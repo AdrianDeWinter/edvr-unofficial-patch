@@ -56,6 +56,9 @@
   is remembered with the D3D11 device it ran on, and a different device is
   probed afresh with no `xessShutdown` between. xess_engine_test pins it
   GPU-free (self-test) and on a supported device (the GPU flight).
+- XMX (2026-11-12): native Windows Arc B580 and A750 run XeSS on XMX with
+  the pinned libxess and EDVR's own D3D12 settings; "Using built-in context"
+  is not a DP4a signal. Section "November 12: XMX on native Windows Arc".
 
 ## October 11: D3D11 capability probe
 
@@ -1505,3 +1508,64 @@ Units (each behind the full build; Haiku implementers, reviewed):
   render-thread p50 of 2.53 ms with XeSS against 2.07-2.14 ms with DLSS in the same session. The rest is XeSS's own recording inside
   xessD3D12Execute; moving it off the render thread is a restructure for about 0.5 ms and is not proposed. Closed for Sean's rig:
   on an RTX 5090, VR XeSS costs about 1.2 ms GPU per frame over DLSS plus about 0.5 ms render-thread CPU, nearly all XeSS itself.
+## November 12: XMX on native Windows Arc
+
+Question: does XeSS run on the XMX matrix units on an Intel Arc card, or on
+the cross-vendor DP4a path? The October 11 entry left XMX acceleration
+unqualified. Answer: XMX, on both cards tested, with EDVR's own settings.
+
+Environment: native Windows 11, Intel Arc B580 (8086:E20B) and Arc A750
+(8086:56A1), Intel driver 32.0.101.9175, plus an AMD Radeon iGPU
+(1002:164E) as the DP4a reference. libxess.dll 2.0.2.68 from the pinned SDK
+3.0.2 (SHA-256 251659dd...e5d5b7, the `tools\fetch_xess.py` pin). No game:
+a standalone program on each adapter, with what `xess_engine.cpp` does: a
+D3D12 device at feature level 11_0, `xessD3D12CreateContext`, then
+`xessD3D12Init` at 1920x1080 Balanced with init flags 0x42
+(INVERTED_DEPTH | LDR_INPUT_COLOR) and again with 0x102 (INVERTED_DEPTH |
+ENABLE_AUTOEXPOSURE).
+
+The trap: on every adapter, Intel and AMD alike, the SDK logs "Using built-in
+context" or "No context found. Creating built-in context". That line is easy
+to read as "DP4a fallback", and an earlier local investigation did. It is not
+a DP4a signal. "Built-in" means the XeSS runtime inside the application's own
+libxess.dll, as opposed to the copy shipped with the Intel driver
+(igxess2.dll); Intel's SR developer guide, "XeSS-SR Components" and
+"Compatibility", describes that choice. libxess.dll contains both the Intel
+C-for-Metal network with XMX convolution blocks and the HLSL cross-vendor
+network, and which one runs depends on the device, not on that choice. The
+"ExternalAIL: 4, Built-in AIL: 4" line before it compares the two copies'
+interface versions; a tie keeps the application's copy.
+
+Method: after `xessD3D12Init`, scan the process's committed private
+read-write memory for live objects of each convolution block class, by
+vtable. The vtables are found from the classes' RTTI in the pinned DLL
+(image base 0x180000000): `xess::ConvBlock` (HLSL) at RVA 0x48A6B8,
+`xess::ConvBlockCm` (CM, no XMX) 0x48AB08, `xess::ConvBlockCmLiteXmx`
+0x48AD78, `xess::ConvBlockCmXmx` 0x48AF88. The RVAs hold for this DLL only.
+
+| | Arc B580 | Arc A750 | AMD iGPU |
+|---|---|---|---|
+| Live blocks, both flag sets | 22 ConvBlockCmXmx | 22 ConvBlockCmXmx | 24 ConvBlock (HLSL) |
+| Other block classes | 0 | 0 | 0 |
+| Model tag in the SDK's debug output | `Xe 8 ..._72974` | `Xe 8 ..._72974` | `Xe 5 ..._021` |
+| Temp buffer / texture heap, descriptors | 28.2 / 54.3 MB, 252 | 28.2 / 54.5 MB, 252 | 0.06 / 68.0 MB, 221 |
+| First (uncached) Init | 2.5 s | 4.1 s | 0.7 s |
+
+The `Xe 8` tag is the one libxess stores with
+`xess_model_splatnet_medium_cm`; `Xe 5` is stored with the lite models,
+including the HLSL `xess_model_splatnet_lite`. The longer first Init on
+Intel is the driver compiling the CM kernels; later runs hit its cache.
+
+Ruled out: XeSS on native Windows Arc running the DP4a path, because after
+Init the only network blocks alive on the B580 and the A750 are
+ConvBlockCmXmx, with EDVR's feature level and both of its flag sets, while
+the AMD iGPU builds only HLSL blocks.
+
+Ruled out: "Using built-in context" or a 4/4 AIL version tie as evidence of
+DP4a, because the AMD iGPU, which can only run the cross-vendor path, logs
+the same built-in context and the Intel cards still build XMX blocks.
+
+Not covered: no GPU trace (Intel GPA or PIX) shows the DPAS instructions
+themselves; "XMX" rests on the block class the SDK builds. Not checked in
+the game: the D3D11 key path, Proton or Linux, and the Arc B390. No timing
+comparison against DP4a on the same card was made.
