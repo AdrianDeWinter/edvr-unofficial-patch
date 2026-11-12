@@ -89,6 +89,7 @@ _VR, _FLAT, _EITHER, _NVIDIA = {"profile": ["vr"]}, {"profile": ["flat"]}, {"pro
 #   edvr.ini / edvr-flat.ini  merged into the settings already there; each for its own profile
 #   nvngx_dlss.dll   only where the survey found an NVIDIA adapter; a foreign copy is left alone
 #   libxess.dll and its two notices   every install; foreign copies are left alone
+#   libxess_fg.dll, libxell.dll   flat profiles only (XeSS Frame Generation and Xe Low Latency); as libxess.dll
 FILES = (
     PackagedFile("graphics", "d3d11.dll", "core", "game", "d3d11.dll", _EITHER, "chain"),
     PackagedFile("runtime", "openvr/openvr_api.dll", "core", "openvr", "openvr_api.dll", _VR, "runtime"),
@@ -102,6 +103,8 @@ FILES = (
     PackagedFile("xess_license", "INTEL-XESS-LICENSE.txt", "xess", "game", "INTEL-XESS-LICENSE.txt", None, "owned"),
     PackagedFile("xess_third_party", "INTEL-XESS-THIRD-PARTY.txt", "xess", "game", "INTEL-XESS-THIRD-PARTY.txt",
                  None, "owned"),
+    PackagedFile("xess_fg", "libxess_fg.dll", "xess", "game", "libxess_fg.dll", _FLAT, "owned"),
+    PackagedFile("xess_ll", "libxell.dll", "xess", "game", "libxell.dll", _FLAT, "owned"),
 )
 # Members that ship in a zip without an entry in the manifest's files: notices, and the profile
 # descriptor, which the planner no longer reads (it writes its own).
@@ -165,6 +168,10 @@ def _files(root, no_dlss):
         result.extend(((build / "libxess.dll", "libxess.dll"),
                        (build / "INTEL-XESS-LICENSE.txt", "INTEL-XESS-LICENSE.txt"),
                        (build / "INTEL-XESS-THIRD-PARTY.txt", "INTEL-XESS-THIRD-PARTY.txt")))
+        # XeSS Frame Generation and Xe Low Latency: the same SDK's runtimes, under the same notices.
+        for name in ("libxess_fg.dll", "libxell.dll"):
+            if (build / name).is_file():
+                result.append((build / name, name))
     # Both settings files ship: edvr.ini for VR, and edvr-flat.ini for the flat
     # runtime (config.cpp reads edvr-flat.ini first). Each keeps its own name.
     result.extend([(root / "edvr.ini", "edvr.ini"),
@@ -1142,7 +1149,7 @@ def self_test():
             with zipfile.ZipFile(root / "dist" / "ed-up-installer-1.2.7.zip") as installer_archive:
                 assert set(installer_archive.namelist()) == {"edvr-installer.exe"}
             xess_files = {108: "libxess.dll", 109: "INTEL-XESS-LICENSE.txt",
-                          110: "INTEL-XESS-THIRD-PARTY.txt"}
+                          110: "INTEL-XESS-THIRD-PARTY.txt", 112: "libxess_fg.dll", 113: "libxell.dll"}
             for resource_id, name in xess_files.items():
                 contents = ("XeSS fixture " + name).encode("ascii")
                 (root / "build" / name).write_bytes(contents)
@@ -1241,6 +1248,8 @@ def self_test():
             assert {entry["path"] for entry in bridge["files"]} == {
                 entry["path"] for entry in parsed["files"] if entry["id"] in sign_manifest.BRIDGE_ITEM_OF_FILE}
             assert sign_manifest.load_manifest(bridge_bytes)[1], "the schema-2 reader must refuse the bridge"
+            assert by_id["xess_fg"]["when"] == {"profile": ["flat"]} and by_id["xess_ll"]["when"] == {"profile": ["flat"]}
+            assert by_id["xess_fg"]["asset"] == by_id["xess"]["asset"] == by_id["xess_ll"]["asset"]
             lines = []
             assert sign_manifest.verify_directory(dist, allow_unsigned=True, out=lines.append), lines
             assert not sign_manifest.verify_directory(dist, out=lambda line: None), "unsigned dist verified"

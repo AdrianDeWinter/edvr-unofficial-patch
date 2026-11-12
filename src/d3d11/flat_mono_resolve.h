@@ -220,6 +220,12 @@ struct FlatMonoResolveFrame {
     // camera's device depth representable; the resolver scales world depth
     // only after computing world reprojection from the original raw depth.
     float foregroundDepthNear = 0;
+    // XeSS Frame Generation (xess_fg.h; docs/xess-frame-generation-2026-11-12.md, F4): a pixel refused only because its previous position is off
+    // the screen keeps its camera motion in the motion the backend receives, instead of 0 (not a stale-slot pixel, nor one inside the vehicle
+    // volume: their vectors are unconfirmed). Its rejection mask entry stands, but XeSS-SR takes no mask, so XeSS-SR gets that motion too, as
+    // it would from an engine. Frame generation has no rejection input and reads 0 as "not moving", which misplaces the strip a turn brings into
+    // view. Only the flat runtime sets it, under XeSS-SR while the bridge generates; false (the default) leaves every pixel as before.
+    bool keepOffscreenMotion = false;
     // The upscaler feature slot the backend evaluates on (dlaa.h, kUpscalerSlots; dlaa.cpp and fsr3_engine.cpp keep one
     // feature, one size key and one history per slot). 0 is the flat profile's and eye 0's -- the default, and every
     // caller before the VR world route. The VR world route passes 2 (vr_world_route.h, kVrWorldFeatureSlot), because its two

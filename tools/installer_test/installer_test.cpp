@@ -207,6 +207,8 @@ static const TestTableRow kTestTable[] = {
     {"xess", TargetRoot::Game, "libxess.dll", 0, false, ExistingMode::Owned},
     {"xess_license", TargetRoot::Game, "INTEL-XESS-LICENSE.txt", 0, false, ExistingMode::Owned},
     {"xess_third_party", TargetRoot::Game, "INTEL-XESS-THIRD-PARTY.txt", 0, false, ExistingMode::Owned},
+    {"xess_fg", TargetRoot::Game, "libxess_fg.dll", kProfileFlat, false, ExistingMode::Owned},
+    {"xess_ll", TargetRoot::Game, "libxell.dll", kProfileFlat, false, ExistingMode::Owned},
 };
 
 static PayloadFileEntry* tfind(PayloadInfo& p, const std::string& id) {

@@ -34,6 +34,10 @@ struct FlatPageRow {
 inline constexpr FlatPageRow kFlatPageRows[] = {
     {"fix", "temporal_aa",       FlatRowRead::RequestedMode},
     {"fix", "temporal_aa_model", FlatRowRead::Allowlist},
+    // XeSS Frame Generation (2026-11-12): flat only (`menu flat_performance`), dimmed unless the flat AA mode is XeSS (xessFgToggleRowDim), the frames
+    // row dimmed as well while the toggle is off. The tab's order is edvr.ini's: they sit under the DLSS preset row there.
+    {"fix", "xess_frame_generation", FlatRowRead::Allowlist},
+    {"fix", "xess_generated_frames", FlatRowRead::Allowlist},
     {"fix", "render_sharpness",  FlatRowRead::Allowlist},
     {"fix", "ui_quality",        FlatRowRead::Allowlist},
     // HUD Anti-Aliasing (2026-10-24), directly under UI quality: flat only. Its `menu flat_performance` token (tools\gen_settings_schema.py) is a page VR's
@@ -124,6 +128,31 @@ inline bool flatSharpenRowDim(bool flatProfile, bool antiAliasingOn) {
 // there is nothing for it to act on. Flat only (VR's menu has no such row). One function so a rig can read the whole truth table; menu.cpp asks it and nothing else.
 inline bool hudAntiAliasingRowDim(bool uiQualityOn, bool antiAliasingOn) {
     return !uiQualityOn || !antiAliasingOn;
+}
+
+// The XeSS Frame Generation rows (2026-11-12). Both are dimmed while the flat anti-aliasing mode is not XeSS: frames are generated only under XeSS-SR, so under
+// any other mode neither row means anything. They stay on the page, so the page's rows never change with the mode. Flat only (VR's menu has no such row). One
+// function per row so a rig can read the truth table; menu.cpp asks them and nothing else.
+inline bool xessFgToggleRowDim(bool flatProfile, bool antiAliasingIsXess) {
+    return flatProfile && !antiAliasingIsXess;
+}
+
+// The frames row's dim: the toggle's, and while XeSS Frame Generation is off there is nothing for the multiplier to act on.
+inline bool xessFgFramesRowDim(bool flatProfile, bool antiAliasingIsXess, bool frameGenerationOn) {
+    return xessFgToggleRowDim(flatProfile, antiAliasingIsXess) || !frameGenerationOn;
+}
+
+// Whether the frames option `frames` (1 = 2x, 2 = 3x, 3 = 4x) can be chosen on this GPU. `maxFrames` is the GPU's maximum generated frames per rendered frame
+// (xessFgMaxGeneratedFrames), 0 while it is not known yet: then every option is enabled.
+inline bool xessFgFramesOptionEnabled(int frames, unsigned maxFrames) {
+    return maxFrames == 0 || (frames >= 1 && static_cast<unsigned>(frames) <= maxFrames);
+}
+
+// The frames value the panel shows for a stored or typed one: clamped to 1 and, when the GPU's maximum is known, to it. The stored value is not rewritten.
+inline int xessFgFramesShown(int stored, unsigned maxFrames) {
+    int v = stored < 1 ? 1 : stored > 3 ? 3 : stored;
+    if (maxFrames != 0 && static_cast<unsigned>(v) > maxFrames) v = static_cast<int>(maxFrames);
+    return v;
 }
 
 // The first Allowlist row whose dotted key `allows` refuses, or null. `allows` is

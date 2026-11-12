@@ -24,6 +24,9 @@ inline bool flatProfileReadsKey(const char* key) {
         std::strcmp(key, "advanced.flat_cpu_timing") == 0 ||
         std::strcmp(key, "hotkey.menu") == 0 ||
         std::strcmp(key, "fix.temporal_aa_model") == 0 ||
+        // XeSS Frame Generation (xess_fg.cpp, docs\xess-frame-generation-2026-11-12.md): flat-only rows on the Performance tab.
+        std::strcmp(key, "fix.xess_frame_generation") == 0 ||
+        std::strcmp(key, "fix.xess_generated_frames") == 0 ||
         std::strcmp(key, "hotkey.dump_draws") == 0 ||
         // TEMPORARY (GPU pass profile, 2026-10-12): the flat profile reads the same key. Remove with the arc.
         std::strcmp(key, "hotkey.gpu_pass_profile") == 0 ||

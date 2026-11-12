@@ -316,9 +316,9 @@ ED-UP is MIT licensed; see [LICENSE](LICENSE). NVIDIA's DLSS runtime,
 `nvngx_dlss.dll`, which the installer carries, is not: it is NVIDIA's software
 under the NVIDIA RTX SDKs licence. It is distributed unmodified as part of this
 application, as that licence allows, and only placed on machines with an NVIDIA
-card. Intel's XeSS runtime, `libxess.dll`, ships with Intel's licence and
-third-party notices (`INTEL-XESS-LICENSE.txt`, `INTEL-XESS-THIRD-PARTY.txt`),
-and the Khronos OpenXR loader, `openxr_loader.dll`, with its notice
+card. Intel's XeSS runtimes, `libxess.dll`, `libxess_fg.dll` and `libxell.dll`,
+ship with Intel's licence and third-party notices (`INTEL-XESS-LICENSE.txt`,
+`INTEL-XESS-THIRD-PARTY.txt`), and the Khronos OpenXR loader, `openxr_loader.dll`, with its notice
 (`OPENXR-LOADER-LICENSE.txt`). The `fsr` engine is AMD's FidelityFX Super
 Resolution 3.1 upscaler through its community Direct3D 11 port (the optiscaler
 project's FidelityFX-SDK-DX11, MIT), compiled into `d3d11.dll`; its notice

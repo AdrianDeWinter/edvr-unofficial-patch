@@ -20,6 +20,7 @@
 #include "flat_celestial.h"    // planet patch motion: the rows' tangents for the records the resolve binds (fetchCelestialRecords)
 #include "celestial_motion.h"
 #include "xess_engine.h"
+#include "xess_fg.h"   // xessFgWanted: the resolver keeps the edge strip's motion for frame generation
 #include "flat_projection_recipes.h"
 #include "flat_shader_classifier.h"
 #include "flat_projection_ownership.h"
@@ -7605,6 +7606,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     }
     fetchCelestialRecords(ctx, f);   // planet patch motion: this frame's records for the resolve's t18
     concoursePaneBakeFrame(ctx, f.color, f.depth, f.camera, f.renderWidth, f.renderHeight);   // TEMPORARY (docs\concourse-cull-2026-11-05.md): one relaxed load when no bake runs
+    f.keepOffscreenMotion = s.engine == FlatMonoResolveMode::Xess && xessFgWanted();   // frame generation's edge strip (xess_fg.h)
     if (!flatMonoResolve(s.device.Get(), ctx, f, &outputView, &s.reason)) {
         const char* temporalReason=s.reason;
         const char* fallbackReason=nullptr;
@@ -7960,6 +7962,7 @@ void FlatRuntimeDrawScope::treatHdr(const FlatMonoFrame& selected, uint32_t srvS
     reach("resolve");   // the frame is the resolver's from here
     fetchCelestialRecords(ctx, f);   // planet patch motion: this frame's records for the resolve's t18
     concoursePaneBakeFrame(ctx, f.color, f.depth, f.camera, f.renderWidth, f.renderHeight);   // TEMPORARY (docs\concourse-cull-2026-11-05.md): one relaxed load when no bake runs
+    f.keepOffscreenMotion = s.engine == FlatMonoResolveMode::Xess && xessFgWanted();   // frame generation's edge strip (xess_fg.h)
     if (!flatMonoResolve(s.device.Get(), ctx, f, &outputView, &s.reason)) {
         const char* temporalReason = s.reason;
         // The backend (or the route's own guard) refused before H was written. Recover the jitter into H, or decline.
