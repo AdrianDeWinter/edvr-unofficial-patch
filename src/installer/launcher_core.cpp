@@ -29,6 +29,8 @@ const FolderEntry kFolderEntries[] = {
     {"openxr_license", L"openvr\\OPENXR-LOADER-LICENSE.txt"},
     {"ngx", L"nvngx_dlss.dll"},
     {"xess", L"libxess.dll"},
+    {"xess_fg", L"libxess_fg.dll"},
+    {"xess_ll", L"libxell.dll"},
     {"xess_license", L"INTEL-XESS-LICENSE.txt"},
     {"xess_third_party", L"INTEL-XESS-THIRD-PARTY.txt"},
 };

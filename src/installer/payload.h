@@ -27,6 +27,8 @@ namespace edvr::installer {
 #define IDR_EDVR_XESS_LICENSE 109
 #define IDR_EDVR_XESS_THIRD_PARTY 110
 #define IDR_EDVR_FLAT_INI 111   // edvr-flat.ini, carried by both editions
+#define IDR_EDVR_XESS_FG 112    // Intel's XeSS Frame Generation runtime, libxess_fg.dll
+#define IDR_EDVR_XESS_LL 113    // Intel's Xe Low Latency runtime, libxell.dll
 
 // Native names: native_graphics, native_runtime, openxr_loader, ini (edvr.ini), flat_ini (edvr-flat.ini)
 // and profile (the descriptor, resource 107, which the planner no longer reads).

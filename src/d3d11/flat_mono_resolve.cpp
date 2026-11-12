@@ -3,6 +3,7 @@
 #include "dlaa.h"
 #include "fsr3_engine.h"
 #include "xess_engine.h"
+#include "xess_fg.h"   // xessFgNoteCamera: the frame's camera for XeSS Frame Generation
 #include "map_easu.h"
 #include "map_smaa.h"
 #include "temporal_shader_bytecode.h"
@@ -1320,6 +1321,7 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
     constants.debug[2]=overlay?1u:0u;
     constants.debug[3]=(foreground?2u:(untrusted?1u:0u))|(skin?4u:0u);
     if(f.staleRecordTerm && depthCheck)constants.debug[3]|=16u;
+    if(f.keepOffscreenMotion)constants.debug[3]|=64u;   // the shader's offscreenOnly pixels keep their motion (frame generation)
     if(vehicleNow) {
         constants.debug[3]|=32u;
         for(int i=0;i<3;++i){constants.vehiclePosNow[i]=f.vehiclePosition[0][i];constants.vehiclePosPrev[i]=f.vehiclePosition[1][i];}
@@ -1404,6 +1406,7 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
         ID3D11SamplerState* sampler=g.sampler.Get();context->CSSetSamplers(0,1,&sampler);
         context->CSSetShader(g.taa.Get(),nullptr,0);context->Dispatch((f.outputWidth+7)/8,(f.outputHeight+7)/8,1);
     } else if(f.mode==FlatMonoResolveMode::Xess) {
+        xessFgNoteCamera(f.camera,f.deltaMs);   // XeSS Frame Generation's frame constants (xess_fg.h); nothing without its bridge
         ok=xessEvaluate(context,f.slot,g.color.texture.Get(),g.depth[depthIndex].texture.Get(),
             g.motion.texture.Get(),g.output[0].texture.Get(),f.renderWidth,f.renderHeight,
             evalW,evalH,f.jitterX,f.jitterY,reset,hdr,reason);

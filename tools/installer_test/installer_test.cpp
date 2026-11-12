@@ -2422,6 +2422,8 @@ static void testXessPlanner() {
     p.xessSha = "xess-runtime-new";
     p.xessLicenseSha = "xess-license-new";
     p.xessThirdPartySha = "xess-third-party-new";
+    p.xessFgSha = "xess-fg-new";
+    p.xessLlSha = "xess-ll-new";
     const Options options = testOptions();
     auto current = [&](const wchar_t* leaf, const std::string& hash, DllKind kind = DllKind::Foreign) {
         return fakeDll(kind, joinPath(dir, leaf), hash);
@@ -2436,6 +2438,8 @@ static void testXessPlanner() {
         s.xess = current(L"libxess.dll", p.xessSha);
         s.xessLicense = current(L"INTEL-XESS-LICENSE.txt", p.xessLicenseSha);
         s.xessThirdParty = current(L"INTEL-XESS-THIRD-PARTY.txt", p.xessThirdPartySha);
+        s.xessFg = current(L"libxess_fg.dll", p.xessFgSha);
+        s.xessLl = current(L"libxell.dll", p.xessLlSha);
         return s;
     };
 
@@ -2451,17 +2455,20 @@ static void testXessPlanner() {
               !hasStep(plan, Action::WriteText, nullptr, L"edvr-flat.ini") &&
               !hasStep(plan, Action::WritePayload, nullptr, L"libxess.dll"),
               "adoption writes only the ownership record, not existing files");
-        check(notesMention(plan, "libxess.dll (Intel's XeSS-SR runtime) is already this build's"),
+        check(notesMention(plan, "(Intel's XeSS runtimes) are already this build's"),
               "the report says the XeSS runtime is already this build's");
         const InstallState adopted = parseState(plannedText(plan, L"state.ini"));
         check(adopted.xessSha == p.xessSha && adopted.xessLicenseSha == p.xessLicenseSha &&
-              adopted.xessThirdPartySha == p.xessThirdPartySha,
+              adopted.xessThirdPartySha == p.xessThirdPartySha &&
+              adopted.xessFgSha == p.xessFgSha && adopted.xessLlSha == p.xessLlSha,
               "[xess] hashes survive the planned state round-trip");
         s.state = adopted;
         const Plan removal = planUninstall(s, options);
         check(hasStep(removal, Action::Delete, L"libxess.dll", nullptr) &&
               hasStep(removal, Action::Delete, L"INTEL-XESS-LICENSE.txt", nullptr) &&
-              hasStep(removal, Action::Delete, L"INTEL-XESS-THIRD-PARTY.txt", nullptr),
+              hasStep(removal, Action::Delete, L"INTEL-XESS-THIRD-PARTY.txt", nullptr) &&
+              hasStep(removal, Action::Delete, L"libxess_fg.dll", nullptr) &&
+              hasStep(removal, Action::Delete, L"libxell.dll", nullptr),
               "uninstall removes each adopted file by its recorded hash");
     }
     {   // A foreign runtime is left alone, even when the notices are ours.
@@ -2517,14 +2524,19 @@ static void testXessPlanner() {
         vr.xessSha = "xess-runtime-new";
         vr.xessLicenseSha = "xess-license-new";
         vr.xessThirdPartySha = "xess-third-party-new";
+        vr.xessFgSha = "xess-fg-new";
+        vr.xessLlSha = "xess-ll-new";
         const Plan plan = planInstall(baseSurvey(dir), options, vr);
         check(!plan.blocked && hasStep(plan, Action::WritePayload, nullptr, L"libxess.dll") &&
               hasStep(plan, Action::WritePayload, nullptr, L"INTEL-XESS-LICENSE.txt") &&
-              hasStep(plan, Action::WritePayload, nullptr, L"INTEL-XESS-THIRD-PARTY.txt"),
-              "a VR install carries libxess.dll and both license notices");
+              hasStep(plan, Action::WritePayload, nullptr, L"INTEL-XESS-THIRD-PARTY.txt") &&
+              hasStep(plan, Action::WritePayload, nullptr, L"libxess_fg.dll") &&
+              hasStep(plan, Action::WritePayload, nullptr, L"libxell.dll"),
+              "a VR install carries libxess.dll, libxess_fg.dll, libxell.dll and both license notices");
         check(notesMention(plan, "Placing libxess.dll"), "the report says the XeSS runtime is being placed");
         check(plan.nextState.xessSha == vr.xessSha && plan.nextState.xessLicenseSha == vr.xessLicenseSha &&
-              plan.nextState.xessThirdPartySha == vr.xessThirdPartySha,
+              plan.nextState.xessThirdPartySha == vr.xessThirdPartySha &&
+              plan.nextState.xessFgSha == vr.xessFgSha && plan.nextState.xessLlSha == vr.xessLlSha,
               "a VR install records the XeSS files it placed");
     }
 }
@@ -6830,6 +6842,8 @@ static void testState() {
     state.xessSha = "xess-runtime";
     state.xessLicenseSha = "xess-license";
     state.xessThirdPartySha = "xess-notices";
+    state.xessFgSha = "xess-fg";
+    state.xessLlSha = "xess-ll";
 
     const InstallState back = parseState(serializeState(state));
     check(back.present, "a written record reads back as present");
@@ -6840,6 +6854,8 @@ static void testState() {
     expectEq(back.xessSha, state.xessSha, "the XeSS runtime ownership survives");
     expectEq(back.xessLicenseSha, state.xessLicenseSha, "the XeSS license ownership survives");
     expectEq(back.xessThirdPartySha, state.xessThirdPartySha, "the XeSS third-party ownership survives");
+    expectEq(back.xessFgSha, state.xessFgSha, "the XeSS Frame Generation ownership survives");
+    expectEq(back.xessLlSha, state.xessLlSha, "the Xe Low Latency ownership survives");
     check(!parseState("").present, "an empty record is not a record");
     check(!parseState("[edvr]\r\nsomething = else\r\n").present,
           "a file that merely parses is not a record either");

@@ -400,6 +400,9 @@ void prep(uint3 id:SV_DispatchThreadID) {
     float2 rawUv=uv-jitter.xy/float2(size.xy);
     float depth=SceneDepth.Load(int3(q,0));
     float2 motion=0; float reject=1, expected=0;
+    // Set only where the camera term's one failed range test is that the previous position is off the screen (the strip
+    // a turn brings into view): its motion is real and is kept for frame generation (debug.w value 64) below.
+    bool offscreenOnly=false;
     bool foregroundActualMotion=false;
     // What the pixel is (kClass*), for the refusal census and view alone: nothing below reads it back. Until a check says
     // otherwise a pixel the checks below do not reach is a reset frame's, or one whose own depth is no depth.
@@ -522,9 +525,16 @@ void prep(uint3 id:SV_DispatchThreadID) {
             // the actual current phase separately and tracks its own history.
             motion=(prev-rawUv)*float2(size.xy);
             expected=before.z/before.w;
+            const bool sane=before.w>0 && all(isfinite(motion)) && all(abs(motion)<=65504) &&
+                            isfinite(expected) && expected>=0 && expected<=1;
             valid=all(isfinite(motion)) && all(abs(motion)<=65504) &&
                   all(prev>=0) && all(prev<=1) && isfinite(expected) && expected>=0 && expected<=1;
             if(!valid)cls=kClassRange;
+            // Only where nothing else would have checked the vector: a stale slot (kind 3) and a kind-0 pixel inside the
+            // vehicle volume have their camera term confirmed against last frame's depth below, which an off-screen
+            // previous position cannot be, so theirs is never kept (a cockpit surface riding the ship has a camera vector
+            // hundreds of pixels long that easily points off the screen).
+            offscreenOnly=!valid && sane && kind!=3 && !(kind==0 && vehicleState!=0);
             // A stale slot under the steady-detail rule (kind 3): the camera term stands only if last frame's depth confirms it. A pixel
             // the check refuses stays a stale-slot pixel (cls kClassStale, refused): the census counts it as stale-refused.
             if((debug.w&2)!=0)expected*=foregroundDepth.x;
@@ -540,7 +550,16 @@ void prep(uint3 id:SV_DispatchThreadID) {
             reject=valid?0:1;
         } else if(kind!=2)cls=kClassCamera;
     }
-    if(!foregroundActualMotion) { if(reject!=0)motion=0; }
+    // XeSS Frame Generation (debug.w value 64, only while its bridge is on and the backend is XeSS-SR): a pixel refused only because its
+    // previous position is off the screen keeps its camera motion. reject stays 1, but XeSS-SR takes no rejection input, so XeSS-SR
+    // receives that motion too: true motion off the screen, which XeSS-SR treats as history it does not have (the input engines give
+    // it). Frame generation, which has no rejection input either, would otherwise read 0 as "not moving" and place the strip a turn
+    // brings into view wrongly.
+    if(!foregroundActualMotion) {
+        const float2 cameraMotion=motion;
+        if(reject!=0)motion=0;
+        if((debug.w&64)!=0 && offscreenOnly && cls==kClassRange)motion=cameraMotion;
+    }
     if((debug.w&2)!=0 && !foreground)depth*=foregroundDepth.x;
     OutDepth[q]=isfinite(depth)?saturate(depth):0;
     OutMotion[q]=motion; OutRejection[q]=reject;

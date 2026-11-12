@@ -50,7 +50,7 @@ constexpr const char* kRows[kChoiceCount] = {"Use mouse/controller aim", "Use lo
 constexpr const char* kFooter = "Up/Down to choose, Enter or UI Select to confirm. Esc asks next time.";
 
 constexpr int kLineChars = 95;      // MenuLine.left holds 95 characters and the terminator
-constexpr int kPageLinesMax = 19;   // kMenuMaxLines: what one raster holds
+constexpr int kPageLinesMax = 21;   // kMenuMaxLines: what one raster holds
 constexpr int kPageLines = 1 + kNoteCount + kChoiceCount;   // the heading, the notes, the three rows
 
 // The card's width in degrees while the page is up (the player's width_degrees is 16..45): wide enough that the words need not be wrapped, with no tooltip strip beside it. The text is

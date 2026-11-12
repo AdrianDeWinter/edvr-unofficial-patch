@@ -985,6 +985,8 @@ def _validate_v2_receipt_in(r):
                    ini=ini_target,
                    dlss=os.path.join(target, "nvngx_dlss.dll"),
                    xess=os.path.join(target, "libxess.dll"),
+                   xess_fg=os.path.join(target, "libxess_fg.dll"),
+                   xess_ll=os.path.join(target, "libxell.dll"),
                    xess_license=os.path.join(target, "INTEL-XESS-LICENSE.txt"),
                    xess_third_party=os.path.join(target, "INTEL-XESS-THIRD-PARTY.txt"))
     # A both install records the flat half's settings file as its own entry.
@@ -996,6 +998,8 @@ def _validate_v2_receipt_in(r):
         sources = {"graphics": paths["graphics"],
                    "dlss": os.path.join(build_dir(root), "nvngx_dlss.dll"),
                    "xess": os.path.join(build_dir(root), "libxess.dll"),
+                   "xess_fg": os.path.join(build_dir(root), "libxess_fg.dll"),
+                   "xess_ll": os.path.join(build_dir(root), "libxell.dll"),
                    "xess_license": os.path.join(build_dir(root), "INTEL-XESS-LICENSE.txt"),
                    "xess_third_party": os.path.join(build_dir(root), "INTEL-XESS-THIRD-PARTY.txt"),
                    "ini": _ini_source(root, "flat"), "profile": "generated"}
@@ -1934,6 +1938,8 @@ def retire_stale_native_receipt(target, tag, dry_run=False):
         allowed.update(config=paths["config"], profile=descriptor,
                        ini=os.path.join(target, "edvr.ini"), ini_flat=os.path.join(target, "edvr-flat.ini"),
                        dlss=os.path.join(target, "nvngx_dlss.dll"), xess=os.path.join(target, "libxess.dll"),
+                       xess_fg=os.path.join(target, "libxess_fg.dll"),
+                       xess_ll=os.path.join(target, "libxell.dll"),
                        xess_license=os.path.join(target, "INTEL-XESS-LICENSE.txt"),
                        xess_third_party=os.path.join(target, "INTEL-XESS-THIRD-PARTY.txt"))
         files = old.get("files")
@@ -2013,7 +2019,8 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
               if not os.path.isfile(p[k])]
     if include_dlss and not os.path.isfile(os.path.join(build_dir(root), "nvngx_dlss.dll")):
         errors.append("missing optional DLSS source %s" % os.path.join(build_dir(root), "nvngx_dlss.dll"))
-    xess_names = (("xess", "libxess.dll"), ("xess_license", "INTEL-XESS-LICENSE.txt"),
+    xess_names = (("xess", "libxess.dll"), ("xess_fg", "libxess_fg.dll"), ("xess_ll", "libxell.dll"),
+                  ("xess_license", "INTEL-XESS-LICENSE.txt"),
                   ("xess_third_party", "INTEL-XESS-THIRD-PARTY.txt"))
     # The optional runtimes the game directory lacks -- a game update wipes them with the rest -- are installed
     # when this build has them, whether or not --dlss / --xess / --all was given: without nvngx_dlss.dll the
@@ -2126,6 +2133,9 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
                 if name == "libxess.dll":
                     print("[edvr] WARNING: %s is missing, so XeSS cannot run; an install adds it from this build" %
                           os.path.join(target, name))
+                elif name in ("libxess_fg.dll", "libxell.dll"):
+                    print("[edvr] WARNING: %s is missing, so XeSS Frame Generation / Xe Low Latency cannot run; "
+                          "an install adds it from this build" % os.path.join(target, name))
                 else:
                     print("[edvr] WARNING: %s is missing (an XeSS notice file; XeSS itself is not affected); "
                           "an install adds it from this build" % os.path.join(target, name))
@@ -2893,10 +2903,12 @@ def _scope_self_test():
         code, _ = run(args_for(g, "--profile", "vr", "--scope", "vr", tag="alias"))
         check(code == "refused" and tree(g) == before, "--profile with --scope was accepted")
 
-        # XeSS-SR for the VR scope: --xess installs the three files beside the
+        # XeSS-SR for the VR scope: --xess installs the XeSS files beside the
         # game (a dry run writes nothing), and verify flags a VR ini that selects
         # xess while its runtime is missing.
         for name, data in (("libxess.dll", b"XESS-RUNTIME"),
+                           ("libxess_fg.dll", b"XESS-FG-RUNTIME"),
+                           ("libxell.dll", b"XESS-LL-RUNTIME"),
                            ("INTEL-XESS-LICENSE.txt", b"XESS-LICENSE"),
                            ("INTEL-XESS-THIRD-PARTY.txt", b"XESS-NOTICES")):
             Path(root, "build", name).write_bytes(data)
@@ -2907,9 +2919,11 @@ def _scope_self_test():
         code, text = run(args_for(g, "--scope", "vr", "--xess", tag="vrxess"))
         check(code == 0, "--scope vr --xess failed: %r" % text)
         check(Path(g, "libxess.dll").read_bytes() == b"XESS-RUNTIME" and
+              Path(g, "libxess_fg.dll").read_bytes() == b"XESS-FG-RUNTIME" and
+              Path(g, "libxell.dll").read_bytes() == b"XESS-LL-RUNTIME" and
               Path(g, "INTEL-XESS-LICENSE.txt").read_bytes() == b"XESS-LICENSE" and
               Path(g, "INTEL-XESS-THIRD-PARTY.txt").read_bytes() == b"XESS-NOTICES",
-              "--scope vr --xess did not install the three XeSS files")
+              "--scope vr --xess did not install the five XeSS files")
         Path(g, "edvr.ini").write_bytes(b"[fix]\ntemporal_aa = xess\n")
         code, _ = run(args_for(g, "--scope", "vr", "--verify-only", tag="vrxess"))
         check(code == 0, "--scope vr verify rejected a selected XeSS with its files verified")
@@ -2925,17 +2939,19 @@ def _scope_self_test():
         code, text = run(args_for(g, "--scope", "vr", "--dry-run", tag="optmiss"))
         check(code == 0 and tree(g) == before, "a --dry-run that would add the optional runtimes wrote files")
         check("nvngx_dlss.dll was missing from the game directory" in text
-              and "libxess.dll, INTEL-XESS-LICENSE.txt, INTEL-XESS-THIRD-PARTY.txt missing" in text,
+              and "libxess.dll, libxess_fg.dll, libxell.dll, INTEL-XESS-LICENSE.txt, INTEL-XESS-THIRD-PARTY.txt missing" in text,
               "the dry-run plan did not name the missing optional runtimes: %r" % text)
         code, text = run(args_for(g, "--scope", "vr", tag="optmiss"))
         check(code == 0, "--scope vr with no optional runtimes failed: %r" % text)
         check(Path(g, "nvngx_dlss.dll").read_bytes() == b"DLSS" and Path(g, "libxess.dll").read_bytes() == b"XESS-RUNTIME"
+              and Path(g, "libxess_fg.dll").read_bytes() == b"XESS-FG-RUNTIME"
+              and Path(g, "libxell.dll").read_bytes() == b"XESS-LL-RUNTIME"
               and Path(g, "INTEL-XESS-LICENSE.txt").read_bytes() == b"XESS-LICENSE"
               and Path(g, "INTEL-XESS-THIRD-PARTY.txt").read_bytes() == b"XESS-NOTICES",
               "a plain install did not add the missing DLSS and XeSS runtimes")
         receipt = os.path.join(g, "edvr_native_receipt.json")
         keys = {e["key"] for e in json.loads(Path(receipt).read_text(encoding="utf-8"))["files"]}
-        check({"dlss", "xess", "xess_license", "xess_third_party"} <= keys and verify_native_receipt(receipt, g)["version"] == 2,
+        check({"dlss", "xess", "xess_fg", "xess_ll", "xess_license", "xess_third_party"} <= keys and verify_native_receipt(receipt, g)["version"] == 2,
               "the added runtimes are not in a verifying receipt: %r" % keys)
         code, text = run(args_for(g, "--scope", "vr", "--verify-only", tag="optmiss"))
         check(code == 0 and "WARNING" not in text, "--verify-only warned or failed with the runtimes in place: %r" % text)
@@ -3581,6 +3597,8 @@ def _xess_opt_in_self_test():
         game.mkdir()
         for name, data in (("d3d11.dll", b"FLAT-GRAPHICS"),
                            ("libxess.dll", b"PINNED-XESS"),
+                           ("libxess_fg.dll", b"PINNED-XESS-FG"),
+                           ("libxell.dll", b"PINNED-XESS-LL"),
                            ("INTEL-XESS-LICENSE.txt", b"LICENSE"),
                            ("INTEL-XESS-THIRD-PARTY.txt", b"THIRD-PARTY")):
             (root / "build" / name).write_bytes(data)
@@ -3673,6 +3691,7 @@ def _compile_only_self_test():
             print("compile_build_dir is not <root>/build/compile-build")
             return False
         products = {"d3d11.dll": b"COMPILE-GRAPHICS", "libxess.dll": b"COMPILE-XESS",
+                    "libxess_fg.dll": b"COMPILE-XESS-FG", "libxell.dll": b"COMPILE-XESS-LL",
                     "INTEL-XESS-LICENSE.txt": b"LICENSE", "INTEL-XESS-THIRD-PARTY.txt": b"THIRD-PARTY"}
         for name, data in products.items():
             (cbuild / name).write_bytes(data)
@@ -4453,6 +4472,8 @@ def self_test():
         Path(froot, "build", "d3d11.dll").write_bytes(b"FLAT-GRAPHICS")
         Path(froot, "build", "nvngx_dlss.dll").write_bytes(b"FLAT-DLSS")
         Path(froot, "build", "libxess.dll").write_bytes(b"FLAT-XESS")
+        Path(froot, "build", "libxess_fg.dll").write_bytes(b"FLAT-XESS-FG")
+        Path(froot, "build", "libxell.dll").write_bytes(b"FLAT-XESS-LL")
         Path(froot, "build", "INTEL-XESS-LICENSE.txt").write_bytes(b"INTEL-LICENSE")
         Path(froot, "build", "INTEL-XESS-THIRD-PARTY.txt").write_bytes(b"INTEL-THIRD-PARTY")
         Path(froot, "edvr.ini").write_bytes(b"[fix]\ntemporal_aa=dlss\n")
@@ -4478,6 +4499,8 @@ def self_test():
             assert Path(fgame, "d3d11.dll").read_bytes() == b"FLAT-GRAPHICS"
             assert Path(fgame, "nvngx_dlss.dll").read_bytes() == b"FLAT-DLSS"
             assert Path(fgame, "libxess.dll").read_bytes() == b"FLAT-XESS"
+            assert Path(fgame, "libxess_fg.dll").read_bytes() == b"FLAT-XESS-FG"
+            assert Path(fgame, "libxell.dll").read_bytes() == b"FLAT-XESS-LL"
             assert Path(fgame, "INTEL-XESS-LICENSE.txt").read_bytes() == b"INTEL-LICENSE"
             assert Path(fgame, "INTEL-XESS-THIRD-PARTY.txt").read_bytes() == b"INTEL-THIRD-PARTY"
             assert Path(fgame, "edvr.ini").read_bytes() == b"[user]\nkeep=1\n"

@@ -57,8 +57,8 @@
   comes with Phase 2. Its `on` value (forced, ignoring the gate's performance
   terms) is temporary, for A/B flights.
 - **Declined in design (re-open on new evidence):** ## Declined, including AFW
-  as a replacement and flat-profile frame generation (2026-10-27).
-- **Open:** ## Open questions.
+  as a replacement. Flat XeSS-FG (declined 10-27) was re-opened 2026-11-12 as
+  a present bridge: `docs/xess-frame-generation-2026-11-12.md`. Open: ## Open questions.
 
 ## The ask
 

@@ -9,6 +9,7 @@
 
 #include "../common/log.h"
 #include "dlaa.h"  // kUpscalerSlots: one XeSS feature per upscaler slot
+#include "load_proc.h"
 
 #ifndef EDVR_HAVE_XESS
 #define EDVR_HAVE_XESS 0
@@ -217,6 +218,7 @@ bool g_available = false;
 // kept only for that device: a different one is probed afresh. Held with its own reference so a replacement device that lands at a freed
 // device's address cannot pass for it; released by xessShutdown and by the next probe. A raw pointer, like g_state: no static destructor.
 ID3D11Device* g_failedProbeDevice = nullptr;
+XessInputTagger g_inputTagger = nullptr;   // frame generation's, while its bridge exists (xessSetInputTagger)
 
 void forgetFailedProbeDevice() {
     if (g_failedProbeDevice) g_failedProbeDevice->Release();
@@ -228,11 +230,6 @@ bool returnLatchedFailure(const XessFeatureFailureLatch& latch, const char** why
     std::snprintf(g_reason, sizeof(g_reason), "%s", latch.reason());
     if (why) *why = g_reason;
     return false;
-}
-
-template <typename T> bool loadProc(HMODULE module, const char* name, T& target) {
-    target = reinterpret_cast<T>(GetProcAddress(module, name));
-    return target != nullptr;
 }
 
 bool waitFor(State& state, uint64_t value, const char** why, const char* stage) {
@@ -468,7 +465,7 @@ bool releaseSlot(State& state, unsigned slot, const char** why) {
     return true;
 }
 
-bool makeShared(State& state, unsigned slot, SharedTexture& target, const char* role,
+bool makeShared(ID3D11Device* d11, ID3D12Device* d12, unsigned slot, SharedTexture& target, const char* role,
                 uint32_t width, uint32_t height, DXGI_FORMAT format,
                 bool writable, const char** why) {
     D3D11_TEXTURE2D_DESC desc{};
@@ -480,7 +477,7 @@ bool makeShared(State& state, unsigned slot, SharedTexture& target, const char* 
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET |
                      (writable ? D3D11_BIND_UNORDERED_ACCESS : 0);
     desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
-    HRESULT hr = state.d11->CreateTexture2D(&desc, nullptr, target.d11.GetAddressOf());
+    HRESULT hr = d11->CreateTexture2D(&desc, nullptr, target.d11.GetAddressOf());
     if (FAILED(hr)) return fail(why, "shared %s D3D11 texture %ux%u format=%u failed 0x%08X",
                                 role, width, height, unsigned(format), unsigned(hr));
     // The native D3D11 runtime enforces the keyed mutex: it drops any copy or
@@ -497,11 +494,17 @@ bool makeShared(State& state, unsigned slot, SharedTexture& target, const char* 
                                       nullptr, &target.handle);
     if (FAILED(hr) || !target.handle)
         return fail(why, "shared %s NT handle failed 0x%08X", role, unsigned(hr));
-    hr = state.d12->OpenSharedHandle(target.handle, IID_PPV_ARGS(target.d12.GetAddressOf()));
+    hr = d12->OpenSharedHandle(target.handle, IID_PPV_ARGS(target.d12.GetAddressOf()));
     if (FAILED(hr)) return fail(why, "shared %s D3D12 open failed 0x%08X", role, unsigned(hr));
     Log::get().note("xess: slot=%u shared %s %ux%u format=%u D3D11->D3D12 open ok",
                     slot, role, width, height, unsigned(format));
     return true;
+}
+
+bool makeShared(State& state, unsigned slot, SharedTexture& target, const char* role,
+                uint32_t width, uint32_t height, DXGI_FORMAT format,
+                bool writable, const char** why) {
+    return makeShared(state.d11.Get(), state.d12.Get(), slot, target, role, width, height, format, writable, why);
 }
 
 // AcquireSync reports WAIT_TIMEOUT and WAIT_ABANDONED as success HRESULTs, so
@@ -1077,6 +1080,10 @@ bool xessEvaluate(ID3D11DeviceContext* context, unsigned slot,
         list->ResolveQueryData(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2,
                                command.timingReadback.Get(), 0);
     }
+    // XeSS Frame Generation takes the same motion and depth, copied on this list while both are still
+    // NON_PIXEL_SHADER_RESOURCE. The flat resolver's slot only; it returns at once when no bridge exists.
+    if (slot == 0 && g_inputTagger)
+        g_inputTagger(list, feature.motion.d12.Get(), feature.depth.d12.Get(), width, height, jitterX, jitterY, reset);
     transition(list, feature.color.d12.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_COMMON);
     transition(list, feature.motion.d12.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -1167,6 +1174,75 @@ bool xessEvaluate(ID3D11DeviceContext* context, unsigned slot,
                         static_cast<unsigned long long>(consumer), hdr ? "R11->FP16" : "RGBA8");
     if (why) *why = nullptr;
     return true;
+#endif
+}
+
+void xessSetInputTagger(XessInputTagger tagger) {
+#if EDVR_HAVE_XESS
+    g_inputTagger = tagger;
+#else
+    (void)tagger;
+#endif
+}
+
+bool xessBridgeOpen(ID3D11Device* device, XessD3D12Bridge* out, const char** why) {
+    if (!out) return fail(why, "no bridge output");
+    *out = XessD3D12Bridge{};
+#if !EDVR_HAVE_XESS
+    (void)device;
+    return fail(why, "this build has no XeSS SDK (EDVR_HAVE_XESS=0)");
+#else
+    if (!xessAvailable(device, why)) return false;
+    State& state = *g_state;
+    out->d12 = state.d12.Get(); out->d12->AddRef();
+    out->queue = state.queue.Get(); out->queue->AddRef();
+    if (why) *why = nullptr;
+    return true;
+#endif
+}
+
+bool xessBridgeMakeFence(ID3D11Device* d11, ID3D12Device* d12, ID3D12Fence** fence12, ID3D11Fence** fence11,
+                         const char** why) {
+#if EDVR_HAVE_XESS
+    if (!d11 || !d12 || !fence12 || !fence11) return fail(why, "no device for the bridge fence");
+    ComPtr<ID3D11Device5> d11v5;
+    HRESULT hr = d11->QueryInterface(IID_PPV_ARGS(d11v5.GetAddressOf()));
+    if (FAILED(hr)) return fail(why, "ID3D11Device5 unavailable 0x%08X", unsigned(hr));
+    ComPtr<ID3D12Fence> made12;
+    hr = d12->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(made12.GetAddressOf()));
+    if (FAILED(hr)) return fail(why, "D3D12 shared fence failed 0x%08X", unsigned(hr));
+    HANDLE handle = nullptr;
+    hr = d12->CreateSharedHandle(made12.Get(), nullptr, GENERIC_ALL, nullptr, &handle);
+    if (FAILED(hr) || !handle) return fail(why, "D3D12 fence NT handle failed 0x%08X", unsigned(hr));
+    ComPtr<ID3D11Fence> made11;
+    hr = d11v5->OpenSharedFence(handle, IID_PPV_ARGS(made11.GetAddressOf()));
+    CloseHandle(handle);   // both opened objects keep the fence
+    if (FAILED(hr)) return fail(why, "D3D11 shared fence open failed 0x%08X", unsigned(hr));
+    *fence12 = made12.Detach();
+    *fence11 = made11.Detach();
+    return true;
+#else
+    (void)d11; (void)d12; (void)fence12; (void)fence11;
+    return fail(why, "this build has no XeSS SDK (EDVR_HAVE_XESS=0)");
+#endif
+}
+
+bool xessBridgeShareTexture(ID3D11Device* d11Device, ID3D12Device* d12Device, uint32_t width, uint32_t height,
+                            unsigned dxgiFormat, ID3D11Texture2D** d11, IDXGIKeyedMutex** key, ID3D12Resource** d12,
+                            const char** why) {
+#if EDVR_HAVE_XESS
+    if (!d11Device || !d12Device || !d11 || !key || !d12) return fail(why, "no device for the shared texture");
+    SharedTexture shared;
+    if (!makeShared(d11Device, d12Device, 0, shared, "frame-generation back buffer", width, height,
+                    static_cast<DXGI_FORMAT>(dxgiFormat), false, why))
+        return false;
+    *d11 = shared.d11.Detach();
+    *key = shared.key.Detach();
+    *d12 = shared.d12.Detach();
+    return true;   // ~SharedTexture closes the NT handle; both opened objects keep the resource
+#else
+    (void)d11Device; (void)d12Device; (void)width; (void)height; (void)dxgiFormat; (void)d11; (void)key; (void)d12;
+    return fail(why, "this build has no XeSS SDK (EDVR_HAVE_XESS=0)");
 #endif
 }
 

@@ -421,6 +421,8 @@ InstallState parseState(const std::string& text) {
     s.xessSha = get("xess", "sha256");
     s.xessLicenseSha = get("xess", "license_sha256");
     s.xessThirdPartySha = get("xess", "third_party_sha256");
+    s.xessFgSha = get("xess", "fg_sha256");
+    s.xessLlSha = get("xess", "ll_sha256");
 
     s.iniSha = get("ini", "sha256");
     s.nativeGraphicsSha = get("native", "graphics_sha256");
@@ -475,6 +477,8 @@ std::string serializeState(const InstallState& state) {
     out += "sha256 = " + state.xessSha + "\r\n";
     out += "license_sha256 = " + state.xessLicenseSha + "\r\n";
     out += "third_party_sha256 = " + state.xessThirdPartySha + "\r\n";
+    out += "fg_sha256 = " + state.xessFgSha + "\r\n";
+    out += "ll_sha256 = " + state.xessLlSha + "\r\n";
 
     out += "\r\n[ini]\r\n";
     out += "sha256 = " + state.iniSha + "\r\n";

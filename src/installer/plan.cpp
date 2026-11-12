@@ -67,6 +67,8 @@ const wchar_t* kOpenvr = L"openvr_api.dll";
 const wchar_t* kOpenvrOrig = L"openvr_api_orig.dll";
 const wchar_t* kNgx = L"nvngx_dlss.dll";   // NVIDIA's DLSS runtime, beside the game's executable
 const wchar_t* kXess = L"libxess.dll";
+const wchar_t* kXessFg = L"libxess_fg.dll";   // XeSS Frame Generation
+const wchar_t* kXessLl = L"libxell.dll";      // Xe Low Latency
 const wchar_t* kXessLicense = L"INTEL-XESS-LICENSE.txt";
 const wchar_t* kXessThirdParty = L"INTEL-XESS-THIRD-PARTY.txt";
 
@@ -422,6 +424,8 @@ Survey surveyTarget(const GameInstall& game) {
     // The pinned XeSS runtime is 75 MB, above probeDll's 64 MB PE cap.
     // Ownership here needs only a readable content hash, as for notices.
     s.xess = notice(kXess);
+    s.xessFg = notice(kXessFg);
+    s.xessLl = notice(kXessLl);
     s.xessLicense = notice(kXessLicense);
     s.xessThirdParty = notice(kXessThirdParty);
     s.nvidiaAdapter = nvidiaAdapterPresent(&s.nvidiaAdapterName);
@@ -884,11 +888,18 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             {"xess", kXess, &s.xess, &p.xessSha, &next.xessSha},
             {"xess_license", kXessLicense, &s.xessLicense, &p.xessLicenseSha, &next.xessLicenseSha},
             {"xess_third_party", kXessThirdParty, &s.xessThirdParty, &p.xessThirdPartySha, &next.xessThirdPartySha},
+            {"xess_fg", kXessFg, &s.xessFg, &p.xessFgSha, &next.xessFgSha},
+            {"xess_ll", kXessLl, &s.xessLl, &p.xessLlSha, &next.xessLlSha},
         };
-        const std::string previous[] = {s.state.xessSha, s.state.xessLicenseSha, s.state.xessThirdPartySha};
-        unsigned placed = 0, updated = 0, current = 0;
-        for (unsigned i=0; i<3; ++i) {
+        const std::string previous[] = {s.state.xessSha, s.state.xessLicenseSha, s.state.xessThirdPartySha,
+                                        s.state.xessFgSha, s.state.xessLlSha};
+        unsigned placed = 0, updated = 0, current = 0, carried = 0;
+        for (unsigned i=0; i<5; ++i) {
             const auto& file = files[i];
+            // An installer built before the Frame Generation and Low Latency runtimes existed carries neither: nothing to
+            // place, and a copy an earlier installer recorded stays recorded as ours.
+            if (file.desired->empty()) { *file.recorded = previous[i]; continue; }
+            ++carried;
             const bool present = file.cur->kind != DllKind::Absent;
             const bool ours = present && !previous[i].empty() && file.cur->sha256 == previous[i];
             if (file.cur->kind == DllKind::Unreadable) {
@@ -912,10 +923,11 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         }
         if (placed || updated)
             plan.notes.push_back(placed && !updated
-                ? "Placing libxess.dll (Intel's XeSS-SR runtime, for temporal_aa = xess) and its licence notices."
-                : "Updating libxess.dll (Intel's XeSS-SR runtime) and its licence notices.");
-        else if (current == 3)
-            plan.notes.push_back("libxess.dll (Intel's XeSS-SR runtime) is already this build's -- left alone.");
+                ? "Placing libxess.dll (Intel's XeSS-SR runtime, for temporal_aa = xess), libxess_fg.dll (XeSS Frame Generation), "
+                  "libxell.dll (Xe Low Latency) and their licence notices."
+                : "Updating libxess.dll (Intel's XeSS-SR runtime), libxess_fg.dll, libxell.dll and their licence notices.");
+        else if (current == carried)
+            plan.notes.push_back("libxess.dll, libxess_fg.dll and libxell.dll (Intel's XeSS runtimes) are already this build's -- left alone.");
     }
 
     if (!flat) {
@@ -1225,7 +1237,9 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
 
     const bool ownershipChanged = next.xessSha != s.state.xessSha ||
                                   next.xessLicenseSha != s.state.xessLicenseSha ||
-                                  next.xessThirdPartySha != s.state.xessThirdPartySha;
+                                  next.xessThirdPartySha != s.state.xessThirdPartySha ||
+                                  next.xessFgSha != s.state.xessFgSha ||
+                                  next.xessLlSha != s.state.xessLlSha;
     const bool stateOnly = !changed && body.empty() && ownershipChanged && !o.repair;
     if (stateOnly)
         plan.notes.push_back("Optional runtime ownership changed; only the install record will be updated.");
@@ -1494,11 +1508,11 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             "The nvngx_dlss.dll beside the game is not the copy ED-UP placed -- left alone.");
     }
 
-    const DllInfo* xessFiles[] = {&s.xess, &s.xessLicense, &s.xessThirdParty};
+    const DllInfo* xessFiles[] = {&s.xess, &s.xessLicense, &s.xessThirdParty, &s.xessFg, &s.xessLl};
     const std::string* xessOwned[] = {&s.state.xessSha, &s.state.xessLicenseSha,
-                                     &s.state.xessThirdPartySha};
-    const std::string* xessCarried[] = {&p.xessSha, &p.xessLicenseSha, &p.xessThirdPartySha};
-    for (unsigned i=0; i<3; ++i) {
+                                     &s.state.xessThirdPartySha, &s.state.xessFgSha, &s.state.xessLlSha};
+    const std::string* xessCarried[] = {&p.xessSha, &p.xessLicenseSha, &p.xessThirdPartySha, &p.xessFgSha, &p.xessLlSha};
+    for (unsigned i=0; i<5; ++i) {
         const DllInfo& cur = *xessFiles[i];
         if (cur.kind == DllKind::Absent) continue;
         // EDVR's when the record or the tool's receipt lists it AND its bytes are the record's, the tool's or the payload's. A file with
@@ -1510,7 +1524,7 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                                          : "Keeping a changed XeSS file: " + say(leafOf(cur.path)));
             continue;
         }
-        remove(cur.path, "removes Intel XeSS-SR file ED-UP placed", cur.sha256);
+        remove(cur.path, "removes Intel XeSS file ED-UP placed", cur.sha256);
     }
 
     // ---- settings and record ------------------------------------------

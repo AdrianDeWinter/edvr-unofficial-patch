@@ -5,13 +5,20 @@
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 struct ID3D11Texture2D;
+struct ID3D11Fence;   // xessBridgeMakeFence
+struct ID3D12Device;
+struct ID3D12CommandQueue;
+struct ID3D12Fence;
+struct ID3D12GraphicsCommandList;
+struct ID3D12Resource;
+struct IDXGIKeyedMutex;
 
 namespace edvr {
 
 // XeSS-SR keeps one feature per upscaler slot (dlaa.h, kUpscalerSlots); each
 // slot is keyed and rebuilt on its own. The flat resolver uses slot 0. This
-// backend uses Intel's D3D12 SDK over a shared D3D11/D3D12 device pair; it does
-// not provide frame generation.
+// backend uses Intel's D3D12 SDK over a shared D3D11/D3D12 device pair, which
+// XeSS Frame Generation (xess_fg.h) borrows through the xessBridge* calls below.
 bool xessBuiltIn();
 bool xessAvailable(ID3D11Device* device, const char** why);
 
@@ -60,6 +67,30 @@ struct XessBridgeTiming {
     bool submitTimed = false;
     char line[768] = "";   // the text logged by the report
 };
+// The D3D11/D3D12 bridge's device and queue, lent to XeSS Frame Generation (xess_fg.cpp), which presents on the
+// same queue. Each pointer carries a reference the caller releases, so they outlive xessShutdown. Opening runs the
+// availability probe on `device`. Frame generation orders its work with fences of its own (xessBridgeMakeFence),
+// never XeSS-SR's: each of its fences is signalled by one queue only, so no value goes backwards whichever
+// feature's work completes first.
+struct XessD3D12Bridge {
+    ID3D12Device* d12 = nullptr;
+    ID3D12CommandQueue* queue = nullptr;
+};
+// Called on the flat resolver's slot after each successful XeSS-SR execute, on its still-open command list, with
+// motion and depth in NON_PIXEL_SHADER_RESOURCE. Null (the default) calls nothing.
+using XessInputTagger = void (*)(ID3D12GraphicsCommandList* list, ID3D12Resource* motion, ID3D12Resource* depth,
+                                 uint32_t width, uint32_t height, float jitterX, float jitterY, bool reset);
+void xessSetInputTagger(XessInputTagger tagger);
+bool xessBridgeOpen(ID3D11Device* device, XessD3D12Bridge* out, const char** why);
+// A new shared fence made on `d12` and opened on `d11` (which must be an ID3D11Device5). The caller releases both.
+bool xessBridgeMakeFence(ID3D11Device* d11, ID3D12Device* d12, ID3D12Fence** fence12, ID3D11Fence** fence11,
+                         const char** why);
+// A texture on `d11` opened on `d12` (NT handle; keyed mutex where the runtime has one, which every D3D11 access
+// must hold as key 0). The caller releases all three; the handle is closed here.
+bool xessBridgeShareTexture(ID3D11Device* d11Device, ID3D12Device* d12Device, uint32_t width, uint32_t height,
+                            unsigned dxgiFormat, ID3D11Texture2D** d11, IDXGIKeyedMutex** key, ID3D12Resource** d12,
+                            const char** why);
+
 // Reads back whatever the GPU has finished, for every slot. Never waits. Returns the evaluations still unread.
 unsigned xessBridgeTimingSweep(ID3D11DeviceContext* context);
 // Logs and fills the slot's line now, then starts a new window. False when the slot has executed nothing in its window.

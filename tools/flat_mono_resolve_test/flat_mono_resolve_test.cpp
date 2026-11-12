@@ -98,6 +98,7 @@ const ShardUnit kUnits[]={
     {"originOpticalGpuTests",4},
     {"flatDofBlurGpuTests",1},
     {"flatCelestialGpuTests",5},
+    {"offscreenMotionGpuTests",3},
 };
 int shardIndex=0,shardCount=0;   // 0/0: no --shard, everything runs
 std::vector<std::string> shardRan;
@@ -239,6 +240,7 @@ bool xessAvailable(ID3D11Device*,const char**){return true;}
 void xessReleaseFeatures(){}
 void xessShutdown(){}
 bool xessBuiltIn(){return true;}
+void xessFgNoteCamera(const float[4][4],float){}   // XeSS Frame Generation's camera note: no bridge in the rig
 // XeSS has no rejection-mask input. Observe its actual depth/motion/reset
 // arguments without fabricating a mask; the fixture checks final pixels too.
 bool xessEvaluate(ID3D11DeviceContext* c,unsigned,ID3D11Texture2D*,ID3D11Texture2D* depth,ID3D11Texture2D* mv,
@@ -286,6 +288,7 @@ bool fsr3Evaluate(ID3D11DeviceContext* c,unsigned slot,ID3D11Texture2D* colour,I
 #include "flat_first_person_phase_gpu_tests.h"
 #include "flat_refusal_gpu_tests.h"
 #include "flat_steady_depth_gpu_tests.h"
+#include "flat_offscreen_motion_gpu_tests.h"   // a camera-term pixel whose previous position is off the screen keeps its motion with debug.w bit 64 (XeSS FG)
 #include "flat_vehicle_frame_gpu_tests.h"   // near pixels with no certified record ride the ship's record (flat profile, in a ship)
 #include "flat_stale_record_gpu_tests.h"   // a stale slot's pixel asks the record under it first (flat profile only)
 #include "flat_skin_gpu_tests.h"
@@ -375,6 +378,7 @@ int main(int argc,char** argv) {
         // The depth-validated steady detail (the same section, the key's second form): the prep's depth check, its tolerance and its previous depth,
         // through the DLSS and FSR stubs and EDVR's own TAA, and the same scenario against the prep with one rule flipped at a time.
         if(shardRuns("steadyDepthGpuTests"))timedSuite("steadyDepthGpuTests",[&]{return steadyDepthGpuTests(device.Get(),context.Get());});
+        if(shardRuns("offscreenMotionGpuTests"))timedSuite("offscreenMotionGpuTests",[&]{return offscreenMotionGpuTests(device.Get(),context.Get());});
         if(shardRuns("vehicleFrameGpuTests"))timedSuite("vehicleFrameGpuTests",[&]{return vehicleFrameGpuTests(device.Get(),context.Get());});
         if(shardRuns("staleRecordGpuTests"))timedSuite("staleRecordGpuTests",[&]{return staleRecordGpuTests(device.Get(),context.Get());});
         if(shardRuns("originOpticalGpuTests"))timedSuite("originOpticalGpuTests",[&]{return originOpticalGpuTests(device.Get(),context.Get());});

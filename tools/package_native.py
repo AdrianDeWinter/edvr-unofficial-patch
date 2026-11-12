@@ -71,7 +71,8 @@ CORE_NAMES = ("d3d11.dll", "openvr/openvr_api.dll", "openvr/openxr_loader.dll",
               "LICENSE.txt", "DXBC-HASH-LICENSE.txt", "MINIZ-LICENSE.txt", "FIDELITYFX-SDK-DX11-LICENSE.txt",
               "MIN-ED-LAUNCHER-LICENSE.txt")
 DLSS_NAMES = ("nvngx_dlss.dll", "NVIDIA-DLSS-LICENSE.txt")
-XESS_NAMES = ("libxess.dll", "INTEL-XESS-LICENSE.txt", "INTEL-XESS-THIRD-PARTY.txt")
+XESS_NAMES = ("libxess.dll", "libxess_fg.dll", "libxell.dll", "INTEL-XESS-LICENSE.txt",
+              "INTEL-XESS-THIRD-PARTY.txt")
 # Manifest item -> path in the zips. A licence file not listed here ships in its
 # zip but has no entry in the manifest's files.
 ITEM_PATHS = (("native_graphics", "d3d11.dll"), ("native_runtime", "openvr/openvr_api.dll"),
@@ -79,9 +80,26 @@ ITEM_PATHS = (("native_graphics", "d3d11.dll"), ("native_runtime", "openvr/openv
               ("openxr_loader", "openvr/openxr_loader.dll"),
               ("openxr_license", "openvr/OPENXR-LOADER-LICENSE.txt"),
               ("ngx", "nvngx_dlss.dll"), ("xess", "libxess.dll"),
+              ("xess_fg", "libxess_fg.dll"), ("xess_ll", "libxell.dll"),
               ("xess_license", "INTEL-XESS-LICENSE.txt"),
               ("xess_third_party", "INTEL-XESS-THIRD-PARTY.txt"))
+# Items a launcher older than the version named refuses: update_manifest.cpp fails the whole manifest on an item it
+# does not know, and launcher 0.1.0 (shipped in v0.22.0) knows neither of these. They ship in the XeSS zip and the
+# installer's payload either way, but enter the manifest's files only once MIN_LAUNCHER is at least that version,
+# so a manifest never locks an older launcher out of updating. The launcher that knows them must carry that version.
+ITEMS_SINCE_LAUNCHER = {"xess_fg": "0.2.0", "xess_ll": "0.2.0"}
 SPLIT_PATTERNS = ("ed-up-dlss-*.zip", "ed-up-xess-*.zip")
+
+
+def _version_tuple(text):
+    return tuple(int(part) for part in text.split("-", 1)[0].split("."))
+
+
+def manifest_items(min_launcher=None):
+    """ITEM_PATHS less the items a launcher at min_launcher would refuse (ITEMS_SINCE_LAUNCHER)."""
+    floor = _version_tuple(min_launcher or MIN_LAUNCHER)
+    return tuple((item, path) for item, path in ITEM_PATHS
+                 if item not in ITEMS_SINCE_LAUNCHER or floor >= _version_tuple(ITEMS_SINCE_LAUNCHER[item]))
 
 
 def _version(value):
@@ -115,10 +133,12 @@ def _files(root, no_dlss):
     if not no_dlss or (build / "nvngx_dlss.dll").is_file():
         result.append((build / "nvngx_dlss.dll", "nvngx_dlss.dll"))
         result.append((build / "NVIDIA-DLSS-LICENSE.txt", "NVIDIA-DLSS-LICENSE.txt"))
-    if (build / "libxess.dll").is_file():
-        result.extend(((build / "libxess.dll", "libxess.dll"),
-                       (build / "INTEL-XESS-LICENSE.txt", "INTEL-XESS-LICENSE.txt"),
-                       (build / "INTEL-XESS-THIRD-PARTY.txt", "INTEL-XESS-THIRD-PARTY.txt")))
+    if any((build / name).is_file() for name in ("libxess.dll", "libxess_fg.dll", "libxell.dll")):
+        # libxess_fg.dll (XeSS Frame Generation) and libxell.dll (Xe Low Latency) are the same SDK's
+        # other runtimes and travel with libxess.dll under the same Intel notices.
+        for name in XESS_NAMES:
+            if (build / name).is_file() or name.startswith("INTEL-"):
+                result.append((build / name, name))
     # Both settings files ship: edvr.ini for VR, and edvr-flat.ini for the flat
     # runtime (config.cpp reads edvr-flat.ini first). Each keeps its own name.
     result.extend([(root / "edvr.ini", "edvr.ini"),
@@ -292,7 +312,8 @@ def _validate_installer_resources(executable, files):
             raise ValueError("the embedded DLSS runtime requires its NVIDIA license notice")
     elif embedded_dlss is not None:
         raise ValueError("installer embeds DLSS but its matching DLL and notice are missing from the package")
-    xess_names = {108: "libxess.dll", 109: "INTEL-XESS-LICENSE.txt", 110: "INTEL-XESS-THIRD-PARTY.txt"}
+    xess_names = {108: "libxess.dll", 109: "INTEL-XESS-LICENSE.txt", 110: "INTEL-XESS-THIRD-PARTY.txt",
+                  112: "libxess_fg.dll", 113: "libxell.dll"}
     for resource_id, name in xess_names.items():
         embedded = _embedded_resource(executable, resource_id, required=False)
         if name in by_name:
@@ -354,7 +375,7 @@ def _validate_launcher(root):
 
       * build\\ed-up-launcher.exe exists (build.bat writes it);
       * its FileVersion and ProductVersion are exactly src\\installer\\launcher_version.h's;
-      * it carries none of the installer's payload resources, 101 to 111, and carries the min-ed-launcher
+      * it carries none of the installer's payload resources, 101 to 113, and carries the min-ed-launcher
         licence as resource 120, byte for byte the file in third_party;
       * src\\installer\\update_keys.h lists two distinct keys, and neither is the public test key
         of RFC 6979, whose private half is in every library's tests."""
@@ -368,7 +389,7 @@ def _validate_launcher(root):
     for key in STAMP_KEYS:
         if stamp.get(key) != version:
             problems.append("%s %s is %s, but launcher_version.h says %s" % (LAUNCHER_ASSET, key, stamp.get(key), version))
-    for resource_id in range(101, 112):
+    for resource_id in range(101, 114):
         if _embedded_resource(launcher, resource_id, required=False) is not None:
             problems.append("%s carries resource %d: the launcher has no embedded payload" % (LAUNCHER_ASSET, resource_id))
     licence = _embedded_resource(launcher, LAUNCHER_LICENSE_RESOURCE, required=False)
@@ -426,7 +447,7 @@ def _split_outputs(root, version, files):
     manifest["assets"] = assets
     manifest["files"] = [{"item": item, "path": path, "asset": held[path],
                           "sha256": hashlib.sha256(data[path]).hexdigest(), "size": len(data[path])}
-                         for item, path in ITEM_PATHS if path in held]
+                         for item, path in manifest_items() if path in held]
     problems = sign_manifest.validate_manifest(manifest)
     if problems:
         raise ValueError("the manifest is not valid:\n  " + "\n  ".join(problems))
@@ -1053,7 +1074,7 @@ def self_test():
             with zipfile.ZipFile(root / "dist" / "ed-up-installer-1.2.7.zip") as installer_archive:
                 assert set(installer_archive.namelist()) == {"edvr-installer.exe"}
             xess_files = {108: "libxess.dll", 109: "INTEL-XESS-LICENSE.txt",
-                          110: "INTEL-XESS-THIRD-PARTY.txt"}
+                          110: "INTEL-XESS-THIRD-PARTY.txt", 112: "libxess_fg.dll", 113: "libxell.dll"}
             for resource_id, name in xess_files.items():
                 contents = ("XeSS fixture " + name).encode("ascii")
                 (root / "build" / name).write_bytes(contents)
@@ -1125,9 +1146,14 @@ def self_test():
                                           "sha256": hashlib.sha256(b"launcher exe").hexdigest(), "size": 12}
             assert (dist / LAUNCHER_ASSET).read_bytes() == b"launcher exe"
             assert [asset["name"] for asset in parsed["assets"]] == [core.name, dlss_zip.name, xess_zip.name]
+            # xess_fg and xess_ll are in the XeSS zip but not yet in the manifest: launcher 0.1.0 refuses a manifest naming them.
             assert {entry["item"] for entry in parsed["files"]} == {
                 "native_graphics", "native_runtime", "ini", "flat_ini", "profile", "openxr_loader",
                 "openxr_license", "ngx", "xess", "xess_license", "xess_third_party"}
+            with zipfile.ZipFile(xess_zip) as xess_archive:
+                assert {"libxess_fg.dll", "libxell.dll"} <= set(xess_archive.namelist()), xess_archive.namelist()
+            assert {item for item, _ in manifest_items("0.1.0")} == {item for item, _ in ITEM_PATHS} - {"xess_fg", "xess_ll"}
+            assert {item for item, _ in manifest_items("0.2.0")} == {item for item, _ in ITEM_PATHS}
             lines = []
             assert sign_manifest.verify_directory(dist, allow_unsigned=True, out=lines.append), lines
             ngx = next(entry for entry in parsed["files"] if entry["item"] == "ngx")

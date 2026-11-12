@@ -50,7 +50,7 @@ struct Manifest {
 // The item names a manifest may use; the same list as ITEMS in sign_manifest.py.
 inline constexpr const char* kManifestItems[] = {
     "native_graphics", "native_runtime", "ini", "flat_ini", "profile", "ngx",
-    "xess", "xess_license", "xess_third_party", "openxr_loader", "openxr_license"};
+    "xess", "xess_fg", "xess_ll", "xess_license", "xess_third_party", "openxr_loader", "openxr_license"};
 
 inline constexpr size_t kMaxManifestBytes = 1u << 20;
 

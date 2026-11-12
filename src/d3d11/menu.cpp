@@ -65,6 +65,7 @@
 #include "vr_ssaa_hold_math.h"  // ssaahold::formatHoldToast
 #include "mode_watch.h"         // modeWatchNoticeDue: the 3D mode watch's toast, once per commit
 #include "vscreen_res.h"
+#include "xess_fg.h"        // xessFgBridged, xessFgMaxGeneratedFrames: the XeSS Frame Generation rows (hint, and the options the GPU cannot make)
 #include "xinput_watch.h"   // the Hotkeys page's capture reads the pad
 #include "../../include/edvr_plugin_api.h"
 #include "../plugins/plugin_manager.h"
@@ -514,6 +515,72 @@ const char* hudAntiAliasingRefusal() {
     return hudAntiAliasingUiQualityOn() ? "HUD Anti-Aliasing is inactive: turn anti-aliasing on first."
                                         : "HUD Anti-Aliasing is inactive: turn UI quality on above first.";
 }
+
+// fix.xess_frame_generation and fix.xess_generated_frames (the XeSS Frame Generation and XeSS-FG frames rows, flat Performance tab only, 2026-11-12). Both are
+// always on the page and DIMMED while the flat anti-aliasing mode is not XeSS; the frames row is dimmed as well while the toggle is off. A dimmed row refuses a
+// change with a line saying why. The mode is read as the flat runtime reads it (requestedTemporalMode), live; the rows are flat only, so a VR menu never has them.
+bool isXessFgToggleRow(const MenuRowDef& d) {
+    return strcmp(d.section, "fix") == 0 && strcmp(d.key, "xess_frame_generation") == 0;
+}
+
+bool isXessFgFramesRow(const MenuRowDef& d) {
+    return strcmp(d.section, "fix") == 0 && strcmp(d.key, "xess_generated_frames") == 0;
+}
+
+// Both read the value the panel shows (g_rows), as flatDlssSelected does, not Config: an F8 change is shown at once but reaches Config only with the reload after
+// the worker's write, so reading Config dimmed the rows one change late (2026-11-12).
+const std::string& shownValue(const char* section, const char* key) {
+    static const std::string none;
+    for (int i = 0; i < kRowDefCount; ++i)
+        if (strcmp(kMenuRows[i].section, section) == 0 && strcmp(kMenuRows[i].key, key) == 0) return g_rows[i].value;
+    return none;
+}
+
+bool flatAntiAliasingIsXess() { return _stricmp(shownValue("fix", "temporal_aa").c_str(), "xess") == 0; }
+
+bool xessFgToggleOn() { return boolOf(shownValue("fix", "xess_frame_generation"), false); }
+
+bool xessFgToggleRowDisabled() { return xessFgToggleRowDim(runtimeFlatProfile(), flatAntiAliasingIsXess()); }
+
+bool xessFgFramesRowDisabled() { return xessFgFramesRowDim(runtimeFlatProfile(), flatAntiAliasingIsXess(), xessFgToggleOn()); }
+
+// The highlighted dimmed row's hint, and the line a refused change leaves: the AA mode comes first, because turning the toggle on does nothing without it.
+const char* xessFgDimHint(bool framesRow) {
+    if (xessFgToggleRowDisabled()) return "Needs XeSS anti-aliasing: choose XeSS above to use this.";
+    return framesRow ? "Needs XeSS Frame Generation: turn it on above to use this." : "";
+}
+
+const char* xessFgRefusal(bool framesRow) {
+    const char* row = framesRow ? "XeSS-FG frames" : "XeSS Frame Generation";
+    static char text[120];
+    if (xessFgToggleRowDisabled())
+        snprintf(text, sizeof(text), "%s is inactive: choose XeSS anti-aliasing above first.", row);
+    else
+        snprintf(text, sizeof(text), "%s is inactive: turn XeSS Frame Generation on above first.", row);
+    return text;
+}
+
+// A change to either row refused for its dim, or false.
+bool xessFgRowRefused(const MenuRowDef& d, const char** why) {
+    const bool toggle = isXessFgToggleRow(d), frames = isXessFgFramesRow(d);
+    if (!(toggle && xessFgToggleRowDisabled()) && !(frames && xessFgFramesRowDisabled())) return false;
+    *why = xessFgRefusal(frames);
+    return true;
+}
+
+// The toggle is on but frame generation is not running: either it was never tried this session (it takes effect at the next launch), or it
+// was tried and failed or stopped (xessFgProblem), which a restart alone will not fix. The second wins.
+bool xessFgNeedsRestart() { return xessFgToggleOn() && (!xessFgBridged() || xessFgProblem() != nullptr); }
+
+const char* xessFgRestartHint() {
+    static char text[200];
+    if (const char* problem = xessFgProblem()) {
+        snprintf(text, sizeof(text), "Not running: %s. Details in the EDVR log.", problem);
+        return text;
+    }
+    return "Takes effect at the next game start.";
+}
+
 
 // visual.star_glow (the Star glow row). It strengthens the halo of Elite's own bloom, so with Elite's Bloom option off it changes nothing, and the
 // menus say so (star_glow_bloom.h: the flat panel's Visual tab as a note under the rows, the VR menu as the hint line while this row is highlighted).
@@ -1028,6 +1095,7 @@ bool rowPending(const MenuRowDef& d, const std::string& value, const std::string
 struct ChoiceItem {
     std::string value;
     std::string label;
+    bool disabled = false;   // a choice this machine cannot make (XeSS-FG frames above the GPU's maximum): skipped by stepping, listed as "(not supported)"
 };
 
 const char* nvidiaLabel() {
@@ -1065,6 +1133,8 @@ std::vector<ChoiceItem> choicesOf(const MenuRowDef& d) {
                 else if (c.value == "dlss") c.label = nvidiaLabel();
                 else if (c.value == "fsr") c.label = "FSR3";
             }
+            // XeSS-FG frames: an option above what the GPU can generate (xessFgMaxGeneratedFrames, 0 while unknown = all enabled) is disabled.
+            if (isXessFgFramesRow(d)) c.disabled = !xessFgFramesOptionEnabled(atoi(c.value.c_str()), xessFgMaxGeneratedFrames());
             out.push_back(c);
         }
         pos = bar + 1;
@@ -1116,6 +1186,14 @@ std::string displayValue(const MenuRowDef& d, const std::string& v) {
             // menu_schema.h: "+0.15 m", "0 ms (exact)", "30%", or the plain number.
             return menuFormatNumber(d, atof(v.c_str()));
         case MenuKind::Choice: {
+            // A stored value above what the GPU can generate is shown as the clamped one (the file is not rewritten).
+            if (isXessFgFramesRow(d)) {
+                char shown[8];
+                snprintf(shown, sizeof(shown), "%d", xessFgFramesShown(atoi(v.c_str()), xessFgMaxGeneratedFrames()));
+                for (const ChoiceItem& c : choicesOf(d)) {
+                    if (c.value == shown) return c.label;
+                }
+            }
             for (const ChoiceItem& c : choicesOf(d)) {
                 if (_stricmp(c.value.c_str(), v.c_str()) == 0) return c.label;
             }
@@ -2320,6 +2398,8 @@ int measureFooterLine(const char* utf8, void* ctx) {
     return menuPanelMeasureLine(utf8, static_cast<const MenuContent*>(ctx)->capPx);
 }
 
+void cancelEdit();
+
 void buildContent(MenuContent& c) {
     State& s = g_s;
     memset(&c, 0, sizeof(c));
@@ -2560,7 +2640,11 @@ void buildContent(MenuContent& c) {
             const bool glassDirtRow = isCockpitGlassDirtRow(d);
             const bool windowDistanceRow = isStationWindowDistanceRow(d);
             const bool doorsRow = isRoomsBehindDoorsRow(d);
+            const bool xessFramesRow = isXessFgFramesRow(d);
+            const bool xessToggleRow = isXessFgToggleRow(d);
             const bool dim = (dlssRow && dlssPresetDisabled()) ||
+                             (xessFramesRow && xessFgFramesRowDisabled()) ||
+                             (xessToggleRow && xessFgToggleRowDisabled()) ||
                              (sharpenRow && sharpenRowDisabled()) ||
                              (hudAaRow && hudAntiAliasingRowDisabled()) ||
                              (glassDirtRow && cockpitGlassDirtRowDisabled()) ||
@@ -2640,6 +2724,10 @@ void buildContent(MenuContent& c) {
                 snprintf(c.hint, sizeof(c.hint), "%s", cockpitGlassDirtHint());
             else if (hi && dim && (windowDistanceRow || doorsRow))
                 snprintf(c.hint, sizeof(c.hint), "%s", stationWindowDistanceHint());
+            else if (hi && dim && (xessFramesRow || xessToggleRow))
+                snprintf(c.hint, sizeof(c.hint), "%s", xessFgDimHint(xessFramesRow));
+            else if (hi && (xessFramesRow || xessToggleRow) && xessFgNeedsRestart())
+                snprintf(c.hint, sizeof(c.hint), "%s", xessFgRestartHint());
             else if (hi && dim && runtimeFlatProfile())
                 snprintf(c.hint, sizeof(c.hint), "%s",
                          sharpenRow ? "Turn anti-aliasing on to sharpen."
@@ -2696,8 +2784,11 @@ void buildContent(MenuContent& c) {
                     for (const ChoiceItem& ch : choicesOf(d)) {
                         if (!list.empty()) list += ", ";
                         list += ch.label;
+                        if (ch.disabled) list += " (not supported)";
                     }
                     if (!list.empty()) body += "Choices: " + list + ".  ";
+                    if (xessFramesRow && xessFgMaxGeneratedFrames() != 0)
+                        body += "This GPU makes up to " + std::to_string(xessFgMaxGeneratedFrames()) + " per frame.  ";
                 }
                 if (!openxrScaleRow) {
                     body += std::string("Shipped ") + displayValue(d, d.shipped) + ".  " +
@@ -3153,6 +3244,11 @@ void stepRow(int defIndex, int dir, int mult) {
         g_s.contentDirty = true;
         return;
     }
+    if (const char* why = nullptr; xessFgRowRefused(d, &why)) {
+        g_s.lastWrite = why;
+        g_s.contentDirty = true;
+        return;
+    }
     if (isOpenxrRenderScaleRow(d)) {
         // A width for the worn headset, stepped by 100 px on the grid of
         // round hundreds (steppedResolution); the generated row is Text,
@@ -3182,6 +3278,9 @@ void stepRow(int defIndex, int dir, int mult) {
             }
             const int n = static_cast<int>(items.size());
             int next = at < 0 ? 0 : ((at + (dir >= 0 ? 1 : n - 1)) % n);
+            // Choices this machine cannot make are skipped (XeSS-FG frames above the GPU's maximum); at most one lap, and none enabled changes nothing.
+            for (int lap = 0; lap < n && items[next].disabled; ++lap) next = (next + (dir >= 0 ? 1 : n - 1)) % n;
+            if (items[next].disabled) return;
             applyChange(defIndex, items[next].value);
             break;
         }
@@ -3558,6 +3657,11 @@ void beginEdit(int entryIndex, int defIndex) {
     }
     if (isCockpitGlassDirtRow(kMenuRows[defIndex]) && cockpitGlassDirtRowDisabled()) {
         s.lastWrite = cockpitGlassDirtRefusal();
+        s.contentDirty = true;
+        return;
+    }
+    if (const char* why = nullptr; xessFgRowRefused(kMenuRows[defIndex], &why)) {
+        s.lastWrite = why;
         s.contentDirty = true;
         return;
     }
@@ -4030,6 +4134,9 @@ void dispatchNav(MenuNav nav, uint64_t now) {
                         }
                     } else if (isCockpitGlassDirtRow(d) && cockpitGlassDirtRowDisabled()) {
                         s.lastWrite = cockpitGlassDirtRefusal();
+                        s.contentDirty = true;
+                    } else if (const char* why = nullptr; xessFgRowRefused(d, &why)) {
+                        s.lastWrite = why;
                         s.contentDirty = true;
                     } else if (isStationWindowDistanceRow(d) && stationWindowDistanceRowDisabled()) {
                         s.lastWrite = stationWindowDistanceRefusal();

@@ -35,6 +35,8 @@ int idFor(const std::string& item) {
     if (item == "ini") return IDR_EDVR_INI;
     if (item == "ngx") return IDR_EDVR_NGX;
     if (item == "xess") return IDR_EDVR_XESS;
+    if (item == "xess_fg") return IDR_EDVR_XESS_FG;
+    if (item == "xess_ll") return IDR_EDVR_XESS_LL;
     if (item == "xess_license") return IDR_EDVR_XESS_LICENSE;
     if (item == "xess_third_party") return IDR_EDVR_XESS_THIRD_PARTY;
     if (item == "openxr_loader") return IDR_EDVR_OPENXR_LOADER;
@@ -159,6 +161,8 @@ PayloadInfo buildInfo() {
         p.haveXess = true;
         p.xessSha = shaOfItem("xess", data, size);
     }
+    if (lookup("xess_fg", &data, &size)) p.xessFgSha = shaOfItem("xess_fg", data, size);
+    if (lookup("xess_ll", &data, &size)) p.xessLlSha = shaOfItem("xess_ll", data, size);
     if (lookup("xess_license", &data, &size)) p.xessLicenseSha = shaOfItem("xess_license", data, size);
     if (lookup("xess_third_party", &data, &size)) p.xessThirdPartySha = shaOfItem("xess_third_party", data, size);
     const bool graphicsPresent = lookup("native_graphics", &data, &size);

@@ -40,6 +40,7 @@ struct PayloadInfo {
     std::string ngxSha;
     bool        haveXess = false;
     std::string xessSha, xessLicenseSha, xessThirdPartySha;
+    std::string xessFgSha, xessLlSha;   // libxess_fg.dll (Frame Generation) and libxell.dll (Low Latency)
     bool        nativePairValid = false;
     bool        haveOpenxrLoader = false;
     std::string openxrLoaderSha;
@@ -100,6 +101,7 @@ struct Survey {
     // built on is one.
     DllInfo      ngx;            // <game>\nvngx_dlss.dll
     DllInfo      xess, xessLicense, xessThirdParty;
+    DllInfo      xessFg, xessLl;   // <game>\libxess_fg.dll, <game>\libxell.dll
     bool         nvidiaAdapter = false;
     std::wstring nvidiaAdapterName;
 

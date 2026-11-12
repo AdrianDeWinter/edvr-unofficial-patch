@@ -489,14 +489,33 @@ void panelTable(const std::string& root, const std::string& gen) {
               std::strcmp(kFlatTabNames[kFlatTabCount - 1], "Debug") == 0,
           "the flat panel has exactly three tabs: Performance, Visual, then Debug last");
     {
-        const char* const order[][2] = {{"fix", "temporal_aa"}, {"fix", "temporal_aa_model"}, {"fix", "render_sharpness"}, {"fix", "ui_quality"},
+        const char* const order[][2] = {{"fix", "temporal_aa"}, {"fix", "temporal_aa_model"}, {"fix", "xess_frame_generation"}, {"fix", "xess_generated_frames"},
+                                        {"fix", "render_sharpness"}, {"fix", "ui_quality"},
                                         {"fix", "hud_antialiasing"}, {"fix", "optimized_stations"}, {"fix", "station_window_distance"}, {"fix", "skip_rooms_behind_doors"}};
-        bool same = kFlatPageRowCount == 8;
-        for (size_t i = 0; same && i < 8; ++i)
+        bool same = kFlatPageRowCount == 10;
+        for (size_t i = 0; same && i < 10; ++i)
             same = std::strcmp(kFlatPageRows[i].section, order[i][0]) == 0 && std::strcmp(kFlatPageRows[i].key, order[i][1]) == 0;
-        check(same, "the Performance tab has the flat page's eight rows in their order (HUD Anti-Aliasing directly under UI quality, Window 3D distance directly under Optimized stations, "
-                    "Skip rooms behind doors under that)");
+        check(same, "the Performance tab has the flat page's ten rows in their order (the two XeSS Frame Generation rows under the DLSS preset, HUD Anti-Aliasing directly under UI quality, "
+                    "Window 3D distance directly under Optimized stations, Skip rooms behind doors under that)");
     }
+    // The XeSS Frame Generation rows (2026-11-12): read through the gate, dimmed (never hidden) unless the flat AA mode is XeSS, the frames row dimmed as well while the
+    // toggle is off, and frames above the GPU's maximum disabled (every option enabled while the maximum is unknown).
+    check(flatProfileReadsKey("fix.xess_frame_generation") && flatProfileReadsKey("fix.xess_generated_frames"), "the flat gate reads both XeSS Frame Generation keys");
+    check(xessFgToggleRowDim(true, false) && !xessFgToggleRowDim(true, true) && !xessFgToggleRowDim(false, false) && !xessFgToggleRowDim(false, true),
+          "the XeSS Frame Generation toggle is dimmed in flat unless the AA mode is XeSS, and never for VR (which has none)");
+    check(xessFgFramesRowDim(true, false, true) && xessFgFramesRowDim(true, true, false) && !xessFgFramesRowDim(true, true, true),
+          "the frames row is dimmed unless the AA mode is XeSS and XeSS Frame Generation is on");
+    check(xessFgFramesOptionEnabled(1, 0) && xessFgFramesOptionEnabled(3, 0) && xessFgFramesOptionEnabled(1, 1) && !xessFgFramesOptionEnabled(2, 1) &&
+              xessFgFramesOptionEnabled(3, 3) && !xessFgFramesOptionEnabled(4, 3),
+          "frames options above the GPU's maximum are disabled; with the maximum unknown (0) all are enabled");
+    check(xessFgFramesShown(3, 1) == 1 && xessFgFramesShown(3, 0) == 3 && xessFgFramesShown(9, 3) == 3 && xessFgFramesShown(0, 3) == 1 && xessFgFramesShown(2, 3) == 2,
+          "a stored frames value above the maximum is shown clamped");
+    check(menuCpp.find("(xessToggleRow && xessFgToggleRowDisabled())") != std::string::npos && menuCpp.find("xessFgRowRefused(d, &why)") != std::string::npos &&
+              menuCpp.find("syncXessFgRows") == std::string::npos &&
+              menuCpp.find("bool flatAntiAliasingIsXess() { return _stricmp(shownValue(\"fix\", \"temporal_aa\").c_str(), \"xess\") == 0; }") != std::string::npos &&
+              menuCpp.find("bool xessFgToggleOn() { return boolOf(shownValue(\"fix\", \"xess_frame_generation\"), false); }") != std::string::npos &&
+              menuCpp.find("if (ch.disabled) list += \" (not supported)\";") != std::string::npos && menuCpp.find("items[next].disabled") != std::string::npos,
+          "menu.cpp dims both XeSS rows in place (no page rebuild) from the values the panel shows, not Config, which lags an F8 change by a reload; refuses a change to a dimmed one, and skips disabled frames options when stepping");
     check(kFlatVisualRowCount == 6 && std::strcmp(kFlatVisualRows[0].section, "visual") == 0 && std::strcmp(kFlatVisualRows[0].key, "intro_video") == 0 &&
               std::strcmp(kFlatVisualRows[1].section, "visual") == 0 && std::strcmp(kFlatVisualRows[1].key, "star_glow") == 0 &&
               std::strcmp(kFlatVisualRows[2].section, "visual") == 0 && std::strcmp(kFlatVisualRows[2].key, "cockpit_glass") == 0 &&

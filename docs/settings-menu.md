@@ -287,6 +287,27 @@ that is not in `[fix]` and on a key `kFlatPageRows` does not list (the row would
 rigs `flat_sharpen_test` and `sharp_weapons_test` hold the placement, the dimming and VR's page. The installer's
 window, VR view, still lists the row.
 
+### XeSS Frame Generation rows (2026-11-12)
+
+Two flat-only rows (`menu flat_performance`, so none on VR's pages) on the Performance tab, under the DLSS preset
+row (`docs/xess-frame-generation-2026-11-12.md`):
+
+- **XeSS Frame Generation** (`fix.xess_frame_generation`, on | off, default off). Live while the bridge exists. The
+  bridge is made at swap-chain creation, so turning it on after a launch without it shows "Takes effect at the
+  next game start." (`xessFgBridged()` false). When the bridge was tried and failed, or stopped on a fault, the
+  hint says "Not running: <reason>" instead (`xessFgProblem()`), since a restart alone will not fix that.
+- **XeSS-FG frames** (`fix.xess_generated_frames`, 1 = 2x, 2 = 3x, 3 = 4x, default 1). Also dimmed while the
+  toggle is off. A choice above the GPU's maximum (`xessFgMaxGeneratedFrames()`, known once a bridge has been made; 0 =
+  unknown, all allowed, and the runtime clamps) is skipped when
+  stepping and marked "(not supported)" in the tooltip, because the panel draws only the current value. A stored
+  value above the maximum shows clamped; the file is not rewritten.
+
+Both rows are always on the page and dimmed unless the flat AA mode is XeSS (`xessFgToggleRowDim`,
+`xessFgFramesRowDim`); a dimmed row refuses a change and says why. Both rows read the AA mode and the toggle from the
+values the panel shows (`g_rows`, as the DLSS preset row does), not `Config`: an F8 change reaches `Config` only
+with the reload after the write, so reading it dimmed (and before that, hid) the rows one change late (2026-11-12). The installer's window lists them in the
+flat view only. `flat_sharpen_test` holds the tables and the menu.cpp wiring.
+
 ## The ask
 
 *A design document, written before the code. It supersedes and extends

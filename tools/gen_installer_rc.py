@@ -39,6 +39,8 @@ IDR_PROFILE = 107
 IDR_XESS = 108
 IDR_XESS_LICENSE = 109
 IDR_XESS_THIRD_PARTY = 110
+IDR_XESS_FG = 112   # Intel's XeSS Frame Generation runtime, libxess_fg.dll
+IDR_XESS_LL = 113   # Intel's Xe Low Latency runtime, libxell.dll
 IDR_FLAT_INI = 111   # edvr-flat.ini: the flat profile's own settings, carried beside edvr.ini
 RT_MANIFEST = 24
 
@@ -449,6 +451,8 @@ def main(argv=None):
     flat_ini = os.path.join(args.build, 'edvr-flat.ini')
     ngx = os.path.join(args.build, 'nvngx_dlss.dll')
     xess = os.path.join(args.build, 'libxess.dll')
+    xess_fg = os.path.join(args.build, 'libxess_fg.dll')
+    xess_ll = os.path.join(args.build, 'libxell.dll')
     xess_license = os.path.join(args.build, 'INTEL-XESS-LICENSE.txt')
     xess_third_party = os.path.join(args.build, 'INTEL-XESS-THIRD-PARTY.txt')
     manifest = os.path.join(args.root, 'src', 'installer', 'installer.manifest')
@@ -485,7 +489,7 @@ def main(argv=None):
         print('  A manifest Windows cannot parse is an installer that cannot start.')
         return 1
 
-    if os.path.exists(xess) and (
+    if (os.path.exists(xess) or os.path.exists(xess_fg) or os.path.exists(xess_ll)) and (
             not os.path.isfile(xess_license) or not os.path.isfile(xess_third_party)):
         print('gen_installer_rc: ERROR: XeSS runtime lacks license notices')
         return 1
@@ -531,6 +535,13 @@ def main(argv=None):
                   '%d RCDATA "%s"' % (IDR_XESS_LICENSE, rc_path(xess_license)),
                   '%d RCDATA "%s"' % (IDR_XESS_THIRD_PARTY, rc_path(xess_third_party))]
         carried += ', Intel XeSS-SR runtime and notices'
+    # The XeSS Frame Generation and Xe Low Latency runtimes ride with it under the same Intel notices.
+    if os.path.exists(xess_fg):
+        lines.append('%d RCDATA "%s"' % (IDR_XESS_FG, rc_path(xess_fg)))
+        carried += ', Intel XeSS-FG runtime (libxess_fg.dll)'
+    if os.path.exists(xess_ll):
+        lines.append('%d RCDATA "%s"' % (IDR_XESS_LL, rc_path(xess_ll)))
+        carried += ', Intel Xe Low Latency runtime (libxell.dll)'
 
     version = args.version
     lines += [''] + versioninfo_lines(
@@ -604,7 +615,7 @@ def self_test():
                 print('expected-error: argparse refused --profile flat (exit 2)')
             else:
                 raise AssertionError('--profile flat was accepted')
-            for name in ('libxess.dll', 'INTEL-XESS-LICENSE.txt', 'INTEL-XESS-THIRD-PARTY.txt'):
+            for name in ('libxess.dll', 'libxess_fg.dll', 'libxell.dll', 'INTEL-XESS-LICENSE.txt', 'INTEL-XESS-THIRD-PARTY.txt'):
                 with open(os.path.join(build, name), 'wb') as stream: stream.write(name.encode('ascii'))
             assert main(['--root', root, '--build', build, '--out', out,
                          '--version', '1.2.3']) == 0
@@ -613,8 +624,10 @@ def self_test():
             # One installer: both settings files, the descriptor, the runtime and the XeSS-SR files.
             assert all('%d RCDATA ' % resource_id in rc_text for resource_id in
                        (IDR_INI, IDR_FLAT_INI, IDR_PROFILE, IDR_NATIVE_RUNTIME, IDR_LOADER,
-                        IDR_LOADER_NOTICE, IDR_XESS, IDR_XESS_LICENSE, IDR_XESS_THIRD_PARTY))
+                        IDR_LOADER_NOTICE, IDR_XESS, IDR_XESS_FG, IDR_XESS_LL, IDR_XESS_LICENSE,
+                        IDR_XESS_THIRD_PARTY))
             assert 'Intel XeSS-SR runtime and notices' in rc_text
+            assert 'Intel XeSS-FG runtime (libxess_fg.dll)' in rc_text and 'Intel Xe Low Latency runtime (libxell.dll)' in rc_text
             assert 'graphics, edvr.ini, edvr-flat.ini and vr profile descriptor' in rc_text
             with open(os.path.join(build, 'edvr-flat.ini'), 'rb') as stream:
                 flat_ini = stream.read()

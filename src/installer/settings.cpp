@@ -192,6 +192,10 @@ void SettingsModel::refreshRows() {
             const std::string dotted = std::string(def.section) + "." + def.key;
             // fix.temporal_aa is read by the flat runtime through Config::requestedTemporalMode, which skips the allow-list.
             if (!edvr::flatProfileReadsKey(dotted.c_str()) && dotted != "fix.temporal_aa") continue;
+        } else {
+            // XeSS Frame Generation cannot work under OpenXR: the flat selection's rows only (the settings the VR runtime never reads).
+            const std::string vrDotted = std::string(def.section) + "." + def.key;
+            if (vrDotted == "fix.xess_frame_generation" || vrDotted == "fix.xess_generated_frames") continue;
         }
         SettingRow row;
         row.def = &def;

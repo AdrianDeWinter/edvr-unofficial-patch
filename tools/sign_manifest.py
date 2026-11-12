@@ -50,7 +50,7 @@ SIGNATURE_NAME = MANIFEST_NAME + ".sig"
 
 # The manifest's names for the files the installer's payloadItem() knows.
 ITEMS = ("native_graphics", "native_runtime", "ini", "flat_ini", "profile", "ngx", "xess",
-         "xess_license", "xess_third_party", "openxr_loader", "openxr_license")
+         "xess_fg", "xess_ll", "xess_license", "xess_third_party", "openxr_loader", "openxr_license")
 
 # NIST P-256.
 P = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff

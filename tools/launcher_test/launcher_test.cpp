@@ -2986,6 +2986,8 @@ void testSession() {
         session.start();
         check(ui.pump([&]() { return session.checkState() == CheckState::Skipped; }), "an unreachable GitHub ends the check as skipped");
         check(contains(session.updateLine(), "could not be reached") && session.updateLine().back() == '.', "with one sentence: " + session.updateLine());
+        // The payload loads on its own worker, which can finish after the check under load.
+        check(ui.pump([&]() { return session.payloadState() != PayloadState::Loading; }), "the payload load finishes");
         session.beginUpdate();
         check(!session.updating() && http.count("ed-up-core") == 0, "Update does nothing when there is nothing to update");
         check(session.payloadState() == PayloadState::None, "and the payload stays none");
