@@ -156,13 +156,6 @@ void LauncherSession::beginUpdate() {
     if (checkState_ != CheckState::Available || updating_ || applying_) return;
     const UpdateCheck check = check_;
     const bool canonical = env_.roots.canonical;
-    // A launcher that is not the canonical copy never replaces itself; one this old cannot read
-    // the new payload, and says so rather than guessing.
-    const bool tooOld = compareVersions(EDUP_LAUNCHER_VERSION, check.manifest.minLauncher) < 0;
-    if (tooOld && !canonical) {
-        updateFailed("this copy of the launcher is too old for that release and does not replace itself when run with --data-root");
-        return;
-    }
     // After a restart for a self-update the launcher is already what the manifest names, or the
     // update would loop: carry on with the payload either way.
     const bool selfUpdate = check.launcherNeedsUpdate && canonical && !env_.updatedFlag;

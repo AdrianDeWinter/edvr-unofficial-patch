@@ -3,4 +3,4 @@
 // agree with it, so keep this to one define.
 #pragma once
 
-#define EDUP_LAUNCHER_VERSION "0.1.0"
+#define EDUP_LAUNCHER_VERSION "0.2.0"

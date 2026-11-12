@@ -45,6 +45,7 @@ import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import package_native as pn  # noqa: E402
 import sign_manifest as sm  # noqa: E402
 
 TEST_PRIVATE = int(sm.RFC_KEY, 16)
@@ -187,6 +188,14 @@ def write_signing(out):
 
 # ---- schema shapes -------------------------------------------------------------
 
+def package_table_manifest():
+    """A manifest of nothing but package_native.FILES, with one zip per group: the real table must pass."""
+    manifest = copy.deepcopy(good_manifest()[0])
+    manifest["assets"] = [{"name": group + ".zip", "sha256": "0" * 64, "size": 1} for group in ("core", "dlss", "xess")]
+    manifest["files"] = [pn.manifest_file_entry(f, f.group + ".zip", b"x") for f in pn.FILES]
+    return manifest
+
+
 def shape_cases():
     base, _ = good_manifest()
     launcher = {"version": "0.1.0", "asset": "ed-up-launcher.exe", "sha256": "0" * 64, "size": 1}
@@ -200,20 +209,45 @@ def shape_cases():
         change(clone)
         add(name, sm._dump(clone))
 
+    def second(**changes):
+        """A change that appends a copy of files[0] (graphics) as another id, with `changes`."""
+        def change(m):
+            m["files"].append(dict(copy.deepcopy(m["files"][0]), id="other", **changes))
+        return change
+
+    def with_target(root, path):
+        """Appends a replace file (id other) with this target, to test target rules on a file with no name of its own."""
+        def change(m):
+            m["files"].append(dict(copy.deepcopy(m["files"][0]), id="other", existing="replace",
+                                   target={"root": root, "path": path}))
+        return change
+
     text = sm._dump(base).decode("ascii")
     add("valid", sm._dump(base))
     add("valid-launcher", sm._dump(dict(base, launcher=launcher)))
-    assert '"size": 8\n' in text
-    add("valid-minus-zero-size", text.replace('"size": 8\n', '"size": -0\n', 1))
+    assert '"size": 8,\n' in text
+    add("valid-minus-zero-size", text.replace('"size": 8,\n', '"size": -0,\n', 1))
     add("valid-escaped-version", text.replace('"version": "1.0.0"', '"version": "\\u0031.0.0"', 1))
     add("valid-escaped-path", text.replace('"path": "d3d11.dll"', '"path": "\\u0064\\u0033d11.dll"', 1))
     add("valid-compact", json.dumps(base, separators=(",", ":")))
-    for item in sm.ITEMS:
-        mutate("item-" + item, lambda m, item=item: (m.update(files=m["files"][:1]), m["files"][0].update(item=item)))
-    mutate("schema-2", lambda m: m.update(schema=2))
+    add("valid-package-table", sm._dump(package_table_manifest()))
+
+    # schema: read alone first, so a newer one is refused whatever else the file holds.
+    mutate("schema-1", lambda m: m.update(schema=1))
+    mutate("schema-0", lambda m: m.update(schema=0))
+    mutate("schema-3", lambda m: m.update(schema=3))
+    mutate("schema-4", lambda m: m.update(schema=4))
+    add("schema-3-junk-body", '{"schema": 3, "anything": [1, 2, {"x": null}]}')
+    add("schema-3-bare", '{"schema": 3}')
     mutate("schema-true", lambda m: m.update(schema=True))
-    mutate("schema-float", lambda m: m.update(schema=1.0))
-    for key in ("version", "build", "tag", "min_launcher"):
+    mutate("schema-float", lambda m: m.update(schema=2.0))
+    mutate("schema-text", lambda m: m.update(schema="2"))
+    mutate("schema-null", lambda m: m.update(schema=None))
+    mutate("schema-missing", lambda m: m.pop("schema"))
+    mutate("schema-negative", lambda m: m.update(schema=-2))
+    mutate("min-launcher-present", lambda m: m.update(min_launcher="0.1.0"))
+
+    for key in ("version", "build", "tag"):
         mutate(key + "-number", lambda m, key=key: m.update({key: 3}))
         mutate(key + "-empty", lambda m, key=key: m.update({key: ""}))
         mutate(key + "-missing", lambda m, key=key: m.pop(key))
@@ -236,6 +270,7 @@ def shape_cases():
     mutate("files-empty", lambda m: m.update(files=[]))
     mutate("files-missing", lambda m: m.pop("files"))
     mutate("files-not-list", lambda m: m.update(files={}))
+    mutate("files-entry-not-object", lambda m: m["files"].append("graphics"))
     mutate("asset-extra-key", lambda m: m["assets"][0].update(more=1))
     mutate("asset-missing-size", lambda m: m["assets"][0].pop("size"))
     mutate("asset-sha-short", lambda m: m["assets"][0].update(sha256="ab"))
@@ -248,16 +283,138 @@ def shape_cases():
     mutate("file-extra-key", lambda m: m["files"][0].update(more=1))
     for index, bad in enumerate(("a b.zip", "a/b.zip", "a\\b.zip", "", "..", ".", "...", "\u00e9.zip", "a.zip\n", "a:b.zip", 5)):
         mutate("asset-name-%d" % index, lambda m, bad=bad: m["assets"][0].update(name=bad))
+    # files[].path: the path inside the zip, the older zip-path rule.
     for index, bad in enumerate(("", ".", "..", "/abs", "a//b", "a/./b", "a/../b", "a/", "a\\b", "C:/x", "a:b",
                                  "a\x01b", "caf\u00e9", "a\x7fb", "../x", 5, None)):
         mutate("path-%d" % index, lambda m, bad=bad: m["files"][0].update(path=bad))
     mutate("path-nested-ok", lambda m: m["files"][1].update(path="Openvr/win64/openvr_api.dll"))
-    mutate("item-unknown", lambda m: m["files"][0].update(item="payload"))
-    mutate("item-alias-d3d11", lambda m: m["files"][0].update(item="d3d11"))
-    mutate("item-duplicate", lambda m: m["files"].append(dict(m["files"][0], path="other.dll")))
+    mutate("path-trailing-dot-in-zip-ok", lambda m: m["files"][0].update(path="d3d11.dll."))
     mutate("asset-duplicate", lambda m: m["assets"].append(dict(m["assets"][0])))
     mutate("file-asset-unlisted", lambda m: m["files"][0].update(asset="nowhere.zip"))
     mutate("file-asset-number", lambda m: m["files"][0].update(asset=3))
+
+    # id
+    mutate("id-missing", lambda m: m["files"][0].pop("id"))
+    mutate("id-old-item-key", lambda m: (m["files"][0].pop("id"), m["files"][0].update(item="native_graphics")))
+    for name, bad in (("empty", ""), ("upper", "Graphics"), ("dash", "a-b"), ("too-long", "a" * 33),
+                      ("non-ascii", "caf\u00e9"), ("number", 5), ("null", None), ("space", "a b")):
+        mutate("id-" + name, lambda m, bad=bad: m["files"][0].update(id=bad))
+    mutate("id-longest-ok", lambda m: m["files"][0].update(id="a" * 32))
+    mutate("id-digits-underscore-ok", lambda m: m["files"][0].update(id="_0_9_"))
+    mutate("id-duplicate", lambda m: m["files"].append(dict(
+        copy.deepcopy(m["files"][0]), target={"root": "game", "path": "other.dll"}, existing="replace")))
+
+    # target
+    mutate("target-missing", lambda m: m["files"][0].pop("target"))
+    mutate("target-not-object", lambda m: m["files"][0].update(target="d3d11.dll"))
+    mutate("target-null", lambda m: m["files"][0].update(target=None))
+    mutate("target-extra-key", lambda m: m["files"][0]["target"].update(mode="x"))
+    mutate("target-root-settings", lambda m: m["files"][0]["target"].update(root="settings"))
+    mutate("target-root-upper", lambda m: m["files"][0]["target"].update(root="Game"))
+    mutate("target-root-missing", lambda m: m["files"][0]["target"].pop("root"))
+    mutate("target-path-missing", lambda m: m["files"][0]["target"].pop("path"))
+    for name, good in (("nested", "sub/dir/File-1.dll"), ("console", "console.txt"), ("com10", "com10.dll"),
+                       ("nul-prefix", "nullx.dll"), ("double-ext", "x.dll.bak"), ("dot-inside", "a.b/c.d"),
+                       ("com-prefix-dir", "com1x/a.dll")):
+        mutate("target-path-ok-" + name, with_target("game", good))
+    for name, bad in (("empty", ""), ("dot", "."), ("dotdot", ".."), ("dotdot-lead", "../x.dll"),
+                      ("dotdot-mid", "a/../x.dll"), ("absolute", "/abs.dll"), ("drive", "C:/x.dll"),
+                      ("drive-relative", "C:x.dll"), ("colon", "a:b"), ("empty-segment", "a//b"),
+                      ("dot-segment", "a/./b"), ("backslash", "a\\b"), ("nul", "NUL"), ("nul-lower-ext", "nul.txt"),
+                      ("con-txt", "con.txt"), ("con-mixed", "Con"), ("com1", "COM1"), ("com0", "com0"),
+                      ("lpt9", "lpt9.dll"), ("aux-dir", "a/AUX/b"), ("aux-multi-ext", "aux.tar.gz"),
+                      ("prn", "prn.dll"), ("ads", "x.dll:stream"), ("trailing-dot", "x.dll."),
+                      ("trailing-space", "x.dll "), ("dir-trailing-dot", "a./b"), ("dir-trailing-space", "a /b"),
+                      ("trailing-slash", "a/"), ("control", "a\x01b"), ("non-ascii", "caf\u00e9"),
+                      ("star", "a*b"), ("question", "a?b"), ("quote", 'a"b'), ("less", "a<b"), ("greater", "a>b"),
+                      ("pipe", "a|b"), ("number", 5), ("null", None)):
+        mutate("target-path-" + name, with_target("game", bad))
+
+    # when
+    mutate("when-absent", lambda m: m["files"][0].pop("when"))
+    mutate("when-profile-vr", lambda m: m["files"][0].update(when={"profile": ["vr"]}))
+    mutate("when-profile-flat", lambda m: m["files"][0].update(when={"profile": ["flat"]}))
+    mutate("when-profile-both", lambda m: m["files"][0].update(when={"profile": ["flat", "vr"]}))
+    mutate("when-adapter", lambda m: m["files"][0].update(when={"adapter": "nvidia"}))
+    mutate("when-both-keys", lambda m: m["files"][0].update(when={"profile": ["flat"], "adapter": "nvidia"}))
+    for name, bad in (("empty", {}), ("list", []), ("null", None), ("text", "vr"), ("route", {"route": "x"}),
+                      ("option", {"profile": ["vr"], "option": "x"}), ("profile-empty", {"profile": []}),
+                      ("profile-text", {"profile": "vr"}), ("profile-unknown", {"profile": ["both"]}),
+                      ("profile-dup", {"profile": ["vr", "vr"]}), ("profile-upper", {"profile": ["VR"]}),
+                      ("profile-number", {"profile": [1]}), ("adapter-amd", {"adapter": "amd"}),
+                      ("adapter-true", {"adapter": True}), ("adapter-list", {"adapter": ["nvidia"]})):
+        mutate("when-" + name, lambda m, bad=bad: m["files"][0].update(when=bad))
+
+    # existing, and the constraints each behaviour carries
+    mutate("existing-replace", lambda m: m["files"][0].update(existing="replace"))
+    mutate("existing-owned", lambda m: m["files"][0].update(existing="owned"))
+    mutate("existing-chain", lambda m: m["files"][0].update(existing="chain"))
+    mutate("existing-runtime", lambda m: m["files"][1].update(existing="runtime"))
+    mutate("existing-settings", lambda m: m["files"][2].update(existing="settings"))
+    mutate("existing-missing", lambda m: m["files"][0].pop("existing"))
+    for name, bad in (("unknown", "merge"), ("upper", "Replace"), ("empty", ""), ("number", 1), ("null", None),
+                      ("list", ["replace"])):
+        mutate("existing-" + name, lambda m, bad=bad: m["files"][0].update(existing=bad))
+    mutate("constraint-second-chain", second(target={"root": "game", "path": "other.dll"}, existing="chain"))
+    mutate("constraint-second-runtime", lambda m: m["files"].append(dict(
+        copy.deepcopy(m["files"][1]), id="other", target={"root": "openvr", "path": "other.dll"})))
+    mutate("constraint-runtime-in-game-root", lambda m: m["files"][1]["target"].update(root="game"))
+    mutate("constraint-settings-no-when", lambda m: m["files"][2].pop("when"))
+    mutate("constraint-settings-both-profiles", lambda m: m["files"][2].update(when={"profile": ["vr", "flat"]}))
+    mutate("constraint-settings-adapter-only", lambda m: m["files"][2].update(when={"adapter": "nvidia"}))
+    mutate("constraint-settings-profile-with-adapter-ok", lambda m: m["files"][2].update(
+        when={"profile": ["vr"], "adapter": "nvidia"}))
+    mutate("constraint-second-settings-same-profile", lambda m: m["files"].append(dict(
+        copy.deepcopy(m["files"][2]), id="other", target={"root": "game", "path": "other.ini"})))
+    mutate("constraint-settings-per-profile-ok", lambda m: m["files"].append(dict(
+        copy.deepcopy(m["files"][2]), id="settings_flat", when={"profile": ["flat"]},
+        target={"root": "game", "path": "edvr-flat.ini"})))
+
+    # chain and runtime work at today's names only
+    mutate("constraint-chain-other-name", lambda m: m["files"][0]["target"].update(path="other.dll"))
+    mutate("constraint-chain-in-openvr-root", lambda m: m["files"][0]["target"].update(root="openvr"))
+    mutate("constraint-chain-nested", lambda m: m["files"][0]["target"].update(path="sub/d3d11.dll"))
+    mutate("constraint-chain-name-case-ok", lambda m: m["files"][0]["target"].update(path="D3D11.DLL"))
+    mutate("constraint-runtime-other-name", lambda m: m["files"][1]["target"].update(path="other.dll"))
+    mutate("constraint-runtime-nested", lambda m: m["files"][1]["target"].update(path="sub/openvr_api.dll"))
+    mutate("constraint-runtime-name-case-ok", lambda m: m["files"][1]["target"].update(path="OpenVR_API.dll"))
+
+    # a game target may not alias the openvr root, and the installer's own names and folders are reserved
+    for name, root, path, ok in (
+            ("game-under-openvr", "game", "openvr/x.dll", False), ("game-under-openvr-win64", "game", "Openvr/win64/x.dll", False),
+            ("game-under-openvr-upper", "game", "OPENVR/x.dll", False), ("game-openvr-sibling-ok", "game", "openvr-extra/x.dll", True),
+            ("game-openvr-prefix-ok", "game", "openvrx.dll", True), ("game-openvr-leaf-ok", "game", "openvr", True),
+            ("openvr-root-openvr-folder-ok", "openvr", "openvr/x.dll", True),
+            ("profile-descriptor", "game", "edvr_profile.ini", False), ("profile-descriptor-case", "game", "EDVR_Profile.INI", False),
+            ("startup-config", "game", "edvr_openxr.ini", False), ("startup-config-openvr", "openvr", "edvr_openxr.ini", False),
+            ("base-copy", "game", "edvr.ini.base", False), ("base-copy-nested-case", "game", "sub/y.BASE", False),
+            ("openvr-original", "openvr", "openvr_api_orig.dll", False), ("openvr-original-game", "game", "openvr_api_orig.dll", False),
+            ("chain-name", "game", "d3d11_edhm.dll", False), ("chain-name-case", "game", "D3D11_Other.DLL", False),
+            ("chain-name-empty-star", "game", "d3d11_.dll", False),
+            ("record-folder", "game", "edvr_install/x.ini", False), ("record-folder-case", "game", "Edvr_Install/x.ini", False),
+            ("backup-folder", "game", "edvr_backup/a/b.dll", False), ("backup-folder-openvr-root", "openvr", "edvr_backup/b.dll", False),
+            ("chain-lookalike-ok", "game", "d3d11x.dll", True), ("chain-lookalike-ext-ok", "game", "d3d11_x.dll.bak", True),
+            ("chain-name-nested-ok", "game", "sub/d3d11_x.dll", True), ("descriptor-nested-ok", "game", "sub/edvr_profile.ini", True),
+            ("descriptor-lookalike-ok", "game", "edvr_profile.ini2", True), ("base-lookalike-ok", "game", "x.basement", True),
+            ("folder-lookalike-ok", "game", "edvr_installer/x", True), ("folder-name-only-ok", "game", "edvr_install", True)):
+        assert ok == name.endswith("-ok"), name
+        mutate("reserved-" + name, with_target(root, path))
+
+    # overlapping targets
+    mutate("overlap-same-path", second(existing="replace"))
+    mutate("overlap-case-folded", second(existing="replace", target={"root": "game", "path": "D3D11.DLL"}))
+    mutate("overlap-one-without-when", lambda m: m["files"].append(dict(
+        {k: v for k, v in copy.deepcopy(m["files"][0]).items() if k != "when"}, id="other", existing="replace")))
+    mutate("overlap-adapter-does-not-exclude", second(existing="replace", when={"profile": ["vr"], "adapter": "nvidia"}))
+    mutate("overlap-shared-profile", lambda m: (m["files"][0].update(when={"profile": ["vr"]}, existing="replace"),
+                                                 m["files"].append(dict(copy.deepcopy(m["files"][0]), id="other",
+                                                                        when={"profile": ["flat", "vr"]}))))
+    mutate("overlap-other-root-ok", second(existing="replace", target={"root": "openvr", "path": "d3d11.dll"}))
+    mutate("overlap-other-path-ok", second(existing="replace", target={"root": "game", "path": "d3d11.dll.bak"}))
+    mutate("overlap-disjoint-profiles-ok", lambda m: (m["files"][0].update(when={"profile": ["vr"]}, existing="replace"),
+                                                      m["files"].append(dict(copy.deepcopy(m["files"][0]), id="other",
+                                                                             when={"profile": ["flat"]}))))
+
     add("root-array", "[]")
     add("root-string", '"x"')
     add("root-null", "null")
@@ -266,12 +423,12 @@ def shape_cases():
     add("not-json", "{")
     add("trailing-junk", text + "x")
     add("trailing-value", text.strip() + " {}")
-    add("duplicate-key", text.replace('"schema": 1,', '"schema": 1, "schema": 1,', 1))
-    add("duplicate-key-nested", text.replace('"size": 8\n', '"size": 8, "size": 8\n', 1))
-    add("duplicate-key-escaped", text.replace('"schema": 1,', '"schema": 1, "sch\\u0065ma": 1,', 1))
-    add("leading-zero", text.replace('"schema": 1', '"schema": 01', 1))
+    add("duplicate-key", text.replace('"schema": 2,', '"schema": 2, "schema": 2,', 1))
+    add("duplicate-key-nested", text.replace('"size": 8,\n', '"size": 8, "size": 8,\n', 1))
+    add("duplicate-key-escaped", text.replace('"schema": 2,', '"schema": 2, "sch\\u0065ma": 2,', 1))
+    add("leading-zero", text.replace('"schema": 2', '"schema": 02', 1))
     add("nan-value", text.replace('"issued": 1794000000', '"issued": NaN', 1))
-    add("trailing-comma", text.replace('"schema": 1,', '"schema": 1,,', 1))
+    add("trailing-comma", text.replace('"schema": 2,', '"schema": 2,,', 1))
     add("single-quotes", text.replace('"schema"', "'schema'", 1))
     add("control-char-in-string", text.replace('"version": "1.0.0"', '"version": "1.\t0.0"', 1))
     add("bom", b"\xef\xbb\xbf" + sm._dump(base))
@@ -305,9 +462,11 @@ def deterministic_zip(members):
     return buffer.getvalue()
 
 
-def release(out, name, version, issued, graphics, min_launcher="0.1.0", launcher_version=None):
+def release(out, name, version, issued, graphics, launcher_version=None, schema=None):
     """One release folder: a core zip, a DLSS zip (identical across releases), a
-    signed manifest and, if asked, a launcher entry. Returns the folder."""
+    signed manifest and, if asked, a launcher entry. `schema` overrides the
+    manifest's schema after it was validated as schema 2, for a release the
+    launcher cannot read. Returns the folder."""
     folder = out / "releases" / name
     rng = random.Random(5)
     dlss = deterministic_zip({"nvngx_dlss.dll": rng.randbytes(60000)})
@@ -316,20 +475,17 @@ def release(out, name, version, issued, graphics, min_launcher="0.1.0", launcher
                     "edvr.ini": b"[fix]\nversion=" + version.encode() + b"\n"}
     core = deterministic_zip(core_members)
     core_name = "ed-up-core-%s.zip" % version
+    by_id = {f.id: f for f in pn.FILES}
+    runtime = by_id["runtime"]._replace(source="Openvr/win64/openvr_api.dll")  # this fixture's zip layout
     files = [
-        {"item": "native_graphics", "path": "d3d11.dll", "asset": core_name,
-         "sha256": hashlib.sha256(graphics).hexdigest(), "size": len(graphics)},
-        {"item": "native_runtime", "path": "Openvr/win64/openvr_api.dll", "asset": core_name,
-         "sha256": hashlib.sha256(core_members["Openvr/win64/openvr_api.dll"]).hexdigest(),
-         "size": len(core_members["Openvr/win64/openvr_api.dll"])},
-        {"item": "ini", "path": "edvr.ini", "asset": core_name,
-         "sha256": hashlib.sha256(core_members["edvr.ini"]).hexdigest(), "size": len(core_members["edvr.ini"])},
+        pn.manifest_file_entry(by_id["graphics"], core_name, graphics),
+        pn.manifest_file_entry(runtime, core_name, core_members["Openvr/win64/openvr_api.dll"]),
+        pn.manifest_file_entry(by_id["settings_vr"], core_name, core_members["edvr.ini"]),
     ]
     nvngx = zipfile.ZipFile(io.BytesIO(dlss)).read("nvngx_dlss.dll")
-    files.append({"item": "ngx", "path": "nvngx_dlss.dll", "asset": dlss_name,
-                  "sha256": hashlib.sha256(nvngx).hexdigest(), "size": len(nvngx)})
-    manifest = {"schema": 1, "version": version, "build": "v" + version, "tag": "v" + version, "issued": issued,
-                "min_launcher": min_launcher,
+    files.append(pn.manifest_file_entry(by_id["dlss"], dlss_name, nvngx))
+    manifest = {"schema": sm.MANIFEST_SCHEMA, "version": version, "build": "v" + version, "tag": "v" + version,
+                "issued": issued,
                 "assets": [{"name": core_name, "sha256": hashlib.sha256(core).hexdigest(), "size": len(core)},
                            {"name": dlss_name, "sha256": hashlib.sha256(dlss).hexdigest(), "size": len(dlss)}],
                 "files": files}
@@ -340,7 +496,9 @@ def release(out, name, version, issued, graphics, min_launcher="0.1.0", launcher
         manifest["launcher"] = {"version": launcher_version, "asset": "ed-up-launcher.exe",
                                 "sha256": hashlib.sha256(exe).hexdigest(), "size": len(exe)}
         write(folder / "ed-up-launcher.exe", exe)
-    assert not sm.validate_manifest(manifest)
+    assert not sm.validate_manifest(manifest), sm.validate_manifest(manifest)
+    if schema is not None:
+        manifest["schema"] = schema
     data = sm._dump(manifest)
     write(folder / sm.MANIFEST_NAME, data)
     write(folder / sm.SIGNATURE_NAME, sign_text(data))
@@ -351,9 +509,11 @@ def write_releases(out):
     release(out, "relA", "1.0.0", 1794000000, b"graphics one")
     release(out, "relB", "1.1.0", 1794000100, b"graphics two", launcher_version="0.2.0")
     release(out, "relOld", "0.9.0", 1790000000, b"graphics old")
-    release(out, "relMin", "1.2.0", 1794000200, b"graphics three", min_launcher="0.3.0")
-    release(out, "relMinLauncher", "1.3.0", 1794000300, b"graphics four", min_launcher="0.3.0",
-            launcher_version="0.3.0")
+    release(out, "relC", "1.2.0", 1794000200, b"graphics three")
+    release(out, "relD", "1.3.0", 1794000300, b"graphics four", launcher_version="0.3.0")
+    # A release of a schema newer than the launcher reads: signed, with every asset present, so a
+    # download would show in the rig; the launcher must refuse it before it fetches anything.
+    release(out, "relSchema3", "1.4.0", 1794000400, b"graphics five", launcher_version="0.4.0", schema=3)
 
 
 MARKER = ".launcher-fixtures"
@@ -418,7 +578,7 @@ def self_test():
         # Shape cases: both verdicts are present, each file is signed, and the
         # recorded verdict is the Python validator's.
         shapes = [line.split("\t") for line in (out / "shapes.txt").read_text().splitlines()]
-        assert len(shapes) > 120, len(shapes)
+        assert len(shapes) == 271, len(shapes)
         verdicts = {v for _, v in shapes}
         assert verdicts == {"accept", "refuse"}, verdicts
         by_name = dict(shapes)
@@ -428,9 +588,23 @@ def self_test():
             body = (out / "shapes" / (label + ".json")).read_bytes()
             assert (verdict == "accept") == (not sm.load_manifest(body)[1])
             assert sm.p256_verify(public, body, bytes.fromhex((out / "shapes" / (label + ".sig")).read_text().strip()))
-        item_labels = [l for l in by_name if l.split("-", 1)[1] in ["item-" + i for i in sm.ITEMS]]
-        assert len(item_labels) == len(sm.ITEMS)
-        assert all(by_name[l] == "accept" for l in item_labels), "an ITEMS entry is not accepted"
+        names_by_verdict = {}
+        for label, verdict in shapes:
+            names_by_verdict.setdefault(label.split("-", 1)[1], verdict)
+        # Every existing value and every when key is accepted, and the packager's own table too.
+        for name in ("existing-replace", "existing-owned", "existing-chain", "existing-runtime", "existing-settings",
+                     "when-profile-vr", "when-profile-flat", "when-profile-both", "when-adapter",
+                     "when-both-keys", "valid-package-table", "constraint-chain-name-case-ok",
+                     "constraint-runtime-name-case-ok", "reserved-game-openvr-sibling-ok", "reserved-chain-lookalike-ok",
+                     "reserved-descriptor-nested-ok"):
+            assert names_by_verdict[name] == "accept", name
+        for name in ("schema-1", "schema-3", "schema-missing", "target-path-nul", "target-path-con-txt",
+                     "target-path-ads", "target-path-trailing-dot", "target-path-dotdot", "target-path-absolute",
+                     "target-path-drive", "id-duplicate", "overlap-same-path", "min-launcher-present",
+                     "constraint-chain-other-name", "constraint-chain-in-openvr-root", "constraint-runtime-other-name",
+                     "reserved-game-under-openvr", "reserved-profile-descriptor", "reserved-base-copy", "reserved-chain-name",
+                     "reserved-record-folder", "reserved-backup-folder", "reserved-openvr-original"):
+            assert names_by_verdict[name] == "refuse", name
 
         # Inflate fixtures: readable by Python's zipfile, hashes as recorded, all block kinds.
         recorded = [line.split("\t") for line in (out / "inflate" / "entries.txt").read_text().splitlines()]
@@ -452,10 +626,17 @@ def self_test():
         # Releases: every manifest validates and verifies, every asset and member matches,
         # relA and relB share the DLSS zip, the others differ as the rig expects.
         folders = {p.name: p for p in (out / "releases").iterdir()}
-        assert set(folders) == {"relA", "relB", "relOld", "relMin", "relMinLauncher"}
+        assert set(folders) == {"relA", "relB", "relOld", "relC", "relD", "relSchema3"}
         for name, folder in folders.items():
+            if name == "relSchema3":
+                continue  # a schema the launcher cannot read: the Python verdict is a refusal, as it should be
             lines = []
             assert sm.verify_directory(folder, keys=[public], out=lines.append), (name, lines)
+        s3 = (folders["relSchema3"] / sm.MANIFEST_NAME).read_bytes()
+        assert json.loads(s3)["schema"] == 3 and sm.load_manifest(s3)[1] == ["manifest schema 3, launcher reads 2"]
+        assert sm.p256_verify(public, s3, bytes.fromhex((folders["relSchema3"] / sm.SIGNATURE_NAME).read_text().strip()))
+        assert all((folders["relSchema3"] / n).is_file() for n in
+                   (a["name"] for a in json.loads(s3)["assets"])), "the schema-3 release keeps its assets, so a download would show"
         dlss = lambda f: sorted(p.name for p in f.glob("ed-up-dlss-*.zip"))
         assert dlss(folders["relA"]) == dlss(folders["relB"]) and len(dlss(folders["relA"])) == 1
         a = json.loads((folders["relA"] / sm.MANIFEST_NAME).read_text())
@@ -463,7 +644,7 @@ def self_test():
         assert a["assets"][1] == b["assets"][1] and a["assets"][0] != b["assets"][0]
         assert "launcher" not in a and b["launcher"]["version"] == "0.2.0"
         assert b["issued"] > a["issued"] > json.loads((folders["relOld"] / sm.MANIFEST_NAME).read_text())["issued"]
-        assert json.loads((folders["relMin"] / sm.MANIFEST_NAME).read_text())["min_launcher"] == "0.3.0"
+        assert "min_launcher" not in json.loads((folders["relC"] / sm.MANIFEST_NAME).read_text())
         again = Path(temp) / "again"
         generate(again)
         assert (again / "releases" / "relA" / sm.MANIFEST_NAME).read_bytes() == (folders["relA"] / sm.MANIFEST_NAME).read_bytes(), "not deterministic"

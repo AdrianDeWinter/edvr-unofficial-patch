@@ -118,7 +118,7 @@ New assets, added beside today's:
 | Asset | Holds | Fetched |
 |---|---|---|
 | `ed-up-launcher.exe` | The launcher, no embedded payload | When its digest changes |
-| `ed-up-manifest.json`, `ed-up-manifest.json.sig` | Per-file hashes, asset names, minimum launcher version | Every check |
+| `ed-up-manifest.json`, `ed-up-manifest.json.sig` | Per-file hashes, asset names, where each file goes | Every check |
 | `ed-up-core-<ver>.zip` | `d3d11.dll`, `openvr_api.dll`, loader, inis, descriptor | Every update |
 | `ed-up-dlss-<hash>.zip`, `ed-up-xess-<hash>.zip` | The DLSS and XeSS files | Only when their hash changes |
 
@@ -133,24 +133,15 @@ under the rename rule above.
 The manifest is ASCII JSON, signed as exact bytes. The launcher checks the signature
 before it parses anything.
 
-```json
-{
-  "schema": 1,
-  "version": "0.22.0",
-  "build": "v0.22.0",
-  "tag": "v0.22.0",
-  "issued": 1794000000,
-  "min_launcher": "0.1.0",
-  "launcher": {"version": "0.1.0", "asset": "ed-up-launcher.exe", "sha256": "...", "size": 1},
-  "assets": [{"name": "ed-up-core-0.22.0.zip", "sha256": "...", "size": 1}],
-  "files": [{"item": "native_graphics", "path": "d3d11.dll",
-             "asset": "ed-up-core-0.22.0.zip", "sha256": "...", "size": 1}]
-}
-```
+**Superseded (2026-11-12):** the manifest is now schema 2, which says where each file
+goes and how an existing file is treated, and `min_launcher` is gone: the schema number
+is the compatibility contract. The format, the schema versioning and the shared parser
+are in `docs\design-manifest-schema2-2026-11-12.md`. What stays as written here:
 
-- `build` is the stamp in the DLLs, which the install record stores. `item` is a name
-  `payloadItem()` already knows. `path` is the file's path in the zip and in the
-  unpacked `ed-up-<ver>.zip`, so `--payload <dir>` uses the same table.
+- The `launcher` block, `assets`, `version`, `build` (the stamp in the DLLs, which the
+  install record stores), `tag` and `issued`. A file's `path` is its path in the zip and
+  in the unpacked `ed-up-<ver>.zip`; `--payload <dir>` reads
+  `<dir>\ed-up-manifest.json` (unsigned is fine) and takes each file by that `path`.
 - `tag` must match the release it was fetched from, so a signed manifest cannot be
   moved onto another release.
 - `issued` only goes up. The launcher records the highest it has accepted and ignores

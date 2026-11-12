@@ -191,6 +191,21 @@ PayloadInfo buildInfo() {
 
 }  // namespace
 
+// TEMPORARY, removed in stage 2: schema-2 file id -> the item name idFor knows.
+std::string stage1PayloadItem(const std::string& fileId) {
+    static const struct { const char* id; const char* item; } kBridge[] = {
+        {"graphics", "native_graphics"},   {"runtime", "native_runtime"},
+        {"openxr_loader", "openxr_loader"}, {"openxr_license", "openxr_license"},
+        {"settings_vr", "ini"},            {"settings_flat", "flat_ini"},
+        {"dlss", "ngx"},                   {"xess", "xess"},
+        {"xess_license", "xess_license"},  {"xess_third_party", "xess_third_party"},
+    };
+    for (const auto& entry : kBridge) {
+        if (fileId == entry.id) return entry.item;
+    }
+    return std::string();
+}
+
 bool payloadItem(const std::string& item, const void** data, size_t* size) {
     std::lock_guard<std::mutex> lock(g_mutex);
     return lookup(item, data, size);

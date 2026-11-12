@@ -803,7 +803,8 @@ if not exist "%OBJ%\openxr_module" mkdir "%OBJ%\openxr_module"
 if errorlevel 1 ( echo [edvr] ERROR: native runtime module build failed & exit /b 1 )
 python tools\build_phases.py --mark "%PHASES%" "runtime dll"
 
-REM Shared by the installer and installer_test rigs below.
+REM Shared by the installer and installer_test rigs below. install_manifest.cpp is the schema-2 parser both halves link;
+REM it needs update_json.cpp and update_util.cpp, so those sit here rather than in LAUNCHER_SRC.
 set INSTALLER_SRC="src\installer\main.cpp" "src\installer\gui.cpp" ^
     "src\installer\ui.cpp" "src\installer\settings.cpp" ^
     "src\installer\settings_view.cpp" "src\installer\logbundle.cpp" ^
@@ -811,7 +812,8 @@ set INSTALLER_SRC="src\installer\main.cpp" "src\installer\gui.cpp" ^
     "src\installer\apply.cpp" "src\installer\detect.cpp" ^
     "src\installer\probe.cpp" "src\common\iniedit.cpp" ^
     "src\installer\state.cpp" "src\installer\mirror.cpp" ^
-    "src\installer\payload.cpp"
+    "src\installer\payload.cpp" "src\installer\install_manifest.cpp" ^
+    "src\installer\update_json.cpp" "src\installer\update_util.cpp"
 set INSTALLER_LIBS=user32.lib gdi32.lib gdiplus.lib dwmapi.lib uxtheme.lib ^
     shell32.lib ole32.lib comctl32.lib advapi32.lib version.lib bcrypt.lib dxgi.lib kernel32.lib
 REM What the launcher adds to INSTALLER_SRC (its main.cpp, gui.cpp and the rest are the same files, built
@@ -823,9 +825,9 @@ set LAUNCHER_SRC="src\installer\launcher_core.cpp" "src\installer\launcher_regis
     "src\installer\launcher_plan.cpp" "src\installer\launch_route.cpp" ^
     "src\installer\launcher_session.cpp" "src\installer\launcher_main.cpp" ^
     "src\installer\selfupdate.cpp" "src\installer\updater.cpp" ^
-    "src\installer\update_http.cpp" "src\installer\update_json.cpp" ^
+    "src\installer\update_http.cpp" ^
     "src\installer\update_manifest.cpp" "src\installer\update_zip.cpp" ^
-    "src\installer\update_cache.cpp" "src\installer\update_util.cpp" ^
+    "src\installer\update_cache.cpp" ^
     "src\installer\launcher_state.cpp" "src\installer\frontier_api.cpp" ^
     "src\installer\machine_id.cpp" "src\installer\steam_ticket.cpp" ^
     "src\installer\direct_launch.cpp" "src\installer\frontier_login.cpp" ^
@@ -3374,6 +3376,7 @@ if not exist "%OBJ%\insttest" mkdir "%OBJ%\insttest"
     "src\installer\mirror.cpp" ^
     "src\installer\settings.cpp" "src\installer\logbundle.cpp" ^
     "src\installer\app.cpp" "src\installer\payload.cpp" ^
+    "src\installer\install_manifest.cpp" "src\installer\update_json.cpp" "src\installer\update_util.cpp" ^
     /link /INCREMENTAL:NO %INSTALLER_LIBS%
 if errorlevel 1 ( echo [edvr] ERROR: installer_test build failed & exit /b 1 )
 "%BUILD%\installer_test.exe" "%ROOT%" "%BUILD%\insttest_scratch" || (
@@ -3440,6 +3443,7 @@ if errorlevel 1 ( echo [edvr] ERROR: the fake steam_api64.dll build failed & exi
     "src\installer\probe.cpp" "src\common\iniedit.cpp" "src\installer\state.cpp" ^
     "src\installer\mirror.cpp" "src\installer\settings.cpp" ^
     "src\installer\logbundle.cpp" "src\installer\app.cpp" "src\installer\payload.cpp" ^
+    "src\installer\install_manifest.cpp" "src\installer\update_json.cpp" "src\installer\update_util.cpp" ^
     "src\installer\ui.cpp" %LAUNCHER_SRC% ^
     /link /INCREMENTAL:NO %INSTALLER_LIBS% winhttp.lib ws2_32.lib ^
     /MANIFEST:EMBED /MANIFESTINPUT:"%ROOT%\tools\launcher_test\launcher_test.manifest"

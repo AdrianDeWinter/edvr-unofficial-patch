@@ -30,6 +30,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
+from typing import NamedTuple, Optional
 
 import sign_manifest
 from gen_installer_rc import descriptor_bytes
@@ -55,7 +56,6 @@ STAMP_KEYS = ("FileVersion", "ProductVersion")
 # "Updates"). The core zip carries the files that change every release; DLSS and
 # XeSS go in zips named by a hash of their contents, so an unchanged runtime keeps
 # its asset name from release to release.
-MIN_LAUNCHER = "0.1.0"
 MANIFEST = sign_manifest.MANIFEST_NAME
 SUMS_NAME = "SHA256SUMS"
 LAUNCHER_ASSET = "ed-up-launcher.exe"
@@ -66,21 +66,66 @@ LAUNCHER_LICENSE_FILE = ("third_party", "min_ed_launcher", "LICENSE")
 LAUNCHER_LICENSE_NAME = "MIN-ED-LAUNCHER-LICENSE.txt"
 LAUNCHER_LICENSE_RESOURCE = 120
 KEYS_HEADER = ("src", "installer", "update_keys.h")
-CORE_NAMES = ("d3d11.dll", "openvr/openvr_api.dll", "openvr/openxr_loader.dll",
-              "openvr/OPENXR-LOADER-LICENSE.txt", "edvr.ini", "edvr-flat.ini", "edvr_profile.ini",
-              "LICENSE.txt", "DXBC-HASH-LICENSE.txt", "MINIZ-LICENSE.txt", "FIDELITYFX-SDK-DX11-LICENSE.txt",
-              "MIN-ED-LAUNCHER-LICENSE.txt")
-DLSS_NAMES = ("nvngx_dlss.dll", "NVIDIA-DLSS-LICENSE.txt")
-XESS_NAMES = ("libxess.dll", "INTEL-XESS-LICENSE.txt", "INTEL-XESS-THIRD-PARTY.txt")
-# Manifest item -> path in the zips. A licence file not listed here ships in its
-# zip but has no entry in the manifest's files.
-ITEM_PATHS = (("native_graphics", "d3d11.dll"), ("native_runtime", "openvr/openvr_api.dll"),
-              ("ini", "edvr.ini"), ("flat_ini", "edvr-flat.ini"), ("profile", "edvr_profile.ini"),
-              ("openxr_loader", "openvr/openxr_loader.dll"),
-              ("openxr_license", "openvr/OPENXR-LOADER-LICENSE.txt"),
-              ("ngx", "nvngx_dlss.dll"), ("xess", "libxess.dll"),
-              ("xess_license", "INTEL-XESS-LICENSE.txt"),
-              ("xess_third_party", "INTEL-XESS-THIRD-PARTY.txt"))
+
+
+class PackagedFile(NamedTuple):
+    """One file of the manifest's `files`: the one place a payload file is declared."""
+    id: str            # [a-z0-9_]{1,32}, the stable name the install record is keyed by
+    source: str        # its path inside its zip (and an unpacked --payload folder)
+    group: str         # the zip that holds it: core, dlss or xess
+    root: str          # target.root: game or openvr
+    path: str          # target.path under that root
+    when: Optional[dict]  # None means always; keys profile and adapter, as in the schema
+    existing: str      # how a file already at the target is treated
+
+
+# The profiles an install covers: both writes vr and flat, so d3d11.dll (every profile) lists both.
+_VR, _FLAT, _EITHER, _NVIDIA = {"profile": ["vr"]}, {"profile": ["flat"]}, {"profile": ["vr", "flat"]}, {"adapter": "nvidia"}
+# What src\installer\plan.cpp's planInstall does with each file today:
+#   d3d11.dll        every profile; a foreign DLL at the target is chained to
+#   openvr_api.dll   VR profiles only (flat keeps the game's own runtime); the game's original is kept
+#   openxr_loader / licence   VR profiles only, replaced
+#   edvr.ini / edvr-flat.ini  merged into the settings already there; each for its own profile
+#   nvngx_dlss.dll   only where the survey found an NVIDIA adapter; a foreign copy is left alone
+#   libxess.dll and its two notices   every install; foreign copies are left alone
+FILES = (
+    PackagedFile("graphics", "d3d11.dll", "core", "game", "d3d11.dll", _EITHER, "chain"),
+    PackagedFile("runtime", "openvr/openvr_api.dll", "core", "openvr", "openvr_api.dll", _VR, "runtime"),
+    PackagedFile("openxr_loader", "openvr/openxr_loader.dll", "core", "openvr", "openxr_loader.dll", _VR, "replace"),
+    PackagedFile("openxr_license", "openvr/OPENXR-LOADER-LICENSE.txt", "core", "openvr",
+                 "OPENXR-LOADER-LICENSE.txt", _VR, "replace"),
+    PackagedFile("settings_vr", "edvr.ini", "core", "game", "edvr.ini", _VR, "settings"),
+    PackagedFile("settings_flat", "edvr-flat.ini", "core", "game", "edvr-flat.ini", _FLAT, "settings"),
+    PackagedFile("dlss", "nvngx_dlss.dll", "dlss", "game", "nvngx_dlss.dll", _NVIDIA, "owned"),
+    PackagedFile("xess", "libxess.dll", "xess", "game", "libxess.dll", None, "owned"),
+    PackagedFile("xess_license", "INTEL-XESS-LICENSE.txt", "xess", "game", "INTEL-XESS-LICENSE.txt", None, "owned"),
+    PackagedFile("xess_third_party", "INTEL-XESS-THIRD-PARTY.txt", "xess", "game", "INTEL-XESS-THIRD-PARTY.txt",
+                 None, "owned"),
+)
+# Members that ship in a zip without an entry in the manifest's files: notices, and the profile
+# descriptor, which the planner no longer reads (it writes its own).
+_EXTRA_MEMBERS = {"core": ("edvr_profile.ini", "LICENSE.txt", "DXBC-HASH-LICENSE.txt", "MINIZ-LICENSE.txt",
+                           "FIDELITYFX-SDK-DX11-LICENSE.txt", "MIN-ED-LAUNCHER-LICENSE.txt"),
+                  "dlss": ("NVIDIA-DLSS-LICENSE.txt",), "xess": ()}
+
+
+def _group_names(group):
+    return tuple(f.source for f in FILES if f.group == group) + _EXTRA_MEMBERS[group]
+
+
+CORE_NAMES = _group_names("core")
+DLSS_NAMES = _group_names("dlss")
+XESS_NAMES = _group_names("xess")
+
+
+def manifest_file_entry(file, asset, data):
+    """The manifest's files[] entry for `file`, held by zip `asset`, whose bytes are `data`."""
+    entry = {"id": file.id, "asset": asset, "path": file.source, "sha256": hashlib.sha256(data).hexdigest(),
+             "size": len(data), "target": {"root": file.root, "path": file.path}}
+    if file.when is not None:
+        entry["when"] = json.loads(json.dumps(file.when))
+    entry["existing"] = file.existing
+    return entry
 SPLIT_PATTERNS = ("ed-up-dlss-*.zip", "ed-up-xess-*.zip")
 
 
@@ -412,10 +457,10 @@ def _split_outputs(root, version, files):
     stamp = _stamped_versions(present["d3d11.dll"]) or {}
     if not stamp.get("FileVersion"):
         raise ValueError("d3d11.dll carries no FileVersion for the manifest's build")
-    manifest = {"schema": 1, "version": version, "build": stamp["FileVersion"], "tag": "v" + version,
+    manifest = {"schema": sign_manifest.MANIFEST_SCHEMA, "version": version, "build": stamp["FileVersion"],
+                "tag": "v" + version,
                 "issued": int(os.environ["SOURCE_DATE_EPOCH"]) if os.environ.get("SOURCE_DATE_EPOCH")
-                else int(time.time()),
-                "min_launcher": MIN_LAUNCHER}
+                else int(time.time())}
     launcher = root / "build" / LAUNCHER_ASSET
     if not launcher.is_file():
         raise ValueError("build\\%s is missing" % LAUNCHER_ASSET)
@@ -424,9 +469,8 @@ def _split_outputs(root, version, files):
                             "sha256": hashlib.sha256(blob).hexdigest(), "size": len(blob)}
     outputs.append((LAUNCHER_ASSET, blob))
     manifest["assets"] = assets
-    manifest["files"] = [{"item": item, "path": path, "asset": held[path],
-                          "sha256": hashlib.sha256(data[path]).hexdigest(), "size": len(data[path])}
-                         for item, path in ITEM_PATHS if path in held]
+    manifest["files"] = [manifest_file_entry(file, held[file.source], data[file.source])
+                         for file in FILES if file.source in held]
     problems = sign_manifest.validate_manifest(manifest)
     if problems:
         raise ValueError("the manifest is not valid:\n  " + "\n  ".join(problems))
@@ -1119,19 +1163,23 @@ def self_test():
             assert manifest_bytes.decode("ascii") and b"\r" not in manifest_bytes and manifest_bytes.endswith(b"\n")
             parsed, problems = sign_manifest.load_manifest(manifest_bytes)
             assert problems == [], problems
-            assert (parsed["version"], parsed["build"], parsed["tag"], parsed["issued"],
-                    parsed["min_launcher"]) == ("4.0.0", "v4.0.0", "v4.0.0", 1794000000, MIN_LAUNCHER)
+            assert (parsed["schema"], parsed["version"], parsed["build"], parsed["tag"], parsed["issued"]) == (
+                sign_manifest.MANIFEST_SCHEMA, "4.0.0", "v4.0.0", "v4.0.0", 1794000000)
+            assert "min_launcher" not in parsed
             assert parsed["launcher"] == {"version": "0.1.0", "asset": LAUNCHER_ASSET,
                                           "sha256": hashlib.sha256(b"launcher exe").hexdigest(), "size": 12}
             assert (dist / LAUNCHER_ASSET).read_bytes() == b"launcher exe"
             assert [asset["name"] for asset in parsed["assets"]] == [core.name, dlss_zip.name, xess_zip.name]
-            assert {entry["item"] for entry in parsed["files"]} == {
-                "native_graphics", "native_runtime", "ini", "flat_ini", "profile", "openxr_loader",
-                "openxr_license", "ngx", "xess", "xess_license", "xess_third_party"}
+            assert [entry["id"] for entry in parsed["files"]] == [file.id for file in FILES]
+            assert "edvr_profile.ini" not in {entry["path"] for entry in parsed["files"]}
+            by_id = {entry["id"]: entry for entry in parsed["files"]}
+            assert by_id["graphics"]["existing"] == "chain" and by_id["graphics"]["when"] == {"profile": ["vr", "flat"]}
+            assert by_id["runtime"]["target"] == {"root": "openvr", "path": "openvr_api.dll"}
+            assert by_id["dlss"]["when"] == {"adapter": "nvidia"} and "when" not in by_id["xess"]
             lines = []
             assert sign_manifest.verify_directory(dist, allow_unsigned=True, out=lines.append), lines
-            ngx = next(entry for entry in parsed["files"] if entry["item"] == "ngx")
-            assert ngx["asset"] == dlss_zip.name and ngx["path"] == "nvngx_dlss.dll"
+            dlss = next(entry for entry in parsed["files"] if entry["id"] == "dlss")
+            assert dlss["asset"] == dlss_zip.name and dlss["path"] == "nvngx_dlss.dll"
             # Two runs give the same bytes, and a new version keeps the DLSS and XeSS names.
             first = {path: path.read_bytes() for path in (core, dlss_zip, xess_zip, dist / MANIFEST)}
             assert package(root, "4.0.0", no_dlss=True) == 0
@@ -1148,12 +1196,12 @@ def self_test():
             renamed = split_assets(dist)
             assert len(renamed["dlss"]) == 1 and renamed["dlss"] != found["dlss"] and renamed["xess"] == found["xess"]
             assert sign_manifest.verify_directory(dist, allow_unsigned=True, out=lambda line: None)
-            # No DLSS runtime in the tree: no DLSS asset and no ngx item.
+            # No DLSS runtime in the tree: no DLSS asset and no dlss file.
             dlss_dll.unlink(); notice.unlink(); resources[104] = None
             assert package(root, "4.0.2", no_dlss=True) == 0
             assert split_assets(dist)["dlss"] == [] and split_assets(dist)["xess"] == found["xess"]
             parsed = json.loads((dist / MANIFEST).read_text(encoding="ascii"))
-            assert "ngx" not in {entry["item"] for entry in parsed["files"]}
+            assert "dlss" not in {entry["id"] for entry in parsed["files"]}
             assert all("dlss" not in asset["name"] for asset in parsed["assets"])
             assert sign_manifest.verify_directory(dist, allow_unsigned=True, out=lambda line: None)
             with zipfile.ZipFile(dist / "ed-up-4.0.2.zip") as archive:
@@ -1242,10 +1290,30 @@ def self_test():
             keys_header.write_text(real_keys_text, encoding="utf-8")
             assert package(root, "4.0.6", no_dlss=True, dry_run=True) == 0   # and the good one passes again
 
-            # The folder table the launcher reads --payload with is this tool's item table.
-            table = re.findall(r'\{"([a-z_]+)", L"([^"]+)"\}', ROOT.joinpath("src", "installer", "launcher_core.cpp").read_text(encoding="utf-8"))
-            assert sorted((item, path.replace("\\\\", "/")) for item, path in table) == sorted(ITEM_PATHS), \
-                "src/installer/launcher_core.cpp's kFolderEntries and package_native.ITEM_PATHS differ"
+            # Every table entry is a legal target and the table passes the manifest's own rules, on a
+            # manifest of nothing but the table.
+            legal = {"schema": sign_manifest.MANIFEST_SCHEMA, "version": "1.0.0", "build": "b", "tag": "t",
+                     "issued": 1,
+                     "assets": [{"name": name + ".zip", "sha256": "0" * 64, "size": 1}
+                                for name in ("core", "dlss", "xess")],
+                     "files": [manifest_file_entry(file, file.group + ".zip", b"x") for file in FILES]}
+            assert sign_manifest.validate_manifest(legal) == [], sign_manifest.validate_manifest(legal)
+            assert len({file.id for file in FILES}) == len(FILES)
+            for file in FILES:
+                assert sign_manifest.target_path_problem(file.id, file.path) is None, file
+                assert file.root in sign_manifest.ROOTS and file.existing in sign_manifest.EXISTING, file
+                assert file.group in _EXTRA_MEMBERS, file
+            # The schema number is the one the C++ parser reads.
+            found = re.search(r"kManifestSchema\s*=\s*(\d+)\s*;", ROOT.joinpath(
+                "src", "installer", "install_manifest.h").read_text(encoding="utf-8"))
+            assert found and int(found.group(1)) == sign_manifest.MANIFEST_SCHEMA, \
+                "install_manifest.h's kManifestSchema and sign_manifest.MANIFEST_SCHEMA differ"
+            # TEMPORARY (stage 1 of docs/design-manifest-schema2): the launcher's id -> item bridge names
+            # every table id, so a file added here is not silently unplaceable.
+            bridge = dict(re.findall(r'\{"([a-z0-9_]+)",\s*"([a-z0-9_]+)"\}',
+                                     ROOT.joinpath("src", "installer", "payload.cpp").read_text(encoding="utf-8")))
+            assert {file.id for file in FILES} <= set(bridge), \
+                "src/installer/payload.cpp's stage1PayloadItem lacks an id of package_native.FILES"
             if old_epoch is None:
                 del os.environ["SOURCE_DATE_EPOCH"]
             else:

@@ -4,53 +4,18 @@
 // the SHA-256 of the file (docs\design-launcher-2026-11-07.md, "The manifest"
 // and "Signing and the key"). loadVerifiedManifest checks the signature FIRST
 // and parses only bytes that passed, so nothing an attacker controls reaches
-// the parser. The schema rules here are the ones of tools\sign_manifest.py's
-// validate_manifest, rule for rule: tools\launcher_test feeds both the same
-// fixtures and fails when they disagree.
+// the parser. The schema itself, shared with the installer, is
+// install_manifest.h (docs\design-manifest-schema2-2026-11-12.md); its rules are
+// the ones of tools\sign_manifest.py's validate_manifest, rule for rule:
+// tools\launcher_test feeds both the same fixtures and fails when they disagree.
 #pragma once
 
 #include <string>
 #include <vector>
 
+#include "install_manifest.h"
+
 namespace edvr::installer {
-
-struct ManifestLauncher {
-    std::string version;
-    std::string asset;
-    std::string sha256;
-    unsigned long long size = 0;
-};
-
-struct ManifestAsset {
-    std::string name;
-    std::string sha256;
-    unsigned long long size = 0;
-};
-
-struct ManifestFile {
-    std::string item;   // a name payloadItem() knows, one of kManifestItems
-    std::string path;   // the file's path inside its zip and inside an unpacked payload folder
-    std::string asset;  // the ManifestAsset.name of the zip that holds it
-    std::string sha256;
-    unsigned long long size = 0;
-};
-
-struct Manifest {
-    std::string version;
-    std::string build;
-    std::string tag;
-    long long issued = 0;
-    std::string minLauncher;
-    bool hasLauncher = false;
-    ManifestLauncher launcher;
-    std::vector<ManifestAsset> assets;
-    std::vector<ManifestFile> files;
-};
-
-// The item names a manifest may use; the same list as ITEMS in sign_manifest.py.
-inline constexpr const char* kManifestItems[] = {
-    "native_graphics", "native_runtime", "ini", "flat_ini", "profile", "ngx",
-    "xess", "xess_license", "xess_third_party", "openxr_loader", "openxr_license"};
 
 inline constexpr size_t kMaxManifestBytes = 1u << 20;
 
@@ -59,9 +24,17 @@ inline constexpr size_t kMaxManifestBytes = 1u << 20;
 // update_keys.h. `sigText` is exactly 128 lower-case hex characters, then at
 // most one line ending. The signature must verify under any listed key; a key
 // that is not a valid point is skipped. On failure `error` (may be null) says
-// which check failed and `out` is untouched.
+// which check failed and `out` is untouched. A manifest of a schema newer than
+// kManifestSchema is refused with `failure->schemaTooNew` set and the number in
+// `failure->schema` (`failure` may be null); `error` then reads "manifest schema
+// N, launcher reads 2".
+struct ManifestFailure {
+    bool schemaTooNew = false;
+    long long schema = 0;
+};
 bool loadVerifiedManifest(const std::string& bytes, const std::string& sigText,
-                          const char* const* keys, Manifest* out, std::string* error);
+                          const char* const* keys, Manifest* out, std::string* error,
+                          ManifestFailure* failure = nullptr);
 
 // Numeric major.minor.patch comparison: negative when a < b, zero when equal,
 // positive when a > b. A leading "v" is ignored, a missing component is 0, and

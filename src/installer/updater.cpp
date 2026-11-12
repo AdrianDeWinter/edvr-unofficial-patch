@@ -240,8 +240,17 @@ UpdateCheck Updater::check() {
 
     Manifest manifest;
     std::string why;
-    if (!loadVerifiedManifest(manifestBytes, signatureText, keys(), &manifest, &why))
+    ManifestFailure failure;
+    if (!loadVerifiedManifest(manifestBytes, signatureText, keys(), &manifest, &why, &failure)) {
+        if (failure.schemaTooNew) {
+            // Refused before any download: this launcher cannot read that manifest at all.
+            UpdateCheck refused = outcomeOnly(UpdateOutcome::Refused, kSchemaTooNewMessage);
+            refused.tag = tag;
+            refused.detail = why;  // "manifest schema N, launcher reads 2"
+            return refused;
+        }
         return outcomeOnly(UpdateOutcome::Refused, "the release " + tag + " was refused: " + why);
+    }
     if (manifest.tag != tag)
         return outcomeOnly(UpdateOutcome::Refused, "the release " + tag + " was refused: its manifest is for another tag");
     // A re-offered release whose digest GitHub did not report is caught here.
@@ -251,12 +260,6 @@ UpdateCheck Updater::check() {
         return outcomeOnly(UpdateOutcome::UpToDate, "the release " + tag + " is older than one already accepted and was ignored");
 
     const std::string& ours = settings_.launcherVersion;
-    if (compareVersions(ours, manifest.minLauncher) < 0) {
-        const bool newerLauncher = manifest.hasLauncher && compareVersions(manifest.launcher.version, ours) > 0 &&
-                                   compareVersions(manifest.launcher.version, manifest.minLauncher) >= 0;
-        if (!newerLauncher)
-            return outcomeOnly(UpdateOutcome::Refused, "the release " + tag + " needs a newer launcher than " + ours + " and carries none");
-    }
 
     result = UpdateCheck();
     result.outcome = UpdateOutcome::Available;
@@ -405,7 +408,8 @@ bool Updater::loadManifestFile(const std::wstring& jsonPath, Manifest* manifest,
     for (const ManifestFile& f : loaded.files) {
         if (!cache.hasSized(f.sha256, f.size)) return fail("the payload cache lacks " + f.path + "; connect and update to repair it");
         PayloadFile p;
-        p.item = f.item;
+        p.item = stage1PayloadItem(f.id);
+        if (p.item.empty()) return fail("this launcher cannot place the file " + f.id + " yet");
         p.path = cache.pathFor(f.sha256);
         p.sha256 = f.sha256;
         list.push_back(std::move(p));

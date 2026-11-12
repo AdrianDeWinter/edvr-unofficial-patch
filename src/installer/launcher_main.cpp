@@ -146,6 +146,7 @@ int runUpdateCommand(const AppArgs& args, Output& out) {
     out.line("Signed by:       " + signedBy(check));
     out.line(std::string("Outcome:         ") + outcomeName(check.outcome));
     if (!check.message.empty()) out.line("                 " + check.message);
+    if (!check.detail.empty()) out.line("                 " + check.detail);
 
     switch (check.outcome) {
         case UpdateOutcome::Refused: return 3;

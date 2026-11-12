@@ -35,6 +35,11 @@ inline constexpr const char* kGitHubApiBase =
 inline constexpr const char* kManifestAssetName = "ed-up-manifest.json";
 inline constexpr const char* kSignatureAssetName = "ed-up-manifest.json.sig";
 
+// What the window and --check say when a release's manifest is of a newer schema than this
+// launcher reads. The detail ("manifest schema N, launcher reads 2") goes in UpdateCheck::detail.
+inline constexpr const char* kSchemaTooNewMessage =
+    "This update needs a newer ED-UP launcher. Download the latest launcher from the releases page.";
+
 enum class UpdateOutcome {
     UpToDate,   // nothing newer; `message` may say why
     Available,  // a verified, newer manifest is in UpdateCheck
@@ -52,6 +57,7 @@ struct ReleaseAsset {
 struct UpdateCheck {
     UpdateOutcome outcome = UpdateOutcome::Skipped;
     std::string message;  // one sentence, for the window's quiet line and the log
+    std::string detail;   // for the log only: why a Refused outcome was refused, when message is a fixed line
     std::string tag;
     Manifest manifest;
     std::string manifestBytes;

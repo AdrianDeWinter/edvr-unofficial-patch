@@ -63,4 +63,10 @@ bool usePayloadFiles(const std::vector<PayloadFile>& files, const std::string& v
 // Back to the embedded resources, as if usePayloadFiles had never been called.
 void resetPayloadFiles();
 
+// TEMPORARY, removed in stage 2 of docs\design-manifest-schema2-2026-11-12.md (when the planner loops
+// over the manifest's files and idFor and canonicalItem go): the item name payloadItem knows for a
+// schema-2 file id, or empty for an id this build has no slot for. This is the only place the two
+// vocabularies meet; the launcher turns a ManifestFile into a PayloadFile through it.
+std::string stage1PayloadItem(const std::string& fileId);
+
 }  // namespace edvr::installer

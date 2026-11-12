@@ -48,9 +48,10 @@ HEADER = ROOT / "src" / "installer" / "update_keys.h"
 MANIFEST_NAME = "ed-up-manifest.json"
 SIGNATURE_NAME = MANIFEST_NAME + ".sig"
 
-# The manifest's names for the files the installer's payloadItem() knows.
-ITEMS = ("native_graphics", "native_runtime", "ini", "flat_ini", "profile", "ngx", "xess",
-         "xess_license", "xess_third_party", "openxr_loader", "openxr_license")
+# The one schema the launcher reads: kManifestSchema in src\installer\install_manifest.h, which
+# the self-test reads as text and compares with this number.
+MANIFEST_SCHEMA = 2
+SCHEMA_HEADER = ROOT / "src" / "installer" / "install_manifest.h"
 
 # NIST P-256.
 P = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff
@@ -63,6 +64,13 @@ G = (0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296,
 HEX64 = re.compile(r"[0-9a-f]{64}")
 HEX128 = re.compile(r"[0-9a-f]{128}")
 ASSET_NAME = re.compile(r"[A-Za-z0-9._-]+")
+FILE_ID = re.compile(r"[a-z0-9_]{1,32}")
+PROFILES = ("vr", "flat")
+ROOTS = ("game", "openvr")
+EXISTING = ("replace", "owned", "chain", "runtime", "settings")
+# The device names Windows reserves as a path segment's stem, any case.
+RESERVED_NAMES = frozenset(["con", "prn", "aux", "nul"] + ["com%d" % n for n in range(10)] +
+                           ["lpt%d" % n for n in range(10)])
 
 
 # ---- the curve ---------------------------------------------------------------
@@ -202,6 +210,31 @@ def _path_problem(where, value):
     return None
 
 
+def target_path_problem(where, value):
+    """Why `value` is not a legal target path (the rule of install_manifest.cpp's
+    isTargetPath), or None. A backslash, a colon (drives and alternate streams), a
+    control or non-ASCII character, a character Windows bars from a name, an
+    empty, . or .. segment, a segment ending in a dot or a space, and a reserved
+    device name (CON, PRN, AUX, NUL, COM0-9, LPT0-9, any case, with or without an
+    extension) as a segment's stem are all refused."""
+    if not _is_text(value):
+        return "%s must be a non-empty string" % where
+    if "\\" in value or ":" in value:
+        return "%s has a backslash or a colon" % where
+    if any(ord(c) < 0x20 or ord(c) > 0x7e for c in value):
+        return "%s has a control or non-ASCII character" % where
+    if any(c in '<>"|?*' for c in value):
+        return "%s has a character Windows bars from a name" % where
+    for part in value.split("/"):
+        if part in ("", ".", ".."):
+            return "%s must be a relative path with no empty, . or .. segment" % where
+        if part[-1] in ". ":
+            return "%s has a segment ending in a dot or a space" % where
+        if part.split(".")[0].rstrip(" ").lower() in RESERVED_NAMES:
+            return "%s has a segment that is a reserved device name" % where
+    return None
+
+
 def _shape(where, obj, keys, optional=()):
     if not isinstance(obj, dict):
         return ["%s must be an object" % where]
@@ -211,16 +244,151 @@ def _shape(where, obj, keys, optional=()):
     return problems
 
 
-def validate_manifest(obj):
-    """Why `obj` (a parsed manifest) breaks the schema of docs\\design-launcher
-    ("The manifest"), as a list of strings; empty when it is sound."""
-    problems = _shape("manifest", obj, ("schema", "version", "build", "tag", "issued", "min_launcher",
-                                        "assets", "files"), ("launcher",))
-    if not isinstance(obj, dict):
+def when_can_overlap(first, second):
+    """True when two (validated) `when` objects, or None for no `when`, can both
+    hold on some install: a missing profile condition holds for every profile, two
+    lists must share a value, and the adapter never excludes."""
+    a = (first or {}).get("profile")
+    b = (second or {}).get("profile")
+    return a is None or b is None or bool(set(a) & set(b))
+
+
+def _when_problems(where, when):
+    problems = _shape(where, when, (), ("profile", "adapter"))
+    if problems:
         return problems
-    if not _is_int(obj.get("schema")) or obj.get("schema") != 1:
-        problems.append("schema must be 1")
-    for key in ("version", "build", "tag", "min_launcher"):
+    if not when:
+        return ["%s is empty" % where]
+    if "profile" in when:
+        profile = when["profile"]
+        if not isinstance(profile, list) or not profile:
+            problems.append("%s.profile must be a non-empty list" % where)
+        elif any(not isinstance(v, str) or v not in PROFILES for v in profile):
+            problems.append("%s.profile holds a value that is not vr or flat" % where)
+        elif len(set(profile)) != len(profile):
+            problems.append("%s.profile repeats a value" % where)
+    if "adapter" in when and when["adapter"] != "nvidia":
+        problems.append("%s.adapter must be nvidia" % where)
+    return problems
+
+
+def _file_problems(index, entry, asset_names):
+    """Problems with one files[] entry; the entry's id is in each message once known."""
+    where = "files[%d]" % index
+    sub = _shape(where, entry, ("id", "asset", "path", "sha256", "size", "target", "existing"), ("when",))
+    if sub:
+        return sub
+    if not isinstance(entry["id"], str) or not FILE_ID.fullmatch(entry["id"]):
+        return ["%s.id must match [a-z0-9_]{1,32}" % where]
+    label = "file %s" % entry["id"]
+    problems = []
+    if not isinstance(entry["asset"], str) or entry["asset"] not in asset_names:
+        problems.append("%s names no listed asset" % label)
+    problem = _path_problem(label + " path", entry["path"])
+    if problem:
+        problems.append(problem)
+    problem = _hex_problem(label + " sha256", entry["sha256"])
+    if problem:
+        problems.append(problem)
+    if not _is_int(entry["size"]) or entry["size"] < 0:
+        problems.append("%s size must be a non-negative integer" % label)
+    target = entry["target"]
+    sub = _shape(label + " target", target, ("root", "path"))
+    problems += sub
+    if not sub:
+        if target["root"] not in ROOTS:
+            problems.append("%s target.root must be game or openvr" % label)
+        problem = target_path_problem(label + " target.path", target["path"])
+        if problem:
+            problems.append(problem)
+    if "when" in entry:
+        problems += _when_problems(label + " when", entry["when"])
+    if not isinstance(entry["existing"], str) or entry["existing"] not in EXISTING:
+        problems.append("%s existing must be replace, owned, chain, runtime or settings" % label)
+    return problems
+
+
+def _reserved_target_problem(target):
+    """Why a target may not be a payload file, or None: a name or folder the installer itself writes
+    (the fixed steps), or, under the game root, a path into the default Openvr folder, where it would
+    alias the openvr root. Case-folded, as Windows compares names. install_manifest.cpp's
+    reservedTargetReason gives the same verdict."""
+    path = target["path"].lower()
+    leaf = path.rsplit("/", 1)[-1]
+    top_level = "/" not in path
+    if target["root"] == "game" and path.startswith("openvr/"):
+        return "is under the openvr folder, which the openvr root names"
+    if path.startswith(("edvr_install/", "edvr_backup/")):
+        return "is inside a folder the installer keeps its record and backups in"
+    if top_level and path in ("edvr_profile.ini", "edvr_openxr.ini", "openvr_api_orig.dll"):
+        return "is a file the installer writes itself"
+    if leaf.endswith(".base"):
+        return "is a .base copy the installer keeps"
+    if top_level and len(path) >= 10 and path.startswith("d3d11_") and path.endswith(".dll"):
+        return "is a name a chained graphics DLL is parked under"
+    return None
+
+
+def _cross_file_problems(files):
+    """The behaviour constraints and the overlap check, over files that each passed
+    _file_problems and have distinct ids."""
+    problems = []
+    chain = runtime = None
+    settings = {}
+    for entry in files:
+        existing = entry["existing"]
+        if existing == "chain":
+            if chain is not None:
+                problems.append("file %s is a second chain file (after %s)" % (entry["id"], chain))
+            chain = chain or entry["id"]
+            if entry["target"]["root"] != "game" or entry["target"]["path"].lower() != "d3d11.dll":
+                problems.append("file %s is a chain file and must target game d3d11.dll" % entry["id"])
+        elif existing == "runtime":
+            if runtime is not None:
+                problems.append("file %s is a second runtime file (after %s)" % (entry["id"], runtime))
+            runtime = runtime or entry["id"]
+            if entry["target"]["root"] != "openvr" or entry["target"]["path"].lower() != "openvr_api.dll":
+                problems.append("file %s is a runtime file and must target openvr openvr_api.dll" % entry["id"])
+        elif existing == "settings":
+            profile = (entry.get("when") or {}).get("profile")
+            if profile not in (["vr"], ["flat"]):
+                problems.append("file %s is a settings file and needs when.profile exactly [vr] or [flat]"
+                                % entry["id"])
+            elif profile[0] in settings:
+                problems.append("file %s is a second settings file for its profile (after %s)"
+                                % (entry["id"], settings[profile[0]]))
+            else:
+                settings[profile[0]] = entry["id"]
+    for entry in files:
+        reason = _reserved_target_problem(entry["target"])
+        if reason:
+            problems.append("file %s target %s" % (entry["id"], reason))
+    for i, first in enumerate(files):
+        for second in files[i + 1:]:
+            if (first["target"]["root"] == second["target"]["root"] and
+                    first["target"]["path"].lower() == second["target"]["path"].lower() and
+                    when_can_overlap(first.get("when"), second.get("when"))):
+                problems.append("files %s and %s have the same target" % (first["id"], second["id"]))
+    return problems
+
+
+def validate_manifest(obj):
+    """Why `obj` (a parsed manifest) breaks schema 2 (docs\\design-manifest-schema2-2026-11-12.md),
+    as a list of strings; empty when it is sound. install_manifest.cpp's parseManifest gives the
+    same verdict. A schema above MANIFEST_SCHEMA is one problem and nothing else is checked, as
+    the launcher reads `schema` alone first."""
+    if not isinstance(obj, dict):
+        return ["manifest must be an object"]
+    schema = obj.get("schema")
+    if not _is_int(schema):
+        return ["schema must be a whole number"]
+    if schema > MANIFEST_SCHEMA:
+        return ["manifest schema %d, launcher reads %d" % (schema, MANIFEST_SCHEMA)]
+    if schema != MANIFEST_SCHEMA:
+        return ["schema %d is no longer read; this launcher reads %d" % (schema, MANIFEST_SCHEMA)]
+    problems = _shape("manifest", obj, ("schema", "version", "build", "tag", "issued", "assets", "files"),
+                      ("launcher",))
+    for key in ("version", "build", "tag"):
         if key in obj and not _is_text(obj[key]):
             problems.append("%s must be a non-empty string" % key)
     if "issued" in obj and (not _is_int(obj["issued"]) or obj["issued"] <= 0):
@@ -265,29 +433,18 @@ def validate_manifest(obj):
         if not isinstance(files, list) or not files:
             problems.append("files must be a non-empty list")
         else:
-            seen = set()
+            seen, sound = set(), []
             for index, entry in enumerate(files):
-                where = "files[%d]" % index
-                sub = _shape(where, entry, ("item", "path", "asset", "sha256", "size"))
-                problems += sub
-                if sub:
-                    continue
-                if entry["item"] not in ITEMS:
-                    problems.append("%s.item %r is not a known item" % (where, entry["item"]))
-                elif entry["item"] in seen:
-                    problems.append("%s.item %s is listed twice" % (where, entry["item"]))
-                else:
-                    seen.add(entry["item"])
-                problem = _path_problem(where + ".path", entry["path"])
-                if problem:
-                    problems.append(problem)
-                if not isinstance(entry["asset"], str) or entry["asset"] not in asset_names:
-                    problems.append("%s.asset names no listed asset" % where)
-                problem = _hex_problem(where + ".sha256", entry["sha256"])
-                if problem:
-                    problems.append(problem)
-                if not _is_int(entry["size"]) or entry["size"] < 0:
-                    problems.append("%s.size must be a non-negative integer" % where)
+                found = _file_problems(index, entry, asset_names)
+                problems += found
+                if not found:
+                    if entry["id"] in seen:
+                        problems.append("file %s is listed twice" % entry["id"])
+                    else:
+                        seen.add(entry["id"])
+                        sound.append(entry)
+            if not problems:
+                problems += _cross_file_problems(sound)
     return problems
 
 
@@ -412,7 +569,7 @@ def verify_directory(directory, allow_unsigned=False, keys=None, out=print):
                     elif hashlib.sha256(archive.read(info)).hexdigest() != entry["sha256"]:
                         report(False, "%s does not match its sha256" % label)
                     else:
-                        report(True, "%s (%s): size and sha256" % (label, entry["item"]))
+                        report(True, "%s (%s): size and sha256" % (label, entry["id"]))
         except (OSError, zipfile.BadZipFile) as exc:
             report(False, "zip %s cannot be read: %s" % (name, exc))
     return ok
@@ -533,14 +690,18 @@ def _fixture_manifest(zip_name="ed-up-core-1.0.0.zip", members=None, zip_bytes=N
             for name, content in members.items():
                 archive.writestr(name, content)
         zip_bytes = buffer.getvalue()
-    items = {"d3d11.dll": "native_graphics", "openvr/openvr_api.dll": "native_runtime", "edvr.ini": "ini"}
+    places = {
+        "d3d11.dll": ("graphics", {"root": "game", "path": "d3d11.dll"}, {"profile": ["vr", "flat"]}, "chain"),
+        "openvr/openvr_api.dll": ("runtime", {"root": "openvr", "path": "openvr_api.dll"}, {"profile": ["vr"]},
+                                  "runtime"),
+        "edvr.ini": ("settings_vr", {"root": "game", "path": "edvr.ini"}, {"profile": ["vr"]}, "settings")}
     manifest = {
-        "schema": 1, "version": "1.0.0", "build": "v1.0.0", "tag": "v1.0.0", "issued": 1794000000,
-        "min_launcher": "0.1.0",
+        "schema": MANIFEST_SCHEMA, "version": "1.0.0", "build": "v1.0.0", "tag": "v1.0.0", "issued": 1794000000,
         "assets": [{"name": zip_name, "sha256": hashlib.sha256(zip_bytes).hexdigest(), "size": len(zip_bytes)}],
-        "files": [{"item": items[name], "path": name, "asset": zip_name,
-                   "sha256": hashlib.sha256(content).hexdigest(), "size": len(content)}
-                  for name, content in members.items() if name in items]}
+        "files": [{"id": places[name][0], "asset": zip_name, "path": name,
+                   "sha256": hashlib.sha256(content).hexdigest(), "size": len(content),
+                   "target": dict(places[name][1]), "when": dict(places[name][2]), "existing": places[name][3]}
+                  for name, content in members.items() if name in places]}
     return manifest, zip_bytes
 
 
@@ -604,9 +765,16 @@ def self_test():
     def rejects(label, change):
         assert mutated(change), label
 
-    rejects("schema 2", lambda m: m.update(schema=2))
-    rejects("schema true", lambda m: m.update(schema=True))
-    for key in ("version", "build", "tag", "min_launcher"):
+    # schema is read alone first: 1, 3, missing, a bool and a float are all refused, and a schema
+    # above ours is the one verdict that names the number.
+    assert MANIFEST_SCHEMA == 2
+    for bad in (1, 0, 3, True, 2.0, "2"):
+        rejects("schema %r" % (bad,), lambda m, bad=bad: m.update(schema=bad))
+    rejects("schema missing", lambda m: m.pop("schema"))
+    assert mutated(lambda m: m.update(schema=3)) == ["manifest schema 3, launcher reads 2"]
+    assert mutated(lambda m: (m.update(schema=3), m.update(extra=1))) == ["manifest schema 3, launcher reads 2"]
+    rejects("min_launcher is gone", lambda m: m.update(min_launcher="0.1.0"))
+    for key in ("version", "build", "tag"):
         rejects(key + " number", lambda m, key=key: m.update({key: 3}))
         rejects(key + " empty", lambda m, key=key: m.update({key: ""}))
         rejects(key + " missing", lambda m, key=key: m.pop(key))
@@ -628,18 +796,103 @@ def self_test():
     for bad in ("", ".", "..", "/abs", "a//b", "a/./b", "a/../b", "a/", "a\\b", "C:/x", "a:b",
                 "a\x01b", "caf\u00e9", 5):
         rejects("path %r" % (bad,), lambda m, bad=bad: m["files"][0].update(path=bad))
-    rejects("unknown item", lambda m: m["files"][0].update(item="payload"))
-    rejects("duplicate item", lambda m: m["files"].append(dict(m["files"][0], path="other.dll")))
+    rejects("file without id", lambda m: m["files"][0].pop("id"))
+    rejects("file with the old item key", lambda m: m["files"][0].update(item="native_graphics"))
+    for bad in ("", "Graphics", "a-b", "a" * 33, "caf\u00e9", 5, None):
+        rejects("id %r" % (bad,), lambda m, bad=bad: m["files"][0].update(id=bad))
+    assert not mutated(lambda m: m["files"][0].update(id="a" * 32))
+    rejects("duplicate id", lambda m: m["files"].append(
+        dict(m["files"][0], target={"root": "game", "path": "other.dll"})))
+    # target: its shape, its root and the path rule.
+    rejects("target missing", lambda m: m["files"][0].pop("target"))
+    rejects("target not an object", lambda m: m["files"][0].update(target="d3d11.dll"))
+    rejects("target unknown key", lambda m: m["files"][0]["target"].update(mode="x"))
+    rejects("target root settings", lambda m: m["files"][0]["target"].update(root="settings"))
+    rejects("target root missing", lambda m: m["files"][0]["target"].pop("root"))
+    def with_target(root, path):
+        """Appends a replace file with this target, so a target rule is tried on a file with no name of its own."""
+        return lambda m: m["files"].append(dict(m["files"][0], id="other", existing="replace",
+                                                target={"root": root, "path": path}))
+
+    assert not mutated(with_target("game", "sub/dir/File-1.dll"))
+    assert not mutated(with_target("game", "console.txt"))
+    assert not mutated(with_target("game", "com10.dll"))
+    for bad in ("", ".", "..", "../x.dll", "a/../x.dll", "/abs.dll", "C:/x.dll", "C:x.dll", "a:b", "a//b",
+                "a/./b", "a\\b", "NUL", "nul.txt", "con.txt", "Con", "COM1", "lpt9.dll", "a/AUX/b", "aux.tar.gz",
+                "com0", "x.dll:stream", "x.dll.", "x.dll ", "a./b", "a /b", "a\x01b", "caf\u00e9", "a*b", "a?b",
+                'a"b', "a<b", "a>b", "a|b", 5, None):
+        rejects("target path %r" % (bad,), with_target("game", bad))
+    # chain and runtime work at today's names only; a game target may not alias the openvr root; the installer's own names are reserved.
+    rejects("chain at another name", lambda m: m["files"][0]["target"].update(path="other.dll"))
+    rejects("chain in the openvr root", lambda m: m["files"][0]["target"].update(root="openvr"))
+    rejects("chain nested", lambda m: m["files"][0]["target"].update(path="sub/d3d11.dll"))
+    assert not mutated(lambda m: m["files"][0]["target"].update(path="D3D11.DLL"))
+    rejects("runtime at another name", lambda m: m["files"][1]["target"].update(path="other.dll"))
+    rejects("runtime nested", lambda m: m["files"][1]["target"].update(path="sub/openvr_api.dll"))
+    assert not mutated(lambda m: m["files"][1]["target"].update(path="OpenVR_API.dll"))
+    for root, bad in (("game", "openvr/x.dll"), ("game", "Openvr/win64/x.dll"), ("game", "edvr_profile.ini"),
+                      ("game", "EDVR_Profile.INI"), ("game", "edvr_openxr.ini"), ("openvr", "edvr_openxr.ini"),
+                      ("game", "edvr.ini.base"), ("game", "sub/y.BASE"), ("openvr", "openvr_api_orig.dll"),
+                      ("game", "d3d11_edhm.dll"), ("game", "D3D11_Other.DLL"), ("game", "d3d11_.dll"),
+                      ("game", "edvr_install/x.ini"), ("game", "edvr_backup/a/b.dll")):
+        rejects("reserved target %s %s" % (root, bad), with_target(root, bad))
+    for root, good in (("game", "openvr-extra/x.dll"), ("game", "openvrx.dll"), ("openvr", "openvr/x.dll"),
+                       ("game", "d3d11x.dll"), ("game", "d3d11_x.dll.bak"), ("game", "sub/d3d11_x.dll"),
+                       ("game", "sub/edvr_profile.ini"), ("game", "x.basement"), ("game", "edvr_installer/x")):
+        assert not mutated(with_target(root, good)), (root, good)
+    # when: absent means always; each key alone and together; an empty one, an unknown key or value is an error.
+    assert not mutated(lambda m: m["files"][0].pop("when"))
+    assert not mutated(lambda m: m["files"][0].update(when={"adapter": "nvidia"}))
+    assert not mutated(lambda m: m["files"][0].update(when={"profile": ["flat"], "adapter": "nvidia"}))
+    assert not mutated(lambda m: m["files"][0].update(when={"profile": ["flat", "vr"]}))
+    for bad in ({}, [], None, "vr", {"route": "x"}, {"profile": []}, {"profile": "vr"}, {"profile": ["both"]},
+                {"profile": ["vr", "vr"]}, {"profile": ["VR"]}, {"profile": [1]}, {"adapter": "amd"},
+                {"adapter": True}, {"adapter": ["nvidia"]}, {"profile": ["vr"], "option": "x"}):
+        rejects("when %r" % (bad,), lambda m, bad=bad: m["files"][0].update(when=bad))
+    # existing: each value (with the constraints its behaviour carries), and nothing else.
+    for ok in ("replace", "owned"):
+        assert not mutated(lambda m, ok=ok: m["files"][0].update(existing=ok)), ok
+    for bad in ("Replace", "merge", "", None, 1, ["replace"]):
+        rejects("existing %r" % (bad,), lambda m, bad=bad: m["files"][0].update(existing=bad))
+    rejects("existing missing", lambda m: m["files"][0].pop("existing"))
+    rejects("second chain file", lambda m: m["files"].append(dict(
+        m["files"][0], id="other", target={"root": "game", "path": "other.dll"})))
+    rejects("second runtime file", lambda m: m["files"].append(dict(
+        m["files"][1], id="other", target={"root": "openvr", "path": "other.dll"})))
+    rejects("runtime in the game root", lambda m: m["files"][1]["target"].update(root="game"))
+    rejects("settings without when", lambda m: m["files"][2].pop("when"))
+    rejects("settings both profiles", lambda m: m["files"][2].update(when={"profile": ["vr", "flat"]}))
+    rejects("settings adapter only", lambda m: m["files"][2].update(when={"adapter": "nvidia"}))
+    rejects("second settings file for a profile", lambda m: m["files"].append(dict(
+        m["files"][2], id="other", target={"root": "game", "path": "other.ini"})))
+    assert not mutated(lambda m: m["files"].append(dict(
+        m["files"][2], id="settings_flat", when={"profile": ["flat"]},
+        target={"root": "game", "path": "edvr-flat.ini"})))
+    # Overlapping targets: same root and case-folded path when both can hold; a different root, disjoint
+    # profiles or a different path do not overlap, and an adapter never separates two files.
+    rejects("overlap", lambda m: m["files"].append(dict(
+        m["files"][0], id="other", existing="replace", target={"root": "game", "path": "D3D11.DLL"})))
+    rejects("overlap, one without when", lambda m: m["files"].append(dict(
+        {k: v for k, v in m["files"][0].items() if k != "when"}, id="other", existing="replace")))
+    rejects("overlap, adapter does not exclude", lambda m: m["files"].append(dict(
+        m["files"][0], id="other", existing="replace", when={"profile": ["vr"], "adapter": "nvidia"})))
+    assert not mutated(lambda m: m["files"].append(dict(
+        m["files"][0], id="other", target={"root": "openvr", "path": "d3d11.dll"}, existing="replace")))
+    assert not mutated(lambda m: (m["files"][0].update(when={"profile": ["vr"]}, existing="replace"),
+                                  m["files"].append(dict(m["files"][0], id="other", when={"profile": ["flat"]}))))
     rejects("duplicate asset", lambda m: m["assets"].append(dict(m["assets"][0])))
     rejects("file asset unlisted", lambda m: m["files"][0].update(asset="nowhere.zip"))
     rejects("not a list", lambda m: m.update(files={}))
     assert validate_manifest([]) and validate_manifest("x") and validate_manifest(None)
-    for item in ITEMS:
-        assert not mutated(lambda m, item=item: (m.update(files=m["files"][:1]), m["files"][0].update(item=item))), item
+    # The schema number is the one the C++ parser reads.
+    header_text = SCHEMA_HEADER.read_text(encoding="utf-8")
+    found = re.search(r"kManifestSchema\s*=\s*(\d+)\s*;", header_text)
+    assert found and int(found.group(1)) == MANIFEST_SCHEMA, \
+        "sign_manifest.MANIFEST_SCHEMA and kManifestSchema in install_manifest.h differ"
     # load_manifest: ASCII only, valid JSON, no duplicate keys.
     assert load_manifest(_dump(manifest))[1] == []
     assert load_manifest(_dump(manifest).replace(b'"1.0.0"', '"\u00e9"'.encode("utf-8"), 1))[1]
-    assert load_manifest(b"{")[1] and load_manifest(b'{"schema": 1, "schema": 1}')[1]
+    assert load_manifest(b"{")[1] and load_manifest(b'{"schema": 2, "schema": 2}')[1]
     assert load_manifest(b"\xef\xbb\xbf" + _dump(manifest))[1]
 
     with tempfile.TemporaryDirectory(prefix="edvr-sign-manifest-") as temp:
@@ -686,7 +939,7 @@ def self_test():
         assert not verify_directory(release, keys=[], out=lambda line: None)
         invalid = temp / "invalid"
         invalid.mkdir()
-        bad_manifest = dict(manifest, schema=2)
+        bad_manifest = dict(manifest, schema=MANIFEST_SCHEMA + 1)
         _write_release(invalid, bad_manifest, zip_bytes)
         assert sign_file(invalid / MANIFEST_NAME, TEST_KEY, [key_a], False)[0] == 1
         assert not (invalid / SIGNATURE_NAME).exists()

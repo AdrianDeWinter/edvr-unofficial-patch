@@ -59,9 +59,10 @@ struct PayloadLoad {
     std::wstring manifestPath; // the stored manifest, when kind is Manifest
 };
 
-// The files of an unpacked ed-up-<ver>.zip, by the same table the manifest uses. The version is
-// the FileVersion stamped in d3d11.dll. Nothing here checks a hash: the folder is the user's,
-// named with --payload, and a signed manifest does not cover it.
+// The files of an unpacked ed-up-<ver>.zip, listed by the schema-2 manifest <dir>\ed-up-manifest.json
+// (unsigned is fine here) and taken by each file's `path` under the folder. The version is the
+// manifest's build. Nothing here checks a hash: the folder is the user's, named with --payload,
+// and a signed manifest does not cover it.
 bool listPayloadFolder(const std::wstring& dir, std::vector<PayloadFile>* files, std::string* version,
                        std::string* error);
 

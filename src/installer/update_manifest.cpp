@@ -4,9 +4,6 @@
 #include <bcrypt.h>
 
 #include <cstring>
-#include <initializer_list>
-#include <set>
-
 #include "update_json.h"
 #include "update_util.h"
 
@@ -83,145 +80,9 @@ bool verifyWithKey(const char* keyHex, const unsigned char digest[32], const uns
 
 // ---- the schema --------------------------------------------------------------
 
-using Json = JsonValue;
-
 bool failWith(std::string* error, const std::string& text) {
     if (error) *error = text;
     return false;
-}
-
-bool isText(const Json* v) { return v && v->isString() && !v->text.empty(); }
-bool isCount(const Json* v) { return v && v->isInt() && v->integer >= 0; }
-
-bool isHash(const Json* v) { return v && v->isString() && isLowerHex(v->text, 64); }
-
-// [A-Za-z0-9._-]+ and not made only of dots.
-bool isAssetName(const Json* v) {
-    if (!v || !v->isString() || v->text.empty()) return false;
-    bool onlyDots = true;
-    for (char c : v->text) {
-        const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-                        c == '.' || c == '_' || c == '-';
-        if (!ok) return false;
-        if (c != '.') onlyDots = false;
-    }
-    return !onlyDots;
-}
-
-// A relative path inside a zip: no backslash, colon or control or non-ASCII
-// character, and no empty, "." or ".." segment.
-bool isZipPath(const Json* v) {
-    if (!v || !v->isString() || v->text.empty()) return false;
-    for (char c : v->text) {
-        const unsigned char u = static_cast<unsigned char>(c);
-        if (c == '\\' || c == ':' || u < 0x20 || u > 0x7e) return false;
-    }
-    size_t start = 0;
-    for (;;) {
-        const size_t slash = v->text.find('/', start);
-        const std::string part = v->text.substr(start, slash == std::string::npos ? std::string::npos : slash - start);
-        if (part.empty() || part == "." || part == "..") return false;
-        if (slash == std::string::npos) break;
-        start = slash + 1;
-    }
-    return true;
-}
-
-// The object has every key in `required`, no key outside `required` and `optional`.
-bool shapeOk(const Json& obj, std::initializer_list<const char*> required,
-             std::initializer_list<const char*> optional, std::string* error, const char* where) {
-    if (!obj.isObject()) return failWith(error, std::string(where) + " must be an object");
-    for (const char* key : required) {
-        if (!obj.find(key)) return failWith(error, std::string(where) + " lacks " + key);
-    }
-    for (const std::string& key : obj.keys) {
-        bool known = false;
-        for (const char* k : required) known = known || key == k;
-        for (const char* k : optional) known = known || key == k;
-        if (!known) return failWith(error, std::string(where) + " has an unknown key");
-    }
-    return true;
-}
-
-bool isKnownItem(const std::string& item) {
-    for (const char* known : kManifestItems) {
-        if (item == known) return true;
-    }
-    return false;
-}
-
-bool fromJson(const Json& root, Manifest* out, std::string* error) {
-    if (!shapeOk(root, {"schema", "version", "build", "tag", "issued", "min_launcher", "assets", "files"},
-                 {"launcher"}, error, "manifest"))
-        return false;
-    const Json* schema = root.find("schema");
-    if (!schema->isInt() || schema->integer != 1) return failWith(error, "schema must be 1");
-    for (const char* key : {"version", "build", "tag", "min_launcher"}) {
-        if (!isText(root.find(key))) return failWith(error, std::string(key) + " must be a non-empty string");
-    }
-    const Json* issued = root.find("issued");
-    if (!issued->isInt() || issued->integer <= 0) return failWith(error, "issued must be a positive integer");
-
-    Manifest m;
-    m.version = root.find("version")->text;
-    m.build = root.find("build")->text;
-    m.tag = root.find("tag")->text;
-    m.minLauncher = root.find("min_launcher")->text;
-    m.issued = issued->integer;
-
-    if (const Json* launcher = root.find("launcher")) {
-        if (!shapeOk(*launcher, {"version", "asset", "sha256", "size"}, {}, error, "launcher")) return false;
-        if (!isText(launcher->find("version"))) return failWith(error, "launcher.version must be a non-empty string");
-        if (!isAssetName(launcher->find("asset"))) return failWith(error, "launcher.asset is not a plain file name");
-        if (!isHash(launcher->find("sha256"))) return failWith(error, "launcher.sha256 must be 64 lower-case hex characters");
-        if (!isCount(launcher->find("size"))) return failWith(error, "launcher.size must be a non-negative integer");
-        m.hasLauncher = true;
-        m.launcher.version = launcher->find("version")->text;
-        m.launcher.asset = launcher->find("asset")->text;
-        m.launcher.sha256 = launcher->find("sha256")->text;
-        m.launcher.size = static_cast<unsigned long long>(launcher->find("size")->integer);
-    }
-
-    const Json* assets = root.find("assets");
-    if (!assets->isArray() || assets->items.empty()) return failWith(error, "assets must be a non-empty list");
-    std::set<std::string> assetNames;
-    for (const Json& asset : assets->items) {
-        if (!shapeOk(asset, {"name", "sha256", "size"}, {}, error, "an asset")) return false;
-        if (!isAssetName(asset.find("name"))) return failWith(error, "an asset name is not a plain file name");
-        if (!assetNames.insert(asset.find("name")->text).second) return failWith(error, "an asset is listed twice");
-        if (!isHash(asset.find("sha256"))) return failWith(error, "an asset sha256 must be 64 lower-case hex characters");
-        if (!isCount(asset.find("size"))) return failWith(error, "an asset size must be a non-negative integer");
-        ManifestAsset a;
-        a.name = asset.find("name")->text;
-        a.sha256 = asset.find("sha256")->text;
-        a.size = static_cast<unsigned long long>(asset.find("size")->integer);
-        m.assets.push_back(std::move(a));
-    }
-
-    const Json* files = root.find("files");
-    if (!files->isArray() || files->items.empty()) return failWith(error, "files must be a non-empty list");
-    std::set<std::string> itemsSeen;
-    for (const Json& file : files->items) {
-        if (!shapeOk(file, {"item", "path", "asset", "sha256", "size"}, {}, error, "a file")) return false;
-        const Json* item = file.find("item");
-        if (!item->isString() || !isKnownItem(item->text)) return failWith(error, "a file item is not a known item");
-        if (!itemsSeen.insert(item->text).second) return failWith(error, "a file item is listed twice");
-        if (!isZipPath(file.find("path"))) return failWith(error, "a file path is not a plain relative path");
-        const Json* asset = file.find("asset");
-        if (!asset->isString() || assetNames.find(asset->text) == assetNames.end())
-            return failWith(error, "a file names no listed asset");
-        if (!isHash(file.find("sha256"))) return failWith(error, "a file sha256 must be 64 lower-case hex characters");
-        if (!isCount(file.find("size"))) return failWith(error, "a file size must be a non-negative integer");
-        ManifestFile f;
-        f.item = item->text;
-        f.path = file.find("path")->text;
-        f.asset = asset->text;
-        f.sha256 = file.find("sha256")->text;
-        f.size = static_cast<unsigned long long>(file.find("size")->integer);
-        m.files.push_back(std::move(f));
-    }
-    *out = std::move(m);
-    return true;
 }
 
 // ---- versions ----------------------------------------------------------------
@@ -293,7 +154,8 @@ int compareIdentifier(const std::string& a, const std::string& b) {
 }  // namespace
 
 bool loadVerifiedManifest(const std::string& bytes, const std::string& sigText, const char* const* keys,
-                          Manifest* out, std::string* error) {
+                          Manifest* out, std::string* error, ManifestFailure* failure) {
+    if (failure) *failure = ManifestFailure();
     if (bytes.size() > kMaxManifestBytes) return failWith(error, "the manifest is larger than allowed");
     unsigned char sig[64];
     if (!parseSignatureText(sigText, sig))
@@ -314,7 +176,13 @@ bool loadVerifiedManifest(const std::string& bytes, const std::string& sigText, 
     std::string parseError;
     if (!parseJson(bytes, &root, &parseError)) return failWith(error, "the manifest is not valid JSON: " + parseError);
     Manifest manifest;
-    if (!fromJson(root, &manifest, error)) return false;
+    long long schemaSeen = 0;
+    const ManifestParse parsed = parseManifest(root, &manifest, error, &schemaSeen);
+    if (parsed == ManifestParse::SchemaTooNew && failure) {
+        failure->schemaTooNew = true;
+        failure->schema = schemaSeen;
+    }
+    if (parsed != ManifestParse::Ok) return false;
     *out = std::move(manifest);
     return true;
 }
