@@ -14,13 +14,66 @@
 // to open it.
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
 namespace edvr::installer {
 
+// One file the installer placed, keyed by the manifest's file id (docs\design-manifest-schema2-2026-11-12.md, "Install records"). The
+// record says where it went (root and path, as the manifest gave them), how a file already there was treated, what was written, and,
+// when a file was displaced, what it was and where its backup is. Ownership is this hash: a file is EDVR's to remove while the bytes on
+// disk are still the ones the record names.
+struct FileRecord {
+    std::string  id;
+    std::string  root = "game";       // game | openvr, as the manifest's target.root
+    std::string  path;                // under root, '/' separated, as the manifest's target.path
+    std::string  existing = "replace";  // the behaviour name: replace, owned, chain, runtime or settings
+    std::string  sha256;              // what was written
+    std::string  beforeSha256;        // what it displaced; empty when nothing was there
+    std::wstring backup;              // where that copy was kept, relative to the game folder (absolute when outside it); empty when none
+};
+
+// Whether a record's root and path are safe to resolve: a known root and a path that passes install_manifest's target path rule
+// (nothing that leaves its root: no "..", drive, colon or backslash). A hand-edited state.ini that fails this is refused, not followed.
+bool recordTargetIsSafe(const FileRecord& record, std::string* why = nullptr);
+
 struct InstallState {
     bool present = false;  // a record was found and parsed
+
+    // The files the installer placed, in the order it placed them. The planner works from these alone: a state.ini written before the
+    // records existed is read into them on load (parseState).
+    std::vector<FileRecord> files;
+    // The ids of records parseState refused (an unsafe path, an unknown root or behaviour, a bad id): kept so the plan can say so.
+    std::vector<std::string> refusedRecords;
+
+    const FileRecord* file(const std::string& id) const {
+        for (const FileRecord& f : files) if (f.id == id) return &f;
+        return nullptr;
+    }
+    FileRecord* file(const std::string& id) {
+        for (FileRecord& f : files) if (f.id == id) return &f;
+        return nullptr;
+    }
+    // The first record placed under this behaviour name (existingName), or null: the chained graphics file, the runtime.
+    const FileRecord* withExisting(const char* existing) const {
+        for (const FileRecord& f : files) if (f.existing == existing) return &f;
+        return nullptr;
+    }
+    // The hash recorded for `id`, or empty when no record names it.
+    std::string shaOf(const std::string& id) const {
+        const FileRecord* f = file(id);
+        return f ? f->sha256 : std::string();
+    }
+    void put(const FileRecord& record) {
+        if (FileRecord* f = file(record.id)) *f = record;
+        else files.push_back(record);
+    }
+    void drop(const std::string& id) {
+        for (size_t i = 0; i < files.size(); ++i) {
+            if (files[i].id == id) { files.erase(files.begin() + static_cast<std::ptrdiff_t>(i)); return; }
+        }
+    }
 
     std::string  edvrVersion;   // the EDVR build installed
     std::string  installedUtc;  // when, ISO-8601 Z
@@ -35,29 +88,16 @@ struct InstallState {
     // through a folder called "Games #2" would fall foul of.
     std::wstring openvrDir;
 
-    bool         d3d11Installed = false;
-    std::string  d3d11Sha;       // what we put at d3d11.dll, to spot a clobber
     std::wstring chainTarget;    // the mod we renamed aside, e.g. d3d11_edhm.dll
     std::wstring chainMod;       // its name, e.g. EDHM
 
-    bool         openvrInstalled = false;
-    std::string  openvrSha;
     std::wstring openvrOrigName;  // normally openvr_api_orig.dll
     std::string  openvrOrigSha;   // the game's own runtime, as we found it
-
-    bool         ngxInstalled = false;  // NVIDIA's DLSS runtime, the copy we placed
-    std::string  ngxSha;
-    std::string  xessSha, xessLicenseSha, xessThirdPartySha;
 
     std::string iniSha;       // the edvr.ini we wrote; a differing file is user edits
     bool        hasBaseIni = false;
 
-    bool nativeInstalled = false;
-    std::string nativeGraphicsSha;
-    std::string nativeRuntimeSha;
-    std::string openxrLoaderSha;
-    std::string openxrLicenseSha;
-    std::string nativeConfigSha;
+    std::string nativeConfigSha;   // edvr_openxr.ini: a fixed step, not a payload file, so it has no file record
     std::wstring nativeOriginalName;
     std::string nativeOriginalSha;
 };

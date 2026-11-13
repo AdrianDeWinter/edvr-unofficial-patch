@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "detect.h"
+#include "install_manifest.h"
 #include "../common/iniedit.h"
 
 namespace edvr::installer {
@@ -386,6 +387,101 @@ std::wstring timestampName() {
     return std::wstring(buf);
 }
 
+bool recordTargetIsSafe(const FileRecord& record, std::string* why) {
+    if (record.root != "game" && record.root != "openvr") {
+        if (why) *why = "unknown root";
+        return false;
+    }
+    return isTargetPath(record.path, why);
+}
+
+namespace {
+
+// A file id as the manifest spells it: [a-z0-9_]{1,32}. The id is part of a section name, so nothing else is let through.
+bool validRecordId(const std::string& id) {
+    if (id.empty() || id.size() > 32) return false;
+    for (const char c : id) {
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return false;
+    }
+    return true;
+}
+
+bool knownExisting(const std::string& name) {
+    for (const ExistingMode mode : {ExistingMode::Replace, ExistingMode::Owned, ExistingMode::Chain, ExistingMode::Runtime,
+                                    ExistingMode::Settings})
+        if (name == existingName(mode)) return true;
+    return false;
+}
+
+// What an installer 0.22 or launcher 0.1.0 state.ini keeps of each payload file: a hash in a component section, and nothing that says
+// where the file went or how it was treated, because the installer knew those by name. The table is that knowledge, written down once:
+// the file ids of schema 2's first manifest, the place and behaviour the planner always gave them, and the one or two fields that held
+// the hash (the older field first, then the [native] copy a later version added). state.cpp's serializeState writes the same fields
+// from the records, so a downgrade and tools\install_edvr.py's flat-receipt check still find them.
+struct LegacyKey { const char* section; const char* key; };
+struct LegacySlot {
+    const char* id;
+    const char* root;
+    const char* path;
+    const char* existing;
+    LegacyKey   keys[2];
+};
+const LegacySlot kLegacySlots[] = {
+    {"graphics",         "game",   "d3d11.dll",                 "chain",   {{"d3d11", "sha256"}, {"native", "graphics_sha256"}}},
+    {"runtime",          "openvr", "openvr_api.dll",            "runtime", {{"openvr", "sha256"}, {"native", "runtime_sha256"}}},
+    {"openxr_loader",    "openvr", "openxr_loader.dll",         "replace", {{"native", "loader_sha256"}, {nullptr, nullptr}}},
+    {"openxr_license",   "openvr", "OPENXR-LOADER-LICENSE.txt", "replace", {{"native", "license_sha256"}, {nullptr, nullptr}}},
+    {"dlss",             "game",   "nvngx_dlss.dll",            "owned",   {{"ngx", "sha256"}, {nullptr, nullptr}}},
+    {"xess",             "game",   "libxess.dll",               "owned",   {{"xess", "sha256"}, {nullptr, nullptr}}},
+    {"xess_license",     "game",   "INTEL-XESS-LICENSE.txt",    "owned",   {{"xess", "license_sha256"}, {nullptr, nullptr}}},
+    {"xess_third_party", "game",   "INTEL-XESS-THIRD-PARTY.txt", "owned",  {{"xess", "third_party_sha256"}, {nullptr, nullptr}}},
+};
+
+// Reads a record-less state.ini into file records. What a record needs and an old file cannot say is taken from the historical layout
+// above (every file at its table place, treated as the planner treated it). What it cannot recover: the copy of a foreign file a file
+// displaced (before_sha256 and backup stay empty) except for the VR runtime, whose original was always kept beside it under orig_name,
+// and the settings digest of a "both" install, which names only the VR file's. Installer 0.22 wrote the hashes of what it placed, and
+// that is the only thing the planner asks of a record.
+void migrateLegacyRecords(const IniDoc& doc, InstallState* s) {
+    auto get = [&](const char* section, const char* key) -> std::string {
+        const IniLine* l = doc.findKey(section, key);
+        return l ? l->value : std::string();
+    };
+    for (const LegacySlot& slot : kLegacySlots) {
+        std::string sha;
+        for (const LegacyKey& k : slot.keys) {
+            if (!k.section) continue;
+            sha = get(k.section, k.key);
+            if (!sha.empty()) break;
+        }
+        if (sha.empty()) continue;
+        FileRecord r;
+        r.id = slot.id;
+        r.root = slot.root;
+        r.path = slot.path;
+        r.existing = slot.existing;
+        r.sha256 = sha;
+        if (r.id == "runtime" && !s->openvrOrigSha.empty() && !s->openvrDir.empty() && !s->openvrOrigName.empty()) {
+            r.beforeSha256 = s->openvrOrigSha;
+            r.backup = s->openvrDir + L"\\" + s->openvrOrigName;
+        }
+        s->put(r);
+    }
+    // The settings digest names the file the scope manages: the VR file for vr and both, the flat file for flat.
+    if (!s->iniSha.empty()) {
+        FileRecord r;
+        const bool flat = s->scope == "flat";
+        r.id = flat ? "settings_flat" : "settings_vr";
+        r.root = "game";
+        r.path = flat ? "edvr-flat.ini" : "edvr.ini";
+        r.existing = "settings";
+        r.sha256 = s->iniSha;
+        s->put(r);
+    }
+}
+
+}  // namespace
+
 InstallState parseState(const std::string& text) {
     InstallState s;
     if (text.empty()) return s;
@@ -406,36 +502,51 @@ InstallState parseState(const std::string& text) {
     s.components = get("edvr", "components");
     s.openvrDir = fromUtf8(get("edvr", "openvr_dir"));
 
-    s.d3d11Sha = get("d3d11", "sha256");
-    s.d3d11Installed = !s.d3d11Sha.empty();
     s.chainTarget = fromUtf8(get("d3d11", "chain_target"));
     s.chainMod = fromUtf8(get("d3d11", "chain_mod"));
 
-    s.openvrSha = get("openvr", "sha256");
-    s.openvrInstalled = !s.openvrSha.empty();
     s.openvrOrigName = fromUtf8(get("openvr", "orig_name"));
     s.openvrOrigSha = get("openvr", "orig_sha256");
 
-    s.ngxSha = get("ngx", "sha256");
-    s.ngxInstalled = !s.ngxSha.empty();
-    s.xessSha = get("xess", "sha256");
-    s.xessLicenseSha = get("xess", "license_sha256");
-    s.xessThirdPartySha = get("xess", "third_party_sha256");
-
     s.iniSha = get("ini", "sha256");
-    s.nativeGraphicsSha = get("native", "graphics_sha256");
-    s.nativeRuntimeSha = get("native", "runtime_sha256");
-    s.openxrLoaderSha = get("native", "loader_sha256");
-    s.openxrLicenseSha = get("native", "license_sha256");
     s.nativeConfigSha = get("native", "config_sha256");
     s.nativeOriginalName = fromUtf8(get("native", "original_name"));
     s.nativeOriginalSha = get("native", "original_sha256");
-    s.nativeInstalled = !s.nativeRuntimeSha.empty();
+
+    // The per-file records. A record written by this installer has [file.<id>] sections and they are all that is read. One written
+    // before them (installer 0.22, launcher 0.1.0) has none, and is read into records from its component fields.
+    bool haveRecordSections = false;
+    std::vector<std::string> sections;   // each [file.*] section once, in the order the file has them
+    for (const IniLine& l : doc.lines) {
+        if (l.section.compare(0, 5, "file.") != 0) continue;
+        haveRecordSections = true;
+        if (std::find(sections.begin(), sections.end(), l.section) == sections.end()) sections.push_back(l.section);
+    }
+    if (haveRecordSections) {
+        for (const std::string& section : sections) {
+            FileRecord r;
+            r.id = section.substr(5);
+            r.root = get(section.c_str(), "root");
+            r.path = get(section.c_str(), "path");
+            r.existing = get(section.c_str(), "existing");
+            r.sha256 = get(section.c_str(), "sha256");
+            r.beforeSha256 = get(section.c_str(), "before_sha256");
+            r.backup = fromUtf8(get(section.c_str(), "backup"));
+            std::string why;
+            if (!validRecordId(r.id) || !knownExisting(r.existing) || !recordTargetIsSafe(r, &why)) {
+                s.refusedRecords.push_back(r.id);
+                continue;
+            }
+            s.put(r);
+        }
+    } else {
+        migrateLegacyRecords(doc, &s);
+    }
 
     // A record with no version is not a record; it is a file that happens to
     // parse. Everything downstream keys off `present`, so it has to mean
     // "written by this installer", not "the parse did not fail".
-    s.present = !s.edvrVersion.empty() || s.d3d11Installed || s.openvrInstalled || s.nativeInstalled;
+    s.present = !s.edvrVersion.empty() || !s.files.empty();
     return s;
 }
 
@@ -459,30 +570,45 @@ std::string serializeState(const InstallState& state) {
     out += "components = " + state.components + "\r\n";
     out += "openvr_dir = " + toUtf8(state.openvrDir) + "\r\n";
 
+    // One section per file placed, keyed by the manifest's file id. These are what the planner reads.
+    for (const FileRecord& f : state.files) {
+        out += "\r\n[file." + f.id + "]\r\n";
+        out += "root = " + f.root + "\r\n";
+        out += "path = " + f.path + "\r\n";
+        out += "existing = " + f.existing + "\r\n";
+        out += "sha256 = " + f.sha256 + "\r\n";
+        if (!f.beforeSha256.empty()) out += "before_sha256 = " + f.beforeSha256 + "\r\n";
+        if (!f.backup.empty()) out += "backup = " + toUtf8(f.backup) + "\r\n";
+    }
+
+    // The component sections an installer 0.22 and tools\install_edvr.py's flat-receipt check read, written from the records
+    // (kLegacySlots is the same mapping). A reader that knows the records ignores them.
+    const std::string graphicsSha = state.shaOf("graphics");
+    const std::string runtimeSha = state.shaOf("runtime");
     out += "\r\n[d3d11]\r\n";
-    out += "sha256 = " + (state.d3d11Installed ? state.d3d11Sha : std::string()) + "\r\n";
+    out += "sha256 = " + graphicsSha + "\r\n";
     out += "chain_target = " + toUtf8(state.chainTarget) + "\r\n";
     out += "chain_mod = " + toUtf8(state.chainMod) + "\r\n";
 
     out += "\r\n[openvr]\r\n";
-    out += "sha256 = " + (state.openvrInstalled ? state.openvrSha : std::string()) + "\r\n";
+    out += "sha256 = " + runtimeSha + "\r\n";
     out += "orig_name = " + toUtf8(state.openvrOrigName) + "\r\n";
     out += "orig_sha256 = " + state.openvrOrigSha + "\r\n";
 
     out += "\r\n[ngx]\r\n";
-    out += "sha256 = " + (state.ngxInstalled ? state.ngxSha : std::string()) + "\r\n";
+    out += "sha256 = " + state.shaOf("dlss") + "\r\n";
     out += "\r\n[xess]\r\n";
-    out += "sha256 = " + state.xessSha + "\r\n";
-    out += "license_sha256 = " + state.xessLicenseSha + "\r\n";
-    out += "third_party_sha256 = " + state.xessThirdPartySha + "\r\n";
+    out += "sha256 = " + state.shaOf("xess") + "\r\n";
+    out += "license_sha256 = " + state.shaOf("xess_license") + "\r\n";
+    out += "third_party_sha256 = " + state.shaOf("xess_third_party") + "\r\n";
 
     out += "\r\n[ini]\r\n";
     out += "sha256 = " + state.iniSha + "\r\n";
     out += "\r\n[native]\r\n";
-    out += "graphics_sha256 = " + state.nativeGraphicsSha + "\r\n";
-    out += "runtime_sha256 = " + state.nativeRuntimeSha + "\r\n";
-    out += "loader_sha256 = " + state.openxrLoaderSha + "\r\n";
-    out += "license_sha256 = " + state.openxrLicenseSha + "\r\n";
+    out += "graphics_sha256 = " + graphicsSha + "\r\n";
+    out += "runtime_sha256 = " + runtimeSha + "\r\n";
+    out += "loader_sha256 = " + state.shaOf("openxr_loader") + "\r\n";
+    out += "license_sha256 = " + state.shaOf("openxr_license") + "\r\n";
     out += "config_sha256 = " + state.nativeConfigSha + "\r\n";
     out += "original_name = " + toUtf8(state.nativeOriginalName) + "\r\n";
     out += "original_sha256 = " + state.nativeOriginalSha + "\r\n";

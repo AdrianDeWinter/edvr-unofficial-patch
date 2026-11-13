@@ -524,6 +524,25 @@ so. And uninstall removes only the copy ED-UP placed, by the hash in the install
 record. A build made without the DLSS SDK ships an installer without the
 runtime, and says so in its window and its report.
 
+## The install record keyed by file id
+
+`edvr_install\state.ini` keeps one `[file.<id>]` section for every payload file
+the installer placed, keyed by the manifest's file id: `root` (`game` or
+`openvr`), `path` (under the root), `existing` (the behaviour), `sha256` (what
+was written) and, when a file was displaced, `before_sha256` and `backup`. It is
+what ownership means: a file is ED-UP's to remove while its bytes on disk are
+still the recorded hash (a tool receipt from `install_edvr.py` is a second source
+of provenance). Uninstall works from the records and the receipts alone and
+needs no payload; an edited copy is kept and the plan says so. An update removes
+a recorded id the new install no longer places (dropped from the manifest, or
+outside the scope) under the same rule. A record whose path leaves its root is
+refused, not followed. A `state.ini` from installer 0.22 or launcher 0.1.0 has
+no file sections and is read into records from its component fields; the
+compatibility sections are still written beside the records, for a downgrade and
+for `install_edvr.py`'s flat-receipt check. When a lost record leaves a folder
+with files only the payload can vouch for, a caller that has a payload still
+passes it, and it adds candidates for those files.
+
 ## What it does not do
 
 No network access of any kind: it installs what it carries, and "update" means

@@ -48,7 +48,6 @@ struct PayloadFileEntry {
 struct PayloadInfo {
     std::string version;
     std::vector<PayloadFileEntry> files;
-
     const PayloadFileEntry* find(const std::string& id) const {
         for (const PayloadFileEntry& f : files) if (f.file.id == id) return &f;
         return nullptr;

@@ -2,58 +2,63 @@
 
 ## Status
 
-- **State (2026-11-13): stages 1 and 2 done, stage 3 next.** Three stages on
-  branch `claude/launcher-manifest-schema-6880a7`. Each passes the full build
-  and is committed on its own.
-  1. Schema 2 format: one shared parser, the Python validator, the
-     packager's file table, fixtures, and the launcher's update path. Done.
+- **State (2026-11-13): stages 1, 2 and 3 done, plus the review fixes.**
+  Branch `claude/launcher-manifest-schema-6880a7`; each stage passed the
+  full build and is its own commit.
+  1. Schema 2 format: shared parser, Python validator, the packager's file
+     table, fixtures, the launcher's update path.
   2. One install engine: the installer embeds a schema-2 manifest, and the
-     planner loops over its files. Done.
-  3. Per-id install records in `state.ini`, with migration, and removal of
-     dropped files. Next.
-- **Stage 2, as built:**
-  - A payload is `PayloadInfo`: the manifest's files that have bytes, each
-    with its hash and its `valid` flag (`plan.h`). `payload.cpp` builds it
-    from RCDATA 100 and 101 + i (installer) or from mapped cache files
-    (`usePayloadFiles(manifest, files)`, launcher and `--payload`).
-  - `planInstall` sorts the files by behaviour (chain, owned, runtime,
-    replace, settings) and runs one handler each. `when` is split in two:
-    a file for another profile is skipped, and a file the adapter rules out
-    is skipped by every behaviour except `owned`, which still recognises a
-    copy that is there and says why nothing was placed.
-  - A target the survey has no field for is read from the disk by the
-    planner (`Survey::targets` lets a test list one), so a plan never
-    overwrites a file it did not look at.
-  - Backups keep the file name; a second target with the same file name
-    goes under its folder (`openvr\...`), so the mirror and the survey keep
-    finding `openvr_api.dll` where they look.
-  - Id-specific C++ that is left, until stage 3 keeps a record per id:
-    the id to `state.ini` field table (`recordSlotIn`), the OpenXR loader and
-    licence ownership proofs, the XeSS notice requirement, the startup
-    config's loader and graphics paths, the three native-image validity
-    checks, and the report words for the DLSS and XeSS runtimes (`kBlurbs`).
-  - Behaviour changed on purpose: an unreadable `owned` file keeps its
-    record (the DLSS runtime used to lose it); the XeSS report is one line
-    per file with a name, not one for the trio.
-- **Supersedes** the 2026-11-12 draft "Launcher 0.2.0: a data-driven update
-  manifest". That draft was written against an older tree:
-  - It assumed an openvr proxy route, which was retired 2026-09-16.
-  - It assumed an XeSS opt-in, which does not exist.
-  - It assumed `xess_fg`, which is not in the tree.
-  - It assumed a runtime registration step, which does not exist.
-  - It assumed `ITEMS_SINCE_LAUNCHER`, which is not in the tree.
-- **Decided with the maintainer (2026-11-12):**
-  - Launcher 0.1.0 and schema 1 are retired. No v1 manifest is published
-    alongside.
-  - The installer and the launcher share one parser and one install engine.
-  - `when` has two keys, `profile` and `adapter`; there is no `route` and no
-    `option`.
-  - `existing` has five behaviours: `replace`, `chain`, `runtime`,
-    `settings` and `owned`.
-  - Install records are kept per file id, starting in this change.
+     planner loops over its files.
+  3. Per-id install records in `state.ini`, with migration and removal of
+     dropped files.
+- **Stage 2, as built:** a payload is `PayloadInfo` (the manifest's files
+  that have bytes, with hash and `valid`, `plan.h`), built by `payload.cpp`
+  from RCDATA 100 and 101 + i or from mapped cache files. `planInstall` runs
+  one handler per behaviour in the order chain, owned, runtime, replace,
+  settings; another profile's file is skipped, and an adapter miss skips all
+  but `owned`. A target the survey has no field for is read from disk.
+  Backups keep the file name; a colliding one goes under its folder.
+- **Stage 3, as built:**
+  - `state.ini` has one `[file.<id>]` section per placed file (`FileRecord`,
+    `state.h`): root, path, existing, sha256, and before_sha256 and backup
+    when a file was displaced. `serializeState` still writes the old per-file
+    sections, derived from the records, for a downgrade and for
+    `install_edvr.py`'s flat-receipt check.
+  - Migration: a `state.ini` with no file sections is read into records by
+    `kLegacySlots` (`state.cpp`). Not recoverable: the foreign file a record
+    displaced (except the runtime's original), and the second settings
+    file's digest of a both install. A record with an unknown root or a path
+    failing `isTargetPath` is refused on load and in the planner.
+  - Uninstall and update work from `removalCandidates` (`plan.cpp`): a
+    recorded file goes only while its disk hash is the record's (or the tool
+    receipt's, or the payload's bytes); an edited copy stays with a note.
+  - Still id-specific: `kBlurbs` (report words), the startup config's paths
+    and ownership, the XeSS notice requirement, the native-image validity
+    checks, and `kLegacySlots` (migration only).
+  - `planUninstall` takes an optional payload: with none it works from
+    records and receipts alone; given one it also vouches for payload files
+    in a folder whose record was lost. Repair is unchanged.
+- **Review fixes (2026-11-13), as built:**
+  - An update never removes a recorded `owned` file its payload lacks (a build
+    without the SDK omits DLSS and XeSS from its manifest); `listedOnly` is
+    gone. Uninstall still removes it by hash.
+  - Planner: `MakeDir` for a missing parent of a target; a target must stay
+    inside its root with no junction or link below it (records too); the
+    uninstall backup uses `backupNameFor`; the old copy of an id placed at a
+    new target is a removal candidate; a recorded file whose disk hash is the
+    payload's bytes is ours (flat conversion); a dropped or moved id kept for
+    an edit has its own note and never blocks.
+  - Schema (C++ and Python, fixtures pin both): `chain` is `game:d3d11.dll`,
+    `runtime` is `openvr:openvr_api.dll`; reserved targets are refused. The
+    shape corpus is 271 cases (49 accepted, 222 refused).
+- **Supersedes** the 2026-11-12 draft "Launcher 0.2.0" (older tree).
+- **Decided with the maintainer (2026-11-12):** launcher 0.1.0 and schema 1
+  are retired, with no v1 manifest alongside; the installer and the launcher
+  share one parser and one engine; `when` has `profile` and `adapter` only;
+  `existing` has `replace`, `chain`, `runtime`, `settings` and `owned`;
+  install records are per file id.
 - **Out of scope:** the launcher updating itself. The `launcher` block stays
-  so it can later.
-- **Issues:** none filed yet.
+  so it can later. No issues filed yet.
 
 ## Why
 
@@ -239,7 +244,14 @@ only a small fixed set of named behaviours.
 - **Uninstall** removes a recorded file only when its hash still matches.
   An edited copy is kept, and the plan says so.
 - **Update:** a recorded `id` that the new install does not place is removed
-  under the same rule.
+  under the same rule (replace behaviour: backed up first). So is the old copy
+  of an id placed at a new target. An edited copy is kept, with its own
+  note, and blocks nothing. A recorded `owned` file (a vendor runtime) that
+  the payload does not carry is never removed by an update: a build without
+  the SDK leaves those ids out of its manifest, and the earlier copies stay
+  where they are, recorded. Only an uninstall removes them, by the hash rule.
+  A recorded file also counts as ours when its disk hash equals the payload's
+  own bytes for its id.
 - **Migration:** a `state.ini` without file sections, written by installer
   0.22 or launcher 0.1.0, is read into records from its component fields.
   The planner then works from records only.

@@ -265,22 +265,6 @@ bool startupConfigIsEdvrs(const Survey& s) {
                                joinPath(s.game.dir, kD3d11));
 }
 
-// The OpenXR files beside the game's VR runtime have three proofs of provenance: the record lists them, the tool's receipt lists them,
-// or EDVR's startup config for this folder names the loader they travel with.
-bool openxrProvenance(const Survey& s, const DllInfo& info, const std::string& recorded) {
-    return !recorded.empty() || toolListsPath(s, info.path) || startupConfigIsEdvrs(s);
-}
-
-bool loaderOwned(const Survey& s, const std::string& carriedSha) {
-    return ownedFile(s, s.openxrLoader, openxrProvenance(s, s.openxrLoader, s.state.openxrLoaderSha),
-                     s.state.openxrLoaderSha, carriedSha);
-}
-
-bool licenseOwned(const Survey& s, const std::string& carriedSha) {
-    return ownedFile(s, s.openxrLicense, openxrProvenance(s, s.openxrLicense, s.state.openxrLicenseSha),
-                     s.state.openxrLicenseSha, carriedSha);
-}
-
 // The startup config is EDVR's by its own text, which names this folder's paths; or by its record or the tool's receipt and its bytes.
 bool startupConfigOwned(const Survey& s) {
     if (ownedFile(s, s.nativeConfig,
@@ -424,39 +408,39 @@ int rankOfBehaviour(ExistingMode mode) {
     }
 }
 
-// The install record's slot for a file's hash, by file id. state.ini keeps one field per known file until stage 3 of
-// docs\design-manifest-schema2-2026-11-12.md keeps a record per id; this is the one table that knows them. A file with no slot is
-// placed and backed up like any other and records nothing.
-template <class State>
-auto recordSlotIn(State& state, const std::string& id) -> decltype(&state.d3d11Sha) {
-    if (id == "graphics") return &state.d3d11Sha;
-    if (id == "runtime") return &state.openvrSha;
-    if (id == "openxr_loader") return &state.openxrLoaderSha;
-    if (id == "openxr_license") return &state.openxrLicenseSha;
-    if (id == "dlss") return &state.ngxSha;
-    if (id == "xess") return &state.xessSha;
-    if (id == "xess_license") return &state.xessLicenseSha;
-    if (id == "xess_third_party") return &state.xessThirdPartySha;
-    return nullptr;
+// Where an install record's file is on this machine, or false when the record is refused: an unknown root, or a path that fails the
+// manifest's target path rule (a hand-edited state.ini may name "..\..\Windows\x.dll"). The same rule parseState applies on load; it is
+// applied again here because a plan may be given a record that never went through parseState.
+bool recordPathOf(const Survey& s, const FileRecord& r, std::wstring* path) {
+    if (!recordTargetIsSafe(r)) return false;
+    ManifestTarget target;
+    target.root = r.root == "openvr" ? TargetRoot::Openvr : TargetRoot::Game;
+    target.path = r.path;
+    return containedTargetPath(s, target, path);
 }
 
-// The hash the record says EDVR placed for `id`. The DLSS runtime's record counts only with its installed flag.
-std::string recordedShaOf(const InstallState& state, const std::string& id) {
-    if (id == "dlss" && !state.ngxInstalled) return std::string();
-    const std::string* slot = recordSlotIn(state, id);
-    return slot ? *slot : std::string();
+// The behaviour a record was placed under, by its name; Replace for a name this build does not know (parseState refuses those).
+ExistingMode modeOfRecord(const FileRecord& r) {
+    for (const ExistingMode mode : {ExistingMode::Chain, ExistingMode::Owned, ExistingMode::Runtime, ExistingMode::Settings})
+        if (r.existing == existingName(mode)) return mode;
+    return ExistingMode::Replace;
 }
 
 // How the report names the files it says most about: what it is, and what turns it on. The words only; a file with none is
-// placed and reported by its file name.
-struct FileBlurb { const char* id; const char* what; const char* purpose; };
+// placed and reported by its file name. `label` is the family a kept file is named by ("Keeping a changed OpenXR file").
+// This table and the startup config's loader name are the id-specific words that remain in the planner.
+struct FileBlurb { const char* id; const char* label; const char* what; const char* purpose; };
 const FileBlurb kBlurbs[] = {
-    {"dlss", "NVIDIA's DLSS runtime", "for temporal_aa = dlaa"},
-    {"xess", "Intel's XeSS-SR runtime", "for temporal_aa = xess"},
+    {"dlss", "DLSS", "NVIDIA's DLSS runtime", "for temporal_aa = dlaa"},
+    {"xess", "XeSS", "Intel's XeSS-SR runtime", "for temporal_aa = xess"},
+    {"xess_license", "XeSS", nullptr, nullptr},
+    {"xess_third_party", "XeSS", nullptr, nullptr},
+    {"openxr_loader", "OpenXR", nullptr, nullptr},
+    {"openxr_license", "OpenXR", nullptr, nullptr},
 };
 const FileBlurb* blurbFor(const std::string& id) {
     for (const FileBlurb& b : kBlurbs) {
-        if (id == b.id) return &b;
+        if (id == b.id && b.what) return &b;
     }
     return nullptr;
 }
@@ -480,6 +464,104 @@ std::wstring backupNameFor(const Survey& s, const std::wstring& path, std::vecto
     }
     taken->emplace_back(leaf, path);
     return leaf;
+}
+
+// One file an operation may take out, with the proof that settles it. Built from the install records, which are the ownership
+// evidence: a record for the id whose hash is what is on disk now, or a tool receipt that placed those bytes. A payload, when the caller
+// has one, only widens that for a folder whose record was lost (see removalCandidates).
+struct Candidate {
+    std::string  id;
+    std::wstring path;
+    DllInfo      info;
+    ExistingMode mode = ExistingMode::Replace;
+    bool         owned = false;    // EDVR's, by the proofs: it may be removed
+    bool         matches = false;  // not proven EDVR's, but identical to the payload's copy: another mod's copy looks like this
+    bool         dropped = false;  // an install is not placing its id any more: the payload lacks it
+    bool         moved = false;    // an install places its id at another target: this is the old one
+    std::string  newTarget;        // for a moved one, where the payload puts it now
+};
+
+// "Keeping a changed OpenXR file: x" for an edited copy, or the identical-copy note for a copy nothing shows EDVR placed. The edited
+// copy is kept and the plan says so; so is the identical one, which another mod's own copy of a vendor file looks exactly like.
+std::string keepNote(const Candidate& c) {
+    const std::string leaf = say(leafOf(c.path));
+    if (c.matches) return leaf + " " + kMatchesNoProof;
+    if (c.dropped) return "Keeping " + leaf + ": it was changed since ED-UP placed it, and this install no longer places it.";
+    if (c.moved) return "Keeping the old " + leaf + ": it was changed since ED-UP placed it, and this install places it at " + c.newTarget + " now.";
+    const FileBlurb* blurb = nullptr;
+    for (const FileBlurb& b : kBlurbs) if (c.id == b.id) blurb = &b;
+    return std::string("Keeping a changed ") + (blurb ? std::string(blurb->label) + " " : std::string()) + "file: " + leaf;
+}
+
+// The files an operation may take out, in the order the records list them, then the payload's.
+//
+// A record is a candidate unless this install still places its id. `uninstall` says nothing is placed (every record goes);
+// otherwise a record stays out when the payload places its id, at the recorded target, under the install's profiles; an id the payload
+// places somewhere else makes the old copy a candidate (moved), and an id it lacks does too (dropped), except an owned one: a vendor
+// file a build carries no bytes for stays, and stays recorded. Chain, runtime and settings records are not removed here: the chain
+// and the runtime have their own restore rules, and a settings file is the user's.
+//
+// A payload file with no record is a candidate only for a folder whose record was lost: its provenance is the tool's receipt, or, for a
+// file the replace behaviour put in the Openvr folder, EDVR's startup config for this folder; its bytes are the tool's or the payload's.
+// An uninstall called with no payload sees only the records and the receipts.
+std::vector<Candidate> removalCandidates(const Survey& s, const PayloadInfo& p, bool uninstall, unsigned profiles,
+                                         std::vector<std::string>* notes) {
+    std::vector<Candidate> out;
+    std::vector<DllInfo> probed;
+    for (const FileRecord& r : s.state.files) {
+        const ExistingMode mode = modeOfRecord(r);
+        if (mode == ExistingMode::Chain || mode == ExistingMode::Runtime || mode == ExistingMode::Settings) continue;
+        const PayloadFileEntry* entry = p.find(r.id);
+        bool dropped = false, moved = false;
+        if (!uninstall) {
+            if (entry && whenHolds(entry->file.when, profiles, true)) {
+                // Still placed. Placed somewhere else than the record says, the old copy is a file this install no longer places.
+                if (r.root == targetRootName(entry->file.target.root) && _stricmp(r.path.c_str(), entry->file.target.path.c_str()) == 0)
+                    continue;
+                moved = true;
+            } else if (!entry && mode == ExistingMode::Owned) {
+                // A vendor file (owned) this payload does not place is never removed by an install: a build without the SDK carries no
+                // bytes for it, and what an earlier install placed stays where it is, recorded. Only an uninstall takes it out.
+                continue;
+            } else {
+                dropped = !entry;
+            }
+        }
+        Candidate c;
+        c.id = r.id;
+        c.mode = mode;
+        c.dropped = dropped;
+        c.moved = moved;
+        if (moved) c.newTarget = entry->file.target.path;
+        if (!recordPathOf(s, r, &c.path)) {
+            notes->push_back("The install record names a path outside its folder for " + r.id + "; it was not touched.");
+            continue;
+        }
+        c.info = targetInfoOf(s, c.path, &probed);
+        if (c.info.kind == DllKind::Absent) continue;
+        // Owned by the record's hash, a tool receipt, or the bytes this payload carries for the id (what the old loader and licence
+        // ownership also accepted).
+        c.owned = ownedFile(s, c.info, true, r.sha256, p.shaOf(r.id));
+        c.matches = sameSha(c.info.sha256, p.shaOf(r.id));
+        out.push_back(std::move(c));
+    }
+    for (const PayloadFileEntry& e : p.files) {
+        if (s.state.file(e.file.id)) continue;
+        if (e.file.existing != ExistingMode::Replace && e.file.existing != ExistingMode::Owned) continue;
+        if (!uninstall && whenHolds(e.file.when, profiles, true)) continue;
+        Candidate c;
+        c.id = e.file.id;
+        c.mode = e.file.existing;
+        if (!containedTargetPath(s, e.file.target, &c.path)) continue;
+        c.info = targetInfoOf(s, c.path, &probed);
+        if (c.info.kind == DllKind::Absent) continue;
+        const bool provenance = toolListsPath(s, c.path) ||
+            (e.file.existing == ExistingMode::Replace && e.file.target.root == TargetRoot::Openvr && startupConfigIsEdvrs(s));
+        c.owned = ownedFile(s, c.info, provenance, std::string(), e.sha);
+        c.matches = sameSha(c.info.sha256, e.sha);
+        out.push_back(std::move(c));
+    }
+    return out;
 }
 
 }  // namespace
@@ -708,8 +790,15 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     if (s.descriptorPresent && (s.descriptorSha.empty() || (!recordAgrees && !ownEdition))) {
         plan.blocked = true; plan.problems.push_back("edvr_profile.ini differs from the recorded file; it was left untouched."); return plan;
     }
+    // The files this install no longer places, found from the records (removalCandidates): on a flat conversion the OpenXR files beside
+    // the VR runtime, on any update an id the manifest dropped. Each is removed only when it is still EDVR's, by its recorded hash.
+    std::vector<std::string> recordNotes;
+    const std::vector<Candidate> retirees = removalCandidates(s, p, false, profilesOfScope(scope), &recordNotes);
     if (retireRuntime) {
-        const bool ownedVr = !s.state.openvrSha.empty() && s.openvrCurrent.sha256 == s.state.openvrSha &&
+        // The runtime's own record, by its behaviour: the file it names is the one EDVR placed in the Openvr folder.
+        const FileRecord* runtimeRecord = s.state.withExisting(existingName(ExistingMode::Runtime));
+        const std::string runtimeSha = runtimeRecord ? runtimeRecord->sha256 : std::string();
+        const bool ownedVr = !runtimeSha.empty() && s.openvrCurrent.sha256 == runtimeSha &&
             (s.openvrOrig.kind == DllKind::OpenVrRuntime || !s.openvrOrigInBackups.empty()) &&
             (s.openvrOrig.kind != DllKind::OpenVrRuntime || s.state.openvrOrigSha.empty() ||
              s.openvrOrig.sha256 == s.state.openvrOrigSha);
@@ -717,9 +806,10 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             plan.blocked = true; plan.problems.push_back("Cannot prove ED-UP's VR runtime and the game's original; flat conversion left the VR files intact."); return plan;
         }
         // The OpenXR files beside the runtime are retired with it, so each must be EDVR's by a proof; a changed one refuses the conversion.
-        if ((s.openxrLoader.kind != DllKind::Absent && !loaderOwned(s, p.shaOf("openxr_loader"))) ||
-            (s.openxrLicense.kind != DllKind::Absent && !licenseOwned(s, p.shaOf("openxr_license"))) ||
-            (s.nativeConfig.kind != DllKind::Absent && !startupConfigOwned(s))) {
+        bool changedAsset = s.nativeConfig.kind != DllKind::Absent && !startupConfigOwned(s);
+        // Only the OpenXR files the old planner retired decide this: a dropped or moved id is kept with a note and blocks nothing.
+        for (const Candidate& c : retirees) changedAsset |= c.mode == ExistingMode::Replace && !c.owned && !c.dropped && !c.moved;
+        if (changedAsset) {
             plan.blocked = true; plan.problems.push_back("An OpenXR asset differs from ED-UP's record; conversion cannot retire it safely."); return plan;
         }
     }
@@ -779,7 +869,6 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     components += ",ngx-optional,xess-optional";
     next.components = components;
     next.openvrDir = flat ? std::wstring() : relativeOpenvr(s.game.dir, nativeDir);
-    next.nativeInstalled=!flat;
 
     // The chain is DECIDED by this run, not inherited from the record. The
     // record says what was true last time, and whether it is still true is the
@@ -790,6 +879,7 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     next.chainMod.clear();
 
     std::vector<std::pair<std::wstring, std::wstring>> backupNames;  // file name -> the path that took it (backupNameFor)
+    std::vector<std::pair<std::wstring, std::wstring>> backedUp;     // a path backed up in this plan -> where its copy goes
     auto backup = [&](const std::wstring& path, const std::string& why) {
         Step st;
         st.action = Action::Backup;
@@ -797,6 +887,7 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         st.to = joinPath(plan.backupDir, backupNameFor(s, path, &backupNames));
         st.why = why;
         body.push_back(st);
+        backedUp.emplace_back(path, st.to);
         wantBackupDir = true;
     };
     auto rename = [&](const std::wstring& from, const std::wstring& to, const std::string& why,
@@ -883,12 +974,29 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             if (f.entry->file.existing == mode && (f.canPlace || mode == ExistingMode::Owned)) handler(f);
         }
     };
-    // What the record keeps of a file that was placed or found current.
-    auto recordFile = [&](const std::string& id, const std::string& sha) {
-        if (std::string* slot = recordSlotIn(next, id)) *slot = sha;
-        if (id == "graphics") { next.d3d11Installed = true; next.nativeGraphicsSha = sha; }
-        else if (id == "runtime") { next.openvrInstalled = true; next.nativeRuntimeSha = sha; }
-        else if (id == "dlss") next.ngxInstalled = !sha.empty();
+    // What the record keeps of a file that was placed or found current: where it is, how it was treated, and what was written. An empty
+    // hash means EDVR does not own whatever is there, so there is no record. A file this plan backed up before replacing it records
+    // what it displaced and where the copy is, unless what it displaced was EDVR's own earlier copy: then the older record's
+    // displaced file (the one that was not EDVR's) stays the one on record.
+    auto recordFile = [&](const Placed& f, const std::string& sha) {
+        const std::string& id = f.entry->file.id;
+        if (sha.empty()) { next.drop(id); return; }
+        FileRecord r;
+        r.id = id;
+        r.root = targetRootName(f.entry->file.target.root);
+        r.path = f.entry->file.target.path;
+        r.existing = existingName(f.entry->file.existing);
+        r.sha256 = sha;
+        const FileRecord* earlier = s.state.file(id);
+        if (earlier) { r.beforeSha256 = earlier->beforeSha256; r.backup = earlier->backup; }
+        for (const auto& saved : backedUp) {
+            if (_wcsicmp(saved.first.c_str(), f.dst.c_str()) != 0) continue;
+            const bool wasOurs = f.cur.kind == DllKind::Edvr || (earlier && sameSha(earlier->sha256, f.cur.sha256));
+            if (wasOurs) break;
+            r.beforeSha256 = f.cur.sha256;
+            r.backup = relativeOpenvr(s.game.dir, saved.second);
+        }
+        next.put(r);
     };
 
     // ---- existing = chain: the proxy graphics DLL. One name, and every mod in this space wants it. ----
@@ -913,16 +1021,16 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                 plan.notes.push_back(o.repair ? "Reinstalling d3d11.dll (the fixes)."
                                               : "Updating d3d11.dll (the fixes).");
             }
-            recordFile(id, sha);
+            recordFile(f, sha);
         } else if (cur.kind == DllKind::Absent) {
             writePayload(id, dst, "installs ED-UP's d3d11.dll");
             plan.notes.push_back(
-                s.state.d3d11Installed
+                s.state.file(id)
                     ? "Restoring d3d11.dll -- ED-UP was installed here, and the file is gone. "
                       "(EDHM's uninstaller runs `del d3d11.dll`, which after an ED-UP install is "
                       "ours.)"
                     : "Installing d3d11.dll (the fixes).");
-            recordFile(id, sha);
+            recordFile(f, sha);
         } else {
             // Somebody else is in the slot. Rename theirs, take the name, and
             // point EDVR at it -- the README's manual procedure, done by the
@@ -979,9 +1087,9 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                         "advanced.real_dll to it by hand.");
                 }
             }
-            recordFile(id, sha);
+            recordFile(f, sha);
 
-            if (s.state.d3d11Installed) {
+            if (s.state.file(id)) {
                 plan.notes.push_back(modSay +
                                      " has replaced ED-UP's d3d11.dll since the last install. Both "
                                      "are kept: it becomes " + say(chainLeaf) +
@@ -1044,39 +1152,41 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         const DllInfo& cur = f.cur;
         const std::string leaf = say(leafOf(dst));
         const FileBlurb* blurb = blurbFor(id);
-        const std::string named = blurb ? leaf + " (" + blurb->what + ")" : leaf;
+        const std::string named = blurb && blurb->what ? leaf + " (" + blurb->what + ")" : leaf;
         const bool present = cur.kind != DllKind::Absent && cur.kind != DllKind::Unreadable;
-        const std::string previous = recordedShaOf(s.state, id);
+        const std::string previous = s.state.shaOf(id);
         const bool ours = present && !previous.empty() && cur.sha256 == previous;
         if (cur.kind == DllKind::Unreadable) {
             // Unreadable says nothing about whose it is: the record stays as it was.
             plan.problems.push_back("The optional file " + leaf + " cannot be read -- something has it open; it was left untouched.");
         } else if (present && cur.sha256 == sha && !o.repair) {
             if (blurb) plan.notes.push_back(named + " is already this build's -- left alone.");
-            recordFile(id, sha);
+            recordFile(f, sha);
         } else if (present && !ours && cur.sha256 != sha) {
             plan.notes.push_back("A different " + leaf + " is present; left alone.");
-            recordFile(id, std::string());
+            recordFile(f, std::string());
         } else if (!f.canPlace) {
             plan.notes.push_back("No NVIDIA graphics card was found, so " + named + " was not placed." +
                                  (blurb ? std::string(" ") + blurb->purpose + " needs one, and runs ED-UP's own history without it." : std::string()));
-            recordFile(id, ours ? previous : std::string());
+            recordFile(f, ours ? previous : std::string());
         } else {
             if (present) backup(dst, "the " + leaf + " ED-UP placed, being replaced");
             writePayload(id, dst, present ? "updates " + leaf : "places " + leaf + " beside the game");
             if (blurb)
                 plan.notes.push_back(present ? "Updating " + named + "."
                                              : "Placing " + leaf + " (" + blurb->what + ", " + blurb->purpose + ").");
-            recordFile(id, sha);
+            recordFile(f, sha);
         }
     };
     each(ExistingMode::Owned, placeOwned);
-    if (!p.find("dlss") && s.state.ngxInstalled) {
-        // This installer carries no runtime (a build without the SDK): what an
-        // earlier one placed stays, and stays recorded as ours.
-        plan.notes.push_back(
-            "This installer carries no DLSS runtime; the nvngx_dlss.dll a previous one placed "
-            "is left where it is.");
+    for (const FileRecord& r : s.state.files) {
+        // This installer carries no bytes for a vendor file (a build without the SDK leaves it out of its manifest): what an earlier
+        // one placed stays, and stays recorded as ours.
+        if (r.existing != existingName(ExistingMode::Owned) || p.find(r.id)) continue;
+        const FileBlurb* blurb = blurbFor(r.id);
+        const std::string leaf = r.path.substr(r.path.find_last_of('/') + 1);   // npos + 1 is 0: the whole path
+        plan.notes.push_back("This installer carries no " + (blurb ? std::string(blurb->label) + " runtime" : leaf) + "; the " + leaf +
+                             " a previous one placed is left where it is.");
     }
 
     // ---- existing = runtime: the game-facing OpenVR ABI is always provided by native OpenXR. The original DLL is retained for
@@ -1124,7 +1234,7 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             writePayload(id, runtime, "installs native OpenXR using the Windows-selected runtime");
             plan.notes.push_back("Installing native OpenXR. The original VR library is not used at runtime.");
         }
-        recordFile(id, sha);
+        recordFile(f, sha);
         next.nativeOriginalName = next.openvrOrigName; next.nativeOriginalSha = next.openvrOrigSha;
     };
     each(ExistingMode::Runtime, placeRuntime);
@@ -1141,7 +1251,7 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             }
             writePayload(id, f.dst, "installs " + say(leafOf(f.dst)));
         }
-        recordFile(id, sha);
+        recordFile(f, sha);
     };
     each(ExistingMode::Replace, placeReplace);
 
@@ -1179,36 +1289,58 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             restoreOriginal.why = "restores the game's original VR library";
             body.push_back(restoreOriginal);
         }
-        const struct NativeFile { const DllInfo* info; bool owned; bool matches; } nativeFiles[] = {
-            {&s.openxrLoader, loaderOwned(s, p.shaOf("openxr_loader")), sameSha(s.openxrLoader.sha256, p.shaOf("openxr_loader"))},
-            {&s.openxrLicense, licenseOwned(s, p.shaOf("openxr_license")), sameSha(s.openxrLicense.sha256, p.shaOf("openxr_license"))},
-            {&s.nativeConfig, startupConfigOwned(s), false},
-        };
-        for (const NativeFile& file : nativeFiles) {
-            if (file.info->kind == DllKind::Absent) continue;
-            if (!file.owned) {
-                plan.notes.push_back(file.matches
-                    ? say(leafOf(file.info->path)) + " " + kMatchesNoProof
-                    : "Keeping a changed OpenXR file: " + say(leafOf(file.info->path)));
-                continue;
+        // The startup config is a fixed step with no record of its own: EDVR's by its text, or by its hash and the record or receipt.
+        if (s.nativeConfig.kind != DllKind::Absent) {
+            if (startupConfigOwned(s)) {
+                backup(s.nativeConfig.path, "the ED-UP OpenXR asset being retired");
+                body.back().required = true; body.back().expectSha = s.nativeConfig.sha256;
+                Step retire; retire.action = Action::Delete; retire.from = s.nativeConfig.path;
+                retire.expectSha = s.nativeConfig.sha256; retire.why = "retires ED-UP's OpenXR asset";
+                body.push_back(retire);
+                changed = true;
+            } else {
+                plan.notes.push_back("Keeping a changed OpenXR file: " + say(leafOf(s.nativeConfig.path)));
             }
-            backup(file.info->path, "the ED-UP OpenXR asset being retired");
-            body.back().required = true; body.back().expectSha = file.info->sha256;
-            Step retire; retire.action = Action::Delete; retire.from = file.info->path;
-            retire.expectSha = file.info->sha256; retire.why = "retires ED-UP's OpenXR asset";
-            body.push_back(retire);
-            changed = true;
         }
-        next.openvrInstalled = false; next.openvrSha.clear();
-        next.openvrOrigName.clear(); next.openvrOrigSha.clear();
-        next.nativeRuntimeSha.clear(); next.openxrLoaderSha.clear();
-        next.openxrLicenseSha.clear(); next.nativeConfigSha.clear();
+        // The VR runtime and the OpenXR files go from the record: nothing is owned beside the game's own runtime any more.
+        next.openvrOrigName.clear(); next.openvrOrigSha.clear(); next.nativeConfigSha.clear();
         next.nativeOriginalName.clear(); next.nativeOriginalSha.clear();
         if (retireRuntime) {
             plan.notes.push_back("Converting VR to flat: the game's original VR library is in place and verified ED-UP OpenXR assets are retired.");
         } else if (!installed.empty() && installed != "flat") {
             plan.notes.push_back("Converting to flat: the VR library here is not ED-UP's, so it is left where it is.");
         }
+    }
+
+    // ---- Files an earlier install placed that this one does not: an id the manifest dropped, or one the scope no longer covers (the
+    // OpenXR files on a flat conversion). Each goes only while it is still the copy the record names, by hash; an edited copy stays
+    // where it is and the plan says so. A replaced file is backed up first; a vendor file (owned) is not, as for an uninstall. ----
+    for (const std::string& note : recordNotes) plan.notes.push_back(note);
+    if (!s.state.refusedRecords.empty())
+        plan.notes.push_back("The install record has " + std::to_string(s.state.refusedRecords.size()) +
+                             " entry(ies) it cannot use (a path outside its folder, or an unknown name); they were ignored.");
+    for (const Candidate& c : retirees) {
+        if (!c.owned) {
+            plan.notes.push_back(keepNote(c));
+            continue;
+        }
+        if (c.mode == ExistingMode::Replace) {
+            backup(c.path, "the ED-UP file being retired");
+            body.back().required = true; body.back().expectSha = c.info.sha256;
+        }
+        Step retire; retire.action = Action::Delete; retire.from = c.path;
+        retire.expectSha = c.info.sha256; retire.why = "retires a file ED-UP placed that this install does not";
+        body.push_back(retire);
+        changed = true;
+        plan.notes.push_back("Removing " + say(leafOf(c.path)) + ": this install no longer places it.");
+    }
+    // The record keeps what this install placed. An id it did not place is dropped from it, kept or removed alike, except a vendor
+    // file (owned) this payload carries no bytes for: that one stays where it is, and stays recorded.
+    for (const FileRecord& r : s.state.files) {
+        bool placedHere = false;
+        for (const Placed& f : placed) placedHere |= f.entry->file.id == r.id;
+        const bool keptVendor = r.existing == existingName(ExistingMode::Owned) && !p.find(r.id);
+        if (!placedHere && !keptVendor) next.drop(r.id);
     }
 
     // The descriptor is the scope's canonical text, not the payload's: a scope change rewrites it.
@@ -1369,6 +1501,7 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             plan.notes.push_back(iniName + " already says what it should -- left alone.");
         }
         (isFlat ? flatSha : vrSha) = sha256Bytes(merged.data(), merged.size());
+        recordFile(file, isFlat ? flatSha : vrSha);
     };
     // The flat file first, so the VR file's merge report (plan.merge) is the one left when both are installed.
     for (const bool flatFile : {true, false}) {
@@ -1402,9 +1535,13 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     // The record's settings digest is the VR file's when the scope has one (the file the older records named), else the flat file's.
     next.iniSha = wantsVrIni ? vrSha : flatSha;
 
-    const bool ownershipChanged = next.xessSha != s.state.xessSha ||
-                                  next.xessLicenseSha != s.state.xessLicenseSha ||
-                                  next.xessThirdPartySha != s.state.xessThirdPartySha;
+    // Which vendor files (owned) EDVR claims changed without a file moving: a copy that is already the payload's is adopted, a claim on
+    // a copy someone else replaced is given up. Only the record changes then, and it still has to be written.
+    bool ownershipChanged = false;
+    for (const FileRecord& r : next.files)
+        if (r.existing == existingName(ExistingMode::Owned) && r.sha256 != s.state.shaOf(r.id)) ownershipChanged = true;
+    for (const FileRecord& r : s.state.files)
+        if (r.existing == existingName(ExistingMode::Owned) && r.sha256 != next.shaOf(r.id)) ownershipChanged = true;
     const bool stateOnly = !changed && body.empty() && ownershipChanged && !o.repair;
     if (stateOnly)
         plan.notes.push_back("Optional runtime ownership changed; only the install record will be updated.");
@@ -1485,7 +1622,9 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
 
 Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     Plan plan;
-    if((s.state.nativeInstalled || s.openvrCurrent.nativeRuntimeExports) && s.openvrCurrent.kind==DllKind::Edvr &&
+    const FileRecord* runtimeRecord = s.state.withExisting(existingName(ExistingMode::Runtime));
+    const FileRecord* chainRecord = s.state.withExisting(existingName(ExistingMode::Chain));
+    if(((runtimeRecord && !runtimeRecord->sha256.empty()) || s.openvrCurrent.nativeRuntimeExports) && s.openvrCurrent.kind==DllKind::Edvr &&
        s.openvrOrig.kind!=DllKind::OpenVrRuntime && s.openvrOrigInBackups.empty()) {
         plan.blocked=true;plan.problems.push_back("The original VR library is missing. Repair the game files before uninstalling; the native pair was left intact.");return plan;
     }
@@ -1517,11 +1656,12 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     bool wantBackupDir = false;
     bool changed = false;
 
+    std::vector<std::pair<std::wstring, std::wstring>> backupNames;  // file name -> the path that took it (backupNameFor)
     auto backup = [&](const std::wstring& path, const std::string& why) {
         Step st;
         st.action = Action::Backup;
         st.from = path;
-        st.to = joinPath(plan.backupDir, leafOf(path));
+        st.to = joinPath(plan.backupDir, backupNameFor(s, path, &backupNames));
         st.why = why;
         body.push_back(st);
         wantBackupDir = true;
@@ -1559,11 +1699,33 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         changed = true;
     };
 
-    // ---- d3d11 --------------------------------------------------------
-    const std::wstring d3d11Path = joinPath(s.game.dir, kD3d11);
-    if (s.d3d11.kind == DllKind::Edvr) {
+    // The files this uninstall acts on, from the install records: the chained graphics file and the runtime have their own restore rules
+    // below; every other record is a candidate for removal (removalCandidates). A payload, when the caller gives one, only widens
+    // that for a folder whose record was lost; an uninstall given none works from the records and the tool's receipts alone.
+    std::vector<std::string> recordNotes;
+    const std::vector<Candidate> doomed = removalCandidates(s, p, true, 0, &recordNotes);
+    for (const std::string& note : recordNotes) plan.notes.push_back(note);
+    if (!s.state.refusedRecords.empty())
+        plan.notes.push_back("The install record has " + std::to_string(s.state.refusedRecords.size()) +
+                             " entry(ies) it cannot use (a path outside its folder, or an unknown name); they were ignored.");
+    std::vector<DllInfo> probed;
+    // A record's path, or the default when there is no record or the record's path is refused.
+    auto recordedPath = [&](const FileRecord* r, const std::wstring& fallback) {
+        std::wstring path;
+        if (r && recordPathOf(s, *r, &path)) return path;
+        if (r) plan.notes.push_back("The install record names a path outside its folder for " + r->id + "; it was not touched.");
+        return fallback;
+    };
+
+    // ---- the chained graphics file ------------------------------------
+    const std::wstring d3d11Path = recordedPath(chainRecord, joinPath(s.game.dir, kD3d11));
+    const DllInfo d3d11Info = targetInfoOf(s, d3d11Path, &probed);
+    // EDVR's by what probeDll reads it as, or by the record's hash.
+    const bool d3d11Ours = d3d11Info.kind == DllKind::Edvr ||
+                           (chainRecord && ownedFile(s, d3d11Info, true, chainRecord->sha256, std::string()));
+    if (d3d11Ours) {
         backup(d3d11Path, "ED-UP's d3d11.dll");
-        remove(d3d11Path, "removes ED-UP's d3d11.dll", s.d3d11.sha256);
+        remove(d3d11Path, "removes ED-UP's d3d11.dll", d3d11Info.sha256);
 
         // Whatever we moved aside goes back under the name it had. Without
         // this, uninstalling EDVR silently uninstalls the other mod too: its
@@ -1600,23 +1762,26 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                     ", but that file is not there any more, so there is nothing to put back.");
             }
         }
-    } else if (s.d3d11.kind == DllKind::Absent) {
+    } else if (d3d11Info.kind == DllKind::Absent) {
         plan.notes.push_back("No d3d11.dll to remove.");
     } else {
-        plan.notes.push_back("The d3d11.dll here is not ED-UP's (" + say(describeDll(s.d3d11)) +
+        plan.notes.push_back("The d3d11.dll here is not ED-UP's (" + say(describeDll(d3d11Info)) +
                              ") -- left alone.");
     }
 
-    // ---- openvr -------------------------------------------------------
+    // ---- the runtime --------------------------------------------------
     if (s.haveOpenvrDir) {
-        const std::wstring dst = joinPath(s.game.openvrDir, kOpenvr);
+        const std::wstring dst = recordedPath(runtimeRecord, joinPath(s.game.openvrDir, kOpenvr));
+        const DllInfo current = targetInfoOf(s, dst, &probed);
+        const bool runtimeOurs = current.kind == DllKind::Edvr ||
+                                 (runtimeRecord && ownedFile(s, current, true, runtimeRecord->sha256, std::string()));
         std::wstring origName = safeSiblingName(s.openvrOrigName, kOpenvr);
         if (origName.empty()) origName = kOpenvrOrig;
         const std::wstring origPath = joinPath(s.game.openvrDir, origName);
-        if (s.openvrCurrent.kind == DllKind::Edvr) {
+        if (runtimeOurs) {
             if (s.openvrOrig.kind == DllKind::OpenVrRuntime) {
                 backup(dst, "ED-UP's openvr_api.dll");
-                remove(dst, "removes ED-UP's openvr_api.dll", s.openvrCurrent.sha256);
+                remove(dst, "removes ED-UP's openvr_api.dll", current.sha256);
                 rename(origPath, dst, "puts the game's own openvr_api.dll back",
                        s.openvrOrig.sha256);
                 plan.notes.push_back(
@@ -1644,7 +1809,7 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                     "files in your launcher -- that restores the original -- and then uninstall "
                     "again.");
             }
-        } else if (s.openvrCurrent.kind == DllKind::OpenVrRuntime &&
+        } else if (current.kind == DllKind::OpenVrRuntime &&
                    s.openvrOrig.kind == DllKind::OpenVrRuntime) {
             plan.notes.push_back(
                 "The game's own openvr_api.dll is already in place; the spare copy at "
@@ -1654,56 +1819,27 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         }
     }
 
-    // The OpenXR files EDVR placed beside the VR runtime are removed by their proofs, whether or not this folder's record lists them
-    // (a record from an older flat install lists none); a changed one is kept.
-    {
-        auto retire=[&](const DllInfo& info,bool owned,bool matches) {
-            if(info.kind==DllKind::Absent)return;
-            if(!owned) {
-                plan.notes.push_back(matches ? say(leafOf(info.path))+" "+kMatchesNoProof
-                                             : "Keeping a changed OpenXR file: "+say(leafOf(info.path)));
-                return;
-            }
-            backup(info.path,"the native OpenXR file being removed");
-            remove(info.path,"removes ED-UP's OpenXR dependency",info.sha256);
-        };
-        retire(s.openxrLoader,loaderOwned(s,p.shaOf("openxr_loader")),sameSha(s.openxrLoader.sha256,p.shaOf("openxr_loader")));
-        retire(s.openxrLicense,licenseOwned(s,p.shaOf("openxr_license")),sameSha(s.openxrLicense.sha256,p.shaOf("openxr_license")));
-        retire(s.nativeConfig,startupConfigOwned(s),false);
-    }
-
-    // ---- NVIDIA's DLSS runtime ----------------------------------------
-    // Removed only when it is the copy this installer placed, by its hash: a
-    // copy the user put there themselves, or one NVIDIA's updater replaced,
-    // is theirs to keep. No backup of a 59 MB file the payload already holds.
-    const std::wstring ngxPath = joinPath(s.game.dir, kNgx);
-    if (s.state.ngxInstalled && !s.state.ngxSha.empty() && s.ngx.kind != DllKind::Absent &&
-        s.ngx.kind != DllKind::Unreadable && s.ngx.sha256 == s.state.ngxSha) {
-        remove(ngxPath, "removes NVIDIA's DLSS runtime, which ED-UP placed", s.ngx.sha256);
-        plan.notes.push_back("Removing nvngx_dlss.dll (NVIDIA's DLSS runtime, which ED-UP placed).");
-    } else if (s.ngx.kind != DllKind::Absent) {
-        plan.notes.push_back(
-            "The nvngx_dlss.dll beside the game is not the copy ED-UP placed -- left alone.");
-    }
-
-    const DllInfo* xessFiles[] = {&s.xess, &s.xessLicense, &s.xessThirdParty};
-    const std::string* xessOwned[] = {&s.state.xessSha, &s.state.xessLicenseSha,
-                                     &s.state.xessThirdPartySha};
-    const std::string xessHeld[] = {p.shaOf("xess"), p.shaOf("xess_license"), p.shaOf("xess_third_party")};
-    const std::string* xessCarried[] = {&xessHeld[0], &xessHeld[1], &xessHeld[2]};
-    for (unsigned i=0; i<3; ++i) {
-        const DllInfo& cur = *xessFiles[i];
-        if (cur.kind == DllKind::Absent) continue;
-        // EDVR's when the record or the tool's receipt lists it AND its bytes are the record's, the tool's or the payload's. A file with
-        // matching bytes and no provenance is someone's to keep; a changed one is kept too.
-        const bool provenance = !xessOwned[i]->empty() || toolListsPath(s, cur.path);
-        if (!ownedFile(s, cur, provenance, *xessOwned[i], *xessCarried[i])) {
-            const bool matches = sameSha(cur.sha256, *xessCarried[i]);
-            plan.notes.push_back(matches ? say(leafOf(cur.path)) + " " + kMatchesNoProof
-                                         : "Keeping a changed XeSS file: " + say(leafOf(cur.path)));
+    // ---- every other recorded file, and the startup config ------------
+    // A file is removed only while it is still the copy the record names (or the tool placed); an edited copy is kept and the plan
+    // says so. A replaced file is backed up first; a vendor runtime or notice (owned) is not: the payload already holds its bytes.
+    for (const Candidate& c : doomed) {
+        if (!c.owned) {
+            plan.notes.push_back(keepNote(c));
             continue;
         }
-        remove(cur.path, "removes Intel XeSS-SR file ED-UP placed", cur.sha256);
+        if (c.mode == ExistingMode::Replace) backup(c.path, "the ED-UP file being removed");
+        remove(c.path, "removes a file ED-UP placed", c.info.sha256);
+        const FileBlurb* blurb = blurbFor(c.id);
+        if (blurb) plan.notes.push_back("Removing " + say(leafOf(c.path)) + " (" + blurb->what + ", which ED-UP placed).");
+    }
+    // The startup config is a fixed step with no record: EDVR's by its text, or by its hash and the record or the tool's receipt.
+    if (s.nativeConfig.kind != DllKind::Absent) {
+        if (startupConfigOwned(s)) {
+            backup(s.nativeConfig.path, "the native OpenXR file being removed");
+            remove(s.nativeConfig.path, "removes ED-UP's OpenXR dependency", s.nativeConfig.sha256);
+        } else {
+            plan.notes.push_back("Keeping a changed OpenXR file: " + say(leafOf(s.nativeConfig.path)));
+        }
     }
 
     // ---- settings and record ------------------------------------------
