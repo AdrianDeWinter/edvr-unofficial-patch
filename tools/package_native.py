@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import NamedTuple, Optional
 
 import sign_manifest
-from gen_installer_rc import descriptor_bytes
+from gen_installer_rc import EMBEDDED_ASSET, IDR_FILE_BASE, IDR_MANIFEST, descriptor_bytes, embedded_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -317,34 +317,43 @@ def _embedded_resource(executable, resource_id, required=True):
 
 
 def _validate_installer_resources(executable, files):
+    """The installer carries the schema-2 manifest as RCDATA 100 and each file of its `files` list as RCDATA
+    101 + its index (docs/design-manifest-schema2-2026-11-12.md, "One engine"). Checked here, without
+    running it: the manifest is valid and lists exactly the table's files the package carries, in the
+    table's order; each entry is what the table and the release file say; each resource is byte for byte
+    the release file; and no resource follows them."""
     by_name = {name: source for source, name in files}
-    # Both settings files are embedded: 103 is edvr.ini, 111 is edvr-flat.ini.
-    ids = {101: "d3d11.dll", 102: "openvr/openvr_api.dll", 103: "edvr.ini", 105: "openvr/openxr_loader.dll",
-           106: "openvr/OPENXR-LOADER-LICENSE.txt", 107: "edvr_profile.ini", 111: "edvr-flat.ini"}
-    for resource_id, name in ids.items():
-        actual = _embedded_resource(executable, resource_id)
-        if hashlib.sha256(actual).digest() != hashlib.sha256(by_name[name].read_bytes()).digest():
-            raise ValueError("installer resource %d differs from %s" % (resource_id, name))
-    expected_descriptor = descriptor_bytes()
-    if by_name["edvr_profile.ini"].read_bytes() != expected_descriptor:
+    expected = [file for file in FILES if file.source in by_name]
+    raw = _embedded_resource(executable, IDR_MANIFEST)
+    try:
+        manifest = json.loads(raw.decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ValueError("installer resource %d (the manifest) is not ASCII JSON: %s" % (IDR_MANIFEST, error))
+    problems = sign_manifest.validate_manifest(manifest)
+    if problems:
+        raise ValueError("the installer's embedded manifest is not valid: " + "; ".join(problems))
+    listed = [entry["id"] for entry in manifest["files"]]
+    if listed != [file.id for file in expected]:
+        raise ValueError("the installer's manifest lists %s but the package carries %s"
+                         % (listed, [file.id for file in expected]))
+    for index, (file, entry) in enumerate(zip(expected, manifest["files"])):
+        resource_id = IDR_FILE_BASE + index
+        data = by_name[file.source].read_bytes()
+        if _embedded_resource(executable, resource_id) != data:
+            raise ValueError("installer resource %d differs from %s" % (resource_id, file.source))
+        if entry != manifest_file_entry(file, EMBEDDED_ASSET, data):
+            raise ValueError("the installer's manifest entry for %s differs from the table and %s"
+                             % (file.id, file.source))
+    after = IDR_FILE_BASE + len(expected)
+    for resource_id in range(after, after + 16):
+        if _embedded_resource(executable, resource_id, required=False) is not None:
+            raise ValueError("installer carries resource %d, which no file of its manifest uses" % resource_id)
+    if by_name["edvr_profile.ini"].read_bytes() != descriptor_bytes():
         raise ValueError("loose descriptor does not declare the packaged scope")
-    embedded_dlss = _embedded_resource(executable, 104, required=False)
     if "nvngx_dlss.dll" in by_name:
-        if embedded_dlss != by_name["nvngx_dlss.dll"].read_bytes():
-            raise ValueError("installer resource 104 differs from nvngx_dlss.dll")
         notice = by_name.get("NVIDIA-DLSS-LICENSE.txt")
         if notice is None or not notice.read_bytes().strip():
             raise ValueError("the embedded DLSS runtime requires its NVIDIA license notice")
-    elif embedded_dlss is not None:
-        raise ValueError("installer embeds DLSS but its matching DLL and notice are missing from the package")
-    xess_names = {108: "libxess.dll", 109: "INTEL-XESS-LICENSE.txt", 110: "INTEL-XESS-THIRD-PARTY.txt"}
-    for resource_id, name in xess_names.items():
-        embedded = _embedded_resource(executable, resource_id, required=False)
-        if name in by_name:
-            if embedded != by_name[name].read_bytes():
-                raise ValueError("installer resource %d differs from %s" % (resource_id, name))
-        elif embedded is not None:
-            raise ValueError("installer embeds XeSS without matching runtime and notices")
 
 
 def _write_zip_entry(output, source, name):
@@ -399,7 +408,7 @@ def _validate_launcher(root):
 
       * build\\ed-up-launcher.exe exists (build.bat writes it);
       * its FileVersion and ProductVersion are exactly src\\installer\\launcher_version.h's;
-      * it carries none of the installer's payload resources, 101 to 111, and carries the min-ed-launcher
+      * it carries none of the installer's payload resources, 100 to 111, and carries the min-ed-launcher
         licence as resource 120, byte for byte the file in third_party;
       * src\\installer\\update_keys.h lists two distinct keys, and neither is the public test key
         of RFC 6979, whose private half is in every library's tests."""
@@ -413,7 +422,7 @@ def _validate_launcher(root):
     for key in STAMP_KEYS:
         if stamp.get(key) != version:
             problems.append("%s %s is %s, but launcher_version.h says %s" % (LAUNCHER_ASSET, key, stamp.get(key), version))
-    for resource_id in range(101, 112):
+    for resource_id in range(IDR_MANIFEST, IDR_FILE_BASE + len(FILES) + 1):
         if _embedded_resource(launcher, resource_id, required=False) is not None:
             problems.append("%s carries resource %d: the launcher has no embedded payload" % (LAUNCHER_ASSET, resource_id))
     licence = _embedded_resource(launcher, LAUNCHER_LICENSE_RESOURCE, required=False)
@@ -721,8 +730,29 @@ def self_test():
         import fetch_openxr_loader
         old_verify = fetch_openxr_loader.verify
         old_resource = globals()['_embedded_resource']
-        resources = {101: b"payload", 102: b"payload", 103: b"payload",
-                     105: b"payload", 106: b"notice", 107: vr_descriptor, 111: b"payload"}
+        # What a faithful installer built from the files now on disk carries: the manifest at 100 and each file
+        # after it. refresh() recomputes it from the disk; `changes` maps a release file name to other bytes
+        # for the installer to hold, or to None for the installer to lack the file.
+        resources = {}
+
+        def refresh(changes=None):
+            changes = changes or {}
+            on_disk = {name: source for source, name in _files(root, True) if source.is_file()}
+            held = []
+            for file in FILES:
+                if file.source in changes:
+                    data = changes[file.source]
+                elif file.source in on_disk:
+                    data = on_disk[file.source].read_bytes()
+                else:
+                    continue
+                if data is not None:
+                    held.append((file, data))
+            resources.clear()
+            resources[IDR_MANIFEST] = embedded_manifest(held, "0.0.0-test", issued=1)
+            for index, (file, data) in enumerate(held):
+                resources[IDR_FILE_BASE + index] = data
+        refresh()
         # The launcher carries the min-ed-launcher licence as resource 120, the bytes of the file in third_party;
         # a case puts a payload resource into it, or spoils the licence.
         launcher_resources = {LAUNCHER_LICENSE_RESOURCE: root.joinpath(*LAUNCHER_LICENSE_FILE).read_bytes()}
@@ -981,14 +1011,14 @@ def self_test():
             (root / "build" / "edvr_openxr_runtime.dll").write_bytes(b"payload")
             dlss = root / "build" / "nvngx_dlss.dll"
             notice = root / "build" / "NVIDIA-DLSS-LICENSE.txt"
-            resources[104] = b"embedded-dlss"
+            refresh({"nvngx_dlss.dll": b"embedded-dlss"})
             try:
                 package(root, "1.2.4", no_dlss=True)
                 raise AssertionError("embedded runtime accepted without its loose payload")
             except ValueError:
                 pass
             assert not (root / "dist" / ".edvr-stage-1.2.4").exists()
-            dlss.write_bytes(resources[104])
+            dlss.write_bytes(b"embedded-dlss")
             try:
                 package(root, "1.2.4", no_dlss=True)
                 raise AssertionError("embedded runtime accepted without its notice")
@@ -997,16 +1027,16 @@ def self_test():
             notice.write_bytes(b"NVIDIA runtime notice")
             assert package(root, "1.2.4", no_dlss=True) == 0
             with zipfile.ZipFile(root / "dist" / "ed-up-1.2.4.zip") as archive:
-                assert archive.read("nvngx_dlss.dll") == resources[104]
+                assert archive.read("nvngx_dlss.dll") == b"embedded-dlss"
                 assert archive.read("NVIDIA-DLSS-LICENSE.txt") == notice.read_bytes()
             for bad in (None, b"different-installer-runtime"):
-                resources[104] = bad
+                refresh({"nvngx_dlss.dll": bad})
                 try:
                     package(root, "1.2.5", no_dlss=True)
                     raise AssertionError("mismatched embedded runtime accepted")
                 except ValueError:
                     pass
-            resources[104] = dlss.read_bytes()
+            refresh()
             notice.write_bytes(b" \n")
             try:
                 package(root, "1.2.5", no_dlss=True)
@@ -1079,21 +1109,28 @@ def self_test():
                 print("expected-error: argparse refused --profile flat (exit 2)")
             assert not (root / "dist" / "ed-up-flat-1.2.8.zip").exists()
             # The installer's own copy of each settings file is checked against that
-            # file, under its own name: edvr-flat.ini (111) is not edvr.ini (103).
-            resources[111] = b"[fix]\r\ntemporal_aa = dlss\r\n"
+            # file, under its own name: edvr-flat.ini is not edvr.ini.
+            refresh({"edvr-flat.ini": b"[fix]\r\ntemporal_aa = dlss\r\n"})
             try:
                 package(root, "1.2.8", no_dlss=True)
                 raise AssertionError("installer embedding other flat settings than edvr-flat.ini accepted")
             except ValueError as error:
                 assert "edvr-flat.ini" in str(error), str(error)
-            resources[111] = b"payload"
-            del resources[111]
+            refresh({"edvr-flat.ini": None})
             try:
                 package(root, "1.2.8", no_dlss=True)
-                raise AssertionError("installer without edvr-flat.ini (111) accepted")
+                raise AssertionError("installer without edvr-flat.ini accepted")
             except ValueError:
                 pass
-            resources[111] = b"payload"
+            # A file in the installer that the table does not list, or one more resource than the manifest lists.
+            refresh()
+            resources[IDR_FILE_BASE + len([1 for key in resources if key >= IDR_FILE_BASE])] = b"stray"
+            try:
+                package(root, "1.2.8", no_dlss=True)
+                raise AssertionError("installer with a stray resource accepted")
+            except ValueError as error:
+                assert "no file of its manifest uses" in str(error), str(error)
+            refresh()
             with zipfile.ZipFile(root / "dist" / "ed-up-installer-1.2.7.zip") as installer_archive:
                 assert set(installer_archive.namelist()) == {"edvr-installer.exe"}
             xess_files = {108: "libxess.dll", 109: "INTEL-XESS-LICENSE.txt",
@@ -1101,12 +1138,12 @@ def self_test():
             for resource_id, name in xess_files.items():
                 contents = ("XeSS fixture " + name).encode("ascii")
                 (root / "build" / name).write_bytes(contents)
-                resources[resource_id] = contents
+            refresh()
             assert package(root, "3.0.3", no_dlss=True) == 0
             with zipfile.ZipFile(root / "dist" / "ed-up-3.0.3.zip") as archive:
                 for name in xess_files.values():
                     assert archive.read(name) == (root / "build" / name).read_bytes()
-            resources[108] = b"wrong XeSS"
+            refresh({"libxess.dll": b"wrong XeSS"})
             try:
                 package(root, "3.0.4", no_dlss=True)
                 raise AssertionError("installer with mismatched XeSS runtime accepted")
@@ -1114,7 +1151,7 @@ def self_test():
                 pass
 
             # The split assets and the unsigned manifest, beside the three archives.
-            resources[108] = (root / "build" / "libxess.dll").read_bytes()
+            refresh()
             old_epoch = os.environ.get("SOURCE_DATE_EPOCH")
             os.environ["SOURCE_DATE_EPOCH"] = "1794000000"
             dist = root / "dist"
@@ -1191,13 +1228,13 @@ def self_test():
             # A changed runtime gets a new name and the old one goes.
             dlss_dll = root / "build" / "nvngx_dlss.dll"
             kept = dlss_dll.read_bytes()
-            dlss_dll.write_bytes(b"another DLSS runtime"); resources[104] = b"another DLSS runtime"
+            dlss_dll.write_bytes(b"another DLSS runtime"); refresh()
             assert package(root, "4.0.1", no_dlss=True) == 0
             renamed = split_assets(dist)
             assert len(renamed["dlss"]) == 1 and renamed["dlss"] != found["dlss"] and renamed["xess"] == found["xess"]
             assert sign_manifest.verify_directory(dist, allow_unsigned=True, out=lambda line: None)
             # No DLSS runtime in the tree: no DLSS asset and no dlss file.
-            dlss_dll.unlink(); notice.unlink(); resources[104] = None
+            dlss_dll.unlink(); notice.unlink(); refresh()
             assert package(root, "4.0.2", no_dlss=True) == 0
             assert split_assets(dist)["dlss"] == [] and split_assets(dist)["xess"] == found["xess"]
             parsed = json.loads((dist / MANIFEST).read_text(encoding="ascii"))
@@ -1206,7 +1243,7 @@ def self_test():
             assert sign_manifest.verify_directory(dist, allow_unsigned=True, out=lambda line: None)
             with zipfile.ZipFile(dist / "ed-up-4.0.2.zip") as archive:
                 assert not dlss_names & set(archive.namelist())
-            dlss_dll.write_bytes(kept); resources[104] = kept
+            dlss_dll.write_bytes(kept); refresh()
             notice.write_bytes(b"NVIDIA runtime notice")
             # A failed publish puts the earlier split assets back.
             before = snapshot()
@@ -1266,7 +1303,7 @@ def self_test():
             stamps["override"][LAUNCHER_ASSET] = None
             refused_launcher("launcher without a version resource", "FileVersion is None")
             del stamps["override"][LAUNCHER_ASSET]
-            for resource_id in (101, 102, 111):
+            for resource_id in (100, 101, 102, 111):
                 launcher_resources[resource_id] = b"payload"
                 refused_launcher("launcher with resource %d" % resource_id, "carries resource %d" % resource_id)
                 del launcher_resources[resource_id]
@@ -1308,12 +1345,6 @@ def self_test():
                 "src", "installer", "install_manifest.h").read_text(encoding="utf-8"))
             assert found and int(found.group(1)) == sign_manifest.MANIFEST_SCHEMA, \
                 "install_manifest.h's kManifestSchema and sign_manifest.MANIFEST_SCHEMA differ"
-            # TEMPORARY (stage 1 of docs/design-manifest-schema2): the launcher's id -> item bridge names
-            # every table id, so a file added here is not silently unplaceable.
-            bridge = dict(re.findall(r'\{"([a-z0-9_]+)",\s*"([a-z0-9_]+)"\}',
-                                     ROOT.joinpath("src", "installer", "payload.cpp").read_text(encoding="utf-8")))
-            assert {file.id for file in FILES} <= set(bridge), \
-                "src/installer/payload.cpp's stage1PayloadItem lacks an id of package_native.FILES"
             if old_epoch is None:
                 del os.environ["SOURCE_DATE_EPOCH"]
             else:

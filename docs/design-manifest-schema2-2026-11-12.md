@@ -2,15 +2,39 @@
 
 ## Status
 
-- **State (2026-11-12): being implemented in three stages** on branch
-  `claude/launcher-manifest-schema-6880a7`. Each stage passes the full
-  build and is committed on its own.
+- **State (2026-11-13): stages 1 and 2 done, stage 3 next.** Three stages on
+  branch `claude/launcher-manifest-schema-6880a7`. Each passes the full build
+  and is committed on its own.
   1. Schema 2 format: one shared parser, the Python validator, the
-     packager's file table, fixtures, and the launcher's update path.
+     packager's file table, fixtures, and the launcher's update path. Done.
   2. One install engine: the installer embeds a schema-2 manifest, and the
-     planner loops over its files.
+     planner loops over its files. Done.
   3. Per-id install records in `state.ini`, with migration, and removal of
-     dropped files.
+     dropped files. Next.
+- **Stage 2, as built:**
+  - A payload is `PayloadInfo`: the manifest's files that have bytes, each
+    with its hash and its `valid` flag (`plan.h`). `payload.cpp` builds it
+    from RCDATA 100 and 101 + i (installer) or from mapped cache files
+    (`usePayloadFiles(manifest, files)`, launcher and `--payload`).
+  - `planInstall` sorts the files by behaviour (chain, owned, runtime,
+    replace, settings) and runs one handler each. `when` is split in two:
+    a file for another profile is skipped, and a file the adapter rules out
+    is skipped by every behaviour except `owned`, which still recognises a
+    copy that is there and says why nothing was placed.
+  - A target the survey has no field for is read from the disk by the
+    planner (`Survey::targets` lets a test list one), so a plan never
+    overwrites a file it did not look at.
+  - Backups keep the file name; a second target with the same file name
+    goes under its folder (`openvr\...`), so the mirror and the survey keep
+    finding `openvr_api.dll` where they look.
+  - Id-specific C++ that is left, until stage 3 keeps a record per id:
+    the id to `state.ini` field table (`recordSlotIn`), the OpenXR loader and
+    licence ownership proofs, the XeSS notice requirement, the startup
+    config's loader and graphics paths, the three native-image validity
+    checks, and the report words for the DLSS and XeSS runtimes (`kBlurbs`).
+  - Behaviour changed on purpose: an unreadable `owned` file keeps its
+    record (the DLSS runtime used to lose it); the XeSS report is one line
+    per file with a name, not one for the trio.
 - **Supersedes** the 2026-11-12 draft "Launcher 0.2.0: a data-driven update
   manifest". That draft was written against an older tree:
   - It assumed an openvr proxy route, which was retired 2026-09-16.

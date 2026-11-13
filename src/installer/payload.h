@@ -1,72 +1,62 @@
-// The files this installer carries, embedded in its own executable.
+// The files this installer carries, embedded in its own executable, or the files a launcher
+// reads from its cache.
 //
 // One .exe and nothing else: a zip that has to be extracted first is where
 // most manual installs go wrong (Explorer will happily run a program from
 // INSIDE a zip, in a temporary folder, with none of its siblings) and it is
 // the step people skip. The payload is linked in as RCDATA by build.bat, which
-// generates the .rc so that a build without the game's openvr_api.dll simply
-// ships without that half rather than failing to compile.
+// generates the .rc (tools\gen_installer_rc.py) from package_native.py's one table of files.
+//
+// A payload is the parsed schema-2 manifest (install_manifest.h) plus the bytes of each of its
+// files: the same shape whether the executable carries it or a launcher's cache does
+// (docs\design-manifest-schema2-2026-11-12.md, "One engine"). The planner reads PayloadInfo and
+// the applier asks payloadItem for a file's bytes by its manifest id.
 #pragma once
 
 #include <string>
 #include <vector>
 
+#include "install_manifest.h"
 #include "plan.h"
 
 namespace edvr::installer {
 
-// Resource ids, matched by the generated payload.rc.
-#define IDR_EDVR_D3D11 101
-#define IDR_EDVR_OPENVR 102
-#define IDR_EDVR_INI 103
-#define IDR_EDVR_NGX 104   // NVIDIA's DLSS runtime, nvngx_dlss.dll, when the build had the SDK
-#define IDR_EDVR_OPENXR_LOADER 105
-#define IDR_EDVR_OPENXR_LICENSE 106
-#define IDR_EDVR_PROFILE 107
-#define IDR_EDVR_XESS 108
-#define IDR_EDVR_XESS_LICENSE 109
-#define IDR_EDVR_XESS_THIRD_PARTY 110
-#define IDR_EDVR_FLAT_INI 111   // edvr-flat.ini, carried by both editions
+// Resource ids, matched by the generated payload.rc: the manifest, then one RCDATA per file of its
+// `files` list at IDR_EDVR_FILE_BASE + its index. (Resource 120, the launcher's licence, is not a payload file.)
+#define IDR_EDVR_MANIFEST 100
+#define IDR_EDVR_FILE_BASE 101
 
-// Native names: native_graphics, native_runtime, openxr_loader, ini (edvr.ini), flat_ini (edvr-flat.ini)
-// and profile (the descriptor, resource 107, which the planner no longer reads).
-bool payloadItem(const std::string& item, const void** data, size_t* size);
+// The bytes of payload file `id` (a manifest file id), for applyPlan's provider.
+bool payloadItem(const std::string& id, const void** data, size_t* size);
 
-// Version, hashes and the shipped edvr.ini text. Computed on first use, and again
-// after usePayloadFiles or resetPayloadFiles: the reference stays valid, but what
-// it holds changes, so a caller keeps a copy rather than the reference across such
-// a call.
+// The manifest's files that have bytes, with their hashes and validity. Computed on first use, and again
+// after usePayloadFiles or resetPayloadFiles: the reference stays valid, but what it holds changes, so a
+// caller keeps a copy rather than the reference across such a call.
 const PayloadInfo& payloadInfo();
 
-// One file of a payload that lives outside the executable: the item name (as
-// payloadItem knows it, aliases included), where the file is, and its SHA-256 when
-// the caller has one to check it against.
+// One file of a payload that lives outside the executable: the manifest id, where the file is, and its SHA-256
+// when the caller has one to check it against.
 struct PayloadFile {
-    std::string item;
+    std::string id;
     std::wstring path;
     std::string sha256;  // lower-case hex, or empty to skip the check
 };
 
-// Switches payloadItem and payloadInfo from the embedded resources to these files,
+// Switches payloadItem and payloadInfo from the embedded resources to `manifest` and these files,
 // for the rest of the process. Each file is mapped read-only and kept mapped, so a
 // pointer payloadItem returned stays valid even after a later call replaces the
-// payload; a file whose hash does not match is refused, and so is an unknown or
-// repeated item. Nothing changes unless every file is accepted. With no files the
-// payload is empty: payloadItem finds nothing, which is how "no payload" reads.
+// payload; a file whose hash does not match is refused, and so is an id the manifest
+// does not list or a repeated one. Nothing changes unless every file is accepted. A manifest file with
+// no PayloadFile has no bytes: payloadItem finds nothing for it, as for a folder unpacked from the core zip alone.
 // A file given a hash is hashed here, once: payloadInfo reuses that value rather than
 // reading the same bytes again, and Updater::loadCurrentManifest leaves the hashing to
 // this call, so a launcher reads its payload once at start-up, not three times.
+// The payload's version is the manifest's build.
 // Call it from the thread that owns the payload; it does not synchronise with a
 // reader running at the same time.
-bool usePayloadFiles(const std::vector<PayloadFile>& files, const std::string& version, std::string* error);
+bool usePayloadFiles(const Manifest& manifest, const std::vector<PayloadFile>& files, std::string* error);
 
 // Back to the embedded resources, as if usePayloadFiles had never been called.
 void resetPayloadFiles();
-
-// TEMPORARY, removed in stage 2 of docs\design-manifest-schema2-2026-11-12.md (when the planner loops
-// over the manifest's files and idFor and canonicalItem go): the item name payloadItem knows for a
-// schema-2 file id, or empty for an id this build has no slot for. This is the only place the two
-// vocabularies meet; the launcher turns a ManifestFile into a PayloadFile through it.
-std::string stage1PayloadItem(const std::string& fileId);
 
 }  // namespace edvr::installer

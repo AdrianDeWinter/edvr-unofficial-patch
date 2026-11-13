@@ -14,44 +14,61 @@
 // the GUI can show the user the plan before a single file moves.
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "detect.h"
 #include "../common/iniedit.h"
+#include "install_manifest.h"
 #include "probe.h"
 #include "state.h"
 
 namespace edvr::installer {
 
-// What this installer carries. Sizes and hashes come from the embedded
-// resources; the planner needs them to tell "already installed" from "an older
-// build" without reading the payload itself.
+// One file of a payload: what the manifest says about it (id, where it goes, when, and how a file already there is treated) and
+// the bytes it will be written from. The bytes are not copied: they stay in the executable's resource or in a mapped file.
+struct PayloadFileEntry {
+    ManifestFile file;
+    const void*  data = nullptr;
+    size_t       size = 0;
+    std::string  sha;     // lower-case SHA-256 of the bytes, as read
+    // Whether the bytes passed their structural check. Only the three native images carry one (payload.cpp: the chained graphics
+    // file, the runtime and the OpenXR loader); every other file is true.
+    bool         valid = true;
+    // Keeps the bytes alive when nothing else does: a test's synthetic file. Null for a resource or a mapping.
+    std::shared_ptr<const std::string> owned;
+
+    std::string text() const { return std::string(static_cast<const char*>(data), size); }
+};
+
+// What this installer or launcher carries: the parsed schema-2 manifest's files that have bytes, in manifest order. The planner
+// needs their sizes and hashes to tell "already installed" from "an older build" without reading the payload itself.
+// A file the manifest lists but the payload has no bytes for (a build without the DLSS runtime) is simply absent here.
 struct PayloadInfo {
     std::string version;
-    std::string descriptorText;
-    std::string descriptorSha;
-    bool        haveD3d11 = false;
-    bool        nativeGraphicsValid = false;
-    std::string d3d11Sha;
-    bool        haveOpenvr = false;
-    std::string openvrSha;
-    bool        haveNgx = false;   // NVIDIA's DLSS runtime, nvngx_dlss.dll
-    std::string ngxSha;
-    bool        haveXess = false;
-    std::string xessSha, xessLicenseSha, xessThirdPartySha;
-    bool        nativePairValid = false;
-    bool        haveOpenxrLoader = false;
-    std::string openxrLoaderSha;
-    bool        haveOpenxrLicense = false;
-    std::string openxrLicenseSha;
-    // The shipped default settings, one text per settings file (state.h: settingsLeafFor
-    // names each). The VR edition carries edvr.ini; both editions carry edvr-flat.ini. The
-    // scope the install was asked for decides which of these it writes.
-    bool        haveIni = false;      // edvr.ini
-    std::string iniText;
-    bool        haveFlatIni = false;  // edvr-flat.ini
-    std::string flatIniText;
+    std::vector<PayloadFileEntry> files;
+
+    const PayloadFileEntry* find(const std::string& id) const {
+        for (const PayloadFileEntry& f : files) if (f.file.id == id) return &f;
+        return nullptr;
+    }
+    // The first file the manifest treats with this behaviour, or null.
+    const PayloadFileEntry* firstWith(ExistingMode mode) const {
+        for (const PayloadFileEntry& f : files) if (f.file.existing == mode) return &f;
+        return nullptr;
+    }
+    // The settings file for exactly one profile (kProfileVr or kProfileFlat), or null.
+    const PayloadFileEntry* settingsFor(unsigned profile) const {
+        for (const PayloadFileEntry& f : files)
+            if (f.file.existing == ExistingMode::Settings && f.file.when.profiles == profile) return &f;
+        return nullptr;
+    }
+    // The SHA-256 of file `id`, or empty when the payload lacks it.
+    std::string shaOf(const std::string& id) const {
+        const PayloadFileEntry* f = find(id);
+        return f ? f->sha : std::string();
+    }
 };
 
 // The folder as it is right now.
@@ -100,6 +117,10 @@ struct Survey {
     // built on is one.
     DllInfo      ngx;            // <game>\nvngx_dlss.dll
     DllInfo      xess, xessLicense, xessThirdParty;
+    // Any other target a payload file resolves to, by DllInfo::path. The fields above are the files the planner has always known by
+    // name; a manifest may name more. A target found in neither is read from the disk by the planner itself (plan.cpp targetInfoOf),
+    // so a survey that never heard of a file still reports it as present when it is; a test lists it here instead.
+    std::vector<DllInfo> targets;
     bool         nvidiaAdapter = false;
     std::wstring nvidiaAdapterName;
 
@@ -179,7 +200,7 @@ enum class Action {
     MakeDir,
     Backup,        // copy `from` to `to`, leaving the original in place
     Rename,        // move `from` to `to`, replacing whatever is at `to`
-    WritePayload,  // write embedded item `item` to `to`
+    WritePayload,  // write the payload file with id `item` to `to`
     WriteText,     // write `text` to `to`
     Delete,        // remove `from`
 };
@@ -188,7 +209,7 @@ struct Step {
     Action       action = Action::MakeDir;
     std::wstring from;
     std::wstring to;
-    std::string  item;  // "d3d11" | "openvr" | "ngx" for WritePayload
+    std::string  item;  // the payload file's manifest id, for WritePayload
     std::string  text;  // for WriteText
     std::string  why;   // shown to the user, one line
 
@@ -224,6 +245,7 @@ struct Plan {
 Plan planInstall(const Survey& survey, const Options& options, const PayloadInfo& payload);
 // The payload says which OpenXR and XeSS files are EDVR's by their bytes. Without one (an empty PayloadInfo) only the record proves a
 // file, which can only keep more files than the full proof would: callers that remove files pass the payload the installer carries.
+// (Until stage 3 of docs\design-manifest-schema2-2026-11-12.md keeps a record per file id, the ownership proofs name those files by id.)
 Plan planUninstall(const Survey& survey, const Options& options, const PayloadInfo& payload = PayloadInfo());
 
 // The one-paragraph summary shown before anything is done.

@@ -408,8 +408,7 @@ bool Updater::loadManifestFile(const std::wstring& jsonPath, Manifest* manifest,
     for (const ManifestFile& f : loaded.files) {
         if (!cache.hasSized(f.sha256, f.size)) return fail("the payload cache lacks " + f.path + "; connect and update to repair it");
         PayloadFile p;
-        p.item = stage1PayloadItem(f.id);
-        if (p.item.empty()) return fail("this launcher cannot place the file " + f.id + " yet");
+        p.id = f.id;
         p.path = cache.pathFor(f.sha256);
         p.sha256 = f.sha256;
         list.push_back(std::move(p));

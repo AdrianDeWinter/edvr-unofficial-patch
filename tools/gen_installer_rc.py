@@ -23,23 +23,18 @@ Usage:
 
 import argparse
 import os
+from pathlib import Path
 import re
 import struct
 import subprocess
 import sys
 
-# Resource ids, matched by src/installer/payload.h.
-IDR_NATIVE_GRAPHICS = 101
-IDR_NATIVE_RUNTIME = 102
-IDR_INI = 103
-IDR_NGX = 104   # NVIDIA's DLSS runtime, when the build had the SDK
-IDR_LOADER = 105
-IDR_LOADER_NOTICE = 106
-IDR_PROFILE = 107
-IDR_XESS = 108
-IDR_XESS_LICENSE = 109
-IDR_XESS_THIRD_PARTY = 110
-IDR_FLAT_INI = 111   # edvr-flat.ini: the flat profile's own settings, carried beside edvr.ini
+# Resource ids, matched by src/installer/payload.cpp: the schema-2 manifest is RCDATA 100 and each file of its
+# `files` list is RCDATA 101 + its index in that list (docs/design-manifest-schema2-2026-11-12.md, "One engine").
+IDR_MANIFEST = 100
+IDR_FILE_BASE = 101
+# The one asset the embedded manifest lists: the executable itself.
+EMBEDDED_ASSET = "edvr-installer.exe"
 RT_MANIFEST = 24
 
 
@@ -70,8 +65,8 @@ def flat_ini_bytes():
 
 def descriptor_bytes():
     """The edvr_profile.ini the installer carries, schema 2: scope both, the one the
-    installer's default names. package_native.py checks the installer's embedded
-    descriptor against these same bytes."""
+    installer's default names. package_native.py checks the loose descriptor in the
+    release against these same bytes; the planner writes its own copy of the text."""
     return b'[install]\r\nschema = 2\r\nscope = both\r\n'
 
 
@@ -190,7 +185,7 @@ def launcher_version(root):
 def write_launcher_rc(root, out, dry_run):
     """--launcher-rc: launcher.rc with the manifest, the icon, a VERSIONINFO and one RCDATA, the
     licence of the code direct launch is ported from (id 120, printed by --licenses). The launcher
-    carries no payload (package_native.py refuses one that does, ids 101 to 111), and nothing in the
+    carries no payload (package_native.py refuses one that does, resources 100 to 111), and nothing in the
     file depends on the build's `git describe` or on the clock, so two builds of the same sources
     are the same bytes."""
     manifest = os.path.join(root, 'src', 'installer', 'installer.manifest')
@@ -403,6 +398,52 @@ def ico_bytes():
     return bytes(out)
 
 
+def installer_files(root, build, ini=None):
+    """[(PackagedFile, path)] for the files the build holds, in package_native.FILES order: the one table
+    that says what the installer carries. Optional files (DLSS, XeSS) are listed only when the build has
+    them; the caller decides which absences are errors."""
+    import package_native
+    root = Path(root)
+    by_source = {}
+    for source, name in package_native._files(root, True):
+        try:
+            source = Path(build) / source.relative_to(root / 'build')
+        except ValueError:
+            pass
+        by_source[name] = source
+    if ini:
+        by_source['edvr.ini'] = Path(ini)
+    found = []
+    for entry in package_native.FILES:
+        path = by_source.get(entry.source)
+        if path is not None and path.is_file():
+            found.append((entry, path))
+    return found
+
+
+def embedded_manifest(entries, version, issued=None):
+    """The schema-2 manifest the installer carries as RCDATA 100, as bytes: `entries` is
+    [(PackagedFile, bytes)] in the order of the RCDATA 101+i resources. It is unsigned, as the
+    executable is the unit of trust, and lists the executable as its one asset. Its sha256 and size
+    per file are those of the bytes."""
+    import hashlib
+    import json
+    import time
+    import package_native
+    import sign_manifest
+    blobs = b''.join(data for _, data in entries)
+    if issued is None:
+        issued = int(os.environ['SOURCE_DATE_EPOCH']) if os.environ.get('SOURCE_DATE_EPOCH') else int(time.time())
+    manifest = {'schema': sign_manifest.MANIFEST_SCHEMA, 'version': version, 'build': version, 'tag': version,
+                'issued': issued,
+                'assets': [{'name': EMBEDDED_ASSET, 'sha256': hashlib.sha256(blobs).hexdigest(), 'size': len(blobs)}],
+                'files': [package_native.manifest_file_entry(entry, EMBEDDED_ASSET, data) for entry, data in entries]}
+    problems = sign_manifest.validate_manifest(manifest)
+    if problems:
+        raise ValueError('the installer manifest is not valid: ' + '; '.join(problems))
+    return (json.dumps(manifest, indent=2, ensure_ascii=True) + '\n').encode('ascii')
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--root')
@@ -447,7 +488,6 @@ def main(argv=None):
     # edvr-flat.ini is generated here and embedded beside edvr.ini (id 111): one
     # installer carries both settings files, and the scope decides which it writes.
     flat_ini = os.path.join(args.build, 'edvr-flat.ini')
-    ngx = os.path.join(args.build, 'nvngx_dlss.dll')
     xess = os.path.join(args.build, 'libxess.dll')
     xess_license = os.path.join(args.build, 'INTEL-XESS-LICENSE.txt')
     xess_third_party = os.path.join(args.build, 'INTEL-XESS-THIRD-PARTY.txt')
@@ -503,33 +543,42 @@ def main(argv=None):
     with open(descriptor_path, 'wb') as f:
         f.write(descriptor_bytes())
 
+    # What the installer carries is package_native.FILES, the one table, filtered to what the build holds.
+    # The manifest (RCDATA 100) is written from the same bytes the RCDATA 101+i lines embed.
+    payload = []
+    for entry, path in installer_files(args.root, args.build, args.ini):
+        with open(path, 'rb') as stream:
+            payload.append((entry, path, stream.read()))
+    try:
+        manifest_bytes = embedded_manifest([(entry, data) for entry, _, data in payload], args.version)
+    except ValueError as exc:
+        print('gen_installer_rc: ERROR: %s' % exc)
+        return 1
+    manifest_path = os.path.join(args.out, 'installer_manifest.json')
+    with open(manifest_path, 'wb') as f:
+        f.write(manifest_bytes)
+
     lines = [
         '// Generated by tools/gen_installer_rc.py. Do not edit; do not commit.',
         '',
         '1 %d "%s"' % (RT_MANIFEST, rc_path(manifest)),
         '1 ICON "%s"' % rc_path(icon_path),
         '',
-        '%d RCDATA "%s"' % (IDR_NATIVE_GRAPHICS, rc_path(d3d11)),
-        '%d RCDATA "%s"' % (IDR_INI, rc_path(ini)),
-        '%d RCDATA "%s"' % (IDR_FLAT_INI, rc_path(flat_ini)),
-        '%d RCDATA "%s"' % (IDR_PROFILE, rc_path(descriptor_path)),
-        '%d RCDATA "%s"' % (IDR_NATIVE_RUNTIME, rc_path(runtime)),
-        '%d RCDATA "%s"' % (IDR_LOADER, rc_path(loader)),
-        '%d RCDATA "%s"' % (IDR_LOADER_NOTICE, rc_path(notice)),
+        '// The schema-2 manifest, then one resource per file of its `files` list, in that order.',
+        '%d RCDATA "%s"' % (IDR_MANIFEST, rc_path(manifest_path)),
     ]
+    for index, (entry, path, _) in enumerate(payload):
+        lines.append('%d RCDATA "%s"  // %s' % (IDR_FILE_BASE + index, rc_path(str(path)), entry.id))
     # This line is what a build log says the installer carries.
-    carried = 'graphics, edvr.ini, edvr-flat.ini and vr profile descriptor, native OpenXR runtime, loader and notice'
-    if os.path.exists(ngx):
-        lines.append('%d RCDATA "%s"' % (IDR_NGX, rc_path(ngx)))
+    carried = 'graphics, edvr.ini, edvr-flat.ini, native OpenXR runtime, loader and notice'
+    have = {entry.id for entry, _, _ in payload}
+    if 'dlss' in have:
         carried += ", and NVIDIA's DLSS runtime (nvngx_dlss.dll)"
     else:
         lines.append('// no nvngx_dlss.dll in the build (no DLSS SDK): this installer ships without')
         lines.append("// NVIDIA's optional anti-aliasing runtime.")
     # XeSS-SR ships with the installer: both edvr.ini and edvr-flat.ini can select it.
-    if os.path.exists(xess):
-        lines += ['%d RCDATA "%s"' % (IDR_XESS, rc_path(xess)),
-                  '%d RCDATA "%s"' % (IDR_XESS_LICENSE, rc_path(xess_license)),
-                  '%d RCDATA "%s"' % (IDR_XESS_THIRD_PARTY, rc_path(xess_third_party))]
+    if 'xess' in have:
         carried += ', Intel XeSS-SR runtime and notices'
 
     version = args.version
@@ -610,12 +659,29 @@ def self_test():
                          '--version', '1.2.3']) == 0
             with open(os.path.join(out, 'payload.rc'), encoding='utf-8') as stream:
                 rc_text = stream.read()
-            # One installer: both settings files, the descriptor, the runtime and the XeSS-SR files.
-            assert all('%d RCDATA ' % resource_id in rc_text for resource_id in
-                       (IDR_INI, IDR_FLAT_INI, IDR_PROFILE, IDR_NATIVE_RUNTIME, IDR_LOADER,
-                        IDR_LOADER_NOTICE, IDR_XESS, IDR_XESS_LICENSE, IDR_XESS_THIRD_PARTY))
+            # One installer: the manifest at 100, then one resource per file the table lists and the build holds, in
+            # the table's order (here everything but DLSS), and no resource past them.
+            import json
+            import hashlib
+            import package_native
+            import sign_manifest
+            with open(os.path.join(out, 'installer_manifest.json'), 'rb') as stream:
+                embedded = json.loads(stream.read().decode('ascii'))
+            ids = [entry.id for entry in package_native.FILES if entry.id != 'dlss']
+            assert [entry['id'] for entry in embedded['files']] == ids, embedded['files']
+            assert '%d RCDATA "' % IDR_MANIFEST in rc_text
+            for index, entry_id in enumerate(ids):
+                assert '%d RCDATA "' % (IDR_FILE_BASE + index) in rc_text and '// ' + entry_id in rc_text, entry_id
+            assert '%d RCDATA ' % (IDR_FILE_BASE + len(ids)) not in rc_text
             assert 'Intel XeSS-SR runtime and notices' in rc_text
-            assert 'graphics, edvr.ini, edvr-flat.ini and vr profile descriptor' in rc_text
+            assert 'graphics, edvr.ini, edvr-flat.ini, native OpenXR runtime, loader and notice' in rc_text
+            # It is a valid schema-2 manifest, and its hashes and sizes are those of the bytes embedded after it.
+            assert sign_manifest.validate_manifest(embedded) == []
+            held = dict((entry.id, path) for entry, path in installer_files(root, build))
+            for entry in embedded['files']:
+                with open(held[entry['id']], 'rb') as stream:
+                    data = stream.read()
+                assert entry['sha256'] == hashlib.sha256(data).hexdigest() and entry['size'] == len(data), entry['id']
             with open(os.path.join(build, 'edvr-flat.ini'), 'rb') as stream:
                 flat_ini = stream.read()
                 assert flat_ini == flat_ini_bytes()

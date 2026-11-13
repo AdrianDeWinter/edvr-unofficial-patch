@@ -41,8 +41,7 @@ LauncherRoots launcherRoots(const std::wstring& dataRootArg) {
     return roots;
 }
 
-bool listPayloadFolder(const std::wstring& dir, std::vector<PayloadFile>* files, std::string* version,
-                       std::string* error) {
+bool listPayloadFolder(const std::wstring& dir, Manifest* out, std::vector<PayloadFile>* files, std::string* error) {
     auto fail = [&](const std::string& text) {
         if (error) *error = text;
         return false;
@@ -64,7 +63,7 @@ bool listPayloadFolder(const std::wstring& dir, std::vector<PayloadFile>* files,
 
     // The manifest is unsigned here: the folder is the user's own, named with --payload. A file the
     // folder does not hold is skipped, as a folder unpacked from the core zip alone lacks the DLSS and
-    // XeSS ones; usePayloadFiles then simply has no such item.
+    // XeSS ones; usePayloadFiles then simply has no bytes for it.
     std::vector<PayloadFile> found;
     for (const ManifestFile& file : manifest.files) {
         std::wstring relative = widenUtf8(file.path);
@@ -74,13 +73,12 @@ bool listPayloadFolder(const std::wstring& dir, std::vector<PayloadFile>* files,
         const std::wstring path = joinPath(dir, relative);
         if (!fileExists(path)) continue;
         PayloadFile f;
-        f.item = stage1PayloadItem(file.id);
-        if (f.item.empty()) return fail("this launcher cannot place the file " + file.id + " yet");
+        f.id = file.id;
         f.path = path;
         found.push_back(std::move(f));
     }
     *files = std::move(found);
-    *version = manifest.build;
+    *out = std::move(manifest);
     return true;
 }
 
@@ -89,12 +87,14 @@ PayloadLoad loadLauncherPayload(const LauncherRoots& roots, const std::wstring& 
     std::string error;
     if (!payloadDir.empty()) {
         std::vector<PayloadFile> files;
-        if (!listPayloadFolder(payloadDir, &files, &load.version, &error)) {
+        Manifest folderManifest;
+        if (!listPayloadFolder(payloadDir, &folderManifest, &files, &error)) {
             load.note = error;
             return load;
         }
         load.kind = PayloadKind::Folder;
-        if (!usePayloadFiles(files, load.version, &error)) {
+        load.version = folderManifest.build;
+        if (!usePayloadFiles(folderManifest, files, &error)) {
             load.note = error;
             return load;
         }
@@ -129,7 +129,7 @@ PayloadLoad loadLauncherPayload(const LauncherRoots& roots, const std::wstring& 
     load.kind = PayloadKind::Manifest;
     load.manifestPath = joinPath(joinPath(roots.launcherDir(), L"manifests"), widenUtf8(state.currentManifest())) + L".json";
     load.version = manifest.build;
-    if (!usePayloadFiles(files, manifest.build, &error)) {
+    if (!usePayloadFiles(manifest, files, &error)) {
         load.note = error;
         return load;
     }
@@ -137,7 +137,7 @@ PayloadLoad loadLauncherPayload(const LauncherRoots& roots, const std::wstring& 
     return load;
 }
 
-bool payloadPresent(const PayloadInfo& info) { return info.haveD3d11 || info.haveOpenvr || info.haveIni; }
+bool payloadPresent(const PayloadInfo& info) { return !info.files.empty(); }
 
 bool isDeveloperInstall(const std::wstring& gameDir) {
     FILETIME record{};

@@ -61,10 +61,10 @@ struct PayloadLoad {
 
 // The files of an unpacked ed-up-<ver>.zip, listed by the schema-2 manifest <dir>\ed-up-manifest.json
 // (unsigned is fine here) and taken by each file's `path` under the folder. The version is the
-// manifest's build. Nothing here checks a hash: the folder is the user's, named with --payload,
-// and a signed manifest does not cover it.
-bool listPayloadFolder(const std::wstring& dir, std::vector<PayloadFile>* files, std::string* version,
-                       std::string* error);
+// manifest's build. A file the folder does not hold is left out, as a folder unpacked from the core zip
+// alone lacks the DLSS and XeSS ones. Nothing here checks a hash: the folder is the user's, named with
+// --payload, and a signed manifest does not cover it.
+bool listPayloadFolder(const std::wstring& dir, Manifest* manifest, std::vector<PayloadFile>* files, std::string* error);
 
 // Loads the payload the launcher will install from: the --payload folder when one is given,
 // else the manifest launcher.ini names (re-verified, its files hashed once by

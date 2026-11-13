@@ -1486,7 +1486,7 @@ void testUpdater() {
         check(off.loadCurrentManifest(&loaded, &files, &err), "the current manifest loads offline: " + err);
         check(offline.requests.empty(), "loading it made no request");
         check(loaded.version == "1.3.0" && files.size() == 4, "it is the last adopted manifest, with four files");
-        for (const PayloadFile& f : files) check(exists(f.path) && sha256File(f.path) == f.sha256, "payload file " + f.item + " is cached and verified");
+        for (const PayloadFile& f : files) check(exists(f.path) && sha256File(f.path) == f.sha256, "payload file " + f.id + " is cached and verified");
         // Damage: a changed stored manifest, a changed signature, a missing cache file.
         const std::wstring storedJson = P(manifests, widenUtf8(lastSha) + L".json");
         const std::string original = readAll(storedJson);
@@ -1515,7 +1515,7 @@ void testUpdater() {
             bad[0] = static_cast<char>(bad[0] ^ 1);
             writeAll(victim, bad);
             check(off.loadCurrentManifest(&loaded, &files, &err), "a same-size tampered cache file passes the size listing: " + err);
-            check(!usePayloadFiles(files, loaded.version, &err) && contains(err, "hash"), "usePayloadFiles refuses the tampered cache file: " + err);
+            check(!usePayloadFiles(loaded, files, &err) && contains(err, "hash"), "usePayloadFiles refuses the tampered cache file: " + err);
             check(!cache.hasVerified(relD.manifest.files[0].sha256, good.size()), "and the cache itself no longer calls it verified");
             writeAll(victim, good);
             check(off.loadCurrentManifest(&loaded, &files, &err), "the restored file lists again: " + err);
@@ -1526,11 +1526,11 @@ void testUpdater() {
                   "a stored manifest loads by its path: " + err);
             check(!off.loadManifestFile(P(manifests, L"renamed.json"), &byPath, &byPathFiles, &err) && contains(err, "not its hash"), "a manifest not named for its hash is refused: " + err);
         }
-        check(usePayloadFiles(files, loaded.version, &err), "the payload switches to those files: " + err);
+        check(usePayloadFiles(loaded, files, &err), "the payload switches to those files: " + err);
         const void* data = nullptr;
         size_t size = 0;
-        check(payloadItem("native_graphics", &data, &size) && std::string(static_cast<const char*>(data), size) == "graphics four", "payloadItem now serves the cached graphics file");
-        check(payloadInfo().version == "1.3.0" && payloadInfo().haveD3d11 && payloadInfo().haveNgx && payloadInfo().haveIni, "payloadInfo follows the manifest's version and files");
+        check(payloadItem("graphics", &data, &size) && std::string(static_cast<const char*>(data), size) == "graphics four", "payloadItem now serves the cached graphics file");
+        check(payloadInfo().version == loaded.build && payloadInfo().find("graphics") && payloadInfo().find("dlss") && payloadInfo().find("settings_vr"), "payloadInfo follows the manifest's build and files");
         resetPayloadFiles();
 
         const std::wstring emptyBase = fresh("up10b");
@@ -1541,8 +1541,32 @@ void testUpdater() {
 
 // ---- payload ---------------------------------------------------------------------------
 
-const char* const kPayloadItems[] = {"native_graphics", "native_runtime", "ini", "flat_ini", "profile", "ngx",
-                                     "xess", "xess_license", "xess_third_party", "openxr_loader", "openxr_license"};
+const char* const kPayloadIds[] = {"graphics", "runtime", "settings_vr", "settings_flat", "dlss",
+                                   "xess", "xess_license", "xess_third_party", "openxr_loader", "openxr_license"};
+
+// A manifest of the files a payload test uses: ids from the packager's table, each with a target and a behaviour.
+Manifest payloadManifest(const std::string& build, const std::vector<std::string>& ids) {
+    Manifest m;
+    m.version = "9.9.9";
+    m.build = build;
+    m.tag = "v9.9.9";
+    m.issued = 1;
+    m.assets.push_back({"test.zip", std::string(64, '0'), 1});
+    for (const std::string& id : ids) {
+        ManifestFile f;
+        f.id = id;
+        f.asset = "test.zip";
+        f.path = id + ".bin";
+        f.sha256 = std::string(64, '0');
+        f.target.path = id + ".bin";
+        f.existing = id == "graphics" ? ExistingMode::Chain : id == "runtime" ? ExistingMode::Runtime
+                   : id.compare(0, 8, "settings") == 0 ? ExistingMode::Settings : ExistingMode::Replace;
+        if (id == "settings_vr") f.when.profiles = kProfileVr;
+        if (id == "settings_flat") f.when.profiles = kProfileFlat;
+        m.files.push_back(f);
+    }
+    return m;
+}
 
 void testPayload() {
     section("payload");
@@ -1550,7 +1574,7 @@ void testPayload() {
     const PayloadInfo embedded = payloadInfo();
     const void* data = nullptr;
     size_t size = 0;
-    check(!payloadItem("ini", &data, &size) && !embedded.haveIni && !embedded.haveD3d11, "with no call made the rig's (resource-less) executable serves nothing, as before");
+    check(!payloadItem("settings_vr", &data, &size) && embedded.files.empty(), "with no call made the rig's (resource-less) executable serves nothing, as before");
     const std::string baseVersion = embedded.version;
     const PayloadInfo* reference = &payloadInfo();
 
@@ -1561,61 +1585,67 @@ void testPayload() {
     };
     const std::string graphics = "graphics bytes", ini = "[fix]\nx=1\n", ngx = "ngx bytes";
     std::string err;
-    std::vector<PayloadFile> files = {{"d3d11", make(L"g.bin", graphics), sha(graphics)},
-                                      {"ini", make(L"i.bin", ini), sha(ini)},
-                                      {"ngx", make(L"n.bin", ngx), std::string()}};
-    check(usePayloadFiles(files, "9.9.9", &err), "mapped files are accepted: " + err);
-    check(payloadItem("native_graphics", &data, &size) && std::string(static_cast<const char*>(data), size) == graphics, "payloadItem serves the mapped file under its native name");
-    const void* alias = nullptr;
-    size_t aliasSize = 0;
-    check(payloadItem("d3d11", &alias, &aliasSize) && alias == data && aliasSize == size, "the d3d11 alias serves the same bytes");
-    check(!payloadItem("openvr", &data, &size) && !payloadItem("native_runtime", &data, &size), "an item the payload lacks is not served from anywhere else");
-    check(!payloadItem("bogus", &data, &size), "an unknown item is not served");
+    const Manifest first = payloadManifest("9.9.9", {"graphics", "settings_vr", "dlss", "runtime"});
+    std::vector<PayloadFile> files = {{"graphics", make(L"g.bin", graphics), sha(graphics)},
+                                      {"settings_vr", make(L"i.bin", ini), sha(ini)},
+                                      {"dlss", make(L"n.bin", ngx), std::string()}};
+    check(usePayloadFiles(first, files, &err), "mapped files are accepted: " + err);
+    check(payloadItem("graphics", &data, &size) && std::string(static_cast<const char*>(data), size) == graphics, "payloadItem serves the mapped file under its manifest id");
+    check(!payloadItem("runtime", &data, &size), "a manifest file with no bytes is not served from anywhere else");
+    check(!payloadItem("bogus", &data, &size) && !payloadItem("d3d11", &data, &size) && !payloadItem("native_graphics", &data, &size), "an id the manifest does not list is not served");
     const PayloadInfo& info = payloadInfo();
     check(&info == reference, "payloadInfo hands back the same object, now updated");
-    check(info.version == "9.9.9" && info.haveD3d11 && info.d3d11Sha == sha(graphics) && info.haveIni && info.iniText == ini && info.haveNgx && info.ngxSha == sha(ngx),
-          "payloadInfo follows the files: version, hashes and the ini text");
-    check(!info.haveOpenvr && !info.nativePairValid && !info.nativeGraphicsValid, "what is absent or not a valid native image reads absent or invalid");
+    check(info.version == "9.9.9" && info.find("graphics") && info.find("graphics")->sha == sha(graphics) && info.find("settings_vr") && info.find("settings_vr")->text() == ini &&
+              info.find("dlss") && info.find("dlss")->sha == sha(ngx),
+          "payloadInfo follows the files: version, hashes and the settings text");
+    check(info.files.size() == 3 && !info.find("runtime") && !info.find("graphics")->valid, "what is absent or not a valid native image reads absent or invalid");
+    check(info.find("settings_vr")->file.existing == ExistingMode::Settings && info.find("settings_vr")->file.when.profiles == kProfileVr && info.find("graphics")->file.existing == ExistingMode::Chain,
+          "each file keeps what the manifest says about it");
 
     // The pointer handed out earlier outlives a replacement.
-    check(payloadItem("ini", &data, &size), "the ini is served");
+    check(payloadItem("settings_vr", &data, &size), "the ini is served");
     const char* oldIni = static_cast<const char*>(data);
     const size_t oldIniSize = size;
     const std::string newIni = "[fix]\nx=2\n";
-    check(usePayloadFiles({{"ini", make(L"i2.bin", newIni), sha(newIni)}}, "9.9.10", &err), "the payload can be replaced: " + err);
+    const Manifest second = payloadManifest("9.9.10", {"settings_vr"});
+    check(usePayloadFiles(second, {{"settings_vr", make(L"i2.bin", newIni), sha(newIni)}}, &err), "the payload can be replaced: " + err);
     check(std::string(oldIni, oldIniSize) == ini, "a pointer from before the replacement still reads the old bytes");
-    check(payloadItem("ini", &data, &size) && std::string(static_cast<const char*>(data), size) == newIni && payloadInfo().iniText == newIni && payloadInfo().version == "9.9.10",
+    check(payloadItem("settings_vr", &data, &size) && std::string(static_cast<const char*>(data), size) == newIni && payloadInfo().find("settings_vr")->text() == newIni && payloadInfo().version == "9.9.10",
           "after the replacement the new bytes and version are served");
-    check(!payloadItem("native_graphics", &data, &size) && !payloadInfo().haveD3d11, "the replaced payload no longer has the old items");
+    check(!payloadItem("graphics", &data, &size) && !payloadInfo().find("graphics"), "the replaced payload no longer has the old files");
 
     // Refusals change nothing.
-    check(!usePayloadFiles({{"ini", make(L"i3.bin", "other"), sha(ini)}}, "bad", &err) && contains(err, "hash"), "a wrong hash is refused: " + err);
-    check(!usePayloadFiles({{"bogus", make(L"b.bin", "x"), std::string()}}, "bad", &err) && contains(err, "unknown"), "an unknown item is refused: " + err);
-    check(!usePayloadFiles({{"d3d11", make(L"d1.bin", "x"), std::string()}, {"native_graphics", make(L"d2.bin", "y"), std::string()}}, "bad", &err) && contains(err, "twice"),
-          "an alias and its native name together are refused as a repeat: " + err);
-    check(!usePayloadFiles({{"ini", P(dir, L"missing.bin"), std::string()}}, "bad", &err) && contains(err, "cannot be opened"), "a missing file is refused: " + err);
-    check(!usePayloadFiles({{"ini", make(L"empty.bin", ""), std::string()}}, "bad", &err), "an empty file is refused");
-    check(payloadInfo().version == "9.9.10" && payloadItem("ini", &data, &size) && std::string(static_cast<const char*>(data), size) == newIni, "after the refusals the previous payload is intact");
+    check(!usePayloadFiles(second, {{"settings_vr", make(L"i3.bin", "other"), sha(ini)}}, &err) && contains(err, "hash"), "a wrong hash is refused: " + err);
+    check(!usePayloadFiles(second, {{"bogus", make(L"b.bin", "x"), std::string()}}, &err) && contains(err, "unknown"), "an id the manifest does not list is refused: " + err);
+    const Manifest twin = payloadManifest("bad", {"graphics"});
+    check(!usePayloadFiles(twin, {{"graphics", make(L"d1.bin", "x"), std::string()}, {"graphics", make(L"d2.bin", "y"), std::string()}}, &err) && contains(err, "twice"),
+          "one id given twice is refused as a repeat: " + err);
+    check(!usePayloadFiles(second, {{"settings_vr", P(dir, L"missing.bin"), std::string()}}, &err) && contains(err, "cannot be opened"), "a missing file is refused: " + err);
+    check(!usePayloadFiles(second, {{"settings_vr", make(L"empty.bin", ""), std::string()}}, &err), "an empty file is refused");
+    check(payloadInfo().version == "9.9.10" && payloadItem("settings_vr", &data, &size) && std::string(static_cast<const char*>(data), size) == newIni, "after the refusals the previous payload is intact");
 
-    // Every item the payload knows (PayloadFile's own vocabulary, until the planner reads the manifest's files).
+    // Every id of the packager's table is accepted, and a file the launcher has never heard of too: the manifest is the vocabulary.
+    std::vector<std::string> ids(std::begin(kPayloadIds), std::end(kPayloadIds));
+    ids.push_back("extra_dll");
+    const Manifest every = payloadManifest("all", ids);
     std::vector<PayloadFile> all;
     int index = 0;
-    for (const char* item : kPayloadItems) {
-        const std::string bytes = std::string("bytes of ") + item;
-        all.push_back({item, make((L"all" + std::to_wstring(index++) + L".bin").c_str(), bytes), sha(bytes)});
+    for (const std::string& id : ids) {
+        const std::string bytes = "bytes of " + id;
+        all.push_back({id, make((L"all" + std::to_wstring(index++) + L".bin").c_str(), bytes), sha(bytes)});
     }
-    check(usePayloadFiles(all, "all", &err), "every manifest item is accepted by the payload: " + err);
-    for (const char* item : kPayloadItems) {
-        check(payloadItem(item, &data, &size) && std::string(static_cast<const char*>(data), size) == std::string("bytes of ") + item, std::string("item ") + item + " is served");
+    check(usePayloadFiles(every, all, &err), "every manifest file is accepted by the payload: " + err);
+    for (const std::string& id : ids) {
+        check(payloadItem(id, &data, &size) && std::string(static_cast<const char*>(data), size) == "bytes of " + id, "file " + id + " is served");
     }
-    check(payloadInfo().haveXess && payloadInfo().haveOpenxrLoader && payloadInfo().haveOpenxrLicense && payloadInfo().haveFlatIni && !payloadInfo().descriptorText.empty(),
-          "payloadInfo reads the XeSS, loader, license, flat ini and descriptor items too");
+    check(payloadInfo().files.size() == ids.size() && payloadInfo().find("extra_dll") && payloadInfo().find("xess_license") && payloadInfo().find("openxr_license") && payloadInfo().find("settings_flat"),
+          "payloadInfo lists them all, in the manifest's order");
 
     // No files is the empty payload; reset returns to the executable's own.
-    check(usePayloadFiles({}, "none", &err), "an empty payload is allowed: " + err);
-    check(!payloadItem("ini", &data, &size) && !payloadInfo().haveIni && payloadInfo().version == "none", "an empty payload serves nothing and says its version");
+    check(usePayloadFiles(payloadManifest("none", {"graphics"}), {}, &err), "an empty payload is allowed: " + err);
+    check(!payloadItem("settings_vr", &data, &size) && payloadInfo().files.empty() && payloadInfo().version == "none", "an empty payload serves nothing and says its version");
     resetPayloadFiles();
-    check(payloadInfo().version == baseVersion && !payloadInfo().haveIni && &payloadInfo() == reference, "reset returns to the embedded behaviour");
+    check(payloadInfo().version == baseVersion && payloadInfo().files.empty() && &payloadInfo() == reference, "reset returns to the embedded behaviour");
 }
 
 // ---- WinHttpClient against a loopback server ----------------------------------------------------
@@ -2179,15 +2209,17 @@ void testCore() {
         writeAll(P(dir, L"unrelated.txt"), "ignored");
         writeAll(P(dir, L"ed-up-manifest.json"), manifestText("2", table));
         std::vector<PayloadFile> files;
-        std::string version, err;
-        check(listPayloadFolder(dir, &files, &version, &err), "an unpacked zip with its manifest lists: " + err);
+        Manifest folder;
+        std::string err;
+        check(listPayloadFolder(dir, &folder, &files, &err), "an unpacked zip with its manifest lists: " + err);
         check(files.size() == 3, "only the manifest's files the folder holds are listed (the DLSS runtime is not there): " + std::to_string(files.size()));
+        const std::string version = folder.build;
         check(version == "v9.9.9", "the version is the manifest's build: " + version);
         bool graphics = false, ini = false, runtime = false;
         for (const PayloadFile& f : files) {
-            graphics |= f.item == "native_graphics" && f.sha256.empty();
-            ini |= f.item == "ini";
-            runtime |= f.item == "native_runtime" && _wcsicmp(f.path.c_str(), P(dir, L"Openvr\\openvr_api.dll").c_str()) == 0;
+            graphics |= f.id == "graphics" && f.sha256.empty();
+            ini |= f.id == "settings_vr";
+            runtime |= f.id == "runtime" && _wcsicmp(f.path.c_str(), P(dir, L"Openvr\\openvr_api.dll").c_str()) == 0;
         }
         check(graphics && ini && runtime, "the files are taken by their path, and no hash is claimed for the user's folder");
 
@@ -2196,7 +2228,7 @@ void testCore() {
         check(load.ok && load.kind == PayloadKind::Folder && load.version == version, "loadLauncherPayload takes the folder: " + load.note);
         const void* data = nullptr;
         size_t size = 0;
-        check(payloadItem("ini", &data, &size) && std::string(static_cast<const char*>(data), size) == "[fix]\nx=1\n", "payloadItem now serves the folder's edvr.ini");
+        check(payloadItem("settings_vr", &data, &size) && std::string(static_cast<const char*>(data), size) == "[fix]\nx=1\n", "payloadItem now serves the folder's edvr.ini");
         check(payloadPresent(payloadInfo()) && payloadInfo().version == version, "payloadPresent says there is a payload, with its version");
         resetPayloadFiles();
         check(!payloadPresent(payloadInfo()), "reset: a build with no embedded resources has no payload (the state the launcher starts in)");
@@ -2206,17 +2238,19 @@ void testCore() {
         const PayloadLoad none = loadLauncherPayload(roots, empty, g_testKeys);
         check(!none.ok && contains(none.note, "ed-up-manifest.json"), "a folder with no manifest is refused, and says what to point at: " + none.note);
         check(!payloadPresent(payloadInfo()), "and a refused load leaves the process with no payload");
-        // A folder's manifest is held to the same schema: a newer one, a bad target and an id this launcher cannot place.
+        // A folder's manifest is held to the same schema: a newer one and a bad target are refused.
         const std::wstring newer = fresh("core-folder-newer");
         writeAll(P(newer, L"ed-up-manifest.json"), manifestText("3", table));
-        check(!listPayloadFolder(newer, &files, &version, &err) && err == kSchemaTooNewMessage, "a folder whose manifest is of a newer schema says to update the launcher: " + err);
+        check(!listPayloadFolder(newer, &folder, &files, &err) && err == kSchemaTooNewMessage, "a folder whose manifest is of a newer schema says to update the launcher: " + err);
         const std::wstring escaping = fresh("core-folder-escape");
         writeAll(P(escaping, L"ed-up-manifest.json"), manifestText("2", fileEntry("graphics", "d3d11.dll", "game", "../d3d11.dll", "", "replace")));
-        check(!listPayloadFolder(escaping, &files, &version, &err) && contains(err, "target.path"), "a target that leaves its root is refused: " + err);
+        check(!listPayloadFolder(escaping, &folder, &files, &err) && contains(err, "target.path"), "a target that leaves its root is refused: " + err);
         const std::wstring unknown = fresh("core-folder-unknown");
         copyOfSystemDll(P(unknown, L"newthing.dll"));
         writeAll(P(unknown, L"ed-up-manifest.json"), manifestText("2", fileEntry("newthing", "newthing.dll", "game", "newthing.dll", "", "replace")));
-        check(!listPayloadFolder(unknown, &files, &version, &err) && contains(err, "newthing"), "an id this launcher cannot place yet is named: " + err);
+        // The manifest is the vocabulary: a file this launcher was not built knowing about is listed like any other (schema 1 refused it by name).
+        check(listPayloadFolder(unknown, &folder, &files, &err) && files.size() == 1 && files[0].id == "newthing" && folder.files[0].id == "newthing",
+              "a file id this launcher has never heard of is listed: " + err);
     }
 
     // A stored manifest: the first run has none, and after an adoption it loads.
@@ -2241,7 +2275,7 @@ void testCore() {
         check(load.manifestPath == P(P(roots.launcherDir(), L"manifests"), widenUtf8(sha(a.manifestBytes)) + L".json") && exists(load.manifestPath), "the load names the stored manifest it used");
         const void* data = nullptr;
         size_t size = 0;
-        check(payloadItem("native_graphics", &data, &size) && std::string(static_cast<const char*>(data), size) == "graphics one", "payloadItem serves the cached graphics file");
+        check(payloadItem("graphics", &data, &size) && std::string(static_cast<const char*>(data), size) == "graphics one", "payloadItem serves the cached graphics file");
         resetPayloadFiles();
 
         // The cache lost a file: named, and not a first run. (Another root: the files above are still mapped.)
@@ -3071,7 +3105,7 @@ void testSession() {
             check(!session.updating() && session.payloadState() == PayloadState::Ready && session.payload().version == "v1.0.0", "the payload is ready, at v1.0.0: " + session.updateLine());
             const void* data = nullptr;
             size_t size = 0;
-            check(payloadItem("native_graphics", &data, &size) && std::string(static_cast<const char*>(data), size) == "graphics one", "payloadItem serves the update's files");
+            check(payloadItem("graphics", &data, &size) && std::string(static_cast<const char*>(data), size) == "graphics one", "payloadItem serves the update's files");
             LauncherState state;
             state.load(P(settingsFor(base).launcherDir, L"launcher.ini"), nullptr);
             check(state.currentManifest() == sha(a.manifestBytes) && state.highestIssued() == 1794000000, "launcher.ini names the adopted manifest");

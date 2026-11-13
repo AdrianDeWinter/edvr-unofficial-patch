@@ -6,6 +6,7 @@
 #include <mutex>
 
 #include "probe.h"
+#include "update_json.h"
 
 #ifndef EDVR_VERSION_STRING
 #define EDVR_VERSION_STRING "unknown"
@@ -25,31 +26,6 @@ bool findBlob(int id, const void** data, size_t* size) {
     *data = p;
     *size = bytes;
     return true;
-}
-
-int idFor(const std::string& item) {
-    if (item == "d3d11") return IDR_EDVR_D3D11;
-    if (item == "openvr") return IDR_EDVR_OPENVR;
-    if (item == "native_graphics") return IDR_EDVR_D3D11;
-    if (item == "native_runtime") return IDR_EDVR_OPENVR;
-    if (item == "ini") return IDR_EDVR_INI;
-    if (item == "ngx") return IDR_EDVR_NGX;
-    if (item == "xess") return IDR_EDVR_XESS;
-    if (item == "xess_license") return IDR_EDVR_XESS_LICENSE;
-    if (item == "xess_third_party") return IDR_EDVR_XESS_THIRD_PARTY;
-    if (item == "openxr_loader") return IDR_EDVR_OPENXR_LOADER;
-    if (item == "openxr_license") return IDR_EDVR_OPENXR_LICENSE;
-    if (item == "profile") return IDR_EDVR_PROFILE;
-    if (item == "flat_ini") return IDR_EDVR_FLAT_INI;
-    return 0;
-}
-
-// The name an item is kept under when the payload is outside the executable:
-// the two historical aliases fold into the native names.
-std::string canonicalItem(const std::string& item) {
-    if (item == "d3d11") return "native_graphics";
-    if (item == "openvr") return "native_runtime";
-    return idFor(item) != 0 ? item : std::string();
 }
 
 // One payload file, mapped read-only.
@@ -100,38 +76,63 @@ bool mapFile(const std::wstring& path, Mapped* out) {
 // still hold one. A launcher switches payload a handful of times at most.
 std::mutex g_mutex;
 bool g_external = false;
+Manifest g_manifest;                  // the external payload's manifest
 std::string g_version;
-std::map<std::string, Mapped> g_files;
+std::map<std::string, Mapped> g_files;  // by manifest file id
 std::vector<Mapped> g_retired;
 PayloadInfo g_info;
 bool g_infoValid = false;
 
-void retireFiles() {
-    for (auto& entry : g_files) g_retired.push_back(entry.second);
-    g_files.clear();
+// The manifest the executable carries as RCDATA 100: empty when it carries none (the launcher, a test rig) or when
+// the resource is not a manifest this build reads, either of which reads as "no payload".
+bool g_embeddedRead = false;
+Manifest g_embedded;
+
+const Manifest& embeddedManifest() {
+    if (g_embeddedRead) return g_embedded;
+    g_embeddedRead = true;
+    const void* data = nullptr;
+    size_t size = 0;
+    if (!findBlob(IDR_EDVR_MANIFEST, &data, &size)) return g_embedded;
+    JsonValue root;
+    std::string error;
+    Manifest parsed;
+    if (parseJson(std::string(static_cast<const char*>(data), size), &root, &error) &&
+        parseManifest(root, &parsed, &error) == ManifestParse::Ok)
+        g_embedded = std::move(parsed);
+    return g_embedded;
 }
 
-// payloadItem without the lock, for code that already holds it.
-bool lookup(const std::string& item, const void** data, size_t* size) {
+const Manifest& activeManifest() { return g_external ? g_manifest : embeddedManifest(); }
+
+// The bytes of file `index` of the active manifest, without the lock, for code that already holds it.
+bool lookupIndex(size_t index, const void** data, size_t* size) {
+    const Manifest& manifest = activeManifest();
+    if (index >= manifest.files.size()) return false;
     if (g_external) {
-        const std::string name = canonicalItem(item);
-        const auto found = g_files.find(name);
-        if (name.empty() || found == g_files.end()) return false;
+        const auto found = g_files.find(manifest.files[index].id);
+        if (found == g_files.end()) return false;
         *data = found->second.view;
         *size = found->second.size;
         return true;
     }
-    const int id = idFor(item);
-    if (id == 0) return false;
-    return findBlob(id, data, size);
+    return findBlob(IDR_EDVR_FILE_BASE + static_cast<int>(index), data, size);
 }
 
-// The SHA-256 of what lookup() returned for `item`. A file outside the executable that
+bool lookup(const std::string& id, const void** data, size_t* size) {
+    const Manifest& manifest = activeManifest();
+    for (size_t i = 0; i < manifest.files.size(); ++i) {
+        if (manifest.files[i].id == id) return lookupIndex(i, data, size);
+    }
+    return false;
+}
+
+// The SHA-256 of what lookupIndex() returned. A file outside the executable that
 // usePayloadFiles already verified against the caller's hash keeps that hash, so the
 // launcher reads each of its ~200 MB of files once, not once more per payloadInfo.
-std::string shaOfItem(const std::string& item, const void* data, size_t size) {
+std::string shaOfIndex(size_t index, const void* data, size_t size) {
     if (g_external) {
-        const auto found = g_files.find(canonicalItem(item));
+        const auto found = g_files.find(activeManifest().files[index].id);
         if (found != g_files.end() && !found->second.sha.empty()) return found->second.sha;
     }
     return sha256Bytes(data, size);
@@ -140,75 +141,42 @@ std::string shaOfItem(const std::string& item, const void* data, size_t size) {
 PayloadInfo buildInfo() {
     PayloadInfo p;
     p.version = g_external ? g_version : std::string(EDVR_VERSION_STRING);
-
-    const void* data = nullptr;
-    size_t size = 0;
-    if (lookup("d3d11", &data, &size)) {
-        p.haveD3d11 = true;
-        p.d3d11Sha = shaOfItem("d3d11", data, size);
-    }
-    if (lookup("openvr", &data, &size)) {
-        p.haveOpenvr = true;
-        p.openvrSha = shaOfItem("openvr", data, size);
-    }
-    if (lookup("ngx", &data, &size)) {
-        p.haveNgx = true;
-        p.ngxSha = shaOfItem("ngx", data, size);
-    }
-    if (lookup("xess", &data, &size)) {
-        p.haveXess = true;
-        p.xessSha = shaOfItem("xess", data, size);
-    }
-    if (lookup("xess_license", &data, &size)) p.xessLicenseSha = shaOfItem("xess_license", data, size);
-    if (lookup("xess_third_party", &data, &size)) p.xessThirdPartySha = shaOfItem("xess_third_party", data, size);
-    const bool graphicsPresent = lookup("native_graphics", &data, &size);
-    const bool graphics = graphicsPresent && validateNativePayloadBytes(data, size, NativeImageKind::Graphics);
-    p.nativeGraphicsValid = graphics;
-    const bool runtimePresent = lookup("native_runtime", &data, &size);
-    const bool runtime = runtimePresent && validateNativePayloadBytes(data, size, NativeImageKind::Runtime);
-    const bool loaderPresent = lookup("openxr_loader", &data, &size);
-    if (loaderPresent) { p.haveOpenxrLoader = true; p.openxrLoaderSha = shaOfItem("openxr_loader", data, size); }
-    const bool loader = loaderPresent && validateNativePayloadBytes(data, size, NativeImageKind::Loader);
-    const bool license = lookup("openxr_license", &data, &size);
-    p.nativePairValid = graphics && runtime && loader && license;
-    if (license) { p.haveOpenxrLicense = true; p.openxrLicenseSha = shaOfItem("openxr_license", data, size); }
-    // Resource 103 is edvr.ini; resource 111 is edvr-flat.ini. Both are carried, and the
-    // scope the install asks for decides which of them it writes.
-    if (lookup("ini", &data, &size)) {
-        p.haveIni = true;
-        p.iniText.assign(static_cast<const char*>(data), size);
-    }
-    if (lookup("flat_ini", &data, &size)) {
-        p.haveFlatIni = true;
-        p.flatIniText.assign(static_cast<const char*>(data), size);
-    }
-    if (lookup("profile", &data, &size)) {
-        p.descriptorText.assign(static_cast<const char*>(data), size);
-        p.descriptorSha = shaOfItem("profile", data, size);
+    const Manifest& manifest = activeManifest();
+    for (size_t i = 0; i < manifest.files.size(); ++i) {
+        const ManifestFile& file = manifest.files[i];
+        const void* data = nullptr;
+        size_t size = 0;
+        if (!lookupIndex(i, &data, &size)) continue;
+        PayloadFileEntry entry;
+        entry.file = file;
+        entry.data = data;
+        entry.size = size;
+        entry.sha = shaOfIndex(i, data, size);
+        // The executable's own bytes are the ones its manifest was written from; a file that is not is not carried.
+        if (!g_external && entry.sha != file.sha256) continue;
+        // The three native images are checked for what they are. The loader is found by its id: nothing in its manifest entry
+        // says it is the Khronos loader, and the check is of that file's own exports.
+        if (file.existing == ExistingMode::Chain)
+            entry.valid = validateNativePayloadBytes(data, size, NativeImageKind::Graphics);
+        else if (file.existing == ExistingMode::Runtime)
+            entry.valid = validateNativePayloadBytes(data, size, NativeImageKind::Runtime);
+        else if (file.id == "openxr_loader")
+            entry.valid = validateNativePayloadBytes(data, size, NativeImageKind::Loader);
+        p.files.push_back(std::move(entry));
     }
     return p;
 }
 
-}  // namespace
-
-// TEMPORARY, removed in stage 2: schema-2 file id -> the item name idFor knows.
-std::string stage1PayloadItem(const std::string& fileId) {
-    static const struct { const char* id; const char* item; } kBridge[] = {
-        {"graphics", "native_graphics"},   {"runtime", "native_runtime"},
-        {"openxr_loader", "openxr_loader"}, {"openxr_license", "openxr_license"},
-        {"settings_vr", "ini"},            {"settings_flat", "flat_ini"},
-        {"dlss", "ngx"},                   {"xess", "xess"},
-        {"xess_license", "xess_license"},  {"xess_third_party", "xess_third_party"},
-    };
-    for (const auto& entry : kBridge) {
-        if (fileId == entry.id) return entry.item;
-    }
-    return std::string();
+void retireFiles() {
+    for (auto& entry : g_files) g_retired.push_back(entry.second);
+    g_files.clear();
 }
 
-bool payloadItem(const std::string& item, const void** data, size_t* size) {
+}  // namespace
+
+bool payloadItem(const std::string& id, const void** data, size_t* size) {
     std::lock_guard<std::mutex> lock(g_mutex);
-    return lookup(item, data, size);
+    return lookup(id, data, size);
 }
 
 const PayloadInfo& payloadInfo() {
@@ -220,7 +188,7 @@ const PayloadInfo& payloadInfo() {
     return g_info;
 }
 
-bool usePayloadFiles(const std::vector<PayloadFile>& files, const std::string& version, std::string* error) {
+bool usePayloadFiles(const Manifest& manifest, const std::vector<PayloadFile>& files, std::string* error) {
     auto refuse = [&](const std::string& text) {
         if (error) *error = text;
         return false;
@@ -231,33 +199,35 @@ bool usePayloadFiles(const std::vector<PayloadFile>& files, const std::string& v
         fresh.clear();
     };
     for (const PayloadFile& file : files) {
-        const std::string name = canonicalItem(file.item);
-        if (name.empty()) {
+        bool listed = false;
+        for (const ManifestFile& f : manifest.files) listed |= f.id == file.id;
+        if (!listed) {
             releaseFresh();
-            return refuse("the payload names an unknown item:" + file.item);
+            return refuse("the payload names an unknown file: " + file.id);
         }
-        if (fresh.find(name) != fresh.end()) {
+        if (fresh.find(file.id) != fresh.end()) {
             releaseFresh();
-            return refuse("the payload lists the item twice: " + file.item);
+            return refuse("the payload lists the file twice: " + file.id);
         }
         Mapped mapped;
         if (!mapFile(file.path, &mapped)) {
             releaseFresh();
-            return refuse("the payload file for " + file.item + " cannot be opened");
+            return refuse("the payload file for " + file.id + " cannot be opened");
         }
         if (!file.sha256.empty() && sha256Bytes(mapped.view, mapped.size) != file.sha256) {
             unmap(&mapped);
             releaseFresh();
-            return refuse("the payload file for " + file.item + " does not match its hash");
+            return refuse("the payload file for " + file.id + " does not match its hash");
         }
         mapped.sha = file.sha256;  // empty when unchecked; non-empty only after the comparison above
-        fresh[name] = mapped;
+        fresh[file.id] = mapped;
     }
     std::lock_guard<std::mutex> lock(g_mutex);
     retireFiles();
     g_files = std::move(fresh);
     g_external = true;
-    g_version = version;
+    g_manifest = manifest;
+    g_version = manifest.build;
     g_infoValid = false;
     return true;
 }
@@ -266,6 +236,7 @@ void resetPayloadFiles() {
     std::lock_guard<std::mutex> lock(g_mutex);
     retireFiles();
     g_external = false;
+    g_manifest = Manifest();
     g_version.clear();
     g_infoValid = false;
 }

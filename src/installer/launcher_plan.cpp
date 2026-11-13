@@ -124,7 +124,7 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
         Manifest manifest;
         std::vector<PayloadFile> files;
         if (!updater.loadManifestFile(joinPath(paths.manifestsDir, widenUtf8(file.manifestSha)) + L".json", &manifest, &files, &error) ||
-            !usePayloadFiles(files, manifest.build, &error))
+            !usePayloadFiles(manifest, files, &error))
             return failed("the downloaded files cannot be used: " + error);
     } else if (file.action != "uninstall") {
         return failed("the plan names no payload to install from");
