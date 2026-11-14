@@ -130,7 +130,7 @@ void testKey() {
     check(uiQualityParse("100", &ok, &alias) == 1.0f && ok && !alias, "100 is a target of 1.0");
     check(uiQualityParse("125", &ok, &alias) == 1.25f && ok && !alias, "125 is a target of 1.25");
     check(uiQualityParse("150", &ok, &alias) == 1.5f && ok && !alias, "150 is a target of 1.5");
-    check(uiQualityParse("200", &ok, &alias) == 2.0f && ok && !alias, "200 is a target of 2.0");
+    check(uiQualityParse("200", &ok, &alias) == 1.5f && ok && !alias, "200 is clamped to 150, a target of 1.5");
     // The first spellings, read for one release, each naming its new one.
     check(uiQualityParse("1.0", &ok, &alias) == 1.0f && ok && alias && std::strcmp(alias, "100") == 0,
           "1.0 is read as 100, and says so");
@@ -140,8 +140,7 @@ void testKey() {
           "1.25 is read as 125, and says so");
     check(uiQualityParse("125", &ok) == 1.25f && ok, "the alias out-parameter is optional");
     // Anything else is off, and refused out loud.
-    const char* garbage[] = {"100%", "125%", "150%", "200%", "100.0", "1.00", "1.5", "2", "2.0", "Off", "on", "175", "250", "0", "", " 125", "150 "};
-    bool refused = true;
+    const char* garbage[] = {"100%", "125%", "150%", "200%", "100.0", "1.00", "1.5", "2", "2.0", "Off", "on", "175", "250", "0", "", " 125", "150 "};    bool refused = true;
     for (const char* g : garbage) {
         alias = "unset";
         refused = refused && uiQualityParse(g, &ok, &alias) == 0.0f && !ok && !alias;
@@ -150,9 +149,9 @@ void testKey() {
     check(uiQualityParse(nullptr, &ok) == 0.0f && !ok, "no text is off");
     // The log's and the menu's spelling.
     check(std::strcmp(uiQualityLabel(1.0f), "100%") == 0 && std::strcmp(uiQualityLabel(1.25f), "125%") == 0 &&
-              std::strcmp(uiQualityLabel(1.5f), "150%") == 0 && std::strcmp(uiQualityLabel(2.0f), "200%") == 0 &&
+              std::strcmp(uiQualityLabel(1.5f), "150%") == 0 && std::strcmp(uiQualityLabel(2.0f), "off") == 0 &&
               std::strcmp(uiQualityLabel(0.0f), "off") == 0,
-          "the label: 100%, 125%, 150%, 200%, off");
+          "the label: 100%, 125%, 150%, off; nothing above 150");
 }
 
 void testSize() {

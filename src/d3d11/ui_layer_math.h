@@ -53,9 +53,11 @@ namespace edvr {
 
 // ---------------------------------------------------------------- the key --
 
-// "off" | "100" | "125" | "150" | "200" -> 0 (off) | 1.0 | 1.25 | 1.5 | 2.0: the target HMD Quality, as
+// "off" | "100" | "125" | "150" | "200" -> 0 (off) | 1.0 | 1.25 | 1.5 | 1.5: the target HMD Quality, as
 // a percentage of HMD Quality 1.0 in the file (a plain number, like every
-// numeric key) and "100%" ... "200%" in the F8 menu. Exact text, the way the
+// numeric key) and "100%" ... "150%" in the F8 menu. "200" is clamped to 150
+// (the ceiling since 2026-11-14): a saved 200 reads as 150, for VR and flat alike.
+// Exact text, the way the
 // other choice keys read: "100.0" is not "100". The first
 // spellings -- "1.0", "1" and "1.25" -- are read for one release as 100 and
 // 125, with *alias set to the new spelling for the log's one-time note.
@@ -72,7 +74,7 @@ inline float uiQualityParse(const char* text, bool* recognized, const char** ali
     if (std::strcmp(text, "100") == 0) return 1.0f;
     if (std::strcmp(text, "125") == 0) return 1.25f;
     if (std::strcmp(text, "150") == 0) return 1.5f;
-    if (std::strcmp(text, "200") == 0) return 2.0f;
+    if (std::strcmp(text, "200") == 0) return 1.5f;  // clamped to the 150% ceiling
     if (std::strcmp(text, "1.0") == 0 || std::strcmp(text, "1") == 0) {
         if (alias) *alias = "100";
         return 1.0f;
@@ -85,12 +87,11 @@ inline float uiQualityParse(const char* text, bool* recognized, const char** ali
     return 0.0f;
 }
 
-// The target as the menu and the log say it: "100%", "125%", "150%", "200%", else "off".
+// The target as the menu and the log say it: "100%", "125%", "150%", else "off".
 inline const char* uiQualityLabel(float target) {
     if (target == 1.0f) return "100%";
     if (target == 1.25f) return "125%";
     if (target == 1.5f) return "150%";
-    if (target == 2.0f) return "200%";
     return "off";
 }
 
