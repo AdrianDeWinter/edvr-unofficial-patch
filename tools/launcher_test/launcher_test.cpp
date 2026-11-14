@@ -972,6 +972,17 @@ void testState() {
     check(direct.load(path, &err) && direct.directLaunch() && direct.channel() == "rc", "on survives a reload, beside the other keys");
     direct.setDirectLaunch(false);
     check(!direct.directLaunch() && direct.get("direct_launch") == "off", "setDirectLaunch(false) writes off");
+
+    // close_after_start: off unless the file says exactly "on", and it survives a reload beside direct_launch.
+    check(!direct.closeAfterStart(), "close-after-start is off when the key is missing");
+    direct.setCloseAfterStart(true);
+    check(direct.closeAfterStart() && direct.get("close_after_start") == "on", "setCloseAfterStart(true) writes on");
+    check(direct.save(&err), "and saves: " + err);
+    LauncherState closing;
+    check(closing.load(path, &err) && closing.closeAfterStart() && !closing.directLaunch(),
+          "on survives a reload, and does not change direct_launch");
+    closing.setCloseAfterStart(false);
+    check(!closing.closeAfterStart() && closing.get("close_after_start") == "off", "setCloseAfterStart(false) writes off");
     int notOn = 0;
     for (const char* value : {"", "off", "ON", "On", "yes", "true", "1", " on", "on "}) {
         direct.set("direct_launch", value);

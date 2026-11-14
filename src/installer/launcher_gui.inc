@@ -18,13 +18,15 @@ enum : int {
     kIdPlayVr = 1083,
     kIdPlayFlat = 1084,
     kIdDirect = 1085,
+    kIdCloseAfter = 1086,
 };
 
 // Posted by the session's worker threads: lParam is a heap std::function<void()> to run here.
 const UINT kMsgLauncherJob = WM_APP + 2;
 
-// The band sits between the report card (ends at 650) and the tip line.
-const RECT kBandCard{kMargin, 658, kClientWidth - kMargin, 750};
+// The band sits between the report card (ends at 650) and the bottom of the window. Its third row, under
+// the Play row, holds the close-after-start checkbox.
+const RECT kBandCard{kMargin, 658, kClientWidth - kMargin, 776};
 
 struct LauncherGui {
     HWND update = nullptr;
@@ -33,6 +35,7 @@ struct LauncherGui {
     HWND playVr = nullptr;
     HWND playFlat = nullptr;
     HWND direct = nullptr;           // "Start Elite directly", for a Steam install
+    HWND closeAfter = nullptr;       // "Close the launcher once Elite has started", saved in launcher.ini
     std::unique_ptr<LauncherSession> session;
     std::wstring playCaption;        // beside or under the Play buttons, for the folder shown
     int directLeft = 0;              // where the "Start Elite directly" checkbox starts, in design units
@@ -154,6 +157,11 @@ void updateLauncherControls() {
     if (ui::checkboxChecked(lg.direct) != lg.session->directLaunch()) ui::toggleCheckbox(lg.direct);
     lg.directLeft = kMargin + kCardPad + (showPair ? 262 : 134);
     MoveWindow(lg.direct, dp(lg.directLeft), dp(696), dp(kClientWidth - kMargin - kCardPad - lg.directLeft), dp(22), TRUE);
+
+    // Close-after-start: its own row, under the Play row, always offered on the install screen.
+    ShowWindow(lg.closeAfter, onScreen ? SW_SHOW : SW_HIDE);
+    EnableWindow(lg.closeAfter, !busy);
+    if (ui::checkboxChecked(lg.closeAfter) != lg.session->closeAfterStartSetting()) ui::toggleCheckbox(lg.closeAfter);
 }
 
 void launcherRefresh() {
@@ -170,13 +178,15 @@ void launcherRefresh() {
 void layoutLauncherControls() {
     if (!lg.update) return;
     // These are not in `places`, so a change of scale does not reach their font on its own.
-    for (HWND control : {lg.update, lg.rc, lg.play, lg.playVr, lg.playFlat, lg.direct})
+    for (HWND control : {lg.update, lg.rc, lg.play, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter})
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().body), TRUE);
     MoveWindow(lg.update, dp(574), dp(666), dp(102), dp(26), TRUE);
     MoveWindow(lg.rc, dp(336), dp(666), dp(226), dp(26), TRUE);
     MoveWindow(lg.playVr, dp(kMargin + kCardPad), dp(700), dp(118), dp(34), TRUE);
     MoveWindow(lg.playFlat, dp(kMargin + kCardPad + 126), dp(700), dp(118), dp(34), TRUE);
     MoveWindow(lg.play, dp(kMargin + kCardPad), dp(700), dp(124), dp(34), TRUE);
+    // Stops short of the Discord link, which sits at the right of the same rows (kTipTop).
+    MoveWindow(lg.closeAfter, dp(kMargin + kCardPad), dp(752), dp(538), dp(22), TRUE);
     updateLauncherControls();
 }
 
@@ -212,7 +222,8 @@ void createLauncherControls(HWND window) {
     lg.playVr = ui::makeButton(window, L"Play VR", kIdPlayVr, ui::ButtonStyle::Primary, f.body);
     lg.playFlat = ui::makeButton(window, L"Play flat", kIdPlayFlat, ui::ButtonStyle::Secondary, f.body);
     lg.direct = ui::makeCheckbox(window, L"Start Elite directly (no Frontier launcher)", kIdDirect, false, f.body);
-    for (HWND control : {lg.update, lg.rc, lg.play, lg.playVr, lg.playFlat, lg.direct}) ShowWindow(control, SW_HIDE);
+    lg.closeAfter = ui::makeCheckbox(window, L"Close the launcher once Elite has started", kIdCloseAfter, false, f.body);
+    for (HWND control : {lg.update, lg.rc, lg.play, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter}) ShowWindow(control, SW_HIDE);
 }
 
 // The window is up: load the payload, ask GitHub, and say what start-up had to say.
@@ -221,6 +232,7 @@ void launcherBegin() {
     env.roots = launcherRootsFor(g.args);
     env.payloadDir = g.args.payloadDir;
     env.channelOverride = g.args.channel;
+    env.closeAfterStartArg = g.args.closeAfterStart;
     env.updatedFlag = g.args.updated;
     wchar_t self[MAX_PATH * 2]{};
     const DWORD n = GetModuleFileNameW(nullptr, self, static_cast<DWORD>(sizeof(self) / sizeof(self[0])));
@@ -311,6 +323,10 @@ bool launcherCommand(int id, int code) {
     switch (id) {
         case kIdUpdate:
             lg.session->beginUpdate();
+            return true;
+        case kIdCloseAfter:
+            ui::toggleCheckbox(lg.closeAfter);
+            lg.session->setCloseAfterStart(ui::checkboxChecked(lg.closeAfter));
             return true;
         case kIdRc:
             ui::toggleCheckbox(lg.rc);
