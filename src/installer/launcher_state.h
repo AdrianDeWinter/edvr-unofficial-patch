@@ -6,6 +6,8 @@
 //   direct_launch      on: a Steam install, or one from Frontier's own store, is started by the
 //                      launcher itself, without Frontier's launcher. Missing, or anything but "on",
 //                      is off. Turning it off also deletes frontier-login.dat (frontier_login.h).
+//   close_after_start  on: the launcher closes itself once Elite has started, instead of staying
+//                      open until it exits. Missing, or anything but "on", is off.
 //   mode.<16 hex>      the play mode remembered for one install folder: the first
 //                      16 hex characters of the SHA-256 of the folder's path,
 //                      lower-cased, with backslashes and no trailing separator
@@ -51,6 +53,10 @@ public:
     // True only when the file says "on". Off is the default, and writing it removes no line: it says "off".
     bool directLaunch() const;
     void setDirectLaunch(bool on);
+
+    // True only when the file says "on". Off is the default.
+    bool closeAfterStart() const;
+    void setCloseAfterStart(bool on);
 
     static std::string modeKey(const std::wstring& installFolder);
     std::string mode(const std::wstring& installFolder) const;

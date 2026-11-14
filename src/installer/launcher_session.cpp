@@ -233,7 +233,33 @@ void LauncherSession::finishSelfUpdate() {
 
 LauncherSession::LauncherSession(SessionEnv env) : env_(std::move(env)) {
     LauncherState state;
-    if (state.load(launcherIniPath(env_.roots), nullptr)) directLaunch_ = state.directLaunch();
+    if (state.load(launcherIniPath(env_.roots), nullptr)) {
+        directLaunch_ = state.directLaunch();
+        closeAfterStart_ = state.closeAfterStart();
+    }
+}
+
+void LauncherSession::setCloseAfterStart(bool on) {
+    if (on == closeAfterStart_) return;
+    closeAfterStart_ = on;
+    LauncherState state;
+    std::string error;
+    if (state.load(launcherIniPath(env_.roots), &error)) {
+        state.setCloseAfterStart(on);
+        createDirectories(env_.roots.launcherDir());
+        state.save(&error);
+    }
+    changed();
+}
+
+void LauncherSession::gameIsRunning() {
+    gameStarted_ = true;
+    // Close-after-start leaves the game to run on its own, so the window goes; otherwise it steps aside.
+    if (closeAfterStart()) {
+        if (env_.closeWindow) env_.closeWindow();
+    } else if (env_.windowAside) {
+        env_.windowAside(true);
+    }
 }
 
 bool LauncherSession::setDirectLaunch(bool on, const std::function<bool()>& confirm) {
@@ -295,6 +321,7 @@ void LauncherSession::startRouteAndWatch(const std::wstring& source, const std::
     // mode, so only its mode is remembered.
     rememberPlay(gameDir, route.carriesMode ? (vr ? "vr" : "flat") : nullptr);
     playing_ = true;
+    gameStarted_ = false;
     playLine_ = startLine;
     changed();
     spawn([this, names, timing]() {
@@ -304,7 +331,7 @@ void LauncherSession::startRouteAndWatch(const std::wstring& source, const std::
                     playLine_ = "Waiting for Elite to start; if EDLaunch is updating the game, let it finish.";
                 } else if (e == WatchEvent::GameSeen) {
                     playLine_ = "Elite is running.";
-                    if (env_.windowAside) env_.windowAside(true);
+                    gameIsRunning();
                 } else {
                     playLine_ = "Elite has closed.";
                 }
@@ -370,6 +397,7 @@ void LauncherSession::beginDirectPlay(const std::wstring& source, const std::wst
                                       const WatchNames& names, const WatchTiming& timing) {
     rememberPlay(gameDir, vr ? "vr" : "flat");
     playing_ = true;
+    gameStarted_ = false;
     playLine_ = "Signing in to Frontier...";
     changed();
     const std::string base = env_.frontierBase.empty() ? std::string(kFrontierApiBase) : env_.frontierBase;
@@ -458,7 +486,7 @@ void LauncherSession::beginDirectPlay(const std::wstring& source, const std::wst
         }
         post([this]() {
             playLine_ = "Elite is running.";
-            if (env_.windowAside) env_.windowAside(true);
+            gameIsRunning();
             changed();
         });
         while (WaitForSingleObject(process, 200) == WAIT_TIMEOUT) {

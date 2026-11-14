@@ -54,6 +54,7 @@ struct SessionEnv {
     LauncherRoots roots;
     std::wstring payloadDir;       // --payload, or empty
     std::string  channelOverride;  // --channel for this run, or empty to read launcher.ini
+    bool         closeAfterStartArg = false;  // --close-after-start for this run; the saved setting is read too
     bool         updatedFlag = false;  // started by a self-update: carry on into the update
     std::wstring selfExe;          // the running exe: hashed for the check, replaced by self-update
     const char* const* keys = nullptr;  // null means the release keys
@@ -72,6 +73,8 @@ struct SessionEnv {
     // The game started (true) or is over (false), on every route. The window is minimised while the game
     // runs and comes back when it exits, and stays open for another Play.
     std::function<void(bool aside)> windowAside;
+    // Close-after-start (the setting or --close-after-start): when the game has started, closeWindow is
+    // called in place of windowAside(true). The window posts WM_CLOSE; headless play ends its loop.
 
     // False where direct launch is not offered (the launcher under Wine on Linux): directLaunch() is then false
     // even if launcher.ini says direct_launch=on, Play never takes the direct path, and the window hides the
@@ -137,6 +140,15 @@ public:
     bool directLaunchOffered() const { return env_.directLaunchOffered; }
     bool setDirectLaunch(bool on, const std::function<bool()>& confirm);
 
+    // Whether the launcher closes itself once the game has started: the saved setting, or --close-after-start.
+    bool closeAfterStart() const { return closeAfterStart_ || env_.closeAfterStartArg; }
+    // The saved setting alone, which is what the window's checkbox shows.
+    bool closeAfterStartSetting() const { return closeAfterStart_; }
+    // Saves the setting to launcher.ini. The window's checkbox; --close-after-start does not write it.
+    void setCloseAfterStart(bool on);
+    // True once the game has been seen running (or the direct start gave a process), for the run's exit code.
+    bool gameStarted() const { return gameStarted_; }
+
     // The elevated apply, waited for on a worker. `done` runs on the window's thread.
     void beginElevatedApply(const PlanFile& plan, const ElevatedRunner& runner,
                             std::function<void(const ElevatedResult&)> done);
@@ -157,6 +169,8 @@ private:
     void spawn(std::function<void()> work) { workers_.emplace_back(std::move(work)); }
     // Writes last_install, and the install's mode unless `mode` is null.
     void rememberPlay(const std::wstring& gameDir, const char* mode);
+    // The game is running, on the window's thread: the window steps aside, or closes when close-after-start is on.
+    void gameIsRunning();
     void startRouteAndWatch(const std::wstring& source, const std::wstring& gameDir, bool vr, bool elevated,
                             const RouteOps& ops, const WatchNames& names, const WatchTiming& timing,
                             const std::string& startLine);
@@ -181,6 +195,8 @@ private:
     bool autoResumed_ = false;  // the update that followed a self-update's restart was started
     bool playing_ = false;
     bool directLaunch_ = false;
+    bool closeAfterStart_ = false;
+    bool gameStarted_ = false;
     bool applying_ = false;
     std::string playLine_;
 };

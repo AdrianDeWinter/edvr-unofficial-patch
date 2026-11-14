@@ -29,6 +29,9 @@ bool launcherPreparePayload(const AppArgs& args, std::string* note);
 // one message box at the end. Returns the exit code.
 bool launcherHasCommand(const AppArgs& args);
 int runLauncherCommand(const AppArgs& args, bool haveConsole);
+// --headless: starts Elite from args.dir (default: the folder this exe is in) through Play's route, with no window. 0 when Elite started, 1 when it
+// did not, 2 for a bad command line. Waits for Elite to exit, or for the start with --close-after-start.
+int runHeadless(const AppArgs& args, bool haveConsole);
 
 // --direct-dry-run over `env` (its http and seams): the lines to print and the exit code, 0 for a plan, 3
 // for a fallback and 2 for a command line that is not usable. Starts nothing; every token, the Steam ticket

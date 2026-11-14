@@ -91,6 +91,16 @@ std::string usageText() {
            "                       taken for Frontier's own store and uses only the login the window stored,\r\n"
            "                       never asking for one.\r\n"
            "  --licenses           print the licence of the third-party code the launcher is ported from.\r\n"
+           "  --close-after-start  close the launcher once Elite has started, instead of staying open\r\n"
+           "                       until it exits. Also a checkbox in the window, which this flag does not change.\r\n"
+           "  --headless [--dir <game folder>] --vr|--novr\r\n"
+           "                       start Elite with no window, through the same route Play uses, and print\r\n"
+           "                       its progress. Without --dir, the folder this exe is in is the game folder,\r\n"
+           "                       so the launcher can be copied into the game's product folder. Then it\r\n"
+           "                       prints its progress, waits for Elite to exit, or with --close-after-start\r\n"
+           "                       returns once Elite has started. Exit 0 when Elite started, 1 when it did not,\r\n"
+           "                       2 for a bad command line. Never asks for a login: a Frontier-store install\r\n"
+           "                       uses the stored login, and fails with a line saying so when there is none.\r\n"
 #endif
            "\r\n"
            "  A copy of your settings files (and the install record) is kept outside the game\r\n"
@@ -181,6 +191,10 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             a.novr = true;
         else if (arg == L"--licenses")
             a.licenses = true;
+        else if (arg == L"--close-after-start")
+            a.closeAfterStart = true;
+        else if (arg == L"--headless")
+            a.headless = true;
 #endif
         else if (arg == L"--help" || arg == L"-h" || arg == L"/?")
             a.help = true;

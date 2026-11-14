@@ -47,6 +47,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     // The elevated copy has one job and shows nothing; the update and unregister commands print
     // to a console when there is one.
     if (!args.badArg && !args.planFile.empty()) return runApplyPlanFile(args);
+    if (!args.badArg && !args.help && args.headless) return runHeadless(args, attachToConsole());
     if (!args.badArg && !args.help && launcherHasCommand(args)) return runLauncherCommand(args, attachToConsole());
 #endif
 

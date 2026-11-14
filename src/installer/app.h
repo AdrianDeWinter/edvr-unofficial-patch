@@ -47,6 +47,8 @@ struct AppArgs {
     bool         vr = false;           // --vr, for --direct-dry-run
     bool         novr = false;         // --novr, for --direct-dry-run
     bool         licenses = false;     // --licenses: print the third-party licence the launcher carries
+    bool         closeAfterStart = false;  // --close-after-start: close once Elite has started, for this run
+    bool         headless = false;     // --headless: start Elite from --dir with no window (needs --vr or --novr)
 #endif
 };
 

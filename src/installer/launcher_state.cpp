@@ -112,6 +112,10 @@ bool LauncherState::directLaunch() const { return get("direct_launch") == "on"; 
 
 void LauncherState::setDirectLaunch(bool on) { set("direct_launch", on ? "on" : "off"); }
 
+bool LauncherState::closeAfterStart() const { return get("close_after_start") == "on"; }
+
+void LauncherState::setCloseAfterStart(bool on) { set("close_after_start", on ? "on" : "off"); }
+
 std::string LauncherState::modeKey(const std::wstring& installFolder) {
     std::wstring folder = installFolder;
     for (wchar_t& c : folder) {

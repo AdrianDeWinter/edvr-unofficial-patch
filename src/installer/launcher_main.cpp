@@ -5,15 +5,20 @@
 #include <windows.h>
 #include <objbase.h>
 
+#include <condition_variable>
 #include <cwctype>
+#include <deque>
 #include <functional>
+#include <mutex>
 #include <vector>
 
+#include "detect.h"
 #include "direct_launch.h"
 #include "frontier_login.h"
 #include "launch_route.h"
 #include "launcher_plan.h"
 #include "launcher_register.h"
+#include "launcher_session.h"
 #include "launcher_state.h"
 #include "logbundle.h"
 #include "mirror.h"
@@ -233,7 +238,112 @@ int runUnregisterCommand(const AppArgs& args, Output& out) {
     return 0;
 }
 
+// --headless: Play with no window. The session runs as the window runs it: its workers post their
+// jobs to a queue, and the jobs run here, on this thread, so the session's one-thread rule holds.
+class HeadlessQueue {
+public:
+    void push(std::function<void()> job) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            jobs_.push_back(std::move(job));
+        }
+        ready_.notify_one();
+    }
+
+    std::function<void()> pop() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        ready_.wait(lock, [this]() { return !jobs_.empty(); });
+        std::function<void()> job = std::move(jobs_.front());
+        jobs_.pop_front();
+        return job;
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable ready_;
+    std::deque<std::function<void()>> jobs_;
+};
+
+// The source Play would give this folder: a Steam install under steamapps\common, and any other folder
+// taken for Frontier's own store, the rule --direct-dry-run uses.
+std::wstring headlessSource(const std::wstring& dir) {
+    std::wstring lowered = dir;
+    for (wchar_t& c : lowered) c = c == L'/' ? L'\\' : static_cast<wchar_t>(towlower(c));
+    return lowered.find(L"\\steamapps\\") == std::wstring::npos ? L"Frontier launcher" : L"Steam";
+}
+
+int headlessPlay(const AppArgs& args, Output& out) {
+    if (args.vr == args.novr) {
+        out.line("--headless needs exactly one of --vr and --novr. --dir names the game's product folder; without it, the folder this exe is in is used.");
+        return 2;
+    }
+    if (isElevated()) {
+        out.line(elevatedRefusal());
+        return 2;
+    }
+    // Without --dir, the folder this exe is in: a player can copy the launcher into the game folder and run it there.
+    std::wstring dir = args.dir;
+    if (dir.empty()) {
+        const std::wstring self = selfPath();
+        const size_t slash = self.find_last_of(L'\\');
+        dir = slash == std::wstring::npos ? std::wstring() : self.substr(0, slash);
+    }
+    GameInstall game;
+    if (dir.empty() || !describeDir(dir, L"Folder you chose", &game)) {
+        out.line("No EliteDangerous64.exe under " + narrowUtf8(dir.empty() ? args.dir : dir) +
+                 ". Put the launcher in the game's product folder, or pass --dir with it.");
+        return 2;
+    }
+    std::vector<unsigned long> running;
+    if (!pidsNamed(L"EliteDangerous64.exe", &running)) {
+        out.line("Windows would not list the running programs, so the launcher cannot tell whether Elite is already running. Nothing was started.");
+        return 1;
+    }
+    if (!running.empty()) {
+        out.line("Elite is already running. Nothing was started.");
+        return 1;
+    }
+
+    // Declared before the session, so the workers can post into it until the session is gone.
+    HeadlessQueue queue;
+    bool closeRequested = false;
+    SessionEnv env;
+    env.roots = launcherRootsFor(args);
+    env.closeAfterStartArg = args.closeAfterStart;
+    env.post = [&queue](std::function<void()> job) { queue.push(std::move(job)); };
+    // The window's close: here it ends the wait. The lines are printed after each job, not from a callback.
+    env.closeWindow = [&closeRequested]() { closeRequested = true; };
+    // No askLogin or askCode: a headless start never asks. A Frontier-store direct launch without a stored
+    // login stops with a line saying so, and the install's own route is not taken by surprise.
+    // No start(): there is no payload to load and no update to check here.
+    LauncherSession session(env);
+
+    std::string shown;
+    auto show = [&]() {
+        if (session.playLine() == shown) return;
+        shown = session.playLine();
+        if (!shown.empty()) out.line(shown);
+    };
+    session.beginPlay(headlessSource(dir), dir, args.vr, false, realRouteOps(), WatchNames(), WatchTiming());
+    show();
+    bool finished = closeRequested || !session.playing();
+    while (!finished) {
+        queue.pop()();
+        show();
+        finished = closeRequested || !session.playing();
+    }
+    // Elite started (and is either still running, or the wait was ended by --close-after-start): 0. Otherwise 1.
+    return session.gameStarted() ? 0 : 1;
+}
+
 }  // namespace
+
+int runHeadless(const AppArgs& args, bool haveConsole) {
+    Output out(haveConsole);
+    const int code = headlessPlay(args, out);
+    out.finish();
+    return code;
+}
 
 int directDryRunLines(const AppArgs& args, DirectEnv env, std::vector<std::string>* lines) {
     if (args.dir.empty() || args.vr == args.novr) {
