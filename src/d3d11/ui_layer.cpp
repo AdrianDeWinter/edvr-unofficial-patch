@@ -4536,6 +4536,14 @@ void uiLayerConfigure(Config& cfg) {
                         "ui_quality = %s -- the old one is read for this release only.",
                         text.c_str(), newSpelling, uiQualityLabel(target), newSpelling);
     }
+    if (text == "200") {
+        // 200 is clamped to the 150% ceiling (uiQualityParse); say so once, since the menu will not show 200.
+        static bool clampNoted = false;
+        if (!clampNoted) {
+            clampNoted = true;
+            Log::get().note("ui quality: fix.ui_quality = 200 is above the 150%% ceiling and is read as 150%%.");
+        }
+    }
     const bool temporalVr = temporalModeEnabledFor(cfg.getString("fix.temporal_aa", "off"), false);
     // VR's half of the HUD edge smoothing (fix.hud_antialiasing, off by default, live; 2026-11-03): read on every configure and used by uiLayerComposite only while the
     // profile is not flat (the flat adapter reads the key itself, a frame at a time). The layer's composite runs only while fix.ui_quality is not off and a temporal
