@@ -251,7 +251,7 @@ feature in that document names its setting.
 
 ## Game updates
 
-ED-UP is made for one Elite build at a time; 0.22.0 is made for build 334925.
+ED-UP is made for one Elite build at a time; 0.22.1 is made for build 334925.
 After a game update the game still starts with ED-UP. Each fix that hooks the
 game's code looks for its target by the shape of the code, and one that cannot
 find it stands down while the rest carry on, with the log naming each. Native
