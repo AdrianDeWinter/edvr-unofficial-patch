@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ED Unofficial Patch</title>
+<meta name="description" content="Download the ED-UP launcher: DLSS, FSR and XeSS upscaling and fixes for Elite Dangerous, in VR and flat.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#05070d">
+<meta property="og:type" content="website">
+<meta property="og:title" content="ED Unofficial Patch">
+<meta property="og:description" content="DLSS, FSR and XeSS upscaling and fixes for Elite Dangerous, in VR and flat. Free and open source.">
+<meta property="og:url" content="https://characterecho-sean.github.io/ed-unofficial-patch/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2305070d'/%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%23ff7a1a' stroke-width='2' opacity='.45'/%3E%3Cpath d='M10 19l6-6 6 6' fill='none' stroke='%23ff8f3a' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #05070d;
+  --ink: #e9edf5;
+  --ink-2: #b4bccb;
+  --muted: #7d879a;
+  --line: rgba(255, 255, 255, 0.09);
+  --glass: rgba(14, 18, 28, 0.62);
+  --accent: #ff7a1a;
+  --accent-hi: #ffa04d;
+  --accent-lo: #e2560a;
+  --cool: #6cc4ff;
+  --radius: 14px;
+  --sans: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  position: relative;
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 17px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+a { color: inherit; }
+
+/* The sky: nebula haze, a starfield and a planet's lit limb along the bottom. */
+.sky {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(60vmax 40vmax at 88% -8%, rgba(255, 122, 26, 0.16), transparent 70%),
+    radial-gradient(55vmax 45vmax at -10% 18%, rgba(70, 120, 255, 0.13), transparent 70%),
+    var(--bg);
+}
+
+#stars { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* The planet scrolls with the page; its limb sits just under the download panel
+   (--horizon, set by the script from the hero's bottom edge). */
+.horizon {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.planet {
+  --r: 120vmax;
+  position: absolute;
+  left: 50%;
+  top: calc(var(--horizon, 83vh) + 20px);
+  width: calc(var(--r) * 2);
+  height: calc(var(--r) * 2);
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 0%, #1b120c 0%, #0a0a10 7%, #05060a 30%);
+  box-shadow:
+    0 0 90px 6px rgba(255, 112, 30, 0.22),
+    0 0 260px 30px rgba(255, 90, 20, 0.10),
+    inset 0 2px 0 rgba(255, 196, 140, 0.70),
+    inset 0 18px 50px rgba(255, 120, 40, 0.24);
+}
+
+.wrap {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* Top bar */
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 0;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.brand svg { width: 30px; height: 30px; flex: none; }
+
+.brand span b { color: var(--accent-hi); font-weight: 650; }
+
+.nav { display: flex; gap: 6px; }
+
+.nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: 15px;
+  text-decoration: none;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.nav a:hover { color: var(--ink); background: rgba(255, 255, 255, 0.06); }
+
+.nav svg { width: 17px; height: 17px; }
+
+/* Hero */
+.hero { padding: clamp(40px, 10vh, 110px) 0 40px; max-width: 860px; }
+
+.eyebrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 0 0 22px;
+  font: 500 12.5px/1 var(--mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px 7px 10px;
+  border: 1px solid rgba(255, 122, 26, 0.35);
+  border-radius: 999px;
+  background: rgba(255, 122, 26, 0.08);
+  color: var(--accent-hi);
+  letter-spacing: 0.08em;
+  text-transform: none;
+}
+
+.chip i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(255, 122, 26, 0.6);
+  animation: ping 2.4s ease-out infinite;
+}
+
+@keyframes ping {
+  0% { box-shadow: 0 0 0 0 rgba(255, 122, 26, 0.55); }
+  70%, 100% { box-shadow: 0 0 0 9px rgba(255, 122, 26, 0); }
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2.35rem, 6.2vw, 4.4rem);
+  line-height: 1.04;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+h1 .glow {
+  background: linear-gradient(100deg, #ffd2a8 0%, var(--accent-hi) 35%, var(--accent) 70%, #ff5a1f 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@media (min-width: 480px) { h1 .glow { white-space: nowrap; } }
+
+.lede {
+  margin: 24px 0 0;
+  max-width: 660px;
+  font-size: clamp(1.05rem, 1.6vw, 1.2rem);
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+/* The download panel, framed with HUD corner brackets. */
+.panel {
+  position: relative;
+  margin-top: 40px;
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  backdrop-filter: blur(14px) saturate(130%);
+  max-width: 760px;
+}
+
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: var(--radius);
+  pointer-events: none;
+  --c: var(--accent);
+  --l: 22px;
+  background:
+    linear-gradient(var(--c), var(--c)) top left / var(--l) 2px no-repeat,
+    linear-gradient(var(--c), var(--c)) top left / 2px var(--l) no-repeat,
+    linear-gradient(var(--c), var(--c)) top right / var(--l) 2px no-repeat,
+    linear-gradient(var(--c), var(--c)) top right / 2px var(--l) no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom left / var(--l) 2px no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom left / 2px var(--l) no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom right / var(--l) 2px no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom right / 2px var(--l) no-repeat;
+  opacity: 0.85;
+}
+
+.actions { display: flex; flex-wrap: wrap; gap: 14px; }
+
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 64px;
+  padding: 12px 24px 12px 20px;
+  border-radius: 11px;
+  text-decoration: none;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
+}
+
+.btn svg { flex: none; }
+
+.btn-text { display: flex; flex-direction: column; line-height: 1.2; }
+
+.btn-text strong { font-size: 17.5px; font-weight: 650; letter-spacing: 0.005em; }
+
+.btn-text small { margin-top: 4px; font: 500 12.5px/1.2 var(--mono); letter-spacing: 0.02em; }
+
+.btn.primary {
+  overflow: hidden;
+  color: #1a0b02;
+  background: linear-gradient(180deg, var(--accent-hi) 0%, var(--accent) 55%, var(--accent-lo) 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 230, 200, 0.6) inset,
+    0 10px 30px -8px rgba(255, 110, 20, 0.65),
+    0 0 0 1px rgba(255, 140, 60, 0.6);
+}
+
+.btn.primary small { color: rgba(40, 16, 2, 0.72); }
+
+.btn.primary::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -60%;
+  width: 40%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  transform: skewX(-18deg);
+  transition: left 0.6s ease;
+}
+
+.btn.primary:hover { transform: translateY(-2px); box-shadow: 0 1px 0 rgba(255, 230, 200, 0.6) inset, 0 16px 40px -8px rgba(255, 110, 20, 0.8), 0 0 0 1px rgba(255, 160, 80, 0.8); }
+
+.btn.primary:hover::after { left: 130%; }
+
+.btn.ghost {
+  color: var(--ink);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.btn.ghost small { color: var(--muted); }
+
+.btn.ghost:hover { transform: translateY(-2px); border-color: rgba(255, 255, 255, 0.32); background: rgba(255, 255, 255, 0.08); }
+
+.btn:focus-visible, .nav a:focus-visible, .links a:focus-visible, footer a:focus-visible, .brand:focus-visible {
+  outline: 2px solid var(--cool);
+  outline-offset: 3px;
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 22px 0 0;
+  padding: 18px 0 0;
+  border-top: 1px dashed var(--line);
+  list-style: none;
+  font-size: 14.5px;
+  color: var(--muted);
+}
+
+.links a {
+  color: var(--ink-2);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.links a:hover { color: var(--accent-hi); border-color: var(--accent-hi); }
+
+.links .k { margin-right: 6px; font: 500 11.5px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+
+/* Sections */
+section.block { padding: 56px 0 8px; }
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 22px;
+  font: 500 12.5px/1 var(--mono);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.label::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+
+.card {
+  position: relative;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.card:hover { border-color: rgba(255, 122, 26, 0.35); transform: translateY(-2px); }
+
+.card .ico {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 18px;
+  border-radius: 10px;
+  color: var(--accent-hi);
+  background: rgba(255, 122, 26, 0.10);
+  border: 1px solid rgba(255, 122, 26, 0.25);
+}
+
+.card .ico svg { width: 22px; height: 22px; }
+
+.card h3 { margin: 0 0 8px; font-size: 18px; font-weight: 650; letter-spacing: -0.005em; }
+
+.card p { margin: 0; color: var(--ink-2); font-size: 15.5px; line-height: 1.55; }
+
+.card .n { position: absolute; top: 22px; right: 22px; font: 500 12px/1 var(--mono); color: rgba(255, 255, 255, 0.22); letter-spacing: 0.1em; }
+
+/* First run */
+.steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 12px; }
+
+.steps li {
+  counter-increment: step;
+  position: relative;
+  padding: 18px 20px 18px 66px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  color: var(--ink-2);
+  font-size: 15.5px;
+}
+
+.steps li::before {
+  content: counter(step, decimal-leading-zero);
+  position: absolute;
+  left: 20px;
+  top: 18px;
+  font: 600 13px/1.9 var(--mono);
+  color: var(--accent-hi);
+  letter-spacing: 0.06em;
+}
+
+.steps strong { color: var(--ink); font-weight: 600; }
+
+code {
+  font: 500 0.88em/1 var(--mono);
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* Footer */
+footer {
+  margin-top: 72px;
+  padding: 28px 0 40px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.foot-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 14px 28px; }
+
+.foot-links { display: flex; flex-wrap: wrap; gap: 6px 20px; }
+
+footer a { color: var(--ink-2); text-decoration: none; }
+
+footer a:hover { color: var(--accent-hi); }
+
+.fine { margin: 18px 0 0; max-width: 720px; font-size: 12.5px; line-height: 1.6; color: #5f687a; }
+
+/* Entrance */
+.rise { opacity: 0; transform: translateY(14px); animation: rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) forwards; }
+.d1 { animation-delay: 0.05s; }
+.d2 { animation-delay: 0.15s; }
+.d3 { animation-delay: 0.25s; }
+.d4 { animation-delay: 0.38s; }
+
+@keyframes rise { to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .rise { opacity: 1; transform: none; animation: none; }
+  .chip i { animation: none; }
+  .btn, .card, .btn.primary::after { transition: none; }
+}
+
+@media (max-width: 640px) {
+  body { font-size: 16px; }
+  .wrap { padding: 0 16px; }
+  .top { padding: 16px 0; }
+  .nav a span { display: none; }
+  .nav a { padding: 8px; }
+  .panel { padding: 18px; margin-top: 30px; }
+  .actions { flex-direction: column; }
+  .btn { width: 100%; }
+  .steps li { padding-left: 56px; }
+  .steps li::before { left: 16px; }
+}
+</style>
+</head>
+<body>
+
+<div class="sky" aria-hidden="true">
+  <canvas id="stars"></canvas>
+</div>
+<div class="horizon" aria-hidden="true">
+  <div class="planet"></div>
+</div>
+
+<div class="wrap">
+
+  <header class="top">
+    <a class="brand" href="https://github.com/characterecho-sean/ed-unofficial-patch" aria-label="ED-UP on GitHub">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="13" fill="none" stroke="#ff7a1a" stroke-width="1.6" opacity=".45"/>
+        <circle cx="16" cy="16" r="13" fill="none" stroke="#ffa04d" stroke-width="1.6" stroke-dasharray="14 68" stroke-linecap="round"/>
+        <path d="M10 19l6-6 6 6" fill="none" stroke="#ffa04d" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>ED<b>-UP</b></span>
+    </a>
+    <nav class="nav" aria-label="Project links">
+      <a href="https://github.com/characterecho-sean/ed-unofficial-patch">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a href="https://discord.gg/AWJ6djKKzr">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>
+        <span>Discord</span>
+      </a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="title">
+      <p class="eyebrow rise d1">
+        <span>ED Unofficial Patch</span>
+        <span class="chip"><i></i><span id="ver">Latest release</span></span>
+      </p>
+
+      <h1 id="title" class="rise d2">Upscaling and fixes for <span class="glow">Elite Dangerous</span>, in VR and flat</h1>
+
+      <p class="lede rise d3">ED-UP adds DLSS, FSR and XeSS upscaling to Elite Dangerous in a headset and on a monitor, draws Odyssey's on-foot game in stereo, and fixes about two dozen things that are right on a monitor and wrong in a headset.</p>
+
+      <div class="panel rise d4">
+        <div class="actions">
+          <a class="btn primary" id="dl" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest/download/ed-up-launcher.exe">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 20h16"/></svg>
+            <span class="btn-text">
+              <strong id="dl-title">Download the launcher</strong>
+              <small id="dl-meta">Windows &middot; ed-up-launcher.exe</small>
+            </span>
+          </a>
+          <a class="btn ghost" href="https://github.com/characterecho-sean/ed-unofficial-patch">
+            <svg width="24" height="24" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            <span class="btn-text">
+              <strong>View on GitHub</strong>
+              <small>Source, issues and docs</small>
+            </span>
+          </a>
+        </div>
+
+        <ul class="links">
+          <li><span class="k">Also</span><a id="alt-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest">Linux launcher (Steam, Proton)</a></li>
+          <li><a id="inst-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest">Standalone installer</a></li>
+          <li><a id="notes-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest">Release notes</a></li>
+          <li><a id="sums-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest/download/SHA256SUMS">SHA256SUMS</a></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="block" aria-labelledby="what">
+      <h2 class="label" id="what">What the launcher does</h2>
+      <div class="grid">
+        <article class="card">
+          <span class="n">01</span>
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-4"/><path d="M4 4v3.5h3.5"/><path d="M4 13a8 8 0 0 0 14.9 4"/><path d="M20 20v-3.5h-3.5"/></svg></div>
+          <h3>Keeps ED-UP current</h3>
+          <p>It checks this project's releases and offers each new one. A release is offered only if its signature checks out against a key built into the launcher, and nothing downloads until you press Download.</p>
+        </article>
+        <article class="card">
+          <span class="n">02</span>
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 9.5C2 8 3 7 4.5 7h15C21 7 22 8 22 9.5v4c0 1.5-1 2.5-2.5 2.5h-3l-2-2.5h-5l-2 2.5h-3C3 16 2 15 2 13.5z"/><circle cx="7.5" cy="11.2" r="1.6"/><circle cx="16.5" cy="11.2" r="1.6"/></svg></div>
+          <h3>VR, flat or both</h3>
+          <p>It finds the game, lists exactly what it is about to change and waits for a yes. Every file it replaces is backed up first, and your settings and other mods keep working.</p>
+        </article>
+        <article class="card">
+          <span class="n">03</span>
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.5v15l12-7.5z"/></svg></div>
+          <h3>One Play button</h3>
+          <p>Play starts Elite through Steam, Epic or Frontier's launcher. The launcher waits on the taskbar while you fly and comes back when the game exits.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="block" aria-labelledby="first">
+      <h2 class="label" id="first">First run</h2>
+      <ol class="steps">
+        <li><strong>Windows may call the launcher unrecognised.</strong> It is not code-signed yet, so choose More info, then Run anyway. To check the file first, compare its SHA-256 with the release's <code>SHA256SUMS</code>.</li>
+        <li><strong>It installs itself.</strong> The first run copies it to <code>%LOCALAPPDATA%\EDVR\launcher\</code> and adds a Start menu shortcut. Removing it from Windows' list of installed programs takes that away again and leaves ED-UP and your settings alone.</li>
+        <li><strong>Pick VR and flat, VR only or flat only.</strong> Check the list of changes, say yes, and press Play.</li>
+      </ol>
+    </section>
+  </main>
+
+  <footer>
+    <div class="foot-row">
+      <span>ED-UP is free, open source under the MIT licence, and stays free.</span>
+      <nav class="foot-links" aria-label="More">
+        <a href="https://github.com/characterecho-sean/ed-unofficial-patch/issues/new/choose">Report a problem</a>
+        <a href="https://discord.gg/AWJ6djKKzr">Discord</a>
+        <a href="https://ko-fi.com/seancharacterecho">Tip on Ko-fi</a>
+      </nav>
+    </div>
+    <p class="fine">Not affiliated with, endorsed by, or supported by Frontier Developments plc or Valve Corporation. Elite Dangerous is a trademark of Frontier Developments plc.</p>
+  </footer>
+
+</div>
+
+<script>
+// Horizon: put the planet's limb just under the hero, whatever the hero's height.
+(function () {
+  var hero = document.querySelector('.hero');
+  if (!hero) return;
+  function place() {
+    var bottom = hero.getBoundingClientRect().bottom + (window.scrollY || window.pageYOffset || 0);
+    document.documentElement.style.setProperty('--horizon', Math.round(bottom) + 'px');
+  }
+  place();
+  window.addEventListener('resize', place);
+  window.addEventListener('load', place);
+})();
+
+// Starfield: a slow drift with a gentle twinkle, and a rare shooting star. Static when the
+// visitor asks for reduced motion.
+(function () {
+  var canvas = document.getElementById('stars');
+  if (!canvas || !canvas.getContext) return;
+  var ctx = canvas.getContext('2d');
+  var still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var tints = ['255,255,255', '255,255,255', '255,255,255', '255,214,180', '186,214,255'];
+  var stars = [], w = 0, h = 0, last = 0, meteor = null, nextMeteor = 4000 + Math.random() * 6000;
+
+  function build() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    w = window.innerWidth; h = window.innerHeight;
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var n = Math.min(1400, Math.round(w * h / 1700));
+    stars = [];
+    for (var i = 0; i < n; i++) {
+      var z = Math.random();
+      stars.push({
+        x: Math.random() * w, y: Math.random() * h,
+        r: 0.25 + z * z * z * 1.5,
+        a: 0.18 + z * 0.8,
+        p: Math.random() * 6.283, s: 0.3 + Math.random() * 1.4,
+        v: 0.15 + z * 0.9,
+        c: 'rgb(' + tints[(Math.random() * tints.length) | 0] + ')'
+      });
+    }
+  }
+
+  function draw(t) {
+    ctx.clearRect(0, 0, w, h);
+    for (var i = 0; i < stars.length; i++) {
+      var s = stars[i];
+      var tw = still ? 1 : 0.7 + 0.3 * Math.sin(s.p + t * 0.001 * s.s);
+      ctx.globalAlpha = s.a * tw;
+      ctx.fillStyle = s.c;
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 6.283); ctx.fill();
+      if (s.r > 1.2) {
+        ctx.globalAlpha = s.a * tw * 0.1;
+        ctx.beginPath(); ctx.arc(s.x, s.y, s.r * 2.4, 0, 6.283); ctx.fill();
+      }
+    }
+    if (meteor) {
+      var m = meteor, k = m.age / m.life;
+      var fade = k < 0.2 ? k / 0.2 : 1 - (k - 0.2) / 0.8;
+      var tx = m.x - m.dx * 0.09, ty = m.y - m.dy * 0.09;
+      var g = ctx.createLinearGradient(m.x, m.y, tx, ty);
+      g.addColorStop(0, 'rgba(255,236,214,' + (0.9 * fade) + ')');
+      g.addColorStop(1, 'rgba(255,160,77,0)');
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = g; ctx.lineWidth = 1.4; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(m.x, m.y); ctx.lineTo(tx, ty); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function tick(t) {
+    var dt = Math.min(t - last, 50); last = t;
+    for (var i = 0; i < stars.length; i++) {
+      var s = stars[i];
+      s.x -= s.v * dt * 0.006;
+      if (s.x < -4) { s.x = w + 4; s.y = Math.random() * h; }
+    }
+    nextMeteor -= dt;
+    if (!meteor && nextMeteor <= 0) {
+      var ang = 2.55 + Math.random() * 0.35, sp = 0.9 + Math.random() * 0.5;
+      meteor = { x: w * (0.35 + Math.random() * 0.6), y: h * Math.random() * 0.35,
+                 dx: Math.cos(ang) * sp * 1000, dy: Math.sin(ang) * sp * 1000,
+                 age: 0, life: 700 + Math.random() * 500 };
+      nextMeteor = 9000 + Math.random() * 12000;
+    }
+    if (meteor) {
+      meteor.age += dt;
+      meteor.x += meteor.dx * dt / 1000; meteor.y += meteor.dy * dt / 1000;
+      if (meteor.age >= meteor.life) meteor = null;
+    }
+    draw(t);
+    requestAnimationFrame(tick);
+  }
+
+  var resizeTimer;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () { build(); draw(last); }, 120);
+  });
+
+  build();
+  draw(0);
+  if (!still) requestAnimationFrame(function (t) { last = t; requestAnimationFrame(tick); });
+})();
+
+// Latest release: the links above work without this. It fills in the version, date and
+// sizes from GitHub's API, and on Linux puts the Linux launcher first.
+(function () {
+  var API = 'https://api.github.com/repos/characterecho-sean/ed-unofficial-patch/releases/latest';
+  var KEY = 'edup-latest-release-v1';
+  var ua = navigator.userAgent || '';
+  var platform = (navigator.userAgentData && navigator.userAgentData.platform) || '';
+  var linux = /linux/i.test(platform) || (/Linux/.test(ua) && !/Android|CrOS/.test(ua));
+
+  function el(id) { return document.getElementById(id); }
+  function size(n) { var mb = n / 1048576; return (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + ' MB'; }
+  function find(list, test) { for (var i = 0; i < list.length; i++) if (test(list[i].n)) return list[i]; return null; }
+
+  function apply(d) {
+    var date = '';
+    try { date = new Date(d.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); } catch (e) {}
+    el('ver').textContent = d.tag + (date ? ' · ' + date : '');
+    el('notes-link').href = d.url;
+    el('notes-link').textContent = 'Release notes for ' + d.tag;
+
+    var exe = find(d.assets, function (n) { return n === 'ed-up-launcher.exe'; });
+    var lin = find(d.assets, function (n) { return /^ed-up-launcher-linux-.*\.zip$/.test(n); });
+    var inst = find(d.assets, function (n) { return /^ed-up-installer-\d.*\.zip$/.test(n); });
+    var sums = find(d.assets, function (n) { return n === 'SHA256SUMS'; });
+
+    if (inst) el('inst-link').href = inst.u;
+    if (sums) el('sums-link').href = sums.u;
+
+    if (linux && lin) {
+      el('dl').href = lin.u;
+      el('dl-title').textContent = 'Download for Linux';
+      el('dl-meta').textContent = 'Steam, Proton · ' + lin.n + ' · ' + size(lin.s);
+      if (exe) { el('alt-link').href = exe.u; el('alt-link').textContent = 'Windows launcher'; }
+    } else {
+      if (exe) {
+        el('dl').href = exe.u;
+        el('dl-meta').textContent = 'Windows · ed-up-launcher.exe · ' + size(exe.s);
+      }
+      if (lin) el('alt-link').href = lin.u;
+    }
+  }
+
+  try {
+    var hit = JSON.parse(sessionStorage.getItem(KEY) || 'null');
+    if (hit && Date.now() - hit.t < 10 * 60 * 1000) { apply(hit.d); return; }
+  } catch (e) {}
+
+  if (!window.fetch) return;
+  fetch(API, { headers: { Accept: 'application/vnd.github+json' } })
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (j) {
+      var d = {
+        tag: j.tag_name, date: j.published_at, url: j.html_url,
+        assets: (j.assets || []).map(function (a) { return { n: a.name, s: a.size, u: a.browser_download_url }; })
+      };
+      try { sessionStorage.setItem(KEY, JSON.stringify({ t: Date.now(), d: d })); } catch (e) {}
+      apply(d);
+    })
+    .catch(function () {});
+})();
+</script>
+</body>
+</html>
