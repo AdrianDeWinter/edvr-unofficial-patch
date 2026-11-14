@@ -290,8 +290,10 @@ int headlessPlay(const AppArgs& args, Output& out) {
         const size_t slash = self.find_last_of(L'\\');
         dir = slash == std::wstring::npos ? std::wstring() : self.substr(0, slash);
     }
+    AppArgs selectedArgs = args;
+    selectedArgs.dir = dir;
     GameInstall game;
-    if (dir.empty() || !describeDir(dir, L"Folder you chose", &game)) {
+    if (!describeSelectedDir(selectedArgs, &game)) {
         out.line("No EliteDangerous64.exe under " + narrowUtf8(dir.empty() ? args.dir : dir) +
                  ". Put the launcher in the game's product folder, or pass --dir with it.");
         return 2;
@@ -359,8 +361,7 @@ int directDryRunLines(const AppArgs& args, DirectEnv env, std::vector<std::strin
         return 2;
     }
     GameInstall game;
-    const bool described = installs ? describeDirWithInstalls(args.dir, L"Folder you chose", *installs, &game)
-                                   : describeDir(args.dir, L"Folder you chose", &game);
+    const bool described = describeSelectedDir(args, &game, installs);
     if (!described) {
         lines->push_back("No EliteDangerous64.exe under " + narrowUtf8(args.dir) + ". Nothing was started.");
         return 2;

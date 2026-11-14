@@ -253,6 +253,7 @@ python tools\run_jobs.py ^
     --gate "tools\build_lock.py --self-test" ^
     --gate "tools\worktree.py --self-test" ^
     --gate "tools\steam_library.py --self-test" ^
+    --gate "tools\epic_library.py --self-test" ^
     --gate "tools\hook_signatures.py --self-test" ^
     --gate "tools\hook_signatures.py audit --src src" ^
     --gate "tools\archive_game_exe.py --self-test" ^

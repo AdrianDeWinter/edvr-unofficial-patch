@@ -466,6 +466,9 @@ void files() {
           "with two folders, the store slug the path implies picks the right one");
     check(seatMirrorDirFor(root, L"E:\\Games\\Elite Dangerous\\Products\\elite-dangerous-odyssey-64", false).empty(),
           "...and with two and no slug, there is no guess");
+    CreateDirectoryW((root + L"\\EDVR\\elite-dangerous-odyssey-64-folder-you-chose").c_str(), nullptr);
+    check(seatMirrorDirFor(root, L"E:\\Games\\Elite Dangerous\\Products\\elite-dangerous-odyssey-64", false).empty(),
+          "an old generic folder among several mirrors does not make a read-only legacy lookup unambiguous");
     // a seat in the mirror folder survives as the real thing would: save, drop the book, load
     const std::wstring seatPath = made + L"\\" + kSeatFileName;
     std::vector<SeatRecord> real;

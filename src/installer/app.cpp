@@ -59,6 +59,8 @@ std::string usageText() {
            "\r\n"
            "  --dir <path>         the folder holding EliteDangerous64.exe. Without it, the\r\n"
            "                       installer finds your installs itself and uses the only one.\r\n"
+           "  --store epic|steam|frontier  the store for an exact --dir product folder, when\r\n"
+           "                       detection in this Windows prefix cannot identify its store.\r\n"
            "  --scope both|vr|flat what to install: both (VR and flat), vr (VR only) or flat\r\n"
            "                       (flat only). Without it, the scope already installed is kept,\r\n"
            "                       and a new install gets both.\r\n"
@@ -132,6 +134,15 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             a.badArg = true;
             a.badArgText = L"--scope takes both, vr or flat, not \"" + value + L"\"";
         };
+        auto setStore = [&](const std::wstring& value) {
+            if (value == L"epic") a.store = L"Epic";
+            else if (value == L"steam") a.store = L"Steam";
+            else if (value == L"frontier") a.store = L"Frontier launcher";
+            else {
+                a.badArg = true;
+                a.badArgText = L"--store takes epic, steam or frontier, not \"" + value + L"\"";
+            }
+        };
         if (arg == L"--install")
             a.action = AppArgs::Act::Install;
         else if (arg == L"--repair")
@@ -144,6 +155,11 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             next(&a.dir);
         else if (arg.rfind(L"--dir=", 0) == 0)
             a.dir = arg.substr(6);
+        else if (arg == L"--store") {
+            std::wstring value;
+            if (next(&value)) setStore(value);
+        } else if (arg.rfind(L"--store=", 0) == 0)
+            setStore(arg.substr(8));
         else if (arg == L"--scope") {
             std::wstring value;
             if (next(&value)) setScope(value);
@@ -204,7 +220,24 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             a.badArgText = L"unknown argument: " + arg;
         }
     }
+    if (!a.store.empty() && a.dir.empty()) {
+        a.badArg = true;
+        a.badArgText = L"--store needs --dir with the exact game's product folder";
+    }
     return a;
+}
+
+bool describeSelectedDir(const AppArgs& args, GameInstall* out,
+                         const std::vector<GameInstall>* installs) {
+    if (args.dir.empty()) return false;
+    // Store context supplied by a host wrapper cannot label a descendant chosen
+    // while searching an arbitrary launcher/library root.
+    if (!args.store.empty() && !gameDirLooksRight(args.dir)) return false;
+    const bool described = installs ? describeDirWithInstalls(args.dir, L"Folder you chose", *installs, out)
+                                   : describeDir(args.dir, L"Folder you chose", out);
+    if (!described) return false;
+    if (!args.store.empty()) out->source = args.store;
+    return true;
 }
 
 Options optionsFor(const AppArgs& args, bool repair) {
@@ -353,6 +386,10 @@ bool relaunchElevated(const AppArgs& args) {
         case AppArgs::Act::None: break;
     }
     if (!args.dir.empty()) cmd += L"--dir \"" + args.dir + L"\" ";
+    if (!args.store.empty()) {
+        const wchar_t* store = args.store == L"Epic" ? L"epic" : args.store == L"Steam" ? L"steam" : L"frontier";
+        cmd += std::wstring(L"--store ") + store + L" ";
+    }
     if (!args.scope.empty()) cmd += L"--scope " + fromUtf8(args.scope) + L" ";
     if (!args.keepSettings) cmd += L"--replace-settings ";
     if (args.removeSettings) cmd += L"--remove-settings ";
@@ -386,7 +423,7 @@ int runConsole(const AppArgs& args) {
 #endif
     GameInstall game;
     if (!args.dir.empty()) {
-        if (!describeDir(args.dir, L"Folder you chose", &game)) {
+        if (!describeSelectedDir(args, &game)) {
             writeOut("No EliteDangerous64.exe under " + toUtf8(args.dir) + "\r\n");
             return 2;
         }

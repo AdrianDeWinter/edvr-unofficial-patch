@@ -102,6 +102,15 @@ try:
     from tools import steam_library
 except ImportError:
     import steam_library
+_epic_bytecode_policy = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
+try:
+    try:
+        from tools import epic_library
+    except ImportError:
+        import epic_library
+finally:
+    sys.dont_write_bytecode = _epic_bytecode_policy
 try:
     from tools import gen_installer_rc
 except ImportError:
@@ -1392,6 +1401,10 @@ def steam_dirs():
     return steam_library.steam_dirs(GAME_EXE)
 
 
+def epic_dirs():
+    return [str(path) for path in epic_library.epic_dirs()] if os.name != "nt" else []
+
+
 def frontier_dirs():
     local = os.environ.get("LOCALAPPDATA", "")
     if not local:
@@ -1417,6 +1430,8 @@ def resolve_target(spec):
     """A store name, or a path to the directory holding the game exe."""
     if spec == "steam":
         found = steam_dirs()
+    elif spec == "epic":
+        found = epic_dirs()
     elif spec == "frontier":
         found = frontier_dirs()
     else:
@@ -1637,6 +1652,8 @@ def mirror_root():
 
 def _mirror_source_for(target):
     """The installer's source label for a game directory, from where the directory is."""
+    if os.name != "nt" and any(Path(target).resolve() == Path(path).resolve() for path in epic_dirs()):
+        return "Epic"
     parts = [p.lower() for p in re.split(r"[\\/]", os.path.abspath(target)) if p]
     if "steamapps" in parts:
         return "Steam"
@@ -3124,7 +3141,7 @@ def _main(argv=None):
     ap = argparse.ArgumentParser(
         description="Install a built EDVR into a game directory, verified.")
     ap.add_argument("--target", default="steam",
-                    help="steam, frontier, or a path to the game directory")
+                    help="steam, epic (Linux), frontier, or a path to the game directory")
     ap.add_argument("--scope", choices=SCOPES, default=None,
                     help="what the install is for: both (default), vr, or flat")
     ap.add_argument("--profile", choices=("vr", "flat"), default=None,
@@ -4269,8 +4286,75 @@ def _archive_route_self_test():
     return ok
 
 
+def _epic_import_self_test():
+    with tempfile.TemporaryDirectory(prefix="edvr_epic_import_") as temporary:
+        root = Path(temporary)
+        tools = root / "tools"
+        tools.mkdir()
+        for name in ("install_edvr", "epic_library", "steam_library", "gen_installer_rc",
+                     "compile_only", "archive_game_exe", "build_receipt"):
+            shutil.copyfile(Path(__file__).resolve().parent / (name + ".py"), tools / (name + ".py"))
+        script = ("import runpy, sys; sys.path.insert(0, sys.argv[2]); sys.dont_write_bytecode = False; "
+                  "runpy.run_path(sys.argv[1], run_name='edvr_import_fixture'); "
+                  "assert sys.dont_write_bytecode is False")
+        result = subprocess.run([sys.executable, "-I", "-c", script, str(tools / "install_edvr.py"), str(tools)],
+                                cwd=str(root), capture_output=True, text=True)
+        if result.returncode != 0 or list(tools.glob("__pycache__/epic_library*.pyc")):
+            print("Epic import self-test: new discovery import wrote bytecode or failed")
+            return False
+        return True
+
+
+def _epic_discovery_self_test():
+    if os.name == "nt":
+        return True  # This route discovers Linux managers only.
+    saved_env = dict(os.environ)
+    try:
+        with tempfile.TemporaryDirectory(prefix="edvr_epic_target_") as temporary:
+            home = Path(temporary)
+            os.environ.clear()
+            os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(home / "config"),
+                              XDG_DATA_HOME=str(home / "data"))
+            prefix = home / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            config = home / "config/heroic"
+            installed = config / "legendaryConfig/legendary/installed.json"
+            installed.parent.mkdir(parents=True)
+            games = config / "GamesConfig"
+            games.mkdir()
+            game = home / "custom Unicode é/Products/odyssey"
+            game.mkdir(parents=True)
+            (game / GAME_EXE).write_bytes(b"game fixture")
+            installed.write_text(json.dumps({"Elite": {"install_path": str(game.parent.parent)}}), encoding="utf-8")
+            (games / "Elite.json").write_text(json.dumps({"Elite": {"winePrefix": str(prefix)}}), encoding="utf-8")
+            assert resolve_target("epic") == str(game)
+            assert _mirror_source_for(game) == "Epic"
+            other = home / "second install"
+            other.mkdir()
+            (other / GAME_EXE).write_bytes(b"game fixture")
+            installed.write_text(json.dumps({"Elite": {"install_path": str(game.parent.parent)},
+                                             "Second": {"install_path": str(other)}}), encoding="utf-8")
+            (games / "Second.json").write_text(json.dumps({"Second": {"winePrefix": str(prefix)}}), encoding="utf-8")
+            try:
+                resolve_target("epic")
+                raise AssertionError("Epic target selected an ambiguous install")
+            except SystemExit as exc:
+                assert "2 epic installs" in str(exc)
+            (other / GAME_EXE).unlink()
+            assert resolve_target("epic") == str(game)
+        return True
+    except (AssertionError, OSError) as exc:
+        print("Epic target/source self-test failed: %s" % exc)
+        return False
+    finally:
+        os.environ.clear()
+        os.environ.update(saved_env)
+
+
 def self_test():
     ok = True
+    if not _epic_import_self_test(): ok = False
+    if not _epic_discovery_self_test(): ok = False
     if not _archive_route_self_test(): ok = False
     if not _game_probe_self_test(): ok = False
     if not _xess_opt_in_self_test(): ok = False

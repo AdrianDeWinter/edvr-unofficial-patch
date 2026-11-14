@@ -23,8 +23,14 @@ This file is why it does what it does. Using it is one paragraph in the
   its own kept default, `edvr_install\edvr.ini.base` and
   `edvr_install\edvr-flat.ini.base`. A scope change deletes no settings file.
 - **Which profile runs** is set by Elite's 3D mode, not the installer.
-- **Epic folders:** Browse and `--dir` retain the store recorded in Epic's
-  manifests, so Play and settings recovery use the same install as discovery.
+- **Windows Epic folders:** Browse and `--dir` retain the store recorded in Epic's
+  manifests. The install record keeps that store so Play, runtime settings
+  saves and recovery agree even when older mirror copies remain.
+- **Linux Epic installer:** The native Epic Launcher Preview,
+  Heroic/Legendary, Lutris and existing Wine Epic records identify the game
+  and its existing prefix. The wrapper uses the recorded runner and passes
+  Epic identity to the Windows installer. Game launching stays with the
+  original Epic manager.
 - **Installs by `tools\install_edvr.py` (2026-10-14):** the game's original
   runtime is recovered from the newest receipt that still holds it, so an
   update, a switch to flat-only and an uninstall work after two tool installs
@@ -86,6 +92,18 @@ without the game executable are ignored. Browse and `--dir` match the
 confirmed product folder against the store records, retaining its store for
 launching and for the settings mirror outside the game directory.
 
+On Linux, the wrapper reads the native Epic Launcher Preview, native and
+Flatpak Heroic, standalone Legendary, Lutris, and existing Wine Epic
+installation records. It confirms the game executable, associates the
+existing prefix and recorded runner, and passes `--store epic` with that
+exact product folder to the Windows installer.
+
+The installer records the store in `edvr_install\state.ini`. The F8 settings
+menu and saved seat positions use that record to select the same mirror as
+Repair, including for custom paths with no store name. Repair also updates
+this metadata when the patch files are already current. Older records without
+the store keep the previous lookup behavior until the next Repair.
+
 Epic licences require starting through the Epic launcher
 ([Frontier's platform requirements](https://customersupport.frontier.co.uk/hc/en-us/articles/25577492149788-Elite-Dangerous-Versions-Memberships-Account-Limitations-and-Activation-Keys)).
 ED-UP's Play and `--headless` hand detected Epic installs to Epic; they do not
@@ -97,9 +115,10 @@ needs a compatible ED-UP release.
 
 Older Browse or `--dir` installs may have saved settings under
 `<product>-folder-you-chose`. Run Repair while the game's settings still
-exist to copy them into the Epic mirror; the older copy is retained. If the
-game folder was already wiped, confirm that the older copy belongs to this
-install before recovering it manually: its name does not identify the store.
+exist to copy them into the Epic mirror and direct future runtime saves
+there; the older copy is retained. If the game folder was already wiped,
+confirm that the older copy belongs to this install before recovering it
+manually: its name does not identify the store.
 
 The `Openvr` folder is found by **file, not by name**: `Openvr\win64`, then
 `Openvr`, then the game folder, and whichever holds `openvr_api.dll` *or*
@@ -596,7 +615,7 @@ finds the installs itself and refuses to guess when there is more than one.
 so a command-line run borrows the calling console; run it with `start /wait` if
 the interleaved prompt bothers you.
 
-### Linux Steam wrapper
+### Linux installer wrapper
 
 #### 2026-10-16 preview evidence
 
@@ -640,7 +659,7 @@ removed at the maintainer's request; full validation uses the unchanged
 `build.bat --wait-lock` on native Windows. A green build does not establish an
 installer flight.
 
-The Linux installer ZIP includes `edvr_installer.sh`,
+The Linux installer ZIP includes `edvr_installer.sh`, `epic_library.py`,
 `edvr-installer-linux.py`, the Windows installer, and `README-linux.txt`. The
 launcher needs Python 3 and Steam's existing Proton installation, with no
 Protontricks or system Wine dependency. Run Elite once from Steam, close it,
@@ -683,6 +702,66 @@ compatdata directory (the parent of `pfx`); `pfx/drive_c` must already exist.
 The wrapper only launches the installer. Keep any existing required Elite
 launch options; headset/OpenXR setup and Proton gameplay remain unverified
 here.
+
+### Linux Epic detection and installation
+
+The wrapper uses `epic_library.py` for one read-only inventory shared with
+`install_edvr.py --target epic`. It confirms `EliteDangerous64.exe` beneath
+the manager's recorded install root and associates the existing prefix;
+journal directories alone do not identify a game install. Local records may
+name custom drives and Unicode paths.
+
+| Manager | Records read |
+|---|---|
+| Native Epic Launcher Preview | `installations.jsonl` beneath `$XDG_DATA_HOME/com.epicgames.eglv2` (default `~/.local/share/com.epicgames.eglv2`), with the matching existing `compat/compatdata/<artifactId>` prefix |
+| Heroic, native and Flatpak | `legendaryConfig/legendary/installed.json` and the matching `GamesConfig/<app>.json` under its configuration directory |
+| Standalone Legendary | `installed.json` and `config.ini`, including the configured prefix and Wine environment |
+| Lutris, native and Flatpak | Game and runner YAML, with Epic `.item` records inside the selected prefix |
+| Epic Games Launcher in Wine | Existing prefixes' Epic `.item` records; an unrecorded runner requires an explicit override |
+
+The schemas follow the manager owners:
+[Heroic](https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/blob/main/src/backend/game_config.ts),
+[Legendary](https://github.com/derrod/legendary/blob/master/legendary/core.py),
+and [Lutris](https://github.com/lutris/lutris/blob/master/lutris/config.py).
+The native Preview's package evidence and journal format are documented in
+[Native Epic Linux Preview](epic-linux-preview.md).
+Discovery reads their files directly. It does not invoke a manager's launch
+or authentication commands, including Legendary's authenticated dry-run.
+
+Choose `--store epic` when Steam is also present. `--game-dir` selects one
+confirmed product when several Epic copies exist. The wrapper requires an
+existing prefix and its recorded installed Wine/Proton/UMU runner. Use
+`--prefix` with `--wine`, or an explicit installed `--proton`, when the
+metadata cannot supply that relationship. It reports missing or ambiguous
+records instead of choosing another prefix or replacement runner.
+
+For the native Epic Preview, the prefix's Proton `config_info` identifies the
+runner used by the game's last launch. Other cached runtime versions are not
+substitutes. After a runner change, start Elite once through Epic before
+installing ED-UP. A missing or stale Proton record needs that first launch
+or an explicit `--proton` override. Journal deletion and incomplete records
+are respected even when older game files remain on disk.
+
+Epic's direct Proton route invokes the recorded Proton with `runinprefix`;
+it does not require a Steam installation or Steam-managed runtime. Steam's
+own route retains its recorded Steam runtime. UMU uses the selected installed
+Proton and requires its existing runtime rather than downloading one during
+installation.
+
+Flatpak runners use their manager's sandbox and invocation-only filesystem
+access. Explicit `--wine` and `--proton` paths instead select host runners.
+PATH-based Wine and UMU selection respects runtime/application metadata and
+applicable system/user Flatpak overrides. An unreadable override or unset
+PATH requires an explicit host runner.
+`--dry-run` starts no process and writes no files. `--preview` executes the
+selected runner to show the Windows install plan, so normal prefix
+bookkeeping may occur even though the game files are not changed.
+
+The Windows installer receives `--store epic --dir <verified product>`;
+the explicit store is restricted to that exact product and follows console,
+GUI, elevation and settings recovery paths. The Linux ED-UP `--launcher`
+mode remains Steam-only and refuses Epic installs. Start Epic games with
+their original manager to retain its normal authentication.
 
 ## How it is built and tested
 

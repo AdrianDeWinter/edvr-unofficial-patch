@@ -2818,6 +2818,72 @@ void testElevatedApply() {
     }
 }
 
+void testElevatedStoreIdentity() {
+    section("elevated: selected store identity");
+    const Rel release = loadRel("relA");
+    const std::wstring base = fresh("elev-store-identity");
+    ScriptedHttp http;
+    http.replies[latestUrl()] = ok(releaseJson(release), "\"etag-A\"");
+    serveRelease(&http, release);
+    Updater updater(http, settingsFor(base));
+    std::string err;
+    const UpdateCheck update = updater.check();
+    check(update.outcome == UpdateOutcome::Available && adopt(&updater, update, &err),
+          "the signed release is available to the elevated store case: " + err);
+    const LauncherRoots roots = launcherRoots(base);
+    const std::wstring planPath = P(roots.launcherDir(), L"plan-7-8.txt");
+    const std::wstring resultPath = P(roots.launcherDir(), L"result-7-8.txt");
+    PlanFile plan;
+    plan.action = "install";
+    plan.manifestSha = sha(release.manifestBytes);
+    // The selected store survives the elevated dispatcher's fresh discovery.
+    // Signed payload verification and the real mirror restore still run; only
+    // the machine inventory is supplied rather than read from the host.
+    {
+        PlanFile epic = plan;
+        epic.dir = fakeGameFolder("elev-epic-product");
+        epic.source = L"Epic";
+        epic.scope = "vr";
+        epic.restoreMirror = true;
+        GameInstall conflict;
+        conflict.dir = epic.dir;
+        conflict.source = L"Steam";
+        const std::vector<GameInstall> inventory = {conflict};
+        const std::wstring epicMirror = P(base, L"elev-epic-product-epic");
+        const std::wstring steamMirror = P(base, L"elev-epic-product-steam");
+        const std::string epicSettings = "[fix]\nshare_exposure = 1\n";
+        const std::string steamSettings = "[fix]\nshare_exposure = 0\n";
+        writeAll(P(epicMirror, L"edvr.ini"), epicSettings);
+        writeAll(P(steamMirror, L"edvr.ini"), steamSettings);
+        check(writePlanFile(planPath, epic, &err), "the Epic-selected plan is written for elevated dispatch: " + err);
+        DeleteFileW(resultPath.c_str());
+        const int code = applyPlanFile(planPath, g_testKeys, &inventory);
+        ApplyOutcome out;
+        check(code == 1 && readResultFile(resultPath, &out, &err) && out.status == ApplyOutcome::Status::Blocked,
+              "the elevated Epic plan verifies its signed payload and reaches the planner refusal");
+        check(readAll(P(epic.dir, L"edvr.ini")) == epicSettings &&
+                  readAll(P(steamMirror, L"edvr.ini")) == steamSettings && !exists(P(epic.dir, L"d3d11.dll")),
+              "elevated restore uses the selected Epic mirror despite conflicting Steam inventory");
+        for (const wchar_t* source : {L"", L"Older store"}) {
+            epic.source = source;
+            DeleteFileW(P(epic.dir, L"edvr.ini").c_str());
+            check(writePlanFile(planPath, epic, &err), "the older plan source is readable: " + err);
+            const int olderCode = applyPlanFile(planPath, g_testKeys, &inventory);
+            check(olderCode == 1 && readResultFile(resultPath, &out, &err) && out.status == ApplyOutcome::Status::Blocked &&
+                      readAll(P(epic.dir, L"edvr.ini")) == steamSettings,
+                  "an empty or unrecognised older source retains the detected store's restore behavior");
+        }
+        epic.source = L"Epic";
+        epic.dir = fresh("elev-epic-library-root");
+        writeAll(P(epic.dir, L"Products\\elite-dangerous-odyssey-64\\EliteDangerous64.exe"), "not an executable");
+        check(writePlanFile(planPath, epic, &err), "an elevated plan with a library root can be read for validation: " + err);
+        const int rootCode = applyPlanFile(planPath, g_testKeys, &inventory);
+        check(rootCode == 1 && readResultFile(resultPath, &out, &err) && out.status == ApplyOutcome::Status::Failed &&
+                  !out.lines.empty() && contains(out.lines[0], "EliteDangerous64.exe"),
+              "the elevated explicit store rejects a root that only has a game in a descendant product");
+    }
+}
+
 // ---- routes and the watcher -----------------------------------------------------------------------
 
 struct Recorder {
@@ -4453,6 +4519,66 @@ void testDirectSession() {
 
 void testEpicCommands() {
     section("Epic: selected install in headless Play and direct dry run");
+    auto parseStore = [](std::vector<std::wstring> words) {
+        std::vector<wchar_t*> argv;
+        std::wstring exe = L"ed-up-launcher.exe";
+        argv.push_back(&exe[0]);
+        for (std::wstring& word : words) argv.push_back(&word[0]);
+        return parseArgs(static_cast<int>(argv.size()), argv.data());
+    };
+    const AppArgs epicStore = parseStore({L"--dir", L"D:\\Elite", L"--store", L"epic"});
+    const AppArgs steamStore = parseStore({L"--store=steam", L"--dir=D:\\Elite"});
+    const AppArgs frontierStore = parseStore({L"--store", L"frontier", L"--dir", L"D:\\Elite"});
+    check(!epicStore.badArg && epicStore.store == L"Epic" && !steamStore.badArg && steamStore.store == L"Steam" &&
+              !frontierStore.badArg && frontierStore.store == L"Frontier launcher",
+          "an explicit store accepts each supported name with its selected folder");
+    check(parseStore({L"--store", L"epic"}).badArg && parseStore({L"--store"}).badArg &&
+              parseStore({L"--store=other", L"--dir", L"D:\\Elite"}).badArg,
+          "a store needs an exact folder and a supported value");
+    {
+        DirectRig rig("epic-host-dry-run", "direct_launch=on\n", true);
+        const std::vector<GameInstall> noWindowsMetadata;
+        const AppArgs args = parseStore({L"--direct-dry-run", L"--dir", rig.game.product, L"--store", L"epic", L"--vr"});
+        GameInstall selected;
+        check(!args.badArg && args.store == L"Epic" && describeSelectedDir(args, &selected, &noWindowsMetadata) &&
+                  selected.source == L"Epic" && selected.dir == canonicalPath(rig.game.product),
+              "the explicit store labels only the confirmed product even without Windows metadata");
+        const std::wstring mirrorRoot = P(rig.base, L"mirrors");
+        check(mirrorDirFor(selected, mirrorRoot) == P(mirrorRoot, L"elite-dangerous-odyssey-64-epic"),
+              "the explicit Epic product uses the same store mirror as a Windows-discovered Epic product");
+        GameInstall conflicting = selected;
+        conflicting.source = L"Steam";
+        const std::vector<GameInstall> conflictingInventory = {conflicting};
+        check(describeSelectedDir(args, &selected, &conflictingInventory) && selected.source == L"Epic",
+              "the host's store context remains authoritative over conflicting prefix metadata for that product");
+        AppArgs detected = args;
+        detected.store.clear();
+        check(describeSelectedDir(detected, &selected, &conflictingInventory) && selected.source == L"Steam",
+              "without explicit store context the inventory remains authoritative");
+        const GameTree other = makeFrontierStore(P(rig.base, L"another-install"));
+        detected.dir = other.product;
+        check(describeSelectedDir(detected, &selected, &conflictingInventory) && selected.source == L"Folder you chose",
+              "a separately chosen install never borrows the explicit Epic source");
+        AppArgs root = args;
+        root.dir = rig.game.root;
+        check(!describeSelectedDir(root, &selected, &noWindowsMetadata),
+              "an explicit store cannot label a descendant selected from an arbitrary launcher root");
+        root.dir = P(rig.base, L"missing-product");
+        check(!describeSelectedDir(root, &selected, &noWindowsMetadata), "explicit store context cannot bypass executable confirmation");
+        int steamAttempts = 0;
+        DirectEnv env = directEnv(&rig.http, rig.keys.keys, nullptr);
+        env.makeSteam = [&steamAttempts](const std::wstring&) {
+            ++steamAttempts;
+            return std::unique_ptr<SteamSession>();
+        };
+        std::vector<std::string> out;
+        check(directDryRunLines(args, env, &out, &noWindowsMetadata) == 3 &&
+                  out == std::vector<std::string>{"Epic installs use the Epic Games launcher. Direct launch is unavailable; no sign-in was attempted and nothing was started."},
+              "the host's explicit Epic identity survives a prefix without Windows store metadata");
+        check(steamAttempts == 0 && rig.http.requests.empty() && rig.started.empty() && rig.rec.uris.empty() &&
+                  rig.rec.spawns.empty() && eventTags().empty(),
+              "an explicit Epic dry run never uses Steam or Frontier authentication and starts nothing");
+    }
     {
         DirectRig rig("epic-headless", "direct_launch=on\n", true);
         GameInstall discovered;
@@ -4475,6 +4601,18 @@ void testEpicCommands() {
               "headless Play opens the selected Epic install through Epic even with direct launch enabled");
         check(rig.http.requests.empty() && rig.started.empty() && eventTags().empty() && rig.loginNotes.empty() && rig.codeNotes.empty(),
               "headless Epic Play never signs in directly, asks for credentials, or starts the game itself");
+
+        DirectRig host("epic-host-headless", "direct_launch=on\n", true);
+        const AppArgs explicitArgs = parseStore({L"--headless", L"--store", L"epic", L"--dir", host.game.product, L"--vr"});
+        const std::vector<GameInstall> noWindowsMetadata;
+        GameInstall hostSelected;
+        check(describeSelectedDir(explicitArgs, &hostSelected, &noWindowsMetadata) && hostSelected.source == L"Epic",
+              "headless Play resolves the host-selected Epic product without Windows Epic metadata");
+        beginHeadlessPlay(*host.session, hostSelected, true, host.rec.ops(), names, timing);
+        host.session->shutdown();
+        check(host.rec.uris == std::vector<std::wstring>{L"com.epicgames.launcher://apps/9c203b6ed35846e8a4a9ff1e314f6593?action=launch&silent=true"} && host.rec.spawns.empty() &&
+                  host.http.requests.empty() && host.started.empty() && eventTags().empty() && host.loginNotes.empty() && host.codeNotes.empty(),
+              "host-selected Epic headless Play takes only the Epic route, with no authentication");
     }
     {
         DirectRig rig("epic-dry-run", "direct_launch=on\n", true);
@@ -5421,6 +5559,7 @@ int main(int argc, char** argv) {
     testSelfUpdate();
     testPlanFile();
     testElevatedApply();
+    testElevatedStoreIdentity();
     testRoute();
     testWatcher();
     testSession();

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Run EDVR's Windows installer, or with --launcher the ED-UP launcher, with Elite's recorded Steam Proton runtime."""
+"""Run EDVR's Windows installer in Elite's existing Steam or Epic Wine/Proton prefix."""
 
 import argparse
+import configparser
 import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -23,7 +25,13 @@ def parser():
     p.add_argument("--launcher-exe", type=Path,
                    help="ed-up-launcher.exe (beside script or build/ by default); implies nothing without --launcher")
     p.add_argument("--steam-dir", type=Path, help="Steam root; otherwise use STEAM_DIR or known locations")
-    p.add_argument("--proton", type=Path, help="Proton directory or proton script; overrides the prefix record")
+    p.add_argument("--store", choices=("auto", "steam", "epic"), default="auto",
+                   help="select the store; auto refuses when both stores have matching installs")
+    p.add_argument("--proton", type=Path,
+                   help="host Proton directory or script; overrides the prefix record and bypasses Epic Flatpak")
+    p.add_argument("--prefix", type=Path, help="existing Epic Wine prefix or Proton compatdata root")
+    p.add_argument("--wine", type=Path,
+                   help="explicit host Wine binary for Epic (bypasses a recorded Flatpak runner)")
     p.add_argument("--game-dir", type=Path, help="folder holding EliteDangerous64.exe inside the installed game")
     actions = p.add_mutually_exclusive_group()
     for name in ("install", "repair", "uninstall", "collect-logs"):
@@ -63,7 +71,10 @@ def launcher_args(args):
         if getattr(args, name):
             raise ValueError("--%s is an installer option; it cannot be used with --launcher" %
                              name.replace("_", "-"))
-    return list(args.passthrough or [])
+    forwarded = list(args.passthrough or [])
+    if any(word.split("=", 1)[0].lower() in ("--dir", "--store") for word in forwarded):
+        raise ValueError("launcher arguments cannot override the selected --dir or --store")
+    return forwarded
 
 
 def installer_args(args):
@@ -344,11 +355,12 @@ def runtime_path(proton, steam_roots):
     return found[0]
 
 
-def windows_path(host_path, compatdata):
-    dos = compatdata / "pfx/dosdevices"
+def prefix_windows_path(host_path, prefix):
+    """Translate through the selected prefix's existing drive mappings only."""
+    dos = prefix / "dosdevices"
     found = []
     if not dos.is_dir():
-        raise ValueError("Proton prefix has no dosdevices: %s" % dos)
+        raise ValueError("Wine prefix has no dosdevices: %s" % dos)
     for link in dos.iterdir():
         if not re.fullmatch(r"[a-zA-Z]:", link.name) or not link.is_symlink():
             continue
@@ -362,6 +374,347 @@ def windows_path(host_path, compatdata):
     return drive + ":\\" + tail
 
 
+def windows_path(host_path, compatdata):
+    return prefix_windows_path(host_path, compatdata / "pfx")
+
+
+def optional_steam_roots(args, home, environ):
+    try:
+        return roots(args, home, environ)
+    except ValueError:
+        return []
+
+
+def epic_discovery():
+    # Importing a sibling module must not create __pycache__ during --dry-run.
+    previous = sys.dont_write_bytecode
+    try:
+        sys.dont_write_bytecode = True
+        import epic_library
+        return epic_library
+    finally:
+        sys.dont_write_bytecode = previous
+
+
+def flatpak_installations(home, environ):
+    data = Path(environ.get("XDG_DATA_HOME", str(home / ".local/share")))
+    installations = (Path(environ.get("FLATPAK_USER_DIR") or data / "flatpak"),
+                     Path(environ.get("FLATPAK_SYSTEM_DIR") or "/var/lib/flatpak"))
+    if any(not path.is_absolute() for path in installations):
+        raise ValueError("Flatpak installation directories must be absolute; pass a host runner override")
+    return installations
+
+
+def flatpak_deployment(app_id, home, environ):
+    for installation in flatpak_installations(home, environ):
+        application = installation / "app" / app_id
+        deployments = [application / "current/active"] + sorted(application.glob("*/*/active"))
+        for deployment in deployments:
+            if (deployment / "files").is_dir():
+                return installation, deployment
+    raise ValueError("installed Flatpak %s deployment is missing; repair the manager or pass a host runner override" % app_id)
+
+
+def flatpak_metadata(deployment):
+    return flatpak_keyfile(deployment / "metadata")
+
+
+def flatpak_keyfile(path):
+    # GKeyFile has no inherited DEFAULT section, interpolation, or colon
+    # delimiter. A missing optional file is different from an unreadable one.
+    config = configparser.ConfigParser(interpolation=None, delimiters=("=",),
+                                       comment_prefixes=("#",), default_section="\x00", strict=False)
+    config.optionxform = str
+    try:
+        with path.open(encoding="utf-8", newline="") as stream:
+            contents = stream.read(1024 * 1024 + 1)
+        if len(contents) > 1024 * 1024:
+            raise ValueError("Flatpak metadata or override file is too large: %s; pass a host runner override" % path)
+        if "\x00" in contents:
+            raise ValueError("unsupported Flatpak NUL character; pass a host runner override")
+        ascii_space = " \t\r\f"
+        lines = [line[:-1] if line.endswith("\r") else line for line in contents.split("\n")]
+        for line in lines:
+            left = line.lstrip(ascii_space)
+            if left != left.lstrip():
+                raise ValueError("unsupported Flatpak whitespace; pass a host runner override")
+            if "=" in left and not left.startswith(("#", "[")):
+                key, value = left.split("=", 1)
+                if key.rstrip(ascii_space) != key.rstrip() or value.lstrip(ascii_space) != value.lstrip():
+                    raise ValueError("unsupported Flatpak whitespace; pass a host runner override")
+            match = re.match(r"\s*(?:PATH|HOST_XDG_DATA_HOME|runtime)\s*=(.*)$", line)
+            if match and match[1] != match[1].rstrip():
+                raise ValueError("unsupported Flatpak trailing whitespace; pass a host runner override")
+        # GKeyFile ignores indentation on each physical line. Python's INI
+        # parser instead treats an indented key as the preceding value's
+        # continuation, so normalize indentation before parsing the keyfile.
+        config.read_string("\n".join(line.lstrip(ascii_space) for line in lines))
+    except FileNotFoundError:
+        pass
+    except (OSError, UnicodeError, configparser.Error) as exc:
+        raise ValueError("Flatpak metadata or override file is unreadable or invalid: %s; "
+                         "pass a host runner override" % path) from exc
+    return config
+
+
+def flatpak_string(value):
+    # g_key_file_get_string unescapes these characters; shell expansion is
+    # never performed. Refuse unsupported spellings rather than guess a path.
+    escapes = {"s": " ", "n": "\n", "t": "\t", "r": "\r", "\\": "\\"}
+    if "\n" in value or "\r" in value:
+        raise ValueError("unsupported Flatpak multiline environment; pass a host runner override")
+    result = []
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char == "\\":
+            index += 1
+            if index == len(value) or value[index] not in escapes:
+                raise ValueError("unsupported Flatpak environment escape; pass a host runner override")
+            char = escapes[value[index]]
+        result.append(char)
+        index += 1
+    return "".join(result)
+
+
+def flatpak_runtime_deployment(config, home, environ):
+    runtime = config.get("Application", "runtime", fallback="")
+    parts = runtime.split("/")
+    if len(parts) != 3 or any(not re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in parts):
+        raise ValueError("installed Flatpak runtime metadata is missing or invalid; pass a host runner override")
+    # flatpak run resolves its runtime independently of the app deployment,
+    # searching the user installation before the default system installation.
+    for installation in flatpak_installations(home, environ):
+        deployment = installation / "runtime" / Path(*parts) / "active"
+        if (deployment / "files").is_dir():
+            if not (deployment / "metadata").is_file():
+                raise ValueError("installed Flatpak runtime metadata is missing; pass a host runner override")
+            return deployment
+    raise ValueError("installed Flatpak runtime metadata is missing; pass a host runner override")
+
+
+def flatpak_host_file(path, app_id, home, environ):
+    """Resolve sandbox /app and /usr paths from installed deployment metadata, without a process."""
+    path = Path(path)
+    if not path.is_absolute():
+        raise ValueError("recorded runner must be an absolute path: %s" % path)
+    _, deployment = flatpak_deployment(app_id, home, environ)
+    if not inside(path, Path("/app")) and not inside(path, Path("/usr")):
+        return path
+    if inside(path, Path("/app")):
+        candidate = deployment / "files" / path.relative_to("/app")
+    else:
+        runtime_deployment = flatpak_runtime_deployment(flatpak_metadata(deployment), home, environ)
+        candidate = runtime_deployment / "files" / path.relative_to("/usr")
+    if candidate.is_file():
+        return candidate
+    raise ValueError("recorded runner file is missing from installed Flatpak %s: %s; "
+                     "repair the manager or pass --wine/--proton with an installed host runner" % (app_id, path))
+
+
+def flatpak_runtime_environment(app_id, home, environ):
+    installation, deployment = flatpak_deployment(app_id, home, environ)
+    config = flatpak_metadata(deployment)
+    user_installation, system_installation = flatpak_installations(home, environ)
+    layers = []
+    runtime = config.get("Application", "runtime", fallback="")
+    if runtime:
+        layers.append(flatpak_metadata(flatpak_runtime_deployment(config, home, environ)))
+    layers.append(config)
+    # flatpak_deploy_get_overrides merges system-global, system-app,
+    # user-global, user-app, with system layers only for system installs:
+    # github.com/flatpak/flatpak/blob/main/common/flatpak-dir.c
+    override_dirs = ([system_installation / "overrides"] if installation != user_installation else [])
+    override_dirs.append(user_installation / "overrides")
+    for directory in override_dirs:
+        layers.extend(flatpak_keyfile(directory / name) for name in ("global", app_id))
+    values = {"PATH": "/app/bin:/usr/bin", "HOST_XDG_DATA_HOME": (
+        environ.get("XDG_DATA_HOME") or str(home / ".local/share"))}
+    for layer in layers:
+        for key in values:
+            if layer.has_option("Environment", key):
+                values[key] = flatpak_string(layer.get("Environment", key))
+        # Context.unset-environment wins over Environment in the same file;
+        # a later layer can set it again (flatpak_context_load_metadata).
+        unset = layer.get("Context", "unset-environment", fallback="")
+        if "\\" in unset:
+            raise ValueError("unsupported Flatpak unset-environment; pass a host runner override")
+        for key in unset.split(";"):
+            if key in values:
+                values[key] = None
+    path = values["PATH"]
+    if path is None:
+        raise ValueError("Flatpak PATH is unset; pass a host runner override")
+    if any(not Path(part).is_absolute() or "\x00" in part for part in path.split(":")):
+        raise ValueError("installed Flatpak PATH must contain absolute directories; pass a host runner override")
+    host_data = values["HOST_XDG_DATA_HOME"]
+    if host_data is None or not Path(host_data).is_absolute() or "\x00" in host_data:
+        raise ValueError("Flatpak HOST_XDG_DATA_HOME must be an absolute directory; pass a host runner override")
+    # flatpak-run exports host XDG_DATA_HOME as HOST_XDG_DATA_HOME. UMU's
+    # container=flatpak branch uses that value, not the sandbox XDG_DATA_HOME:
+    # github.com/Open-Wine-Components/umu-launcher/blob/main/umu/umu_consts.py
+    return {"PATH": path, "HOST_XDG_DATA_HOME": host_data}
+
+
+def flatpak_path_runner(binary, fallback, app_id, home, environ, sandbox_env):
+    for directory in sandbox_env["PATH"].split(":"):
+        candidate = Path(directory) / binary
+        try:
+            if flatpak_host_file(candidate, app_id, home, environ).is_file():
+                return candidate
+        except ValueError:
+            continue
+    if binary != "umu-run":
+        raise ValueError("Flatpak %s is missing from its effective PATH; pass a host runner override" % binary)
+    return fallback
+
+
+def existing_prefix(path):
+    path = path.expanduser().resolve()
+    if (path / "pfx/drive_c").is_dir():
+        prefix, compatdata = (path / "pfx").resolve(), path
+    else:
+        prefix, compatdata = path, None
+    if not all((prefix / name).exists() for name in ("drive_c", "dosdevices", "system.reg", "user.reg")):
+        raise ValueError("existing Epic prefix is incomplete at %s; launch Elite in its original manager first" % path)
+    return prefix, compatdata
+
+
+def clean_epic_env(environ):
+    result = dict(environ)
+    for key in list(result):
+        upper = key.upper()
+        if upper.startswith(("STEAM", "WINE", "PROTON", "UMU_", "LGDRY_")) or upper in ("GAMEID", "STORE", "RUNTIMEPATH"):
+            del result[key]
+    return result
+
+
+def umu_runtime(proton_host, home, environ, flatpak_id):
+    """Require the selected tool's installed runtime rather than letting UMU install one."""
+    manifest = proton_host.parent / "toolmanifest.vdf"
+    tool = section(vdf(manifest), "manifest", manifest)
+    appid = tool.get("require_tool_appid")
+    if appid is None:
+        return None
+    variants = {"1391110": "steamrt2", "1628350": "steamrt3", "4183110": "steamrt4", "4185400": "steamrt4-arm64"}
+    if appid not in variants:
+        raise ValueError("unsupported UMU runtime app %s in %s; select a supported installed runner" % (appid, manifest))
+    data_key = "HOST_XDG_DATA_HOME" if flatpak_id else "XDG_DATA_HOME"
+    data = Path(environ.get(data_key, str(home / ".local/share")))
+    runtime = data / "umu" / variants[appid]
+    if not all((runtime / name).exists() for name in (
+            "_v2-entry-point", "VERSIONS.txt", "pressure-vessel", ".installed.ok")):
+        raise ValueError("UMU runtime missing or incomplete at %s; launch Elite in its original manager first" % runtime)
+    return runtime
+
+
+def build_epic_plan(args, installer, forwarded, home, env_in):
+    library = epic_discovery()
+
+    if args.launcher:
+        raise ValueError("Epic --launcher is not supported by this wrapper; launch Elite through its original "
+                         "Heroic, Legendary, Lutris or Epic manager to preserve Epic authentication")
+    if args.wine and args.proton:
+        raise ValueError("choose one Epic runner override: --wine or --proton")
+    try:
+        selected = library.select_install(args.game_dir, home=home, environ=env_in)
+    except ValueError:
+        # A complete explicit binding is also the escape hatch for competing owners.
+        if not (args.game_dir and args.prefix and (args.wine or args.proton)):
+            raise
+        selected = None
+    game = selected.game_dir if selected else args.game_dir.expanduser().resolve()
+    if not (game / "EliteDangerous64.exe").is_file():
+        raise ValueError("EliteDangerous64.exe missing in --game-dir %s" % game)
+    install_root = selected.install_root if selected else game
+    configured = args.prefix or (selected.compatdata or selected.prefix if selected else None)
+    if configured is None:
+        raise ValueError("Epic prefix is not recorded; pass --prefix PATH for Elite's existing prefix")
+    prefix, compatdata = existing_prefix(configured)
+    flatpak_id = selected.flatpak_id if selected and not (args.wine or args.proton) else None
+    recorded_env = dict(selected.env) if selected else {}
+    kind = "wine" if args.wine else ("proton" if args.proton else selected.runner_kind)
+    if kind == "proton" and compatdata is None:
+        raise ValueError("selected Proton needs an existing compatdata root with pfx/; "
+                         "pass that root with --prefix or select --wine for a raw Wine prefix")
+    if args.wine:
+        runner = args.wine.expanduser().resolve()
+    elif args.proton:
+        runner = proton_path(args, compatdata)
+    elif selected.manager == "epic-preview":
+        # The native launcher caches several runtimes. The prefix's ordinary
+        # Proton record identifies the one Elite actually used most recently.
+        runner = proton_path(args, compatdata)
+    else:
+        runner = selected.runner
+    sandbox_env = {}
+    if flatpak_id:
+        lookup = "umu-run" if kind == "umu" else getattr(selected, "runner_lookup", None)
+        if lookup:
+            sandbox_env = flatpak_runtime_environment(flatpak_id, home, env_in)
+            runner = flatpak_path_runner(lookup, runner, flatpak_id, home, env_in, sandbox_env)
+    if kind not in ("wine", "proton", "umu") or runner is None:
+        raise ValueError("Epic runner is not resolved; pass --wine PATH or --proton PATH for Elite's installed runner")
+    runner = Path(runner).expanduser()
+    runner_host = flatpak_host_file(runner, flatpak_id, home, env_in) if flatpak_id else runner
+    if not runner.is_absolute() or not runner_host.is_file():
+        raise ValueError("recorded Epic runner is missing: %s; pass --wine PATH or --proton PATH" % runner)
+    env = clean_epic_env(env_in)
+    env.update(recorded_env)
+    env.update(sandbox_env)
+    # Identity and prefix always belong to the selected Epic game, never the invoking Steam shortcut.
+    for key in list(env):
+        if key.upper().startswith("STEAM"):
+            del env[key]
+    env["WINEPREFIX"] = str(prefix)
+    env["STEAM_COMPAT_INSTALL_PATH"] = str(install_root)
+    runtime = None
+    if kind == "wine":
+        env.pop("PROTONPATH", None)
+        command = [str(runner)]
+    elif kind == "proton":
+        steam_roots = optional_steam_roots(args, home, env_in)
+        # Heroic with UMU disabled runs its selected Proton directly. A Steam
+        # toolmanifest dependency describes Steam's wrapper, not this manager's
+        # runinprefix route; that verb also skips Proton's Steam-dependent prefix setup.
+        command = [str(runner), "runinprefix"]
+        env["STEAM_COMPAT_DATA_PATH"] = str(compatdata)
+        if steam_roots:
+            env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = str(steam_roots[0])
+    else:
+        raw_proton = recorded_env.get("PROTONPATH", "")
+        proton_root = Path(raw_proton)
+        if not raw_proton or not proton_root.is_absolute():
+            raise ValueError("UMU needs a recorded absolute installed PROTONPATH; pass --proton PATH")
+        proton = proton_root / "proton"
+        proton_host = flatpak_host_file(proton, flatpak_id, home, env_in) if flatpak_id else proton
+        if not proton_host.is_file():
+            raise ValueError("recorded UMU Proton is missing at %s; pass --proton PATH" % proton)
+        runtime = umu_runtime(proton_host, home, env, flatpak_id)
+        env.update(WINEPREFIX=str(compatdata or prefix), PROTONPATH=str(proton_root),
+                   PROTON_VERB="runinprefix", UMU_RUNTIME_UPDATE="0", PROTONFIXES_DISABLE="1",
+                   GAMEID="umu-0", STORE="egs")
+        command = [str(runner)]
+    game_windows = prefix_windows_path(game.resolve(), prefix)
+    command += [str(installer), "--store", "epic", "--dir", game_windows] + forwarded
+    if flatpak_id:
+        flatpak = shutil.which("flatpak", path=env_in.get("PATH"))
+        if not flatpak:
+            raise ValueError("Flatpak executable missing; install the recorded manager or pass a host runner override")
+        permissions = {installer.resolve(), install_root.resolve(), configured.expanduser().resolve()}
+        if kind == "umu":
+            permissions.add(Path(env["HOST_XDG_DATA_HOME"]) / "umu")
+        for candidate in (runner, Path(recorded_env.get("PROTONPATH", "/app")), runtime):
+            if candidate and candidate.is_absolute() and not inside(candidate, Path("/app")) and not inside(candidate, Path("/usr")):
+                permissions.add(candidate if candidate.is_dir() else candidate.parent)
+        command = [flatpak, "run", "--command=" + command[0]] + [
+            "--filesystem=" + str(path) for path in sorted(permissions, key=str)
+        ] + ["--env=%s=%s" % (key, env[key]) for key in sorted(env)
+             if key in recorded_env or key in sandbox_env or key.startswith(("WINE", "PROTON", "UMU_", "STEAM_COMPAT_")) or key in ("GAMEID", "STORE")
+        ] + [flatpak_id] + command[1:]
+    return command, env, (game, compatdata or prefix, runner, runtime)
+
+
 def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
     env_in = os.environ if environ is None else environ
     forwarded = installer_args(args)
@@ -370,6 +723,34 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
         raise ValueError("%s not found: %s (pass %s PATH)" % (
             "launcher" if args.launcher else "installer", installer,
             "--launcher-exe" if args.launcher else "--installer"))
+    store = args.store
+    if store == "auto":
+        epic = epic_discovery().discover(home=home, environ=env_in)
+        if args.game_dir:
+            epic = [item for item in epic if item.game_dir.resolve() == args.game_dir.expanduser().resolve()]
+        steam_roots = optional_steam_roots(args, home, env_in)
+        steam_error = None
+        try:
+            find_game(args, steam_roots)
+            has_steam = True
+        except ValueError as exc:
+            steam_error = exc
+            has_steam = "multiple" in str(exc)
+        if epic and has_steam:
+            raise ValueError("multiple Steam/Epic installs found; pass --store steam or --store epic and --game-dir")
+        if epic or args.prefix or args.wine:
+            store = "epic"
+        elif has_steam:
+            store = "steam"
+        elif steam_roots:
+            raise steam_error
+        else:
+            raise ValueError("no valid Elite Steam or Epic install found; pass --store epic --game-dir PATH "
+                             "--prefix PATH and --wine PATH (or --proton PATH) for an unowned install")
+    if store == "epic":
+        return build_epic_plan(args, installer, forwarded, home, env_in)
+    if args.prefix or args.wine:
+        raise ValueError("--prefix and --wine are Epic options; use --store epic")
     steam_roots = roots(args, home, env_in)
     steam_root, library, install_root, game = find_game(args, steam_roots)
     compatdata = compatdata_path(library, env_in)
@@ -400,20 +781,24 @@ def run(args, *, script=Path(__file__), home=Path.home(), environ=None,
         print("  program: %s" % ("launcher" if args.launcher else "installer"))
         print("  game: %s" % game)
         print("  prefix: %s" % compatdata)
-        print("  Proton: %s" % proton)
-        print("  runtime: %s" % (runtime or "none required by toolmanifest"))
+        print("  runner: %s" % proton)
+        print("  runtime: %s" % (runtime or "none"))
         for key in ("SteamAppId", "SteamGameId", "STEAM_COMPAT_APP_ID",
                     "STEAM_COMPAT_CLIENT_INSTALL_PATH", "STEAM_COMPAT_DATA_PATH",
                     "STEAM_COMPAT_INSTALL_PATH", "STEAM_COMPAT_LIBRARY_PATHS"):
-            print("  %s=%s" % (key, shlex.quote(env[key])))
+            if key in env:
+                print("  %s=%s" % (key, shlex.quote(env[key])))
+        for key in ("WINEPREFIX", "PROTONPATH", "PROTON_VERB", "UMU_RUNTIME_UPDATE"):
+            if key in env:
+                print("  %s=%s" % (key, shlex.quote(env[key])))
         print("  command: %s" % shlex.join(command))
         return 0
     if geteuid() == 0:
-        raise ValueError("run as your Steam user without sudo")
+        raise ValueError("run as the game owner without sudo")
     try:
         return launch(command, env=env, check=False).returncode
     except OSError as exc:
-        raise ValueError("could not start Steam's Proton/runtime: %s" % exc) from exc
+        raise ValueError("could not start the selected Wine/Proton runtime: %s" % exc) from exc
 
 
 def launcher_self_test(parse, root, script, home, env, launch, calls):
@@ -487,12 +872,492 @@ def launcher_self_test(parse, root, script, home, env, launch, calls):
     assert installer_args(parse("--install")) == ["--install"]
 
 
+def epic_self_test():
+    import io
+    import json
+    from contextlib import redirect_stdout
+    from tempfile import TemporaryDirectory
+
+    if os.name == "nt":
+        # Wine drive links and Linux Flatpak deployments require POSIX filesystem semantics.
+        return
+    parse = lambda *words: parse_argv(list(words))
+    with TemporaryDirectory(dir="/dev/shm" if Path("/dev/shm").is_dir() else None) as tmp:
+        root = Path(tmp).resolve()
+        home = root / "home"
+        script = root / "tools/install_proton.py"
+        script.parent.mkdir()
+        exe = script.parent / "edvr-installer.exe"
+        exe.write_bytes(b"installer")
+        (script.parent / "ed-up-launcher.exe").write_bytes(b"launcher")
+        install = home / "Custom Elite's $() folder"
+        game = install / PRODUCT
+        game.mkdir(parents=True)
+        (game / "EliteDangerous64.exe").write_bytes(b"game")
+        prefix = home / "Existing Wine prefix"
+        (prefix / "drive_c").mkdir(parents=True)
+        (prefix / "dosdevices").mkdir()
+        (prefix / "dosdevices/g:").symlink_to(install, target_is_directory=True)
+        for name in ("system.reg", "user.reg"):
+            (prefix / name).write_bytes(b"registry")
+        wine = home / "Selected Wine's $() runner/bin/wine"
+        wine.parent.mkdir(parents=True)
+        wine.write_bytes(b"runner")
+        config = home / ".config/heroic"
+        installed = config / "legendaryConfig/legendary/installed.json"
+        installed.parent.mkdir(parents=True)
+        installed.write_text(json.dumps({"ELITE": {"app_name": "ELITE", "title": "Elite Dangerous",
+                             "install_path": str(install), "executable": "EDLaunch.exe"}}), encoding="utf-8")
+        settings = config / "GamesConfig/ELITE.json"
+        settings.parent.mkdir()
+
+        def save_settings(base, binary, kind="wine", umu=False, path=settings):
+            path.write_text(json.dumps({"ELITE": {"winePrefix": str(base), "wineVersion": {
+                "bin": str(binary), "name": "selected", "type": kind}, "disableUMU": not umu}}), encoding="utf-8")
+
+        save_settings(prefix, wine)
+        env = {"PATH": "/mock", "HOME": str(home), "SteamAppId": "359320", "SteamGameId": "wrong",
+               "STEAM_COMPAT_DATA_PATH": "/wrong", "WINEPREFIX": "/wrong", "PROTONPATH": "/wrong",
+               "EPIC_AUTH_TOKEN": "secret-not-for-output"}
+        expected_windows = "G:\\Products\\elite-dangerous-odyssey-64"
+        expected = [str(wine), str(exe), "--store", "epic", "--dir", expected_windows,
+                    "--install", "--scope", "flat"]
+        args = parse("--dry-run", "--install", "--scope", "flat")
+        command, launch_env, _ = build_plan(args, script=script, home=home, environ=env)
+        assert command == expected
+        assert launch_env["WINEPREFIX"] == str(prefix)
+        assert "PROTONPATH" not in launch_env and "SteamAppId" not in launch_env
+        assert "SteamGameId" not in launch_env and "STEAM_COMPAT_DATA_PATH" not in launch_env
+        before = {str(p): (p.read_bytes() if p.is_file() else None) for p in root.rglob("*")}
+        calls = []
+
+        def launch(command, **kwargs):
+            calls.append((command, kwargs))
+            return subprocess.CompletedProcess(command, 17)
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            assert run(args, script=script, home=home, environ=env, launch=launch,
+                       platform="linux", geteuid=lambda: 1000) == 0
+        assert not calls and before == {str(p): (p.read_bytes() if p.is_file() else None) for p in root.rglob("*")}
+        assert "secret-not-for-output" not in output.getvalue() and shlex.join(expected) in output.getvalue()
+        assert run(parse("--store", "epic", "--install", "--scope", "flat"), script=script,
+                   home=home, environ=env, launch=launch, platform="linux", geteuid=lambda: 1000) == 17
+        assert calls[0][0] == expected and calls[0][1]["env"]["WINEPREFIX"] == str(prefix)
+
+        def refuses(words, reason):
+            try:
+                build_plan(parse(*words), script=script, home=home, environ=env)
+                raise AssertionError("accepted invalid Epic plan: %r" % (words,))
+            except ValueError as exc:
+                assert reason in str(exc), str(exc)
+
+        refuses(("--store", "epic", "--launcher"), "original")
+        refuses(("--launcher", "--", "--store=steam"), "override")
+        refuses(("--launcher", "--", "--dir", "C:\\other"), "override")
+        refuses(("--store", "epic", "--wine", str(root / "missing")), "missing")
+        (prefix / "system.reg").unlink()
+        refuses(("--store", "epic"), "incomplete")
+        (prefix / "system.reg").write_bytes(b"registry")
+
+        # Two recorded owners of one product need a choice; a full manual binding is that choice.
+        competing = root / "competing-legendary"
+        competing.mkdir()
+        other_prefix = home / "Other existing prefix"
+        (other_prefix / "drive_c").mkdir(parents=True)
+        (other_prefix / "dosdevices").mkdir()
+        (other_prefix / "dosdevices/g:").symlink_to(install, target_is_directory=True)
+        for name in ("system.reg", "user.reg"):
+            (other_prefix / name).write_bytes(b"registry")
+        competing_installed = competing / "installed.json"
+        competing_installed.write_text(json.dumps({"ELITE": {
+            "title": "Elite Dangerous", "install_path": str(install)}}), encoding="utf-8")
+        (competing / "config.ini").write_text(
+            "[ELITE]\nwine_prefix=" + str(other_prefix) + "\nwine_executable=" + str(wine)
+            + "\n[ELITE.env]\nWINEDEBUG=owner-only\n", encoding="utf-8")
+        env["LEGENDARY_CONFIG_PATH"] = str(competing)
+        incoming_prefix = env.pop("WINEPREFIX")
+        refuses(("--store", "epic", "--game-dir", str(game)), "configurations match")
+        command, launch_env, _ = build_plan(parse("--store", "epic", "--game-dir", str(game),
+            "--prefix", str(prefix), "--wine", str(wine)), script=script, home=home, environ=env)
+        assert command == expected[:-3] and launch_env["WINEPREFIX"] == str(prefix)
+        assert "WINEDEBUG" not in launch_env
+        env["WINEPREFIX"] = incoming_prefix
+        env.pop("LEGENDARY_CONFIG_PATH")
+        competing_installed.unlink()
+
+        # A real Steam install and Epic install require a store selection; game-dir disambiguates.
+        steam = home / ".local/share/Steam"
+        steam_game = steam / "steamapps/common/Elite Dangerous" / PRODUCT
+        steam_game.mkdir(parents=True)
+        (steam_game / "EliteDangerous64.exe").write_bytes(b"game")
+        (steam / "steamapps/libraryfolders.vdf").write_text('"libraryfolders" {}', encoding="utf-8")
+        steam_manifest = steam / "steamapps/appmanifest_359320.acf"
+        steam_manifest.write_text('"AppState" { "appid" "359320" "installdir" "Elite Dangerous" }', encoding="utf-8")
+        refuses(("--dry-run",), "multiple Steam/Epic")
+        assert build_plan(parse("--game-dir", str(game)), script=script, home=home, environ=env)[0][:2] == expected[:2]
+        steam_manifest.unlink()
+        (steam / "steamapps/libraryfolders.vdf").unlink()
+
+        # The configured Proton root remains distinct from its actual Wine prefix.
+        compat = home / "Existing Proton root"
+        compat.mkdir()
+        prefix.rename(compat / "pfx")
+        prefix = compat / "pfx"
+        proton = home / "Selected Proton/proton"
+        proton.parent.mkdir()
+        proton.write_bytes(b"runner")
+        toolmanifest = proton.parent / "toolmanifest.vdf"
+        toolmanifest.write_text('"manifest" { "require_tool_appid" "1628350" }', encoding="utf-8")
+        save_settings(compat, proton, "proton")
+        command, launch_env, _ = build_plan(parse("--store", "epic"), script=script, home=home, environ=env)
+        assert command == [str(proton), "runinprefix", str(exe), "--store", "epic", "--dir", expected_windows]
+        assert launch_env["STEAM_COMPAT_DATA_PATH"] == str(compat)
+        assert launch_env["WINEPREFIX"] == str(prefix)
+        assert "STEAM_COMPAT_CLIENT_INSTALL_PATH" not in launch_env
+
+        # UMU uses the manager's pinned Proton and existing runtime, with no automatic selection.
+        umu = config / "tools/runtimes/umu/umu_run.py"
+        umu.parent.mkdir(parents=True)
+        umu.write_bytes(b"runner")
+        save_settings(compat, proton, "proton", umu=True)
+        toolmanifest.write_text('"manifest" { "require_tool_appid" "1628350" }', encoding="utf-8")
+        refuses(("--store", "epic"), "UMU runtime missing")
+        runtime = home / ".local/share/umu/steamrt3"
+        (runtime / "pressure-vessel").mkdir(parents=True)
+        for name in ("_v2-entry-point", "VERSIONS.txt", ".installed.ok"):
+            (runtime / name).write_bytes(b"runtime")
+        command, launch_env, _ = build_plan(parse("--store", "epic"), script=script, home=home, environ=env)
+        assert command == [str(umu), str(exe), "--store", "epic", "--dir", expected_windows]
+        assert {key: launch_env[key] for key in ("WINEPREFIX", "PROTONPATH", "PROTON_VERB", "UMU_RUNTIME_UPDATE", "GAMEID", "STORE")} == {
+            "WINEPREFIX": str(compat), "PROTONPATH": str(proton.parent), "PROTON_VERB": "runinprefix",
+            "UMU_RUNTIME_UPDATE": "0", "GAMEID": "umu-0", "STORE": "egs"}
+        assert "SteamAppId" not in launch_env
+
+        # A fully explicit unowned Wine prefix does not need any launcher metadata or Steam.
+        installed.unlink()
+        command, _, _ = build_plan(parse("--store", "epic", "--game-dir", str(game), "--prefix", str(prefix),
+                                        "--wine", str(wine)), script=script, home=home, environ=env)
+        assert command == expected[:-3]
+
+        # A Flatpak-only Wine binary is checked in its installed deployment and executed inside it.
+        flat_id = "com.heroicgameslauncher.hgl"
+        flat_config = home / ".var/app" / flat_id / "config/heroic"
+        flat_installed = flat_config / "legendaryConfig/legendary/installed.json"
+        flat_installed.parent.mkdir(parents=True)
+        flat_installed.write_text(json.dumps({"ELITE": {"title": "Elite Dangerous", "install_path": str(install)}}), encoding="utf-8")
+        flat_settings = flat_config / "GamesConfig/ELITE.json"
+        flat_settings.parent.mkdir()
+        save_settings(prefix, Path("/app/bin/wine"), path=flat_settings)
+        deployed_wine = home / ".local/share/flatpak/app" / flat_id / "current/active/files/bin/wine"
+        deployed_wine.parent.mkdir(parents=True)
+        deployed_wine.write_bytes(b"runner")
+        fake_flatpak = root / "bin/flatpak"
+        fake_flatpak.parent.mkdir()
+        fake_flatpak.write_bytes(b"runner")
+        fake_flatpak.chmod(0o700)
+        env["PATH"] = str(fake_flatpak.parent)
+        command, launch_env, _ = build_plan(parse("--store", "epic"), script=script, home=home, environ=env)
+        assert command[:3] == [str(fake_flatpak), "run", "--command=/app/bin/wine"]
+        assert command[-6:] == [flat_id, str(exe), "--store", "epic", "--dir", expected_windows]
+        assert "--env=WINEPREFIX=" + str(prefix) in command
+        assert "--filesystem=" + str(exe) in command and "--filesystem=" + str(install) in command
+        assert "secret-not-for-output" not in shlex.join(command)
+        deployed_wine.unlink()
+        refuses(("--store", "epic"), "installed Flatpak")
+
+        # Flatpak exports the host XDG data directory as HOST_XDG_DATA_HOME.
+        # Heroic searches its sandbox PATH before the bundled UMU fallback.
+        shared_data = home / "Custom Shared Data"
+        flat_deployment = shared_data / "flatpak/app" / flat_id / "current/active"
+        flat_deployment.mkdir(parents=True)
+        (flat_deployment / "metadata").write_text(
+            "[Environment]\nPATH=/app/libexec/manager:/app/bin:/usr/bin\n", encoding="utf-8")
+        sandbox_umu = flat_deployment / "files/libexec/manager/umu-run"
+        sandbox_umu.parent.mkdir(parents=True)
+        sandbox_umu.write_bytes(b"sandbox runner")
+        app_bin_umu = flat_deployment / "files/bin/umu-run"
+        app_bin_umu.parent.mkdir(parents=True)
+        app_bin_umu.write_bytes(b"secondary sandbox runner")
+        host_umu = fake_flatpak.parent / "umu-run"
+        host_umu.write_bytes(b"host runner must not run inside Flatpak")
+        host_umu.chmod(0o700)
+        bundled_umu = flat_config / "tools/runtimes/umu/umu_run.py"
+        bundled_umu.parent.mkdir(parents=True)
+        bundled_umu.write_bytes(b"fallback runner")
+        save_settings(compat, proton, "proton", umu=True, path=flat_settings)
+        flat_runtime = home / "Custom Shared Data/umu/steamrt3"
+        (flat_runtime / "pressure-vessel").mkdir(parents=True)
+        for name in ("_v2-entry-point", "VERSIONS.txt", ".installed.ok"):
+            (flat_runtime / name).write_bytes(b"runtime")
+        flat_env = dict(env, XDG_DATA_HOME=str(shared_data))
+        flat_env.pop("HOST_XDG_DATA_HOME", None)
+        command, launch_env, details = build_plan(parse("--store", "epic"), script=script, home=home, environ=flat_env)
+        assert command[:3] == [str(fake_flatpak), "run", "--command=/app/libexec/manager/umu-run"]
+        assert details[3] == flat_runtime
+        assert launch_env["HOST_XDG_DATA_HOME"] == str(shared_data)
+        assert "--env=HOST_XDG_DATA_HOME=" + str(shared_data) in command
+        assert "--env=PATH=/app/libexec/manager:/app/bin:/usr/bin" in command
+        assert "--env=PROTONPATH=" + str(proton.parent) in command
+        assert "--env=PROTON_VERB=runinprefix" in command and "--env=UMU_RUNTIME_UPDATE=0" in command
+        assert str(host_umu) not in command and str(bundled_umu) not in command
+
+        # Persistent overrides select the same UMU that Heroic finds, with
+        # per-app values overriding global values without exporting secrets.
+        overrides = shared_data / "flatpak/overrides"
+        overrides.mkdir()
+        (overrides / "global").write_text("[Environment]\nPATH=/app/bin\n", encoding="utf-8")
+        custom_umu = flat_deployment / "files/custom runneré/umu-run"
+        custom_umu.parent.mkdir()
+        custom_umu.write_bytes(b"selected overridden runner")
+        for indentation in (" \t ", "\r\f "):
+            (overrides / flat_id).write_text(
+                "[Environment]\nTOKEN=must-not-be-exported\n" + indentation
+                + "PATH=/app/custom\\srunneré:/app/bin\n", encoding="utf-8")
+            before_plan = {str(path.relative_to(root)): (path.lstat().st_mtime_ns, path.lstat().st_size)
+                           for path in root.rglob("*")}
+            command, launch_env, details = build_plan(parse("--store", "epic"), script=script, home=home, environ=flat_env)
+            assert before_plan == {str(path.relative_to(root)): (path.lstat().st_mtime_ns, path.lstat().st_size)
+                                   for path in root.rglob("*")}
+            assert command[:3] == [str(fake_flatpak), "run", "--command=/app/custom runneré/umu-run"]
+            assert "--env=PATH=/app/custom runneré:/app/bin" in command
+            assert "must-not-be-exported" not in shlex.join(command) and "TOKEN" not in launch_env
+        for unsupported in ("\u00a0PATH=/app/bin", "PATH\u00a0=/app/bin", "PATH=\u00a0/app/bin",
+                            "\vPATH=/app/bin", "NOTE=fixture\x00value", "  keyless continuation"):
+            (overrides / flat_id).write_text(
+                "[Environment]\nTOKEN=must-not-be-exported\n" + unsupported + "\n", encoding="utf-8")
+            try:
+                build_plan(parse("--store", "epic"), script=script, home=home, environ=flat_env)
+                raise AssertionError("unsupported Flatpak syntax accepted: %r" % unsupported)
+            except ValueError as exc:
+                assert "override" in str(exc)
+        (overrides / flat_id).write_text(
+            "[Environment]\nPATH=/app/bin\n[Context]\nunset-environment=PATH;\n", encoding="utf-8")
+        try:
+            build_plan(parse("--store", "epic"), script=script, home=home, environ=flat_env)
+            raise AssertionError("unset Flatpak PATH accepted")
+        except ValueError as exc:
+            assert "PATH" in str(exc) and "override" in str(exc)
+        (overrides / flat_id).unlink()
+        (overrides / "global").unlink()
+
+        # System overrides apply only to system deployments. Within them the
+        # effective order is runtime, app, system-global, system-app,
+        # user-global, user-app; a later set also replaces an earlier unset.
+        system_installation = root / "system-flatpak"
+        system_overrides = system_installation / "overrides"
+        system_overrides.mkdir(parents=True)
+        (system_overrides / "global").write_text("[Environment]\nPATH=/app/unselected\n", encoding="utf-8")
+        system_env = dict(flat_env, FLATPAK_SYSTEM_DIR=str(system_installation),
+                          FLATPAK_USER_DIR=str(shared_data / "flatpak"))
+        command, _, _ = build_plan(parse("--store", "epic"), script=script, home=home, environ=system_env)
+        assert command[:3] == [str(fake_flatpak), "run", "--command=/app/libexec/manager/umu-run"]
+        system_deployment = system_installation / "app" / flat_id / "current/active"
+        system_deployment.parent.mkdir(parents=True)
+        flat_deployment.rename(system_deployment)
+        for name in ("runtime", "system-global", "system-app", "user-global", "user-app"):
+            binary = system_deployment / "files" / name / "umu-run"
+            binary.parent.mkdir()
+            binary.write_bytes(b"override runner")
+        runtime_deployment = system_installation / "runtime/org.example.Platform/x86_64/1/active"
+        (runtime_deployment / "files").mkdir(parents=True)
+        (runtime_deployment / "metadata").write_text("[Environment]\nPATH=/app/runtime\n", encoding="utf-8")
+        (system_deployment / "metadata").write_text(
+            "[Application]\nruntime=org.example.Platform/x86_64/1\n", encoding="utf-8")
+        (system_overrides / "global").unlink()
+        command, _, _ = build_plan(parse("--store", "epic"), script=script, home=home, environ=system_env)
+        assert command[:3] == [str(fake_flatpak), "run", "--command=/app/runtime/umu-run"]
+        user_runtime = shared_data / "flatpak/runtime/org.example.Platform/x86_64/1/active"
+        user_runtime.parent.mkdir(parents=True)
+        runtime_deployment.rename(user_runtime)
+        (runtime_deployment / "files").mkdir(parents=True)
+        (runtime_deployment / "metadata").write_text("[Environment]\nPATH=/app/system-global\n", encoding="utf-8")
+        command, _, _ = build_plan(parse("--store", "epic"), script=script, home=home, environ=system_env)
+        assert command[:3] == [str(fake_flatpak), "run", "--command=/app/runtime/umu-run"]
+        user_metadata = user_runtime / "metadata"
+        recorded_metadata = user_metadata.read_bytes()
+        user_metadata.unlink()
+        try:
+            build_plan(parse("--store", "epic"), script=script, home=home, environ=system_env)
+            raise AssertionError("corrupt user runtime silently selected a system runtime")
+        except ValueError as exc:
+            assert "runtime metadata is missing" in str(exc), str(exc)
+        user_metadata.write_bytes(recorded_metadata)
+        for path, directory in ((system_overrides / "global", "system-global"),
+                                (system_overrides / flat_id, "system-app"),
+                                (overrides / "global", "user-global"), (overrides / flat_id, "user-app")):
+            path.write_text("[Environment]\nPATH=/app/" + directory + "\n", encoding="utf-8")
+            command, _, _ = build_plan(parse("--store", "epic"), script=script, home=home, environ=system_env)
+            assert command[:3] == [str(fake_flatpak), "run", "--command=/app/" + directory + "/umu-run"]
+        (overrides / "global").write_text("[Context]\nunset-environment=PATH;HOST_XDG_DATA_HOME;\n", encoding="utf-8")
+        (overrides / flat_id).write_text(
+            "[Environment]\nPATH=/app/user-app\nHOST_XDG_DATA_HOME=" + str(shared_data) + "\n", encoding="utf-8")
+        command, _, details = build_plan(parse("--store", "epic"), script=script, home=home, environ=system_env)
+        assert command[:3] == [str(fake_flatpak), "run", "--command=/app/user-app/umu-run"]
+        assert details[3] == flat_runtime
+        (overrides / flat_id).write_text("[Environment]\nPATH=/app/bad\\q\n", encoding="utf-8")
+        try:
+            build_plan(parse("--store", "epic"), script=script, home=home, environ=system_env)
+            raise AssertionError("invalid Flatpak escape accepted")
+        except ValueError as exc:
+            assert "escape" in str(exc) and "override" in str(exc)
+        (overrides / flat_id).unlink()
+        (overrides / "global").unlink()
+
+        # Lutris's System Wine means `wine` on the sandbox PATH; a custom
+        # absolute /usr/bin/wine selection remains that exact executable.
+        flat_installed.unlink()
+        manifests = prefix / "drive_c/ProgramData/Epic/EpicGamesLauncher/Data/Manifests"
+        manifests.mkdir(parents=True)
+        (manifests / "elite.item").write_text(json.dumps({"AppName": "ELITE", "DisplayName": "Elite Dangerous",
+                                                        "InstallLocation": "G:\\"}), encoding="utf-8")
+        lutris_id = "net.lutris.Lutris"
+        flat_lutris = home / ".var/app" / lutris_id / "config/lutris/games/epic.yml"
+        flat_lutris.parent.mkdir(parents=True)
+        lutris_game = "game:\n  prefix: " + json.dumps(str(prefix)) + "\n"
+        flat_lutris.write_text(lutris_game + "wine:\n  version: system\n", encoding="utf-8")
+        lutris_deployment = home / ".local/share/flatpak/app" / lutris_id / "current/active"
+        app_wine = lutris_deployment / "files/bin/wine"
+        app_wine.parent.mkdir(parents=True)
+        app_wine.write_bytes(b"selected system wine")
+        (lutris_deployment / "metadata").write_text(
+            "[Application]\nruntime=org.gnome.Platform/x86_64/51\n[Environment]\nPATH=/app/bin:/usr/bin\n", encoding="utf-8")
+        runtime_wine = home / ".local/share/flatpak/runtime/org.gnome.Platform/x86_64/51/active/files/bin/wine"
+        runtime_wine.parent.mkdir(parents=True)
+        runtime_wine.write_bytes(b"unselected runtime wine")
+        (runtime_wine.parent.parent.parent / "metadata").write_text("[Runtime]\n", encoding="utf-8")
+        command, _, _ = build_plan(parse("--store", "epic"), script=script, home=home, environ=env)
+        assert command[:3] == [str(fake_flatpak), "run", "--command=/app/bin/wine"]
+        # System Wine follows a persistent user-global PATH before the
+        # deployment default; an explicit custom executable stays exact.
+        lutris_overrides = home / ".local/share/flatpak/overrides"
+        lutris_overrides.mkdir()
+        (lutris_overrides / "global").write_text("[Environment]\nPATH=/usr/bin:/app/bin\n", encoding="utf-8")
+        command, _, _ = build_plan(parse("--store", "epic"), script=script, home=home, environ=env)
+        assert command[:3] == [str(fake_flatpak), "run", "--command=/usr/bin/wine"]
+        (lutris_overrides / "global").write_text("[Environment]\nPATH=/app/missing\n", encoding="utf-8")
+        refuses(("--store", "epic"), "effective PATH")
+        (lutris_overrides / "global").unlink()
+        flat_lutris.write_text(lutris_game + "wine:\n  version: custom\n  custom_wine_path: /usr/bin/wine\n", encoding="utf-8")
+        command, _, _ = build_plan(parse("--store", "epic"), script=script, home=home, environ=env)
+        assert command[:3] == [str(fake_flatpak), "run", "--command=/usr/bin/wine"]
+        flat_lutris.unlink()
+
+        # Standalone Legendary and Lutris metadata drive the same bound installer route.
+        legendary = home / ".config/legendary"
+        legendary.mkdir()
+        legendary_installed = legendary / "installed.json"
+        legendary_installed.write_text(json.dumps({"ELITE": {
+            "title": "Elite Dangerous", "install_path": str(install)}}), encoding="utf-8")
+        (legendary / "config.ini").write_text(
+            "[ELITE]\nwine_prefix=" + str(prefix) + "\nwine_executable=" + str(wine)
+            + "\n[ELITE.env]\nWINEDEBUG=-all\n", encoding="utf-8")
+        manager_env = dict(env)
+        manager_env.pop("WINEPREFIX")
+        command, launch_env, _ = build_plan(parse("--store", "epic"), script=script,
+                                           home=home, environ=manager_env)
+        assert command == expected[:-3] and launch_env["WINEDEBUG"] == "-all"
+        legendary_installed.unlink()
+        lutris = home / ".config/lutris"
+        (lutris / "games").mkdir(parents=True)
+        (lutris / "games/epic.yml").write_text(
+            "game:\n  prefix: " + json.dumps(str(prefix)) + "\n"
+            "wine:\n  version: custom\n  custom_wine_path: " + json.dumps(str(wine)) + "\n", encoding="utf-8")
+        manifests = prefix / "drive_c/ProgramData/Epic/EpicGamesLauncher/Data/Manifests"
+        manifests.mkdir(parents=True, exist_ok=True)
+        (manifests / "elite.item").write_text(json.dumps({"AppName": "ELITE", "DisplayName": "Elite Dangerous",
+                                                        "InstallLocation": "G:\\"}), encoding="utf-8")
+        command, launch_env, _ = build_plan(parse("--store", "epic"), script=script,
+                                           home=home, environ=manager_env)
+        assert command == expected[:-3] and launch_env["WINEPREFIX"] == str(prefix)
+
+
+def preview_self_test():
+    """Native Epic uses the game's last-run Proton, not another cached runtime."""
+    import io
+    import json
+    from contextlib import redirect_stdout
+    from tempfile import TemporaryDirectory
+
+    if os.name == "nt":
+        return
+    with TemporaryDirectory(dir="/dev/shm" if Path("/dev/shm").is_dir() else None) as tmp:
+        root = Path(tmp).resolve()
+        home = root / "home"
+        data = home / "Custom data é"
+        native = data / "com.epicgames.eglv2"
+        install = home / "Games é/Custom name"
+        game = install / PRODUCT
+        game.mkdir(parents=True)
+        (game / "EliteDangerous64.exe").write_bytes(b"game")
+        compat = native / "compat/compatdata/ELITE"
+        prefix = compat / "pfx"
+        (prefix / "drive_c").mkdir(parents=True)
+        (prefix / "dosdevices").mkdir()
+        (prefix / "dosdevices/g:").symlink_to(install, target_is_directory=True)
+        for name in ("system.reg", "user.reg"):
+            (prefix / name).write_bytes(b"registry")
+        proton = native / "compat/runtime/GE-Proton10-34/proton"
+        other = native / "compat/runtime/GE-Proton10-35/proton"
+        for runner in (proton, other):
+            runner.parent.mkdir(parents=True)
+            runner.write_bytes(b"runner")
+        (compat / "config_info").write_text("\n".join((
+            "GE-Proton10-34", str(proton.parent / "files/share/fonts"),
+            str(proton.parent / "files/lib"), "", "0", "0", "0",
+            str(proton.parent / "files/share/default_pfx"))), encoding="utf-8")
+        (native / "installations.jsonl").write_text(
+            json.dumps({"version": 1, "writtenAt": "2026-10-16T08:40:42Z", "entries": 0}) + "\n" +
+            json.dumps({"installationId": "one", "complete": True, "dir": str(install),
+                        "platform": "Windows", "artifactId": "ELITE", "itemId": "elite"}) + "\n",
+            encoding="utf-8")
+        script = root / "install_proton.py"
+        installer = root / "edvr-installer.exe"
+        installer.write_bytes(b"installer")
+        env = {"HOME": str(home), "XDG_DATA_HOME": str(data), "PATH": "/missing",
+               "SteamAppId": "wrong", "STEAM_COMPAT_DATA_PATH": "/wrong",
+               "EPIC_AUTH_TOKEN": "must-not-appear"}
+        args = parse_argv(["--dry-run"])
+        command, resolved, _ = build_plan(args, script=script, home=home, environ=env)
+        assert command == [str(proton), "runinprefix", str(installer), "--store", "epic",
+                           "--dir", "G:\\Products\\elite-dangerous-odyssey-64"]
+        assert resolved["STEAM_COMPAT_DATA_PATH"] == str(compat)
+        assert resolved["WINEPREFIX"] == str(prefix)
+        assert "SteamAppId" not in resolved and "STEAM_COMPAT_CLIENT_INSTALL_PATH" not in resolved
+        before = {str(p): (p.read_bytes() if p.is_file() else None) for p in root.rglob("*")}
+        output = io.StringIO()
+
+        def never_launch(*args, **kwargs):
+            raise AssertionError("dry-run started the native Epic runner")
+
+        with redirect_stdout(output):
+            assert run(args, script=script, home=home, environ=env, launch=never_launch,
+                       platform="linux", geteuid=lambda: 1000) == 0
+        assert "must-not-appear" not in output.getvalue()
+        assert before == {str(p): (p.read_bytes() if p.is_file() else None) for p in root.rglob("*")}
+        try:
+            build_plan(parse_argv(["--store", "epic", "--prefix", str(prefix)]),
+                       script=script, home=home, environ=env)
+            raise AssertionError("native Epic accepted a raw pfx without its Proton root")
+        except ValueError as exc:
+            assert "compatdata root with pfx/" in str(exc), str(exc)
+        (compat / "config_info").unlink()
+        try:
+            build_plan(args, script=script, home=home, environ=env)
+            raise AssertionError("native Epic guessed an unrecorded Proton runtime")
+        except ValueError as exc:
+            assert "Proton record missing" in str(exc), str(exc)
+        override = parse_argv(["--store", "epic", "--proton", str(other)])
+        assert build_plan(override, script=script, home=home, environ=env)[0][:2] == [str(other), "runinprefix"]
+
+
 def self_test():
     import io
     from contextlib import redirect_stderr, redirect_stdout
     from tempfile import TemporaryDirectory
 
     parse = lambda *words: parse_argv(list(words))
+    assert parse("--store", "epic", "--prefix", "/existing", "--wine", "/selected/wine").store == "epic"
     assert installer_args(parse("--preview", "--scope", "flat", "--replace-settings")) == [
         "--install", "--dry-run", "--scope", "flat", "--replace-settings"]
     assert installer_args(parse()) == []
@@ -707,6 +1572,8 @@ def self_test():
         finally:
             if os.name == "nt":
                 globals()["windows_path"] = original_windows_path
+    epic_self_test()
+    preview_self_test()
     print("install_proton: self-test passed")
 
 

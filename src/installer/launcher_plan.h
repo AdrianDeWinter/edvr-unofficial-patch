@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "detect.h"
 #include "launcher_core.h"
 
 namespace edvr::installer {
@@ -74,7 +75,10 @@ std::string outcomeReport(const ApplyOutcome& outcome);
 // Never throws, never shows anything: every failure is an outcome. Returns the process
 // exit code for --apply-plan: 0 done or nothing to do, 1 blocked or failed, 2 a plan that
 // cannot be read or is not where planPathsFor accepts it (no result is written for either).
-int applyPlanFile(const std::wstring& planPath, const char* const* keys);
+// An optional already-discovered inventory supplies the store discovery boundary;
+// null uses the machine's inventory, as the elevated launcher does.
+int applyPlanFile(const std::wstring& planPath, const char* const* keys,
+                  const std::vector<GameInstall>* installs = nullptr);
 
 // How the elevated copy is started and waited for. The real one is ShellExecuteEx with
 // `runas`; the rig starts the same program unelevated.

@@ -1,5 +1,10 @@
 ED-UP launcher on Linux (Steam + Proton)
 
+This launcher wrapper is Steam-only. Epic game detection and installer actions
+are available through edvr_installer.sh --store epic in the Linux installer
+package. Start Epic games through their original Heroic, Legendary, Lutris or
+Epic manager; Epic --launcher mode is refused here.
+
 This is new and untested on Linux. The launcher window, its updates and the
 Play button may not work yet. Logs and reports are welcome.
 

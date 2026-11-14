@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "../common/install_scope.h"
+#include "../common/mirror_location.h"
 #include "../common/real_dll_choice.h"
 
 namespace edvr::installer {
@@ -907,6 +908,8 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     if (!flat) components += ",openvr,openxr-loader,openxr-license,openxr-config";
     components += ",ngx-optional,xess-optional";
     next.components = components;
+    const std::wstring storeSource = edvr::canonicalMirrorSource(s.game.source);
+    if (!storeSource.empty()) next.storeSource = storeSource;
     next.openvrDir = flat ? std::wstring() : relativeOpenvr(s.game.dir, nativeDir);
 
     // The chain is DECIDED by this run, not inherited from the record. The
@@ -1591,10 +1594,12 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         if (r.existing == existingName(ExistingMode::Owned) && r.sha256 != s.state.shaOf(r.id)) ownershipChanged = true;
     for (const FileRecord& r : s.state.files)
         if (r.existing == existingName(ExistingMode::Owned) && r.sha256 != next.shaOf(r.id)) ownershipChanged = true;
-    const bool stateOnly = !changed && body.empty() && ownershipChanged && !o.repair;
+    const bool sourceChanged = next.storeSource != s.state.storeSource;
+    const bool stateOnly = !changed && body.empty() && (ownershipChanged || sourceChanged) && !o.repair;
     if (stateOnly)
-        plan.notes.push_back("Optional runtime ownership changed; only the install record will be updated.");
-    if (!changed && !ownershipChanged && !o.repair) {
+        plan.notes.push_back(sourceChanged ? "The store source changed; only the install record will be updated."
+                                           : "Optional runtime ownership changed; only the install record will be updated.");
+    if (!changed && !ownershipChanged && !sourceChanged && !o.repair) {
         plan.nothingToDo = true;
         plan.notes.push_back("Everything is already in place. Nothing to do.");
     }

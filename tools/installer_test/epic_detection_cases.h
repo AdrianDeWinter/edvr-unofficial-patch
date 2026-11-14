@@ -1,5 +1,8 @@
 #pragma once
 
+#include "../../src/common/mirror_location.h"
+#include "../../src/openxr/seat_store.h"
+
 // Included after the installer rig's scratch-file and assertion helpers.
 static void testEpicDetection(const std::wstring& scratch) {
     printf("\nEpic manifests and a directly selected product\n");
@@ -61,20 +64,6 @@ static void testEpicDetection(const std::wstring& scratch) {
     check(_wcsicmp(mirrorDirFor(selected, mirrorRoot).c_str(), expectedMirror.c_str()) == 0,
           "the direct product uses the Epic mirror used by the detected install");
 
-    // Simulate the update that removed ED-UP's files while leaving Elite.
-    const std::string tuned = "[fix]\r\nshare_exposure = 0\r\n";
-    writeAll(joinPath(customProduct, L"edvr.ini"), tuned);
-    check(updateMirrorIni(customProduct, expectedMirror).ok, "the Epic settings are saved outside the game");
-    DeleteFileW(joinPath(customProduct, L"edvr.ini").c_str());
-    GameInstall repaired;
-    check(describeDirWithInstalls(customProduct, L"Folder you chose", installs, &repaired),
-          "the product can be selected again after the game update");
-    std::vector<std::string> notes;
-    check(restoreFromMirror(customProduct, readMirror(mirrorDirFor(repaired, mirrorRoot)), "vr", &notes),
-          "the direct repair finds and restores the previous Epic settings");
-    expectEq(readAll(joinPath(customProduct, L"edvr.ini")), "[fix]\r\nshare_exposure = 0\r\n",
-             "the repaired product gets the player's exact saved setting");
-
     const std::wstring other = joinPath(root, L"other\\elite-dangerous-odyssey-64");
     makeTree(other);
     check(writeAll(joinPath(other, L"EliteDangerous64.exe"), "fixture"),
@@ -87,5 +76,99 @@ static void testEpicDetection(const std::wstring& scratch) {
           unknown.source == L"Frontier launcher", "an unmatched explicit store source remains the fallback");
     check(!describeDirWithInstalls(joinPath(root, L"gone"), L"Folder you chose", installs, &unknown),
           "a selected folder without the game executable is still refused");
+    removeTree(root);
+}
+
+static void testEpicRuntimeMirrors(const std::wstring& scratch) {
+    printf("\nthe runtime and repair share the recorded Epic mirror\n");
+    const std::wstring root = joinPath(scratch, L"epic-runtime-mirror");
+    removeTree(root);
+    const std::wstring local = joinPath(root, L"AppData");
+    const std::wstring dir = joinPath(root, L"Archive42\\Products\\elite-dangerous-odyssey-64");
+    makeTree(local);
+    makeTree(stateDirPath(dir));
+    const PayloadInfo payload = flatPayloadFor(kFlatTemplate);
+    Survey current = installedFlatSurvey(dir, payload);
+    current.game.source = L"Epic";
+    current.d3d11.sha256 = tsha(payload, "graphics");
+    trecord(current.state, "graphics", tsha(payload, "graphics"));
+    current.flatIniPresent = true;
+    current.flatIniText = kFlatTemplate;
+    current.iniPresent = true;
+    current.iniText = kSharedIni;
+    const std::string oldSettings = "[fix]\r\nshare_exposure = 1\r\n";
+    check(writeAll(joinPath(dir, L"EliteDangerous64.exe"), "fixture") &&
+          writeAll(joinPath(dir, L"edvr.ini"), oldSettings) &&
+          writeAll(statePath(dir), serializeState(current.state)), "the legacy direct-folder install has settings and its old record");
+    const std::wstring mirrorRoot = joinPath(local, L"EDVR");
+    const std::wstring legacyMirror = joinPath(mirrorRoot, L"elite-dangerous-odyssey-64-folder-you-chose");
+    const std::wstring expectedMirror = joinPath(mirrorRoot, L"elite-dangerous-odyssey-64-epic");
+    const std::wstring steamMirror = joinPath(mirrorRoot, L"elite-dangerous-odyssey-64-steam");
+    check(updateMirrorIni(dir, legacyMirror).ok, "the old generic backup remains available");
+    makeTree(steamMirror);
+    writeAll(joinPath(steamMirror, L"edvr.ini"), "another install's settings");
+
+    Options options = testOptions();
+    options.scope = "flat";
+    const std::string beforeRecord = readAll(statePath(dir));
+    check(beforeRecord.find("store_source") == std::string::npos,
+          "the actual legacy record has no stored source metadata");
+    const Plan recordPlan = planInstall(current, options, payload);
+    check(!recordPlan.blocked && !recordPlan.nothingToDo,
+          "an otherwise current install plans to persist its discovered Epic source");
+    planReport(recordPlan);
+    check(readAll(statePath(dir)) == beforeRecord && !dirExists(expectedMirror),
+          "dry-run planning leaves the install record and mirror directories untouched");
+    check(applyPlan(recordPlan, provider(false)).ok, "the source-only install record update applies");
+    check(readState(dir).storeSource == L"Epic", "the recorded source is the canonical Epic store");
+    check(!fileExists(joinPath(dir, L"d3d11.dll")) && readAll(joinPath(dir, L"edvr.ini")) == oldSettings,
+          "the record-only update writes neither a payload nor the live settings");
+    current.state = readState(dir);
+    check(planInstall(current, options, payload).nothingToDo, "the recorded source needs no further update");
+    check(updateMirror(dir, L"", mirrorDirFor(current.game, mirrorRoot)).ok,
+          "repair seeds the Epic mirror without deleting the older generic copy");
+
+    const std::wstring runtimeMirror = runtimeMirrorDirFor(local, dir, true);
+    check(runtimeMirror == expectedMirror &&
+          edvr::openxr::seatMirrorDirFor(local, dir, false) == expectedMirror &&
+          edvr::openxr::seatMirrorDirFor(local, dir, true) == expectedMirror,
+          "menu writes and seat reads and writes choose the recorded Epic mirror among all three stores");
+    MergeReport report;
+    const std::string changed = mergeIni(oldSettings, oldSettings, &oldSettings,
+                                         {{"fix.share_exposure", "0"}}, &report);
+    check(writeFileAtomic(joinPath(dir, L"edvr.ini"), changed) &&
+          writeGenerations(runtimeMirror, L"edvr.ini", changed, false),
+          "the F8-style edit saves through the actual runtime-selected mirror");
+    expectEq(readAll(joinPath(legacyMirror, L"edvr.ini")), "[fix]\r\nshare_exposure = 1\r\n",
+             "the previous generic backup is preserved");
+    expectEq(readAll(joinPath(steamMirror, L"edvr.ini")), "another install's settings",
+             "the Steam backup is preserved");
+
+    removeTree(dir);
+    makeTree(dir);
+    writeAll(joinPath(dir, L"EliteDangerous64.exe"), "fixture");
+    GameInstall repaired;
+    check(describeDirWithInstalls(dir, L"Folder you chose", {current.game}, &repaired),
+          "the wiped product still resolves to its discovered store");
+    std::vector<std::string> notes;
+    check(restoreFromMirror(dir, readMirror(mirrorDirFor(repaired, mirrorRoot)), "vr", &notes),
+          "repair restores from that same Epic mirror after the game update");
+    expectEq(readAll(joinPath(dir, L"edvr.ini")), "[fix]\r\nshare_exposure = 0\r\n",
+             "repair recovers the exact latest runtime setting");
+    check(readState(dir).storeSource == L"Epic", "the restored record keeps the runtime mirror identity");
+
+    const std::wstring hinted = joinPath(root, L"steamapps\\common\\recorded-product");
+    makeTree(stateDirPath(hinted));
+    const std::string recorded = "[edvr]\r\nversion = test\r\nstore_source = Epic\r\n";
+    writeAll(statePath(hinted), recorded);
+    const std::wstring hintedSteam = joinPath(mirrorRoot, L"recorded-product-steam");
+    const std::wstring recordedEpic = joinPath(mirrorRoot, L"recorded-product-epic");
+    makeTree(hintedSteam);
+    check(runtimeMirrorDirFor(local, hinted, false).empty() &&
+          edvr::openxr::seatMirrorDirFor(local, hinted, false).empty() &&
+          !dirExists(recordedEpic) && readAll(statePath(hinted)) == recorded,
+          "a read-only recorded Epic lookup neither borrows the hinted Steam mirror nor creates its missing folder");
+    check(runtimeMirrorDirFor(local, hinted, true) == recordedEpic && dirExists(hintedSteam),
+          "a recorded Epic store beats a conflicting Steam path hint when creating its exact mirror");
     removeTree(root);
 }

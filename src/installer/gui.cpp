@@ -869,7 +869,20 @@ void scanForInstalls() {
     SendMessageW(g.combo, CB_RESETCONTENT, 0, 0);
     g.installs.clear();
     size_t legacyLeftOut = 0;
-    for (const GameInstall& game : findInstalls(&legacyLeftOut)) {
+    std::vector<GameInstall> found = findInstalls(&legacyLeftOut);
+    // A rescan still knows the host-supplied store for the original exact
+    // product. Every other install keeps the source its own detection found.
+    GameInstall supplied;
+    if (!g.args.store.empty() && describeSelectedDir(g.args, &supplied, &found)) {
+        bool listed = false;
+        for (GameInstall& game : found) {
+            if (_wcsicmp(game.dir.c_str(), supplied.dir.c_str()) != 0) continue;
+            game = supplied;
+            listed = true;
+        }
+        if (!listed) found.push_back(supplied);
+    }
+    for (const GameInstall& game : found) {
         g.installs.push_back(game);
         const std::wstring label = game.source + L"  \x00b7  " + game.dir;
         SendMessageW(g.combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
@@ -988,6 +1001,9 @@ void runAction(AppArgs::Act action) {
     AppArgs args = g.args;
     args.action = action;
     args.dir = g.survey.game.dir;
+    const std::wstring& selectedSource = g.survey.game.source;
+    args.store = selectedSource == L"Epic" || selectedSource == L"Steam" || selectedSource == L"Frontier launcher"
+                     ? selectedSource : std::wstring();
     args.keepSettings = ui::checkboxChecked(g.chkKeep);
     args.removeSettings = false;
     args.scope = scopeChoice();
@@ -1571,8 +1587,10 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             // registry and filesystem sweep.
             if (!g.args.dir.empty()) {
                 GameInstall game;
-                if (describeDir(g.args.dir, L"Folder you chose", &game))
+                if (describeSelectedDir(g.args, &game))
                     addInstall(game);
+                else if (!g.args.store.empty())
+                    setReport("--store needs --dir with an existing, exact game product folder. No install was selected.");
                 else
                     scanForInstalls();
             } else {
