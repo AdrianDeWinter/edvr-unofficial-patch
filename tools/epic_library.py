@@ -531,7 +531,7 @@ def select_install(game_path=None, home=None, environ=None):
 def self_test():
     """Hermetic fixtures exercise products, their ownership and launch metadata."""
     with tempfile.TemporaryDirectory(prefix="edvr_epic_") as temporary:
-        home = Path(temporary)
+        home = Path(temporary).resolve()
         config = home / "custom config"
         env = {"XDG_CONFIG_HOME": str(config), "XDG_DATA_HOME": str(home / "data")}
 
