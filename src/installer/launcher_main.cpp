@@ -264,9 +264,11 @@ private:
     std::deque<std::function<void()>> jobs_;
 };
 
-// The source Play would give this folder: a Steam install under steamapps\common, and any other folder
-// taken for Frontier's own store, the rule --direct-dry-run uses.
-std::wstring headlessSource(const std::wstring& dir) {
+// Store discovery is authoritative. An unregistered folder keeps the command line's previous
+// Steam-path/Frontier fallback; headless Play and the direct dry run share that fallback.
+std::wstring commandSource(const GameInstall& game) {
+    if (!game.source.empty() && _wcsicmp(game.source.c_str(), L"Folder you chose") != 0) return game.source;
+    const std::wstring& dir = game.dir;
     std::wstring lowered = dir;
     for (wchar_t& c : lowered) c = c == L'/' ? L'\\' : static_cast<wchar_t>(towlower(c));
     return lowered.find(L"\\steamapps\\") == std::wstring::npos ? L"Frontier launcher" : L"Steam";
@@ -324,7 +326,7 @@ int headlessPlay(const AppArgs& args, Output& out) {
         shown = session.playLine();
         if (!shown.empty()) out.line(shown);
     };
-    session.beginPlay(headlessSource(dir), dir, args.vr, false, realRouteOps(), WatchNames(), WatchTiming());
+    beginHeadlessPlay(session, game, args.vr, realRouteOps(), WatchNames(), WatchTiming());
     show();
     bool finished = closeRequested || !session.playing();
     while (!finished) {
@@ -345,19 +347,34 @@ int runHeadless(const AppArgs& args, bool haveConsole) {
     return code;
 }
 
-int directDryRunLines(const AppArgs& args, DirectEnv env, std::vector<std::string>* lines) {
+void beginHeadlessPlay(LauncherSession& session, const GameInstall& game, bool vr, const RouteOps& ops,
+                       const WatchNames& names, const WatchTiming& timing) {
+    session.beginPlay(commandSource(game), game.dir, vr, false, ops, names, timing);
+}
+
+int directDryRunLines(const AppArgs& args, DirectEnv env, std::vector<std::string>* lines,
+                      const std::vector<GameInstall>* installs) {
     if (args.dir.empty() || args.vr == args.novr) {
         lines->push_back("--direct-dry-run needs --dir <the game's product folder> and exactly one of --vr and --novr.");
         return 2;
     }
+    GameInstall game;
+    const bool described = installs ? describeDirWithInstalls(args.dir, L"Folder you chose", *installs, &game)
+                                   : describeDir(args.dir, L"Folder you chose", &game);
+    if (!described) {
+        lines->push_back("No EliteDangerous64.exe under " + narrowUtf8(args.dir) + ". Nothing was started.");
+        return 2;
+    }
+    const std::wstring source = commandSource(game);
+    if (_wcsicmp(source.c_str(), L"Epic") == 0) {
+        lines->push_back("Epic installs use the Epic Games launcher. Direct launch is unavailable; no sign-in was attempted and nothing was started.");
+        return 3;
+    }
     env.progress = [lines](const std::string& line) { lines->push_back(line); };
-    // Steam keeps its games under steamapps\common; anything else is taken for Frontier's own store.
-    std::wstring lowered = args.dir;
-    for (wchar_t& c : lowered) c = c == L'/' ? L'\\' : static_cast<wchar_t>(towlower(c));
     DirectRequest request;
-    request.productDir = args.dir;
+    request.productDir = game.dir;
     request.vr = args.vr;
-    request.frontier = lowered.find(L"\\steamapps\\") == std::wstring::npos;
+    request.frontier = _wcsicmp(source.c_str(), L"Frontier launcher") == 0;
     // A dry run never asks and never changes the stored login, whatever the caller handed in.
     env.prompts = FrontierPrompts();
     lines->push_back(request.frontier ? "Dry run for an install from Frontier's own store, with the stored login."

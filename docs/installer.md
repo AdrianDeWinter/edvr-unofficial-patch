@@ -23,6 +23,8 @@ This file is why it does what it does. Using it is one paragraph in the
   its own kept default, `edvr_install\edvr.ini.base` and
   `edvr_install\edvr-flat.ini.base`. A scope change deletes no settings file.
 - **Which profile runs** is set by Elite's 3D mode, not the installer.
+- **Epic folders:** Browse and `--dir` retain the store recorded in Epic's
+  manifests, so Play and settings recovery use the same install as discovery.
 - **Installs by `tools\install_edvr.py` (2026-10-14):** the game's original
   runtime is recovered from the newest receipt that still holds it, so an
   update, a switch to flat-only and an uninstall work after two tool installs
@@ -76,6 +78,28 @@ through the same confirmation. Odyssey products sort first, since that is what
 ED-UP is for. Three storefronts on one machine is not unusual, so when more than
 one install is found the window pre-selects the one that already has ED-UP in
 it.
+
+Epic's `InstallLocation` is decoded as JSON, including Unicode escapes. The
+game folder can have any name or drive; neither the display name nor the
+install path needs to contain "Elite". Malformed manifests and locations
+without the game executable are ignored. Browse and `--dir` match the
+confirmed product folder against the store records, retaining its store for
+launching and for the settings mirror outside the game directory.
+
+Epic licences require starting through the Epic launcher
+([Frontier's platform requirements](https://customersupport.frontier.co.uk/hc/en-us/articles/25577492149788-Elite-Dangerous-Versions-Memberships-Account-Limitations-and-Activation-Keys)).
+ED-UP's Play and `--headless` hand detected Epic installs to Epic; they do not
+ask for a Frontier-store login. `--direct-dry-run` reports that requirement
+without signing in or starting anything. After a game update, use Repair to
+restore ED-UP and recover saved settings. Starting the game from Epic does
+not reapply the patch. A game build that the patch does not support still
+needs a compatible ED-UP release.
+
+Older Browse or `--dir` installs may have saved settings under
+`<product>-folder-you-chose`. Run Repair while the game's settings still
+exist to copy them into the Epic mirror; the older copy is retained. If the
+game folder was already wiped, confirm that the older copy belongs to this
+install before recovering it manually: its name does not identify the store.
 
 The `Openvr` folder is found by **file, not by name**: `Openvr\win64`, then
 `Openvr`, then the game folder, and whichever holds `openvr_api.dll` *or*

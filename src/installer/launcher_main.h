@@ -9,6 +9,7 @@
 #include "app.h"
 #include "direct_launch.h"
 #include "launcher_core.h"
+#include "launch_route.h"
 
 namespace edvr::installer {
 
@@ -33,10 +34,18 @@ int runLauncherCommand(const AppArgs& args, bool haveConsole);
 // did not, 2 for a bad command line. Waits for Elite to exit, or for the start with --close-after-start.
 int runHeadless(const AppArgs& args, bool haveConsole);
 
+class LauncherSession;
+// Starts the selected install through headless Play's route. The caller has checked elevation and running games;
+// supplying the route operations and watcher names keeps the same path usable without starting a real store.
+void beginHeadlessPlay(LauncherSession& session, const GameInstall& game, bool vr, const RouteOps& ops,
+                       const WatchNames& names, const WatchTiming& timing);
+
 // --direct-dry-run over `env` (its http and seams): the lines to print and the exit code, 0 for a plan, 3
 // for a fallback and 2 for a command line that is not usable. Starts nothing; every token, the Steam ticket
 // and the machine ID are replaced by <masked> in the lines. runLauncherCommand makes the real environment.
-int directDryRunLines(const AppArgs& args, DirectEnv env, std::vector<std::string>* lines);
+// `installs`, when supplied, is a discovery snapshot instead of a new scan.
+int directDryRunLines(const AppArgs& args, DirectEnv env, std::vector<std::string>* lines,
+                      const std::vector<GameInstall>* installs = nullptr);
 
 // --apply-plan: the elevated copy. No window, no console; returns the exit code.
 int runApplyPlanFile(const AppArgs& args);

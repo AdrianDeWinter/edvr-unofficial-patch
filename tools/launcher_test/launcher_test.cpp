@@ -4451,9 +4451,61 @@ void testDirectSession() {
     }
 }
 
+void testEpicCommands() {
+    section("Epic: selected install in headless Play and direct dry run");
+    {
+        DirectRig rig("epic-headless", "direct_launch=on\n", true);
+        GameInstall discovered;
+        discovered.dir = rig.game.product;
+        discovered.source = L"Epic";
+        const std::vector<GameInstall> installs = {discovered};
+        GameInstall selected;
+        check(describeDirWithInstalls(rig.game.product, L"Folder you chose", installs, &selected),
+              "the selected Epic product is described from the supplied store inventory");
+        WatchNames names;
+        names.game = kFakeGame;
+        names.edlaunch = kFakeEd;
+        WatchTiming timing;
+        timing.pollMs = 40;
+        timing.startupWaitMs = 200;
+        timing.closeWaitMs = 100;
+        beginHeadlessPlay(*rig.session, selected, true, rig.rec.ops(), names, timing);
+        rig.session->shutdown();
+        check(rig.rec.uris == std::vector<std::wstring>{L"com.epicgames.launcher://apps/9c203b6ed35846e8a4a9ff1e314f6593?action=launch&silent=true"} && rig.rec.spawns.empty(),
+              "headless Play opens the selected Epic install through Epic even with direct launch enabled");
+        check(rig.http.requests.empty() && rig.started.empty() && eventTags().empty() && rig.loginNotes.empty() && rig.codeNotes.empty(),
+              "headless Epic Play never signs in directly, asks for credentials, or starts the game itself");
+    }
+    {
+        DirectRig rig("epic-dry-run", "direct_launch=on\n", true);
+        GameInstall discovered;
+        discovered.dir = rig.game.product;
+        discovered.source = L"Epic";
+        const std::vector<GameInstall> installs = {discovered};
+        AppArgs args;
+        args.directDryRun = true;
+        args.dir = rig.game.product;
+        args.vr = true;
+        writeAll(P(rig.game.root, L"steam_api64.dll"), "boundary fixture");
+        int steamAttempts = 0;
+        DirectEnv env = directEnv(&rig.http, rig.keys.keys, nullptr);
+        env.makeSteam = [&steamAttempts](const std::wstring&) {
+            ++steamAttempts;
+            return std::unique_ptr<SteamSession>();
+        };
+        std::vector<std::string> out;
+        const int code = directDryRunLines(args, env, &out, &installs);
+        check(code == 3 && out == std::vector<std::string>{"Epic installs use the Epic Games launcher. Direct launch is unavailable; no sign-in was attempted and nothing was started."},
+              "an Epic direct dry run explains the store route and exits without a direct launch plan");
+        check(steamAttempts == 0 && rig.http.requests.empty() && rig.started.empty() && rig.rec.uris.empty() && rig.rec.spawns.empty() && eventTags().empty(),
+              "an Epic direct dry run makes no authentication request, loads no Steam ticket, and starts nothing");
+    }
+}
+
 // --direct-dry-run: the sign-in as far as the command line, masked, with nothing started.
 void testDryRun() {
     section("direct: --direct-dry-run");
+    const std::vector<GameInstall> installs;
     const std::wstring base = fresh("direct-dry");
     const GameTree game = makeGame(base);
     RigKeys keys = rigKeys(L"dry", true);
@@ -4469,7 +4521,7 @@ void testDryRun() {
         http.script[kPurchasesPath] = {jsonReply(purchasesJson(std::string("--id ") + kExpectedMachineId, "/Zz"))};
         std::vector<std::string> out;
         resetEvents();
-        const int code = directDryRunLines(a, directEnv(&http, keys.keys, nullptr), &out);
+        const int code = directDryRunLines(a, directEnv(&http, keys.keys, nullptr), &out, &installs);
         const std::string all = joined(out);
         check(code == 0 && !out.empty(), "a good sign-in gives a plan and exit code 0: " + std::to_string(code));
         check(!leaks(all), "no token, ticket or machine ID is anywhere in what is printed");
@@ -4483,7 +4535,7 @@ void testDryRun() {
         out.clear();
         FrontierHttp again;
         scriptHappy(&again);
-        check(directDryRunLines(a, directEnv(&again, keys.keys, nullptr), &out) == 0 && !out.empty() && contains(out.back(), "/steam /novr /edo --foo") && !contains(out.back(), "/steam /vr"), "--novr prints /novr");
+        check(directDryRunLines(a, directEnv(&again, keys.keys, nullptr), &out, &installs) == 0 && !out.empty() && contains(out.back(), "/steam /novr /edo --foo") && !contains(out.back(), "/steam /vr"), "--novr prints /novr");
         a.vr = true;
         a.novr = false;
     }
@@ -4492,7 +4544,7 @@ void testDryRun() {
         scriptHappy(&http);
         http.script[kAuthPath] = {statusReply(403)};
         std::vector<std::string> out;
-        const int code = directDryRunLines(a, directEnv(&http, keys.keys, nullptr), &out);
+        const int code = directDryRunLines(a, directEnv(&http, keys.keys, nullptr), &out, &installs);
         check(code == 3 && !out.empty() && contains(out.back(), "Direct launch did not work: Frontier refused the request (HTTP 403)") && !leaks(joined(out)), "a fallback prints its reason and exits 3: " + (out.empty() ? std::string() : out.back()));
     }
     {
@@ -4505,7 +4557,7 @@ void testDryRun() {
             FrontierHttp http;
             scriptHappy(&http);
             std::vector<std::string> out;
-            if (directDryRunLines(bad, directEnv(&http, keys.keys, nullptr), &out) == 2 && http.requests.empty() && out.size() == 1 && contains(out[0], "--direct-dry-run needs --dir")) ++refused;
+            if (directDryRunLines(bad, directEnv(&http, keys.keys, nullptr), &out, &installs) == 2 && http.requests.empty() && out.size() == 1 && contains(out[0], "--direct-dry-run needs --dir")) ++refused;
         }
         check(refused == 3, "no folder, neither of --vr and --novr, or both: exit 2, with one line, and nothing contacted (" + std::to_string(refused) + " of 3)");
     }
@@ -5169,6 +5221,7 @@ void testBundleLeavesLoginOut() {
 // --direct-dry-run on a Frontier-store folder: the stored login only, never asked, never changed.
 void testStoreDryRun() {
     section("frontier store: --direct-dry-run");
+    const std::vector<GameInstall> installs;
     const std::wstring base = fresh("store-dry");
     const GameTree game = makeFrontierStore(base);
     RigKeys keys = rigKeys(L"store-dry", true);
@@ -5204,7 +5257,7 @@ void testStoreDryRun() {
         const std::string before = readAll(loginPath);
         std::vector<std::string> out;
         resetEvents();
-        const int code = directDryRunLines(a, env(&http), &out);
+        const int code = directDryRunLines(a, env(&http), &out, &installs);
         const std::string all = joined(out);
         check(code == 0 && out.size() >= 3, "a stored login gives a plan and exit code 0: " + std::to_string(code) + " " + all);
         check(!out.empty() && contains(out[0], "Frontier's own store"), "the first line says which kind of install it took this for: " + (out.empty() ? std::string() : out[0]));
@@ -5224,7 +5277,7 @@ void testStoreDryRun() {
         flat.vr = false;
         flat.novr = true;
         std::vector<std::string> out;
-        check(directDryRunLines(flat, env(&http), &out) == 0 && !out.empty() && contains(out.back(), " /novr /edo --foo") && !contains(out.back(), "/steam"), "--novr prints /novr");
+        check(directDryRunLines(flat, env(&http), &out, &installs) == 0 && !out.empty() && contains(out.back(), " /novr /edo --foo") && !contains(out.back(), "/steam"), "--novr prints /novr");
     }
     {
         // No stored login at all: it says so, asks nothing, contacts nothing beyond the clock.
@@ -5232,7 +5285,7 @@ void testStoreDryRun() {
         scriptStore(&http, true);
         deleteFrontierLogin(loginPath);
         std::vector<std::string> out;
-        const int code = directDryRunLines(a, env(&http), &out);
+        const int code = directDryRunLines(a, env(&http), &out, &installs);
         check(code == 3 && !out.empty() && contains(out.back(), "Sign in once from the launcher's window") && !contains(out.back(), "Direct launch did not work") && !leaks(joined(out)),
               "with no stored login it stops and says to sign in once from the window: " + (out.empty() ? std::string() : out.back()));
         check(asked == 0 && http.count(kFAuthPath) == 0 && http.count(kFTokenPath) == 0 && !exists(loginPath), "and asks nothing, makes no sign-in call and stores nothing");
@@ -5243,7 +5296,7 @@ void testStoreDryRun() {
         scriptStore(&http, false);
         saveLogin(loginPath, nullptr, kMachineToken);
         std::vector<std::string> out;
-        check(directDryRunLines(a, env(&http), &out) == 3 && !out.empty() && contains(out.back(), "Sign in once from the launcher's window") && http.count(kFAuthPath) == 0 && asked == 0, "a stored login with no password stops the same way");
+        check(directDryRunLines(a, env(&http), &out, &installs) == 3 && !out.empty() && contains(out.back(), "Sign in once from the launcher's window") && http.count(kFAuthPath) == 0 && asked == 0, "a stored login with no password stops the same way");
     }
     {
         // A password but no token yet: a dry run must not make Frontier email a code.
@@ -5251,7 +5304,7 @@ void testStoreDryRun() {
         scriptStore(&http, true);
         saveLogin(loginPath, kPassword, nullptr);
         std::vector<std::string> out;
-        const int code = directDryRunLines(a, env(&http), &out);
+        const int code = directDryRunLines(a, env(&http), &out, &installs);
         check(code == 3 && !out.empty() && contains(out.back(), "emailed code") && http.count(kFAuthPath) == 0 && http.count(kFTokenPath) == 0 && asked == 0, "a login with no token stops before the call that would email a code: " + (out.empty() ? std::string() : out.back()));
     }
     {
@@ -5262,7 +5315,7 @@ void testStoreDryRun() {
         saveLogin(loginPath, kPassword, kMachineToken);
         const std::string before = readAll(loginPath);
         std::vector<std::string> out;
-        const int code = directDryRunLines(a, env(&http), &out);
+        const int code = directDryRunLines(a, env(&http), &out, &installs);
         check(code == 3 && !out.empty() && contains(out.back(), "did not accept the saved login") && !leaks(joined(out)) && asked == 0 && readAll(loginPath) == before && http.count(kFAuthPath) == 1,
               "a denied login exits 3 with one call, asks nothing, and the stored login is unchanged: " + (out.empty() ? std::string() : out.back()));
     }
@@ -5273,7 +5326,7 @@ void testStoreDryRun() {
         http.script[kPurchasesPath] = {statusReply(503)};
         saveLogin(loginPath, kPassword, kMachineToken);
         std::vector<std::string> out;
-        const int code = directDryRunLines(a, env(&http), &out);
+        const int code = directDryRunLines(a, env(&http), &out, &installs);
         check(code == 3 && !out.empty() && contains(out.back(), "Direct launch did not work: Frontier's servers are unavailable (HTTP 503)") && contains(out.back(), "Frontier's launcher") && !contains(out.back(), "Steam"), "an unavailable server is a fallback to Frontier's launcher: " + (out.empty() ? std::string() : out.back()));
     }
     dropKeys(keys);
@@ -5375,6 +5428,7 @@ int main(int argc, char** argv) {
     testLayoutDpi();
     testDirectPlan();
     testDirectSession();
+    testEpicCommands();
     testDryRun();
     testLoginFile();
     testStoreSession();
