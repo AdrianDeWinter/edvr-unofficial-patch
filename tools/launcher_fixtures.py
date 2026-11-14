@@ -644,7 +644,7 @@ def self_test():
             if name == "relSchema3":
                 continue  # a schema the launcher cannot read: the Python verdict is a refusal, as it should be
             lines = []
-            assert sm.verify_directory(folder, keys=[public], out=lines.append), (name, lines)
+            assert sm.verify_directory(folder, keys=[public], out=lines.append, bridge=False), (name, lines)
         s3 = (folders["relSchema3"] / sm.MANIFEST_NAME).read_bytes()
         assert json.loads(s3)["schema"] == 3 and sm.load_manifest(s3)[1] == ["manifest schema 3, launcher reads 2"]
         assert sm.p256_verify(public, s3, bytes.fromhex((folders["relSchema3"] / sm.SIGNATURE_NAME).read_text().strip()))

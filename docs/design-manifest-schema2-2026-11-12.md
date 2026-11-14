@@ -2,6 +2,11 @@
 
 ## Status
 
+- **State (2026-11-14): releases publish a schema-1 bridge.** Launcher 0.1.0
+  shipped in v0.22.0 and reads only `ed-up-manifest.json` at schema 1. Each
+  release carries `ed-up-manifest-v2.json` (schema 2, the only one 0.2.0 and
+  later fetch) and the bridge `ed-up-manifest.json` (2026-11-14 entry). The
+  bridge stays until a decision retires it; not flown against a 0.1.0 launcher.
 - **State (2026-11-13): stages 1, 2 and 3 done, plus the review fixes.** Branch
   `claude/launcher-manifest-schema-6880a7`; each stage passed the full build
   and is its own commit: (1) the schema-2 format, parser, validator, packager
@@ -46,18 +51,14 @@
   - Schema (C++ and Python, fixtures pin both): `chain` is `game:d3d11.dll`,
     `runtime` is `openvr:openvr_api.dll`; reserved targets are refused. The
     shape corpus is 280 cases (52 accepted, 228 refused).
-- **Second review (2026-11-13), as built:** a path this plan places is never a
-  removal candidate, and `apply.cpp`'s Delete re-checks its hash; the Python
-  validator takes the parser's integer range (2^63-1); `--payload` files are
-  checked against the manifest's hashes; the XeSS notices go with the runtime
-  (`FileBlurb::needs`); a containment-refused target keeps its record; one
-  target check (`targetAllowed`) serves manifest files and records, with a
-  `settings` file pinned to its profile's ini.
-- **Supersedes** the 2026-11-12 draft "Launcher 0.2.0" (older tree).
-- **Decided with the maintainer (2026-11-12):** launcher 0.1.0 and schema 1 are
-  retired, no v1 manifest alongside; one parser and one engine; install records
-  are per file id. **Out of scope:** the launcher updating itself (the
-  `launcher` block stays so it can later). No issues filed yet.
+- **Second review (2026-11-13), as built:** a placed path is never a removal
+  candidate and Delete re-checks its hash; the Python validator takes the
+  parser's integer range; `--payload` files are hash-checked; the XeSS notices
+  go with the runtime; one `targetAllowed` check serves files and records.
+- **Decided with the maintainer (2026-11-12), changed 2026-11-14:** one parser
+  and one engine; install records are per file id. "No v1 manifest alongside"
+  assumed 0.1.0 was never released; it was, hence the bridge. Supersedes the
+  2026-11-12 draft "Launcher 0.2.0". No issues filed yet.
 
 ## Why
 
@@ -202,7 +203,8 @@ small fixed set of named behaviours.
   - **Lower, missing, or not an integer:** refused as malformed.
 - After the upgrade a stored schema-1 manifest is not loadable, and the
   launcher has no current manifest until a schema-2 release is adopted.
-  Launcher 0.1.0 was never released.
+  Launcher 0.1.0 shipped in v0.22.0 and reads schema 1 only; the bridge below
+  is how it reaches a launcher that reads schema 2.
 - A schema-3 manifest that fails strict JSON parsing (an integer over 2^63-1,
   or nesting deeper than `kJsonMaxDepth`) is reported as invalid JSON rather
   than as needing a newer launcher. Nothing downloads either way. Future
@@ -227,7 +229,7 @@ small fixed set of named behaviours.
     since the exe is the unit of trust. Each file is `RCDATA` `101 + its
     index in files[]`.
   - The launcher maps the content-addressed cache files instead.
-  - `--payload <dir>` reads `<dir>\ed-up-manifest.json` and takes each file
+  - `--payload <dir>` reads `<dir>\ed-up-manifest-v2.json` and takes each file
     from its `path` under the folder.
   - `idFor`, `canonicalItem`, the per-item fields of `PayloadInfo`, and the
     resource ids 101-111 are removed.
@@ -288,3 +290,46 @@ small fixed set of named behaviours.
   resolves to a legal target, and that the schema constants match.
 - **Parity:** the existing `installer_test` planner cases keep their
   expectations. Only how their payload is built changes.
+
+## 2026-11-14: the schema-1 bridge
+
+v0.22.0 shipped `ed-up-launcher.exe` 0.1.0. It downloads `ed-up-manifest.json`
+and its `.sig` (names fixed in `updater.h`) and its parser accepts only
+`"schema": 1`. Main's 0.2.0 reads schema 2, so under the old name every 0.1.0
+launcher would refuse the next release and be stranded.
+
+What 0.1.0 can do: when the verified manifest's `min_launcher` is newer than
+0.1.0 and the manifest has a `launcher` block newer than 0.1.0 and at least
+`min_launcher`, it reports an update with the launcher itself as the thing to
+update, downloads `launcher.asset`, checks its size and sha256, swaps itself
+and restarts with `--updated`. 0.2.0 still handles `--updated` and migrates
+0.1.0's `state.ini`.
+
+Every release now carries two signed manifests:
+
+- **`ed-up-manifest-v2.json` and `.sig`:** the schema-2 manifest, as before,
+  under a new name. `kManifestAssetName` and `kSignatureAssetName` in
+  `updater.h` name it, and `--payload <dir>` reads the same name. 0.2.0 and
+  later fetch only this pair.
+- **`ed-up-manifest.json` and `.sig`:** a schema-1 bridge, valid under the
+  v0.22.0 rules (`tools/sign_manifest.py` `validate_manifest_v1`, ported rule
+  for rule from that release). Its `min_launcher` is the launcher version this
+  build packages, and its `launcher` block names `ed-up-launcher.exe` with that
+  version, hash and size, so 0.1.0 never installs from it and only replaces
+  itself. Its `assets` and `files` are still true: each schema-2 file that has
+  a schema-1 item (`BRIDGE_ITEM_OF_FILE`) is listed with the same zip, path,
+  hash and size, and a file with none (a licence notice) is left out. Tag,
+  version, build and `issued` equal the schema-2 manifest's.
+
+`package_native.py` writes both, unsigned, and refuses to write a bridge that
+fails `validate_bridge` or disagrees with the schema-2 manifest
+(`bridge_agreement`). `sign_manifest.py sign` takes either file, by its schema,
+and `verify` requires and verifies both pairs and their agreement.
+`release.yml` checks both manifests are in `SHA256SUMS` and uploads both.
+
+Ruled out: publishing schema 2 under the old name (0.1.0 would refuse it), and
+a bridge whose `min_launcher` is the old 0.1.0 (0.1.0 would then install from
+it, and a schema-1 manifest cannot carry what the schema-2 engine installs).
+
+Open: the bridge is kept until the maintainer decides that no 0.1.0 launcher is
+worth stranding. Not flown: a 0.1.0 launcher against a signed bridge.

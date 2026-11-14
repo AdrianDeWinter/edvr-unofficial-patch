@@ -216,27 +216,36 @@ log reporters get the tool's general line. Review the final notes file.
 Besides the four ZIPs, the package artifact carries the split assets the
 launcher updates from: `ed-up-core-<version>.zip`, an `ed-up-dlss-<hash>.zip`
 and an `ed-up-xess-<hash>.zip` when the build has those runtimes,
-`ed-up-launcher.exe` when the build has one, and `ed-up-manifest.json`, which
-names them all with their hashes. `SHA256SUMS` lists every one of them. The
-workflow never signs. Sign the manifest in your own terminal, because
+`ed-up-launcher.exe` when the build has one, and two manifests. `ed-up-manifest-v2.json`
+is the schema-2 manifest launcher 0.2.0 and later read; it names them all with their
+hashes. `ed-up-manifest.json` is a schema-1 bridge: launcher 0.1.0 (shipped in v0.22.0)
+reads only that name and schema, so the bridge sets its `min_launcher` to the
+launcher this build packages and carries that launcher block, which makes
+0.1.0 replace itself and read the schema-2 manifest from then on. It also lists,
+truthfully, each file that has a schema-1 item. It stays until a decision retires it
+(`docs/design-manifest-schema2-2026-11-12.md`). `SHA256SUMS` lists every one of them. The
+workflow never signs. Sign both manifests in your own terminal, because
 `sign_manifest.py` refuses to run anywhere else, and it reads the private key
 from a hidden prompt or, with `--key-stdin`, from one line on stdin so your
 password manager's command line can supply it. The key is never kept in a
 repository or in a session. The signing tool only signs with a key whose public
 half is listed in `src/installer/update_keys.h`. Check the folder before
-attaching anything; the check exits 0 only when the signature, the schema and
-the size and hash of every asset and every file inside the zips all pass:
+attaching anything; the check exits 0 only when both signatures, both schemas,
+the bridge's agreement with the schema-2 manifest, and the size and hash of
+every asset and every file inside the zips all pass:
 
 ```powershell
+python tools/sign_manifest.py sign "edvr-artifacts/$runId/ed-up-manifest-v2.json"
+if ($LASTEXITCODE -ne 0) { throw 'Signing the schema-2 manifest failed' }
 python tools/sign_manifest.py sign "edvr-artifacts/$runId/ed-up-manifest.json"
-if ($LASTEXITCODE -ne 0) { throw 'Signing the manifest failed' }
+if ($LASTEXITCODE -ne 0) { throw 'Signing the schema-1 bridge failed' }
 python tools/sign_manifest.py verify "edvr-artifacts/$runId"
 if ($LASTEXITCODE -ne 0) { throw 'The signed release folder did not verify' }
 ```
 
 Then attach the four verified ZIPs (the fourth, `ed-up-launcher-linux-<version>.zip`,
-is a convenience package outside the signed manifest), the split assets, the manifest with its
-`.sig`, and `SHA256SUMS` to a draft release. A release with no `.sig` is simply
+is a convenience package outside the signed manifest), the split assets, both manifests with
+their `.sig` files, and `SHA256SUMS` to a draft release. A release missing either `.sig` is simply
 not offered to the launcher as an update:
 
 ```powershell
@@ -249,6 +258,8 @@ $assets = @(
     "$folder/ed-up-installer-$version.zip"
     "$folder/ed-up-installer-linux-$version.zip"
     "$folder/ed-up-launcher-linux-$version.zip"
+    "$folder/ed-up-manifest-v2.json"
+    "$folder/ed-up-manifest-v2.json.sig"
     "$folder/ed-up-manifest.json"
     "$folder/ed-up-manifest.json.sig"
     "$folder/SHA256SUMS"
@@ -265,7 +276,7 @@ Actions, the same assets land in `dist\`, `SHA256SUMS` included:
 `package_native.py` writes it, and the workflow only checks that it lists the
 files above with their hashes. `package.bat` prints the signing command when
 it finishes. Run `python tools\sign_manifest.py sign
-dist\ed-up-manifest.json` and then `python tools\sign_manifest.py verify dist`,
+dist\ed-up-manifest-v2.json` and `... sign dist\ed-up-manifest.json`, then `python tools\sign_manifest.py verify dist`,
 and attach the files from `dist\` the same way. `package_native.py` writes the
 split zips with fixed timestamps and file order, so packaging twice gives the
 same bytes, and it removes older `ed-up-dlss-*.zip` and `ed-up-xess-*.zip` from

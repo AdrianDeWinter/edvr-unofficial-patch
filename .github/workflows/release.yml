@@ -311,11 +311,14 @@ jobs:
             "ed-up-installer-linux-$env:PACKAGE_VERSION.zip",
             "ed-up-launcher-linux-$env:PACKAGE_VERSION.zip"
           )
-          # The split assets: whatever the unsigned manifest names. The workflow never
-          # signs; the maintainer signs the manifest locally and uploads the .sig.
-          $manifestPath = Join-Path 'dist' 'ed-up-manifest.json'
+          # The split assets: whatever the unsigned schema-2 manifest names. A release carries
+          # two manifests, that one and the schema-1 bridge for launcher 0.1.0. The workflow never
+          # signs; the maintainer signs both locally and uploads the two .sig files.
+          $manifestPath = Join-Path 'dist' 'ed-up-manifest-v2.json'
           if (-not (Test-Path -LiteralPath $manifestPath)) { throw "Missing $manifestPath" }
           $manifest = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $manifestPath).Path) | ConvertFrom-Json
+          $names += 'ed-up-manifest-v2.json'
+          if (-not (Test-Path -LiteralPath (Join-Path 'dist' 'ed-up-manifest.json'))) { throw "Missing the schema-1 bridge dist/ed-up-manifest.json" }
           $names += 'ed-up-manifest.json'
           $names += @($manifest.assets | ForEach-Object { $_.name })
           if ($manifest.launcher) { $names += $manifest.launcher.asset }
@@ -383,6 +386,7 @@ jobs:
           if-no-files-found: error
           path: |
             dist/ed-up-*.zip
+            dist/ed-up-manifest-v2.json
             dist/ed-up-manifest.json
             dist/ed-up-launcher.exe
             dist/SHA256SUMS

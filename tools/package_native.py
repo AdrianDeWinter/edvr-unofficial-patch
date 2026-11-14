@@ -14,8 +14,8 @@ release's tag and a binary with no version stamp are refused as mismatches.
 --dry-run makes the same check and writes nothing.
 
 Beside the archives and split assets it writes SHA256SUMS: one "<sha256>  <name>"
-line, LF-terminated, for every file a release attaches except the manifest's
-.sig, which is made after packaging. release.yml checks it against its own list.
+line, LF-terminated, for every file a release attaches except the two manifests'
+.sig files, which are made after packaging. release.yml checks it against its own list.
 """
 import argparse
 import hashlib
@@ -57,6 +57,7 @@ STAMP_KEYS = ("FileVersion", "ProductVersion")
 # XeSS go in zips named by a hash of their contents, so an unchanged runtime keeps
 # its asset name from release to release.
 MANIFEST = sign_manifest.MANIFEST_NAME
+BRIDGE = sign_manifest.BRIDGE_NAME
 SUMS_NAME = "SHA256SUMS"
 LAUNCHER_ASSET = "ed-up-launcher.exe"
 LAUNCHER_VERSION_HEADER = ("src", "installer", "launcher_version.h")
@@ -443,7 +444,7 @@ def _validate_launcher(root):
 
 
 def _split_outputs(root, version, files):
-    """The split assets and the unsigned manifest as [(file name, bytes)], all in
+    """The split assets and the two unsigned manifests (schema 2, and the schema-1 bridge) as [(file name, bytes)], all in
     memory so a dry run builds and checks them and writes nothing. The launcher
     exe, build\\ed-up-launcher.exe, is required (_validate_launcher)."""
     present = {name: source for source, name in files}
@@ -484,6 +485,13 @@ def _split_outputs(root, version, files):
     if problems:
         raise ValueError("the manifest is not valid:\n  " + "\n  ".join(problems))
     outputs.append((MANIFEST, (json.dumps(manifest, indent=2, ensure_ascii=True) + "\n").encode("ascii")))
+    # The schema-1 bridge for launcher 0.1.0 (v0.22.0), which reads only ed-up-manifest.json at
+    # schema 1: it sends that launcher to this release's launcher, which reads the schema-2 manifest.
+    bridge = sign_manifest.make_bridge(manifest)
+    problems = sign_manifest.validate_bridge(bridge) + sign_manifest.bridge_agreement(bridge, manifest)
+    if problems:
+        raise ValueError("the schema-1 bridge is not valid:\n  " + "\n  ".join(problems))
+    outputs.append((BRIDGE, (json.dumps(bridge, indent=2, ensure_ascii=True) + "\n").encode("ascii")))
     return outputs
 
 
@@ -793,7 +801,7 @@ def self_test():
             try: package(root, "../escape", dry_run=True); raise AssertionError("bad version accepted")
             except ValueError: pass
             assert package(root, "1.2.3", no_dlss=True) == 0
-            # SHA256SUMS lists what release.yml's rule lists (the four ZIPs, the manifest, the manifest's
+            # SHA256SUMS lists what release.yml's rule lists (the four ZIPs, both manifests, the manifest's
             # assets and its launcher), each with its hash, in LF lines, and no .sig.
             sums_bytes = (root / "dist" / SUMS_NAME).read_bytes()
             assert sums_bytes.endswith(b"\n") and b"\r" not in sums_bytes
@@ -805,7 +813,7 @@ def self_test():
             manifest_doc = json.loads((root / "dist" / MANIFEST).read_text(encoding="ascii"))
             expected = {name + "-1.2.3.zip" for name in
                         ("ed-up", "ed-up-installer", "ed-up-installer-linux", "ed-up-launcher-linux")}
-            expected |= {MANIFEST} | {asset["name"] for asset in manifest_doc["assets"]}
+            expected |= {MANIFEST, BRIDGE} | {asset["name"] for asset in manifest_doc["assets"]}
             if manifest_doc.get("launcher"): expected.add(manifest_doc["launcher"]["asset"])
             assert set(listed) == expected, sorted(listed)
             for name, digest in listed.items():
@@ -1213,12 +1221,33 @@ def self_test():
             assert by_id["graphics"]["existing"] == "chain" and by_id["graphics"]["when"] == {"profile": ["vr", "flat"]}
             assert by_id["runtime"]["target"] == {"root": "openvr", "path": "openvr_api.dll"}
             assert by_id["dlss"]["when"] == {"adapter": "nvidia"} and "when" not in by_id["xess"]
+            # The schema-1 bridge for launcher 0.1.0: valid under that release's rules, it sends that
+            # launcher to this release's, and it lists the same bytes the schema-2 manifest does.
+            bridge_bytes = (dist / BRIDGE).read_bytes()
+            assert bridge_bytes.decode("ascii") and b"\r" not in bridge_bytes and bridge_bytes.endswith(b"\n")
+            bridge, problems = sign_manifest.load_bridge(bridge_bytes)
+            assert problems == [] and sign_manifest.validate_manifest_v1(bridge) == [], problems
+            assert (bridge["schema"], bridge["version"], bridge["build"], bridge["tag"], bridge["issued"]) == (
+                1, "4.0.0", "v4.0.0", "v4.0.0", 1794000000)
+            assert bridge["min_launcher"] == bridge["launcher"]["version"] == parsed["launcher"]["version"]
+            assert bridge["launcher"] == parsed["launcher"] and bridge["launcher"]["asset"] == LAUNCHER_ASSET
+            assert bridge["assets"] == parsed["assets"]
+            assert sign_manifest.bridge_agreement(bridge, parsed) == []
+            assert {entry["item"] for entry in bridge["files"]} <= set(sign_manifest.ITEMS)
+            assert [entry["item"] for entry in bridge["files"]] == [
+                item for item in sign_manifest.ITEMS if item in {
+                    sign_manifest.BRIDGE_ITEM_OF_FILE[entry["id"]] for entry in parsed["files"]
+                    if entry["id"] in sign_manifest.BRIDGE_ITEM_OF_FILE}]
+            assert {entry["path"] for entry in bridge["files"]} == {
+                entry["path"] for entry in parsed["files"] if entry["id"] in sign_manifest.BRIDGE_ITEM_OF_FILE}
+            assert sign_manifest.load_manifest(bridge_bytes)[1], "the schema-2 reader must refuse the bridge"
             lines = []
             assert sign_manifest.verify_directory(dist, allow_unsigned=True, out=lines.append), lines
+            assert not sign_manifest.verify_directory(dist, out=lambda line: None), "unsigned dist verified"
             dlss = next(entry for entry in parsed["files"] if entry["id"] == "dlss")
             assert dlss["asset"] == dlss_zip.name and dlss["path"] == "nvngx_dlss.dll"
             # Two runs give the same bytes, and a new version keeps the DLSS and XeSS names.
-            first = {path: path.read_bytes() for path in (core, dlss_zip, xess_zip, dist / MANIFEST)}
+            first = {path: path.read_bytes() for path in (core, dlss_zip, xess_zip, dist / MANIFEST, dist / BRIDGE)}
             assert package(root, "4.0.0", no_dlss=True) == 0
             assert all(path.read_bytes() == data for path, data in first.items()), "packaging is not deterministic"
             assert package(root, "4.0.1", no_dlss=True) == 0

@@ -710,8 +710,8 @@ Rel loadRel(const char* name, bool parse = true) {
     Rel r;
     r.name = name;
     r.dir = P(P(g_fixtures, L"releases"), name);
-    r.manifestBytes = readAll(P(r.dir, L"ed-up-manifest.json"));
-    r.sigText = readAll(P(r.dir, L"ed-up-manifest.json.sig"));
+    r.manifestBytes = readAll(P(r.dir, L"ed-up-manifest-v2.json"));
+    r.sigText = readAll(P(r.dir, L"ed-up-manifest-v2.json.sig"));
     std::string err;
     if (parse && !loadVerifiedManifest(r.manifestBytes, r.sigText, g_testKeys, &r.manifest, &err)) {
         check(false, std::string("release fixture ") + name + " loads: " + err);
@@ -1109,8 +1109,8 @@ std::string releaseJson(const Rel& r, const ApiOptions& o = ApiOptions()) {
         else if (o.digests) assets += ",\"digest\":null";
         assets += "}";
     };
-    add("ed-up-manifest.json", r.manifestBytes, true);
-    if (o.includeSig) add("ed-up-manifest.json.sig", r.sigText, true);
+    add("ed-up-manifest-v2.json", r.manifestBytes, true);
+    if (o.includeSig) add("ed-up-manifest-v2.json.sig", r.sigText, true);
     if (!o.onlyManifestAssets) {
         for (const ManifestAsset& a : r.manifest.assets) add(a.name, readAll(P(r.dir, a.name)), false);
         if (r.manifest.hasLauncher) add("ed-up-launcher.exe", readAll(P(r.dir, L"ed-up-launcher.exe")), false);
@@ -1215,12 +1215,12 @@ void testUpdater() {
         serveRelease(&bare, a);
         Updater up2(bare, settingsFor(base));
         const UpdateCheck noDigest = up2.check();
-        check(noDigest.outcome == UpdateOutcome::UpToDate && bare.count("ed-up-manifest.json") == 2, "with no digest listed the manifest is downloaded and found to be the adopted one: " + noDigest.message);
+        check(noDigest.outcome == UpdateOutcome::UpToDate && bare.count("ed-up-manifest-v2.json") == 2, "with no digest listed the manifest is downloaded and found to be the adopted one: " + noDigest.message);
         ScriptedHttp odd;
         odd.replies[latestUrl()] = ok(releaseJson(a, [] { ApiOptions o; o.odd = "md5:00ff"; return o; }()));
         serveRelease(&odd, a);
         Updater up3(odd, settingsFor(base));
-        check(up3.check().outcome == UpdateOutcome::UpToDate && odd.count("ed-up-manifest.json") == 2, "an odd digest means download anyway");
+        check(up3.check().outcome == UpdateOutcome::UpToDate && odd.count("ed-up-manifest-v2.json") == 2, "an odd digest means download anyway");
     }
     // 304 with a pending update, and 304 with nothing stored.
     {
@@ -1286,10 +1286,10 @@ void testUpdater() {
         ScriptedHttp gone;
         gone.replies[latestUrl()] = ok(releaseJson(a));
         serveRelease(&gone, a);
-        gone.replies[std::string(kDownloads) + "relA/ed-up-manifest.json.sig"] = failing(404);
+        gone.replies[std::string(kDownloads) + "relA/ed-up-manifest-v2.json.sig"] = failing(404);
         Updater up3(gone, settingsFor(fresh("up5c")));
         check(up3.check().outcome == UpdateOutcome::Refused, "a .sig that is listed but cannot be fetched is refused");
-        gone.replies[std::string(kDownloads) + "relA/ed-up-manifest.json.sig"] = failing(503);
+        gone.replies[std::string(kDownloads) + "relA/ed-up-manifest-v2.json.sig"] = failing(503);
         check(up3.check().outcome == UpdateOutcome::Skipped, "a .sig that fails with a server error is skipped");
 
         // The manifest of A with the signature of B, and no digest to tell them apart, so the
@@ -1297,7 +1297,7 @@ void testUpdater() {
         ScriptedHttp badSig;
         badSig.replies[latestUrl()] = ok(releaseJson(a, [] { ApiOptions o; o.digests = false; return o; }()));
         serveRelease(&badSig, a);
-        badSig.replies[std::string(kDownloads) + "relA/ed-up-manifest.json.sig"] = ok(b.sigText);
+        badSig.replies[std::string(kDownloads) + "relA/ed-up-manifest-v2.json.sig"] = ok(b.sigText);
         Updater up4(badSig, settingsFor(fresh("up5d")));
         const UpdateCheck c4 = up4.check();
         check(c4.outcome == UpdateOutcome::Refused, "a signature of another manifest is refused: " + c4.message);
@@ -1307,14 +1307,14 @@ void testUpdater() {
         ScriptedHttp staleSig;
         staleSig.replies[latestUrl()] = ok(releaseJson(a));
         serveRelease(&staleSig, a);
-        staleSig.replies[std::string(kDownloads) + "relA/ed-up-manifest.json.sig"] = ok(b.sigText);
+        staleSig.replies[std::string(kDownloads) + "relA/ed-up-manifest-v2.json.sig"] = ok(b.sigText);
         Updater upStaleSig(staleSig, settingsFor(fresh("up5s")));
         const UpdateCheck cStaleSig = upStaleSig.check();
         check(cStaleSig.outcome == UpdateOutcome::Skipped && contains(cStaleSig.message, "older copy of the signature"), "a stale signature skips the check: " + cStaleSig.message);
         ScriptedHttp swapped;
         swapped.replies[latestUrl()] = ok(releaseJson(a));
         serveRelease(&swapped, a);
-        swapped.replies[std::string(kDownloads) + "relA/ed-up-manifest.json"] = ok(b.manifestBytes);
+        swapped.replies[std::string(kDownloads) + "relA/ed-up-manifest-v2.json"] = ok(b.manifestBytes);
         Updater up5(swapped, settingsFor(fresh("up5e")));
         const UpdateCheck c5 = up5.check();
         check(c5.outcome == UpdateOutcome::Skipped && contains(c5.message, "older copy of the manifest"), "a manifest that is not the one GitHub lists skips the check: " + c5.message);
@@ -1324,7 +1324,7 @@ void testUpdater() {
         ScriptedHttp flippedHttp;
         flippedHttp.replies[latestUrl()] = ok(releaseJson(a, [] { ApiOptions o; o.digests = false; return o; }()));
         serveRelease(&flippedHttp, a);
-        flippedHttp.replies[std::string(kDownloads) + "relA/ed-up-manifest.json"] = ok(flipped);
+        flippedHttp.replies[std::string(kDownloads) + "relA/ed-up-manifest-v2.json"] = ok(flipped);
         Updater up6(flippedHttp, settingsFor(fresh("up5f")));
         const UpdateCheck c6 = up6.check();
         check(c6.outcome == UpdateOutcome::Refused && contains(c6.message, "signature"), "a flipped manifest byte is refused on the signature: " + c6.message);
@@ -2222,7 +2222,7 @@ void testCore() {
                                   fileEntry("settings_vr", "edvr.ini", "game", "edvr.ini", "{\"profile\": [\"vr\"]}", "settings", iniSha) + "," +
                                   fileEntry("runtime", "Openvr/openvr_api.dll", "openvr", "openvr_api.dll", "{\"profile\": [\"vr\"]}", "runtime", runtimeSha) + "," +
                                   fileEntry("dlss", "nvngx_dlss.dll", "game", "nvngx_dlss.dll", "{\"adapter\": \"nvidia\"}", "owned");
-        writeAll(P(dir, L"ed-up-manifest.json"), manifestText("2", table));
+        writeAll(P(dir, L"ed-up-manifest-v2.json"), manifestText("2", table));
         std::vector<PayloadFile> files;
         Manifest folder;
         std::string err;
@@ -2251,7 +2251,7 @@ void testCore() {
         check(!loadLauncherPayload(roots, P(dir, L"nowhere"), g_testKeys).ok, "a folder that is not there is refused");
         const std::wstring empty = fresh("core-folder-empty");
         const PayloadLoad none = loadLauncherPayload(roots, empty, g_testKeys);
-        check(!none.ok && contains(none.note, "ed-up-manifest.json"), "a folder with no manifest is refused, and says what to point at: " + none.note);
+        check(!none.ok && contains(none.note, "ed-up-manifest-v2.json"), "a folder with no manifest is refused, and says what to point at: " + none.note);
         check(!payloadPresent(payloadInfo()), "and a refused load leaves the process with no payload");
         // A folder whose file is not the one the manifest hashes is refused, and nothing is switched.
         // (A fresh folder: the files of the first one stay mapped for the pointers payloadItem handed out.)
@@ -2259,21 +2259,21 @@ void testCore() {
         copyOfSystemDll(P(tamperedDir, L"d3d11.dll"));
         writeAll(P(tamperedDir, L"edvr.ini"), "[fix]\nx=2\n");
         writeAll(P(tamperedDir, L"Openvr\\openvr_api.dll"), "runtime");
-        writeAll(P(tamperedDir, L"ed-up-manifest.json"), manifestText("2", table));
+        writeAll(P(tamperedDir, L"ed-up-manifest-v2.json"), manifestText("2", table));
         const PayloadLoad tampered = loadLauncherPayload(roots, tamperedDir, g_testKeys);
         check(!tampered.ok && contains(tampered.note, "settings_vr") && contains(tampered.note, "does not match its hash"),
               "a --payload folder whose file differs from the manifest's hash is refused: " + tampered.note);
         check(!payloadPresent(payloadInfo()), "and a refused folder leaves the process with no payload");
         // A folder's manifest is held to the same schema: a newer one and a bad target are refused.
         const std::wstring newer = fresh("core-folder-newer");
-        writeAll(P(newer, L"ed-up-manifest.json"), manifestText("3", table));
+        writeAll(P(newer, L"ed-up-manifest-v2.json"), manifestText("3", table));
         check(!listPayloadFolder(newer, &folder, &files, &err) && err == kSchemaTooNewMessage, "a folder whose manifest is of a newer schema says to update the launcher: " + err);
         const std::wstring escaping = fresh("core-folder-escape");
-        writeAll(P(escaping, L"ed-up-manifest.json"), manifestText("2", fileEntry("graphics", "d3d11.dll", "game", "../d3d11.dll", "", "replace")));
+        writeAll(P(escaping, L"ed-up-manifest-v2.json"), manifestText("2", fileEntry("graphics", "d3d11.dll", "game", "../d3d11.dll", "", "replace")));
         check(!listPayloadFolder(escaping, &folder, &files, &err) && contains(err, "target.path"), "a target that leaves its root is refused: " + err);
         const std::wstring unknown = fresh("core-folder-unknown");
         copyOfSystemDll(P(unknown, L"newthing.dll"));
-        writeAll(P(unknown, L"ed-up-manifest.json"), manifestText("2", fileEntry("newthing", "newthing.dll", "game", "newthing.dll", "", "replace")));
+        writeAll(P(unknown, L"ed-up-manifest-v2.json"), manifestText("2", fileEntry("newthing", "newthing.dll", "game", "newthing.dll", "", "replace")));
         // The manifest is the vocabulary: a file this launcher was not built knowing about is listed like any other (schema 1 refused it by name).
         check(listPayloadFolder(unknown, &folder, &files, &err) && files.size() == 1 && files[0].id == "newthing" && folder.files[0].id == "newthing",
               "a file id this launcher has never heard of is listed: " + err);

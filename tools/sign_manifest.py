@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
-"""Sign and verify the release manifest, ed-up-manifest.json.
+"""Sign and verify the release manifests, ed-up-manifest-v2.json and ed-up-manifest.json.
 
-The manifest is ASCII JSON and is signed as its exact bytes: P-256 ECDSA over
+A release carries two manifests. ed-up-manifest-v2.json is the schema-2 manifest that
+launcher 0.2.0 and later read. ed-up-manifest.json is a schema-1 bridge, the one name and
+schema launcher 0.1.0 (v0.22.0) knows: it tells that launcher to replace itself with the
+current one, and lists the same files truthfully.
+
+A manifest is ASCII JSON and is signed as its exact bytes: P-256 ECDSA over
 the SHA-256 of the file, with a deterministic nonce (RFC 6979), written to
-ed-up-manifest.json.sig as 128 lower-case hex characters (r then s) and a
+<manifest>.sig as 128 lower-case hex characters (r then s) and a
 newline. The launcher checks the signature before it parses anything, through
 Windows' BCrypt, and trusts the public keys listed in src\\installer\\update_keys.h.
 Only the Python standard library is used.
 
   generate            make one key and print its private scalar and public key
                       once. Writes no file.
-  sign MANIFEST       sign the file, after checking the manifest and that the
+  sign MANIFEST       sign either manifest (by its schema), after checking the manifest and that the
                       key's public half is in update_keys.h. The key comes from
                       a hidden prompt, or from one line on stdin with --key-stdin
                       so a password manager's command line can supply it.
                       --dry-run does everything except write the .sig.
-  verify DIR          check the signature, the manifest's schema and the size and
+  verify DIR          check both signatures, both manifests' schemas, that the bridge
+                      agrees with the schema-2 manifest, and the size and
                       hash of every asset, the launcher if listed, and every file
-                      inside every zip. --allow-unsigned skips only the signature.
+                      inside every zip. --allow-unsigned skips only the signatures.
 
 `generate` and `sign` refuse (exit 2) unless stdout is a real terminal, so a
 session whose output is captured can never see a private key. Nothing derived
@@ -45,13 +51,27 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HEADER = ROOT / "src" / "installer" / "update_keys.h"
-MANIFEST_NAME = "ed-up-manifest.json"
+MANIFEST_NAME = "ed-up-manifest-v2.json"
 SIGNATURE_NAME = MANIFEST_NAME + ".sig"
+# The schema-1 bridge, under the name launcher 0.1.0 downloads.
+BRIDGE_NAME = "ed-up-manifest.json"
+BRIDGE_SIGNATURE_NAME = BRIDGE_NAME + ".sig"
 
 # The one schema the launcher reads: kManifestSchema in src\installer\install_manifest.h, which
 # the self-test reads as text and compares with this number.
 MANIFEST_SCHEMA = 2
 SCHEMA_HEADER = ROOT / "src" / "installer" / "install_manifest.h"
+
+# Schema 1, as launcher 0.1.0 (v0.22.0) reads it. Its names for the files the installer knew.
+BRIDGE_SCHEMA = 1
+ITEMS = ("native_graphics", "native_runtime", "ini", "flat_ini", "profile", "ngx", "xess",
+         "xess_license", "xess_third_party", "openxr_loader", "openxr_license")
+# Schema-2 file id -> schema-1 item. A schema-2 file with no entry here (a licence only
+# ever shipped in a zip) has no place in the bridge.
+BRIDGE_ITEM_OF_FILE = {"graphics": "native_graphics", "runtime": "native_runtime", "settings_vr": "ini",
+                       "settings_flat": "flat_ini", "openxr_loader": "openxr_loader",
+                       "openxr_license": "openxr_license", "dlss": "ngx", "xess": "xess",
+                       "xess_license": "xess_license", "xess_third_party": "xess_third_party"}
 
 # NIST P-256.
 P = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff
@@ -454,6 +474,145 @@ def validate_manifest(obj):
     return problems
 
 
+def validate_manifest_v1(obj):
+    """Why `obj` breaks schema 1, the manifest launcher 0.1.0 (v0.22.0) parses, as a list of
+    strings; empty when sound. Ported rule for rule from that release's sign_manifest.py and
+    update_manifest.cpp: every key required but `launcher`, no unknown key, item names from ITEMS."""
+    problems = _shape("manifest", obj, ("schema", "version", "build", "tag", "issued", "min_launcher",
+                                        "assets", "files"), ("launcher",))
+    if not isinstance(obj, dict):
+        return problems
+    if not _is_int(obj.get("schema")) or obj.get("schema") != BRIDGE_SCHEMA:
+        problems.append("schema must be 1")
+    for key in ("version", "build", "tag", "min_launcher"):
+        if key in obj and not _is_text(obj[key]):
+            problems.append("%s must be a non-empty string" % key)
+    if "issued" in obj and (not _is_int(obj["issued"]) or obj["issued"] <= 0):
+        problems.append("issued must be a positive integer")
+    launcher = obj.get("launcher")
+    if "launcher" in obj:
+        sub = _shape("launcher", launcher, ("version", "asset", "sha256", "size"))
+        problems += sub
+        if not sub:
+            if not _is_text(launcher["version"]):
+                problems.append("launcher.version must be a non-empty string")
+            problems += [p for p in (_name_problem("launcher.asset", launcher["asset"]),
+                                     _hex_problem("launcher.sha256", launcher["sha256"])) if p]
+            if not _is_int(launcher["size"]) or launcher["size"] < 0:
+                problems.append("launcher.size must be a non-negative integer")
+    asset_names = set()
+    assets = obj.get("assets")
+    if "assets" in obj:
+        if not isinstance(assets, list) or not assets:
+            problems.append("assets must be a non-empty list")
+        else:
+            for index, asset in enumerate(assets):
+                where = "assets[%d]" % index
+                sub = _shape(where, asset, ("name", "sha256", "size"))
+                problems += sub
+                if sub:
+                    continue
+                problem = _name_problem(where + ".name", asset["name"])
+                if problem:
+                    problems.append(problem)
+                elif asset["name"] in asset_names:
+                    problems.append("%s.name %s is listed twice" % (where, asset["name"]))
+                else:
+                    asset_names.add(asset["name"])
+                problem = _hex_problem(where + ".sha256", asset["sha256"])
+                if problem:
+                    problems.append(problem)
+                if not _is_int(asset["size"]) or asset["size"] < 0:
+                    problems.append("%s.size must be a non-negative integer" % where)
+    files = obj.get("files")
+    if "files" in obj:
+        if not isinstance(files, list) or not files:
+            problems.append("files must be a non-empty list")
+        else:
+            seen = set()
+            for index, entry in enumerate(files):
+                where = "files[%d]" % index
+                sub = _shape(where, entry, ("item", "path", "asset", "sha256", "size"))
+                problems += sub
+                if sub:
+                    continue
+                if entry["item"] not in ITEMS:
+                    problems.append("%s.item %r is not a known item" % (where, entry["item"]))
+                elif entry["item"] in seen:
+                    problems.append("%s.item %s is listed twice" % (where, entry["item"]))
+                else:
+                    seen.add(entry["item"])
+                problem = _path_problem(where + ".path", entry["path"])
+                if problem:
+                    problems.append(problem)
+                if not isinstance(entry["asset"], str) or entry["asset"] not in asset_names:
+                    problems.append("%s.asset names no listed asset" % where)
+                problem = _hex_problem(where + ".sha256", entry["sha256"])
+                if problem:
+                    problems.append(problem)
+                if not _is_int(entry["size"]) or entry["size"] < 0:
+                    problems.append("%s.size must be a non-negative integer" % where)
+    return problems
+
+
+def validate_bridge(obj):
+    """validate_manifest_v1, plus what makes a schema-1 manifest the bridge: min_launcher is the
+    version of the launcher block it carries, so launcher 0.1.0 never installs from it and only
+    replaces itself with that launcher."""
+    problems = validate_manifest_v1(obj)
+    if problems:
+        return problems
+    if "launcher" not in obj:
+        return ["the bridge must carry a launcher block"]
+    if obj["min_launcher"] != obj["launcher"]["version"]:
+        problems.append("min_launcher %s must equal launcher.version %s" %
+                        (obj["min_launcher"], obj["launcher"]["version"]))
+    return problems
+
+
+def bridge_agreement(bridge, v2):
+    """Why the bridge `bridge` does not state the same release as the schema-2 manifest `v2`
+    (both already valid), as a list of strings. Same tag, version, build, issued and launcher;
+    every asset the bridge lists is the schema-2 asset, byte for byte; every bridge file is the
+    schema-2 file of that item, and every schema-2 file with a schema-1 item is there."""
+    problems = ["%s differs: %r in the bridge, %r in the schema-2 manifest" % (key, bridge[key], v2[key])
+                for key in ("version", "build", "tag", "issued") if bridge[key] != v2[key]]
+    if bridge["launcher"] != v2.get("launcher"):
+        problems.append("the launcher block differs from the schema-2 manifest's")
+    v2_assets = {asset["name"]: asset for asset in v2["assets"]}
+    for asset in bridge["assets"]:
+        if v2_assets.get(asset["name"]) != asset:
+            problems.append("bridge asset %s is not the schema-2 asset" % asset["name"])
+    by_id = {entry["id"]: entry for entry in v2["files"]}
+    wanted = {BRIDGE_ITEM_OF_FILE[file_id]: entry for file_id, entry in by_id.items()
+              if file_id in BRIDGE_ITEM_OF_FILE}
+    listed = {entry["item"]: entry for entry in bridge["files"]}
+    for item, entry in listed.items():
+        other = wanted.get(item)
+        if other is None:
+            problems.append("bridge item %s has no schema-2 file" % item)
+        elif {key: entry[key] for key in ("asset", "path", "sha256", "size")} != \
+                {key: other[key] for key in ("asset", "path", "sha256", "size")}:
+            problems.append("bridge item %s is not the schema-2 file %s" % (item, other["id"]))
+    for item, entry in wanted.items():
+        if item not in listed:
+            problems.append("schema-2 file %s has no bridge entry %s" % (entry["id"], item))
+    return problems
+
+def make_bridge(v2):
+    """The schema-1 bridge for the schema-2 manifest `v2` (which must carry a launcher block):
+    the same tag, version, build, issued and launcher, `min_launcher` the launcher's own version,
+    and every file that has a schema-1 item, in ITEMS order, with its zip, path, hash and size."""
+    assets = [dict(asset) for asset in v2["assets"]]
+    by_item = {BRIDGE_ITEM_OF_FILE[entry["id"]]: entry for entry in v2["files"]
+               if entry["id"] in BRIDGE_ITEM_OF_FILE}
+    return {"schema": BRIDGE_SCHEMA, "version": v2["version"], "build": v2["build"], "tag": v2["tag"],
+            "issued": v2["issued"], "min_launcher": v2["launcher"]["version"],
+            "launcher": dict(v2["launcher"]), "assets": assets,
+            "files": [{"item": item, "path": by_item[item]["path"], "asset": by_item[item]["asset"],
+                       "sha256": by_item[item]["sha256"], "size": by_item[item]["size"]}
+                      for item in ITEMS if item in by_item]}
+
 def _no_duplicate_keys(pairs):
     seen = {}
     for key, value in pairs:
@@ -463,19 +622,39 @@ def _no_duplicate_keys(pairs):
     return seen
 
 
-def load_manifest(data):
-    """(object, problems) for the manifest's bytes: pure ASCII, one JSON object
-    with no duplicate keys, then validate_manifest."""
+def _parse(data):
+    """(object, problems) for a manifest's bytes: pure ASCII, one JSON object with no duplicate keys."""
     try:
         text = data.decode("ascii")
     except UnicodeDecodeError:
         return None, ["the manifest is not pure ASCII"]
     try:
-        obj = json.loads(text, object_pairs_hook=_no_duplicate_keys)
+        return json.loads(text, object_pairs_hook=_no_duplicate_keys), []
     except ValueError as exc:
         return None, ["the manifest is not valid JSON: %s" % exc]
-    return obj, validate_manifest(obj)
 
+
+def load_manifest(data):
+    """(object, problems) for a schema-2 manifest's bytes: _parse, then validate_manifest. This is
+    the launcher's verdict on ed-up-manifest-v2.json; a schema-1 file is refused here."""
+    obj, problems = _parse(data)
+    return (obj, problems) if problems else (obj, validate_manifest(obj))
+
+
+def load_bridge(data):
+    """(object, problems) for the schema-1 bridge's bytes: _parse, then validate_bridge."""
+    obj, problems = _parse(data)
+    return (obj, problems) if problems else (obj, validate_bridge(obj))
+
+
+def load_either(data):
+    """load_bridge for a schema-1 file, load_manifest for anything else: what `sign` checks."""
+    obj, problems = _parse(data)
+    if problems:
+        return obj, problems
+    if isinstance(obj, dict) and _is_int(obj.get("schema")) and obj["schema"] == BRIDGE_SCHEMA:
+        return obj, validate_bridge(obj)
+    return obj, validate_manifest(obj)
 
 # ---- verifying a release folder ----------------------------------------------
 
@@ -495,9 +674,11 @@ def read_signature(text):
     return None
 
 
-def verify_directory(directory, allow_unsigned=False, keys=None, out=print):
+def verify_directory(directory, allow_unsigned=False, keys=None, out=print, bridge=True):
     """Check a release folder; True when every check passes. One line per check
-    goes to `out`. `keys` defaults to the keys in update_keys.h."""
+    goes to `out`. `keys` defaults to the keys in update_keys.h. With `bridge` (the
+    default) the folder must also hold the signed schema-1 bridge, ed-up-manifest.json,
+    and it must state the same release as the schema-2 manifest."""
     directory = Path(directory)
     ok = True
 
@@ -507,35 +688,57 @@ def verify_directory(directory, allow_unsigned=False, keys=None, out=print):
         out("%s %s" % ("ok:  " if passed else "FAIL:", text))
         return passed
 
+    key_cache = [keys]
+
+    def check_signature(data, manifest_name, signature_name):
+        if allow_unsigned:
+            return
+        if key_cache[0] is None:
+            key_cache[0] = header_keys()
+        try:
+            signature = read_signature((directory / signature_name).read_text(encoding="ascii"))
+        except (OSError, UnicodeDecodeError):
+            report(False, "%s is missing or unreadable" % signature_name)
+            return
+        if signature is None:
+            report(False, "%s is not 128 hex characters" % signature_name)
+        elif not key_cache[0]:
+            report(False, "no public key is listed in update_keys.h to check %s against" % signature_name)
+        else:
+            report(any(p256_verify(key, data, signature) for key in key_cache[0]),
+                   "signature on %s matches a listed key" % manifest_name)
+
     try:
         data = (directory / MANIFEST_NAME).read_bytes()
     except OSError:
         report(False, "%s is missing from %s" % (MANIFEST_NAME, directory))
         return False
     if allow_unsigned:
-        out("WARNING: --allow-unsigned: the signature is NOT checked. Do not publish on this result.")
-    else:
-        keys = header_keys() if keys is None else keys
-        try:
-            signature = read_signature((directory / SIGNATURE_NAME).read_text(encoding="ascii"))
-        except (OSError, UnicodeDecodeError):
-            signature = None
-            report(False, "%s is missing or unreadable" % SIGNATURE_NAME)
-        else:
-            if signature is None:
-                report(False, "%s is not 128 hex characters" % SIGNATURE_NAME)
-            elif not keys:
-                report(False, "no public key is listed in update_keys.h to check %s against" % SIGNATURE_NAME)
-            else:
-                report(any(p256_verify(key, data, signature) for key in keys),
-                       "signature on %s matches a listed key" % MANIFEST_NAME)
+        out("WARNING: --allow-unsigned: the signatures are NOT checked. Do not publish on this result.")
+    check_signature(data, MANIFEST_NAME, SIGNATURE_NAME)
     obj, problems = load_manifest(data)
     if problems:
         for problem in problems:
             report(False, "schema: " + problem)
         return False
     report(True, "schema of %s" % MANIFEST_NAME)
-
+    if bridge:
+        try:
+            bridge_data = (directory / BRIDGE_NAME).read_bytes()
+        except OSError:
+            report(False, "%s, the schema-1 bridge, is missing from %s" % (BRIDGE_NAME, directory))
+        else:
+            check_signature(bridge_data, BRIDGE_NAME, BRIDGE_SIGNATURE_NAME)
+            bridge_obj, bridge_problems = load_bridge(bridge_data)
+            if not bridge_problems and "launcher" not in obj:
+                bridge_problems = ["%s has no launcher block for the bridge to name" % MANIFEST_NAME]
+            if not bridge_problems:
+                bridge_problems = bridge_agreement(bridge_obj, obj)
+            if bridge_problems:
+                for problem in bridge_problems:
+                    report(False, "bridge: " + problem)
+            else:
+                report(True, "schema of %s, and it agrees with %s" % (BRIDGE_NAME, MANIFEST_NAME))
     def check_file(label, name, sha256, size):
         path = directory / name
         if not path.is_file():
@@ -611,7 +814,7 @@ def sign_file(manifest, key_text, keys, dry_run=False):
         data = manifest.read_bytes()
     except OSError as exc:
         return 1, "cannot read %s: %s" % (manifest, exc.strerror or "error")
-    _, problems = load_manifest(data)
+    _, problems = load_either(data)
     if problems:
         return 1, "the manifest is not valid:\n  " + "\n  ".join(problems)
     signature = p256_sign(priv, data)
@@ -667,7 +870,7 @@ def cmd_sign(args):
 
 
 def cmd_verify(args):
-    return 0 if verify_directory(args.directory, args.allow_unsigned) else 3
+    return 0 if verify_directory(args.directory, args.allow_unsigned, bridge=True) else 3
 
 
 # ---- self-test ---------------------------------------------------------------
@@ -719,6 +922,15 @@ def _write_release(directory, manifest, zip_bytes, zip_name="ed-up-core-1.0.0.zi
     (directory / zip_name).write_bytes(zip_bytes)
     (directory / MANIFEST_NAME).write_bytes(_dump(manifest))
 
+
+def _write_full_release(directory, v2, zip_bytes, zip_name="ed-up-core-1.0.0.zip"):
+    """A folder with the schema-2 manifest (given a launcher block), its zip and launcher exe, and
+    the unsigned bridge for it."""
+    v2 = dict(v2, launcher={"version": "0.2.0", "asset": "ed-up-launcher.exe",
+                            "sha256": hashlib.sha256(b"exe").hexdigest(), "size": 3})
+    _write_release(directory, v2, zip_bytes, zip_name)
+    (directory / "ed-up-launcher.exe").write_bytes(b"exe")
+    (directory / BRIDGE_NAME).write_bytes(_dump(make_bridge(v2)))
 
 def _header_text(keys):
     lines = ["#pragma once", "// comment mentioning \"%s\" is not a key" % ("ab" * 64),
@@ -928,6 +1140,9 @@ def self_test():
         assert all(len(key) == 64 and _on_curve((int.from_bytes(key[:32], "big"), int.from_bytes(key[32:], "big")))
                    for key in real), "update_keys.h holds a key that is not on the curve"
 
+        def verify_v2(*args, **kwargs):
+            return verify_directory(*args, bridge=False, **kwargs)
+
         # Sign and verify a release folder through the internal functions.
         release = temp / "release"
         release.mkdir()
@@ -952,9 +1167,9 @@ def self_test():
         assert re.fullmatch(rb"[0-9a-f]{128}\n", text), text
         assert not [p for p in release.iterdir() if p.name.endswith(".tmp")]
         lines = []
-        assert verify_directory(release, keys=[key_a], out=lines.append), lines
-        assert not verify_directory(release, keys=[key_b], out=lambda line: None)
-        assert not verify_directory(release, keys=[], out=lambda line: None)
+        assert verify_v2(release, keys=[key_a], out=lines.append), lines
+        assert not verify_v2(release, keys=[key_b], out=lambda line: None)
+        assert not verify_v2(release, keys=[], out=lambda line: None)
         invalid = temp / "invalid"
         invalid.mkdir()
         bad_manifest = dict(manifest, schema=MANIFEST_SCHEMA + 1)
@@ -969,7 +1184,7 @@ def self_test():
             for entry in release.iterdir():
                 (folder / entry.name).write_bytes(entry.read_bytes())
             change(folder)
-            return verify_directory(folder, allow_unsigned=allow_unsigned, keys=[key_a], out=lambda line: None)
+            return verify_v2(folder, allow_unsigned=allow_unsigned, keys=[key_a], out=lambda line: None)
 
         assert tampered("none", lambda f: None)
         assert not tampered("manifest", lambda f: (f / MANIFEST_NAME).write_bytes(
@@ -979,7 +1194,7 @@ def self_test():
         assert tampered("nosig-allowed", lambda f: (f / SIGNATURE_NAME).unlink(), allow_unsigned=True)
         lines = []
         folder = temp / "t-nosig-allowed"
-        verify_directory(folder, allow_unsigned=True, keys=[key_a], out=lines.append)
+        verify_v2(folder, allow_unsigned=True, keys=[key_a], out=lines.append)
         assert any("NOT checked" in line for line in lines)
         zip_file = "ed-up-core-1.0.0.zip"
         assert not tampered("asset-byte", lambda f: (f / zip_file).write_bytes(
@@ -996,7 +1211,7 @@ def self_test():
         forged.mkdir()
         _write_release(forged, forged_manifest, other_zip)
         lines = []
-        assert not verify_directory(forged, allow_unsigned=True, out=lines.append)
+        assert not verify_v2(forged, allow_unsigned=True, out=lines.append)
         assert any("d3d11.dll in" in line and line.startswith("FAIL") for line in lines), lines
         assert any(line.startswith("ok:") and "openvr/openvr_api.dll in" in line for line in lines), lines
         missing_member = temp / "missing-member"
@@ -1004,27 +1219,120 @@ def self_test():
         short_manifest, short_zip = _fixture_manifest()
         short_manifest["files"][0]["path"] = "gone.dll"
         _write_release(missing_member, short_manifest, short_zip)
-        assert not verify_directory(missing_member, allow_unsigned=True, out=lambda line: None)
+        assert not verify_v2(missing_member, allow_unsigned=True, out=lambda line: None)
         launcher_manifest = dict(manifest, launcher={
             "version": "0.1.0", "asset": "ed-up-launcher.exe",
             "sha256": hashlib.sha256(b"exe").hexdigest(), "size": 3})
         with_launcher = temp / "with-launcher"
         with_launcher.mkdir()
         _write_release(with_launcher, launcher_manifest, zip_bytes)
-        assert not verify_directory(with_launcher, allow_unsigned=True, out=lambda line: None)
+        assert not verify_v2(with_launcher, allow_unsigned=True, out=lambda line: None)
         (with_launcher / "ed-up-launcher.exe").write_bytes(b"exe")
-        assert verify_directory(with_launcher, allow_unsigned=True, out=lambda line: None)
+        assert verify_v2(with_launcher, allow_unsigned=True, out=lambda line: None)
         (with_launcher / "ed-up-launcher.exe").write_bytes(b"EXE")
-        assert not verify_directory(with_launcher, allow_unsigned=True, out=lambda line: None)
-        assert not verify_directory(temp / "nowhere", allow_unsigned=True, out=lambda line: None)
+        assert not verify_v2(with_launcher, allow_unsigned=True, out=lambda line: None)
+        assert not verify_v2(temp / "nowhere", allow_unsigned=True, out=lambda line: None)
 
+        # The schema-1 bridge for launcher 0.1.0: valid under the old rules, truthful, and signed
+        # beside the schema-2 manifest.
+        import copy
+        full = dict(manifest, launcher={"version": "0.2.0", "asset": "ed-up-launcher.exe",
+                                        "sha256": hashlib.sha256(b"exe").hexdigest(), "size": 3})
+        bridge_doc = make_bridge(full)
+        assert validate_manifest_v1(bridge_doc) == [] and validate_bridge(bridge_doc) == []
+        assert bridge_agreement(bridge_doc, full) == []
+        assert bridge_doc["schema"] == 1 and bridge_doc["min_launcher"] == "0.2.0" == bridge_doc["launcher"]["version"]
+        assert bridge_doc["launcher"]["asset"] == "ed-up-launcher.exe"
+        assert [e["item"] for e in bridge_doc["files"]] == ["native_graphics", "native_runtime", "ini"]
+        assert all(set(e) == {"item", "path", "asset", "sha256", "size"} for e in bridge_doc["files"])
+        assert load_bridge(_dump(bridge_doc))[1] == [] and load_either(_dump(bridge_doc))[1] == []
+        assert load_either(_dump(full))[1] == [] and load_manifest(_dump(full))[1] == []
+        assert load_manifest(_dump(bridge_doc))[1], "the schema-2 reader must refuse the bridge"
+        assert load_bridge(_dump(full))[1], "the bridge reader must refuse schema 2"
+        assert validate_manifest(bridge_doc), "schema 2 must refuse the bridge"
+
+        def bridge_rejects(label, change, validator=validate_bridge):
+            doc = copy.deepcopy(bridge_doc)
+            change(doc)
+            assert validator(doc), label
+
+        for label, change in (
+                ("schema 2", lambda m: m.update(schema=2)),
+                ("no min_launcher", lambda m: m.pop("min_launcher")),
+                ("empty min_launcher", lambda m: m.update(min_launcher="")),
+                ("unknown top key", lambda m: m.update(extra=1)),
+                ("unknown file key", lambda m: m["files"][0].update(target={})),
+                ("unknown item", lambda m: m["files"][0].update(item="graphics")),
+                ("duplicate item", lambda m: m["files"].append(dict(m["files"][0]))),
+                ("file asset unlisted", lambda m: m["files"][0].update(asset="nowhere.zip")),
+                ("empty files", lambda m: m.update(files=[])),
+                ("empty assets", lambda m: m.update(assets=[])),
+                ("bad sha", lambda m: m["files"][0].update(sha256="AB" * 32)),
+                ("escaping path", lambda m: m["files"][0].update(path="../d3d11.dll")),
+                ("launcher key missing", lambda m: m["launcher"].pop("size")),
+                ("issued zero", lambda m: m.update(issued=0))):
+            bridge_rejects(label, change, validate_manifest_v1)
+        bridge_rejects("no launcher block", lambda m: m.pop("launcher"))
+        bridge_rejects("min_launcher is not the launcher's", lambda m: m.update(min_launcher="0.1.0"))
+        for label, change in (
+                ("issued", lambda m: m.update(issued=m["issued"] + 1)),
+                ("version", lambda m: m.update(version="9.9.9")),
+                ("launcher", lambda m: m["launcher"].update(size=4)),
+                ("asset hash", lambda m: m["assets"][0].update(sha256="0" * 64)),
+                ("file hash", lambda m: m["files"][0].update(sha256="0" * 64)),
+                ("file path", lambda m: m["files"][0].update(path="other.dll")),
+                ("a file dropped", lambda m: m["files"].pop())):
+            doc = copy.deepcopy(bridge_doc)
+            change(doc)
+            assert bridge_agreement(doc, full), label
+
+        # sign_file takes either manifest, by its own schema, and refuses an invalid one.
+        both = temp / "both"
+        both.mkdir()
+        _write_full_release(both, manifest, zip_bytes)
+        assert sign_file(both / BRIDGE_NAME, TEST_KEY, [key_a], False)[0] == 0
+        assert (both / BRIDGE_SIGNATURE_NAME).is_file() and not (both / SIGNATURE_NAME).exists()
+        loose = copy.deepcopy(bridge_doc)
+        loose["min_launcher"] = "0.1.0"
+        (both / "loose.json").write_bytes(_dump(loose))
+        assert sign_file(both / "loose.json", TEST_KEY, [key_a], False)[0] == 1
+        assert not (both / "loose.json.sig").exists()
+        assert sign_file(both / MANIFEST_NAME, TEST_KEY, [key_a], False)[0] == 0
+        assert verify_directory(both, keys=[key_a], out=lambda line: None)
+
+        # verify requires and verifies both pairs.
+        def both_tampered(label, change):
+            folder = temp / ("b-" + label)
+            folder.mkdir()
+            for entry in both.iterdir():
+                (folder / entry.name).write_bytes(entry.read_bytes())
+            change(folder)
+            return verify_directory(folder, keys=[key_a], out=lambda line: None)
+
+        assert both_tampered("none", lambda f: None)
+        assert not both_tampered("no-bridge", lambda f: (f / BRIDGE_NAME).unlink())
+        assert not both_tampered("no-bridge-sig", lambda f: (f / BRIDGE_SIGNATURE_NAME).unlink())
+        assert not both_tampered("no-v2-sig", lambda f: (f / SIGNATURE_NAME).unlink())
+        assert not both_tampered("bad-bridge-sig", lambda f: (f / BRIDGE_SIGNATURE_NAME).write_text("0" * 128 + "\n"))
+        assert not both_tampered("v2-sig-on-bridge", lambda f: (f / BRIDGE_SIGNATURE_NAME).write_bytes(
+            (f / SIGNATURE_NAME).read_bytes()))
+        assert not both_tampered("bridge-edited", lambda f: (f / BRIDGE_NAME).write_bytes(
+            (f / BRIDGE_NAME).read_bytes().replace(b"1794000000", b"1794000001")))
+        folder = temp / "b-unsigned-no-bridge"
+        folder.mkdir()
+        for entry in both.iterdir():
+            if entry.name != BRIDGE_NAME:
+                (folder / entry.name).write_bytes(entry.read_bytes())
+        lines = []
+        assert not verify_directory(folder, allow_unsigned=True, out=lines.append)
+        assert any("schema-1 bridge, is missing" in line for line in lines), lines
         # main(): --key-stdin with a BOM, --dry-run, and the terminal refusals, all in
         # process with the terminal check and the header replaced.
         global HEADER, _is_terminal
         old_header, old_terminal, old_stdin = HEADER, _is_terminal, sys.stdin
         main_dir = temp / "main"
         main_dir.mkdir()
-        _write_release(main_dir, manifest, zip_bytes)
+        _write_full_release(main_dir, manifest, zip_bytes)
         header.write_text(_header_text([key_a]), encoding="utf-8")
         HEADER = header
         try:
@@ -1039,6 +1347,10 @@ def self_test():
             sys.stdin = io.StringIO("\ufeff  " + TEST_KEY + "  \r\n")
             with contextlib.redirect_stdout(io.StringIO()):
                 assert main(["sign", str(main_dir / MANIFEST_NAME), "--key-stdin"]) == 0
+            assert not verify_directory(main_dir, keys=[key_a], out=lambda line: None), "the bridge is unsigned"
+            sys.stdin = io.StringIO(TEST_KEY + "\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                assert main(["sign", str(main_dir / BRIDGE_NAME), "--key-stdin"]) == 0
             assert verify_directory(main_dir, keys=[key_a], out=lambda line: None)
             sys.stdin = io.StringIO("not a key\n")
             captured = io.StringIO()
@@ -1072,7 +1384,7 @@ def self_test():
         script = str(Path(__file__).resolve())
         refused_dir = temp / "refused"
         refused_dir.mkdir()
-        _write_release(refused_dir, manifest, zip_bytes)
+        _write_full_release(refused_dir, manifest, zip_bytes)
         for command, stdin in ((["generate"], ""),
                                (["sign", str(refused_dir / MANIFEST_NAME), "--key-stdin"], TEST_KEY + "\n"),
                                (["sign", str(refused_dir / MANIFEST_NAME), "--key-stdin", "--dry-run"],
