@@ -7,7 +7,7 @@ something correct on a monitor is wrong in a headset because it is drawn once
 for two eyes, pinned to your face instead of standing in the world, or sized
 for a screen you are not looking at.
 
-This page describes release 0.22.0, made for Elite build 334925. Each entry
+This page describes release 0.22.1, made for Elite build 334925. Each entry
 names its setting in `edvr.ini` and the value it ships with. Most are also a
 row in the F8 menu and take effect within about a second. Where a fix has a
 full write-up, with what was measured and why the game behaves as it does, the
@@ -105,19 +105,20 @@ describes the temporal pass.
 ### The interface
 
 In VR, `fix.ui_quality` draws the game's interface as sharp as it would be at
-HMD Quality 1.0 (`100`, the default), 1.25, 1.5 or 2.0, whatever HMD Quality
-the scene runs at. The cockpit's panels are made at that size inside the game's
-own panel code. Menus, station services, the loading screen and the 2D screen
-are drawn into a separate layer and laid over the finished picture after the
+HMD Quality 1.0 (`100`, the default), 1.25 or 1.5, whatever HMD Quality the
+scene runs at. The cockpit's panels are made at that size inside the game's own
+panel code. Menus, station services, the loading screen and the 2D screen are
+drawn into a separate layer and laid over the finished picture after the
 upscaler and the sharpening, so their text is never upscaled, sharpened or
 smeared. The cockpit's holo panels, the flight HUD, the target markers and the
 holograms go through a layer of their own at the same size, and keep the bloom
 halo the game gives them. The supercruise bars, the orbit lines and the space
 dust are drawn into the layer too, so the upscaler does not smear them. The
-layer needs anti-aliasing on, and larger sizes cost video memory: at `200` it
-has four times the pixels it has at `100`. `off` leaves the interface as the
-game draws it. On a flat screen the same setting makes the panels at the
-display's size or larger, whatever Supersampling the scene renders at.
+layer needs anti-aliasing on, and larger sizes cost video memory: at `150` it
+has 2.25 times the pixels it has at `100`. A saved `200` reads as `150`. `off`
+leaves the interface as the game draws it. On a flat screen the same setting
+makes the panels at the display's size or larger, whatever Supersampling the
+scene renders at.
 
 ### Stair steps on the HUD
 
@@ -445,10 +446,10 @@ the game draws it. `visual.desktop_window_aspect` cuts the picture to 1:1, 4:3,
 places the cut as Elite's own mirror does (`native`) or in the centre
 (`center`), `visual.desktop_window_vertical_shift` moves it up or down, and
 `visual.desktop_window_style` makes the window an ordinary one or `borderless`
-full screen. While Elite shows its flat screen in the headset, as on foot
-with native on-foot VR off, the window keeps the game's own shape, because the
-game sizes that screen's HUD by it. In VR the desktop window never waits for
-the monitor's vertical sync, so it cannot hold the headset to 60 Hz.
+full screen. While Elite shows its flat screen in the headset, as on foot with
+native on-foot VR off, the window keeps the game's own shape, because the game
+sizes that screen's HUD by it. In VR the desktop window never waits for the
+monitor's vertical sync, so it cannot hold the headset to 60 Hz.
 [desktop-window.md](desktop-window.md).
 
 ## Launch and loading
