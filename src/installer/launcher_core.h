@@ -59,7 +59,7 @@ struct PayloadLoad {
     std::wstring manifestPath; // the stored manifest, when kind is Manifest
 };
 
-// The files of an unpacked ed-up-<ver>.zip, listed by the schema-2 manifest <dir>\ed-up-manifest.json
+// The files of an unpacked ed-up-<ver>.zip, listed by the schema-2 manifest <dir>\ed-up-manifest-v2.json
 // (unsigned is fine here) and taken by each file's `path` under the folder. The version is the
 // manifest's build. A file the folder does not hold is left out, as a folder unpacked from the core zip
 // alone lacks the DLSS and XeSS ones. Nothing here checks a hash: the folder is the user's, named with

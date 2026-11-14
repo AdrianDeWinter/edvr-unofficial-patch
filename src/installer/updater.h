@@ -32,8 +32,8 @@ namespace edvr::installer {
 // The one place the project's address lives.
 inline constexpr const char* kGitHubApiBase =
     "https://api.github.com/repos/characterecho-sean/ed-unofficial-patch";
-inline constexpr const char* kManifestAssetName = "ed-up-manifest.json";
-inline constexpr const char* kSignatureAssetName = "ed-up-manifest.json.sig";
+inline constexpr const char* kManifestAssetName = "ed-up-manifest-v2.json";
+inline constexpr const char* kSignatureAssetName = "ed-up-manifest-v2.json.sig";
 
 // What the window and --check say when a release's manifest is of a newer schema than this
 // launcher reads. The detail ("manifest schema N, launcher reads 2") goes in UpdateCheck::detail.
