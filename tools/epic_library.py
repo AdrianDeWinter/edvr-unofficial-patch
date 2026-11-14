@@ -532,6 +532,12 @@ def self_test():
     """Hermetic fixtures exercise products, their ownership and launch metadata."""
     with tempfile.TemporaryDirectory(prefix="edvr_epic_") as temporary:
         home = Path(temporary).resolve()
+        host_games = home
+        if os.name == "nt" and not str(home).startswith("\\\\?\\"):
+            # Host game paths need a consistent namespace distinct from the
+            # guest C: manifest paths whose Wine-drive mapping is tested below.
+            host_path = str(home)
+            host_games = Path("\\\\?\\UNC\\" + host_path[2:] if host_path.startswith("\\\\") else "\\\\?\\" + host_path)
         config = home / "custom config"
         env = {"XDG_CONFIG_HOME": str(config), "XDG_DATA_HOME": str(home / "data")}
 
@@ -547,7 +553,7 @@ def self_test():
             return base, actual
 
         def game(name):
-            root = home / name
+            root = host_games / name
             leaf = root / "Products" / "elite-dangerous-odyssey-64"
             leaf.mkdir(parents=True)
             (leaf / GAME_EXE).write_bytes(b"game fixture")
@@ -561,13 +567,8 @@ def self_test():
             return path
 
         def manifest(actual, root, app="EliteApp"):
-            # Extended host paths keep native Windows fixtures distinct from
-            # the guest C: paths whose mapping is exercised separately below.
-            location = str(root)
-            if os.name == "nt" and not location.startswith("C:\\Games\\"):
-                location = "\\\\?\\" + location
             write(actual / "drive_c/ProgramData/Epic/EpicGamesLauncher/Data/Manifests/elite.item",
-                  {"AppName": app, "InstallLocation": location})
+                  {"AppName": app, "InstallLocation": str(root)})
 
         # Native Preview journals record current installations independently of
         # their display title; the existing artifact prefix owns the binding.
@@ -775,11 +776,11 @@ def self_test():
         lutflat = home / ".var/app/net.lutris.Lutris/data/lutris"
         flatyaml = lutflat / "games/epic.yaml"
         flatyaml.parent.mkdir(parents=True)
-        flatyaml.write_text("game:\n  prefix: " + json.dumps(str(flatprefix)) + " # chosen prefix\nwine:\n  version: bundled\n", encoding="utf-8")
+        flatyaml.write_text("game:\n  prefix: " + json.dumps(str(flatprefix), ensure_ascii=False) + " # chosen prefix\nwine:\n  version: bundled\n", encoding="utf-8")
         flatwine = executable(".var/app/net.lutris.Lutris/data/lutris/runners/wine/bundled/bin/wine")
         got = select_install(flatleaf, home, legenv)
         assert (got.runner, got.flatpak_id, got.manager) == (flatwine, "net.lutris.Lutris", "lutris")
-        flatyaml.write_text("game:\n  prefix: " + json.dumps(str(flatprefix)) + "\nwine:\n  version: system\n", encoding="utf-8")
+        flatyaml.write_text("game:\n  prefix: " + json.dumps(str(flatprefix), ensure_ascii=False) + "\nwine:\n  version: system\n", encoding="utf-8")
         got = select_install(flatleaf, home, legenv)
         assert (got.runner, got.runner_kind, got.runner_lookup) == (None, "wine", "wine")
 
