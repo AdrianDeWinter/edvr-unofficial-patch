@@ -334,7 +334,7 @@ static void sourcePins(const std::string& root) {
         const size_t at = menu.find("void menuProfileSwitch() {");
         const size_t end = at == std::string::npos ? at : menu.find("\n}\n", at);
         const std::string body = end == std::string::npos ? std::string() : menu.substr(at, end - at);
-        check(!body.empty() && has(body.c_str(), "s.flatNotice.clear();") && has(body.c_str(), "s.flatNoticeUp = false;") && has(body.c_str(), "s.flatNoticeShown = false;"),
+        check(!body.empty() && has(body.c_str(), "s.flatNotice.clear();") && has(body.c_str(), "s.screenNotice.clear();"),
               "a profile switch clears the outgoing profile's queued and displayed flat notice (menuProfileSwitch)");
     }
     check(has(ini, "compare_aa = F7"), "edvr.ini ships the key bound to F7");

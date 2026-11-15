@@ -50,6 +50,7 @@
 #include "menu_keys.h"
 #include "menu_pad.h"
 #include "menu_panel.h"
+#include "menu_policy.h"
 #include "native_menu.h"
 #include "native_render_labels.h"
 #include "vr_runtime.h"
@@ -219,7 +220,7 @@ struct State {
     uint64_t tickMs = 0;
 
     bool  open = false;
-    bool  flatEscapeDown = false;
+    bool  escapeDown = false;   // the Escape tracker (menuEscapeAction): the flat open seeds it from the raw key, the VR open leaves it
     bool  flatKeysReadyShown = false;
     bool  flatNativeScaleShown = false;
     // The flat panel's settings warning (flat_elite_settings.h): Elite's graphics files, read
@@ -342,15 +343,11 @@ struct State {
     std::string toastText;
 
     // menuShowNotice in the flat profile, which draws no toasts: the notice is the panel's raster at a toast's size, composited in the
-    // upper left corner while it is up. `Shown` is set once that raster (not the menu's) is the live one; `RasterStale` holds the panel
-    // back after a notice until the menu's own content has been rasterised, so a toast-sized card never flashes as the menu.
-    // The queue keeps a notice raised while the menu is open until it closes (flat_notice_queue.h).
+    // upper left corner while it is up (the machine is ScreenNoticeState, menu_policy.h, kept apart from the VR toast path: it queues while the
+    // menu is open and shows only once its own raster is the live one, which the toast's fade does not). The queue keeps a notice raised while
+    // the menu is open until it closes (flat_notice_queue.h).
     edvr::FlatNoticeQueue flatNotice;
-    bool     flatNoticeUp = false;
-    bool     flatNoticeShown = false;
-    bool     flatRasterStale = false;
-    uint64_t flatNoticeUntilMs = 0;
-    uint32_t flatNoticeSerial = 0;
+    edvr::ScreenNoticeState screenNotice;
 
     // The head-locked readout (menu.fps_overlay), shown while the menu is
     // down: re-anchored to the head every frame, re-rasterised twice a
@@ -4469,54 +4466,39 @@ void latchAnchor(float yawDeg, float pitchDeg) {
 
 void openMenu(uint64_t now) {
     State& s = g_s;
-    if (runtimeFlatProfile()) {
-        inputGateInstall();
+    const MenuProfilePolicy pol = menuPolicyFor(runtimeFlatProfile());
+    const bool world = pol.anchor == MenuAnchor::World;
+    if (world) {
+        if (!glitchConsumerPresent() && !nativeMenuAvailable()) {
+            if (!s.noConsumerNoted) {
+                s.noConsumerNoted = true;
+                Log::get().note("menu: the menu key was pressed, but no compositor consumer has "
+                                "hooked the compositor, so there is no door to draw the panel "
+                                "at. The menu stays closed and the keyboard stays the game's. "
+                                "See the runtime diagnosis in this log.");
+                vrRuntimeExplainOnce();
+            }
+            return;
+        }
+        if (!s.aimPromptUp) s.aimPromptWide = false;   // F177: an ordinary open while the wide card was fading takes the player's own width back
+        latchAnchor(0.0f, 0.0f);
+        if (!s.anchorValid) {
+            if (!s.noPoseNoted) {
+                s.noPoseNoted = true;
+                Log::get().note("menu: no head pose has been published yet, so the panel has "
+                                "nowhere to anchor. Try again once the headset is tracking.");
+            }
+            return;
+        }
+    }
+    inputGateInstall();
+    if (pol.padNavigation) {
         s.padIndex = -1;
         s.padReady = false;
         s.padReadyNoted = false;
         s.padNavigation.prime(0);
         inputGateSetPadPrivate(false, -1);
-        for (KeyRepeat& k : s.keys) keyRepeatPrime(k, rawKeyDown(k.vk));
-        for (KeyRepeat& k : s.editKeys) keyRepeatPrime(k, rawKeyDown(k.vk));
-        buildPages();
-        refreshRowValues();
-        s.open = true;
-        s.openedMs = s.lastInputMs = s.highlightSinceMs = now;
-        s.lastDrawn = menuDrawnValue();
-        s.lastDrawnMs = 0;
-        s.flatEscapeDown = rawKeyDown(VK_ESCAPE);
-        s.flatNativeScaleShown = flatRuntimeNativeScale();
-        s.flatSettingsForce = true;   // Elite's graphics files are looked at when the panel opens
-        starGlowBloomMenuOpened();    // ... and so is the Bloom option, when the Star glow is above 100
-        s.alpha = 1.0f;
-        s.tooltipUp = false;
-        s.contentDirty = true;
-        Log::get().note("menu: flat graphics panel open; keyboard %s.",
-                        s.privateWanted ? "private" : "shared");
-        return;
     }
-    if (!glitchConsumerPresent() && !nativeMenuAvailable()) {
-        if (!s.noConsumerNoted) {
-            s.noConsumerNoted = true;
-            Log::get().note("menu: the menu key was pressed, but no compositor consumer has "
-                            "hooked the compositor, so there is no door to draw the panel "
-                            "at. The menu stays closed and the keyboard stays the game's. "
-                            "See the runtime diagnosis in this log.");
-            vrRuntimeExplainOnce();
-        }
-        return;
-    }
-    if (!s.aimPromptUp) s.aimPromptWide = false;   // F177: an ordinary open while the wide card was fading takes the player's own width back
-    latchAnchor(0.0f, 0.0f);
-    if (!s.anchorValid) {
-        if (!s.noPoseNoted) {
-            s.noPoseNoted = true;
-            Log::get().note("menu: no head pose has been published yet, so the panel has "
-                            "nowhere to anchor. Try again once the headset is tracking.");
-        }
-        return;
-    }
-    inputGateInstall();
     // Every tracker is seeded from the raw key: one held as the menu opens
     // -- W for thrust, Down on the way in -- does nothing until released
     // and pressed afresh. handleKeys runs only while open, so before this
@@ -4525,32 +4507,51 @@ void openMenu(uint64_t now) {
     // required, not optional, and it changes the fixed keys the same way.
     for (KeyRepeat& k : s.keys) keyRepeatPrime(k, rawKeyDown(k.vk));
     for (KeyRepeat& k : s.editKeys) keyRepeatPrime(k, rawKeyDown(k.vk));
-    for (int i = 0; i < s.aliases.count; ++i) {
-        keyRepeatPrime(s.aliasKeys[i], rawKeyDown(s.aliasKeys[i].vk));
+    if (pol.adoptGameKeys) {
+        for (int i = 0; i < s.aliases.count; ++i) {
+            keyRepeatPrime(s.aliasKeys[i], rawKeyDown(s.aliasKeys[i].vk));
+        }
     }
-    if (s.developer != s.developerBuilt) buildPages();
+    // The flat pages are rebuilt at every open; the VR pages only when the developer switch moved.
+    if (!world || s.developer != s.developerBuilt) buildPages();
     refreshRowValues();
-    // Elite's bindings are read for the Hotkeys page's badges when the menu opens (and again
-    // when Elite rewrites them), never per frame; nothing from a capture survives a close.
-    s.clashStale = true;
-    s.captureEntry = -1;
-    s.noteUntilMs = 0;
+    if (world) {
+        // Elite's bindings are read for the Hotkeys page's badges when the menu opens (and again
+        // when Elite rewrites them), never per frame; nothing from a capture survives a close.
+        s.clashStale = true;
+        s.captureEntry = -1;
+        s.noteUntilMs = 0;
+    }
     s.open = true;
     s.openedMs = now;
     s.lastInputMs = now;
     s.highlightSinceMs = now;
     s.tooltipUp = false;
-    s.lastDrawnMs = now;   // grace: the first draw has not had a chance yet
-    s.aimParked = false;
     s.contentDirty = true;
-    s.toastUp = false;
-    s.toastAlpha = 0.0f;
-    s.overlayUp = false;
-    s.overlayAlpha = 0.0f;
-    starGlowBloomMenuOpened();   // Elite's Bloom option is read again when the Star glow is above 100, as in the flat panel
-    perfMonitorNoteEvent(kEvMenu);
-    Log::get().note("menu: open (%s, %.1f m, keys %s).", s.pages[s.page].name,
-                    static_cast<double>(s.distance), s.privateWanted ? "private" : "shared");
+    if (world) {
+        s.lastDrawnMs = now;   // grace: the first draw has not had a chance yet
+        s.aimParked = false;
+        s.toastUp = false;
+        s.toastAlpha = 0.0f;
+        s.overlayUp = false;
+        s.overlayAlpha = 0.0f;
+    } else {
+        s.lastDrawn = menuDrawnValue();
+        s.lastDrawnMs = 0;
+        s.escapeDown = rawKeyDown(VK_ESCAPE);
+        s.flatNativeScaleShown = flatRuntimeNativeScale();
+        s.flatSettingsForce = true;   // Elite's graphics files are looked at when the panel opens
+        s.alpha = 1.0f;
+    }
+    starGlowBloomMenuOpened();   // Elite's Bloom option is read again when the Star glow is above 100 (flat: the files are looked at when the panel opens)
+    if (world) {
+        perfMonitorNoteEvent(kEvMenu);
+        Log::get().note("menu: open (%s, %.1f m, keys %s).", s.pages[s.page].name,
+                        static_cast<double>(s.distance), s.privateWanted ? "private" : "shared");
+    } else {
+        Log::get().note("menu: flat graphics panel open; keyboard %s.",
+                        s.privateWanted ? "private" : "shared");
+    }
 }
 
 void aimPromptClosed();   // F177, below
@@ -4566,7 +4567,7 @@ void closeMenu(const char* why) {
     inputGateSetPrivate(false);
     inputGateSetPadPrivate(false, -1);
     s.padReady = false;
-    if (runtimeFlatProfile()) hotkeysPrimeAll(); // a held navigation key must not become a hotkey on close
+    if (menuPolicyFor(runtimeFlatProfile()).primesHotkeysOnClose) hotkeysPrimeAll(); // a held navigation key must not become a hotkey on close
     perfMonitorNoteEvent(kEvMenu);
     Log::get().note("menu: closed (%s).", why);
     if (s.aimPromptUp) aimPromptClosed();
@@ -4699,10 +4700,7 @@ void menuProfileSwitch() {
     if (s.open) closeMenu("profile switch");
     // The outgoing profile's flat notice, queued or on screen, goes with it: Config::switchProfile clears the AA comparison override it described.
     s.flatNotice.clear();
-    s.flatNoticeUp = false;
-    s.flatNoticeShown = false;
-    s.flatNoticeUntilMs = 0;
-    s.flatRasterStale = false;
+    s.screenNotice.clear();
     inputGateSetPrivate(false);
     menuPanelFlatResize();
     s.lastDrawn = menuDrawnValue();
@@ -4772,48 +4770,9 @@ void menuAdoptGameBindings(bool enabled, const char* why) {
     }
 }
 
-void menuConfigure(Config& cfg) {
+// The switch for Elite's panel keys (menuConfigure, for the profiles that adopt them).
+static void menuAdoptGameBindingsSwitch(Config& cfg, bool summonChanged, const std::string& key) {
     State& s = g_s;
-    if (runtimeFlatProfile()) {
-        const std::string key = cfg.getString("hotkey.menu", "F8");
-        if (!s.configured || key != s.summonName) {
-            s.summonName = key;
-            s.summon.setBinding(key.c_str());
-        }
-        s.privateWanted = true;
-        s.aimMode = 1;
-        s.tooltipDelayS = 0.0f;
-        s.toasts = false;
-        s.overlay = false;
-        inputGateConfigure(cfg);
-        if (!s.configured) {
-            s.configured = true;
-            s.flatSettings.setFolder(flatEliteGraphicsFolder());
-            starGlowBloomConfigure();
-            initKeys();
-            refreshRowValues();
-            takeSnapshot();
-            buildPages();
-            Log::get().note("menu: flat graphics panel configured; summon with %s.", key.c_str());
-        }
-        return;
-    }
-    if (!runtimeVrProfile()) {
-        s.configured = false;
-        s.summon.setBinding("");
-        return;
-    }
-    const std::string key = cfg.getString("hotkey.menu", "F8");
-    const bool summonChanged = key != s.summonName || !s.configured;
-    if (summonChanged) {
-        s.summonName = key;
-        s.summon.setBinding(key.c_str());
-        if (!s.summon.bound() && !key.empty()) {
-            Log::get().note("menu: hotkey.menu = \"%s\" bound nothing (the line above says "
-                            "why), so the menu cannot be summoned this session.",
-                            key.c_str());
-        }
-    }
     // Elite's panel keys follow the same switch as the camera keys. The
     // live flip is handled HERE and not by device_hook's fingerprint poll:
     // if the files did not change while the setting was off, the
@@ -4839,6 +4798,11 @@ void menuConfigure(Config& cfg) {
             }
         }
     }
+}
+
+// The [menu] keys: the profiles that read them (menu_policy.h) -- the flat profile reads none, and its values are the policy's.
+static void menuReadMenuKeys(Config& cfg) {
+    State& s = g_s;
     const std::string kb = cfg.getString("menu.keyboard", "private");
     s.privateWanted = _stricmp(kb.c_str(), "shared") != 0;
     const std::string aim = cfg.getString("menu.aim", "keys");
@@ -4924,21 +4888,58 @@ void menuConfigure(Config& cfg) {
         s.developer = dev;
         if (s.configured) buildPages();
     }
+}
+
+void menuConfigure(Config& cfg) {
+    State& s = g_s;
+    const bool flat = runtimeFlatProfile();
+    if (!flat && !runtimeVrProfile()) {
+        s.configured = false;
+        s.summon.setBinding("");
+        return;
+    }
+    const MenuProfilePolicy pol = menuPolicyFor(flat);
+    const std::string key = cfg.getString("hotkey.menu", "F8");
+    const bool summonChanged = key != s.summonName || !s.configured;
+    if (summonChanged) {
+        s.summonName = key;
+        s.summon.setBinding(key.c_str());
+        if (pol.anchor == MenuAnchor::World && !s.summon.bound() && !key.empty()) {
+            Log::get().note("menu: hotkey.menu = \"%s\" bound nothing (the line above says "
+                            "why), so the menu cannot be summoned this session.",
+                            key.c_str());
+        }
+    }
+    if (pol.adoptGameKeys) menuAdoptGameBindingsSwitch(cfg, summonChanged, key);
+    if (pol.readsMenuKeys) {
+        menuReadMenuKeys(cfg);
+    } else {
+        // The flat profile reads no [menu] key (src/common/flat_profile_keys.h): the policy's values stand in, and nothing a VR session left in the
+        // State (a width, a toast switch, the overlay) is read in flat.
+        s.privateWanted = pol.keyboardAlwaysPrivate;
+        s.aimMode = 1;
+        s.tooltipDelayS = 0.0f;
+        s.toasts = false;      // toasts are the world placement's; the flat notice does not ask for them (noticesAlwaysOn)
+        s.overlay = false;
+    }
     inputGateConfigure(cfg);
     if (!s.configured) {
         s.configured = true;
+        if (flat) s.flatSettings.setFolder(flatEliteGraphicsFolder());
         starGlowBloomConfigure();
         initKeys();
         refreshRowValues();
         takeSnapshot();
         buildPages();
-        Log::get().note("menu: %d rows in the table (%d on the Fixes/Performance pages); "
-                        "summon with %s. docs/settings-menu.md.",
-                        kRowDefCount,
-                        static_cast<int>(s.pages[0].entries.size() + s.pages[1].entries.size()),
-                        key.c_str());
-        // F177: the flat profile has no aiming choice page; the log says so once.
-        if (runtimeFlatProfile()) aimPromptNoteNotShown("the flat profile has no such page");
+        if (flat) {
+            Log::get().note("menu: flat graphics panel configured; summon with %s.", key.c_str());
+        } else {
+            Log::get().note("menu: %d rows in the table (%d on the Fixes/Performance pages); "
+                            "summon with %s. docs/settings-menu.md.",
+                            kRowDefCount,
+                            static_cast<int>(s.pages[0].entries.size() + s.pages[1].entries.size()),
+                            key.c_str());
+        }
     }
 }
 
@@ -4967,14 +4968,16 @@ void menuShowNotice(const char* text) {
         Log::get().note("menu: notice \"%s\" not shown: the menu is not configured in this profile.", text);
         return;
     }
-    if (runtimeFlatProfile()) {
+    const MenuProfilePolicy pol = menuPolicyFor(runtimeFlatProfile());
+    // The flat profile shows its notices whatever menu.toasts says: it cannot read that key yet (it reads as off), and its notices never depended on it.
+    if (!pol.noticesAlwaysOn && !s.toasts) {
+        Log::get().note("menu: notice \"%s\" not queued: menu.toasts is off.", text);
+        return;
+    }
+    if (pol.noticePlacement == MenuNoticePlacement::ScreenCorner) {
         s.flatNotice.show(text);
         Log::get().note("menu: notice \"%s\" queued for the flat screen (upper left, about %llu s).", text,
                         static_cast<unsigned long long>((kToastMs + 500) / 1000));
-        return;
-    }
-    if (!s.toasts) {
-        Log::get().note("menu: notice \"%s\" not queued: menu.toasts is off.", text);
         return;
     }
     // The newest AA notice (or "Windows: " notice, the concourse pane mode) replaces an older one of its kind still waiting or on screen: a quick second press
@@ -5065,7 +5068,7 @@ void menuNoteConfigReloaded() {
 }
 
 void menuFlatBeforePresent(IDXGISwapChain* swap, unsigned flags) {
-    if (!runtimeFlatProfile() || !g_s.configured || !(g_s.open || g_s.flatNoticeShown) ||
+    if (!runtimeFlatProfile() || !g_s.configured || !g_s.screenNotice.compositing(g_s.open) ||
         (flags & DXGI_PRESENT_TEST)) return;
     menuPanelCompositeFlat(swap);
 }
@@ -5093,145 +5096,46 @@ void menuTick(ID3D11Device* dev) {
         char windowsToast[64];
         if (concoursePaneTakeToast(windowsToast, sizeof(windowsToast))) menuShowNotice(windowsToast);
     }
-    if (runtimeFlatProfile()) {
-        guardedBudget(g_budget, [&] {
-            const uint64_t now = nowMs();
-            tickHeldEdit(now);   // a held numeric edit whose burst has ended is written now (menu_edit_hold.h)
-            s.tickMs = now;
-            drainWrites();
-            const bool summonPressed = s.summon.pressed();
-            // A pad binding in an existing ini may overlap panel navigation.
-            // Its opening edge still works; once open, the panel owns that
-            // button (A selects, B backs out, and the others navigate).
-            const HotkeyBinding& summonBinding = s.summon.binding();
-            const bool padNavSummon = summonBinding.kind == HotkeyKind::Pad &&
-                menuPadOwnsButton(summonBinding.padButtons, summonBinding.padTrigger);
-            if (summonPressed && !(s.open && padNavSummon && s.padReady)) {
-                if (s.open) closeMenu("the menu key");
-                else openMenu(now);
-            }
-            if (s.summon.takeMissedWhileUnfocused())
-                Log::get().note("menu: %s was pressed while Elite was unfocused.",
-                                s.summonName.c_str());
-            if (s.open && !gameHasFocus()) closeMenu("Elite lost focus");
-            if (s.open) {
-                const bool esc = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-                if (esc && !s.flatEscapeDown) {
-                    if (s.editEntry >= 0) cancelEdit();
-                    else closeMenu("Escape");
-                }
-                s.flatEscapeDown = esc;
-            }
-            const uint32_t drawn = menuDrawnValue();
-            if (drawn != s.lastDrawn) {
-                s.lastDrawn = drawn;
-                s.lastDrawnMs = now;
-            }
-            if (s.open && now - s.openedMs > kNotDrawnCloseMs &&
-                now - s.lastDrawnMs > kNotDrawnCloseMs) {
-                Log::get().note("menu: flat panel was not drawn; closing and releasing keyboard.");
-                closeMenu("not drawn");
-            }
-            const bool drawnFresh = s.open && s.lastDrawnMs != 0 &&
-                                    now - s.lastDrawnMs <= kDrawnFreshMs;
-            inputGateSetPrivate(drawnFresh);
-            const bool keysReady = drawnFresh && inputGateHoldsGameKeyboard();
-            if (keysReady != s.flatKeysReadyShown) {
-                s.flatKeysReadyShown = keysReady;
-                s.contentDirty = true;
-            }
-            if (!keysReady && s.captureEntry >= 0) {
-                const int def = s.captureDef;
-                endCapture();
-                setHotkeyNote(def, "capture cancelled", "Keyboard gate unavailable");
-            }
-            const bool nativeScale = flatRuntimeNativeScale();
-            if (nativeScale != s.flatNativeScaleShown) {
-                s.flatNativeScaleShown = nativeScale;
-                s.contentDirty = true;
-            }
-            flatWarningTick(now);
-            starGlowBloomTick();
-            preparePadNavigation(now, drawnFresh && gameHasFocus());
-            if (keysReady) handleKeys(now);
-            handlePadNavigation(now);
-            if (s.open && dev && !menuPanelFlatRasterReady()) s.contentDirty = true;
-            if (s.open && s.contentDirty) {
-                s.contentDirty = false;
-                MenuContent c;
-                buildContent(c);
-                menuPanelSubmit(c);
-            }
-            // A notice from outside the menu (menuShowNotice): rasterised at a toast's size, composited once that raster is the live one.
-            // With the menu open the notice stays queued and starts when it closes (it was cleared here and lost).
-            if (const std::string* notice = s.flatNotice.take(s.open)) {
-                s.flatNoticeUp = true;
-                s.flatNoticeShown = false;
-                s.flatNoticeUntilMs = now + kToastMs;
-                s.flatNoticeSerial = menuPanelRasterSerial();
-                MenuContent n;
-                buildToastContent(n, *notice, kToastWidthDeg, 1.0f);
-                menuPanelSubmit(n);
-            }
-            if (s.flatNoticeUp) {
-                int rasterH = 0;
-                if (s.open || now >= s.flatNoticeUntilMs) {
-                    s.flatNoticeUp = false;
-                    s.flatNoticeShown = false;
-                    s.flatRasterStale = true;
-                    s.flatNoticeSerial = menuPanelRasterSerial();
-                    s.contentDirty = true;   // the menu's content must be re-sent after a notice
-                } else if (!s.flatNoticeShown && menuPanelRasterSerial() != s.flatNoticeSerial &&
-                           menuPanelStats(nullptr, &rasterH, nullptr, nullptr) && rasterH > 0 && rasterH < kFlatNoticeMaxPx) {
-                    s.flatNoticeShown = true;
-                }
-            }
-            if (s.flatRasterStale && !s.flatNoticeUp && menuPanelRasterSerial() != s.flatNoticeSerial) s.flatRasterStale = false;
-            MenuGeometry g;
-            g.dist = 1.0f;
-            g.curve = 0.0f;
-            g.halfW = 0.62f;
-            g.alpha = ((s.open && !s.flatRasterStale) || (s.flatNoticeUp && s.flatNoticeShown)) ? 1.0f : 0.0f;
-            menuPanelSetGeometry(g);
-            inputGateTick();
-            if (dev) menuPanelTick(dev);
-        });
-        if (!g_budget.shouldRun()) {
-            inputGateSetPrivate(false);
-            inputGateSetPadPrivate(false, -1);
-        }
-        return;
-    }
+    // One body for both profiles (menu_policy.h). The order of the steps is each profile's own order with the other's steps left out; a step that only one
+    // profile has is gated by the policy field that names why, or by `world` where it is the VR panel's tooling the design brings to flat step by step.
+    const MenuProfilePolicy pol = menuPolicyFor(runtimeFlatProfile());
+    const bool world = pol.anchor == MenuAnchor::World;
     guardedBudget(g_budget, [&] {
-        static uint64_t lastNativeRevision = 0;
-        const uint64_t nativeRevision = nativeMenuRevision();
-        if (nativeRevision != lastNativeRevision) {
-            lastNativeRevision = nativeRevision;
-            closeMenu("native tracking origin or availability changed");
-            s.alpha = 0.0f;
+        if (world) {
+            static uint64_t lastNativeRevision = 0;
+            const uint64_t nativeRevision = nativeMenuRevision();
+            if (nativeRevision != lastNativeRevision) {
+                lastNativeRevision = nativeRevision;
+                closeMenu("native tracking origin or availability changed");
+                s.alpha = 0.0f;
+            }
         }
         const uint64_t now = nowMs();
-        const uint64_t dt = s.lastTickMs ? now - s.lastTickMs : 0;
-        s.lastTickMs = now;
+        uint64_t dt = 0;
+        if (pol.fade) {
+            dt = s.lastTickMs ? now - s.lastTickMs : 0;
+            s.lastTickMs = now;
+        }
         // The clock the content build reads, so the tooltip's dwell and the
         // raster agree on when the row was last moved.
         s.tickMs = now;
 
         // The monitor's ring: one clock read and a store per frame, and the
         // compositor's sample when a new one was published. Its slow
-        // samplers run only while the Monitor page is showing.
-        perfMonitorFrame(dev);
-        perfMonitorSetActive(s.open && s.pages[s.page].monitor);
-        // A held numeric edit whose burst has ended is written now (menu_edit_hold.h); the worker's results are drained after it.
-        tickHeldEdit(now);
+        // samplers run only while the Monitor page is showing. The flat profile never reaches it:
+        // the census is the flat profile's only driver of engine motion's clock.
+        if (world) {
+            perfMonitorFrame(dev);
+            perfMonitorSetActive(s.open && s.pages[s.page].monitor);
+        }
+        tickHeldEdit(now);   // a held numeric edit whose burst has ended is written now (menu_edit_hold.h); the worker's results are drained after it
         // Writes the worker finished since last frame.
         drainWrites();
-        starGlowBloomTick();
 
         // The Hotkeys page's upkeep. A hotkey rebound anywhere (this page, the ini, a rewrite of
         // the registry by the reload) changes which keys are EDVR's: the panel keys adopted from
         // Elite are resolved against that set (rule R5), so they are resolved again when it moves.
-        {
+        if (pol.adoptGameKeys) {
             int vks[16];
             const int n = hotkeyRegisteredKeys(vks, 16);
             uint32_t sig = 2166136261u ^ static_cast<uint32_t>(n);
@@ -5242,157 +5146,185 @@ void menuTick(ID3D11Device* dev) {
             }
             s.registeredSig = sig;
         }
-        if (s.noteUntilMs && s.tickMs >= s.noteUntilMs) {
-            s.noteUntilMs = 0;
-            s.noteDef = -1;
-            s.contentDirty = true;
-        }
-        // A belt for the suspension of EDVR's hotkeys (hotkey.h): it is only ever on while a row waits.
-        if (s.captureEntry < 0 && hotkeysSuspended()) hotkeysSuspend(false);
-        if (s.open) {
-            const Page& page = s.pages[s.page];
-            if (s.clashStale && !page.entries.empty() && page.entries[0].kind == EntryKind::Setting &&
-                kMenuRows[page.entries[0].def].kind == MenuKind::Hotkey) {
-                refreshHotkeyClashes();   // only the page that shows the badges reads the files
+        if (pol.hotkeysPage) {
+            if (s.noteUntilMs && s.tickMs >= s.noteUntilMs) {
+                s.noteUntilMs = 0;
+                s.noteDef = -1;
+                s.contentDirty = true;
             }
-        }
-
-        // The VR Supersampling hold (vr_ssaa_hold.h): while the game's Supersampling is held at 1.0 in VR, a requested value that is
-        // not 1.0 is said once per change, as a toast. The measured notice below cannot fire under the hold (the world is drawn at
-        // the eye's own size), so it is kept for the cases the hold does not cover (3D mode 0, flat).
-        {
-            float requested = 0.0f;
-            if (vrSsaaHoldNoticeDue(&requested)) {
-                char holdToast[120];
-                ssaahold::formatHoldToast(holdToast, sizeof(holdToast), requested);
-                if (s.toasts) {
-                    s.toastQueue.push_back(holdToast);
-                    Log::get().note("vr ssaa gate: notice queued as a toast (\"%s\")", holdToast);
-                } else {
-                    Log::get().note("vr ssaa gate: notice not queued: menu.toasts is off");
+            // A belt for the suspension of EDVR's hotkeys (hotkey.h): it is only ever on while a row waits.
+            if (s.captureEntry < 0 && hotkeysSuspended()) hotkeysSuspend(false);
+            if (s.open) {
+                const Page& page = s.pages[s.page];
+                if (s.clashStale && !page.entries.empty() && page.entries[0].kind == EntryKind::Setting &&
+                    kMenuRows[page.entries[0].def].kind == MenuKind::Hotkey) {
+                    refreshHotkeyClashes();   // only the page that shows the badges reads the files
                 }
-                s.contentDirty = true;
             }
         }
 
-        // The 3D mode watch (mode_watch.h): a commit says once, as a toast, which profile EDVR is running now, or that it is paused.
-        {
-            char modeToast[160];
-            if (modeWatchNoticeDue(modeToast, sizeof(modeToast))) {
-                if (s.toasts) {
-                    s.toastQueue.push_back(modeToast);
-                    Log::get().note("mode watch: notice queued as a toast (\"%s\")", modeToast);
-                } else {
-                    Log::get().note("mode watch: notice not queued: menu.toasts is off");
-                }
-                s.contentDirty = true;
-            }
-        }
-
-        // Elite's Supersampling below 1.0 (vr_supersample_notice.h, design section 83): once vScreen has measured the world
-        // rendered under the eye texture, the headset says so once a session as a toast (the menu's own notice, with the log
-        // line vScreen wrote; the open menu keeps it as the Status page's hint). Gated on menu.toasts like every toast, and
-        // this is the VR branch: the flat profile returned above and never reaches it.
-        if (!s.vrSupersamplingToasted) {
-            uint32_t rw = 0, rh = 0, ew = 0, eh = 0;
-            if (vScreenRenderBelowEye(&rw, &rh, &ew, &eh)) {
-                s.vrSupersamplingToasted = true;
-                if (s.toasts) {
-                    char toast[96];
-                    vrss::formatToast(toast, sizeof(toast));
-                    s.toastQueue.push_back(toast);
-                    Log::get().note("vr supersampling: the headset notice is queued as a toast (\"%s\"); the Status page shows the "
-                                    "advice as its hint while the menu is open.", toast);
-                } else {
-                    Log::get().note("vr supersampling: menu.toasts is off, so no toast; the Status page shows the advice as its "
-                                    "hint while the menu is open.");
-                }
-                s.contentDirty = true;
-            }
-        }
-
-        // Elite's terrain checkerboard rendering (terrain_checkerboard_notice.h, design section 84), VR only like the rest of this
-        // branch. The tick starts the reader on its own thread at the first VR frame boundary, once; everything after that loads the
-        // word it publishes and never a file. A toast once per RAISE of the option: toastOnRaise sets the latch (the published
-        // version) before the toasts test, so turning the option off and on again says it again and an option that stays on says it
-        // once. Gated on menu.toasts like every toast and logged either way; the open menu has it as the Status page's hint, a live
-        // predicate that ends when the option does.
-        terrainCheckerboardTick();
-        {
-            tcn::State cbState = tcn::State::Unknown;
-            uint32_t cbVersion = 0;
-            terrainCheckerboardPublished(&cbState, &cbVersion);
-            if (tcn::toastOnRaise(&s.terrainCheckerboardToasted, cbState, cbVersion)) {
-                char terrainToast[96];
-                char terrainNote[400];
-                tcn::formatToast(terrainToast, sizeof(terrainToast));
-                if (s.toasts) s.toastQueue.push_back(terrainToast);
-                tcn::formatQueuedLog(terrainNote, sizeof(terrainNote), s.toasts, terrainToast);
-                Log::get().note("%s", terrainNote);
-                s.contentDirty = true;
-            }
-        }
-
-        // Parallel projection left on for a canted Pimax (parallel_projection_notice.h, docs/canted-projection.md), VR only like the rest of
-        // this branch. Decided once a menu session (ppn::SessionLatch), from the first tick that holds the eye poses the native menu was given
-        // and the headset's names: ppn::decide, the same call the openxr half logs from. A close or a new session starts the decision again,
-        // so an earlier session's verdict is neither kept nor said twice. Only Notice (PimaxXR, which applies Pimax Play's toggle) reaches the
-        // user: a toast, gated on menu.toasts like every toast, and the Status page's hint while the menu is open. A runtime not known to
-        // apply the toggle gets the openxr log line alone. Nothing is said when the views are not a pair of orientations yet: the check waits.
-        {
-            // The identity is read before the poses. A close between the two reads leaves this tick's answer for the old session, which the
-            // next tick resets; it cannot put a new session's poses under the old identity for a whole session. Once this session is decided
-            // the tick does nothing more: the poses (a mutex and a copy) and the names are fetched only while a decision is still due.
-            const uint64_t parallelSession = nativeMenuSessionId();
-            if (parallelSession != s.parallelProjection.session || !s.parallelProjection.checked) {
-                float eyes[2][12]{};
-                NativeRenderLabels labels{};
-                const bool named = nativeMenuEyePoses(eyes) && nativeRenderLabels(&labels) && labels.valid;
-                if (ppn::latchTick(s.parallelProjection, parallelSession, named ? eyes : nullptr, labels.systemName, labels.runtimeName)) {
-                    char parallelToast[96];
-                    ppn::formatToast(parallelToast, sizeof(parallelToast));
+        if (pol.noticePlacement == MenuNoticePlacement::WorldToast) {
+            // The VR Supersampling hold (vr_ssaa_hold.h): while the game's Supersampling is held at 1.0 in VR, a requested value that is
+            // not 1.0 is said once per change, as a toast. The measured notice below cannot fire under the hold (the world is drawn at
+            // the eye's own size), so it is kept for the cases the hold does not cover (3D mode 0, flat).
+            {
+                float requested = 0.0f;
+                if (vrSsaaHoldNoticeDue(&requested)) {
+                    char holdToast[120];
+                    ssaahold::formatHoldToast(holdToast, sizeof(holdToast), requested);
                     if (s.toasts) {
-                        s.toastQueue.push_back(parallelToast);
-                        Log::get().note("parallel projection: the headset notice is queued as a toast (\"%s\"); the Status page shows the "
-                                        "advice as its hint while the menu is open.", parallelToast);
+                        s.toastQueue.push_back(holdToast);
+                        Log::get().note("vr ssaa gate: notice queued as a toast (\"%s\")", holdToast);
                     } else {
-                        Log::get().note("parallel projection: menu.toasts is off, so no toast; the Status page shows the advice as its "
+                        Log::get().note("vr ssaa gate: notice not queued: menu.toasts is off");
+                    }
+                    s.contentDirty = true;
+                }
+            }
+
+            // The 3D mode watch (mode_watch.h): a commit says once, as a toast, which profile EDVR is running now, or that it is paused.
+            {
+                char modeToast[160];
+                if (modeWatchNoticeDue(modeToast, sizeof(modeToast))) {
+                    if (s.toasts) {
+                        s.toastQueue.push_back(modeToast);
+                        Log::get().note("mode watch: notice queued as a toast (\"%s\")", modeToast);
+                    } else {
+                        Log::get().note("mode watch: notice not queued: menu.toasts is off");
+                    }
+                    s.contentDirty = true;
+                }
+            }
+
+            // Elite's Supersampling below 1.0 (vr_supersample_notice.h, design section 83): once vScreen has measured the world
+            // rendered under the eye texture, the headset says so once a session as a toast (the menu's own notice, with the log
+            // line vScreen wrote; the open menu keeps it as the Status page's hint). Gated on menu.toasts like every toast, and
+            // this is the world-toast placement: the flat profile never reaches it.
+            if (!s.vrSupersamplingToasted) {
+                uint32_t rw = 0, rh = 0, ew = 0, eh = 0;
+                if (vScreenRenderBelowEye(&rw, &rh, &ew, &eh)) {
+                    s.vrSupersamplingToasted = true;
+                    if (s.toasts) {
+                        char toast[96];
+                        vrss::formatToast(toast, sizeof(toast));
+                        s.toastQueue.push_back(toast);
+                        Log::get().note("vr supersampling: the headset notice is queued as a toast (\"%s\"); the Status page shows the "
+                                        "advice as its hint while the menu is open.", toast);
+                    } else {
+                        Log::get().note("vr supersampling: menu.toasts is off, so no toast; the Status page shows the advice as its "
                                         "hint while the menu is open.");
                     }
                     s.contentDirty = true;
                 }
             }
+
+            // Elite's terrain checkerboard rendering (terrain_checkerboard_notice.h, design section 84), VR only like the rest of this
+            // placement. The tick starts the reader on its own thread at the first VR frame boundary, once; everything after that loads the
+            // word it publishes and never a file. A toast once per RAISE of the option: toastOnRaise sets the latch (the published
+            // version) before the toasts test, so turning the option off and on again says it again and an option that stays on says it
+            // once. Gated on menu.toasts like every toast and logged either way; the open menu has it as the Status page's hint, a live
+            // predicate that ends when the option does.
+            terrainCheckerboardTick();
+            {
+                tcn::State cbState = tcn::State::Unknown;
+                uint32_t cbVersion = 0;
+                terrainCheckerboardPublished(&cbState, &cbVersion);
+                if (tcn::toastOnRaise(&s.terrainCheckerboardToasted, cbState, cbVersion)) {
+                    char terrainToast[96];
+                    char terrainNote[400];
+                    tcn::formatToast(terrainToast, sizeof(terrainToast));
+                    if (s.toasts) s.toastQueue.push_back(terrainToast);
+                    tcn::formatQueuedLog(terrainNote, sizeof(terrainNote), s.toasts, terrainToast);
+                    Log::get().note("%s", terrainNote);
+                    s.contentDirty = true;
+                }
+            }
+
+            // Parallel projection left on for a canted Pimax (parallel_projection_notice.h, docs/canted-projection.md), VR only like the rest of
+            // this placement. Decided once a menu session (ppn::SessionLatch), from the first tick that holds the eye poses the native menu was given
+            // and the headset's names: ppn::decide, the same call the openxr half logs from. A close or a new session starts the decision again,
+            // so an earlier session's verdict is neither kept nor said twice. Only Notice (PimaxXR, which applies Pimax Play's toggle) reaches the
+            // user: a toast, gated on menu.toasts like every toast, and the Status page's hint while the menu is open. A runtime not known to
+            // apply the toggle gets the openxr log line alone. Nothing is said when the views are not a pair of orientations yet: the check waits.
+            {
+                // The identity is read before the poses. A close between the two reads leaves this tick's answer for the old session, which the
+                // next tick resets; it cannot put a new session's poses under the old identity for a whole session. Once this session is decided
+                // the tick does nothing more: the poses (a mutex and a copy) and the names are fetched only while a decision is still due.
+                const uint64_t parallelSession = nativeMenuSessionId();
+                if (parallelSession != s.parallelProjection.session || !s.parallelProjection.checked) {
+                    float eyes[2][12]{};
+                    NativeRenderLabels labels{};
+                    const bool named = nativeMenuEyePoses(eyes) && nativeRenderLabels(&labels) && labels.valid;
+                    if (ppn::latchTick(s.parallelProjection, parallelSession, named ? eyes : nullptr, labels.systemName, labels.runtimeName)) {
+                        char parallelToast[96];
+                        ppn::formatToast(parallelToast, sizeof(parallelToast));
+                        if (s.toasts) {
+                            s.toastQueue.push_back(parallelToast);
+                            Log::get().note("parallel projection: the headset notice is queued as a toast (\"%s\"); the Status page shows the "
+                                            "advice as its hint while the menu is open.", parallelToast);
+                        } else {
+                            Log::get().note("parallel projection: menu.toasts is off, so no toast; the Status page shows the advice as its "
+                                            "hint while the menu is open.");
+                        }
+                        s.contentDirty = true;
+                    }
+                }
+            }
         }
 
         // F177: the aiming choice at start, once a session.
-        aimPromptTick(now);
+        if (pol.headAim) aimPromptTick(now);
 
         // The summon key: EDVR's own, focus-gated. With Shift, recentre. While a hotkey row
         // waits for its input the key is a candidate for the capture (the menu key can be
         // rebound to itself, or taken for another row and refused), not a command: the
         // edge is still consumed here so it cannot close the menu when the capture ends.
-        if (s.summon.pressed() && s.captureEntry < 0) {
-            const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-            if (!s.open) {
-                if (!aimPromptOnFirstMenuOpen(now)) openMenu(now);   // F190: the first open of a session that has not shown the aiming page opens on it
-            } else if (shift) {
-                latchAnchor(0.0f, 0.0f);
-                s.lastInputMs = now;
-                Log::get().note("menu: recentred where you are looking.");
-            } else {
-                closeMenu("the menu key");
+        // A pad binding in an existing flat ini may overlap panel navigation. Its opening
+        // edge still works; once open, the panel owns that button (A selects, B backs out,
+        // and the others navigate).
+        {
+            const bool summonPressed = s.summon.pressed();
+            const HotkeyBinding& summonBinding = s.summon.binding();
+            const bool padNavSummon = pol.padNavigation && summonBinding.kind == HotkeyKind::Pad &&
+                menuPadOwnsButton(summonBinding.padButtons, summonBinding.padTrigger);
+            const bool shift = world && summonPressed && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+            switch (menuSummonAction(summonPressed, s.open, padNavSummon, s.padReady, pol.hotkeysPage && s.captureEntry >= 0, shift, world)) {
+                case MenuSummonAction::Open:
+                    if (pol.headAim) {
+                        if (!aimPromptOnFirstMenuOpen(now)) openMenu(now);   // F190: the first open of a session that has not shown the aiming page opens on it
+                    } else {
+                        openMenu(now);
+                    }
+                    break;
+                case MenuSummonAction::Recentre:
+                    latchAnchor(0.0f, 0.0f);
+                    s.lastInputMs = now;
+                    Log::get().note("menu: recentred where you are looking.");
+                    break;
+                case MenuSummonAction::Close:
+                    closeMenu("the menu key");
+                    break;
+                case MenuSummonAction::None:
+                    break;
             }
         }
         if (s.summon.takeMissedWhileUnfocused()) {
-            Log::get().note("menu: %s was received but another application had focus. "
-                            "Focus Elite's desktop window and press it again.",
-                            s.summonName.c_str());
+            if (world) {
+                Log::get().note("menu: %s was received but another application had focus. "
+                                "Focus Elite's desktop window and press it again.",
+                                s.summonName.c_str());
+            } else {
+                Log::get().note("menu: %s was pressed while Elite was unfocused.",
+                                s.summonName.c_str());
+            }
         }
+        starGlowBloomTick();
+        if (pol.closesOnFocusLoss && s.open && !gameHasFocus()) closeMenu("Elite lost focus");
 
         // Refresh the read-only OpenXR sizing snapshot while the menu is
         // visible. Comparing the whole POD also notices a stop/restart that
         // happened while the menu was hidden, without opening an XR session.
-        if (s.open) {
+        if (pol.sizing == MenuSizing::HeadsetPpd && s.open) {
             EdvrNativeRenderSizing latest{};
             const bool available = readNativeRenderSizing(&latest);
             const bool changed = available != s.renderSizingAvailable ||
@@ -5419,22 +5351,24 @@ void menuTick(ID3D11Device* dev) {
         if (s.open) {
             // Escape, then the navigation keys, then the head. Escape ends
             // a value being typed before it closes the menu, so a typed
-            // value can be abandoned without losing the panel.
-            static bool escDown = false;
-            const bool esc = gameHasFocus() && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-            // A hotkey row waiting for its input owns Escape (it cancels the capture, in handleCapture);
-            // the edge is still tracked, so the Esc that cancelled it cannot close the menu a tick later.
-            if (esc && !escDown && s.captureEntry < 0) {
-                if (s.editEntry >= 0) {
+            // value can be abandoned without losing the panel. A hotkey row waiting for its input owns Escape
+            // (it cancels the capture, in handleCapture); the edge is still tracked, so the Esc that
+            // cancelled it cannot close the menu a tick later. Where the menu closes on focus loss
+            // (flat, above) the focus is already known to be Elite's.
+            const bool esc = (pol.closesOnFocusLoss || gameHasFocus()) && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+            switch (menuEscapeAction(esc, s.escapeDown, pol.hotkeysPage && s.captureEntry >= 0, s.editEntry >= 0)) {
+                case MenuEscapeAction::CancelEdit:
                     cancelEdit();
                     s.lastInputMs = now;
-                } else {
+                    break;
+                case MenuEscapeAction::Close:
                     closeMenu("Escape");
-                }
+                    break;
+                case MenuEscapeAction::None:
+                    break;
             }
-            escDown = esc;
         }
-        if (s.open) {
+        if (world && s.open) {
             handleKeys(now);
             handleAim(now);
             // The tooltip's dwell has passed: nothing else changed, so ask
@@ -5454,19 +5388,23 @@ void menuTick(ID3D11Device* dev) {
             s.lastDrawn = drawn;
             s.lastDrawnMs = now;
         }
-        if (s.open && now - s.openedMs > kNotDrawnCloseMs && now - s.lastDrawnMs > kNotDrawnCloseMs) {
-            if (!s.notDrawnNoted) {
-                s.notDrawnNoted = true;
-                Log::get().note("menu: the panel is not being drawn -- the openvr half never "
-                                "called the door export (a mismatched pair, or every submit "
-                                "path refused). The menu closes and the keyboard stays the "
-                                "game's; please report this log.");
+        if (menuNotDrawn(s.open, now, s.openedMs, s.lastDrawnMs, kNotDrawnCloseMs)) {
+            if (world) {
+                if (!s.notDrawnNoted) {
+                    s.notDrawnNoted = true;
+                    Log::get().note("menu: the panel is not being drawn -- the openvr half never "
+                                    "called the door export (a mismatched pair, or every submit "
+                                    "path refused). The menu closes and the keyboard stays the "
+                                    "game's; please report this log.");
+                }
+            } else {
+                Log::get().note("menu: flat panel was not drawn; closing and releasing keyboard.");
             }
             closeMenu("not drawn");
         }
 
         // Fade toward the target.
-        {
+        if (pol.fade) {
             const float target = s.open ? 1.0f : 0.0f;
             const float rate = dt > 0 ? static_cast<float>(dt) / static_cast<float>(kFadeMs) : 1.0f;
             if (s.alpha < target) s.alpha = s.alpha + rate > target ? target : s.alpha + rate;
@@ -5475,72 +5413,74 @@ void menuTick(ID3D11Device* dev) {
         }
 
         // Toasts, when the menu is down; the overlay when nothing else is up.
-        if (!s.open && s.alpha <= 0.0f) {
-            if (!s.toastUp && !s.toastQueue.empty()) {
-                s.toastText = s.toastQueue.front();
-                s.toastQueue.erase(s.toastQueue.begin());
-                latchAnchor(0.0f, kToastPitchDeg);
-                if (s.anchorValid) {
-                    s.toastUp = true;
-                    s.overlayUp = false;
-                    s.overlayAlpha = 0.0f;
-                    s.toastUntilMs = now + kToastMs;
-                    MenuContent c;
-                    buildToastContent(c, s.toastText, kToastWidthDeg, 1.0f);
-                    menuPanelSubmit(c);
-                }
-            }
-            if (s.toastUp) {
-                const bool alive = now < s.toastUntilMs;
-                const float target = alive ? 1.0f : 0.0f;
-                const float rate = dt > 0 ? static_cast<float>(dt) / static_cast<float>(kFadeMs) : 1.0f;
-                if (s.toastAlpha < target) s.toastAlpha = s.toastAlpha + rate > target ? target : s.toastAlpha + rate;
-                else if (s.toastAlpha > target) s.toastAlpha = s.toastAlpha - rate < target ? target : s.toastAlpha - rate;
-                if (!alive && s.toastAlpha <= 0.0f) {
-                    s.toastUp = false;
-                    s.contentDirty = true;   // the menu's content must be re-sent after a toast
-                }
-            }
-            // The head-locked readout: the door anchors it to each frame's
-            // own pose (setMenuHeadLock below), so it rides the look with no
-            // lag, the toolkit's way; its text is refreshed twice a second.
-            // Never while a toast has the panel.
-            if (s.overlay && !s.toastUp) {
-                float pose[12];
-                s.anchorValid = headPose(pose);
-                if (s.anchorValid) {
-                    if (!s.overlayUp || dueMs(s.overlayTextMs, 500)) {
-                        s.overlayTextMs = stampMs();
-                        char line[120];
-                        perfMonitorOverlayLine(line, sizeof(line));
-                        if (!s.overlayUp || line != s.overlayText || s.overlayTextDeg != s.textDeg) {
-                            s.overlayText = line;
-                            MenuContent c;
-                            if (menuPanelBuildOverlayContent(c, s.overlayText.c_str(), s.textDeg,
-                                                              nullptr)) {
-                                s.overlayTextDeg = s.textDeg;
-                                menuPanelSubmit(c);
-                            }
-                        }
-                        s.overlayUp = true;
+        if (pol.noticePlacement == MenuNoticePlacement::WorldToast) {
+            if (!s.open && s.alpha <= 0.0f) {
+                if (!s.toastUp && !s.toastQueue.empty()) {
+                    s.toastText = s.toastQueue.front();
+                    s.toastQueue.erase(s.toastQueue.begin());
+                    latchAnchor(0.0f, kToastPitchDeg);
+                    if (s.anchorValid) {
+                        s.toastUp = true;
+                        s.overlayUp = false;
+                        s.overlayAlpha = 0.0f;
+                        s.toastUntilMs = now + kToastMs;
+                        MenuContent c;
+                        buildToastContent(c, s.toastText, kToastWidthDeg, 1.0f);
+                        menuPanelSubmit(c);
                     }
                 }
-            } else if (s.overlayUp && !s.overlay) {
+                if (s.toastUp) {
+                    const bool alive = now < s.toastUntilMs;
+                    const float target = alive ? 1.0f : 0.0f;
+                    const float rate = dt > 0 ? static_cast<float>(dt) / static_cast<float>(kFadeMs) : 1.0f;
+                    if (s.toastAlpha < target) s.toastAlpha = s.toastAlpha + rate > target ? target : s.toastAlpha + rate;
+                    else if (s.toastAlpha > target) s.toastAlpha = s.toastAlpha - rate < target ? target : s.toastAlpha - rate;
+                    if (!alive && s.toastAlpha <= 0.0f) {
+                        s.toastUp = false;
+                        s.contentDirty = true;   // the menu's content must be re-sent after a toast
+                    }
+                }
+                // The head-locked readout: the door anchors it to each frame's
+                // own pose (setMenuHeadLock below), so it rides the look with no
+                // lag, the toolkit's way; its text is refreshed twice a second.
+                // Never while a toast has the panel.
+                if (s.overlay && !s.toastUp) {
+                    float pose[12];
+                    s.anchorValid = headPose(pose);
+                    if (s.anchorValid) {
+                        if (!s.overlayUp || dueMs(s.overlayTextMs, 500)) {
+                            s.overlayTextMs = stampMs();
+                            char line[120];
+                            perfMonitorOverlayLine(line, sizeof(line));
+                            if (!s.overlayUp || line != s.overlayText || s.overlayTextDeg != s.textDeg) {
+                                s.overlayText = line;
+                                MenuContent c;
+                                if (menuPanelBuildOverlayContent(c, s.overlayText.c_str(), s.textDeg,
+                                                                  nullptr)) {
+                                    s.overlayTextDeg = s.textDeg;
+                                    menuPanelSubmit(c);
+                                }
+                            }
+                            s.overlayUp = true;
+                        }
+                    }
+                } else if (s.overlayUp && !s.overlay) {
+                    s.overlayUp = false;
+                    s.overlayAlpha = 0.0f;
+                }
+                if (s.overlayUp && !s.toastUp) {
+                    const float rate = dt > 0 ? static_cast<float>(dt) / static_cast<float>(kFadeMs) : 1.0f;
+                    const float target = 0.9f;
+                    if (s.overlayAlpha < target) s.overlayAlpha = s.overlayAlpha + rate > target ? target : s.overlayAlpha + rate;
+                } else {
+                    s.overlayAlpha = 0.0f;
+                }
+            } else {
+                s.toastUp = false;
+                s.toastAlpha = 0.0f;
                 s.overlayUp = false;
                 s.overlayAlpha = 0.0f;
             }
-            if (s.overlayUp && !s.toastUp) {
-                const float rate = dt > 0 ? static_cast<float>(dt) / static_cast<float>(kFadeMs) : 1.0f;
-                const float target = 0.9f;
-                if (s.overlayAlpha < target) s.overlayAlpha = s.overlayAlpha + rate > target ? target : s.overlayAlpha + rate;
-            } else {
-                s.overlayAlpha = 0.0f;
-            }
-        } else {
-            s.toastUp = false;
-            s.toastAlpha = 0.0f;
-            s.overlayUp = false;
-            s.overlayAlpha = 0.0f;
         }
 
         // The gate, then content, geometry, visibility. The gate is decided
@@ -5550,30 +5490,56 @@ void menuTick(ID3D11Device* dev) {
         // private a few lines later -- at HEAD that sat past the old
         // single line's clip and was never seen; the two-line footer shows
         // it. Nothing between here and the old spot read the gate.
-        const bool showingMenu = s.alpha > 0.0f && !s.toastUp;
-        const bool drawnFresh = now - s.lastDrawnMs <= kDrawnFreshMs;
+        const bool showingMenu = !world || (s.alpha > 0.0f && !s.toastUp);
+        const bool drawnFresh = menuDrawnFresh(s.open, now, s.lastDrawnMs, kDrawnFreshMs);
         inputGateSetPrivate(s.open && showingMenu && drawnFresh && !s.pages[s.page].status);
-        // The fault line follows the gate the way the legend follows the
-        // live predicate: a raster that said one thing while the gate now
-        // says another is re-sent, so the warning appears when the draw
-        // stalls and goes when it resumes, on a rig with nothing adopted
-        // too (the legend's own comparison fires only with aliases).
-        const bool sharedWarn = s.open && s.privateWanted && !s.pages[s.page].status && !inputGatePrivate();
-        if (sharedWarn != s.sharedWarnShown) {
-            s.sharedWarnShown = sharedWarn;
-            s.contentDirty = true;
-        }
-        if (s.open || s.alpha > 0.0f) {
-            Page& p = s.pages[s.page];
-            if (p.status && dueMs(s.statusRefreshMs, p.monitor ? kMonitorRefreshMs : kStatusRefreshMs)) {
-                s.statusRefreshMs = stampMs();
+        if (world) {
+            // The fault line follows the gate the way the legend follows the
+            // live predicate: a raster that said one thing while the gate now
+            // says another is re-sent, so the warning appears when the draw
+            // stalls and goes when it resumes, on a rig with nothing adopted
+            // too (the legend's own comparison fires only with aliases).
+            const bool sharedWarn = s.open && s.privateWanted && !s.pages[s.page].status && !inputGatePrivate();
+            if (sharedWarn != s.sharedWarnShown) {
+                s.sharedWarnShown = sharedWarn;
                 s.contentDirty = true;
             }
-            // The locked FPS readout refreshes at the same cadence as the
-            // head-locked overlay: twice a second, cheaply.
-            if (s.open && s.overlay && s.overlayLock && dueMs(s.menuOverlayTextMs, 500)) {
-                s.menuOverlayTextMs = stampMs();
+        } else {
+            // The flat panel's keys follow the gate too: they are handled only once it holds the keyboard.
+            const bool keysReady = drawnFresh && inputGateHoldsGameKeyboard();
+            if (keysReady != s.flatKeysReadyShown) {
+                s.flatKeysReadyShown = keysReady;
                 s.contentDirty = true;
+            }
+            if (!keysReady && s.captureEntry >= 0) {
+                const int def = s.captureDef;
+                endCapture();
+                setHotkeyNote(def, "capture cancelled", "Keyboard gate unavailable");
+            }
+            const bool nativeScale = flatRuntimeNativeScale();
+            if (nativeScale != s.flatNativeScaleShown) {
+                s.flatNativeScaleShown = nativeScale;
+                s.contentDirty = true;
+            }
+            flatWarningTick(now);
+            preparePadNavigation(now, drawnFresh && gameHasFocus());
+            if (keysReady) handleKeys(now);
+            handlePadNavigation(now);
+            if (s.open && dev && !menuPanelFlatRasterReady()) s.contentDirty = true;
+        }
+        if (world ? (s.open || s.alpha > 0.0f) : s.open) {
+            if (world) {
+                Page& p = s.pages[s.page];
+                if (p.status && dueMs(s.statusRefreshMs, p.monitor ? kMonitorRefreshMs : kStatusRefreshMs)) {
+                    s.statusRefreshMs = stampMs();
+                    s.contentDirty = true;
+                }
+                // The locked FPS readout refreshes at the same cadence as the
+                // head-locked overlay: twice a second, cheaply.
+                if (s.open && s.overlay && s.overlayLock && dueMs(s.menuOverlayTextMs, 500)) {
+                    s.menuOverlayTextMs = stampMs();
+                    s.contentDirty = true;
+                }
             }
             if (s.contentDirty) {
                 s.contentDirty = false;
@@ -5582,34 +5548,63 @@ void menuTick(ID3D11Device* dev) {
                 menuPanelSubmit(c);
             }
         }
-        const bool showingOverlay = !showingMenu && !s.toastUp && s.overlayUp && s.overlayAlpha > 0.0f;
+        if (pol.noticePlacement == MenuNoticePlacement::ScreenCorner) {
+            // A notice from outside the menu (menuShowNotice): rasterised at a toast's size, composited once that raster is the live one.
+            // With the menu open the notice stays queued and starts when it closes (it was cleared here and lost).
+            if (const std::string* notice = s.flatNotice.take(s.open)) {
+                s.screenNotice.start(now, kToastMs, menuPanelRasterSerial());
+                MenuContent n;
+                buildToastContent(n, *notice, kToastWidthDeg, 1.0f);
+                menuPanelSubmit(n);
+            }
+            const bool resend = s.screenNotice.tick(s.open, now, menuPanelRasterSerial(), [] {
+                int rasterH = 0;
+                return menuPanelStats(nullptr, &rasterH, nullptr, nullptr) && rasterH > 0 && rasterH < kFlatNoticeMaxPx;
+            });
+            if (resend) s.contentDirty = true;   // the menu's content must be re-sent after a notice
+        }
         MenuGeometry g;
-        g.dist = s.distance;
-        g.curve = (s.toastUp || showingOverlay) ? 0.0f : s.curve;
-        // The toast and the head-locked overlay are their own bitmaps with
-        // no strip, so they take no shift.
-        const bool menuBranch = !s.toastUp && !showingOverlay;
-        const float widthDeg =
-            s.toastUp ? kToastWidthDeg : showingOverlay ? kOverlayWidthDeg : cardWidthDeg();
-        g.halfW = panelHalfW(widthDeg, menuBranch && tooltipsOn());
-        g.shift = panelShift(g.halfW, menuBranch && tooltipsOn());
-        g.alpha = s.toastUp ? s.toastAlpha : showingOverlay ? s.overlayAlpha : s.alpha;
-        g.overlayRaster = showingOverlay;
-        if (!glitchConsumerPresent() && !nativeMenuAvailable()) {
-            g.alpha = 0.0f;
-            inputGateSetPrivate(false);
+        bool showingOverlay = false;
+        if (world) {
+            showingOverlay = !showingMenu && !s.toastUp && s.overlayUp && s.overlayAlpha > 0.0f;
+            g.dist = s.distance;
+            g.curve = (s.toastUp || showingOverlay) ? 0.0f : s.curve;
+            // The toast and the head-locked overlay are their own bitmaps with
+            // no strip, so they take no shift.
+            const bool menuBranch = !s.toastUp && !showingOverlay;
+            const float widthDeg =
+                s.toastUp ? kToastWidthDeg : showingOverlay ? kOverlayWidthDeg : cardWidthDeg();
+            g.halfW = panelHalfW(widthDeg, menuBranch && tooltipsOn());
+            g.shift = panelShift(g.halfW, menuBranch && tooltipsOn());
+            g.alpha = s.toastUp ? s.toastAlpha : showingOverlay ? s.overlayAlpha : s.alpha;
+            g.overlayRaster = showingOverlay;
+            if (!glitchConsumerPresent() && !nativeMenuAvailable()) {
+                g.alpha = 0.0f;
+                inputGateSetPrivate(false);
+            }
+        } else {
+            g.dist = 1.0f;
+            g.curve = 0.0f;
+            g.halfW = 0.62f;
+            g.alpha = s.screenNotice.panelVisible(s.open) ? 1.0f : 0.0f;
         }
         menuPanelSetGeometry(g);
-        setMenuHeadLock(showingOverlay, s.overlayYaw, s.overlayPitch);
-        setMenuVisible(g.alpha);
+        if (world) {
+            setMenuHeadLock(showingOverlay, s.overlayYaw, s.overlayPitch);
+            setMenuVisible(g.alpha);
+        }
         inputGateTick();
         if (dev) menuPanelTick(dev);
     });
     if (!g_budget.shouldRun()) {
         // A faulting tick must not leave the keyboard taken, or EDVR's hotkeys held still.
         inputGateSetPrivate(false);
-        hotkeysSuspend(false);
-        setMenuVisible(0.0f);
+        if (world) {
+            hotkeysSuspend(false);
+            setMenuVisible(0.0f);
+        } else {
+            inputGateSetPadPrivate(false, -1);
+        }
     }
 }
 

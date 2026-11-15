@@ -287,12 +287,12 @@ template<class Check> void runParallelProjectionNoticeCases(Check&& check) {
     check(has(host,"projectionModeNoted=false;projectionVerdict=edvr::ppn::Verdict::NotApplicable;\n    const auto menuClosed=menu.close();")&&
               count(host,"nativeTracePuts(line);")>=1&&has(host,"edvr::ppn::formatLog(line,sizeof(line),projectionVerdict,systemLabel,runtimeLabel,"),
           "wiring: a closed session forgets the decision with the labels it was made from, and the line goes to the openxr log through the one trace");
-    // The menu: the VR branch only, after the flat profile's branch returned; one check, decided once; only Notice raises anything.
-    const size_t vrBranch=menu.find("guardedBudget(g_budget, [&] {\n        static uint64_t lastNativeRevision = 0;");
+    // The menu: the world-toast placement only (the flat profile has the screen corner); one check, decided once; only Notice raises anything.
+    const size_t vrBranch=menu.find("if (pol.noticePlacement == MenuNoticePlacement::WorldToast) {");
     const size_t block=menu.find("const uint64_t parallelSession = nativeMenuSessionId();");
     const size_t eyes=menu.find("const bool named = nativeMenuEyePoses(eyes) && nativeRenderLabels(&labels) && labels.valid;");
     const size_t latch=menu.find("ppn::latchTick(s.parallelProjection, parallelSession, named ? eyes : nullptr, labels.systemName, labels.runtimeName)");
-    const size_t toasts=menu.find("if (s.toasts) {\n                        s.toastQueue.push_back(parallelToast);");
+    const size_t toasts=menu.find("if (s.toasts) {\n                            s.toastQueue.push_back(parallelToast);");
     check(vrBranch!=std::string::npos&&block!=std::string::npos&&eyes!=std::string::npos&&latch!=std::string::npos&&toasts!=std::string::npos&&
               vrBranch<block&&block<eyes&&eyes<latch&&latch<toasts&&count(menu,"ppn::latchTick(")==1&&count(menu,"ppn::formatToast(")==1&&
               count(menu,"ppn::decide(")==0&&count(menu,"ppn::classifyRotations(")==0&&count(menu,"nativeMenuSessionId()")==1,

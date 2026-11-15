@@ -1515,7 +1515,19 @@ void testCaptureWiringPins(const char* root) {
           close.find("hotkeysPrimeAll()") != std::string::npos,
           "menu.cpp: closing releases pad ownership and consumes held hotkey edges");
     const std::string tick = bodyOf("void menuTick(ID3D11Device* dev) {");
-    check(tick.find("s.open && padNavSummon && s.padReady") != std::string::npos,
+    std::string policyText;
+    {
+        const std::string path = std::string(root) + "\\src\\d3d11\\menu_policy.h";
+        FILE* f = fopen(path.c_str(), "rb");
+        if (f) {
+            char buf[8192];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), f)) > 0) policyText.append(buf, n);
+            fclose(f);
+        }
+    }
+    check(tick.find("menuSummonAction(summonPressed, s.open, padNavSummon, s.padReady,") != std::string::npos &&
+          policyText.find("if (open && padNavSummon && padReady) return MenuSummonAction::None;") != std::string::npos,
           "menu.cpp: overlapping summon is suppressed only after navigation is private");
     const std::string keys = bodyOf("void handleKeys(uint64_t now) {");
     const std::string apply = bodyOf("void applyDecision(int def, const CaptureDecision& dec) {");

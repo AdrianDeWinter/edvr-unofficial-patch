@@ -3009,8 +3009,8 @@ void testFlatCpuWiring() {
           "the draw wrapper counts its D3D calls at every call site (thirty and more)");
     // ORDER. The census's whole-frame span opens before the Paused return (a stood-down frame is
     // still a frame), the Present's census block sits after the stand-down's frame boundary and
-    // before anything that reads the frame's draw capture, and the flat branch of the menu tick
-    // returns before perfMonitorFrame -- so the census is the only driver of engine motion's clock.
+    // before anything that reads the frame's draw capture, and the menu tick's perfMonitorFrame
+    // is behind the world-anchored placement -- so the census is the only driver of engine motion's clock.
     auto at = [&](const std::string& text, const char* needle) { return text.find(needle); };
     const size_t open = at(runtimeCpp, "if (!s.gpuFrameTried) gpuFrameOpen(s, context);");
     const size_t lastPausedReturn = runtimeCpp.rfind("if (s.work == FlatWork::Paused) return;");
@@ -3022,39 +3022,31 @@ void testFlatCpuWiring() {
     check(standDown != std::string::npos && tick != std::string::npos && capture != std::string::npos &&
           standDown < tick && tick < capture,
           "the census tick follows the stand-down's frame boundary and precedes the draw capture");
-    auto flatReturnsBeforeMonitor = [](const std::string& text) {
+    // The menu tick is one body for both profiles (menu_policy.h); the monitor's frame call sits behind the world-anchored placement and nowhere else, so the flat
+    // profile never reaches it.
+    const std::string monitorGuard = "if (world) {\n            perfMonitorFrame(dev);";
+    auto monitorOnlyInWorld = [&](const std::string& text) {
         const size_t menuTick = text.find("void menuTick(ID3D11Device* dev)");
         if (menuTick == std::string::npos) return false;
-        const size_t flat = text.find("if (runtimeFlatProfile()) {", menuTick);
-        if (flat == std::string::npos) return false;
-        // The next outer guardedBudget is the native branch. Inspect the end
-        // of the flat branch itself, independent of its controller cleanup.
-        const size_t native = text.find("\n    guardedBudget(g_budget, [&] {", flat);
+        const size_t world = text.find("const bool world = pol.anchor == MenuAnchor::World;", menuTick);
         const size_t perf = text.find("perfMonitorFrame(dev);", menuTick);
-        if (native == std::string::npos || perf == std::string::npos || native >= perf)
-            return false;
-        std::string branch = text.substr(flat, native - flat);
-        if (branch.find("perfMonitorFrame(dev);") != std::string::npos) return false;
-        branch.erase(std::remove_if(branch.begin(), branch.end(), [](char c) {
-            return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-        }), branch.end());
-        const std::string end = "return;}";
-        return branch.size() >= end.size() &&
-               branch.compare(branch.size() - end.size(), end.size(), end) == 0;
+        if (world == std::string::npos || perf == std::string::npos || world >= perf) return false;
+        if (text.find("perfMonitorFrame(dev);", perf + 1) != std::string::npos) return false;
+        const size_t guard = text.find(monitorGuard, menuTick);
+        return guard != std::string::npos && guard + monitorGuard.size() - std::strlen("perfMonitorFrame(dev);") == perf;
     };
-    check(flatReturnsBeforeMonitor(menuCpp),
-          "the flat branch of the menu tick ends before perfMonitorFrame: the census is the flat profile's only driver of engine motion's clock");
-    std::string missingFlatReturn = menuCpp;
-    const size_t nativeBudget = missingFlatReturn.find("\n    guardedBudget(g_budget, [&] {",
-        missingFlatReturn.find("void menuTick(ID3D11Device* dev)"));
-    const size_t flatReturn = missingFlatReturn.rfind("return;", nativeBudget);
-    if (flatReturn != std::string::npos) missingFlatReturn.erase(flatReturn, 7);
-    check(!flatReturnsBeforeMonitor(missingFlatReturn),
-          "menu clock control: deleting the flat return fails the ordering invariant");
+    check(monitorOnlyInWorld(menuCpp),
+          "the menu tick calls perfMonitorFrame once, behind the world-anchored placement: the census is the flat profile's only driver of engine motion's clock");
+    std::string unguardedMonitor = menuCpp;
+    const size_t guardAt = unguardedMonitor.find(monitorGuard);
+    if (guardAt != std::string::npos) unguardedMonitor.replace(guardAt, std::strlen("if (world)"), "");
+    check(!monitorOnlyInWorld(unguardedMonitor),
+          "menu clock control: removing the world guard fails the ordering invariant");
     std::string earlyMonitor = menuCpp;
-    if (flatReturn != std::string::npos) earlyMonitor.insert(flatReturn, "perfMonitorFrame(dev);\n");
-    check(!flatReturnsBeforeMonitor(earlyMonitor),
-          "menu clock control: a monitor call inside the flat branch fails the invariant");
+    const size_t worldAt = earlyMonitor.find("const bool world = pol.anchor == MenuAnchor::World;", earlyMonitor.find("void menuTick(ID3D11Device* dev)"));
+    if (worldAt != std::string::npos) earlyMonitor.insert(worldAt, "perfMonitorFrame(dev);\n    ");
+    check(!monitorOnlyInWorld(earlyMonitor),
+          "menu clock control: a second monitor call outside the guard fails the invariant");
     // INSTRUMENT ONLY. The stand-down functions never read the census, and no decision in the
     // runtime reads a figure it produced.
     const size_t first = at(runtimeCpp, "void applyWork(State& s, FlatWork next) {");

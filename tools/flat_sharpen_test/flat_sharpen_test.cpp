@@ -247,7 +247,7 @@ bool sourceSaysStarGlowBloom(const std::string& menuCpp) {
            tick.find("Log::get().note(\"%s\", line.c_str());") != std::string::npos &&
            opened.find("g_s.starGlowBloom.noteMenuOpened(&line)") != std::string::npos && opened.find("Log::get().note(\"%s\", line.c_str());") != std::string::npos &&
            configure.find("g_s.starGlowBloom.configure(flatEliteGraphicsFolder(), executableDirectory());") != std::string::npos &&
-           occurrences(menuCpp, "starGlowBloomTick();") == 2 && occurrences(openMenu, "starGlowBloomMenuOpened();") == 2 && occurrences(menuConfigure, "starGlowBloomConfigure();") == 2 &&
+           occurrences(menuCpp, "starGlowBloomTick();") == 1 && occurrences(openMenu, "starGlowBloomMenuOpened();") == 1 && occurrences(menuConfigure, "starGlowBloomConfigure();") == 1 &&
            occurrences(menuCpp, "readEliteBloom(") == 0 && occurrences(menuCpp, "noteSetting(") == 1 && occurrences(menuCpp, "noteMenuOpened(") == 1;
 }
 
@@ -573,9 +573,9 @@ void panelTable(const std::string& root, const std::string& gen) {
         const std::string rowDimmed = mutated("(windowDistanceRow && stationWindowDistanceRowDisabled());", "(windowDistanceRow && stationWindowDistanceRowDisabled()) || isStarGlowRow(d);");
         const std::string stepRefused = mutated("    if (isOpenxrRenderScaleRow(d)) {\n        // A width for the worn headset", "    if (isStarGlowRow(d)) return;\n    if (isOpenxrRenderScaleRow(d)) {\n        // A width for the worn headset");
         const std::string everyFrame = mutated("    if (s.starGlowBloomGenSeen && generation == s.starGlowBloomGen) return;\n", "");
-        const std::string noOpenRead = mutated("starGlowBloomMenuOpened();    // ... and so is the Bloom option", "// ... and so is the Bloom option");
-        const std::string noVrTick = mutated("        drainWrites();\n        starGlowBloomTick();\n", "        drainWrites();\n");
-        const std::string noVrConfigure = mutated("        s.configured = true;\n        starGlowBloomConfigure();\n", "        s.configured = true;\n");
+        const std::string noOpenRead = mutated("starGlowBloomMenuOpened();   // Elite's Bloom option is read again", "// Elite's Bloom option is read again");
+        const std::string noVrTick = mutated("        starGlowBloomTick();\n        if (pol.closesOnFocusLoss", "        if (pol.closesOnFocusLoss");
+        const std::string noVrConfigure = mutated("        starGlowBloomConfigure();\n        initKeys();", "        initKeys();");
         check(!noteEveryTab.empty() && !sourceSaysStarGlowBloom(noteEveryTab), "control: a note on every tab is caught");
         check(!noteInVr.empty() && !sourceSaysStarGlowBloom(noteInVr), "control: a note asked of a profile other than the running one is caught");
         check(!hintEveryRow.empty() && !sourceSaysStarGlowBloom(hintEveryRow), "control: a VR hint on every highlighted row is caught");
@@ -583,9 +583,9 @@ void panelTable(const std::string& root, const std::string& gen) {
         check(!rowDimmed.empty() && !sourceSaysStarGlowBloom(rowDimmed), "control: a Star glow row dimmed for the hint (it would stop responding) is caught");
         check(!stepRefused.empty() && !sourceSaysStarGlowBloom(stepRefused), "control: a Star glow row that refuses its steps is caught");
         check(!everyFrame.empty() && !sourceSaysStarGlowBloom(everyFrame), "control: a tick that looks at the setting every frame, with no change of the config generation, is caught");
-        check(!noOpenRead.empty() && !sourceSaysStarGlowBloom(noOpenRead), "control: a flat panel that does not read Elite's Bloom when it opens is caught");
-        check(!noVrTick.empty() && !sourceSaysStarGlowBloom(noVrTick), "control: a VR menu that never ticks the Star glow's Bloom is caught");
-        check(!noVrConfigure.empty() && !sourceSaysStarGlowBloom(noVrConfigure), "control: a VR menu that never gives the Bloom reader its folders is caught");
+        check(!noOpenRead.empty() && !sourceSaysStarGlowBloom(noOpenRead), "control: a menu that does not read Elite's Bloom when it opens is caught");
+        check(!noVrTick.empty() && !sourceSaysStarGlowBloom(noVrTick), "control: a menu that never ticks the Star glow's Bloom is caught");
+        check(!noVrConfigure.empty() && !sourceSaysStarGlowBloom(noVrConfigure), "control: a menu that never gives the Bloom reader its folders is caught");
     }
     check(kFlatDebugRowCount == 2 && flatDebugHasRow("advanced", "flat_cpu_timing") && flatDebugHasRow("advanced", "flat_refusal_view") &&
               std::strcmp(kFlatDebugRows[0].key, "flat_cpu_timing") == 0 && std::strcmp(kFlatDebugRows[1].key, "flat_refusal_view") == 0,
