@@ -13,8 +13,8 @@ and journal replacement policy have independent community implementation
 corroboration; their complete official call chains were not reconstructed.
 
 No official statement that Elite Dangerous works through this Preview was
-found. A real existing Elite installation and prefix remain the next useful
-verification, after deterministic discovery and dry-run tests pass.
+found. Deterministic discovery and dry-run tests pass; a real existing Elite
+installation and prefix remain the next useful verification.
 
 ## Official availability and installation
 
@@ -52,12 +52,7 @@ The package also contains `usr/lib/epic-games-launcher/libEOSSDK-Linux-Shipping.
 third-party notices and a desktop entry. These are shipped paths, not evidence
 that the package has been installed on this machine.
 
-REA opened the ELF and identified its digest/architecture. Its `.deb` route
-rejected that archive format; its native string/decompiler queries failed with
-an execution error and oversized diagnostic response. Its separate ELF-layout
-provider lacked its configured Python dependencies. Bounded GNU `nm`,
-`readelf -rW` and `objdump` inspection provided the evidence below; the target
-was never executed. Addresses are ELF virtual addresses for this digest only.
+Addresses below are ELF virtual addresses for this digest only.
 
 | Observation | Static evidence |
 | --- | --- |

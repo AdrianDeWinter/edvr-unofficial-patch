@@ -235,6 +235,14 @@ def inside(path, parent):
         return False
 
 
+class SteamNoInstall(ValueError):
+    """The inspected Steam inventory has no matching valid game."""
+
+
+class SteamAmbiguousInstalls(ValueError):
+    """Steam owns matching games but needs an explicit selection."""
+
+
 def find_game(args, steam_roots):
     requested = args.game_dir.expanduser().resolve() if args.game_dir else None
     matches = []
@@ -264,10 +272,10 @@ def find_game(args, steam_roots):
                 matches.append(match)
     if not matches:
         detail = ("; " + "; ".join(rejected[:3])) if rejected else ""
-        raise ValueError("Elite Steam app %s has no valid install%s; check --steam-dir and --game-dir" %
+        raise SteamNoInstall("Elite Steam app %s has no valid install%s; check --steam-dir and --game-dir" %
                          (APP_ID, detail))
     if len(matches) > 1:
-        raise ValueError("multiple Elite installs found; pass --steam-dir and --game-dir to select one")
+        raise SteamAmbiguousInstalls("multiple Elite installs found; pass --steam-dir and --game-dir to select one")
     return matches[0]
 
 
@@ -388,10 +396,12 @@ def windows_path(host_path, compatdata):
     return prefix_windows_path(host_path, compatdata / "pfx")
 
 
-def optional_steam_roots(args, home, environ):
+def optional_steam_roots(args, home, environ, *, require_explicit=False):
     try:
         return roots(args, home, environ)
     except ValueError:
+        if require_explicit and (args.steam_dir is not None or environ.get("STEAM_DIR")):
+            raise
         return []
 
 
@@ -766,6 +776,8 @@ def build_epic_plan(args, installer, forwarded, home, env_in):
         raise ValueError("choose one Epic runner override: --wine or --proton")
     try:
         selected = library.select_install(args.game_dir, home=home, environ=env_in)
+    except library.InventoryLimitError:
+        raise
     except ValueError:
         # A complete explicit binding is also the escape hatch for competing owners.
         if not (args.game_dir and args.prefix and (args.wine or args.proton)):
@@ -857,9 +869,11 @@ def build_epic_plan(args, installer, forwarded, home, env_in):
                 permissions.add(candidate if candidate.is_dir() else candidate.parent)
         command = [flatpak, "run", "--command=" + command[0]] + [
             "--filesystem=" + str(path) for path in sorted(permissions, key=str)
+        ] + ["--unset-env=" + key for key in sorted(env_in.keys() - env.keys())
         ] + ["--env=%s=%s" % (key, env[key]) for key in sorted(env)
              if key in recorded_env or key in sandbox_env or key.startswith(("WINE", "PROTON", "UMU_", "STEAM_COMPAT_")) or key in ("GAMEID", "STORE")
         ] + [flatpak_id] + command[1:]
+        env = dict(env_in)
     return command, env, (game, compatdata or prefix, runner, runtime)
 
 
@@ -873,23 +887,26 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
             "--launcher-exe" if args.launcher else "--installer"))
     store = args.store
     if store == "auto":
-        epic = epic_discovery().discover(home=home, environ=env_in)
-        if args.game_dir:
-            epic = [item for item in epic if item.game_dir.resolve() == args.game_dir.expanduser().resolve()]
-        steam_roots = optional_steam_roots(args, home, env_in)
+        epic = epic_discovery().matching_installs(args.game_dir, home=home, environ=env_in)
+        steam_roots = optional_steam_roots(args, home, env_in, require_explicit=True)
         steam_error = None
         try:
             find_game(args, steam_roots)
             has_steam = True
-        except ValueError as exc:
+        except SteamAmbiguousInstalls as exc:
             steam_error = exc
-            has_steam = "multiple" in str(exc)
+            has_steam = True
+        except SteamNoInstall as exc:
+            steam_error = exc
+            has_steam = False
         if epic and has_steam:
             raise ValueError("multiple Steam/Epic installs found; pass --store steam or --store epic and --game-dir")
-        if epic or args.prefix or args.wine:
+        if epic:
             store = "epic"
         elif has_steam:
             store = "steam"
+        elif args.prefix or args.wine:
+            store = "epic"
         elif steam_roots:
             raise steam_error
         else:
@@ -953,9 +970,11 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
         command = [flatpak, "run", selector, "--arch=" + relative.parts[0],
                    "--branch=" + relative.parts[1], "--command=" + command[0]] + [
             "--filesystem=" + str(path) for path in sorted(permissions, key=str)
+        ] + ["--unset-env=" + key for key in sorted(env_in.keys() - env.keys())
         ] + ["--env=%s=%s" % (key, env[key]) for key in sorted(env)
              if key in sandbox_env or key in ("SteamAppId", "SteamGameId") or key.startswith("STEAM_COMPAT_")
         ] + [flatpak_id] + command[1:]
+        env = dict(env_in)
     return command, env, (game, compatdata, proton, runtime)
 
 
@@ -972,14 +991,17 @@ def run(args, *, script=Path(__file__), home=Path.home(), environ=None,
         print("  prefix: %s" % compatdata)
         print("  runner: %s" % proton)
         print("  runtime: %s" % (runtime or "none"))
+        # Flatpak's sandbox environment is printed in argv; its host process
+        # retains the invoking environment, which may contain stale identities.
+        display_env = {} if command[1:2] == ["run"] else env
         for key in ("SteamAppId", "SteamGameId", "STEAM_COMPAT_APP_ID",
                     "STEAM_COMPAT_CLIENT_INSTALL_PATH", "STEAM_COMPAT_DATA_PATH",
                     "STEAM_COMPAT_INSTALL_PATH", "STEAM_COMPAT_LIBRARY_PATHS"):
-            if key in env:
-                print("  %s=%s" % (key, shlex.quote(env[key])))
+            if key in display_env:
+                print("  %s=%s" % (key, shlex.quote(display_env[key])))
         for key in ("WINEPREFIX", "PROTONPATH", "PROTON_VERB", "UMU_RUNTIME_UPDATE"):
-            if key in env:
-                print("  %s=%s" % (key, shlex.quote(env[key])))
+            if key in display_env:
+                print("  %s=%s" % (key, shlex.quote(display_env[key])))
         print("  command: %s" % shlex.join(command))
         return 0
     if geteuid() == 0:
@@ -1204,6 +1226,9 @@ def epic_self_test():
         assert launch_env["STEAM_COMPAT_DATA_PATH"] == str(compat)
         assert launch_env["WINEPREFIX"] == str(prefix)
         assert "STEAM_COMPAT_CLIENT_INSTALL_PATH" not in launch_env
+        optional_client = dict(env, STEAM_DIR=str(root / "missing optional Steam"))
+        assert build_plan(parse("--store", "epic"), script=script, home=home,
+                          environ=optional_client)[0] == command
 
         # UMU uses the manager's pinned Proton and existing runtime, with no automatic selection.
         umu = config / "tools/runtimes/umu/umu_run.py"
@@ -1275,21 +1300,43 @@ def epic_self_test():
         bundled_umu.parent.mkdir(parents=True)
         bundled_umu.write_bytes(b"fallback runner")
         save_settings(compat, proton, "proton", umu=True, path=flat_settings)
+        flat_options = json.loads(flat_settings.read_text(encoding="utf-8"))
+        flat_options["ELITE"]["enviromentOptions"] = [
+            {"key": "WINEDEBUG", "value": "manager-only"}, {"key": "TOKEN", "value": "manager-secret"}]
+        flat_settings.write_text(json.dumps(flat_options), encoding="utf-8")
         flat_runtime = home / "Custom Shared Data/umu/steamrt3"
         (flat_runtime / "pressure-vessel").mkdir(parents=True)
         for name in ("_v2-entry-point", "VERSIONS.txt", ".installed.ok"):
             (flat_runtime / name).write_bytes(b"runtime")
         flat_env = dict(env, XDG_DATA_HOME=str(shared_data))
+        flat_env.update(WINEARCH="host-arch", WINEPREFIX="must-not-print-unset-value",
+                        WINEDEBUG="host-debug", PROTON_VERSION="host-proton",
+                        UMU_LOG="host-umu", LGDRY_TOKEN="must-not-print-unset-value")
         flat_env.pop("HOST_XDG_DATA_HOME", None)
         command, launch_env, details = build_plan(parse("--store", "epic"), script=script, home=home, environ=flat_env)
         assert command[:3] == [str(fake_flatpak), "run", "--command=/app/libexec/manager/umu-run"]
         assert details[3] == flat_runtime
-        assert launch_env["HOST_XDG_DATA_HOME"] == str(shared_data)
+        assert launch_env == flat_env, "Epic sandbox environment leaked into host flatpak process"
+        for key in ("SteamAppId", "SteamGameId", "STEAM_COMPAT_DATA_PATH", "WINEARCH", "PROTON_VERSION",
+                    "UMU_LOG", "LGDRY_TOKEN"):
+            assert "--unset-env=" + key in command, "Epic inherited a removed host variable: " + key
+        assert "--unset-env=WINEDEBUG" not in command, "recorded manager environment was removed"
+        assert "--env=WINEDEBUG=manager-only" in command
+        assert "manager-secret" not in shlex.join(command) and "must-not-print-unset-value" not in shlex.join(command)
         assert "--env=HOST_XDG_DATA_HOME=" + str(shared_data) in command
         assert "--env=PATH=/app/libexec/manager:/app/bin:/usr/bin" in command
         assert "--env=PROTONPATH=" + str(proton.parent) in command
         assert "--env=PROTON_VERB=runinprefix" in command and "--env=UMU_RUNTIME_UPDATE=0" in command
         assert str(host_umu) not in command and str(bundled_umu) not in command
+        flat_output = io.StringIO()
+        before_flat_run = {str(path): (path.read_bytes() if path.is_file() else None) for path in root.rglob("*")}
+        with redirect_stdout(flat_output):
+            assert run(parse("--store", "epic", "--dry-run"), script=script, home=home,
+                       environ=flat_env, launch=launch) == 0
+        assert shlex.join(command) in flat_output.getvalue()
+        assert "must-not-print-unset-value" not in flat_output.getvalue()
+        assert "manager-secret" not in flat_output.getvalue() and "secret-not-for-output" not in flat_output.getvalue()
+        assert before_flat_run == {str(path): (path.read_bytes() if path.is_file() else None) for path in root.rglob("*")}
 
         # Persistent overrides select the same UMU that Heroic finds, with
         # per-app values overriding global values without exporting secrets.
@@ -1540,6 +1587,143 @@ def preview_self_test():
         assert build_plan(override, script=script, home=home, environ=env)[0][:2] == [str(other), "runinprefix"]
 
 
+def auto_selection_self_test():
+    """Select stores from confirmed ownership, without starting any binary."""
+    if os.name == "nt":
+        return
+    import io
+    import json
+    from contextlib import redirect_stderr, redirect_stdout
+    from tempfile import TemporaryDirectory
+
+    cases = ("steam-hint", "steam-env-hint", "epic-root", "epic-product", "steam-prefix",
+             "steam-wine", "manual-epic", "both-stores", "both-prefix", "both-wine",
+             "ambiguous-steam", "malformed-steam", "epic-overflow-auto", "epic-overflow-manual")
+    failures = []
+    for case in cases:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            home = root / "home"
+            script = root / "tools/install_proton.py"
+            script.parent.mkdir()
+            installer = script.parent / "edvr-installer.exe"
+            installer.write_bytes(b"fixture")
+            steam = home / ".local/share/Steam"
+            steam_game = steam / "steamapps/common/Elite Dangerous" / PRODUCT
+            steam_game.mkdir(parents=True)
+            (steam_game / "EliteDangerous64.exe").write_bytes(b"fixture")
+            (steam / "steamapps/libraryfolders.vdf").write_text('"libraryfolders" {}', encoding="utf-8")
+            manifest = steam / "steamapps/appmanifest_359320.acf"
+            manifest.write_text('"AppState" { "appid" "359320" "installdir" "Elite Dangerous" }', encoding="utf-8")
+            compat = root / "explicit compatdata"
+            prefix = compat / "pfx"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "dosdevices").mkdir()
+            (prefix / "dosdevices/z:").symlink_to(root, target_is_directory=True)
+            (prefix / "system.reg").write_bytes(b"registry")
+            (prefix / "user.reg").write_bytes(b"registry")
+            proton = root / "Proton/proton"
+            proton.parent.mkdir()
+            proton.write_bytes(b"fixture")
+            (proton.parent / "toolmanifest.vdf").write_text('"manifest" {}', encoding="utf-8")
+            wine = root / "wine"
+            wine.write_bytes(b"fixture")
+            epic_root = home / "Epic Elite"
+            epic_game = epic_root / PRODUCT
+            epic_game.mkdir(parents=True)
+            (epic_game / "EliteDangerous64.exe").write_bytes(b"fixture")
+            legendary = home / ".config/legendary"
+            legendary.mkdir(parents=True)
+            installed = legendary / "installed.json"
+            installed.write_text(json.dumps({"ELITE": {"install_path": str(epic_root)}}), encoding="utf-8")
+            (legendary / "config.ini").write_text(
+                "[ELITE]\nwine_prefix=" + str(prefix) + "\nwine_executable=" + str(wine) + "\n", encoding="utf-8")
+            env = {"PATH": "/fixture/host", "HOME": str(home)}
+            words = []
+            expected_error = None
+            expected_store = "epic"
+            if case in ("steam-hint", "steam-env-hint"):
+                expected_error = "Steam root not found; pass --steam-dir"
+                if case == "steam-hint":
+                    words = ["--steam-dir", str(root / "missing Steam")]
+                else:
+                    env["STEAM_DIR"] = str(root / "missing Steam")
+            elif case in ("epic-root", "epic-product"):
+                words = ["--game-dir", str(epic_root if case == "epic-root" else epic_game)]
+            elif case in ("steam-prefix", "steam-wine"):
+                installed.unlink()
+                if case == "steam-prefix":
+                    expected_store = "steam"
+                    words = ["--prefix", str(compat), "--proton", str(proton)]
+                else:
+                    words = ["--wine", str(wine)]
+                    expected_error = "--wine is an Epic option; use --store epic"
+            elif case == "manual-epic":
+                installed.unlink()
+                manifest.unlink()
+                (steam / "steamapps/libraryfolders.vdf").unlink()
+                words = ["--game-dir", str(epic_game), "--prefix", str(prefix), "--wine", str(wine)]
+            elif case in ("both-stores", "both-prefix", "both-wine", "ambiguous-steam"):
+                expected_error = "multiple Steam/Epic installs"
+                if case == "both-prefix":
+                    words = ["--prefix", str(compat)]
+                elif case == "both-wine":
+                    words = ["--wine", str(wine)]
+                if case == "ambiguous-steam":
+                    second = home / ".steam/steam"
+                    second_game = second / "steamapps/common/Another Elite" / PRODUCT
+                    second_game.mkdir(parents=True)
+                    (second_game / "EliteDangerous64.exe").write_bytes(b"fixture")
+                    (second / "steamapps/libraryfolders.vdf").write_text('"libraryfolders" {}', encoding="utf-8")
+                    (second / "steamapps/appmanifest_359320.acf").write_text(
+                        '"AppState" { "appid" "359320" "installdir" "Another Elite" }', encoding="utf-8")
+            elif case == "malformed-steam":
+                manifest.write_text('"AppState" { "appid" "wrong" }', encoding="utf-8")
+                expected_error = "wrong appid"
+            elif case.startswith("epic-overflow"):
+                games = home / ".config/lutris/games"
+                games.mkdir(parents=True)
+                for number in range(513):
+                    (games / (str(number) + ".yml")).write_bytes(b"fixture")
+                expected_error = "512"
+                if case == "epic-overflow-manual":
+                    words = ["--store", "epic", "--game-dir", str(epic_game),
+                             "--prefix", str(prefix), "--wine", str(wine)]
+
+            def snapshot():
+                return {str(path.relative_to(root)): ("link", str(path.readlink())) if path.is_symlink()
+                        else ("file", path.read_bytes()) if path.is_file() else ("directory",)
+                        for path in root.rglob("*")}
+
+            before = snapshot()
+            output, errors = io.StringIO(), io.StringIO()
+            original_run = globals()["run"]
+
+            def fixture_run(args):
+                return original_run(args, script=script, home=home, environ=env,
+                    launch=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("dry-run started a process")))
+
+            globals()["run"] = fixture_run
+            try:
+                with redirect_stdout(output), redirect_stderr(errors):
+                    status = main(["--dry-run", *words])
+                if expected_error:
+                    assert status == 2 and expected_error in errors.getvalue(), (status, errors.getvalue())
+                else:
+                    assert status == 0, errors.getvalue()
+                    command, launch_env, _ = build_plan(parse_argv(words), script=script, home=home, environ=env)
+                    assert command[command.index("--store") + 1] == expected_store, command
+                    if case == "steam-prefix":
+                        assert launch_env["STEAM_COMPAT_DATA_PATH"] == str(compat)
+                    assert shlex.join(command) in output.getvalue()
+                assert snapshot() == before, "auto dry-run wrote files"
+            except (AssertionError, ValueError) as exc:
+                failures.append(case + ": " + str(exc))
+            finally:
+                globals()["run"] = original_run
+    assert not failures, "; ".join(failures)
+
+
 def steam_context_self_test(only=None):
     """Exercise real Linux prefixes/deployments without starting any installed binary."""
     if os.name == "nt":
@@ -1694,6 +1878,8 @@ def steam_context_self_test(only=None):
                     flatpak.parent.mkdir()
                     flatpak.write_bytes(b"fixture only")
                     flatpak.chmod(0o700)
+                    env.update(WINEARCH="host-arch", WINEPREFIX="must-not-print-unset-value",
+                               WINEDEBUG="host-debug", PROTON_VERSION="host-proton", SteamAppId="wrong-host-id")
                     if case == "flatpak-config-missing":
                         config_root.rmdir()
                         output = dry_run()
@@ -1810,7 +1996,15 @@ def steam_context_self_test(only=None):
                         assert "--env=STEAM_COMPAT_CLIENT_INSTALL_PATH=" + str(steam) in command
                         assert "--env=STEAM_COMPAT_DATA_PATH=" + str(compat) in command
                         assert "--filesystem=" + str(library) in command
-                        assert resolved["SteamAppId"] == APP_ID
+                        assert "--env=SteamAppId=" + APP_ID in command
+                        assert "--env=SteamGameId=" + APP_ID in command
+                        assert "--env=STEAM_COMPAT_APP_ID=" + APP_ID in command
+                        assert resolved == env, "Steam sandbox environment leaked into host flatpak process"
+                        for key in ("WINEARCH", "WINEPREFIX", "WINEDEBUG", "PROTON_VERSION"):
+                            assert "--unset-env=" + key in command, "Steam inherited a removed host variable: " + key
+                        assert "--unset-env=SteamAppId" not in command
+                        assert "must-not-print-unset-value" not in output
+                        assert "--env=PATH=/app/bin:/usr/bin" in command
                     if case in ("flatpak-usr", "flatpak-parent-usr", "flatpak-parent-app"):
                         (runner_files / "toolmanifest.vdf").write_text('\"manifest\" { \"version\" \"2\" }', encoding="utf-8")
                         direct = ("/app/share/steam/compatibilitytools.d/Proton-GE/proton" if case == "flatpak-parent-app"
@@ -2075,6 +2269,7 @@ def self_test():
         finally:
             if os.name == "nt":
                 globals()["windows_path"] = original_windows_path
+    auto_selection_self_test()
     epic_self_test()
     preview_self_test()
     steam_context_self_test()

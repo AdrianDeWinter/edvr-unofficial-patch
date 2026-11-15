@@ -15,11 +15,22 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import tempfile
 from urllib.parse import quote
 
 
 GAME_EXE = "EliteDangerous64.exe"
+
+
+class InventoryLimitError(ValueError):
+    """Discovery is incomplete because a directory exceeded its scan bound."""
+
+    def __init__(self, path, limit):
+        self.path = path
+        self.limit = limit
+        super().__init__("Epic discovery directory exceeds the %d-entry scan limit: %s; "
+                         "reduce the directory entries and retry." % (limit, path))
 
 
 @dataclass
@@ -82,7 +93,7 @@ def _children(path, limit=512):
         for entry in path.iterdir():
             result.append(entry)
             if len(result) > limit:
-                return []
+                raise InventoryLimitError(path, limit)
         return sorted(result, key=lambda p: p.name)
     except OSError:
         return []
@@ -275,7 +286,8 @@ def _yaml_mapping(path):
             if not line.strip() or line.lstrip().startswith("#") or line.strip() in ("---", "..."):
                 continue
             indent = len(line) - len(line.lstrip(" "))
-            if skip_indent is not None and indent > skip_indent:
+            if skip_indent is not None and (indent > skip_indent or
+                    (indent == skip_indent and re.match(r"-(?:\s|$)", line[indent:]))):
                 continue
             skip_indent = None
             match = re.fullmatch(r"( *)([A-Za-z_][A-Za-z0-9_.-]*):(?: +(.*))?", line)
@@ -516,11 +528,17 @@ def epic_dirs(home=None, environ=None):
     return sorted({x.game_dir for x in discover(home, environ)}, key=str)
 
 
-def select_install(game_path=None, home=None, environ=None):
+def matching_installs(game_path=None, home=None, environ=None):
+    """Return discovered launch configurations matching a product or install root."""
     installs = discover(home, environ)
     if game_path is not None:
         selected = Path(game_path).expanduser().resolve()
         installs = [x for x in installs if selected in (x.game_dir, x.install_root)]
+    return installs
+
+
+def select_install(game_path=None, home=None, environ=None):
+    installs = matching_installs(game_path, home, environ)
     if not installs:
         raise ValueError("No confirmed Linux Epic Elite install found; specify a known Epic game path and prefix.")
     if len(installs) != 1:
@@ -656,6 +674,9 @@ def self_test():
                                  "enviromentOptions": [{"key": "WINEESYNC", "value": "1"}, {"key": "SECRET_TOKEN", "value": "hidden"}]}})
         got = select_install(home=home, environ=env)
         assert (got.game_dir, got.prefix, got.compatdata, got.runner, got.runner_kind, got.manager) == (leaf, actual, base, runner, "proton", "heroic")
+        assert matching_installs(root, home, env) == [got]
+        assert matching_installs(leaf, home, env) == [got]
+        assert matching_installs(home / "unowned product", home, env) == []
         assert got.launch_uri == "heroic://launch?appName=EliteApp&runner=legendary"
         assert got.env == {"WINEESYNC": "1"}
         # Heroic chooses the provided PATH's UMU before its bundled default.
@@ -674,6 +695,23 @@ def self_test():
         for invalid in ({"is_dlc": True}, {"platform": "Linux"}, {"install_path": 4}, {"app_name": "OtherApp"}):
             write(heroic / "legendaryConfig/legendary/installed.json", {"EliteApp": dict(installed["EliteApp"], **invalid)})
             assert discover(home, env) == [], invalid
+        write(heroic / "legendaryConfig/legendary/installed.json", installed)
+        # A manifest app ID must stay within GamesConfig on either host OS.
+        # Give rejected IDs real configs so missing files cannot hide traversal.
+        for app in ("../escaped", "nested/app", r"..\escaped", r"nested\app", "Élite 🚀"):
+            app_config = heroic / "GamesConfig" / (app + ".json")
+            write(app_config, {app: {"winePrefix": str(base),
+                                   "wineVersion": {"bin": str(runner), "type": "proton"},
+                                   "disableUMU": True}})
+            write(heroic / "legendaryConfig/legendary/installed.json",
+                  {app: dict(installed["EliteApp"], app_name=app)})
+            matches = discover(home, env)
+            if app == "Élite 🚀":
+                assert len(matches) == 1 and matches[0].app_name == app
+                assert matches[0].launch_uri == "heroic://launch?appName=%C3%89lite%20%F0%9F%9A%80&runner=legendary"
+            else:
+                assert matches == [], "unsafe Heroic app name selected: " + app
+            app_config.unlink()
         write(heroic / "legendaryConfig/legendary/installed.json", installed)
         (leaf / GAME_EXE).unlink()
         assert discover(home, env) == []
@@ -760,6 +798,15 @@ def self_test():
         (lutris / "lutris.conf").write_text("[lutris]\nrunner_dir = " + str(home / "chosen runners") + "\n", encoding="utf-8")
         yml.write_text("game:\n  prefix: '" + str(lutprefix) + "'\n  launch_configs:\n    - name: Alternate\n      args: '--alternate'\n", encoding="utf-8")
         assert select_install(lutleaf, home, legenv).runner == selected_wine
+        # PyYAML writes indentless lists. Skip their complete subtree, then
+        # resume selected siblings without interpreting nested list contents.
+        yml.write_text("game:\n  launch_configs:\n  - name: Alternate\n    game:\n      prefix: /not-the-owner\n    options:\n    - - nested\n      - values\n  - name: !!unsupported ignored\n  prefix: '" + str(lutprefix) + "'\n"
+                       "ignored:\n- nested:\n  - value\nwine:\n  version: custom\n  custom_wine_path: '" + str(wine) + "'\n", encoding="utf-8")
+        got = select_install(lutleaf, home, legenv)
+        assert (got.prefix, got.runner, got.manager) == (lutprefix, wine, "lutris")
+        for invalid in ("  prefix:\n  - unsupported\n", "  prefix: !!unsupported value\n"):
+            yml.write_text("game:\n" + invalid, encoding="utf-8")
+            assert all(x.game_dir != lutleaf for x in discover(home, legenv)), "selected YAML list or tag was accepted"
         yml.write_text("game:\n  prefix: [unsupported, prefix]\n", encoding="utf-8")
         assert all(x.game_dir != lutleaf for x in discover(home, legenv))
         yml.write_text("game:\n  prefix: '" + str(lutprefix) + "'\nwine:\n  version: system\n", encoding="utf-8")
@@ -769,6 +816,36 @@ def self_test():
         yml.write_text("game:\n  prefix: '" + str(lutprefix) + "'\nwine:\n  version: ge-proton\n", encoding="utf-8")
         got = select_install(lutleaf, home, legenv)
         assert got.runner is None and got.runner_kind == "umu"
+        # Keep the last allowed entry discoverable; an additional entry must
+        # produce a diagnostic, never an empty or partial library.
+        for index in range(511):
+            (yml.parent / ("other-%03d.yml" % index)).write_text("runner: other\n", encoding="utf-8")
+        assert select_install(lutleaf, home, legenv).prefix == lutprefix
+        overflow = yml.parent / "overflow.yml"
+        overflow.write_text("runner: other\n", encoding="utf-8")
+        before_overflow = {p.name: (p.stat().st_mtime_ns, p.read_bytes()) for p in yml.parent.iterdir()}
+        for discover_overflow in (lambda: discover(home, legenv),
+                                  lambda: select_install(lutleaf, home, legenv)):
+            try:
+                discover_overflow()
+                raise AssertionError("oversized Lutris inventory was silently accepted")
+            except InventoryLimitError as exc:
+                assert str(yml.parent) in str(exc) and "512-entry scan limit" in str(exc)
+        import contextlib
+        import io
+        from unittest.mock import patch
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(Path, "home", return_value=home), patch.dict(os.environ, legenv, clear=True), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            assert main([]) == 2
+        assert output.getvalue() == ""
+        assert str(yml.parent) in errors.getvalue() and "512-entry scan limit" in errors.getvalue()
+        assert "Traceback" not in errors.getvalue()
+        after_overflow = {p.name: (p.stat().st_mtime_ns, p.read_bytes()) for p in yml.parent.iterdir()}
+        assert after_overflow == before_overflow, "failed discovery wrote files"
+        for source in yml.parent.glob("other-*.yml"):
+            source.unlink()
+        overflow.unlink()
         (lutprefix / "drive_c/ProgramData/Epic/EpicGamesLauncher/Data/Manifests/elite.item").unlink()
         _, flatprefix = prefix("Lutris sandbox prefix")
         flatroot, flatleaf = game("Lutris sandbox game")
@@ -844,7 +921,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.self_test:
         return 0 if self_test() else 1
-    for install in discover():
+    try:
+        installs = discover()
+    except InventoryLimitError as exc:
+        print("EDVR: " + str(exc), file=sys.stderr)
+        return 2
+    for install in installs:
         print("%s [%s]" % (install.game_dir, install.manager))
     return 0
 

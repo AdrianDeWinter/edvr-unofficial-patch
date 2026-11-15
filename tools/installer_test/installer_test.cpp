@@ -6917,6 +6917,9 @@ static void testState() {
     state.storeSource = L"another-store";
     check(serializeState(state).find("store_source") == std::string::npos,
           "an unknown store is not written into the install record");
+    state.storeSource = L"Frontier launcher";
+    check(parseState(serializeState(state)).storeSource == L"Frontier launcher",
+          "the canonical Frontier launcher source survives serialization and parsing");
     expectEq(toUtf8(back.chainTarget), "d3d11_edhm.dll", "the chain target survives");
     expectEq(toUtf8(back.openvrDir), "Openvr\\win64", "the openvr folder survives");
     expectEq(back.openvrOrigSha, "9abc", "the original runtime's hash survives");
@@ -7722,6 +7725,7 @@ int wmain(int argc, wchar_t** argv) {
     testMirror(scratch);
     testEpicDetection(scratch);
     testEpicRuntimeMirrors(scratch);
+    testRelabelledLegacyMirror(scratch);
     testAtomicWrite(scratch);
     testReplaceScripts(scratch);
     testApplyPatience(scratch);

@@ -41,7 +41,8 @@ Steam shortcut is ignored. Flatpak Steam uses its installed sandbox and the
 recorded Proton, including compatibility-tool extensions; missing or ambiguous
 tools are refused. An explicit --proton selects a host runner and bypasses
 the sandbox.
-Additional named system Flatpak installations require that host override.
+For Steam, additional named system Flatpak installations require that host
+override.
 
 The launcher keeps its downloads and settings inside Elite's Proton prefix, in
 drive_c/users/steamuser/AppData/Local/EDVR under

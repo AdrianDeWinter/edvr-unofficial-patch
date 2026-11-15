@@ -47,6 +47,7 @@ jobs:
         env:
           TOOLS: |
             install_proton.py
+            epic_library.py
             install_edvr.py
             steam_library.py
             edvr_log.py

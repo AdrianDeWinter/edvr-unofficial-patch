@@ -56,7 +56,8 @@ the wrong prefix. Steam identity is also passed to the Windows installer.
 Flatpak Steam uses its installed sandbox and recorded Proton, including
 compatibility-tool extensions. Missing or ambiguous tools are refused. An
 explicit --proton selects a host runner and bypasses the sandbox.
-Additional named system Flatpak installations require that host override.
+For Steam, additional named system Flatpak installations require that host
+override. This restriction does not apply to the Epic Flatpak route.
 
 For an Epic install whose prefix or runner is not fully recorded, pass
 --prefix '/existing/prefix' and --wine '/installed/wine/bin/wine', or select

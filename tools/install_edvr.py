@@ -1402,7 +1402,10 @@ def steam_dirs():
 
 
 def epic_dirs():
-    return [str(path) for path in epic_library.epic_dirs()] if os.name != "nt" else []
+    try:
+        return [str(path) for path in epic_library.epic_dirs()] if os.name != "nt" else []
+    except epic_library.InventoryLimitError as exc:
+        raise SystemExit("[edvr] " + str(exc)) from None
 
 
 def frontier_dirs():
@@ -4342,6 +4345,26 @@ def _epic_discovery_self_test():
                 assert "2 epic installs" in str(exc)
             (other / GAME_EXE).unlink()
             assert resolve_target("epic") == str(game)
+            inventory = home / "config/lutris/games"
+            inventory.mkdir(parents=True)
+            for index in range(513):
+                (inventory / ("entry-%03d.yml" % index)).write_text("runner: other\n", encoding="utf-8")
+            before = {str(p.relative_to(home)): (p.stat().st_mtime_ns, p.read_bytes() if p.is_file() else None)
+                      for p in home.rglob("*")}
+            try:
+                resolve_target("epic")
+                raise AssertionError("Epic target hid an incomplete inventory")
+            except SystemExit as exc:
+                assert str(inventory) in str(exc) and "512-entry scan limit" in str(exc)
+            result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()),
+                                     "--target", "epic", "--dry-run", "--root", str(home)],
+                                    capture_output=True, text=True)
+            assert result.returncode == 1 and result.stdout == ""
+            assert str(inventory) in result.stderr and "512-entry scan limit" in result.stderr
+            assert "Traceback" not in result.stderr
+            after = {str(p.relative_to(home)): (p.stat().st_mtime_ns, p.read_bytes() if p.is_file() else None)
+                     for p in home.rglob("*")}
+            assert after == before, "Epic dry-run failure wrote files"
         return True
     except (AssertionError, OSError) as exc:
         print("Epic target/source self-test failed: %s" % exc)

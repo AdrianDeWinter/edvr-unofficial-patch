@@ -26,6 +26,9 @@ This file is why it does what it does. Using it is one paragraph in the
 - **Windows Epic folders:** Browse and `--dir` retain the store recorded in Epic's
   manifests. The install record keeps that store so Play, runtime settings
   saves and recovery agree even when older mirror copies remain.
+- **Older folder mirrors:** The installer and runtime reuse a sole generic
+  folder mirror when the store-specific mirror is absent, preserving settings
+  and seat memory through a store relabel and a game-folder wipe.
 - **Linux Epic installer:** The native Epic Launcher Preview,
   Heroic/Legendary, Lutris and existing Wine Epic records identify the game
   and its existing prefix. The wrapper uses the recorded runner and passes
@@ -116,11 +119,13 @@ not reapply the patch. A game build that the patch does not support still
 needs a compatible ED-UP release.
 
 Older Browse or `--dir` installs may have saved settings under
-`<product>-folder-you-chose`. Run Repair while the game's settings still
-exist to copy them into the Epic mirror and direct future runtime saves
-there; the older copy is retained. If the game folder was already wiped,
-confirm that the older copy belongs to this install before recovering it
-manually: its name does not identify the store.
+`<product>-folder-you-chose`. When the store-specific mirror is absent and
+that generic folder is the sole matching mirror, the installer and runtime
+keep using it in place. Its settings, generations and seat memory remain
+available even if the install record is relabelled before a game update wipes
+the game folder. An existing store-specific mirror takes precedence. Multiple
+candidates or a foreign-store-only mirror are not adopted for a known store;
+confirm ownership before recovering those copies manually.
 
 The `Openvr` folder is found by **file, not by name**: `Openvr\win64`, then
 `Openvr`, then the game folder, and whichever holds `openvr_api.dll` *or*
@@ -699,9 +704,10 @@ Flatpak Steam runs the recorded Proton and runtime inside the installed Steam
 sandbox. The wrapper checks the selected deployment and its compatibility-tool
 extension metadata without starting Flatpak. Missing or ambiguous deployments
 and extension mounts are refused rather than replaced with another runner.
-Named system Flatpak installations are also refused because their global
-extension search order is not evaluated here. An explicit `--proton` selects a
-host runner and bypasses the sandbox.
+For Steam, named system Flatpak installations are also refused because their
+global extension search order is not evaluated here. This restriction does not
+apply to the Epic Flatpak route. An explicit `--proton` selects a host runner
+and bypasses the sandbox.
 
 The wrapper also accepts `--repair`, `--uninstall`, and `--collect-logs`. Use
 `--game-dir` for a different product folder inside the installed game tree,

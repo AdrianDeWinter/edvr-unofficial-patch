@@ -106,7 +106,7 @@ std::wstring defaultMirrorRoot() {
 
 std::wstring mirrorDirFor(const GameInstall& game, const std::wstring& root) {
     if (root.empty() || game.dir.empty()) return std::wstring();
-    return joinPath(root, edvr::mirrorFolderName(game.dir, game.source));
+    return edvr::mirrorDirForSource(root, game.dir, game.source);
 }
 
 MirrorInfo readMirror(const std::wstring& mirrorDir) {
