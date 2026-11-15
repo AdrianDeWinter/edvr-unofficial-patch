@@ -3,11 +3,16 @@
 Known faults with known answers for both Flat screen and VR users, plus how to
 collect automated diagnostic data for anything new.
 
+A plain-language walkthrough is in the [player
+guide](../wiki/When-something-goes-wrong.md). This page is the known technical
+cases.
+
 If your issue is not listed below, open [an
 issue](https://github.com/characterecho-sean/ed-unofficial-patch/issues/new/choose)
 or ask on Discord with your logs attached: run the installer and click **Save
 logs**, which gathers the relevant session's logs, breadcrumbs, and settings
-into one zip on your Desktop.
+into one zip on your Desktop. [Ask for help](../wiki/Ask-for-help.md) is the
+same step in short.
 
 For planned installer telemetry features and diagnostic roadmap, see
 [diagnostic-reporting-automation-2026-09-26.md](diagnostic-reporting-automation-2026-09-26.md).
@@ -111,8 +116,8 @@ motion vectors and jitter cancellation.
 
 ### Checking your active VR runtime
 
-**If the fixes that need `openvr_api.dll` do nothing at all**, read [Headsets
-and VR runtimes](../README.md#headsets-and-vr-runtimes) first. On Elite's
+**If the fixes that need `openvr_api.dll` do nothing at all**, read
+[Headsets](../wiki/Headsets.md) first. On Elite's
 native Oculus back end that half of the patch is never loaded, and no install
 can change that — the log says so in a `vr runtime:` line.
 
