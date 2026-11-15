@@ -51,6 +51,7 @@
 #include "menu_pad.h"
 #include "menu_panel.h"
 #include "menu_policy.h"
+#include "menu_pages.h"
 #include "native_menu.h"
 #include "native_render_labels.h"
 #include "vr_runtime.h"
@@ -1792,6 +1793,106 @@ Page makeAimPromptPage() {
     return p;
 }
 
+// The flat profile's three tabs (menu_flat_rows.h). Each walks the generated schema (edvr.ini order) and keeps the rows its table names.
+// Performance: the flat settings the panel always had. The rows are the table in menu_flat_rows.h, which a rig checks
+// against the flat profile's key gate: a row listed there whose key is refused fails the build instead of reading a silent 0.
+void addFlatPerformanceRows(Page& p) {
+    for (int i = 0; i < kRowDefCount; ++i) {
+        const MenuRowDef& d = kMenuRows[i];
+        if (!flatPageHasRow(d.section, d.key)) continue;
+        Entry e;
+        e.kind = EntryKind::Setting;
+        e.def = i;
+        p.entries.push_back(e);
+    }
+}
+
+// Visual (2026-10-22): the [visual] options that do something in flat, for everyone. The rows are the table in menu_flat_rows.h, kept in edvr.ini
+// order whatever page their `menu` token names: Intro movie and Star glow are `menu visual`, which VR's Visual page lists too; a row only this tab
+// shows would be `menu flat_visual`, a page VR builds none of. The generator fails the build for a row the table lists that the schema has no row for.
+void addFlatVisualRows(Page& p) {
+    for (int i = 0; i < kRowDefCount; ++i) {
+        const MenuRowDef& d = kMenuRows[i];
+        if (d.tier != MenuTier::Fix || !flatVisualHasRow(d.section, d.key)) continue;
+        Entry e;
+        e.kind = EntryKind::Setting;
+        e.def = i;
+        p.entries.push_back(e);
+    }
+}
+
+// Debug: for bug reports, both off by default. A heading says so; the rows are the `menu debug` rows named in kFlatDebugRows.
+void addFlatDebugRows(Page& p) {
+    Entry h;
+    h.kind = EntryKind::Heading;
+    h.text = "For bug reports. Both are off unless you turn them on.";
+    p.entries.push_back(h);
+    for (int i = 0; i < kRowDefCount; ++i) {
+        const MenuRowDef& d = kMenuRows[i];
+        if (d.tier != MenuTier::Fix || _stricmp(d.page, kFlatDebugPage) != 0 || !flatDebugHasRow(d.section, d.key)) continue;
+        Entry e;
+        e.kind = EntryKind::Setting;
+        e.def = i;
+        p.entries.push_back(e);
+    }
+}
+
+MenuTier menuTierOf(MenuPageTier t) {
+    return t == MenuPageTier::Advanced ? MenuTier::Advanced : t == MenuPageTier::Experimental ? MenuTier::Experimental : MenuTier::Fix;
+}
+
+// One page of the table (menu_pages.h): its name and its entries from its source.
+// Notes on the sources, kept from the pages' own history:
+//  - Mirror window (2026-10-28 as "Desktop window"; renamed F173): the `menu desktop_window` rows, no group headings, the page is the group.
+//  - Native on foot (2026-10-14): the `menu native_on_foot` rows of edvr.ini, in file order; compatibility settings without that tag stay out. Grouped (F127).
+//  - Visual (2026-10-27): the `menu visual` rows, under the ini's own heading blocks. The flat Visual tab is the same name and another list (kFlatVisualRows).
+//  - Hotkeys: the rows the generator made from [hotkey]'s annotations; a `# ui:` row always, a `# dev:` row only with developer mode on (hotkeyPageRows says
+//    which, and a rig pins it). No group headings: the [hotkey] block's own title is a paragraph.
+//  - Advanced: by page name, a developer hotkey row is Advanced tier too, and belongs to the Hotkeys page.
+Page makePage(const MenuPageDef& d) {
+    State& s = g_s;
+    Page p;
+    p.name = d.name;
+    switch (d.source) {
+        case MenuPageSource::Settings:
+            addSettingRows(p, menuTierOf(d.tier), d.token, d.grouped);
+            break;
+        case MenuPageSource::FlatPerformance: addFlatPerformanceRows(p); break;
+        case MenuPageSource::FlatVisual: addFlatVisualRows(p); break;
+        case MenuPageSource::FlatDebug: addFlatDebugRows(p); break;
+        case MenuPageSource::Hotkeys: {
+            int rows[32];
+            const int n = hotkeyPageRows(kMenuRows, kRowDefCount, s.developer, rows, 32);
+            for (int i = 0; i < n; ++i) {
+                Entry e;
+                e.kind = EntryKind::Setting;
+                e.def = rows[i];
+                p.entries.push_back(e);
+            }
+            break;
+        }
+        case MenuPageSource::Plugins: buildPluginsPage(p); break;
+        case MenuPageSource::Monitor:
+            p.status = true;
+            p.monitor = true;
+            return p;
+        case MenuPageSource::Status:
+            p.status = true;
+            return p;
+        case MenuPageSource::Actions:
+            for (size_t i = 0; i < g_actions.size(); ++i) {
+                Entry e;
+                e.kind = EntryKind::Action;
+                e.action = static_cast<int>(i);
+                p.entries.push_back(e);
+            }
+            break;
+    }
+    if (d.post == MenuPagePost::AimChoiceAfterLookToAim) moveRowAfter(p, "menu", "aim_choice_prompt", "fix", "native_on_foot_look_to_aim");   // F177
+    firstSelectable(p);
+    return p;
+}
+
 void buildPages() {
     State& s = g_s;
     const int keepPage = s.page;
@@ -1804,178 +1905,9 @@ void buildPages() {
     const int keepScroll = s.pages.empty() ? 0 : s.pages[s.page].scroll;
     const size_t keepCount = s.pages.empty() ? 0 : s.pages[s.page].entries.size();
     s.pages.clear();
-    if (runtimeFlatProfile()) {
-        // Three tabs: Performance (the flat settings the panel always had), Visual (2026-10-22), then Debug (2026-10-16), last.
-        {
-            Page p;
-            p.name = kFlatTabNames[0];
-            for (int i = 0; i < kRowDefCount; ++i) {
-                const MenuRowDef& d = kMenuRows[i];
-                // The rows are the table in menu_flat_rows.h, which a rig checks
-                // against the flat profile's key gate: a row listed there whose key
-                // is refused fails the build instead of reading a silent 0.
-                if (!flatPageHasRow(d.section, d.key)) continue;
-                Entry e;
-                e.kind = EntryKind::Setting;
-                e.def = i;
-                p.entries.push_back(e);
-            }
-            firstSelectable(p);
-            s.pages.push_back(p);
-        }
-        {
-            // Visual (2026-10-22): the [visual] options that do something in flat, for everyone. The rows are the table in menu_flat_rows.h, kept in edvr.ini
-            // order whatever page their `menu` token names: Intro movie and Star glow are `menu visual`, which VR's Visual page lists too; a row only this tab
-            // shows would be `menu flat_visual`, a page VR builds none of. The generator fails the build for a row the table lists that the schema has no row for.
-            Page p;
-            p.name = kFlatTabNames[1];
-            for (int i = 0; i < kRowDefCount; ++i) {
-                const MenuRowDef& d = kMenuRows[i];
-                if (d.tier != MenuTier::Fix || !flatVisualHasRow(d.section, d.key)) continue;
-                Entry e;
-                e.kind = EntryKind::Setting;
-                e.def = i;
-                p.entries.push_back(e);
-            }
-            firstSelectable(p);
-            s.pages.push_back(p);
-        }
-        // No Plugins tab: add-ons are VR-only, so in flat it could only be empty. The flat add-on follow-up adds it to kFlatTabNames with the
-        // flat render path.
-        {
-            // Debug: for bug reports, both off by default. A heading says so; the rows are the `menu debug` rows named in kFlatDebugRows.
-            Page p;
-            p.name = kFlatTabNames[2];
-            Entry h;
-            h.kind = EntryKind::Heading;
-            h.text = "For bug reports. Both are off unless you turn them on.";
-            p.entries.push_back(h);
-            for (int i = 0; i < kRowDefCount; ++i) {
-                const MenuRowDef& d = kMenuRows[i];
-                if (d.tier != MenuTier::Fix || _stricmp(d.page, kFlatDebugPage) != 0 || !flatDebugHasRow(d.section, d.key)) continue;
-                Entry e;
-                e.kind = EntryKind::Setting;
-                e.def = i;
-                p.entries.push_back(e);
-            }
-            firstSelectable(p);
-            s.pages.push_back(p);
-        }
-        s.page = keepPage < static_cast<int>(s.pages.size()) ? keepPage : 0;
-        s.developerBuilt = s.developer;
-        s.contentDirty = true;
-        return;
-    }
-    {
-        Page p;
-        p.name = "Performance";
-        addSettingRows(p, MenuTier::Fix, "performance", false);
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        Page p;
-        p.name = "Fixes";
-        addSettingRows(p, MenuTier::Fix, "fixes", true);
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        // Visual (2026-10-27): how the world looks through the headset, apart from the fixes. The rows are the `menu visual` rows of edvr.ini, in file order, under the ini's own
-        // heading blocks (World scale, Intro movie, Star glow, Intro background picture, Screen curve). The flat panel's Visual tab is the same name and another list (kFlatVisualRows):
-        // a row VR shows and flat does not is `menu visual`, one flat shows and VR does not is `menu flat_visual`.
-        Page p;
-        p.name = "Visual";
-        addSettingRows(p, MenuTier::Fix, "visual", true);
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        // Mirror window (2026-10-28 as "Desktop window"; renamed F173): the keys that shape Elite's window on the desktop, right after Visual. The rows are the `menu desktop_window` rows of edvr.ini, in file order
-        // (what it shows, the picture's shape, the window's style); no group headings, the page is the group. VR's menu only: the flat panel has no such page.
-        Page p;
-        p.name = "Mirror window";
-        addSettingRows(p, MenuTier::Fix, "desktop_window", false);
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        // Native on foot (2026-10-14): the explicitly selected native on-foot settings. The rows are the
-        // `menu native_on_foot` rows of edvr.ini, in file order (the switch first, the HUD last); compatibility settings without that tag stay out of the page.
-        // Grouped (F127): the headings are the ini's own heading blocks above the rows, as on the Fixes page.
-        Page p;
-        p.name = "Native on foot";
-        addSettingRows(p, MenuTier::Fix, "native_on_foot", true);
-        moveRowAfter(p, "menu", "aim_choice_prompt", "fix", "native_on_foot_look_to_aim");   // F177
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        // The hotkeys: the rows the generator made from [hotkey]'s annotations. A
-        // `# ui:` row is here always, a `# dev:` row only with developer mode on
-        // (hotkeyPageRows says which, and a rig pins it). No group headings: the
-        // [hotkey] block's own title is a paragraph.
-        Page p;
-        p.name = "Hotkeys";
-        int rows[32];
-        const int n = hotkeyPageRows(kMenuRows, kRowDefCount, s.developer, rows, 32);
-        for (int i = 0; i < n; ++i) {
-            Entry e;
-            e.kind = EntryKind::Setting;
-            e.def = rows[i];
-            p.entries.push_back(e);
-        }
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        Page p;
-        p.name = "Plugins";
-        buildPluginsPage(p);
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        Page p;
-        p.name = "Monitor";
-        p.status = true;
-        p.monitor = true;
-        s.pages.push_back(p);
-    }
-    {
-        Page p;
-        p.name = "Status";
-        p.status = true;
-        s.pages.push_back(p);
-    }
-    if (s.developer) {
-        {
-            Page p;
-            p.name = "Advanced";
-            // By page name: a developer hotkey row is Advanced tier too, and belongs to the Hotkeys page.
-            addSettingRows(p, MenuTier::Advanced, "advanced", true);
-            firstSelectable(p);
-            s.pages.push_back(p);
-        }
-        {
-            Page p;
-            p.name = "Experimental";
-            addSettingRows(p, MenuTier::Experimental, "experimental", true);
-            firstSelectable(p);
-            s.pages.push_back(p);
-        }
-        {
-            Page p;
-            p.name = "Instruments";
-            for (size_t i = 0; i < g_actions.size(); ++i) {
-                Entry e;
-                e.kind = EntryKind::Action;
-                e.action = static_cast<int>(i);
-                p.entries.push_back(e);
-            }
-            firstSelectable(p);
-            s.pages.push_back(p);
-        }
+    const bool flat = runtimeFlatProfile();
+    for (size_t i = 0; i < kMenuPageCount; ++i) {
+        if (menuPageShown(kMenuPages[i], flat, s.developer)) s.pages.push_back(makePage(kMenuPages[i]));
     }
     s.developerBuilt = s.developer;
     // F177: while the aiming choice is up its page is the last, and the one shown.

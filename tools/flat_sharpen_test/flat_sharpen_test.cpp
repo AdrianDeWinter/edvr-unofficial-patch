@@ -112,39 +112,37 @@ void printLines(const char* what, const std::string& text, const char* needle) {
 // ---------------------------------------------------------------------------
 // The panel table.
 
+// The body of the function `head` opens in menu.cpp (up to the first closing brace at the start of a line); empty when it is not there.
+std::string functionBody(const std::string& menuCpp, const char* head) {
+    const size_t def = menuCpp.find(head);
+    if (def == std::string::npos) return std::string();
+    const size_t defEnd = menuCpp.find("\n}", def);
+    return defEnd == std::string::npos ? std::string() : menuCpp.substr(def, defEnd - def);
+}
 bool sourceBuildsFlatPageFromTable(const std::string& menuCpp) {
-    const size_t at = menuCpp.find("p.name = kFlatTabNames[0];");
-    if (at == std::string::npos) return false;
-    const size_t end = menuCpp.find("firstSelectable(p);", at);
-    if (end == std::string::npos) return false;
-    const std::string region = menuCpp.substr(at, end - at);
-    return region.find("flatPageHasRow(") != std::string::npos &&
+    const std::string region = functionBody(menuCpp, "void addFlatPerformanceRows(Page& p) {");
+    return !region.empty() && region.find("flatPageHasRow(") != std::string::npos &&
            region.find("strcmp(d.key,") == std::string::npos;
 }
 
-// The Visual tab (2026-10-22): built from kFlatVisualRows, after the Performance tab and before the Debug tab, and from no key list of
-// menu.cpp's own.
-bool sourceBuildsFlatVisualFromTable(const std::string& menuCpp) {
-    const size_t at = menuCpp.find("p.name = kFlatTabNames[1];");
-    const size_t first = menuCpp.find("p.name = kFlatTabNames[0];");
-    const size_t debug = menuCpp.find("p.name = kFlatTabNames[2];");
-    if (at == std::string::npos || first == std::string::npos || debug == std::string::npos || !(first < at && at < debug)) return false;
-    const size_t end = menuCpp.find("firstSelectable(p);", at);
-    if (end == std::string::npos) return false;
-    const std::string region = menuCpp.substr(at, end - at);
-    return region.find("flatVisualHasRow(") != std::string::npos && region.find("strcmp(d.key,") == std::string::npos;
+// The three flat tabs are made by makePage from the one page table (menu_pages.h), each from its own table's walker; the order is the table's, pinned in menu_policy_test.
+bool sourceMakesFlatPagesFromTables(const std::string& menuCpp) {
+    const std::string make = functionBody(menuCpp, "Page makePage(const MenuPageDef& d) {");
+    return !make.empty() && make.find("case MenuPageSource::FlatPerformance: addFlatPerformanceRows(p); break;") != std::string::npos &&
+           make.find("case MenuPageSource::FlatVisual: addFlatVisualRows(p); break;") != std::string::npos &&
+           make.find("case MenuPageSource::FlatDebug: addFlatDebugRows(p); break;") != std::string::npos;
 }
 
-// The Debug tab (2026-10-16): built from kFlatDebugRows and the `menu debug` page, after the Performance and Visual tabs, as the last tab,
-// with its heading, and from no key list of menu.cpp's own.
+// The Visual tab (2026-10-22): built from kFlatVisualRows, and from no key list of menu.cpp's own.
+bool sourceBuildsFlatVisualFromTable(const std::string& menuCpp) {
+    const std::string region = functionBody(menuCpp, "void addFlatVisualRows(Page& p) {");
+    return sourceMakesFlatPagesFromTables(menuCpp) && region.find("flatVisualHasRow(") != std::string::npos && region.find("strcmp(d.key,") == std::string::npos;
+}
+
+// The Debug tab (2026-10-16): built from kFlatDebugRows and the `menu debug` page, with its heading, and from no key list of menu.cpp's own.
 bool sourceBuildsFlatDebugFromTable(const std::string& menuCpp) {
-    const size_t at = menuCpp.find("p.name = kFlatTabNames[2];");
-    const size_t first = menuCpp.find("p.name = kFlatTabNames[0];");
-    if (at == std::string::npos || first == std::string::npos || first > at) return false;
-    const size_t end = menuCpp.find("firstSelectable(p);", at);
-    if (end == std::string::npos) return false;
-    const std::string region = menuCpp.substr(at, end - at);
-    return region.find("flatDebugHasRow(") != std::string::npos && region.find("kFlatDebugPage") != std::string::npos &&
+    const std::string region = functionBody(menuCpp, "void addFlatDebugRows(Page& p) {");
+    return sourceMakesFlatPagesFromTables(menuCpp) && region.find("flatDebugHasRow(") != std::string::npos && region.find("kFlatDebugPage") != std::string::npos &&
            region.find("EntryKind::Heading") != std::string::npos && region.find("For bug reports") != std::string::npos &&
            region.find("strcmp(d.key,") == std::string::npos;
 }
@@ -174,13 +172,6 @@ bool sourceGatesSharpenRow(const std::string& menuCpp) {
            menuCpp.find("if (isSharpenRow(kMenuRows[defIndex]) && sharpenRowDisabled()) {") != std::string::npos;
 }
 
-// The body of the function `head` opens in menu.cpp (up to the first closing brace at the start of a line); empty when it is not there.
-std::string functionBody(const std::string& menuCpp, const char* head) {
-    const size_t def = menuCpp.find(head);
-    if (def == std::string::npos) return std::string();
-    const size_t defEnd = menuCpp.find("\n}", def);
-    return defEnd == std::string::npos ? std::string() : menuCpp.substr(def, defEnd - def);
-}
 
 // The HUD Anti-Aliasing row's dimming (2026-10-24), the same shape: one question (hudAntiAliasingRowDim, whose truth table is checked below), asked in the profile's
 // own terms -- fix.ui_quality read as the layer reads it, the anti-aliasing as the running profile reads it (the flat mode through requestedTemporalMode; since
@@ -254,25 +245,18 @@ bool sourceSaysStarGlowBloom(const std::string& menuCpp) {
 // The flat Performance tab is built from kFlatPageRows whatever page a row's `menu` token names (the page token is what keeps a flat-only row off VR's page), and
 // VR's Performance page is the rows whose token is `menu performance`: the two ends of the HUD Anti-Aliasing row's placement.
 bool sourceFlatTabIgnoresPageToken(const std::string& menuCpp) {
-    const size_t at = menuCpp.find("p.name = kFlatTabNames[0];");
-    if (at == std::string::npos) return false;
-    const size_t end = menuCpp.find("firstSelectable(p);", at);
-    if (end == std::string::npos) return false;
-    const std::string region = menuCpp.substr(at, end - at);
-    return region.find("flatPageHasRow(") != std::string::npos && region.find("d.page") == std::string::npos;
+    const std::string region = functionBody(menuCpp, "void addFlatPerformanceRows(Page& p) {");
+    return !region.empty() && region.find("flatPageHasRow(") != std::string::npos && region.find("d.page") == std::string::npos;
 }
-
-bool sourceVrPerformancePageIsTheToken(const std::string& menuCpp) {
+bool sourceVrPerformancePageIsTheToken(const std::string& menuCpp, const std::string& pagesH) {
     const size_t add = menuCpp.find("void addSettingRows(Page& p, MenuTier tier, const char* page, bool grouped) {");
     if (add == std::string::npos) return false;
     const size_t addEnd = menuCpp.find("\n}", add);
     const std::string addBody = addEnd == std::string::npos ? std::string() : menuCpp.substr(add, addEnd - add);
     if (addBody.find("if (page && _stricmp(d.page, page) != 0) continue;") == std::string::npos) return false;
-    const size_t name = menuCpp.find("p.name = \"Performance\";");
-    if (name == std::string::npos) return false;
-    const size_t end = menuCpp.find("firstSelectable(p);", name);
-    if (end == std::string::npos) return false;
-    return menuCpp.substr(name, end - name).find("addSettingRows(p, MenuTier::Fix, \"performance\", false);") != std::string::npos;
+    // The page is a row of the page table (menu_pages.h): the VR "Performance" page, a Settings source of the Fix tier, the token `performance`, ungrouped; makePage hands those to addSettingRows.
+    return pagesH.find("{\"Performance\", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, \"performance\", false, MenuPagePost::None},") != std::string::npos &&
+           functionBody(menuCpp, "Page makePage(const MenuPageDef& d) {").find("addSettingRows(p, menuTierOf(d.tier), d.token, d.grouped);") != std::string::npos;
 }
 
 // The HUD Anti-Aliasing row of the generated schema is on both menus since 2026-11-03: a Fix-tier on/off choice shipped off and live, on the page
@@ -391,6 +375,8 @@ void panelTable(const std::string& root, const std::string& gen) {
     const std::string menuCpp = readWholeFile(std::wstring(root.begin(), root.end()) +
                                               L"\\src\\d3d11\\menu.cpp");
     check(!menuCpp.empty(), "menu.cpp is readable from the repo root");
+    const std::string pagesH = readWholeFile(std::wstring(root.begin(), root.end()) + L"\\src\\d3d11\\menu_pages.h");
+    check(!pagesH.empty(), "menu_pages.h is readable from the repo root");
     check(sourceBuildsFlatPageFromTable(menuCpp), "menu.cpp builds the flat page from flatPageHasRow");
     std::string hardCoded = menuCpp;
     const size_t at = hardCoded.find("if (!flatPageHasRow(d.section, d.key)) continue;");
@@ -471,15 +457,18 @@ void panelTable(const std::string& root, const std::string& gen) {
 
     // THE FLAT-ONLY PLACEMENT (2026-10-24). The flat Performance tab ignores the page token; VR's Performance page is exactly the rows whose token is `menu performance`.
     check(sourceFlatTabIgnoresPageToken(menuCpp), "menu.cpp builds the flat Performance tab from flatPageHasRow alone, whatever page a row's token names");
-    check(sourceVrPerformancePageIsTheToken(menuCpp), "menu.cpp builds VR's Performance page from the rows whose page is `performance`");
+    check(sourceVrPerformancePageIsTheToken(menuCpp, pagesH), "menu.cpp builds VR's Performance page from the rows whose page is `performance`");
     {
         const std::string byPage = mutated("if (!flatPageHasRow(d.section, d.key)) continue;",
                                            "if (!flatPageHasRow(d.section, d.key) || _stricmp(d.page, \"performance\") != 0) continue;");
         check(!byPage.empty() && !sourceFlatTabIgnoresPageToken(byPage), "control: a flat tab that also asks the page token (it would drop a flat_performance row) is caught");
-        const std::string allPages = mutated("addSettingRows(p, MenuTier::Fix, \"performance\", false);", "addSettingRows(p, MenuTier::Fix, nullptr, false);");
-        check(!allPages.empty() && !sourceVrPerformancePageIsTheToken(allPages), "control: a VR Performance page that takes every page's rows is caught");
+        std::string allPages = pagesH;
+        const char* tokenRow = "MenuPageTier::Fix, \"performance\", false,";
+        const size_t tk = allPages.find(tokenRow);
+        if (tk != std::string::npos) allPages.replace(tk, std::strlen(tokenRow), "MenuPageTier::Fix, nullptr, false,");
+        check(tk != std::string::npos && !sourceVrPerformancePageIsTheToken(menuCpp, allPages), "control: a VR Performance page that takes every page's rows is caught");
         const std::string noFilter = mutated("if (page && _stricmp(d.page, page) != 0) continue;", "");
-        check(!noFilter.empty() && !sourceVrPerformancePageIsTheToken(noFilter), "control: an addSettingRows that does not filter by page is caught");
+        check(!noFilter.empty() && !sourceVrPerformancePageIsTheToken(noFilter, pagesH), "control: an addSettingRows that does not filter by page is caught");
     }
 
     // THE TABS (Debug 2026-10-16, Visual 2026-10-22). Exactly three, Performance, Visual, Debug, Debug last; the Performance rows are the ones the
@@ -532,18 +521,15 @@ void panelTable(const std::string& root, const std::string& gen) {
     check(!flatPageHasRow("fix", "particle_billboard") && !flatDebugHasRow("fix", "particle_billboard"), "the Billboards row is on the Visual tab only");
     check(!flatPageHasRow("visual", "star_glow") && !flatDebugHasRow("visual", "star_glow") && !flatVisualHasRow("advanced", "flat_cpu_timing"),
           "no key is on two tabs");
-    check(sourceBuildsFlatVisualFromTable(menuCpp), "menu.cpp builds the Visual tab, between Performance and Debug, from kFlatVisualRows");
+    check(sourceBuildsFlatVisualFromTable(menuCpp), "menu.cpp builds the Visual tab from kFlatVisualRows");
     {
         std::string listed = menuCpp;
         const char* gate = "!flatVisualHasRow(d.section, d.key)";
         const size_t j = listed.find(gate);
         if (j != std::string::npos) listed.replace(j, std::strlen(gate), "strcmp(d.key, \"star_glow\") != 0");
         check(j != std::string::npos && !sourceBuildsFlatVisualFromTable(listed), "control: a Visual tab built from a key list in menu.cpp is caught");
-        std::string swapped = menuCpp;
-        const char* nameDebug = "p.name = kFlatTabNames[2];";
-        const size_t k = swapped.find(nameDebug);
-        if (k != std::string::npos) swapped.replace(k, std::strlen(nameDebug), "p.name = kFlatTabNames[0];");
-        check(k != std::string::npos && !sourceBuildsFlatVisualFromTable(swapped), "control: a Visual tab with no Debug tab after it is caught");
+        const std::string unmade = mutated("case MenuPageSource::FlatVisual: addFlatVisualRows(p); break;", "");
+        check(!unmade.empty() && !sourceBuildsFlatVisualFromTable(unmade), "control: a Visual tab the page table's maker never builds is caught");
     }
     // THE STAR GLOW'S BLOOM HINT (2026-10-27). Said on the Visual tab only, under the condition, as a note; in the VR menu on the highlighted Star glow row, as the hint line.
     {

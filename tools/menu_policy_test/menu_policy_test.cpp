@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 #include "../../src/d3d11/flat_notice_queue.h"
+#include "../../src/d3d11/menu_pages.h"
 #include "../../src/d3d11/menu_policy.h"
 
 using namespace edvr;
@@ -180,6 +181,29 @@ void noticeCases() {
         check(!r.notice.up && !r.notice.shown && !r.notice.rasterStale && r.notice.untilMs == 0 && !r.queue.due(), "a profile switch clears the notice, queued or shown");
     }
 }
+// The page table (menu_pages.h): the pages each profile shows, in order. A reorder or a lost page fails here.
+std::string pageList(bool flat, bool developer) {
+    std::string out;
+    for (size_t i = 0; i < kMenuPageCount; ++i) {
+        if (!menuPageShown(kMenuPages[i], flat, developer)) continue;
+        if (!out.empty()) out += ",";
+        out += kMenuPages[i].name;
+    }
+    return out;
+}
+
+void pageCases() {
+    const std::string vr = "Performance,Fixes,Visual,Mirror window,Native on foot,Hotkeys,Plugins,Monitor,Status";
+    check(pageList(true, false) == "Performance,Visual,Debug", "the flat profile's pages are Performance, Visual, Debug");
+    check(pageList(true, true) == "Performance,Visual,Debug", "developer mode adds no flat page");
+    check(pageList(false, false) == vr, "the VR profile's pages without developer mode");
+    check(pageList(false, true) == vr + ",Advanced,Experimental,Instruments", "developer mode adds Advanced, Experimental and Instruments to VR, after Status");
+    check(kMenuPages[7].post == MenuPagePost::AimChoiceAfterLookToAim && std::strcmp(kMenuPages[7].name, "Native on foot") == 0, "the Native on foot page moves the aiming row under Look to aim");
+    size_t posts = 0;
+    for (size_t i = 0; i < kMenuPageCount; ++i) posts += kMenuPages[i].post != MenuPagePost::None;
+    check(posts == 1, "only Native on foot has a post step");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -196,6 +220,7 @@ int main(int argc, char** argv) {
     escapeCases();
     drawnCases();
     noticeCases();
+    pageCases();
     std::printf("menu_policy_test: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -1558,23 +1558,36 @@ void testCaptureWiringPins(const char* root) {
     // Number rows are shown and stepped by menu_schema.h's helpers (the ones testNumberRows holds to "+0.15 m" and 0.01). The Explorer Cam page that
     // was built for everyone went with Explorer Cam in F98; the native on foot page is built the same way.
     {
-        const std::string pages = bodyOf("void buildPages() {");
-        check(pages.find("p.name = \"Explorer Cam\";") == std::string::npos && pages.find("\"explorer_cam\"") == std::string::npos,
-              "menu.cpp: buildPages makes no Explorer Cam page (retired in F98)");
-        const size_t at = pages.find("p.name = \"Native on foot\";");
-        const size_t rows = at == std::string::npos ? at : pages.find("addSettingRows(p, MenuTier::Fix, \"native_on_foot\", true);", at);
-        const size_t developer = pages.find("if (s.developer) {");
-        check(at != std::string::npos && rows != std::string::npos && rows - at < 300 && developer != std::string::npos && at < developer,
-              "menu.cpp: buildPages makes the Native on foot page from the Fix-tier rows of the native_on_foot page, grouped under the ini's headings (F127), for everyone, before the developer pages");
-        {   // The Mirror window page (2026-10-28 as the Desktop window page; renamed F173): built right after Visual and before Native on foot, for everyone, from the Fix-tier rows of its own page.
-            const size_t visual = pages.find("p.name = \"Visual\";"), page = pages.find("p.name = \"Mirror window\";"), native = pages.find("p.name = \"Native on foot\";");
-            const size_t rows = page == std::string::npos ? page : pages.find("addSettingRows(p, MenuTier::Fix, \"desktop_window\", false);", page);
-            check(visual != std::string::npos && page != std::string::npos && native != std::string::npos && visual < page && page < native && rows != std::string::npos && rows - page < 200,
-                  "menu.cpp: buildPages makes the Mirror window page (it was the Desktop window page until F173) from the Fix-tier rows of the desktop_window page, right after Visual and before Native on foot");
-            check(visual == std::string::npos || pages.find("addSettingRows(p, MenuTier::Fix, \"visual\", true);", visual) != std::string::npos,
-                  "menu.cpp: the Visual page is still built from the visual rows");
+        // The pages are rows of the page table (src/d3d11/menu_pages.h), built by one loop in buildPages and by makePage, which hands a Settings row to addSettingRows.
+        std::string table;
+        {
+            const std::string path = std::string(root) + "\\src\\d3d11\\menu_pages.h";
+            FILE* pf = fopen(path.c_str(), "rb");
+            if (pf) {
+                char buf[65536];
+                size_t n;
+                while ((n = fread(buf, 1, sizeof(buf), pf)) > 0) table.append(buf, n);
+                fclose(pf);
+            }
         }
-        check(bodyOf("std::string displayValue(const MenuRowDef& d, const std::string& v) {").find("menuFormatNumber(d, atof(v.c_str()))") !=
+        const std::string pages = bodyOf("void buildPages() {");
+        const std::string make = bodyOf("Page makePage(const MenuPageDef& d) {");
+        check(!table.empty() && table.find("\"Explorer Cam\"") == std::string::npos && table.find("\"explorer_cam\"") == std::string::npos,
+              "menu_pages.h: the page table has no Explorer Cam page (retired in F98)");
+        check(pages.find("menuPageShown(kMenuPages[i], flat, s.developer)") != std::string::npos && pages.find("makePage(kMenuPages[i])") != std::string::npos &&
+                  make.find("addSettingRows(p, menuTierOf(d.tier), d.token, d.grouped);") != std::string::npos,
+              "menu.cpp: buildPages is one loop over the page table, and makePage builds a Settings page from its tier, token and grouping");
+        const size_t at = table.find("{\"Native on foot\", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, \"native_on_foot\", true,");
+        const size_t developer = table.find("{\"Advanced\", false, true, true,");
+        check(at != std::string::npos && developer != std::string::npos && at < developer,
+              "menu_pages.h: the Native on foot page is the Fix-tier rows of the native_on_foot page, grouped under the ini's headings (F127), for everyone (VR), before the developer pages");
+        {   // The Mirror window page (2026-10-28 as the Desktop window page; renamed F173): right after Visual and before Native on foot, for everyone, from the Fix-tier rows of its own page.
+            const size_t visual = table.find("{\"Visual\", false, true, false,"), page = table.find("{\"Mirror window\", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, \"desktop_window\", false,");
+            check(visual != std::string::npos && page != std::string::npos && at != std::string::npos && visual < page && page < at,
+                  "menu_pages.h: the Mirror window page (it was the Desktop window page until F173) is the Fix-tier rows of the desktop_window page, right after Visual and before Native on foot");
+            check(visual != std::string::npos && table.find("MenuPageSource::Settings, MenuPageTier::Fix, \"visual\", true,", visual) == visual + std::strlen("{\"Visual\", false, true, false, "),
+                  "menu_pages.h: the Visual page is still built from the visual rows");
+        }        check(bodyOf("std::string displayValue(const MenuRowDef& d, const std::string& v) {").find("menuFormatNumber(d, atof(v.c_str()))") !=
                   std::string::npos,
               "menu.cpp: a number row is shown by menuFormatNumber (\"+0.15 m\", \"0 ms (exact)\")");
         check(bodyOf("void stepRow(int defIndex, int dir, int mult) {").find("menuSteppedNumber(d, ") != std::string::npos,
