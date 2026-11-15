@@ -380,7 +380,62 @@ section.block { padding: 56px 0 8px; }
 .card .n { position: absolute; top: 22px; right: 22px; font: 500 12px/1 var(--mono); color: rgba(255, 255, 255, 0.22); letter-spacing: 0.1em; }
 
 /* Features */
+.hgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 14px; }
+
+@media (max-width: 700px) { .hgrid { grid-template-columns: 1fr; } }
+
 .fgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+
+.feat.hl {
+  padding: 26px 26px 22px;
+  border-color: rgba(255, 122, 26, 0.38);
+  background: radial-gradient(120% 90% at 0% 0%, rgba(255, 122, 26, 0.15), transparent 55%), var(--glass);
+  box-shadow: inset 0 1px 0 rgba(255, 196, 140, 0.10), 0 20px 50px -24px rgba(255, 100, 20, 0.45);
+}
+
+.feat.hl:hover { border-color: rgba(255, 160, 77, 0.6); }
+
+.feat.hl .feat-head { gap: 14px; margin-bottom: 14px; }
+
+.feat.hl .ico { width: 48px; height: 48px; border-radius: 12px; }
+
+.feat.hl .ico svg { width: 24px; height: 24px; }
+
+.feat.hl h3 { font-size: 22px; letter-spacing: -0.01em; }
+
+.feat.hl p { font-size: 15.5px; }
+
+.kicker {
+  display: block;
+  margin-bottom: 6px;
+  font: 600 10.5px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent-hi);
+}
+
+.points { display: grid; gap: 8px; margin: 16px 0 0; padding: 0; list-style: none; }
+
+.points li { position: relative; padding-left: 20px; color: var(--ink); font-size: 14.5px; line-height: 1.45; }
+
+.points li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.45em;
+  width: 7px;
+  height: 7px;
+  border-radius: 1.5px;
+  transform: rotate(45deg);
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(255, 122, 26, 0.6);
+}
+
+.feat:not(.hl) .points { gap: 9px; margin-top: 4px; }
+
+.feat:not(.hl) .points li { color: var(--ink-2); font-size: 14px; }
+
+.points .tag { margin-right: 6px; padding: 2px 5px; font-size: 9.5px; vertical-align: 1px; }
 
 .feat {
   display: flex;
@@ -598,7 +653,7 @@ footer a:hover { color: var(--accent-hi); }
 
       <h1 id="title" class="rise d2">Upscaling and fixes for <span class="glow">Elite Dangerous</span>, in VR and flat</h1>
 
-      <p class="lede rise d3">ED-UP adds DLSS, FSR and XeSS upscaling to Elite Dangerous on a monitor or in a headset. It keeps the menus and HUD sharp, fixes a long list of the game's visual problems, and in VR draws Odyssey's on-foot game in stereo.</p>
+      <p class="lede rise d3">ED-UP is a free mod for Elite Dangerous that adds DLSS, FSR and XeSS upscaling and fixes rendering problems, in VR and on a flat screen. In VR it also renders the on-foot game in 3D, where Elite on its own shows a flat screen.</p>
 
       <div class="panel rise d4">
         <div class="actions">
@@ -620,7 +675,7 @@ footer a:hover { color: var(--accent-hi); }
 
         <ul class="links">
           <li><span class="k">Also</span><a id="alt-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest">Linux launcher (Steam, Proton)</a></li>
-          <li><a id="inst-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest">Standalone installer</a></li>
+          <li><a id="inst-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest">Installer without the launcher</a></li>
           <li><a id="notes-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest">Release notes</a></li>
           <li><a id="sums-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest/download/SHA256SUMS">SHA256SUMS</a></li>
         </ul>
@@ -629,61 +684,72 @@ footer a:hover { color: var(--accent-hi); }
 
     <section class="block" aria-labelledby="features">
       <h2 class="label" id="features">What ED-UP does</h2>
+      <div class="hgrid">
+        <article class="feat hl">
+          <div class="feat-head">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/></svg></div>
+            <div><span class="kicker">Main feature</span><h3>DLSS, FSR and XeSS upscaling</h3></div>
+          </div>
+          <p>Elite's own anti-aliasing leaves edges and fine lines shimmering as you move. An upscaler fixes that by blending each frame with the ones before it, and lets the game render below full resolution for a higher frame rate.</p>
+          <ul class="points">
+            <li>DLSS on NVIDIA RTX cards</li>
+            <li>FSR 3.1 or XeSS on any GPU</li>
+            <li>Set HMD Image Quality (VR) or Supersampling (flat) below 1.0 to raise the frame rate</li>
+            <li>F7 switches it off and on for a side-by-side look</li>
+          </ul>
+          <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
+        </article>
+        <article class="feat hl">
+          <div class="feat-head">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7.5" r="3.5"/><path d="M5 21c0-3.9 3.1-7 7-7s7 3.1 7 7"/></svg></div>
+            <div><span class="kicker">Main feature</span><h3>On-foot VR in 3D</h3></div>
+          </div>
+          <p>On foot, Elite shows VR players a flat screen, with the same image in both eyes. ED-UP renders the world in 3D from your character's eyes instead, so walking, using tools and fighting on foot are in 3D, like the cockpit.</p>
+          <ul class="points">
+            <li>Your body is there when you look down</li>
+            <li>Aim with your head or the mouse, chosen on first launch</li>
+            <li>Weapon scopes zoom in as they do in flat</li>
+            <li>On by default</li>
+          </ul>
+          <div class="tags"><span class="tag vr">VR</span></div>
+        </article>
+      </div>
       <div class="fgrid">
         <article class="feat">
           <div class="feat-head">
-            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/></svg></div>
-            <h3>DLSS, FSR and XeSS</h3>
-          </div>
-          <p>Elite has no temporal anti-aliasing, so edges shimmer whenever you move. Pick DLSS on an RTX card, or FSR or XeSS on any GPU, to steady them. Render below full resolution and the upscaler wins back frame time.</p>
-          <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
-        </article>
-        <article class="feat">
-          <div class="feat-head">
-            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg></div>
-            <h3>A sharp interface</h3>
-          </div>
-          <p>Menus, panels, the HUD and holograms are drawn in a layer of their own and laid over the picture after the upscaler, so their text never smears. Weapons fire stays crisp too.</p>
-          <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
-        </article>
-        <article class="feat">
-          <div class="feat-head">
             <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V4h4"/><path d="M16 4h4v4"/><path d="M20 16v4h-4"/><path d="M8 20H4v-4"/><circle cx="12" cy="12" r="3"/></svg></div>
-            <h3>Sharpening and a smoother HUD</h3>
+            <h3>Sharpening and HUD anti-aliasing</h3>
           </div>
-          <p>Upscalers trade a little edge contrast for a steady picture, and AMD's RCAS sharpening, off by default, hands some of it back. HUD anti-aliasing, also off by default, smooths the stair steps on the HUD's slanted lines, which show most at a low UI quality or below 4K on a monitor.</p>
+          <ul class="points">
+            <li>Sharpening (AMD RCAS) for the slight softness upscaling adds</li>
+            <li>HUD anti-aliasing for jagged HUD lines, most visible below 4K</li>
+            <li>Both off by default</li>
+          </ul>
           <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
-        </article>
-        <article class="feat">
-          <div class="feat-head">
-            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7.5" r="3.5"/><path d="M5 21c0-3.9 3.1-7 7-7s7 3.1 7 7"/></svg></div>
-            <h3>Native on-foot VR</h3>
-          </div>
-          <p>On foot, Elite shows both eyes the same flat image. ED-UP draws the world in stereo from your commander's head, with your body beneath you. You choose look to aim or mouse aim, and scopes magnify the view.</p>
-          <div class="tags"><span class="tag vr">VR</span></div>
         </article>
         <article class="feat">
           <div class="feat-head">
             <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg></div>
-            <h3>Anchored in the world</h3>
+            <h3>Smoke, glare and view fixes</h3>
           </div>
-          <p>The jump flash, the sun's glare, smoke and steam, the loading screen's ship and the night-vision pulse stop riding along with your head. Over a planet, terrain no longer goes missing at the edges of view.</p>
-          <div class="tags"><span class="tag vr">VR</span></div>
-        </article>
-        <article class="feat">
-          <div class="feat-head">
-            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14"/><path d="M15 6v14"/></svg></div>
-            <h3>Galaxy and System Maps</h3>
-          </div>
-          <p>The Galaxy Map holds the headset's frame rate without smearing, and its labels stay put as you turn your head. On both maps the cursor selects what it points at.</p>
-          <div class="tags"><span class="tag vr">VR</span></div>
+          <ul class="points">
+            <li>Smoke and steam stay upright as you look around</li>
+            <li><span class="tag vr">VR</span>Sun glare and night vision stay still as you turn</li>
+            <li><span class="tag vr">VR</span>No world lurch when you jump</li>
+            <li><span class="tag vr">VR</span>No missing terrain at the edges of view</li>
+          </ul>
+          <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
         </article>
         <article class="feat">
           <div class="feat-head">
             <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 17a9 9 0 1 1 17 0"/><path d="M12 14l4.5-4.5"/><circle cx="12" cy="14" r="1.2"/></svg></div>
-            <h3>Faster stations</h3>
+            <h3>Frame rate in stations</h3>
           </div>
-          <p>By default, in a sealed hangar or walking a station's concourse, ED-UP skips drawing what you cannot see. The windows show a picture of the view until you walk up to one.</p>
+          <ul class="points">
+            <li>Skips what's outside your hangar while docked with the hatch closed</li>
+            <li>Skips the station outside the concourse on foot; windows show a snapshot until you get close</li>
+            <li>On by default</li>
+          </ul>
           <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
         </article>
         <article class="feat">
@@ -691,15 +757,21 @@ footer a:hover { color: var(--accent-hi); }
             <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9"/><path d="M17 7h3"/><circle cx="15" cy="7" r="2"/><path d="M4 17h3"/><path d="M11 17h9"/><circle cx="9" cy="17" r="2"/></svg></div>
             <h3>Visual options</h3>
           </div>
-          <p>You can change the world scale in VR, give stars a stronger glow, bring back the older Horizons cockpit glass, or turn off the hyperspace streaks and space dust. Each one ships set to the game's own look.</p>
+          <ul class="points">
+            <li>Stronger star glow</li>
+            <li>Horizons-style cockpit glass</li>
+            <li><span class="tag vr">VR</span>World scale, bigger or smaller</li>
+            <li><span class="tag vr">VR</span>Hide hyperspace streaks and space dust</li>
+            <li>All start at the game's own look</li>
+          </ul>
           <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
         </article>
       </div>
 
       <div class="facts">
-        <div><b>In-game settings</b>Press F8 for ED-UP's menu, a panel anchored in the world in VR. Most changes take effect within about a second.</div>
-        <div><b>Your files</b>ED-UP changes the running game in memory only, and the installer backs up every file it replaces.</div>
-        <div><b>Game updates</b>After an Elite update, a fix that cannot find what it needs switches itself off while the rest keep working, and the log names it.</div>
+        <div><b>In-game settings</b>Press F8 in game to open ED-UP's settings. Most changes apply within about a second, without restarting.</div>
+        <div><b>Your files</b>ED-UP doesn't patch Elite's program or data files; its fixes are applied in memory while the game runs. The installer puts ED-UP's own files beside the game, and where one replaces an existing file, such as Elite's openvr_api.dll, it keeps a backup.</div>
+        <div><b>Game updates</b>If an Elite update breaks a fix, that fix turns itself off, the rest keep working, and the log says which one.</div>
       </div>
 
       <p class="more"><a href="https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md">Every feature and fix, with its setting and default &rarr;</a></p>
@@ -712,19 +784,19 @@ footer a:hover { color: var(--accent-hi); }
           <span class="n">01</span>
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-4"/><path d="M4 4v3.5h3.5"/><path d="M4 13a8 8 0 0 0 14.9 4"/><path d="M20 20v-3.5h-3.5"/></svg></div>
           <h3>Keeps ED-UP current</h3>
-          <p>It checks this project's releases and offers each new one whose signature verifies against a key built into the launcher. Nothing downloads until you press Download.</p>
+          <p>It checks GitHub for new ED-UP releases. Each release is signed with the project's key, and the launcher won't offer one whose signature doesn't check out, so a tampered download can't be installed. Nothing downloads until you press Download.</p>
         </article>
         <article class="card">
           <span class="n">02</span>
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 9.5C2 8 3 7 4.5 7h15C21 7 22 8 22 9.5v4c0 1.5-1 2.5-2.5 2.5h-3l-2-2.5h-5l-2 2.5h-3C3 16 2 15 2 13.5z"/><circle cx="7.5" cy="11.2" r="1.6"/><circle cx="16.5" cy="11.2" r="1.6"/></svg></div>
           <h3>VR, flat or both</h3>
-          <p>It finds the game and installs ED-UP for VR, flat or both. It lists every change before making it and waits for your yes, and your settings and other mods keep working.</p>
+          <p>It finds the game and installs ED-UP for VR, flat or both. It shows every file it will change and waits for you to confirm, and your settings and other mods keep working.</p>
         </article>
         <article class="card">
           <span class="n">03</span>
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.5v15l12-7.5z"/></svg></div>
           <h3>One Play button</h3>
-          <p>Play starts Elite through Steam, Epic or Frontier's launcher. The launcher waits on the taskbar while you fly and comes back when the game exits.</p>
+          <p>Play starts Elite through Steam, Epic or Frontier's launcher. ED-UP's launcher then waits on the taskbar while you play and comes back when the game exits.</p>
         </article>
       </div>
     </section>
@@ -732,8 +804,8 @@ footer a:hover { color: var(--accent-hi); }
     <section class="block" aria-labelledby="first">
       <h2 class="label" id="first">First run</h2>
       <ol class="steps">
-        <li><strong>Windows may warn that the launcher is unrecognised.</strong> It is not code-signed yet, so choose More info, then Run anyway. To check the file first, compare its SHA-256 with the release's <code>SHA256SUMS</code>.</li>
-        <li><strong>It installs itself.</strong> The first run copies it to <code>%LOCALAPPDATA%\EDVR\launcher\</code> and adds a Start menu shortcut. Uninstalling it from Windows' installed apps removes the copy and the shortcut, and leaves ED-UP and your settings in place.</li>
+        <li><strong>Windows may warn that the launcher is unrecognised.</strong> That warning is about Windows code signing, a paid certificate the launcher doesn't have yet, and is separate from the signature the launcher checks on each update. Choose More info, then Run anyway. To check the file first, compare its SHA-256 with the release's <code>SHA256SUMS</code>.</li>
+        <li><strong>The launcher installs itself first.</strong> The first run copies it to <code>%LOCALAPPDATA%\EDVR\launcher\</code> and adds a Start menu shortcut. Uninstalling it from Windows' installed apps removes only the launcher and its shortcut; ED-UP stays installed in the game folder, with your settings.</li>
         <li><strong>Pick VR and flat, VR only or flat only.</strong> Check the list of changes, say yes, and press Play.</li>
       </ol>
     </section>
