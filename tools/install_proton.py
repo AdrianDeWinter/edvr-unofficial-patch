@@ -539,6 +539,7 @@ def flatpak_extension_file(path, deployment, home, environ):
         if config.has_option(section_name, "enable-if") or config.has_option(section_name, "subdirectory-suffix"):
             raise ValueError("unsupported conditional Flatpak extension mount; pass an installed host --proton")
         relative = path.relative_to(mount)
+        full_extension_id = extension_id
         subdirectories = config.get(section_name, "subdirectories", fallback="false")
         if subdirectories == "true" and relative.parts:
             extension_id += "." + relative.parts[0]
@@ -554,6 +555,19 @@ def flatpak_extension_file(path, deployment, home, environ):
         found = []
         for installation in flatpak_installations(home, environ):
             for version in versions:
+                # add_extension() prefers full extensions and also mounts local
+                # unmaintained extensions. Refuse either shadow rather than
+                # validating a subextension that Flatpak will not execute.
+                # github.com/flatpak/flatpak/blob/1.16.1/common/flatpak-dir-utils.c#L433-L457
+                full = installation / "runtime" / full_extension_id / runtime[1] / version / "active/files"
+                if subdirectories == "true" and full.is_dir():
+                    raise ValueError("full Flatpak extension shadows the recorded subextension: %s; "
+                                     "pass --proton with an installed host runner" % full_extension_id)
+                for identifier in {full_extension_id, extension_id}:
+                    unmaintained = installation / "extension" / identifier / runtime[1] / version
+                    if unmaintained.exists() or unmaintained.is_symlink():
+                        raise ValueError("unmaintained Flatpak extension may shadow the recorded runner: %s; "
+                                         "pass --proton with an installed host runner" % unmaintained)
                 extension = installation / "runtime" / extension_id / runtime[1] / version / "active"
                 if (extension / "files").is_dir():
                     if not (extension / "metadata").is_file():
@@ -569,11 +583,21 @@ def flatpak_extension_file(path, deployment, home, environ):
     return None
 
 
+def flatpak_sandbox_path(path):
+    """Translate a recorded Pressure Vessel parent mount to the outer Flatpak namespace."""
+    for tree in ("app", "usr"):
+        if inside(path, Path("/run/parent") / tree):
+            return Path("/") / path.relative_to("/run/parent")
+    return path
+
+
 def flatpak_host_file(path, app_id, home, environ, selected=None):
     """Resolve sandbox /app and /usr paths from installed deployment metadata, without a process."""
     path = Path(path)
     if not path.is_absolute():
         raise ValueError("recorded runner must be an absolute path: %s" % path)
+    if selected:
+        path = flatpak_sandbox_path(path)
     _, deployment = selected or flatpak_deployment(app_id, home, environ)
     if not inside(path, Path("/app")) and not inside(path, Path("/usr")):
         return path
@@ -847,8 +871,15 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
     proton = proton_path(args, compatdata, host_file)
     runtime = runtime_path(proton, [steam_root], host_file)
     game_windows = windows_path(game, compatdata)
+    sandbox_proton = flatpak_sandbox_path(proton) if selected else proton
+    payload_proton = sandbox_proton
+    if selected and runtime and (inside(sandbox_proton, Path("/app")) or inside(sandbox_proton, Path("/usr"))):
+        # Pressure Vessel's Flatpak subsandbox exposes the parent /app and
+        # /usr under /run/parent and forwards the payload argv unchanged.
+        # gitlab.steamos.cloud/steamrt/steam-runtime-tools/-/blob/e8724b354362b197f56772f5d88e49d70104826e/pressure-vessel/runtime.c#L352-362
+        payload_proton = Path("/run/parent") / sandbox_proton.relative_to("/")
     command = ([str(runtime), "--verb=run", "--"] if runtime else [])
-    command += [str(proton), "runinprefix", str(installer), "--store", "steam", "--dir", game_windows] + forwarded
+    command += [str(payload_proton), "runinprefix", str(installer), "--store", "steam", "--dir", game_windows] + forwarded
     env = dict(env_in)
     for key in list(env):
         if key.startswith("WINE") or key == "PROTON_VERSION":
@@ -871,8 +902,8 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
         user_installation, _ = flatpak_installations(home, env_in)
         selector = "--user" if installation == user_installation else "--system"
         permissions = {installer.resolve(), steam_root, compatdata, *libraries(steam_root)}
-        if not inside(proton, Path("/app")) and not inside(proton, Path("/usr")):
-            permissions.add(proton.parent)
+        if not inside(sandbox_proton, Path("/app")) and not inside(sandbox_proton, Path("/usr")):
+            permissions.add(sandbox_proton.parent)
         env.update(sandbox_env)
         command = [flatpak, "run", selector, "--arch=" + relative.parts[0],
                    "--branch=" + relative.parts[1], "--command=" + command[0]] + [
@@ -1474,13 +1505,14 @@ def steam_context_self_test(only=None):
 
     parse = lambda *words: parse_argv(list(words))
     failures = []
-    for case in ("prefix", "store", "flatpak"):
+    for case in ("prefix", "store", "flatpak", "flatpak-usr", "flatpak-full",
+                 "flatpak-local-full", "flatpak-local-sub", "flatpak-parent-app", "flatpak-parent-usr"):
         if only is not None and case != only:
             continue
         with TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             home = root / "home"
-            steam = home / (".var/app/com.valvesoftware.Steam/.local/share/Steam" if case == "flatpak"
+            steam = home / (".var/app/com.valvesoftware.Steam/.local/share/Steam" if case.startswith("flatpak")
                             else ".local/share/Steam")
             script = root / "tools/install_proton.py"
             script.parent.mkdir()
@@ -1611,21 +1643,70 @@ def steam_context_self_test(only=None):
                     flatpak.parent.mkdir()
                     flatpak.write_bytes(b"fixture only")
                     flatpak.chmod(0o700)
+                    if case in ("flatpak-full", "flatpak-local-full", "flatpak-local-sub"):
+                        # Flatpak prefers full extension mounts to subextensions, and local
+                        # unmaintained mounts can also replace the installed runner's files.
+                        base_id = flat_id + ".CompatibilityTool"
+                        if case == "flatpak-full":
+                            shadow = installation / "runtime" / base_id / "x86_64/stable/active/files/Proton-GE"
+                        elif case == "flatpak-local-full":
+                            shadow = installation / "extension" / base_id / "x86_64/stable/Proton-GE"
+                        else:
+                            shadow = installation / "extension" / extension_id / "x86_64/stable"
+                        shadow.mkdir(parents=True)
+                        if case == "flatpak-full":
+                            (shadow.parents[1] / "metadata").write_text("[Runtime]\nname=" + base_id + "\n", encoding="utf-8")
+                        (shadow / "proton").write_bytes(b"different shadowing runner")
+                        (shadow / "toolmanifest.vdf").write_text(
+                            '\"manifest\" { \"require_tool_appid\" \"999999\" }', encoding="utf-8")
+                        refuses("shadow")
+                        continue
+                    if case in ("flatpak-usr", "flatpak-parent-usr"):
+                        recorded = Path("/usr/share/Proton")
+                        extension = platform
+                        runner_files = platform / "files/share/Proton"
+                        runner_files.mkdir(parents=True)
+                        (runner_files / "proton").write_bytes(b"fixture only")
+                        (runner_files / "toolmanifest.vdf").write_text(
+                            '\"manifest\" { \"require_tool_appid\" \"1628350\" }', encoding="utf-8")
+                        record(compat, recorded)
+                        expected_payload = "/run/parent/usr/share/Proton/proton"
+                    else:
+                        runner_files = extension / "files"
+                        expected_payload = "/run/parent/app/share/steam/compatibilitytools.d/Proton-GE/proton"
+                    if case in ("flatpak-parent-app", "flatpak-parent-usr"):
+                        recorded = Path("/run/parent") / recorded.relative_to("/")
+                        record(compat, recorded)
+                    # Model the nested namespace: the parent app/runtime is under
+                    # /run/parent, not the nested runtime's /app or /usr.
+                    nested = root / "runtime namespace"
+                    nested_runner = nested / Path(expected_payload).relative_to("/")
+                    nested_runner.parent.parent.mkdir(parents=True)
+                    nested_runner.parent.symlink_to(runner_files, target_is_directory=True)
                     for words in ((), ("--install", "--scope", "flat"), ("--launcher",)):
                         output = dry_run(*words)
-                        command, resolved, _ = plan(*words)
+                        command, resolved, details = plan(*words)
+                        assert details[2] == recorded / "proton", "recorded runner details changed"
                         assert shlex.join(command) in output
                         assert command[:3] == [str(flatpak), "run", "--user"]
                         assert "--arch=x86_64" in command and "--branch=stable" in command
                         assert "--command=" + str(runtime / "_v2-entry-point") in command
                         start = command.index(flat_id)
-                        assert command[start + 1:start + 6] == ["--verb=run", "--", str(recorded / "proton"),
+                        assert command[start + 1:start + 6] == ["--verb=run", "--", expected_payload,
                                                                "runinprefix", str(script.parent / (
                                                                "ed-up-launcher.exe" if "--launcher" in words else "edvr-installer.exe"))]
+                        payload = nested / Path(command[start + 3]).relative_to("/")
+                        assert payload.read_bytes() == b"fixture only", "runner is unavailable in runtime namespace"
                         assert "--env=STEAM_COMPAT_CLIENT_INSTALL_PATH=" + str(steam) in command
                         assert "--env=STEAM_COMPAT_DATA_PATH=" + str(compat) in command
                         assert "--filesystem=" + str(library) in command
                         assert resolved["SteamAppId"] == APP_ID
+                    if case in ("flatpak-usr", "flatpak-parent-usr", "flatpak-parent-app"):
+                        (runner_files / "toolmanifest.vdf").write_text('\"manifest\" { \"version\" \"2\" }', encoding="utf-8")
+                        direct = ("/app/share/steam/compatibilitytools.d/Proton-GE/proton" if case == "flatpak-parent-app"
+                                  else "/usr/share/Proton/proton")
+                        assert "--command=" + direct in plan()[0]
+                        continue
                     (extension / "files/proton").unlink()
                     refuses("missing")
                     (extension / "files/proton").write_bytes(b"fixture only")
