@@ -1,0 +1,71 @@
+# Publishes wiki/ to the repository's GitHub wiki, which is a separate git
+# repository (<repo>.wiki.git). wiki/ on main is the source: every page there
+# replaces the wiki's, and a page that exists only on the wiki is removed, so
+# edit the guide by pull request, not on the Wiki tab.
+#
+# GITHUB_TOKEN cannot push to a wiki, so this needs the repository secret
+# WIKI_TOKEN: a personal access token, from an account that can edit the wiki,
+# that can push to this repository (a classic token with the public_repo scope).
+name: Wiki
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'wiki/**'
+      - '.github/workflows/wiki.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wiki
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Publish wiki/ to the wiki
+        shell: bash
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WIKI_TOKEN:-}" ]; then
+            echo "::error::The WIKI_TOKEN secret is not set; the wiki was not updated (see the header of .github/workflows/wiki.yml)."
+            exit 1
+          fi
+          source_commit="$(git rev-parse --short=8 HEAD)"
+          source_subject="$(git log -1 --format=%s)"
+          live="$RUNNER_TEMP/wiki-repo"
+          git clone --quiet --depth 1 "https://x-access-token:${WIKI_TOKEN}@github.com/${REPO}.wiki.git" "$live"
+
+          # Replace every page with main's.
+          find "$live" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R wiki/. "$live/"
+          # A wiki page's address has no .md: [x](Playing.md#a) becomes [x](Playing#a).
+          # Only bare page names change; URLs and paths with a slash are left alone.
+          find "$live" -name '*.md' -not -path '*/.git/*' \
+            -exec sed -i -E 's/\]\(([A-Za-z0-9_-]+)\.md(#[^)]*)?\)/](\1\2)/g' {} +
+
+          cd "$live"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The wiki already matches wiki/ at $source_commit."
+            exit 0
+          fi
+          git diff --cached --stat
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit --quiet -m "Sync from main $source_commit: $source_subject"
+          git push --quiet origin HEAD
+          echo "Published wiki/ at $source_commit to the wiki."
