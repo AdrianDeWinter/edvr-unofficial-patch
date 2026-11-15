@@ -37,7 +37,7 @@ On Linux:
 ./edvr_installer.sh --uninstall
 ```
 
-Add `--store epic` when both stores are installed and the package includes `epic_library.py`.
+The planned Epic-on-Linux release adds `--store epic` when both stores are installed. [Planned: Epic on Linux](Install-on-Linux.md#planned-epic-on-linux).
 
 By hand, delete `d3d11.dll` from the game folder. In the `Openvr` folder you used, delete ED-UP's `openvr_api.dll` and rename `openvr_api_orig.dll` back to `openvr_api.dll`. Delete `edvr.ini` only when you want the settings gone. The installer is the one that also restores a chained mod. The hand steps miss that.
 

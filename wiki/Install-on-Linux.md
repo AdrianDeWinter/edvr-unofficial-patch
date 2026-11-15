@@ -4,7 +4,7 @@ This page covers a desktop PC and a Steam Deck. ED-UP is a Windows program. The 
 
 ## Steam
 
-Release 0.22.1 installs a Steam copy. That includes Flatpak Steam and the Steam Deck.
+The Linux package installs a Steam copy. That includes Flatpak Steam, when Steam's files are available to your user, and the Steam Deck.
 
 1. Install Odyssey in Steam, run it once, and close it. If you change Elite's Proton version, launch it once more and close it, so the prefix matches that Proton.
 2. On a Steam Deck, switch to Desktop Mode.
@@ -41,29 +41,33 @@ The optional [launcher](The-launcher.md) can start a Steam copy. Download `ed-up
 
 ### If Steam is in an unusual place
 
-The script reads Steam's library list, including Flatpak Steam. When the prefix record is missing or stale, point it at the Proton you use:
+When the prefix record is missing or stale, point the script at the Proton you use:
 
 ```sh
 ./edvr_installer.sh --proton '/path/to/Proton'
 ```
 
-For a custom prefix, pass the compatdata folder, the one that contains `pfx`. `pfx/drive_c` has to exist already:
-
-```sh
-./edvr_installer.sh --store steam --prefix '/path/to/compatdata/359320'
-```
+`--proton` accepts the Proton directory or its `proton` script. For a custom prefix, set `STEAM_COMPAT_DATA_PATH` to the compatdata folder, the one that contains `pfx`. `pfx/drive_c` has to exist already. Launch Elite once so that prefix exists. The script uses the Proton recorded for it.
 
 `--steam-dir`, or the variable `STEAM_DIR`, selects a Steam folder in a nonstandard place. `--game-dir` selects one product folder when several are installed.
 
-The script uses the Proton that last set up that prefix. Launch Elite once so that prefix already exists. Flatpak Steam runs inside Steam's sandbox. If the script cannot tell which compatibility tool is installed, it stops and says so. `--proton` selects a runner on the computer and skips the sandbox.
+Headset software under Proton is your own setup. This package places ED-UP's files and leaves Elite's launch options as they are.
 
-## Epic, Heroic, Legendary, and Lutris
+## Repair, uninstall, and logs
 
-Look in the unzipped folder.
+```sh
+./edvr_installer.sh --repair
+./edvr_installer.sh --uninstall
+./edvr_installer.sh --collect-logs
+```
 
-If `epic_library.py` is beside `edvr_installer.sh`, this package can install an Epic copy. Use the steps below. If that file is absent, you have the Steam-only package shipped with release 0.22.1. Use the Steam steps above. Epic on Linux is the installer that includes `epic_library.py`.
+**Save logs** writes a zip to your Downloads folder, or to your home folder when Downloads is missing, and prints the path.
 
-That package can find:
+## Planned: Epic on Linux
+
+Not in release 0.22.1. The Linux package in that release installs a Steam copy, and the steps above are the ones to use. The notes of the release that adds Epic on Linux will name that version. The steps in this section are the ones that release will use.
+
+That release can find:
 
 | The game was installed with | What the script reads |
 | --- | --- |
@@ -73,7 +77,7 @@ That package can find:
 | Lutris, normally or as a Flatpak | Lutris's game and runner settings |
 | The Windows Epic launcher in an existing Wine prefix | Epic's records inside that prefix |
 
-A journal folder on its own is not an install. The script checks that `EliteDangerous64.exe` is there, then uses the Wine or Proton already recorded for that copy.
+The script requires `EliteDangerous64.exe` in the recorded folder. A journal folder without that executable is skipped. It then uses the Wine or Proton already recorded for that copy.
 
 1. Run Odyssey once from that program, then close it. After you change its runner, launch it once more before you install.
 2. When Steam is installed as well, name the store:
@@ -91,18 +95,8 @@ When the records do not name the runner, pass the prefix you already play in, an
 ./edvr_installer.sh --store epic --prefix '/existing/prefix' --wine '/path/to/wine'
 ```
 
-`--proton` with an installed Proton works the same way. When a record is missing, the script reports it and stops. Pass `--prefix` with `--wine`, or `--proton`, and run it again.
+`--proton` with an installed Proton works the same way. When a record is missing, the script reports it and stops. Launch the game once so the prefix already exists. The script uses that prefix, or the prefix and runner you pass.
 
-Start the game afterwards from Heroic, Legendary, Lutris, or Epic, so that program can sign you in. The Linux ED-UP launcher starts Steam copies. Epic copies stay with the program that installed them.
+Start the game afterwards from Heroic, Legendary, Lutris, or Epic, so that program can sign you in. The Linux launcher stays on Steam. Epic copies start from the program that installed them.
 
-Headset software under Proton is your own setup. This package places ED-UP's files and leaves Elite's launch options as they are.
-
-## Repair, uninstall, and logs
-
-```sh
-./edvr_installer.sh --repair
-./edvr_installer.sh --uninstall
-./edvr_installer.sh --collect-logs
-```
-
-Add `--store epic` when both stores are installed and the package includes `epic_library.py`. **Save logs** writes a zip to your Downloads folder, or to your home folder when Downloads is missing, and prints the path.
+Repair, uninstall, and logs use the same commands as Steam. Add `--store epic` when both stores are installed. The package for that release includes `epic_library.py` next to `edvr_installer.sh`.

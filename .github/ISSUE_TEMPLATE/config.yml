@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: Question about how something works
-    url: https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/README.md
-    about: The README covers what each fix does, what it reads, and every setting in edvr.ini. Worth a look before opening an issue.
+    url: https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/wiki/Home.md
+    about: The player guide covers install, headsets, and the settings. Worth a look before opening an issue.
   - name: Chat, setup help, or "is this normal?"
     url: https://discord.gg/AWJ6djKKzr
     about: Discord is the place for setup questions and general talk. For anything broken, open an issue instead so you can attach the log -- that is usually the whole answer.

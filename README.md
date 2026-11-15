@@ -27,11 +27,11 @@ It accepts Odyssey. It stops when it finds the older Horizons client.
 | --- | --- | --- |
 | Windows: Steam, Epic, or Frontier | The [launcher](https://characterecho-sean.github.io/ed-unofficial-patch/), or `ed-up-installer-<version>.zip` on the [release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest) | [Install on Windows](wiki/Install-on-Windows.md) |
 | Linux or Steam Deck, through Steam | `ed-up-installer-linux-<version>.zip` | [Install on Linux](wiki/Install-on-Linux.md) |
-| Linux, through Epic, Heroic, Legendary, or Lutris | The Linux zip that contains `epic_library.py` | [Epic on Linux](wiki/Install-on-Linux.md#epic-heroic-legendary-and-lutris) |
+| Linux, through Epic, Heroic, Legendary, or Lutris | Planned. Not in 0.22.1. | [Planned: Epic on Linux](wiki/Install-on-Linux.md#planned-epic-on-linux) |
 
-Release 0.22.1's Linux package finds Steam. Epic on Linux is the package that
-includes `epic_library.py`. The Windows installer already finds Steam, Epic,
-and Frontier.
+On Windows the installer finds Steam, Epic, and Frontier. On Linux, release
+0.22.1 installs the Steam copy. Epic on Linux is written up as planned, for
+the release whose notes name it.
 
 Press F8 in the game to change settings.
 [Settings](wiki/Settings.md) is the tour, and
@@ -45,7 +45,12 @@ the world is drawn from your commander's eyes, with look-to-aim and scopes
 you can turn on. Shared brightness, terrain at the edge of the view, the jump
 flash, and sun glare are part of the same install.
 [What it changes](wiki/What-it-changes.md) walks through them.
-[Headsets](wiki/Headsets.md) is which runtime to select before you launch.
+
+## Headsets and VR runtimes
+
+[Headsets](wiki/Headsets.md) is which runtime to select before you launch,
+and what the log means when Elite starts on the Oculus path. A log from
+0.22.1 names this heading. A newer build names the Headsets page.
 
 EDHM and ReShade can stay installed. [Other mods](wiki/Other-mods.md).
 

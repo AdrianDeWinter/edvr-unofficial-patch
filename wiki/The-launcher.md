@@ -58,7 +58,7 @@ Download `ed-up-launcher-linux-<version>.zip` from the [release](https://github.
 
 It runs inside Elite's Proton prefix. Downloads and settings stay there, under `drive_c/users/steamuser/AppData/Local/EDVR` in `steamapps/compatdata/359320/pfx`.
 
-Play starts Elite through Steam. The direct Frontier sign-in is a Windows checkbox. The Linux launcher starts Steam copies, and Epic copies stay with Heroic, Legendary, Lutris, or Epic.
+Play starts Elite through Steam. Starting the game directly, without Steam, is a Windows checkbox. The Linux launcher is for a Steam install. Epic on Linux is [planned](Install-on-Linux.md#planned-epic-on-linux), and the launcher stays on Steam when that release arrives.
 
 The window, the updater, and Play are new on Linux. If one of them fails, send the log. [Ask for help](Ask-for-help.md).
 

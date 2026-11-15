@@ -54,7 +54,7 @@ In a headset, **HMD Image Quality** is the size the game renders. Below 1.0 the 
 
 ### Frame generation on a monitor
 
-Release 0.22.1 stops at that upscaler. A later build adds **Frame generation** on the monitor's Performance page. Leave it off until you want it. The row is available when anti-aliasing is XeSS, in Borderless or Windowed, and it applies the next time Elite starts. It is not offered in a headset. Menus and the HUD are generated with the scene, so they can ghost. An Intel Arc card can insert more frames than other cards. The menu refuses a count the card will not run.
+Release 0.22.1 does not include frame generation. The notes of the release that adds it name that version. In that release the row is on the monitor Performance page. Leave it off until you want it. It is available when anti-aliasing is XeSS, in Borderless or Windowed, and it applies the next time Elite starts. It is not offered in a headset. Menus and the HUD are generated with the scene, so they can ghost. An Intel Arc card can insert more frames than other cards. The menu refuses a count the card will not run.
 
 ### Sharp interface
 

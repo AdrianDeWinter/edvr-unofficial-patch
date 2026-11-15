@@ -30,7 +30,7 @@ Yes. Use Desktop Mode and the Linux package. [Install on Linux](Install-on-Linux
 
 ## I own it on Steam and on Epic.
 
-On Windows the installer lists each copy. Pick the one you want. On Linux, a package that contains `epic_library.py` needs `--store steam` or `--store epic`. Release 0.22.1's Linux zip is the Steam package. [Install on Linux](Install-on-Linux.md#epic-heroic-legendary-and-lutris).
+On Windows the installer lists each copy. Pick the one you want. On Linux, release 0.22.1 installs the Steam copy. Epic on Linux is planned. [Planned: Epic on Linux](Install-on-Linux.md#planned-epic-on-linux).
 
 ## Where do my settings live?
 
