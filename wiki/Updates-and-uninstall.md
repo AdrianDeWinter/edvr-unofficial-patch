@@ -2,7 +2,7 @@
 
 ## When Frontier updates Elite
 
-Each ED-UP release is made for one Odyssey build. The release notes name it. Release 0.22.1 was made for build 334925.
+Each ED-UP release is made for one Odyssey build. The release notes name it. Release 0.22.2 was made for build 334925.
 
 After a game update, Elite still starts with ED-UP in place. Each fix looks for its target by the shape of the game's code, or by what the frame contains. A fix that cannot find its target turns itself off. The rest keep running. The log names each one that stood down.
 
@@ -37,7 +37,7 @@ On Linux:
 ./edvr_installer.sh --uninstall
 ```
 
-The planned Epic-on-Linux release adds `--store epic` when both stores are installed. [Planned: Epic on Linux](Install-on-Linux.md#planned-epic-on-linux).
+When both a Steam and an Epic copy are installed, add `--store epic` or `--store steam`. [Epic on Linux](Install-on-Linux.md#epic-on-linux).
 
 By hand, delete `d3d11.dll` from the game folder. In the `Openvr` folder you used, delete ED-UP's `openvr_api.dll` and rename `openvr_api_orig.dll` back to `openvr_api.dll`. Delete `edvr.ini` only when you want the settings gone. The installer is the one that also restores a chained mod. The hand steps miss that.
 

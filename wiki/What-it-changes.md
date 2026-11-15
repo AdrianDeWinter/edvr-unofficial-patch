@@ -2,7 +2,7 @@
 
 ED-UP does three jobs. It can upscale the picture. It draws Odyssey's on-foot game in stereo. It corrects drawings that are right on a monitor and wrong when each eye has its own view.
 
-The fixes below are release 0.22.1. [Every setting and its default](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md) is the long page. The notes of each release name anything that release adds.
+The fixes below are release 0.22.2. [Every setting and its default](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md) is the long page. The notes of each release name anything that release adds.
 
 The changes live in memory while Elite runs. ED-UP leaves the game's files on disk as Frontier wrote them. It leaves your account, ships, cargo, credits, and missions alone. Look to aim is the one place it turns your commander, and it does that with the same kind of input a mouse sends. It leaves anti-cheat untouched, and it runs under its own name.
 
@@ -14,7 +14,7 @@ Menus, panels, and HUD text are drawn again after the upscaler, so the upscaler 
 
 [Upscaling](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md#upscaling-dlss-fsr-and-xess) · [the interface](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md#the-interface)
 
-Release 0.22.1 does not include frame generation. The notes of the release that adds it name that version. It is a monitor row, off by default, only with XeSS. [Settings](Settings.md#frame-generation-on-a-monitor) names the limits.
+From release 0.22.2, XeSS Frame Generation can add frames on a monitor. It is a monitor row, off by default, only with XeSS. [Settings](Settings.md#frame-generation-on-a-monitor) names the limits.
 
 ## On foot in a headset
 

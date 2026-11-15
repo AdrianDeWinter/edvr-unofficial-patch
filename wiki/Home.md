@@ -4,7 +4,7 @@ ED-UP (formerly EDVR) is a free add-on for Elite Dangerous: Odyssey. It makes th
 
 You install it with one program, then start the game from Steam, Epic, or Frontier's launcher as you already do. The first install takes a few minutes.
 
-This wiki is the player guide. The [README](https://github.com/characterecho-sean/ed-unofficial-patch) on the project page is the short introduction. Each page here is one job. Release 0.22.1 was made for Odyssey build 334925. The notes on each release name the build that release matches.
+This wiki is the player guide. The [README](https://github.com/characterecho-sean/ed-unofficial-patch) on the project page is the short introduction. Each page here is one job. Release 0.22.2 was made for Odyssey build 334925. The notes on each release name the build that release matches.
 
 ## Install
 
@@ -12,7 +12,7 @@ This wiki is the player guide. The [README](https://github.com/characterecho-sea
 | --- | --- |
 | Windows, through Steam, Epic, or Frontier | [Install on Windows](Install-on-Windows.md) |
 | Linux or a Steam Deck, through Steam | [Install on Linux](Install-on-Linux.md) |
-| Linux, through Epic, Heroic, Legendary, or Lutris | [Planned: Epic on Linux](Install-on-Linux.md#planned-epic-on-linux) |
+| Linux, through Epic, Heroic, Legendary, or Lutris | [Epic on Linux](Install-on-Linux.md#epic-on-linux) |
 
 The Windows launcher is on the [download page](https://characterecho-sean.github.io/ed-unofficial-patch/). Every package, including Linux and the checksums, is on the [latest release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest).
 
