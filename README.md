@@ -7,7 +7,7 @@ it runs its own OpenXR session. The first install takes a few minutes.
 
 The [player guide](wiki/Home.md) has the install steps, the headset setup, the
 F8 menu, and what to do when something looks wrong. This page is the short
-introduction. The guide matches release 0.22.1, made for Odyssey build 334925.
+introduction. The guide matches release 0.22.2, made for Odyssey build 334925.
 Each release's notes name the build that release matches.
 
 ED-UP is free and stays free. If it improves your game, [tips are
@@ -27,11 +27,11 @@ It accepts Odyssey. It stops when it finds the older Horizons client.
 | --- | --- | --- |
 | Windows: Steam, Epic, or Frontier | The [launcher](https://characterecho-sean.github.io/ed-unofficial-patch/), or `ed-up-installer-<version>.zip` on the [release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest) | [Install on Windows](wiki/Install-on-Windows.md) |
 | Linux or Steam Deck, through Steam | `ed-up-installer-linux-<version>.zip` | [Install on Linux](wiki/Install-on-Linux.md) |
-| Linux, through Epic, Heroic, Legendary, or Lutris | Planned. Not in 0.22.1. | [Planned: Epic on Linux](wiki/Install-on-Linux.md#planned-epic-on-linux) |
+| Linux, through Epic, Heroic, Legendary, or Lutris | `ed-up-installer-linux-<version>.zip` | [Epic on Linux](wiki/Install-on-Linux.md#epic-on-linux) |
 
-On Windows the installer finds Steam, Epic, and Frontier. On Linux, release
-0.22.1 installs the Steam copy. Epic on Linux is written up as planned, for
-the release whose notes name it.
+On Windows the installer finds Steam, Epic, and Frontier. On Linux it finds
+Steam, and Epic copies installed through Epic's own launcher, Heroic,
+Legendary, Lutris, or Wine.
 
 Press F8 in the game to change settings.
 [Settings](wiki/Settings.md) is the tour, and
@@ -50,7 +50,7 @@ flash, and sun glare are part of the same install.
 
 [Headsets](wiki/Headsets.md) is which runtime to select before you launch,
 and what the log means when Elite starts on the Oculus path. A log from
-0.22.1 names this heading. A newer build names the Headsets page.
+0.22.1 names this heading; a log from 0.22.2 or later names the Headsets page.
 
 EDHM and ReShade can stay installed. [Other mods](wiki/Other-mods.md).
 

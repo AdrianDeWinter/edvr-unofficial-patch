@@ -63,11 +63,11 @@ Headset software under Proton is your own setup. This package places ED-UP's fil
 
 **Save logs** writes a zip to your Downloads folder, or to your home folder when Downloads is missing, and prints the path.
 
-## Planned: Epic on Linux
+## Epic on Linux
 
-Not in release 0.22.1. The Linux package in that release installs a Steam copy, and the steps above are the ones to use. The notes of the release that adds Epic on Linux will name that version. The steps in this section are the ones that release will use.
+From release 0.22.2 the Linux package also installs an Epic copy. Release 0.22.1 and earlier install a Steam copy only.
 
-That release can find:
+The script can find:
 
 | The game was installed with | What the script reads |
 | --- | --- |

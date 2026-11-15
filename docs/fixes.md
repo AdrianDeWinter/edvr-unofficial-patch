@@ -9,7 +9,7 @@ for a screen you are not looking at.
 
 The [player guide](../wiki/Home.md) is the short tour of these features.
 
-This page describes release 0.22.1, made for Elite build 334925. Each entry
+This page describes release 0.22.2, made for Elite build 334925. Each entry
 names its setting in `edvr.ini` and the value it ships with. Most are also a
 row in the F8 menu and take effect within about a second. Where a fix has a
 full write-up, with what was measured and why the game behaves as it does, the
@@ -101,6 +101,23 @@ comes with `fix.temporal_aa` and has no switch of its own.
 The comparison key, F7, turns anti-aliasing off for a side-by-side look and
 back again without writing to `edvr.ini`. [anti-aliasing.md](anti-aliasing.md)
 describes the temporal pass.
+
+### XeSS Frame Generation on a flat screen
+
+On the flat profile with `fix.temporal_aa = xess`, `fix.xess_frame_generation =
+on` (off by default) presents through Intel's XeSS Frame Generation and Xe Low
+Latency, which add generated frames between the real ones.
+`fix.xess_generated_frames` sets how many: `1`, `2` or `3` (2x, 3x or 4x; Intel
+GPUs offer up to 3, others 1). Both are rows on the flat Performance tab,
+greyed out unless the anti-aliasing is XeSS. Frame generation takes effect at
+the next launch, only if XeSS is the anti-aliasing then, and needs Elite's
+Borderless or Windowed mode; in Fullscreen the frames are shown with none
+generated. It never applies in VR. On a fault it stops for the session and the
+game keeps a plain window. The HUD and menus are generated with the scene and
+can ghost. It needs `libxess_fg.dll` and `libxell.dll`, which the installer
+places with XeSS on flat profiles.
+[xess-frame-generation-2026-11-12.md](xess-frame-generation-2026-11-12.md) has
+the design and the measurements.
 
 ## Shimmer and sharpness
 
