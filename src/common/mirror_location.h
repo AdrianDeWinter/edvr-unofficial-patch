@@ -108,9 +108,19 @@ inline std::wstring runtimeMirrorDirFor(const std::wstring& localAppData,
     else if (lowered.find(L"\\epic games\\") != std::wstring::npos) inferredSource = L"Epic";
     else if (lowered.find(L"frontier_developments\\products") != std::wstring::npos)
         inferredSource = L"Frontier launcher";
-    if (!inferredSource.empty()) return exactDir(inferredSource);
+    if (!inferredSource.empty()) {
+        const std::wstring hinted = mirrorDirForSource(root, gameDir, inferredSource);
+        if (mirrorDirectoryExists(hinted)) return hinted;
+    }
     const std::wstring found = uniqueExistingMirrorDir(root, gameDir);
-    if (!found.empty()) return found;
+    if (!found.empty()) {
+        if (inferredSource.empty()) return found;
+        // A path hint does not bind a pre-store_source mirror. Retain the
+        // sole unclaimed copy, but never bypass a recorded store owner.
+        const std::wstring owner = recordedMirrorSource(found + L"\\state.ini");
+        if (owner.empty() || owner == L"Folder you chose") return found;
+    }
+    if (!inferredSource.empty()) return exactDir(inferredSource);
     if (!create) return std::wstring();
     return exactDir(L"Folder you chose");
 }

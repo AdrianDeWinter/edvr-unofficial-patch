@@ -29,6 +29,8 @@ This file is why it does what it does. Using it is one paragraph in the
 - **Older folder mirrors:** The installer and runtime reuse a generic mirror
   owned by the same store, or an unbound generic mirror that is the sole
   candidate, preserving settings and seat memory through relabelling and wipes.
+  Without a store record, runtime lookup also retains a sole unclaimed legacy
+  mirror despite a different store hint in the game path.
 - **Linux Epic installer:** The native Epic Launcher Preview,
   Heroic/Legendary, Lutris and existing Wine Epic records identify the game
   and its existing prefix. The wrapper uses the recorded runner and passes
@@ -126,6 +128,9 @@ Its settings, generations and seat memory remain available even if the install
 record is relabelled before a game update wipes the game folder. An existing
 store-specific mirror takes precedence. Conflicting ownership and ambiguous
 unbound candidates require manual ownership confirmation before recovery.
+Without a game store record, runtime lookup can also retain a sole unclaimed
+legacy mirror with a different store suffix: the path hint does not establish
+ownership. A candidate bound to another store is refused.
 
 The `Openvr` folder is found by **file, not by name**: `Openvr\win64`, then
 `Openvr`, then the game folder, and whichever holds `openvr_api.dll` *or*

@@ -432,7 +432,7 @@ static void testEpicRuntimeMirrors(const std::wstring& scratch) {
           "a recorded Epic store beats a conflicting Steam path hint when creating its exact mirror");
 
     // A game update can remove state.ini as well as the settings. A path
-    // hint still identifies the source and must obey the same ownership rules.
+    // hint cannot borrow a mirror authoritatively bound to another source.
     GameInstall wiped;
     wiped.dir = joinPath(root, L"steamapps\\common\\wiped-product");
     wiped.source = L"Steam";
@@ -443,6 +443,9 @@ static void testEpicRuntimeMirrors(const std::wstring& scratch) {
     const std::wstring wipedLegacy = joinPath(mirrorRoot, L"wiped-product-folder-you-chose");
     makeTree(wipedEpic);
     writeAll(joinPath(wipedEpic, L"edvr.ini"), "foreign Epic settings");
+    // A slug alone does not bind older mirrors. This fixture represents an
+    // owned foreign store, so its installer-authored metadata says so.
+    writeAll(joinPath(wipedEpic, L"state.ini"), "[edvr]\r\nversion = test\r\nstore_source = Epic\r\n");
     const std::string beforeForeignRead = mirrorFixtureTree(root);
     check(!fileExists(statePath(wiped.dir)) && mirrorDirFor(wiped, mirrorRoot) == wipedSteam &&
           runtimeMirrorDirFor(local, wiped.dir, false).empty() &&
@@ -479,5 +482,55 @@ static void testEpicRuntimeMirrors(const std::wstring& scratch) {
           readAll(joinPath(wipedSteam, L"edvr.ini")) == "canonical Steam settings" &&
           readAll(joinPath(wipedLegacy, L"edvr.ini")) == "legacy settings",
           "an inferred Steam source keeps canonical ownership when a legacy mirror also exists");
+    removeTree(root);
+}
+
+static void testLegacyRuntimeHint(const std::wstring& scratch) {
+    printf("\na path hint preserves recovery from the sole unbound legacy mirror\n");
+    const std::wstring root = joinPath(scratch, L"legacy-runtime-hint");
+    removeTree(root);
+    const std::wstring local = joinPath(root, L"AppData");
+    const std::wstring game = joinPath(root, L"Epic Games\\legacy-game");
+    const std::wstring mirrorRoot = joinPath(local, L"EDVR");
+    const std::wstring legacy = joinPath(mirrorRoot, L"legacy-game-steam");
+    const std::wstring canonical = joinPath(mirrorRoot, L"legacy-game-epic");
+    makeTree(game);
+    makeTree(legacy);
+    check(writeAll(joinPath(legacy, L"state.ini"), "[edvr]\r\nversion = v0.22.0\r\n") &&
+          writeAll(joinPath(legacy, L"edvr.ini"), "[fix]\r\nshare_exposure = 0\r\n") &&
+          writeAll(joinPath(legacy, L"edvr-flat.ini"), "[fix]\r\ntemporal_aa = off\r\n") &&
+          writeAll(joinPath(legacy, L"seat.txt"), "edvr-seat 1\nlegacy headset\t0.125\t0.25\t-0.5\t0\n"),
+          "a pre-store_source mirror retains actual VR, flat and remembered seat settings under its old slug");
+    const std::string before = mirrorFixtureTree(root);
+    check(!fileExists(statePath(game)) && runtimeMirrorDirFor(local, game, false) == legacy &&
+          runtimeMirrorDirFor(local, game, true) == legacy &&
+          edvr::openxr::seatMirrorDirFor(local, game, false) == legacy &&
+          mirrorFixtureTree(root) == before && !dirExists(canonical),
+          "a store path hint preserves the sole unbound legacy mirror without creating or changing anything");
+    const std::wstring seat = edvr::openxr::seatMirrorDirFor(local, game, false);
+    std::vector<edvr::openxr::SeatRecord> seats;
+    check(!seat.empty() && edvr::openxr::seatBookLoadFile(joinPath(seat, L"seat.txt"), seats) &&
+          seats.size() == 1 && seats[0].key == "legacy headset" && seats[0].pose.x == 0.125f &&
+          seats[0].pose.y == 0.25f && seats[0].pose.z == -0.5f,
+          "the legacy fallback reads the exact remembered seat despite the conflicting store path hint");
+    std::vector<std::string> notes;
+    check(restoreFromMirror(game, readMirror(runtimeMirrorDirFor(local, game, false)), "both", &notes),
+          "the legacy runtime selection can recover both missing settings files");
+    expectEq(readAll(joinPath(game, L"edvr.ini")), "[fix]\r\nshare_exposure = 0\r\n",
+             "legacy recovery retains the exact VR setting");
+    expectEq(readAll(joinPath(game, L"edvr-flat.ini")), "[fix]\r\ntemporal_aa = off\r\n",
+             "legacy recovery retains the exact flat setting");
+    makeTree(canonical);
+    writeAll(joinPath(canonical, L"edvr.ini"), "canonical settings");
+    check(runtimeMirrorDirFor(local, game, false) == canonical && runtimeMirrorDirFor(local, game, true) == canonical &&
+          readAll(joinPath(canonical, L"edvr.ini")) == "canonical settings",
+          "an existing exact canonical mirror takes precedence over the unbound legacy fallback");
+    removeTree(canonical);
+    writeFileAtomic(joinPath(legacy, L"state.ini"), "[edvr]\r\nversion = test\r\nstore_source = Steam\r\n");
+    const std::string beforeClaimedRead = mirrorFixtureTree(root);
+    check(runtimeMirrorDirFor(local, game, false).empty() &&
+          edvr::openxr::seatMirrorDirFor(local, game, false).empty() &&
+          mirrorFixtureTree(root) == beforeClaimedRead && !dirExists(canonical),
+          "the same candidate is refused without writes once authoritative ownership binds it to the other store");
     removeTree(root);
 }
