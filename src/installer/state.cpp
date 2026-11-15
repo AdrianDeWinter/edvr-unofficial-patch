@@ -12,6 +12,7 @@
 #include "detect.h"
 #include "install_manifest.h"
 #include "../common/iniedit.h"
+#include "../common/mirror_location.h"
 
 namespace edvr::installer {
 
@@ -515,6 +516,7 @@ InstallState parseState(const std::string& text) {
     if (s.scope.empty()) s.scope = recordedScope(s);   // a record from before scopes: its profile says which
     s.descriptorSha = get("edvr", "descriptor_sha256");
     s.components = get("edvr", "components");
+    s.storeSource = edvr::canonicalMirrorSource(fromUtf8(get("edvr", "store_source")));
     s.openvrDir = fromUtf8(get("edvr", "openvr_dir"));
 
     s.chainTarget = fromUtf8(get("d3d11", "chain_target"));
@@ -583,6 +585,8 @@ std::string serializeState(const InstallState& state) {
     out += "scope = " + recordedScope(state) + "\r\n";
     out += "descriptor_sha256 = " + state.descriptorSha + "\r\n";
     out += "components = " + state.components + "\r\n";
+    const std::wstring source = edvr::canonicalMirrorSource(state.storeSource);
+    if (!source.empty()) out += "store_source = " + toUtf8(source) + "\r\n";
     out += "openvr_dir = " + toUtf8(state.openvrDir) + "\r\n";
 
     // One section per file placed, keyed by the manifest's file id. These are what the planner reads.

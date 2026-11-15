@@ -537,20 +537,45 @@ def _describe(ref, root):
     return ref
 
 
-def version_matches(actual, expect):
-    """A build's version is `git describe` output; the log may carry a
-    -dirty or -N-g<hash> suffix the expectation does not, and the commit
-    hash is the part that decides. Compare on the trailing g<hash> when
-    both have one, and fall back to substring either way."""
+def _unique_commit(prefix, root):
+    """Resolve an object abbreviation only when it names one commit."""
+    import subprocess
+    try:
+        result = subprocess.run(["git", "-C", root, "rev-parse",
+                                 "--disambiguate=" + prefix],
+                                capture_output=True, text=True, timeout=10)
+        objects = result.stdout.splitlines()
+        if result.returncode != 0 or len(objects) != 1:
+            return None
+        kind = subprocess.run(["git", "-C", root, "cat-file", "-t", objects[0]],
+                              capture_output=True, text=True, timeout=10)
+        if kind.returncode == 0 and kind.stdout.strip() == "commit":
+            return objects[0]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def version_matches(actual, expect, root=None):
+    """Keep literal/dirty labels and equal hash tokens. Extending a shorter
+    hash requires unique Git commit identity in this checkout. Describe output
+    can become a bare hash when a checkout lacks the original release tag."""
     if not actual or not expect:
         return False
     if actual == expect:
         return True
-    a = re.search(r"g([0-9a-f]{7,})", actual)
-    e = re.search(r"g([0-9a-f]{7,})", expect)
+    pattern = r"(?:.+-\d+-g)?(?P<hash>[0-9a-f]{7,64})(?:-dirty)?"
+    a = re.fullmatch(pattern, actual)
+    e = re.fullmatch(pattern, expect)
     if a and e:
-        short = min(len(a.group(1)), len(e.group(1)))
-        return a.group(1)[:short] == e.group(1)[:short]
+        ah, eh = a.group("hash"), e.group("hash")
+        if ah == eh:
+            return True
+        if not (ah.startswith(eh) or eh.startswith(ah)):
+            return False
+        root = os.path.abspath(root) if root else repo_root()
+        ac = _unique_commit(ah, root)
+        return ac is not None and ac == _unique_commit(eh, root)
     # `git describe` on a tagged commit prints the bare tag, with no hash.
     return expect in actual or actual in expect
 
@@ -4283,7 +4308,7 @@ def _fmt_zone(delta):
 
 def open_runtime_log(gfx_path, gfx_ver, want, runtime_file, native_dirs,
                      lacking="native_long_cycle and frame_cycle_report lines "
-                             "are unavailable"):
+                             "are unavailable", root=None):
     """The runtime log that goes with a graphics log, read, and whether it is
     the right build: its lines are as much evidence as the graphics log's.
     runtime_file (--runtime-file) names it, else pair_runtime_log finds the one
@@ -4312,7 +4337,7 @@ def open_runtime_log(gfx_path, gfx_ver, want, runtime_file, native_dirs,
             print("[edvr] WARNING: the runtime log has no version line -- it "
                   "may be truncated, or not an EDVR log.")
         if want is not None:
-            if version_matches(rt_ver, want):
+            if version_matches(rt_ver, want, root):
                 print("[edvr] runtime build matches: %s" % want)
             else:
                 print("[edvr] BUILD MISMATCH (runtime log)\n"
@@ -4322,7 +4347,7 @@ def open_runtime_log(gfx_path, gfx_ver, want, runtime_file, native_dirs,
                       "Reinstall and fly again."
                       % (rt_ver or "(nothing)", want))
                 return rt_path, rt_text, 2
-        elif gfx_ver and rt_ver and not version_matches(gfx_ver, rt_ver):
+        elif gfx_ver and rt_ver and not version_matches(gfx_ver, rt_ver, root):
             print("[edvr] WARNING: the runtime log is from build %s and the "
                   "graphics log from %s; they are not one flight of one build."
                   % (rt_ver, gfx_ver))
@@ -4337,7 +4362,8 @@ def print_periodic_report(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
     window_s = args.window_ms / 1000.0
 
     rt_path, rt_text, rc = open_runtime_log(gfx_path, gfx_ver, want,
-                                            args.runtime_file, native_dirs)
+                                            args.runtime_file, native_dirs,
+                                            root=args.root)
     if rc is not None:
         return rc
 
@@ -8660,7 +8686,8 @@ def print_freezes(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
     by the build's own detector or put back together from the older lines; no STOP). A regime the game's own frame holds (INFO for a load, WARN for its
     scenes) or that has no named owner (WARN) does not set it."""
     rt_path, rt_text, rc = open_runtime_log(gfx_path, gfx_ver, want, args.runtime_file, native_dirs,
-                                            lacking="native_long_cycle lines and the runtime's counts are unavailable")
+                                            lacking="native_long_cycle lines and the runtime's counts are unavailable",
+                                            root=args.root)
     if rc is not None:
         return rc
     fz = parse_freezes(gfx_path, gfx_text, rt_path, rt_text)
@@ -19311,7 +19338,7 @@ def main(argv=None):
         want = expected_version(args.expect_build,
                                 os.path.abspath(args.root) if args.root
                                 else repo_root())
-        if version_matches(ver, want):
+        if version_matches(ver, want, args.root):
             print("[edvr] build matches: %s" % want)
         else:
             print("[edvr] BUILD MISMATCH\n"
@@ -26198,8 +26225,111 @@ def self_test_health():
     return ok
 
 
+def self_test_build_identity():
+    """Build identity through real Git, including a historically unique short hash."""
+    import contextlib
+    import io
+    import subprocess
+
+    ok = True
+
+    def check(condition, message):
+        nonlocal ok
+        if not condition:
+            print("build identity: " + message)
+            ok = False
+
+    with tempfile.TemporaryDirectory(prefix="edvr_build_identity_") as root:
+        def git(*args, data=None):
+            # Commit object bytes must retain LF endings on Windows too.
+            result = subprocess.run(["git", "-C", root] + list(args),
+                                    input=data.encode("utf-8") if data is not None else None,
+                                    capture_output=True,
+                                    timeout=10, check=True)
+            return result.stdout.decode("ascii").strip()
+
+        git("init", "--quiet", "--object-format=sha1")
+        git("config", "core.abbrev", "8")
+        tree = git("hash-object", "-w", "-t", "tree", "--stdin", data="")
+
+        def commit(number):
+            # These two valid commit objects share seven hex digits. Their
+            # fixed identities avoid mining a collision during each build.
+            data = ("tree %s\nauthor EDVR Test <edvr@example.invalid> 1700000000 +0000\n"
+                    "committer EDVR Test <edvr@example.invalid> 1700000000 +0000\n\n"
+                    "abbreviation collision %d\n" % (tree, number))
+            return git("hash-object", "-w", "-t", "commit", "--stdin", data=data)
+
+        first = commit(13452)
+        check(first == "5281dd2062f7386eb6dd0b4104bba7c664e67d69", "first fixture commit changed")
+        gfx = os.path.join(root, "graphics.log")
+        runtime = os.path.join(root, "runtime.log")
+
+        def run(actual, expect, want, native=None, selected_root=None,
+                report="periodic"):
+            with open(gfx, "w", encoding="utf-8") as f:
+                f.write("[00:00:00.001] version %s (build 1)\n" % actual)
+            args = ["--file", gfx, "--root", selected_root or root,
+                    "--expect-build", expect]
+            if native is None:
+                args.append("--version")
+            else:
+                with open(runtime, "w", encoding="utf-8") as f:
+                    f.write("2026-11-14 00:00:00.001 UTC pid=1 tid=1 "
+                            "module_init,version=%s,durable_log=1\n" % native)
+                args += (["--tally", "periodic"] if report == "periodic" else ["--freezes"])
+                args += ["--runtime-file", runtime]
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc = main(args)
+            text = output.getvalue()
+            check(rc == want, "%r vs %r (runtime %r) returned %d, wanted %d:\n%s"
+                  % (actual, expect, native, rc, want, text))
+            if native is not None and want in (0, 3):
+                check("runtime build matches:" in text, "runtime identity was not checked:\n" + text)
+            return text
+
+        # The untagged commit describes as eight hex digits, whereas an old
+        # DLL can still log the seven-digit describe suffix or a raw hash.
+        run("fixture-1-g5281dd2", first, 0)
+        run("5281dd2", first, 0)
+        run(first, "fixture-1-g5281dd2", 0)
+        run("fixture-1-g5281dd2-dirty", first, 0)
+        run("fixture-1-g5281dd20", first, 0, native="fixture-1-g5281dd2")
+        run("fixture-1-g5281dd20", first, 3, native="fixture-1-g5281dd2",
+            report="freezes")
+        run("fixture-1-g1234567", first, 2)
+        run("fixture-1-g5281dd2", "5281dd20", 2,
+            selected_root=os.path.join(root, "missing-repository"))
+        # Git is a boundary: a missing executable cannot establish identity.
+        from unittest.mock import patch
+        with patch("subprocess.run", side_effect=FileNotFoundError("git unavailable")):
+            run("fixture-1-g5281dd2", first, 2)
+
+        second = commit(18084)
+        check(second == "5281dd2b82425a23c7933afba50b184bc1c8672a", "second fixture commit changed")
+        # The very same short hash is now ambiguous, even though it prefixes
+        # the requested commit. A longer unique prefix still works.
+        run("fixture-1-g5281dd2", first, 2)
+        run("5281dd2", first, 2)
+        run("fixture-1-g5281dd2", "fixture-1-g5281dd20", 2)
+        run("fixture-1-g5281dd20", first, 0)
+        run("fixture-1-g5281dd20", second, 2)
+        text = run("fixture-1-g5281dd20", first, 2, native="fixture-1-g5281dd2")
+        check("BUILD MISMATCH (runtime log)" in text, "ambiguous runtime did not fail at runtime identity:\n" + text)
+        run("fixture-1-g5281dd20", first, 2, native="fixture-1-g5281dd2",
+            report="freezes")
+        run("fixture-1-g5281dd20", first, 2, native="fixture-1-g5281dd2b")
+
+        git("tag", "--no-sign", "v0.0.0-identity-test", first)
+        run("v0.0.0-identity-test", "v0.0.0-identity-test", 0)
+        run("fixture-1-g5281dd20", "fixture-1-g5281dd20-dirty", 0)
+    return ok
+
+
 def self_test():
     ok = self_test_phase_failure()
+    ok = self_test_build_identity() and ok
 
     for name, want in (("edvr_gfx_20260910_042313.log", "gfx"),
                        ("edvr_vr_20260910_042313.log", "vr"),

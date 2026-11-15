@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "probe.h"
+#include "update_json.h"
 
 namespace edvr::installer {
 namespace {
@@ -181,48 +182,13 @@ void findSteam(std::vector<GameInstall>* out) {
 
 // ---- Epic ----------------------------------------------------------------
 //
-// Epic writes one .item manifest per installed game, as JSON. Again no parser:
-// InstallLocation is the only field that matters and DisplayName is only used
-// to tell Elite's manifest from the other twenty.
+// The executable check identifies Elite: a manifest's display name and the
+// player's chosen folder name need not contain the game's name.
 void findEpic(std::vector<GameInstall>* out) {
     const std::wstring manifests =
         joinPath(env(L"ProgramData"), L"Epic\\EpicGamesLauncher\\Data\\Manifests");
-    if (!dirExists(manifests)) return;
-
-    for (const std::wstring& name : filesMatching(manifests, L"*.item")) {
-        const std::string json = readTextFileImpl(joinPath(manifests, name), 1u << 20);
-        if (json.empty()) continue;
-
-        auto field = [&](const char* key) -> std::string {
-            const std::string needle = std::string("\"") + key + "\"";
-            size_t k = json.find(needle);
-            if (k == std::string::npos) return std::string();
-            const size_t colon = json.find(':', k + needle.size());
-            if (colon == std::string::npos) return std::string();
-            const size_t open = json.find('"', colon);
-            if (open == std::string::npos) return std::string();
-            std::string value;
-            for (size_t i = open + 1; i < json.size(); ++i) {
-                if (json[i] == '\\' && i + 1 < json.size()) {
-                    ++i;
-                    value += json[i];
-                    continue;
-                }
-                if (json[i] == '"') break;
-                value += json[i];
-            }
-            return value;
-        };
-
-        const std::wstring display = lower(fromUtf8(field("DisplayName")));
-        const std::wstring location = fromUtf8(field("InstallLocation"));
-        if (location.empty()) continue;
-        if (display.find(L"elite") == std::wstring::npos &&
-            lower(location).find(L"elite") == std::wstring::npos) {
-            continue;
-        }
-        addFromRoot(location, L"Epic", out);
-    }
+    const std::vector<GameInstall> found = findEpicInstalls(manifests);
+    out->insert(out->end(), found.begin(), found.end());
 }
 
 // ---- Frontier launcher ---------------------------------------------------
@@ -411,11 +377,37 @@ std::wstring findOpenvrDir(const std::wstring& gameDir) {
 }
 
 bool describeDir(const std::wstring& dir, const std::wstring& source, GameInstall* out) {
+    return describeDirWithInstalls(dir, source, findInstalls(), out);
+}
+
+bool describeDirWithInstalls(const std::wstring& dir, const std::wstring& source,
+                             const std::vector<GameInstall>& installs, GameInstall* out) {
     std::vector<GameInstall> found;
     addFromRoot(canonicalPath(dir), source, &found);
     if (found.empty()) return false;
     *out = found.front();
+    for (const GameInstall& install : installs) {
+        if (!sameDir(install.dir, out->dir) || install.source.empty()) continue;
+        out->source = install.source;
+        break;
+    }
     return true;
+}
+
+std::vector<GameInstall> findEpicInstalls(const std::wstring& manifestDir) {
+    std::vector<GameInstall> found;
+    for (const std::wstring& name : filesMatching(manifestDir, L"*.item")) {
+        std::string text = readTextFileImpl(joinPath(manifestDir, name), 1u << 20);
+        // The previous reader accepted BOM-prefixed manifests. Keep that file
+        // encoding tolerance here while the shared parser checks the JSON body.
+        if (text.compare(0, 3, "\xef\xbb\xbf") == 0) text.erase(0, 3);
+        JsonValue manifest;
+        if (!parseJson(text, &manifest, nullptr)) continue;
+        const JsonValue* location = manifest.find("InstallLocation");
+        if (!location || !location->isString() || location->text.empty()) continue;
+        addFromRoot(fromUtf8(location->text), L"Epic", &found);
+    }
+    return found;
 }
 
 GameRunState runStateOfSnapshot(void* snapshot, const wchar_t* exeName, const std::wstring& dir) {

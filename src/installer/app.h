@@ -22,6 +22,7 @@ struct AppArgs {
 
     Act          action = Act::None;
     std::wstring dir;                    // --dir, the game folder
+    std::wstring store;                  // --store: canonical source for this exact --dir; empty means detect
     std::string  scope;                  // --scope both|vr|flat; empty means the folder's own, else both
     bool         keepSettings = true;    // --replace-settings
     bool         removeSettings = false; // --remove-settings (uninstall)
@@ -54,6 +55,12 @@ struct AppArgs {
 
 AppArgs parseArgs(int argc, wchar_t** argv);
 std::string usageText();
+
+// Resolve only args.dir through the detection owner. An explicit store needs the
+// exact product folder, and applies to that verified folder alone. The optional
+// inventory keeps callers with an existing scan from scanning the machine again.
+bool describeSelectedDir(const AppArgs& args, GameInstall* out,
+                         const std::vector<GameInstall>* installs = nullptr);
 
 Options optionsFor(const AppArgs& args, bool repair);
 

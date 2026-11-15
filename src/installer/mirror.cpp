@@ -9,6 +9,7 @@
 #include <string>
 
 #include "../common/iniedit.h"
+#include "../common/mirror_location.h"
 #include "state.h"
 
 namespace edvr::installer {
@@ -34,22 +35,6 @@ std::wstring localAppDataFolder() {
         if (GetEnvironmentVariableW(L"LOCALAPPDATA", env, MAX_PATH)) base = env;
     }
     return base;
-}
-
-// "Frontier launcher" -> "frontier-launcher". Lowercase and hyphenated so it
-// reads naturally as part of a folder name rather than shouting at whoever
-// browses to it.
-std::wstring slugOf(const std::wstring& s) {
-    std::wstring out;
-    for (wchar_t c : s) {
-        if (iswalnum(c)) {
-            out += static_cast<wchar_t>(towlower(c));
-        } else if (!out.empty() && out.back() != L'-') {
-            out += L'-';
-        }
-    }
-    while (!out.empty() && out.back() == L'-') out.pop_back();
-    return out;
 }
 
 bool ensureDirTree(const std::wstring& path) {
@@ -121,10 +106,7 @@ std::wstring defaultMirrorRoot() {
 
 std::wstring mirrorDirFor(const GameInstall& game, const std::wstring& root) {
     if (root.empty() || game.dir.empty()) return std::wstring();
-    std::wstring name = leafOf(game.dir);
-    const std::wstring slug = slugOf(game.source);
-    if (!slug.empty()) name += L"-" + slug;
-    return joinPath(root, name);
+    return edvr::mirrorDirForSource(root, game.dir, game.source);
 }
 
 MirrorInfo readMirror(const std::wstring& mirrorDir) {

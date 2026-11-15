@@ -2818,6 +2818,72 @@ void testElevatedApply() {
     }
 }
 
+void testElevatedStoreIdentity() {
+    section("elevated: selected store identity");
+    const Rel release = loadRel("relA");
+    const std::wstring base = fresh("elev-store-identity");
+    ScriptedHttp http;
+    http.replies[latestUrl()] = ok(releaseJson(release), "\"etag-A\"");
+    serveRelease(&http, release);
+    Updater updater(http, settingsFor(base));
+    std::string err;
+    const UpdateCheck update = updater.check();
+    check(update.outcome == UpdateOutcome::Available && adopt(&updater, update, &err),
+          "the signed release is available to the elevated store case: " + err);
+    const LauncherRoots roots = launcherRoots(base);
+    const std::wstring planPath = P(roots.launcherDir(), L"plan-7-8.txt");
+    const std::wstring resultPath = P(roots.launcherDir(), L"result-7-8.txt");
+    PlanFile plan;
+    plan.action = "install";
+    plan.manifestSha = sha(release.manifestBytes);
+    // The selected store survives the elevated dispatcher's fresh discovery.
+    // Signed payload verification and the real mirror restore still run; only
+    // the machine inventory is supplied rather than read from the host.
+    {
+        PlanFile epic = plan;
+        epic.dir = fakeGameFolder("elev-epic-product");
+        epic.source = L"Epic";
+        epic.scope = "vr";
+        epic.restoreMirror = true;
+        GameInstall conflict;
+        conflict.dir = epic.dir;
+        conflict.source = L"Steam";
+        const std::vector<GameInstall> inventory = {conflict};
+        const std::wstring epicMirror = P(base, L"elev-epic-product-epic");
+        const std::wstring steamMirror = P(base, L"elev-epic-product-steam");
+        const std::string epicSettings = "[fix]\nshare_exposure = 1\n";
+        const std::string steamSettings = "[fix]\nshare_exposure = 0\n";
+        writeAll(P(epicMirror, L"edvr.ini"), epicSettings);
+        writeAll(P(steamMirror, L"edvr.ini"), steamSettings);
+        check(writePlanFile(planPath, epic, &err), "the Epic-selected plan is written for elevated dispatch: " + err);
+        DeleteFileW(resultPath.c_str());
+        const int code = applyPlanFile(planPath, g_testKeys, &inventory);
+        ApplyOutcome out;
+        check(code == 1 && readResultFile(resultPath, &out, &err) && out.status == ApplyOutcome::Status::Blocked,
+              "the elevated Epic plan verifies its signed payload and reaches the planner refusal");
+        check(readAll(P(epic.dir, L"edvr.ini")) == epicSettings &&
+                  readAll(P(steamMirror, L"edvr.ini")) == steamSettings && !exists(P(epic.dir, L"d3d11.dll")),
+              "elevated restore uses the selected Epic mirror despite conflicting Steam inventory");
+        for (const wchar_t* source : {L"", L"Older store"}) {
+            epic.source = source;
+            DeleteFileW(P(epic.dir, L"edvr.ini").c_str());
+            check(writePlanFile(planPath, epic, &err), "the older plan source is readable: " + err);
+            const int olderCode = applyPlanFile(planPath, g_testKeys, &inventory);
+            check(olderCode == 1 && readResultFile(resultPath, &out, &err) && out.status == ApplyOutcome::Status::Blocked &&
+                      readAll(P(epic.dir, L"edvr.ini")) == steamSettings,
+                  "an empty or unrecognised older source retains the detected store's restore behavior");
+        }
+        epic.source = L"Epic";
+        epic.dir = fresh("elev-epic-library-root");
+        writeAll(P(epic.dir, L"Products\\elite-dangerous-odyssey-64\\EliteDangerous64.exe"), "not an executable");
+        check(writePlanFile(planPath, epic, &err), "an elevated plan with a library root can be read for validation: " + err);
+        const int rootCode = applyPlanFile(planPath, g_testKeys, &inventory);
+        check(rootCode == 1 && readResultFile(resultPath, &out, &err) && out.status == ApplyOutcome::Status::Failed &&
+                  !out.lines.empty() && contains(out.lines[0], "EliteDangerous64.exe"),
+              "the elevated explicit store rejects a root that only has a game in a descendant product");
+    }
+}
+
 // ---- routes and the watcher -----------------------------------------------------------------------
 
 struct Recorder {
@@ -2898,6 +2964,19 @@ void testRoute() {
     std::string err;
     check(startRoute(steam, rec.ops(), false, &err) && rec.uris.size() == 1 && rec.uris[0] == L"steam://rungameid/359320" && rec.spawns.empty(), "Steam is started by opening exactly the Steam address, and spawns nothing: " + err);
     check(startRoute(epic, rec.ops(), false, &err) && rec.uris.size() == 2 && rec.uris[1] == epic.uri && rec.spawns.empty(), "Epic is started by opening exactly the Epic address");
+    Recorder wine;
+    RouteOps wineOps = wine.ops();
+    wineOps.underWine = true;
+    check(startRoute(steam, wineOps, false, &err) && wine.uris == std::vector<std::wstring>{L"steam://run/359320"} && wine.spawns.empty(),
+          "Steam under Wine opens the native client's run address, bypassing Proton's restart interception: " + err);
+    const LaunchRoute steamFlat = routeFor(L"Steam", products, false);
+    check(startRoute(steamFlat, wineOps, false, &err) && wine.uris == std::vector<std::wstring>{L"steam://run/359320", L"steam://run/359320"} &&
+              !steam.carriesMode && !steamFlat.carriesMode && wine.spawns.empty(),
+          "Steam under Wine leaves both VR and flat choices to the store");
+    check(startRoute(epic, wineOps, false, &err) && wine.uris.size() == 3 && wine.uris.back() == epic.uri && wine.spawns.empty(),
+          "Epic under Wine keeps its own launch address");
+    check(!startRoute(steam, wineOps, true, &err) && contains(err, "administrator") && wine.uris.size() == 3 && wine.spawns.empty(),
+          "an elevated launcher under Wine refuses Steam before opening any address");
     check(startRoute(vr, rec.ops(), false, &err) && rec.spawns.size() == 1 && rec.spawns[0].exe == vr.exe && rec.spawns[0].args == vr.args && rec.spawns[0].dir == vr.workDir && rec.uris.size() == 2,
           "Frontier is started by spawning EDLaunch.exe with its flags, and opens no address");
     Recorder refused;
@@ -2910,6 +2989,7 @@ void testRoute() {
     check(!startRoute(steam, failing, false, &err) && !startRoute(vr, failing, false, &err), "an address Windows will not open, or a program that will not start, is a failure");
     const RouteOps real = realRouteOps();
     check(real.openUri && real.spawn, "the real ops exist (and are not called by this rig)");
+    check(real.underWine == runningUnderWine(), "the real route ops use the host's Wine detection");
 }
 
 struct Events {
@@ -4451,9 +4531,133 @@ void testDirectSession() {
     }
 }
 
+void testEpicCommands() {
+    section("Epic: selected install in headless Play and direct dry run");
+    auto parseStore = [](std::vector<std::wstring> words) {
+        std::vector<wchar_t*> argv;
+        std::wstring exe = L"ed-up-launcher.exe";
+        argv.push_back(&exe[0]);
+        for (std::wstring& word : words) argv.push_back(&word[0]);
+        return parseArgs(static_cast<int>(argv.size()), argv.data());
+    };
+    const AppArgs epicStore = parseStore({L"--dir", L"D:\\Elite", L"--store", L"epic"});
+    const AppArgs steamStore = parseStore({L"--store=steam", L"--dir=D:\\Elite"});
+    const AppArgs frontierStore = parseStore({L"--store", L"frontier", L"--dir", L"D:\\Elite"});
+    check(!epicStore.badArg && epicStore.store == L"Epic" && !steamStore.badArg && steamStore.store == L"Steam" &&
+              !frontierStore.badArg && frontierStore.store == L"Frontier launcher",
+          "an explicit store accepts each supported name with its selected folder");
+    check(parseStore({L"--store", L"epic"}).badArg && parseStore({L"--store"}).badArg &&
+              parseStore({L"--store=other", L"--dir", L"D:\\Elite"}).badArg,
+          "a store needs an exact folder and a supported value");
+    {
+        DirectRig rig("epic-host-dry-run", "direct_launch=on\n", true);
+        const std::vector<GameInstall> noWindowsMetadata;
+        const AppArgs args = parseStore({L"--direct-dry-run", L"--dir", rig.game.product, L"--store", L"epic", L"--vr"});
+        GameInstall selected;
+        check(!args.badArg && args.store == L"Epic" && describeSelectedDir(args, &selected, &noWindowsMetadata) &&
+                  selected.source == L"Epic" && selected.dir == canonicalPath(rig.game.product),
+              "the explicit store labels only the confirmed product even without Windows metadata");
+        const std::wstring mirrorRoot = P(rig.base, L"mirrors");
+        check(mirrorDirFor(selected, mirrorRoot) == P(mirrorRoot, L"elite-dangerous-odyssey-64-epic"),
+              "the explicit Epic product uses the same store mirror as a Windows-discovered Epic product");
+        GameInstall conflicting = selected;
+        conflicting.source = L"Steam";
+        const std::vector<GameInstall> conflictingInventory = {conflicting};
+        check(describeSelectedDir(args, &selected, &conflictingInventory) && selected.source == L"Epic",
+              "the host's store context remains authoritative over conflicting prefix metadata for that product");
+        AppArgs detected = args;
+        detected.store.clear();
+        check(describeSelectedDir(detected, &selected, &conflictingInventory) && selected.source == L"Steam",
+              "without explicit store context the inventory remains authoritative");
+        const GameTree other = makeFrontierStore(P(rig.base, L"another-install"));
+        detected.dir = other.product;
+        check(describeSelectedDir(detected, &selected, &conflictingInventory) && selected.source == L"Folder you chose",
+              "a separately chosen install never borrows the explicit Epic source");
+        AppArgs root = args;
+        root.dir = rig.game.root;
+        check(!describeSelectedDir(root, &selected, &noWindowsMetadata),
+              "an explicit store cannot label a descendant selected from an arbitrary launcher root");
+        root.dir = P(rig.base, L"missing-product");
+        check(!describeSelectedDir(root, &selected, &noWindowsMetadata), "explicit store context cannot bypass executable confirmation");
+        int steamAttempts = 0;
+        DirectEnv env = directEnv(&rig.http, rig.keys.keys, nullptr);
+        env.makeSteam = [&steamAttempts](const std::wstring&) {
+            ++steamAttempts;
+            return std::unique_ptr<SteamSession>();
+        };
+        std::vector<std::string> out;
+        check(directDryRunLines(args, env, &out, &noWindowsMetadata) == 3 &&
+                  out == std::vector<std::string>{"Epic installs use the Epic Games launcher. Direct launch is unavailable; no sign-in was attempted and nothing was started."},
+              "the host's explicit Epic identity survives a prefix without Windows store metadata");
+        check(steamAttempts == 0 && rig.http.requests.empty() && rig.started.empty() && rig.rec.uris.empty() &&
+                  rig.rec.spawns.empty() && eventTags().empty(),
+              "an explicit Epic dry run never uses Steam or Frontier authentication and starts nothing");
+    }
+    {
+        DirectRig rig("epic-headless", "direct_launch=on\n", true);
+        GameInstall discovered;
+        discovered.dir = rig.game.product;
+        discovered.source = L"Epic";
+        const std::vector<GameInstall> installs = {discovered};
+        GameInstall selected;
+        check(describeDirWithInstalls(rig.game.product, L"Folder you chose", installs, &selected),
+              "the selected Epic product is described from the supplied store inventory");
+        WatchNames names;
+        names.game = kFakeGame;
+        names.edlaunch = kFakeEd;
+        WatchTiming timing;
+        timing.pollMs = 40;
+        timing.startupWaitMs = 200;
+        timing.closeWaitMs = 100;
+        beginHeadlessPlay(*rig.session, selected, true, rig.rec.ops(), names, timing);
+        rig.session->shutdown();
+        check(rig.rec.uris == std::vector<std::wstring>{L"com.epicgames.launcher://apps/9c203b6ed35846e8a4a9ff1e314f6593?action=launch&silent=true"} && rig.rec.spawns.empty(),
+              "headless Play opens the selected Epic install through Epic even with direct launch enabled");
+        check(rig.http.requests.empty() && rig.started.empty() && eventTags().empty() && rig.loginNotes.empty() && rig.codeNotes.empty(),
+              "headless Epic Play never signs in directly, asks for credentials, or starts the game itself");
+
+        DirectRig host("epic-host-headless", "direct_launch=on\n", true);
+        const AppArgs explicitArgs = parseStore({L"--headless", L"--store", L"epic", L"--dir", host.game.product, L"--vr"});
+        const std::vector<GameInstall> noWindowsMetadata;
+        GameInstall hostSelected;
+        check(describeSelectedDir(explicitArgs, &hostSelected, &noWindowsMetadata) && hostSelected.source == L"Epic",
+              "headless Play resolves the host-selected Epic product without Windows Epic metadata");
+        beginHeadlessPlay(*host.session, hostSelected, true, host.rec.ops(), names, timing);
+        host.session->shutdown();
+        check(host.rec.uris == std::vector<std::wstring>{L"com.epicgames.launcher://apps/9c203b6ed35846e8a4a9ff1e314f6593?action=launch&silent=true"} && host.rec.spawns.empty() &&
+                  host.http.requests.empty() && host.started.empty() && eventTags().empty() && host.loginNotes.empty() && host.codeNotes.empty(),
+              "host-selected Epic headless Play takes only the Epic route, with no authentication");
+    }
+    {
+        DirectRig rig("epic-dry-run", "direct_launch=on\n", true);
+        GameInstall discovered;
+        discovered.dir = rig.game.product;
+        discovered.source = L"Epic";
+        const std::vector<GameInstall> installs = {discovered};
+        AppArgs args;
+        args.directDryRun = true;
+        args.dir = rig.game.product;
+        args.vr = true;
+        writeAll(P(rig.game.root, L"steam_api64.dll"), "boundary fixture");
+        int steamAttempts = 0;
+        DirectEnv env = directEnv(&rig.http, rig.keys.keys, nullptr);
+        env.makeSteam = [&steamAttempts](const std::wstring&) {
+            ++steamAttempts;
+            return std::unique_ptr<SteamSession>();
+        };
+        std::vector<std::string> out;
+        const int code = directDryRunLines(args, env, &out, &installs);
+        check(code == 3 && out == std::vector<std::string>{"Epic installs use the Epic Games launcher. Direct launch is unavailable; no sign-in was attempted and nothing was started."},
+              "an Epic direct dry run explains the store route and exits without a direct launch plan");
+        check(steamAttempts == 0 && rig.http.requests.empty() && rig.started.empty() && rig.rec.uris.empty() && rig.rec.spawns.empty() && eventTags().empty(),
+              "an Epic direct dry run makes no authentication request, loads no Steam ticket, and starts nothing");
+    }
+}
+
 // --direct-dry-run: the sign-in as far as the command line, masked, with nothing started.
 void testDryRun() {
     section("direct: --direct-dry-run");
+    const std::vector<GameInstall> installs;
     const std::wstring base = fresh("direct-dry");
     const GameTree game = makeGame(base);
     RigKeys keys = rigKeys(L"dry", true);
@@ -4469,7 +4673,7 @@ void testDryRun() {
         http.script[kPurchasesPath] = {jsonReply(purchasesJson(std::string("--id ") + kExpectedMachineId, "/Zz"))};
         std::vector<std::string> out;
         resetEvents();
-        const int code = directDryRunLines(a, directEnv(&http, keys.keys, nullptr), &out);
+        const int code = directDryRunLines(a, directEnv(&http, keys.keys, nullptr), &out, &installs);
         const std::string all = joined(out);
         check(code == 0 && !out.empty(), "a good sign-in gives a plan and exit code 0: " + std::to_string(code));
         check(!leaks(all), "no token, ticket or machine ID is anywhere in what is printed");
@@ -4483,7 +4687,7 @@ void testDryRun() {
         out.clear();
         FrontierHttp again;
         scriptHappy(&again);
-        check(directDryRunLines(a, directEnv(&again, keys.keys, nullptr), &out) == 0 && !out.empty() && contains(out.back(), "/steam /novr /edo --foo") && !contains(out.back(), "/steam /vr"), "--novr prints /novr");
+        check(directDryRunLines(a, directEnv(&again, keys.keys, nullptr), &out, &installs) == 0 && !out.empty() && contains(out.back(), "/steam /novr /edo --foo") && !contains(out.back(), "/steam /vr"), "--novr prints /novr");
         a.vr = true;
         a.novr = false;
     }
@@ -4492,7 +4696,7 @@ void testDryRun() {
         scriptHappy(&http);
         http.script[kAuthPath] = {statusReply(403)};
         std::vector<std::string> out;
-        const int code = directDryRunLines(a, directEnv(&http, keys.keys, nullptr), &out);
+        const int code = directDryRunLines(a, directEnv(&http, keys.keys, nullptr), &out, &installs);
         check(code == 3 && !out.empty() && contains(out.back(), "Direct launch did not work: Frontier refused the request (HTTP 403)") && !leaks(joined(out)), "a fallback prints its reason and exits 3: " + (out.empty() ? std::string() : out.back()));
     }
     {
@@ -4505,7 +4709,7 @@ void testDryRun() {
             FrontierHttp http;
             scriptHappy(&http);
             std::vector<std::string> out;
-            if (directDryRunLines(bad, directEnv(&http, keys.keys, nullptr), &out) == 2 && http.requests.empty() && out.size() == 1 && contains(out[0], "--direct-dry-run needs --dir")) ++refused;
+            if (directDryRunLines(bad, directEnv(&http, keys.keys, nullptr), &out, &installs) == 2 && http.requests.empty() && out.size() == 1 && contains(out[0], "--direct-dry-run needs --dir")) ++refused;
         }
         check(refused == 3, "no folder, neither of --vr and --novr, or both: exit 2, with one line, and nothing contacted (" + std::to_string(refused) + " of 3)");
     }
@@ -5169,6 +5373,7 @@ void testBundleLeavesLoginOut() {
 // --direct-dry-run on a Frontier-store folder: the stored login only, never asked, never changed.
 void testStoreDryRun() {
     section("frontier store: --direct-dry-run");
+    const std::vector<GameInstall> installs;
     const std::wstring base = fresh("store-dry");
     const GameTree game = makeFrontierStore(base);
     RigKeys keys = rigKeys(L"store-dry", true);
@@ -5204,7 +5409,7 @@ void testStoreDryRun() {
         const std::string before = readAll(loginPath);
         std::vector<std::string> out;
         resetEvents();
-        const int code = directDryRunLines(a, env(&http), &out);
+        const int code = directDryRunLines(a, env(&http), &out, &installs);
         const std::string all = joined(out);
         check(code == 0 && out.size() >= 3, "a stored login gives a plan and exit code 0: " + std::to_string(code) + " " + all);
         check(!out.empty() && contains(out[0], "Frontier's own store"), "the first line says which kind of install it took this for: " + (out.empty() ? std::string() : out[0]));
@@ -5224,7 +5429,7 @@ void testStoreDryRun() {
         flat.vr = false;
         flat.novr = true;
         std::vector<std::string> out;
-        check(directDryRunLines(flat, env(&http), &out) == 0 && !out.empty() && contains(out.back(), " /novr /edo --foo") && !contains(out.back(), "/steam"), "--novr prints /novr");
+        check(directDryRunLines(flat, env(&http), &out, &installs) == 0 && !out.empty() && contains(out.back(), " /novr /edo --foo") && !contains(out.back(), "/steam"), "--novr prints /novr");
     }
     {
         // No stored login at all: it says so, asks nothing, contacts nothing beyond the clock.
@@ -5232,7 +5437,7 @@ void testStoreDryRun() {
         scriptStore(&http, true);
         deleteFrontierLogin(loginPath);
         std::vector<std::string> out;
-        const int code = directDryRunLines(a, env(&http), &out);
+        const int code = directDryRunLines(a, env(&http), &out, &installs);
         check(code == 3 && !out.empty() && contains(out.back(), "Sign in once from the launcher's window") && !contains(out.back(), "Direct launch did not work") && !leaks(joined(out)),
               "with no stored login it stops and says to sign in once from the window: " + (out.empty() ? std::string() : out.back()));
         check(asked == 0 && http.count(kFAuthPath) == 0 && http.count(kFTokenPath) == 0 && !exists(loginPath), "and asks nothing, makes no sign-in call and stores nothing");
@@ -5243,7 +5448,7 @@ void testStoreDryRun() {
         scriptStore(&http, false);
         saveLogin(loginPath, nullptr, kMachineToken);
         std::vector<std::string> out;
-        check(directDryRunLines(a, env(&http), &out) == 3 && !out.empty() && contains(out.back(), "Sign in once from the launcher's window") && http.count(kFAuthPath) == 0 && asked == 0, "a stored login with no password stops the same way");
+        check(directDryRunLines(a, env(&http), &out, &installs) == 3 && !out.empty() && contains(out.back(), "Sign in once from the launcher's window") && http.count(kFAuthPath) == 0 && asked == 0, "a stored login with no password stops the same way");
     }
     {
         // A password but no token yet: a dry run must not make Frontier email a code.
@@ -5251,7 +5456,7 @@ void testStoreDryRun() {
         scriptStore(&http, true);
         saveLogin(loginPath, kPassword, nullptr);
         std::vector<std::string> out;
-        const int code = directDryRunLines(a, env(&http), &out);
+        const int code = directDryRunLines(a, env(&http), &out, &installs);
         check(code == 3 && !out.empty() && contains(out.back(), "emailed code") && http.count(kFAuthPath) == 0 && http.count(kFTokenPath) == 0 && asked == 0, "a login with no token stops before the call that would email a code: " + (out.empty() ? std::string() : out.back()));
     }
     {
@@ -5262,7 +5467,7 @@ void testStoreDryRun() {
         saveLogin(loginPath, kPassword, kMachineToken);
         const std::string before = readAll(loginPath);
         std::vector<std::string> out;
-        const int code = directDryRunLines(a, env(&http), &out);
+        const int code = directDryRunLines(a, env(&http), &out, &installs);
         check(code == 3 && !out.empty() && contains(out.back(), "did not accept the saved login") && !leaks(joined(out)) && asked == 0 && readAll(loginPath) == before && http.count(kFAuthPath) == 1,
               "a denied login exits 3 with one call, asks nothing, and the stored login is unchanged: " + (out.empty() ? std::string() : out.back()));
     }
@@ -5273,7 +5478,7 @@ void testStoreDryRun() {
         http.script[kPurchasesPath] = {statusReply(503)};
         saveLogin(loginPath, kPassword, kMachineToken);
         std::vector<std::string> out;
-        const int code = directDryRunLines(a, env(&http), &out);
+        const int code = directDryRunLines(a, env(&http), &out, &installs);
         check(code == 3 && !out.empty() && contains(out.back(), "Direct launch did not work: Frontier's servers are unavailable (HTTP 503)") && contains(out.back(), "Frontier's launcher") && !contains(out.back(), "Steam"), "an unavailable server is a fallback to Frontier's launcher: " + (out.empty() ? std::string() : out.back()));
     }
     dropKeys(keys);
@@ -5368,6 +5573,7 @@ int main(int argc, char** argv) {
     testSelfUpdate();
     testPlanFile();
     testElevatedApply();
+    testElevatedStoreIdentity();
     testRoute();
     testWatcher();
     testSession();
@@ -5375,6 +5581,7 @@ int main(int argc, char** argv) {
     testLayoutDpi();
     testDirectPlan();
     testDirectSession();
+    testEpicCommands();
     testDryRun();
     testLoginFile();
     testStoreSession();

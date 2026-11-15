@@ -43,6 +43,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STAMPED = ("d3d11.dll", "openvr/openvr_api.dll", "edvr-installer.exe")
 INSTALLER = "edvr-installer.exe"
 LINUX_WRAPPER = "edvr-installer-linux.py"
+LINUX_EPIC_LIBRARY = "epic_library.py"
 LINUX_LAUNCHER = "edvr_installer.sh"
 # The launcher's Linux package: the same launcher exe the Windows release publishes, run inside Elite's
 # Proton prefix by the installer wrapper's --launcher mode. A convenience package, not in the signed manifest.
@@ -157,6 +158,7 @@ def _files(root, no_dlss):
               (root / "release" / "README.txt", "README.txt"),
               (root / "release" / "README-linux.txt", "README-linux.txt"),
               (root / "tools" / "install_proton.py", LINUX_WRAPPER),
+              (root / "tools" / LINUX_EPIC_LIBRARY, LINUX_EPIC_LIBRARY),
               (root / LINUX_LAUNCHER, LINUX_LAUNCHER),
               (root / "release" / "OPENVR.txt", "openvr/READ-ME-FIRST.txt")]
     # Historical --no-dlss permits builds made without the SDK. It cannot
@@ -519,6 +521,7 @@ def _launcher_linux_members(root):
     """(source, archive name) of the launcher's Linux ZIP."""
     return [(root / "build" / LAUNCHER_ASSET, LAUNCHER_ASSET),
             (root / "tools" / "install_proton.py", LAUNCHER_LINUX_WRAPPER),
+            (root / "tools" / LINUX_EPIC_LIBRARY, LINUX_EPIC_LIBRARY),
             (root / LAUNCHER_LINUX_SH, LAUNCHER_LINUX_SH),
             (root / "release" / LAUNCHER_LINUX_README, LAUNCHER_LINUX_README)]
 
@@ -566,8 +569,8 @@ def package(root, version, no_dlss=False, dry_run=False):
     installer_archive = dist / ("ed-up-installer-" + version + ".zip")
     linux_archive = dist / ("ed-up-installer-linux-" + version + ".zip")
     print("[edvr] installer plan: %s (%s)" % (installer_archive, INSTALLER))
-    print("[edvr] Linux installer plan: %s (%s, %s, %s, README-linux.txt)" %
-          (linux_archive, INSTALLER, LINUX_WRAPPER, LINUX_LAUNCHER))
+    print("[edvr] Linux installer plan: %s (%s, %s, %s, %s, README-linux.txt)" %
+          (linux_archive, INSTALLER, LINUX_WRAPPER, LINUX_EPIC_LIBRARY, LINUX_LAUNCHER))
     launcher_linux_archive = dist / ("ed-up-launcher-linux-" + version + ".zip")
     print("[edvr] Linux launcher plan: %s (%s)" % (
         launcher_linux_archive, ", ".join(name for _, name in launcher_linux)))
@@ -601,7 +604,7 @@ def package(root, version, no_dlss=False, dry_run=False):
         with zipfile.ZipFile(temporary_installer_archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
             output.write(stage / INSTALLER, INSTALLER)
         with zipfile.ZipFile(temporary_linux_archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
-            for name in (INSTALLER, LINUX_WRAPPER, LINUX_LAUNCHER, "README-linux.txt"):
+            for name in (INSTALLER, LINUX_WRAPPER, LINUX_EPIC_LIBRARY, LINUX_LAUNCHER, "README-linux.txt"):
                 _write_zip_entry(output, stage / name, name)
         with zipfile.ZipFile(temporary_launcher_linux, "w", compression=zipfile.ZIP_DEFLATED) as output:
             for source, name in launcher_linux:
@@ -721,6 +724,8 @@ def self_test():
             source.parent.mkdir(parents=True, exist_ok=True); source.write_bytes(b"payload")
         wrapper_source = root / "tools" / "install_proton.py"
         wrapper_source.write_bytes(b"#!/usr/bin/env python3\nprint('fixture')\n")
+        epic_library_source = root / "tools" / LINUX_EPIC_LIBRARY
+        epic_library_source.write_bytes(b"# Epic discovery fixture\n")
         launcher_source = root / LINUX_LAUNCHER
         launcher_source.write_bytes((ROOT / LINUX_LAUNCHER).read_bytes())
         launcher_sh_source = root / LAUNCHER_LINUX_SH
@@ -830,10 +835,11 @@ def self_test():
                 assert set(installer_archive.namelist()) == {"edvr-installer.exe"}
                 assert installer_archive.read("edvr-installer.exe") == b"payload"
             with zipfile.ZipFile(root / "dist" / "ed-up-installer-linux-1.2.3.zip") as linux_archive:
-                assert set(linux_archive.namelist()) == {INSTALLER, LINUX_WRAPPER, LINUX_LAUNCHER,
+                assert set(linux_archive.namelist()) == {INSTALLER, LINUX_WRAPPER, LINUX_EPIC_LIBRARY, LINUX_LAUNCHER,
                                                         "README-linux.txt"}
                 assert linux_archive.read(INSTALLER) == b"payload"
                 assert linux_archive.read(LINUX_WRAPPER) == wrapper_source.read_bytes()
+                assert linux_archive.read(LINUX_EPIC_LIBRARY) == epic_library_source.read_bytes()
                 assert linux_archive.read(LINUX_LAUNCHER) == launcher_source.read_bytes()
                 assert linux_archive.read("README-linux.txt") == b"payload"
                 for name in (LINUX_WRAPPER, LINUX_LAUNCHER):
@@ -849,10 +855,11 @@ def self_test():
             # shell script and the README, with Unix modes on the script and the wrapper only.
             with zipfile.ZipFile(root / "dist" / "ed-up-launcher-linux-1.2.3.zip") as launcher_archive:
                 assert set(launcher_archive.namelist()) == {LAUNCHER_ASSET, LAUNCHER_LINUX_WRAPPER,
-                                                           LAUNCHER_LINUX_SH, LAUNCHER_LINUX_README}
+                                                           LINUX_EPIC_LIBRARY, LAUNCHER_LINUX_SH, LAUNCHER_LINUX_README}
                 assert launcher_archive.read(LAUNCHER_ASSET) == b"launcher exe"
                 assert launcher_archive.read(LAUNCHER_ASSET) == (root / "dist" / LAUNCHER_ASSET).read_bytes()
                 assert launcher_archive.read(LAUNCHER_LINUX_WRAPPER) == wrapper_source.read_bytes()
+                assert launcher_archive.read(LINUX_EPIC_LIBRARY) == epic_library_source.read_bytes()
                 assert launcher_archive.read(LAUNCHER_LINUX_SH) == launcher_sh_source.read_bytes()
                 assert launcher_archive.read(LAUNCHER_LINUX_README) == b"launcher readme"
                 for name in (LAUNCHER_LINUX_WRAPPER, LAUNCHER_LINUX_SH):
@@ -1015,7 +1022,7 @@ def self_test():
                 assert names == {"d3d11.dll", "edvr_profile.ini", "openvr/openvr_api.dll", "openvr/openxr_loader.dll",
                                  "openvr/OPENXR-LOADER-LICENSE.txt", "edvr-installer.exe",
                                  "README.txt", "openvr/READ-ME-FIRST.txt", "edvr.ini", "edvr-flat.ini",
-                                  "README-linux.txt", LINUX_WRAPPER, LINUX_LAUNCHER,
+                                  "README-linux.txt", LINUX_WRAPPER, LINUX_EPIC_LIBRARY, LINUX_LAUNCHER,
                                   "LICENSE.txt", "DXBC-HASH-LICENSE.txt", "MINIZ-LICENSE.txt", LAUNCHER_LICENSE_NAME}
                 assert archive.read(LINUX_WRAPPER) == wrapper_source.read_bytes()
                 assert archive.getinfo(LINUX_WRAPPER).external_attr >> 16 == 0o100755
@@ -1204,12 +1211,12 @@ def self_test():
             with zipfile.ZipFile(dist / "ed-up-4.0.0.zip") as archive:
                 assert set(archive.namelist()) == core_names | dlss_names | xess_names | {
                     INSTALLER, "README.txt", "openvr/READ-ME-FIRST.txt", "README-linux.txt",
-                    LINUX_WRAPPER, LINUX_LAUNCHER}
+                    LINUX_WRAPPER, LINUX_EPIC_LIBRARY, LINUX_LAUNCHER}
             assert members(dist / "ed-up-installer-4.0.0.zip") == {INSTALLER}
             assert members(dist / "ed-up-installer-linux-4.0.0.zip") == {
-                INSTALLER, LINUX_WRAPPER, LINUX_LAUNCHER, "README-linux.txt"}
+                INSTALLER, LINUX_WRAPPER, LINUX_EPIC_LIBRARY, LINUX_LAUNCHER, "README-linux.txt"}
             assert members(dist / "ed-up-launcher-linux-4.0.0.zip") == {
-                LAUNCHER_ASSET, LAUNCHER_LINUX_WRAPPER, LAUNCHER_LINUX_SH, LAUNCHER_LINUX_README}
+                LAUNCHER_ASSET, LAUNCHER_LINUX_WRAPPER, LINUX_EPIC_LIBRARY, LAUNCHER_LINUX_SH, LAUNCHER_LINUX_README}
             # The manifest: valid, ASCII, LF, the real hashes, and the launcher the release carries.
             manifest_bytes = (dist / MANIFEST).read_bytes()
             assert manifest_bytes.decode("ascii") and b"\r" not in manifest_bytes and manifest_bytes.endswith(b"\n")

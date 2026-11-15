@@ -7,6 +7,8 @@
 #include <set>
 
 #include "../common/iniedit.h"
+#include "../common/mirror_location.h"
+#include "app.h"
 #include "apply.h"
 #include "mirror.h"
 #include "payload.h"
@@ -108,7 +110,8 @@ bool missingOrLink(const std::wstring& path) {
 
 // The plan's work, as outcome. Everything the elevated copy does after reading the file. Every
 // path comes from `paths`, which planPathsFor worked out from where the file is.
-ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* const* keys) {
+ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* const* keys,
+                     const std::vector<GameInstall>* installs) {
     if (file.action != "install" && file.action != "repair" && file.action != "uninstall")
         return failed("the plan names an action this launcher does not know");
     if (file.dir.empty()) return failed("the plan names no game folder");
@@ -131,7 +134,21 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
     }
 
     GameInstall game;
-    if (!describeDir(file.dir, file.source.empty() ? L"Folder you chose" : file.source, &game))
+    AppArgs selected;
+    selected.dir = file.dir;
+    selected.store = edvr::canonicalMirrorSource(file.source);
+    if (selected.store == L"Folder you chose") selected.store.clear();
+    const std::wstring fallback = file.source.empty() ? L"Folder you chose" : file.source;
+    // A canonical store is the window's confirmed selection, including a host
+    // wrapper's explicit store. Preserve it through the elevated handoff for
+    // this exact product; unrecognised older sources retain discovery behavior.
+    bool described = false;
+    if (!selected.store.empty())
+        described = describeSelectedDir(selected, &game, installs);
+    else
+        described = installs ? describeDirWithInstalls(file.dir, fallback, *installs, &game)
+                             : describeDir(file.dir, fallback, &game);
+    if (!described)
         return failed("there is no EliteDangerous64.exe in the game folder the plan names");
     const std::wstring mirrorDir = mirrorDirFor(game, paths.dataRoot);
 
@@ -329,7 +346,8 @@ std::string manifestShaOf(const std::wstring& manifestPath) {
     return leaf.substr(0, 64);
 }
 
-int applyPlanFile(const std::wstring& planPath, const char* const* keys) {
+int applyPlanFile(const std::wstring& planPath, const char* const* keys,
+                  const std::vector<GameInstall>* installs) {
     // A plan that is not where the launcher writes plans, or cannot be read, has no result path to
     // report to, so the parent sees no result file.
     PlanPaths paths;
@@ -337,7 +355,7 @@ int applyPlanFile(const std::wstring& planPath, const char* const* keys) {
     if (!planPathsFor(planPath, &paths, &error)) return 2;
     PlanFile plan;
     if (!readPlanFile(planPath, &plan, &error)) return 2;
-    const ApplyOutcome outcome = runPlan(plan, paths, keys);
+    const ApplyOutcome outcome = runPlan(plan, paths, keys, installs);
     writeResultFile(paths.resultPath, outcome, nullptr);
     return outcome.status == ApplyOutcome::Status::Done || outcome.status == ApplyOutcome::Status::NothingToDo ? 0 : 1;
 }

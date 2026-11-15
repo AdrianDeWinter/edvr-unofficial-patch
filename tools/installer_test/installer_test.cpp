@@ -3933,6 +3933,8 @@ static std::wstring firstSubdirLike(const std::wstring& dir, const std::wstring&
     return name;
 }
 
+#include "epic_detection_cases.h"
+
 static void testMirror(const std::wstring& scratch) {
     printf("\nthe mirror kept outside the game folder\n");
 
@@ -6893,6 +6895,7 @@ static void testState() {
     InstallState state;
     state.edvrVersion = "v0.10.1";
     state.installedUtc = "2026-08-27T12:00:00Z";
+    state.storeSource = L"Epic";
     state.openvrDir = L"Openvr\\win64";
     trecord(state, "graphics", "1234");
     state.chainTarget = L"d3d11_edhm.dll";
@@ -6908,6 +6911,15 @@ static void testState() {
     const InstallState back = parseState(serializeState(state));
     check(back.present, "a written record reads back as present");
     expectEq(back.edvrVersion, state.edvrVersion, "the version survives");
+    check(back.storeSource == L"Epic", "the recorded store survives serialization and parsing");
+    check(parseState("[edvr]\r\nversion = test\r\nstore_source = another-store\r\n").storeSource.empty(),
+          "an unknown store is not accepted as authoritative install metadata");
+    state.storeSource = L"another-store";
+    check(serializeState(state).find("store_source") == std::string::npos,
+          "an unknown store is not written into the install record");
+    state.storeSource = L"Frontier launcher";
+    check(parseState(serializeState(state)).storeSource == L"Frontier launcher",
+          "the canonical Frontier launcher source survives serialization and parsing");
     expectEq(toUtf8(back.chainTarget), "d3d11_edhm.dll", "the chain target survives");
     expectEq(toUtf8(back.openvrDir), "Openvr\\win64", "the openvr folder survives");
     expectEq(back.openvrOrigSha, "9abc", "the original runtime's hash survives");
@@ -7711,6 +7723,11 @@ int wmain(int argc, wchar_t** argv) {
     testFlatSettingsPlanner();
     testApply(scratch);
     testMirror(scratch);
+    testEpicDetection(scratch);
+    testEpicRuntimeMirrors(scratch);
+    testRelabelledLegacyMirror(scratch);
+    testLegacyMirrorOwnership(scratch);
+    testLegacyRuntimeHint(scratch);
     testAtomicWrite(scratch);
     testReplaceScripts(scratch);
     testApplyPatience(scratch);

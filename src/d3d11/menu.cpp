@@ -23,6 +23,7 @@
 #include "flat_notice_queue.h"
 #include "../common/iniedit.h"
 #include "../common/log.h"
+#include "../common/mirror_location.h"
 #include "../common/native_render_settings.h"
 #include "../common/openxr_resolution_entries.h"
 #include "../common/parallel_projection_notice.h"
@@ -1386,51 +1387,11 @@ bool dirExistsW(const std::wstring& p) {
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-std::wstring lowerW(std::wstring s) {
-    for (wchar_t& c : s) c = static_cast<wchar_t>(towlower(c));
-    return s;
-}
-
-// The installer's mirror folder for this install (src/installer/mirror.h:
-// %LOCALAPPDATA%\EDVR\<leaf>-<store>), found rather than invented where it
-// can be: the store slug the installer would derive from the path, else the
-// one folder that already carries this leaf, else made fresh.
+// The menu and seat memory follow the source the installer recorded.
 std::wstring mirrorDir() {
     wchar_t env[MAX_PATH] = {};
     if (!GetEnvironmentVariableW(L"LOCALAPPDATA", env, MAX_PATH)) return std::wstring();
-    const std::wstring root = std::wstring(env) + L"\\EDVR";
-    const std::wstring exeDir = executableDirectory();
-    const size_t slash = exeDir.find_last_of(L"\\/");
-    const std::wstring leaf = slash == std::wstring::npos ? exeDir : exeDir.substr(slash + 1);
-    const std::wstring low = lowerW(exeDir);
-    std::wstring slug;
-    if (low.find(L"\\steamapps\\") != std::wstring::npos) slug = L"steam";
-    else if (low.find(L"\\epic games\\") != std::wstring::npos) slug = L"epic";
-    else if (low.find(L"frontier_developments\\products") != std::wstring::npos)
-        slug = L"frontier-launcher";
-    if (!slug.empty()) {
-        const std::wstring exact = root + L"\\" + leaf + L"-" + slug;
-        if (dirExistsW(exact)) return exact;
-    }
-    // One folder carrying this leaf already: the installer made it.
-    WIN32_FIND_DATAW fd{};
-    HANDLE h = FindFirstFileW((root + L"\\" + leaf + L"-*").c_str(), &fd);
-    std::wstring found;
-    int count = 0;
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                found = root + L"\\" + fd.cFileName;
-                ++count;
-            }
-        } while (FindNextFileW(h, &fd));
-        FindClose(h);
-    }
-    if (count == 1) return found;
-    if (!dirExistsW(root)) CreateDirectoryW(root.c_str(), nullptr);
-    const std::wstring made = root + L"\\" + leaf + L"-" + (slug.empty() ? L"folder-you-chose" : slug);
-    if (!dirExistsW(made)) CreateDirectoryW(made.c_str(), nullptr);
-    return dirExistsW(made) ? made : std::wstring();
+    return edvr::runtimeMirrorDirFor(env, executableDirectory(), true);
 }
 
 bool g_backedUp = false;

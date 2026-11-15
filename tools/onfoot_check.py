@@ -2637,7 +2637,7 @@ def main(argv=None):
         import edvr_log
         root = os.path.abspath(args.root) if args.root else edvr_log.repo_root()
         want = edvr_log.expected_version(args.expect_build, root)
-        if edvr_log.version_matches(S.build, want):
+        if edvr_log.version_matches(S.build, want, root):
             print('[onfoot] build matches: %s' % want)
         else:
             print('[onfoot] BUILD MISMATCH\n         recording says %s\n         expected       %s\n         This recording is not evidence about that build.' % (S.build or '(nothing)', want))
@@ -3099,6 +3099,34 @@ def self_test():
         check(rc == 0 and 'build matches' in out, 'a matching --expect-build passes')
         rc, out = _run(d, '--expect-build', 'v9.9.9-1-g1234567')
         check(rc == 2 and 'BUILD MISMATCH' in out, 'a different --expect-build exits 2')
+        # The selected repository owns abbreviation identity, including when
+        # this checker was loaded from a different checkout.
+        import subprocess
+        identity_root = os.path.join(tmp, 'build-identity')
+        os.makedirs(identity_root)
+
+        def identity_git(*args, data=None):
+            # Keep the pinned commit's object bytes identical on Windows.
+            result = subprocess.run(['git', '-C', identity_root] + list(args),
+                                    input=data.encode('utf-8') if data is not None else None,
+                                    capture_output=True,
+                                    timeout=10, check=True)
+            return result.stdout.decode('ascii').strip()
+
+        identity_git('init', '--quiet', '--object-format=sha1')
+        identity_git('config', 'core.abbrev', '8')
+        tree = identity_git('hash-object', '-w', '-t', 'tree', '--stdin', data='')
+        commit = identity_git('hash-object', '-w', '-t', 'commit', '--stdin', data=(
+            'tree %s\nauthor EDVR Test <edvr@example.invalid> 1700000000 +0000\n'
+            'committer EDVR Test <edvr@example.invalid> 1700000000 +0000\n\n'
+            'abbreviation collision 13452\n' % tree))
+        check(commit == '5281dd2062f7386eb6dd0b4104bba7c664e67d69', 'the build-identity fixture commit is stable')
+        recording = fresh()
+        write_session(recording, stamp, {'pin': {'t': [0.0]}}, build='fixture-1-g5281dd2')
+        rc, out = _run(recording, '--root', identity_root, '--expect-build', commit,
+                       '--dump', 'pin', '--fields', 'seq')
+        check(rc == 0 and 'build matches: 5281dd20' in out,
+              'an abbreviated recording build matches in --root (rc=%s): %s' % (rc, out))
         rc, out = _run(d, '--list')
         check(rc == 0 and stamp in out, '--list names the session')
         rc, out = _run(d, '--dump', 'pin', '--fields', 'stance,e')

@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "detect.h"
+#include "logbundle.h"
 
 namespace edvr::installer {
 namespace {
@@ -103,6 +104,7 @@ LaunchRoute routeFor(const std::wstring& source, const std::wstring& gameDir, bo
 
 RouteOps realRouteOps() {
     RouteOps ops;
+    ops.underWine = runningUnderWine();
     ops.openUri = [](const std::wstring& uri) {
         return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", uri.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
     };
@@ -133,9 +135,16 @@ bool startRoute(const LaunchRoute& route, const RouteOps& ops, bool elevated, st
     if (elevated) return fail(elevatedRefusal());
     switch (route.kind) {
         case RouteKind::Steam:
-        case RouteKind::Epic:
-            if (!ops.openUri || !ops.openUri(route.uri)) return fail("Windows would not open the store's launch address.");
+        case RouteKind::Epic: {
+            // Proton consumes rungameid for its own SteamGameId as a restart request, even
+            // without a restart supervisor (runinprefix). The documented run URI is forwarded.
+            // ValveSoftware/Proton, steam_helper/steam.c: steam_command_handler;
+            // https://partner.steamgames.com/doc/sdk/api#initialization_and_shutdown
+            const std::wstring uri = route.kind == RouteKind::Steam && ops.underWine
+                ? std::wstring(L"steam://run/") + kSteamAppId : route.uri;
+            if (!ops.openUri || !ops.openUri(uri)) return fail("Windows would not open the store's launch address.");
             return true;
+        }
         case RouteKind::Frontier:
             if (!ops.spawn || !ops.spawn(route.exe, route.args, route.workDir)) return fail("EDLaunch.exe could not be started.");
             return true;

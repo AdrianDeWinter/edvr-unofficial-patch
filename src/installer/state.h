@@ -81,6 +81,7 @@ struct InstallState {
     std::string  scope;          // both | vr | flat: what the install covers; read from profile when a record has none
     std::string  descriptorSha;
     std::string  components; // installed component inventory, comma separated
+    std::wstring storeSource; // the confirmed store, used by runtime settings and seat mirrors
 
     // Which Openvr folder was used, RELATIVE to the game folder (Openvr\win64
     // or Openvr). Relative because the reader trims a value at whitespace
