@@ -77,10 +77,12 @@ a { color: inherit; }
   left: 50%;
   top: calc(var(--horizon, 83vh) + 20px);
   width: calc(var(--r) * 2);
-  height: calc(var(--r) * 2);
+  /* A semicircle on top of a long dark body, so the night side reaches the foot of
+     even a long phone page; .horizon clips the rest. */
+  height: calc(var(--r) + 1000vh);
   transform: translateX(-50%);
-  border-radius: 50%;
-  background: radial-gradient(circle at 50% 0%, #1b120c 0%, #0a0a10 7%, #05060a 30%);
+  border-radius: var(--r) var(--r) 0 0;
+  background: radial-gradient(circle calc(var(--r) * 2.2) at 50% 0%, #1b120c 0%, #0a0a10 7%, #05060a 30%);
   box-shadow:
     0 0 90px 6px rgba(255, 112, 30, 0.22),
     0 0 260px 30px rgba(255, 90, 20, 0.10),
@@ -377,6 +379,101 @@ section.block { padding: 56px 0 8px; }
 
 .card .n { position: absolute; top: 22px; right: 22px; font: 500 12px/1 var(--mono); color: rgba(255, 255, 255, 0.22); letter-spacing: 0.1em; }
 
+/* Features */
+.intro { margin: -6px 0 22px; max-width: 720px; color: var(--ink-2); font-size: 16px; text-wrap: pretty; }
+
+.fgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+
+.feat {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.feat:hover { border-color: rgba(255, 122, 26, 0.35); transform: translateY(-2px); }
+
+.feat-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+
+.feat-head .ico {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  color: var(--accent-hi);
+  background: rgba(255, 122, 26, 0.10);
+  border: 1px solid rgba(255, 122, 26, 0.25);
+}
+
+.feat-head .ico svg { width: 19px; height: 19px; }
+
+.feat h3 { margin: 0; font-size: 16.5px; font-weight: 650; line-height: 1.25; letter-spacing: -0.005em; }
+
+.feat p { margin: 0; color: var(--ink-2); font-size: 14.5px; line-height: 1.55; }
+
+.tags { display: flex; gap: 6px; margin-top: auto; padding-top: 14px; }
+
+.tag {
+  padding: 4px 7px;
+  border-radius: 5px;
+  font: 600 10.5px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.tag.vr { color: var(--cool); background: rgba(108, 196, 255, 0.10); border: 1px solid rgba(108, 196, 255, 0.28); }
+
+.tag.flat { color: #c9cfdb; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.16); }
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+.facts div { padding: 18px 20px; font-size: 14.5px; line-height: 1.55; color: var(--ink-2); }
+
+.facts div + div { border-left: 1px solid var(--line); }
+
+.facts b {
+  display: block;
+  margin-bottom: 6px;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent-hi);
+}
+
+.more { margin: 18px 0 0; font-size: 15px; }
+
+.more a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(255, 160, 77, 0.5);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.more a:hover { color: var(--accent-hi); border-color: var(--accent-hi); }
+
+.more a:focus-visible { outline: 2px solid var(--cool); outline-offset: 3px; }
+
+@media (max-width: 760px) {
+  .facts { grid-template-columns: 1fr; }
+  .facts div + div { border-left: 0; border-top: 1px solid var(--line); }
+}
+
 /* First run */
 .steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 12px; }
 
@@ -445,7 +542,7 @@ footer a:hover { color: var(--accent-hi); }
 @media (prefers-reduced-motion: reduce) {
   .rise { opacity: 1; transform: none; animation: none; }
   .chip i { animation: none; }
-  .btn, .card, .btn.primary::after { transition: none; }
+  .btn, .card, .feat, .btn.primary::after { transition: none; }
 }
 
 @media (max-width: 640px) {
@@ -530,6 +627,85 @@ footer a:hover { color: var(--accent-hi); }
           <li><a id="sums-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest/download/SHA256SUMS">SHA256SUMS</a></li>
         </ul>
       </div>
+    </section>
+
+    <section class="block" aria-labelledby="features">
+      <h2 class="label" id="features">What ED-UP does</h2>
+      <p class="intro">Most of the fixes share one cause: something right on a monitor is wrong in a headset, because it is drawn once for two eyes, pinned to your face, or sized for a screen you are not looking at.</p>
+      <div class="fgrid">
+        <article class="feat">
+          <div class="feat-head">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/></svg></div>
+            <h3>DLSS, FSR and XeSS</h3>
+          </div>
+          <p>Elite has no temporal anti-aliasing, so edges shimmer whenever you move. Pick DLSS on an RTX card, or FSR or XeSS on any GPU, to steady them. Render below full resolution and the upscaler wins back frame time.</p>
+          <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
+        </article>
+        <article class="feat">
+          <div class="feat-head">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg></div>
+            <h3>A sharp interface</h3>
+          </div>
+          <p>Menus, panels, the HUD and holograms are drawn in a layer of their own and laid over the picture after the upscaler, so their text never smears. Weapons fire stays crisp too.</p>
+          <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
+        </article>
+        <article class="feat">
+          <div class="feat-head">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7.5" r="3.5"/><path d="M5 21c0-3.9 3.1-7 7-7s7 3.1 7 7"/></svg></div>
+            <h3>Native on-foot VR</h3>
+          </div>
+          <p>On foot, Elite shows both eyes the same flat image. ED-UP draws the world in stereo from your commander's head, with your body beneath you, look to aim if you want it, and scopes that magnify.</p>
+          <div class="tags"><span class="tag vr">VR</span></div>
+        </article>
+        <article class="feat">
+          <div class="feat-head">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8.5" cy="12" r="5.5"/><circle cx="15.5" cy="12" r="5.5"/></svg></div>
+            <h3>The two eyes agree</h3>
+          </div>
+          <p>Fixed: one eye darker than the other near bright lights, the planet you are scanning going black in one eye, the FSS showing each eye a different scan, and the RemLok helmet's lines along your nose.</p>
+          <div class="tags"><span class="tag vr">VR</span></div>
+        </article>
+        <article class="feat">
+          <div class="feat-head">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg></div>
+            <h3>Anchored in the world</h3>
+          </div>
+          <p>The jump flash, the sun's glare, smoke and steam, the loading screen's ship and the night-vision pulse stop riding along with your head. Over a planet, terrain no longer goes missing at the edges of view.</p>
+          <div class="tags"><span class="tag vr">VR</span></div>
+        </article>
+        <article class="feat">
+          <div class="feat-head">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14"/><path d="M15 6v14"/></svg></div>
+            <h3>Galaxy and System Maps</h3>
+          </div>
+          <p>The Galaxy Map holds the headset's frame rate without smearing, and its labels stay put as you turn your head. On both maps the cursor selects what it points at.</p>
+          <div class="tags"><span class="tag vr">VR</span></div>
+        </article>
+        <article class="feat">
+          <div class="feat-head">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 17a9 9 0 1 1 17 0"/><path d="M12 14l4.5-4.5"/><circle cx="12" cy="14" r="1.2"/></svg></div>
+            <h3>Faster stations</h3>
+          </div>
+          <p>In a sealed hangar, or on foot in a station's concourse, ED-UP skips drawing what you cannot see. The windows show a picture of the view until you walk up to one. On by default.</p>
+          <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
+        </article>
+        <article class="feat">
+          <div class="feat-head">
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9"/><path d="M17 7h3"/><circle cx="15" cy="7" r="2"/><path d="M4 17h3"/><path d="M11 17h9"/><circle cx="9" cy="17" r="2"/></svg></div>
+            <h3>Visual options</h3>
+          </div>
+          <p>World scale in VR, a stronger glow around stars, the older Horizons cockpit glass, and switches to drop the hyperspace streaks and space dust. Each starts at the game's own look.</p>
+          <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
+        </article>
+      </div>
+
+      <div class="facts">
+        <div><b>Settings in game</b>Press F8 for ED-UP's menu, a panel anchored in the world in VR. Most changes take effect within a second.</div>
+        <div><b>Your files</b>ED-UP changes the running game in memory only, and the installer backs up every file it replaces.</div>
+        <div><b>Game updates</b>After an Elite update, a fix that cannot find what it needs stands down on its own, and the log names it.</div>
+      </div>
+
+      <p class="more"><a href="https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md">Every feature and fix, with its setting and default &rarr;</a></p>
     </section>
 
     <section class="block" aria-labelledby="what">
