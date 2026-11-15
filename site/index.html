@@ -1059,23 +1059,39 @@ footer a:hover { color: var(--accent-hi); }
     }
   }
 
-  try {
-    var hit = JSON.parse(sessionStorage.getItem(KEY) || 'null');
-    if (hit && Date.now() - hit.t < 10 * 60 * 1000) { apply(hit.d); return; }
-  } catch (e) {}
+  // An answer is kept for ten minutes per tab, so reloads don't use up GitHub's limit of 60 API
+  // calls an hour per address. 'checked' is when this tab last had an answer or last asked.
+  var TTL = 10 * 60 * 1000;
+  var checked = 0;
 
-  if (!window.fetch) return;
-  fetch(API, { headers: { Accept: 'application/vnd.github+json' } })
-    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(function (j) {
-      var d = {
-        tag: j.tag_name, date: j.published_at, url: j.html_url,
-        assets: (j.assets || []).map(function (a) { return { n: a.name, s: a.size, u: a.browser_download_url }; })
-      };
-      try { sessionStorage.setItem(KEY, JSON.stringify({ t: Date.now(), d: d })); } catch (e) {}
-      apply(d);
-    })
-    .catch(function () {});
+  function check() {
+    try {
+      var hit = JSON.parse(sessionStorage.getItem(KEY) || 'null');
+      if (hit && Date.now() - hit.t < TTL) { checked = hit.t; apply(hit.d); return; }
+    } catch (e) {}
+
+    if (!window.fetch) return;
+    checked = Date.now();
+    fetch(API, { headers: { Accept: 'application/vnd.github+json' } })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (j) {
+        var d = {
+          tag: j.tag_name, date: j.published_at, url: j.html_url,
+          assets: (j.assets || []).map(function (a) { return { n: a.name, s: a.size, u: a.browser_download_url }; })
+        };
+        try { sessionStorage.setItem(KEY, JSON.stringify({ t: Date.now(), d: d })); } catch (e) {}
+        apply(d);
+      })
+      .catch(function () {});
+  }
+
+  check();
+
+  // A tab left open, or restored by the browser without a reload, asks again when it comes back
+  // into view once its answer is older than ten minutes, so a new release shows up there too.
+  function recheck() { if (Date.now() - checked >= TTL) check(); }
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') recheck(); });
+  window.addEventListener('pageshow', function (e) { if (e.persisted) recheck(); });
 })();
 
 // The Witchspace News video. The page shows a still and links to YouTube; YouTube's player (the
