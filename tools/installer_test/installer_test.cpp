@@ -7726,6 +7726,7 @@ int wmain(int argc, wchar_t** argv) {
     testEpicDetection(scratch);
     testEpicRuntimeMirrors(scratch);
     testRelabelledLegacyMirror(scratch);
+    testLegacyMirrorOwnership(scratch);
     testAtomicWrite(scratch);
     testReplaceScripts(scratch);
     testApplyPatience(scratch);

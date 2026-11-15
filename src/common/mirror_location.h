@@ -15,6 +15,12 @@ inline std::wstring canonicalMirrorSource(const std::wstring& source) {
     return std::wstring();
 }
 
+inline std::wstring recordedMirrorSource(const std::wstring& record) {
+    wchar_t value[64]{};
+    GetPrivateProfileStringW(L"edvr", L"store_source", L"", value, 64, record.c_str());
+    return canonicalMirrorSource(value);
+}
+
 inline std::wstring mirrorFolderName(const std::wstring& gameDir, const std::wstring& source) {
     const size_t slash = gameDir.find_last_of(L"\\/");
     std::wstring name = slash == std::wstring::npos ? gameDir : gameDir.substr(slash + 1);
@@ -52,16 +58,26 @@ inline std::wstring uniqueExistingMirrorDir(const std::wstring& root, const std:
 
 // Store discovery can relabel an older generic-folder install without copying
 // any files. Keep using its mirror in place, including generations and seat
-// memory, only when it is the sole candidate. An existing store mirror owns
-// its name; another store's folder is never adopted for a known source.
+// memory, when its recorded owner matches. An unbound legacy mirror must be
+// the sole candidate. An existing store mirror owns its name; another store's
+// folder is never adopted, including through an unlabelled generic selection.
 // This selection is shared by the installer and runtime and writes nothing.
 inline std::wstring mirrorDirForSource(const std::wstring& root, const std::wstring& gameDir,
                                       const std::wstring& source) {
     const std::wstring exact = root + L"\\" + mirrorFolderName(gameDir, source);
-    if (mirrorDirectoryExists(exact) || canonicalMirrorSource(source).empty()) return exact;
+    const std::wstring requested = canonicalMirrorSource(source);
+    const bool generic = requested == L"Folder you chose";
+    if (requested.empty() || (!generic && mirrorDirectoryExists(exact))) return exact;
     const std::wstring legacy = root + L"\\" + mirrorFolderName(gameDir, L"Folder you chose");
+    if (!mirrorDirectoryExists(legacy)) return exact;
+    const std::wstring owner = recordedMirrorSource(legacy + L"\\state.ini");
+    if (!owner.empty() && owner != L"Folder you chose") {
+        if (owner == requested) return legacy;
+        return generic ? std::wstring() : exact;
+    }
     const std::wstring unique = uniqueExistingMirrorDir(root, gameDir);
-    return !unique.empty() && _wcsicmp(unique.c_str(), legacy.c_str()) == 0 ? unique : exact;
+    if (!unique.empty() && _wcsicmp(unique.c_str(), legacy.c_str()) == 0) return unique;
+    return generic ? std::wstring() : exact;
 }
 
 // The menu and seat memory use the store the installer recorded, even when
@@ -72,12 +88,11 @@ inline std::wstring runtimeMirrorDirFor(const std::wstring& localAppData,
     if (localAppData.empty() || gameDir.empty()) return std::wstring();
     const std::wstring root = localAppData + L"\\EDVR";
     const std::wstring record = gameDir + L"\\edvr_install\\state.ini";
-    wchar_t value[64]{};
-    GetPrivateProfileStringW(L"edvr", L"store_source", L"", value, 64, record.c_str());
-    const std::wstring recordedSource = canonicalMirrorSource(value);
+    const std::wstring recordedSource = recordedMirrorSource(record);
 
     auto exactDir = [&](const std::wstring& source) {
         const std::wstring path = mirrorDirForSource(root, gameDir, source);
+        if (path.empty()) return std::wstring();
         if (mirrorDirectoryExists(path)) return path;
         if (!create) return std::wstring();
         if (!mirrorDirectoryExists(root)) CreateDirectoryW(root.c_str(), nullptr);

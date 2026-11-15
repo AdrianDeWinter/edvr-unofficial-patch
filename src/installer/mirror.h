@@ -39,7 +39,9 @@ std::wstring defaultMirrorRoot();
 // one of those installed is not a hypothetical -- it is what this feature was
 // written on. The store name is what keeps two installs from overwriting one
 // mirror. If that store's folder is absent, an older generic-folder mirror is
-// reused only when it is the sole matching folder; no file is moved or written.
+// reused when its recorded owner matches, or when it is unbound and the sole
+// matching folder. A generic selection conflicting with a recorded owner
+// returns empty. No file is moved or written.
 std::wstring mirrorDirFor(const GameInstall& game,
                           const std::wstring& root = defaultMirrorRoot());
 

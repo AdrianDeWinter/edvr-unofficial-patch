@@ -248,6 +248,97 @@ static void testRelabelledLegacyMirror(const std::wstring& scratch) {
     }
 }
 
+static void testLegacyMirrorOwnership(const std::wstring& scratch) {
+    printf("\nan adopted generic mirror retains its recorded store ownership\n");
+    for (const wchar_t* source : {L"Steam", L"Epic"}) {
+        const std::wstring root = joinPath(scratch, std::wstring(L"claimed-mirror-") + source);
+        removeTree(root);
+        const std::wstring local = joinPath(root, L"AppData");
+        const std::wstring mirrorRoot = joinPath(local, L"EDVR");
+        GameInstall first;
+        first.source = source;
+        first.dir = joinPath(root, first.source == L"Steam" ? L"first\\steamapps\\common\\product"
+                                                            : L"first\\Epic Games\\product");
+        GameInstall second;
+        second.dir = joinPath(root, L"second\\Products\\product");
+        second.source = first.source == L"Steam" ? L"Epic" : L"Steam";
+        const std::wstring legacy = joinPath(mirrorRoot, L"product-folder-you-chose");
+        const std::wstring secondCanonical = joinPath(mirrorRoot, mirrorFolderName(second.dir, second.source));
+        makeTree(stateDirPath(first.dir));
+        makeTree(stateDirPath(second.dir));
+        makeTree(local);
+        InstallState state;
+        state.edvrVersion = "v1";
+        state.storeSource = L"Folder you chose";
+        check(writeAll(statePath(first.dir), serializeState(state)) &&
+              writeAll(joinPath(first.dir, L"edvr.ini"), "[fix]\r\nshare_exposure = 0\r\n") &&
+              writeAll(joinPath(first.dir, L"edvr-flat.ini"), "[fix]\r\ntemporal_aa = off\r\n") &&
+              updateMirror(first.dir, L"", legacy).ok,
+              "a genuinely generic legacy record and both settings files are mirrored");
+        state.storeSource = first.source;
+        check(writeFileAtomic(statePath(first.dir), serializeState(state)) &&
+              mirrorDirFor(first, mirrorRoot) == legacy &&
+              updateMirror(first.dir, L"", mirrorDirFor(first, mirrorRoot)).ok &&
+              parseState(readAll(joinPath(legacy, L"state.ini"))).storeSource == first.source,
+              "the first store adopts the generic mirror and a normal update records its canonical ownership there");
+        state.storeSource = second.source;
+        check(writeAll(statePath(second.dir), serializeState(state)),
+              "the second install has its own canonical store identity");
+        const std::string before = mirrorFixtureTree(root);
+        check(mirrorDirFor(second, mirrorRoot) == secondCanonical &&
+              runtimeMirrorDirFor(local, second.dir, false).empty() &&
+              edvr::openxr::seatMirrorDirFor(local, second.dir, false).empty() &&
+              mirrorFixtureTree(root) == before && !dirExists(secondCanonical),
+              "the second store refuses another store's claimed generic mirror and read-only lookup writes nothing");
+        check(mirrorDirFor(first, mirrorRoot) == legacy && runtimeMirrorDirFor(local, first.dir, false) == legacy,
+              "the first store keeps access to its claimed generic mirror");
+        check(writeAll(joinPath(second.dir, L"edvr.ini"), "[fix]\r\nshare_exposure = 1\r\n") &&
+              updateMirror(second.dir, L"", mirrorDirFor(second, mirrorRoot)).ok &&
+              parseState(readAll(joinPath(secondCanonical, L"state.ini"))).storeSource == second.source,
+              "the second store creates and updates its separate canonical mirror");
+        check(mirrorDirFor(first, mirrorRoot) == legacy && runtimeMirrorDirFor(local, first.dir, false) == legacy &&
+              edvr::openxr::seatMirrorDirFor(local, first.dir, false) == legacy,
+              "matching recorded ownership keeps the first generic mirror accessible beside the other canonical store");
+
+        GameInstall unlabelled;
+        unlabelled.dir = joinPath(root, L"chosen\\Products\\product");
+        unlabelled.source = L"Folder you chose";
+        makeTree(stateDirPath(unlabelled.dir));
+        state.storeSource = L"Folder you chose";
+        writeAll(statePath(unlabelled.dir), serializeState(state));
+        const std::string beforeRefusal = mirrorFixtureTree(root);
+        const MirrorInfo empty = readMirror(L"");
+        std::vector<std::string> emptyNotes;
+        check(!empty.hasIni && !empty.hasFlatIni && settingsToRestore(unlabelled.dir, empty, "both").empty() &&
+              !restoreFromMirror(unlabelled.dir, empty, "both", &emptyNotes) &&
+              !updateMirror(unlabelled.dir, L"", L"").ok && !updateMirrorIni(unlabelled.dir, L"").ok &&
+              mirrorFixtureTree(root) == beforeRefusal,
+              "installer mirror readers, restore and both writers safely refuse an empty mirror path without writes");
+        check(mirrorDirFor(unlabelled, mirrorRoot).empty() &&
+              runtimeMirrorDirFor(local, unlabelled.dir, false).empty() &&
+              runtimeMirrorDirFor(local, unlabelled.dir, true).empty() &&
+              edvr::openxr::seatMirrorDirFor(local, unlabelled.dir, false).empty() &&
+              mirrorFixtureTree(root) == beforeRefusal,
+              "Folder you chose cannot bypass a claimed generic mirror's owner through an exact-name match");
+
+        removeTree(first.dir);
+        makeTree(first.dir);
+        writeAll(joinPath(first.dir, L"EliteDangerous64.exe"), "fixture");
+        std::vector<std::string> notes;
+        check(!fileExists(statePath(first.dir)) && runtimeMirrorDirFor(local, first.dir, false) == legacy &&
+              restoreFromMirror(first.dir, readMirror(mirrorDirFor(first, mirrorRoot)), "both", &notes),
+              "the first store restores from its claimed generic mirror after a live state and settings wipe");
+        expectEq(readAll(joinPath(first.dir, L"edvr.ini")), "[fix]\r\nshare_exposure = 0\r\n",
+                 "the owning store recovers the exact VR settings");
+        expectEq(readAll(joinPath(first.dir, L"edvr-flat.ini")), "[fix]\r\ntemporal_aa = off\r\n",
+                 "the owning store recovers the exact flat settings");
+        check(readState(first.dir).storeSource == first.source &&
+              runtimeMirrorDirFor(local, first.dir, false) == legacy,
+              "the recovered canonical record still resolves to its owning generic mirror");
+        removeTree(root);
+    }
+}
+
 static void testEpicRuntimeMirrors(const std::wstring& scratch) {
     printf("\nthe runtime and repair share the recorded Epic mirror\n");
     const std::wstring root = joinPath(scratch, L"epic-runtime-mirror");

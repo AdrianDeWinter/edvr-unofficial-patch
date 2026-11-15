@@ -26,9 +26,9 @@ This file is why it does what it does. Using it is one paragraph in the
 - **Windows Epic folders:** Browse and `--dir` retain the store recorded in Epic's
   manifests. The install record keeps that store so Play, runtime settings
   saves and recovery agree even when older mirror copies remain.
-- **Older folder mirrors:** The installer and runtime reuse a sole generic
-  folder mirror when the store-specific mirror is absent, preserving settings
-  and seat memory through a store relabel and a game-folder wipe.
+- **Older folder mirrors:** The installer and runtime reuse a generic mirror
+  owned by the same store, or an unbound generic mirror that is the sole
+  candidate, preserving settings and seat memory through relabelling and wipes.
 - **Linux Epic installer:** The native Epic Launcher Preview,
   Heroic/Legendary, Lutris and existing Wine Epic records identify the game
   and its existing prefix. The wrapper uses the recorded runner and passes
@@ -119,13 +119,13 @@ not reapply the patch. A game build that the patch does not support still
 needs a compatible ED-UP release.
 
 Older Browse or `--dir` installs may have saved settings under
-`<product>-folder-you-chose`. When the store-specific mirror is absent and
-that generic folder is the sole matching mirror, the installer and runtime
-keep using it in place. Its settings, generations and seat memory remain
-available even if the install record is relabelled before a game update wipes
-the game folder. An existing store-specific mirror takes precedence. Multiple
-candidates or a foreign-store-only mirror are not adopted for a known store;
-confirm ownership before recovering those copies manually.
+`<product>-folder-you-chose`. When the store-specific mirror is absent, the
+installer and runtime reuse a generic mirror whose record names the same
+store. An unbound generic mirror is reused only when it is the sole candidate.
+Its settings, generations and seat memory remain available even if the install
+record is relabelled before a game update wipes the game folder. An existing
+store-specific mirror takes precedence. Conflicting ownership and ambiguous
+unbound candidates require manual ownership confirmation before recovery.
 
 The `Openvr` folder is found by **file, not by name**: `Openvr\win64`, then
 `Openvr`, then the game folder, and whichever holds `openvr_api.dll` *or*
