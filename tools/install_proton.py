@@ -424,6 +424,9 @@ def require_default_flatpak_installations(environ):
     recovery = "; pass --proton with an installed host runner"
     if not config_root.is_absolute():
         raise ValueError("Flatpak installation configuration root must be absolute" + recovery)
+    # GIO normalizes '..' lexically before following links, unlike resolve().
+    if ".." in config_root.parts:
+        raise ValueError("Flatpak installation configuration root has ambiguous parent navigation" + recovery)
     try:
         # An absent optional config tree means no extra installations. Walk
         # missing components to distinguish that from a dangling symlink or
@@ -1551,7 +1554,7 @@ def steam_context_self_test(only=None):
                  "flatpak-local-full", "flatpak-local-sub", "flatpak-parent-app", "flatpak-parent-usr",
                  "flatpak-config", "flatpak-config-link", "flatpak-config-dangling", "flatpak-config-relative",
                  "flatpak-config-file", "flatpak-config-installations-file", "flatpak-config-unreadable",
-                 "flatpak-config-missing"):
+                 "flatpak-config-missing", "flatpak-config-parent"):
         if only is not None and case != only:
             continue
         with TemporaryDirectory() as tmp:
@@ -1700,7 +1703,18 @@ def steam_context_self_test(only=None):
                     if case.startswith("flatpak-config"):
                         from unittest.mock import patch
 
-                        if case in ("flatpak-config", "flatpak-config-link"):
+                        if case == "flatpak-config-parent":
+                            # GIO collapses '..' lexically, while resolve() follows
+                            # the symlink first. The lexical config has an extra
+                            # installation; the physical sibling is empty.
+                            (root / "elsewhere/child").mkdir(parents=True)
+                            (root / "config-alias").symlink_to(root / "elsewhere/child", target_is_directory=True)
+                            (root / "elsewhere/flatpak-config").mkdir()
+                            (config_root / "installations.d").mkdir()
+                            (config_root / "installations.d/named.conf").write_text(
+                                '[Installation "extra"]\nPath=' + str(root / "extra-system") + "\n", encoding="utf-8")
+                            env["FLATPAK_CONFIG_DIR"] = str(root / "config-alias/../flatpak-config")
+                        elif case in ("flatpak-config", "flatpak-config-link"):
                             configs = config_root / "installations.d"
                             configs.mkdir()
                             extra = root / "extra.conf"
@@ -1732,6 +1746,8 @@ def steam_context_self_test(only=None):
                                 error = refuses("Flatpak installation configuration")
                         else:
                             error = refuses("Flatpak installation configuration")
+                        if case == "flatpak-config-relative":
+                            assert "root must be absolute" in error, error
                         assert "--proton" in error and "host runner" in error
                         assert snapshot() == before, "refused Steam configuration wrote files"
                         # A host runner is an explicit recovery from unsupported sandbox configuration.
