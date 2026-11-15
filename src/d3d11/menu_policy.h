@@ -22,7 +22,6 @@ struct MenuProfilePolicy {
   bool adoptGameKeys = false;                      // Elite's own panel keys are adopted as menu keys
   MenuNoticePlacement noticePlacement = MenuNoticePlacement::ScreenCorner;
   bool keyboardAlwaysPrivate = false;              // menu.keyboard is not read: the panel always takes the keyboard
-  bool noticesAlwaysOn = false;                    // notices do not wait for menu.toasts (flat cannot read that key yet)
   bool readsMenuKeys = false;                      // the [menu] keys are read (flat reads none of them)
   bool hotkeysPage = false;                        // the Hotkeys page: a row can be waiting for a key to capture
   bool padNavigation = false;                      // the panel is navigated by a pad
@@ -37,7 +36,6 @@ inline MenuProfilePolicy menuPolicyFor(bool flatProfile) {
     p.sizing = MenuSizing::FixedPx;
     p.noticePlacement = MenuNoticePlacement::ScreenCorner;
     p.keyboardAlwaysPrivate = true;
-    p.noticesAlwaysOn = true;
     p.padNavigation = true;
     p.closesOnFocusLoss = true;
     p.primesHotkeysOnClose = true;

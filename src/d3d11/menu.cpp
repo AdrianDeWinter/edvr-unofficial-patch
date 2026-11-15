@@ -52,6 +52,7 @@
 #include "menu_panel.h"
 #include "menu_policy.h"
 #include "menu_pages.h"
+#include "menu_restart.h"
 #include "native_menu.h"
 #include "native_render_labels.h"
 #include "vr_runtime.h"
@@ -204,6 +205,7 @@ struct State {
     bool privateWanted = true;
     bool developer = false;
     bool toasts = true;
+    bool noticesOn = true;   // menu.toasts, read in both profiles: whether menuShowNotice shows a notice (VR's toast, flat's screen card)
     float distance = 1.4f;
     float curve = 0.2f;
     float textDeg = 1.1f;
@@ -297,7 +299,8 @@ struct State {
     bool    aliasesLiveShown = false;     // what the last raster's legend assumed; a change marks contentDirty
     bool    sharedWarnShown = false;      // whether the last raster carried KEYS SHARED WITH THE GAME; same
     bool    aliasHeldBackNoted = false;   // the held-back line, once per session
-    int     footerLogged = 0;             // the footer's measured widths, at most four per session
+    bool    flatFooterShortNoted = false; // the flat footer fell back to the short restart wording (logged once)
+    int     footerLogged = 0;            // the footer's measured widths, at most four per session
     std::string footerLoggedText;         // ...and the last footer they were logged for
 
     // Typing a value (a number, or a free string): the row being typed
@@ -579,6 +582,30 @@ const char* xessFgRestartHint() {
     }
     return "Takes effect at the next game start.";
 }
+
+// The rows that only sometimes need a restart (menu_restart.h: the table and the rule), judged from the state the menu shows now and the runtime's own
+// answers. Judged afresh each time rather than stored: the bridge's state and the shown values are what the answer depends on, and a stored flag would
+// go stale when either moves. The launch value of the Anti-aliasing row is its snapshot (takeSnapshot).
+RestartState rowConditionalState(int def) {
+    const MenuRowDef& d = kMenuRows[def];
+    if (!conditionalRestartFor(d.section, d.key)) return RestartState::NotPending;
+    RestartInput in;
+    in.flatProfile = runtimeFlatProfile();
+    in.aaIsXess = flatAntiAliasingIsXess();
+    in.fgOn = xessFgToggleOn();
+    in.bridged = xessFgBridged();
+    in.problemPresent = xessFgProblem() != nullptr;
+    for (int i = 0; i < kRowDefCount; ++i) {
+        if (strcmp(kMenuRows[i].section, "fix") == 0 && strcmp(kMenuRows[i].key, "temporal_aa") == 0) {
+            in.aaChangedSinceLaunch = g_rows[i].value != g_rows[i].snapshot;
+            break;
+        }
+    }
+    return conditionalRestartState(in, d.section, d.key);
+}
+
+// A row waits for a restart: its own `restart` setting changed since launch, or its condition says so.
+bool rowWaiting(int def) { return g_rows[def].pending || rowConditionalState(def) == RestartState::PendingRestart; }
 
 
 // visual.star_glow (the Star glow row). It strengthens the halo of Elite's own bloom, so with Elite's Bloom option off it changes nothing, and the
@@ -1934,7 +1961,8 @@ void refreshRowValues() {
 void takeSnapshot() {
     for (int i = 0; i < kRowDefCount; ++i) {
         const MenuRowDef& d = kMenuRows[i];
-        if (d.applies == 2) g_rows[i].snapshot = g_rows[i].value;
+        // A row of the conditional-restart table needs its launch value too (menu_restart.h).
+        if (d.applies == 2 || conditionalRestartFor(d.section, d.key)) g_rows[i].snapshot = g_rows[i].value;
         g_rows[i].pending = false;
     }
     g_s.snapshotTaken = true;
@@ -1942,7 +1970,7 @@ void takeSnapshot() {
 
 int pendingRestartCount() {
     int n = 0;
-    for (int i = 0; i < kRowDefCount; ++i) n += g_rows[i].pending ? 1 : 0;
+    for (int i = 0; i < kRowDefCount; ++i) n += rowWaiting(i) ? 1 : 0;
     return n;
 }
 
@@ -2134,7 +2162,7 @@ void buildStatus(MenuContent& c) {
         } else {
             std::string names;
             for (int i = 0; i < kRowDefCount && names.size() < 50; ++i) {
-                if (!g_rows[i].pending) continue;
+                if (!rowWaiting(i)) continue;
                 if (!names.empty()) names += ", ";
                 names += kMenuRows[i].key;
             }
@@ -2520,6 +2548,8 @@ void buildContent(MenuContent& c) {
             }
             const MenuRowDef& d = kMenuRows[e.def];
             const RowState& r = g_rows[e.def];
+            const bool waiting = rowWaiting(e.def);
+            const bool stopped = !waiting && rowConditionalState(e.def) == RestartState::Stopped;
             const bool editingThis = (s.editEntry == i);
             const bool capturingThis = (s.captureEntry == i);
             const bool hotkeyRow = d.kind == MenuKind::Hotkey;
@@ -2564,13 +2594,16 @@ void buildContent(MenuContent& c) {
                 // What has been typed, with a caret. The raster shows a
                 // typed row in the value colour whatever its kind.
                 v = s.editBuf + "_";
-            } else if (r.pending) {
+            } else if (waiting) {
                 // The resolution preview already describes the selected
                 // after-restart value.  The pending badge supplies the same
                 // timing cue as every other restart row, while keeping the
-                // per-eye dimensions readable.
-                if (!openxrScaleRow) v = displayValue(d, r.snapshot) + " -> " + v;
+                // per-eye dimensions readable. A conditional row (menu_restart.h)
+                // whose value is its launch value shows no arrow: only the badge.
+                if (!openxrScaleRow && r.value != r.snapshot) v = displayValue(d, r.snapshot) + " -> " + v;
                 l.badge = kBadgePending;
+            } else if (stopped) {
+                l.badge = kBadgeStopped;   // the value stays as set; the highlighted row's hint says why (xessFgRestartHint)
             } else if (d.applies == 2) {
                 l.badge = kBadgeRestart;
             } else if (d.applies == 0) {
@@ -2590,7 +2623,7 @@ void buildContent(MenuContent& c) {
             // side is "leave the game alone". The installer's own rule.
             // A row with a change waiting for a restart keeps its words,
             // because a switch cannot show two values at once.
-            if (!editingThis && !r.pending) {
+            if (!editingThis && !waiting && !stopped) {
                 std::string on;
                 if (d.kind == MenuKind::Toggle) {
                     l.toggle = boolOf(r.value, boolOf(d.shipped, false)) ? 2 : 1;
@@ -2861,20 +2894,30 @@ void buildContent(MenuContent& c) {
         return;
     }
     if (runtimeFlatProfile()) {
-        const char* status = "";
-        if (s.lastWrite.compare(0, 7, "FAILED:") == 0) status = " | write failed";
-        else if (s.lastWrite.compare(0, 8, "writing ") == 0) status = " | saving";
-        else if (!s.flatKeysReadyShown) status = " | keyboard gate unavailable";
-        else if (!s.lastWrite.empty()) status = " | saved";
-        if (s.padReady)
-            snprintf(c.footer, sizeof(c.footer), "D-pad move/change  A select  B back\nLB/RB pages  %s close%s",
-                     s.summonName.c_str(), status);
-        else
-            snprintf(c.footer, sizeof(c.footer), "Up/Down row  Left/Right change  Tab page\n%s/Esc close%s",
-                     s.summonName.c_str(), status);
+        FooterWrite write = FooterWrite::None;
+        if (s.lastWrite.compare(0, 7, "FAILED:") == 0) write = FooterWrite::Failed;
+        else if (s.lastWrite.compare(0, 8, "writing ") == 0) write = FooterWrite::Saving;
+        else if (!s.lastWrite.empty()) write = FooterWrite::Saved;
         // The installed version, on every page, drawn at the right end of this same
         // footer line (menu_panel.cpp). Flat only: VR's footer does not carry it.
         snprintf(c.footerTag, sizeof(c.footerTag), "ED-UP %s", EDVR_VERSION_STRING);
+        // The second line is "<key> close | <count waiting for a restart> | saved" and the tag shares it at the right end: the long wording is
+        // measured against the raster's own ruler with the tag and a gap, and the short one (the VR footer's) is used if it would touch the tag.
+        const int linePx = c.cardPx - 2 * (c.capPx * 8 / 10);
+        const int tagPx = menuPanelMeasureLine(c.footerTag, c.capPx) + c.capPx * 2;
+        char status[160], line2[200];
+        for (int shortForm = 0; shortForm < 2; ++shortForm) {
+            menuFlatFooterStatus(write, s.flatKeysReadyShown, pendingN, shortForm != 0, status, sizeof(status));
+            if (s.padReady) snprintf(line2, sizeof(line2), "LB/RB pages  %s close%s", s.summonName.c_str(), status);
+            else snprintf(line2, sizeof(line2), "%s/Esc close%s", s.summonName.c_str(), status);
+            if (shortForm || menuPanelMeasureLine(line2, c.capPx) + tagPx <= linePx) break;
+            if (!s.flatFooterShortNoted) {
+                s.flatFooterShortNoted = true;
+                Log::get().note("menu panel: the flat footer's restart count does not fit beside the version in %d px; using the short wording.", linePx);
+            }
+        }
+        if (s.padReady) snprintf(c.footer, sizeof(c.footer), "D-pad move/change  A select  B back\n%s", line2);
+        else snprintf(c.footer, sizeof(c.footer), "Up/Down row  Left/Right change  Tab page\n%s", line2);
         return;
     }
     {
@@ -2955,10 +2998,21 @@ void enqueueChange(WriteJob& job, bool held = false) {
     const MenuRowDef& d = kMenuRows[job.def];
     job.before = g_rows[job.def].value;
     job.gen = g_rows[job.def].edits.next();
+    std::vector<char> waitedBefore(static_cast<size_t>(kRowDefCount));
+    for (int i = 0; i < kRowDefCount; ++i) waitedBefore[static_cast<size_t>(i)] = rowWaiting(i) ? 1 : 0;
     // Show it now; the worker writes it; the reload that follows confirms it.
     g_rows[job.def].value = job.value;
     if (d.applies == 2) {
         g_rows[job.def].pending = rowPending(d, job.value, g_rows[job.def].snapshot);
+    }
+    // One line for each row this write made wait for a restart (the written row, or another the written value now decides: the Anti-aliasing choice
+    // decides the frame generation rows).
+    for (int i = 0; i < kRowDefCount; ++i) {
+        if (waitedBefore[static_cast<size_t>(i)] || !rowWaiting(i)) continue;
+        const MenuRowDef& w = kMenuRows[i];
+        Log::get().note("menu: %s = %s applies at next game start (%s)", dottedOf(w).c_str(),
+                        g_rows[i].value.empty() ? "(default)" : g_rows[i].value.c_str(),
+                        conditionalRestartFor(w.section, w.key) ? kRestartReasonConditional : kRestartReasonSetting);
     }
     s.menuWroteDotted = job.dotted;
     // An F8 pick of the anti-aliasing mode ends an AA comparison that is showing it off (aa_compare.h): the player's choice wins.
@@ -4502,6 +4556,13 @@ void closeMenu(const char* why) {
     if (menuPolicyFor(runtimeFlatProfile()).primesHotkeysOnClose) hotkeysPrimeAll(); // a held navigation key must not become a hotkey on close
     perfMonitorNoteEvent(kEvMenu);
     Log::get().note("menu: closed (%s).", why);
+    // Changes still waiting for a restart: say so once, now the open menu's badges and footer are gone. Not at a profile switch: the pending state
+    // belongs to the profile being left (menuProfileSwitch retakes the snapshot).
+    if (strcmp(why, "profile switch") != 0) {
+        char notice[64];
+        menuRestartCloseNotice(pendingRestartCount(), notice, sizeof(notice));
+        if (notice[0]) menuShowNotice(notice);
+    }
     if (s.aimPromptUp) aimPromptClosed();
 }
 
@@ -4851,9 +4912,10 @@ void menuConfigure(Config& cfg) {
         s.privateWanted = pol.keyboardAlwaysPrivate;
         s.aimMode = 1;
         s.tooltipDelayS = 0.0f;
-        s.toasts = false;      // toasts are the world placement's; the flat notice does not ask for them (noticesAlwaysOn)
+        s.toasts = false;      // toasts are the world placement's; the flat notice follows s.noticesOn
         s.overlay = false;
     }
+    s.noticesOn = cfg.getBool("menu.toasts", true);   // flat-listed (flat_profile_keys.h); notices follow it in both profiles
     inputGateConfigure(cfg);
     if (!s.configured) {
         s.configured = true;
@@ -4901,8 +4963,8 @@ void menuShowNotice(const char* text) {
         return;
     }
     const MenuProfilePolicy pol = menuPolicyFor(runtimeFlatProfile());
-    // The flat profile shows its notices whatever menu.toasts says: it cannot read that key yet (it reads as off), and its notices never depended on it.
-    if (!pol.noticesAlwaysOn && !s.toasts) {
+    // Both profiles' notices follow menu.toasts (flat reads it since the restart-indication step; the shipped default is on).
+    if (!s.noticesOn) {
         Log::get().note("menu: notice \"%s\" not queued: menu.toasts is off.", text);
         return;
     }

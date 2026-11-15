@@ -5,7 +5,9 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include "../../src/common/flat_profile_keys.h"
 #include "../../src/d3d11/flat_notice_queue.h"
+#include "../../src/d3d11/menu_restart.h"
 #include "../../src/d3d11/menu_pages.h"
 #include "../../src/d3d11/menu_policy.h"
 
@@ -25,8 +27,8 @@ void policyCases() {
     check(flat.sizing == MenuSizing::FixedPx && vr.sizing == MenuSizing::HeadsetPpd, "flat is a fixed pixel card, VR is sized from the headset's pixels per degree");
     check(flat.noticePlacement == MenuNoticePlacement::ScreenCorner && vr.noticePlacement == MenuNoticePlacement::WorldToast,
           "flat notices go to the screen corner, VR notices are toasts in the world");
-    check(flat.noticesAlwaysOn, "the flat policy keeps notices on: menu.toasts is not readable in flat, and a refused key reads as off");
-    check(!vr.noticesAlwaysOn, "VR notices obey menu.toasts");
+    check(edvr::flatProfileReadsKey("menu.toasts"), "flat reads menu.toasts, so its notices follow it like VR's toasts");
+    check(!edvr::flatProfileReadsKey("menu.toastz"), "the flat allow-list is exact: a misspelt toasts key is not read");
     check(flat.keyboardAlwaysPrivate && !vr.keyboardAlwaysPrivate, "flat always takes the keyboard; VR reads menu.keyboard");
     check(!flat.fade && vr.fade, "only the VR panel fades");
     check(!flat.headAim && vr.headAim, "only the VR panel aims with the head");
@@ -204,6 +206,101 @@ void pageCases() {
     check(posts == 1, "only Native on foot has a post step");
 }
 
+// The conditional-restart table (menu_restart.h): a truth table over the inputs, row by row, with the outcome named for each.
+RestartInput base() {
+    RestartInput in;
+    in.flatProfile = true;
+    in.aaIsXess = true;
+    in.fgOn = true;
+    in.bridged = false;
+    in.problemPresent = false;
+    in.aaChangedSinceLaunch = false;
+    return in;
+}
+const char* const kToggle = "xess_frame_generation";
+const char* const kFrames = "xess_generated_frames";
+const char* const kAa = "temporal_aa";
+
+void restartCases() {
+    using S = RestartState;
+    auto st = [](const RestartInput& in, const char* key) { return conditionalRestartState(in, "fix", key); };
+    check(sizeof(kConditionalRestarts) / sizeof(kConditionalRestarts[0]) == 3, "the table names three rows: the FG toggle, the FG frames, Anti-aliasing");
+    check(conditionalRestartFor("fix", kToggle) && conditionalRestartFor("fix", kFrames) && conditionalRestartFor("fix", kAa), "all three rows are in the table");
+    check(!conditionalRestartFor("fix", "ui_quality") && !conditionalRestartFor(nullptr, kAa) && !conditionalRestartFor("fix", nullptr), "any other row, and a null name, is not in it");
+
+    // FG on, XeSS-SR now, no bridge, no problem: the bridge can only be made at the next game start.
+    RestartInput in = base();
+    check(st(in, kToggle) == S::PendingRestart, "FG on, XeSS-SR, no bridge: the toggle waits for a restart");
+    check(st(in, kFrames) == S::PendingRestart, "FG on, XeSS-SR, no bridge: the frames row waits for a restart");
+    check(st(in, kAa) == S::NotPending, "...and Anti-aliasing does not, while its value is the launch value");
+    in.aaChangedSinceLaunch = true;
+    check(st(in, kAa) == S::PendingRestart, "...but does once the choice differs from the launch value: it is the change that needs the bridge");
+    check(st(in, kToggle) == S::PendingRestart && st(in, kFrames) == S::PendingRestart, "an AA change leaves the FG rows waiting");
+    // Bridged: live.
+    in = base(); in.bridged = true; in.aaChangedSinceLaunch = true;
+    check(st(in, kToggle) == S::NotPending && st(in, kFrames) == S::NotPending && st(in, kAa) == S::NotPending, "bridged: nothing waits, however AA changed");
+    // FG off: nothing needs the bridge.
+    in = base(); in.fgOn = false; in.aaChangedSinceLaunch = true;
+    check(st(in, kToggle) == S::NotPending && st(in, kFrames) == S::NotPending && st(in, kAa) == S::NotPending, "FG off: nothing waits");
+    // AA other than XeSS: the bridge would not be made even after a restart.
+    in = base(); in.aaIsXess = false; in.aaChangedSinceLaunch = true;
+    check(st(in, kToggle) == S::NotPending && st(in, kFrames) == S::NotPending && st(in, kAa) == S::NotPending, "AA is not XeSS-SR: nothing waits (the FG rows are dimmed instead)");
+    // A problem: a restart alone does not fix it.
+    in = base(); in.problemPresent = true;
+    check(st(in, kToggle) == S::Stopped && st(in, kFrames) == S::Stopped, "FG on and failed: the FG rows are Stopped, not waiting");
+    check(st(in, kAa) == S::NotPending, "...and Anti-aliasing is neither");
+    in.aaChangedSinceLaunch = true; in.bridged = true;
+    check(st(in, kToggle) == S::Stopped && st(in, kAa) == S::NotPending, "a problem outranks the bridge and an AA change");
+    in = base(); in.problemPresent = true; in.fgOn = false;
+    check(st(in, kToggle) == S::NotPending && st(in, kFrames) == S::NotPending, "a problem with FG off says nothing");
+    // VR: no XeSS Frame Generation.
+    in = base(); in.flatProfile = false; in.aaChangedSinceLaunch = true;
+    check(st(in, kToggle) == S::NotPending && st(in, kFrames) == S::NotPending && st(in, kAa) == S::NotPending, "VR: the rules never apply");
+    in.problemPresent = true;
+    check(st(in, kToggle) == S::NotPending, "VR: not even Stopped");
+    // A row outside the table.
+    in = base(); in.aaChangedSinceLaunch = true;
+    check(conditionalRestartState(in, "fix", "ui_quality") == S::NotPending, "a row outside the table is never judged here");
+
+    // The words.
+    char b[96];
+    menuRestartCountText(0, false, b, sizeof(b));
+    check(b[0] == 0, "no count, no text");
+    menuRestartCountText(1, false, b, sizeof(b));
+    check(std::strcmp(b, "1 change waits for a game restart") == 0, "one change: \"1 change waits for a game restart\"");
+    menuRestartCountText(2, false, b, sizeof(b));
+    check(std::strcmp(b, "2 changes wait for a game restart") == 0, "two changes: \"2 changes wait for a game restart\"");
+    menuRestartCountText(2, true, b, sizeof(b));
+    check(std::strcmp(b, "2 changes at next launch") == 0, "the short form is the VR footer's wording");
+    menuRestartCloseNotice(0, b, sizeof(b));
+    check(b[0] == 0, "no change waiting, no close notice");
+    menuRestartCloseNotice(1, b, sizeof(b));
+    check(std::strcmp(b, "1 change applies at next game start") == 0, "close notice for one");
+    menuRestartCloseNotice(3, b, sizeof(b));
+    check(std::strcmp(b, "3 changes apply at next game start") == 0, "close notice for three");
+
+    char s[160];
+    using W = FooterWrite;
+    menuFlatFooterStatus(W::Saved, true, 0, false, s, sizeof(s));
+    check(std::strcmp(s, " | saved") == 0, "flat footer, nothing waiting: \" | saved\" as before");
+    menuFlatFooterStatus(W::Saved, true, 1, false, s, sizeof(s));
+    check(std::strcmp(s, " | 1 change waits for a game restart | saved") == 0, "flat footer, one waiting: the count comes ahead of saved");
+    menuFlatFooterStatus(W::Saved, true, 2, false, s, sizeof(s));
+    check(std::strcmp(s, " | 2 changes wait for a game restart | saved") == 0, "flat footer, two waiting");
+    menuFlatFooterStatus(W::None, true, 1, false, s, sizeof(s));
+    check(std::strcmp(s, " | 1 change waits for a game restart") == 0, "flat footer, nothing written yet but one waiting: the count alone");
+    menuFlatFooterStatus(W::None, true, 0, false, s, sizeof(s));
+    check(s[0] == 0, "flat footer, nothing at all: empty");
+    menuFlatFooterStatus(W::Failed, true, 2, false, s, sizeof(s));
+    check(std::strcmp(s, " | write failed") == 0, "a failed write keeps priority over the count");
+    menuFlatFooterStatus(W::Saving, true, 2, false, s, sizeof(s));
+    check(std::strcmp(s, " | saving") == 0, "saving keeps priority over the count");
+    menuFlatFooterStatus(W::Saved, false, 1, false, s, sizeof(s));
+    check(std::strcmp(s, " | 1 change waits for a game restart | keyboard gate unavailable") == 0, "the gate note follows the count");
+    menuFlatFooterStatus(W::Saved, true, 1, true, s, sizeof(s));
+    check(std::strcmp(s, " | 1 change at next launch | saved") == 0, "the short form in the footer");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -221,6 +318,7 @@ int main(int argc, char** argv) {
     drawnCases();
     noticeCases();
     pageCases();
+    restartCases();
     std::printf("menu_policy_test: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
 }

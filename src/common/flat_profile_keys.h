@@ -23,6 +23,9 @@ inline bool flatProfileReadsKey(const char* key) {
         // on the Debug tab. Unlisted, getBool answers false here whatever the file says, and the timing could never be turned on from the panel.
         std::strcmp(key, "advanced.flat_cpu_timing") == 0 ||
         std::strcmp(key, "hotkey.menu") == 0 ||
+        // Whether the menu's notices show (menu.cpp menuShowNotice): VR's toasts and flat's screen card alike. Unlisted, getBool answers false here whatever
+        // the file says, and no flat notice (a restart waiting, an AA comparison) could be shown.
+        std::strcmp(key, "menu.toasts") == 0 ||
         std::strcmp(key, "fix.temporal_aa_model") == 0 ||
         // XeSS Frame Generation (xess_fg.cpp, docs\xess-frame-generation-2026-11-12.md): flat-only rows on the Performance tab.
         std::strcmp(key, "fix.xess_frame_generation") == 0 ||

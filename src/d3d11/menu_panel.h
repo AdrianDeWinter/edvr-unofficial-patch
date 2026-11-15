@@ -59,6 +59,7 @@ enum MenuBadge : uint8_t {
     kBadgePending = 2,   // "at next launch", the value beside it is the pending one
     kBadgeUnknown = 3,   // "?" -- when it applies is not documented
     kBadgeClash = 4,     // "also in Elite" -- a hotkey that Elite's own bindings use too (the game sees the press)
+    kBadgeStopped = 5,   // "stopped" -- the setting is on but what it drives stopped; a restart alone will not fix it (menu_restart.h)
 };
 
 struct MenuLine {
