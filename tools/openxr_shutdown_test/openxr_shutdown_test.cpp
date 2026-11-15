@@ -24,6 +24,13 @@ namespace {
 
 std::atomic<unsigned> checks{0};
 std::atomic<unsigned> failures{0};
+std::atomic<const char*> g_stage{"start"};
+
+// Names the step the rig is in, so a watchdog exit says where it stopped.
+void stage(const char* name) {
+  g_stage.store(name, std::memory_order_release);
+  std::printf("stage: %s\n", name);
+}
 
 void check(bool value, const char* description) {
   ++checks;
@@ -63,7 +70,12 @@ struct CaptureLifetime final {
 struct Watchdog final {
   Event finished;
   std::thread thread{[this] {
-    if (!finished.wait(20000)) std::_Exit(3);
+    if (!finished.wait(20000)) {
+      std::fprintf(stderr, "openxr_shutdown_test: watchdog fired after 20 s in stage: %s\n",
+          g_stage.load(std::memory_order_acquire));
+      std::fflush(stderr);
+      std::_Exit(3);
+    }
   }};
   ~Watchdog() { finished.signal(); thread.join(); }
 };
@@ -137,6 +149,7 @@ class BoundFixture final {
 
   bool start() {
     std::atomic<HRESULT> acquired{E_FAIL};
+    stage("fixture start: acquire the graphics binding");
     std::thread init([&] {
       initThread_ = GetCurrentThreadId();
       acquired.store(binding_.acquire(path_), std::memory_order_release);
@@ -145,13 +158,16 @@ class BoundFixture final {
     if (acquired.load(std::memory_order_acquire) != S_OK) return false;
     acquired_ = true;
 
+    stage("fixture start: first Present");
     presentThread_ = GetCurrentThreadId();
     if (FAILED(present_.present())) return false;
     if (!binding_.renderThread() || binding_.renderThread() != presentThread_)
       return false;
+    stage("fixture start: owner start");
     if (!owner_.start()) return false;
     started_ = true;
 
+    stage("fixture start: bind the route while presenting");
     std::atomic<bool> bound{false};
     std::thread bind([&] {
       systemSetupThread_ = GetCurrentThreadId();
@@ -162,13 +178,16 @@ class BoundFixture final {
       present_.present();
       return bound.load(std::memory_order_acquire);
     });
+    stage(pumped ? "fixture start: join the bind thread" : "fixture start: join the bind thread after 3 s without a bind");
     bind.join();
+    stage("fixture start: done");
     return pumped && bound.load(std::memory_order_acquire) &&
         render_.isRenderThread();
   }
 
   bool close() {
     if (!acquired_ && !started_) return true;
+    stage("fixture close");
     return retain() && disposeRetained();
   }
 
@@ -515,25 +534,37 @@ int selfTest(const std::wstring& suppliedPath) {
   check(absolutePath(path), "graphics proxy path is drive-absolute");
   // The DLL loaded next is the only proxy in this process: no d3d11.dll comes with the exe.
   check(edvr::reportNoD3D11Mapped("openxr_shutdown_test"), "no d3d11.dll is mapped before the rig loads the proxy");
+  stage("load the graphics proxy");
   HMODULE proxy = LoadLibraryExW(path.c_str(), nullptr,
       LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
   check(proxy != nullptr, "load the actual graphics proxy");
   if (!proxy) return 1;
   {
     PresentDevice present;
+    stage("create the WARP device and swap chain through the proxy");
     check(SUCCEEDED(present.initialize(proxy, D3D_DRIVER_TYPE_WARP)),
         "initialize a real WARP device through the graphics proxy");
     if (present.swapchain()) {
+      stage("case: noPresentCancelsDrain");
       noPresentCancelsDrain(proxy, path, present);
+      stage("case: noPresentCancelsBoundary");
       noPresentCancelsBoundary(proxy, path, present);
+      stage("case: resumedPresentCompletes");
       resumedPresentCompletes(proxy, path, present);
+      stage("case: heldFinalizerRetiresBeforeRelease");
       heldFinalizerRetiresBeforeRelease(proxy, path, present);
+      stage("case: failurePreservesResources");
       failurePreservesResources(proxy, path, present);
+      stage("case: throwingDrainSkipsFinalizer");
       throwingDrainSkipsFinalizer(proxy, path, present);
+      stage("case: falseDrainSkipsFinalizer");
       falseDrainSkipsFinalizer(proxy, path, present);
+      stage("case: throwingFinalizerPreservesResources");
       throwingFinalizerPreservesResources(proxy, path, present);
     }
+    stage("release the WARP device");
   }
+  stage("done");
   // The proxy owns process-lifetime hook state; keep its module loaded until
   // this isolated diagnostic exits, matching the existing graphics fixtures.
   return failures.load(std::memory_order_acquire) ? 1 : 0;
@@ -542,6 +573,8 @@ int selfTest(const std::wstring& suppliedPath) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+  // Unbuffered, so what the rig printed survives the watchdog's _Exit.
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
   if (argc == 2 && !std::wcscmp(argv[1], L"--dry-run")) {
     std::puts("Would reproduce the two-step native render shutdown ordering with a real WARP Present; no windows, device, threads or writes created.");
     return 0;
