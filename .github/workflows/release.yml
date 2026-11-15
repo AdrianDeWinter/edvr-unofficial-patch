@@ -24,7 +24,7 @@ concurrency:
 jobs:
   # What a pull request needs, from the files it changes. Every other event builds.
   #   build           anything the build or one of its rigs can read
-  #   light gates     only notes: root *.md, docs\*.md, .agents\, issue templates. Their
+  #   light gates     only notes: root *.md, docs\*.md, wiki\*.md, .agents\, issue templates. Their
   #                   gates are check_status_blocks.py (docs\ Status blocks) and
   #                   check_agent_material.py (agent files export-ignore; no zero-width,
   #                   bidi or tag character in any tracked text), seconds instead of the build.
@@ -65,7 +65,7 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              docs/*.md|.agents/*|.github/ISSUE_TEMPLATE/*|.github/FUNDING.yml) ;;
+              docs/*.md|wiki/*.md|.agents/*|.github/ISSUE_TEMPLATE/*|.github/FUNDING.yml) ;;
               */*) build=true ;;
               *.md) ;;
               *) build=true ;;
