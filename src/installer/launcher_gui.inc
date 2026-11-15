@@ -117,6 +117,7 @@ void updateLauncherControls() {
     // setting is offered for a Steam install and for one from Frontier's own store.
     lg.playCaption.clear();
     bool showPlay = false, showPair = false, showDirect = false, playEnabled = false;
+    bool showVrButton = false, showFlatButton = false;  // within the pair: only the modes this folder has installed
     if (survey) {
         const LaunchRoute route = routeFor(g.survey.game.source, g.survey.game.dir, true);
         const bool anyGame = g.survey.gameRunningHere || g.survey.gameRunningElsewhere;
@@ -125,13 +126,24 @@ void updateLauncherControls() {
         showDirect = (route.kind == RouteKind::Steam || frontierStore) && lg.session->directLaunchOffered();
         const bool directOn = showDirect && lg.session->directLaunch();
         if (route.kind == RouteKind::Frontier || directOn) {
+            // A button only for a mode this folder has installed: a VR-only install gets no flat button, and the reverse.
+            // An empty scope (no install the survey can name) keeps both, as before.
+            const std::string scope = installedScope(g.survey);
+            const bool hasVr = scope.empty() || scope == "both" || scope == "vr";
+            const bool hasFlat = scope.empty() || scope == "both" || scope == "flat";
+            const bool bothModes = hasVr && hasFlat;
             showPair = true;
+            showVrButton = hasVr;
+            showFlatButton = hasFlat;
             lg.playCaption = directOn ? (frontierStore ? L"Signs in itself. If that fails, it starts EDLaunch."
                                                        : L"Signs in itself. If that fails, it starts through Steam.")
-                                      : L"Starts EDLaunch with the mode you pick, then closes it when Elite exits.";
+                             : bothModes ? L"Starts EDLaunch with the mode you pick, then closes it when Elite exits."
+                             : hasVr ? L"Starts EDLaunch in VR, then closes it when Elite exits."
+                                     : L"Starts EDLaunch in flat, then closes it when Elite exits.";
+            // With a choice, the remembered mode is the primary button; a lone button is the primary one.
             const bool flat = launcherRememberedMode() == "flat";
-            ui::setButtonStyle(lg.playVr, flat ? ui::ButtonStyle::Secondary : ui::ButtonStyle::Primary);
-            ui::setButtonStyle(lg.playFlat, flat ? ui::ButtonStyle::Primary : ui::ButtonStyle::Secondary);
+            ui::setButtonStyle(lg.playVr, (bothModes ? !flat : hasVr) ? ui::ButtonStyle::Primary : ui::ButtonStyle::Secondary);
+            ui::setButtonStyle(lg.playFlat, (bothModes ? flat : hasFlat) ? ui::ButtonStyle::Primary : ui::ButtonStyle::Secondary);
         } else if (route.kind != RouteKind::None) {
             showPlay = true;
             const wchar_t* store = route.kind == RouteKind::Steam ? L"Steam" : L"Epic";
@@ -146,8 +158,11 @@ void updateLauncherControls() {
     }
     if (lg.session->playing() || !lg.session->playLine().empty()) lg.playCaption = fromUtf8(lg.session->playLine());
     ShowWindow(lg.play, onScreen && showPlay ? SW_SHOW : SW_HIDE);
-    ShowWindow(lg.playVr, onScreen && showPair ? SW_SHOW : SW_HIDE);
-    ShowWindow(lg.playFlat, onScreen && showPair ? SW_SHOW : SW_HIDE);
+    ShowWindow(lg.playVr, onScreen && showPair && showVrButton ? SW_SHOW : SW_HIDE);
+    ShowWindow(lg.playFlat, onScreen && showPair && showFlatButton ? SW_SHOW : SW_HIDE);
+    // Left to right: Play VR, then Play flat. A lone pair button takes the first slot.
+    MoveWindow(lg.playVr, dp(kMargin + kCardPad), dp(700), dp(118), dp(34), TRUE);
+    MoveWindow(lg.playFlat, dp(kMargin + kCardPad + (showVrButton ? 126 : 0)), dp(700), dp(118), dp(34), TRUE);
     for (HWND button : {lg.play, lg.playVr, lg.playFlat}) EnableWindow(button, playEnabled);
 
     // The checkbox is on the second row, right of whichever Play buttons are showing, and what is under

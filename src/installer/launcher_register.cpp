@@ -13,7 +13,7 @@
 namespace edvr::installer {
 namespace {
 
-constexpr const wchar_t* kAppName = L"ED Unofficial Patch (ED-UP)";
+constexpr const wchar_t* kAppName = L"ED-UP Launcher";
 constexpr const wchar_t* kPublisher = L"ED-UP (unofficial)";
 
 bool sameFile(const std::wstring& a, const std::wstring& b) {
@@ -66,7 +66,7 @@ bool writeShortcut(const std::wstring& linkPath, const std::wstring& exe, const 
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)))) return false;
     link->SetPath(exe.c_str());
     link->SetWorkingDirectory(workDir.c_str());
-    link->SetDescription(L"ED Unofficial Patch launcher");
+    link->SetDescription(kAppName);
     link->SetIconLocation(exe.c_str(), 0);
     IPersistFile* file = nullptr;
     bool ok = false;
@@ -76,6 +76,27 @@ bool writeShortcut(const std::wstring& linkPath, const std::wstring& exe, const 
     }
     link->Release();
     return ok;
+}
+
+// True when the shortcut at `linkPath` starts the launcher that lives in `launcherDir`.
+bool shortcutRunsLauncherIn(const std::wstring& linkPath, const std::wstring& launcherDir) {
+    IShellLinkW* link = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)))) return false;
+    bool ours = false;
+    IPersistFile* file = nullptr;
+    if (SUCCEEDED(link->QueryInterface(IID_PPV_ARGS(&file)))) {
+        if (SUCCEEDED(file->Load(linkPath.c_str(), STGM_READ))) {
+            wchar_t target[MAX_PATH]{};
+            if (SUCCEEDED(link->GetPath(target, MAX_PATH, nullptr, SLGP_RAWPATH))) {
+                const std::wstring path = target;
+                ours = _wcsicmp(leafOf(path).c_str(), kLauncherExeName) == 0 &&
+                       _wcsicmp(joinPath(launcherDir, leafOf(path)).c_str(), path.c_str()) == 0;
+            }
+        }
+        file->Release();
+    }
+    link->Release();
+    return ours;
 }
 
 }  // namespace
@@ -102,6 +123,9 @@ bool registerLauncher(const RegisterTargets& t, std::string* error) {
         if (!createDirectories(t.startMenuDir)) return fail("the Start menu folder cannot be created");
         if (!writeShortcut(joinPath(t.startMenuDir, kShortcutName), t.exePath, t.launcherDir))
             return fail("the Start menu shortcut cannot be written");
+        // The shortcut from an earlier build is replaced by the one just written, not left beside it.
+        const std::wstring legacy = joinPath(t.startMenuDir, kLegacyShortcutName);
+        if (fileExists(legacy) && shortcutRunsLauncherIn(legacy, t.launcherDir)) DeleteFileW(legacy.c_str());
     }
     HKEY key = nullptr;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, t.registryKey.c_str(), 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key,
@@ -133,9 +157,13 @@ bool unregisterLauncher(const RegisterTargets& t, const std::wstring& runningExe
 
     if (!t.startMenuDir.empty()) {
         const std::wstring link = joinPath(t.startMenuDir, kShortcutName);
-        if (fileExists(link)) {
-            if (DeleteFileW(link.c_str())) out.notes.push_back("Removed the Start menu shortcut.");
-            else out.notes.push_back("Could not remove the Start menu shortcut.");
+        const std::wstring legacy = joinPath(t.startMenuDir, kLegacyShortcutName);
+        const bool legacyIsOurs = fileExists(legacy) && shortcutRunsLauncherIn(legacy, t.launcherDir);
+        if (fileExists(link) || legacyIsOurs) {
+            bool removed = true;
+            if (fileExists(link) && !DeleteFileW(link.c_str())) removed = false;
+            if (legacyIsOurs && !DeleteFileW(legacy.c_str())) removed = false;
+            out.notes.push_back(removed ? "Removed the Start menu shortcut." : "Could not remove the Start menu shortcut.");
         }
     }
     if (!t.registryKey.empty()) {

@@ -2375,6 +2375,20 @@ std::wstring shortcutTarget(const std::wstring& link) {
     return target;
 }
 
+bool makeShortcut(const std::wstring& link, const std::wstring& target) {
+    IShellLinkW* l = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&l)))) return false;
+    l->SetPath(target.c_str());
+    IPersistFile* f = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(l->QueryInterface(IID_PPV_ARGS(&f)))) {
+        ok = SUCCEEDED(f->Save(link.c_str(), TRUE));
+        f->Release();
+    }
+    l->Release();
+    return ok;
+}
+
 std::wstring regString(const std::wstring& key, const wchar_t* value) {
     wchar_t buf[1024]{};
     DWORD size = sizeof(buf);
@@ -2405,18 +2419,38 @@ void testRegister() {
     writeAll(P(t.payloadDir, L"abc"), "cached");
     writeAll(P(root, L"mirror-folder\\edvr.ini"), "settings");   // beside the launcher folder, as the real mirror is
 
+    // An earlier build's ED-UP.lnk that starts this launcher is replaced by the new shortcut.
+    CreateDirectoryW(t.startMenuDir.c_str(), nullptr);
+    check(makeShortcut(P(t.startMenuDir, L"ED-UP.lnk"), t.exePath), "an earlier build's shortcut can be made for the test");
     std::string err;
     check(registerLauncher(t, &err), "registering works: " + err);
     const std::wstring link = P(t.startMenuDir, kShortcutName);
     check(exists(link), "the Start menu shortcut is written");
+    check(!exists(P(t.startMenuDir, L"ED-UP.lnk")), "the earlier build's ED-UP.lnk is replaced, not left beside the new one");
     check(_wcsicmp(shortcutTarget(link).c_str(), t.exePath.c_str()) == 0, "and points at the launcher exe: " + narrowUtf8(shortcutTarget(link)));
-    check(regString(key, L"DisplayName") == L"ED Unofficial Patch (ED-UP)" && regString(key, L"DisplayVersion") == L"0.1.0" &&
+    check(regString(key, L"DisplayName") == L"ED-UP Launcher" && regString(key, L"DisplayVersion") == L"0.1.0" &&
               regString(key, L"Publisher") == L"ED-UP (unofficial)" && regString(key, L"InstallLocation") == t.launcherDir,
           "DisplayName, DisplayVersion, Publisher and InstallLocation are set");
     check(regString(key, L"UninstallString") == L"\"" + t.exePath + L"\" --unregister", "UninstallString runs the launcher with --unregister: " + narrowUtf8(regString(key, L"UninstallString")));
     DWORD noModify = 0, noRepair = 0;
     check(regDword(key, L"NoModify", &noModify) && noModify == 1 && regDword(key, L"NoRepair", &noRepair) && noRepair == 1, "NoModify and NoRepair are 1");
     check(registerLauncher(t, &err), "registering again replaces rather than fails: " + err);
+
+    // A shortcut of the user's own called ED-UP.lnk, pointing elsewhere, is not the launcher's: register and unregister leave it.
+    const std::wstring userDir = P(root, L"UserStartMenu");
+    CreateDirectoryW(userDir.c_str(), nullptr);
+    check(makeShortcut(P(userDir, L"ED-UP.lnk"), L"C:\\Windows\\notepad.exe"), "a user's shortcut can be made for the test");
+    RegisterTargets elsewhere = t;
+    elsewhere.startMenuDir = userDir;
+    check(registerLauncher(elsewhere, &err), "registering into a folder that has the user's shortcut works: " + err);
+    check(_wcsicmp(shortcutTarget(P(userDir, L"ED-UP.lnk")).c_str(), L"C:\\Windows\\notepad.exe") == 0, "the user's ED-UP.lnk still points at notepad");
+    RegisterTargets elsewhereOff = elsewhere;
+    elsewhereOff.launcherDir = P(root, L"nothing\\launcher");
+    elsewhereOff.payloadDir.clear();
+    elsewhereOff.registryKey.clear();
+    UnregisterResult elsewhereResult;
+    check(unregisterLauncher(elsewhereOff, std::wstring(), &elsewhereResult, &err) && exists(P(userDir, L"ED-UP.lnk")) && !exists(P(userDir, kShortcutName)),
+          "unregistering removes the launcher's shortcut and leaves the user's ED-UP.lnk: " + err);
 
     // Refusals before anything is deleted.
     UnregisterResult result;
@@ -2430,10 +2464,12 @@ void testRegister() {
     check(!unregisterLauncher(wrong, std::wstring(), &result, &err) && contains(err, "payload") && exists(P(root, L"mirror-folder\\edvr.ini")), "a cache folder not named payload is refused: " + err);
 
     // The running exe cannot be deleted: it is held open here without delete sharing, as Windows holds a running image.
+    check(makeShortcut(P(t.startMenuDir, L"ED-UP.lnk"), t.exePath), "an earlier build's shortcut can be made for the unregister check");
     HANDLE hold = CreateFileW(t.exePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     check(unregisterLauncher(t, t.exePath, &result, &err), "unregistering works: " + err);
     CloseHandle(hold);
-    check(!exists(link) && regString(key, L"DisplayName").empty(), "the shortcut and the registry entry are gone");
+    check(!exists(link) && !exists(P(t.startMenuDir, L"ED-UP.lnk")) && regString(key, L"DisplayName").empty(),
+          "the shortcuts (current and earlier build's) and the registry entry are gone");
     check(!exists(t.payloadDir), "the downloaded files are gone");
     check(!exists(P(t.launcherDir, L"launcher.ini")) && !exists(P(t.launcherDir, L"manifests")), "the launcher folder's other contents are gone");
     check(result.exeRemains && exists(t.exePath), "the exe that is running stays, and the result says so");
