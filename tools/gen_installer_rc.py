@@ -220,7 +220,7 @@ def write_launcher_rc(root, out, dry_run):
         '',
     ] + versioninfo_lines(
         version,
-        file_description='ED-UP launcher',
+        file_description='ED-UP Launcher',
         internal_name='ed-up-launcher',
         original_filename='ed-up-launcher.exe',
         file_type='0x1L',
@@ -756,7 +756,7 @@ def self_test():
         with open(os.path.join(lout, 'launcher.rc'), encoding='utf-8') as stream:
             launcher_text = stream.read()
         assert 'OriginalFilename", "ed-up-launcher.exe"' in launcher_text
-        assert 'FileDescription", "ED-UP launcher"' in launcher_text
+        assert 'FileDescription", "ED-UP Launcher"' in launcher_text
         assert 'FileVersion", "0.1.0"' in launcher_text and 'ProductVersion", "0.1.0"' in launcher_text
         assert 'FILEVERSION 0,1,0,0' in launcher_text
         # No payload, only the licence as 120, and not the build's describe.

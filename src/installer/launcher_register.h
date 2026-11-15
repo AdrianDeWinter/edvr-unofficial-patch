@@ -16,7 +16,7 @@ struct RegisterTargets {
     std::wstring exePath;      // the launcher the shortcut and the uninstall entry point at
     std::wstring launcherDir;  // removed by unregister, except the exe that is running
     std::wstring payloadDir;   // the file cache, removed by unregister
-    std::wstring startMenuDir; // the folder that gets ED-UP.lnk
+    std::wstring startMenuDir; // the folder that gets ED-UP Launcher.lnk
     std::wstring registryKey;  // under HKCU
     std::string  version;      // DisplayVersion
 };
@@ -27,7 +27,10 @@ std::wstring defaultStartMenuDir();
 // HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\ED-UP
 std::wstring defaultUninstallKey();
 
-inline constexpr const wchar_t* kShortcutName = L"ED-UP.lnk";
+inline constexpr const wchar_t* kShortcutName = L"ED-UP Launcher.lnk";
+// The name earlier builds gave the shortcut. Register and unregister remove it only while it
+// still starts the launcher, so a shortcut of the user's own with that name is left alone.
+inline constexpr const wchar_t* kLegacyShortcutName = L"ED-UP.lnk";
 
 // Writes the shortcut and the registry entry (DisplayName, DisplayVersion, Publisher,
 // InstallLocation, UninstallString "<exe>" --unregister, NoModify, NoRepair), replacing
