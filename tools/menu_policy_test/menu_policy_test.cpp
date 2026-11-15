@@ -1,6 +1,8 @@
 // menu_policy_test: pure regression rig for the F8 menu's profile policy and the decisions menuTick takes from it (src/d3d11/menu_policy.h).
 // It pins what the flat and the VR profiles each do today, so the one menuTick that serves both cannot drift either: the policy's fields, the summon
 // key's edge, Escape, the draw the gate follows, and the flat screen's notice machine with its queue (flat_notice_queue.h).
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -10,6 +12,8 @@
 #include "../../src/d3d11/menu_restart.h"
 #include "../../src/d3d11/menu_pages.h"
 #include "../../src/d3d11/menu_policy.h"
+#include "../../src/d3d11/menu_flat_layout.h"
+#include "../../src/d3d11/menu_panel.h"
 
 using namespace edvr;
 
@@ -24,7 +28,7 @@ void policyCases() {
     const MenuProfilePolicy flat = menuPolicyFor(true);
     const MenuProfilePolicy vr = menuPolicyFor(false);
     check(flat.anchor == MenuAnchor::Screen && vr.anchor == MenuAnchor::World, "flat is anchored on the screen, VR in the world");
-    check(flat.sizing == MenuSizing::FixedPx && vr.sizing == MenuSizing::HeadsetPpd, "flat is a fixed pixel card, VR is sized from the headset's pixels per degree");
+    check(flat.sizing == MenuSizing::OutputPx && vr.sizing == MenuSizing::HeadsetPpd, "flat is sized from the output's pixels, VR is sized from the headset's pixels per degree");
     check(flat.noticePlacement == MenuNoticePlacement::ScreenCorner && vr.noticePlacement == MenuNoticePlacement::WorldToast,
           "flat notices go to the screen corner, VR notices are toasts in the world");
     check(edvr::flatProfileReadsKey("menu.toasts"), "flat reads menu.toasts, so its notices follow it like VR's toasts");
@@ -301,6 +305,70 @@ void restartCases() {
     check(std::strcmp(s, " | 1 change at next launch | saved") == 0, "the short form in the footer");
 }
 
+// The flat card sized from the output's pixels and laid 1:1 (menu_flat_layout.h). Pure functions of the output size.
+void flatLayoutCases() {
+    struct Res { int w, h, card, cap; const char* name; };
+    const Res res[] = {
+        {1920, 1080, 357, 14, "1920x1080"},
+        {2560, 1440, 476, 19, "2560x1440"},
+        {3840, 2160, 714, 28, "3840x2160"},
+        {3440, 1440, 476, 19, "3440x1440"},
+    };
+    // The Performance tab's bitmap is 1106 high at the 860 raster (native_menu_test --layout measures it): its height over its width is the aspect.
+    const float aspect = 1106.0f / 860.0f;
+    for (const Res& r : res) {
+        const FlatCardSize fs = flatCardSize(r.w, r.h, kFlatMenuCardHeightFrac);
+        char name[160];
+        std::snprintf(name, sizeof(name), "the flat card at %s is %d px wide with a %d px cap", r.name, r.card, r.cap);
+        check(fs.cardPx == r.card && fs.capPx == r.cap, name);
+        // The card and the strip: the same card, the strip extends to the right.
+        const int tipW = flatBitmapWidth(fs.cardPx, true, kTipRatio);
+        const int plainW = flatBitmapWidth(fs.cardPx, false, kTipRatio);
+        std::snprintf(name, sizeof(name), "%s: without the tooltip the bitmap is the card; with it, the card's width times the strip ratio", r.name);
+        check(plainW == fs.cardPx && tipW == static_cast<int>(fs.cardPx * kTipRatio + 0.5f) && tipW > plainW, name);
+        // The composite: the card's rect is identical with and without the strip, and every bitmap maps 1:1.
+        const int bh = static_cast<int>(fs.cardPx * aspect + 0.5f);
+        const FlatPlacement plain = flatPlace(r.w, r.h, plainW, bh);
+        const FlatPlacement tip = flatPlace(r.w, r.h, tipW, bh);
+        std::snprintf(name, sizeof(name), "%s: the bitmap is placed at exactly its own pixel size, 1:1", r.name);
+        check(plain.oneToOne && plain.w == plainW && plain.h == bh && tip.oneToOne && tip.w == tipW && tip.h == bh, name);
+        std::snprintf(name, sizeof(name), "%s: the card's rect (x, y, width, height) is the same with and without the strip", r.name);
+        check(plain.x == tip.x && plain.y == tip.y && plain.w == fs.cardPx && std::min(plain.w, tip.w) == fs.cardPx && plain.h == tip.h, name);
+        std::snprintf(name, sizeof(name), "%s: the corner is two percent in, in whole pixels", r.name);
+        check(plain.x == static_cast<int>(std::lround(0.02 * r.w)) && plain.y == static_cast<int>(std::lround(0.02 * r.h)), name);
+        // The geometry the shader takes, read back to output pixels: the left edge, the top edge and the width.
+        for (const FlatPlacement* pl : {&plain, &tip}) {
+            const float tanY = static_cast<float>(r.h) / static_cast<float>(r.w);
+            const float halfH = pl->halfW * static_cast<float>(bh) / static_cast<float>(pl->w);
+            const float leftPx = (pl->shift - pl->halfW + 1.0f) * 0.5f * static_cast<float>(r.w);
+            const float topPx = (1.0f - (halfH - pl->originY) / tanY) * 0.5f * static_cast<float>(r.h);
+            const float widthPx = pl->halfW * static_cast<float>(r.w);
+            std::snprintf(name, sizeof(name), "%s: the shader geometry puts the bitmap at its pixel rect", r.name);
+            check(std::fabs(leftPx - static_cast<float>(pl->x)) < 0.01f && std::fabs(topPx - static_cast<float>(pl->y)) < 0.01f &&
+                  std::fabs(widthPx - static_cast<float>(pl->w)) < 0.01f, name);
+        }
+    }
+    // The reference: at 1080p the card is the size the old composite drew it (the old formula, with the measured aspect).
+    check(std::fabs(flatLegacyCardPx(1920, 1080, aspect) - static_cast<float>(flatCardSize(1920, 1080, kFlatMenuCardHeightFrac).cardPx)) < 2.0f,
+          "the flat card at 1080p is the width the old composite gave it");
+    check(flatCardSize(3440, 1440, kFlatMenuCardHeightFrac).cardPx == flatCardSize(2560, 1440, kFlatMenuCardHeightFrac).cardPx,
+          "an ultrawide output does not grow the card: it follows the output's height");
+    check(flatCardSize(0, 0, kFlatMenuCardHeightFrac).cardPx == 357, "an output not known yet is sized as 1920x1080");
+    // Bounds: text never below the minimum cap, the card never past 45 % of the output's width.
+    check(flatCardSize(1280, 720, kFlatMenuCardHeightFrac).capPx == kFlatMinCapPx, "a small output keeps the minimum text height");
+    check(flatCardSize(1000, 2000, kFlatMenuCardHeightFrac).cardPx <= 450, "a narrow output keeps the card under 45 percent of its width");
+    // The notice's card: the old toast's 0.31 of the width at 1080p, from the height.
+    check(flatCardSize(1920, 1080, kFlatNoticeHeightFrac).cardPx == 595, "the flat notice at 1080p is 595 px wide, as before");
+    check(flatCardSize(2560, 1440, kFlatNoticeHeightFrac).cardPx == 793 && flatCardSize(3440, 1440, kFlatNoticeHeightFrac).cardPx == 793,
+          "the flat notice follows the output's height too");
+    check(flatNoticeMaxRasterPx(1080) == 216 && flatNoticeMaxRasterPx(2160) == 432, "the notice's raster bound follows the output's height");
+    // A page taller than the output allows is the one case scaled down, and still in the corner.
+    const FlatPlacement tall = flatPlace(1920, 1080, 700, 1400);
+    check(!tall.oneToOne && tall.h <= static_cast<int>(0.85 * 1080 + 1) && tall.w < 700 && tall.x == 38 && tall.y == 22,
+          "a bitmap taller than the screen allows is scaled to fit, upper-left kept");
+    check(flatPlace(0, 1080, 100, 100).w == 0 && flatPlace(1920, 1080, 0, 100).w == 0, "an unknown output or an empty bitmap places nothing");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -319,6 +387,7 @@ int main(int argc, char** argv) {
     noticeCases();
     pageCases();
     restartCases();
+    flatLayoutCases();
     std::printf("menu_policy_test: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
 }

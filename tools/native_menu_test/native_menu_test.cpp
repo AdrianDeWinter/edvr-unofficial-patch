@@ -2,6 +2,7 @@
 #include "../../src/common/frame_flag.h"
 #include "../../src/common/parallel_projection_notice.h"
 #include "../../src/d3d11/menu_panel.h"
+#include "../../src/d3d11/menu_flat_layout.h"
 #include "../../src/openxr/native_menu_client.h"
 #include "../../src/openxr/eye_capture.h"
 #include "../../src/openxr/immediate_executor.h"
@@ -175,7 +176,7 @@ int wmain(int argc, wchar_t** argv) {
               "a page that builds no hint line reserves none and is a hint box shorter than one that does");
         // The Debug tab's heading, against the rect layout() draws it into
         // (menuPanelLineRectForTest reads it from layout()'s own text op).
-        // Flat: cardPx 860, capPx 34 -- sizeContent's flat path, fixed. The
+        // Flat's old fixed raster: cardPx 860, capPx 34 (the reference of menu_flat_layout.h; the sizes the flat card is rasterised at now are checked below). The
         // heading takes the whole line: its left is pad / 2 and its right is
         // cardW - pad, so the rect is 820 px here; DT_END_ELLIPSIS cuts text
         // at its right edge. Without the full-width arm in layout() the rect
@@ -220,6 +221,67 @@ int wmain(int argc, wchar_t** argv) {
                   "menu.cpp sets reserveHint inside the pad block, ahead of its pad loop");
             check(menu.find("c.reserveHint = true;", set + 1) == std::string::npos,
                   "menu.cpp sets reserveHint in exactly one place (the pad block; the Monitor and prompt pages reserve none)");
+        }
+        // The flat card's sizing (menu_flat_layout.h). Its reference constants were derived from the Performance tab's shape at the old fixed raster (860 px wide,
+        // cap 34): eleven rows, a reserved hint box, three tabs, a two-line footer. Measure that shape here, so a layout change that moves it fails this rig
+        // and the constants are looked at, instead of the flat card drifting from the size it had at 1920x1080.
+        auto flatPage = [](int rows, int card, int cap) {
+            edvr::MenuContent c{};
+            c.widthPx = c.cardPx = card;
+            c.capPx = cap;
+            c.tabCount = 3;
+            std::snprintf(c.tabs[0], sizeof(c.tabs[0]), "Performance");
+            std::snprintf(c.tabs[1], sizeof(c.tabs[1]), "Visual");
+            std::snprintf(c.tabs[2], sizeof(c.tabs[2]), "Debug");
+            c.lineCount = rows;
+            for (int i = 0; i < rows; ++i) std::snprintf(c.lines[i].left, sizeof(c.lines[i].left), "Row %d", i);
+            c.reserveHint = true;
+            std::strcpy(c.footer, "Up/Down row  Left/Right change  Tab page\nline two");
+            return c;
+        };
+        const int perfH = edvr::menuPanelLayoutHeightForTest(flatPage(11, 860, 34));
+        const float perfAspect = static_cast<float>(perfH) / 860.0f;
+        check(std::fabs(perfAspect - 1106.0f / 860.0f) < 0.02f,
+              "the Performance tab's bitmap is still the shape the flat card's reference size was derived from (aspect 1106 / 860)");
+        for (const int outH : {1080, 2160}) {
+            const int outW = outH * 16 / 9;
+            const edvr::FlatCardSize fs = edvr::flatCardSize(outW, outH, edvr::kFlatMenuCardHeightFrac);
+            if (outH == 1080) {
+                check(std::fabs(edvr::flatLegacyCardPx(outW, outH, perfAspect) - static_cast<float>(fs.cardPx)) < 0.01f * static_cast<float>(fs.cardPx),
+                      "the flat card at 1920x1080 is within one percent of the old composite's width for the measured aspect");
+            }
+            // A notice is told from the menu by its raster's height (menu.cpp, ScreenNoticeState::tick): at both output sizes the one-line notice
+            // sits under the bound and the menu's smallest page (the Debug tab, padded to its nine rows) over it.
+            const edvr::FlatCardSize ns = edvr::flatCardSize(outW, outH, edvr::kFlatNoticeHeightFrac);
+            edvr::MenuContent notice{};
+            notice.toast = true;
+            notice.lineCount = 1;
+            std::strcpy(notice.lines[0].left, "Anti-aliasing changed to DLSS (Quality)");
+            notice.widthPx = notice.cardPx = ns.cardPx;
+            notice.capPx = ns.capPx;
+            const int bound = edvr::flatNoticeMaxRasterPx(outH);
+            check(edvr::menuPanelLayoutHeightForTest(notice) < bound, "a one-line flat notice's raster is under the notice bound at this output size");
+            check(edvr::menuPanelLayoutHeightForTest(flatPage(9, fs.cardPx, fs.capPx)) > bound,
+                  "the flat menu's smallest page is over the notice bound at this output size");
+        }
+        {
+            std::ifstream in("src/d3d11/menu.cpp");
+            std::string menu((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            check(!menu.empty() && menu.find("flatCardSize(") != std::string::npos,
+                  "menu.cpp sizes the flat card with flatCardSize");
+            check(menu.find("c.cardPx = c.widthPx = 860;") == std::string::npos, "menu.cpp no longer rasterises the flat card at a fixed 860 px");
+        }
+        // The same heading at the sizes the flat card is rasterised at now: smaller faces must still fit the rect (no ellipsis).
+        for (const int outH : {720, 1080, 1440, 2160}) {
+            const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+            edvr::MenuContent d2 = dbg;
+            d2.widthPx = d2.cardPx = fs.cardPx;
+            d2.capPx = fs.capPx;
+            int ax0 = 0, ay0 = 0, ax1 = 0, ay1 = 0;
+            edvr::menuPanelLineRectForTest(d2, 0, &ax0, &ay0, &ax1, &ay1);
+            const int w2 = edvr::menuPanelMeasureLine(d2.lines[0].left, d2.capPx);
+            if (w2 > ax1 - ax0) std::printf("  heading at %dp: %d px in a %d px rect\n", outH, w2, ax1 - ax0);
+            check(w2 > 0 && w2 <= ax1 - ax0, "the Debug heading fits its rect at the flat card's rasterised size");
         }
         std::printf("native_menu_test: layout %u checks, %u failures (heading %dpx in a %dpx rect)\n",
                     checks, fails, headingW, headingBoxW);
@@ -586,8 +648,8 @@ int wmain(int argc, wchar_t** argv) {
                       "flat resize draws bounded panel pixels");
                 check(visibleBounds[0] >= 0.01f && visibleBounds[0] < 0.05f &&
                       visibleBounds[1] >= 0.01f && visibleBounds[1] < 0.05f &&
-                      visibleBounds[2] < 0.55f && visibleBounds[3] < 0.55f,
-                      "flat panel stays small and anchored near the upper-left corner");
+                      std::fabs((visibleBounds[2] - visibleBounds[0]) * 320.0f - 256.0f) <= 4.0f,
+                      "flat panel is drawn 1:1 (the 256 px raster covers 256 output pixels), anchored near the upper-left corner");
             }
             // A replacement graphics device must build its own raster and
             // context state; no resource from the first device may be reused.

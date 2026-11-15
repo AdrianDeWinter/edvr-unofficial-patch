@@ -1,5 +1,6 @@
 #include "temporal_shader_bytecode.h"
 #include "menu_panel.h"
+#include "menu_flat_layout.h"
 #include "flat_compute_readback.h"
 #include "graphics_runtime.h"
 #include "../common/runtime_profile.h"
@@ -1326,18 +1327,17 @@ void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf
         const float aspect = g_panelAspect.load();
         float flatPose[12]{};
         if (flat && aspect > 0.0f) {
-            const float fitHeight = 0.85f * static_cast<float>(regionH) /
-                                    static_cast<float>(regionW ? regionW : 1) / aspect;
-            // The old desktop card was centred and could occupy 85% of the
-            // screen height. Halve both of its screen dimensions, then pin
-            // its upper-left edge two percent in from the output edges.
-            // This is evaluated against the swapchain, not Elite's SS size.
-            g.halfW = 0.5f * (std::min)(g.halfW, fitHeight);
-            constexpr float margin = 0.02f;
-            g.shift = g.dist * (-1.0f + 2.0f * margin) + g.halfW;
-            flatPose[0] = flatPose[4] = flatPose[8] = 1.0f;
-            flatPose[10] = g.halfW * aspect - g.dist * (1.0f - 2.0f * margin) * p.tans[2];
-            xf = flatPose;
+            // The raster was sized from the output's own pixels (menu.cpp sizeContent), so the bitmap is laid at exactly its own pixel size: one bitmap
+            // pixel is one output pixel, its upper-left corner a whole two percent in from the output's (menu_flat_layout.h). A page taller than the
+            // output allows is the one case scaled down. This is evaluated against the swapchain, not Elite's SS size.
+            const FlatPlacement place = flatPlace(static_cast<int>(regionW), static_cast<int>(regionH), g_panelW, g_panelH);
+            if (place.w > 0) {
+                g.halfW = place.halfW * g.dist;
+                g.shift = place.shift * g.dist;
+                flatPose[0] = flatPose[4] = flatPose[8] = 1.0f;
+                flatPose[10] = place.originY * g.dist;
+                xf = flatPose;
+            }
         }
         const float halfH = g.halfW * aspect;
         if (panelBox(xf, p.tans, g.dist, g.curve, g.halfW, halfH, g.shift, regionW, regionH, flipV, g_nativeFrustum && flipU,

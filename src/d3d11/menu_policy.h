@@ -11,12 +11,12 @@
 namespace edvr {
 
 enum class MenuAnchor { Screen, World };
-enum class MenuSizing { FixedPx, HeadsetPpd };
+enum class MenuSizing { OutputPx, HeadsetPpd };
 enum class MenuNoticePlacement { ScreenCorner, WorldToast };
 
 struct MenuProfilePolicy {
   MenuAnchor anchor = MenuAnchor::Screen;          // a card on the screen, or a panel anchored in the world
-  MenuSizing sizing = MenuSizing::FixedPx;         // a fixed pixel card, or sized from the headset's pixels per degree
+  MenuSizing sizing = MenuSizing::OutputPx;         // sized from the output's own pixels, or sized from the headset's pixels per degree
   bool fade = false;                               // the panel fades in and out
   bool headAim = false;                            // the head aims at rows; the aiming choice page exists
   bool adoptGameKeys = false;                      // Elite's own panel keys are adopted as menu keys
@@ -33,7 +33,7 @@ inline MenuProfilePolicy menuPolicyFor(bool flatProfile) {
   MenuProfilePolicy p;
   if (flatProfile) {
     p.anchor = MenuAnchor::Screen;
-    p.sizing = MenuSizing::FixedPx;
+    p.sizing = MenuSizing::OutputPx;
     p.noticePlacement = MenuNoticePlacement::ScreenCorner;
     p.keyboardAlwaysPrivate = true;
     p.padNavigation = true;

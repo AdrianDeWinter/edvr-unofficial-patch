@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
@@ -51,6 +52,7 @@
 #include "menu_pad.h"
 #include "menu_panel.h"
 #include "menu_policy.h"
+#include "menu_flat_layout.h"
 #include "menu_pages.h"
 #include "menu_restart.h"
 #include "native_menu.h"
@@ -112,8 +114,6 @@ constexpr uint64_t kNotDrawnCloseMs = 1500;
 // A toast's life, and the pitch it sits below the look direction.
 constexpr uint64_t kToastMs = 2500;
 constexpr float    kToastPitchDeg = -12.0f;
-// The tallest raster that is a notice and not the menu (a one-line card is about 130 px; the menu's smallest page is over 300).
-constexpr int      kFlatNoticeMaxPx = 200;
 // The Status page's live values are refreshed at this cadence while shown;
 // the Monitor page's at four a second, so its digits read as a gauge and
 // not a flicker.
@@ -218,6 +218,7 @@ struct State {
     uint64_t highlightSinceMs = 0;
     bool     tooltipUp = false;
     bool     tooltipsWere = true;    // to notice a live change of shape
+    uint32_t flatOutSized[2] = {0, 0};  // the output size the flat menu's raster was last sized for (sizeContent)
     bool     tipWidthNoted = false;
     int      tooltipScroll = 0;      // lines of the tooltip's body scrolled past
     uint64_t tickMs = 0;
@@ -2279,13 +2280,30 @@ float panelShift(float halfW, bool withTip) {
     return withTip ? halfW * (kTipRatio - 1.0f) / kTipRatio : 0.0f;
 }
 
-// The bitmap's size, from the headset's own pixels per degree at the
+// The back buffer's size, published by the Present hook (menuFlatBeforePresent) for the flat profile's sizing below. 0 until the first Present: the
+// flat card is then sized for 1920x1080, and rebuilt the tick after the real size arrives.
+std::atomic<uint32_t> g_flatOutW{0};
+std::atomic<uint32_t> g_flatOutH{0};
+
+// The bitmap's size. In VR, from the headset's own pixels per degree at the
 // panel: the panel is specified in degrees, so it reads the same size in
-// any headset and composites near 1:1. `withTip` adds the strip.
-void sizeContent(MenuContent& c, float widthDeg, float textDeg, bool withTip = false) {
-    if (runtimeFlatProfile()) {
-        c.cardPx = c.widthPx = 860;
-        c.capPx = 34;
+// any headset and composites near 1:1. In flat, from the output's own
+// pixels (menu_flat_layout.h), and the composite draws it 1:1 too.
+// `withTip` adds the strip beside the card; the card itself keeps its size.
+// `toast` is a flat notice's card rather than the menu's.
+void sizeContent(MenuContent& c, float widthDeg, float textDeg, bool withTip = false, bool toast = false) {
+    if (menuPolicyFor(runtimeFlatProfile()).sizing == MenuSizing::OutputPx) {
+        const uint32_t ow = g_flatOutW.load(std::memory_order_relaxed);
+        const uint32_t oh = g_flatOutH.load(std::memory_order_relaxed);
+        if (!toast) {   // what the MENU's raster was sized for: a changed output rebuilds it (menuTick)
+            g_s.flatOutSized[0] = ow;
+            g_s.flatOutSized[1] = oh;
+        }
+        const FlatCardSize fs = flatCardSize(static_cast<int>(ow), static_cast<int>(oh),
+                                             toast ? kFlatNoticeHeightFrac : kFlatMenuCardHeightFrac);
+        c.cardPx = fs.cardPx;
+        c.widthPx = flatBitmapWidth(fs.cardPx, withTip, kTipRatio);
+        c.capPx = fs.capPx;
         return;
     }
     float ppd = 45.0f;
@@ -2978,7 +2996,7 @@ void buildToastContent(MenuContent& c, const std::string& text, float widthDeg, 
     strncpy(c.lines[0].left, text.c_str(), sizeof(c.lines[0].left) - 1);
     c.lines[0].style = kMenuInfo;
     c.popupLine = -1;
-    sizeContent(c, widthDeg, g_s.textDeg * capScale);
+    sizeContent(c, widthDeg, g_s.textDeg * capScale, false, true);
     // The card must never be wider than the bitmap it lives in: everything
     // downstream reads cardPx as a part of widthPx.
     if (c.widthPx > 1200) {
@@ -4793,6 +4811,15 @@ static void menuAdoptGameBindingsSwitch(Config& cfg, bool summonChanged, const s
     }
 }
 
+// menu.tooltip_delay, in both profiles (the flat allow-list carries it, flat_profile_keys.h). Under a third of a second is not a dwell, it is a flicker:
+// those values, and 0, mean no tooltip at all.
+static float menuReadTooltipDelay(Config& cfg) {
+    float delay = cfg.getFloat("menu.tooltip_delay", 1.5f);
+    if (!(delay >= 0.3f)) delay = 0.0f;
+    if (delay > 10.0f) delay = 10.0f;
+    return delay;
+}
+
 // The [menu] keys: the profiles that read them (menu_policy.h) -- the flat profile reads none, and its values are the policy's.
 static void menuReadMenuKeys(Config& cfg) {
     State& s = g_s;
@@ -4818,14 +4845,7 @@ static void menuReadMenuKeys(Config& cfg) {
     float w = cfg.getFloat("menu.width_degrees", 30.0f);
     if (!(w >= 16.0f) || w > 45.0f) w = 30.0f;
     s.idleSeconds = cfg.getIntInRange("menu.idle_dismiss", 0, 0, 600);
-    {
-        // Under a third of a second is not a dwell, it is a flicker: those
-        // values, and 0, mean no tooltip at all.
-        float delay = cfg.getFloat("menu.tooltip_delay", 1.5f);
-        if (!(delay >= 0.3f)) delay = 0.0f;
-        if (delay > 10.0f) delay = 10.0f;
-        s.tooltipDelayS = delay;
-    }
+    s.tooltipDelayS = menuReadTooltipDelay(cfg);
     // With a tooltip beside it, the panel reaches out to
     // atan(2.14 * tan(w/2)) on the right -- 29.8 degrees at the default
     // width, 41.5 at the widest. Past about 35 the strip leaves one eye's
@@ -4911,7 +4931,12 @@ void menuConfigure(Config& cfg) {
         // State (a width, a toast switch, the overlay) is read in flat.
         s.privateWanted = pol.keyboardAlwaysPrivate;
         s.aimMode = 1;
-        s.tooltipDelayS = 0.0f;
+        // The tooltip's delay is the one [menu] key flat reads besides menu.toasts: the strip beside the card is the same raster in both. A change of whether
+        // it shows changes the bitmap's width, so the card is rebuilt.
+        const float delay = menuReadTooltipDelay(cfg);
+        if (s.configured && (delay > 0.0f) != (s.tooltipDelayS > 0.0f)) s.contentDirty = true;
+        s.tooltipDelayS = delay;
+        s.tooltipsWere = delay > 0.0f;
         s.toasts = false;      // toasts are the world placement's; the flat notice follows s.noticesOn
         s.overlay = false;
     }
@@ -5062,8 +5087,16 @@ void menuNoteConfigReloaded() {
 }
 
 void menuFlatBeforePresent(IDXGISwapChain* swap, unsigned flags) {
-    if (!runtimeFlatProfile() || !g_s.configured || !g_s.screenNotice.compositing(g_s.open) ||
-        (flags & DXGI_PRESENT_TEST)) return;
+    if (!runtimeFlatProfile() || !g_s.configured) return;
+    // The output's own size, for the card's raster (sizeContent). Published before the closed-menu return below so that the first open already has it.
+    if (swap && !(flags & DXGI_PRESENT_TEST)) {
+        DXGI_SWAP_CHAIN_DESC desc{};
+        if (SUCCEEDED(swap->GetDesc(&desc)) && desc.BufferDesc.Width > 0 && desc.BufferDesc.Height > 0) {
+            g_flatOutW.store(desc.BufferDesc.Width, std::memory_order_relaxed);
+            g_flatOutH.store(desc.BufferDesc.Height, std::memory_order_relaxed);
+        }
+    }
+    if (!g_s.screenNotice.compositing(g_s.open) || (flags & DXGI_PRESENT_TEST)) return;
     menuPanelCompositeFlat(swap);
 }
 
@@ -5365,15 +5398,16 @@ void menuTick(ID3D11Device* dev) {
         if (world && s.open) {
             handleKeys(now);
             handleAim(now);
-            // The tooltip's dwell has passed: nothing else changed, so ask
-            // for the one re-raster that brings it up.
-            if (!s.tooltipUp && tooltipsOn() && !s.pages[s.page].status &&
-                now >= s.highlightSinceMs + static_cast<uint64_t>(s.tooltipDelayS * 1000.0f)) {
-                s.contentDirty = true;
-            }
             if (s.idleSeconds > 0 && now - s.lastInputMs > static_cast<uint64_t>(s.idleSeconds) * 1000) {
                 closeMenu("idle");
             }
+        }
+
+        // The tooltip's dwell has passed: nothing else changed, so ask for the one re-raster that brings it up. Both profiles: the flat card's highlight dwells
+        // on the keyboard or the pad the same way.
+        if (s.open && !s.tooltipUp && tooltipsOn() && !s.pages[s.page].status &&
+            now >= s.highlightSinceMs + static_cast<uint64_t>(s.tooltipDelayS * 1000.0f)) {
+            s.contentDirty = true;
         }
 
         // The draw the gate follows.
@@ -5516,6 +5550,11 @@ void menuTick(ID3D11Device* dev) {
                 s.contentDirty = true;
             }
             flatWarningTick(now);
+            // The raster is sized from the output's pixels (sizeContent): a resize, or the first Present's size, builds it again.
+            if (s.open && (g_flatOutW.load(std::memory_order_relaxed) != s.flatOutSized[0] ||
+                           g_flatOutH.load(std::memory_order_relaxed) != s.flatOutSized[1])) {
+                s.contentDirty = true;
+            }
             preparePadNavigation(now, drawnFresh && gameHasFocus());
             if (keysReady) handleKeys(now);
             handlePadNavigation(now);
@@ -5553,7 +5592,8 @@ void menuTick(ID3D11Device* dev) {
             }
             const bool resend = s.screenNotice.tick(s.open, now, menuPanelRasterSerial(), [] {
                 int rasterH = 0;
-                return menuPanelStats(nullptr, &rasterH, nullptr, nullptr) && rasterH > 0 && rasterH < kFlatNoticeMaxPx;
+                return menuPanelStats(nullptr, &rasterH, nullptr, nullptr) && rasterH > 0 &&
+                       rasterH < flatNoticeMaxRasterPx(static_cast<int>(g_flatOutH.load(std::memory_order_relaxed)));
             });
             if (resend) s.contentDirty = true;   // the menu's content must be re-sent after a notice
         }

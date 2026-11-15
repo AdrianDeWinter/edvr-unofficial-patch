@@ -26,6 +26,9 @@ inline bool flatProfileReadsKey(const char* key) {
         // Whether the menu's notices show (menu.cpp menuShowNotice): VR's toasts and flat's screen card alike. Unlisted, getBool answers false here whatever
         // the file says, and no flat notice (a restart waiting, an AA comparison) could be shown.
         std::strcmp(key, "menu.toasts") == 0 ||
+        // How long a highlighted row rests before its tooltip shows in the strip beside the flat card, the same dwell VR's panel has (menu.cpp
+        // menuReadTooltipDelay). Unlisted, getFloat answers the default here whatever the file says, and the flat tooltip could never be turned off.
+        std::strcmp(key, "menu.tooltip_delay") == 0 ||
         std::strcmp(key, "fix.temporal_aa_model") == 0 ||
         // XeSS Frame Generation (xess_fg.cpp, docs\xess-frame-generation-2026-11-12.md): flat-only rows on the Performance tab.
         std::strcmp(key, "fix.xess_frame_generation") == 0 ||
