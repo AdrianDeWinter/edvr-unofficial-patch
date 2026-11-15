@@ -431,6 +431,12 @@ section.block { padding: 56px 0 8px; }
   box-shadow: 0 0 8px rgba(255, 122, 26, 0.6);
 }
 
+.feat:not(.hl) .points { gap: 9px; margin-top: 4px; }
+
+.feat:not(.hl) .points li { color: var(--ink-2); font-size: 14px; }
+
+.points .tag { margin-right: 6px; padding: 2px 5px; font-size: 9.5px; vertical-align: 1px; }
+
 .feat {
   display: flex;
   flex-direction: column;
@@ -714,15 +720,24 @@ footer a:hover { color: var(--accent-hi); }
             <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V4h4"/><path d="M16 4h4v4"/><path d="M20 16v4h-4"/><path d="M8 20H4v-4"/><circle cx="12" cy="12" r="3"/></svg></div>
             <h3>Sharpening and HUD anti-aliasing</h3>
           </div>
-          <p>Upscaling softens the picture slightly, and an optional sharpening filter (AMD's RCAS) puts back some edge contrast. The HUD is drawn after upscaling so its text isn't smeared, which means it misses the anti-aliasing too, and its diagonal lines can look stepped, most on a flat screen below 4K. A separate option smooths them. Both are off by default.</p>
+          <ul class="points">
+            <li>Sharpening (AMD RCAS) for the slight softness upscaling adds</li>
+            <li>HUD anti-aliasing for jagged HUD lines, most visible below 4K</li>
+            <li>Both off by default</li>
+          </ul>
           <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
         </article>
         <article class="feat">
           <div class="feat-head">
             <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg></div>
-            <h3>Smoke, steam and sun glare</h3>
+            <h3>Smoke, glare and view fixes</h3>
           </div>
-          <p>Smoke, steam and geyser plumes roll and spin with the camera as you look around or swing the mouse; ED-UP keeps them upright. In VR it also holds the sun's glare and the night-vision pulse still, drops the wrong-angle frame that makes the world lurch on a jump, and keeps ground from vanishing at the edges of your view over planets.</p>
+          <ul class="points">
+            <li>Smoke and steam stay upright as you look around</li>
+            <li><span class="tag vr">VR</span>Sun glare and night vision stay still as you turn</li>
+            <li><span class="tag vr">VR</span>No world lurch when you jump</li>
+            <li><span class="tag vr">VR</span>No missing terrain at the edges of view</li>
+          </ul>
           <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
         </article>
         <article class="feat">
@@ -730,7 +745,11 @@ footer a:hover { color: var(--accent-hi); }
             <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 17a9 9 0 1 1 17 0"/><path d="M12 14l4.5-4.5"/><circle cx="12" cy="14" r="1.2"/></svg></div>
             <h3>Frame rate in stations</h3>
           </div>
-          <p>Elite keeps drawing parts of a station you can't see, and by default ED-UP skips them: everything outside your hangar while you're docked with the hatch closed, and the station outside the concourse while you're on foot. The concourse windows show a snapshot of the view until you walk up to one.</p>
+          <ul class="points">
+            <li>Skips what's outside your hangar while docked with the hatch closed</li>
+            <li>Skips the station outside the concourse on foot; windows show a snapshot until you get close</li>
+            <li>On by default</li>
+          </ul>
           <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
         </article>
         <article class="feat">
@@ -738,7 +757,13 @@ footer a:hover { color: var(--accent-hi); }
             <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9"/><path d="M17 7h3"/><circle cx="15" cy="7" r="2"/><path d="M4 17h3"/><path d="M11 17h9"/><circle cx="9" cy="17" r="2"/></svg></div>
             <h3>Visual options</h3>
           </div>
-          <p>In VR and flat you can strengthen the glow around stars and swap Odyssey's reflective cockpit glass for the plainer Horizons look. In VR you can also make the world look bigger or smaller, and turn off the hyperspace streaks and space dust. Each starts at the game's normal look.</p>
+          <ul class="points">
+            <li>Stronger star glow</li>
+            <li>Horizons-style cockpit glass</li>
+            <li><span class="tag vr">VR</span>World scale, bigger or smaller</li>
+            <li><span class="tag vr">VR</span>Hide hyperspace streaks and space dust</li>
+            <li>All start at the game's own look</li>
+          </ul>
           <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
         </article>
       </div>
