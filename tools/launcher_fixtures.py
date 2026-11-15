@@ -520,7 +520,7 @@ def release(out, name, version, issued, graphics, launcher_version=None, schema=
 
 def write_releases(out):
     release(out, "relA", "1.0.0", 1794000000, b"graphics one")
-    release(out, "relB", "1.1.0", 1794000100, b"graphics two", launcher_version="0.2.0")
+    release(out, "relB", "1.1.0", 1794000100, b"graphics two", launcher_version="0.2.9")
     release(out, "relOld", "0.9.0", 1790000000, b"graphics old")
     release(out, "relC", "1.2.0", 1794000200, b"graphics three")
     release(out, "relD", "1.3.0", 1794000300, b"graphics four", launcher_version="0.3.0")
@@ -655,7 +655,7 @@ def self_test():
         a = json.loads((folders["relA"] / sm.MANIFEST_NAME).read_text())
         b = json.loads((folders["relB"] / sm.MANIFEST_NAME).read_text())
         assert a["assets"][1] == b["assets"][1] and a["assets"][0] != b["assets"][0]
-        assert "launcher" not in a and b["launcher"]["version"] == "0.2.0"
+        assert "launcher" not in a and b["launcher"]["version"] == "0.2.9"
         assert b["issued"] > a["issued"] > json.loads((folders["relOld"] / sm.MANIFEST_NAME).read_text())["issued"]
         assert "min_launcher" not in json.loads((folders["relC"] / sm.MANIFEST_NAME).read_text())
         again = Path(temp) / "again"

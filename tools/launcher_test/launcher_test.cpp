@@ -1448,7 +1448,7 @@ void testUpdater() {
         const UpdateCheck lower = upHigher.check();
         check(lower.outcome == UpdateOutcome::Available && !lower.launcherNeedsUpdate, "a different digest with a lower version is not a launcher update");
         UpdaterSettings equal = settingsFor(fresh("up9f"));
-        equal.launcherVersion = "0.2.0";
+        equal.launcherVersion = "0.2.9";
         Updater upEqual(http, equal);
         check(upEqual.check().launcherNeedsUpdate, "an equal version with a different digest is a launcher update");
     }
