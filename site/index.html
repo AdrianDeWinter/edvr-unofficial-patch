@@ -522,6 +522,76 @@ section.block { padding: 56px 0 8px; }
 
 .more a:focus-visible { outline: 2px solid var(--cool); outline-offset: 3px; }
 
+.video {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+.video-frame { position: relative; display: block; aspect-ratio: 16 / 9; background: #000; }
+
+.video-frame img,
+.video-frame iframe { position: absolute; inset: 0; display: block; width: 100%; height: 100%; border: 0; object-fit: cover; }
+
+.video-frame .play {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 14px 5px 5px;
+  border-radius: 999px;
+  font: 600 13px/1 var(--mono);
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: rgba(5, 7, 13, 0.74);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 10px 28px -10px rgba(0, 0, 0, 0.7);
+  transition: transform 0.2s;
+}
+
+.video-frame .play-ico {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: #1a0d03;
+  background: linear-gradient(180deg, var(--accent-hi), var(--accent-lo));
+  box-shadow: 0 0 0 4px rgba(255, 122, 26, 0.2), 0 6px 18px -4px rgba(255, 100, 20, 0.6);
+}
+
+.video-frame .play-ico svg { margin-left: 2px; }
+
+.video-frame:hover .play { transform: translateY(-1px) scale(1.03); }
+
+.video-frame:focus-visible { outline: 2px solid var(--cool); outline-offset: -2px; }
+
+.video-text { display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 22px 24px; }
+
+.video-text h3 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.005em; }
+
+.video-text p { margin: 0; color: var(--ink-2); font-size: 15px; line-height: 1.55; }
+
+.video-text .more { margin: 2px 0 0; }
+
+.video-text .note { color: var(--muted); font-size: 13px; }
+
+@media (max-width: 760px) { .video { grid-template-columns: 1fr; } }
+
+@media (max-width: 640px) {
+  .video-frame .play { right: 10px; bottom: 10px; gap: 7px; padding: 3px 10px 3px 3px; font-size: 11px; }
+  .video-frame .play-ico { width: 26px; height: 26px; box-shadow: 0 0 0 3px rgba(255, 122, 26, 0.2); }
+  .video-frame .play-ico svg { width: 13px; height: 13px; }
+}
+
 @media (max-width: 760px) {
   .facts { grid-template-columns: 1fr; }
   .facts div + div { border-left: 0; border-top: 1px solid var(--line); }
@@ -595,7 +665,7 @@ footer a:hover { color: var(--accent-hi); }
 @media (prefers-reduced-motion: reduce) {
   .rise { opacity: 1; transform: none; animation: none; }
   .chip i { animation: none; }
-  .btn, .card, .feat, .btn.primary::after { transition: none; }
+  .btn, .card, .feat, .btn.primary::after, .video-frame .play { transition: none; }
 }
 
 @media (max-width: 640px) {
@@ -775,6 +845,22 @@ footer a:hover { color: var(--accent-hi); }
       </div>
 
       <p class="more"><a href="https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md">Every feature and fix, with its setting and default &rarr;</a></p>
+    </section>
+
+    <section class="block" aria-labelledby="video">
+      <h2 class="label" id="video">Seen on Witchspace News</h2>
+      <div class="video">
+        <a class="video-frame" id="video-play" href="https://www.youtube.com/watch?v=EyJ5i_lBhbo&amp;t=356s" aria-label="Play the ED-UP segment of Witchspace News, from 5:56">
+          <img src="witchspace-news.jpg" width="1280" height="720" loading="lazy" decoding="async" alt="Episode title card reading Elite Dangerous, ED Unofficial Patch, over a commander on foot among plants on an icy planet">
+          <span class="play" aria-hidden="true"><span class="play-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg></span>Play from 5:56</span>
+        </a>
+        <div class="video-text">
+          <h3>ED-UP on Witchspace News</h3>
+          <p>CMDR Buur covers ED-UP in this episode of Witchspace News, on The Buur Pit's YouTube channel. The segment starts at 5:56.</p>
+          <p class="more"><a href="https://www.youtube.com/watch?v=EyJ5i_lBhbo&amp;t=356s">Watch on YouTube &rarr;</a></p>
+          <p class="note">Playing it here loads YouTube's player.</p>
+        </div>
+      </div>
     </section>
 
     <section class="block" aria-labelledby="what">
@@ -990,6 +1076,28 @@ footer a:hover { color: var(--accent-hi); }
       apply(d);
     })
     .catch(function () {});
+})();
+
+// The Witchspace News video. The page shows a still and links to YouTube; YouTube's player (the
+// no-cookie domain) loads only when the visitor clicks the still, so nothing is fetched from it before.
+(function () {
+  var a = document.getElementById('video-play');
+  if (!a) return;
+  a.addEventListener('click', function (e) {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    var f = document.createElement('iframe');
+    f.src = 'https://www.youtube-nocookie.com/embed/EyJ5i_lBhbo?start=356&autoplay=1&rel=0';
+    f.title = 'Witchspace News: the ED-UP segment';
+    f.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
+    f.allowFullscreen = true;
+    f.referrerPolicy = 'strict-origin-when-cross-origin';
+    var box = document.createElement('div');
+    box.className = 'video-frame';
+    box.appendChild(f);
+    a.parentNode.replaceChild(box, a);
+    f.focus();
+  });
 })();
 </script>
 </body>
