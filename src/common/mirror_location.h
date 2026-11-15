@@ -116,9 +116,9 @@ inline std::wstring runtimeMirrorDirFor(const std::wstring& localAppData,
     if (!found.empty()) {
         if (inferredSource.empty()) return found;
         // A path hint does not bind a pre-store_source mirror. Retain the
-        // sole unclaimed copy, but never bypass a recorded store owner.
+        // sole unclaimed or matching-owner copy, never a conflicting owner.
         const std::wstring owner = recordedMirrorSource(found + L"\\state.ini");
-        if (owner.empty() || owner == L"Folder you chose") return found;
+        if (owner.empty() || owner == L"Folder you chose" || owner == inferredSource) return found;
     }
     if (!inferredSource.empty()) return exactDir(inferredSource);
     if (!create) return std::wstring();

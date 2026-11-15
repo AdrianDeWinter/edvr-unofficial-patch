@@ -526,6 +526,13 @@ static void testLegacyRuntimeHint(const std::wstring& scratch) {
           readAll(joinPath(canonical, L"edvr.ini")) == "canonical settings",
           "an existing exact canonical mirror takes precedence over the unbound legacy fallback");
     removeTree(canonical);
+    writeFileAtomic(joinPath(legacy, L"state.ini"), "[edvr]\r\nversion = test\r\nstore_source = Epic\r\n");
+    const std::string beforeMatchingRead = mirrorFixtureTree(root);
+    check(runtimeMirrorDirFor(local, game, false) == legacy &&
+          runtimeMirrorDirFor(local, game, true) == legacy &&
+          edvr::openxr::seatMirrorDirFor(local, game, false) == legacy &&
+          mirrorFixtureTree(root) == beforeMatchingRead && !dirExists(canonical),
+          "a sole legacy candidate with the matching recorded owner remains recoverable despite its old slug");
     writeFileAtomic(joinPath(legacy, L"state.ini"), "[edvr]\r\nversion = test\r\nstore_source = Steam\r\n");
     const std::string beforeClaimedRead = mirrorFixtureTree(root);
     check(runtimeMirrorDirFor(local, game, false).empty() &&
