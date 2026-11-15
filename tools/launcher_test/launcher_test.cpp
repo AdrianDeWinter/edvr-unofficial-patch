@@ -444,7 +444,7 @@ void testShapes() {
     }
     const std::wstring tableBase = P(P(g_fixtures, L"shapes"), widenUtf8(tableLabel));
     Manifest table;
-    check(loadVerifiedManifest(readAll(tableBase + L".json"), readAll(tableBase + L".sig"), g_testKeys, &table, &err) && table.files.size() == 10,
+    check(loadVerifiedManifest(readAll(tableBase + L".json"), readAll(tableBase + L".sig"), g_testKeys, &table, &err) && table.files.size() == 12,
           "the packager's file table is read whole: " + err);
     auto byId = [&](const char* id) -> const ManifestFile* {
         for (const ManifestFile& f : table.files) if (f.id == id) return &f;
@@ -457,6 +457,11 @@ void testShapes() {
           "dlss is placed only for an NVIDIA adapter, and owned");
     check(flat && flat->when.profiles == kProfileFlat && flat->existing == ExistingMode::Settings && xess && !xess->when.present && xess->existing == ExistingMode::Owned,
           "the flat settings file is for the flat profile, and XeSS has no condition");
+    for (const char* id : {"xess_fg", "xess_ll"}) {
+        const ManifestFile* f = byId(id);
+        check(f && f->when.profiles == kProfileFlat && !f->when.adapterNvidia && f->existing == ExistingMode::Owned && f->target.root == TargetRoot::Game,
+              std::string(id) + " is placed for the flat profile only, and owned");
+    }
 
     // The `when` evaluation: the installed profiles and the survey's adapter.
     ManifestWhen always;
@@ -3155,6 +3160,8 @@ void testSession() {
         // The payload loads on a worker of its own: wait for it too, or a check that finishes first leaves it Loading.
         check(ui.pump([&]() { return session.checkState() == CheckState::Skipped && session.payloadState() != PayloadState::Loading; }), "an unreachable GitHub ends the check as skipped");
         check(contains(session.updateLine(), "could not be reached") && session.updateLine().back() == '.', "with one sentence: " + session.updateLine());
+        // The payload loads on its own worker, which can finish after the check under load.
+        check(ui.pump([&]() { return session.payloadState() != PayloadState::Loading; }), "the payload load finishes");
         session.beginUpdate();
         check(!session.updating() && http.count("ed-up-core") == 0, "Update does nothing when there is nothing to update");
         check(session.payloadState() == PayloadState::None, "and the payload stays none");

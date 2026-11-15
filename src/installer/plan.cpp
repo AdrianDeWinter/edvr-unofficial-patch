@@ -447,6 +447,8 @@ const FileBlurb kBlurbs[] = {
     {"xess", "XeSS", "Intel's XeSS-SR runtime", "for temporal_aa = xess", nullptr},
     {"xess_license", "XeSS", nullptr, nullptr, "xess"},
     {"xess_third_party", "XeSS", nullptr, nullptr, "xess"},
+    {"xess_fg", "XeSS", "Intel's XeSS Frame Generation runtime", "for xess_frame_generation", "xess"},
+    {"xess_ll", "XeSS", "Intel's Xe Low Latency runtime", "for xess_frame_generation", "xess"},
     {"openxr_loader", "OpenXR", nullptr, nullptr, nullptr},
     {"openxr_license", "OpenXR", nullptr, nullptr, nullptr},
 };

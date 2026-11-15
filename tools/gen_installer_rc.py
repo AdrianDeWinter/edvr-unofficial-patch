@@ -525,7 +525,9 @@ def main(argv=None):
         print('  A manifest Windows cannot parse is an installer that cannot start.')
         return 1
 
-    if os.path.exists(xess) and (
+    # XeSS-SR, XeSS Frame Generation and Xe Low Latency all ship under the same two Intel notices.
+    any_xess = any(os.path.exists(os.path.join(args.build, name)) for name in ('libxess.dll', 'libxess_fg.dll', 'libxell.dll'))
+    if any_xess and (
             not os.path.isfile(xess_license) or not os.path.isfile(xess_third_party)):
         print('gen_installer_rc: ERROR: XeSS runtime lacks license notices')
         return 1
@@ -580,6 +582,8 @@ def main(argv=None):
     # XeSS-SR ships with the installer: both edvr.ini and edvr-flat.ini can select it.
     if 'xess' in have:
         carried += ', Intel XeSS-SR runtime and notices'
+    if 'xess_fg' in have and 'xess_ll' in have:
+        carried += ', Intel XeSS Frame Generation and Xe Low Latency runtimes'
 
     version = args.version
     lines += [''] + versioninfo_lines(
@@ -653,7 +657,7 @@ def self_test():
                 print('expected-error: argparse refused --profile flat (exit 2)')
             else:
                 raise AssertionError('--profile flat was accepted')
-            for name in ('libxess.dll', 'INTEL-XESS-LICENSE.txt', 'INTEL-XESS-THIRD-PARTY.txt'):
+            for name in ('libxess.dll', 'INTEL-XESS-LICENSE.txt', 'INTEL-XESS-THIRD-PARTY.txt', 'libxess_fg.dll', 'libxell.dll'):
                 with open(os.path.join(build, name), 'wb') as stream: stream.write(name.encode('ascii'))
             assert main(['--root', root, '--build', build, '--out', out,
                          '--version', '1.2.3']) == 0
@@ -674,6 +678,7 @@ def self_test():
                 assert '%d RCDATA "' % (IDR_FILE_BASE + index) in rc_text and '// ' + entry_id in rc_text, entry_id
             assert '%d RCDATA ' % (IDR_FILE_BASE + len(ids)) not in rc_text
             assert 'Intel XeSS-SR runtime and notices' in rc_text
+            assert 'Intel XeSS Frame Generation and Xe Low Latency runtimes' in rc_text
             assert 'graphics, edvr.ini, edvr-flat.ini, native OpenXR runtime, loader and notice' in rc_text
             # It is a valid schema-2 manifest, and its hashes and sizes are those of the bytes embedded after it.
             assert sign_manifest.validate_manifest(embedded) == []

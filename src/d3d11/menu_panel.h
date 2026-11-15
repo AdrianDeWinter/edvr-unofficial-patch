@@ -88,9 +88,10 @@ constexpr int kMenuMaxTabs = 8;
 // silently past this, and the line it would drop is `Last write`. 17 since
 // 2026-10-14: the flat page gained its sixth row (Intro movie), and 18 since
 // 2026-10-16 for its seventh (Sharp weapons, retired 2026-10-28), and 19 since
-// 2026-11-08 for Skip rooms behind doors: its rows, a blank line and the ten-line
+// 2026-11-08 for Skip rooms behind doors, and 21 since 2026-11-12 for the two
+// XeSS Frame Generation rows: its rows, a blank line and the ten-line
 // warning (flat_elite_settings.h) are the whole card.
-constexpr int kMenuMaxLines = 19;
+constexpr int kMenuMaxLines = 21;
 constexpr int kMenuMaxTiles = 16;
 
 // A gauge: a big number with a small caption above and one small line

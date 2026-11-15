@@ -30,6 +30,7 @@ experimental; their visual quality is not yet qualified.
 - Press F8 or Escape to close. Game keys are private while the menu is drawn.
 - [fix] temporal_aa also accepts off, on (TAA), dlaa, dlss, fsr or xess (default off).
 - XeSS-SR needs libxess.dll beside the game; the installer includes it when built with the SDK.
+- libxess_fg.dll (XeSS Frame Generation) and libxell.dll (Xe Low Latency) ship beside it, from the same SDK.
 - Game supersampling controls render scale; DLAA requires native SS.
 - [visual] intro_video = skip leaves out the launch movie (the F8 menu's Visual
   tab, Intro movie row, does the same; it applies at the next launch). The

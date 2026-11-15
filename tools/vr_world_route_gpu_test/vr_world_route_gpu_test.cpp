@@ -230,6 +230,7 @@ bool xessAvailable(ID3D11Device*, const char**) { return false; }
 void xessReleaseFeatures() {}
 void xessShutdown() {}
 bool xessBuiltIn() { return false; }
+void xessFgNoteCamera(const float[4][4], float) {}   // XeSS Frame Generation's camera note: no bridge in the rig
 bool xessEvaluate(ID3D11DeviceContext*,unsigned,ID3D11Texture2D*,ID3D11Texture2D*,ID3D11Texture2D*,
                   ID3D11Texture2D*,uint32_t,uint32_t,uint32_t,uint32_t,float,float,bool,bool,const char**) { return false; }
 bool dlaaEvaluate(ID3D11DeviceContext* c, int slot, ID3D11Texture2D* colour, ID3D11Texture2D*, ID3D11Texture2D*, ID3D11Texture2D* out,
