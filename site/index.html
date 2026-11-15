@@ -380,7 +380,56 @@ section.block { padding: 56px 0 8px; }
 .card .n { position: absolute; top: 22px; right: 22px; font: 500 12px/1 var(--mono); color: rgba(255, 255, 255, 0.22); letter-spacing: 0.1em; }
 
 /* Features */
+.hgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 14px; }
+
+@media (max-width: 700px) { .hgrid { grid-template-columns: 1fr; } }
+
 .fgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+
+.feat.hl {
+  padding: 26px 26px 22px;
+  border-color: rgba(255, 122, 26, 0.38);
+  background: radial-gradient(120% 90% at 0% 0%, rgba(255, 122, 26, 0.15), transparent 55%), var(--glass);
+  box-shadow: inset 0 1px 0 rgba(255, 196, 140, 0.10), 0 20px 50px -24px rgba(255, 100, 20, 0.45);
+}
+
+.feat.hl:hover { border-color: rgba(255, 160, 77, 0.6); }
+
+.feat.hl .feat-head { gap: 14px; margin-bottom: 14px; }
+
+.feat.hl .ico { width: 48px; height: 48px; border-radius: 12px; }
+
+.feat.hl .ico svg { width: 24px; height: 24px; }
+
+.feat.hl h3 { font-size: 22px; letter-spacing: -0.01em; }
+
+.feat.hl p { font-size: 15.5px; }
+
+.kicker {
+  display: block;
+  margin-bottom: 6px;
+  font: 600 10.5px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent-hi);
+}
+
+.points { display: grid; gap: 8px; margin: 16px 0 0; padding: 0; list-style: none; }
+
+.points li { position: relative; padding-left: 20px; color: var(--ink); font-size: 14.5px; line-height: 1.45; }
+
+.points li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.45em;
+  width: 7px;
+  height: 7px;
+  border-radius: 1.5px;
+  transform: rotate(45deg);
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(255, 122, 26, 0.6);
+}
 
 .feat {
   display: flex;
@@ -629,54 +678,52 @@ footer a:hover { color: var(--accent-hi); }
 
     <section class="block" aria-labelledby="features">
       <h2 class="label" id="features">What ED-UP does</h2>
-      <div class="fgrid">
-        <article class="feat">
+      <div class="hgrid">
+        <article class="feat hl">
           <div class="feat-head">
             <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><path d="M20 4l-7 7"/><path d="M4 20l7-7"/></svg></div>
-            <h3>DLSS, FSR and XeSS</h3>
+            <div><span class="kicker">Main feature</span><h3>DLSS, FSR and XeSS upscaling</h3></div>
           </div>
-          <p>Elite's own anti-aliasing leaves edges and fine lines shimmering as you move. DLSS (NVIDIA RTX cards), FSR or XeSS (any GPU) fix that by blending each frame with the ones before it. Set HMD Image Quality (VR) or Supersampling (flat) below 1.0 and the upscaler brings the picture back to full size, for a higher frame rate.</p>
+          <p>Elite's own anti-aliasing leaves edges and fine lines shimmering as you move. An upscaler fixes that by blending each frame with the ones before it, and lets the game render below full resolution for a higher frame rate.</p>
+          <ul class="points">
+            <li>DLSS on NVIDIA RTX cards</li>
+            <li>FSR 3.1 or XeSS on any GPU</li>
+            <li>Set HMD Image Quality (VR) or Supersampling (flat) below 1.0 to raise the frame rate</li>
+            <li>F7 switches it off and on for a side-by-side look</li>
+          </ul>
           <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
         </article>
-        <article class="feat">
+        <article class="feat hl">
           <div class="feat-head">
-            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg></div>
-            <h3>Menus and HUD skip the upscaler</h3>
+            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7.5" r="3.5"/><path d="M5 21c0-3.9 3.1-7 7-7s7 3.1 7 7"/></svg></div>
+            <div><span class="kicker">Main feature</span><h3>On-foot VR in 3D</h3></div>
           </div>
-          <p>Upscaling smears small text. ED-UP draws menus, cockpit panels, the HUD and holograms separately and lays them over the finished picture, so the upscaler never touches them. You can also draw them at a higher resolution than the rest of the scene. Lasers and tracers are added after upscaling too, so they don't smear.</p>
-          <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
+          <p>On foot, Elite shows VR players a flat screen, with the same image in both eyes. ED-UP renders the world in 3D from your character's eyes instead, so walking, using tools and fighting on foot are in 3D, like the cockpit.</p>
+          <ul class="points">
+            <li>Your body is there when you look down</li>
+            <li>Aim with your head or the mouse, chosen on first launch</li>
+            <li>Weapon scopes zoom in as they do in flat</li>
+            <li>On by default</li>
+          </ul>
+          <div class="tags"><span class="tag vr">VR</span></div>
         </article>
+      </div>
+      <div class="fgrid">
         <article class="feat">
           <div class="feat-head">
             <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V4h4"/><path d="M16 4h4v4"/><path d="M20 16v4h-4"/><path d="M8 20H4v-4"/><circle cx="12" cy="12" r="3"/></svg></div>
             <h3>Sharpening and HUD anti-aliasing</h3>
           </div>
-          <p>Upscaling softens the picture slightly, and an optional sharpening filter (AMD's RCAS) puts back some edge contrast. Because the HUD skips the upscaler, it also misses its anti-aliasing, so diagonal lines can look stepped, most on a flat screen below 4K. A separate option smooths them. Both are off by default.</p>
+          <p>Upscaling softens the picture slightly, and an optional sharpening filter (AMD's RCAS) puts back some edge contrast. The HUD is drawn after upscaling so its text isn't smeared, which means it misses the anti-aliasing too, and its diagonal lines can look stepped, most on a flat screen below 4K. A separate option smooths them. Both are off by default.</p>
           <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
         </article>
         <article class="feat">
           <div class="feat-head">
-            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7.5" r="3.5"/><path d="M5 21c0-3.9 3.1-7 7-7s7 3.1 7 7"/></svg></div>
-            <h3>On foot in 3D</h3>
-          </div>
-          <p>On foot, Elite shows VR players a flat screen, with the same image in both eyes. ED-UP renders the world in 3D from your character's eyes instead, and your body is there when you look down. You can aim with your head or the mouse, and weapon scopes zoom in as they do in flat.</p>
-          <div class="tags"><span class="tag vr">VR</span></div>
-        </article>
-        <article class="feat">
-          <div class="feat-head">
             <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg></div>
-            <h3>Head-locked effects</h3>
+            <h3>Smoke, steam and sun glare</h3>
           </div>
-          <p>Elite draws the sun's glare, smoke and steam, and the night-vision pulse flat on your view, so in VR they move when you turn or tilt your head. ED-UP keeps them still in the world. It also drops the one wrong-angle frame that makes the world lurch when you jump, and stops ground going missing at the edges of your view over planets.</p>
-          <div class="tags"><span class="tag vr">VR</span></div>
-        </article>
-        <article class="feat">
-          <div class="feat-head">
-            <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14"/><path d="M15 6v14"/></svg></div>
-            <h3>Galaxy and System Maps</h3>
-          </div>
-          <p>The Galaxy Map runs at your headset's full frame rate without smearing, and its labels stay in place when you turn your head. On both maps the cursor selects what it points at, even while you move your head, and on the System Map a second click moves the map to the body, as in flat.</p>
-          <div class="tags"><span class="tag vr">VR</span></div>
+          <p>Smoke, steam and geyser plumes roll and spin with the camera as you look around or swing the mouse; ED-UP keeps them upright. In VR it also holds the sun's glare and the night-vision pulse still, drops the wrong-angle frame that makes the world lurch on a jump, and keeps ground from vanishing at the edges of your view over planets.</p>
+          <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
         </article>
         <article class="feat">
           <div class="feat-head">
@@ -691,7 +738,7 @@ footer a:hover { color: var(--accent-hi); }
             <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9"/><path d="M17 7h3"/><circle cx="15" cy="7" r="2"/><path d="M4 17h3"/><path d="M11 17h9"/><circle cx="9" cy="17" r="2"/></svg></div>
             <h3>Visual options</h3>
           </div>
-          <p>You can make the world look bigger or smaller in VR, strengthen the glow around stars, swap Odyssey's reflective cockpit glass for the plainer Horizons look, and turn off the hyperspace streaks and space dust. Each starts at the game's normal look.</p>
+          <p>In VR and flat you can strengthen the glow around stars and swap Odyssey's reflective cockpit glass for the plainer Horizons look. In VR you can also make the world look bigger or smaller, and turn off the hyperspace streaks and space dust. Each starts at the game's normal look.</p>
           <div class="tags"><span class="tag vr">VR</span><span class="tag flat">Flat</span></div>
         </article>
       </div>
