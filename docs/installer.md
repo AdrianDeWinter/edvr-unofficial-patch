@@ -6,8 +6,9 @@ optional NVIDIA DLSS runtime as resources. It finds the game, installs or
 updates ED-UP, preserves the settings you have changed, keeps other mods
 working, and can put everything back.
 
-This file is why it does what it does. Using it is one paragraph in the
-[README](../README.md).
+This file is why it does what it does. Using it is the player guide:
+[Windows](../wiki/Install-on-Windows.md) and
+[Linux](../wiki/Install-on-Linux.md).
 
 ## Status
 
@@ -396,8 +397,8 @@ one and it appears, leave it and it stays where it is.
 
 **Save logs** writes one zip to the Desktop: the most recent session's logs,
 `edvr_breadcrumbs.txt`, any `edvr_FATAL.txt`, `edvr.ini` and the install
-record. That is the list [Reporting a
-problem](../README.md#reporting-a-problem) asks for — four things in three
+record. That is the list [Ask for
+help](../wiki/Ask-for-help.md) asks for — four things in three
 folders, named in a paragraph somebody reads while annoyed — collected by the
 program that is already open and already knows which folder the game is in and
 where `log.dir` moved the logs to.

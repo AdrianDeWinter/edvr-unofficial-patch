@@ -7,6 +7,8 @@ something correct on a monitor is wrong in a headset because it is drawn once
 for two eyes, pinned to your face instead of standing in the world, or sized
 for a screen you are not looking at.
 
+The [player guide](../wiki/Home.md) is the short tour of these features.
+
 This page describes release 0.22.1, made for Elite build 334925. Each entry
 names its setting in `edvr.ini` and the value it ships with. Most are also a
 row in the F8 menu and take effect within about a second. Where a fix has a
@@ -676,7 +678,7 @@ changes your ship, cargo, credits or missions. Look to aim, above, is the one
 way ED-UP steers your commander, with the same kind of input a mouse gives.
 None interacts with anti-cheat, and none attempts to hide from anything. The
 launcher is the one part of ED-UP that goes online; the
-[README](../README.md#the-launcher) says what it contacts.
+[launcher page](../wiki/The-launcher.md) says what it contacts.
 
 If you would rather ED-UP changed as little of the game as possible, set
 `fix.vscreen_res_width` to `1920` (the stock size, meaning "do not patch"),
