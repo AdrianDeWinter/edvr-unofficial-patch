@@ -2964,6 +2964,19 @@ void testRoute() {
     std::string err;
     check(startRoute(steam, rec.ops(), false, &err) && rec.uris.size() == 1 && rec.uris[0] == L"steam://rungameid/359320" && rec.spawns.empty(), "Steam is started by opening exactly the Steam address, and spawns nothing: " + err);
     check(startRoute(epic, rec.ops(), false, &err) && rec.uris.size() == 2 && rec.uris[1] == epic.uri && rec.spawns.empty(), "Epic is started by opening exactly the Epic address");
+    Recorder wine;
+    RouteOps wineOps = wine.ops();
+    wineOps.underWine = true;
+    check(startRoute(steam, wineOps, false, &err) && wine.uris == std::vector<std::wstring>{L"steam://run/359320"} && wine.spawns.empty(),
+          "Steam under Wine opens the native client's run address, bypassing Proton's restart interception: " + err);
+    const LaunchRoute steamFlat = routeFor(L"Steam", products, false);
+    check(startRoute(steamFlat, wineOps, false, &err) && wine.uris == std::vector<std::wstring>{L"steam://run/359320", L"steam://run/359320"} &&
+              !steam.carriesMode && !steamFlat.carriesMode && wine.spawns.empty(),
+          "Steam under Wine leaves both VR and flat choices to the store");
+    check(startRoute(epic, wineOps, false, &err) && wine.uris.size() == 3 && wine.uris.back() == epic.uri && wine.spawns.empty(),
+          "Epic under Wine keeps its own launch address");
+    check(!startRoute(steam, wineOps, true, &err) && contains(err, "administrator") && wine.uris.size() == 3 && wine.spawns.empty(),
+          "an elevated launcher under Wine refuses Steam before opening any address");
     check(startRoute(vr, rec.ops(), false, &err) && rec.spawns.size() == 1 && rec.spawns[0].exe == vr.exe && rec.spawns[0].args == vr.args && rec.spawns[0].dir == vr.workDir && rec.uris.size() == 2,
           "Frontier is started by spawning EDLaunch.exe with its flags, and opens no address");
     Recorder refused;
@@ -2976,6 +2989,7 @@ void testRoute() {
     check(!startRoute(steam, failing, false, &err) && !startRoute(vr, failing, false, &err), "an address Windows will not open, or a program that will not start, is a failure");
     const RouteOps real = realRouteOps();
     check(real.openUri && real.spawn, "the real ops exist (and are not called by this rig)");
+    check(real.underWine == runningUnderWine(), "the real route ops use the host's Wine detection");
 }
 
 struct Events {

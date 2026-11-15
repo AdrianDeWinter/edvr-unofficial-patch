@@ -37,8 +37,10 @@ This file is why it does what it does. Using it is one paragraph in the
   (see "Receipts from the tool"). `installer_test` pins it over real files.
 - **Linux Steam wrapper:** `tools/install_proton.py` and `edvr_installer.sh`
   ship in the Linux installer and full release ZIPs. They use Steam's existing
-  Proton prefix, recorded Proton runner, and required runtime directly;
-  Protontricks is no longer needed. On 2026-10-16, the direct route reached the
+  Elite prefix, recorded Proton runner, and required runtime; Flatpak Steam
+  uses its selected sandbox, including installed compatibility-tool extensions.
+  Steam identity is passed explicitly, and unrelated shortcut prefixes are
+  ignored. Protontricks is no longer needed. On 2026-10-16, the direct route reached the
   Odyssey folder. An older flat installer refused to proceed while Elite was
   running. A current unified installer preview and actual installation remain
   unverified; the game session logs do not establish VR rendering behavior.
@@ -693,11 +695,29 @@ DOS drive links. If you change Elite's Proton version in Steam, launch Elite
 once before running the wrapper so the prefix record reflects that version.
 `--proton` accepts a Proton directory or script as an explicit override.
 
+Flatpak Steam runs the recorded Proton and runtime inside the installed Steam
+sandbox. The wrapper checks the selected deployment and its compatibility-tool
+extension metadata without starting Flatpak. Missing or ambiguous deployments
+and extension mounts are refused rather than replaced with another runner.
+An explicit `--proton` selects a host runner and bypasses the sandbox.
+
 The wrapper also accepts `--repair`, `--uninstall`, and `--collect-logs`. Use
 `--game-dir` for a different product folder inside the installed game tree,
 `--installer` for a separate EXE, and `--steam-dir` or `STEAM_DIR` for a
-nonstandard Steam root. `STEAM_COMPAT_DATA_PATH` can name an existing custom
-compatdata directory (the parent of `pfx`); `pfx/drive_c` must already exist.
+nonstandard Steam root. Use `--store steam --prefix` to select an existing
+custom compatdata directory (the parent of `pfx`); `pfx/drive_c` must already
+exist. An inherited `STEAM_COMPAT_DATA_PATH` is used only when its Steam app
+identity identifies Elite; a different shortcut's prefix is ignored. The
+Windows installer and launcher receive `--store steam` even when a DOS drive
+alias prevents Windows-side discovery from recognizing the folder again.
+
+Under Wine/Proton, the launcher's Play action opens `steam://run/359320`.
+[Proton's Steam helper](https://github.com/ValveSoftware/Proton/blob/proton_11.0/steam_helper/steam.c)
+intercepts the older `rungameid` address for its own app as a restart request,
+which has no supervisor under `runinprefix`. Valve documents the forwarded
+`run` address in its [Steamworks API overview](https://partner.steamgames.com/doc/sdk/api#initialization_and_shutdown).
+Native Windows keeps its existing launch address. Steam chooses the game's
+launch mode; the wrapper does not change its launch options.
 
 The wrapper only launches the installer. Keep any existing required Elite
 launch options; headset/OpenXR setup and Proton gameplay remain unverified

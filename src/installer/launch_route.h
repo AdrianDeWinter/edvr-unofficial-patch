@@ -3,7 +3,7 @@
 // This is the route every store can use (docs\design-launcher-2026-11-07.md, "The EDLaunch
 // route"):
 //
-//   Steam      steam://rungameid/359320
+//   Steam      steam://rungameid/359320 (steam://run/359320 under Wine)
 //   Epic       com.epicgames.launcher://apps/<app>?action=launch&silent=true
 //   Frontier   EDLaunch.exe /autorun /autoquit /edo /vr   (or /novr)
 //
@@ -61,6 +61,7 @@ LaunchRoute routeFor(const std::wstring& source, const std::wstring& gameDir, bo
 struct RouteOps {
     std::function<bool(const std::wstring& uri)> openUri;
     std::function<bool(const std::wstring& exe, const std::wstring& args, const std::wstring& workDir)> spawn;
+    bool underWine = false;  // Steam's URI must reach the native client, not Proton's restart event.
 };
 RouteOps realRouteOps();
 

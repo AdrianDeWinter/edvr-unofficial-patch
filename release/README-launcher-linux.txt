@@ -27,13 +27,20 @@ Options for the launcher itself go after a lone --, for example:
 
     ./ed-up-launcher.sh -- --channel rc
 
-The wrapper's own options (--game-dir, --steam-dir, --proton, --launcher-exe)
+The wrapper's own options (--game-dir, --steam-dir, --prefix, --proton, --launcher-exe)
 go before the --. They work as they do for the Linux installer wrapper: use
 --game-dir '/path/to/product' for a different product folder, --steam-dir
 '/path/to/Steam' or STEAM_DIR for a nonstandard Steam root, and --proton
 '/path/to/Proton' if the prefix record is missing or stale. The shell script
 works from any directory. You can also run python3 ed-up-launcher-linux.py
 --launcher directly.
+
+For a custom Steam prefix, use --store steam --prefix with the existing
+compatdata directory (the parent of pfx). An inherited prefix from another
+Steam shortcut is ignored. Flatpak Steam uses its installed sandbox and the
+recorded Proton, including compatibility-tool extensions; missing or ambiguous
+tools are refused. An explicit --proton selects a host runner and bypasses
+the sandbox.
 
 The launcher keeps its downloads and settings inside Elite's Proton prefix, in
 drive_c/users/steamuser/AppData/Local/EDVR under

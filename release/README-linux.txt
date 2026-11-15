@@ -47,9 +47,15 @@ there is none) and prints the Linux path. Use
 installed game tree, or --installer '/path/to/edvr-installer.exe' for a
 separate EXE. --steam-dir '/path/to/Steam' or STEAM_DIR selects a nonstandard
 Steam root. --proton '/path/to/Proton' accepts a Proton directory or its proton
-script if the prefix record is missing or stale. STEAM_COMPAT_DATA_PATH can
-select an existing custom compatdata directory (the parent of pfx); its
-pfx/drive_c must already exist.
+script if the prefix record is missing or stale. For a custom Steam prefix,
+use --store steam --prefix with the existing compatdata directory (the parent
+of pfx); its pfx/drive_c must already exist. Inherited prefixes are used only
+when their Steam app identity names Elite, so another shortcut cannot select
+the wrong prefix. Steam identity is also passed to the Windows installer.
+
+Flatpak Steam uses its installed sandbox and recorded Proton, including
+compatibility-tool extensions. Missing or ambiguous tools are refused. An
+explicit --proton selects a host runner and bypasses the sandbox.
 
 For an Epic install whose prefix or runner is not fully recorded, pass
 --prefix '/existing/prefix' and --wine '/installed/wine/bin/wine', or select

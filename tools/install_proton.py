@@ -28,8 +28,9 @@ def parser():
     p.add_argument("--store", choices=("auto", "steam", "epic"), default="auto",
                    help="select the store; auto refuses when both stores have matching installs")
     p.add_argument("--proton", type=Path,
-                   help="host Proton directory or script; overrides the prefix record and bypasses Epic Flatpak")
-    p.add_argument("--prefix", type=Path, help="existing Epic Wine prefix or Proton compatdata root")
+                   help="host Proton directory or script; overrides the prefix record and bypasses Flatpak")
+    p.add_argument("--prefix", type=Path,
+                   help="existing Epic Wine prefix; with --store steam, Elite's Proton compatdata root (containing pfx/)")
     p.add_argument("--wine", type=Path,
                    help="explicit host Wine binary for Epic (bypasses a recorded Flatpak runner)")
     p.add_argument("--game-dir", type=Path, help="folder holding EliteDangerous64.exe inside the installed game")
@@ -270,15 +271,22 @@ def find_game(args, steam_roots):
     return matches[0]
 
 
-def compatdata_path(library, environ):
-    raw = environ.get("STEAM_COMPAT_DATA_PATH")
-    path = Path(raw).expanduser().resolve() if raw else library / "steamapps/compatdata" / APP_ID
+def compatdata_path(library, environ, explicit=None):
+    identities = [environ[key] for key in ("SteamAppId", "SteamGameId", "STEAM_COMPAT_APP_ID")
+                  if environ.get(key)]
+    # A non-Steam installer shortcut carries its own valid prefix. Only Elite's
+    # unambiguous Steam identity can authorize an inherited custom location.
+    raw = environ.get("STEAM_COMPAT_DATA_PATH") if identities and all(
+        value == APP_ID for value in identities) else None
+    path = (explicit or (Path(raw) if raw else library / "steamapps/compatdata" / APP_ID)).expanduser().resolve()
     if not (path / "pfx/drive_c").is_dir():
+        if explicit:
+            raise ValueError("--prefix needs Elite's existing Proton compatdata root containing pfx/drive_c: %s" % path)
         raise ValueError("Elite Proton prefix missing at %s; launch Elite once through Steam" % path)
     return path
 
 
-def recorded_proton(compatdata):
+def recorded_proton(compatdata, host_file=None):
     record = compatdata / "config_info"
     if not record.is_file() or record.stat().st_size > 1024 * 1024:
         raise ValueError("Proton record missing in %s; launch Elite once or pass --proton PATH" % compatdata)
@@ -290,7 +298,8 @@ def recorded_proton(compatdata):
         cleaned = value.rstrip("/")
         for suffix in suffixes:
             if cleaned.startswith("/") and cleaned.endswith(suffix):
-                return Path(cleaned[:-len(suffix)]).resolve()
+                base = Path(cleaned[:-len(suffix)])
+                return base if host_file else base.resolve()
         return None
 
     defaults = tuple("/%s/share/%s" % (tree, name)
@@ -302,7 +311,8 @@ def recorded_proton(compatdata):
         base = base_of(line, defaults)
         if base is not None:
             break
-    if base is None or not (base / "proton").is_file():
+    resolve_file = host_file or (lambda path: path)
+    if base is None or not resolve_file(base / "proton").is_file():
         raise ValueError("recorded Proton is missing or stale in %s; launch Elite once or pass --proton PATH" % record)
     fonts = base_of(lines[1], ("/files/share/fonts", "/dist/share/fonts"))
     library = base_of(lines[2], ("/files/lib", "/dist/lib"))
@@ -311,9 +321,9 @@ def recorded_proton(compatdata):
     return base
 
 
-def proton_path(args, compatdata):
+def proton_path(args, compatdata, host_file=None):
     if args.proton is None:
-        return recorded_proton(compatdata) / "proton"
+        return recorded_proton(compatdata, host_file) / "proton"
     chosen = args.proton.expanduser().resolve()
     script = chosen / "proton" if chosen.is_dir() else chosen
     if script.name != "proton" or not script.is_file():
@@ -321,8 +331,8 @@ def proton_path(args, compatdata):
     return script
 
 
-def runtime_path(proton, steam_roots):
-    manifest = proton.parent / "toolmanifest.vdf"
+def runtime_path(proton, steam_roots, host_file=None):
+    manifest = (host_file or (lambda path: path))(proton.parent / "toolmanifest.vdf")
     if not manifest.is_file():
         raise ValueError("Proton toolmanifest.vdf missing beside %s; reinstall it through Steam or pass --proton PATH" % proton)
     tool = section(vdf(manifest), "manifest", manifest)
@@ -405,13 +415,27 @@ def flatpak_installations(home, environ):
     return installations
 
 
-def flatpak_deployment(app_id, home, environ):
+def flatpak_deployment(app_id, home, environ, strict=False):
+    found = []
     for installation in flatpak_installations(home, environ):
         application = installation / "app" / app_id
-        deployments = [application / "current/active"] + sorted(application.glob("*/*/active"))
+        current = application / "current/active"
+        deployments = ([current] if strict and (current / "files").is_dir() else
+                       [current] + sorted(application.glob("*/*/active")))
         for deployment in deployments:
             if (deployment / "files").is_dir():
-                return installation, deployment
+                if not strict:
+                    return installation, deployment
+                resolved = deployment.resolve()
+                if not inside(resolved, application.resolve()):
+                    raise ValueError("Flatpak application deployment escapes its installation: %s" % deployment)
+                candidate = (installation, resolved)
+                if candidate not in found:
+                    found.append(candidate)
+    if strict and len(found) == 1:
+        return found[0]
+    if found:
+        raise ValueError("ambiguous installed Flatpak %s deployments; select an installed host --proton" % app_id)
     raise ValueError("installed Flatpak %s deployment is missing; repair the manager or pass a host runner override" % app_id)
 
 
@@ -493,12 +517,64 @@ def flatpak_runtime_deployment(config, home, environ):
     raise ValueError("installed Flatpak runtime metadata is missing; pass a host runner override")
 
 
-def flatpak_host_file(path, app_id, home, environ):
+def flatpak_extension_file(path, deployment, home, environ):
+    """Resolve an unconditional app extension mount, refusing ambiguous deployments."""
+    # Flatpak binds an extension's files directory at its declared mount;
+    # subdirectories appends the extension ID's suffix to that directory.
+    # github.com/flatpak/flatpak/blob/main/common/flatpak-run.c (flatpak_run_add_extension_args)
+    config = flatpak_metadata(deployment)
+    runtime = config.get("Application", "runtime", fallback="").split("/")
+    if len(runtime) != 3:
+        raise ValueError("installed Flatpak runtime metadata is missing or invalid")
+    for section_name in config.sections():
+        if not section_name.startswith("Extension "):
+            continue
+        extension_id = section_name[len("Extension "):]
+        directory = Path(flatpak_string(config.get(section_name, "directory", fallback="")))
+        if directory.is_absolute() or ".." in directory.parts or not directory.parts:
+            continue
+        mount = Path("/app") / directory
+        if not inside(path, mount):
+            continue
+        if config.has_option(section_name, "enable-if") or config.has_option(section_name, "subdirectory-suffix"):
+            raise ValueError("unsupported conditional Flatpak extension mount; pass an installed host --proton")
+        relative = path.relative_to(mount)
+        subdirectories = config.get(section_name, "subdirectories", fallback="false")
+        if subdirectories == "true" and relative.parts:
+            extension_id += "." + relative.parts[0]
+            relative = Path(*relative.parts[1:])
+        elif subdirectories != "false":
+            raise ValueError("unsupported Flatpak extension subdirectories")
+        versions = config.get(section_name, "versions", fallback=config.get(
+            section_name, "version", fallback="")).split(";")
+        versions = list(dict.fromkeys(value for value in versions if value))
+        if not versions or any(not re.fullmatch(r"[A-Za-z0-9_.-]+", value)
+                               for value in (extension_id, runtime[1], *versions)):
+            raise ValueError("invalid Flatpak extension metadata; pass an installed host --proton")
+        found = []
+        for installation in flatpak_installations(home, environ):
+            for version in versions:
+                extension = installation / "runtime" / extension_id / runtime[1] / version / "active"
+                if (extension / "files").is_dir():
+                    if not (extension / "metadata").is_file():
+                        raise ValueError("installed Flatpak extension metadata is missing")
+                    candidate = extension.resolve() / "files" / relative
+                    if candidate not in found:
+                        found.append(candidate)
+        if len(found) > 1:
+            raise ValueError("ambiguous installed Flatpak extension for %s; pass an installed host --proton" % path)
+        if len(found) == 1 and found[0].is_file():
+            return found[0]
+        raise ValueError("recorded runner file is missing from installed Flatpak extension: %s" % path)
+    return None
+
+
+def flatpak_host_file(path, app_id, home, environ, selected=None):
     """Resolve sandbox /app and /usr paths from installed deployment metadata, without a process."""
     path = Path(path)
     if not path.is_absolute():
         raise ValueError("recorded runner must be an absolute path: %s" % path)
-    _, deployment = flatpak_deployment(app_id, home, environ)
+    _, deployment = selected or flatpak_deployment(app_id, home, environ)
     if not inside(path, Path("/app")) and not inside(path, Path("/usr")):
         return path
     if inside(path, Path("/app")):
@@ -506,14 +582,18 @@ def flatpak_host_file(path, app_id, home, environ):
     else:
         runtime_deployment = flatpak_runtime_deployment(flatpak_metadata(deployment), home, environ)
         candidate = runtime_deployment / "files" / path.relative_to("/usr")
+    if selected and inside(path, Path("/app")):
+        extension = flatpak_extension_file(path, deployment, home, environ)
+        if extension is not None:
+            return extension
     if candidate.is_file():
         return candidate
     raise ValueError("recorded runner file is missing from installed Flatpak %s: %s; "
                      "repair the manager or pass --wine/--proton with an installed host runner" % (app_id, path))
 
 
-def flatpak_runtime_environment(app_id, home, environ):
-    installation, deployment = flatpak_deployment(app_id, home, environ)
+def flatpak_runtime_environment(app_id, home, environ, selected=None):
+    installation, deployment = selected or flatpak_deployment(app_id, home, environ)
     config = flatpak_metadata(deployment)
     user_installation, system_installation = flatpak_installations(home, environ)
     layers = []
@@ -749,16 +829,26 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
                              "--prefix PATH and --wine PATH (or --proton PATH) for an unowned install")
     if store == "epic":
         return build_epic_plan(args, installer, forwarded, home, env_in)
-    if args.prefix or args.wine:
-        raise ValueError("--prefix and --wine are Epic options; use --store epic")
+    if args.wine:
+        raise ValueError("--wine is an Epic option; use --store epic")
     steam_roots = roots(args, home, env_in)
     steam_root, library, install_root, game = find_game(args, steam_roots)
-    compatdata = compatdata_path(library, env_in)
-    proton = proton_path(args, compatdata)
-    runtime = runtime_path(proton, steam_roots)
+    compatdata = compatdata_path(library, env_in, args.prefix)
+    flatpak_id = "com.valvesoftware.Steam"
+    selected = None
+    host_file = None
+    sandbox_env = {}
+    flatpak_data = home / ".var/app" / flatpak_id
+    if not args.proton and (inside(steam_root, flatpak_data.resolve()) or
+                            steam_root == (flatpak_data / ".local/share/Steam").resolve()):
+        selected = flatpak_deployment(flatpak_id, home, env_in, strict=True)
+        sandbox_env = flatpak_runtime_environment(flatpak_id, home, env_in, selected)
+        host_file = lambda path: flatpak_host_file(path, flatpak_id, home, env_in, selected)
+    proton = proton_path(args, compatdata, host_file)
+    runtime = runtime_path(proton, [steam_root], host_file)
     game_windows = windows_path(game, compatdata)
     command = ([str(runtime), "--verb=run", "--"] if runtime else [])
-    command += [str(proton), "runinprefix", str(installer), "--dir", game_windows] + forwarded
+    command += [str(proton), "runinprefix", str(installer), "--store", "steam", "--dir", game_windows] + forwarded
     env = dict(env_in)
     for key in list(env):
         if key.startswith("WINE") or key == "PROTON_VERSION":
@@ -767,6 +857,29 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
                STEAM_COMPAT_CLIENT_INSTALL_PATH=str(steam_root), STEAM_COMPAT_DATA_PATH=str(compatdata),
                STEAM_COMPAT_INSTALL_PATH=str(install_root),
                STEAM_COMPAT_LIBRARY_PATHS=":".join(str(lib / "steamapps") for lib in libraries(steam_root)))
+    if selected:
+        installation, deployment = selected
+        config = flatpak_metadata(deployment)
+        relative = deployment.relative_to((installation / "app" / flatpak_id).resolve())
+        if (len(relative.parts) != 3 or relative.parts[0] == "current" or
+                any(not re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in relative.parts[:2]) or
+                config.get("Application", "name", fallback="") != flatpak_id):
+            raise ValueError("installed Flatpak Steam app reference is missing or invalid; pass an installed host --proton")
+        flatpak = shutil.which("flatpak", path=env_in.get("PATH"))
+        if not flatpak:
+            raise ValueError("Flatpak executable missing; install the selected Steam Flatpak")
+        user_installation, _ = flatpak_installations(home, env_in)
+        selector = "--user" if installation == user_installation else "--system"
+        permissions = {installer.resolve(), steam_root, compatdata, *libraries(steam_root)}
+        if not inside(proton, Path("/app")) and not inside(proton, Path("/usr")):
+            permissions.add(proton.parent)
+        env.update(sandbox_env)
+        command = [flatpak, "run", selector, "--arch=" + relative.parts[0],
+                   "--branch=" + relative.parts[1], "--command=" + command[0]] + [
+            "--filesystem=" + str(path) for path in sorted(permissions, key=str)
+        ] + ["--env=%s=%s" % (key, env[key]) for key in sorted(env)
+             if key in sandbox_env or key in ("SteamAppId", "SteamGameId") or key.startswith("STEAM_COMPAT_")
+        ] + [flatpak_id] + command[1:]
     return command, env, (game, compatdata, proton, runtime)
 
 
@@ -820,7 +933,7 @@ def launcher_self_test(parse, root, script, home, env, launch, calls):
     assert parse("--launcher").passthrough is None
     assert launcher_args(parse("--launcher")) == []
 
-    # The command shape: runinprefix, the launcher exe, --dir, then the passthrough; no installer flags.
+    # Explicit store identity survives custom drive aliases; passthrough stays verbatim.
     plan_args = parse("--launcher", "--dry-run", "--", "--direct-dry-run", "--vr")
     before = set(root.rglob("*"))
     buf = io.StringIO()
@@ -831,13 +944,13 @@ def launcher_self_test(parse, root, script, home, env, launch, calls):
     assert len(calls) == count and set(root.rglob("*")) == before, "launcher --dry-run touched something"
     command, process_env, _details = build_plan(plan_args, script=script, home=home, environ=env)
     start = command.index("runinprefix")
-    assert command[start:start + 3] == ["runinprefix", str(exe.resolve()), "--dir"]
-    assert command[start + 4:] == ["--direct-dry-run", "--vr"]
+    assert command[start:start + 5] == ["runinprefix", str(exe.resolve()), "--store", "steam", "--dir"]
+    assert command[start + 6:] == ["--direct-dry-run", "--vr"]
     assert "edvr-installer.exe" not in shlex.join(command) and "--install" not in command
     assert "program: launcher" in buf.getvalue() and shlex.join(command) in buf.getvalue()
     assert process_env["SteamAppId"] == APP_ID and "WINEPREFIX" not in process_env
     bare = build_plan(parse("--launcher", "--dry-run"), script=script, home=home, environ=env)[0]
-    assert bare[-3:-1] == [str(exe.resolve()), "--dir"] and bare[-1] != "--install"
+    assert bare[-5:-1] == [str(exe.resolve()), "--store", "steam", "--dir"] and bare[-1] != "--install"
     # A real launcher run uses the same command and returns the launcher's exit code.
     assert run(parse("--launcher", "--", "--channel", "rc"), script=script, home=home, environ=env,
                launch=launch, platform="linux", geteuid=lambda: 1000) == 23
@@ -1351,6 +1464,205 @@ def preview_self_test():
         assert build_plan(override, script=script, home=home, environ=env)[0][:2] == [str(other), "runinprefix"]
 
 
+def steam_context_self_test(only=None):
+    """Exercise real Linux prefixes/deployments without starting any installed binary."""
+    if os.name == "nt":
+        return
+    import io
+    from contextlib import redirect_stdout
+    from tempfile import TemporaryDirectory
+
+    parse = lambda *words: parse_argv(list(words))
+    failures = []
+    for case in ("prefix", "store", "flatpak"):
+        if only is not None and case != only:
+            continue
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            home = root / "home"
+            steam = home / (".var/app/com.valvesoftware.Steam/.local/share/Steam" if case == "flatpak"
+                            else ".local/share/Steam")
+            script = root / "tools/install_proton.py"
+            script.parent.mkdir()
+            for name in ("edvr-installer.exe", "ed-up-launcher.exe"):
+                (script.parent / name).write_bytes(b"fixture only")
+            game_root = root / "external Steam library/steamapps/common/Custom title"
+            game = game_root / PRODUCT
+            game.mkdir(parents=True)
+            (game / "EliteDangerous64.exe").write_bytes(b"fixture only")
+            library = game_root.parents[2]
+            (library / "steamapps/appmanifest_359320.acf").write_text(
+                '\"AppState\" { \"appid\" \"359320\" \"installdir\" \"Custom title\" }', encoding="utf-8")
+            (steam / "steamapps").mkdir(parents=True)
+            (steam / "steamapps/libraryfolders.vdf").write_text(
+                '\"libraryfolders\" { \"0\" { \"path\" \"' + str(library) + '\" } }', encoding="utf-8")
+            compat = library / "steamapps/compatdata/359320"
+            alternate = root / "explicit Elite prefix"
+            shortcut = root / "shortcut prefix"
+            proton = root / "installed Proton"
+            proton.mkdir()
+            (proton / "proton").write_bytes(b"fixture only")
+            (proton / "toolmanifest.vdf").write_text('\"manifest\" { \"version\" \"2\" }', encoding="utf-8")
+
+            def record(prefix, selected=proton):
+                (prefix / "config_info").write_text("\n".join(("11.0-100",
+                    str(selected / "files/share/fonts"), str(selected / "files/lib"), str(steam),
+                    "0", "0", "0", str(selected / "files/share/default_pfx"))) + "\n", encoding="utf-8")
+
+            for prefix in (compat, alternate, shortcut):
+                (prefix / "pfx/drive_c").mkdir(parents=True)
+                (prefix / "pfx/dosdevices").mkdir()
+                (prefix / "pfx/dosdevices/q:").symlink_to(library, target_is_directory=True)
+                record(prefix)
+            env = {"STEAM_DIR": str(steam), "PATH": str(root / "bin"),
+                   "FLATPAK_SYSTEM_DIR": str(root / "system-flatpak")}
+
+            def plan(*words, environment=None):
+                return build_plan(parse("--store", "steam", *words), script=script, home=home,
+                                  environ=env if environment is None else environment)
+
+            def refuses(reason, *words):
+                try:
+                    plan(*words)
+                    raise AssertionError("accepted invalid Steam context: " + reason)
+                except ValueError as exc:
+                    assert reason in str(exc), str(exc)
+
+            def snapshot():
+                return {str(path.relative_to(root)): ("link", str(path.readlink())) if path.is_symlink()
+                        else ("file", path.read_bytes()) if path.is_file() else ("directory",)
+                        for path in root.rglob("*")}
+
+            def dry_run(*words):
+                before = snapshot()
+                output = io.StringIO()
+                original_run = globals()["run"]
+
+                def fixture_run(args):
+                    return original_run(args, script=script, home=home, environ=env,
+                        launch=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("dry-run started a process")))
+
+                globals()["run"] = fixture_run
+                try:
+                    with redirect_stdout(output):
+                        assert main(["--store", "steam", "--dry-run", *words]) == 0
+                finally:
+                    globals()["run"] = original_run
+                assert snapshot() == before, "Steam dry-run wrote files"
+                return output.getvalue()
+
+            try:
+                if case == "prefix":
+                    env.update(STEAM_COMPAT_DATA_PATH=str(shortcut), SteamAppId="1000000001",
+                               SteamGameId="4294967296000000001", STEAM_COMPAT_APP_ID="1000000001")
+                    assert plan()[1]["STEAM_COMPAT_DATA_PATH"] == str(compat), "inherited shortcut prefix selected"
+                    assert plan("--prefix", str(alternate))[1]["STEAM_COMPAT_DATA_PATH"] == str(alternate)
+                    dry_run("--prefix", str(alternate))
+                    elite_env = dict(env, SteamAppId=APP_ID, SteamGameId=APP_ID, STEAM_COMPAT_APP_ID=APP_ID,
+                                     STEAM_COMPAT_DATA_PATH=str(alternate))
+                    assert plan(environment=elite_env)[1]["STEAM_COMPAT_DATA_PATH"] == str(alternate)
+                    elite_env["SteamGameId"] = "4294967296000000001"
+                    assert plan(environment=elite_env)[1]["STEAM_COMPAT_DATA_PATH"] == str(compat)
+                    markerless = {key: value for key, value in env.items()
+                                  if key not in ("SteamAppId", "SteamGameId", "STEAM_COMPAT_APP_ID")}
+                    assert plan(environment=markerless)[1]["STEAM_COMPAT_DATA_PATH"] == str(compat)
+                    refuses("compatdata root", "--prefix", str(alternate / "pfx"))
+                elif case == "store":
+                    for words in ((), ("--install", "--scope", "flat"), ("--launcher",)):
+                        output = dry_run(*words)
+                        command, _, _ = plan(*words)
+                        start = command.index("runinprefix")
+                        expected_exe = script.parent / ("ed-up-launcher.exe" if "--launcher" in words
+                                                         else "edvr-installer.exe")
+                        assert command[start:start + 6] == ["runinprefix", str(expected_exe), "--store", "steam",
+                                                          "--dir", "Q:\\steamapps\\common\\Custom title\\Products\\elite-dangerous-odyssey-64"], command
+                        assert shlex.join(command) in output
+                else:
+                    flat_id = "com.valvesoftware.Steam"
+                    installation = home / ".local/share/flatpak"
+                    app = installation / "app" / flat_id
+                    deployment = app / "x86_64/stable/fixture-commit"
+                    (deployment / "files").mkdir(parents=True)
+                    (app / "x86_64/stable/active").symlink_to("fixture-commit", target_is_directory=True)
+                    (app / "current").symlink_to("x86_64/stable", target_is_directory=True)
+                    metadata = ("[Application]\nname=" + flat_id + "\nruntime=org.example.Platform/x86_64/1\n"
+                                "[Extension com.valvesoftware.Steam.CompatibilityTool]\n"
+                                "directory=share/steam/compatibilitytools.d\nsubdirectories=true\n"
+                                "version=stable\nversions=stable;beta;test;\n")
+                    (deployment / "metadata").write_text(metadata, encoding="utf-8")
+                    platform = installation / "runtime/org.example.Platform/x86_64/1/active"
+                    (platform / "files").mkdir(parents=True)
+                    (platform / "metadata").write_text("[Runtime]\nname=org.example.Platform\n", encoding="utf-8")
+                    extension_id = flat_id + ".CompatibilityTool.Proton-GE"
+                    extension = installation / "runtime" / extension_id / "x86_64/stable/active"
+                    (extension / "files").mkdir(parents=True)
+                    (extension / "files/proton").write_bytes(b"fixture only")
+                    (extension / "metadata").write_text("[Runtime]\nname=" + extension_id + "\n", encoding="utf-8")
+                    (extension / "files/toolmanifest.vdf").write_text(
+                        '\"manifest\" { \"require_tool_appid\" \"1628350\" }', encoding="utf-8")
+                    recorded = Path("/app/share/steam/compatibilitytools.d/Proton-GE")
+                    record(compat, recorded)
+                    runtime = library / "steamapps/common/SteamLinuxRuntime_sniper"
+                    runtime.mkdir()
+                    (runtime / "_v2-entry-point").write_bytes(b"fixture only")
+                    (library / "steamapps/appmanifest_1628350.acf").write_text(
+                        '\"AppState\" { \"appid\" \"1628350\" \"installdir\" \"SteamLinuxRuntime_sniper\" }', encoding="utf-8")
+                    flatpak = root / "bin/flatpak"
+                    flatpak.parent.mkdir()
+                    flatpak.write_bytes(b"fixture only")
+                    flatpak.chmod(0o700)
+                    for words in ((), ("--install", "--scope", "flat"), ("--launcher",)):
+                        output = dry_run(*words)
+                        command, resolved, _ = plan(*words)
+                        assert shlex.join(command) in output
+                        assert command[:3] == [str(flatpak), "run", "--user"]
+                        assert "--arch=x86_64" in command and "--branch=stable" in command
+                        assert "--command=" + str(runtime / "_v2-entry-point") in command
+                        start = command.index(flat_id)
+                        assert command[start + 1:start + 6] == ["--verb=run", "--", str(recorded / "proton"),
+                                                               "runinprefix", str(script.parent / (
+                                                               "ed-up-launcher.exe" if "--launcher" in words else "edvr-installer.exe"))]
+                        assert "--env=STEAM_COMPAT_CLIENT_INSTALL_PATH=" + str(steam) in command
+                        assert "--env=STEAM_COMPAT_DATA_PATH=" + str(compat) in command
+                        assert "--filesystem=" + str(library) in command
+                        assert resolved["SteamAppId"] == APP_ID
+                    (extension / "files/proton").unlink()
+                    refuses("missing")
+                    (extension / "files/proton").write_bytes(b"fixture only")
+                    duplicate = installation / "runtime" / extension_id / "x86_64/beta/active"
+                    (duplicate / "files").mkdir(parents=True)
+                    (duplicate / "metadata").write_text("[Runtime]\nname=" + extension_id + "\n", encoding="utf-8")
+                    (duplicate / "files/proton").write_bytes(b"fixture only")
+                    refuses("ambiguous")
+                    shutil.rmtree(duplicate.parents[0])
+                    second = Path(env["FLATPAK_SYSTEM_DIR"]) / "app" / flat_id / "x86_64/stable/active"
+                    (second / "files").mkdir(parents=True)
+                    (second / "metadata").write_text(metadata, encoding="utf-8")
+                    refuses("ambiguous")
+                    shutil.rmtree(second.parents[3])
+                    # Without a Steam runtime dependency, Proton itself is the sandbox command.
+                    (extension / "files/toolmanifest.vdf").write_text('\"manifest\" { \"version\" \"2\" }', encoding="utf-8")
+                    assert "--command=" + str(recorded / "proton") in plan()[0]
+                    (extension / "files/toolmanifest.vdf").write_text(
+                        '\"manifest\" { \"require_tool_appid\" \"1628350\" }', encoding="utf-8")
+                    # The system deployment is pinned even when the app data remains in ~/.var/app.
+                    system_app = Path(env["FLATPAK_SYSTEM_DIR"]) / "app" / flat_id
+                    system_app.parent.mkdir(parents=True)
+                    app.rename(system_app)
+                    assert plan()[0][:3] == [str(flatpak), "run", "--system"]
+                    system_app.rename(app)
+                    platform.rename(platform.with_name("unavailable"))
+                    refuses("runtime metadata is missing")
+                    # An explicit host override recovers a missing Flatpak deployment without fallback guessing.
+                    shutil.rmtree(app)
+                    override, _, _ = plan("--proton", str(proton))
+                    assert override[:2] == [str(proton / "proton"), "runinprefix"]
+                    refuses("deployment is missing")
+            except (AssertionError, ValueError) as exc:
+                failures.append(case + ": " + str(exc))
+    assert not failures, "; ".join(failures)
+
+
 def self_test():
     import io
     from contextlib import redirect_stderr, redirect_stdout
@@ -1442,7 +1754,7 @@ def self_test():
             assert not calls and set(root.rglob("*")) == before
             command, process_env, details = build_plan(args, script=script, home=home, environ=env)
             assert command[:3] == [str(runtime / "_v2-entry-point"), "--verb=run", "--"]
-            assert command[3:7] == [str(proton / "proton"), "runinprefix", str(exe), "--dir"]
+            assert command[3:9] == [str(proton / "proton"), "runinprefix", str(exe), "--store", "steam", "--dir"]
             assert "waitforexitandrun" not in command
             assert command[-4:] == ["--install", "--dry-run", "--scope", "flat"]
             assert str(game) in buf.getvalue() and shlex.join(command) in buf.getvalue()
@@ -1574,6 +1886,7 @@ def self_test():
                 globals()["windows_path"] = original_windows_path
     epic_self_test()
     preview_self_test()
+    steam_context_self_test()
     print("install_proton: self-test passed")
 
 
