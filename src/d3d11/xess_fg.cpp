@@ -13,6 +13,7 @@
 #include "../common/config.h"
 #include "../common/log.h"
 #include "../common/runtime_profile.h"
+#include "xess_fg_presented.h"
 
 #ifndef EDVR_HAVE_XESS
 #define EDVR_HAVE_XESS 0
@@ -39,6 +40,17 @@ namespace {
 std::atomic<bool> g_bridged{false};
 std::atomic<uint32_t> g_maxFrames{0};
 std::atomic<bool> g_exclusiveFullscreen{false};   // the presenting swap chain's, for the settings panel
+std::atomic<bool> g_everBridged{false};            // a bridge was ready at some point this session
+std::atomic<uint32_t> g_activeFrames{0};           // generated frames per rendered frame, right now (0: off or stopped)
+
+// The presented-frame count (xess_fg_presented.h), published by the render thread after each Present and read by any thread under a sequence number:
+// an odd sequence is a write in progress.
+std::atomic<uint32_t> g_presentSeq{0};
+std::atomic<int> g_presentState{0};   // 0 not sampled yet, 1 counting, 2 unavailable
+std::atomic<uint64_t> g_presentTotal{0};
+std::atomic<int64_t> g_presentQpc{0};
+std::atomic<int> g_presentSource{0};
+std::atomic<const char*> g_presentWhy{nullptr};
 
 // The first reason frame generation did not start or stopped, for the panel. Written once, then published.
 std::atomic<int> g_problemState{0};   // 0 none, 1 being written, 2 readable
@@ -178,6 +190,7 @@ struct Bridge {
     uint64_t presents = 0, statusFailures = 0, skipped = 0;
     bool flagsNoted = false, deviceNoted = false;
     bool failed = false;   // a fault: frame generation stops and the plain swap chain takes the window
+    fgpresented::Tally tally;   // the frames that reached the screen, from XeSS-FG's present status or DXGI's frame statistics
     ~Bridge() {
         // Order matters: the proxy before XeSS-FG's context, XeSS-FG before XeLL (the guide's shutdown order).
         proxy.Reset();
@@ -606,6 +619,8 @@ bool syncPlain(Bridge& b, UINT width, UINT height, UINT sourceFormat) {
 void fallBack(Bridge& b) {
     if (b.fellBack) return;
     b.fellBack = true;
+    g_activeFrames.store(0, std::memory_order_relaxed);
+    b.tally.onSwapChainChanged();   // the presented count carries on from the plain swap chain's frame statistics
     xessSetInputTagger(nullptr, nullptr);
     if (b.proxy && b.presenterFullscreen) b.proxy->SetFullscreenState(FALSE, nullptr);
     b.presenterFullscreen = false;
@@ -652,6 +667,45 @@ HRESULT plainPresent(Bridge& b, IDXGISwapChain* hidden, UINT syncInterval, UINT 
     target.Reset();
     back.Reset();
     return b.plain->Present(syncInterval, presentFlagsFor(b, syncInterval, flags));
+}
+
+// The presented-frame count after a Present, published for the readers (xessFgPresentStats). Logs the source once, and again if it changes.
+void publishPresented(Bridge& b) {
+    uint64_t total = 0;
+    int64_t qpc = 0;
+    fgpresented::Source source = fgpresented::Source::None;
+    const bool have = b.tally.get(&total, &qpc, &source);
+    const uint32_t seq = g_presentSeq.load(std::memory_order_relaxed);
+    g_presentSeq.store(seq + 1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+    g_presentState.store(have ? 1 : b.tally.unavailable() ? 2 : 0, std::memory_order_relaxed);
+    g_presentTotal.store(have ? total : 0, std::memory_order_relaxed);
+    g_presentQpc.store(have ? qpc : 0, std::memory_order_relaxed);
+    g_presentSource.store(static_cast<int>(source), std::memory_order_relaxed);
+    g_presentWhy.store(b.tally.unavailable() ? b.tally.unavailableWhy() : nullptr, std::memory_order_relaxed);
+    g_presentSeq.store(seq + 2, std::memory_order_release);
+    char note[200];
+    if (b.tally.takeNote(note, static_cast<int>(sizeof(note)))) Log::get().note("%s", note);
+}
+
+// IDXGISwapChain::GetFrameStatistics on the swap chain that shows the frames, for the tally.
+void sampleFrameStatistics(Bridge& b) {
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    IDXGISwapChain* shown = presenter(b);
+    DXGI_FRAME_STATISTICS stats{};
+    const HRESULT hr = shown ? shown->GetFrameStatistics(&stats) : DXGI_ERROR_INVALID_CALL;
+    b.tally.onStats(SUCCEEDED(hr), hr == DXGI_ERROR_FRAME_STATISTICS_DISJOINT, stats.PresentCount, stats.SyncQPCTime.QuadPart, now.QuadPart);
+}
+
+// The plain swap chain's Present, counted: after a fall back every Present puts one frame on the screen, and DXGI's own count says so.
+HRESULT plainPresentCounted(Bridge& b, IDXGISwapChain* hidden, UINT syncInterval, UINT flags) {
+    const HRESULT hr = plainPresent(b, hidden, syncInterval, flags);
+    if (SUCCEEDED(hr) && b.plain) {
+        sampleFrameStatistics(b);
+        publishPresented(b);
+    }
+    return hr;
 }
 
 // A call on Elite's swap chain from a thread other than the one that presents: logged once, since the bridge's state
@@ -889,6 +943,31 @@ bool xessFgExclusiveFullscreen() {
 }
 uint32_t xessFgMaxGeneratedFrames() { return g_maxFrames.load(std::memory_order_relaxed); }
 const char* xessFgProblem() { return g_problemState.load(std::memory_order_acquire) == 2 ? g_problem : nullptr; }
+bool xessFgBridgeThisSession() { return g_everBridged.load(std::memory_order_relaxed); }
+uint32_t xessFgActiveGeneratedFrames() { return g_activeFrames.load(std::memory_order_relaxed); }
+bool xessFgPresentStats(uint64_t* presented, uint64_t* qpc, const char** source) {
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        const uint32_t before = g_presentSeq.load(std::memory_order_acquire);
+        if (before & 1u) continue;
+        const int state = g_presentState.load(std::memory_order_relaxed);
+        const uint64_t total = g_presentTotal.load(std::memory_order_relaxed);
+        const int64_t at = g_presentQpc.load(std::memory_order_relaxed);
+        const int src = g_presentSource.load(std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (g_presentSeq.load(std::memory_order_relaxed) != before) continue;
+        if (state != 1) return false;
+        if (presented) *presented = total;
+        if (qpc) *qpc = static_cast<uint64_t>(at);
+        if (source) *source = fgpresented::sourceName(static_cast<fgpresented::Source>(src));
+        return true;
+    }
+    return false;
+}
+const char* xessFgPresentUnavailableWhy() {
+    if (g_presentState.load(std::memory_order_relaxed) != 2) return "";
+    const char* why = g_presentWhy.load(std::memory_order_relaxed);
+    return why ? why : "";
+}
 
 #if !EDVR_HAVE_XESS
 
@@ -1105,6 +1184,7 @@ bool xessFgFinishCreate(IDXGISwapChain* hidden, HWND realWindow) {
     b->hiddenSwap = hidden;
     xessSetInputTagger(&tagInputs, &commitInputs);
     g_bridged.store(true, std::memory_order_relaxed);
+    g_everBridged.store(true, std::memory_order_relaxed);
     Log::get().note("xess-fg: bridge ready: proxy %ux%u format=%u buffers=%u tearing=%u; Elite's swap chain flags=0x%X%s; "
                     "XeLL low latency on; GPU maximum %u generated frames; frame generation runs while "
                     "fix.xess_frame_generation is on and the flat XeSS-SR resolve runs", b->width, b->height,
@@ -1140,7 +1220,7 @@ HRESULT xessFgPresent(IDXGISwapChain* hidden, UINT syncInterval, UINT flags) {
         IDXGISwapChain* shown = presenter(*b);
         return shown ? shown->Present(syncInterval, presentFlagsFor(*b, syncInterval, flags)) : S_OK;
     }
-    if (b->fellBack) return plainPresent(*b, hidden, syncInterval, flags);
+    if (b->fellBack) return plainPresentCounted(*b, hidden, syncInterval, flags);
 
     startFrame(*b);   // the first frame only: every later one started at the end of the last Present hook
     const uint32_t id = b->frameId;
@@ -1165,7 +1245,7 @@ HRESULT xessFgPresent(IDXGISwapChain* hidden, UINT syncInterval, UINT flags) {
         fault(*b, "%u frames in a row could not be copied to the proxy (last: %s)", b->droppedRun, skipReason);
     if (b->failed) {
         fallBack(*b);
-        return plainPresent(*b, hidden, syncInterval, flags);
+        return plainPresentCounted(*b, hidden, syncInterval, flags);
     }
     if (!copied) {
         // Presenting now would show a proxy buffer last written frames ago (and generate frames from it): the frame
@@ -1217,6 +1297,15 @@ HRESULT xessFgPresent(IDXGISwapChain* hidden, UINT syncInterval, UINT flags) {
 
     xefg_swapchain_present_status_t status{};
     const xefg_swapchain_result_t st = b->fg.lastStatus(b->fgContext, &status);
+    // Frames that reached the screen: XeSS-FG's own count for this Present, else DXGI's frame statistics (xess_fg_presented.h).
+    {
+        LARGE_INTEGER presentedAt;
+        QueryPerformanceCounter(&presentedAt);
+        b->tally.onStatus(st >= 0, st >= 0 ? status.framesPresented : 0u, presentedAt.QuadPart);
+        if (b->tally.wantsStats()) sampleFrameStatistics(*b);
+        publishPresented(*b);
+        g_activeFrames.store(b->enabledState == 1 ? (b->framesState ? b->framesState : 1u) : 0u, std::memory_order_relaxed);
+    }
     if (st >= 0 && status.frameGenResult < 0 && b->statusFailures++ < 16)
         Log::get().note("xess-fg: frame %u: interpolation result %s (%d)", id, fgResultName(status.frameGenResult),
                         int(status.frameGenResult));

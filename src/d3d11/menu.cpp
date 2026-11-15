@@ -2174,66 +2174,85 @@ void buildStatus(MenuContent& c) {
     statusLine(c, "Last write", g_s.lastWrite.empty() ? "none this session" : g_s.lastWrite.c_str());
 }
 
+// One note line (the Monitor's small text under the gauges).
+void addMonitorNote(MenuContent& c, const char* text) {
+    if (c.lineCount >= kMenuMaxLines) return;
+    MenuLine& l = c.lines[c.lineCount++];
+    strncpy(l.left, text, sizeof(l.left) - 1);
+    l.style = kMenuNote;
+    l.badge = kBadgeNone;
+}
+
 // The Monitor page: fpsVR's readout from perf_monitor.h, and the frame-time
-// strip underneath.
+// strips underneath. The flat profile's is the rendered and the presented frame
+// rate (the presented one only while the XeSS Frame Generation bridge exists),
+// the slow samplers, and strips for the CPU, the rendered and the presented
+// period; it has no GPU strip (nothing times the flat frame on the GPU).
 void buildMonitor(MenuContent& c) {
+    const bool flat = runtimeFlatProfile();
     PerfTile tiles[kMenuMaxTiles];
-    const int n = perfMonitorTiles(tiles, kMenuMaxTiles);
+    const int n = flat ? perfMonitorFlatTiles(tiles, kMenuMaxTiles) : perfMonitorTiles(tiles, kMenuMaxTiles);
     for (int i = 0; i < n; ++i) {
         strncpy(c.tiles[i].caption, tiles[i].caption, sizeof(c.tiles[i].caption) - 1);
         strncpy(c.tiles[i].value, tiles[i].value, sizeof(c.tiles[i].value) - 1);
         strncpy(c.tiles[i].sub, tiles[i].sub, sizeof(c.tiles[i].sub) - 1);
     }
     c.tileCount = n;
-    c.tileColumns = 4;
-    // The local render-to-submit diagnostic is separate from SteamVR's gauges.
-    {
+    // Three across in flat: the card is a fraction of the screen's height (menu_flat_layout.h), so four tiles would be too narrow for their numbers.
+    c.tileColumns = flat ? 3 : 4;
+    if (flat) {
+        // "FG stopped: <why>" or "Presented: unavailable (<why>)", only for a session with the bridge (perf_presented.h).
+        PerfReadout r;
+        perfMonitorReadout(&r, 0.0f);
+        char note[200];
+        formatBridgeNote(r, note, sizeof(note));
+        if (note[0]) addMonitorNote(c, note);
+    } else {
+        // The local render-to-submit diagnostic is separate from SteamVR's gauges.
         char line[200];
         perfMonitorLocalGpuLine(line, sizeof(line));
-        MenuLine& l = c.lines[c.lineCount++];
-        strncpy(l.left, line, sizeof(l.left) - 1);
-        l.style = kMenuNote;
-        l.badge = kBadgeNone;
+        addMonitorNote(c, line);
     }
     if (nativeMenuActive()) {
         char line[240];
         perfMonitorNativeTimingLine(line, sizeof(line));
-        MenuLine& l = c.lines[c.lineCount++];
-        strncpy(l.left, line, sizeof(l.left) - 1);
-        l.style = kMenuNote;
-        l.badge = kBadgeNone;
+        addMonitorNote(c, line);
     }
     // One line under the gauges: the last drop and what EDVR was doing.
     {
         char line[200];
         perfMonitorLastDropLine(line, sizeof(line));
-        MenuLine& l = c.lines[c.lineCount++];
-        strncpy(l.left, line, sizeof(l.left) - 1);
-        l.style = kMenuNote;
-        l.badge = kBadgeNone;
+        addMonitorNote(c, line);
     }
     c.compact = true;
-    // Two strips, fpsVR's pair: the GPU frame the compositor measured, and
-    // the render thread's own busy time.
-    const int kinds[2] = {kGraphGpu, kGraphCpu};
-    const char* names[2] = {"GPU", "CPU"};
-    const bool nativeGraphs = nativeMenuActive();
     c.graphCount = 0;
-    for (int g = 0; g < 2; ++g) {
+    const bool nativeGraphs = nativeMenuActive();
+    // VR: two strips, fpsVR's pair -- the GPU frame the compositor measured, and the render thread's own busy time. Flat: the CPU's, the rendered period and,
+    // under the bridge, the presented one.
+    const int vrKinds[2] = {kGraphGpu, kGraphCpu};
+    const char* vrNames[2] = {"GPU", "CPU"};
+    const int flatKinds[3] = {kGraphCpu, kGraphPeriod, kGraphPresented};
+    const char* flatNames[3] = {"CPU thread", "Rendered", "Presented"};
+    const int strips = flat ? 3 : 2;
+    for (int g = 0; g < strips; ++g) {
+        const int kind = flat ? flatKinds[g] : vrKinds[g];
         MenuGraph& mg = c.graphs[c.graphCount];
-        mg.count = perfMonitorGraph(kinds[g], mg.samples,
-                                    static_cast<int>(sizeof(mg.samples) / sizeof(mg.samples[0])),
-                                    &mg.budgetMs);
+        mg.count = perfMonitorGraph(kind, mg.samples, static_cast<int>(sizeof(mg.samples) / sizeof(mg.samples[0])), &mg.budgetMs);
         if (!mg.count) continue;
-        mg.zeroIsValid = nativeGraphs;
-        if (nativeGraphs && mg.budgetMs > 0.0f)
-            snprintf(mg.label, sizeof(mg.label), "%s, %d samples; predicted period %.1f ms",
-                     g == 0 ? "Producer GPU" : "Application wall", mg.count, double(mg.budgetMs));
-        else if (nativeGraphs)
-            snprintf(mg.label, sizeof(mg.label), "%s, %d samples; no runtime reference",
-                     g == 0 ? "Producer GPU" : "Application wall", mg.count);
-        else snprintf(mg.label, sizeof(mg.label), "%s, last %d frames; the line is the %.1f ms budget",
-                 names[g], mg.count, static_cast<double>(mg.budgetMs));
+        if (flat) {
+            snprintf(mg.label, sizeof(mg.label), "%s, last %d frames; the line is the %.1f ms budget", flatNames[g], mg.count,
+                     static_cast<double>(mg.budgetMs));
+        } else {
+            mg.zeroIsValid = nativeGraphs;
+            if (nativeGraphs && mg.budgetMs > 0.0f)
+                snprintf(mg.label, sizeof(mg.label), "%s, %d samples; predicted period %.1f ms",
+                         g == 0 ? "Producer GPU" : "Application wall", mg.count, double(mg.budgetMs));
+            else if (nativeGraphs)
+                snprintf(mg.label, sizeof(mg.label), "%s, %d samples; no runtime reference",
+                         g == 0 ? "Producer GPU" : "Application wall", mg.count);
+            else snprintf(mg.label, sizeof(mg.label), "%s, last %d frames; the line is the %.1f ms budget",
+                     vrNames[g], mg.count, static_cast<double>(mg.budgetMs));
+        }
         ++c.graphCount;
     }
 }
@@ -5095,6 +5114,7 @@ void menuFlatBeforePresent(IDXGISwapChain* swap, unsigned flags) {
             g_flatOutW.store(desc.BufferDesc.Width, std::memory_order_relaxed);
             g_flatOutH.store(desc.BufferDesc.Height, std::memory_order_relaxed);
         }
+        perfMonitorNoteSwapChain(swap);   // the display's refresh rate, for the Monitor's budgets (every few seconds)
     }
     if (!g_s.screenNotice.compositing(g_s.open) || (flags & DXGI_PRESENT_TEST)) return;
     menuPanelCompositeFlat(swap);
@@ -5149,12 +5169,12 @@ void menuTick(ID3D11Device* dev) {
 
         // The monitor's ring: one clock read and a store per frame, and the
         // compositor's sample when a new one was published. Its slow
-        // samplers run only while the Monitor page is showing. The flat profile never reaches it:
-        // the census is the flat profile's only driver of engine motion's clock.
-        if (world) {
-            perfMonitorFrame(dev);
-            perfMonitorSetActive(s.open && s.pages[s.page].monitor);
-        }
+        // samplers run only while the Monitor page is showing. Both profiles
+        // (the flat one rings the rendered and the presented frame rate; the
+        // flat census stays the driver of engine motion's clock, which
+        // perfMonitorFrame leaves alone there).
+        perfMonitorFrame(dev);
+        perfMonitorSetActive(s.open && s.pages[s.page].monitor);
         tickHeldEdit(now);   // a held numeric edit whose burst has ended is written now (menu_edit_hold.h); the worker's results are drained after it
         // Writes the worker finished since last frame.
         drainWrites();
@@ -5556,12 +5576,14 @@ void menuTick(ID3D11Device* dev) {
                 s.contentDirty = true;
             }
             preparePadNavigation(now, drawnFresh && gameHasFocus());
-            if (keysReady) handleKeys(now);
+            // A status page (the Monitor) releases the keyboard to the game, as in VR, so the menu's own keys are not "ready"; they still run there, because
+            // the fixed keys and the page pair act on status pages (handleKeys) and a player parked on the Monitor must be able to leave it.
+            if (keysReady || (drawnFresh && s.pages[s.page].status)) handleKeys(now);
             handlePadNavigation(now);
             if (s.open && dev && !menuPanelFlatRasterReady()) s.contentDirty = true;
         }
         if (world ? (s.open || s.alpha > 0.0f) : s.open) {
-            if (world) {
+            {
                 Page& p = s.pages[s.page];
                 if (p.status && dueMs(s.statusRefreshMs, p.monitor ? kMonitorRefreshMs : kStatusRefreshMs)) {
                     s.statusRefreshMs = stampMs();

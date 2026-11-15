@@ -200,11 +200,11 @@ std::string pageList(bool flat, bool developer) {
 
 void pageCases() {
     const std::string vr = "Performance,Fixes,Visual,Mirror window,Native on foot,Hotkeys,Plugins,Monitor,Status";
-    check(pageList(true, false) == "Performance,Visual,Debug", "the flat profile's pages are Performance, Visual, Debug");
-    check(pageList(true, true) == "Performance,Visual,Debug", "developer mode adds no flat page");
+    check(pageList(true, false) == "Performance,Visual,Monitor,Debug", "the flat profile's pages are Performance, Visual, Monitor, Debug (Debug last)");
+    check(pageList(true, true) == "Performance,Visual,Monitor,Debug", "developer mode adds no flat page");
     check(pageList(false, false) == vr, "the VR profile's pages without developer mode");
     check(pageList(false, true) == vr + ",Advanced,Experimental,Instruments", "developer mode adds Advanced, Experimental and Instruments to VR, after Status");
-    check(kMenuPages[7].post == MenuPagePost::AimChoiceAfterLookToAim && std::strcmp(kMenuPages[7].name, "Native on foot") == 0, "the Native on foot page moves the aiming row under Look to aim");
+    check(kMenuPages[6].post == MenuPagePost::AimChoiceAfterLookToAim && std::strcmp(kMenuPages[6].name, "Native on foot") == 0, "the Native on foot page moves the aiming row under Look to aim");
     size_t posts = 0;
     for (size_t i = 0; i < kMenuPageCount; ++i) posts += kMenuPages[i].post != MenuPagePost::None;
     check(posts == 1, "only Native on foot has a post step");

@@ -112,7 +112,7 @@ struct MenuGraph {
     bool zeroIsValid = false; // Native history distinguishes measured zero from missing data.
     char  label[64];
 };
-constexpr int kMenuMaxGraphs = 2;
+constexpr int kMenuMaxGraphs = 3;
 
 // Everything the panel shows, as text. The model builds one of these on
 // every change; the raster lays it out.

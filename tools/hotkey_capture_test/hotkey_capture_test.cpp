@@ -1531,7 +1531,7 @@ void testCaptureWiringPins(const char* root) {
           "menu.cpp: overlapping summon is suppressed only after navigation is private");
     const std::string keys = bodyOf("void handleKeys(uint64_t now) {");
     const std::string apply = bodyOf("void applyDecision(int def, const CaptureDecision& dec) {");
-    check(tick.find("if (keysReady) handleKeys(now)") != std::string::npos &&
+    check(tick.find("if (keysReady || (drawnFresh && s.pages[s.page].status)) handleKeys(now)") != std::string::npos &&
           keys.find("if (s.captureEntry >= 0)") < keys.find("handleCapture(now)") &&
           handle.find("hotkeyDecide(st, in.ctx)") != std::string::npos &&
           apply.find("case CaptureOutcome::Cancelled:") != std::string::npos,

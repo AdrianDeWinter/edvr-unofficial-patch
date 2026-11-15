@@ -38,6 +38,7 @@
 #include "sharpen_pass.h"
 #include "stall_watch.h"
 #include "temporal_pass.h"
+#include "xess_fg.h"            // xessFgPresentStats and its companions: the presented rate under XeSS Frame Generation
 // fsr3_engine.h is deliberately NOT included: the EDVR PASSES tile reaches
 // AMD's price through temporal_pass.h's temporalPassTrainedTotals, which
 // answers for the engine fix.temporal_aa names right now (F6).
@@ -185,6 +186,11 @@ struct State {
     uint64_t nativeHistoryLogMs=0;
     unsigned nativeHistoryReports=0;
     Frame    ring[kRing];
+    // The presented period (perf_presented.h): one entry per rendered frame that moved the screen's frame counter. Empty for a session without the XeSS-FG
+    // bridge, and then every presented figure is absent, never zero.
+    PresentedRing presented;
+    uint64_t presentedPushes = 0;    // presented.pushes() as of the last frame, and when it last moved: a counter that stops is "measuring", not the old rate
+    uint64_t presentedMovedMs = 0;
     int      head = 0;          // next write
     int      count = 0;
     int64_t  lastQpc = 0;
@@ -866,12 +872,21 @@ void slowTestTick() {
     }
 }
 
+// The refresh rate of the output the flat swap chain shows on, in millihertz (perfMonitorNoteSwapChain); 0 until one was read, and always 0 in VR.
+std::atomic<uint32_t> g_refreshMilliHz{0};
+
+float refreshHzNow() { return static_cast<float>(g_refreshMilliHz.load(std::memory_order_relaxed)) / 1000.0f; }
+// The frame period the screen runs at (the presented budget); 11.1 ms only when no rate is known.
+float displayBudgetNow() { return displayBudgetMs(refreshHzNow()); }
+// The rendered budget: that period times the frames each rendered frame becomes while XeSS Frame Generation makes any (xessFgActiveGeneratedFrames).
+float renderedBudgetNow() { return renderedBudgetMs(refreshHzNow(), xessFgActiveGeneratedFrames()); }
+
 float budgetNow() {
     const State& s = g_s;
     if (nativeMenuActive()) return static_cast<float>(s.nativeHistory.predictedPeriod(GetTickCount64()));
-    // Off the native path nothing reports the display's rate (it crossed
-    // from the retired openvr half), so the budget is the unknown-rate one.
-    return 11.1f;
+    // Off the native path the openvr half no longer reports the display's rate. In the flat profile the output's refresh rate was read from DXGI (and the
+    // generated frames are accounted for); until then, and in a legacy VR session, the budget is the unknown-rate one.
+    return renderedBudgetNow();
 }
 
 #ifdef EDVR_HAVE_VERSION_HEADER
@@ -1036,6 +1051,8 @@ void logNativeBenchmark(State& s, const NativeBenchmarkReport& report) {
 void perfMonitorProfileSwitch() {
     // A zero clock reads as "no previous frame", which perfMonitorFrame already gives the first frame and the 5 s loading gaps (presentMs 0).
     g_s.lastQpc = 0;
+    // The presented counter's next sample is a new baseline too: the stretch between has no frames of its own to count.
+    g_s.presented.rebase();
 }
 
 void perfMonitorCrossProfileFrame() {
@@ -1096,7 +1113,10 @@ void perfMonitorFrame(ID3D11Device* dev) {
     // Engine motion's hooks, cut at the same edge (engine_motion_cpu.h): this
     // thread is the render thread, the one that calls Present. The figures are
     // this frame's own, every call clocked -- what the LONG FRAME line reads.
-    {
+    // Not in the flat profile: there the flat census is the driver of engine motion's clock and gate (flat_cpu.h), and a second cut here would take frames
+    // from its window and set the gate on a different schedule.
+    const bool flatProfile = runtimeFlatProfile();
+    if (!flatProfile) {
         const emcpu::Figures em = g_engineMotion.onFrame(qpcFrequency(), nowMs());
         f.emMeasured = em.measured;
         f.emMs = static_cast<float>(em.renderMs);
@@ -1282,13 +1302,26 @@ void perfMonitorFrame(ID3D11Device* dev) {
     }
     f.cpuDrawsMs = s.drawsMsRunning;
     s.drawWholeTicks = s.drawRealTicks = 0;
-    detail::g_perfMonitorSampleDraws = (s.frameNo % kDrawSampleEvery) == 0;
+    // The draw hooks' own-cost sample is the VR profile's (the flat profile has its census): the monitor rings flat frames without arming it.
+    detail::g_perfMonitorSampleDraws = !flatProfile && (s.frameNo % kDrawSampleEvery) == 0;
     const DeviceCreates made = deviceCreatesTake();
     f.createTextures = made.textures;
     f.createBuffers = made.buffers;
     f.createShaders = made.shaders;
     f.createMb = static_cast<float>(static_cast<double>(made.textureBytes + made.bufferBytes) / 1048576.0);
     ringPush(f);
+    // The presented rate: the screen's frame counter, read at the same edge as the rendered interval (xessFgPresentStats is false for a session without the
+    // bridge and while no source can count, and then the ring is simply not fed).
+    {
+        uint64_t presentedCount = 0, presentedQpc = 0;
+        if (xessFgPresentStats(&presentedCount, &presentedQpc, nullptr)) {
+            s.presented.observe(presentedCount, static_cast<int64_t>(presentedQpc), qpcFrequency());
+            if (s.presented.pushes() != s.presentedPushes) {
+                s.presentedPushes = s.presented.pushes();
+                s.presentedMovedMs = nowMs();
+            }
+        }
+    }
 
     // A frame our own clock calls long: the page's "last drop", and the log's decisions about it
     // (judgeLongFrame: blip, long, or freeze). A gap of 5 s or more used to be skipped here altogether, so a
@@ -1431,6 +1464,49 @@ uint64_t nativeGpuAge(const GpuFrameSnapshot& gpu) {
     const uint64_t age = nativeTimingAge(gpu.capturedAtMs);
     return gpu.result.ageMs > UINT64_MAX - age ? UINT64_MAX : gpu.result.ageMs + age;
 }
+
+// The once-a-second samplers' four tiles, in the order the VR page lays them out: CPU load, GPU load and temperature, VRAM, RAM. Shared by the VR Monitor
+// (perfMonitorTiles) and the flat one (perfMonitorFlatTiles).
+template <class Tile>
+void appendSlowTiles(Tile&& tile) {
+    State& s = g_s;
+    char v[32], sub[40];
+    if (s.cpuSystemPct >= 0.0f) {
+        snprintf(v, sizeof(v), "%.0f%%", s.cpuSystemPct);
+        snprintf(sub, sizeof(sub), "Elite %.0f%% of %u", s.cpuProcessPct >= 0.0f ? s.cpuProcessPct : 0.0f,
+                 s.cpuThreads);
+        tile("CPU", v, sub);
+    } else {
+        tile("CPU", "--", "sampling");
+    }
+    if (s.nvOk) {
+        snprintf(v, sizeof(v), "%d%%", s.gpuLoadPct);
+        if (s.gpuTempC > -1000) snprintf(sub, sizeof(sub), "load, %d C", s.gpuTempC);
+        else snprintf(sub, sizeof(sub), "load");
+        tile("GPU", v, sub);
+    } else {
+        tile("GPU", "--", s.nvTried ? s.nvWhy : "sampling");
+    }
+    {
+        char vu[24] = "--", vb[24] = "?";
+        if (s.vramBudget) {
+            gb(vu, sizeof(vu), s.vramUsed);
+            gb(vb, sizeof(vb), s.vramBudget);
+        }
+        snprintf(sub, sizeof(sub), "of %s GB", vb);
+        tile("VRAM", vu, s.vramBudget ? sub : "sampling");
+    }
+    {
+        char rp[24] = "--", ra[24] = "?", rt[24] = "?";
+        if (s.ramTotal) {
+            gb(rp, sizeof(rp), s.ramProcess);
+            gb(ra, sizeof(ra), s.ramAvail);
+            gb(rt, sizeof(rt), s.ramTotal);
+        }
+        snprintf(sub, sizeof(sub), "GB, %s free of %s", ra, rt);
+        tile("RAM", rp, s.ramTotal ? sub : "sampling");
+    }
+}
 }
 
 int perfMonitorTiles(PerfTile* out, int max) {
@@ -1555,43 +1631,8 @@ int perfMonitorTiles(PerfTile* out, int max) {
         }
         tile(native ? "XR PERIOD" : "DISPLAY", v, sub);
     }
-    if (s.cpuSystemPct >= 0.0f) {
-        snprintf(v, sizeof(v), "%.0f%%", s.cpuSystemPct);
-        snprintf(sub, sizeof(sub), "Elite %.0f%% of %u", s.cpuProcessPct >= 0.0f ? s.cpuProcessPct : 0.0f,
-                 s.cpuThreads);
-        tile("CPU", v, sub);
-    } else {
-        tile("CPU", "--", "sampling");
-    }
-    if (s.nvOk) {
-        snprintf(v, sizeof(v), "%d%%", s.gpuLoadPct);
-        if (s.gpuTempC > -1000) snprintf(sub, sizeof(sub), "load, %d C", s.gpuTempC);
-        else snprintf(sub, sizeof(sub), "load");
-        tile("GPU", v, sub);
-    } else {
-        tile("GPU", "--", s.nvTried ? s.nvWhy : "sampling");
-    }
-    {
-        char vu[24] = "--", vb[24] = "?";
-        if (s.vramBudget) {
-            gb(vu, sizeof(vu), s.vramUsed);
-            gb(vb, sizeof(vb), s.vramBudget);
-        }
-        snprintf(sub, sizeof(sub), "of %s GB", vb);
-        tile("VRAM", vu, s.vramBudget ? sub : "sampling");
-    }
-
-    // Row 4: memory, and EDVR's own price.
-    {
-        char rp[24] = "--", ra[24] = "?", rt[24] = "?";
-        if (s.ramTotal) {
-            gb(rp, sizeof(rp), s.ramProcess);
-            gb(ra, sizeof(ra), s.ramAvail);
-            gb(rt, sizeof(rt), s.ramTotal);
-        }
-        snprintf(sub, sizeof(sub), "GB, %s free of %s", ra, rt);
-        tile("RAM", rp, s.ramTotal ? sub : "sampling");
-    }
+    // The slow samplers' tiles: CPU load, GPU load and temperature, VRAM, RAM (the flat Monitor shows the same four: appendSlowTiles).
+    appendSlowTiles(tile);
     {
         const double frames = cnt > 0 ? static_cast<double>(cnt) : 1.0;
         if (native) {
@@ -1718,6 +1759,132 @@ int perfMonitorTiles(PerfTile* out, int max) {
     }
     return n;
 }
+namespace {
+// Long frames (a Present gap over twice the budget, the judge's own test) in the newest `seconds` of the ring.
+int dropsInLast(float seconds) {
+    const float budget = budgetNow();
+    if (!(budget > 0.0f)) return 0;
+    int drops = 0;
+    float secs = 0.0f;
+    for (int i = g_s.count - 1; i >= 0 && secs < seconds; --i) {
+        const Frame& f = ringAt(i);
+        if (f.presentMs > 2.0f * budget) ++drops;
+        secs += f.presentMs / 1000.0f;
+    }
+    return drops;
+}
+}  // namespace
+
+void perfMonitorReadout(PerfReadout* out, float windowSeconds) {
+    State& s = g_s;
+    if (!out) return;
+    *out = PerfReadout{};
+    float present[kRing];
+    int n = 0;
+    float secs = 0.0f;
+    for (int i = s.count - 1; i >= 0; --i) {
+        if (windowSeconds > 0.0f && secs >= windowSeconds) break;
+        const Frame& f = ringAt(i);
+        present[n++] = f.presentMs;
+        secs += f.presentMs / 1000.0f;
+    }
+    const PerfStats ps = perfStatsOf(present, n);
+    if (ps.count) {
+        out->haveRendered = true;
+        out->renderedMs = ps.avgMs;
+        out->renderedFps = perfFpsOf(ps.avgMs);
+        out->renderedLowMs = ps.p99Ms;
+        out->renderedLowFps = perfFpsOf(ps.p99Ms);
+    }
+    if (nativeMenuActive()) {
+        const NativeTimingSnapshot timing = nativeTimingSnapshot();
+        const auto cpu = s.nativeHistory.applicationCpu(GetTickCount64(), 200);
+        if (nativeApplicationCpuReady(timing) && cpu.count) {
+            out->haveCpu = true;
+            out->cpuMs = static_cast<float>(cpu.meanMs);
+        }
+    } else {
+        const float thread = recentTimes().threadMs();
+        if (thread > 0.0f) {
+            out->haveCpu = true;
+            out->cpuMs = thread;
+        }
+    }
+    out->drops = dropsInLast(10.0f);
+    // The presented rate: absent without a bridge this session; unavailable when a bridge's count cannot be had; "measuring" until the ring has an entry and
+    // again if the counter stops moving for two seconds.
+    const bool bridge = xessFgBridgeThisSession();
+    uint64_t count = 0, at = 0;
+    const bool counting = xessFgPresentStats(&count, &at, nullptr);
+    const char* why = xessFgPresentUnavailableWhy();
+    const bool moving = s.presented.any() && nowMs() - s.presentedMovedMs <= 2000;
+    out->presented = presentedStateOf(bridge, counting, why[0] != 0, moving);
+    if (out->presented == PresentedState::Counting) {
+        const PerfStats pst = s.presented.stats(windowSeconds);
+        if (pst.count) {
+            out->presentedMs = pst.avgMs;
+            out->presentedFps = perfFpsOf(pst.avgMs);
+            out->presentedLowMs = pst.p99Ms;
+            out->presentedLowFps = perfFpsOf(pst.p99Ms);
+        } else {
+            out->presented = PresentedState::Measuring;
+        }
+    }
+    snprintf(out->unavailableWhy, sizeof(out->unavailableWhy), "%s", why);
+    out->activeGenerated = xessFgActiveGeneratedFrames();
+    const char* problem = xessFgProblem();
+    if (bridge && problem) {
+        out->fgStopped = true;
+        // fault() prefixes its text with "stopped: "; the note says it once.
+        if (strncmp(problem, "stopped: ", 9) == 0) problem += 9;
+        snprintf(out->stopped, sizeof(out->stopped), "%s", problem);
+    }
+}
+
+int perfMonitorFlatTiles(PerfTile* out, int max) {
+    if (!out || max <= 0) return 0;
+    int n = 0;
+    auto tile = [&](const char* caption, const char* value, const char* sub) {
+        if (n >= max) return;
+        snprintf(out[n].caption, sizeof(out[n].caption), "%s", caption);
+        snprintf(out[n].value, sizeof(out[n].value), "%s", value);
+        snprintf(out[n].sub, sizeof(out[n].sub), "%s", sub ? sub : "");
+        ++n;
+    };
+    PerfReadout r;
+    perfMonitorReadout(&r, 0.0f);   // the whole ring, like the VR page's FRAME RATE tile
+    emitRateTiles(r, tile);
+    appendSlowTiles(tile);
+    return n;
+}
+
+void perfMonitorNoteSwapChain(IDXGISwapChain* swap) {
+    // Read every few seconds: a window moved to another monitor changes the answer, and nothing else does.
+    static uint64_t lastMs = 0;
+    if (!swap || !dueMs(lastMs, 3000)) return;
+    lastMs = stampMs();
+    IDXGIOutput* output = nullptr;
+    if (FAILED(swap->GetContainingOutput(&output)) || !output) return;
+    DXGI_OUTPUT_DESC desc{};
+    uint32_t hz = 0;
+    wchar_t device[32] = L"";
+    if (SUCCEEDED(output->GetDesc(&desc)) && desc.Monitor) {
+        MONITORINFOEXW info{};
+        info.cbSize = sizeof(info);
+        if (GetMonitorInfoW(desc.Monitor, &info)) {
+            wcsncpy_s(device, info.szDevice, _TRUNCATE);
+            DEVMODEW mode{};
+            mode.dmSize = sizeof(mode);
+            if (EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) && mode.dmDisplayFrequency > 1) hz = mode.dmDisplayFrequency;
+        }
+    }
+    output->Release();
+    if (!hz) return;   // 0 and 1 are "the hardware default": not a rate
+    const uint32_t milli = hz * 1000u;
+    if (g_refreshMilliHz.exchange(milli, std::memory_order_relaxed) != milli)
+        Log::get().note("perf: display refresh %u Hz (%ls); the presented budget is %.2f ms", hz, device, static_cast<double>(1000.0f / static_cast<float>(hz)));
+}
+
 void perfMonitorLastDropLine(char* buf, size_t bufLen) {
     State& s = g_s;
     if (!buf || !bufLen) return;
@@ -1808,8 +1975,12 @@ void perfMonitorNativeTimingLine(char* buf, size_t bufLen) {
 }
 int perfMonitorGraph(int which, float* out, int max, float* budgetMs) {
     State& s = g_s;
-    if (budgetMs) *budgetMs = budgetNow();
+    if (budgetMs) *budgetMs = which == kGraphPresented ? displayBudgetNow() : budgetNow();
     if (!out || max <= 0) return 0;
+    if (which == kGraphPresented) {
+        // Absent (no bridge this session) and unavailable (no source can count) are no samples, never a strip of zeros.
+        return xessFgBridgeThisSession() && xessFgPresentStats(nullptr, nullptr, nullptr) ? s.presented.copy(out, max) : 0;
+    }
     if (nativeMenuActive() && (which == kGraphGpu || which == kGraphCpu))
         return s.nativeHistory.graph(which == kGraphGpu, out, max, GetTickCount64());
     // Off the native path there is no GPU frame to plot: it was the
@@ -1846,6 +2017,12 @@ void perfMonitorOverlayLine(char* buf, size_t bufLen) {
     const PerfStats ps = perfStatsOf(present, n);
     if (!ps.count) { snprintf(buf, bufLen, "measuring"); return; }
     const PerfRecentTimes recent = recentTimes();
+    // Under the XeSS-FG bridge the line says both rates: "render 58 / shown 116 fps   cpu 9.1 ms" (perf_presented.h). Without a bridge, today's line.
+    if (!nativeMenuActive()) {
+        PerfReadout readout;
+        perfMonitorReadout(&readout, 1.0f);
+        if (formatCompactLine(readout, buf, bufLen)) return;
+    }
     if (nativeMenuActive()) {
         const NativeTimingSnapshot timing = nativeTimingSnapshot();
         const GpuFrameSnapshot gpu = gpuFrameSnapshot();

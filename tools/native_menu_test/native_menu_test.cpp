@@ -283,6 +283,44 @@ int wmain(int argc, wchar_t** argv) {
             if (w2 > ax1 - ax0) std::printf("  heading at %dp: %d px in a %d px rect\n", outH, w2, ax1 - ax0);
             check(w2 > 0 && w2 <= ax1 - ax0, "the Debug heading fits its rect at the flat card's rasterised size");
         }
+        // The flat Monitor page at the sizes the flat card is rasterised at (menu.cpp buildMonitor, flat): four tabs, eleven tiles three across (the rendered
+        // three, the presented three under the bridge, the four slow samplers), two note lines (the bridge's and the last drop), three strips (CPU, rendered,
+        // presented) and the footer. It must stay under the raster's 2048-px height bound and, so that it is drawn 1:1, under the share of the output's height
+        // the placement allows (menu_flat_layout.h kFlatMaxHeightFrac).
+        auto flatMonitor = [](int outH) {
+            const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+            edvr::MenuContent c{};
+            c.widthPx = c.cardPx = fs.cardPx;
+            c.capPx = fs.capPx;
+            c.compact = true;
+            c.tabCount = 4;
+            std::snprintf(c.tabs[0], sizeof(c.tabs[0]), "Performance");
+            std::snprintf(c.tabs[1], sizeof(c.tabs[1]), "Visual");
+            std::snprintf(c.tabs[2], sizeof(c.tabs[2]), "Monitor");
+            std::snprintf(c.tabs[3], sizeof(c.tabs[3]), "Debug");
+            c.tileCount = 11;
+            c.tileColumns = 3;
+            c.lineCount = 2;
+            for (int i = 0; i < 2; ++i) {
+                std::snprintf(c.lines[i].left, sizeof(c.lines[i].left), "Note %d", i);
+                c.lines[i].style = edvr::kMenuNote;
+            }
+            c.graphCount = edvr::kMenuMaxGraphs;
+            std::strcpy(c.footer, "Up/Down row  Left/Right change  Tab page\nline two");
+            return c;
+        };
+        for (const int outH : {1080, 1440, 2160}) {
+            const int h = edvr::menuPanelLayoutHeightForTest(flatMonitor(outH));
+            std::printf("  flat Monitor raster at %dp: %d px tall (bound 2048, 1:1 up to %d)\n", outH, h,
+                        static_cast<int>(edvr::kFlatMaxHeightFrac * static_cast<float>(outH)));
+            check(h > 0 && h < 2048, "the flat Monitor page is under the raster's 2048-px height bound at 1080p, 1440p and 2160p");
+            check(static_cast<float>(h) <= edvr::kFlatMaxHeightFrac * static_cast<float>(outH),
+                  "the flat Monitor page is drawn 1:1 (under the placement's height share) at 1080p, 1440p and 2160p");
+        }
+        {   // an upper bound on the rows: one more strip than the panel holds would be silently dropped, so it is pinned
+            check(edvr::kMenuMaxGraphs >= 3, "the panel holds the flat Monitor's three strips");
+            check(edvr::kMenuMaxTiles >= 11, "the panel holds the flat Monitor's eleven tiles");
+        }
         std::printf("native_menu_test: layout %u checks, %u failures (heading %dpx in a %dpx rect)\n",
                     checks, fails, headingW, headingBoxW);
         return fails ? 1 : 0;

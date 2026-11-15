@@ -28,11 +28,11 @@ struct MenuPageDef {
     MenuPagePost post;
 };
 
-// Order is the tab order. Flat's three names are kFlatTabNames (the Bloom note finds the Visual tab by it).
+// Order is the tab order. Flat's Performance, Visual and Debug names are kFlatTabNames (the Bloom note finds the Visual tab by it); its Monitor is the VR
+// one, shown to both, and the flat Debug entry sits after it so that Debug stays last.
 inline constexpr MenuPageDef kMenuPages[] = {
     {kFlatTabNames[0], true, false, false, MenuPageSource::FlatPerformance, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
     {kFlatTabNames[1], true, false, false, MenuPageSource::FlatVisual, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
-    {kFlatTabNames[2], true, false, false, MenuPageSource::FlatDebug, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
     {"Performance", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, "performance", false, MenuPagePost::None},
     {"Fixes", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, "fixes", true, MenuPagePost::None},
     {"Visual", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, "visual", true, MenuPagePost::None},
@@ -40,8 +40,9 @@ inline constexpr MenuPageDef kMenuPages[] = {
     {"Native on foot", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, "native_on_foot", true, MenuPagePost::AimChoiceAfterLookToAim},
     {"Hotkeys", false, true, false, MenuPageSource::Hotkeys, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
     {"Plugins", false, true, false, MenuPageSource::Plugins, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
-    {"Monitor", false, true, false, MenuPageSource::Monitor, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
+    {"Monitor", true, true, false, MenuPageSource::Monitor, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
     {"Status", false, true, false, MenuPageSource::Status, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
+    {kFlatTabNames[2], true, false, false, MenuPageSource::FlatDebug, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
     {"Advanced", false, true, true, MenuPageSource::Settings, MenuPageTier::Advanced, "advanced", true, MenuPagePost::None},
     {"Experimental", false, true, true, MenuPageSource::Settings, MenuPageTier::Experimental, "experimental", true, MenuPagePost::None},
     {"Instruments", false, true, true, MenuPageSource::Actions, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
