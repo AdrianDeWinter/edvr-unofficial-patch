@@ -2,10 +2,10 @@
 
 ## Upscaling and fixes for Elite Dangerous, in VR and flat
 
-ED-UP adds DLSS, FSR and XeSS upscaling to Elite Dangerous in VR and on a flat
-screen, draws Odyssey's on-foot game in stereo in a headset, and fixes about
-two dozen things that are right on a monitor and wrong in a headset. In VR it
-is a native OpenXR package. It takes about three minutes to install.
+ED-UP adds DLSS, FSR and XeSS upscaling to Elite Dangerous on a monitor or in a
+headset. It keeps the menus and HUD sharp and fixes a long list of the game's
+visual problems. In VR it is a native OpenXR package and draws Odyssey's
+on-foot game in stereo. It takes about three minutes to install.
 
 Bugs get fixed through [an
 issue](https://github.com/characterecho-sean/ed-unofficial-patch/issues/new/choose),
