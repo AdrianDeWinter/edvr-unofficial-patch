@@ -699,7 +699,9 @@ Flatpak Steam runs the recorded Proton and runtime inside the installed Steam
 sandbox. The wrapper checks the selected deployment and its compatibility-tool
 extension metadata without starting Flatpak. Missing or ambiguous deployments
 and extension mounts are refused rather than replaced with another runner.
-An explicit `--proton` selects a host runner and bypasses the sandbox.
+Named system Flatpak installations are also refused because their global
+extension search order is not evaluated here. An explicit `--proton` selects a
+host runner and bypasses the sandbox.
 
 The wrapper also accepts `--repair`, `--uninstall`, and `--collect-logs`. Use
 `--game-dir` for a different product folder inside the installed game tree,

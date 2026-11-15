@@ -415,6 +415,47 @@ def flatpak_installations(home, environ):
     return installations
 
 
+def require_default_flatpak_installations(environ):
+    """Refuse uninspected system roots before validating a Steam sandbox runner."""
+    # Flatpak 1.16.1 reads regular *.conf files here, including symlinks,
+    # and extension lookup searches every configured system installation.
+    # github.com/flatpak/flatpak/blob/1.16.1/common/flatpak-dir.c#L1798-L1899
+    config_root = Path(environ.get("FLATPAK_CONFIG_DIR", "/etc/flatpak"))
+    recovery = "; pass --proton with an installed host runner"
+    if not config_root.is_absolute():
+        raise ValueError("Flatpak installation configuration root must be absolute" + recovery)
+    try:
+        # An absent optional config tree means no extra installations. Walk
+        # missing components to distinguish that from a dangling symlink or
+        # an inaccessible ancestor, which cannot establish the search roots.
+        existing = config_root
+        while True:
+            try:
+                existing.stat()
+                break
+            except FileNotFoundError:
+                if existing.is_symlink():
+                    raise ValueError("Flatpak installation configuration has a dangling reference: %s%s" %
+                                     (existing, recovery))
+                existing = existing.parent
+        if existing != config_root:
+            return
+        config_root = config_root.resolve(strict=True)
+        with os.scandir(config_root) as entries:
+            for entry in entries:
+                if entry.name != "installations.d":
+                    continue
+                if not entry.is_dir():
+                    raise ValueError("Flatpak installation configuration directory is invalid: %s%s" % (entry.path, recovery))
+                with os.scandir(entry.path) as configs:
+                    for config in configs:
+                        if config.name.endswith(".conf") and config.is_file():
+                            raise ValueError("Flatpak installation configuration includes unsupported system roots: %s%s" %
+                                             (config.path, recovery))
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("Flatpak installation configuration is invalid or unreadable: %s%s" % (config_root, recovery)) from exc
+
+
 def flatpak_deployment(app_id, home, environ, strict=False):
     found = []
     for installation in flatpak_installations(home, environ):
@@ -865,6 +906,7 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
     flatpak_data = home / ".var/app" / flatpak_id
     if not args.proton and (inside(steam_root, flatpak_data.resolve()) or
                             steam_root == (flatpak_data / ".local/share/Steam").resolve()):
+        require_default_flatpak_installations(env_in)
         selected = flatpak_deployment(flatpak_id, home, env_in, strict=True)
         sandbox_env = flatpak_runtime_environment(flatpak_id, home, env_in, selected)
         host_file = lambda path: flatpak_host_file(path, flatpak_id, home, env_in, selected)
@@ -1506,7 +1548,10 @@ def steam_context_self_test(only=None):
     parse = lambda *words: parse_argv(list(words))
     failures = []
     for case in ("prefix", "store", "flatpak", "flatpak-usr", "flatpak-full",
-                 "flatpak-local-full", "flatpak-local-sub", "flatpak-parent-app", "flatpak-parent-usr"):
+                 "flatpak-local-full", "flatpak-local-sub", "flatpak-parent-app", "flatpak-parent-usr",
+                 "flatpak-config", "flatpak-config-link", "flatpak-config-dangling", "flatpak-config-relative",
+                 "flatpak-config-file", "flatpak-config-installations-file", "flatpak-config-unreadable",
+                 "flatpak-config-missing"):
         if only is not None and case != only:
             continue
         with TemporaryDirectory() as tmp:
@@ -1546,8 +1591,10 @@ def steam_context_self_test(only=None):
                 (prefix / "pfx/dosdevices").mkdir()
                 (prefix / "pfx/dosdevices/q:").symlink_to(library, target_is_directory=True)
                 record(prefix)
+            config_root = root / "flatpak-config"
+            config_root.mkdir()
             env = {"STEAM_DIR": str(steam), "PATH": str(root / "bin"),
-                   "FLATPAK_SYSTEM_DIR": str(root / "system-flatpak")}
+                   "FLATPAK_SYSTEM_DIR": str(root / "system-flatpak"), "FLATPAK_CONFIG_DIR": str(config_root)}
 
             def plan(*words, environment=None):
                 return build_plan(parse("--store", "steam", *words), script=script, home=home,
@@ -1559,6 +1606,7 @@ def steam_context_self_test(only=None):
                     raise AssertionError("accepted invalid Steam context: " + reason)
                 except ValueError as exc:
                     assert reason in str(exc), str(exc)
+                    return str(exc)
 
             def snapshot():
                 return {str(path.relative_to(root)): ("link", str(path.readlink())) if path.is_symlink()
@@ -1643,6 +1691,52 @@ def steam_context_self_test(only=None):
                     flatpak.parent.mkdir()
                     flatpak.write_bytes(b"fixture only")
                     flatpak.chmod(0o700)
+                    if case == "flatpak-config-missing":
+                        config_root.rmdir()
+                        output = dry_run()
+                        assert "--command=" + str(runtime / "_v2-entry-point") in plan()[0]
+                        assert "/run/parent/app/share/steam/compatibilitytools.d/Proton-GE/proton" in output
+                        continue
+                    if case.startswith("flatpak-config"):
+                        from unittest.mock import patch
+
+                        if case in ("flatpak-config", "flatpak-config-link"):
+                            configs = config_root / "installations.d"
+                            configs.mkdir()
+                            extra = root / "extra.conf"
+                            extra.write_text('[Installation "extra"]\nPath=' + str(root / "extra-system") + "\n", encoding="utf-8")
+                            if case == "flatpak-config":
+                                extra.rename(configs / "extra.conf")
+                            else:
+                                (configs / "extra.conf").symlink_to(extra)
+                        elif case == "flatpak-config-dangling":
+                            config_root.rmdir()
+                            config_root.symlink_to(root / "missing-config", target_is_directory=True)
+                        elif case == "flatpak-config-relative":
+                            env["FLATPAK_CONFIG_DIR"] = os.path.relpath(config_root)
+                        elif case == "flatpak-config-file":
+                            config_root.rmdir()
+                            config_root.write_bytes(b"not a directory")
+                        elif case == "flatpak-config-installations-file":
+                            (config_root / "installations.d").write_bytes(b"not a directory")
+                        before = snapshot()
+                        if case == "flatpak-config-unreadable":
+                            original_scandir = os.scandir
+
+                            def unreadable_config(path):
+                                if Path(path) == config_root:
+                                    raise PermissionError("fixture access denied")
+                                return original_scandir(path)
+
+                            with patch.object(os, "scandir", unreadable_config):
+                                error = refuses("Flatpak installation configuration")
+                        else:
+                            error = refuses("Flatpak installation configuration")
+                        assert "--proton" in error and "host runner" in error
+                        assert snapshot() == before, "refused Steam configuration wrote files"
+                        # A host runner is an explicit recovery from unsupported sandbox configuration.
+                        assert plan("--proton", str(proton))[0][:2] == [str(proton / "proton"), "runinprefix"]
+                        continue
                     if case in ("flatpak-full", "flatpak-local-full", "flatpak-local-sub"):
                         # Flatpak prefers full extension mounts to subextensions, and local
                         # unmaintained mounts can also replace the installed runner's files.
