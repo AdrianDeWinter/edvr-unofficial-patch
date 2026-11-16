@@ -29,6 +29,11 @@ inline bool flatProfileReadsKey(const char* key) {
         // How long a highlighted row rests before its tooltip shows in the strip beside the flat card, the same dwell VR's panel has (menu.cpp
         // menuReadTooltipDelay). Unlisted, getFloat answers the default here whatever the file says, and the flat tooltip could never be turned off.
         std::strcmp(key, "menu.tooltip_delay") == 0 ||
+        // The frame-rate readout (menu.cpp, perf_monitor.h): off | compact | detailed, in the top right corner of the flat screen, and its copy at the top of the
+        // open menu card (menu.fps_overlay_lock). Both are Performance tab rows. Unlisted, getString answers the default here whatever the file says and the rows
+        // could never turn the readout on.
+        std::strcmp(key, "menu.fps_overlay") == 0 ||
+        std::strcmp(key, "menu.fps_overlay_lock") == 0 ||
         std::strcmp(key, "fix.temporal_aa_model") == 0 ||
         // XeSS Frame Generation (xess_fg.cpp, docs\xess-frame-generation-2026-11-12.md): flat-only rows on the Performance tab.
         std::strcmp(key, "fix.xess_frame_generation") == 0 ||

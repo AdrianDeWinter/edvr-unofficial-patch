@@ -3,6 +3,9 @@
 #include "../../src/d3d11/frame_ticks.h"
 #include "../../src/d3d11/xess_fg_presented.h"
 #include "../../src/common/perf_presented.h"
+#include "../../src/common/fps_overlay_mode.h"
+#include "../../src/d3d11/menu_flat_layout.h"
+#include "../../src/d3d11/menu_policy.h"
 #include <vector>
 #include <cstdio>
 #include <cstring>
@@ -829,6 +832,56 @@ void readoutText() {
         check(formatCompactLine(none,line,sizeof(line))&&std::string(line)=="measuring","readout: no rendered frames yet is \"measuring\"");
     }
 }
+// ---- the frame-rate readout (fps_overlay_mode.h, menu_flat_layout.h, menu_policy.h) ------------------------------------------------------------------
+void fpsOverlayModes() {
+    check(parseFpsOverlay("off")==FpsOverlayMode::Off&&parseFpsOverlay("compact")==FpsOverlayMode::Compact&&parseFpsOverlay("detailed")==FpsOverlayMode::Detailed,"fps overlay: the three words");
+    check(parseFpsOverlay("on")==FpsOverlayMode::Compact&&parseFpsOverlay("true")==FpsOverlayMode::Compact&&parseFpsOverlay("1")==FpsOverlayMode::Compact&&parseFpsOverlay("yes")==FpsOverlayMode::Compact,"fps overlay: the old on words read as compact");
+    check(parseFpsOverlay("false")==FpsOverlayMode::Off&&parseFpsOverlay("0")==FpsOverlayMode::Off&&parseFpsOverlay("no")==FpsOverlayMode::Off,"fps overlay: the old off words read as off");
+    check(parseFpsOverlay("  Detailed \r")==FpsOverlayMode::Detailed&&parseFpsOverlay("ON")==FpsOverlayMode::Compact,"fps overlay: case and surrounding blanks do not matter");
+    check(parseFpsOverlay("")==FpsOverlayMode::Off&&parseFpsOverlay(nullptr)==FpsOverlayMode::Off&&parseFpsOverlay("loud")==FpsOverlayMode::Off,"fps overlay: empty, missing and unknown read as the default, off");
+    check(!std::strcmp(fpsOverlayWord(FpsOverlayMode::Compact),"compact")&&parseFpsOverlay(fpsOverlayWord(FpsOverlayMode::Detailed))==FpsOverlayMode::Detailed,"fps overlay: the words the menu writes read back");
+}
+void detailedText() {
+    char a[96],b[96];
+    PerfReadout r=bridged(PresentedState::Counting,1);r.drops=3;
+    formatDetailRates(r,a,sizeof(a));formatDetailTimes(r,b,sizeof(b));
+    check(std::string(a)=="render 58.4 / shown 116.8 fps"&&std::string(b)=="17.1 ms   1% low 52 fps   cpu 9.1 ms   drops 3","detailed: line 1 the two rates, line 2 frame time, 1% low, cpu and drops");
+    r=bridged(PresentedState::Absent,0);r.haveCpu=false;
+    formatDetailRates(r,a,sizeof(a));formatDetailTimes(r,b,sizeof(b));
+    check(std::string(a)=="58.4 fps"&&std::string(b)=="17.1 ms   1% low 52 fps   drops 0","detailed: without a bridge one rate, and no cpu when it is unknown");
+    r=bridged(PresentedState::Unavailable,0);formatDetailRates(r,a,sizeof(a));
+    check(std::string(a)=="render 58.4 fps   shown n/a","detailed: an unavailable count is n/a, not a number");
+    PerfReadout none;formatDetailRates(none,a,sizeof(a));formatDetailTimes(none,b,sizeof(b));
+    check(std::string(a)=="measuring"&&b[0]==0,"detailed: nothing rendered yet is measuring, with no second line");
+}
+void flatCorner() {
+    for(int outH:{1080,1440,2160}){
+        const int outW=outH*16/9;
+        const FlatCardSize fs=flatCardSize(outW,outH,kFlatMenuCardHeightFrac);
+        const int w=fs.capPx*28,h=fs.capPx*14;
+        const FlatPlacement ul=flatPlace(outW,outH,w,h),ur=flatPlace(outW,outH,w,h,FlatCorner::UpperRight);
+        const int margin=int(std::lround(kFlatMarginFrac*outW));
+        check(ul.oneToOne&&ur.oneToOne&&ur.w==w&&ur.h==h,"flat corner: the readout is composited 1:1 at flat sizes");
+        check(ul.x==margin&&ur.x+ur.w==outW-margin&&ur.y==ul.y,"flat corner: upper right is the same 2% margin from the right edge, at the same height");
+        check(std::fabs((ur.shift-ur.halfW)-(-1.0f+2.0f*float(ur.x)/float(outW)))<1e-5f&&ur.shift>ul.shift,"flat corner: the geometry's left edge is the placed x, to the right of the upper left one");
+    }
+    const FlatPlacement def=flatPlace(1920,1080,300,200);
+    check(def.x==flatPlace(1920,1080,300,200,FlatCorner::UpperLeft).x,"flat corner: the default is upper left, as the menu and notices were placed");
+}
+void readoutMachine() {
+    ScreenReadoutState m;
+    check(!m.tick(false,false,5)&&!m.compositing(),"readout machine: not wanted does nothing");
+    check(m.tick(true,false,5),"readout machine: wanted, it asks for the first raster");
+    m.didSubmit(5);
+    check(!m.compositing()&&!m.tick(true,false,5)&&!m.compositing(),"readout machine: the raster is not shown until the panel has taken one");
+    check(!m.tick(true,false,6)&&m.compositing(),"readout machine: shown once the serial moved");
+    check(m.tick(true,true,6)&&m.compositing(),"readout machine: a refresh is asked for and the card stays up");
+    m.didSubmit(6);
+    check(m.compositing(),"readout machine: a refresh submit does not hide it");
+    m.tick(false,false,7);
+    check(!m.compositing()&&m.tick(true,false,7),"readout machine: the menu or a notice hides it, and it starts again from nothing");
+    m.didSubmit(7);check(!m.compositing(),"readout machine: and is not shown until its own raster is taken");
+}
 }
 int wmain(int argc,wchar_t** argv) {
     if(argc!=2)return 2;
@@ -836,6 +889,7 @@ int wmain(int argc,wchar_t** argv) {
     if(std::wcscmp(argv[1],L"--self-test"))return 2;
     averages();invalidation();agesAndValues();displayBase();callerWorkCrossing();graphs();benchmarkWindows();benchmarkAdmission();
     frameTicksChain();frameTicksTopThree();frameTicksOddClocks();frameTicksUncut();frameShareText();nativeLongFrameFits();frameTickCostNote();
+    fpsOverlayModes();detailedText();flatCorner();readoutMachine();
     presentedTally();presentedRing();presentedBudgets();readoutText();
     std::printf("native_perf_history_test: %u checks, %u failures\n",checks,failures);return failures?1:0;
 }

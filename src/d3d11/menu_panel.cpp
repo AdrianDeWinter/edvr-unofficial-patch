@@ -1330,7 +1330,8 @@ void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf
             // The raster was sized from the output's own pixels (menu.cpp sizeContent), so the bitmap is laid at exactly its own pixel size: one bitmap
             // pixel is one output pixel, its upper-left corner a whole two percent in from the output's (menu_flat_layout.h). A page taller than the
             // output allows is the one case scaled down. This is evaluated against the swapchain, not Elite's SS size.
-            const FlatPlacement place = flatPlace(static_cast<int>(regionW), static_cast<int>(regionH), g_panelW, g_panelH);
+            const FlatPlacement place = flatPlace(static_cast<int>(regionW), static_cast<int>(regionH), g_panelW, g_panelH,
+                                                   g.flatCorner == 1 ? FlatCorner::UpperRight : FlatCorner::UpperLeft);
             if (place.w > 0) {
                 g.halfW = place.halfW * g.dist;
                 g.shift = place.shift * g.dist;
@@ -1838,6 +1839,44 @@ bool menuPanelBuildOverlayContent(MenuContent& c, const char* line, float textDe
     c.angularWidthDeg = 2.0f * atanf((static_cast<float>(card) / static_cast<float>(cap)) *
                                      tanf(halfTextRad)) * 57.2957795f;
     if (angularWidthDeg) *angularWidthDeg = c.angularWidthDeg;
+    return true;
+}
+
+bool menuPanelBuildReadoutContent(MenuContent& c, const char* const* lines, int lineCount, int capPx, int minCardPx, float textDegrees,
+                                  float* angularWidthDeg) {
+    if (angularWidthDeg) *angularWidthDeg = 0.0f;
+    if (!lines || lineCount < 1 || lineCount > kMenuMaxLines || capPx < 8) return false;
+    const int cap = capPx;
+    const int pad = cap * 8 / 10;
+    const int em = cap * 8 / 7;   // the overlay's face: smaller than Font::Row's toast face
+    c = MenuContent{};
+    c.toast = true;
+    c.compact = false;
+    c.popupLine = -1;
+    c.capPx = cap;
+    int widest = 0;
+    for (int i = 0; i < lineCount; ++i) {
+        if (!lines[i] || !*lines[i] || strlen(lines[i]) >= sizeof(c.lines[0].left)) return false;
+        memcpy(c.lines[i].left, lines[i], strlen(lines[i]) + 1);
+        c.lines[i].style = kMenuInfo;
+        c.lines[i].badge = kBadgeNone;
+        const int w = menuPanelMeasureLine(lines[i], em);
+        if (w <= 0) return false;
+        if (w > widest) widest = w;
+    }
+    c.lineCount = lineCount;
+    int card = widest + 2 * pad;
+    if (card < minCardPx) card = minCardPx;
+    if (card < 64) card = 64;
+    if (card > 2600) return false;
+    c.cardPx = c.widthPx = card;
+    c.rowFontPx = em;
+    if (textDegrees > 0.0f) {
+        if (!(textDegrees >= 0.6f) || textDegrees > 3.0f) textDegrees = 1.1f;
+        const float halfTextRad = textDegrees * 0.85f * 0.0174532925f * 0.5f;
+        c.angularWidthDeg = 2.0f * atanf((static_cast<float>(card) / static_cast<float>(cap)) * tanf(halfTextRad)) * 57.2957795f;
+        if (angularWidthDeg) *angularWidthDeg = c.angularWidthDeg;
+    }
     return true;
 }
 

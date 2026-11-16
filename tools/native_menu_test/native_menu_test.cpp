@@ -13,6 +13,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <cstdio>
+#include <utility>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -316,6 +317,34 @@ int wmain(int argc, wchar_t** argv) {
             check(h > 0 && h < 2048, "the flat Monitor page is under the raster's 2048-px height bound at 1080p, 1440p and 2160p");
             check(static_cast<float>(h) <= edvr::kFlatMaxHeightFrac * static_cast<float>(outH),
                   "the flat Monitor page is drawn 1:1 (under the placement's height share) at 1080p, 1440p and 2160p");
+        }
+        // The detailed frame-rate card (menuPanelBuildReadoutContent, menu.cpp buildReadoutContent): three lines and two strips, at the flat text heights and at the
+        // VR reference face (cap 42, with and without an angular width). Under the raster's height bound, and in flat small enough to be a corner card.
+        {
+            const char* lines[3] = {"render 58.4 / shown 116.8 fps", "17.1 ms   1% low 52 fps   cpu 9.1 ms   drops 12", "FG stopped: a wait on the queue timed out"};
+            auto detailed = [&](int cap, int minCard, float deg, float* angular) {
+                edvr::MenuContent c{};
+                const bool ok = edvr::menuPanelBuildReadoutContent(c, lines, 3, cap, minCard, deg, angular);
+                c.graphCount = 2;
+                return std::make_pair(ok, c);
+            };
+            for (const int outH : {1080, 2160}) {
+                const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+                const auto built = detailed(fs.capPx, fs.capPx * 14, 0.0f, nullptr);
+                const int h = edvr::menuPanelLayoutHeightForTest(built.second);
+                std::printf("  flat detailed readout at %dp: %d x %d px\n", outH, built.second.cardPx, h);
+                check(built.first && built.second.cardPx >= fs.capPx * 14 && built.second.capPx == fs.capPx, "the detailed readout builds at the flat text height");
+                check(h > 0 && h < outH / 4 && built.second.angularWidthDeg == 0.0f, "the flat detailed card is a corner card (under a quarter of the output's height) with no angular width");
+                const edvr::FlatPlacement ur = edvr::flatPlace(outH * 16 / 9, outH, built.second.cardPx, h, edvr::FlatCorner::UpperRight);
+                check(ur.oneToOne && ur.x + ur.w < outH * 16 / 9, "the flat detailed card is composited 1:1 inside the top right corner");
+            }
+            float deg = 0.0f;
+            const auto vr = detailed(42, 42 * 14, 1.1f, &deg);
+            const int vrH = edvr::menuPanelLayoutHeightForTest(vr.second);
+            std::printf("  VR detailed readout: %d x %d px, %.2f degrees wide\n", vr.second.cardPx, vrH, static_cast<double>(deg));
+            check(vr.first && vrH > 0 && vrH < 2048 && deg > 1.0f && deg == vr.second.angularWidthDeg, "the VR detailed card is under the raster bound and carries its angular width");
+            edvr::MenuContent noLines{};
+            check(!edvr::menuPanelBuildReadoutContent(noLines, nullptr, 0, 42, 0, 0.0f, nullptr), "a readout with no lines is refused");
         }
         {   // an upper bound on the rows: one more strip than the panel holds would be silently dropped, so it is pinned
             check(edvr::kMenuMaxGraphs >= 3, "the panel holds the flat Monitor's three strips");

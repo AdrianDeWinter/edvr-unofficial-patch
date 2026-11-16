@@ -85,6 +85,9 @@ inline float flatLegacyCardPx(int outW, int outH, float aspect) {
 // Where a `bmpW` x `bmpH` bitmap lands on an `outW` x `outH` output, in output pixels, and the composite's geometry for it at a distance of 1 in the units
 // menu_panel.cpp's flat path uses (the output's width spans -1..1; a surface `halfW` wide is `halfW` of it; positive `shift` is to the right; `originY`
 // moves the surface's centre so that its top edge is at `y`).
+// Which corner the bitmap's margin is measured from: the menu and a notice sit upper left, the frame-rate readout upper right.
+enum class FlatCorner { UpperLeft = 0, UpperRight = 1 };
+
 struct FlatPlacement {
   int x = 0, y = 0, w = 0, h = 0;
   float halfW = 0.0f;
@@ -93,7 +96,7 @@ struct FlatPlacement {
   bool oneToOne = false;  // w == bmpW and h == bmpH: no resample
 };
 
-inline FlatPlacement flatPlace(int outW, int outH, int bmpW, int bmpH) {
+inline FlatPlacement flatPlace(int outW, int outH, int bmpW, int bmpH, FlatCorner corner = FlatCorner::UpperLeft) {
   FlatPlacement p;
   if (outW <= 0 || outH <= 0 || bmpW <= 0 || bmpH <= 0) return p;
   double scale = 1.0;
@@ -106,6 +109,7 @@ inline FlatPlacement flatPlace(int outW, int outH, int bmpW, int bmpH) {
   p.oneToOne = scale >= 1.0;
   // Whole pixels: a corner on a fraction of a pixel would resample even at 1:1.
   p.x = static_cast<int>(std::lround(kFlatMarginFrac * outW));
+  if (corner == FlatCorner::UpperRight) p.x = outW - p.x - p.w;   // the same margin from the right edge
   p.y = static_cast<int>(std::lround(kFlatMarginFrac * outH));
   const float tanY = static_cast<float>(outH) / static_cast<float>(outW);
   p.halfW = static_cast<float>(p.w) / static_cast<float>(outW);

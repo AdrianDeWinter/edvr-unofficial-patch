@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "../common/config.h"
+#include "../common/fps_overlay_mode.h"
 #include "../common/runtime_profile.h"
 #include "../common/frame_flag.h"
 #include "../common/guard.h"
@@ -357,7 +358,10 @@ struct State {
     // The head-locked readout (menu.fps_overlay), shown while the menu is
     // down: re-anchored to the head every frame, re-rasterised twice a
     // second.
-    bool     overlay = false;
+    bool     overlay = false;   // menu.fps_overlay is compact or detailed
+    FpsOverlayMode overlayMode = FpsOverlayMode::Off;
+    ScreenReadoutState flatReadout;   // flat: the readout's raster is the live one (menu_policy.h)
+    uint32_t readoutSized[2] = {0, 0}; // the output size the flat readout's raster was built for
     bool     overlayLock = false;
     float    overlayYaw = 0.0f;
     float    overlayPitch = -16.0f;
@@ -524,6 +528,11 @@ const char* hudAntiAliasingRefusal() {
 // change with a line saying why. The mode is read as the flat runtime reads it (requestedTemporalMode), live; the rows are flat only, so a VR menu never has them.
 bool isXessFgToggleRow(const MenuRowDef& d) {
     return strcmp(d.section, "fix") == 0 && strcmp(d.key, "xess_frame_generation") == 0;
+}
+
+// menu.fps_overlay: a file that still says on or off (a switch until 2026-11) is shown, and stepped from, as compact or off.
+bool isFpsOverlayRow(const MenuRowDef& d) {
+    return strcmp(d.section, "menu") == 0 && strcmp(d.key, "fps_overlay") == 0;
 }
 
 bool isXessFgFramesRow(const MenuRowDef& d) {
@@ -1213,6 +1222,12 @@ std::string displayValue(const MenuRowDef& d, const std::string& v) {
             // menu_schema.h: "+0.15 m", "0 ms (exact)", "30%", or the plain number.
             return menuFormatNumber(d, atof(v.c_str()));
         case MenuKind::Choice: {
+            if (isFpsOverlayRow(d)) {
+                const char* word = fpsOverlayWord(parseFpsOverlay(v.c_str()));
+                for (const ChoiceItem& c : choicesOf(d)) {
+                    if (_stricmp(c.value.c_str(), word) == 0) return c.label;
+                }
+            }
             // A stored value above what the GPU can generate is shown as the clamped one (the file is not rewritten).
             if (isXessFgFramesRow(d)) {
                 char shown[8];
@@ -2355,6 +2370,53 @@ int measureFooterLine(const char* utf8, void* ctx) {
 
 void cancelEdit();
 
+// The frame-rate readout's raster (menu.fps_overlay), VR and flat. Compact is the one line; detailed is a card of two or three lines and a strip of the rendered
+// frame time (and one of the presented, under the XeSS-FG bridge) against its budget, from the same reading in both profiles. VR: the fixed 42-pixel reference
+// face and an angular width, as the line always had. Flat: the menu's own text height at this output, composited at its own pixel size in the top right corner.
+bool buildReadoutContent(MenuContent& c, FpsOverlayMode mode, bool flat, float textDeg) {
+    int cap = 42;
+    float deg = textDeg;
+    if (flat) {
+        const uint32_t ow = g_flatOutW.load(std::memory_order_relaxed);
+        const uint32_t oh = g_flatOutH.load(std::memory_order_relaxed);
+        g_s.readoutSized[0] = ow;
+        g_s.readoutSized[1] = oh;
+        cap = flatCardSize(static_cast<int>(ow), static_cast<int>(oh), kFlatMenuCardHeightFrac).capPx;
+        deg = 0.0f;
+    }
+    if (mode == FpsOverlayMode::Compact) {
+        char line[120];
+        perfMonitorOverlayLine(line, sizeof(line));
+        if (!flat) return menuPanelBuildOverlayContent(c, line, textDeg, nullptr);
+        const char* one[1] = {line};
+        return menuPanelBuildReadoutContent(c, one, 1, cap, 0, 0.0f, nullptr);
+    }
+    PerfReadout r;
+    perfMonitorReadout(&r, 1.0f);
+    char l1[96], l2[96], note[200], l3[96];
+    formatDetailRates(r, l1, sizeof(l1));
+    formatDetailTimes(r, l2, sizeof(l2));
+    formatBridgeNote(r, note, sizeof(note));
+    snprintf(l3, sizeof(l3), "%.90s", note);
+    const char* lines[3];
+    int n = 0;
+    lines[n++] = l1;
+    if (l2[0]) lines[n++] = l2;
+    if (l3[0]) lines[n++] = l3;
+    if (!menuPanelBuildReadoutContent(c, lines, n, cap, cap * 14, deg, nullptr)) return false;
+    const int kinds[2] = {kGraphPeriod, kGraphPresented};
+    const char* names[2] = {"Rendered", "Presented"};
+    c.graphCount = 0;
+    for (int g = 0; g < 2; ++g) {
+        MenuGraph& mg = c.graphs[c.graphCount];
+        mg.count = perfMonitorGraph(kinds[g], mg.samples, static_cast<int>(sizeof(mg.samples) / sizeof(mg.samples[0])), &mg.budgetMs);
+        if (!mg.count) continue;
+        snprintf(mg.label, sizeof(mg.label), "%s, last %d frames; the line is the %.1f ms budget", names[g], mg.count, static_cast<double>(mg.budgetMs));
+        ++c.graphCount;
+    }
+    return true;
+}
+
 void buildContent(MenuContent& c) {
     State& s = g_s;
     memset(&c, 0, sizeof(c));
@@ -3256,8 +3318,9 @@ void stepRow(int defIndex, int dir, int mult) {
             const std::vector<ChoiceItem> items = choicesOf(d);
             if (items.empty()) return;
             int at = -1;
+            const std::string curWord = isFpsOverlayRow(d) ? std::string(fpsOverlayWord(parseFpsOverlay(cur.c_str()))) : cur;
             for (size_t i = 0; i < items.size(); ++i) {
-                if (_stricmp(items[i].value.c_str(), cur.c_str()) == 0) at = static_cast<int>(i);
+                if (_stricmp(items[i].value.c_str(), curWord.c_str()) == 0) at = static_cast<int>(i);
             }
             const int n = static_cast<int>(items.size());
             int next = at < 0 ? 0 : ((at + (dir >= 0 ? 1 : n - 1)) % n);
@@ -4731,6 +4794,7 @@ void menuProfileSwitch() {
     // The outgoing profile's flat notice, queued or on screen, goes with it: Config::switchProfile clears the AA comparison override it described.
     s.flatNotice.clear();
     s.screenNotice.clear();
+    s.flatReadout.clear();
     inputGateSetPrivate(false);
     menuPanelFlatResize();
     s.lastDrawn = menuDrawnValue();
@@ -4839,6 +4903,34 @@ static float menuReadTooltipDelay(Config& cfg) {
     return delay;
 }
 
+// menu.fps_overlay (off | compact | detailed; the old on and off still read) and menu.fps_overlay_lock, in both profiles (the flat allow-list carries them,
+// flat_profile_keys.h); the yaw and pitch are the headset's and are read, with their defaults, in both.
+static void menuReadFpsOverlayKeys(Config& cfg) {
+    State& s = g_s;
+    const FpsOverlayMode mode = parseFpsOverlay(cfg.getString("menu.fps_overlay", "off").c_str());
+    const bool ovLock = cfg.getBool("menu.fps_overlay_lock", false);
+    float yaw = cfg.getFloat("menu.fps_overlay_yaw", 0.0f);
+    float pitch = cfg.getFloat("menu.fps_overlay_pitch", 20.0f);
+    if (!(yaw >= -60.0f) || yaw > 60.0f) yaw = 0.0f;
+    if (!(pitch >= -45.0f) || pitch > 45.0f) pitch = 20.0f;
+    if (s.configured && mode != s.overlayMode) {
+        Log::get().note("menu: the frame-rate overlay is %s.", fpsOverlayWord(mode));
+        if (s.open && (ovLock || s.overlayLock)) s.contentDirty = true;
+        s.overlayTextMs = 0;   // the next tick builds the new shape at once
+        s.overlayText.clear();
+        s.flatReadout.clear();
+    }
+    if (s.configured && ovLock != s.overlayLock) {
+        Log::get().note("menu: the frame-rate overlay is %s while the menu is open.", ovLock ? "locked on" : "no longer locked");
+        if (s.open && mode != FpsOverlayMode::Off) s.contentDirty = true;
+    }
+    s.overlayMode = mode;
+    s.overlay = mode != FpsOverlayMode::Off;
+    s.overlayLock = ovLock;
+    s.overlayYaw = yaw;
+    s.overlayPitch = pitch;
+}
+
 // The [menu] keys: the profiles that read them (menu_policy.h) -- the flat profile reads none, and its values are the policy's.
 static void menuReadMenuKeys(Config& cfg) {
     State& s = g_s;
@@ -4894,27 +4986,6 @@ static void menuReadMenuKeys(Config& cfg) {
     s.toasts = cfg.getBool("menu.toasts", true);
     s.aimPromptKeyOn = cfg.getBool("menu.aim_choice_prompt", true);   // F177
     s.nativeOnFootKeyOn = _stricmp(cfg.getString("fix.native_on_foot", "on").c_str(), "on") == 0;
-    {
-        const bool ov = cfg.getBool("menu.fps_overlay", false);
-        const bool ovLock = cfg.getBool("menu.fps_overlay_lock", false);
-        float yaw = cfg.getFloat("menu.fps_overlay_yaw", 0.0f);
-        float pitch = cfg.getFloat("menu.fps_overlay_pitch", 20.0f);
-        if (!(yaw >= -60.0f) || yaw > 60.0f) yaw = 0.0f;
-        if (!(pitch >= -45.0f) || pitch > 45.0f) pitch = 20.0f;
-        if (s.configured && ov != s.overlay) {
-            Log::get().note("menu: the frame-rate overlay is %s.", ov ? "on" : "off");
-            if (s.open && (ovLock || s.overlayLock)) s.contentDirty = true;
-        }
-        if (s.configured && ovLock != s.overlayLock) {
-            Log::get().note("menu: the frame-rate overlay is %s while the menu is open.",
-                            ovLock ? "locked on" : "no longer locked");
-            if (s.open && ov) s.contentDirty = true;
-        }
-        s.overlay = ov;
-        s.overlayLock = ovLock;
-        s.overlayYaw = yaw;
-        s.overlayPitch = pitch;
-    }
     const bool dev = cfg.getBool("menu.developer", false);
     if (dev != s.developer) {
         s.developer = dev;
@@ -4957,8 +5028,8 @@ void menuConfigure(Config& cfg) {
         s.tooltipDelayS = delay;
         s.tooltipsWere = delay > 0.0f;
         s.toasts = false;      // toasts are the world placement's; the flat notice follows s.noticesOn
-        s.overlay = false;
     }
+    menuReadFpsOverlayKeys(cfg);
     s.noticesOn = cfg.getBool("menu.toasts", true);   // flat-listed (flat_profile_keys.h); notices follow it in both profiles
     inputGateConfigure(cfg);
     if (!s.configured) {
@@ -5116,7 +5187,7 @@ void menuFlatBeforePresent(IDXGISwapChain* swap, unsigned flags) {
         }
         perfMonitorNoteSwapChain(swap);   // the display's refresh rate, for the Monitor's budgets (every few seconds)
     }
-    if (!g_s.screenNotice.compositing(g_s.open) || (flags & DXGI_PRESENT_TEST)) return;
+    if (!(g_s.screenNotice.compositing(g_s.open) || g_s.flatReadout.compositing()) || (flags & DXGI_PRESENT_TEST)) return;
     menuPanelCompositeFlat(swap);
 }
 
@@ -5496,17 +5567,28 @@ void menuTick(ID3D11Device* dev) {
                     float pose[12];
                     s.anchorValid = headPose(pose);
                     if (s.anchorValid) {
-                        if (!s.overlayUp || dueMs(s.overlayTextMs, 500)) {
+                        // compact: twice a second; detailed: about four times a second, and always re-rasterised (its strip moves).
+                        const bool detailed = s.overlayMode == FpsOverlayMode::Detailed;
+                        if (!s.overlayUp || dueMs(s.overlayTextMs, detailed ? 250 : 500)) {
                             s.overlayTextMs = stampMs();
-                            char line[120];
-                            perfMonitorOverlayLine(line, sizeof(line));
-                            if (!s.overlayUp || line != s.overlayText || s.overlayTextDeg != s.textDeg) {
-                                s.overlayText = line;
+                            if (detailed) {
                                 MenuContent c;
-                                if (menuPanelBuildOverlayContent(c, s.overlayText.c_str(), s.textDeg,
-                                                                  nullptr)) {
+                                if (buildReadoutContent(c, FpsOverlayMode::Detailed, false, s.textDeg)) {
+                                    s.overlayText.clear();
                                     s.overlayTextDeg = s.textDeg;
                                     menuPanelSubmit(c);
+                                }
+                            } else {
+                                char line[120];
+                                perfMonitorOverlayLine(line, sizeof(line));
+                                if (!s.overlayUp || line != s.overlayText || s.overlayTextDeg != s.textDeg) {
+                                    s.overlayText = line;
+                                    MenuContent c;
+                                    if (menuPanelBuildOverlayContent(c, s.overlayText.c_str(), s.textDeg,
+                                                                      nullptr)) {
+                                        s.overlayTextDeg = s.textDeg;
+                                        menuPanelSubmit(c);
+                                    }
                                 }
                             }
                             s.overlayUp = true;
@@ -5528,6 +5610,30 @@ void menuTick(ID3D11Device* dev) {
                 s.toastAlpha = 0.0f;
                 s.overlayUp = false;
                 s.overlayAlpha = 0.0f;
+            }
+        }
+
+        // The flat frame-rate readout (menu.fps_overlay): one raster at a time, the menu first, then a notice, then the readout. It is built here, before this
+        // tick's menu content is submitted, so a menu opened this tick can hold its card back until its own raster is the live one (a readout raster left in the
+        // corner must not flash as the menu). A notice about to start (queued) keeps it off, so the notice's raster is the next one taken.
+        if (pol.noticePlacement == MenuNoticePlacement::ScreenCorner) {
+            if (s.open && s.flatReadout.submitted) {
+                s.screenNotice.rasterStale = true;
+                s.screenNotice.serial = menuPanelRasterSerial();
+            }
+            const bool wanted = s.overlayMode != FpsOverlayMode::Off && !s.open && !s.screenNotice.up && !s.flatNotice.due();
+            const bool detailed = s.overlayMode == FpsOverlayMode::Detailed;
+            const bool sizeChanged = g_flatOutW.load(std::memory_order_relaxed) != s.readoutSized[0] ||
+                                     g_flatOutH.load(std::memory_order_relaxed) != s.readoutSized[1];
+            const bool refreshDue = sizeChanged || dueMs(s.overlayTextMs, detailed ? 250 : 500);
+            if (s.flatReadout.tick(wanted, refreshDue, menuPanelRasterSerial()) && (s.flatReadout.submitted || dueMs(s.overlayTextMs, 250))) {
+                s.overlayTextMs = stampMs();   // also paces a build that fails
+                const uint32_t before = menuPanelRasterSerial();
+                MenuContent rc;
+                if (buildReadoutContent(rc, s.overlayMode, true, 0.0f)) {
+                    menuPanelSubmit(rc);
+                    s.flatReadout.didSubmit(before);
+                }
             }
         }
 
@@ -5642,7 +5748,10 @@ void menuTick(ID3D11Device* dev) {
             g.dist = 1.0f;
             g.curve = 0.0f;
             g.halfW = 0.62f;
-            g.alpha = s.screenNotice.panelVisible(s.open) ? 1.0f : 0.0f;
+            // The menu, else a notice, else the readout in the upper right corner (the readout only once its own raster is the live one).
+            const bool readoutOnly = !s.open && !s.screenNotice.up && s.flatReadout.compositing();
+            g.alpha = s.screenNotice.panelVisible(s.open) || readoutOnly ? 1.0f : 0.0f;
+            g.flatCorner = readoutOnly ? 1 : 0;
         }
         menuPanelSetGeometry(g);
         if (world) {

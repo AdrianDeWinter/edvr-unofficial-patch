@@ -139,4 +139,38 @@ struct ScreenNoticeState {
   }
 };
 
+// ---- The frame-rate readout on the flat screen ------------------------------------------------------------------------------------------------------
+// One raster, one thing on screen: the menu, then a notice, then the readout (docs\design-f8-menu-unification-2026-11-15.md). The readout's raster is only
+// composited once it is the live one -- never the menu's or a notice's left over in the corner. `wanted` is: the readout is on, the menu is closed and no notice is
+// up. While it is not wanted the readout is suspended and its next raster is submitted from nothing.
+struct ScreenReadoutState {
+  bool submitted = false;  // a readout raster was handed to the panel since the last suspension
+  bool shown = false;      // that raster (or a later one) is the live one
+  uint32_t serial = 0;     // the panel's raster serial read before the first submit
+
+  // Returns true when the caller must build and submit a raster now: the first one after a suspension, or `refreshDue`.
+  bool tick(bool wanted, bool refreshDue, uint32_t rasterSerial) {
+    if (!wanted) {
+      submitted = false;
+      shown = false;
+      return false;
+    }
+    if (submitted && !shown && rasterSerial != serial) shown = true;
+    return !submitted || refreshDue;
+  }
+  // The raster was submitted. The serial is that read before the submit (kept from the first one only: a refresh does not make the card disappear).
+  void didSubmit(uint32_t serialBefore) {
+    if (!submitted) {
+      submitted = true;
+      shown = false;
+      serial = serialBefore;
+    }
+  }
+  bool compositing() const { return shown; }
+  void clear() {
+    submitted = false;
+    shown = false;
+  }
+};
+
 }  // namespace edvr

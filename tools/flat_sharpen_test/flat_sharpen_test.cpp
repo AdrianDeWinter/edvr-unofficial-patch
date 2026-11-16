@@ -480,11 +480,12 @@ void panelTable(const std::string& root, const std::string& gen) {
     {
         const char* const order[][2] = {{"fix", "temporal_aa"}, {"fix", "temporal_aa_model"}, {"fix", "xess_frame_generation"}, {"fix", "xess_generated_frames"},
                                         {"fix", "render_sharpness"}, {"fix", "ui_quality"},
-                                        {"fix", "hud_antialiasing"}, {"fix", "optimized_stations"}, {"fix", "station_window_distance"}, {"fix", "skip_rooms_behind_doors"}};
-        bool same = kFlatPageRowCount == 10;
-        for (size_t i = 0; same && i < 10; ++i)
+                                        {"fix", "hud_antialiasing"}, {"fix", "optimized_stations"}, {"fix", "station_window_distance"}, {"fix", "skip_rooms_behind_doors"},
+                                        {"menu", "fps_overlay"}, {"menu", "fps_overlay_lock"}};
+        bool same = kFlatPageRowCount == 12;
+        for (size_t i = 0; same && i < 12; ++i)
             same = std::strcmp(kFlatPageRows[i].section, order[i][0]) == 0 && std::strcmp(kFlatPageRows[i].key, order[i][1]) == 0;
-        check(same, "the Performance tab has the flat page's ten rows in their order (the two XeSS Frame Generation rows under the DLSS preset, HUD Anti-Aliasing directly under UI quality, "
+        check(same, "the Performance tab has the flat page's twelve rows in their order (the two XeSS Frame Generation rows under the DLSS preset, HUD Anti-Aliasing directly under UI quality, "
                     "Window 3D distance directly under Optimized stations, Skip rooms behind doors under that)");
     }
     // The XeSS Frame Generation rows (2026-11-12): read through the gate, dimmed (never hidden) unless the flat AA mode is XeSS, the frames row dimmed as well while the

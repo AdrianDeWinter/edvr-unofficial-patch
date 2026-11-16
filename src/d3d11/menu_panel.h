@@ -90,9 +90,9 @@ constexpr int kMenuMaxTabs = 8;
 // 2026-10-14: the flat page gained its sixth row (Intro movie), and 18 since
 // 2026-10-16 for its seventh (Sharp weapons, retired 2026-10-28), and 19 since
 // 2026-11-08 for Skip rooms behind doors, and 21 since 2026-11-12 for the two
-// XeSS Frame Generation rows: its rows, a blank line and the ten-line
+// XeSS Frame Generation rows, and 23 since 2026-11-16 for the two frame-rate readout rows: its rows, a blank line and the ten-line
 // warning (flat_elite_settings.h) are the whole card.
-constexpr int kMenuMaxLines = 21;
+constexpr int kMenuMaxLines = 23;
 constexpr int kMenuMaxTiles = 16;
 
 // A gauge: a big number with a small caption above and one small line
@@ -192,6 +192,13 @@ struct MenuContent {
 bool menuPanelBuildOverlayContent(MenuContent& c, const char* line, float textDegrees,
                                   float* angularWidthDeg);
 
+// The frame-rate readout's card (menu.fps_overlay = detailed; the same builder serves flat): `lineCount` full-width info lines in a toast-style card, to which the
+// caller adds strips (c.graphs, c.graphCount) after the call. `capPx` is the text height (VR: the fixed 42-pixel reference; flat: the menu's cap at this
+// output), the card is as wide as the widest line needs and at least `minCardPx`. `textDegrees` > 0 (VR) also gives the card's angular width, as
+// menuPanelBuildOverlayContent does; flat passes 0 and the card is composited at its own pixel size. False when a line is empty, too long or the card too wide.
+bool menuPanelBuildReadoutContent(MenuContent& c, const char* const* lines, int lineCount, int capPx, int minCardPx, float textDegrees,
+                                  float* angularWidthDeg);
+
 // Where the panel sits, in the anchor's frame: metres to it, how much it
 // wraps (0 flat .. 0.9), its half-width along the surface, and the fade.
 //
@@ -213,6 +220,8 @@ struct MenuGeometry {
     // new bitmap dimensions with the previous frame's geometry during a
     // worker handover. Ordinary menu and toast callers leave this false.
     bool overlayRaster = false;
+    // Flat only: which corner the card is placed from (menu_flat_layout.h FlatCorner as an int; 0 upper left, 1 upper right: the frame-rate readout).
+    int flatCorner = 0;
 };
 
 // Hand the raster a new content (copied; the worker wakes). Frame thread.

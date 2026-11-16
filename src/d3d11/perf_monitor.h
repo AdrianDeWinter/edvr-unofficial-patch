@@ -96,7 +96,9 @@ enum PerfGraph { kGraphGpu = 0, kGraphCpu = 1, kGraphPeriod = 2, kGraphPresented
 // The reference is the fresh runtime-predicted period, or 0 if unavailable.
 int perfMonitorGraph(int which, float* out, int max, float* budgetMs);
 
-// The one-line readout for the head-locked overlay (menu.fps_overlay):
+// The one-line readout (menu.fps_overlay = compact: the head-locked line in VR, the corner line in flat, and the copy at the top of the menu card with
+// menu.fps_overlay_lock). With the XeSS-FG bridge it names both rates ("render 58 / shown 116 fps   cpu 9.1 ms"); the detailed card is built from
+// perfMonitorReadout:
 // frame rate over the last second, CPU/GPU over the menu's recent window,
 // and frames dropped in the last ten seconds. Without app timing the CPU
 // fallback is labelled "thread". Needs nothing the slow samplers

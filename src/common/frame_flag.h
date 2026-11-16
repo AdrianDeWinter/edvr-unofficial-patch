@@ -334,8 +334,8 @@ bool headForward(float* tx, float* ty);
 void publishMenuAnchor(const float* m12);
 bool menuAnchor(float* out12, uint32_t* seq);
 
-// HEAD-LOCKED instead: the panel rides the look (menu.fps_overlay, the
-// toolkit's way), turned by yaw and pitch from straight ahead. The door
+// HEAD-LOCKED instead: the panel rides the look (menu.fps_overlay = compact or
+// detailed, the toolkit's way), turned by yaw and pitch from straight ahead. The door
 // then builds the anchor from the frame's OWN pose rather than the
 // published one, so the lock has no lag at all. Written every frame by
 // d3d11; off (zero) means "use the published anchor".

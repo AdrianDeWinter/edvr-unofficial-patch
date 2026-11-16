@@ -184,6 +184,34 @@ inline bool formatCompactLine(const PerfReadout& r, char* buf, size_t len) {
   return true;
 }
 
+// The detailed card's two lines (menu.fps_overlay = detailed), the same in VR and flat.
+//   line 1: the rates, "render 58.4 / shown 116.8 fps", "58.4 fps" without a bridge, "render 58.4 fps   shown n/a" when the count cannot be had
+//   line 2: "17.1 ms   1% low 52 fps   cpu 9.1 ms   drops 2" (cpu only when known)
+inline void formatDetailRates(const PerfReadout& r, char* buf, size_t len) {
+  if (!buf || !len) return;
+  if (!r.haveRendered) {
+    std::snprintf(buf, len, "measuring");
+  } else if (!readoutHasBridge(r)) {
+    std::snprintf(buf, len, "%.1f fps", r.renderedFps);
+  } else if (r.presented == PresentedState::Counting) {
+    std::snprintf(buf, len, "render %.1f / shown %.1f fps", r.renderedFps, r.presentedFps);
+  } else if (r.presented == PresentedState::Unavailable) {
+    std::snprintf(buf, len, "render %.1f fps   shown n/a", r.renderedFps);
+  } else {
+    std::snprintf(buf, len, "render %.1f / shown -- fps", r.renderedFps);
+  }
+}
+inline void formatDetailTimes(const PerfReadout& r, char* buf, size_t len) {
+  if (!buf || !len) return;
+  if (!r.haveRendered) {
+    buf[0] = 0;
+    return;
+  }
+  char cpu[32] = "";
+  if (r.haveCpu) std::snprintf(cpu, sizeof(cpu), "   cpu %.1f ms", r.cpuMs);
+  std::snprintf(buf, len, "%.1f ms   1%% low %.0f fps%s   drops %d", r.renderedMs, r.renderedLowFps, cpu, r.drops);
+}
+
 // The tiles, handed one at a time to `tile(caption, value, sub)`: the rendered rate, its frame time and 1% low, then -- when a bridge exists this session --
 // the presented rate, its 1% low and the active factor. Captions are at most 23 characters, values 23, subs 39 (PerfTile).
 template <class Tile>
