@@ -27,10 +27,12 @@ It accepts Odyssey. It stops when it finds the older Horizons client.
 | --- | --- | --- |
 | Windows: Steam, Epic, or Frontier | The [launcher](https://characterecho-sean.github.io/ed-unofficial-patch/), or `ed-up-launcher.exe` on the [release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest) | [Install on Windows](wiki/Install-on-Windows.md) |
 | Linux or Steam Deck, through Steam | `ed-up-launcher-linux-<version>.zip` | [Install on Linux](wiki/Install-on-Linux.md) |
-| Linux, through Epic, Heroic, Legendary, or Lutris | `ed-up-<version>.zip`, copied by hand. There is no installer for this route. | [Epic on Linux](wiki/Install-on-Linux.md#epic-on-linux) |
+| Linux, through Epic, Heroic, Legendary, or Lutris | `ed-up-launcher-linux-<version>.zip`, with `--store epic` | [Epic on Linux](wiki/Install-on-Linux.md#epic-on-linux) |
 
 On Windows the launcher finds Steam, Epic, and Frontier. On Linux it finds
-Steam. The Linux launcher does not install for an Epic copy.
+Steam, and Epic copies installed through Epic's own launcher, Heroic,
+Legendary, Lutris, or Wine. The Linux launcher is new and untested on Linux
+hardware.
 
 Press F8 in the game to change settings.
 [Settings](wiki/Settings.md) is the tour, and

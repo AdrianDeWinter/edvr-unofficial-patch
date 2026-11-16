@@ -58,7 +58,7 @@ Download `ed-up-launcher-linux-<version>.zip` from the [release](https://github.
 
 It runs inside Elite's Proton prefix. Downloads and settings stay there, under `drive_c/users/steamuser/AppData/Local/EDVR` in `steamapps/compatdata/359320/pfx`.
 
-Play starts Elite through Steam. Starting the game directly, without Steam, is a Windows checkbox. The Linux launcher is for a Steam install. There is no Linux installer for an Epic copy: see [Epic on Linux](Install-on-Linux.md#epic-on-linux). An Epic copy starts from the program you installed it with.
+Play starts Elite through Steam. Starting the game directly, without Steam, is a Windows checkbox. On Linux, Play is for a Steam install. An Epic copy can be installed with the launcher, which is run under the copy's own Wine or Proton ([Epic on Linux](Install-on-Linux.md#epic-on-linux)), and it starts from Heroic, Legendary, Lutris or Epic.
 
 The window, the updater, and Play are new on Linux. If one of them fails, send the log. [Ask for help](Ask-for-help.md).
 

@@ -491,6 +491,23 @@ def _launcher_linux_members(root):
             (root / "release" / LAUNCHER_LINUX_README, LAUNCHER_LINUX_README)]
 
 
+def _wrapper_missing_helpers(root, members):
+    """The modules of tools/ that tools/install_proton.py imports and the launcher's Linux ZIP does not
+    carry, sorted. The wrapper runs from that ZIP with nothing else beside it, so a helper left out
+    (epic_library, which it reads Epic's records through, is the one it has) would stop it on a
+    player's machine; here it stops the packaging."""
+    import ast
+    imported = set()
+    for node in ast.walk(ast.parse((root / "tools" / "install_proton.py").read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imported.add(node.module.split(".")[0])
+    siblings = {path.stem for path in (root / "tools").glob("*.py")} - {"install_proton"}
+    shipped = {Path(name).stem for _, name in members}
+    return sorted((imported & siblings) - shipped)
+
+
 def package(root, version, no_dlss=False, dry_run=False):
     version = _version(version); root = root.resolve()
     dist = root / "dist"; stage = dist / (".edvr-stage-" + version); final_stage = dist / ("ed-up-" + version)
@@ -509,6 +526,10 @@ def package(root, version, no_dlss=False, dry_run=False):
     wrapper = (root / "tools" / "install_proton.py").read_bytes()
     if not wrapper.startswith(b"#!/usr/bin/env python3\n") or b"\r" in wrapper:
         raise ValueError("Linux launcher wrapper needs a Python 3 shebang and LF line endings")
+    helpers = _wrapper_missing_helpers(root, launcher_linux)
+    if helpers:
+        raise ValueError("tools/install_proton.py imports %s, which the launcher's Linux ZIP does not carry: "
+                         "add it to _launcher_linux_members" % ", ".join(helpers))
     launcher_sh = (root / LAUNCHER_LINUX_SH).read_bytes()
     if not launcher_sh.startswith(b"#!/bin/sh\n") or b"\r" in launcher_sh:
         raise ValueError("launcher Linux shell script needs a /bin/sh shebang and LF line endings")
@@ -828,6 +849,22 @@ def self_test():
                 except ValueError as error:
                     assert "Linux launcher wrapper" in str(error), str(error)
             wrapper_source.write_bytes(b"#!/usr/bin/env python3\nprint('fixture')\n")
+            # The wrapper runs from the ZIP with nothing else beside it: a module of tools/ that it imports and
+            # the ZIP does not carry fails the packaging, naming the module.
+            ghost = root / "tools" / "ghost_helper.py"
+            ghost.write_bytes(b"# a helper the ZIP does not carry\n")
+            wrapper_source.write_bytes(b"#!/usr/bin/env python3\nimport epic_library\nfrom ghost_helper import x\n")
+            for dry_run in (True, False):
+                try:
+                    package(root, "1.2.3", no_dlss=True, dry_run=dry_run)
+                    raise AssertionError("a wrapper importing a helper the ZIP lacks accepted")
+                except ValueError as error:
+                    assert "ghost_helper" in str(error) and "epic_library" not in str(error), str(error)
+            ghost.unlink()
+            wrapper_source.write_bytes(b"#!/usr/bin/env python3\nprint('fixture')\n")
+            # And the real wrapper, against the real list, imports only what the ZIP carries.
+            assert _wrapper_missing_helpers(ROOT, _launcher_linux_members(ROOT)) == []
+            assert "epic_library" in {Path(name).stem for _, name in _launcher_linux_members(ROOT)}
             launcher_sh_source.write_bytes(b"#!/bin/sh\r\nexit 0\r\n")
             for dry_run in (True, False):
                 try:

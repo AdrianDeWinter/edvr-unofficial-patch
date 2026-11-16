@@ -31,9 +31,7 @@ ed-up-launcher.exe --uninstall
 ed-up-launcher.exe --uninstall --remove-settings
 ```
 
-On Linux, run `./ed-up-launcher.sh` and press **Uninstall**.
-
-The Linux launcher does not handle an Epic copy, including one that an earlier Linux installer set up. For that copy, remove the files by hand, as below. [Epic on Linux](Install-on-Linux.md#epic-on-linux).
+On Linux, run `./ed-up-launcher.sh` and press **Uninstall**. For an Epic copy, add `--store epic`. [Epic on Linux](Install-on-Linux.md#epic-on-linux).
 
 By hand, delete `d3d11.dll` from the game folder. In the `Openvr` folder you used, delete ED-UP's `openvr_api.dll` and rename `openvr_api_orig.dll` back to `openvr_api.dll`. Delete `edvr.ini` only when you want the settings gone. The launcher is the one that also restores a chained mod. The hand steps miss that.
 

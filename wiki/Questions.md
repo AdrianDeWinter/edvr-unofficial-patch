@@ -30,7 +30,7 @@ Yes. Use Desktop Mode and the Linux launcher. [Install on Linux](Install-on-Linu
 
 ## I own it on Steam and on Epic.
 
-On Windows the launcher lists each copy. Pick the one you want. On Linux the launcher installs for a Steam copy only. When both a Steam and an Epic copy are installed, name the store with `--store steam`. [Epic on Linux](Install-on-Linux.md#epic-on-linux).
+On Windows the launcher lists each copy. Pick the one you want. On Linux, when both a Steam and an Epic copy are installed, name the store with `--store steam` or `--store epic`. [Epic on Linux](Install-on-Linux.md#epic-on-linux).
 
 ## Where do my settings live?
 

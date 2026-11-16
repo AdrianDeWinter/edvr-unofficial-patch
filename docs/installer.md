@@ -41,12 +41,13 @@ This file is why the engine does what it does. Using it is the player guide:
   candidate, preserving settings and seat memory through relabelling and wipes.
   Without a store record, runtime lookup also retains a sole unclaimed or
   matching-owner legacy mirror despite a different suffix.
-- **Linux Epic:** the route that ran the Windows installer in an Epic copy's
-  prefix went with `edvr-installer.exe`. `tools/install_proton.py` still reads
-  the Epic records (`epic_library.py`), only to refuse an Epic copy clearly and
-  to ask for `--store steam` when both stores are installed. A Linux player with
-  an Epic copy has the manual install only (see "Linux Epic: detected, then
-  refused").
+- **Linux Epic:** the native Epic Launcher Preview, Heroic/Legendary, Lutris
+  and existing Wine Epic records identify the game and its existing prefix.
+  `tools/install_proton.py` uses the recorded runner to run the launcher
+  (`ed-up-launcher.exe`) in that prefix, with `--store epic`. The route was
+  removed with `edvr-installer.exe` and restored for the launcher on
+  2026-11-16, and has not been run on Linux hardware. Play is a Steam action,
+  so the game starts from the original Epic manager.
 - **Installs by `tools\install_edvr.py` (2026-10-14):** the game's original
   runtime is recovered from the newest receipt that still holds it, so an
   update, a switch to flat-only and an uninstall work after two tool installs
@@ -115,7 +116,7 @@ On Linux, the wrapper reads the native Epic Launcher Preview, native and
 Flatpak Heroic, standalone Legendary, Lutris, and existing Wine Epic
 installation records. It confirms the game executable, associates the
 existing prefix and recorded runner, and passes `--store epic` with that
-exact product folder to the Windows installer.
+exact product folder to the launcher.
 
 The installer records the store in `edvr_install\state.ini`. The F8 settings
 menu and saved seat positions use that record to select the same mirror as
@@ -661,9 +662,9 @@ beside `ed-up-launcher.exe`, `ed-up-launcher.sh`, `epic_library.py` and
 `README-launcher-linux.txt`. The wrapper used to run the standalone installer
 too. That mode is deleted (2026-11-16) with its `--install`, `--repair`,
 `--uninstall`, `--collect-logs`, `--preview`, `--scope`, `--replace-settings`,
-`--remove-settings`, `--installer` and `--wine` options: argparse now refuses
-them. `--launcher` is still accepted and ignored, because `ed-up-launcher.sh`
-passes it.
+`--remove-settings` and `--installer` options: argparse now refuses them, and the
+launcher's own options go after `--` for either store. `--launcher` is still
+accepted and ignored, because `ed-up-launcher.sh` passes it.
 
 The launcher needs Python 3 and Steam's existing Proton installation, with no
 Protontricks or system Wine dependency. Run Elite once from Steam, close it,
@@ -692,8 +693,9 @@ global extension search order is not evaluated here. An explicit `--proton`
 selects a host runner and bypasses the sandbox.
 
 The wrapper's own options are `--game-dir` for a different product folder inside
-the installed game tree, `--launcher-exe` for a separate exe, and `--steam-dir`
-or `STEAM_DIR` for a nonstandard Steam root. Use `--store steam --prefix` to
+the installed game tree, `--launcher-exe` for a separate exe, `--steam-dir`
+or `STEAM_DIR` for a nonstandard Steam root, and `--store`, `--prefix`, `--wine`
+and `--proton`, which the Epic section below covers. Use `--store steam --prefix` to
 select an existing custom compatdata directory (the parent of `pfx`);
 `pfx/drive_c` must already exist. An inherited `STEAM_COMPAT_DATA_PATH` is used
 only when its Steam app identity identifies Elite; a different shortcut's prefix
@@ -712,7 +714,7 @@ The wrapper only launches the launcher. Keep any existing required Elite
 launch options; headset/OpenXR setup and Proton gameplay remain unverified
 here, and so does the launcher itself on Linux: it has not been flown there.
 
-### Linux Epic: detected, then refused
+### Linux Epic: the launcher under the Epic copy's runner
 
 The wrapper uses `epic_library.py` for one read-only inventory, shared with
 `install_edvr.py --target epic`. It confirms `EliteDangerous64.exe` beneath
@@ -737,20 +739,61 @@ The native Preview's package evidence and journal format are documented in
 Discovery reads their files directly. It does not invoke a manager's launch
 or authentication commands, including Legendary's authenticated dry-run.
 
-`install_proton.py` uses the inventory for one decision. With only an Epic copy
-found, or with `--store epic`, it stops with a message that sends the player to
-the original manager, which supplies the normal authentication. With a Steam
-copy and an Epic copy both found, it stops and asks for `--store steam`, and
-`--game-dir` when several Steam copies exist. Nothing runs in an Epic prefix.
+With only an Epic copy found, or with `--store epic`, `install_proton.py` runs
+the launcher under that copy's runner, in its prefix, with `--store epic --dir
+<Windows path of the verified product folder>` and then the words after `--`
+(`./ed-up-launcher.sh --store epic -- --install --scope flat`). With no words
+after `--` the launcher opens its window. With a Steam copy and an Epic copy
+both found, it stops and asks for `--store steam` or `--store epic` and
+`--game-dir`. `--store steam` with `--wine` is refused: `--wine` is Epic's
+option.
 
-What went with the standalone installer: the Epic plan (`build_epic_plan`), the
-Heroic, Legendary, Lutris and native Preview runner and prefix handling it used
-(`--prefix` for an Epic prefix, `--wine`, UMU), and the Epic cases of the
-wrapper's self-test. `epic_library.py` stays, for the detection above and for
-`install_edvr.py --target epic`; its `select_install` is no longer called by
-anything that ships. This is a gap for Linux players with an Epic copy: the
-launcher has no route into one, so they place the files by hand
-([manual install](manual-install.md)).
+Choose `--store epic` when Steam is also present. `--game-dir` selects one
+confirmed product when several Epic copies exist. The wrapper requires an
+existing prefix and its recorded installed Wine/Proton/UMU runner. Use
+`--prefix` with `--wine`, or an explicit installed `--proton`, when the
+metadata cannot supply that relationship; a complete `--game-dir`, `--prefix`
+and runner binding is also the way past competing records. It reports missing or
+ambiguous records instead of choosing another prefix or replacement runner.
+
+For the native Epic Preview, the prefix's Proton `config_info` identifies the
+runner used by the game's last launch. Other cached runtime versions are not
+substitutes. After a runner change, start Elite once through Epic before
+running the launcher. A missing or stale Proton record needs that first launch
+or an explicit `--proton` override. Journal deletion and incomplete records
+are respected even when older game files remain on disk.
+
+Epic's direct Proton route invokes the recorded Proton with `runinprefix`;
+it does not require a Steam installation or Steam-managed runtime. Steam's
+own route retains its recorded Steam runtime. UMU uses the selected installed
+Proton and requires its existing runtime rather than downloading one.
+
+Flatpak runners use their manager's sandbox and invocation-only filesystem
+access. Explicit `--wine` and `--proton` paths instead select host runners.
+PATH-based Wine and UMU selection respects runtime/application metadata and
+applicable system/user Flatpak overrides. An unreadable override or unset
+PATH requires an explicit host runner. `--dry-run` starts no process and
+writes no files.
+
+The explicit store is restricted to the exact product folder the launcher is
+given. Play is a Steam action on Linux (see above), so an Epic copy starts from
+its original Heroic, Legendary, Lutris or Epic manager, which supplies its
+normal authentication. The launcher's window, its updates and the options
+after `--` are the launcher's own; none of them has been run through this
+route on Linux hardware.
+
+This route is the one the standalone installer's wrapper had. It was removed
+with `edvr-installer.exe` (commit 26ac5972) and restored the same day for the
+launcher: `build_epic_plan`, the Epic runner helpers and `--wine` come from the
+text before that commit, with the launcher exe as the program run and the
+launcher's options after `--` in place of the installer's action options.
+`tools/install_proton.py --self-test` holds it: `epic_plan_self_test` runs on
+any host with the Windows path of the game folder replaced; `epic_self_test`,
+`preview_self_test` and the Epic cases of `auto_selection_self_test` need Linux
+symlinks and Flatpak layouts and run only there (`.github/workflows/linux-tools.yml`).
+`tools/package_native.py` refuses a package whose wrapper imports a module of
+`tools/` that the launcher's Linux ZIP does not carry, as it would with
+`epic_library.py` missing.
 
 ## How it is built and tested
 
