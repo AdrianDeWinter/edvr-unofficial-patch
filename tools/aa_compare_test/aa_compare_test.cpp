@@ -339,7 +339,7 @@ static void sourcePins(const std::string& root) {
     }
     check(has(ini, "compare_aa = F7"), "edvr.ini ships the key bound to F7");
     check(std::string(kDefaultKey) == "F7", "and the code's default is the same F7");
-    check(has(ini, "# ui: AA comparison key (empty = off) | hotkey | live"), "the F8 Hotkeys page has the row");
+    check(has(ini, "# ui: AA comparison key | hotkey | live"), "the F8 Hotkeys page has the row");
     check(has(flatKeys, "\"hotkey.compare_aa\""), "the flat profile reads the key");
     check(has(gen, "compare_aa = F7"), "and the flat ini template carries it");
     check(has(readme, "F7"), "release\\README.txt lists the key");

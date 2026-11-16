@@ -51,6 +51,8 @@
 #include "menu_flat_rows.h"
 #include "menu_flat_status.h"
 #include "menu_flat_status_layout.h"
+#include "menu_tab_strip.h"
+#include "menu_flat_footer.h"
 #include "menu_keys.h"
 #include "menu_pad.h"
 #include "menu_panel.h"
@@ -2591,12 +2593,17 @@ void buildContent(MenuContent& c) {
         const int gap = c.capPx / 2;
         const bool single = promptPage;   // F177: the page is the only tab while it is up
         const int arrow = c.capPx;    // the room an arrow takes at either end
-        // The panel's own estimate of a tab's width, the raster's formula.
-        auto tabWidth = [&](int i) {
-            return static_cast<int>(strlen(s.pages[i].name)) * c.capPx * 6 / 10 + c.capPx;
-        };
-        int first = 0, last = total - 1;
         int room = c.cardPx - 2 * pad;
+        // The tab face: the panel's own, shrunk until every page's tab fits the row (menu_tab_strip.h); the widths are measured in it, as the raster lays them.
+        {
+            const char* names[64];
+            const int n = total < 64 ? total : 64;
+            for (int i = 0; i < n; ++i) names[i] = s.pages[i].name;
+            c.tabFontPx = single ? tabStripDefaultEm(c.capPx) : tabStripFitEm(names, n, room, c.capPx, &menuPanelTabWidth);
+        }
+        const int tabEm = c.tabFontPx;
+        auto tabWidth = [&](int i) { return menuPanelTabWidth(s.pages[i].name, tabEm); };
+        int first = 0, last = total - 1;
         // Grow outward from the current page while there is room, ending
         // before the arrows that say what is left over.
         first = last = s.page;
@@ -3154,8 +3161,17 @@ void buildContent(MenuContent& c) {
                 Log::get().note("menu panel: the flat footer's restart count does not fit beside the version in %d px; using the short wording.", linePx);
             }
         }
-        if (s.padReady) snprintf(c.footer, sizeof(c.footer), "D-pad move/change  A select  B back\n%s", line2);
-        else snprintf(c.footer, sizeof(c.footer), "Up/Down row  Left/Right change  Tab page\n%s", line2);
+        // The first line names what the keys do on the highlighted row: a hotkey row is rebound with Enter (or A) and Left/Right do nothing there; while a row
+        // waits for its key, the capture's own keys.
+        const bool hotkeyRow = !p.status && p.highlight >= 0 && p.highlight < static_cast<int>(p.entries.size()) &&
+                               p.entries[p.highlight].kind == EntryKind::Setting && kMenuRows[p.entries[p.highlight].def].kind == MenuKind::Hotkey;
+        const bool clearable = s.captureDef >= 0 && strcmp(kMenuRows[s.captureDef].key, "menu") != 0;
+        if (s.captureEntry >= 0)
+            snprintf(c.footer, sizeof(c.footer), "%s\n%s", clearable ? kFlatFooterCapture : kFlatFooterCaptureKeep, line2);
+        else if (s.padReady)
+            snprintf(c.footer, sizeof(c.footer), "%s\n%s", hotkeyRow ? kFlatFooterPadHotkey : kFlatFooterPad, line2);
+        else
+            snprintf(c.footer, sizeof(c.footer), "%s\n%s", hotkeyRow ? kFlatFooterHotkey : kFlatFooterKeys, line2);
         return;
     }
     {

@@ -5,6 +5,8 @@
 #include "../../src/d3d11/menu_flat_layout.h"
 #include "../../src/d3d11/menu_flat_status.h"
 #include "../../src/d3d11/menu_flat_status_layout.h"
+#include "../../src/d3d11/menu_tab_strip.h"
+#include "../../src/d3d11/menu_flat_footer.h"
 #include "../../src/openxr/native_menu_client.h"
 #include "../../src/openxr/eye_capture.h"
 #include "../../src/openxr/immediate_executor.h"
@@ -434,7 +436,36 @@ int wmain(int argc, wchar_t** argv) {
                 check(static_cast<float>(h) <= edvr::kFlatMaxHeightFrac * static_cast<float>(outH),
                       "the flat Status page, worst case, is drawn 1:1 (under the placement's height share) at 1080p, 1440p and 2160p");
             }
-            // The Performance tab's pointer to the Status tab is one line of the card at every flat size, measured with the note face's em.
+        // The flat tab strip (menu_tab_strip.h): the five flat tabs, measured in the bold tab face, fit the card's row at every flat size with no
+        // window and no arrows, at or above the floor of the face; and each tab's rect is at least its name's width (the raster draws a name in its rect).
+        {
+            const char* flatTabs[5] = {"Performance", "Visual", "Hotkeys", "Status", "Debug"};
+            for (const int outH : {720, 1080, 1440, 2160}) {
+                const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+                const int room = fs.cardPx - 2 * (fs.capPx * 8 / 10);
+                const int em = edvr::tabStripFitEm(flatTabs, 5, room, fs.capPx, &edvr::menuPanelTabWidth);
+                const int strip = edvr::tabStripWidth(flatTabs, 5, em, edvr::tabStripGapPx(fs.capPx), &edvr::menuPanelTabWidth);
+                std::printf("  flat tab strip at %dp: em %d (default %d, floor %d), %d of %d px\n", outH, em, edvr::tabStripDefaultEm(fs.capPx),
+                            edvr::tabStripMinEm(fs.capPx), strip, room);
+                check(strip <= room, "the flat menu's five tabs fit the card's row, measured in the tab face");
+                check(em >= edvr::tabStripMinEm(fs.capPx), "the flat tab face stays at or above its floor");
+            }
+        }
+        // The flat footer's first-line legends (menu_flat_footer.h) fit the footer line, measured in the Small face it is drawn in (em = the cap height),
+        // at every flat size: the single-line draw path would ellipsise one that did not.
+        for (const int outH : {720, 1080, 1440, 2160}) {
+            const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+            const int line = fs.cardPx - 2 * (fs.capPx * 8 / 10);
+            int widest = 0;
+            for (const char* legend : edvr::kFlatFooterLegends) {
+                const int w = edvr::menuPanelMeasureLine(legend, fs.capPx);
+                if (w > widest) widest = w;
+                if (w > line) std::printf("  flat footer legend too wide at %dp: %d of %d px: %s\n", outH, w, line, legend);
+                check(w <= line, "every flat footer legend fits the footer line, measured in the Small face");
+            }
+            std::printf("  flat footer legends at %dp: widest %d of %d px\n", outH, widest, line);
+        }
+        // The Performance tab's pointer to the Status tab is one line of the card at every flat size, measured with the note face's em.
             for (const int outH : {720, 1080, 1440, 2160}) {
                 const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
                 const int width = fs.cardPx - 2 * (fs.capPx * 8 / 10);

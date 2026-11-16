@@ -360,7 +360,8 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             Op o;
             o.text = true;
             o.str = widen(c.tabs[i]);
-            const int wpx = static_cast<int>(o.str.size()) * cap * 6 / 10 + cap;
+            const int tabEm = c.tabFontPx > 0 ? c.tabFontPx : cap * 9 / 7;
+            const int wpx = menuPanelTabWidth(c.tabs[i], tabEm);
             o.rect = {x, y, x + wpx, y + tabH};
             o.rgb = i == c.activeTab ? kTabActive : kTabIdle;
             o.align = DT_LEFT;
@@ -368,7 +369,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             ops.push_back(o);
             if (i == c.activeTab) {
                 Op under;
-                under.rect = {x, y + tabH - cap / 6, x + wpx - cap / 2, y + tabH};
+                under.rect = {x, y + tabH - cap / 6, x + wpx - tabEm / 3, y + tabH};
                 under.rgb = kTabActive;
                 under.alpha = 0.9f;
                 ops.push_back(under);
@@ -843,7 +844,7 @@ bool rasterise(const MenuContent& c, Raster& out) {
     const int u = cap * 9 / 10;
     HFONT fonts[kFontCount] = {
         makeFont(c.rowFontPx > 0 ? c.rowFontPx : cap * 10 / 7, false), // Row
-        makeFont(cap * 9 / 7, true),          // Tab
+        makeFont(c.tabFontPx > 0 ? c.tabFontPx : cap * 9 / 7, true), // Tab
         makeFont(cap * 7 / 7, false),         // Small
         makeFont(cap * 8 / 7, false),         // Hint
         makeFont(u * 15 / 10, true),          // Big: the tiles' numbers
@@ -1905,6 +1906,21 @@ int menuPanelMeasureLine(const char* utf8, int emPx) {
     if (f) DeleteObject(f);
     DeleteDC(dc);
     return r.right - r.left;
+}
+
+int menuPanelTabWidth(const char* utf8, int emPx) {
+    if (!utf8 || !*utf8 || emPx <= 0) return 0;
+    const std::wstring s = widen(utf8);
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (!dc) return 0;
+    HFONT f = makeFont(emPx, true);   // bold, as Font::Tab
+    HGDIOBJ old = f ? SelectObject(dc, f) : nullptr;
+    RECT r = {0, 0, 1, 1};
+    DrawTextW(dc, s.c_str(), -1, &r, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    if (old) SelectObject(dc, old);
+    if (f) DeleteObject(f);
+    DeleteDC(dc);
+    return (r.right - r.left) + emPx / 3;
 }
 
 bool menuPanelBuildOverlayContent(MenuContent& c, const char* line, float textDegrees,

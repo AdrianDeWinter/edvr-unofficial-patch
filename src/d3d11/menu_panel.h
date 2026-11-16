@@ -137,6 +137,8 @@ struct MenuContent {
     // Information rows' caption column, in pixels from the card's left edge. Zero keeps the fixed 26 % split; the flat Status page sets it from its widest
     // caption (menu_flat_status_layout.h).
     int      infoSplitPx = 0;
+    // The tab names' face, em in pixels. Zero is the panel's own (cap * 9 / 7); the model shrinks it so every tab fits (menu_tab_strip.h).
+    int      tabFontPx = 0;
     // Tiles are laid out ABOVE the lines, `tileColumns` across (4 when 0).
     MenuTile tiles[kMenuMaxTiles];
     int      tileCount = 0;
@@ -298,6 +300,9 @@ bool menuPanelStats(int* w, int* h, double* lastMs, float* gpuMs);
 // footer was 1520 px in a 770 px line at the default size. GDI only; no
 // device, callable from a test.
 int menuPanelMeasureLine(const char* utf8, int emPx);
+// The width a tab takes in the strip at the tab face's em: the bold name, measured, and a third of an em of space after it. The model's window and the
+// raster's layout both use it, so a tab is never drawn narrower than its name.
+int menuPanelTabWidth(const char* utf8, int emPx);
 
 void menuPanelShutdown();
 
