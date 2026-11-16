@@ -257,13 +257,13 @@ FlatStatusInput statusBase() {
 }
 
 void statusCases() {
-    const char* all = "ED-UP,Profile,Display,Anti-aliasing,Upscaling,Frame generation,Sharpening,HUD quality,Keyboard,Waiting for a restart,Last write";
+    const char* all = "ED-UP,Profile,Display,Anti-aliasing,Upscaling,Frame generation,Sharpening,HUD quality,Keyboard,Restart pending,Last write";
     FlatStatusInput in = statusBase();
     check(statusCaptions(in) == all, "flat Status, no bridge and nothing waiting: version, profile, display, AA, upscaling, frame generation, sharpening, HUD, keyboard, waiting, last write");
     check(statusValue(in, "ED-UP") == "v1.2.3 / game build 334925" && statusValue(in, "Profile") == "flat", "the version carries the game build, and the profile is flat");
     check(statusValue(in, "Display") == "2560x1440, 144 Hz, windowed/borderless", "the display says size, refresh rate and mode");
     check(statusValue(in, "Anti-aliasing") == "DLSS K, running" && statusValue(in, "Upscaling") == "1706x960 to 2560x1440", "AA names the mode, its model and that it runs; upscaling the sizes");
-    check(statusValue(in, "Frame generation") == "off" && statusValue(in, "Waiting for a restart") == "none" && statusValue(in, "Last write") == "none this session",
+    check(statusValue(in, "Frame generation") == "off" && statusValue(in, "Restart pending") == "none" && statusValue(in, "Last write") == "none this session",
           "frame generation off, nothing waiting, no write yet");
     check(statusValue(in, "Keyboard") == "ready" && statusValue(in, "HUD quality") == "High, edges on", "the keyboard gate and the HUD");
 
@@ -323,19 +323,19 @@ void statusCases() {
     in = statusBase();
     in.waitingCount = 2;
     in.waitingLabels = "XeSS Frame Generation, Anti-aliasing";
-    check(statusValue(in, "Waiting for a restart") == "2: XeSS Frame Generation, Anti-aliasing", "changes waiting for a restart are counted and named");
+    check(statusValue(in, "Restart pending") == "2: XeSS Frame Generation, Anti-aliasing", "changes waiting for a restart are counted and named");
     in.lastWrite = "fix.temporal_aa = xess";
     check(statusValue(in, "Last write") == "fix.temporal_aa = xess", "the last write is its own line");
     in = statusBase();
     in.wrapper = "ReShade64.dll";
-    check(statusCaptions(in) == "ED-UP,Profile,Display,Anti-aliasing,Upscaling,Frame generation,Sharpening,HUD quality,Graphics wrapper,Keyboard,Waiting for a restart,Last write" &&
+    check(statusCaptions(in) == "ED-UP,Profile,Display,Anti-aliasing,Upscaling,Frame generation,Sharpening,HUD quality,Graphics wrapper,Keyboard,Restart pending,Last write" &&
           statusValue(in, "Graphics wrapper") == "ReShade64.dll", "a graphics wrapper that was found is a line, ahead of the keyboard");
     in = statusBase();
     in.keyboardReady = false;
     check(statusValue(in, "Keyboard") == "gate unavailable", "a keyboard that has not reached the gate says so");
     in = statusBase();
     in.eliteWarningActive = true;
-    check(statusCaptions(in).find("Keyboard,Elite graphics settings,Waiting") != std::string::npos, "the settings warning has its line, after the keyboard, ahead of the restarts");
+    check(statusCaptions(in).find("Keyboard,Elite settings,Restart pending") != std::string::npos, "the settings warning has its line, after the keyboard, ahead of the restarts");
 
     // Every line at once is the most the page has, and every caption and value fits its buffer.
     in = statusBase();

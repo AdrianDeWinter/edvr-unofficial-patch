@@ -92,7 +92,8 @@ constexpr int kMenuMaxTabs = 8;
 // 2026-11-08 for Skip rooms behind doors, and 21 since 2026-11-12 for the two
 // XeSS Frame Generation rows, and 23 since 2026-11-16 for the two frame-rate readout rows. Since the warning moved to the flat Status page (2026-11-16) the
 // 23 is that page: its thirteen lines and the ten-line warning (flat_elite_settings.h) are the whole card (menu.cpp static_asserts it); the Performance tab needs 15.
-constexpr int kMenuMaxLines = 23;
+// 32 since 2026-11-16: the flat Status page wraps long values onto continuation rows (menu_flat_status_layout.h).
+constexpr int kMenuMaxLines = 32;
 constexpr int kMenuMaxTiles = 16;
 
 // A gauge: a big number with a small caption above and one small line
@@ -133,6 +134,9 @@ struct MenuContent {
     // Zero uses the ordinary Row face; overlay content supplies a smaller
     // fixed reference face here so measurement and rasterisation match.
     int      rowFontPx = 0;
+    // Information rows' caption column, in pixels from the card's left edge. Zero keeps the fixed 26 % split; the flat Status page sets it from its widest
+    // caption (menu_flat_status_layout.h).
+    int      infoSplitPx = 0;
     // Tiles are laid out ABOVE the lines, `tileColumns` across (4 when 0).
     MenuTile tiles[kMenuMaxTiles];
     int      tileCount = 0;

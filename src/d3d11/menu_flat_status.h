@@ -2,7 +2,7 @@
 //
 // menu.cpp's buildStatus gathers what each line's source says into a FlatStatusInput and asks flatStatusLines which lines the page has and what they read. A line
 // whose source does not exist is not there (a display size not published yet, a scene not measured, no graphics wrapper), never a guess. The wrapped notes of
-// Elite's graphics-settings warning follow the "Elite graphics settings" line and are the caller's (flat_elite_settings.h, the same words the Performance tab
+// Elite's graphics-settings warning follow the "Elite settings" line and are the caller's (flat_elite_settings.h, the same words the Performance tab
 // carried before): up to FlatSettingsWarning::kMaxLines of them, so the page is at most kFlatStatusMaxLines + that many lines (menu.cpp static_asserts it
 // against menu_panel.h's kMenuMaxLines).
 //
@@ -121,11 +121,11 @@ inline int flatStatusLines(const FlatStatusInput& in, FlatStatusLine* out, int m
   }
   if (in.wrapper && *in.wrapper) flatStatusAdd(out, max, &n, "Graphics wrapper", in.wrapper);
   flatStatusAdd(out, max, &n, "Keyboard", in.keyboardReady ? "ready" : "gate unavailable");
-  if (in.eliteWarningActive) flatStatusAdd(out, max, &n, "Elite graphics settings", "see below");
+  if (in.eliteWarningActive) flatStatusAdd(out, max, &n, "Elite settings", "see below");
 
   if (in.waitingCount <= 0) std::snprintf(v, sizeof(v), "none");
   else std::snprintf(v, sizeof(v), "%d: %s", in.waitingCount, in.waitingLabels ? in.waitingLabels : "");
-  flatStatusAdd(out, max, &n, "Waiting for a restart", v);
+  flatStatusAdd(out, max, &n, "Restart pending", v);
   flatStatusAdd(out, max, &n, "Last write", in.lastWrite && *in.lastWrite ? in.lastWrite : "none this session");
   return n;
 }

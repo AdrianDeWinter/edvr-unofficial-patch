@@ -4,6 +4,7 @@
 #include "../../src/d3d11/menu_panel.h"
 #include "../../src/d3d11/menu_flat_layout.h"
 #include "../../src/d3d11/menu_flat_status.h"
+#include "../../src/d3d11/menu_flat_status_layout.h"
 #include "../../src/openxr/native_menu_client.h"
 #include "../../src/openxr/eye_capture.h"
 #include "../../src/openxr/immediate_executor.h"
@@ -109,6 +110,9 @@ static bool changedBounds(const std::vector<UINT>& pixels, UINT width, UINT heig
     bounds[2] = float(x1) / width; bounds[3] = float(y1) / height;
     return true;
 }
+
+// The panel's ruler at a fixed em, as menu.cpp's flatWarnMeasure gives it.
+static int statusRuler(const char* text, void* context) { return edvr::menuPanelMeasureLine(text, *static_cast<int*>(context)); }
 
 int wmain(int argc, wchar_t** argv) {
     SetErrorMode(3);
@@ -321,10 +325,11 @@ int wmain(int argc, wchar_t** argv) {
         }
         // The flat Status page (menu.cpp buildFlatStatus, menu_flat_status.h): five tabs of six, the most lines the page has (every source present) and the warning's
         // ten note lines under them, compact, with the page's hint and the footer. Under the raster's 2048-px bound and drawn 1:1 at the sizes the card is rasterised
-        // at; and its longest values and the Performance tab's pointer fit one line of the card, so nothing is cut at the right edge.
+        // at; every caption and value row (menu_flat_status_layout.h, long values wrapped) fits its column, measured in the note face it is drawn in, and the
+        // Performance tab's pointer fits one line of the card, so nothing is cut at the right edge.
         {
             const char* wrapperCaptions[edvr::kFlatStatusMaxLines] = {"ED-UP", "Profile", "Display", "Anti-aliasing", "Upscaling", "Frame generation", "Sharpening",
-                                                                    "HUD quality", "Graphics wrapper", "Keyboard", "Elite graphics settings", "Waiting for a restart", "Last write"};
+                                                                    "HUD quality", "Graphics wrapper", "Keyboard", "Elite settings", "Restart pending", "Last write"};
             edvr::FlatStatusInput in;
             in.version = "v1.2.3-123-gabcdef0";
             in.gameBuild = "334925";
@@ -366,31 +371,44 @@ int wmain(int argc, wchar_t** argv) {
                 const char* tabs[5] = {"Performance", "Visual", "Monitor", "Status", "Debug"};
                 for (int i = 0; i < 5; ++i) std::snprintf(c.tabs[i], sizeof(c.tabs[i]), "%s", tabs[i]);
                 c.activeTab = 3;
+                int em = edvr::flatStatusEmPx(fs.capPx);
+                edvr::FlatStatusLayout layout;
+                edvr::flatStatusLayout(sl, sn, fs.cardPx, fs.capPx, &statusRuler, &em, &layout);
+                c.rowFontPx = em;
+                c.infoSplitPx = layout.splitPx;
+                const int pad = fs.capPx * 8 / 10;
+                const int captionW = layout.splitPx - pad;
+                const int valueW = fs.cardPx - pad - layout.splitPx;
                 int widest = 0;
-                const int inner = fs.cardPx - 2 * (fs.capPx * 8 / 10);
-                for (int i = 0; i < sn; ++i) {
+                for (int i = 0; i < layout.rowCount; ++i) {
+                    if (c.lineCount >= edvr::kMenuMaxLines) break;
                     edvr::MenuLine& l = c.lines[c.lineCount++];
-                    std::snprintf(l.left, sizeof(l.left), "%s", sl[i].caption);
-                    std::snprintf(l.right, sizeof(l.right), "%s", sl[i].value);
+                    std::snprintf(l.left, sizeof(l.left), "%s", layout.rows[i].caption);
+                    std::snprintf(l.right, sizeof(l.right), "%s", layout.rows[i].value);
                     l.style = edvr::kMenuInfo;
-                    const int w = edvr::menuPanelMeasureLine(l.left, fs.capPx) + edvr::menuPanelMeasureLine(l.right, fs.capPx) + fs.capPx;
-                    if (w > widest) widest = w;
-                    // Every line (the AA line with a model and a pause, the restart list and the display line run longest) is held to one line.
-                    if (w > inner) std::printf("  Status line %d too wide at %dp: %d of %d px\n", i, outH, w, inner);
-                    check(w <= inner, "the flat Status page's lines fit one line, caption and value");
+                    const int cw = edvr::menuPanelMeasureLine(l.left, em);
+                    const int vw = edvr::menuPanelMeasureLine(l.right, em);
+                    if (vw > widest) widest = vw;
+                    if (cw > captionW || vw > valueW)
+                        std::printf("  Status row %d too wide at %dp: caption %d of %d px, value %d of %d px\n", i, outH, cw, captionW, vw, valueW);
+                    check(cw <= captionW, "the flat Status page's captions fit their column, measured in the face they are drawn in");
+                    check(vw <= valueW, "the flat Status page's values fit their column, measured in the face they are drawn in");
                 }
+                check(layout.rowCount < edvr::kFlatStatusMaxRows, "the flat Status layout dropped no row");
                 for (int i = 0; i < 10; ++i) {
+                    if (c.lineCount >= edvr::kMenuMaxLines) break;
                     edvr::MenuLine& l = c.lines[c.lineCount++];
                     std::snprintf(l.left, sizeof(l.left), "Elite's post-processing is not recognised, note line %d", i);
                     l.style = edvr::kMenuNote;
                 }
-                check(c.lineCount == edvr::kMenuMaxLines, "the flat Status page with the warning's ten lines is the card's whole line budget");
+                check(c.lineCount <= edvr::kMenuMaxLines, "the flat Status page's rows and the warning's ten lines fit the card's lines");
+                std::printf("  flat Status at %dp: %d rows, caption column %d px, value column %d px\n", outH, layout.rowCount, captionW, valueW);
                 std::snprintf(c.hint, sizeof(c.hint), "%s", "The page a support thread will ask to see. Tab for the next page.");
                 c.reserveHint = true;
                 std::strcpy(c.footer, "Up/Down row  Left/Right change  Tab page\nline two");
                 const int h = edvr::menuPanelLayoutHeightForTest(c);
-                std::printf("  flat Status raster at %dp: %d px tall (bound 2048, 1:1 up to %d), widest line %d of %d px\n", outH, h,
-                            static_cast<int>(edvr::kFlatMaxHeightFrac * static_cast<float>(outH)), widest, inner);
+                std::printf("  flat Status raster at %dp: %d px tall (bound 2048, 1:1 up to %d), widest value %d of %d px\n", outH, h,
+                            static_cast<int>(edvr::kFlatMaxHeightFrac * static_cast<float>(outH)), widest, valueW);
                 check(h > 0 && h < 2048, "the flat Status page is under the raster's 2048-px height bound at 1080p, 1440p and 2160p");
                 check(static_cast<float>(h) <= edvr::kFlatMaxHeightFrac * static_cast<float>(outH),
                       "the flat Status page, worst case, is drawn 1:1 (under the placement's height share) at 1080p, 1440p and 2160p");

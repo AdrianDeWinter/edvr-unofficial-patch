@@ -50,6 +50,7 @@
 #include "menu_aim_prompt.h"    // F177: the aiming choice at start: the page's words, the trigger, the writes
 #include "menu_flat_rows.h"
 #include "menu_flat_status.h"
+#include "menu_flat_status_layout.h"
 #include "menu_keys.h"
 #include "menu_pad.h"
 #include "menu_panel.h"
@@ -2403,10 +2404,17 @@ void buildFlatStatus(MenuContent& c) {
         flatComposeSettingsWarning(flatModeLabel().c_str(), s.flatSettings.settings(), width,
                                    &flatWarnMeasure, &ruler, &warning, s.flatWarnCause);
     }
-    for (int i = 0; i < n; ++i) {
-        statusLine(c, lines[i].caption, lines[i].value);
+    // The rows as drawn: the note face, a caption column as wide as the widest caption, long values wrapped under it (menu_flat_status_layout.h).
+    const int em = flatStatusEmPx(c.capPx);
+    c.rowFontPx = em;
+    FlatWarnRuler statusRuler{em};
+    FlatStatusLayout layout;
+    flatStatusLayout(lines, n, c.cardPx, c.capPx, &flatWarnMeasure, &statusRuler, &layout);
+    c.infoSplitPx = layout.splitPx;
+    for (int i = 0; i < layout.rowCount; ++i) {
+        statusLine(c, layout.rows[i].caption, layout.rows[i].value);
         // The warning's words go right under their line.
-        if (strcmp(lines[i].caption, "Elite graphics settings") == 0) {
+        if (strcmp(layout.rows[i].caption, "Elite settings") == 0) {
             for (int k = 0; k < warning.count && c.lineCount < kMenuMaxLines; ++k) {
                 MenuLine& l = c.lines[c.lineCount++];
                 l = MenuLine{};

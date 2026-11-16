@@ -227,7 +227,7 @@ is missing:
   menu is made with the menu open, where the row and the footer already say it,
   and notices only show once it is closed. The log has one line per change.
 - **Flat notices follow `menu.toasts`**, as VR's toasts do (default on).
-- **Status page:** "Waiting for a restart" with the settings' names.
+- **Status page:** "Restart pending" with the settings' names.
 
 ### The flat Status page
 

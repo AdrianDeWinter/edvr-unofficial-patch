@@ -461,7 +461,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
         // unless you turn them on." read as "Both are off unl..." -- with
         // half the card sitting empty beside the cut.
         const int split = l.style == kMenuNote || l.style == kMenuHeading ? cardW - pad
-                          : l.style == kMenuInfo                          ? cardW * 26 / 100
+                          : l.style == kMenuInfo                          ? (c.infoSplitPx > 0 ? c.infoSplitPx : cardW * 26 / 100)
                                                                           : cardW * 6 / 10;
         Op left;
         left.text = true;
