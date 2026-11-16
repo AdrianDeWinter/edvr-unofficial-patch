@@ -5,7 +5,7 @@ The log usually shows the cause. A report with no log leaves very little to go o
 ## Save logs
 
 1. Close Elite. After a crash, confirm in Task Manager that `EliteDangerous64.exe` is gone.
-2. Open the installer or the launcher.
+2. Open the launcher.
 3. Press **Save logs**.
 
 On Windows the zip is written to the Desktop. Under Wine or Proton it is written to Downloads. The zip is also copied to the clipboard, so Ctrl+V attaches it in Discord or on a GitHub comment.
@@ -14,13 +14,7 @@ Inside it: the last session's logs, `edvr_breadcrumbs.txt`, any `edvr_FATAL.txt`
 
 If Elite crashed, Save logs writes a second zip, `edvr-crash-dump-<time>.zip`. That file is a copy of the game's memory. Attach the log zip to a public issue. Send the dump in private, and only when someone asks for it.
 
-On Linux:
-
-```sh
-./edvr_installer.sh --collect-logs
-```
-
-The script prints the path of the zip.
+On Linux, run `./ed-up-launcher.sh` and press **Save logs**. **Copy path** and **Show folder** appear beside it afterwards.
 
 ## Where to send it
 

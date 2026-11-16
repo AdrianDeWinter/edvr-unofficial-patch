@@ -30,9 +30,9 @@ The Windows launcher is on the [download page](https://characterecho-sean.github
 
 ## Before you download
 
-The installer accepts Odyssey. It stops when it finds the older Horizons client.
+The launcher accepts Odyssey. It stops when it finds the older Horizons client.
 
-Close Elite before you install. The installer lists every change and waits for a yes. It copies each file it replaces into `edvr_backup` in the game folder.
+Close Elite before you install. The launcher lists every change and waits for a yes. It copies each file it replaces into `edvr_backup` in the game folder.
 
 After Frontier updates the game, Elite still starts. A fix that no longer matches that update turns itself off, and the log names it. Walking around in stereo needs the build named in the release notes.
 

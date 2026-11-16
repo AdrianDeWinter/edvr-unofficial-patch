@@ -19,19 +19,19 @@ REM  :rig_<label> subroutine at the end of this file; the runner starts it as
 REM  "build.bat --rig <label>", a child that inherits this build's environment
 REM  and runs that one subroutine. --rig is the runner's, not for hand use.
 REM  --dll-only is the post-commit promotion path: it requires the receipt from
-REM  a matching green full build, rebuilds the production DLLs, and skips rigs
-REM  and the self-contained installer.
+REM  a matching green full build, rebuilds the production DLLs, and skips the
+REM  rigs (the launcher is built in one).
 REM  --compile-only is the Linux test-flight path, run under Wine by
 REM  tools\linux_toolchain.py: the same production DLLs, into
 REM  build\compile-build, with no Python gates, no receipt check, no rigs and
-REM  no installer. It is never validation and never a release asset.
+REM  no launcher. It is never validation and never a release asset.
 REM
 REM  Set EDVR_SIGN=1 (any value) to sign the shipped binaries as they are made, with
 REM  Azure Artifact Signing: d3d11.dll and edvr_openxr_runtime.dll before anything
-REM  copies or embeds them, then edvr-installer.exe and ed-up-launcher.exe, so the
-REM  installer carries, and package.bat zips and hashes, the signed bytes. It needs
-REM  python tools\artifact_signing.py check to pass and an az login. A build asked to
-REM  sign that cannot, fails. Unset, nothing is signed and nothing here changes.
+REM  copies them, then ed-up-launcher.exe, so package.bat zips and hashes the signed
+REM  bytes. It needs python tools\artifact_signing.py check to pass and an az login.
+REM  A build asked to sign that cannot, fails. Unset, nothing is signed and nothing
+REM  here changes.
 REM
 REM  Only one top-level build runs at a time on this machine (tools\
 REM  build_lock.py): a second invocation is refused immediately with a
@@ -416,7 +416,7 @@ REM build if either DLL imports the compiler again.
 
 python tools\build_phases.py --mark "%PHASES%" "shader generation"
 echo [edvr] === d3d11.dll ===
-REM The settings schema -- the installer's window AND the in-headset menu's
+REM The settings schema -- the launcher's window AND the in-headset menu's
 REM row table (docs\settings-menu.md) -- generated from edvr.ini and the
 REM accessor calls in src\, with the gate that keeps it complete. Here,
 REM before the d3d11 compile, because menu.cpp includes menu_schema.inc.
@@ -501,14 +501,14 @@ REM checkout's own third_party\ngx; else the machine's copy under
 REM %LOCALAPPDATA%\EDVR\ngx-sdk, which is where tools\fetch_ngx.py puts it
 REM (one copy every checkout and worktree finds). The d3d11 half is then
 REM built with the NGX calls in, the static library linked, and the runtime
-REM and NVIDIA's licence copied into the build for the installer and the
-REM zip. The copy is VERIFIED first -- the files the build reads, and the
+REM and NVIDIA's licence copied into the build for the release zips. The
+REM copy is VERIFIED first -- the files the build reads, and the
 REM runtime's SHA-256 against the pin in tools\fetch_ngx.py -- and a
-REM mismatch fails the build: the DLL the installer carries must be the
+REM mismatch fails the build: the DLL the release ships must be the
 REM one the flights verified, and updating it is a deliberate commit.
 REM Without any SDK the build still succeeds, since the code compiles
-REM either way, but says so loudly: that build has no DLAA and its
-REM installer carries no runtime, which is not a release (package.bat
+REM either way, but says so loudly: that build has no DLAA and no
+REM runtime to package, which is not a release (package.bat
 REM refuses it unless told --no-dlss).
 set NGX=
 if defined EDVR_NGX_SDK set NGX=%EDVR_NGX_SDK%
@@ -530,8 +530,8 @@ if defined NGX (
     copy /Y "%NGX%\LICENSE.txt" "%BUILD%\NVIDIA-DLSS-LICENSE.txt" >nul
 ) else (
     echo [edvr] ==================================================================
-    echo [edvr] NO DLSS SDK. This build has no DLAA, and its installer carries no
-    echo [edvr] nvngx_dlss.dll. Fine for development; NOT a release. Looked for
+    echo [edvr] NO DLSS SDK. This build has no DLAA, and there is no
+    echo [edvr] nvngx_dlss.dll to package. Fine for development; NOT a release. Looked for
     echo [edvr] include\nvsdk_ngx.h in these three places, in this order:
     if defined EDVR_NGX_SDK (
         echo [edvr]   EDVR_NGX_SDK   = %EDVR_NGX_SDK%
@@ -758,12 +758,12 @@ if errorlevel 1 ( echo [edvr] ERROR: DXBC notice resource failed & exit /b 1 )
 rc.exe /nologo /fo "%OBJ%\d3d11\miniz_notice.res" "third_party\miniz\notice.rc"
 if errorlevel 1 ( echo [edvr] ERROR: miniz notice resource failed & exit /b 1 )
 
-REM Version resources for both shipped DLLs. Until now only the installer
-REM carried a VERSIONINFO; an unsigned DLL with no FileVersion, CompanyName or
-REM FileDescription looks less like a real build than one that has them, and
-REM this is the cheap, honest way to look like one: say who built it and what
-REM it is. Generated, like the installer's own block, so the version string
-REM stays git describe's and nothing here hand-maintains it.
+REM Version resources for both shipped DLLs. An unsigned DLL with no
+REM FileVersion, CompanyName or FileDescription looks less like a real build
+REM than one that has them, and this is the cheap, honest way to look like
+REM one: say who built it and what it is. Generated, like the launcher's own
+REM block, so the version string stays git describe's and nothing here
+REM hand-maintains it.
 if not exist "%OBJ%\d3d11" mkdir "%OBJ%\d3d11"
 if not exist "%OBJ%\openxr_module" mkdir "%OBJ%\openxr_module"
 python "tools\gen_installer_rc.py" --version-rc graphics --version "%EDVR_VER%" --out "%GEN%"
@@ -783,7 +783,7 @@ if errorlevel 1 ( echo [edvr] ERROR: link failed & exit /b 1 )
 echo [edvr] built %BUILD%\d3d11.dll
 python tools\build_phases.py --mark "%PHASES%" "d3d11.dll"
 REM Release signing, EDVR_SIGN: signed here, before the copy below, so d3d11.dll and the
-REM edvr_openxr_graphics.dll the installer embeds are the same signed bytes.
+REM edvr_openxr_graphics.dll the release packs are the same signed bytes.
 if defined EDVR_SIGN (
     python tools\artifact_signing.py sign "%BUILD%\d3d11.dll" || exit /b 1
 )
@@ -820,13 +820,13 @@ if not exist "%OBJ%\openxr_module" mkdir "%OBJ%\openxr_module"
     /link /INCREMENTAL:NO %EDVR_CPU_LINK% /PDB:"%BUILD%\edvr_openxr_runtime.pdb" /DEF:"src\openxr\native_module.def" "%OBJ%\openxr_module\version.res" d3d11.lib dxgi.lib user32.lib gdi32.lib
 if errorlevel 1 ( echo [edvr] ERROR: native runtime module build failed & exit /b 1 )
 REM Release signing, EDVR_SIGN: before any rig starts and before the openvr_api.dll copy, so the
-REM installer embeds, and the release ships, the signed runtime.
+REM release ships the signed runtime.
 if defined EDVR_SIGN (
     python tools\artifact_signing.py sign "%BUILD%\edvr_openxr_runtime.dll" || exit /b 1
 )
 python tools\build_phases.py --mark "%PHASES%" "runtime dll"
 
-REM Shared by the installer and installer_test rigs below. install_manifest.cpp is the schema-2 parser both halves link;
+REM The install engine's sources, shared by the launcher and the installer_test rigs below. install_manifest.cpp is the schema-2 parser both halves link;
 REM it needs update_json.cpp and update_util.cpp, so those sit here rather than in LAUNCHER_SRC.
 set INSTALLER_SRC="src\installer\main.cpp" "src\installer\gui.cpp" ^
     "src\installer\ui.cpp" "src\installer\settings.cpp" ^
@@ -843,7 +843,7 @@ REM What the launcher adds to INSTALLER_SRC (its main.cpp, gui.cpp and the rest 
 REM with /DEDUP_LAUNCHER): the update core and the launcher_* and selfupdate files. launcher_test links
 REM these too (frontier_api to direct_launch are direct launch: Frontier's API, the machine ID, the Steam ticket,
 REM the sequence; frontier_login is the stored Frontier-store login, and launcher_login_dialog its two windows,
-REM which the rig drives with ui.cpp). winhttp.lib is the one library the installer does not need.
+REM which the rig drives with ui.cpp). winhttp.lib is the one library the install engine alone does not need.
 set LAUNCHER_SRC="src\installer\launcher_core.cpp" "src\installer\launcher_register.cpp" ^
     "src\installer\launcher_plan.cpp" "src\installer\launch_route.cpp" ^
     "src\installer\launcher_session.cpp" "src\installer\launcher_main.cpp" ^
@@ -857,6 +857,15 @@ set LAUNCHER_SRC="src\installer\launcher_core.cpp" "src\installer\launcher_regis
     "src\installer\launcher_login_dialog.cpp"
 
 if defined EDVR_DLL_ONLY goto dll_only_finish
+
+REM The two release files nothing else makes, build\edvr-flat.ini and build\edvr_profile_vr.ini, which
+REM package_native.py packs and tools\install_edvr.py installs. The same step checks that the native pair,
+REM the loader and its notice, and any XeSS notices are in the build, so a missing one fails here and not
+REM at packaging.
+python "tools\gen_installer_rc.py" --release-files --build "%BUILD%" || (
+    echo [edvr] ERROR: the release settings files could not be written
+    exit /b 1
+)
 
 echo.
 echo [edvr] === test rigs ===
@@ -921,17 +930,15 @@ python tools\run_jobs.py --script "%ROOT%\build.bat" --times "%BUILD%\rig_times.
     %RUN_JOBS_ARGS% || exit /b 1
 python tools\build_phases.py --mark "%PHASES%" "test rigs"
 
-REM Release signing, EDVR_SIGN, the rest: the installer and the launcher are built inside rigs, which
-REM run hidden under the focus guard, and the signing client reads its credential from the Azure CLI,
-REM which opens a console window each time; the guard rightly refuses that (measured 2026-11-16).
-REM So both are signed here, once the pool is done, in one call, after the launcher's determinism
-REM comparison, which a signature would fail. The start checks run again on the signed bytes. The two
-REM DLLs were signed before the pool started, so everything the installer embeds is already signed.
-REM Each signing adds a timestamp: a signed launcher differs from release to release though its code
-REM did not.
+REM Release signing, EDVR_SIGN, the rest: the launcher is built inside a rig, which runs hidden under
+REM the focus guard, and the signing client reads its credential from the Azure CLI, which opens a
+REM console window each time; the guard rightly refuses that (measured 2026-11-16). So it is signed
+REM here, once the pool is done, after the launcher's determinism comparison, which a signature would
+REM fail. The start check runs again on the signed bytes. The two DLLs were signed before the pool
+REM started. Each signing adds a timestamp: a signed launcher differs from release to release though
+REM its code did not.
 if defined EDVR_SIGN (
-    python tools\artifact_signing.py sign "%BUILD%\edvr-installer.exe" "%BUILD%\ed-up-launcher.exe" || exit /b 1
-    "%BUILD%\edvr-installer.exe" --help >nul || exit /b 1
+    python tools\artifact_signing.py sign "%BUILD%\ed-up-launcher.exe" || exit /b 1
     "%BUILD%\ed-up-launcher.exe" --help >nul || exit /b 1
 )
 
@@ -945,16 +952,15 @@ python tools\openxr_pe.py --native "%BUILD%\openvr_api.dll" --forbid-import d3dc
 python tools\openxr_pe.py --graphics "%BUILD%\d3d11.dll" --forbid-import d3dcompiler_47.dll || exit /b 1
 echo.
 REM The one line a release engineer has to see, after thousands of compiler
-REM lines: whether the installer just built carries NVIDIA's runtime.
+REM lines: whether the build has NVIDIA's runtime for package.bat to put in the release.
 if exist "%BUILD%\nvngx_dlss.dll" (
-    echo [edvr] DLSS runtime: CARRIED -- build\edvr-installer.exe places nvngx_dlss.dll
-    echo        beside the game on machines with an NVIDIA card.
+    echo [edvr] DLSS runtime: FOUND -- package.bat puts build\nvngx_dlss.dll in the manual-install
+    echo        zip and in the DLSS zip the launcher installs from.
 ) else (
-    echo [edvr] DLSS runtime: NOT CARRIED -- no DLSS SDK was found ^(the boxed notice
+    echo [edvr] DLSS runtime: NOT FOUND -- no DLSS SDK was found ^(the boxed notice
     echo        above says where it looked^). Not a release build.
 )
 echo.
-python tools\package_native.py --check-installer || exit /b 1
 python tools\build_receipt.py --write "%BUILD%\full_build_receipt.json" ^
     --root "%ROOT%" ^
     --context "cl=%CL%" ^
@@ -977,8 +983,6 @@ echo        python tools\install_edvr.py --target frontier
 echo        --target takes steam, frontier or a path. Settings are preserved
 echo        unless --ini is specified. Windows selects the OpenXR runtime.
 echo.
-echo [edvr] The self-contained build\edvr-installer.exe installs the same pair,
-echo        preserves graphics-mod chaining, and supports repair and uninstall.
 echo [edvr] After the flight:
 echo        python tools\edvr_log.py --target steam^|frontier^|^<game dir^> --expect-build HEAD
 exit /b 0
@@ -994,14 +998,14 @@ python tools\build_phases.py --mark "%PHASES%" "dll-only outputs"
 python tools\build_phases.py --report "%PHASES%"
 if defined EDVR_COMPILE_ONLY goto compile_only_finish
 echo [edvr] DLL-only build passed: production DLLs and loader are ready to install.
-echo [edvr] Test rigs and the self-contained installer were skipped; use a full build
-echo        before distributing an installer or accepting new source changes.
+echo [edvr] Test rigs and the launcher build were skipped; use a full build
+echo        before packaging a release or accepting new source changes.
 exit /b 0
 
 :compile_only_finish
 echo [edvr] COMPILE-ONLY build finished in %BUILD%
 echo [edvr] NOT Windows validated and NOT a release asset: no Python gates, rigs or
-echo        installer ran. tools\linux_toolchain.py writes its receipt next.
+echo        launcher build ran. tools\linux_toolchain.py writes its receipt next.
 exit /b 0
 
 REM ===========================================================================
@@ -3326,50 +3330,9 @@ if errorlevel 1 ( echo [edvr] ERROR: native runtime module test build failed & e
 "%BUILD%\openxr_module_test.exe" --self-test-local || exit /b 1
 exit /b 0
 
-:rig_installer
-echo [edvr] === edvr-installer.exe ===
-REM The complete native pair, Khronos loader, notices and settings are embedded.
-REM /MANIFEST:NO is not optional. link.exe embeds a manifest of its own by
-REM default, and our .rc already puts one at resource 1 -- two RT_MANIFEST
-REM resources in one image, which Windows refuses to start at all: "the
-REM side-by-side configuration is incorrect", before a line of our code runs.
-REM It links and packages perfectly happily.
-if not exist "%OBJ%\installer" mkdir "%OBJ%\installer"
-python "tools\gen_installer_rc.py" --root "%ROOT%" --build "%BUILD%" ^
-    --out "%GEN%" --version "%EDVR_VER%"
-if errorlevel 1 ( echo [edvr] ERROR: installer resource generation failed & exit /b 1 )
-
-REM The settings window's contents were generated above, before the d3d11
-REM compile, since the in-headset menu shares the schema.
-
-rc.exe /nologo /fo "%OBJ%\installer\payload.res" "%GEN%\payload.rc"
-if errorlevel 1 ( echo [edvr] ERROR: rc.exe failed on the installer resources & exit /b 1 )
-
-
-%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /GR- /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
-    /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /I"%GEN%" ^
-    /DEDVR_VERSION_STRING=\"%EDVR_VER%\" ^
-    /Fo"%OBJ%\installer"\ /Fe"%BUILD%\edvr-installer.exe" ^
-    %INSTALLER_SRC% "%OBJ%\installer\payload.res" ^
-    /link /INCREMENTAL:NO /SUBSYSTEM:WINDOWS /MANIFEST:NO %INSTALLER_LIBS%
-if errorlevel 1 ( echo [edvr] ERROR: installer build failed & exit /b 1 )
-REM Not signed here: see "Release signing" after the rig pool.
-echo [edvr] built %BUILD%\edvr-installer.exe
-
-REM Does it START? Not a formality: a manifest Windows cannot parse, a missing
-REM import, the wrong subsystem -- each of these produces an executable that
-REM links without a murmur and dies before main(), with a dialog the build never
-REM sees. --help reads nothing and writes nothing.
-"%BUILD%\edvr-installer.exe" --help >nul || (
-    echo [edvr] ERROR: the installer will not run. If Windows called it a
-    echo        side-by-side configuration problem, the manifest is the suspect.
-    exit /b 1
-)
-exit /b 0
-
 :rig_launcher
 echo [edvr] === ed-up-launcher.exe ===
-REM The launcher: the installer's window and engine with the update core, built with
+REM The launcher: the install engine and its window with the update core, built with
 REM /DEDUP_LAUNCHER, carrying NO payload (package_native.py refuses an exe that does) and with its
 REM VERSIONINFO taken from src\installer\launcher_version.h, not from `git describe`.
 REM

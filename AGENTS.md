@@ -13,8 +13,8 @@ the full Windows workflow for C++ changes.
 
 Unofficial VR fixes for Elite Dangerous: Odyssey. A proxy DLL
 (`d3d11.dll` beside the game) and EDVR's own OpenXR runtime for
-Elite (`openvr_api.dll` in `Openvr\win64`), a config file, and an
-installer that carries all three.
+Elite (`openvr_api.dll` in `Openvr\win64`), a config file, and a
+launcher (`ed-up-launcher.exe`) that installs and updates them from the release.
 
 The expensive resource on this project is not tokens, it is **test
 flights**. Every wrong hypothesis costs a build, an install, a headset
@@ -213,8 +213,8 @@ minutes after a flight finally reproduced the effect being chased.
   commands.
 - For an actual release from a non-native host, merge the validated
   source, push the exact clean `vX.Y.Z` tag, and require that tag's full
-  Windows build and package run to pass. Download and verify all three
-  ZIPs with `SHA256SUMS`, have the maintainer sign the manifest,
+  Windows build and package run to pass. Download and verify every
+  asset with `SHA256SUMS`, have the maintainer sign the manifest,
   generate and review release notes including
   `release_credits.py`'s `## Thanks` section, then create a draft
   release; publication remains an explicit step. On native Windows, the
@@ -227,8 +227,8 @@ minutes after a flight finally reproduced the effect being chased.
   `build_lock.py --wait` and then `build.bat` as two commands; another build
   can take the lock between them.
 - The normal `build.bat` path is the validation build: it runs the Python
-  self-tests, compiles the production DLLs, runs the test rigs, builds and
-  checks the self-contained installer, and writes
+  self-tests, compiles the production DLLs, runs the test rigs (one of them
+  builds and checks the launcher), and writes
   `build\full_build_receipt.json` only after all gates pass. Green means
   green; do not report success off a build you did not read.
 - Compiles go through `tools\compile_cache.py`, which skips a compile whose
@@ -242,8 +242,8 @@ minutes after a flight finally reproduced the effect being chased.
   For the install-only rebuild that gives the DLLs the clean commit's
   version, use `build.bat --dll-only` by absolute path. It requires a
   clean working tree and a matching full-build receipt, rebuilds and
-  validates the production DLLs, and skips the test rigs and
-  self-contained installer. It is a promotion step, never a substitute
+  validates the production DLLs, and skips the test rigs and the
+  launcher build. It is a promotion step, never a substitute
   for validating changed source; if its receipt check fails, run the
   full build again. The receipt fingerprints tracked files, untracked
   files git does not ignore, and the ignored dependency folders
@@ -411,7 +411,7 @@ the Ghidra scripts, and, kept local and never committed, the game executables fo
 | `src\d3d11\` | the graphics half: hooks, shader fixes, the draw census |
 | `src\openxr\` | the native OpenXR runtime: the OpenVR ABI Elite calls, translated to OpenXR |
 | `src\openvr\compat\` | the OpenVR ABI header |
-| `src\installer\` | the self-contained installer and its log bundler, and the launcher that grows out of them (`update_*`, `launcher_*`, built with `EDUP_LAUNCHER`) |
+| `src\installer\` | the install engine (planner, settings, log bundler) and the launcher built from it (`update_*`, `launcher_*`, built with `EDUP_LAUNCHER`); the standalone installer exe is no longer built |
 | `src\common\` | config, logging, the crash sentinel |
 | `tools\` | Python tools, each with `--self-test`; C++ test rigs in subdirs |
 | `docs\` | one investigation doc per arc — read its `## Status` block first |

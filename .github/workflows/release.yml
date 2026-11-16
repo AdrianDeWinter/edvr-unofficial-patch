@@ -307,8 +307,6 @@ jobs:
           if ($code -ne 0) { throw "Packaging failed with exit code $code" }
           $names = @(
             "ed-up-$env:PACKAGE_VERSION.zip",
-            "ed-up-installer-$env:PACKAGE_VERSION.zip",
-            "ed-up-installer-linux-$env:PACKAGE_VERSION.zip",
             "ed-up-launcher-linux-$env:PACKAGE_VERSION.zip"
           )
           # The split assets: whatever the unsigned schema-2 manifest names. A release carries
@@ -375,7 +373,6 @@ jobs:
             build/openvr_api.dll
             build/edvr_openxr_runtime.dll
             build/openxr_loader.dll
-            build/edvr-installer.exe
             build/ed-up-launcher.exe
 
       - name: Upload release packages

@@ -1,6 +1,6 @@
 # Settings
 
-Press **F8** in the game. That opens ED-UP's menu, in the headset or on a monitor. The installer's settings window edits the same files.
+Press **F8** in the game. That opens ED-UP's menu, in the headset or on a monitor. The launcher's settings window edits the same files.
 
 [Every setting, with the value it ships with](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md), is in the repository. This page is the short tour.
 
@@ -41,7 +41,7 @@ The default is off. Elite draws edges without temporal anti-aliasing, so fine li
 
 | Choice | Which machine |
 | --- | --- |
-| DLSS | An NVIDIA RTX card. The installer places NVIDIA's file on a machine with an NVIDIA card. |
+| DLSS | An NVIDIA RTX card. The launcher places NVIDIA's file on a machine with an NVIDIA card. |
 | FSR | Any graphics card. Nothing further to download. |
 | XeSS | Any graphics card, and fastest on Intel Arc. On other cards it costs more frame time than DLSS or FSR. |
 | On | ED-UP's own anti-aliasing. |

@@ -745,7 +745,7 @@ footer a:hover { color: var(--accent-hi); }
 
         <ul class="links">
           <li><span class="k">Also</span><a id="alt-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest">Linux launcher (Steam, Proton)</a></li>
-          <li><a id="inst-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest">Installer without the launcher</a></li>
+          <li><a id="manual-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest">Files for a manual install</a></li>
           <li><a id="notes-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest">Release notes</a></li>
           <li><a id="sums-link" href="https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest/download/SHA256SUMS">SHA256SUMS</a></li>
         </ul>
@@ -840,7 +840,7 @@ footer a:hover { color: var(--accent-hi); }
 
       <div class="facts">
         <div><b>In-game settings</b>Press F8 in game to open ED-UP's settings. Most changes apply within about a second, without restarting.</div>
-        <div><b>Your files</b>ED-UP doesn't patch Elite's program or data files; its fixes are applied in memory while the game runs. The installer puts ED-UP's own files beside the game, and where one replaces an existing file, such as Elite's openvr_api.dll, it keeps a backup.</div>
+        <div><b>Your files</b>ED-UP doesn't patch Elite's program or data files; its fixes are applied in memory while the game runs. The launcher puts ED-UP's own files beside the game, and where one replaces an existing file, such as Elite's openvr_api.dll, it keeps a backup.</div>
         <div><b>Game updates</b>If an Elite update breaks a fix, that fix turns itself off, the rest keep working, and the log says which one.</div>
       </div>
 
@@ -1039,10 +1039,10 @@ footer a:hover { color: var(--accent-hi); }
 
     var exe = find(d.assets, function (n) { return n === 'ed-up-launcher.exe'; });
     var lin = find(d.assets, function (n) { return /^ed-up-launcher-linux-.*\.zip$/.test(n); });
-    var inst = find(d.assets, function (n) { return /^ed-up-installer-\d.*\.zip$/.test(n); });
+    var manual = find(d.assets, function (n) { return /^ed-up-\d.*\.zip$/.test(n); });
     var sums = find(d.assets, function (n) { return n === 'SHA256SUMS'; });
 
-    if (inst) el('inst-link').href = inst.u;
+    if (manual) el('manual-link').href = manual.u;
     if (sums) el('sums-link').href = sums.u;
 
     if (linux && lin) {

@@ -8,9 +8,8 @@ r"""Sign and verify the release binaries with Azure Artifact Signing.
 
 build.bat calls `sign` on every shipped binary when EDVR_SIGN is set (d3d11.dll before it
 is copied to edvr_openxr_graphics.dll, edvr_openxr_runtime.dll before it becomes
-openvr_api.dll, then edvr-installer.exe and ed-up-launcher.exe), so the installer embeds,
-and package.bat zips and hashes, the signed bytes. Unset, nothing here runs and a build is
-what it always was.
+openvr_api.dll, then ed-up-launcher.exe), so package.bat zips and hashes the signed bytes.
+Unset, nothing here runs and a build is what it always was.
 
 What it needs: signtool.exe from a Windows SDK 10.0.22621 or newer, the .NET runtime the client's
 runtimeconfig names (10 for the pinned 1.0.151; `check` reads it), the

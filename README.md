@@ -19,19 +19,18 @@ it. Setup questions fit the [Discord](https://discord.gg/AWJ6djKKzr).
 
 ## Install
 
-Close Elite first. The installer lists every file it will change and waits for
+Close Elite first. The launcher lists every file it will change and waits for
 a yes. It keeps your settings, and it keeps a backup of anything it replaces.
 It accepts Odyssey. It stops when it finds the older Horizons client.
 
 | Where you play | Download | Steps |
 | --- | --- | --- |
-| Windows: Steam, Epic, or Frontier | The [launcher](https://characterecho-sean.github.io/ed-unofficial-patch/), or `ed-up-installer-<version>.zip` on the [release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest) | [Install on Windows](wiki/Install-on-Windows.md) |
-| Linux or Steam Deck, through Steam | `ed-up-installer-linux-<version>.zip` | [Install on Linux](wiki/Install-on-Linux.md) |
-| Linux, through Epic, Heroic, Legendary, or Lutris | `ed-up-installer-linux-<version>.zip` | [Epic on Linux](wiki/Install-on-Linux.md#epic-on-linux) |
+| Windows: Steam, Epic, or Frontier | The [launcher](https://characterecho-sean.github.io/ed-unofficial-patch/), or `ed-up-launcher.exe` on the [release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest) | [Install on Windows](wiki/Install-on-Windows.md) |
+| Linux or Steam Deck, through Steam | `ed-up-launcher-linux-<version>.zip` | [Install on Linux](wiki/Install-on-Linux.md) |
+| Linux, through Epic, Heroic, Legendary, or Lutris | `ed-up-<version>.zip`, copied by hand. There is no installer for this route. | [Epic on Linux](wiki/Install-on-Linux.md#epic-on-linux) |
 
-On Windows the installer finds Steam, Epic, and Frontier. On Linux it finds
-Steam, and Epic copies installed through Epic's own launcher, Heroic,
-Legendary, Lutris, or Wine.
+On Windows the launcher finds Steam, Epic, and Frontier. On Linux it finds
+Steam. The Linux launcher does not install for an Epic copy.
 
 Press F8 in the game to change settings.
 [Settings](wiki/Settings.md) is the tour, and
@@ -57,7 +56,7 @@ EDHM and ReShade can stay installed. [Other mods](wiki/Other-mods.md).
 After Frontier updates the game, Elite still starts. A fix that no longer
 matches that build turns itself off, and the log names it. On-foot VR waits
 for an ED-UP update for the new build. If a launcher verify deletes the patch,
-run the installer again.
+run the launcher again.
 [Updates and uninstall](wiki/Updates-and-uninstall.md).
 
 ## Build
@@ -87,7 +86,7 @@ records the contribution and measurements.
 ## Licence and standing
 
 ED-UP is MIT licensed; see [LICENSE](LICENSE). NVIDIA's DLSS runtime,
-`nvngx_dlss.dll`, which the installer carries, is not: it is NVIDIA's software
+`nvngx_dlss.dll`, which the release carries, is not: it is NVIDIA's software
 under the NVIDIA RTX SDKs licence. It is distributed unmodified as part of this
 application, as that licence allows, and only placed on machines with an NVIDIA
 card. Intel's XeSS runtimes, `libxess.dll`, `libxess_fg.dll` and `libxell.dll`,
