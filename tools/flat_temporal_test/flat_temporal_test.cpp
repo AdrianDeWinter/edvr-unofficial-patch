@@ -2171,10 +2171,18 @@ int flatTraceMigrate(const char* dirPath) {
 // ---------------------------------------------------------------------------
 namespace {
 constexpr uint64_t kHullVs = 0x66DE2CADB1F4AE6Bull, kHullPs = 0x235567BE2840B3EDull;
+// The control: today's table without the hull pair, and without the pairs keyed since the Krait trace was recorded that it draws
+// (EDHM's AACFDCF2/CAD1F585, keyed 2026-11-16, #230), so it is the table the recording was made under, less the pair under test.
+constexpr uint64_t kEdhmAacfVs = 0xAACFDCF2FB9AD809ull, kEdhmAacfPs = 0xCAD1F585EDDC5641ull;
 bool tableWithoutHullPair(uint64_t vs, uint64_t ps) {
-    return !(vs == kHullVs && ps == kHullPs) && edvr::engine_velocity_family::supportedPair(vs, ps);
+    return !(vs == kHullVs && ps == kHullPs) && !(vs == kEdhmAacfVs && ps == kEdhmAacfPs) &&
+        edvr::engine_velocity_family::supportedPair(vs, ps);
 }
 bool tableNow(uint64_t vs, uint64_t ps) { return edvr::engine_velocity_family::supportedPair(vs, ps); }
+// The hull test's "new table": today's, less the pair keyed after it (CAD1F585), so it and the control differ by the hull pair alone.
+bool tableWithHullPair(uint64_t vs, uint64_t ps) {
+    return !(vs == kEdhmAacfVs && ps == kEdhmAacfPs) && edvr::engine_velocity_family::supportedPair(vs, ps);
+}
 struct RekeyFrame {
     uint64_t frame = 0, storedHash = 0, hash = 0;
     bool storedProduced = false, produced = false;
@@ -2304,8 +2312,8 @@ void testHullPairKeying() {
     check(supportedPair(kHullVs, kHullPs), "the Krait hull pair 66DE2CAD/235567BE is keyed for flat");
     check(supportedPair(kHullVs, 0x864F1F949851B8DEull) && supportedPair(kHullVs, 0xBBDE4E71FB78528Aull),
           "the family's two earlier pixel shaders are still keyed");
-    check(!supportedPair(0xAACFDCF2FB9AD809ull, 0xCAD1F585EDDC5641ull),
-          "CAD1F585 (EDHM-patched, reads t120) is left for later: unkeyed");
+    check(supportedPair(0xAACFDCF2FB9AD809ull, 0xCAD1F585EDDC5641ull),
+          "CAD1F585 (EDHM's build of CF534B32, reads t120) is keyed since 2026-11-16 (#230)");
     check(!supportedPair(0xBBE58E40FE88EC80ull, 0x7311054AB3AAE1DCull),
           "BBE58E40/7311054A (SV_Position input) is left for later: unkeyed");
     check(!supportedPair(kHullVs, 0x818212B5F404C002ull), "a third 66DE2CAD pixel shader stays unkeyed");
@@ -2322,7 +2330,7 @@ void testHullPairKeying() {
         std::vector<unsigned char> bytes;
         std::vector<RekeyFrame> recorded, control, now;
         const bool ok = readTrace(entry.path(), bytes) && rekeyReplay(bytes, nullptr, recorded) &&
-            rekeyReplay(bytes, tableWithoutHullPair, control) && rekeyReplay(bytes, tableNow, now) &&
+            rekeyReplay(bytes, tableWithoutHullPair, control) && rekeyReplay(bytes, tableWithHullPair, now) &&
             recorded.size() == control.size() && control.size() == now.size();
         check(ok, "re-key replay parses every corpus trace under all three decisions");
         if (!ok) continue;
