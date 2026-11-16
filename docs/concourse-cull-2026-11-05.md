@@ -813,6 +813,8 @@ Flat, Frontier, the 25e49f5d install, a large station (Coriolis or Orbis), Windo
 
 Read with `python tools\edvr_log.py --target <the elite-dangerous-odyssey-64 folder> --expect-build 25e49f5d --grep "concourse clear|pane shares|pane 5s"` (`--target frontier` names two installs on Sean's machine).
 
+**First try, not a test of the change:** flown 2026-11-16 on 25e49f5d, log `edvr_gfx_20261116_115714`, at a Coriolis. Sean: "the snapshot is not displaying correctly and it's falling back to a grey haze". The game started in VR (3D mode 3) and switched to flat at 11:57:46 (`profile switch: vr -> flat`). The flat bake then refused: `concourse camera test: concourse-camera-test-producer: 0x2874290 is already patched by another EDVR module; skipped`, then `concourse bake: flat: no bake`. With no cube the panes were drawn `mirror-steady`, a flat fill: that is the grey (`panes treated 45407 draws (mode mirror-steady, 1 slots)`). This is the open item "a flat bake in a session started in VR", not 25e49f5d. The clear itself ran on the total: it lifted at 3.2 to 8.3% of the view against a 3.2% entry (Window 3D distance 250 in Frontier's `edvr-flat.ini`). Fly the list again from a flat launch: Elite's 3D mode off before the game starts, or `/novr`.
+
 ## Before the merge to main (2026-11-08)
 
 Sean: "Let's merge this to main if it looks good", then "Fix, then merge".
