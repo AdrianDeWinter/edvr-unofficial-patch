@@ -6480,23 +6480,28 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
         }
         return worldPrediction;
     };
-    // Where the weapon's two passes are judged (flat_copy_structure.h, flatWeaponRoute; design section 104). The HDR route's frame
-    // keeps what it had: a protected overlay for the glow pass below, and the cohort's own qualification at H. Where the copy route
-    // judges the frame (DLSS or FSR, and the HDR route will not treat it) the cohort is flagged here, before the model sees the draw,
-    // and the glow pass is admitted as an alternate HDR writer instead of planned as an overlay; both ride the trace.
-    bool weaponRouteKnown=false,weaponCopyRoute=false;
-    const auto copyWeapon=[&]() {
+    // Where the weapon's two passes are judged (flat_copy_structure.h, flatWeaponRoute; design section 104). On the HDR route the glow
+    // pass keeps its protected overlay below. Where the copy route judges the frame (DLSS or FSR, and the HDR route will not treat it)
+    // the glow pass is admitted as an alternate HDR writer instead of planned as an overlay. The cohort is flagged on both routes,
+    // before the model sees the draw, and rides the trace. 2026-11-16 (the HDR route, a tool in hand where no world draw is keyed): the
+    // HDR route used to keep the cohort as a source record, qualified at H as an alternate camera. With nothing keyed in the world it
+    // was then the lighting pass's only record, so the pass took the first-person camera for the world's and every jittered frame was
+    // refused deferred-inverse-unproven. The selector now asks the first-person count instead (flatSelectHdrRouteAt, mixedCamera).
+    bool weaponRouteKnown=false;
+    FlatWeaponRoute weaponRoute=FlatWeaponRoute::Unchanged;
+    const auto routeOfWeapon=[&]() {
         if(!weaponRouteKnown) {
             weaponRouteKnown=true;
-            weaponCopyRoute=flatWeaponRoute(s.hdrKey==FlatHdrKey::Auto,s.hdrLatch.tripped,s.engine,k.width,k.height,
-                s.prefix.width,s.prefix.height)==FlatWeaponRoute::Copy;
+            weaponRoute=flatWeaponRoute(s.hdrKey==FlatHdrKey::Auto,s.hdrLatch.tripped,s.engine,k.width,k.height,
+                s.prefix.width,s.prefix.height);
         }
-        return weaponCopyRoute;
+        return weaponRoute;
     };
+    const auto copyWeapon=[&]() { return routeOfWeapon()==FlatWeaponRoute::Copy; };
     if(d.supported && k.camera && k.depth && k.kind==kFlatContractPool && k.format==23 && weaponMotionFamilyVs(k.vs) &&
        flat_mono_detail::fullViewport(k,k.width,k.height) &&
        flatContractKind(false,k.color,k.depth,k.width,k.height,k.format,s.prefix.width,s.prefix.height,false)==kFlatContractScreen &&
-       copyWeapon()) {
+       routeOfWeapon()!=FlatWeaponRoute::Unchanged) {
         // The first-person camera, not the world's: the world camera is the named one once H has named it, and the last named world's
         // (near plane and projection scale: the domain's own prediction, below) before that, so a weapon-family draw under the world's
         // camera stays a world source.

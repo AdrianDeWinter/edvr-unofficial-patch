@@ -421,6 +421,9 @@ inline FlatMonoFrame flatSelectHdrRouteAt(FlatRuntimePrefix& p, const FlatHdrFra
     in.qualifiedAlternateUser = qualifiedAlternateUser;
     in.unsupportedFamilyDraws = p.unsupportedFamilyDraws;
     out = flatSelectHdrFrame(in, f.trigger.hdr, consumerSeq, gate);
+    // A first-person cohort the model left out of the sources (FlatRuntimeDraw::firstPersonCohort, flagged on this route too since
+    // 2026-11-16) makes the selected frame mixed-camera, as the copy route's selection does, so the foreground contract qualifies it.
+    if (out.selected() && flatRuntimeFirstPerson(p, target->writes.key.depth)) out.mixedCamera = true;
     if (out.reason == FlatMonoReason::AmbiguousSource && sourceSink)
         sourceSink(in, f.trigger.hdr, consumerSeq, sourceSinkUser);
     if (out.reason == FlatMonoReason::ConflictingHdr) {
