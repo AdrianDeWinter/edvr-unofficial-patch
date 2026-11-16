@@ -186,8 +186,8 @@ int wmain(int argc, wchar_t** argv) {
         // The Debug tab's heading, against the rect layout() draws it into
         // (menuPanelLineRectForTest reads it from layout()'s own text op).
         // Flat's old fixed raster: cardPx 860, capPx 34 (the reference of menu_flat_layout.h; the sizes the flat card is rasterised at now are checked below). The
-        // heading takes the whole line: its left is pad / 2 and its right is
-        // cardW - pad, so the rect is 820 px here; DT_END_ELLIPSIS cuts text
+        // heading takes the whole line: its left is pad and its right is
+        // cardW - pad / 2, so the rect is 820 px here; DT_END_ELLIPSIS cuts text
         // at its right edge. Without the full-width arm in layout() the rect
         // is the setting split's 503 px and the 805 px sentence is cut.
         edvr::MenuContent dbg{};
@@ -203,10 +203,75 @@ int wmain(int argc, wchar_t** argv) {
         edvr::menuPanelLineRectForTest(dbg, 0, &hx0, &hy0, &hx1, &hy1);
         const int headingBoxW = hx1 - hx0;
         const int headingW = edvr::menuPanelMeasureLine(dbg.lines[0].left, dbg.capPx);
-        check(headingBoxW == 860 - dbg.capPx * 8 / 10 - dbg.capPx * 8 / 10 / 2,
-              "the heading's rect spans the line from its half-pad left to cardW - pad");
+        check(hx0 == 27 && headingBoxW == 820,
+              "the heading shares the label inset and retains its full-width prose allowance");
         check(headingW > 0 && headingW <= headingBoxW,
               "the Debug heading fits the rect it is drawn into (no ellipsis)");
+        // Restart status has its own full line, including when the primary
+        // value becomes a switch or is being edited. Measure the requested
+        // fonts independently of the layout's rectangle calculations.
+        auto lineHeight = [](int em) {
+            HDC dc = CreateCompatibleDC(nullptr);
+            HFONT font = CreateFontW(-em, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                    ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+            HGDIOBJ old = SelectObject(dc, font);
+            TEXTMETRICW metrics{};
+            GetTextMetricsW(dc, &metrics);
+            SelectObject(dc, old);
+            DeleteObject(font);
+            DeleteDC(dc);
+            return metrics.tmHeight;
+        };
+        for (const int cap : {14, 34, 50, 60, 80}) {
+            edvr::MenuContent badges{};
+            badges.widthPx = badges.cardPx = cap == 14 ? 357 : 860;
+            badges.capPx = cap;
+            badges.lineCount = 9;
+            badges.reserveHint = true;
+            std::strcpy(badges.overlayLine, "58 fps   gpu 11.3 ms   cpu 9.1 ms");
+            for (int i = 0; i < 9; ++i) {
+                auto& l = badges.lines[i];
+                std::strcpy(l.left, "Frame generation");
+                std::strcpy(l.right, "off -> on");
+                l.style = edvr::kMenuRow;
+                l.badge = edvr::kBadgePending;
+                l.reserveBadge = true;
+            }
+            const auto pending = edvr::menuPanelRowRectsForTest(badges, 0);
+            check(pending.label[1] == pending.value[1] && pending.label[3] == pending.value[3],
+                  "a badged row's label and value share the primary baseline");
+            check(pending.value[3] - pending.value[1] >= lineHeight(cap * 10 / 7),
+                  "the primary value has a complete GDI line box");
+            check(pending.badge[1] >= pending.value[3] && pending.badge[3] - pending.badge[1] >= lineHeight(cap * 8 / 10),
+                  "the badge has a complete GDI line below the primary value");
+            check(pending.selectable && pending.hitTop <= pending.label[1] && pending.hitBottom >= pending.badge[3],
+                  "the row's selectable area includes both primary and secondary text");
+            const int visible = edvr::menuPanelEntryRows(badges, 9);
+            check(visible > 0 && visible <= 9 && (cap > 50 || visible == 9),
+                  "the stable badge window retains nine rows at normal sizes and scrolls at larger text sizes");
+            badges.lineCount = visible;
+            const int height = edvr::menuPanelLayoutHeightForTest(badges);
+            std::printf("  badge window at cap %d: %d rows, %d px tall\n", cap, visible, height);
+            check(height <= 2048, "the pending row window and locked readout fit the raster through the maximum cap 80");
+            if (visible < 9) {
+                ++badges.lineCount;
+                check(edvr::menuPanelLayoutHeightForTest(badges) > 2048,
+                      "the large-text window keeps every row that fits but excludes the first overflowing row");
+                --badges.lineCount;
+            }
+            badges.lines[0].badge = edvr::kBadgeNone;
+            badges.lines[0].style = edvr::kMenuRowEdit;
+            const auto editing = edvr::menuPanelRowRectsForTest(badges, 0);
+            check(edvr::menuPanelLayoutHeightForTest(badges) == height && editing.hitBottom == pending.hitBottom,
+                  "editing a reserved restart row preserves page height and pointer geometry");
+            badges.lines[0].badge = edvr::kBadgeRestart;
+            badges.lines[0].toggle = 2;
+            badges.lines[0].right[0] = 0;
+            const auto toggle = edvr::menuPanelRowRectsForTest(badges, 0);
+            check(toggle.badge[3] - toggle.badge[1] >= lineHeight(cap * 8 / 10),
+                  "a restart badge remains readable beside a switch-only primary row");
+        }
         // The wiring that makes a padded page reserve its hint box is in
         // menu.cpp's build, which this rig does not link -- so the height
         // checks above set reserveHint themselves and cannot see it. Read
@@ -467,7 +532,7 @@ int wmain(int argc, wchar_t** argv) {
             std::printf("  flat footer legends at %dp: widest %d of %d px\n", outH, widest, line);
         }
         // Every row label the flat menu shows (menu_flat_rows.h's three tables and the flat Hotkeys page's keys), read from edvr.ini's `# ui:` lines, fits the
-        // label column (menu_panel.cpp: cardW * 6 / 10 less the pad) in the Row face it is drawn in (em cap * 10 / 7), at every flat size. Two labels were
+        // actual label rectangle from menu_panel.cpp in the Row face it is drawn in (em cap * 10 / 7), at every flat size. Two labels were
         // ellipsised on the Performance tab at 1080p (2026-11-16) and nothing measured them.
         {
             std::vector<std::string> keys;
@@ -507,8 +572,15 @@ int wmain(int argc, wchar_t** argv) {
             }
             for (const int outH : {720, 1080, 1440, 2160}) {
                 const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
-                const int pad = fs.capPx * 8 / 10;
-                const int column = fs.cardPx * 6 / 10 - pad;
+                edvr::MenuContent probe{};
+                probe.widthPx = probe.cardPx = fs.cardPx;
+                probe.capPx = fs.capPx;
+                probe.lineCount = 1;
+                probe.lines[0].style = edvr::kMenuRow;
+                std::strcpy(probe.lines[0].left, "label");
+                int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+                edvr::menuPanelLineRectForTest(probe, 0, &x0, &y0, &x1, &y1);
+                const int column = x1 - x0;
                 const int em = fs.capPx * 10 / 7;
                 int widest = 0;
                 for (const std::string& label : labels) {

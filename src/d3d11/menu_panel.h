@@ -73,6 +73,9 @@ struct MenuLine {
     // irrelevant to the mode in force -- the DLSS preset outside DLSS/DLAA
     // -- rather than one hidden and reappearing on a mode change.
     bool    dim = false;
+    // Keep a secondary line while a restart row changes between its launch
+    // value, a pending value and editing, so the rows below it stay put.
+    bool    reserveBadge = false;
 };
 
 // THE TOOLTIP'S STRIP, as fractions of the menu card's width: the gap
@@ -250,6 +253,12 @@ int  menuPanelLayoutHeightForTest(const MenuContent& c);
 // DrawTextW single-line path cuts text at the rect's right edge, so a heading measured wider
 // than this rect is ellipsised on screen. Zeroed when the line has no such op.
 void menuPanelLineRectForTest(const MenuContent& c, int i, int* x0, int* y0, int* x1, int* y1);
+struct MenuPanelRowRectsForTest {
+    int label[4]{}, value[4]{}, badge[4]{};
+    int hitTop = 0, hitBottom = 0;
+    bool selectable = false;
+};
+MenuPanelRowRectsForTest menuPanelRowRectsForTest(const MenuContent& c, int i);
 #endif
 
 // Once per frame: upload a finished raster, create the texture as needed.
@@ -303,6 +312,10 @@ int menuPanelMeasureLine(const char* utf8, int emPx);
 // The width a tab takes in the strip at the tab face's em: the bold name, measured, and a third of an em of space after it. The model's window and the
 // raster's layout both use it, so a tab is never drawn narrower than its name.
 int menuPanelTabWidth(const char* utf8, int emPx);
+// Settings pages keep a stable window even if every entry needs restart
+// status. At large VR text sizes fewer entries fit the raster; the model
+// uses this count with its existing scrolling window.
+int menuPanelEntryRows(const MenuContent& c, int requested);
 
 void menuPanelShutdown();
 
