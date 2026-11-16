@@ -8,7 +8,7 @@ body:
       value: |
         The logs answer most of these on their own — every fix says in the log whether it armed, what it matched, and why it declined. So the files are worth more here than a description of what you saw.
 
-        **Run `edvr-installer.exe` and press Save logs.** It writes one zip to your Desktop with both logs from the last session, your `edvr.ini`, the install record and the rest — the right files, from the right session, in one attachment. (`edvr-installer.exe --collect-logs` does the same from a command line.)
+        **Run `ed-up-launcher.exe` and press Save logs.** It writes one zip to your Desktop with both logs from the last session, your `edvr.ini`, the install record and the rest — the right files, from the right session, in one attachment. (`ed-up-launcher.exe --collect-logs` does the same from a command line.)
 
         Play until the problem happens, quit, *then* press Save logs. It takes the most recent session, so a launch after the fact replaces the one I need.
 
@@ -16,7 +16,7 @@ body:
     id: which-fix
     attributes:
       label: Which fix
-      description: The groups here are the ones in the installer's Settings tab and the in-headset menu's Fixes page, so pick whichever you were changing.
+      description: The groups here are the ones in the launcher's Settings tab and the in-headset menu's Fixes page, so pick whichever you were changing.
       options:
         - When the eyes disagree (eye brightness, FSS scanner)
         - Night vision (the pulse's distance; the experimental look and its brightness)
@@ -38,7 +38,7 @@ body:
       description: |
         Drag it in.
 
-        **If you installed by hand and have no installer**, attach `edvr_gfx_*.log` and `edvr_vr_*.log` with matching timestamps from `edvr_logs\`, from one run where the problem happened. Both, please — this is the thing I most often have to ask for a second time. The two halves of ED-UP are separate DLLs in different folders and neither can see what the other does; Explorer Cam in particular is decided in the gfx half and applied in the vr half, so with one of them I can see that it did not happen but not why. **If the vr log is missing entirely, say so** — that is itself an answer.
+        **If you installed by hand and have no launcher**, attach `edvr_gfx_*.log` and `edvr_vr_*.log` with matching timestamps from `edvr_logs\`, from one run where the problem happened. Both, please — this is the thing I most often have to ask for a second time. The two halves of ED-UP are separate DLLs in different folders and neither can see what the other does; Explorer Cam in particular is decided in the gfx half and applied in the vr half, so with one of them I can see that it did not happen but not why. **If the vr log is missing entirely, say so** — that is itself an answer.
 
         Send whole files rather than the lines that look relevant. What explains a fix declining is usually somewhere you would not think to look.
 

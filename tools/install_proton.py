@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run EDVR's Windows installer in Elite's existing Steam or Epic Wine/Proton prefix."""
+"""Run the ED-UP launcher (ed-up-launcher.exe) in Elite's existing Steam or Epic Wine/Proton prefix."""
 
 import argparse
 import configparser
@@ -19,11 +19,11 @@ MAX_VDF = 4 * 1024 * 1024
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--installer", type=Path, help="edvr-installer.exe (beside script or build/ by default)")
     p.add_argument("--launcher", action="store_true",
-                   help="run ed-up-launcher.exe instead of the installer; arguments after a literal -- go to it")
+                   help="accepted and ignored: this wrapper only runs the launcher. ed-up-launcher.sh passes it. "
+                        "Arguments after a literal -- go to the launcher, for either store")
     p.add_argument("--launcher-exe", type=Path,
-                   help="ed-up-launcher.exe (beside script or build/ by default); implies nothing without --launcher")
+                   help="ed-up-launcher.exe (beside script or build/ by default)")
     p.add_argument("--steam-dir", type=Path, help="Steam root; otherwise use STEAM_DIR or known locations")
     p.add_argument("--store", choices=("auto", "steam", "epic"), default="auto",
                    help="select the store; auto refuses when both stores have matching installs")
@@ -34,23 +34,11 @@ def parser():
     p.add_argument("--wine", type=Path,
                    help="explicit host Wine binary for Epic (bypasses a recorded Flatpak runner)")
     p.add_argument("--game-dir", type=Path, help="folder holding EliteDangerous64.exe inside the installed game")
-    actions = p.add_mutually_exclusive_group()
-    for name in ("install", "repair", "uninstall", "collect-logs"):
-        actions.add_argument("--" + name, action="store_true")
-    actions.add_argument("--preview", action="store_true",
-                         help="start Proton/Wine to show the Windows install plan without changing game files")
-    p.add_argument("--scope", choices=("both", "vr", "flat"))
-    p.add_argument("--replace-settings", action="store_true")
-    p.add_argument("--remove-settings", action="store_true")
     offline = p.add_mutually_exclusive_group()
     offline.add_argument("--dry-run", action="store_true",
                          help="resolve and print the exact command; start no processes and write nothing")
     offline.add_argument("--self-test", action="store_true", help=argparse.SUPPRESS)
     return p
-
-
-LAUNCHER_REFUSED = ("install", "repair", "uninstall", "collect_logs", "preview", "scope",
-                    "replace_settings", "remove_settings", "installer")
 
 
 def parse_argv(argv=None):
@@ -68,40 +56,12 @@ def parse_argv(argv=None):
 
 
 def launcher_args(args):
-    for name in LAUNCHER_REFUSED:
-        if getattr(args, name):
-            raise ValueError("--%s is an installer option; it cannot be used with --launcher" %
-                             name.replace("_", "-"))
+    """The words after -- that go to the launcher, which may not override the --dir or --store this
+    wrapper selects."""
     forwarded = list(args.passthrough or [])
     if any(word.split("=", 1)[0].lower() in ("--dir", "--store") for word in forwarded):
         raise ValueError("launcher arguments cannot override the selected --dir or --store")
     return forwarded
-
-
-def installer_args(args):
-    if getattr(args, "passthrough", None) is not None and not args.launcher:
-        raise ValueError("arguments after -- are forwarded to the launcher; use --launcher")
-    if args.launcher_exe is not None and not args.launcher:
-        raise ValueError("--launcher-exe requires --launcher")
-    if args.launcher:
-        return launcher_args(args)
-    action = next((name for name in ("install", "repair", "uninstall", "collect_logs", "preview")
-                   if getattr(args, name)), None)
-    if args.scope and action not in ("install", "repair", "preview"):
-        raise ValueError("--scope requires --install, --repair or --preview")
-    if args.replace_settings and action not in ("install", "repair", "preview"):
-        raise ValueError("--replace-settings requires --install, --repair or --preview")
-    if args.remove_settings and action != "uninstall":
-        raise ValueError("--remove-settings requires --uninstall")
-    result = (["--install", "--dry-run"] if action == "preview" else
-              (["--" + action.replace("_", "-")] if action else []))
-    if args.scope:
-        result += ["--scope", args.scope]
-    if args.replace_settings:
-        result.append("--replace-settings")
-    if args.remove_settings:
-        result.append("--remove-settings")
-    return result
 
 
 def launcher_path(args, script):
@@ -109,15 +69,6 @@ def launcher_path(args, script):
         return args.launcher_exe.expanduser().resolve()
     adjacent = script.resolve().parent / "ed-up-launcher.exe"
     return adjacent if adjacent.is_file() else script.resolve().parents[1] / "build" / "ed-up-launcher.exe"
-
-
-def installer_path(args, script):
-    if args.launcher:
-        return launcher_path(args, script)
-    if args.installer is not None:
-        return args.installer.expanduser().resolve()
-    adjacent = script.resolve().parent / "edvr-installer.exe"
-    return adjacent if adjacent.is_file() else script.resolve().parents[1] / "build" / "edvr-installer.exe"
 
 
 def vdf(path):
@@ -282,7 +233,7 @@ def find_game(args, steam_roots):
 def compatdata_path(library, environ, explicit=None):
     identities = [environ[key] for key in ("SteamAppId", "SteamGameId", "STEAM_COMPAT_APP_ID")
                   if environ.get(key)]
-    # A non-Steam installer shortcut carries its own valid prefix. Only Elite's
+    # A non-Steam shortcut carries its own valid prefix. Only Elite's
     # unambiguous Steam identity can authorize an inherited custom location.
     raw = environ.get("STEAM_COMPAT_DATA_PATH") if identities and all(
         value == APP_ID for value in identities) else None
@@ -766,12 +717,9 @@ def umu_runtime(proton_host, home, environ, flatpak_id):
     return runtime
 
 
-def build_epic_plan(args, installer, forwarded, home, env_in):
+def build_epic_plan(args, launcher, forwarded, home, env_in):
     library = epic_discovery()
 
-    if args.launcher:
-        raise ValueError("Epic --launcher is not supported by this wrapper; launch Elite through its original "
-                         "Heroic, Legendary, Lutris or Epic manager to preserve Epic authentication")
     if args.wine and args.proton:
         raise ValueError("choose one Epic runner override: --wine or --proton")
     try:
@@ -856,12 +804,12 @@ def build_epic_plan(args, installer, forwarded, home, env_in):
                    GAMEID="umu-0", STORE="egs")
         command = [str(runner)]
     game_windows = prefix_windows_path(game.resolve(), prefix)
-    command += [str(installer), "--store", "epic", "--dir", game_windows] + forwarded
+    command += [str(launcher), "--store", "epic", "--dir", game_windows] + forwarded
     if flatpak_id:
         flatpak = shutil.which("flatpak", path=env_in.get("PATH"))
         if not flatpak:
             raise ValueError("Flatpak executable missing; install the recorded manager or pass a host runner override")
-        permissions = {installer.resolve(), install_root.resolve(), configured.expanduser().resolve()}
+        permissions = {launcher.resolve(), install_root.resolve(), configured.expanduser().resolve()}
         if kind == "umu":
             permissions.add(Path(env["HOST_XDG_DATA_HOME"]) / "umu")
         for candidate in (runner, Path(recorded_env.get("PROTONPATH", "/app")), runtime):
@@ -879,12 +827,10 @@ def build_epic_plan(args, installer, forwarded, home, env_in):
 
 def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
     env_in = os.environ if environ is None else environ
-    forwarded = installer_args(args)
-    installer = installer_path(args, script)
-    if not installer.is_file():
-        raise ValueError("%s not found: %s (pass %s PATH)" % (
-            "launcher" if args.launcher else "installer", installer,
-            "--launcher-exe" if args.launcher else "--installer"))
+    forwarded = launcher_args(args)
+    launcher = launcher_path(args, script)
+    if not launcher.is_file():
+        raise ValueError("launcher not found: %s (pass --launcher-exe PATH)" % launcher)
     store = args.store
     if store == "auto":
         epic = epic_discovery().matching_installs(args.game_dir, home=home, environ=env_in)
@@ -913,7 +859,7 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
             raise ValueError("no valid Elite Steam or Epic install found; pass --store epic --game-dir PATH "
                              "--prefix PATH and --wine PATH (or --proton PATH) for an unowned install")
     if store == "epic":
-        return build_epic_plan(args, installer, forwarded, home, env_in)
+        return build_epic_plan(args, launcher, forwarded, home, env_in)
     if args.wine:
         raise ValueError("--wine is an Epic option; use --store epic")
     steam_roots = roots(args, home, env_in)
@@ -941,7 +887,7 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
         # gitlab.steamos.cloud/steamrt/steam-runtime-tools/-/blob/e8724b354362b197f56772f5d88e49d70104826e/pressure-vessel/runtime.c#L352-362
         payload_proton = Path("/run/parent") / sandbox_proton.relative_to("/")
     command = ([str(runtime), "--verb=run", "--"] if runtime else [])
-    command += [str(payload_proton), "runinprefix", str(installer), "--store", "steam", "--dir", game_windows] + forwarded
+    command += [str(payload_proton), "runinprefix", str(launcher), "--store", "steam", "--dir", game_windows] + forwarded
     env = dict(env_in)
     for key in list(env):
         if key.startswith("WINE") or key == "PROTON_VERSION":
@@ -963,7 +909,7 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
             raise ValueError("Flatpak executable missing; install the selected Steam Flatpak")
         user_installation, _ = flatpak_installations(home, env_in)
         selector = "--user" if installation == user_installation else "--system"
-        permissions = {installer.resolve(), steam_root, compatdata, *libraries(steam_root)}
+        permissions = {launcher.resolve(), steam_root, compatdata, *libraries(steam_root)}
         if not inside(sandbox_proton, Path("/app")) and not inside(sandbox_proton, Path("/usr")):
             permissions.add(sandbox_proton.parent)
         env.update(sandbox_env)
@@ -981,12 +927,12 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
 def run(args, *, script=Path(__file__), home=Path.home(), environ=None,
         launch=subprocess.run, platform=sys.platform, geteuid=getattr(os, "geteuid", lambda: 1)):
     if platform != "linux" and not args.dry_run:
-        raise ValueError("run this wrapper on Linux; use edvr-installer.exe on Windows")
+        raise ValueError("run this wrapper on Linux; use ed-up-launcher.exe on Windows")
     command, env, (game, compatdata, proton, runtime) = build_plan(
         args, script=script, home=home, environ=environ)
     if args.dry_run:
         print("EDVR resolved launch plan (nothing executed or written):")
-        print("  program: %s" % ("launcher" if args.launcher else "installer"))
+        print("  program: launcher")
         print("  game: %s" % game)
         print("  prefix: %s" % compatdata)
         print("  runner: %s" % proton)
@@ -1014,22 +960,32 @@ def run(args, *, script=Path(__file__), home=Path.home(), environ=None,
 
 def launcher_self_test(parse, root, script, home, env, launch, calls):
     import io
-    from contextlib import redirect_stdout
+    from contextlib import redirect_stderr, redirect_stdout
 
-    # Default exe resolution mirrors installer_path: beside the script, else <repo>/build.
+    # Default exe resolution: beside the script, else <repo>/build.
+    exe = script.parent / "ed-up-launcher.exe"
+    exe.unlink()
     launcher_args_ns = parse("--launcher")
     assert launcher_path(launcher_args_ns, script) == script.resolve().parents[1] / "build" / "ed-up-launcher.exe"
-    exe = script.parent / "ed-up-launcher.exe"
     exe.write_bytes(b"exe")
     assert launcher_path(launcher_args_ns, script) == exe.resolve()
     override = root / "elsewhere" / "my-launcher.exe"
     assert launcher_path(parse("--launcher", "--launcher-exe", str(override)), script) == override.resolve()
+    # The launcher is the only program: with or without the accepted --launcher, the same exe is chosen.
+    assert launcher_path(parse(), script) == exe.resolve()
 
     # Passthrough: split at the first --, kept verbatim, later -- stay in it.
     ns = parse("--launcher", "--dry-run", "--", "--direct-dry-run", "--vr", "--", "--channel", "rc")
     assert ns.dry_run and ns.passthrough == ["--direct-dry-run", "--vr", "--", "--channel", "rc"]
     assert parse("--launcher").passthrough is None
-    assert launcher_args(parse("--launcher")) == []
+    assert launcher_args(parse("--launcher")) == [] and launcher_args(parse()) == []
+    # What the wrapper selects, --dir and --store, cannot be overridden from the passthrough.
+    for override_words in (("--store=steam",), ("--STORE", "epic"), ("--dir", "C:\\other"), ("--dir=C:\\other",)):
+        try:
+            launcher_args(parse("--", *override_words))
+            raise AssertionError("launcher accepted %s" % override_words[0])
+        except ValueError as exc:
+            assert "override" in str(exc)
 
     # Explicit store identity survives custom drive aliases; passthrough stays verbatim.
     plan_args = parse("--launcher", "--dry-run", "--", "--direct-dry-run", "--vr")
@@ -1044,43 +1000,260 @@ def launcher_self_test(parse, root, script, home, env, launch, calls):
     start = command.index("runinprefix")
     assert command[start:start + 5] == ["runinprefix", str(exe.resolve()), "--store", "steam", "--dir"]
     assert command[start + 6:] == ["--direct-dry-run", "--vr"]
-    assert "edvr-installer.exe" not in shlex.join(command) and "--install" not in command
+    assert "--install" not in command
     assert "program: launcher" in buf.getvalue() and shlex.join(command) in buf.getvalue()
     assert process_env["SteamAppId"] == APP_ID and "WINEPREFIX" not in process_env
     bare = build_plan(parse("--launcher", "--dry-run"), script=script, home=home, environ=env)[0]
-    assert bare[-5:-1] == [str(exe.resolve()), "--store", "steam", "--dir"] and bare[-1] != "--install"
+    assert bare[-5:-1] == [str(exe.resolve()), "--store", "steam", "--dir"]
     # A real launcher run uses the same command and returns the launcher's exit code.
     assert run(parse("--launcher", "--", "--channel", "rc"), script=script, home=home, environ=env,
                launch=launch, platform="linux", geteuid=lambda: 1000) == 23
     assert calls[-1][0][-2:] == ["--channel", "rc"] and str(exe.resolve()) in calls[-1][0]
     calls.pop()
-    # A missing launcher names --launcher-exe, not --installer.
+    # A missing launcher names --launcher-exe.
     exe.unlink()
     try:
         build_plan(parse("--launcher", "--dry-run"), script=script, home=home, environ=env)
         raise AssertionError("missing launcher accepted")
     except ValueError as exc:
-        assert "--launcher-exe" in str(exc) and "--installer" not in str(exc)
+        assert "--launcher-exe" in str(exc)
     exe.write_bytes(b"exe")
 
-    # Installer-only options are refused in launcher mode.
-    for refused in (("--install",), ("--repair",), ("--uninstall",), ("--collect-logs",), ("--preview",),
-                    ("--scope", "flat"), ("--replace-settings",), ("--remove-settings",),
-                    ("--installer", str(exe))):
+    # The installer's options are gone: argparse refuses each (exit 2), so an old command line cannot
+    # quietly start the launcher instead.
+    for gone in (("--install",), ("--repair",), ("--uninstall",), ("--collect-logs",), ("--preview",),
+                 ("--scope", "flat"), ("--replace-settings",), ("--remove-settings",),
+                 ("--installer", str(exe))):
+        with redirect_stderr(io.StringIO()) as refusal:
+            try:
+                parse(*gone)
+                raise AssertionError("accepted removed option %s" % gone[0])
+            except SystemExit as exc:
+                assert exc.code == 2 and "unrecognized arguments" in refusal.getvalue(), gone
+
+
+def epic_plan_self_test():
+    """The Epic plan from fixture records, on any host: store selection, runner and prefix resolution,
+    the launcher command, the environment and the refusals.
+
+    Nothing here needs a Linux filesystem. Elite's Windows path inside the prefix is taken from the prefix's
+    dosdevices symlinks, which a Windows host cannot make, so prefix_windows_path is replaced by a function
+    that maps the game folder to G:. What the real one does with those symlinks, and the Flatpak, native
+    Epic Preview and Steam-prefix cases, are epic_self_test's, preview_self_test's and
+    steam_context_self_test's, which only a Linux host runs."""
+    import io
+    import json
+    from contextlib import redirect_stdout
+    from tempfile import TemporaryDirectory
+
+    parse = lambda *words: parse_argv(list(words))
+    real_prefix_windows_path = globals()["prefix_windows_path"]
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        home = root / "home"
+        script = root / "tools" / "install_proton.py"
+        script.parent.mkdir()
+        launcher_exe = script.parent / "ed-up-launcher.exe"
+        launcher_exe.write_bytes(b"launcher")
+        install = home / "Games" / "Elite Epic"
+        game = install / PRODUCT
+        game.mkdir(parents=True)
+        (game / "EliteDangerous64.exe").write_bytes(b"game")
+        game_windows = "G:\\Products\\elite-dangerous-odyssey-64"
+
+        def fake_windows_path(host_path, prefix):
+            return "G:\\" + "\\".join(Path(host_path).relative_to(install).parts)
+
+        def wine_prefix(name):
+            path = home / "prefixes" / name
+            (path / "drive_c").mkdir(parents=True)
+            (path / "dosdevices").mkdir()
+            for entry in ("system.reg", "user.reg"):
+                (path / entry).write_bytes(b"registry")
+            return path
+
+        def file(path, mode=0o644):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fixture")
+            path.chmod(mode)
+            return path
+
+        wine = file(home / "runners" / "Wine 9 $()" / "bin" / "wine", 0o755)
+        other_wine = file(home / "runners" / "Other Wine" / "bin" / "wine", 0o755)
+        proton_dir = home / "runners" / "GE-Proton10-1"
+        proton = file(proton_dir / "proton", 0o755)
+        (proton_dir / "toolmanifest.vdf").write_text('"manifest" { "version" "2" }', encoding="utf-8")
+        config = home / ".config" / "heroic"
+        installed = config / "legendaryConfig/legendary/installed.json"
+        installed.parent.mkdir(parents=True)
+        installed.write_text(json.dumps({"ELITE": {"app_name": "ELITE", "title": "Elite Dangerous",
+                             "install_path": str(install), "executable": "EDLaunch.exe"}}), encoding="utf-8")
+        settings = config / "GamesConfig" / "ELITE.json"
+        settings.parent.mkdir()
+
+        def record(prefix, binary, kind, umu=False, environment=()):
+            settings.write_text(json.dumps({"ELITE": {
+                "winePrefix": str(prefix), "wineVersion": {"bin": str(binary), "name": "chosen", "type": kind},
+                "disableUMU": not umu,
+                "enviromentOptions": [{"key": key, "value": value} for key, value in environment]}}), encoding="utf-8")
+
+        env = {"PATH": str(root / "nobin"), "HOME": str(home), "EPIC_AUTH_TOKEN": "secret-not-for-output",
+               "SteamAppId": "359320", "STEAM_COMPAT_DATA_PATH": "/wrong", "WINESERVER": "/wrong/server",
+               "PROTON_VERSION": "old", "PROTONPATH": "/wrong"}
+        plain = wine_prefix("plain")
+        record(plain, wine, "wine", environment=(("WINEDEBUG", "-all"), ("NOT_ON_THE_LIST", "dropped")))
+
+        def plan(*words, environment=None, directory=None):
+            return build_plan(parse(*words), script=script, home=directory or home,
+                              environ=env if environment is None else environment)
+
+        def refuses(reason, *words, environment=None, directory=None):
+            try:
+                plan(*words, environment=environment, directory=directory)
+                raise AssertionError("accepted %r, which should say %r" % (words, reason))
+            except ValueError as exc:
+                assert reason in str(exc), (reason, str(exc))
+                assert "secret-not-for-output" not in str(exc)
+
+        def snapshot():
+            return {str(path): (path.read_bytes() if path.is_file() else None) for path in root.rglob("*")}
+
+        globals()["prefix_windows_path"] = fake_windows_path
         try:
-            launcher_args(parse("--launcher", *refused))
-            raise AssertionError("launcher accepted %s" % refused[0])
-        except ValueError as exc:
-            assert refused[0] in str(exc) and "--launcher" in str(exc)
-    # Passthrough and --launcher-exe are refused without --launcher.
-    for stray in (("--", "--vr"), ("--install", "--", "--vr"), ("--launcher-exe", str(exe))):
-        try:
-            installer_args(parse(*stray))
-            raise AssertionError("accepted %s without --launcher" % stray[0])
-        except ValueError as exc:
-            assert "--launcher" in str(exc)
-    # The installer path is unchanged by all of this.
-    assert installer_args(parse("--install")) == ["--install"]
+            # Wine, from Heroic's record: the program is the launcher, under the recorded runner, with the
+            # folder and the store the wrapper chose and the words after -- on the end.
+            before = snapshot()
+            command, launch_env, details = plan("--dry-run", "--", "--install", "--scope", "flat")
+            assert command == [str(wine), str(launcher_exe), "--store", "epic", "--dir", game_windows,
+                               "--install", "--scope", "flat"], command
+            assert launch_env["WINEPREFIX"] == str(plain) and launch_env["WINEDEBUG"] == "-all"
+            assert "NOT_ON_THE_LIST" not in launch_env and launch_env["STEAM_COMPAT_INSTALL_PATH"] == str(install)
+            for stale in ("SteamAppId", "STEAM_COMPAT_DATA_PATH", "WINESERVER", "PROTON_VERSION", "PROTONPATH"):
+                assert stale not in launch_env, stale
+            assert details == (game, plain, wine, None)
+            assert plan("--store", "epic")[0] == command[:6]
+            # Nothing is written, and a dry run starts nothing and prints neither the token nor a Steam id.
+            calls = []
+
+            def launch(argv, **kwargs):
+                calls.append((argv, kwargs))
+                return subprocess.CompletedProcess(argv, 17)
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                assert run(parse("--dry-run", "--", "--install"), script=script, home=home, environ=env,
+                           launch=launch, platform="linux", geteuid=lambda: 1000) == 0
+            assert not calls and snapshot() == before
+            assert "secret-not-for-output" not in output.getvalue() and "program: launcher" in output.getvalue()
+            assert "WINEPREFIX=" in output.getvalue() and "SteamAppId" not in output.getvalue()
+            assert shlex.join(command[:6] + ["--install"]) in output.getvalue()
+            # A real run uses that command and environment, and returns the launcher's exit code.
+            assert run(parse("--store", "epic", "--", "--repair"), script=script, home=home, environ=env,
+                       launch=launch, platform="linux", geteuid=lambda: 1000) == 17
+            assert calls[0][0] == command[:6] + ["--repair"]
+            assert calls[0][1]["env"]["WINEPREFIX"] == str(plain)
+            try:
+                run(parse("--store", "epic"), script=script, home=home, environ=env, launch=launch,
+                    platform="linux", geteuid=lambda: 0)
+                raise AssertionError("root accepted")
+            except ValueError as exc:
+                assert "sudo" in str(exc)
+
+            # What the wrapper selects, the store and the folder, is not the launcher's to override.
+            refuses("override", "--store", "epic", "--", "--store=steam")
+            refuses("override", "--", "--dir", "C:\\other")
+            # Runner overrides: --wine replaces the record's runner, --proton needs a compatdata root,
+            # and the two together are refused.
+            assert plan("--wine", str(other_wine))[0][0] == str(other_wine)
+            refuses("choose one Epic runner override", "--wine", str(wine), "--proton", str(proton))
+            refuses("missing", "--store", "epic", "--wine", str(root / "missing"))
+            refuses("selected Proton needs an existing compatdata root", "--store", "epic", "--proton", str(proton))
+            (plain / "system.reg").unlink()
+            refuses("incomplete", "--store", "epic")
+            (plain / "system.reg").write_bytes(b"registry")
+            # --wine is Epic's option: with --store steam it is refused before anything is read.
+            refuses("--wine is an Epic option", "--store", "steam", "--wine", str(wine))
+            # The launcher itself has to be there, and the message says how to name another.
+            launcher_exe.unlink()
+            refuses("--launcher-exe", "--store", "epic")
+            launcher_exe.write_bytes(b"launcher")
+
+            # Proton without UMU runs the chosen Proton's own runinprefix verb in the compatdata root.
+            compat = home / "prefixes" / "proton"
+            (compat / "pfx" / "drive_c").mkdir(parents=True)
+            (compat / "pfx" / "dosdevices").mkdir()
+            for entry in ("system.reg", "user.reg"):
+                (compat / "pfx" / entry).write_bytes(b"registry")
+            record(compat, proton, "proton")
+            command, launch_env, details = plan("--store", "epic")
+            assert command == [str(proton), "runinprefix", str(launcher_exe), "--store", "epic", "--dir", game_windows]
+            assert launch_env["WINEPREFIX"] == str(compat / "pfx") and launch_env["STEAM_COMPAT_DATA_PATH"] == str(compat)
+            assert details[1] == compat and details[2] == proton
+            record(plain, proton, "proton")
+            refuses("selected Proton needs an existing compatdata root", "--store", "epic")
+            # A runner the record does not name a kind for is not guessed.
+            record(plain, wine, "unknown")
+            refuses("Epic runner is not resolved", "--store", "epic")
+            record(plain, root / "no such wine", "wine")
+            refuses("Epic runner is not resolved", "--store", "epic")
+
+            # UMU: Heroic's default for a Proton. The program is umu-run, with Proton's directory, the verb
+            # and the store in its environment, and the Steam runtime Proton's manifest names must be installed.
+            umu_run = file(root / "bin" / ("umu-run.exe" if os.name == "nt" else "umu-run"), 0o755)
+            umu_env = dict(env, PATH=str(umu_run.parent), XDG_DATA_HOME=str(home / "data"))
+            raw = wine_prefix("umu")
+            record(raw, proton, "proton", umu=True)
+            command, launch_env, details = plan("--store", "epic", environment=umu_env)
+            assert command == [str(umu_run), str(launcher_exe), "--store", "epic", "--dir", game_windows], command
+            assert launch_env["WINEPREFIX"] == str(raw) and launch_env["PROTONPATH"] == str(proton_dir)
+            assert (launch_env["PROTON_VERB"], launch_env["GAMEID"], launch_env["STORE"],
+                    launch_env["UMU_RUNTIME_UPDATE"]) == ("runinprefix", "umu-0", "egs", "0")
+            assert details[3] is None
+            (proton_dir / "toolmanifest.vdf").write_text(
+                '"manifest" { "require_tool_appid" "1628350" }', encoding="utf-8")
+            refuses("UMU runtime missing or incomplete", "--store", "epic", environment=umu_env)
+            runtime = home / "data" / "umu" / "steamrt3"
+            for entry in ("_v2-entry-point", "VERSIONS.txt", "pressure-vessel", ".installed.ok"):
+                file(runtime / entry)
+            assert plan("--store", "epic", environment=umu_env)[2][3] == runtime
+            (proton_dir / "toolmanifest.vdf").write_text(
+                '"manifest" { "require_tool_appid" "999999" }', encoding="utf-8")
+            refuses("unsupported UMU runtime", "--store", "epic", environment=umu_env)
+            (proton_dir / "toolmanifest.vdf").write_text('"manifest" { "version" "2" }', encoding="utf-8")
+            record(plain, wine, "wine")
+
+            # Store selection. Only Epic is found: it is chosen. A Steam copy beside it needs the player's
+            # word, and --game-dir or --store epic then names the Epic one.
+            assert plan("--dry-run")[0][0] == str(wine)
+            steam = home / ".local" / "share" / "Steam"
+            steam_game = steam / "steamapps" / "common" / "Elite Dangerous" / PRODUCT
+            steam_game.mkdir(parents=True)
+            (steam_game / "EliteDangerous64.exe").write_bytes(b"game")
+            (steam / "steamapps" / "libraryfolders.vdf").write_text('"libraryfolders" {}', encoding="utf-8")
+            (steam / "steamapps" / "appmanifest_359320.acf").write_text(
+                '"AppState" { "appid" "359320" "installdir" "Elite Dangerous" }', encoding="utf-8")
+            refuses("multiple Steam/Epic installs", "--dry-run")
+            refuses("multiple Steam/Epic installs", "--dry-run", "--prefix", str(plain))
+            assert plan("--game-dir", str(game))[0][:2] == [str(wine), str(launcher_exe)]
+            assert plan("--store", "epic")[0][:2] == [str(wine), str(launcher_exe)]
+
+            # An install no manager recorded is bound by hand: the folder, its prefix and a runner.
+            bare = root / "bare home"
+            bare.mkdir()
+            refuses("no valid Elite Steam or Epic install found", "--dry-run", directory=bare)
+            refuses("No confirmed Linux Epic Elite install", "--store", "epic", "--wine", str(wine),
+                    "--game-dir", str(game), directory=bare)
+            refuses("incomplete", "--store", "epic", "--wine", str(wine), "--game-dir", str(game),
+                    "--prefix", str(plain / "missing"), directory=bare)
+            command = plan("--dry-run", "--game-dir", str(game), "--prefix", str(plain), "--wine", str(wine),
+                           directory=bare)[0]
+            assert command == [str(wine), str(launcher_exe), "--store", "epic", "--dir", game_windows], command
+            assert plan("--dry-run", "--game-dir", str(game), "--prefix", str(compat), "--proton", str(proton),
+                        directory=bare)[0][1] == "runinprefix"
+            refuses("EliteDangerous64.exe missing", "--store", "epic", "--game-dir", str(root / "no game"),
+                    "--prefix", str(plain), "--wine", str(wine), directory=bare)
+        finally:
+            globals()["prefix_windows_path"] = real_prefix_windows_path
 
 
 def epic_self_test():
@@ -1098,9 +1271,8 @@ def epic_self_test():
         home = root / "home"
         script = root / "tools/install_proton.py"
         script.parent.mkdir()
-        exe = script.parent / "edvr-installer.exe"
-        exe.write_bytes(b"installer")
-        (script.parent / "ed-up-launcher.exe").write_bytes(b"launcher")
+        exe = script.parent / "ed-up-launcher.exe"
+        exe.write_bytes(b"launcher")
         install = home / "Custom Elite's $() folder"
         game = install / PRODUCT
         game.mkdir(parents=True)
@@ -1133,7 +1305,7 @@ def epic_self_test():
         expected_windows = "G:\\Products\\elite-dangerous-odyssey-64"
         expected = [str(wine), str(exe), "--store", "epic", "--dir", expected_windows,
                     "--install", "--scope", "flat"]
-        args = parse("--dry-run", "--install", "--scope", "flat")
+        args = parse("--dry-run", "--", "--install", "--scope", "flat")
         command, launch_env, _ = build_plan(args, script=script, home=home, environ=env)
         assert command == expected
         assert launch_env["WINEPREFIX"] == str(prefix)
@@ -1152,7 +1324,7 @@ def epic_self_test():
                        platform="linux", geteuid=lambda: 1000) == 0
         assert not calls and before == {str(p): (p.read_bytes() if p.is_file() else None) for p in root.rglob("*")}
         assert "secret-not-for-output" not in output.getvalue() and shlex.join(expected) in output.getvalue()
-        assert run(parse("--store", "epic", "--install", "--scope", "flat"), script=script,
+        assert run(parse("--store", "epic", "--", "--install", "--scope", "flat"), script=script,
                    home=home, environ=env, launch=launch, platform="linux", geteuid=lambda: 1000) == 17
         assert calls[0][0] == expected and calls[0][1]["env"]["WINEPREFIX"] == str(prefix)
 
@@ -1163,9 +1335,9 @@ def epic_self_test():
             except ValueError as exc:
                 assert reason in str(exc), str(exc)
 
-        refuses(("--store", "epic", "--launcher"), "original")
-        refuses(("--launcher", "--", "--store=steam"), "override")
-        refuses(("--launcher", "--", "--dir", "C:\\other"), "override")
+        # What the wrapper selects, the store and the folder, is not the launcher's to override.
+        refuses(("--store", "epic", "--", "--store=steam"), "override")
+        refuses(("--store", "epic", "--", "--dir", "C:\\other"), "override")
         refuses(("--store", "epic", "--wine", str(root / "missing")), "missing")
         (prefix / "system.reg").unlink()
         refuses(("--store", "epic"), "incomplete")
@@ -1479,7 +1651,7 @@ def epic_self_test():
         assert command[:3] == [str(fake_flatpak), "run", "--command=/usr/bin/wine"]
         flat_lutris.unlink()
 
-        # Standalone Legendary and Lutris metadata drive the same bound installer route.
+        # Standalone Legendary and Lutris metadata drive the same bound launcher route.
         legendary = home / ".config/legendary"
         legendary.mkdir()
         legendary_installed = legendary / "installed.json"
@@ -1548,14 +1720,14 @@ def preview_self_test():
                         "platform": "Windows", "artifactId": "ELITE", "itemId": "elite"}) + "\n",
             encoding="utf-8")
         script = root / "install_proton.py"
-        installer = root / "edvr-installer.exe"
-        installer.write_bytes(b"installer")
+        launcher_exe = root / "ed-up-launcher.exe"
+        launcher_exe.write_bytes(b"launcher")
         env = {"HOME": str(home), "XDG_DATA_HOME": str(data), "PATH": "/missing",
                "SteamAppId": "wrong", "STEAM_COMPAT_DATA_PATH": "/wrong",
                "EPIC_AUTH_TOKEN": "must-not-appear"}
         args = parse_argv(["--dry-run"])
         command, resolved, _ = build_plan(args, script=script, home=home, environ=env)
-        assert command == [str(proton), "runinprefix", str(installer), "--store", "epic",
+        assert command == [str(proton), "runinprefix", str(launcher_exe), "--store", "epic",
                            "--dir", "G:\\Products\\elite-dangerous-odyssey-64"]
         assert resolved["STEAM_COMPAT_DATA_PATH"] == str(compat)
         assert resolved["WINEPREFIX"] == str(prefix)
@@ -1606,8 +1778,8 @@ def auto_selection_self_test():
             home = root / "home"
             script = root / "tools/install_proton.py"
             script.parent.mkdir()
-            installer = script.parent / "edvr-installer.exe"
-            installer.write_bytes(b"fixture")
+            launcher_exe = script.parent / "ed-up-launcher.exe"
+            launcher_exe.write_bytes(b"fixture")
             steam = home / ".local/share/Steam"
             steam_game = steam / "steamapps/common/Elite Dangerous" / PRODUCT
             steam_game.mkdir(parents=True)
@@ -1748,8 +1920,7 @@ def steam_context_self_test(only=None):
                             else ".local/share/Steam")
             script = root / "tools/install_proton.py"
             script.parent.mkdir()
-            for name in ("edvr-installer.exe", "ed-up-launcher.exe"):
-                (script.parent / name).write_bytes(b"fixture only")
+            (script.parent / "ed-up-launcher.exe").write_bytes(b"fixture only")
             game_root = root / "external Steam library/steamapps/common/Custom title"
             game = game_root / PRODUCT
             game.mkdir(parents=True)
@@ -1835,12 +2006,11 @@ def steam_context_self_test(only=None):
                     assert plan(environment=markerless)[1]["STEAM_COMPAT_DATA_PATH"] == str(compat)
                     refuses("compatdata root", "--prefix", str(alternate / "pfx"))
                 elif case == "store":
-                    for words in ((), ("--install", "--scope", "flat"), ("--launcher",)):
+                    for words in ((), ("--launcher",)):
                         output = dry_run(*words)
                         command, _, _ = plan(*words)
                         start = command.index("runinprefix")
-                        expected_exe = script.parent / ("ed-up-launcher.exe" if "--launcher" in words
-                                                         else "edvr-installer.exe")
+                        expected_exe = script.parent / "ed-up-launcher.exe"
                         assert command[start:start + 6] == ["runinprefix", str(expected_exe), "--store", "steam",
                                                           "--dir", "Q:\\steamapps\\common\\Custom title\\Products\\elite-dangerous-odyssey-64"], command
                         assert shlex.join(command) in output
@@ -1979,7 +2149,7 @@ def steam_context_self_test(only=None):
                     nested_runner = nested / Path(expected_payload).relative_to("/")
                     nested_runner.parent.parent.mkdir(parents=True)
                     nested_runner.parent.symlink_to(runner_files, target_is_directory=True)
-                    for words in ((), ("--install", "--scope", "flat"), ("--launcher",)):
+                    for words in ((), ("--launcher",)):
                         output = dry_run(*words)
                         command, resolved, details = plan(*words)
                         assert details[2] == recorded / "proton", "recorded runner details changed"
@@ -1989,8 +2159,7 @@ def steam_context_self_test(only=None):
                         assert "--command=" + str(runtime / "_v2-entry-point") in command
                         start = command.index(flat_id)
                         assert command[start + 1:start + 6] == ["--verb=run", "--", expected_payload,
-                                                               "runinprefix", str(script.parent / (
-                                                               "ed-up-launcher.exe" if "--launcher" in words else "edvr-installer.exe"))]
+                                                               "runinprefix", str(script.parent / "ed-up-launcher.exe")]
                         payload = nested / Path(command[start + 3]).relative_to("/")
                         assert payload.read_bytes() == b"fixture only", "runner is unavailable in runtime namespace"
                         assert "--env=STEAM_COMPAT_CLIENT_INSTALL_PATH=" + str(steam) in command
@@ -2055,23 +2224,15 @@ def self_test():
 
     parse = lambda *words: parse_argv(list(words))
     assert parse("--store", "epic", "--prefix", "/existing", "--wine", "/selected/wine").store == "epic"
-    assert installer_args(parse("--preview", "--scope", "flat", "--replace-settings")) == [
-        "--install", "--dry-run", "--scope", "flat", "--replace-settings"]
-    assert installer_args(parse()) == []
-    assert installer_args(parse("--uninstall", "--remove-settings")) == ["--uninstall", "--remove-settings"]
-    for invalid in (("--dry-run", "--self-test"), ("--install", "--preview")):
+    assert launcher_args(parse()) == [] and launcher_args(parse("--launcher")) == []
+    assert launcher_args(parse("--launcher", "--", "--vr", "a b")) == ["--vr", "a b"]
+    for invalid in (("--dry-run", "--self-test"),):
         with redirect_stderr(io.StringIO()):
             try:
                 parse(*invalid)
                 raise AssertionError("accepted mutually exclusive arguments")
             except SystemExit as exc:
                 assert exc.code == 2
-    for invalid in (("--scope", "vr"), ("--remove-settings",), ("--preview", "--remove-settings")):
-        try:
-            installer_args(parse(*invalid))
-            raise AssertionError("accepted invalid action flags")
-        except ValueError:
-            pass
 
     with TemporaryDirectory() as tmp:
         # Windows TEMP may use an 8.3 alias; match build_plan()'s resolved paths.
@@ -2081,7 +2242,7 @@ def self_test():
         other = home / "other Steam"
         script = root / "tools/install_proton.py"
         script.parent.mkdir()
-        exe = script.parent / "edvr-installer.exe"
+        exe = script.parent / "ed-up-launcher.exe"
         exe.write_bytes(b"exe")
         proton = steam / "steamapps/common/Proton's $() Experimental"
         if os.name == "nt":
@@ -2123,7 +2284,7 @@ def self_test():
             globals()["windows_path"] = lambda path, _compat: "S:\\" + "\\".join(path.relative_to(steam).parts)
         env = {"WINEPREFIX": "/wrong", "WINESERVER": "/wrong/server", "PROTON_VERSION": "old",
                "STEAM_DIR": str(steam), "PATH": "/mock"}
-        args = parse("--dry-run", "--preview", "--scope", "flat")
+        args = parse("--dry-run")
         before = set(root.rglob("*"))
         buf = io.StringIO()
         calls = []
@@ -2141,7 +2302,7 @@ def self_test():
             assert command[:3] == [str(runtime / "_v2-entry-point"), "--verb=run", "--"]
             assert command[3:9] == [str(proton / "proton"), "runinprefix", str(exe), "--store", "steam", "--dir"]
             assert "waitforexitandrun" not in command
-            assert command[-4:] == ["--install", "--dry-run", "--scope", "flat"]
+            assert command[-2] == "--dir" and "--install" not in command
             assert str(game) in buf.getvalue() and shlex.join(command) in buf.getvalue()
             assert "WINEPREFIX" not in process_env and "WINESERVER" not in process_env
             assert "PROTON_VERSION" not in process_env and process_env["SteamAppId"] == APP_ID
@@ -2169,9 +2330,9 @@ def self_test():
             assert recorded_proton(compat) == proton
             (compat / "config_info").write_text(
                 "\n".join(path.replace("\\", "/") for path in record_lines) + "\n", encoding="utf-8")
-            assert run(parse("--preview"), script=script, home=home, environ=env,
+            assert run(parse(), script=script, home=home, environ=env,
                        launch=launch, platform="linux", geteuid=lambda: 1000) == 23
-            assert calls[-1][0][-2:] == ["--install", "--dry-run"]
+            assert calls[-1][0][-2] == "--dir" and str(exe) in calls[-1][0]
             if os.name != "nt":
                 original_game = game.with_name("original-product")
                 game.rename(original_game)
@@ -2198,7 +2359,7 @@ def self_test():
                 entry.unlink()
                 entry.write_bytes(b"script")
             try:
-                run(parse("--preview"), script=script, home=home, environ=env,
+                run(parse(), script=script, home=home, environ=env,
                     launch=launch, platform="linux", geteuid=lambda: 0)
                 raise AssertionError("root accepted")
             except ValueError as exc:
@@ -2269,6 +2430,7 @@ def self_test():
         finally:
             if os.name == "nt":
                 globals()["windows_path"] = original_windows_path
+    epic_plan_self_test()
     auto_selection_self_test()
     epic_self_test()
     preview_self_test()

@@ -8,7 +8,7 @@ After a game update, Elite still starts with ED-UP in place. Each fix looks for 
 
 On-foot VR in stereo needs that exact build. On any other build it waits for an ED-UP update.
 
-Frontier's launcher can delete `d3d11.dll` when it verifies the game files. Elite itself is fine. The verify took ED-UP out. Run the installer again, or press **Repair**. If the game folder lost your settings, the spare copy under `%LOCALAPPDATA%\EDVR` is what the installer offers to put back.
+Frontier's launcher can delete `d3d11.dll` when it verifies the game files. Elite itself is fine. The verify took ED-UP out. Run the launcher again, or press **Repair**. If the game folder lost your settings, the spare copy under `%LOCALAPPDATA%\EDVR` is what the launcher offers to put back.
 
 Starting the game from Epic does not put the patch back after a verify. Repair does.
 
@@ -16,29 +16,23 @@ Starting the game from Epic does not put the patch back after a verify. Repair d
 
 The [launcher](The-launcher.md) offers a newer release when one exists, and downloads it when you press Download. The release signature has to match the key inside the launcher.
 
-You can also download the new installer and run it over the copy you have. It keeps settings you have changed. A file you edited is kept when a later release no longer ships that file. DLSS and XeSS files stay when a release does not carry them.
+An update keeps settings you have changed. A file you edited is kept when a later release no longer ships that file. DLSS and XeSS files stay when a release does not carry them.
 
 ## Uninstall
 
-Open the installer or the launcher and press **Uninstall**.
+Open the launcher and press **Uninstall**.
 
 It removes ED-UP's files and restores the game's `openvr_api.dll`. If another mod was chained behind ED-UP, that mod goes back under its own name. `edvr.ini` stays, unless you ask for the settings to go too, so a later install finds them.
 
 From a terminal on Windows:
 
 ```text
-edvr-installer.exe --uninstall
-edvr-installer.exe --uninstall --remove-settings
+ed-up-launcher.exe --uninstall
+ed-up-launcher.exe --uninstall --remove-settings
 ```
 
-On Linux:
+On Linux, run `./ed-up-launcher.sh` and press **Uninstall**. For an Epic copy, add `--store epic`. [Epic on Linux](Install-on-Linux.md#epic-on-linux).
 
-```sh
-./edvr_installer.sh --uninstall
-```
-
-When both a Steam and an Epic copy are installed, add `--store epic` or `--store steam`. [Epic on Linux](Install-on-Linux.md#epic-on-linux).
-
-By hand, delete `d3d11.dll` from the game folder. In the `Openvr` folder you used, delete ED-UP's `openvr_api.dll` and rename `openvr_api_orig.dll` back to `openvr_api.dll`. Delete `edvr.ini` only when you want the settings gone. The installer is the one that also restores a chained mod. The hand steps miss that.
+By hand, delete `d3d11.dll` from the game folder. In the `Openvr` folder you used, delete ED-UP's `openvr_api.dll` and rename `openvr_api_orig.dll` back to `openvr_api.dll`. Delete `edvr.ini` only when you want the settings gone. The launcher is the one that also restores a chained mod. The hand steps miss that.
 
 Removing the [launcher](The-launcher.md) leaves the patch installed.

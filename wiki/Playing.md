@@ -26,4 +26,4 @@ With on-foot VR left on, the first headset launch opens an **Aiming on foot** pa
 
 ## A spare copy of your settings
 
-The installer keeps a copy of your settings outside the game folder. On Windows that is `%LOCALAPPDATA%\EDVR`. On Linux it is inside the Proton prefix, at `drive_c/users/steamuser/AppData/Local/EDVR`. If a game update deletes the files beside the game, the installer can put them back.
+The launcher keeps a copy of your settings outside the game folder. On Windows that is `%LOCALAPPDATA%\EDVR`. On Linux it is inside the Proton prefix, at `drive_c/users/steamuser/AppData/Local/EDVR`. If a game update deletes the files beside the game, the launcher can put them back.

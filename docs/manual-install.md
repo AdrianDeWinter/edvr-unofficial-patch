@@ -1,9 +1,9 @@
 # Installing native OpenXR by hand
 
-The release installer validates the game revision, preserves settings and
+The launcher validates the game revision, preserves settings and
 handles graphics-mod chaining. Use it for upgrades or an uncertain existing
 installation. These steps describe a fresh manual install of the complete
-native package.
+native package, from the release's `ed-up-<version>.zip`.
 
 1. Close Elite Dangerous.
 2. Find the folder containing `EliteDangerous64.exe`. Typical locations are
@@ -17,7 +17,7 @@ native package.
    `edvr.ini` and `edvr-flat.ini` there only if you do not already have them;
    otherwise keep your existing settings.
 5. For a VR install, preserve the game's original `Openvr\win64\openvr_api.dll`
-   as `openvr_api_orig.dll`. If that original already exists, use the installer
+   as `openvr_api_orig.dll`. If that original already exists, use the launcher
    rather than renaming a previously installed ED-UP DLL over it. The original
    is for uninstall; native ED-UP never loads it.
 6. For a VR install, copy all three files from the release's `openvr` directory
@@ -32,7 +32,7 @@ native package.
 
 The native module uses its sibling loader and the game's `d3d11.dll` when
 `edvr_openxr.ini` is absent. No manual configuration is needed for the layout
-above. A present but invalid startup configuration is an error. The installer
+above. A present but invalid startup configuration is an error. The launcher
 writes a valid configuration automatically and supports other detected OpenVR
 directory layouts.
 
@@ -40,14 +40,14 @@ SteamVR may be the selected OpenXR runtime. When another runtime is selected,
 the package does not require SteamVR or OpenComposite. There is no legacy
 OpenVR/LibOVR backend fallback. Logs go into `edvr_logs` beside the game.
 
-For uninstall, close Elite and use the installer, or remove the ED-UP files and
+For uninstall, close Elite and use the launcher, or remove the ED-UP files and
 restore the original `openvr_api.dll` and any graphics-mod chain. Restore the
 original before launching the unmodified game. Preserve your `edvr.ini` if you
 intend to reinstall.
 
 ## Which files each scope needs
 
-The installer asks "Install ED-UP for:" and writes the choice to a small
+The launcher asks "Install ED-UP for:" and writes the choice to a small
 descriptor, `edvr_profile.ini`, beside the game:
 
 ```
@@ -81,7 +81,7 @@ EDHM also installs as `d3d11.dll`. To run both:
 ED-UP passes everything through EDHM, and anything EDHM doesn't handle falls
 through to Windows' own `d3d11.dll`. Restart the game for this to take effect.
 If the name is wrong or the file won't load, ED-UP says so in the log and
-carries on without it. This is the same procedure the installer follows, and
+carries on without it. This is the same procedure the launcher follows, and
 what it will tell you it did.
 
 EDHM's uninstaller runs `del d3d11.dll`, which after this is ED-UP's file. To

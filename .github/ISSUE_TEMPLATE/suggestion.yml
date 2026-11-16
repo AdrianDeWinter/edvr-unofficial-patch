@@ -36,7 +36,7 @@ body:
         - The intro, the menus and loading
         - The cockpit interface and HUD
         - Anti-aliasing and performance
-        - The installer, edvr.ini or the in-headset menu
+        - The launcher, edvr.ini or the in-headset menu
         - Somewhere else, or everywhere
     validations:
       required: false
@@ -53,4 +53,4 @@ body:
     attributes:
       label: Anything else (optional)
       description: |
-        A screenshot or a short video of the thing, if it is something you can see. A link to a Frontier issue-tracker entry if one exists. If it is about performance, the zip from the installer's **Save logs** is still the most useful thing you can attach — the log prices every pass ED-UP runs.
+        A screenshot or a short video of the thing, if it is something you can see. A link to a Frontier issue-tracker entry if one exists. If it is about performance, the zip from the launcher's **Save logs** is still the most useful thing you can attach — the log prices every pass ED-UP runs.

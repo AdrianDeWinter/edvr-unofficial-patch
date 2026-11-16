@@ -45,13 +45,13 @@ not undo an edit to it, and clobbering it has cost a session. --ini backs
 it up first and says loudly what it did. The one exception is a settings
 file that is not there: a game update wipes the directory, edvr.ini with it,
 and without the file the F8 menu cannot save anything. An install then restores
-the file from the newest copy edvr-installer.exe mirrored under
+the file from the newest copy ed-up-launcher.exe mirrored under
 %LOCALAPPDATA%\\EDVR\\<leaf>-<store>\\ when there is one, and writes the shipped
 default only when there is not (a new file either way, so no backup, not
 journaled): a default written first would make the installer's own restore skip
 and its next mirror update replace the saved copy with the default. A copy found
 only under another store's folder is not guessed at; no default is written, and
-the install says to run edvr-installer.exe. --verify-only warns about a missing
+the install says to run ed-up-launcher.exe. --verify-only warns about a missing
 file and names where it would come from. The flat half's settings live in
 edvr-flat.ini instead. --ini writes the settings files of the chosen scope:
 both writes edvr.ini and edvr-flat.ini, vr writes edvr.ini, flat writes
@@ -1616,7 +1616,7 @@ def _missing_ini_defaults(root, target, scope, handled=()):
 # ---------------------------------------------------------------------------
 # The settings mirror (src/installer/mirror.cpp, src/common/iniedit.cpp)
 #
-# edvr-installer.exe keeps the newest copies of edvr.ini and edvr-flat.ini under
+# ed-up-launcher.exe keeps the newest copies of edvr.ini and edvr-flat.ini under
 # %LOCALAPPDATA%\EDVR\<leaf>-<store>\ and restores them when the game directory has
 # none, which is what a game update leaves behind. A default written first would
 # make that restore skip, and the installer's next mirror update would replace the
@@ -1689,7 +1689,7 @@ def _mirror_ini_plan(target, scope):
     the newest copy from the mirror folder this directory's source names. blocked:
     (half, target, paths, why), a file with a copy only under another store's
     folder, or a copy that could not be read; no default is written over those,
-    because edvr-installer.exe restores from the copy and a default would stop it.
+    because ed-up-launcher.exe restores from the copy and a default would stop it.
     Nothing here writes."""
     root = mirror_root()
     if not root:
@@ -2070,7 +2070,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
     # could not be read" for every edit. A flat half that can inherit the settings
     # of edvr.ini does (seed_ini, below) and gets no default.
     # A default whose template is not there is a warning, not a refusal: the payload is what the install is for.
-    # The mirror edvr-installer.exe keeps is asked first (see _mirror_ini_plan): a file it holds is restored, not
+    # The mirror ed-up-launcher.exe keeps is asked first (see _mirror_ini_plan): a file it holds is restored, not
     # defaulted, and a copy this tool cannot place with confidence stops the default rather than being overwritten.
     mirror_restore, mirror_blocked = ([], []) if include_ini else _mirror_ini_plan(target, scope)
     mirror_halves = {half for half, _, _, _ in mirror_restore} | {half for half, _, _, _ in mirror_blocked}
@@ -2111,7 +2111,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
             leftovers.append(descriptor)
         if leftovers:
             raise SystemExit("[edvr] flat preflight refused existing VR or unknown profile state; "
-                             "use edvr-installer.exe to convert and restore originals (run its "
+                             "use ed-up-launcher.exe to convert and restore originals (run its "
                              "update/repair once first if this install was made by this tool, so "
                              "it records the files it must prove before converting):\n       " +
                              "\n       ".join(leftovers))
@@ -2185,7 +2185,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
                   "the mirror copy %s" % (ini_target, source))
         for _, ini_target, paths, why in mirror_blocked:
             print("[edvr] WARNING: %s is missing, so the F8 menu cannot save settings; a mirror copy exists (%s) "
-                  "but %s, so an install writes no default: run edvr-installer.exe to restore it" %
+                  "but %s, so an install writes no default: run ed-up-launcher.exe to restore it" %
                   (ini_target, ", ".join(paths), why))
         for _, _, ini_target, _ in default_ini:
             # Not a mismatch (no settings file is part of the payload) but the F8 menu cannot save without one.
@@ -2200,7 +2200,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
             if not any(name.startswith("edvr") for name in names.values()):
                 raise ValueError("existing d3d11.dll is a graphics mod")
         except (OSError, ValueError) as exc:
-            raise SystemExit("[edvr] Use edvr-installer.exe to preserve and chain the existing d3d11.dll: %s" % exc)
+            raise SystemExit("[edvr] Use ed-up-launcher.exe to preserve and chain the existing d3d11.dll: %s" % exc)
     known, running = strict_game_running(target)
     if not dry_run and (not known or running):
         print("[edvr] ERROR: native staging requires a proven stopped game%s" % probe_reason())
@@ -2284,7 +2284,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
               "backup)" % (dst, source))
     for half, dst, paths, why in mirror_blocked:
         print("       WARNING  %s is missing and a mirror copy exists (%s) but %s, so no default is written: run "
-              "edvr-installer.exe to restore it" % (dst, ", ".join(paths), why))
+              "ed-up-launcher.exe to restore it" % (dst, ", ".join(paths), why))
     if seed_ini:
         print("       seed     %s (from edvr.ini; a new file, so no backup)" % _ini_target(target, "flat"))
     for half, source, dst, data in default_ini:
@@ -2362,10 +2362,10 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
             print("[edvr] %s settings were missing: restored %s from the copy kept outside the game folder, %s "
                   "(a game update removes this file; the F8 menu needs it to save)" % (half, dst, source))
         except OSError as exc:
-            print("[edvr] WARNING: could not restore %s from %s (%s); run edvr-installer.exe to restore it" %
+            print("[edvr] WARNING: could not restore %s from %s (%s); run ed-up-launcher.exe to restore it" %
                   (dst, source, exc))
     for half, dst, paths, why in mirror_blocked:
-        print("[edvr] WARNING: %s was not written: a mirror copy exists (%s) but %s; run edvr-installer.exe to "
+        print("[edvr] WARNING: %s was not written: a mirror copy exists (%s) but %s; run ed-up-launcher.exe to "
               "restore it" % (dst, ", ".join(paths), why))
     if seed_ini:
         try:
@@ -2719,7 +2719,7 @@ def _scope_self_test():
               "the migrated chain did not land in the default edvr.ini: %r" % shared)
 
         # The settings mirror (%LOCALAPPDATA%\EDVR\<leaf>-<store>\): a missing settings file comes back from the
-        # newest copy edvr-installer.exe kept, not from the shipped default, because a default written first makes
+        # newest copy ed-up-launcher.exe kept, not from the shipped default, because a default written first makes
         # the installer's restore skip and its next mirror update replace the saved copy with the default.
         def mirror_of(g, slug="folder-you-chose"):
             d = os.path.join(local_app_data, "EDVR", os.path.basename(g) + "-" + slug)
@@ -2798,11 +2798,11 @@ def _scope_self_test():
         Path(mirror_of(g, "epic"), "edvr.ini").write_bytes(b"[user]\nepic-mirror=1\n")
         before = tree(g)
         code, text = run(args_for(g, "--scope", "both", "--dry-run", tag="mire"))
-        check(code == 0 and tree(g) == before and "no default is written" in text and "edvr-installer.exe" in text,
+        check(code == 0 and tree(g) == before and "no default is written" in text and "ed-up-launcher.exe" in text,
               "the dry-run plan did not refuse a default over another store's mirror copy: %r" % text)
         code, text = run(args_for(g, "--scope", "both", tag="mire"))
         check(code == 0 and not Path(g, "edvr.ini").exists() and not Path(g, "edvr-flat.ini").exists()
-              and "edvr-installer.exe" in text,
+              and "ed-up-launcher.exe" in text,
               "a default was written over another store's mirror copy, or the install did not say why not: %r" % text)
         # No LOCALAPPDATA (a Linux host): there is no mirror, and the default is written as before.
         os.environ.pop("LOCALAPPDATA")

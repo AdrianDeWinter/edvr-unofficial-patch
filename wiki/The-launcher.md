@@ -1,6 +1,6 @@
 # The launcher
 
-The launcher is optional. It is the installer, plus updates, plus a Play button. You can install from the zip and start Elite yourself. [Install on Windows](Install-on-Windows.md) and [Install on Linux](Install-on-Linux.md) cover both downloads.
+The launcher installs ED-UP, keeps it up to date, and has a Play button. You can start Elite yourself and ignore Play, or copy the files by hand from `ed-up-<version>.zip` instead. [Install on Windows](Install-on-Windows.md) and [Install on Linux](Install-on-Linux.md) say how.
 
 ## What it talks to
 
@@ -58,7 +58,7 @@ Download `ed-up-launcher-linux-<version>.zip` from the [release](https://github.
 
 It runs inside Elite's Proton prefix. Downloads and settings stay there, under `drive_c/users/steamuser/AppData/Local/EDVR` in `steamapps/compatdata/359320/pfx`.
 
-Play starts Elite through Steam. Starting the game directly, without Steam, is a Windows checkbox. The Linux launcher is for a Steam install. An Epic copy on Linux is installed with the [Linux installer](Install-on-Linux.md#epic-on-linux) and started from the program you installed it with.
+Play starts Elite through Steam. Starting the game directly, without Steam, is a Windows checkbox. On Linux, Play is for a Steam install. An Epic copy can be installed with the launcher, which is run under the copy's own Wine or Proton ([Epic on Linux](Install-on-Linux.md#epic-on-linux)), and it starts from Heroic, Legendary, Lutris or Epic.
 
 The window, the updater, and Play are new on Linux. If one of them fails, send the log. [Ask for help](Ask-for-help.md).
 

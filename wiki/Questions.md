@@ -10,7 +10,7 @@ ED-UP leaves your account, ships, cargo, credits, and missions alone. The patch 
 
 ## Does it work with Horizons?
 
-The installer accepts Odyssey. It stops when it finds the older Horizons client.
+The launcher accepts Odyssey. It stops when it finds the older Horizons client.
 
 ## Do I need OpenComposite or SteamVR?
 
@@ -26,11 +26,11 @@ Yes. Choose **Flat only**, or choose **VR and flat** and launch Elite on the mon
 
 ## Does it run on a Steam Deck?
 
-Yes. Use Desktop Mode and the Linux package. [Install on Linux](Install-on-Linux.md).
+Yes. Use Desktop Mode and the Linux launcher. [Install on Linux](Install-on-Linux.md).
 
 ## I own it on Steam and on Epic.
 
-On Windows the installer lists each copy. Pick the one you want. On Linux, when both a Steam and an Epic copy are installed, name the store with `--store steam` or `--store epic`. [Epic on Linux](Install-on-Linux.md#epic-on-linux).
+On Windows the launcher lists each copy. Pick the one you want. On Linux, when both a Steam and an Epic copy are installed, name the store with `--store steam` or `--store epic`. [Epic on Linux](Install-on-Linux.md#epic-on-linux).
 
 ## Where do my settings live?
 

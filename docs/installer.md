@@ -1,19 +1,28 @@
-# The installer
+# The install engine
 
-`edvr-installer.exe` — one executable, carrying the native graphics/runtime
-pair, `openxr_loader.dll`, its license notice, `edvr.ini`, `edvr-flat.ini` and
-optional NVIDIA DLSS runtime as resources. It finds the game, installs or
-updates ED-UP, preserves the settings you have changed, keeps other mods
-working, and can put everything back.
+The install engine is the code in `src\installer\` that finds the game, installs
+or updates ED-UP, preserves the settings you have changed, keeps other mods
+working, and can put everything back. `ed-up-launcher.exe` runs it, installing
+from the release's files, which it has downloaded and checked
+(`docs\design-launcher-2026-11-07.md`, `docs\design-manifest-schema2-2026-11-12.md`).
 
-This file is why it does what it does. Using it is the player guide:
+A standalone `edvr-installer.exe` used to be built from the same sources, with
+the native pair, `openxr_loader.dll`, the notices, `edvr.ini`, `edvr-flat.ini`
+and the DLSS and XeSS runtimes embedded in it as resources. It was dropped on
+2026-11-16. The release assets are now the launcher, `ed-up-<version>.zip` (the
+files for a manual install), the split assets the launcher updates from, and
+the Linux launcher package. Below, "the installer" means this engine as the
+launcher runs it. The dated evidence further down names the standalone
+installer where it was the program under test.
+
+This file is why the engine does what it does. Using it is the player guide:
 [Windows](../wiki/Install-on-Windows.md) and
 [Linux](../wiki/Install-on-Linux.md).
 
 ## Status
 
-- **One installer:** `edvr-installer.exe` covers VR and flat; the flat
-  installer is retired.
+- **One engine:** the launcher covers VR and flat; the flat installer is
+  retired, and so is the standalone `edvr-installer.exe` (2026-11-16).
 - **Scope:** "Install ED-UP for:" offers VR and flat (recommended), VR only, or
   Flat only; `--scope both|vr|flat` does the same. A new install gets both; an
   existing install keeps its scope.
@@ -32,24 +41,27 @@ This file is why it does what it does. Using it is the player guide:
   candidate, preserving settings and seat memory through relabelling and wipes.
   Without a store record, runtime lookup also retains a sole unclaimed or
   matching-owner legacy mirror despite a different suffix.
-- **Linux Epic installer:** The native Epic Launcher Preview,
-  Heroic/Legendary, Lutris and existing Wine Epic records identify the game
-  and its existing prefix. The wrapper uses the recorded runner and passes
-  Epic identity to the Windows installer. Game launching stays with the
-  original Epic manager.
+- **Linux Epic:** the native Epic Launcher Preview, Heroic/Legendary, Lutris
+  and existing Wine Epic records identify the game and its existing prefix.
+  `tools/install_proton.py` uses the recorded runner to run the launcher
+  (`ed-up-launcher.exe`) in that prefix, with `--store epic`. The route was
+  removed with `edvr-installer.exe` and restored for the launcher on
+  2026-11-16, and has not been run on Linux hardware. Play is a Steam action,
+  so the game starts from the original Epic manager.
 - **Installs by `tools\install_edvr.py` (2026-10-14):** the game's original
   runtime is recovered from the newest receipt that still holds it, so an
   update, a switch to flat-only and an uninstall work after two tool installs
   (see "Receipts from the tool"). `installer_test` pins it over real files.
-- **Linux Steam wrapper:** `tools/install_proton.py` and `edvr_installer.sh`
-  ship in the Linux installer and full release ZIPs. They use Steam's existing
+- **Linux Steam wrapper:** `tools/install_proton.py` ships in
+  `ed-up-launcher-linux-<version>.zip` as `ed-up-launcher-linux.py`, run by
+  `ed-up-launcher.sh`, and runs only the launcher. It uses Steam's existing
   Elite prefix, recorded Proton runner, and required runtime; Flatpak Steam
   uses its selected sandbox, including installed compatibility-tool extensions.
   Steam identity is passed explicitly, and unrelated shortcut prefixes are
-  ignored. Protontricks is no longer needed. On 2026-10-16, the direct route reached the
-  Odyssey folder. An older flat installer refused to proceed while Elite was
-  running. A current unified installer preview and actual installation remain
-  unverified; the game session logs do not establish VR rendering behavior.
+  ignored. Protontricks is no longer needed. On 2026-10-16, the direct route
+  reached the Odyssey folder with the standalone installer of that day. The
+  launcher through this wrapper has not been flown on Linux, and the game
+  session logs do not establish VR rendering behavior.
 - **Windows validation:** Run the full `build.bat --wait-lock` on native
   Windows; local Wine cannot pass the process-monitor self-tests. A build
   result and an installer test are separate evidence.
@@ -104,7 +116,7 @@ On Linux, the wrapper reads the native Epic Launcher Preview, native and
 Flatpak Heroic, standalone Legendary, Lutris, and existing Wine Epic
 installation records. It confirms the game executable, associates the
 existing prefix and recorded runner, and passes `--store epic` with that
-exact product folder to the Windows installer.
+exact product folder to the launcher.
 
 The installer records the store in `edvr_install\state.ini`. The F8 settings
 menu and saved seat positions use that record to select the same mirror as
@@ -349,8 +361,8 @@ follows the same split for every operation:
   the restore offer and the copy back. A restore that could not copy back every
   settings file it holds says which one failed and reports failure, so a flat
   file lost behind a shared file that did come back is not a success.
-- **The release** carries one installer, which carries both shipped defaults,
-  `edvr.ini` and `edvr-flat.ini`.
+- **The release** carries both shipped defaults, `edvr.ini` and
+  `edvr-flat.ini`, in its core zip and in `ed-up-<version>.zip`.
 
 ## The settings screen
 
@@ -570,7 +582,7 @@ library, and NGX keeps an over-the-air model cache under
 `ProgramData\NVIDIA\NGX`, but no super-resolution runtime), so the application
 has to carry it, and the DLSS SDK licence allows exactly that: the runtime may
 be distributed as incorporated into an application, not as a stand-alone
-download. So it rides inside the installer, unmodified, and is placed beside
+download. So it rides in the release, unmodified, and is placed beside
 the game's executable, where NGX looks for it, under three rules. Only where an
 NVIDIA adapter is present, by DXGI's vendor id (a machine with an AMD
 integrated GPU beside an RTX card counts): it is 59 MB, and on any other card
@@ -578,8 +590,8 @@ the pass falls back to its own history regardless. Only when the slot is empty
 or holds the copy a previous ED-UP install placed: a copy you put there
 yourself, or one NVIDIA's updater replaced, is left alone, and the report says
 so. And uninstall removes only the copy ED-UP placed, by the hash in the install
-record. A build made without the DLSS SDK ships an installer without the
-runtime, and says so in its window and its report.
+record. A build made without the DLSS SDK ships a release without the
+runtime, and the window and the report say so when the payload has none.
 
 ## The install record keyed by file id
 
@@ -602,11 +614,14 @@ passes it, and it adds candidates for those files.
 
 ## What it does not do
 
-No network access of any kind: it installs what it carries, and "update" means
-running the newer installer. No telemetry. No registry writes — the registry is
-only read, to find the game. No Add/Remove Programs entry, no shortcuts, no
-services, no scheduled tasks. Nothing outside the game folder, `edvr_backup\`
-and `edvr_install\`.
+The engine itself makes no network call and sends no telemetry. It reads the
+registry only to find the game, and it writes nothing outside the game folder,
+`edvr_backup\` and `edvr_install\`, apart from the settings mirror under
+`%LOCALAPPDATA%\EDVR`. The launcher around it does what the standalone installer
+never did: it asks GitHub for releases, downloads their files into its cache and
+checks each, and on its first run copies itself to `%LOCALAPPDATA%\EDVR\launcher\`
+and adds a Start menu shortcut and an Add/Remove Programs entry
+(`docs\design-launcher-2026-11-07.md`).
 
 ## The command line
 
@@ -614,22 +629,209 @@ The window is the product; the command line is what makes it testable and
 scriptable.
 
 ```
-edvr-installer.exe --install [--dir D] [--scope both|vr|flat] [--dry-run]
-edvr-installer.exe --repair [--dir D]
-edvr-installer.exe --uninstall [--dir D] [--remove-settings]
-edvr-installer.exe --collect-logs [--dir D]
-edvr-installer.exe --help
+ed-up-launcher.exe --install [--dir D] [--scope both|vr|flat] [--dry-run]
+ed-up-launcher.exe --repair [--dir D]
+ed-up-launcher.exe --uninstall [--dir D] [--remove-settings]
+ed-up-launcher.exe --collect-logs [--dir D]
+ed-up-launcher.exe --help
 ```
+
+The launcher installs from a release it has downloaded (`--update`, or Download
+in the window) or from `--payload <dir>`: the unpacked files of
+`ed-up-<version>.zip` with `ed-up-manifest-v2.json` beside them. The zip does not
+carry that manifest; it is an asset of the release. With neither, there is
+nothing to install from, and the window says so. That is what replaced the
+standalone installer's embedded files: an install with no network now needs the
+release's files and its manifest copied across by hand. `--help` lists the
+launcher's own options (`--check-update`, `--update`, `--channel`, `--payload`,
+`--data-root`, `--unregister`, `--headless`).
 
 `--scope` is the window's "Install ED-UP for:" choice: `both` (VR and flat),
 `vr` or `flat`. Without it, the scope already installed is kept, and a new
 install gets `both`. `--replace-settings` does what it says. Without `--dir` it
 finds the installs itself and refuses to guess when there is more than one.
-`--dry-run` prints the plan and touches nothing. It is a GUI-subsystem program,
+`--dry-run` prints the plan and touches nothing. The launcher is a GUI-subsystem program,
 so a command-line run borrows the calling console; run it with `start /wait` if
 the interleaved prompt bothers you.
 
-### Linux installer wrapper
+### Linux launcher wrapper
+
+`tools/install_proton.py` runs the launcher inside Elite's Proton prefix. It
+ships as `ed-up-launcher-linux.py` in `ed-up-launcher-linux-<version>.zip`,
+beside `ed-up-launcher.exe`, `ed-up-launcher.sh`, `epic_library.py` and
+`README-launcher-linux.txt`. The wrapper used to run the standalone installer
+too. That mode is deleted (2026-11-16) with its `--install`, `--repair`,
+`--uninstall`, `--collect-logs`, `--preview`, `--scope`, `--replace-settings`,
+`--remove-settings` and `--installer` options: argparse now refuses them, and the
+launcher's own options go after `--` for either store. `--launcher` is still
+accepted and ignored, because `ed-up-launcher.sh` passes it.
+
+The launcher needs Python 3 and Steam's existing Proton installation, with no
+Protontricks or system Wine dependency. Run Elite once from Steam, close it,
+then run `./ed-up-launcher.sh` as your normal user. On Steam Deck, use Desktop
+Mode. The launcher window opens on the Odyssey product folder. Options for the
+launcher itself go after a lone `--`, and the wrapper refuses a `--dir` or
+`--store` there, since it sets both. The window installs, updates, repairs and
+uninstalls from the release the launcher has downloaded, and its Save logs
+writes to Downloads.
+
+The wrapper discovers native or Flatpak Steam roots, reads Steam's library and
+app manifests, and requires an existing Elite prefix (`pfx/drive_c`). It uses
+the Proton runner recorded as configuring that prefix in `config_info`, then
+finds the runtime named by the runner's `require_tool_appid` in Steam's
+installed app manifests. Windows paths are formed from the prefix's existing
+DOS drive links. If you change Elite's Proton version in Steam, launch Elite
+once before running the wrapper so the prefix record reflects that version.
+`--proton` accepts a Proton directory or script as an explicit override.
+
+Flatpak Steam runs the recorded Proton and runtime inside the installed Steam
+sandbox. The wrapper checks the selected deployment and its compatibility-tool
+extension metadata without starting Flatpak. Missing or ambiguous deployments
+and extension mounts are refused rather than replaced with another runner.
+For Steam, named system Flatpak installations are also refused because their
+global extension search order is not evaluated here. An explicit `--proton`
+selects a host runner and bypasses the sandbox.
+
+The wrapper's own options are `--game-dir` for a different product folder inside
+the installed game tree, `--launcher-exe` for a separate exe, `--steam-dir`
+or `STEAM_DIR` for a nonstandard Steam root, and `--store`, `--prefix`, `--wine`
+and `--proton`, which the Epic section below covers. Use `--store steam --prefix` to
+select an existing custom compatdata directory (the parent of `pfx`);
+`pfx/drive_c` must already exist. An inherited `STEAM_COMPAT_DATA_PATH` is used
+only when its Steam app identity identifies Elite; a different shortcut's prefix
+is ignored. The launcher receives `--store steam` even when a DOS drive alias
+prevents Windows-side discovery from recognizing the folder again.
+
+Under Wine/Proton, the launcher's Play action opens `steam://run/359320`.
+[Proton's Steam helper](https://github.com/ValveSoftware/Proton/blob/proton_11.0/steam_helper/steam.c)
+intercepts the older `rungameid` address for its own app as a restart request,
+which has no supervisor under `runinprefix`. Valve documents the forwarded
+`run` address in its [Steamworks API overview](https://partner.steamgames.com/doc/sdk/api#initialization_and_shutdown).
+Native Windows keeps its existing launch address. Steam chooses the game's
+launch mode; the wrapper does not change its launch options.
+
+The wrapper only launches the launcher. Keep any existing required Elite
+launch options; headset/OpenXR setup and Proton gameplay remain unverified
+here, and so does the launcher itself on Linux: it has not been flown there.
+
+### Linux Epic: the launcher under the Epic copy's runner
+
+The wrapper uses `epic_library.py` for one read-only inventory, shared with
+`install_edvr.py --target epic`. It confirms `EliteDangerous64.exe` beneath
+the manager's recorded install root and associates the existing prefix;
+journal directories alone do not identify a game install. Local records may
+name custom drives and Unicode paths.
+
+| Manager | Records read |
+|---|---|
+| Native Epic Launcher Preview | `installations.jsonl` beneath `$XDG_DATA_HOME/com.epicgames.eglv2` (default `~/.local/share/com.epicgames.eglv2`), with the matching existing `compat/compatdata/<artifactId>` prefix |
+| Heroic, native and Flatpak | `legendaryConfig/legendary/installed.json` and the matching `GamesConfig/<app>.json` under its configuration directory |
+| Standalone Legendary | `installed.json` and `config.ini`, including the configured prefix and Wine environment |
+| Lutris, native and Flatpak | Game and runner YAML, with Epic `.item` records inside the selected prefix |
+| Epic Games Launcher in Wine | Existing prefixes' Epic `.item` records; an unrecorded runner requires an explicit override |
+
+The schemas follow the manager owners:
+[Heroic](https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/blob/main/src/backend/game_config.ts),
+[Legendary](https://github.com/derrod/legendary/blob/master/legendary/core.py),
+and [Lutris](https://github.com/lutris/lutris/blob/master/lutris/config.py).
+The native Preview's package evidence and journal format are documented in
+[Native Epic Linux Preview](epic-linux-preview.md).
+Discovery reads their files directly. It does not invoke a manager's launch
+or authentication commands, including Legendary's authenticated dry-run.
+
+With only an Epic copy found, or with `--store epic`, `install_proton.py` runs
+the launcher under that copy's runner, in its prefix, with `--store epic --dir
+<Windows path of the verified product folder>` and then the words after `--`
+(`./ed-up-launcher.sh --store epic -- --install --scope flat`). With no words
+after `--` the launcher opens its window. With a Steam copy and an Epic copy
+both found, it stops and asks for `--store steam` or `--store epic` and
+`--game-dir`. `--store steam` with `--wine` is refused: `--wine` is Epic's
+option.
+
+Choose `--store epic` when Steam is also present. `--game-dir` selects one
+confirmed product when several Epic copies exist. The wrapper requires an
+existing prefix and its recorded installed Wine/Proton/UMU runner. Use
+`--prefix` with `--wine`, or an explicit installed `--proton`, when the
+metadata cannot supply that relationship; a complete `--game-dir`, `--prefix`
+and runner binding is also the way past competing records. It reports missing or
+ambiguous records instead of choosing another prefix or replacement runner.
+
+For the native Epic Preview, the prefix's Proton `config_info` identifies the
+runner used by the game's last launch. Other cached runtime versions are not
+substitutes. After a runner change, start Elite once through Epic before
+running the launcher. A missing or stale Proton record needs that first launch
+or an explicit `--proton` override. Journal deletion and incomplete records
+are respected even when older game files remain on disk.
+
+Epic's direct Proton route invokes the recorded Proton with `runinprefix`;
+it does not require a Steam installation or Steam-managed runtime. Steam's
+own route retains its recorded Steam runtime. UMU uses the selected installed
+Proton and requires its existing runtime rather than downloading one.
+
+Flatpak runners use their manager's sandbox and invocation-only filesystem
+access. Explicit `--wine` and `--proton` paths instead select host runners.
+PATH-based Wine and UMU selection respects runtime/application metadata and
+applicable system/user Flatpak overrides. An unreadable override or unset
+PATH requires an explicit host runner. `--dry-run` starts no process and
+writes no files.
+
+The explicit store is restricted to the exact product folder the launcher is
+given. Play is a Steam action on Linux (see above), so an Epic copy starts from
+its original Heroic, Legendary, Lutris or Epic manager, which supplies its
+normal authentication. The launcher's window, its updates and the options
+after `--` are the launcher's own; none of them has been run through this
+route on Linux hardware.
+
+This route is the one the standalone installer's wrapper had. It was removed
+with `edvr-installer.exe` (commit 26ac5972) and restored the same day for the
+launcher: `build_epic_plan`, the Epic runner helpers and `--wine` come from the
+text before that commit, with the launcher exe as the program run and the
+launcher's options after `--` in place of the installer's action options.
+`tools/install_proton.py --self-test` holds it: `epic_plan_self_test` runs on
+any host with the Windows path of the game folder replaced; `epic_self_test`,
+`preview_self_test` and the Epic cases of `auto_selection_self_test` need Linux
+symlinks and Flatpak layouts and run only there (`.github/workflows/linux-tools.yml`).
+`tools/package_native.py` refuses a package whose wrapper imports a module of
+`tools/` that the launcher's Linux ZIP does not carry, as it would with
+`epic_library.py` missing.
+
+## How it is built and tested
+
+`build.bat` builds the native graphics/runtime pair first. A full build then runs
+`tools/gen_installer_rc.py --release-files`, which validates the native graphics
+marker/providers, native runtime exports, bundled loader and notice, and writes
+the two release settings files nothing else makes (`edvr-flat.ini` and
+`edvr_profile_vr.ini`). A missing or mismatched native file fails the build.
+`tools/package_native.py` packs the release from `build\` and checks the
+launcher before it does: its version stamp, no embedded payload resources, the
+min-ed-launcher licence, and the update keys.
+
+The launcher is one of the test rigs (`:rig_launcher`). It is built twice, under
+two different `EDVR_VER` values, and the two exes must be the same bytes. The
+linker's own manifest is turned off with `/MANIFEST:NO` — two `RT_MANIFEST`
+resources in one image is a program Windows refuses to start. Two guards exist
+because the failure they catch is invisible: the resource generator refuses a
+manifest that is not valid XML, and the rig runs the finished launcher with
+`--help` and fails if it does not start. A bad manifest links perfectly and
+dies before `main()`.
+
+The installed game's exact executable profile is checked separately by the
+engine before any mutation.
+
+`tools/installer_test` is the reason the planner is a pure function of a survey
+of the folder. Every case worth getting right is a state of somebody else's
+machine — EDHM in the `d3d11.dll` slot, another mod's installer having
+overwritten ours, a game update that put the stock `openvr_api.dll` back, an
+original lost to a double rename, an `edvr.ini` full of tuned values — and none
+of them can be produced to order on the machine doing the build. They are all
+written down there instead, along with an end-to-end install, uninstall and
+rollback against real files in a scratch folder. `tools/launcher_test` covers
+the launcher around the engine.
+
+## History: the standalone installer's Linux wrapper
+
+These two records are from 2026-10-16, when the wrapper ran `edvr-installer.exe`.
+They are kept because the `ruled out` lines are still true.
 
 #### 2026-10-16 preview evidence
 
@@ -672,154 +874,3 @@ required gates did not pass. The temporary Windows test-build workflow was
 removed at the maintainer's request; full validation uses the unchanged
 `build.bat --wait-lock` on native Windows. A green build does not establish an
 installer flight.
-
-The Linux installer ZIP includes `edvr_installer.sh`, `epic_library.py`,
-`edvr-installer-linux.py`, the Windows installer, and `README-linux.txt`. The
-launcher needs Python 3 and Steam's existing Proton installation, with no
-Protontricks or system Wine dependency. Run Elite once from Steam, close it,
-then run the wrapper as your normal user. On Steam Deck, use Desktop Mode. With
-no action option, the Windows installer GUI opens with the Odyssey product
-folder selected. For a flat install with a current installer build:
-
-```sh
-./edvr_installer.sh --install --scope flat
-```
-
-To see the Windows install plan without changing game files:
-
-```sh
-./edvr_installer.sh --preview --scope flat
-```
-
-Preview invokes the Windows installer with `--install --dry-run` through the
-selected Proton and its runtime. It may update Proton prefix bookkeeping. The
-wrapper's `--dry-run` instead resolves and prints the exact paths and command
-without starting a process or writing files. The shell launcher works from any
-directory and forwards all options to the Python wrapper, which you can run
-directly as `python3 edvr-installer-linux.py`.
-
-The wrapper discovers native or Flatpak Steam roots, reads Steam's library and
-app manifests, and requires an existing Elite prefix (`pfx/drive_c`). It uses
-the Proton runner recorded as configuring that prefix in `config_info`, then
-finds the runtime named by the runner's `require_tool_appid` in Steam's
-installed app manifests. Windows paths are formed from the prefix's existing
-DOS drive links. If you change Elite's Proton version in Steam, launch Elite
-once before running the wrapper so the prefix record reflects that version.
-`--proton` accepts a Proton directory or script as an explicit override.
-
-Flatpak Steam runs the recorded Proton and runtime inside the installed Steam
-sandbox. The wrapper checks the selected deployment and its compatibility-tool
-extension metadata without starting Flatpak. Missing or ambiguous deployments
-and extension mounts are refused rather than replaced with another runner.
-For Steam, named system Flatpak installations are also refused because their
-global extension search order is not evaluated here. This restriction does not
-apply to the Epic Flatpak route. An explicit `--proton` selects a host runner
-and bypasses the sandbox.
-
-The wrapper also accepts `--repair`, `--uninstall`, and `--collect-logs`. Use
-`--game-dir` for a different product folder inside the installed game tree,
-`--installer` for a separate EXE, and `--steam-dir` or `STEAM_DIR` for a
-nonstandard Steam root. Use `--store steam --prefix` to select an existing
-custom compatdata directory (the parent of `pfx`); `pfx/drive_c` must already
-exist. An inherited `STEAM_COMPAT_DATA_PATH` is used only when its Steam app
-identity identifies Elite; a different shortcut's prefix is ignored. The
-Windows installer and launcher receive `--store steam` even when a DOS drive
-alias prevents Windows-side discovery from recognizing the folder again.
-
-Under Wine/Proton, the launcher's Play action opens `steam://run/359320`.
-[Proton's Steam helper](https://github.com/ValveSoftware/Proton/blob/proton_11.0/steam_helper/steam.c)
-intercepts the older `rungameid` address for its own app as a restart request,
-which has no supervisor under `runinprefix`. Valve documents the forwarded
-`run` address in its [Steamworks API overview](https://partner.steamgames.com/doc/sdk/api#initialization_and_shutdown).
-Native Windows keeps its existing launch address. Steam chooses the game's
-launch mode; the wrapper does not change its launch options.
-
-The wrapper only launches the installer. Keep any existing required Elite
-launch options; headset/OpenXR setup and Proton gameplay remain unverified
-here.
-
-### Linux Epic detection and installation
-
-The wrapper uses `epic_library.py` for one read-only inventory shared with
-`install_edvr.py --target epic`. It confirms `EliteDangerous64.exe` beneath
-the manager's recorded install root and associates the existing prefix;
-journal directories alone do not identify a game install. Local records may
-name custom drives and Unicode paths.
-
-| Manager | Records read |
-|---|---|
-| Native Epic Launcher Preview | `installations.jsonl` beneath `$XDG_DATA_HOME/com.epicgames.eglv2` (default `~/.local/share/com.epicgames.eglv2`), with the matching existing `compat/compatdata/<artifactId>` prefix |
-| Heroic, native and Flatpak | `legendaryConfig/legendary/installed.json` and the matching `GamesConfig/<app>.json` under its configuration directory |
-| Standalone Legendary | `installed.json` and `config.ini`, including the configured prefix and Wine environment |
-| Lutris, native and Flatpak | Game and runner YAML, with Epic `.item` records inside the selected prefix |
-| Epic Games Launcher in Wine | Existing prefixes' Epic `.item` records; an unrecorded runner requires an explicit override |
-
-The schemas follow the manager owners:
-[Heroic](https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/blob/main/src/backend/game_config.ts),
-[Legendary](https://github.com/derrod/legendary/blob/master/legendary/core.py),
-and [Lutris](https://github.com/lutris/lutris/blob/master/lutris/config.py).
-The native Preview's package evidence and journal format are documented in
-[Native Epic Linux Preview](epic-linux-preview.md).
-Discovery reads their files directly. It does not invoke a manager's launch
-or authentication commands, including Legendary's authenticated dry-run.
-
-Choose `--store epic` when Steam is also present. `--game-dir` selects one
-confirmed product when several Epic copies exist. The wrapper requires an
-existing prefix and its recorded installed Wine/Proton/UMU runner. Use
-`--prefix` with `--wine`, or an explicit installed `--proton`, when the
-metadata cannot supply that relationship. It reports missing or ambiguous
-records instead of choosing another prefix or replacement runner.
-
-For the native Epic Preview, the prefix's Proton `config_info` identifies the
-runner used by the game's last launch. Other cached runtime versions are not
-substitutes. After a runner change, start Elite once through Epic before
-installing ED-UP. A missing or stale Proton record needs that first launch
-or an explicit `--proton` override. Journal deletion and incomplete records
-are respected even when older game files remain on disk.
-
-Epic's direct Proton route invokes the recorded Proton with `runinprefix`;
-it does not require a Steam installation or Steam-managed runtime. Steam's
-own route retains its recorded Steam runtime. UMU uses the selected installed
-Proton and requires its existing runtime rather than downloading one during
-installation.
-
-Flatpak runners use their manager's sandbox and invocation-only filesystem
-access. Explicit `--wine` and `--proton` paths instead select host runners.
-PATH-based Wine and UMU selection respects runtime/application metadata and
-applicable system/user Flatpak overrides. An unreadable override or unset
-PATH requires an explicit host runner.
-`--dry-run` starts no process and writes no files. `--preview` executes the
-selected runner to show the Windows install plan, so normal prefix
-bookkeeping may occur even though the game files are not changed.
-
-The Windows installer receives `--store epic --dir <verified product>`;
-the explicit store is restricted to that exact product and follows console,
-GUI, elevation and settings recovery paths. The Linux ED-UP `--launcher`
-mode remains Steam-only and refuses Epic installs. Start Epic games with
-their original manager to retain its normal authentication.
-
-## How it is built and tested
-
-`build.bat` builds the native graphics/runtime pair before the installer.
-`tools/gen_installer_rc.py` validates the native graphics marker/providers,
-native runtime exports, bundled loader and notice before generating resources.
-A missing or mismatched native resource fails the build; there is no half-patch
-installer. The linker's own manifest is turned off with `/MANIFEST:NO` — two
-`RT_MANIFEST` resources in one image is a program Windows refuses to start.
-
-The installed game's exact executable profile is checked separately by the
-installer before any mutation.
-
-`tools/installer_test` is the reason the planner is a pure function of a survey
-of the folder. Every case worth getting right is a state of somebody else's
-machine — EDHM in the `d3d11.dll` slot, another mod's installer having
-overwritten ours, a game update that put the stock `openvr_api.dll` back, an
-original lost to a double rename, an `edvr.ini` full of tuned values — and none
-of them can be produced to order on the machine doing the build. They are all
-written down there instead, along with an end-to-end install, uninstall and
-rollback against real files in a scratch folder.
-
-Two guards exist because the failure they catch is invisible: the resource
-generator refuses a manifest that is not valid XML, and the build runs the
-finished installer with `--help` and fails if it does not start. A bad manifest
-links perfectly and dies before `main()`.

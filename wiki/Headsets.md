@@ -28,4 +28,4 @@ That saving shows up with PimaxXR as the OpenXR runtime. With Pimax Play's own O
 
 ## Linux
 
-The Linux package places the files. Proton and your headset software still have to agree, and the installer leaves Elite's launch options as they are. [Install on Linux](Install-on-Linux.md).
+The Linux launcher places the files. Proton and your headset software still have to agree, and the launcher leaves Elite's launch options as they are. [Install on Linux](Install-on-Linux.md).

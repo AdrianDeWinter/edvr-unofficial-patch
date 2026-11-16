@@ -40,7 +40,7 @@ What differs from CI's Windows build:
     D3D11CreateDeviceForD3D12, EnableFeatureLevelUpgrade and D3DPerformance_*
     and adds two D3DKMT exports.  Elite imports D3D11CreateDevice alone from it
     (EliteDangerous64.exe, checked 2026-10-24);
-  - no Python gates, rigs or installer: that is what makes it compile-only.
+  - no Python gates, rigs or launcher: that is what makes it compile-only.
 """
 
 import argparse

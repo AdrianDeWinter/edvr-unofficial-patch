@@ -4,9 +4,9 @@ If you are going to ask someone, collect the log first. [Ask for help](Ask-for-h
 
 ## Windows blocked the program
 
-The installer and the launcher are unsigned. Windows calls them unrecognised. Choose **More info**, then **Run anyway**. Compare the file with `SHA256SUMS` on the [release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest) if you want to check it first.
+The launcher is unsigned. Windows calls them unrecognised. Choose **More info**, then **Run anyway**. Compare the file with `SHA256SUMS` on the [release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest) if you want to check it first.
 
-## The installer stops before it writes anything
+## The launcher stops before it writes anything
 
 It stops while Elite is running. Close the game, including a copy left in Task Manager.
 
@@ -34,7 +34,7 @@ Angled cockpit panels can smear when EDHM recolors them. Include that in the rep
 
 ## The patch disappeared after the launcher checked the files
 
-Frontier's verify can delete `d3d11.dll`. Run the installer again. [Updates and uninstall](Updates-and-uninstall.md).
+Frontier's verify can delete `d3d11.dll`. Run the launcher again. [Updates and uninstall](Updates-and-uninstall.md).
 
 ## A headset session wrote one log
 
