@@ -576,7 +576,7 @@ const char* xessFgDimHint(bool framesRow) {
 }
 
 const char* xessFgRefusal(bool framesRow) {
-    const char* row = framesRow ? "XeSS-FG frames" : "XeSS Frame Generation";
+    const char* row = framesRow ? "XeSS-FG frames" : "Frame generation";
     static char text[120];
     if (xessFgToggleRowDisabled())
         snprintf(text, sizeof(text), "%s is inactive: choose XeSS anti-aliasing above first.", row);
@@ -669,7 +669,7 @@ const char* stationWindowDistanceHint() { return "Needs Optimized stations: turn
 // refused the same way while that is off.
 bool isRoomsBehindDoorsRow(const MenuRowDef& d) { return strcmp(d.section, "fix") == 0 && strcmp(d.key, "skip_rooms_behind_doors") == 0; }
 
-const char* roomsBehindDoorsRefusal() { return "Skip rooms behind doors is inactive: turn Optimized stations on above first."; }
+const char* roomsBehindDoorsRefusal() { return "Skip closed rooms is inactive: turn Optimized stations on above first."; }
 
 const char* stationWindowDistanceRefusal() { return "Window 3D distance is inactive: turn Optimized stations on above first."; }
 

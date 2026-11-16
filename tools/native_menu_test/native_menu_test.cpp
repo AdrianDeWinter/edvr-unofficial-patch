@@ -7,6 +7,7 @@
 #include "../../src/d3d11/menu_flat_status_layout.h"
 #include "../../src/d3d11/menu_tab_strip.h"
 #include "../../src/d3d11/menu_flat_footer.h"
+#include "../../src/d3d11/menu_flat_rows.h"
 #include "../../src/openxr/native_menu_client.h"
 #include "../../src/openxr/eye_capture.h"
 #include "../../src/openxr/immediate_executor.h"
@@ -464,6 +465,60 @@ int wmain(int argc, wchar_t** argv) {
                 check(w <= line, "every flat footer legend fits the footer line, measured in the Small face");
             }
             std::printf("  flat footer legends at %dp: widest %d of %d px\n", outH, widest, line);
+        }
+        // Every row label the flat menu shows (menu_flat_rows.h's three tables and the flat Hotkeys page's keys), read from edvr.ini's `# ui:` lines, fits the
+        // label column (menu_panel.cpp: cardW * 6 / 10 less the pad) in the Row face it is drawn in (em cap * 10 / 7), at every flat size. Two labels were
+        // ellipsised on the Performance tab at 1080p (2026-11-16) and nothing measured them.
+        {
+            std::vector<std::string> keys;
+            for (const auto& r : edvr::kFlatPageRows) keys.push_back(r.key);
+            for (const auto& r : edvr::kFlatVisualRows) keys.push_back(r.key);
+            for (const auto& r : edvr::kFlatDebugRows) keys.push_back(r.key);
+            for (const char* k : {"menu", "compare_aa", "monitor_panel"}) keys.push_back(k);
+            std::ifstream ini("edvr.ini");
+            std::vector<std::string> lines;
+            for (std::string l; std::getline(ini, l);) {
+                if (!l.empty() && l.back() == '\r') l.pop_back();
+                lines.push_back(l);
+            }
+            std::vector<std::string> labels;
+            for (const std::string& key : keys) {
+                std::string label;
+                for (size_t i = 0; i < lines.size() && label.empty(); ++i) {
+                    // A key shipped commented out (the Debug tab's, `#flat_cpu_timing = off`) still has its row.
+                    const std::string& l = lines[i];
+                    const size_t at = !l.empty() && l[0] == '#' ? 1 : 0;
+                    if (l.compare(at, key.size(), key) != 0) continue;
+                    size_t p = at + key.size();
+                    while (p < l.size() && l[p] == ' ') ++p;
+                    if (p >= l.size() || l[p] != '=') continue;
+                    // The `# ui:` (or `# dev:`) line is within the four lines above the key.
+                    for (size_t j = i; j > 0 && j + 4 > i && label.empty(); --j) {
+                        const std::string& u = lines[j - 1];
+                        const size_t tag = u.rfind("# ui: ", 0) == 0 ? 6 : u.rfind("# dev: ", 0) == 0 ? 7 : 0;
+                        if (!tag) continue;
+                        const size_t bar = u.find(" |", tag);
+                        label = u.substr(tag, bar == std::string::npos ? std::string::npos : bar - tag);
+                    }
+                }
+                if (label.empty()) std::printf("  flat row label not found in edvr.ini for key %s\n", key.c_str());
+                check(!label.empty(), "every flat row's label is found in edvr.ini");
+                if (!label.empty()) labels.push_back(label);
+            }
+            for (const int outH : {720, 1080, 1440, 2160}) {
+                const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+                const int pad = fs.capPx * 8 / 10;
+                const int column = fs.cardPx * 6 / 10 - pad;
+                const int em = fs.capPx * 10 / 7;
+                int widest = 0;
+                for (const std::string& label : labels) {
+                    const int w = edvr::menuPanelMeasureLine(label.c_str(), em);
+                    if (w > widest) widest = w;
+                    if (w > column) std::printf("  flat row label too wide at %dp: %d of %d px: %s\n", outH, w, column, label.c_str());
+                    check(w <= column, "every flat row label fits the label column, measured in the Row face");
+                }
+                std::printf("  flat row labels at %dp: %zu labels, widest %d of %d px\n", outH, labels.size(), widest, column);
+            }
         }
         // The Performance tab's pointer to the Status tab is one line of the card at every flat size, measured with the note face's em.
             for (const int outH : {720, 1080, 1440, 2160}) {

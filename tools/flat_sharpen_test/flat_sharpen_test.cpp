@@ -486,7 +486,7 @@ void panelTable(const std::string& root, const std::string& gen) {
         for (size_t i = 0; same && i < 12; ++i)
             same = std::strcmp(kFlatPageRows[i].section, order[i][0]) == 0 && std::strcmp(kFlatPageRows[i].key, order[i][1]) == 0;
         check(same, "the Performance tab has the flat page's twelve rows in their order (the two XeSS Frame Generation rows under the DLSS preset, HUD Anti-Aliasing directly under UI quality, "
-                    "Window 3D distance directly under Optimized stations, Skip rooms behind doors under that)");
+                    "Window 3D distance directly under Optimized stations, Skip closed rooms under that)");
     }
     // The XeSS Frame Generation rows (2026-11-12): read through the gate, dimmed (never hidden) unless the flat AA mode is XeSS, the frames row dimmed as well while the
     // toggle is off, and frames above the GPU's maximum disabled (every option enabled while the maximum is unknown).
