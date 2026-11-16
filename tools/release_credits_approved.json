@@ -24,6 +24,12 @@
       "approved": "2026-10-25",
       "for": "the initial investigation and research that made native on-foot VR possible; approval recorded in 66d476b2",
       "commits": ["c3a99013", "1535fb59"]
+    },
+    {
+      "login": "Fenris159",
+      "approved": "2026-11-16",
+      "for": "the layout polish of the shared F8 menu and overlay on top of PR #227, and the rig that measures every flat label against the rendered column",
+      "commits": ["1d0339c3", "48f70984"]
     }
   ]
 }
