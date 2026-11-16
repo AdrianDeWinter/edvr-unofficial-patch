@@ -2694,7 +2694,8 @@ void buildContent(MenuContent& c) {
             tooltipsOn() &&
             s.tickMs >= s.highlightSinceMs + static_cast<uint64_t>(s.tooltipDelayS * 1000.0f);
         // Keep the highlight in the window.
-        const int visibleRows = p.visibleRows > 0 ? p.visibleRows : kVisibleRows;
+        const int requestedRows = p.visibleRows > 0 ? p.visibleRows : kVisibleRows;
+        const int visibleRows = p.prompt ? requestedRows : menuPanelEntryRows(c, requestedRows);
         if (p.prompt) c.compact = true;   // F177: fifteen lines in the height guard
         const int total = static_cast<int>(p.entries.size());
         if (p.highlight >= total) p.highlight = total ? total - 1 : 0;
@@ -2862,6 +2863,9 @@ void buildContent(MenuContent& c) {
                 else if (r.clashCount) l.badge = kBadgeClash;
             }
             strncpy(l.right, v.c_str(), sizeof(l.right) - 1);
+            l.reserveBadge = d.applies == 2 || d.applies == 0 ||
+                             (runtimeFlatProfile() && conditionalRestartFor(d.section, d.key) != nullptr) ||
+                             r.clashCount > 0;
             // Anything with two states is a switch, drawn where the value
             // would be: a plain boolean, and a two-way choice where one
             // side is "leave the game alone". The installer's own rule.

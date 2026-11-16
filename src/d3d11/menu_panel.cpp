@@ -44,34 +44,36 @@ struct Rgb {
     uint8_t r, g, b;
 };
 
-constexpr Rgb kBg = {14, 18, 24};
-constexpr float kBgAlpha = 0.86f;
-constexpr Rgb kTabActive = {255, 150, 40};
-constexpr Rgb kTabIdle = {150, 150, 150};
-constexpr Rgb kLabel = {232, 232, 226};
-constexpr Rgb kValue = {255, 190, 80};
-constexpr Rgb kDimText = {150, 150, 150};
-constexpr Rgb kHeading = {120, 170, 220};
-constexpr Rgb kHighlight = {255, 140, 0};
-constexpr float kHighlightAlpha = 0.22f;
-constexpr Rgb kBadge = {255, 170, 60};
-constexpr Rgb kHint = {190, 190, 190};
-constexpr Rgb kFooter = {140, 140, 140};
-constexpr Rgb kToastText = {255, 200, 120};
+constexpr Rgb kBg = {21, 30, 40};
+constexpr float kBgAlpha = 0.92f;
+constexpr Rgb kSurface = {35, 48, 61};
+constexpr Rgb kStructure = {68, 87, 103};
+constexpr Rgb kTabActive = {228, 235, 240};
+constexpr Rgb kTabIdle = {162, 177, 189};
+constexpr Rgb kLabel = {228, 235, 240};
+constexpr Rgb kValue = {228, 235, 240};
+constexpr Rgb kDimText = {139, 154, 166};
+constexpr Rgb kHeading = {162, 177, 189};
+constexpr Rgb kHighlight = {232, 175, 103};
+constexpr float kHighlightAlpha = 0.10f;
+constexpr Rgb kBadge = {232, 175, 103};
+constexpr Rgb kHint = {162, 177, 189};
+constexpr Rgb kFooter = {162, 177, 189};
+constexpr Rgb kToastText = {228, 235, 240};
 // The switch, the installer's colours: an accent track when on, a grey one
 // when off, with a knob at the end the value is at.
-constexpr Rgb kSwitchOn = {255, 150, 40};
-constexpr Rgb kSwitchOff = {90, 96, 104};
+constexpr Rgb kSwitchOn = {232, 175, 103};
+constexpr Rgb kSwitchOff = {68, 87, 103};
 constexpr Rgb kKnobOn = {24, 20, 16};
 constexpr Rgb kKnobOff = {200, 200, 200};
 // The tooltip: a darker card than the panel, so it reads as being above it.
-constexpr Rgb kPopupBg = {8, 11, 15};
+constexpr Rgb kPopupBg = {21, 30, 40};
 constexpr float kPopupAlpha = 0.97f;
-constexpr Rgb kPopupEdge = {255, 150, 40};
+constexpr Rgb kPopupEdge = {68, 87, 103};
 constexpr Rgb kEditField = {255, 255, 255};
 
-enum class Font { Row, Tab, Small, Hint, Big, Caption, TileSub, Tip };
-constexpr int kFontCount = 8;
+enum class Font { Row, Tab, Small, Hint, Big, Caption, TileSub, Tip, Badge };
+constexpr int kFontCount = 9;
 
 struct Op {
     bool         text = false;
@@ -223,6 +225,19 @@ HFONT makeFont(int emPx, bool bold) {
     return CreateFontIndirectW(&lf);
 }
 
+int fontLineHeight(int emPx) {
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (!dc) return emPx * 14 / 10;
+    HFONT font = makeFont(emPx, false);
+    HGDIOBJ old = font ? SelectObject(dc, font) : nullptr;
+    TEXTMETRICW metrics{};
+    const bool measured = GetTextMetricsW(dc, &metrics) != FALSE;
+    if (old) SelectObject(dc, old);
+    if (font) DeleteObject(font);
+    DeleteDC(dc);
+    return measured ? metrics.tmHeight : emPx * 14 / 10;
+}
+
 std::wstring widen(const char* s) {
     if (!s || !*s) return std::wstring();
     const int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, nullptr, 0);
@@ -287,6 +302,13 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
     const int graphOneH = cap * 32 / 10;
     const int graphH = c.graphCount * graphOneH;
     const int rows = c.lineCount;
+    const int primaryH = (std::max)(rowPitch, fontLineHeight(c.rowFontPx > 0 ? c.rowFontPx : cap * 10 / 7));
+    const int badgeH = fontLineHeight(cap * 8 / 10);
+    int rowsH = 0;
+    for (int i = 0; i < rows; ++i) {
+        const MenuLine& line = c.lines[i];
+        rowsH += line.badge != kBadgeNone || line.reserveBadge ? primaryH + badgeH : rowPitch;
+    }
     // The tile grid: caption, big value, a two-line sub, in a box five
     // tile-units tall, the unit being nine tenths of a cap. Each box is
     // sized to its font's LINE height, not its cap height -- the first
@@ -316,7 +338,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
     // A locked FPS readout sits above the tabs so it stays visible while
     // the menu is scrolled or a tooltip is up.
     const int overlayH = (c.toast || !c.overlayLine[0]) ? 0 : cap * 16 / 10;
-    const int H = pad + overlayH + tabH + tilesH + rows * rowPitch + (c.toast ? cap * 2 / 10 : 0) +
+    const int H = pad + overlayH + tabH + tilesH + rowsH + (c.toast ? cap * 2 / 10 : 0) +
                   graphH + (hintReserved ? hintH : 0) + footH + pad;
     *outH = H;
 
@@ -369,8 +391,9 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             ops.push_back(o);
             if (i == c.activeTab) {
                 Op under;
-                under.rect = {x, y + tabH - cap / 6, x + wpx - tabEm / 3, y + tabH};
-                under.rgb = kTabActive;
+                const int thickness = (std::max)(1, cap / 12);
+                under.rect = {x, y + tabH - thickness, x + wpx - tabEm / 3, y + tabH};
+                under.rgb = kHighlight;
                 under.alpha = 0.9f;
                 ops.push_back(under);
             }
@@ -398,8 +421,8 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             const int y0 = y + row * (tileH + tileGap);
             Op box;
             box.rect = {x0, y0, x0 + tileW, y0 + tileH};
-            box.rgb = Rgb{255, 255, 255};
-            box.alpha = 0.06f;
+            box.rgb = kSurface;
+            box.alpha = 0.80f;
             ops.push_back(box);
             const int inset = u / 3;
             Op cap1;
@@ -435,7 +458,10 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
     int popupRowTop = -1, popupRowBottom = -1;
     for (int i = 0; i < rows; ++i) {
         const MenuLine& l = c.lines[i];
-        const RECT rr = {pad / 2, y, cardW - pad / 2, y + rowPitch};
+        const bool secondary = l.badge != kBadgeNone || l.reserveBadge;
+        const int textH = secondary ? primaryH : rowPitch;
+        const int rowH = secondary ? primaryH + badgeH : rowPitch;
+        const RECT rr = {pad / 2, y, cardW - pad / 2, y + rowH};
         if (i == c.popupLine) {
             popupRowTop = rr.top;
             popupRowBottom = rr.bottom;
@@ -453,6 +479,11 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             h.alpha = kHighlightAlpha;
             h.radius = cap / 4;
             ops.push_back(h);
+            Op rail;
+            rail.rect = {rr.left, y + cap / 4, rr.left + (std::max)(2, cap / 12), y + rowH - cap / 4};
+            rail.rgb = kHighlight;
+            rail.alpha = 0.95f;
+            ops.push_back(rail);
         }
         // Information rows carry long values, so the split sits further
         // left for them than for a setting's label and value; a note and a
@@ -467,7 +498,9 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
         Op left;
         left.text = true;
         left.str = widen(l.left);
-        left.rect = {pad, y, split, y + rowPitch};
+        // Info's split already includes its measured caption/value gap.
+        const int gutter = l.style == kMenuInfo ? 0 : cap / 2;
+        left.rect = {pad, y, split - (l.style == kMenuNote || l.style == kMenuHeading ? 0 : gutter), y + textH};
         left.align = DT_LEFT;
         left.font = l.style == kMenuHeading ? Font::Small : l.style == kMenuNote ? Font::Hint : Font::Row;
         left.rgb = l.style == kMenuHeading        ? kHeading
@@ -475,7 +508,9 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
                    : l.style == kMenuNote         ? kHint
                    : c.toast                      ? kToastText
                                                    : kLabel;
-        if (l.style == kMenuHeading) left.rect.left = pad / 2;
+        // Align the leading edge with other text while retaining the
+        // heading's original full-width allowance for explanatory prose.
+        if (l.style == kMenuHeading) left.rect.right = cardW - pad / 2;
         if (c.toast) left.rect.right = cardW - pad;
         ops.push_back(left);
         // The switch: a pill the width of two knobs, the knob at the end the
@@ -488,7 +523,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             const int h = switchH;
             const int wsw = switchW;
             const int right = cardW - pad;
-            const RECT box = {right - wsw, y + (rowPitch - h) / 2, right, y + (rowPitch + h) / 2};
+            const RECT box = {right - wsw, y + (textH - h) / 2, right, y + (textH + h) / 2};
             const bool on = l.toggle == 2;
             Op track;
             track.rect = box;
@@ -511,7 +546,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             if (l.style == kMenuRowEdit) {
                 // A field behind the typed value, so the row reads as one.
                 Op field;
-                field.rect = {split, y + rowPitch / 6, cardW - pad, y + rowPitch - rowPitch / 6};
+                field.rect = {split, y + textH / 6, cardW - pad, y + textH - textH / 6};
                 field.rgb = kEditField;
                 field.alpha = 0.10f;
                 field.radius = cap / 5;
@@ -524,7 +559,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             }
             right.text = true;
             right.str = widen(l.right);
-            right.rect = {split, y, cardW - pad, y + rowPitch};
+            right.rect = {split, y, cardW - pad, y + textH};
             right.align = l.style == kMenuInfo ? DT_LEFT : DT_RIGHT;
             right.font = Font::Row;
             right.rgb = l.style == kMenuInfo               ? kLabel
@@ -534,24 +569,22 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             if (l.style == kMenuRowEdit) right.rect.right -= cap / 3;
             if (l.toggle) right.rect.right -= switchW + cap / 2;
             ops.push_back(right);
-            if (l.badge == kBadgeRestart || l.badge == kBadgeUnknown || l.badge == kBadgePending || l.badge == kBadgeClash || l.badge == kBadgeStopped) {
-                Op b;
-                b.text = true;
-                b.str = l.badge == kBadgeRestart ? L"restart"
-                        : l.badge == kBadgePending ? L"at next launch"
-                        : l.badge == kBadgeClash   ? L"also in Elite"
-                        : l.badge == kBadgeStopped ? L"stopped"
-                                                   : L"?";
-                b.rect = {split, y + rowPitch * 62 / 100, cardW - pad, y + rowPitch};
-                b.align = DT_RIGHT;
-                b.font = Font::Small;
-                b.rgb = l.badge == kBadgeUnknown ? kDimText : kBadge;
-                ops.push_back(b);
-                // The value sits up a little to make room for the badge.
-                ops[ops.size() - 2].rect.bottom = y + rowPitch * 70 / 100;
-            }
         }
-        y += rowPitch;
+        if (l.badge == kBadgeRestart || l.badge == kBadgeUnknown || l.badge == kBadgePending || l.badge == kBadgeClash || l.badge == kBadgeStopped) {
+            Op b;
+            b.text = true;
+            b.str = l.badge == kBadgeRestart ? L"restart"
+                    : l.badge == kBadgePending ? L"at next launch"
+                    : l.badge == kBadgeClash   ? L"also in Elite"
+                    : l.badge == kBadgeStopped ? L"stopped"
+                                               : L"?";
+            b.rect = {split, y + primaryH, cardW - pad, y + rowH};
+            b.align = DT_RIGHT;
+            b.font = Font::Badge;
+            b.rgb = l.badge == kBadgeUnknown ? kDimText : kBadge;
+            ops.push_back(b);
+        }
+        y += rowH;
     }
     for (int g = 0; g < c.graphCount; ++g) {
         // One strip per measure, fpsVR's pair stacked: one bar per frame,
@@ -560,12 +593,13 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
         // over it, red at twice it.
         const MenuGraph& mg = c.graphs[g];
         const int gx0 = pad, gx1 = cardW - pad;
-        const int gy0 = y + cap / 2, gy1 = y + graphOneH - cap / 4;
+        const int legendH = mg.label[0] ? fontLineHeight(cap) : cap / 2;
+        const int gy0 = y + legendH, gy1 = y + graphOneH - cap / 4;
         {
             Op bg;
             bg.rect = {gx0, gy0, gx1, gy1};
-            bg.rgb = Rgb{0, 0, 0};
-            bg.alpha = 0.35f;
+            bg.rgb = kSurface;
+            bg.alpha = 0.80f;
             ops.push_back(bg);
         }
         const float scale = perfGraphScale(mg.samples, mg.count, mg.budgetMs);
@@ -592,7 +626,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             Op line;
             const int ly = gy1 - static_cast<int>(0.5f * plotH + 0.5f);
             line.rect = {gx0, ly, gx1, ly + (cap / 12 > 0 ? cap / 12 : 1)};
-            line.rgb = kLabel;
+            line.rgb = kStructure;
             line.alpha = 0.5f;
             ops.push_back(line);
         }
@@ -600,7 +634,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             Op t;
             t.text = true;
             t.str = widen(mg.label);
-            t.rect = {gx0 + cap / 3, gy0, gx1, gy0 + cap * 14 / 10};
+            t.rect = {gx0, y, gx1, y + legendH};
             t.align = DT_LEFT;
             t.font = Font::Small;
             t.rgb = kFooter;
@@ -851,6 +885,7 @@ bool rasterise(const MenuContent& c, Raster& out) {
         makeFont(u * 8 / 10, true),           // Caption
         makeFont(u * 72 / 100, false),        // TileSub
         makeFont(cap * 78 / 100, false),      // Tip: the tooltip's body
+        makeFont(cap * 8 / 10, false),        // Badge: a subordinate status line
     };
     execute(colour, ops, false, fonts);
     execute(cover, ops, true, fonts);
@@ -1801,6 +1836,31 @@ void menuPanelLineRectForTest(const MenuContent& c, int i, int* x0, int* y0, int
         return;
     }
 }
+
+MenuPanelRowRectsForTest menuPanelRowRectsForTest(const MenuContent& c, int i) {
+    MenuPanelRowRectsForTest result;
+    if (i < 0 || i >= c.lineCount) return result;
+    std::vector<Op> ops;
+    std::vector<LineRect> lines;
+    int height = 0;
+    layout(c, ops, lines, &height, 0, nullptr);
+    const LineRect& hit = lines[i];
+    result.hitTop = static_cast<int>(hit.y0 * height + 0.5f);
+    result.hitBottom = static_cast<int>(hit.y1 * height + 0.5f);
+    result.selectable = hit.selectable;
+    for (const Op& op : ops) {
+        if (!op.text || op.rect.top < result.hitTop || op.rect.top >= result.hitBottom) continue;
+        int* rect = op.font == Font::Badge ? result.badge
+                    : op.str == widen(c.lines[i].left) ? result.label
+                    : op.str == widen(c.lines[i].right) ? result.value : nullptr;
+        if (!rect) continue;
+        rect[0] = op.rect.left;
+        rect[1] = op.rect.top;
+        rect[2] = op.rect.right;
+        rect[3] = op.rect.bottom;
+    }
+    return result;
+}
 #endif
 
 void menuPanelTick(ID3D11Device* dev) {
@@ -1889,6 +1949,24 @@ bool menuPanelStats(int* w, int* h, double* lastMs, float* gpuMs) {
     if (lastMs) *lastMs = g_w.lastMs;
     if (gpuMs) *gpuMs = g_gpuMsAvg.load();
     return true;
+}
+
+int menuPanelEntryRows(const MenuContent& c, int requested) {
+    MenuContent probe = c;
+    probe.toast = false;
+    probe.reserveHint = true;
+    probe.tileCount = probe.graphCount = 0;
+    probe.popupLine = -1;
+    probe.lineCount = (std::max)(1, (std::min)(requested, kMenuMaxLines));
+    for (int i = 0; i < probe.lineCount; ++i) probe.lines[i].reserveBadge = true;
+    for (;;) {
+        std::vector<Op> ops;
+        std::vector<LineRect> lines;
+        int height = 0;
+        layout(probe, ops, lines, &height, 0, nullptr);
+        if (height <= 2048 || probe.lineCount == 1) return probe.lineCount;
+        --probe.lineCount;
+    }
 }
 
 int menuPanelMeasureLine(const char* utf8, int emPx) {
