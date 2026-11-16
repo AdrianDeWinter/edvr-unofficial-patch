@@ -26,6 +26,13 @@ REM  tools\linux_toolchain.py: the same production DLLs, into
 REM  build\compile-build, with no Python gates, no receipt check, no rigs and
 REM  no installer. It is never validation and never a release asset.
 REM
+REM  Set EDVR_SIGN=1 (any value) to sign the shipped binaries as they are made, with
+REM  Azure Artifact Signing: d3d11.dll and edvr_openxr_runtime.dll before anything
+REM  copies or embeds them, then edvr-installer.exe and ed-up-launcher.exe, so the
+REM  installer carries, and package.bat zips and hashes, the signed bytes. It needs
+REM  python tools\artifact_signing.py check to pass and an az login. A build asked to
+REM  sign that cannot, fails. Unset, nothing is signed and nothing here changes.
+REM
 REM  Only one top-level build runs at a time on this machine (tools\
 REM  build_lock.py): a second invocation is refused immediately with a
 REM  message saying to wait, and exits 1, rather than contending with the
@@ -243,6 +250,7 @@ python tools\run_jobs.py ^
     --gate "tools\gen_installer_rc.py --self-test" ^
     --gate "tools\package_native.py --self-test" ^
     --gate "tools\sign_manifest.py --self-test" ^
+    --gate "tools\artifact_signing.py --self-test" ^
     --gate "tools\launcher_fixtures.py --self-test" ^
     --gate "tools\install_proton.py --self-test" ^
     --gate "tools\build_diff.py --self-test" ^
@@ -774,6 +782,11 @@ if errorlevel 1 ( echo [edvr] ERROR: link failed & exit /b 1 )
 
 echo [edvr] built %BUILD%\d3d11.dll
 python tools\build_phases.py --mark "%PHASES%" "d3d11.dll"
+REM Release signing, EDVR_SIGN: signed here, before the copy below, so d3d11.dll and the
+REM edvr_openxr_graphics.dll the installer embeds are the same signed bytes.
+if defined EDVR_SIGN (
+    python tools\artifact_signing.py sign "%BUILD%\d3d11.dll" || exit /b 1
+)
 copy /y "%BUILD%\d3d11.dll" "%BUILD%\edvr_openxr_graphics.dll" >nul || exit /b 1
 echo [edvr] built %BUILD%\edvr_openxr_graphics.dll
 
@@ -806,6 +819,11 @@ if not exist "%OBJ%\openxr_module" mkdir "%OBJ%\openxr_module"
     "src\common\frame_flag.cpp" ^
     /link /INCREMENTAL:NO %EDVR_CPU_LINK% /PDB:"%BUILD%\edvr_openxr_runtime.pdb" /DEF:"src\openxr\native_module.def" "%OBJ%\openxr_module\version.res" d3d11.lib dxgi.lib user32.lib gdi32.lib
 if errorlevel 1 ( echo [edvr] ERROR: native runtime module build failed & exit /b 1 )
+REM Release signing, EDVR_SIGN: before any rig starts and before the openvr_api.dll copy, so the
+REM installer embeds, and the release ships, the signed runtime.
+if defined EDVR_SIGN (
+    python tools\artifact_signing.py sign "%BUILD%\edvr_openxr_runtime.dll" || exit /b 1
+)
 python tools\build_phases.py --mark "%PHASES%" "runtime dll"
 
 REM Shared by the installer and installer_test rigs below. install_manifest.cpp is the schema-2 parser both halves link;
@@ -902,6 +920,20 @@ python tools\run_jobs.py --script "%ROOT%\build.bat" --times "%BUILD%\rig_times.
     --after flat_mono_resolve_shard5=flat_mono_resolve_test ^
     %RUN_JOBS_ARGS% || exit /b 1
 python tools\build_phases.py --mark "%PHASES%" "test rigs"
+
+REM Release signing, EDVR_SIGN, the rest: the installer and the launcher are built inside rigs, which
+REM run hidden under the focus guard, and the signing client reads its credential from the Azure CLI,
+REM which opens a console window each time; the guard rightly refuses that (measured 2026-11-16).
+REM So both are signed here, once the pool is done, in one call, after the launcher's determinism
+REM comparison, which a signature would fail. The start checks run again on the signed bytes. The two
+REM DLLs were signed before the pool started, so everything the installer embeds is already signed.
+REM Each signing adds a timestamp: a signed launcher differs from release to release though its code
+REM did not.
+if defined EDVR_SIGN (
+    python tools\artifact_signing.py sign "%BUILD%\edvr-installer.exe" "%BUILD%\ed-up-launcher.exe" || exit /b 1
+    "%BUILD%\edvr-installer.exe" --help >nul || exit /b 1
+    "%BUILD%\ed-up-launcher.exe" --help >nul || exit /b 1
+)
 
 REM The config contract check (tools\check_config_contract.py) runs with the gates at the top: it reads only src\ and edvr.ini.
 
@@ -3321,6 +3353,7 @@ if errorlevel 1 ( echo [edvr] ERROR: rc.exe failed on the installer resources & 
     %INSTALLER_SRC% "%OBJ%\installer\payload.res" ^
     /link /INCREMENTAL:NO /SUBSYSTEM:WINDOWS /MANIFEST:NO %INSTALLER_LIBS%
 if errorlevel 1 ( echo [edvr] ERROR: installer build failed & exit /b 1 )
+REM Not signed here: see "Release signing" after the rig pool.
 echo [edvr] built %BUILD%\edvr-installer.exe
 
 REM Does it START? Not a formality: a manifest Windows cannot parse, a missing
@@ -3357,6 +3390,8 @@ if errorlevel 1 (
     exit /b 1
 )
 echo [edvr] launcher determinism: two builds under different EDVR_VER values are identical
+REM Not signed here either: the byte-for-byte comparison above would fail on a signature, and signing
+REM inside a rig is refused by the focus guard. See "Release signing" after the rig pool.
 certutil -hashfile "%BUILD%\ed-up-launcher.exe" SHA256 | findstr /v "hash CertUtil"
 echo [edvr] built %BUILD%\ed-up-launcher.exe
 

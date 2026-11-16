@@ -282,6 +282,20 @@ split zips with fixed timestamps and file order, so packaging twice gives the
 same bytes, and it removes older `ed-up-dlss-*.zip` and `ed-up-xess-*.zip` from
 `dist\` when a runtime's contents change.
 
+To sign the binaries (Authenticode, through Azure Artifact Signing), set
+`EDVR_SIGN=1` for the full `build.bat`. It signs `d3d11.dll` and
+`edvr_openxr_runtime.dll` before anything copies or embeds them, then
+`edvr-installer.exe` and `ed-up-launcher.exe`, so the installer embeds and
+`package.bat` hashes the signed bytes. Once per machine, run `python
+tools\artifact_signing.py fetch` (Microsoft's signing client, pinned by hash,
+from NuGet), then `az login` as an account that holds `Artifact Signing
+Certificate Profile Signer` on the `ed-up-release` profile. `python
+tools\artifact_signing.py check` says what is missing and `... verify <files>`
+re-checks a file. A build asked to sign that cannot, fails. Every signature is
+timestamped and every signing makes new bytes, so a signed `ed-up-launcher.exe`
+differs from release to release even when its code did not, and an installed
+launcher replaces itself each time (see below). The workflow does not sign.
+
 Build every release by the same route. `ed-up-launcher.exe` is the same bytes
 from two builds on one machine, but a CI build and a local build differ, and an
 installed launcher replaces itself when the digest changes. Replacing an asset on

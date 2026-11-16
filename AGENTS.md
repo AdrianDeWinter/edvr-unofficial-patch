@@ -85,6 +85,7 @@ corrupted. Do not regenerate the one-liner — extend the script.
 | Reflow release notes or docs | `python tools\reflow_notes.py` | reflowing by hand or by regex |
 | Credit contributors in release notes | `python tools\release_credits.py --from <previous-tag> --thanks` | writing the credits from memory or ad-hoc `gh` queries |
 | Sign a release manifest (the maintainer, in their own terminal: `generate` and `sign` refuse without one, and the private keys never enter a session) | `python tools\sign_manifest.py sign <manifest>`, then `python tools\sign_manifest.py verify <folder>` | signing in CI, or any other tool that sees the private key |
+| Sign the shipped binaries (Authenticode, Azure Artifact Signing; the maintainer's own terminal after `az login`: set `EDVR_SIGN=1`, then run the full `build.bat`) | `python tools\artifact_signing.py check`, `fetch`, `sign`, `verify` | `signtool` by hand, or any certificate or key file in the repo |
 | Try the launcher without touching the real folders | `ed-up-launcher.exe --data-root <scratch folder>` (with `--check-update`, `--update` or `--channel rc`) | running it bare, which copies and registers itself on this machine |
 | Make a worktree that can build | `python tools\worktree.py add <path>` | `git worktree add` alone (no deps) |
 | Post PR replies, a review or a summary | `python tools\pr_post.py --pr N --since <time> ...` | hand-built `gh api` / `gh pr comment` / `gh pr review` calls |

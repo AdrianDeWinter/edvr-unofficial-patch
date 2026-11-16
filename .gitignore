@@ -29,6 +29,10 @@ third_party/ffx-dx11/
 # are verified at build time and packaged with their notices.
 third_party/xess/
 
+# Azure Artifact Signing client (Microsoft's NuGet package), fetched and verified by
+# tools/artifact_signing.py fetch. Signing tooling only, never a build input.
+third_party/artifact_signing/
+
 # Pinned Khronos loader binary, fetched by tools/fetch_openxr_loader.py.
 third_party/openxr/loader/
 
