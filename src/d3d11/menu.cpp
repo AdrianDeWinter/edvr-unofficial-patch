@@ -2264,18 +2264,11 @@ void buildMonitor(MenuContent& c) {
         mg.count = perfMonitorGraph(kind, mg.samples, static_cast<int>(sizeof(mg.samples) / sizeof(mg.samples[0])), &mg.budgetMs);
         if (!mg.count) continue;
         if (flat) {
-            snprintf(mg.label, sizeof(mg.label), "%s, last %d frames; the line is the %.1f ms budget", flatNames[g], mg.count,
-                     static_cast<double>(mg.budgetMs));
+            snprintf(mg.label, sizeof(mg.label), "%s", flatNames[g]);
         } else {
             mg.zeroIsValid = nativeGraphs;
-            if (nativeGraphs && mg.budgetMs > 0.0f)
-                snprintf(mg.label, sizeof(mg.label), "%s, %d samples; predicted period %.1f ms",
-                         g == 0 ? "Producer GPU" : "Application wall", mg.count, double(mg.budgetMs));
-            else if (nativeGraphs)
-                snprintf(mg.label, sizeof(mg.label), "%s, %d samples; no runtime reference",
-                         g == 0 ? "Producer GPU" : "Application wall", mg.count);
-            else snprintf(mg.label, sizeof(mg.label), "%s, last %d frames; the line is the %.1f ms budget",
-                     vrNames[g], mg.count, static_cast<double>(mg.budgetMs));
+            snprintf(mg.label, sizeof(mg.label), "%s",
+                     nativeGraphs ? (g == 0 ? "Producer GPU" : "Application wall") : vrNames[g]);
         }
         ++c.graphCount;
     }
@@ -2516,7 +2509,7 @@ bool buildReadoutContent(MenuContent& c, FpsOverlayMode mode, bool flat, float t
         MenuGraph& mg = c.graphs[c.graphCount];
         mg.count = perfMonitorGraph(kinds[g], mg.samples, static_cast<int>(sizeof(mg.samples) / sizeof(mg.samples[0])), &mg.budgetMs);
         if (!mg.count) continue;
-        snprintf(mg.label, sizeof(mg.label), "%s, last %d frames; the line is the %.1f ms budget", names[g], mg.count, static_cast<double>(mg.budgetMs));
+        snprintf(mg.label, sizeof(mg.label), "%s", names[g]);
         ++c.graphCount;
     }
     return true;
