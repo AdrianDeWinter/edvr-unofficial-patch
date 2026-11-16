@@ -38,7 +38,7 @@ inline constexpr MenuPageDef kMenuPages[] = {
     {"Visual", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, "visual", true, MenuPagePost::None},
     {"Mirror window", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, "desktop_window", false, MenuPagePost::None},
     {"Native on foot", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, "native_on_foot", true, MenuPagePost::AimChoiceAfterLookToAim},
-    {"Hotkeys", false, true, false, MenuPageSource::Hotkeys, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
+    {"Hotkeys", true, true, false, MenuPageSource::Hotkeys, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
     {"Plugins", false, true, false, MenuPageSource::Plugins, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
     {"Monitor", true, true, false, MenuPageSource::Monitor, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
     {"Status", true, true, false, MenuPageSource::Status, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
@@ -51,6 +51,14 @@ inline constexpr size_t kMenuPageCount = sizeof(kMenuPages) / sizeof(kMenuPages[
 
 inline bool menuPageShown(const MenuPageDef& d, bool flatProfile, bool developer) {
     return (flatProfile ? d.flat : d.vr) && (!d.developer || developer);
+}
+
+// Whether a profile has a page of this source at all (developer pages excluded: they are not the profile's own). This is the one answer to "does this profile
+// have a Hotkeys page", which menuTick asks to run a row's capture, its note timer and the clash reading (the policy of menu_policy.h no longer carries it).
+inline constexpr bool menuProfileHasPage(MenuPageSource source, bool flatProfile) {
+    for (size_t i = 0; i < kMenuPageCount; ++i)
+        if (kMenuPages[i].source == source && !kMenuPages[i].developer && (flatProfile ? kMenuPages[i].flat : kMenuPages[i].vr)) return true;
+    return false;
 }
 
 }  // namespace edvr

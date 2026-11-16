@@ -1892,8 +1892,8 @@ MenuTier menuTierOf(MenuPageTier t) {
 //  - Mirror window (2026-10-28 as "Desktop window"; renamed F173): the `menu desktop_window` rows, no group headings, the page is the group.
 //  - Native on foot (2026-10-14): the `menu native_on_foot` rows of edvr.ini, in file order; compatibility settings without that tag stay out. Grouped (F127).
 //  - Visual (2026-10-27): the `menu visual` rows, under the ini's own heading blocks. The flat Visual tab is the same name and another list (kFlatVisualRows).
-//  - Hotkeys: the rows the generator made from [hotkey]'s annotations; a `# ui:` row always, a `# dev:` row only with developer mode on (hotkeyPageRows says
-//    which, and a rig pins it). No group headings: the [hotkey] block's own title is a paragraph.
+//  - Hotkeys: the rows the generator made from [hotkey]'s annotations; a `# ui:` row always, a `# dev:` row only with developer mode on (hotkeyPageRowsFor says which,
+//    and a rig pins it; the flat page is the Fix rows whose key the flat profile reads: the Menu key and the AA comparison key). No group headings: the [hotkey] block's own title is a paragraph.
 //  - Advanced: by page name, a developer hotkey row is Advanced tier too, and belongs to the Hotkeys page.
 Page makePage(const MenuPageDef& d) {
     State& s = g_s;
@@ -1908,7 +1908,7 @@ Page makePage(const MenuPageDef& d) {
         case MenuPageSource::FlatDebug: addFlatDebugRows(p); break;
         case MenuPageSource::Hotkeys: {
             int rows[32];
-            const int n = hotkeyPageRows(kMenuRows, kRowDefCount, s.developer, rows, 32);
+            const int n = hotkeyPageRowsFor(kMenuRows, kRowDefCount, runtimeFlatProfile(), s.developer, rows, 32);
             for (int i = 0; i < n; ++i) {
                 Entry e;
                 e.kind = EntryKind::Setting;
@@ -2987,7 +2987,7 @@ void buildContent(MenuContent& c) {
                                 (strcmp(d.key, "menu") == 0 && s.summon.kind() == HotkeyKind::Key
                                      ? ". ED-UP keeps the menu key from the game, so those are masked while it is installed."
                                      : ". The key is watched, not captured: the game sees the press too, so one press does both.");
-                    } else if (!s.readGameBindings) {
+                    } else if (!s.readGameBindings && !runtimeFlatProfile()) {   // flat never reads them (the gate refuses the key), so it says nothing
                         body += "\nNot checked against your Elite bindings (hotkey.read_game_bindings is off).";
                     }
                 }
@@ -4710,9 +4710,9 @@ void openMenu(uint64_t now) {
     // The flat pages are rebuilt at every open; the VR pages only when the developer switch moved.
     if (!world || s.developer != s.developerBuilt) buildPages();
     refreshRowValues();
-    if (world) {
+    if (menuProfileHasPage(MenuPageSource::Hotkeys, runtimeFlatProfile())) {
         // Elite's bindings are read for the Hotkeys page's badges when the menu opens (and again
-        // when Elite rewrites them), never per frame; nothing from a capture survives a close.
+        // when Elite rewrites them: VR only, the flat profile does not read them, see menuAdoptGameBindings), never per frame; nothing from a capture survives a close.
         s.clashStale = true;
         s.captureEntry = -1;
         s.noteUntilMs = 0;
@@ -5328,6 +5328,7 @@ void menuTick(ID3D11Device* dev) {
     // profile has is gated by the policy field that names why, or by `world` where it is the VR panel's tooling the design brings to flat step by step.
     const MenuProfilePolicy pol = menuPolicyFor(runtimeFlatProfile());
     const bool world = pol.anchor == MenuAnchor::World;
+    const bool hotkeysPage = menuProfileHasPage(MenuPageSource::Hotkeys, runtimeFlatProfile());   // one answer, the page table's (menu_pages.h)
     guardedBudget(g_budget, [&] {
         if (world) {
             static uint64_t lastNativeRevision = 0;
@@ -5374,7 +5375,7 @@ void menuTick(ID3D11Device* dev) {
             }
             s.registeredSig = sig;
         }
-        if (pol.hotkeysPage) {
+        if (hotkeysPage) {
             if (s.noteUntilMs && s.tickMs >= s.noteUntilMs) {
                 s.noteUntilMs = 0;
                 s.noteDef = -1;
@@ -5516,7 +5517,7 @@ void menuTick(ID3D11Device* dev) {
             const bool padNavSummon = pol.padNavigation && summonBinding.kind == HotkeyKind::Pad &&
                 menuPadOwnsButton(summonBinding.padButtons, summonBinding.padTrigger);
             const bool shift = world && summonPressed && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-            switch (menuSummonAction(summonPressed, s.open, padNavSummon, s.padReady, pol.hotkeysPage && s.captureEntry >= 0, shift, world)) {
+            switch (menuSummonAction(summonPressed, s.open, padNavSummon, s.padReady, hotkeysPage && s.captureEntry >= 0, shift, world)) {
                 case MenuSummonAction::Open:
                     if (pol.headAim) {
                         if (!aimPromptOnFirstMenuOpen(now)) openMenu(now);   // F190: the first open of a session that has not shown the aiming page opens on it
@@ -5584,7 +5585,7 @@ void menuTick(ID3D11Device* dev) {
             // cancelled it cannot close the menu a tick later. Where the menu closes on focus loss
             // (flat, above) the focus is already known to be Elite's.
             const bool esc = (pol.closesOnFocusLoss || gameHasFocus()) && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-            switch (menuEscapeAction(esc, s.escapeDown, pol.hotkeysPage && s.captureEntry >= 0, s.editEntry >= 0)) {
+            switch (menuEscapeAction(esc, s.escapeDown, hotkeysPage && s.captureEntry >= 0, s.editEntry >= 0)) {
                 case MenuEscapeAction::CancelEdit:
                     cancelEdit();
                     s.lastInputMs = now;

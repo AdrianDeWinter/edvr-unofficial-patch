@@ -173,4 +173,9 @@ CaptureDecision hotkeyDecide(const CaptureStep& step, const HotkeyRowContext& ct
 // developer switch on. Returns the count written (at most `max`).
 int hotkeyPageRows(const MenuRowDef* rows, int n, bool developer, int* out, int max);
 
+// The same for a profile: the VR profile's page is hotkeyPageRows as it is. The flat profile's is the rows of the Fix tier only, whatever the developer switch
+// says (developer mode is not on the flat allow-list), and of those only the hotkeys the flat profile reads (flat_profile_keys.h): a row for a key the flat gate
+// refuses would show a value that binds nothing. The investigation hotkeys (concourse_*, gpu_pass_profile, dump_draws) are not rows of the Fix tier, so they stay off.
+int hotkeyPageRowsFor(const MenuRowDef* rows, int n, bool flatProfile, bool developer, int* out, int max);
+
 }  // namespace edvr

@@ -39,7 +39,6 @@ void policyCases() {
     check(!flat.headAim && vr.headAim, "only the VR panel aims with the head");
     check(!flat.adoptGameKeys && vr.adoptGameKeys, "only VR adopts Elite's panel keys");
     check(!flat.readsMenuKeys && vr.readsMenuKeys, "flat reads no [menu] key, VR reads them");
-    check(!flat.hotkeysPage && vr.hotkeysPage, "only VR has the Hotkeys page today");
     check(flat.padNavigation && !vr.padNavigation, "only the flat panel is navigated by the pad");
     check(flat.closesOnFocusLoss && !vr.closesOnFocusLoss, "only the flat panel closes when Elite loses the focus");
     check(flat.primesHotkeysOnClose && !vr.primesHotkeysOnClose, "only flat primes the hotkeys on close");
@@ -201,8 +200,11 @@ std::string pageList(bool flat, bool developer) {
 
 void pageCases() {
     const std::string vr = "Performance,Fixes,Visual,Mirror window,Native on foot,Hotkeys,Plugins,Monitor,Status";
-    check(pageList(true, false) == "Performance,Visual,Monitor,Status,Debug", "the flat profile's pages are Performance, Visual, Monitor, Status, Debug (Debug last)");
-    check(pageList(true, true) == "Performance,Visual,Monitor,Status,Debug", "developer mode adds no flat page");
+    check(pageList(true, false) == "Performance,Visual,Hotkeys,Monitor,Status,Debug", "the flat profile's pages are Performance, Visual, Hotkeys, Monitor, Status, Debug (Debug last)");
+    check(menuProfileHasPage(MenuPageSource::Hotkeys, true) && menuProfileHasPage(MenuPageSource::Hotkeys, false), "both profiles have a Hotkeys page: the capture, note and clash work in menuTick follows the page table, not a policy field");
+    check(!menuProfileHasPage(MenuPageSource::Plugins, true) && menuProfileHasPage(MenuPageSource::Plugins, false), "only VR has a Plugins page");
+    check(!menuProfileHasPage(MenuPageSource::Actions, false), "a developer-only page (Instruments) is not a profile's own");
+    check(pageList(true, true) == "Performance,Visual,Hotkeys,Monitor,Status,Debug", "developer mode adds no flat page");
     check(pageList(false, false) == vr, "the VR profile's pages without developer mode");
     check(pageList(false, true) == vr + ",Advanced,Experimental,Instruments", "developer mode adds Advanced, Experimental and Instruments to VR, after Status");
     check(kMenuPages[6].post == MenuPagePost::AimChoiceAfterLookToAim && std::strcmp(kMenuPages[6].name, "Native on foot") == 0, "the Native on foot page moves the aiming row under Look to aim");

@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "../../src/common/flat_profile_keys.h"
 #include "../../src/common/hotkey.h"
 #include "../../src/common/iniedit.h"
 #include "../../src/common/pad_names.h"
@@ -1529,6 +1530,16 @@ void testCaptureWiringPins(const char* root) {
     check(tick.find("menuSummonAction(summonPressed, s.open, padNavSummon, s.padReady,") != std::string::npos &&
           policyText.find("if (open && padNavSummon && padReady) return MenuSummonAction::None;") != std::string::npos,
           "menu.cpp: overlapping summon is suppressed only after navigation is private");
+    // One source of truth for "this profile has a Hotkeys page": the page table. The policy has no field for it, the tick asks the table once, and the capture, its
+    // note timer and Escape ownership all follow that one bool; a flat open resets the capture and reads the page's state like VR's.
+    check(tick.find("const bool hotkeysPage = menuProfileHasPage(MenuPageSource::Hotkeys, runtimeFlatProfile());") != std::string::npos &&
+          text.find("pol.hotkeysPage") == std::string::npos && policyText.find("hotkeysPage") == std::string::npos &&
+          tick.find("hotkeysPage && s.captureEntry >= 0, shift, world)") != std::string::npos &&
+          tick.find("menuEscapeAction(esc, s.escapeDown, hotkeysPage && s.captureEntry >= 0, s.editEntry >= 0)") != std::string::npos,
+          "menu.cpp: the capture's claim on the summon key and Escape follows the page table's Hotkeys page, and the policy has no field for it");
+    check(bodyOf("void openMenu(uint64_t now) {").find("if (menuProfileHasPage(MenuPageSource::Hotkeys, runtimeFlatProfile())) {") != std::string::npos &&
+          text.find("hotkeyPageRowsFor(kMenuRows, kRowDefCount, runtimeFlatProfile(), s.developer, rows, 32)") != std::string::npos,
+          "menu.cpp: either profile's open resets a capture, and the Hotkeys page's rows come from the profile's own list");
     const std::string keys = bodyOf("void handleKeys(uint64_t now) {");
     const std::string apply = bodyOf("void applyDecision(int def, const CaptureDecision& dec) {");
     check(tick.find("if (keysReady || (drawnFresh && s.pages[s.page].status)) handleKeys(now)") != std::string::npos &&
@@ -2428,6 +2439,37 @@ void testRows() {
     }
     check(nEveryone == 3 && nDev == 5, "three rows for everyone (menu, AA comparison, camera history), five in developer mode");
     check(rowIndex("read_game_bindings") < 0, "a plain [hotkey] setting is not a row");
+    // The flat profile's page (hotkeyPageRowsFor): the Fix rows whose key the flat profile reads, and nothing else, whatever the developer switch says. VR's is as it was.
+    {
+        int flat[16], flatDev[16], vr[16], vrDev[16];
+        const int nFlat = hotkeyPageRowsFor(kMenuRows, kCount, true, false, flat, 16);
+        const int nFlatDev = hotkeyPageRowsFor(kMenuRows, kCount, true, true, flatDev, 16);
+        const int nVr = hotkeyPageRowsFor(kMenuRows, kCount, false, false, vr, 16);
+        const int nVrDev = hotkeyPageRowsFor(kMenuRows, kCount, false, true, vrDev, 16);
+        check(nFlat == 2 && nFlatDev == 2, "the flat Hotkeys page has two rows, with or without developer mode");
+        check(nFlat == 2 && strcmp(kMenuRows[flat[0]].key, "menu") == 0 && strcmp(kMenuRows[flat[1]].key, "compare_aa") == 0,
+              "the flat Hotkeys page is the Menu key, then the AA comparison key");
+        check(rowIndex("dump_camera") >= 0 && !contains(flat, nFlat, rowIndex("dump_camera")) && !flatProfileReadsKey("hotkey.dump_camera"),
+              "the camera history key is for everyone in VR, but the flat profile does not read it: no flat row");
+        for (const char* key : {"dump_draws", "dump_eyes"})
+            checkf(!contains(flat, nFlat, rowIndex(key)) && !contains(flatDev, nFlatDev, rowIndex(key)), "hotkey.%s (developer tier) is not on the flat page, developer mode or not", key);
+        bool allReadable = true, allFix = true;
+        for (int k = 0; k < nFlat; ++k) {
+            const std::string dotted = std::string("hotkey.") + kMenuRows[flat[k]].key;
+            allReadable &= flatProfileReadsKey(dotted.c_str());
+            allFix &= kMenuRows[flat[k]].tier == MenuTier::Fix;
+        }
+        check(allReadable && allFix, "every flat Hotkeys row is a Fix row whose key the flat gate reads");
+        // The investigation keys (hotkey.concourse_*, hotkey.gpu_pass_profile) are the flat gate's but have no row at all: they cannot reach the page.
+        bool investigationRow = false;
+        for (int i = 0; i < kCount; ++i)
+            investigationRow |= kMenuRows[i].kind == MenuKind::Hotkey && (strncmp(kMenuRows[i].key, "concourse_", 10) == 0 || strcmp(kMenuRows[i].key, "gpu_pass_profile") == 0);
+        check(!investigationRow, "no investigation hotkey (concourse_*, gpu_pass_profile) is a menu row");
+        check(nVr == nEveryone && nVrDev == nDev && nVr == 3 && nVrDev == 5, "the VR page is unchanged: three rows, five with developer mode");
+        bool same = true;
+        for (int k = 0; k < nVr; ++k) same &= vr[k] == all[k];
+        check(same, "the VR page's rows are hotkeyPageRows' own");
+    }
     // Table order is the page's order: the menu key first.
     check(nEveryone > 0 && strcmp(kMenuRows[all[0]].key, "menu") == 0, "the menu key leads the page");
     // No other row is a Hotkey row, and none of these sits on another page.

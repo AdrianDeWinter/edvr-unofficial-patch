@@ -14,6 +14,7 @@ enum class MenuAnchor { Screen, World };
 enum class MenuSizing { OutputPx, HeadsetPpd };
 enum class MenuNoticePlacement { ScreenCorner, WorldToast };
 
+// (Whether a profile has a Hotkeys page is not a policy field: the page table says it, menu_pages.h menuProfileHasPage.)
 struct MenuProfilePolicy {
   MenuAnchor anchor = MenuAnchor::Screen;          // a card on the screen, or a panel anchored in the world
   MenuSizing sizing = MenuSizing::OutputPx;         // sized from the output's own pixels, or sized from the headset's pixels per degree
@@ -23,7 +24,6 @@ struct MenuProfilePolicy {
   MenuNoticePlacement noticePlacement = MenuNoticePlacement::ScreenCorner;
   bool keyboardAlwaysPrivate = false;              // menu.keyboard is not read: the panel always takes the keyboard
   bool readsMenuKeys = false;                      // the [menu] keys are read (flat reads none of them)
-  bool hotkeysPage = false;                        // the Hotkeys page: a row can be waiting for a key to capture
   bool padNavigation = false;                      // the panel is navigated by a pad
   bool closesOnFocusLoss = false;                  // the menu closes when Elite loses the focus
   bool primesHotkeysOnClose = false;               // a held navigation key must not become a hotkey on close
@@ -48,7 +48,6 @@ inline MenuProfilePolicy menuPolicyFor(bool flatProfile) {
   p.adoptGameKeys = true;
   p.noticePlacement = MenuNoticePlacement::WorldToast;
   p.readsMenuKeys = true;
-  p.hotkeysPage = true;
   return p;
 }
 
