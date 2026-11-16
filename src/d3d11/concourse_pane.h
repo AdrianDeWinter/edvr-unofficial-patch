@@ -13,7 +13,7 @@
 // While the cull is on (the plain phase), the second draw is limited to the pixels whose scene behind the pane is farther than diag.concourse_mirror_beyond
 // metres: a mark pass (one fullscreen triangle at that depth, writing stencil bit 0x40 where the scene is farther) runs once a frame before the first mirror
 // draw, and the mirror draw tests that bit. Glass with a wall behind it (a terminal screen) is left as the game drew it. Each pane's side, learned by two
-// occlusion queries (the game's glass samples, the mirror's samples), decides which panes still mirror once the cull is lifted (the bay window clearing).
+// occlusion queries (the game's glass samples, the mirror's samples), decides when the cull is lifted (the windows clearing together).
 // Family draws are also measured: an occlusion query around the game's draw gives the share of the viewport it covers, whatever the mode.
 //
 // The draw thunks of vscreen.cpp (hookedDraw and hookedDrawInstanced for what is withheld; hookedDrawIndexed and hookedDrawIndexedInstanced for that and the
@@ -145,8 +145,7 @@ struct ConcoursePaneFeed {
     bool effects = false;       // the outside effects are not issued although the phase is not the plain one (the backdrop capture's lift); withhold implies it
     bool sealed = false;        // the hangar is sealed: the families that can only be outside are not issued (concourse_cull_core.h, sealedToo)
     bool realSky = false;       // this room's windows show the real sky (cc::RoomLayout::realSky): the planet, its atmosphere and the sun are issued with the cull on (skySide)
-    float bayOpacity = 1.0f;    // the clearing pane's opacity, 0 to 1
-    float enterShare = 0.0f;    // the share of the view at which the clearing starts (diag.concourse_clear_share); 0 never: a pane read as exterior that fills this much becomes the clearing pane
+    float bayOpacity = 1.0f;    // the opacity every outside pane has while the cull is lifted, 0 to 1
     float up[3] = {};           // the anchor's local up axis in world (the steady glow's sky test); zero when not valid
     bool upValid = false;
     uint32_t bayN = 0;          // this room's bay window's index count (cc::RoomLayout); 0 is the large station's
@@ -154,11 +153,11 @@ struct ConcoursePaneFeed {
 };
 void concoursePaneSetFeed(const ConcoursePaneFeed& feed) noexcept;
 
-// The latest completed frame's shares of the viewport, per index count (family draws only).
+// The latest completed frame's shares of the viewport: the total of the outside glass in the main view, and per index count (family draws only).
 struct ConcoursePaneShares {
     bool valid = false;     // a reading from the last 250 ms
     uint32_t seq = 0;       // moves with each new frame read
-    float bay = -1.0f;      // the largest share of a clearing-pane draw (n == the clearing pane's index count: 36, the bay window, until another exterior pane is approached); 0 when none was drawn; negative when not valid
+    float exterior = -1.0f; // the total share of the main view that all the outside glass fills (cc::exteriorGlassShare, each pane weighted by its entry scale); 0 when none was drawn; negative when not valid
     uint32_t count = 0;
     uint32_t n[8] = {};
     float share[8] = {};    // 0 to 1
@@ -179,12 +178,11 @@ bool concoursePaneTakeSurveyRequest() noexcept;
 struct ConcoursePaneMirrorStats {
     uint64_t markPasses = 0, markRefused = 0, tests = 0;
     uint32_t known = 0, exterior = 0, dropped = 0;
+    uint32_t shareSamplesDropped = 0;   // glass draws measured since the last call that did not fit a frame's sample table
 };
 ConcoursePaneMirrorStats concoursePaneTakeMirrorStats() noexcept;
 // The mode ("mirror-backdrop", "mirror-steady", "mirror", "mirror-soft", "tint", "off") and the number of panes in the list, for the summary.
 const char* concoursePaneModeName() noexcept;
-// The index count treated as the clearing pane now (36 until an exterior pane fills the view).
-uint32_t concoursePaneClearingN() noexcept;
 uint32_t concoursePaneSlotCount() noexcept;
 void concoursePaneNoteShader(uint64_t hash, const void* bytecode, size_t len) noexcept;   // a pixel shader was created: one of the glass's layout joins the glass family (any thread)
 // Panes are being treated: the feed says treat, the mode is not off and the replacement states are made.

@@ -4388,22 +4388,21 @@ cc::ClearOutput concourseClearStep(uint64_t now, bool wantCull, bool gateWanted,
     cc::ClearInput in;
     in.nowMs = now;
     in.gate = wantCull;
-    in.bayShare = sh.valid ? sh.bay : -1.0f;
+    in.windowShare = sh.valid ? sh.exterior : -1.0f;
     in.shareSeq = sh.seq;
-    in.enterShare = g_concEnterShare * cc::clearEntryScale(concoursePaneClearingN(), g_concLayout->bayN);   // the shop window enters at 0.3 of the share; the exit follows at 0.4 of that
+    in.enterShare = g_concEnterShare;   // the shop window's 0.3 entry scale is inside the total (cc::exteriorGlassShare); the exit follows at 0.4 of the share
     const cc::ClearPhase before = g_concClear.phase();
     const cc::ClearOutput out = g_concClear.step(in);
     if (out.phase != before) {
         float local[3] = {};
-        const bool camOk = concourseCamLocal(local);   // for the log line only: the machine follows the bay's share of the view, not the camera
+        const bool camOk = concourseCamLocal(local);   // for the log line only: the machine follows the outside glass's share of the view, not the camera
         char pane[48] = {};
-        if (sh.valid) std::snprintf(pane, sizeof(pane), "%.1f%%", 100.0 * static_cast<double>(sh.bay));
+        if (sh.valid) std::snprintf(pane, sizeof(pane), "%.1f%%", 100.0 * static_cast<double>(sh.exterior));
         else std::snprintf(pane, sizeof(pane), "unread");
         char cam[96] = {};
         if (camOk) std::snprintf(cam, sizeof(cam), "cam_local %.2f %.2f %.2f", static_cast<double>(local[0]), static_cast<double>(local[1]), static_cast<double>(local[2]));
         else std::snprintf(cam, sizeof(cam), "cam_local unreadable");
-        Log::get().note("concourse clear: %s (%spane n=%u %s of the view, %s)", cc::clearPhaseName(out.phase), wantCull ? "" : "gate lost, ",
-                        static_cast<unsigned>(concoursePaneClearingN()), pane, cam);
+        Log::get().note("concourse clear: %s (%sexterior glass %s of the view, weighted, %s)", cc::clearPhaseName(out.phase), wantCull ? "" : "gate lost, ", pane, cam);
     }
     // The shares line: at most once a second while the gate holds, when a share moved by over half a point or a window type came or went.
     if (gateWanted && sh.valid && sh.seq != g_concShareSeq && now - g_concShareLogMs >= 1000) {
@@ -4426,9 +4425,9 @@ cc::ClearOutput concourseClearStep(uint64_t now, bool wantCull, bool gateWanted,
             if (sh.count == 0) std::snprintf(text, sizeof(text), "no family draw");
             float sl[3] = {};
             if (concourseCamLocal(sl))
-                Log::get().note("concourse pane shares: %s cam_local %.2f %.2f %.2f", text, static_cast<double>(sl[0]), static_cast<double>(sl[1]), static_cast<double>(sl[2]));
+                Log::get().note("concourse pane shares: exterior %.1f%% (weighted) %s cam_local %.2f %.2f %.2f", 100.0 * static_cast<double>(sh.exterior), text, static_cast<double>(sl[0]), static_cast<double>(sl[1]), static_cast<double>(sl[2]));
             else
-                Log::get().note("concourse pane shares: %s", text);
+                Log::get().note("concourse pane shares: exterior %.1f%% (weighted) %s", 100.0 * static_cast<double>(sh.exterior), text);
         }
     }
     return out;
@@ -5998,7 +5997,6 @@ void concourseTick(uint64_t now, uint32_t frame) {
     feed.effects = (cullActive || backdropLift) && !lookOn;
     feed.bayOpacity = clr.bayOpacity;
     feed.sealed = g_sealedFlag.load(std::memory_order_acquire);   // the hangar is sealed: what can only be outside is not issued, with no diag key
-    feed.enterShare = g_concEnterShare;
     feed.bayN = g_concLayout->bayN;
     feed.backdropRadiusM = g_concLayout->backdropRadiusM;
     {
@@ -6144,7 +6142,7 @@ void concourseTick(uint64_t now, uint32_t frame) {
             g_concSumFrames = 0;
             Log::get().note("concourse cull 5s: rigs seen %u vetoed %u, producer vetoed %u kept %u (name %u, small-close %u, unreadable-name %u, unreadable-sphere %u), "
                             "store cleared %u, callback cost %.3f ms/frame, panes treated %u draws (mode %s, %u slots), outside draws withheld %u, phase %s, "
-                            "mark passes %u (refused %u), panes known %u exterior %u (dropped %u), tests %u",
+                            "mark passes %u (refused %u), panes known %u exterior %u (dropped %u), tests %u, share samples dropped %u",
                             static_cast<unsigned>(g_concWin.rigSeen.exchange(0)), static_cast<unsigned>(g_concWin.rigVetoed.exchange(0)),
                             static_cast<unsigned>(g_concWin.prodVetoed.exchange(0)), static_cast<unsigned>(g_concWin.prodKept.exchange(0)),
                             static_cast<unsigned>(g_concWin.kept[0].exchange(0)), static_cast<unsigned>(g_concWin.kept[1].exchange(0)),
@@ -6152,13 +6150,13 @@ void concourseTick(uint64_t now, uint32_t frame) {
                             static_cast<unsigned>(g_concWin.storeCleared.exchange(0)), ms, static_cast<unsigned>(treated), concoursePaneModeName(),
                             static_cast<unsigned>(concoursePaneSlotCount()), static_cast<unsigned>(withheld), cc::clearPhaseName(clr.phase),
                             static_cast<unsigned>(mir.markPasses), static_cast<unsigned>(mir.markRefused), static_cast<unsigned>(mir.known),
-                            static_cast<unsigned>(mir.exterior), static_cast<unsigned>(mir.dropped), static_cast<unsigned>(mir.tests));
+                            static_cast<unsigned>(mir.exterior), static_cast<unsigned>(mir.dropped), static_cast<unsigned>(mir.tests), static_cast<unsigned>(mir.shareSamplesDropped));
         } else if (concoursePaneTreating()) {
             Log::get().note("concourse pane 5s: treated %u draws (mode %s, %u slots), outside draws withheld %u, phase %s, mark passes %u (refused %u), panes known %u exterior %u "
-                            "(dropped %u), tests %u",
+                            "(dropped %u), tests %u, share samples dropped %u",
                             static_cast<unsigned>(treated), concoursePaneModeName(), static_cast<unsigned>(concoursePaneSlotCount()), static_cast<unsigned>(withheld),
                             cc::clearPhaseName(clr.phase), static_cast<unsigned>(mir.markPasses), static_cast<unsigned>(mir.markRefused), static_cast<unsigned>(mir.known),
-                            static_cast<unsigned>(mir.exterior), static_cast<unsigned>(mir.dropped), static_cast<unsigned>(mir.tests));
+                            static_cast<unsigned>(mir.exterior), static_cast<unsigned>(mir.dropped), static_cast<unsigned>(mir.tests), static_cast<unsigned>(mir.shareSamplesDropped));
         }
     }
     (void)frame;
