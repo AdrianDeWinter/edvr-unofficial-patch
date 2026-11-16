@@ -2,18 +2,25 @@
 
 ## Status
 
-- **State (2026-11-16):** all seven steps built on branch
-  `f8-menu-unification`, each with a green full validation build and rigs.
-  NOT FLOWN: nothing has run in the game yet. The flight checklist is at the end.
-- **2026-11-16, the monitor panel:** in flat the Monitor is no longer a tab.
-  `hotkey.monitor_panel` (default F5) shows it as a panel of its own in the
-  top-right corner, a second flat raster, with or without the F8 menu, and the
-  game keeps all input. BUILT, NOT FLOWN. See the dated entry below.
+- **State (2026-11-16):** all seven steps and the flat monitor panel are built
+  on branch `f8-menu-unification`, each with a green full validation build and
+  rigs. Flown in part: the flat profile four times by the PR author, VR once by
+  the maintainer's reviewer (see the flight journal). The checklist at the end
+  says what is still open.
+- **Flown, 2026-11-16:** flat four times by the PR author (Status page, Hotkeys
+  page, tab titles, row labels and Monitor graph labels fixed in turn), VR once
+  by the maintainer's reviewer (new look accepted; menu tick cost measured
+  higher, font measurements now cached). Details in the journal.
+- **Not flown:** XeSS Frame Generation on (presented against rendered rate,
+  against PresentMon) and the flat Monitor panel together with the menu on
+  screen.
 - **Goal:** one settings menu implementation for both profiles, and the VR
   menu's tooling (tooltips, Monitor, FPS readout, Status, Hotkeys, restart
   indication) brought to the flat profile.
-- **Work:** seven steps, below, each building green and testable on its own.
-  Steps 1 and 2 change nothing a user sees.
+- **Changed on purpose in VR:** the raster is shared, so VR's panel looks
+  different. Listed under "What changes in VR".
+- **Comparability:** flat LONG FRAME counts before and after this branch are
+  not comparable (the budget is now refresh-derived, journal entry below).
 - **Out of scope:** a Plugins tab in flat (blocked on add-ons running in flat),
   developer pages in flat, a GPU frame-time graph in flat, a configurable flat
   readout position. Each becomes its own issue.
@@ -23,275 +30,151 @@
   so a menu key Elite also binds reaches the game there (as in VR); whether F5
   is the right default for the monitor panel key; the GPU price of the second
   full-frame composite while the menu and the panel are both up.
-- **Next:** fly the checklist, then open the PR.
+- **Next:** fly the open checklist items (XeSS FG, monitor panel with the
+  menu), then merge.
 - **Related:** `docs/settings-menu.md` (the VR menu's design),
   `docs/xess-frame-generation-2026-11-12.md`,
   `docs/design-plugin-architecture-2026-09-30.md`.
 
 ## Background
 
-F8 opens EDVR's settings menu in both profiles. In VR it is a panel floating in
-the world, aimed at with the head and driven by keyboard or pad. In flat it is
-a card in the upper-left corner of the screen. Each writes straight into
-`edvr.ini`, so the file stays the single source of truth.
-
-The two menus look like separate implementations, but most of the code is
-already shared:
-
-| Part | Shared? |
-|---|---|
-| Row definitions (generated from the `# ui:` lines in `edvr.ini`) | yes |
-| Stepping, typing a value, hotkey capture, writing the ini, restart badges | yes |
-| Building the page content (`buildContent`) | yes |
-| Rasterising the panel (GDI, on a worker thread) | yes |
-| Compositing it (one compute shader; flat passes a screen-shaped view) | yes |
-| Configure step (`menuConfigure`) | **no**: two branches |
-| Per-frame driver (`menuTick`) | **no**: two branches, ~110 and ~400 lines |
-| Which pages exist (`buildPages`) | **no**: flat uses three hand-kept tables |
-| Notices | **no**: flat has its own notice card, VR has toasts |
-| Panel sizing | **no**: flat is a fixed 860 px card |
-
-The two `menuTick` branches repeat the same steps in different shapes (summon,
-Escape, the "panel not drawn" watchdog, keyboard gate, keys and pad, building
-and submitting content), and VR adds the rest. That duplication is where the
-two menus drift apart, and it is why features built for VR never reached flat.
-
-Flat today has three tabs: Performance, Visual, Debug. VR has Performance,
-Fixes, Visual, Mirror window, Native on foot, Hotkeys, Plugins, Monitor and
-Status, plus three developer pages.
+F8 opens EDVR's settings menu in both profiles: in VR a panel floating in the
+world, in flat a card in the upper-left corner. Each writes into `edvr.ini`. Most
+of the code was already shared (row definitions from the `# ui:` lines, stepping,
+typing, hotkey capture, restart badges, `buildContent`, the GDI raster, the one
+composite shader). Not shared were the configure step, the per-frame driver
+`menuTick` (~110 and ~400 lines), the page list, notices and panel sizing. That
+duplication is where the menus drifted apart. Flat had three tabs (Performance,
+Visual, Debug); VR has nine plus developer pages.
 
 ## What changes for users
 
-Flat players get:
+Flat players get tooltips beside the card; the Monitor (frame rate and time, 1% low,
+CPU time, drops, CPU load, RAM, VRAM, GPU, graphs; a panel of its own, see the
+journal); an FPS readout top right in two sizes; a Status page (what is actually
+running, plus Elite's graphics-settings warning, moved from the Performance tab);
+a Hotkeys page; restart indication (row, footer, Status page, notice on close);
+and crisper text, drawn at the screen's own pixel size.
 
-- **Tooltips:** an explanation of the highlighted setting beside the card.
-- **Monitor page:** frame rate, frame time, 1% low, CPU time, drops, CPU load,
-  RAM, VRAM and GPU figures, with frame-time graphs.
-- **FPS readout** while playing, in the top-right corner, in two sizes.
-- **Status page:** what is actually running (mode, upscaling, frame
-  generation, display mode, wrappers), and Elite's graphics-settings warning,
-  which moves here from the Performance tab.
-- **Hotkeys page:** rebind the hotkeys the flat profile uses without editing
-  the ini.
-- **Restart indication:** settings that only apply at the next game start say
-  so on their row, in the footer, on the Status page and in a notice when the
-  menu closes.
-- **Crisper text:** the card is drawn at the screen's own pixel size instead
-  of being scaled.
-
-Both profiles get:
-
-- `menu.fps_overlay` becomes `off | compact | detailed` (today: on/off, VR only).
-  An existing `on` keeps working and means `compact`.
-- **With XeSS Frame Generation, the rendered and the presented frame rate are
-  always shown separately**, never as one figure.
+Both profiles get `menu.fps_overlay` as `off | compact | detailed` (before:
+on/off, VR only; an existing `on` still works and means `compact`), and with
+XeSS Frame Generation the rendered and the presented frame rate are always
+shown separately, never as one figure.
 
 ## Design
 
 ### A profile policy instead of branches
 
 A small, pure description of what differs between the profiles replaces the
-`if (flat)` branches:
-
-- where the panel sits: on the screen, or anchored in the world;
-- how it is sized: from the output's pixels, or from the headset's pixels per
-  degree;
-- whether it fades, whether it aims with the head;
-- whether Elite's own panel keys are adopted as menu keys;
-- where notices appear;
-- which pages exist.
-
-`menuTick` and `menuConfigure` each become one body that asks the policy. The
-policy lives in its own header with no Windows or D3D dependencies, so a test
-rig can drive the open, close, Escape, watchdog and notice sequences for both
-profiles. Today no rig compiles `menu.cpp`, so this logic is untested outside a
-flight; pulling the decisions into a testable core is part of the point.
+`if (flat)` branches: where the panel sits (screen or world), how it is sized
+(output pixels or the headset's pixels per degree), whether it fades or aims
+with the head, whether Elite's own panel keys are adopted as menu keys, where
+notices appear, and which pages exist. `menuTick` and `menuConfigure` are each
+one body that asks the policy. The policy lives in its own header with no
+Windows or D3D dependencies, so a test rig drives the open, close, Escape,
+watchdog and notice sequences for both profiles; before this, no rig compiled
+`menu.cpp`.
 
 ### Settings the flat profile may read
 
 The flat profile only reads keys on its allow-list
 (`src/common/flat_profile_keys.h`). A key not on the list reads as 0 or `off`,
 whatever the file says, and nothing complains. So every `menu.*` key a flat
-feature uses must be added to that list in the step that uses it, and the
-existing build check that fails on a flat menu row with a refused key is
-extended to every flat page.
-
-This matters for notices in particular: flat shows its notices (the AA
-comparison key, the concourse window mode) unconditionally today. Once notices
-go through the toast path they are governed by `menu.toasts`, which flat cannot
-read yet and would therefore see as `off`. Until `menu.toasts` is on the flat
-list, the flat policy keeps notices on, so step 1 changes nothing.
+feature uses is on that list, and the build check that fails on a flat menu row
+with a refused key covers every flat page. Notices go through the toast path
+and so follow `menu.toasts` (default on), which is on the flat list.
 
 ### One page table
 
-`buildPages` becomes one loop over a table of pages, each with the profiles it
+`buildPages` is one loop over a table of pages, each with the profiles it
 appears in and where its rows come from: an ini `menu` token, one of the flat
 row tables, or a built-in page (Hotkeys, Plugins, Monitor, Status, developer
-actions, the aiming prompt). The flat tables themselves stay as they are, so
-which rows each flat tab shows does not change.
-
-A side effect fixes a small flat bug: rebuilding the pages keeps the
-highlighted row in VR but jumps back to the first row in flat.
+actions, the aiming prompt). The flat tables stay as they were, so which rows
+each flat tab shows did not change. A side effect fixes a flat bug: rebuilding
+the pages keeps the highlighted row in flat as it already did in VR.
 
 ### One raster, one thing on screen at a time
 
-The panel has a single raster. The menu, a notice and the FPS readout cannot
-be on screen together; the priority is the menu, then a notice, then the
-readout. With the menu open, the readout's single line can be shown at the top
-of the menu card (`menu.fps_overlay_lock`, as VR does today). A notice briefly
-hides the readout. A second raster is possible later if that proves annoying.
-2026-11-16: the monitor panel is that second raster (its own slot in
-`menu_panel.cpp`). The menu, a notice and the readout still share the first,
-with the priority above.
+The panel has a single raster. The menu, a notice and the FPS readout cannot be
+on screen together; the priority is the menu, then a notice, then the readout.
+With the menu open, the readout's single line can be shown at the top of the
+menu card (`menu.fps_overlay_lock`, as VR does). The flat monitor panel is a
+second raster (its own slot in `menu_panel.cpp`).
 
 ### Flat sizing and placement
 
-The flat card was a fixed 860 px raster, composited at a size relative to the
-screen. Measured in the layout rig, the Performance tab's raster is 860 x 1106
-px and the composite fitted it to 42.5 % of the screen height: 357 px wide at
-1080p, a 0.415x resample there and 0.83x at 4K. The flat policy now sizes the
-raster from the output's own pixels instead, as VR sizes it from the headset's
-pixels per degree, and composites it 1:1. The on-screen size is kept: the card
-is 0.3305 of the output height wide (357 px at 1080p, 476 at 1440p, 714 at
-2160p), capped at 45 % of the width, with text cap height scaled from 34 px at
-860 and never below 14 px. Both fractions are constants in
-`src/d3d11/menu_flat_layout.h`. A page taller than 85 % of the output is the
-one case still scaled down.
-
-The composite today pins the card to the top-left corner. The readout needs
-the top-right corner, so the flat placement gains a corner parameter. Tooltips
-widen the bitmap to the right of the card; the card itself keeps its size and
-position.
+The flat card was a fixed 860 px raster composited at 42.5 % of the screen height
+(a 0.415x resample at 1080p). The flat policy now sizes the raster from the
+output's pixels and composites it 1:1, keeping the on-screen size: 0.3305 of the
+output height wide (357 px at 1080p, 714 at 2160p), capped at 45 % of the width,
+text cap height scaled from 34 px at 860, never below 14 px (constants in
+`src/d3d11/menu_flat_layout.h`). A page taller than 85 % of the output is scaled
+down. The composite takes a corner (card top-left, readout top-right); tooltips
+widen the bitmap to the right without moving the card.
 
 ### Rendered and presented frame rate
 
-Under XeSS Frame Generation, Elite's own D3D11 Present runs at the rendered
-rate, and EDVR's bridge presents rendered plus generated frames on the real
-window. The two are measured separately:
+Under XeSS Frame Generation, Elite's Present runs at the rendered rate and EDVR's
+bridge presents rendered plus generated frames. Rendered comes from the
+frame-time recorder (flat now feeds it at its own Present). Presented is the sum
+of `framesPresented` from XeSS-FG's present status; whether it equals what the
+display showed is for the flight to compare with PresentMon. If the field fails or
+stays 0 for 30 presents, it falls back to the swap chain's DXGI `PresentCount`,
+and the log names the source once. It is never computed as rendered x (1 +
+generated); that is what was asked for, not what happened.
 
-- **Rendered:** the existing frame-time recorder, which the flat profile does
-  not feed today. Flat will feed it at its own Present.
-- **Presented:** the sum of `framesPresented` from XeSS-FG's per-frame present
-  status (`xefg_swapchain_present_status_t`). Intel documents it as the number
-  of frames sent to be presented by the last call; whether that equals what
-  the display showed is for the flight to compare with PresentMon. When that
-  field fails or stays 0 for 30 presents, the count comes from the presenting
-  swap chain's DXGI frame statistics (`PresentCount`), which also covers the
-  bridge's plain fallback swap chain. The log names the source once. It is
-  never computed as rendered x (1 + generated frames): that is what was asked
-  for, not what happened.
-
-Display rules:
-
-- Whenever the bridge exists this session, both rates are shown, even with
-  frame generation switched off (they are then equal).
-- If frame generation stopped, the readout says so and why, instead of showing
-  two equal numbers.
-- Without a bridge, there is no presented figure at all (not a 0).
-- If the presented count cannot be read, it says "unavailable".
-- The graph's budget line is the display's refresh period for presented
-  frames, and that period times the frame-generation factor for rendered
-  frames.
+With a bridge both rates are shown (equal with frame generation off); if frame
+generation stopped, the readout says so and why; without a bridge there is no
+presented figure; an unreadable count says "unavailable". The graph's budget
+line is the refresh period for presented frames, times the frame-generation
+factor for rendered frames.
 
 ### The FPS readout
 
-`menu.fps_overlay`:
-
-- `off`: nothing (the default).
-- `compact`: one line. With the bridge: `render 58 / shown 116 fps  cpu 9.1 ms`
-  and drops; without: `58 fps  cpu 9.1 ms` and drops. Refreshed twice a second.
-- `detailed`: a small card. Rendered and presented rate; frame time, 1% low,
-  CPU time and drops; one frame-time graph (presented overlaid on rendered when
-  bridged). Refreshed about four times a second.
-
-The readout uses only the cheap per-frame figures. CPU load, RAM, VRAM and GPU
-load stay on the Monitor page, whose samplers run only while that page is
-showing. In VR both sizes are head-locked at `menu.fps_overlay_yaw/pitch`, as
-today; in flat the readout sits in the top-right corner. The F8 row for it
-joins the flat Performance tab, along with "FPS readout in menu"; the VR
-position rows do not, as they mean nothing on a screen.
-
-Old values: `on`, `true` and `1` read as `compact`; `off`, `false` and `0` as
-`off`. The menu writes the new words. The installer does not write this key.
+`menu.fps_overlay`: `off` (default); `compact`, one line (`render 58 / shown 116
+fps  cpu 9.1 ms` with the bridge, `58 fps  cpu 9.1 ms` without, plus drops, twice a
+second); `detailed`, a small card with both rates, frame time, 1% low, CPU time,
+drops and one graph (about four times a second). Only cheap per-frame figures; CPU
+load, RAM, VRAM and GPU stay on the Monitor page. In VR both sizes are
+head-locked at `menu.fps_overlay_yaw/pitch`; in flat the readout sits top right.
+Old values `on`/`true`/`1` read as `compact`, `off`/`false`/`0` as `off`.
 
 ### Restart indication
 
-A setting marked `restart` in `edvr.ini` already gets a badge, and once
-changed shows `old -> new` and "at next launch". That works in flat too. What
-is missing:
-
-- **Settings that only sometimes need a restart.** XeSS Frame Generation is
-  live once its bridge exists, but the bridge can only be made as the game
-  starts: turning it on, or choosing XeSS-SR, after a launch without it needs a
-  restart. Today only the highlighted row's hint says so. A table of runtime
-  conditions, one entry per such setting, marks a row as waiting for a restart
-  exactly when its current value cannot take effect until then. When frame
-  generation failed, the row says "stopped" and why instead, since a restart
-  will not fix that.
-- **Flat footer:** the count of changes waiting for a restart (VR's footer
-  already shows it).
-- **Notice on close:** one when the menu closes with changes still waiting
-  ("2 changes apply at next game start"), in both profiles, except when a
-  profile switch closed it. There is no notice per change: a change made in the
-  menu is made with the menu open, where the row and the footer already say it,
-  and notices only show once it is closed. The log has one line per change.
-- **Flat notices follow `menu.toasts`**, as VR's toasts do (default on).
-- **Status page:** "Restart pending" with the settings' names.
+A `restart`-marked setting gets a badge and, once changed, `old -> new` and "at
+next launch", in flat too. Added: a table of runtime conditions for settings that
+only sometimes need a restart (XeSS Frame Generation and XeSS-SR need the bridge,
+which is made only as the game starts; a failed frame generation says "stopped"
+and why instead); the flat footer's count of changes waiting; one notice when the
+menu closes with changes waiting (both profiles, not after a profile switch; none
+per change, the log has a line each); and "Restart pending" on the Status page.
 
 ### The flat Status page
 
-ED-UP version; profile; display (size, refresh rate, borderless or exclusive
-fullscreen); anti-aliasing (requested and running mode, model, DLSS or DLAA);
-upscaling (internal to output size); frame generation (off, on with its
-factor, stopped and why, or at next launch); sharpening; HUD quality; a
-graphics wrapper such as ReShade if one handles the game's calls; keyboard
-gate; Elite's graphics-settings warning; changes waiting for a restart; last
-write. The Performance tab keeps a one-line pointer while the warning is
-active. As on VR's Status page, keys pass through to the game.
+ED-UP version; profile; display; anti-aliasing (requested and running mode);
+upscaling sizes; frame generation (off, on with its factor, stopped and why, or
+at next launch); sharpening; HUD quality; a graphics wrapper such as ReShade;
+keyboard gate; Elite's graphics-settings warning (the Performance tab keeps a
+one-line pointer); changes waiting for a restart; last write. As in VR, keys pass
+through to the game.
 
 ### The flat Hotkeys page
 
 The VR page's everyone-visible rows, filtered to the hotkeys the flat profile
-reads: today the menu key, the AA comparison key and, since 2026-11-16, the monitor panel key, which only the flat profile reads and VR's page does not list. Capture and the pad rules
-are shared. Clash badges against Elite's bindings are not shown in flat: the
-flat profile does not read Elite's bindings (`hotkey.read_game_bindings` is
-not on its list), and turning that on is a separate decision. Temporary
-investigation hotkeys have no menu rows, so they stay off.
+reads: the menu key, the AA comparison key and the monitor panel key (which only
+flat reads). Capture and the pad rules are shared. Clash badges against Elite's
+bindings are not shown in flat: it does not read Elite's bindings
+(`hotkey.read_game_bindings` is not on its list), and turning that on is a
+separate decision. Temporary investigation hotkeys have no rows.
 
-## Steps
+## What was built
 
-Each step builds green and can be tested on its own. A "flight" is a test
-session in the game.
-
-1. **One tick, one configure.** The profile policy, the merged `menuTick` and
-   `menuConfigure`, flat notices on the toast path. No visible change; the log's
-   `menu:` lines keep their wording. Before merging, record the current open,
-   close, Escape, watchdog and notice behaviour in a rig, and keep it passing.
-   *Flights:* flat (open, change a setting, AA comparison notice, close, switch
-   VR to flat live) and VR (open, aim, toast).
-2. **One page table.** No visible change except the kept highlight in flat. A
-   rig pins each profile's pages and rows in order.
-3. **Restart indication.** The conditional-restart table, the flat footer
-   count, the notices, the Status line. `menu.toasts` joins the flat allow-list
-   here. A rig covers every case of the XeSS conditions and the footer text.
-   *Flight:* flat, XeSS FG turned on without a bridge, then after a restart.
-4. **Flat layout: crisp sizing and tooltips.** Raster from output pixels,
-   tooltip strip, `menu.tooltip_delay` on the allow-list. *Flight:* flat at
-   1080p and 4K.
-5. **Monitor and FPS readout.** Flat feeds the frame recorder; the presented
-   count from the bridge; the Monitor page in flat; `menu.fps_overlay` gains its
-   three values in both profiles. A rig covers the counter, its wrap, a fallback
-   bridge and no bridge, the old values' parsing, and the detailed card's layout
-   at flat and VR sizes. *Flights:* flat on an Intel Arc (2x and 3x) and on a
-   non-Intel GPU, frame generation on and off, compared with PresentMon's
-   displayed-frames figure; VR with the detailed card.
-6. **Flat Status page**, with the graphics-settings warning moved to it.
-7. **Flat Hotkeys page.**
-
-Not in this work, each its own issue: a Plugins tab in flat (needs add-ons to
-run in flat first; with step 2 it becomes one row of the page table), developer
-pages in flat, a GPU frame-time graph in flat (needs GPU timing of its own), a
-configurable flat readout position.
+Seven steps, each green with rigs: one tick and one configure through the profile
+policy; one page table; restart indication; flat layout (crisp sizing,
+tooltips); Monitor and the FPS readout (rigs cover the counter, its wrap, a
+fallback bridge, no bridge, old value parsing, the detailed card at flat and VR
+sizes); the flat Status page; the flat Hotkeys page. Later: the monitor panel,
+the long-frame budget and the layout polish below.
 
 ## Constraints
 
@@ -300,84 +183,143 @@ configurable flat readout position.
 - No new settings for experiments. The `menu.*` keys already exist and gain a
   meaning in flat; their names describe what the user gets.
 - The panel holds at most 23 lines (raised from 21 for the two readout rows on
-  the flat Performance tab) and its raster at most 2048 px high. The flat
-  Status page with Elite's settings warning needs all 23. The flat monitor panel
-  (the Monitor page's content under one tab) is as tall as the Monitor page was,
-  1103 px at 2160p, and would pass 2048 px near 8K output height.
-- New log lines name where each figure came from, so a log shows which counter
-  was read.
+  the flat Performance tab) and its raster at most 2048 px high. The flat Status
+  page with Elite's settings warning needs all 23. The flat monitor panel is as
+  tall as the Monitor page was, 1103 px at 2160p, and would pass 2048 px near 8K
+  output height.
+- New log lines name where each figure came from.
 
-## 2026-11-16: the monitor panel (BUILT, NOT FLOWN)
+## Journal
 
-User decision: in flat, the Monitor tab leaves the F8 menu and becomes a panel
-of its own, so the frame-rate gauges can stay up while the game is played.
+### 2026-11-16: the monitor panel
+
+In flat, the Monitor tab leaves the F8 menu and becomes a panel of its own, so
+the frame-rate gauges can stay up while the game is played.
 
 - **Shown by** `hotkey.monitor_panel`, default F5, a row of the flat Hotkeys
   page. Flat only: VR keeps its Monitor tab, does not read the key, and its
   Hotkeys page and duplicate check do not list it (`flatProfileOnlyKey` in
-  `src/common/flat_profile_keys.h`). F5 because F2 to F9 are bound in no
-  stock Elite scheme (`docs/settings-menu.md`), F7, F8 and F9 are EDVR's, F2,
-  F3, F4 and F6 are the concourse arc's test keys, and F5 was Explorer Cam's,
-  retired in F98.
+  `src/common/flat_profile_keys.h`). F5 because F2 to F9 are bound in no stock
+  Elite scheme (`docs/settings-menu.md`) and F5 was Explorer Cam's, retired.
 - **Independent of the menu.** Either can be up alone or both together. The
   panel never takes the keyboard or the pad and has no rows; the key is
-  watched, not captured. Whether it is up is session state, never written;
-  a launch and a profile switch start with it down.
-- **Placement:** top right, the menu card's width and text height at the
-  output (`flatCardSize`), 1:1; the menu card and its tooltip strip stay clear
-  of it at 720p to 2160p (menu_policy_test, native_menu_test).
-- **A second raster.** `menu_panel.cpp` has a monitor slot: its own pending
-  content and finished raster in the shared worker, its own texture, serial
-  and geometry. The flat composite draws the menu's slot, then the monitor's
-  over the result; only the menu's slot advances the menu's heartbeat. The
-  menu's GPU objects are shared. While both are up the composite runs twice a
-  Present.
-- **Readout:** `menu.fps_overlay` is not drawn while the panel is up (same
-  corner; the panel shows a superset) and comes back when it goes down.
-- **Samplers:** the once-a-second samplers run while the panel is up.
+  watched, not captured. Up or down is session state, never written.
+- **Placement:** top right, the menu card's width and text height, 1:1; the menu
+  card and its tooltip strip stay clear of it at 720p to 2160p.
+- **A second raster:** its own pending content, raster, texture, serial and
+  geometry in the shared worker. The flat composite draws the menu's slot, then
+  the monitor's over it; only the menu's slot advances the menu's heartbeat.
+  While both are up the composite runs twice a Present.
+- **Readout:** `menu.fps_overlay` is not drawn while the panel is up and comes
+  back when it goes down. The once-a-second samplers run while it is up.
 - **Log:** `menu: monitor panel key F5 (hotkey.monitor_panel).` at configure,
-  `menu: the monitor panel is up (F5).` / `down` on each press, and
-  `menu panel: first monitor panel composite -- ...` once. A flight with none
-  of these ran a build without the panel.
+  `menu: the monitor panel is up (F5).` / `down` on each press, and `menu panel:
+  first monitor panel composite -- ...` once. A flight with none of these ran a
+  build without the panel.
+
+### 2026-11-16: flat long frames use a refresh-derived budget
+
+Flat now logs long frames against `budgetNow`, the display period times
+(1 + generated frames), instead of a fixed 11.1 ms. At 60 Hz the drop threshold
+is 33 ms, at 144 Hz 13.9 ms. Flat LONG FRAME counts are therefore not
+comparable between builds before and after this branch. Whether the new flat
+long-frame log lines are too frequent is still a flight question.
+
+### 2026-11-16: layout polish by Fenris159
+
+Contributor Fenris159 refined the shared menu renderer (F8 menu, monitor panel,
+tooltips, readouts, flat and VR) without changing what any setting, hotkey or
+profile policy means. What shipped and still describes the code:
+
+- Labels share a left edge, values a consistent right edge, with a gutter
+  between the columns. Restart information has its own secondary line, tall
+  enough for its text, below the aligned label and value. Graph captions have
+  their own space above the data. Selection is a narrow marker and a subtle
+  fill; decoration that does not help orientation is omitted. Segoe UI stays,
+  with the renderer's existing font-measurement path.
+- At large VR text sizes the renderer budgets the visible settings window
+  against the 2048 px raster limit and the scroll controls reach the rest. The
+  ordinary nine-row window holds at cap heights 14, 34 and 50; the regression
+  also covers 60 and 80.
+- Checks added: aligned primary text, full secondary line height, selectable
+  row bounds, restart/edit/switch transitions, the large-text scroll window.
+  The inherited label-fitting test measures the real label column including its
+  gutter; all 23 labels fit at 720p, 1080p, 1440p and 2160p. Restoring the old
+  badge geometry fails 20 more checks, admitting one extra row at the large-text
+  boundary fails two, and narrowing the label column fails 27 more.
+- The colours first proposed (a dark blue panel with an amber accent) were
+  later replaced by the grey and white palette described under "What changes in
+  VR"; the comparison images in `docs/images/` (`overlay-settings-comparison.png`,
+  `overlay-monitor-comparison.png`) show the amber version and are not
+  referenced here.
+
+### 2026-11-16: What changes in VR
+
+VR shares the raster, so its panel changed on purpose; the maintainer accepted
+this after a VR flight.
+
+- Grey and white palette with a 0.10 highlight, instead of the orange accent and
+  the 0.22 highlight.
+- A row with a restart badge (or reserving one) is about 1.5 rows tall, because
+  the badge has its own line.
+- Setting labels are cut half a cap earlier.
+- Monitor graph legends are plain titles ("GPU", "CPU"); the "last N frames;
+  the line is the X ms budget" text and the native "predicted period" text are
+  gone. The strips are about a third shorter.
+- Tab names are measured, and the tab face shrinks toward a 0.9-cap floor when
+  the tabs do not fit. VR has 9 to 13 tabs, so its tab text is about 30 %
+  smaller.
+- A Pimax at the default text size may show one row fewer (9 to 8).
+
+### 2026-11-16: Flat flights
+
+The PR author flew flat four times on successive builds, each flight's findings
+fixed in the next commit: (1) build `efe90e2f`: frame-time graph labels too long
+(now plain titles), stats wanted as their own panel; (2) the Status page's
+captions and values all cut off (now a measured caption column in the note face,
+wrapped values); (3) build `82f1f5f6`: Performance and Debug tab titles
+ellipsised (tab widths measured, tab face shrinks to fit), two Hotkeys rows ended
+in "(e..." (labels shortened), the Hotkeys footer said Left/Right change (now
+Enter rebind, naming the capture keys); (4) build `ac4faab6`: "XeSS Frame
+Generation" and "Skip rooms behind doors" ellipsised (now "Frame generation"
+and "Skip closed rooms"; `native_menu_test` measures every flat row label).
 
 ## Flight checklist
 
-Steps 1 to 7 are built and rig-tested, not flown. One flat session and one VR
-session cover most of it; the XeSS checks need an Intel Arc and, for the 1x
-case, a non-Intel GPU.
+Flown 2026-11-16 means seen in the flights above; everything else is open.
+The XeSS checks need an Intel Arc and, for the 1x case, a non-Intel GPU.
 
 Flat:
-- F8 opens and closes, Escape closes, a value can be stepped and typed, the
-  AA comparison key's notice appears top-left, a live switch VR to flat works.
-- Text is crisp at 1080p and at 4K; no row is cut off on any tab at 1080p.
-  Resizing the window rebuilds the card.
-- Tooltips appear after the delay, beside the card, and scroll with
+- Flown 2026-11-16: the Status page, the Hotkeys page, the tab titles, the row
+  labels and the Monitor graph labels read in full after the fixes above.
+- Open: F8 opens and closes, Escape closes, a value can be stepped and typed,
+  the AA comparison key's notice appears top-left, a live switch VR to flat.
+- Open: text is crisp at 1080p and at 4K; resizing the window rebuilds the card.
+- Open: tooltips appear after the delay, beside the card, scroll with
   PageUp/PageDown, on keyboard and on pad.
-- Monitor panel (F5): the F8 menu has no Monitor tab; F5 shows the panel top
-  right and hides it, with the menu open and closed; walking, flying and the
-  game's own menus work with it up (no key is taken); the CPU, GPU, VRAM and
-  RAM tiles fill while it is up; resizing the window rebuilds it; no stale
-  card flashes when it comes up. The log has the three lines of the
-  2026-11-16 entry.
-- On the panel: rendered and presented rates with frame generation at 2x, 3x
-  and off, compared with PresentMon's displayed frames; the refresh rate and
-  budget lines are right; the log names the presented source.
-- `menu.fps_overlay` compact and detailed in the top-right corner, giving way
-  to the menu, to notices and to the monitor panel without a stale frame
-  flashing, and coming back when the panel goes down.
-- Status page lines (display, anti-aliasing running or paused, upscaling
-  sizes, frame generation) match the session; Elite's settings warning shows
-  there and the Performance tab shows the one-line pointer.
-- XeSS FG turned on without a bridge: "at next launch" on the row, the footer
-  count, the notice on close; after a restart the rows are live.
-- Hotkeys page: rebind the menu key, the AA comparison key and the monitor
+- Open, monitor panel (F5) together with the menu: the F8 menu has no Monitor
+  tab; F5 shows the panel top right and hides it with the menu open and closed;
+  walking, flying and the game's own menus work with it up (no key is taken);
+  the CPU, GPU, VRAM and RAM tiles fill; resizing rebuilds it; no stale card
+  flashes when it comes up. The log has the three lines of the monitor entry.
+- Open, XeSS Frame Generation on: rendered and presented rates at 2x, 3x and
+  off, compared with PresentMon's displayed frames; the refresh rate and budget
+  lines are right; the log names the presented source.
+- Open: `menu.fps_overlay` compact and detailed in the top-right corner, giving
+  way to the menu, notices and the monitor panel without a stale frame, and
+  coming back when the panel goes down.
+- Open: Status page lines (display, anti-aliasing, upscaling sizes, frame
+  generation) match the session; Elite's settings warning shows there and the
+  Performance tab shows the one-line pointer.
+- Open: XeSS FG turned on without a bridge: "at next launch" on the row, the
+  footer count, the notice on close; after a restart the rows are live.
+- Open: Hotkeys page rebinds the menu key, the AA comparison key and the monitor
   panel key; clearing the monitor panel key hides the panel.
-- Whether the new flat long-frame log lines are too frequent.
+- Open: whether the new flat long-frame log lines are too frequent.
 
 VR:
-- The menu, toasts and aiming behave as before (steps 1 and 2 must not have
-  changed anything).
-- `menu.fps_overlay` compact (an old `on`) and detailed, head-locked.
-- The close notice when a restart setting changed.
-- The Monitor tab is still in the menu; the Hotkeys page has no monitor panel
-  key row.
+- Flown 2026-11-16 (reviewer): the Performance and Monitor pages and the new
+  look at 90 Hz.
+- Open: toasts and aiming behave as before; `menu.fps_overlay` compact (an old
+  `on`) and detailed, head-locked; the close notice when a restart setting
+  changed; the Hotkeys page has no monitor panel key row.
