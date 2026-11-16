@@ -897,6 +897,11 @@ struct Worker {
     MenuContent             pending{};
     bool                    hasReady = false;
     Raster                  ready;
+    // The flat monitor panel's slot (menuPanelSubmitMonitor): its own pending content and finished raster, taken by uploadMonitorRaster.
+    bool                    hasPendingMon = false;
+    MenuContent             pendingMon{};
+    bool                    hasReadyMon = false;
+    Raster                  readyMon;
     // The layout the hit test reads, from the raster most recently uploaded.
     std::vector<LineRect>   liveLines;
     int                     liveW = 0, liveH = 0;
@@ -914,20 +919,32 @@ Worker& g_w = *new Worker;
 void workerMain() {
     for (;;) {
         MenuContent c;
+        bool mon = false;
         {
             std::unique_lock<std::mutex> lock(g_w.m);
-            g_w.cv.wait(lock, [] { return g_w.quit || g_w.hasPending; });
+            g_w.cv.wait(lock, [] { return g_w.quit || g_w.hasPending || g_w.hasPendingMon; });
             if (g_w.quit) return;
-            c = g_w.pending;
-            g_w.hasPending = false;
+            if (g_w.hasPending) {   // the menu's content first
+                c = g_w.pending;
+                g_w.hasPending = false;
+            } else {
+                c = g_w.pendingMon;
+                g_w.hasPendingMon = false;
+                mon = true;
+            }
         }
         Raster r;
         bool ok = false;
         guarded("menuPanel/raster", [&] { ok = rasterise(c, r); });
         if (!ok) continue;
         std::lock_guard<std::mutex> lock(g_w.m);
-        g_w.ready = std::move(r);
-        g_w.hasReady = true;
+        if (mon) {
+            g_w.readyMon = std::move(r);
+            g_w.hasReadyMon = true;
+        } else {
+            g_w.ready = std::move(r);
+            g_w.hasReady = true;
+        }
     }
 }
 
@@ -979,6 +996,24 @@ ID3D11SamplerState*  g_samp = nullptr;
 
 std::mutex   g_geomMutex;
 MenuGeometry g_geom;
+
+// The flat monitor panel's raster (menuPanelSubmitMonitor): a second slot beside the menu's, with its own texture, size, serial and geometry. The menu's device
+// objects (the compute shader, the parameter buffer, the sampler, the eye's copy and output textures, the query ring) are shared: both slots are drawn on the
+// frame thread, one after the other.
+ID3D11Texture2D*          g_monTex = nullptr;
+ID3D11ShaderResourceView* g_monSrv = nullptr;
+ID3D11Device*             g_monDevice = nullptr;   // borrowed while g_monTex holds its device
+int                       g_monW = 0, g_monH = 0;
+std::atomic<uint32_t>     g_monSerial{0};
+MenuGeometry              g_monGeom;               // under g_geomMutex, with g_geom
+
+// What one composite draws when it is not the menu's raster (compositeInner's `slot`).
+struct PanelSource {
+    ID3D11ShaderResourceView* srv = nullptr;
+    int   w = 0, h = 0;
+    float aspect = 0.0f;   // h / w
+    MenuGeometry geom;
+};
 
 bool     g_failNoted = false;
 bool     g_fmtNoted = false;
@@ -1168,13 +1203,19 @@ bool makeTex(ID3D11Device* dev, uint32_t w, uint32_t h, DXGI_FORMAT texFmt, DXGI
 }
 
 void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf,
-                     bool flat = false) {
+                     bool flat = false, const PanelSource* slot = nullptr) {
+    // The raster drawn: the menu's (no slot: the globals, as always) or the one the caller names (the flat monitor panel's).
     MenuGeometry g;
-    {
+    if (slot) {
+        g = slot->geom;
+    } else {
         std::lock_guard<std::mutex> lock(g_geomMutex);
         g = g_geom;
     }
-    if (!(g.alpha > 0.0f) || !g_panelSrv || g_panelW <= 0 || g_panelH <= 0) return nullptr;
+    ID3D11ShaderResourceView* const panelSrv = slot ? slot->srv : g_panelSrv;
+    const int panelW = slot ? slot->w : g_panelW;
+    const int panelH = slot ? slot->h : g_panelH;
+    if (!(g.alpha > 0.0f) || !panelSrv || panelW <= 0 || panelH <= 0) return nullptr;
     if (g.overlayRaster) {
         // The menu tick publishes geometry before it can upload the worker's
         // finished raster. Use the width belonging to the texture that is
@@ -1324,13 +1365,13 @@ void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf
         int32_t box[4] = {0, 0, static_cast<int32_t>(regionW), static_cast<int32_t>(regionH)};
         // Read the aspect ONCE: a raster landing between two reads would
         // give the culling box and the shader different panels for a frame.
-        const float aspect = g_panelAspect.load();
+        const float aspect = slot ? slot->aspect : g_panelAspect.load();
         float flatPose[12]{};
         if (flat && aspect > 0.0f) {
             // The raster was sized from the output's own pixels (menu.cpp sizeContent), so the bitmap is laid at exactly its own pixel size: one bitmap
             // pixel is one output pixel, its upper-left corner a whole two percent in from the output's (menu_flat_layout.h). A page taller than the
             // output allows is the one case scaled down. This is evaluated against the swapchain, not Elite's SS size.
-            const FlatPlacement place = flatPlace(static_cast<int>(regionW), static_cast<int>(regionH), g_panelW, g_panelH,
+            const FlatPlacement place = flatPlace(static_cast<int>(regionW), static_cast<int>(regionH), panelW, panelH,
                                                    g.flatCorner == 1 ? FlatCorner::UpperRight : FlatCorner::UpperLeft);
             if (place.w > 0) {
                 g.halfW = place.halfW * g.dist;
@@ -1410,7 +1451,7 @@ void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf
 
             ID3D11ShaderResourceView* nullSrv[2] = {};
             ID3D11UnorderedAccessView* nullUav = nullptr;
-            ID3D11ShaderResourceView* setSrv[2] = {inSrv, g_panelSrv};
+            ID3D11ShaderResourceView* setSrv[2] = {inSrv, panelSrv};
             ctx->CSSetShaderResources(0, 2, nullSrv);
             ctx->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
             ctx->CSSetShader(g_cs, nullptr, 0);
@@ -1445,7 +1486,7 @@ void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf
                 Log::get().note(
                     "menu panel: first composite -- a %dx%d bitmap on a %ux%u %s eye region "
                     "(DXGI_FORMAT %d%s), %.2f m out, curve %.2f, half-width %.2f m%s.",
-                    g_panelW, g_panelH, regionW, regionH, eye == 0 ? "left" : "right",
+                    panelW, panelH, regionW, regionH, eye == 0 ? "left" : "right",
                     static_cast<int>(sd.Format), linear ? ", linear light" : "",
                     static_cast<double>(g.dist), static_cast<double>(g.curve),
                     static_cast<double>(g.halfW),
@@ -1462,6 +1503,42 @@ void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf
     if (dev) dev->Release();
     src->Release();
     return result;
+}
+
+// The flat monitor panel's finished raster, uploaded into its own texture the way menuPanelTick uploads the menu's. Frame thread.
+void uploadMonitorRaster(ID3D11Device* dev) {
+    Raster r;
+    {
+        std::lock_guard<std::mutex> lock(g_w.m);
+        if (!g_w.hasReadyMon) return;
+        r = std::move(g_w.readyMon);
+        g_w.hasReadyMon = false;
+    }
+    guardedBudget(g_budget, [&] {
+        if (!g_monTex || g_monW != r.w || g_monH != r.h) {
+            if (g_monSrv) { g_monSrv->Release(); g_monSrv = nullptr; }
+            if (g_monTex) { g_monTex->Release(); g_monTex = nullptr; }
+            if (!makeTex(dev, static_cast<uint32_t>(r.w), static_cast<uint32_t>(r.h),
+                         DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
+                         D3D11_BIND_SHADER_RESOURCE, &g_monTex, &g_monSrv, nullptr)) {
+                if (g_monSrv) { g_monSrv->Release(); g_monSrv = nullptr; }
+                if (g_monTex) { g_monTex->Release(); g_monTex = nullptr; }
+                failOnce("the monitor panel's texture could not be created");
+                return;
+            }
+            g_monW = r.w;
+            g_monH = r.h;
+            g_monDevice = dev;
+        }
+        ID3D11DeviceContext* ctx = nullptr;
+        dev->GetImmediateContext(&ctx);
+        if (!ctx) return;
+        ctx->UpdateSubresource(g_monTex, 0, nullptr, r.rgba.data(),
+                               static_cast<UINT>(r.w) * 4, 0);
+        ctx->Release();
+        perfMonitorNoteEvent(kEvRaster);
+        g_monSerial.fetch_add(1, std::memory_order_release);
+    });
 }
 
 }  // namespace
@@ -1499,9 +1576,9 @@ void* menuPanelCompositeNative(ID3D11Texture2D* src, int eye, const float* bound
 
 bool menuPanelCompositeFlat(IDXGISwapChain* swap) {
     if (!swap || graphicsRuntimeDisabled()) return false;
-    MenuGeometry g;
-    { std::lock_guard<std::mutex> lock(g_geomMutex); g = g_geom; }
-    if (!(g.alpha > 0.0f) || !g_panelSrv) return false;
+    MenuGeometry g, mg;
+    { std::lock_guard<std::mutex> lock(g_geomMutex); g = g_geom; mg = g_monGeom; }
+    if (!((g.alpha > 0.0f && g_panelSrv) || (mg.alpha > 0.0f && g_monSrv))) return false;
     ID3D11Texture2D* back = nullptr;
     if (FAILED(swap->GetBuffer(0, __uuidof(ID3D11Texture2D),
                                reinterpret_cast<void**>(&back))) || !back) return false;
@@ -1513,14 +1590,16 @@ bool menuPanelCompositeFlat(IDXGISwapChain* swap) {
 
 bool menuPanelCompositeFlatTexture(ID3D11Texture2D* back) {
     if (!back || graphicsRuntimeDisabled()) return false;
-    MenuGeometry g;
-    { std::lock_guard<std::mutex> lock(g_geomMutex); g = g_geom; }
-    if (!(g.alpha > 0.0f) || !g_panelSrv) return false;
+    MenuGeometry g, mg;
+    { std::lock_guard<std::mutex> lock(g_geomMutex); g = g_geom; mg = g_monGeom; }
+    const bool menuUp = g.alpha > 0.0f && g_panelSrv;
+    const bool monitorUp = mg.alpha > 0.0f && g_monSrv && g_monW > 0 && g_monH > 0;
+    if (!menuUp && !monitorUp) return false;
     FlatComputeInternalScope internal;
     ID3D11Device* dev = nullptr;
     ID3D11DeviceContext* context = nullptr;
     back->GetDevice(&dev);
-    if (g_panelDevice && g_panelDevice != dev) {
+    if ((g_panelDevice && g_panelDevice != dev) || (g_monDevice && g_monDevice != dev)) {
         menuPanelFlatResize();
         if (dev) dev->Release();
         return false;
@@ -1541,10 +1620,14 @@ bool menuPanelCompositeFlatTexture(ID3D11Texture2D* back) {
     // and depends on a D3D11.1 feature real games essentially never exercise
     // -- exactly the kind of corner a translation layer has every reason to
     // under-test.
+    //
+    // Two slots, in order: the menu's raster (or a notice's, or the readout's), then the monitor panel's over the result. Each is one copy of the
+    // backbuffer, one dispatch and one copy back; they share the eye's textures, so they run one after the other on this thread. Only the menu's
+    // slot advances the menu's heartbeat: the input gate and the not-drawn watchdog follow the menu alone.
+    // compositeInner expects a packed 3x3 rotation followed by XYZ origin.
+    const float identity[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
     bool copied = false;
-    {
-        // compositeInner expects a packed 3x3 rotation followed by XYZ origin.
-        const float identity[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
+    if (menuUp) {
         ID3D11Texture2D* out = static_cast<ID3D11Texture2D*>(
             compositeInner(back, 0, nullptr, identity, true));
         if (out) {
@@ -1553,9 +1636,32 @@ bool menuPanelCompositeFlatTexture(ID3D11Texture2D* back) {
         }
     }
     if (copied) bumpMenuDrawn();
+    bool monitorCopied = false;
+    if (monitorUp) {
+        PanelSource ps;
+        ps.srv = g_monSrv;
+        ps.w = g_monW;
+        ps.h = g_monH;
+        ps.aspect = static_cast<float>(g_monH) / static_cast<float>(g_monW);
+        ps.geom = mg;
+        ID3D11Texture2D* out = static_cast<ID3D11Texture2D*>(
+            compositeInner(back, 0, nullptr, identity, true, &ps));
+        if (out) {
+            context->CopyResource(back, out);
+            monitorCopied = true;
+            static bool monitorNoted = false;
+            if (!monitorNoted) {
+                monitorNoted = true;
+                D3D11_TEXTURE2D_DESC bd{};
+                back->GetDesc(&bd);
+                Log::get().note("menu panel: first monitor panel composite -- a %dx%d bitmap in the upper right corner of a %ux%u output, "
+                                "after the menu's slot (%s this frame).", g_monW, g_monH, bd.Width, bd.Height, copied ? "drawn" : "empty");
+            }
+        }
+    }
     context->Release();
     dev->Release();
-    return copied;
+    return copied || monitorCopied;
 }
 
 void menuPanelFlatResize() {
@@ -1565,6 +1671,10 @@ void menuPanelFlatResize() {
     g_panelDevice = nullptr;
     g_panelW = g_panelH = 0;
     g_panelAspect.store(0.0f);
+    if (g_monSrv) { g_monSrv->Release(); g_monSrv = nullptr; }
+    if (g_monTex) { g_monTex->Release(); g_monTex = nullptr; }
+    g_monDevice = nullptr;
+    g_monW = g_monH = 0;
     if (g_cs) { g_cs->Release(); g_cs = nullptr; }
     g_csTried = false;
     if (g_cb) { g_cb->Release(); g_cb = nullptr; }
@@ -1574,6 +1684,25 @@ void menuPanelFlatResize() {
 
 bool menuPanelFlatRasterReady() { return g_panelSrv != nullptr; }
 uint32_t menuPanelRasterSerial() { return g_rasterSerial.load(std::memory_order_acquire); }
+bool menuPanelMonitorRasterReady() { return g_monSrv != nullptr; }
+uint32_t menuPanelMonitorRasterSerial() { return g_monSerial.load(std::memory_order_acquire); }
+
+void menuPanelSubmitMonitor(const MenuContent& c) {
+    std::lock_guard<std::mutex> lock(g_w.m);
+    if (!g_w.started) {
+        g_w.started = true;
+        g_w.quit = false;
+        g_w.thread = std::thread(workerMain);
+    }
+    g_w.pendingMon = c;
+    g_w.hasPendingMon = true;
+    g_w.cv.notify_one();
+}
+
+void menuPanelSetMonitorGeometry(const MenuGeometry& g) {
+    std::lock_guard<std::mutex> lock(g_geomMutex);
+    g_monGeom = g;
+}
 
 bool menuPanelHit(const float org[3], const float dir[3], float dist, float curve, float halfW,
                   float halfH, float shift, float* su, float* sv) {
@@ -1627,6 +1756,10 @@ bool menuPanelWorkerReadyForTest() {
     std::lock_guard<std::mutex> lock(g_w.m);
     return g_w.hasReady && !g_w.hasPending;
 }
+bool menuPanelMonitorWorkerReadyForTest() {
+    std::lock_guard<std::mutex> lock(g_w.m);
+    return g_w.hasReadyMon && !g_w.hasPendingMon;
+}
 // The bitmap height layout() produces for `c`, so the test can assert a
 // page's shape is independent of which rows carry a hint (where it
 // reserves the hint box) and that it reserves nothing on a page that does
@@ -1671,8 +1804,10 @@ void menuPanelLineRectForTest(const MenuContent& c, int i, int* x0, int* y0, int
 
 void menuPanelTick(ID3D11Device* dev) {
     if (!dev) return;
-    if (runtimeFlatProfile() && g_panelDevice && g_panelDevice != dev)
+    if (runtimeFlatProfile() && ((g_panelDevice && g_panelDevice != dev) || (g_monDevice && g_monDevice != dev)))
         menuPanelFlatResize();
+    // The flat monitor panel's raster first: the menu's path below returns early when it has none.
+    if (runtimeFlatProfile()) uploadMonitorRaster(dev);
     Raster r;
     bool have = false;
     {
@@ -1893,6 +2028,10 @@ void menuPanelShutdown() {
     if (g_panelSrv) { g_panelSrv->Release(); g_panelSrv = nullptr; }
     if (g_panelTex) { g_panelTex->Release(); g_panelTex = nullptr; }
     g_panelDevice = nullptr;
+    if (g_monSrv) { g_monSrv->Release(); g_monSrv = nullptr; }
+    if (g_monTex) { g_monTex->Release(); g_monTex = nullptr; }
+    g_monDevice = nullptr;
+    g_monW = g_monH = 0;
     if (g_samp) { g_samp->Release(); g_samp = nullptr; }
     if (g_cb) { g_cb->Release(); g_cb = nullptr; }
     if (g_cs) { g_cs->Release(); g_cs = nullptr; }

@@ -2446,9 +2446,10 @@ void testRows() {
         const int nFlatDev = hotkeyPageRowsFor(kMenuRows, kCount, true, true, flatDev, 16);
         const int nVr = hotkeyPageRowsFor(kMenuRows, kCount, false, false, vr, 16);
         const int nVrDev = hotkeyPageRowsFor(kMenuRows, kCount, false, true, vrDev, 16);
-        check(nFlat == 2 && nFlatDev == 2, "the flat Hotkeys page has two rows, with or without developer mode");
-        check(nFlat == 2 && strcmp(kMenuRows[flat[0]].key, "menu") == 0 && strcmp(kMenuRows[flat[1]].key, "compare_aa") == 0,
-              "the flat Hotkeys page is the Menu key, then the AA comparison key");
+        check(nFlat == 3 && nFlatDev == 3, "the flat Hotkeys page has three rows, with or without developer mode");
+        check(nFlat == 3 && strcmp(kMenuRows[flat[0]].key, "menu") == 0 && strcmp(kMenuRows[flat[1]].key, "compare_aa") == 0 &&
+                  strcmp(kMenuRows[flat[2]].key, "monitor_panel") == 0,
+              "the flat Hotkeys page is the Menu key, the AA comparison key, then the monitor panel key");
         check(rowIndex("dump_camera") >= 0 && !contains(flat, nFlat, rowIndex("dump_camera")) && !flatProfileReadsKey("hotkey.dump_camera"),
               "the camera history key is for everyone in VR, but the flat profile does not read it: no flat row");
         for (const char* key : {"dump_draws", "dump_eyes"})
@@ -2469,6 +2470,15 @@ void testRows() {
         bool same = true;
         for (int k = 0; k < nVr; ++k) same &= vr[k] == all[k];
         check(same, "the VR page's rows are hotkeyPageRows' own");
+        // The monitor panel's key (hotkey.monitor_panel): a Fix-tier Hotkey row of the hotkeys page that only the flat profile reads, so only the flat page lists it.
+        const int monitorRow = rowIndex("monitor_panel");
+        check(monitorRow >= 0 && kMenuRows[monitorRow].kind == MenuKind::Hotkey && kMenuRows[monitorRow].tier == MenuTier::Fix &&
+                  strcmp(kMenuRows[monitorRow].page, "hotkeys") == 0 && strcmp(kMenuRows[monitorRow].shipped, "F5") == 0,
+              "hotkey.monitor_panel is a Fix-tier Hotkey row on the hotkeys page, shipped as F5");
+        check(monitorRow >= 0 && contains(flat, nFlat, monitorRow) && !contains(vr, nVr, monitorRow) && !contains(vrDev, nVrDev, monitorRow) &&
+                  !contains(all, nEveryone, monitorRow) && !contains(dev, nDev, monitorRow),
+              "the monitor panel key is on the flat Hotkeys page only: VR does not read it");
+        check(flatProfileReadsKey("hotkey.monitor_panel") && flatProfileOnlyKey("hotkey.monitor_panel"), "the flat gate reads it, and it is flat-only");
     }
     // Table order is the page's order: the menu key first.
     check(nEveryone > 0 && strcmp(kMenuRows[all[0]].key, "menu") == 0, "the menu key leads the page");

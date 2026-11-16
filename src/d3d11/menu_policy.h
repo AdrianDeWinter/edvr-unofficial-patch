@@ -27,6 +27,7 @@ struct MenuProfilePolicy {
   bool padNavigation = false;                      // the panel is navigated by a pad
   bool closesOnFocusLoss = false;                  // the menu closes when Elite loses the focus
   bool primesHotkeysOnClose = false;               // a held navigation key must not become a hotkey on close
+  bool monitorPanel = false;                       // the Monitor is a panel of its own, on its own key (hotkey.monitor_panel), not a tab of the menu
 };
 
 inline MenuProfilePolicy menuPolicyFor(bool flatProfile) {
@@ -39,6 +40,7 @@ inline MenuProfilePolicy menuPolicyFor(bool flatProfile) {
     p.padNavigation = true;
     p.closesOnFocusLoss = true;
     p.primesHotkeysOnClose = true;
+    p.monitorPanel = true;
     return p;
   }
   p.anchor = MenuAnchor::World;
@@ -171,5 +173,19 @@ struct ScreenReadoutState {
     shown = false;
   }
 };
+
+// ---- The monitor panel on the flat screen -------------------------------------------------------------------------------------------------------------
+// One pressed edge of hotkey.monitor_panel: the panel goes up or down, whatever the menu is doing (it takes no input, so it never waits on the menu). A hotkey
+// row waiting for its input (captureActive) takes the edge as a candidate, not a command.
+inline bool menuMonitorPanelToggle(bool pressed, bool panelUp, bool captureActive) {
+  if (!pressed || captureActive) return panelUp;
+  return !panelUp;
+}
+
+// The flat frame-rate readout is wanted: it is on, the menu is closed, no notice is up or about to start, and the monitor panel is down (the panel sits in the
+// same corner and shows everything the readout does).
+inline bool flatReadoutWanted(bool readoutOn, bool menuOpen, bool noticeUp, bool noticeDue, bool monitorPanelUp) {
+  return readoutOn && !menuOpen && !noticeUp && !noticeDue && !monitorPanelUp;
+}
 
 }  // namespace edvr

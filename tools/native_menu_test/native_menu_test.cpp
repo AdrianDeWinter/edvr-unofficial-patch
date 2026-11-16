@@ -323,6 +323,27 @@ int wmain(int argc, wchar_t** argv) {
             check(static_cast<float>(h) <= edvr::kFlatMaxHeightFrac * static_cast<float>(outH),
                   "the flat Monitor page is drawn 1:1 (under the placement's height share) at 1080p, 1440p and 2160p");
         }
+        // The flat monitor panel (menu.cpp buildMonitorPanel; menu_panel.h, the monitor slot): the same content under one tab and a one-line footer, on the menu
+        // card's width and text height. Under the raster's 2048-px bound and drawn 1:1 at 720p, 1080p, 1440p and 2160p, in the upper right corner level with the
+        // menu card and clear of it and its tooltip strip.
+        for (const int outH : {720, 1080, 1440, 2160}) {
+            const int outW = outH * 16 / 9;
+            edvr::MenuContent c = flatMonitor(outH);
+            c.tabCount = 1;
+            c.activeTab = 0;
+            std::snprintf(c.tabs[0], sizeof(c.tabs[0]), "Monitor");
+            std::strcpy(c.footer, "F5 hides this panel");
+            const int h = edvr::menuPanelLayoutHeightForTest(c);
+            std::printf("  flat monitor panel at %dp: %dx%d px (1:1 up to %d px tall)\n", outH, c.widthPx, h,
+                        static_cast<int>(edvr::kFlatMaxHeightFrac * static_cast<float>(outH)));
+            check(h > 0 && h < 2048, "the flat monitor panel is under the raster's 2048-px height bound at 720p, 1080p, 1440p and 2160p");
+            const edvr::FlatPlacement panel = edvr::flatPlace(outW, outH, c.widthPx, h, edvr::FlatCorner::UpperRight);
+            check(panel.oneToOne && panel.w == c.widthPx && panel.h == h, "the flat monitor panel is drawn 1:1 at 720p, 1080p, 1440p and 2160p");
+            const int menuW = edvr::flatBitmapWidth(c.cardPx, true, edvr::kTipRatio);
+            const edvr::FlatPlacement menu = edvr::flatPlace(outW, outH, menuW, h);
+            check(panel.y == menu.y && panel.x + panel.w == outW - static_cast<int>(std::lround(edvr::kFlatMarginFrac * outW)) && menu.x + menu.w < panel.x,
+                  "the flat monitor panel sits in the upper right corner, level with the menu card and clear of the card and its tooltip strip");
+        }
         // The flat Status page (menu.cpp buildFlatStatus, menu_flat_status.h): five tabs of six, the most lines the page has (every source present) and the warning's
         // ten note lines under them, compact, with the page's hint and the footer. Under the raster's 2048-px bound and drawn 1:1 at the sizes the card is rasterised
         // at; every caption and value row (menu_flat_status_layout.h, long values wrapped) fits its column, measured in the note face it is drawn in, and the
@@ -368,7 +389,7 @@ int wmain(int argc, wchar_t** argv) {
                 c.capPx = fs.capPx;
                 c.compact = true;
                 c.tabCount = 5;
-                const char* tabs[5] = {"Performance", "Visual", "Monitor", "Status", "Debug"};
+                const char* tabs[5] = {"Performance", "Visual", "Hotkeys", "Status", "Debug"};
                 for (int i = 0; i < 5; ++i) std::snprintf(c.tabs[i], sizeof(c.tabs[i]), "%s", tabs[i]);
                 c.activeTab = 3;
                 int em = edvr::flatStatusEmPx(fs.capPx);
@@ -821,6 +842,69 @@ int wmain(int argc, wchar_t** argv) {
                       visibleBounds[1] >= 0.01f && visibleBounds[1] < 0.05f &&
                       std::fabs((visibleBounds[2] - visibleBounds[0]) * 320.0f - 256.0f) <= 4.0f,
                       "flat panel is drawn 1:1 (the 256 px raster covers 256 output pixels), anchored near the upper-left corner");
+            }
+            // The monitor panel (menu_panel.h, the second flat slot): its own raster and serial, composited after the menu's in the same call, in the upper
+            // right corner, without advancing the menu's heartbeat; and alone, with the menu hidden.
+            {
+                edvr::MenuContent mon{};
+                mon.widthPx = mon.cardPx = 96;
+                mon.capPx = 14;
+                mon.lineCount = 1;
+                std::strcpy(mon.lines[0].left, "Monitor");
+                std::strcpy(mon.lines[0].right, "60");
+                const uint32_t monSerial = edvr::menuPanelMonitorRasterSerial();
+                edvr::menuPanelSubmitMonitor(mon);
+                bool monReady = false;
+                for (unsigned ms = 0; ms < 3000 && !monReady; ms += 5) {
+                    monReady = edvr::menuPanelMonitorWorkerReadyForTest();
+                    if (!monReady) Sleep(5);
+                }
+                check(monReady, "monitor panel raster worker ready");
+                edvr::menuPanelTick(device.Get());
+                check(edvr::menuPanelMonitorRasterReady() && edvr::menuPanelMonitorRasterSerial() != monSerial && edvr::menuPanelFlatRasterReady(),
+                      "the monitor raster is uploaded to its own slot, and the menu's stays live");
+                edvr::MenuGeometry monGeometry{};
+                monGeometry.dist = 1.f;
+                monGeometry.alpha = 1.f;
+                monGeometry.flatCorner = 1;
+                edvr::menuPanelSetMonitorGeometry(monGeometry);
+                ComPtr<ID3D11Texture2D> bothBack;
+                check(makeBackbuffer(device.Get(), context.Get(), bothBack, background, 320, 240), "flat backbuffer for the menu and the monitor panel");
+                if (bothBack) {
+                    const uint32_t beatBefore = edvr::menuDrawnValue();
+                    std::vector<UINT> px;
+                    check(edvr::menuPanelCompositeFlatTexture(bothBack.Get()) && readPixels(device.Get(), context.Get(), bothBack.Get(), px) && px.size() == 320u * 240u,
+                          "the menu and the monitor panel compose in one call");
+                    check(edvr::menuDrawnValue() == beatBefore + 1, "the monitor panel does not advance the menu's heartbeat");
+                    // The menu's 256 px raster ends at x = 6 + 256 = 262; the monitor's 96 px raster ends 2 % (6 px) in from the right edge, at 314.
+                    size_t right = 0, beyond = 0;
+                    for (UINT y = 0; px.size() == 320u * 240u && y < 240; ++y)
+                        for (UINT x = 263; x < 320; ++x) {
+                            const bool changed = px[size_t(y) * 320 + x] != background;
+                            if (x < 314) right += changed;
+                            else if (x >= 316) beyond += changed;
+                        }
+                    check(right > 0 && beyond == 0, "the monitor panel is drawn in the upper right corner, inside the 2 percent margin");
+                }
+                edvr::MenuGeometry hiddenMenu = geometry;
+                hiddenMenu.alpha = 0.f;
+                edvr::menuPanelSetGeometry(hiddenMenu);
+                ComPtr<ID3D11Texture2D> aloneBack;
+                check(makeBackbuffer(device.Get(), context.Get(), aloneBack, background, 320, 240), "flat backbuffer for the monitor panel alone");
+                if (aloneBack) {
+                    const uint32_t beatBefore = edvr::menuDrawnValue();
+                    std::vector<UINT> px;
+                    float aloneBounds[4]{};
+                    check(edvr::menuPanelCompositeFlatTexture(aloneBack.Get()) && readPixels(device.Get(), context.Get(), aloneBack.Get(), px) &&
+                              changedBounds(px, 320, 240, background, aloneBounds) && aloneBounds[0] > 0.6f && aloneBounds[2] < 0.99f,
+                          "the monitor panel composes alone, with the menu hidden, in the right part of the output");
+                    check(edvr::menuDrawnValue() == beatBefore, "the monitor panel alone does not advance the menu's heartbeat");
+                }
+                edvr::menuPanelSetGeometry(geometry);
+                edvr::menuPanelFlatResize();
+                check(!edvr::menuPanelMonitorRasterReady(), "a flat resize retires the monitor panel's raster too");
+                monGeometry.alpha = 0.f;
+                edvr::menuPanelSetMonitorGeometry(monGeometry);
             }
             // A replacement graphics device must build its own raster and
             // context state; no resource from the first device may be reused.

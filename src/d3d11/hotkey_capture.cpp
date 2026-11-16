@@ -239,6 +239,9 @@ int hotkeyPageRows(const MenuRowDef* rows, int n, bool developer, int* out, int 
         const MenuRowDef& d = rows[i];
         if (d.kind != MenuKind::Hotkey || strcmp(d.page, "hotkeys") != 0) continue;
         if (d.tier != MenuTier::Fix && !developer) continue;
+        char dotted[96];
+        snprintf(dotted, sizeof(dotted), "%s.%s", d.section, d.key);
+        if (flatProfileOnlyKey(dotted)) continue;   // the VR profile does not read it (flat_profile_keys.h)
         out[count++] = i;
     }
     return count;

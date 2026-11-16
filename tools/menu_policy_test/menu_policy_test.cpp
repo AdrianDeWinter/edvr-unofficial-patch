@@ -42,6 +42,10 @@ void policyCases() {
     check(flat.padNavigation && !vr.padNavigation, "only the flat panel is navigated by the pad");
     check(flat.closesOnFocusLoss && !vr.closesOnFocusLoss, "only the flat panel closes when Elite loses the focus");
     check(flat.primesHotkeysOnClose && !vr.primesHotkeysOnClose, "only flat primes the hotkeys on close");
+    check(flat.monitorPanel && !vr.monitorPanel, "only the flat profile has the monitor panel");
+    check(flatProfileReadsKey("hotkey.monitor_panel") && flatProfileOnlyKey("hotkey.monitor_panel") && !flatProfileOnlyKey("hotkey.menu") &&
+          !flatProfileOnlyKey("hotkey.compare_aa") && !flatProfileOnlyKey(nullptr),
+          "the flat gate reads the monitor panel's key, and it is the one key only the flat profile reads");
     check(menuPolicyFor(true).anchor == flat.anchor && menuPolicyFor(false).anchor == vr.anchor, "the policy is a pure function of the profile");
 }
 
@@ -88,6 +92,19 @@ void drawnCases() {
     check(menuNotDrawn(true, 1501, 0, 0, 1500), "an open menu never drawn is closed past the limit");
     check(!menuNotDrawn(true, 3000, 0, 2000, 1500), "a menu that was drawn recently stays");
     check(!menuNotDrawn(true, 1600, 1000, 0, 1500), "a menu that opened recently stays whatever the draw clock says");
+}
+
+// The flat monitor panel (menu_policy.h): its key toggles it whatever the menu does, a waiting capture takes the edge, and the readout gives way to it.
+void monitorPanelCases() {
+    check(!menuMonitorPanelToggle(false, false, false) && menuMonitorPanelToggle(false, true, false), "no edge: the panel stays as it is");
+    check(menuMonitorPanelToggle(true, false, false), "the edge raises the panel");
+    check(!menuMonitorPanelToggle(true, true, false), "the edge lowers the panel");
+    check(!menuMonitorPanelToggle(true, false, true) && menuMonitorPanelToggle(true, true, true), "a hotkey row waiting for its input takes the edge: no change");
+    check(flatReadoutWanted(true, false, false, false, false), "the readout is wanted when on and nothing else is up");
+    check(!flatReadoutWanted(false, false, false, false, false), "an off readout is not wanted");
+    check(!flatReadoutWanted(true, true, false, false, false), "the open menu hides the readout");
+    check(!flatReadoutWanted(true, false, true, false, false) && !flatReadoutWanted(true, false, false, true, false), "a notice up or about to start hides the readout");
+    check(!flatReadoutWanted(true, false, false, false, true), "the monitor panel hides the readout: same corner, and it shows a superset");
 }
 
 // The flat notice, driven the way menuTick drives it: take from the queue while the menu is closed, start, then tick after the content went out.
@@ -200,11 +217,14 @@ std::string pageList(bool flat, bool developer) {
 
 void pageCases() {
     const std::string vr = "Performance,Fixes,Visual,Mirror window,Native on foot,Hotkeys,Plugins,Monitor,Status";
-    check(pageList(true, false) == "Performance,Visual,Hotkeys,Monitor,Status,Debug", "the flat profile's pages are Performance, Visual, Hotkeys, Monitor, Status, Debug (Debug last)");
+    check(pageList(true, false) == "Performance,Visual,Hotkeys,Status,Debug", "the flat profile's pages are Performance, Visual, Hotkeys, Status, Debug (Debug last): the Monitor is a panel of its own there");
+    check(!menuProfileHasPage(MenuPageSource::Monitor, true) && menuProfileHasPage(MenuPageSource::Monitor, false) &&
+              menuPolicyFor(true).monitorPanel && !menuPolicyFor(false).monitorPanel,
+          "the Monitor is a tab where it is not a panel: VR's tab, flat's panel");
     check(menuProfileHasPage(MenuPageSource::Hotkeys, true) && menuProfileHasPage(MenuPageSource::Hotkeys, false), "both profiles have a Hotkeys page: the capture, note and clash work in menuTick follows the page table, not a policy field");
     check(!menuProfileHasPage(MenuPageSource::Plugins, true) && menuProfileHasPage(MenuPageSource::Plugins, false), "only VR has a Plugins page");
     check(!menuProfileHasPage(MenuPageSource::Actions, false), "a developer-only page (Instruments) is not a profile's own");
-    check(pageList(true, true) == "Performance,Visual,Hotkeys,Monitor,Status,Debug", "developer mode adds no flat page");
+    check(pageList(true, true) == "Performance,Visual,Hotkeys,Status,Debug", "developer mode adds no flat page");
     check(pageList(false, false) == vr, "the VR profile's pages without developer mode");
     check(pageList(false, true) == vr + ",Advanced,Experimental,Instruments", "developer mode adds Advanced, Experimental and Instruments to VR, after Status");
     check(kMenuPages[6].post == MenuPagePost::AimChoiceAfterLookToAim && std::strcmp(kMenuPages[6].name, "Native on foot") == 0, "the Native on foot page moves the aiming row under Look to aim");
@@ -480,6 +500,13 @@ void flatLayoutCases() {
         check(plain.oneToOne && plain.w == plainW && plain.h == bh && tip.oneToOne && tip.w == tipW && tip.h == bh, name);
         std::snprintf(name, sizeof(name), "%s: the card's rect (x, y, width, height) is the same with and without the strip", r.name);
         check(plain.x == tip.x && plain.y == tip.y && plain.w == fs.cardPx && std::min(plain.w, tip.w) == fs.cardPx && plain.h == tip.h, name);
+        // The flat monitor panel (menu_panel.h, the monitor slot): a card of the menu's width, 1:1 in the upper right corner, level with the menu card and
+        // clear of it and its tooltip strip.
+        const FlatPlacement monitor = flatPlace(r.w, r.h, fs.cardPx, bh, FlatCorner::UpperRight);
+        std::snprintf(name, sizeof(name), "%s: the monitor panel is 1:1 in the upper right corner, level with the menu card, clear of it and its strip", r.name);
+        check(monitor.oneToOne && monitor.w == fs.cardPx && monitor.y == tip.y &&
+                  monitor.x + monitor.w == r.w - static_cast<int>(std::lround(0.02 * r.w)) && tip.x + tip.w < monitor.x,
+              name);
         std::snprintf(name, sizeof(name), "%s: the corner is two percent in, in whole pixels", r.name);
         check(plain.x == static_cast<int>(std::lround(0.02 * r.w)) && plain.y == static_cast<int>(std::lround(0.02 * r.h)), name);
         // The geometry the shader takes, read back to output pixels: the left edge, the top edge and the width.
@@ -530,6 +557,7 @@ int main(int argc, char** argv) {
     summonCases();
     escapeCases();
     drawnCases();
+    monitorPanelCases();
     noticeCases();
     pageCases();
     restartCases();

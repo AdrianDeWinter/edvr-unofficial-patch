@@ -65,6 +65,9 @@ inline bool flatProfileReadsKey(const char* key) {
         // The AA comparison key (aa_compare.cpp): turns EDVR's temporal AA off for a side-by-side look and back, runtime only. Unlisted, a hotkey
         // key reads empty in flat, which is unbound.
         std::strcmp(key, "hotkey.compare_aa") == 0 ||
+        // The monitor panel's key (menu.cpp, menu_panel.h's monitor slot): shows and hides the frame-rate gauges in the top right corner. Flat only (see
+        // flatProfileOnlyKey). Unlisted, a hotkey key reads empty in flat, which is unbound, and the panel could never be shown.
+        std::strcmp(key, "hotkey.monitor_panel") == 0 ||
         // The interface quality (flat panel row; ui_panel_scale.cpp's flat factor and the flat UI layer). The VR layer reads it
         // too, but stays inert in flat: it is live only with fix.temporal_aa on through this gate, which refuses that key.
         std::strcmp(key, "fix.ui_quality") == 0 ||
@@ -117,6 +120,12 @@ inline bool flatProfileReadsKey(const char* key) {
         // Saved Games folder when the default is wrong; unlisted, it reads "off" and the watcher looks in a folder named "off".
         std::strcmp(key, "d3d11.journal_watch") == 0 ||
         std::strcmp(key, "d3d11.journal_dir") == 0;
+}
+
+// The keys only the flat profile reads: the VR profile ignores them, so VR's Hotkeys page does not list them and VR's duplicate check does not count them
+// (hotkey_capture.cpp hotkeyPageRows, menu.cpp collectOtherHotkeys). Dotted "section.key"; a null key is not one.
+inline bool flatProfileOnlyKey(const char* key) {
+    return key && std::strcmp(key, "hotkey.monitor_panel") == 0;
 }
 
 }  // namespace edvr

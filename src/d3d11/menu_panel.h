@@ -230,8 +230,18 @@ struct MenuGeometry {
 
 // Hand the raster a new content (copied; the worker wakes). Frame thread.
 void menuPanelSubmit(const MenuContent& c);
+// THE FLAT MONITOR PANEL (docs\design-f8-menu-unification-2026-11-15.md, 2026-11-16 entry): a second flat raster in its own texture, composited after the
+// menu's in the same Present, so both can be on screen. Flat only; VR never submits one. Frame thread, like menuPanelSubmit; the raster worker is shared, and
+// a menu content waiting is taken first.
+void menuPanelSubmitMonitor(const MenuContent& c);
+// Whether the monitor panel is drawn and where: alpha > 0 draws it, flatCorner 1 is the upper right corner. It is placed 1:1 like the menu (dist 1).
+void menuPanelSetMonitorGeometry(const MenuGeometry& g);
+// How many monitor rasters have been uploaded (wraps), for the menu's ScreenReadoutState; and whether one is live.
+uint32_t menuPanelMonitorRasterSerial();
+bool menuPanelMonitorRasterReady();
 #ifdef EDVR_MENU_TEST
 bool menuPanelWorkerReadyForTest();
+bool menuPanelMonitorWorkerReadyForTest();
 int  menuPanelLayoutHeightForTest(const MenuContent& c);
 // The rect layout() gives the text op for the line at `i`'s left text (pixels, the frame the
 // raster draws in), read from layout()'s own ops. The heading's is the ellipsis check: the

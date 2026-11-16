@@ -28,7 +28,7 @@ struct MenuPageDef {
     MenuPagePost post;
 };
 
-// Order is the tab order. Flat's Performance, Visual and Debug names are kFlatTabNames (the Bloom note finds the Visual tab by it); its Monitor and Status are the VR
+// Order is the tab order. Flat's Performance, Visual and Debug names are kFlatTabNames (the Bloom note finds the Visual tab by it); its Hotkeys and Status are the VR
 // ones, shown to both, and the flat Debug entry sits after it so that Debug stays last.
 inline constexpr MenuPageDef kMenuPages[] = {
     {kFlatTabNames[0], true, false, false, MenuPageSource::FlatPerformance, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
@@ -40,7 +40,8 @@ inline constexpr MenuPageDef kMenuPages[] = {
     {"Native on foot", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, "native_on_foot", true, MenuPagePost::AimChoiceAfterLookToAim},
     {"Hotkeys", true, true, false, MenuPageSource::Hotkeys, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
     {"Plugins", false, true, false, MenuPageSource::Plugins, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
-    {"Monitor", true, true, false, MenuPageSource::Monitor, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
+    // Flat shows the Monitor as a panel of its own (hotkey.monitor_panel; menu_policy.h monitorPanel), not as a tab.
+    {"Monitor", false, true, false, MenuPageSource::Monitor, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
     {"Status", true, true, false, MenuPageSource::Status, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
     {kFlatTabNames[2], true, false, false, MenuPageSource::FlatDebug, MenuPageTier::Fix, nullptr, false, MenuPagePost::None},
     {"Advanced", false, true, true, MenuPageSource::Settings, MenuPageTier::Advanced, "advanced", true, MenuPagePost::None},

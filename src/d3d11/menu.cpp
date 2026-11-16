@@ -364,6 +364,15 @@ struct State {
     FpsOverlayMode overlayMode = FpsOverlayMode::Off;
     ScreenReadoutState flatReadout;   // flat: the readout's raster is the live one (menu_policy.h)
     uint32_t readoutSized[2] = {0, 0}; // the output size the flat readout's raster was built for
+    // The flat monitor panel (menu_panel.h, the monitor slot; design doc, 2026-11-16): its key (hotkey.monitor_panel, flat only), whether it is up (session
+    // state, never written), the machine that composites it only once a raster built since it was raised is live (on the monitor slot's own serial), the output
+    // size its raster was built for, and its refresh clock.
+    Hotkey      monitorKey;
+    std::string monitorKeyName;
+    bool        monitorPanelOpen = false;
+    ScreenReadoutState monitorPanel;
+    uint32_t    monitorSized[2] = {0, 0};
+    uint64_t    monitorTextMs = 0;
     bool     overlayLock = false;
     float    overlayYaw = 0.0f;
     float    overlayPitch = -16.0f;
@@ -2523,6 +2532,26 @@ bool buildReadoutContent(MenuContent& c, FpsOverlayMode mode, bool flat, float t
     return true;
 }
 
+// The flat monitor panel's raster (menu_panel.h, the monitor slot): the Monitor page's tiles, notes and strips (buildMonitor) on a card of the menu's width and
+// text height at this output, under one tab that names it and a footer that says which key puts it away. No rows, no highlight, no tooltip.
+void buildMonitorPanel(MenuContent& c) {
+    State& s = g_s;
+    memset(&c, 0, sizeof(c));
+    c.popupLine = -1;
+    const uint32_t ow = g_flatOutW.load(std::memory_order_relaxed);
+    const uint32_t oh = g_flatOutH.load(std::memory_order_relaxed);
+    s.monitorSized[0] = ow;
+    s.monitorSized[1] = oh;
+    const FlatCardSize fs = flatCardSize(static_cast<int>(ow), static_cast<int>(oh), kFlatMenuCardHeightFrac);
+    c.cardPx = c.widthPx = fs.cardPx;
+    c.capPx = fs.capPx;
+    c.tabCount = 1;
+    c.activeTab = 0;
+    snprintf(c.tabs[0], sizeof(c.tabs[0]), "%s", "Monitor");
+    buildMonitor(c);
+    snprintf(c.footer, sizeof(c.footer), "%s hides this panel", s.monitorKeyName.c_str());
+}
+
 void buildContent(MenuContent& c) {
     State& s = g_s;
     memset(&c, 0, sizeof(c));
@@ -3970,6 +3999,8 @@ void collectOtherHotkeys(int exceptDef, HotkeyOthers* out) {
     std::vector<int> defs;
     for (int i = 0; i < kRowDefCount; ++i) {
         if (i == exceptDef || kMenuRows[i].kind != MenuKind::Hotkey) continue;
+        // A key only the flat profile reads (flat_profile_keys.h) binds nothing in VR, so it takes no key from a VR row.
+        if (!runtimeFlatProfile() && flatProfileOnlyKey(dottedOf(kMenuRows[i]).c_str())) continue;
         defs.push_back(i);
         out->names.push_back(dottedOf(kMenuRows[i]));
     }
@@ -4905,6 +4936,8 @@ void menuProfileSwitch() {
     s.flatNotice.clear();
     s.screenNotice.clear();
     s.flatReadout.clear();
+    s.monitorPanelOpen = false;   // session state: the incoming profile starts with the monitor panel down
+    s.monitorPanel.clear();
     inputGateSetPrivate(false);
     menuPanelFlatResize();
     s.lastDrawn = menuDrawnValue();
@@ -5109,6 +5142,9 @@ void menuConfigure(Config& cfg) {
     if (!flat && !runtimeVrProfile()) {
         s.configured = false;
         s.summon.setBinding("");
+        s.monitorKey.setBinding("");
+        s.monitorKeyName.clear();
+        s.monitorPanelOpen = false;
         return;
     }
     const MenuProfilePolicy pol = menuPolicyFor(flat);
@@ -5122,6 +5158,26 @@ void menuConfigure(Config& cfg) {
                             "why), so the menu cannot be summoned this session.",
                             key.c_str());
         }
+    }
+    // The flat monitor panel's key (hotkey.monitor_panel; flat only, flat_profile_keys.h). VR does not read it: its binding is cleared, so nothing is watched.
+    {
+        std::string monKey;
+        if (pol.monitorPanel) monKey = cfg.getString("hotkey.monitor_panel", "F5");
+        if (monKey != s.monitorKeyName || !s.configured) {
+            s.monitorKeyName = monKey;
+            s.monitorKey.setBinding(monKey.c_str());
+            if (pol.monitorPanel) {
+                if (monKey.empty()) {
+                    Log::get().note("menu: the monitor panel key is off (hotkey.monitor_panel is empty).");
+                } else if (!s.monitorKey.bound()) {
+                    Log::get().note("menu: hotkey.monitor_panel = \"%s\" bound nothing (the line above says why), so the monitor panel cannot be shown this session.",
+                                    monKey.c_str());
+                } else {
+                    Log::get().note("menu: monitor panel key %s (hotkey.monitor_panel).", monKey.c_str());
+                }
+            }
+        }
+        if (!s.monitorKey.bound()) s.monitorPanelOpen = false;   // nothing could put it away again
     }
     if (pol.adoptGameKeys) menuAdoptGameBindingsSwitch(cfg, summonChanged, key);
     if (pol.readsMenuKeys) {
@@ -5298,7 +5354,8 @@ void menuFlatBeforePresent(IDXGISwapChain* swap, unsigned flags) {
         }
         perfMonitorNoteSwapChain(swap);   // the display's refresh rate, for the Monitor's budgets (every few seconds)
     }
-    if (!(g_s.screenNotice.compositing(g_s.open) || g_s.flatReadout.compositing()) || (flags & DXGI_PRESENT_TEST)) return;
+    if (!(g_s.screenNotice.compositing(g_s.open) || g_s.flatReadout.compositing() || (g_s.monitorPanelOpen && g_s.monitorPanel.compositing())) ||
+        (flags & DXGI_PRESENT_TEST)) return;
     menuPanelCompositeFlat(swap);
 }
 
@@ -5357,7 +5414,7 @@ void menuTick(ID3D11Device* dev) {
         // flat census stays the driver of engine motion's clock, which
         // perfMonitorFrame leaves alone there).
         perfMonitorFrame(dev);
-        perfMonitorSetActive(s.open && s.pages[s.page].monitor);
+        perfMonitorSetActive((s.open && s.pages[s.page].monitor) || s.monitorPanelOpen);   // the flat monitor panel needs the slow samplers too
         tickHeldEdit(now);   // a held numeric edit whose burst has ended is written now (menu_edit_hold.h); the worker's results are drained after it
         // Writes the worker finished since last frame.
         drainWrites();
@@ -5548,6 +5605,15 @@ void menuTick(ID3D11Device* dev) {
                                 s.summonName.c_str());
             }
         }
+        // The flat monitor panel's key: up or down whatever the menu is doing. The panel takes no input, so the press is only watched (the game sees it too);
+        // a hotkey row waiting for its input takes the edge as a candidate instead. pressed() is read every tick so its edge latch stays current.
+        if (pol.monitorPanel) {
+            const bool was = s.monitorPanelOpen;
+            s.monitorPanelOpen = menuMonitorPanelToggle(s.monitorKey.pressed(), s.monitorPanelOpen, hotkeysPage && s.captureEntry >= 0);
+            if (s.monitorPanelOpen != was) Log::get().note("menu: the monitor panel is %s (%s).", s.monitorPanelOpen ? "up" : "down", s.monitorKeyName.c_str());
+            if (s.monitorKey.takeMissedWhileUnfocused())
+                Log::get().note("menu: %s (the monitor panel key) was pressed while Elite was unfocused.", s.monitorKeyName.c_str());
+        }
         starGlowBloomTick();
         if (pol.closesOnFocusLoss && s.open && !gameHasFocus()) closeMenu("Elite lost focus");
 
@@ -5733,7 +5799,7 @@ void menuTick(ID3D11Device* dev) {
                 s.screenNotice.rasterStale = true;
                 s.screenNotice.serial = menuPanelRasterSerial();
             }
-            const bool wanted = s.overlayMode != FpsOverlayMode::Off && !s.open && !s.screenNotice.up && !s.flatNotice.due();
+            const bool wanted = flatReadoutWanted(s.overlayMode != FpsOverlayMode::Off, s.open, s.screenNotice.up, s.flatNotice.due(), s.monitorPanelOpen);
             const bool detailed = s.overlayMode == FpsOverlayMode::Detailed;
             const bool sizeChanged = g_flatOutW.load(std::memory_order_relaxed) != s.readoutSized[0] ||
                                      g_flatOutH.load(std::memory_order_relaxed) != s.readoutSized[1];
@@ -5746,6 +5812,23 @@ void menuTick(ID3D11Device* dev) {
                     menuPanelSubmit(rc);
                     s.flatReadout.didSubmit(before);
                 }
+            }
+        }
+
+        // The flat monitor panel: its own raster (menu_panel.h, the monitor slot), so it is on screen with the menu, a notice, or alone. Refreshed on the Monitor
+        // page's cadence and at once when the output's size changes; composited only once a raster built since it was raised is live (the readout's machine, on
+        // the monitor slot's serial).
+        if (pol.monitorPanel) {
+            const bool sizeChanged = g_flatOutW.load(std::memory_order_relaxed) != s.monitorSized[0] ||
+                                     g_flatOutH.load(std::memory_order_relaxed) != s.monitorSized[1];
+            const bool refreshDue = sizeChanged || dueMs(s.monitorTextMs, kMonitorRefreshMs);
+            if (s.monitorPanel.tick(s.monitorPanelOpen, refreshDue, menuPanelMonitorRasterSerial())) {
+                s.monitorTextMs = stampMs();
+                const uint32_t before = menuPanelMonitorRasterSerial();
+                MenuContent mc;
+                buildMonitorPanel(mc);
+                menuPanelSubmitMonitor(mc);
+                s.monitorPanel.didSubmit(before);
             }
         }
 
@@ -5794,8 +5877,8 @@ void menuTick(ID3D11Device* dev) {
                 s.contentDirty = true;
             }
             preparePadNavigation(now, drawnFresh && gameHasFocus());
-            // A status page (the Monitor) releases the keyboard to the game, as in VR, so the menu's own keys are not "ready"; they still run there, because
-            // the fixed keys and the page pair act on status pages (handleKeys) and a player parked on the Monitor must be able to leave it.
+            // A status page (the Status page) releases the keyboard to the game, as in VR, so the menu's own keys are not "ready"; they still run there, because
+            // the fixed keys and the page pair act on status pages (handleKeys) and a player parked on it must be able to leave it.
             if (keysReady || (drawnFresh && s.pages[s.page].status)) handleKeys(now);
             handlePadNavigation(now);
             if (s.open && dev && !menuPanelFlatRasterReady()) s.contentDirty = true;
@@ -5866,6 +5949,16 @@ void menuTick(ID3D11Device* dev) {
             g.flatCorner = readoutOnly ? 1 : 0;
         }
         menuPanelSetGeometry(g);
+        if (pol.monitorPanel) {
+            // The monitor panel, in the upper right corner, 1:1 like the menu (menu_flat_layout.h flatPlace).
+            MenuGeometry mg;
+            mg.dist = 1.0f;
+            mg.curve = 0.0f;
+            mg.halfW = 0.62f;
+            mg.alpha = s.monitorPanelOpen && s.monitorPanel.compositing() ? 1.0f : 0.0f;
+            mg.flatCorner = static_cast<int>(FlatCorner::UpperRight);
+            menuPanelSetMonitorGeometry(mg);
+        }
         if (world) {
             setMenuHeadLock(showingOverlay, s.overlayYaw, s.overlayPitch);
             setMenuVisible(g.alpha);
