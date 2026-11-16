@@ -153,15 +153,12 @@ float g_glowCbBaySent[24] = {};
 bool g_glowCbSentValid = false;
 bool g_glowLogged = false;
 float g_glowLoggedLv[4] = {};
-// The index count treated as the clearing pane (36, the bay window, until an exterior pane fills the view), and the entry share the feed carries.
-std::atomic<uint32_t> g_clearN{cc::kBayIndexCount};
 std::atomic<uint32_t> g_bayN{cc::kBayIndexCount};   // this room's bay window (the feed's, from its anchor)
 std::atomic<bool> g_realSkyNow{false};                // this room's windows show the real sky (the feed's): skySide families are issued with the cull on
 // While the bake captures (concoursePaneBakeBegin to its finish or cancel): the people's draws are not issued (cc::bakePeopleVs), and how many were left out, for the finish line.
 std::atomic<bool> g_bakePeopleOff{false};
 std::atomic<uint64_t> g_bakePeopleLeft{0};
 std::atomic<float> g_radiusFed{cc::kBackdropRadiusDefaultM};   // this room's sphere, unless the key says
-std::atomic<float> g_enterShareFed{0.0f};
 
 // The mark pass's own objects (made by the tick; the draw threads read the atomics).
 std::atomic<ID3D11VertexShader*> g_vsMark{nullptr};      // the fullscreen triangle at the beyond depth
@@ -312,6 +309,8 @@ struct ShareSlot {
     uint32_t frame = 0;
     uint32_t n = 0;
     double pixels = 0.0;
+    cc::PaneKey key;                                   // the pane, and its side as the table had it when the query opened (the draw hook's, never read under this mutex)
+    cc::PaneSide side = cc::PaneSide::kUnknown;
 };
 struct Bin {
     bool used = false;
@@ -320,6 +319,8 @@ struct Bin {
     uint32_t count = 0;
     uint32_t n[kBinMaxN] = {};
     float share[kBinMaxN] = {};
+    uint32_t sampleCount = 0;                          // one sample per pane draw: the total of the outside glass reads these
+    cc::GlassSample samples[kShareSlots];
 };
 std::mutex g_shareMutex;
 ShareSlot g_slots[kShareSlots];
@@ -330,6 +331,8 @@ uint64_t g_latestMs = 0;
 uint32_t g_latestFrame = 0;
 uint32_t g_seqCounter = 0;
 uint64_t g_shareDropped = 0;
+uint32_t g_sampleDropped = 0;   // samples that did not fit a bin's table, since the last stats call
+double g_mainPixels = 0.0;      // the largest viewport of the visit, decaying (cc::mainViewPixelsNext); under g_shareMutex
 
 // ---- The one-shot material log ---------------------------------------------------------------------------------------------------------------
 constexpr size_t kMatMax = 4;
@@ -876,7 +879,8 @@ Bin* binFor(uint32_t frame, bool create) noexcept {
 }
 
 // Opens a query around a family draw (immediate context only). Returns the slot, or -1.
-int openShareQuery(ID3D11DeviceContext* ctx, uint32_t n) noexcept {
+// `side` is what the side table said when the draw came (read by the caller before this call: this takes the shares' mutex, and the table has its own).
+int openShareQuery(ID3D11DeviceContext* ctx, const cc::PaneKey& key, cc::PaneSide side) noexcept {
     D3D11_VIEWPORT vp{};
     UINT nvp = 1;
     ctx->RSGetViewports(&nvp, &vp);
@@ -898,7 +902,9 @@ int openShareQuery(ID3D11DeviceContext* ctx, uint32_t n) noexcept {
         ShareSlot& s = g_slots[idx];
         s.state = 1;
         s.frame = frame;
-        s.n = n;
+        s.n = key.n;
+        s.key = key;
+        s.side = side;
         s.pixels = static_cast<double>(vp.Width) * static_cast<double>(vp.Height);
         Bin* b = binFor(frame, true);
         if (b) ++b->outstanding;
@@ -947,6 +953,15 @@ void pollShares(ID3D11Device* device, uint32_t prevFrame, uint32_t frame, bool m
                 } else if (k < b->count && share > b->share[k]) {
                     b->share[k] = share;
                 }
+                if (b->sampleCount < kShareSlots) {
+                    cc::GlassSample& g = b->samples[b->sampleCount++];
+                    g.key = s.key;
+                    g.share = share;
+                    g.pixels = s.pixels;
+                    g.side = s.side;
+                } else {
+                    ++g_sampleDropped;
+                }
                 if (b->outstanding > 0) --b->outstanding;
             }
             s.state = 0;
@@ -964,12 +979,18 @@ void pollShares(ID3D11Device* device, uint32_t prevFrame, uint32_t frame, bool m
             ConcoursePaneShares r;
             r.valid = true;
             r.seq = ++g_seqCounter;
-            r.bay = 0.0f;
             r.count = best->count;
             for (uint32_t k = 0; k < best->count; ++k) {
                 r.n[k] = best->n[k];
                 r.share[k] = best->share[k];
-                if (best->n[k] == g_clearN.load(std::memory_order_relaxed) && best->share[k] > r.bay) r.bay = best->share[k];
+            }
+            // The total of the outside glass in the main view (concourse_cull_core.h exteriorGlassShare), then the main view's size is remembered for the next frame.
+            r.exterior = cc::exteriorGlassShare(best->samples, best->sampleCount, g_mainPixels, g_bayN.load(std::memory_order_relaxed));
+            if (best->sampleCount > 0) {
+                double frameMax = 0.0;
+                for (uint32_t k = 0; k < best->sampleCount; ++k)
+                    if (best->samples[k].pixels > frameMax) frameMax = best->samples[k].pixels;
+                g_mainPixels = cc::mainViewPixelsNext(g_mainPixels, frameMax);
             }
             g_latest = r;
             g_latestMs = nowMs;
@@ -1351,11 +1372,6 @@ void pollTests(ID3D11Device* device, uint32_t frame) noexcept {
     ID3D11DeviceContext* imm = nullptr;
     device->GetImmediateContext(&imm);
     if (!imm) return;
-    // The clearing pane: in the plain phase, an exterior mesh whose glass fills the view as much as the entry share is a candidate (the largest wins).
-    uint32_t candN = 0;
-    float candShare = 0.0f;
-    const bool plainNow = g_withholdNow.load(std::memory_order_relaxed);
-    const float enterShare = g_enterShareFed.load(std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(g_sideMutex);
         if (g_testsMade) {
@@ -1400,13 +1416,6 @@ void pollTests(ID3D11Device* device, uint32_t frame) noexcept {
                         g_missPixels = pixels;
                     }
                 }
-                if (plainNow && enterShare > 0.0f && pixels > 0.0 && g_sides.side(key) == cc::PaneSide::kExterior) {
-                    const float share = static_cast<float>(static_cast<double>(drawn) / pixels);
-                    if (share >= enterShare * cc::clearEntryScale(key.n, g_bayN.load(std::memory_order_relaxed)) && share > candShare && key.n != g_clearN.load(std::memory_order_relaxed)) {
-                        candN = key.n;
-                        candShare = share;
-                    }
-                }
                 if (c == cc::PaneSides::Change::kNone) continue;
                 const bool ext = g_sides.side(key) == cc::PaneSide::kExterior;
                 uint32_t& cap = (c == cc::PaneSides::Change::kFirst && ext) ? g_sideLogExterior : g_sideLogOther;
@@ -1419,18 +1428,6 @@ void pollTests(ID3D11Device* device, uint32_t frame) noexcept {
         }
     }
     imm->Release();
-    if (candN != 0) {
-        // Against the latest share of the pane that is the clearing pane now (0 when it is not on screen). The shares' lock is taken after the table's is let go.
-        float cur = 0.0f;
-        {
-            std::lock_guard<std::mutex> lock(g_shareMutex);
-            const uint32_t now = g_clearN.load(std::memory_order_relaxed);
-            for (uint32_t k = 0; g_latest.valid && k < g_latest.count; ++k)
-                if (g_latest.n[k] == now) cur = g_latest.share[k];
-        }
-        if (candShare > cur && g_clearN.exchange(candN, std::memory_order_relaxed) != candN)
-            Log::get().note("concourse pane: the clearing pane is now n=%u (share %.1f%%)", candN, 100.0 * static_cast<double>(candShare));
-    }
 }
 
 // ---- The mark pass -----------------------------------------------------------------------------------------------------------------------------
@@ -2412,7 +2409,8 @@ void ConcoursePaneScope::beginBody(ID3D11DeviceContext* ctx, UINT indexCount, UI
     if (immediate) {
         materialOnce(ctx, indexCount);
         if (g_shareOn.load(std::memory_order_acquire)) {
-            query_ = openShareQuery(ctx, indexCount);
+            const cc::PaneKey shareKey{indexCount, startIndex, baseVertex};
+            query_ = openShareQuery(ctx, shareKey, sideOf(shareKey));   // the side is read before the shares' mutex is taken
             if (query_ >= 0) flags_ |= kFlagQuery;
         }
     }
@@ -2429,14 +2427,12 @@ void ConcoursePaneScope::beginBody(ID3D11DeviceContext* ctx, UINT indexCount, UI
             sideOf(cc::PaneKey{indexCount, startIndex, baseVertex}) == cc::PaneSide::kExterior)
             mark = false;
     } else {
-        // The cull is lifted (lifting, fading, clear): only a pane known to be exterior is still mirrored, and over its whole area.
+        // The cull is lifted (lifting, fading, clear): only a pane known to be exterior is still mirrored, over its whole area, and every such pane fades together.
         const cc::PaneKey key{indexCount, startIndex, baseVertex};
         if (sideOf(key) != cc::PaneSide::kExterior) return;
-        if (indexCount == g_clearN.load(std::memory_order_relaxed)) {
-            opacity = std::min(1.0f, std::max(0.0f, g_bayOpacity.load(std::memory_order_relaxed)));
-            if (opacity <= 0.001f) return;   // the bay glass is clear: the game's own glass, alone
-            if (opacity < 0.999f) opaque = false;
-        }
+        opacity = std::min(1.0f, std::max(0.0f, g_bayOpacity.load(std::memory_order_relaxed)));
+        if (opacity <= 0.001f) return;   // the outside glass is clear: the game's own glass, alone
+        if (opacity < 0.999f) opaque = false;
     }
     if (tint) opaque = true;
     planMirror_ = true;
@@ -3268,13 +3264,17 @@ ConcoursePaneMirrorStats concoursePaneTakeMirrorStats() noexcept {
     r.markPasses = g_markPasses.exchange(0, std::memory_order_relaxed);
     r.markRefused = g_markRefused.exchange(0, std::memory_order_relaxed);
     r.tests = g_testsRead.exchange(0, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_shareMutex);
+        r.shareSamplesDropped = g_sampleDropped;
+        g_sampleDropped = 0;
+    }
     std::lock_guard<std::mutex> lock(g_sideMutex);
     r.known = g_sides.knownCount();
     r.exterior = g_sides.exteriorCount();
     r.dropped = g_sides.dropped();
     return r;
 }
-uint32_t concoursePaneClearingN() noexcept { return g_clearN.load(std::memory_order_relaxed); }
 const char* concoursePaneModeName() noexcept { return modeText(g_mode.load(std::memory_order_relaxed)); }
 void concoursePaneNoteShader(uint64_t hash, const void* bytecode, size_t len) noexcept {
     if (!cc::glassLayoutPs(bytecode, len)) return;
@@ -3304,15 +3304,17 @@ void concoursePaneSetFeed(const ConcoursePaneFeed& feed) noexcept {
         g_sides.reset();
         if (!g_bakeBaked.load(std::memory_order_acquire)) g_bdResetPending.store(true, std::memory_order_release);   // and the backdrop cube and its origin (the tick does it)
     }
+    if (!treatBefore && feed.treat) {   // and the size of the main view (the side table's lock is let go before the shares' is taken)
+        std::lock_guard<std::mutex> lock(g_shareMutex);
+        g_mainPixels = 0.0;
+    }
     if (!g_feedWithhold.exchange(feed.withhold, std::memory_order_relaxed) && feed.withhold) {
         g_plainFrom.store(g_frameNow.load(std::memory_order_relaxed), std::memory_order_relaxed);
-        g_clearN.store(g_bayN.load(std::memory_order_relaxed), std::memory_order_relaxed);   // back in the plain mirror phase: the next approach starts from the bay window
     }
     g_feedEffects.store(feed.effects, std::memory_order_relaxed);
     g_feedSealed.store(feed.sealed, std::memory_order_relaxed);
     g_realSkyNow.store(feed.realSky, std::memory_order_relaxed);
     g_bayOpacity.store(feed.bayOpacity, std::memory_order_relaxed);
-    g_enterShareFed.store(feed.enterShare, std::memory_order_relaxed);
     for (int k = 0; k < 3; ++k) g_upFed[k].store(feed.upValid ? feed.up[k] : 0.0f, std::memory_order_relaxed);
     g_upFedValid.store(feed.upValid, std::memory_order_relaxed);
     updateArmed();

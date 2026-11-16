@@ -1323,12 +1323,12 @@ inline bool parseGlowLevels(const char* text, float out[4]) noexcept {
     return true;
 }
 
-// ---- The bay glass's clearing, following the bay in view ------------------------------------------------------------------------------------------
+// ---- The windows' clearing, following the outside glass in view ----------------------------------------------------------------------------------
 // Mirror (the glass stands in, the cull is on) -> Lifting (the cull is off, the glass still opaque, so the station is back before it opens) -> FadingOut ->
-// Clear. A reading of the bay glass's share of the view at or over enterShare, twice in a row in Mirror, starts it. In Lifting, FadingOut and Clear the share
-// below enterShare * kClearExitRatio for releaseMs running releases it: with the bay out of view (share at most kClearUnseenShare, or no reading) straight back
-// to Mirror, else FadingIn, which returns to Mirror when it is done, turns round to FadingOut if the share is over enterShare again, and jumps to Mirror
-// if the bay goes out of view.
+// Clear. A reading of the total share of the view that all the outside glass fills (exteriorGlassShare), at or over enterShare, twice in a row in Mirror, starts
+// it, and every outside pane then fades together. In Lifting, FadingOut and Clear the share below enterShare * kClearExitRatio for releaseMs running releases it:
+// with the glass out of view (share at most kClearUnseenShare, or no reading) straight back to Mirror, else FadingIn, which returns to Mirror when it is done,
+// turns round to FadingOut if the share is over enterShare again, and jumps to Mirror if the glass goes out of view.
 enum class ClearPhase : uint8_t { kMirror, kLifting, kFadingOut, kClear, kFadingIn };
 
 inline const char* clearPhaseName(ClearPhase p) noexcept {
@@ -1343,13 +1343,60 @@ inline const char* clearPhaseName(ClearPhase p) noexcept {
 
 // The shop window (the ship services counter) is the mesh n=30, start 7301760. It reads exterior, and at the counter it fills 7.3 to 8.3% of the view (Flight 11, cam_local
 // 9.2 26.17 30.8), its maximum 9.8%; elsewhere, in three flights, n=30 stayed under 3%. The 20% entry share never reached it, so it enters at 0.3 of the share.
-// The exit follows at kClearExitRatio of that. Any other pane enters at the share itself.
+// The exit follows at kClearExitRatio of that. Any other pane enters at the share itself. The scale is applied per pane, inside the total (exteriorGlassShare divides
+// each pane's share by it), so the machine compares the total with the entry share as it stands.
 // In a room whose bay is itself n=30 (an orbital outpost's) that is the bay, and it enters at the share.
 inline float clearEntryScale(uint32_t n, uint32_t bayN = kBayIndexCount) noexcept { return n == 30 && bayN != 30 ? 0.3f : 1.0f; }
 
+// ---- The window share: all the outside glass in the main view ---------------------------------------------------------------------------------------
+// One window can be several meshes (a bar's outside glass is three, 2.2%, 1.5% and 1.4% of the view), none big enough alone, so the clearing machine reads their
+// total. A sample is one glass draw's occlusion-query share of the viewport it was drawn into, with its pane and the side the table gave it when the query opened.
+struct GlassSample {
+    PaneKey key;
+    float share = 0.0f;       // 0 to 1, of that viewport
+    double pixels = 0.0;      // that viewport's width times its height
+    PaneSide side = PaneSide::kUnknown;
+};
+
+// The most pixels a viewport had in the bins since the visit began, decaying 0.1% a frame so a drop in render scale is followed within seconds.
+constexpr double kMainViewDecay = 0.999;
+inline double mainViewPixelsNext(double prev, double frameMax) noexcept {
+    const double decayed = prev * kMainViewDecay;
+    return frameMax > decayed ? frameMax : decayed;
+}
+
+// The total of one frame's glass. Only viewports of at least half the main view count (the offscreen passes that draw the same glass into small targets are not
+// the screen); a pane drawn twice (two eyes) counts once, at its larger share. Exterior counts; so does a pane of unknown side whose index count is the room's bay
+// window (before the side tests have run, and in VR, where no side test runs); interior never. Each share is divided by clearEntryScale, so the shop window's 30%
+// entry share is inside the total. The sum is clamped to 1.
+inline float exteriorGlassShare(const GlassSample* samples, uint32_t count, double mainPixels, uint32_t bayN) noexcept {
+    double main = mainPixels;
+    for (uint32_t i = 0; i < count; ++i)
+        if (samples[i].pixels > main) main = samples[i].pixels;   // a frame's own largest viewport is the main view when none is remembered yet
+    double total = 0.0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const GlassSample& s = samples[i];
+        if (!(s.pixels >= main * 0.5) || !(s.pixels > 0.0)) continue;
+        if (!(s.side == PaneSide::kExterior || (s.side == PaneSide::kUnknown && s.key.n == bayN))) continue;
+        bool larger = false;   // a later sample of the same pane with a bigger share stands for it
+        bool earlierSame = false;
+        for (uint32_t j = 0; j < count; ++j) {
+            if (j == i) continue;
+            const GlassSample& o = samples[j];
+            if (o.key.n != s.key.n || o.key.startIndex != s.key.startIndex || o.key.baseVertex != s.key.baseVertex) continue;
+            if (!(o.pixels >= main * 0.5) || !(o.pixels > 0.0)) continue;
+            if (o.share > s.share) larger = true;
+            else if (o.share == s.share && j < i) earlierSame = true;
+        }
+        if (larger || earlierSame) continue;
+        total += static_cast<double>(s.share) / static_cast<double>(clearEntryScale(s.key.n, bayN));
+    }
+    return total > 1.0 ? 1.0f : static_cast<float>(total);
+}
+
 constexpr float kClearExitRatio = 0.4f;     // the exit share is enterShare * this (20% in, 8% out)
 constexpr uint64_t kClearReleaseMs = 250;   // the share must stay below the exit share this long
-constexpr float kClearUnseenShare = 0.01f;  // at or under this (or no reading) the bay is out of view
+constexpr float kClearUnseenShare = 0.01f;  // at or under this (or no reading) the glass is out of view
 constexpr uint64_t kClearLiftMs = 150;
 constexpr uint64_t kClearFadeMs = 600;
 constexpr uint32_t kClearReadingsToEnter = 2;
@@ -1357,7 +1404,7 @@ constexpr uint32_t kClearReadingsToEnter = 2;
 struct ClearInput {
     uint64_t nowMs = 0;
     bool gate = false;        // the cull is wanted: key on, on foot in social space, the anchor seen, not sealed
-    float bayShare = -1.0f;   // the latest completed frame's share of the view (0 to 1); negative when there is no reading
+    float windowShare = -1.0f;   // the latest completed frame's total share of the view for all the outside glass (exteriorGlassShare, 0 to 1); negative when there is no reading
     uint32_t shareSeq = 0;    // moves with each new reading: one frame read on two ticks is one reading
     float enterShare = 0.0f;   // 0 never clears
     uint64_t liftMs = kClearLiftMs;
@@ -1389,9 +1436,9 @@ public:
         const bool fresh = !seqSeen_ || in.shareSeq != lastSeq_;
         seqSeen_ = true;
         lastSeq_ = in.shareSeq;
-        const bool over = in.enterShare > 0.0f && in.bayShare >= 0.0f && in.bayShare >= in.enterShare;
-        const bool below = in.enterShare <= 0.0f || in.bayShare < in.enterShare * kClearExitRatio;   // a negative share (no reading) is below
-        const bool unseen = in.bayShare <= kClearUnseenShare;                                         // negative included
+        const bool over = in.enterShare > 0.0f && in.windowShare >= 0.0f && in.windowShare >= in.enterShare;
+        const bool below = in.enterShare <= 0.0f || in.windowShare < in.enterShare * kClearExitRatio;   // a negative share (no reading) is below
+        const bool unseen = in.windowShare <= kClearUnseenShare;                                         // negative included
         switch (phase_) {
             case ClearPhase::kMirror:
                 opacity_ = 1.0f;

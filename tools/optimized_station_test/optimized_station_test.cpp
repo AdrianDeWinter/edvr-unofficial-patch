@@ -4229,7 +4229,7 @@ int main(int argc, char** argv) {
             check(spread, "concourse pane test frame: the keys are spread over the 8 frames, not all on one");
         }
 
-        // The clearing machine: it follows the bay's share of the view, not the camera.
+        // The clearing machine: it follows the total share of the view the outside glass fills, not the camera.
         {
             using CP = cc::ClearPhase;
             cc::ClearInput in;
@@ -4238,7 +4238,7 @@ int main(int argc, char** argv) {
             uint32_t seq = 0;
             auto stepAt = [&](cc::ClearMachine& m, uint64_t now, float share) {
                 in.nowMs = now;
-                in.bayShare = share;
+                in.windowShare = share;
                 in.shareSeq = ++seq;
                 return m.step(in);
             };
@@ -5097,6 +5097,65 @@ int main(int argc, char** argv) {
             check(std::fabs(0.2f * cc::clearEntryScale(30) - 0.06f) < 1e-6f && std::fabs(0.2f * cc::clearEntryScale(30) * cc::kClearExitRatio - 0.024f) < 1e-6f,
                   "concourse clear: the 20% share becomes 6% in and 2.4% out for the shop window");
             check(0.073f >= 0.2f * cc::clearEntryScale(30) && 0.03f < 0.2f * cc::clearEntryScale(30), "concourse clear: the 7.3% seen at the counter enters, the under-3% seen elsewhere does not");
+        }
+
+        // The total of the outside glass in the main view: a bar's three meshes, two eyes, an offscreen pass, sides and the weights.
+        {
+            constexpr double kMain = 2560.0 * 1440.0;
+            auto smp = [](uint32_t n, uint32_t start, float share, double pixels, cc::PaneSide side) {
+                cc::GlassSample s;
+                s.key = cc::PaneKey{n, start, 0};
+                s.share = share;
+                s.pixels = pixels;
+                s.side = side;
+                return s;
+            };
+            const cc::PaneSide ext = cc::PaneSide::kExterior;
+            const auto close2 = [](float a, float b) { return std::fabs(a - b) < 1e-5f; };
+            {
+                const cc::GlassSample bar[3] = {smp(24, 0, 0.022f, kMain, ext), smp(30, 0, 0.015f, kMain, ext), smp(36, 0, 0.014f, kMain, ext)};
+                check(close2(cc::exteriorGlassShare(bar, 3, kMain, 36), 0.022f + 0.015f / 0.3f + 0.014f),
+                      "exterior glass: a bar's three meshes sum, the shop window's n=30 weighted by its entry scale (0.086)");
+            }
+            {
+                const cc::GlassSample eyes[2] = {smp(36, 100, 0.10f, kMain, ext), smp(36, 100, 0.12f, kMain, ext)};
+                check(close2(cc::exteriorGlassShare(eyes, 2, kMain, 36), 0.12f), "exterior glass: the same pane in two eyes counts once, at the larger share");
+                const cc::GlassSample two[2] = {smp(36, 100, 0.10f, kMain, ext), smp(36, 200, 0.12f, kMain, ext)};
+                check(close2(cc::exteriorGlassShare(two, 2, kMain, 36), 0.22f), "exterior glass: two panes of one index count with different first indices both count");
+            }
+            {
+                const cc::GlassSample off[2] = {smp(30, 0, 0.414f, 256.0 * 256.0, ext), smp(36, 0, 0.02f, kMain, ext)};
+                check(close2(cc::exteriorGlassShare(off, 2, kMain, 36), 0.02f), "exterior glass: a 256x256 viewport's 41.4% is not the screen and is left out");
+                const cc::GlassSample alone[1] = {smp(30, 0, 0.414f, 256.0 * 256.0, ext)};
+                check(close2(cc::exteriorGlassShare(alone, 1, kMain, 36), 0.0f), "exterior glass: with the main view remembered, an offscreen-only frame totals zero");
+                const cc::GlassSample both[2] = {smp(30, 0, 0.414f, 256.0 * 256.0, ext), smp(30, 0, 0.015f, kMain, ext)};
+                check(close2(cc::exteriorGlassShare(both, 2, 0.0, 36), 0.05f), "exterior glass: with no main view remembered yet, the frame's own largest viewport stands for it");
+            }
+            {
+                const cc::GlassSample in1[1] = {smp(36, 0, 0.3f, kMain, cc::PaneSide::kInterior)};
+                check(close2(cc::exteriorGlassShare(in1, 1, kMain, 36), 0.0f), "exterior glass: an interior pane never counts, not even the bay's index count");
+            }
+            {
+                const cc::GlassSample unk[2] = {smp(36, 0, 0.05f, kMain, cc::PaneSide::kUnknown), smp(24, 0, 0.04f, kMain, cc::PaneSide::kUnknown)};
+                check(close2(cc::exteriorGlassShare(unk, 2, kMain, 36), 0.05f), "exterior glass: an unknown side counts only when it is the bay's index count");
+            }
+            {
+                const cc::GlassSample outpost[1] = {smp(30, 0, 0.1f, kMain, ext)};
+                check(close2(cc::exteriorGlassShare(outpost, 1, kMain, 30), 0.1f), "exterior glass: where the bay is n=30 (an outpost) it has weight 1");
+            }
+            {
+                double m = 0.0;
+                m = cc::mainViewPixelsNext(m, 1000000.0);
+                check(m == 1000000.0, "main view pixels: a larger frame is taken at once");
+                m = cc::mainViewPixelsNext(m, 65536.0);
+                check(std::fabs(m - 999000.0) < 1e-6, "main view pixels: a smaller frame decays it by 0.999");
+                m = cc::mainViewPixelsNext(m, 65536.0);
+                check(std::fabs(m - 998001.0) < 1e-6, "main view pixels: and again per call");
+            }
+            {
+                const cc::GlassSample big[3] = {smp(36, 0, 0.6f, kMain, ext), smp(24, 0, 0.5f, kMain, ext), smp(30, 0, 0.4f, kMain, ext)};
+                check(cc::exteriorGlassShare(big, 3, kMain, 36) == 1.0f, "exterior glass: the total clamps at 1");
+            }
         }
 
         // The withheld outside draws: named by shader, found by a bloom and a scan.
