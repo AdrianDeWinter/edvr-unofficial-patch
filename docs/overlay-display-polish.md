@@ -2,16 +2,18 @@
 
 ## Status
 
-- **State (2026-11-15):** visual refinement of the shared menu renderer,
+- **State (2026-11-16):** visual refinement of the shared menu renderer,
   stacked on [PR
   #227](https://github.com/characterecho-sean/ed-unofficial-patch/pull/227) at
-  `ac4faab69fbc27f78f325972ca0a7d36069b3090`.
+  `caad8640b1fe7786246d2d0251bab7042dca30e3`.
 - **Scope:** F8 menu, monitor panel, tooltips and frame-rate readouts in flat
   and VR. Settings, hotkeys and profile policy retain their meaning.
-- **Validation:** local raster comparisons are complete. All 42 added layout
-  checks pass; five Wine font-substitution failures also occur on the unchanged
-  base. The full Windows workflow is pending. No in-game or headset flight has
-  been performed.
+- **Validation:** local raster comparisons and mutation checks are complete.
+  The initial candidate `da7171ec` passed the full Windows build and package
+  workflow. See the [stacked
+  PR](https://github.com/AdrianDeWinter/edvr-unofficial-patch/pull/3) for
+  validation of the rebased candidate. No in-game or headset flight has been
+  performed.
 - **Next flight:** inspect the F8 menu and F5 panel against bright and dark
   game scenes, then check VR selection and text at the headset's own scale.
 
@@ -61,9 +63,18 @@ or interaction in a live flight.
 
 Local Wine resolves the requested Segoe UI face to Liberation Sans. These
 images demonstrate layout and colour; native Windows validation remains the
-font and build gate. The local layout run has 270 checks and five failures; the
-unchanged base has 228 checks and the same five failures. Those failures
-concern existing heading and Status text fitting with the substituted font.
+font and build gate. The initial local layout run had 270 checks and five
+failures; its original base `ac4faab6` had 228 checks and the same five
+failures. Those failures concern existing heading and Status text fitting with
+the substituted font. The initial candidate's native Windows run passed 264
+layout checks and 135 WARP checks with zero failures.
+
+After rebasing onto `caad8640`, the local layout run has 385 checks and the
+same five font-substitution failures as that base's 343 checks. The inherited
+label-fitting test measures the renderer's actual label column, including its
+gutter. All 23 labels fit at 720p, 1080p, 1440p and 2160p. Deliberately
+narrowing the rendered column while leaving the former width formula unchanged
+produces 27 additional label-fit failures.
 
 The added checks cover aligned primary text, full secondary line height,
 selectable row bounds, restart/edit/switch transitions, and the large-text

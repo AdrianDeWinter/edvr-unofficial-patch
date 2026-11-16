@@ -532,7 +532,7 @@ int wmain(int argc, wchar_t** argv) {
             std::printf("  flat footer legends at %dp: widest %d of %d px\n", outH, widest, line);
         }
         // Every row label the flat menu shows (menu_flat_rows.h's three tables and the flat Hotkeys page's keys), read from edvr.ini's `# ui:` lines, fits the
-        // label column (menu_panel.cpp: cardW * 6 / 10 less the pad) in the Row face it is drawn in (em cap * 10 / 7), at every flat size. Two labels were
+        // actual label rectangle from menu_panel.cpp in the Row face it is drawn in (em cap * 10 / 7), at every flat size. Two labels were
         // ellipsised on the Performance tab at 1080p (2026-11-16) and nothing measured them.
         {
             std::vector<std::string> keys;
@@ -572,8 +572,15 @@ int wmain(int argc, wchar_t** argv) {
             }
             for (const int outH : {720, 1080, 1440, 2160}) {
                 const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
-                const int pad = fs.capPx * 8 / 10;
-                const int column = fs.cardPx * 6 / 10 - pad;
+                edvr::MenuContent probe{};
+                probe.widthPx = probe.cardPx = fs.cardPx;
+                probe.capPx = fs.capPx;
+                probe.lineCount = 1;
+                probe.lines[0].style = edvr::kMenuRow;
+                std::strcpy(probe.lines[0].left, "label");
+                int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+                edvr::menuPanelLineRectForTest(probe, 0, &x0, &y0, &x1, &y1);
+                const int column = x1 - x0;
                 const int em = fs.capPx * 10 / 7;
                 int widest = 0;
                 for (const std::string& label : labels) {
