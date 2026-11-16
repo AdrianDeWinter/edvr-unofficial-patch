@@ -4686,6 +4686,17 @@ if errorlevel 1 ( echo [edvr] ERROR: menu_pad_test build failed & exit /b 1 )
 "%BUILD%\menu_pad_test.exe" --self-test || exit /b 1
 exit /b 0
 
+:rig_menu_policy_test
+echo [edvr] === menu_policy_test.exe ===
+if not exist "%OBJ%\menupolicy" mkdir "%OBJ%\menupolicy"
+%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
+/Fo"%OBJ%\menupolicy"\ /Fe"%BUILD%\menu_policy_test.exe" ^
+"tools\menu_policy_test\menu_policy_test.cpp" /link /INCREMENTAL:NO
+if errorlevel 1 ( echo [edvr] ERROR: menu_policy_test build failed & exit /b 1 )
+"%BUILD%\menu_policy_test.exe" --dry-run || exit /b 1
+"%BUILD%\menu_policy_test.exe" --self-test || exit /b 1
+exit /b 0
+
 :rig_addon_manager_test
 echo [edvr] === addon_manager_test.exe ===
 if not exist "%OBJ%\addon_manager_test" mkdir "%OBJ%\addon_manager_test"

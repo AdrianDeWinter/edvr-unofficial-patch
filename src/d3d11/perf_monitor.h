@@ -31,12 +31,22 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "../common/perf_presented.h"
+
 struct ID3D11Device;
+struct IDXGISwapChain;
 
 namespace edvr {
 
-// Every frame, from the frame boundary: the interval ring.
+// Every frame, from the frame boundary: the interval ring. Both profiles (menu.cpp menuTick). In the flat profile the engine-motion and draw-hook
+// clocks are not cut here: the flat census drives them.
 void perfMonitorFrame(ID3D11Device* dev);
+
+// Flat, once a frame from the Present hook: the swap chain that shows the frames, so the display's refresh rate can be read now and then (DXGI output ->
+// monitor -> its current mode). The rate is the presented budget (perf_presented.h); 11.1 ms stands until one was read.
+void perfMonitorNoteSwapChain(IDXGISwapChain* swap);
+// The display refresh rate that read gave, in Hz; 0 until one was read (always 0 in VR). Any thread. The flat Status page names it.
+float perfMonitorRefreshHz();
 // Once a frame at the owned Present's boundary, in both profiles: the cross-profile cost's 30 s and 5-minute lines (cross_profile_cost.h).
 void perfMonitorCrossProfileFrame();
 
@@ -56,6 +66,14 @@ struct PerfTile {
 };
 int perfMonitorTiles(PerfTile* out, int max);
 
+// The flat profile's Monitor tiles (the F8 menu's Monitor page, off the native path): the rendered rate, its frame time and 1% low; when a bridge exists this
+// session the presented rate, its 1% low and the frame generation factor; then the slow samplers' CPU load, GPU, VRAM and RAM. Returns how many.
+int perfMonitorFlatTiles(PerfTile* out, int max);
+
+// One reading of the rates for the frame-rate readout (menu.fps_overlay) and the Monitor page's note. `windowSeconds` is the span it averages over (the
+// readout's one second; 0 is the whole ring, as the tiles use). Both profiles.
+void perfMonitorReadout(PerfReadout* out, float windowSeconds);
+
 // The most recent long frame, with EDVR's events in it, as one line for
 // under the gauges.
 void perfMonitorLastDropLine(char* buf, size_t bufLen);
@@ -68,7 +86,11 @@ void perfMonitorLastDropLine(char* buf, size_t bufLen);
 // path there is no GPU strip (0 samples: the compositor's GPU frame crossed
 // from the retired openvr half) and the CPU strip is the render thread's
 // own time.
-enum PerfGraph { kGraphGpu = 0, kGraphCpu = 1, kGraphPeriod = 2 };
+//
+// kGraphPresented is the PRESENTED period, one entry per rendered frame (the frame's time over the frames that reached the screen in it): 0 samples without
+// a bridge or while the count is unavailable, never a strip of zeros. Its budget is the display's refresh period; the others' (flat) is that times the
+// frame generation factor, so a 2x session's rendered frames are judged against two refresh periods.
+enum PerfGraph { kGraphGpu = 0, kGraphCpu = 1, kGraphPeriod = 2, kGraphPresented = 3 };
 // Native mode uses independent unique completion samples for kGraphGpu
 // (producer span) and kGraphCpu (the CPU figure: the runtime's caller work per
 // cycle, or an older runtime's pre-submit application time --
@@ -76,7 +98,9 @@ enum PerfGraph { kGraphGpu = 0, kGraphCpu = 1, kGraphPeriod = 2 };
 // The reference is the fresh runtime-predicted period, or 0 if unavailable.
 int perfMonitorGraph(int which, float* out, int max, float* budgetMs);
 
-// The one-line readout for the head-locked overlay (menu.fps_overlay):
+// The one-line readout (menu.fps_overlay = compact: the head-locked line in VR, the corner line in flat, and the copy at the top of the menu card with
+// menu.fps_overlay_lock). With the XeSS-FG bridge it names both rates ("render 58 / shown 116 fps   cpu 9.1 ms"); the detailed card is built from
+// perfMonitorReadout:
 // frame rate over the last second, CPU/GPU over the menu's recent window,
 // and frames dropped in the last ten seconds. Without app timing the CPU
 // fallback is labelled "thread". Needs nothing the slow samplers

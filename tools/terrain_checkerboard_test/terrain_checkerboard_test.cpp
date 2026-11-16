@@ -944,14 +944,14 @@ void caseT6() {
 
     // the toast: the VR branch only, the latch set before menu.toasts is tested, logged either way
     const std::string tick = functionBody(menu, "void menuTick(ID3D11Device* dev) {");
-    const size_t vrBranch = tick.find("guardedBudget(g_budget, [&] {\n        static uint64_t lastNativeRevision = 0;");
+    const size_t vrBranch = tick.find("if (pol.noticePlacement == MenuNoticePlacement::WorldToast) {");
     const size_t call = tick.find("terrainCheckerboardTick();");
     const size_t published = tick.find("terrainCheckerboardPublished(&cbState, &cbVersion);");
     const size_t latch = tick.find("if (tcn::toastOnRaise(&s.terrainCheckerboardToasted, cbState, cbVersion)) {");
     const size_t toastsTest = tick.find("if (s.toasts) s.toastQueue.push_back(terrainToast);");
     const size_t note = tick.find("Log::get().note(\"%s\", terrainNote);");
     check(vrBranch != std::string::npos && call != std::string::npos && vrBranch < call && count(tick, "terrainCheckerboardTick();") == 1 && !has(tick.substr(0, vrBranch), "terrainCheckerboard"),
-          "T6b: the worker is started from the menu tick's VR branch, once in the source, after the flat profile's branch returned: flat never reaches it");
+          "T6b: the worker is started from the menu tick's world-toast placement, once in the source, and nothing before that placement names it: flat never reaches it");
     check(published != std::string::npos && latch != std::string::npos && toastsTest != std::string::npos && note != std::string::npos && call < published && published < latch &&
               latch < toastsTest && toastsTest < note,
           "T6b: the published pair is loaded, then the latch is set (toastOnRaise), then menu.toasts is tested, then the note is logged");

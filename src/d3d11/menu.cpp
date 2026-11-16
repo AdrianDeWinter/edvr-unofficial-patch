@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
@@ -16,6 +17,7 @@
 #include <vector>
 
 #include "../common/config.h"
+#include "../common/fps_overlay_mode.h"
 #include "../common/runtime_profile.h"
 #include "../common/frame_flag.h"
 #include "../common/guard.h"
@@ -47,9 +49,17 @@
 #include "menu_write.h"
 #include "menu_aim_prompt.h"    // F177: the aiming choice at start: the page's words, the trigger, the writes
 #include "menu_flat_rows.h"
+#include "menu_flat_status.h"
+#include "menu_flat_status_layout.h"
+#include "menu_tab_strip.h"
+#include "menu_flat_footer.h"
 #include "menu_keys.h"
 #include "menu_pad.h"
 #include "menu_panel.h"
+#include "menu_policy.h"
+#include "menu_flat_layout.h"
+#include "menu_pages.h"
+#include "menu_restart.h"
 #include "native_menu.h"
 #include "native_render_labels.h"
 #include "vr_runtime.h"
@@ -109,8 +119,6 @@ constexpr uint64_t kNotDrawnCloseMs = 1500;
 // A toast's life, and the pitch it sits below the look direction.
 constexpr uint64_t kToastMs = 2500;
 constexpr float    kToastPitchDeg = -12.0f;
-// The tallest raster that is a notice and not the menu (a one-line card is about 130 px; the menu's smallest page is over 300).
-constexpr int      kFlatNoticeMaxPx = 200;
 // The Status page's live values are refreshed at this cadence while shown;
 // the Monitor page's at four a second, so its digits read as a gauge and
 // not a flicker.
@@ -202,6 +210,7 @@ struct State {
     bool privateWanted = true;
     bool developer = false;
     bool toasts = true;
+    bool noticesOn = true;   // menu.toasts, read in both profiles: whether menuShowNotice shows a notice (VR's toast, flat's screen card)
     float distance = 1.4f;
     float curve = 0.2f;
     float textDeg = 1.1f;
@@ -214,12 +223,13 @@ struct State {
     uint64_t highlightSinceMs = 0;
     bool     tooltipUp = false;
     bool     tooltipsWere = true;    // to notice a live change of shape
+    uint32_t flatOutSized[2] = {0, 0};  // the output size the flat menu's raster was last sized for (sizeContent)
     bool     tipWidthNoted = false;
     int      tooltipScroll = 0;      // lines of the tooltip's body scrolled past
     uint64_t tickMs = 0;
 
     bool  open = false;
-    bool  flatEscapeDown = false;
+    bool  escapeDown = false;   // the Escape tracker (menuEscapeAction): the flat open seeds it from the raw key, the VR open leaves it
     bool  flatKeysReadyShown = false;
     bool  flatNativeScaleShown = false;
     // The flat panel's settings warning (flat_elite_settings.h): Elite's graphics files, read
@@ -295,7 +305,8 @@ struct State {
     bool    aliasesLiveShown = false;     // what the last raster's legend assumed; a change marks contentDirty
     bool    sharedWarnShown = false;      // whether the last raster carried KEYS SHARED WITH THE GAME; same
     bool    aliasHeldBackNoted = false;   // the held-back line, once per session
-    int     footerLogged = 0;             // the footer's measured widths, at most four per session
+    bool    flatFooterShortNoted = false; // the flat footer fell back to the short restart wording (logged once)
+    int     footerLogged = 0;            // the footer's measured widths, at most four per session
     std::string footerLoggedText;         // ...and the last footer they were logged for
 
     // Typing a value (a number, or a free string): the row being typed
@@ -342,20 +353,28 @@ struct State {
     std::string toastText;
 
     // menuShowNotice in the flat profile, which draws no toasts: the notice is the panel's raster at a toast's size, composited in the
-    // upper left corner while it is up. `Shown` is set once that raster (not the menu's) is the live one; `RasterStale` holds the panel
-    // back after a notice until the menu's own content has been rasterised, so a toast-sized card never flashes as the menu.
-    // The queue keeps a notice raised while the menu is open until it closes (flat_notice_queue.h).
+    // upper left corner while it is up (the machine is ScreenNoticeState, menu_policy.h, kept apart from the VR toast path: it queues while the
+    // menu is open and shows only once its own raster is the live one, which the toast's fade does not). The queue keeps a notice raised while
+    // the menu is open until it closes (flat_notice_queue.h).
     edvr::FlatNoticeQueue flatNotice;
-    bool     flatNoticeUp = false;
-    bool     flatNoticeShown = false;
-    bool     flatRasterStale = false;
-    uint64_t flatNoticeUntilMs = 0;
-    uint32_t flatNoticeSerial = 0;
+    edvr::ScreenNoticeState screenNotice;
 
     // The head-locked readout (menu.fps_overlay), shown while the menu is
     // down: re-anchored to the head every frame, re-rasterised twice a
     // second.
-    bool     overlay = false;
+    bool     overlay = false;   // menu.fps_overlay is compact or detailed
+    FpsOverlayMode overlayMode = FpsOverlayMode::Off;
+    ScreenReadoutState flatReadout;   // flat: the readout's raster is the live one on the monitor slot (menu_policy.h)
+    uint32_t readoutSized[2] = {0, 0}; // the output size the flat readout's raster was built for
+    // The flat monitor panel (menu_panel.h, the monitor slot; design doc, 2026-11-16): its key (hotkey.monitor_panel, flat only), whether it is up (session
+    // state, never written), the machine that composites it only once a raster built since it was raised is live (on the monitor slot's own serial), the output
+    // size its raster was built for, and its refresh clock.
+    Hotkey      monitorKey;
+    std::string monitorKeyName;
+    bool        monitorPanelOpen = false;
+    ScreenReadoutState monitorPanel;
+    uint32_t    monitorSized[2] = {0, 0};
+    uint64_t    monitorTextMs = 0;
     bool     overlayLock = false;
     float    overlayYaw = 0.0f;
     float    overlayPitch = -16.0f;
@@ -524,6 +543,11 @@ bool isXessFgToggleRow(const MenuRowDef& d) {
     return strcmp(d.section, "fix") == 0 && strcmp(d.key, "xess_frame_generation") == 0;
 }
 
+// menu.fps_overlay: a file that still says on or off (a switch until 2026-11) is shown, and stepped from, as compact or off.
+bool isFpsOverlayRow(const MenuRowDef& d) {
+    return strcmp(d.section, "menu") == 0 && strcmp(d.key, "fps_overlay") == 0;
+}
+
 bool isXessFgFramesRow(const MenuRowDef& d) {
     return strcmp(d.section, "fix") == 0 && strcmp(d.key, "xess_generated_frames") == 0;
 }
@@ -552,7 +576,7 @@ const char* xessFgDimHint(bool framesRow) {
 }
 
 const char* xessFgRefusal(bool framesRow) {
-    const char* row = framesRow ? "XeSS-FG frames" : "XeSS Frame Generation";
+    const char* row = framesRow ? "XeSS-FG frames" : "Frame generation";
     static char text[120];
     if (xessFgToggleRowDisabled())
         snprintf(text, sizeof(text), "%s is inactive: choose XeSS anti-aliasing above first.", row);
@@ -581,6 +605,30 @@ const char* xessFgRestartHint() {
     }
     return "Takes effect at the next game start.";
 }
+
+// The rows that only sometimes need a restart (menu_restart.h: the table and the rule), judged from the state the menu shows now and the runtime's own
+// answers. Judged afresh each time rather than stored: the bridge's state and the shown values are what the answer depends on, and a stored flag would
+// go stale when either moves. The launch value of the Anti-aliasing row is its snapshot (takeSnapshot).
+RestartState rowConditionalState(int def) {
+    const MenuRowDef& d = kMenuRows[def];
+    if (!conditionalRestartFor(d.section, d.key)) return RestartState::NotPending;
+    RestartInput in;
+    in.flatProfile = runtimeFlatProfile();
+    in.aaIsXess = flatAntiAliasingIsXess();
+    in.fgOn = xessFgToggleOn();
+    in.bridged = xessFgBridged();
+    in.problemPresent = xessFgProblem() != nullptr;
+    for (int i = 0; i < kRowDefCount; ++i) {
+        if (strcmp(kMenuRows[i].section, "fix") == 0 && strcmp(kMenuRows[i].key, "temporal_aa") == 0) {
+            in.aaChangedSinceLaunch = g_rows[i].value != g_rows[i].snapshot;
+            break;
+        }
+    }
+    return conditionalRestartState(in, d.section, d.key);
+}
+
+// A row waits for a restart: its own `restart` setting changed since launch, or its condition says so.
+bool rowWaiting(int def) { return g_rows[def].pending || rowConditionalState(def) == RestartState::PendingRestart; }
 
 
 // visual.star_glow (the Star glow row). It strengthens the halo of Elite's own bloom, so with Elite's Bloom option off it changes nothing, and the
@@ -621,7 +669,7 @@ const char* stationWindowDistanceHint() { return "Needs Optimized stations: turn
 // refused the same way while that is off.
 bool isRoomsBehindDoorsRow(const MenuRowDef& d) { return strcmp(d.section, "fix") == 0 && strcmp(d.key, "skip_rooms_behind_doors") == 0; }
 
-const char* roomsBehindDoorsRefusal() { return "Skip rooms behind doors is inactive: turn Optimized stations on above first."; }
+const char* roomsBehindDoorsRefusal() { return "Skip closed rooms is inactive: turn Optimized stations on above first."; }
 
 const char* stationWindowDistanceRefusal() { return "Window 3D distance is inactive: turn Optimized stations on above first."; }
 
@@ -1187,6 +1235,12 @@ std::string displayValue(const MenuRowDef& d, const std::string& v) {
             // menu_schema.h: "+0.15 m", "0 ms (exact)", "30%", or the plain number.
             return menuFormatNumber(d, atof(v.c_str()));
         case MenuKind::Choice: {
+            if (isFpsOverlayRow(d)) {
+                const char* word = fpsOverlayWord(parseFpsOverlay(v.c_str()));
+                for (const ChoiceItem& c : choicesOf(d)) {
+                    if (_stricmp(c.value.c_str(), word) == 0) return c.label;
+                }
+            }
             // A stored value above what the GPU can generate is shown as the clamped one (the file is not rewritten).
             if (isXessFgFramesRow(d)) {
                 char shown[8];
@@ -1224,10 +1278,12 @@ constexpr int kFlatWarnLogMax = 24;
 // run of transients must not use up the budget that says what the panel showed, and the other way round.
 constexpr int kFlatWarnHeldLogMax = 8;
 
-// The flat page is the rows of menu_flat_rows.h and nothing else; a blank line and a full warning make up the rest of
-// the card. (The wrapper note, when there is one, takes what is left.)
-static_assert(static_cast<int>(kFlatPageRowCount) + 1 + FlatSettingsWarning::kMaxLines <= kMenuMaxLines,
-              "the flat page's rows, a blank line and a full settings warning fit the card's lines");
+// The flat page is the rows of menu_flat_rows.h and nothing else; a blank line and the warning's pointer (two lines at the narrowest ruler) make up the rest of
+// the card. (The wrapper note, when there is one, takes what is left.) The warning's own words are on the Status page: its lines and a full warning are the card.
+static_assert(static_cast<int>(kFlatPageRowCount) + 1 + 2 <= kMenuMaxLines,
+              "the flat page's rows, a blank line and the warning's pointer fit the card's lines");
+static_assert(kFlatStatusMaxLines + FlatSettingsWarning::kMaxLines <= kMenuMaxLines,
+              "the flat Status page's lines and a full settings warning fit the card's lines");
 
 // The selected mode as the panel names it on its Anti-aliasing row.
 std::string flatModeLabel() {
@@ -1795,6 +1851,106 @@ Page makeAimPromptPage() {
     return p;
 }
 
+// The flat profile's three tabs (menu_flat_rows.h). Each walks the generated schema (edvr.ini order) and keeps the rows its table names.
+// Performance: the flat settings the panel always had. The rows are the table in menu_flat_rows.h, which a rig checks
+// against the flat profile's key gate: a row listed there whose key is refused fails the build instead of reading a silent 0.
+void addFlatPerformanceRows(Page& p) {
+    for (int i = 0; i < kRowDefCount; ++i) {
+        const MenuRowDef& d = kMenuRows[i];
+        if (!flatPageHasRow(d.section, d.key)) continue;
+        Entry e;
+        e.kind = EntryKind::Setting;
+        e.def = i;
+        p.entries.push_back(e);
+    }
+}
+
+// Visual (2026-10-22): the [visual] options that do something in flat, for everyone. The rows are the table in menu_flat_rows.h, kept in edvr.ini
+// order whatever page their `menu` token names: Intro movie and Star glow are `menu visual`, which VR's Visual page lists too; a row only this tab
+// shows would be `menu flat_visual`, a page VR builds none of. The generator fails the build for a row the table lists that the schema has no row for.
+void addFlatVisualRows(Page& p) {
+    for (int i = 0; i < kRowDefCount; ++i) {
+        const MenuRowDef& d = kMenuRows[i];
+        if (d.tier != MenuTier::Fix || !flatVisualHasRow(d.section, d.key)) continue;
+        Entry e;
+        e.kind = EntryKind::Setting;
+        e.def = i;
+        p.entries.push_back(e);
+    }
+}
+
+// Debug: for bug reports, both off by default. A heading says so; the rows are the `menu debug` rows named in kFlatDebugRows.
+void addFlatDebugRows(Page& p) {
+    Entry h;
+    h.kind = EntryKind::Heading;
+    h.text = "For bug reports. Both are off unless you turn them on.";
+    p.entries.push_back(h);
+    for (int i = 0; i < kRowDefCount; ++i) {
+        const MenuRowDef& d = kMenuRows[i];
+        if (d.tier != MenuTier::Fix || _stricmp(d.page, kFlatDebugPage) != 0 || !flatDebugHasRow(d.section, d.key)) continue;
+        Entry e;
+        e.kind = EntryKind::Setting;
+        e.def = i;
+        p.entries.push_back(e);
+    }
+}
+
+MenuTier menuTierOf(MenuPageTier t) {
+    return t == MenuPageTier::Advanced ? MenuTier::Advanced : t == MenuPageTier::Experimental ? MenuTier::Experimental : MenuTier::Fix;
+}
+
+// One page of the table (menu_pages.h): its name and its entries from its source.
+// Notes on the sources, kept from the pages' own history:
+//  - Mirror window (2026-10-28 as "Desktop window"; renamed F173): the `menu desktop_window` rows, no group headings, the page is the group.
+//  - Native on foot (2026-10-14): the `menu native_on_foot` rows of edvr.ini, in file order; compatibility settings without that tag stay out. Grouped (F127).
+//  - Visual (2026-10-27): the `menu visual` rows, under the ini's own heading blocks. The flat Visual tab is the same name and another list (kFlatVisualRows).
+//  - Hotkeys: the rows the generator made from [hotkey]'s annotations; a `# ui:` row always, a `# dev:` row only with developer mode on (hotkeyPageRowsFor says which,
+//    and a rig pins it; the flat page is the Fix rows whose key the flat profile reads: the Menu key and the AA comparison key). No group headings: the [hotkey] block's own title is a paragraph.
+//  - Advanced: by page name, a developer hotkey row is Advanced tier too, and belongs to the Hotkeys page.
+Page makePage(const MenuPageDef& d) {
+    State& s = g_s;
+    Page p;
+    p.name = d.name;
+    switch (d.source) {
+        case MenuPageSource::Settings:
+            addSettingRows(p, menuTierOf(d.tier), d.token, d.grouped);
+            break;
+        case MenuPageSource::FlatPerformance: addFlatPerformanceRows(p); break;
+        case MenuPageSource::FlatVisual: addFlatVisualRows(p); break;
+        case MenuPageSource::FlatDebug: addFlatDebugRows(p); break;
+        case MenuPageSource::Hotkeys: {
+            int rows[32];
+            const int n = hotkeyPageRowsFor(kMenuRows, kRowDefCount, runtimeFlatProfile(), s.developer, rows, 32);
+            for (int i = 0; i < n; ++i) {
+                Entry e;
+                e.kind = EntryKind::Setting;
+                e.def = rows[i];
+                p.entries.push_back(e);
+            }
+            break;
+        }
+        case MenuPageSource::Plugins: buildPluginsPage(p); break;
+        case MenuPageSource::Monitor:
+            p.status = true;
+            p.monitor = true;
+            return p;
+        case MenuPageSource::Status:
+            p.status = true;
+            return p;
+        case MenuPageSource::Actions:
+            for (size_t i = 0; i < g_actions.size(); ++i) {
+                Entry e;
+                e.kind = EntryKind::Action;
+                e.action = static_cast<int>(i);
+                p.entries.push_back(e);
+            }
+            break;
+    }
+    if (d.post == MenuPagePost::AimChoiceAfterLookToAim) moveRowAfter(p, "menu", "aim_choice_prompt", "fix", "native_on_foot_look_to_aim");   // F177
+    firstSelectable(p);
+    return p;
+}
+
 void buildPages() {
     State& s = g_s;
     const int keepPage = s.page;
@@ -1807,178 +1963,9 @@ void buildPages() {
     const int keepScroll = s.pages.empty() ? 0 : s.pages[s.page].scroll;
     const size_t keepCount = s.pages.empty() ? 0 : s.pages[s.page].entries.size();
     s.pages.clear();
-    if (runtimeFlatProfile()) {
-        // Three tabs: Performance (the flat settings the panel always had), Visual (2026-10-22), then Debug (2026-10-16), last.
-        {
-            Page p;
-            p.name = kFlatTabNames[0];
-            for (int i = 0; i < kRowDefCount; ++i) {
-                const MenuRowDef& d = kMenuRows[i];
-                // The rows are the table in menu_flat_rows.h, which a rig checks
-                // against the flat profile's key gate: a row listed there whose key
-                // is refused fails the build instead of reading a silent 0.
-                if (!flatPageHasRow(d.section, d.key)) continue;
-                Entry e;
-                e.kind = EntryKind::Setting;
-                e.def = i;
-                p.entries.push_back(e);
-            }
-            firstSelectable(p);
-            s.pages.push_back(p);
-        }
-        {
-            // Visual (2026-10-22): the [visual] options that do something in flat, for everyone. The rows are the table in menu_flat_rows.h, kept in edvr.ini
-            // order whatever page their `menu` token names: Intro movie and Star glow are `menu visual`, which VR's Visual page lists too; a row only this tab
-            // shows would be `menu flat_visual`, a page VR builds none of. The generator fails the build for a row the table lists that the schema has no row for.
-            Page p;
-            p.name = kFlatTabNames[1];
-            for (int i = 0; i < kRowDefCount; ++i) {
-                const MenuRowDef& d = kMenuRows[i];
-                if (d.tier != MenuTier::Fix || !flatVisualHasRow(d.section, d.key)) continue;
-                Entry e;
-                e.kind = EntryKind::Setting;
-                e.def = i;
-                p.entries.push_back(e);
-            }
-            firstSelectable(p);
-            s.pages.push_back(p);
-        }
-        // No Plugins tab: add-ons are VR-only, so in flat it could only be empty. The flat add-on follow-up adds it to kFlatTabNames with the
-        // flat render path.
-        {
-            // Debug: for bug reports, both off by default. A heading says so; the rows are the `menu debug` rows named in kFlatDebugRows.
-            Page p;
-            p.name = kFlatTabNames[2];
-            Entry h;
-            h.kind = EntryKind::Heading;
-            h.text = "For bug reports. Both are off unless you turn them on.";
-            p.entries.push_back(h);
-            for (int i = 0; i < kRowDefCount; ++i) {
-                const MenuRowDef& d = kMenuRows[i];
-                if (d.tier != MenuTier::Fix || _stricmp(d.page, kFlatDebugPage) != 0 || !flatDebugHasRow(d.section, d.key)) continue;
-                Entry e;
-                e.kind = EntryKind::Setting;
-                e.def = i;
-                p.entries.push_back(e);
-            }
-            firstSelectable(p);
-            s.pages.push_back(p);
-        }
-        s.page = keepPage < static_cast<int>(s.pages.size()) ? keepPage : 0;
-        s.developerBuilt = s.developer;
-        s.contentDirty = true;
-        return;
-    }
-    {
-        Page p;
-        p.name = "Performance";
-        addSettingRows(p, MenuTier::Fix, "performance", false);
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        Page p;
-        p.name = "Fixes";
-        addSettingRows(p, MenuTier::Fix, "fixes", true);
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        // Visual (2026-10-27): how the world looks through the headset, apart from the fixes. The rows are the `menu visual` rows of edvr.ini, in file order, under the ini's own
-        // heading blocks (World scale, Intro movie, Star glow, Intro background picture, Screen curve). The flat panel's Visual tab is the same name and another list (kFlatVisualRows):
-        // a row VR shows and flat does not is `menu visual`, one flat shows and VR does not is `menu flat_visual`.
-        Page p;
-        p.name = "Visual";
-        addSettingRows(p, MenuTier::Fix, "visual", true);
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        // Mirror window (2026-10-28 as "Desktop window"; renamed F173): the keys that shape Elite's window on the desktop, right after Visual. The rows are the `menu desktop_window` rows of edvr.ini, in file order
-        // (what it shows, the picture's shape, the window's style); no group headings, the page is the group. VR's menu only: the flat panel has no such page.
-        Page p;
-        p.name = "Mirror window";
-        addSettingRows(p, MenuTier::Fix, "desktop_window", false);
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        // Native on foot (2026-10-14): the explicitly selected native on-foot settings. The rows are the
-        // `menu native_on_foot` rows of edvr.ini, in file order (the switch first, the HUD last); compatibility settings without that tag stay out of the page.
-        // Grouped (F127): the headings are the ini's own heading blocks above the rows, as on the Fixes page.
-        Page p;
-        p.name = "Native on foot";
-        addSettingRows(p, MenuTier::Fix, "native_on_foot", true);
-        moveRowAfter(p, "menu", "aim_choice_prompt", "fix", "native_on_foot_look_to_aim");   // F177
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        // The hotkeys: the rows the generator made from [hotkey]'s annotations. A
-        // `# ui:` row is here always, a `# dev:` row only with developer mode on
-        // (hotkeyPageRows says which, and a rig pins it). No group headings: the
-        // [hotkey] block's own title is a paragraph.
-        Page p;
-        p.name = "Hotkeys";
-        int rows[32];
-        const int n = hotkeyPageRows(kMenuRows, kRowDefCount, s.developer, rows, 32);
-        for (int i = 0; i < n; ++i) {
-            Entry e;
-            e.kind = EntryKind::Setting;
-            e.def = rows[i];
-            p.entries.push_back(e);
-        }
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        Page p;
-        p.name = "Plugins";
-        buildPluginsPage(p);
-        firstSelectable(p);
-        s.pages.push_back(p);
-    }
-    {
-        Page p;
-        p.name = "Monitor";
-        p.status = true;
-        p.monitor = true;
-        s.pages.push_back(p);
-    }
-    {
-        Page p;
-        p.name = "Status";
-        p.status = true;
-        s.pages.push_back(p);
-    }
-    if (s.developer) {
-        {
-            Page p;
-            p.name = "Advanced";
-            // By page name: a developer hotkey row is Advanced tier too, and belongs to the Hotkeys page.
-            addSettingRows(p, MenuTier::Advanced, "advanced", true);
-            firstSelectable(p);
-            s.pages.push_back(p);
-        }
-        {
-            Page p;
-            p.name = "Experimental";
-            addSettingRows(p, MenuTier::Experimental, "experimental", true);
-            firstSelectable(p);
-            s.pages.push_back(p);
-        }
-        {
-            Page p;
-            p.name = "Instruments";
-            for (size_t i = 0; i < g_actions.size(); ++i) {
-                Entry e;
-                e.kind = EntryKind::Action;
-                e.action = static_cast<int>(i);
-                p.entries.push_back(e);
-            }
-            firstSelectable(p);
-            s.pages.push_back(p);
-        }
+    const bool flat = runtimeFlatProfile();
+    for (size_t i = 0; i < kMenuPageCount; ++i) {
+        if (menuPageShown(kMenuPages[i], flat, s.developer)) s.pages.push_back(makePage(kMenuPages[i]));
     }
     s.developerBuilt = s.developer;
     // F177: while the aiming choice is up its page is the last, and the one shown.
@@ -2005,7 +1992,8 @@ void refreshRowValues() {
 void takeSnapshot() {
     for (int i = 0; i < kRowDefCount; ++i) {
         const MenuRowDef& d = kMenuRows[i];
-        if (d.applies == 2) g_rows[i].snapshot = g_rows[i].value;
+        // A row of the conditional-restart table needs its launch value too (menu_restart.h).
+        if (d.applies == 2 || conditionalRestartFor(d.section, d.key)) g_rows[i].snapshot = g_rows[i].value;
         g_rows[i].pending = false;
     }
     g_s.snapshotTaken = true;
@@ -2013,7 +2001,7 @@ void takeSnapshot() {
 
 int pendingRestartCount() {
     int n = 0;
-    for (int i = 0; i < kRowDefCount; ++i) n += g_rows[i].pending ? 1 : 0;
+    for (int i = 0; i < kRowDefCount; ++i) n += rowWaiting(i) ? 1 : 0;
     return n;
 }
 
@@ -2031,7 +2019,13 @@ void statusLine(MenuContent& c, const char* left, const char* right) {
     l.badge = kBadgeNone;
 }
 
+void buildFlatStatus(MenuContent& c);   // below, with the output's published size it reads
+
 void buildStatus(MenuContent& c) {
+    if (runtimeFlatProfile()) {
+        buildFlatStatus(c);
+        return;
+    }
     char buf[200];
     snprintf(buf, sizeof(buf), "%s / game build %s", EDVR_VERSION_STRING, gameBuildVersion().c_str());
     statusLine(c, "ED-UP", buf);
@@ -2205,7 +2199,7 @@ void buildStatus(MenuContent& c) {
         } else {
             std::string names;
             for (int i = 0; i < kRowDefCount && names.size() < 50; ++i) {
-                if (!g_rows[i].pending) continue;
+                if (!rowWaiting(i)) continue;
                 if (!names.empty()) names += ", ";
                 names += kMenuRows[i].key;
             }
@@ -2216,66 +2210,78 @@ void buildStatus(MenuContent& c) {
     statusLine(c, "Last write", g_s.lastWrite.empty() ? "none this session" : g_s.lastWrite.c_str());
 }
 
+// One note line (the Monitor's small text under the gauges).
+void addMonitorNote(MenuContent& c, const char* text) {
+    if (c.lineCount >= kMenuMaxLines) return;
+    MenuLine& l = c.lines[c.lineCount++];
+    strncpy(l.left, text, sizeof(l.left) - 1);
+    l.style = kMenuNote;
+    l.badge = kBadgeNone;
+}
+
 // The Monitor page: fpsVR's readout from perf_monitor.h, and the frame-time
-// strip underneath.
+// strips underneath. The flat profile's is the rendered and the presented frame
+// rate (the presented one only while the XeSS Frame Generation bridge exists),
+// the slow samplers, and strips for the CPU, the rendered and the presented
+// period; it has no GPU strip (nothing times the flat frame on the GPU).
 void buildMonitor(MenuContent& c) {
+    const bool flat = runtimeFlatProfile();
     PerfTile tiles[kMenuMaxTiles];
-    const int n = perfMonitorTiles(tiles, kMenuMaxTiles);
+    const int n = flat ? perfMonitorFlatTiles(tiles, kMenuMaxTiles) : perfMonitorTiles(tiles, kMenuMaxTiles);
     for (int i = 0; i < n; ++i) {
         strncpy(c.tiles[i].caption, tiles[i].caption, sizeof(c.tiles[i].caption) - 1);
         strncpy(c.tiles[i].value, tiles[i].value, sizeof(c.tiles[i].value) - 1);
         strncpy(c.tiles[i].sub, tiles[i].sub, sizeof(c.tiles[i].sub) - 1);
     }
     c.tileCount = n;
-    c.tileColumns = 4;
-    // The local render-to-submit diagnostic is separate from SteamVR's gauges.
-    {
+    // Three across in flat: the card is a fraction of the screen's height (menu_flat_layout.h), so four tiles would be too narrow for their numbers.
+    c.tileColumns = flat ? 3 : 4;
+    if (flat) {
+        // "FG stopped: <why>" or "Presented: unavailable (<why>)", only for a session with the bridge (perf_presented.h).
+        PerfReadout r;
+        perfMonitorReadout(&r, 0.0f);
+        char note[200];
+        formatBridgeNote(r, note, sizeof(note));
+        if (note[0]) addMonitorNote(c, note);
+    } else {
+        // The local render-to-submit diagnostic is separate from SteamVR's gauges.
         char line[200];
         perfMonitorLocalGpuLine(line, sizeof(line));
-        MenuLine& l = c.lines[c.lineCount++];
-        strncpy(l.left, line, sizeof(l.left) - 1);
-        l.style = kMenuNote;
-        l.badge = kBadgeNone;
+        addMonitorNote(c, line);
     }
     if (nativeMenuActive()) {
         char line[240];
         perfMonitorNativeTimingLine(line, sizeof(line));
-        MenuLine& l = c.lines[c.lineCount++];
-        strncpy(l.left, line, sizeof(l.left) - 1);
-        l.style = kMenuNote;
-        l.badge = kBadgeNone;
+        addMonitorNote(c, line);
     }
     // One line under the gauges: the last drop and what EDVR was doing.
     {
         char line[200];
         perfMonitorLastDropLine(line, sizeof(line));
-        MenuLine& l = c.lines[c.lineCount++];
-        strncpy(l.left, line, sizeof(l.left) - 1);
-        l.style = kMenuNote;
-        l.badge = kBadgeNone;
+        addMonitorNote(c, line);
     }
     c.compact = true;
-    // Two strips, fpsVR's pair: the GPU frame the compositor measured, and
-    // the render thread's own busy time.
-    const int kinds[2] = {kGraphGpu, kGraphCpu};
-    const char* names[2] = {"GPU", "CPU"};
-    const bool nativeGraphs = nativeMenuActive();
     c.graphCount = 0;
-    for (int g = 0; g < 2; ++g) {
+    const bool nativeGraphs = nativeMenuActive();
+    // VR: two strips, fpsVR's pair -- the GPU frame the compositor measured, and the render thread's own busy time. Flat: the CPU's, the rendered period and,
+    // under the bridge, the presented one.
+    const int vrKinds[2] = {kGraphGpu, kGraphCpu};
+    const char* vrNames[2] = {"GPU", "CPU"};
+    const int flatKinds[3] = {kGraphCpu, kGraphPeriod, kGraphPresented};
+    const char* flatNames[3] = {"CPU thread", "Rendered", "Presented"};
+    const int strips = flat ? 3 : 2;
+    for (int g = 0; g < strips; ++g) {
+        const int kind = flat ? flatKinds[g] : vrKinds[g];
         MenuGraph& mg = c.graphs[c.graphCount];
-        mg.count = perfMonitorGraph(kinds[g], mg.samples,
-                                    static_cast<int>(sizeof(mg.samples) / sizeof(mg.samples[0])),
-                                    &mg.budgetMs);
+        mg.count = perfMonitorGraph(kind, mg.samples, static_cast<int>(sizeof(mg.samples) / sizeof(mg.samples[0])), &mg.budgetMs);
         if (!mg.count) continue;
-        mg.zeroIsValid = nativeGraphs;
-        if (nativeGraphs && mg.budgetMs > 0.0f)
-            snprintf(mg.label, sizeof(mg.label), "%s, %d samples; predicted period %.1f ms",
-                     g == 0 ? "Producer GPU" : "Application wall", mg.count, double(mg.budgetMs));
-        else if (nativeGraphs)
-            snprintf(mg.label, sizeof(mg.label), "%s, %d samples; no runtime reference",
-                     g == 0 ? "Producer GPU" : "Application wall", mg.count);
-        else snprintf(mg.label, sizeof(mg.label), "%s, last %d frames; the line is the %.1f ms budget",
-                 names[g], mg.count, static_cast<double>(mg.budgetMs));
+        if (flat) {
+            snprintf(mg.label, sizeof(mg.label), "%s", flatNames[g]);
+        } else {
+            mg.zeroIsValid = nativeGraphs;
+            snprintf(mg.label, sizeof(mg.label), "%s",
+                     nativeGraphs ? (g == 0 ? "Producer GPU" : "Application wall") : vrNames[g]);
+        }
         ++c.graphCount;
     }
 }
@@ -2322,13 +2328,133 @@ float panelShift(float halfW, bool withTip) {
     return withTip ? halfW * (kTipRatio - 1.0f) / kTipRatio : 0.0f;
 }
 
-// The bitmap's size, from the headset's own pixels per degree at the
+// The back buffer's size, published by the Present hook (menuFlatBeforePresent) for the flat profile's sizing below. 0 until the first Present: the
+// flat card is then sized for 1920x1080, and rebuilt the tick after the real size arrives.
+std::atomic<uint32_t> g_flatOutW{0};
+std::atomic<uint32_t> g_flatOutH{0};
+// The swap chain description's Windowed flag, published with the size: -1 until the first Present, 0 exclusive fullscreen, 1 windowed or borderless. With the XeSS
+// Frame Generation bridge the description is the bridge's own answer about the real window (device_hook.cpp patches it).
+std::atomic<int> g_flatWindowed{-1};
+
+// One row's value as its row shows it (the Performance tab's words), "" when there is no such row.
+std::string shownText(const char* section, const char* key) {
+    for (int i = 0; i < kRowDefCount; ++i)
+        if (strcmp(kMenuRows[i].section, section) == 0 && strcmp(kMenuRows[i].key, key) == 0) return displayValue(kMenuRows[i], g_rows[i].value);
+    return std::string();
+}
+
+// The flat Status page (menu_flat_status.h): its lines, then, while Elite's graphics-settings warning is up, the warning's words wrapped to the note face's width
+// (the Performance tab says only where to look: see buildContent).
+void buildFlatStatus(MenuContent& c) {
+    State& s = g_s;
+    FlatStatusInput in;
+    const std::string build = gameBuildVersion();
+    in.version = EDVR_VERSION_STRING;
+    in.gameBuild = build.c_str();
+    in.outW = g_flatOutW.load(std::memory_order_relaxed);
+    in.outH = g_flatOutH.load(std::memory_order_relaxed);
+    in.refreshHz = perfMonitorRefreshHz();
+    const int windowed = g_flatWindowed.load(std::memory_order_relaxed);
+    in.displayMode = windowed < 0 ? FlatDisplayMode::Unknown : windowed ? FlatDisplayMode::Windowed : FlatDisplayMode::Exclusive;
+
+    const std::string requested = Config::get().requestedTemporalMode();
+    in.aaOn = temporalModeEnabled(requested);
+    const std::string label = flatModeLabel();
+    in.aaLabel = label.c_str();
+    const std::string model = (label == "DLSS" || label == "DLAA") ? shownText("fix", "temporal_aa_model") : std::string();
+    in.aaModel = model.c_str();
+    const char* reason = "";
+    bool standing = false;
+    in.aaRun = flatRuntimeStructuralRefusal(&reason, &standing) ? FlatAaRun::Paused : flatRuntimeActive() ? FlatAaRun::Running : FlatAaRun::NotRunning;
+    in.sceneKnown = flatRuntimeSceneSizes(&in.renderW, &in.renderH, &in.sceneOutW, &in.sceneOutH);
+
+    // Frame generation, from the same rule the rows' restart marks follow (menu_restart.h).
+    int fgDef = -1;
+    for (int i = 0; i < kRowDefCount && fgDef < 0; ++i)
+        if (strcmp(kMenuRows[i].section, "fix") == 0 && strcmp(kMenuRows[i].key, "xess_frame_generation") == 0) fgDef = i;
+    const RestartState fgState = fgDef >= 0 ? rowConditionalState(fgDef) : RestartState::NotPending;
+    const char* fgProblem = xessFgProblem();
+    in.fgProblem = fgProblem ? fgProblem : "";
+    in.fgExclusiveFullscreen = xessFgExclusiveFullscreen();
+    if (!xessFgToggleOn()) in.fg = FlatFgState::Off;
+    else if (fgState == RestartState::Stopped) in.fg = FlatFgState::Stopped;
+    else if (fgState == RestartState::PendingRestart) in.fg = FlatFgState::NextLaunch;
+    else if (!xessFgBridged()) in.fg = FlatFgState::NeedsXess;
+    else if (xessFgActiveGeneratedFrames() > 0) {
+        in.fg = FlatFgState::On;
+        in.fgFactor = 1 + xessFgActiveGeneratedFrames();
+    } else in.fg = FlatFgState::OnIdle;
+
+    const std::string sharpening = shownText("fix", "render_sharpness");
+    const std::string hud = shownText("fix", "ui_quality");
+    const std::string hudAa = _stricmp(shownValue("fix", "ui_quality").c_str(), "off") == 0 ? std::string() : shownText("fix", "hud_antialiasing");
+    in.sharpening = sharpening.c_str();
+    in.hudQuality = hud.c_str();
+    in.hudAntiAliasing = hudAa.c_str();
+    in.wrapper = contextWrapperFile();
+    in.keyboardReady = inputGateGameKeyboardSeen();
+    in.eliteWarningActive = s.flatWarnActive;
+    in.waitingCount = pendingRestartCount();
+    // Their labels, cut so the line stays one line.
+    std::string waiting;
+    for (int i = 0; i < kRowDefCount; ++i) {
+        if (!rowWaiting(i)) continue;
+        if (!waiting.empty()) waiting += ", ";
+        waiting += kMenuRows[i].label;
+    }
+    if (waiting.size() > 24) waiting = waiting.substr(0, 21) + "...";
+    in.waitingLabels = waiting.c_str();
+    in.lastWrite = s.lastWrite.c_str();
+
+    FlatStatusLine lines[kFlatStatusMaxLines];
+    const int n = flatStatusLines(in, lines, kFlatStatusMaxLines);
+    FlatSettingsWarning warning;
+    if (s.flatWarnActive) {
+        FlatWarnRuler ruler{c.capPx * 8 / 7};   // the note face's em (menu_panel.cpp, Font::Hint)
+        const int width = c.cardPx - 2 * (c.capPx * 8 / 10);
+        flatComposeSettingsWarning(flatModeLabel().c_str(), s.flatSettings.settings(), width,
+                                   &flatWarnMeasure, &ruler, &warning, s.flatWarnCause);
+    }
+    // The rows as drawn: the note face, a caption column as wide as the widest caption, long values wrapped under it (menu_flat_status_layout.h).
+    const int em = flatStatusEmPx(c.capPx);
+    c.rowFontPx = em;
+    FlatWarnRuler statusRuler{em};
+    FlatStatusLayout layout;
+    flatStatusLayout(lines, n, c.cardPx, c.capPx, &flatWarnMeasure, &statusRuler, &layout);
+    c.infoSplitPx = layout.splitPx;
+    for (int i = 0; i < layout.rowCount; ++i) {
+        statusLine(c, layout.rows[i].caption, layout.rows[i].value);
+        // The warning's words go right under their line.
+        if (strcmp(layout.rows[i].caption, "Elite settings") == 0) {
+            for (int k = 0; k < warning.count && c.lineCount < kMenuMaxLines; ++k) {
+                MenuLine& l = c.lines[c.lineCount++];
+                l = MenuLine{};
+                strncpy(l.left, warning.line[k], sizeof(l.left) - 1);
+                l.style = kMenuNote;
+            }
+        }
+    }
+}
+
+// The bitmap's size. In VR, from the headset's own pixels per degree at the
 // panel: the panel is specified in degrees, so it reads the same size in
-// any headset and composites near 1:1. `withTip` adds the strip.
-void sizeContent(MenuContent& c, float widthDeg, float textDeg, bool withTip = false) {
-    if (runtimeFlatProfile()) {
-        c.cardPx = c.widthPx = 860;
-        c.capPx = 34;
+// any headset and composites near 1:1. In flat, from the output's own
+// pixels (menu_flat_layout.h), and the composite draws it 1:1 too.
+// `withTip` adds the strip beside the card; the card itself keeps its size.
+// `toast` is a flat notice's card rather than the menu's.
+void sizeContent(MenuContent& c, float widthDeg, float textDeg, bool withTip = false, bool toast = false) {
+    if (menuPolicyFor(runtimeFlatProfile()).sizing == MenuSizing::OutputPx) {
+        const uint32_t ow = g_flatOutW.load(std::memory_order_relaxed);
+        const uint32_t oh = g_flatOutH.load(std::memory_order_relaxed);
+        if (!toast) {   // what the MENU's raster was sized for: a changed output rebuilds it (menuTick)
+            g_s.flatOutSized[0] = ow;
+            g_s.flatOutSized[1] = oh;
+        }
+        const FlatCardSize fs = flatCardSize(static_cast<int>(ow), static_cast<int>(oh),
+                                             toast ? kFlatNoticeHeightFrac : kFlatMenuCardHeightFrac);
+        c.cardPx = fs.cardPx;
+        c.widthPx = flatBitmapWidth(fs.cardPx, withTip, kTipRatio);
+        c.capPx = fs.capPx;
         return;
     }
     float ppd = 45.0f;
@@ -2360,6 +2486,73 @@ int measureFooterLine(const char* utf8, void* ctx) {
 }
 
 void cancelEdit();
+
+// The frame-rate readout's raster (menu.fps_overlay), VR and flat. Compact is the one line; detailed is a card of two or three lines and a strip of the rendered
+// frame time (and one of the presented, under the XeSS-FG bridge) against its budget, from the same reading in both profiles. VR: the fixed 42-pixel reference
+// face and an angular width, as the line always had. Flat: the menu's own text height at this output, composited at its own pixel size in the top right corner.
+bool buildReadoutContent(MenuContent& c, FpsOverlayMode mode, bool flat, float textDeg) {
+    int cap = 42;
+    float deg = textDeg;
+    if (flat) {
+        const uint32_t ow = g_flatOutW.load(std::memory_order_relaxed);
+        const uint32_t oh = g_flatOutH.load(std::memory_order_relaxed);
+        g_s.readoutSized[0] = ow;
+        g_s.readoutSized[1] = oh;
+        cap = flatCardSize(static_cast<int>(ow), static_cast<int>(oh), kFlatMenuCardHeightFrac).capPx;
+        deg = 0.0f;
+    }
+    if (mode == FpsOverlayMode::Compact) {
+        char line[120];
+        perfMonitorOverlayLine(line, sizeof(line));
+        if (!flat) return menuPanelBuildOverlayContent(c, line, textDeg, nullptr);
+        const char* one[1] = {line};
+        return menuPanelBuildReadoutContent(c, one, 1, cap, 0, 0.0f, nullptr);
+    }
+    PerfReadout r;
+    perfMonitorReadout(&r, 1.0f);
+    char l1[96], l2[96], note[200], l3[96];
+    formatDetailRates(r, l1, sizeof(l1));
+    formatDetailTimes(r, l2, sizeof(l2));
+    formatBridgeNote(r, note, sizeof(note));
+    snprintf(l3, sizeof(l3), "%.90s", note);
+    const char* lines[3];
+    int n = 0;
+    lines[n++] = l1;
+    if (l2[0]) lines[n++] = l2;
+    if (l3[0]) lines[n++] = l3;
+    if (!menuPanelBuildReadoutContent(c, lines, n, cap, cap * 14, deg, nullptr)) return false;
+    const int kinds[2] = {kGraphPeriod, kGraphPresented};
+    const char* names[2] = {"Rendered", "Presented"};
+    c.graphCount = 0;
+    for (int g = 0; g < 2; ++g) {
+        MenuGraph& mg = c.graphs[c.graphCount];
+        mg.count = perfMonitorGraph(kinds[g], mg.samples, static_cast<int>(sizeof(mg.samples) / sizeof(mg.samples[0])), &mg.budgetMs);
+        if (!mg.count) continue;
+        snprintf(mg.label, sizeof(mg.label), "%s", names[g]);
+        ++c.graphCount;
+    }
+    return true;
+}
+
+// The flat monitor panel's raster (menu_panel.h, the monitor slot): the Monitor page's tiles, notes and strips (buildMonitor) on a card of the menu's width and
+// text height at this output, under one tab that names it and a footer that says which key puts it away. No rows, no highlight, no tooltip.
+void buildMonitorPanel(MenuContent& c) {
+    State& s = g_s;
+    memset(&c, 0, sizeof(c));
+    c.popupLine = -1;
+    const uint32_t ow = g_flatOutW.load(std::memory_order_relaxed);
+    const uint32_t oh = g_flatOutH.load(std::memory_order_relaxed);
+    s.monitorSized[0] = ow;
+    s.monitorSized[1] = oh;
+    const FlatCardSize fs = flatCardSize(static_cast<int>(ow), static_cast<int>(oh), kFlatMenuCardHeightFrac);
+    c.cardPx = c.widthPx = fs.cardPx;
+    c.capPx = fs.capPx;
+    c.tabCount = 1;
+    c.activeTab = 0;
+    snprintf(c.tabs[0], sizeof(c.tabs[0]), "%s", "Monitor");
+    buildMonitor(c);
+    snprintf(c.footer, sizeof(c.footer), "%s hides this panel", s.monitorKeyName.c_str());
+}
 
 void buildContent(MenuContent& c) {
     State& s = g_s;
@@ -2400,12 +2593,17 @@ void buildContent(MenuContent& c) {
         const int gap = c.capPx / 2;
         const bool single = promptPage;   // F177: the page is the only tab while it is up
         const int arrow = c.capPx;    // the room an arrow takes at either end
-        // The panel's own estimate of a tab's width, the raster's formula.
-        auto tabWidth = [&](int i) {
-            return static_cast<int>(strlen(s.pages[i].name)) * c.capPx * 6 / 10 + c.capPx;
-        };
-        int first = 0, last = total - 1;
         int room = c.cardPx - 2 * pad;
+        // The tab face: the panel's own, shrunk until every page's tab fits the row (menu_tab_strip.h); the widths are measured in it, as the raster lays them.
+        {
+            const char* names[64];
+            const int n = total < 64 ? total : 64;
+            for (int i = 0; i < n; ++i) names[i] = s.pages[i].name;
+            c.tabFontPx = single ? tabStripDefaultEm(c.capPx) : tabStripFitEm(names, n, room, c.capPx, &menuPanelTabWidth);
+        }
+        const int tabEm = c.tabFontPx;
+        auto tabWidth = [&](int i) { return menuPanelTabWidth(s.pages[i].name, tabEm); };
+        int first = 0, last = total - 1;
         // Grow outward from the current page while there is room, ending
         // before the arrows that say what is left over.
         first = last = s.page;
@@ -2466,7 +2664,10 @@ void buildContent(MenuContent& c) {
         c.compact = true;
         snprintf(c.hint, sizeof(c.hint), "%s",
                  "The page a support thread will ask to see. Tab or PageDown for the next page.");
-        {
+        if (runtimeFlatProfile()) {
+            // The flat page has no VR notice to share this slot with, and no PageDown.
+            snprintf(c.hint, sizeof(c.hint), "%s", "The page a support thread will ask to see. Tab for the next page.");
+        } else {
             // Elite's Supersampling below 1.0 (VR; vr_supersample_notice.h, design section 83), when vScreen has measured the
             // world rendered under the eye texture: the open menu says it HERE, in the hint this page has anyway. A line of its
             // own, or a note on a settings page, would take the bitmap past the 2048-px guard on the Pimax (see the header).
@@ -2493,7 +2694,8 @@ void buildContent(MenuContent& c) {
             tooltipsOn() &&
             s.tickMs >= s.highlightSinceMs + static_cast<uint64_t>(s.tooltipDelayS * 1000.0f);
         // Keep the highlight in the window.
-        const int visibleRows = p.visibleRows > 0 ? p.visibleRows : kVisibleRows;
+        const int requestedRows = p.visibleRows > 0 ? p.visibleRows : kVisibleRows;
+        const int visibleRows = p.prompt ? requestedRows : menuPanelEntryRows(c, requestedRows);
         if (p.prompt) c.compact = true;   // F177: fifteen lines in the height guard
         const int total = static_cast<int>(p.entries.size());
         if (p.highlight >= total) p.highlight = total ? total - 1 : 0;
@@ -2591,6 +2793,8 @@ void buildContent(MenuContent& c) {
             }
             const MenuRowDef& d = kMenuRows[e.def];
             const RowState& r = g_rows[e.def];
+            const bool waiting = rowWaiting(e.def);
+            const bool stopped = !waiting && rowConditionalState(e.def) == RestartState::Stopped;
             const bool editingThis = (s.editEntry == i);
             const bool capturingThis = (s.captureEntry == i);
             const bool hotkeyRow = d.kind == MenuKind::Hotkey;
@@ -2635,13 +2839,16 @@ void buildContent(MenuContent& c) {
                 // What has been typed, with a caret. The raster shows a
                 // typed row in the value colour whatever its kind.
                 v = s.editBuf + "_";
-            } else if (r.pending) {
+            } else if (waiting) {
                 // The resolution preview already describes the selected
                 // after-restart value.  The pending badge supplies the same
                 // timing cue as every other restart row, while keeping the
-                // per-eye dimensions readable.
-                if (!openxrScaleRow) v = displayValue(d, r.snapshot) + " -> " + v;
+                // per-eye dimensions readable. A conditional row (menu_restart.h)
+                // whose value is its launch value shows no arrow: only the badge.
+                if (!openxrScaleRow && r.value != r.snapshot) v = displayValue(d, r.snapshot) + " -> " + v;
                 l.badge = kBadgePending;
+            } else if (stopped) {
+                l.badge = kBadgeStopped;   // the value stays as set; the highlighted row's hint says why (xessFgRestartHint)
             } else if (d.applies == 2) {
                 l.badge = kBadgeRestart;
             } else if (d.applies == 0) {
@@ -2656,12 +2863,15 @@ void buildContent(MenuContent& c) {
                 else if (r.clashCount) l.badge = kBadgeClash;
             }
             strncpy(l.right, v.c_str(), sizeof(l.right) - 1);
+            l.reserveBadge = d.applies == 2 || d.applies == 0 ||
+                             (runtimeFlatProfile() && conditionalRestartFor(d.section, d.key) != nullptr) ||
+                             r.clashCount > 0;
             // Anything with two states is a switch, drawn where the value
             // would be: a plain boolean, and a two-way choice where one
             // side is "leave the game alone". The installer's own rule.
             // A row with a change waiting for a restart keeps its words,
             // because a switch cannot show two values at once.
-            if (!editingThis && !r.pending) {
+            if (!editingThis && !waiting && !stopped) {
                 std::string on;
                 if (d.kind == MenuKind::Toggle) {
                     l.toggle = boolOf(r.value, boolOf(d.shipped, false)) ? 2 : 1;
@@ -2818,7 +3028,7 @@ void buildContent(MenuContent& c) {
                                 (strcmp(d.key, "menu") == 0 && s.summon.kind() == HotkeyKind::Key
                                      ? ". ED-UP keeps the menu key from the game, so those are masked while it is installed."
                                      : ". The key is watched, not captured: the game sees the press too, so one press does both.");
-                    } else if (!s.readGameBindings) {
+                    } else if (!s.readGameBindings && !runtimeFlatProfile()) {   // flat never reads them (the gate refuses the key), so it says nothing
                         body += "\nNot checked against your Elite bindings (hotkey.read_game_bindings is off).";
                     }
                 }
@@ -2840,18 +3050,17 @@ void buildContent(MenuContent& c) {
                 l.style = kMenuNote;
             }
         }
-        // The settings warning (flat only, and only while frames are refused for the shape
-        // of the post chain): a blank line, then the words wrapped to the note face's width.
+        // The settings warning (flat only, and only while frames are refused for the shape of the post chain): its words are on the Status tab
+        // (buildFlatStatus); here a blank line and a one-line pointer to them, wrapped to the note face's width.
         if (runtimeFlatProfile() && s.flatWarnActive) {
             FlatWarnRuler ruler{c.capPx * 8 / 7};   // the note face's em (menu_panel.cpp, Font::Hint)
             const int width = c.cardPx - 2 * (c.capPx * 8 / 10);
-            FlatSettingsWarning warning;
-            flatComposeSettingsWarning(flatModeLabel().c_str(), s.flatSettings.settings(), width,
-                                       &flatWarnMeasure, &ruler, &warning, s.flatWarnCause);
+            FlatSettingsWarning pointer;
+            flatWrapWarning(kFlatWarningPointer, width, &flatWarnMeasure, &ruler, &pointer);
             if (c.lineCount < kMenuMaxLines) c.lines[c.lineCount++].style = kMenuNote;
-            for (int i = 0; i < warning.count && c.lineCount < kMenuMaxLines; ++i) {
+            for (int i = 0; i < pointer.count && c.lineCount < kMenuMaxLines; ++i) {
                 MenuLine& l = c.lines[c.lineCount++];
-                strncpy(l.left, warning.line[i], sizeof(l.left) - 1);
+                strncpy(l.left, pointer.line[i], sizeof(l.left) - 1);
                 l.style = kMenuNote;
             }
         }
@@ -2932,20 +3141,40 @@ void buildContent(MenuContent& c) {
         return;
     }
     if (runtimeFlatProfile()) {
-        const char* status = "";
-        if (s.lastWrite.compare(0, 7, "FAILED:") == 0) status = " | write failed";
-        else if (s.lastWrite.compare(0, 8, "writing ") == 0) status = " | saving";
-        else if (!s.flatKeysReadyShown) status = " | keyboard gate unavailable";
-        else if (!s.lastWrite.empty()) status = " | saved";
-        if (s.padReady)
-            snprintf(c.footer, sizeof(c.footer), "D-pad move/change  A select  B back\nLB/RB pages  %s close%s",
-                     s.summonName.c_str(), status);
-        else
-            snprintf(c.footer, sizeof(c.footer), "Up/Down row  Left/Right change  Tab page\n%s/Esc close%s",
-                     s.summonName.c_str(), status);
+        FooterWrite write = FooterWrite::None;
+        if (s.lastWrite.compare(0, 7, "FAILED:") == 0) write = FooterWrite::Failed;
+        else if (s.lastWrite.compare(0, 8, "writing ") == 0) write = FooterWrite::Saving;
+        else if (!s.lastWrite.empty()) write = FooterWrite::Saved;
         // The installed version, on every page, drawn at the right end of this same
         // footer line (menu_panel.cpp). Flat only: VR's footer does not carry it.
         snprintf(c.footerTag, sizeof(c.footerTag), "ED-UP %s", EDVR_VERSION_STRING);
+        // The second line is "<key> close | <count waiting for a restart> | saved" and the tag shares it at the right end: the long wording is
+        // measured against the raster's own ruler with the tag and a gap, and the short one (the VR footer's) is used if it would touch the tag.
+        const int linePx = c.cardPx - 2 * (c.capPx * 8 / 10);
+        const int tagPx = menuPanelMeasureLine(c.footerTag, c.capPx) + c.capPx * 2;
+        char status[160], line2[200];
+        for (int shortForm = 0; shortForm < 2; ++shortForm) {
+            // The flat panel keeps the keyboard private on every page, so "ready" is the same on a status page as on any other.
+            menuFlatFooterStatus(write, s.flatKeysReadyShown, pendingN, shortForm != 0, status, sizeof(status));
+            if (s.padReady) snprintf(line2, sizeof(line2), "LB/RB pages  %s close%s", s.summonName.c_str(), status);
+            else snprintf(line2, sizeof(line2), "%s/Esc close%s", s.summonName.c_str(), status);
+            if (shortForm || menuPanelMeasureLine(line2, c.capPx) + tagPx <= linePx) break;
+            if (!s.flatFooterShortNoted) {
+                s.flatFooterShortNoted = true;
+                Log::get().note("menu panel: the flat footer's restart count does not fit beside the version in %d px; using the short wording.", linePx);
+            }
+        }
+        // The first line names what the keys do on the highlighted row: a hotkey row is rebound with Enter (or A) and Left/Right do nothing there; while a row
+        // waits for its key, the capture's own keys.
+        const bool hotkeyRow = !p.status && p.highlight >= 0 && p.highlight < static_cast<int>(p.entries.size()) &&
+                               p.entries[p.highlight].kind == EntryKind::Setting && kMenuRows[p.entries[p.highlight].def].kind == MenuKind::Hotkey;
+        const bool clearable = s.captureDef >= 0 && strcmp(kMenuRows[s.captureDef].key, "menu") != 0;
+        if (s.captureEntry >= 0)
+            snprintf(c.footer, sizeof(c.footer), "%s\n%s", clearable ? kFlatFooterCapture : kFlatFooterCaptureKeep, line2);
+        else if (s.padReady)
+            snprintf(c.footer, sizeof(c.footer), "%s\n%s", hotkeyRow ? kFlatFooterPadHotkey : kFlatFooterPad, line2);
+        else
+            snprintf(c.footer, sizeof(c.footer), "%s\n%s", hotkeyRow ? kFlatFooterHotkey : kFlatFooterKeys, line2);
         return;
     }
     {
@@ -3006,7 +3235,7 @@ void buildToastContent(MenuContent& c, const std::string& text, float widthDeg, 
     strncpy(c.lines[0].left, text.c_str(), sizeof(c.lines[0].left) - 1);
     c.lines[0].style = kMenuInfo;
     c.popupLine = -1;
-    sizeContent(c, widthDeg, g_s.textDeg * capScale);
+    sizeContent(c, widthDeg, g_s.textDeg * capScale, false, true);
     // The card must never be wider than the bitmap it lives in: everything
     // downstream reads cardPx as a part of widthPx.
     if (c.widthPx > 1200) {
@@ -3026,10 +3255,21 @@ void enqueueChange(WriteJob& job, bool held = false) {
     const MenuRowDef& d = kMenuRows[job.def];
     job.before = g_rows[job.def].value;
     job.gen = g_rows[job.def].edits.next();
+    std::vector<char> waitedBefore(static_cast<size_t>(kRowDefCount));
+    for (int i = 0; i < kRowDefCount; ++i) waitedBefore[static_cast<size_t>(i)] = rowWaiting(i) ? 1 : 0;
     // Show it now; the worker writes it; the reload that follows confirms it.
     g_rows[job.def].value = job.value;
     if (d.applies == 2) {
         g_rows[job.def].pending = rowPending(d, job.value, g_rows[job.def].snapshot);
+    }
+    // One line for each row this write made wait for a restart (the written row, or another the written value now decides: the Anti-aliasing choice
+    // decides the frame generation rows).
+    for (int i = 0; i < kRowDefCount; ++i) {
+        if (waitedBefore[static_cast<size_t>(i)] || !rowWaiting(i)) continue;
+        const MenuRowDef& w = kMenuRows[i];
+        Log::get().note("menu: %s = %s applies at next game start (%s)", dottedOf(w).c_str(),
+                        g_rows[i].value.empty() ? "(default)" : g_rows[i].value.c_str(),
+                        conditionalRestartFor(w.section, w.key) ? kRestartReasonConditional : kRestartReasonSetting);
     }
     s.menuWroteDotted = job.dotted;
     // An F8 pick of the anti-aliasing mode ends an AA comparison that is showing it off (aa_compare.h): the player's choice wins.
@@ -3236,8 +3476,9 @@ void stepRow(int defIndex, int dir, int mult) {
             const std::vector<ChoiceItem> items = choicesOf(d);
             if (items.empty()) return;
             int at = -1;
+            const std::string curWord = isFpsOverlayRow(d) ? std::string(fpsOverlayWord(parseFpsOverlay(cur.c_str()))) : cur;
             for (size_t i = 0; i < items.size(); ++i) {
-                if (_stricmp(items[i].value.c_str(), cur.c_str()) == 0) at = static_cast<int>(i);
+                if (_stricmp(items[i].value.c_str(), curWord.c_str()) == 0) at = static_cast<int>(i);
             }
             const int n = static_cast<int>(items.size());
             int next = at < 0 ? 0 : ((at + (dir >= 0 ? 1 : n - 1)) % n);
@@ -3777,6 +4018,8 @@ void collectOtherHotkeys(int exceptDef, HotkeyOthers* out) {
     std::vector<int> defs;
     for (int i = 0; i < kRowDefCount; ++i) {
         if (i == exceptDef || kMenuRows[i].kind != MenuKind::Hotkey) continue;
+        // A key only the flat profile reads (flat_profile_keys.h) binds nothing in VR, so it takes no key from a VR row.
+        if (!runtimeFlatProfile() && flatProfileOnlyKey(dottedOf(kMenuRows[i]).c_str())) continue;
         defs.push_back(i);
         out->names.push_back(dottedOf(kMenuRows[i]));
     }
@@ -4469,54 +4712,39 @@ void latchAnchor(float yawDeg, float pitchDeg) {
 
 void openMenu(uint64_t now) {
     State& s = g_s;
-    if (runtimeFlatProfile()) {
-        inputGateInstall();
+    const MenuProfilePolicy pol = menuPolicyFor(runtimeFlatProfile());
+    const bool world = pol.anchor == MenuAnchor::World;
+    if (world) {
+        if (!glitchConsumerPresent() && !nativeMenuAvailable()) {
+            if (!s.noConsumerNoted) {
+                s.noConsumerNoted = true;
+                Log::get().note("menu: the menu key was pressed, but no compositor consumer has "
+                                "hooked the compositor, so there is no door to draw the panel "
+                                "at. The menu stays closed and the keyboard stays the game's. "
+                                "See the runtime diagnosis in this log.");
+                vrRuntimeExplainOnce();
+            }
+            return;
+        }
+        if (!s.aimPromptUp) s.aimPromptWide = false;   // F177: an ordinary open while the wide card was fading takes the player's own width back
+        latchAnchor(0.0f, 0.0f);
+        if (!s.anchorValid) {
+            if (!s.noPoseNoted) {
+                s.noPoseNoted = true;
+                Log::get().note("menu: no head pose has been published yet, so the panel has "
+                                "nowhere to anchor. Try again once the headset is tracking.");
+            }
+            return;
+        }
+    }
+    inputGateInstall();
+    if (pol.padNavigation) {
         s.padIndex = -1;
         s.padReady = false;
         s.padReadyNoted = false;
         s.padNavigation.prime(0);
         inputGateSetPadPrivate(false, -1);
-        for (KeyRepeat& k : s.keys) keyRepeatPrime(k, rawKeyDown(k.vk));
-        for (KeyRepeat& k : s.editKeys) keyRepeatPrime(k, rawKeyDown(k.vk));
-        buildPages();
-        refreshRowValues();
-        s.open = true;
-        s.openedMs = s.lastInputMs = s.highlightSinceMs = now;
-        s.lastDrawn = menuDrawnValue();
-        s.lastDrawnMs = 0;
-        s.flatEscapeDown = rawKeyDown(VK_ESCAPE);
-        s.flatNativeScaleShown = flatRuntimeNativeScale();
-        s.flatSettingsForce = true;   // Elite's graphics files are looked at when the panel opens
-        starGlowBloomMenuOpened();    // ... and so is the Bloom option, when the Star glow is above 100
-        s.alpha = 1.0f;
-        s.tooltipUp = false;
-        s.contentDirty = true;
-        Log::get().note("menu: flat graphics panel open; keyboard %s.",
-                        s.privateWanted ? "private" : "shared");
-        return;
     }
-    if (!glitchConsumerPresent() && !nativeMenuAvailable()) {
-        if (!s.noConsumerNoted) {
-            s.noConsumerNoted = true;
-            Log::get().note("menu: the menu key was pressed, but no compositor consumer has "
-                            "hooked the compositor, so there is no door to draw the panel "
-                            "at. The menu stays closed and the keyboard stays the game's. "
-                            "See the runtime diagnosis in this log.");
-            vrRuntimeExplainOnce();
-        }
-        return;
-    }
-    if (!s.aimPromptUp) s.aimPromptWide = false;   // F177: an ordinary open while the wide card was fading takes the player's own width back
-    latchAnchor(0.0f, 0.0f);
-    if (!s.anchorValid) {
-        if (!s.noPoseNoted) {
-            s.noPoseNoted = true;
-            Log::get().note("menu: no head pose has been published yet, so the panel has "
-                            "nowhere to anchor. Try again once the headset is tracking.");
-        }
-        return;
-    }
-    inputGateInstall();
     // Every tracker is seeded from the raw key: one held as the menu opens
     // -- W for thrust, Down on the way in -- does nothing until released
     // and pressed afresh. handleKeys runs only while open, so before this
@@ -4525,32 +4753,51 @@ void openMenu(uint64_t now) {
     // required, not optional, and it changes the fixed keys the same way.
     for (KeyRepeat& k : s.keys) keyRepeatPrime(k, rawKeyDown(k.vk));
     for (KeyRepeat& k : s.editKeys) keyRepeatPrime(k, rawKeyDown(k.vk));
-    for (int i = 0; i < s.aliases.count; ++i) {
-        keyRepeatPrime(s.aliasKeys[i], rawKeyDown(s.aliasKeys[i].vk));
+    if (pol.adoptGameKeys) {
+        for (int i = 0; i < s.aliases.count; ++i) {
+            keyRepeatPrime(s.aliasKeys[i], rawKeyDown(s.aliasKeys[i].vk));
+        }
     }
-    if (s.developer != s.developerBuilt) buildPages();
+    // The flat pages are rebuilt at every open; the VR pages only when the developer switch moved.
+    if (!world || s.developer != s.developerBuilt) buildPages();
     refreshRowValues();
-    // Elite's bindings are read for the Hotkeys page's badges when the menu opens (and again
-    // when Elite rewrites them), never per frame; nothing from a capture survives a close.
-    s.clashStale = true;
-    s.captureEntry = -1;
-    s.noteUntilMs = 0;
+    if (menuProfileHasPage(MenuPageSource::Hotkeys, runtimeFlatProfile())) {
+        // Elite's bindings are read for the Hotkeys page's badges when the menu opens (and again
+        // when Elite rewrites them: VR only, the flat profile does not read them, see menuAdoptGameBindings), never per frame; nothing from a capture survives a close.
+        s.clashStale = true;
+        s.captureEntry = -1;
+        s.noteUntilMs = 0;
+    }
     s.open = true;
     s.openedMs = now;
     s.lastInputMs = now;
     s.highlightSinceMs = now;
     s.tooltipUp = false;
-    s.lastDrawnMs = now;   // grace: the first draw has not had a chance yet
-    s.aimParked = false;
     s.contentDirty = true;
-    s.toastUp = false;
-    s.toastAlpha = 0.0f;
-    s.overlayUp = false;
-    s.overlayAlpha = 0.0f;
-    starGlowBloomMenuOpened();   // Elite's Bloom option is read again when the Star glow is above 100, as in the flat panel
-    perfMonitorNoteEvent(kEvMenu);
-    Log::get().note("menu: open (%s, %.1f m, keys %s).", s.pages[s.page].name,
-                    static_cast<double>(s.distance), s.privateWanted ? "private" : "shared");
+    if (world) {
+        s.lastDrawnMs = now;   // grace: the first draw has not had a chance yet
+        s.aimParked = false;
+        s.toastUp = false;
+        s.toastAlpha = 0.0f;
+        s.overlayUp = false;
+        s.overlayAlpha = 0.0f;
+    } else {
+        s.lastDrawn = menuDrawnValue();
+        s.lastDrawnMs = 0;
+        s.escapeDown = rawKeyDown(VK_ESCAPE);
+        s.flatNativeScaleShown = flatRuntimeNativeScale();
+        s.flatSettingsForce = true;   // Elite's graphics files are looked at when the panel opens
+        s.alpha = 1.0f;
+    }
+    starGlowBloomMenuOpened();   // Elite's Bloom option is read again when the Star glow is above 100 (flat: the files are looked at when the panel opens)
+    if (world) {
+        perfMonitorNoteEvent(kEvMenu);
+        Log::get().note("menu: open (%s, %.1f m, keys %s).", s.pages[s.page].name,
+                        static_cast<double>(s.distance), s.privateWanted ? "private" : "shared");
+    } else {
+        Log::get().note("menu: flat graphics panel open; keyboard %s.",
+                        s.privateWanted ? "private" : "shared");
+    }
 }
 
 void aimPromptClosed();   // F177, below
@@ -4566,9 +4813,16 @@ void closeMenu(const char* why) {
     inputGateSetPrivate(false);
     inputGateSetPadPrivate(false, -1);
     s.padReady = false;
-    if (runtimeFlatProfile()) hotkeysPrimeAll(); // a held navigation key must not become a hotkey on close
+    if (menuPolicyFor(runtimeFlatProfile()).primesHotkeysOnClose) hotkeysPrimeAll(); // a held navigation key must not become a hotkey on close
     perfMonitorNoteEvent(kEvMenu);
     Log::get().note("menu: closed (%s).", why);
+    // Changes still waiting for a restart: say so once, now the open menu's badges and footer are gone. Not at a profile switch: the pending state
+    // belongs to the profile being left (menuProfileSwitch retakes the snapshot).
+    if (strcmp(why, "profile switch") != 0) {
+        char notice[64];
+        menuRestartCloseNotice(pendingRestartCount(), notice, sizeof(notice));
+        if (notice[0]) menuShowNotice(notice);
+    }
     if (s.aimPromptUp) aimPromptClosed();
 }
 
@@ -4699,10 +4953,10 @@ void menuProfileSwitch() {
     if (s.open) closeMenu("profile switch");
     // The outgoing profile's flat notice, queued or on screen, goes with it: Config::switchProfile clears the AA comparison override it described.
     s.flatNotice.clear();
-    s.flatNoticeUp = false;
-    s.flatNoticeShown = false;
-    s.flatNoticeUntilMs = 0;
-    s.flatRasterStale = false;
+    s.screenNotice.clear();
+    s.flatReadout.clear();
+    s.monitorPanelOpen = false;   // session state: the incoming profile starts with the monitor panel down
+    s.monitorPanel.clear();
     inputGateSetPrivate(false);
     menuPanelFlatResize();
     s.lastDrawn = menuDrawnValue();
@@ -4772,48 +5026,9 @@ void menuAdoptGameBindings(bool enabled, const char* why) {
     }
 }
 
-void menuConfigure(Config& cfg) {
+// The switch for Elite's panel keys (menuConfigure, for the profiles that adopt them).
+static void menuAdoptGameBindingsSwitch(Config& cfg, bool summonChanged, const std::string& key) {
     State& s = g_s;
-    if (runtimeFlatProfile()) {
-        const std::string key = cfg.getString("hotkey.menu", "F8");
-        if (!s.configured || key != s.summonName) {
-            s.summonName = key;
-            s.summon.setBinding(key.c_str());
-        }
-        s.privateWanted = true;
-        s.aimMode = 1;
-        s.tooltipDelayS = 0.0f;
-        s.toasts = false;
-        s.overlay = false;
-        inputGateConfigure(cfg);
-        if (!s.configured) {
-            s.configured = true;
-            s.flatSettings.setFolder(flatEliteGraphicsFolder());
-            starGlowBloomConfigure();
-            initKeys();
-            refreshRowValues();
-            takeSnapshot();
-            buildPages();
-            Log::get().note("menu: flat graphics panel configured; summon with %s.", key.c_str());
-        }
-        return;
-    }
-    if (!runtimeVrProfile()) {
-        s.configured = false;
-        s.summon.setBinding("");
-        return;
-    }
-    const std::string key = cfg.getString("hotkey.menu", "F8");
-    const bool summonChanged = key != s.summonName || !s.configured;
-    if (summonChanged) {
-        s.summonName = key;
-        s.summon.setBinding(key.c_str());
-        if (!s.summon.bound() && !key.empty()) {
-            Log::get().note("menu: hotkey.menu = \"%s\" bound nothing (the line above says "
-                            "why), so the menu cannot be summoned this session.",
-                            key.c_str());
-        }
-    }
     // Elite's panel keys follow the same switch as the camera keys. The
     // live flip is handled HERE and not by device_hook's fingerprint poll:
     // if the files did not change while the setting was off, the
@@ -4839,6 +5054,48 @@ void menuConfigure(Config& cfg) {
             }
         }
     }
+}
+
+// menu.tooltip_delay, in both profiles (the flat allow-list carries it, flat_profile_keys.h). Under a third of a second is not a dwell, it is a flicker:
+// those values, and 0, mean no tooltip at all.
+static float menuReadTooltipDelay(Config& cfg) {
+    float delay = cfg.getFloat("menu.tooltip_delay", 1.5f);
+    if (!(delay >= 0.3f)) delay = 0.0f;
+    if (delay > 10.0f) delay = 10.0f;
+    return delay;
+}
+
+// menu.fps_overlay (off | compact | detailed; the old on and off still read) and menu.fps_overlay_lock, in both profiles (the flat allow-list carries them,
+// flat_profile_keys.h); the yaw and pitch are the headset's and are read, with their defaults, in both.
+static void menuReadFpsOverlayKeys(Config& cfg) {
+    State& s = g_s;
+    const FpsOverlayMode mode = parseFpsOverlay(cfg.getString("menu.fps_overlay", "off").c_str());
+    const bool ovLock = cfg.getBool("menu.fps_overlay_lock", false);
+    float yaw = cfg.getFloat("menu.fps_overlay_yaw", 0.0f);
+    float pitch = cfg.getFloat("menu.fps_overlay_pitch", 20.0f);
+    if (!(yaw >= -60.0f) || yaw > 60.0f) yaw = 0.0f;
+    if (!(pitch >= -45.0f) || pitch > 45.0f) pitch = 20.0f;
+    if (s.configured && mode != s.overlayMode) {
+        Log::get().note("menu: the frame-rate overlay is %s.", fpsOverlayWord(mode));
+        if (s.open && (ovLock || s.overlayLock)) s.contentDirty = true;
+        s.overlayTextMs = 0;   // the next tick builds the new shape at once
+        s.overlayText.clear();
+        s.flatReadout.clear();
+    }
+    if (s.configured && ovLock != s.overlayLock) {
+        Log::get().note("menu: the frame-rate overlay is %s while the menu is open.", ovLock ? "locked on" : "no longer locked");
+        if (s.open && mode != FpsOverlayMode::Off) s.contentDirty = true;
+    }
+    s.overlayMode = mode;
+    s.overlay = mode != FpsOverlayMode::Off;
+    s.overlayLock = ovLock;
+    s.overlayYaw = yaw;
+    s.overlayPitch = pitch;
+}
+
+// The [menu] keys: the profiles that read them (menu_policy.h) -- the flat profile reads none, and its values are the policy's.
+static void menuReadMenuKeys(Config& cfg) {
+    State& s = g_s;
     const std::string kb = cfg.getString("menu.keyboard", "private");
     s.privateWanted = _stricmp(kb.c_str(), "shared") != 0;
     const std::string aim = cfg.getString("menu.aim", "keys");
@@ -4861,14 +5118,7 @@ void menuConfigure(Config& cfg) {
     float w = cfg.getFloat("menu.width_degrees", 30.0f);
     if (!(w >= 16.0f) || w > 45.0f) w = 30.0f;
     s.idleSeconds = cfg.getIntInRange("menu.idle_dismiss", 0, 0, 600);
-    {
-        // Under a third of a second is not a dwell, it is a flicker: those
-        // values, and 0, mean no tooltip at all.
-        float delay = cfg.getFloat("menu.tooltip_delay", 1.5f);
-        if (!(delay >= 0.3f)) delay = 0.0f;
-        if (delay > 10.0f) delay = 10.0f;
-        s.tooltipDelayS = delay;
-    }
+    s.tooltipDelayS = menuReadTooltipDelay(cfg);
     // With a tooltip beside it, the panel reaches out to
     // atan(2.14 * tan(w/2)) on the right -- 29.8 degrees at the default
     // width, 41.5 at the widest. Past about 35 the strip leaves one eye's
@@ -4898,47 +5148,94 @@ void menuConfigure(Config& cfg) {
     s.toasts = cfg.getBool("menu.toasts", true);
     s.aimPromptKeyOn = cfg.getBool("menu.aim_choice_prompt", true);   // F177
     s.nativeOnFootKeyOn = _stricmp(cfg.getString("fix.native_on_foot", "on").c_str(), "on") == 0;
-    {
-        const bool ov = cfg.getBool("menu.fps_overlay", false);
-        const bool ovLock = cfg.getBool("menu.fps_overlay_lock", false);
-        float yaw = cfg.getFloat("menu.fps_overlay_yaw", 0.0f);
-        float pitch = cfg.getFloat("menu.fps_overlay_pitch", 20.0f);
-        if (!(yaw >= -60.0f) || yaw > 60.0f) yaw = 0.0f;
-        if (!(pitch >= -45.0f) || pitch > 45.0f) pitch = 20.0f;
-        if (s.configured && ov != s.overlay) {
-            Log::get().note("menu: the frame-rate overlay is %s.", ov ? "on" : "off");
-            if (s.open && (ovLock || s.overlayLock)) s.contentDirty = true;
-        }
-        if (s.configured && ovLock != s.overlayLock) {
-            Log::get().note("menu: the frame-rate overlay is %s while the menu is open.",
-                            ovLock ? "locked on" : "no longer locked");
-            if (s.open && ov) s.contentDirty = true;
-        }
-        s.overlay = ov;
-        s.overlayLock = ovLock;
-        s.overlayYaw = yaw;
-        s.overlayPitch = pitch;
-    }
     const bool dev = cfg.getBool("menu.developer", false);
     if (dev != s.developer) {
         s.developer = dev;
         if (s.configured) buildPages();
     }
+}
+
+void menuConfigure(Config& cfg) {
+    State& s = g_s;
+    const bool flat = runtimeFlatProfile();
+    if (!flat && !runtimeVrProfile()) {
+        s.configured = false;
+        s.summon.setBinding("");
+        s.monitorKey.setBinding("");
+        s.monitorKeyName.clear();
+        s.monitorPanelOpen = false;
+        return;
+    }
+    const MenuProfilePolicy pol = menuPolicyFor(flat);
+    const std::string key = cfg.getString("hotkey.menu", "F8");
+    const bool summonChanged = key != s.summonName || !s.configured;
+    if (summonChanged) {
+        s.summonName = key;
+        s.summon.setBinding(key.c_str());
+        if (pol.anchor == MenuAnchor::World && !s.summon.bound() && !key.empty()) {
+            Log::get().note("menu: hotkey.menu = \"%s\" bound nothing (the line above says "
+                            "why), so the menu cannot be summoned this session.",
+                            key.c_str());
+        }
+    }
+    // The flat monitor panel's key (hotkey.monitor_panel; flat only, flat_profile_keys.h). VR does not read it: its binding is cleared, so nothing is watched.
+    {
+        std::string monKey;
+        if (pol.monitorPanel) monKey = cfg.getString("hotkey.monitor_panel", "F5");
+        if (monKey != s.monitorKeyName || !s.configured) {
+            s.monitorKeyName = monKey;
+            s.monitorKey.setBinding(monKey.c_str());
+            if (pol.monitorPanel) {
+                if (monKey.empty()) {
+                    Log::get().note("menu: the monitor panel key is off (hotkey.monitor_panel is empty).");
+                } else if (!s.monitorKey.bound()) {
+                    Log::get().note("menu: hotkey.monitor_panel = \"%s\" bound nothing (the line above says why), so the monitor panel cannot be shown this session.",
+                                    monKey.c_str());
+                } else {
+                    Log::get().note("menu: monitor panel key %s (hotkey.monitor_panel).", monKey.c_str());
+                }
+            }
+        }
+        if (!s.monitorKey.bound()) s.monitorPanelOpen = false;   // nothing could put it away again
+    }
+    if (pol.adoptGameKeys) menuAdoptGameBindingsSwitch(cfg, summonChanged, key);
+    if (pol.readsMenuKeys) {
+        menuReadMenuKeys(cfg);
+    } else {
+        // The flat profile reads no [menu] key (src/common/flat_profile_keys.h): the policy's values stand in, and nothing a VR session left in the
+        // State (a width, a toast switch, the overlay) is read in flat.
+        s.privateWanted = pol.keyboardAlwaysPrivate;
+        s.aimMode = 1;
+        // The tooltip's delay is the one [menu] key flat reads besides menu.toasts: the strip beside the card is the same raster in both. A change of whether
+        // it shows changes the bitmap's width, so the card is rebuilt.
+        const float delay = menuReadTooltipDelay(cfg);
+        if (s.configured && (delay > 0.0f) != (s.tooltipDelayS > 0.0f)) s.contentDirty = true;
+        s.tooltipDelayS = delay;
+        s.tooltipsWere = delay > 0.0f;
+        s.toasts = false;      // toasts are the world placement's; the flat notice follows s.noticesOn
+    }
+    menuReadFpsOverlayKeys(cfg);
+    s.noticesOn = cfg.getBool("menu.toasts", true);   // flat-listed (flat_profile_keys.h); notices follow it in both profiles
     inputGateConfigure(cfg);
     if (!s.configured) {
         s.configured = true;
+        if (flat) s.flatSettings.setFolder(flatEliteGraphicsFolder());
         starGlowBloomConfigure();
         initKeys();
         refreshRowValues();
         takeSnapshot();
         buildPages();
-        Log::get().note("menu: %d rows in the table (%d on the Fixes/Performance pages); "
-                        "summon with %s. docs/settings-menu.md.",
-                        kRowDefCount,
-                        static_cast<int>(s.pages[0].entries.size() + s.pages[1].entries.size()),
-                        key.c_str());
-        // F177: the flat profile has no aiming choice page; the log says so once.
-        if (runtimeFlatProfile()) aimPromptNoteNotShown("the flat profile has no such page");
+        if (flat) {
+            Log::get().note("menu: flat graphics panel configured; summon with %s.", key.c_str());
+            // F177: the flat profile has no aiming choice page; the log says so once.
+            aimPromptNoteNotShown("the flat profile has no such page");
+        } else {
+            Log::get().note("menu: %d rows in the table (%d on the Fixes/Performance pages); "
+                            "summon with %s. docs/settings-menu.md.",
+                            kRowDefCount,
+                            static_cast<int>(s.pages[0].entries.size() + s.pages[1].entries.size()),
+                            key.c_str());
+        }
     }
 }
 
@@ -4967,14 +5264,16 @@ void menuShowNotice(const char* text) {
         Log::get().note("menu: notice \"%s\" not shown: the menu is not configured in this profile.", text);
         return;
     }
-    if (runtimeFlatProfile()) {
+    const MenuProfilePolicy pol = menuPolicyFor(runtimeFlatProfile());
+    // Both profiles' notices follow menu.toasts (flat reads it since the restart-indication step; the shipped default is on).
+    if (!s.noticesOn) {
+        Log::get().note("menu: notice \"%s\" not queued: menu.toasts is off.", text);
+        return;
+    }
+    if (pol.noticePlacement == MenuNoticePlacement::ScreenCorner) {
         s.flatNotice.show(text);
         Log::get().note("menu: notice \"%s\" queued for the flat screen (upper left, about %llu s).", text,
                         static_cast<unsigned long long>((kToastMs + 500) / 1000));
-        return;
-    }
-    if (!s.toasts) {
-        Log::get().note("menu: notice \"%s\" not queued: menu.toasts is off.", text);
         return;
     }
     // The newest AA notice (or "Windows: " notice, the concourse pane mode) replaces an older one of its kind still waiting or on screen: a quick second press
@@ -5065,7 +5364,18 @@ void menuNoteConfigReloaded() {
 }
 
 void menuFlatBeforePresent(IDXGISwapChain* swap, unsigned flags) {
-    if (!runtimeFlatProfile() || !g_s.configured || !(g_s.open || g_s.flatNoticeShown) ||
+    if (!runtimeFlatProfile() || !g_s.configured) return;
+    // The output's own size, for the card's raster (sizeContent). Published before the closed-menu return below so that the first open already has it.
+    if (swap && !(flags & DXGI_PRESENT_TEST)) {
+        DXGI_SWAP_CHAIN_DESC desc{};
+        if (SUCCEEDED(swap->GetDesc(&desc)) && desc.BufferDesc.Width > 0 && desc.BufferDesc.Height > 0) {
+            g_flatOutW.store(desc.BufferDesc.Width, std::memory_order_relaxed);
+            g_flatOutH.store(desc.BufferDesc.Height, std::memory_order_relaxed);
+            g_flatWindowed.store(desc.Windowed ? 1 : 0, std::memory_order_relaxed);
+        }
+        perfMonitorNoteSwapChain(swap);   // the display's refresh rate, for the Monitor's budgets (every few seconds)
+    }
+    if (!(g_s.screenNotice.compositing(g_s.open) || g_s.flatReadout.compositing() || (g_s.monitorPanelOpen && g_s.monitorPanel.compositing())) ||
         (flags & DXGI_PRESENT_TEST)) return;
     menuPanelCompositeFlat(swap);
 }
@@ -5093,145 +5403,47 @@ void menuTick(ID3D11Device* dev) {
         char windowsToast[64];
         if (concoursePaneTakeToast(windowsToast, sizeof(windowsToast))) menuShowNotice(windowsToast);
     }
-    if (runtimeFlatProfile()) {
-        guardedBudget(g_budget, [&] {
-            const uint64_t now = nowMs();
-            tickHeldEdit(now);   // a held numeric edit whose burst has ended is written now (menu_edit_hold.h)
-            s.tickMs = now;
-            drainWrites();
-            const bool summonPressed = s.summon.pressed();
-            // A pad binding in an existing ini may overlap panel navigation.
-            // Its opening edge still works; once open, the panel owns that
-            // button (A selects, B backs out, and the others navigate).
-            const HotkeyBinding& summonBinding = s.summon.binding();
-            const bool padNavSummon = summonBinding.kind == HotkeyKind::Pad &&
-                menuPadOwnsButton(summonBinding.padButtons, summonBinding.padTrigger);
-            if (summonPressed && !(s.open && padNavSummon && s.padReady)) {
-                if (s.open) closeMenu("the menu key");
-                else openMenu(now);
-            }
-            if (s.summon.takeMissedWhileUnfocused())
-                Log::get().note("menu: %s was pressed while Elite was unfocused.",
-                                s.summonName.c_str());
-            if (s.open && !gameHasFocus()) closeMenu("Elite lost focus");
-            if (s.open) {
-                const bool esc = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-                if (esc && !s.flatEscapeDown) {
-                    if (s.editEntry >= 0) cancelEdit();
-                    else closeMenu("Escape");
-                }
-                s.flatEscapeDown = esc;
-            }
-            const uint32_t drawn = menuDrawnValue();
-            if (drawn != s.lastDrawn) {
-                s.lastDrawn = drawn;
-                s.lastDrawnMs = now;
-            }
-            if (s.open && now - s.openedMs > kNotDrawnCloseMs &&
-                now - s.lastDrawnMs > kNotDrawnCloseMs) {
-                Log::get().note("menu: flat panel was not drawn; closing and releasing keyboard.");
-                closeMenu("not drawn");
-            }
-            const bool drawnFresh = s.open && s.lastDrawnMs != 0 &&
-                                    now - s.lastDrawnMs <= kDrawnFreshMs;
-            inputGateSetPrivate(drawnFresh);
-            const bool keysReady = drawnFresh && inputGateHoldsGameKeyboard();
-            if (keysReady != s.flatKeysReadyShown) {
-                s.flatKeysReadyShown = keysReady;
-                s.contentDirty = true;
-            }
-            if (!keysReady && s.captureEntry >= 0) {
-                const int def = s.captureDef;
-                endCapture();
-                setHotkeyNote(def, "capture cancelled", "Keyboard gate unavailable");
-            }
-            const bool nativeScale = flatRuntimeNativeScale();
-            if (nativeScale != s.flatNativeScaleShown) {
-                s.flatNativeScaleShown = nativeScale;
-                s.contentDirty = true;
-            }
-            flatWarningTick(now);
-            starGlowBloomTick();
-            preparePadNavigation(now, drawnFresh && gameHasFocus());
-            if (keysReady) handleKeys(now);
-            handlePadNavigation(now);
-            if (s.open && dev && !menuPanelFlatRasterReady()) s.contentDirty = true;
-            if (s.open && s.contentDirty) {
-                s.contentDirty = false;
-                MenuContent c;
-                buildContent(c);
-                menuPanelSubmit(c);
-            }
-            // A notice from outside the menu (menuShowNotice): rasterised at a toast's size, composited once that raster is the live one.
-            // With the menu open the notice stays queued and starts when it closes (it was cleared here and lost).
-            if (const std::string* notice = s.flatNotice.take(s.open)) {
-                s.flatNoticeUp = true;
-                s.flatNoticeShown = false;
-                s.flatNoticeUntilMs = now + kToastMs;
-                s.flatNoticeSerial = menuPanelRasterSerial();
-                MenuContent n;
-                buildToastContent(n, *notice, kToastWidthDeg, 1.0f);
-                menuPanelSubmit(n);
-            }
-            if (s.flatNoticeUp) {
-                int rasterH = 0;
-                if (s.open || now >= s.flatNoticeUntilMs) {
-                    s.flatNoticeUp = false;
-                    s.flatNoticeShown = false;
-                    s.flatRasterStale = true;
-                    s.flatNoticeSerial = menuPanelRasterSerial();
-                    s.contentDirty = true;   // the menu's content must be re-sent after a notice
-                } else if (!s.flatNoticeShown && menuPanelRasterSerial() != s.flatNoticeSerial &&
-                           menuPanelStats(nullptr, &rasterH, nullptr, nullptr) && rasterH > 0 && rasterH < kFlatNoticeMaxPx) {
-                    s.flatNoticeShown = true;
-                }
-            }
-            if (s.flatRasterStale && !s.flatNoticeUp && menuPanelRasterSerial() != s.flatNoticeSerial) s.flatRasterStale = false;
-            MenuGeometry g;
-            g.dist = 1.0f;
-            g.curve = 0.0f;
-            g.halfW = 0.62f;
-            g.alpha = ((s.open && !s.flatRasterStale) || (s.flatNoticeUp && s.flatNoticeShown)) ? 1.0f : 0.0f;
-            menuPanelSetGeometry(g);
-            inputGateTick();
-            if (dev) menuPanelTick(dev);
-        });
-        if (!g_budget.shouldRun()) {
-            inputGateSetPrivate(false);
-            inputGateSetPadPrivate(false, -1);
-        }
-        return;
-    }
+    // One body for both profiles (menu_policy.h). The order of the steps is each profile's own order with the other's steps left out; a step that only one
+    // profile has is gated by the policy field that names why, or by `world` where it is the VR panel's tooling the design brings to flat step by step.
+    const MenuProfilePolicy pol = menuPolicyFor(runtimeFlatProfile());
+    const bool world = pol.anchor == MenuAnchor::World;
+    const bool hotkeysPage = menuProfileHasPage(MenuPageSource::Hotkeys, runtimeFlatProfile());   // one answer, the page table's (menu_pages.h)
     guardedBudget(g_budget, [&] {
-        static uint64_t lastNativeRevision = 0;
-        const uint64_t nativeRevision = nativeMenuRevision();
-        if (nativeRevision != lastNativeRevision) {
-            lastNativeRevision = nativeRevision;
-            closeMenu("native tracking origin or availability changed");
-            s.alpha = 0.0f;
+        if (world) {
+            static uint64_t lastNativeRevision = 0;
+            const uint64_t nativeRevision = nativeMenuRevision();
+            if (nativeRevision != lastNativeRevision) {
+                lastNativeRevision = nativeRevision;
+                closeMenu("native tracking origin or availability changed");
+                s.alpha = 0.0f;
+            }
         }
         const uint64_t now = nowMs();
-        const uint64_t dt = s.lastTickMs ? now - s.lastTickMs : 0;
-        s.lastTickMs = now;
+        uint64_t dt = 0;
+        if (pol.fade) {
+            dt = s.lastTickMs ? now - s.lastTickMs : 0;
+            s.lastTickMs = now;
+        }
         // The clock the content build reads, so the tooltip's dwell and the
         // raster agree on when the row was last moved.
         s.tickMs = now;
 
         // The monitor's ring: one clock read and a store per frame, and the
         // compositor's sample when a new one was published. Its slow
-        // samplers run only while the Monitor page is showing.
+        // samplers run only while the Monitor page is showing. Both profiles
+        // (the flat one rings the rendered and the presented frame rate; the
+        // flat census stays the driver of engine motion's clock, which
+        // perfMonitorFrame leaves alone there).
         perfMonitorFrame(dev);
-        perfMonitorSetActive(s.open && s.pages[s.page].monitor);
-        // A held numeric edit whose burst has ended is written now (menu_edit_hold.h); the worker's results are drained after it.
-        tickHeldEdit(now);
+        perfMonitorSetActive((s.open && s.pages[s.page].monitor) || s.monitorPanelOpen);   // the flat monitor panel needs the slow samplers too
+        tickHeldEdit(now);   // a held numeric edit whose burst has ended is written now (menu_edit_hold.h); the worker's results are drained after it
         // Writes the worker finished since last frame.
         drainWrites();
-        starGlowBloomTick();
 
         // The Hotkeys page's upkeep. A hotkey rebound anywhere (this page, the ini, a rewrite of
         // the registry by the reload) changes which keys are EDVR's: the panel keys adopted from
         // Elite are resolved against that set (rule R5), so they are resolved again when it moves.
-        {
+        if (pol.adoptGameKeys) {
             int vks[16];
             const int n = hotkeyRegisteredKeys(vks, 16);
             uint32_t sig = 2166136261u ^ static_cast<uint32_t>(n);
@@ -5242,157 +5454,194 @@ void menuTick(ID3D11Device* dev) {
             }
             s.registeredSig = sig;
         }
-        if (s.noteUntilMs && s.tickMs >= s.noteUntilMs) {
-            s.noteUntilMs = 0;
-            s.noteDef = -1;
-            s.contentDirty = true;
-        }
-        // A belt for the suspension of EDVR's hotkeys (hotkey.h): it is only ever on while a row waits.
-        if (s.captureEntry < 0 && hotkeysSuspended()) hotkeysSuspend(false);
-        if (s.open) {
-            const Page& page = s.pages[s.page];
-            if (s.clashStale && !page.entries.empty() && page.entries[0].kind == EntryKind::Setting &&
-                kMenuRows[page.entries[0].def].kind == MenuKind::Hotkey) {
-                refreshHotkeyClashes();   // only the page that shows the badges reads the files
+        if (hotkeysPage) {
+            if (s.noteUntilMs && s.tickMs >= s.noteUntilMs) {
+                s.noteUntilMs = 0;
+                s.noteDef = -1;
+                s.contentDirty = true;
             }
-        }
-
-        // The VR Supersampling hold (vr_ssaa_hold.h): while the game's Supersampling is held at 1.0 in VR, a requested value that is
-        // not 1.0 is said once per change, as a toast. The measured notice below cannot fire under the hold (the world is drawn at
-        // the eye's own size), so it is kept for the cases the hold does not cover (3D mode 0, flat).
-        {
-            float requested = 0.0f;
-            if (vrSsaaHoldNoticeDue(&requested)) {
-                char holdToast[120];
-                ssaahold::formatHoldToast(holdToast, sizeof(holdToast), requested);
-                if (s.toasts) {
-                    s.toastQueue.push_back(holdToast);
-                    Log::get().note("vr ssaa gate: notice queued as a toast (\"%s\")", holdToast);
-                } else {
-                    Log::get().note("vr ssaa gate: notice not queued: menu.toasts is off");
+            // A belt for the suspension of EDVR's hotkeys (hotkey.h): it is only ever on while a row waits.
+            if (s.captureEntry < 0 && hotkeysSuspended()) hotkeysSuspend(false);
+            if (s.open) {
+                const Page& page = s.pages[s.page];
+                if (s.clashStale && !page.entries.empty() && page.entries[0].kind == EntryKind::Setting &&
+                    kMenuRows[page.entries[0].def].kind == MenuKind::Hotkey) {
+                    refreshHotkeyClashes();   // only the page that shows the badges reads the files
                 }
-                s.contentDirty = true;
             }
         }
 
-        // The 3D mode watch (mode_watch.h): a commit says once, as a toast, which profile EDVR is running now, or that it is paused.
-        {
-            char modeToast[160];
-            if (modeWatchNoticeDue(modeToast, sizeof(modeToast))) {
-                if (s.toasts) {
-                    s.toastQueue.push_back(modeToast);
-                    Log::get().note("mode watch: notice queued as a toast (\"%s\")", modeToast);
-                } else {
-                    Log::get().note("mode watch: notice not queued: menu.toasts is off");
-                }
-                s.contentDirty = true;
-            }
-        }
-
-        // Elite's Supersampling below 1.0 (vr_supersample_notice.h, design section 83): once vScreen has measured the world
-        // rendered under the eye texture, the headset says so once a session as a toast (the menu's own notice, with the log
-        // line vScreen wrote; the open menu keeps it as the Status page's hint). Gated on menu.toasts like every toast, and
-        // this is the VR branch: the flat profile returned above and never reaches it.
-        if (!s.vrSupersamplingToasted) {
-            uint32_t rw = 0, rh = 0, ew = 0, eh = 0;
-            if (vScreenRenderBelowEye(&rw, &rh, &ew, &eh)) {
-                s.vrSupersamplingToasted = true;
-                if (s.toasts) {
-                    char toast[96];
-                    vrss::formatToast(toast, sizeof(toast));
-                    s.toastQueue.push_back(toast);
-                    Log::get().note("vr supersampling: the headset notice is queued as a toast (\"%s\"); the Status page shows the "
-                                    "advice as its hint while the menu is open.", toast);
-                } else {
-                    Log::get().note("vr supersampling: menu.toasts is off, so no toast; the Status page shows the advice as its "
-                                    "hint while the menu is open.");
-                }
-                s.contentDirty = true;
-            }
-        }
-
-        // Elite's terrain checkerboard rendering (terrain_checkerboard_notice.h, design section 84), VR only like the rest of this
-        // branch. The tick starts the reader on its own thread at the first VR frame boundary, once; everything after that loads the
-        // word it publishes and never a file. A toast once per RAISE of the option: toastOnRaise sets the latch (the published
-        // version) before the toasts test, so turning the option off and on again says it again and an option that stays on says it
-        // once. Gated on menu.toasts like every toast and logged either way; the open menu has it as the Status page's hint, a live
-        // predicate that ends when the option does.
-        terrainCheckerboardTick();
-        {
-            tcn::State cbState = tcn::State::Unknown;
-            uint32_t cbVersion = 0;
-            terrainCheckerboardPublished(&cbState, &cbVersion);
-            if (tcn::toastOnRaise(&s.terrainCheckerboardToasted, cbState, cbVersion)) {
-                char terrainToast[96];
-                char terrainNote[400];
-                tcn::formatToast(terrainToast, sizeof(terrainToast));
-                if (s.toasts) s.toastQueue.push_back(terrainToast);
-                tcn::formatQueuedLog(terrainNote, sizeof(terrainNote), s.toasts, terrainToast);
-                Log::get().note("%s", terrainNote);
-                s.contentDirty = true;
-            }
-        }
-
-        // Parallel projection left on for a canted Pimax (parallel_projection_notice.h, docs/canted-projection.md), VR only like the rest of
-        // this branch. Decided once a menu session (ppn::SessionLatch), from the first tick that holds the eye poses the native menu was given
-        // and the headset's names: ppn::decide, the same call the openxr half logs from. A close or a new session starts the decision again,
-        // so an earlier session's verdict is neither kept nor said twice. Only Notice (PimaxXR, which applies Pimax Play's toggle) reaches the
-        // user: a toast, gated on menu.toasts like every toast, and the Status page's hint while the menu is open. A runtime not known to
-        // apply the toggle gets the openxr log line alone. Nothing is said when the views are not a pair of orientations yet: the check waits.
-        {
-            // The identity is read before the poses. A close between the two reads leaves this tick's answer for the old session, which the
-            // next tick resets; it cannot put a new session's poses under the old identity for a whole session. Once this session is decided
-            // the tick does nothing more: the poses (a mutex and a copy) and the names are fetched only while a decision is still due.
-            const uint64_t parallelSession = nativeMenuSessionId();
-            if (parallelSession != s.parallelProjection.session || !s.parallelProjection.checked) {
-                float eyes[2][12]{};
-                NativeRenderLabels labels{};
-                const bool named = nativeMenuEyePoses(eyes) && nativeRenderLabels(&labels) && labels.valid;
-                if (ppn::latchTick(s.parallelProjection, parallelSession, named ? eyes : nullptr, labels.systemName, labels.runtimeName)) {
-                    char parallelToast[96];
-                    ppn::formatToast(parallelToast, sizeof(parallelToast));
+        if (pol.noticePlacement == MenuNoticePlacement::WorldToast) {
+            // The VR Supersampling hold (vr_ssaa_hold.h): while the game's Supersampling is held at 1.0 in VR, a requested value that is
+            // not 1.0 is said once per change, as a toast. The measured notice below cannot fire under the hold (the world is drawn at
+            // the eye's own size), so it is kept for the cases the hold does not cover (3D mode 0, flat).
+            {
+                float requested = 0.0f;
+                if (vrSsaaHoldNoticeDue(&requested)) {
+                    char holdToast[120];
+                    ssaahold::formatHoldToast(holdToast, sizeof(holdToast), requested);
                     if (s.toasts) {
-                        s.toastQueue.push_back(parallelToast);
-                        Log::get().note("parallel projection: the headset notice is queued as a toast (\"%s\"); the Status page shows the "
-                                        "advice as its hint while the menu is open.", parallelToast);
+                        s.toastQueue.push_back(holdToast);
+                        Log::get().note("vr ssaa gate: notice queued as a toast (\"%s\")", holdToast);
                     } else {
-                        Log::get().note("parallel projection: menu.toasts is off, so no toast; the Status page shows the advice as its "
+                        Log::get().note("vr ssaa gate: notice not queued: menu.toasts is off");
+                    }
+                    s.contentDirty = true;
+                }
+            }
+
+            // The 3D mode watch (mode_watch.h): a commit says once, as a toast, which profile EDVR is running now, or that it is paused.
+            {
+                char modeToast[160];
+                if (modeWatchNoticeDue(modeToast, sizeof(modeToast))) {
+                    if (s.toasts) {
+                        s.toastQueue.push_back(modeToast);
+                        Log::get().note("mode watch: notice queued as a toast (\"%s\")", modeToast);
+                    } else {
+                        Log::get().note("mode watch: notice not queued: menu.toasts is off");
+                    }
+                    s.contentDirty = true;
+                }
+            }
+
+            // Elite's Supersampling below 1.0 (vr_supersample_notice.h, design section 83): once vScreen has measured the world
+            // rendered under the eye texture, the headset says so once a session as a toast (the menu's own notice, with the log
+            // line vScreen wrote; the open menu keeps it as the Status page's hint). Gated on menu.toasts like every toast, and
+            // this is the world-toast placement: the flat profile never reaches it.
+            if (!s.vrSupersamplingToasted) {
+                uint32_t rw = 0, rh = 0, ew = 0, eh = 0;
+                if (vScreenRenderBelowEye(&rw, &rh, &ew, &eh)) {
+                    s.vrSupersamplingToasted = true;
+                    if (s.toasts) {
+                        char toast[96];
+                        vrss::formatToast(toast, sizeof(toast));
+                        s.toastQueue.push_back(toast);
+                        Log::get().note("vr supersampling: the headset notice is queued as a toast (\"%s\"); the Status page shows the "
+                                        "advice as its hint while the menu is open.", toast);
+                    } else {
+                        Log::get().note("vr supersampling: menu.toasts is off, so no toast; the Status page shows the advice as its "
                                         "hint while the menu is open.");
                     }
                     s.contentDirty = true;
                 }
             }
+
+            // Elite's terrain checkerboard rendering (terrain_checkerboard_notice.h, design section 84), VR only like the rest of this
+            // placement. The tick starts the reader on its own thread at the first VR frame boundary, once; everything after that loads the
+            // word it publishes and never a file. A toast once per RAISE of the option: toastOnRaise sets the latch (the published
+            // version) before the toasts test, so turning the option off and on again says it again and an option that stays on says it
+            // once. Gated on menu.toasts like every toast and logged either way; the open menu has it as the Status page's hint, a live
+            // predicate that ends when the option does.
+            terrainCheckerboardTick();
+            {
+                tcn::State cbState = tcn::State::Unknown;
+                uint32_t cbVersion = 0;
+                terrainCheckerboardPublished(&cbState, &cbVersion);
+                if (tcn::toastOnRaise(&s.terrainCheckerboardToasted, cbState, cbVersion)) {
+                    char terrainToast[96];
+                    char terrainNote[400];
+                    tcn::formatToast(terrainToast, sizeof(terrainToast));
+                    if (s.toasts) s.toastQueue.push_back(terrainToast);
+                    tcn::formatQueuedLog(terrainNote, sizeof(terrainNote), s.toasts, terrainToast);
+                    Log::get().note("%s", terrainNote);
+                    s.contentDirty = true;
+                }
+            }
+
+            // Parallel projection left on for a canted Pimax (parallel_projection_notice.h, docs/canted-projection.md), VR only like the rest of
+            // this placement. Decided once a menu session (ppn::SessionLatch), from the first tick that holds the eye poses the native menu was given
+            // and the headset's names: ppn::decide, the same call the openxr half logs from. A close or a new session starts the decision again,
+            // so an earlier session's verdict is neither kept nor said twice. Only Notice (PimaxXR, which applies Pimax Play's toggle) reaches the
+            // user: a toast, gated on menu.toasts like every toast, and the Status page's hint while the menu is open. A runtime not known to
+            // apply the toggle gets the openxr log line alone. Nothing is said when the views are not a pair of orientations yet: the check waits.
+            {
+                // The identity is read before the poses. A close between the two reads leaves this tick's answer for the old session, which the
+                // next tick resets; it cannot put a new session's poses under the old identity for a whole session. Once this session is decided
+                // the tick does nothing more: the poses (a mutex and a copy) and the names are fetched only while a decision is still due.
+                const uint64_t parallelSession = nativeMenuSessionId();
+                if (parallelSession != s.parallelProjection.session || !s.parallelProjection.checked) {
+                    float eyes[2][12]{};
+                    NativeRenderLabels labels{};
+                    const bool named = nativeMenuEyePoses(eyes) && nativeRenderLabels(&labels) && labels.valid;
+                    if (ppn::latchTick(s.parallelProjection, parallelSession, named ? eyes : nullptr, labels.systemName, labels.runtimeName)) {
+                        char parallelToast[96];
+                        ppn::formatToast(parallelToast, sizeof(parallelToast));
+                        if (s.toasts) {
+                            s.toastQueue.push_back(parallelToast);
+                            Log::get().note("parallel projection: the headset notice is queued as a toast (\"%s\"); the Status page shows the "
+                                            "advice as its hint while the menu is open.", parallelToast);
+                        } else {
+                            Log::get().note("parallel projection: menu.toasts is off, so no toast; the Status page shows the advice as its "
+                                            "hint while the menu is open.");
+                        }
+                        s.contentDirty = true;
+                    }
+                }
+            }
         }
 
         // F177: the aiming choice at start, once a session.
-        aimPromptTick(now);
+        if (pol.headAim) aimPromptTick(now);
 
         // The summon key: EDVR's own, focus-gated. With Shift, recentre. While a hotkey row
         // waits for its input the key is a candidate for the capture (the menu key can be
         // rebound to itself, or taken for another row and refused), not a command: the
         // edge is still consumed here so it cannot close the menu when the capture ends.
-        if (s.summon.pressed() && s.captureEntry < 0) {
-            const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-            if (!s.open) {
-                if (!aimPromptOnFirstMenuOpen(now)) openMenu(now);   // F190: the first open of a session that has not shown the aiming page opens on it
-            } else if (shift) {
-                latchAnchor(0.0f, 0.0f);
-                s.lastInputMs = now;
-                Log::get().note("menu: recentred where you are looking.");
-            } else {
-                closeMenu("the menu key");
+        // A pad binding in an existing flat ini may overlap panel navigation. Its opening
+        // edge still works; once open, the panel owns that button (A selects, B backs out,
+        // and the others navigate).
+        {
+            const bool summonPressed = s.summon.pressed();
+            const HotkeyBinding& summonBinding = s.summon.binding();
+            const bool padNavSummon = pol.padNavigation && summonBinding.kind == HotkeyKind::Pad &&
+                menuPadOwnsButton(summonBinding.padButtons, summonBinding.padTrigger);
+            const bool shift = world && summonPressed && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+            switch (menuSummonAction(summonPressed, s.open, padNavSummon, s.padReady, hotkeysPage && s.captureEntry >= 0, shift, world)) {
+                case MenuSummonAction::Open:
+                    if (pol.headAim) {
+                        if (!aimPromptOnFirstMenuOpen(now)) openMenu(now);   // F190: the first open of a session that has not shown the aiming page opens on it
+                    } else {
+                        openMenu(now);
+                    }
+                    break;
+                case MenuSummonAction::Recentre:
+                    latchAnchor(0.0f, 0.0f);
+                    s.lastInputMs = now;
+                    Log::get().note("menu: recentred where you are looking.");
+                    break;
+                case MenuSummonAction::Close:
+                    closeMenu("the menu key");
+                    break;
+                case MenuSummonAction::None:
+                    break;
             }
         }
         if (s.summon.takeMissedWhileUnfocused()) {
-            Log::get().note("menu: %s was received but another application had focus. "
-                            "Focus Elite's desktop window and press it again.",
-                            s.summonName.c_str());
+            if (world) {
+                Log::get().note("menu: %s was received but another application had focus. "
+                                "Focus Elite's desktop window and press it again.",
+                                s.summonName.c_str());
+            } else {
+                Log::get().note("menu: %s was pressed while Elite was unfocused.",
+                                s.summonName.c_str());
+            }
         }
+        // The flat monitor panel's key: up or down whatever the menu is doing. The panel takes no input, so the press is only watched (the game sees it too);
+        // a hotkey row waiting for its input takes the edge as a candidate instead. pressed() is read every tick so its edge latch stays current.
+        if (pol.monitorPanel) {
+            const bool was = s.monitorPanelOpen;
+            s.monitorPanelOpen = menuMonitorPanelToggle(s.monitorKey.pressed(), s.monitorPanelOpen, hotkeysPage && s.captureEntry >= 0);
+            if (s.monitorPanelOpen != was) Log::get().note("menu: the monitor panel is %s (%s).", s.monitorPanelOpen ? "up" : "down", s.monitorKeyName.c_str());
+            if (s.monitorKey.takeMissedWhileUnfocused())
+                Log::get().note("menu: %s (the monitor panel key) was pressed while Elite was unfocused.", s.monitorKeyName.c_str());
+        }
+        starGlowBloomTick();
+        if (pol.closesOnFocusLoss && s.open && !gameHasFocus()) closeMenu("Elite lost focus");
 
         // Refresh the read-only OpenXR sizing snapshot while the menu is
         // visible. Comparing the whole POD also notices a stop/restart that
         // happened while the menu was hidden, without opening an XR session.
-        if (s.open) {
+        if (pol.sizing == MenuSizing::HeadsetPpd && s.open) {
             EdvrNativeRenderSizing latest{};
             const bool available = readNativeRenderSizing(&latest);
             const bool changed = available != s.renderSizingAvailable ||
@@ -5419,33 +5668,36 @@ void menuTick(ID3D11Device* dev) {
         if (s.open) {
             // Escape, then the navigation keys, then the head. Escape ends
             // a value being typed before it closes the menu, so a typed
-            // value can be abandoned without losing the panel.
-            static bool escDown = false;
-            const bool esc = gameHasFocus() && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-            // A hotkey row waiting for its input owns Escape (it cancels the capture, in handleCapture);
-            // the edge is still tracked, so the Esc that cancelled it cannot close the menu a tick later.
-            if (esc && !escDown && s.captureEntry < 0) {
-                if (s.editEntry >= 0) {
+            // value can be abandoned without losing the panel. A hotkey row waiting for its input owns Escape
+            // (it cancels the capture, in handleCapture); the edge is still tracked, so the Esc that
+            // cancelled it cannot close the menu a tick later. Where the menu closes on focus loss
+            // (flat, above) the focus is already known to be Elite's.
+            const bool esc = (pol.closesOnFocusLoss || gameHasFocus()) && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+            switch (menuEscapeAction(esc, s.escapeDown, hotkeysPage && s.captureEntry >= 0, s.editEntry >= 0)) {
+                case MenuEscapeAction::CancelEdit:
                     cancelEdit();
                     s.lastInputMs = now;
-                } else {
+                    break;
+                case MenuEscapeAction::Close:
                     closeMenu("Escape");
-                }
+                    break;
+                case MenuEscapeAction::None:
+                    break;
             }
-            escDown = esc;
         }
-        if (s.open) {
+        if (world && s.open) {
             handleKeys(now);
             handleAim(now);
-            // The tooltip's dwell has passed: nothing else changed, so ask
-            // for the one re-raster that brings it up.
-            if (!s.tooltipUp && tooltipsOn() && !s.pages[s.page].status &&
-                now >= s.highlightSinceMs + static_cast<uint64_t>(s.tooltipDelayS * 1000.0f)) {
-                s.contentDirty = true;
-            }
             if (s.idleSeconds > 0 && now - s.lastInputMs > static_cast<uint64_t>(s.idleSeconds) * 1000) {
                 closeMenu("idle");
             }
+        }
+
+        // The tooltip's dwell has passed: nothing else changed, so ask for the one re-raster that brings it up. Both profiles: the flat card's highlight dwells
+        // on the keyboard or the pad the same way.
+        if (s.open && !s.tooltipUp && tooltipsOn() && !s.pages[s.page].status &&
+            now >= s.highlightSinceMs + static_cast<uint64_t>(s.tooltipDelayS * 1000.0f)) {
+            s.contentDirty = true;
         }
 
         // The draw the gate follows.
@@ -5454,19 +5706,23 @@ void menuTick(ID3D11Device* dev) {
             s.lastDrawn = drawn;
             s.lastDrawnMs = now;
         }
-        if (s.open && now - s.openedMs > kNotDrawnCloseMs && now - s.lastDrawnMs > kNotDrawnCloseMs) {
-            if (!s.notDrawnNoted) {
-                s.notDrawnNoted = true;
-                Log::get().note("menu: the panel is not being drawn -- the openvr half never "
-                                "called the door export (a mismatched pair, or every submit "
-                                "path refused). The menu closes and the keyboard stays the "
-                                "game's; please report this log.");
+        if (menuNotDrawn(s.open, now, s.openedMs, s.lastDrawnMs, kNotDrawnCloseMs)) {
+            if (world) {
+                if (!s.notDrawnNoted) {
+                    s.notDrawnNoted = true;
+                    Log::get().note("menu: the panel is not being drawn -- the openvr half never "
+                                    "called the door export (a mismatched pair, or every submit "
+                                    "path refused). The menu closes and the keyboard stays the "
+                                    "game's; please report this log.");
+                }
+            } else {
+                Log::get().note("menu: flat panel was not drawn; closing and releasing keyboard.");
             }
             closeMenu("not drawn");
         }
 
         // Fade toward the target.
-        {
+        if (pol.fade) {
             const float target = s.open ? 1.0f : 0.0f;
             const float rate = dt > 0 ? static_cast<float>(dt) / static_cast<float>(kFadeMs) : 1.0f;
             if (s.alpha < target) s.alpha = s.alpha + rate > target ? target : s.alpha + rate;
@@ -5475,72 +5731,126 @@ void menuTick(ID3D11Device* dev) {
         }
 
         // Toasts, when the menu is down; the overlay when nothing else is up.
-        if (!s.open && s.alpha <= 0.0f) {
-            if (!s.toastUp && !s.toastQueue.empty()) {
-                s.toastText = s.toastQueue.front();
-                s.toastQueue.erase(s.toastQueue.begin());
-                latchAnchor(0.0f, kToastPitchDeg);
-                if (s.anchorValid) {
-                    s.toastUp = true;
-                    s.overlayUp = false;
-                    s.overlayAlpha = 0.0f;
-                    s.toastUntilMs = now + kToastMs;
-                    MenuContent c;
-                    buildToastContent(c, s.toastText, kToastWidthDeg, 1.0f);
-                    menuPanelSubmit(c);
-                }
-            }
-            if (s.toastUp) {
-                const bool alive = now < s.toastUntilMs;
-                const float target = alive ? 1.0f : 0.0f;
-                const float rate = dt > 0 ? static_cast<float>(dt) / static_cast<float>(kFadeMs) : 1.0f;
-                if (s.toastAlpha < target) s.toastAlpha = s.toastAlpha + rate > target ? target : s.toastAlpha + rate;
-                else if (s.toastAlpha > target) s.toastAlpha = s.toastAlpha - rate < target ? target : s.toastAlpha - rate;
-                if (!alive && s.toastAlpha <= 0.0f) {
-                    s.toastUp = false;
-                    s.contentDirty = true;   // the menu's content must be re-sent after a toast
-                }
-            }
-            // The head-locked readout: the door anchors it to each frame's
-            // own pose (setMenuHeadLock below), so it rides the look with no
-            // lag, the toolkit's way; its text is refreshed twice a second.
-            // Never while a toast has the panel.
-            if (s.overlay && !s.toastUp) {
-                float pose[12];
-                s.anchorValid = headPose(pose);
-                if (s.anchorValid) {
-                    if (!s.overlayUp || dueMs(s.overlayTextMs, 500)) {
-                        s.overlayTextMs = stampMs();
-                        char line[120];
-                        perfMonitorOverlayLine(line, sizeof(line));
-                        if (!s.overlayUp || line != s.overlayText || s.overlayTextDeg != s.textDeg) {
-                            s.overlayText = line;
-                            MenuContent c;
-                            if (menuPanelBuildOverlayContent(c, s.overlayText.c_str(), s.textDeg,
-                                                              nullptr)) {
-                                s.overlayTextDeg = s.textDeg;
-                                menuPanelSubmit(c);
-                            }
-                        }
-                        s.overlayUp = true;
+        if (pol.noticePlacement == MenuNoticePlacement::WorldToast) {
+            if (!s.open && s.alpha <= 0.0f) {
+                if (!s.toastUp && !s.toastQueue.empty()) {
+                    s.toastText = s.toastQueue.front();
+                    s.toastQueue.erase(s.toastQueue.begin());
+                    latchAnchor(0.0f, kToastPitchDeg);
+                    if (s.anchorValid) {
+                        s.toastUp = true;
+                        s.overlayUp = false;
+                        s.overlayAlpha = 0.0f;
+                        s.toastUntilMs = now + kToastMs;
+                        MenuContent c;
+                        buildToastContent(c, s.toastText, kToastWidthDeg, 1.0f);
+                        menuPanelSubmit(c);
                     }
                 }
-            } else if (s.overlayUp && !s.overlay) {
+                if (s.toastUp) {
+                    const bool alive = now < s.toastUntilMs;
+                    const float target = alive ? 1.0f : 0.0f;
+                    const float rate = dt > 0 ? static_cast<float>(dt) / static_cast<float>(kFadeMs) : 1.0f;
+                    if (s.toastAlpha < target) s.toastAlpha = s.toastAlpha + rate > target ? target : s.toastAlpha + rate;
+                    else if (s.toastAlpha > target) s.toastAlpha = s.toastAlpha - rate < target ? target : s.toastAlpha - rate;
+                    if (!alive && s.toastAlpha <= 0.0f) {
+                        s.toastUp = false;
+                        s.contentDirty = true;   // the menu's content must be re-sent after a toast
+                    }
+                }
+                // The head-locked readout: the door anchors it to each frame's
+                // own pose (setMenuHeadLock below), so it rides the look with no
+                // lag, the toolkit's way; its text is refreshed twice a second.
+                // Never while a toast has the panel.
+                if (s.overlay && !s.toastUp) {
+                    float pose[12];
+                    s.anchorValid = headPose(pose);
+                    if (s.anchorValid) {
+                        // compact: twice a second; detailed: about four times a second, and always re-rasterised (its strip moves).
+                        const bool detailed = s.overlayMode == FpsOverlayMode::Detailed;
+                        if (!s.overlayUp || dueMs(s.overlayTextMs, detailed ? 250 : 500)) {
+                            s.overlayTextMs = stampMs();
+                            if (detailed) {
+                                MenuContent c;
+                                if (buildReadoutContent(c, FpsOverlayMode::Detailed, false, s.textDeg)) {
+                                    s.overlayText.clear();
+                                    s.overlayTextDeg = s.textDeg;
+                                    menuPanelSubmit(c);
+                                }
+                            } else {
+                                char line[120];
+                                perfMonitorOverlayLine(line, sizeof(line));
+                                if (!s.overlayUp || line != s.overlayText || s.overlayTextDeg != s.textDeg) {
+                                    s.overlayText = line;
+                                    MenuContent c;
+                                    if (menuPanelBuildOverlayContent(c, s.overlayText.c_str(), s.textDeg,
+                                                                      nullptr)) {
+                                        s.overlayTextDeg = s.textDeg;
+                                        menuPanelSubmit(c);
+                                    }
+                                }
+                            }
+                            s.overlayUp = true;
+                        }
+                    }
+                } else if (s.overlayUp && !s.overlay) {
+                    s.overlayUp = false;
+                    s.overlayAlpha = 0.0f;
+                }
+                if (s.overlayUp && !s.toastUp) {
+                    const float rate = dt > 0 ? static_cast<float>(dt) / static_cast<float>(kFadeMs) : 1.0f;
+                    const float target = 0.9f;
+                    if (s.overlayAlpha < target) s.overlayAlpha = s.overlayAlpha + rate > target ? target : s.overlayAlpha + rate;
+                } else {
+                    s.overlayAlpha = 0.0f;
+                }
+            } else {
+                s.toastUp = false;
+                s.toastAlpha = 0.0f;
                 s.overlayUp = false;
                 s.overlayAlpha = 0.0f;
             }
-            if (s.overlayUp && !s.toastUp) {
-                const float rate = dt > 0 ? static_cast<float>(dt) / static_cast<float>(kFadeMs) : 1.0f;
-                const float target = 0.9f;
-                if (s.overlayAlpha < target) s.overlayAlpha = s.overlayAlpha + rate > target ? target : s.overlayAlpha + rate;
-            } else {
-                s.overlayAlpha = 0.0f;
+        }
+
+        // The flat frame-rate readout (menu.fps_overlay): it has the monitor slot (menuPanelSubmitMonitor), top right, so the menu card and the notices (the menu's
+        // slot, top left) never hold it back and it never holds them back. It shares the slot with the monitor panel, which is why the two are never wanted at once
+        // (flatReadoutWanted): each machine reads the slot's serial before its first submit and is composited only once the serial has moved, so the other's
+        // raster left in the slot is never shown as its own. With menu.fps_overlay_lock the open menu's card carries the readout line itself, so the separate
+        // readout waits for the menu to close.
+        if (pol.noticePlacement == MenuNoticePlacement::ScreenCorner) {
+            const bool wanted = flatReadoutWanted(s.overlayMode != FpsOverlayMode::Off, s.monitorPanelOpen, s.open, s.overlayLock);
+            const bool detailed = s.overlayMode == FpsOverlayMode::Detailed;
+            const bool sizeChanged = g_flatOutW.load(std::memory_order_relaxed) != s.readoutSized[0] ||
+                                     g_flatOutH.load(std::memory_order_relaxed) != s.readoutSized[1];
+            const bool refreshDue = sizeChanged || dueMs(s.overlayTextMs, detailed ? 250 : 500);
+            if (s.flatReadout.tick(wanted, refreshDue, menuPanelMonitorRasterSerial()) && (s.flatReadout.submitted || dueMs(s.overlayTextMs, 250))) {
+                s.overlayTextMs = stampMs();   // also paces a build that fails
+                const uint32_t before = menuPanelMonitorRasterSerial();
+                MenuContent rc;
+                if (buildReadoutContent(rc, s.overlayMode, true, 0.0f)) {
+                    rc.slotOwner = kSlotOwnerReadout;
+                    menuPanelSubmitMonitor(rc);
+                    s.flatReadout.didSubmit(before);
+                }
             }
-        } else {
-            s.toastUp = false;
-            s.toastAlpha = 0.0f;
-            s.overlayUp = false;
-            s.overlayAlpha = 0.0f;
+        }
+
+        // The flat monitor panel: its own raster (menu_panel.h, the monitor slot, shared with the frame-rate readout above), so it is on screen with the menu, a
+        // notice, or alone. Refreshed on the Monitor page's cadence and at once when the output's size changes; composited only once a raster built since it was
+        // raised is live (the readout's machine, on the monitor slot's serial).
+        if (pol.monitorPanel) {
+            const bool sizeChanged = g_flatOutW.load(std::memory_order_relaxed) != s.monitorSized[0] ||
+                                     g_flatOutH.load(std::memory_order_relaxed) != s.monitorSized[1];
+            const bool refreshDue = sizeChanged || dueMs(s.monitorTextMs, kMonitorRefreshMs);
+            if (s.monitorPanel.tick(s.monitorPanelOpen, refreshDue, menuPanelMonitorRasterSerial())) {
+                s.monitorTextMs = stampMs();
+                const uint32_t before = menuPanelMonitorRasterSerial();
+                MenuContent mc;
+                buildMonitorPanel(mc);
+                mc.slotOwner = kSlotOwnerMonitorPanel;
+                menuPanelSubmitMonitor(mc);
+                s.monitorPanel.didSubmit(before);
+            }
         }
 
         // The gate, then content, geometry, visibility. The gate is decided
@@ -5550,30 +5860,65 @@ void menuTick(ID3D11Device* dev) {
         // private a few lines later -- at HEAD that sat past the old
         // single line's clip and was never seen; the two-line footer shows
         // it. Nothing between here and the old spot read the gate.
-        const bool showingMenu = s.alpha > 0.0f && !s.toastUp;
-        const bool drawnFresh = now - s.lastDrawnMs <= kDrawnFreshMs;
-        inputGateSetPrivate(s.open && showingMenu && drawnFresh && !s.pages[s.page].status);
-        // The fault line follows the gate the way the legend follows the
-        // live predicate: a raster that said one thing while the gate now
-        // says another is re-sent, so the warning appears when the draw
-        // stalls and goes when it resumes, on a rig with nothing adopted
-        // too (the legend's own comparison fires only with aliases).
-        const bool sharedWarn = s.open && s.privateWanted && !s.pages[s.page].status && !inputGatePrivate();
-        if (sharedWarn != s.sharedWarnShown) {
-            s.sharedWarnShown = sharedWarn;
-            s.contentDirty = true;
-        }
-        if (s.open || s.alpha > 0.0f) {
-            Page& p = s.pages[s.page];
-            if (p.status && dueMs(s.statusRefreshMs, p.monitor ? kMonitorRefreshMs : kStatusRefreshMs)) {
-                s.statusRefreshMs = stampMs();
+        const bool showingMenu = !world || (s.alpha > 0.0f && !s.toastUp);
+        const bool drawnFresh = menuDrawnFresh(s.open, now, s.lastDrawnMs, kDrawnFreshMs);
+        // A status page releases the keyboard to the game in VR (menu.keyboard decides the rest); a profile whose panel always takes the keyboard (flat)
+        // keeps it private there too, so Tab and Esc on the Status page do not also reach the game (Engine Boost, the pause menu).
+        const bool statusReleases = menuStatusPageReleasesKeyboard(s.pages[s.page].status, pol.keyboardAlwaysPrivate);
+        inputGateSetPrivate(s.open && showingMenu && drawnFresh && !statusReleases);
+        if (world) {
+            // The fault line follows the gate the way the legend follows the
+            // live predicate: a raster that said one thing while the gate now
+            // says another is re-sent, so the warning appears when the draw
+            // stalls and goes when it resumes, on a rig with nothing adopted
+            // too (the legend's own comparison fires only with aliases).
+            const bool sharedWarn = s.open && s.privateWanted && !s.pages[s.page].status && !inputGatePrivate();
+            if (sharedWarn != s.sharedWarnShown) {
+                s.sharedWarnShown = sharedWarn;
                 s.contentDirty = true;
             }
-            // The locked FPS readout refreshes at the same cadence as the
-            // head-locked overlay: twice a second, cheaply.
-            if (s.open && s.overlay && s.overlayLock && dueMs(s.menuOverlayTextMs, 500)) {
-                s.menuOverlayTextMs = stampMs();
+        } else {
+            // The flat panel's keys follow the gate too: they are handled only once it holds the keyboard.
+            const bool keysReady = drawnFresh && inputGateHoldsGameKeyboard();
+            if (keysReady != s.flatKeysReadyShown) {
+                s.flatKeysReadyShown = keysReady;
                 s.contentDirty = true;
+            }
+            if (!keysReady && s.captureEntry >= 0) {
+                const int def = s.captureDef;
+                endCapture();
+                setHotkeyNote(def, "capture cancelled", "Keyboard gate unavailable");
+            }
+            const bool nativeScale = flatRuntimeNativeScale();
+            if (nativeScale != s.flatNativeScaleShown) {
+                s.flatNativeScaleShown = nativeScale;
+                s.contentDirty = true;
+            }
+            flatWarningTick(now);
+            // The raster is sized from the output's pixels (sizeContent): a resize, or the first Present's size, builds it again.
+            if (s.open && (g_flatOutW.load(std::memory_order_relaxed) != s.flatOutSized[0] ||
+                           g_flatOutH.load(std::memory_order_relaxed) != s.flatOutSized[1])) {
+                s.contentDirty = true;
+            }
+            preparePadNavigation(now, drawnFresh && gameHasFocus());
+            // The flat panel keeps the keyboard private on every page, the Status page included, so its keys run once the gate holds it.
+            if (keysReady) handleKeys(now);
+            handlePadNavigation(now);
+            if (s.open && dev && !menuPanelFlatRasterReady()) s.contentDirty = true;
+        }
+        if (world ? (s.open || s.alpha > 0.0f) : s.open) {
+            {
+                Page& p = s.pages[s.page];
+                if (p.status && dueMs(s.statusRefreshMs, p.monitor ? kMonitorRefreshMs : kStatusRefreshMs)) {
+                    s.statusRefreshMs = stampMs();
+                    s.contentDirty = true;
+                }
+                // The locked FPS readout refreshes at the same cadence as the
+                // head-locked overlay: twice a second, cheaply.
+                if (s.open && s.overlay && s.overlayLock && dueMs(s.menuOverlayTextMs, 500)) {
+                    s.menuOverlayTextMs = stampMs();
+                    s.contentDirty = true;
+                }
             }
             if (s.contentDirty) {
                 s.contentDirty = false;
@@ -5582,34 +5927,81 @@ void menuTick(ID3D11Device* dev) {
                 menuPanelSubmit(c);
             }
         }
-        const bool showingOverlay = !showingMenu && !s.toastUp && s.overlayUp && s.overlayAlpha > 0.0f;
+        if (pol.noticePlacement == MenuNoticePlacement::ScreenCorner) {
+            // A notice from outside the menu (menuShowNotice): rasterised at a toast's size, composited once that raster is the live one.
+            // With the menu open the notice stays queued and starts when it closes (it was cleared here and lost).
+            if (const std::string* notice = s.flatNotice.take(s.open)) {
+                s.screenNotice.start(now, kToastMs, menuPanelRasterSerial());
+                MenuContent n;
+                buildToastContent(n, *notice, kToastWidthDeg, 1.0f);
+                menuPanelSubmit(n);
+            }
+            const bool resend = s.screenNotice.tick(s.open, now, menuPanelRasterSerial(), [] {
+                int rasterH = 0;
+                return menuPanelStats(nullptr, &rasterH, nullptr, nullptr) && rasterH > 0 &&
+                       rasterH < flatNoticeMaxRasterPx(static_cast<int>(g_flatOutH.load(std::memory_order_relaxed)));
+            });
+            if (resend) s.contentDirty = true;   // the menu's content must be re-sent after a notice
+        }
         MenuGeometry g;
-        g.dist = s.distance;
-        g.curve = (s.toastUp || showingOverlay) ? 0.0f : s.curve;
-        // The toast and the head-locked overlay are their own bitmaps with
-        // no strip, so they take no shift.
-        const bool menuBranch = !s.toastUp && !showingOverlay;
-        const float widthDeg =
-            s.toastUp ? kToastWidthDeg : showingOverlay ? kOverlayWidthDeg : cardWidthDeg();
-        g.halfW = panelHalfW(widthDeg, menuBranch && tooltipsOn());
-        g.shift = panelShift(g.halfW, menuBranch && tooltipsOn());
-        g.alpha = s.toastUp ? s.toastAlpha : showingOverlay ? s.overlayAlpha : s.alpha;
-        g.overlayRaster = showingOverlay;
-        if (!glitchConsumerPresent() && !nativeMenuAvailable()) {
-            g.alpha = 0.0f;
-            inputGateSetPrivate(false);
+        bool showingOverlay = false;
+        if (world) {
+            showingOverlay = !showingMenu && !s.toastUp && s.overlayUp && s.overlayAlpha > 0.0f;
+            g.dist = s.distance;
+            g.curve = (s.toastUp || showingOverlay) ? 0.0f : s.curve;
+            // The toast and the head-locked overlay are their own bitmaps with
+            // no strip, so they take no shift.
+            const bool menuBranch = !s.toastUp && !showingOverlay;
+            const float widthDeg =
+                s.toastUp ? kToastWidthDeg : showingOverlay ? kOverlayWidthDeg : cardWidthDeg();
+            g.halfW = panelHalfW(widthDeg, menuBranch && tooltipsOn());
+            g.shift = panelShift(g.halfW, menuBranch && tooltipsOn());
+            g.alpha = s.toastUp ? s.toastAlpha : showingOverlay ? s.overlayAlpha : s.alpha;
+            g.overlayRaster = showingOverlay;
+            if (!glitchConsumerPresent() && !nativeMenuAvailable()) {
+                g.alpha = 0.0f;
+                inputGateSetPrivate(false);
+            }
+        } else {
+            g.dist = 1.0f;
+            g.curve = 0.0f;
+            g.halfW = 0.62f;
+            // The menu, else a notice, in the upper left corner. (The readout and the monitor panel are the monitor slot's, below.)
+            g.alpha = s.screenNotice.panelVisible(s.open) ? 1.0f : 0.0f;
+            g.flatCorner = 0;
         }
         menuPanelSetGeometry(g);
-        setMenuHeadLock(showingOverlay, s.overlayYaw, s.overlayPitch);
-        setMenuVisible(g.alpha);
+        if (pol.monitorPanel || pol.noticePlacement == MenuNoticePlacement::ScreenCorner) {
+            // The monitor slot, in the upper right corner, 1:1 like the menu (menu_flat_layout.h flatPlace): the monitor panel, else the frame-rate readout, each
+            // only once its own raster is the live one. Neither wanted: alpha 0, so nothing stale stays on screen.
+            MenuGeometry mg;
+            mg.dist = 1.0f;
+            mg.curve = 0.0f;
+            mg.halfW = 0.62f;
+            // A raster is drawn only for the owner it was built for: one still in flight for the other (the slot is shared) draws nothing this frame.
+            const uint8_t slotOwner = menuPanelMonitorRasterOwner();
+            const bool panelLive = s.monitorPanelOpen && s.monitorPanel.compositing() && slotOwner == kSlotOwnerMonitorPanel;
+            const bool readoutLive = s.flatReadout.compositing() && slotOwner == kSlotOwnerReadout;
+            mg.alpha = panelLive || readoutLive ? 1.0f : 0.0f;
+            mg.flatCorner = static_cast<int>(FlatCorner::UpperRight);
+            menuPanelSetMonitorGeometry(mg);
+        }
+        if (world) {
+            setMenuHeadLock(showingOverlay, s.overlayYaw, s.overlayPitch);
+            setMenuVisible(g.alpha);
+        }
         inputGateTick();
         if (dev) menuPanelTick(dev);
     });
     if (!g_budget.shouldRun()) {
         // A faulting tick must not leave the keyboard taken, or EDVR's hotkeys held still.
         inputGateSetPrivate(false);
-        hotkeysSuspend(false);
-        setMenuVisible(0.0f);
+        if (world) {
+            hotkeysSuspend(false);
+            setMenuVisible(0.0f);
+        } else {
+            inputGateSetPadPrivate(false, -1);
+        }
     }
 }
 

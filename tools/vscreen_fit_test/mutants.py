@@ -308,7 +308,7 @@ MUTANTS = [
     M("ss-hint-reworded", "R13c", [('"Elite Supersampling is below 1: set it to 1 and use HMD Image Quality."', '"Elite Supersampling is low."')], "the Status hint no longer says what to set and use", HEADER2),
     M("ss-hint-too-long", "R13c", [('set it to 1 and use HMD Image Quality."', 'set it to 1 and use HMD Image Quality instead of Elite\'s own Supersampling setting."')],
       "the Status hint outgrows the 78 characters of the hint it replaces", HEADER2),
-    M("pin-ss-toast-not-gated", "R13e", [("                if (s.toasts) {\n                    char toast[96];", "                {\n                    char toast[96];")], "the toast ignores menu.toasts", "src/d3d11/menu.cpp"),
+    M("pin-ss-toast-not-gated", "R13e", [("                    if (s.toasts) {\n                        char toast[96];", "                    {\n                        char toast[96];")], "the toast ignores menu.toasts", "src/d3d11/menu.cpp"),
     M("pin-ss-hint-dropped", "R13e", [("if (vScreenRenderBelowEye(&rw, &rh, &ew, &eh)) vrss::formatStatusHint(c.hint, sizeof(c.hint));", "(void)rw;")],
       "the Status page's hint no longer says it", "src/d3d11/menu.cpp"),
     M("pin-ss-note-returns", "R13e", [("        if (c.lineCount == 0) {\n            MenuLine& l = c.lines[c.lineCount++];\n            strncpy(l.left, \"Nothing on this page yet.\"",

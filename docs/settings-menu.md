@@ -1177,6 +1177,13 @@ What this cannot do is name a cause the ring does not carry. A drop with
 no EDVR event and ordinary EDVR costs is the game's or the runtime's, and
 the page says so by calling it clean.
 
+**2026-11-16:** `menu.fps_overlay` is now `off | compact | detailed`, in VR
+and in flat (`compact` is the single line described here, and an old `on`
+reads as `compact`; `detailed` adds frame time, 1% low and a frame-time
+graph). In flat it sits in the screen's top-right corner. Under XeSS Frame
+Generation it shows the rendered and presented rates separately. See
+[design-f8-menu-unification-2026-11-15.md](design-f8-menu-unification-2026-11-15.md).
+
 **The overlay** (`menu.fps_overlay`, off by default, and **a switch on
 the Performance page** since 2026-09-08 -- it is the one thing a player
 wants to turn on from inside the headset, and until then it was reachable

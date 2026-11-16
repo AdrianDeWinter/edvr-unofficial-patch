@@ -56,6 +56,17 @@ const char* xessFgProblem();
 // the motion of the strip a turn brings into view (FlatMonoResolveFrame::keepOffscreenMotion) instead of writing 0
 // there. The render thread's.
 bool xessFgWanted();
+// True once a bridge was made this session, and stays true after it stopped (fell back, was torn down): the Monitor and the frame-rate readout show a
+// presented rate whenever this is true, so a bridge that stopped is told from a session that never had one.
+bool xessFgBridgeThisSession();
+// The generated frames per rendered frame the bridge is making right now: 0 while frame generation is off, not wanted or stopped. The render thread's.
+uint32_t xessFgActiveGeneratedFrames();
+// Frames that reached the screen: the cumulative count and the QPC time of its latest sample, and the source's name (a static string). False when there is
+// no count: no bridge this session, nothing sampled yet, or neither source works (xessFgPresentUnavailableWhy says which, "" before the first sample).
+// Any thread. Never rendered * (1 + generated) (xess_fg_presented.h).
+bool xessFgPresentStats(uint64_t* presented, uint64_t* qpc, const char** source);
+// Why no presented count is available, a static string; "" while it is only not sampled yet.
+const char* xessFgPresentUnavailableWhy();
 
 // device_hook.cpp, the game factory's swap chain creation, before the real
 // call. When the bridge is wanted and its D3D12 side could be made, returns

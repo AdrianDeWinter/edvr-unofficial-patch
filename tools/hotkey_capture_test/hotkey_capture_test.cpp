@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "../../src/common/flat_profile_keys.h"
 #include "../../src/common/hotkey.h"
 #include "../../src/common/iniedit.h"
 #include "../../src/common/pad_names.h"
@@ -1515,8 +1516,30 @@ void testCaptureWiringPins(const char* root) {
           close.find("hotkeysPrimeAll()") != std::string::npos,
           "menu.cpp: closing releases pad ownership and consumes held hotkey edges");
     const std::string tick = bodyOf("void menuTick(ID3D11Device* dev) {");
-    check(tick.find("s.open && padNavSummon && s.padReady") != std::string::npos,
+    std::string policyText;
+    {
+        const std::string path = std::string(root) + "\\src\\d3d11\\menu_policy.h";
+        FILE* f = fopen(path.c_str(), "rb");
+        if (f) {
+            char buf[8192];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), f)) > 0) policyText.append(buf, n);
+            fclose(f);
+        }
+    }
+    check(tick.find("menuSummonAction(summonPressed, s.open, padNavSummon, s.padReady,") != std::string::npos &&
+          policyText.find("if (open && padNavSummon && padReady) return MenuSummonAction::None;") != std::string::npos,
           "menu.cpp: overlapping summon is suppressed only after navigation is private");
+    // One source of truth for "this profile has a Hotkeys page": the page table. The policy has no field for it, the tick asks the table once, and the capture, its
+    // note timer and Escape ownership all follow that one bool; a flat open resets the capture and reads the page's state like VR's.
+    check(tick.find("const bool hotkeysPage = menuProfileHasPage(MenuPageSource::Hotkeys, runtimeFlatProfile());") != std::string::npos &&
+          text.find("pol.hotkeysPage") == std::string::npos && policyText.find("hotkeysPage") == std::string::npos &&
+          tick.find("hotkeysPage && s.captureEntry >= 0, shift, world)") != std::string::npos &&
+          tick.find("menuEscapeAction(esc, s.escapeDown, hotkeysPage && s.captureEntry >= 0, s.editEntry >= 0)") != std::string::npos,
+          "menu.cpp: the capture's claim on the summon key and Escape follows the page table's Hotkeys page, and the policy has no field for it");
+    check(bodyOf("void openMenu(uint64_t now) {").find("if (menuProfileHasPage(MenuPageSource::Hotkeys, runtimeFlatProfile())) {") != std::string::npos &&
+          text.find("hotkeyPageRowsFor(kMenuRows, kRowDefCount, runtimeFlatProfile(), s.developer, rows, 32)") != std::string::npos,
+          "menu.cpp: either profile's open resets a capture, and the Hotkeys page's rows come from the profile's own list");
     const std::string keys = bodyOf("void handleKeys(uint64_t now) {");
     const std::string apply = bodyOf("void applyDecision(int def, const CaptureDecision& dec) {");
     check(tick.find("if (keysReady) handleKeys(now)") != std::string::npos &&
@@ -1546,23 +1569,36 @@ void testCaptureWiringPins(const char* root) {
     // Number rows are shown and stepped by menu_schema.h's helpers (the ones testNumberRows holds to "+0.15 m" and 0.01). The Explorer Cam page that
     // was built for everyone went with Explorer Cam in F98; the native on foot page is built the same way.
     {
-        const std::string pages = bodyOf("void buildPages() {");
-        check(pages.find("p.name = \"Explorer Cam\";") == std::string::npos && pages.find("\"explorer_cam\"") == std::string::npos,
-              "menu.cpp: buildPages makes no Explorer Cam page (retired in F98)");
-        const size_t at = pages.find("p.name = \"Native on foot\";");
-        const size_t rows = at == std::string::npos ? at : pages.find("addSettingRows(p, MenuTier::Fix, \"native_on_foot\", true);", at);
-        const size_t developer = pages.find("if (s.developer) {");
-        check(at != std::string::npos && rows != std::string::npos && rows - at < 300 && developer != std::string::npos && at < developer,
-              "menu.cpp: buildPages makes the Native on foot page from the Fix-tier rows of the native_on_foot page, grouped under the ini's headings (F127), for everyone, before the developer pages");
-        {   // The Mirror window page (2026-10-28 as the Desktop window page; renamed F173): built right after Visual and before Native on foot, for everyone, from the Fix-tier rows of its own page.
-            const size_t visual = pages.find("p.name = \"Visual\";"), page = pages.find("p.name = \"Mirror window\";"), native = pages.find("p.name = \"Native on foot\";");
-            const size_t rows = page == std::string::npos ? page : pages.find("addSettingRows(p, MenuTier::Fix, \"desktop_window\", false);", page);
-            check(visual != std::string::npos && page != std::string::npos && native != std::string::npos && visual < page && page < native && rows != std::string::npos && rows - page < 200,
-                  "menu.cpp: buildPages makes the Mirror window page (it was the Desktop window page until F173) from the Fix-tier rows of the desktop_window page, right after Visual and before Native on foot");
-            check(visual == std::string::npos || pages.find("addSettingRows(p, MenuTier::Fix, \"visual\", true);", visual) != std::string::npos,
-                  "menu.cpp: the Visual page is still built from the visual rows");
+        // The pages are rows of the page table (src/d3d11/menu_pages.h), built by one loop in buildPages and by makePage, which hands a Settings row to addSettingRows.
+        std::string table;
+        {
+            const std::string path = std::string(root) + "\\src\\d3d11\\menu_pages.h";
+            FILE* pf = fopen(path.c_str(), "rb");
+            if (pf) {
+                char buf[65536];
+                size_t n;
+                while ((n = fread(buf, 1, sizeof(buf), pf)) > 0) table.append(buf, n);
+                fclose(pf);
+            }
         }
-        check(bodyOf("std::string displayValue(const MenuRowDef& d, const std::string& v) {").find("menuFormatNumber(d, atof(v.c_str()))") !=
+        const std::string pages = bodyOf("void buildPages() {");
+        const std::string make = bodyOf("Page makePage(const MenuPageDef& d) {");
+        check(!table.empty() && table.find("\"Explorer Cam\"") == std::string::npos && table.find("\"explorer_cam\"") == std::string::npos,
+              "menu_pages.h: the page table has no Explorer Cam page (retired in F98)");
+        check(pages.find("menuPageShown(kMenuPages[i], flat, s.developer)") != std::string::npos && pages.find("makePage(kMenuPages[i])") != std::string::npos &&
+                  make.find("addSettingRows(p, menuTierOf(d.tier), d.token, d.grouped);") != std::string::npos,
+              "menu.cpp: buildPages is one loop over the page table, and makePage builds a Settings page from its tier, token and grouping");
+        const size_t at = table.find("{\"Native on foot\", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, \"native_on_foot\", true,");
+        const size_t developer = table.find("{\"Advanced\", false, true, true,");
+        check(at != std::string::npos && developer != std::string::npos && at < developer,
+              "menu_pages.h: the Native on foot page is the Fix-tier rows of the native_on_foot page, grouped under the ini's headings (F127), for everyone (VR), before the developer pages");
+        {   // The Mirror window page (2026-10-28 as the Desktop window page; renamed F173): right after Visual and before Native on foot, for everyone, from the Fix-tier rows of its own page.
+            const size_t visual = table.find("{\"Visual\", false, true, false,"), page = table.find("{\"Mirror window\", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, \"desktop_window\", false,");
+            check(visual != std::string::npos && page != std::string::npos && at != std::string::npos && visual < page && page < at,
+                  "menu_pages.h: the Mirror window page (it was the Desktop window page until F173) is the Fix-tier rows of the desktop_window page, right after Visual and before Native on foot");
+            check(visual != std::string::npos && table.find("MenuPageSource::Settings, MenuPageTier::Fix, \"visual\", true,", visual) == visual + std::strlen("{\"Visual\", false, true, false, "),
+                  "menu_pages.h: the Visual page is still built from the visual rows");
+        }        check(bodyOf("std::string displayValue(const MenuRowDef& d, const std::string& v) {").find("menuFormatNumber(d, atof(v.c_str()))") !=
                   std::string::npos,
               "menu.cpp: a number row is shown by menuFormatNumber (\"+0.15 m\", \"0 ms (exact)\")");
         check(bodyOf("void stepRow(int defIndex, int dir, int mult) {").find("menuSteppedNumber(d, ") != std::string::npos,
@@ -2403,6 +2439,47 @@ void testRows() {
     }
     check(nEveryone == 3 && nDev == 5, "three rows for everyone (menu, AA comparison, camera history), five in developer mode");
     check(rowIndex("read_game_bindings") < 0, "a plain [hotkey] setting is not a row");
+    // The flat profile's page (hotkeyPageRowsFor): the Fix rows whose key the flat profile reads, and nothing else, whatever the developer switch says. VR's is as it was.
+    {
+        int flat[16], flatDev[16], vr[16], vrDev[16];
+        const int nFlat = hotkeyPageRowsFor(kMenuRows, kCount, true, false, flat, 16);
+        const int nFlatDev = hotkeyPageRowsFor(kMenuRows, kCount, true, true, flatDev, 16);
+        const int nVr = hotkeyPageRowsFor(kMenuRows, kCount, false, false, vr, 16);
+        const int nVrDev = hotkeyPageRowsFor(kMenuRows, kCount, false, true, vrDev, 16);
+        check(nFlat == 3 && nFlatDev == 3, "the flat Hotkeys page has three rows, with or without developer mode");
+        check(nFlat == 3 && strcmp(kMenuRows[flat[0]].key, "menu") == 0 && strcmp(kMenuRows[flat[1]].key, "compare_aa") == 0 &&
+                  strcmp(kMenuRows[flat[2]].key, "monitor_panel") == 0,
+              "the flat Hotkeys page is the Menu key, the AA comparison key, then the monitor panel key");
+        check(rowIndex("dump_camera") >= 0 && !contains(flat, nFlat, rowIndex("dump_camera")) && !flatProfileReadsKey("hotkey.dump_camera"),
+              "the camera history key is for everyone in VR, but the flat profile does not read it: no flat row");
+        for (const char* key : {"dump_draws", "dump_eyes"})
+            checkf(!contains(flat, nFlat, rowIndex(key)) && !contains(flatDev, nFlatDev, rowIndex(key)), "hotkey.%s (developer tier) is not on the flat page, developer mode or not", key);
+        bool allReadable = true, allFix = true;
+        for (int k = 0; k < nFlat; ++k) {
+            const std::string dotted = std::string("hotkey.") + kMenuRows[flat[k]].key;
+            allReadable &= flatProfileReadsKey(dotted.c_str());
+            allFix &= kMenuRows[flat[k]].tier == MenuTier::Fix;
+        }
+        check(allReadable && allFix, "every flat Hotkeys row is a Fix row whose key the flat gate reads");
+        // The investigation keys (hotkey.concourse_*, hotkey.gpu_pass_profile) are the flat gate's but have no row at all: they cannot reach the page.
+        bool investigationRow = false;
+        for (int i = 0; i < kCount; ++i)
+            investigationRow |= kMenuRows[i].kind == MenuKind::Hotkey && (strncmp(kMenuRows[i].key, "concourse_", 10) == 0 || strcmp(kMenuRows[i].key, "gpu_pass_profile") == 0);
+        check(!investigationRow, "no investigation hotkey (concourse_*, gpu_pass_profile) is a menu row");
+        check(nVr == nEveryone && nVrDev == nDev && nVr == 3 && nVrDev == 5, "the VR page is unchanged: three rows, five with developer mode");
+        bool same = true;
+        for (int k = 0; k < nVr; ++k) same &= vr[k] == all[k];
+        check(same, "the VR page's rows are hotkeyPageRows' own");
+        // The monitor panel's key (hotkey.monitor_panel): a Fix-tier Hotkey row of the hotkeys page that only the flat profile reads, so only the flat page lists it.
+        const int monitorRow = rowIndex("monitor_panel");
+        check(monitorRow >= 0 && kMenuRows[monitorRow].kind == MenuKind::Hotkey && kMenuRows[monitorRow].tier == MenuTier::Fix &&
+                  strcmp(kMenuRows[monitorRow].page, "hotkeys") == 0 && strcmp(kMenuRows[monitorRow].shipped, "F5") == 0,
+              "hotkey.monitor_panel is a Fix-tier Hotkey row on the hotkeys page, shipped as F5");
+        check(monitorRow >= 0 && contains(flat, nFlat, monitorRow) && !contains(vr, nVr, monitorRow) && !contains(vrDev, nVrDev, monitorRow) &&
+                  !contains(all, nEveryone, monitorRow) && !contains(dev, nDev, monitorRow),
+              "the monitor panel key is on the flat Hotkeys page only: VR does not read it");
+        check(flatProfileReadsKey("hotkey.monitor_panel") && flatProfileOnlyKey("hotkey.monitor_panel"), "the flat gate reads it, and it is flat-only");
+    }
     // Table order is the page's order: the menu key first.
     check(nEveryone > 0 && strcmp(kMenuRows[all[0]].key, "menu") == 0, "the menu key leads the page");
     // No other row is a Hotkey row, and none of these sits on another page.

@@ -23,6 +23,17 @@ inline bool flatProfileReadsKey(const char* key) {
         // on the Debug tab. Unlisted, getBool answers false here whatever the file says, and the timing could never be turned on from the panel.
         std::strcmp(key, "advanced.flat_cpu_timing") == 0 ||
         std::strcmp(key, "hotkey.menu") == 0 ||
+        // Whether the menu's notices show (menu.cpp menuShowNotice): VR's toasts and flat's screen card alike. Unlisted, getBool answers false here whatever
+        // the file says, and no flat notice (a restart waiting, an AA comparison) could be shown.
+        std::strcmp(key, "menu.toasts") == 0 ||
+        // How long a highlighted row rests before its tooltip shows in the strip beside the flat card, the same dwell VR's panel has (menu.cpp
+        // menuReadTooltipDelay). Unlisted, getFloat answers the default here whatever the file says, and the flat tooltip could never be turned off.
+        std::strcmp(key, "menu.tooltip_delay") == 0 ||
+        // The frame-rate readout (menu.cpp, perf_monitor.h): off | compact | detailed, in the top right corner of the flat screen, and its copy at the top of the
+        // open menu card (menu.fps_overlay_lock). Both are Performance tab rows. Unlisted, getString answers the default here whatever the file says and the rows
+        // could never turn the readout on.
+        std::strcmp(key, "menu.fps_overlay") == 0 ||
+        std::strcmp(key, "menu.fps_overlay_lock") == 0 ||
         std::strcmp(key, "fix.temporal_aa_model") == 0 ||
         // XeSS Frame Generation (xess_fg.cpp, docs\xess-frame-generation-2026-11-12.md): flat-only rows on the Performance tab.
         std::strcmp(key, "fix.xess_frame_generation") == 0 ||
@@ -54,6 +65,9 @@ inline bool flatProfileReadsKey(const char* key) {
         // The AA comparison key (aa_compare.cpp): turns EDVR's temporal AA off for a side-by-side look and back, runtime only. Unlisted, a hotkey
         // key reads empty in flat, which is unbound.
         std::strcmp(key, "hotkey.compare_aa") == 0 ||
+        // The monitor panel's key (menu.cpp, menu_panel.h's monitor slot): shows and hides the frame-rate gauges in the top right corner. Flat only (see
+        // flatProfileOnlyKey). Unlisted, a hotkey key reads empty in flat, which is unbound, and the panel could never be shown.
+        std::strcmp(key, "hotkey.monitor_panel") == 0 ||
         // The interface quality (flat panel row; ui_panel_scale.cpp's flat factor and the flat UI layer). The VR layer reads it
         // too, but stays inert in flat: it is live only with fix.temporal_aa on through this gate, which refuses that key.
         std::strcmp(key, "fix.ui_quality") == 0 ||
@@ -106,6 +120,12 @@ inline bool flatProfileReadsKey(const char* key) {
         // Saved Games folder when the default is wrong; unlisted, it reads "off" and the watcher looks in a folder named "off".
         std::strcmp(key, "d3d11.journal_watch") == 0 ||
         std::strcmp(key, "d3d11.journal_dir") == 0;
+}
+
+// The keys only the flat profile reads: the VR profile ignores them, so VR's Hotkeys page does not list them and VR's duplicate check does not count them
+// (hotkey_capture.cpp hotkeyPageRows, menu.cpp collectOtherHotkeys). Dotted "section.key"; a null key is not one.
+inline bool flatProfileOnlyKey(const char* key) {
+    return key && std::strcmp(key, "hotkey.monitor_panel") == 0;
 }
 
 }  // namespace edvr
