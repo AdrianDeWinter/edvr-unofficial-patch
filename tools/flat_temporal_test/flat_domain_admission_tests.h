@@ -142,7 +142,8 @@ inline int flatDomainAdmissionTests() {
     check(!flatDomainInertNoWrite(inert,changedBindings),"stale DSV refuses");
     auto unprovenInert=inert;unprovenInert.inertNoSideEffects=false;
     check(!flatDomainInertNoWrite(unprovenInert,inertBindings),"unproven side effects refuse");
-    check(!engine_velocity_family::supportedPair(0xAACFDCF2FB9AD809ull,0xCAD1F585EDDC5641ull),"recorded legacy world-pair gate still refuses CAD1");
+    // CAD1 has been keyed since 2026-11-16 (#230); its original bytecode still serves as the structural proof below.
+    check(engine_velocity_family::supportedPair(0xAACFDCF2FB9AD809ull,0xCAD1F585EDDC5641ull),"CAD1 is a keyed world pair (#230)");
     check(foreign.pool && foreign.foreignPs && foreign.projection,"actual CAD1 original bytecode proves pool/PS/projection");
     check(flatDomainPlan(foreign,true,23,true,false,false).kind==FlatDomainPlanKind::ForeignPool,"recorded pre-world foreign admitted structurally");
     check(flatDomainPlan(foreign,true,23,true,true,true).kind==FlatDomainPlanKind::WorldPool,"same-camera world draw preserves world ownership");

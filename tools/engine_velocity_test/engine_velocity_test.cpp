@@ -115,6 +115,7 @@ void softCheck(bool value, const char* why) {
 // every pair the dump does hold must still pass whole -- so a candidate can be
 // tried on the dump that has it without a full corpus on this machine.
 bool g_partial = false;
+bool g_hardware = false;   // --hardware: the corpus run on the GPU's device, a diagnostic
 unsigned g_absent = 0;
 bool g_lastAbsent = false;
 // One real pair through the whole harness, `ok` deciding what a failure does:
@@ -201,6 +202,8 @@ void corpus(ID3D11Device* device, ID3D11DeviceContext* context, const std::wstri
         {L"vs_DE545DC8EE4FBB87", L"ps_03B17F89B31C4788", false},
         {L"vs_BBE58E40FE88EC80", L"ps_DB3E8D20CF53FBC0", false}, {L"vs_DE545DC8EE4FBB87", L"ps_E46E3E4832B2FDB0", false},
         {L"vs_AACFDCF2FB9AD809", L"ps_CF534B32F491561A", false}, {L"vs_66DE2CADB1F4AE6B", L"ps_864F1F949851B8DE", false},
+        // EDHM's build of CF534B32 (issue #230); its t120 strip takes the rig's 1D dummy.
+        {L"vs_AACFDCF2FB9AD809", L"ps_CAD1F585EDDC5641", false},
         {L"vs_66DE2CADB1F4AE6B", L"ps_BBDE4E71FB78528A", false},   // the 15:46 session's stock station draws
         {L"vs_61AE8EB05FDC18DD", L"ps_FC43E42710010343", false},
         // Eye run 055427 (2026-09-26, parked close to a coriolis port): the
@@ -255,9 +258,7 @@ void corpus(ID3D11Device* device, ID3D11DeviceContext* context, const std::wstri
         // substitution, proven by production-patcher hashes in 162120.
         {L"vs_5B4D8E894EEDA8B4", L"ps_BA58469C3D6120A7", true},
         // Left for later (2026-09-29, the Krait's main-menu hangar): the flat census
-        // names them when they draw. CAD1F585 is EDHM-patched (reads t120), so its
-        // hash belongs to a mod's build; 7311054A takes an SV_Position input.
-        {L"vs_AACFDCF2FB9AD809", L"ps_CAD1F585EDDC5641", false},
+        // names it when it draws; 7311054A takes an SV_Position input.
         {L"vs_BBE58E40FE88EC80", L"ps_7311054AB3AAE1DC", false},
     };
     for (const auto& p : candidates) {
@@ -318,8 +319,11 @@ int wmain(int argc, wchar_t** argv) {
         else if (a == L"--corpus" && i + 1 < argc) corpusRoot = argv[++i];
         else if (a == L"--partial") g_partial = true;
         else if (a == L"--real-link" && i + 1 < argc) realLinkRoot = argv[++i];
+        // Diagnostic, never the gate: the GPU's own device in place of WARP, for a pair WARP itself faults on
+        // (EDHM's ps_CAD1F585 and its 1D strip at t120, 2026-11-16). The comparison stays stock against patched on one device.
+        else if (a == L"--hardware") g_hardware = true;
         else {
-            std::fprintf(stderr, "usage: engine_velocity_test --self-test | --dry-run [--corpus <edvr_logs dir> [--partial]] [--real-link <edvr_logs dir>]\n");
+            std::fprintf(stderr, "usage: engine_velocity_test --self-test | --dry-run [--corpus <edvr_logs dir> [--partial]] [--real-link <edvr_logs dir>] [--hardware]\n");
             return 2;
         }
     }
@@ -342,8 +346,9 @@ int wmain(int argc, wchar_t** argv) {
         std::printf("engine_velocity_test: claim check: %u checks passed.\n", g_checks);
         return 0;
     }
-    check(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device,
-                                      &level, &context)), "D3D11CreateDevice WARP");
+    check(SUCCEEDED(D3D11CreateDevice(nullptr, g_hardware ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+                                      D3D11_SDK_VERSION, &device, &level, &context)),
+          g_hardware ? "D3D11CreateDevice HARDWARE (--hardware, diagnostic)" : "D3D11CreateDevice WARP");
     check(level >= D3D_FEATURE_LEVEL_11_0, "feature level 11");
     constexpr uint64_t shellVs = 0xBFE51414CC3024B4ull;
     constexpr uint64_t shellPs = 0xDB79AE788E049DFDull;
@@ -387,8 +392,8 @@ int wmain(int argc, wchar_t** argv) {
     }
     // The Krait hull pair (2026-09-29): keyed for flat through the family's flat-only
     // companion slot, never for VR. Its sibling stays keyed everywhere, and the pixel
-    // shaders left for later (the EDHM-patched CAD1F585, BBE58E40's 7311054A) and a
-    // third 66DE2CAD pixel shader stay unkeyed in every profile.
+    // shaders left for later (BBE58E40's 7311054A) and a third 66DE2CAD pixel shader
+    // stay unkeyed in every profile; EDHM's CAD1F585 is keyed in every profile (#230).
     constexpr uint64_t hullVs = 0x66DE2CADB1F4AE6Bull, hullPs = 0x235567BE2840B3EDull;
     constexpr uint64_t hullSiblingPs = 0x864F1F949851B8DEull;
     for (const auto profile : {edvr::RuntimeProfile::Vr, edvr::RuntimeProfile::LegacyVr}) {
@@ -399,8 +404,9 @@ int wmain(int argc, wchar_t** argv) {
     }
     for (const auto profile : {edvr::RuntimeProfile::Vr, edvr::RuntimeProfile::LegacyVr, edvr::RuntimeProfile::Flat}) {
         edvr::g_runtimeProfile = profile;
-        check(!edvr::engineVelocityPoolFamilyPair(0xAACFDCF2FB9AD809ull, 0xCAD1F585EDDC5641ull) &&
-              !edvr::engineVelocityPoolFamilyPair(0xBBE58E40FE88EC80ull, 0x7311054AB3AAE1DCull) &&
+        check(edvr::engineVelocityPoolFamilyPair(0xAACFDCF2FB9AD809ull, 0xCAD1F585EDDC5641ull),
+              "EDHM's CAD1F585 is keyed in every profile");
+        check(!edvr::engineVelocityPoolFamilyPair(0xBBE58E40FE88EC80ull, 0x7311054AB3AAE1DCull) &&
               !edvr::engineVelocityPoolFamilyPair(hullVs, 0x818212B5F404C002ull),
               "the pixel shaders left for later stay unkeyed in every profile");
     }

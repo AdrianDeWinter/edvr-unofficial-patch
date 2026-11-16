@@ -36,7 +36,11 @@ constexpr Family kFamilies[] = {
     // was refused no-supported-motion-source-pair. Both profiles. Hash recomputed from the dumped bytecode (log.cpp
     // fnv1a64); passes the corpus harness whole on WARP. E364F563 (the reporter's) stays a candidate in the harness.
     {0xDE545DC8EE4FBB87ull, "vs_DE545DC8EE4FBB87", {0xE46E3E4832B2FDB0ull, 0xCB429E043DBB2506ull, 0x03B17F89B31C4788ull, 0x60D69AB6C65C549Aull, 0}, false, 0x91F8937EDA723663ull},
-    {0xAACFDCF2FB9AD809ull, "vs_AACFDCF2FB9AD809", {0xCF534B32F491561Aull, 0, 0, 0}},
+    // 2026-11-16 (issue #230, a flat report with EDHM): CAD1F585 is EDHM's build of CF534B32 (it adds a t120 parameter strip). With EDHM
+    // every draw of this vertex shader uses it, world objects and the held tool alike, so unkeyed it left an on-foot view with no ship in
+    // sight without a supported draw, and the tool's glow pass was refused hdr-camera-changed on the copy route. Patched, reflected,
+    // created and identical in o0..o3 and depth on WARP with a 1D dummy at t120. Both profiles.
+    {0xAACFDCF2FB9AD809ull, "vs_AACFDCF2FB9AD809", {0xCF534B32F491561Aull, 0xCAD1F585EDDC5641ull, 0, 0}},
     // 2026-09-29, the Krait's main-menu F10 capture: 235567BE is the stock pixel
     // shader of the hull PLATING (5 draws, ~70k vertices). Unkeyed, its draws wrote
     // depth over pool records without writing a slot, so 22.5% of the frame had a
@@ -46,8 +50,8 @@ constexpr Family kFamilies[] = {
     // discard, no depth output); the real-corpus harness passes it whole (patched,
     // reflected, created, o0..o3 and depth bit-identical on WARP). Flat-only
     // (flatPs): VR never keyed it and stays as it was. Left for later, not keyed:
-    // AACFDCF2/CAD1F585 (EDHM-patched, reads t120) and BBE58E40/7311054A (an
-    // SV_Position input); the flat census names them when they draw.
+    // BBE58E40/7311054A (an SV_Position input); the flat census names it when it
+    // draws. (AACFDCF2/CAD1F585, EDHM's build, was keyed 2026-11-16, above.)
     {0x66DE2CADB1F4AE6Bull, "vs_66DE2CADB1F4AE6B", {0x864F1F949851B8DEull, 0xBBDE4E71FB78528Aull, 0, 0}, false, 0x235567BE2840B3EDull},
     {0x61AE8EB05FDC18DDull, "vs_61AE8EB05FDC18DD", {0xFC43E42710010343ull, 0x451A82D4DD1BA254ull, 0x4504BC268E109C31ull, 0}, false, 0, false, true},
     {0x436193B352A2897Eull, "vs_436193B352A2897E", {0x16940F576006BE65ull, 0x51EE1F922FD220B0ull, 0, 0}},
