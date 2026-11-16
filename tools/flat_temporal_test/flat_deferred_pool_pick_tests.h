@@ -137,6 +137,24 @@ inline unsigned run() {
                "five records are more than the pick tests: no donor");
     }
     {
+        // 2026-11-16, the HDR route with nothing keyed in the world (Epic, EDHM, native res): the tool's keyed draws came first under
+        // the first-person camera and were the depth's ONLY source record, so the single-record rule handed the pass the tool's camera.
+        Scene before;   // as it was: the tool a source record, the world's unkeyed writers then not noted
+        auto tool = before.pool(before.gbuf, .0675f); before.see(tool);
+        before.see(before.writer()); before.see(before.writer());
+        const auto wrong = before.donor(before.lighting());
+        expect(wrong && wrong.role == Role::Pool && wrong.camera == before.p->sources[0].camera && before.p->witnessesUsed == 0,
+               "control: with the tool a source record, the lone record is the donor and it is the first-person camera");
+        Scene now;      // the cohort flagged on this route: the tool is counted, not recorded, and the world's writers stand in
+        auto cohort = now.pool(now.gbuf, .0675f); cohort.firstPersonCohort = true; now.see(cohort);
+        const auto world = now.writer(); now.see(world); now.see(now.writer());
+        const auto right = now.donor(now.lighting());
+        expect(now.p->sourcesUsed == 0 && now.p->firstPersonDraws == 1 && flatRuntimeFirstPerson(*now.p, now.depth),
+               "a flagged tool joins no source record and is counted as first person on the depth");
+        expect(right && right.role == Role::Witness && right.cameraHash == world.key.cameraHash && right.poolRecords == 0,
+               "the lighting pass's donor is then the world's witness camera, not the tool's");
+    }
+    {
         Scene w;   // records present: a valid witness entry does not stand in, as before
         w.see(w.writer()); w.see(w.pool(w.gbuf)); w.see(w.pool(w.gbuf, .0675f));
         const auto d = w.donor(w.lighting());
@@ -163,6 +181,16 @@ inline unsigned run() {
     expect(deferred_witness_test::countOf(source, "pool-cameras=%u pool-pick=%s pool-picks=one:%llu,several:%llu,none:%llu,unqualified:%llu") == 1 &&
            verifier.find("resolved.poolCameraCount,poolCameraPickName(poolPick),") != std::string::npos,
            "the HDR camera line says how many records stood on the depth and which camera held");
+    // The HDR route's selection marks a frame with a flagged cohort on H's depth mixed-camera, so the foreground contract runs.
+    {
+        std::ifstream hin("src/d3d11/flat_hdr_route.h"); std::string hdr, hl;
+        while (std::getline(hin, hl)) hdr += hl + '\n';
+        const auto at = deferred_witness_test::between(hdr, "inline FlatMonoFrame flatSelectHdrRouteAt(", "inline FlatMonoFrame flatSelectHdrRoute(");
+        const size_t select = at.find("out = flatSelectHdrFrame(in, f.trigger.hdr, consumerSeq, gate);");
+        const size_t mixed = at.find("if (out.selected() && flatRuntimeFirstPerson(p, target->writes.key.depth)) out.mixedCamera = true;");
+        expect(select != std::string::npos && mixed != std::string::npos && select < mixed,
+               "the HDR route's selection marks a frame with first-person draws on H's depth mixed-camera, after selecting");
+    }
     std::printf("flat deferred pool pick: %u failure(s)\n", failures);
     return failures;
 }

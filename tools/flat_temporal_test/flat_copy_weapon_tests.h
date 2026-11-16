@@ -499,8 +499,10 @@ inline int flatCopyWeaponWiringTests() {
     const std::string scope = compact(body(runtime, "FlatRuntimeDrawScope::FlatRuntimeDrawScope("));
     const auto dispositionValid = [&](const std::string& text) {
         return ordered(text, {
-            "flatWeaponRoute(s.hdrKey==FlatHdrKey::Auto,s.hdrLatch.tripped,s.engine,k.width,k.height,", "==FlatWeaponRoute::Copy;",
-            "weaponMotionFamilyVs(k.vs)", "copyWeapon()) {", "d.firstPersonCohort=!predictedWorld&&!worldCamera;",
+            "flatWeaponRoute(s.hdrKey==FlatHdrKey::Auto,s.hdrLatch.tripped,s.engine,k.width,k.height,",
+            "return routeOfWeapon()==FlatWeaponRoute::Copy;",
+            // 2026-11-16: the cohort is flagged wherever a route judges the weapon, the HDR route included.
+            "weaponMotionFamilyVs(k.vs)", "routeOfWeapon()!=FlatWeaponRoute::Unchanged) {", "d.firstPersonCohort=!predictedWorld&&!worldCamera;",
             "(s.hdrKey==FlatHdrKey::Auto || copyWeapon())", "if(copyWeapon()) {", "d.alternateHdr=true;", "} else {",
             "d.overlayProtected=true;", "overlayPlanned=true;", "FlatMonoFrame selected = [&]() -> FlatMonoFrame {",
             "flatRuntimeObserve(s.prefix, d);"}) &&
@@ -513,6 +515,13 @@ inline int flatCopyWeaponWiringTests() {
            "mutation control: the glow pass admitted as nothing fails the wiring");
     expect(!dispositionValid(withoutAfter(scope, "d.alternateHdr=true;", "} else {")), "mutation control: an overlay planned in both routes fails the wiring");
     expect(!dispositionValid(without(scope, "d.firstPersonCohort=!predictedWorld&&!worldCamera;")), "mutation control: an unflagged cohort fails the wiring");
+    {
+        std::string copyOnly = scope;   // the cohort gated on the copy route alone, as before 2026-11-16
+        const std::string gate = compact("routeOfWeapon()!=FlatWeaponRoute::Unchanged) {");
+        const size_t at = copyOnly.find(gate);
+        if (at != std::string::npos) copyOnly.replace(at, gate.size(), compact("copyWeapon()) {"));
+        expect(!dispositionValid(copyOnly), "mutation control: a cohort flagged on the copy route alone fails the wiring");
+    }
     expect(!dispositionValid(without(scope, "||copyWeapon())")), "mutation control: an overlay gate that ignores the copy route's disposition fails the wiring");
     {
         std::string moved = scope;   // the overlay planned before the disposition

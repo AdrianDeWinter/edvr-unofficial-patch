@@ -63,6 +63,7 @@ struct FlatRuntimeDraw {
     //   firstPersonCohort: a supported pool draw of the first-person weapon family under an alternate camera, into the scene's
     //     depth (the cohort that draws before the world, near 0.0675 against 0.025). It is no world motion source, so it joins no
     //     source record, and the frame it is in is mixed-camera (FlatMonoFrame::mixedCamera): the foreground contract qualifies it.
+    //     Unlike alternateHdr it is also set where the HDR route judges the weapon (2026-11-16; flat_runtime.cpp, routeOfWeapon).
     //   alternateHdr: an HDR draw from a second camera that is the world's pose, with no depth write (the weapon's glow pass). No
     //     overlay is planned for it, and on a scene H that is still sound it neither sets nor vetoes the scene camera, as the laser
     //     pair does by its shader hashes.
