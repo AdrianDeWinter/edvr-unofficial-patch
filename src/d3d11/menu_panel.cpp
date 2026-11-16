@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -109,6 +110,7 @@ struct Raster {
     float    cardFrac = 1.0f;    // how much of the width the menu card spans
     int      popupScrollMax = 0; // line-steps the tooltip's body can be scrolled
     double   ms = 0.0;
+    uint8_t  slotOwner = 0;      // MenuContent::slotOwner of the content this was drawn from
 };
 
 struct Dib {
@@ -973,6 +975,7 @@ void workerMain() {
         bool ok = false;
         guarded("menuPanel/raster", [&] { ok = rasterise(c, r); });
         if (!ok) continue;
+        r.slotOwner = c.slotOwner;
         std::lock_guard<std::mutex> lock(g_w.m);
         if (mon) {
             g_w.readyMon = std::move(r);
@@ -1041,6 +1044,7 @@ ID3D11ShaderResourceView* g_monSrv = nullptr;
 ID3D11Device*             g_monDevice = nullptr;   // borrowed while g_monTex holds its device
 int                       g_monW = 0, g_monH = 0;
 std::atomic<uint32_t>     g_monSerial{0};
+std::atomic<uint8_t>      g_monOwner{0};           // the uploaded raster's slotOwner, stored before its serial moves
 MenuGeometry              g_monGeom;               // under g_geomMutex, with g_geom
 
 // What one composite draws when it is not the menu's raster (compositeInner's `slot`).
@@ -1573,6 +1577,7 @@ void uploadMonitorRaster(ID3D11Device* dev) {
                                static_cast<UINT>(r.w) * 4, 0);
         ctx->Release();
         perfMonitorNoteEvent(kEvRaster);
+        g_monOwner.store(r.slotOwner, std::memory_order_relaxed);
         g_monSerial.fetch_add(1, std::memory_order_release);
     });
 }
@@ -1722,6 +1727,7 @@ bool menuPanelFlatRasterReady() { return g_panelSrv != nullptr; }
 uint32_t menuPanelRasterSerial() { return g_rasterSerial.load(std::memory_order_acquire); }
 bool menuPanelMonitorRasterReady() { return g_monSrv != nullptr; }
 uint32_t menuPanelMonitorRasterSerial() { return g_monSerial.load(std::memory_order_acquire); }
+uint8_t menuPanelMonitorRasterOwner() { return g_monOwner.load(std::memory_order_relaxed); }
 
 void menuPanelSubmitMonitor(const MenuContent& c) {
     std::lock_guard<std::mutex> lock(g_w.m);
@@ -1969,8 +1975,40 @@ int menuPanelEntryRows(const MenuContent& c, int requested) {
     }
 }
 
+// Measuring creates a DC and a font, and the tab fit asks once per tab per em
+// step at every menu rebuild; the width of a given text at a given size does
+// not change, so remember it. The raster worker also measures tab widths.
+static std::mutex g_measureMutex;
+static std::map<std::string, int> g_measureCache;
+
+static std::string measureKey(bool bold, const char* utf8, int emPx) {
+    std::string k(bold ? "B" : "R");
+    k += std::to_string(emPx);
+    k += ':';
+    k += utf8;
+    return k;
+}
+
+static bool measureCacheGet(bool bold, const char* utf8, int emPx, int* out) {
+    const std::string k = measureKey(bold, utf8, emPx);
+    std::lock_guard<std::mutex> lock(g_measureMutex);
+    const auto it = g_measureCache.find(k);
+    if (it == g_measureCache.end()) return false;
+    *out = it->second;
+    return true;
+}
+
+static void measureCachePut(bool bold, const char* utf8, int emPx, int width) {
+    const std::string k = measureKey(bold, utf8, emPx);
+    std::lock_guard<std::mutex> lock(g_measureMutex);
+    if (g_measureCache.size() >= 1024) g_measureCache.clear();
+    g_measureCache[k] = width;
+}
+
 int menuPanelMeasureLine(const char* utf8, int emPx) {
     if (!utf8 || !*utf8 || emPx <= 0) return 0;
+    int cached = 0;
+    if (measureCacheGet(false, utf8, emPx, &cached)) return cached;
     const std::wstring s = widen(utf8);
     HDC dc = CreateCompatibleDC(nullptr);
     if (!dc) return 0;
@@ -1983,11 +2021,15 @@ int menuPanelMeasureLine(const char* utf8, int emPx) {
     if (old) SelectObject(dc, old);
     if (f) DeleteObject(f);
     DeleteDC(dc);
-    return r.right - r.left;
+    const int w = r.right - r.left;
+    measureCachePut(false, utf8, emPx, w);
+    return w;
 }
 
 int menuPanelTabWidth(const char* utf8, int emPx) {
     if (!utf8 || !*utf8 || emPx <= 0) return 0;
+    int cached = 0;
+    if (measureCacheGet(true, utf8, emPx, &cached)) return cached;
     const std::wstring s = widen(utf8);
     HDC dc = CreateCompatibleDC(nullptr);
     if (!dc) return 0;
@@ -1998,7 +2040,9 @@ int menuPanelTabWidth(const char* utf8, int emPx) {
     if (old) SelectObject(dc, old);
     if (f) DeleteObject(f);
     DeleteDC(dc);
-    return (r.right - r.left) + emPx / 3;
+    const int w = (r.right - r.left) + emPx / 3;
+    measureCachePut(true, utf8, emPx, w);
+    return w;
 }
 
 bool menuPanelBuildOverlayContent(MenuContent& c, const char* line, float textDegrees,

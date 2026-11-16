@@ -364,7 +364,7 @@ struct State {
     // second.
     bool     overlay = false;   // menu.fps_overlay is compact or detailed
     FpsOverlayMode overlayMode = FpsOverlayMode::Off;
-    ScreenReadoutState flatReadout;   // flat: the readout's raster is the live one (menu_policy.h)
+    ScreenReadoutState flatReadout;   // flat: the readout's raster is the live one on the monitor slot (menu_policy.h)
     uint32_t readoutSized[2] = {0, 0}; // the output size the flat readout's raster was built for
     // The flat monitor panel (menu_panel.h, the monitor slot; design doc, 2026-11-16): its key (hotkey.monitor_panel, flat only), whether it is up (session
     // state, never written), the machine that composites it only once a raster built since it was raised is live (on the monitor slot's own serial), the output
@@ -3154,9 +3154,8 @@ void buildContent(MenuContent& c) {
         const int tagPx = menuPanelMeasureLine(c.footerTag, c.capPx) + c.capPx * 2;
         char status[160], line2[200];
         for (int shortForm = 0; shortForm < 2; ++shortForm) {
-            // A status page releases the keyboard to the game by design, so "ready" there is whether the game's keyboard has reached the gate.
-            const bool footerKeys = s.flatKeysReadyShown || (p.status && inputGateGameKeyboardSeen());
-            menuFlatFooterStatus(write, footerKeys, pendingN, shortForm != 0, status, sizeof(status));
+            // The flat panel keeps the keyboard private on every page, so "ready" is the same on a status page as on any other.
+            menuFlatFooterStatus(write, s.flatKeysReadyShown, pendingN, shortForm != 0, status, sizeof(status));
             if (s.padReady) snprintf(line2, sizeof(line2), "LB/RB pages  %s close%s", s.summonName.c_str(), status);
             else snprintf(line2, sizeof(line2), "%s/Esc close%s", s.summonName.c_str(), status);
             if (shortForm || menuPanelMeasureLine(line2, c.capPx) + tagPx <= linePx) break;
@@ -5228,6 +5227,8 @@ void menuConfigure(Config& cfg) {
         buildPages();
         if (flat) {
             Log::get().note("menu: flat graphics panel configured; summon with %s.", key.c_str());
+            // F177: the flat profile has no aiming choice page; the log says so once.
+            aimPromptNoteNotShown("the flat profile has no such page");
         } else {
             Log::get().note("menu: %d rows in the table (%d on the Fixes/Performance pages); "
                             "summon with %s. docs/settings-menu.md.",
@@ -5811,33 +5812,32 @@ void menuTick(ID3D11Device* dev) {
             }
         }
 
-        // The flat frame-rate readout (menu.fps_overlay): one raster at a time, the menu first, then a notice, then the readout. It is built here, before this
-        // tick's menu content is submitted, so a menu opened this tick can hold its card back until its own raster is the live one (a readout raster left in the
-        // corner must not flash as the menu). A notice about to start (queued) keeps it off, so the notice's raster is the next one taken.
+        // The flat frame-rate readout (menu.fps_overlay): it has the monitor slot (menuPanelSubmitMonitor), top right, so the menu card and the notices (the menu's
+        // slot, top left) never hold it back and it never holds them back. It shares the slot with the monitor panel, which is why the two are never wanted at once
+        // (flatReadoutWanted): each machine reads the slot's serial before its first submit and is composited only once the serial has moved, so the other's
+        // raster left in the slot is never shown as its own. With menu.fps_overlay_lock the open menu's card carries the readout line itself, so the separate
+        // readout waits for the menu to close.
         if (pol.noticePlacement == MenuNoticePlacement::ScreenCorner) {
-            if (s.open && s.flatReadout.submitted) {
-                s.screenNotice.rasterStale = true;
-                s.screenNotice.serial = menuPanelRasterSerial();
-            }
-            const bool wanted = flatReadoutWanted(s.overlayMode != FpsOverlayMode::Off, s.open, s.screenNotice.up, s.flatNotice.due(), s.monitorPanelOpen);
+            const bool wanted = flatReadoutWanted(s.overlayMode != FpsOverlayMode::Off, s.monitorPanelOpen, s.open, s.overlayLock);
             const bool detailed = s.overlayMode == FpsOverlayMode::Detailed;
             const bool sizeChanged = g_flatOutW.load(std::memory_order_relaxed) != s.readoutSized[0] ||
                                      g_flatOutH.load(std::memory_order_relaxed) != s.readoutSized[1];
             const bool refreshDue = sizeChanged || dueMs(s.overlayTextMs, detailed ? 250 : 500);
-            if (s.flatReadout.tick(wanted, refreshDue, menuPanelRasterSerial()) && (s.flatReadout.submitted || dueMs(s.overlayTextMs, 250))) {
+            if (s.flatReadout.tick(wanted, refreshDue, menuPanelMonitorRasterSerial()) && (s.flatReadout.submitted || dueMs(s.overlayTextMs, 250))) {
                 s.overlayTextMs = stampMs();   // also paces a build that fails
-                const uint32_t before = menuPanelRasterSerial();
+                const uint32_t before = menuPanelMonitorRasterSerial();
                 MenuContent rc;
                 if (buildReadoutContent(rc, s.overlayMode, true, 0.0f)) {
-                    menuPanelSubmit(rc);
+                    rc.slotOwner = kSlotOwnerReadout;
+                    menuPanelSubmitMonitor(rc);
                     s.flatReadout.didSubmit(before);
                 }
             }
         }
 
-        // The flat monitor panel: its own raster (menu_panel.h, the monitor slot), so it is on screen with the menu, a notice, or alone. Refreshed on the Monitor
-        // page's cadence and at once when the output's size changes; composited only once a raster built since it was raised is live (the readout's machine, on
-        // the monitor slot's serial).
+        // The flat monitor panel: its own raster (menu_panel.h, the monitor slot, shared with the frame-rate readout above), so it is on screen with the menu, a
+        // notice, or alone. Refreshed on the Monitor page's cadence and at once when the output's size changes; composited only once a raster built since it was
+        // raised is live (the readout's machine, on the monitor slot's serial).
         if (pol.monitorPanel) {
             const bool sizeChanged = g_flatOutW.load(std::memory_order_relaxed) != s.monitorSized[0] ||
                                      g_flatOutH.load(std::memory_order_relaxed) != s.monitorSized[1];
@@ -5847,6 +5847,7 @@ void menuTick(ID3D11Device* dev) {
                 const uint32_t before = menuPanelMonitorRasterSerial();
                 MenuContent mc;
                 buildMonitorPanel(mc);
+                mc.slotOwner = kSlotOwnerMonitorPanel;
                 menuPanelSubmitMonitor(mc);
                 s.monitorPanel.didSubmit(before);
             }
@@ -5861,7 +5862,10 @@ void menuTick(ID3D11Device* dev) {
         // it. Nothing between here and the old spot read the gate.
         const bool showingMenu = !world || (s.alpha > 0.0f && !s.toastUp);
         const bool drawnFresh = menuDrawnFresh(s.open, now, s.lastDrawnMs, kDrawnFreshMs);
-        inputGateSetPrivate(s.open && showingMenu && drawnFresh && !s.pages[s.page].status);
+        // A status page releases the keyboard to the game in VR (menu.keyboard decides the rest); a profile whose panel always takes the keyboard (flat)
+        // keeps it private there too, so Tab and Esc on the Status page do not also reach the game (Engine Boost, the pause menu).
+        const bool statusReleases = menuStatusPageReleasesKeyboard(s.pages[s.page].status, pol.keyboardAlwaysPrivate);
+        inputGateSetPrivate(s.open && showingMenu && drawnFresh && !statusReleases);
         if (world) {
             // The fault line follows the gate the way the legend follows the
             // live predicate: a raster that said one thing while the gate now
@@ -5897,9 +5901,8 @@ void menuTick(ID3D11Device* dev) {
                 s.contentDirty = true;
             }
             preparePadNavigation(now, drawnFresh && gameHasFocus());
-            // A status page (the Status page) releases the keyboard to the game, as in VR, so the menu's own keys are not "ready"; they still run there, because
-            // the fixed keys and the page pair act on status pages (handleKeys) and a player parked on it must be able to leave it.
-            if (keysReady || (drawnFresh && s.pages[s.page].status)) handleKeys(now);
+            // The flat panel keeps the keyboard private on every page, the Status page included, so its keys run once the gate holds it.
+            if (keysReady) handleKeys(now);
             handlePadNavigation(now);
             if (s.open && dev && !menuPanelFlatRasterReady()) s.contentDirty = true;
         }
@@ -5963,19 +5966,23 @@ void menuTick(ID3D11Device* dev) {
             g.dist = 1.0f;
             g.curve = 0.0f;
             g.halfW = 0.62f;
-            // The menu, else a notice, else the readout in the upper right corner (the readout only once its own raster is the live one).
-            const bool readoutOnly = !s.open && !s.screenNotice.up && s.flatReadout.compositing();
-            g.alpha = s.screenNotice.panelVisible(s.open) || readoutOnly ? 1.0f : 0.0f;
-            g.flatCorner = readoutOnly ? 1 : 0;
+            // The menu, else a notice, in the upper left corner. (The readout and the monitor panel are the monitor slot's, below.)
+            g.alpha = s.screenNotice.panelVisible(s.open) ? 1.0f : 0.0f;
+            g.flatCorner = 0;
         }
         menuPanelSetGeometry(g);
-        if (pol.monitorPanel) {
-            // The monitor panel, in the upper right corner, 1:1 like the menu (menu_flat_layout.h flatPlace).
+        if (pol.monitorPanel || pol.noticePlacement == MenuNoticePlacement::ScreenCorner) {
+            // The monitor slot, in the upper right corner, 1:1 like the menu (menu_flat_layout.h flatPlace): the monitor panel, else the frame-rate readout, each
+            // only once its own raster is the live one. Neither wanted: alpha 0, so nothing stale stays on screen.
             MenuGeometry mg;
             mg.dist = 1.0f;
             mg.curve = 0.0f;
             mg.halfW = 0.62f;
-            mg.alpha = s.monitorPanelOpen && s.monitorPanel.compositing() ? 1.0f : 0.0f;
+            // A raster is drawn only for the owner it was built for: one still in flight for the other (the slot is shared) draws nothing this frame.
+            const uint8_t slotOwner = menuPanelMonitorRasterOwner();
+            const bool panelLive = s.monitorPanelOpen && s.monitorPanel.compositing() && slotOwner == kSlotOwnerMonitorPanel;
+            const bool readoutLive = s.flatReadout.compositing() && slotOwner == kSlotOwnerReadout;
+            mg.alpha = panelLive || readoutLive ? 1.0f : 0.0f;
             mg.flatCorner = static_cast<int>(FlatCorner::UpperRight);
             menuPanelSetMonitorGeometry(mg);
         }

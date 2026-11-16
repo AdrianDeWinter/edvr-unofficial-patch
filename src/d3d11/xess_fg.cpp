@@ -686,6 +686,7 @@ void publishPresented(Bridge& b) {
     g_presentSeq.store(seq + 2, std::memory_order_release);
     char note[200];
     if (b.tally.takeNote(note, static_cast<int>(sizeof(note)))) Log::get().note("%s", note);
+    if (b.tally.takeDropNote(note, static_cast<int>(sizeof(note)))) Log::get().note("%s", note);
 }
 
 // IDXGISwapChain::GetFrameStatistics on the swap chain that shows the frames, for the tally.

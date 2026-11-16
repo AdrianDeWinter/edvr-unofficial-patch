@@ -52,7 +52,10 @@ class Tally {
       setSource(Source::StatusFrames);
       return;
     }
-    if (statusCounted_) return;   // one odd sample in a status that has worked is dropped, not a verdict
+    if (statusCounted_) {   // one odd sample in a status that has worked is dropped, not a verdict, but it is counted
+      ++dropped_;
+      return;
+    }
     if (++badRun_ >= kProbePresents) {
       statusUsable_ = false;
       statusWhy_ = statusOk ? "the present status never reports a frame presented" : "the present status call fails";
@@ -66,7 +69,10 @@ class Tally {
   void onStats(bool ok, bool disjoint, uint32_t presentCount, int64_t syncQpc, int64_t nowQpc) {
     if (statusUsable_) return;
     if (disjoint) {
+      // Cannot be compared with the sample before: a new baseline. A chain that only ever says DISJOINT counts toward the same
+      // failure run as a failing call, so it ends in "unavailable" rather than "measuring" forever.
       havePrev_ = false;
+      if (!statsAdvanced_ && ++statsBad_ >= kProbePresents) markUnavailable("frame statistics are not available on this swap chain");
       return;
     }
     if (!ok) {
@@ -112,6 +118,16 @@ class Tally {
     if (source) *source = source_;
     return true;
   }
+  // Presents whose status said nothing usable after the status had worked: dropped from the count.
+  uint64_t droppedStatuses() const { return dropped_; }
+  // One log line when the drop count first becomes non-zero and again at each sixteen-fold step (1, 16, 256, ...), false otherwise. Never per frame.
+  bool takeDropNote(char* buf, int len) {
+    if (!buf || len <= 0 || dropped_ < nextDropNote_) return false;
+    nextDropNote_ *= 16;
+    std::snprintf(buf, static_cast<size_t>(len), "perf: presented frames: %llu present status result(s) reported no usable frame count and were dropped",
+                  static_cast<unsigned long long>(dropped_));
+    return true;
+  }
   bool unavailable() const { return unavailable_; }
   const char* unavailableWhy() const { return unavailableWhy_ ? unavailableWhy_ : ""; }
   // Why the status source was given up on, or null while it is in use.
@@ -143,6 +159,7 @@ class Tally {
   bool statusUsable_ = true;
   bool statusCounted_ = false;
   unsigned badRun_ = 0;
+  uint64_t dropped_ = 0, nextDropNote_ = 1;
   const char* statusWhy_ = nullptr;
   bool havePrev_ = false;
   uint32_t prev_ = 0;

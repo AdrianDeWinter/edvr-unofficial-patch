@@ -100,11 +100,14 @@ void monitorPanelCases() {
     check(menuMonitorPanelToggle(true, false, false), "the edge raises the panel");
     check(!menuMonitorPanelToggle(true, true, false), "the edge lowers the panel");
     check(!menuMonitorPanelToggle(true, false, true) && menuMonitorPanelToggle(true, true, true), "a hotkey row waiting for its input takes the edge: no change");
-    check(flatReadoutWanted(true, false, false, false, false), "the readout is wanted when on and nothing else is up");
-    check(!flatReadoutWanted(false, false, false, false, false), "an off readout is not wanted");
-    check(!flatReadoutWanted(true, true, false, false, false), "the open menu hides the readout");
-    check(!flatReadoutWanted(true, false, true, false, false) && !flatReadoutWanted(true, false, false, true, false), "a notice up or about to start hides the readout");
-    check(!flatReadoutWanted(true, false, false, false, true), "the monitor panel hides the readout: same corner, and it shows a superset");
+    check(flatReadoutWanted(true, false, false, false), "the readout is wanted when it is on and the monitor panel is down");
+    check(!flatReadoutWanted(false, false, false, false), "an off readout is not wanted");
+    check(flatReadoutWanted(true, false, true, false), "the open menu does not hold the readout back: the menu has the other slot, upper left");
+    check(!flatReadoutWanted(true, true, false, false) && !flatReadoutWanted(true, true, true, false), "the monitor panel hides the readout: same slot and corner, and it shows a superset");
+    check(!flatReadoutWanted(true, false, true, true) && flatReadoutWanted(true, false, false, true), "menu.fps_overlay_lock: the open menu's card carries the line, so the separate readout waits for it to close");
+    check(menuStatusPageReleasesKeyboard(true, false) && !menuStatusPageReleasesKeyboard(false, false), "VR: a status page releases the keyboard to the game, other pages do not");
+    check(!menuStatusPageReleasesKeyboard(true, true) && !menuStatusPageReleasesKeyboard(false, true), "flat (keyboard always private): the Status page keeps the keyboard private too");
+    check(!menuStatusPageReleasesKeyboard(true, menuPolicyFor(true).keyboardAlwaysPrivate) && menuStatusPageReleasesKeyboard(true, menuPolicyFor(false).keyboardAlwaysPrivate), "the policy's own flag drives it: flat private on a status page, VR released");
 }
 
 // The flat notice, driven the way menuTick drives it: take from the queue while the menu is closed, start, then tick after the content went out.

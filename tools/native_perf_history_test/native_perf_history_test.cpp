@@ -845,10 +845,10 @@ void detailedText() {
     char a[96],b[96];
     PerfReadout r=bridged(PresentedState::Counting,1);r.drops=3;
     formatDetailRates(r,a,sizeof(a));formatDetailTimes(r,b,sizeof(b));
-    check(std::string(a)=="render 58.4 / shown 116.8 fps"&&std::string(b)=="17.1 ms   1% low 52 fps   cpu 9.1 ms   drops 3","detailed: line 1 the two rates, line 2 frame time, 1% low, cpu and drops");
+    check(std::string(a)=="render 58.4 / shown 116.8 fps"&&std::string(b)=="17.1 ms   worst 52 fps   cpu 9.1 ms   drops 3","detailed: line 1 the two rates, line 2 frame time, worst, cpu and drops");
     r=bridged(PresentedState::Absent,0);r.haveCpu=false;
     formatDetailRates(r,a,sizeof(a));formatDetailTimes(r,b,sizeof(b));
-    check(std::string(a)=="58.4 fps"&&std::string(b)=="17.1 ms   1% low 52 fps   drops 0","detailed: without a bridge one rate, and no cpu when it is unknown");
+    check(std::string(a)=="58.4 fps"&&std::string(b)=="17.1 ms   worst 52 fps   drops 0","detailed: without a bridge one rate, and no cpu when it is unknown");
     r=bridged(PresentedState::Unavailable,0);formatDetailRates(r,a,sizeof(a));
     check(std::string(a)=="render 58.4 fps   shown n/a","detailed: an unavailable count is n/a, not a number");
     PerfReadout none;formatDetailRates(none,a,sizeof(a));formatDetailTimes(none,b,sizeof(b));
@@ -879,7 +879,7 @@ void readoutMachine() {
     m.didSubmit(6);
     check(m.compositing(),"readout machine: a refresh submit does not hide it");
     m.tick(false,false,7);
-    check(!m.compositing()&&m.tick(true,false,7),"readout machine: the menu or a notice hides it, and it starts again from nothing");
+    check(!m.compositing()&&m.tick(true,false,7),"readout machine: the monitor panel (or the menu's locked line) hides it, and it starts again from nothing");
     m.didSubmit(7);check(!m.compositing(),"readout machine: and is not shown until its own raster is taken");
 }
 }

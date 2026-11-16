@@ -120,7 +120,14 @@ constexpr int kMenuMaxGraphs = 3;
 
 // Everything the panel shows, as text. The model builds one of these on
 // every change; the raster lays it out.
+// Who a raster on the monitor slot belongs to (MenuContent::slotOwner, menuPanelMonitorRasterOwner): the slot is shared by the flat monitor panel and the flat
+// frame-rate readout, and the compositor draws a raster only for the owner that asked for it.
+constexpr uint8_t kSlotOwnerNone = 0;      // the menu's slot, or untagged
+constexpr uint8_t kSlotOwnerMonitorPanel = 1;
+constexpr uint8_t kSlotOwnerReadout = 2;
+
 struct MenuContent {
+    uint8_t  slotOwner = kSlotOwnerNone;   // monitor slot only: who built this content; carried through the worker to the uploaded raster
     // A one-line FPS readout drawn at the top of the menu card when the user
     // has locked the overlay to the menu, so both are visible for A/B testing.
     char     overlayLine[120];
@@ -229,7 +236,7 @@ struct MenuGeometry {
     // new bitmap dimensions with the previous frame's geometry during a
     // worker handover. Ordinary menu and toast callers leave this false.
     bool overlayRaster = false;
-    // Flat only: which corner the card is placed from (menu_flat_layout.h FlatCorner as an int; 0 upper left, 1 upper right: the frame-rate readout).
+    // Flat only: which corner the card is placed from (menu_flat_layout.h FlatCorner as an int; 0 upper left, 1 upper right: the monitor slot's, for the monitor panel and the frame-rate readout).
     int flatCorner = 0;
 };
 
@@ -241,8 +248,9 @@ void menuPanelSubmit(const MenuContent& c);
 void menuPanelSubmitMonitor(const MenuContent& c);
 // Whether the monitor panel is drawn and where: alpha > 0 draws it, flatCorner 1 is the upper right corner. It is placed 1:1 like the menu (dist 1).
 void menuPanelSetMonitorGeometry(const MenuGeometry& g);
-// How many monitor rasters have been uploaded (wraps), for the menu's ScreenReadoutState; and whether one is live.
+// How many monitor-slot rasters have been uploaded (wraps), for the menu's ScreenReadoutState (the monitor panel and the flat frame-rate readout share the slot); and whether one is live.
 uint32_t menuPanelMonitorRasterSerial();
+uint8_t  menuPanelMonitorRasterOwner();   // the slotOwner of the raster last uploaded to the monitor slot (kSlotOwnerNone when none is)
 bool menuPanelMonitorRasterReady();
 #ifdef EDVR_MENU_TEST
 bool menuPanelWorkerReadyForTest();

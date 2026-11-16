@@ -604,7 +604,7 @@ int wmain(int argc, wchar_t** argv) {
         // The detailed frame-rate card (menuPanelBuildReadoutContent, menu.cpp buildReadoutContent): three lines and two strips, at the flat text heights and at the
         // VR reference face (cap 42, with and without an angular width). Under the raster's height bound, and in flat small enough to be a corner card.
         {
-            const char* lines[3] = {"render 58.4 / shown 116.8 fps", "17.1 ms   1% low 52 fps   cpu 9.1 ms   drops 12", "FG stopped: a wait on the queue timed out"};
+            const char* lines[3] = {"render 58.4 / shown 116.8 fps", "17.1 ms   worst 52 fps   cpu 9.1 ms   drops 12", "FG stopped: a wait on the queue timed out"};
             auto detailed = [&](int cap, int minCard, float deg, float* angular) {
                 edvr::MenuContent c{};
                 const bool ok = edvr::menuPanelBuildReadoutContent(c, lines, 3, cap, minCard, deg, angular);
@@ -1011,6 +1011,7 @@ int wmain(int argc, wchar_t** argv) {
                 std::strcpy(mon.lines[0].left, "Monitor");
                 std::strcpy(mon.lines[0].right, "60");
                 const uint32_t monSerial = edvr::menuPanelMonitorRasterSerial();
+                mon.slotOwner = edvr::kSlotOwnerMonitorPanel;
                 edvr::menuPanelSubmitMonitor(mon);
                 bool monReady = false;
                 for (unsigned ms = 0; ms < 3000 && !monReady; ms += 5) {
@@ -1021,6 +1022,30 @@ int wmain(int argc, wchar_t** argv) {
                 edvr::menuPanelTick(device.Get());
                 check(edvr::menuPanelMonitorRasterReady() && edvr::menuPanelMonitorRasterSerial() != monSerial && edvr::menuPanelFlatRasterReady(),
                       "the monitor raster is uploaded to its own slot, and the menu's stays live");
+                check(edvr::menuPanelMonitorRasterOwner() == edvr::kSlotOwnerMonitorPanel, "the uploaded monitor raster reports the panel as its owner");
+                {
+                    // The slot is shared with the frame-rate readout: the owner follows the raster actually uploaded, so a stale one is never taken for the other's.
+                    edvr::MenuContent ro = mon;
+                    ro.slotOwner = edvr::kSlotOwnerReadout;
+                    std::strcpy(ro.lines[0].left, "FPS");
+                    edvr::menuPanelSubmitMonitor(ro);
+                    bool roReady = false;
+                    for (unsigned ms = 0; ms < 3000 && !roReady; ms += 5) {
+                        roReady = edvr::menuPanelMonitorWorkerReadyForTest();
+                        if (!roReady) Sleep(5);
+                    }
+                    check(roReady, "readout-tagged monitor raster worker ready");
+                    edvr::menuPanelTick(device.Get());
+                    check(edvr::menuPanelMonitorRasterOwner() == edvr::kSlotOwnerReadout, "after the readout's raster is uploaded the slot reports the readout as its owner");
+                    edvr::menuPanelSubmitMonitor(mon);
+                    roReady = false;
+                    for (unsigned ms = 0; ms < 3000 && !roReady; ms += 5) {
+                        roReady = edvr::menuPanelMonitorWorkerReadyForTest();
+                        if (!roReady) Sleep(5);
+                    }
+                    edvr::menuPanelTick(device.Get());
+                    check(roReady && edvr::menuPanelMonitorRasterOwner() == edvr::kSlotOwnerMonitorPanel, "and the panel again once its raster is uploaded over it");
+                }
                 edvr::MenuGeometry monGeometry{};
                 monGeometry.dist = 1.f;
                 monGeometry.alpha = 1.f;

@@ -1866,7 +1866,17 @@ void perfMonitorNoteSwapChain(IDXGISwapChain* swap) {
     if (!swap || !dueMs(lastMs, 3000)) return;
     lastMs = stampMs();
     IDXGIOutput* output = nullptr;
-    if (FAILED(swap->GetContainingOutput(&output)) || !output) return;
+    const HRESULT outHr = swap->GetContainingOutput(&output);
+    if (FAILED(outHr) || !output) {
+        // Under the XeSS-FG bridge the swap chain handed here can be the proxy: the budget then stays at 11.1 ms. Said once a session.
+        static bool noted = false;
+        if (!noted) {
+            noted = true;
+            Log::get().note("perf: display refresh not read: GetContainingOutput failed (hr=0x%08lX); the presented budget stays at the default",
+                            static_cast<unsigned long>(outHr));
+        }
+        return;
+    }
     DXGI_OUTPUT_DESC desc{};
     uint32_t hz = 0;
     wchar_t device[32] = L"";
