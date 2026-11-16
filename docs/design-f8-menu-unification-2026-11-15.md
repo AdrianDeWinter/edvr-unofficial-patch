@@ -2,7 +2,9 @@
 
 ## Status
 
-- **State:** design agreed 2026-11-15; no code yet.
+- **State (2026-11-16):** all seven steps built on branch
+  `f8-menu-unification`, each with a green full validation build and rigs.
+  NOT FLOWN: nothing has run in the game yet. The flight checklist is at the end.
 - **Goal:** one settings menu implementation for both profiles, and the VR
   menu's tooling (tooltips, Monitor, FPS readout, Status, Hotkeys, restart
   indication) brought to the flat profile.
@@ -11,7 +13,11 @@
 - **Out of scope:** a Plugins tab in flat (blocked on add-ons running in flat),
   developer pages in flat, a GPU frame-time graph in flat, a configurable flat
   readout position. Each becomes its own issue.
-- **Next:** file the issues, then step 1.
+- **Open questions for the flight:** whether XeSS-FG's `framesPresented`
+  matches PresentMon's displayed frames; whether the 1080p card (14 px cap
+  height) is large enough; the Monitor and Status pages pass keys to the game,
+  so a menu key Elite also binds reaches the game there (as in VR).
+- **Next:** fly the checklist, then open the PR.
 - **Related:** `docs/settings-menu.md` (the VR menu's design),
   `docs/xess-frame-generation-2026-11-12.md`,
   `docs/design-plugin-architecture-2026-09-30.md`.
@@ -131,12 +137,17 @@ hides the readout. A second raster is possible later if that proves annoying.
 
 ### Flat sizing and placement
 
-The flat card is a fixed 860 px raster, composited at a size relative to the
-screen. By the composite's arithmetic that is roughly a quarter of the screen
-width, so the text is scaled down about 0.6x at 1080p and up about 1.2x at 4K
-(an estimate; to be measured). The flat policy sizes the raster from the
-output's own pixels instead, as VR sizes it from the headset's pixels per
-degree, so the card composites 1:1.
+The flat card was a fixed 860 px raster, composited at a size relative to the
+screen. Measured in the layout rig, the Performance tab's raster is 860 x 1106
+px and the composite fitted it to 42.5 % of the screen height: 357 px wide at
+1080p, a 0.415x resample there and 0.83x at 4K. The flat policy now sizes the
+raster from the output's own pixels instead, as VR sizes it from the headset's
+pixels per degree, and composites it 1:1. The on-screen size is kept: the card
+is 0.3305 of the output height wide (357 px at 1080p, 476 at 1440p, 714 at
+2160p), capped at 45 % of the width, with text cap height scaled from 34 px at
+860 and never below 14 px. Both fractions are constants in
+`src/d3d11/menu_flat_layout.h`. A page taller than 85 % of the output is the
+one case still scaled down.
 
 The composite today pins the card to the top-left corner. The readout needs
 the top-right corner, so the flat placement gains a corner parameter. Tooltips
@@ -151,11 +162,15 @@ window. The two are measured separately:
 
 - **Rendered:** the existing frame-time recorder, which the flat profile does
   not feed today. Flat will feed it at its own Present.
-- **Presented:** a count of frames that actually reached the screen, from
-  XeSS-FG's per-frame present status (if it carries a count) or else from the
-  presenting swap chain's DXGI frame statistics. It is never computed as
-  rendered x (1 + generated frames): that is what was asked for, not what
-  happened.
+- **Presented:** the sum of `framesPresented` from XeSS-FG's per-frame present
+  status (`xefg_swapchain_present_status_t`). Intel documents it as the number
+  of frames sent to be presented by the last call; whether that equals what
+  the display showed is for the flight to compare with PresentMon. When that
+  field fails or stays 0 for 30 presents, the count comes from the presenting
+  swap chain's DXGI frame statistics (`PresentCount`), which also covers the
+  bridge's plain fallback swap chain. The log names the source once. It is
+  never computed as rendered x (1 + generated frames): that is what was asked
+  for, not what happened.
 
 Display rules:
 
@@ -206,9 +221,12 @@ is missing:
   will not fix that.
 - **Flat footer:** the count of changes waiting for a restart (VR's footer
   already shows it).
-- **Notices:** one when a change starts waiting ("XeSS Frame Generation:
-  applies at next game start"), and one when the menu closes with changes still
-  waiting ("2 changes apply at next game start").
+- **Notice on close:** one when the menu closes with changes still waiting
+  ("2 changes apply at next game start"), in both profiles, except when a
+  profile switch closed it. There is no notice per change: a change made in the
+  menu is made with the menu open, where the row and the footer already say it,
+  and notices only show once it is closed. The log has one line per change.
+- **Flat notices follow `menu.toasts`**, as VR's toasts do (default on).
 - **Status page:** "Waiting for a restart" with the settings' names.
 
 ### The flat Status page
@@ -224,9 +242,12 @@ active. As on VR's Status page, keys pass through to the game.
 
 ### The flat Hotkeys page
 
-The VR page's rows, filtered to the hotkeys the flat profile reads. Capture,
-clash warnings against Elite's bindings and the pad rules are already shared.
-Temporary investigation hotkeys stay off the flat page.
+The VR page's everyone-visible rows, filtered to the hotkeys the flat profile
+reads: today the menu key and the AA comparison key. Capture and the pad rules
+are shared. Clash badges against Elite's bindings are not shown in flat: the
+flat profile does not read Elite's bindings (`hotkey.read_game_bindings` is
+not on its list), and turning that on is a separate decision. Temporary
+investigation hotkeys have no menu rows, so they stay off.
 
 ## Steps
 
@@ -269,8 +290,41 @@ configurable flat readout position.
   fails otherwise.
 - No new settings for experiments. The `menu.*` keys already exist and gain a
   meaning in flat; their names describe what the user gets.
-- The panel holds at most 21 lines and its raster at most 2048 px high. Moving
-  the graphics warning off the Performance tab should let the line limit come
-  back down.
+- The panel holds at most 23 lines (raised from 21 for the two readout rows on
+  the flat Performance tab) and its raster at most 2048 px high. The flat
+  Status page with Elite's settings warning needs all 23. The flat Monitor page
+  is 1103 px tall at 2160p and would pass 2048 px near 8K output height.
 - New log lines name where each figure came from, so a log shows which counter
   was read.
+
+## Flight checklist
+
+Steps 1 to 7 are built and rig-tested, not flown. One flat session and one VR
+session cover most of it; the XeSS checks need an Intel Arc and, for the 1x
+case, a non-Intel GPU.
+
+Flat:
+- F8 opens and closes, Escape closes, a value can be stepped and typed, the
+  AA comparison key's notice appears top-left, a live switch VR to flat works.
+- Text is crisp at 1080p and at 4K; no row is cut off on any tab at 1080p.
+  Resizing the window rebuilds the card.
+- Tooltips appear after the delay, beside the card, and scroll with
+  PageUp/PageDown, on keyboard and on pad.
+- Monitor page: rendered and presented rates with frame generation at 2x, 3x
+  and off, compared with PresentMon's displayed frames; the refresh rate and
+  budget lines are right; the log names the presented source.
+- `menu.fps_overlay` compact and detailed in the top-right corner, giving way
+  to the menu and to notices without a stale frame flashing.
+- Status page lines (display, anti-aliasing running or paused, upscaling
+  sizes, frame generation) match the session; Elite's settings warning shows
+  there and the Performance tab shows the one-line pointer.
+- XeSS FG turned on without a bridge: "at next launch" on the row, the footer
+  count, the notice on close; after a restart the rows are live.
+- Hotkeys page: rebind the menu key and the AA comparison key.
+- Whether the new flat long-frame log lines are too frequent.
+
+VR:
+- The menu, toasts and aiming behave as before (steps 1 and 2 must not have
+  changed anything).
+- `menu.fps_overlay` compact (an old `on`) and detailed, head-locked.
+- The close notice when a restart setting changed.
