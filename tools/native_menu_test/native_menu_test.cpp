@@ -3,6 +3,7 @@
 #include "../../src/common/parallel_projection_notice.h"
 #include "../../src/d3d11/menu_panel.h"
 #include "../../src/d3d11/menu_flat_layout.h"
+#include "../../src/d3d11/menu_flat_status.h"
 #include "../../src/openxr/native_menu_client.h"
 #include "../../src/openxr/eye_capture.h"
 #include "../../src/openxr/immediate_executor.h"
@@ -317,6 +318,91 @@ int wmain(int argc, wchar_t** argv) {
             check(h > 0 && h < 2048, "the flat Monitor page is under the raster's 2048-px height bound at 1080p, 1440p and 2160p");
             check(static_cast<float>(h) <= edvr::kFlatMaxHeightFrac * static_cast<float>(outH),
                   "the flat Monitor page is drawn 1:1 (under the placement's height share) at 1080p, 1440p and 2160p");
+        }
+        // The flat Status page (menu.cpp buildFlatStatus, menu_flat_status.h): five tabs of six, the most lines the page has (every source present) and the warning's
+        // ten note lines under them, compact, with the page's hint and the footer. Under the raster's 2048-px bound and drawn 1:1 at the sizes the card is rasterised
+        // at; and its longest values and the Performance tab's pointer fit one line of the card, so nothing is cut at the right edge.
+        {
+            const char* wrapperCaptions[edvr::kFlatStatusMaxLines] = {"ED-UP", "Profile", "Display", "Anti-aliasing", "Upscaling", "Frame generation", "Sharpening",
+                                                                    "HUD quality", "Graphics wrapper", "Keyboard", "Elite graphics settings", "Waiting for a restart", "Last write"};
+            edvr::FlatStatusInput in;
+            in.version = "v1.2.3-123-gabcdef0";
+            in.gameBuild = "334925";
+            in.outW = 3840;
+            in.outH = 2160;
+            in.refreshHz = 144.0f;
+            in.displayMode = edvr::FlatDisplayMode::Windowed;
+            in.aaOn = true;
+            in.aaLabel = "DLSS";
+            in.aaModel = "K";
+            in.aaRun = edvr::FlatAaRun::Paused;
+            in.sceneKnown = true;
+            in.renderW = 2560;
+            in.renderH = 1440;
+            in.sceneOutW = 3840;
+            in.sceneOutH = 2160;
+            in.fg = edvr::FlatFgState::OnIdle;
+            in.fgExclusiveFullscreen = true;
+            in.sharpening = "off";
+            in.hudQuality = "High";
+            in.hudAntiAliasing = "on";
+            in.wrapper = "ReShade64.dll";
+            in.keyboardReady = true;
+            in.eliteWarningActive = true;
+            in.waitingCount = 3;
+            in.waitingLabels = "XeSS Frame Generation...";
+            in.lastWrite = "fix.xess_generated_frames = 3";
+            edvr::FlatStatusLine sl[edvr::kFlatStatusMaxLines];
+            const int sn = edvr::flatStatusLines(in, sl, edvr::kFlatStatusMaxLines);
+            check(sn == edvr::kFlatStatusMaxLines, "the flat Status fixture has every line");
+            for (int i = 0; i < sn; ++i) check(std::strcmp(sl[i].caption, wrapperCaptions[i]) == 0, "the flat Status fixture's lines are in the page's order");
+            for (const int outH : {1080, 1440, 2160}) {
+                const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+                edvr::MenuContent c{};
+                c.widthPx = c.cardPx = fs.cardPx;
+                c.capPx = fs.capPx;
+                c.compact = true;
+                c.tabCount = 5;
+                const char* tabs[5] = {"Performance", "Visual", "Monitor", "Status", "Debug"};
+                for (int i = 0; i < 5; ++i) std::snprintf(c.tabs[i], sizeof(c.tabs[i]), "%s", tabs[i]);
+                c.activeTab = 3;
+                int widest = 0;
+                const int inner = fs.cardPx - 2 * (fs.capPx * 8 / 10);
+                for (int i = 0; i < sn; ++i) {
+                    edvr::MenuLine& l = c.lines[c.lineCount++];
+                    std::snprintf(l.left, sizeof(l.left), "%s", sl[i].caption);
+                    std::snprintf(l.right, sizeof(l.right), "%s", sl[i].value);
+                    l.style = edvr::kMenuInfo;
+                    const int w = edvr::menuPanelMeasureLine(l.left, fs.capPx) + edvr::menuPanelMeasureLine(l.right, fs.capPx) + fs.capPx;
+                    if (w > widest) widest = w;
+                    // Every line (the AA line with a model and a pause, the restart list and the display line run longest) is held to one line.
+                    if (w > inner) std::printf("  Status line %d too wide at %dp: %d of %d px\n", i, outH, w, inner);
+                    check(w <= inner, "the flat Status page's lines fit one line, caption and value");
+                }
+                for (int i = 0; i < 10; ++i) {
+                    edvr::MenuLine& l = c.lines[c.lineCount++];
+                    std::snprintf(l.left, sizeof(l.left), "Elite's post-processing is not recognised, note line %d", i);
+                    l.style = edvr::kMenuNote;
+                }
+                check(c.lineCount == edvr::kMenuMaxLines, "the flat Status page with the warning's ten lines is the card's whole line budget");
+                std::snprintf(c.hint, sizeof(c.hint), "%s", "The page a support thread will ask to see. Tab for the next page.");
+                c.reserveHint = true;
+                std::strcpy(c.footer, "Up/Down row  Left/Right change  Tab page\nline two");
+                const int h = edvr::menuPanelLayoutHeightForTest(c);
+                std::printf("  flat Status raster at %dp: %d px tall (bound 2048, 1:1 up to %d), widest line %d of %d px\n", outH, h,
+                            static_cast<int>(edvr::kFlatMaxHeightFrac * static_cast<float>(outH)), widest, inner);
+                check(h > 0 && h < 2048, "the flat Status page is under the raster's 2048-px height bound at 1080p, 1440p and 2160p");
+                check(static_cast<float>(h) <= edvr::kFlatMaxHeightFrac * static_cast<float>(outH),
+                      "the flat Status page, worst case, is drawn 1:1 (under the placement's height share) at 1080p, 1440p and 2160p");
+            }
+            // The Performance tab's pointer to the Status tab is one line of the card at every flat size, measured with the note face's em.
+            for (const int outH : {720, 1080, 1440, 2160}) {
+                const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+                const int width = fs.cardPx - 2 * (fs.capPx * 8 / 10);
+                const int w = edvr::menuPanelMeasureLine(edvr::kFlatWarningPointer, fs.capPx * 8 / 7);
+                std::printf("  Performance pointer at %dp: %d of %d px\n", outH, w, width);
+                check(w > 0 && w <= width, "the Performance tab's pointer to the Status tab fits one note line");
+            }
         }
         // The detailed frame-rate card (menuPanelBuildReadoutContent, menu.cpp buildReadoutContent): three lines and two strips, at the flat text heights and at the
         // VR reference face (cap 42, with and without an angular width). Under the raster's height bound, and in flat small enough to be a corner card.

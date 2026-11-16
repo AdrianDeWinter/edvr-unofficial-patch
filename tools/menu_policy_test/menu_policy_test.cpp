@@ -9,6 +9,7 @@
 #include <string>
 #include "../../src/common/flat_profile_keys.h"
 #include "../../src/d3d11/flat_notice_queue.h"
+#include "../../src/d3d11/menu_flat_status.h"
 #include "../../src/d3d11/menu_restart.h"
 #include "../../src/d3d11/menu_pages.h"
 #include "../../src/d3d11/menu_policy.h"
@@ -200,14 +201,157 @@ std::string pageList(bool flat, bool developer) {
 
 void pageCases() {
     const std::string vr = "Performance,Fixes,Visual,Mirror window,Native on foot,Hotkeys,Plugins,Monitor,Status";
-    check(pageList(true, false) == "Performance,Visual,Monitor,Debug", "the flat profile's pages are Performance, Visual, Monitor, Debug (Debug last)");
-    check(pageList(true, true) == "Performance,Visual,Monitor,Debug", "developer mode adds no flat page");
+    check(pageList(true, false) == "Performance,Visual,Monitor,Status,Debug", "the flat profile's pages are Performance, Visual, Monitor, Status, Debug (Debug last)");
+    check(pageList(true, true) == "Performance,Visual,Monitor,Status,Debug", "developer mode adds no flat page");
     check(pageList(false, false) == vr, "the VR profile's pages without developer mode");
     check(pageList(false, true) == vr + ",Advanced,Experimental,Instruments", "developer mode adds Advanced, Experimental and Instruments to VR, after Status");
     check(kMenuPages[6].post == MenuPagePost::AimChoiceAfterLookToAim && std::strcmp(kMenuPages[6].name, "Native on foot") == 0, "the Native on foot page moves the aiming row under Look to aim");
     size_t posts = 0;
     for (size_t i = 0; i < kMenuPageCount; ++i) posts += kMenuPages[i].post != MenuPagePost::None;
     check(posts == 1, "only Native on foot has a post step");
+}
+
+// The flat Status page's lines (menu_flat_status.h): which are there for each situation, and what they say.
+std::string statusCaptions(const FlatStatusInput& in) {
+    FlatStatusLine lines[kFlatStatusMaxLines + 4];
+    const int n = flatStatusLines(in, lines, kFlatStatusMaxLines + 4);
+    std::string out;
+    for (int i = 0; i < n; ++i) {
+        if (i) out += ",";
+        out += lines[i].caption;
+    }
+    return out;
+}
+std::string statusValue(const FlatStatusInput& in, const char* caption) {
+    FlatStatusLine lines[kFlatStatusMaxLines + 4];
+    const int n = flatStatusLines(in, lines, kFlatStatusMaxLines + 4);
+    for (int i = 0; i < n; ++i)
+        if (std::strcmp(lines[i].caption, caption) == 0) return lines[i].value;
+    return "<absent>";
+}
+FlatStatusInput statusBase() {
+    FlatStatusInput in;
+    in.version = "v1.2.3";
+    in.gameBuild = "334925";
+    in.outW = 2560;
+    in.outH = 1440;
+    in.refreshHz = 144.0f;
+    in.displayMode = FlatDisplayMode::Windowed;
+    in.aaOn = true;
+    in.aaLabel = "DLSS";
+    in.aaModel = "K";
+    in.aaRun = FlatAaRun::Running;
+    in.sceneKnown = true;
+    in.renderW = 1706;
+    in.renderH = 960;
+    in.sceneOutW = 2560;
+    in.sceneOutH = 1440;
+    in.sharpening = "off";
+    in.hudQuality = "High";
+    in.hudAntiAliasing = "on";
+    in.keyboardReady = true;
+    in.lastWrite = "";
+    return in;
+}
+
+void statusCases() {
+    const char* all = "ED-UP,Profile,Display,Anti-aliasing,Upscaling,Frame generation,Sharpening,HUD quality,Keyboard,Waiting for a restart,Last write";
+    FlatStatusInput in = statusBase();
+    check(statusCaptions(in) == all, "flat Status, no bridge and nothing waiting: version, profile, display, AA, upscaling, frame generation, sharpening, HUD, keyboard, waiting, last write");
+    check(statusValue(in, "ED-UP") == "v1.2.3 / game build 334925" && statusValue(in, "Profile") == "flat", "the version carries the game build, and the profile is flat");
+    check(statusValue(in, "Display") == "2560x1440, 144 Hz, windowed/borderless", "the display says size, refresh rate and mode");
+    check(statusValue(in, "Anti-aliasing") == "DLSS K, running" && statusValue(in, "Upscaling") == "1706x960 to 2560x1440", "AA names the mode, its model and that it runs; upscaling the sizes");
+    check(statusValue(in, "Frame generation") == "off" && statusValue(in, "Waiting for a restart") == "none" && statusValue(in, "Last write") == "none this session",
+          "frame generation off, nothing waiting, no write yet");
+    check(statusValue(in, "Keyboard") == "ready" && statusValue(in, "HUD quality") == "High, edges on", "the keyboard gate and the HUD");
+
+    // Sources that do not exist are lines that are not there.
+    in = statusBase();
+    in.outW = in.outH = 0;
+    in.refreshHz = 0.0f;
+    in.displayMode = FlatDisplayMode::Unknown;
+    check(statusValue(in, "Display") == "<absent>", "no output size, refresh rate or mode yet: no Display line");
+    in.refreshHz = 60.0f;
+    check(statusValue(in, "Display") == "60 Hz", "a refresh rate alone is shown alone");
+    in = statusBase();
+    in.sceneKnown = false;
+    check(statusValue(in, "Upscaling") == "<absent>", "no measured scene: no Upscaling line");
+    in = statusBase();
+    in.renderW = in.sceneOutW;
+    in.renderH = in.sceneOutH;
+    check(statusValue(in, "Upscaling") == "none, 2560x1440", "a scene at the output's size is not upscaled");
+    in = statusBase();
+    in.aaOn = false;
+    check(statusValue(in, "Anti-aliasing") == "off" && statusValue(in, "Upscaling") == "<absent>", "anti-aliasing off: no upscaling line");
+    in = statusBase();
+    in.aaRun = FlatAaRun::Paused;
+    check(statusValue(in, "Anti-aliasing") == "DLSS K, paused: Elite's settings", "a stood-down mode says it is paused");
+    in.aaRun = FlatAaRun::NotRunning;
+    in.aaModel = "";
+    in.aaLabel = "XeSS-SR";
+    check(statusValue(in, "Anti-aliasing") == "XeSS-SR, not running", "a mode with no model and not running yet");
+    in = statusBase();
+    in.hudAntiAliasing = "";
+    check(statusValue(in, "HUD quality") == "High", "no HUD edge smoothing while the HUD quality is off");
+    in = statusBase();
+    in.sharpening = "";
+    in.hudQuality = "";
+    check(statusCaptions(in).find("Sharpening") == std::string::npos && statusCaptions(in).find("HUD quality") == std::string::npos, "a row that is not there leaves no line");
+
+    // Frame generation: the bridge cases.
+    in = statusBase();
+    in.fg = FlatFgState::On;
+    in.fgFactor = 2;
+    check(statusValue(in, "Frame generation") == "on, 2x", "a bridge making one generated frame per rendered frame: on, 2x");
+    in.fgFactor = 3;
+    check(statusValue(in, "Frame generation") == "on, 3x", "...and two: on, 3x");
+    in.fg = FlatFgState::OnIdle;
+    check(statusValue(in, "Frame generation") == "on, no frames made now", "a bridge that makes none now");
+    in.fgExclusiveFullscreen = true;
+    check(statusValue(in, "Frame generation") == "on, none in exclusive fullscreen", "...in exclusive fullscreen, and says why");
+    in.fg = FlatFgState::Stopped;
+    in.fgProblem = "a wait on the queue timed out";
+    check(statusValue(in, "Frame generation") == "stopped: a wait on the queue timed out", "a bridge that stopped says why");
+    in.fg = FlatFgState::NextLaunch;
+    check(statusValue(in, "Frame generation") == "at next launch", "frame generation on without a bridge, with XeSS-SR chosen: at next launch");
+    in.fg = FlatFgState::NeedsXess;
+    check(statusValue(in, "Frame generation") == "on, needs XeSS-SR", "frame generation on without a bridge, without XeSS-SR: says what it needs");
+
+    // Restart pending, wrapper, keyboard, warning.
+    in = statusBase();
+    in.waitingCount = 2;
+    in.waitingLabels = "XeSS Frame Generation, Anti-aliasing";
+    check(statusValue(in, "Waiting for a restart") == "2: XeSS Frame Generation, Anti-aliasing", "changes waiting for a restart are counted and named");
+    in.lastWrite = "fix.temporal_aa = xess";
+    check(statusValue(in, "Last write") == "fix.temporal_aa = xess", "the last write is its own line");
+    in = statusBase();
+    in.wrapper = "ReShade64.dll";
+    check(statusCaptions(in) == "ED-UP,Profile,Display,Anti-aliasing,Upscaling,Frame generation,Sharpening,HUD quality,Graphics wrapper,Keyboard,Waiting for a restart,Last write" &&
+          statusValue(in, "Graphics wrapper") == "ReShade64.dll", "a graphics wrapper that was found is a line, ahead of the keyboard");
+    in = statusBase();
+    in.keyboardReady = false;
+    check(statusValue(in, "Keyboard") == "gate unavailable", "a keyboard that has not reached the gate says so");
+    in = statusBase();
+    in.eliteWarningActive = true;
+    check(statusCaptions(in).find("Keyboard,Elite graphics settings,Waiting") != std::string::npos, "the settings warning has its line, after the keyboard, ahead of the restarts");
+
+    // Every line at once is the most the page has, and every caption and value fits its buffer.
+    in = statusBase();
+    in.wrapper = "ReShade64.dll";
+    in.eliteWarningActive = true;
+    in.fg = FlatFgState::Stopped;
+    in.fgProblem = "a wait on the queue timed out";
+    in.waitingCount = 3;
+    in.waitingLabels = "XeSS Frame Generation, Anti-ali...";
+    in.lastWrite = "fix.xess_generated_frames = 3";
+    FlatStatusLine lines[kFlatStatusMaxLines + 4];
+    const int n = flatStatusLines(in, lines, kFlatStatusMaxLines + 4);
+    check(n == kFlatStatusMaxLines, "with every source present the page has kFlatStatusMaxLines lines");
+    bool fits = true;
+    for (int i = 0; i < n; ++i) fits &= std::strlen(lines[i].caption) < sizeof(lines[i].caption) && std::strlen(lines[i].value) < sizeof(lines[i].value) - 1;
+    check(fits, "no caption or value was cut at its buffer");
+    FlatStatusLine few[3];
+    check(flatStatusLines(in, few, 3) == 3, "a short output holds only what it can");
 }
 
 // The conditional-restart table (menu_restart.h): a truth table over the inputs, row by row, with the outcome named for each.
@@ -387,6 +531,7 @@ int main(int argc, char** argv) {
     noticeCases();
     pageCases();
     restartCases();
+    statusCases();
     flatLayoutCases();
     std::printf("menu_policy_test: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;

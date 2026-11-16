@@ -45,6 +45,8 @@ void perfMonitorFrame(ID3D11Device* dev);
 // Flat, once a frame from the Present hook: the swap chain that shows the frames, so the display's refresh rate can be read now and then (DXGI output ->
 // monitor -> its current mode). The rate is the presented budget (perf_presented.h); 11.1 ms stands until one was read.
 void perfMonitorNoteSwapChain(IDXGISwapChain* swap);
+// The display refresh rate that read gave, in Hz; 0 until one was read (always 0 in VR). Any thread. The flat Status page names it.
+float perfMonitorRefreshHz();
 // Once a frame at the owned Present's boundary, in both profiles: the cross-profile cost's 30 s and 5-minute lines (cross_profile_cost.h).
 void perfMonitorCrossProfileFrame();
 

@@ -1858,6 +1858,8 @@ int perfMonitorFlatTiles(PerfTile* out, int max) {
     return n;
 }
 
+float perfMonitorRefreshHz() { return refreshHzNow(); }
+
 void perfMonitorNoteSwapChain(IDXGISwapChain* swap) {
     // Read every few seconds: a window moved to another monitor changes the answer, and nothing else does.
     static uint64_t lastMs = 0;

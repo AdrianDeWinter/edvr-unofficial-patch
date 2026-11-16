@@ -49,6 +49,7 @@
 #include "menu_write.h"
 #include "menu_aim_prompt.h"    // F177: the aiming choice at start: the page's words, the trigger, the writes
 #include "menu_flat_rows.h"
+#include "menu_flat_status.h"
 #include "menu_keys.h"
 #include "menu_pad.h"
 #include "menu_panel.h"
@@ -1265,10 +1266,12 @@ constexpr int kFlatWarnLogMax = 24;
 // run of transients must not use up the budget that says what the panel showed, and the other way round.
 constexpr int kFlatWarnHeldLogMax = 8;
 
-// The flat page is the rows of menu_flat_rows.h and nothing else; a blank line and a full warning make up the rest of
-// the card. (The wrapper note, when there is one, takes what is left.)
-static_assert(static_cast<int>(kFlatPageRowCount) + 1 + FlatSettingsWarning::kMaxLines <= kMenuMaxLines,
-              "the flat page's rows, a blank line and a full settings warning fit the card's lines");
+// The flat page is the rows of menu_flat_rows.h and nothing else; a blank line and the warning's pointer (two lines at the narrowest ruler) make up the rest of
+// the card. (The wrapper note, when there is one, takes what is left.) The warning's own words are on the Status page: its lines and a full warning are the card.
+static_assert(static_cast<int>(kFlatPageRowCount) + 1 + 2 <= kMenuMaxLines,
+              "the flat page's rows, a blank line and the warning's pointer fit the card's lines");
+static_assert(kFlatStatusMaxLines + FlatSettingsWarning::kMaxLines <= kMenuMaxLines,
+              "the flat Status page's lines and a full settings warning fit the card's lines");
 
 // The selected mode as the panel names it on its Anti-aliasing row.
 std::string flatModeLabel() {
@@ -2004,7 +2007,13 @@ void statusLine(MenuContent& c, const char* left, const char* right) {
     l.badge = kBadgeNone;
 }
 
+void buildFlatStatus(MenuContent& c);   // below, with the output's published size it reads
+
 void buildStatus(MenuContent& c) {
+    if (runtimeFlatProfile()) {
+        buildFlatStatus(c);
+        return;
+    }
     char buf[200];
     snprintf(buf, sizeof(buf), "%s / game build %s", EDVR_VERSION_STRING, gameBuildVersion().c_str());
     statusLine(c, "ED-UP", buf);
@@ -2318,6 +2327,102 @@ float panelShift(float halfW, bool withTip) {
 // flat card is then sized for 1920x1080, and rebuilt the tick after the real size arrives.
 std::atomic<uint32_t> g_flatOutW{0};
 std::atomic<uint32_t> g_flatOutH{0};
+// The swap chain description's Windowed flag, published with the size: -1 until the first Present, 0 exclusive fullscreen, 1 windowed or borderless. With the XeSS
+// Frame Generation bridge the description is the bridge's own answer about the real window (device_hook.cpp patches it).
+std::atomic<int> g_flatWindowed{-1};
+
+// One row's value as its row shows it (the Performance tab's words), "" when there is no such row.
+std::string shownText(const char* section, const char* key) {
+    for (int i = 0; i < kRowDefCount; ++i)
+        if (strcmp(kMenuRows[i].section, section) == 0 && strcmp(kMenuRows[i].key, key) == 0) return displayValue(kMenuRows[i], g_rows[i].value);
+    return std::string();
+}
+
+// The flat Status page (menu_flat_status.h): its lines, then, while Elite's graphics-settings warning is up, the warning's words wrapped to the note face's width
+// (the Performance tab says only where to look: see buildContent).
+void buildFlatStatus(MenuContent& c) {
+    State& s = g_s;
+    FlatStatusInput in;
+    const std::string build = gameBuildVersion();
+    in.version = EDVR_VERSION_STRING;
+    in.gameBuild = build.c_str();
+    in.outW = g_flatOutW.load(std::memory_order_relaxed);
+    in.outH = g_flatOutH.load(std::memory_order_relaxed);
+    in.refreshHz = perfMonitorRefreshHz();
+    const int windowed = g_flatWindowed.load(std::memory_order_relaxed);
+    in.displayMode = windowed < 0 ? FlatDisplayMode::Unknown : windowed ? FlatDisplayMode::Windowed : FlatDisplayMode::Exclusive;
+
+    const std::string requested = Config::get().requestedTemporalMode();
+    in.aaOn = temporalModeEnabled(requested);
+    const std::string label = flatModeLabel();
+    in.aaLabel = label.c_str();
+    const std::string model = (label == "DLSS" || label == "DLAA") ? shownText("fix", "temporal_aa_model") : std::string();
+    in.aaModel = model.c_str();
+    const char* reason = "";
+    bool standing = false;
+    in.aaRun = flatRuntimeStructuralRefusal(&reason, &standing) ? FlatAaRun::Paused : flatRuntimeActive() ? FlatAaRun::Running : FlatAaRun::NotRunning;
+    in.sceneKnown = flatRuntimeSceneSizes(&in.renderW, &in.renderH, &in.sceneOutW, &in.sceneOutH);
+
+    // Frame generation, from the same rule the rows' restart marks follow (menu_restart.h).
+    int fgDef = -1;
+    for (int i = 0; i < kRowDefCount && fgDef < 0; ++i)
+        if (strcmp(kMenuRows[i].section, "fix") == 0 && strcmp(kMenuRows[i].key, "xess_frame_generation") == 0) fgDef = i;
+    const RestartState fgState = fgDef >= 0 ? rowConditionalState(fgDef) : RestartState::NotPending;
+    const char* fgProblem = xessFgProblem();
+    in.fgProblem = fgProblem ? fgProblem : "";
+    in.fgExclusiveFullscreen = xessFgExclusiveFullscreen();
+    if (!xessFgToggleOn()) in.fg = FlatFgState::Off;
+    else if (fgState == RestartState::Stopped) in.fg = FlatFgState::Stopped;
+    else if (fgState == RestartState::PendingRestart) in.fg = FlatFgState::NextLaunch;
+    else if (!xessFgBridged()) in.fg = FlatFgState::NeedsXess;
+    else if (xessFgActiveGeneratedFrames() > 0) {
+        in.fg = FlatFgState::On;
+        in.fgFactor = 1 + xessFgActiveGeneratedFrames();
+    } else in.fg = FlatFgState::OnIdle;
+
+    const std::string sharpening = shownText("fix", "render_sharpness");
+    const std::string hud = shownText("fix", "ui_quality");
+    const std::string hudAa = _stricmp(shownValue("fix", "ui_quality").c_str(), "off") == 0 ? std::string() : shownText("fix", "hud_antialiasing");
+    in.sharpening = sharpening.c_str();
+    in.hudQuality = hud.c_str();
+    in.hudAntiAliasing = hudAa.c_str();
+    in.wrapper = contextWrapperFile();
+    in.keyboardReady = inputGateGameKeyboardSeen();
+    in.eliteWarningActive = s.flatWarnActive;
+    in.waitingCount = pendingRestartCount();
+    // Their labels, cut so the line stays one line.
+    std::string waiting;
+    for (int i = 0; i < kRowDefCount; ++i) {
+        if (!rowWaiting(i)) continue;
+        if (!waiting.empty()) waiting += ", ";
+        waiting += kMenuRows[i].label;
+    }
+    if (waiting.size() > 24) waiting = waiting.substr(0, 21) + "...";
+    in.waitingLabels = waiting.c_str();
+    in.lastWrite = s.lastWrite.c_str();
+
+    FlatStatusLine lines[kFlatStatusMaxLines];
+    const int n = flatStatusLines(in, lines, kFlatStatusMaxLines);
+    FlatSettingsWarning warning;
+    if (s.flatWarnActive) {
+        FlatWarnRuler ruler{c.capPx * 8 / 7};   // the note face's em (menu_panel.cpp, Font::Hint)
+        const int width = c.cardPx - 2 * (c.capPx * 8 / 10);
+        flatComposeSettingsWarning(flatModeLabel().c_str(), s.flatSettings.settings(), width,
+                                   &flatWarnMeasure, &ruler, &warning, s.flatWarnCause);
+    }
+    for (int i = 0; i < n; ++i) {
+        statusLine(c, lines[i].caption, lines[i].value);
+        // The warning's words go right under their line.
+        if (strcmp(lines[i].caption, "Elite graphics settings") == 0) {
+            for (int k = 0; k < warning.count && c.lineCount < kMenuMaxLines; ++k) {
+                MenuLine& l = c.lines[c.lineCount++];
+                l = MenuLine{};
+                strncpy(l.left, warning.line[k], sizeof(l.left) - 1);
+                l.style = kMenuNote;
+            }
+        }
+    }
+}
 
 // The bitmap's size. In VR, from the headset's own pixels per degree at the
 // panel: the panel is specified in degrees, so it reads the same size in
@@ -2522,7 +2627,10 @@ void buildContent(MenuContent& c) {
         c.compact = true;
         snprintf(c.hint, sizeof(c.hint), "%s",
                  "The page a support thread will ask to see. Tab or PageDown for the next page.");
-        {
+        if (runtimeFlatProfile()) {
+            // The flat page has no VR notice to share this slot with, and no PageDown.
+            snprintf(c.hint, sizeof(c.hint), "%s", "The page a support thread will ask to see. Tab for the next page.");
+        } else {
             // Elite's Supersampling below 1.0 (VR; vr_supersample_notice.h, design section 83), when vScreen has measured the
             // world rendered under the eye texture: the open menu says it HERE, in the hint this page has anyway. A line of its
             // own, or a note on a settings page, would take the bitmap past the 2048-px guard on the Pimax (see the header).
@@ -2901,18 +3009,17 @@ void buildContent(MenuContent& c) {
                 l.style = kMenuNote;
             }
         }
-        // The settings warning (flat only, and only while frames are refused for the shape
-        // of the post chain): a blank line, then the words wrapped to the note face's width.
+        // The settings warning (flat only, and only while frames are refused for the shape of the post chain): its words are on the Status tab
+        // (buildFlatStatus); here a blank line and a one-line pointer to them, wrapped to the note face's width.
         if (runtimeFlatProfile() && s.flatWarnActive) {
             FlatWarnRuler ruler{c.capPx * 8 / 7};   // the note face's em (menu_panel.cpp, Font::Hint)
             const int width = c.cardPx - 2 * (c.capPx * 8 / 10);
-            FlatSettingsWarning warning;
-            flatComposeSettingsWarning(flatModeLabel().c_str(), s.flatSettings.settings(), width,
-                                       &flatWarnMeasure, &ruler, &warning, s.flatWarnCause);
+            FlatSettingsWarning pointer;
+            flatWrapWarning(kFlatWarningPointer, width, &flatWarnMeasure, &ruler, &pointer);
             if (c.lineCount < kMenuMaxLines) c.lines[c.lineCount++].style = kMenuNote;
-            for (int i = 0; i < warning.count && c.lineCount < kMenuMaxLines; ++i) {
+            for (int i = 0; i < pointer.count && c.lineCount < kMenuMaxLines; ++i) {
                 MenuLine& l = c.lines[c.lineCount++];
-                strncpy(l.left, warning.line[i], sizeof(l.left) - 1);
+                strncpy(l.left, pointer.line[i], sizeof(l.left) - 1);
                 l.style = kMenuNote;
             }
         }
@@ -3006,7 +3113,9 @@ void buildContent(MenuContent& c) {
         const int tagPx = menuPanelMeasureLine(c.footerTag, c.capPx) + c.capPx * 2;
         char status[160], line2[200];
         for (int shortForm = 0; shortForm < 2; ++shortForm) {
-            menuFlatFooterStatus(write, s.flatKeysReadyShown, pendingN, shortForm != 0, status, sizeof(status));
+            // A status page releases the keyboard to the game by design, so "ready" there is whether the game's keyboard has reached the gate.
+            const bool footerKeys = s.flatKeysReadyShown || (p.status && inputGateGameKeyboardSeen());
+            menuFlatFooterStatus(write, footerKeys, pendingN, shortForm != 0, status, sizeof(status));
             if (s.padReady) snprintf(line2, sizeof(line2), "LB/RB pages  %s close%s", s.summonName.c_str(), status);
             else snprintf(line2, sizeof(line2), "%s/Esc close%s", s.summonName.c_str(), status);
             if (shortForm || menuPanelMeasureLine(line2, c.capPx) + tagPx <= linePx) break;
@@ -5184,6 +5293,7 @@ void menuFlatBeforePresent(IDXGISwapChain* swap, unsigned flags) {
         if (SUCCEEDED(swap->GetDesc(&desc)) && desc.BufferDesc.Width > 0 && desc.BufferDesc.Height > 0) {
             g_flatOutW.store(desc.BufferDesc.Width, std::memory_order_relaxed);
             g_flatOutH.store(desc.BufferDesc.Height, std::memory_order_relaxed);
+            g_flatWindowed.store(desc.Windowed ? 1 : 0, std::memory_order_relaxed);
         }
         perfMonitorNoteSwapChain(swap);   // the display's refresh rate, for the Monitor's budgets (every few seconds)
     }

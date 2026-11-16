@@ -90,8 +90,8 @@ constexpr int kMenuMaxTabs = 8;
 // 2026-10-14: the flat page gained its sixth row (Intro movie), and 18 since
 // 2026-10-16 for its seventh (Sharp weapons, retired 2026-10-28), and 19 since
 // 2026-11-08 for Skip rooms behind doors, and 21 since 2026-11-12 for the two
-// XeSS Frame Generation rows, and 23 since 2026-11-16 for the two frame-rate readout rows: its rows, a blank line and the ten-line
-// warning (flat_elite_settings.h) are the whole card.
+// XeSS Frame Generation rows, and 23 since 2026-11-16 for the two frame-rate readout rows. Since the warning moved to the flat Status page (2026-11-16) the
+// 23 is that page: its thirteen lines and the ten-line warning (flat_elite_settings.h) are the whole card (menu.cpp static_asserts it); the Performance tab needs 15.
 constexpr int kMenuMaxLines = 23;
 constexpr int kMenuMaxTiles = 16;
 
