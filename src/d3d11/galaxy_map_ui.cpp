@@ -414,7 +414,7 @@ void setArrowOrigin(const float from[3]) {
 void setGates(bool vr, bool pointer) {
     const bool wasPointer = g_pointerOpen.exchange(pointer, std::memory_order_relaxed);
     g_vrOpen.store(vr, std::memory_order_relaxed);
-    g_swapOpen.store(vr || pointer || g_systemOpen.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    g_swapOpen.store(!g_stock.load(std::memory_order_relaxed) && (vr || pointer || g_systemOpen.load(std::memory_order_relaxed)), std::memory_order_relaxed);
     if (g_st) ++g_st->directFrame;
     if (wasPointer && !pointer) {
         g_over.store(false, std::memory_order_relaxed);

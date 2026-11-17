@@ -3267,8 +3267,11 @@ void testSupercruiseLines() {
               "GP13: the pointer's self-check, its second call of the projector and the other-caller note are gone");
         check(pointer.find("if (caller != s.pointerReturn && caller != s.systemReturn) return original(k, in, idx, out);") != std::string::npos && pointer.find("gamePinMatches(kSystemPointerReturnRva") != std::string::npos &&
                   pointer.find("return pointerCall(s, original, k, in, idx, out, caller == s.systemReturn);") != std::string::npos &&
-                  pointer.find("const bool open = galaxy || system;") != std::string::npos && pointer.find("const bool system = mappointer::systemMapOn(galaxy, s.armed.load(std::memory_order_acquire), s.systemReturn, mapCameraAnyOpen());") != std::string::npos && pointer.find("mapui::setGates(galaxy, open);") != std::string::npos,
+                  pointer.find("const bool open = !stock && (galaxy || system);") != std::string::npos && pointer.find("const bool system = mappointer::systemMapOn(galaxy, s.armed.load(std::memory_order_acquire), s.systemReturn, mapCameraAnyOpen());") != std::string::npos && pointer.find("mapui::setGates(galaxy && !stock, open);") != std::string::npos,
               "GP14: any caller but the two maps' pointer calls goes straight to the original projector; the System Map's is optional and pinned, and its gate opens the pointer alone, not the Galaxy Map's fixed icons");
+        check(pointer.find("getString(\"fix.vr_maps\", \"on\") == \"off\"") != std::string::npos && pointer.find("if (system && !stock) {") != std::string::npos &&
+                  slurp("src/d3d11/galaxy_map_ui.cpp").find("!g_stock.load(std::memory_order_relaxed) && (vr || pointer || g_systemOpen.load(std::memory_order_relaxed))") != std::string::npos,
+              "GP15: fix.vr_maps = off closes the pointer's gates, skips the arrow's depth and takes the swap gate down with them, and the System Map flag still reaches the UI layer");
         {
             const std::string mapUiText = slurp("src/d3d11/galaxy_map_ui.cpp");
             check(pointer.find("farPoint(pose.rows, pose.position, arrow, from, game[3], farIn)") != std::string::npos && pointer.find("s.rayFrom.load(from);") != std::string::npos &&

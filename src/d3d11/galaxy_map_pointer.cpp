@@ -12,6 +12,7 @@
 #include <new>
 
 #include "../common/code_hook.h"
+#include "../common/config.h"
 #include "../common/game_build.h"
 #include "../common/log.h"
 #include "../common/runtime_profile.h"
@@ -93,6 +94,7 @@ struct State {
     uint64_t openFrames = 0;   // frames with the map open since the last 30 s line
     uint64_t galaxyFrames = 0; // of those, the Galaxy Map's: the run of sprites is its alone
     uint64_t lastLineMs = 0;
+    uint64_t stockPolledMs = 0;   // when fix.vr_maps was last read
     bool cursorSaid = false;
     const char* why = "";
 };
@@ -383,10 +385,22 @@ void mapPointerFrame() noexcept {
     }
     State& s = *g_s;
     const uint64_t now = GetTickCount64();
+    // fix.vr_maps = off: the maps as the game draws them. Polled twice a second. The hooks still arm and the System Map flag still reaches the UI layer (its plane and the cut-out behind the bodies);
+    // only the pointer, the arrow's depth, the panel mask and the world-fixed icons, rings and markers stand down.
+    if (now - s.stockPolledMs >= 500) {
+        s.stockPolledMs = now;
+        const bool stockNow = Config::get().getString("fix.vr_maps", "on") == "off";
+        if (stockNow != mapui::g_stock.load(std::memory_order_relaxed)) {
+            mapui::g_stock.store(stockNow, std::memory_order_relaxed);
+            Log::get().note("map pointer: fix.vr_maps = %s: %s", stockNow ? "off" : "on",
+                            stockNow ? "the Galaxy Map and the System Map keep the game's cursor, arrow, panels, icons and markers" : "the maps' pointer, arrow, panel mask, icons and markers are EDVR's again");
+        }
+    }
+    const bool stock = mapui::g_stock.load(std::memory_order_relaxed);
     const bool galaxy = mapCameraGalaxyOpen();
     const bool system = mappointer::systemMapOn(galaxy, s.armed.load(std::memory_order_acquire), s.systemReturn, mapCameraAnyOpen());
     mapui::setSystemOpen(system);
-    if (system) {
+    if (system && !stock) {
         MapCameraPose pose;
         if (mapCameraPose(pose)) {
             // The arrow's ray in the map's axes, as pointerCall reads it. The camera's forward until the cursor is known.
@@ -401,7 +415,7 @@ void mapPointerFrame() noexcept {
     }
     if (galaxy) ++s.galaxyFrames;
     if (!s.armed.load(std::memory_order_acquire)) {
-        mapui::setGates(galaxy, false);   // the icons, labels and rings are fixed in the world whether or not the pointer's hooks can be had
+        mapui::setGates(galaxy && !stock, false);   // the icons, labels and rings are fixed in the world whether or not the pointer's hooks can be had
         if (s.stood) return;
         if (s.tries && now - s.lastTryMs < 1000) return;
         s.lastTryMs = now;
@@ -425,7 +439,7 @@ void mapPointerFrame() noexcept {
                         s.systemReturn ? "" : " (not found in this build: the System Map stays as the game made it)");
     }
     // The hover and the arrow on either map: the arrow's direction is the same ray in both (docs/galaxy-map-vr-2026-11-03.md, "The System Map"). The fixed icons and the sprite depth stay the Galaxy Map's.
-    const bool open = galaxy || system;
+    const bool open = !stock && (galaxy || system);
     if (open) ++s.openFrames;
     if (open != s.open) {
         if (open) s.openedInWindow = true;
@@ -446,7 +460,7 @@ void mapPointerFrame() noexcept {
     }
     if (open) latchFrame(s);
     s.gate.store(open ? 1 : 0, std::memory_order_release);
-    mapui::setGates(galaxy, open);
+    mapui::setGates(galaxy && !stock, open);
     if (!s.cursorSaid && s.cursorObject.load(std::memory_order_acquire)) {
         s.cursorSaid = true;
         Log::get().note("map pointer: the cursor update ran: its object is at %p", reinterpret_cast<void*>(s.cursorObject.load(std::memory_order_acquire)));
