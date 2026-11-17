@@ -8,7 +8,7 @@ The **launcher** installs ED-UP, offers later updates, and has a Play button.
 
 1. Download [ed-up-launcher.exe](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest/download/ed-up-launcher.exe), or use the [download page](https://characterecho-sean.github.io/ed-unofficial-patch/).
 2. On the [release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest), open `SHA256SUMS` and compare it with the file's SHA-256. That hash is how you check the download is the one this project published.
-3. Windows reports the program as unrecognised, because it is unsigned. Choose **More info**, then **Run anyway**.
+3. Windows may say it does not recognise the app, because the publisher is new to it. The warning names CharacterEcho LLC, who signed the file. Choose **More info**, then **Run anyway**.
 4. The first run copies the launcher to `%LOCALAPPDATA%\EDVR\launcher\`, adds a Start menu shortcut, and adds an entry in Windows' list of installed programs. Later runs start from there.
 
 The launcher installs from a release it has downloaded: press **Download** when it says an update is available.
