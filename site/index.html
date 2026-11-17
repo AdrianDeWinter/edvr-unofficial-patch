@@ -926,7 +926,10 @@ footer a:hover { color: var(--accent-hi); }
 })();
 
 // Starfield: a slow drift with a gentle twinkle, and a rare shooting star. Static when the
-// visitor asks for reduced motion.
+// visitor asks for reduced motion. It is redrawn 30 times a second, where a star moves a
+// fraction of a pixel per frame: redrawing the whole window at the display's refresh rate cost
+// several per cent of a GPU. A shooting star moves too fast for that, so while one crosses the
+// field is redrawn on every frame.
 (function () {
   var canvas = document.getElementById('stars');
   if (!canvas || !canvas.getContext) return;
@@ -982,7 +985,11 @@ footer a:hover { color: var(--accent-hi); }
     ctx.globalAlpha = 1;
   }
 
+  var STEP = 1000 / 30;
+
   function tick(t) {
+    requestAnimationFrame(tick);
+    if (!meteor && t - last < STEP - 2) return;
     var dt = Math.min(t - last, 50); last = t;
     for (var i = 0; i < stars.length; i++) {
       var s = stars[i];
@@ -1003,7 +1010,6 @@ footer a:hover { color: var(--accent-hi); }
       if (meteor.age >= meteor.life) meteor = null;
     }
     draw(t);
-    requestAnimationFrame(tick);
   }
 
   var resizeTimer;
