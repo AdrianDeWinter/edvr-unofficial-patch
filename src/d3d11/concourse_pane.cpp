@@ -106,6 +106,7 @@ bool learnedPs(uint64_t ps) noexcept {
     return false;
 }
 std::atomic<bool> g_feedMeasure{false}, g_feedTreat{false}, g_feedWithhold{false}, g_feedSealed{false}, g_feedEffects{false};
+std::atomic<bool> g_mapOpenSeen{false};   // a map is open (GuiFocus 6..8): the outside's draws are issued whatever the cull or the sealed hangar says (updateArmed)
 std::atomic<bool> g_withholdSealedNow{false};   // the hangar is sealed: only the families marked sealedToo are not issued
 std::atomic<float> g_bayOpacity{1.0f};
 std::atomic<bool> g_treatNow{false};      // treat fed, a mode other than off, and the replacement states made
@@ -3164,10 +3165,18 @@ void updateArmed() noexcept {
     const uint32_t mode = g_mode.load(std::memory_order_relaxed);
     const bool treat = g_feedTreat.load(std::memory_order_relaxed) && mode != kModeOff && g_statesReady.load(std::memory_order_acquire);
     const bool withhold = g_feedWithhold.load(std::memory_order_relaxed);   // whatever the mode: F4 at off shows what the cull leaves
-    const bool effects = withhold || g_feedEffects.load(std::memory_order_relaxed);   // the outside is not issued: the plain phase, or the backdrop capture's lift
+    // A Galaxy Map, System Map or Orrery (Status.json GuiFocus 6, 7, 8) draws the planets, suns and atmospheres from the same shaders the outside withholding names, and they ARE the
+    // picture there, so nothing is withheld while one is open: a docked ship in a sealed hangar showed a System Map with most of its bodies missing (issue 203, 2026-11-17 logs). Unknown
+    // focus (no watcher, no field) keeps the withholding as it was. Flat reads it through journalFlatGuiFocus, every other profile through journalGuiFocus.
+    uint32_t guiFocus = 0;
+    const bool mapOpen = (journalFlatGuiFocus(&guiFocus) || journalGuiFocus(&guiFocus)) && guiFocus >= 6 && guiFocus <= 8;
+    if (g_mapOpenSeen.exchange(mapOpen, std::memory_order_relaxed) != mapOpen)
+        Log::get().note("concourse cull: a map is %s (GuiFocus %u): the outside's draws (planets, suns, atmospheres) are %s.", mapOpen ? "open" : "shut", guiFocus,
+                        mapOpen ? "issued, not withheld" : "withheld again where the cull or the sealed hangar says so");
+    const bool effects = !mapOpen && (withhold || g_feedEffects.load(std::memory_order_relaxed));   // the outside is not issued: the plain phase, or the backdrop capture's lift
     const bool shares = g_feedMeasure.load(std::memory_order_relaxed) && g_shareOn.load(std::memory_order_relaxed);
     g_treatNow.store(treat, std::memory_order_release);
-    const bool sealed = g_feedSealed.load(std::memory_order_relaxed);
+    const bool sealed = !mapOpen && g_feedSealed.load(std::memory_order_relaxed);
     g_withholdNow.store(withhold, std::memory_order_release);
     g_effectsNow.store(effects, std::memory_order_release);
     g_washOffNow.store(treat && mode == kModeBackdrop && g_bakeBaked.load(std::memory_order_acquire), std::memory_order_release);
