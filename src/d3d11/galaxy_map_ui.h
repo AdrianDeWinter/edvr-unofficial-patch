@@ -160,6 +160,7 @@ inline std::atomic<bool> g_vrOpen{false};   // inline: ui_layer.cpp reads them a
 inline std::atomic<bool> g_pointerOpen{false};
 inline std::atomic<bool> g_swapOpen{false};   // any of these: the draw path's one load for swapBegin (the Galaxy Map, or the System Map's arrow and markers)
 inline std::atomic<bool> g_over{false};
+inline std::atomic<bool> g_stock{false};   // fix.vr_maps = off: the pointer, the arrow, the panel mask and the world-fixed icons and markers stand down, the maps are as the game draws them (galaxy_map_pointer.cpp)
 inline std::atomic<bool> g_systemOpen{false};   // the VR profile and the System Map's camera up: its flat plane in the UI layer, the cut-out, the markers' scale
 inline std::atomic<uint64_t> g_bodyCutouts{0};  // the cut-outs made since the last 30 s line (ui_layer.cpp mapBodiesPunch)
 inline bool vrOpen() noexcept { return g_vrOpen.load(std::memory_order_relaxed); }
