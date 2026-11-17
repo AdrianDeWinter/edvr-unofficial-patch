@@ -2533,7 +2533,10 @@ static void constantsCases() {
     ComPtr<ID3D11DeviceContext> c2;
     ck(edvr::systemD3D11CreateDevice()(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &d2, nullptr, &c2), "second device");
     ID3D11Buffer* other = c.get(c2.Get(), p0);
-    check(other && other != first && c.written() == p0, "another device: the buffer is made again for it");
+    // The prior buffer was released on the device switch; its address may be reused.
+    ComPtr<ID3D11Device> otherDevice;
+    if (other) other->GetDevice(otherDevice.GetAddressOf());
+    check(other && otherDevice.Get() == d2.Get() && c.written() == p0, "another device: the buffer is made again for it");
     c.reset();
     check(c.buffer() == nullptr && !c.failed(), "reset releases the buffer");
     // the production arrays also carry the key defaults the module reads
