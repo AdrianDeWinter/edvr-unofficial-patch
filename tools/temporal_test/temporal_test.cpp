@@ -177,6 +177,16 @@ int main() {
         check(near(edvr::dittoFillConstants(held).antiShimmer, 0.4f), "a set anti-shimmer strength is used as given");
         held.antiShimmer = 0.0f;
         check(edvr::dittoFillConstants(held).antiShimmer == 0.0f, "anti-shimmer off stays off where Auto would be 0.6");
+        check(edvr::dittoAntiShimmerFromText("auto") == -1.0f && edvr::dittoAntiShimmerFromText("") == -1.0f &&
+                  edvr::dittoAntiShimmerFromText("AUTO") == -1.0f && edvr::dittoAntiShimmerFromText("nope") == -1.0f &&
+                  edvr::dittoAntiShimmerFromText("off") == 0.0f && edvr::dittoAntiShimmerFromText("OFF") == 0.0f &&
+                  edvr::dittoAntiShimmerFromText("0.4") == 0.4f && edvr::dittoAntiShimmerFromText("2") == 0.9f &&
+                  edvr::dittoAntiShimmerFromText("-1") == 0.0f && edvr::dittoAntiShimmerFromText("0.4x") == -1.0f,
+              "anti-shimmer text: auto and junk stay on the ratio curve, off is 0, a number is clamped to 0..0.9");
+        check(edvr::dittoSharpenModeFromText("cas") == 0 && edvr::dittoSharpenModeFromText("CAS") == 0 &&
+                  edvr::dittoSharpenModeFromText(nullptr) == 0 && edvr::dittoSharpenModeFromText("rcas") == 1 &&
+                  edvr::dittoSharpenModeFromText("RCAS") == 1,
+              "the filter text is RCAS or CAS");
     }
     check(!edvr::temporalModeEnabledFor("off", true) && !edvr::temporalModeEnabledFor("off", false) &&
           !edvr::temporalModeEnabledFor("bogus", true) && !edvr::temporalModeEnabledFor("bogus", false),

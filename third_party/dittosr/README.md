@@ -19,6 +19,4 @@ with fxc or D3DCompile. DXC promotes `cs_5_0` to shader model 6 and writes
 DXIL, which Direct3D 11 will not create; `tools/gen_dittosr_shaders.py` rejects
 that container. Regenerate after a shader edit:
 
-```
-python3 tools/gen_dittosr_shaders.py
-```
+On Windows, `python tools/gen_dittosr_shaders.py` compiles with `d3dcompiler_47.dll`. On Linux, set `FXC` to `fxc.exe`. `python tools/gen_dittosr_shaders.py --check-bytes` recompiles and requires the committed header to match. DXC is the wrong compiler for this.

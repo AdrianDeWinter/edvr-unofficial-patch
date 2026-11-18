@@ -40,7 +40,7 @@ Press F8 in the game to change settings.
 
 ## What you get
 
-A steadier picture: DLSS on an NVIDIA RTX card, FSR or DittoSR on any card, or XeSS.
+A steadier picture: DLSS on an NVIDIA RTX card, FSR or DittoSR on any Direct3D 11 GPU, or XeSS.
 Menus and the HUD stay sharp on top of the upscaler. On foot in a headset,
 the world is drawn from your commander's eyes, with look-to-aim and scopes
 you can turn on. Shared brightness, terrain at the edge of the view, the jump

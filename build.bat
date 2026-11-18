@@ -293,6 +293,14 @@ python tools\run_jobs.py ^
     --gate "tools\compile_cache.py --self-test" || exit /b 1
 :python_gates_done
 
+REM DittoSR's committed bytecode has to match a fresh D3DCompile of the HLSL.
+REM --self-test only checks the container shape, so a shader edit that was not
+REM regenerated would pass it. A compile-only Linux build has no D3DCompile
+REM that emits shader model 5, so this comparison stays on the Windows build.
+if not defined EDVR_COMPILE_ONLY (
+    python tools\gen_dittosr_shaders.py --check-bytes || exit /b 1
+)
+
 REM The version baked into both DLLs, printed in the second line of every log.
 REM
 REM `git describe` rather than a hand-maintained constant, because the constant

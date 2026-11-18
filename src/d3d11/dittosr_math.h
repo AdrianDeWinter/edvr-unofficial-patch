@@ -7,6 +7,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#if !defined(_MSC_VER)
+#include <strings.h>
+#endif
 
 namespace edvr {
 
@@ -53,6 +58,28 @@ struct DittoEval {
 };
 
 inline float dittoClamp(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+inline bool dittoSameText(const char* a, const char* b) {
+    if (!a || !b) return a == b;
+#if defined(_MSC_VER)
+    return _stricmp(a, b) == 0;
+#else
+    return strcasecmp(a, b) == 0;
+#endif
+}
+
+// auto, empty, or anything that is not a number: DittoSR's ratio curve (-1). off: 0. A number is clamped to 0..0.9.
+inline float dittoAntiShimmerFromText(const char* text) {
+    if (!text || !text[0] || dittoSameText(text, "auto")) return -1.0f;
+    if (dittoSameText(text, "off")) return 0.0f;
+    char* end = nullptr;
+    const float asked = std::strtof(text, &end);
+    if (!end || end == text || *end != 0) return -1.0f;
+    return dittoClamp(asked, 0.0f, 0.9f);
+}
+
+// rcas is 1. cas, and any other word, is 0.
+inline int dittoSharpenModeFromText(const char* text) { return text && dittoSameText(text, "rcas") ? 1 : 0; }
 
 inline DittoCb dittoFillConstants(const DittoEval& in) {
     DittoCb k{};

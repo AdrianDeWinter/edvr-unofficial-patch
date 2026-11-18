@@ -171,7 +171,34 @@ def self_test() -> int:
     return verify_header(OUT)
 
 
+def header_arrays(path: pathlib.Path) -> dict:
+    text = path.read_text(encoding="ascii")
+    found = {}
+    for name, body in re.findall(r"kDitto(\w+)Dxbc\[\] = \{([^}]*)\}", text, re.S):
+        found[name.lower()] = bytes(int(token, 16) for token in re.findall(r"0x([0-9a-fA-F]{2})", body))
+    return found
+
+
+def check_bytes() -> int:
+    """Recompile the four passes and require the committed header to match. Windows uses D3DCompile; Linux needs FXC."""
+    committed = header_arrays(OUT)
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = pathlib.Path(tmp)
+        for name, defines in PASSES:
+            fresh = compile_pass(name, defines, directory)
+            old = committed.get(name)
+            if old != fresh:
+                raise SystemExit(
+                    f"gen_dittosr_shaders: {name} does not match src/d3d11/dittosr_shader_bytecode.h "
+                    f"({len(fresh)} compiled, {0 if old is None else len(old)} committed). "
+                    "Regenerate with python tools/gen_dittosr_shaders.py")
+    print("gen_dittosr_shaders: committed bytecode matches a fresh cs_5_0 compile")
+    return 0
+
+
 def main() -> int:
+    if "--check-bytes" in sys.argv:
+        return check_bytes()
     if "--self-test" in sys.argv or "--verify-header" in sys.argv:
         return self_test()
     parts = [

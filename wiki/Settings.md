@@ -43,7 +43,7 @@ The default is off. Elite draws edges without temporal anti-aliasing, so fine li
 | --- | --- |
 | DLSS | An NVIDIA RTX card. The launcher places NVIDIA's file on a machine with an NVIDIA card. |
 | FSR | Any graphics card. Nothing further to download. |
-| DittoSR | Any graphics card, as an alternative to FSR. Nothing further to download. [DittoSR 0.5.0](https://github.com/Vancete/DittoSR/releases/tag/v0.5.0) runs inside ED-UP. Do not point DittoSR's own loader at Elite: this game does not load the file that loader replaces. |
+| DittoSR | Any Direct3D 11 GPU, as an alternative to FSR. Nothing further to download. [DittoSR 0.5.0](https://github.com/Vancete/DittoSR/releases/tag/v0.5.0) runs inside ED-UP. Do not point DittoSR's own loader at Elite: this game does not load the file that loader replaces. |
 | XeSS | Any graphics card, and fastest on Intel Arc. On other cards it costs more frame time than DLSS or FSR. |
 | On | ED-UP's own anti-aliasing. |
 
@@ -53,7 +53,7 @@ In a headset, **HMD Image Quality** is the size the game renders. Below 1.0 the 
 
 [The full upscaler notes](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md#upscaling-dlss-fsr-dittosr-and-xess).
 
-Choosing DittoSR lights four rows under it: **DittoSR sharpness** (60 is the look it ships with), **DittoSR frame weight** (2; lower is steadier, higher is crisper), **DittoSR anti-shimmer** (Auto, Off, or a strength from 0.1 to 0.9), and **DittoSR filter** (CAS, or RCAS). They stay on the page for the other choices and do not respond until DittoSR is selected, the same way the DLSS preset waits for DLSS and frame generation waits for XeSS. ED-UP's **Sharpening** row is a separate pass after the upscaler. A change applies on the next frame.
+Choosing DittoSR lights four rows under it: **DittoSR sharpness** (60 is the look it ships with), **DittoSR frame weight** (2; lower is steadier, higher is crisper), **DittoSR anti-shimmer** (Auto, Off, or a strength from 0.1 to 0.9), and **DittoSR filter** (CAS, or RCAS). In the game they stay on the page for the other choices and do not respond until DittoSR is selected, the same way the DLSS preset waits for DLSS and frame generation waits for XeSS. The launcher hides them until DittoSR is selected. Frame weight and anti-shimmer are tuning keys. ED-UP's **Sharpening** row is a separate pass after the upscaler. A change applies on the next frame.
 
 ### Frame generation on a monitor
 
