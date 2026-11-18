@@ -293,11 +293,17 @@ Two flat-only rows (`menu flat_performance`, so none on VR's pages) on the Perfo
 row (`docs/xess-frame-generation-2026-11-12.md`):
 
 - **XeSS Frame Generation** (`fix.xess_frame_generation`, on | off, default off). Live while the bridge exists. The
-  bridge is made at swap-chain creation, so turning it on after a launch without it shows "Takes effect at the
-  next game start." (`xessFgBridged()` false). When the bridge was tried and failed, or stopped on a fault, the
-  hint says "Not running: <reason>" instead (`xessFgProblem()`), since a restart alone will not fix that.
-  While the window is in exclusive fullscreen (`xessFgExclusiveFullscreen()`), the hint on either row says frame
-  generation is paused and to choose Borderless or Windowed in Elite's display options.
+  bridge is made at swap-chain creation only when the key is on and the flat AA mode is XeSS then. After such a start
+  the row switches frame generation on and off with no restart, and the bridge stays until the game exits, also when
+  the AA mode is switched away from XeSS: frame generation is then disabled (no XeSS-SR inputs), the plain swap chain
+  or an already-made proxy keeps the window, and choosing XeSS again resumes it. After any other start there is no
+  bridge (`xessFgBridged()` false): turning it on shows "Frame generation is set up as the game starts: takes effect
+  at the next game start.", and while the AA row is not XeSS the dim hint says "Needs XeSS anti-aliasing: choose XeSS
+  above to use this." after a bridged start, else "Needs XeSS anti-aliasing: choose XeSS above, then restart the
+  game.". When the bridge was tried and failed, or stopped on a fault, the hint says "Not running: <reason>" instead
+  (`xessFgProblem()`), since a restart alone will not fix that.
+  While the window is in exclusive fullscreen (`xessFgExclusiveFullscreen()`), the row is dimmed and locked, and its hint
+  says to choose Borderless or Windowed in Elite's display options.
 - **XeSS-FG frames** (`fix.xess_generated_frames`, 1 = 2x, 2 = 3x, 3 = 4x, default 1). Also dimmed while the
   toggle is off. A choice above the GPU's maximum (`xessFgMaxGeneratedFrames()`, known once a bridge has been made; 0 =
   unknown, all allowed, and the runtime clamps) is skipped when
@@ -305,7 +311,8 @@ row (`docs/xess-frame-generation-2026-11-12.md`):
   value above the maximum shows clamped; the file is not rewritten.
 
 Both rows are always on the page and dimmed unless the flat AA mode is XeSS (`xessFgToggleRowDim`,
-`xessFgFramesRowDim`); a dimmed row refuses a change and says why. Both rows read the AA mode and the toggle from the
+`xessFgFramesRowDim`); a dimmed row refuses a change and says why. In exclusive fullscreen both rows are dimmed and locked
+too, because frame generation cannot run there. Both rows read the AA mode and the toggle from the
 values the panel shows (`g_rows`, as the DLSS preset row does), not `Config`: an F8 change reaches `Config` only
 with the reload after the write, so reading it dimmed (and before that, hid) the rows one change late (2026-11-12). The installer's window lists them in the
 flat view only. `flat_sharpen_test` holds the tables and the menu.cpp wiring.

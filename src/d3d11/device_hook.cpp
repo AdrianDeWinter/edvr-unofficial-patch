@@ -2393,6 +2393,17 @@ State& ensureState() {
 
 }  // namespace
 
+// The XeSS-FG bridge's plain swap chain, made on Elite's own factory so Elite's window association applies (xess_fg.h).
+// Straight to the real CreateSwapChainForHwnd: through the hook it would re-enter createBridged, which releases the
+// bridge, and be hooked as the game's swap chain.
+HRESULT xessFgCreateSwapChainUnhooked(IDXGIFactory2* factory, IUnknown* device, HWND window,
+                                      const DXGI_SWAP_CHAIN_DESC1* desc, IDXGISwapChain1** out) {
+    if (!factory || !out) return E_INVALIDARG;
+    if (g_state && g_state->realCreateSwapChainForHwnd)
+        return g_state->realCreateSwapChainForHwnd(factory, device, window, desc, nullptr, nullptr, out);
+    return factory->CreateSwapChainForHwnd(device, window, desc, nullptr, nullptr, out);
+}
+
 // The commander's seat, for the runtime's seat memory (src/openxr/seat_memory.h), which is always on in the VR profile (the setting
 // advanced.cockpit_centre was retired 2026-10-14: keep shipped). In the flat profile the word is cleared to "nobody has written", which the
 // runtime reads as inactive. Called at the first export call (so the runtime's start-up finds it before any frame) and from the journal's tick

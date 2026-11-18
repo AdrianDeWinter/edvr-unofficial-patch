@@ -592,21 +592,32 @@ bool dittoRowRefused(const MenuRowDef& d, const char** why) {
 
 bool xessFgToggleOn() { return boolOf(shownValue("fix", "xess_frame_generation"), false); }
 
-bool xessFgToggleRowDisabled() { return xessFgToggleRowDim(runtimeFlatProfile(), flatAntiAliasingIsXess()); }
+bool xessFgToggleRowDisabled() { return xessFgToggleRowDim(runtimeFlatProfile(), flatAntiAliasingIsXess(), xessFgExclusiveFullscreen()); }
 
-bool xessFgFramesRowDisabled() { return xessFgFramesRowDim(runtimeFlatProfile(), flatAntiAliasingIsXess(), xessFgToggleOn()); }
+bool xessFgFramesRowDisabled() {
+    return xessFgFramesRowDim(runtimeFlatProfile(), flatAntiAliasingIsXess(), xessFgToggleOn(), xessFgExclusiveFullscreen());
+}
 
-// The highlighted dimmed row's hint, and the line a refused change leaves: the AA mode comes first, because turning the toggle on does nothing without it.
+// The highlighted dimmed row's hint, and the line a refused change leaves: the AA mode comes first, because turning the toggle on does nothing without it;
+// then exclusive fullscreen, which locks both rows whatever the AA mode.
+// Frame generation is set up only when the game starts with frame generation on and XeSS anti-aliasing (xess_fg.cpp, xessFgBeginCreate): after such a
+// start (bridged) choosing XeSS again is enough; after any other start it also takes a restart, and the hint says so up front.
 const char* xessFgDimHint(bool framesRow) {
-    if (xessFgToggleRowDisabled()) return "Needs XeSS anti-aliasing: choose XeSS above to use this.";
+    if (runtimeFlatProfile() && !flatAntiAliasingIsXess())
+        return xessFgBridged() ? "Needs XeSS anti-aliasing: choose XeSS above to use this."
+                               : "Needs XeSS anti-aliasing: choose XeSS above, then restart the game.";
+    if (runtimeFlatProfile() && xessFgExclusiveFullscreen())
+        return "Unavailable in exclusive fullscreen: choose Borderless or Windowed in Elite's display options.";
     return framesRow ? "Needs XeSS Frame Generation: turn it on above to use this." : "";
 }
 
 const char* xessFgRefusal(bool framesRow) {
     const char* row = framesRow ? "XeSS-FG frames" : "Frame generation";
-    static char text[120];
-    if (xessFgToggleRowDisabled())
+    static char text[160];
+    if (runtimeFlatProfile() && !flatAntiAliasingIsXess())
         snprintf(text, sizeof(text), "%s is inactive: choose XeSS anti-aliasing above first.", row);
+    else if (runtimeFlatProfile() && xessFgExclusiveFullscreen())
+        snprintf(text, sizeof(text), "%s is locked in exclusive fullscreen: choose Borderless or Windowed in Elite's display options.", row);
     else
         snprintf(text, sizeof(text), "%s is inactive: turn XeSS Frame Generation on above first.", row);
     return text;
@@ -620,8 +631,9 @@ bool xessFgRowRefused(const MenuRowDef& d, const char** why) {
     return true;
 }
 
-// The toggle is on but frame generation is not running: either it was never tried this session (it takes effect at the next launch), or it
-// was tried and failed or stopped (xessFgProblem), which a restart alone will not fix. The second wins.
+// The toggle is on but frame generation is not running: either the game did not start with both frame generation on and XeSS anti-aliasing (no
+// bridge; it takes effect at the next game start), or it was tried and failed or stopped (xessFgProblem), which a restart alone will not fix. The
+// second wins. After a bridged start the toggle is live both ways and neither applies.
 bool xessFgNeedsRestart() { return xessFgToggleOn() && (!xessFgBridged() || xessFgProblem() != nullptr); }
 
 const char* xessFgRestartHint() {
@@ -630,7 +642,7 @@ const char* xessFgRestartHint() {
         snprintf(text, sizeof(text), "Not running: %s. Details in the EDVR log.", problem);
         return text;
     }
-    return "Takes effect at the next game start.";
+    return "Frame generation is set up as the game starts: takes effect at the next game start.";
 }
 
 // The rows that only sometimes need a restart (menu_restart.h: the table and the rule), judged from the state the menu shows now and the runtime's own
@@ -2928,8 +2940,6 @@ void buildContent(MenuContent& c) {
                 snprintf(c.hint, sizeof(c.hint), "%s", xessFgDimHint(xessFramesRow));
             else if (hi && dim && dittoRow)
                 snprintf(c.hint, sizeof(c.hint), "%s", dittoRowHint());
-            else if (hi && (xessFramesRow || xessToggleRow) && xessFgToggleOn() && xessFgExclusiveFullscreen())
-                snprintf(c.hint, sizeof(c.hint), "%s", "Paused in exclusive fullscreen: choose Borderless or Windowed in Elite's display options.");
             else if (hi && (xessFramesRow || xessToggleRow) && xessFgNeedsRestart())
                 snprintf(c.hint, sizeof(c.hint), "%s", xessFgRestartHint());
             else if (hi && dim && runtimeFlatProfile())

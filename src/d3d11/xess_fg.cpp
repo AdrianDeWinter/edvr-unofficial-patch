@@ -73,6 +73,7 @@ constexpr UINT kPlainBuffers = 2;
 constexpr DWORD kGpuWaitMs = 5000;
 constexpr DWORD kKeyWaitMs = 100;
 constexpr unsigned kMaxDroppedRun = 30;   // consecutive frames not presented before the bridge gives up (xessFgPresent)
+constexpr unsigned kSettlePresents = 30;  // consecutive windowed foreground presents before the plain swap chain hands over to the proxy
 
 // The two settings, re-read only when the configuration changes (Config::generation()), not on every Present.
 // The render thread's: Present, the resolver's xessFgWanted.
@@ -150,6 +151,7 @@ struct Bridge {
     xell_context_handle_t llContext = nullptr;
     uint32_t initFlags = 0;
     ComPtr<IDXGIFactory2> factory;
+    ComPtr<IDXGIFactory2> gameFactory;   // Elite's: the plain swap chain is made on it (xessFgCreateSwapChainUnhooked)
     ComPtr<IDXGISwapChain4> proxy;
     // After a fault: a plain D3D11 flip swap chain on the real window, which Elite's frame is copied into instead.
     ComPtr<IDXGISwapChain1> plain;
@@ -173,6 +175,10 @@ struct Bridge {
     uint32_t pendingId = 0;          // tagged on XeSS-SR's list, which is not submitted yet (commitInputs)
     uint32_t taggedId = 0;           // the id motion and depth were last tagged for, on a list that was submitted
     uint32_t tagFailedId = 0;        // the id whose tagging was refused, or whose list never ran
+    uint32_t resolvedId = 0;         // the id XeSS-SR last resolved, on a list that was submitted (either presenter)
+    uint32_t pendingResolvedId = 0;  // the plain presenter's: the id XeSS-SR resolved on a list not submitted yet (commitInputs)
+    unsigned resolvedRun = 0;        // consecutive presents whose frame XeSS-SR resolved
+    unsigned windowedRun = 0;        // consecutive presents windowed and in the foreground; reset when fullscreen changes
     unsigned taggedRun = 0;          // consecutive presents that had inputs
     unsigned droppedRun = 0;         // consecutive frames not presented (copyIn or Elite's back buffer failed)
     bool queueStuck = false;         // a wait on the D3D12 queue timed out: its work may still be running
@@ -199,6 +205,7 @@ struct Bridge {
         plain.Reset();
         for (CommandSlot& slot : ring) { slot.list.Reset(); slot.allocator.Reset(); }
         shared12.Reset(); sharedKey.Reset(); shared11.Reset();
+        gameFactory.Reset();
         factory.Reset();
         in11.Reset(); out11.Reset(); in12.Reset(); out12.Reset();
         queue.Reset(); d12.Reset(); ctx4.Reset(); context.Reset(); d11.Reset();
@@ -614,24 +621,88 @@ bool syncPlain(Bridge& b, UINT width, UINT height, UINT sourceFormat) {
     return SUCCEEDED(hr);
 }
 
-// After a fault: frame generation, XeLL and the proxy go; a plain D3D11 flip swap chain on the real window takes
-// Elite's frame from here. Runs once.
-void fallBack(Bridge& b) {
-    if (b.fellBack) return;
-    b.fellBack = true;
+// The XeLL and XeSS-FG contexts, their pipelines and the latency mode: what frame generation needs, made the first time
+// it can run and again after dropProxy. Idempotent. Fills `why` and returns false on a failure, with neither context left.
+bool prepareFg(Bridge& b, char* why, size_t whySize) {
+    if (b.fgContext && b.llContext) return true;
+    bool ok = true;
+    if (!b.llContext) {
+        const xell_result_t lr = b.ll.createContext(b.d12.Get(), &b.llContext);
+        if (lr != XELL_RESULT_SUCCESS) {
+            std::snprintf(why, whySize, "xellD3D12CreateContext returned %d", int(lr));
+            b.llContext = nullptr;
+            ok = false;
+        } else {
+            b.ll.setLogging(b.llContext, XELL_LOGGING_LEVEL_WARNING, &llLog);
+        }
+    }
+    if (ok && !b.fgContext) {
+        const xefg_swapchain_result_t fr = b.fg.createContext(b.d12.Get(), &b.fgContext);
+        if (fr != XEFG_SWAPCHAIN_RESULT_SUCCESS) {
+            std::snprintf(why, whySize, "xefgSwapChainD3D12CreateContext returned %s (%d)", fgResultName(fr), int(fr));
+            b.fgContext = nullptr;
+            ok = false;
+        } else {
+            b.fg.setLogging(b.fgContext, XEFG_SWAPCHAIN_LOGGING_LEVEL_WARNING, &fgLog, nullptr);
+        }
+    }
+    if (ok) {
+        b.initFlags = XEFG_SWAPCHAIN_INIT_FLAG_INVERTED_DEPTH;
+        xefg_swapchain_d3d12_init_params_t params{};
+        params.initFlags = b.initFlags;
+        params.maxInterpolatedFrames = XEFG_SWAPCHAIN_USE_MAX_SUPPORTED_INTERPOLATED_FRAMES;
+        // The swap chain's real size and format: XeSS-FG logs "Back buffer width is zero" for a 0x0 query (flight
+        // 20261113_012553).
+        UINT queryWidth = b.width, queryHeight = b.height;
+        clientSize(b.real, &queryWidth, &queryHeight);
+        xefg_swapchain_properties_t props{};
+        if (b.fg.getProperties(b.fgContext, &params, queryWidth, queryHeight, b.format, &props) >= 0 &&
+            props.maxSupportedInterpolations)
+            g_maxFrames.store(props.maxSupportedInterpolations, std::memory_order_relaxed);
+        const xefg_swapchain_result_t lr = b.fg.setLatency(b.fgContext, b.llContext);
+        if (lr < 0) {
+            std::snprintf(why, whySize, "xefgSwapChainSetLatencyReduction returned %s", fgResultName(lr));
+            ok = false;
+        }
+    }
+    if (ok) {
+        // Compiles in the background while Elite finishes starting; initialization waits for it.
+        const xefg_swapchain_result_t pr = b.fg.buildPipelines(b.fgContext, nullptr, 0, b.initFlags);
+        if (pr < 0) Log::get().note("xess-fg: pipeline build did not start: %s", fgResultName(pr));
+    }
+    if (!ok) {
+        if (b.fgContext) { b.fg.destroy(b.fgContext); b.fgContext = nullptr; }
+        if (b.llContext) { b.ll.destroy(b.llContext); b.llContext = nullptr; }
+    }
+    return ok;
+}
+
+// Takes the FG side off the window: the proxy leaves exclusive fullscreen (the window must be free for the plain swap
+// chain), its queue work finishes, and the proxy and both contexts go. `leaveFullscreen` (fallBack only) also forgets the
+// fullscreen state, since the swap chain that takes the window next is windowed.
+void dropProxy(Bridge& b, bool leaveFullscreen) {
     g_activeFrames.store(0, std::memory_order_relaxed);
-    b.tally.onSwapChainChanged();   // the presented count carries on from the plain swap chain's frame statistics
-    xessSetInputTagger(nullptr, nullptr);
     if (b.proxy && b.presenterFullscreen) b.proxy->SetFullscreenState(FALSE, nullptr);
-    b.presenterFullscreen = false;
-    g_exclusiveFullscreen.store(false, std::memory_order_relaxed);
+    if (leaveFullscreen) {
+        b.presenterFullscreen = false;
+        g_exclusiveFullscreen.store(false, std::memory_order_relaxed);
+    }
     // A queue that already missed one 5 s wait is not waited on again; what it may still use is kept, not released.
     if (!drainQueue(b)) keepQueueResources(b);
-    for (CommandSlot& slot : b.ring) { slot.list.Reset(); slot.allocator.Reset(); slot.doneValue = 0; }
-    b.shared12.Reset(); b.sharedKey.Reset(); b.shared11.Reset();
+    for (CommandSlot& slot : b.ring) slot.doneValue = 0;   // the queue has drained (or its slots were kept and moved out)
     b.proxy.Reset();
     if (b.fgContext) { b.fg.destroy(b.fgContext); b.fgContext = nullptr; }
     if (b.llContext) { b.ll.destroy(b.llContext); b.llContext = nullptr; }
+    b.enabledState = -1;
+    b.framesState = 0;
+    b.taggedRun = 0;
+    b.pendingId = 0;
+    b.startedId = 0;
+}
+
+// The plain D3D11 flip swap chain on the real window, shaped from Elite's back buffer. Does nothing if it exists.
+bool makePlain(Bridge& b, HRESULT* hrOut = nullptr) {
+    if (b.plain) return true;
     ComPtr<ID3D11Texture2D> back;
     D3D11_TEXTURE2D_DESC source{};
     const bool haveSource = sourceBuffer(b.hiddenSwap, back, &source);
@@ -647,14 +718,139 @@ void fallBack(Bridge& b) {
     desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     desc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
     desc.Flags = b.tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
-    // The bridge's own factory, not the game's: device_hook.cpp's creation hook forwards it untouched.
-    const HRESULT hr = b.factory && desc.Format != DXGI_FORMAT_UNKNOWN
-        ? b.factory->CreateSwapChainForHwnd(b.d11.Get(), b.real, &desc, nullptr, nullptr, b.plain.GetAddressOf())
+    // Elite's factory, so that DXGI's window association on the real window (Alt+Enter, focus loss, exclusive fullscreen) is
+    // Elite's own; the bridge's factory never had it. xessFgCreateSwapChainUnhooked goes past device_hook.cpp's creation
+    // hook, which would tear the bridge down. Without Elite's factory, the bridge's own factory makes it.
+    const bool onGame = b.gameFactory != nullptr;
+    const HRESULT hr = desc.Format == DXGI_FORMAT_UNKNOWN ? E_FAIL
+        : onGame ? xessFgCreateSwapChainUnhooked(b.gameFactory.Get(), b.d11.Get(), b.real, &desc, b.plain.GetAddressOf())
+        : b.factory ? b.factory->CreateSwapChainForHwnd(b.d11.Get(), b.real, &desc, nullptr, nullptr, b.plain.GetAddressOf())
         : E_FAIL;
     if (FAILED(hr)) b.plain.Reset();
-    Log::get().note("xess-fg: plain D3D11 swap chain on window %p %ux%u format=%u: 0x%08X%s", static_cast<void*>(b.real),
-                    desc.Width, desc.Height, unsigned(desc.Format), unsigned(hr),
+    if (hrOut) *hrOut = hr;
+    Log::get().note("xess-fg: plain D3D11 swap chain on window %p on %s factory %ux%u format=%u: 0x%08X%s", static_cast<void*>(b.real),
+                    onGame ? "Elite's" : "the bridge's", desc.Width, desc.Height, unsigned(desc.Format), unsigned(hr),
                     FAILED(hr) ? "; nothing can reach the window now" : "");
+    return SUCCEEDED(hr);
+}
+
+// After a fault: frame generation, XeLL and the proxy go; a plain D3D11 flip swap chain on the real window takes
+// Elite's frame from here, for good. Runs once.
+void fallBack(Bridge& b) {
+    if (b.fellBack) return;
+    b.fellBack = true;
+    b.tally.onSwapChainChanged();   // the presented count carries on from the plain swap chain's frame statistics
+    xessSetInputTagger(nullptr, nullptr);
+    dropProxy(b, true);
+    for (CommandSlot& slot : b.ring) { slot.list.Reset(); slot.allocator.Reset(); slot.doneValue = 0; }
+    b.shared12.Reset(); b.sharedKey.Reset(); b.shared11.Reset();
+    makePlain(b);
+}
+
+// The plain -> proxy switch: the plain swap chain gives the window up, and the proxy is made on the real window and
+// owns it until dropProxy. False on a fault; the next Present's fallBack then remakes the plain swap chain.
+bool makeProxy(Bridge& b, uint32_t frame) {
+    char why[320] = "";
+    if (b.queueStuck) {
+        // A queue that missed a 5 s wait may still be running the last proxy's copies: no new proxy on it.
+        fault(b, "frame generation could not start: the D3D12 queue missed a wait earlier");
+        return false;
+    }
+    if (!prepareFg(b, why, sizeof(why))) {
+        fault(b, "frame generation could not start: %s", why);
+        return false;
+    }
+    if (!b.ring[0].list && !makeRing(b, why, sizeof(why))) {
+        fault(b, "frame generation could not start: %s", why);
+        return false;
+    }
+    // Elite's back buffer sets the proxy's size and format, as syncProxy keeps them later.
+    ComPtr<ID3D11Texture2D> back;
+    D3D11_TEXTURE2D_DESC source{};
+    if (!sourceBuffer(b.hiddenSwap, back, &source)) {
+        fault(b, "Elite's back buffer could not be read for the proxy");
+        return false;
+    }
+    back.Reset();
+    const DXGI_FORMAT format = proxyFormatFor(source.Format);
+    if (format == DXGI_FORMAT_UNKNOWN) {
+        fault(b, "Elite's back buffer is format %u, which XeSS-FG does not present", unsigned(source.Format));
+        return false;
+    }
+    b.width = source.Width;
+    b.height = source.Height;
+    b.format = format;
+    // The plain swap chain goes first: the proxy is made on the same window.
+    b.plain.Reset();
+    b.context->Flush();
+    DXGI_SWAP_CHAIN_DESC1 desc{};
+    desc.Width = b.width;
+    desc.Height = b.height;
+    desc.Format = b.format;
+    desc.SampleDesc.Count = 1;
+    desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    desc.BufferCount = kProxyBuffers;
+    desc.Scaling = DXGI_SCALING_STRETCH;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    desc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+    desc.Flags = b.tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+    xefg_swapchain_d3d12_init_params_t params{};
+    params.initFlags = b.initFlags;
+    params.maxInterpolatedFrames = XEFG_SWAPCHAIN_USE_MAX_SUPPORTED_INTERPOLATED_FRAMES;
+    params.uiMode = XEFG_SWAPCHAIN_UI_MODE_NONE;   // the HUD is interpolated with the scene: no HUD-less image exists
+    const xefg_swapchain_result_t ir =
+        b.fg.initFromDesc(b.fgContext, b.real, &desc, nullptr, b.queue.Get(), b.factory.Get(), &params);
+    bool ok = true;
+    if (ir < 0) {
+        std::snprintf(why, sizeof(why), "xefgSwapChainD3D12InitFromSwapChainDesc returned %s (%d)", fgResultName(ir), int(ir));
+        ok = false;
+    } else if (b.fg.getSwapChainPtr(b.fgContext, IID_PPV_ARGS(b.proxy.GetAddressOf())) < 0 || !b.proxy) {
+        std::snprintf(why, sizeof(why), "the proxy swap chain pointer was refused");
+        ok = false;
+    }
+    if (ok) {
+        xefg_swapchain_d3d12_init_params_t applied{};
+        if (b.fg.getInitParams(b.fgContext, &applied) >= 0 && applied.maxInterpolatedFrames)
+            g_maxFrames.store(applied.maxInterpolatedFrames, std::memory_order_relaxed);
+    }
+    ok = ok && makeShared(b, why, sizeof(why));
+    if (ok) {
+        xell_sleep_params_t sleep{};
+        sleep.bLowLatencyMode = 1;
+        const xell_result_t sr = b.ll.setSleepMode(b.llContext, &sleep);
+        if (sr != XELL_RESULT_SUCCESS) {
+            std::snprintf(why, sizeof(why), "xellSetSleepMode returned %d", int(sr));
+            ok = false;
+        }
+    }
+    if (!ok) {
+        b.proxy.Reset();
+        fault(b, "the proxy could not take window %p: %s", static_cast<void*>(b.real), why);
+        return false;
+    }
+    b.tally.onSwapChainChanged();
+    b.enabledState = -1;
+    b.taggedRun = 0;
+    static unsigned lines = 0;
+    if (lines++ < 32)
+        Log::get().note("xess-fg: the proxy takes window %p at frame %u (%ux%u format=%u tearing=%u)",
+                        static_cast<void*>(b.real), frame, b.width, b.height, unsigned(b.format), b.tearing ? 1u : 0u);
+    return true;
+}
+
+// The proxy -> plain switch (exclusive fullscreen, or a windowed-only rule): the proxy leaves the window and the plain
+// swap chain takes it back. The caller re-applies fullscreen on the plain swap chain when that is wanted.
+void returnToPlain(Bridge& b, const char* reason) {
+    if (b.fellBack || !b.proxy) return;
+    b.tally.onSwapChainChanged();
+    dropProxy(b, false);
+    HRESULT hr = S_OK;
+    const bool ok = makePlain(b, &hr);
+    static unsigned lines = 0;
+    if (lines++ < 32)
+        Log::get().note("xess-fg: the plain swap chain takes window %p at frame %u: %s", static_cast<void*>(b.real), b.frameId,
+                        reason);
+    if (!ok) fault(b, "the plain swap chain could not take window %p back (0x%08X)", static_cast<void*>(b.real), unsigned(hr));
 }
 
 HRESULT plainPresent(Bridge& b, IDXGISwapChain* hidden, UINT syncInterval, UINT flags) {
@@ -729,8 +925,19 @@ void refreshFullscreen(Bridge& b) {
     b.presenterFullscreen = fullscreen != FALSE;
     g_exclusiveFullscreen.store(b.presenterFullscreen, std::memory_order_relaxed);
     b.enabledState = -1;
+    b.windowedRun = 0;
     Log::get().note("xess-fg: exclusive fullscreen is now %s without a call from Elite (DXGI's Alt+Enter?)",
                     fullscreen ? "on" : "off");
+    if (b.presenterFullscreen && b.proxy && !b.fellBack) {
+        // The proxy went fullscreen: the plain swap chain takes the window back and goes fullscreen instead.
+        returnToPlain(b, "exclusive fullscreen by DXGI (Alt+Enter)");
+        if (b.plain) {
+            b.plain->SetFullscreenState(TRUE, nullptr);
+            BOOL plainFullscreen = FALSE;
+            if (SUCCEEDED(b.plain->GetFullscreenState(&plainFullscreen, nullptr))) b.presenterFullscreen = plainFullscreen != FALSE;
+            g_exclusiveFullscreen.store(b.presenterFullscreen, std::memory_order_relaxed);
+        }
+    }
 }
 
 void llMarker(Bridge& b, uint32_t id, xell_latency_marker_type_t marker) {
@@ -738,9 +945,10 @@ void llMarker(Bridge& b, uint32_t id, xell_latency_marker_type_t marker) {
 }
 
 // XeLL wants, per frame id: sleep, then the simulation, render submit and present markers in order. Elite's
-// simulation and render submission interleave on one thread, so the whole CPU frame is reported as both.
+// simulation and render submission interleave on one thread, so the whole CPU frame is reported as both. XeLL runs
+// only with the proxy: the plain swap chain has no frame generation to pace.
 void startFrame(Bridge& b) {
-    if (!b.llContext || b.startedId == b.frameId) return;
+    if (!b.llContext || !b.proxy || b.fellBack || b.startedId == b.frameId) return;
     b.startedId = b.frameId;
     b.ll.sleep(b.llContext, b.frameId);
     llMarker(b, b.frameId, XELL_SIMULATION_START);
@@ -778,7 +986,7 @@ void cameraMatrices(const Bridge& b, float view[16], float projection[16]) {
 void tagInputs(ID3D12GraphicsCommandList* list, ID3D12Resource* motion, ID3D12Resource* depth,
                uint32_t width, uint32_t height, float jitterX, float jitterY, bool reset) {
     Bridge* b = g_bridge;
-    if (!b || !b->proxy || b->failed || b->fellBack || !runtimeFlatProfile() || !list || !motion || !depth) return;
+    if (!b || b->failed || b->fellBack || !runtimeFlatProfile() || !list || !motion || !depth) return;
     // XeSS-SR may have been restarted on another D3D12 device (xessShutdown on a device change); XeSS-FG's context
     // belongs to the one the bridge opened, so a list from any other device is not tagged.
     ComPtr<ID3D12Device> listDevice;
@@ -787,6 +995,11 @@ void tagInputs(ID3D12GraphicsCommandList* list, ID3D12Resource* motion, ID3D12Re
             b->deviceNoted = true;
             Log::get().note("xess-fg: XeSS-SR now runs on another D3D12 device; frame generation gets no inputs from it");
         }
+        return;
+    }
+    if (!b->proxy) {
+        // The plain presenter: XeSS-SR resolved this frame, and nothing is tagged.
+        b->pendingResolvedId = b->frameId;
         return;
     }
     const uint32_t id = b->frameId;
@@ -825,9 +1038,15 @@ void tagInputs(ID3D12GraphicsCommandList* list, ID3D12Resource* motion, ID3D12Re
 // After the list tagInputs recorded on was closed: submitted, the frame has inputs; closed with an error, it has none.
 void commitInputs(bool submitted) {
     Bridge* b = g_bridge;
-    if (!b || !b->pendingId) return;
+    if (!b) return;
+    if (b->pendingResolvedId) {
+        if (submitted) b->resolvedId = b->pendingResolvedId;
+        b->pendingResolvedId = 0;
+    }
+    if (!b->pendingId) return;
     if (submitted) {
         b->taggedId = b->pendingId;
+        b->resolvedId = b->pendingId;
     } else {
         b->tagFailedId = b->pendingId;
         Log::get().note("xess-fg: frame %u: XeSS-SR's command list did not close; its tags are dropped", b->pendingId);
@@ -1001,7 +1220,7 @@ void xessFgNoteCamera(const float[4][4], float) {}
 
 bool xessFgWanted() {
     const Bridge* b = g_bridge;
-    return b && !b->failed && !b->fellBack && settings().wanted;
+    return b && !b->failed && !b->fellBack && !b->presenterFullscreen && settings().wanted;
 }
 
 // The panel's frame cap before any bridge exists: XeSS-FG makes more than one generated frame only on Intel GPUs, so
@@ -1043,47 +1262,15 @@ HWND xessFgBeginCreate(IUnknown* device, HWND realWindow, UINT* width, UINT* hei
     }
     ok = ok && openD3D12(*b, device, why, sizeof(why)) && loadLibraries(*b, why, sizeof(why));
     if (ok) {
-        const xell_result_t lr = b->ll.createContext(b->d12.Get(), &b->llContext);
-        if (lr != XELL_RESULT_SUCCESS) {
-            std::snprintf(why, sizeof(why), "xellD3D12CreateContext returned %d", int(lr));
-            b->llContext = nullptr;
-            ok = false;
-        } else {
-            b->ll.setLogging(b->llContext, XELL_LOGGING_LEVEL_WARNING, &llLog);
-        }
+        // The swap chain's real size: XeSS-FG logs "Back buffer width is zero" for a 0x0 query (flight 20261113_012553).
+        UINT sizeWidth = *width, sizeHeight = *height;
+        clientSize(realWindow, &sizeWidth, &sizeHeight);
+        b->width = sizeWidth;
+        b->height = sizeHeight;
     }
+    // The XeLL and XeSS-FG contexts and their pipelines are made now, while Elite finishes starting.
+    if (ok) ok = prepareFg(*b, why, sizeof(why));
     if (ok) {
-        const xefg_swapchain_result_t fr = b->fg.createContext(b->d12.Get(), &b->fgContext);
-        if (fr != XEFG_SWAPCHAIN_RESULT_SUCCESS) {
-            std::snprintf(why, sizeof(why), "xefgSwapChainD3D12CreateContext returned %s (%d)", fgResultName(fr), int(fr));
-            b->fgContext = nullptr;
-            ok = false;
-        }
-    }
-    if (ok) {
-        b->fg.setLogging(b->fgContext, XEFG_SWAPCHAIN_LOGGING_LEVEL_WARNING, &fgLog, nullptr);
-        b->initFlags = XEFG_SWAPCHAIN_INIT_FLAG_INVERTED_DEPTH;
-        xefg_swapchain_d3d12_init_params_t params{};
-        params.initFlags = b->initFlags;
-        params.maxInterpolatedFrames = XEFG_SWAPCHAIN_USE_MAX_SUPPORTED_INTERPOLATED_FRAMES;
-        // The swap chain's real size and format: XeSS-FG logs "Back buffer width is zero" for a 0x0 query (flight
-        // 20261113_012553).
-        UINT queryWidth = *width, queryHeight = *height;
-        clientSize(realWindow, &queryWidth, &queryHeight);
-        xefg_swapchain_properties_t props{};
-        if (b->fg.getProperties(b->fgContext, &params, queryWidth, queryHeight, b->format, &props) >= 0 &&
-            props.maxSupportedInterpolations)
-            g_maxFrames.store(props.maxSupportedInterpolations, std::memory_order_relaxed);
-        const xefg_swapchain_result_t lr = b->fg.setLatency(b->fgContext, b->llContext);
-        if (lr < 0) {
-            std::snprintf(why, sizeof(why), "xefgSwapChainSetLatencyReduction returned %s", fgResultName(lr));
-            ok = false;
-        }
-    }
-    if (ok) {
-        // Compiles in the background while Elite finishes starting; initialization waits for it.
-        const xefg_swapchain_result_t pr = b->fg.buildPipelines(b->fgContext, nullptr, 0, b->initFlags);
-        if (pr < 0) Log::get().note("xess-fg: pipeline build did not start: %s", fgResultName(pr));
         b->hidden = makeHiddenWindow();
         if (!b->hidden) {
             std::snprintf(why, sizeof(why), "hidden window could not be made (Win32=%lu)", GetLastError());
@@ -1136,45 +1323,6 @@ bool xessFgFinishCreate(IDXGISwapChain* hidden, HWND realWindow) {
         if (SUCCEEDED(b->factory.As(&factory5)) &&
             SUCCEEDED(factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allow, sizeof(allow))))
             b->tearing = allow != FALSE;
-        DXGI_SWAP_CHAIN_DESC1 desc{};
-        desc.Width = b->width;
-        desc.Height = b->height;
-        desc.Format = b->format;
-        desc.SampleDesc.Count = 1;
-        desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        desc.BufferCount = kProxyBuffers;
-        desc.Scaling = DXGI_SCALING_STRETCH;
-        desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-        desc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
-        desc.Flags = b->tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
-        xefg_swapchain_d3d12_init_params_t params{};
-        params.initFlags = b->initFlags;
-        params.maxInterpolatedFrames = XEFG_SWAPCHAIN_USE_MAX_SUPPORTED_INTERPOLATED_FRAMES;
-        params.uiMode = XEFG_SWAPCHAIN_UI_MODE_NONE;   // the HUD is interpolated with the scene: no HUD-less image exists
-        const xefg_swapchain_result_t ir =
-            b->fg.initFromDesc(b->fgContext, realWindow, &desc, nullptr, b->queue.Get(), b->factory.Get(), &params);
-        if (ir < 0) {
-            std::snprintf(why, sizeof(why), "xefgSwapChainD3D12InitFromSwapChainDesc returned %s (%d)", fgResultName(ir), int(ir));
-            ok = false;
-        } else if (b->fg.getSwapChainPtr(b->fgContext, IID_PPV_ARGS(b->proxy.GetAddressOf())) < 0 || !b->proxy) {
-            std::snprintf(why, sizeof(why), "the proxy swap chain pointer was refused");
-            ok = false;
-        }
-        if (ok) {
-            xefg_swapchain_d3d12_init_params_t applied{};
-            if (b->fg.getInitParams(b->fgContext, &applied) >= 0 && applied.maxInterpolatedFrames)
-                g_maxFrames.store(applied.maxInterpolatedFrames, std::memory_order_relaxed);
-        }
-    }
-    ok = ok && makeShared(*b, why, sizeof(why)) && makeRing(*b, why, sizeof(why));
-    if (ok) {
-        xell_sleep_params_t sleep{};
-        sleep.bLowLatencyMode = 1;
-        const xell_result_t sr = b->ll.setSleepMode(b->llContext, &sleep);
-        if (sr != XELL_RESULT_SUCCESS) {
-            std::snprintf(why, sizeof(why), "xellSetSleepMode returned %d", int(sr));
-            ok = false;
-        }
     }
     if (!ok) {
         // The caller releases the hidden swap chain, then calls xessFgAbandon to take the window down after it.
@@ -1182,17 +1330,35 @@ bool xessFgFinishCreate(IDXGISwapChain* hidden, HWND realWindow) {
         noteProblem(why);
         return false;
     }
+    // Elite's frame is shown on the real window by EDVR's plain swap chain from the start; the proxy comes later (makeProxy).
     b->hiddenSwap = hidden;
+    {
+        ComPtr<IDXGIFactory2> game;
+        const HRESULT parentHr = hidden->GetParent(IID_PPV_ARGS(game.GetAddressOf()));
+        if (SUCCEEDED(parentHr)) {
+            b->gameFactory = game;
+        } else {
+            Log::get().note("xess-fg: Elite's factory could not be read from its swap chain (0x%08X); the plain swap chain goes "
+                            "on the bridge's factory", unsigned(parentHr));
+        }
+    }
+    HRESULT plainHr = S_OK;
+    if (!makePlain(*b, &plainHr)) {
+        Log::get().note("xess-fg: not started: the plain swap chain could not be made on the window (0x%08X); the swap chain "
+                        "is remade on the game window", unsigned(plainHr));
+        noteProblem("the plain swap chain could not be made on the window");
+        return false;
+    }
     xessSetInputTagger(&tagInputs, &commitInputs);
     g_bridged.store(true, std::memory_order_relaxed);
     g_everBridged.store(true, std::memory_order_relaxed);
-    Log::get().note("xess-fg: bridge ready: proxy %ux%u format=%u buffers=%u tearing=%u; Elite's swap chain flags=0x%X%s; "
-                    "XeLL low latency on; GPU maximum %u generated frames; frame generation runs while "
-                    "fix.xess_frame_generation is on and the flat XeSS-SR resolve runs", b->width, b->height,
-                    unsigned(b->format), kProxyBuffers, b->tearing ? 1u : 0u, b->hiddenFlags,
+    Log::get().note("xess-fg: bridge ready: the plain swap chain shows Elite's frame on window %p (%ux%u format=%u tearing=%u); "
+                    "Elite's swap chain flags=0x%X%s; the proxy is made when frame generation can run (fix.xess_frame_generation "
+                    "on, windowed, XeSS-SR resolving)", static_cast<void*>(realWindow), b->width, b->height, unsigned(b->format),
+                    b->tearing ? 1u : 0u, b->hiddenFlags,
                     (b->hiddenFlags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT)
                         ? " (frame-latency waitable: the hidden swap chain is never presented, so a wait on its object would not end)"
-                        : "", g_maxFrames.load(std::memory_order_relaxed));
+                        : "");
     return true;
 }
 
@@ -1221,7 +1387,29 @@ HRESULT xessFgPresent(IDXGISwapChain* hidden, UINT syncInterval, UINT flags) {
         IDXGISwapChain* shown = presenter(*b);
         return shown ? shown->Present(syncInterval, presentFlagsFor(*b, syncInterval, flags)) : S_OK;
     }
-    if (b->fellBack) return plainPresentCounted(*b, hidden, syncInterval, flags);
+    // Whether XeSS-SR resolved this frame, and whether the window has been windowed and in the foreground long enough
+    // for the proxy to take it (kSettlePresents).
+    const bool resolved = b->resolvedId == b->frameId;
+    b->resolvedRun = resolved ? b->resolvedRun + 1 : 0;
+    // The swap chain's window may be a child of the one Windows activates: compare the top-level windows.
+    const bool foreground = !b->presenterFullscreen && GetForegroundWindow() == GetAncestor(b->real, GA_ROOT);
+    b->windowedRun = foreground ? b->windowedRun + 1 : 0;
+
+    if (b->fellBack || !b->proxy) {
+        // The plain presenter shows the frame. The proxy takes over once frame generation can run: the setting is on,
+        // the window is windowed, XeSS-SR resolved two frames in a row and the window has settled.
+        const bool switchUp = !b->fellBack && settings().wanted && runtimeFlatProfile() && foreground &&
+                              b->resolvedRun >= 2 && b->windowedRun >= kSettlePresents;
+        if (!switchUp || !makeProxy(*b, b->frameId)) {
+            if (b->failed) fallBack(*b);
+            const HRESULT plainHr = plainPresentCounted(*b, hidden, syncInterval, flags);
+            g_activeFrames.store(0, std::memory_order_relaxed);
+            ++b->frameId;
+            if (!b->frameId) b->frameId = 1;
+            return plainHr;
+        }
+        // The proxy has the window now: this frame goes through it below.
+    }
 
     startFrame(*b);   // the first frame only: every later one started at the end of the last Present hook
     const uint32_t id = b->frameId;
@@ -1331,7 +1519,7 @@ HRESULT xessFgAfterResize(HRESULT hiddenResult) {
     D3D11_TEXTURE2D_DESC source{};
     if (sourceBuffer(b->hiddenSwap, back, &source)) {
         back.Reset();
-        if (b->fellBack) syncPlain(*b, source.Width, source.Height, source.Format);
+        if (b->plain) syncPlain(*b, source.Width, source.Height, source.Format);
         else syncProxy(*b, source.Width, source.Height, source.Format);
     }
     return hiddenResult;
@@ -1341,17 +1529,21 @@ HWND xessFgWindow() { return g_bridge ? g_bridge->real : nullptr; }
 
 HRESULT xessFgSetFullscreenState(BOOL fullscreen, IDXGIOutput* target) {
     Bridge* b = g_bridge;
-    IDXGISwapChain* shown = b ? presenter(*b) : nullptr;
-    if (!shown) return DXGI_ERROR_INVALID_CALL;
+    if (!b || !presenter(*b)) return DXGI_ERROR_INVALID_CALL;
     threadCheck(*b, "SetFullscreenState");
+    // Exclusive fullscreen is the plain swap chain's: the proxy gives the window back first.
+    if (fullscreen && b->proxy && !b->fellBack) returnToPlain(*b, "exclusive fullscreen asked by Elite");
+    IDXGISwapChain* shown = presenter(*b);
+    if (!shown) return DXGI_ERROR_INVALID_CALL;
     const HRESULT hr = shown->SetFullscreenState(fullscreen, target);
     if (SUCCEEDED(hr)) {
         b->presenterFullscreen = fullscreen != FALSE;
         g_exclusiveFullscreen.store(b->presenterFullscreen, std::memory_order_relaxed);
     }
     b->enabledState = -1;   // XeSS-FG needs enabling again after exclusive fullscreen
+    b->windowedRun = 0;
     Log::get().note("xess-fg: exclusive fullscreen %s (0x%08X)%s", fullscreen ? "on" : "off", unsigned(hr),
-                    fullscreen && !b->fellBack ? "; XeSS-FG presents without generating frames in exclusive fullscreen" : "");
+                    fullscreen ? "; frame generation is off in exclusive fullscreen" : "");
     return hr;
 }
 

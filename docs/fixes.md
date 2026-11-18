@@ -123,13 +123,21 @@ on` (off by default) presents through Intel's XeSS Frame Generation and Xe Low
 Latency, which add generated frames between the real ones.
 `fix.xess_generated_frames` sets how many: `1`, `2` or `3` (2x, 3x or 4x; Intel
 GPUs offer up to 3, others 1). Both are rows on the flat Performance tab,
-greyed out unless the anti-aliasing is XeSS. Frame generation takes effect at
-the next launch, only if XeSS is the anti-aliasing then, and needs Elite's
-Borderless or Windowed mode; in Fullscreen the frames are shown with none
-generated. It never applies in VR. On a fault it stops for the session and the
-game keeps a plain window. The HUD and menus are generated with the scene and
-can ghost. It needs `libxess_fg.dll` and `libxell.dll`, which the installer
-places with XeSS on flat profiles.
+greyed out unless the anti-aliasing is XeSS. Frame generation is set up as the
+game starts, and only when it is on and the anti-aliasing is XeSS at that
+start. After such a start it can be switched on and off in the panel with no
+restart. What it sets up stays until the game is closed, even if the
+anti-aliasing is switched away from XeSS: frame generation is then off, Elite's
+frame still reaches the window through ED-UP's own swap chain, and switching
+back to XeSS resumes it. After a start without both, EDVR sets up nothing, and
+the game presents exactly as it does without frame generation. Turning it on,
+or choosing XeSS, then takes effect at the next game start. It needs Elite's
+Borderless or Windowed mode: in Fullscreen, or after Alt+Enter, it is off and
+both rows are greyed out and locked until the game is windowed again. It never
+applies in VR. On a fault it stops for the session and the game keeps a plain
+window. The HUD and menus are generated with the scene and can ghost. It needs
+`libxess_fg.dll` and `libxell.dll`, which the installer places with XeSS on
+flat profiles.
 [xess-frame-generation-2026-11-12.md](xess-frame-generation-2026-11-12.md) has
 the design and the measurements.
 

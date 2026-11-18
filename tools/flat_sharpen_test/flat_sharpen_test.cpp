@@ -493,10 +493,16 @@ void panelTable(const std::string& root, const std::string& gen) {
     // The XeSS Frame Generation rows (2026-11-12): read through the gate, dimmed (never hidden) unless the flat AA mode is XeSS, the frames row dimmed as well while the
     // toggle is off, and frames above the GPU's maximum disabled (every option enabled while the maximum is unknown).
     check(flatProfileReadsKey("fix.xess_frame_generation") && flatProfileReadsKey("fix.xess_generated_frames"), "the flat gate reads both XeSS Frame Generation keys");
-    check(xessFgToggleRowDim(true, false) && !xessFgToggleRowDim(true, true) && !xessFgToggleRowDim(false, false) && !xessFgToggleRowDim(false, true),
+    check(xessFgToggleRowDim(true, false, false) && !xessFgToggleRowDim(true, true, false) && !xessFgToggleRowDim(false, false, false) && !xessFgToggleRowDim(false, true, false),
           "the XeSS Frame Generation toggle is dimmed in flat unless the AA mode is XeSS, and never for VR (which has none)");
-    check(xessFgFramesRowDim(true, false, true) && xessFgFramesRowDim(true, true, false) && !xessFgFramesRowDim(true, true, true),
+    check(xessFgFramesRowDim(true, false, true, false) && xessFgFramesRowDim(true, true, false, false) && !xessFgFramesRowDim(true, true, true, false),
           "the frames row is dimmed unless the AA mode is XeSS and XeSS Frame Generation is on");
+    check(xessFgToggleRowDim(true, true, true) && xessFgFramesRowDim(true, true, true, true) && xessFgFramesRowDim(true, true, false, true),
+          "both XeSS Frame Generation rows are dimmed in flat exclusive fullscreen, whatever the AA mode");
+    check(!xessFgToggleRowDim(true, true, false) && !xessFgFramesRowDim(true, true, true, false),
+          "neither XeSS Frame Generation row is dimmed in flat when not in exclusive fullscreen, with the AA mode XeSS and frame generation on");
+    check(!xessFgToggleRowDim(false, true, true) && !xessFgFramesRowDim(false, true, true, true),
+          "VR (flat false) never dims the toggle or the frames row for exclusive fullscreen (VR has no such row)");
     check(xessFgFramesOptionEnabled(1, 0) && xessFgFramesOptionEnabled(3, 0) && xessFgFramesOptionEnabled(1, 1) && !xessFgFramesOptionEnabled(2, 1) &&
               xessFgFramesOptionEnabled(3, 3) && !xessFgFramesOptionEnabled(4, 3),
           "frames options above the GPU's maximum are disabled; with the maximum unknown (0) all are enabled");
@@ -508,9 +514,11 @@ void panelTable(const std::string& root, const std::string& gen) {
               menuCpp.find("bool xessFgToggleOn() { return boolOf(shownValue(\"fix\", \"xess_frame_generation\"), false); }") != std::string::npos &&
               menuCpp.find("if (ch.disabled) list += \" (not supported)\";") != std::string::npos && menuCpp.find("items[next].disabled") != std::string::npos,
           "menu.cpp dims both XeSS rows in place (no page rebuild) from the values the panel shows, not Config, which lags an F8 change by a reload; refuses a change to a dimmed one, and skips disabled frames options when stepping");
-    check(menuCpp.find("xessFgToggleOn() && xessFgExclusiveFullscreen())") != std::string::npos &&
-              menuCpp.find("choose Borderless or Windowed in Elite's display options.") != std::string::npos,
-          "menu.cpp says on the XeSS rows that frame generation is paused in exclusive fullscreen and names the modes that generate");
+    check(menuCpp.find("xessFgToggleRowDim(runtimeFlatProfile(), flatAntiAliasingIsXess(), xessFgExclusiveFullscreen())") != std::string::npos &&
+              menuCpp.find("xessFgFramesRowDim(runtimeFlatProfile(), flatAntiAliasingIsXess(), xessFgToggleOn(), xessFgExclusiveFullscreen())") != std::string::npos &&
+              menuCpp.find("Paused in exclusive fullscreen") == std::string::npos &&
+              menuCpp.find("is locked in exclusive fullscreen: choose Borderless or Windowed in Elite's display options.") != std::string::npos,
+          "menu.cpp dims both XeSS rows in exclusive fullscreen, locks them with a refusal and hint that name the modes that generate, and no longer says 'Paused'");
     check(kFlatVisualRowCount == 6 && std::strcmp(kFlatVisualRows[0].section, "visual") == 0 && std::strcmp(kFlatVisualRows[0].key, "intro_video") == 0 &&
               std::strcmp(kFlatVisualRows[1].section, "visual") == 0 && std::strcmp(kFlatVisualRows[1].key, "star_glow") == 0 &&
               std::strcmp(kFlatVisualRows[2].section, "visual") == 0 && std::strcmp(kFlatVisualRows[2].key, "cockpit_glass") == 0 &&
