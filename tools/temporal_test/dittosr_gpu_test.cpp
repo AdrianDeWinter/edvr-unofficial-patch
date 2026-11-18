@@ -114,13 +114,16 @@ int main(int argc, char** argv) {
           "DittoSR accepts alternating caller depth views and logs its first evaluation once");
 
     // The render-size textures fit. The first output-size history texture is rejected before dispatch.
-    constexpr uint32_t oversized = D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION + 1;
+    // WARP does not enforce the 16384 dimension limit: it creates 16385, 32768 and 1048576 wide textures at
+    // feature level 11_0. It does refuse (E_INVALIDARG) a texture past the resource size limit, which is at most
+    // 2 GB, so a 2^28 x 32 RGBA16F history (64 GB) fails on every device.
+    constexpr uint32_t oversized = 1u << 28;
     check(!run(oversized, inputs[0].Get()) && why && std::strstr(why, "history textures") &&
               !run(oversized, inputs[1].Get()) && why && std::strstr(why, "history textures") &&
               countNotes("history allocation failed") == 1 && countNotes("history ready") == 0,
           "a failed resize logs one refusal and stays latched at that size");
     check(run(32, inputs[0].Get()) && !why && countNotes("history ready after size change") == 1 &&
-              countNotes("16385x32 becomes 16x16 -> 32x32") == 1,
+              countNotes("268435456x32 becomes 16x16 -> 32x32") == 1,
           "the next valid size recovers and logs the successful rebuild with both sizes");
 
     edvr::dittoShutdown();
