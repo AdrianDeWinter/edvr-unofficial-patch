@@ -340,7 +340,9 @@ extern "C" {
 //            either way. bit 6 -- with bit 1 set, the external engine is
 //            AMD's FSR rather than NVIDIA's DLAA/DLSS; ignored when bit 1
 //            is clear. Bit 7 -- with bit 1 set and bit 6 clear, the external
-//            engine is Intel's XeSS-SR. Bits 2-5 are reset's own sub-reasons,
+//            engine is Intel's XeSS-SR. Bit 9 -- with bit 1 set, the external
+//            engine is DittoSR 0.5.0 rather than NVIDIA, AMD or Intel.
+//            Bits 2-5 are reset's own sub-reasons,
 //            read by the pass's own diagnostics; native_temporal.cpp's treat()
 //            (the ABI's one caller) never sets them. Bit 8 -- a map is open
 //            (temporal_mode.h temporalMapOpen): the pass resets this eye's

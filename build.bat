@@ -249,6 +249,7 @@ python tools\run_jobs.py ^
     --gate "tools\fetch_xess.py --self-test" ^
     --gate "tools\gen_installer_rc.py --self-test" ^
     --gate "tools\package_native.py --self-test" ^
+    --gate "tools\gen_dittosr_shaders.py --self-test" ^
     --gate "tools\sign_manifest.py --self-test" ^
     --gate "tools\artifact_signing.py --self-test" ^
     --gate "tools\launcher_fixtures.py --self-test" ^
@@ -291,6 +292,13 @@ python tools\run_jobs.py ^
     --gate "tools\build_phases.py --self-test" ^
     --gate "tools\compile_cache.py --self-test" || exit /b 1
 :python_gates_done
+
+REM DittoSR's committed bytecode has to match a fresh D3DCompile of the HLSL.
+REM --self-test only checks the container shape, so a shader edit that was not
+REM regenerated would pass it. Compile-only builds skip the Python gates.
+if not defined EDVR_COMPILE_ONLY (
+    python tools\gen_dittosr_shaders.py --check-bytes || exit /b 1
+)
 
 REM The version baked into both DLLs, printed in the second line of every log.
 REM
@@ -741,7 +749,7 @@ python tools\compile_cache.py --prune --keep thunks.obj --keep weapon_ui_getter_
     "src\d3d11\sky_ring.cpp" ^
     "src\d3d11\terrain_cull_cover_hook.cpp" ^
     "src\d3d11\dlaa.cpp" ^
-    "src\d3d11\fsr3_engine.cpp" ^
+    "src\d3d11\fsr3_engine.cpp" "src\d3d11\dittosr_engine.cpp" ^
     "src\d3d11\sharpen_pass.cpp" ^
     "src\d3d11\flat_sharpen.cpp" "src\d3d11\flat_ui_layer.cpp" "src\d3d11\flat_star_glow.cpp" "src\d3d11\flat_dof_blur.cpp" ^
     "src\d3d11\loader_panel.cpp" ^
@@ -2194,6 +2202,14 @@ if errorlevel 1 ( echo [edvr] ERROR: temporal_test build failed & exit /b 1 )
     echo [edvr] ERROR: the temporal pass's arithmetic is wrong
     exit /b 1
 )
+echo [edvr] === dittosr_gpu_test.exe ===
+%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
+    /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\taatest"\ /Fe"%BUILD%\dittosr_gpu_test.exe" ^
+    "tools\temporal_test\dittosr_gpu_test.cpp" "src\d3d11\dittosr_engine.cpp" ^
+    /link /INCREMENTAL:NO
+if errorlevel 1 ( echo [edvr] ERROR: dittosr_gpu_test build failed & exit /b 1 )
+"%BUILD%\dittosr_gpu_test.exe" --dry-run || exit /b 1
+"%BUILD%\dittosr_gpu_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_sky_flicker_test

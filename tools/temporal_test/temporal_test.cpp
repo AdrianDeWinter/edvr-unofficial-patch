@@ -18,6 +18,7 @@
 
 #include "../../src/common/temporal_math.h"
 #include "../../src/common/temporal_mode.h"
+#include "../../src/d3d11/dittosr_math.h"
 #include "../../src/d3d11/temporal_history.h"
 
 namespace {
@@ -91,7 +92,7 @@ int main() {
     for (float scale : {0.0f, -1.0f, NAN, INFINITY}) {
         if (strcmp(edvr::temporalNvidiaLabel(scale), "DLSS / DLAA")) { ++g_fails; puts("FAIL: unknown scale label"); }
     }
-    for (const char* mode : {"on", "ON", "dlaa", "DLAA", "dlss", "DLSS", "fsr", "xess", "XeSS"}) {
+    for (const char* mode : {"on", "ON", "dlaa", "DLAA", "dlss", "DLSS", "fsr", "dittosr", "DittoSR", "xess", "XeSS"}) {
         if (!edvr::temporalModeEnabled(mode)) { ++g_fails; printf("FAIL: bundled temporal mode %s\n", mode); }
     }
     for (const char* mode : {"off", "OFF", "", "bogus"}) {
@@ -145,6 +146,52 @@ int main() {
     check(edvr::temporalEngineForProfile("fsr", true) == edvr::TemporalEngine::Amd &&
           edvr::temporalEngineForProfile("dlaa", false) == edvr::TemporalEngine::Nvidia,
           "the profile-aware engine leaves the other engines unchanged");
+    check(edvr::temporalEngineFor("dittosr") == edvr::TemporalEngine::Ditto &&
+              edvr::temporalEngineFor("DittoSR") == edvr::TemporalEngine::Ditto &&
+              edvr::temporalExternalEngine("dittosr") &&
+              edvr::temporalEngineForProfile("dittosr", true) == edvr::TemporalEngine::Ditto &&
+              edvr::temporalEngineForProfile("dittosr", false) == edvr::TemporalEngine::Ditto,
+          "dittosr is its own external engine in flat and in VR");
+    {
+        edvr::DittoEval up;
+        up.rw = 1920; up.rh = 1080; up.ow = 3840; up.oh = 2160; up.jitX = 0.25f; up.jitY = -0.25f; up.reset = true;
+        const edvr::DittoCb two = edvr::dittoFillConstants(up);
+        check(two.ratio == 2.0f && two.width == 0.8f && two.mvScale[0] == 1.0f / 1920.0f && two.mvScale[1] == 1.0f / 1080.0f,
+              "DittoSR at 2x scales render-pixel motion into uv and uses the 2x reconstruction width");
+        auto near = [](float a, float b) { return std::fabs(a - b) < 1.0e-5f; };
+        check(two.reset == 1.0f && two.depthInverted == 1.0f && two.history10 == 0.0f && near(two.antiShimmer, 0.6f) &&
+                  near(two.historySharpen, 0.03f) && near(two.shareFar, 0.2f) && near(two.envCap, 0.5f) && two.fusedSharpen == 1.0f &&
+                  two.frameWeight == 2.0f && two.sharpness == 0.6f && two.sharpenMode == 0.0f,
+              "DittoSR 0.5.0 defaults at 2x, with RGBA16F history and fused CAS sharpening");
+        edvr::DittoEval three = up;
+        three.ow = 5760; three.oh = 3240; three.frameWeight = 9.0f; three.sharpness = -1.0f; three.sharpenMode = 1; three.hdr = true;
+        three.hasReactive = true; three.autoExposure = true;
+        const edvr::DittoCb ultra = edvr::dittoFillConstants(three);
+        check(ultra.ratio == 3.0f && near(ultra.antiShimmer, 0.45f) && near(ultra.historySharpen, 0.05f) && near(ultra.shareFar, 0.1f) &&
+                  near(ultra.envCap, 0.25f) && ultra.fusedSharpen == 0.0f && ultra.sharpenMode == 1.0f && ultra.frameWeight == 4.0f &&
+                  ultra.sharpness == 0.0f && ultra.hdr == 1.0f && ultra.hasReactive == 1.0f && ultra.autoReactive == 0.0f &&
+                  ultra.autoExposure == 1.0f && ultra.hasExposure == 1.0f && near(ultra.antiShimmer, 0.45f),
+              "DittoSR at 3x drops fused sharpening, clamps the tunables, and lets a game reactive mask replace its own");
+        edvr::DittoEval held = up;
+        held.antiShimmer = 0.4f;
+        check(near(edvr::dittoFillConstants(held).antiShimmer, 0.4f), "a set anti-shimmer strength is used as given");
+        held.antiShimmer = 0.0f;
+        check(edvr::dittoFillConstants(held).antiShimmer == 0.0f, "anti-shimmer off stays off where Auto would be 0.6");
+        check(edvr::dittoAntiShimmerFromText("auto") == -1.0f && edvr::dittoAntiShimmerFromText("") == -1.0f &&
+                  edvr::dittoAntiShimmerFromText("AUTO") == -1.0f && edvr::dittoAntiShimmerFromText("nope") == -1.0f &&
+                  edvr::dittoAntiShimmerFromText("off") == 0.0f && edvr::dittoAntiShimmerFromText("OFF") == 0.0f &&
+                  edvr::dittoAntiShimmerFromText("0.4") == 0.4f && edvr::dittoAntiShimmerFromText("2") == 0.9f &&
+                  edvr::dittoAntiShimmerFromText("-1") == 0.0f && edvr::dittoAntiShimmerFromText("0.4x") == -1.0f,
+              "anti-shimmer text: auto and junk stay on the ratio curve, off is 0, a number is clamped to 0..0.9");
+        check(edvr::dittoSharpenModeFromText("cas") == 0 && edvr::dittoSharpenModeFromText("CAS") == 0 &&
+                  edvr::dittoSharpenModeFromText(nullptr) == 0 && edvr::dittoSharpenModeFromText("rcas") == 1 &&
+                  edvr::dittoSharpenModeFromText("RCAS") == 1,
+              "the filter text is RCAS or CAS");
+        check(edvr::dittoSharpenModeFromText("rcasx") == 0, "an unrecognized filter uses CAS");
+        check(edvr::dittoAntiShimmerFromText("inf") == -1.0f &&
+                  edvr::dittoAntiShimmerFromText("nan") == -1.0f,
+              "non-finite anti-shimmer values use Auto");
+    }
     check(!edvr::temporalModeEnabledFor("off", true) && !edvr::temporalModeEnabledFor("off", false) &&
           !edvr::temporalModeEnabledFor("bogus", true) && !edvr::temporalModeEnabledFor("bogus", false),
           "off and unknown modes stay inactive in both profiles");

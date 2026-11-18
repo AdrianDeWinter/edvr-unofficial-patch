@@ -4,6 +4,7 @@
 #include "../../src/d3d11/flat_projection_math.h"
 #include "../../src/common/temporal_math.h"
 #include "../../src/d3d11/dlaa.h"
+#include "../../src/d3d11/dittosr_engine.h"
 #include "../../src/d3d11/fsr3_engine.h"
 #include "../../src/d3d11/engine_velocity_emit.h"
 #include "../../src/d3d11/flat_hdr_crumbs.h"
@@ -248,6 +249,7 @@ ID3D11ComputeShader* shaderSwapCreateCs(ID3D11DeviceContext* context,const void*
 }
 bool dlaaAvailable(ID3D11Device*,const char**){return true;}
 bool fsr3Available(ID3D11Device*,const char**){return true;}
+bool dittoAvailable(ID3D11Device*,const char**){return true;}
 bool xessAvailable(ID3D11Device*,const char**){return true;}
 void xessReleaseFeatures(){}
 void xessShutdown(){}
@@ -281,6 +283,26 @@ bool fsr3Evaluate(ID3D11DeviceContext* c,unsigned slot,ID3D11Texture2D* colour,I
                                   readPixel(c,colour,&observedBackendOutside,4,1,1);
     infiniteSeen=infinite;check(nearZ==expectedNear && std::abs(fov-1.5707963f)<1e-5f,"FSR actual near and FOV");
     return backend(c,depth,mv,mask,out,jx,jy,reset,why);
+}
+// The rig links flat_mono_resolve.cpp and not dittosr_engine.cpp. DittoSR is not given a near plane or a FOV.
+bool dittoEvaluate(ID3D11DeviceContext* c,unsigned slot,const char*,const DittoFrameViews& views,
+    uint32_t w,uint32_t h,uint32_t outW,uint32_t outH,float jx,float jy,bool reset,
+    const char** why,bool hdr) {
+    const auto texture=[](ID3D11View* view) {
+        ComPtr<ID3D11Resource> resource;
+        ComPtr<ID3D11Texture2D> tex;
+        if(view) {view->GetResource(resource.GetAddressOf());resource.As(&tex);}
+        return tex;
+    };
+    const auto colour=texture(views.colour),out=texture(views.output);
+    if(!colour || !out) return false;
+    backendSlots.push_back(static_cast<int>(slot));
+    observedInW=w;observedInH=h;observedOutW=outW;observedOutH=outH;
+    observedHdr=hdr;observedColourFormat=DXGI_FORMAT_UNKNOWN;observedOutFormat=DXGI_FORMAT_UNKNOWN;
+    {D3D11_TEXTURE2D_DESC d{};colour->GetDesc(&d);observedColourFormat=d.Format;out->GetDesc(&d);observedOutFormat=d.Format;}
+    if(hdr) observedBackendPixels=readPixel(c,colour.Get(),&observedBackendCenter,4,8,8) &&
+                                  readPixel(c,colour.Get(),&observedBackendOutside,4,1,1);
+    return backend(c,texture(views.depth).Get(),texture(views.motion).Get(),texture(views.reactive).Get(),out.Get(),jx,jy,reset,why);
 }
 } // namespace edvr
 #include "flat_projection_scope_tests.h"

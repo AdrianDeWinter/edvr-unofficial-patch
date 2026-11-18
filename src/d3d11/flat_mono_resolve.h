@@ -12,10 +12,11 @@ namespace edvr {
 // How the resolver isolates the game's pipeline state (flat_isolation_mode.h has the definition): the context state swap, or
 // the explicit state capture a DXMT device gets.
 enum class FlatContextIsolation : uint8_t;
-enum class FlatMonoResolveMode { Taa, Dlaa, Dlss, Fsr, Xess };
+enum class FlatMonoResolveMode { Taa, Dlaa, Dlss, Fsr, Xess, Ditto };
 // The mode as the logs and the HDR route's breadcrumbs (flat_hdr_crumbs.h) spell it.
 inline const char* flatMonoResolveModeName(FlatMonoResolveMode mode) {
-    return mode == FlatMonoResolveMode::Xess ? "xess" : mode == FlatMonoResolveMode::Fsr ? "fsr" : mode == FlatMonoResolveMode::Dlss ? "dlss"
+    return mode == FlatMonoResolveMode::Ditto ? "dittosr" : mode == FlatMonoResolveMode::Xess ? "xess"
+         : mode == FlatMonoResolveMode::Fsr ? "fsr" : mode == FlatMonoResolveMode::Dlss ? "dlss"
          : mode == FlatMonoResolveMode::Dlaa ? "dlaa" : "taa";
 }
 
@@ -75,6 +76,18 @@ inline FlatResolveRoute flatResolveRoute(FlatMonoResolveMode mode,
         out.evalWidth = larger ? rW : dW; out.evalHeight = larger ? rH : dH;
         out.refused = false;
         out.name = larger ? "xess-native-aa-supersample" : smaller ? "xess-upscale" : "xess-native-aa";
+        return out;
+    }
+    // DittoSR uses FSR's size contract: upscale when the render is smaller,
+    // and at 1.0x or above evaluate on the render grid.
+    if (mode == FlatMonoResolveMode::Ditto) {
+        if (larger) {
+            out.evalWidth = rW; out.evalHeight = rH; out.refused = false;
+            out.name = "dittosr-native-aa-supersample";
+            return out;
+        }
+        out.evalWidth = dW; out.evalHeight = dH; out.refused = false;
+        out.name = smaller ? "dittosr-upscale" : "dittosr-native";
         return out;
     }
     // FSR: Native AA is the 1.0x case of the same upscaler (equal render and

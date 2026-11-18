@@ -96,6 +96,12 @@ FILES = (
                  "OPENXR-LOADER-LICENSE.txt", _VR, "replace"),
     PackagedFile("settings_vr", "edvr.ini", "core", "game", "edvr.ini", _VR, "settings"),
     PackagedFile("settings_flat", "edvr-flat.ini", "core", "game", "edvr-flat.ini", _FLAT, "settings"),
+    # DittoSR is inside d3d11.dll, so these notices are manifest files, not extra
+    # zip members: the launcher installs a manifest file and would otherwise
+    # copy the DLL without them.
+    PackagedFile("dittosr_license", "DITTOSR-LICENSE.txt", "core", "game", "DITTOSR-LICENSE.txt", _EITHER, "owned"),
+    PackagedFile("dittosr_gsr_license", "DITTOSR-GSR-LICENSE.txt", "core", "game",
+                 "DITTOSR-GSR-LICENSE.txt", _EITHER, "owned"),
     PackagedFile("dlss", "nvngx_dlss.dll", "dlss", "game", "nvngx_dlss.dll", _NVIDIA, "owned"),
     PackagedFile("xess", "libxess.dll", "xess", "game", "libxess.dll", None, "owned"),
     PackagedFile("xess_license", "INTEL-XESS-LICENSE.txt", "xess", "game", "INTEL-XESS-LICENSE.txt", None, "owned"),
@@ -173,6 +179,12 @@ def _files(root, no_dlss):
                    (root / "LICENSE", "LICENSE.txt")])
     result.append((root / "third_party" / "dxbc_hash" / "LICENSE.TXT", "DXBC-HASH-LICENSE.txt"))
     result.append((root / "third_party" / "miniz" / "LICENSE", "MINIZ-LICENSE.txt"))
+    # DittoSR is compiled into d3d11.dll on every build, so its MIT notice and
+    # the Snapdragon Game Super Resolution BSD notice always travel with the
+    # release. FSR's notice stays optional: that port is left out of some builds.
+    result.append((root / "third_party" / "dittosr" / "LICENSE", "DITTOSR-LICENSE.txt"))
+    result.append((root / "third_party" / "dittosr" / "licenses" / "LICENSE-snapdragon-gsr.txt",
+                   "DITTOSR-GSR-LICENSE.txt"))
     result.append((root.joinpath(*LAUNCHER_LICENSE_FILE), LAUNCHER_LICENSE_NAME))
     # AMD's FSR3 D3D11 port (MIT). Unlike NVIDIA's runtime it ships no DLL --
     # it is statically linked into d3d11.dll -- so its presence in a build is
@@ -910,7 +922,8 @@ def self_test():
                 assert names == {"d3d11.dll", "edvr_profile.ini", "openvr/openvr_api.dll", "openvr/openxr_loader.dll",
                                  "openvr/OPENXR-LOADER-LICENSE.txt",
                                  "README.txt", "openvr/READ-ME-FIRST.txt", "edvr.ini", "edvr-flat.ini",
-                                 "LICENSE.txt", "DXBC-HASH-LICENSE.txt", "MINIZ-LICENSE.txt", LAUNCHER_LICENSE_NAME}
+                                 "LICENSE.txt", "DXBC-HASH-LICENSE.txt", "MINIZ-LICENSE.txt",
+                                 "DITTOSR-LICENSE.txt", "DITTOSR-GSR-LICENSE.txt", LAUNCHER_LICENSE_NAME}
                 assert not [name for name in names if name.endswith((".exe", ".sh", ".py"))], names
             (root / "build" / "edvr_openxr_runtime.dll").write_bytes(b"payload")
             dlss = root / "build" / "nvngx_dlss.dll"
@@ -1028,7 +1041,8 @@ def self_test():
             xess_names = set(xess_files)
             core_names = {"d3d11.dll", "openvr/openvr_api.dll", "openvr/openxr_loader.dll",
                           "openvr/OPENXR-LOADER-LICENSE.txt", "edvr.ini", "edvr-flat.ini",
-                          "edvr_profile.ini", "LICENSE.txt", "DXBC-HASH-LICENSE.txt", "MINIZ-LICENSE.txt", LAUNCHER_LICENSE_NAME}
+                          "edvr_profile.ini", "LICENSE.txt", "DXBC-HASH-LICENSE.txt", "MINIZ-LICENSE.txt",
+                          "DITTOSR-LICENSE.txt", "DITTOSR-GSR-LICENSE.txt", LAUNCHER_LICENSE_NAME}
 
             def snapshot():
                 return {path.relative_to(dist).as_posix(): (path.read_bytes() if path.is_file() else None)

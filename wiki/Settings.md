@@ -43,6 +43,7 @@ The default is off. Elite draws edges without temporal anti-aliasing, so fine li
 | --- | --- |
 | DLSS | An NVIDIA RTX card. The launcher places NVIDIA's file on a machine with an NVIDIA card. |
 | FSR | Any graphics card. Nothing further to download. |
+| DittoSR | Any Direct3D 11 GPU, as an alternative to FSR. Nothing further to download. [DittoSR 0.5.0](https://github.com/Vancete/DittoSR/releases/tag/v0.5.0) runs inside ED-UP. Do not point DittoSR's own loader at Elite: this game does not load the file that loader replaces. |
 | XeSS | Any graphics card, and fastest on Intel Arc. On other cards it costs more frame time than DLSS or FSR. |
 | On | ED-UP's own anti-aliasing. |
 
@@ -50,7 +51,9 @@ Set Elite's own anti-aliasing to Off or SMAA while one of these is on. If DLSS i
 
 In a headset, **HMD Image Quality** is the size the game renders. Below 1.0 the game renders smaller and the upscaler fills the headset size back in. That is where the frame time is saved. At 1.0 and above, DLSS runs at full size. Leave Elite's **Supersampling** at 1.0 in VR. Below that, the game scales the world before ED-UP sees it, and the headset shows a notice. On a monitor, Supersampling is the render size.
 
-[The full upscaler notes](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md#upscaling-dlss-fsr-and-xess).
+[The full upscaler notes](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md#upscaling-dlss-fsr-dittosr-and-xess).
+
+Choosing DittoSR lights four rows under it: **DittoSR sharpness** (60 is the look it ships with), **DittoSR frame weight** (2; lower is steadier, higher is crisper), **DittoSR anti-shimmer** (Auto, Off, or a strength from 0.1 to 0.9), and **DittoSR filter** (CAS, or RCAS). In the game they stay on the page for the other choices and do not respond until DittoSR is selected, the same way the DLSS preset waits for DLSS and frame generation waits for XeSS. The launcher hides them until DittoSR is selected. Frame weight and anti-shimmer are tuning keys. ED-UP's **Sharpening** row is a separate pass after the upscaler. A change applies on the next frame.
 
 ### Frame generation on a monitor
 
