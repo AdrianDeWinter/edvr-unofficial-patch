@@ -444,7 +444,7 @@ void testShapes() {
     }
     const std::wstring tableBase = P(P(g_fixtures, L"shapes"), widenUtf8(tableLabel));
     Manifest table;
-    check(loadVerifiedManifest(readAll(tableBase + L".json"), readAll(tableBase + L".sig"), g_testKeys, &table, &err) && table.files.size() == 12,
+    check(loadVerifiedManifest(readAll(tableBase + L".json"), readAll(tableBase + L".sig"), g_testKeys, &table, &err) && table.files.size() == 14,
           "the packager's file table is read whole: " + err);
     auto byId = [&](const char* id) -> const ManifestFile* {
         for (const ManifestFile& f : table.files) if (f.id == id) return &f;
@@ -457,6 +457,12 @@ void testShapes() {
           "dlss is placed only for an NVIDIA adapter, and owned");
     check(flat && flat->when.profiles == kProfileFlat && flat->existing == ExistingMode::Settings && xess && !xess->when.present && xess->existing == ExistingMode::Owned,
           "the flat settings file is for the flat profile, and XeSS has no condition");
+    for (const char* id : {"dittosr_license", "dittosr_gsr_license"}) {
+        const ManifestFile* f = byId(id);
+        check(f && f->when.profiles == (kProfileVr | kProfileFlat) && !f->when.adapterNvidia && f->existing == ExistingMode::Owned &&
+                  f->target.root == TargetRoot::Game,
+              std::string(id) + " is placed with d3d11.dll for both profiles, and owned");
+    }
     for (const char* id : {"xess_fg", "xess_ll"}) {
         const ManifestFile* f = byId(id);
         check(f && f->when.profiles == kProfileFlat && !f->when.adapterNvidia && f->existing == ExistingMode::Owned && f->target.root == TargetRoot::Game,
