@@ -1414,8 +1414,10 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
             g.motion.texture.Get(),g.output[0].texture.Get(),f.renderWidth,f.renderHeight,
             evalW,evalH,f.jitterX,f.jitterY,reset,hdr,reason);
     } else if(f.mode==FlatMonoResolveMode::Ditto) {
-        ok=dittoEvaluate(context,f.slot,g.color.texture.Get(),g.depth[depthIndex].texture.Get(),g.motion.texture.Get(),g.rejection.texture.Get(),
-            g.output[0].texture.Get(),f.renderWidth,f.renderHeight,evalW,evalH,f.jitterX,f.jitterY,reset,reason,hdr);
+        const char* route=f.slot==0?"flat":upscalerSlotLabel(static_cast<int>(f.slot));
+        ok=dittoEvaluate(context,f.slot,route,
+            {g.color.srv.Get(),g.depth[depthIndex].srv.Get(),g.motion.srv.Get(),g.rejection.srv.Get(),g.output[0].uav.Get()},
+            f.renderWidth,f.renderHeight,evalW,evalH,f.jitterX,f.jitterY,reset,reason,hdr);
     } else if(f.mode==FlatMonoResolveMode::Fsr) {
         const float sy=std::sqrt(f.camera[0][1]*f.camera[0][1]+f.camera[1][1]*f.camera[1][1]+f.camera[2][1]*f.camera[2][1]);
         ok=fsr3Evaluate(context,f.slot,g.color.texture.Get(),g.depth[depthIndex].texture.Get(),g.motion.texture.Get(),g.rejection.texture.Get(),

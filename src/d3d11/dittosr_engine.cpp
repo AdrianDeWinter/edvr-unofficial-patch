@@ -12,82 +12,41 @@
 #include "../common/log.h"
 
 #include <d3d11.h>
+#include <wrl/client.h>
 
-#include <cstdlib>
 #include <cstring>
-#include <string>
+#include <utility>
 
 namespace edvr {
 namespace {
 
+using Microsoft::WRL::ComPtr;
+
 struct Tex {
-    ID3D11Texture2D* tex = nullptr;
-    ID3D11ShaderResourceView* srv = nullptr;
-    ID3D11UnorderedAccessView* uav = nullptr;
-    void release() {
-        if (uav) uav->Release();
-        if (srv) srv->Release();
-        if (tex) tex->Release();
-        *this = {};
+    ComPtr<ID3D11Texture2D> tex;
+    ComPtr<ID3D11ShaderResourceView> srv;
+    ComPtr<ID3D11UnorderedAccessView> uav;
+};
+
+struct SlotSize {
+    uint32_t rw = 0, rh = 0, ow = 0, oh = 0;
+    bool operator==(const SlotSize& other) const {
+        return rw == other.rw && rh == other.rh && ow == other.ow && oh == other.oh;
     }
 };
 
-// A view of a caller texture, kept while that texture is the one this slot is given. Creating and releasing five views
-// on every evaluation was a render-thread cost in VR (three slots). The texture pointer is the key: a new texture
-// drops the old view.
-struct HeldSrv {
-    ID3D11Resource* resource = nullptr;
-    ID3D11ShaderResourceView* view = nullptr;
-    void release() {
-        if (view) view->Release();
-        resource = nullptr;
-        view = nullptr;
-    }
-    bool take(ID3D11Device* dev, ID3D11Resource* want) {
-        if (resource == want && (view || !want)) return true;
-        release();
-        if (!want) return true;
-        if (FAILED(dev->CreateShaderResourceView(want, nullptr, &view)) || !view) {
-            view = nullptr;
-            return false;
-        }
-        resource = want;
-        return true;
-    }
-};
-
-struct HeldUav {
-    ID3D11Resource* resource = nullptr;
-    ID3D11UnorderedAccessView* view = nullptr;
-    void release() {
-        if (view) view->Release();
-        resource = nullptr;
-        view = nullptr;
-    }
-    bool take(ID3D11Device* dev, ID3D11Resource* want) {
-        if (resource == want && (view || !want)) return true;
-        release();
-        if (!want) return true;
-        if (FAILED(dev->CreateUnorderedAccessView(want, nullptr, &view)) || !view) {
-            view = nullptr;
-            return false;
-        }
-        resource = want;
-        return true;
-    }
+struct History {
+    Tex mda[2], hist[2], aux[2], stab[2], env[2], expo[2];
+    Tex change;
 };
 
 struct Slot {
-    uint32_t rw = 0, rh = 0, ow = 0, oh = 0;
+    SlotSize size;  // last attempted size, including a failed allocation
     bool live = false;
-    bool told = false;    // the first successful evaluation of this slot has been logged
-    bool failed = false;  // this size already failed to allocate; do not try again until the size changes
-    uint32_t failRw = 0, failRh = 0, failOw = 0, failOh = 0;
+    bool evaluationNoted = false;
+    bool refusalNoted = false;
     int cur = 0;
-    Tex mda[2], hist[2], aux[2], stab[2], env[2], expo[2];
-    Tex change;
-    HeldSrv colour, depth, motion, reactive;
-    HeldUav out;
+    History history;
 };
 
 struct Clock {
@@ -119,7 +78,8 @@ const char* g_shaderWhy = "DittoSR's compute shaders have not been created";
 uint32_t g_evals = 0, g_resets = 0, g_measured = 0;
 double g_msSum = 0, g_msMax = 0;
 bool g_compiledNoted = false;
-bool g_refusalNoted = false;
+bool g_deviceRefusalNoted = false;
+bool g_invalidSlotNoted = false;
 
 void releaseShaders() {
     if (g_sharpen) g_sharpen->Release();
@@ -135,27 +95,11 @@ void releaseShaders() {
 }
 
 void releaseSlots() {
-    for (Slot& s : g_slot) {
-        for (int i = 0; i < 2; ++i) {
-            s.mda[i].release();
-            s.hist[i].release();
-            s.aux[i].release();
-            s.stab[i].release();
-            s.env[i].release();
-            s.expo[i].release();
-        }
-        s.change.release();
-        s.colour.release();
-        s.depth.release();
-        s.motion.release();
-        s.reactive.release();
-        s.out.release();
-        s = {};
-    }
+    for (Slot& s : g_slot) s = {};
     for (Clock& c : g_clock) c.release();
     g_clockCur = 0;
     g_openClock = -1;
-    g_refusalNoted = false;
+    g_invalidSlotNoted = false;
 }
 
 bool createOne(ID3D11Device* dev, const unsigned char* bytes, size_t size, ID3D11ComputeShader** out,
@@ -219,7 +163,6 @@ bool ensureShaders(ID3D11Device* dev, const char** why) {
 }
 
 bool makeTex(ID3D11Device* dev, Tex& t, uint32_t w, uint32_t h, DXGI_FORMAT fmt) {
-    t.release();
     if (!w || !h) return false;
     D3D11_TEXTURE2D_DESC td{};
     td.Width = w;
@@ -230,96 +173,59 @@ bool makeTex(ID3D11Device* dev, Tex& t, uint32_t w, uint32_t h, DXGI_FORMAT fmt)
     td.SampleDesc.Count = 1;
     td.Usage = D3D11_USAGE_DEFAULT;
     td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-    if (FAILED(dev->CreateTexture2D(&td, nullptr, &t.tex)) || !t.tex) return false;
-    if (FAILED(dev->CreateShaderResourceView(t.tex, nullptr, &t.srv)) || !t.srv) return false;
-    if (FAILED(dev->CreateUnorderedAccessView(t.tex, nullptr, &t.uav)) || !t.uav) return false;
+    if (FAILED(dev->CreateTexture2D(&td, nullptr, t.tex.GetAddressOf())) || !t.tex) return false;
+    if (FAILED(dev->CreateShaderResourceView(t.tex.Get(), nullptr, t.srv.GetAddressOf())) || !t.srv) return false;
+    if (FAILED(dev->CreateUnorderedAccessView(t.tex.Get(), nullptr, t.uav.GetAddressOf())) || !t.uav) return false;
     return true;
 }
 
-void dropSlotTextures(Slot& s) {
-    for (int i = 0; i < 2; ++i) {
-        s.mda[i].release();
-        s.hist[i].release();
-        s.aux[i].release();
-        s.stab[i].release();
-        s.env[i].release();
-        s.expo[i].release();
+bool ensureSlot(ID3D11Device* dev, ID3D11DeviceContext* ctx, Slot& s, const char* route, SlotSize size,
+                bool& reset, const char** why) {
+    static constexpr char historyFailure[] = "DittoSR could not create its history textures on this device";
+    if (s.size == size) {
+        // A failed allocation stays latched at its size, as in fsr3_engine.cpp.
+        if (!s.live && why) *why = historyFailure;
+        return s.live;
     }
-    s.change.release();
+    const SlotSize previous = s.size;
+    s.history = {};
     s.live = false;
-}
-
-bool ensureSlot(ID3D11Device* dev, ID3D11DeviceContext* ctx, unsigned slot, Slot& s, uint32_t rw, uint32_t rh,
-                uint32_t ow, uint32_t oh, const char** why) {
-    if (s.live && s.rw == rw && s.rh == rh && s.ow == ow && s.oh == oh) return true;
-    // This size already failed. Trying again would free and reallocate the partial set on every frame, on the
-    // render thread, which is the rig that is already short of memory (the same latch as fsr3_engine.cpp).
-    if (s.failed && s.failRw == rw && s.failRh == rh && s.failOw == ow && s.failOh == oh) {
-        if (why) *why = "DittoSR could not create its history textures on this device";
-        return false;
-    }
-    const bool remake = s.live;
-    const uint32_t wasRw = s.rw, wasRh = s.rh, wasOw = s.ow, wasOh = s.oh;
-    if (remake) {
-        Log::get().note(
-            "DittoSR: %s history is remade (%ux%u -> %ux%u becomes %ux%u -> %ux%u). Its history starts again.",
-            upscalerSlotLabel(static_cast<int>(slot)), wasRw, wasRh, wasOw, wasOh, rw, rh, ow, oh);
-    }
-    dropSlotTextures(s);
-    s.failed = false;
-    const bool made = makeTex(dev, s.mda[0], rw, rh, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
-                      makeTex(dev, s.mda[1], rw, rh, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
-                      makeTex(dev, s.hist[0], ow, oh, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
-                      makeTex(dev, s.hist[1], ow, oh, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
-                      makeTex(dev, s.aux[0], rw, rh, DXGI_FORMAT_R8G8B8A8_UNORM) &&
-                      makeTex(dev, s.aux[1], rw, rh, DXGI_FORMAT_R8G8B8A8_UNORM) &&
-                      makeTex(dev, s.stab[0], ow, oh, DXGI_FORMAT_R16G16_FLOAT) &&
-                      makeTex(dev, s.stab[1], ow, oh, DXGI_FORMAT_R16G16_FLOAT) &&
-                      makeTex(dev, s.env[0], rw, rh, DXGI_FORMAT_R16G16_FLOAT) &&
-                      makeTex(dev, s.env[1], rw, rh, DXGI_FORMAT_R16G16_FLOAT) &&
-                      makeTex(dev, s.expo[0], 1, 1, DXGI_FORMAT_R32_FLOAT) &&
-                      makeTex(dev, s.expo[1], 1, 1, DXGI_FORMAT_R32_FLOAT) &&
-                      makeTex(dev, s.change, 1, 1, DXGI_FORMAT_R32_FLOAT);
+    s.size = size;
+    const auto [rw, rh, ow, oh] = size;
+    // Publish the new set only when every allocation succeeds.
+    History next;
+    const bool made = makeTex(dev, next.mda[0], rw, rh, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
+                      makeTex(dev, next.mda[1], rw, rh, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
+                      makeTex(dev, next.hist[0], ow, oh, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
+                      makeTex(dev, next.hist[1], ow, oh, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
+                      makeTex(dev, next.aux[0], rw, rh, DXGI_FORMAT_R8G8B8A8_UNORM) &&
+                      makeTex(dev, next.aux[1], rw, rh, DXGI_FORMAT_R8G8B8A8_UNORM) &&
+                      makeTex(dev, next.stab[0], ow, oh, DXGI_FORMAT_R16G16_FLOAT) &&
+                      makeTex(dev, next.stab[1], ow, oh, DXGI_FORMAT_R16G16_FLOAT) &&
+                      makeTex(dev, next.env[0], rw, rh, DXGI_FORMAT_R16G16_FLOAT) &&
+                      makeTex(dev, next.env[1], rw, rh, DXGI_FORMAT_R16G16_FLOAT) &&
+                      makeTex(dev, next.expo[0], 1, 1, DXGI_FORMAT_R32_FLOAT) &&
+                      makeTex(dev, next.expo[1], 1, 1, DXGI_FORMAT_R32_FLOAT) &&
+                      makeTex(dev, next.change, 1, 1, DXGI_FORMAT_R32_FLOAT);
     if (!made) {
-        dropSlotTextures(s);
-        s.failed = true;
-        s.failRw = rw;
-        s.failRh = rh;
-        s.failOw = ow;
-        s.failOh = oh;
-        if (why) *why = "DittoSR could not create its history textures on this device";
+        s.refusalNoted = true;
+        Log::get().note("DittoSR: %s refused %ux%u -> %ux%u (history allocation failed).", route, rw, rh, ow, oh);
+        if (why) *why = historyFailure;
         return false;
     }
     const float zero[4] = {};
-    ctx->ClearUnorderedAccessViewFloat(s.expo[0].uav, zero);
-    ctx->ClearUnorderedAccessViewFloat(s.expo[1].uav, zero);
-    s.rw = rw;
-    s.rh = rh;
-    s.ow = ow;
-    s.oh = oh;
+    ctx->ClearUnorderedAccessViewFloat(next.expo[0].uav.Get(), zero);
+    ctx->ClearUnorderedAccessViewFloat(next.expo[1].uav.Get(), zero);
+    s.history = std::move(next);
     s.cur = 0;
     s.live = true;
-    return true;
-}
-
-bool hasBind(ID3D11Texture2D* tex, UINT flag) {
-    if (!tex) return false;
-    D3D11_TEXTURE2D_DESC d{};
-    tex->GetDesc(&d);
-    return (d.BindFlags & flag) == flag;
-}
-
-bool floatColour(ID3D11Texture2D* tex) {
-    D3D11_TEXTURE2D_DESC d{};
-    tex->GetDesc(&d);
-    switch (d.Format) {
-        case DXGI_FORMAT_R32G32B32A32_FLOAT:
-        case DXGI_FORMAT_R32G32B32_FLOAT:
-        case DXGI_FORMAT_R16G16B16A16_FLOAT:
-        case DXGI_FORMAT_R11G11B10_FLOAT:
-        case DXGI_FORMAT_R9G9B9E5_SHAREDEXP: return true;
-        default: return false;
+    reset = true;
+    if (previous.rw != 0) {
+        Log::get().note(
+            "DittoSR: %s history ready after size change (%ux%u -> %ux%u becomes %ux%u -> %ux%u).",
+            route, previous.rw, previous.rh, previous.ow, previous.oh, rw, rh, ow, oh);
     }
+    return true;
 }
 
 void harvest(ID3D11DeviceContext* ctx, Clock& c) {
@@ -411,14 +317,12 @@ void run(ID3D11DeviceContext* ctx, ID3D11ComputeShader* cs, ID3D11ShaderResource
     ctx->Dispatch(gx, gy, 1);
 }
 
-bool refuse(const char** why, const char* reason, ID3D11Device* dev = nullptr) {
-    if (reason && why) *why = reason;
-    const char* said = why && *why ? *why : reason;
-    if (said && !g_refusalNoted) {
-        g_refusalNoted = true;
-        Log::get().note("DittoSR: refused (%s). The pass's own history runs instead.", said);
+bool refuse(bool& noted, const char* route, const char* reason, const char** why) {
+    if (why) *why = reason;
+    if (!noted) {
+        noted = true;
+        Log::get().note("DittoSR: %s refused (%s).", route, reason);
     }
-    if (dev) dev->Release();
     return false;
 }
 
@@ -426,7 +330,19 @@ bool refuse(const char** why, const char* reason, ID3D11Device* dev = nullptr) {
 
 const char* dittoVersionLabel() { return "DittoSR 0.5.0"; }
 
-bool dittoAvailable(ID3D11Device* dev, const char** why) { return ensureShaders(dev, why); }
+bool dittoAvailable(ID3D11Device* dev, const char** why) {
+    const char* reason = nullptr;
+    if (ensureShaders(dev, &reason)) {
+        if (why) *why = nullptr;
+        return true;
+    }
+    if (why) *why = reason;
+    if (!g_deviceRefusalNoted) {
+        g_deviceRefusalNoted = true;
+        Log::get().note("DittoSR: unavailable (%s).", reason);
+    }
+    return false;
+}
 
 void dittoReleaseFeatures() { releaseSlots(); }
 
@@ -434,6 +350,7 @@ void dittoShutdown() {
     releaseSlots();
     releaseShaders();
     g_dev = nullptr;
+    g_deviceRefusalNoted = false;
     g_shaderWhy = "DittoSR's compute shaders have not been created";
 }
 
@@ -446,36 +363,21 @@ bool dittoTotals(uint32_t* evaluations, double* avgMs, double* maxMs, uint32_t* 
     return true;
 }
 
-bool dittoEvaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colour, ID3D11Texture2D* depth,
-                   ID3D11Texture2D* mv, ID3D11Texture2D* reactive, ID3D11Texture2D* out, uint32_t w, uint32_t h,
-                   uint32_t outW, uint32_t outH, float jx, float jy, bool reset, const char** why, bool hdr) {
+bool dittoEvaluate(ID3D11DeviceContext* ctx, unsigned slot, const char* route, const DittoFrameViews& views,
+                   uint32_t w, uint32_t h, uint32_t outW, uint32_t outH, float jx, float jy,
+                   bool reset, const char** why, bool hdr) {
     if (why) *why = nullptr;
-    if (!ctx || slot >= kUpscalerSlots || !w || !h || !outW || !outH)
-        return refuse(why, "DittoSR was asked for a frame it cannot size");
-    if (!colour || !depth || !mv || !out)
-        return refuse(why, "DittoSR needs colour, depth, motion vectors and an output");
-    if (!hasBind(colour, D3D11_BIND_SHADER_RESOURCE) || !hasBind(depth, D3D11_BIND_SHADER_RESOURCE) ||
-        !hasBind(mv, D3D11_BIND_SHADER_RESOURCE) || (reactive && !hasBind(reactive, D3D11_BIND_SHADER_RESOURCE)))
-        return refuse(why, "DittoSR's inputs need a shader-resource bind");
-    if (!hasBind(out, D3D11_BIND_UNORDERED_ACCESS))
-        return refuse(why, "DittoSR's output needs an unordered-access bind");
-    ID3D11Device* dev = nullptr;
-    ctx->GetDevice(&dev);
-    if (!dev) return refuse(why, "DittoSR has no device");
-    if (!ensureShaders(dev, why)) return refuse(why, nullptr, dev);
+    if (slot >= kUpscalerSlots)
+        return refuse(g_invalidSlotNoted, route, "DittoSR was asked for an upscaler slot out of range", why);
     Slot& s = g_slot[slot];
-    const bool grew = !s.live || s.rw != w || s.rh != h || s.ow != outW || s.oh != outH;
-    if (!ensureSlot(dev, ctx, slot, s, w, h, outW, outH, why)) return refuse(why, nullptr, dev);
-    if (grew) reset = true;
-
-    if (!s.colour.take(dev, colour) || !s.depth.take(dev, depth) || !s.motion.take(dev, mv) ||
-        !s.reactive.take(dev, reactive) || !s.out.take(dev, out))
-        return refuse(why, "DittoSR could not view the frame's textures", dev);
-    ID3D11ShaderResourceView* colourSrv = s.colour.view;
-    ID3D11ShaderResourceView* depthSrv = s.depth.view;
-    ID3D11ShaderResourceView* mvSrv = s.motion.view;
-    ID3D11ShaderResourceView* reactiveSrv = s.reactive.view;
-    ID3D11UnorderedAccessView* outUav = s.out.view;
+    if (!ctx || !w || !h || !outW || !outH)
+        return refuse(s.refusalNoted, route, "DittoSR was asked for a frame it cannot size", why);
+    if (!views.colour || !views.depth || !views.motion || !views.output)
+        return refuse(s.refusalNoted, route, "DittoSR needs views of colour, depth, motion vectors and output", why);
+    ComPtr<ID3D11Device> dev;
+    ctx->GetDevice(dev.GetAddressOf());
+    if (!dittoAvailable(dev.Get(), why)) return false;
+    if (!ensureSlot(dev.Get(), ctx, s, route, {w, h, outW, outH}, reset, why)) return false;
 
     DittoEval ev;
     ev.rw = w;
@@ -485,9 +387,9 @@ bool dittoEvaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* col
     ev.jitX = jx;
     ev.jitY = jy;
     ev.reset = reset;
-    ev.hdr = hdr || floatColour(colour);
+    ev.hdr = hdr;
     ev.depthInverted = true;
-    ev.hasReactive = reactiveSrv != nullptr;
+    ev.hasReactive = views.reactive != nullptr;
     ev.autoExposure = ev.hdr;
     ev.sharpness = Config::get().getFloat("fix.dittosr_sharpness", 0.6f);
     ev.frameWeight = Config::get().getFloat("fix.dittosr_frame_weight", 2.0f);
@@ -499,7 +401,7 @@ bool dittoEvaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* col
     saved.capture(ctx);
     harvest(ctx, g_clock[0]);
     harvest(ctx, g_clock[1]);
-    stampBegin(dev, ctx);
+    stampBegin(dev.Get(), ctx);
 
     D3D11_MAPPED_SUBRESOURCE map{};
     bool ran = false;
@@ -513,71 +415,69 @@ bool dittoEvaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* col
         s.cur ^= 1;
         const int cur = s.cur;
         const int prev = cur ^ 1;
+        const History& history = s.history;
         ID3D11ShaderResourceView* z[8] = {};
         ID3D11UnorderedAccessView* u[3] = {};
 
         // convert, plus the extra row that writes how much of the image changed
-        z[0] = depthSrv;
-        z[1] = mvSrv;
-        z[2] = colourSrv;
-        z[3] = s.hist[prev].srv;
-        z[5] = ev.autoExposure ? s.expo[prev].srv : nullptr;
-        u[0] = s.mda[cur].uav;
-        u[1] = s.change.uav;
-        u[2] = ev.autoExposure ? s.expo[cur].uav : nullptr;
+        z[0] = views.depth;
+        z[1] = views.motion;
+        z[2] = views.colour;
+        z[3] = history.hist[prev].srv.Get();
+        z[5] = ev.autoExposure ? history.expo[prev].srv.Get() : nullptr;
+        u[0] = history.mda[cur].uav.Get();
+        u[1] = history.change.uav.Get();
+        u[2] = ev.autoExposure ? history.expo[cur].uav.Get() : nullptr;
         run(ctx, g_convert, z, u, (w + 7) / 8, (h + 7) / 8 + 1);
 
         // motion
         for (int i = 0; i < 8; ++i) z[i] = nullptr;
         for (int i = 0; i < 3; ++i) u[i] = nullptr;
-        z[0] = s.aux[prev].srv;
-        z[1] = s.mda[cur].srv;
-        z[2] = colourSrv;
-        z[3] = s.mda[prev].srv;
-        z[4] = s.env[prev].srv;
-        z[5] = ev.autoExposure ? s.expo[cur].srv : nullptr;
-        u[0] = s.aux[cur].uav;
-        u[1] = s.env[cur].uav;
+        z[0] = history.aux[prev].srv.Get();
+        z[1] = history.mda[cur].srv.Get();
+        z[2] = views.colour;
+        z[3] = history.mda[prev].srv.Get();
+        z[4] = history.env[prev].srv.Get();
+        z[5] = ev.autoExposure ? history.expo[cur].srv.Get() : nullptr;
+        u[0] = history.aux[cur].uav.Get();
+        u[1] = history.env[cur].uav.Get();
         run(ctx, g_motion, z, u, (w + 7) / 8, (h + 7) / 8);
 
         // upscale. ANTI_SHIMMER writes a float2 stability texture.
         for (int i = 0; i < 8; ++i) z[i] = nullptr;
         for (int i = 0; i < 3; ++i) u[i] = nullptr;
-        z[0] = s.hist[prev].srv;
-        z[1] = s.mda[cur].srv;
-        z[2] = colourSrv;
-        z[3] = s.aux[cur].srv;
-        z[4] = s.change.srv;
-        z[5] = ev.autoExposure ? s.expo[cur].srv : nullptr;
-        z[6] = reactiveSrv;
-        z[7] = s.stab[prev].srv;
-        u[0] = s.hist[cur].uav;
-        u[1] = outUav;
-        u[2] = s.stab[cur].uav;
+        z[0] = history.hist[prev].srv.Get();
+        z[1] = history.mda[cur].srv.Get();
+        z[2] = views.colour;
+        z[3] = history.aux[cur].srv.Get();
+        z[4] = history.change.srv.Get();
+        z[5] = ev.autoExposure ? history.expo[cur].srv.Get() : nullptr;
+        z[6] = views.reactive;
+        z[7] = history.stab[prev].srv.Get();
+        u[0] = history.hist[cur].uav.Get();
+        u[1] = views.output;
+        u[2] = history.stab[cur].uav.Get();
         run(ctx, g_upscale, z, u, (outW + 15) / 16, (outH + 7) / 8);
 
         // sharpen, unless the upscale already wrote the output (fused, ratio <= 2.55, CAS)
         if (packed.fusedSharpen <= 0.0f) {
             for (int i = 0; i < 8; ++i) z[i] = nullptr;
             for (int i = 0; i < 3; ++i) u[i] = nullptr;
-            z[0] = s.hist[cur].srv;
-            z[1] = s.mda[cur].srv;
-            z[5] = ev.autoExposure ? s.expo[cur].srv : nullptr;
-            z[7] = s.stab[cur].srv;
-            u[1] = outUav;
+            z[0] = history.hist[cur].srv.Get();
+            z[1] = history.mda[cur].srv.Get();
+            z[5] = ev.autoExposure ? history.expo[cur].srv.Get() : nullptr;
+            z[7] = history.stab[cur].srv.Get();
+            u[1] = views.output;
             run(ctx, g_sharpen, z, u, (outW + 7) / 8, (outH + 7) / 8);
         }
         ran = true;
-    } else if (why) {
-        *why = "DittoSR could not write its constants";
     }
     stampEnd(ctx);
     saved.restore(ctx);
-    dev->Release();
-    if (!ran) return refuse(why, why && *why ? *why : "DittoSR could not write its constants");
-    if (!s.told) {
-        s.told = true;
-        Log::get().note("DittoSR: %s evaluated %ux%u -> %ux%u.", upscalerSlotLabel(static_cast<int>(slot)), w, h, outW, outH);
+    if (!ran) return refuse(s.refusalNoted, route, "DittoSR could not write its constants", why);
+    if (!s.evaluationNoted) {
+        s.evaluationNoted = true;
+        Log::get().note("DittoSR: %s evaluated %ux%u -> %ux%u.", route, w, h, outW, outH);
     }
     ++g_evals;
     if (reset) ++g_resets;

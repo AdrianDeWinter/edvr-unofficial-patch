@@ -17,6 +17,13 @@ included.
 `src/d3d11/dittosr_shader_bytecode.h` is these passes compiled to shader model 5
 with fxc or D3DCompile. DXC promotes `cs_5_0` to shader model 6 and writes
 DXIL, which Direct3D 11 will not create; `tools/gen_dittosr_shaders.py` rejects
-that container. Regenerate after a shader edit:
+that container.
 
-On Windows, `python tools/gen_dittosr_shaders.py` compiles with `d3dcompiler_47.dll`. On Linux, set `FXC` to `fxc.exe`. `python tools/gen_dittosr_shaders.py --check-bytes` recompiles and requires the committed header to match. DXC is the wrong compiler for this.
+Regenerate after a shader edit with `python tools/gen_dittosr_shaders.py`.
+On Windows, the tool uses `fxc` if available and falls back to
+`d3dcompiler_47.dll`. On Linux, set `FXC` to a runnable compiler. With Wine,
+point it at an executable wrapper that runs `fxc.exe` and converts the input
+and output paths with `winepath`. A host with a PE execution handler can
+invoke `fxc.exe` directly if the compiler can resolve those paths.
+`python tools/gen_dittosr_shaders.py --check-bytes` recompiles all four passes
+and compares them with the committed header.

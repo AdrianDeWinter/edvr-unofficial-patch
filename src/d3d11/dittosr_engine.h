@@ -11,22 +11,28 @@
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
-struct ID3D11Texture2D;
+struct ID3D11ShaderResourceView;
+struct ID3D11UnorderedAccessView;
 
 namespace edvr {
 
 bool dittoAvailable(ID3D11Device* dev, const char** why);
 
-// One slot, one frame. `slot` is dlaa.h's kUpscalerSlots. colour, depth, mv
-// and out are the same textures fsr3Evaluate takes; reactive may be null.
-// out, and every texture the passes write for themselves, need both an
-// unordered-access and a shader-resource bind. False, with why, on a refusal.
-// hdr: the colour is scene radiance (the flat HDR route). Reversed-Z depth is
-// always on, matching FSR's create flags.
-bool dittoEvaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colour,
-                   ID3D11Texture2D* depth, ID3D11Texture2D* mv, ID3D11Texture2D* reactive,
-                   ID3D11Texture2D* out, uint32_t w, uint32_t h, uint32_t outW, uint32_t outH,
-                   float jx, float jy, bool reset, const char** why, bool hdr = false);
+// The caller owns these views for the duration of dittoEvaluate. Reactive is optional.
+struct DittoFrameViews {
+    ID3D11ShaderResourceView* colour;
+    ID3D11ShaderResourceView* depth;
+    ID3D11ShaderResourceView* motion;
+    ID3D11ShaderResourceView* reactive;
+    ID3D11UnorderedAccessView* output;
+};
+
+// One slot from dlaa.h's kUpscalerSlots, with the caller's route name for the log.
+// HDR marks scene radiance. Depth is always reversed-Z, matching FSR's create flags.
+// Returns false and sets why on a refusal.
+bool dittoEvaluate(ID3D11DeviceContext* ctx, unsigned slot, const char* route, const DittoFrameViews& views,
+                   uint32_t w, uint32_t h, uint32_t outW, uint32_t outH, float jx, float jy,
+                   bool reset, const char** why, bool hdr);
 
 void dittoReleaseFeatures();
 void dittoShutdown();

@@ -77,8 +77,12 @@ def compile_pass(name: str, defines: str, directory: pathlib.Path) -> bytes:
     src.write_text(source(name, defines))
     fxc = fxc_path()
     if fxc:
-        run = subprocess.run([fxc, "/nologo", "/T", "cs_5_0", "/E", "main", "/O3", "/Fo", str(blob), str(src)],
-                             capture_output=True, text=True)
+        try:
+            run = subprocess.run([fxc, "/nologo", "/T", "cs_5_0", "/E", "main", "/O3", "/Fo", str(blob), str(src)],
+                                 capture_output=True, text=True)
+        except OSError as exc:
+            hint = " On Linux, set FXC to an executable Wine wrapper or use a PE execution handler." if sys.platform == "linux" else ""
+            raise SystemExit(f"gen_dittosr_shaders: could not run {fxc}: {exc}.{hint}") from exc
         if run.returncode != 0:
             sys.stderr.write(run.stdout + run.stderr)
             raise SystemExit(f"gen_dittosr_shaders: {name} did not compile")
@@ -87,7 +91,7 @@ def compile_pass(name: str, defines: str, directory: pathlib.Path) -> bytes:
         data = compile_d3d(src.read_text(encoding="utf-8"), name)
     else:
         raise SystemExit(
-            "gen_dittosr_shaders: set FXC to fxc.exe, or run this on Windows where d3dcompiler_47.dll can compile "
+            "gen_dittosr_shaders: set FXC to a runnable fxc compiler or Wine wrapper, or run this on Windows where d3dcompiler_47.dll can compile "
             "cs_5_0. DXC writes shader model 6 DXIL for that target, and Direct3D 11 will not create it.")
     shader_model_5(data, name)
     return data
@@ -132,14 +136,24 @@ def c_array(name: str, data: bytes) -> str:
     return "\n".join(lines)
 
 
-def verify_header(path: pathlib.Path) -> int:
+def header_arrays(path: pathlib.Path) -> dict:
     text = path.read_text(encoding="ascii")
     arrays = re.findall(r"kDitto(\w+)Dxbc\[\] = \{([^}]*)\}", text, re.S)
-    if len(arrays) != 4:
-        raise SystemExit(f"gen_dittosr_shaders: {path} holds {len(arrays)} passes, expected 4")
+    found = {}
     for name, body in arrays:
-        data = bytes(int(token, 16) for token in re.findall(r"0x([0-9a-fA-F]{2})", body))
-        shader_model_5(data, name)
+        pass_name = name.lower()
+        if pass_name in found:
+            raise SystemExit(f"gen_dittosr_shaders: duplicate pass {pass_name} in {path}")
+        found[pass_name] = bytes(int(token, 16) for token in re.findall(r"0x([0-9a-fA-F]{2})", body))
+        shader_model_5(found[pass_name], pass_name)
+    expected = {name for name, _ in PASSES}
+    if found.keys() != expected:
+        raise SystemExit(f"gen_dittosr_shaders: {path} holds {', '.join(sorted(found))}; expected {', '.join(sorted(expected))}")
+    return found
+
+
+def verify_header(path: pathlib.Path) -> int:
+    header_arrays(path)
     print("gen_dittosr_shaders: four passes are cs_5_0 DXBC")
     return 0
 
@@ -171,14 +185,6 @@ def self_test() -> int:
     return verify_header(OUT)
 
 
-def header_arrays(path: pathlib.Path) -> dict:
-    text = path.read_text(encoding="ascii")
-    found = {}
-    for name, body in re.findall(r"kDitto(\w+)Dxbc\[\] = \{([^}]*)\}", text, re.S):
-        found[name.lower()] = bytes(int(token, 16) for token in re.findall(r"0x([0-9a-fA-F]{2})", body))
-    return found
-
-
 def check_bytes() -> int:
     """Recompile the four passes and require the committed header to match. Windows uses D3DCompile; Linux needs FXC."""
     committed = header_arrays(OUT)
@@ -186,11 +192,11 @@ def check_bytes() -> int:
         directory = pathlib.Path(tmp)
         for name, defines in PASSES:
             fresh = compile_pass(name, defines, directory)
-            old = committed.get(name)
+            old = committed[name]
             if old != fresh:
                 raise SystemExit(
                     f"gen_dittosr_shaders: {name} does not match src/d3d11/dittosr_shader_bytecode.h "
-                    f"({len(fresh)} compiled, {0 if old is None else len(old)} committed). "
+                    f"({len(fresh)} compiled, {len(old)} committed). "
                     "Regenerate with python tools/gen_dittosr_shaders.py")
     print("gen_dittosr_shaders: committed bytecode matches a fresh cs_5_0 compile")
     return 0
@@ -215,7 +221,7 @@ def main() -> int:
             data = compile_pass(name, defines, directory)
             parts.append(c_array(name, data))
             parts.append("")
-    OUT.write_text("\n".join(parts) + "\n")
+    OUT.write_text("\n".join(parts), encoding="ascii")
     print(f"wrote {OUT.relative_to(ROOT)}")
     return 0
 

@@ -26,6 +26,7 @@
 // --self-test runs it; --dry-run says what it would do and writes nothing.
 
 #include "../../src/d3d11/vr_world_route.h"
+#include "../../src/d3d11/dittosr_engine.h"
 #include "../../src/d3d11/vr_world_route_math.h"
 #include "../../src/d3d11/binding_shadow.h"
 #include "../../src/d3d11/flat_mono_resolve.h"
@@ -260,8 +261,8 @@ bool fsr3Evaluate(ID3D11DeviceContext*, unsigned, ID3D11Texture2D*, ID3D11Textur
                   ID3D11Texture2D*, uint32_t, uint32_t, uint32_t, uint32_t, float, float, bool, float, float, float, float,
                   const char**, bool, bool) { return false; }
 // The rig links flat_mono_resolve.cpp and not dittosr_engine.cpp. Same refusal as the FSR stub above.
-bool dittoEvaluate(ID3D11DeviceContext*, unsigned, ID3D11Texture2D*, ID3D11Texture2D*, ID3D11Texture2D*, ID3D11Texture2D*,
-                   ID3D11Texture2D*, uint32_t, uint32_t, uint32_t, uint32_t, float, float, bool, const char**, bool) {
+bool dittoEvaluate(ID3D11DeviceContext*, unsigned, const char*, const DittoFrameViews&,
+                   uint32_t, uint32_t, uint32_t, uint32_t, float, float, bool, const char**, bool) {
     return false;
 }
 }  // namespace edvr

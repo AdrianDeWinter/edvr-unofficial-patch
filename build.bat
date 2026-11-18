@@ -295,8 +295,7 @@ python tools\run_jobs.py ^
 
 REM DittoSR's committed bytecode has to match a fresh D3DCompile of the HLSL.
 REM --self-test only checks the container shape, so a shader edit that was not
-REM regenerated would pass it. A compile-only Linux build has no D3DCompile
-REM that emits shader model 5, so this comparison stays on the Windows build.
+REM regenerated would pass it. Compile-only builds skip the Python gates.
 if not defined EDVR_COMPILE_ONLY (
     python tools\gen_dittosr_shaders.py --check-bytes || exit /b 1
 )
@@ -2203,6 +2202,14 @@ if errorlevel 1 ( echo [edvr] ERROR: temporal_test build failed & exit /b 1 )
     echo [edvr] ERROR: the temporal pass's arithmetic is wrong
     exit /b 1
 )
+echo [edvr] === dittosr_gpu_test.exe ===
+%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
+    /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\taatest"\ /Fe"%BUILD%\dittosr_gpu_test.exe" ^
+    "tools\temporal_test\dittosr_gpu_test.cpp" "src\d3d11\dittosr_engine.cpp" ^
+    /link /INCREMENTAL:NO
+if errorlevel 1 ( echo [edvr] ERROR: dittosr_gpu_test build failed & exit /b 1 )
+"%BUILD%\dittosr_gpu_test.exe" --dry-run || exit /b 1
+"%BUILD%\dittosr_gpu_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_sky_flicker_test

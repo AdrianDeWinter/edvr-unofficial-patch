@@ -4766,14 +4766,9 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                                          : intelEngine ? edvr::xessAvailable(dev, &why)
                                                        : dlaaAvailable(dev, &why);
             if (!engineAvailable) {
-                if (!engineFailNoted) {
+                if (!dittoEngine && !engineFailNoted) {
                     engineFailNoted = true;
-                    if (dittoEngine) {
-                        Log::get().note(
-                            "temporal aa: dittosr was asked for, but %s. The pass's own "
-                            "history runs instead.",
-                            why);
-                    } else if (amdEngine) {
+                    if (amdEngine) {
                         Log::get().note(
                             "temporal aa: fsr was asked for, but %s. The pass's own "
                             "history runs instead.",
@@ -5104,8 +5099,8 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                     if ((gpuCensusBegin(ctx, GpuCensusSection::DoorUpscaler),
                                 beginRegion(qs, Region::Full, dev, ctx),
                                 dittoEngine
-                                    ? edvr::dittoEvaluate(ctx, static_cast<unsigned>(eye),
-                                                         e.dlColour, e.dlDepth, e.dlMv, nullptr, e.dlOut,
+                                    ? edvr::dittoEvaluate(ctx, static_cast<unsigned>(eye), edvr::upscalerSlotLabel(eye),
+                                                         {e.dlColourSrv, e.dlDepthSrv, e.dlMvSrv, nullptr, e.dlOutUav},
                                                          w, h, oW, oH, jxNow, jyNow, resetHist, &why, false)
                                 : intelEngine
                                     ? edvr::xessEvaluate(ctx, static_cast<unsigned>(eye),
@@ -5237,14 +5232,9 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                         // note belongs to an upscale the game asked for, and
                         // the 2026-10-09 flight's 1:1 create used to hide it.
                         const bool unityFrame = oW == w && oH == h;
-                        if (!unityFrame && !engineFailNoted) {
+                        if (!unityFrame && !dittoEngine && !engineFailNoted) {
                             engineFailNoted = true;
-                            if (dittoEngine) {
-                                Log::get().note(
-                                    "temporal aa: dittosr was asked for, but %s. The pass's own "
-                                    "history runs instead.",
-                                    why);
-                            } else if (amdEngine) {
+                            if (amdEngine) {
                                 Log::get().note(
                                     "temporal aa: fsr was asked for, but %s. The pass's own "
                                     "history runs instead.",

@@ -184,7 +184,7 @@ static const char* kTestFlatIni = "[fix]\r\ntemporal_aa = off\r\n[advanced]\r\nr
 
 // ---------------------------------------------------------------------------
 // Payloads for the planner: a schema-2 manifest description and the bytes of each file, built here instead of by hand at every
-// site. kTestTable mirrors tools\package_native.py's FILES, the one table a release is made from (testManifestMirrorsPackager
+// site. kTestTable mirrors tools\package_native.py's FILES, the one table a release is made from (testManifestFiles
 // below reads that table and fails when the two differ), so a test payload has the same files, targets, conditions and behaviours as
 // a real one. A file's bytes are synthetic; its hash is whatever the test sets, since the planner compares hashes, not bytes.
 // ---------------------------------------------------------------------------
@@ -203,6 +203,8 @@ static const TestTableRow kTestTable[] = {
     {"openxr_license", TargetRoot::Openvr, "OPENXR-LOADER-LICENSE.txt", kProfileVr, false, ExistingMode::Replace},
     {"settings_vr", TargetRoot::Game, "edvr.ini", kProfileVr, false, ExistingMode::Settings},
     {"settings_flat", TargetRoot::Game, "edvr-flat.ini", kProfileFlat, false, ExistingMode::Settings},
+    {"dittosr_license", TargetRoot::Game, "DITTOSR-LICENSE.txt", kProfileAll, false, ExistingMode::Owned},
+    {"dittosr_gsr_license", TargetRoot::Game, "DITTOSR-GSR-LICENSE.txt", kProfileAll, false, ExistingMode::Owned},
     {"dlss", TargetRoot::Game, "nvngx_dlss.dll", 0, true, ExistingMode::Owned},
     {"xess", TargetRoot::Game, "libxess.dll", 0, false, ExistingMode::Owned},
     {"xess_license", TargetRoot::Game, "INTEL-XESS-LICENSE.txt", 0, false, ExistingMode::Owned},

@@ -5,6 +5,7 @@
 // 16-byte register packing of shaders/common.hlsli rather than DittoConstants.
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -68,13 +69,13 @@ inline bool dittoSameText(const char* a, const char* b) {
 #endif
 }
 
-// auto, empty, or anything that is not a number: DittoSR's ratio curve (-1). off: 0. A number is clamped to 0..0.9.
+// Auto and invalid values use DittoSR's ratio curve (-1). Off is 0. A finite number is clamped to 0..0.9.
 inline float dittoAntiShimmerFromText(const char* text) {
     if (!text || !text[0] || dittoSameText(text, "auto")) return -1.0f;
     if (dittoSameText(text, "off")) return 0.0f;
     char* end = nullptr;
     const float asked = std::strtof(text, &end);
-    if (!end || end == text || *end != 0) return -1.0f;
+    if (!end || end == text || *end != 0 || !std::isfinite(asked)) return -1.0f;
     return dittoClamp(asked, 0.0f, 0.9f);
 }
 

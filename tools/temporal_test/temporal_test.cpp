@@ -187,6 +187,10 @@ int main() {
                   edvr::dittoSharpenModeFromText(nullptr) == 0 && edvr::dittoSharpenModeFromText("rcas") == 1 &&
                   edvr::dittoSharpenModeFromText("RCAS") == 1,
               "the filter text is RCAS or CAS");
+        check(edvr::dittoSharpenModeFromText("rcasx") == 0, "an unrecognized filter uses CAS");
+        check(edvr::dittoAntiShimmerFromText("inf") == -1.0f &&
+                  edvr::dittoAntiShimmerFromText("nan") == -1.0f,
+              "non-finite anti-shimmer values use Auto");
     }
     check(!edvr::temporalModeEnabledFor("off", true) && !edvr::temporalModeEnabledFor("off", false) &&
           !edvr::temporalModeEnabledFor("bogus", true) && !edvr::temporalModeEnabledFor("bogus", false),
