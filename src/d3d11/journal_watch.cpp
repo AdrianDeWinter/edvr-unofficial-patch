@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "../common/config.h"
+#include "../common/elite_journal_folder.h"   // the journal folder under Windows' Saved Games known folder
 #include "../common/guard.h"
 #include "../common/runtime_profile.h"
 #include "../common/log.h"
@@ -1072,6 +1073,39 @@ JournalPick journalPickNewest(const uint64_t* creation, const uint64_t* write,
     return best;
 }
 
+// FOLDERID_SavedGames from the SDK's knownfolders.h (10.0.26100):
+// {4C5C32FF-BB9D-43b0-B5B4-2D72E54EAAA4}. SHGetKnownFolderPath is shell32's,
+// and the string it returns is freed with ole32's CoTaskMemFree. The graphics
+// DLL links neither (elite_graphics_folder.h), so both are loaded for the call
+// and released when this loaded them. KF_FLAG_DONT_VERIFY is 0x00004000
+// (shlobj_core.h): the path Windows has configured, including a name in
+// another language and a folder the user moved, even if it does not exist yet.
+std::wstring journalKnownSavedGamesFolder() {
+    HMODULE shell = GetModuleHandleW(L"shell32.dll");
+    const bool ownShell = shell == nullptr;
+    if (!shell) shell = LoadLibraryW(L"shell32.dll");
+    if (!shell) return std::wstring();
+    using ShGetFn = HRESULT (WINAPI*)(const GUID&, DWORD, HANDLE, PWSTR*);
+    const auto shGet = reinterpret_cast<ShGetFn>(GetProcAddress(shell, "SHGetKnownFolderPath"));
+    HMODULE ole = GetModuleHandleW(L"ole32.dll");
+    const bool ownOle = ole == nullptr;
+    if (!ole) ole = LoadLibraryW(L"ole32.dll");
+    using FreeFn = void (WINAPI*)(void*);
+    const auto freeMem = ole ? reinterpret_cast<FreeFn>(GetProcAddress(ole, "CoTaskMemFree")) : nullptr;
+    std::wstring out;
+    if (shGet && freeMem) {
+        const GUID savedGames = {0x4c5c32ff, 0xbb9d, 0x43b0, {0xb5, 0xb4, 0x2d, 0x72, 0xe5, 0x4e, 0xaa, 0xa4}};
+        PWSTR path = nullptr;
+        if (SUCCEEDED(shGet(savedGames, 0x00004000u, nullptr, &path)) && path) {
+            out = path;
+            freeMem(path);
+        }
+    }
+    if (ownOle && ole) FreeLibrary(ole);
+    if (ownShell) FreeLibrary(shell);
+    return out;
+}
+
 void journalWatchConfigure() {
     // A new watcher starts from nothing, and stops the one before it, if any.
     endSession();
@@ -1100,8 +1134,11 @@ void journalWatchConfigure() {
     notBefore.dwHighDateTime = t.HighPart;
 
     std::wstring dir;
+    bool explicitDir = false;
+    bool fromWindows = false;   // the path came from FOLDERID_SavedGames, not the English fallback
     const std::string dirUtf8 = cfg.getString("d3d11.journal_dir", "");
     if (!dirUtf8.empty()) {
+        explicitDir = true;
         const int need = MultiByteToWideChar(CP_UTF8, 0, dirUtf8.c_str(), -1,
                                              nullptr, 0);
         std::wstring w(need > 0 ? need : 1, L'\0');
@@ -1110,29 +1147,42 @@ void journalWatchConfigure() {
         dir = w;
     } else {
         wchar_t profile[MAX_PATH] = {};
-        const DWORD n =
-            GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
-        if (n == 0 || n >= MAX_PATH) {
-            Log::get().note("journal: USERPROFILE is not set, so the journal "
-                            "cannot be found. Set d3d11.journal_dir to the "
-                            "'Saved Games\\Frontier Developments\\Elite "
-                            "Dangerous' folder to use it anyway.");
+        const DWORD n = GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
+        const std::wstring userProfile = (n == 0 || n >= MAX_PATH) ? std::wstring() : std::wstring(profile, n);
+        // Windows names Saved Games in the user's language and follows a folder the user moved. The English
+        // "Saved Games" under USERPROFILE is only the fallback for a Windows that does not answer.
+        const std::wstring known = journalKnownSavedGamesFolder();
+        fromWindows = !known.empty();
+        dir = eliteJournalFolder(std::wstring(), known, userProfile);
+        if (dir.empty()) {
+            Log::get().note("journal: Windows did not name a Saved Games folder and USERPROFILE is not set, so the journal "
+                            "cannot be found. Set d3d11.journal_dir to the Frontier Developments\\Elite Dangerous folder under it.");
             return;
         }
-        dir = std::wstring(profile) +
-              L"\\Saved Games\\Frontier Developments\\Elite Dangerous";
     }
 
     const DWORD attrs = GetFileAttributesW(dir.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES ||
         !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-        Log::get().note("journal: no folder at the expected place, so the "
-                        "game's journal is not being read and the render-state "
-                        "heuristics carry everything, as before. Set "
-                        "d3d11.journal_dir if your Saved Games folder was "
-                        "moved.");
+        const std::string shown = runtimeProfileUtf8(dir);
+        if (explicitDir) {
+            Log::get().note("journal: no folder at %s (d3d11.journal_dir), so the game's journal is not being read and the render-state "
+                            "heuristics carry everything, as before.",
+                            shown.c_str());
+        } else if (fromWindows) {
+            Log::get().note("journal: no folder at %s, so the game's journal is not being read and the render-state heuristics carry "
+                            "everything, as before. That is Windows' Saved Games folder, in this language's name, with Frontier "
+                            "Developments\\Elite Dangerous under it. Set d3d11.journal_dir if the journal lives somewhere else.",
+                            shown.c_str());
+        } else {
+            Log::get().note("journal: no folder at %s, so the game's journal is not being read and the render-state heuristics carry "
+                            "everything, as before. Windows did not name a Saved Games folder, so this is the English name under "
+                            "USERPROFILE. Set d3d11.journal_dir if the journal lives somewhere else.",
+                            shown.c_str());
+        }
         return;
     }
+    Log::get().note("journal: folder %s", runtimeProfileUtf8(dir).c_str());
 
     // The worker's state. The thread itself starts at the first tick.
     Session* s = new (std::nothrow) Session;
