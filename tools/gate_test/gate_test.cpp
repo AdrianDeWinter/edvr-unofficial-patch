@@ -33,6 +33,7 @@
 // journalPickNewest, had no coverage at all until the review rounds on
 // issue #19 found arithmetic bugs in it (and in a sibling decision since
 // removed), every one of which is one line of table here.
+#include "../../src/common/elite_journal_folder.h"
 #include "../../src/d3d11/journal_watch.h"
 // Same reason: eyeShapedAtScale is the recogniser rule that decides whether
 // the gate is fed at all, and it is inline in the header so this file can
@@ -1197,6 +1198,34 @@ int journalWorkerChecks() {
         printf("  FAIL  %s\n", what);
         ++bad;
     };
+    // The journal folder follows Windows' Saved Games name. A German profile's folder is not "Saved Games",
+    // and an explicit d3d11.journal_dir is the Elite folder itself, not a root to join under.
+    verify(edvr::eliteJournalFolder(L"D:\\journals", L"C:\\Users\\Ragnatz\\Gespeicherte Spiele", L"C:\\Users\\Ragnatz") == L"D:\\journals",
+           "an explicit journal_dir is the Elite folder, whole");
+    verify(edvr::eliteJournalFolder(L"", L"C:\\Users\\Ragnatz\\Gespeicherte Spiele", L"C:\\Users\\Ragnatz") ==
+               L"C:\\Users\\Ragnatz\\Gespeicherte Spiele\\Frontier Developments\\Elite Dangerous",
+           "a Saved Games folder in another language is used, not the English name");
+    verify(edvr::eliteJournalFolder(L"", L"C:\\Users\\Ragnatz\\Gespeicherte Spiele\\", L"C:\\Users\\Ragnatz") ==
+               L"C:\\Users\\Ragnatz\\Gespeicherte Spiele\\Frontier Developments\\Elite Dangerous",
+           "a trailing slash on the known folder is not doubled");
+    verify(edvr::eliteJournalFolder(L"", L"D:\\Moved Saves", L"C:\\Users\\Ragnatz") ==
+               L"D:\\Moved Saves\\Frontier Developments\\Elite Dangerous",
+           "a moved Saved Games folder is used, not the one under the profile");
+    verify(edvr::eliteJournalFolder(L"", L"", L"C:\\Users\\Ragnatz") ==
+               L"C:\\Users\\Ragnatz\\Saved Games\\Frontier Developments\\Elite Dangerous",
+           "with no answer from Windows the English Saved Games name is the fallback");
+    verify(edvr::eliteJournalFolder(L"", L"", L"").empty(),
+           "with no explicit dir, no known folder and no profile there is no path");
+    {
+        const std::wstring known = edvr::journalKnownSavedGamesFolder();
+        verify(!known.empty(), "Windows names the Saved Games folder");
+        std::wstring root = known;
+        while (!root.empty() && (root.back() == L'\\' || root.back() == L'/')) root.pop_back();
+        wchar_t profile[MAX_PATH] = {};
+        GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
+        verify(edvr::eliteJournalFolder(L"", known, profile) == root + L"\\Frontier Developments\\Elite Dangerous",
+               "the journal folder is Windows' Saved Games folder plus Elite's own folder");
+    }
     if (edvr::g_clockForTest) {
         printf("  FAIL  the journal worker reads the real clock, and a fake one is installed\n");
         return 1;

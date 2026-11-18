@@ -1,7 +1,9 @@
 // Elite's own journal, read for the boundaries it states outright.
 //
 // The game writes a documented event stream for third-party tools:
-// Journal.*.log in the Saved Games folder, one JSON object per line. EDVR has
+// Journal.*.log in the Saved Games folder, one JSON object per line. The folder
+// is Windows' Saved Games known folder, so its name follows the user's language
+// and a folder the user moved (elite_journal_folder.h). EDVR has
 // been reconstructing two facts from render-state heuristics that this file
 // simply states: whether GAMEPLAY has started (LoadGame -- before it, every
 // keypress is menu navigation, and the next-view key is an arrow that menus
@@ -45,6 +47,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 #include "journal_station.h"
 
@@ -413,6 +416,11 @@ struct JournalPick {
 };
 JournalPick journalPickNewest(const uint64_t* creation, const uint64_t* write,
                               size_t count, uint64_t notBefore);
+
+// Windows' Saved Games folder (FOLDERID_SavedGames): the name in the user's
+// language, and where the user moved it. Empty if Windows does not answer.
+// The graphics DLL does not link shell32, so this loads it for the call.
+std::wstring journalKnownSavedGamesFolder();
 
 // RIG SEAMS. tools\gate_test drives the worker through these; the product
 // never calls them, and at their defaults they change nothing.
