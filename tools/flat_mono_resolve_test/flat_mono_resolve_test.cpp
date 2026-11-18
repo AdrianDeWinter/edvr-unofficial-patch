@@ -248,6 +248,7 @@ ID3D11ComputeShader* shaderSwapCreateCs(ID3D11DeviceContext* context,const void*
 }
 bool dlaaAvailable(ID3D11Device*,const char**){return true;}
 bool fsr3Available(ID3D11Device*,const char**){return true;}
+bool dittoAvailable(ID3D11Device*,const char**){return true;}
 bool xessAvailable(ID3D11Device*,const char**){return true;}
 void xessReleaseFeatures(){}
 void xessShutdown(){}
@@ -280,6 +281,18 @@ bool fsr3Evaluate(ID3D11DeviceContext* c,unsigned slot,ID3D11Texture2D* colour,I
     if(hdr) observedBackendPixels=readPixel(c,colour,&observedBackendCenter,4,8,8) &&
                                   readPixel(c,colour,&observedBackendOutside,4,1,1);
     infiniteSeen=infinite;check(nearZ==expectedNear && std::abs(fov-1.5707963f)<1e-5f,"FSR actual near and FOV");
+    return backend(c,depth,mv,mask,out,jx,jy,reset,why);
+}
+// The rig links flat_mono_resolve.cpp and not dittosr_engine.cpp. DittoSR is not given a near plane or a FOV.
+bool dittoEvaluate(ID3D11DeviceContext* c,unsigned slot,ID3D11Texture2D* colour,ID3D11Texture2D* depth,ID3D11Texture2D* mv,
+    ID3D11Texture2D* mask,ID3D11Texture2D* out,uint32_t w,uint32_t h,uint32_t outW,uint32_t outH,float jx,float jy,bool reset,
+    const char** why,bool hdr) {
+    backendSlots.push_back(static_cast<int>(slot));
+    observedInW=w;observedInH=h;observedOutW=outW;observedOutH=outH;
+    observedHdr=hdr;observedColourFormat=DXGI_FORMAT_UNKNOWN;observedOutFormat=DXGI_FORMAT_UNKNOWN;
+    {D3D11_TEXTURE2D_DESC d{};colour->GetDesc(&d);observedColourFormat=d.Format;out->GetDesc(&d);observedOutFormat=d.Format;}
+    if(hdr) observedBackendPixels=readPixel(c,colour,&observedBackendCenter,4,8,8) &&
+                                  readPixel(c,colour,&observedBackendOutside,4,1,1);
     return backend(c,depth,mv,mask,out,jx,jy,reset,why);
 }
 } // namespace edvr

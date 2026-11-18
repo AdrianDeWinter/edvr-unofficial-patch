@@ -452,6 +452,8 @@ const FileBlurb kBlurbs[] = {
     {"xess_ll", "XeSS", "Intel's Xe Low Latency runtime", "for xess_frame_generation", "xess"},
     {"openxr_loader", "OpenXR", nullptr, nullptr, nullptr},
     {"openxr_license", "OpenXR", nullptr, nullptr, nullptr},
+    {"dittosr_license", "DittoSR", nullptr, nullptr, "graphics"},
+    {"dittosr_gsr_license", "DittoSR", nullptr, nullptr, "graphics"},
 };
 // The id a file travels with, or null.
 const char* travelsWith(const std::string& id) {

@@ -35,6 +35,11 @@ inline bool flatProfileReadsKey(const char* key) {
         std::strcmp(key, "menu.fps_overlay") == 0 ||
         std::strcmp(key, "menu.fps_overlay_lock") == 0 ||
         std::strcmp(key, "fix.temporal_aa_model") == 0 ||
+        // DittoSR's picture controls (dittosr_engine.cpp). Performance-page rows, dimmed until Anti-aliasing is DittoSR.
+        std::strcmp(key, "fix.dittosr_sharpness") == 0 ||
+        std::strcmp(key, "fix.dittosr_frame_weight") == 0 ||
+        std::strcmp(key, "fix.dittosr_anti_shimmer") == 0 ||
+        std::strcmp(key, "fix.dittosr_sharpen") == 0 ||
         // XeSS Frame Generation (xess_fg.cpp, docs\xess-frame-generation-2026-11-12.md): flat-only rows on the Performance tab.
         std::strcmp(key, "fix.xess_frame_generation") == 0 ||
         std::strcmp(key, "fix.xess_generated_frames") == 0 ||

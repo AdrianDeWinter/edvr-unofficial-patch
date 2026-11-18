@@ -105,12 +105,15 @@ void rebuildItems(List* list) {
 
     const std::vector<SettingRow>& rows = list->model->rows();
 
-    // fsr ignores fix.temporal_aa_model (NVIDIA's preset row): found fresh
-    // each rebuild.
+    // NVIDIA's preset row is hidden for FSR and DittoSR. DittoSR's own rows are
+    // shown only while DittoSR is the anti-aliasing. Found fresh each rebuild.
     bool hideAaPreset = false;
+    bool showDitto = false;
     for (const SettingRow& r : rows) {
         if (isVscreenKey(*r.def, "temporal_aa")) {
-            hideAaPreset = _stricmp(effectiveValue(r).c_str(), "fsr") == 0;
+            hideAaPreset = _stricmp(effectiveValue(r).c_str(), "fsr") == 0 ||
+                           _stricmp(effectiveValue(r).c_str(), "dittosr") == 0;
+            showDitto = _stricmp(effectiveValue(r).c_str(), "dittosr") == 0;
             break;
         }
     }
@@ -118,6 +121,10 @@ void rebuildItems(List* list) {
     for (size_t i = 0; i < rows.size(); ++i) {
         if (!matches(rows[i], needle)) continue;
         if (hideAaPreset && isVscreenKey(*rows[i].def, "temporal_aa_model")) continue;
+        if (!showDitto && (isVscreenKey(*rows[i].def, "dittosr_sharpness") ||
+                           isVscreenKey(*rows[i].def, "dittosr_frame_weight") ||
+                           isVscreenKey(*rows[i].def, "dittosr_anti_shimmer") ||
+                           isVscreenKey(*rows[i].def, "dittosr_sharpen"))) continue;
         const std::wstring wanted = headingFor(*rows[i].def);
         if (!haveHeading || wanted != heading) {
             heading = wanted;
@@ -496,6 +503,11 @@ void paint(List* list) {
 
 void applyValue(List* list, size_t rowIndex, const std::string& value) {
     if (!list->model) return;
+    // DittoSR's rows and the DLSS preset appear or leave with this choice.
+    // The click returns as soon as this write finishes, so rebuilding the
+    // list here is the paint the next frame sees.
+    const bool aa = rowIndex < list->model->rows().size() && list->model->rows()[rowIndex].def &&
+                    isVscreenKey(*list->model->rows()[rowIndex].def, "temporal_aa");
     if (!list->model->set(rowIndex, value)) {
         list->error = list->model->lastError();
         MessageBoxW(GetParent(list->hwnd), fromUtf8(list->error).c_str(), kAppTitle,
@@ -506,6 +518,10 @@ void applyValue(List* list, size_t rowIndex, const std::string& value) {
         // on install: the mirror exists so a game update between now and the
         // next install cannot take today's change with it.
         updateMirrorIni(list->model->gameDir(), list->mirrorDir);
+        if (aa) {
+            rebuildItems(list);
+            updateScrollbar(list);
+        }
     }
     InvalidateRect(list->hwnd, nullptr, TRUE);
 }

@@ -2060,6 +2060,8 @@ void testFlatResolveRoute() {
         {FlatMonoResolveMode::Dlss, 2496,1404, 3840,2160, 3840,2160, false, "trained-upscale"},
         {FlatMonoResolveMode::Dlss, 3840,2160, 3840,2160, 3840,2160, false, "trained-native"},
         {FlatMonoResolveMode::Fsr,  2496,1404, 3840,2160, 3840,2160, false, "trained-upscale"},
+        {FlatMonoResolveMode::Ditto, 2496,1404, 3840,2160, 3840,2160, false, "dittosr-upscale"},
+        {FlatMonoResolveMode::Ditto, 3840,2160, 3840,2160, 3840,2160, false, "dittosr-native"},
         {FlatMonoResolveMode::Xess, 2496,1404, 3840,2160, 3840,2160, false, "xess-upscale"},
         {FlatMonoResolveMode::Xess, 3840,2160, 3840,2160, 3840,2160, false, "xess-native-aa"},
         // R > D (section 72 step 2): NVIDIA evaluates DLAA at R and the game's
@@ -2067,6 +2069,7 @@ void testFlatResolveRoute() {
         {FlatMonoResolveMode::Dlss, 5760,3240, 3840,2160, 5760,3240, false, "dlss-as-dlaa-supersample"},
         {FlatMonoResolveMode::Dlaa, 5760,3240, 3840,2160, 5760,3240, false, "dlaa-supersample"},
         {FlatMonoResolveMode::Fsr,  5760,3240, 3840,2160, 5760,3240, false, "fsr-native-aa-supersample"},
+        {FlatMonoResolveMode::Ditto, 5760,3240, 3840,2160, 5760,3240, false, "dittosr-native-aa-supersample"},
         {FlatMonoResolveMode::Xess, 5760,3240, 3840,2160, 5760,3240, false, "xess-native-aa-supersample"},
         {FlatMonoResolveMode::Taa,  5760,3240, 3840,2160, 3840,2160, false, "taa-display-grid-down"},
         {FlatMonoResolveMode::Dlaa, 3840,2160, 3840,2160, 3840,2160, false, "dlaa-native"},

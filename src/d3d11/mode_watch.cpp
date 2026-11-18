@@ -7,6 +7,7 @@
 #include "dlaa.h"               // dlaaReleaseForSwitch: DLSS features released, NGX kept
 #include "engine_velocity.h"    // engineVelocityFlatAbandon: the flat teardown's velocity state
 #include "flat_runtime.h"       // flatRuntimeResize: the flat teardown, run before a commit leaves flat
+#include "dittosr_engine.h"    // dittoReleaseFeatures: DittoSR's histories, released at every switch
 #include "fsr3_engine.h"        // fsr3ReleaseFeatures: FSR's features, released at every switch
 #include "menu.h"               // menuProfileSwitch: the menu closes and forgets the outgoing profile's first-time block
 #include "mode_watch_logic.h"
@@ -433,8 +434,8 @@ void commitPosted(uint64_t packed) {
         return;
     }
 
-    // Teardown, while the outgoing profile's predicates still answer true (design section 3.3). Every switch releases the DLSS and FSR
-    // features and closes the menu; the flat and VR parts are the outgoing profile's own.
+    // Teardown, while the outgoing profile's predicates still answer true (design section 3.3). Every switch releases the DLSS, FSR,
+    // DittoSR and XeSS features and closes the menu; the flat and VR parts are the outgoing profile's own.
     if (!g_skipTeardown.load(std::memory_order_relaxed)) {
         if (cur == RuntimeProfile::Flat) {
             flatRuntimeResize();
@@ -444,6 +445,7 @@ void commitPosted(uint64_t packed) {
         }
         dlaaReleaseForSwitch();
         fsr3ReleaseFeatures();
+        dittoReleaseFeatures();
         xessReleaseFeatures();
         menuProfileSwitch();
         g_teardowns.fetch_add(1, std::memory_order_relaxed);

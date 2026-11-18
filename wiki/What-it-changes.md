@@ -8,11 +8,11 @@ The changes live in memory while Elite runs. ED-UP leaves the game's files on di
 
 ## A steadier picture
 
-Fine edges shimmer because Elite has no temporal anti-aliasing of its own. ED-UP can hand each frame to DLSS, FSR, or XeSS, or run its own. Ships, vehicles, settlement parts, and characters pass their real motion through, read from the game's own record of where each one was and where it is. Anything ED-UP cannot follow is drawn with no history, so the upscaler does not invent a trail.
+Fine edges shimmer because Elite has no temporal anti-aliasing of its own. ED-UP can hand each frame to DLSS, FSR, DittoSR, or XeSS, or run its own. Ships, vehicles, settlement parts, and characters pass their real motion through, read from the game's own record of where each one was and where it is. Anything ED-UP cannot follow is drawn with no history, so the upscaler does not invent a trail.
 
 Menus, panels, and HUD text are drawn again after the upscaler, so the upscaler does not smear them. Weapons fire has a layer of its own and stays sharp. In the headset, an NPC's hair and eyes move with the head, and so do the Holo-Me suit, helmet, and collar.
 
-[Upscaling](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md#upscaling-dlss-fsr-and-xess) · [the interface](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md#the-interface)
+[Upscaling](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md#upscaling-dlss-fsr-dittosr-and-xess) · [the interface](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md#the-interface)
 
 From release 0.22.2, XeSS Frame Generation can add frames on a monitor. It is a monitor row, off by default, only with XeSS. [Settings](Settings.md#frame-generation-on-a-monitor) names the limits.
 

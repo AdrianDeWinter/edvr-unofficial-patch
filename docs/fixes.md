@@ -58,7 +58,7 @@ pins a one-line frame-rate readout to your view while the menu is closed.
 On a flat screen F8 opens ED-UP's own panel, with the settings that apply to
 flat on its Performance and Visual tabs.
 
-## Upscaling: DLSS, FSR and XeSS
+## Upscaling: DLSS, FSR, DittoSR and XeSS
 
 Elite has no temporal anti-aliasing, so edges and fine lines shimmer as you
 move, and in a headset you never stop moving. ED-UP can hand each frame to a
@@ -73,6 +73,19 @@ Anti-aliasing row of the Performance page, or set `fix.temporal_aa`:
 - `fsr` is AMD's FidelityFX Super Resolution 3.1, through a community Direct3D
   11 port compiled into `d3d11.dll`. It runs on any GPU and needs no extra
   file.
+- `dittosr` is [DittoSR 0.5.0](https://github.com/Vancete/DittoSR/releases/tag/v0.5.0),
+  a lighter temporal upscaler offered as an alternative to FSR. It uses the
+  same colour, depth and motion, runs on any GPU, and is compiled into
+  `d3d11.dll`, so there is nothing to download and DittoSR's own loader is
+  not used. Elite does not load AMD's FidelityFX DLL, which is what that
+  loader replaces. While it is selected, the Performance page offers its
+  sharpness (60 is the look it ships with), its frame weight (2; lower is
+  steadier), its anti-shimmer (Auto, Off, or 0.1 to 0.9) and its filter
+  (CAS, or RCAS). Those rows stay on the page and
+  dim for every other anti-aliasing choice, the same way the DLSS preset
+  dims unless DLSS is selected. They apply on the next frame. DittoSR's own
+  F7 panel is not part of this build; ED-UP's F7 still toggles anti-aliasing
+  off for a comparison. Ditto Relight is not included.
 - `xess` is Intel's XeSS-SR. It runs on any GPU and is fastest on an Intel Arc
   card. Elsewhere it costs more than DLSS or FSR: on an RTX 5090 in VR it took
   about 1.2 ms a frame more than DLSS. It needs Intel's runtime, `libxess.dll`,

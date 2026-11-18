@@ -249,6 +249,7 @@ python tools\run_jobs.py ^
     --gate "tools\fetch_xess.py --self-test" ^
     --gate "tools\gen_installer_rc.py --self-test" ^
     --gate "tools\package_native.py --self-test" ^
+    --gate "tools\gen_dittosr_shaders.py --self-test" ^
     --gate "tools\sign_manifest.py --self-test" ^
     --gate "tools\artifact_signing.py --self-test" ^
     --gate "tools\launcher_fixtures.py --self-test" ^
@@ -741,7 +742,7 @@ python tools\compile_cache.py --prune --keep thunks.obj --keep weapon_ui_getter_
     "src\d3d11\sky_ring.cpp" ^
     "src\d3d11\terrain_cull_cover_hook.cpp" ^
     "src\d3d11\dlaa.cpp" ^
-    "src\d3d11\fsr3_engine.cpp" ^
+    "src\d3d11\fsr3_engine.cpp" "src\d3d11\dittosr_engine.cpp" ^
     "src\d3d11\sharpen_pass.cpp" ^
     "src\d3d11\flat_sharpen.cpp" "src\d3d11\flat_ui_layer.cpp" "src\d3d11\flat_star_glow.cpp" "src\d3d11\flat_dof_blur.cpp" ^
     "src\d3d11\loader_panel.cpp" ^

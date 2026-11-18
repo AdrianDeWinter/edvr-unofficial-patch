@@ -1,7 +1,7 @@
 # ED Unofficial Patch (ED-UP, formerly EDVR)
 
-ED-UP adds DLSS, FSR, and XeSS to Elite Dangerous: Odyssey, on a monitor or in
-a headset. It keeps the menus and HUD sharp, draws the on-foot game in stereo,
+ED-UP adds DLSS, FSR, DittoSR, and XeSS to Elite Dangerous: Odyssey, on a monitor
+or in a headset. It keeps the menus and HUD sharp, draws the on-foot game in stereo,
 and fixes visual problems that show up once each eye has its own view. In VR
 it runs its own OpenXR session. The first install takes a few minutes.
 
@@ -40,7 +40,7 @@ Press F8 in the game to change settings.
 
 ## What you get
 
-A steadier picture: DLSS on an NVIDIA RTX card, FSR on any card, or XeSS.
+A steadier picture: DLSS on an NVIDIA RTX card, FSR or DittoSR on any card, or XeSS.
 Menus and the HUD stay sharp on top of the upscaler. On foot in a headset,
 the world is drawn from your commander's eyes, with look-to-aim and scopes
 you can turn on. Shared brightness, terrain at the edge of the view, the jump
@@ -98,6 +98,9 @@ ship with Intel's licence and third-party notices (`INTEL-XESS-LICENSE.txt`,
 engine is AMD's FidelityFX Super Resolution 3.1 upscaler through its community
 Direct3D 11 port (the optiscaler project's FidelityFX-SDK-DX11, MIT), compiled
 into `d3d11.dll`; its notice ships as `FIDELITYFX-SDK-DX11-LICENSE.txt`.
+DittoSR 0.5.0 is compiled into the same DLL (MIT; it derives from Snapdragon
+Game Super Resolution 2, BSD-3-Clause). The release carries
+`DITTOSR-LICENSE.txt` and `DITTOSR-GSR-LICENSE.txt`.
 
 Not affiliated with, endorsed by, or supported by Frontier Developments plc or
 Valve Corporation. Elite Dangerous is a trademark of Frontier Developments plc.

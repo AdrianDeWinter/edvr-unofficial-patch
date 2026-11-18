@@ -15,6 +15,7 @@ inline bool temporalModeEnabled(const std::string& mode) {
            _stricmp(mode.c_str(), "dlaa") == 0 ||
            _stricmp(mode.c_str(), "dlss") == 0 ||
            _stricmp(mode.c_str(), "fsr") == 0 ||
+           _stricmp(mode.c_str(), "dittosr") == 0 ||
            _stricmp(mode.c_str(), "xess") == 0;
 }
 
@@ -240,14 +241,16 @@ struct TemporalFootTracker {
 // does not name (off included) reads as Own: off never reaches the seam,
 // and an unrecognised value already falls back to the pass's own history
 // (temporalModeEnabled above), so there is nothing else to run.
-// Intel is XeSS-SR, the third external engine (the VR eye pass runs it per eye; flat runs it through flat_mono_resolve).
-enum class TemporalEngine { Own, Nvidia, Amd, Intel };
+// Intel is XeSS-SR. Ditto is DittoSR 0.5.0, an alternative to FSR on the same inputs.
+// The VR eye pass runs each per eye; flat runs each through flat_mono_resolve.
+enum class TemporalEngine { Own, Nvidia, Amd, Intel, Ditto };
 
 inline TemporalEngine temporalEngineFor(const std::string& mode) {
     if (_stricmp(mode.c_str(), "dlaa") == 0 || _stricmp(mode.c_str(), "dlss") == 0) {
         return TemporalEngine::Nvidia;
     }
     if (_stricmp(mode.c_str(), "fsr") == 0) return TemporalEngine::Amd;
+    if (_stricmp(mode.c_str(), "dittosr") == 0) return TemporalEngine::Ditto;
     if (_stricmp(mode.c_str(), "xess") == 0) return TemporalEngine::Intel;
     return TemporalEngine::Own;
 }

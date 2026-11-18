@@ -563,6 +563,33 @@ const std::string& shownValue(const char* section, const char* key) {
 
 bool flatAntiAliasingIsXess() { return _stricmp(shownValue("fix", "temporal_aa").c_str(), "xess") == 0; }
 
+// fix.dittosr_sharpness, fix.dittosr_frame_weight, fix.dittosr_anti_shimmer and fix.dittosr_sharpen. They stay on the
+// Performance page, like the DLSS preset, and dim until Anti-aliasing is DittoSR. The mode is the value the panel shows,
+// so the rows light up on the same change that selects DittoSR, before the ini write reaches Config.
+bool isDittoRow(const MenuRowDef& d) {
+    return strcmp(d.section, "fix") == 0 &&
+           (strcmp(d.key, "dittosr_sharpness") == 0 || strcmp(d.key, "dittosr_frame_weight") == 0 ||
+            strcmp(d.key, "dittosr_anti_shimmer") == 0 || strcmp(d.key, "dittosr_sharpen") == 0);
+}
+
+bool antiAliasingIsDitto() { return _stricmp(shownValue("fix", "temporal_aa").c_str(), "dittosr") == 0; }
+
+bool dittoRowDisabled() { return !antiAliasingIsDitto(); }
+
+const char* dittoRowHint() { return "Choose DittoSR above to use this."; }
+
+const char* dittoRowRefusal(const MenuRowDef& d) {
+    static char text[120];
+    snprintf(text, sizeof(text), "%s is inactive: choose DittoSR above first.", d.label);
+    return text;
+}
+
+bool dittoRowRefused(const MenuRowDef& d, const char** why) {
+    if (!isDittoRow(d) || !dittoRowDisabled()) return false;
+    *why = dittoRowRefusal(d);
+    return true;
+}
+
 bool xessFgToggleOn() { return boolOf(shownValue("fix", "xess_frame_generation"), false); }
 
 bool xessFgToggleRowDisabled() { return xessFgToggleRowDim(runtimeFlatProfile(), flatAntiAliasingIsXess()); }
@@ -2807,7 +2834,9 @@ void buildContent(MenuContent& c) {
             const bool doorsRow = isRoomsBehindDoorsRow(d);
             const bool xessFramesRow = isXessFgFramesRow(d);
             const bool xessToggleRow = isXessFgToggleRow(d);
+            const bool dittoRow = isDittoRow(d);
             const bool dim = (dlssRow && dlssPresetDisabled()) ||
+                             (dittoRow && dittoRowDisabled()) ||
                              (xessFramesRow && xessFgFramesRowDisabled()) ||
                              (xessToggleRow && xessFgToggleRowDisabled()) ||
                              (sharpenRow && sharpenRowDisabled()) ||
@@ -2897,6 +2926,8 @@ void buildContent(MenuContent& c) {
                 snprintf(c.hint, sizeof(c.hint), "%s", stationWindowDistanceHint());
             else if (hi && dim && (xessFramesRow || xessToggleRow))
                 snprintf(c.hint, sizeof(c.hint), "%s", xessFgDimHint(xessFramesRow));
+            else if (hi && dim && dittoRow)
+                snprintf(c.hint, sizeof(c.hint), "%s", dittoRowHint());
             else if (hi && (xessFramesRow || xessToggleRow) && xessFgToggleOn() && xessFgExclusiveFullscreen())
                 snprintf(c.hint, sizeof(c.hint), "%s", "Paused in exclusive fullscreen: choose Borderless or Windowed in Elite's display options.");
             else if (hi && (xessFramesRow || xessToggleRow) && xessFgNeedsRestart())
@@ -2996,6 +3027,8 @@ void buildContent(MenuContent& c) {
                         }
                         body += "\nPress R again to remove this headset's entry (back to " + fallback + ").";
                     }
+                } else if (dim && dittoRow) {
+                    body += std::string("\n") + dittoRowHint();
                 } else if (dim) {
                     body += "\nInactive: only DLSS and DLAA read this preset.";
                 } else if (s.resetArmedEntry == i) {
@@ -3419,6 +3452,11 @@ void stepRow(int defIndex, int dir, int mult) {
     const std::string& cur = g_rows[defIndex].value;
     if (isDlssPresetRow(d) && dlssPresetDisabled()) {
         g_s.lastWrite = "DLSS preset is inactive: select DLSS or DLAA above first.";
+        g_s.contentDirty = true;
+        return;
+    }
+    if (const char* why = nullptr; dittoRowRefused(d, &why)) {
+        g_s.lastWrite = why;
         g_s.contentDirty = true;
         return;
     }
@@ -3856,6 +3894,11 @@ void beginEdit(int entryIndex, int defIndex) {
     // neither (stepRow says why).
     if (isSharpenRow(kMenuRows[defIndex]) && sharpenRowDisabled()) {
         s.lastWrite = "Sharpening is inactive: turn anti-aliasing on above first.";
+        s.contentDirty = true;
+        return;
+    }
+    if (const char* why = nullptr; dittoRowRefused(kMenuRows[defIndex], &why)) {
+        s.lastWrite = why;
         s.contentDirty = true;
         return;
     }
@@ -4340,6 +4383,9 @@ void dispatchNav(MenuNav nav, uint64_t now) {
                         }
                     } else if (isCockpitGlassDirtRow(d) && cockpitGlassDirtRowDisabled()) {
                         s.lastWrite = cockpitGlassDirtRefusal();
+                        s.contentDirty = true;
+                    } else if (const char* why = nullptr; dittoRowRefused(d, &why)) {
+                        s.lastWrite = why;
                         s.contentDirty = true;
                     } else if (const char* why = nullptr; xessFgRowRefused(d, &why)) {
                         s.lastWrite = why;

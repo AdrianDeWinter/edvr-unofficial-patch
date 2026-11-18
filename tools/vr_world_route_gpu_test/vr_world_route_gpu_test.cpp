@@ -226,6 +226,8 @@ bool gpuCensusBegin(ID3D11DeviceContext*, GpuCensusSection) noexcept { return fa
 void gpuCensusEnd(ID3D11DeviceContext*, GpuCensusSection) noexcept {}
 bool dlaaAvailable(ID3D11Device*, const char**) { return true; }
 bool fsr3Available(ID3D11Device*, const char**) { return true; }
+bool dittoAvailable(ID3D11Device*, const char**) { return true; }
+void dittoReleaseFeatures() {}
 bool xessAvailable(ID3D11Device*, const char**) { return false; }
 void xessReleaseFeatures() {}
 void xessShutdown() {}
@@ -257,6 +259,11 @@ bool dlaaEvaluate(ID3D11DeviceContext* c, int slot, ID3D11Texture2D* colour, ID3
 bool fsr3Evaluate(ID3D11DeviceContext*, unsigned, ID3D11Texture2D*, ID3D11Texture2D*, ID3D11Texture2D*, ID3D11Texture2D*,
                   ID3D11Texture2D*, uint32_t, uint32_t, uint32_t, uint32_t, float, float, bool, float, float, float, float,
                   const char**, bool, bool) { return false; }
+// The rig links flat_mono_resolve.cpp and not dittosr_engine.cpp. Same refusal as the FSR stub above.
+bool dittoEvaluate(ID3D11DeviceContext*, unsigned, ID3D11Texture2D*, ID3D11Texture2D*, ID3D11Texture2D*, ID3D11Texture2D*,
+                   ID3D11Texture2D*, uint32_t, uint32_t, uint32_t, uint32_t, float, float, bool, const char**, bool) {
+    return false;
+}
 }  // namespace edvr
 
 namespace {
