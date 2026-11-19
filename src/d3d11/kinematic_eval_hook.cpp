@@ -366,10 +366,8 @@ thread_local uint32_t t_jobMask=0;
 thread_local uint32_t t_builderRow=kGateProbeNoRow;
 thread_local engine_velocity_emit::PrimaryIdentity t_primaryIdentity;
 
-// The two evaluator relays are pass-throughs unless a diagnostic is attached
-// (two loads and a call), cheaper than one clock read, so every call is COUNTED
-// and only the probe branches, which have real work, are clocked
-// (engine_motion_cpu.h, Part kEval; the count bounds the cost).
+// Counted on sampled frames. The forward itself is clocked on those same frames
+// (engine_motion_cpu.h, Part kEval). The probe branches stay clocked on their own.
 __declspec(noinline) uintptr_t __fastcall evalObserved(uintptr_t descriptor,uintptr_t param2,
                                                        uintptr_t renderRecord) noexcept {
     emcpu::count(emcpu::kEval);
@@ -380,7 +378,11 @@ __declspec(noinline) uintptr_t __fastcall evalObserved(uintptr_t descriptor,uint
         probe->observe(descriptor,renderRecord,jobMask); // observe() gates on active()
     }
     const auto forward=reinterpret_cast<EvalFn>(g_evalEntry.forward.load(std::memory_order_acquire));
+    emcpu::Token forwardClock{};
+    const bool clockForward=(emcpu::g_gate.load(std::memory_order_relaxed) & emcpu::kSampledBit)!=0;
+    if(clockForward) emcpu::enter(forwardClock,emcpu::kEval,false);
     const uintptr_t result=forward(descriptor,param2,renderRecord);
+    if(clockForward) emcpu::leave(forwardClock);
     // The cull gate probe reads the verdict the call just wrote (param2:
     // u32 LOD index, u8 passed); renderRecord is the VIEW (design doc §9).
     const auto gateProbe=gateProbeGate.load(std::memory_order_acquire);
@@ -460,7 +462,11 @@ __declspec(noinline) uintptr_t __fastcall rigEvalObserved(uintptr_t rig,uintptr_
     const auto forward=reinterpret_cast<RigEvalFn>(g_rigEvalEntry.forward.load(std::memory_order_acquire));
     const uintptr_t previousRig=t_rigCurrent;
     t_rigCurrent=rig;
+    emcpu::Token forwardClock{};
+    const bool clockForward=(emcpu::g_gate.load(std::memory_order_relaxed) & emcpu::kSampledBit)!=0;
+    if(clockForward) emcpu::enter(forwardClock,emcpu::kEval,false);
     const uintptr_t out=forward(rig,poseCtx);
+    if(clockForward) emcpu::leave(forwardClock);
     t_rigCurrent=previousRig;
     return out;
 }

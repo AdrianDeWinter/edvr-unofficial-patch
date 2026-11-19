@@ -139,6 +139,7 @@ struct Build {
     bool consumer = true;                // a pass reads H at all
     bool sBeforeConsumer = false;        // S is written before anything reads H
     const void* copyReads = nullptr;     // what the copy reads (null: S)
+    uint64_t sVs = 0xF9;                 // S's writer's vertex shader (0xF9 is no known tone pass)
     uint64_t sPs = 0xFE;                 // S's writer's pixel shader (0xFE is no whitelisted pair)
     uint32_t sInstances = 1;
     bool poolSources = true;
@@ -167,7 +168,7 @@ inline Built build(const Build& b) {
     const uint32_t w = b.sW ? b.sW : b.sc.hW, h = b.sH ? b.sH : b.sc.hH;
     const void* S = s.sc.tone;
     const auto writeS = [&](const void* t1 = nullptr) {
-        FlatRuntimeDraw d = s.make(S, b.sDepth ? s.sc.probe : nullptr, w, h, b.sFormat, 0xF9, b.sPs, false, false);
+        FlatRuntimeDraw d = s.make(S, b.sDepth ? s.sc.probe : nullptr, w, h, b.sFormat, b.sVs, b.sPs, false, false);
         d.instances = b.sInstances;
         if (!b.sFullViewport) d.key.viewport[2] = float(w) - 8.0f;
         s.draw(d, nullptr, t1);
@@ -616,6 +617,18 @@ inline int flatCopyStructureTests() {
         admit(aaBuilt, policy(true, FlatMonoResolveMode::Dlss, true), &aaDiag);
         expect(aaDiag.ldrTargetsBefore == 2 && aaDiag.ldrDrawsBefore == 2,
                "the chain length rides the decline: two R-sized image passes, one draw each");
+        // Bloom off leaves depth of field as full-size images, and the tone pass still writes S. That is not a filter
+        // after the tone pass: S's writer is a known tone vertex shader, so the frame is admitted and the count stays.
+        Build dof;
+        dof.llmBefore = 2;
+        dof.consumerWritesS = false;
+        dof.sVs = flat_mono_detail::kToneVs;
+        dof.sPs = 0xFE;   // not a whitelisted tone pass: the whitelist refuses, and the structure still sees the tone vertex shader
+        Built dofBuilt = build(dof);
+        FlatCopyDiag dofDiag;
+        const FlatMonoFrame dofFrame = admit(dofBuilt, policy(true, FlatMonoResolveMode::Dlss, true), &dofDiag);
+        expect(dofDiag.outcome == FlatCopyOutcome::Admitted && dofFrame.selected() && dofDiag.ldrTargetsBefore == 2,
+               "depth of field with bloom off: full-size images before a tone pass that writes S are admitted");
 
         // The refusals that are the scene's, not the chain's.
         Build sources; sources.poolSources = false; sources.stockFamily = true;

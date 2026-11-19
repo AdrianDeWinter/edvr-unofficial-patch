@@ -4758,6 +4758,16 @@ int main(int argc, char** argv) {
                     feed(l, "{ \"timestamp\":\"t\", \"event\":\"Location\", \"Docked\":false, \"OnFoot\":true, \"Body\":\"LP 1 a\", \"BodyID\":4, \"BodyType\":\"Planet\" }\r\n");
                     check(l.kind() == K::kUnknown, "station type: on foot on a planet is unknown");
                     {
+                        js::Latch rest;
+                        feed(rest, "{ \"event\":\"ApproachSettlement\", \"Name\":\"Chamberlain's Rest\", \"Name_Localised\":\"Industrial\", \"BodyName\":\"HIP 97950 ABC 2 k\" }\n");
+                        check(rest.kind() == K::kCraterPort, "station type: Chamberlain's Rest, with no StationType, is a CraterPort");
+                        feed(rest, "{ \"event\":\"Location\", \"Docked\":false, \"OnFoot\":true, \"Body\":\"HIP 97950 ABC 2 k\", \"BodyType\":\"Planet\" }\n");
+                        check(rest.kind() == K::kCraterPort, "station type: the on-foot location after it keeps the CraterPort");
+                        feed(rest, "{ \"event\":\"ApproachSettlement\", \"Name\":\"Other Rest\" }\n");
+                        feed(rest, "{ \"event\":\"Location\", \"Docked\":false, \"OnFoot\":true, \"Body\":\"LP 1 a\", \"BodyType\":\"Planet\" }\n");
+                        check(rest.kind() == K::kUnknown, "station type: another settlement does not keep it");
+                    }
+                    {
                         // A port on a planet: real lines from a CraterOutpost, Flight 37. Only Docked and Undocked name it.
                         const char* portDocked = "{ \"timestamp\":\"t\", \"event\":\"Docked\", \"StationName\":\"Test Installation\", \"StationType\":\"CraterOutpost\", \"MarketID\":2 }\r\n";
                         const char* portDisembark = "{ \"timestamp\":\"t\", \"event\":\"Disembark\", \"SRV\":false, \"Taxi\":false, \"Multicrew\":false, \"ID\":1, \"StarSystem\":\"S\", \"Body\":\"LP 1 a\", \"BodyID\":4, \"OnStation\":false, \"OnPlanet\":true }\r\n";

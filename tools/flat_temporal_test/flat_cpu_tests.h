@@ -473,7 +473,8 @@ inline int flatCpuTests() {
         expect(has(text, "engine jobs 0.000 ms (calls 0.0)") && has(text, "engine builder 0.000 ms (calls 0.0)") &&
                has(text, "engine rigid emit 0.000 ms (calls 0.0)") && has(text, "engine tees 0.000 ms (calls 0.0)"),
                "the parts that did not run print as zeros");
-        expect(has(text, "engine eval relays 8.0 calls (counted, not clocked)"), "the evaluator relays print as a count");
+        expect(has(text, "engine eval relays 0.000 ms (8.0 calls on sampled frames; the clock floor is inside this)"),
+               "the evaluator relays print their sampled-frame time and their count");
     }
 
     // ---- 8: the draw wrapper's D3D calls, the GPU spans, the paused frames -------------------------------

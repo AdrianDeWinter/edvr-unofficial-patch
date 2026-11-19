@@ -3,6 +3,7 @@
 #include "flat_projection_scope.h"
 #include <d3d11_1.h>
 #include <wrl/client.h>
+#include <atomic>
 #include <cstdint>
 
 namespace edvr {
@@ -125,6 +126,10 @@ public:
     // Called after the real Map and before observeMap invalidates the shadow.
     FlatProjectionBounceSource bounceSource(ID3D11Resource* resource);
     bool containsTracked(ID3D11Resource* resource) { return find(resource) != nullptr; }
+    // A map or update of a resource already found not to be a projection buffer. The scope around the
+    // observer can skip it. A later CreateBuffer retires every rejection, so a reused address is looked at again.
+    bool writeRejected(ID3D11Resource* resource) const noexcept;
+    void noteResourceCreated() noexcept;
     void setBounceSampleHooks(bool (*wants)(uint32_t),
                               void (*record)(uint32_t,uint64_t)) {
         bounceSampleWants_ = wants; bounceSampleRecord_ = record;
@@ -245,6 +250,16 @@ private:
     bool refuseAt(FlatProjectionRuntimeRefusal, const char*, uint32_t = ~0u, uint32_t = ~0u);
     Tracked* find(ID3D11Resource* resource);
     Tracked* track(ID3D11Resource* resource);
+    Tracked* trackOrReject(ID3D11Resource* resource);
+    void rememberReject(ID3D11Resource* resource) noexcept;
+    static uint32_t rejectIndex(ID3D11Resource* resource) noexcept;
+    static constexpr uint32_t kRejectSlots = 4096;
+    struct RejectSlot {
+        uintptr_t ptr = 0;
+        uint32_t gen = 0;
+    };
+    RejectSlot reject_[kRejectSlots]{};
+    std::atomic<uint32_t> rejectGen_{1};
     void discard(Tracked& entry);
     void mutate(Tracked& entry);
     bool queueCold(Tracked& entry);

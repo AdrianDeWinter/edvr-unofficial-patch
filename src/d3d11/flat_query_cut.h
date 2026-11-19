@@ -30,6 +30,7 @@ enum class FlatQuery : uint8_t {
     CoverageDepth = 0,   // the depth view coverage classification asks the context for (OMGetRenderTargets, depth only)
     ShaderIdentity,      // the actual vertex and pixel shaders of a draw whose projection needs no patch
     GameBlend,           // the game's blend state, factor and mask, when engine motion derives its own
+    BoundBlend,          // the blend last passed to the device, including EDVR's own sets (flatQueryGameBlend)
     GameTargets,         // the game's render-target set engine motion adds MRT6 to
     TargetsKept,         // the read-back that says the runtime took the set with MRT6 in it
     Count
@@ -41,6 +42,7 @@ inline const char* flatQueryName(FlatQuery q) {
     case FlatQuery::CoverageDepth: return "coverage depth view";
     case FlatQuery::ShaderIdentity: return "coverage shader identity";
     case FlatQuery::GameBlend: return "game blend state";
+    case FlatQuery::BoundBlend: return "bound blend";
     case FlatQuery::GameTargets: return "game render targets";
     case FlatQuery::TargetsKept: return "MRT6 read-back";
     default: return "?";

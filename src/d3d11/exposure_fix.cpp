@@ -660,6 +660,7 @@ void STDMETHODCALLTYPE hookedClearState(ID3D11DeviceContext* self) {
         return;
     }
     bindingForgetAll();
+    flatOmForget();
     for (void*& v : g_state->uav) v = nullptr;
     g_state->realClearState(self);
 }

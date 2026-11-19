@@ -121,6 +121,11 @@ template<class Check> void run(Check check) {
         check(flatDofBlurRetryAllowed(r, b, 101) && flatDofBlurRetryAllowed(r, c, 101), "dof blur retry: a changed size or format tries at once");
         check(flatDofBlurRetryFailed(r, b, 101), "dof blur retry: a failure of a new shape is logged");
         check(flatDofBlurRetryAllowed(r, a, 102), "dof blur retry: only the last failed shape is remembered");
+        check(flatDofBlurCoversScene(1440, 810, 1440, 810) && flatDofBlurCoversScene(720, 405, 1440, 810),
+              "dof blur: the composite accepts a full-size blur and the half-size blur bloom off feeds it");
+        check(!flatDofBlurCoversScene(720, 405, 1440, 811) && !flatDofBlurCoversScene(360, 202, 1440, 810) &&
+              !flatDofBlurCoversScene(0, 405, 1440, 810),
+              "dof blur: a blur that is not the scene or exactly half of it is refused");
         flatDofBlurRetryClear(r);
         check(flatDofBlurRetryAllowed(r, b, 102), "dof blur retry: a clear (resize, device change) tries at once");
     }

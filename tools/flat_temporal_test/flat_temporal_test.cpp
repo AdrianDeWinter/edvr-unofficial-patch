@@ -3999,10 +3999,11 @@ void testFlatQueryCutWiring() {
          "the coverage reads that still ask the context (an F10 audit, the legacy route) put the game's state back first, and nothing else does"},
         {&runtimeCpp, "if (owner()) engineVelocityFlatFrameEnd();", 1, "the frame's end lets go of what the bracket kept"},
         // Engine motion's wrapper.
-        {&engineCpp, "flatQueryCut().plan(FlatQuery::GameTargets)", 1, "the game's render-target set is kept through the policy"},
+        {&engineCpp, "flatQueryCut().plan(FlatQuery::GameTargets)", 2, "the game's render-target set is kept through the policy, and foreground capture reads the hook record the same way"},
         {&engineCpp, "flatQueryCut().plan(FlatQuery::GameBlend)", 1, "and its blend state"},
+        {&engineCpp, "flatQueryCut().plan(FlatQuery::BoundBlend)", 1, "foreground capture checks the blend last passed to the device on its own question"},
         {&engineCpp, "flatQueryCut().plan(FlatQuery::TargetsKept)", 1, "and the runtime's acceptance of MRT6"},
-        {&engineCpp, "flatQueryCut().compared(", 3, "each is compared with the context on a check"},
+        {&engineCpp, "flatQueryCut().compared(", 5, "each is compared with the context on a check, including the two foreground reads"},
         {&engineCpp, "void engineVelocityFlatFrameEnd() noexcept {", 1, "the bracket lets go of what it kept at the frame's end"},
         // The shared reads.
         {&readsH, "cut.plan(FlatQuery::CoverageDepth)", 1, "the depth question asks the policy"},

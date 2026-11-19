@@ -1818,8 +1818,8 @@ bool verifyMenuHdrCopy(ID3D11DeviceContext* ctx,FlatRuntimeDraw& draw) {
     return true;
 }
 // The depth-of-field composite (flat_runtime_model.h kDofCompositeVs/Ps), read from the context: the actual shaders, the scene HDR at t0 and the
-// blurred image at t1 as plain one-mip 2D views of the scene's size (the HDR and an R16G16B16A16 typeless intermediate), a depthless HDR output
-// of that size, a full viewport. Names the scene HDR's resource at t0 for the model, as the menu copy's verification does.
+// blurred image at t1 (full size, or half size when bloom is off) as plain one-mip 2D views, a depthless HDR output of the scene's size, a full
+// viewport. Names the scene HDR's resource at t0 for the model, as the menu copy's verification does.
 constexpr uint64_t kDofCompositeVs=0x20F383BBAC05C031ull;
 constexpr uint64_t kDofCompositePs=0xBF2302BCC7B434DBull;
 static_assert(kDofCompositePs==kFlatDofBlurCompositePs,"the blur's average names the same composite");
@@ -1852,12 +1852,12 @@ bool verifyDofComposite(ID3D11DeviceContext* ctx,FlatRuntimeDraw& draw) {
        srv.ViewDimension!=D3D11_SRV_DIMENSION_TEXTURE2D || srv.Texture2D.MostDetailedMip!=0 ||
        srv.Texture2D.MipLevels!=1 || srvAux.ViewDimension!=D3D11_SRV_DIMENSION_TEXTURE2D ||
        srvAux.Texture2D.MostDetailedMip!=0 || rtv.ViewDimension!=D3D11_RTV_DIMENSION_TEXTURE2D ||
-       rtv.Texture2D.MipSlice!=0 || in.MipLevels!=1 || out.MipLevels!=1 || mid.MipLevels!=1 ||
+       rtv.Texture2D.MipSlice!=0 || in.MipLevels!=1 || out.MipLevels!=1 ||
        in.ArraySize!=1 || out.ArraySize!=1 || mid.ArraySize!=1 ||
        in.SampleDesc.Count!=1 || out.SampleDesc.Count!=1 || mid.SampleDesc.Count!=1 ||
        mid.Format!=DXGI_FORMAT_R16G16B16A16_TYPELESS ||
        in.Width!=k.width || in.Height!=k.height || out.Width!=k.width || out.Height!=k.height ||
-       mid.Width!=k.width || mid.Height!=k.height ||
+       !flatDofBlurCoversScene(mid.Width, mid.Height, k.width, k.height) ||
        count!=1 || k.viewportCount!=1 || std::memcmp(&viewport,k.viewport,sizeof(viewport))!=0 ||
        !flat_mono_detail::fullViewport(k,k.width,k.height))return false;
     k.srvView[0]=scene.Get();k.srvResource[0]=source.Get();
@@ -3623,6 +3623,7 @@ bool flatRuntimePassiveRearmBusy() {
            s.projectionFrames != 0 || s.drawCapture.active() || s.drawPackets.armed();
 }
 void flatRuntimeCreateBuffer(ID3D11Buffer* buffer, const void* initialData) {
+    if (state().projection) state().projection->noteResourceCreated();
     if(owner() && state().projection) {
         flatcpu::Scope shadows(flatcpu::kShadows);
         state().projection->observeCreateBuffer(buffer,initialData);
@@ -5745,12 +5746,14 @@ void flatRuntimeMap(ID3D11Resource* res, D3D11_MAP type, void* bytes) {
     if (!owner() || type == D3D11_MAP_READ || state().work == FlatWork::Paused) return;
     flatcpu::Scope lookup(flatcpu::kResource);
     resourceWritten(state(), res,"flatRuntimeMap",FlatOverlayMutationOp::Written,historyWholeWrite(HistoryWriteEntry::Map)); if (auto* c = camera(res, false)) state().cameras.setMapped(*c, bytes);
-    if (state().projection) { flatcpu::Scope shadows(flatcpu::kShadows); state().projection->observeMap(res,type,bytes); }
+    if (state().projection && !state().projection->writeRejected(res)) {
+        flatcpu::Scope shadows(flatcpu::kShadows); state().projection->observeMap(res,type,bytes);
+    }
 }
 void flatRuntimeUnmap(ID3D11Resource* res) {
     if (!owner() || state().work == FlatWork::Paused) return;
     flatcpu::Scope lookup(flatcpu::kResource);
-    if (state().projection) { flatcpu::Scope shadows(flatcpu::kShadows);
+    if (state().projection && state().projection->containsTracked(res)) { flatcpu::Scope shadows(flatcpu::kShadows);
         state().projection->observeUnmap(res,state().prefix.frame,state().prefix.sequence); }
     if (auto* c = camera(res, false)) {
         if (c->mapped) { capture(*c, c->mapped); if (state().work == FlatWork::Full) cameraWitness(res); }
@@ -5764,7 +5767,7 @@ void flatRuntimeUpdate(ID3D11Resource* res, const void* bytes, const D3D11_BOX* 
     if (auto* c = camera(res, false)) {
         if (!box || (box->left == 0 && box->right == c->width)) { capture(*c, bytes); if (state().work == FlatWork::Full) cameraWitness(res); }
     }
-    if (state().projection) { flatcpu::Scope shadows(flatcpu::kShadows);
+    if (state().projection && !state().projection->writeRejected(res)) { flatcpu::Scope shadows(flatcpu::kShadows);
         state().projection->observeUpdate(res,bytes,box,state().prefix.frame,state().prefix.sequence); }
 }
 
@@ -8086,9 +8089,12 @@ void FlatRuntimeDrawScope::beginActualDraw(ID3D11Buffer* indirectArgs,UINT indir
         const State::DomainProofEntry* proofEntry=nullptr;
         const auto& projection=domainShaderProofEntry(s,domainVs,domainPs,&proofEntry);
         Ptr<ID3D11BlendState> blend;FLOAT factors[4]{};UINT sampleMask=0;
-        ctx->OMGetBlendState(&blend,factors,&sampleMask);D3D11_BLEND_DESC bd{};
+        ID3D11BlendState* blendRaw=nullptr;
+        flatQueryGameBlend(ctx,&blendRaw,factors,&sampleMask);
+        blend.Attach(blendRaw);D3D11_BLEND_DESC bd{};
         if(blend)blend->GetDesc(&bd);else for(auto& rt:bd.RenderTarget)rt.RenderTargetWriteMask=15;
-        unsigned boundColors=0;ID3D11RenderTargetView* colors[6]{};ctx->OMGetRenderTargets(6,colors,nullptr);
+        unsigned boundColors=0;ID3D11RenderTargetView* colors[6]{};
+        flatQueryGameColorTargets(ctx,colors);
         std::array<Ptr<ID3D11RenderTargetView>,6> originalColors{};
         // Which colour targets a first-person draw writes does not decide who
         // owns a pixel (section 104); the scene's HDR target is itself a
