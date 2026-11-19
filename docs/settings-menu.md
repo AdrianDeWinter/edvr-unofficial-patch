@@ -296,8 +296,10 @@ row (`docs/xess-frame-generation-2026-11-12.md`):
   bridge is made at swap-chain creation, so turning it on after a launch without it shows "Takes effect at the
   next game start." (`xessFgBridged()` false). When the bridge was tried and failed, or stopped on a fault, the
   hint says "Not running: <reason>" instead (`xessFgProblem()`), since a restart alone will not fix that.
-  While the window is in exclusive fullscreen (`xessFgExclusiveFullscreen()`), the hint on either row says frame
-  generation is paused and to choose Borderless or Windowed in Elite's display options.
+  While the window is in exclusive fullscreen (`xessFgExclusiveFullscreen()`) and nothing has stopped frame
+  generation (no `xessFgProblem()`), the hint on either row says frame generation is paused and to choose
+  Borderless or Windowed in Elite's display options, and the toggle row, when on, carries a "paused in fullscreen"
+  badge whether highlighted or not.
 - **XeSS-FG frames** (`fix.xess_generated_frames`, 1 = 2x, 2 = 3x, 3 = 4x, default 1). Also dimmed while the
   toggle is off. A choice above the GPU's maximum (`xessFgMaxGeneratedFrames()`, known once a bridge has been made; 0 =
   unknown, all allowed, and the runtime clamps) is skipped when

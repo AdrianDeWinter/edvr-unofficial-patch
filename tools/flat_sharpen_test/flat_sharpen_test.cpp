@@ -526,9 +526,10 @@ void panelTable(const std::string& root, const std::string& gen) {
               menuCpp.find("aaDependentRowHidden(d.key, shownValue(\"fix\", \"temporal_aa\").c_str(), xessFgToggleOn())") != std::string::npos &&
               menuCpp.find("strcmp(d.key, \"temporal_aa\") == 0 || strcmp(d.key, \"xess_frame_generation\") == 0))\n        buildPages();") != std::string::npos,
           "menu.cpp omits those rows in both page builders and rebuilds the page when Anti-aliasing or Frame generation changes");
-    check(menuCpp.find("xessFgToggleOn() && xessFgExclusiveFullscreen())") != std::string::npos &&
+    check(menuCpp.find("(xessFramesRow || xessToggleRow) && xessFgPausedByFullscreen())") != std::string::npos &&
+              menuCpp.find("xessToggleRow && !dim && xessFgPausedByFullscreen()") != std::string::npos &&
               menuCpp.find("choose Borderless or Windowed in Elite's display options.") != std::string::npos,
-          "menu.cpp says on the XeSS rows that frame generation is paused in exclusive fullscreen and names the modes that generate");
+          "menu.cpp says on the XeSS rows that frame generation is paused in exclusive fullscreen (not after a fault) and names the modes that generate");
     check(kFlatVisualRowCount == 6 && std::strcmp(kFlatVisualRows[0].section, "visual") == 0 && std::strcmp(kFlatVisualRows[0].key, "intro_video") == 0 &&
               std::strcmp(kFlatVisualRows[1].section, "visual") == 0 && std::strcmp(kFlatVisualRows[1].key, "star_glow") == 0 &&
               std::strcmp(kFlatVisualRows[2].section, "visual") == 0 && std::strcmp(kFlatVisualRows[2].key, "cockpit_glass") == 0 &&

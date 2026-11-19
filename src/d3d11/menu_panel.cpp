@@ -572,13 +572,14 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             if (l.toggle) right.rect.right -= switchW + cap / 2;
             ops.push_back(right);
         }
-        if (l.badge == kBadgeRestart || l.badge == kBadgeUnknown || l.badge == kBadgePending || l.badge == kBadgeClash || l.badge == kBadgeStopped) {
+        if (l.badge != kBadgeNone) {
             Op b;
             b.text = true;
             b.str = l.badge == kBadgeRestart ? L"restart"
                     : l.badge == kBadgePending ? L"at next launch"
                     : l.badge == kBadgeClash   ? L"also in Elite"
                     : l.badge == kBadgeStopped ? L"stopped"
+                    : l.badge == kBadgePaused  ? L"paused in fullscreen"
                                                : L"?";
             b.rect = {split, y + primaryH, cardW - pad, y + rowH};
             b.align = DT_RIGHT;

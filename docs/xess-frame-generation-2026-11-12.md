@@ -2,6 +2,9 @@
 
 ## Status
 
+- **State (2026-11-23): fullscreen fix flown 3 times, its final form twice.**
+  0.22.3's black screen: no ResizeBuffers after SetFullscreenState, so every
+  Present failed. The presenter is now resized after each switch (11-17 on).
 - **State (2026-11-12): shipped behind a key, flown 4 times on an Arc B580.**
   Works in space, on foot, in settlements and near planets. Flat profile only.
   This re-opens the 2026-10-27 decline in
@@ -27,11 +30,8 @@
 - **Understood, presented-rate lows (flights 3-4):** where the GPU is full, the
   presented 1% low follows the base frame's p99, because a late real frame
   holds the last generated frame on screen.
-  - Ruled out:
-    - L1: no generated frames were dropped.
-    - L2: frame generation rarely switched off and on.
-    - L3: the bridge's waits were 0.
-    - L5: XeLL never oversleeps.
+  - Ruled out: L1 no generated frames dropped; L2 rare off/on switching; L3
+    the bridge's waits were 0; L5 XeLL never oversleeps.
   - At one spot Elite alone took 37 ms of GPU time per frame.
 - **Deferred, L6:** XeLL is on and receives every marker, but never sleeps.
   The proxy's Present blocks instead (median 7-22 ms), so latency is higher
@@ -54,11 +54,10 @@
   a fullscreen change DXGI made alone are logged; the GPU-maximum query passes
   the real size; the panel's exclusive-fullscreen hint.
 - **Issues:** none filed yet for L6 or F2.
-- **Next flight:** fly the review build on the Arc B580 in space and on foot,
-  and check the log for `bridge ready`, no `stops for this session`, and the
-  F4 strip on a fast turn. Then force a fallback (resize the window while a
-  shader compile stalls the queue, or switch to an FP16 output) and check the
-  game stays on screen.
+- **Next flight (the original reporter, on 302a4532 or later):** the same
+  Fullscreen/Borderless round trips on their machine: the picture stays,
+  `resized to` beside each `exclusive fullscreen` line, no `Present failed`,
+  the "paused in fullscreen" badge, frame generation back on in Borderless.
 
 ## Design
 
@@ -145,6 +144,8 @@
 | `xess-fg: frame N not presented: ...` | the copy into the shared texture was skipped (keyed mutex); the window keeps the last image |
 | `xess-fg: Elite is making another swap chain on window ...` | the bridge let go of the window for Elite's new swap chain |
 | `xess-fg: XeSS-SR now runs on another D3D12 device` | XeSS-SR restarted on a device change; no more inputs are tagged |
+| `xess-fg: the proxy's / the plain swap chain's Present failed 0x... (exclusive fullscreen on/off)` | the first 8 failed Presents; 0x887A0001 in exclusive fullscreen is a switch the presenter was not resized after |
+| `xess-fg: ... not resized after the fullscreen switch: ...` | the resize a fullscreen switch needs did not run; the next Presents fail |
 
 ## Journal
 
@@ -180,3 +181,68 @@
   - Frame generation was disabled and re-enabled 2-3 frames later a few times
     per hour; the reason was not logged before this build. Open: read the new
     reason on the next flight before changing the disable rule.
+- **2026-11-17, 0.22.3 report:** frame generation on, game restarted: a blank
+  window that advanced only on alt-tab, audio running; closed from the
+  taskbar. Frame generation works for others in Borderless, so causes that
+  Borderless would show too were dropped.
+  - ruled out: H2 (XeLL's sleep blocks), H3 (the proxy's Present blocks), H7
+    (the D3D11 -> D3D12 handoff stalls), because Borderless runs each of them
+    and works.
+  - ruled out: H8 (a fault, then the fallback), because it is not
+    mode-specific and a fault logs `stops for this session`; H9 (a slow first
+    pipeline compile), because it explains a slow start, not the alt-tab
+    pattern.
+- **2026-11-18, two-presenter attempt (885583ea, dropped):** a plain D3D11
+  swap chain on Elite's own factory showed the frame until frame generation
+  could run, then the proxy was made mid-session.
+  - A proxy made mid-session hangs inside XeSS-FG's Present 2-3 frames after
+    frame generation is enabled, on the main menu (flights 5-10 and the
+    2026-11-19 test flight). Made at swap-chain creation it does not (switch
+    test 8, flight 11).
+  - ruled out as that hang's cause: K1 (the Steam overlay), K2 (no warm-up
+    before enable), K3 (the contexts made at launch), because each removed
+    alone hangs the same. Not pursued: K4 (the plain swap chain held the
+    window first), K5 (XeSS-SR already on the shared D3D12 queue).
+  - A black screen at exit and hitches on one test machine came with
+    0.22.3's own code there too (control flight, 8507b6e2): environmental.
+- **2026-11-19, test flight** (v0.22.3-8-gbbdc65c9, 3440x1440 at 144 Hz):
+  - Fullscreen: "black screen, music plays, no intro video; after alt-tab the
+    main menu shows but is frozen". Elite asked for exclusive fullscreen at
+    frame 1 and the plain swap chain took it (0x00000000); from then every
+    Present failed with 0x887A0001 (DXGI_ERROR_INVALID_CALL), 2096-3322 per
+    5 s window while fullscreen, 0 while alt-tabbed out. The game kept
+    rendering; the screen kept the last windowed image. No `plain swap chain
+    resized` line: syncPlain skips an unchanged size, and DXGI requires
+    ResizeBuffers after a flip-model swap chain's fullscreen switch before
+    Present succeeds. 0.22.3 sends the same call to the proxy and syncProxy
+    skips an unchanged size the same way, which fits the 0.22.3 report.
+    - ruled out: H1 (a factory without Elite's window association), because
+      the plain swap chain on Elite's own factory fails the same way.
+  - Borderless: "froze as XeSS finished resolving on the main menu": the
+    mid-session proxy hang above, 3 frames after enable.
+- **2026-11-19, fix:** back to 0.22.3's design (the proxy made at swap-chain
+  creation, passthrough with frame generation off in exclusive fullscreen).
+  After every successful exclusive-fullscreen switch, from Elite or from DXGI's
+  Alt+Enter, the presenting swap chain is resized at an unchanged size
+  (`syncPresenter(b, true)`), because a flip-model swap chain's next Present
+  fails until ResizeBuffers follows the switch (DXGI
+  `IDXGISwapChain::ResizeBuffers` remarks, in both directions). The first 8
+  failed Presents are logged with their HRESULT, and the F8 frame generation
+  row shows "paused in fullscreen" while exclusive fullscreen holds it off.
+  - Flown 2026-11-23 (c3ef17cd): Fullscreen start, then Borderless,
+    Fullscreen and Borderless again: the picture stays throughout, and frame
+    generation comes on as soon as the game is windowed.
+  - The committed form differs: c3ef17cd resized the presenter to its own
+    size, format and flags (`resizeAfterFullscreenSwitch`); the commit
+    instead runs `syncProxy`/`syncPlain` forced, at the size and format of
+    Elite's back buffer, so the plain path now also needs that buffer and a
+    flip-model twin of its format. c3ef17cd is on no branch.
+  - Flown 2026-11-23 (302a4532, the committed form; logs `_140926`,
+    `_141259`): a Borderless start with two Fullscreen round trips at
+    2560x1440 and 3840x2160, then a Fullscreen start, Borderless and exit.
+    Every switch logs `resized to` before `exclusive fullscreen on/off
+    (0x00000000)`; no `Present failed` or `not resized`; frame generation is
+    off in Fullscreen and back on within 0.4 s of Borderless. The one
+    `mismatch-input-resources (-12)` on the first frame after frame generation
+    turns on is in the f2907cd8 logs from before the fix too.
+  - Unflown: the plain-swap-chain fallback across a fullscreen switch.

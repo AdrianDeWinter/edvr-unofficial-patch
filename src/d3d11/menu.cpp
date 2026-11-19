@@ -629,6 +629,10 @@ bool xessFgRowRefused(const MenuRowDef& d, const char** why) {
 // was tried and failed or stopped (xessFgProblem), which a restart alone will not fix. The second wins.
 bool xessFgNeedsRestart() { return xessFgToggleOn() && (!xessFgBridged() || xessFgProblem() != nullptr); }
 
+// The toggle is on, but exclusive fullscreen holds frame generation off until the game is windowed again. Not after a
+// fault (xessFgProblem): the plain swap chain can be in exclusive fullscreen too, and windowing it brings nothing back.
+bool xessFgPausedByFullscreen() { return xessFgExclusiveFullscreen() && xessFgToggleOn() && xessFgProblem() == nullptr; }
+
 const char* xessFgRestartHint() {
     static char text[200];
     if (const char* problem = xessFgProblem()) {
@@ -3005,6 +3009,10 @@ void buildContent(MenuContent& c) {
                 l.badge = kBadgePending;
             } else if (stopped) {
                 l.badge = kBadgeStopped;   // the value stays as set; the highlighted row's hint says why (xessFgRestartHint)
+            } else if (xessToggleRow && !dim && xessFgPausedByFullscreen()) {
+                // On, but exclusive fullscreen holds frame generation off until the game is windowed again; the
+                // highlighted row's hint says what to choose instead.
+                l.badge = kBadgePaused;
             } else if (d.applies == 2) {
                 l.badge = kBadgeRestart;
             } else if (d.applies == 0) {
@@ -3055,7 +3063,7 @@ void buildContent(MenuContent& c) {
                 snprintf(c.hint, sizeof(c.hint), "%s", xessFgDimHint(xessFramesRow));
             else if (hi && dim && dittoRow)
                 snprintf(c.hint, sizeof(c.hint), "%s", dittoRowHint());
-            else if (hi && (xessFramesRow || xessToggleRow) && xessFgToggleOn() && xessFgExclusiveFullscreen())
+            else if (hi && (xessFramesRow || xessToggleRow) && xessFgPausedByFullscreen())
                 snprintf(c.hint, sizeof(c.hint), "%s", "Paused in exclusive fullscreen: choose Borderless or Windowed in Elite's display options.");
             else if (hi && (xessFramesRow || xessToggleRow) && xessFgNeedsRestart())
                 snprintf(c.hint, sizeof(c.hint), "%s", xessFgRestartHint());
