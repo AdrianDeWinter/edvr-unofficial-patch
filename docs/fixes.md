@@ -524,6 +524,16 @@ applies to the intro only and retires for the session once a rendered scene
 arrives. `stock` leaves the game alone.
 [loading-panel-handoff.md](loading-panel-handoff.md).
 
+### Loading the game's data
+
+While the game is loading it downloads its data a file at a time, and it opens
+a new encrypted connection for every file. Most of that wait is the handshake,
+repeated a few hundred times. ED-UP keeps each download worker on the
+connection it opened first, so the later files skip the handshake. The requests
+themselves are unchanged, and ED-UP does not read them. There is no setting: it
+is on for build 334925 and stands down on any other build, or when the download
+code is not the bytes this was checked against. The log says which.
+
 ## Stations and frame rate
 
 ### Optimized stations
@@ -704,8 +714,10 @@ These safeguards are the reason to trust it:
   game was really forcing.
 - It is all or nothing: if any single write fails, every earlier one is undone.
 
-None of the fixes touches the network or your account, and none reads or
-changes your ship, cargo, credits or missions. Look to aim, above, is the one
+Loading the game's data, above, is the one place ED-UP changes how the game's
+own downloads are carried: the same requests, on a connection that stays open.
+ED-UP sends nothing of its own. None of the fixes reads or changes your
+account, ship, cargo, credits or missions. Look to aim, above, is the one
 way ED-UP steers your commander, with the same kind of input a mouse gives.
 None interacts with anti-cheat, and none attempts to hide from anything. The
 launcher is the one part of ED-UP that goes online; the

@@ -4,7 +4,7 @@ ED-UP does three jobs. It can upscale the picture. It draws Odyssey's on-foot ga
 
 The fixes below are release 0.22.2. [Every setting and its default](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md) is the long page. The notes of each release name anything that release adds.
 
-The changes live in memory while Elite runs. ED-UP leaves the game's files on disk as Frontier wrote them. It leaves your account, ships, cargo, credits, and missions alone. Look to aim is the one place it turns your commander, and it does that with the same kind of input a mouse sends. It leaves anti-cheat untouched, and it runs under its own name.
+The changes live in memory while Elite runs. ED-UP leaves the game's files on disk as Frontier wrote them. It leaves your account, ships, cargo, credits, and missions alone. While the game is loading, it keeps the game's own download connections open so later files skip a new handshake, and it does not read those downloads. Look to aim is the one place it turns your commander, and it does that with the same kind of input a mouse sends. It leaves anti-cheat untouched, and it runs under its own name.
 
 ## A steadier picture
 
