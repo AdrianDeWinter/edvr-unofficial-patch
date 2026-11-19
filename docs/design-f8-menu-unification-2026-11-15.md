@@ -30,6 +30,12 @@
   so a menu key Elite also binds reaches the game there (as in VR); whether F5
   is the right default for the monitor panel key; the GPU price of the second
   full-frame composite while the menu and the panel are both up.
+- **Changed 2026-11-19 (journal):** flat no longer has a separate corner
+  readout. The monitor panel (F5) has three views, `menu.monitor_panel_view`
+  = full | detailed | compact (flat only, default full); `menu.fps_overlay` is
+  VR only; `menu.fps_overlay_lock` ("Frame rate in menu") works on its
+  own in both profiles. Flown 2026-11-19 in flat (the three views, the menu
+  line, the view kept across restarts).
 - **Next:** fly the open checklist items (XeSS FG, monitor panel with the
   menu), then merge.
 - **Related:** `docs/settings-menu.md` (the VR menu's design),
@@ -95,11 +101,12 @@ the pages keeps the highlighted row in flat as it already did in VR.
 
 ### One raster, one thing on screen at a time
 
-The panel has a single raster. The menu, a notice and the FPS readout cannot be
-on screen together; the priority is the menu, then a notice, then the readout.
-With the menu open, the readout's single line can be shown at the top of the
-menu card (`menu.fps_overlay_lock`, as VR does). The flat monitor panel is a
-second raster (its own slot in `menu_panel.cpp`).
+The panel has a single raster. The menu and a notice cannot be on screen
+together; the menu has priority. With the menu open, a one-line frame rate can
+be shown at the top of the menu card (`menu.fps_overlay_lock`, its own switch
+since 2026-11-19, as in VR). The flat monitor panel, in any of its views
+(`menu.monitor_panel_view`), is a second raster (its own slot in
+`menu_panel.cpp`); flat has no separate corner readout since 2026-11-19.
 
 ### Flat sizing and placement
 
@@ -136,7 +143,9 @@ fps  cpu 9.1 ms` with the bridge, `58 fps  cpu 9.1 ms` without, plus drops, twic
 second); `detailed`, a small card with both rates, frame time, 1% low, CPU time,
 drops and one graph (about four times a second). Only cheap per-frame figures; CPU
 load, RAM, VRAM and GPU stay on the Monitor page. In VR both sizes are
-head-locked at `menu.fps_overlay_yaw/pitch`; in flat the readout sits top right.
+head-locked at `menu.fps_overlay_yaw/pitch`. In flat (since 2026-11-19) the two
+sizes are the monitor panel's detailed and compact views, shown only with F5
+(`menu.monitor_panel_view`, journal 2026-11-19).
 Old values `on`/`true`/`1` read as `compact`, `off`/`false`/`0` as `off`.
 
 ### Restart indication
@@ -212,6 +221,8 @@ the frame-rate gauges can stay up while the game is played.
   While both are up the composite runs twice a Present.
 - **Readout:** `menu.fps_overlay` is not drawn while the panel is up and comes
   back when it goes down. The once-a-second samplers run while it is up.
+  (Superseded 2026-11-19: flat has no corner readout; the readout is a view of
+  the panel, and the samplers run for its full view only.)
 - **Log:** `menu: monitor panel key F5 (hotkey.monitor_panel).` at configure,
   `menu: the monitor panel is up (F5).` / `down` on each press, and `menu panel:
   first monitor panel composite -- ...` once. A flight with none of these ran a
@@ -305,9 +316,11 @@ Flat:
 - Open, XeSS Frame Generation on: rendered and presented rates at 2x, 3x and
   off, compared with PresentMon's displayed frames; the refresh rate and budget
   lines are right; the log names the presented source.
-- Open: `menu.fps_overlay` compact and detailed in the top-right corner, giving
-  way to the menu, notices and the monitor panel without a stale frame, and
-  coming back when the panel goes down.
+- Retired 2026-11-19: the flat corner readout (`menu.fps_overlay` compact and
+  detailed top right) is gone. Its replacement, the monitor panel's detailed
+  and compact views, was flown 2026-11-19.
+- Open: F5 pressed twice quickly (down and up within a quarter second) draws
+  the panel at once, in every view (PR #241 review fix).
 - Open: Status page lines (display, anti-aliasing, upscaling sizes, frame
   generation) match the session; Elite's settings warning shows there and the
   Performance tab shows the one-line pointer.
@@ -323,3 +336,44 @@ VR:
 - Open: toasts and aiming behave as before; `menu.fps_overlay` compact (an old
   `on`) and detailed, head-locked; the close notice when a restart setting
   changed; the Hotkeys page has no monitor panel key row.
+
+### 2026-11-19: the monitor panel's views; the menu-header line on its own
+
+Before, three settings changed each other's meaning in flat: the corner
+readout (`menu.fps_overlay`) hid under the monitor panel, the menu-header
+line (`menu.fps_overlay_lock`) replaced the corner readout while the menu was
+open, and that line did nothing at all while the readout was off. The rule
+was one function, `flatReadoutWanted` (menu_policy.h), now removed.
+
+- **One performance view in flat, on F5.** `menu.monitor_panel_view` = full
+  (the Monitor page, the default) | detailed (the readout card) | compact (the
+  readout line). F5 shows and hides whichever is chosen, top right. The view
+  is a setting, so it survives F5 presses and restarts; whether the panel is
+  up is still session state and is never written. Nothing appears in the
+  corner without F5.
+- **No migration.** Flat users who had the corner readout on lose it; F5
+  shows the full panel until they pick a smaller view. A flat
+  `menu.fps_overlay` line is no longer read.
+- **One raster machine.** The readout's own `ScreenReadoutState` and the
+  `kSlotOwnerReadout` tag are gone: the panel in any view is the slot's only
+  owner. Cadence per view: full on the Monitor page's 250 ms, detailed 250 ms,
+  compact 500 ms; a view change rebuilds at once.
+- **Samplers.** The slow once-a-second samplers run only for the full view;
+  detailed and compact read the cheap per-frame figures, as VR's readout does.
+- **The menu-header line** is its own switch in both profiles: it no longer
+  needs `menu.fps_overlay` on and hides nothing. Its row is now labelled
+  "Frame rate in menu"; the key is unchanged.
+- **VR:** `menu.fps_overlay` keeps its label and behaviour; only its
+  description lost the flat sentences.
+- **Log:** `menu: the monitor panel view is full (menu.monitor_panel_view).` at
+  configure and on each change; `menu: the frame-rate line at the top of the
+  menu is on.` / `off` on a change. A flat flight without the view line ran a
+  build without this change.
+- **Flown 2026-11-19 (flat):** the three views, the menu line on its own, the
+  view kept across a restart.
+- **Review fix (2026-11-20, PR #241):** a raise of the panel within 250 ms of
+  its last raster drew nothing until that window ran out: the failed-build
+  backoff was measured from the last raster, which F5 lowering the panel did
+  not reset. The refresh clock is now cleared while the panel is down, so a
+  raise builds at once; the backoff still paces a failing build while it is
+  up. Not flown.

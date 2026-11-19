@@ -100,11 +100,9 @@ void monitorPanelCases() {
     check(menuMonitorPanelToggle(true, false, false), "the edge raises the panel");
     check(!menuMonitorPanelToggle(true, true, false), "the edge lowers the panel");
     check(!menuMonitorPanelToggle(true, false, true) && menuMonitorPanelToggle(true, true, true), "a hotkey row waiting for its input takes the edge: no change");
-    check(flatReadoutWanted(true, false, false, false), "the readout is wanted when it is on and the monitor panel is down");
-    check(!flatReadoutWanted(false, false, false, false), "an off readout is not wanted");
-    check(flatReadoutWanted(true, false, true, false), "the open menu does not hold the readout back: the menu has the other slot, upper left");
-    check(!flatReadoutWanted(true, true, false, false) && !flatReadoutWanted(true, true, true, false), "the monitor panel hides the readout: same slot and corner, and it shows a superset");
-    check(!flatReadoutWanted(true, false, true, true) && flatReadoutWanted(true, false, false, true), "menu.fps_overlay_lock: the open menu's card carries the line, so the separate readout waits for it to close");
+    check(menuHeaderFpsLine(true, true), "menu.fps_overlay_lock: the open menu's card carries the frame-rate line");
+    check(!menuHeaderFpsLine(false, true), "the header line needs the menu open");
+    check(!menuHeaderFpsLine(true, false), "the header line is off when its switch is off");
     check(menuStatusPageReleasesKeyboard(true, false) && !menuStatusPageReleasesKeyboard(false, false), "VR: a status page releases the keyboard to the game, other pages do not");
     check(!menuStatusPageReleasesKeyboard(true, true) && !menuStatusPageReleasesKeyboard(false, true), "flat (keyboard always private): the Status page keeps the keyboard private too");
     check(!menuStatusPageReleasesKeyboard(true, menuPolicyFor(true).keyboardAlwaysPrivate) && menuStatusPageReleasesKeyboard(true, menuPolicyFor(false).keyboardAlwaysPrivate), "the policy's own flag drives it: flat private on a status page, VR released");

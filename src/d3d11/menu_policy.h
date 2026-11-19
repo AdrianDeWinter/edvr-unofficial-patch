@@ -140,10 +140,10 @@ struct ScreenNoticeState {
   }
 };
 
-// ---- The frame-rate readout on the flat screen ------------------------------------------------------------------------------------------------------
-// The readout has the monitor slot (menu_panel.h menuPanelSubmitMonitor), not the menu's, so the menu and notices never arbitrate with it. Its raster is only
-// composited once it is the live one on that slot -- never the monitor panel's left over in the corner. While it is not wanted the readout is suspended and its
-// next raster is submitted from nothing.
+// ---- The flat monitor panel's raster machine ------------------------------------------------------------------------------------------------------
+// The panel has the monitor slot (menu_panel.h menuPanelSubmitMonitor), not the menu's, so the menu and notices never arbitrate with it. Its raster is only
+// composited once it is the live one on that slot -- never one left over from before the panel was last put away. While it is not wanted the machine is
+// suspended and its next raster is submitted from nothing.
 struct ScreenReadoutState {
   bool submitted = false;  // a readout raster was handed to the panel since the last suspension
   bool shown = false;      // that raster (or a later one) is the live one
@@ -182,11 +182,10 @@ inline bool menuMonitorPanelToggle(bool pressed, bool panelUp, bool captureActiv
   return !panelUp;
 }
 
-// The flat frame-rate readout is wanted: it is on, the monitor panel is down (the panel shares its slot and corner and shows everything the readout does), and
-// the menu card is not carrying the readout's line itself (menu.fps_overlay_lock). The menu being open, or a notice, does not hold it back: they have the
-// menu's slot, in the upper left.
-inline bool flatReadoutWanted(bool readoutOn, bool monitorPanelUp, bool menuOpen, bool lockedIntoMenu) {
-  return readoutOn && !monitorPanelUp && !(menuOpen && lockedIntoMenu);
+// The frame-rate line at the top of the open menu card (menu.fps_overlay_lock): its own switch, in both profiles, since 2026-11-19. It no longer needs
+// menu.fps_overlay on, and it hides nothing else.
+inline bool menuHeaderFpsLine(bool menuOpen, bool headerLineOn) {
+  return menuOpen && headerLineOn;
 }
 
 // A status page (the Status page) hands the keyboard back to the game, unless the profile's panel always takes it (flat, MenuProfilePolicy::keyboardAlwaysPrivate:

@@ -840,6 +840,11 @@ void fpsOverlayModes() {
     check(parseFpsOverlay("  Detailed \r")==FpsOverlayMode::Detailed&&parseFpsOverlay("ON")==FpsOverlayMode::Compact,"fps overlay: case and surrounding blanks do not matter");
     check(parseFpsOverlay("")==FpsOverlayMode::Off&&parseFpsOverlay(nullptr)==FpsOverlayMode::Off&&parseFpsOverlay("loud")==FpsOverlayMode::Off,"fps overlay: empty, missing and unknown read as the default, off");
     check(!std::strcmp(fpsOverlayWord(FpsOverlayMode::Compact),"compact")&&parseFpsOverlay(fpsOverlayWord(FpsOverlayMode::Detailed))==FpsOverlayMode::Detailed,"fps overlay: the words the menu writes read back");
+    check(parseMonitorPanelView("full")==MonitorPanelView::Full&&parseMonitorPanelView("detailed")==MonitorPanelView::Detailed&&parseMonitorPanelView("compact")==MonitorPanelView::Compact,"monitor panel view: the three words");
+    check(parseMonitorPanelView("")==MonitorPanelView::Full&&parseMonitorPanelView(nullptr)==MonitorPanelView::Full&&parseMonitorPanelView("off")==MonitorPanelView::Full&&parseMonitorPanelView("loud")==MonitorPanelView::Full,"monitor panel view: empty, missing, off and unknown read as the default, full");
+    check(parseMonitorPanelView("  Compact \r")==MonitorPanelView::Compact,"monitor panel view: case and surrounding blanks do not matter");
+    check(parseMonitorPanelView(monitorPanelViewWord(MonitorPanelView::Detailed))==MonitorPanelView::Detailed&&parseMonitorPanelView(monitorPanelViewWord(MonitorPanelView::Full))==MonitorPanelView::Full,"monitor panel view: the words the menu writes read back");
+    check(monitorPanelReadoutMode(MonitorPanelView::Full)==FpsOverlayMode::Off&&monitorPanelReadoutMode(MonitorPanelView::Detailed)==FpsOverlayMode::Detailed&&monitorPanelReadoutMode(MonitorPanelView::Compact)==FpsOverlayMode::Compact,"monitor panel view: detailed and compact draw the readout's shapes, full the Monitor page");
 }
 void detailedText() {
     char a[96],b[96];
