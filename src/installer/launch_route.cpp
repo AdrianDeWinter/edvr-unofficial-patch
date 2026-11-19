@@ -5,9 +5,13 @@
 #include <tlhelp32.h>
 
 #include <algorithm>
+#include <cwctype>
 
 #include "detect.h"
+#include "direct_launch.h"
 #include "logbundle.h"
+#include "probe.h"
+#include "update_util.h"
 
 namespace edvr::installer {
 namespace {
@@ -72,7 +76,7 @@ std::wstring findEdLaunchIn(const std::vector<std::wstring>& roots) {
 }
 
 LaunchRoute routeFor(const std::wstring& source, const std::wstring& gameDir, bool vr,
-                     const std::vector<std::wstring>* frontierRoots) {
+                     const std::vector<std::wstring>* frontierRoots, bool direct) {
     LaunchRoute route;
     if (sourceIs(source, L"Steam")) {
         route.kind = RouteKind::Steam;
@@ -80,8 +84,18 @@ LaunchRoute routeFor(const std::wstring& source, const std::wstring& gameDir, bo
         return route;
     }
     if (sourceIs(source, L"Epic")) {
+        if (direct && findEdLaunch(gameDir).empty()) {
+            route.why = "EDLaunch.exe was not found above this Epic install, so it cannot be stood in for.";
+            return route;
+        }
+        // Epic's protocol activation address, the counterpart of steam://rungameid.
+        // The three ids are the catalog's, and the colons are encoded so the
+        // address survives ShellExecute. With the checkbox on, the mode is carried
+        // by the stand-in Epic then starts, not by this address.
         route.kind = RouteKind::Epic;
-        route.uri = std::wstring(L"com.epicgames.launcher://apps/") + kEpicAppId + L"?action=launch&silent=true";
+        route.uri = std::wstring(L"com.epicgames.launcher://apps/") + kEpicNamespaceId + L"%3A" +
+                    kEpicCatalogId + L"%3A" + kEpicAppId + L"?action=launch&silent=true";
+        route.carriesMode = direct;
         return route;
     }
     std::wstring edlaunch = findEdLaunch(gameDir);
@@ -151,6 +165,164 @@ bool startRoute(const LaunchRoute& route, const RouteOps& ops, bool elevated, st
         default:
             return fail(route.why.empty() ? "There is nothing to start the game with." : route.why);
     }
+}
+
+namespace {
+
+bool hasFlag(const std::wstring& line, const wchar_t* flag) {
+    std::wstring hay = line, needle = flag;
+    for (wchar_t& c : hay) c = static_cast<wchar_t>(towlower(c));
+    for (wchar_t& c : needle) c = static_cast<wchar_t>(towlower(c));
+    size_t at = 0;
+    while ((at = hay.find(needle, at)) != std::wstring::npos) {
+        const bool boundary = at == 0 || hay[at - 1] == L' ';
+        const size_t end = at + needle.size();
+        if (boundary && (end == hay.size() || hay[end] == L' ')) return true;
+        at += needle.size();
+    }
+    return false;
+}
+
+std::wstring argsAfterExe(const std::wstring& commandLine) {
+    size_t i = 0;
+    while (i < commandLine.size() && (commandLine[i] == L' ' || commandLine[i] == L'\t')) ++i;
+    if (i >= commandLine.size()) return std::wstring();
+    if (commandLine[i] == L'"') {
+        const size_t end = commandLine.find(L'"', i + 1);
+        i = end == std::wstring::npos ? commandLine.size() : end + 1;
+    } else {
+        while (i < commandLine.size() && commandLine[i] != L' ' && commandLine[i] != L'\t') ++i;
+    }
+    while (i < commandLine.size() && (commandLine[i] == L' ' || commandLine[i] == L'\t')) ++i;
+    return commandLine.substr(i);
+}
+
+std::wstring readSmallText(const std::wstring& path) {
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return std::wstring();
+    char buf[80]{};
+    DWORD read = 0;
+    const BOOL ok = ReadFile(f, buf, sizeof(buf) - 1, &read, nullptr);
+    CloseHandle(f);
+    if (!ok) return std::wstring();
+    std::string text(buf, buf + read);
+    while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) text.pop_back();
+    return std::wstring(text.begin(), text.end());
+}
+
+bool writeSmallText(const std::wstring& path, const std::string& text) {
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    DWORD wrote = 0;
+    const BOOL ok = WriteFile(f, text.data(), static_cast<DWORD>(text.size()), &wrote, nullptr);
+    CloseHandle(f);
+    return ok && wrote == text.size();
+}
+
+std::wstring modulePath() {
+    wchar_t buf[1024]{};
+    const DWORD n = GetModuleFileNameW(nullptr, buf, 1024);
+    return (n > 0 && n < 1024) ? std::wstring(buf, n) : std::wstring();
+}
+
+}  // namespace
+
+std::wstring edLaunchShimCommand(const std::wstring& origExe, const std::wstring& commandLine, bool vr,
+                                 bool chooseMode) {
+    std::wstring args = argsAfterExe(commandLine);
+    auto add = [&](const wchar_t* flag) {
+        if (hasFlag(args, flag)) return;
+        if (!args.empty()) args += L' ';
+        args += flag;
+    };
+    add(L"/autorun");
+    add(L"/autoquit");
+    add(L"/edo");
+    // /novr contains the letters of /vr, so the mode is chosen only when neither flag is present.
+    if (chooseMode && !hasFlag(args, L"/vr") && !hasFlag(args, L"/novr")) add(vr ? L"/vr" : L"/novr");
+    return L"\"" + origExe + L"\" " + args;
+}
+
+int runEdLaunchShimIfInvoked() {
+    const std::wstring self = modulePath();
+    const std::wstring leaf = self.substr(self.find_last_of(L"\\/") == std::wstring::npos ? 0 : self.find_last_of(L"\\/") + 1);
+    if (_wcsicmp(leaf.c_str(), L"EDLaunch.exe") != 0) return -1;
+
+    const std::wstring dir = parentOf(self);
+    const std::wstring mode = readSmallText(joinPath(dir, kEdLaunchModeName));
+    std::string error;
+    if (!startGameFromEpicCommand(dir, GetCommandLineW(), mode == L"vr", &error)) {
+        MessageBoxW(nullptr, widenUtf8(error).c_str(), L"ED Unofficial Patch", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    return 0;
+}
+
+bool writeEdLaunchMode(const std::wstring& gameDir, bool vr) {
+    const std::wstring edlaunch = findEdLaunch(gameDir);
+    if (edlaunch.empty()) return false;
+    return writeSmallText(joinPath(parentOf(edlaunch), kEdLaunchModeName), vr ? "vr\n" : "flat\n");
+}
+
+bool installEdLaunchShim(const std::wstring& selfExe, const std::wstring& gameDir, std::string* error) {
+    auto fail = [&](const std::string& text) {
+        if (error) *error = text;
+        return false;
+    };
+    if (!fileExists(selfExe)) return true;
+    const std::wstring edlaunch = findEdLaunch(gameDir);
+    if (edlaunch.empty()) return fail("EDLaunch.exe was not found above this Epic install.");
+    const std::wstring dir = parentOf(edlaunch);
+    const std::wstring orig = joinPath(dir, kEdLaunchOrigName);
+    const std::wstring marker = joinPath(dir, kEdLaunchMarkerName);
+    const std::string selfHash = sha256File(selfExe);
+    const std::string liveHash = sha256File(edlaunch);
+    if (selfHash.empty() || liveHash.empty()) return fail("EDLaunch.exe could not be read.");
+    const std::wstring recorded = readSmallText(marker);
+    const bool marked = !recorded.empty();
+    if (marked && liveHash == selfHash) return true;
+
+    auto copySelf = [&]() {
+        if (!CopyFileW(selfExe.c_str(), edlaunch.c_str(), FALSE))
+            return fail("The stand-in could not be copied into EDLaunch.exe's place.");
+        if (!writeSmallText(marker, sha256File(edlaunch)))
+            return fail("The stand-in was copied, but its marker could not be written.");
+        return true;
+    };
+    // The marker names the stand-in we wrote. The same hash means that copy is still there
+    // and this launcher has been rebuilt, so only the copy is replaced. A different hash is
+    // a game update putting Frontier's binary back, and that binary becomes the saved one.
+    if (marked && std::string(recorded.begin(), recorded.end()) == liveHash) return copySelf();
+    if (!marked && fileExists(orig))
+        return fail("EDLaunch_orig.exe is already beside EDLaunch.exe, so the stand-in was not installed.");
+    if (marked || !fileExists(orig)) {
+        if (fileExists(orig) && !DeleteFileW(orig.c_str()))
+            return fail("The saved EDLaunch is in use, so it could not be replaced.");
+        if (!MoveFileW(edlaunch.c_str(), orig.c_str()))
+            return fail("EDLaunch.exe is in use, so the stand-in could not take its place.");
+    }
+    return copySelf();
+}
+
+bool removeEdLaunchShim(const std::wstring& gameDir, std::string* error) {
+    auto fail = [&](const std::string& text) {
+        if (error) *error = text;
+        return false;
+    };
+    const std::wstring edlaunch = findEdLaunch(gameDir);
+    if (edlaunch.empty()) return true;
+    const std::wstring dir = parentOf(edlaunch);
+    const std::wstring orig = joinPath(dir, kEdLaunchOrigName);
+    const std::wstring marker = joinPath(dir, kEdLaunchMarkerName);
+    if (!fileExists(marker)) return true;
+    if (!fileExists(orig)) return fail("The saved EDLaunch is missing, so the original file was left where it is.");
+    if (!DeleteFileW(edlaunch.c_str())) return fail("EDLaunch.exe is in use, so the original could not be put back.");
+    if (!MoveFileW(orig.c_str(), edlaunch.c_str()))
+        return fail("The original EDLaunch could not be moved back into place.");
+    DeleteFileW(marker.c_str());
+    DeleteFileW(joinPath(dir, kEdLaunchModeName).c_str());
+    return true;
 }
 
 bool pidsNamed(const std::wstring& exeName, std::vector<unsigned long>* pids) {

@@ -113,8 +113,17 @@ std::string maskSecrets(const std::string& text, const std::vector<std::string>&
 //   "ServerToken <machineToken> <authToken> <serverArgs>" [/steam] /vr|/novr [gameArgs]
 // `steamAware` is false for a Frontier-store install, which never gets /steam. An offline product has an
 // empty quoted token. `serverArgs` and `gameArgs` are the product's own.
+// `configureEpic`, when set, is one quoted argument before the mode: ConfigureEpic, the refresh
+// token, the sandbox and the deployment. Steam's line leaves it empty.
 std::string directCommandLine(bool online, const std::string& machineToken, const std::string& authToken,
-                              const std::string& serverArgs, bool steamAware, bool vr, const std::string& gameArgs);
+                              const std::string& serverArgs, bool steamAware, bool vr, const std::string& gameArgs,
+                              const std::string& configureEpic = "");
+
+// The stand-in for EDLaunch.exe. Epic has already passed an exchange code on `commandLine`.
+// This signs in and starts EliteDangerous64.exe. It does not start Frontier's launcher.
+// `error` is a sentence and holds no secret. True when the game process was created.
+bool startGameFromEpicCommand(const std::wstring& installDir, const std::wstring& commandLine, bool vr,
+                              std::string* error);
 
 // The version compare Product.fs makes (System.Version equality): the same numbers in the same count.
 bool sameGameVersion(const std::string& a, const std::string& b);

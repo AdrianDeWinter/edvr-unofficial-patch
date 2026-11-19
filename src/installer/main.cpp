@@ -38,6 +38,13 @@ bool attachToConsole() {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     using namespace edvr::installer;
 
+#ifdef EDUP_LAUNCHER
+    // Epic starts the file named EDLaunch.exe and passes the exchange code on its command
+    // line. When that file is our stand-in, run the saved EDLaunch and do not open a window.
+    const int shim = runEdLaunchShimIfInvoked();
+    if (shim >= 0) return shim;
+#endif
+
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     const AppArgs args = parseArgs(argc ? argc : 0, argv);

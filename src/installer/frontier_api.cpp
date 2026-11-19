@@ -125,7 +125,7 @@ std::string hexOfBytes(const std::string& text) {
 }
 
 HttpResponse FrontierApi::send(const std::string& path, const std::vector<std::pair<std::string, std::string>>& query,
-                               const std::string& bearer, bool post) {
+                               const std::string& token, bool post, AuthKind kind) {
     HttpRequest request;
     request.method = post ? "POST" : "GET";
     request.url = base_ + path;
@@ -133,7 +133,7 @@ HttpResponse FrontierApi::send(const std::string& path, const std::vector<std::p
         request.url += i == 0 ? '?' : '&';
         request.url += query[i].first + "=" + percentEncode(query[i].second);
     }
-    if (!bearer.empty()) request.headers.emplace_back("Authorization", "bearer " + bearer);
+    if (!token.empty()) request.headers.emplace_back("Authorization", (kind == AuthKind::Epic ? "epic " : "bearer ") + token);
     request.maxBytes = kFrontierMaxBytes;
     request.followRedirects = false;
     request.cancel = cancel_;
@@ -179,6 +179,22 @@ ApiResult FrontierApi::steamAuth(const std::string& machineId, const std::string
         return unexpected(reply.status, "Frontier's sign-in reply carried no tokens");
     session->authToken = *authToken;
     session->machineToken = *machineToken;
+    return result;
+}
+
+ApiResult FrontierApi::epicAuth(const std::string& machineId, const std::string& epicAccess, FrontierSession* session) {
+    const HttpResponse reply = send("/3.0/user/forctoken", {{"machineId", machineId}, {"fTime", fTime()}}, epicAccess, false, AuthKind::Epic);
+    ApiResult result = classify(reply);
+    if (result.outcome != ApiOutcome::Ok) return result;
+    JsonValue json;
+    if (!parseJson(reply.body, &json, nullptr) || !json.isObject()) return unexpected(reply.status, "Frontier's sign-in reply was not in the form the launcher expects");
+    const std::string* authToken = stringMember(json, "authToken");
+    const std::string* machineToken = stringMember(json, "machineToken");
+    if (!authToken || !machineToken || authToken->empty() || machineToken->empty())
+        return unexpected(reply.status, "Frontier's sign-in reply carried no tokens");
+    session->authToken = *authToken;
+    session->machineToken = *machineToken;
+    session->epicAccess = epicAccess;
     return result;
 }
 
@@ -243,6 +259,8 @@ ApiResult FrontierApi::purchases(const FrontierSession& session, PurchaseList* o
     HttpResponse reply;
     if (session.frontierStore)
         reply = send("/3.0/user/purchases", {{"fTime", fTime()}, {"authToken", session.authToken}, {"machineToken", session.machineToken}}, std::string());
+    else if (!session.epicAccess.empty())
+        reply = send("/3.0/user/purchases", {{"fTime", fTime()}}, session.epicAccess, false, AuthKind::Epic);
     else
         reply = send("/3.0/user/purchases", {{"fTime", fTime()}}, session.authToken);
     ApiResult result = classify(reply, !session.frontierStore);
@@ -285,7 +303,8 @@ ApiResult FrontierApi::installerVersion(const FrontierSession& session, const st
                                      {"sku", sku},
                                      {"os", "win"},
                                      {"fTime", fTime()}},
-                                    session.frontierStore ? std::string() : session.authToken);
+                                    session.epicAccess.empty() ? (session.frontierStore ? std::string() : session.authToken) : session.epicAccess,
+                                    false, session.epicAccess.empty() ? AuthKind::Bearer : AuthKind::Epic);
     ApiResult result = classify(reply, !session.frontierStore);
     if (result.outcome != ApiOutcome::Ok) return result;
     JsonValue json;

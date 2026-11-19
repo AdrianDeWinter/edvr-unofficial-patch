@@ -35,6 +35,15 @@ inline constexpr const char* kDirectLaunchQuestion =
     "is yours. Untick this at any time to go back to Frontier's launcher.\n\n"
     "Turn it on?";
 
+// An Epic install cannot sign in the way Steam does. The checkbox skips the Epic launcher
+// and starts that install's EDLaunch with the mode. Nothing is stored.
+inline constexpr const char* kDirectLaunchQuestionEpic =
+    "Skip the Epic launcher and pick VR or flat here?\n\n"
+    "Play then starts this install's EDLaunch with that mode, and closes it when Elite exits. "
+    "It does not sign in and stores nothing. Epic still has to be signed in on this PC. Untick this "
+    "to hand the start back to the Epic launcher, which cannot carry a mode.\n\n"
+    "Turn it on?";
+
 // The same question for an install from Frontier's own store, where the launcher asks for the login itself.
 // Unticking deletes what it stored, and the question says so.
 inline constexpr const char* kDirectLaunchQuestionFrontier =
@@ -127,6 +136,9 @@ public:
     // A Steam or Frontier-store install ("Frontier launcher") with direct launch on signs in to Frontier and
     // starts the game itself, and falls back to its own route, saying why, when it cannot. A cancelled
     // question starts nothing and says "Sign-in cancelled." Every other install takes its route.
+    // The Epic stand-in: our exe takes EDLaunch.exe's name, and Frontier's binary is kept beside it.
+    // `on` false puts the original back. The mode file is written only when turning it on.
+    bool standInForEdLaunch(const std::wstring& gameDir, bool on, bool vr, std::string* error);
     void beginPlay(const std::wstring& source, const std::wstring& gameDir, bool vr, bool elevated,
                    const RouteOps& ops, const WatchNames& names, const WatchTiming& timing);
     bool playing() const { return playing_; }
@@ -171,9 +183,11 @@ private:
     void rememberPlay(const std::wstring& gameDir, const char* mode);
     // The game is running, on the window's thread: the window steps aside, or closes when close-after-start is on.
     void gameIsRunning();
+    // `direct` is the skip-the-launcher checkbox. Only an Epic install uses it here: Steam and
+    // the Frontier store sign in themselves before this is called.
     void startRouteAndWatch(const std::wstring& source, const std::wstring& gameDir, bool vr, bool elevated,
                             const RouteOps& ops, const WatchNames& names, const WatchTiming& timing,
-                            const std::string& startLine);
+                            const std::string& startLine, bool direct = false);
     void beginDirectPlay(const std::wstring& source, const std::wstring& gameDir, bool vr, const RouteOps& ops,
                          const WatchNames& names, const WatchTiming& timing);
     // Posts `ask` to the window's thread and waits for it from the worker. False when it was cancelled or

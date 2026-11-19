@@ -62,7 +62,10 @@ struct FrontierSession {
     std::string machineToken;
     // A session from Frontier's own store: its purchases and installer calls carry the tokens in the
     // query and send no Authorization header. A Steam session sends the bearer header instead.
+    // An Epic session sends "Authorization: epic <access token>" on those calls, and still puts the
+    // Frontier tokens in the installer query.
     bool frontierStore = false;
+    std::string epicAccess;
 };
 
 struct Purchase {
@@ -109,6 +112,10 @@ public:
 
     ApiResult steamAuth(const std::string& machineId, const std::string& steamTicketHex, FrontierSession* session);
 
+    // Epic's exchange has already become an access token. The header is "epic", not "bearer",
+    // and the query carries no ticket. The session keeps that access token for the calls after this.
+    ApiResult epicAuth(const std::string& machineId, const std::string& epicAccess, FrontierSession* session);
+
     // The first call of a first sign-in. Ok means Frontier emailed a code, and `encCode` is what the
     // next call hands back with it. Denied is a refused email or password.
     ApiResult frontierFirstSignIn(const std::string& email, const std::string& password, const std::string& machineId,
@@ -127,8 +134,9 @@ public:
                                std::string* version);
 
 private:
+    enum class AuthKind { Bearer, Epic };
     HttpResponse send(const std::string& path, const std::vector<std::pair<std::string, std::string>>& query,
-                      const std::string& bearer, bool post = false);
+                      const std::string& token, bool post = false, AuthKind kind = AuthKind::Bearer);
 
     HttpClient& http_;
     std::string base_;

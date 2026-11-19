@@ -5,9 +5,14 @@
 #include <cctype>
 #include <cstdlib>
 
+#include <windows.h>
+#include <shellapi.h>
+
 #include "detect.h"
 #include "frontier_login.h"
 #include "launch_route.h"
+#include "launcher_version.h"
+#include "update_http.h"
 #include "update_json.h"
 #include "update_util.h"
 
@@ -309,12 +314,14 @@ bool sameGameVersion(const std::string& a, const std::string& b) {
 }
 
 std::string directCommandLine(bool online, const std::string& machineToken, const std::string& authToken,
-                              const std::string& serverArgs, bool steamAware, bool vr, const std::string& gameArgs) {
+                              const std::string& serverArgs, bool steamAware, bool vr, const std::string& gameArgs,
+                              const std::string& configureEpic) {
     std::string options;
     auto add = [&](const std::string& piece) {
         if (!options.empty()) options += ' ';
         options += piece;
     };
+    if (!configureEpic.empty()) add("\"" + configureEpic + "\"");
     if (steamAware) add("/steam");
     add(vr ? "/vr" : "/novr");
     if (!gameArgs.empty()) add(gameArgs);
@@ -451,6 +458,204 @@ HANDLE startGameProcess(const std::wstring& exe, const std::wstring& args, const
         return nullptr;
     CloseHandle(pi.hThread);
     return pi.hProcess;
+}
+
+namespace {
+
+std::string base64(const std::string& text) {
+    static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    unsigned value = 0;
+    int bits = 0;
+    for (unsigned char c : text) {
+        value = (value << 8) | c;
+        bits += 8;
+        while (bits >= 6) {
+            bits -= 6;
+            out.push_back(table[(value >> bits) & 63]);
+        }
+    }
+    if (bits) {
+        out.push_back(table[(value << (6 - bits)) & 63]);
+        while (out.size() % 4) out.push_back('=');
+    }
+    return out;
+}
+
+std::string argValue(const std::wstring& commandLine, const wchar_t* name) {
+    int argc = 0;
+    wchar_t** argv = CommandLineToArgvW(commandLine.c_str(), &argc);
+    std::string value;
+    const std::wstring prefix = std::wstring(name) + L"=";
+    if (argv) {
+        for (int i = 1; i < argc && value.empty(); ++i) {
+            const std::wstring arg = argv[i];
+            if (arg.size() >= prefix.size() && _wcsnicmp(arg.c_str(), prefix.c_str(), prefix.size()) == 0)
+                value = narrowUtf8(arg.substr(prefix.size()));
+        }
+        LocalFree(argv);
+    }
+    return value;
+}
+
+// A run of printable UTF-16LE characters starting at an even offset.
+std::string utf16Ascii(const std::string& bytes, size_t at, size_t* end) {
+    std::string out;
+    while (at + 1 < bytes.size()) {
+        const unsigned char lo = static_cast<unsigned char>(bytes[at]);
+        const unsigned char hi = static_cast<unsigned char>(bytes[at + 1]);
+        if (hi != 0 || lo < 32 || lo >= 127) break;
+        out.push_back(static_cast<char>(lo));
+        at += 2;
+    }
+    if (end) *end = at;
+    return out;
+}
+
+// EosIF.dll holds the game's Epic client id and secret as ordinary strings. They are read from
+// that file when a launch needs them, and they are not kept in this program. The client id is the
+// string that starts with "xyza"; the secret is the next string after it.
+bool readEosClient(const std::wstring& path, std::string* clientId, std::string* clientSecret) {
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(f, &size) || size.QuadPart <= 0 || size.QuadPart > (8 << 20)) {
+        CloseHandle(f);
+        return false;
+    }
+    std::string bytes(static_cast<size_t>(size.QuadPart), '\0');
+    DWORD read = 0;
+    const BOOL ok = ReadFile(f, &bytes[0], static_cast<DWORD>(bytes.size()), &read, nullptr);
+    CloseHandle(f);
+    if (!ok || read < bytes.size()) return false;
+    const std::string mark = std::string("x\0y\0z\0a\0", 8);
+    const size_t at = bytes.find(mark);
+    if (at == std::string::npos || (at % 2) != 0) return false;
+    size_t end = 0;
+    const std::string id = utf16Ascii(bytes, at, &end);
+    if (id.size() < 16 || id.size() > 80) return false;
+    size_t next = end;
+    while (next + 1 < bytes.size()) {
+        const unsigned char lo = static_cast<unsigned char>(bytes[next]);
+        const unsigned char hi = static_cast<unsigned char>(bytes[next + 1]);
+        if (hi == 0 && lo >= 32 && lo < 127) break;
+        next += 2;
+    }
+    const std::string secret = utf16Ascii(bytes, next, nullptr);
+    if (secret.size() < 16 || secret.size() > 80 || secret.find(' ') != std::string::npos) return false;
+    *clientId = id;
+    *clientSecret = secret;
+    return true;
+}
+
+std::wstring productDirUnder(const std::wstring& installDir) {
+    const std::wstring products = joinPath(installDir, L"Products");
+    std::wstring fallback;
+    WIN32_FIND_DATAW fd{};
+    HANDLE h = FindFirstFileW(joinPath(products, L"*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return std::wstring();
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        const std::wstring name = fd.cFileName;
+        if (name == L"." || name == L"..") continue;
+        const std::wstring dir = joinPath(products, name);
+        if (!fileExists(joinPath(dir, L"EliteDangerous64.exe"))) continue;
+        if (name.find(L"odyssey") != std::wstring::npos) {
+            FindClose(h);
+            return dir;
+        }
+        if (fallback.empty()) fallback = dir;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return fallback;
+}
+
+}  // namespace
+
+std::string formEncode(const std::string& text) {
+    static const char hex[] = "0123456789ABCDEF";
+    std::string out;
+    for (unsigned char c : text) {
+        if (std::isalnum(c) || c == '-' || c == '.' || c == '_' || c == '~') out.push_back(static_cast<char>(c));
+        else {
+            out.push_back('%');
+            out.push_back(hex[c >> 4]);
+            out.push_back(hex[c & 15]);
+        }
+    }
+    return out;
+}
+
+bool startGameFromEpicCommand(const std::wstring& installDir, const std::wstring& commandLine, bool vr, std::string* error) {
+    auto fail = [&](const std::string& text) {
+        if (error) *error = text;
+        return false;
+    };
+    const std::string exchange = argValue(commandLine, L"-AUTH_PASSWORD");
+    const std::string deployment = argValue(commandLine, L"-epicdeploymentid");
+    const std::string sandbox = argValue(commandLine, L"-epicsandboxid");
+    if (exchange.empty() || deployment.empty() || sandbox.empty())
+        return fail("Epic did not pass a sign-in to EDLaunch.exe, so the game was not started.");
+    std::string clientId, clientSecret;
+    if (!readEosClient(joinPath(installDir, L"EosIF.dll"), &clientId, &clientSecret))
+        return fail("The game's Epic sign-in details could not be read, so the game was not started.");
+
+    WinHttpClient http(false, EDUP_LAUNCHER_VERSION);
+    HttpRequest tokenRequest;
+    tokenRequest.method = "POST";
+    tokenRequest.url = "https://api.epicgames.dev/epic/oauth/v1/token";
+    tokenRequest.headers.emplace_back("Authorization", "Basic " + base64(clientId + ":" + clientSecret));
+    tokenRequest.headers.emplace_back("Content-Type", "application/x-www-form-urlencoded");
+    tokenRequest.body = "grant_type=exchange_code&exchange_code=" + formEncode(exchange) +
+                        "&deployment_id=" + formEncode(deployment) +
+                        "&scope=basic_profile%20friends_list%20presence";
+    tokenRequest.followRedirects = false;
+    const HttpResponse tokenReply = http.get(tokenRequest);
+    if (!tokenReply.transportOk || tokenReply.status != 200)
+        return fail("Epic did not accept the sign-in, so the game was not started.");
+    JsonValue tokenJson;
+    if (!parseJson(tokenReply.body, &tokenJson, nullptr) || !tokenJson.isObject())
+        return fail("Epic's sign-in reply could not be read, so the game was not started.");
+    const JsonValue* access = tokenJson.find("access_token");
+    const JsonValue* refresh = tokenJson.find("refresh_token");
+    if (!access || !access->isString() || access->text.empty() || !refresh || !refresh->isString() || refresh->text.empty())
+        return fail("Epic's sign-in reply carried no token, so the game was not started.");
+
+    const std::wstring productDir = productDirUnder(installDir);
+    VersionInfo info;
+    if (productDir.empty() || !readVersionInfo(productDir, &info))
+        return fail("Elite's program was not found in its folder, so the game was not started.");
+    const std::wstring exe = joinPath(productDir, widenUtf8(info.executable));
+    std::string machineId, machineError;
+    if (!readMachineId(MachineIdKeys(), &machineId, &machineError)) return fail(machineError);
+
+    FrontierApi api(http, kFrontierApiBase);
+    api.syncTime();
+    FrontierSession session;
+    const ApiResult signedIn = api.epicAuth(machineId, access->text, &session);
+    if (signedIn.outcome != ApiOutcome::Ok)
+        return fail("Frontier did not accept the Epic sign-in, so the game was not started.");
+    PurchaseList purchases;
+    const ApiResult bought = api.purchases(session, &purchases);
+    if (bought.outcome != ApiOutcome::Ok)
+        return fail("Frontier did not list what this account owns, so the game was not started.");
+    const Purchase* product = chooseProduct(purchases.items, lastFolder(productDir));
+    if (!product) return fail("Elite is not among the products Frontier lists for this account, so the game was not started.");
+    std::string remoteVersion;
+    const ApiResult installer = api.installerVersion(session, machineId, product->sku, &remoteVersion);
+    if (installer.outcome != ApiOutcome::Ok)
+        return fail("Frontier did not say which game version is current, so the game was not started.");
+    if (!sameGameVersion(info.version, remoteVersion))
+        return fail("The game needs patching, so it was not started. Start it from the Epic launcher once to let it update.");
+    std::string serverArgs;
+    if (product->testApi) serverArgs = "/Test";
+    if (!product->serverArgs.empty()) serverArgs += (serverArgs.empty() ? "" : " ") + product->serverArgs;
+    const std::string configure = "ConfigureEpic " + refresh->text + " " + sandbox + " " + deployment;
+    const std::wstring args = widenUtf8(directCommandLine(!info.offline, session.machineToken, session.authToken, serverArgs,
+                                                         false, vr, product->gameArgs, configure));
+    if (!startGameProcess(exe, args, productDir))
+        return fail("Elite's program could not be started.");
+    return true;
 }
 
 }  // namespace edvr::installer

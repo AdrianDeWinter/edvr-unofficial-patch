@@ -202,7 +202,7 @@ HttpResponse WinHttpClient::get(const HttpRequest& request) {
 
     std::wstring headerText;
     for (const auto& header : request.headers) headerText += widenUtf8(header.first + ": " + header.second + "\r\n");
-    if (isPost) headerText += L"Content-Length: 0\r\n";
+    if (isPost && request.body.empty()) headerText += L"Content-Length: 0\r\n";
 
     std::string url = request.url;
     for (int hop = 0; hop <= 10; ++hop) {
@@ -223,7 +223,9 @@ HttpResponse WinHttpClient::get(const HttpRequest& request) {
         WinHttpSetOption(req.h, WINHTTP_OPTION_REDIRECT_POLICY, &never, sizeof(never));
         const BOOL sent = WinHttpSendRequest(req.h, headerText.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headerText.c_str(),
                                              headerText.empty() ? 0 : static_cast<DWORD>(-1L),
-                                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+                                             request.body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char*>(request.body.data()),
+                                             static_cast<DWORD>(request.body.size()),
+                                             static_cast<DWORD>(request.body.size()), 0);
         if (!sent) return stop(failureText("the request could not be sent"));
         if (!WinHttpReceiveResponse(req.h, nullptr)) return stop(failureText("no reply was received"));
 

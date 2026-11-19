@@ -283,7 +283,7 @@ Frontier's launcher. It goes in first because all three stores need it.
 |---|---|
 | Steam | `steam://rungameid/359320` |
 | Frontier | `EDLaunch.exe /autorun /autoquit /edo /vr` or `/novr` |
-| Epic | `com.epicgames.launcher://` URI, app `9c203b6ed35846e8a4a9ff1e314f6593` |
+| Epic | `com.epicgames.launcher://apps/<sandbox>%3A<catalog>%3A<artifact>?action=launch&silent=true` |
 
 The launcher waits for the game to start and exit, then closes EDLaunch with
 `WM_CLOSE`, since `/autoquit` is not reliable. If the game never started, EDLaunch

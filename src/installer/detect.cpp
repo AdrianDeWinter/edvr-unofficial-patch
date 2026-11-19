@@ -184,11 +184,26 @@ void findSteam(std::vector<GameInstall>* out) {
 //
 // The executable check identifies Elite: a manifest's display name and the
 // player's chosen folder name need not contain the game's name.
+//
+// Two generations of the store record the folder. The older one writes a
+// .item file per install under ProgramData. The current one writes a
+// transaction journal, installations.jsonl, under the AppDataPath it stores
+// in the registry (com.epicgames.eglv2 when that value is absent).
 void findEpic(std::vector<GameInstall>* out) {
     const std::wstring manifests =
         joinPath(env(L"ProgramData"), L"Epic\\EpicGamesLauncher\\Data\\Manifests");
     const std::vector<GameInstall> found = findEpicInstalls(manifests);
     out->insert(out->end(), found.begin(), found.end());
+
+    std::wstring data = regString(HKEY_CURRENT_USER, L"Software\\Epic Games\\EpicGamesLauncher",
+                                  L"AppDataPath", 0);
+    if (data.empty()) {
+        const std::wstring local = env(L"LOCALAPPDATA");
+        if (!local.empty()) data = joinPath(local, L"com.epicgames.eglv2");
+    }
+    if (data.empty()) return;
+    const std::vector<GameInstall> journal = findEpicJournal(joinPath(data, L"installations.jsonl"));
+    out->insert(out->end(), journal.begin(), journal.end());
 }
 
 // ---- Frontier launcher ---------------------------------------------------
@@ -408,6 +423,98 @@ std::vector<GameInstall> findEpicInstalls(const std::wstring& manifestDir) {
         addFromRoot(fromUtf8(location->text), L"Epic", &found);
     }
     return found;
+}
+
+namespace {
+
+// One non-empty line of a journal, with a trailing CR removed. Blank lines are
+// not lines: a writer may end the file with a newline.
+std::vector<std::string> journalLines(std::string text) {
+    if (text.compare(0, 3, "\xef\xbb\xbf") == 0) text.erase(0, 3);
+    std::vector<std::string> lines;
+    std::string line;
+    auto push = [&]() {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) lines.push_back(line);
+        line.clear();
+    };
+    for (char c : text) {
+        if (c == '\n') push();
+        else line.push_back(c);
+    }
+    push();
+    return lines;
+}
+
+}  // namespace
+
+std::vector<GameInstall> findEpicJournal(const std::wstring& journalPath) {
+    const std::string text = readTextFileImpl(journalPath);
+    if (text.empty()) return {};
+    const std::vector<std::string> lines = journalLines(text);
+    if (lines.empty()) return {};
+
+    // The first object is the log header, not an install. A later launcher
+    // that changes the version is left unread rather than guessed at.
+    JsonValue header;
+    if (!parseJson(lines[0], &header, nullptr) || !header.isObject() || header.find("installationId"))
+        return {};
+    const JsonValue* version = header.find("version");
+    if (!version || !version->isInt() || version->integer != 1) return {};
+
+    // Each line is a whole snapshot of one installation. The last line for an
+    // id wins, including a deletion. A line that is not that shape abandons
+    // the file: applying the prefix of a torn log would resurrect a removed
+    // install.
+    struct Snapshot {
+        std::string id;
+        std::string dir;  // empty when this snapshot is not a Windows install to offer
+    };
+    std::vector<Snapshot> current;
+    for (size_t i = 1; i < lines.size(); ++i) {
+        JsonValue row;
+        if (!parseJson(lines[i], &row, nullptr) || !row.isObject()) return {};
+        const JsonValue* id = row.find("installationId");
+        if (!id || !id->isString() || id->text.empty() || id->text.find('\0') != std::string::npos)
+            return {};
+        const JsonValue* deleted = row.find("deleted");
+        if (deleted && deleted->type != JsonValue::Type::Bool) return {};
+
+        std::string dir;
+        const bool gone = deleted && deleted->boolean;
+        if (!gone) {
+            const JsonValue* complete = row.find("complete");
+            const JsonValue* platform = row.find("platform");
+            const JsonValue* location = row.find("dir");
+            if (complete && complete->type == JsonValue::Type::Bool && complete->boolean &&
+                platform && platform->isString() && platform->text == "Windows" &&
+                location && location->isString() && !location->text.empty()) {
+                dir = location->text;
+            }
+        }
+        bool replaced = false;
+        for (Snapshot& snap : current) {
+            if (snap.id != id->text) continue;
+            snap.dir = dir;
+            replaced = true;
+            break;
+        }
+        if (!replaced) current.push_back(Snapshot{id->text, dir});
+    }
+
+    std::vector<GameInstall> found;
+    for (const Snapshot& snap : current) {
+        if (!snap.dir.empty()) addFromRoot(fromUtf8(snap.dir), L"Epic", &found);
+    }
+    std::vector<GameInstall> unique;
+    std::set<std::wstring> seen;
+    for (const GameInstall& gi : found) {
+        std::wstring key = gi.dir;
+        for (wchar_t& c : key) c = static_cast<wchar_t>(towlower(c));
+        if (!seen.insert(key).second) continue;
+        unique.push_back(gi);
+    }
+    return unique;
 }
 
 GameRunState runStateOfSnapshot(void* snapshot, const wchar_t* exeName, const std::wstring& dir) {
