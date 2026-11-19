@@ -38,6 +38,7 @@
 #include "input_gate.h"
 #include "desktop_window_cursor.h"   // visual.desktop_window: the executable's cursor calls, watched (VR scope)
 #include "loaded_module_match.h"
+#include "net_keepalive.h"  // netKeepaliveInstall: one libcurl handle per HTTP pump, so loading reuses the TLS connection
 #include "vr_ssaa_hold.h"  // vrSsaaHoldEarlyInstall: the Supersampling hold's hooks at DLL load
 #include "mode_watch.h"    // modeWatchStart: the 3D mode watch, started after the profile lines
 #include "oculus_route.h"
@@ -494,6 +495,9 @@ BOOL CALLBACK initOnceCallback(PINIT_ONCE, PVOID, PVOID*) {
     // The TEMPORARY instrument (advanced.game_update_check): off, nothing; on, on the known build, the resolver runs once on a background
     // thread and logs whether it finds every address where the hooks' constants put it.
     edvr::gameBuildStartup(&edvr::vrSsaaHoldInstallAfterResolve);
+    // Before the menu's Continue: the HTTP pumps pay a TLS handshake per file unless each one keeps its
+    // first libcurl multi handle. Build 334925 only; any other bytes and it leaves the game's calls alone.
+    edvr::netKeepaliveInstall();
 
     if (g_missingExports) {
         edvr::Log::get().note(

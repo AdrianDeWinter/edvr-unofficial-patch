@@ -753,6 +753,7 @@ python tools\compile_cache.py --prune --keep thunks.obj --keep weapon_ui_getter_
     "src\d3d11\sharpen_pass.cpp" ^
     "src\d3d11\flat_sharpen.cpp" "src\d3d11\flat_ui_layer.cpp" "src\d3d11\flat_star_glow.cpp" "src\d3d11\flat_dof_blur.cpp" ^
     "src\d3d11\loader_panel.cpp" ^
+    "src\d3d11\net_keepalive.cpp" ^
     "src\d3d11\splash_dim.cpp" ^
     "src\d3d11\billboard_fix.cpp" ^
     "src\d3d11\particle_fix.cpp" "src\d3d11\shader_swap.cpp" "src\d3d11\sunglare_fix.cpp" ^
@@ -2061,6 +2062,22 @@ if not exist "%OBJ%\hotkeycapturetest" mkdir "%OBJ%\hotkeycapturetest"
 if errorlevel 1 ( echo [edvr] ERROR: hotkey_capture_test build failed & exit /b 1 )
 "%BUILD%\hotkey_capture_test.exe" "%ROOT%" || (
     echo [edvr] ERROR: the Hotkeys page failed its format, capture, joystick or row checks
+    exit /b 1
+)
+exit /b 0
+
+:rig_net_keepalive_test
+echo [edvr] === net_keepalive_test.exe ===
+REM The loading-connection table: one libcurl multi handle per pump thread, the
+REM 50 s refresh, a full table, the return-address gate. No device and no game.
+if not exist "%OBJ%\netkeepalive" mkdir "%OBJ%\netkeepalive"
+%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
+    /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\netkeepalive"\ /Fe"%BUILD%\net_keepalive_test.exe" ^
+    "tools\net_keepalive_test\net_keepalive_test.cpp" ^
+    /link /INCREMENTAL:NO kernel32.lib user32.lib
+if errorlevel 1 ( echo [edvr] ERROR: net_keepalive_test build failed & exit /b 1 )
+"%BUILD%\net_keepalive_test.exe" || (
+    echo [edvr] ERROR: loading connection reuse failed its table checks
     exit /b 1
 )
 exit /b 0
