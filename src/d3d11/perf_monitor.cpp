@@ -17,7 +17,11 @@
 
 #include <d3d11.h>
 #include <dxgi1_4.h>
+#include <pdh.h>
+#include <pdhmsg.h>  // PDH_MORE_DATA and the CStatus values; pdh.h does not pull them in
 #include <psapi.h>
+
+#include "gpu_engine_load.h"
 
 #include <atomic>
 #include <cmath>
@@ -173,6 +177,17 @@ struct NvThermalSettings {
 };
 constexpr uint32_t kThermalTargetAll = 15;
 
+// PDH, resolved when the Monitor opens. Linked nowhere: pdh.dll is loaded for the sample, not at process start.
+using PFN_PdhOpenQueryW = decltype(&::PdhOpenQueryW);
+using PFN_PdhAddEnglishCounterW = decltype(&::PdhAddEnglishCounterW);
+using PFN_PdhCollectQueryData = decltype(&::PdhCollectQueryData);
+using PFN_PdhGetFormattedCounterArrayW = decltype(&::PdhGetFormattedCounterArrayW);
+using PFN_PdhCloseQuery = decltype(&::PdhCloseQuery);
+// The wildcard is the whole object's instances. English, so a localised Windows still resolves it.
+constexpr wchar_t kGpuEngineCounter[] = L"\\GPU Engine(*)\\Utilization Percentage";
+// A runaway instance list is refused rather than grown without a limit. A desktop's engines fit in far less.
+constexpr DWORD kPdhByteCap = 1u << 20;
+
 struct State {
     NativePerfHistory nativeHistory;
     NativeBenchmarkCollector nativeBenchmark;
@@ -268,8 +283,14 @@ struct State {
     uint64_t ramTotal = 0, ramAvail = 0, ramProcess = 0;
     uint64_t vramUsed = 0, vramBudget = 0;
     bool     vramTried = false;
+    bool     adapterLookupDone = false;
+    bool     haveAdapterLuid = false;
+    uint32_t adapterLuidLow = 0, adapterLuidHigh = 0;
+    uint32_t adapterVendor = 0;
     IDXGIAdapter3* adapter3 = nullptr;
-    int      gpuLoadPct = -1;
+    // NVIDIA's graphics-domain percent, -1 until a sample says the domain is present. Kept apart from the engine
+    // counter: the tile shows whichever reads higher (gpu_engine_load.h).
+    int      nvLoadPct = -1;
     int      gpuTempC = -1000;
     // NvAPI
     bool     nvTried = false;
@@ -278,6 +299,22 @@ struct State {
     PFN_NvDynamicPstates nvPstates = nullptr;
     PFN_NvThermal nvThermal = nullptr;
     char     nvWhy[96] = {};
+    // Windows GPU Engine counters (gpu_engine_load.h).
+    bool     pdhTried = false;
+    bool     pdhOk = false;
+    bool     pdhHaveSample = false;   // a collect returned real percentages, not the baseline
+    int      engineLoadPct = -1;
+    char     pdhWhy[48] = {};
+    bool     gpuLoadNoted = false;
+    PDH_HQUERY pdhQuery = nullptr;
+    PDH_HCOUNTER pdhCounter = nullptr;
+    PFN_PdhOpenQueryW pdhOpen = nullptr;
+    PFN_PdhAddEnglishCounterW pdhAdd = nullptr;
+    PFN_PdhCollectQueryData pdhCollect = nullptr;
+    PFN_PdhGetFormattedCounterArrayW pdhArray = nullptr;
+    PFN_PdhCloseQuery pdhClose = nullptr;
+    std::vector<std::max_align_t> pdhBytes;  // aligned for PDH_FMT_COUNTERVALUE_ITEM_W, which the array call writes into it
+    std::vector<GpuEngineRow> pdhRows;
 };
 State g_s;
 
@@ -372,6 +409,92 @@ void nvArm() {
     if (!ok) snprintf(s.nvWhy, sizeof(s.nvWhy), "n/a (NvAPI refused)");
 }
 
+void pdhArm() {
+    State& s = g_s;
+    if (s.pdhTried) return;
+    s.pdhTried = true;
+    HMODULE lib = LoadLibraryW(L"pdh.dll");
+    if (!lib) {
+        snprintf(s.pdhWhy, sizeof(s.pdhWhy), "n/a (no GPU engine counters)");
+        Log::get().note("perf: GPU engine counters unavailable (pdh.dll did not load)");
+        return;
+    }
+    s.pdhOpen = reinterpret_cast<PFN_PdhOpenQueryW>(GetProcAddress(lib, "PdhOpenQueryW"));
+    s.pdhAdd = reinterpret_cast<PFN_PdhAddEnglishCounterW>(GetProcAddress(lib, "PdhAddEnglishCounterW"));
+    s.pdhCollect = reinterpret_cast<PFN_PdhCollectQueryData>(GetProcAddress(lib, "PdhCollectQueryData"));
+    s.pdhArray = reinterpret_cast<PFN_PdhGetFormattedCounterArrayW>(GetProcAddress(lib, "PdhGetFormattedCounterArrayW"));
+    s.pdhClose = reinterpret_cast<PFN_PdhCloseQuery>(GetProcAddress(lib, "PdhCloseQuery"));
+    if (!s.pdhOpen || !s.pdhAdd || !s.pdhCollect || !s.pdhArray || !s.pdhClose) {
+        snprintf(s.pdhWhy, sizeof(s.pdhWhy), "n/a (no GPU engine counters)");
+        Log::get().note("perf: GPU engine counters unavailable (pdh.dll is missing an entry point)");
+        return;
+    }
+    PDH_STATUS st = s.pdhOpen(nullptr, 0, &s.pdhQuery);
+    if (st != ERROR_SUCCESS || !s.pdhQuery) {
+        snprintf(s.pdhWhy, sizeof(s.pdhWhy), "n/a (GPU counters refused)");
+        Log::get().note("perf: GPU engine counters refused (PdhOpenQueryW 0x%08lX)", static_cast<unsigned long>(st));
+        return;
+    }
+    st = s.pdhAdd(s.pdhQuery, kGpuEngineCounter, 0, &s.pdhCounter);
+    if (st != ERROR_SUCCESS || !s.pdhCounter) {
+        s.pdhClose(s.pdhQuery);
+        s.pdhQuery = nullptr;
+        snprintf(s.pdhWhy, sizeof(s.pdhWhy), "n/a (GPU counters refused)");
+        Log::get().note("perf: GPU engine counters refused (PdhAddEnglishCounterW 0x%08lX)", static_cast<unsigned long>(st));
+        return;
+    }
+    s.pdhOk = true;
+}
+
+// One collect. The first returns a baseline (every instance invalid) and publishes nothing. Later collects fold the
+// game adapter's engines (gpuEngineLoadPercent). A collect that fails leaves the previous percent in place.
+void pdhSample() {
+    State& s = g_s;
+    if (!s.pdhOk) return;
+    const PDH_STATUS collected = s.pdhCollect(s.pdhQuery);
+    if (collected != ERROR_SUCCESS) return;
+    DWORD bytes = 0, count = 0;
+    const PDH_STATUS sized = s.pdhArray(s.pdhCounter, PDH_FMT_DOUBLE, &bytes, &count, nullptr);
+    if (sized != PDH_MORE_DATA || bytes == 0) return;
+    if (bytes > kPdhByteCap) {
+        static bool noted = false;
+        if (!noted) {
+            noted = true;
+            Log::get().note("perf: GPU engine counter list is %lu bytes, over the cap; the load is not read from it",
+                            static_cast<unsigned long>(bytes));
+        }
+        return;
+    }
+    const size_t slots = (static_cast<size_t>(bytes) + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t);
+    if (s.pdhBytes.size() < slots) s.pdhBytes.resize(slots);
+    const PDH_STATUS got = s.pdhArray(s.pdhCounter, PDH_FMT_DOUBLE, &bytes, &count,
+                                      reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(s.pdhBytes.data()));
+    if (got != ERROR_SUCCESS) return;
+    auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(s.pdhBytes.data());
+    bool anyValid = false;
+    s.pdhRows.clear();
+    for (DWORD i = 0; i < count; ++i) {
+        const DWORD status = items[i].FmtValue.CStatus;
+        if (status != PDH_CSTATUS_VALID_DATA && status != PDH_CSTATUS_NEW_DATA) continue;
+        anyValid = true;
+        if (!s.haveAdapterLuid || !items[i].szName) continue;
+        GpuEngineInstance inst;
+        if (!parseGpuEngineInstance(items[i].szName, inst)) continue;
+        GpuEngineRow row;
+        row.luidLow = inst.luidLow;
+        row.luidHigh = inst.luidHigh;
+        row.phys = inst.phys;
+        row.eng = inst.eng;
+        row.cls = inst.cls;
+        row.percent = items[i].FmtValue.doubleValue;
+        s.pdhRows.push_back(row);
+    }
+    if (!anyValid || !s.haveAdapterLuid) return;
+    s.pdhHaveSample = true;
+    s.engineLoadPct = gpuEngineLoadPercent(s.pdhRows.data(), static_cast<int>(s.pdhRows.size()), s.adapterLuidLow,
+                                           s.adapterLuidHigh);
+}
+
 void slowSample(ID3D11Device* dev) {
     State& s = g_s;
     // CPU, system-wide and this process.
@@ -427,11 +550,19 @@ void slowSample(ID3D11Device* dev) {
             dxgiDev) {
             IDXGIAdapter* adapter = nullptr;
             if (SUCCEEDED(dxgiDev->GetAdapter(&adapter)) && adapter) {
+                DXGI_ADAPTER_DESC ad{};
+                if (SUCCEEDED(adapter->GetDesc(&ad))) {
+                    s.adapterLuidLow = ad.AdapterLuid.LowPart;
+                    s.adapterLuidHigh = static_cast<uint32_t>(ad.AdapterLuid.HighPart);
+                    s.adapterVendor = ad.VendorId;
+                    s.haveAdapterLuid = true;
+                }
                 adapter->QueryInterface(__uuidof(IDXGIAdapter3), reinterpret_cast<void**>(&s.adapter3));
                 adapter->Release();
             }
             dxgiDev->Release();
         }
+        s.adapterLookupDone = true;
     }
     if (s.adapter3) {
         DXGI_QUERY_VIDEO_MEMORY_INFO vmi{};
@@ -440,14 +571,15 @@ void slowSample(ID3D11Device* dev) {
             s.vramBudget = vmi.Budget;
         }
     }
-    // GPU load and temperature, NVIDIA only.
+    // GPU load: the adapter's busiest 3D or compute engine, and NVIDIA's graphics domain when that driver is here.
+    // Temperature is NVIDIA's sensor only (the engine counters do not carry one).
     nvArm();
     if (s.nvOk && s.nvGpu) {
         guardedBudget(g_budget, [&] {
             NvDynamicPstates p{};
             p.version = sizeof(p) | (1u << 16);
             if (s.nvPstates(s.nvGpu, &p) == 0 && (p.utilization[0].present & 1)) {
-                s.gpuLoadPct = static_cast<int>(p.utilization[0].percentage);
+                s.nvLoadPct = static_cast<int>(p.utilization[0].percentage);
             }
             if (s.nvThermal) {
                 NvThermalSettings t{};
@@ -457,6 +589,24 @@ void slowSample(ID3D11Device* dev) {
                 }
             }
         });
+    }
+    pdhArm();
+    pdhSample();
+    const bool useNv = gpuLoadUseNv(s.nvOk, s.haveAdapterLuid, s.adapterVendor);
+    const bool haveNumber = s.engineLoadPct >= 0 || (useNv && s.nvLoadPct >= 0);
+    const bool pdhSettled = s.pdhTried && (!s.pdhOk || (s.adapterLookupDone && !s.haveAdapterLuid) || s.pdhHaveSample);
+    if (!s.gpuLoadNoted && (haveNumber || (pdhSettled && s.nvTried))) {
+        s.gpuLoadNoted = true;
+        if (haveNumber) {
+            Log::get().note(
+                "perf: GPU load is the busiest 3D or compute engine on adapter %08lx:%08lx%s",
+                static_cast<unsigned long>(s.adapterLuidHigh), static_cast<unsigned long>(s.adapterLuidLow),
+                useNv ? " (NVIDIA's figure is used when it reads higher; temperature is NVIDIA's)"
+                      : " (no NVIDIA temperature)");
+        } else {
+            const char* why = s.pdhWhy[0] ? s.pdhWhy : (s.nvWhy[0] ? s.nvWhy : "n/a");
+            Log::get().note("perf: GPU load unavailable (%s)", why);
+        }
     }
 }
 
@@ -1479,13 +1629,19 @@ void appendSlowTiles(Tile&& tile) {
     } else {
         tile("CPU", "--", "sampling");
     }
-    if (s.nvOk) {
-        snprintf(v, sizeof(v), "%d%%", s.gpuLoadPct);
-        if (s.gpuTempC > -1000) snprintf(sub, sizeof(sub), "load, %d C", s.gpuTempC);
-        else snprintf(sub, sizeof(sub), "load");
+    {
+        const bool useNv = gpuLoadUseNv(s.nvOk, s.haveAdapterLuid, s.adapterVendor);
+        const int nvPct = useNv ? s.nvLoadPct : -1;
+        const bool haveNumber = s.engineLoadPct >= 0 || nvPct >= 0;
+        const bool pdhSettled = s.pdhTried && (!s.pdhOk || (s.adapterLookupDone && !s.haveAdapterLuid) || s.pdhHaveSample);
+        const bool sampling = !haveNumber && !(pdhSettled && s.nvTried);
+        const char* why = "n/a";
+        if (s.pdhOk && s.pdhHaveSample && s.engineLoadPct < 0) why = "n/a (no engine on this GPU)";
+        else if (s.pdhWhy[0]) why = s.pdhWhy;
+        else if (s.nvWhy[0]) why = s.nvWhy;
+        formatGpuLoadTile(s.engineLoadPct, nvPct, useNv && s.gpuTempC > -1000, s.gpuTempC, sampling, why, v, sizeof(v),
+                          sub, sizeof(sub));
         tile("GPU", v, sub);
-    } else {
-        tile("GPU", "--", s.nvTried ? s.nvWhy : "sampling");
     }
     {
         char vu[24] = "--", vb[24] = "?";

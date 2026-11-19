@@ -4470,6 +4470,21 @@ if errorlevel 1 ( echo [edvr] ERROR: cross_profile_test build failed & exit /b 1
 "%OBJ%\crossprofile\cross_profile_test.exe" --self-test || exit /b 1
 exit /b 0
 
+:rig_gpu_engine_load_test
+echo [edvr] === gpu_engine_load_test.exe ===
+REM The Monitor GPU tile (src\d3d11\gpu_engine_load.h): Windows GPU Engine instance names, per-process shares of one engine
+REM added, distinct engines not added, the game adapter's LUID only, and the tile taking NVIDIA's figure only when it reads
+REM higher. Pure. The source check pins perf_monitor.cpp to that formatter.
+if not exist "%OBJ%\gpuengineload" mkdir "%OBJ%\gpuengineload"
+%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /utf-8 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
+    /Fo"%OBJ%\gpuengineload\\" /Fe"%OBJ%\gpuengineload\gpu_engine_load_test.exe" ^
+    "tools\gpu_engine_load_test\gpu_engine_load_test.cpp" ^
+    /link /INCREMENTAL:NO
+if errorlevel 1 ( echo [edvr] ERROR: gpu_engine_load_test build failed & exit /b 1 )
+"%OBJ%\gpuengineload\gpu_engine_load_test.exe" --dry-run || exit /b 1
+"%OBJ%\gpuengineload\gpu_engine_load_test.exe" --self-test || exit /b 1
+exit /b 0
+
 :rig_flat_clear_test
 echo [edvr] === flat_clear_test.exe ===
 REM The headset while flat's policy (src\openxr\flat_clear_state.h, docs\design-unified-install-2026-10-12.md section 12): the 250 ms quiet

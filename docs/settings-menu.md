@@ -996,9 +996,10 @@ they were there (flown 2026-09-07).
      gates the read;
    - the display's rate and frame budget, and the eye size;
    - CPU load (system and Elite's share), RAM, VRAM through
-     `IDXGIAdapter3::QueryVideoMemoryInfo`, and GPU load and temperature
-     through NvAPI where an NVIDIA driver is present (elsewhere "n/a" --
-     fpsVR's AMD path is a vendor library this project does not carry);
+     `IDXGIAdapter3::QueryVideoMemoryInfo`, and GPU load from the Windows
+     GPU Engine counters on the game's adapter (the busiest 3D or compute
+     engine; NVIDIA's own figure is used when it reads higher). Temperature
+     stays NvAPI, so it is present only with an NVIDIA driver;
    - EDVR's own passes' measured cost, from the totals they already keep;
    - **two frame-time strips**, fpsVR's pair: the GPU frame and the
      render thread's busy time, each the last 120 frames against its own
