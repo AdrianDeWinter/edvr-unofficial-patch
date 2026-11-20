@@ -33,6 +33,7 @@
 #include "../common/proxy.h"
 #include "../common/system_d3d11.h"   // chooseSystemD3D11: the DllMain handle, checked by path
 #include "device_hook.h"
+#include "game_vram_hook.h"   // advanced.game_vram: the game's GetDesc answer, installed before its device
 #include "flat_wrapper_note.h"
 #include "format_support_log.h"
 #include "input_gate.h"
@@ -862,6 +863,8 @@ extern "C" HRESULT WINAPI edvr_impl_D3D11CreateDevice(
     if (depth.reentrant()) {
         reportLoopOnce();
         target = g_systemCreateDevice ? g_systemCreateDevice : g_realCreateDevice;
+    } else {
+        edvr::gameVramInstall(adapter);
     }
 
     const HRESULT hr =
@@ -890,6 +893,8 @@ extern "C" HRESULT WINAPI edvr_impl_D3D11CreateDeviceAndSwapChain(
         reportLoopOnce();
         target = g_systemCreateDeviceAndSwapChain ? g_systemCreateDeviceAndSwapChain
                                                   : g_realCreateDeviceAndSwapChain;
+    } else {
+        edvr::gameVramInstall(adapter);
     }
 
     const HRESULT hr = target(
