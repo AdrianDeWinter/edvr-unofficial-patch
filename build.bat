@@ -699,6 +699,7 @@ python tools\compile_cache.py --prune --keep thunks.obj --keep weapon_ui_getter_
     "src\d3d11\gpu_census.cpp" "src\d3d11\gpu_pass_profile.cpp" "src\d3d11\blend_probe.cpp" ^
     "src\d3d11\d3d11_proxy.cpp" "src\d3d11\device_hook.cpp" ^
     "src\d3d11\format_support_log.cpp" ^
+    "src\d3d11\game_vram_hook.cpp" ^
     "src\d3d11\graphics_bridge.cpp" ^
     "src\d3d11\render_boundary.cpp" ^
     "src\d3d11\exposure_fix.cpp" "src\d3d11\vscreen.cpp" ^
@@ -1519,6 +1520,26 @@ if not exist "%OBJ%\memwatch" mkdir "%OBJ%\memwatch"
 if errorlevel 1 ( echo [edvr] ERROR: mem_watch_test build failed & exit /b 1 )
 "%OBJ%\memwatch\mem_watch_test.exe" --dry-run || exit /b 1
 "%OBJ%\memwatch\mem_watch_test.exe" --self-test "%ROOT%" || exit /b 1
+exit /b 0
+
+:rig_game_vram_test
+echo [edvr] === game_vram_test.exe ===
+REM Build gate for the video memory size Elite is told (src\common\game_vram.h, src\d3d11\game_vram_hook.cpp, the
+REM advanced.game_vram key; docs\memory-growth-2026-10-22.md, "Elite's streaming budget"): the setting's parse (off, auto, a
+REM number of MB from 256, everything else read as off and named), the size reported for each (auto: 85% of it fits the
+REM OS budget less EDVR's share and a margin, never under 4096 MB, never over the card), the call line's exact text, and
+REM by source text that the key is in edvr.ini off the menu, that both device-creation exports install the hook, that
+REM the hook tells the game's calls from everyone else's and stands down in passthrough and outside the game, and that
+REM learning stops at a profile change and never writes over a store it could not read. It links nothing of the DLLs.
+if not exist "%OBJ%\gamevram" mkdir "%OBJ%\gamevram"
+%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
+    /D_CRT_SECURE_NO_WARNINGS /I"src\common" ^
+    /Fo"%OBJ%\gamevram"\ /Fe"%OBJ%\gamevram\game_vram_test.exe" ^
+    "tools\game_vram_test\game_vram_test.cpp" ^
+    /link /INCREMENTAL:NO
+if errorlevel 1 ( echo [edvr] ERROR: game_vram_test build failed & exit /b 1 )
+"%OBJ%\gamevram\game_vram_test.exe" --dry-run || exit /b 1
+"%OBJ%\gamevram\game_vram_test.exe" --self-test "%ROOT%" || exit /b 1
 exit /b 0
 
 :rig_skin_ledger_test
