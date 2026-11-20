@@ -873,6 +873,7 @@ extern "C" HRESULT WINAPI edvr_impl_D3D11CreateDevice(
     // Only hook on the way out of the OUTERMOST call. Hooking the device a
     // second time on the way back up would install our vtable copy twice.
     if (SUCCEEDED(hr) && ppDevice && *ppDevice && !depth.reentrant()) {
+        edvr::gameVramNoteDevice(*ppDevice);
         attachToDevice(*ppDevice, nullptr, driverType, flags, hr);
     }
     return hr;
@@ -901,6 +902,7 @@ extern "C" HRESULT WINAPI edvr_impl_D3D11CreateDeviceAndSwapChain(
         adapter, driverType, software, flags, featureLevels, numFeatureLevels, sdkVersion,
         swapChainDesc, ppSwapChain, ppDevice, pFeatureLevel, ppContext);
     if (SUCCEEDED(hr) && ppDevice && *ppDevice && !depth.reentrant()) {
+        edvr::gameVramNoteDevice(*ppDevice);
         attachToDevice(*ppDevice, ppSwapChain ? *ppSwapChain : nullptr, driverType, flags, hr);
     }
     return hr;

@@ -19,9 +19,13 @@
 //   V8   the learned store: round trip, skipped lines, duplicates, upserts and the 64-record cap
 //   V9   SessionWatch and learn: the rules and each outcome, with synthetic 1 s samples, and the learn line's text
 //   V10  auto with other reserves (including none), and with no OS budget
+//   V11  a re-read merges onto that record and keeps a higher reserve; a tighten stops at the reserve that pins
+//        the 4096 MB floor; fixed sizes under 4 GB lower shared memory to match; a different device id is not the
+//        install key
 //
 //   game_vram_test.exe --dry-run            touches nothing
 //   game_vram_test.exe --self-test [root]   root is the repository, for the V6 source pins (skipped without it)
+#include <windows.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -395,11 +399,15 @@ void learnCases() {
           "V9 120 samples, big headroom: held, too short");
     check(ra.outcome == LearnResult::Outcome::TooShort, "V9 120 samples, big headroom: outcome TooShort");
 
-    // 60 samples, one over the budget by 100 MB: tightened even though short. 3584 + (512 + 100) + 256 = 4452.
+    // 60 samples, one 100 MB over a 12000 MB budget: tightened even though short. 3584 + (512 + 100) + 256 = 4452.
+    // The budget is large enough that 4452 is still under the floor cap. A 4000 MB budget is already pinned at
+    // 3584, which is V11, not this formula.
     SessionWatch b;
-    for (uint32_t i = 0; i < 60; ++i) b.sample(i * 1000ull, (i == 30 ? 4100ull : 2000ull) * kMiB, 4000 * kMiB);
+    for (uint32_t i = 0; i < 60; ++i) b.sample(i * 1000ull, (i == 30 ? 12100ull : 2000ull) * kMiB, 12000 * kMiB);
     check(b.crossings() == 1, "V9 one crossing is counted");
     check(b.minHeadroomMb() == -100, "V9 the closest headroom is -100 MB");
+    check(reservePinningFloorMb(12000 * kMiB, 512, kReserveCeilMb) > 4452,
+          "V9 this crossing's budget does not pin the floor at the tightened reserve");
     const LearnResult rb = learn(3584, b);
     check(rb.changed && rb.reserveMb == 4452, "V9 crossing: tightened 3584 -> 4452");
     check(std::strcmp(rb.why, "tightened: crossed the budget") == 0, "V9 crossing says 'tightened: crossed the budget'");
@@ -441,7 +449,7 @@ void learnCases() {
     check(re.outcome == LearnResult::Outcome::Held, "V9 held within the margin: outcome Held");
 
     // Within the margin but not crossed: tightened by (512 - 300) + 256 = 468, 3584 -> 4052.
-    const SessionWatch g = steady(10, 3700, 4000);
+    const SessionWatch g = steady(10, 11700, 12000);   // a budget whose floor cap (reservePinningFloorMb) is above 4052
     const LearnResult rg = learn(3584, g);
     check(rg.changed && rg.reserveMb == 4052 && rg.outcome == LearnResult::Outcome::Tightened &&
               std::strcmp(rg.why, "tightened: came within the margin") == 0,
@@ -459,7 +467,7 @@ void learnCases() {
     formatLearnLine(line, sizeof line, key, 3584, b, lb);
     check(std::strcmp(line,
                       "game vram: learned for v=10DE d=2684 drv=32.15.6084.0 layer=windows prof=flat aa=off: "
-                      "peak 4100 MB of a 4000 MB budget, closest -100 MB, crossings 1, plateau no, 59 s "
+                      "peak 12100 MB of a 12000 MB budget, closest -100 MB, crossings 1, plateau no, 59 s "
                       "-> reserve 3584 -> 4452 MB next session (tightened: crossed the budget)") == 0,
           "V9 the learn line has the exact text");
 
@@ -471,6 +479,149 @@ void learnCases() {
     bool overrun = false;
     for (size_t i = 16; i < sizeof guarded; ++i) overrun = overrun || guarded[i] != 0x7F;
     check(!overrun, "V9 a 16-byte learn line is not overrun");
+}
+
+// --- V11: the five review fixes ------------------------------------------------------------------------------------
+
+// Build 334925: under 1 GB the larger of dedicated and shared; from 1 GB up to 4 GB the average when shared is
+// larger; at 4 GB and above, dedicated alone. Sizes are MB.
+uint32_t eliteBranchMb(uint32_t dedicatedMb, uint32_t sharedMb) {
+    const uint64_t dedicated = static_cast<uint64_t>(dedicatedMb) * kMiB;
+    const uint64_t shared = static_cast<uint64_t>(sharedMb) * kMiB;
+    const uint64_t oneGb = 1024ull * kMiB;
+    const uint64_t fourGb = 4096ull * kMiB;
+    if (dedicated < oneGb) return static_cast<uint32_t>((dedicated > shared ? dedicated : shared) >> 20);
+    if (dedicated < fourGb && shared > dedicated) return static_cast<uint32_t>(((dedicated + shared) / 2) >> 20);
+    return dedicatedMb;
+}
+
+LearnResult learned(uint32_t reserve, const char* why) {
+    LearnResult r;
+    r.reserveMb = reserve;
+    r.changed = true;
+    r.why = why;
+    return r;
+}
+
+void reviewCases() {
+    check(classifyStoreOpen(ERROR_FILE_NOT_FOUND) == StoreRead::Missing, "V11 file-not-found is a missing store");
+    check(classifyStoreOpen(ERROR_PATH_NOT_FOUND) == StoreRead::Missing, "V11 path-not-found is a missing store");
+    check(classifyStoreOpen(ERROR_SHARING_VIOLATION) == StoreRead::Error, "V11 a sharing violation is a read error");
+    check(classifyStoreOpen(ERROR_ACCESS_DENIED) == StoreRead::Error, "V11 access denied is a read error");
+
+    const LearnResult hold = learned(3584, "held: headroom within the margin");
+    const Record other = rec("key", 5000, 4, 2, 0);
+    const Record heldOver = mergeLearned("key", 3584, hold, &other);
+    check(heldOver.reserveMb == 5000 && heldOver.sessions == 5 && heldOver.tightened == 2 && heldOver.relaxed == 0,
+          "V11 a hold keeps the other session's higher reserve and its counters");
+
+    const LearnResult tight = learned(6000, "tightened: crossed the budget");
+    const Record raised = mergeLearned("key", 3584, tight, &other);
+    check(raised.reserveMb == 6000 && raised.sessions == 5 && raised.tightened == 3,
+          "V11 the greater tighten is the one stored, counted on the re-read");
+
+    const LearnResult tightLess = learned(4200, "tightened: crossed the budget");
+    const Record notLower = mergeLearned("key", 3584, tightLess, &other);
+    check(notLower.reserveMb == 5000 && notLower.tightened == 3,
+          "V11 a smaller tighten does not replace the other session's reserve");
+
+    const Record same = rec("key", 3584, 1, 0, 0);
+    const LearnResult relax = learned(3072, "relaxed: room to spare");
+    const Record lowered = mergeLearned("key", 3584, relax, &same);
+    check(lowered.reserveMb == 3072 && lowered.sessions == 2 && lowered.relaxed == 1,
+          "V11 a relax is kept when the other session did not raise the reserve");
+    const Record relaxKept = mergeLearned("key", 3584, relax, &other);
+    check(relaxKept.reserveMb == 5000 && relaxKept.relaxed == 1,
+          "V11 a relax does not replace a higher reserve");
+
+    const Record fresh = mergeLearned("key", 3584, hold, nullptr);
+    check(fresh.reserveMb == 3584 && fresh.sessions == 1 && fresh.tightened == 0 && fresh.key == "key",
+          "V11 no record yet: this session's result starts the key");
+
+    check(sameAdapterIdentity(0x10DE, 0x2684, 0x10DE, 0x2684), "V11 the same vendor and device is the install key");
+    check(!sameAdapterIdentity(0x10DE, 0x2684, 0x1002, 0x73BF), "V11 another device id is not the install key");
+    check(!sameAdapterIdentity(0x10DE, 0x2684, 0x8086, 0x2684), "V11 the same device id on another vendor is not the install key");
+
+    const uint64_t heap = 32768ull * kMiB;
+    const uint32_t asked[] = {512, 1023, 1024, 2048, 4095};
+    for (uint32_t mb : asked) {
+        const uint64_t shared = sharedForReported(static_cast<uint64_t>(mb) * kMiB, heap);
+        const std::string label = "V11 " + std::to_string(mb) + " MB lowers shared so Elite's under-4 GB branch yields it";
+        check(shared == static_cast<uint64_t>(mb) * kMiB && eliteBranchMb(mb, static_cast<uint32_t>(shared >> 20)) == mb,
+              label.c_str());
+        const std::string untouched = "V11 " + std::to_string(mb) + " MB with the real shared heap is not that card";
+        check(eliteBranchMb(mb, static_cast<uint32_t>(heap >> 20)) != mb, untouched.c_str());
+    }
+    check(sharedForReported(4096ull * kMiB, heap) == heap, "V11 4096 MB, the auto floor, leaves shared alone");
+    check(sharedForReported(8192ull * kMiB, heap) == heap, "V11 a fixed size at or above 4 GB leaves shared alone");
+    check(sharedForReported(1024ull * kMiB, 256ull * kMiB) == 256ull * kMiB, "V11 shared is not raised when it is already smaller");
+    check(eliteBranchMb(1024, 256) == 1024, "V11 a smaller shared heap already yields the dedicated size");
+
+    Inputs fixed;
+    fixed.realDedicatedBytes = 8192ull * kMiB;
+    const Result f = compute(setting(Mode::Fixed, 1024), fixed);
+    check(f.change && f.reportedBytes == 1024ull * kMiB, "V11 fixed 1024 is not raised to the 4096 floor");
+
+    const uint32_t budgets[] = {3000, 4096, 7000, 7500, 8000, 8192, 11350, 12000};
+    for (uint32_t b : budgets) {
+        const uint32_t cap = reservePinningFloorMb(static_cast<uint64_t>(b) * kMiB, kMarginMb, kReserveCeilMb);
+        Inputs in;
+        in.realDedicatedBytes = 16384ull * kMiB;
+        in.osBudgetBytes = static_cast<uint64_t>(b) * kMiB;
+        // reserveMb 0 in compute() means "use the default", so a cap of 0 is checked as 1, and the step
+        // below the cap is only asked when that reserve is a real explicit value.
+        in.reserveMb = cap == 0 ? 1u : cap;
+        const Result at = compute(setting(Mode::Auto), in);
+        const std::string atLabel = "V11 budget " + std::to_string(b) + " MB: the pinning reserve reports 4096";
+        check(at.reportedBytes == static_cast<uint64_t>(kAutoFloorMb) * kMiB, atLabel.c_str());
+        if (cap > 1) {
+            in.reserveMb = cap - 1;
+            const Result under = compute(setting(Mode::Auto), in);
+            const std::string underLabel = "V11 budget " + std::to_string(b) + " MB: one MB under the cap reports more than 4096";
+            check(under.reportedBytes > static_cast<uint64_t>(kAutoFloorMb) * kMiB, underLabel.c_str());
+        }
+    }
+
+    SessionWatch pinned;
+    pinned.sample(0, 7600ull * kMiB, 7500ull * kMiB);
+    check(reservePinningFloorMb(7500ull * kMiB, 512, kReserveCeilMb) <= 3584,
+          "V11 a 7500 MB budget already pins the floor at the upscaler default");
+    const LearnResult stay = learn(3584, pinned);
+    check(!stay.changed && stay.reserveMb == 3584 && std::strcmp(stay.why, "held: reported size already at the floor") == 0,
+          "V11 a crossing once the report is the floor does not raise the reserve");
+
+    SessionWatch spill;
+    spill.sample(0, 8100ull * kMiB, 8000ull * kMiB);
+    const uint32_t spillCap = reservePinningFloorMb(8000ull * kMiB, 512, kReserveCeilMb);
+    const LearnResult first = learn(3584, spill);
+    check(first.changed && first.reserveMb == spillCap && first.reserveMb < kReserveCeilMb &&
+              std::strcmp(first.why, "tightened: crossed the budget") == 0,
+          "V11 one crossing stops at the reserve that pins the floor, not the ceiling");
+    Inputs spillIn;
+    spillIn.realDedicatedBytes = 8192ull * kMiB;
+    spillIn.osBudgetBytes = 8000ull * kMiB;
+    spillIn.reserveMb = 3584;
+    const Result before = compute(setting(Mode::Auto), spillIn);
+    spillIn.reserveMb = first.reserveMb;
+    const Result after = compute(setting(Mode::Auto), spillIn);
+    check(before.reportedBytes > static_cast<uint64_t>(kAutoFloorMb) * kMiB &&
+              after.reportedBytes == static_cast<uint64_t>(kAutoFloorMb) * kMiB,
+          "V11 that one crossing still changes what Elite is told, down to the floor");
+    uint32_t reserve = 3584;
+    for (int i = 0; i < 40; ++i) reserve = learn(reserve, spill).reserveMb;
+    check(reserve == spillCap && reserve < kReserveCeilMb,
+          "V11 repeated crossings at the floor do not walk the reserve to the ceiling");
+
+    Inputs wide;
+    wide.realDedicatedBytes = 16384ull * kMiB;
+    wide.osBudgetBytes = 12000ull * kMiB;
+    wide.reserveMb = 3584;
+    const Result wideBefore = compute(setting(Mode::Auto), wide);
+    wide.reserveMb = 4452;
+    const Result wideAfter = compute(setting(Mode::Auto), wide);
+    check(wideBefore.reportedBytes > wideAfter.reportedBytes &&
+              wideAfter.reportedBytes > static_cast<uint64_t>(kAutoFloorMb) * kMiB,
+          "V11 a crossing below the floor cap still changes the reported size in one sample");
 }
 
 // --- V6: source text ---------------------------------------------------------------------------------------------
@@ -527,6 +678,20 @@ void sourceCases(const std::string& root) {
     } else {
         check(countOf(proxy, "gameVramInstall(adapter") >= 2,
               "V6 d3d11_proxy.cpp calls gameVramInstall(adapter in both device creators");
+        check(countOf(proxy, "gameVramNoteDevice(") >= 2,
+              "V11 both device creators key the reserve from the device after D3D11CreateDevice returns");
+        const auto noteAfterCreate = [&](const char* fn) {
+            const size_t at = proxy.find(fn);
+            if (at == std::string::npos) return false;
+            const size_t next = proxy.find("\nextern \"C\"", at + 1);
+            const std::string chunk = proxy.substr(at, next == std::string::npos ? std::string::npos : next - at);
+            const size_t call = chunk.find("target(");
+            const size_t noted = chunk.find("gameVramNoteDevice(");
+            return call != std::string::npos && noted != std::string::npos && call < noted;
+        };
+        check(noteAfterCreate("edvr_impl_D3D11CreateDevice(") &&
+                  noteAfterCreate("edvr_impl_D3D11CreateDeviceAndSwapChain("),
+              "V11 gameVramNoteDevice runs after the real create returns, in both exports");
     }
 
     if (!readFile(tickPath, tick)) {
@@ -570,7 +735,7 @@ void sourceCases(const std::string& root) {
         const size_t observe = hook.find("void gameVramObserve(");
         check(observe != std::string::npos && hook.find("!= g_learn.profileAtInstall", observe) != std::string::npos,
               "V6 gameVramObserve stops learning when the profile changes");
-        check(countOf(hook, "== StoreRead::Unreadable") >= 2,
+        check(countOf(hook, "== gamevram::StoreRead::Error") >= 2,
               "V6 both the install and the save leave a store they could not read alone");
         const size_t prepare = hook.find("void prepareAuto(");
         const size_t guard = prepare == std::string::npos ? std::string::npos : hook.find("budgetIsWholeCard(", prepare);
@@ -580,6 +745,17 @@ void sourceCases(const std::string& root) {
               "V6 prepareAuto checks for a whole-card budget under Wine before it opens the store");
         check(hook.find("!g_budgetIgnored) ? osLocalBudget(self)") != std::string::npos,
               "V6 hookedGetDesc ignores the OS budget when the Wine guard fired");
+        check(hook.find("classifyStoreOpen(") != std::string::npos,
+              "V11 a missing store is told from one that could not be read by classifyStoreOpen");
+        check(hook.find("mergeLearned(") != std::string::npos,
+              "V11 a save merges onto the record just re-read instead of the install-time copy");
+        check(hook.find("sharedForReported(") != std::string::npos && hook.find("SharedSystemMemory") != std::string::npos,
+              "V11 a reported size under 4 GB also lowers SharedSystemMemory");
+        check(hook.find("DedicatedSystemMemory") == std::string::npos && hook.find("AdapterLuid") == std::string::npos,
+              "V11 DedicatedSystemMemory and the adapter LUID are not changed");
+        check(hook.find("GetAdapter(") != std::string::npos && hook.find("sameAdapterIdentity(") != std::string::npos &&
+                  hook.find("deviceNoted") != std::string::npos,
+              "V11 the device's adapter is read with GetAdapter and a different id does not keep the install key");
     }
 }
 
@@ -595,6 +771,7 @@ const char* const kCells[] = {
     "V8 learned store: round trip, skipped lines, duplicates, upserts, 64-record cap",
     "V9 SessionWatch and learn: the rules and outcomes with synthetic samples, the learn line",
     "V10 auto with other reserves (including none), with no OS budget, and the whole-card budget test",
+    "V11 re-read merge, floor cap, shared memory under 4 GB, device adapter key",
 };
 
 }  // namespace
@@ -627,6 +804,7 @@ int main(int argc, char** argv) {
     keyCases();
     storeCases();
     learnCases();
+    reviewCases();
     if (root.empty()) {
         std::printf("[game_vram_test] V6 source cells skipped: no repository root given\n");
     } else {

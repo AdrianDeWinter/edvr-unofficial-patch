@@ -21,8 +21,12 @@
 //
 // Nothing is installed in a profile that forwards only (passthrough, or an
 // invalid install), nor in a process that is not the game.
+//
+// The key follows the adapter the device reports; a different GPU's samples
+// are not written under the adapter install saw.
 
 #include <windows.h>
+#include <d3d11.h>
 #include <dxgi1_4.h>
 #include <intrin.h>
 
@@ -67,12 +71,15 @@ constexpr size_t kMaxStoreBytes = 1u << 20;   // the store is a few hundred byte
 struct AutoLearn {
     bool active = false;           // installed in auto with a store to write
     bool stopped = false;          // the AA mode or the profile changed: nothing more is learned this session
+    bool haveGpu = false;          // install read a real adapter desc; the device is checked against it
+    bool deviceNoted = false;      // gameVramNoteDevice has run; samples wait so they are not filed under the wrong key
+    uint32_t vendorId = 0;
+    uint32_t deviceId = 0;
     std::string key;
     std::string aaAtInstall;       // requestedTemporalMode() when the budget was sized
     RuntimeProfile profileAtInstall = RuntimeProfile::Invalid;   // the profile the key was made for
     const char* profileNameAtInstall = "";                       // its runtimeProfileName() (a static string)
     std::wstring storePath;        // empty when LOCALAPPDATA is unset or the store is unreadable: nothing is learned or saved
-    gamevram::Record base;         // the record as found at install; zeros when there was none
     uint32_t lastPassSamples = 0;
     uint32_t lastCrossings = 0;
     uint32_t lastSavedReserve = 0; // the last pass handed to the writer; 0 = none yet
@@ -87,7 +94,8 @@ AutoLearn g_learn;
 // at a time drains it, so two saves never read and write the store at once. If the pool will not take the work, the
 // save runs inline, as it did before. key and storePath are fixed at install, so the callback reads g_learn safely.
 struct SaveJob {
-    gamevram::Record record;
+    gamevram::LearnResult learned;
+    uint32_t startedReserveMb = 0; // the reserve this session started from (mergeLearned)
     std::string line;              // the learning line, formatted on the render thread, logged once the save landed
 };
 SRWLOCK g_saveLock = SRWLOCK_INIT;
@@ -142,7 +150,17 @@ HRESULT STDMETHODCALLTYPE hookedGetDesc(IDXGIAdapter* self, DXGI_ADAPTER_DESC* d
     in.reserveMb = g_reserveMb;
 
     const gamevram::Result r = gamevram::compute(g_setting, in);
-    if (r.change) desc->DedicatedVideoMemory = static_cast<SIZE_T>(r.reportedBytes);
+    if (r.change) {
+        desc->DedicatedVideoMemory = static_cast<SIZE_T>(r.reportedBytes);
+        // Below 4 GB Elite does not use dedicated memory alone (build 334925): under 1 GB the larger of
+        // dedicated and shared, and from 1 to 4 GB the average when shared is larger. Shared has to name
+        // the same size or a discrete GPU's shared heap hides the smaller card. Dedicated system memory
+        // and the adapter LUID stay as the driver reported them.
+        const uint64_t shared = gamevram::sharedForReported(r.reportedBytes,
+                                                            static_cast<uint64_t>(desc->SharedSystemMemory));
+        if (shared != static_cast<uint64_t>(desc->SharedSystemMemory))
+            desc->SharedSystemMemory = static_cast<SIZE_T>(shared);
+    }
 
     const uint32_t n = ++g_calls;
     if (n <= kLoggedCalls) {
@@ -172,30 +190,32 @@ bool storePath(std::wstring& path) {
     return true;
 }
 
-enum class StoreRead { Missing, Read, Unreadable };
 
-// The store's records into `records`. Missing (normal before the first save) is no records. Unreadable is a file that is there but
+// The store's records into `records`. Missing (normal before the first save) is no records. Error is a file that is there but
 // could not be read -- held by another program, or too big to be ours -- and must not be written over: a save from an empty read
 // would replace every other setup's record with this one.
-StoreRead loadStore(const std::wstring& path, std::vector<gamevram::Record>& records) {
+gamevram::StoreRead loadStore(const std::wstring& path, std::vector<gamevram::Record>& records) {
     records.clear();
     std::string text;
     if (readFileBytes(path, &text, kMaxStoreBytes)) {
         records = gamevram::parseStore(text);
-        return StoreRead::Read;
+        return gamevram::StoreRead::Ok;
     }
     if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
         const DWORD error = GetLastError();
-        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return StoreRead::Missing;
+        if (gamevram::classifyStoreOpen(error) == gamevram::StoreRead::Missing) return gamevram::StoreRead::Missing;
     }
-    return StoreRead::Unreadable;
+    return gamevram::StoreRead::Error;
 }
 
 // Auto's starting reserve for this setup: the learned one when the store has one, else the safe default.
 // Sets g_learn.storePath only when there is a store to learn into.
 void prepareAuto(IDXGIAdapter* obj, const std::string& aaMode) {
     DXGI_ADAPTER_DESC desc{};
-    obj->GetDesc(&desc);   // zeros on failure, which the key then carries
+    g_learn.haveGpu = SUCCEEDED(obj->GetDesc(&desc));
+    if (!g_learn.haveGpu) desc = {};   // a failed read must not key off a partial desc
+    g_learn.vendorId = desc.VendorId;
+    g_learn.deviceId = desc.DeviceId;
     LARGE_INTEGER driver{};
     if (FAILED(obj->CheckInterfaceSupport(__uuidof(IDXGIDevice), &driver))) driver.QuadPart = 0;
 
@@ -234,7 +254,7 @@ void prepareAuto(IDXGIAdapter* obj, const std::string& aaMode) {
     }
 
     std::vector<gamevram::Record> store;
-    if (loadStore(path, store) == StoreRead::Unreadable) {
+    if (loadStore(path, store) == gamevram::StoreRead::Error) {
         g_reserveMb = gamevram::defaultReserveMb(vr, aa);
         Log::get().note("game vram: auto for %s: reserve %u MB, the safe default for %s with %s; %s is there but could not be read, so "
                         "nothing is learned or saved this session.",
@@ -245,7 +265,6 @@ void prepareAuto(IDXGIAdapter* obj, const std::string& aaMode) {
 
     const gamevram::Record* found = gamevram::findRecord(store, g_learn.key);
     if (found) {
-        g_learn.base = *found;
         g_reserveMb = found->reserveMb;
         if (found->tightened == 0 && found->relaxed == 0) {
             Log::get().note("game vram: auto for %s: reserve %u MB, kept unchanged by %u earlier session(s).",
@@ -271,21 +290,28 @@ void saveFailed(const std::string& why) {
     }
 }
 
-// One save: another game instance may have written the store since install, so read it, replace only our record, and
-// write it back atomically. Runs on a pool thread (or inline when the pool refused the work).
+// One save: another game instance may have written the store since install, so read it, merge this session onto the
+// record just read (its counters, and its reserve when that instance tightened past ours), and write it back atomically.
+// Runs on a pool thread (or inline when the pool refused the work).
 void runSave(const SaveJob& job) {
     std::vector<gamevram::Record> store;
-    if (loadStore(g_learn.storePath, store) == StoreRead::Unreadable) {
+    if (loadStore(g_learn.storePath, store) == gamevram::StoreRead::Error) {
         saveFailed("it is there but could not be read, so it was left as it is");
         return;
     }
-    gamevram::upsertRecord(store, job.record);
+    const gamevram::Record rec = gamevram::mergeLearned(g_learn.key, job.startedReserveMb, job.learned,
+                                                        gamevram::findRecord(store, g_learn.key));
+    gamevram::upsertRecord(store, rec);
     std::wstring error;
     if (!writeFileAtomic(g_learn.storePath, gamevram::serializeStore(store), &error)) {
         saveFailed("error " + runtimeProfileUtf8(error));
         return;
     }
     Log::get().note("%s", job.line.c_str());
+    if (rec.reserveMb != job.learned.reserveMb) {
+        Log::get().note("game vram: stored reserve %u MB for %s, kept from another session that raised it.",
+                        static_cast<unsigned>(rec.reserveMb), g_learn.key.c_str());
+    }
 }
 
 // Write whatever is pending until the slot is empty, then let the next submit start a new drain.
@@ -404,6 +430,45 @@ void gameVramInstall(IDXGIAdapter* adapter) {
     releaseOwned();
 }
 
+// The device exists only after D3D11CreateDevice returns. Elite's hardware create passes a null adapter, so install
+// keyed EnumAdapters(0), which a per-app high-performance GPU is not. Samples stay off that key when the device's
+// adapter is a different GPU. The GetDesc lie is not retargeted: it still answers the game exe, on the shared vtable.
+void gameVramNoteDevice(ID3D11Device* device) {
+    static std::atomic<bool> once{false};
+    if (!device || once.exchange(true)) return;
+
+    bool stop = false;
+    uint32_t gotVendor = 0;
+    uint32_t gotDevice = 0;
+    if (g_setting.mode == gamevram::Mode::Auto && g_learn.haveGpu) {
+        IDXGIDevice* dxgi = nullptr;
+        if (SUCCEEDED(device->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgi))) && dxgi) {
+            IDXGIAdapter* adapter = nullptr;
+            const HRESULT got = dxgi->GetAdapter(&adapter);
+            dxgi->Release();
+            if (SUCCEEDED(got) && adapter) {
+                DXGI_ADAPTER_DESC desc{};
+                const HRESULT described = adapter->GetDesc(&desc);
+                adapter->Release();
+                if (SUCCEEDED(described)) {
+                    gotVendor = desc.VendorId;
+                    gotDevice = desc.DeviceId;
+                    stop = !gamevram::sameAdapterIdentity(g_learn.vendorId, g_learn.deviceId, gotVendor, gotDevice);
+                }
+            }
+        }
+    }
+    if (stop) {
+        g_learn.stopped = true;
+        Log::get().note("game vram: the device's adapter is v=%04X d=%04X, not v=%04X d=%04X the reserve was read for, "
+                        "so this session's samples are not saved under that key.",
+                        static_cast<unsigned>(gotVendor & 0xFFFFu), static_cast<unsigned>(gotDevice & 0xFFFFu),
+                        static_cast<unsigned>(g_learn.vendorId & 0xFFFFu),
+                        static_cast<unsigned>(g_learn.deviceId & 0xFFFFu));
+    }
+    g_learn.deviceNoted = true;
+}
+
 // The render thread, once a second, from the graphics memory watch (vram_tick.cpp). Feeds the session's figures and,
 // at each minute of samples or a new crossing of the budget, learns the reserve for the next session and saves it.
 void gameVramObserve(uint64_t nowMs, uint64_t usageBytes, uint64_t budgetBytes) {
@@ -430,6 +495,9 @@ void gameVramObserve(uint64_t nowMs, uint64_t usageBytes, uint64_t budgetBytes) 
                         g_learn.aaAtInstall.empty() ? "off" : g_learn.aaAtInstall.c_str());
         return;
     }
+    // The device's adapter is known only after create returns. Until then a sample would teach the install key,
+    // which on a high-performance GPU is not the device. (A store that could not be read at install left active false.)
+    if (g_learn.haveGpu && !g_learn.deviceNoted) return;
 
     static gamevram::SessionWatch watch;
     watch.sample(nowMs, usageBytes, budgetBytes);
@@ -454,12 +522,8 @@ void gameVramObserve(uint64_t nowMs, uint64_t usageBytes, uint64_t budgetBytes) 
 
     auto* job = new (std::nothrow) SaveJob;
     if (!job) return;
-    job->record = g_learn.base;
-    job->record.key = g_learn.key;
-    job->record.reserveMb = r.reserveMb;
-    job->record.sessions = g_learn.base.sessions + 1;
-    job->record.tightened = g_learn.base.tightened + (r.outcome == gamevram::LearnResult::Outcome::Tightened ? 1u : 0u);
-    job->record.relaxed = g_learn.base.relaxed + (r.outcome == gamevram::LearnResult::Outcome::Relaxed ? 1u : 0u);
+    job->learned = r;
+    job->startedReserveMb = g_reserveMb;
     char line[512];
     gamevram::formatLearnLine(line, sizeof line, g_learn.key, g_reserveMb, watch, r);
     job->line = line;

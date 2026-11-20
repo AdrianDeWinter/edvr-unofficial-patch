@@ -8,7 +8,7 @@
 // in %LOCALAPPDATA%\EDVR\game_vram.txt. A session that came close to the budget tightens the reserve; a long,
 // settled session with spare room relaxes it, never below the floor.
 //
-// Standard library only. Nothing here throws.
+// Nothing here throws. game_vram.h is the floor the reserve must not tighten past.
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
@@ -84,6 +84,12 @@ inline std::string makeKey(uint32_t vendorId, uint32_t deviceId, uint64_t driver
     std::string aa = lowerCopy(aaMode);
     if (aa.empty()) aa = "off";
     return std::string(head) + aa;
+}
+
+// Vendor and device only: the key's identity of the GPU. Driver text can differ when one read failed; two
+// different GPUs do not share a vendor and device id.
+inline bool sameAdapterIdentity(uint32_t vendorA, uint32_t deviceA, uint32_t vendorB, uint32_t deviceB) {
+    return (vendorA & 0xFFFFu) == (vendorB & 0xFFFFu) && (deviceA & 0xFFFFu) == (deviceB & 0xFFFFu);
 }
 
 struct Record {
@@ -183,6 +189,16 @@ inline void upsertRecord(std::vector<Record>& records, const Record& r) {
     while (records.size() > kMaxRecords) records.erase(records.begin());
 }
 
+// A missing store is normal. Error means the file may exist (sharing violation, a read failure, over the cap)
+// and must not be replaced by whatever this process managed to parse.
+enum class StoreRead : uint32_t { Ok = 0, Missing, Error };
+
+// Win32 ERROR_FILE_NOT_FOUND is 2, ERROR_PATH_NOT_FOUND is 3. Any other open failure is Error.
+inline StoreRead classifyStoreOpen(uint32_t win32Error) {
+    if (win32Error == 2u || win32Error == 3u) return StoreRead::Missing;
+    return StoreRead::Error;
+}
+
 // One session's DXGI figures, fed once a second.
 class SessionWatch {
 public:
@@ -193,6 +209,7 @@ public:
         if (samples_ == 0) firstMs_ = nowMs;
         if (nowMs < firstMs_) return;
         lastMs_ = nowMs;
+        lastBudgetBytes_ = budgetBytes;
 
         const size_t minute = static_cast<size_t>((nowMs - firstMs_) / 60000ull);
         if (minuteMax_.size() <= minute) minuteMax_.resize(minute + 1, 0);
@@ -225,6 +242,9 @@ public:
 
     uint32_t crossings() const { return crossings_; }
 
+    // The budget of the latest sample kept. Learning caps a tighten against this, not against an earlier dip.
+    uint64_t lastBudgetBytes() const { return lastBudgetBytes_; }
+
     // True when durationMs() >= kPlateauSessionMs and the peak usage had already been reached (to within 3%) at
     // least kPlateauLeadMs before the last sample. Per-minute maxima stand in for the samples: only whole minutes
     // that end at or before that point count, so the test can be up to a minute stricter than the sample-exact rule.
@@ -249,6 +269,7 @@ private:
     uint64_t lastMs_ = 0;
     uint64_t peakBytes_ = 0;
     uint64_t budgetAtPeakBytes_ = 0;
+    uint64_t lastBudgetBytes_ = 0;
     int64_t  minHeadroomBytes_ = 0;
     uint32_t crossings_ = 0;
     std::vector<uint64_t> minuteMax_;
@@ -263,9 +284,32 @@ struct LearnResult {
     const char* why = "";     // static string
 };
 
+// The record to write for this key after a successful re-read. `reread` is that key's record, or null when the
+// key is absent. Counters come from the re-read, not from the copy taken at install: a hold here must not put
+// the older counters back. A reserve the other session raised above the one this session started from is kept
+// when it is the greater, so a hold does not replace that tighten.
+inline Record mergeLearned(const std::string& key, uint32_t startedReserveMb, const LearnResult& learned,
+                           const Record* reread) {
+    Record rec;
+    if (reread) rec = *reread;
+    rec.key = key;
+    const bool tightened = learned.why != nullptr && std::strncmp(learned.why, "tightened", 9) == 0;
+    const bool relaxed = learned.why != nullptr && std::strncmp(learned.why, "relaxed", 7) == 0;
+    uint32_t reserve = learned.reserveMb;
+    if (reread && reread->reserveMb > startedReserveMb && reread->reserveMb > reserve) reserve = reread->reserveMb;
+    rec.reserveMb = reserve;
+    rec.sessions = (reread ? reread->sessions : 0u) + 1u;
+    rec.tightened = (reread ? reread->tightened : 0u) + (tightened ? 1u : 0u);
+    rec.relaxed = (reread ? reread->relaxed : 0u) + (relaxed ? 1u : 0u);
+    return rec;
+}
+
 // Rules, in order (margin = kMarginMb):
 //  1. crossings() > 0 or minHeadroomMb() < margin -> tighten:
-//     reserve + (margin - minHeadroom) + kLearnStepMb, clamped to kReserveCeilMb.
+//     reserve + (margin - minHeadroom) + kLearnStepMb, clamped to the smaller of kReserveCeilMb and the
+//     reserve that already pins auto at kAutoFloorMb for lastBudgetBytes(). Once the reserve is there, Elite
+//     is already told the floor, so the reserve is held ("held: reported size already at the floor") instead
+//     of walking on to the ceiling. A crossing that still changes the reported size still tightens on this sample.
 //     why "tightened: came within the margin" (or "tightened: crossed the budget" when crossings() > 0).
 //     This applies even to a short session.
 //  2. samples() < kMinSamples -> hold (outcome TooShort), why "held: session too short".
@@ -281,9 +325,17 @@ inline LearnResult learn(uint32_t reserveMb, const SessionWatch& s) {
     const int64_t minHead = static_cast<int64_t>(s.minHeadroomMb());
 
     if (s.crossings() > 0 || minHead < margin) {
+        // Past this reserve, compute() is already pinned at the floor for the budget just sampled, so another
+        // step would not change what Elite is told. A one-second dip must not walk the stored reserve to the ceiling.
+        const uint32_t cap = reservePinningFloorMb(s.lastBudgetBytes(), kMarginMb, kReserveCeilMb);
+        if (reserveMb >= cap) {
+            r.why = "held: reported size already at the floor";
+            return r;
+        }
         int64_t deficit = margin - minHead;
         if (deficit < 0) deficit = 0;
         int64_t next = static_cast<int64_t>(reserveMb) + deficit + static_cast<int64_t>(kLearnStepMb);
+        if (next > static_cast<int64_t>(cap)) next = static_cast<int64_t>(cap);
         if (next > static_cast<int64_t>(kReserveCeilMb)) next = static_cast<int64_t>(kReserveCeilMb);
         r.reserveMb = static_cast<uint32_t>(next);
         r.changed = r.reserveMb != reserveMb;

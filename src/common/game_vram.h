@@ -163,6 +163,45 @@ inline Result compute(const Setting& s, const Inputs& in) {
     return r;
 }
 
+// Build 334925 sizes from DedicatedVideoMemory alone only at 4 GB and above. Under 1 GB it takes the larger of
+// dedicated and SharedSystemMemory; from 1 GB up to 4 GB it averages the two when shared is larger. A reported
+// dedicated size in that range therefore also lowers shared to the same size, so both branches yield the size
+// asked for. Shared is never raised, and at or above the auto floor it is left alone (auto itself never reports
+// less than that floor). DedicatedSystemMemory and the adapter LUID are not this function's concern.
+inline uint64_t sharedForReported(uint64_t reportedDedicatedBytes, uint64_t realSharedBytes) {
+    constexpr uint64_t kFourGb = static_cast<uint64_t>(kAutoFloorMb) << 20;
+    if (reportedDedicatedBytes >= kFourGb) return realSharedBytes;
+    if (realSharedBytes > reportedDedicatedBytes) return reportedDedicatedBytes;
+    return realSharedBytes;
+}
+
+// Smallest reserve in MB that already makes auto report kAutoFloorMb for this budget and margin, on a card at
+// least that large. The arithmetic is compute()'s: target = budget - reserve - margin, then floor(target / 0.85),
+// raised to the floor when that is lower. A result that lands on the floor without being raised is already
+// pinned: a further reserve does not change what Elite is told. reserveCeilMb when even that reserve still
+// reports more (the budget is too large for the ceiling to pin).
+inline uint32_t reservePinningFloorMb(uint64_t budgetBytes, uint32_t marginMb, uint32_t reserveCeilMb) {
+    if (reserveCeilMb == 0) return 0;
+    const uint64_t budgetMb = budgetBytes >> 20;
+    const uint64_t margin = marginMb != 0 ? marginMb : kMarginMb;
+    auto pins = [&](uint32_t reserve) {
+        const uint64_t sum = static_cast<uint64_t>(reserve) + margin;
+        const uint64_t target = budgetMb > sum ? budgetMb - sum : 0;
+        uint64_t reported = static_cast<uint64_t>(static_cast<double>(target) / kEliteBudgetFactor);
+        if (reported < kAutoFloorMb) reported = kAutoFloorMb;
+        return reported == kAutoFloorMb;
+    };
+    if (!pins(reserveCeilMb)) return reserveCeilMb;
+    uint32_t lo = 0;
+    uint32_t hi = reserveCeilMb;
+    while (lo < hi) {
+        const uint32_t mid = lo + (hi - lo) / 2;
+        if (pins(mid)) hi = mid;
+        else lo = mid + 1;
+    }
+    return lo;
+}
+
 // The setting as the log names it: "off", "auto", or the number of MB.
 // Writes into buf (always NUL-terminated); returns buf.
 inline const char* settingText(const Setting& s, char* buf, size_t len) {
