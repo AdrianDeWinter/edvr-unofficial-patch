@@ -92,7 +92,8 @@ AutoLearn g_learn;
 // the first crossing of the budget comes when the frame is already struggling. So the render thread only decides what to
 // save and hands it to a thread-pool callback. One slot: a newer result replaces one not yet written, and one callback
 // at a time drains it, so two saves never read and write the store at once. If the pool will not take the work, the
-// save runs inline, as it did before. key and storePath are fixed at install, so the callback reads g_learn safely.
+// save runs inline, as it did before. key and storePath are fixed before the first save (at install, or when the device's
+// adapter re-keys auto, which a sample waits for), so the callback reads g_learn safely.
 struct SaveJob {
     gamevram::LearnResult learned;
     uint32_t startedReserveMb = 0; // the reserve this session started from (mergeLearned)
@@ -209,8 +210,11 @@ gamevram::StoreRead loadStore(const std::wstring& path, std::vector<gamevram::Re
 }
 
 // Auto's starting reserve for this setup: the learned one when the store has one, else the safe default.
-// Sets g_learn.storePath only when there is a store to learn into.
+// Sets g_learn.storePath only when there is a store to learn into. Runs again from gameVramNoteDevice when the device's
+// adapter is not the one install keyed, so it starts from a clean slate each time.
 void prepareAuto(IDXGIAdapter* obj, const std::string& aaMode) {
+    g_budgetIgnored = false;
+    g_learn.storePath.clear();
     DXGI_ADAPTER_DESC desc{};
     g_learn.haveGpu = SUCCEEDED(obj->GetDesc(&desc));
     if (!g_learn.haveGpu) desc = {};   // a failed read must not key off a partial desc
@@ -431,40 +435,40 @@ void gameVramInstall(IDXGIAdapter* adapter) {
 }
 
 // The device exists only after D3D11CreateDevice returns. Elite's hardware create passes a null adapter, so install
-// keyed EnumAdapters(0), which a per-app high-performance GPU is not. Samples stay off that key when the device's
-// adapter is a different GPU. The GetDesc lie is not retargeted: it still answers the game exe, on the shared vtable.
+// keyed EnumAdapters(0), which a per-app high-performance GPU is not. When the device's adapter is a different GPU, auto
+// is sized and learned for that adapter instead: its own key and record (or the safe default), set here, before Elite's
+// first GetDesc, which comes from its budget sizing after create returns. The vtable patch is not touched again: every
+// adapter shares it, and the hook reads the reserve on each call. A device adapter that cannot be read leaves learning
+// stopped, so the session writes nothing under a key it cannot check.
 void gameVramNoteDevice(ID3D11Device* device) {
     static std::atomic<bool> once{false};
     if (!device || once.exchange(true)) return;
 
-    bool stop = false;
-    uint32_t gotVendor = 0;
-    uint32_t gotDevice = 0;
-    if (g_setting.mode == gamevram::Mode::Auto && g_learn.haveGpu) {
+    if (g_setting.mode == gamevram::Mode::Auto && g_realGetDesc) {
+        IDXGIAdapter* adapter = nullptr;
         IDXGIDevice* dxgi = nullptr;
         if (SUCCEEDED(device->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgi))) && dxgi) {
-            IDXGIAdapter* adapter = nullptr;
-            const HRESULT got = dxgi->GetAdapter(&adapter);
+            if (FAILED(dxgi->GetAdapter(&adapter))) adapter = nullptr;
             dxgi->Release();
-            if (SUCCEEDED(got) && adapter) {
-                DXGI_ADAPTER_DESC desc{};
-                const HRESULT described = adapter->GetDesc(&desc);
-                adapter->Release();
-                if (SUCCEEDED(described)) {
-                    gotVendor = desc.VendorId;
-                    gotDevice = desc.DeviceId;
-                    stop = !gamevram::sameAdapterIdentity(g_learn.vendorId, g_learn.deviceId, gotVendor, gotDevice);
-                }
-            }
         }
-    }
-    if (stop) {
-        g_learn.stopped = true;
-        Log::get().note("game vram: the device's adapter is v=%04X d=%04X, not v=%04X d=%04X the reserve was read for, "
-                        "so this session's samples are not saved under that key.",
-                        static_cast<unsigned>(gotVendor & 0xFFFFu), static_cast<unsigned>(gotDevice & 0xFFFFu),
-                        static_cast<unsigned>(g_learn.vendorId & 0xFFFFu),
-                        static_cast<unsigned>(g_learn.deviceId & 0xFFFFu));
+        // Our own call: the hook answers it with the real desc, the caller is not the game exe.
+        DXGI_ADAPTER_DESC desc{};
+        if (!adapter || FAILED(adapter->GetDesc(&desc))) {
+            if (g_learn.active) {
+                g_learn.stopped = true;
+                Log::get().note("game vram: the device's adapter could not be read, so this session's samples are not saved.");
+            }
+        } else if (!g_learn.haveGpu ||
+                   !gamevram::sameAdapterIdentity(g_learn.vendorId, g_learn.deviceId, desc.VendorId, desc.DeviceId)) {
+            Log::get().note("game vram: the device's adapter is v=%04X d=%04X, not v=%04X d=%04X the reserve was read for; "
+                            "auto is sized and learned for the device's adapter instead.",
+                            static_cast<unsigned>(desc.VendorId & 0xFFFFu), static_cast<unsigned>(desc.DeviceId & 0xFFFFu),
+                            static_cast<unsigned>(g_learn.vendorId & 0xFFFFu),
+                            static_cast<unsigned>(g_learn.deviceId & 0xFFFFu));
+            prepareAuto(adapter, g_learn.aaAtInstall);
+            g_learn.active = !g_learn.storePath.empty();
+        }
+        if (adapter) adapter->Release();
     }
     g_learn.deviceNoted = true;
 }
@@ -497,7 +501,7 @@ void gameVramObserve(uint64_t nowMs, uint64_t usageBytes, uint64_t budgetBytes) 
     }
     // The device's adapter is known only after create returns. Until then a sample would teach the install key,
     // which on a high-performance GPU is not the device. (A store that could not be read at install left active false.)
-    if (g_learn.haveGpu && !g_learn.deviceNoted) return;
+    if (!g_learn.deviceNoted) return;
 
     static gamevram::SessionWatch watch;
     watch.sample(nowMs, usageBytes, budgetBytes);

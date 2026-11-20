@@ -756,6 +756,20 @@ void sourceCases(const std::string& root) {
         check(hook.find("GetAdapter(") != std::string::npos && hook.find("sameAdapterIdentity(") != std::string::npos &&
                   hook.find("deviceNoted") != std::string::npos,
               "V11 the device's adapter is read with GetAdapter and a different id does not keep the install key");
+        {
+            const size_t noteAt = hook.find("void gameVramNoteDevice(");
+            const size_t noteEnd = noteAt == std::string::npos ? std::string::npos : hook.find("\n}\n", noteAt);
+            const std::string note = noteEnd == std::string::npos ? std::string() : hook.substr(noteAt, noteEnd - noteAt);
+            check(note.find("prepareAuto(adapter, g_learn.aaAtInstall)") != std::string::npos &&
+                      note.find("g_learn.active = !g_learn.storePath.empty()") != std::string::npos,
+                  "V11 a different device adapter re-keys auto: its own record or the default, and learning goes on under it");
+            check(note.find("g_learn.stopped = true") != std::string::npos,
+                  "V11 a device adapter that cannot be read stops learning");
+            const size_t descAt = prepare == std::string::npos ? std::string::npos : hook.find("DXGI_ADAPTER_DESC", prepare);
+            check(prepare != std::string::npos && hook.find("g_budgetIgnored = false;", prepare) < descAt &&
+                      hook.find("g_learn.storePath.clear();", prepare) < descAt,
+                  "V11 prepareAuto starts clean, so running it again for the device's adapter keeps nothing from install");
+        }
     }
 }
 
