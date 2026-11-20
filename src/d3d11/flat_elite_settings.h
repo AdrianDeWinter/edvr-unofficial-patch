@@ -311,10 +311,13 @@ private:
 };
 
 // ---- the words -------------------------------------------------------------------------
-// Ten lines: the flat page has seven rows (UI quality joined it 2026-10-09, Optimized stations and Intro movie 2026-10-14, Sharp weapons 2026-10-16), so a
-// blank line and ten of these are the card's eighteen (menu_panel.h's kMenuMaxLines; menu.cpp static_asserts it). The two paragraphs take up to six at the
+// Ten lines: the flat page has eight rows (UI quality joined it 2026-10-09, Optimized stations 2026-10-14, HUD Anti-Aliasing
+// 2026-10-24, Window 3D distance 2026-11-07, Skip rooms behind doors 2026-11-08; the Intro movie, a row from 2026-10-14, went to the Visual tab 2026-10-22;
+// Sharp weapons, a row from 2026-10-16, was retired 2026-10-28), so a blank line and ten of these are the card's nineteen of its nineteen
+// (menu_panel.h's kMenuMaxLines; menu.cpp static_asserts it). The two paragraphs take up to six at the
 // panel's width (40 characters a line in the rig's ruler), the third (EDVR's TAA above the output) four more: ten at worst. There is
-// no spare line now (it was the eleventh, kept for a ruler wider than the rig's); a wider ruler cuts the last line of a paragraph.
+// no spare line now (it was the eleventh, kept for a ruler wider than the rig's); a wider ruler cuts the last line of a paragraph. Another row on
+// this tab takes the card past its nineteen: the assert fails the build, and the answer is a shorter warning or a taller card, not a row-count edit.
 struct FlatSettingsWarning {
     static constexpr int kMaxLines = 10;
     char line[kMaxLines][160] = {};
@@ -326,7 +329,7 @@ struct FlatSettingsWarning {
 // and FSR resolve before the post chain at any render size from the output's up, so they are the way out, and so is rendering
 // at or below the output.
 inline constexpr char kFlatTaaAboveWords[] =
-    "Above 1.0 supersampling, EDVR's TAA works only on a post chain it knows. Set Elite's supersampling to 1.0 or "
+    "Above 1.0 supersampling, ED-UP's TAA works only on a post chain it knows. Set Elite's supersampling to 1.0 or "
     "lower, or choose DLSS or FSR.";
 static_assert(sizeof(kFlatTaaAboveWords) <= sizeof(FlatSettingsWarning{}.line[0]),
               "the TAA paragraph fits one unwrapped log line");

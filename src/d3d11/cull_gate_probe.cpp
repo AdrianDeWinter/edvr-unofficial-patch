@@ -1,4 +1,5 @@
 #include "cull_gate_probe.h"
+#include "../common/dump_file.h"   // gate_<stamp>.bin goes out as .z
 
 #include <windows.h>
 #include <algorithm>
@@ -478,16 +479,16 @@ uint32_t CullGateProbe::distinctRecords() const noexcept {
 }
 
 bool CullGateProbe::write(const wchar_t* path) noexcept {
-    FILE* f = nullptr;
-    if (!path || _wfopen_s(&f, path, L"wb") || !f) return false;
+    dump_file::Writer f;
+    if (!path || !f.open(path)) return false;
     std::atomic_thread_fence(std::memory_order_acquire);
     const Counts c = counts();
-    bool ok = fwrite("EDVRGATE", 1, 8, f) == 8;
-    auto u8 = [&](uint8_t v) { ok = fwrite(&v, 1, 1, f) == 1 && ok; };
-    auto u16 = [&](uint16_t v) { ok = fwrite(&v, 2, 1, f) == 1 && ok; };
-    auto u32 = [&](uint32_t v) { ok = fwrite(&v, 4, 1, f) == 1 && ok; };
-    auto u64 = [&](uint64_t v) { ok = fwrite(&v, 8, 1, f) == 1 && ok; };
-    auto raw = [&](const void* p, size_t n) { if (n) ok = fwrite(p, 1, n, f) == n && ok; };
+    bool ok = f.write("EDVRGATE", 8);
+    auto u8 = [&](uint8_t v) { ok = f.write(&v, 1) && ok; };
+    auto u16 = [&](uint16_t v) { ok = f.write(&v, 2) && ok; };
+    auto u32 = [&](uint32_t v) { ok = f.write(&v, 4) && ok; };
+    auto u64 = [&](uint64_t v) { ok = f.write(&v, 8) && ok; };
+    auto raw = [&](const void* p, size_t n) { if (n) ok = f.write(p, n) && ok; };
     u32(kVersion);
     u32(first_);
     u32(first_ + kFrames - 1);
@@ -603,8 +604,7 @@ bool CullGateProbe::write(const wchar_t* path) noexcept {
         raw(t.bytes, kTableBytes);
     }
     raw("EDVE", 4);
-    ok = !ferror(f) && ok;
-    return fclose(f) == 0 && ok;
+    return f.close() && ok;
 }
 
 void cullGateProbeGateObserver(uintptr_t gateCtx, uintptr_t out, uintptr_t view) noexcept {

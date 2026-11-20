@@ -28,17 +28,41 @@ struct GameInstall {
     bool odyssey = false;    // Odyssey rather than the Horizons build
 };
 
-// Every install this machine can be shown to have, Odyssey first. Confirmed by
-// the executable, deduplicated by path.
-std::vector<GameInstall> findInstalls();
+// Every supported install this machine can be shown to have, Odyssey first.
+// Confirmed by the executable, deduplicated by path. Legacy installs are left out,
+// because no build of this mod supports them, and counted in *legacyLeftOut so an
+// empty list can say why instead of "not found". Browse can still reach one, and
+// the planner then says why it refuses.
+std::vector<GameInstall> findInstalls(size_t* legacyLeftOut = nullptr);
+
+// Confirm the installations named by Epic's .item files in this directory.
+std::vector<GameInstall> findEpicInstalls(const std::wstring& manifestDir);
+
+// What to say when the only installs found were legacy ones: they are there, and why
+// they are not offered. Ends without a line break.
+const char* onlyLegacyInstallsText();
+
+// `installs` without those whose EliteDangerous64.exe `isLegacyExe` says is legacy.
+std::vector<GameInstall> withoutLegacyInstalls(const std::vector<GameInstall>& installs, bool (*isLegacyExe)(const std::wstring&));
+
+// The folders Frontier's launcher may be installed in: what its installer recorded
+// in the registry, then its default places. The store keeps the game under the
+// user's AppData, well away from EDLaunch.exe, so a walk up from the game folder
+// does not find it. May hold empty strings and folders that do not exist.
+std::vector<std::wstring> frontierLauncherRoots();
 
 // Does this folder hold EliteDangerous64.exe?
 bool gameDirLooksRight(const std::wstring& dir);
 
 // Build the record for a folder the user picked. `dir` may be the game folder
-// itself or a launcher root above it; the game folder underneath is found when
-// there is exactly one.
+// itself or a launcher root above it; the first confirmed product is used.
+// A matching store record supplies its source; otherwise `source` is kept.
 bool describeDir(const std::wstring& dir, const std::wstring& source, GameInstall* out);
+
+// The same resolution over an already discovered inventory, without scanning
+// the machine again. Only an exact canonical product-folder match carries a source.
+bool describeDirWithInstalls(const std::wstring& dir, const std::wstring& source,
+                             const std::vector<GameInstall>& installs, GameInstall* out);
 
 // Whichever of Openvr\win64, Openvr or the game folder holds the game's
 // openvr_api.dll (or the openvr_api_orig.dll a previous install left). Empty

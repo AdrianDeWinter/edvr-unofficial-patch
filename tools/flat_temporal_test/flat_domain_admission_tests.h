@@ -142,7 +142,8 @@ inline int flatDomainAdmissionTests() {
     check(!flatDomainInertNoWrite(inert,changedBindings),"stale DSV refuses");
     auto unprovenInert=inert;unprovenInert.inertNoSideEffects=false;
     check(!flatDomainInertNoWrite(unprovenInert,inertBindings),"unproven side effects refuse");
-    check(!engine_velocity_family::supportedPair(0xAACFDCF2FB9AD809ull,0xCAD1F585EDDC5641ull),"recorded legacy world-pair gate still refuses CAD1");
+    // CAD1 has been keyed since 2026-11-16 (#230); its original bytecode still serves as the structural proof below.
+    check(engine_velocity_family::supportedPair(0xAACFDCF2FB9AD809ull,0xCAD1F585EDDC5641ull),"CAD1 is a keyed world pair (#230)");
     check(foreign.pool && foreign.foreignPs && foreign.projection,"actual CAD1 original bytecode proves pool/PS/projection");
     check(flatDomainPlan(foreign,true,23,true,false,false).kind==FlatDomainPlanKind::ForeignPool,"recorded pre-world foreign admitted structurally");
     check(flatDomainPlan(foreign,true,23,true,true,true).kind==FlatDomainPlanKind::WorldPool,"same-camera world draw preserves world ownership");
@@ -507,6 +508,37 @@ inline int flatDomainWorldPredictionTests() {
         check(!flatDomainPredictsWorld(noScale, ref, &detail) && detail.nearEqual && detail.ratio0 == 0, "a draw at the reference's near plane with no projection scale is not predicted");
     }
 
+    // ---- the naming veto's bound inside one frame (the scoped zoom's stall) ----------------------------------------------------
+    {
+        float world[6][4];
+        loggedRows(world, false);
+        const FlatDomainWorldReference ref = flatDomainWorldReference(world);
+        // The flight's frame 106042: the world's own next frame, 15.2% zoomed. Near equal, scale rejected, so it is vetoed and it counts.
+        float zoomed[6][4]; std::memcpy(zoomed, world, sizeof(world)); scaled(zoomed, 1.152, 1.152);
+        FlatDomainWorldPrediction zoom;
+        check(!flatDomainPredictsWorld(zoomed, ref, &zoom) && zoom.nearEqual, "the world zoomed 15.2% in a frame is not predicted, and its near plane is the reference's");
+        uint32_t draws = 0;
+        bool reached = false;
+        for (uint32_t i = 1; i < kFlatNamingVetoDraws; ++i) reached = flatNamingVetoBoundReached(zoom, draws) || reached;
+        check(!reached && draws == kFlatNamingVetoDraws - 1, "the draws before the bound keep the veto");
+        check(flatNamingVetoBoundReached(zoom, draws), "the draw that reaches the bound ends it");
+        // The grenade: a camera at its own near plane never counts, however many draws it makes.
+        float weapon[6][4]; loggedRows(weapon, true);
+        FlatDomainWorldPrediction own;
+        check(!flatDomainPredictsWorld(weapon, ref, &own) && !own.nearEqual, "the first person at its own near plane is vetoed without the near test");
+        draws = 0;
+        reached = false;
+        for (uint32_t i = 0; i < 13000; ++i) reached = flatNamingVetoBoundReached(own, draws) || reached;
+        check(!reached && draws == 0, "a camera at its own near plane is never taken for the world by the count");
+        // A first person aiming down sights shares the world's near plane: the bound must clear what it draws. Flight 4's frames that never named
+        // vetoed about 30; the bench's grenade hold draws 70.
+        draws = 0;
+        reached = false;
+        for (uint32_t i = 0; i < 70; ++i) reached = flatNamingVetoBoundReached(zoom, draws) || reached;
+        check(!reached, "70 vetoed draws at the world's near plane keep the veto");
+        check(kFlatNamingVetoDraws == 128, "the bound is 128 draws a frame: 1.5 ms at the flight's 12 us a draw, against 160 ms a frame without it");
+    }
+
     // ---- an aiming-down-sights frame through the pending-null witnesses -----------------------------------------------------------
     // The frame's pre-naming draws, as the 13:18 flight saw them: the world's depth prepass (F516BF02/B40B0462, the world's own rows) and the
     // weapon's, at the world's near plane with its own projection scale. The near-only classification takes both for the world, so the
@@ -547,6 +579,41 @@ inline int flatDomainWorldPredictionTests() {
         // The same sequence with the 10% margin met from the other side: a world draw 9% off its reference (a fast zoom) is still the world.
         float fast[6][4]; std::memcpy(fast, previousWorld, sizeof(fast)); scaled(fast, 1.09, 1.09);
         check(withScale(fast), "a world draw 9% off its reference (a fast zoom) is still predicted");
+    }
+
+    // ---- the HDR's first camera with a first person in hand (2026-10-29) ------------------------------------------------------------
+    // edvr_gfx_20261029_180522, frame 227957: on foot, a scanner tool out, bare terrain. The HDR target's first camera F2754D4F (the terrain
+    // pass's, near 0.025) and the glow pass's D8A6FFD7 (near 0.0675, 1.28 times the scale), rows 270..275 as the untrusted H bucket lines
+    // printed them. No draw named the world, the tool's draws were a source and first-person draws, and every frame refused.
+    {
+        const auto rowsOf = [](const uint32_t (&w)[24], float (&rows)[6][4]) { std::memcpy(rows, w, sizeof(rows)); };
+        const uint32_t terrainWords[24] = {0xBE87B778,0xBFD15F00,0x00000000,0xBE5DC18D, 0xBD0BA99E,0xBEC5FCE6,0x00000000,0x3F79C424,
+                                           0xBF356768,0x3F216749,0x00000000,0x3D0E8E84, 0x00000000,0x00000000,0x3CCCCCCD,0x00000000,
+                                           0xBE5DC18D,0x3F79C424,0x3D0E8E84,0x00000000, 0xC27442E0,0x42A7871E,0xC218C568,0x00000000};
+        const uint32_t toolWords[24] = {0xBEADE353,0xC0061EEE,0x00000000,0xBE5DC18D, 0xBD32560B,0xBEFD7E73,0x00000000,0x3F79C424,
+                                        0xBF6866E2,0x3F4EC85C,0x00000000,0x3D0E8E84, 0x00000000,0x00000000,0x3D8A3D71,0x00000000,
+                                        0xBE5DC18D,0x3F79C424,0x3D0E8E84,0x00000000, 0xC27442E0,0x42A7871E,0xC218C568,0x00000000};
+        float terrain[6][4], tool[6][4];
+        rowsOf(terrainWords, terrain); rowsOf(toolWords, tool);
+        // The reference the last named world left: the same camera (a structure in view a moment before named it).
+        const FlatDomainWorldReference ref = flatDomainWorldReference(terrain);
+        check(ref.valid() && ref.nearPlane == 0.025f, "the flight's terrain camera leaves a reference at the world's near plane");
+        const bool toolPredicted = flatDomainPredictsWorld(tool, ref);
+        check(!toolPredicted, "the flight's glow pass camera is not predicted to be the world's");
+        check(flatDomainHdrFirstCameraIsWorld(terrain, toolPredicted, ref),
+              "the flight's frame: the HDR's first camera is the last world's and the glow pass's is not, so the target is admitted");
+        check(!flatDomainHdrFirstCameraIsWorld(tool, flatDomainPredictsWorld(terrain, ref), ref),
+              "the roles swapped (a first-person camera first, the world drawing over it) admit nothing");
+        check(!flatDomainHdrFirstCameraIsWorld(terrain, true, ref),
+              "a drawing camera that is itself predicted to be the world's admits nothing on this path");
+        check(!flatDomainHdrFirstCameraIsWorld(terrain, toolPredicted, FlatDomainWorldReference{}),
+              "no reference (no world named this session) admits nothing");
+        float zoomed[6][4]; std::memcpy(zoomed, terrain, sizeof(zoomed)); scaled(zoomed, 1.28, 1.28);
+        check(!flatDomainHdrFirstCameraIsWorld(zoomed, toolPredicted, ref),
+              "a first camera at the world's near plane but 1.28 times its scale (a weapon camera aiming down sights) admits nothing");
+        float zooming[6][4]; std::memcpy(zooming, terrain, sizeof(zooming)); scaled(zooming, 1.038, 1.038);
+        check(flatDomainHdrFirstCameraIsWorld(zooming, toolPredicted, ref),
+              "the world a frame into a zoom (3.8%) is still the world's first camera");
     }
     return failures;
 }

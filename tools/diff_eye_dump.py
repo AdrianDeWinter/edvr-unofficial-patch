@@ -21,6 +21,11 @@ import re
 import struct
 import sys
 
+try:
+    from tools import log_session
+except ImportError:
+    import log_session
+
 TILE = 16
 
 
@@ -73,7 +78,7 @@ def main(argv=None):
     fmts = {}
     dims = {}
     if len(argv) > 1:
-        for line in open(argv[1], encoding="utf-8", errors="replace"):
+        for line in log_session.read_log_text(argv[1]).splitlines():
             m = re.search(
                 r"FSSDUMP c=(\d+) tag=(\S+) eye=(\d) w=(\d+) h=(\d+) "
                 r"fmt=(\d+)", line)

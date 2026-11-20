@@ -4,6 +4,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <memory>
@@ -14,10 +15,14 @@
 #include <vector>
 
 #include "../common/config.h"
+#include "../common/elite_journal_folder.h"   // the journal folder under Windows' Saved Games known folder
 #include "../common/guard.h"
 #include "../common/runtime_profile.h"
 #include "../common/log.h"
 #include "../common/periodic_work.h"
+#include "journal_loadout_reader.h"   // F140: the suit loadout's weapon slots (their own reader of the current journal; journal_loadout.h parses)
+#include "journal_vehicle_latch.h"   // issue 140: the Scorpion latch, fed every byte the tail reads
+#include "srv_turret_math.h"          // issue 140: the turret view's Flags bit (journalSrvTurretView)
 
 namespace edvr {
 namespace {
@@ -108,6 +113,16 @@ struct Published {
     // shutdown states -- Status then carries only "Flags":0.
     bool     onFootKnown = false;
     bool     onFoot = false;
+    // Built F16: Flags2 bit 16 (BreathableAtmosphere, journal_watch.h) and the raw Flags2 word, from the same sample.
+    bool     breathableKnown = false;
+    bool     breathable = false;
+    uint32_t flags2 = 0;
+    // Built F20: Flags2 bit 5 (AimDownSight, journal_watch.h), from the same sample; known whenever Flags2 is in the file.
+    bool     adsKnown = false;
+    bool     ads = false;
+    // Built F66a: Status.json SelectedWeapon (journal_watch.h: JournalHeldItem) and its value, from the same sample.
+    uint8_t  heldKind = 0;
+    char     heldName[64] = {};
     // Built v14 (optimized station): Status.json Flags bit 0 is Docked (the same field whose bit 4 is supercruise, read above).
     bool     dockedKnown = false;
     bool     docked = false;
@@ -117,7 +132,6 @@ struct Published {
     bool     seated = false;
     // Built v14.35: the raw words of the last sample (0 while the field is absent), for the station's on-foot release line and its flag-change instrument.
     uint32_t flags = 0;
-    uint32_t flags2 = 0;
     // Built v14.21: Status.json Flags bits 24-26 only (InMainShip, InFighter, InSRV), the in-vehicle half of the seat test without Flags2.
     bool     vehicleKnown = false;
     bool     vehicle = false;
@@ -136,6 +150,9 @@ struct Published {
     bool     supercruiseKnown = false;
     bool     supercruise = false;
     uint32_t statusSamples = 0;       // successful Status.json parses
+    uint64_t statusContentRevision = 0, statusContentMs = 0;
+    // Built issue 140: the journal says the player's SRV is the Scorpion (journal_vehicle_latch.h). False until a LoadGame or LaunchSRV says so.
+    bool     srvScorpion = false;
 };
 
 struct Visible {
@@ -150,12 +167,20 @@ struct Visible {
     std::atomic<bool>     fsdJumpLive{false};
     std::atomic<bool>     onFootKnown{false};
     std::atomic<bool>     onFoot{false};
+    std::atomic<bool>     breathableKnown{false};
+    std::atomic<bool>     breathable{false};
+    std::atomic<bool>     adsKnown{false};
+    std::atomic<bool>     ads{false};
+    // Built F66a: the held item's kind, and its name behind a sequence counter (one writer: the worker).
+    std::atomic<uint8_t>  heldKind{0};
+    std::atomic<uint32_t> heldSeq{0};
+    char                  heldName[64] = {};
+    std::atomic<uint32_t> flags2{0};
     std::atomic<bool>     dockedKnown{false};
     std::atomic<bool>     docked{false};
     std::atomic<bool>     seatedKnown{false};
     std::atomic<bool>     seated{false};
     std::atomic<uint32_t> flags{0};
-    std::atomic<uint32_t> flags2{0};
     std::atomic<bool>     vehicleKnown{false};
     std::atomic<bool>     vehicle{false};
     std::atomic<uint32_t> seatKind{0};
@@ -165,6 +190,8 @@ struct Visible {
     std::atomic<bool>     supercruiseKnown{false};
     std::atomic<bool>     supercruise{false};
     std::atomic<uint32_t> statusSamples{0};
+    std::atomic<uint64_t> statusContentRevision{0}, statusContentMs{0};
+    std::atomic<bool>     srvScorpion{false};
 };
 Visible g_v;
 
@@ -185,12 +212,20 @@ void applyPublished(const Published& p) {
     g_v.fsdJumpLive.store(p.fsdJumpLive, kRelaxed);
     g_v.onFootKnown.store(p.onFootKnown, kRelaxed);
     g_v.onFoot.store(p.onFoot, kRelaxed);
+    g_v.breathableKnown.store(p.breathableKnown, kRelaxed);
+    g_v.breathable.store(p.breathable, kRelaxed);
+    g_v.adsKnown.store(p.adsKnown, kRelaxed);
+    g_v.ads.store(p.ads, kRelaxed);
+    g_v.heldSeq.fetch_add(1, std::memory_order_acq_rel);   // odd: a write is in progress
+    std::memcpy(g_v.heldName, p.heldName, sizeof(g_v.heldName));
+    g_v.heldSeq.fetch_add(1, std::memory_order_release);
+    g_v.heldKind.store(p.heldKind, kRelaxed);
+    g_v.flags2.store(p.flags2, kRelaxed);
     g_v.dockedKnown.store(p.dockedKnown, kRelaxed);
     g_v.docked.store(p.docked, kRelaxed);
     g_v.seatedKnown.store(p.seatedKnown, kRelaxed);
     g_v.seated.store(p.seated, kRelaxed);
     g_v.flags.store(p.flags, kRelaxed);
-    g_v.flags2.store(p.flags2, kRelaxed);
     g_v.vehicleKnown.store(p.vehicleKnown, kRelaxed);
     g_v.vehicle.store(p.vehicle, kRelaxed);
     g_v.seatKind.store(p.seatKind, kRelaxed);
@@ -200,6 +235,9 @@ void applyPublished(const Published& p) {
     g_v.supercruiseKnown.store(p.supercruiseKnown, kRelaxed);
     g_v.supercruise.store(p.supercruise, kRelaxed);
     g_v.statusSamples.store(p.statusSamples, kRelaxed);
+    g_v.statusContentRevision.store(p.statusContentRevision, kRelaxed);
+    g_v.statusContentMs.store(p.statusContentMs, kRelaxed);
+    g_v.srvScorpion.store(p.srvScorpion, kRelaxed);
     g_v.active.store(p.active, std::memory_order_release);
 }
 
@@ -215,6 +253,13 @@ void resetVisible() {
 // worker on every pass. Not part of a session: the game sets it right after
 // configuring, and it means the same thing to whichever worker is running.
 std::atomic<bool> g_eager{false};
+// Built F66a: the native on-foot tick's own request for the 100 ms cadence (journalWatchSetEagerStatusOnFoot); the worker reads on the faster.
+std::atomic<bool> g_eagerOnFoot{false};
+// The SRV turret entry fade's request for the same cadence (journalWatchSetEagerStatusSrv), in the Scorpion.
+std::atomic<bool> g_eagerSrv{false};
+// F147: the native on-foot tick's request for the suit loadout's weapon slots (journalWatchSetLoadoutWanted). False until native on foot is first active, and always false in the
+// flat profile: nothing reads the loadout there, and the reader opens and walks the whole journal.
+std::atomic<bool> g_loadoutWanted{false};
 
 // The rig's hook (journal_watch.h). Null in the product.
 std::atomic<JournalWorkHook> g_workHook{nullptr};
@@ -256,6 +301,13 @@ struct Session {
     // the player teleporting off their feet, so `known` only drops after a
     // few misses in a row.
     uint32_t     statusMisses = 0;
+    JournalStatusContentRevision statusContent;
+    loadout::Reader loadoutReader;   // F140: the worker's own
+    // Issue 140: which SRV the player is in, read from the bytes the tail reads (journal_vehicle_latch.h). The worker's own, reset with the file.
+    journal_vehicle::Latch vehicle;
+    // The station's type (journal_station.h), from the same bytes. The worker's own; the file it is saved to is read once, before the first byte.
+    journal_station::Latch station;
+    bool stationLoaded = false;
     // The flat profile's GuiFocus note (pollStatus): the last value noted, and how many notes were written (capped).
     bool         guiNoted = false;
     bool         guiNotedPresent = false;
@@ -272,6 +324,7 @@ struct Session {
     PeriodicWork workStatus{"journal_status"};
     PeriodicWork workTail{"journal_tail", "bytes"};
     PeriodicWork workReglob{"journal_reglob", "files"};
+    PeriodicWork workLoadout{"journal_loadout"};   // F147
     // SEH containment, as the frame boundary's tick had: a fault in a pass is
     // absorbed and logged once, and a run of them retires the watcher.
     FaultBudget  budget{"journal.worker", 8};
@@ -304,6 +357,113 @@ std::atomic<Session*> g_session{nullptr};
 // Set by shutdown. A frame that arrives after it starts nothing.
 std::atomic<bool> g_stopped{false};
 
+// Issue 140: the latch moved (a journal event, or the file changed). Said once per change, in the VR profile only (the flat profile never reads it).
+void noteVehicle(Session& s, bool scorpion, journal_vehicle::Event cause) {
+    s.pub.srvScorpion = scorpion;
+    if (runtimeFlatProfile()) return;
+    Log::get().note("srv turret: the vehicle is %s (event %s)", scorpion ? "the Scorpion" : "not the Scorpion", journal_vehicle::eventName(cause));
+}
+
+std::atomic<uint8_t> g_stationKind{0};   // journal_station::Kind, for journalStationKind on the Present thread
+std::atomic<uint32_t> g_carrierJumps{0}; // the latch's CarrierJump count, for journalCarrierJumps
+
+// %LOCALAPPDATA%\EDVR\last-station.txt: the type of the last station the journal named and a hash of its name, so that a load on foot, which names neither, can be told it.
+std::wstring stationFilePath() {
+    wchar_t appdata[MAX_PATH] = {};
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", appdata, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return std::wstring();
+    return std::wstring(appdata) + L"\\EDVR\\last-station.txt";
+}
+
+void stationLoad(Session& s) {
+    const std::wstring path = stationFilePath();
+    if (path.empty()) return;
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    char text[128] = {};
+    DWORD got = 0;
+    const BOOL ok = ReadFile(h, text, sizeof(text) - 1, &got, nullptr);
+    CloseHandle(h);
+    journal_station::Saved saved;
+    if (ok && journal_station::parseSaved(text, &saved)) {
+        s.station.restore(saved);
+        Log::get().note("journal: the last station saved is of type %s", journal_station::kindName(saved.kind));
+    }
+}
+
+// Whole or not at all: a new file, then a replace. A failure is said once, and only costs a load on foot its type.
+void stationSave(const Session& s) {
+    static bool saidFailure = false;
+    const std::wstring path = stationFilePath();
+    if (path.empty()) return;
+    const std::wstring dir = path.substr(0, path.find_last_of(L'\\'));
+    CreateDirectoryW(dir.c_str(), nullptr);
+    const std::wstring temp = path + L".new";
+    char text[128] = {};
+    const int len = journal_station::formatSaved(s.station.saved(), text, sizeof(text));
+    bool ok = false;
+    HANDLE h = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD wrote = 0;
+        ok = len > 0 && WriteFile(h, text, static_cast<DWORD>(len), &wrote, nullptr) && wrote == static_cast<DWORD>(len);
+        CloseHandle(h);
+        ok = ok && MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
+    if (!ok && !saidFailure) {
+        saidFailure = true;
+        Log::get().note("journal: the last station could not be saved (error %lu): a load on foot will not know its type", GetLastError());
+    }
+}
+
+void noteStationKind(journal_station::Kind k) {
+    g_stationKind.store(static_cast<uint8_t>(k), std::memory_order_relaxed);
+    Log::get().note("journal: the station's type is %s", journal_station::kindName(k));
+}
+
+// A load on foot where nothing saved says what the station is: the first flight after an install, or after playing without EDVR. The game's own older journals do, newest first, until
+// one names any station. Read on the worker, once a load. Names are hashed here as in the latch, and none is logged.
+void stationSearchJournals(Session& s, uint64_t bodyHash) {
+    constexpr size_t kFilesMax = 40;
+    constexpr uint64_t kFileBytesMax = 32ull * 1024 * 1024;
+    struct Entry {
+        uint64_t when;
+        std::wstring name;
+    };
+    std::vector<Entry> files;
+    WIN32_FIND_DATAW fd{};
+    HANDLE find = FindFirstFileW((s.dir + L"\\Journal.*.log").c_str(), &fd);
+    if (find == INVALID_HANDLE_VALUE) return;
+    do {
+        files.push_back(Entry{(static_cast<uint64_t>(fd.ftLastWriteTime.dwHighDateTime) << 32) | fd.ftLastWriteTime.dwLowDateTime, fd.cFileName});
+    } while (FindNextFileW(find, &fd));
+    FindClose(find);
+    std::sort(files.begin(), files.end(), [](const Entry& a, const Entry& b) { return a.when > b.when; });
+    std::vector<char> buf;
+    const size_t look = files.size() < kFilesMax ? files.size() : kFilesMax;
+    for (size_t i = 0; i < look; ++i) {
+        HANDLE h = CreateFileW((s.dir + L"\\" + files[i].name).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        LARGE_INTEGER size{};
+        DWORD got = 0;
+        bool ok = false;
+        if (GetFileSizeEx(h, &size) && size.QuadPart > 0 && static_cast<uint64_t>(size.QuadPart) <= kFileBytesMax) {
+            buf.resize(static_cast<size_t>(size.QuadPart));
+            ok = ReadFile(h, buf.data(), static_cast<DWORD>(buf.size()), &got, nullptr) != 0;
+        }
+        CloseHandle(h);
+        journal_station::Saved found;
+        if (!ok || !journal_station::lastStationIn(buf.data(), got, &found)) continue;
+        if (found.nameHash == bodyHash) {
+            Log::get().note("journal: the station is named in an older journal, %zu back", i);
+            s.station.adopt(found, noteStationKind);
+        } else {
+            Log::get().note("journal: the last station named, %zu journals back, is another one: this one's type is not known", i);
+        }
+        return;
+    }
+    Log::get().note("journal: no station is named in the last %zu journals: this one's type is not known", look);
+}
+
 void closeFile(Session& s) {
     if (s.handle != INVALID_HANDLE_VALUE) {
         CloseHandle(s.handle);
@@ -311,6 +471,10 @@ void closeFile(Session& s) {
     }
     s.offset = 0;
     s.carryLen = 0;
+    s.loadoutReader.close();   // F140
+    // Issue 140: another file is another stream, and what the last one said of the vehicle does not carry over (unknown is "not the Scorpion").
+    if (s.vehicle.reset()) noteVehicle(s, false, journal_vehicle::Event::kNewJournal);
+    s.station.newFile();
 }
 
 // FILETIME is a 64-bit count in two halves; the decision below wants one
@@ -432,13 +596,21 @@ void pollStatus(Session& s) {
     uint32_t flags = 0;
     uint32_t gui = 0;
     DWORD bytesRead = 0;
+    JournalHeldItem heldKind = kHeldUnknown;   // F66a
+    char heldName[64] = {};
     if (f != INVALID_HANDLE_VALUE) {
-        char buf[2048];
+        char buf[JournalStatusContentRevision::kCapacity];   // SelectedWeapon sits near the end, after the destination and the pips
         DWORD got = 0;
         if (ReadFile(f, buf, sizeof(buf) - 1, &got, nullptr) && got > 0) {
             buf[got] = '\0';
             bytesRead = got;
             parsed = true;
+            const uint64_t revision = s.statusContent.observe(buf, got);
+            if (revision != s.pub.statusContentRevision) {
+                s.pub.statusContentRevision = revision;
+                s.pub.statusContentMs = stampMs();
+            }
+            heldKind = journalParseSelectedWeapon(buf, got, heldName, sizeof(heldName));
             const char* p = strstr(buf, "\"Flags2\":");
             if (p) {
                 sawFlags2 = true;
@@ -464,6 +636,15 @@ void pollStatus(Session& s) {
         ++s.pub.statusSamples;
         s.pub.onFootKnown = sawFlags2;
         s.pub.onFoot = sawFlags2 && (flags2 & 0x01u) != 0;
+        s.pub.breathableKnown = sawFlags2;
+        s.pub.breathable = sawFlags2 && journalBreathableFromFlags2(flags2);
+        s.pub.adsKnown = sawFlags2;
+        s.pub.ads = sawFlags2 && journalAdsFromFlags2(flags2);
+        // F66a: the held item, only with Flags2 in the file (on foot or in a vehicle; the menus write neither).
+        s.pub.heldKind = sawFlags2 ? static_cast<uint8_t>(heldKind) : static_cast<uint8_t>(kHeldUnknown);
+        std::memset(s.pub.heldName, 0, sizeof(s.pub.heldName));
+        if (sawFlags2 && heldKind != kHeldUnknown) std::memcpy(s.pub.heldName, heldName, sizeof(s.pub.heldName));
+        s.pub.flags2 = sawFlags2 ? flags2 : 0u;
         s.pub.dockedKnown = sawFlags;
         s.pub.docked = sawFlags && (flags & 0x01u) != 0;
         // The same sample's seat: Flags bits 24-26 and Flags2 bits 1-2 (journal_watch.h). A Flags2 that is absent is read
@@ -508,6 +689,13 @@ void pollStatus(Session& s) {
         }
     } else if (++s.statusMisses >= 3) {
         s.pub.onFootKnown = false;
+        s.pub.breathableKnown = false;
+        s.pub.breathable = false;
+        s.pub.adsKnown = false;
+        s.pub.ads = false;
+        s.pub.heldKind = static_cast<uint8_t>(kHeldUnknown);
+        std::memset(s.pub.heldName, 0, sizeof(s.pub.heldName));
+        s.pub.flags2 = 0;
         s.pub.dockedKnown = false;
         s.pub.seatedKnown = false;
         s.pub.flags = 0;
@@ -535,6 +723,16 @@ void scanEvents(Session& s, const char* data, uint32_t len) {
     }
     if (stitchedLen) scanRange(s, stitched, stitchedLen);
     scanRange(s, data, len);
+    // Issue 140: the Scorpion latch reads the new bytes themselves, once (a stream: the carry and the stitched head above would feed some bytes twice).
+    s.vehicle.feed(data, len, [&s](bool scorpion, journal_vehicle::Event cause) { noteVehicle(s, scorpion, cause); });
+    s.station.feed(data, len, noteStationKind);
+    if (s.station.jumps() != g_carrierJumps.load(std::memory_order_relaxed)) {
+        g_carrierJumps.store(s.station.jumps(), std::memory_order_relaxed);
+        Log::get().note("journal: CarrierJump: the commander was aboard a carrier as it jumped (%u this session)", s.station.jumps());
+    }
+    uint64_t unmatchedBody = 0;
+    if (s.station.takeUnmatched(&unmatchedBody)) stationSearchJournals(s, unmatchedBody);
+    if (s.station.takeSavedChanged()) stationSave(s);
 
     // Keep the tail as the next carry. Anything already scanned in `stitched`
     // that also sits in `data`'s head double-scans harmlessly: LoadGame and
@@ -550,6 +748,10 @@ void scanEvents(Session& s, const char* data, uint32_t len) {
 // the Present thread; it runs on the worker now and is otherwise the same code.
 // Returns false when the watcher has retired.
 bool pass(Session& s, char* buf) {
+    if (!s.stationLoaded) {
+        s.stationLoaded = true;
+        stationLoad(s);
+    }
     // dueMs, not elapsedMs: the counter this replaced started at 0 meaning
     // "poll on the first frame", and a stamp of 0 read as "never due" would
     // have retired the watcher before it ever ran -- silently, because the
@@ -557,7 +759,7 @@ bool pass(Session& s, char* buf) {
     // Status.json rides its own clock: ~1 KB reread, normally on the
     // journal's cadence, but at 100 ms when a consumer asked for low
     // latency.
-    const bool eager = g_eager.load(std::memory_order_relaxed);
+    const bool eager = g_eager.load(std::memory_order_relaxed) || g_eagerOnFoot.load(std::memory_order_relaxed) || g_eagerSrv.load(std::memory_order_relaxed);
     if (dueMs(s.statusMs, cadence(eager ? kStatusEagerMs : kPollMs))) {
         s.statusMs = stampMs();
         PeriodicWorkScope timing(s.workStatus);
@@ -667,6 +869,14 @@ bool pass(Session& s, char* buf) {
         if (s.handle == INVALID_HANDLE_VALUE) return true;   // nothing yet
     }
 
+    // F140: the suit loadout's weapon slots, from the first byte of this same journal (journal_loadout_reader.h says why it is not the tail below). F147: only in the VR
+    // profile and only once native on foot has been active (journalWatchSetLoadoutWanted); the first poll after that reads the file once from its start, every later one
+    // only what was appended, and a poll while it is not wanted does nothing. Its time is timed apart from the tail's.
+    if (g_loadoutWanted.load(std::memory_order_relaxed) && !runtimeFlatProfile()) {
+        PeriodicWorkScope timing(s.workLoadout);
+        s.loadoutReader.poll(s.dir, s.file);
+    }
+
     // Read whatever has appeared since last time.
     {
         // Timed to the end of the block whichever way it is left: the failed
@@ -745,7 +955,9 @@ DWORD untilNextDue(const Session& s) {
         const uint64_t age = now - since;
         return age >= every ? 0 : every - age;
     };
-    const bool eager = g_eager.load(std::memory_order_relaxed);
+    // The SRV request is read here so the worker really wakes at 100 ms. (The on-foot request is not: it only sets pass()'s test, and the worker's sleep stays at the 500 ms the
+    // FSS latch's flag alone shortens. Left as it was; see the entry fade's doc entry.)
+    const bool eager = g_eager.load(std::memory_order_relaxed) || g_eagerSrv.load(std::memory_order_relaxed);
     const uint64_t status = left(s.statusMs, cadence(eager ? kStatusEagerMs : kPollMs));
     const uint64_t poll = left(s.pollMs, cadence(kPollMs));
     uint64_t ms = status < poll ? status : poll;
@@ -861,6 +1073,39 @@ JournalPick journalPickNewest(const uint64_t* creation, const uint64_t* write,
     return best;
 }
 
+// FOLDERID_SavedGames from the SDK's knownfolders.h (10.0.26100):
+// {4C5C32FF-BB9D-43b0-B5B4-2D72E54EAAA4}. SHGetKnownFolderPath is shell32's,
+// and the string it returns is freed with ole32's CoTaskMemFree. The graphics
+// DLL links neither (elite_graphics_folder.h), so both are loaded for the call
+// and released when this loaded them. KF_FLAG_DONT_VERIFY is 0x00004000
+// (shlobj_core.h): the path Windows has configured, including a name in
+// another language and a folder the user moved, even if it does not exist yet.
+std::wstring journalKnownSavedGamesFolder() {
+    HMODULE shell = GetModuleHandleW(L"shell32.dll");
+    const bool ownShell = shell == nullptr;
+    if (!shell) shell = LoadLibraryW(L"shell32.dll");
+    if (!shell) return std::wstring();
+    using ShGetFn = HRESULT (WINAPI*)(const GUID&, DWORD, HANDLE, PWSTR*);
+    const auto shGet = reinterpret_cast<ShGetFn>(GetProcAddress(shell, "SHGetKnownFolderPath"));
+    HMODULE ole = GetModuleHandleW(L"ole32.dll");
+    const bool ownOle = ole == nullptr;
+    if (!ole) ole = LoadLibraryW(L"ole32.dll");
+    using FreeFn = void (WINAPI*)(void*);
+    const auto freeMem = ole ? reinterpret_cast<FreeFn>(GetProcAddress(ole, "CoTaskMemFree")) : nullptr;
+    std::wstring out;
+    if (shGet && freeMem) {
+        const GUID savedGames = {0x4c5c32ff, 0xbb9d, 0x43b0, {0xb5, 0xb4, 0x2d, 0x72, 0xe5, 0x4e, 0xaa, 0xa4}};
+        PWSTR path = nullptr;
+        if (SUCCEEDED(shGet(savedGames, 0x00004000u, nullptr, &path)) && path) {
+            out = path;
+            freeMem(path);
+        }
+    }
+    if (ownOle && ole) FreeLibrary(ole);
+    if (ownShell) FreeLibrary(shell);
+    return out;
+}
+
 void journalWatchConfigure() {
     // A new watcher starts from nothing, and stops the one before it, if any.
     endSession();
@@ -889,8 +1134,11 @@ void journalWatchConfigure() {
     notBefore.dwHighDateTime = t.HighPart;
 
     std::wstring dir;
+    bool explicitDir = false;
+    bool fromWindows = false;   // the path came from FOLDERID_SavedGames, not the English fallback
     const std::string dirUtf8 = cfg.getString("d3d11.journal_dir", "");
     if (!dirUtf8.empty()) {
+        explicitDir = true;
         const int need = MultiByteToWideChar(CP_UTF8, 0, dirUtf8.c_str(), -1,
                                              nullptr, 0);
         std::wstring w(need > 0 ? need : 1, L'\0');
@@ -899,29 +1147,42 @@ void journalWatchConfigure() {
         dir = w;
     } else {
         wchar_t profile[MAX_PATH] = {};
-        const DWORD n =
-            GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
-        if (n == 0 || n >= MAX_PATH) {
-            Log::get().note("journal: USERPROFILE is not set, so the journal "
-                            "cannot be found. Set d3d11.journal_dir to the "
-                            "'Saved Games\\Frontier Developments\\Elite "
-                            "Dangerous' folder to use it anyway.");
+        const DWORD n = GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
+        const std::wstring userProfile = (n == 0 || n >= MAX_PATH) ? std::wstring() : std::wstring(profile, n);
+        // Windows names Saved Games in the user's language and follows a folder the user moved. The English
+        // "Saved Games" under USERPROFILE is only the fallback for a Windows that does not answer.
+        const std::wstring known = journalKnownSavedGamesFolder();
+        fromWindows = !known.empty();
+        dir = eliteJournalFolder(std::wstring(), known, userProfile);
+        if (dir.empty()) {
+            Log::get().note("journal: Windows did not name a Saved Games folder and USERPROFILE is not set, so the journal "
+                            "cannot be found. Set d3d11.journal_dir to the Frontier Developments\\Elite Dangerous folder under it.");
             return;
         }
-        dir = std::wstring(profile) +
-              L"\\Saved Games\\Frontier Developments\\Elite Dangerous";
     }
 
     const DWORD attrs = GetFileAttributesW(dir.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES ||
         !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-        Log::get().note("journal: no folder at the expected place, so the "
-                        "game's journal is not being read and the render-state "
-                        "heuristics carry everything, as before. Set "
-                        "d3d11.journal_dir if your Saved Games folder was "
-                        "moved.");
+        const std::string shown = runtimeProfileUtf8(dir);
+        if (explicitDir) {
+            Log::get().note("journal: no folder at %s (d3d11.journal_dir), so the game's journal is not being read and the render-state "
+                            "heuristics carry everything, as before.",
+                            shown.c_str());
+        } else if (fromWindows) {
+            Log::get().note("journal: no folder at %s, so the game's journal is not being read and the render-state heuristics carry "
+                            "everything, as before. That is Windows' Saved Games folder, in this language's name, with Frontier "
+                            "Developments\\Elite Dangerous under it. Set d3d11.journal_dir if the journal lives somewhere else.",
+                            shown.c_str());
+        } else {
+            Log::get().note("journal: no folder at %s, so the game's journal is not being read and the render-state heuristics carry "
+                            "everything, as before. Windows did not name a Saved Games folder, so this is the English name under "
+                            "USERPROFILE. Set d3d11.journal_dir if the journal lives somewhere else.",
+                            shown.c_str());
+        }
         return;
     }
+    Log::get().note("journal: folder %s", runtimeProfileUtf8(dir).c_str());
 
     // The worker's state. The thread itself starts at the first tick.
     Session* s = new (std::nothrow) Session;
@@ -949,7 +1210,7 @@ void journalWatchConfigure() {
         // patch motion (journalFlatSupercruise). The accessors above answer flat with the no-journal values, so this line is the
         // only place the watcher says it runs there.
         Log::get().note("journal: flat profile -- Status.json is read for the map's GuiFocus (temporal AA off on the maps and the Full System Scanner) and for "
-                        "supercruise (planet patch motion). The journal's events are tailed but not used in flat.");
+                        "supercruise (planet patch motion). The journal's events are tailed for the station's type (the concourse cull's bake), and not otherwise used in flat.");
         return;
     }
     Log::get().note("journal: watching the game's own event stream for the "
@@ -957,7 +1218,11 @@ void journalWatchConfigure() {
                     "(LoadGame), on-foot sessions beginning (Disembark), and "
                     "jumps (StartJump, resolved by FSDJump or "
                     "SupercruiseEntry) for the witchspace star fix. Event "
-                    "names only; nothing else is read or kept.");
+                    "names only are kept, with one exception: while native "
+                    "on foot is on, the suit loadout's weapon slots (module "
+                    "name, scope or not, mods) are also read from the whole "
+                    "journal, by their own reader, once native on foot first "
+                    "becomes active; the commander's loadout name is not kept.");
 }
 
 void journalWatchTick() {
@@ -1020,6 +1285,66 @@ bool journalFlatGuiFocus(uint32_t* focus) {
     if (focus) *focus = peek(g_v.guiFocus);
     return true;
 }
+JournalHeldItem journalHeldItem() {
+    if (runtimeFlatProfile()) return kHeldUnknown;
+    const uint8_t k = peek(g_v.heldKind);
+    return k == kHeldNone ? kHeldNone : k == kHeldItem ? kHeldItem : kHeldUnknown;
+}
+// The held item's name under the seqlock the worker publishes it with; false after four torn reads. cap is above 0 and out is not null.
+static bool copyHeldName(char* out, size_t cap) {
+    for (int tries = 0; tries < 4; ++tries) {
+        const uint32_t s1 = g_v.heldSeq.load(std::memory_order_acquire);
+        if (s1 & 1u) continue;
+        char tmp[sizeof(g_v.heldName)];
+        std::memcpy(tmp, g_v.heldName, sizeof(tmp));
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (g_v.heldSeq.load(std::memory_order_relaxed) != s1) continue;
+        tmp[sizeof(tmp) - 1] = '\0';
+        const size_t len = std::strlen(tmp);
+        const size_t n = len < cap - 1 ? len : cap - 1;
+        std::memcpy(out, tmp, n);
+        out[n] = '\0';
+        return true;
+    }
+    return false;
+}
+bool journalHeldItemName(char* out, size_t cap) {
+    if (out && cap) out[0] = '\0';
+    if (!out || !cap || runtimeFlatProfile() || peek(g_v.heldKind) == kHeldUnknown) return false;
+    return copyHeldName(out, cap);
+}
+// S0 (scope zoom, measure only): the flat profile's readers of the on-foot bit, the ADS bit and the held item, on journalFlatGuiFocus's pattern. Every accessor above answers flat
+// with a stopped watcher's value, and still does; these answer only in flat, with the watcher running, and only for a field the last Status.json sample carried.
+bool journalFlatOnFoot(bool* onFoot) {
+    if (!runtimeFlatProfile() || !g_v.active.load(std::memory_order_acquire) || !peek(g_v.onFootKnown)) return false;
+    if (onFoot) *onFoot = peek(g_v.onFoot);
+    return true;
+}
+bool journalFlatAds(bool* ads) {
+    if (!runtimeFlatProfile() || !g_v.active.load(std::memory_order_acquire) || !peek(g_v.adsKnown)) return false;
+    if (ads) *ads = peek(g_v.ads);
+    return true;
+}
+bool journalFlatHeldItemName(char* out, size_t cap) {
+    if (out && cap) out[0] = '\0';
+    if (!out || !cap || !runtimeFlatProfile() || !g_v.active.load(std::memory_order_acquire) || peek(g_v.heldKind) == kHeldUnknown) return false;
+    return copyHeldName(out, cap);
+}
+void journalWatchSetEagerStatusOnFoot(bool eager) {
+    if (g_eagerOnFoot.exchange(eager, std::memory_order_relaxed) == eager) return;
+    if (Session* s = g_session.load(std::memory_order_acquire)) SetEvent(s->wake);
+}
+void journalWatchSetEagerStatusSrv(bool eager) {
+    if (g_eagerSrv.exchange(eager, std::memory_order_relaxed) == eager) return;
+    if (Session* s = g_session.load(std::memory_order_acquire)) SetEvent(s->wake);
+}
+void journalWatchSetLoadoutWanted(bool wanted) {
+    if (wanted && runtimeFlatProfile()) return;
+    if (g_loadoutWanted.exchange(wanted, std::memory_order_relaxed) == wanted) return;
+    if (wanted) {
+        if (Session* s = g_session.load(std::memory_order_acquire)) SetEvent(s->wake);
+    }
+}
 bool journalFlatSupercruise(bool* supercruise) {
     if (!runtimeFlatProfile() || !g_v.active.load(std::memory_order_acquire) || !peek(g_v.supercruiseKnown)) return false;
     if (supercruise) *supercruise = peek(g_v.supercruise);
@@ -1056,6 +1381,31 @@ bool journalInJumpTunnel() {
 }
 bool journalOnFootKnown() { return journalWatchActive() && peek(g_v.onFootKnown); }
 bool journalOnFoot() { return !runtimeFlatProfile() && peek(g_v.onFoot); }
+// F22: LoadGame seen, or Status.json says on foot now (a training scenario writes no LoadGame). See journal_watch.h.
+bool journalSessionOrOnFoot(bool* viaOnFoot) {
+    if (viaOnFoot) *viaOnFoot = false;
+    if (journalGameplay()) return true;
+    if (!journalOnFootKnown() || !journalOnFoot()) return false;
+    if (viaOnFoot) *viaOnFoot = true;
+    return true;
+}
+bool journalBreathableKnown() { return journalWatchActive() && peek(g_v.breathableKnown); }
+bool journalBreathable() { return !runtimeFlatProfile() && peek(g_v.breathable); }
+bool journalAdsKnown() { return journalWatchActive() && peek(g_v.adsKnown); }
+bool journalAds() { return !runtimeFlatProfile() && peek(g_v.ads); }
+JournalAdsStatus journalAdsStatus() {
+    if (runtimeFlatProfile()) return JournalAdsStatus{};
+    JournalAdsStatus r;
+    r.known = peek(g_v.active) && peek(g_v.adsKnown);
+    r.value = peek(g_v.ads);
+    r.polls = peek(g_v.statusSamples);
+    r.contentRevision = peek(g_v.statusContentRevision);
+    r.contentMs = peek(g_v.statusContentMs);
+    return r;
+}
+uint32_t journalFlags2() { return peek(g_v.flags2); }
+bool journalSrvTurretView() { return !runtimeFlatProfile() && srv_turret::turretViewFromFlags(peek(g_v.flags)); }
+bool journalSrvScorpion() { return !runtimeFlatProfile() && peek(g_v.srvScorpion); }
 bool journalDockedKnown() { return journalWatchActive() && peek(g_v.dockedKnown); }
 bool journalStatusDockedKnown() { return g_v.active.load(std::memory_order_acquire) && peek(g_v.dockedKnown); }
 bool journalStatusDocked() { return peek(g_v.docked); }
@@ -1071,11 +1421,16 @@ bool journalVehicle() { return !runtimeFlatProfile() && peek(g_v.vehicle); }
 uint32_t journalSeatKind() { return runtimeFlatProfile() ? 0u : peek(g_v.seatKind); }
 uint32_t journalStatusSamples() { return runtimeFlatProfile() ? 0u : peek(g_v.statusSamples); }
 
+journal_station::Kind journalStationKind() { return static_cast<journal_station::Kind>(g_stationKind.load(std::memory_order_relaxed)); }
+uint32_t journalCarrierJumps() { return g_carrierJumps.load(std::memory_order_relaxed); }
+
 JournalRawStatus journalRawStatus() {
     JournalRawStatus r;
     r.active = g_v.active.load(std::memory_order_acquire);
     r.gameplay = peek(g_v.gameplay);
     r.statusSamples = peek(g_v.statusSamples);
+    r.statusContentRevision = peek(g_v.statusContentRevision);
+    r.statusContentMs = peek(g_v.statusContentMs);
     r.guiKnown = peek(g_v.fssFocusKnown);
     r.gui = peek(g_v.guiFocus);
     return r;

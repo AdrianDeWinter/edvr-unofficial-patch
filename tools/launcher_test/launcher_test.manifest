@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!--
+    The launcher this rig tests ships with longPathAware in src\installer\installer.manifest, so on a
+    machine with long paths enabled (HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled)
+    it opens a path past 259 characters. The rig has to be the same kind of process, or the scratch
+    folder under a deep worktree (.claude\worktrees\<name>, 100 characters and more) puts the manifest
+    store's temporary file (scratch + about 140) past MAX_PATH, and two adoption checks fail for a
+    reason that has nothing to do with the code under test.
+
+    Only that one setting, and nothing else of installer.manifest: the code page, DPI and
+    common-controls settings change what the rig measures. XML comments cannot hold a double hyphen.
+  -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

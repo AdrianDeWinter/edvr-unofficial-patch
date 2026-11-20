@@ -38,6 +38,8 @@ import sys
 import tempfile
 import shutil
 
+import dump_io   # tools\dump_io.py: the eye dump's .bin files are NAME or NAME.z
+
 import numpy as np
 
 FRAMES = 20
@@ -62,7 +64,7 @@ class Dispatch:
 
 
 def read_skin(path):
-    b = open(path, "rb").read()
+    b = dump_io.read_bytes(path)
     h = HEADER.unpack_from(b, 0)
     if h[0] != MAGIC:
         raise ValueError("%s: not a skin ledger file (magic %r)" % (path, h[0]))
@@ -107,7 +109,7 @@ def read_skin(path):
 
 
 def read_pool(path):
-    b = open(path, "rb").read()
+    b = dump_io.read_bytes(path)
     magic, ver, frame, pool_bytes, scene_bytes, rec_bytes, records = struct.unpack_from("<8sIIIIII", b, 0)
     if magic != b"EDVRPOOL" or rec_bytes != POOL_REC:
         raise ValueError("%s: not a pool copy" % path)
@@ -132,7 +134,7 @@ def frame_jobs(fr):
 
 def bones(dirpath, stamp, p, frame):
     path = os.path.join(dirpath, "bones%d_%s_%d.bin" % (p, stamp, frame))
-    return np.fromfile(path, dtype=np.uint8) if os.path.exists(path) else None
+    return np.frombuffer(dump_io.read_bytes(path), dtype=np.uint8).copy() if dump_io.exists(path) else None
 
 
 def rows_f32(raw):
@@ -293,7 +295,7 @@ def run_checks(dirpath, stamp):
     pool = {}
     for fr in frames:
         path = os.path.join(dirpath, "pool_%s_%d.bin" % (stamp, fr["frame"]))
-        if os.path.exists(path):
+        if dump_io.exists(path):
             pool[fr["frame"]] = read_pool(path)
     not_dst = skinned = undrawn = frames_pool = frames_nojobs = 0
     for fr in frames:
@@ -419,11 +421,11 @@ def print_report(res, out=sys.stdout):
 
 
 def newest_stamp(dirpath):
-    cands = [f for f in os.listdir(dirpath) if re.match(r"skin_\d+\.bin$", f)]
+    cands = [f for f in os.listdir(dirpath) if re.match(r"skin_\d+\.bin(\.z)?$", f)]
     if not cands:
         raise ValueError("no skin_<stamp>.bin in %s" % dirpath)
     cands.sort(key=lambda f: os.path.getmtime(os.path.join(dirpath, f)))
-    return cands[-1][len("skin_"):-len(".bin")]
+    return re.match(r"skin_(\d+)\.bin", cands[-1]).group(1)
 
 
 # ---- the synthetic run (an independent writer of the same layout: the checker is tested on it, and the C++ writer's fixture is
@@ -576,6 +578,23 @@ def self_test():
     v = verdict("nofile")
     expect("prev" not in v["fails"], "a missing bones file skips its pair, it does not fail the run: %s" % v["fails"])
     expect("18 of 18 frame pairs" in v["checks"]["prev"]["detail"], "...and the pair count shows it: %s" % v["checks"]["prev"]["detail"])
+    # the same healthy run with every .bin stored as NAME.z, the way the dump writes them, checks the same
+    d = tempfile.mkdtemp(prefix="skinchk_")
+    try:
+        stamp = synth_run(d)
+        for name in os.listdir(d):
+            if name.endswith(".bin"):
+                full = os.path.join(d, name)
+                with open(full, "rb") as fh:
+                    dump_io.write_z(full, fh.read())
+                os.remove(full)
+        expect(newest_stamp(d) == stamp, "newest_stamp finds a compressed run")
+        zrun = run_checks(d, stamp)
+        expect(not zrun["fails"] and zrun["checks"]["prev"]["detail"] == healthy["checks"]["prev"]["detail"]
+               and zrun["checks"]["bases"]["detail"] == healthy["checks"]["bases"]["detail"],
+               "a compressed healthy run passes and reads as the plain one does: %s" % zrun["fails"])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
     # the reader refuses what is not its layout
     d = tempfile.mkdtemp(prefix="skinchk_")
     try:

@@ -1,14 +1,30 @@
 #pragma once
 #include "../../src/d3d11/flat_resolve_input_capture.h"
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <thread>
+
+// Capture directory names must be unique per arm, whatever the clock granularity: 200 fresh instances armed back to back
+// (#105: a per-instance serial let two instances share <tick>_<pid>_1 and mix their frame files).
+inline int flatResolveInputDirectoryTests() {
+    edvr::flatDrawCaptureNoDirectoryWrites=true;
+    std::set<std::wstring> seen;int bad=0;
+    for(unsigned i=0;i<200;++i) {
+        edvr::FlatResolveInputCapture capture;capture.arm(1000+i);
+        if(capture.directory().empty() || !seen.insert(capture.directory()).second)++bad;
+    }
+    edvr::flatDrawCaptureNoDirectoryWrites=false;
+    if(bad)std::printf("FAIL: resolve inputs: %d of 200 back-to-back arms got an empty or repeated directory\n",bad);
+    return bad?1:0;
+}
 
 inline int flatResolveInputGpuTests(ID3D11Device* device,ID3D11DeviceContext* context) {
     namespace fs=std::filesystem;
     using edvr::FlatMonoResolveFrame;
     using edvr::FlatMonoResolveMode;
-    int failed=0;
+    int failed=flatResolveInputDirectoryTests();
     auto expect=[&](bool ok,const char* what) {if(!ok) {std::printf("FAIL: resolve inputs %s\n",what);++failed;}};
     constexpr UINT width=16,height=12;
     std::array<std::vector<uint8_t>,9> bytes;
@@ -112,6 +128,29 @@ inline int flatResolveInputGpuTests(ID3D11Device* device,ID3D11DeviceContext* co
         }
     }
     expect(failureLogged && !falseComplete && fs::is_directory(blockedManifest),"blocked metadata publication logs failure and never claims a completed frame");blocked.cancel();
+
+    // A scanner or reader with the queued body open (sharing read and write but not DELETE) refuses the classic rename, which
+    // left the body at "queued" with the finished one stranded in .tmp. The publish must wait the hold out (2026-10-25).
+    edvr::FlatResolveInputCapture held;f.frame=61200;held.arm(f.frame-1);held.capture(device,context,f);
+    const auto heldManifest=fs::path(held.directory())/"inputs_frame_61200_1.json";
+    HANDLE hold=CreateFileW(heldManifest.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    expect(hold!=INVALID_HANDLE_VALUE && text(heldManifest).find("\"status\":\"queued\"")!=std::string::npos,"queued body exists to be held");
+    // The hold is let go once the publish has been refused (its own attempt count), then 20 ms later: a hold timed from the thread's start against the publish's retry budget
+    // (5 tries, 20 ms apart) failed once in a full build (#139) when the thread ran late. The publish runs inside poll(), so polling goes on while the thread waits.
+    const int attemptsBefore=edvr::posixReplaceAttempts()+edvr::classicReplaceAttempts();
+    std::atomic<bool> pollingDone{false};
+    std::thread release([&hold,&pollingDone,attemptsBefore] {
+        while(!pollingDone.load() && edvr::posixReplaceAttempts()+edvr::classicReplaceAttempts()<=attemptsBefore)Sleep(1);
+        Sleep(20);
+        if(hold!=INVALID_HANDLE_VALUE)CloseHandle(hold);
+    });
+    const ULONGLONG heldDeadline=GetTickCount64()+20000;   // the capture's own 5 s timeout ends its sample before this
+    while(text(heldManifest).find("\"status\":\"queued\"")!=std::string::npos && GetTickCount64()<heldDeadline) {held.poll(context,f.frame+1);Sleep(1);}
+    pollingDone=true;release.join();
+    const auto heldBody=text(heldManifest);
+    if(heldBody.find("\"complete\":true")==std::string::npos)
+        std::printf("info: held manifest publish: %d replace attempts, body: %.300s\n",edvr::posixReplaceAttempts()+edvr::classicReplaceAttempts()-attemptsBefore,heldBody.c_str());
+    expect(heldBody.find("\"complete\":true")!=std::string::npos && heldBody.find("\"status\":\"queued\"")==std::string::npos && !fs::exists(heldManifest.wstring()+L".tmp"),"manifest publication survives a handle held for 50 ms and leaves no .tmp");held.cancel();
 
     // Exercise the actual resolver arm/capture/refusal/poll path for every SDK.
     const fs::path root=fs::path(edvr::Config::get().logDir())/"flat_pixels";

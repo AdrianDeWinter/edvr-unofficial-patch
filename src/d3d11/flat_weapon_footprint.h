@@ -18,10 +18,12 @@
 #include <string>
 #include <vector>
 #include "flat_compute_readback.h"
+#include "flat_capture_directory.h"
 #include "exposure_fix.h"
 #include "shader_swap.h"
 #include "temporal_shader_bytecode.h"
 #include "../common/config.h"
+#include "../common/iniedit.h"
 #include "../common/log.h"
 #ifdef EDVR_HAVE_VERSION_HEADER
 #include "edvr_version.h"
@@ -114,7 +116,7 @@ class FlatWeaponFootprint {
     Ptr<ID3D11Buffer> regionCb_;
     std::wstring directory_;
     uint64_t armFrame_=0,armMs_=0,diskBudget_=0;
-    uint32_t serial_=0,completed_=0,attempts_=0,unsupported_=0;
+    uint32_t completed_=0,attempts_=0,unsupported_=0;
     bool armed_=false,failed_=false;
 #ifdef EDVR_WEAPON_FOOTPRINT_TEST
     std::string fixtureCase_;
@@ -413,7 +415,8 @@ class FlatWeaponFootprint {
         const std::string body=json(f);
         const std::wstring temporary=stem+L".json.tmp",target=stem+L".json";
         const bool files=write(temporary,body.data(),body.size())&&
-            MoveFileExW(temporary.c_str(),target.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;
+            replaceFileAtomic(temporary,target);
+        if(!files)DeleteFileW(temporary.c_str());
         Log::get().note("flat weapon footprint: frame=%llu status=%s reason=%s draw-seq=%u exact-draws=%u consumer=%u stages=%s/%s/%s/%s bytes=%llu files=%s directory=%ls",
             static_cast<unsigned long long>(f.number),f.status,f.reason,f.drawSeq,f.drawCountExact,f.consumerFound?1u:0u,
             f.stages[0].status,f.stages[1].status,f.stages[2].status,f.stages[3].status,
@@ -437,11 +440,15 @@ public:
     void arm(uint64_t frame) {
         cancel("rearmed");shader_.Reset();regionCb_.Reset();directory_.clear();
         attempts_=completed_=unsupported_=0;diskBudget_=0;failed_=false;armed_=true;armFrame_=frame;armMs_=GetTickCount64();
-        SYSTEMTIME t{};GetSystemTime(&t);wchar_t leaf[128]{};
-        _snwprintf_s(leaf,_TRUNCATE,L"%04u%02u%02u_%02u%02u%02u_%03u_%lu_%u",t.wYear,t.wMonth,t.wDay,
-            t.wHour,t.wMinute,t.wSecond,t.wMilliseconds,GetCurrentProcessId(),++serial_);
-        const auto root=Config::get().logDir()+L"\\flat_weapon_footprint";directory_=root+L"\\"+leaf;
-        if(!ensureDirectory(Config::get().logDir())||!ensureDirectory(root)||!ensureDirectory(directory_)){
+        SYSTEMTIME t{};GetSystemTime(&t);
+        const auto leaf=[&](uint64_t id) {
+            wchar_t name[128]{};
+            _snwprintf_s(name,_TRUNCATE,L"%04u%02u%02u_%02u%02u%02u_%03u_%lu_%llu",t.wYear,t.wMonth,t.wDay,
+                t.wHour,t.wMinute,t.wSecond,t.wMilliseconds,GetCurrentProcessId(),static_cast<unsigned long long>(id));
+            return std::wstring(name);
+        };
+        const auto root=Config::get().logDir()+L"\\flat_weapon_footprint";
+        if(!ensureDirectory(Config::get().logDir())||!ensureDirectory(root)||!createFreshCaptureDirectory(root,leaf,directory_)){
             armed_=false;Log::get().note("flat weapon footprint: arm refused directory");return;}
         Log::get().note("flat weapon footprint: armed frame=%llu exact-VS=%016llX exact-PS=%016llX conflict-only=1 frames=2 gpu-cap=384MiB cumulative-disk-cap=384MiB expiry=900frames/30s roi=full-width-lower-1152 directory=%ls",
             static_cast<unsigned long long>(frame),static_cast<unsigned long long>(kVs),static_cast<unsigned long long>(kPs),directory_.c_str());

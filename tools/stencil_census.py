@@ -45,6 +45,11 @@ import re
 import sys
 from collections import Counter, OrderedDict
 
+try:
+    from tools import log_session
+except ImportError:
+    import log_session
+
 # EDVR's own motion-vector compute shader. It is the reader question 2
 # measures up to; --mv overrides it.
 #
@@ -372,9 +377,8 @@ def parse_lines(lines, source):
 
 
 def parse(path):
-    with open(path, 'r', encoding='utf-8', errors='replace') as f:
-        lines = [m.group(1) for m in map(LINE_RE.match,
-                                         (r.rstrip('\r\n') for r in f)) if m]
+    # The whole session: a head log and its tail segments (tools\log_session.py).
+    lines = [m.group(1) for m in map(LINE_RE.match, log_session.read_log_text(path).splitlines()) if m]
     return parse_lines(lines, path)
 
 

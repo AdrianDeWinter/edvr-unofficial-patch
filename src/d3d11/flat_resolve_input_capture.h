@@ -1,7 +1,9 @@
 #pragma once
 #include "flat_mono_resolve.h"
 #include "flat_compute_readback.h"
+#include "flat_capture_directory.h"
 #include "../common/config.h"
+#include "../common/iniedit.h"
 #include "../common/log.h"
 #include <wrl/client.h>
 #include <array>
@@ -54,7 +56,7 @@ class FlatResolveInputCapture {
     uint64_t armFrame_ = 0, armMs_ = 0, lastFrame_ = ~0ull, reserved_ = 0;
     uint64_t copyOperations_ = 0;
     uint64_t budget_ = byteCap;
-    uint32_t attempts_ = 0, serial_ = 0;
+    uint32_t attempts_ = 0;
     bool active_ = false;
 
     static const char* modeName(FlatMonoResolveMode mode) {
@@ -64,6 +66,7 @@ class FlatResolveInputCapture {
         case FlatMonoResolveMode::Fsr: return "fsr";
         case FlatMonoResolveMode::Fsr4: return "fsr4";
         case FlatMonoResolveMode::Xess: return "xess";
+        case FlatMonoResolveMode::Ditto: return "dittosr";
         default: return "taa";
         }
     }
@@ -88,7 +91,11 @@ class FlatResolveInputCapture {
         if(_wfopen_s(&file,(name+L".tmp").c_str(),L"wb") || !file)return false;
         bool ok=std::fwrite(body.data(),1,body.size(),file)==body.size();
         ok=std::fclose(file)==0 && ok;
-        if(ok)ok=MoveFileExW((name+L".tmp").c_str(),name.c_str(),MOVEFILE_REPLACE_EXISTING)!=FALSE;
+        // The classic replace is refused while any handle to the target is open (a scanner or reader on the
+        // just-written "queued" body); the shared POSIX-semantics replace gets past one that shares DELETE
+        // and waits out one that does not.
+        if(ok)ok=replaceFileAtomic(name+L".tmp",name);
+        if(!ok)DeleteFileW((name+L".tmp").c_str());
         return ok;
     }
     bool session(const char* status) {
@@ -185,8 +192,10 @@ public:
         cancel();directory_.clear();manifests_.clear();reserved_=0;attempts_=0;lastFrame_=~0ull;
         armFrame_=frame;armMs_=GetTickCount64();active_=true;
         const auto root=Config::get().logDir()+L"\\flat_pixels";
-        directory_=root+L"\\resolve_inputs_"+std::to_wstring(armMs_)+L"_"+std::to_wstring(GetCurrentProcessId())+L"_"+std::to_wstring(++serial_);
-        if(!ensureDirectory(Config::get().logDir()) || !ensureDirectory(root) || !ensureDirectory(directory_)) {
+        const auto leaf=[&](uint64_t id) {
+            return L"resolve_inputs_"+std::to_wstring(armMs_)+L"_"+std::to_wstring(GetCurrentProcessId())+L"_"+std::to_wstring(id);
+        };
+        if(!ensureDirectory(Config::get().logDir()) || !ensureDirectory(root) || !createFreshCaptureDirectory(root,leaf,directory_)) {
             active_=false;Log::get().note("flat resolve inputs: arm failed directory=%ls",directory_.c_str());return;
         }
         if(!session("armed")) {active_=false;return;}

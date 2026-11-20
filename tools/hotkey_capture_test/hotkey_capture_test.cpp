@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "../../src/common/flat_profile_keys.h"
 #include "../../src/common/hotkey.h"
 #include "../../src/common/iniedit.h"
 #include "../../src/common/pad_names.h"
@@ -309,6 +310,39 @@ void testHotkeyEdge() {
         g_held = true;
         h.setBinding("231D012D:Joy_3");
         check(h.pressed(), "setting the same binding again does not swallow a press");
+    }
+    // Key up: pressed() reads the key and nothing else (no modifiers, no focus query),
+    // and leaves the same state that pressedWith(false, held, focused) leaves for
+    // every held/focused combination.
+    {
+        static int s_modReads = 0;
+        static bool s_f20 = false;
+        hotkeySetKeyboardReaderForTest([](int vk) {
+            if (vk == VK_CONTROL || vk == VK_MENU || vk == VK_SHIFT) ++s_modReads;
+            return vk == VK_F20 && s_f20;
+        });
+        for (int variant = 0; variant < 5; ++variant) {
+            Hotkey a;   // pressed()
+            Hotkey b;   // pressedWith(false, held, focused)
+            a.setKey(VK_F20, variant == 4 ? kHotkeyCtrl : 0);
+            b.setKey(VK_F20, variant == 4 ? kHotkeyCtrl : 0);
+            a.setGameMirrored(variant & 1);
+            b.setGameMirrored(variant & 1);
+            s_f20 = false;
+            s_modReads = 0;
+            const bool ra = a.pressed();
+            const bool rb = b.pressedWith(false, (variant & 2) ? kHotkeyCtrl : 0, (variant & 1) != 0);
+            check(ra == rb && !ra, "key up: pressed() and pressedWith(false,...) agree: no edge");
+            check(s_modReads == 0, "key up: no modifier is read");
+            check(!a.takeMissedWhileUnfocused() && !b.takeMissedWhileUnfocused(),
+                  "key up: nothing is recorded as missed while unfocused");
+            // Next frame, key down: both latches were left false, so the press is an edge
+            // under the same conditions (game-mirrored = focused).
+            s_f20 = true;
+            check(b.pressedWith(true, variant == 4 ? kHotkeyCtrl : 0, true),
+                  "key up then down: the edge is still there");
+        }
+        hotkeySetKeyboardReaderForTest(nullptr);
     }
     // Focus is the keyboard's rule: a pad or joystick press with another window up is
     // missed, said once, and not fired when focus returns.
@@ -1066,11 +1100,7 @@ void testChecks() {
 }
 
 // ---------------------------------------------------------------------------
-// 6b. What a capture step does to a row, and the Explorer Cam lock
-
-// The session flag the Explorer Cam side will own (explorerCamSessionActive()); a stub here.
-bool g_session = false;
-bool sessionStub() { return g_session; }
+// 6b. What a capture step does to a row
 
 // A step, made by driving the real state machine with one new input.
 CaptureStep stepFor(const CaptureSnapshot& s, bool canClear = true) {
@@ -1114,63 +1144,21 @@ void testDecide() {
         c.uses = uses;
         c.nUses = 3;
         c.scope = scope;
-        c.explorerCamSession = sessionStub();
         return c;
     };
 
-    // Explorer Cam's key while NO session is on: free to change and to clear.
-    g_session = false;
+    // A key row with an on-foot scope (a fixture row: the scope is the decision's input; every EDVR key today works anywhere).
     {
-        const HotkeyRowContext c = ctxFor("explorer_cam", "F5", ClashScope::OnFoot);
-        check(hotkeyCaptureMayBegin(c), "no session: Enter on the Explorer Cam key row starts a capture");
+        const HotkeyRowContext c = ctxFor("on_foot_key", "F5", ClashScope::OnFoot);
         CaptureDecision d = hotkeyDecide(stepFor(pressing(VK_F10)), c);
-        check(d.outcome == CaptureOutcome::Bind && d.binding.vk == VK_F10, "...F10 is written");
+        check(d.outcome == CaptureOutcome::Bind && d.binding.vk == VK_F10, "an on-foot key row: F10 is written");
         d = hotkeyDecide(stepFor(pressing(VK_DELETE)), c);
-        check(d.outcome == CaptureOutcome::Clear, "...Delete clears it (that turns Explorer Cam off)");
+        check(d.outcome == CaptureOutcome::Clear, "...Delete clears it");
         d = hotkeyDecide(stepFor(pressing(VK_F9)), c);
         check(d.outcome == CaptureOutcome::Bind && d.check.clashCount == 1 && strstr(d.check.clashList, "HumanoidJumpButton"),
               "...a key Elite also uses is written, with the warning");
         d = hotkeyDecide(stepFor(pressing(VK_F7)), c);
         check(d.outcome == CaptureOutcome::Bind && d.check.clashCount == 0, "...a ship control on the key is no warning on foot");
-    }
-    // The same row WHILE a session is on: locked -- clear and change both refused, whatever the key.
-    g_session = true;
-    {
-        const HotkeyRowContext c = ctxFor("explorer_cam", "F5", ClashScope::OnFoot);
-        check(!hotkeyCaptureMayBegin(c), "session on: Enter on the Explorer Cam key row starts nothing");
-        check(hotkeyDecide(stepFor(pressing(VK_F10)), c).outcome == CaptureOutcome::Locked, "...a change is refused");
-        check(hotkeyDecide(stepFor(pressing(VK_DELETE)), c).outcome == CaptureOutcome::Locked, "...a clear is refused");
-        check(hotkeyDecide(stepFor(pressing(VK_BACK)), c).outcome == CaptureOutcome::Locked, "...Backspace too");
-        check(hotkeyDecide(stepFor(pressing(VK_F8)), c).outcome == CaptureOutcome::Locked,
-              "...and the lock is the answer even for a key that would also be a duplicate");
-        check(hotkeyDecide(stepFor(pressing(VK_TAB)), c).outcome == CaptureOutcome::Locked,
-              "...or a reserved one");
-        check(hotkeyDecide(stepFor(pressing(VK_ESCAPE)), c).outcome == CaptureOutcome::Cancelled,
-              "...but Esc, which changes nothing, is just a cancel");
-        check(hotkeyDecide(CaptureStep(), c).outcome == CaptureOutcome::Waiting, "...and nothing pressed is nothing");
-        char words[96];
-        hotkeyLockedText("F5", words, sizeof(words));
-        check(strcmp(words, "Leave Explorer Cam (F5) to change its key") == 0, "the words are \"Leave Explorer Cam (F5) to change its key\"");
-        hotkeyLockedText("231D0200:Joy_12", words, sizeof(words));
-        check(strcmp(words, "Leave Explorer Cam (231D0200:Joy_12) to change its key") == 0, "...with the key the row holds, a HOTAS button too");
-        hotkeyLockedText("", words, sizeof(words));
-        check(strcmp(words, "Leave Explorer Cam (its key) to change its key") == 0, "...and a fallback for none");
-        check(hotkeyRowLocked("explorer_cam", true) && !hotkeyRowLocked("explorer_cam", false), "the row is locked only while the session is");
-        // No other hotkey row is ever locked by it.
-        for (const char* other : {"menu", "dump_camera", "dump_draws", "dump_eyes"}) {
-            const HotkeyRowContext oc = ctxFor(other, "", ClashScope::AnyContext);
-            checkf(hotkeyCaptureMayBegin(oc) && !hotkeyRowLocked(other, true), "hotkey.%s is not locked by a session", other);
-        }
-        const HotkeyRowContext toggle = ctxFor("dump_eyes", "SCROLLLOCK", ClashScope::AnyContext);
-        check(hotkeyDecide(stepFor(pressing(VK_F11)), toggle).outcome == CaptureOutcome::Bind,
-              "...so the eye dump key is still written during a session");
-    }
-    // And unlocked again once the session ends: the stub flips, the row follows.
-    g_session = false;
-    {
-        const HotkeyRowContext c = ctxFor("explorer_cam", "F5", ClashScope::OnFoot);
-        check(hotkeyCaptureMayBegin(c) && hotkeyDecide(stepFor(pressing(VK_F10)), c).outcome == CaptureOutcome::Bind,
-              "session over: the row takes a change again");
     }
 
     // The menu key: changed, never cleared.
@@ -1230,20 +1218,19 @@ void testDecide() {
     {
         const HotkeyRowContext c = ctxFor("dump_draws", "", ClashScope::AnyContext);
         check(hotkeyDecide(stepFor(pressing(VK_DELETE)), c).outcome == CaptureOutcome::ClearAlready, "Delete on an empty row: already empty");
-        const HotkeyRowContext spelled = ctxFor("explorer_cam", "f5", ClashScope::OnFoot);
+        const HotkeyRowContext spelled = ctxFor("on_foot_key", "f5", ClashScope::OnFoot);
         check(hotkeyDecide(stepFor(pressing(VK_F5)), spelled).outcome == CaptureOutcome::Unchanged,
               "\"f5\" in the ini and F5 pressed are the same key: unchanged");
     }
-    g_session = false;
 }
 
 // ---------------------------------------------------------------------------
 // 6c. The capture-ending press must not reach a hotkey polled LATER in the same frame
 //
-// The review of 2026-10-08, finding 1. device_hook runs the menu BEFORE vScreenFrameBoundary,
-// which polls Explorer Cam's F5 latch; that latch had not seen the press that ended a capture,
-// and suspension was already lifted, so capturing F5 on another row (refused as a duplicate)
-// entered Explorer Cam. These cells run the REAL Hotkey, the real state machine and the real
+// The review of 2026-10-08, finding 1. device_hook runs the menu BEFORE hotkeys polled later in
+// the frame; such a latch had not seen the press that ended a capture, and suspension was already
+// lifted, so capturing F5 on another row (refused as a duplicate) fired the later key (Explorer
+// Cam's, until F98). These cells run the REAL Hotkey, the real state machine and the real
 // decision in the frame's real order -- earlier poll, menu tick (step, decide, end the capture),
 // later poll -- against a keyboard, a pad and a HOTAS the cell controls.
 
@@ -1312,7 +1299,7 @@ CaptureSnapshot snapshotOfWorld() {
 
 struct LeakCell {
     const char*   name;
-    const char*   explorer;      // hotkey.explorer_cam, as the ini holds it
+    const char*   later;         // hotkey.compare_aa (a key polled after the menu), as the ini holds it
     const char*   rowKey;        // the row being captured
     const char*   rowCurrent;    // ...and what it holds
     HotkeyBinding pressed;       // the input that ends the capture
@@ -1324,18 +1311,18 @@ void runLeakCell(const LeakCell& c) {
     hotkeySetKeyboardReaderForTest(&worldKey);
     hotkeySetNonKeyboardReader(&worldHeld);
     HotkeyBinding e;
-    hotkeyParseBinding(c.explorer, &e, true);
+    hotkeyParseBinding(c.later, &e, true);
 
     Hotkey early;      // a diagnostic key, polled BEFORE the menu in the frame
-    Hotkey explorer;   // Explorer Cam's F5, polled AFTER it (vScreenFrameBoundary)
+    Hotkey later;      // a key polled AFTER it
     early.setGameMirrored(true);
-    explorer.setGameMirrored(true);
-    early.setBinding(c.explorer);
-    explorer.setBinding(c.explorer);
+    later.setGameMirrored(true);
+    early.setBinding(c.later);
+    later.setBinding(c.later);
 
     // Frame 0: the capture begins (Enter on the row).
     early.pressed();
-    explorer.pressed();
+    later.pressed();
     HotkeyCapture capture;
     capture.begin(snapshotOfWorld());
     hotkeysSuspend(true);
@@ -1346,37 +1333,37 @@ void runLeakCell(const LeakCell& c) {
     const CaptureStep step = capture.step(snapshotOfWorld(), strcmp(c.rowKey, "menu") != 0);
     HotkeyOther others[2];
     int nOthers = 0;
-    const bool isExplorerRow = strcmp(c.rowKey, "explorer_cam") == 0;
-    if (!isExplorerRow) others[nOthers++] = HotkeyOther{"hotkey.explorer_cam", e};
+    const bool isLaterRow = strcmp(c.rowKey, "compare_aa") == 0;
+    if (!isLaterRow) others[nOthers++] = HotkeyOther{"hotkey.compare_aa", e};
     HotkeyRowContext ctx;
     ctx.rowKey = c.rowKey;
     ctx.currentText = c.rowCurrent;
     ctx.others = others;
     ctx.nOthers = nOthers;
-    ctx.scope = isExplorerRow ? ClashScope::OnFoot : ClashScope::AnyContext;
+    ctx.scope = ClashScope::AnyContext;
     const CaptureDecision dec = hotkeyDecide(step, ctx);
     capture.end();
     hotkeysSuspend(false);   // endCapture(): the capture is over, EDVR's hotkeys work again
     char what[240];
     snprintf(what, sizeof(what), "%s: the capture ends as expected", c.name);
     check(dec.outcome == c.expect, what);
-    const bool leaked = explorer.pressed();   // the later poll in the same frame
-    snprintf(what, sizeof(what), "%s: the capture-ending press does not fire Explorer Cam's latch in that frame", c.name);
+    const bool leaked = later.pressed();   // the later poll in the same frame
+    snprintf(what, sizeof(what), "%s: the capture-ending press does not fire the later key's latch in that frame", c.name);
     check(!leaked, what);
     snprintf(what, sizeof(what), "%s: ...nor the earlier one's, a frame later", c.name);
     check(!early.pressed(), what);
     // Frame 2 and on, the press still held, then released.
     snprintf(what, sizeof(what), "%s: ...nor while it stays held", c.name);
-    check(!explorer.pressed() && !explorer.pressed() && !early.pressed(), what);
+    check(!later.pressed() && !later.pressed() && !early.pressed(), what);
     setHeld(c.pressed, false);
-    check(!explorer.pressed() && !early.pressed(), "(released: nothing)");
-    // The next fresh press of Explorer Cam's own input still works, once.
+    check(!later.pressed() && !early.pressed(), "(released: nothing)");
+    // The next fresh press of the later key's own input still works, once.
     setHeld(e, true);
     snprintf(what, sizeof(what), "%s: a fresh press afterwards still fires", c.name);
-    check(explorer.pressed() && early.pressed(), what);
-    check(!explorer.pressed() && !early.pressed(), "...once");
+    check(later.pressed() && early.pressed(), what);
+    check(!later.pressed() && !early.pressed(), "...once");
     setHeld(e, false);
-    explorer.pressed();
+    later.pressed();
     early.pressed();
     hotkeySetKeyboardReaderForTest(nullptr);
     hotkeySetNonKeyboardReader(&fakeReader);
@@ -1384,36 +1371,36 @@ void runLeakCell(const LeakCell& c) {
 
 void testCaptureLeak() {
     printf("capture-ending press\n");
-    const char* explorers[3] = {"F5", "GamePad_Back", "231D0200:Joy_12"};
+    const char* laters[3] = {"F5", "GamePad_Back", "231D0200:Joy_12"};
     const char* kinds[3] = {"keyboard", "pad", "HOTAS"};
     for (int k = 0; k < 3; ++k) {
         HotkeyBinding e;
-        hotkeyParseBinding(explorers[k], &e, true);
+        hotkeyParseBinding(laters[k], &e, true);
         char name[96];
-        // The press is the Explorer binding itself, captured on ANOTHER row: refused as a duplicate,
-        // and it must not also be Explorer Cam's key press.
+        // The press is the later key's binding itself, captured on ANOTHER row: refused as a duplicate,
+        // and it must not also be the later key's press.
         snprintf(name, sizeof(name), "Duplicate (%s)", kinds[k]);
-        runLeakCell({name, explorers[k], "dump_eyes", "SCROLLLOCK", e, CaptureOutcome::Duplicate});
-        // ...captured on the Explorer row itself: unchanged.
+        runLeakCell({name, laters[k], "dump_eyes", "SCROLLLOCK", e, CaptureOutcome::Duplicate});
+        // ...captured on the later key's own row: unchanged.
         snprintf(name, sizeof(name), "Unchanged (%s)", kinds[k]);
-        runLeakCell({name, explorers[k], "explorer_cam", explorers[k], e, CaptureOutcome::Unchanged});
-        // Esc cancels. (The cell for a keyboard Explorer key that IS Esc is below.)
+        runLeakCell({name, laters[k], "compare_aa", laters[k], e, CaptureOutcome::Unchanged});
+        // Esc cancels. (The cell for a keyboard later key that IS Esc is below.)
         snprintf(name, sizeof(name), "Cancelled (%s)", kinds[k]);
-        runLeakCell({name, explorers[k], "dump_eyes", "SCROLLLOCK", key(VK_ESCAPE), CaptureOutcome::Cancelled});
+        runLeakCell({name, laters[k], "dump_eyes", "SCROLLLOCK", key(VK_ESCAPE), CaptureOutcome::Cancelled});
     }
-    // A successful Bind that is a different press of the same key: Explorer = F5 is a subset of CTRL+F5.
-    runLeakCell({"Bind (keyboard, CTRL+F5 over an F5 Explorer key)", "F5", "dump_eyes", "SCROLLLOCK", key(VK_F5, kHotkeyCtrl),
+    // A successful Bind that is a different press of the same key: a later key of F5 is a subset of CTRL+F5.
+    runLeakCell({"Bind (keyboard, CTRL+F5 over an F5 later key)", "F5", "dump_eyes", "SCROLLLOCK", key(VK_F5, kHotkeyCtrl),
                  CaptureOutcome::Bind});
-    runLeakCell({"Bind (pad, Start over a Back Explorer key)", "GamePad_Back", "dump_eyes", "SCROLLLOCK", pad(kPadStart),
+    runLeakCell({"Bind (pad, Start over a Back later key)", "GamePad_Back", "dump_eyes", "SCROLLLOCK", pad(kPadStart),
                  CaptureOutcome::Bind});
-    runLeakCell({"Bind (HOTAS, Joy_3 over a Joy_12 Explorer key)", "231D0200:Joy_12", "dump_eyes", "SCROLLLOCK",
+    runLeakCell({"Bind (HOTAS, Joy_3 over a Joy_12 later key)", "231D0200:Joy_12", "dump_eyes", "SCROLLLOCK",
                  joy(kGladiator, 2), CaptureOutcome::Bind});
-    runLeakCell({"Bind (HOTAS, a hat over a Joy_12 Explorer key)", "231D0200:Joy_12", "dump_camera", "PAUSE",
+    runLeakCell({"Bind (HOTAS, a hat over a Joy_12 later key)", "231D0200:Joy_12", "dump_camera", "PAUSE",
                  joy(kGladiator, kJoyPovBase), CaptureOutcome::Bind});
     // The same press ending a capture on the MENU row.
     runLeakCell({"Unchanged (keyboard, menu row)", "F5", "menu", "F8", key(VK_F8), CaptureOutcome::Unchanged});
-    // An Explorer key that is itself the cancelling key (an ini edit): the Esc that cancels is not a press of it.
-    runLeakCell({"Cancelled (keyboard Explorer key IS Esc)", "ESCAPE", "dump_eyes", "SCROLLLOCK", key(VK_ESCAPE),
+    // A later key that is itself the cancelling key (an ini edit): the Esc that cancels is not a press of it.
+    runLeakCell({"Cancelled (keyboard later key IS Esc)", "ESCAPE", "dump_eyes", "SCROLLLOCK", key(VK_ESCAPE),
                  CaptureOutcome::Cancelled});
 
     // The registry behind it: every Hotkey is in it, wherever it lives, and copies and
@@ -1428,7 +1415,7 @@ void testCaptureLeak() {
             check(hotkeysLiveCount() == before + 3, "three live Hotkeys are three registry entries (construct, int, copy)");
         }
         check(hotkeysLiveCount() == before, "...and none is left behind");
-        static Hotkey staticLike;   // a file-scope Hotkey, like Explorer Cam's
+        static Hotkey staticLike;   // a file-scope Hotkey
         check(hotkeysLiveCount() == before + 1, "...a Hotkey with static storage registers itself too");
     }
     // Priming reaches a pad and a HOTAS latch, and a key latch, whichever binding they hold, and
@@ -1529,8 +1516,30 @@ void testCaptureWiringPins(const char* root) {
           close.find("hotkeysPrimeAll()") != std::string::npos,
           "menu.cpp: closing releases pad ownership and consumes held hotkey edges");
     const std::string tick = bodyOf("void menuTick(ID3D11Device* dev) {");
-    check(tick.find("s.open && padNavSummon && s.padReady") != std::string::npos,
+    std::string policyText;
+    {
+        const std::string path = std::string(root) + "\\src\\d3d11\\menu_policy.h";
+        FILE* f = fopen(path.c_str(), "rb");
+        if (f) {
+            char buf[8192];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), f)) > 0) policyText.append(buf, n);
+            fclose(f);
+        }
+    }
+    check(tick.find("menuSummonAction(summonPressed, s.open, padNavSummon, s.padReady,") != std::string::npos &&
+          policyText.find("if (open && padNavSummon && padReady) return MenuSummonAction::None;") != std::string::npos,
           "menu.cpp: overlapping summon is suppressed only after navigation is private");
+    // One source of truth for "this profile has a Hotkeys page": the page table. The policy has no field for it, the tick asks the table once, and the capture, its
+    // note timer and Escape ownership all follow that one bool; a flat open resets the capture and reads the page's state like VR's.
+    check(tick.find("const bool hotkeysPage = menuProfileHasPage(MenuPageSource::Hotkeys, runtimeFlatProfile());") != std::string::npos &&
+          text.find("pol.hotkeysPage") == std::string::npos && policyText.find("hotkeysPage") == std::string::npos &&
+          tick.find("hotkeysPage && s.captureEntry >= 0, shift, world)") != std::string::npos &&
+          tick.find("menuEscapeAction(esc, s.escapeDown, hotkeysPage && s.captureEntry >= 0, s.editEntry >= 0)") != std::string::npos,
+          "menu.cpp: the capture's claim on the summon key and Escape follows the page table's Hotkeys page, and the policy has no field for it");
+    check(bodyOf("void openMenu(uint64_t now) {").find("if (menuProfileHasPage(MenuPageSource::Hotkeys, runtimeFlatProfile())) {") != std::string::npos &&
+          text.find("hotkeyPageRowsFor(kMenuRows, kRowDefCount, runtimeFlatProfile(), s.developer, rows, 32)") != std::string::npos,
+          "menu.cpp: either profile's open resets a capture, and the Hotkeys page's rows come from the profile's own list");
     const std::string keys = bodyOf("void handleKeys(uint64_t now) {");
     const std::string apply = bodyOf("void applyDecision(int def, const CaptureDecision& dec) {");
     check(tick.find("if (keysReady) handleKeys(now)") != std::string::npos &&
@@ -1557,18 +1566,39 @@ void testCaptureWiringPins(const char* root) {
               "device_hook.cpp: the raw XInput hotkey reader obeys panel ownership");
     }
 
-    // The Explorer Cam page (2026-10-08): built for everyone -- ahead of, and outside, the developer pages -- from the `explorer_cam` rows, and its numbers
-    // are shown and stepped by menu_schema.h's helpers (the ones testExplorerPage holds to "+0.15 m" and 0.01).
+    // Number rows are shown and stepped by menu_schema.h's helpers (the ones testNumberRows holds to "+0.15 m" and 0.01). The Explorer Cam page that
+    // was built for everyone went with Explorer Cam in F98; the native on foot page is built the same way.
     {
+        // The pages are rows of the page table (src/d3d11/menu_pages.h), built by one loop in buildPages and by makePage, which hands a Settings row to addSettingRows.
+        std::string table;
+        {
+            const std::string path = std::string(root) + "\\src\\d3d11\\menu_pages.h";
+            FILE* pf = fopen(path.c_str(), "rb");
+            if (pf) {
+                char buf[65536];
+                size_t n;
+                while ((n = fread(buf, 1, sizeof(buf), pf)) > 0) table.append(buf, n);
+                fclose(pf);
+            }
+        }
         const std::string pages = bodyOf("void buildPages() {");
-        const size_t at = pages.find("p.name = \"Explorer Cam\";");
-        const size_t rows = at == std::string::npos ? at : pages.find("addSettingRows(p, MenuTier::Fix, \"explorer_cam\", false);", at);
-        const size_t developer = pages.find("if (s.developer) {");
-        check(at != std::string::npos && rows != std::string::npos && rows - at < 200,
-              "menu.cpp: buildPages makes a page named Explorer Cam from the Fix-tier rows of the explorer_cam page");
+        const std::string make = bodyOf("Page makePage(const MenuPageDef& d) {");
+        check(!table.empty() && table.find("\"Explorer Cam\"") == std::string::npos && table.find("\"explorer_cam\"") == std::string::npos,
+              "menu_pages.h: the page table has no Explorer Cam page (retired in F98)");
+        check(pages.find("menuPageShown(kMenuPages[i], flat, s.developer)") != std::string::npos && pages.find("makePage(kMenuPages[i])") != std::string::npos &&
+                  make.find("addSettingRows(p, menuTierOf(d.tier), d.token, d.grouped);") != std::string::npos,
+              "menu.cpp: buildPages is one loop over the page table, and makePage builds a Settings page from its tier, token and grouping");
+        const size_t at = table.find("{\"Native on foot\", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, \"native_on_foot\", true,");
+        const size_t developer = table.find("{\"Advanced\", false, true, true,");
         check(at != std::string::npos && developer != std::string::npos && at < developer,
-              "...for everyone: it is built before, and outside, the developer-mode pages");
-        check(bodyOf("std::string displayValue(const MenuRowDef& d, const std::string& v) {").find("menuFormatNumber(d, atof(v.c_str()))") !=
+              "menu_pages.h: the Native on foot page is the Fix-tier rows of the native_on_foot page, grouped under the ini's headings (F127), for everyone (VR), before the developer pages");
+        {   // The Mirror window page (2026-10-28 as the Desktop window page; renamed F173): right after Visual and before Native on foot, for everyone, from the Fix-tier rows of its own page.
+            const size_t visual = table.find("{\"Visual\", false, true, false,"), page = table.find("{\"Mirror window\", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, \"desktop_window\", false,");
+            check(visual != std::string::npos && page != std::string::npos && at != std::string::npos && visual < page && page < at,
+                  "menu_pages.h: the Mirror window page (it was the Desktop window page until F173) is the Fix-tier rows of the desktop_window page, right after Visual and before Native on foot");
+            check(visual != std::string::npos && table.find("MenuPageSource::Settings, MenuPageTier::Fix, \"visual\", true,", visual) == visual + std::strlen("{\"Visual\", false, true, false, "),
+                  "menu_pages.h: the Visual page is still built from the visual rows");
+        }        check(bodyOf("std::string displayValue(const MenuRowDef& d, const std::string& v) {").find("menuFormatNumber(d, atof(v.c_str()))") !=
                   std::string::npos,
               "menu.cpp: a number row is shown by menuFormatNumber (\"+0.15 m\", \"0 ms (exact)\")");
         check(bodyOf("void stepRow(int defIndex, int dir, int mult) {").find("menuSteppedNumber(d, ") != std::string::npos,
@@ -1674,7 +1704,7 @@ void testEliteBinds(const char* root) {
     check(count == 9, "nine uses in all (the unknown pad key is left out, its keyboard slot is not)");
     check(find("UnknownPad", key(VK_F6)), "an element with a pad key this build has no name for still reports its keyboard slot");
 
-    // The keyboard-only lookup Explorer Cam's launch check uses is unchanged by all this.
+    // The keyboard-only lookup the AA comparison key's clash check uses is unchanged by all this.
     static EliteKeyboardUse kb[64];
     const int kn = eliteBindsKeyboardUsesDir(dir.c_str(), kb, 64, nullptr, 0);
     bool sawSpace = false, sawCtrlR = false, leaked = false;
@@ -1728,7 +1758,6 @@ void testEliteBinds(const char* root) {
             // For the reader: what the shipped defaults would be told on this machine's bindings.
             struct { const char* what; HotkeyBinding b; ClashScope scope; } defaults[] = {
                 {"menu F8", key(VK_F8), ClashScope::AnyContext},
-                {"explorer_cam F5 (on foot)", key(VK_F5), ClashScope::OnFoot},
                 {"dump_camera PAUSE", key(VK_PAUSE), ClashScope::AnyContext},
             };
             for (const auto& d : defaults) {
@@ -1745,10 +1774,11 @@ void testEliteBinds(const char* root) {
 }
 
 // ---------------------------------------------------------------------------
-// 8b. The Explorer Cam page (2026-10-08): the generated rows, how they step, and what they show
+// 8b. Number rows: how they step and what they show (menu_schema.h's helpers). The Explorer Cam page they were written for (2026-10-08) went
+// with Explorer Cam in F98: no row is generated for it or for any of its keys.
 
-void testExplorerPage() {
-    printf("explorer cam page\n");
+void testNumberRows() {
+    printf("number rows\n");
     constexpr int kCount = static_cast<int>(sizeof(kMenuRows) / sizeof(kMenuRows[0]));
     auto find = [&](const char* section, const char* key) {
         for (int i = 0; i < kCount; ++i) {
@@ -1756,45 +1786,42 @@ void testExplorerPage() {
         }
         return -1;
     };
-    // The page: exactly four rows, in the ini's order, for everyone (the Fix tier), live, numbers.
-    const char* want[4] = {"explorer_cam_eye_trim_up", "explorer_cam_eye_trim_forward", "explorer_cam_eye_trim_right",
-                           "explorer_cam_follow_smoothing_ms"};
-    int onPage[16];
-    int n = 0;
-    for (int i = 0; i < kCount; ++i) {
-        if (strcmp(kMenuRows[i].page, "explorer_cam") == 0 && n < 16) onPage[n++] = i;
+    int onPage = 0;
+    for (int i = 0; i < kCount; ++i) onPage += strcmp(kMenuRows[i].page, "explorer_cam") == 0 ? 1 : 0;
+    check(onPage == 0, "no row is on an Explorer Cam page (retired in F98)");
+    for (const char* retired : {"explorer_cam_eye_up", "explorer_cam_eye_forward", "explorer_cam_eye_right", "explorer_cam_eye_trim_up",
+                                "explorer_cam_eye_trim_forward", "explorer_cam_eye_trim_right", "explorer_cam_follow_smoothing_ms"}) {
+        checkf(find("fix", retired) < 0, "the retired key fix.%s has no menu row", retired);
     }
-    check(n == 4, "the Explorer Cam page has four rows");
-    for (int k = 0; k < 4 && k < n; ++k) {
-        const MenuRowDef& d = kMenuRows[onPage[k]];
-        checkf(strcmp(d.key, want[k]) == 0, "row %s is in the ini's order", want[k]);
-        checkf(strcmp(d.section, "fix") == 0 && d.tier == MenuTier::Fix, "%s is a [fix] row of the Fix tier (everyone, not the developer pages)", want[k]);
-        checkf(d.kind == MenuKind::Number && d.applies == 1, "%s is a LIVE number row", want[k]);
-    }
-    check(n == 4 && strcmp(kMenuRows[onPage[0]].label, "Eye height") == 0 && strcmp(kMenuRows[onPage[1]].label, "Eye forward") == 0 &&
-              strcmp(kMenuRows[onPage[2]].label, "Eye sideways") == 0 && strcmp(kMenuRows[onPage[3]].label, "Head-follow smoothing") == 0,
-          "the labels: Eye height, Eye forward, Eye sideways, Head-follow smoothing");
-    // The absolute fallback keys have no row anywhere, and neither does the Explorer Cam key outside its own page.
-    for (const char* hidden : {"explorer_cam_eye_up", "explorer_cam_eye_forward", "explorer_cam_eye_right"}) {
-        checkf(find("fix", hidden) < 0, "the fallback key fix.%s has no menu row (ini-only)", hidden);
-    }
-    check(find("fix", "explorer_cam") < 0, "no [fix] explorer_cam row (the key is hotkey.explorer_cam)");
-    const int key = find("hotkey", "explorer_cam");
-    check(key >= 0 && strcmp(kMenuRows[key].page, "hotkeys") == 0, "the Explorer Cam KEY stays on the Hotkeys page only (not duplicated on this one)");
+    check(find("hotkey", "explorer_cam") < 0 && find("fix", "explorer_cam") < 0, "...nor the retired key hotkey.explorer_cam (no Hotkeys row)");
 
-    // Shipped values, bounds and steps.
-    if (n == 4) {
-        const MenuRowDef& up = kMenuRows[onPage[0]];
-        const MenuRowDef& fwd = kMenuRows[onPage[1]];
-        const MenuRowDef& right = kMenuRows[onPage[2]];
-        const MenuRowDef& smooth = kMenuRows[onPage[3]];
-        check(atof(up.shipped) == 0.15 && atof(fwd.shipped) == -0.08 && atof(right.shipped) == 0.0 && atof(smooth.shipped) == 0.0,
-              "shipped: 0.15 up, -0.08 forward, 0.0 sideways, smoothing 0 (Sean's tuning)");
-        for (int k = 0; k < 3; ++k) {
-            const MenuRowDef& d = kMenuRows[onPage[k]];
-            checkf(atof(d.lo) == -0.5 && atof(d.hi) == 0.5 && d.precision == 2, "%s is -0.5..0.5 m at two decimals", d.key);
-            checkf(menuStepOf(d) == 0.01, "%s steps by 0.01 m", d.key);
-        }
+    // The helpers on rows shaped by the four tokens: metres to two decimals with a sign, and milliseconds with a word for zero.
+    MenuRowDef up = {};
+    up.kind = MenuKind::Number;
+    up.shipped = "0.15";
+    up.lo = "-0.5";
+    up.hi = "0.5";
+    up.precision = 2;
+    up.step = "0.01";
+    up.unit = "m";
+    up.zero = "";
+    up.showSign = true;
+    MenuRowDef fwd = up;
+    fwd.shipped = "-0.08";
+    MenuRowDef right = up;
+    right.shipped = "0.0";
+    MenuRowDef smooth = {};
+    smooth.kind = MenuKind::Number;
+    smooth.shipped = "0";
+    smooth.lo = "0";
+    smooth.hi = "200";
+    smooth.precision = 0;
+    smooth.step = "10";
+    smooth.unit = "ms";
+    smooth.zero = "exact";
+    smooth.showSign = false;
+    {
+        for (const MenuRowDef* d : {&up, &fwd, &right}) check(menuStepOf(*d) == 0.01, "a metre row with step 0.01 steps by 0.01 m");
         check(atof(smooth.lo) == 0.0 && atof(smooth.hi) == 200.0 && smooth.precision == 0 && menuStepOf(smooth) == 10.0,
               "the smoothing is 0..200 ms, whole numbers, in steps of 10");
         // What the rows show.
@@ -1859,6 +1886,521 @@ void testExplorerPage() {
         check(menuStepOf(ranged) == 0.05, "a 0..1 decimal row steps by a twentieth (the older rule)");
     }
 }
+void testLegacyOnFootRowsStayOutOfMenu() {
+    printf("legacy on-foot rows stay out of the menu\n");
+    constexpr int kCount = static_cast<int>(sizeof(kMenuRows) / sizeof(kMenuRows[0]));
+    const char* const keys[] = {"native_on_foot_hide_fp_body", "native_on_foot_body_unclip", "native_on_foot_body_align",
+                                "native_on_foot_body_mode", "native_on_foot_body_cull", "native_on_foot_body_hybrid",
+                                "native_on_foot_look_to_aim_yaw_sign", "native_on_foot_look_to_aim_comp_delay",
+                                "native_on_foot_look_to_aim_comp_sign", "native_on_foot_body_align_trim_right_cm",
+                                "native_on_foot_body_align_trim_up_cm", "native_on_foot_body_align_trim_forward_cm",
+                                "native_on_foot_weapon_eye_right_cm",
+                                // F127: the 21 rows taken off the page (the keys, their behaviour and their defaults stay: set in edvr.ini or the installer's window), and the
+                                // aim reticle's placement, retired (a hidden retired line; the reticle always sits on the aim axis)
+                                "native_on_foot_world_markers", "native_on_foot_spine_bend_amount", "native_on_foot_weapon_eye_body",
+                                "native_on_foot_pistol_readout_forward_cm", "native_on_foot_pistol_readout_left_cm", "native_on_foot_pistol_readout_up_cm",
+                                "native_on_foot_pistol_readout_toward_eye_cm", "native_on_foot_rifle_ads_readout_forward_cm",
+                                "native_on_foot_rifle_ads_readout_left_cm", "native_on_foot_rifle_ads_readout_up_cm",
+                                "native_on_foot_rifle_ads_readout_toward_eye_cm", "native_on_foot_hud_room", "native_on_foot_hud_left_x",
+                                "native_on_foot_hud_left_y", "native_on_foot_hud_top_x", "native_on_foot_hud_top_y", "native_on_foot_hud_right_x",
+                                "native_on_foot_hud_right_y", "native_on_foot_hud_centre_x", "native_on_foot_hud_centre_y",
+                                "native_on_foot_hud_follow_smoothing_ms", "native_on_foot_reticle_follow", "native_on_foot_visor_axis",
+                                // F155 (the panel cursor's series): the panel cursor's two settings, retired (the cursor is always drawn), and no row
+                                "native_on_foot_panel_mouse", "native_on_foot_panel_cursor_test",
+                                // F146: the ADS sight switch, the two ADS sight trims and the full outfit switch, retired; the four Weapon UI trims moved to [experimental]
+                                "native_on_foot_ads_game_sight", "native_on_foot_ads_sight_up_cm", "native_on_foot_ads_sight_right_cm", "native_on_foot_body_full_outfit",
+                                "native_on_foot_weapon_ui_forward_cm", "native_on_foot_weapon_ui_left_cm", "native_on_foot_weapon_ui_up_cm", "native_on_foot_weapon_ui_toward_eye_cm",
+                                // F152: the ADS eye distance (a cap at 21 cm), retired; the developer tier's "ADS eye forward / back" is the per-weapon trim that replaces it
+                                "native_on_foot_ads_eye_distance_cm"};
+    // kMenuRows is generated at build time from repository annotations. A player's older live INI supplies values at runtime,
+    // but cannot add rows back to this compiled table.
+    int nativePageRows = 0;
+    for (int i = 0; i < kCount; ++i)
+        if (strcmp(kMenuRows[i].page, "native_on_foot") == 0) ++nativePageRows;
+    check(nativePageRows == 20, "the Native on foot page has 20 rows (the look to aim ADS vertical aim switch, under Look and aim; F216: View bob, the [fix] key native_on_foot_view_bob, under Comfort; F205 added ADS: view circle and F205b removed it again, the circle following ADS: scope zoom; F177: Aiming choice at start, the [menu] key menu.aim_choice_prompt, which the page shows under Look to aim; "
+                                "A1: ADS: scope zoom joined Aiming down sights; F127: 21 rows went to edvr.ini and the installer's window, and Reticle follows was retired; "
+                                "F128: Visor axis (test) was retired with the correction always on; the panel cursor's F155 retired its F154's Panel cursor (test) row with the "
+                                "drawn placement shipped; F146: the ADS sight switch, the two ADS sight trims and the full outfit switch were retired, and the four Weapon UI trims "
+                                "went to [experimental]; F152: ADS eye distance was retired, its per-weapon trim is an [experimental] row)");   // the page's own order under Look to aim: the F177 pins in native_frame_test
+    // F127: the page's order and its five headings. The switch is always first; look and aim, then aiming down sights, then body and view, the HUD last. kMenuRows is in
+    // edvr.ini order; the group is the ini's heading block above the key, which the page shows as a heading.
+    {
+        struct Want { const char* key; const char* group; const char* section = "fix"; };
+        static const Want want[] = {
+            {"native_on_foot", "Native on foot VR"},
+            {"native_on_foot_look_to_aim", "Look and aim"},
+            {"native_on_foot_turn_style", "Look and aim"},
+            {"native_on_foot_snap_turn_deg", "Look and aim"},
+            {"native_on_foot_look_to_aim_smoothing_ms", "Look and aim"},
+            {"native_on_foot_look_to_aim_ads_vertical", "Look and aim"},
+            {"native_on_foot_ads_sight_eye", "Aiming down sights"},
+            {"native_on_foot_ads_head_aim", "Aiming down sights"},
+            {"native_on_foot_ads_scope_zoom", "Aiming down sights"},
+            {"native_on_foot_eye_height_cm", "Body and view"},
+            {"native_on_foot_weapon_view_offset_cm", "Body and view"},
+            {"native_on_foot_weapon_eye_forward_cm", "Body and view"},
+            {"native_on_foot_breathable_visor", "Body and view"},
+            {"native_on_foot_hud_distance", "HUD"},
+            {"native_on_foot_hud_size", "HUD"},
+            {"native_on_foot_hud_element_scale", "HUD"},
+            {"native_on_foot_hud_spread", "HUD"},
+            {"native_on_foot_hud_follow", "HUD"},
+            {"native_on_foot_view_bob", "Comfort"},   // F216: View bob (a user setting) under its own heading, after the HUD rows
+            // F177: the [menu] key is the last row of the table (the ini's order) and has no group; the page moves it under Look to aim when it builds
+            {"aim_choice_prompt", "", "menu"},
+        };
+        constexpr int kWant = static_cast<int>(sizeof(want) / sizeof(want[0]));
+        int at = 0;
+        bool inOrder = true;
+        for (int i = 0; i < kCount; ++i) {
+            if (strcmp(kMenuRows[i].page, "native_on_foot") != 0) continue;
+            const bool match = at < kWant && strcmp(kMenuRows[i].section, want[at].section) == 0 && strcmp(kMenuRows[i].key, want[at].key) == 0 &&
+                               strcmp(kMenuRows[i].group, want[at].group) == 0;
+            if (!match) {
+                printf("  page row %d is %s.%s under \"%s\"; wanted %s under \"%s\"\n", at, kMenuRows[i].section, kMenuRows[i].key, kMenuRows[i].group, at < kWant ? want[at].key : "(none)",
+                       at < kWant ? want[at].group : "");
+                inOrder = false;
+            }
+            ++at;
+        }
+        check(inOrder && at == kWant, "the Native on foot page keeps its order and headings: Native on foot VR first, then Look and aim, Aiming down sights, Body and view, the HUD, and the [menu] key last");
+        int firstPageRow = -1;
+        for (int i = 0; i < kCount && firstPageRow < 0; ++i)
+            if (strcmp(kMenuRows[i].page, "native_on_foot") == 0) firstPageRow = i;
+        check(firstPageRow >= 0 && strcmp(kMenuRows[firstPageRow].section, "fix") == 0 && strcmp(kMenuRows[firstPageRow].key, "native_on_foot") == 0 &&
+                  strcmp(kMenuRows[firstPageRow].label, "Native on foot VR") == 0,
+              "the first row of the Native on foot page is the feature switch, labelled Native on foot VR");
+    }
+    // F162: the sight in both eyes switch (on, off) became the ADS sight eye (both, right, left): the same place on the page, a three-way choice, live, shipped both. The old key has no row.
+    {
+        int found = 0, oldRows = 0;
+        bool shaped = true;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.key, "native_on_foot_ads_sight_both_eyes") == 0) ++oldRows;
+            if (strcmp(d.section, "fix") != 0 || strcmp(d.key, "native_on_foot_ads_sight_eye") != 0) continue;
+            ++found;
+            shaped = shaped && d.kind == MenuKind::Choice && strcmp(d.label, "ADS: sight eye") == 0 && strcmp(d.choices, "both|right|left") == 0 && strcmp(d.shipped, "both") == 0 &&
+                     d.applies == 1 && d.tier == MenuTier::Fix && strcmp(d.page, "native_on_foot") == 0 && strcmp(d.group, "Aiming down sights") == 0;
+        }
+        check(found == 1 && oldRows == 0 && shaped,
+              "ADS: sight eye is one Native on foot row under Aiming down sights: a choice of both, right and left, live, shipped both; the old sight in both eyes key has no row (F162)");
+    }
+    // F177: Aiming choice at start is the [menu] key menu.aim_choice_prompt: one on/off row of the Native on foot page, live, shipped on, in the VR menu only (the flat tabs list their rows by table and
+    // do not name it; the key is not in src/common/flat_profile_keys.h, pinned in native_frame_test). The page shows it under Look to aim (menu.cpp moveRowAfter, pinned in native_frame_test).
+    {
+        int found = 0;
+        bool shaped = true;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.section, "menu") != 0 || strcmp(d.key, "aim_choice_prompt") != 0) continue;
+            ++found;
+            shaped = shaped && d.kind == MenuKind::Choice && strcmp(d.label, "Aiming choice at start") == 0 && strcmp(d.choices, "on|off") == 0 && strcmp(d.shipped, "on") == 0 && d.applies == 1 &&
+                     d.tier == MenuTier::Fix && strcmp(d.page, "native_on_foot") == 0;
+        }
+        check(found == 1 && shaped, "Aiming choice at start is one Native on foot row, the [menu] key aim_choice_prompt: a choice of on and off, live, shipped on (F177)");
+    }
+    for (const char* key : keys) {
+        bool found = false;
+        for (int i = 0; i < kCount; ++i)
+            if (strcmp(kMenuRows[i].section, "fix") == 0 && strcmp(kMenuRows[i].key, key) == 0) found = true;
+        checkf(!found, "%s remains a compatible setting but has no in-headset menu row", key);
+    }
+    // F146: the four Weapon UI trims are [experimental] rows, shown in the developer tier under their own heading: a number from -30 to 30 in steps of 0.5 cm with an explicit sign,
+    // live, labelled without "(test)". They carry the old fix. values over through edvr.ini's moved-from lines (tools/config_test and tools/installer_test hold that).
+    // F152: the fifth, "ADS eye forward / back", beside them on the same page and tier, shaped the same (it carries no old value over: the key it replaces changed meaning).
+    {
+        static const struct { const char* key; const char* label; } want[] = {
+            {"native_on_foot_weapon_ui_forward_cm", "Weapon UI forward"}, {"native_on_foot_weapon_ui_left_cm", "Weapon UI left"},
+            {"native_on_foot_weapon_ui_up_cm", "Weapon UI up"}, {"native_on_foot_weapon_ui_toward_eye_cm", "Weapon UI toward you"},
+            {"native_on_foot_ads_eye_offset_cm", "ADS eye forward / back"}};
+        int found = 0;
+        bool shaped = true;
+        for (const auto& w : want)
+            for (int i = 0; i < kCount; ++i) {
+                const MenuRowDef& d = kMenuRows[i];
+                if (strcmp(d.section, "experimental") != 0 || strcmp(d.key, w.key) != 0) continue;
+                ++found;
+                shaped = shaped && d.kind == MenuKind::Number && d.tier == MenuTier::Experimental && strcmp(d.label, w.label) == 0 && strcmp(d.lo, "-30") == 0 && strcmp(d.hi, "30") == 0 &&
+                         strcmp(d.step, "0.5") == 0 && strcmp(d.unit, "cm") == 0 && d.showSign && d.applies == 1 && strcmp(d.shipped, "0.0") == 0;
+            }
+        check(found == 5 && shaped, "the four Weapon UI trims and the ADS eye trim are [experimental] number rows: -30..30 cm, step 0.5, signed, live, shipped 0.0, labelled without (test)");
+    }
+    // F168 (TEMPORARY): "Crouched ADS body forward / back" is the sixth number row of the developer tier's native on foot rows, right after "ADS eye forward / back" on the same page and under the same
+    // heading: -20..20 cm (a narrower range than the eye's -30..30), step 0.5, signed, live, shipped 1.0 since F181 (5.0 under F173, 0.0 before), labelled without (test). It carries no old value over.
+    {
+        int adsEyeRow = -1, bodyRow = -1, found = 0;
+        bool shaped = true;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.section, "experimental") == 0 && strcmp(d.key, "native_on_foot_ads_eye_offset_cm") == 0) adsEyeRow = i;
+            if (strcmp(d.section, "experimental") != 0 || strcmp(d.key, "native_on_foot_crouch_ads_body_forward_cm") != 0) continue;
+            bodyRow = i;
+            ++found;
+            shaped = shaped && d.kind == MenuKind::Number && d.tier == MenuTier::Experimental && strcmp(d.label, "Crouched ADS body forward / back") == 0 && strcmp(d.lo, "-20") == 0 &&
+                     strcmp(d.hi, "20") == 0 && strcmp(d.step, "0.5") == 0 && strcmp(d.unit, "cm") == 0 && d.showSign && d.applies == 1 && strcmp(d.shipped, "1.0") == 0;
+        }
+        const bool beside = adsEyeRow >= 0 && bodyRow == adsEyeRow + 1 && strcmp(kMenuRows[bodyRow].page, kMenuRows[adsEyeRow].page) == 0 &&
+                            strcmp(kMenuRows[bodyRow].group, kMenuRows[adsEyeRow].group) == 0;
+        check(found == 1 && shaped && beside,
+              "Crouched ADS body forward / back (F168, TEMPORARY) is one [experimental] number row right after ADS eye forward / back, on its page and under its heading: -20..20 cm, step 0.5, signed, live, shipped 1.0 (F181; 5.0 under F173)");
+    }
+    // F171 (TEMPORARY): "Crouched ADS body left / right" is the seventh number row of the developer tier's native on foot rows, right after "Crouched ADS body forward / back" on the same page and
+    // under the same heading: -30..30 cm in steps of 0.5 (F172: widened from the forward row's -20..20), signed, live, shipped 23.0 since F181 (25.0 under F173, 15.0 before; positive is left of the aim line), labelled without (test). It
+    // carries no old value over.
+    {
+        int bodyRow = -1, leftRow = -1, found = 0;
+        bool shaped = true;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.section, "experimental") == 0 && strcmp(d.key, "native_on_foot_crouch_ads_body_forward_cm") == 0) bodyRow = i;
+            if (strcmp(d.section, "experimental") != 0 || strcmp(d.key, "native_on_foot_crouch_ads_body_left_cm") != 0) continue;
+            leftRow = i;
+            ++found;
+            shaped = shaped && d.kind == MenuKind::Number && d.tier == MenuTier::Experimental && strcmp(d.label, "Crouched ADS body left / right") == 0 && strcmp(d.lo, "-30") == 0 &&
+                     strcmp(d.hi, "30") == 0 && strcmp(d.step, "0.5") == 0 && strcmp(d.unit, "cm") == 0 && d.showSign && d.applies == 1 && strcmp(d.shipped, "23.0") == 0;
+        }
+        const bool beside = bodyRow >= 0 && leftRow == bodyRow + 1 && strcmp(kMenuRows[leftRow].page, kMenuRows[bodyRow].page) == 0 &&
+                            strcmp(kMenuRows[leftRow].group, kMenuRows[bodyRow].group) == 0;
+        check(found == 1 && shaped && beside,
+              "Crouched ADS body left / right (F171, TEMPORARY) is one [experimental] number row right after Crouched ADS body forward / back, on its page and under its heading: -30..30 cm (F172: was -20..20), step 0.5, signed, live, shipped 23.0 (F181; 25.0 under F173)");
+    }
+    // F178 (TEMPORARY): the standing mirrors of the two crouched body dials are the eighth and ninth number rows of the developer tier's native on foot rows, right after "Crouched ADS body left / right" on
+    // the same page and under the same heading, in the crouched pair's order: "Standing ADS body forward / back" (-20..20 cm, step 0.5, signed, live, shipped 4.0 since F181, 0.0 before) and "Standing ADS body left / right"
+    // (-30..30 cm, step 0.5, signed, live, shipped 23.0 since F181, 0.0 before; positive is left of the aim line), labelled without (test). They carry no old value over.
+    {
+        int leftRow = -1, standFwdRow = -1, standLeftRow = -1, foundFwd = 0, foundLeft = 0;
+        bool shaped = true;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.section, "experimental") == 0 && strcmp(d.key, "native_on_foot_crouch_ads_body_left_cm") == 0) leftRow = i;
+            if (strcmp(d.section, "experimental") != 0) continue;
+            if (strcmp(d.key, "native_on_foot_stand_ads_body_forward_cm") == 0) {
+                standFwdRow = i;
+                ++foundFwd;
+                shaped = shaped && d.kind == MenuKind::Number && d.tier == MenuTier::Experimental && strcmp(d.label, "Standing ADS body forward / back") == 0 && strcmp(d.lo, "-20") == 0 &&
+                         strcmp(d.hi, "20") == 0 && strcmp(d.step, "0.5") == 0 && strcmp(d.unit, "cm") == 0 && d.showSign && d.applies == 1 && strcmp(d.shipped, "4.0") == 0;
+            }
+            if (strcmp(d.key, "native_on_foot_stand_ads_body_left_cm") == 0) {
+                standLeftRow = i;
+                ++foundLeft;
+                shaped = shaped && d.kind == MenuKind::Number && d.tier == MenuTier::Experimental && strcmp(d.label, "Standing ADS body left / right") == 0 && strcmp(d.lo, "-30") == 0 &&
+                         strcmp(d.hi, "30") == 0 && strcmp(d.step, "0.5") == 0 && strcmp(d.unit, "cm") == 0 && d.showSign && d.applies == 1 && strcmp(d.shipped, "23.0") == 0;
+            }
+        }
+        const bool beside = leftRow >= 0 && standFwdRow == leftRow + 1 && standLeftRow == standFwdRow + 1 && strcmp(kMenuRows[standFwdRow].page, kMenuRows[leftRow].page) == 0 &&
+                            strcmp(kMenuRows[standFwdRow].group, kMenuRows[leftRow].group) == 0 && strcmp(kMenuRows[standLeftRow].page, kMenuRows[leftRow].page) == 0 &&
+                            strcmp(kMenuRows[standLeftRow].group, kMenuRows[leftRow].group) == 0;
+        check(foundFwd == 1 && foundLeft == 1 && shaped && beside,
+              "Standing ADS body forward / back and left / right (F178, TEMPORARY) are one [experimental] number row each, right after Crouched ADS body left / right in that order, on its page and under its heading: "
+              "-20..20 and -30..30 cm, step 0.5, signed, live, shipped 4.0 and 23.0 (F181; 0.0 before)");
+    }
+    // F180 (TEMPORARY): "Standing ADS spine straighten" and "Neck guard distance" are the tenth and eleventh number rows of the developer tier's native on foot rows, right after "Standing ADS body left /
+    // right" on the same page and under the same heading, in that order: the straighten 0..1 in steps of 0.05, not signed, live, shipped 0.9 since F181 (0.0 before); the guard 0..20 cm in steps of 0.5, not signed, live, shipped
+    // 2.0 since F181 (10.0 before; 0 turns it off). They carry no old value over.
+    {
+        int standLeft = -1, spineRow = -1, guardRow = -1, foundSpine = 0, foundGuard = 0;
+        bool shaped = true;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.section, "experimental") != 0) continue;
+            if (strcmp(d.key, "native_on_foot_stand_ads_body_left_cm") == 0) standLeft = i;
+            if (strcmp(d.key, "native_on_foot_stand_ads_spine_straighten") == 0) {
+                spineRow = i;
+                ++foundSpine;
+                shaped = shaped && d.kind == MenuKind::Number && d.tier == MenuTier::Experimental && strcmp(d.label, "Standing ADS spine straighten") == 0 && strcmp(d.lo, "0") == 0 && strcmp(d.hi, "1") == 0 &&
+                         strcmp(d.step, "0.05") == 0 && !d.showSign && d.applies == 1 && strcmp(d.shipped, "0.9") == 0;
+            }
+            if (strcmp(d.key, "native_on_foot_neck_guard_cm") == 0) {
+                guardRow = i;
+                ++foundGuard;
+                shaped = shaped && d.kind == MenuKind::Number && d.tier == MenuTier::Experimental && strcmp(d.label, "Neck guard distance") == 0 && strcmp(d.lo, "0") == 0 && strcmp(d.hi, "20") == 0 &&
+                         strcmp(d.step, "0.5") == 0 && strcmp(d.unit, "cm") == 0 && !d.showSign && d.applies == 1 && strcmp(d.shipped, "2.0") == 0;
+            }
+        }
+        const bool beside = standLeft >= 0 && spineRow == standLeft + 1 && guardRow == spineRow + 1 && strcmp(kMenuRows[spineRow].page, kMenuRows[standLeft].page) == 0 &&
+                            strcmp(kMenuRows[spineRow].group, kMenuRows[standLeft].group) == 0 && strcmp(kMenuRows[guardRow].page, kMenuRows[standLeft].page) == 0 &&
+                            strcmp(kMenuRows[guardRow].group, kMenuRows[standLeft].group) == 0;
+        check(foundSpine == 1 && foundGuard == 1 && shaped && beside,
+              "Standing ADS spine straighten and Neck guard distance (F180, TEMPORARY) are one [experimental] number row each, right after Standing ADS body left / right in that order, on its page and under its heading: "
+              "0..1 step 0.05 shipped 0.9, and 0..20 cm step 0.5 shipped 2.0 (F181; 0.0 and 10.0 before), both live and unsigned");
+    }
+    // F181 (TEMPORARY): "Hip elbow swivel max" is the twelfth number row of the developer tier's native on foot rows, right after "Neck guard distance" on the same page and under the same heading: 0..90 degrees
+    // in steps of 1, not signed, live, shipped 25.0 (90 leaves the game's pose). It carries no old value over.
+    {
+        int guardRow = -1, hipRow = -1, found = 0;
+        bool shaped = true;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.section, "experimental") != 0) continue;
+            if (strcmp(d.key, "native_on_foot_neck_guard_cm") == 0) guardRow = i;
+            if (strcmp(d.key, "native_on_foot_hip_elbow_swivel_max_deg") == 0) {
+                hipRow = i;
+                ++found;
+                shaped = shaped && d.kind == MenuKind::Number && d.tier == MenuTier::Experimental && strcmp(d.label, "Hip elbow swivel max") == 0 && strcmp(d.lo, "0") == 0 && strcmp(d.hi, "90") == 0 &&
+                         strcmp(d.step, "1") == 0 && strcmp(d.unit, "deg") == 0 && !d.showSign && d.applies == 1 && strcmp(d.shipped, "25.0") == 0;
+            }
+        }
+        const bool beside = guardRow >= 0 && hipRow == guardRow + 1 && strcmp(kMenuRows[hipRow].page, kMenuRows[guardRow].page) == 0 && strcmp(kMenuRows[hipRow].group, kMenuRows[guardRow].group) == 0;
+        check(found == 1 && shaped && beside,
+              "Hip elbow swivel max (F181, TEMPORARY) is one [experimental] number row right after Neck guard distance, on its page and under its heading: 0..90 deg, step 1, unsigned, live, shipped 25.0");
+    }
+    // F185 (TEMPORARY): "ADS left arm reach" is the thirteenth number row of the developer tier's native on foot rows, right after "Hip elbow swivel max" on the same page and under the same heading: 0.8 to 1 in steps of 0.01,
+    // not signed, live, shipped 0.92 (1 is the old behaviour). It carries no old value over.
+    {
+        int hipRow = -1, reachRow = -1, found = 0;
+        bool shaped = true;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.section, "experimental") != 0) continue;
+            if (strcmp(d.key, "native_on_foot_hip_elbow_swivel_max_deg") == 0) hipRow = i;
+            if (strcmp(d.key, "native_on_foot_ads_left_reach") == 0) {
+                reachRow = i;
+                ++found;
+                shaped = shaped && d.kind == MenuKind::Number && d.tier == MenuTier::Experimental && strcmp(d.label, "ADS left arm reach") == 0 && strcmp(d.lo, "0.8") == 0 && strcmp(d.hi, "1") == 0 &&
+                         strcmp(d.step, "0.01") == 0 && !d.showSign && d.applies == 1 && strcmp(d.shipped, "0.92") == 0;
+            }
+        }
+        const bool beside = hipRow >= 0 && reachRow == hipRow + 1 && strcmp(kMenuRows[reachRow].page, kMenuRows[hipRow].page) == 0 && strcmp(kMenuRows[reachRow].group, kMenuRows[hipRow].group) == 0;
+        check(found == 1 && shaped && beside,
+              "ADS left arm reach (F185, TEMPORARY) is one [experimental] number row right after Hip elbow swivel max, on its page and under its heading: 0.8..1, step 0.01, unsigned, live, shipped 0.92");
+    }
+    // F220 (TEMPORARY): "HUD stays with view" is an [experimental] on/off choice right after "Body follows view" (F215), on the same page and under the same heading, live, shipped on.
+    {
+        int bodyRow = -1, hudRow = -1, found = 0;
+        bool shaped = true;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.section, "experimental") != 0) continue;
+            if (strcmp(d.key, "native_on_foot_body_follows_view") == 0) bodyRow = i;
+            if (strcmp(d.key, "native_on_foot_hud_stays_with_view") == 0) {
+                hudRow = i;
+                ++found;
+                shaped = shaped && d.kind == MenuKind::Choice && d.tier == MenuTier::Experimental && strcmp(d.label, "HUD stays with view") == 0 && strcmp(d.choices, "on|off") == 0 && strcmp(d.shipped, "on") == 0 &&
+                         d.applies == 1;
+            }
+        }
+        const bool beside = bodyRow >= 0 && hudRow == bodyRow + 1 && strcmp(kMenuRows[hudRow].page, kMenuRows[bodyRow].page) == 0 && strcmp(kMenuRows[hudRow].group, kMenuRows[bodyRow].group) == 0;
+        check(found == 1 && shaped && beside, "HUD stays with view (F220, TEMPORARY) is one [experimental] on/off row right after Body follows view, on its page and under its heading: live, shipped on");
+    }
+    // F222 (TEMPORARY): "Steady body in turns" is an [experimental] on/off choice right after "HUD stays with view" (F220), on the same page and under the same heading, live, shipped on.
+    {
+        int hudRow = -1, turnRow = -1, found = 0;
+        bool shaped = true;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.section, "experimental") != 0) continue;
+            if (strcmp(d.key, "native_on_foot_hud_stays_with_view") == 0) hudRow = i;
+            if (strcmp(d.key, "native_on_foot_steady_body_in_turns") == 0) {
+                turnRow = i;
+                ++found;
+                shaped = shaped && d.kind == MenuKind::Choice && d.tier == MenuTier::Experimental && strcmp(d.label, "Steady body in turns") == 0 && strcmp(d.choices, "on|off") == 0 && strcmp(d.shipped, "on") == 0 &&
+                         d.applies == 1;
+            }
+        }
+        const bool beside = hudRow >= 0 && turnRow == hudRow + 1 && strcmp(kMenuRows[turnRow].page, kMenuRows[hudRow].page) == 0 && strcmp(kMenuRows[turnRow].group, kMenuRows[hudRow].group) == 0;
+        check(found == 1 && shaped && beside, "Steady body in turns (F222, TEMPORARY) is one [experimental] on/off row right after HUD stays with view, on its page and under its heading: live, shipped on");
+    }
+    // F170 (TEMPORARY): "Crouched ADS torso square" is the thirteenth number row of the developer tier's native on foot rows (the twelfth before F181 put "Hip elbow swivel max" before it, the tenth before F180 put the two rows of its own between, the eighth before F178 put the two "Standing ADS body" rows between, the seventh before
+    // F171 put "Crouched ADS body left / right" before that), right after the hip elbow swivel row on the same page and under the same heading: 0..1 of the shoulder line's blade in steps of 0.05, not signed,
+    // live, shipped 0.0 since F173 (1.0 before: the turn was on), labelled without (test). It carries no old value over.
+    {
+        int leftRow = -1, squareRow = -1, found = 0;
+        bool shaped = true;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.section, "experimental") == 0 && strcmp(d.key, "native_on_foot_ads_left_reach") == 0) leftRow = i;   // F185 put "ADS left arm reach" between the hip elbow row and this one
+            if (strcmp(d.section, "experimental") != 0 || strcmp(d.key, "native_on_foot_crouch_ads_square") != 0) continue;
+            squareRow = i;
+            ++found;
+            shaped = shaped && d.kind == MenuKind::Number && d.tier == MenuTier::Experimental && strcmp(d.label, "Crouched ADS torso square") == 0 && strcmp(d.lo, "0") == 0 &&
+                     strcmp(d.hi, "1") == 0 && strcmp(d.step, "0.05") == 0 && !d.showSign && d.applies == 1 && strcmp(d.shipped, "0.0") == 0;
+        }
+        const bool beside = leftRow >= 0 && squareRow == leftRow + 1 && strcmp(kMenuRows[squareRow].page, kMenuRows[leftRow].page) == 0 &&
+                            strcmp(kMenuRows[squareRow].group, kMenuRows[leftRow].group) == 0;
+        check(found == 1 && shaped && beside,
+              "Crouched ADS torso square (F170, TEMPORARY) is one [experimental] number row right after ADS left arm reach (F185; Hip elbow swivel max before F185, Neck guard distance before F181), on its page and under its heading: 0..1, step 0.05, unsigned, live, shipped 0.0 (F173; 1.0 before)");
+    }
+    // F169 (TEMPORARY): "Pistol sprint arm swing phase" is the fourteenth number row of the developer tier's native on foot rows (the eleventh before F180 put two rows before the torso square, the seventh before F170 put "Crouched ADS torso square" between, the eighth
+    // before F171 put "Crouched ADS body left / right" before that, the ninth before F178 put the two "Standing ADS body" rows before that), right after the torso square row on the same page and under the same heading: 0..1 of a stride in steps of 0.05, not signed,
+    // live, shipped 0.5 since F173 (0.0 before), labelled without (test). It carries no old value over.
+    {
+        int squareRow = -1, swingRow = -1, found = 0;
+        bool shaped = true;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.section, "experimental") == 0 && strcmp(d.key, "native_on_foot_crouch_ads_square") == 0) squareRow = i;
+            if (strcmp(d.section, "experimental") != 0 || strcmp(d.key, "native_on_foot_pistol_sprint_swing_phase") != 0) continue;
+            swingRow = i;
+            ++found;
+            shaped = shaped && d.kind == MenuKind::Number && d.tier == MenuTier::Experimental && strcmp(d.label, "Pistol sprint arm swing phase") == 0 && strcmp(d.lo, "0") == 0 &&
+                     strcmp(d.hi, "1") == 0 && strcmp(d.step, "0.05") == 0 && !d.showSign && d.applies == 1 && strcmp(d.shipped, "0.5") == 0;
+        }
+        const bool beside = squareRow >= 0 && swingRow == squareRow + 1 && strcmp(kMenuRows[swingRow].page, kMenuRows[squareRow].page) == 0 &&
+                            strcmp(kMenuRows[swingRow].group, kMenuRows[squareRow].group) == 0;
+        check(found == 1 && shaped && beside,
+              "Pistol sprint arm swing phase (F169, TEMPORARY) is one [experimental] number row right after Crouched ADS torso square, on its page and under its heading: 0..1, step 0.05, unsigned, live, shipped 0.5 (F173; 0.0 before)");
+    }
+    // F194b / F195b: look to aim's test rows are gone with their keys. The picture-centre aim (F194 part 1) was removed on 2026-10-31; the eye height row (F194 part 2) and the keep-the-aim's-pitch row (F195) were
+    // retired the same day on the pilot's word, and their behaviour is unconditional. No row of the experimental section is a "Look to aim: ... (test)" row, and none names those keys.
+    {
+        int found = 0;
+        for (int i = 0; i < kCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strstr(d.key, "look_to_aim_aims_at") != nullptr || strstr(d.key, "look_to_aim_eye_height") != nullptr || strstr(d.key, "look_to_aim_keeps") != nullptr) ++found;
+            if (strcmp(d.section, "experimental") == 0 && strncmp(d.label, "Look to aim:", 12) == 0) ++found;
+        }
+        check(found == 0, "Look to aim's three test rows (aim at the middle of the picture, eye height as mouse look, keep the aim's pitch; F194, F195) are gone with their keys: no experimental \"Look to aim: ...\" row, no row of those keys");
+    }
+    // F157: the developer tier's "Body draw to hide (test)" dial (F154 to F156) is retired: the key stays in edvr.ini on a hidden retired line (`# ui: hidden -- retired (F157)`), so it
+    // has a row in neither menu, the developer tier's included, and the dial's heading is gone with it.
+    {
+        int found = 0, headed = 0;
+        for (int i = 0; i < kCount; ++i) {
+            if (strcmp(kMenuRows[i].key, "native_on_foot_body_draw_hide") == 0) ++found;
+            if (strcmp(kMenuRows[i].group, "Native on foot: body draws (test)") == 0) ++headed;
+        }
+        check(found == 0 && headed == 0, "the retired Body draw to hide (test) dial has no row in the menu and no heading of its own (F157)");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 7b. The Visual page of VR's menu (2026-10-27): how the world looks, apart from the fixes. World scale is a whole-percent number from 50 to 200, live; Desktop window (visual.desktop_window,
+// what Elite's window on the desktop shows) was on it until 2026-10-28, when it and its two new keys moved to the Mirror window page, then the Desktop window page (testDesktopWindowPage); the intro settings and the
+// screen curve moved onto it from the Fixes page; Star glow, which both profiles read, is on it too; and a live edvr.ini without the world_scale line takes
+// the first change from the menu as an appended line.
+
+// 7c. The Mirror window page of VR's menu (the Desktop window page, 2026-10-28, until F173; its page id is unchanged, and since F174 its rows' labels leave out the window's name, which the page gives), right after Visual: what the window shows, the picture's shape, how far up or down it is cut (round 7: a signed whole-percent
+// number row; round 8: how the shape is cut, native or center) and the window's style, the five [visual] keys, Fix tier, in edvr.ini order, no group headings needed (the page is the group), choices in the words the file gives them.
+void testDesktopWindowPage() {
+    printf("desktop window page\n");
+    constexpr int kCount = static_cast<int>(sizeof(kMenuRows) / sizeof(kMenuRows[0]));
+    struct Want { const char* key; const char* label; const char* choices; };   // an empty choices is the number row
+    static const Want want[] = {
+        {"desktop_window", "Image", "game=Game|left_eye=Left eye|right_eye=Right eye|both_eyes=Both eyes"},
+        {"desktop_window_aspect", "Shape", "full=Full picture|1:1=1:1|4:3=4:3|16:10=16:10|16:9=16:9|21:9=21:9"},
+        {"desktop_window_crop", "Crop", "native=Same as the game's mirror|center=Centre"},
+        {"desktop_window_vertical_shift", "Vertical shift", ""},
+        {"desktop_window_style", "Style", "window=Window|borderless=Borderless full screen"},
+    };
+    constexpr int kWant = static_cast<int>(sizeof(want) / sizeof(want[0]));
+    int at = 0, shift = -1, mode = -1;
+    bool inOrder = true;
+    for (int i = 0; i < kCount; ++i) {
+        if (strcmp(kMenuRows[i].page, "desktop_window") != 0) continue;
+        if (strcmp(kMenuRows[i].key, "desktop_window") == 0) mode = i;
+        const bool number = at < kWant && want[at].choices[0] == '\0';
+        const bool match = at < kWant && strcmp(kMenuRows[i].section, "visual") == 0 && strcmp(kMenuRows[i].key, want[at].key) == 0 && strcmp(kMenuRows[i].label, want[at].label) == 0 &&
+                           kMenuRows[i].tier == MenuTier::Fix && kMenuRows[i].kind == (number ? MenuKind::Number : MenuKind::Choice) && kMenuRows[i].applies == 1 &&
+                           strcmp(kMenuRows[i].choices, want[at].choices) == 0;
+        if (!match) {
+            printf("  page row %d is %s.%s \"%s\" [%s]; wanted visual.%s \"%s\" [%s]\n", at, kMenuRows[i].section, kMenuRows[i].key, kMenuRows[i].label, kMenuRows[i].choices,
+                   at < kWant ? want[at].key : "(none)", at < kWant ? want[at].label : "", at < kWant ? want[at].choices : "");
+            inOrder = false;
+        }
+        if (strcmp(kMenuRows[i].key, "desktop_window_vertical_shift") == 0) shift = i;
+        ++at;
+    }
+    check(inOrder && at == kWant, "VR's Mirror window page is Image, Shape, Crop, Vertical shift and Style, [visual] Fix-tier rows (the shift a number, the rest choices), live, in edvr.ini order");
+    // F173: the mirror window shows the left eye by default (the shipped choice), the other four rows keep their words
+    check(mode >= 0 && strcmp(kMenuRows[mode].shipped, "left_eye") == 0, "F173: the Mirror window row (visual.desktop_window) ships on left_eye");
+    for (int i = 0; i < kCount; ++i) {
+        if (strncmp(kMenuRows[i].key, "desktop_window", 14) == 0 && strcmp(kMenuRows[i].section, "visual") == 0)
+            checkf(strcmp(kMenuRows[i].page, "desktop_window") == 0, "visual.%s is on the Mirror window page, not on the Visual page", kMenuRows[i].key);
+    }
+    if (shift < 0) {
+        check(false, "the Mirror window page has a vertical shift row");
+        return;
+    }
+    const MenuRowDef& d = kMenuRows[shift];
+    check(strcmp(d.shipped, "0") == 0 && strcmp(d.lo, "-100") == 0 && strcmp(d.hi, "100") == 0 && d.precision == 0 && !d.percent && strcmp(d.step, "5") == 0 && strcmp(d.unit, "%") == 0 &&
+              strcmp(d.zero, "default") == 0 && d.showSign,
+          "the vertical shift ships at 0 and is a signed whole number from -100 to 100 in steps of 5, in %, a zero reading (default)");
+    check(menuFormatNumber(d, 25.0) == "+25 %" && menuFormatNumber(d, -25.0) == "-25 %" && menuFormatNumber(d, 0.0) == "0 % (default)", "it reads +25 %, -25 % and 0 % (default)");
+    check(menuSteppedNumber(d, 0.0, 1, 1) == 5.0 && menuSteppedNumber(d, 0.0, -1, 1) == -5.0 && menuSteppedNumber(d, 100.0, 1, 1) == 100.0 && menuSteppedNumber(d, -100.0, -1, 1) == -100.0,
+          "a press steps by 5 either side of 0 and the ends hold at -100 and 100");
+    check(strstr(d.detail, "straight ahead") == nullptr && strstr(d.detail, "0 is the default centre") != nullptr, "its tooltip says 0 is the default centre, not straight ahead");
+}
+
+void testVisualPage() {
+    printf("visual page\n");
+    constexpr int kCount = static_cast<int>(sizeof(kMenuRows) / sizeof(kMenuRows[0]));
+    struct Want { const char* section; const char* key; const char* group; };
+    static const Want want[] = {
+        {"fix", "panel_curvature", "The on-foot screen"},
+        {"fix", "intro_backdrop", "The intro"},
+        {"fix", "vr_maps", "VR Galaxy Map and System Map"},
+        {"visual", "world_scale", "World scale"},
+        {"visual", "intro_video", "The launch movie"},
+        {"visual", "star_glow", "Stars"},
+        {"visual", "cockpit_glass", "The cockpit"},
+        {"visual", "cockpit_glass_dirt", "The cockpit"},
+        {"visual", "cockpit_glass_lights", "The cockpit"},
+    };
+    constexpr int kWant = static_cast<int>(sizeof(want) / sizeof(want[0]));
+    int at = 0, world = -1;
+    bool inOrder = true;
+    for (int i = 0; i < kCount; ++i) {
+        if (strcmp(kMenuRows[i].page, "visual") != 0) continue;
+        const bool match = at < kWant && strcmp(kMenuRows[i].section, want[at].section) == 0 && strcmp(kMenuRows[i].key, want[at].key) == 0 &&
+                           strcmp(kMenuRows[i].group, want[at].group) == 0 && kMenuRows[i].tier == MenuTier::Fix;
+        if (!match) {
+            printf("  page row %d is %s.%s under \"%s\"; wanted %s.%s under \"%s\"\n", at, kMenuRows[i].section, kMenuRows[i].key, kMenuRows[i].group,
+                   at < kWant ? want[at].section : "(none)", at < kWant ? want[at].key : "", at < kWant ? want[at].group : "");
+            inOrder = false;
+        }
+        if (strcmp(kMenuRows[i].key, "world_scale") == 0) world = i;
+        ++at;
+    }
+    check(inOrder && at == kWant, "VR's Visual page is Screen curve, Intro background picture, VR Galaxy and System Map fixes, World scale, Intro movie, Star glow, Cockpit glass, Legacy glass dirt and Legacy glass lights, Fix tier, in edvr.ini order under their headings (the desktop window rows moved to their own page, 2026-10-28)");
+    for (int i = 0; i < kCount; ++i) {
+        const bool moved = strcmp(kMenuRows[i].key, "panel_curvature") == 0 || strcmp(kMenuRows[i].key, "intro_backdrop") == 0 || strcmp(kMenuRows[i].key, "intro_video") == 0;
+        if (moved && strcmp(kMenuRows[i].section, "advanced") != 0) checkf(strcmp(kMenuRows[i].page, "fixes") != 0, "%s.%s is no longer on the Fixes page", kMenuRows[i].section, kMenuRows[i].key);
+        if (strcmp(kMenuRows[i].key, "star_glow") == 0)
+            check(strcmp(kMenuRows[i].page, "visual") == 0, "Star glow is on the Visual page both menus build (the headset reads it since 2026-10-27), not on the flat tab's own page");
+    }
+    {
+        int dirt = -1;
+        for (int i = 0; i < kCount; ++i)
+            if (strcmp(kMenuRows[i].section, "visual") == 0 && strcmp(kMenuRows[i].key, "cockpit_glass_dirt") == 0) dirt = i;
+        check(dirt >= 0, "the Visual page has the Legacy glass dirt row");
+        if (dirt >= 0) {
+            const MenuRowDef& g = kMenuRows[dirt];
+            check(g.kind == MenuKind::Number && strcmp(g.label, "Legacy glass dirt") == 0 && strcmp(g.shipped, "100") == 0 && strcmp(g.lo, "0") == 0 && strcmp(g.hi, "300") == 0 &&
+                      g.precision == 0 && !g.percent && strcmp(g.step, "10") == 0 && strcmp(g.unit, "%") == 0 && g.applies == 1,
+                  "Legacy glass dirt is a live whole-percent number row from 0 to 300 in steps of 10, shipped at 100 (the look as it ships)");
+            check(menuSteppedNumber(g, 100.0, 1, 1) == 110.0 && menuSteppedNumber(g, 0.0, -1, 1) == 0.0 && menuSteppedNumber(g, 300.0, 1, 1) == 300.0 && menuFormatNumber(g, 150.0) == "150 %",
+                  "a press steps by 10, the ends hold at 0 and 300, and the row reads \"150 %\"");
+        }
+        int lights = -1;
+        for (int i = 0; i < kCount; ++i)
+            if (strcmp(kMenuRows[i].section, "visual") == 0 && strcmp(kMenuRows[i].key, "cockpit_glass_lights") == 0) lights = i;
+        check(lights >= 0 && lights == dirt + 1, "the Legacy glass lights row is directly under the Legacy glass dirt row");
+        if (lights >= 0)
+            check(strcmp(kMenuRows[lights].label, "Legacy glass lights") == 0 && strcmp(kMenuRows[lights].shipped, "off") == 0 && kMenuRows[lights].applies == 1, "Legacy glass lights is a live row, shipped off");
+    }
+    if (world < 0) return;
+    const MenuRowDef& d = kMenuRows[world];
+    check(d.kind == MenuKind::Number && strcmp(d.label, "World scale") == 0, "World scale is a number row, labelled World scale");
+    check(strcmp(d.shipped, "100") == 0 && strcmp(d.lo, "50") == 0 && strcmp(d.hi, "200") == 0 && d.precision == 0 && !d.percent,
+          "it ships at 100 and is a whole percent from 50 to 200 (stored as the percent, not a fraction)");
+    check(strcmp(d.step, "1") == 0 && strcmp(d.unit, "%") == 0 && d.applies == 1, "it steps by 1, reads in %, and is live");
+    check(menuFormatNumber(d, 130.0) == "130 %" && menuFormatNumber(d, 100.0) == "100 %", "the row reads \"130 %\"");
+    check(menuSteppedNumber(d, 100.0, 1, 1) == 101.0 && menuSteppedNumber(d, 100.0, -1, 5) == 95.0 && menuSteppedNumber(d, 200.0, 1, 1) == 200.0 &&
+              menuSteppedNumber(d, 50.0, -1, 5) == 50.0,
+          "a press steps by 1, Shift by 5, and the ends hold at 50 and 200");
+    // The live file of an install from before the key has no line for it. The write the menu makes (menu.cpp, menuIniWrite) is mergeIni with the dotted key
+    // forced: absent, it is appended to the end of its own section (not refused), and nothing else moves.
+    std::string source = "[fix]\n# a setting\ntemporal_aa = dlss\n\n[visual]\nstar_glow = 100\n";
+    MergeReport report;
+    const std::string updated = mergeIni(source, source, &source, {{"visual.world_scale", "130"}}, &report);
+    const size_t line = updated.find("world_scale = 130"), visual = updated.find("[visual]");
+    check(iniValue(updated, "visual.world_scale", "<unset>") == "130" && line != std::string::npos && line > visual,
+          "a live edvr.ini with no world_scale line takes the menu's first write as a line appended inside [visual]");
+    check(iniValue(updated, "fix.temporal_aa", "<unset>") == "dlss" && iniValue(updated, "visual.star_glow", "<unset>") == "100",
+          "...and the neighbouring settings are untouched");
+}
+
 // ---------------------------------------------------------------------------
 // 8. The generated rows: which are on the Hotkeys page, in which tier
 
@@ -1878,7 +2420,7 @@ void testRows() {
         for (int k = 0; k < n; ++k) if (v[k] == i) return true;
         return false;
     };
-    for (const char* key : {"menu", "explorer_cam", "compare_aa", "dump_camera"}) {
+    for (const char* key : {"menu", "compare_aa", "dump_camera"}) {
         const int i = rowIndex(key);
         checkf(i >= 0, "hotkey.%s has a generated row", key);
         checkf(i >= 0 && kMenuRows[i].kind == MenuKind::Hotkey && kMenuRows[i].tier == MenuTier::Fix &&
@@ -1896,8 +2438,49 @@ void testRows() {
         checkf(!contains(all, nEveryone, i), "hotkey.%s is NOT on the page with developer mode off", key);
         checkf(contains(dev, nDev, i), "hotkey.%s is on the page with developer mode on", key);
     }
-    check(nEveryone == 4 && nDev == 6, "four rows for everyone (menu, Explorer Cam, AA comparison, camera history), six in developer mode");
+    check(nEveryone == 3 && nDev == 5, "three rows for everyone (menu, AA comparison, camera history), five in developer mode");
     check(rowIndex("read_game_bindings") < 0, "a plain [hotkey] setting is not a row");
+    // The flat profile's page (hotkeyPageRowsFor): the Fix rows whose key the flat profile reads, and nothing else, whatever the developer switch says. VR's is as it was.
+    {
+        int flat[16], flatDev[16], vr[16], vrDev[16];
+        const int nFlat = hotkeyPageRowsFor(kMenuRows, kCount, true, false, flat, 16);
+        const int nFlatDev = hotkeyPageRowsFor(kMenuRows, kCount, true, true, flatDev, 16);
+        const int nVr = hotkeyPageRowsFor(kMenuRows, kCount, false, false, vr, 16);
+        const int nVrDev = hotkeyPageRowsFor(kMenuRows, kCount, false, true, vrDev, 16);
+        check(nFlat == 3 && nFlatDev == 3, "the flat Hotkeys page has three rows, with or without developer mode");
+        check(nFlat == 3 && strcmp(kMenuRows[flat[0]].key, "menu") == 0 && strcmp(kMenuRows[flat[1]].key, "compare_aa") == 0 &&
+                  strcmp(kMenuRows[flat[2]].key, "monitor_panel") == 0,
+              "the flat Hotkeys page is the Menu key, the AA comparison key, then the monitor panel key");
+        check(rowIndex("dump_camera") >= 0 && !contains(flat, nFlat, rowIndex("dump_camera")) && !flatProfileReadsKey("hotkey.dump_camera"),
+              "the camera history key is for everyone in VR, but the flat profile does not read it: no flat row");
+        for (const char* key : {"dump_draws", "dump_eyes"})
+            checkf(!contains(flat, nFlat, rowIndex(key)) && !contains(flatDev, nFlatDev, rowIndex(key)), "hotkey.%s (developer tier) is not on the flat page, developer mode or not", key);
+        bool allReadable = true, allFix = true;
+        for (int k = 0; k < nFlat; ++k) {
+            const std::string dotted = std::string("hotkey.") + kMenuRows[flat[k]].key;
+            allReadable &= flatProfileReadsKey(dotted.c_str());
+            allFix &= kMenuRows[flat[k]].tier == MenuTier::Fix;
+        }
+        check(allReadable && allFix, "every flat Hotkeys row is a Fix row whose key the flat gate reads");
+        // The investigation keys (hotkey.concourse_*, hotkey.gpu_pass_profile) are the flat gate's but have no row at all: they cannot reach the page.
+        bool investigationRow = false;
+        for (int i = 0; i < kCount; ++i)
+            investigationRow |= kMenuRows[i].kind == MenuKind::Hotkey && (strncmp(kMenuRows[i].key, "concourse_", 10) == 0 || strcmp(kMenuRows[i].key, "gpu_pass_profile") == 0);
+        check(!investigationRow, "no investigation hotkey (concourse_*, gpu_pass_profile) is a menu row");
+        check(nVr == nEveryone && nVrDev == nDev && nVr == 3 && nVrDev == 5, "the VR page is unchanged: three rows, five with developer mode");
+        bool same = true;
+        for (int k = 0; k < nVr; ++k) same &= vr[k] == all[k];
+        check(same, "the VR page's rows are hotkeyPageRows' own");
+        // The monitor panel's key (hotkey.monitor_panel): a Fix-tier Hotkey row of the hotkeys page that only the flat profile reads, so only the flat page lists it.
+        const int monitorRow = rowIndex("monitor_panel");
+        check(monitorRow >= 0 && kMenuRows[monitorRow].kind == MenuKind::Hotkey && kMenuRows[monitorRow].tier == MenuTier::Fix &&
+                  strcmp(kMenuRows[monitorRow].page, "hotkeys") == 0 && strcmp(kMenuRows[monitorRow].shipped, "F5") == 0,
+              "hotkey.monitor_panel is a Fix-tier Hotkey row on the hotkeys page, shipped as F5");
+        check(monitorRow >= 0 && contains(flat, nFlat, monitorRow) && !contains(vr, nVr, monitorRow) && !contains(vrDev, nVrDev, monitorRow) &&
+                  !contains(all, nEveryone, monitorRow) && !contains(dev, nDev, monitorRow),
+              "the monitor panel key is on the flat Hotkeys page only: VR does not read it");
+        check(flatProfileReadsKey("hotkey.monitor_panel") && flatProfileOnlyKey("hotkey.monitor_panel"), "the flat gate reads it, and it is flat-only");
+    }
     // Table order is the page's order: the menu key first.
     check(nEveryone > 0 && strcmp(kMenuRows[all[0]].key, "menu") == 0, "the menu key leads the page");
     // No other row is a Hotkey row, and none of these sits on another page.
@@ -1937,7 +2520,10 @@ int main(int argc, char** argv) {
     testCaptureWiringPins(argc > 1 ? argv[1] : "");
     testEliteBinds(argc > 1 ? argv[1] : "");
     testRows();
-    testExplorerPage();
+    testNumberRows();
+    testLegacyOnFootRowsStayOutOfMenu();
+    testVisualPage();
+    testDesktopWindowPage();
     if (failures) {
         printf("hotkey_capture_test: %d of %d checks FAILED\n", failures, checks);
         return 1;

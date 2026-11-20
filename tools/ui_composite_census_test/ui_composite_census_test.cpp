@@ -59,6 +59,8 @@ void check(bool ok, const char* label) {
 // The pair the disassembly named (docs\ui-layer-2026-09-23.md, 2026-10-01) and the stock pair it replaces.
 constexpr uint64_t kGuiFxVs = 0x1989E6D3B405FDE0ull, kGuiFxPs = 0xEAB8A1C95A13FFBEull;
 constexpr uint64_t kStockVs = 0x81216C77F90DEDD6ull, kStockPs = 0xA2965EC2931A39C8ull;
+// The pair the game draws the same panels with close to a planet's surface (docs\ui-layer-2026-09-23.md, 2026-10-31: log edvr_gfx_20261031_135903.log, 22.00 draws a frame, no family).
+constexpr uint64_t kNoShadowVs = 0x925ACEDA0153AA5Bull, kNoShadowPs = 0x738A98ED038E58B7ull;
 // The null-output quad (Frontier shader dump of 2026-09-06: vs_B018D143700AB803.dxbc a position-only mesh vertex shader, ps_258B95AC99520C1F.dxbc `mov o0.xyzw, l(0,0,0,0)` with
 // no input): the pair the 15:09 flight's census named as a composite left in the scene (log edvr_gfx_20261001_150919.log, 2.00 draws a frame on the loading screen).
 constexpr uint64_t kNullVs = 0xB018D143700AB803ull, kNullPs = 0x258B95AC99520C1Full;
@@ -78,24 +80,28 @@ void caseR1() {
     why = UiFamilyWhy::kOther;
     check(uiLayerFamilyFor(hdr(kGuiFxVs), &why) == UiLayerFamily::kHolo && why == UiFamilyWhy::kDirect,
           "R1b: the vertex shader of Disable GUI effects names the cockpit holo panels on the lit HDR target, a direct shader, exactly as the stock one does");
+    why = UiFamilyWhy::kOther;
+    check(uiLayerFamilyFor(hdr(kNoShadowVs), &why) == UiLayerFamily::kHolo && why == UiFamilyWhy::kDirect,
+          "R1j: the vertex shader of the panels drawn close to a planet's surface names the cockpit holo panels on the lit HDR target, a direct shader, exactly as the other two do");
     UiFamilyFacts ldr;
     ldr.targetKind = 2;           // the post-tonemap eye target
     ldr.learnedSurface = true;
-    for (uint64_t vs : {kStockVs, kGuiFxVs}) {
+    for (uint64_t vs : {kStockVs, kGuiFxVs, kNoShadowVs}) {
         ldr.vs = vs;
         why = UiFamilyWhy::kOther;
         check(uiLayerFamilyFor(ldr, &why) == UiLayerFamily::kHolo && why == UiFamilyWhy::kLearnedSurface,
-              "R1c: on the post-tonemap target, over a learned surface, both holo-panel vertex shaders are the holo panels");
+              "R1c: on the post-tonemap target, over a learned surface, all three holo-panel vertex shaders are the holo panels");
     }
-    // A vertex shader one bit from either names nothing on the HDR target (the rule is an exact compare), and so does zero.
+    // A vertex shader one bit from any of them names nothing on the HDR target (the rule is an exact compare), and so does zero.
     bool nothing = true;
-    for (uint64_t vs : {kGuiFxVs ^ 1ull, kStockVs ^ 1ull, kGuiFxVs ^ 0x8000000000000000ull, kStockVs ^ 0x100ull, kGuiFxPs, kStockPs, 0ull}) {
+    for (uint64_t vs : {kGuiFxVs ^ 1ull, kStockVs ^ 1ull, kNoShadowVs ^ 1ull, kGuiFxVs ^ 0x8000000000000000ull, kStockVs ^ 0x100ull,
+                        kNoShadowVs ^ 0x100ull, kGuiFxPs, kStockPs, kNoShadowPs, 0ull}) {
         why = UiFamilyWhy::kOther;
         nothing = nothing && uiLayerFamilyFor(hdr(vs), &why) == UiLayerFamily::kNone && why == UiFamilyWhy::kNotPostTonemap;
     }
-    check(nothing, "R1d: a vertex shader one bit away from either, a pixel shader's hash, and zero name nothing on the HDR target");
+    check(nothing, "R1d: a vertex shader one bit away from any of them, a pixel shader's hash, and zero name nothing on the HDR target");
     // Not an eye target: no family, whatever the shaders say.
-    for (uint64_t vs : {kStockVs, kGuiFxVs}) {
+    for (uint64_t vs : {kStockVs, kGuiFxVs, kNoShadowVs}) {
         UiFamilyFacts f = hdr(vs);
         f.targetKind = 0;
         why = UiFamilyWhy::kOther;
@@ -104,9 +110,14 @@ void caseR1() {
     }
     check(kHoloGuiFxOffVs == kGuiFxVs && kHoloGuiFxOffPs == kGuiFxPs && kUiVsHoloGuiFxOff == kGuiFxVs && kUiVsHolo == kStockVs,
           "R1f: the hashes are the disassembled ones: vs 1989E6D3B405FDE0 / ps EAB8A1C95A13FFBE with the setting on, vs 81216C77F90DEDD6 without");
-    check(uiVsIsHoloPanel(kStockVs) && uiVsIsHoloPanel(kGuiFxVs) && !uiVsIsHoloPanel(kUiVsFlightHud) && !uiVsIsHoloPanel(kUiVsSprite) &&
-              !uiVsIsHoloPanel(kUiVsPanel) && !uiVsIsHoloPanel(0) && !uiVsIsHoloPanel(kGuiFxPs),
-          "R1g: uiVsIsHoloPanel is true for exactly the two holo-panel vertex shaders");
+    check(kHoloNoShadowVs == kNoShadowVs && kHoloNoShadowPs == kNoShadowPs && kUiVsHoloNoShadow == kNoShadowVs,
+          "R1k: the hashes are the disassembled ones: vs 925ACEDA0153AA5B / ps 738A98ED038E58B7 close to a planet's surface");
+    check(holoSurfaceSlot(kNoShadowPs) == 1 && holoSurfaceSlot(kHoloUnlitPs) == 1 && holoSurfaceSlot(kGuiFxPs) == 2 && holoSurfaceSlot(kStockPs) == 2,
+          "R1l: the interface surface sits in t1 for the pair without the shadow stage (as for the stock unlit material), in t2 for the lit materials and the Disable-GUI-effects pair");
+    check(uiVsIsHoloPanel(kStockVs) && uiVsIsHoloPanel(kGuiFxVs) && uiVsIsHoloPanel(kNoShadowVs) && !uiVsIsHoloPanel(kUiVsFlightHud) &&
+              !uiVsIsHoloPanel(kUiVsSprite) && !uiVsIsHoloPanel(kUiVsPanel) && !uiVsIsHoloPanel(0) && !uiVsIsHoloPanel(kGuiFxPs) &&
+              !uiVsIsHoloPanel(kNoShadowPs),
+          "R1g: uiVsIsHoloPanel is true for exactly the three holo-panel vertex shaders");
     check(std::strcmp(uiLayerFamilyName(UiLayerFamily::kHolo), "cockpit holo panels") == 0,
           "R1h: the family's census name is unchanged: the 30 s lines and the reader name it \"cockpit holo panels\"");
     UiFamilyWhy wh = UiFamilyWhy::kOther;
@@ -312,12 +323,12 @@ UiLayerFamily frozenFamilyFor(const UiFamilyFacts& f, UiFamilyWhy* why) {
 }
 
 void caseR8() {
-    const uint64_t vsList[] = {kStockVs, kGuiFxVs, kUiVsFlightHud, kUiVsSprite, kUiVsPanel, kUiVsLoader, kUiVsGuiVector, kUiVsGuiText, kUiVsGuiIcons,
+    const uint64_t vsList[] = {kStockVs, kGuiFxVs, kNoShadowVs, kUiVsFlightHud, kUiVsSprite, kUiVsPanel, kUiVsLoader, kUiVsGuiVector, kUiVsGuiText, kUiVsGuiIcons,
                                kHoloIconCore, kHoloIconStalkA, kHoloIconStalkB, kHoloContactA, kHoloContactB, kHoloContactC, kHoloContactD,
                                kHoloContactE, kHoloTargetSphere, kHoloCoronaFamily, kHoloCanopy, kHoloWorldMarkerReticle, kGuiFxVs ^ 1ull,
-                               kStockVs ^ 1ull, 0x1234ull, 0ull};
+                               kStockVs ^ 1ull, kNoShadowVs ^ 1ull, 0x1234ull, 0ull};
     const uint64_t psList[] = {0ull, kUiPanelPs[0], kUiPanelPs[1], kUiPanelPs[2], kUiPanelPs[3], kUiLoaderPs[0], kUiLoaderPs[1], 0xEA02FAC2BD6C643Cull,
-                               0xE95634B0F61D218Full, 0x2D037A047171BF3Bull, kStockPs, kGuiFxPs, 0xDEADBEEFCAFEF00Dull};
+                               0xE95634B0F61D218Full, 0x2D037A047171BF3Bull, kStockPs, kGuiFxPs, kNoShadowPs, 0xDEADBEEFCAFEF00Dull};
     unsigned compared = 0, differing = 0, effectsOffAsStock = 0, effectsOffBefore = 0;
     for (int kind = 0; kind <= 2; ++kind)
         for (uint64_t vs : vsList)
@@ -331,23 +342,23 @@ void caseR8() {
                     f.panelSized = (bits & 2) != 0;
                     f.learnedSurface = (bits & 4) != 0;
                     UiFamilyFacts g = f;
-                    g.vs = vs == kGuiFxVs ? kStockVs : vs;   // the new shader answers as the stock one would
+                    g.vs = (vs == kGuiFxVs || vs == kNoShadowVs) ? kStockVs : vs;   // the two later shaders answer as the stock one would
                     UiFamilyWhy wNew = UiFamilyWhy::kOther, wOld = UiFamilyWhy::kOther;
                     const UiLayerFamily a = uiLayerFamilyFor(f, &wNew), b = frozenFamilyFor(g, &wOld);
                     ++compared;
                     if (a != b || wNew != wOld) ++differing;
-                    if (vs == kGuiFxVs) {
+                    if (vs == kGuiFxVs || vs == kNoShadowVs) {
                         ++effectsOffAsStock;
                         UiFamilyWhy wBefore = UiFamilyWhy::kOther;
-                        // what the rule said about the new shader before it was named: no holo panel (on the HDR target, no family at all)
+                        // what the rule said about the later shaders before they were named: no holo panel (on the HDR target, no family at all)
                         if (frozenFamilyFor(f, &wBefore) != UiLayerFamily::kHolo) ++effectsOffBefore;
                     }
                 }
-    check(compared == 3 * 25 * 13 * 8 && differing == 0,
-          "R8a: for every input but the new shader's -- 3 targets x 25 vertex shaders x 13 pixel shaders x 8 states of the SRV facts -- the rule's family and reason "
-          "are exactly the frozen rule's (the stock pair and every other draw are unchanged); the new shader answers exactly as the stock one");
-    check(effectsOffAsStock == 3 * 13 * 8 && effectsOffBefore == effectsOffAsStock,
-          "R8b: the frozen rule never named the new shader a holo panel, on any target and with any facts: the field's defect, kept in the rig as its control");
+    check(compared == 3 * 27 * 14 * 8 && differing == 0,
+          "R8a: for every input but the two later shaders' -- 3 targets x 27 vertex shaders x 14 pixel shaders x 8 states of the SRV facts -- the rule's family and reason "
+          "are exactly the frozen rule's (the stock pair and every other draw are unchanged); the Disable-GUI-effects shader and the planet-surface shader answer exactly as the stock one");
+    check(effectsOffAsStock == 2 * 3 * 14 * 8 && effectsOffBefore == effectsOffAsStock,
+          "R8b: the frozen rule never named either later shader a holo panel, on any target and with any facts: the field's defect, kept in the rig as its control");
 }
 
 // ---- R9: the pair the scene keeps on purpose ----------------------------------------------------------------------------------------
@@ -636,42 +647,48 @@ void pins() {
     const std::string rule = functionBody(math, "inline UiLayerFamily uiLayerFamilyFor(");
     const auto rulePlaces = [](const std::string& body, const std::string& whole) {
         return countOf(body, "uiVsIsHoloPanel(f.vs)?UiLayerFamily::kHolo") == 2 && countOf(whole, "f.vs==kUiVsHolo") == 0 &&
-               has(whole, "constexpr bool uiVsIsHoloPanel(uint64_t vs) { return vs == kUiVsHolo || vs == kUiVsHoloGuiFxOff; }");
+               has(whole, "constexpr bool uiVsIsHoloPanel(uint64_t vs) { return vs == kUiVsHolo || vs == kUiVsHoloGuiFxOff || vs == kUiVsHoloNoShadow; }");
     };
     const std::string mathAll = squeeze(math);
     check(!rule.empty() && rulePlaces(rule, mathAll),
           "P1: uiLayerFamilyFor names the holo panels through uiVsIsHoloPanel in both its branches, and nothing in ui_layer_math.h compares the stock holo hash by itself");
     {
         const std::string one = "uiVsIsHoloPanel(f.vs)?UiLayerFamily::kHolo";
-        std::string noHdr = rule, noLdr = rule, stockOnly = mathAll;
+        std::string noHdr = rule, noLdr = rule, stockOnly = mathAll, noShadowDropped = mathAll;
         const size_t a = noHdr.find(squeeze(one));
         if (a != std::string::npos) noHdr.replace(a, squeeze(one).size(), "f.vs==kUiVsHolo?UiLayerFamily::kHolo");
         const size_t b = noLdr.rfind(squeeze(one));
         if (b != std::string::npos) noLdr.replace(b, squeeze(one).size(), "f.vs==kUiVsHolo?UiLayerFamily::kHolo");
-        stockOnly = edited(mathAll, "constexpr bool uiVsIsHoloPanel(uint64_t vs) { return vs == kUiVsHolo || vs == kUiVsHoloGuiFxOff; }",
+        stockOnly = edited(mathAll, "constexpr bool uiVsIsHoloPanel(uint64_t vs) { return vs == kUiVsHolo || vs == kUiVsHoloGuiFxOff || vs == kUiVsHoloNoShadow; }",
                            "constexpr bool uiVsIsHoloPanel(uint64_t vs) { return vs == kUiVsHolo; }");
-        check(!rulePlaces(noHdr, noHdr) && !rulePlaces(noLdr, noLdr) && !rulePlaces(rule, stockOnly),
-              "P1 control: with the HDR branch, the post-tonemap branch or the predicate naming only the stock panels, the pin fails");
+        noShadowDropped = edited(mathAll, "constexpr bool uiVsIsHoloPanel(uint64_t vs) { return vs == kUiVsHolo || vs == kUiVsHoloGuiFxOff || vs == kUiVsHoloNoShadow; }",
+                                 "constexpr bool uiVsIsHoloPanel(uint64_t vs) { return vs == kUiVsHolo || vs == kUiVsHoloGuiFxOff; }");
+        check(!rulePlaces(noHdr, noHdr) && !rulePlaces(noLdr, noLdr) && !rulePlaces(rule, stockOnly) && !rulePlaces(rule, noShadowDropped),
+              "P1 control: with the HDR branch, the post-tonemap branch or the predicate naming only the stock panels, or without the planet-surface shader, the pin fails");
     }
 
     // P2: ui_depth publishes the composite flag from the loop that already finds the surface: false first, before any early return, and set
     // from the same `composite` the pass classifies by. And depth is LEFT OUT for the new pair on purpose: no stand-in names it and the
     // hologram family list does not, because the stand-in's input signature (TEXCOORD4/7/8) is not the new vertex shader's output.
-    const std::string onEye = functionBody(depth, "bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {");
+    // Since 2026-10-27 the call is two functions (the memo's wrapper, which resets the outputs and tests the pass, and the classifier it
+    // calls after them); the pins read them in that order, as the one body they were before.
+    // Build 5 made the wrapper inline in ui_depth.h; build 6 (item 5) put it back out of line, in build 4's form.
+    const std::string onEye = functionBody(depth, "bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {") +
+                              functionBody(depth, "static bool classifyEyeDraw(ID3D11DeviceContext* ctx, classifiermemo::Exit* exit) {");
     const auto depthPlaces = [](const std::string& body) {
-        return inOrder(body, {"detail::g_uiDepthDrawComposite = false;", "if (!detail::g_uiDepthOn || detail::g_uiDepthStoodDown) return false;",
-                              "const bool composite = surfaceSlot >= 0;", "detail::g_uiDepthDrawComposite = composite;", "const uint64_t h = boundVsHash(ctx);"}) &&
-               countOf(body, "detail::g_uiDepthDrawComposite=composite;") == 1 && countOf(body, "detail::g_uiDepthDrawComposite=false;") == 1;
+        return inOrder(body, {"detail::g_uiDepthDraw = detail::UiDepthDraw{};", "if (!detail::g_uiDepthOn || detail::g_uiDepthStoodDown) return false;",
+                              "const bool composite = surfaceSlot >= 0;", "detail::g_uiDepthDraw.composite = composite;", "const uint64_t h = boundVsHash(ctx);"}) &&
+               countOf(body, "detail::g_uiDepthDraw.composite=composite;") == 1 && countOf(body, "detail::g_uiDepthDraw=detail::UiDepthDraw{};") == 1;
     };
     check(depthPlaces(onEye),
           "P2a: uiDepthOnEyeDraw clears the composite flag first (before its early returns) and sets it once, from the composite it classifies by");
     {
         std::string late = onEye, missing = onEye, twice = onEye;
-        late = edited(late, "detail::g_uiDepthDrawComposite = false;", "");
+        late = edited(late, "detail::g_uiDepthDraw = detail::UiDepthDraw{};", "");
         late = edited(late, "if (!detail::g_uiDepthOn || detail::g_uiDepthStoodDown) return false;",
-                      "if (!detail::g_uiDepthOn || detail::g_uiDepthStoodDown) return false; detail::g_uiDepthDrawComposite = false;");
-        missing = edited(missing, "detail::g_uiDepthDrawComposite = composite;", "");
-        twice = edited(twice, "detail::g_uiDepthDrawComposite = composite;", "detail::g_uiDepthDrawComposite = composite; detail::g_uiDepthDrawComposite = composite;");
+                      "if (!detail::g_uiDepthOn || detail::g_uiDepthStoodDown) return false; detail::g_uiDepthDraw = detail::UiDepthDraw{};");
+        missing = edited(missing, "detail::g_uiDepthDraw.composite = composite;", "");
+        twice = edited(twice, "detail::g_uiDepthDraw.composite = composite;", "detail::g_uiDepthDraw.composite = composite; detail::g_uiDepthDraw.composite = composite;");
         check(!depthPlaces(late) && !depthPlaces(missing) && !depthPlaces(twice),
               "P2a control: cleared after the early returns, never set, or set twice, the pin fails");
     }
@@ -686,27 +703,37 @@ void pins() {
     const std::string familyList = functionBody(depth, "uint32_t holoBuildFamilyList(");
     const auto depthLeftOut = [](const std::string& all, const std::string& table, const std::string& list) {
         return !table.empty() && !list.empty() && countOf(all, "kHoloGuiFxOffVs") == 1 && countOf(all, "kHoloGuiFxOffPs") == 0 &&
-               has(all, "noteFamily(h, ph, h == kHoloGuiFxOffVs ?") && countOf(all, "0x1989E6D3B405FDE0") == 0 && countOf(all, "0xEAB8A1C95A13FFBE") == 0 &&
-               table.find("kHoloGuiFxOff") == std::string::npos && list.find("kHoloGuiFxOff") == std::string::npos;
+               countOf(all, "kHoloNoShadowVs") == 1 && countOf(all, "kHoloNoShadowPs") == 0 &&
+               has(all, "noteFamily(h, ph, h == kHoloGuiFxOffVs || h == kHoloNoShadowVs ?") && countOf(all, "0x1989E6D3B405FDE0") == 0 &&
+               countOf(all, "0xEAB8A1C95A13FFBE") == 0 && countOf(all, "0x925ACEDA0153AA5B") == 0 && countOf(all, "0x738A98ED038E58B7") == 0 &&
+               table.find("kHoloGuiFxOff") == std::string::npos && list.find("kHoloGuiFxOff") == std::string::npos &&
+               table.find("kHoloNoShadow") == std::string::npos && list.find("kHoloNoShadow") == std::string::npos;
     };
     check(depthLeftOut(depthAll, standIns, familyList),
-          "P2b: ui_depth.cpp names the Disable-GUI-effects vertex shader once, in its family note, and neither shader in the stand-in table or the hologram-depth family list: "
-          "no depth for it. The stand-in (kHoloDepthHlsl) reads TEXCOORD4, TEXCOORD7 and TEXCOORD8 and the new vertex shader writes TEXCOORD0 and TEXCOORD6 only "
-          "(docs/ui-layer-2026-09-23.md, 2026-10-01); a stand-in for it is new HLSL, not a table entry");
+          "P2b: ui_depth.cpp names the Disable-GUI-effects and planet-surface vertex shaders once each, in its family note, and neither pair's shaders in the stand-in table or the hologram-depth family list: "
+          "no depth for them. The stand-in (kHoloDepthHlsl) reads TEXCOORD4, TEXCOORD7 and TEXCOORD8 and the later vertex shaders write TEXCOORD0 (and TEXCOORD6) only "
+          "(docs/ui-layer-2026-09-23.md, 2026-10-01 and 2026-10-31); a stand-in for them is new HLSL, not a table entry");
     {
         const std::string entry = "{{kHoloGuiFxOffPs,0,0,0},{kHoloGuiFxOffVs,0,0,0},2,kUiDepthHoloBytecode,sizeof(kUiDepthHoloBytecode),\"x\",nullptr,false},";
-        std::string inTable = standIns, inList = familyList, ps = depthAll, twice = depthAll;
+        const std::string entryNs = "{{kHoloNoShadowPs,0,0,0},{kHoloNoShadowVs,0,0,0},1,kUiDepthHoloBytecode,sizeof(kUiDepthHoloBytecode),\"x\",nullptr,false},";
+        std::string inTable = standIns, inTableNs = standIns, inList = familyList, inListNs = familyList, ps = depthAll, psNs = depthAll, twice = depthAll,
+                    twiceNs = depthAll;
         inTable.insert(inTable.size() - 2, entry);
+        inTableNs.insert(inTableNs.size() - 2, entryNs);
         inList.insert(inList.size() - 1, "out[count++]=kHoloGuiFxOffVs;");   // before the function's closing brace
+        inListNs.insert(inListNs.size() - 1, "out[count++]=kHoloNoShadowVs;");
         ps += "kHoloGuiFxOffPs";
+        psNs += "kHoloNoShadowPs";
         twice += "kHoloGuiFxOffVs";
+        twiceNs += "kHoloNoShadowVs";
         check(!depthLeftOut(depthAll, inTable, familyList) && !depthLeftOut(depthAll, standIns, inList) && !depthLeftOut(ps, standIns, familyList) &&
-                  !depthLeftOut(twice, standIns, familyList),
-              "P2b control: with the pair in the stand-in table, in the hologram-depth family list, its pixel shader named, or its vertex shader named a second time, the pin fails");
+                  !depthLeftOut(twice, standIns, familyList) && !depthLeftOut(depthAll, inTableNs, familyList) && !depthLeftOut(depthAll, standIns, inListNs) &&
+                  !depthLeftOut(psNs, standIns, familyList) && !depthLeftOut(twiceNs, standIns, familyList),
+              "P2b control: with either pair in the stand-in table, in the hologram-depth family list, its pixel shader named, or its vertex shader named a second time, the pin fails");
     }
 
-    // P3: vscreen.cpp. The flag is cleared with the other per-draw flags, set right after the pass's own call (inside the pass's gate), taken and
-    // cleared by the scope, and the census is settled once, AFTER both takes -- the family's and the after-UI retry's -- and before the loader
+    // P3: vscreen.cpp. The flag is the draw's own (build 6, #184: a DrawCallFlags the thunk declares false and beginPanelOverride fills), set right after the pass's own
+    // call (inside the pass's gate), taken by the scope, and the census is settled once, AFTER both takes -- the family's and the after-UI retry's -- and before the loader
     // panel's and the curve's substitutions.
     const std::string fwd = functionBody(vsc, "void forwardWithVerdict(ID3D11DeviceContext* self, DrawVerdict v,");
     const std::string beginOverride = functionBody(vsc, "DrawVerdict beginPanelOverride(ID3D11DeviceContext* self, char kind, UINT count,");
@@ -722,10 +749,10 @@ void pins() {
     };
     const auto vsPlaces = [&countOnlyReads](const std::string& begin, const std::string& body) {
         return countOnlyReads(body) &&
-               inOrder(begin, {"t_uiDepthThisDraw = false;", "t_compositeThisDraw = false;", "if (!drawGateWanted()) {"}) &&
-               has(begin, "if (uiDepthWantsDraws()) { t_uiDepthThisDraw = uiDepthOnEyeDraw(") && has(begin, "t_compositeThisDraw = uiDepthDrawSampledSurface(); }") &&
-               countOf(begin, "t_compositeThisDraw=uiDepthDrawSampledSurface();") == 1 &&
-               has(body, "composite(t_compositeThisDraw)") && has(body, "t_compositeThisDraw = false;") &&
+               has(begin, "DrawCallFlags& flags") && inOrder(begin, {"if (!drawGateWanted()) {", "if (uiDepthWantsDraws()) { flags.uiDepth = uiDepthOnEyeDraw("}) &&
+               has(begin, "flags.composite = uiDepthDrawSampledSurface();") &&
+               countOf(begin, "flags.composite=uiDepthDrawSampledSurface();") == 1 &&
+               has(body, "composite(f.composite)") &&
                inOrder(body, {"uiLayer = uiLayerDecide(self, static_cast<int>(uiFamily)", "uiLayer = uiLayerNoteOther(", "if (compositeCounted) {",
                               "uiLayerNoteCompositeTaken();", "uiLayerNoteCompositeLeft(bindingShaderHash(BindSlot::Vs), bindingShaderHash(BindSlot::Ps),",
                               "if (v == DrawVerdict::kLoaderPanel) {"}) &&
@@ -733,11 +760,11 @@ void pins() {
                countOf(body, "uiLayerNoteCompositeTaken();") == 1 && countOf(body, "uiLayerNoteCompositeLeft(") == 1;
     };
     check(!fwd.empty() && !beginOverride.empty() && vsPlaces(beginOverride, fwd),
-          "P3: vscreen.cpp clears the composite flag with the other per-draw flags, sets it right after uiDepthOnEyeDraw, consumes it in the scope, and counts the composite "
+          "P3: vscreen.cpp sets the draw's own composite flag right after uiDepthOnEyeDraw, consumes it in the scope, and counts the composite "
           "once, after the family's take and the after-UI retry and before the substitutions");
     {
         const std::string taken = "uiLayerNoteCompositeTaken();";
-        std::string early = fwd, noLeft = fwd, extraTaken = fwd, notCleared = beginOverride, notSet = beginOverride, notConsumed = fwd, writes = fwd, returns = fwd;
+        std::string early = fwd, noLeft = fwd, extraTaken = fwd, setTwice = beginOverride, notSet = beginOverride, notConsumed = fwd, writes = fwd, returns = fwd;
         writes = edited(writes, "if (compositeCounted) {", "if (compositeCounted) { uiLayer = false;");
         returns = edited(returns, "uiLayerNoteCompositeTaken();", "uiLayerNoteCompositeTaken(); return;");
         // the count moved in front of the after-UI retry
@@ -745,12 +772,12 @@ void pins() {
         early = edited(early, "uiLayer = uiLayerNoteOther(", "if (compositeCounted) { uiLayerNoteCompositeTaken(); } uiLayer = uiLayerNoteOther(");
         noLeft = edited(noLeft, "uiLayerNoteCompositeLeft(", "uiLayerNoteOtherThing(");
         extraTaken = edited(extraTaken, taken.c_str(), "uiLayerNoteCompositeTaken(); uiLayerNoteCompositeTaken();");
-        notCleared = edited(notCleared, "t_compositeThisDraw = false;", "");
-        notSet = edited(notSet, "t_compositeThisDraw = uiDepthDrawSampledSurface();", "");
-        notConsumed = edited(notConsumed, "composite(t_compositeThisDraw)", "composite(false)");
-        check(!vsPlaces(beginOverride, early) && !vsPlaces(beginOverride, noLeft) && !vsPlaces(beginOverride, extraTaken) && !vsPlaces(notCleared, fwd) &&
+        setTwice = edited(setTwice, "flags.composite = uiDepthDrawSampledSurface();", "flags.composite = uiDepthDrawSampledSurface(); flags.composite = uiDepthDrawSampledSurface();");
+        notSet = edited(notSet, "flags.composite = uiDepthDrawSampledSurface();", "");
+        notConsumed = edited(notConsumed, "composite(f.composite)", "composite(false)");
+        check(!vsPlaces(beginOverride, early) && !vsPlaces(beginOverride, noLeft) && !vsPlaces(beginOverride, extraTaken) && !vsPlaces(setTwice, fwd) &&
                   !vsPlaces(notSet, fwd) && !vsPlaces(beginOverride, notConsumed) && !vsPlaces(beginOverride, writes) && !vsPlaces(beginOverride, returns),
-              "P3 control: counted before the after-UI retry, with no left-composite call, with a second taken call, with the flag never cleared, never set, "
+              "P3 control: counted before the after-UI retry, with no left-composite call, with a second taken call, with the flag set twice, never set, "
               "not consumed by the scope, with the count assigning the take or returning, the pin fails");
     }
 

@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <cstdarg>
+#include <cstdio>
 #include <cstring>
 
 #include "guard.h"
@@ -58,11 +60,20 @@ size_t codeInstructionLength(const uint8_t* code, size_t available,
     // Prefixes. Only the operand-size prefix and REX are expected in a
     // prologue; a segment, lock or rep prefix means this is not the sort of
     // instruction being decoded and the answer is 0.
-    if (i < available && code[i] == 0x66) ++i;
+    // F212: a scalar-single move (movss, F3 0F 10 / 0F 11) is the one F3-prefixed form understood, and only that: the prefix is taken here, and the opcode switch below
+    // answers 0 for it unless it is followed by 0F 10 or 0F 11. A leaf that opens with a movss store (the look springs' target setter, 0x1A8DF40 in build 334925) is
+    // otherwise unhookable.
+    bool scalarSingle = false;
+    if (i < available && code[i] == 0xF3) {
+        scalarSingle = true;
+        ++i;
+    }
+    if (!scalarSingle && i < available && code[i] == 0x66) ++i;
     if (i < available && isRexPrefix(code[i])) ++i;
     if (i >= available) return 0;
 
     const uint8_t op = code[i++];
+    if (scalarSingle && !(op == 0x0F && i < available && (code[i] == 0x10 || code[i] == 0x11))) return 0;
     switch (op) {
         // push/pop r64 -- the classic prologue register saves.
         case 0x50: case 0x51: case 0x52: case 0x53:
@@ -145,13 +156,29 @@ size_t codeInstructionLength(const uint8_t* code, size_t available,
                 i += extra;
                 return i <= available ? i : 0;
             }
+            // movups xmm, xmm/m128 (0F 10) and its store (0F 11): a plain unaligned move with a ModRM operand and no immediate, which is
+            // how MSVC opens a leaf that copies a matrix (the SRV radar's placement setter, 0x38563A0 in build 334925, begins
+            // `sub rsp,48h; movups xmm0,[rdx]`); with the F3 prefix (taken above) the same two opcodes are movss, which is how a leaf that
+            // stores a float opens (F212: 0x1A8DF40). Moved as is unless rip-relative, which is measured like every other ModRM form.
+            // Every other SSE form is still refused.
+            if (i < available && (code[i] == 0x10 || code[i] == 0x11)) {
+                ++i;
+                if (i >= available) return 0;
+                bool rip = false;
+                size_t extra = 0;
+                if (!modrmSize(code[i], &rip, &extra)) return 0;
+                if (rip && ripDispOffset) *ripDispOffset = i + 1;
+                i += extra;
+                return i <= available ? i : 0;
+            }
             return 0;   // every other two-byte opcode, including jcc rel32
         }
 
         default:
             // Everything unlisted, which includes E8 (call), E9/EB (jmp),
-            // 7x (jcc rel8), C3 (ret) and every SSE form. A prologue that
-            // begins with any of them is one this class will not touch.
+            // 7x (jcc rel8), C3 (ret) and every SSE form but movups and movss
+            // (0F 10 / 0F 11 above). A prologue that begins with any of them is one
+            // this class will not touch.
             return 0;
     }
 }
@@ -194,9 +221,18 @@ uint8_t* allocateNear(void* anchor, size_t bytes) {
 
 }  // namespace
 
+void CodeHook::refusedf(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(m_refusal, sizeof(m_refusal), fmt, args);
+    va_end(args);
+    Log::get().note("%s", m_refusal);
+}
+
 bool CodeHook::install(void* target, void* replacement, void** origOut,
                        const char* who, Prepare prepare, void* prepareContext) {
     const char* label = who ? who : "?";
+    m_refusal[0] = 0;
     if (m_installed || !target || !replacement) return false;
 
     uint8_t* const code = static_cast<uint8_t*>(target);
@@ -209,7 +245,7 @@ bool CodeHook::install(void* target, void* replacement, void** origOut,
     // sixteen bytes, so refusing costs nothing in practice and removes a whole
     // class of race from the design.
     if (reinterpret_cast<uintptr_t>(code) % 8 != 0) {
-        Log::get().note(
+        refusedf(
             "CodeHook %s: %p is not eight-byte aligned, so the patch could not "
             "be written as one atomic store. Not hooked -- a torn patch in code "
             "another thread is executing is not a risk worth taking.",
@@ -229,14 +265,17 @@ bool CodeHook::install(void* target, void* replacement, void** origOut,
     size_t pieceCount = 0;
     size_t stolen = 0;
     while (stolen < kCodeHookPatchBytes) {
-        if (pieceCount >= 8) return false;
+        if (pieceCount >= 8) {
+            refusedf("CodeHook %s: the prologue at %p takes more than eight instructions to cover the patch. Not hooked.", label, target);
+            return false;
+        }
         size_t len = 0;
         size_t rip = 0;
         const bool read = guarded("CodeHook::install/decode", [&] {
             len = codeInstructionLength(code + stolen, 16 - stolen, &rip);
         });
         if (!read || len == 0) {
-            Log::get().note(
+            refusedf(
                 "CodeHook %s: the instruction at %p+%zu is one this build does "
                 "not recognise or will not move (a jump or a call -- a function "
                 "beginning with one is a linker thunk or somebody else's hook, "
@@ -251,7 +290,11 @@ bool CodeHook::install(void* target, void* replacement, void** origOut,
         ++pieceCount;
         stolen += len;
     }
-    if (stolen > sizeof(m_original)) return false;
+    if (stolen > sizeof(m_original)) {
+        refusedf("CodeHook %s: the %zu bytes to move at %p are more than the %zu the trampoline keeps. Not hooked.", label, stolen, target,
+                 sizeof(m_original));
+        return false;
+    }
 
     // trampoline = the stolen instructions, then an absolute jump back to the
     // rest of the function. Absolute here, not relative: the trampoline is
@@ -261,7 +304,7 @@ bool CodeHook::install(void* target, void* replacement, void** origOut,
     const size_t trampolineBytes = stolen + 14;
     uint8_t* const tramp = allocateNear(target, trampolineBytes);
     if (!tramp) {
-        Log::get().note(
+        refusedf(
             "CodeHook %s: no executable memory could be reserved within reach "
             "of %p, so a five-byte jump cannot get to a trampoline. Not hooked.",
             label, target);
@@ -308,11 +351,14 @@ bool CodeHook::install(void* target, void* replacement, void** origOut,
     });
     if (!built || !relocatable) {
         if (!relocatable) {
-            Log::get().note(
+            refusedf(
                 "CodeHook %s: the prologue at %p reaches data more than two "
                 "gigabytes from where the trampoline could be placed, so the "
                 "moved instruction could not be made to address it. Not hooked.",
                 label, target);
+        }
+        if (!built) {
+            refusedf("CodeHook %s: the trampoline for the prologue at %p could not be written. Not hooked.", label, target);
         }
         VirtualFree(tramp, 0, MEM_RELEASE);
         return false;
@@ -324,7 +370,7 @@ bool CodeHook::install(void* target, void* replacement, void** origOut,
     // only restores the target's eight bytes and releases the block.
     DWORD trampOldProtect = 0;
     if (!VirtualProtect(tramp, trampolineBytes, PAGE_EXECUTE_READ, &trampOldProtect)) {
-        Log::get().note(
+        refusedf(
             "CodeHook %s: could not make the trampoline at %p executable (err "
             "%lu). Not hooked.",
             label, tramp, GetLastError());
@@ -340,7 +386,7 @@ bool CodeHook::install(void* target, void* replacement, void** origOut,
         reinterpret_cast<intptr_t>(replacement) -
         (reinterpret_cast<intptr_t>(code) + static_cast<intptr_t>(kCodeHookPatchBytes));
     if (displacement > INT32_MAX || displacement < INT32_MIN) {
-        Log::get().note(
+        refusedf(
             "CodeHook %s: %p is more than two gigabytes from the replacement, "
             "which a five-byte jump cannot reach. Not hooked.",
             label, target);
@@ -365,14 +411,14 @@ bool CodeHook::install(void* target, void* replacement, void** origOut,
     if (prepare && (!guarded("CodeHook::install/prepare", [&] {
             prepared = prepare(tramp, prepareContext);
         }) || !prepared)) {
-        Log::get().note("CodeHook %s: replacement preparation refused; target unchanged.", label);
+        refusedf("CodeHook %s: replacement preparation refused; target unchanged.", label);
         VirtualFree(tramp, 0, MEM_RELEASE);
         return false;
     }
 
     DWORD oldProtect = 0;
     if (!VirtualProtect(code, 8, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        Log::get().note("CodeHook %s: could not make %p writable (err %lu). Not "
+        refusedf("CodeHook %s: could not make %p writable (err %lu). Not "
                         "hooked.", label, target, GetLastError());
         VirtualFree(tramp, 0, MEM_RELEASE);
         return false;

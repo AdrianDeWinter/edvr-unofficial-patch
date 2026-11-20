@@ -3,11 +3,16 @@
 Known faults with known answers for both Flat screen and VR users, plus how to
 collect automated diagnostic data for anything new.
 
+A plain-language walkthrough is in the [player
+guide](../wiki/When-something-goes-wrong.md). This page is the known technical
+cases.
+
 If your issue is not listed below, open [an
-issue](https://github.com/characterecho-sean/edvr-unofficial-patch/issues/new/choose)
-or ask on Discord with your logs attached: run the installer and click **Save
+issue](https://github.com/characterecho-sean/ed-unofficial-patch/issues/new/choose)
+or ask on Discord with your logs attached: run the launcher and click **Save
 logs**, which gathers the relevant session's logs, breadcrumbs, and settings
-into one zip on your Desktop.
+into one zip on your Desktop. [Ask for help](../wiki/Ask-for-help.md) is the
+same step in short.
 
 For planned installer telemetry features and diagnostic roadmap, see
 [diagnostic-reporting-automation-2026-09-26.md](diagnostic-reporting-automation-2026-09-26.md).
@@ -17,15 +22,15 @@ For planned installer telemetry features and diagnostic roadmap, see
 ## Quick Start: Collecting Diagnostic Data (One-Click)
 
 Whether you fly in VR or play in Flat mode, never hunt manually through game
-subdirectories for log files. The installer bundles everything automatically:
+subdirectories for log files. The launcher bundles everything automatically:
 
 1. **Close Elite Dangerous completely.** If the game crashed or froze, verify
    in Task Manager (`Ctrl+Shift+Esc`) that `EliteDangerous64.exe` is not hung
    in the background.
-2. **Open the installer:** unzip `edvr-installer-<version>.zip` and run
-   `edvr-installer.exe`. It serves VR and flat players alike; under "Install
-   EDVR for:", "Flat only" installs the flat fixes alone.
-3. **Click "Save logs"** on the bottom bar of the installer window.
+2. **Open the launcher:** run `ed-up-launcher.exe`. It serves VR and flat
+   players alike; under "Install ED-UP for:", "Flat only" installs the flat
+   fixes alone.
+3. **Click "Save logs"** on the bottom bar of the launcher window.
 4. A zip file is written directly to your Desktop:
    `edvr-logs-YYYYMMDD_HHMMSS.zip`.
 5. Attach that zip file to your GitHub issue or Discord post.
@@ -76,7 +81,7 @@ motion vectors and jitter cancellation.
      and state discovery, plus the usual routing and refusal reports, in
      `edvr_gfx_*.log`. Shift plus `NumLock` requests the full capture, which
      is slow and large; use it only if asked.
-  4. Exit the game, run `edvr-installer.exe`, and click **Save logs**.
+  4. Exit the game, run `ed-up-launcher.exe`, and click **Save logs**.
 
 ### Flat mode: EDHM side-menu haze or blurry angled panels
 
@@ -111,8 +116,8 @@ motion vectors and jitter cancellation.
 
 ### Checking your active VR runtime
 
-**If the fixes that need `openvr_api.dll` do nothing at all**, read [Headsets
-and VR runtimes](../README.md#headsets-and-vr-runtimes) first. On Elite's
+**If the fixes that need `openvr_api.dll` do nothing at all**, read
+[Headsets](../wiki/Headsets.md) first. On Elite's
 native Oculus back end that half of the patch is never loaded, and no install
 can change that — the log says so in a `vr runtime:` line.
 
@@ -182,8 +187,8 @@ EDVR consists of two DLLs that must match: `d3d11.dll` and `openvr_api.dll`. A
 mismatched install (one file updated, one old) intentionally aborts startup,
 causing Elite to report `VRInitError_Init_Internal`.
 
-**Fix:** Run `edvr-installer.exe` and click **Repair**. It writes both halves
-from the single bundled payload. If building from source, run:
+**Fix:** Run `ed-up-launcher.exe` and click **Repair**. It writes both halves
+from the single downloaded release. If building from source, run:
 
 ```powershell
 python tools\install_edvr.py --target steam --verify-only
@@ -192,8 +197,8 @@ python tools\install_edvr.py --target steam --verify-only
 ### Everything except the exposure fix stopped working
 
 Look in `edvr_gfx_*.log` for the periodic `vScreen totals:` line. If **`largest
-eye-draw count`** is `0` and stays `0`, cockpit UI fixes, panel distance, and
-Explorer Cam switch off.
+eye-draw count`** is `0` and stays `0`, cockpit UI fixes, panel distance and
+the transition flash fix switch off.
 
 This happens if your per-eye resolution is below 2048 on both axes (e.g. Quest
 3 at lower render scales) or if your custom resolution matches the on-foot

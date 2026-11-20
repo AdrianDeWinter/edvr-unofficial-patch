@@ -18,6 +18,8 @@
 //
 // Usage: installer_test.exe <repo root> <scratch dir>
 #include <windows.h>
+#include <shellapi.h>
+#include <shlobj.h>
 #include <tlhelp32.h>
 
 #include <algorithm>
@@ -180,26 +182,124 @@ static DllInfo fakeDll(DllKind kind, const std::wstring& path, const std::string
 // The edvr-flat.ini a VR test payload carries beside its edvr.ini (both editions carry it since the unified install).
 static const char* kTestFlatIni = "[fix]\r\ntemporal_aa = off\r\n[advanced]\r\nreal_dll =\r\n";
 
+// ---------------------------------------------------------------------------
+// Payloads for the planner: a schema-2 manifest description and the bytes of each file, built here instead of by hand at every
+// site. kTestTable mirrors tools\package_native.py's FILES, the one table a release is made from (testManifestFiles
+// below reads that table and fails when the two differ), so a test payload has the same files, targets, conditions and behaviours as
+// a real one. A file's bytes are synthetic; its hash is whatever the test sets, since the planner compares hashes, not bytes.
+// ---------------------------------------------------------------------------
+struct TestTableRow {
+    const char* id;
+    TargetRoot root;
+    const char* path;
+    unsigned profiles;     // when.profile bits, 0 for none
+    bool nvidia;           // when.adapter = nvidia
+    ExistingMode existing;
+};
+static const TestTableRow kTestTable[] = {
+    {"graphics", TargetRoot::Game, "d3d11.dll", kProfileAll, false, ExistingMode::Chain},
+    {"runtime", TargetRoot::Openvr, "openvr_api.dll", kProfileVr, false, ExistingMode::Runtime},
+    {"openxr_loader", TargetRoot::Openvr, "openxr_loader.dll", kProfileVr, false, ExistingMode::Replace},
+    {"openxr_license", TargetRoot::Openvr, "OPENXR-LOADER-LICENSE.txt", kProfileVr, false, ExistingMode::Replace},
+    {"settings_vr", TargetRoot::Game, "edvr.ini", kProfileVr, false, ExistingMode::Settings},
+    {"settings_flat", TargetRoot::Game, "edvr-flat.ini", kProfileFlat, false, ExistingMode::Settings},
+    {"dittosr_license", TargetRoot::Game, "DITTOSR-LICENSE.txt", kProfileAll, false, ExistingMode::Owned},
+    {"dittosr_gsr_license", TargetRoot::Game, "DITTOSR-GSR-LICENSE.txt", kProfileAll, false, ExistingMode::Owned},
+    {"dlss", TargetRoot::Game, "nvngx_dlss.dll", 0, true, ExistingMode::Owned},
+    {"xess", TargetRoot::Game, "libxess.dll", 0, false, ExistingMode::Owned},
+    {"xess_license", TargetRoot::Game, "INTEL-XESS-LICENSE.txt", 0, false, ExistingMode::Owned},
+    {"xess_third_party", TargetRoot::Game, "INTEL-XESS-THIRD-PARTY.txt", 0, false, ExistingMode::Owned},
+    {"xess_fg", TargetRoot::Game, "libxess_fg.dll", kProfileFlat, false, ExistingMode::Owned},
+    {"xess_ll", TargetRoot::Game, "libxell.dll", kProfileFlat, false, ExistingMode::Owned},
+};
+
+static PayloadFileEntry* tfind(PayloadInfo& p, const std::string& id) {
+    for (PayloadFileEntry& f : p.files) if (f.file.id == id) return &f;
+    return nullptr;
+}
+
+// Gives `id` these bytes (and their hash unless `sha` says another), adding the file from the table when the payload has none.
+static PayloadFileEntry& tfile(PayloadInfo& p, const std::string& id, const std::string& bytes, const std::string* sha = nullptr) {
+    PayloadFileEntry* e = tfind(p, id);
+    if (!e) {
+        const TestTableRow* row = nullptr;
+        for (const TestTableRow& r : kTestTable) if (id == r.id) row = &r;
+        if (!row) { fprintf(stderr, "test payload: no table row for %s\n", id.c_str()); abort(); }
+        PayloadFileEntry fresh;
+        fresh.file.id = row->id;
+        fresh.file.asset = "test";
+        fresh.file.path = row->path;
+        fresh.file.target.root = row->root;
+        fresh.file.target.path = row->path;
+        fresh.file.when.profiles = row->profiles;
+        fresh.file.when.adapterNvidia = row->nvidia;
+        fresh.file.when.present = row->profiles != 0 || row->nvidia;
+        fresh.file.existing = row->existing;
+        p.files.push_back(std::move(fresh));
+        e = &p.files.back();
+    }
+    e->owned = std::make_shared<const std::string>(bytes);
+    e->data = e->owned->data();
+    e->size = e->owned->size();
+    e->sha = sha ? *sha : sha256Bytes(bytes.data(), bytes.size());
+    return *e;
+}
+// The file's hash is `sha`; its bytes are placeholders. Most planner cases only compare hashes.
+static void tset(PayloadInfo& p, const std::string& id, const std::string& sha) {
+    tfile(p, id, "bytes of " + id, &sha);
+}
+// A settings file: its text is its bytes. Empty text means the payload does not carry it.
+static void tsetText(PayloadInfo& p, const std::string& id, const std::string& text) {
+    if (text.empty()) {
+        p.files.erase(std::remove_if(p.files.begin(), p.files.end(), [&](const PayloadFileEntry& f) { return f.file.id == id; }), p.files.end());
+        return;
+    }
+    tfile(p, id, text);
+}
+// The payload has no bytes for `id`, though its manifest lists it (a build without the DLSS runtime): an earlier install's copy stays.
+static void tdrop(PayloadInfo& p, const std::string& id) {
+    p.files.erase(std::remove_if(p.files.begin(), p.files.end(), [&](const PayloadFileEntry& f) { return f.file.id == id; }), p.files.end());
+}
+// The manifest no longer lists `id` at all: an install record for it is for a dropped file.
+static void tremove(PayloadInfo& p, const std::string& id) {
+    p.files.erase(std::remove_if(p.files.begin(), p.files.end(), [&](const PayloadFileEntry& f) { return f.file.id == id; }), p.files.end());
+}
+// An install record for `id` as the planner writes one: where the file goes and how it is treated come from the same table a test
+// payload is built from, and the hash is what the test says was written.
+static void trecord(InstallState& state, const std::string& id, const std::string& sha) {
+    for (const TestTableRow& row : kTestTable) {
+        if (id != row.id) continue;
+        FileRecord r;
+        r.id = row.id;
+        r.root = targetRootName(row.root);
+        r.path = row.path;
+        r.existing = existingName(row.existing);
+        r.sha256 = sha;
+        state.put(r);
+        return;
+    }
+    fprintf(stderr, "test record: no table row for %s\n", id.c_str());
+    abort();
+}
+static std::string tsha(const PayloadInfo& p, const std::string& id) { return p.shaOf(id); }
+static std::string ttext(const PayloadInfo& p, const std::string& id) {
+    const PayloadFileEntry* f = p.find(id);
+    return f ? f->text() : std::string();
+}
+static void tvalid(PayloadInfo& p, const std::string& id, bool valid) {
+    if (PayloadFileEntry* e = tfind(p, id)) e->valid = valid;
+}
+
 // The VR installer's payload: the runtime, edvr.ini and edvr-flat.ini.
 static PayloadInfo testPayload(const std::string& iniText) {
     PayloadInfo p;
     p.version = "v9.9.9-test";
-    p.descriptorText = "[install]\r\nschema = 2\r\nscope = both\r\n";
-    p.descriptorSha = sha256Bytes(p.descriptorText.data(), p.descriptorText.size());
-    p.haveD3d11 = true;
-    p.nativeGraphicsValid = true;
-    p.d3d11Sha = "aaaa-new-d3d11";
-    p.haveOpenvr = true;
-    p.openvrSha = "bbbb-new-openvr";
-    p.nativePairValid = true;
-    p.haveOpenxrLoader = true;
-    p.openxrLoaderSha = "cccc-loader";
-    p.haveOpenxrLicense = true;
-    p.openxrLicenseSha = "dddd-license";
-    p.haveIni = !iniText.empty();
-    p.iniText = iniText;
-    p.haveFlatIni = true;
-    p.flatIniText = kTestFlatIni;
+    tset(p, "graphics", "aaaa-new-d3d11");
+    tset(p, "runtime", "bbbb-new-openvr");
+    tset(p, "openxr_loader", "cccc-loader");
+    tset(p, "openxr_license", "dddd-license");
+    tsetText(p, "settings_vr", iniText);
+    tsetText(p, "settings_flat", kTestFlatIni);
     return p;
 }
 
@@ -208,11 +308,9 @@ static const char kFlatGraphicsBytes[] = "TEST-FLAT-D3D11-PAYLOAD";
 // A payload with no VR runtime: graphics and edvr-flat.ini only. It can install scope flat and nothing that needs the runtime.
 static PayloadInfo flatPayloadFor(const std::string& flatIniText) {
     PayloadInfo p = testPayload(std::string());
-    p.haveOpenvr = false; p.haveOpenxrLoader = false; p.haveOpenxrLicense = false; p.nativePairValid = false;
-    p.haveIni = false;
-    p.haveFlatIni = true;
-    p.flatIniText = flatIniText;
-    p.d3d11Sha = sha256Bytes(kFlatGraphicsBytes, sizeof(kFlatGraphicsBytes) - 1);
+    tremove(p, "runtime"); tremove(p, "openxr_loader"); tremove(p, "openxr_license");
+    tsetText(p, "settings_flat", flatIniText);
+    tset(p, "graphics", sha256Bytes(kFlatGraphicsBytes, sizeof(kFlatGraphicsBytes) - 1));
     return p;
 }
 
@@ -599,6 +697,35 @@ static void testShippedIni(const std::wstring& root) {
         expectEq(iniValue(lost, "fix.intro_video", "<absent>"), "skip", "control: it is carried under the old name instead, where nothing reads it");
     }
 
+    // F162: fix.native_on_foot_ads_sight_both_eyes (on | off) became fix.native_on_foot_ads_sight_eye (both | right | left)
+    // (edvr.ini: `# moved-from: fix.native_on_foot_ads_sight_both_eyes (default on) (values on=both, off=right)`). A file from before has the old
+    // line: off is somebody's choice and arrives as right (the new key's word for it, not the old one), on is the old shipped default, a stale
+    // line, not a choice, consumed so the new line stands as shipped (both), and nothing is left under the old name to shadow either.
+    {
+        MergeReport offRep, onRep, newRep;
+        const std::string off = mergeIni(shipped, "[fix]\r\nnative_on_foot_ads_sight_both_eyes = off\r\n", nullptr, {}, &offRep);
+        expectEq(iniValue(off, "fix.native_on_foot_ads_sight_eye", "<absent>"), "right", "a chosen ADS sight in both eyes = off arrives as the sight eye right");
+        expectEq(iniValue(off, "fix.native_on_foot_ads_sight_both_eyes", "<absent>"), "<absent>", "...and nothing is left under the old name to shadow it");
+        check(!offRep.followed.empty() && offRep.followed[0].find("fix.native_on_foot_ads_sight_both_eyes = off  ->  fix.native_on_foot_ads_sight_eye = right") != std::string::npos,
+              "the report says the value followed its key and became right");
+        const std::string on = mergeIni(shipped, "[fix]\r\nnative_on_foot_ads_sight_both_eyes = on\r\n", nullptr, {}, &onRep);
+        expectEq(iniValue(on, "fix.native_on_foot_ads_sight_eye", "<absent>"), "both", "the old shipped default on is not a choice: the sight eye stands as shipped (both)");
+        expectEq(iniValue(on, "fix.native_on_foot_ads_sight_both_eyes", "<absent>"), "<absent>", "...and the stale line is consumed, not carried");
+        // an explicit new-key value wins over the old line, as for every moved key
+        const std::string both = mergeIni(shipped, "[fix]\r\nnative_on_foot_ads_sight_both_eyes = off\r\nnative_on_foot_ads_sight_eye = left\r\n", nullptr, {}, &newRep);
+        expectEq(iniValue(both, "fix.native_on_foot_ads_sight_eye", "<absent>"), "left", "a sight eye already chosen in the file wins over the old line");
+        // CONTROL: the same merge with the annotation taken out. The old word is carried under the old name, where nothing reads it.
+        std::string unannotated = shipped;
+        const std::string line = "# moved-from: fix.native_on_foot_ads_sight_both_eyes (default on) (values on=both, off=right)";
+        const size_t at = unannotated.find(line);
+        if (at != std::string::npos) unannotated.replace(at, line.size(), "# (annotation removed)");
+        check(at != std::string::npos, "the control's ini really lost the sight eye annotation");
+        MergeReport lostRep;
+        const std::string lost = mergeIni(unannotated, "[fix]\r\nnative_on_foot_ads_sight_both_eyes = off\r\n", nullptr, {}, &lostRep);
+        expectEq(iniValue(lost, "fix.native_on_foot_ads_sight_eye", "<absent>"), "both", "control: without the annotation the sight eye stays as shipped");
+        expectEq(iniValue(lost, "fix.native_on_foot_ads_sight_both_eyes", "<absent>"), "off", "control: the choice is carried under the old name instead, where nothing reads it");
+    }
+
     // 2026-09-29: the flat camera path became always-on and its two switches,
     // fix.temporal_aa_camera and fix.temporal_aa_camera_trace, were removed. A
     // rig that flew the experiment has both lines, one or both "on". Neither may
@@ -657,11 +784,11 @@ static void testShippedIni(const std::wstring& root) {
                   flatMerged.find("carried over from your edvr.ini") == std::string::npos,
               "a merge of edvr-flat.ini says the retired line was carried over from edvr-flat.ini");
         const std::string flatBare = mergeIni(shipped, flown, nullptr, {}, nullptr, "edvr-flat.ini");
-        check(flatBare.find("# carried over from your edvr-flat.ini; not an EDVR setting this version knows") !=
+        check(flatBare.find("# carried over from your edvr-flat.ini; not an ED-UP setting this version knows") !=
                   std::string::npos,
               "...and so does the note for a key this version never shipped");
         check(mergeIni(shipped, flown, nullptr, {}, nullptr, nullptr)
-                      .find("# carried over from your edvr.ini; not an EDVR setting this version knows") !=
+                      .find("# carried over from your edvr.ini; not an ED-UP setting this version knows") !=
                   std::string::npos,
               "no file named: the VR file's name, as before");
 
@@ -1490,14 +1617,13 @@ static void testPlanner() {
     {   // NVIDIA's DLSS runtime: placed only where an NVIDIA card is, and only
         // when the slot is empty or holds the copy we placed.
         PayloadInfo withNgx = payload;
-        withNgx.haveNgx = true;
-        withNgx.ngxSha = "cccc-new-ngx";
+        tset(withNgx, "dlss", "cccc-new-ngx");
         Survey s = baseSurvey(dir);
         s.nvidiaAdapter = true;
         Plan plan = planInstall(s, options, withNgx);
         check(hasStep(plan, Action::WritePayload, nullptr, L"nvngx_dlss.dll"),
               "with an NVIDIA card the DLSS runtime is placed");
-        check(plan.nextState.ngxInstalled && plan.nextState.ngxSha == "cccc-new-ngx",
+        check(plan.nextState.shaOf("dlss") == "cccc-new-ngx",
               "and recorded as ours");
         s.nvidiaAdapter = false;
         plan = planInstall(s, options, withNgx);
@@ -1509,10 +1635,9 @@ static void testPlanner() {
         plan = planInstall(s, options, withNgx);
         check(!hasStep(plan, Action::WritePayload, nullptr, L"nvngx_dlss.dll"),
               "a copy that is not ours is left alone");
-        check(!plan.nextState.ngxInstalled, "and not claimed");
+        check(plan.nextState.shaOf("dlss").empty(), "and not claimed");
         s.state.present = true;
-        s.state.ngxInstalled = true;
-        s.state.ngxSha = "their-ngx";
+        trecord(s.state, "dlss", "their-ngx");
         plan = planInstall(s, options, withNgx);
         check(hasStep(plan, Action::WritePayload, nullptr, L"nvngx_dlss.dll"),
               "an older copy of ours is updated");
@@ -1522,12 +1647,12 @@ static void testPlanner() {
         plan = planInstall(s, options, withNgx);
         check(!hasStep(plan, Action::WritePayload, nullptr, L"nvngx_dlss.dll"),
               "this build's copy is left alone");
-        check(plan.nextState.ngxInstalled, "and still recorded");
+        check(!plan.nextState.shaOf("dlss").empty(), "and still recorded");
         s.ngx = fakeDll(DllKind::Foreign, joinPath(dir, L"nvngx_dlss.dll"), "their-ngx");
         const Plan un = planUninstall(s, options);
         check(hasStep(un, Action::Delete, L"nvngx_dlss.dll", nullptr),
               "uninstall removes the copy EDVR placed");
-        s.state.ngxSha = "some-other";
+        trecord(s.state, "dlss", "some-other");
         const Plan un2 = planUninstall(s, options);
         check(!hasStep(un2, Action::Delete, L"nvngx_dlss.dll", nullptr),
               "but not one it did not place");
@@ -1554,15 +1679,14 @@ static void testPlanner() {
         s.d3d11 = fakeDll(DllKind::D3d11Provider, joinPath(dir, L"d3d11.dll"), "reshade-sha",
                           L"ReShade");
         s.state.present = true;
-        s.state.d3d11Installed = true;
-        s.state.d3d11Sha = "old-edvr-sha";
+        trecord(s.state, "graphics", "old-edvr-sha");
         const Plan plan = planInstall(s, options, payload);
         check(hasStep(plan, Action::Rename, L"d3d11.dll", L"d3d11_reshade.dll"),
               "the intruder is kept, under its own name");
         check(hasStep(plan, Action::WritePayload, nullptr, L"d3d11.dll"), "and EDVR goes back");
         expectEq(iniValue(plannedIni(plan), "advanced.real_dll"), "d3d11_reshade.dll",
                  "with the chain pointed at it");
-        check(notesMention(plan, "replaced EDVR"), "the report says what happened");
+        check(notesMention(plan, "replaced ED-UP"), "the report says what happened");
     }
 
     {   // The same mod reinstalled itself over us twice: its older copy is
@@ -1574,7 +1698,7 @@ static void testPlanner() {
             fakeDll(DllKind::D3d11Provider, joinPath(dir, L"d3d11_edhm.dll"), "edhm-old",
                     L"3Dmigoto"));
         s.state.present = true;
-        s.state.d3d11Installed = true;
+        trecord(s.state, "graphics", "recorded-edvr-d3d11");
         s.state.chainTarget = L"d3d11_edhm.dll";
         s.state.chainMod = L"EDHM";
         const Plan plan = planInstall(s, options, payload);
@@ -1586,26 +1710,25 @@ static void testPlanner() {
 
     {   // An update where nothing has changed at all.
         Survey s = baseSurvey(dir);
-        s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), payload.d3d11Sha);
+        s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), tsha(payload, "graphics"));
         s.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openvr_api.dll"),
-                                  payload.openvrSha);
+                                  tsha(payload, "runtime"));
         s.openvrOrig = fakeDll(DllKind::OpenVrRuntime,
                                joinPath(s.game.openvrDir, L"openvr_api_orig.dll"), "game-vr");
         s.iniPresent = true;
         s.iniText = kNextIni;
         s.baseIniText = kNextIni;
         s.state.present = true;
-        s.state.d3d11Installed = true;
-        s.state.d3d11Sha = payload.d3d11Sha;
+        trecord(s.state, "graphics", tsha(payload, "graphics"));
         s.descriptorPresent = true;
-        s.descriptorSha = payload.descriptorSha;
-        s.state.descriptorSha = payload.descriptorSha;
+        s.descriptorSha = descriptorShaFor("both");
+        s.state.descriptorSha = descriptorShaFor("both");
         // Scope both is the default: its flat file and that file's base are in place too.
         s.flatIniPresent = true;
-        s.flatIniText = payload.flatIniText;
-        s.flatBaseIniText = payload.flatIniText;
-        s.openxrLoader=fakeDll(DllKind::Foreign,joinPath(s.game.openvrDir,L"openxr_loader.dll"),payload.openxrLoaderSha);
-        s.openxrLicense=fakeDll(DllKind::Foreign,joinPath(s.game.openvrDir,L"OPENXR-LOADER-LICENSE.txt"),payload.openxrLicenseSha);
+        s.flatIniText = ttext(payload, "settings_flat");
+        s.flatBaseIniText = ttext(payload, "settings_flat");
+        s.openxrLoader=fakeDll(DllKind::Foreign,joinPath(s.game.openvrDir,L"openxr_loader.dll"),tsha(payload, "openxr_loader"));
+        s.openxrLicense=fakeDll(DllKind::Foreign,joinPath(s.game.openvrDir,L"OPENXR-LOADER-LICENSE.txt"),tsha(payload, "openxr_license"));
         const auto first=planInstall(s,options,payload);
         s.nativeConfig=fakeDll(DllKind::Foreign,joinPath(s.game.openvrDir,L"edvr_openxr.ini"),first.nextState.nativeConfigSha);
         const Plan plan = planInstall(s, options, payload);
@@ -1615,9 +1738,9 @@ static void testPlanner() {
 
     {   // The same folder, but the user asked for a repair.
         Survey s = baseSurvey(dir);
-        s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), payload.d3d11Sha);
+        s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), tsha(payload, "graphics"));
         s.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openvr_api.dll"),
-                                  payload.openvrSha);
+                                  tsha(payload, "runtime"));
         s.openvrOrig = fakeDll(DllKind::OpenVrRuntime,
                                joinPath(s.game.openvrDir, L"openvr_api_orig.dll"), "game-vr");
         s.iniPresent = true;
@@ -1640,7 +1763,7 @@ static void testPlanner() {
         s.otherD3d11.push_back(fakeDll(DllKind::D3d11Provider, joinPath(dir, L"d3d11_edhm.dll"),
                                        "edhm-sha", L"3Dmigoto"));
         s.state.present = true;
-        s.state.d3d11Installed = true;
+        trecord(s.state, "graphics", "recorded-edvr-d3d11");
         s.state.chainTarget = L"d3d11_edhm.dll";
         s.state.chainMod = L"EDHM";
         const Plan plan = planInstall(s, options, payload);
@@ -1671,7 +1794,7 @@ static void testPlanner() {
         Survey s = baseSurvey(dir);
         s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), "old-edvr");
         s.state.present = true;
-        s.state.d3d11Installed = true;
+        trecord(s.state, "graphics", "recorded-edvr-d3d11");
         s.state.chainTarget = L"d3d11_edhm.dll";
         s.state.chainMod = L"EDHM";
         s.iniPresent = true;
@@ -1769,9 +1892,9 @@ static void testPlanner() {
         // only openvr_api.dll in the folder -- that leaves VR unable to start,
         // in the name of removing the thing that was making it work.
         Survey s = baseSurvey(dir);
-        s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), payload.d3d11Sha);
+        s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), tsha(payload, "graphics"));
         s.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openvr_api.dll"),
-                                  payload.openvrSha);
+                                  tsha(payload, "runtime"));
         s.openvrOrig = fakeDll(DllKind::Absent,
                                joinPath(s.game.openvrDir, L"openvr_api_orig.dll"), "");
         const Plan plan = planUninstall(s, options);
@@ -1802,7 +1925,7 @@ static void testPlanner() {
         s.otherD3d11.push_back(fakeDll(DllKind::D3d11Provider, joinPath(dir, L"d3d11_edhm.dll"),
                                        "edhm-sha", L"3Dmigoto"));
         s.state.present = true;
-        s.state.d3d11Installed = true;
+        trecord(s.state, "graphics", "recorded-edvr-d3d11");
         s.state.chainTarget = L"d3d11_edhm.dll";
         s.state.chainMod = L"EDHM";
         const Plan plan = planInstall(s, options, payload);
@@ -1862,7 +1985,7 @@ static void testPlanner() {
         // quietly installing half of one. package.bat refuses to ship it.
         Survey s = baseSurvey(dir);
         PayloadInfo halfBuild = payload;
-        halfBuild.haveOpenvr = false;
+        tdrop(halfBuild, "runtime");
         const Plan plan = planInstall(s, options, halfBuild);
         check(!hasStep(plan, Action::Rename, L"openvr_api.dll", L"openvr_api_orig.dll"),
               "a build without the VR half does not touch the game's runtime");
@@ -1875,15 +1998,28 @@ static void testPlanner() {
         s.eliteKind = EliteExeKind::Legacy;
         Plan plan = planInstall(s, options, payload);
         check(plan.blocked && plan.steps.empty(), "legacy Elite Dangerous is refused");
+
+        // The installs on offer leave legacy out, by the executable's own words: these are
+        // what the two real executables say. A folder's name does not decide it.
+        check(versionStringsNameLegacyElite(L"Elite:Dangerous", L"Elite:Dangerous Executable"), "the pre-Odyssey version strings read as legacy");
+        check(!versionStringsNameLegacyElite(L"Elite Dangerous: Odyssey", L"Elite Dangerous: Odyssey Executable"), "Odyssey's version strings do not");
+        check(!versionStringsNameLegacyElite(L"", L""), "an exe with no version strings is not called legacy");
+        GameInstall odysseyInstall, legacyInstall;
+        odysseyInstall.dir = L"C:\\Games\\ED\\Products\\elite-dangerous-odyssey-64";
+        legacyInstall.dir = L"C:\\Games\\ED\\Products\\elite-dangerous-64";
+        const std::vector<GameInstall> kept = withoutLegacyInstalls({legacyInstall, odysseyInstall}, [](const std::wstring& exe) {
+            return exe == L"C:\\Games\\ED\\Products\\elite-dangerous-64\\EliteDangerous64.exe";
+        });
+        check(kept.size() == 1 && kept[0].dir == odysseyInstall.dir, "the list drops a legacy install, tested on its executable's path, and keeps the Odyssey one");
         check(notesMention(plan, "Elite Dangerous (Horizons)"), "and named as Horizons, not Odyssey");
-        check(notesMention(plan, "no EDVR build supports this game"),
+        check(notesMention(plan, "no ED-UP build supports this game"),
               "with no pointer at some other build");
 
         s.eliteKind = EliteExeKind::OdysseyUnknown;
         s.eliteFileVersion = L"999999";
         plan = planInstall(s, options, payload);
         check(!plan.blocked && !plan.steps.empty(), "an unknown Odyssey revision installs");
-        check(problemMentions(plan, "is not the one this EDVR build was checked against"),
+        check(problemMentions(plan, "is not the one this ED-UP build was checked against"),
               "with a warning that says why");
         check(problemMentions(plan, "fixes tied to the game build stand down"),
               "and says what stands down");
@@ -1905,11 +2041,11 @@ static void testPlanner() {
 
     {   // Uninstall, with a chained mod and the original runtime in place.
         Survey s = baseSurvey(dir);
-        s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), payload.d3d11Sha);
+        s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), tsha(payload, "graphics"));
         s.otherD3d11.push_back(fakeDll(DllKind::D3d11Provider, joinPath(dir, L"d3d11_edhm.dll"),
                                        "edhm-sha", L"3Dmigoto"));
         s.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openvr_api.dll"),
-                                  payload.openvrSha);
+                                  tsha(payload, "runtime"));
         s.openvrOrig = fakeDll(DllKind::OpenVrRuntime,
                                joinPath(s.game.openvrDir, L"openvr_api_orig.dll"), "game-vr");
         s.iniPresent = true;
@@ -1941,13 +2077,10 @@ static void testNativePlanner() {
     printf("\nnative planner\n");
     const std::wstring dir = L"C:\\Games\\ED\\Products\\elite-dangerous-odyssey-64";
     Options o = testOptions();
-    PayloadInfo p; p.version="native-test"; p.iniText="[fix]\r\nblack_void = 1\r\n"; p.haveIni=true;
-    p.flatIniText=kTestFlatIni; p.haveFlatIni=true;
-    p.descriptorText = "[install]\r\nschema = 2\r\nscope = both\r\n";
-    p.descriptorSha = sha256Bytes(p.descriptorText.data(), p.descriptorText.size());
-    p.nativePairValid=true; p.nativeGraphicsValid=true; p.haveD3d11=true; p.haveOpenvr=true; p.haveOpenxrLoader=true; p.d3d11Sha="graphics";
-    p.openvrSha="runtime"; p.openxrLoaderSha="loader";
-    p.haveOpenxrLicense=true; p.openxrLicenseSha="license";
+    PayloadInfo p = testPayload("[fix]\r\nblack_void = 1\r\n"); p.version="native-test";
+    tset(p, "graphics", "graphics");
+    tset(p, "runtime", "runtime"); tset(p, "openxr_loader", "loader");
+    tset(p, "openxr_license", "license");
     Survey s=baseSurvey(dir); s.openxrLoader=fakeDll(DllKind::Absent,joinPath(s.game.openvrDir,L"openxr_loader.dll"),"");
     s.eliteKind=EliteExeKind::OdysseyQualified;
     Plan fresh=planInstall(s,o,p);
@@ -1958,17 +2091,17 @@ static void testNativePlanner() {
     check(hasStep(fresh,Action::WriteText,nullptr,L"edvr_openxr.ini"),"native startup config is written");
     bool systemConfig=false; for(const Step& st:fresh.steps) if(st.action==Action::WriteText && leafOf(st.to)==L"edvr_openxr.ini") systemConfig=st.text.find("runtime=system")!=std::string::npos;
     check(systemConfig,"config selects the system runtime");
-    PayloadInfo half=p; half.nativePairValid=false;
+    PayloadInfo half=p; tvalid(half, "runtime", false);
     check(planInstall(s,o,half).blocked,"missing one native payload rejects the whole plan");
     s.openvrCurrent=fakeDll(DllKind::Foreign,joinPath(s.game.openvrDir,L"openvr_api.dll"),"old-opencomposite",L"OpenComposite");
     Plan upgrade=planInstall(s,o,p);
     check(!upgrade.blocked && hasStep(upgrade,Action::Backup,L"openvr_api.dll",L"openvr_api.dll"),"upgrade preserves a stock or OpenComposite runtime");
-    s.state.nativeInstalled=true; s.state.nativeRuntimeSha=p.openvrSha; s.state.nativeOriginalSha="old-opencomposite";
-    s.openxrLoader=fakeDll(DllKind::Edvr,joinPath(s.game.openvrDir,L"openxr_loader.dll"),p.openxrLoaderSha);
-    s.state.openxrLoaderSha=p.openxrLoaderSha; s.state.openxrLicenseSha=p.openxrLicenseSha;
-    s.openvrCurrent=fakeDll(DllKind::Edvr,joinPath(s.game.openvrDir,L"openvr_api.dll"),p.openvrSha);
+    trecord(s.state, "runtime", tsha(p, "runtime")); s.state.nativeOriginalSha="old-opencomposite";
+    s.openxrLoader=fakeDll(DllKind::Edvr,joinPath(s.game.openvrDir,L"openxr_loader.dll"),tsha(p, "openxr_loader"));
+    trecord(s.state, "openxr_loader", tsha(p, "openxr_loader")); trecord(s.state, "openxr_license", tsha(p, "openxr_license"));
+    s.openvrCurrent=fakeDll(DllKind::Edvr,joinPath(s.game.openvrDir,L"openvr_api.dll"),tsha(p, "runtime"));
     s.openvrOrig=fakeDll(DllKind::OpenVrRuntime,joinPath(s.game.openvrDir,L"openvr_api_orig.dll"),"old-opencomposite");
-    s.d3d11=fakeDll(DllKind::Edvr,joinPath(dir,L"d3d11.dll"),p.d3d11Sha);
+    s.d3d11=fakeDll(DllKind::Edvr,joinPath(dir,L"d3d11.dll"),tsha(p, "graphics"));
     Plan out=planUninstall(s,o);
     check(hasStep(out,Action::Delete,L"openxr_loader.dll",nullptr),"uninstall removes the bundled loader");
     check(hasStep(out,Action::Rename,L"openvr_api_orig.dll",L"openvr_api.dll"),"uninstall restores the original runtime");
@@ -2022,7 +2155,7 @@ static void testFlatPlanner() {
 
     s = baseSurvey(dir);
     s.state.present = true; s.state.profile = "vr";
-    s.state.openvrInstalled = true; s.state.openvrSha = "installed-vr";
+    trecord(s.state, "runtime", "installed-vr");
     s.state.openvrOrigSha = "game-vr";
     s.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openvr_api.dll"), "installed-vr");
     s.openvrOrig = fakeDll(DllKind::OpenVrRuntime, joinPath(s.game.openvrDir, L"openvr_api_orig.dll"), "game-vr");
@@ -2110,7 +2243,7 @@ static const char* kMoveNote =
 static PayloadProvider flatProvider() {
     return [](const std::string& item, const void** data, size_t* size) {
         static const char kProfile[] = "[install]\r\nschema = 2\r\nscope = flat\r\n";
-        if (item == "d3d11") {
+        if (item == "graphics") {
             *data = kFlatGraphicsBytes;
             *size = sizeof(kFlatGraphicsBytes) - 1;
             return true;
@@ -2159,9 +2292,8 @@ static Survey installedFlatSurvey(const std::wstring& dir, const PayloadInfo& in
     s.state.profile = "flat";
     s.state.scope = "flat";
     s.state.descriptorSha = descriptorShaFor("flat");
-    s.state.d3d11Installed = true;
-    s.state.d3d11Sha = "an-older-flat-d3d11";
-    s.flatBaseIniText = installedWith.flatIniText;
+    trecord(s.state, "graphics", "an-older-flat-d3d11");
+    s.flatBaseIniText = ttext(installedWith, "settings_flat");
     return s;
 }
 
@@ -2185,14 +2317,14 @@ static std::string unifiedProblems(const Plan& plan) {
 // the game's original runtime kept in a backup, its descriptor, and no record.
 static Survey toolBothSurvey(const std::wstring& dir, const PayloadInfo& vr) {
     Survey s = baseSurvey(dir);
-    s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), vr.d3d11Sha);
-    s.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openvr_api.dll"), vr.openvrSha);
+    s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), tsha(vr, "graphics"));
+    s.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openvr_api.dll"), tsha(vr, "runtime"));
     s.openvrOrig = fakeDll(DllKind::Absent, joinPath(s.game.openvrDir, L"openvr_api_orig.dll"), "");
     s.openvrOrigInBackups.push_back(L"C:\\Games\\ED\\backup\\openvr_api_stock.dll");
-    s.openxrLoader = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openxr_loader.dll"), vr.openxrLoaderSha);
-    s.openxrLicense = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"OPENXR-LOADER-LICENSE.txt"), vr.openxrLicenseSha);
+    s.openxrLoader = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openxr_loader.dll"), tsha(vr, "openxr_loader"));
+    s.openxrLicense = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"OPENXR-LOADER-LICENSE.txt"), tsha(vr, "openxr_license"));
     s.descriptorPresent = true;
-    s.descriptorSha = sha256Bytes(vr.descriptorText.data(), vr.descriptorText.size());
+    s.descriptorSha = descriptorShaFor("both");
     return s;
 }
 
@@ -2241,8 +2373,7 @@ static void testUnifiedDescriptor() {
         s.state.present = true;
         s.state.profile = "vr";
         s.state.descriptorSha = shaOf(vr1);
-        s.state.openvrInstalled = true;
-        s.state.openvrSha = vr.openvrSha;
+        trecord(s.state, "runtime", tsha(vr, "runtime"));
         const Plan plan = planInstall(s, o, vr);
         check(!plan.blocked, "an older schema-1 record does not block a tool-written both install",
               unifiedProblems(plan));
@@ -2275,8 +2406,8 @@ static void testUnifiedDescriptor() {
         const Plan update = planInstall(after, o, vr);
         check(!update.blocked, "the GUI update of a tool-written both install plans", unifiedProblems(update));
         after.state = update.nextState;
-        after.openxrLoader = fakeDll(DllKind::Edvr, joinPath(after.game.openvrDir, L"openxr_loader.dll"), vr.openxrLoaderSha);
-        after.openxrLicense = fakeDll(DllKind::Edvr, joinPath(after.game.openvrDir, L"OPENXR-LOADER-LICENSE.txt"), vr.openxrLicenseSha);
+        after.openxrLoader = fakeDll(DllKind::Edvr, joinPath(after.game.openvrDir, L"openxr_loader.dll"), tsha(vr, "openxr_loader"));
+        after.openxrLicense = fakeDll(DllKind::Edvr, joinPath(after.game.openvrDir, L"OPENXR-LOADER-LICENSE.txt"), tsha(vr, "openxr_license"));
         after.nativeConfig = fakeDll(DllKind::Edvr, joinPath(after.game.openvrDir, L"edvr_openxr.ini"), update.nextState.nativeConfigSha);
         const Plan conversion = planInstall(after, convert, flat);
         check(!conversion.blocked, "a recorded both install converts to flat through the runtime proofs", unifiedProblems(conversion));
@@ -2322,10 +2453,8 @@ static void testUnifiedDescriptor() {
         check(!planInstall(markerFlat, both, vr).blocked, "an explicit scope both over a scope = flat install installs VR");
         check(!planInstall(markerFlat, o, flat).blocked, "the flat payload updates a scope = flat install");
 
-        // The payload's own descriptor is no longer what gets written: a schema-1 text in the payload is ignored.
+        // The payload carries no descriptor: the planner writes its own text for the scope, whatever an older installer shipped.
         PayloadInfo retired = vr;
-        retired.descriptorText = vr1;
-        retired.descriptorSha = shaOf(vr1);
         check(!planInstall(baseSurvey(dir), o, retired).blocked && plannedText(planInstall(baseSurvey(dir), o, retired), L"edvr_profile.ini") == both2,
               "a payload carrying a schema-1 descriptor does not change what the planner writes");
     }
@@ -2374,24 +2503,23 @@ static void testXessPlanner() {
     printf("\noptional XeSS files: planning and ownership\n");
     const std::wstring dir = L"C:\\Games\\ED\\Products\\elite-dangerous-odyssey-64";
     PayloadInfo p = flatPayloadFor(kFlatTemplate);
-    p.haveXess = true;
-    p.xessSha = "xess-runtime-new";
-    p.xessLicenseSha = "xess-license-new";
-    p.xessThirdPartySha = "xess-third-party-new";
+    tset(p, "xess", "xess-runtime-new");
+    tset(p, "xess_license", "xess-license-new");
+    tset(p, "xess_third_party", "xess-third-party-new");
     const Options options = testOptions();
     auto current = [&](const wchar_t* leaf, const std::string& hash, DllKind kind = DllKind::Foreign) {
         return fakeDll(kind, joinPath(dir, leaf), hash);
     };
     auto installed = [&]() {
         Survey s = installedFlatSurvey(dir, p);
-        s.d3d11.sha256 = p.d3d11Sha;
-        s.state.d3d11Sha = p.d3d11Sha;
+        s.d3d11.sha256 = tsha(p, "graphics");
+        trecord(s.state, "graphics", tsha(p, "graphics"));
         s.flatIniPresent = true;
-        s.flatIniText = p.flatIniText;
-        s.flatBaseIniText = p.flatIniText;
-        s.xess = current(L"libxess.dll", p.xessSha);
-        s.xessLicense = current(L"INTEL-XESS-LICENSE.txt", p.xessLicenseSha);
-        s.xessThirdParty = current(L"INTEL-XESS-THIRD-PARTY.txt", p.xessThirdPartySha);
+        s.flatIniText = ttext(p, "settings_flat");
+        s.flatBaseIniText = ttext(p, "settings_flat");
+        s.xess = current(L"libxess.dll", tsha(p, "xess"));
+        s.xessLicense = current(L"INTEL-XESS-LICENSE.txt", tsha(p, "xess_license"));
+        s.xessThirdParty = current(L"INTEL-XESS-THIRD-PARTY.txt", tsha(p, "xess_third_party"));
         return s;
     };
 
@@ -2410,8 +2538,8 @@ static void testXessPlanner() {
         check(notesMention(plan, "libxess.dll (Intel's XeSS-SR runtime) is already this build's"),
               "the report says the XeSS runtime is already this build's");
         const InstallState adopted = parseState(plannedText(plan, L"state.ini"));
-        check(adopted.xessSha == p.xessSha && adopted.xessLicenseSha == p.xessLicenseSha &&
-              adopted.xessThirdPartySha == p.xessThirdPartySha,
+        check(adopted.shaOf("xess") == tsha(p, "xess") && adopted.shaOf("xess_license") == tsha(p, "xess_license") &&
+              adopted.shaOf("xess_third_party") == tsha(p, "xess_third_party"),
               "[xess] hashes survive the planned state round-trip");
         s.state = adopted;
         const Plan removal = planUninstall(s, options);
@@ -2423,11 +2551,11 @@ static void testXessPlanner() {
     {   // A foreign runtime is left alone, even when the notices are ours.
         Survey s = installed();
         s.xess.sha256 = "foreign-runtime";
-        s.state.xessSha = "old-ours";
+        trecord(s.state, "xess", "old-ours");
         const Plan plan = planInstall(s, options, p);
         check(!plan.blocked && !hasStep(plan, Action::WritePayload, nullptr, L"libxess.dll") &&
               notesMention(plan, "different libxess.dll"), "foreign XeSS runtime is preserved");
-        check(plan.nextState.xessSha.empty() && plan.nextState.xessLicenseSha == p.xessLicenseSha,
+        check(plan.nextState.shaOf("xess").empty() && plan.nextState.shaOf("xess_license") == tsha(p, "xess_license"),
               "foreign runtime ownership is cleared while identical notice is adopted");
         s.state = plan.nextState;
         const Plan removal = planUninstall(s, options);
@@ -2437,11 +2565,11 @@ static void testXessPlanner() {
     {   // An old runtime whose hash matches our record can be replaced.
         Survey s = installed();
         s.xess.sha256 = "old-ours";
-        s.state.xessSha = "old-ours";
+        trecord(s.state, "xess", "old-ours");
         const Plan plan = planInstall(s, options, p);
         check(hasStep(plan, Action::Backup, L"libxess.dll", L"libxess.dll") &&
               hasStep(plan, Action::WritePayload, nullptr, L"libxess.dll") &&
-              plan.nextState.xessSha == p.xessSha,
+              plan.nextState.shaOf("xess") == tsha(p, "xess"),
               "stale XeSS file that EDVR placed is backed up and updated");
         check(notesMention(plan, "Updating libxess.dll"), "the report says the XeSS runtime is being updated");
     }
@@ -2449,38 +2577,37 @@ static void testXessPlanner() {
         // graphics and other XeSS files must still proceed.
         Survey s = installed();
         s.d3d11.sha256 = "old-graphics";
-        s.state.d3d11Sha = "old-graphics";
+        trecord(s.state, "graphics", "old-graphics");
         s.xess = current(L"libxess.dll", "", DllKind::Unreadable);
-        s.state.xessSha = "previous-ownership";
+        trecord(s.state, "xess", "previous-ownership");
         const Plan plan = planInstall(s, options, p);
         check(!plan.blocked && hasStep(plan, Action::WritePayload, nullptr, L"d3d11.dll") &&
               !hasStep(plan, Action::WritePayload, nullptr, L"libxess.dll") &&
               notesMention(plan, "libxess.dll cannot be read"),
               "unreadable optional runtime does not block graphics update");
-        check(plan.nextState.xessSha == "previous-ownership",
+        check(plan.nextState.shaOf("xess") == "previous-ownership",
               "unreadable destination retains previous ownership evidence");
     }
     {   // A broken installer payload is still rejected before any writes.
         PayloadInfo missing = p;
-        missing.xessLicenseSha.clear();
+        tdrop(missing, "xess_license");
         const Plan plan = planInstall(installed(), options, missing);
         check(plan.blocked && plan.steps.empty() && notesMention(plan, "license notices"),
               "XeSS payload missing a license notice is rejected");
     }
     {   // The VR edition carries the same three files: its edvr.ini selects XeSS-SR too.
         PayloadInfo vr = testPayload(kNextIni);
-        vr.haveXess = true;
-        vr.xessSha = "xess-runtime-new";
-        vr.xessLicenseSha = "xess-license-new";
-        vr.xessThirdPartySha = "xess-third-party-new";
+        tset(vr, "xess", "xess-runtime-new");
+        tset(vr, "xess_license", "xess-license-new");
+        tset(vr, "xess_third_party", "xess-third-party-new");
         const Plan plan = planInstall(baseSurvey(dir), options, vr);
         check(!plan.blocked && hasStep(plan, Action::WritePayload, nullptr, L"libxess.dll") &&
               hasStep(plan, Action::WritePayload, nullptr, L"INTEL-XESS-LICENSE.txt") &&
               hasStep(plan, Action::WritePayload, nullptr, L"INTEL-XESS-THIRD-PARTY.txt"),
               "a VR install carries libxess.dll and both license notices");
         check(notesMention(plan, "Placing libxess.dll"), "the report says the XeSS runtime is being placed");
-        check(plan.nextState.xessSha == vr.xessSha && plan.nextState.xessLicenseSha == vr.xessLicenseSha &&
-              plan.nextState.xessThirdPartySha == vr.xessThirdPartySha,
+        check(plan.nextState.shaOf("xess") == tsha(vr, "xess") && plan.nextState.shaOf("xess_license") == tsha(vr, "xess_license") &&
+              plan.nextState.shaOf("xess_third_party") == tsha(vr, "xess_third_party"),
               "a VR install records the XeSS files it placed");
     }
 }
@@ -2505,12 +2632,11 @@ static std::string shaOfText(const std::string& text) { return sha256Bytes(text.
 // The VR edition's payload with the native and XeSS files it carries, each by the bytes this test gives it.
 static PayloadInfo contentPayload() {
     PayloadInfo p = testPayload(kNextIni);
-    p.openxrLoaderSha = shaOfText(kTestLoaderBytes);
-    p.openxrLicenseSha = shaOfText(kTestLicenseBytes);
-    p.haveXess = true;
-    p.xessSha = shaOfText(kTestXessBytes);
-    p.xessLicenseSha = shaOfText(kTestXessLicenseBytes);
-    p.xessThirdPartySha = shaOfText(kTestXessThirdBytes);
+    tset(p, "openxr_loader", shaOfText(kTestLoaderBytes));
+    tset(p, "openxr_license", shaOfText(kTestLicenseBytes));
+    tset(p, "xess", shaOfText(kTestXessBytes));
+    tset(p, "xess_license", shaOfText(kTestXessLicenseBytes));
+    tset(p, "xess_third_party", shaOfText(kTestXessThirdBytes));
     return p;
 }
 
@@ -2527,15 +2653,15 @@ static Survey leftoverSurvey(const std::wstring& dir, const PayloadInfo& p, bool
     const std::wstring nativeDir = s.game.openvrDir;
     const std::string config = startupConfigFor(dir);
     s.openvrCurrent = runtimeIsEdvr
-        ? fakeDll(DllKind::Edvr, joinPath(nativeDir, L"openvr_api.dll"), p.openvrSha)
+        ? fakeDll(DllKind::Edvr, joinPath(nativeDir, L"openvr_api.dll"), tsha(p, "runtime"))
         : fakeDll(DllKind::OpenVrRuntime, joinPath(nativeDir, L"openvr_api.dll"), "game-vr");
     s.openxrLoader = fakeDll(DllKind::Foreign, joinPath(nativeDir, L"openxr_loader.dll"), loaderSha);
-    s.openxrLicense = fakeDll(DllKind::Foreign, joinPath(nativeDir, L"OPENXR-LOADER-LICENSE.txt"), p.openxrLicenseSha);
+    s.openxrLicense = fakeDll(DllKind::Foreign, joinPath(nativeDir, L"OPENXR-LOADER-LICENSE.txt"), tsha(p, "openxr_license"));
     s.nativeConfig = fakeDll(DllKind::Foreign, joinPath(nativeDir, L"edvr_openxr.ini"), shaOfText(config));
     s.nativeConfigText = config;
-    s.xess = fakeDll(DllKind::Foreign, joinPath(dir, L"libxess.dll"), p.xessSha);
-    s.xessLicense = fakeDll(DllKind::Foreign, joinPath(dir, L"INTEL-XESS-LICENSE.txt"), p.xessLicenseSha);
-    s.xessThirdParty = fakeDll(DllKind::Foreign, joinPath(dir, L"INTEL-XESS-THIRD-PARTY.txt"), p.xessThirdPartySha);
+    s.xess = fakeDll(DllKind::Foreign, joinPath(dir, L"libxess.dll"), tsha(p, "xess"));
+    s.xessLicense = fakeDll(DllKind::Foreign, joinPath(dir, L"INTEL-XESS-LICENSE.txt"), tsha(p, "xess_license"));
+    s.xessThirdParty = fakeDll(DllKind::Foreign, joinPath(dir, L"INTEL-XESS-THIRD-PARTY.txt"), tsha(p, "xess_third_party"));
     s.descriptorPresent = true;
     s.descriptorSha = descriptorShaFor("both");
     return s;
@@ -2596,7 +2722,7 @@ static void testContentOwnership(const std::wstring& scratch) {
         check(!hasStep(plan, Action::Delete, L"libxess.dll", nullptr) &&
               !hasStep(plan, Action::Delete, L"INTEL-XESS-LICENSE.txt", nullptr) &&
               !hasStep(plan, Action::Delete, L"INTEL-XESS-THIRD-PARTY.txt", nullptr) &&
-              notesMention(plan, "nothing shows EDVR placed it"),
+              notesMention(plan, "nothing shows ED-UP placed it"),
               "keeps the XeSS trio: a payload match with no record or receipt is not proof");
         check(hasStep(plan, Action::Delete, L"openvr_api.dll", nullptr) &&
               hasStep(plan, Action::Rename, L"openvr_api_orig.dll", L"openvr_api.dll"),
@@ -2658,10 +2784,10 @@ static void testSharedFilesKept() {
     const std::wstring dir = L"C:\\Games\\ED\\Products\\elite-dangerous-odyssey-64";
     const PayloadInfo p = contentPayload();
     const std::wstring loaderPath = joinPath(joinPath(dir, L"Openvr\\win64"), L"openxr_loader.dll");
-    const char* kept = "matches EDVR's copy but nothing shows EDVR placed it; left alone";
+    const char* kept = "matches ED-UP's copy but nothing shows ED-UP placed it; left alone";
     {   // A fresh flat install, stock runtime, no record, no descriptor: another mod's loader matching the payload is kept.
         Survey s = baseSurvey(dir);
-        s.openxrLoader = fakeDll(DllKind::Foreign, loaderPath, p.openxrLoaderSha);
+        s.openxrLoader = fakeDll(DllKind::Foreign, loaderPath, tsha(p, "openxr_loader"));
         Options o = testOptions();
         o.scope = "flat";
         const Plan plan = planInstall(s, o, p);
@@ -2673,9 +2799,9 @@ static void testSharedFilesKept() {
     }
     {   // The same bytes with the record listing them: the file is EDVR's, and goes.
         Survey s = baseSurvey(dir);
-        s.openxrLoader = fakeDll(DllKind::Foreign, loaderPath, p.openxrLoaderSha);
+        s.openxrLoader = fakeDll(DllKind::Foreign, loaderPath, tsha(p, "openxr_loader"));
         s.state.present = true; s.state.profile = "vr"; s.state.scope = "both";
-        s.state.openxrLoaderSha = p.openxrLoaderSha;
+        trecord(s.state, "openxr_loader", tsha(p, "openxr_loader"));
         Options o = testOptions();
         o.scope = "flat";
         check(hasStep(planInstall(s, o, p), Action::Delete, L"openxr_loader.dll", nullptr),
@@ -2683,9 +2809,9 @@ static void testSharedFilesKept() {
     }
     {   // The same bytes with the tool's receipt listing them as placed: EDVR's, and removed.
         Survey s = baseSurvey(dir);
-        s.openxrLoader = fakeDll(DllKind::Foreign, loaderPath, p.openxrLoaderSha);
+        s.openxrLoader = fakeDll(DllKind::Foreign, loaderPath, tsha(p, "openxr_loader"));
         ToolReceiptFile placed;
-        placed.key = "loader"; placed.target = loaderPath; placed.installedSha = p.openxrLoaderSha;
+        placed.key = "loader"; placed.target = loaderPath; placed.installedSha = tsha(p, "openxr_loader");
         ToolReceipt receipt;
         receipt.native = true; receipt.files.push_back(placed);
         s.toolReceipts.push_back(receipt);
@@ -2697,17 +2823,17 @@ static void testSharedFilesKept() {
     {   // XeSS: payload-identical libxess.dll and no record or receipt entry is kept on uninstall; a record or a receipt removes it.
         const std::wstring xess = joinPath(dir, L"libxess.dll");
         Survey bare = baseSurvey(dir);
-        bare.xess = fakeDll(DllKind::Foreign, xess, p.xessSha);
+        bare.xess = fakeDll(DllKind::Foreign, xess, tsha(p, "xess"));
         const Plan kept1 = planUninstall(bare, testOptions(), p);
         check(!hasStep(kept1, Action::Delete, L"libxess.dll", nullptr) && notesMention(kept1, kept),
               "uninstall keeps a payload-identical libxess.dll with no record or receipt entry");
         Survey recorded = bare;
-        recorded.state.present = true; recorded.state.xessSha = p.xessSha;
+        recorded.state.present = true; trecord(recorded.state, "xess", tsha(p, "xess"));
         check(hasStep(planUninstall(recorded, testOptions(), p), Action::Delete, L"libxess.dll", nullptr),
               "uninstall removes it when the record lists it");
         Survey listed = bare;
         ToolReceiptFile placed;
-        placed.key = "xess"; placed.target = xess; placed.installedSha = p.xessSha;
+        placed.key = "xess"; placed.target = xess; placed.installedSha = tsha(p, "xess");
         ToolReceipt receipt;
         receipt.native = true; receipt.files.push_back(placed);
         listed.toolReceipts.push_back(receipt);
@@ -2858,16 +2984,16 @@ static void testToolAdoption(const std::wstring& scratch) {
     const std::string license(kTestLicenseBytes, sizeof kTestLicenseBytes - 1);
 
     PayloadInfo vr = testPayload(kNextIni);
-    vr.openvrSha = shaOfText(edvr);
-    vr.d3d11Sha = shaOfText(graphics);
-    vr.openxrLoaderSha = shaOfText(loader);
-    vr.openxrLicenseSha = shaOfText(license);
+    tset(vr, "runtime", shaOfText(edvr));
+    tset(vr, "graphics", shaOfText(graphics));
+    tset(vr, "openxr_loader", shaOfText(loader));
+    tset(vr, "openxr_license", shaOfText(license));
     PayloadInfo flat = flatPayloadFor(kTestFlatIni);
-    flat.d3d11Sha = shaOfText(graphics);
+    tset(flat, "graphics", shaOfText(graphics));
     Options flatOptions = testOptions();
     flatOptions.scope = "flat";
     const PayloadProvider provide = [&](const std::string& item, const void** data, size_t* size) {
-        const std::string* bytes = item == "openvr" ? &edvr : item == "d3d11" ? &graphics
+        const std::string* bytes = item == "runtime" ? &edvr : item == "graphics" ? &graphics
                                  : item == "openxr_loader" ? &loader : item == "openxr_license" ? &license : nullptr;
         if (!bytes) return false;
         *data = bytes->data();
@@ -2948,7 +3074,7 @@ static void testToolAdoption(const std::wstring& scratch) {
     {
         const Survey s = survey();
         const Plan conversion = planInstall(s, flatOptions, flat);
-        check(conversion.blocked && notesMention(conversion, "Cannot prove EDVR's VR runtime and the game's original"),
+        check(conversion.blocked && notesMention(conversion, "Cannot prove ED-UP's VR runtime and the game's original"),
               "and flat conversion is still blocked with today's message");
         check(planUninstall(s, testOptions(), vr).blocked, "and uninstall is still blocked");
     }
@@ -3110,7 +3236,7 @@ static void testFlatSettingsPlanner() {
         s.flatIniText = std::string(kFlatOwnIni) + "stale_line = 1\r\n";
         const std::string merged = plannedText(planInstall(s, options, flatNew), L"edvr-flat.ini");
         check(merged.find("stale_line = 1") != std::string::npos &&
-                  merged.find("# carried over from your edvr-flat.ini; not an EDVR setting this version knows") !=
+                  merged.find("# carried over from your edvr-flat.ini; not an ED-UP setting this version knows") !=
                       std::string::npos,
               "a flat update carries an unknown line under a note naming edvr-flat.ini");
         check(merged.find("carried over from your edvr.ini") == std::string::npos,
@@ -3120,9 +3246,31 @@ static void testFlatSettingsPlanner() {
         seed.iniPresent = true;
         seed.iniText = kSharedIni;
         const std::string seeded = plannedText(planInstall(seed, options, flatNew), L"edvr-flat.ini");
-        check(seeded.find("# carried over from your edvr.ini; not an EDVR setting this version knows") !=
+        check(seeded.find("# carried over from your edvr.ini; not an ED-UP setting this version knows") !=
                   std::string::npos,
               "a seed from the shared file names edvr.ini for the lines it carries over");
+    }
+
+    {   // A file written by 0.21 (the carried-line note and the file's own header say EDVR) merges again without
+        // a second note for the same line, and the note it carries from then on is the ED-UP wording.
+        const std::string shippedIni = "# ED-UP settings.\r\n\r\n[fix]\r\nblack_void = 1\r\n";
+        const std::string oldWording =
+            "# EDVR settings.\r\n\r\n[fix]\r\nblack_void = 0\r\n"
+            "# carried over from your edvr.ini; not an EDVR setting this version knows\r\n"
+            "stale_line = 7\r\n";
+        const std::string merged = mergeIni(shippedIni, oldWording, &shippedIni, {}, nullptr);
+        const std::string oldNote = "not an EDVR setting this version knows";
+        const std::string newNote = "# carried over from your edvr.ini; not an ED-UP setting this version knows";
+        size_t notes = 0, lines = 0;
+        for (size_t at = merged.find("carried over from your"); at != std::string::npos;
+             at = merged.find("carried over from your", at + 1)) ++notes;
+        for (size_t at = merged.find("stale_line = 7"); at != std::string::npos; at = merged.find("stale_line = 7", at + 1)) ++lines;
+        check(notes == 1 && lines == 1 && merged.find(newNote) != std::string::npos &&
+                  merged.find(oldNote) == std::string::npos,
+              "a 0.21 file's carried line gets one note, in the ED-UP wording, and no second one",
+              merged);
+        const std::string again = mergeIni(shippedIni, merged, &shippedIni, {}, nullptr);
+        check(again == merged, "and merging that result again changes nothing");
     }
 
     {   // Asked for fresh defaults with two files: the flat one is replaced, after
@@ -3156,8 +3304,8 @@ static void testFlatSettingsPlanner() {
 
     {   // A flat file that already says what it should: left alone, and said once.
         Survey s = installedFlatSurvey(dir, flatOld);
-        s.d3d11.sha256 = flatOld.d3d11Sha;
-        s.state.d3d11Sha = flatOld.d3d11Sha;
+        s.d3d11.sha256 = tsha(flatOld, "graphics");
+        trecord(s.state, "graphics", tsha(flatOld, "graphics"));
         s.flatIniPresent = true;
         s.flatIniText = kFlatTemplate;
         s.iniPresent = true;
@@ -3285,8 +3433,8 @@ static void testFlatSettingsPlanner() {
 
     {   // Flat-only over a flat file that holds it, with edvr.ini present but empty: edvr.ini gets the value in that line alone.
         Survey s = installedFlatSurvey(dir, flatOld);
-        s.d3d11.sha256 = flatOld.d3d11Sha;
-        s.state.d3d11Sha = flatOld.d3d11Sha;
+        s.d3d11.sha256 = tsha(flatOld, "graphics");
+        trecord(s.state, "graphics", tsha(flatOld, "graphics"));
         s.flatIniPresent = true;
         s.flatIniText = "[advanced]\r\nreal_dll = d3d11_edhm.dll\r\n";
         s.iniPresent = true;
@@ -3367,8 +3515,7 @@ static void testFlatSettingsPlanner() {
         s.iniText = "[fix]\r\nblack_void = 0\r\ntemporal_aa = dlaa\r\n";   // black_void is theirs; temporal_aa the VR default
         Options convert = options;
         convert.scope = "flat";
-        s.state.openvrInstalled = true;
-        s.state.openvrSha = "installed-vr";
+        trecord(s.state, "runtime", "installed-vr");
         s.state.openvrOrigSha = "game-vr";
         s.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openvr_api.dll"), "installed-vr");
         s.openvrOrig = fakeDll(DllKind::OpenVrRuntime, joinPath(s.game.openvrDir, L"openvr_api_orig.dll"), "game-vr");
@@ -3386,7 +3533,7 @@ static void testFlatSettingsPlanner() {
     auto installedFlat = [&](bool sharedToo, bool flatToo) {
         Survey s = baseSurvey(dir);
         s.haveOpenvrDir = false;
-        s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), flatOld.d3d11Sha);
+        s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), tsha(flatOld, "graphics"));
         s.descriptorPresent = true;
         s.descriptorSha = descriptorShaFor("flat");
         s.state.present = true;
@@ -3490,12 +3637,12 @@ static PayloadProvider provider(bool failOpenvr) {
         static const char kLoader[] = "TEST-OPENXR-LOADER";
         static const char kLicense[] = "Khronos OpenXR Loader license";
         static const char kProfile[] = "[install]\r\nschema = 2\r\nscope = both\r\n";
-        if (item == "d3d11") {
+        if (item == "graphics") {
             *data = kD3d11;
             *size = sizeof(kD3d11) - 1;
             return true;
         }
-        if (item == "openvr" && !failOpenvr) {
+        if (item == "runtime" && !failOpenvr) {
             *data = kOpenvr;
             *size = sizeof(kOpenvr) - 1;
             return true;
@@ -3657,7 +3804,7 @@ static void testApply(const std::wstring& scratch) {
         writeAll(joinPath(gameDir, L"edvr_install"), "not a directory");
 
         PayloadInfo newer = payload;
-        newer.d3d11Sha = "dddd-newer";
+        tset(newer, "graphics", "dddd-newer");
         Survey again = scratchSurvey(gameDir);
         const std::wstring ours = joinPath(gameDir, L"d3d11.dll");
         again.d3d11 = fakeDll(DllKind::Edvr, ours, sha256File(ours));
@@ -3734,10 +3881,10 @@ static void testApply(const std::wstring& scratch) {
         // A new version arrives with a different d3d11.dll and a new default.
         PayloadInfo newer = payload;
         newer.version = "v9.9.10-test";
-        newer.d3d11Sha = "cccc-newer-d3d11";
+        tset(newer, "graphics", "cccc-newer-d3d11");
         std::string newerIni = kNextIni;
         newerIni += "\r\n[fix]\r\nbrand_new = 7\r\n";
-        newer.iniText = newerIni;
+        tsetText(newer, "settings_vr", newerIni);
 
         Survey again = surveyTarget(s.game);
         again.eliteKind=EliteExeKind::OdysseyQualified;
@@ -3787,6 +3934,8 @@ static std::wstring firstSubdirLike(const std::wstring& dir, const std::wstring&
     FindClose(h);
     return name;
 }
+
+#include "epic_detection_cases.h"
 
 static void testMirror(const std::wstring& scratch) {
     printf("\nthe mirror kept outside the game folder\n");
@@ -4595,12 +4744,12 @@ static Plan pairPlan(const std::wstring& dir) {
     plan.backupDir = joinPath(dir, L"edvr_backup");
     Step graphics;
     graphics.action = Action::WritePayload;
-    graphics.item = "d3d11";
+    graphics.item = "graphics";
     graphics.to = joinPath(dir, L"d3d11.dll");
     plan.steps.push_back(graphics);
     Step runtime;
     runtime.action = Action::WritePayload;
-    runtime.item = "openvr";
+    runtime.item = "runtime";
     runtime.to = joinPath(dir, L"openvr_api.dll");
     plan.steps.push_back(runtime);
     return plan;
@@ -4620,7 +4769,7 @@ static Plan asidePlan(const std::wstring& dir, bool thenOurs) {
     if (thenOurs) {
         Step ours;
         ours.action = Action::WritePayload;
-        ours.item = "openvr";
+        ours.item = "runtime";
         ours.to = joinPath(dir, L"openvr_api.dll");
         plan.steps.push_back(ours);
     }
@@ -6142,9 +6291,18 @@ static void testLogBundle(const std::wstring& scratch) {
     // write time it would be the newest log by weeks, alone in its session,
     // and the three above would be left out.
     writeAll(joinPath(logs, L"edvr_gfx_20260827_140000_500_9.log"), "a second process, same second");
+    // A long session's tail segments (log.max_mb; src\common\log_rotate.h) sit beside their head and are part of its session: bundled with it, in
+    // either name form, and never taken for the newest log. The orphan one names a head (absent) that would be the newest by its stamp; if a segment
+    // could be the newest log, the session above would be left out as "older" and this lone segment bundled instead.
+    writeAll(joinPath(logs, L"edvr_gfx_20260827_140000.tail-001.log"), "segment 1 of the session that matters");
+    writeAll(joinPath(logs, L"edvr_gfx_20260827_140000.tail-002.log"), "segment 2 of the session that matters");
+    writeAll(joinPath(logs, L"edvr_gfx_20260827_140000_500_9.tail-001.log"), "segment 1 of the second process");
+    writeAll(joinPath(logs, L"edvr_gfx_20260101_100000.tail-001.log"), "segment of an old session");
+    writeAll(joinPath(logs, L"edvr_gfx_20260828_090000.tail-001.log"), "an orphan segment, its head gone");
 
     for(const auto* name:{L"edvr_gfx_20260827_140000.log",L"edvr_vr_20260827_140003.log",
-                          L"edvr_openxr_20260827_140004_123_4567.log",L"edvr_gfx_20260827_140000_500_9.log"})
+                          L"edvr_openxr_20260827_140004_123_4567.log",L"edvr_gfx_20260827_140000_500_9.log",
+                          L"edvr_gfx_20260827_140000.tail-001.log",L"edvr_gfx_20260827_140000.tail-002.log",L"edvr_gfx_20260827_140000_500_9.tail-001.log"})
         bundleStamp(joinPath(logs,name),27,12);
     const auto packetRoot=joinPath(logs,L"flat_draw_packets");
     auto packetFixture=[&](const wchar_t* folder,WORD minute,bool manifest=true){
@@ -6196,6 +6354,20 @@ static void testLogBundle(const std::wstring& scratch) {
           "and the same-second gfx log, dated by its name not its write time");
     check(!bundleHas(names, "edvr_gfx_20260101_100000.log"),
           "the previous session is left out");
+    check(bundleHas(names, "edvr_gfx_20260827_140000.tail-001.log") && bundleHas(names, "edvr_gfx_20260827_140000.tail-002.log") &&
+              bundleHas(names, "edvr_gfx_20260827_140000_500_9.tail-001.log"),
+          "a session's tail segments are bundled with their head, in both name forms");
+    check(!bundleHas(names, "edvr_gfx_20260101_100000.tail-001.log") && !bundleHas(names, "edvr_gfx_20260828_090000.tail-001.log"),
+          "a segment is dated by its head's name: the old session's is left out, and a segment that would be the newest by its stamp is not taken for the newest log");
+    {
+        bool segmentNote = false, countNote = false;
+        for (const std::string& note : bundle.notes) {
+            segmentNote = segmentNote || note.find("3 tail segments of those logs") != std::string::npos;
+            countNote = countNote || note.find("4 logs from the most recent session (of 6 in the folder)") != std::string::npos;
+        }
+        check(segmentNote, "the bundle says how many tail segments it carries");
+        check(countNote, "and its log count is of session logs only: segments are not logs of their own");
+    }
     check(bundleHas(names, "edvr_breadcrumbs.txt"), "the breadcrumbs are in");
     check(bundleHas(names, "edvr_FATAL.txt"), "the fatal note is in");
     check(bundleHas(names, "edvr.ini"), "the settings file is in");
@@ -6439,6 +6611,56 @@ static void testLogBundle(const std::wstring& scratch) {
     makeTree(bare);
     const LogBundle nothing = collectLogs(bare, scratch, &noDumps);
     check(!nothing.ok, "a folder with no logs and no settings collects nothing");
+
+    // The clipboard half of Save logs. The bytes are read back with the shell's own parser, the one
+    // Explorer and a file-drop target use. The clipboard itself is left alone: a run of this rig must not
+    // overwrite the clipboard of whoever is building.
+    {
+        const std::wstring zip = L"C:\\Users\\Jos\u00e9 N\\Desktop\\edvr logs 20260827.zip";
+        const std::vector<unsigned char> block = dropFilesBlock(zip);
+        check(block.size() == sizeof(DROPFILES) + (zip.size() + 2) * sizeof(wchar_t),
+              "the clipboard block is the header, the path and the list's closing empty string");
+        const DROPFILES* header = reinterpret_cast<const DROPFILES*>(block.data());
+        check(header->pFiles == sizeof(DROPFILES) && header->fWide,
+              "the file list starts after the header and is wide");
+        const size_t n = block.size();
+        check(n >= 4 && block[n - 1] == 0 && block[n - 2] == 0 && block[n - 3] == 0 && block[n - 4] == 0,
+              "the list ends in two wide NULs, which is where a reader stops");
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, block.size());
+        void* bytes = memory ? GlobalLock(memory) : nullptr;
+        check(bytes != nullptr, "the clipboard block fixture is allocated");
+        if (bytes) {
+            memcpy(bytes, block.data(), block.size());
+            GlobalUnlock(memory);
+            HDROP drop = reinterpret_cast<HDROP>(memory);
+            check(DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0) == 1, "the shell reads one file from it");
+            wchar_t back[MAX_PATH]{};
+            const UINT length = DragQueryFileW(drop, 0, back, MAX_PATH);
+            check(length == zip.size() && zip == back,
+                  "and that file is the zip's path, spaces and a non-ASCII letter intact");
+            GlobalFree(memory);
+        }
+        std::string copyError;
+        check(!copyFileToClipboard(nullptr, std::wstring(), &copyError) && !copyError.empty(),
+              "copying no file says so rather than clearing the clipboard");
+    }
+
+    // Wine's WINEHOMEDIR, as the pure string function reads it.
+    {
+        check(hostHomeFromWineHomeDir(L"\\??\\Z:\\home\\deck") == L"Z:\\home\\deck", "the Z: form loses its NT prefix");
+        check(hostHomeFromWineHomeDir(L"\\??\\z:\\home\\deck") == L"z:\\home\\deck", "a lower-case drive is a drive");
+        check(hostHomeFromWineHomeDir(L"\\??\\Z:\\home\\deck\\") == L"Z:\\home\\deck", "a trailing backslash is trimmed");
+        check(hostHomeFromWineHomeDir(L"\\??\\Z:\\") == L"Z:\\", "a bare drive root keeps its backslash");
+        check(hostHomeFromWineHomeDir(L"\\??\\unix\\home\\deck").empty(), "the \\??\\unix form names no drive");
+        check(hostHomeFromWineHomeDir(L"").empty(), "an empty value is an unknown home");
+        check(hostHomeFromWineHomeDir(L"\\??\\Z:\\Users\\sean") == L"Z:\\Users\\sean", "a Mac-style home");
+        check(hostHomeFromWineHomeDir(L"Z:\\home\\deck") == L"Z:\\home\\deck", "a value without the prefix still works");
+        // Not Wine here: the folder is the Desktop, as before, and a host path is the Windows path.
+        if (!runningUnderWine()) {
+            check(logSaveFolder(true) == desktopFolder(), "on Windows the logs go to the Desktop");
+            check(hostPathFor(L"C:\\a\\b.zip") == "C:\\a\\b.zip", "on Windows the path is shown as it is");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -6464,14 +6686,11 @@ static Survey recordedBothSurvey(const std::wstring& dir, const PayloadInfo& vr)
     s.state.profile = "vr";
     s.state.scope = "both";
     s.state.descriptorSha = descriptorShaFor("both");
-    s.state.d3d11Installed = true;
-    s.state.d3d11Sha = vr.d3d11Sha;
-    s.state.openvrInstalled = true;
-    s.state.openvrSha = vr.openvrSha;
-    s.state.openxrLoaderSha = vr.openxrLoaderSha;
-    s.state.openxrLicenseSha = vr.openxrLicenseSha;
-    s.state.nativeInstalled = true;
-    s.state.nativeRuntimeSha = vr.openvrSha;
+    trecord(s.state, "graphics", tsha(vr, "graphics"));
+    trecord(s.state, "runtime", tsha(vr, "runtime"));
+    trecord(s.state, "openxr_loader", tsha(vr, "openxr_loader"));
+    trecord(s.state, "openxr_license", tsha(vr, "openxr_license"));
+    trecord(s.state, "runtime", tsha(vr, "runtime"));
     s.state.nativeConfigSha = "config-sha";
     s.nativeConfig = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"edvr_openxr.ini"), "config-sha");
     s.iniPresent = true;
@@ -6678,32 +6897,577 @@ static void testState() {
     InstallState state;
     state.edvrVersion = "v0.10.1";
     state.installedUtc = "2026-08-27T12:00:00Z";
+    state.storeSource = L"Epic";
     state.openvrDir = L"Openvr\\win64";
-    state.d3d11Installed = true;
-    state.d3d11Sha = "1234";
+    trecord(state, "graphics", "1234");
     state.chainTarget = L"d3d11_edhm.dll";
     state.chainMod = L"EDHM";
-    state.openvrInstalled = true;
-    state.openvrSha = "5678";
+    trecord(state, "runtime", "5678");
     state.openvrOrigName = L"openvr_api_orig.dll";
     state.openvrOrigSha = "9abc";
     state.iniSha = "def0";
-    state.xessSha = "xess-runtime";
-    state.xessLicenseSha = "xess-license";
-    state.xessThirdPartySha = "xess-notices";
+    trecord(state, "xess", "xess-runtime");
+    trecord(state, "xess_license", "xess-license");
+    trecord(state, "xess_third_party", "xess-notices");
 
     const InstallState back = parseState(serializeState(state));
     check(back.present, "a written record reads back as present");
     expectEq(back.edvrVersion, state.edvrVersion, "the version survives");
+    check(back.storeSource == L"Epic", "the recorded store survives serialization and parsing");
+    check(parseState("[edvr]\r\nversion = test\r\nstore_source = another-store\r\n").storeSource.empty(),
+          "an unknown store is not accepted as authoritative install metadata");
+    state.storeSource = L"another-store";
+    check(serializeState(state).find("store_source") == std::string::npos,
+          "an unknown store is not written into the install record");
+    state.storeSource = L"Frontier launcher";
+    check(parseState(serializeState(state)).storeSource == L"Frontier launcher",
+          "the canonical Frontier launcher source survives serialization and parsing");
     expectEq(toUtf8(back.chainTarget), "d3d11_edhm.dll", "the chain target survives");
     expectEq(toUtf8(back.openvrDir), "Openvr\\win64", "the openvr folder survives");
     expectEq(back.openvrOrigSha, "9abc", "the original runtime's hash survives");
-    expectEq(back.xessSha, state.xessSha, "the XeSS runtime ownership survives");
-    expectEq(back.xessLicenseSha, state.xessLicenseSha, "the XeSS license ownership survives");
-    expectEq(back.xessThirdPartySha, state.xessThirdPartySha, "the XeSS third-party ownership survives");
+    expectEq(back.shaOf("xess"), state.shaOf("xess"), "the XeSS runtime ownership survives");
+    expectEq(back.shaOf("xess_license"), state.shaOf("xess_license"), "the XeSS license ownership survives");
+    expectEq(back.shaOf("xess_third_party"), state.shaOf("xess_third_party"), "the XeSS third-party ownership survives");
     check(!parseState("").present, "an empty record is not a record");
     check(!parseState("[edvr]\r\nsomething = else\r\n").present,
           "a file that merely parses is not a record either");
+}
+
+// Two plans are the same when their steps (action, paths, item, text) and notes are.
+static bool samePlan(const Plan& a, const Plan& b) {
+    if (a.steps.size() != b.steps.size() || a.notes != b.notes || a.problems != b.problems) {
+        printf("  (plans differ: %zu/%zu steps, %zu/%zu notes)\n", a.steps.size(), b.steps.size(), a.notes.size(), b.notes.size());
+        return false;
+    }
+    for (size_t i = 0; i < a.steps.size(); ++i) {
+        const Step& x = a.steps[i];
+        const Step& y = b.steps[i];
+        // The install record's own text may differ: a migrated record also keeps the original runtime it was found beside.
+        const bool record = _wcsicmp(leafOf(x.to).c_str(), L"state.ini") == 0;
+        if (x.action != y.action || x.from != y.from || x.to != y.to || x.item != y.item || (!record && x.text != y.text)) {
+            printf("  (step %zu differs: %s | %s)\n", i, toUtf8(x.to).c_str(), x.why.c_str());
+            return false;
+        }
+    }
+    return true;
+}
+
+// Install records keyed by file id: round trip, migration of a record-less state.ini, refusal of an unsafe path, removal of a dropped
+// id, and an uninstall that needs no payload.
+static void testInstallRecords() {
+    printf("\ninstall records keyed by file id\n");
+    const std::wstring dir = L"C:\\Games\\ED\\Products\\elite-dangerous-odyssey-64";
+
+    {   // Round trip: every field of a record survives serialize and parse.
+        InstallState st;
+        st.edvrVersion = "v9";
+        st.scope = "both";
+        trecord(st, "graphics", "g-sha");
+        FileRecord r;
+        r.id = "runtime"; r.root = "openvr"; r.path = "openvr_api.dll"; r.existing = "runtime";
+        r.sha256 = "r-sha"; r.beforeSha256 = "orig-sha"; r.backup = L"edvr_backup\\20261112-101010\\openvr_api.dll";
+        st.put(r);
+        const InstallState back = parseState(serializeState(st));
+        const FileRecord* g = back.file("graphics");
+        const FileRecord* rt = back.file("runtime");
+        check(g && g->root == "game" && g->path == "d3d11.dll" && g->existing == "chain" && g->sha256 == "g-sha",
+              "a record's root, path, behaviour and hash round-trip");
+        check(rt && rt->beforeSha256 == "orig-sha" && rt->backup == r.backup && rt->root == "openvr",
+              "and so do the displaced file's hash and its backup");
+        check(back.refusedRecords.empty(), "nothing is refused");
+    }
+    {   // The legacy sections written beside the records agree with the migration table: stripped of [file.*], they read back the same.
+        InstallState st;
+        st.edvrVersion = "v9"; st.scope = "both"; st.openvrDir = L"Openvr\\win64";
+        const char* ids[] = {"graphics", "runtime", "openxr_loader", "openxr_license", "dlss", "xess", "xess_license", "xess_third_party"};
+        for (const char* id : ids) trecord(st, id, std::string("sha-") + id);
+        std::string text = serializeState(st), stripped;
+        size_t pos = 0; bool skip = false;
+        while (pos < text.size()) {
+            size_t end = text.find('\n', pos);
+            end = end == std::string::npos ? text.size() : end + 1;
+            const std::string line = text.substr(pos, end - pos);
+            if (line.compare(0, 1, "[") == 0) skip = line.compare(0, 6, "[file.") == 0;
+            if (!skip) stripped += line;
+            pos = end;
+        }
+        const InstallState migrated = parseState(stripped);
+        bool all = true;
+        for (const char* id : ids) all &= migrated.shaOf(id) == std::string("sha-") + id;
+        check(all, "the compatibility sections read back as the same records");
+    }
+    {   // An installer 0.22 state.ini, as a literal: no file sections, hashes in component fields.
+        const std::string old =
+            "[edvr]\r\nversion = v0.22.0\r\nprofile = vr\r\nscope = both\r\ndescriptor_sha256 = dd\r\nopenvr_dir = Openvr\\win64\r\n"
+            "[d3d11]\r\nsha256 = gg\r\nchain_target = d3d11_edhm.dll\r\nchain_mod = EDHM\r\n"
+            "[openvr]\r\nsha256 = rr\r\norig_name = openvr_api_orig.dll\r\norig_sha256 = oo\r\n"
+            "[ngx]\r\nsha256 = nn\r\n[xess]\r\nsha256 = xx\r\nlicense_sha256 = xl\r\nthird_party_sha256 = xt\r\n"
+            "[ini]\r\nsha256 = ii\r\n[native]\r\ngraphics_sha256 = gg\r\nruntime_sha256 = rr\r\nloader_sha256 = ll\r\n"
+            "license_sha256 = cc\r\nconfig_sha256 = ff\r\n";
+        const InstallState m = parseState(old);
+        check(m.present && m.files.size() == 9, "an old state.ini is read into nine records");
+        const FileRecord* rt = m.file("runtime");
+        check(rt && rt->root == "openvr" && rt->path == "openvr_api.dll" && rt->existing == "runtime" && rt->sha256 == "rr" &&
+              rt->beforeSha256 == "oo" && toUtf8(rt->backup) == "Openvr\\win64\\openvr_api_orig.dll",
+              "the runtime record keeps the original kept beside it");
+        check(m.file("openxr_loader") && m.file("openxr_loader")->existing == "replace" && m.file("dlss")->existing == "owned" &&
+              m.file("settings_vr") && m.file("settings_vr")->sha256 == "ii",
+              "behaviours and the settings file come from the historical layout");
+        // The same plan as a state built record by record.
+        const PayloadInfo p = testPayload(kNextIni);
+        Survey a = baseSurvey(dir), b = baseSurvey(dir);
+        for (Survey* s : {&a, &b}) {
+            s->openvrCurrent = fakeDll(DllKind::Edvr, joinPath(s->game.openvrDir, L"openvr_api.dll"), "rr");
+            s->openvrOrig = fakeDll(DllKind::OpenVrRuntime, joinPath(s->game.openvrDir, L"openvr_api_orig.dll"), "oo");
+            s->d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), "gg");
+            s->openxrLoader = fakeDll(DllKind::Foreign, joinPath(s->game.openvrDir, L"openxr_loader.dll"), "ll");
+            s->ngx = fakeDll(DllKind::Foreign, joinPath(dir, L"nvngx_dlss.dll"), "nn");
+            s->descriptorPresent = true; s->descriptorSha = descriptorShaFor("both");
+        }
+        a.state = m;
+        b.state.present = true; b.state.scope = "both"; b.state.profile = "vr"; b.state.openvrDir = L"Openvr\\win64";
+        b.state.openvrOrigName = L"openvr_api_orig.dll"; b.state.openvrOrigSha = "oo";
+        b.state.edvrVersion = m.edvrVersion; b.state.descriptorSha = m.descriptorSha; b.state.iniSha = m.iniSha;
+        b.state.chainTarget = m.chainTarget; b.state.chainMod = m.chainMod; b.state.nativeConfigSha = m.nativeConfigSha;
+        b.state.nativeOriginalName = m.nativeOriginalName; b.state.nativeOriginalSha = m.nativeOriginalSha;
+        trecord(b.state, "settings_vr", "ii");
+        trecord(b.state, "graphics", "gg"); trecord(b.state, "runtime", "rr"); trecord(b.state, "openxr_loader", "ll");
+        trecord(b.state, "openxr_license", "cc"); trecord(b.state, "dlss", "nn"); trecord(b.state, "xess", "xx");
+        trecord(b.state, "xess_license", "xl"); trecord(b.state, "xess_third_party", "xt");
+        check(samePlan(planUninstall(a, testOptions()), planUninstall(b, testOptions())),
+              "an old-format record plans the same uninstall as the records it migrates to");
+        check(samePlan(planInstall(a, testOptions(), p), planInstall(b, testOptions(), p)),
+              "and the same update");
+    }
+    {   // A hand-edited path that leaves its root is refused on load and again in the planner, and nothing outside is touched.
+        const std::string text =
+            "[edvr]\r\nversion = v9\r\nscope = both\r\n[file.evil]\r\nroot = game\r\npath = ../../Windows/x.dll\r\nexisting = replace\r\nsha256 = aa\r\n"
+            "[file.worse]\r\nroot = nowhere\r\npath = x.dll\r\nexisting = replace\r\nsha256 = aa\r\n"
+            "[file.drive]\r\nroot = game\r\npath = C:/x.dll\r\nexisting = replace\r\nsha256 = aa\r\n";
+        const InstallState st = parseState(text);
+        check(st.files.empty() && st.refusedRecords.size() == 3, "an escaping path, an unknown root and a drive are refused on load");
+        Survey s = baseSurvey(dir);
+        FileRecord bad;
+        bad.id = "evil"; bad.root = "game"; bad.path = "../evil.dll"; bad.existing = "replace"; bad.sha256 = "aa";
+        s.state.present = true; s.state.put(bad);
+        const Plan un = planUninstall(s, testOptions());
+        bool touched = false;
+        for (const Step& st2 : un.steps) touched |= st2.from.find(L"evil") != std::wstring::npos || st2.to.find(L"evil") != std::wstring::npos;
+        check(!touched && notesMention(un, "outside its folder"), "a record that escapes its root is not followed by the planner, and says so");
+    }
+    {   // Uninstall from the records alone: no payload loaded.
+        Survey s = baseSurvey(dir);
+        s.state.present = true; s.state.scope = "both";
+        trecord(s.state, "openxr_loader", "ll"); trecord(s.state, "openxr_license", "cc");
+        trecord(s.state, "dlss", "nn"); trecord(s.state, "xess", "xx");
+        s.openxrLoader = fakeDll(DllKind::Foreign, joinPath(s.game.openvrDir, L"openxr_loader.dll"), "ll");
+        s.openxrLicense = fakeDll(DllKind::Foreign, joinPath(s.game.openvrDir, L"OPENXR-LOADER-LICENSE.txt"), "edited");
+        s.ngx = fakeDll(DllKind::Foreign, joinPath(dir, L"nvngx_dlss.dll"), "nn");
+        s.xess = fakeDll(DllKind::Foreign, joinPath(dir, L"libxess.dll"), "xx");
+        const Plan un = planUninstall(s, testOptions());
+        check(hasStep(un, Action::Delete, L"openxr_loader.dll", nullptr) && hasStep(un, Action::Backup, L"openxr_loader.dll", nullptr),
+              "uninstall with no payload removes a recorded file whose hash still matches, backed up first");
+        check(hasStep(un, Action::Delete, L"nvngx_dlss.dll", nullptr) && hasStep(un, Action::Delete, L"libxess.dll", nullptr),
+              "and the vendor files it placed");
+        check(!hasStep(un, Action::Delete, L"OPENXR-LOADER-LICENSE.txt", nullptr) && notesMention(un, "Keeping a changed OpenXR file"),
+              "an edited copy is kept, with a note");
+    }
+    {   // Update: an id the manifest dropped is backed up and removed when its hash matches, kept (and said so) when it was edited.
+        const PayloadInfo p = testPayload(kNextIni);
+        FileRecord legacy;
+        legacy.id = "old_tool"; legacy.root = "game"; legacy.path = "old_tool.dll"; legacy.existing = "replace"; legacy.sha256 = "ot";
+        Survey s = baseSurvey(dir);
+        s.state.present = true; s.state.scope = "both"; s.state.profile = "vr"; s.state.put(legacy);
+        s.targets.push_back(fakeDll(DllKind::Foreign, joinPath(dir, L"old_tool.dll"), "ot"));
+        const Plan removed = planInstall(s, testOptions(), p);
+        check(!removed.blocked && hasStep(removed, Action::Backup, L"old_tool.dll", nullptr) &&
+              hasStep(removed, Action::Delete, L"old_tool.dll", nullptr) && removed.nextState.shaOf("old_tool").empty(),
+              "a dropped id whose file still matches its record is backed up, removed on update, and leaves the record");
+        s.targets.back().sha256 = "edited";
+        const Plan kept = planInstall(s, testOptions(), p);
+        check(!hasStep(kept, Action::Delete, L"old_tool.dll", nullptr) && notesMention(kept, "no longer places it") &&
+              !notesMention(kept, "Keeping a changed") && kept.nextState.shaOf("old_tool").empty(),
+              "an edited copy of a dropped id is kept, with a note of its own");
+        // A vendor file this payload has no bytes for stays: a build without the SDK leaves it out of its manifest entirely.
+        Survey u = baseSurvey(dir);
+        u.state.present = true; u.state.scope = "both"; u.state.profile = "vr";
+        trecord(u.state, "dlss", "nn");
+        u.ngx = fakeDll(DllKind::Foreign, joinPath(dir, L"nvngx_dlss.dll"), "nn");
+        const Plan stays = planInstall(u, testOptions(), testPayload(kNextIni));
+        check(!hasStep(stays, Action::Delete, L"nvngx_dlss.dll", nullptr) && !stays.nextState.shaOf("dlss").empty(),
+              "a vendor file the payload has no bytes for stays, and stays recorded");
+    }
+    {   // What a plan records: where, how, what was written, and the foreign file it displaced.
+        PayloadInfo p = testPayload(kNextIni);
+        Survey s = baseSurvey(dir);
+        s.openvrCurrent = fakeDll(DllKind::Foreign, joinPath(s.game.openvrDir, L"openxr_loader.dll"), "x");  // keeps the survey simple
+        s.openxrLoader = fakeDll(DllKind::Foreign, joinPath(s.game.openvrDir, L"openxr_loader.dll"), "their-loader");
+        const Plan plan = planInstall(s, testOptions(), p);
+        const FileRecord* l = plan.nextState.file("openxr_loader");
+        check(l && l->root == "openvr" && l->path == "openxr_loader.dll" && l->existing == "replace" && l->sha256 == tsha(p, "openxr_loader") &&
+              l->beforeSha256 == "their-loader" && toUtf8(l->backup).find("edvr_backup") == 0,
+              "a replaced file's record names its place, behaviour, hash, and the backup of what it displaced");
+        check(plan.nextState.file("graphics") && plan.nextState.file("settings_vr") && plan.nextState.file("settings_flat"),
+              "every placed file has a record, settings included");
+    }
+}
+
+static void taddExtra(PayloadInfo& p, const std::string& id, TargetRoot root, const std::string& path, ExistingMode existing,
+                      unsigned profiles, bool nvidia, const std::string& sha);   // defined with the manifest-as-payload cases
+
+// A junction at `link` to `target`, made the way a user would (mklink /J), or false when the rig could not make one.
+static bool makeJunction(const std::wstring& link, const std::wstring& target) {
+    wchar_t systemDir[MAX_PATH]{};
+    GetSystemDirectoryW(systemDir, MAX_PATH);
+    std::wstring command = L"\"" + joinPath(systemDir, L"cmd.exe") + L"\" /c mklink /J \"" + link + L"\" \"" + target + L"\"";
+    std::vector<wchar_t> buffer(command.begin(), command.end());
+    buffer.push_back(0);
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(nullptr, buffer.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) return false;
+    WaitForSingleObject(pi.hProcess, 15000);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    const DWORD attributes = GetFileAttributesW(link.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+}
+
+// Fixes from the schema-2 review (docs\design-manifest-schema2-2026-11-12.md): vendor files a build lacks, nested targets, containment,
+// backup names, a file placed at a new target, and the proofs a flat conversion accepts.
+static void testSchemaReviewFixes(const std::wstring& scratch) {
+    printf("\nschema 2 review fixes\n");
+    const std::wstring dir = L"C:\\Games\\ED\\Products\\elite-dangerous-odyssey-64";
+
+    {   // A build with no DLSS or XeSS bytes leaves them out of its manifest altogether; an update must not take an earlier install's
+        // copies away. The payload here is built that way: the ids are absent, not listed.
+        const PayloadInfo p = testPayload(kNextIni);
+        check(!p.find("dlss") && !p.find("xess") && !p.find("xess_license") && !p.find("xess_third_party"),
+              "the SDK-less payload does not mention the vendor files");
+        Survey s = baseSurvey(dir);
+        s.state.present = true; s.state.scope = "both"; s.state.profile = "vr";
+        trecord(s.state, "dlss", "nn"); trecord(s.state, "xess", "xx"); trecord(s.state, "xess_license", "xl");
+        trecord(s.state, "xess_third_party", "xt");
+        s.ngx = fakeDll(DllKind::Foreign, joinPath(dir, L"nvngx_dlss.dll"), "nn");
+        s.xess = fakeDll(DllKind::Foreign, joinPath(dir, L"libxess.dll"), "xx");
+        s.xessLicense = fakeDll(DllKind::Foreign, joinPath(dir, L"INTEL-XESS-LICENSE.txt"), "xl");
+        s.xessThirdParty = fakeDll(DllKind::Foreign, joinPath(dir, L"INTEL-XESS-THIRD-PARTY.txt"), "xt");
+        const Plan plan = planInstall(s, testOptions(), p);
+        check(!plan.blocked, "an update from an SDK-less build plans", unifiedProblems(plan));
+        bool deletes = false;
+        for (const Step& st : plan.steps) deletes |= st.action == Action::Delete && st.from.find(dir) == 0 && leafOf(st.from) != L"edvr_profile.ini";
+        check(!deletes, "and deletes none of the vendor files an earlier install placed");
+        check(!plan.nextState.shaOf("dlss").empty() && !plan.nextState.shaOf("xess").empty() &&
+              !plan.nextState.shaOf("xess_license").empty() && !plan.nextState.shaOf("xess_third_party").empty(),
+              "each stays recorded");
+        check(notesMention(plan, "carries no DLSS runtime") && notesMention(plan, "left where it is"), "and the plan says it is left where it is");
+        const Plan un = planUninstall(s, testOptions());
+        check(hasStep(un, Action::Delete, L"nvngx_dlss.dll", nullptr) && hasStep(un, Action::Delete, L"libxess.dll", nullptr),
+              "an uninstall still removes them, by the hash rule");
+    }
+
+    {   // A target below the root: the planner makes its folder, and the plan applies.
+        PayloadInfo p = testPayload(kNextIni);
+        taddExtra(p, "nested", TargetRoot::Game, "sub/deeper/x.dll", ExistingMode::Replace, 0, false, "nested-sha");
+        const Plan fake = planInstall(baseSurvey(dir), testOptions(), p);
+        check(hasStep(fake, Action::MakeDir, nullptr, L"deeper"), "a nested target gets a MakeDir for its folder");
+        const std::wstring game = joinPath(joinPath(scratch, L"schema-review"), L"nested");
+        layOutScratchGame(game);
+        const Plan plan = planInstall(scratchSurvey(game), testOptions(), p);
+        const ApplyResult result = applyPlan(plan, [&](const std::string& item, const void** data, size_t* size) {
+            const PayloadFileEntry* e = p.find(item);
+            if (!e) return false;
+            *data = e->data;
+            *size = e->size;
+            return true;
+        });
+        check(result.ok, "a plan with a nested target applies", result.error);
+        expectEq(readAll(joinPath(game, L"sub\\deeper\\x.dll")), "bytes of nested", "and the file is where the manifest said");
+    }
+
+    {   // The resolved path stays inside its root: a junction between the root and the file refuses the file, for the manifest and
+        // for a record. The root itself may be a junction.
+        const std::wstring root = joinPath(scratch, L"schema-review");
+        removeTree(root);
+        const std::wstring game = joinPath(root, L"game");
+        const std::wstring elsewhere = joinPath(root, L"elsewhere");
+        layOutScratchGame(game);
+        makeTree(elsewhere);
+        writeAll(joinPath(elsewhere, L"y.dll"), "RECORDED-COPY");
+        const std::wstring link = joinPath(game, L"link");
+        const bool linked = makeJunction(link, elsewhere);
+        check(linked, "the rig made a junction to test with");
+        if (linked) {
+            PayloadInfo p = testPayload(kNextIni);
+            taddExtra(p, "through", TargetRoot::Game, "link/x.dll", ExistingMode::Replace, 0, false, "through-sha");
+            const Plan plan = planInstall(scratchSurvey(game), testOptions(), p);
+            check(!hasStep(plan, Action::WritePayload, nullptr, L"x.dll") && problemMentions(plan, "leaves its folder"),
+                  "a manifest target through a junction is refused with a problem, and not written");
+            check(hasStep(plan, Action::WritePayload, nullptr, L"d3d11.dll"), "while the other files are placed");
+
+            Survey s = scratchSurvey(game);
+            s.state.present = true; s.state.scope = "both";
+            FileRecord r;
+            r.id = "through"; r.root = "game"; r.path = "link/y.dll"; r.existing = "replace";
+            r.sha256 = sha256File(joinPath(elsewhere, L"y.dll"));
+            s.state.put(r);
+            const Plan un = planUninstall(s, testOptions());
+            bool touched = false;
+            for (const Step& st : un.steps) touched |= st.from.find(L"y.dll") != std::wstring::npos || st.to.find(L"y.dll") != std::wstring::npos;
+            check(!touched && notesMention(un, "outside its folder"), "a record whose path runs through a junction is not followed");
+            const Plan update = planInstall(s, testOptions(), testPayload(kNextIni));
+            touched = false;
+            for (const Step& st : update.steps) touched |= st.from.find(L"y.dll") != std::wstring::npos || st.to.find(L"y.dll") != std::wstring::npos;
+            check(!touched, "nor by an update");
+
+            // The root itself reached through a junction is fine.
+            const std::wstring rootLink = joinPath(root, L"rootlink");
+            if (makeJunction(rootLink, game)) {
+                const Plan viaRoot = planInstall(scratchSurvey(rootLink), testOptions(), testPayload(kNextIni));
+                check(hasStep(viaRoot, Action::WritePayload, nullptr, L"d3d11.dll") && !problemMentions(viaRoot, "leaves its folder"),
+                      "a game folder that is itself a junction still takes its files");
+                RemoveDirectoryW(rootLink.c_str());
+            } else {
+                check(false, "the rig made a junction for the root");
+            }
+            RemoveDirectoryW(link.c_str());
+        }
+    }
+
+    {   // Two records sharing a leaf are backed up under different names on an uninstall.
+        Survey s = baseSurvey(dir);
+        s.state.present = true; s.state.scope = "both";
+        FileRecord a, b;
+        a.id = "shared_a"; a.root = "game"; a.path = "x.dll"; a.existing = "replace"; a.sha256 = "aa";
+        b.id = "shared_b"; b.root = "openvr"; b.path = "x.dll"; b.existing = "replace"; b.sha256 = "bb";
+        s.state.put(a);
+        s.state.put(b);
+        s.targets.push_back(fakeDll(DllKind::Foreign, joinPath(dir, L"x.dll"), "aa"));
+        s.targets.push_back(fakeDll(DllKind::Foreign, joinPath(s.game.openvrDir, L"x.dll"), "bb"));
+        const Plan un = planUninstall(s, testOptions());
+        std::vector<std::wstring> targets;
+        for (const Step& st : un.steps) if (st.action == Action::Backup && leafOf(st.from) == L"x.dll") targets.push_back(st.to);
+        check(targets.size() == 2 && _wcsicmp(targets[0].c_str(), targets[1].c_str()) != 0,
+              "two files with one name are backed up to two different copies on uninstall");
+    }
+
+    {   // A recorded id placed at a new target: the old copy goes by the hash rule, or stays with a note when it was edited.
+        PayloadInfo p = testPayload(kNextIni);
+        taddExtra(p, "movable", TargetRoot::Game, "new/x.dll", ExistingMode::Replace, 0, false, "mv-new");
+        FileRecord r;
+        r.id = "movable"; r.root = "game"; r.path = "old/x.dll"; r.existing = "replace"; r.sha256 = "mv-old";
+        Survey s = baseSurvey(dir);
+        s.state.present = true; s.state.scope = "both"; s.state.profile = "vr";
+        s.state.put(r);
+        s.targets.push_back(fakeDll(DllKind::Foreign, joinPath(dir, L"old\\x.dll"), "mv-old"));
+        const Plan plan = planInstall(s, testOptions(), p);
+        bool oldDeleted = false, oldBackedUp = false;
+        for (const Step& st : plan.steps) {
+            oldDeleted |= st.action == Action::Delete && st.from == joinPath(dir, L"old\\x.dll");
+            oldBackedUp |= st.action == Action::Backup && st.from == joinPath(dir, L"old\\x.dll");
+        }
+        check(!plan.blocked && oldDeleted && oldBackedUp && hasStep(plan, Action::WritePayload, nullptr, L"x.dll"),
+              "the copy at a recorded id's old target is backed up and removed, and the new one is written");
+        check(plan.nextState.file("movable") && plan.nextState.file("movable")->path == "new/x.dll", "and the record names the new target");
+        s.targets.back().sha256 = "edited";
+        const Plan kept = planInstall(s, testOptions(), p);
+        oldDeleted = false;
+        for (const Step& st : kept.steps) oldDeleted |= st.action == Action::Delete && st.from == joinPath(dir, L"old\\x.dll");
+        check(!oldDeleted && notesMention(kept, "Keeping the old x.dll") && !kept.blocked, "an edited old copy is kept, with a note");
+    }
+
+    {   // A flat conversion accepts the payload's own bytes as a proof, as the old loader and licence ownership did, and a dropped id
+        // with an edited copy has its own note and blocks nothing.
+        const PayloadInfo vr = testPayload(kNextIni);
+        Survey s = baseSurvey(dir);
+        s.state.present = true; s.state.profile = "vr";
+        trecord(s.state, "runtime", "installed-vr");
+        trecord(s.state, "openxr_loader", "stale-recorded-hash");
+        s.state.openvrOrigSha = "game-vr";
+        s.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openvr_api.dll"), "installed-vr");
+        s.openvrOrig = fakeDll(DllKind::OpenVrRuntime, joinPath(s.game.openvrDir, L"openvr_api_orig.dll"), "game-vr");
+        s.openxrLoader = fakeDll(DllKind::Foreign, joinPath(s.game.openvrDir, L"openxr_loader.dll"), tsha(vr, "openxr_loader"));
+        FileRecord gone;
+        gone.id = "old_tool"; gone.root = "game"; gone.path = "old_tool.dll"; gone.existing = "replace"; gone.sha256 = "ot";
+        s.state.put(gone);
+        s.targets.push_back(fakeDll(DllKind::Foreign, joinPath(dir, L"old_tool.dll"), "edited-by-user"));
+        Options o = testOptions();
+        o.scope = "flat";
+        const Plan plan = planInstall(s, o, vr);
+        check(!plan.blocked, "a loader that is the payload's own bytes does not block flat conversion", unifiedProblems(plan));
+        check(hasStep(plan, Action::Delete, L"openxr_loader.dll", nullptr), "and is retired");
+        check(!hasStep(plan, Action::Delete, L"old_tool.dll", nullptr) && notesMention(plan, "Keeping old_tool.dll"),
+              "an edited copy of a dropped id is kept with its own note, and does not block the conversion");
+        s.openxrLoader.sha256 = "edited-loader";
+        check(planInstall(s, o, vr).blocked, "while an edited OpenXR file still blocks it, as before");
+    }
+}
+
+// Fixes from the second schema-2 review: a path this plan places is never retired, a delete re-checks its hash, a notice goes with its
+// runtime, a refused target keeps its record, and a record is held to the manifest's own target check.
+static void testReviewFollowUps(const std::wstring& scratch) {
+    printf("\nschema 2 review follow-ups\n");
+    const std::wstring dir = L"C:\\Games\\ED\\Products\\elite-dangerous-odyssey-64";
+    const std::wstring base = joinPath(scratch, L"review-followups");
+    auto provide = [](const PayloadInfo& p) {
+        return [&p](const std::string& item, const void** data, size_t* size) {
+            const PayloadFileEntry* e = p.find(item);
+            if (!e) return false;
+            *data = e->data;
+            *size = e->size;
+            return true;
+        };
+    };
+    auto sha = [](const std::string& bytes) { return sha256Bytes(bytes.data(), bytes.size()); };
+    auto deletes = [](const Plan& plan, const std::wstring& path) {
+        for (const Step& st : plan.steps)
+            if (st.action == Action::Delete && _wcsicmp(st.from.c_str(), path.c_str()) == 0) return true;
+        return false;
+    };
+
+    {   // An id renamed at an unchanged target: the record's old id is not placed any more, but its path is, so it is not retired.
+        const std::wstring game = joinPath(base, L"renamed");
+        layOutScratchGame(game);
+        const std::wstring lib = joinPath(game, L"Openvr\\win64\\helper.dll");
+        writeAll(lib, "OLD-HELPER-BYTES");
+        PayloadInfo p = testPayload(kNextIni);
+        taddExtra(p, "helper", TargetRoot::Openvr, "helper.dll", ExistingMode::Replace, kProfileVr, false, sha("bytes of helper"));
+        Survey s = scratchSurvey(game);
+        s.state.present = true; s.state.scope = "both"; s.state.profile = "vr";
+        FileRecord r;
+        r.id = "old_helper"; r.root = "openvr"; r.path = "helper.dll"; r.existing = "replace"; r.sha256 = sha256File(lib);
+        s.state.put(r);
+        const Plan plan = planInstall(s, testOptions(), p);
+        check(!plan.blocked, "a renamed id at the same target plans", unifiedProblems(plan));
+        check(hasStep(plan, Action::WritePayload, nullptr, L"helper.dll") && !deletes(plan, lib),
+              "the new file is written and the old id's copy at that path is not deleted");
+        check(plan.nextState.file("helper") && !plan.nextState.file("old_helper"), "and the record follows the id");
+        const ApplyResult result = applyPlan(plan, provide(p));
+        check(result.ok, "the plan applies", result.error);
+        expectEq(readAll(lib), "bytes of helper", "and the new file is still there afterwards");
+    }
+
+    {   // An id moves while another id takes its old path.
+        const std::wstring game = joinPath(base, L"swapped");
+        layOutScratchGame(game);
+        makeTree(joinPath(game, L"old"));
+        const std::wstring oldPath = joinPath(game, L"old\\x.dll");
+        writeAll(oldPath, "OLD-COPY-OF-MOVER");
+        PayloadInfo p = testPayload(kNextIni);
+        taddExtra(p, "mover", TargetRoot::Game, "new/x.dll", ExistingMode::Replace, 0, false, sha("bytes of mover"));
+        taddExtra(p, "taker", TargetRoot::Game, "old/x.dll", ExistingMode::Replace, 0, false, sha("bytes of taker"));
+        Survey s = scratchSurvey(game);
+        s.state.present = true; s.state.scope = "both"; s.state.profile = "vr";
+        FileRecord r;
+        r.id = "mover"; r.root = "game"; r.path = "old/x.dll"; r.existing = "replace"; r.sha256 = sha256File(oldPath);
+        s.state.put(r);
+        const Plan plan = planInstall(s, testOptions(), p);
+        check(!plan.blocked && !deletes(plan, oldPath), "a path another id takes is not retired with the moved id's old copy", unifiedProblems(plan));
+        const ApplyResult result = applyPlan(plan, provide(p));
+        check(result.ok, "the plan applies", result.error);
+        expectEq(readAll(oldPath), "bytes of taker", "the id that took the old path has its file there");
+        expectEq(readAll(joinPath(game, L"new\\x.dll")), "bytes of mover", "and the moved id has its file at the new one");
+    }
+
+    {   // The delete re-checks its hash: a step that wrote the file earlier in the same plan has changed what the delete was made for.
+        const std::wstring game = joinPath(base, L"delete-recheck");
+        layOutScratchGame(game);
+        const std::wstring path = joinPath(game, L"thing.dll");
+        writeAll(path, "OLD");
+        PayloadInfo p;
+        tfile(p, "settings_vr", "NEW-BYTES");
+        Plan plan;
+        plan.backupDir = joinPath(game, L"edvr_backup\\recheck");
+        Step write;
+        write.action = Action::WritePayload; write.item = "settings_vr"; write.to = path; write.why = "writes";
+        Step del;
+        del.action = Action::Delete; del.from = path; del.expectSha = sha("OLD"); del.why = "deletes the old bytes";
+        plan.steps = {write, del};
+        const ApplyResult result = applyPlan(plan, provide(p));
+        check(!result.ok, "a delete made for other bytes than the file now holds stops the plan");
+        check(!readAll(path).empty(), "and the file is not deleted");
+    }
+
+    {   // The XeSS notices travel with the runtime: neither is placed alone, and an earlier install's records stay.
+        PayloadInfo p = testPayload(kNextIni);
+        tset(p, "xess_license", "xl-new");
+        tset(p, "xess_third_party", "xt-new");
+        Survey s = baseSurvey(dir);
+        s.state.present = true; s.state.scope = "both"; s.state.profile = "vr";
+        trecord(s.state, "xess_license", "xl-old");
+        const Plan plan = planInstall(s, testOptions(), p);
+        check(!plan.blocked, "notices without the runtime plan", unifiedProblems(plan));
+        check(!hasStep(plan, Action::WritePayload, nullptr, L"INTEL-XESS-LICENSE.txt") &&
+              !hasStep(plan, Action::WritePayload, nullptr, L"INTEL-XESS-THIRD-PARTY.txt"),
+              "neither notice is placed when the payload carries no XeSS runtime");
+        check(plan.nextState.file("xess_license"), "and a record an earlier install made for one stays");
+        tset(p, "xess", "xs-new");
+        const Plan with = planInstall(baseSurvey(dir), testOptions(), p);
+        check(hasStep(with, Action::WritePayload, nullptr, L"INTEL-XESS-LICENSE.txt") &&
+              hasStep(with, Action::WritePayload, nullptr, L"INTEL-XESS-THIRD-PARTY.txt") &&
+              hasStep(with, Action::WritePayload, nullptr, L"libxess.dll"),
+              "with the runtime, all three are placed as before");
+    }
+
+    {   // A target the junction check refuses keeps the record of the file that is still on disk.
+        const std::wstring root = joinPath(base, L"refused");
+        removeTree(root);
+        const std::wstring game = joinPath(root, L"game");
+        const std::wstring elsewhere = joinPath(root, L"elsewhere");
+        layOutScratchGame(game);
+        makeTree(elsewhere);
+        writeAll(joinPath(elsewhere, L"x.dll"), "STILL-THERE");
+        const std::wstring link = joinPath(game, L"link");
+        const bool linked = makeJunction(link, elsewhere);
+        check(linked, "the rig made a junction to test with");
+        if (linked) {
+            PayloadInfo p = testPayload(kNextIni);
+            taddExtra(p, "through", TargetRoot::Game, "link/x.dll", ExistingMode::Replace, 0, false, sha("bytes of through"));
+            Survey s = scratchSurvey(game);
+            s.state.present = true; s.state.scope = "both"; s.state.profile = "vr";
+            FileRecord r;
+            r.id = "through"; r.root = "game"; r.path = "link/x.dll"; r.existing = "replace"; r.sha256 = sha("STILL-THERE");
+            s.state.put(r);
+            const Plan plan = planInstall(s, testOptions(), p);
+            check(problemMentions(plan, "leaves its folder") && !hasStep(plan, Action::WritePayload, nullptr, L"x.dll"),
+                  "the target through a junction is refused");
+            check(plan.nextState.file("through") && plan.nextState.file("through")->sha256 == sha("STILL-THERE"),
+                  "and the record of the file that stays on disk is kept");
+            RemoveDirectoryW(link.c_str());
+        }
+    }
+
+    {   // A record is held to the manifest's target check: reserved names and the pins of chain, runtime and settings.
+        InstallState st;
+        st.edvrVersion = "v9"; st.scope = "both";
+        auto record = [&](const char* id, const char* root, const char* path, ExistingMode mode) {
+            FileRecord r;
+            r.id = id; r.root = root; r.path = path; r.existing = existingName(mode); r.sha256 = "ab";
+            st.put(r);
+        };
+        record("graphics", "game", "d3d11.dll", ExistingMode::Chain);                 // legal
+        record("runtime", "openvr", "openvr_api.dll", ExistingMode::Runtime);        // legal
+        record("settings_flat", "game", "edvr-flat.ini", ExistingMode::Settings);    // legal
+        record("plain", "game", "sub/x.dll", ExistingMode::Replace);                  // legal
+        record("badchain", "game", "EliteDangerous64.exe", ExistingMode::Chain);
+        record("badruntime", "game", "openvr_api.dll", ExistingMode::Runtime);
+        record("badsettings", "game", "other.ini", ExistingMode::Settings);
+        record("badsettingsroot", "openvr", "edvr.ini", ExistingMode::Settings);
+        record("reserved", "game", "edvr_profile.ini", ExistingMode::Replace);
+        record("reservedchain", "game", "d3d11_edhm.dll", ExistingMode::Replace);
+        record("backupdir", "game", "edvr_backup/a.dll", ExistingMode::Owned);
+        const InstallState back = parseState(serializeState(st));
+        check(back.file("graphics") && back.file("runtime") && back.file("settings_flat") && back.file("plain"),
+              "records that satisfy the manifest's target check load");
+        check(!back.file("badchain") && !back.file("badruntime") && !back.file("badsettings") && !back.file("badsettingsroot") &&
+              !back.file("reserved") && !back.file("reservedchain") && !back.file("backupdir"),
+              "records that a manifest could not carry are refused on load");
+        check(back.refusedRecords.size() == 7, "and are counted as refused", std::to_string(back.refusedRecords.size()));
+        FileRecord hand;
+        hand.id = "graphics"; hand.root = "game"; hand.path = "EliteDangerous64.exe"; hand.existing = "chain"; hand.sha256 = "ab";
+        std::string why;
+        check(!recordTargetIsSafe(hand, &why) && !why.empty(), "a hand-edited chain record naming the game exe is unsafe", why);
+    }
 }
 
 // The command line's scope and the default one. --scope takes both, vr or flat and refuses anything else; --convert-profile is
@@ -6775,6 +7539,161 @@ static void testScopeArgs() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The payload is a manifest: what the planner does with a file it was not written for
+// (docs\design-manifest-schema2-2026-11-12.md, "One engine")
+// ---------------------------------------------------------------------------
+
+// A file the packager's table does not have, with the behaviour, target and condition the test gives it.
+static void taddExtra(PayloadInfo& p, const std::string& id, TargetRoot root, const std::string& path, ExistingMode existing,
+                      unsigned profiles, bool nvidia, const std::string& sha) {
+    PayloadFileEntry e;
+    e.file.id = id;
+    e.file.asset = "test";
+    e.file.path = path;
+    e.file.target.root = root;
+    e.file.target.path = path;
+    e.file.when.profiles = profiles;
+    e.file.when.adapterNvidia = nvidia;
+    e.file.when.present = profiles != 0 || nvidia;
+    e.file.existing = existing;
+    e.owned = std::make_shared<const std::string>("bytes of " + id);
+    e.data = e.owned->data();
+    e.size = e.owned->size();
+    e.sha = sha;
+    p.files.push_back(std::move(e));
+}
+
+static void testManifestFiles(const std::wstring& root) {
+    printf("\nthe payload is a manifest: files the planner was not written for\n");
+
+    {   // The test table is the packager's table: same ids, targets, conditions and behaviours, so a test payload is a real one's shape.
+        const std::string text = readTextFile(joinPath(root, L"tools\\package_native.py"));
+        check(!text.empty(), "tools\\package_native.py is readable from the root");
+        size_t count = 0;
+        for (size_t at = text.find("PackagedFile(\""); at != std::string::npos; at = text.find("PackagedFile(\"", at + 1)) ++count;
+        check(count == sizeof(kTestTable) / sizeof(kTestTable[0]), "the test table has one row per packager file");
+        for (const TestTableRow& row : kTestTable) {
+            const size_t at = text.find(std::string("PackagedFile(\"") + row.id + "\"");
+            check(at != std::string::npos, (std::string("the packager declares ") + row.id).c_str());
+            if (at == std::string::npos) continue;
+            std::string decl = text.substr(at, text.find("),", at) - at + 2);
+            const char* when = row.nvidia ? "_NVIDIA" : row.profiles == kProfileAll ? "_EITHER" : row.profiles == kProfileVr ? "_VR"
+                              : row.profiles == kProfileFlat ? "_FLAT" : "None";
+            const std::string tail = std::string("\"") + (row.root == TargetRoot::Game ? "game" : "openvr") + "\", \"" + row.path + "\"";
+            std::string flattened;
+            for (char c : decl) if (c != '\n' && c != '\r') flattened += c;
+            std::string squeezed;
+            for (char c : flattened) if (!(c == ' ' && !squeezed.empty() && squeezed.back() == ' ')) squeezed += c;
+            check(squeezed.find(tail) != std::string::npos && squeezed.find(std::string(", ") + when + ", \"" + existingName(row.existing) + "\"") != std::string::npos,
+                  (std::string("the test table row ") + row.id + " is the packager's").c_str());
+        }
+    }
+
+    const std::wstring dir = L"C:\\Games\\ED\\Products\\elite-dangerous-odyssey-64";
+    const Options options = testOptions();
+
+    {   // A file this planner was never written for: id extra_dll, game root, replace, flat profile only. It is placed and backed up by
+        // the manifest's word alone.
+        PayloadInfo flat = flatPayloadFor(kTestFlatIni);
+        taddExtra(flat, "extra_dll", TargetRoot::Game, "extra/x.dll", ExistingMode::Replace, kProfileFlat, false, "extra-new");
+        Options flatOptions = options;
+        flatOptions.scope = "flat";
+        Survey s = baseSurvey(dir);
+        const std::wstring target = joinPath(dir, L"extra\\x.dll");
+
+        Plan fresh = planInstall(s, flatOptions, flat);
+        check(!fresh.blocked && hasStep(fresh, Action::WritePayload, nullptr, L"x.dll"), "a file the planner never heard of is placed on a fresh install");
+        bool itemIsId = false;
+        for (const Step& st : fresh.steps) if (st.action == Action::WritePayload && st.to == target && st.item == "extra_dll") itemIsId = true;
+        check(itemIsId, "its step names the manifest id and resolves the target under the game folder");
+        check(!hasStep(fresh, Action::Backup, L"x.dll", nullptr), "and, with nothing there, backs nothing up");
+
+        s.targets.push_back(fakeDll(DllKind::Foreign, target, "someone-elses"));
+        Plan replaced = planInstall(s, flatOptions, flat);
+        check(hasStep(replaced, Action::Backup, L"x.dll", L"x.dll") && hasStep(replaced, Action::WritePayload, nullptr, L"x.dll"),
+              "a copy already there is backed up first, then replaced");
+        s.targets.back().sha256 = "extra-new";
+        Plan current = planInstall(s, flatOptions, flat);
+        check(!hasStep(current, Action::WritePayload, nullptr, L"x.dll") && !hasStep(current, Action::Backup, L"x.dll", nullptr),
+              "a copy that is already this build's is left alone");
+        flatOptions.repair = true;
+        check(hasStep(planInstall(s, flatOptions, flat), Action::WritePayload, nullptr, L"x.dll"), "and repair writes it again");
+
+        Options vrOptions = options;
+        vrOptions.scope = "vr";
+        PayloadInfo vrWith = testPayload(kNextIni);
+        taddExtra(vrWith, "extra_dll", TargetRoot::Game, "extra/x.dll", ExistingMode::Replace, kProfileFlat, false, "extra-new");
+        vrOptions.scope = "vr";
+        check(!hasStep(planInstall(baseSurvey(dir), vrOptions, vrWith), Action::WritePayload, nullptr, L"x.dll"),
+              "a file for the flat profile only is not placed by a vr install");
+        vrOptions.scope = "both";
+        check(hasStep(planInstall(baseSurvey(dir), vrOptions, vrWith), Action::WritePayload, nullptr, L"x.dll"),
+              "and is placed by an install of both profiles");
+    }
+
+    {   // `when` adapter: a file for NVIDIA machines is skipped without one (any behaviour but owned), and placed with one.
+        PayloadInfo p = testPayload(kNextIni);
+        taddExtra(p, "nv_extra", TargetRoot::Game, "nv_extra.dll", ExistingMode::Replace, 0, true, "nv-new");
+        taddExtra(p, "nv_owned", TargetRoot::Game, "nv_owned.dll", ExistingMode::Owned, 0, true, "nvo-new");
+        Survey s = baseSurvey(dir);
+        s.nvidiaAdapter = false;
+        Plan none = planInstall(s, options, p);
+        check(!hasStep(none, Action::WritePayload, nullptr, L"nv_extra.dll") && !hasStep(none, Action::WritePayload, nullptr, L"nv_owned.dll"),
+              "without an NVIDIA adapter neither adapter-conditioned file is placed");
+        check(notesMention(none, "No NVIDIA") && notesMention(none, "nv_owned.dll"), "and the owned one says why");
+        check(!notesMention(none, "nv_extra.dll"), "while the replace one is skipped in silence");
+        s.nvidiaAdapter = true;
+        Plan some = planInstall(s, options, p);
+        check(hasStep(some, Action::WritePayload, nullptr, L"nv_extra.dll") && hasStep(some, Action::WritePayload, nullptr, L"nv_owned.dll"),
+              "with one both are placed");
+        s.targets.push_back(fakeDll(DllKind::Foreign, joinPath(dir, L"nv_owned.dll"), "theirs"));
+        check(!hasStep(planInstall(s, options, p), Action::WritePayload, nullptr, L"nv_owned.dll") && notesMention(planInstall(s, options, p), "A different nv_owned.dll"),
+              "an owned file that somebody else's copy holds is left alone, whatever the adapter");
+    }
+
+    {   // A file under the openvr root lands in the surveyed Openvr folder, wherever that is, and its backup does not collide with a
+        // game-folder file of the same name.
+        PayloadInfo p = testPayload(kNextIni);
+        taddExtra(p, "native_extra", TargetRoot::Openvr, "sub/native_extra.dll", ExistingMode::Replace, kProfileVr, false, "ne-new");
+        taddExtra(p, "game_shared", TargetRoot::Game, "shared.dll", ExistingMode::Replace, 0, false, "gs-new");
+        taddExtra(p, "native_shared", TargetRoot::Openvr, "shared.dll", ExistingMode::Replace, kProfileVr, false, "ns-new");
+        Survey s = baseSurvey(dir);
+        s.game.openvrDir = joinPath(dir, L"Openvr");   // a surveyed folder other than the default Openvr\win64
+        s.openvrCurrent.path = joinPath(s.game.openvrDir, L"openvr_api.dll");
+        s.openxrLoader.path = joinPath(s.game.openvrDir, L"openxr_loader.dll");
+        s.openxrLicense.path = joinPath(s.game.openvrDir, L"OPENXR-LOADER-LICENSE.txt");
+        s.targets.push_back(fakeDll(DllKind::Foreign, joinPath(dir, L"shared.dll"), "game-old"));
+        s.targets.push_back(fakeDll(DllKind::Foreign, joinPath(s.game.openvrDir, L"shared.dll"), "openvr-old"));
+        const Plan plan = planInstall(s, options, p);
+        bool landed = false;
+        for (const Step& st : plan.steps)
+            if (st.action == Action::WritePayload && st.item == "native_extra" && st.to == joinPath(s.game.openvrDir, L"sub\\native_extra.dll")) landed = true;
+        check(landed, "an openvr-root file is written into the surveyed Openvr folder, under its path");
+        std::vector<std::wstring> backups;
+        for (const Step& st : plan.steps)
+            if (st.action == Action::Backup && leafOf(st.from) == L"shared.dll") backups.push_back(st.to);
+        check(backups.size() == 2 && _wcsicmp(backups[0].c_str(), backups[1].c_str()) != 0,
+              "two targets with one file name get two backup names, so neither overwrites the other");
+        check(hasStep(plan, Action::WritePayload, nullptr, L"openvr_api.dll") && hasStep(plan, Action::WritePayload, nullptr, L"openxr_loader.dll"),
+              "and the runtime and loader land beside it");
+    }
+
+    {   // The planner reads an unlisted target from the disk when the survey has not: a plan never overwrites a file it did not look at.
+        const std::wstring scratch = joinPath(root, L"build\\insttest_scratch\\manifest_files");
+        removeTree(scratch);
+        makeTree(scratch);
+        writeAll(joinPath(scratch, L"unlisted.dll"), "the user's own");
+        PayloadInfo p = testPayload(kNextIni);
+        taddExtra(p, "unlisted", TargetRoot::Game, "unlisted.dll", ExistingMode::Replace, 0, false, "u-new");
+        Survey s = baseSurvey(scratch);
+        const Plan plan = planInstall(s, options, p);
+        check(hasStep(plan, Action::Backup, L"unlisted.dll", L"unlisted.dll"),
+              "a file the survey never listed but the disk has is backed up before it is replaced");
+        removeTree(scratch);
+    }
+}
+
 int wmain(int argc, wchar_t** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -6798,6 +7717,7 @@ int wmain(int argc, wchar_t** argv) {
     testUnifiedDescriptor();
     testStaleRecordBase();
     testXessPlanner();
+    testManifestFiles(root);
     testContentOwnership(scratch);
     testSharedFilesKept();
     testToolReceipts(scratch);
@@ -6805,6 +7725,11 @@ int wmain(int argc, wchar_t** argv) {
     testFlatSettingsPlanner();
     testApply(scratch);
     testMirror(scratch);
+    testEpicDetection(scratch);
+    testEpicRuntimeMirrors(scratch);
+    testRelabelledLegacyMirror(scratch);
+    testLegacyMirrorOwnership(scratch);
+    testLegacyRuntimeHint(scratch);
     testAtomicWrite(scratch);
     testReplaceScripts(scratch);
     testApplyPatience(scratch);
@@ -6820,6 +7745,9 @@ int wmain(int argc, wchar_t** argv) {
     testSettings(root, scratch);
     testLogBundle(scratch);
     testState();
+    testInstallRecords();
+    testSchemaReviewFixes(scratch);
+    testReviewFollowUps(scratch);
     testScopeArgs();
 
     printf("\n%s\n", g_fails == 0 ? "installer_test: all good" : "installer_test: FAILURES");

@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""Generate the installer's resource script -- payload, manifest, icon, version.
+"""Generate the build's resource scripts, version header and release settings files.
 
-The installer ships as ONE executable with the files it installs embedded in
-it, because the step people skip is "extract the zip first": Windows will
-happily run a program from inside a zip, in a temporary folder, with none of
-its siblings next to it. An installer that reads its payload from its own
-directory works perfectly on every machine it is tested on and fails on the
-first one where somebody double-clicked it in Explorer's zip view.
+What it writes, one mode per run:
 
-Generated rather than committed for two reasons:
-
-  * The native graphics/runtime pair and bundled OpenXR loader are mandatory.
-    A partial installer is worse than a build failure, so all native resources
-    are validated before the generated directory is created.
-  * nvngx_dlss.dll remains optional; it is included when the build provides it.
-  * The version string comes from `git describe`, like the DLLs'.
+  * --version-header: edvr_version.h, the build's version string as an include.
+  * --version-rc graphics|runtime: the VERSIONINFO resource of d3d11.dll and
+    of openvr_api.dll.
+  * --launcher-rc: launcher.rc for ed-up-launcher.exe (manifest, icon, its own
+    VERSIONINFO from src/installer/launcher_version.h, and the min-ed-launcher
+    licence). The launcher carries no embedded payload.
+  * --release-files: build\\edvr-flat.ini and build\\edvr_profile_vr.ini, the two
+    files the release packs that nothing else makes. The native graphics and
+    runtime DLLs, the OpenXR loader and its notice, and any XeSS notices are
+    checked first, so a build that is missing one fails here and not at
+    packaging.
 
 Usage:
-  python tools/gen_installer_rc.py --root <repo> --build <build dir>
-                                   --out <gen dir> --version <string>
+  python tools/gen_installer_rc.py --release-files --build <build dir>
+  python tools/gen_installer_rc.py --launcher-rc --root <repo> --out <gen dir>
+  python tools/gen_installer_rc.py --version-rc graphics --out <gen dir> --version <string>
+  python tools/gen_installer_rc.py --version-header --out <gen dir> --version <string>
 """
 
 import argparse
@@ -28,27 +29,20 @@ import struct
 import subprocess
 import sys
 
-# Resource ids, matched by src/installer/payload.h.
-IDR_NATIVE_GRAPHICS = 101
-IDR_NATIVE_RUNTIME = 102
-IDR_INI = 103
-IDR_NGX = 104   # NVIDIA's DLSS runtime, when the build had the SDK
-IDR_LOADER = 105
-IDR_LOADER_NOTICE = 106
-IDR_PROFILE = 107
-IDR_XESS = 108
-IDR_XESS_LICENSE = 109
-IDR_XESS_THIRD_PARTY = 110
-IDR_FLAT_INI = 111   # edvr-flat.ini: the flat profile's own settings, carried beside edvr.ini
+# Resource ids of an embedded payload, as src/installer/payload.cpp reads one: the schema-2 manifest is RCDATA 100 and
+# each file of its `files` list is RCDATA 101 + its index in that list (docs/design-manifest-schema2-2026-11-12.md,
+# "One engine"). Nothing here writes them any more; package_native.py uses them to refuse a launcher that carries any.
+IDR_MANIFEST = 100
+IDR_FILE_BASE = 101
 RT_MANIFEST = 24
 
 
 def flat_ini_bytes():
     """The shipped edvr-flat.ini: the flat profile's own default settings."""
     return (b'# Experimental flat temporal profile: visual qualification in progress.\r\n'
-            b'# F8 opens the AA menu: Off / TAA / DLSS / FSR3 / FSR4 / XeSS-SR and DLSS model presets.\r\n'
-            b'# temporal_aa: off, on (TAA), dlaa (native SS), dlss, fsr, fsr4, xess. Game SS controls render scale.\r\n'
-            b'# XeSS-SR needs libxess.dll beside the game; the flat installer includes it when built with the SDK.\r\n'
+            b'# F8 opens the AA menu: Off / TAA / DLSS / FSR3 / FSR4 / DittoSR / XeSS-SR and DLSS model presets.\r\n'
+            b'# temporal_aa: off, on (TAA), dlaa (native SS), dlss, fsr, fsr4, dittosr, xess. Game SS controls render scale.\r\n'
+            b'# XeSS-SR needs libxess.dll beside the game; the launcher installs it when the release was built with the SDK.\r\n'
             b'# Press NumLock while the issue is visible to collect a diagnostic capture.\r\n'
             b'[fix]\r\ntemporal_aa = off\r\ntemporal_aa_model = k\r\nui_quality = 100\r\n\r\n'
             b'[visual]\r\n'
@@ -69,9 +63,9 @@ def flat_ini_bytes():
 
 
 def descriptor_bytes():
-    """The edvr_profile.ini the installer carries, schema 2: scope both, the one the
-    installer's default names. package_native.py checks the installer's embedded
-    descriptor against these same bytes."""
+    """The edvr_profile.ini the release's zips carry, schema 2: scope both, the one the
+    install engine's default names. package_native.py checks the loose descriptor in the
+    release against these same bytes; the planner writes its own copy of the text."""
     return b'[install]\r\nschema = 2\r\nscope = both\r\n'
 
 
@@ -110,7 +104,7 @@ def origin_url_https():
     repo, or no `origin` remote falls back to the project's known home rather
     than failing a build over a Comments string.
     """
-    fallback = 'https://github.com/characterecho-sean/edvr-unofficial-patch'
+    fallback = 'https://github.com/characterecho-sean/ed-unofficial-patch'
     try:
         url = subprocess.check_output(
             ['git', 'remote', 'get-url', 'origin'],
@@ -129,7 +123,7 @@ def origin_url_https():
 def versioninfo_lines(version, file_description, internal_name, original_filename,
                       file_type, comments):
     """The VERSIONINFO block text, the single writer for it: every .rc file
-    this module produces -- the installer's payload.rc and, now, the two
+    this module produces -- the launcher's launcher.rc and the two
     DLLs' own standalone version_*.rc -- calls this rather than keeping its
     own copy of the eleven lines of StringFileInfo boilerplate.
     """
@@ -148,12 +142,12 @@ def versioninfo_lines(version, file_description, internal_name, original_filenam
         '    BEGIN',
         '        BLOCK "040904b0"',
         '        BEGIN',
-        '            VALUE "CompanyName", "EDVR (unofficial)"',
+        '            VALUE "CompanyName", "ED-UP (unofficial)"',
         '            VALUE "FileDescription", "%s"' % file_description,
         '            VALUE "FileVersion", "%s"' % version,
         '            VALUE "InternalName", "%s"' % internal_name,
         '            VALUE "OriginalFilename", "%s"' % original_filename,
-        '            VALUE "ProductName", "EDVR unofficial patch"',
+        '            VALUE "ProductName", "ED Unofficial Patch"',
         '            VALUE "ProductVersion", "%s"' % version,
         '            VALUE "LegalCopyright", "Copyright (c) 2026 characterecho-sean. MIT License."',
         '            VALUE "Comments", "%s"' % comments,
@@ -167,19 +161,87 @@ def versioninfo_lines(version, file_description, internal_name, original_filenam
     ]
 
 
+LAUNCHER_VERSION_HEADER = ('src', 'installer', 'launcher_version.h')
+# min-ed-launcher's MIT licence, which direct launch's ported code obliges the launcher to carry.
+# src/installer/launcher_main.cpp reads this id; package_native.py checks the bytes.
+IDR_MIN_ED_LAUNCHER_LICENSE = 120
+LAUNCHER_LICENSE_FILE = ('third_party', 'min_ed_launcher', 'LICENSE')
+LAUNCHER_COMMENTS = 'Source and releases: https://github.com/characterecho-sean/ed-unofficial-patch'
+
+
+def launcher_version(root):
+    """The version in src/installer/launcher_version.h: the first quoted x.y.z. It is the
+    launcher's own number, not `git describe`: the launcher's bytes then depend on its
+    sources and nothing else, so a release that did not change it ships the same exe."""
+    with open(os.path.join(root, *LAUNCHER_VERSION_HEADER), encoding='utf-8') as stream:
+        text = stream.read()
+    found = re.search(r'"([0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?)"', text)
+    if not found:
+        raise ValueError('no launcher version string in ' + '\\'.join(LAUNCHER_VERSION_HEADER))
+    return found.group(1)
+
+
+def write_launcher_rc(root, out, dry_run):
+    """--launcher-rc: launcher.rc with the manifest, the icon, a VERSIONINFO and one RCDATA, the
+    licence of the code direct launch is ported from (id 120, printed by --licenses). The launcher
+    carries no payload (package_native.py refuses one that does, resources 100 to 111), and nothing in the
+    file depends on the build's `git describe` or on the clock, so two builds of the same sources
+    are the same bytes."""
+    manifest = os.path.join(root, 'src', 'installer', 'installer.manifest')
+    license_path = os.path.join(root, *LAUNCHER_LICENSE_FILE)
+    try:
+        version = launcher_version(root)
+    except (OSError, ValueError) as exc:
+        print('gen_installer_rc: ERROR: %s' % exc)
+        return 1
+    if not os.path.isfile(license_path):
+        print('gen_installer_rc: ERROR: %s is missing: the launcher carries it' % license_path)
+        return 1
+    try:
+        import xml.etree.ElementTree as ElementTree
+        ElementTree.parse(manifest)
+    except Exception as exc:  # noqa: BLE001 -- any parse failure is fatal here
+        print('gen_installer_rc: ERROR: %s is not valid XML: %s' % (manifest, exc))
+        return 1
+    if dry_run:
+        print('gen_installer_rc: dry run (launcher %s); wrote nothing' % version)
+        return 0
+    os.makedirs(out, exist_ok=True)
+    icon_path = os.path.join(out, 'edvr_installer.ico')
+    with open(icon_path, 'wb') as f:
+        f.write(ico_bytes())
+    lines = [
+        '// Generated by tools/gen_installer_rc.py. Do not edit; do not commit.',
+        '',
+        '1 %d "%s"' % (RT_MANIFEST, rc_path(manifest)),
+        '1 ICON "%s"' % rc_path(icon_path),
+        '%d RCDATA "%s"' % (IDR_MIN_ED_LAUNCHER_LICENSE, rc_path(license_path)),
+        '',
+    ] + versioninfo_lines(
+        version,
+        file_description='ED-UP Launcher',
+        internal_name='ed-up-launcher',
+        original_filename='ed-up-launcher.exe',
+        file_type='0x1L',
+        comments=LAUNCHER_COMMENTS) + ['']
+    out_path = os.path.join(out, 'launcher.rc')
+    with open(out_path, 'w', encoding='utf-8', newline='\r\n') as f:
+        f.write('\n'.join(lines))
+    print('gen_installer_rc: wrote %s (launcher %s, no embedded payload, the min-ed-launcher licence)' % (out_path, version))
+    return 0
+
+
 def write_version_rc(which, version, out, dry_run):
     """--version-rc graphics|runtime: a standalone .rc holding only a
     VERSIONINFO, for the two DLLs that otherwise ship with no resource naming
     them at all. No payload, no manifest, no icon, no --root/--build
-    validation -- those exist to make sure the installer never carries a
-    partial payload, and do not apply to a file that carries nothing but
-    version strings.
+    validation: a file that carries nothing but version strings needs none.
     """
     comments = 'Source and releases: %s' % origin_url_https()
     if which == 'graphics':
         lines = versioninfo_lines(
             version,
-            file_description=('EDVR unofficial VR patch for Elite Dangerous: Direct3D 11 '
+            file_description=('ED Unofficial Patch for Elite Dangerous: Direct3D 11 '
                               'proxy (forwards to the system d3d11.dll)'),
             internal_name='edvr_openxr_graphics',
             original_filename='d3d11.dll',
@@ -189,7 +251,7 @@ def write_version_rc(which, version, out, dry_run):
     else:
         lines = versioninfo_lines(
             version,
-            file_description=('EDVR unofficial VR patch for Elite Dangerous: OpenXR runtime '
+            file_description=('ED Unofficial Patch for Elite Dangerous: OpenXR runtime '
                               'speaking the OpenVR ABI'),
             internal_name='edvr_openxr_runtime',
             original_filename='openvr_api.dll',
@@ -333,51 +395,19 @@ def ico_bytes():
     return bytes(out)
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--root')
-    ap.add_argument('--build')
-    ap.add_argument('--out')
-    ap.add_argument('--version', default='unknown')
-    ap.add_argument('--ini', help='the shipped edvr.ini (default: root edvr.ini)')
-    ap.add_argument('--version-rc', choices=('graphics', 'runtime'),
-                    help='write a standalone VERSIONINFO .rc for this DLL instead of '
-                         'the installer payload')
-    ap.add_argument('--version-header', action='store_true',
-                    help='write edvr_version.h (#define EDVR_VERSION_STRING) into --out, '
-                         'only when its content changes')
-    ap.add_argument('--dry-run', action='store_true')
-    ap.add_argument('--self-test', action='store_true')
-    args = ap.parse_args(argv)
-    if args.self_test:
-        return self_test()
-    if args.version_header:
-        if not args.out:
-            ap.error('--out is required with --version-header')
-        return write_version_header(args.version, args.out, args.dry_run)
-    if args.version_rc:
-        if not args.out:
-            ap.error('--out is required with --version-rc')
-        return write_version_rc(args.version_rc, args.version, args.out, args.dry_run)
-    if not args.root or not args.build or not args.out:
-        ap.error('--root, --build, and --out are required')
+def write_release_files(build, dry_run):
+    """--release-files: check what the release packs from `build`, then write the two files it
+    packs that nothing else makes: edvr-flat.ini (the flat profile's own settings) and
+    edvr_profile_vr.ini (the profile descriptor the zips carry as edvr_profile.ini).
 
-    d3d11 = os.path.join(args.build, 'edvr_openxr_graphics.dll')
-    runtime = os.path.join(args.build, 'edvr_openxr_runtime.dll')
-    loader = os.path.join(args.build, 'openxr_loader.dll')
-    notice = os.path.join(args.build, 'OPENXR-LOADER-LICENSE.txt')
-    ini = args.ini or os.path.join(args.root, 'edvr.ini')
-    # edvr-flat.ini is generated here and embedded beside edvr.ini (id 111): one
-    # installer carries both settings files, and the scope decides which it writes.
-    flat_ini = os.path.join(args.build, 'edvr-flat.ini')
-    ngx = os.path.join(args.build, 'nvngx_dlss.dll')
-    xess = os.path.join(args.build, 'libxess.dll')
-    xess_license = os.path.join(args.build, 'INTEL-XESS-LICENSE.txt')
-    xess_third_party = os.path.join(args.build, 'INTEL-XESS-THIRD-PARTY.txt')
-    manifest = os.path.join(args.root, 'src', 'installer', 'installer.manifest')
-
-    required = [("native graphics", d3d11), ("INI", ini),
-                ("native runtime", runtime), ("OpenXR loader", loader),
+    The native graphics and runtime DLLs and the OpenXR loader with its notice are mandatory, and
+    the DLLs and the loader are validated here, so a build that lacks one fails now and not at
+    packaging. XeSS runtimes are optional, but one without its two Intel notices is refused."""
+    d3d11 = os.path.join(build, 'edvr_openxr_graphics.dll')
+    runtime = os.path.join(build, 'edvr_openxr_runtime.dll')
+    loader = os.path.join(build, 'openxr_loader.dll')
+    notice = os.path.join(build, 'OPENXR-LOADER-LICENSE.txt')
+    required = [("native graphics", d3d11), ("native runtime", runtime), ("OpenXR loader", loader),
                 ("OpenXR loader notice", notice)]
     missing = [(label, path) for label, path in required if not os.path.isfile(path)]
     if missing:
@@ -389,86 +419,68 @@ def main(argv=None):
         openxr_pe.native_graphics_exports(d3d11)
         openxr_pe.native_exports(runtime)
         from fetch_openxr_loader import verify
-        verify(args.build)
+        verify(build)
     except (ImportError, OSError, ValueError) as exc:
         print('gen_installer_rc: ERROR: native payload validation failed: %s' % exc)
         return 1
 
-    # The manifest has to be valid XML or Windows refuses to start the program
-    # at all -- "the side-by-side configuration is incorrect", before a line of
-    # its code runs. It links and packages perfectly happily, so nothing else in
-    # the build would notice. It has already happened once, to a comment
-    # containing the double hyphen this project uses as an em dash, which XML
-    # does not allow inside comments.
-    try:
-        import xml.etree.ElementTree as ElementTree
-        ElementTree.parse(manifest)
-    except Exception as exc:  # noqa: BLE001 -- any parse failure is fatal here
-        print('gen_installer_rc: ERROR: %s is not valid XML: %s' % (manifest, exc))
-        print('  A manifest Windows cannot parse is an installer that cannot start.')
-        return 1
-
-    if os.path.exists(xess) and (
-            not os.path.isfile(xess_license) or not os.path.isfile(xess_third_party)):
+    # XeSS-SR, XeSS Frame Generation and Xe Low Latency all ship under the same two Intel notices.
+    any_xess = any(os.path.exists(os.path.join(build, name)) for name in ('libxess.dll', 'libxess_fg.dll', 'libxell.dll'))
+    if any_xess and (not os.path.isfile(os.path.join(build, 'INTEL-XESS-LICENSE.txt'))
+                     or not os.path.isfile(os.path.join(build, 'INTEL-XESS-THIRD-PARTY.txt'))):
         print('gen_installer_rc: ERROR: XeSS runtime lacks license notices')
         return 1
 
-    if args.dry_run:
-        print('gen_installer_rc: dry run; validated the installer resources and wrote nothing')
+    if dry_run:
+        print('gen_installer_rc: dry run; validated the release inputs and wrote nothing')
         return 0
-    os.makedirs(args.out, exist_ok=True)
-    with open(flat_ini, 'wb') as f:
+    with open(os.path.join(build, 'edvr-flat.ini'), 'wb') as f:
         f.write(flat_ini_bytes())
-    icon_path = os.path.join(args.out, 'edvr_installer.ico')
-    with open(icon_path, 'wb') as f:
-        f.write(ico_bytes())
-    descriptor_path = os.path.join(args.build, 'edvr_profile_vr.ini')
-    with open(descriptor_path, 'wb') as f:
+    with open(os.path.join(build, 'edvr_profile_vr.ini'), 'wb') as f:
         f.write(descriptor_bytes())
-
-    lines = [
-        '// Generated by tools/gen_installer_rc.py. Do not edit; do not commit.',
-        '',
-        '1 %d "%s"' % (RT_MANIFEST, rc_path(manifest)),
-        '1 ICON "%s"' % rc_path(icon_path),
-        '',
-        '%d RCDATA "%s"' % (IDR_NATIVE_GRAPHICS, rc_path(d3d11)),
-        '%d RCDATA "%s"' % (IDR_INI, rc_path(ini)),
-        '%d RCDATA "%s"' % (IDR_FLAT_INI, rc_path(flat_ini)),
-        '%d RCDATA "%s"' % (IDR_PROFILE, rc_path(descriptor_path)),
-        '%d RCDATA "%s"' % (IDR_NATIVE_RUNTIME, rc_path(runtime)),
-        '%d RCDATA "%s"' % (IDR_LOADER, rc_path(loader)),
-        '%d RCDATA "%s"' % (IDR_LOADER_NOTICE, rc_path(notice)),
-    ]
-    # This line is what a build log says the installer carries.
-    carried = 'graphics, edvr.ini, edvr-flat.ini and vr profile descriptor, native OpenXR runtime, loader and notice'
-    if os.path.exists(ngx):
-        lines.append('%d RCDATA "%s"' % (IDR_NGX, rc_path(ngx)))
-        carried += ", and NVIDIA's DLSS runtime (nvngx_dlss.dll)"
-    else:
-        lines.append('// no nvngx_dlss.dll in the build (no DLSS SDK): this installer ships without')
-        lines.append("// NVIDIA's optional anti-aliasing runtime.")
-    # XeSS-SR ships with the installer: both edvr.ini and edvr-flat.ini can select it.
-    if os.path.exists(xess):
-        lines += ['%d RCDATA "%s"' % (IDR_XESS, rc_path(xess)),
-                  '%d RCDATA "%s"' % (IDR_XESS_LICENSE, rc_path(xess_license)),
-                  '%d RCDATA "%s"' % (IDR_XESS_THIRD_PARTY, rc_path(xess_third_party))]
-        carried += ', Intel XeSS-SR runtime and notices'
-
-    version = args.version
-    lines += [''] + versioninfo_lines(
-        version,
-        file_description='EDVR installer',
-        internal_name='edvr-installer',
-        original_filename='edvr-installer.exe',
-        file_type='0x1L',
-        comments='Carries %s' % carried) + ['']
-
-    out_path = os.path.join(args.out, 'payload.rc')
-    with open(out_path, 'w', encoding='utf-8', newline='\r\n') as f:
-        f.write('\n'.join(lines))
-    print('gen_installer_rc: wrote %s (%s)' % (out_path, carried))
+    print('gen_installer_rc: wrote edvr-flat.ini and edvr_profile_vr.ini in %s' % build)
     return 0
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--root')
+    ap.add_argument('--build')
+    ap.add_argument('--out')
+    ap.add_argument('--version', default='unknown')
+    ap.add_argument('--release-files', action='store_true',
+                    help='check the native pair, the loader and any XeSS notices in --build, then write '
+                         'edvr-flat.ini and edvr_profile_vr.ini there')
+    ap.add_argument('--version-rc', choices=('graphics', 'runtime'),
+                    help='write a standalone VERSIONINFO .rc for this DLL')
+    ap.add_argument('--launcher-rc', action='store_true',
+                    help='write launcher.rc (manifest, icon and VERSIONINFO from '
+                         'src/installer/launcher_version.h, no payload) into --out; needs --root')
+    ap.add_argument('--version-header', action='store_true',
+                    help='write edvr_version.h (#define EDVR_VERSION_STRING) into --out, '
+                         'only when its content changes')
+    ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--self-test', action='store_true')
+    args = ap.parse_args(argv)
+    if args.self_test:
+        return self_test()
+    if args.launcher_rc:
+        if not args.out or not args.root:
+            ap.error('--root and --out are required with --launcher-rc')
+        return write_launcher_rc(args.root, args.out, args.dry_run)
+    if args.version_header:
+        if not args.out:
+            ap.error('--out is required with --version-header')
+        return write_version_header(args.version, args.out, args.dry_run)
+    if args.version_rc:
+        if not args.out:
+            ap.error('--out is required with --version-rc')
+        return write_version_rc(args.version_rc, args.version, args.out, args.dry_run)
+    if args.release_files:
+        if not args.build:
+            ap.error('--build is required with --release-files')
+        return write_release_files(args.build, args.dry_run)
+    ap.error('one of --release-files, --version-rc, --launcher-rc or --version-header is required')
 
 
 def self_test():
@@ -482,76 +494,68 @@ def self_test():
     assert parse_version_tuple('unknown') == (0, 0, 0, 0)
     assert parse_version_tuple('garbage') == (0, 0, 0, 0)
     assert parse_version_tuple('v1.2.3-70000-gabcdef1') == (1, 2, 3, 65535)  # clamped
+    assert parse_version_tuple('0.1.0') == (0, 1, 0, 0)  # the launcher's own number has no "v" and no suffix
 
     with tempfile.TemporaryDirectory(prefix='edvr-rc-test-') as scratch:
         root = os.path.join(scratch, 'root'); build = os.path.join(root, 'build')
-        out = os.path.join(root, 'generated'); os.makedirs(build)
-        os.makedirs(os.path.join(root, 'src', 'installer'))
+        os.makedirs(build)
         for name in ('edvr_openxr_graphics.dll', 'edvr_openxr_runtime.dll', 'openxr_loader.dll',
                      'OPENXR-LOADER-LICENSE.txt'):
             with open(os.path.join(build, name), 'wb') as stream: stream.write(b'x')
-        with open(os.path.join(root, 'edvr.ini'), 'wb') as stream: stream.write(b'[openxr]\n')
-        with open(os.path.join(root, 'src', 'installer', 'installer.manifest'), 'w') as stream:
-            stream.write('<assembly></assembly>')
         import openxr_pe, fetch_openxr_loader
         old_g, old_r, old_v = openxr_pe.native_graphics_exports, openxr_pe.native_exports, fetch_openxr_loader.verify
         openxr_pe.native_graphics_exports = lambda path: None; openxr_pe.native_exports = lambda path: None
         fetch_openxr_loader.verify = lambda path: None
         try:
-            assert main(['--root', root, '--build', build, '--out', out,
-                         '--version', '1.2.3', '--dry-run']) == 0 and not os.path.exists(out)
+            # --release-files: a dry run checks and writes nothing.
+            assert main(['--release-files', '--build', build, '--dry-run']) == 0
+            assert not os.path.exists(os.path.join(build, 'edvr-flat.ini'))
+            assert not os.path.exists(os.path.join(build, 'edvr_profile_vr.ini'))
             os.remove(os.path.join(build, 'edvr_openxr_runtime.dll'))
             import contextlib, io
             missing = io.StringIO()  # the refusal under test, relabelled below
             with contextlib.redirect_stdout(missing), contextlib.redirect_stderr(missing):
-                code = main(['--root', root, '--build', build, '--out', out,
-                             '--version', '1.2.3'])
-            assert code == 1 and not os.path.exists(out)
+                code = main(['--release-files', '--build', build])
+            assert code == 1 and not os.path.exists(os.path.join(build, 'edvr-flat.ini'))
             assert 'ERROR: native runtime' in missing.getvalue()
             print('expected-error: ' + missing.getvalue().strip().replace('gen_installer_rc: ERROR: ', '', 1))
             # The flat edition is retired: --profile is no longer an option at all.
             with open(os.path.join(build, 'edvr_openxr_runtime.dll'), 'wb') as stream: stream.write(b'x')
-            assert main(['--root', root, '--build', build, '--out', out,
-                         '--version', '1.2.3', '--dry-run']) == 0
-            assert not os.path.exists(out) and not os.path.exists(os.path.join(build, 'edvr-flat.ini'))
-            import contextlib, io
             refusal = io.StringIO()  # argparse's usage text: expected, so not echoed raw
             try:
                 with contextlib.redirect_stderr(refusal):
-                    main(['--root', root, '--build', build, '--out', out,
-                          '--version', '1.2.3', '--profile', 'flat'])
+                    main(['--release-files', '--build', build, '--profile', 'flat'])
             except SystemExit as exc:
                 assert exc.code == 2
                 assert 'unrecognized arguments: --profile flat' in refusal.getvalue()
                 print('expected-error: argparse refused --profile flat (exit 2)')
             else:
                 raise AssertionError('--profile flat was accepted')
-            for name in ('libxess.dll', 'INTEL-XESS-LICENSE.txt', 'INTEL-XESS-THIRD-PARTY.txt'):
+            # An XeSS runtime without its Intel notices is refused; with them it is accepted.
+            with open(os.path.join(build, 'libxess.dll'), 'wb') as stream: stream.write(b'libxess.dll')
+            no_notices = io.StringIO()
+            with contextlib.redirect_stdout(no_notices):
+                assert main(['--release-files', '--build', build]) == 1
+            assert 'XeSS runtime lacks license notices' in no_notices.getvalue()
+            assert not os.path.exists(os.path.join(build, 'edvr-flat.ini'))
+            print('expected-error: ' + no_notices.getvalue().strip().replace('gen_installer_rc: ERROR: ', '', 1))
+            for name in ('INTEL-XESS-LICENSE.txt', 'INTEL-XESS-THIRD-PARTY.txt', 'libxess_fg.dll', 'libxell.dll'):
                 with open(os.path.join(build, name), 'wb') as stream: stream.write(name.encode('ascii'))
-            assert main(['--root', root, '--build', build, '--out', out,
-                         '--version', '1.2.3']) == 0
-            with open(os.path.join(out, 'payload.rc'), encoding='utf-8') as stream:
-                rc_text = stream.read()
-            # One installer: both settings files, the descriptor, the runtime and the XeSS-SR files.
-            assert all('%d RCDATA ' % resource_id in rc_text for resource_id in
-                       (IDR_INI, IDR_FLAT_INI, IDR_PROFILE, IDR_NATIVE_RUNTIME, IDR_LOADER,
-                        IDR_LOADER_NOTICE, IDR_XESS, IDR_XESS_LICENSE, IDR_XESS_THIRD_PARTY))
-            assert 'Intel XeSS-SR runtime and notices' in rc_text
-            assert 'graphics, edvr.ini, edvr-flat.ini and vr profile descriptor' in rc_text
+            assert main(['--release-files', '--build', build]) == 0
             with open(os.path.join(build, 'edvr-flat.ini'), 'rb') as stream:
                 flat_ini = stream.read()
                 assert flat_ini == flat_ini_bytes()
                 assert b'temporal_aa = off' in flat_ini
                 assert b'[diag]\r\n' in flat_ini and b'flat_origin_capture = off\r\n' in flat_ini
                 assert b'Restart the game after changing this value.' in flat_ini
-                assert b'fsr, fsr4, xess. Game SS controls render scale.' in flat_ini
-                assert b'FSR3 / FSR4 / XeSS-SR' in flat_ini
+                assert b'fsr, fsr4, dittosr, xess. Game SS controls render scale.' in flat_ini
+                assert b'FSR3 / FSR4 / DittoSR / XeSS-SR' in flat_ini
                 assert b'XeSS-SR needs libxess.dll' in flat_ini
                 assert b'temporal_aa_model = k' in flat_ini and b'menu = F8' in flat_ini
                 assert b'dump_draws = NUMLOCK' in flat_ini and b'dump_draws = F10' not in flat_ini
                 assert b'compare_aa = F7' in flat_ini and b'nothing is written' in flat_ini
                 assert b'intro_video = screen' in flat_ini and b'skip refuses it at launch' in flat_ini
-                # The key lives in [visual] (2026-10-22), and the annotation sits directly above it so the installer's merge
+                # The key lives in [visual] (2026-10-22), and the annotation sits directly above it so the install engine's merge
                 # carries a flat user's old [fix] intro_video to the new name (iniedit.cpp movedKeys: a section line or a blank
                 # clears a pending annotation).
                 assert (b'[visual]\r\n# intro_video: screen plays the launch movie as the game makes it; skip refuses it at launch.\r\n'
@@ -563,6 +567,15 @@ def self_test():
             # The flat edition's README is folded into release\README.txt; the build
             # writes no second README.
             assert not os.path.exists(os.path.join(build, 'edvr-flat-README.txt'))
+            # No mode named: argparse refuses, so a call that forgot its flag cannot pass for a write.
+            nothing = io.StringIO()
+            try:
+                with contextlib.redirect_stderr(nothing):
+                    main(['--build', build])
+            except SystemExit as exc:
+                assert exc.code == 2 and 'one of --release-files' in nothing.getvalue()
+            else:
+                raise AssertionError('a call with no mode was accepted')
         finally:
             openxr_pe.native_graphics_exports, openxr_pe.native_exports = old_g, old_r
             fetch_openxr_loader.verify = old_v
@@ -583,6 +596,54 @@ def self_test():
             runtime_text = stream.read()
         assert 'OriginalFilename", "openvr_api.dll"' in runtime_text
         assert 'FILEVERSION 0,16,2,0' in runtime_text
+
+        # --launcher-rc: the launcher's own version, a manifest and an icon, and no payload.
+        lroot = os.path.join(scratch, 'lroot')
+        os.makedirs(os.path.join(lroot, 'src', 'installer'))
+        with open(os.path.join(lroot, 'src', 'installer', 'installer.manifest'), 'w') as stream:
+            stream.write('<assembly></assembly>')
+        header = os.path.join(lroot, 'src', 'installer', 'launcher_version.h')
+        with open(header, 'w') as stream:
+            stream.write('#pragma once\n#define EDUP_LAUNCHER_VERSION "0.1.0"\n')
+        lout = os.path.join(lroot, 'out')
+        # The licence the launcher carries is required: without it there is nothing to embed.
+        import contextlib, io
+        no_license = io.StringIO()
+        with contextlib.redirect_stdout(no_license):
+            assert main(['--launcher-rc', '--root', lroot, '--out', lout]) == 1
+        assert 'min_ed_launcher' in no_license.getvalue() and not os.path.exists(lout)
+        os.makedirs(os.path.join(lroot, 'third_party', 'min_ed_launcher'))
+        with open(os.path.join(lroot, 'third_party', 'min_ed_launcher', 'LICENSE'), 'w') as stream:
+            stream.write('MIT License\n')
+        assert main(['--launcher-rc', '--root', lroot, '--out', lout, '--dry-run']) == 0 and not os.path.exists(lout)
+        assert main(['--launcher-rc', '--root', lroot, '--out', lout, '--version', 'v9.9.9-5-gabc-dirty']) == 0
+        with open(os.path.join(lout, 'launcher.rc'), encoding='utf-8') as stream:
+            launcher_text = stream.read()
+        assert 'OriginalFilename", "ed-up-launcher.exe"' in launcher_text
+        assert 'FileDescription", "ED-UP Launcher"' in launcher_text
+        assert 'FileVersion", "0.1.0"' in launcher_text and 'ProductVersion", "0.1.0"' in launcher_text
+        assert 'FILEVERSION 0,1,0,0' in launcher_text
+        # No payload, only the licence as 120, and not the build's describe.
+        assert launcher_text.count('RCDATA') == 1 and '120 RCDATA "' in launcher_text and 'LICENSE"' in launcher_text
+        assert '9.9.9' not in launcher_text
+        assert '24 "' in launcher_text and 'ICON' in launcher_text
+        with open(os.path.join(lout, 'launcher.rc'), 'rb') as stream:
+            first = stream.read()
+        assert main(['--launcher-rc', '--root', lroot, '--out', lout, '--version', 'unknown']) == 0
+        with open(os.path.join(lout, 'launcher.rc'), 'rb') as stream:
+            assert stream.read() == first  # the build's version never reaches it
+        with open(header, 'w') as stream:
+            stream.write('#pragma once\n#define EDUP_LAUNCHER_VERSION "0.2.0"\n')
+        assert main(['--launcher-rc', '--root', lroot, '--out', lout]) == 0
+        with open(os.path.join(lout, 'launcher.rc'), encoding='utf-8') as stream:
+            assert 'FILEVERSION 0,2,0,0' in stream.read()  # it follows launcher_version.h
+        with open(header, 'w') as stream:
+            stream.write('#pragma once\n')
+        silent = io.StringIO()
+        with contextlib.redirect_stdout(silent):
+            assert main(['--launcher-rc', '--root', lroot, '--out', lout]) == 1
+        assert 'no launcher version string' in silent.getvalue()
+        print('expected-error: ' + silent.getvalue().strip().replace('gen_installer_rc: ERROR: ', '', 1))
 
         # --version-header: escaped define, rewritten only when the version changes.
         vh_out = os.path.join(root, 'vh_out')

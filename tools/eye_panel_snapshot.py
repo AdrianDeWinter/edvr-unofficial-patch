@@ -7,6 +7,8 @@ import json
 import struct
 from pathlib import Path
 
+import dump_io   # tools\dump_io.py: the eye dump's .bin files are NAME or NAME.z
+
 MAGIC = b"EDVRPNL1"
 CAP = 768 * 1024 * 1024
 VS, PS = 0x81216C77F90DEDD6, 0xA2965EC2931A39C8
@@ -98,7 +100,7 @@ def read_bytes(data):
 
 
 def read_snapshot(path):
-    return read_bytes(Path(path).read_bytes())
+    return read_bytes(dump_io.read_bytes(path))
 
 
 def descriptor(value, words, name, optional=False):

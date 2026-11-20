@@ -584,7 +584,7 @@ inline void contractTests(fpgpu::Fixture& fx) {
 }
 
 // ---- the shader source, one rule flipped at a time -----------------------------------------------------------------------------------
-inline void mutationChecks(fpgpu::Fixture& fx) {
+inline void mutationChecks(fpgpu::Fixture& fx, int slice, int slices) {
     static const fpgpu::Mutant mutants[] = {
         {"the correction's sign is flipped", "m.xy+=jitter.xy-jitter.zw;", "m.xy-=jitter.xy-jitter.zw;", nullptr},
         {"the current and previous phases are swapped", "jitter.xy-jitter.zw", "jitter.zw-jitter.xy", nullptr},
@@ -611,6 +611,7 @@ inline void mutationChecks(fpgpu::Fixture& fx) {
     };
     const std::string shipped = edvr::kFlatMonoShaderSource;
     int caught = 0, equivalent = 0;
+    size_t sliceMutants = 0;   // the mutants this slice ran
     auto runMutated = [&](const std::string& hlsl, int* failed, std::string* first) {
         if (!installPrep(fx, hlsl)) return false;
         *failed = 0; mutationFailures = failed; mutationFirst.clear();
@@ -618,6 +619,14 @@ inline void mutationChecks(fpgpu::Fixture& fx) {
         mutationFailures = nullptr; if (first) *first = mutationFirst;
         return true;
     };
+    {   // this slice's sources, compiled ahead on every core
+        std::vector<std::string> sources{shipped};
+        for (size_t index = 0; index < sizeof(mutants) / sizeof(mutants[0]); ++index) {
+            bool once = false;
+            if (fpgpu::mutantInSlice(index, slice, slices)) sources.push_back(fpgpu::replaceOnce(shipped, mutants[index].from, mutants[index].to, &once));
+        }
+        fpgpu::precompilePreps(sources);
+    }
     // The control: the same source, compiled here and run through the same seam, is the shipped prep and passes. Without it a failing mutant could
     // be the harness and not the rule.
     {
@@ -625,7 +634,13 @@ inline void mutationChecks(fpgpu::Fixture& fx) {
         const bool ran = runMutated(shipped, &failed, &first);
         check(ran && failed == 0, "first person phase mutations: control: the unmutated prep, compiled here and run through the test seam, passes the whole scenario");
     }
-    for (const fpgpu::Mutant& m : mutants) {
+    // The resolver logs "first-person motion inputs bound" once per process, so the log lines are counted from after the control has run (a slice
+    // alone in its process would otherwise log it itself): the mutated runs that follow add none.
+    const size_t linesAfterControl = firstPersonLines.size();
+    for (size_t index = 0; index < sizeof(mutants) / sizeof(mutants[0]); ++index) {
+        if (!fpgpu::mutantInSlice(index, slice, slices)) continue;
+        const fpgpu::Mutant& m = mutants[index];
+        ++sliceMutants;
         bool once = false;
         const std::string hlsl = fpgpu::replaceOnce(shipped, m.from, m.to, &once);
         char what[320];
@@ -648,22 +663,32 @@ inline void mutationChecks(fpgpu::Fixture& fx) {
         std::printf("flat mono resolve: first-person phase mutation \"%s\": %d checks fail; first: %s\n", m.name, failed, first.c_str());
     }
     restoreShippedPrep();
-    std::printf("flat mono resolve: first-person phase mutations: %d of %zu caught by the scenario, %d equivalent by construction\n",
-                caught, sizeof(mutants) / sizeof(mutants[0]) - size_t(equivalent), equivalent);
-    check(size_t(caught) + size_t(equivalent) == sizeof(mutants) / sizeof(mutants[0]),
+    std::printf("flat mono resolve: first-person phase mutations (slice %d of %d): %d of %zu caught by the scenario, %d equivalent by construction\n",
+                slice, slices, caught, sliceMutants - size_t(equivalent), equivalent);
+    check(size_t(caught) + size_t(equivalent) == sliceMutants,
           "first person phase mutations: every mutation was either caught or named equivalent");
+    check(firstPersonLines.size() == linesAfterControl, "first person phase: the mode adds no log line");
 }
 
 }  // namespace fpphase
 
 inline void firstPersonPhaseGpuTests(ID3D11Device* device, ID3D11DeviceContext* context) {
-    fpgpu::Fixture fx(device, context);
-    const size_t lines = firstPersonLines.size();
-    // 1. The scenario on the shipped prep, for real.
-    fpphase::phaseScenario(fx);
-    // 2. The contract around the prep: mode 0 is the old prep, the counters, the constants.
-    fpphase::contractTests(fx);
+    // Sharded (kUnits): the scenario and the contract are "firstPersonPhaseGpuTests" (the process must have run firstPersonGpuTests before it);
+    // the mutation loop is kPhaseSlices units of its own, each with its own fixture, free of that ordering.
+    constexpr int kPhaseSlices = 3;
+    if (shardRuns("firstPersonPhaseGpuTests")) {
+        fpgpu::Fixture fx(device, context);
+        const size_t lines = firstPersonLines.size();
+        // 1. The scenario on the shipped prep, for real.
+        fpphase::phaseScenario(fx);
+        // 2. The contract around the prep: mode 0 is the old prep, the counters, the constants.
+        fpphase::contractTests(fx);
+        check(firstPersonLines.size() == lines, "first person phase: the mode adds no log line");
+    }
     // 3. The same scenario against the prep with one rule flipped at a time: it must fail each time.
-    fpphase::mutationChecks(fx);
-    check(firstPersonLines.size() == lines, "first person phase: the mode adds no log line");
+    for (int slice = 1; slice <= kPhaseSlices; ++slice)
+        if (fpgpu::mutationSliceRuns("firstPersonPhase", slice, kPhaseSlices)) {
+            fpgpu::Fixture fx(device, context);
+            fpphase::mutationChecks(fx, slice, kPhaseSlices);
+        }
 }

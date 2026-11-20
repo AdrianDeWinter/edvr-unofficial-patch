@@ -28,10 +28,12 @@ inline FlatUiTarget flatUiTargetClass(bool isBackBuffer, uint32_t w, uint32_t h,
 
 // The shared family rule, asked both ways (an HDR eye target, then the post-tonemap one) with no learned surface:
 // ui_layer_math.h's shader-pair recognitions, not a second hash table.
-inline UiLayerFamily flatUiFamilyOf(uint64_t vs, uint64_t ps) {
+// legacyGlass: visual.cockpit_glass is legacy (the caller's one load of cockpitGlassLegacyLive); false names no canopy, so `odyssey` leaves the game's own canopy draw unnamed.
+inline UiLayerFamily flatUiFamilyOf(uint64_t vs, uint64_t ps, bool legacyGlass = false) {
     UiFamilyFacts f;
     f.vs = vs;
     f.ps = ps;
+    f.legacyGlass = legacyGlass;
     f.targetKind = 1;
     UiLayerFamily out = uiLayerFamilyFor(f);
     if (out != UiLayerFamily::kNone) return out;
@@ -44,15 +46,16 @@ inline UiLayerFamily flatUiFamilyOf(uint64_t vs, uint64_t ps) {
 // those maps is open AND the target is the HDR class: the same pairs with no map open, or on another target, are not the
 // family. The canvas is the always-on composite the 2026-09-23 VR session also saw (docs\ui-layer-2026-09-23.md), which is
 // why no VR classifier names it: this rule is flat's, and GuiFocus-gated.
-constexpr uint64_t kFlatUiMapCanvasVs = 0x12382D2EA45E9632ull;
-constexpr uint64_t kFlatUiMapCanvasPs = 0x855C469156AB997Full;
-constexpr uint64_t kFlatUiMapSpriteVs = 0xC31238331D8AC3D4ull;
-constexpr uint64_t kFlatUiMapSpritePsA = 0xBD0FEB3276C8B2D7ull;  // the 64x64 / 128x128 BC3 / BC7 icons (Galaxy, Orrery)
-constexpr uint64_t kFlatUiMapSpritePsB = 0x539A4858CE3A3477ull;  // the System Map's sprites (n=12)
+// The pair constants live in ui_layer_math.h (VR's layer names the same pairs with a map open); these are aliases.
+constexpr uint64_t kFlatUiMapCanvasVs = kUiVsMapCanvas;
+constexpr uint64_t kFlatUiMapCanvasPs = kUiPsMapCanvas;
+constexpr uint64_t kFlatUiMapSpriteVs = kUiVsMapSprite;
+constexpr uint64_t kFlatUiMapSpritePsA = kUiPsMapSpriteA;  // the 64x64 / 128x128 BC3 / BC7 icons (Galaxy, Orrery)
+constexpr uint64_t kFlatUiMapSpritePsB = kUiPsMapSpriteB;  // the System Map's sprites (n=12)
 // The Galaxy Map's icons since game build 334473 (2026-10-20): the same n=6 BC3 64x64 / 128x128 icons as A, 174 a frame, the same
 // VS, target and state (no depth test, stencil write only), with this PS. A was in no Galaxy Map census after the update and every
 // Galaxy session read `sprite asked=0` (census 8 of edvr_gfx_20261022_101031). The layer's own depth-stencil refusal still applies.
-constexpr uint64_t kFlatUiMapSpritePsC = 0x964221955A9E77E7ull;
+constexpr uint64_t kFlatUiMapSpritePsC = kUiPsMapSpriteC;
 inline UiLayerFamily flatUiMapFamilyOf(uint64_t vs, uint64_t ps, bool mapOpen, bool hdrTarget) {
     if (!mapOpen || !hdrTarget) return UiLayerFamily::kNone;
     if (vs == kFlatUiMapCanvasVs && ps == kFlatUiMapCanvasPs) return UiLayerFamily::kMapCanvas;
@@ -62,10 +65,15 @@ inline UiLayerFamily flatUiMapFamilyOf(uint64_t vs, uint64_t ps, bool mapOpen, b
 }
 
 // A draw's family in the flat layer: the map families first (only with a map open, on the HDR target), then the shared rule.
-inline UiLayerFamily flatUiFamilyFor(uint64_t vs, uint64_t ps, bool mapOpen, bool hdrTarget) {
+// The canopy under the legacy look joins only through `legacyGlass`, which the pair-facts memo (flat_pair_facts.h) leaves false: a pure memo of the hashes never names the canopy, so
+// the producer-run and offscreen shortcuts that read uiMayAsk see the canopy pair exactly as they did before the family existed. The adapter asks for the canopy through
+// FlatPairFacts::legacyGlassPair and cockpitGlassLegacyLive() (flat_runtime.cpp), and the rule above names it only with `legacyGlass`.
+inline UiLayerFamily flatUiFamilyFor(uint64_t vs, uint64_t ps, bool mapOpen, bool hdrTarget, bool legacyGlass = false) {
     const UiLayerFamily map = flatUiMapFamilyOf(vs, ps, mapOpen, hdrTarget);
-    return map != UiLayerFamily::kNone ? map : flatUiFamilyOf(vs, ps);
+    return map != UiLayerFamily::kNone ? map : flatUiFamilyOf(vs, ps, legacyGlass);
 }
+// The canopy pair, as a draw's key carries it (the game's hashes: the swap is at bind time and the shadow records what the game bound).
+inline bool flatUiLegacyGlassPair(uint64_t vs, uint64_t ps) { return vs == kUiVsLegacyGlass && ps == kUiPsLegacyGlass; }
 
 // THE MAP FRAMES' TONEMAP, FOR THE UI LAYER ONLY (census, 2026-10-10, every map census of log 091943's build 9cc6b8ba): VS
 // CFA91824129ECBBC with PS C89DD4ED362D743F reads the scene in SRV slot 0 and writes a 3840x2160 RGBA8 target, issued 3-5
@@ -220,6 +228,28 @@ inline const char* flatUiMapTemporalName(uint32_t focus) {
 // pairs, and no scanner draw has been identified as one of them (its log windows name no such pair).
 inline bool flatUiMapFamiliesOpen(bool known, uint32_t focus) { return known && (focus == 6 || focus == 7 || focus == 8); }
 
+// THE ON-FOOT MAPS (Steam log edvr_gfx_20261024_210032, census 2, 2026-10-24): on foot, Status.json carries no GuiFocus at all
+// (journal: "GuiFocus present=0" for the whole stretch), so the Galaxy Map and the System Map drew with temporal AA on and the map
+// families unasked, and ghosted. The ship's maps, which do report GuiFocus, did not. The maps' own GUI canvas composite is the
+// same pair on foot (80 draws in the two census frames), and no flight census without a map has it. While GuiFocus is absent, a
+// frame is a map frame when that pair was drawn into the HDR target within the last few frames. GuiFocus, when present, is
+// authoritative and this is never asked. The answer is the Galaxy Map's number: the three maps behave alike (temporal AA off, the
+// families open), and the canvas does not say which.
+constexpr uint32_t kFlatUiMapCanvasHoldFrames = 8;   // frames the answer outlasts the last canvas draw (a frame that skips it)
+constexpr uint32_t kFlatUiMapCanvasInferredFocus = 6;
+inline bool flatUiMapCanvasPair(uint64_t vs, uint64_t ps) { return vs == kFlatUiMapCanvasVs && ps == kFlatUiMapCanvasPs; }
+struct FlatUiMapCanvasLatch {
+    bool seen = false;
+    uint64_t lastFrame = 0;
+    uint64_t draws = 0;       // canvas draws noted, for the 5 s line
+    void note(uint64_t frame) { seen = true; lastFrame = frame; ++draws; }
+    // The frame about to run: a map frame by its canvas when the last canvas draw was this recent. A draw noted in the frame
+    // that just ended counts (distance 1); one noted for a later frame than asked about never does.
+    bool open(uint64_t nextFrame) const {
+        return seen && nextFrame > lastFrame && nextFrame - lastFrame <= kFlatUiMapCanvasHoldFrames;
+    }
+};
+
 // The map line's temporal-AA counts (2026-10-10), as pure state so the rig pins them. A frame is `temporalOff` when the
 // mechanism is armed at the frame boundary; `jitterZeroed` when that frame would otherwise have jittered. A frame whose copy
 // ran the spatial recovery counts `spatial`, one whose copy refused it counts `spatialRefused`, and one that armed the
@@ -258,10 +288,17 @@ struct FlatUiMapAaTally {
 // The families the flat layer asks the shared decision for: the cockpit HUD families the 2026-10-09 09:36 census found
 // drawn into the scene's HDR target before the resolve, jittered (the holo panels, the flight HUD, the target sprite),
 // and since 2026-10-10 the System Map's two (the map canvas and the map sprites, flatUiMapFamilyOf: asked only while a map
-// is open). The scene lines the VR layer also takes for density (the orbit lines, the supercruise bars, the space dust)
-// are not asked: they are scene geometry, upscaled with the world in flat as they always were.
+// is open). Since 2026-11-03 the supercruise bars, the supercruise space dust and the normal-space dust are asked too: they are
+// scene geometry that the flat anti-aliasing's temporal history smears (a user report: the bars' 1 px lines and the dust's streaks
+// move about their own width a frame, so successive frames never overlap and the history has nothing to accumulate), and a layer
+// drawn after the upscale has no history to smear. The VR layer takes them for density as well (the bars, for their width); in
+// flat the take is for the history alone, so the density rule is the looser uiLayerSceneLinesFit (a layer at least as large as
+// the render). Their flat recipes (flat_projection_recipes.h) give the adapter the camera rows it reads the jitter from. The
+// ORBIT LINES are taken too, since 2026-11-03, for the history alone like the bars and the dust. They are drawn with the game's own
+// shader at the game's width (the width patch, orbital_width.h, stays VR's), so a line is as wide on screen as it was when the
+// upscaler drew it with the world.
 //
-// The ship's weapons fire and the shield strike's refraction ride fix.sharp_weapons, in flat as in VR (2026-10-16): the weapons fire (1F17, 939D, 5C1D) is
+// The ship's weapons fire and the shield strike's refraction ride the weapons half of the layer, in flat as in VR (2026-10-16): the weapons fire (1F17, 939D, 5C1D) is
 // additive light, so a pair left in the scene for want of camera rows only stays as smeared as it was, and the layer sums with it; the refraction (820E) is one
 // draw. Neither is asked unless its own half of the shared layer is live (flatUiFamilyLive), so fix.ui_quality off leaves the weapons taken and the HUD alone.
 //
@@ -272,12 +309,24 @@ struct FlatUiMapAaTally {
 // refused each frame. A family is taken whole or not at all, so the holograms stay in the game's frame, as before the port.
 inline bool flatUiLayerTakesFamily(UiLayerFamily f) {
     return f == UiLayerFamily::kHolo || f == UiLayerFamily::kFlightHud || f == UiLayerFamily::kSprite ||
-           f == UiLayerFamily::kMapCanvas || f == UiLayerFamily::kMapSprite || f == UiLayerFamily::kWeaponsFire || f == UiLayerFamily::kShieldRipple;
+           f == UiLayerFamily::kMapCanvas || f == UiLayerFamily::kMapSprite || f == UiLayerFamily::kWeaponsFire || f == UiLayerFamily::kShieldRipple ||
+           f == UiLayerFamily::kSupercruiseBars || f == UiLayerFamily::kSpaceDust || f == UiLayerFamily::kNormalSpaceDust ||
+           f == UiLayerFamily::kOrbitLines || f == UiLayerFamily::kLegacyGlass;   // the glass is named only under the legacy look (flatUiFamilyFor's legacyGlass)
 }
-// Whether the half of the shared layer that governs the family is live: the weapons fire (fix.sharp_weapons, a flat AA mode on) for kWeaponsFire, the ripple's
-// own half for kShieldRipple, fix.ui_quality's for every other. The three are independent, as in ui_layer_math.h's uiLayerFamilyEnabled.
+// The four scene families (2026-11-03) the adapter keeps per-family reasons for beside the maps': 0 the supercruise bars, 1 the supercruise
+// space dust, 2 the normal-space dust, 3 the orbit lines. Their window slot (flat_ui_layer.cpp Window::sceneRefused / sceneDeclined, kFlatUiSceneSlots
+// of them), or -1 for any other family.
+inline constexpr int kFlatUiSceneSlots = 4;
+inline int flatUiSceneSlotOf(UiLayerFamily f) {
+    return f == UiLayerFamily::kSupercruiseBars ? 0 : f == UiLayerFamily::kSpaceDust ? 1 : f == UiLayerFamily::kNormalSpaceDust ? 2
+         : f == UiLayerFamily::kOrbitLines ? 3 : -1;
+}
+// Whether the half of the shared layer that governs the family is live: the weapons half (a flat AA mode on) for the families drawn into the weapons layer
+// (ui_layer_math.h uiLayerFamilyUsesWeaponsLayer, the one list: the weapons fire and the VR scope's gunsight mark), the ripple's own half for kShieldRipple, fix.ui_quality's for
+// every other. The three are independent, as in ui_layer_math.h's uiLayerFamilyEnabled. Flat never takes the gunsight mark: it is not in flatUiLayerTakesFamily, and the scope lens
+// that arms it is VR's (the flat tick publishes none), so the answer for it here is only the rule kept in line.
 inline bool flatUiFamilyLive(UiLayerFamily f, bool qualityLive, bool weaponsLive, bool rippleLive) {
-    return f == UiLayerFamily::kWeaponsFire ? weaponsLive : f == UiLayerFamily::kShieldRipple ? rippleLive : qualityLive;
+    return uiLayerFamilyUsesWeaponsLayer(f) ? weaponsLive : f == UiLayerFamily::kShieldRipple ? rippleLive : qualityLive;
 }
 
 // The adapter's own refusals, before the shared decision is asked. Each leaves the draw in the game's frame as stock.

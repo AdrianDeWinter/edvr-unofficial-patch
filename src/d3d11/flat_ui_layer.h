@@ -67,6 +67,14 @@ void flatUiLayerEnd(ID3D11DeviceContext* ctx);
 // Begin's answer for the decided draw (the last kDecided from flatUiLayerDecide, whose family it is), into the window's
 // per-family counts (taken, or refused at issue). Called only for a decided draw.
 void flatUiLayerNoteIssue(uint64_t vs, uint64_t ps, bool taken);
+// The supercruise bars' private strip pass (supercruise_bars.h), in the flat issue path as vscreen.cpp has it in VR's (2026-11-03). Whether the last
+// kDecided draw is the bars; its Prepare reads the game's viewport and so runs BEFORE flatUiLayerBegin (which remaps it to the layer's); its Begin binds
+// the strip shader inside the layer's bracket and runs only after a true flatUiLayerBegin; its End puts the game's geometry stage, constant slot and
+// rasterizer state back BEFORE flatUiLayerEnd. Each runs inside the flat runtime's internal scope, as flatUiLayerBegin does.
+bool flatUiLayerDecidedBars();
+void flatUiLayerBarsPrepare(ID3D11DeviceContext* ctx);
+bool flatUiLayerBarsBegin(ID3D11DeviceContext* ctx, uint32_t vertices);   // false: the draw goes into the layer as the game's plain lines
+void flatUiLayerBarsEnd(ID3D11DeviceContext* ctx);
 // A decided draw that writes depth or stencil: its colourless re-issue into the game's buffer (uiLayerWriteBackBegin/End).
 bool flatUiLayerWriteBackBegin(ID3D11DeviceContext* ctx);
 void flatUiLayerWriteBackEnd(ID3D11DeviceContext* ctx);
@@ -120,7 +128,7 @@ void flatUiLayerNoteCopy(uint64_t frame, const void* source, const void* output)
 bool flatUiLayerToneAdmit(ID3D11DeviceContext* ctx, uint64_t frame, uint32_t renderW, uint32_t renderH, char kind,
                           uint32_t count, uint32_t instances, uint32_t startInstance);
 bool flatUiLayerToneBegin(ID3D11DeviceContext* ctx);
-// Between the issues of one tone bracket (fix.sharp_weapons): the weapons' steps are more issues of the same draw. True: the next step's source and blend are bound, issue the draw again.
+// Between the issues of one tone bracket (the weapons fire): the weapons' steps are more issues of the same draw. True: the next step's source and blend are bound, issue the draw again.
 bool flatUiLayerToneNext(ID3D11DeviceContext* ctx);
 void flatUiLayerToneEnd(ID3D11DeviceContext* ctx);
 

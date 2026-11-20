@@ -18,6 +18,7 @@
 
 #include "../../src/common/temporal_math.h"
 #include "../../src/common/temporal_mode.h"
+#include "../../src/d3d11/dittosr_math.h"
 #include "../../src/d3d11/temporal_history.h"
 
 namespace {
@@ -91,7 +92,7 @@ int main() {
     for (float scale : {0.0f, -1.0f, NAN, INFINITY}) {
         if (strcmp(edvr::temporalNvidiaLabel(scale), "DLSS / DLAA")) { ++g_fails; puts("FAIL: unknown scale label"); }
     }
-    for (const char* mode : {"on", "ON", "dlaa", "DLAA", "dlss", "DLSS", "fsr", "fsr4", "FSR4", "xess", "XeSS"}) {
+    for (const char* mode : {"on", "ON", "dlaa", "DLAA", "dlss", "DLSS", "fsr", "fsr4", "FSR4", "dittosr", "DittoSR", "xess", "XeSS"}) {
         if (!edvr::temporalModeEnabled(mode)) { ++g_fails; printf("FAIL: bundled temporal mode %s\n", mode); }
     }
     for (const char* mode : {"off", "OFF", "", "bogus"}) {
@@ -103,6 +104,64 @@ int main() {
     }
     check(edvr::temporalModeEnabledFor("XeSS", true) && edvr::temporalModeEnabledFor("XeSS", false),
           "XeSS producers arm in flat and VR, including mixed-case ini value");
+    // The performance menu's Anti-aliasing list. DLSS and DLAA are one NVIDIA choice; FSR 4.1 is AMD's. The rest stay.
+    {
+        using edvr::TemporalGpu;
+        const char* shared[] = {"off", "on", "fsr", "dittosr", "xess", "DittoSR", "XeSS"};
+        const auto offers = [&](TemporalGpu gpu, const char* value) { return edvr::temporalAaChoiceOffered(value, gpu); };
+        bool nvidiaOk = offers(TemporalGpu::Nvidia, "dlss") && offers(TemporalGpu::Nvidia, "DLAA") &&
+                        !offers(TemporalGpu::Nvidia, "fsr4");
+        bool amdOk = offers(TemporalGpu::Amd, "fsr4") && offers(TemporalGpu::Amd, "FSR4") &&
+                     !offers(TemporalGpu::Amd, "dlss") && !offers(TemporalGpu::Amd, "dlaa");
+        bool restOk = true;
+        for (TemporalGpu gpu : {TemporalGpu::Nvidia, TemporalGpu::Amd, TemporalGpu::Other, TemporalGpu::Unknown})
+            for (const char* value : shared) restOk = restOk && offers(gpu, value);
+        bool hiddenOk = !offers(TemporalGpu::Other, "dlss") && !offers(TemporalGpu::Other, "fsr4") &&
+                        !offers(TemporalGpu::Unknown, "dlss") && !offers(TemporalGpu::Unknown, "dlaa") &&
+                        !offers(TemporalGpu::Unknown, "fsr4");
+        check(nvidiaOk && amdOk && restOk && hiddenOk, "DLSS/DLAA are listed on NVIDIA, FSR 4.1 on AMD, and the other modes on every GPU");
+        check(edvr::temporalGpuFromAdapter(0x10DE, 0x2B85, L"NVIDIA GeForce RTX 5090", false) == TemporalGpu::Nvidia &&
+              edvr::temporalGpuFromAdapter(0x1002, 0x744C, L"", false) == TemporalGpu::Amd &&
+              edvr::temporalGpuFromAdapter(0x8086, 0x7D55, L"Intel Arc", false) == TemporalGpu::Other &&
+              edvr::temporalGpuFromAdapter(0, 0, L"", false) == TemporalGpu::Unknown,
+              "a PCI vendor id names NVIDIA, AMD, anything else, or no adapter");
+        check(edvr::temporalGpuFromAdapter(0x10DE, 0x1586, L"NVIDIA GeForce", true) == TemporalGpu::Amd &&
+              edvr::temporalGpuFromAdapter(0x10DE, 0x744C, L"AMD Radeon 8060S", false) == TemporalGpu::Amd &&
+              edvr::temporalGpuFromAdapter(0x10DE, 0x2B85, L"NVIDIA GeForce RTX 5090", true) == TemporalGpu::Nvidia,
+              "a spoofed NVIDIA vendor stays AMD when the name says Radeon, or under Wine for the 8060S's device id");
+    }
+    // The VR map gate: the Galaxy Map, System Map and Orrery (GuiFocus 6, 7, 8) and nothing else; an unknown focus (on foot, a menu) is no map.
+    check(edvr::temporalMapOpen(false, true, 6) && edvr::temporalMapOpen(false, true, 7) && edvr::temporalMapOpen(false, true, 8),
+          "the Galaxy Map, the System Map and the Orrery are maps");
+    check(!edvr::temporalMapOpen(false, true, 0) && !edvr::temporalMapOpen(false, true, 5) && !edvr::temporalMapOpen(false, true, 9) &&
+          !edvr::temporalMapOpen(false, true, 10) && !edvr::temporalMapOpen(false, true, 4294967295u),
+          "no focus, station services, the Full System Scanner and anything past the orrery are not maps");
+    check(!edvr::temporalMapOpen(false, false, 6) && !edvr::temporalMapOpen(false, false, 0),
+          "a focus the journal cannot state is never a map, whatever the stale value");
+    check(edvr::temporalMapOpen(true, false, 0) && edvr::temporalMapOpen(true, true, 0) && edvr::temporalMapOpen(true, true, 9) && !edvr::temporalMapOpen(false, false, 0),
+          "a map view named by the camera source opens the gate whatever the journal says (or does not)");
+    // The System Map's close view keeps its history through a move, on the camera's rows; everything else resets on one, and a map with no view named never keeps.
+    check(edvr::temporalMapKeeps(true, false, false) && edvr::temporalMapKeeps(true, false, true) && edvr::temporalMapKeeps(true, true, true) && !edvr::temporalMapKeeps(true, true, false) &&
+              !edvr::temporalMapKeeps(false, false, true) && !edvr::temporalMapKeeps(false, true, true),
+          "a named map keeps at rest, and through a move only where the rows move its scene");
+    // The map camera moving (docs\galaxy-map-vr-2026-11-03.md, Fix 2): rest keeps, one change resets twice, the first look resets, no threshold.
+    {
+        edvr::TemporalMapMotion m;
+        check(edvr::temporalMapMoved(m, 7), "the first look at a map has no history to keep");
+        check(edvr::temporalMapMoved(m, 7), "the look after the first still resets (the publisher can be one publish behind a frame's draws)");
+        check(!edvr::temporalMapMoved(m, 7) && !edvr::temporalMapMoved(m, 7) && !edvr::temporalMapMoved(m, 7), "a map at rest keeps frame after frame");
+        check(edvr::temporalMapMoved(m, 8), "one publish that changed the pose resets");
+        check(edvr::temporalMapMoved(m, 8), "and the look after it resets as well (a frame's draws can be one publish behind)");
+        check(!edvr::temporalMapMoved(m, 8), "then it keeps again");
+        check(edvr::temporalMapMoved(m, 9) && edvr::temporalMapMoved(m, 10) && edvr::temporalMapMoved(m, 11) && edvr::temporalMapMoved(m, 11) && !edvr::temporalMapMoved(m, 11),
+              "a map that keeps moving resets every look, and the one after its last change");
+        m = edvr::TemporalMapMotion{};
+        check(edvr::temporalMapMoved(m, 11), "cleared state (the map closed) makes the next look a first look");
+        edvr::TemporalMapMotion other;
+        check(edvr::temporalMapMoved(other, 11) && edvr::temporalMapMoved(m, 11) && !edvr::temporalMapMoved(m, 11) && edvr::temporalMapMoved(other, 11),
+              "each eye has its own state: the second eye's first look does not spend the first eye's reset");
+    }
+    check(edvr::temporalMapStillBits().load() == 0u, "no word from the pass is no kept frame");
     check(edvr::temporalEngineFor("XeSS") == edvr::TemporalEngine::Intel &&
           edvr::temporalExternalEngine("xess") && edvr::temporalEngineFor("dlss") == edvr::TemporalEngine::Nvidia,
           "xess maps to the Intel engine, an external one, in VR");
@@ -120,6 +179,52 @@ int main() {
           edvr::temporalEngineForProfile("fsr4", false) == edvr::TemporalEngine::AmdFsr4 &&
           edvr::temporalExternalEngineFor("fsr4", true) && edvr::temporalExternalEngineFor("fsr4", false),
           "fsr4 reads as the same external engine in flat and in VR, as fsr does");
+    check(edvr::temporalEngineFor("dittosr") == edvr::TemporalEngine::Ditto &&
+              edvr::temporalEngineFor("DittoSR") == edvr::TemporalEngine::Ditto &&
+              edvr::temporalExternalEngine("dittosr") &&
+              edvr::temporalEngineForProfile("dittosr", true) == edvr::TemporalEngine::Ditto &&
+              edvr::temporalEngineForProfile("dittosr", false) == edvr::TemporalEngine::Ditto,
+          "dittosr is its own external engine in flat and in VR");
+    {
+        edvr::DittoEval up;
+        up.rw = 1920; up.rh = 1080; up.ow = 3840; up.oh = 2160; up.jitX = 0.25f; up.jitY = -0.25f; up.reset = true;
+        const edvr::DittoCb two = edvr::dittoFillConstants(up);
+        check(two.ratio == 2.0f && two.width == 0.8f && two.mvScale[0] == 1.0f / 1920.0f && two.mvScale[1] == 1.0f / 1080.0f,
+              "DittoSR at 2x scales render-pixel motion into uv and uses the 2x reconstruction width");
+        auto near = [](float a, float b) { return std::fabs(a - b) < 1.0e-5f; };
+        check(two.reset == 1.0f && two.depthInverted == 1.0f && two.history10 == 0.0f && near(two.antiShimmer, 0.6f) &&
+                  near(two.historySharpen, 0.03f) && near(two.shareFar, 0.2f) && near(two.envCap, 0.5f) && two.fusedSharpen == 1.0f &&
+                  two.frameWeight == 2.0f && two.sharpness == 0.6f && two.sharpenMode == 0.0f,
+              "DittoSR 0.5.0 defaults at 2x, with RGBA16F history and fused CAS sharpening");
+        edvr::DittoEval three = up;
+        three.ow = 5760; three.oh = 3240; three.frameWeight = 9.0f; three.sharpness = -1.0f; three.sharpenMode = 1; three.hdr = true;
+        three.hasReactive = true; three.autoExposure = true;
+        const edvr::DittoCb ultra = edvr::dittoFillConstants(three);
+        check(ultra.ratio == 3.0f && near(ultra.antiShimmer, 0.45f) && near(ultra.historySharpen, 0.05f) && near(ultra.shareFar, 0.1f) &&
+                  near(ultra.envCap, 0.25f) && ultra.fusedSharpen == 0.0f && ultra.sharpenMode == 1.0f && ultra.frameWeight == 4.0f &&
+                  ultra.sharpness == 0.0f && ultra.hdr == 1.0f && ultra.hasReactive == 1.0f && ultra.autoReactive == 0.0f &&
+                  ultra.autoExposure == 1.0f && ultra.hasExposure == 1.0f && near(ultra.antiShimmer, 0.45f),
+              "DittoSR at 3x drops fused sharpening, clamps the tunables, and lets a game reactive mask replace its own");
+        edvr::DittoEval held = up;
+        held.antiShimmer = 0.4f;
+        check(near(edvr::dittoFillConstants(held).antiShimmer, 0.4f), "a set anti-shimmer strength is used as given");
+        held.antiShimmer = 0.0f;
+        check(edvr::dittoFillConstants(held).antiShimmer == 0.0f, "anti-shimmer off stays off where Auto would be 0.6");
+        check(edvr::dittoAntiShimmerFromText("auto") == -1.0f && edvr::dittoAntiShimmerFromText("") == -1.0f &&
+                  edvr::dittoAntiShimmerFromText("AUTO") == -1.0f && edvr::dittoAntiShimmerFromText("nope") == -1.0f &&
+                  edvr::dittoAntiShimmerFromText("off") == 0.0f && edvr::dittoAntiShimmerFromText("OFF") == 0.0f &&
+                  edvr::dittoAntiShimmerFromText("0.4") == 0.4f && edvr::dittoAntiShimmerFromText("2") == 0.9f &&
+                  edvr::dittoAntiShimmerFromText("-1") == 0.0f && edvr::dittoAntiShimmerFromText("0.4x") == -1.0f,
+              "anti-shimmer text: auto and junk stay on the ratio curve, off is 0, a number is clamped to 0..0.9");
+        check(edvr::dittoSharpenModeFromText("cas") == 0 && edvr::dittoSharpenModeFromText("CAS") == 0 &&
+                  edvr::dittoSharpenModeFromText(nullptr) == 0 && edvr::dittoSharpenModeFromText("rcas") == 1 &&
+                  edvr::dittoSharpenModeFromText("RCAS") == 1,
+              "the filter text is RCAS or CAS");
+        check(edvr::dittoSharpenModeFromText("rcasx") == 0, "an unrecognized filter uses CAS");
+        check(edvr::dittoAntiShimmerFromText("inf") == -1.0f &&
+                  edvr::dittoAntiShimmerFromText("nan") == -1.0f,
+              "non-finite anti-shimmer values use Auto");
+    }
     check(!edvr::temporalModeEnabledFor("off", true) && !edvr::temporalModeEnabledFor("off", false) &&
           !edvr::temporalModeEnabledFor("bogus", true) && !edvr::temporalModeEnabledFor("bogus", false),
           "off and unknown modes stay inactive in both profiles");

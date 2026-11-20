@@ -8,6 +8,8 @@ from pathlib import Path
 import struct
 import tempfile
 
+import dump_io   # tools\dump_io.py: the eye dump's .bin files are NAME or NAME.z
+
 VS, PS = 0x2D78DC3FD2C0C543, 0x99C21CEB7A699821
 IMAGE_CAP, SMALL_CAP = 48 * 1024**2, 8 * 1024**2
 BPP = {2: 16, 10: 8, 16: 8, 26: 4, 27: 4, 28: 4, 29: 4, 39: 4,
@@ -48,8 +50,8 @@ def refusal(m, role):
 
 def read(path):
     path = Path(path)
-    require(path.stat().st_size <= IMAGE_CAP + SMALL_CAP + 1024**2, 'Snapshot exceeds file cap')
-    f = io.BytesIO(path.read_bytes())
+    require(dump_io.getsize(path) <= IMAGE_CAP + SMALL_CAP + 1024**2, 'Snapshot exceeds file cap')   # the decoded size
+    f = io.BytesIO(dump_io.read_bytes(path))
 
     def take(n):
         b = f.read(n)

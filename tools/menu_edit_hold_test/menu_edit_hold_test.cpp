@@ -604,7 +604,7 @@ void caseGlue(const std::string& root) {
     check(occurrences(menu, "applyResolutionChange(defIndex, v, next, true);") == 1, "H11.p2 ...and so does the per-headset render width row");
     check(occurrences(menu, "if (!held) g_held.flush(EditFlush::Other);") == 1, "H11.p3 any change that is not a held step writes what is held first");
     check(occurrences(menu, "if (held) g_held.hold(job, job.def, s.page, s.tickMs);\n    else enqueueWrite(job);") == 1, "H11.p4 a held step goes to the coalescer, every other change to the writer at once");
-    check(occurrences(menu, "tickHeldEdit(now);") == 2, "H11.p5 the held edit's tick runs in both menu ticks (flat and VR)");
+    check(occurrences(menu, "tickHeldEdit(now);") == 1, "H11.p5 the held edit's tick runs in the menu tick, which serves both profiles (flat and VR)");
     check(occurrences(menu, "g_held.tick(now, stepKeyHeld(), highlightedSettingDef(), g_s.page);") == 1, "H11.p6 ...from the key state of the last poll, the highlighted row and the page");
     check(occurrences(menu, "g_held.flush(EditFlush::Close);") == 1, "H11.p7 closing the menu writes what is held");
     check(occurrences(menu, "g_held.flush(EditFlush::Shutdown);   // before the writer stops, which writes what was queued before it quit\n    stopWriter();") == 1,

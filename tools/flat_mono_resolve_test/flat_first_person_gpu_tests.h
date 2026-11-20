@@ -396,21 +396,82 @@ inline std::string replaceOnce(const std::string& text, const char* from, const 
     out.replace(at, std::strlen(from), to);
     return out;
 }
-inline bool compilePrep(const std::string& hlsl, std::vector<unsigned char>& bytes) {
+// The prep compile is the mutation suites' whole cost: one optimised compile of the engine-motion core plus the prep source takes about
+// 3 s, and a shard ran 25 of them in 77 s of its 82 s (measured 2026-11-13). D3DCompile is deterministic, so a source compiles once per
+// process (the controls compile the shipped source in every slice and suite), and precompilePreps compiles a loop's sources on every
+// core before the loop runs them one by one. The bytes are the same either way; only when they are made changes.
+struct PrepCompileLedger {
+    double seconds = 0; unsigned count = 0, reused = 0;
+    ~PrepCompileLedger() { if (count) std::printf("flat mono resolve: prep compiles: %u in %.1f s (wall), %u reused\n", count, seconds, reused); }
+};
+inline PrepCompileLedger g_prepCompiles;
+inline std::mutex g_prepLock;
+inline std::map<std::string, std::vector<unsigned char>> g_prepBytes;   // by prep source (without the core); failures are not kept
+inline bool compilePrepNow(const std::string& hlsl, std::vector<unsigned char>& bytes, bool report) {
     const std::string full = std::string(edvr::kEngineMotionCoreHlsl) + hlsl;
     ComPtr<ID3DBlob> code, errors;
     const HRESULT hr = D3DCompile(full.c_str(), full.size(), "flat_mono_prep_cs", nullptr, nullptr, "prep", "cs_5_0", 0, 0,
                                   code.GetAddressOf(), errors.GetAddressOf());
     if (FAILED(hr) || !code) {
-        std::printf("info: prep compile failed: %s\n", errors ? static_cast<const char*>(errors->GetBufferPointer()) : "no message");
+        if (report) std::printf("info: prep compile failed: %s\n", errors ? static_cast<const char*>(errors->GetBufferPointer()) : "no message");
         return false;
     }
     const auto* p = static_cast<const unsigned char*>(code->GetBufferPointer());
     bytes.assign(p, p + code->GetBufferSize());
     return true;
 }
+inline void precompilePreps(const std::vector<std::string>& sources) {
+    std::vector<const std::string*> todo;
+    {
+        std::lock_guard<std::mutex> hold(g_prepLock);
+        for (const auto& s : sources)
+            if (!g_prepBytes.count(s) &&
+                std::none_of(todo.begin(), todo.end(), [&](const std::string* t) { return *t == s; }))
+                todo.push_back(&s);
+    }
+    if (todo.empty()) return;
+    const auto start = std::chrono::steady_clock::now();
+    std::atomic<size_t> next{0};
+    auto work = [&] {
+        for (size_t i; (i = next++) < todo.size();) {
+            std::vector<unsigned char> bytes;
+            if (!compilePrepNow(*todo[i], bytes, false)) continue;   // compilePrep compiles it again and reports
+            std::lock_guard<std::mutex> hold(g_prepLock);
+            g_prepBytes.emplace(*todo[i], std::move(bytes));
+        }
+    };
+    const unsigned threads = (std::max)(1u, (std::min)(std::thread::hardware_concurrency(), unsigned(todo.size())));
+    std::vector<std::thread> pool;
+    for (unsigned t = 1; t < threads; ++t) pool.emplace_back(work);
+    work();
+    for (auto& t : pool) t.join();
+    g_prepCompiles.seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    g_prepCompiles.count += unsigned(todo.size());
+}
+inline bool compilePrep(const std::string& hlsl, std::vector<unsigned char>& bytes) {
+    {
+        std::lock_guard<std::mutex> hold(g_prepLock);
+        const auto found = g_prepBytes.find(hlsl);
+        if (found != g_prepBytes.end()) { bytes = found->second; ++g_prepCompiles.reused; return true; }
+    }
+    const auto start = std::chrono::steady_clock::now();
+    const bool ok = compilePrepNow(hlsl, bytes, true);
+    g_prepCompiles.seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    ++g_prepCompiles.count;
+    if (ok) { std::lock_guard<std::mutex> hold(g_prepLock); g_prepBytes.emplace(hlsl, bytes); }
+    return ok;
+}
 
-inline void mutationChecks(Fixture& fx) {
+// A mutation loop split into slices that are shard units (kUnits in flat_mono_resolve_test.cpp): mutant i belongs to slice i % slices + 1,
+// and the unit is named "<suite>:mutants<slice>of<slices>". Each slice runs the control first, then only its own mutants.
+inline bool mutationSliceRuns(const char* suite, int slice, int slices) {
+    char unit[64];
+    std::snprintf(unit, sizeof(unit), "%s:mutants%dof%d", suite, slice, slices);
+    return shardRuns(unit);
+}
+inline bool mutantInSlice(size_t index, int slice, int slices) { return int(index % size_t(slices)) == slice - 1; }
+
+inline void mutationChecks(Fixture& fx, int slice, int slices) {
     static const Mutant mutants[] = {
         {"the stencil bit is 0x08, not 0x10", "FirstPersonStencil.Load(int3(q,0)).y&16)!=0", "FirstPersonStencil.Load(int3(q,0)).y&8)!=0", nullptr},
         {"any stencil value attaches", "FirstPersonStencil.Load(int3(q,0)).y&16)!=0", "FirstPersonStencil.Load(int3(q,0)).y&255)!=0", nullptr},
@@ -454,6 +515,7 @@ inline void mutationChecks(Fixture& fx) {
     };
     const std::string shipped = edvr::kFlatMonoShaderSource;
     int caught = 0, equivalent = 0;
+    size_t sliceMutants = 0;   // the mutants this slice ran
     auto runMutated = [&](const std::string& hlsl, int* failed, std::string* first) {
         std::vector<unsigned char> bytes;
         if (!compilePrep(hlsl, bytes)) return false;
@@ -467,6 +529,14 @@ inline void mutationChecks(Fixture& fx) {
         mutationFailures = nullptr; if (first) *first = mutationFirst;
         return true;
     };
+    {   // this slice's sources, compiled ahead on every core
+        std::vector<std::string> sources{shipped};
+        for (size_t index = 0; index < sizeof(mutants) / sizeof(mutants[0]); ++index) {
+            bool once = false;
+            if (mutantInSlice(index, slice, slices)) sources.push_back(replaceOnce(shipped, mutants[index].from, mutants[index].to, &once));
+        }
+        precompilePreps(sources);
+    }
     // The control: the same source, compiled here and run through the same seam, is the shipped prep and passes. Without it a failing
     // mutant could be the harness and not the rule.
     {
@@ -481,7 +551,10 @@ inline void mutationChecks(Fixture& fx) {
         const bool ran = runMutated(shipped, &failed, &first);
         check(ran && failed == 0, "first person mutations: control: the unmutated prep, compiled here and run through the test seam, passes the whole scenario");
     }
-    for (const Mutant& m : mutants) {
+    for (size_t index = 0; index < sizeof(mutants) / sizeof(mutants[0]); ++index) {
+        if (!mutantInSlice(index, slice, slices)) continue;
+        const Mutant& m = mutants[index];
+        ++sliceMutants;
         bool once = false;
         const std::string hlsl = replaceOnce(shipped, m.from, m.to, &once);
         char what[256];
@@ -505,9 +578,9 @@ inline void mutationChecks(Fixture& fx) {
     }
     edvr::flatMonoResolveTestPrepBytecode(nullptr, 0);
     edvr::flatMonoResolveReset();
-    std::printf("flat mono resolve: first-person mutations: %d of %zu caught by the scenario, %d equivalent by construction\n",
-                caught, sizeof(mutants) / sizeof(mutants[0]) - size_t(equivalent), equivalent);
-    check(size_t(caught) + size_t(equivalent) == sizeof(mutants) / sizeof(mutants[0]),
+    std::printf("flat mono resolve: first-person mutations (slice %d of %d): %d of %zu caught by the scenario, %d equivalent by construction\n",
+                slice, slices, caught, sliceMutants - size_t(equivalent), equivalent);
+    check(size_t(caught) + size_t(equivalent) == sliceMutants,
           "first person mutations: every mutation was either caught or named equivalent");
 }
 
@@ -642,6 +715,10 @@ inline void contractTests(Fixture& fx) {
 }  // namespace fpgpu
 
 inline void firstPersonGpuTests(ID3D11Device* device, ID3D11DeviceContext* context) {
+    // Sharded (kUnits): the scenario and the contract are "firstPersonGpuTests"; the mutation loop is kFirstPersonSlices units, each with its own
+    // fixture (the mutation runs install their own prep and reset the resolver, so they share nothing with the contract part).
+    constexpr int kFirstPersonSlices = 4;
+    if (shardRuns("firstPersonGpuTests")) {
     fpgpu::Fixture fx(device, context);
     // 1. The scenario on the shipped prep, for real. Every frame of it that carried a valid pair is counted, and only those.
     const auto before = edvr::flatMonoResolveStats();
@@ -653,6 +730,11 @@ inline void firstPersonGpuTests(ID3D11Device* device, ID3D11DeviceContext* conte
           "first person: every frame of the scenario that carried a valid pair is counted as one, and none is refused or partial");
     // 2. The contract around the prep: absent, partial and refused pairs, the log.
     fpgpu::contractTests(fx);
+    }
     // 3. The same scenario against the prep with one rule flipped at a time: it must fail each time.
-    fpgpu::mutationChecks(fx);
+    for (int slice = 1; slice <= kFirstPersonSlices; ++slice)
+        if (fpgpu::mutationSliceRuns("firstPerson", slice, kFirstPersonSlices)) {
+            fpgpu::Fixture fx(device, context);
+            fpgpu::mutationChecks(fx, slice, kFirstPersonSlices);
+        }
 }

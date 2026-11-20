@@ -44,16 +44,22 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 #include "../common/hotkey.h"
 #include "fss_res.h"
 #include "journal_watch.h"
+#include "native_on_foot.h"  // nativeOnFootFrameBoundary (the render-mode setter hook, flight F0)
+#include "flat_stationary_camera_capture.h"  // mapCameraFrame (the VR map camera's publisher)
+#include "galaxy_map_pointer.h"                // mapPointerFrame (the VR Galaxy Map's hover and panel depth)
 #include "optimized_station.h"   // fix.optimized_stations: the sealed-hangar station (install, the frame tick, the store and the sun skip)
+#include "concourse_pane.h"   // TEMPORARY (docs\concourse-cull-2026-11-05.md): the concourse panes' frame tick
 #include "store_hook.h"
 #include "flat_world_witness.h"
-#include "explorer_cam.h"   // explorerCamFrameBoundary (the frame tick) and explorerCamShutdown (the avatar dither-fade global goes back at an unload)
+#include "onfoot_recorder.h"   // F213: onfootrec::mark, the on-foot mark key's job
+#include "native_on_foot_hooks.h"   // nativeOnFootHooksFrameBoundary (the frame tick) and nativeOnFootHooksShutdown (the avatar dither-fade global goes back at an unload)
 #include "ui_surfaces.h"   // the glyph atlas and sizing chain instruments
 #include "ui_panel_scale.h" // uiPanelScaleShutdown: the panel operands put back
 #include "ui_sizing_math.h" // uiDisplaySizeFromXml: DisplaySettings.xml, for the panel budget
 #include "vr_ssaa_gate.h"   // the step-1 Supersampling gate instruments (log only)
 #include "vr_ssaa_hold.h"   // the Supersampling hold's shutdown (the loader slot goes back)
 #include "vr_display_observer.h"  // the game window's state (read only) and its handle
+#include "desktop_window.h"  // visual.desktop_window: the eye image drawn into Elite's desktop window at its Present
 #include "mode_watch.h"     // modeWatchFrameBoundary: the 3D mode watch's commit, at the frame boundary
 
 #include <intrin.h>         // _ReturnAddress: the caller of each observed call
@@ -90,11 +96,13 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 #include "perf_monitor.h"
 #include "gpu_pass_profile.h"   // TEMPORARY hotkey.gpu_pass_profile: the GPU pass profiler's request
 #include "blend_probe.h"       // TEMPORARY hotkey.blend_probe: the blend probe's install and request
-#include "stall_watch.h"     // stallWatchBeat: the stall sampler's heartbeat, once per owned Present
+#include "stall_watch.h"
+#include "remlok_fix.h"   // F27: remlokRememberVisorPs     // stallWatchBeat: the stall sampler's heartbeat, once per owned Present
 #include "vram_tick.h"       // vramWatchTick: the graphics memory watch, once per owned Present
 #include "mem_tick.h"        // memWatchTick: the process memory watch, once per owned Present (one atomic read; its thread does the sampling)
 #include "vertex_resync_hook.h"   // vertexResyncInstall at startup, vertexResyncPoll once a second: the f3d vertex-buffer cache repair (both profiles)
 #include "light_grid_cache_hook.h"   // lightGridCacheInstall at startup, lightGridCachePoll once a second, lightGridCacheNoteFrame per Present: the fragment-culling grid cache (both profiles)
+#include "vehicle_rig.h"   // vehicleRigInstall at startup, vehicleRigPoll once a second (the vehicle frame's rigs, issue 186)
 #include "terrain_cull_cover_hook.h"   // terrainCullCoverInstall at startup, terrainCullCoverPoll once a second: the terrain cull frustum cover (VR)
 #include "cross_profile_cost.h"   // the flat hooks' and the creation captures' cost while VR is active (log only)
 #include "frame_ticks.h"     // g_frameTicks: what the Present hook's own work cost, by name
@@ -104,6 +112,8 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 #include "transition_flash_eye_base.h"
 #include "vscreen_res.h"
 #include "celestial_motion.h"
+#include "desktop_vsync.h"  // in VR Elite's Present goes out with sync interval 0: the headset paces the frame, not the monitor
+#include "xess_fg.h"        // XeSS Frame Generation: the flat swap chain bridged to a D3D12 proxy on Elite's window
 
 namespace edvr {
 namespace {
@@ -184,6 +194,75 @@ typedef HRESULT(STDMETHODCALLTYPE* PFN_CreateSwapChain)(IDXGIFactory*, IUnknown*
 typedef HRESULT(STDMETHODCALLTYPE* PFN_CreateSwapChainForHwnd)(
     IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*,
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**);
+
+// The XeSS-FG bridge's window queries (xess_fg.h): Elite's swap chain lives on a hidden window and is never presented,
+// so whatever it asks about the window, its fullscreen state, its output or its presents is answered by the swap
+// chain that does present on the real window. Hooked only on a bridged swap chain; every other swap chain sharing
+// the table is forwarded untouched. GetDesc1 is left alone: it names no window and no fullscreen state.
+constexpr size_t kSwapSetFullscreenState = 10, kSwapGetFullscreenState = 11, kSwapGetDesc = 12,
+                 kSwapResizeTarget = 14, kSwapGetContainingOutput = 15, kSwapGetFrameStatistics = 16,
+                 kSwapGetLastPresentCount = 17, kSwap1GetFullscreenDesc = 19, kSwap1GetHwnd = 20;
+typedef HRESULT(STDMETHODCALLTYPE* PFN_SetFullscreenState)(IDXGISwapChain*, BOOL, IDXGIOutput*);
+typedef HRESULT(STDMETHODCALLTYPE* PFN_GetFullscreenState)(IDXGISwapChain*, BOOL*, IDXGIOutput**);
+typedef HRESULT(STDMETHODCALLTYPE* PFN_GetDesc)(IDXGISwapChain*, DXGI_SWAP_CHAIN_DESC*);
+typedef HRESULT(STDMETHODCALLTYPE* PFN_ResizeTarget)(IDXGISwapChain*, const DXGI_MODE_DESC*);
+typedef HRESULT(STDMETHODCALLTYPE* PFN_GetContainingOutput)(IDXGISwapChain*, IDXGIOutput**);
+typedef HRESULT(STDMETHODCALLTYPE* PFN_GetFrameStatistics)(IDXGISwapChain*, DXGI_FRAME_STATISTICS*);
+typedef HRESULT(STDMETHODCALLTYPE* PFN_GetLastPresentCount)(IDXGISwapChain*, UINT*);
+typedef HRESULT(STDMETHODCALLTYPE* PFN_GetFullscreenDesc)(IDXGISwapChain1*, DXGI_SWAP_CHAIN_FULLSCREEN_DESC*);
+typedef HRESULT(STDMETHODCALLTYPE* PFN_GetHwnd)(IDXGISwapChain1*, HWND*);
+PFN_SetFullscreenState g_realSetFullscreenState = nullptr;
+PFN_GetFullscreenState g_realGetFullscreenState = nullptr;
+PFN_GetDesc g_realGetDesc = nullptr;
+PFN_ResizeTarget g_realResizeTarget = nullptr;
+PFN_GetContainingOutput g_realGetContainingOutput = nullptr;
+PFN_GetFrameStatistics g_realGetFrameStatistics = nullptr;
+PFN_GetLastPresentCount g_realGetLastPresentCount = nullptr;
+PFN_GetFullscreenDesc g_realGetFullscreenDesc = nullptr;
+PFN_GetHwnd g_realGetHwnd = nullptr;
+
+HRESULT STDMETHODCALLTYPE hookedFgSetFullscreenState(IDXGISwapChain* self, BOOL fullscreen, IDXGIOutput* target) {
+    return xessFgOwns(self) ? xessFgSetFullscreenState(fullscreen, target) : g_realSetFullscreenState(self, fullscreen, target);
+}
+HRESULT STDMETHODCALLTYPE hookedFgGetFullscreenState(IDXGISwapChain* self, BOOL* fullscreen, IDXGIOutput** target) {
+    return xessFgOwns(self) ? xessFgGetFullscreenState(fullscreen, target) : g_realGetFullscreenState(self, fullscreen, target);
+}
+HRESULT STDMETHODCALLTYPE hookedFgGetDesc(IDXGISwapChain* self, DXGI_SWAP_CHAIN_DESC* desc) {
+    const HRESULT hr = g_realGetDesc(self, desc);
+    if (SUCCEEDED(hr) && desc && xessFgOwns(self)) {
+        desc->OutputWindow = xessFgWindow();
+        BOOL fullscreen = FALSE;
+        if (SUCCEEDED(xessFgGetFullscreenState(&fullscreen, nullptr))) desc->Windowed = !fullscreen;
+    }
+    return hr;
+}
+HRESULT STDMETHODCALLTYPE hookedFgResizeTarget(IDXGISwapChain* self, const DXGI_MODE_DESC* mode) {
+    return xessFgOwns(self) ? xessFgResizeTarget(mode) : g_realResizeTarget(self, mode);
+}
+HRESULT STDMETHODCALLTYPE hookedFgGetContainingOutput(IDXGISwapChain* self, IDXGIOutput** output) {
+    return xessFgOwns(self) ? xessFgGetContainingOutput(output) : g_realGetContainingOutput(self, output);
+}
+HRESULT STDMETHODCALLTYPE hookedFgGetFrameStatistics(IDXGISwapChain* self, DXGI_FRAME_STATISTICS* stats) {
+    return xessFgOwns(self) ? xessFgGetFrameStatistics(stats) : g_realGetFrameStatistics(self, stats);
+}
+HRESULT STDMETHODCALLTYPE hookedFgGetLastPresentCount(IDXGISwapChain* self, UINT* count) {
+    return xessFgOwns(self) ? xessFgGetLastPresentCount(count) : g_realGetLastPresentCount(self, count);
+}
+HRESULT STDMETHODCALLTYPE hookedFgGetFullscreenDesc(IDXGISwapChain1* self, DXGI_SWAP_CHAIN_FULLSCREEN_DESC* desc) {
+    const HRESULT hr = g_realGetFullscreenDesc(self, desc);
+    if (SUCCEEDED(hr) && desc && xessFgOwns(static_cast<IDXGISwapChain*>(self))) {
+        BOOL fullscreen = FALSE;
+        if (SUCCEEDED(xessFgGetFullscreenState(&fullscreen, nullptr))) desc->Windowed = !fullscreen;
+    }
+    return hr;
+}
+HRESULT STDMETHODCALLTYPE hookedFgGetHwnd(IDXGISwapChain1* self, HWND* window) {
+    if (xessFgOwns(static_cast<IDXGISwapChain*>(self)) && window) {
+        *window = xessFgWindow();
+        return S_OK;
+    }
+    return g_realGetHwnd(self, window);
+}
 
 struct State {
     VTableHook deviceHook;
@@ -280,10 +359,12 @@ struct State {
     // The eye dump key: both eyes as the headset receives them, to
     // edvr_logs\eyes as BMP (temporalPassArmEyeDump). Unbound by default.
     Hotkey eyesKey;
+    // The on-foot flight recorder's mark (F213, hotkey.on_foot_mark): a line in the recording and in the log at the moment of a press. Bound by default (F9).
+    Hotkey onFootMarkKey;
     // What each of those three was last bound from (the ini text), so a reload
     // that changes one re-resolves it and one that does not says nothing: the
     // settings menu's Hotkeys page writes them while the game runs.
-    std::string dumpKeyText, censusKeyText, eyesKeyText, gpuPassKeyText, blendProbeKeyText;
+    std::string dumpKeyText, censusKeyText, eyesKeyText, gpuPassKeyText, blendProbeKeyText, onFootMarkKeyText;
     bool        diagnosticKeysBound = false;
     // The player's own FSS enter/quit keys, adopted from their Elite
     // bindings; they give the FSS mode latch its frame-exact edges.
@@ -770,14 +851,16 @@ HRESULT STDMETHODCALLTYPE hookedCreatePS(ID3D11Device* self, const void* bytecod
         captureFlatShader('p', hash, bytecode, len);
         { cross_profile::CaptureScope capture(!runtimeFlatProfile()); rememberFlatProbeShader('p', hash, bytecode, len); }
         registerShaderHash(*out, hash);
+        concoursePaneNoteShader(hash, bytecode, static_cast<size_t>(len));
         engineVelocityRememberPs(static_cast<ID3D11PixelShader*>(*out),hash,bytecode,static_cast<size_t>(len),linkage!=nullptr);
+        remlokRememberVisorPs(hash, bytecode, static_cast<size_t>(len));   // F27: the visor shader's bytes, for the per-eye variants
         if (runtimeScopeIncludesFlat()) {
             cross_profile::CaptureScope capture(!runtimeFlatProfile());
             FlatOverlayLayer::rememberPixelShader(static_cast<ID3D11PixelShader*>(*out),
                 bytecode,static_cast<size_t>(len),linkage!=nullptr);
         }
         uiLayerRememberHoloPs(static_cast<ID3D11PixelShader*>(*out),hash,bytecode,static_cast<size_t>(len),linkage!=nullptr);
-        if(hash==EyeDrawSnapshot::kVscreenPs || hash==EyeDrawSnapshot::kSpritePs || hash==EyeDrawSnapshot::kUnknownAPs || hash==EyeDrawSnapshot::kUnknownBPs || EyeDrawSnapshot::solarPixel(hash)) EyeDrawSnapshot::rememberShader(hash,bytecode,static_cast<size_t>(len));
+        if(hash==EyeDrawSnapshot::kVscreenPs || hash==EyeDrawSnapshot::kSpritePs || hash==EyeDrawSnapshot::kUnknownAPs || hash==EyeDrawSnapshot::kUnknownBPs || hash==EyeDrawSnapshot::kF77OpticPs || hash==EyeDrawSnapshot::kLateMenuPs || hash==EyeDrawSnapshot::kLateMenuBasePs || EyeDrawSnapshot::solarPixel(hash)) EyeDrawSnapshot::rememberShader(hash,bytecode,static_cast<size_t>(len));
         EyeTonemapSnapshot::rememberShader(hash,bytecode,static_cast<size_t>(len));
         EyePanelSnapshot::rememberShader(hash,bytecode,static_cast<size_t>(len),static_cast<ID3D11PixelShader*>(*out));
         GuiDrawSnapshot::rememberShader(hash,bytecode,static_cast<size_t>(len));
@@ -1172,27 +1255,37 @@ void flatResizeNote(const char* api, UINT count, UINT width, UINT height, DXGI_F
 }
 
 HRESULT STDMETHODCALLTYPE hookedFlatResizeBuffers(IDXGISwapChain* self, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) {
+    // The XeSS-FG bridge (xess_fg.h): the hidden swap chain sizes from the real window, and the proxy follows it, in
+    // either profile.
+    const bool bridged = xessFgOwns(self);
+    if (bridged) xessFgBeforeResize(&width, &height);
     if (!runtimeFlatProfile()) {
         cross_profile::enterSite(cross_profile::Site::FlatResizeBuffers, true).stop();   // inactive while VR runs (cross_profile_cost.h)
-        return g_state->realResizeBuffers(self, count, width, height, format, flags);
+        const HRESULT hr = g_state->realResizeBuffers(self, count, width, height, format, flags);
+        return bridged ? xessFgAfterResize(hr) : hr;
     }
     const bool ours = self == g_state->swapChain;
     long refs = -1;
     if (ours) { menuFlatResize(); flatRuntimeResize(); refs = flatResizeBackBufferRefs(self); }
-    const HRESULT hr = g_state->realResizeBuffers(self, count, width, height, format, flags);
+    HRESULT hr = g_state->realResizeBuffers(self, count, width, height, format, flags);
+    if (bridged) hr = xessFgAfterResize(hr);
     if (ours) flatResizeNote("ResizeBuffers", count, width, height, format, flags, hr, refs);
     return hr;
 }
 
 HRESULT STDMETHODCALLTYPE hookedFlatResizeBuffers1(IDXGISwapChain3* self, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags, const UINT* masks, IUnknown* const* queues) {
+    const bool bridged = xessFgOwns(static_cast<IDXGISwapChain*>(self));
+    if (bridged) xessFgBeforeResize(&width, &height);
     if (!runtimeFlatProfile()) {
         cross_profile::enterSite(cross_profile::Site::FlatResizeBuffers, true).stop();   // inactive while VR runs (cross_profile_cost.h)
-        return g_state->realResizeBuffers1(self, count, width, height, format, flags, masks, queues);
+        const HRESULT hr = g_state->realResizeBuffers1(self, count, width, height, format, flags, masks, queues);
+        return bridged ? xessFgAfterResize(hr) : hr;
     }
     const bool ours = static_cast<IDXGISwapChain*>(self) == g_state->swapChain;
     long refs = -1;
     if (ours) { menuFlatResize(); flatRuntimeResize(); refs = flatResizeBackBufferRefs(self); }
-    const HRESULT hr = g_state->realResizeBuffers1(self, count, width, height, format, flags, masks, queues);
+    HRESULT hr = g_state->realResizeBuffers1(self, count, width, height, format, flags, masks, queues);
+    if (bridged) hr = xessFgAfterResize(hr);
     if (ours) flatResizeNote("ResizeBuffers1", count, width, height, format, flags, hr, refs);
     return hr;
 }
@@ -1232,6 +1325,7 @@ EDVR_BOUNDARY_TICK(tkSchedulerProbe, "scheduler_probe");
 EDVR_BOUNDARY_TICK(tkVtableWatch, "vtable_watch");
 EDVR_BOUNDARY_TICK(tkVrRuntime, "vr_runtime");
 EDVR_BOUNDARY_TICK(tkOptimizedStation, "optimized_station");
+EDVR_BOUNDARY_TICK(tkConcoursePane, "concourse_pane");   // TEMPORARY: the concourse panes (concourse_pane.h); one key poll and a few atomic stores a frame
 EDVR_BOUNDARY_TICK(tkLightGridCache, "light_grid_cache");
 EDVR_BOUNDARY_TICK(tkHotkeys, "hotkeys");
 EDVR_BOUNDARY_TICK(tkAaCompare, "aa_compare");   // hotkey.compare_aa: the AA comparison toggle (aa_compare.h); one key poll when idle
@@ -1239,10 +1333,12 @@ EDVR_BOUNDARY_TICK(tkIntroSkipFlat, "intro_skip_flat");   // the flat profile's 
 EDVR_BOUNDARY_TICK(tkEliteBinds, "elite_binds");
 EDVR_BOUNDARY_TICK(tkJournalWatch, "journal_watch");
 EDVR_BOUNDARY_TICK(tkCelestialStatus, "celestial_status");
-// Explorer Cam (explorer_cam.h): reads its keys, installs its hooks, publishes the settings to the hook thread and writes its log lines. It lived in vScreen's
-// boundary until 2026-10-08, which only exists when vScreen installs a State: with fix.black_void off, fix.panel_distance 1, no flash observation,
-// advanced.app_gpu_timing off and advanced.panel_hooks_always off it installs transport-only and F5 did nothing. Here it runs every owned Present.
-EDVR_BOUNDARY_TICK(tkExplorerCam, "explorer_cam");
+// Native on-foot VR, flight F0 (native_on_foot.h): installs the render-mode setter's hook once in VR, reads fix.native_on_foot and writes the setter's log lines.
+// Its avatar hooks (native_on_foot_hooks.h) run first in the same tick. Not vScreen's boundary, which only exists when vScreen installs a State (with
+// fix.black_void off, fix.panel_distance 1, no flash observation, advanced.app_gpu_timing off and advanced.panel_hooks_always off it installs
+// transport-only): here it runs every owned Present.
+EDVR_BOUNDARY_TICK(tkNativeOnFoot, "native_on_foot");
+EDVR_BOUNDARY_TICK(tkMapCamera, "map_camera");
 EDVR_BOUNDARY_TICK(tkFssModeLatch, "fss_mode_latch");
 EDVR_BOUNDARY_TICK(tkMenu, "menu");
 // A plugin's ownership of input is a lease spent here, once per Present, so it ends even when no eye is rendered (input_gate.h).
@@ -1343,7 +1439,7 @@ void tickHotkeys() {
         if (route == FlatDrawCaptureRoute::Passive) {
             flatTemporalArmPassive(g_state->device);
         } else if (route == FlatDrawCaptureRoute::General || route == FlatDrawCaptureRoute::Full) {
-            flatTemporalArm(route == FlatDrawCaptureRoute::Full);
+            flatTemporalArm(g_state->device, route == FlatDrawCaptureRoute::Full);
             // The flat profile's draw census, both tiers: every draw, offscreen included, for two frames (draw_census.h).
             drawCensusFlatRequest();
         } else if (route == FlatDrawCaptureRoute::Vr) {
@@ -1359,6 +1455,8 @@ void tickHotkeys() {
     if (g_state->blendProbeKey.pressed()) blendProbeRequest("hotkey.blend_probe");   // TEMPORARY (blend_probe.h)
     // The eye dump key: the next treated frame's two eyes to disk.
     if (g_state->eyesKey.pressed()) temporalPassArmEyeDump();
+    // F213: the on-foot recording's mark. Nothing else happens on this thread for it.
+    if (g_state->onFootMarkKey.pressed()) onfootrec::mark();
     if (g_state->missedCensusNotes < kMissedDumpNotes &&
         g_state->censusKey.takeMissedWhileUnfocused()) {
         ++g_state->missedCensusNotes;
@@ -1617,6 +1715,7 @@ void presentFrameBoundary() {
     tkVrRuntime.run([] { vrRuntimeTick(); });
     // The optimized station's tick: the setting, the seal and release rules, the held cell in the pad's frame, the 30 s summary.
     tkOptimizedStation.run([] { optimizedStationFrame(static_cast<uint32_t>(g_state->frameCounter)); });
+    tkConcoursePane.run([] { concoursePaneTick(g_state->device, static_cast<uint32_t>(g_state->frameCounter), GetTickCount64()); });
     tkLightGridCache.run([] { lightGridCacheNoteFrame(g_state->frameCounter); });   // the frame count for the grid cache's 30 s line
     tkHotkeys.run(tickHotkeys);
     tkIntroSkipFlat.run([] { introSkipTickFlat(); });
@@ -1627,9 +1726,15 @@ void presentFrameBoundary() {
     // on-foot sessions beginning (Disembark).
     tkJournalWatch.run([] { journalWatchTick(); seatContextPublish(); hmdResetPressFrame(); });
     tkCelestialStatus.run(tickCelestialStatus);
-    // Explorer Cam (Phase 1), after the journal's tick it reads (on foot, GuiFocus, gameplay). Unconditional: an EMPTY hotkey.explorer_cam is read here
-    // every frame too, so binding it live arms the feature on the next one.
-    tkExplorerCam.run([] { explorerCamFrameBoundary(static_cast<uint32_t>(g_state->frameCounter)); });
+    // The VR map camera (flat_stationary_camera_capture.h): its watch on the renderer hook, installed and read here once a frame, on the render thread that installs the other hooks. Flat only stands it down.
+    // The Galaxy Map's pointer (galaxy_map_pointer.h) follows in the same tick: it reads the open state mapCameraFrame just decided.
+    tkMapCamera.run([] { mapCameraFrame(); mapPointerFrame(); });
+    // Native on foot, after the journal's tick it reads (on foot, gameplay). The avatar hooks' boundary runs first: it acts on the want and the body
+    // the previous frame's nativeOnFootFrameBoundary published (native_on_foot_hooks.h), which keeps their one-frame order.
+    tkNativeOnFoot.run([] {
+        nativeOnFootHooksFrameBoundary();
+        nativeOnFootFrameBoundary(static_cast<uint32_t>(g_state->frameCounter));
+    });
     tkFssModeLatch.run(tickFssModeLatch);
     // The settings menu (docs/settings-menu.md): its summon key, its
     // navigation keys and head-aim, its fade, the keyboard gate that
@@ -1703,6 +1808,8 @@ void presentFrameBoundary() {
             // The vertex-buffer resync's 60 s count and its ten-minute heartbeat: it needs no vScreen State, so it is asked here, after the reload, in both profiles.
             vertexResyncPoll(stampMs());
             lightGridCachePoll(stampMs());
+            // The vehicle rig's 30 s health line (issue 186).
+            vehicleRigPoll(stampMs());
             // The terrain cull cover's ten-minute heartbeat (written while its hook is live, zero counts included).
             terrainCullCoverPoll(stampMs());
             // The three diagnostic keys follow the file too (the menu's Hotkeys page).
@@ -1806,6 +1913,10 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
     // reads below, which time the call alone. The gate is one relaxed load.
     const bool routeCrumbs = hdrCrumbPresentSide();
     if (routeCrumbs) hdrCrumbWrite("present", "begin");
+    // visual.desktop_window (desktop_window.h): while the eye image is wanted in Elite's desktop window, the window is shaped and the eye is drawn into the buffer
+    // about to be presented, Elite's own draws into it having been skipped this frame. The setting off (game, the default) and the flat profile: a few loads and a return.
+    // Before the GPU work span closes below, so its draw is inside the frame's span and its tick is named.
+    if (dev && desktopWindowPresent(self, dev, flags, runtimeFlatProfile())) frameTick("desktop_window");
     // The frame's GPU work span ends here (2026-10-14, gpu_census.cpp): EDVR's door work is done and the real Present is next, on
     // the game's own context. Before this call, so the pair is still inside the census scope that the boundary after the Present closes.
     if (dev && gpuCensusFrameWorkOpen()) {
@@ -1816,8 +1927,21 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
             workContext->Release();
         }
     }
+    // The desktop window's vertical sync (desktop_vsync.h): in VR the headset paces the frame, so Elite's Present never waits for the monitor; the flat
+    // profile keeps Elite's own. The trace below keeps the value Elite asked for.
+    const bool flatProfileNow = runtimeFlatProfile();
+    const UINT presentSync = desktopVsyncPresented(flatProfileNow, syncInterval);
+    static DesktopVsyncNote vsyncNote;   // the render thread's
+    if (vsyncNote.changed(flatProfileNow, syncInterval)) {
+        char line[200];
+        formatDesktopVsync(line, sizeof(line), flatProfileNow, syncInterval);
+        Log::get().note("%s", line);
+    }
+    if (flatProfileNow && !(flags & DXGI_PRESENT_TEST)) concoursePaneBakePresent(self);   // TEMPORARY (the concourse bake): keeps the back buffer, or puts the kept image back. One load otherwise
     const int64_t presentT0 = qpcNow();
-    const HRESULT hr = g_state->realPresent(self, syncInterval, flags);
+    // A bridged swap chain (xess_fg.h) lives on a hidden window and is never presented: its frame goes to the XeSS-FG proxy.
+    const HRESULT hr = xessFgOwns(self) ? xessFgPresent(self, presentSync, flags)
+                                        : g_state->realPresent(self, presentSync, flags);
     const int64_t presentT1 = qpcNow();
     // The stall sampler's heartbeat (stall_watch.h): the render thread has just presented. A relaxed store and a
     // compare; the first call starts the watchdog thread, or says that advanced.freeze_location turned it off.
@@ -1910,12 +2034,56 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
         GetCurrentThreadId(), syncInterval, flags, static_cast<int32_t>(hr)};
     nativeTimingNotePresent(dev, traceToken, trace);
     frameTick("timing_note");
+    // XeLL's frame start for the bridged swap chain: its latency sleep, the last thing before Elite starts the next frame.
+    if (xessFgOwns(self)) xessFgFrameStart();
     return hr;
+}
+
+// XeSS Frame Generation (xess_fg.h) around one of the game factory's swap chain creations. When the bridge is wanted,
+// Elite's swap chain is made on EDVR's hidden window by `create(hidden, width, height)` and the bridge's own swap
+// chain takes the real one; true then, with *out and *result set. Any failure on the way leaves nothing made and
+// returns false: the caller creates the swap chain on the real window exactly as it always did. A creation for a
+// window the bridge already owns (Elite making another swap chain) first lets go of it, so that one can own it.
+template <typename SwapChain, typename Create>
+bool createBridged(void* factory, IUnknown* device, HWND realWindow, UINT width, UINT height, UINT format,
+                   bool fullscreen, SwapChain** out, HRESULT* result, Create create) {
+    if (factory != g_state->factory || !out || !realWindow) return false;
+    if (xessFgBridged() && realWindow == xessFgWindow()) xessFgRelease();
+    if (g_state->swapChain || xessFgBridged()) return false;
+    HWND hidden = xessFgBeginCreate(device, realWindow, &width, &height, format);
+    if (!hidden) return false;
+    const HRESULT made = create(hidden, width, height);
+    if (SUCCEEDED(made) && *out && xessFgFinishCreate(*out, realWindow)) {
+        hookSwapChain(*out);
+        if (g_state->swapChain == *out) {
+            // The hidden swap chain was made windowed; a fullscreen creation goes fullscreen on the real window now.
+            if (fullscreen) xessFgSetFullscreenState(TRUE, nullptr);
+            *result = made;
+            return true;
+        }
+        // Unhooked, nothing would ever reach the real window: undo the bridge.
+        Log::get().note("xess-fg: the bridged swap chain could not be hooked; made the usual way instead");
+    }
+    if (SUCCEEDED(made) && *out) { (*out)->Release(); *out = nullptr; }
+    xessFgAbandon();
+    return false;
 }
 
 HRESULT STDMETHODCALLTYPE hookedCreateSwapChain(IDXGIFactory* self, IUnknown* device,
                                                 DXGI_SWAP_CHAIN_DESC* desc,
                                                 IDXGISwapChain** out) {
+    HRESULT bridged = E_FAIL;
+    if (desc && createBridged(self, device, desc->OutputWindow, desc->BufferDesc.Width, desc->BufferDesc.Height,
+                              desc->BufferDesc.Format, !desc->Windowed, out, &bridged,
+                              [&](HWND hidden, UINT width, UINT height) {
+                                  DXGI_SWAP_CHAIN_DESC hiddenDesc = *desc;
+                                  hiddenDesc.OutputWindow = hidden;
+                                  hiddenDesc.Windowed = TRUE;
+                                  hiddenDesc.BufferDesc.Width = width;
+                                  hiddenDesc.BufferDesc.Height = height;
+                                  return g_state->realCreateSwapChain(self, device, &hiddenDesc, out);
+                              }))
+        return bridged;
     const HRESULT hr = g_state->realCreateSwapChain(self, device, desc, out);
     // Only swapchains from the factory we attached to are the game's. A
     // wrapper mod makes its own through a factory sharing this vtable, and
@@ -1931,6 +2099,17 @@ HRESULT STDMETHODCALLTYPE hookedCreateSwapChainForHwnd(
     IDXGIFactory2* self, IUnknown* device, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fs, IDXGIOutput* restrictTo,
     IDXGISwapChain1** out) {
+    HRESULT bridged = E_FAIL;
+    if (desc && createBridged(static_cast<void*>(self), device, hwnd, desc->Width, desc->Height, desc->Format,
+                              fs && !fs->Windowed, out, &bridged,
+                              [&](HWND hidden, UINT width, UINT height) {
+                                  DXGI_SWAP_CHAIN_DESC1 hiddenDesc = *desc;
+                                  hiddenDesc.Width = width;
+                                  hiddenDesc.Height = height;
+                                  return g_state->realCreateSwapChainForHwnd(self, device, hidden, &hiddenDesc, nullptr,
+                                                                             restrictTo, out);
+                              }))
+        return bridged;
     const HRESULT hr =
         g_state->realCreateSwapChainForHwnd(self, device, hwnd, desc, fs, restrictTo, out);
     if (SUCCEEDED(hr) && out && *out &&
@@ -2045,7 +2224,7 @@ std::string hotkeyDescribe(const Hotkey& k) {
 
 // The three diagnostic keys, bound at launch and RE-bound whenever the ini says
 // something else: the settings menu's Hotkeys page writes these while the game
-// runs, so (like hotkey.menu and hotkey.explorer_cam) they re-resolve live. A
+// runs, so (like hotkey.menu) they re-resolve live. A
 // reload that changed none of them says nothing.
 //
 // The bind is SAID, because it failed silently once: dump_draws was set to
@@ -2101,6 +2280,12 @@ void configureDiagnosticHotkeys() {
          "hotkey: dump_eyes is set but bound nothing, so the eye dump cannot be armed this session "
          "(the settings menu's row still can).",
          " Both eyes go to edvr_logs\\eyes as BMP on each press, one hitch each."},
+        // F213: the on-foot flight recorder's mark. Bound by default (F9 is in none of Elite's stock control schemes); a press only counts, writes one mark record when the
+        // recorder is running and says so in the log either way. It does not touch the eye dump, which stalls a frame.
+        {&s.onFootMarkKey, &s.onFootMarkKeyText, Config::get().getString("hotkey.on_foot_mark", "F9"),
+         "hotkey.on_foot_mark", "on-foot mark",
+         "hotkey: on_foot_mark is set but bound nothing, so a press cannot mark the on-foot recording this session.",
+         " A press writes a mark into the on-foot recording (log.on_foot_detail) and a line to the log."},
     };
     for (Item& it : items) {
         if (!first && *it.applied == it.value) continue;
@@ -2221,11 +2406,14 @@ void seatContextPublish() {
         c.published = true;
         c.keep = true;     // the word's "active" bit; always set by this build
         c.gameplay = journalGameplay();
-        c.seatedKnown = journalSeatedKnown();
-        c.seated = c.seatedKnown && journalSeated();
+        // F115: the cockpit's own panels drew with Status.json still on foot (native_on_foot.h): the commander has boarded, a second before Status.json says
+        // so; seated now, so the stored seat goes back at the same edge as every on-foot camera change (a sample that says both is read as seated).
+        const bool boardedEarly = nativeOnFootBoardedEarly();
+        c.seatedKnown = journalSeatedKnown() || boardedEarly;
+        c.seated = (c.seatedKnown && journalSeated()) || boardedEarly;
         c.onFootKnown = journalOnFootKnown();
         c.onFoot = c.onFootKnown && journalOnFoot();
-        c.cameraOpen = explorerCamSessionActive();
+        c.cameraOpen = false;   // the word keeps the bit (seat_context.h); nothing in this build opens a camera session since Explorer Cam's removal
         c.seatKind = journalSeatKind();
         c.transitions = (journalEmbarks() + journalDisembarks() + journalLoadGames() + journalUndocks()) & kSeatTransitionMask;
         word = encodeSeatContext(c);
@@ -2619,7 +2807,7 @@ void hookDevice(ID3D11Device* device) {
                 "hooks are installed on the device or on its context, this session "
                 "or any other: the black void, the panel distance, the exposure "
                 "share, the transition flash fix, the anti-aliasing passes, "
-                "the shader replacements and Explorer Cam are "
+                "the shader replacements and native on foot are "
                 "all inert, and the game renders as it would without this half "
                 "installed. What is still hooked is the swapchain's Present and "
                 "the DXGI factory, which carry the frame boundary the openvr half "
@@ -2649,7 +2837,7 @@ void hookDevice(ID3D11Device* device) {
             "ended in the first few seconds looks the same from here. EVERY fix in "
             "d3d11.dll is off for THIS session only, on every device, and it will try again next "
             "launch: the black void, the panel distance, the exposure share, the "
-            "transition flash fix and Explorer Cam. The game "
+            "transition flash fix and native on foot. The game "
             "renders without EDVR's graphics treatments; the EDVR menu is unavailable "
             "until the next launch. The OpenVR half has its own recovery guard.\n"
             "  If this keeps happening, the hooks really are crashing and the log is "
@@ -2965,6 +3153,8 @@ void hookDevice(ID3D11Device* device) {
             // The light grid cache (light_grid_cache_hook.cpp; docs/light-grid-cache-2026-10-13.md): a CodeHook on the game's fragment-culling cluster builder, once, in BOTH
             // profiles -- the builder is the game's. No key: exact, and verified against the game's own rebuild while it runs. A build that is not 334925 is one log line.
             lightGridCacheInstall();
+            // The vehicle rig (vehicle_rig.cpp, issue 186): a hook on the camera's SetTarget that reads the player vehicle's rigs and supplies the flat profile's vehicle frame, both profiles; no key. A build that is not 334925 is one log line.
+            vehicleRigInstall();
             // The terrain cull cover (terrain_cull_cover_hook.cpp; docs/terrain-culling.md): a CodeHook on the game's cull-plane builder, always on for a scope with VR (the flat
             // profile passes through per call). A build that is not 334925 is scanned for the call site; anything short of one match is one log line and nothing patched.
             terrainCullCoverInstall(!runtimeScopeIncludesVr());
@@ -3116,6 +3306,38 @@ void hookSwapChain(IDXGISwapChain* swapChain) {
             g_flatSwitchAvailable.store(false, std::memory_order_relaxed);
             Log::get().note("flat runtime resize hooks: ResizeBuffers could not be hooked; a switch into the flat profile will run passthrough this session");
         }
+    }
+    if (xessFgOwns(swapChain)) {
+        // The bridged swap chain's window and present queries (see hookedFgGetDesc). Its Present and resizes already go
+        // through the hooks above. GetFullscreenDesc and GetHwnd are IDXGISwapChain1's, present only where the table
+        // reaches them.
+        const size_t prefix = s.swapChainHook.executablePrefix();
+        unsigned fgHooks = 0;
+        if (prefix > kSwapGetLastPresentCount) {
+            fgHooks += s.swapChainHook.replace(kSwapGetFrameStatistics, &hookedFgGetFrameStatistics,
+                                               reinterpret_cast<void**>(&g_realGetFrameStatistics)) ? 1u : 0u;
+            fgHooks += s.swapChainHook.replace(kSwapGetLastPresentCount, &hookedFgGetLastPresentCount,
+                                               reinterpret_cast<void**>(&g_realGetLastPresentCount)) ? 1u : 0u;
+        }
+        if (prefix > kSwap1GetFullscreenDesc)
+            fgHooks += s.swapChainHook.replace(kSwap1GetFullscreenDesc, &hookedFgGetFullscreenDesc,
+                                               reinterpret_cast<void**>(&g_realGetFullscreenDesc)) ? 1u : 0u;
+        if (prefix > kSwapGetContainingOutput) {
+            fgHooks += s.swapChainHook.replace(kSwapSetFullscreenState, &hookedFgSetFullscreenState,
+                                               reinterpret_cast<void**>(&g_realSetFullscreenState)) ? 1u : 0u;
+            fgHooks += s.swapChainHook.replace(kSwapGetFullscreenState, &hookedFgGetFullscreenState,
+                                               reinterpret_cast<void**>(&g_realGetFullscreenState)) ? 1u : 0u;
+            fgHooks += s.swapChainHook.replace(kSwapGetDesc, &hookedFgGetDesc,
+                                               reinterpret_cast<void**>(&g_realGetDesc)) ? 1u : 0u;
+            fgHooks += s.swapChainHook.replace(kSwapResizeTarget, &hookedFgResizeTarget,
+                                               reinterpret_cast<void**>(&g_realResizeTarget)) ? 1u : 0u;
+            fgHooks += s.swapChainHook.replace(kSwapGetContainingOutput, &hookedFgGetContainingOutput,
+                                               reinterpret_cast<void**>(&g_realGetContainingOutput)) ? 1u : 0u;
+        }
+        if (prefix > kSwap1GetHwnd)
+            fgHooks += s.swapChainHook.replace(kSwap1GetHwnd, &hookedFgGetHwnd,
+                                               reinterpret_cast<void**>(&g_realGetHwnd)) ? 1u : 0u;
+        Log::get().note("xess-fg: window query hooks installed: %u of 9 (table prefix %zu)", fgHooks, prefix);
     }
     if (!s.swapChainHook.commit()) {
         s.swapChainHook.uninstall();
@@ -3297,9 +3519,10 @@ void shutdownDeviceHooks() {
     // keyboard the game never gets back.
     menuShutdown();
     journalWatchShutdown();
-    // Explorer Cam: the avatar dither-fade global goes back to -1 if EDVR still holds it at 0 (explorer_cam.h). The hooks are CodeHooks
-    // and come off with their own destructors.
-    explorerCamShutdown();
+    // Native on foot: the gate byte goes back first, then the avatar dither-fade global goes back to -1 if EDVR still holds it at 0
+    // (native_on_foot_hooks.h). The hooks are CodeHooks and come off with their own destructors.
+    nativeOnFootShutdown();   // F2: the gate byte goes back to 1 if EDVR holds it at 0
+    nativeOnFootHooksShutdown();
     // The probe's reference on the device. Read-only for its whole life, so
     // there is nothing to put back -- only the reference to let go.
     if (g_state && g_state->multithread) {

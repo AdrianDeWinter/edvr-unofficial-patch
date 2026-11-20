@@ -33,6 +33,9 @@ Worktree builds, read from tools\\build_lock.py and tools\\compile_cache.py:
   * Keep the path SHORT (C:\\wt99, not a deep scratch folder).  The installer
     test rig builds fixtures under the tree and fails on MAX_PATH when the
     worktree path is ~190 characters; at C:\\wt99 the same build passes.
+    (launcher_test, which failed from a root of about 100 characters, is
+    linked long-path aware now and no longer limits the path; it needs
+    LongPathsEnabled in Windows.)
   * The dependency folders are shared through the junctions, read only by the
     build.  Do not run a fetch_*.py tool with a worktree's third_party as the
     destination: it would modify the main checkout's copy.

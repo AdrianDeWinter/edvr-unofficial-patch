@@ -59,6 +59,7 @@ enum MenuBadge : uint8_t {
     kBadgePending = 2,   // "at next launch", the value beside it is the pending one
     kBadgeUnknown = 3,   // "?" -- when it applies is not documented
     kBadgeClash = 4,     // "also in Elite" -- a hotkey that Elite's own bindings use too (the game sees the press)
+    kBadgeStopped = 5,   // "stopped" -- the setting is on but what it drives stopped; a restart alone will not fix it (menu_restart.h)
 };
 
 struct MenuLine {
@@ -72,6 +73,9 @@ struct MenuLine {
     // irrelevant to the mode in force -- the DLSS preset outside DLSS/DLAA
     // -- rather than one hidden and reappearing on a mode change.
     bool    dim = false;
+    // Keep a secondary line while a restart row changes between its launch
+    // value, a pending value and editing, so the rows below it stay put.
+    bool    reserveBadge = false;
 };
 
 // THE TOOLTIP'S STRIP, as fractions of the menu card's width: the gap
@@ -87,9 +91,12 @@ constexpr int kMenuMaxTabs = 8;
 // of docs/openxr-resolution-per-headset-2026-09-14.md); statusLine drops
 // silently past this, and the line it would drop is `Last write`. 17 since
 // 2026-10-14: the flat page gained its sixth row (Intro movie), and 18 since
-// 2026-10-16 for its seventh (Sharp weapons): its rows, a blank line and the
-// ten-line warning (flat_elite_settings.h) are the whole card.
-constexpr int kMenuMaxLines = 18;
+// 2026-10-16 for its seventh (Sharp weapons, retired 2026-10-28), and 19 since
+// 2026-11-08 for Skip rooms behind doors, and 21 since 2026-11-12 for the two
+// XeSS Frame Generation rows, and 23 since 2026-11-16 for the two frame-rate readout rows. Since the warning moved to the flat Status page (2026-11-16) the
+// 23 is that page: its thirteen lines and the ten-line warning (flat_elite_settings.h) are the whole card (menu.cpp static_asserts it); the Performance tab needs 15.
+// 32 since 2026-11-16: the flat Status page wraps long values onto continuation rows (menu_flat_status_layout.h).
+constexpr int kMenuMaxLines = 32;
 constexpr int kMenuMaxTiles = 16;
 
 // A gauge: a big number with a small caption above and one small line
@@ -109,11 +116,18 @@ struct MenuGraph {
     bool zeroIsValid = false; // Native history distinguishes measured zero from missing data.
     char  label[64];
 };
-constexpr int kMenuMaxGraphs = 2;
+constexpr int kMenuMaxGraphs = 3;
 
 // Everything the panel shows, as text. The model builds one of these on
 // every change; the raster lays it out.
+// Who a raster on the monitor slot belongs to (MenuContent::slotOwner, menuPanelMonitorRasterOwner): the slot is shared by the flat monitor panel and the flat
+// frame-rate readout, and the compositor draws a raster only for the owner that asked for it.
+constexpr uint8_t kSlotOwnerNone = 0;      // the menu's slot, or untagged
+constexpr uint8_t kSlotOwnerMonitorPanel = 1;
+constexpr uint8_t kSlotOwnerReadout = 2;
+
 struct MenuContent {
+    uint8_t  slotOwner = kSlotOwnerNone;   // monitor slot only: who built this content; carried through the worker to the uploaded raster
     // A one-line FPS readout drawn at the top of the menu card when the user
     // has locked the overlay to the menu, so both are visible for A/B testing.
     char     overlayLine[120];
@@ -130,11 +144,24 @@ struct MenuContent {
     // Zero uses the ordinary Row face; overlay content supplies a smaller
     // fixed reference face here so measurement and rasterisation match.
     int      rowFontPx = 0;
+    // Information rows' caption column, in pixels from the card's left edge. Zero keeps the fixed 26 % split; the flat Status page sets it from its widest
+    // caption (menu_flat_status_layout.h).
+    int      infoSplitPx = 0;
+    // The tab names' face, em in pixels. Zero is the panel's own (cap * 9 / 7); the model shrinks it so every tab fits (menu_tab_strip.h).
+    int      tabFontPx = 0;
     // Tiles are laid out ABOVE the lines, `tileColumns` across (4 when 0).
     MenuTile tiles[kMenuMaxTiles];
     int      tileCount = 0;
     int      tileColumns = 0;
     char     hint[200];     // an explanation under the rows (information pages)
+    // Reserve the hint box's height even when `hint` is empty. The box is row-dependent on an
+    // entries page (the highlighted row's hint, the others' none), so its height is held whatever
+    // the highlight says, or the card would grow and shrink as the page scrolls. Only entries
+    // pages set it: the Monitor page is built without a hint line on purpose (the height is better
+    // spent on its tiles), so reserving the box there would add nothing and, tallied into the
+    // bitmap's height, would push the page toward the raster's 2048-px bound and make it stop
+    // updating. The Status page, which does show a hint, needs no reservation.
+    bool     reserveHint = false;
     char     footer[160];   // keys, pending-restart count, warnings
     // The flat profile's EDVR version, drawn dim at the right end of the
     // footer's second line on every page. Empty elsewhere (VR draws none).
@@ -181,6 +208,13 @@ struct MenuContent {
 bool menuPanelBuildOverlayContent(MenuContent& c, const char* line, float textDegrees,
                                   float* angularWidthDeg);
 
+// The frame-rate readout's card (menu.fps_overlay = detailed; the same builder serves flat): `lineCount` full-width info lines in a toast-style card, to which the
+// caller adds strips (c.graphs, c.graphCount) after the call. `capPx` is the text height (VR: the fixed 42-pixel reference; flat: the menu's cap at this
+// output), the card is as wide as the widest line needs and at least `minCardPx`. `textDegrees` > 0 (VR) also gives the card's angular width, as
+// menuPanelBuildOverlayContent does; flat passes 0 and the card is composited at its own pixel size. False when a line is empty, too long or the card too wide.
+bool menuPanelBuildReadoutContent(MenuContent& c, const char* const* lines, int lineCount, int capPx, int minCardPx, float textDegrees,
+                                  float* angularWidthDeg);
+
 // Where the panel sits, in the anchor's frame: metres to it, how much it
 // wraps (0 flat .. 0.9), its half-width along the surface, and the fade.
 //
@@ -202,12 +236,37 @@ struct MenuGeometry {
     // new bitmap dimensions with the previous frame's geometry during a
     // worker handover. Ordinary menu and toast callers leave this false.
     bool overlayRaster = false;
+    // Flat only: which corner the card is placed from (menu_flat_layout.h FlatCorner as an int; 0 upper left, 1 upper right: the monitor slot's, for the monitor panel and the frame-rate readout).
+    int flatCorner = 0;
 };
 
 // Hand the raster a new content (copied; the worker wakes). Frame thread.
 void menuPanelSubmit(const MenuContent& c);
+// THE FLAT MONITOR PANEL (docs\design-f8-menu-unification-2026-11-15.md, 2026-11-16 entry): a second flat raster in its own texture, composited after the
+// menu's in the same Present, so both can be on screen. Flat only; VR never submits one. Frame thread, like menuPanelSubmit; the raster worker is shared, and
+// a menu content waiting is taken first.
+void menuPanelSubmitMonitor(const MenuContent& c);
+// Whether the monitor panel is drawn and where: alpha > 0 draws it, flatCorner 1 is the upper right corner. It is placed 1:1 like the menu (dist 1).
+void menuPanelSetMonitorGeometry(const MenuGeometry& g);
+// How many monitor-slot rasters have been uploaded (wraps), for the menu's ScreenReadoutState (the monitor panel and the flat frame-rate readout share the slot); and whether one is live.
+uint32_t menuPanelMonitorRasterSerial();
+uint8_t  menuPanelMonitorRasterOwner();   // the slotOwner of the raster last uploaded to the monitor slot (kSlotOwnerNone when none is)
+bool menuPanelMonitorRasterReady();
 #ifdef EDVR_MENU_TEST
 bool menuPanelWorkerReadyForTest();
+bool menuPanelMonitorWorkerReadyForTest();
+int  menuPanelLayoutHeightForTest(const MenuContent& c);
+// The rect layout() gives the text op for the line at `i`'s left text (pixels, the frame the
+// raster draws in), read from layout()'s own ops. The heading's is the ellipsis check: the
+// DrawTextW single-line path cuts text at the rect's right edge, so a heading measured wider
+// than this rect is ellipsised on screen. Zeroed when the line has no such op.
+void menuPanelLineRectForTest(const MenuContent& c, int i, int* x0, int* y0, int* x1, int* y1);
+struct MenuPanelRowRectsForTest {
+    int label[4]{}, value[4]{}, badge[4]{};
+    int hitTop = 0, hitBottom = 0;
+    bool selectable = false;
+};
+MenuPanelRowRectsForTest menuPanelRowRectsForTest(const MenuContent& c, int i);
 #endif
 
 // Once per frame: upload a finished raster, create the texture as needed.
@@ -258,6 +317,13 @@ bool menuPanelStats(int* w, int* h, double* lastMs, float* gpuMs);
 // footer was 1520 px in a 770 px line at the default size. GDI only; no
 // device, callable from a test.
 int menuPanelMeasureLine(const char* utf8, int emPx);
+// The width a tab takes in the strip at the tab face's em: the bold name, measured, and a third of an em of space after it. The model's window and the
+// raster's layout both use it, so a tab is never drawn narrower than its name.
+int menuPanelTabWidth(const char* utf8, int emPx);
+// Settings pages keep a stable window even if every entry needs restart
+// status. At large VR text sizes fewer entries fit the raster; the model
+// uses this count with its existing scrolling window.
+int menuPanelEntryRows(const MenuContent& c, int requested);
 
 void menuPanelShutdown();
 

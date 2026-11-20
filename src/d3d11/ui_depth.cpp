@@ -1,10 +1,12 @@
 #include "temporal_shader_bytecode.h"
 #include "fixed_shader_source.h"
 #include "ui_depth.h"
+#include "native_on_foot.h"   // F27: nativeEyeOrderFlipped, the native eye order
 #include "ui_depth_layer.h"
 #include "stellar_coverage.h"
 #include "orbital_width.h"    // the orbit lines' factor and the twin's private b13 (fix.ui_quality)
 #include "planet_motion.h"
+#include "world_screen_coverage.h"   // F105: the in-world screens' coverage
 #include "gpu_interval.h"
 #include "gpu_census.h"     // the hologram resolve's three sub-sections (DoorHoloDepthCopy, DoorHoloNearLight, DoorHoloResolveDraw)
 #include "ui_content.h"
@@ -16,6 +18,7 @@
 #include <d3d11.h>
 
 #include <algorithm>  // std::sort: the hologram depth census's pixel-count p50
+#include <atomic>     // F116: the terminal hide the HRC submit hook reads
 #include <cstdint>
 #include <cstdio>
 #include <cmath>
@@ -28,9 +31,12 @@
 #include "../common/runtime_profile.h"
 #include "../common/guard.h"
 #include "../common/log.h"
+#include "../common/dump_file.h"   // the eye dump's .z container (Chrome<i>.bin, Holo.bin)
 #include "binding_shadow.h"
+#include "classifier_memo.h"   // the eye-draw classifiers' memo of their plain decline (built 2026-10-27)
 #include "depth_probe.h"    // depthProbeIsSceneDepth, ...Format: where the pass reads
 #include "exposure_fix.h"   // lookupShaderHash
+#include "native_on_foot_f116.h"   // F116: the terminal hide's frame order and hysteresis (pure)
 #include "object_probe.h"   // objectProbeLedgerActive: the UI content census's eye-run signal
 #include "shader_swap.h"    // shaderSwapCompilePs: the alpha-aware depth shaders
 #include "temporal_pass.h"  // temporalPassPlanes: the scene's encoding
@@ -42,12 +48,11 @@ namespace edvr {
 // and the two planet-pending flags. Out here only so the header can see
 // them; written from this file exactly as before.
 namespace detail {
-UiDepthMode g_uiDepthMode = UiDepthMode::kNone;
 bool g_uiDepthOn = false;          // the key and the pass, both
 bool g_uiDepthStoodDown = false;
-bool g_uiDepthPlanetPending = false, g_uiDepthPlanetSolarPending = false;
-bool g_holoDepthOn = false;        // the hologram depth pass (on whenever the temporal pass runs)
-bool g_uiDepthDrawComposite = false;  // the last eye draw sampled a learned interface surface (ui_depth.h)
+bool g_holoDepthOn = false;       // the hologram depth pass (on whenever the temporal pass runs)
+UiDepthDraw g_uiDepthDraw;        // this draw's outputs, reset as one block at the top of uiDepthOnEyeDraw (ui_depth.h)
+int g_holoEye = -1;                // this draw's hologram classification: the eye, -1 when none (ui_depth.h writes the decline inline)
 }  // namespace detail
 
 namespace {
@@ -67,8 +72,7 @@ constexpr uint64_t kFlightHud = 0xB7790CBFC6554097ull;
 // before the march), and the empty corners of a stroke's bounding quad come
 // out at alpha nought without a discard.
 constexpr uint64_t kFlightHudPs = 0x8DEF46452FA459F5ull;
-// The cockpit's holo-panel family (panel_upscale.h, removed 2026-09-29).
-constexpr uint64_t kHoloPanel = 0x81216C77F90DEDD6ull;
+// kHoloPanel, the cockpit's holo-panel family, lives in holo_families.h.
 // The generic hologram/icon depth pass's other built-in families (the radar's
 // star icon core, its two stalks, the corona family, the target hologram's
 // sphere, the five contact markers), the world-marker reticle, and the canopy
@@ -184,9 +188,40 @@ float    g_cockpitMetres = kTemporalShipMetres; // same near-field domain as tem
 HoloMotion g_holoMotion[2];
 PlanetCoverage g_planetCoverage;
 bool g_planetNoted=false,g_solarNoted=false;
+// F105: the in-world screens' coverage (world_screen_coverage.h): the pass, its stand-in, its window and its once-only note.
+WorldScreenCoverage g_worldScreenCoverage;
+Microsoft::WRL::ComPtr<ID3D11PixelShader> g_worldScreenPs;
+bool g_worldScreenPsTried = false, g_worldScreenNoted = false;
+WorldScreenWindow g_worldScreenWindow;
+// F108: the tracked stand-in, the census and its window, the first note per held reason, and the once-per-surface lines (each
+// with an occlusion query over its first pass, so the line carries the screen's footprint).
+Microsoft::WRL::ComPtr<ID3D11PixelShader> g_worldScreenTrackedPs;
+bool g_worldScreenTrackedTried = false, g_worldScreenTrackedNoted = false;
+WorldScreenCensusPass g_worldScreenCensusPass;
+WorldScreenCensus g_worldScreenCensus;
+// F116: the HUD hidden while a terminal fills the view (native_on_foot_f116.h). The frames in order (a frame with a screen waits for
+// its census row), the hysteresis on the larger eye's footprint, and what the HRC submit hook and the frame thread read
+// (uiDepthTerminalState). Render thread only, but for the atomics.
+nofoot::f116::FrameOrder g_terminalOrder;
+nofoot::f116::Hysteresis g_terminalHide;
+std::atomic<bool> g_terminalHidden{false}, g_terminalUpscaler{false};
+std::atomic<uint64_t> g_terminalStepMs{0}, g_terminalStepped{0}, g_terminalOver{0}, g_terminalHiddenFrames{0}, g_terminalRows{0};
+std::atomic<float> g_terminalFootprint{-1.0f};
+uint32_t g_worldScreenHeldNoted = 0;        // bits: UiContent decisions already named once as a held reason
+uint32_t g_worldScreenClassNoted = 0;       // bits: classification refusals already named once
+struct WorldScreenSurfaceNote {
+    const void* res = nullptr;              // the interface texture (identity only)
+    Microsoft::WRL::ComPtr<ID3D11Query> query;
+    bool pending = false;
+    char text[480] = {};
+};
+constexpr uint32_t kWorldScreenSurfaceNotes = 8;
+WorldScreenSurfaceNote g_worldScreenSurfaces[kWorldScreenSurfaceNotes];
+uint32_t g_worldScreenSurfaceCount = 0;
+ID3D11Query* g_worldScreenQueryOpen = nullptr;   // the query between this pass's begin and end, if any
 HoloDraw g_holoDraw;
 bool g_holoBound=false, g_holoNoted=false;
-bool g_coronaPending=false, g_coronaMotion=false, g_coronaNoted=false;
+bool g_coronaNoted=false;
 ID3D11Buffer* g_savedHoloInfo=nullptr;
 ID3D11ShaderResourceView* g_savedSceneDepth=nullptr;
 bool g_sceneDepthBound=false;
@@ -294,6 +329,18 @@ uint32_t g_surfaceCount = 0;
 uint32_t g_surfaceNext = 0;
 uint32_t g_evictions = 0;      // ring overwrites + recycled-address drops
 bool     g_ringNoted = false;
+
+// The classifier epoch (built 2026-10-27; docs\engine-render-performance-2026-09-19.md, "Desk design: the ui_depth eye-draw memo").
+// It moves at every write to what the two eye-draw classifiers decline from, so a memoised decline cannot outlive its inputs: the
+// surface table (addSurface, surfaceMatches' eviction, the shutdown reset), the view memo's overrides (the chrome tracker's put, the
+// shutdown clear), the family, exclude and hologram family lists (uiDepthConfigure, holoDepthConfigure), and every frame boundary,
+// so an answer never lives past its frame either. A view-memo miss that only records what the table already says needs no bump.
+// No config key: a fix that always helps. Each write site carries the bump beside it. Flown 2026-10-27 at a settlement pad: 91% of
+// eye draws hit, and about 5M hits checked against a full run of the classifier never differed (classifier_memo.h).
+uint32_t g_classifierEpoch = 1;
+
+// The two memos: the key and the exit of the last full run of each classifier (classifier_memo.h), each classifier's own.
+classifiermemo::Memo g_eyeMemo, g_holoMemo;
 
 // The offscreen learner's state for the currently bound target.
 uint32_t g_rtvGen = ~0u;
@@ -426,6 +473,8 @@ uint32_t g_variantLoggedCount = 0;
 // is the TEXCOORD the variant samples at, which is why the fallback names
 // every shader it adopts in the log.
 constexpr uint32_t kMaxStandIns = 4;
+}  // namespace
+// Outside the anonymous namespace so ui_depth.h can name a pointer to it (detail::UiDepthDraw::reissueShader).
 struct DepthShader {
     uint64_t            ps[kMaxStandIns];  // the game's pixel shaders it stands in for
     uint64_t            vs[kMaxStandIns];  // their vertex families, for a variant
@@ -436,6 +485,7 @@ struct DepthShader {
     ID3D11PixelShader*  shader;
     bool                tried;
 };
+namespace {
 DepthShader g_depthShaders[9] = {
     {{kPanelPs, kPanelPsTinted, kPanelPsCheap, 0}, {kPanelVs, 0, 0, 0}, 1,
      kUiDepthPanelBytecode, sizeof(kUiDepthPanelBytecode), "ui_depth_panel_ps", nullptr, false},
@@ -483,7 +533,7 @@ constexpr float kSmokeFloor = 0.08f;
 // (97.7% alpha 0, the rest strokes), so under the general floor of 0.5 the
 // graph took the sky's far-plane pan (docs/fss-scanner.md, 2026-09-16) and
 // nothing is lost by writing down to one step while the scanner is up.
-FloorCb g_floorCbs[5];   // [0] the interface proper, [1] the holo material and the sprite, [2] the flight HUD, [3] the smoke, [4] the scanner's chrome (g_reissueMaskSlot)
+FloorCb g_floorCbs[5];   // [0] the interface proper, [1] the holo material and the sprite, [2] the flight HUD, [3] the smoke, [4] the scanner's chrome (detail::g_uiDepthDraw.reissueMaskSlot)
 constexpr int kChromeFloorSlot = 4;
 ID3D11DepthStencilState* g_reissueDss = nullptr;   // GEQUAL, write all
 ID3D11DepthStencilState* g_overlayDss = nullptr;   // visible interface overlays replace private depth
@@ -501,6 +551,7 @@ struct Mask {
 };
 Mask     g_mask[2];
 Mask     g_edits[2];
+Mask     g_screenState[2];   // F108: the in-world screens' census state (world_screen_coverage.h), cleared with the masks
 UiContent g_uiContent;
 bool g_contentNoted=false;
 // UI CONTENT CENSUS: one log line per surfaceComposite draw that calls
@@ -638,15 +689,11 @@ bool        g_frameTargetsFullNoted = false;
 // viewport; interface mode scales its depth encoding to the scene's planes.
 using Mode = detail::UiDepthMode;
 
-bool                     g_wantRebind = false;
-bool                     g_wantMask = false;     // this draw marks the reactive mask
-int                      g_drawEye = -1;
+// This draw's rebind, mask, eye and re-issue outputs (wantRebind, wantMask, rebindEye, drawEye, reissueMaskSlot, reissueShader) live in detail::g_uiDepthDraw (ui_depth.h).
 uint32_t                 g_rebindW = 0, g_rebindH = 0;
-int                      g_rebindEye = -1;
 bool                     g_rebound = false;      // the OM was swapped for this draw
 ID3D11RenderTargetView*  g_savedRtvs[kMaxRtvs] = {};
 ID3D11DepthStencilView*  g_savedDsv = nullptr;
-DepthShader*             g_reissueShader = nullptr;
 // What the reissue writes into the reactive mask, relative to the strength:
 // nought for the interface proper (the composites: panels, labels), three
 // quanta of 255 under it for the holo material's markers and the
@@ -661,7 +708,7 @@ DepthShader*             g_reissueShader = nullptr;
 // pixels of halo fell to the camera's path and smeared -- the glow was
 // marked then; with the holo material alone brought across, no change --
 // the chevrons are the flight HUD's.
-int                    g_reissueMaskSlot = 0;   // which cached constant buffer carries it (floorBuffer)
+// reissueMaskSlot (detail::g_uiDepthDraw): which cached constant buffer carries the mask value (floorBuffer).
 ID3D11PixelShader*       g_savedPs = nullptr;
 ID3D11ClassInstance* g_savedPsClasses[256]{};
 UINT g_savedPsClassCount=0;
@@ -693,7 +740,7 @@ bool     g_maskNotedOnce = false;
 struct StellarCpu { uint32_t calls=0,samples=0; int64_t ticks=0; } g_stellarCpu[2];
 int g_stellarCpuActive=-1;
 int64_t g_stellarCpuStart=0;
-GpuIntervals<64> g_stellarGpu[2];
+GpuIntervals<64, GpuQueryOwner::UiDepth> g_stellarGpu[2];
 
 void resetWindow() {
     g_wComposite = g_wDirect = g_wWrote = 0;
@@ -723,6 +770,7 @@ bool surfaceMatches(const ResourceInfo& info) {
     --g_surfaceCount;
     if (g_surfaceNext >= g_surfaceCount) g_surfaceNext = 0;
     ++g_evictions;
+    ++g_classifierEpoch;   // the table lost a surface: a memoised decline may have rested on it
     return false;
 }
 
@@ -748,6 +796,7 @@ void addSurface(const void* res, uint32_t w, uint32_t h, uint32_t fmt, char fami
                             kMaxSurfaces);
         }
     }
+    ++g_classifierEpoch;   // a surface was added or replaced (the early return above changed nothing and needs none)
     ++g_wLearned;
 }
 
@@ -1092,8 +1141,7 @@ float    g_holoShare = 0.5f;     // the share of the display brightness the near
 FaultBudget g_holoBudget("uiDepthHolo", 5);
 
 // This draw's classification, set by uiDepthHologramOnEyeDraw and read by
-// the two reissues that follow the game's own draw (vscreen.cpp).
-int      g_holoEye = -1;
+// the two reissues that follow the game's own draw (vscreen.cpp). The eye is detail::g_holoEye (ui_depth.h).
 uint32_t g_holoW = 0, g_holoH = 0;
 uint64_t g_holoDrawVs = 0;
 bool     g_holoIsWorldMarker = false;   // matched kHoloWorldMarkers, not the cockpit list
@@ -2205,6 +2253,7 @@ void holoDepthConfigure() {
     detail::g_holoDepthOn = on;
     g_holoFamilyCount = famCount;
     memcpy(g_holoFamilies, fam, famCount * sizeof(uint64_t));
+    ++g_classifierEpoch;   // after the list's writes, so a call that read the old list stores a key already out of date
     if (changed) {
         Log::get().note("hologram depth: on -- %u cockpit famil%s, %u world marker%s, "
                         "floor %.3f (display brightness), share %.2f, cockpit radius %.0f m.",
@@ -2247,8 +2296,9 @@ int eyeIndexFor(const void* rtvRes, uint32_t w, uint32_t h, uint32_t fmt) {
     t.w = w;
     t.h = h;
     t.fmt = fmt;
-    t.eye = ofShape;
-    return static_cast<int>(ofShape);
+    // F27: the native eye order: in native on foot the game renders the right eye first, so the first target is the right eye.
+    t.eye = ofShape;   // F31: the cockpit's eye order everywhere (the native flip is gone)
+    return static_cast<int>(t.eye);
 }
 
 // The viewport depth range that carries the encoding correction, and its
@@ -2415,6 +2465,7 @@ void uiDepthConfigure(Config& cfg) {
 
     const bool was = detail::g_uiDepthOn;
     detail::g_uiDepthOn = g_keyOn && g_passOn;
+    ++g_classifierEpoch;   // the direct and exclude lists, g_smokeOn and g_trained are all written above
     if (detail::g_uiDepthOn && !was) {
         g_announced = false;
         g_waitingNoted = false;
@@ -2512,7 +2563,10 @@ bool uiDepthLearnScannerChrome(ID3D11DeviceContext*, uint64_t vs,
     addSurface(info.resource, info.a, info.b, info.fmt, 'C');
     // The view may have been judged "not a surface" this frame or last;
     // the memo answers viewIsSurface for a hundred frames, so overwrite it.
-    if (view) g_viewMemo.put(view, g_frame, 1u);
+    if (view) {
+        g_viewMemo.put(view, g_frame, 1u);
+        ++g_classifierEpoch;   // a view the memo called "not a surface" now answers yes; a memoised decline may have rested on the old answer
+    }
     if (!(g_chromeSaid & 8u)) {
         g_chromeSaid |= 8u;
         Log::get().note("ui depth: the scanner's chrome surface (%ux%u, DXGI format %u) is "
@@ -2579,19 +2633,16 @@ void uiDepthNoteOffscreenDraw(ID3D11DeviceContext* ctx) {
     }
 }
 
-bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {
-    detail::g_uiDepthDrawComposite = false;   // this draw's answer, set below; false on every early return
-    detail::g_uiDepthPlanetPending=false;detail::g_uiDepthPlanetSolarPending=false;
-    g_coronaPending=false;g_coronaMotion=false;
-    g_holoDraw=draw;
-    detail::g_uiDepthMode = Mode::kNone;
-    g_wantRebind = false;
-    g_wantMask = false;
-    g_rebindEye = -1;
-    g_drawEye = -1;
-    g_reissueShader = nullptr;
-    g_reissueMaskSlot = 0;
-    if (!detail::g_uiDepthOn || detail::g_uiDepthStoodDown) return false;
+// The eye-draw classifier proper: everything uiDepthOnEyeDraw does after it has reset its outputs and found the pass on. Split out
+// on 2026-10-27 so the memo (uiDepthOnEyeDraw below) can skip it when the last full run left at the plain decline. `*exit` says which
+// exit it took: kPlainDecline ONLY at the family gate below -- the one answer the bindings and the classifier's epoch fully determine,
+// reached before any counter, log line, shader lookup, eye resolve or scene-depth judgment -- and kOther for every other return,
+// each of which is either an answer with side effects or a decline that reads more than the memo's key.
+static bool classifyEyeDraw(ID3D11DeviceContext* ctx, classifiermemo::Exit* exit) {
+    *exit = classifiermemo::Exit::kOther;
+    // F108's refusal below counts the draw and may say so once; a draw that took it and still reaches the family gate is not a
+    // plain decline, because a hit would skip the count.
+    bool worldScreenCounted = false;
     // Cheapest first: no depth target, nothing to write (the post chain's
     // fullscreen draws, ten a frame).
     const void* dsv = bindingGet(BindSlot::Dsv0);
@@ -2609,7 +2660,7 @@ bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {
         }
     }
     const bool composite = surfaceSlot >= 0;
-    detail::g_uiDepthDrawComposite = composite;   // for the layer's census of composites left in the scene
+    detail::g_uiDepthDraw.composite = composite;   // for the layer's census of composites left in the scene
     // The hash: for a composite, the family line and the exclude list
     // (a couple of dozen a frame); otherwise the direct list, which is the
     // only test left for the other draws.
@@ -2622,11 +2673,41 @@ bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {
     if(h==kPlanetSurfaceVs || h==kSolarSurfaceVs) {
         const uint64_t ps=boundPsHash(ctx);
         if((h==kPlanetSurfaceVs && ps==kPlanetSurfacePs) || (h==kSolarSurfaceVs && ps==kSolarSurfacePs)) {
-            detail::g_uiDepthPlanetPending=true;detail::g_uiDepthPlanetSolarPending=h==kSolarSurfaceVs;return false;
+            detail::g_uiDepthDraw.planetPending=true;detail::g_uiDepthDraw.planetSolarPending=h==kSolarSurfaceVs;return false;
+        }
+    }
+    // F105: an in-world screen, the interface drawn as a lit surface in the G-buffer pass (world_screen_coverage.h). Not a
+    // composite this file has a depth stand-in for and not one the layer can take: marked into the eye's coverage and edit
+    // masks after the game's draw (uiDepthWorldScreenBegin), and nothing else. Learned like the planets: its colour target
+    // is the G-buffer's, which must not join the eye-target table, so Begin finds the eye from the scene depth.
+    // F108: a draw of the pair that fails F105's test is counted by the first test it failed (and named once), then left
+    // to the paths below as before.
+    if (h == kWorldScreenVs && boundPsHash(ctx) == kWorldScreenPs) {
+        const WorldScreenClassRefusal why = worldScreenClassRefusal(composite, dsvIsSceneDepth(dsv), g_trained);
+        if (why == WorldScreenClassRefusal::kNone) {
+            ++g_worldScreenWindow.seen;
+            detail::g_uiDepthDraw.worldScreenPending = true;
+            return false;
+        }
+        worldScreenCounted = true;
+        ++g_worldScreenWindow.classRefused[static_cast<size_t>(why)];
+        const uint32_t bit = 1u << static_cast<uint32_t>(why);
+        if (!(g_worldScreenClassNoted & bit)) {
+            g_worldScreenClassNoted |= bit;
+            ResourceInfo rt;
+            const bool haveRt = bindingResolve(bindingGet(BindSlot::Rtv0), &rt) && rt.isTexture2D;
+            Log::get().note("ui depth world screens (F108): a draw of the pair (vs %016llX ps %016llX) into %ux%u DXGI format %u "
+                            "was not taken: %s; it is left to DLSS alone. Said once for this reason; the 20 s line counts them.",
+                            static_cast<unsigned long long>(kWorldScreenVs), static_cast<unsigned long long>(kWorldScreenPs),
+                            haveRt ? rt.a : 0u, haveRt ? rt.b : 0u, haveRt ? rt.fmt : 0u, worldScreenClassRefusalName(why));
         }
     }
     const bool stellar=h==kRingVs || h==kOrbitalVs;
-    if (!stellar && !composite && !(h && inList(g_families, g_familyCount, h))) return false;
+    if (!stellar && !composite && !(h && inList(g_families, g_familyCount, h))) {
+        // THE PLAIN DECLINE: nine eye draws in ten end here (the 2026-10-27 binding-repeat flight). This is the exit the memo stores.
+        if (!worldScreenCounted) *exit = classifiermemo::Exit::kPlainDecline;
+        return false;
+    }
     if (h && inList(g_exclude, g_excludeCount, h)) return false;
 
     // WHICH PROJECTION. The cockpit's families bind the scene pair and
@@ -2639,8 +2720,8 @@ bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {
     const bool sceneFamily = stellar || h == kHoloPanel || h == kHudSprite ||
                              inList(g_families, g_familyCount, h);
     if (scenePair && sceneFamily) {
-        g_coronaPending=exactCorona;
-        detail::g_uiDepthMode = Mode::kReissueScene;
+        detail::g_uiDepthDraw.coronaPending=exactCorona;
+        detail::g_uiDepthDraw.mode = Mode::kReissueScene;
         const bool wantLine = g_familyLoggedCount < kMaxFamilyLines;
         const bool wantMask = true; // motion classification is needed regardless of any fixed bias
         // Every classified family needs a coverage shader. Unsupported
@@ -2680,7 +2761,7 @@ bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {
         // The smoke is marked at one quantum -- odd, so it keeps the camera's
         // path at its own depth, and as good as unmarked to NVIDIA, since
         // its history is what smooths it.
-        g_reissueMaskSlot = h == kFlightHud ? 2 : h == kSmokeVs ? 3 : hud ? 1
+        detail::g_uiDepthDraw.reissueMaskSlot = h == kFlightHud ? 2 : h == kSmokeVs ? 3 : hud ? 1
                           : samplesScannerChrome(surfaceSlot) ? kChromeFloorSlot : 0;
         const uint64_t ph = boundPsHash(ctx);
         DepthShader* shader = depthShaderFor(ctx, ph, h, surfaceSlot);
@@ -2688,10 +2769,10 @@ bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {
         if (!shader) {
             ++g_wNoShader;
             noteFamily(h, ph, "no supported coverage shader; game draw left unchanged");
-            detail::g_uiDepthMode = Mode::kNone;
+            detail::g_uiDepthDraw.mode = Mode::kNone;
             return false;
         }
-        g_reissueShader = shader;
+        detail::g_uiDepthDraw.reissueShader = shader;
         // A supported coverage draw also marks the reactive mask when asked.
         // Both operations use the private depth copy for scene occlusion.
         if (shader) {
@@ -2699,9 +2780,9 @@ bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {
             if (bindingResolve(bindingGet(BindSlot::Rtv0), &rt) && rt.isTexture2D) {
                 const int eye = eyeIndexFor(rt.resource, rt.a, rt.b, rt.fmt);
                 if (eye >= 0) {
-                    g_wantMask = wantMask;
-                    g_reissueShader = shader;
-                    g_drawEye = eye;
+                    detail::g_uiDepthDraw.wantMask = wantMask;
+                    detail::g_uiDepthDraw.reissueShader = shader;
+                    detail::g_uiDepthDraw.drawEye = eye;
                     g_rebindW = rt.a;
                     g_rebindH = rt.b;
                 }
@@ -2729,12 +2810,13 @@ bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {
     DepthShader* shader = depthShaderFor(ctx, ph, h, surfaceSlot);
     if (!shader) {
         ++g_wNoShader;
-        // The cockpit panels with Disable GUI effects on (holo_material.h) have NO stand-in, on purpose: the UI layer takes them out of the
-        // scene instead (docs/ui-layer-2026-09-23.md, 2026-10-01), and a line that says "still swims" for a pair the layer took would send the
-        // next reader after a fault that is not there. With fix.ui_quality off they are left alone, and do swim.
-        noteFamily(h, ph, h == kHoloGuiFxOffVs
-                              ? "the cockpit holo panel with Disable GUI effects on: no depth stand-in (its output "
-                                "signature is not the stand-in's input); the UI layer takes it out of the scene, and "
+        // The cockpit panels with Disable GUI effects on, and the ones drawn close to a planet's surface (holo_material.h), have NO stand-in, on
+        // purpose: the UI layer takes them out of the scene instead (docs/ui-layer-2026-09-23.md, 2026-10-01 and 2026-10-31), and a line that
+        // says "still swims" for a pair the layer took would send the next reader after a fault that is not there. With fix.ui_quality off they
+        // are left alone, and do swim.
+        noteFamily(h, ph, h == kHoloGuiFxOffVs || h == kHoloNoShadowVs
+                              ? "the cockpit holo panel with Disable GUI effects on, or close to a planet's surface: no depth stand-in "
+                                "(its output signature is not the stand-in's input); the UI layer takes it out of the scene, and "
                                 "with fix.ui_quality off it is left alone and still swims"
                               : "samples a learned surface but has no depth shader of "
                                 "its own yet, and none of this build's stands in; "
@@ -2772,27 +2854,27 @@ bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {
                                  "left alone");
             return false;
         }
-        g_wantRebind = true;
-        g_rebindEye = eye;
-        g_drawEye = eye;
+        detail::g_uiDepthDraw.wantRebind = true;
+        detail::g_uiDepthDraw.rebindEye = eye;
+        detail::g_uiDepthDraw.drawEye = eye;
         g_rebindW = rt.a;
         g_rebindH = rt.b;
     } else {
         ResourceInfo rt;
         if (bindingResolve(bindingGet(BindSlot::Rtv0), &rt) && rt.isTexture2D) {
-            g_drawEye = eyeIndexFor(rt.resource, rt.a, rt.b, rt.fmt);
+            detail::g_uiDepthDraw.drawEye = eyeIndexFor(rt.resource, rt.a, rt.b, rt.fmt);
             g_rebindW = rt.a;
             g_rebindH = rt.b;
         }
     }
-    g_wantMask = g_drawEye >= 0;
-    detail::g_uiDepthMode = Mode::kReissue;
-    g_reissueShader = shader;
+    detail::g_uiDepthDraw.wantMask = detail::g_uiDepthDraw.drawEye >= 0;
+    detail::g_uiDepthDraw.mode = Mode::kReissue;
+    detail::g_uiDepthDraw.reissueShader = shader;
     // The scanner's chrome takes one alpha step, not the general floor
     // (g_floorCbs says why); its composites are recognised by the surface
     // they sample, which the scanner tracker held for the frame.
     const bool chrome = samplesScannerChrome(surfaceSlot);
-    if (chrome) g_reissueMaskSlot = kChromeFloorSlot;
+    if (chrome) detail::g_uiDepthDraw.reissueMaskSlot = kChromeFloorSlot;
     noteFamily(h, ph, chrome ? "interface projection, the scanner's chrome; alpha-aware depth down "
                                "to one alpha step into private scene copy for AA"
                              : "interface projection; alpha-aware depth into private scene copy for AA");
@@ -2800,26 +2882,51 @@ bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {
     return true;
 }
 
+// Every eye draw: the outputs reset, then the memo, then (on a miss) the classifier. Memoised 2026-10-27 (docs\engine-render-
+// performance-2026-09-19.md, "Desk design: the ui_depth eye-draw memo"): a call whose key (the bindings' aggregate generation and
+// the classifier's epoch) is the key of the last full run that left at the plain decline returns false at once. That is exactly
+// what the full run would do -- the resets above it have run, detail::g_uiDepthDraw.composite is false, and no other output is written --
+// so vscreen's call sites need not know. Any other exit is stored as "not a plain decline" and the next call runs in full.
+// Flown 2026-10-27 at a settlement pad: 91% of eye draws hit, about 5M hits were checked against a full run with no difference in
+// the return value, any output or the exit, and v:ui-depth fell from 0.47 to 0.26 ms a frame.
+// Build 6, item 5: back out of line, in build 4's form (build 5's inline entry and its dirty flag saved nothing). Build 6, S2: the key no longer moves on a PS SRV 0..3
+// re-set of the pointer already bound (binding_shadow.cpp bindingSet).
+bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {
+    // Every per-draw output back to its default in one block (composite false, the pending flags false, mode none, the eyes -1, no shader, mask slot 0): this draw's
+    // answers are set below, and are the defaults on every early return. g_holoDraw is the input copied.
+    detail::g_uiDepthDraw = detail::UiDepthDraw{};
+    g_holoDraw=draw;
+    if (!detail::g_uiDepthOn || detail::g_uiDepthStoodDown) return false;
+    // The key is read BEFORE the classifier runs: a write the classifier itself makes (a surface evicted by a view-memo miss) then
+    // leaves the stored key out of date, and the next call runs in full, which is the safe direction.
+    const classifiermemo::Key now{bindingEyeKeyGeneration(), g_classifierEpoch};
+    if (classifiermemo::hit(g_eyeMemo, now)) return false;
+    classifiermemo::Exit exit = classifiermemo::Exit::kOther;
+    const bool ret = classifyEyeDraw(ctx, &exit);
+    classifiermemo::store(g_eyeMemo, now, exit);
+    return ret;
+}
+
 bool uiDepthWantsReissue() {
-    if (!g_reissueShader) return false;
+    if (!detail::g_uiDepthDraw.reissueShader) return false;
     // Only supported, classified coverage draws can be reissued.
-    return detail::g_uiDepthMode == Mode::kReissue || detail::g_uiDepthMode == Mode::kReissueScene;
+    return detail::g_uiDepthDraw.mode == Mode::kReissue || detail::g_uiDepthDraw.mode == Mode::kReissueScene;
 }
 
 UiDepthDrawProbe uiDepthDrawProbe() {
     UiDepthDrawProbe p;
     p.coverage = uiDepthWantsReissue();
-    p.wantMask = g_wantMask && g_drawEye >= 0;
-    p.maskSlot = g_reissueMaskSlot;
-    p.drawEye = g_drawEye;
+    p.wantMask = detail::g_uiDepthDraw.wantMask && detail::g_uiDepthDraw.drawEye >= 0;
+    p.maskSlot = detail::g_uiDepthDraw.reissueMaskSlot;
+    p.drawEye = detail::g_uiDepthDraw.drawEye;
     p.holoWorldMarker = g_holoIsWorldMarker;
     return p;
 }
 
 void uiDepthEnd(ID3D11DeviceContext*) {
     // Also clear classification when the caller skipped or swallowed a draw.
-    detail::g_uiDepthMode = Mode::kNone;
-    g_reissueShader = nullptr;
+    detail::g_uiDepthDraw.mode = Mode::kNone;
+    detail::g_uiDepthDraw.reissueShader = nullptr;
 }
 
 // True when the second draw is set up to write DEPTH, the reactive mask,
@@ -2833,7 +2940,7 @@ void uiDepthEnd(ID3D11DeviceContext*) {
 // after, and the doubling would last the session (the pre-release review
 // of 2026-09-07). splashDimBegin below has taken this shape all along.
 bool uiDepthPlanetBegin(ID3D11DeviceContext* ctx) {
-    const bool pending=detail::g_uiDepthPlanetPending,solar=detail::g_uiDepthPlanetSolarPending;detail::g_uiDepthPlanetPending=false;detail::g_uiDepthPlanetSolarPending=false;
+    const bool pending=detail::g_uiDepthDraw.planetPending,solar=detail::g_uiDepthDraw.planetSolarPending;detail::g_uiDepthDraw.planetPending=false;detail::g_uiDepthDraw.planetSolarPending=false;
     if(!pending || !detail::g_uiDepthOn || detail::g_uiDepthStoodDown || !ctx || ctx->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE ||
        (solar ? (boundVsHash(ctx)!=kSolarSurfaceVs || boundPsHash(ctx)!=kSolarSurfacePs) :
                 (boundVsHash(ctx)!=kPlanetSurfaceVs || boundPsHash(ctx)!=kPlanetSurfacePs)))return false;
@@ -2858,19 +2965,241 @@ bool uiDepthPlanetBegin(ID3D11DeviceContext* ctx) {
 }
 void uiDepthPlanetEnd(ID3D11DeviceContext* ctx) { g_planetCoverage.end(ctx); }
 
+// F108: the interface texture of an in-world screen (the game's t2), described once a texture: its size, slices, mips, format
+// and binding, the view's mips and slices, and UiContent's decision; an occlusion query over the pass that described it gives
+// the screen's footprint, logged when it is ready (worldScreenPollNotes). Up to kWorldScreenSurfaceNotes textures.
+void worldScreenDescribe(ID3D11DeviceContext* ctx, ID3D11ShaderResourceView* gui, UiContent::Decision decision, int eye) {
+    Microsoft::WRL::ComPtr<ID3D11Resource> res;
+    gui->GetResource(&res);
+    if (!res) return;
+    for (uint32_t i = 0; i < g_worldScreenSurfaceCount; ++i)
+        if (g_worldScreenSurfaces[i].res == res.Get()) return;
+    if (g_worldScreenSurfaceCount >= kWorldScreenSurfaceNotes) return;
+    WorldScreenSurfaceNote& n = g_worldScreenSurfaces[g_worldScreenSurfaceCount++];
+    n.res = res.Get();
+    D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
+    gui->GetDesc(&sd);
+    D3D11_TEXTURE2D_DESC td{};
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+    if (SUCCEEDED(res.As(&tex))) tex->GetDesc(&td);
+    uint32_t mip0 = 0, mips = 0, first = 0, slices = 1;
+    const char* dim = "other";
+    if (sd.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2DARRAY) {
+        dim = "Texture2DArray";
+        mip0 = sd.Texture2DArray.MostDetailedMip; mips = sd.Texture2DArray.MipLevels;
+        first = sd.Texture2DArray.FirstArraySlice; slices = sd.Texture2DArray.ArraySize;
+    } else if (sd.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D) {
+        dim = "Texture2D";
+        mip0 = sd.Texture2D.MostDetailedMip; mips = sd.Texture2D.MipLevels;
+    }
+    const uint32_t viewMips = mips == 0xFFFFFFFFu ? (td.MipLevels > mip0 ? td.MipLevels - mip0 : 0u) : mips;
+    const uint32_t viewSlices = slices == 0xFFFFFFFFu ? (td.ArraySize > first ? td.ArraySize - first : 0u) : slices;
+    std::snprintf(n.text, sizeof(n.text),
+                  "ui depth world screens (F108): interface texture %u: %ux%u, %u slice(s), %u mip(s), DXGI format %u, bind 0x%X; "
+                  "the view (%s, format %u) mips %u..%u, slices %u..%u; UiContent: %s (%s)",
+                  g_worldScreenSurfaceCount, td.Width, td.Height, td.ArraySize, td.MipLevels, static_cast<unsigned>(td.Format),
+                  td.BindFlags, dim, static_cast<unsigned>(sd.Format), mip0, mip0 + (viewMips ? viewMips - 1 : 0), first,
+                  first + (viewSlices ? viewSlices - 1 : 0), uiContentDecisionWord(decision), uiContentReason(decision, 0));
+    Microsoft::WRL::ComPtr<ID3D11Device> dev;
+    ctx->GetDevice(&dev);
+    D3D11_QUERY_DESC qd{};
+    qd.Query = D3D11_QUERY_OCCLUSION;
+    if (dev && !g_worldScreenQueryOpen && SUCCEEDED(dev->CreateQuery(&qd, &n.query))) {
+        ctx->Begin(n.query.Get());
+        g_worldScreenQueryOpen = n.query.Get();
+        n.pending = true;
+        std::snprintf(n.text + std::strlen(n.text), sizeof(n.text) - std::strlen(n.text), "; the screen's first pass in eye %d", eye);
+    } else {
+        Log::get().note("%s; the screen's footprint not measured (no occlusion query).", n.text);
+    }
+}
+
+// F108: the described textures' footprints, read without a flush and logged once each (called at the frame boundary).
+void worldScreenPollNotes(ID3D11DeviceContext* ctx) {
+    for (uint32_t i = 0; i < g_worldScreenSurfaceCount; ++i) {
+        WorldScreenSurfaceNote& n = g_worldScreenSurfaces[i];
+        if (!n.pending || !n.query || n.query.Get() == g_worldScreenQueryOpen) continue;
+        UINT64 samples = 0;
+        if (ctx->GetData(n.query.Get(), &samples, sizeof(samples), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) continue;
+        n.pending = false;
+        float ux = 0.0f, uy = 0.0f;
+        const bool scaled = temporalPassUpscale(&ux, &uy);
+        const double out = scaled ? static_cast<double>(samples) * ux * uy : 0.0;
+        if (scaled)
+            Log::get().note("%s covered %llu render px (%.0f output px at x%.2f by x%.2f).", n.text,
+                            static_cast<unsigned long long>(samples), out, static_cast<double>(ux), static_cast<double>(uy));
+        else
+            Log::get().note("%s covered %llu render px (output size unknown: no trained treat yet).", n.text,
+                            static_cast<unsigned long long>(samples));
+        n.query.Reset();
+    }
+}
+
+// F108: the held draws' UiContent decisions as the 20 s line names them ("none" when every marked draw was tracked).
+void worldScreenHeldText(char* out, size_t size) {
+    out[0] = 0;
+    size_t used = 0;
+    for (uint32_t i = 0; i < 16; ++i) {
+        if (!g_worldScreenWindow.heldWhy[i]) continue;
+        const int n = std::snprintf(out + used, size - used, "%s%s %u", used ? ", " : "",
+                                    uiContentReason(static_cast<UiContent::Decision>(i), 0), g_worldScreenWindow.heldWhy[i]);
+        if (n < 0 || static_cast<size_t>(n) >= size - used) break;
+        used += static_cast<size_t>(n);
+    }
+    if (!used) std::snprintf(out, size, "none");
+}
+
+// F105 (world_screen_coverage.h): the draw uiDepthOnEyeDraw classified as an in-world screen, issued once more into the
+// eye's coverage and edit masks over the game's own depth. Every decline is counted by its reason on the 20 s line.
+bool uiDepthWorldScreenBegin(ID3D11DeviceContext* ctx) {
+    const bool pending = detail::g_uiDepthDraw.worldScreenPending;
+    detail::g_uiDepthDraw.worldScreenPending = false;
+    if (!pending || !detail::g_uiDepthOn || detail::g_uiDepthStoodDown || !g_trained || !ctx ||
+        ctx->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+        return false;
+    // The pair still bound: a flag left by a draw this path never reached must not mark another draw.
+    if (boundVsHash(ctx) != kWorldScreenVs || boundPsHash(ctx) != kWorldScreenPs) {
+        g_worldScreenWindow.refuse(WorldScreenRefusal::kState);
+        return false;
+    }
+    // The eye from the scene depth bound for the draw, as uiDepthPlanetBegin finds it.
+    auto* dsv = static_cast<ID3D11DepthStencilView*>(bindingGet(BindSlot::Dsv0));
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> scene;
+    if (dsv) {
+        Microsoft::WRL::ComPtr<ID3D11Resource> resource;
+        dsv->GetResource(&resource);
+        if (resource) resource.As(&scene);
+    }
+    int eye = -1;
+    D3D11_TEXTURE2D_DESC td{};
+    if (scene) {
+        scene->GetDesc(&td);
+        for (int i = 0; i < 2 && eye < 0; ++i) {
+            ID3D11Texture2D* candidate = nullptr;
+            uint32_t format = 0;
+            if (depthProbeSceneDepthFormat(td.Width, td.Height, i, &candidate, &format) && candidate == scene.Get()) eye = i;
+        }
+    }
+    if (eye < 0) {
+        g_worldScreenWindow.refuse(WorldScreenRefusal::kNoEye);
+        return false;
+    }
+    Mask* mask = maskFor(ctx, eye, td.Width, td.Height);
+    Mask* edits = maskFor(ctx, eye, td.Width, td.Height, g_edits);
+    Mask* state = maskFor(ctx, eye, td.Width, td.Height, g_screenState);
+    if (!mask || !mask->rtv || !edits || !edits->rtv || !state || !state->rtv) {
+        g_worldScreenWindow.refuse(WorldScreenRefusal::kNoMask);
+        return false;
+    }
+    if (!g_worldScreenPs && !g_worldScreenPsTried) {
+        g_worldScreenPsTried = true;
+        g_worldScreenPs.Attach(shaderSwapCreatePs(ctx, kWorldScreenCoverageBytecode, sizeof(kWorldScreenCoverageBytecode),
+                                                  "world_screen_coverage_ps", "ui depth world screens (F105)"));
+    }
+    if (!g_worldScreenTrackedPs && !g_worldScreenTrackedTried) {
+        g_worldScreenTrackedTried = true;
+        g_worldScreenTrackedPs.Attach(shaderSwapCreatePs(ctx, kWorldScreenTrackedBytecode, sizeof(kWorldScreenTrackedBytecode),
+                                                         "world_screen_tracked_ps", "ui depth world screens (F108)"));
+    }
+    // F108: the interface texture (the game's t2) and UiContent's edit ages for it. With them the screen is held only where its
+    // interface changed; without (a texture UiContent declines, or the tracked stand-in missing) F105's rule holds it everywhere.
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> gui;
+    ctx->PSGetShaderResources(2, 1, &gui);
+    ID3D11ShaderResourceView* ages = nullptr;
+    UiContent::Decision decision = UiContent::Decision::kDeclinedNoSurface;
+    if (gui && g_worldScreenTrackedPs) {
+        ages = g_uiContent.prepare(ctx, gui.Get(), g_frame, (g_frame & 15u) == 0u);
+        decision = g_uiContent.lastDecision;
+        // F108b: the stand-in reads the ages as a Texture2DArray, as the game's shader reads the interface; a 2D interface's
+        // 2D ages are given as a one-slice array view, not bound to the array register as they are.
+        if (ages) {
+            ages = g_uiContent.arrayView(ctx, ages);
+            if (!ages) decision = UiContent::Decision::kDeclinedCreateFailed;
+        }
+    } else if (gui) {
+        decision = UiContent::Decision::kDeclinedShaderFailed;
+    }
+    ID3D11PixelShader* standIn = ages ? g_worldScreenTrackedPs.Get() : g_worldScreenPs.Get();
+    if (!standIn) {
+        g_worldScreenWindow.refuse(WorldScreenRefusal::kShader);
+        return false;
+    }
+    ID3D11DepthStencilState* test = maskDepthState(ctx);
+    ID3D11BlendState* blend = maskBlend(ctx);
+    if (!test || !blend || !g_worldScreenCoverage.begin(ctx, standIn, mask->rtv, state->rtv, edits->rtv, ages, test, blend)) {
+        g_worldScreenWindow.refuse(WorldScreenRefusal::kState);
+        return false;
+    }
+    mask->marked = true;
+    edits->marked = true;
+    state->marked = true;
+    ++g_worldScreenWindow.marked;
+    ++g_worldScreenWindow.eye[eye];
+    if (ages) {
+        ++g_worldScreenWindow.tracked;
+        if (!g_worldScreenTrackedNoted) {
+            g_worldScreenTrackedNoted = true;
+            Log::get().note("ui depth world screens (F108): an in-world screen's interface is tracked by UiContent from this draw on: "
+                            "it is held only where its texels changed in the last 32 frames, and NVIDIA's history is restarted "
+                            "where a change begins; at rest the screen is DLSS's. Said once.");
+        }
+    } else {
+        ++g_worldScreenWindow.held;
+        const uint32_t why = static_cast<uint32_t>(decision);
+        ++g_worldScreenWindow.heldWhy[why & 15u];
+        if (!(g_worldScreenHeldNoted & (1u << (why & 15u)))) {
+            g_worldScreenHeldNoted |= 1u << (why & 15u);
+            Log::get().note("ui depth world screens (F108): an in-world screen is held everywhere (F105's rule) because its interface "
+                            "texture is not tracked: %s (%s). Said once for this reason; the 20 s line counts these draws.",
+                            uiContentDecisionWord(decision), uiContentReason(decision, 0));
+        }
+    }
+    // F108: the interface texture described once, with an occlusion query over this pass for the screen's footprint.
+    if (gui) worldScreenDescribe(ctx, gui.Get(), decision, eye);
+    if (!g_worldScreenNoted) {
+        g_worldScreenNoted = true;
+        Log::get().note("ui depth world screens (F105): an in-world screen (vs %016llX ps %016llX, the interface drawn as a lit "
+                        "surface) is marked into eye %d's coverage and edit masks at %ux%u from this draw on; the UI resolve "
+                        "holds its pixels to the current frame after DLSS. Said once.",
+                        static_cast<unsigned long long>(kWorldScreenVs), static_cast<unsigned long long>(kWorldScreenPs),
+                        eye, td.Width, td.Height);
+    }
+    return true;
+}
+void uiDepthWorldScreenEnd(ID3D11DeviceContext* ctx) {
+    if (g_worldScreenQueryOpen && ctx) {
+        ctx->End(g_worldScreenQueryOpen);
+        g_worldScreenQueryOpen = nullptr;
+    }
+    g_worldScreenCoverage.end(ctx);
+}
+
+UiDepthTerminalState uiDepthTerminalState() {
+    UiDepthTerminalState s;
+    s.stepMs = g_terminalStepMs.load(std::memory_order_acquire);
+    s.hidden = g_terminalHidden.load(std::memory_order_relaxed);
+    s.footprint = g_terminalFootprint.load(std::memory_order_relaxed);
+    s.stepped = g_terminalStepped.load(std::memory_order_relaxed);
+    s.over = g_terminalOver.load(std::memory_order_relaxed);
+    s.hiddenFrames = g_terminalHiddenFrames.load(std::memory_order_relaxed);
+    s.rows = g_terminalRows.load(std::memory_order_relaxed);
+    s.upscaler = g_terminalUpscaler.load(std::memory_order_relaxed);
+    return s;
+}
+
 bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
     g_stellarCpuActive=-1;
     g_reissueOn = false;
     g_rebound = false;
-    if (!detail::g_uiDepthOn || detail::g_uiDepthStoodDown || !g_reissueShader) return false;
-    const bool depthPass = detail::g_uiDepthMode == Mode::kReissue || detail::g_uiDepthMode == Mode::kReissueScene;   // this draw writes depth
-    const bool sceneProjection = detail::g_uiDepthMode == Mode::kReissueScene;   // ...in the scene's own viewport
-    const bool wantMask = g_wantMask;
-    const bool rebind = g_wantRebind;
-    g_wantRebind = false;
-    g_wantMask = false;
+    if (!detail::g_uiDepthOn || detail::g_uiDepthStoodDown || !detail::g_uiDepthDraw.reissueShader) return false;
+    const bool depthPass = detail::g_uiDepthDraw.mode == Mode::kReissue || detail::g_uiDepthDraw.mode == Mode::kReissueScene;   // this draw writes depth
+    const bool sceneProjection = detail::g_uiDepthDraw.mode == Mode::kReissueScene;   // ...in the scene's own viewport
+    const bool wantMask = detail::g_uiDepthDraw.wantMask;
+    const bool rebind = detail::g_uiDepthDraw.wantRebind;
+    detail::g_uiDepthDraw.wantRebind = false;
+    detail::g_uiDepthDraw.wantMask = false;
     if (!depthPass && !wantMask) return false;
-    DepthShader* shader = g_reissueShader;
+    DepthShader* shader = detail::g_uiDepthDraw.reissueShader;
     const int stellar=shader==&g_depthShaders[6]?0:shader==&g_depthShaders[7]?1:-1;
     ID3D11ShaderResourceView* coronaDepth=nullptr;
     if(stellar>=0) {
@@ -2902,18 +3231,18 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
         // occluder: keep the seeded DSV's GEQUAL test, but never write it.
         const bool orbitalDepth = shader==&g_depthShaders[7];
         ID3D11DepthStencilState* dss = depthPass ? (orbitalDepth ? maskDepthState(ctx) : reissueState(ctx, overlay)) : maskDepthState(ctx);
-        ID3D11Buffer* cb = floorBuffer(ctx, g_reissueMaskSlot);
+        ID3D11Buffer* cb = floorBuffer(ctx, detail::g_uiDepthDraw.reissueMaskSlot);
         if (!dss || !cb) {
             ++g_wNoTwin;
             return;
         }
-        Mask* mask = wantMask ? maskFor(ctx, g_drawEye, g_rebindW, g_rebindH) : nullptr;
+        Mask* mask = wantMask ? maskFor(ctx, detail::g_uiDepthDraw.drawEye, g_rebindW, g_rebindH) : nullptr;
         if (wantMask && !mask && !depthPass) return;   // nothing left to do
         ctx->OMGetRenderTargets(kMaxRtvs, g_savedRtvs, &g_savedDsv);
         ID3D11Texture2D* scene = nullptr;
         if (rebind) {
             uint32_t fmt = 0;
-            if (depthProbeSceneDepthFormat(g_rebindW, g_rebindH, g_rebindEye, &scene, &fmt) && scene)
+            if (depthProbeSceneDepthFormat(g_rebindW, g_rebindH, detail::g_uiDepthDraw.rebindEye, &scene, &fmt) && scene)
                 scene->AddRef();
             else scene = nullptr;
         } else if (g_savedDsv) {
@@ -2925,14 +3254,14 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
             }
         }
         ID3D11DepthStencilView* target = nullptr;
-        if (g_reissueMaskSlot != 3 && scene && g_drawEye >= 0 && g_drawEye < 2)
-            target = g_uiDepth[g_drawEye].acquire(ctx, scene);
+        if (detail::g_uiDepthDraw.reissueMaskSlot != 3 && scene && detail::g_uiDepthDraw.drawEye >= 0 && detail::g_uiDepthDraw.drawEye < 2)
+            target = g_uiDepth[detail::g_uiDepthDraw.drawEye].acquire(ctx, scene);
         bool holo=false;
         const bool ring=shader==&g_depthShaders[6],orbital=shader==&g_depthShaders[7],sprite=shader==&g_depthShaders[5];
         if(orbital && !g_orbitalVs) g_orbitalVs.Attach(shaderSwapCreateVs(ctx,kUiOrbitalCoverageVsBytecode,sizeof(kUiOrbitalCoverageVsBytecode),"orbital coverage","stellar motion"));
         ID3D11Buffer* orbitalWidth=orbital?g_orbitalWidthCb.get(ctx,orbital_width::factor()):nullptr;   // null declines the twin, like a missing shader
         if (target && scene && mask && (holoShader(shader) || sprite || ring || (orbital && g_orbitalVs && orbitalWidth))) {
-            holo=g_holoMotion[g_drawEye].prepare(ctx,scene,g_holoDraw,g_cockpitMetres,ring?1:orbital?2:sprite?3:0,shader->slot);
+            holo=g_holoMotion[detail::g_uiDepthDraw.drawEye].prepare(ctx,scene,g_holoDraw,g_cockpitMetres,ring?1:orbital?2:sprite?3:0,shader->slot);
             if(holo && !g_holoNoted) {
                 g_holoNoted=true;
                 Log::get().note("holo motion: draw-time cockpit transform history active; 128 draws per eye, pool-slot-independent matching, TAA/DLSS.");
@@ -2947,7 +3276,7 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
             g_stellarNoted[orbital?1:0]=true;
             Log::get().note("stellar motion: %s coverage and draw-transform history active; shared 128-record eye budget.",orbital?"orbital line":"opaque ring");
         }
-        if (g_reissueMaskSlot != 3 && !target) {
+        if (detail::g_uiDepthDraw.reissueMaskSlot != 3 && !target) {
             releaseSavedOm();
             ++g_wNoPair;
             if (!g_privateDepthFailedNoted) {
@@ -2956,9 +3285,9 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
             }
             return;
         }
-        const bool needsSceneDepth = g_reissueMaskSlot == 2 || shader == &g_depthShaders[5];
+        const bool needsSceneDepth = detail::g_uiDepthDraw.reissueMaskSlot == 2 || shader == &g_depthShaders[5];
         ID3D11ShaderResourceView* hudScene = needsSceneDepth ?
-            g_uiDepth[g_drawEye].sourceView(ctx) : nullptr;
+            g_uiDepth[detail::g_uiDepthDraw.drawEye].sourceView(ctx) : nullptr;
         if (needsSceneDepth && !hudScene) {
             releaseSavedOm(); ++g_wNoPair;
             if (!g_privateDepthFailedNoted) {
@@ -2967,11 +3296,11 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
             }
             return;
         }
-        if (g_reissueMaskSlot != 3 && !g_privateDepthNoted) {
+        if (detail::g_uiDepthDraw.reissueMaskSlot != 3 && !g_privateDepthNoted) {
             g_privateDepthNoted = true;
             Log::get().note("ui depth: HUD and interface coverage now writes a PRIVATE scene-depth copy "
                             "for temporal AA only; later game draws keep the original depth (eye %d, %ux%u).",
-                            g_drawEye, g_rebindW, g_rebindH);
+                            detail::g_uiDepthDraw.drawEye, g_rebindW, g_rebindH);
         }
         if (rebind) ++g_wRebound;
         // The smoke's depth goes to EDVR's own target (SmokeDepth says why),
@@ -2980,7 +3309,7 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
         // draw, a multisampled scene depth, a failed make -- the smoke is
         // left to the sky's depth this frame rather than written into the
         // game's.
-        if (depthPass && g_reissueMaskSlot == 3) {
+        if (depthPass && detail::g_uiDepthDraw.reissueMaskSlot == 3) {
             SmokeDepth* sdp = nullptr;
             if (g_savedDsv) {
                 ID3D11Resource* res = nullptr;
@@ -2994,7 +3323,7 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
                     D3D11_TEXTURE2D_DESC td{};
                     tex->GetDesc(&td);
                     tex->Release();
-                    if (td.SampleDesc.Count == 1) sdp = smokeDepthFor(ctx, g_drawEye, td.Width, td.Height);
+                    if (td.SampleDesc.Count == 1) sdp = smokeDepthFor(ctx, detail::g_uiDepthDraw.drawEye, td.Width, td.Height);
                 }
             }
             if (!sdp) {
@@ -3013,21 +3342,21 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
                                 "of EDVR's for eye %d, which the temporal pass folds into the scene's "
                                 "as it reads; the game's depth is no longer written under the trail "
                                 "(the review of 2026-09-10).",
-                                sdp->w, sdp->h, g_drawEye);
+                                sdp->w, sdp->h, detail::g_uiDepthDraw.drawEye);
             }
             // Corona shares the historical smoke shader, but its exact
             // affine streak layout is a separate mode-5 motion source. The
             // original scene DSV is unbound while the private smoke DSV is
             // active, so a cached read-only SRV can preserve earlier Holo
             // coverage without copying the full scene.
-            if (g_coronaPending && scene && mask) {
-                coronaDepth=sceneDepthReadView(ctx,scene,g_drawEye);
+            if (detail::g_uiDepthDraw.coronaPending && scene && mask) {
+                coronaDepth=sceneDepthReadView(ctx,scene,detail::g_uiDepthDraw.drawEye);
                 if (!g_smokeCoronaShader && !g_smokeCoronaCompileTried) {
                     g_smokeCoronaCompileTried=true;
                     g_smokeCoronaShader.Attach(shaderSwapCreatePs(ctx,kUiSmokeCoronaBytecode,sizeof(kUiSmokeCoronaBytecode),"ui_depth_corona_ps","ui depth corona"));
                 }
-                if (coronaDepth && g_smokeCoronaShader && g_holoMotion[g_drawEye].prepare(ctx,scene,g_holoDraw,g_cockpitMetres,5,1)) {
-                    holo=true; g_coronaMotion=true;
+                if (coronaDepth && g_smokeCoronaShader && g_holoMotion[detail::g_uiDepthDraw.drawEye].prepare(ctx,scene,g_holoDraw,g_cockpitMetres,5,1)) {
+                    holo=true; detail::g_uiDepthDraw.coronaMotion=true;
                     if(!g_coronaNoted) { g_coronaNoted=true; Log::get().note("corona motion: mode-5 affine streak history active; exact VS/PS, stride-44 layout, bounded geometry epochs and class-3 visibility."); }
                 }
             }
@@ -3069,7 +3398,7 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
                     const uint32_t blocksH = (sh + UiContent::kBlock - 1) / UiContent::kBlock;
                     Log::get().note("UI content census: frame %u eye %d vs %016llX ps %016llX source %ux%u "
                                     "fmt %u bind 0x%X blocks %ux%u -> %s (%s), entry age %u frames, evicted %u this call.",
-                                    g_frame, g_drawEye, static_cast<unsigned long long>(boundVsHash(ctx)),
+                                    g_frame, detail::g_uiDepthDraw.drawEye, static_cast<unsigned long long>(boundVsHash(ctx)),
                                     static_cast<unsigned long long>(boundPsHash(ctx)), sw, sh, sfmt, sbind,
                                     blocksW, blocksH,
                                     uiContentDecisionWord(g_uiContent.lastDecision),
@@ -3077,7 +3406,7 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
                                     g_uiContent.lastAge, g_uiContent.lastEvicted);
                 }
             }
-            if(changes) edits=maskFor(ctx,g_drawEye,g_rebindW,g_rebindH,g_edits);
+            if(changes) edits=maskFor(ctx,detail::g_uiDepthDraw.drawEye,g_rebindW,g_rebindH,g_edits);
             if(!edits)changes=nullptr;
             if(edits && !g_contentNoted) {
                 g_contentNoted=true;
@@ -3103,8 +3432,8 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
         g_reBlendSaved = mask != nullptr;
         g_reissueOn = true;
         g_rebound = true;
-        if(g_coronaMotion && scene) {
-            if(!coronaDepth) { g_coronaMotion=false; holo=false; }
+        if(detail::g_uiDepthDraw.coronaMotion && scene) {
+            if(!coronaDepth) { detail::g_uiDepthDraw.coronaMotion=false; holo=false; }
             else {
                 g_sceneDepthBound=true;
                 ctx->PSGetShaderResources(2,1,&g_savedSceneDepth);
@@ -3114,12 +3443,12 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
         // otherwise; through the original entry so the binding shadow keeps
         // describing the game's bindings.
         ID3D11RenderTargetView* rtv = mask ? mask->rtv : nullptr;
-        ID3D11RenderTargetView* rtvs[3]={rtv,holo?g_holoMotion[g_drawEye].target():nullptr,edits?edits->rtv:nullptr};
+        ID3D11RenderTargetView* rtvs[3]={rtv,holo?g_holoMotion[detail::g_uiDepthDraw.drawEye].target():nullptr,edits?edits->rtv:nullptr};
         g_reissueRtvCount = edits ? 3 : holo ? 2 : (mask ? 1 : 0);
         for (UINT i=0;i<3;++i) g_reissueRtvs[i]=i<g_reissueRtvCount?rtvs[i]:nullptr;
         g_reissueTarget=target;
         vScreenSetRenderTargetsRaw(ctx, edits?3:holo?2:(mask?1:0), mask?rtvs:nullptr, target);
-        if(g_coronaMotion) {
+        if(detail::g_uiDepthDraw.coronaMotion) {
             ctx->PSSetShaderResources(2,1,&coronaDepth);
         }
         if(surfaceComposite) {
@@ -3128,7 +3457,7 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
         }
         if(holo) {
             g_holoBound=true;
-            ID3D11Buffer* info=g_holoMotion[g_drawEye].info(); ctx->PSSetConstantBuffers(12,1,&info);
+            ID3D11Buffer* info=g_holoMotion[detail::g_uiDepthDraw.drawEye].info(); ctx->PSSetConstantBuffers(12,1,&info);
             if(orbital) { g_orbitalBound=true;ctx->VSSetShader(g_orbitalVs.Get(),nullptr,0);ctx->VSSetConstantBuffers(12,1,&info);ctx->VSSetConstantBuffers(orbital_width::kSlot,1,&orbitalWidth); }
         }
         if (hudScene) {
@@ -3137,7 +3466,7 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
         }
         if (mask) {
             mask->marked = true;
-            ID3D11BlendState* bs = g_coronaMotion ? g_holoMotion[g_drawEye].motionBlend() : maskBlend(ctx);
+            ID3D11BlendState* bs = detail::g_uiDepthDraw.coronaMotion ? g_holoMotion[detail::g_uiDepthDraw.drawEye].motionBlend() : maskBlend(ctx);
             const FLOAT one[4] = {1.0f, 1.0f, 1.0f, 1.0f};
             if (bs) ctx->OMSetBlendState(bs, one, 0xFFFFFFFFu);
             if (!g_maskNotedOnce) {
@@ -3146,11 +3475,11 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
                                 "%ux%u for eye %d; fixed NVIDIA bias is zero. "
                                 "Floating strokes keep the camera path; the temporal "
                                 "pass detects UI changes separately.",
-                                g_rebindW, g_rebindH, g_drawEye);
+                                g_rebindW, g_rebindH, detail::g_uiDepthDraw.drawEye);
             }
         }
         ctx->OMSetDepthStencilState(dss, 0);
-        ctx->PSSetShader(g_coronaMotion ? g_smokeCoronaShader.Get() : shader->shader, nullptr, 0);
+        ctx->PSSetShader(detail::g_uiDepthDraw.coronaMotion ? g_smokeCoronaShader.Get() : shader->shader, nullptr, 0);
         ctx->PSSetConstantBuffers(13, 1, &cb);
         if (depthPass && !sceneProjection) scaleViewportsForUi(ctx);
         if (depthPass) {
@@ -3193,7 +3522,7 @@ void uiDepthReissueEnd(ID3D11DeviceContext* ctx) {
         if (g_savedFloorCb) { g_savedFloorCb->Release(); g_savedFloorCb = nullptr; }
         if(g_savedHoloInfo) { g_savedHoloInfo->Release(); g_savedHoloInfo=nullptr; }
         g_holoBound=false;
-        g_coronaMotion=false; g_coronaPending=false;
+        detail::g_uiDepthDraw.coronaMotion=false; detail::g_uiDepthDraw.coronaPending=false;
         if(g_sceneDepthBound) { if(g_savedSceneDepth) g_savedSceneDepth->Release(); g_savedSceneDepth=nullptr; g_sceneDepthBound=false; }
         for(UINT i=0;i<g_savedPsClassCount;++i) if(g_savedPsClasses[i]) g_savedPsClasses[i]->Release();
         g_savedPsClassCount=0;
@@ -3229,8 +3558,8 @@ void uiDepthReissueEnd(ID3D11DeviceContext* ctx) {
         guarded("uiDepth.reissueRestore", [&] { restoreOm(ctx); });
         releaseSavedOm();
     }
-    detail::g_uiDepthMode = Mode::kNone;
-    g_reissueShader = nullptr;
+    detail::g_uiDepthDraw.mode = Mode::kNone;
+    detail::g_uiDepthDraw.reissueShader = nullptr;
     if(g_stellarCpuActive>=0) {
         auto& sample=g_stellarCpu[g_stellarCpuActive];
         sample.ticks+=qpcNow()-g_stellarCpuStart;++sample.samples;
@@ -3243,17 +3572,30 @@ void uiDepthReissueEnd(ID3D11DeviceContext* ctx) {
 // uiDepthOnEyeDraw at the same vscreen.cpp call site rather than inside
 // it: this mechanism needs no coverage shader and applies to families
 // uiDepthOnEyeDraw's own lists never claim -- the icon core has none.
-bool uiDepthHologramOnEyeDraw(ID3D11DeviceContext* ctx) {
-    g_holoEye = -1;
-    if (!detail::g_holoDepthOn) return false;
+//
+// Memoised 2026-10-27 like uiDepthOnEyeDraw (docs\engine-render-performance-2026-09-19.md, "Desk design: the ui_depth eye-draw
+// memo"), and split the same way: classifyHologramDraw is the body after the first two lines, and `*exit` is kPlainDecline at its
+// two cheap declines only -- the hash is 0 or excluded, or in neither list. Those read the vertex shader's hash and the lists, which
+// the key covers. The later declines (the depth view, the render target, the eye) read dsvIsSceneDepth and the eye table, which can
+// change within a frame (the depth probe learns the scene depth at its first draw), so they and acceptance store "not a plain decline".
+// Flown 2026-10-27 with the eye-draw memo: 91% of eye draws hit in this classifier too, and about 5M hits checked against a full run
+// never differed.
+static bool classifyHologramDraw(ID3D11DeviceContext* ctx, classifiermemo::Exit* exit) {
+    *exit = classifiermemo::Exit::kOther;
     // Cheapest first: the vertex-shader hash alone rejects nearly every
     // draw, before the two binding-shadow reads below. Either list
     // qualifies; which one is recorded in g_holoIsWorldMarker, for
     // ContributionBegin's DSS choice below.
     const uint64_t h = boundVsHash(ctx);
-    if (!h || uiDepthIsExcluded(h)) return false;
+    if (!h || uiDepthIsExcluded(h)) {
+        *exit = classifiermemo::Exit::kPlainDecline;
+        return false;
+    }
     const bool worldMarker = inList(kHoloWorldMarkers, kHoloWorldMarkerCount, h);
-    if (!worldMarker && !inList(g_holoFamilies, g_holoFamilyCount, h)) return false;   // built-in families only
+    if (!worldMarker && !inList(g_holoFamilies, g_holoFamilyCount, h)) {   // built-in families only
+        *exit = classifiermemo::Exit::kPlainDecline;
+        return false;
+    }
     // A bound depth-stencil must still be the scene's. None bound is
     // accepted: the icon core and the corona draw with depth off, and
     // neither pass below reads the game's depth.
@@ -3263,7 +3605,7 @@ bool uiDepthHologramOnEyeDraw(ID3D11DeviceContext* ctx) {
     if (!bindingResolve(bindingGet(BindSlot::Rtv0), &rt) || !rt.isTexture2D) return false;
     const int eye = eyeIndexFor(rt.resource, rt.a, rt.b, rt.fmt);
     if (eye < 0) return false;
-    g_holoEye = eye;
+    detail::g_holoEye = eye;
     g_holoW = rt.a;
     g_holoH = rt.b;
     g_holoDrawVs = h;
@@ -3271,6 +3613,19 @@ bool uiDepthHologramOnEyeDraw(ID3D11DeviceContext* ctx) {
     ++g_holoWindowListed;
     if (worldMarker) ++g_holoWindowMarkerDraws;
     return true;
+}
+
+bool uiDepthHologramOnEyeDraw(ID3D11DeviceContext* ctx) {
+    detail::g_holoEye = -1;
+    if (!detail::g_holoDepthOn) return false;
+    // Its own key and its own stored exit, apart from uiDepthOnEyeDraw's: the two classifiers leave at different places on the same
+    // draw. The key is read before the classifier runs, as there.
+    const classifiermemo::Key now{bindingEyeKeyGeneration(), g_classifierEpoch};
+    if (classifiermemo::hit(g_holoMemo, now)) return false;
+    classifiermemo::Exit exit = classifiermemo::Exit::kOther;
+    const bool ret = classifyHologramDraw(ctx, &exit);
+    classifiermemo::store(g_holoMemo, now, exit);
+    return ret;
 }
 
 // Pass (a): the game's own draw again, RTV0 rebound to a scratch
@@ -3284,9 +3639,9 @@ bool uiDepthHologramOnEyeDraw(ID3D11DeviceContext* ctx) {
 // (holoWorldMarkerDss): it contributes regardless of range.
 bool uiDepthHologramContributionBegin(ID3D11DeviceContext* ctx) {
     g_holoContribOn = false;
-    if (g_holoEye < 0) return false;
-    if (!holoScratchPrepare(ctx, g_holoEye, g_holoW, g_holoH)) return false;
-    HoloScratch& s = g_holoScratch[g_holoEye];
+    if (detail::g_holoEye < 0) return false;
+    if (!holoScratchPrepare(ctx, detail::g_holoEye, g_holoW, g_holoH)) return false;
+    HoloScratch& s = g_holoScratch[detail::g_holoEye];
     ID3D11DepthStencilState* dss = g_holoIsWorldMarker ? holoWorldMarkerDss(ctx) : holoContribDss(ctx);
     if (!dss) return false;
     ctx->OMGetRenderTargets(kMaxRtvs, g_savedRtvs, &g_savedDsv);
@@ -3363,7 +3718,7 @@ bool uiDepthHologramContributionBegin(ID3D11DeviceContext* ctx) {
         g_holoFirstDrawNoted = true;
         Log::get().note("hologram depth: first listed draw -- vs %016llX, eye %d, target %ux%u, "
                         "RTV format %u, %s blend space, target view %s.",
-                        static_cast<unsigned long long>(g_holoDrawVs), g_holoEye, g_holoW, g_holoH,
+                        static_cast<unsigned long long>(g_holoDrawVs), detail::g_holoEye, g_holoW, g_holoH,
                         static_cast<unsigned>(rtvFormat), linearBlend ? "linear" : "display",
                         s.targetShaderResource ? "yes" : "no");
     }
@@ -3401,9 +3756,9 @@ bool uiDepthHologramElementDepthBegin(ID3D11DeviceContext* ctx) {
     g_holoElementOn = false;
     g_holoSavedViewportCount = 0;
     g_holoElementQuery = nullptr;
-    if (g_holoEye < 0) return false;
-    if (!holoScratchPrepare(ctx, g_holoEye, g_holoW, g_holoH)) return false;
-    HoloScratch& s = g_holoScratch[g_holoEye];
+    if (detail::g_holoEye < 0) return false;
+    if (!holoScratchPrepare(ctx, detail::g_holoEye, g_holoW, g_holoH)) return false;
+    HoloScratch& s = g_holoScratch[detail::g_holoEye];
     ID3D11DepthStencilState* dss = holoElementDepthState(ctx);
     if (!dss) return false;
     ctx->OMGetRenderTargets(kMaxRtvs, g_savedRtvs, &g_savedDsv);
@@ -3489,7 +3844,7 @@ void uiDepthHologramElementDepthEnd(ID3D11DeviceContext* ctx) {
     g_holoElementOn = false;
     if (g_holoElementQuery) {
         ctx->End(g_holoElementQuery);
-        holoMarkerQueryBegan(g_holoScratch[g_holoEye], g_holoElementQuery);
+        holoMarkerQueryBegan(g_holoScratch[detail::g_holoEye], g_holoElementQuery);
         g_holoElementQuery = nullptr;
     }
     guardedBudget(g_holoBudget, [&] {
@@ -3973,12 +4328,12 @@ void writeChromeDump(ID3D11DeviceContext* ctx,const wchar_t* directory,const wch
             copy.Reset(); continue;
         }
         wchar_t path[MAX_PATH]; _snwprintf_s(path,MAX_PATH,_TRUNCATE,L"%s\\eye_%s_Chrome%u.bin",directory,stamp,i);
-        FILE* f=nullptr; _wfopen_s(&f,path,L"wb"); bool ok=false;
-        if(f) {
+        dump_file::Writer f; bool ok=false;
+        if(f.open(path)) {
             const uint32_t header[9]={1,d.Width,d.Height,static_cast<uint32_t>(d.Format),d.Width*bytes,0,0,0,0};
-            ok=fwrite("EDVRTEX1",1,8,f)==8 && fwrite(header,sizeof(header),1,f)==1;
-            for(uint32_t y=0;y<d.Height && ok;++y) ok=fwrite(static_cast<const char*>(map.pData)+y*map.RowPitch,1,d.Width*bytes,f)==d.Width*bytes;
-            if(fclose(f)!=0) ok=false;
+            ok=f.write("EDVRTEX1",8) && f.write(header,sizeof(header));
+            for(uint32_t y=0;y<d.Height && ok;++y) ok=f.write(static_cast<const char*>(map.pData)+y*map.RowPitch,d.Width*bytes);
+            if(!f.close()) ok=false;
         }
         ctx->Unmap(copy.Get(),0);
         Log::get().note("eye capture: %ls chrome %u -- the scanner's chrome surface %ux%u DXGI format %u, as sampled by the screen's composite this run: %s.",stamp,i,d.Width,d.Height,unsigned(d.Format),ok?"written":"write failed");
@@ -3994,8 +4349,8 @@ void uiDepthHoloWriteDump(ID3D11DeviceContext* ctx,const wchar_t* directory,cons
         unsigned valid=0,matched=0;
         for(unsigned i=0;i<g_holoDumpCount;++i) { const auto* p=static_cast<const float*>(map.pData)+i*60; valid+=p[56]==1; matched+=p[59]==1; }
         wchar_t path[MAX_PATH]; _snwprintf_s(path,MAX_PATH,_TRUNCATE,L"%s\\eye_%s_Holo.bin",directory,stamp);
-        FILE* file=nullptr; _wfopen_s(&file,path,L"wb"); bool ok=false;
-        if(file) { const uint32_t header[2]={g_holoDumpCount,240}; ok=fwrite("EDVRHLO1",1,8,file)==8 && fwrite(header,8,1,file)==1 && fwrite(map.pData,240,g_holoDumpCount,file)==g_holoDumpCount; if(fclose(file)!=0) ok=false; }
+        dump_file::Writer file; bool ok=false;
+        if(file.open(path)) { const uint32_t header[2]={g_holoDumpCount,240}; ok=file.write("EDVRHLO1",8) && file.write(header,8) && file.write(map.pData,size_t(240)*g_holoDumpCount); if(!file.close()) ok=false; }
         ctx->Unmap(g_holoDump.Get(),0);
         Log::get().note("holo motion: eye run %ls matched %u/%u eligible transforms (%u total); record file %s.",stamp,matched,valid,g_holoDumpCount,ok?"written":"FAILED");
     } else Log::get().note("holo motion: eye run %ls readback unavailable (0x%08X).",stamp,unsigned(result));
@@ -4009,6 +4364,7 @@ void releaseChromeHeld() {
 
 void uiDepthFrameBoundary(ID3D11DeviceContext* ctx) {
     ++g_frame;
+    ++g_classifierEpoch;   // no memoised decline outlives its frame (the view memo's entries are stamped by g_frame)
     releaseChromeHeld();   // the pass, which stages an eye run, has run for the frame
     g_uiContent.retire(g_frame);
     if(ctx)g_uiContent.gpu.poll(ctx);
@@ -4020,10 +4376,48 @@ void uiDepthFrameBoundary(ID3D11DeviceContext* ctx) {
     detail::g_holoGeometryTracked.store(g_holoMotion[0].tracksGeometry() || g_holoMotion[1].tracksGeometry(),
                                         std::memory_order_relaxed);
     g_frameTargetCount = 0;
+    // F108: the in-world screens' census, before the clear below: the frame's state targets counted (both eyes one row), the
+    // rows that are ready read back in frame order, and the described textures' footprints.
+    if (ctx) {
+        // F116: every frame takes a place in the hide's frame order: one with a screen waits for its census row, one with none is 0
+        // at once, one whose census was skipped is unknown (the hysteresis holds).
+        if (g_screenState[0].marked || g_screenState[1].marked) {
+            ID3D11ShaderResourceView* states[2] = {g_screenState[0].marked ? g_screenState[0].srv : nullptr,
+                                                   g_screenState[1].marked ? g_screenState[1].srv : nullptr};
+            if (!g_worldScreenCensusPass.count(ctx, states, 2, g_frame)) {
+                ++g_worldScreenCensus.skipped;
+                g_terminalOrder.unknown(g_frame);
+            } else {
+                const auto pixels = [](const Mask& m) { return m.marked ? static_cast<uint64_t>(m.w) * m.h : 0ull; };
+                g_terminalOrder.waiting(g_frame, pixels(g_screenState[0]), pixels(g_screenState[1]));
+            }
+        } else {
+            g_terminalOrder.none(g_frame);
+        }
+        g_worldScreenCensusPass.drain(ctx, [](const WorldScreenCensusRow& r) {
+            if (r.ok) {
+                g_worldScreenCensus.add(r.frame, r.screen, r.edited, r.fresh);
+                g_terminalRows.fetch_add(1, std::memory_order_relaxed);
+            }
+            g_terminalOrder.row(r.frame, r.ok, r.eye[0], r.eye[1]);
+        });
+        g_terminalOrder.pop([](uint64_t, bool known, float footprint) {
+            if (!known) return;
+            const bool hidden = g_terminalHide.step(footprint);
+            g_terminalFootprint.store(footprint, std::memory_order_relaxed);
+            g_terminalStepped.fetch_add(1, std::memory_order_relaxed);
+            if (footprint > nofoot::f116::kHideOver) g_terminalOver.fetch_add(1, std::memory_order_relaxed);
+            if (hidden) g_terminalHiddenFrames.fetch_add(1, std::memory_order_relaxed);
+        });
+        g_terminalHidden.store(g_terminalHide.hidden, std::memory_order_relaxed);
+        g_terminalUpscaler.store(g_trained, std::memory_order_relaxed);
+        g_terminalStepMs.store(GetTickCount64(), std::memory_order_release);
+        worldScreenPollNotes(ctx);
+    }
     // The masks are marked during the frame and read at its submits, so
     // the clear belongs here, after both.
     if (ctx) {
-        for(auto* masks:{g_mask,g_edits}) for(unsigned eye=0;eye<2;++eye) {
+        for(auto* masks:{g_mask,g_edits,g_screenState}) for(unsigned eye=0;eye<2;++eye) {
             Mask& m=masks[eye];
             if (!m.rtv || !m.marked) continue;
             const FLOAT zero[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -4058,6 +4452,7 @@ void uiDepthFrameBoundary(ID3D11DeviceContext* ctx) {
     }
     g_uiContentCensusLedgerWasOn = ledgerActive;
     ++g_wFrames;
+    ++g_worldScreenWindow.frames;
     if (!g_announced && g_wWrote > 0) {
         g_announced = true;
         Log::get().note("ui depth: engaged -- %u interface draws wrote their depth "
@@ -4066,6 +4461,20 @@ void uiDepthFrameBoundary(ID3D11DeviceContext* ctx) {
                         g_wWrote, g_wComposite, g_surfaceCount, g_wDirect, g_wReissued);
     }
     if (g_wFrames >= kTotalsFrames) {
+        // F105: every window while an external upscaler runs, zeros included (world_screen_coverage.h says how to read it).
+        if (g_trained) {
+            char line[600];
+            worldScreenFormatWindow(line, sizeof(line), g_worldScreenWindow);
+            Log::get().note("%s", line);
+            // F108: the hold's own line, beside F105's (world_screen_coverage.h worldScreenFormatF108).
+            char held[200];
+            worldScreenHeldText(held, sizeof(held));
+            char f108[900];
+            worldScreenFormatF108(f108, sizeof(f108), g_worldScreenWindow, g_worldScreenCensus, held);
+            Log::get().note("%s", f108);
+        }
+        g_worldScreenWindow.reset();
+        g_worldScreenCensus.resetWindow();
         const auto& edits=g_uiContent.totals;
         if(g_trained) Log::get().note("UI content totals: compared=%u reused=%u declined=%u reset=%u evicted=%u history=%.2f MiB (session totals; zero comparisons means inactive).",
             edits.updates,edits.hits,edits.declined,edits.resets,edits.evicted,double(g_uiContent.allocated)/(1024*1024));
@@ -4123,7 +4532,7 @@ void uiDepthShutdown() {
     for(auto& motion:g_holoMotion) motion=HoloMotion{};
     if(g_savedHoloInfo) { g_savedHoloInfo->Release(); g_savedHoloInfo=nullptr; }
     g_holoBound=g_holoNoted=false;
-    g_coronaPending=g_coronaMotion=false;g_coronaNoted=false;g_smokeCoronaShader.Reset();g_smokeCoronaCompileTried=false;
+    detail::g_uiDepthDraw.coronaPending=detail::g_uiDepthDraw.coronaMotion=false;g_coronaNoted=false;g_smokeCoronaShader.Reset();g_smokeCoronaCompileTried=false;
     if(g_savedSceneDepth){g_savedSceneDepth->Release();g_savedSceneDepth=nullptr;}g_sceneDepthBound=false;
     for(UINT i=0;i<g_savedPsClassCount;++i)if(g_savedPsClasses[i])g_savedPsClasses[i]->Release();g_savedPsClassCount=0;
     for(auto& cached:g_sceneDepthRead){if(cached.srv)cached.srv->Release();if(cached.tex)cached.tex->Release();cached={};}
@@ -4144,11 +4553,11 @@ void uiDepthShutdown() {
     }
     g_reissueOn = false;
     g_rebound = false;
-    detail::g_uiDepthMode = Mode::kNone;
+    detail::g_uiDepthDraw.mode = Mode::kNone;
     releaseSavedOm();
     for (UiDepthLayer& layer : g_uiDepth) layer.release();
     releaseStates();
-    for(auto* masks:{g_mask,g_edits}) for(unsigned eye=0;eye<2;++eye) {
+    for(auto* masks:{g_mask,g_edits,g_screenState}) for(unsigned eye=0;eye<2;++eye) {
         Mask& m=masks[eye];
         if (m.rtv) m.rtv->Release();
         if (m.srv) m.srv->Release();
@@ -4183,12 +4592,31 @@ void uiDepthShutdown() {
     g_surfaceCount = 0;
     g_surfaceNext = 0;
     g_viewMemo.clear();
+    ++g_classifierEpoch;   // the table and the view memo are empty; every memoised decline is out of date
+    classifiermemo::invalidate(g_eyeMemo);
+    classifiermemo::invalidate(g_holoMemo);
     g_vsMemo.clear();
     g_psMemo.clear();
     for (uint32_t i = 0; i < kExhausted; ++i) g_exhausted[i] = Exhausted();
     g_familyLoggedCount = 0;
     detail::g_uiDepthOn = false;
-    detail::g_uiDepthPlanetPending=detail::g_uiDepthPlanetSolarPending=g_planetNoted=g_solarNoted=false;g_planetCoverage=PlanetCoverage{};
+    detail::g_uiDepthDraw.planetPending=detail::g_uiDepthDraw.planetSolarPending=g_planetNoted=g_solarNoted=false;g_planetCoverage=PlanetCoverage{};
+    detail::g_uiDepthDraw.worldScreenPending = false;
+    g_worldScreenPs.Reset();
+    g_worldScreenPsTried = g_worldScreenNoted = false;
+    g_worldScreenTrackedPs.Reset();
+    g_worldScreenTrackedTried = g_worldScreenTrackedNoted = false;
+    g_worldScreenCensusPass.reset();
+    g_worldScreenCensus = WorldScreenCensus{};
+    g_terminalOrder.clear();
+    g_terminalHide = nofoot::f116::Hysteresis{};
+    g_terminalHidden.store(false, std::memory_order_relaxed);
+    g_terminalStepMs.store(0, std::memory_order_release);
+    g_worldScreenHeldNoted = g_worldScreenClassNoted = 0;
+    for (auto& n : g_worldScreenSurfaces) n = WorldScreenSurfaceNote{};
+    g_worldScreenSurfaceCount = 0;
+    g_worldScreenQueryOpen = nullptr;
+    g_worldScreenWindow.reset();
 }
 
 }  // namespace edvr

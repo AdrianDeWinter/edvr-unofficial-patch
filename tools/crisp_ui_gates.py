@@ -41,9 +41,15 @@ thing it can say. Read it as the gates' evidence, not as the fix's log.
 Exit 0 when at least one census was read, 1 otherwise.
 """
 
+import io
 import re
 import sys
 from collections import defaultdict
+
+try:
+    from tools import log_session
+except ImportError:
+    import log_session
 
 # The GUI renderer's three families (game build 332753). Vector = the
 # textureless widget shader, text = the glyph-atlas shader, icons = the BC7
@@ -150,7 +156,8 @@ class Census(object):
 def parse(path):
     censuses = []
     cur = None
-    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+    # The whole session: a head log and its tail segments (tools\log_session.py).
+    with io.StringIO(log_session.read_log_text(path)) as f:
         for raw in f:
             m = LINE_RE.match(raw.rstrip('\r\n'))
             if not m:

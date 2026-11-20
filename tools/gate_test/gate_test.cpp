@@ -33,6 +33,7 @@
 // journalPickNewest, had no coverage at all until the review rounds on
 // issue #19 found arithmetic bugs in it (and in a sibling decision since
 // removed), every one of which is one line of table here.
+#include "../../src/common/elite_journal_folder.h"
 #include "../../src/d3d11/journal_watch.h"
 // Same reason: eyeShapedAtScale is the recogniser rule that decides whether
 // the gate is fed at all, and it is inline in the header so this file can
@@ -895,22 +896,33 @@ int boundarySourceChecks(const std::string& root) {
     }
     verify(declared >= 50, "device_hook.cpp and vscreen.cpp declare their boundary ticks");
 
-    // EXPLORER CAM'S TICK IS THE DEVICE HOOK'S, NOT vSCREEN'S (review 2026-10-08, finding 3). It used to be run from vScreenFrameBoundary, which only exists when vScreen
-    // installs a State; with fix.black_void off, fix.panel_distance 1, the camera-buffer tap off (the test-only variable EDVR_TEST_NO_CAMERA_TAP=1), advanced.app_gpu_timing off and advanced.panel_hooks_always off vScreen installs
-    // transport-only, that function never runs, and F5 did nothing -- whatever hotkey.explorer_cam held. Moving it back under vScreen (or behind a condition) makes this fail.
-    // (tools\test_openxr_transport.py drives the same minimal config through the real d3d11.dll and asks for the boundary's lines: the behaviour, not just this text.)
+    // NATIVE ON FOOT'S AVATAR HOOKS TICK IN THE DEVICE HOOK'S OWN TICK, NOT vSCREEN'S (review 2026-10-08, finding 3, first written for Explorer Cam's tick, removed in
+    // F98). vScreenFrameBoundary only exists when vScreen installs a State; with fix.black_void off, fix.panel_distance 1, the camera-buffer tap off (the test-only variable
+    // EDVR_TEST_NO_CAMERA_TAP=1), advanced.app_gpu_timing off and advanced.panel_hooks_always off vScreen installs transport-only and that function never runs.
+    // (tools\test_openxr_transport.py drives the same minimal config through the real d3d11.dll and asks for native on foot's first line: the behaviour, not just this text.)
+    // The hooks' boundary runs FIRST in native on foot's tick: it acts on the want and the body nativeOnFootFrameBoundary published the frame before, so a change
+    // acts at the next boundary and the hooks are in place from the first frame the native key is on (native_on_foot_hooks.h).
     const std::string flatTicks = withoutSpaces(tickBody);
-    verify(withoutSpaces(hookText).find("EDVR_BOUNDARY_TICK(tkExplorerCam,\"explorer_cam\");") != std::string::npos &&
-               flatTicks.find("tkExplorerCam.run([]{explorerCamFrameBoundary(static_cast<uint32_t>(g_state->frameCounter));});") != std::string::npos,
-           "Explorer Cam's frame tick is declared in device_hook.cpp and run at the top level of presentFrameBoundary(), with the frame counter");
-    verify(flatTicks.find("tkEliteBinds.run(") < flatTicks.find("tkExplorerCam.run(") &&
-               flatTicks.find("tkExplorerCam.run(") < flatTicks.find("tkMenu.run(") && flatTicks.find("tkExplorerCam.run(") < flatTicks.find("tkVscreenRest.run("),
-           "...after the Elite binds it reads, and before the menu and vScreen's boundary");
-    verify(screenText.find("explorerCamFrameBoundary") == std::string::npos && screenText.find("tkExplorerCam") == std::string::npos,
-           "vscreen.cpp does not carry it: nothing about Explorer Cam depends on vScreen having installed");
+    const std::string nativeTick = "tkNativeOnFoot.run([]{nativeOnFootHooksFrameBoundary();nativeOnFootFrameBoundary(static_cast<uint32_t>(g_state->frameCounter));});";
+    verify(withoutSpaces(hookText).find("EDVR_BOUNDARY_TICK(tkNativeOnFoot,\"native_on_foot\");") != std::string::npos && flatTicks.find(nativeTick) != std::string::npos,
+           "native on foot's tick is declared in device_hook.cpp and run at the top level of presentFrameBoundary(): the hooks' boundary, then native on foot's, with the frame counter");
+    verify(flatTicks.find("tkEliteBinds.run(") < flatTicks.find("tkNativeOnFoot.run(") &&
+               flatTicks.find("tkNativeOnFoot.run(") < flatTicks.find("tkMenu.run(") && flatTicks.find("tkNativeOnFoot.run(") < flatTicks.find("tkVscreenRest.run("),
+           "...after the Elite binds, and before the menu and vScreen's boundary (where Explorer Cam's tick ran)");
+    verify(screenText.find("nativeOnFootHooksFrameBoundary") == std::string::npos && hookText.find("tkExplorerCam") == std::string::npos &&
+               hookText.find("explorerCamFrameBoundary") == std::string::npos,
+           "vscreen.cpp does not carry it, and Explorer Cam's tick is gone");
+    {
+        // At an unload the gate byte goes back first (nativeOnFootShutdown), then the avatar dither-fade global (nativeOnFootHooksShutdown).
+        const std::string flatHook = withoutSpaces(hookText);
+        const size_t gateByte = flatHook.find("nativeOnFootShutdown();"), fadeGlobal = flatHook.find("nativeOnFootHooksShutdown();");
+        verify(gateByte != std::string::npos && fadeGlobal != std::string::npos && gateByte < fadeGlobal &&
+                   flatHook.find("nativeOnFootShutdown();", gateByte + 1) == std::string::npos && flatHook.find("nativeOnFootHooksShutdown();", fadeGlobal + 1) == std::string::npos,
+               "device_hook.cpp's unload puts native on foot's gate byte back, then the avatar fade global, each once");
+    }
     {
         // The ini's reload lives in vScreenRefreshConfig, the only place it is re-read. It must come BEFORE the State check: with vScreen transport-only there is no State, and a
-        // reload that waited for one never happened -- a hotkey.explorer_cam bound while the game runs (or any live edit, the F8 menu's writes) would never apply.
+        // reload that waited for one never happened -- a hotkey bound while the game runs (or any live edit, the F8 menu's writes) would never apply.
         // The one body both refreshes run (vScreenRefreshConfigBody): the forced one skips the gate, the plain one reads the ini first.
         const size_t at = screenText.find("void vScreenRefreshConfigBody(bool forced) {");
         std::string flat;
@@ -1186,6 +1198,34 @@ int journalWorkerChecks() {
         printf("  FAIL  %s\n", what);
         ++bad;
     };
+    // The journal folder follows Windows' Saved Games name. A German profile's folder is not "Saved Games",
+    // and an explicit d3d11.journal_dir is the Elite folder itself, not a root to join under.
+    verify(edvr::eliteJournalFolder(L"D:\\journals", L"C:\\Users\\Ragnatz\\Gespeicherte Spiele", L"C:\\Users\\Ragnatz") == L"D:\\journals",
+           "an explicit journal_dir is the Elite folder, whole");
+    verify(edvr::eliteJournalFolder(L"", L"C:\\Users\\Ragnatz\\Gespeicherte Spiele", L"C:\\Users\\Ragnatz") ==
+               L"C:\\Users\\Ragnatz\\Gespeicherte Spiele\\Frontier Developments\\Elite Dangerous",
+           "a Saved Games folder in another language is used, not the English name");
+    verify(edvr::eliteJournalFolder(L"", L"C:\\Users\\Ragnatz\\Gespeicherte Spiele\\", L"C:\\Users\\Ragnatz") ==
+               L"C:\\Users\\Ragnatz\\Gespeicherte Spiele\\Frontier Developments\\Elite Dangerous",
+           "a trailing slash on the known folder is not doubled");
+    verify(edvr::eliteJournalFolder(L"", L"D:\\Moved Saves", L"C:\\Users\\Ragnatz") ==
+               L"D:\\Moved Saves\\Frontier Developments\\Elite Dangerous",
+           "a moved Saved Games folder is used, not the one under the profile");
+    verify(edvr::eliteJournalFolder(L"", L"", L"C:\\Users\\Ragnatz") ==
+               L"C:\\Users\\Ragnatz\\Saved Games\\Frontier Developments\\Elite Dangerous",
+           "with no answer from Windows the English Saved Games name is the fallback");
+    verify(edvr::eliteJournalFolder(L"", L"", L"").empty(),
+           "with no explicit dir, no known folder and no profile there is no path");
+    {
+        const std::wstring known = edvr::journalKnownSavedGamesFolder();
+        verify(!known.empty(), "Windows names the Saved Games folder");
+        std::wstring root = known;
+        while (!root.empty() && (root.back() == L'\\' || root.back() == L'/')) root.pop_back();
+        wchar_t profile[MAX_PATH] = {};
+        GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
+        verify(edvr::eliteJournalFolder(L"", known, profile) == root + L"\\Frontier Developments\\Elite Dangerous",
+               "the journal folder is Windows' Saved Games folder plus Elite's own folder");
+    }
     if (edvr::g_clockForTest) {
         printf("  FAIL  the journal worker reads the real clock, and a fake one is installed\n");
         return 1;
@@ -1566,6 +1606,29 @@ int journalWorkerChecks() {
                "flat: Flags without bit 4 answers known and not supercruise");
         verify(!journalWatchActive() && !journalGameplay() && !journalSupercruiseKnown() && !journalSupercruise(),
                "flat: the VR accessors still answer the no-journal values");
+        // S0 (scope zoom, measure only): the on-foot bit, the ADS bit (Flags2 bit 5) and SelectedWeapon through the flat readers.
+        {
+            writeWhole(statusFile, "{ \"timestamp\":\"2026-10-28T10:00:00Z\", \"event\":\"Status\", \"Flags\":16777216, \"Flags2\":33, \"GuiFocus\":0, "
+                                   "\"SelectedWeapon\":\"$wpn_m_sniper_plasma_charged_name;\" }\n");
+            char name[64] = {};
+            bool onFoot = false, ads = false;
+            verify(tickUntil([&] { return journalFlatAds(&ads) && ads; }, 10000) && journalFlatOnFoot(&onFoot) && onFoot && journalFlatHeldItemName(name, sizeof(name)) &&
+                       std::strcmp(name, "$wpn_m_sniper_plasma_charged_name;") == 0,
+                   "flat: Flags2 bits 0 and 5 and SelectedWeapon reach journalFlatOnFoot, journalFlatAds and journalFlatHeldItemName");
+            char vrName[64] = {};
+            verify(!journalOnFoot() && !journalAds() && !journalHeldItemName(vrName, sizeof(vrName)) && vrName[0] == '\0',
+                   "flat: the VR accessors of the same sample still answer the no-journal values");
+            writeWhole(statusFile, statusText(16777216u, 1, 0));   // on foot, sights down, no SelectedWeapon
+            verify(tickUntil([&] { bool a = true; return journalFlatAds(&a) && !a; }, 10000) && journalFlatOnFoot(&onFoot) && onFoot && !journalFlatHeldItemName(name, sizeof(name)) && name[0] == '\0',
+                   "flat: the sights down and no SelectedWeapon answer known, not ADS, and no name");
+            writeWhole(statusFile, statusText(0u, -1, -1));   // a menu: no Flags2
+            verify(tickUntil([&] { bool a = true; return !journalFlatAds(&a); }, 10000) && !journalFlatOnFoot(&onFoot), "flat: a Status.json without Flags2 answers not-known for both bits");
+            g_runtimeProfile = RuntimeProfile::Vr;
+            writeWhole(statusFile, "{ \"timestamp\":\"2026-10-28T10:00:00Z\", \"event\":\"Status\", \"Flags\":16777216, \"Flags2\":33, \"SelectedWeapon\":\"$wpn_x;\" }\n");
+            verify(tickUntil([] { return journalAds(); }, 10000) && !journalFlatAds(&ads) && !journalFlatOnFoot(&onFoot) && !journalFlatHeldItemName(name, sizeof(name)),
+                   "the VR profile: the VR accessors answer and the flat readers do not");
+            g_runtimeProfile = RuntimeProfile::Flat;
+        }
         g_runtimeProfile = savedProfile;
         stopWorker();
     }
@@ -1638,6 +1701,98 @@ int journalWorkerChecks() {
 
 }  // namespace
 
+
+// Build 6 (VR draw path CPU; docs\vr-draw-path-cpu-2026-11-01.md, "Build 6" and "Closing build"): source-text checks on the draw's own flags, the removed build-5 forms and the
+// interest mask's absence (the closing build took S1 out: no source file names it).
+int drawPathSourceChecks(const std::string& root) {
+    int bad = 0;
+    auto verify = [&](bool ok, const std::string& what) {
+        ++g_checks;
+        if (ok) return;
+        printf("  FAIL  %s\n", what.c_str());
+        ++bad;
+    };
+    const std::wstring base = std::wstring(root.begin(), root.end()) + L"\\src\\d3d11\\";
+    const auto load = [&](const char* name) {
+        const std::string n(name);
+        return withoutLineComments(readWholeFile(base + std::wstring(n.begin(), n.end())));
+    };
+    const auto countOf = [](const std::string& text, const std::string& needle) {
+        int n = 0;
+        for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) ++n;
+        return n;
+    };
+    // The interest mask is gone: no file under src names it, its header, its recompute functions or its pointer. Raw text, comments included.
+    {
+        static const wchar_t* const kDirs[] = {L"common", L"d3d11", L"installer", L"openvr\\compat", L"openxr"};
+        static const char* const kBanned[] = {"interestHas", "draw_interest.h", "RecomputeInterest", "g_drawInterestPtr"};
+        std::string hits;
+        for (const wchar_t* d : kDirs) {
+            const std::wstring dir = std::wstring(root.begin(), root.end()) + L"\\src\\" + d + L"\\";
+            WIN32_FIND_DATAW fd{};
+            HANDLE find = FindFirstFileW((dir + L"*").c_str(), &fd);
+            if (find == INVALID_HANDLE_VALUE) continue;
+            do {
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+                const std::string text = readWholeFile(dir + fd.cFileName);
+                for (const char* b : kBanned)
+                    if (text.find(b) != std::string::npos) { hits += " "; for (wchar_t c : dir) hits += static_cast<char>(c); for (const wchar_t* c = fd.cFileName; *c; ++c) hits += static_cast<char>(*c); hits += std::string(":") + b; }
+            } while (FindNextFileW(find, &fd));
+            FindClose(find);
+        }
+        verify(hits.empty(), "no interestHas, draw_interest.h, RecomputeInterest or g_drawInterestPtr anywhere in src (closing build):" + hits);
+    }
+
+    // vscreen.cpp: the draw's own flags replaced the thread_locals.
+    const std::string vs = load("vscreen.cpp");
+    verify(!vs.empty(), "could not read src\\d3d11\\vscreen.cpp");
+    {
+        verify(vs.find("thread_local bool t_uiDepthThisDraw") == std::string::npos && vs.find("thread_local bool t_holoDepthThisDraw") == std::string::npos &&
+                   vs.find("thread_local bool t_compositeThisDraw") == std::string::npos,
+               "the three thread_local per-draw flags are gone (#184)");
+        const char kinds[] = {'D', 'I', 'N', 'X'};
+        for (char k : kinds) {
+            const std::string begin = std::string("beginPanelOverride(self, '") + k + "'";
+            const size_t b = vs.find(begin);
+            const size_t bEnd = b == std::string::npos ? b : vs.find(';', b);
+            verify(b != std::string::npos && vs.substr(b, bEnd - b).find(", flags)") != std::string::npos, std::string("the '") + k + "' thunk passes its DrawCallFlags to beginPanelOverride");
+            verify(vs.find(std::string("forwardWithVerdict(self, v, flags, '") + k + "'") != std::string::npos, std::string("the '") + k + "' thunk passes its DrawCallFlags to forwardWithVerdict");
+        }
+        verify(countOf(vs, "beginPanelOverride(self, '") == 4 && countOf(vs, "forwardWithVerdict(self, v, flags, '") == 4, "beginPanelOverride and forwardWithVerdict have only the four thunks as callers");
+        // N7: the pending flags are cleared only by a draw that set them.
+        verify(vs.find("ownsPending(drawCallOwnsPending(f))") != std::string::npos && vs.find("if (ownsPending) uiDepthClearPending();") != std::string::npos &&
+                   vs.find("if (drawCallOwnsPending(flags)) uiDepthClearPending();") != std::string::npos,
+               "forwardWithVerdict clears the module's pending flags on a return only when this draw's own flags set one (N7)");
+        verify(countOf(vs, "uiDepthClearPending()") == 2, "uiDepthClearPending is called from the blocked return and the scope, and nowhere else");
+        verify(vs.find("if (flags.uiDepth) uiDepthEnd(self);") != std::string::npos, "the blocked return ends the interface depth mode this draw's classification left");
+        verify(vs.find("t_markerTeeClockOrdinal") != std::string::npos && vs.find("t_drawClockOrdinal") != std::string::npos, "the two clock ordinals stay (they are not the per-draw flags)");
+    }
+    // Item 5 and item 4: build 5's items 2 and 3, its shadow aggregate and its counts line are gone from the source.
+    {
+        const char* const kGone[] = {"viewIsSurfaceFront", "g_viewFront", "ViewFront", "g_viewMemoPuts", "g_uiDepthDrawDirty", "uiDepthOnEyeDrawMiss", "bindingEyeKeyPtrGeneration",
+                                     "g_bindingEyeKeyPtrGen", "g_eyeMemoPtr", "g_holoMemoPtr", "B5Counts", "b5_counts_line", "g_b5vs", "engineVelocitySlowEntries"};
+        const char* const kFiles[] = {"vscreen.cpp", "vscreen.h", "ui_depth.cpp", "ui_depth.h", "binding_shadow.cpp", "binding_shadow.h", "perf_monitor.cpp", "engine_velocity.cpp", "engine_velocity.h"};
+        for (const char* f : kFiles) {
+            const std::string text = load(f);
+            for (const char* g : kGone) verify(text.find(g) == std::string::npos, std::string(f) + " no longer names " + g + " (build 6 removed it)");
+        }
+        const std::string depthH = load("ui_depth.h");
+        verify(depthH.find("inline bool uiDepthOnEyeDraw") == std::string::npos && depthH.find("bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw = {});") != std::string::npos,
+               "uiDepthOnEyeDraw is declared out of line in ui_depth.h (build 4's form)");
+        const std::string depth = load("ui_depth.cpp");
+        const size_t fn = depth.find("bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw) {");
+        const std::string body = fn == std::string::npos ? std::string() : depth.substr(fn, 1400);
+        const std::string flat = withoutSpaces(body);
+        verify(flat.find("detail::g_uiDepthDraw=detail::UiDepthDraw{};g_holoDraw=draw;if(!detail::g_uiDepthOn||detail::g_uiDepthStoodDown)returnfalse;") != std::string::npos &&
+                   flat.find("classifiermemo::hit(g_eyeMemo,now))returnfalse;") != std::string::npos,
+               "uiDepthOnEyeDraw is build 4's body: the reset, g_holoDraw = draw, the gate, the memo");
+        const std::string binding = load("binding_shadow.cpp");
+        verify(withoutSpaces(binding).find("constbooleyeKeyMoves=!(srv&&s.ptr==ptr);s.ptr=ptr;++s.gen;noteEyeKeySlot(slot,eyeKeyMoves);") != std::string::npos,
+               "S2: bindingSet bumps the slot's own generation on every set and the eye key only when a PS SRV 0..3 pointer changed");
+    }
+    return bad;
+}
+
 int main(int argc, char** argv) {
     // The real ini, so the checks that read the shipped configuration run
     // against the numbers that ship rather than against numbers this file made
@@ -1662,6 +1817,7 @@ int main(int argc, char** argv) {
     g_bad += periodicWorkChecks();
     g_bad += loggedNotesChecks();
     g_bad += boundarySourceChecks(dir);
+    g_bad += drawPathSourceChecks(dir);
     edvr::g_clockForTest = nullptr;
     // Last, and with the real clock the worker reads: it configures the watcher
     // and leaves it off, which the fixtures above never see.

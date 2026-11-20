@@ -59,6 +59,75 @@ inline int flatSourceFreeTests() {
         expect(plain.prefix->unsupportedFamilyDraws == 0, "a frame whose draws carry no flag counts none (every recorded trace of an older build)");
     }
 
+    // -- 2026-11-08: the draws behind a veto are named (a flat report of DLSS dropping to spatial in ground-and-sky views) --
+    {
+        Stream stock; stock.sceneDraws(0, 4); stock.stockFamilyDraw(); stock.toneTrigger();
+        const FlatMonoFrame c = stock.select();
+        expect(c.reason == FlatMonoReason::NoSupportedSource && c.sourceless.vetoFamilyDraws == 1 && c.sourceless.vetoPoolDraws == 0 &&
+                   c.sourceless.depth == stock.sc.hDepth,
+               "a refusal says which cause made it: one stock family draw, no unsupported pool record, and the depth its summary is about");
+        const FlatFamilyVeto& named = stock.prefix->familyVetoes[0];
+        expect(stock.prefix->familyVetoKinds == 1 && named.draws == 1 && named.vs == 0xA1 && named.ps == 0xB9 && named.depth == stock.sc.hDepth && named.color,
+               "the stock draw is named by its shaders, its depth and the colour target it wrote");
+        Stream plainView; plainView.sceneDraws(0, 4); plainView.toneTrigger();
+        const FlatMonoFrame f = plainView.select();
+        expect(f.selected() && f.sourceFree && f.sourceless.vetoFamilyDraws == 0 && f.sourceless.vetoPoolDraws == 0 && plainView.prefix->familyVetoKinds == 0,
+               "a scene taken source-free names no veto");
+
+        Stream table; table.sceneDraws(0, 1);
+        const auto stockOf = [&](uint64_t vs) {
+            FlatRuntimeDraw d = table.make(nullptr, table.sc.hDepth, table.sc.hW, table.sc.hH, 26, vs, 0xB9, true, false);
+            d.poolFamilyVs = true;
+            return d;
+        };
+        table.draw(stockOf(1)); table.draw(stockOf(1)); table.draw(stockOf(2));
+        expect(table.prefix->familyVetoKinds == 2 && table.prefix->familyVetoes[0].draws == 2 && table.prefix->familyVetoes[1].draws == 1 &&
+                   table.prefix->familyVetoOverflowDraws == 0 && !table.prefix->familyVetoes[0].color,
+               "draws of one (vs, ps, depth) share an entry and another key is its own; a depth-only draw names no colour target");
+        for (uint64_t vs = 3; vs <= 7; ++vs) table.draw(stockOf(vs));
+        expect(table.prefix->familyVetoKinds == kFlatFamilyVetoKinds && table.prefix->familyVetoOverflowDraws == 3 && table.prefix->unsupportedFamilyDraws == 8,
+               "past the table's kinds the draws are counted and not kept, and the verdict's own count is untouched");
+
+        FlatSourceVetoWindow w;
+        w.frame(true, false, true, true); w.frame(true, false, false, false); w.frame(false, true, true, false); w.frame(false, true, false, false);
+        expect(w.frames == 4 && w.withFamily == 2 && w.withFamilySelected == 1 && w.refusedByFamily == 1 && w.refusedByPool == 1,
+               "the window counts frames with a stock draw, those selected anyway, and the refusals by cause");
+        char line[3072]{};
+        FlatMonoSourceless last{};
+        int hdrDepth = 0, otherDepth = 0;
+        last.depth = &hdrDepth; last.vetoFamilyDraws = 2;
+        FlatFamilyVeto v[kFlatFamilyVetoKinds]{};
+        v[0].vs = 0x11; v[0].ps = 0x22; v[0].depth = &hdrDepth; v[0].draws = 3; v[0].width = 1664; v[0].height = 702; v[0].color = true; v[0].camera = true;
+        v[1].vs = 0x33; v[1].ps = 0x44; v[1].depth = &otherDepth; v[1].draws = 1;
+        flatSourceVetoLine(line, sizeof(line), w, last, 4305, v, 2, 0);
+        expect(std::strstr(line, "flat source veto 5s: frames=4 with-stock-family=2 of-those-selected=1 refused-by-family=1 refused-by-pool=1; "
+                                 "last refused frame=4305: stock-family-draws=2 unsupported-pool-draws=0 kinds=2 past-the-kinds=0; stock draws: ") == line,
+               "the veto line keeps its key and prints the window and the last refusal's causes");
+        expect(std::strstr(line, "[VS=0000000000000011 PS=0000000000000022 draws=3 depth=hdr target=1664x702 color=1 camera=1]") != nullptr &&
+                   std::strstr(line, "[VS=0000000000000033 PS=0000000000000044 draws=1 depth=other target=0x0 color=0 camera=0]") != nullptr,
+               "each stock draw says whether it wrote the HDR's own depth or another");
+        flatSourceVetoLine(line, sizeof(line), FlatSourceVetoWindow{}, FlatMonoSourceless{}, 0, v, 0, 0);
+        expect(std::strstr(line, "frames=0 with-stock-family=0") != nullptr && std::strstr(line, "stock draws: none") != nullptr,
+               "a window with nothing to name prints its zeros and `none`, so it reads differently from a build that has no line");
+    }
+
+    // -- 2026-11-08, flight 11:03: the HDR route speaks for its no-source refusal where it resolves the frame itself --
+    {
+        Stream view; view.sceneDraws(0, 4); view.stockFamilyDraw(); view.toneTrigger();
+        const FlatMonoFrame refused = view.select();
+        expect(refused.reason == FlatMonoReason::NoSupportedSource &&
+                   flatHdrTriggerRefusalSeen(refused, FlatMonoResolveMode::Dlaa, 3840, 2160, 3840, 2160) == FlatFrameSeen::Transient,
+               "DLAA with H at the output: the route's no-source refusal is Transient, above the copy stage's structural verdict");
+        expect(flatHdrTriggerRefusalSeen(refused, FlatMonoResolveMode::Dlss, 1664, 702, 2560, 1080) == FlatFrameSeen::None,
+               "below the output the copy route serves the frame and its own verdict stands, as before");
+        Stream sourced; sourced.sceneDraws(2, 2); sourced.toneTrigger();
+        expect(flatHdrTriggerRefusalSeen(sourced.select(), FlatMonoResolveMode::Dlaa, 3840, 2160, 3840, 2160) == FlatFrameSeen::None,
+               "a selected frame is flatHdrTriggerSeen's, not this one's");
+        FlatMonoFrame other = refused; other.reason = FlatMonoReason::ConflictingHdr;
+        expect(flatHdrTriggerRefusalSeen(other, FlatMonoResolveMode::Dlaa, 3840, 2160, 3840, 2160) == FlatFrameSeen::None,
+               "every other refusal still adds nothing");
+    }
+
     // -- the trace carries the flag, and an older trace has none --
     {
         Stream s;
@@ -82,16 +151,22 @@ inline int flatSourceFreeTests() {
         FlatSourceSpell spell;
         spell.sourceFreeFrame(true); spell.sourceFreeFrame(true); spell.sourceFreeFrame(false);
         spell.overlayUnnamed(); spell.overlayUnnamed();
+        spell.overlayUnnamed(true); spell.overlayUnnamed(true); spell.overlayUnnamed(true);
+        spell.firstPersonUnnamedFrame(true); spell.firstPersonUnnamedFrame(false);
         const FlatSourceSpellWindow w = spell.take();
-        expect(w.sourceFreeFrames == 3 && w.sourceFreeTreated == 2 && w.overlaysUnnamed == 2,
+        expect(w.sourceFreeFrames == 3 && w.sourceFreeTreated == 2 && w.overlaysUnnamed == 5,
                "source-free frames, those the resolver ran on, and overlays admitted without a named world are counted");
+        expect(w.overlaysFirstPerson == 3 && w.firstPersonFrames == 2 && w.firstPersonTreated == 1,
+               "the first-person path's overlays, its frames and those the resolver ran on are counted apart (2026-10-29)");
         const FlatSourceSpellWindow again = spell.take();
-        expect(again.sourceFreeFrames == 0 && again.sourceFreeTreated == 0 && again.overlaysUnnamed == 0, "and the window is taken");
+        expect(again.sourceFreeFrames == 0 && again.sourceFreeTreated == 0 && again.overlaysUnnamed == 0 &&
+                   again.overlaysFirstPerson == 0 && again.firstPersonFrames == 0 && again.firstPersonTreated == 0, "and the window is taken");
         char line[3072]{};
         const FlatMonoSourceless none{};
         const FlatSourcelessPairNote notes[4]{};
         flatSourceSpellLine(line, sizeof(line), w, none, 0, notes);
-        expect(std::strstr(line, "source-free-frames=3 source-free-treated=2 overlays-without-named-world=2;") != nullptr,
+        expect(std::strstr(line, "source-free-frames=3 source-free-treated=2 overlays-without-named-world=5 first-person-path=3 "
+                                 "first-person-frames=2 first-person-treated=1;") != nullptr,
                "the 5 s line prints them");
         expect(std::strncmp(line, "flat source 5s: frames=", 23) == 0, "the first part keeps the key the log is read by");
         // The line is two parts (kFlatSourceLineParts): the fields, then the top pairs. The runtime prints each into 3072 bytes with the four pairs
@@ -99,7 +174,7 @@ inline int flatSourceFreeTests() {
         FlatSourceSpellWindow widest;
         widest.frames = widest.noSourceFrames = widest.spells = widest.recoveries = widest.abandoned = widest.warmDone = widest.warmFrames = ~0ull;
         widest.warmMax = widest.warmAborted = widest.longestSpell = widest.openSpell = widest.sourceFreeFrames = widest.sourceFreeTreated = ~0ull;
-        widest.overlaysUnnamed = ~0ull;
+        widest.overlaysUnnamed = widest.overlaysFirstPerson = widest.firstPersonFrames = widest.firstPersonTreated = ~0ull;
         FlatMonoSourceless busy;
         busy.records = busy.draws = busy.sameCameraDraws = busy.poolRecords = busy.distinctPairs = ~0u;
         busy.topCount = 4;
@@ -220,21 +295,51 @@ inline int flatSourceFreeWiringTests() {
     // -- the overlay is admitted against the HDR's own camera when no draw has named the world --
     const std::string unnamed =
         "constboolunnamedWorldDepth=!s.namedDepth&&s.prefix.sourcesUsed==0&&s.prefix.firstPersonDraws==0&&"
-        "s.prefix.unsupportedFamilyDraws==0;constFlatRuntimeTarget*overlayTarget=nullptr;";
+        "s.prefix.unsupportedFamilyDraws==0;";
+    const std::string unnamedFirstPerson =
+        "constboolunnamedFirstPerson=!s.namedDepth&&!unnamedWorldDepth&&s.prefix.unsupportedFamilyDraws==0;";
+    const std::string firstCamera =
+        "constautofirstCameraWorld=[&](constFlatRuntimeTarget&t){floatfirstRows[6][4];std::memcpy(firstRows,t.tone.camera,sizeof(firstRows));"
+        "returnflatDomainHdrFirstCameraIsWorld(firstRows,worldPredicted().predicted,s.worldReference);};";
     const auto overlayValid = [&](const std::string& text) {
-        return ordered(text, {unnamed.c_str(), "(k.depth==s.namedDepth||unnamedWorldDepth)&&flat_mono_detail::hdrViewport(k,k.width,k.height)",
-                              "if(!s.namedDepth)s.sourceSpell.overlayUnnamed();", "if(copyWeapon()){"});
+        return ordered(text, {unnamed.c_str(), unnamedFirstPerson.c_str(), firstCamera.c_str(), "constFlatRuntimeTarget*overlayTarget=nullptr;",
+                              "(k.depth==s.namedDepth||unnamedWorldDepth||unnamedFirstPerson)&&flat_mono_detail::hdrViewport(k,k.width,k.height)",
+                              "!flatRuntimeSameCamera(t.tone,d)&&(!unnamedFirstPerson||firstCameraWorld(t))){overlayTarget=&t;break;}",
+                              "if(!s.namedDepth)s.sourceSpell.overlayUnnamed(unnamedFirstPerson);",
+                              "if(!s.namedDepth&&unnamedFirstPerson)s.frameFirstPersonUnnamed=true;", "if(copyWeapon()){"});
     };
     expect(overlayValid(runtime), "the weapon's glow pass is judged against the HDR's own camera when nothing has named the world, and counted");
-    expect(!overlayValid(replaced(runtime, "(k.depth==s.namedDepth||unnamedWorldDepth)&&flat_mono_detail::hdrViewport",
+    expect(!overlayValid(replaced(runtime, "(k.depth==s.namedDepth||unnamedWorldDepth||unnamedFirstPerson)&&flat_mono_detail::hdrViewport",
                                   "k.depth==s.namedDepth&&flat_mono_detail::hdrViewport")),
            "mutation control: an overlay still bound to a named world fails the wiring");
-    expect(!overlayValid(without(runtime, "&&s.prefix.unsupportedFamilyDraws==0;constFlatRuntimeTarget*overlayTarget=nullptr;")) &&
-               !overlayValid(replaced(runtime, "&&s.prefix.unsupportedFamilyDraws==0;constFlatRuntimeTarget*overlayTarget=nullptr;",
-                                      ";constFlatRuntimeTarget*overlayTarget=nullptr;")),
+    expect(!overlayValid(without(runtime, "&&s.prefix.unsupportedFamilyDraws==0;constboolunnamedFirstPerson")) &&
+               !overlayValid(replaced(runtime, "&&s.prefix.unsupportedFamilyDraws==0;constboolunnamedFirstPerson",
+                                      ";constboolunnamedFirstPerson")),
            "mutation control: an unnamed world that ignores a stock family draw, or a source, fails the wiring");
-    expect(!overlayValid(without(runtime, "if(!s.namedDepth)s.sourceSpell.overlayUnnamed();")),
+    expect(!overlayValid(without(runtime, "if(!s.namedDepth)s.sourceSpell.overlayUnnamed(unnamedFirstPerson);")),
            "mutation control: an admission the line never hears of fails the wiring");
+    // -- 2026-10-29, the same view with a first person in hand: admitted by the cameras, not by the counts --
+    expect(!overlayValid(replaced(runtime, "&&(!unnamedFirstPerson||firstCameraWorld(t))){overlayTarget=&t;break;}",
+                                  "){overlayTarget=&t;break;}")),
+           "mutation control: a first-person path that takes any target, whatever its first camera, fails the wiring");
+    expect(!overlayValid(replaced(runtime, "s.prefix.unsupportedFamilyDraws==0;constautofirstCameraWorld",
+                                  "true;constautofirstCameraWorld")),
+           "mutation control: a first-person path that ignores a stock family draw fails the wiring");
+    expect(!overlayValid(replaced(runtime, "returnflatDomainHdrFirstCameraIsWorld(firstRows,worldPredicted().predicted,s.worldReference);",
+                                  "returnflatDomainHdrFirstCameraIsWorld(firstRows,false,s.worldReference);")),
+           "mutation control: a first camera judged without asking whether the drawing camera is the world's fails the wiring");
+    expect(!overlayValid(without(runtime, "if(!s.namedDepth&&unnamedFirstPerson)s.frameFirstPersonUnnamed=true;")),
+           "mutation control: a first-person admission the frame's verdict never hears of fails the wiring");
+    expect(ordered(runtime, {"if(s.frameFirstPersonUnnamed)s.sourceSpell.firstPersonUnnamedFrame(s.treated&&SUCCEEDED(hr));",
+                             "if(!s.treated||FAILED(hr))reset();", "s.frameSourceFree=false;s.frameFirstPersonUnnamed=false;"}),
+           "a frame that held a first-person admission is counted with the resolver's verdict, then the flag is cleared for the next frame");
+    expect(!ordered(without(runtime, "s.frameSourceFree=false;s.frameFirstPersonUnnamed=false;"),
+                    {"if(s.frameFirstPersonUnnamed)s.sourceSpell.firstPersonUnnamedFrame(s.treated&&SUCCEEDED(hr));",
+                     "if(!s.treated||FAILED(hr))reset();", "s.frameSourceFree=false;s.frameFirstPersonUnnamed=false;"}),
+           "mutation control: a flag never cleared fails the wiring");
+    expect(ordered(runtime, {"noteSourceFreeContent(s,selected);", "if(s.frameFirstPersonUnnamed&&s.firstPersonUnnamedLines<6",
+                             "\"flatfirst-personunnamed:frame=%lluselection=%s"}),
+           "the copy route's verdict on such a frame is described, rate-limited, after the source-free note");
 
     // -- the draw scope flags the stock family draw, and the model counts it before the colour test --
     const std::string flagged =
@@ -266,6 +371,43 @@ inline int flatSourceFreeWiringTests() {
                     {"if(s.frameSourceFree)s.sourceSpell.sourceFreeFrame(s.treated&&SUCCEEDED(hr));", "if(!s.treated||FAILED(hr))reset();"}),
            "mutation control: a frame nobody counts fails the wiring");
     expect(count(runtime, "s.treated=false;s.frameSourceFree=false;") == 1, "the flag is cleared with the frame's other naming state");
+
+    // -- 2026-11-08: the veto's names are kept where the count is made, handed over at the refusal, counted at the frame's end, printed --
+    const auto vetoModelValid = [&](const std::string& text) {
+        return ordered(text, {"if(d.poolFamilyVs)flatRuntimeNoteFamilyVeto(p,d.key);", "if(d.poolFamilyVs)++p.unsupportedFamilyDraws;", "if(!k.color)returnout;"});
+    };
+    expect(vetoModelValid(model), "the model names each stock family draw beside its count, before the return for a draw with no colour target");
+    expect(!vetoModelValid(without(model, "if(d.poolFamilyVs)flatRuntimeNoteFamilyVeto(p,d.key);")),
+           "mutation control: a count with no names fails the wiring");
+    const std::string vetoCauses = "out.sourceless.vetoFamilyDraws=in.unsupportedFamilyDraws;out.sourceless.vetoPoolDraws=out.unsupportedDraws;";
+    expect(count(mono, vetoCauses + refuseOrFree) == 1 && count(hdr, vetoCauses + refuseOrFree) == 1,
+           "both selectors write the refusal's two causes into its summary immediately before they decide");
+    expect(count(without(hdr, vetoCauses.c_str()), vetoCauses + refuseOrFree) == 0, "mutation control: a selector that never says why fails the wiring");
+    const auto vetoRuntimeValid = [&](const std::string& text) {
+        return ordered(text, {"s.vetoWindow.frame(endedReason==FlatMonoReason::NoSupportedSource,endedSeen==FlatFrameSeen::Treatable,"
+                              "s.prefix.unsupportedFamilyDraws!=0,s.frameVetoByFamily);", "s.frameVetoByFamily=false;"}) &&
+               ordered(text, {"flatSourceSpellLine(line,sizeof(line),w,s.sourcelessLast,s.sourcelessLastFrame,notes,part);",
+                              "flatSourceVetoLine(line,sizeof(line),s.vetoWindow,s.sourcelessLast,s.sourcelessLastFrame,s.vetoLast,s.vetoLastKinds,"
+                              "s.vetoLastOverflowDraws);Log::get().note(\"%s\",line);", "s.vetoWindow=FlatSourceVetoWindow{};"}) &&
+               ordered(text, {"staticvoidnoteVetoNames(State&s,constFlatMonoFrame&sel){if(sel.reason!=FlatMonoReason::NoSupportedSource)return;",
+                              "s.vetoLastKinds=s.prefix.familyVetoKinds;", "s.frameVetoByFamily=sel.sourceless.vetoFamilyDraws!=0;"}) &&
+               count(text, "noteVetoNames(s,selected);noteSourceFreeContent(s,selected);") == 1 &&
+               count(text, "if(sel.reason==FlatMonoReason::NoSupportedSource){s.sourcelessLast=sel.sourceless;s.sourcelessLastFrame=s.prefix.frame;}"
+                           "noteVetoNames(s,sel);") == 1;
+    };
+    expect(vetoRuntimeValid(runtime), "both routes keep the refusal's names; the frame is counted by cause, the flag cleared, the line printed every window");
+    expect(!vetoRuntimeValid(without(runtime, "s.vetoWindow=FlatSourceVetoWindow{};")), "mutation control: a window never taken fails the wiring");
+    expect(!vetoRuntimeValid(without(runtime, "s.frameVetoByFamily=false;")), "mutation control: a verdict flag that outlives its frame fails the wiring");
+    expect(!vetoRuntimeValid(without(runtime, "noteVetoNames(s,sel);")), "mutation control: an HDR-route refusal left unnamed fails the wiring");
+    // -- flight 11:03: where the HDR route resolves the frame, its no-source refusal is the frame's verdict --
+    const auto refusalValid = [&](const std::string& text) {
+        return ordered(text, {"if(routeSeen==FlatFrameSeen::Treatable){s.frameSeen=FlatFrameSeen::Treatable;s.frameReason=sel.reason;}",
+                              "constFlatFrameSeenrefusalSeen=flatHdrTriggerRefusalSeen(sel,s.engine,s.hdr.trigger.hdrWidth,s.hdr.trigger.hdrHeight,"
+                              "s.prefix.width,s.prefix.height);if(refusalSeen>s.frameSeen){s.frameSeen=refusalSeen;s.frameReason=sel.reason;}"});
+    };
+    expect(refusalValid(runtime), "the HDR route merges its no-source refusal into the frame's verdict beside its selection");
+    expect(!refusalValid(without(runtime, "if(refusalSeen>s.frameSeen){s.frameSeen=refusalSeen;s.frameReason=sel.reason;}")),
+           "mutation control: a refusal computed and never merged fails the wiring");
 
     // -- the engine's views from nothing --
     const std::string views = compact(body(engineSource, "bool engineVelocityPrepareSourceFree("));

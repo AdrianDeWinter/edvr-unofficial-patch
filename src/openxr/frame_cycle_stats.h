@@ -85,6 +85,21 @@ class FrameCycleStats final {
   };
   FrameCycleStats():samples_(std::make_unique<std::array<Sample,capacity>>()){}
 
+  // The window's summary of v[0..n): mean=total/n (the caller sums in sample order), p50/p95/p99 as the ceil(n*x/100)th
+  // smallest value, max as the largest; all 0 when n is 0. Selection, not a sort: v is left partitioned. Samples come from integer
+  // tick differences, so none is NaN and the order statistics are exactly what a sort would read.
+  static Dist distribution(double* v,unsigned n,double total){
+    if(!n)return{};
+    const unsigned r99=(n*99+99)/100-1,r95=(n*95+99)/100-1,r50=(n*50+99)/100-1;
+    std::nth_element(v,v+r99,v+n);
+    const double p99=v[r99];const double mx=*std::max_element(v+r99,v+n);
+    if(r95<r99)std::nth_element(v,v+r95,v+r99);
+    const double p95=v[r95];
+    if(r50<r95)std::nth_element(v,v+r50,v+r95);
+    const double p50=v[r50];
+    return{total/n,p50,p95,p99,mx};
+  }
+
   void enabled() noexcept { std::lock_guard<std::mutex> l(m_); enabled_=true; }
   bool firstComplete() const noexcept { std::lock_guard<std::mutex> l(m_); return everComplete_; }
   void reset(Missing why=ShapeChange) noexcept { std::lock_guard<std::mutex> l(m_); fail(why); current_={}; wait_={};completedReady_=false; pendingFrameEndOwnerBegin_=0;pendingFrameEndOwnerMs_=0; }
@@ -304,8 +319,10 @@ class FrameCycleStats final {
     else if(nowMs-windowStartMs_>=30000){makeReport(lastAttemptedSequence_,nowMs);windowStartMs_=nowMs;shape_=shape;windowStart_=sequence;}
     ++attempted_;lastAttemptedSequence_=sequence;
   }
-  Dist dist(double Sample::*field)const{std::array<double,capacity>v{};double total=0;for(unsigned i=0;i<count_;++i){v[i]=(*samples_)[i].*field;total+=v[i];}std::sort(v.begin(),v.begin()+count_);auto p=[&](unsigned x){return count_?v[(count_*x+99)/100-1]:0;};return{count_?total/count_:0,p(50),p(95),p(99),count_?v[count_-1]:0};}
-  template<class Include> Dist filteredDist(double Sample::*field,Include include)const{std::array<double,capacity>v{};double total=0;unsigned n=0;for(unsigned i=0;i<count_;++i)if(include((*samples_)[i])){v[n]=(*samples_)[i].*field;total+=v[n++];}std::sort(v.begin(),v.begin()+n);auto p=[&](unsigned x){return n?v[(n*x+99)/100-1]:0;};return{n?total/n:0,p(50),p(95),p(99),n?v[n-1]:0};}
+  // The sample window's mean (summed in sample order), p50/p95/p99 (the ceil(n*x/100)th smallest) and max, by selection:
+  // the same order statistics a full sort gives, so the same doubles, without sorting up to 4096 values 28 times a report.
+  Dist dist(double Sample::*field)const{std::array<double,capacity>v;double total=0;for(unsigned i=0;i<count_;++i){v[i]=(*samples_)[i].*field;total+=v[i];}return distribution(v.data(),count_,total);}
+  template<class Include> Dist filteredDist(double Sample::*field,Include include)const{std::array<double,capacity>v;double total=0;unsigned n=0;for(unsigned i=0;i<count_;++i)if(include((*samples_)[i])){v[n]=(*samples_)[i].*field;total+=v[n++];}return distribution(v.data(),n,total);}
   void makeReport(uint64_t last,uint64_t nowMs){report_={};report_.window=++window_;report_.firstSequence=count_?(*samples_)[0].sequence:windowStart_;report_.lastSequence=last;report_.elapsedMs=nowMs>=windowStartMs_?nowMs-windowStartMs_:0;report_.admitted=attempted_;report_.valid=count_;report_.shape=shape_;report_.missing=missing_;report_.callerThread=observedSubmitThread_;report_.waitThread=observedWaitThread_;report_.threadConsistent=!observedThreadMismatch_;
     report_.cycle=dist(&Sample::cycle);report_.beforeFirst=dist(&Sample::beforeFirst);report_.firstSubmit=dist(&Sample::firstSubmit);report_.betweenEyes=dist(&Sample::betweenEyes);report_.secondSubmit=dist(&Sample::secondSubmit);report_.afterSecond=dist(&Sample::afterSecond);report_.nextWait=dist(&Sample::nextWait);report_.residual=dist(&Sample::residual);report_.waitOwner=dist(&Sample::waitOwner);
     report_.frameEndOwnerBody=dist(&Sample::frameEndOwnerBody);report_.nextWaitQueueDelay=dist(&Sample::nextWaitQueueDelay);
@@ -314,7 +331,7 @@ class FrameCycleStats final {
     auto post=[](const Sample&s){return s.postValid;};auto single=[](const Sample&s){return s.postValid&&s.singlePresent;};auto handoff=[](const Sample&s){return s.handoffValid;};
     report_.presentCount=filteredDist(&Sample::presentCount,post);report_.rawPresent=filteredDist(&Sample::rawPresent,post);report_.edvrBeforePresent=filteredDist(&Sample::edvrBeforePresent,post);report_.edvrAfterPresent=filteredDist(&Sample::edvrAfterPresent,post);report_.edvrPresent=filteredDist(&Sample::edvrPresent,post);report_.trailingCallback=filteredDist(&Sample::trailingCallback,post);report_.outsidePresent=filteredDist(&Sample::outsidePresent,post);report_.postResidual=filteredDist(&Sample::postResidual,post);report_.postGap=filteredDist(&Sample::afterSecond,post);report_.beforePresent=filteredDist(&Sample::beforePresent,single);report_.afterPresent=filteredDist(&Sample::afterPresent,single);report_.handoffCount=filteredDist(&Sample::handoffCount,handoff);report_.handoffNested=filteredDist(&Sample::handoffNested,handoff);
     report_.handoffMissing=handoffMissing_;report_.handoffInvalid=handoffInvalid_;report_.handoffOverflow=handoffOverflow_;ready_=true;count_=0;attempted_=0;missing_={};windowStart_=windowStartMs_=lastAttemptedSequence_=0;observedWaitThread_=observedSubmitThread_=0;observedThreadMismatch_=false;handoffMissing_=handoffInvalid_=handoffOverflow_=0;}
-  Dist manual(std::array<double,capacity>&v)const{double t=0;for(unsigned i=0;i<count_;++i)t+=v[i];std::sort(v.begin(),v.begin()+count_);auto p=[&](unsigned x){return count_?v[(count_*x+99)/100-1]:0;};return{count_?t/count_:0,p(50),p(95),p(99),count_?v[count_-1]:0};}
+  Dist manual(std::array<double,capacity>&v)const{double t=0;for(unsigned i=0;i<count_;++i)t+=v[i];return distribution(v.data(),count_,t);}
   mutable std::mutex m_;bool enabled_=false,everComplete_=false,ready_=false,completedReady_=false;Wait wait_{};Current current_{};Completed completed_{};
   double callerWorkMs_=0;bool callerWorkMeasured_=false;uint64_t callerWorkFor_=0;
   // frameEndOwnerBegin/End's pending value: outside current_ because the

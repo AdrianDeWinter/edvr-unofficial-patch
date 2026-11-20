@@ -2,13 +2,12 @@
 
 ## Status
 
+- **2026-10-28: the Sharp weapons setting is RETIRED** (`fix.sharp_weapons`): its flat row is gone, and the HUD Anti-Aliasing row no longer sits under it.
 - **State: SHIPPED (2026-10-09); B390 cockpit proof gap fixed locally (10-11).**
   Steam flat XeSS/UI 125: user reports HUD and menus stable. Correct 4b7bfec4
   proves both E894 variants and composites every steady frame. The October 11
   entry records physical input proof, the fix flight and temporary-probe cleanup.
-  Flown OK on Epic flat. Branch
-  `claude/flat-display-crash-ui-smearing-f1d96a`; the census was removed in the
-  commit that follows the flown build.
+  Flown OK on Epic flat. Branch `claude/flat-display-crash-ui-smearing-f1d96a`; the census was removed in the commit that follows the flown build.
   - SS 1.0 at 125%, HDR route: build `eced5813`, Sean: "Looks great!". In the
     three steady cockpit windows, frames = copies = door-armed = tone-admitted =
     composites = 8046; no back-offs, no declines.
@@ -43,22 +42,23 @@
   - the flat resize-loop fix (771bb99a): exercised OK by windowed resizes on
     13:23 and 13:51 (`result=ok refs=0`).
 - **Ruled-out pointer:** the 2026-10-09 entries; [crisp-ui-handoff.md](crisp-ui-handoff.md).
-- **0.19.0 review (10-09), finding 3:** the Supersampling setter's panel factor is
-  held until the scene's size follows it, its epoch check and write one operation
-  under the floats' lock (last entry; built, not flown).
-- **System Map families (10-10, built, not flown):** `kMapCanvas` and `kMapSprite`
-  (flat only; asked while GuiFocus 6, 7 or 8 is open, on the HDR target) go into the
-  flat UI layer like the HUD families, so they are drawn at D x T after the upscale.
-  "flat ui layer map:" counts them; 10-22: the game-334473 Galaxy icon PS joins, and the Full System
-  Scanner's tone is named so its text is taken too (built, not flown). Entries at end.
-- **Temporary:** no keys; the back-off trail log lines (10-15) go once the camera-suite HUD loop is fixed.
-- **Local flight, next locally:** 4b7bfec4 (120427.log, SS 0.5 then about 0.65/UI 125) verified the rendering path; cleanup 02f50bd7
-  keeps the flown guards (88 CPU checks), is pushed and compiled, no repeat flight needed. Keep codex/xess-flat separate pending
-  the user's Windows full build/testing.
+- **0.19.0 review (10-09), finding 3:** the Supersampling setter's panel factor is held until the scene's size
+  follows it, its check and write one operation under the floats' lock (built, not flown).
+- **System Map families (10-10, built, not flown):** `kMapCanvas` and `kMapSprite` (flat only; asked while GuiFocus 6, 7
+  or 8 is open, on the HDR target) go into the flat UI layer like the HUD families, drawn at D x T after the upscale
+  ("flat ui layer map:"); 10-22: the game-334473 Galaxy icon PS joins, and the Full System Scanner's tone is named too.
+- **Temporary:** the back-off trail log lines (10-15) go once the camera-suite HUD loop is fixed.
+- **Local flight, next locally:** 4b7bfec4 (SS 0.5 then about 0.65/UI 125) verified the rendering path; cleanup 02f50bd7 keeps
+  the flown guards (88 CPU checks), no repeat flight needed. Keep codex/xess-flat separate pending the user's Windows full build.
 - **2026-10-22, the scanner's zoom (second fix built, not flown):** a one-ulp camera difference between HDR writers refused the map
-  recovery's frames; the copy-branch waiver missed the scanner (flight 135701), now also at the admission by structure. Last entry.
-- **Next on Epic:** fly SS 0.5 on the shipped build (the copy route under eced5813's
-  admission change) and 100% at SS 1.0; then an Epic flight opening all three maps.
+  recovery's frames; the copy-branch waiver missed the scanner (flight 135701), now also at the admission by structure.
+- **2026-10-24, HUD Anti-Aliasing (FLOWN OK at 1440p on 88a54953, merged to main):** the HUD layer is composited after the AA, so below
+  4K its slanted edges stepped. SMAA 1x over the layer before the composite is the user setting `fix.hud_antialiasing` (F8 "HUD
+  Anti-Aliasing", flat Performance tab under UI quality, default off; "flat ui layer smaa:" lines). Seen working at 2560x1440 (15:43);
+  nothing to do at 4K, where the edges already carry coverage ramps. Owed: the maps, and its frame-time cost.
+- **2026-10-25, the UI route's GPU timers (Plokhi; built, not flown):** none opened in flat, where nothing reads them.
+- **2026-11-03, bars and dust in the flat layer (FLOWN OK, Frontier, 7cc31c5a):** the supercruise bars and both dusts are taken, as in VR; the orbit lines followed (FLOWN OK, 894343b1), last entry.
+- **Next on Epic:** SS 0.5 on the shipped build (copy route, eced5813's admission change), 100% at SS 1.0, then all three maps.
 
 ## Purpose
 
@@ -1037,3 +1037,199 @@ planet and the HUD text goes blurry for runs of about 2.4 s, crisp for about 1 s
   (a second cause marks the target: read the `flat runtime conflict` line); a refusal `inconsistent-draw-order` or another new reason
   (the waived frame failed a later check of the selection: the reveal composite drawn after the first consumer); a cockpit or DSS window
   with either counter above 0 (the gate leaked).
+
+## 2026-10-24: edge smoothing for the HUD layer (built, not flown)
+
+A user below 4K reported hard stair steps on the HUD's slanted lines. The clearest is the chamfered bracket round "RST" in the power
+distributor panel: its diagonal runs show a step every pixel or two, where the game's own build smoothed them.
+
+- Cause. The layer is composited over the finished picture, after the anti-aliasing (the game's SMAA or DLSS, or EDVR's own), so none of it
+  reaches the HUD. The only smoothing a layer pixel has is the box over its footprint at T (the 2026-10-21 entry: T squared samples a pixel,
+  four at 200). On a display below 4K that is too little for a diagonal run to look smooth.
+- Two places the steps can come from. H1: vector geometry rasterised into the layer, which a live switch from 100 to 200 smooths at once (the
+  next frame draws it into a layer twice the size). H2: edges baked into a Scaleform panel texture at the size the game laid the panel out at,
+  which smooths only after a trip through the main menu has the game lay the panel out again at 200. SMAA on the layer's image works on
+  whatever the layer holds, so it covers both. If a flight shows the steps surviving the switch to 200 until the menu trip, that is H2 and the
+  layer's size alone never reaches it.
+- Where. The flat adapter reads the key (built as a hidden developer key, default on; it is `fix.hud_antialiasing`, default off, since the entry
+  at the end) on every output copy and tells the layer (`uiLayerFlatSetEdgeSmoothing`) just
+  before `uiLayerComposite`. The layer takes the ask on entry and clears it, so the VR profiles, which never ask, composite exactly as before.
+  With the ask, `compositeInner` runs SMAA 1x over the 8-bit layer into an R8G8B8A8 texture of the layer's size and binds that where the
+  composite reads the layer. The composite shader is unchanged, and the multiply transmittance, when there is one, is read as before. Key off,
+  or any failure: the raw layer, as it was.
+- The passes (`ui_layer_smaa.h`, bytecode built offline with the map's SMAA). The layer holds premultiplied light in rgb and transmittance in
+  alpha, cleared to (0, 0, 0, 1). A dark opaque backing is rgb 0 and a 0 against the clear's rgb 0 and a 1, so only alpha shows that edge. The
+  edge pass is therefore new (`uiSmaaEdges`, `ui_layer_smaa_shader.h`): SMAA's colour edge test with the colour distance taken over all four
+  channels, the threshold, steps and local contrast adaptation as `SMAAColorEdgeDetectionPS` has them. The weights and the blend are the map's
+  plain SMAA entries (`smaaWeights`, `smaaBlend`) over `SMAA.hlsl` as upstream wrote it, `SMAA_PRESET_HIGH`, AreaTex and SearchTex from
+  `map_smaa.cpp`. The blend writes all four channels with no colour transform: mixing premultiplied rgb and transmittance linearly is what the
+  composite's own box filter already does to them, so it is exact for this composite.
+- Resources and failure. Made at the first composite that asks, at the layer's size, and made again when the size moves; the compute slots the
+  passes use are put back (the two samplers by the passes, the rest by `compositeInner`). A creation that fails logs once per size with the
+  HRESULT and stands down at that size, with no retry per frame. With the key off the targets are let go; they also go with the layer (a
+  resize, a device change, the layer not live).
+- Memory. 10 bytes a layer pixel (edges 2, weights 4, output 4): 37 MB at 2560x1440 x 100, 83 MB at 3840x2160 x 100, 332 MB at 3840x2160 x 200,
+  on top of the 8-bit layer, the HDR layer and the depth-stencil target of the 2026-10-21 entry.
+- Cost. Not measured. Three compute passes at the layer's size, run inside the span the GPU census times as the layer composite
+  (`DoorUiLayerComposite`), so that figure includes them while the key is on. The 30 s flat report times nothing of its own.
+- Not changed. The holograms stay in the frame, through the anti-aliasing, so this smooths nothing of them.
+- Tests (`flat_mono_resolve_test`, unit `uiLayerSmaaGpuTests`, shard 3; the build's bytecode on WARP over a 64x64 layer in the layer's own
+  convention). A staircase of rise 1 over run 4 in opaque white takes 92 intermediate pixels in rgb and in alpha, with its summed opacity at
+  2591.83 against 2592.00. The same staircase in dark opaque takes 92 intermediate alpha values with rgb still 0, and the map's colour-only edge
+  pass in the edge pass's place leaves it a staircase (the control). An all-clear layer comes out exactly (0, 0, 0, 1); straight bands across
+  the layer, horizontal and vertical, white and dark, come out unchanged; the samplers come back and no view is left bound; a size change
+  re-makes the targets; a failure at a size is told once and not retried there. `flat_weapon_admission_test` runs the whole adapter and layer on
+  WARP and holds the result: smoothed by default, raw with the key off, smoothed again with it on (with the default now off: raw, then smoothed with the
+  key on, raw with it off again; the entry at the end).
+- Log. Once per creation: `flat ui layer smaa: ready at 2560x1440 -- edges R8G8, weights and output R8G8B8A8, 36.9 MB`. Once per distinct
+  failure: `flat ui layer smaa: stood down at WxH -- <what failed> hr=0x%08X`. Every 30 s, whenever the window composited the layer:
+  `flat ui layer smaa: key=on smoothed=N raw-key-off=M raw-fault=K size=WxH`. `smoothed` counts composites that read the SMAA output,
+  `raw-key-off` those with the key off, `raw-fault` those that fell back; `key=` is the value the adapter read, so a key the flat allow-list
+  lacked would show as `key=off`. A window with composites and all three counts 0 means the composite never reached the smoothing.
+- Flight. Flat, a display below 4K (2560x1440 is the case in hand), UI quality 100, in the cockpit. Look at the "RST" bracket in the power
+  distributor and the other diagonal edges, then change the key to off and on again live (F8, or edvr.ini with its hot reload) and
+  compare both the bracket and the small labels and numbers: the smoothing must not soften the text. Then once at 200, to see whether anything
+  stays stepped (H2: switch, look, go through the main menu, look again). Then open the Galaxy Map and the System Map, whose canvas and
+  icons go through the same layer. In the log: one `ready` line at the layer's size; 30 s lines with `key=on smoothed` above 0 and `raw-fault=0`,
+  and after the toggle `key=off raw-key-off` above 0; no `stood down`. Failures: `smoothed=0` with `key=on` and `raw-fault` above 0 (read the
+  `stood down` line and its HRESULT); `key=off` with the key unset (the flat allow-list entry is missing); text visibly softer with the key on.
+  Read the census's layer composite figure with the key on and off for the cost.
+
+## 2026-10-24: HUD Anti-Aliasing becomes an F8 setting
+
+- Decision (Sean, 2026-10-24). The A/B key is a user setting: `fix.hud_antialiasing = on | off`, default off, live, shown in the flat F8 panel as
+  "HUD Anti-Aliasing" on the Performance tab directly under UI quality (Sharp weapons now sits under it). It replaces `advanced.hud_edge_smoothing`
+  completely: that key never shipped in a release, so there is no migration and no fallback read. Off by default.
+- What changed. `flat_ui_layer.cpp` reads `fix.hud_antialiasing` (default false) before each composite; `flat_profile_keys.h` allow-lists it (unlisted, the
+  flat gate would read it off and the row could never turn the smoothing on); `edvr.ini` has a people-facing paragraph after `ui_quality` and the flat
+  sentence of the UI quality paragraph points at it; `menu_flat_rows.h` lists the row (seven rows now: with a blank line and the ten-line warning, the
+  card's eighteen lines exactly, which `menu.cpp` static_asserts). The row dims, and refuses a step, while `fix.ui_quality` is off or the flat
+  anti-aliasing is off, because the layer it smooths is live only with both on (`hudAntiAliasingRowDim`; UI quality is read as the layer reads it, the
+  mode as the Sharp weapons row's flat branch does), and its hint and refusal name the cause that applies. The 30 s `flat ui layer smaa:` line keeps its form.
+- Flat only in the menu. A [fix] row used to reach VR's Performance page by carrying `menu performance`. The new page token `menu flat_performance`
+  (`tools/gen_settings_schema.py`) names a page VR's menu builds none of, as `visual` and `debug` do, while the flat Performance tab is built from
+  `kFlatPageRows` whatever the token says. So the row is on the flat tab and not on VR's page. The generator refuses the token on a key that is not in
+  [fix] and on a key `kFlatPageRows` does not list (the row would be on no menu at all); its self-test covers both and the misspelt token.
+  Not done: the installer's settings window, VR selection, still lists every [fix] setting, this one included (the ini paragraph says it changes nothing in VR).
+- Tests. `flat_weapon_admission_test`: raw by default, smoothed with the key on, raw with it off, smoothed again. `flat_sharpen_test`: the row in
+  the table and its order, the gate, the dimming truth table and its pins in `menu.cpp`, the generated row on the page `flat_performance` directly under UI
+  quality, the flat tab ignoring the page token and VR's page being the `performance` rows. `sharp_weapons_test`: the table order, and Sharp weapons directly
+  under UI quality on VR's page. The GPU unit tests (`uiLayerSmaaGpuTests`) drive the pass directly and needed no change.
+- First look (not a verdict). The 14:37 flight of a38597ab (log `edvr_gfx_20261024_143340.log`, build matched), key on: every composite smoothed,
+  `raw-fault=0`. The layer was 3200x1800, so UI quality 125 and not 100. In Sean's screenshot, received downscaled to 2000x1125, the RST bracket and
+  the shallow slanted panel lines showed no steps and the small text was not softened.
+- Still owed. An off/on comparison at UI quality 100 at full resolution (2560x1440 is the case in hand), then the 200 switch and the main-menu trip (H1
+  against H2 above), the Galaxy Map and the System Map, and the layer composite's frame-time cost with the key on and off.
+
+## 2026-10-24: the 15:35 flight of 88a54953 (4K): no change, and why
+
+- Flight. Log `edvr_gfx_20261024_153506.log`, build matched (`v0.21.0-25-g88a54953`), Steam, flat profile. The display was 3840x2160, not the
+  2560x1440 of the report: `display 3840x2160`, UI quality 125 -> 100 at 15:36:00, layer 3840x2160 (1:1). Sean toggled HUD Anti-Aliasing about
+  fifteen times between 15:37:12 and 15:39:28: "Not seeing any change to the lines around RST".
+- The toggle reached the composite. Every switch logged `menu: fix.hud_antialiasing ... (written to edvr-flat.ini; live)`, every switch on was followed
+  10 ms later by `ready at 3840x2160 ... 82.9 MB`, and the 30 s lines split by it (`smoothed=720 raw-key-off=1979`, `smoothed=0 raw-key-off=2700`,
+  `smoothed=1107 raw-key-off=1590`), `raw-fault=0` throughout.
+- What the pixels hold. Sean's full-size crop of the bracket (176x128, red channel per pixel, `scratchpad\line_profile.py`): the top line rises about
+  one pixel every 8.5 px, and each row's edge is a ramp from full to zero over six to eight pixels (`8888887765321`), its half-way point moving a steady
+  8.5 px per row (x = 62.5, 71, 79.5 in rows 34 to 36). That is a fully anti-aliased edge at this slope. SMAA acts on hard jumps between neighbours
+  (threshold 0.1); these ramps step by about 0.1 a pixel, so it finds little or nothing, and on and off look the same.
+- ruled out: the toggle not reaching the layer, because the 30 s lines split smoothed / raw-key-off with each switch and `raw-fault=0`.
+- ruled out (at 4K, UI quality 100): hard pixel steps in the RST bracket, because its edges in the composited frame carry six-to-eight-pixel coverage ramps.
+- Open. Whether the bracket has hard steps at 2560x1440 (the reported case), where the same artwork covers fewer pixels; the first look at 1440p (14:37)
+  was at UI 125 with the key on and a downscaled screenshot, so it settles nothing. Next: 2560x1440, UI quality 100, full-size crops of the RST bracket
+  with the key off and on at the same spot, read with the same profile. Hard jumps off and ramps on: the setting works where it is needed and has nothing
+  to do at 4K. Ramps with it off too: no pixel aliasing for it to fix in this HUD, and the setting should be proposed for removal.
+- Verdict at 2560x1440 (same log, 15:43). UI quality 200 -> 150 -> 125 -> 100, display and layer 2560x1440, HUD Anti-Aliasing toggled fourteen times
+  at 15:43:13-15:43:34; the window reads `key=on smoothed=1862 raw-key-off=837 raw-fault=0 size=2560x1440`. Sean: "Okay I see it now at 1440p, ship
+  it." So the setting smooths the steps where the HUD has them (below 4K) and has nothing to do at 4K, where the artwork already covers enough pixels
+  to carry its own edge ramps. Merged to main, default off. Still owed: the Galaxy and System Maps with it on, and its frame-time cost.
+
+## 2026-10-25: the UI route's GPU timers stop in flat (built, not flown)
+
+- Report (Plokhi, macOS through DXMT, flat). With the UI route's per-stage GPU timers turned off, a scene below 60 fps went back to 60, at the
+  same settings, and the UI composite and depth replays kept working. Their reading: DXMT's timestamp queries end the active Metal pass and
+  force a flush, so timers whose results are thrown away were splitting the command buffers. Their guard was an early return in `routeBegin`.
+- Checked in the source. `routeBegin` (ui_layer.cpp) opens a GpuTimer for each stage of the route: the clears, the multiply, the seed, each
+  HUD write-back, the composite, coverage and the tonemap. With the crisp HUD on, that is tens a frame. `routePoll` reads them every frame into
+  `g_routeStats`. Their one reader is `logTotals`, the price at the end of the 30 s "ui quality: layer" line. The window boundary skips
+  `logTotals` in the flat profile, prints only the panel-scale and depth-memo lines, and then clears the stats. ui_layer.h exports none of it,
+  and the census item tied to the route (AlteredHdrHud) opens only with `g_hdrDrawTimingOn`, which is off. So in flat every one of these
+  timers was measured and discarded.
+- Built (no key: nothing reads what it removes). `routeBegin` returns -1 in the flat profile. The return comes before the ring and before the
+  "no free timer" and coverage bookkeeping, which feed only that line too. Every caller already takes -1: `routeEnd` and `routeAbort` return
+  at once. `routePoll` still drains, so timers a VR frame left in flight at a live switch to flat are read and freed. Full build green.
+- VR keeps them: the price prints there whenever the layer is live.
+- The saving elsewhere is not measured. On native Windows a timestamp query is a GPU write, so the saving should be small, likely tens of
+  microseconds a frame at most (an estimate). Under DXVK (Proton) it is unknown. The route's timers also no longer take slots in the shared
+  clock's lease table (gpu_disjoint_clock.h), which flat's reported timers draw from as well.
+- Flight check (flat): the HUD layer and panels look as before, and the "flat ui layer" 30 s lines read as before. The "ui quality: layer"
+  line never printed in flat, so no log line goes away. On the Deck, a same-scene frame-time comparison against the previous build would
+  price it under DXVK.
+
+## 2026-11-03: the supercruise bars and the dust in the flat UI layer (FLOWN OK)
+
+A user report: in flat, the supercruise vertical bars and the supercruise space dust blur under motion. The upscaler's history smears them: a bar is
+one render pixel wide and a dust streak moves about its own width a frame, so successive frames never overlap and there is nothing to accumulate.
+VR already draws both into the UI layer, after the upscale. The flat layer now takes them too, and the normal-space dust (the specks near a planet
+or a station) with them, in both editions.
+
+- **Evidence** (Steam flat logs, 14 sessions 2026-10-14..11-02): flat draws the dust and the bars with the same pairs as VR (vs 9BFC7FD2 / ps DBF17257
+  and vs A47A3315 / ps 869FFF43) into the R11G11B10 scene target at render size, so the family rule already named them and the adapter's pre-test
+  (`flat_pair_facts.h` `uiMayAsk`) already passed. The generic classifier refused both pairs (the dust: vertex shader forward-columns, pixel shader a
+  consumer with a multi-row temp; the bars: vertex shader unclassified, slice-not-clean), so the draws had no camera rows and the adapter would have
+  left every one in the scene as `no-camera-rows`.
+- **The hand recipes** (`flat_projection_recipes.h`, the Caspian / fleet-carrier block): the two pairs join the pairs already reciped for the same vertex
+  shaders (the same bytecode, the same hash). Vetted from the shader dumps with `tools\dxbc_disasm.py`: ps 869FFF43 is `o0.xyz = v0.xyz * cb1[90].y;
+  o0.w = v0.w` (colour only); ps DBF17257 reads the cb2 material rows, t0 and t1 at varying coordinates, cb1[61].z and cb1[90].y only (no SV_Position
+  input, never cb1 270..273, no depth output); its multi-row temp is the material blend. `flat_temporal_test` pins both pairs.
+- **The take.** `flatUiLayerTakesFamily` asks for the bars, the space dust and the normal-space dust; the orbit lines stay out (not asked: their width
+  patch is VR's). The density rule is per profile (`uiLayerSceneLinesFit`): VR keeps its strict one (the layer wider than the render), flat takes a layer
+  at least as large as the render on both axes, because the take is for the history and DLAA at UI quality 100 has render == display. A layer narrower
+  than the render (Elite's Supersampling above the UI quality) still leaves the bars in the scene (`no-density-gain`); the dusts are exempt from the
+  rule in both. The bars' strip shader (`supercruise_bars.cpp`) is exact at ratio 1 (`tentHalfWidth` clamps to one texel).
+- **The bars' strip pass in flat.** The issue path brackets the game's draw as `vscreen.cpp` does in VR: Prepare reads the game's viewport before the
+  layer's Begin, the strip shader binds after a true Begin, and End puts the game's geometry stage, constant slot and rasterizer state back before the
+  layer's End (`flatUiLayerBars*`, inside the flat runtime's internal scope). `supercruise_bars_test` pins the order in `flat_runtime.cpp`.
+- **Log lines** (every 30 s, zeros print, so a log without them is a build that never ran this code):
+  `flat ui layer scene: supercruise-bars asked=N decided=N taken=N refused-at-issue=N refused=N (reasons); space-dust ...; normal-space-dust ...`, the
+  reasons being the adapter's refusals and the shared decision's declines by name (`no-camera-rows`, `no-density-gain`, `family-not-ready`, ...);
+  `ui quality: supercruise bars: ...` (the strip pass's own counts, with the flat layer text); and once per family `flat ui layer: the first supercruise
+  bars taken -- frame N, vs ..., ps ..., into the flat HDR layer, composited after the upscale; said once.`
+- **HUD Anti-Aliasing** (`fix.hud_antialiasing`) is one key for both editions now (`ui-layer-2026-09-23.md`, same date); the flat adapter's ask is unchanged,
+  and the smoothing also acts on the bars and the dust, since they are in the layer.
+- **Flight check** (flat, supercruise, then near a planet): `flat ui layer scene:` reads `taken` above zero for the bars and the space dust in supercruise and
+  for the normal-space dust near a body, with `no-camera-rows` and `no-density-gain` at 0 at UI quality 100 and Supersampling 1.0; the bars and the dust
+  no longer smear when the view turns. If `no-camera-rows` climbs, the recipe did not take for that pair; if `no-density-gain` climbs, the layer is
+  narrower than the render (lower Supersampling, or raise UI quality). Frame time: the strip shader and the extra layer draws are small; the smoothing,
+  when on, is the larger cost.
+- **Flight (Frontier, 2026-11-03, log `edvr_gfx_20261103_044624`, build v0.22.0-rc.5-38-g7cc31c5a, VR then flat in one session):** Sean: works in both
+  profiles. Flat, 3840x2160, DLSS, UI quality 100, HUD Anti-Aliasing on: in supercruise every window read `supercruise-bars asked=2700 decided=2700
+  taken=2700 ... refused=0 (none)` and the same for `space-dust` (one draw a frame each at 90 fps), the strip pass at `tent half-width 1.00 layer px in a
+  3840x2160 viewport` (layer and render the same size: the looser flat density rule is what admitted the bars); near a body `normal-space-dust taken=2669
+  of 2672` (3 refused: `not-hdr-target=1 tone-unproven=2`, at a transition). `no-camera-rows` and `other-shift` never appeared: the two new recipes give
+  the rows and the rows carry the frame's phase. `flat ui layer smaa: key=on smoothed=2669 raw-fault=0 size=3840x2160`.
+
+## 2026-11-03: the orbit lines in the flat UI layer (FLOWN OK)
+
+Sean asked for the orbit lines to go the way of the bars and the dust. Flat draws them with VR's pair (vs C7FA0C0F / ps 6EEF165A) into the
+3840x2160 R11G11B10 scene target, depth and stencil tested as in VR, and the generic classifier refused the pair (log `edvr_gfx_20261103_044624`,
+04:56:41: `verdict=refused ... vs-reason=not-forward ... ps-reason=vpos-consumer`). So the lines had no camera rows and stayed in the upscaler's history.
+
+- **The recipe** (`flat_projection_recipes.h`, beside the dust and the bars): ForwardColumns at cb1 row 270 on the vertex stage. The vertex shader
+  projects by cb1[270..273], then adds a screen-space offset scaled by clip w (the instance's half-width over the target's 1/W, 1/H). The offset never
+  reads the jitter, so the rows carry the frame's phase. The pixel shader reads SV_Position.w only (the edge distance's perspective divide), never its
+  x, its y or the target size, so the layer's size does not change what it draws; VR has drawn the pair into a larger layer since 2026-10-07.
+  `flat_temporal_test` pins the pair (49 pairs) and the orbit shaders' other pairings as recipe-less.
+- **The take.** `flatUiLayerTakesFamily` asks for `kOrbitLines` under the flat scene-line density rule (a layer at least as large as the render), as for
+  the bars. Flat has no width patch (`orbital_width.h` stays VR's): the game's half-width is in render pixels, so a line is as wide on screen as when it
+  was upscaled; it only leaves the history. The depth and stencil tests run against the layer's seeded copy, as the normal-space dust's do.
+- **Log:** the `flat ui layer scene:` line gains a fourth part, `orbit-lines asked=N decided=N taken=N refused-at-issue=N refused=N (reasons)`, and once:
+  `flat ui layer: the first orbit lines taken -- ...`.
+- **Flight check** (flat, supercruise with orbit lines showing): `orbit-lines taken` above zero, `no-camera-rows` and `depth-stencil-test` at 0, the
+  lines steady when the view turns. `depth-stencil-test` climbing means the seed refused this depth target; `no-density-gain` means the layer is
+  smaller than the render.
+- **Flight (Frontier, 2026-11-03, log `edvr_gfx_20261103_093139`, build v0.22.0-rc.6-1-g894343b1, flat, 3840x2160, HUD Anti-Aliasing on):** Sean:
+  "seems to work". First take at 09:33:24 (frame 9049). The two supercruise windows read `orbit-lines asked=1414 decided=1306 taken=1306 refused=108`
+  and `asked=2792 decided=2699 taken=2699 refused=93`, every refusal `not-hdr-target`: about three draws a second of the same pair go to a target
+  that is not the scene's HDR one, are left to the game as before, and are outside the history anyway. `no-camera-rows`, `other-shift` and
+  `depth-stencil-test` never appeared. `flat ui layer smaa: key=on smoothed=2699 raw-fault=0`.

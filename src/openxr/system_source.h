@@ -13,6 +13,8 @@ struct SystemOptics {
   uint64_t generation=0, sequence=0;
   RawFov raw[2]{};
   vr::HmdMatrix34_t eyeToHead[2]{};
+  // The world scale (percent) eyeToHead was built with, so an answer from this cache says which scale it carries.
+  uint32_t worldScalePercent=edvr::kWorldScaleDefault;
 };
 // One copied read transaction. No borrowed runtime strings, pointers or handles.
 // A live HMD may have temporarily invalid tracking. geometry is the current
@@ -39,6 +41,10 @@ struct SystemRead {
   vr::HmdMatrix34_t seatedToStanding{}, rawToStanding{};
   // Game-facing per-eye tangent offsets. Cached optics remains unjittered.
   float tangentShift[2][2]{};
+  // The scope zoom (B3): while eye 0's told frustum is narrowed, the projection matrix getter answers it (geometry.raw) and the raw getter, which the game's UI scale reads, answers
+  // the frustum it would have been told without the zoom (toldRaw). Not set: both answer geometry.raw.
+  bool toldRawSet=false;
+  RawFov toldRaw[2]{};
 };
 
 // Who called GetDeviceToAbsoluteTrackingPose and which instant it is to be located at. Taken on the CALLER's thread before the hop to
@@ -87,11 +93,21 @@ class SystemSource {
   }
   virtual void noteProjectionQuery(const SystemRead&,unsigned,float,float,
       vr::EGraphicsAPIConvention,bool,const vr::HmdMatrix44_t&,const void*) noexcept {}
+  // Every projection read the game makes of an eye (raw: GetProjectionRaw, else GetProjectionMatrix), and whether eye 0's answer was the scope zoom's narrowed one (matrix) or
+  // the true one held back from it (raw). span is the vertical tangent span the getter answered (projection_math.h rawSpanV, matrixSpanV; 0 when it answered nothing), and caller
+  // the return address as an RVA in the game's executable (exe_module.h frameRva). Counted, never logged per call; must stay cheap.
+  virtual void noteProjectionRead(unsigned eye,bool raw,bool zoomHeld,float span,uint32_t caller) noexcept {(void)eye;(void)raw;(void)zoomHeld;(void)span;(void)caller;}
   virtual void noteFrequencyQuery(const SystemRead&,vr::TrackedDeviceIndex_t,
       vr::ETrackedPropertyError,float,unsigned) noexcept {}
+  // The first answer to Elite's eye-transform call that carries a world scale (percent) the last answer did not: the sequence is the geometry
+  // frame it was answered from. Said once per change, never per call (the game asks about twelve times a frame).
+  virtual void noteWorldScaleRead(uint32_t percent,uint64_t sequence) noexcept {(void)percent;(void)sequence;}
   virtual void notePropertyQuery(unsigned,vr::TrackedDeviceIndex_t,
       vr::ETrackedDeviceProperty,vr::ETrackedPropertyError) noexcept {}
   virtual void noteHiddenMesh(unsigned,uint64_t,uint32_t,const char*,uint32_t) noexcept {}
+  // Every answer that carried a mesh (non-null vertex data, a triangle count above zero) for the eye: the game's own test for "a hidden-area mesh was served" reads the
+  // counts it stored from such answers. Unlike noteHiddenMesh it is not rate limited; it must stay cheap and must not wait.
+  virtual void noteHiddenMeshServed(unsigned) noexcept {}
   virtual void unsupported(unsigned slot) noexcept=0;
 };
 }

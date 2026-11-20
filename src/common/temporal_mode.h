@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <cmath>
 #include <string>
@@ -14,6 +16,7 @@ inline bool temporalModeEnabled(const std::string& mode) {
            _stricmp(mode.c_str(), "dlss") == 0 ||
            _stricmp(mode.c_str(), "fsr") == 0 ||
            _stricmp(mode.c_str(), "fsr4") == 0 ||
+           _stricmp(mode.c_str(), "dittosr") == 0 ||
            _stricmp(mode.c_str(), "xess") == 0;
 }
 
@@ -39,6 +42,52 @@ inline TemporalPresetSelection temporalPresetFor(const std::string& model) {
     return {11, model.empty()};
 }
 
+// ---- A map is open (VR) -----------------------------------------------------------------------------------------------------
+// Status.json's GuiFocus 6 is the Galaxy Map, 7 the System Map, 8 the Orrery. Their lines, grid, stars and text write no depth, so the
+// temporal pass has no motion source for them and accumulates a ghost (the flat profile's finding, docs\design-flat-temporal-aa-2026-09-23.md,
+// 2026-10-10). The head's delta is the only motion the pass has for them, so the history is right while the game's camera moves as the head does
+// and wrong the moment the map itself pans, orbits or zooms. While one is open the VR pass keeps its jitter and history while the map camera is
+// at rest and resets the history, with no jitter, on any frame it is not (temporalMapMoved). The signal is the map camera's own pose, published
+// by the renderer hook (flat_stationary_camera_capture.h mapCameraChanges): head-free, and identical to the last digit at rest in three eye dumps
+// (docs\galaxy-map-vr-2026-11-03.md). No history at all (the first cut, 2026-11-03) left each frame a single un-antialiased upscale, and the head's
+// tremor, about a pixel a frame, made every thin stroke shimmer (the three eye dumps of 2026-11-04). The Full System Scanner (9) is not here: in VR
+// its own latch (fss_reveal) owns that screen.
+// `viewNamed`: the camera source's stage 0 is a map view (mapCameraAnyOpen), which opens the gate on its first frame instead of up to half a second
+// after the game, as the journal's reading does. `focusKnown` is false when the journal cannot say (the field is absent: on foot, in a menu).
+inline bool temporalMapOpen(bool viewNamed, bool focusKnown, unsigned focus) { return viewNamed || (focusKnown && focus >= 6u && focus <= 8u); }
+
+// The map camera moving, one instance per eye. `changes` is mapCameraChanges(): it advances on a publish that differs from the last by even one bit.
+// A look at a map frame is "moved" on the first one (no history to keep), when `changes` differs from the last look's, and on the look after a
+// change as well: the publisher runs on a game thread, so a frame's draws can be one publish behind the count the pass reads.
+struct TemporalMapMotion {
+    uint64_t seen = 0;
+    bool movedLast = false;
+    bool valid = false;
+};
+inline bool temporalMapMoved(TemporalMapMotion& m, uint64_t changes) {
+    const bool moved = !m.valid || changes != m.seen;
+    const bool result = moved || m.movedLast;
+    m.seen = changes;
+    m.movedLast = moved;
+    m.valid = true;
+    return result;
+}
+
+// The pass's verdict on the last map frame, one bit per eye (set: that eye's history was kept, the camera followed the head). native_temporal's begin()
+// reads both bits to decide whether the next frame is jittered; the flags bit 8 (kTemporalFlagMapKeep) on edvrTemporalAa hands the pass the decision.
+inline std::atomic<unsigned>& temporalMapStillBits() { static std::atomic<unsigned> bits{0}; return bits; }
+inline constexpr unsigned kTemporalFlagMapKeep = 256u;
+
+// THE SYSTEM MAP'S CLOSE VIEW: a body fills enough of the view that its surface's detail shows (galaxy_map_ui.cpp sets this each frame, galaxy_map_ui.h bodyFillsView). The scene there is the body, which writes depth, and the
+// backdrop; every line and icon went to the UI layer. The camera's rows move those exactly, so the history stays through the map camera's moves. A reset there leaves the surface's fine terrain an aliased half-resolution frame,
+// different on every frame of a move (docs\galaxy-map-vr-2026-11-03.md, "The close view's surface"). The far view still resets: its small moons write no depth, and the rows would move them as though at infinity.
+inline std::atomic<bool>& temporalMapCloseView() { static std::atomic<bool> v{false}; return v; }
+inline bool temporalMapKeeps(bool viewNamed, bool moved, bool rowsMoveTheScene) { return viewNamed && (!moved || rowsMoveTheScene); }
+
+// The VR map gate's answer for this frame (native_temporal's begin() stores it, once a frame), published so the draw thread loads one flag per draw: the
+// UI layer's family rule names the map's overlay pairs only while it is set (vscreen.cpp uiLayerFamilyOf, ui_layer_math.h UiFamilyFacts.mapOpen).
+inline std::atomic<bool>& temporalMapGateFlag() { static std::atomic<bool> flag{false}; return flag; }
+
 inline constexpr float kTemporalShipMetres = 10.0f;
 
 // ---- The ship split on foot ----------------------------------------------------------------------------------------------
@@ -46,7 +95,7 @@ inline constexpr float kTemporalShipMetres = 10.0f;
 // split (kTemporalShipMetres) is the ship's -- the cockpit, the hull -- and takes the
 // head's delta alone; every pixel farther, and the far plane, takes the camera's own (the head and the ship together, the
 // game's view rows). That is right in a cockpit, where the near things ride with the head. On foot there is no ship: in
-// Explorer Cam, the one on-foot mode Elite draws in stereo through the eye path, the camera walks with the commander and the
+// Explorer Cam (the on-foot stereo mode then, removed in F98), the camera walked with the commander and the
 // ground 1.5 to 10 m away is the world, not a cockpit. Eye dump 090359 (Steam, v0.18.2-90-g6c63f6aa) had 55% of its decision
 // crop on the head path -- the ground within 10 m, 53.5% of the frame, no cockpit stencil anywhere -- and the head path
 // missed the camera's whole walk: by block matching the raw crops its prediction was off by 24.9 px at the median, the camera's
@@ -193,10 +242,11 @@ struct TemporalFootTracker {
 // does not name (off included) reads as Own: off never reaches the seam,
 // and an unrecognised value already falls back to the pass's own history
 // (temporalModeEnabled above), so there is nothing else to run.
-// Intel is XeSS-SR, the third external engine (the VR eye pass runs it per eye; flat runs it through flat_mono_resolve).
-// AmdFsr4 is AMD's FSR 4.1 through AMD's own D3D12 runtime (fsr4_engine.h), the fourth external engine: the readers that
-// only ask for an external engine count it (temporalExternalEngine), and Amd stays FSR 3.1's alone (its warm, its reactive mask).
-enum class TemporalEngine { Own, Nvidia, Amd, Intel, AmdFsr4 };
+// Intel is XeSS-SR. Ditto is DittoSR 0.5.0, an alternative to FSR on the same inputs.
+// AmdFsr4 is AMD's FSR 4.1 through AMD's own D3D12 runtime (fsr4_engine.h). Amd stays
+// FSR 3.1's alone (its warm, its reactive mask). Ditto keeps the value it has on main;
+// AmdFsr4 is appended after it. The VR eye pass runs each per eye; flat runs each through flat_mono_resolve.
+enum class TemporalEngine { Own, Nvidia, Amd, Intel, Ditto, AmdFsr4 };
 
 inline TemporalEngine temporalEngineFor(const std::string& mode) {
     if (_stricmp(mode.c_str(), "dlaa") == 0 || _stricmp(mode.c_str(), "dlss") == 0) {
@@ -204,6 +254,7 @@ inline TemporalEngine temporalEngineFor(const std::string& mode) {
     }
     if (_stricmp(mode.c_str(), "fsr") == 0) return TemporalEngine::Amd;
     if (_stricmp(mode.c_str(), "fsr4") == 0) return TemporalEngine::AmdFsr4;
+    if (_stricmp(mode.c_str(), "dittosr") == 0) return TemporalEngine::Ditto;
     if (_stricmp(mode.c_str(), "xess") == 0) return TemporalEngine::Intel;
     return TemporalEngine::Own;
 }
@@ -231,6 +282,55 @@ inline bool temporalExternalEngineFor(const std::string& mode, bool flatProfile)
 inline const char* temporalNvidiaLabel(float hmdQuality) {
     if (!std::isfinite(hmdQuality) || hmdQuality <= 0.0f) return "DLSS / DLAA";
     return hmdQuality >= 1.0f ? "DLAA" : "DLSS";
+}
+
+// The GPU the performance menu's Anti-aliasing list is for: the adapter the game device was created on.
+// Unknown (no device yet) offers neither vendor runtime. Other is Intel, a software adapter, or anything else.
+enum class TemporalGpu { Unknown, Nvidia, Amd, Other };
+
+// True when the performance menu may offer this fix.temporal_aa value. dlss and dlaa are NVIDIA's runtime
+// (one choice: the row labels it DLSS or DLAA). fsr4 is AMD's FSR 4.1. Off, TAA, FSR 3.1, DittoSR and XeSS-SR
+// stay on every GPU. A value the ini does not list is offered, so an unknown word is not hidden as if it were a vendor mode.
+inline bool temporalAaChoiceOffered(const char* value, TemporalGpu gpu) {
+    if (!value || !value[0]) return false;
+    if (_stricmp(value, "dlss") == 0 || _stricmp(value, "dlaa") == 0) return gpu == TemporalGpu::Nvidia;
+    if (_stricmp(value, "fsr4") == 0) return gpu == TemporalGpu::Amd;
+    return true;
+}
+
+// Case-insensitive substring of a DXGI description. ASCII letters only; a description is a vendor's English name.
+inline bool temporalGpuNameHas(const wchar_t* text, const wchar_t* needle) {
+    if (!text || !needle || !needle[0]) return false;
+    for (const wchar_t* p = text; *p; ++p) {
+        const wchar_t* a = p;
+        const wchar_t* b = needle;
+        while (*a && *b) {
+            wchar_t ca = *a, cb = *b;
+            if (ca >= L'A' && ca <= L'Z') ca = static_cast<wchar_t>(ca - L'A' + L'a');
+            if (cb >= L'A' && cb <= L'Z') cb = static_cast<wchar_t>(cb - L'A' + L'a');
+            if (ca != cb) break;
+            ++a;
+            ++b;
+        }
+        if (!*b) return true;
+    }
+    return false;
+}
+
+// Who made this adapter. The description wins when it names the maker, because a wrapper can spoof the PCI vendor:
+// DXVK_ENABLE_NVAPI reports NVIDIA's 0x10DE and keeps the real device id (flight 7: device 0x1586, the Radeon 8060S).
+// That one device stays AMD under Wine even when the description was spoofed too. 0x1002 is AMD, 0x1022 is AMD's old
+// vendor id, 0x10DE is NVIDIA. A zero vendor with no name is Unknown.
+inline TemporalGpu temporalGpuFromAdapter(uint32_t vendorId, uint32_t deviceId, const wchar_t* description, bool wine) {
+    if (wine && vendorId == 0x10DEu && deviceId == 0x1586u) return TemporalGpu::Amd;
+    if (temporalGpuNameHas(description, L"radeon") || temporalGpuNameHas(description, L"amd")) return TemporalGpu::Amd;
+    if (temporalGpuNameHas(description, L"nvidia") || temporalGpuNameHas(description, L"geforce") ||
+        temporalGpuNameHas(description, L"quadro"))
+        return TemporalGpu::Nvidia;
+    if (vendorId == 0x1002u || vendorId == 0x1022u) return TemporalGpu::Amd;
+    if (vendorId == 0x10DEu) return TemporalGpu::Nvidia;
+    if (vendorId == 0u && !(description && description[0])) return TemporalGpu::Unknown;
+    return TemporalGpu::Other;
 }
 
 }  // namespace edvr

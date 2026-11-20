@@ -17,6 +17,7 @@ from pathlib import Path
 import struct
 import tempfile
 
+import dump_io   # tools\dump_io.py: drawstate_<stamp>.bin is NAME or NAME.z
 import eye_draw_snapshot
 
 
@@ -530,7 +531,7 @@ def write_output(output_path, binary, manifest, dry_run=False):
 
 def export_capture(capture_path, output_path=None, frame_limit=2, dry_run=False):
     capture_path = Path(capture_path)
-    capture_bytes = capture_path.read_bytes()
+    capture_bytes = dump_io.read_bytes(capture_path)
     capture = eye_draw_snapshot.read(capture_path)
     shaders = load_shaders(capture_path.parent)
     fixture, manifest = extract(capture, shaders, frame_limit)

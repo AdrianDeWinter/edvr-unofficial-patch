@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "../common/dump_file.h"   // panels_<stamp>.bin goes out as .z
+
 namespace edvr {
 class EyePanelSnapshot {
     template<class T> using Ptr = Microsoft::WRL::ComPtr<T>;
@@ -451,11 +453,11 @@ public:
     }
     bool write(ID3D11DeviceContext* ctx,const wchar_t* path) {
         if(!ctx || !path)return false;
-        FILE* f=nullptr;if(_wfopen_s(&f,path,L"wb") || !f)return false;
-        bool ok=fwrite("EDVRPNL1",1,8,f)==8;
-        auto u32=[&](uint32_t v) {ok=fwrite(&v,4,1,f)==1 && ok;};
-        auto u64=[&](uint64_t v) {ok=fwrite(&v,8,1,f)==1 && ok;};
-        auto text=[&](const std::string& value) {u32(uint32_t(value.size()));ok=fwrite(value.data(),1,value.size(),f)==value.size() && ok;};
+        dump_file::Writer f;if(!f.open(path))return false;
+        bool ok=f.write("EDVRPNL1",8);
+        auto u32=[&](uint32_t v) {ok=f.write(&v,4) && ok;};
+        auto u64=[&](uint64_t v) {ok=f.write(&v,8) && ok;};
+        auto text=[&](const std::string& value) {u32(uint32_t(value.size()));ok=f.write(value.data(),value.size()) && ok;};
         u32(1);u32(count());u32(firstFrame_);u32(declined);u32(failures);u32(ignoredOtherEye);u32(ignoredOtherFrame);
         u64(target());u64(bytes);
         for(auto& draw:draws_) {
@@ -490,19 +492,19 @@ public:
                     (valid?"true":"false")+",\"reason\":"+quote(reason)+"}");
                 u32(valid?b.bytes:0);
                 if(valid) {
-                    if(!b.cpu.empty())ok=fwrite(b.cpu.data(),1,b.cpu.size(),f)==b.cpu.size() && ok;
-                    else if(b.mips.empty())ok=fwrite(maps[i][0].pData,1,b.bytes,f)==b.bytes && ok;
+                    if(!b.cpu.empty())ok=f.write(b.cpu.data(),b.cpu.size()) && ok;
+                    else if(b.mips.empty())ok=f.write(maps[i][0].pData,b.bytes) && ok;
                     else for(size_t level=0;level<b.mips.size();++level) {
                         const auto& mip=b.mips[level];const auto& mapped=maps[i][level];
                         const auto* data=static_cast<const uint8_t*>(mapped.pData);
                         for(uint32_t row=0;row<mip.rows;++row)
-                            ok=fwrite(data+size_t(row)*mapped.RowPitch,1,mip.row,f)==mip.row && ok;
+                            ok=f.write(data+size_t(row)*mapped.RowPitch,mip.row) && ok;
                     }
                 }
                 for(uint32_t level=0;level<maps[i].size();++level)ctx->Unmap(b.stage.Get(),level);
             }
         }
-        u32(failures);return fclose(f)==0 && ok;
+        u32(failures);return f.close() && ok;
     }
 };
 } // namespace edvr

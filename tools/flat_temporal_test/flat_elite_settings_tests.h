@@ -530,7 +530,7 @@ inline int flatEliteSettingsTests() {
         expect(w.count == 3 && std::strcmp(w.line[2], kFlatTaaAboveWords) == 0 &&
                std::strcmp(w.line[0], "TAA is not active: Elite's post-processing is not recognised.") == 0,
                "the TAA paragraph is the third line, after the post chain's two");
-        expect(std::string(kFlatTaaAboveWords) == "Above 1.0 supersampling, EDVR's TAA works only on a post chain it knows. Set "
+        expect(std::string(kFlatTaaAboveWords) == "Above 1.0 supersampling, ED-UP's TAA works only on a post chain it knows. Set "
                                                   "Elite's supersampling to 1.0 or lower, or choose DLSS or FSR.",
                "the TAA paragraph's words");
         // Only with the key auto (the structure is what DLSS and FSR do not depend on), never alongside a render-size refusal, never
@@ -557,7 +557,7 @@ inline int flatEliteSettingsTests() {
                     if (elite_settings_test::ruler(w.line[i], nullptr) > elite_settings_test::kPanelWidthPx) fits = false;
             }
         expect(fits, "wrapped to the panel's width every variant fits the lines it has");
-        expect(static_cast<int>(kFlatPageRowCount) + 1 + FlatSettingsWarning::kMaxLines <= 18, "the flat page's rows, a blank line and a full warning fit the card's 18 lines");
+        expect(static_cast<int>(kFlatPageRowCount) + 1 + 2 <= 32 && 13 + FlatSettingsWarning::kMaxLines <= 32, "the flat page's rows, a blank line and the two-line pointer, and the Status page's thirteen lines and a full warning, fit the card's 32 lines");
 
         // The key moves with every condition and with the sizes the words name, so the panel and the log update live as Elite's
         // resolution or supersampling changes; with no cause it is what it was.

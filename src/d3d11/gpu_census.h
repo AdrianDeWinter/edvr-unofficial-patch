@@ -45,6 +45,9 @@ enum class GpuCensusSection : uint8_t {
     DoorMenu,                 // menu_panel.cpp's dispatch
     DoorUiLayerComposite,     // ui_layer.cpp's kComposite dispatch
     DoorSkyRing,              // sky_ring.cpp's dispatch (diag.sky_ring, TEMPORARY; docs/sky-flicker-2026-10-13.md) -- nested inside DoorTemporalWhole, so not a top-level door item
+    DoorScopeZoom,            // scope_zoom.cpp's two passes (the scope lens, fix.native_on_foot_ads_scope_zoom; docs/design-vr-scope-magnification-2026-10-28.md section 8): a top-level
+                              // door item, in the door total, called only in the right eye's scoped ADS -- it has no turn in the rotation until called this window, so with the key off the
+                              // census samples exactly as it did before this section existed
     // In-frame: per game draw. K = 8 while active.
     FrameHologramPasses,      // the two hologram/icon depth reissues
     FrameUiDepthCoverage,     // the UI-depth family reissue (UiContent::prepare, stellar coverage nest inside)
@@ -75,12 +78,18 @@ enum class GpuCensusSection : uint8_t {
     // is on show, from the slow path behind the hook's watch gate -- never from the no-op watcher calls -- and, like the world route's, with no turn in the
     // rotation until called this window, so with no scanner on show the census samples as it did before this section existed.
     FrameFssReveal,
+    // Native on foot's depth readers (F199, native_on_foot.cpp): F85c's reticle depth march (one single-group dispatch over the eye's scene depth for up to 32 lines, and a copy of its small
+    // output into the staging ring) and F119's head-containment grid (a single-group dispatch for each eye that drew its scene, and one copy of the shared output), the GPU work behind F123's
+    // wall contact. They run on foot only: F119's each frame, F85c's while a reticle, weapon readout or prompt line is up. Priced here because with Anti-aliasing off they now get the scene depth
+    // (F199) and, like the FSS reveal's, they are EDVR's cost in the in-frame total. Called from the dispatch call sites, behind the asker's own gates, so a window with none on foot prints "-" and
+    // the rotation gives the section no turn until it has been called this window.
+    FrameOnFootDepth,
     // The second skin's GPU work (F2: engine_velocity.cpp and skin_join_gpu.cpp), priced item by item (F16). Each is NESTED inside a FrameEngineVelocity span (the
     // work was already in the engine velocity figure and still is), so they are timed on turns of their own, are NEVER added to a total, and are reported on a line
     // of their own. Like the world route's they have no turn until called this window, so with no skinned character the census samples exactly as it did before.
     // (A fifth item, a probe of the join's 3-table clear on scratch buffers, priced that clear at 0.015 ms in F16 and was removed: it ran every frame to measure.)
-    FrameSkinSourceClear,     // the on-foot source's target 7 clear, once at the frame's first skinned draw (68 MB at 3888x2187)
-    FrameSkinEyeClear,        // an eye's target 7 clear at the eye-frame's start (31 MB at 2016x1949)
+    FrameSkinSourceClear,     // the on-foot source's target 7 clear, once at the frame's first skinned draw (136 MB at 3888x2187)
+    FrameSkinEyeClear,        // an eye's target 7 clear at the eye-frame's start (63 MB at 2016x1949)
     FrameSkinJoinClear,       // the join's 3-table clear pass (F17: 64 groups of 256 threads over all 65,536 rows of the three tables), issued right before the join
     FrameSkinJoin,            // the join dispatch (one 256-thread group; since F17 without the clear), the plan upload and the job-table copy
     FrameSkinPose,            // the pose table build: instance copy, the six dispatches (clear, mark, scatter, scatter-rest, verify, finish)
@@ -94,6 +103,9 @@ enum class GpuCensusSection : uint8_t {
     AlteredHdrHud,            // a HUD draw moved into the HDR HUD layer (fix.ui_quality's crisp HUD, the layer at 4032^2): the game's shading
                               // at the layer's size, timed by the route's moved-draw timer (ui_layer.cpp routeBegin/routeEnd). Only while
                               // g_hdrDrawTimingOn is on (off since 2026-10-14; it was on for the 2026-10-13 measurement build).
+    AlteredLegacyGlass,       // the legacy canopy's draw (visual.cockpit_glass = legacy, taken into the weapons layer), timed whole by ui_layer.cpp from the layer's issue to uiLayerEnd, in both
+                              // profiles. In VR the "UI draws" scope times the same draw on its own turn, so this item is also inside that one and is NEVER added to the altered line's
+                              // "together" figure; flat does not time "UI draws". No turn in the rotation until called this window, so with the look on `odyssey` the census samples as before.
     // A draw wrapped in another fix's state change (RemLok, the loading hologram, scrim,
     // particles, the panel ...): ONE SECTION PER FIX, kAlteredFixCount of them, in AlteredFix's
     // order. They share ONE turn in the rotation (the first owns it, turnOwnerOf), one K and one

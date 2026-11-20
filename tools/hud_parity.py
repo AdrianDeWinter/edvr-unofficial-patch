@@ -136,6 +136,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import dump_io   # tools\dump_io.py: the eye dump's .bin files are NAME or NAME.z
+
 import numpy as np
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
@@ -651,9 +653,9 @@ def _stamp(path, prefix):
 
 def find_pair(path):
     panels = {os.path.basename(p)[len('panels_'):-len('.bin')]: p
-              for p in glob.glob(os.path.join(path, 'panels_*.bin'))}
+              for p in dump_io.glob(os.path.join(path, 'panels_*.bin'))}   # NAME or NAME.z, once each
     tonemaps = {os.path.basename(p)[len('tonemap_'):-len('.bin')]: p
-                for p in glob.glob(os.path.join(path, 'tonemap_*.bin'))}
+                for p in dump_io.glob(os.path.join(path, 'tonemap_*.bin'))}
     common = sorted(set(panels) & set(tonemaps))
     if len(common) == 1:
         return panels[common[0]], tonemaps[common[0]]
@@ -666,8 +668,7 @@ def find_pair(path):
 
 def sniff_pair(first, second):
     def magic(p):
-        with open(p, 'rb') as f:
-            return f.read(8)
+        return dump_io.read_bytes(p)[:8]
     pair = {magic(first): first, magic(second): second}
     if b'EDVRPNL1' not in pair or b'EDVRTON1' not in pair:
         fail(f'expected one EDVRPNL1 and one EDVRTON1 file, got {magic(first)!r} and {magic(second)!r}')

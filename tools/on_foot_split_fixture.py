@@ -35,6 +35,8 @@ from pathlib import Path
 
 import numpy as np
 
+import dump_io   # tools\dump_io.py: the eye dump's .bin files are NAME or NAME.z
+
 HERE = Path(__file__).resolve().parent
 DEFAULT = HERE / "on_foot_split_test" / "fixture_onfoot.bin"
 MAGIC = b"EDVRFOOT"
@@ -305,7 +307,7 @@ def self_test(path):
 
 # ---- extraction -------------------------------------------------------------------------------------------------------------
 def read_scenez(path):
-    b = path.read_bytes()
+    b = dump_io.read_bytes(path)
     if b[:8] != b"EDVRTEX1":
         raise ValueError("%s is not an EDVR texture dump" % path)
     ver, w, h, fmt, row, scene, eye = struct.unpack_from("<7I", b, 8)
@@ -316,7 +318,7 @@ def read_scenez(path):
 
 
 def read_decisions(path):
-    b = path.read_bytes()
+    b = dump_io.read_bytes(path)
     if b[:8] != b"EDVRTEX1":
         raise ValueError("%s is not an EDVR texture dump" % path)
     ver, w, h, fmt, row, scene, eye = struct.unpack_from("<7I", b, 8)

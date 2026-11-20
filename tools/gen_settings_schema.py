@@ -72,23 +72,37 @@ tier: `# ui: Menu key | hotkey | live` is a row for everyone, and
 `# dev: label Draw census key | hotkey` is a row only while menu.developer is on.
 The section names the page, so neither line does. See HOTKEY_SECTION.
 
-THE EXPLORER CAM PAGE (2026-10-08) is `menu explorer_cam`: the eye trims and the
-follow smoothing, for everyone. Four more tokens shape a NUMBER row there and
-nowhere else: `step 0.01` (the arrow keys' step, instead of the range's
-twentieth), `unit m` (the text after the number), `signed` (an explicit + on a
-positive one) and `zero exact` (the word in brackets after a zero, so `0 ms
-(exact)`). A step that is not a positive number, or any of the four on a
-row the code does not read as a number, fails the build. The older absolute
-fallback eye (`explorer_cam_eye_up/_forward/_right`) stays `ui: hidden`: neither
-schema gets a row for it.
+THE NATIVE ON FOOT PAGE (2026-10-14) is `menu native_on_foot`. Four more tokens
+shape a NUMBER row (first written for the Explorer Cam page of 2026-10-08,
+removed with Explorer Cam in F98): `step 0.01` (the arrow keys' step, instead
+of the range's twentieth), `unit m` (the text after the number), `signed` (an
+explicit + on a positive one) and `zero exact` (the word in brackets after a
+zero, so `0 ms (exact)`). A step that is not a positive number, or any of the
+four on a row the code does not read as a number, fails the build. A
+`ui: hidden` key gets a row in neither schema.
 
 THE FLAT PANEL'S DEBUG TAB (2026-10-16) is `menu debug`: the flat profile's F8 panel has Performance (its settings) and Debug tabs (and, since 2026-10-22,
 a Visual one between them, below), and the Debug rows are the `menu debug` rows. A `menu debug` row may sit on an [advanced] key, but only one named in MENU_ADVANCED_EXCEPTIONS; any other [advanced] key with a menu token is still refused. VR's menu has no such page.
 
-THE FLAT PANEL'S VISUAL TAB (2026-10-22) is `menu visual`: the flat profile's F8 panel now has three tabs, Performance, Visual and Debug, in that order, and
-the Visual tab lists the [visual] options (menu_flat_rows.h's kFlatVisualRows) for everyone, Fix tier. `visual` is a page only the flat panel builds, as `debug`
-is: VR's menu builds no page of that name, so a row that must also be in the headset keeps the bare `menu` token (visual.intro_video does, and stays on VR's
-Fixes page), and a row marked `menu visual` is flat-only until VR grows the page. A [visual] row with no token is desktop-only, as a [fix] row is.
+THE VISUAL PAGE (2026-10-22 flat, 2026-10-27 VR) is `menu visual`, in both menus. The flat profile's F8 panel has three tabs, Performance, Visual and Debug, in that
+order, and its Visual tab lists the rows of menu_flat_rows.h's kFlatVisualRows (Intro movie, Star glow), Fix tier, whatever page their token names. VR's menu has a
+Visual page too, built like Native on foot (Fix tier, the ini's own heading blocks, file order) from the rows whose token is `menu visual`: how the world looks, apart
+from the fixes (World scale, Intro movie, Star glow, Intro background picture, Screen curve). A row that does something in only one of the two says so by its token:
+`menu visual` on a row the flat table does not list is VR-only (World scale), and `menu flat_visual` is a flat-tab-only row that VR's page must not show (none today:
+Star glow was one until the headset read it, 2026-10-27). A [visual] row with no token is desktop-only, as a [fix] row is.
+
+THE DESKTOP WINDOW PAGE (2026-10-28; the menu shows it as the Mirror window tab since F173, the page id and the rows' labels unchanged) is `menu desktop_window`, in VR's menu only, right after the Visual page: the [visual] keys that shape Elite's desktop window
+(visual.desktop_window and its aspect and style), Fix tier, in the file's order, no group headings (the page is the group). No flat table lists them, so the flat panel has no row
+for them. The keys stay in [visual].
+
+THE FLAT PANEL'S OWN PERFORMANCE ROWS (2026-10-24) are `menu flat_performance`: a [fix] row that belongs on the flat panel's Performance tab and does nothing in the
+headset (fix.hud_antialiasing was the first, until 2026-11-03, when VR's UI layer began to smooth its HUD with the same key and the row moved to `menu performance`;
+no row uses the token today, and the generator still supports it). The Performance tab is built from menu_flat_rows.h's kFlatPageRows whatever page
+a row's token names, and VR's Performance page is the rows whose token is `menu performance`, so a `flat_performance` row is on the tab and not on VR's page. The
+token is a page only the flat panel builds, as `visual` and `debug` are, and the generator refuses its misuse by name: on anything but a [fix] key, and on a key
+kFlatPageRows does not list (the row would be on no menu at all: not in the headset, and not on the tab either). `menu flat_visual` is the same for the Visual tab
+(kFlatVisualRows, any exposed section). And the other way round, a row either flat table lists that has no menu row here (no token, or a key the code does not read)
+is refused by name: the flat tab is built from the generated rows and would silently lack it.
 
 The menu's restart flagging is derived here too, from the same prose the
 window reads: a menu row on the Fixes or Performance page that does not say
@@ -156,10 +170,7 @@ import sys
 # after the halves of EDVR that read them, not fixes somebody came here to turn
 # on. [visual] (2026-10-22) is the exception that is exposed: it holds the options
 # that change how the picture looks, which somebody does come here to turn on, and
-# its keys are user settings exactly as [fix]'s are. Explorer Cam's own switches
-# live in [fix] and are exposed; the metre offsets it is tuned with
-# (fix.explorer_cam_eye_*) are not, because tuning them means wearing the
-# headset and watching, which is what the ini's hot reload is for.
+# its keys are user settings exactly as [fix]'s are.
 EXPOSED_SECTIONS = ('fix', 'visual')
 # The sections whose keys may carry a `ui:` line at all. The installer's
 # window still shows only EXPOSED_SECTIONS; what a ui: line buys a developer
@@ -205,9 +216,19 @@ UI_RE = re.compile(r'^ui\s*:\s*(.*)$', re.I)
 DEV_RE = re.compile(r'^dev\s*:\s*(.*)$', re.I)
 # The sections the menu's developer tier lists in full.
 DEV_SECTIONS = ('advanced', 'experimental')
-# Pages a `menu <page>` token can name. 'explorer_cam' is the Explorer Cam page (2026-10-08): the eye trims and the follow smoothing, for everyone.
-# 'visual' (2026-10-22) and 'debug' are the flat panel's tabs; VR's menu builds neither.
-MENU_PAGES = ('fixes', 'performance', 'explorer_cam', 'visual', 'debug')
+# Pages a `menu <page>` token can name. 'native_on_foot' is the Native on foot page (2026-10-14): the native on-foot settings explicitly tagged for the page, in file order.
+# 'visual' is a page of both menus: the flat panel's Visual tab (2026-10-22) and VR's Visual page (2026-10-27); 'debug' (2026-10-16) is the flat panel's Debug tab, which VR's menu does
+# not build. 'flat_performance' (2026-10-24) and 'flat_visual' (2026-10-27) are the flat tabs' own rows, the ones that do nothing in the headset: VR's Performance page lists only
+# `menu performance` and VR's Visual page only `menu visual`, while the flat tabs list menu_flat_rows.h's kFlatPageRows and kFlatVisualRows whatever the token.
+# 'desktop_window' (2026-10-28) is VR's own Desktop window page (the Mirror window tab since F173), right after Visual: the three [visual] keys that shape Elite's desktop window; the flat panel has no such page.
+MENU_PAGES = ('fixes', 'performance', 'flat_performance', 'native_on_foot', 'visual', 'desktop_window', 'flat_visual', 'debug')
+FLAT_PERFORMANCE_PAGE = 'flat_performance'
+FLAT_VISUAL_PAGE = 'flat_visual'
+# The tables a flat-only row must be listed in, relative to the repo root (the flat tabs are built from them).
+FLAT_PAGE_ROWS_HEADER = os.path.join('src', 'd3d11', 'menu_flat_rows.h')
+FLAT_PAGE_ROWS_RE = re.compile(r'kFlatPageRows\[\]\s*=\s*\{(.*?)\n\};', re.S)
+FLAT_VISUAL_ROWS_RE = re.compile(r'kFlatVisualRows\[\]\s*=\s*\{(.*?)\n\};', re.S)
+FLAT_ROW_RE = re.compile(r'\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,')
 # A heading in edvr.ini: a rule, the title, a rule. The heading a person
 # reads in the file is the heading the window shows, so there is no second
 # list of group names to keep in step with this one.
@@ -356,7 +377,7 @@ class Setting(object):
         # dev: line's `label <text>`, for a developer row with no ui: line.
         self.hotkey = False
         self.devLabel = ''
-        # How a menu NUMBER row is stepped and shown (2026-10-08, the Explorer Cam page): `step 0.01` is the arrow keys' step in place of the range's
+        # How a menu NUMBER row is stepped and shown (2026-10-08): `step 0.01` is the arrow keys' step in place of the range's
         # twentieth, `unit m` the text after the number, `signed` an explicit + on a positive one, `zero exact` the word that follows a
         # zero in brackets (`0 ms (exact)`). The installer's window ignores all four.
         self.step = ''
@@ -433,9 +454,10 @@ def parse_ini(path):
                 # Migration metadata, not prose -- captured so the window can
                 # read an un-migrated file the way the runtime does.
                 spec = body[len('moved-from:'):].strip()
-                dm = re.match(r'^(\S+)\s*\(default\s+([^)]*)\)$', spec)
+                # `old.key (default X) (values a=b, c=d)`: both clauses optional, in that order; the value map is the installer merge's alone (iniedit.cpp movedKeys()).
+                dm = re.match(r'^(\S+)\s*(?:\(default\s+([^)]*)\))?\s*(?:\(values\s+[^)]*\))?$', spec)
                 if dm:
-                    movedFrom.append((dm.group(1), dm.group(2).strip()))
+                    movedFrom.append((dm.group(1), (dm.group(2) or '').strip()))
                 else:
                     movedFrom.append((spec, ''))
             elif body.lower().startswith('retired-default:'):
@@ -736,6 +758,23 @@ def c_string(text):
     return '"%s"' % out
 
 
+def flat_page_rows(path, table_re=None):
+    """The dotted keys of a flat tab's table (kFlatPageRows, the Performance tab's,
+    by default, or kFlatVisualRows with FLAT_VISUAL_ROWS_RE; both in
+    menu_flat_rows.h), or None when the file or the table is not there. Line
+    comments are dropped first: they name keys and tokens in prose."""
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            text = f.read()
+    except OSError:
+        return None
+    table = (table_re or FLAT_PAGE_ROWS_RE).search(text)
+    if not table:
+        return None
+    body = re.sub(r'//[^\n]*', '', table.group(1))
+    return set('%s.%s' % (section, key) for section, key in FLAT_ROW_RE.findall(body))
+
+
 def run(root, out, check):
     """Generate into `out` (or only check, when `check` is set or `out` is
     None). Returns the process exit code."""
@@ -866,6 +905,81 @@ def run(root, out, check):
             print('  edvr.ini:%d  %s.%s  (menu %s)' % (s.line, s.section, s.key, s.menuPage))
         return 1
 
+    # ---- `menu flat_performance`: a row of the flat panel's Performance tab and of no page of VR's menu ----
+    #
+    # VR's Performance page lists the rows whose token is `menu performance`; the flat tab is built from kFlatPageRows (menu_flat_rows.h) whatever the token says.
+    # A row marked flat_performance that kFlatPageRows does not list is therefore on no menu at all (not in the headset, and not on the tab), without a sound; and
+    # the tab's rows are [fix] keys.
+    flatOnly = [s for s in settings if s.menuPage == FLAT_PERFORMANCE_PAGE]
+    if flatOnly:
+        notFix = [s for s in flatOnly if s.section != 'fix']
+        if notFix:
+            print('gen_settings_schema: ERROR: `menu %s` belongs to a [fix] setting: the flat Performance tab '
+                  'lists [fix] rows (the Visual and Debug tabs have their own tokens).' % FLAT_PERFORMANCE_PAGE)
+            for s in notFix:
+                print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            return 1
+        listed = flat_page_rows(os.path.join(root, FLAT_PAGE_ROWS_HEADER))
+        if listed is None:
+            print('gen_settings_schema: ERROR: `menu %s` needs %s, with the table kFlatPageRows, to check the '
+                  'row against; it could not be read.' % (FLAT_PERFORMANCE_PAGE, FLAT_PAGE_ROWS_HEADER.replace(os.sep, '/')))
+            for s in flatOnly:
+                print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            return 1
+        unlisted = [s for s in flatOnly if '%s.%s' % (s.section, s.key) not in listed]
+        if unlisted:
+            print('gen_settings_schema: ERROR: %d `menu %s` setting(s) are not rows of kFlatPageRows (%s), so '
+                  'they would be on no menu at all: not in the headset, and not on the flat Performance tab '
+                  'either. List them there, or give them `menu performance`.'
+                  % (len(unlisted), FLAT_PERFORMANCE_PAGE, FLAT_PAGE_ROWS_HEADER.replace(os.sep, '/')))
+            for s in unlisted:
+                print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            return 1
+
+    # ---- `menu flat_visual`: a row of the flat panel's Visual tab and of no page of VR's menu ----
+    #
+    # The same for the Visual tab: VR's Visual page lists the rows whose token is `menu visual`; the flat tab is built from kFlatVisualRows whatever the token says. A row
+    # marked flat_visual that kFlatVisualRows does not list is on no menu at all.
+    flatVisualOnly = [s for s in settings if s.menuPage == FLAT_VISUAL_PAGE]
+    if flatVisualOnly:
+        listed = flat_page_rows(os.path.join(root, FLAT_PAGE_ROWS_HEADER), FLAT_VISUAL_ROWS_RE)
+        if listed is None:
+            print('gen_settings_schema: ERROR: `menu %s` needs %s, with the table kFlatVisualRows, to check the '
+                  'row against; it could not be read.' % (FLAT_VISUAL_PAGE, FLAT_PAGE_ROWS_HEADER.replace(os.sep, '/')))
+            for s in flatVisualOnly:
+                print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            return 1
+        unlisted = [s for s in flatVisualOnly if '%s.%s' % (s.section, s.key) not in listed]
+        if unlisted:
+            print('gen_settings_schema: ERROR: %d `menu %s` setting(s) are not rows of kFlatVisualRows (%s), so '
+                  'they would be on no menu at all: not in the headset, and not on the flat Visual tab '
+                  'either. List them there, or give them `menu visual`.'
+                  % (len(unlisted), FLAT_VISUAL_PAGE, FLAT_PAGE_ROWS_HEADER.replace(os.sep, '/')))
+            for s in unlisted:
+                print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            return 1
+
+    # ---- a row either flat tab lists must be a row of the schema ----
+    #
+    # The flat tabs are built from the generated rows, keeping those the table names. A name the table lists that the schema has no row for (no `menu` token on its ui:
+    # line, a hidden key, a key the code does not read) is a tab that silently lacks the row. Both tables are read when the header is there.
+    flatListed = {}
+    for table_name, table_re in (('kFlatPageRows', FLAT_PAGE_ROWS_RE), ('kFlatVisualRows', FLAT_VISUAL_ROWS_RE)):
+        rows_listed = flat_page_rows(os.path.join(root, FLAT_PAGE_ROWS_HEADER), table_re)
+        if rows_listed:
+            flatListed[table_name] = rows_listed
+    if flatListed:
+        haveRow = set('%s.%s' % (s.section, s.key) for s in settings
+                      if s.menuPage and not s.hidden and s.section in MENU_ROW_SECTIONS and '%s.%s' % (s.section, s.key) in code)
+        lacking = sorted((table_name, dotted) for table_name, rows_listed in flatListed.items() for dotted in rows_listed if dotted not in haveRow)
+        if lacking:
+            print('gen_settings_schema: ERROR: %d row(s) named by the flat panel\'s tables (%s) have no row in the menu schema, '
+                  'so the flat tab would silently lack them. Give the key a `menu` token on its ui: line and a read in src/.'
+                  % (len(lacking), FLAT_PAGE_ROWS_HEADER.replace(os.sep, '/')))
+            for table_name, dotted in lacking:
+                print('  %s  %s' % (dotted, table_name))
+            return 1
+
     # ---- how a number row is stepped and shown (step / unit / zero / signed) ----
     #
     # They shape a menu NUMBER row and nothing else: on a switch, a choice or a text row the
@@ -987,8 +1101,8 @@ def run(root, out, check):
         return 1
     devSilent = []
     for s in settings:
-        if s.section not in DEV_SECTIONS or s.devHidden:
-            continue
+        if s.section not in DEV_SECTIONS or s.devHidden or s.hidden:
+            continue   # `# dev: hidden`, or `# ui: hidden` (a retired key the code still reads to name a saved value): a row in neither schema
         dotted = '%s.%s' % (s.section, s.key)
         if dotted not in code:
             continue
@@ -1285,7 +1399,9 @@ def self_test():
         with open(os.path.join(root, 'edvr.ini'), 'w', encoding='utf-8') as f:
             f.write(ini)
         for filename, text in sources.items():
-            with open(os.path.join(src, filename), 'w', encoding='utf-8') as f:
+            path = os.path.join(src, filename)
+            os.makedirs(os.path.dirname(path), exist_ok=True)   # 'd3d11/menu_flat_rows.h' is a nested one
+            with open(path, 'w', encoding='utf-8') as f:
                 f.write(text)
         out = os.path.join(root, 'gen')
         said = io.StringIO()
@@ -1464,6 +1580,14 @@ def self_test():
     name = 'dev-tier-hidden'
     wrote = case(name, other % '# dev: hidden\n', other_reads, 0)
     expect_not_in(name, wrote, 'some_probe')
+    # A retired developer-tier key (F157): the code still reads it to name a saved value, and `# ui: hidden -- retired` gives it a row in neither schema, the developer tier's
+    # included (the documented contract for a hidden key). The same key with a plain `# ui:` line is a row.
+    name = 'dev-tier-ui-hidden'
+    wrote = case(name, other % '# ui: hidden -- retired (F157): ignored.\n', other_reads, 0)
+    expect_not_in(name, wrote, 'some_probe')
+    name = 'dev-tier-ui-row'
+    wrote = case(name, other % '# ui: A probe\n', other_reads, 0)
+    expect_in(name, wrote, 'some_probe')
 
     # `# retired-default: X` is the installer merge's annotation, not prose.
     # Both shapes the tree has had: a block that ends in one (camera_index_track,
@@ -1761,53 +1885,83 @@ def self_test():
                 {'a.cpp': debug_reads['a.cpp'].replace('flat_cpu_timing', 'other_timing')}, 1)
     expect_in(name, said, 'advanced.other_timing')
 
-    # The Explorer Cam page (2026-10-08): `menu explorer_cam` puts a [fix] number row on its own page for everyone (Fix tier), and
-    # step / unit / zero / signed shape the row (0.01 m, "+0.15 m", "0 ms (exact)"). The two fallback keys the head joint replaced
-    # are `ui: hidden`: neither schema gets a row for them, however the neighbours are annotated.
-    explorer_ini = ('[fix]\n'
-                    '# Fallback eye height, used only when the head joint cannot be read. Live.\n'
-                    '# ui: hidden -- fallback only | range 0.5..2.5 | recommended 1.68\n'
-                    'eye_up = 1.68\n\n'
-                    '# Eye height: raises or lowers the view, in metres. Live.\n'
-                    '# ui: Eye height | range -0.5..0.5 | step 0.01 | unit m | signed | recommended 0.15 | live | menu explorer_cam\n'
-                    'trim_up = 0.15\n\n'
-                    '# Smoothing in milliseconds, 0 = exact. Live.\n'
-                    '# ui: Smoothing | range 0..200 | step 10 | unit ms | zero exact | recommended 0 | live | menu explorer_cam\n'
-                    'smooth = 0\n')
-    explorer_reads = {'a.cpp': ('float u = cfg.getFloat("fix.eye_up", 1.68f);\n'
-                                'float t = cfg.getFloat("fix.trim_up", 0.15f);\n'
-                                'int s = cfg.getInt("fix.smooth", 0);\n')}
-    name = 'explorer-page'
-    wrote = case(name, explorer_ini, explorer_reads, 0)
+    # The number-row tokens (2026-10-08) on a page of their own: `menu native_on_foot` puts a [fix] number row on that page for everyone (Fix tier), and
+    # step / unit / zero / signed shape the row (0.01 m, "+0.15 m", "0 ms (exact)"). A `ui: hidden` key beside them gets a row in neither schema,
+    # however the neighbours are annotated.
+    page_ini = ('[fix]\n'
+                '# A retired height, kept at its last value. Ignored.\n'
+                '# ui: hidden -- retired | range 0.5..2.5 | recommended 1.68\n'
+                'eye_up = 1.68\n\n'
+                '# Eye height: raises or lowers the view, in metres. Live.\n'
+                '# ui: Eye height | range -0.5..0.5 | step 0.01 | unit m | signed | recommended 0.15 | live | menu native_on_foot\n'
+                'trim_up = 0.15\n\n'
+                '# Smoothing in milliseconds, 0 = exact. Live.\n'
+                '# ui: Smoothing | range 0..200 | step 10 | unit ms | zero exact | recommended 0 | live | menu native_on_foot\n'
+                'smooth = 0\n')
+    page_reads = {'a.cpp': ('float u = cfg.getFloat("fix.eye_up", 1.68f);\n'
+                            'float t = cfg.getFloat("fix.trim_up", 0.15f);\n'
+                            'int s = cfg.getInt("fix.smooth", 0);\n')}
+    name = 'number-tokens-page'
+    wrote = case(name, page_ini, page_reads, 0)
     expect_in(name, wrote, 'MenuKind::Number, "0.15", "-0.5", "0.5", 2, "", false, false, 1,\n'
-                           '     MenuTier::Fix, "explorer_cam", "", "0.01", "m", "", true}')
+                           '     MenuTier::Fix, "native_on_foot", "", "0.01", "m", "", true}')
     expect_in(name, wrote, 'MenuKind::Number, "0", "0", "200", 0, "", false, false, 1,\n'
-                           '     MenuTier::Fix, "explorer_cam", "", "10", "ms", "exact", false}')
+                           '     MenuTier::Fix, "native_on_foot", "", "10", "ms", "exact", false}')
     expect_not_in(name, wrote, 'eye_up')
-    if wrote.count('"explorer_cam"') != 2:
-        failures.append('%s: expected exactly two rows on the explorer_cam page, found %d'
-                        % (name, wrote.count('"explorer_cam"')))
+    if wrote.count('"native_on_foot"') != 2:
+        failures.append('%s: expected exactly two rows on the native_on_foot page, found %d'
+                        % (name, wrote.count('"native_on_foot"')))
+    # The Visual page of VR's menu (2026-10-27): `menu visual` puts a [visual] number row on that page for everyone, `unit %` is the text after the number, and a `menu flat_visual`
+    # row is on the flat Visual tab and not on that page.
+    visual_page_ini = ('[visual]\n# How big the world looks, in percent. Live.\n'
+                       '# ui: World scale | range 50..200 | step 1 | unit % | recommended 100 | live | menu visual\nworld_scale = 100\n\n'
+                       '# A glow. Live.\n# ui: Glow | choices 100, 125 | live | menu flat_visual\nglow = 100\n')
+    visual_page_reads = {'a.cpp': ('int w = cfg.getIntInRange("visual.world_scale", 100, 50, 200);\n'
+                                   'std::string g = cfg.getString("visual.glow", "100");\n'),
+                         'd3d11/menu_flat_rows.h': 'inline constexpr FlatPageRow kFlatVisualRows[] = {\n    {"visual", "glow", FlatRowRead::Allowlist},\n};\n'}
+    name = 'visual-page'
+    wrote = case(name, visual_page_ini, visual_page_reads, 0)
+    expect_in(name, wrote, 'MenuKind::Number, "100", "50", "200", 0, "", false, false, 1,\n'
+                           '     MenuTier::Fix, "visual", "", "1", "%", "", false}')
+    expect_in(name, wrote, 'MenuTier::Fix, "flat_visual"')
+    if wrote.count('MenuTier::Fix, "visual"') != 1:
+        failures.append('%s: exactly one row (World scale) is on the Visual page VR lists, found %d' % (name, wrote.count('MenuTier::Fix, "visual"')))
+    # A flat_visual row the table does not list is on no menu at all, so the build fails, by name.
+    name = 'flat-visual-unlisted'
+    said = case(name, visual_page_ini.replace('glow', 'tint').replace('Glow', 'Tint'), dict(visual_page_reads, **{'a.cpp': visual_page_reads['a.cpp'].replace('glow', 'tint')}), 1)
+    expect_in(name, said, 'not rows of kFlatVisualRows')
+    expect_in(name, said, 'visual.tint')
+    name = 'flat-visual-no-table'
+    said = case(name, visual_page_ini, {'a.cpp': visual_page_reads['a.cpp']}, 1)
+    expect_in(name, said, 'could not be read')
+    expect_in(name, said, 'visual.glow')
+    # A row the flat table lists with no menu token (or one the code does not read) would be missing from the tab without a sound: the build fails, by name.
+    name = 'flat-visual-listed-without-a-row'
+    said = case(name, visual_page_ini.replace(' | menu flat_visual', ''), visual_page_reads, 1)
+    expect_in(name, said, 'no row in the menu schema')
+    expect_in(name, said, 'visual.glow')
+    expect_in(name, said, 'kFlatVisualRows')
     # A row that does not use the tokens carries empty ones, so every other page is unchanged.
-    name = 'explorer-page-plain-rows'
+    name = 'number-tokens-plain-rows'
     wrote = case(name, '[fix]\n# A thing. Live.\n# ui: Thing | range 0..5 | menu fixes\nthing = 2\n',
                  {'a.cpp': 'int t = cfg.getInt("fix.thing", 2);\n'}, 0)
     expect_in(name, wrote, 'MenuTier::Fix, "fixes", "", "", "", "", false}')
     # The tokens belong to number rows, and a step is a positive number.
-    name = 'explorer-step-on-a-switch'
+    name = 'number-tokens-on-a-switch'
     said = case(name, '[fix]\n# A switch. Live.\n# ui: Switch | unit m | menu fixes\nswitch = 1\n',
                 {'a.cpp': 'bool b = cfg.getBool("fix.switch", true);\n'}, 1)
     expect_in(name, said, 'fix.switch')
     expect_in(name, said, 'shape a number row')
     for bad in ('0', '-0.01', 'abc', '0.0'):
-        name = 'explorer-bad-step-' + bad
+        name = 'number-tokens-bad-step-' + bad
         said = case(name, ('[fix]\n# A number. Live.\n# ui: Number | range 0..5 | step %s | menu fixes\nnumber = 2\n' % bad),
                     {'a.cpp': 'int n = cfg.getInt("fix.number", 2);\n'}, 1)
         expect_in(name, said, '`step %s` is not a positive number' % bad)
-    # A page nobody built is refused by name, as ever.
-    name = 'explorer-unknown-page'
-    said = case(name, '[fix]\n# A number. Live.\n# ui: Number | range 0..5 | menu explorer\nnumber = 2\n',
+    # A page nobody built is refused by name, as ever: the Explorer Cam page went with Explorer Cam (F98).
+    name = 'retired-explorer-cam-page'
+    said = case(name, '[fix]\n# A number. Live.\n# ui: Number | range 0..5 | menu explorer_cam\nnumber = 2\n',
                 {'a.cpp': 'int n = cfg.getInt("fix.number", 2);\n'}, 1)
-    expect_in(name, said, 'explorer_cam')
+    expect_in(name, said, 'native_on_foot')
     # The Visual section and tab (2026-10-22). [visual] is exposed like [fix]: its keys are rows of the installer's window, a ui: line makes
     # them one, and `menu visual` is a page. The moved key carries its old name into kMovedSettings (the installer's window reads an old
     # file through it), keeps the bare `menu` token (VR's Fixes page) and its place in ini order; star_glow is a Fix-tier row on the
@@ -1830,9 +1984,9 @@ def self_test():
     wrote = case(name, visual_ini, visual_reads, 0)
     for key in ('movie', 'glow', 'tint'):
         expect_in(name, wrote, '{"visual", "%s", ' % key)   # the installer's window shows every exposed [visual] key
-    expect_in(name, wrote, 'MenuTier::Fix, "fixes"')         # the movie keeps VR's Fixes page
+    expect_in(name, wrote, 'MenuTier::Fix, "fixes"')         # a bare `menu` token is the Fixes page (the fixture's movie)
     expect_in(name, wrote, 'MenuKind::Choice, "100", "", "", 2, "100=100%|125=125%|150=150%", false, false, 1,\n'
-                           '     MenuTier::Fix, "visual"')    # the glow is on the page only the flat panel builds
+                           '     MenuTier::Fix, "visual"')    # `menu visual` is the Visual page
     if wrote.count('"tint"') != 1:
         failures.append('%s: a [visual] key with no menu token is a row of the window and of no menu table '
                         '(expected one "tint", found %d)' % (name, wrote.count('"tint"')))
@@ -1861,6 +2015,58 @@ def self_test():
                 {'a.cpp': 'std::string g = cfg.getString("visual.glow", "100");\n'}, 1)
     expect_in(name, said, 'visual.glow  (menu visuals)')
     expect_in(name, said, 'visual, debug')
+    # The flat Performance tab's own rows (2026-10-24): `menu flat_performance` is a [fix] row on a page VR's menu builds none of, so VR's Performance page
+    # (the rows whose token is `menu performance`) does not list it, and menu_flat_rows.h's kFlatPageRows (which builds the flat tab whatever the token) must.
+    flat_ini = ('[fix]\n# A switch. Live.\n# ui: Alpha | choices on, off | live | menu performance\nalpha = on\n\n'
+                '# A flat-only switch. Live.\n# ui: Beta | choices on, off | live | menu flat_performance\nbeta = off\n')
+    flat_reads = {'a.cpp': ('bool a = cfg.getBool("fix.alpha", true);\n'
+                            'bool b = cfg.getBool("fix.beta", false);\n')}
+    flat_table = ('inline constexpr FlatPageRow kFlatPageRows[] = {\n'
+                  '    {"fix", "alpha", FlatRowRead::Allowlist},\n'
+                  '    // {"fix", "gamma", FlatRowRead::Allowlist} -- a row named in a comment is not a row\n'
+                  '    {"fix", "beta",  FlatRowRead::Allowlist},   // flat_performance\n'
+                  '};\n')
+    name = 'flat-performance-row'
+    wrote = case(name, flat_ini, dict(flat_reads, **{'d3d11/menu_flat_rows.h': flat_table}), 0)
+    expect_in(name, wrote, '{"fix", "alpha", "Alpha"')
+    expect_in(name, wrote, '{"fix", "beta", "Beta"')          # the installer's window shows both
+    menuRowsOf = wrote[wrote.find('kMenuRows'):].split('\n    {"')[1:]   # one string per menu row, from its section
+    alphaMenu = [r for r in menuRowsOf if r.startswith('fix", "alpha"')]
+    betaMenu = [r for r in menuRowsOf if r.startswith('fix", "beta"')]
+    if len(alphaMenu) != 1 or len(betaMenu) != 1:
+        failures.append('%s: one menu row each for alpha and beta, found %d and %d' % (name, len(alphaMenu), len(betaMenu)))
+    else:
+        if 'MenuTier::Fix, "performance"' not in alphaMenu[0]:
+            failures.append('%s: the ordinary row (alpha) is on the page VR lists' % name)
+        if 'MenuTier::Fix, "flat_performance"' not in betaMenu[0] or 'MenuTier::Fix, "performance"' in betaMenu[0]:
+            failures.append('%s: the flat-only row (beta) is on flat_performance and not on the page VR lists' % name)
+    # Not listed in kFlatPageRows (a comment naming it does not list it): on no menu at all, so the build fails, by name.
+    ghost_ini = flat_ini.replace('beta', 'gamma').replace('Beta', 'Gamma')
+    ghost_reads = {'a.cpp': flat_reads['a.cpp'].replace('beta', 'gamma')}
+    name = 'flat-performance-unlisted'
+    said = case(name, ghost_ini, dict(ghost_reads, **{'d3d11/menu_flat_rows.h': flat_table}), 1)
+    expect_in(name, said, 'not rows of kFlatPageRows')
+    expect_in(name, said, 'fix.gamma')
+    said = case('flat-performance-unlisted-check', ghost_ini, dict(ghost_reads, **{'d3d11/menu_flat_rows.h': flat_table}), 1, check=True)
+    expect_in('flat-performance-unlisted-check', said, 'fix.gamma')   # the --check path refuses it too
+    name = 'flat-performance-no-table'
+    said = case(name, flat_ini, flat_reads, 1)
+    expect_in(name, said, 'src/d3d11/menu_flat_rows.h')
+    expect_in(name, said, 'could not be read')
+    expect_in(name, said, 'fix.beta')
+    # The token belongs to a [fix] key, whatever the table says.
+    name = 'flat-performance-wrong-section'
+    said = case(name, '[visual]\n# A glow. Live.\n# ui: Glow | choices 100, 125 | live | menu flat_performance\nglow = 100\n',
+                {'a.cpp': 'std::string g = cfg.getString("visual.glow", "100");\n',
+                 'd3d11/menu_flat_rows.h': 'inline constexpr FlatPageRow kFlatPageRows[] = {\n    {"visual", "glow", FlatRowRead::Allowlist},\n};\n'}, 1)
+    expect_in(name, said, 'belongs to a [fix] setting')
+    expect_in(name, said, 'visual.glow')
+    # A misspelt token is an unknown page, and the message lists the real one.
+    name = 'flat-performance-unknown-spelling'
+    said = case(name, flat_ini.replace('flat_performance', 'flat_perf'),
+                dict(flat_reads, **{'d3d11/menu_flat_rows.h': flat_table}), 1)
+    expect_in(name, said, 'fix.beta  (menu flat_perf)')
+    expect_in(name, said, 'flat_performance')
     shutil.rmtree(base, ignore_errors=True)
     if failures:
         print('gen_settings_schema: self-test FAILED')

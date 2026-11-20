@@ -267,8 +267,8 @@ inline bool declarations(const std::vector<BYTE>& ps, std::vector<Decl>& out, st
             d.space = 't';
             d.kind = kind;
             d.ret = ret;
-            if (d.kind != "texture2d" && d.kind != "texture2darray" && d.kind != "texturecube" &&
-                d.kind != "texture3d" && d.kind != "buffer") {
+            if (d.kind != "texture1d" && d.kind != "texture2d" && d.kind != "texture2darray" && d.kind != "texturecube" &&
+                d.kind != "texturecubearray" && d.kind != "texture3d" && d.kind != "buffer") {
                 why = "no dummy for: " + line;
                 return false;
             }
@@ -388,22 +388,36 @@ inline bool bind(ID3D11Device* dev, ID3D11DeviceContext* ctx, const Decl& d, uns
         vd.BufferEx.NumElements = count;
         vd.BufferEx.Flags = d.kind == "raw" ? D3D11_BUFFEREX_SRV_FLAG_RAW : 0u;
     } else {
-        const bool cube = d.kind == "texturecube", volume = d.kind == "texture3d";
-        const unsigned size = volume ? 8u : 16u, mips = volume ? 4u : 5u, bpp = texelBytes(f);
-        const unsigned layers = cube ? 6u : d.kind == "texture2darray" ? 4u : 1u;
+        const bool cubeArray = d.kind == "texturecubearray";
+        const bool cube = d.kind == "texturecube" || cubeArray, volume = d.kind == "texture3d", line = d.kind == "texture1d";
+        // A 1D texture is EDHM's parameter strip, read by ld at fixed texels up to 152 (ps_CAD1F585): 256 wide, so every
+        // read lands in range. WARP faults on an ld past the end of a 1D texture rather than returning zero.
+        const unsigned size = volume ? 8u : line ? 256u : 16u, mips = volume ? 4u : 5u, bpp = texelBytes(f);
+        const unsigned layers = cubeArray ? 12u : cube ? 6u : d.kind == "texture2darray" ? 4u : 1u;
         std::vector<std::vector<uint32_t>> data;
         std::vector<D3D11_SUBRESOURCE_DATA> init;
         for (unsigned layer = 0; layer < layers; ++layer)
             for (unsigned m = 0; m < mips; ++m) {
                 const unsigned w = size >> m;
-                data.push_back(words(f, seed, size_t(w) * w * (volume ? w : 1u) * bpp / 4u, salt * 131u + layer * 8u + m));
+                data.push_back(words(f, seed, size_t(w) * (line ? 1u : w) * (volume ? w : 1u) * bpp / 4u, salt * 131u + layer * 8u + m));
             }
         for (size_t i = 0; i < data.size(); ++i) {
             const unsigned w = size >> (i % mips);
             init.push_back({data[i].data(), w * bpp, w * w * bpp});
         }
         HRESULT hr = E_FAIL;
-        if (volume) {
+        if (line) {   // a 1D texture (EDHM's parameter strip at t120): 256 texels, 5 mips
+            D3D11_TEXTURE1D_DESC td{};
+            td.Width = size;
+            td.MipLevels = mips;
+            td.ArraySize = 1;
+            td.Format = f;
+            td.Usage = D3D11_USAGE_DEFAULT;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            ComPtr<ID3D11Texture1D> t;
+            hr = dev->CreateTexture1D(&td, init.data(), &t);
+            res = t;
+        } else if (volume) {
             D3D11_TEXTURE3D_DESC td{};
             td.Width = td.Height = td.Depth = size;
             td.MipLevels = mips;
@@ -429,12 +443,14 @@ inline bool bind(ID3D11Device* dev, ID3D11DeviceContext* ctx, const Decl& d, uns
         }
         if (FAILED(hr)) return false;
         vd.Format = f;
-        vd.ViewDimension = cube ? D3D11_SRV_DIMENSION_TEXTURECUBE
+        vd.ViewDimension = line ? D3D11_SRV_DIMENSION_TEXTURE1D
+                           : cubeArray ? D3D11_SRV_DIMENSION_TEXTURECUBEARRAY
+                           : cube ? D3D11_SRV_DIMENSION_TEXTURECUBE
                            : volume ? D3D11_SRV_DIMENSION_TEXTURE3D
                            : layers > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DARRAY
                                         : D3D11_SRV_DIMENSION_TEXTURE2D;
         vd.Texture2DArray.MipLevels = mips;   // MipLevels sits at the same offset in every texture view
-        vd.Texture2DArray.ArraySize = layers;
+        vd.Texture2DArray.ArraySize = cubeArray ? 2u : layers;   // NumCubes for a cube array sits at ArraySize's offset
     }
     ComPtr<ID3D11ShaderResourceView> srv;
     if (FAILED(dev->CreateShaderResourceView(res.Get(), &vd, &srv))) return false;
@@ -615,6 +631,8 @@ inline Result compare(ID3D11Device* dev, ID3D11DeviceContext* ctx, const std::ve
         std::printf("  identity: %s: skipped: %s\n", name, reason.c_str());
         return r;
     };
+    std::printf("  identity: %s: driving\n", name);
+    std::fflush(stdout);
     if (!ready) return skip(why);
     ComPtr<ID3D11VertexShader> vs;
     ComPtr<ID3D11PixelShader> stock, patched;
@@ -636,9 +654,11 @@ inline Result compare(ID3D11Device* dev, ID3D11DeviceContext* ctx, const std::ve
         for (const auto& d : decls)
             if (!bind(dev, ctx, d, seed, why)) return skip(why);
         Frame a, b;
-        check(draw(dev, ctx, vs.Get(), stock.Get(), formats, false, a) &&
-                  draw(dev, ctx, vs.Get(), patched.Get(), formats, true, b),
-              "identity: both draws ran and read back");
+        const bool drewStock = draw(dev, ctx, vs.Get(), stock.Get(), formats, false, a);
+        const bool drewPatched = drewStock && draw(dev, ctx, vs.Get(), patched.Get(), formats, true, b);
+        check(drewPatched, "identity: both draws ran and read back");
+        // The readbacks below index every texel: a draw that did not run leaves them empty.
+        if (!drewPatched) return skip(drewStock ? "the patched draw or its readback failed" : "the stock draw or its readback failed");
         for (unsigned t = 0; t < 5; ++t) {
             const std::vector<BYTE>& x = t < 4 ? a.target[t] : a.depth;
             const std::vector<BYTE>& y = t < 4 ? b.target[t] : b.depth;

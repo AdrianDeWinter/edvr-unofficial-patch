@@ -20,6 +20,7 @@
 #include <cstdint>
 
 #include "../common/vtable_hook.h"  // HookMode
+#include "draw_mask_line.h"         // DrawMaskCounts
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
@@ -122,6 +123,8 @@ uint32_t vScreenEyeDrawsThisFrame();
 // VR's temporal anti-aliasing reads off, as the draw path last took it from the config (the AA-off fast path,
 // draw_fast_path.h). For the draw hook CPU line only.
 bool vScreenAaOffForDraws();
+// The may-want byte's counters since the start (draw_mask_line.h), for the perf window line.
+DrawMaskCounts vScreenDrawMaskCounts();
 
 // The context's OMSetRenderTargets through the ORIGINAL entry, past the
 // hook and the binding shadow: for a fix that rebinds around one draw and
@@ -167,10 +170,15 @@ void vScreenClearRenderTargetViewRaw(ID3D11DeviceContext* ctx, ID3D11RenderTarge
 // shadow must keep describing the game's bindings throughout.
 void vScreenPSSetShaderResourcesRaw(ID3D11DeviceContext* ctx, uint32_t startSlot, uint32_t n,
                                     ID3D11ShaderResourceView* const* srvs);
+// The PS constant-buffer slots, past the flat discovery observer's hook (hookedPSSetConstantBuffers, installed for the flat scope only): visual.cockpit_glass_dirt's
+// one-register block at b13 (cockpit_glass.cpp), bound with the legacy canopy shader and put back after. In a VR launch the context's own call is not hooked and is used.
+void vScreenPSSetConstantBuffersRaw(ID3D11DeviceContext* ctx, uint32_t startSlot, uint32_t n, ID3D11Buffer* const* bufs);
 // The layer's copy of the game's depth-stencil target, which it seeds its
 // own from (a depth- or stencil-tested UI draw): past the copy hook, which
 // would report the write to the motion paths.
 void vScreenCopyResourceRaw(ID3D11DeviceContext* ctx, ID3D11Resource* dst, ID3D11Resource* src);
+// A buffer region copy past the hooks (the SRV turret instrument's staging copy of a constant register): src's `box` (bytes, for a buffer) to dst at byte offset dstX. No-op on a null argument.
+void vScreenCopySubresourceRegionRaw(ID3D11DeviceContext* ctx, ID3D11Resource* dst, uint32_t dstX, ID3D11Resource* src, const D3D11_BOX* box);
 
 // Installs the context hooks using the mechanism the caller decided for this
 // device -- shared with the exposure hooks so the two never split modes on

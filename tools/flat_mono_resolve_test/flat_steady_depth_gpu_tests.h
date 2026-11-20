@@ -400,7 +400,7 @@ inline void taaScenario(Rig& r) {
 }
 
 // ---- the shader source, one rule flipped at a time -----------------------------------------------------------------------------------
-inline void mutationChecks(Rig& r) {
+inline void mutationChecks(Rig& r, int slice, int slices) {
     using fpgpu::Mutant;
     static const char* const kLoop =
         "[unroll]for(int y=0;y<2;++y)[unroll]for(int x=0;x<2;++x)best=min(best,abs(HistoryDepth.Load(int3(clamp(base+int2(x,y),0,hi),0))-expected));";
@@ -439,6 +439,7 @@ inline void mutationChecks(Rig& r) {
     };
     const std::string shipped = edvr::kFlatMonoShaderSource;
     int caught = 0, equivalent = 0;
+    size_t sliceMutants = 0;   // the mutants this slice ran
     auto runMutated = [&](const std::string& hlsl, int* failed, std::string* first) {
         std::vector<unsigned char> bytes;
         if (!fpgpu::compilePrep(hlsl, bytes)) return false;
@@ -451,6 +452,14 @@ inline void mutationChecks(Rig& r) {
         mutationFailures = nullptr; if (first) *first = mutationFirst;
         return true;
     };
+    {   // this slice's sources, compiled ahead on every core
+        std::vector<std::string> sources{shipped};
+        for (size_t index = 0; index < sizeof(mutants) / sizeof(mutants[0]); ++index) {
+            bool once = false;
+            if (fpgpu::mutantInSlice(index, slice, slices)) sources.push_back(fpgpu::replaceOnce(shipped, mutants[index].from, mutants[index].to, &once));
+        }
+        fpgpu::precompilePreps(sources);
+    }
     {   // The control: the same source, compiled here and run through the same seam, is the shipped prep and passes.
         std::vector<unsigned char> bytes;
         const bool compiled = fpgpu::compilePrep(shipped, bytes);
@@ -463,7 +472,10 @@ inline void mutationChecks(Rig& r) {
         const bool ran = runMutated(shipped, &failed, &first);
         check(ran && failed == 0, "steady detail mutations: control: the unmutated prep, compiled here and run through the test seam, passes the whole scenario");
     }
-    for (const Mutant& m : mutants) {
+    for (size_t index = 0; index < sizeof(mutants) / sizeof(mutants[0]); ++index) {
+        if (!fpgpu::mutantInSlice(index, slice, slices)) continue;
+        const Mutant& m = mutants[index];
+        ++sliceMutants;
         bool once = false;
         const std::string hlsl = fpgpu::replaceOnce(shipped, m.from, m.to, &once);
         char what[256];
@@ -487,9 +499,9 @@ inline void mutationChecks(Rig& r) {
     }
     edvr::flatMonoResolveTestPrepBytecode(nullptr, 0);
     edvr::flatMonoResolveReset();
-    std::printf("flat mono resolve: steady-detail mutations: %d of %zu caught by the scenario, %d equivalent by construction\n",
-                caught, sizeof(mutants) / sizeof(mutants[0]) - size_t(equivalent), equivalent);
-    check(size_t(caught) + size_t(equivalent) == sizeof(mutants) / sizeof(mutants[0]),
+    std::printf("flat mono resolve: steady-detail mutations (slice %d of %d): %d of %zu caught by the scenario, %d equivalent by construction\n",
+                slice, slices, caught, sliceMutants - size_t(equivalent), equivalent);
+    check(size_t(caught) + size_t(equivalent) == sliceMutants,
           "steady detail mutations: every mutation was either caught or named equivalent");
 }
 
@@ -516,15 +528,23 @@ inline void sourceTests() {
 
 inline void steadyDepthGpuTests(ID3D11Device* device, ID3D11DeviceContext* context) {
     using edvr::FlatMonoResolveMode;
-    steadygpu::sourceTests();
-    steadygpu::Rig rig(device, context);
-    // 1. The scenario on the shipped prep, for real, through DLSS's stub and again through FSR's.
-    steadygpu::scenario(rig, FlatMonoResolveMode::Dlss);
-    steadygpu::scenario(rig, FlatMonoResolveMode::Fsr);
-    // 2. EDVR's own TAA, which keeps last frame's depth itself.
-    steadygpu::taaScenario(rig);
-    edvr::flatMonoResolveReset();
+    // Sharded (kUnits): the scenarios are "steadyDepthGpuTests"; the mutation loop is kSteadySlices units, each with its own rig.
+    constexpr int kSteadySlices = 3;
+    if (shardRuns("steadyDepthGpuTests")) {
+        steadygpu::sourceTests();
+        steadygpu::Rig rig(device, context);
+        // 1. The scenario on the shipped prep, for real, through DLSS's stub and again through FSR's.
+        steadygpu::scenario(rig, FlatMonoResolveMode::Dlss);
+        steadygpu::scenario(rig, FlatMonoResolveMode::Fsr);
+        // 2. EDVR's own TAA, which keeps last frame's depth itself.
+        steadygpu::taaScenario(rig);
+        edvr::flatMonoResolveReset();
+    }
     // 3. The same scenario against the prep with one rule flipped at a time: it must fail each time.
-    steadygpu::mutationChecks(rig);
-    edvr::flatMonoResolveReset();
+    for (int slice = 1; slice <= kSteadySlices; ++slice)
+        if (fpgpu::mutationSliceRuns("steadyDepth", slice, kSteadySlices)) {
+            steadygpu::Rig rig(device, context);
+            steadygpu::mutationChecks(rig, slice, kSteadySlices);
+            edvr::flatMonoResolveReset();
+        }
 }

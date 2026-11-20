@@ -9,6 +9,9 @@
 #include <set>
 #include <vector>
 
+#include "probe.h"
+#include "update_json.h"
+
 namespace edvr::installer {
 namespace {
 
@@ -179,54 +182,20 @@ void findSteam(std::vector<GameInstall>* out) {
 
 // ---- Epic ----------------------------------------------------------------
 //
-// Epic writes one .item manifest per installed game, as JSON. Again no parser:
-// InstallLocation is the only field that matters and DisplayName is only used
-// to tell Elite's manifest from the other twenty.
+// The executable check identifies Elite: a manifest's display name and the
+// player's chosen folder name need not contain the game's name.
 void findEpic(std::vector<GameInstall>* out) {
     const std::wstring manifests =
         joinPath(env(L"ProgramData"), L"Epic\\EpicGamesLauncher\\Data\\Manifests");
-    if (!dirExists(manifests)) return;
-
-    for (const std::wstring& name : filesMatching(manifests, L"*.item")) {
-        const std::string json = readTextFileImpl(joinPath(manifests, name), 1u << 20);
-        if (json.empty()) continue;
-
-        auto field = [&](const char* key) -> std::string {
-            const std::string needle = std::string("\"") + key + "\"";
-            size_t k = json.find(needle);
-            if (k == std::string::npos) return std::string();
-            const size_t colon = json.find(':', k + needle.size());
-            if (colon == std::string::npos) return std::string();
-            const size_t open = json.find('"', colon);
-            if (open == std::string::npos) return std::string();
-            std::string value;
-            for (size_t i = open + 1; i < json.size(); ++i) {
-                if (json[i] == '\\' && i + 1 < json.size()) {
-                    ++i;
-                    value += json[i];
-                    continue;
-                }
-                if (json[i] == '"') break;
-                value += json[i];
-            }
-            return value;
-        };
-
-        const std::wstring display = lower(fromUtf8(field("DisplayName")));
-        const std::wstring location = fromUtf8(field("InstallLocation"));
-        if (location.empty()) continue;
-        if (display.find(L"elite") == std::wstring::npos &&
-            lower(location).find(L"elite") == std::wstring::npos) {
-            continue;
-        }
-        addFromRoot(location, L"Epic", out);
-    }
+    const std::vector<GameInstall> found = findEpicInstalls(manifests);
+    out->insert(out->end(), found.begin(), found.end());
 }
 
 // ---- Frontier launcher ---------------------------------------------------
-void findFrontier(std::vector<GameInstall>* out) {
-    // Where the launcher itself keeps Products these days.
-    addFromRoot(joinPath(env(L"LOCALAPPDATA"), L"Frontier_Developments"), L"Frontier launcher", out);
+// The folders Frontier's launcher may be installed in. May hold empty strings and
+// folders that do not exist; a caller probes each one.
+std::vector<std::wstring> frontierInstallRoots() {
+    std::vector<std::wstring> roots;
 
     // The uninstall registry, both views: whatever the launcher's installer
     // recorded is the authoritative answer for an install that moved.
@@ -251,15 +220,13 @@ void findFrontier(std::vector<GameInstall>* out) {
                 name.find(L"frontier") == std::wstring::npos) {
                 continue;
             }
-            addFromRoot(regString(HKEY_LOCAL_MACHINE, path.c_str(), L"InstallLocation", 0),
-                        L"Frontier launcher", out);
+            roots.push_back(regString(HKEY_LOCAL_MACHINE, path.c_str(), L"InstallLocation", 0));
         }
         RegCloseKey(key);
     }
 
     // And the places it has installed itself to by default, on every fixed
     // drive. Cheap: three directory probes per drive, no walking.
-    std::vector<std::wstring> roots;
     const std::wstring progFiles86 = env(L"ProgramFiles(x86)");
     const std::wstring progFiles = env(L"ProgramFiles");
     if (!progFiles86.empty()) roots.push_back(joinPath(progFiles86, L"Frontier"));
@@ -275,7 +242,13 @@ void findFrontier(std::vector<GameInstall>* out) {
         roots.push_back(d + L"Games\\Frontier");
         roots.push_back(d + L"Program Files (x86)\\Frontier");
     }
-    for (const std::wstring& r : roots) addFromRoot(r, L"Frontier launcher", out);
+    return roots;
+}
+
+void findFrontier(std::vector<GameInstall>* out) {
+    // Where the launcher itself keeps Products these days.
+    addFromRoot(joinPath(env(L"LOCALAPPDATA"), L"Frontier_Developments"), L"Frontier launcher", out);
+    for (const std::wstring& r : frontierInstallRoots()) addFromRoot(r, L"Frontier launcher", out);
 }
 
 // ---- who is running ------------------------------------------------------
@@ -404,11 +377,37 @@ std::wstring findOpenvrDir(const std::wstring& gameDir) {
 }
 
 bool describeDir(const std::wstring& dir, const std::wstring& source, GameInstall* out) {
+    return describeDirWithInstalls(dir, source, findInstalls(), out);
+}
+
+bool describeDirWithInstalls(const std::wstring& dir, const std::wstring& source,
+                             const std::vector<GameInstall>& installs, GameInstall* out) {
     std::vector<GameInstall> found;
     addFromRoot(canonicalPath(dir), source, &found);
     if (found.empty()) return false;
     *out = found.front();
+    for (const GameInstall& install : installs) {
+        if (!sameDir(install.dir, out->dir) || install.source.empty()) continue;
+        out->source = install.source;
+        break;
+    }
     return true;
+}
+
+std::vector<GameInstall> findEpicInstalls(const std::wstring& manifestDir) {
+    std::vector<GameInstall> found;
+    for (const std::wstring& name : filesMatching(manifestDir, L"*.item")) {
+        std::string text = readTextFileImpl(joinPath(manifestDir, name), 1u << 20);
+        // The previous reader accepted BOM-prefixed manifests. Keep that file
+        // encoding tolerance here while the shared parser checks the JSON body.
+        if (text.compare(0, 3, "\xef\xbb\xbf") == 0) text.erase(0, 3);
+        JsonValue manifest;
+        if (!parseJson(text, &manifest, nullptr)) continue;
+        const JsonValue* location = manifest.find("InstallLocation");
+        if (!location || !location->isString() || location->text.empty()) continue;
+        addFromRoot(fromUtf8(location->text), L"Epic", &found);
+    }
+    return found;
 }
 
 GameRunState runStateOfSnapshot(void* snapshot, const wchar_t* exeName, const std::wstring& dir) {
@@ -459,7 +458,23 @@ GameRunState runStateOf(const wchar_t* exeName, const std::wstring& dir) {
 
 GameRunState gameRunState(const std::wstring& gameDir) { return runStateOf(kGameExe, gameDir); }
 
-std::vector<GameInstall> findInstalls() {
+std::vector<std::wstring> frontierLauncherRoots() { return frontierInstallRoots(); }
+
+std::vector<GameInstall> withoutLegacyInstalls(const std::vector<GameInstall>& installs, bool (*isLegacyExe)(const std::wstring&)) {
+    std::vector<GameInstall> kept;
+    for (const GameInstall& gi : installs) {
+        if (!isLegacyExe(joinPath(gi.dir, kGameExe))) kept.push_back(gi);
+    }
+    return kept;
+}
+
+const char* onlyLegacyInstallsText() {
+    // The planner's words for the same refusal, so Browse and the scan say one thing.
+    return "The only Elite Dangerous install found is Elite Dangerous (Horizons), not Elite Dangerous: Odyssey. "
+           "ED-UP supports Odyssey only; no ED-UP build supports that game.";
+}
+
+std::vector<GameInstall> findInstalls(size_t* legacyLeftOut) {
     std::vector<GameInstall> found;
     findSteam(&found);
     findEpic(&found);
@@ -475,13 +490,14 @@ std::vector<GameInstall> findInstalls() {
         unique.push_back(gi);
     }
 
-    // Odyssey first: it is what EDVR is for, and on a machine with both
-    // products the Horizons folder is the wrong answer offered by default.
+    // Odyssey first, for a folder whose executable does not settle which it is.
     std::stable_sort(unique.begin(), unique.end(),
                      [](const GameInstall& a, const GameInstall& b) {
                          return a.odyssey && !b.odyssey;
                      });
-    return unique;
+    std::vector<GameInstall> supported = withoutLegacyInstalls(unique, eliteExeIsLegacy);
+    if (legacyLeftOut) *legacyLeftOut = unique.size() - supported.size();
+    return supported;
 }
 
 bool nvidiaAdapterPresent(std::wstring* name) {

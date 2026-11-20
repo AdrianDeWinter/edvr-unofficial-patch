@@ -4,10 +4,12 @@
 #include "../../src/d3d11/flat_projection_math.h"
 #include "../../src/common/temporal_math.h"
 #include "../../src/d3d11/dlaa.h"
+#include "../../src/d3d11/dittosr_engine.h"
 #include "../../src/d3d11/fsr3_engine.h"
 #include "../../src/d3d11/fsr4_engine.h"
 #include "../../src/d3d11/engine_velocity_emit.h"
 #include "../../src/d3d11/flat_hdr_crumbs.h"
+#include "../../src/d3d11/flat_capture_directory.h"
 #include "../../src/d3d11/flat_isolation_mode.h"
 #include "../../src/d3d11/flat_context_state.h"
 #include "../hdr_crumb_trail.h"
@@ -15,13 +17,18 @@
 #include <d3d11sdklayers.h>
 #include <wrl/client.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <map>
+#include <mutex>
+#include <thread>
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
 #include <string>
 #include <vector>
 #include <cmath>
+#include <set>
 #include "../../src/common/config.h"
 #include "../../src/common/log.h"
 #include "../../src/common/system_d3d11.h"
@@ -70,15 +77,20 @@ void check(bool ok,const char* text){if(!ok){if(mutationFailures){if(!*mutationF
 // ---- sharding (--self-test --shard I/N) ----------------------------------------------------------------------------------------
 // The rig runs the suites as N processes at once, each from a directory of its own (build.bat's :rig_flat_mono_resolve_shard*), because one
 // process took 276 s (the same suites alone sum to about 95 s: the process slows as it goes). A UNIT is the smallest piece that runs whole in
-// one shard: the resolver section of main() with its tail (they share locals), each suite, and each case of the SDK foreground suite (the
-// shipped-prep scenario, the control, one per mutant). kUnits is the complete list, in main()'s order; `group` is the shard (1-based) that runs
-// the unit when N is 5, (group-1)%N+1 otherwise, so any N covers every unit exactly once. Plain --self-test (no --shard) runs every unit.
-// Checked 2026-10-14 by running every unit alone, then the shards: units share no state EXCEPT
+// one shard: the resolver section of main() with its tail (they share locals), each suite, each case of the SDK foreground suite (the
+// shipped-prep scenario, the control, one per mutant), and each slice of a mutation loop ("firstPerson:mutants1of4": the control, then every
+// 4th mutant; the suite's other checks stay in the suite's own unit). kUnits is the complete list, in main()'s order; `group` is the shard
+// (1-based) that runs the unit when N is 5, (group-1)%N+1 otherwise, so any N covers every unit exactly once. Plain --self-test (no --shard)
+// runs every unit. Checked 2026-11-13 by running every unit alone, then the shards: units share no state EXCEPT
 //   firstPersonPhaseGpuTests needs firstPersonGpuTests before it in the process: the resolver logs "first-person motion inputs bound" once per
-//   process, and the phase suite checks it adds no log line (group 1 holds both);
+//   process, and the phase unit checks it adds no log line (group 1 holds both). The phase mutation slices do not need it: they count log lines
+//   from after their own control run. Run alone, firstPersonPhaseGpuTests fails that check by design; `--only firstPersonGpuTests,firstPersonPhaseGpuTests`
+//   passes;
 // and the fixture directories, which are next to the exe (flat-pixel-fixture, flat-weapon-*-fixture), so concurrent shards need exes in
-// different directories. Alone-times, ms, WARP: firstPerson 19000, firstPersonPhase 13200, flatResolveInput 15700, steadyDepth 13900,
-// skin 9200, flatPixelCapture 4200, flatWeaponFootprint 2500, taaHistoryDepth 2000, mapEasu 1800, each SDK foreground case 300-800.
+// different directories (and the repository root as the working directory: some suites read src\ and tools\ files by relative path).
+// Single-threaded WARP CPU seconds in the pool, 2026-11-13: a mutation slice 50-75 (firstPerson 4 slices, firstPersonPhase 3, steadyDepth 3, skin 2,
+// each one control run plus its mutants; the scenario run costs 3-5 s), vehicleFrame 43, staleRecord 28, flatResolveInput 16, taaHistoryDepth 13,
+// firstPerson + firstPersonPhase units 12 together, steadyDepth unit 12, the 8 SDK foreground mutants 5-10 each, the rest 1-5.
 struct ShardUnit {const char* name;int group;};
 const ShardUnit kUnits[]={
     {"projectionScopeTests",1},{"projectionRuntimeTests",1},{"projectionSnapshotTests",1},
@@ -87,15 +99,20 @@ const ShardUnit kUnits[]={
     {"flatWeaponFootprintGpuTests",2},{"flatOverlayLayerGpuTests",2},{"flatLoopOutputGpuTests",2},
     {"flatResolveInputGpuTests",3},{"flatForegroundOwnershipGpuTests",2},
     {"hdrRouteGpuTests",2},
-    {"sdkForeground:shipped",3},{"sdkForeground:control",3},
-    {"sdkForeground:mutant1",4},{"sdkForeground:mutant2",4},{"sdkForeground:mutant3",4},{"sdkForeground:mutant4",5},
-    {"sdkForeground:mutant5",5},{"sdkForeground:mutant6",5},{"sdkForeground:mutant7",5},{"sdkForeground:mutant8",5},
-    {"mapEasuGpuTests",4},{"mapSmaaLookupLeakTests",3},{"sdkForegroundSupersampleGpuTests",5},
+    {"sdkForeground:shipped",4},{"sdkForeground:control",4},
+    {"sdkForeground:mutant1",1},{"sdkForeground:mutant2",1},{"sdkForeground:mutant3",1},{"sdkForeground:mutant4",1},
+    {"sdkForeground:mutant5",3},{"sdkForeground:mutant6",4},{"sdkForeground:mutant7",4},{"sdkForeground:mutant8",5},
+    {"mapEasuGpuTests",5},{"mapSmaaLookupLeakTests",3},{"uiLayerSmaaGpuTests",3},{"sdkForegroundSupersampleGpuTests",5},
     {"upscalerSlotGpuTests",2},{"firstPersonGpuTests",1},{"firstPersonPhaseGpuTests",1},
-    {"refusalGpuTests",2},{"skinGpuTests",5},{"copyRefusalViewGpuTests",2},{"copyForegroundGpuTests",2},
-    {"steadyDepthGpuTests",4},{"taaHistoryDepthGpuTests",5},{"contextIsolationGpuTests",2},
-    {"originOpticalGpuTests",4},
+    {"firstPerson:mutants1of4",1},{"firstPerson:mutants2of4",2},{"firstPerson:mutants3of4",2},{"firstPerson:mutants4of4",1},
+    {"firstPersonPhase:mutants1of3",3},{"firstPersonPhase:mutants2of3",3},{"firstPersonPhase:mutants3of3",3},
+    {"refusalGpuTests",2},{"skinGpuTests",5},{"skin:mutants1of2",5},{"skin:mutants2of2",2},{"copyRefusalViewGpuTests",2},{"copyForegroundGpuTests",2},
+    {"steadyDepthGpuTests",4},{"steadyDepth:mutants1of3",4},{"steadyDepth:mutants2of3",4},{"steadyDepth:mutants3of3",5},
+    {"staleRecordGpuTests",4},{"vehicleFrameGpuTests",5},{"taaHistoryDepthGpuTests",5},{"contextIsolationGpuTests",2},
+    {"originOpticalGpuTests",5},
+    {"flatDofBlurGpuTests",1},
     {"flatCelestialGpuTests",5},
+    {"offscreenMotionGpuTests",3},
 };
 int shardIndex=0,shardCount=0;   // 0/0: no --shard, everything runs
 std::vector<std::string> shardRan;
@@ -218,7 +235,6 @@ void Log::note(const char* fmt,...) {
 }
 // Stand-in for src\common\proxy.cpp's breadcrumb(): the route's crumbs land here so the rig can read the trail back.
 void breadcrumb(const char* stage) {if(stage)crumbLines.emplace_back(stage);}
-bool flatDrawCaptureNoDirectoryWrites=false;
 bool ensureDirectory(const std::wstring& path) {
     if(flatDrawCaptureNoDirectoryWrites)return true;
     return CreateDirectoryW(path.c_str(),nullptr) || GetLastError()==ERROR_ALREADY_EXISTS;
@@ -235,10 +251,17 @@ ID3D11ComputeShader* shaderSwapCreateCs(ID3D11DeviceContext* context,const void*
 bool dlaaAvailable(ID3D11Device*,const char**){return true;}
 bool fsr3Available(ID3D11Device*,const char**){return true;}
 bool fsr4Available(ID3D11Device*,const char**){return true;}
+void fsr4ReleaseFeatures(){}
+void fsr4Shutdown(){}
+bool fsr4BuiltIn(){return true;}
+const char* fsr4VersionLabel(){return "fsr4";}
+bool fsr4SlotTotals(unsigned,uint32_t*,uint32_t*,double*,double*){return false;}
+bool dittoAvailable(ID3D11Device*,const char**){return true;}
 bool xessAvailable(ID3D11Device*,const char**){return true;}
 void xessReleaseFeatures(){}
 void xessShutdown(){}
 bool xessBuiltIn(){return true;}
+void xessFgNoteCamera(const float[4][4],float){}   // XeSS Frame Generation's camera note: no bridge in the rig
 // XeSS has no rejection-mask input. Observe its actual depth/motion/reset
 // arguments without fabricating a mask; the fixture checks final pixels too.
 bool xessEvaluate(ID3D11DeviceContext* c,unsigned,ID3D11Texture2D*,ID3D11Texture2D* depth,ID3D11Texture2D* mv,
@@ -281,6 +304,26 @@ bool fsr4Evaluate(ID3D11DeviceContext* c,unsigned slot,ID3D11Texture2D* colour,I
     infiniteSeen=infinite;check(nearZ==expectedNear && std::abs(fov-1.5707963f)<1e-5f,"FSR 4 actual near and FOV");
     return backend(c,depth,mv,nullptr,out,jx,jy,reset,why);
 }
+// The rig links flat_mono_resolve.cpp and not dittosr_engine.cpp. DittoSR is not given a near plane or a FOV.
+bool dittoEvaluate(ID3D11DeviceContext* c,unsigned slot,const char*,const DittoFrameViews& views,
+    uint32_t w,uint32_t h,uint32_t outW,uint32_t outH,float jx,float jy,bool reset,
+    const char** why,bool hdr) {
+    const auto texture=[](ID3D11View* view) {
+        ComPtr<ID3D11Resource> resource;
+        ComPtr<ID3D11Texture2D> tex;
+        if(view) {view->GetResource(resource.GetAddressOf());resource.As(&tex);}
+        return tex;
+    };
+    const auto colour=texture(views.colour),out=texture(views.output);
+    if(!colour || !out) return false;
+    backendSlots.push_back(static_cast<int>(slot));
+    observedInW=w;observedInH=h;observedOutW=outW;observedOutH=outH;
+    observedHdr=hdr;observedColourFormat=DXGI_FORMAT_UNKNOWN;observedOutFormat=DXGI_FORMAT_UNKNOWN;
+    {D3D11_TEXTURE2D_DESC d{};colour->GetDesc(&d);observedColourFormat=d.Format;out->GetDesc(&d);observedOutFormat=d.Format;}
+    if(hdr) observedBackendPixels=readPixel(c,colour.Get(),&observedBackendCenter,4,8,8) &&
+                                  readPixel(c,colour.Get(),&observedBackendOutside,4,1,1);
+    return backend(c,texture(views.depth).Get(),texture(views.motion).Get(),texture(views.reactive).Get(),out.Get(),jx,jy,reset,why);
+}
 } // namespace edvr
 #include "flat_projection_scope_tests.h"
 #include "flat_projection_runtime_tests.h"
@@ -299,17 +342,22 @@ bool fsr4Evaluate(ID3D11DeviceContext* c,unsigned slot,ID3D11Texture2D* colour,I
 #include "flat_first_person_phase_gpu_tests.h"
 #include "flat_refusal_gpu_tests.h"
 #include "flat_steady_depth_gpu_tests.h"
+#include "flat_offscreen_motion_gpu_tests.h"   // a camera-term pixel whose previous position is off the screen keeps its motion with debug.w bit 64 (XeSS FG)
+#include "flat_vehicle_frame_gpu_tests.h"   // near pixels with no certified record ride the ship's record (flat profile, in a ship)
+#include "flat_stale_record_gpu_tests.h"   // a stale slot's pixel asks the record under it first (flat profile only)
 #include "flat_skin_gpu_tests.h"
 #include "flat_taa_history_depth_gpu_tests.h"
 #include "flat_context_isolation_gpu_tests.h"
 #include "flat_map_easu_gpu_tests.h"   // the map temporal-off frames' EASU, against the bilinear tap (2026-10-10)
 #include "flat_map_smaa_lookup_gpu_tests.h"   // the map SMAA lookup textures: no leak after a failed view, retry, reset (review 0.19.1 finding 2)
+#include "flat_ui_layer_smaa_gpu_tests.h"   // the HUD layer's edge smoothing: the production SMAA passes on a layer in its own convention (2026-10-24)
 #include "flat_sdk_foreground_gpu_tests.h"
 #include "flat_copy_refusal_view_gpu_tests.h"
 #include "flat_copy_foreground_gpu_tests.h"
 #include "flat_celestial_gpu_tests.h"   // planet patch motion in the prep: the tangents, and the shipped prep with a planet record bound and not (2026-10-15)
 #include "flat_origin_ambiguity_gpu_tests.h"
 #include "flat_origin_optical_gpu_tests.h"
+#include "flat_dof_blur_gpu_tests.h"   // the depth-of-field blur's average: the production shader over a jitter cycle of frames
 int main(int argc,char** argv) {
     const bool printGoldens=argc==2 && !std::strcmp(argv[1],"--print-goldens"); // --self-test plus the recorded key-off hashes, for re-recording
     const char* usage="usage: flat_mono_resolve_test --self-test [--shard I/N|--only UNIT,UNIT]|--list-shards N|--dry-run|--print-goldens";
@@ -364,17 +412,19 @@ int main(int argc,char** argv) {
         timedSuite("sdkForegroundGpuTests",[&]{return sdkForegroundGpuTests(device.Get(),context.Get());});   // gated case by case inside (the "sdkForeground:*" units)
         if(shardRuns("mapEasuGpuTests"))timedSuite("mapEasuGpuTests",[&]{return mapEasuGpuTests(device.Get(),context.Get());});
         if(shardRuns("mapSmaaLookupLeakTests"))timedSuite("mapSmaaLookupLeakTests",[&]{return mapSmaaLookupLeakTests(device.Get(),context.Get());});
+        if(shardRuns("uiLayerSmaaGpuTests"))timedSuite("uiLayerSmaaGpuTests",[&]{return uiLayerSmaaGpuTests(device.Get(),context.Get());});
         // The same SDK foreground contract above the output (the supersampled on-foot frame), and the untrusted-coverage clause's other two sides.
         if(shardRuns("sdkForegroundSupersampleGpuTests"))timedSuite("sdkForegroundSupersampleGpuTests",[&]{return sdkForegroundSupersampleGpuTests(device.Get(),context.Get());});
         // The VR world route's seams (section 82): the third upscaler slot, the first-person map and stencil in the prep, and the phase term
         // the map's vector gets when the world and the first-person camera are jittered (stage 2).
         if(shardRuns("upscalerSlotGpuTests"))timedSuite("upscalerSlotGpuTests",[&]{return upscalerSlotGpuTests(device.Get(),context.Get());});
-        if(shardRuns("firstPersonGpuTests"))timedSuite("firstPersonGpuTests",[&]{return firstPersonGpuTests(device.Get(),context.Get());});
-        if(shardRuns("firstPersonPhaseGpuTests"))timedSuite("firstPersonPhaseGpuTests",[&]{return firstPersonPhaseGpuTests(device.Get(),context.Get());});
+        // Gated unit by unit inside (the "firstPerson*" units: the scenario and contract, and the mutation slices).
+        timedSuite("firstPersonGpuTests",[&]{return firstPersonGpuTests(device.Get(),context.Get());});
+        timedSuite("firstPersonPhaseGpuTests",[&]{return firstPersonPhaseGpuTests(device.Get(),context.Get());});
         // The stage 2 experiment build's refusal census and view: the prep's class byte, the counting pass and its read-back, the steady-detail
         // rule's effect on the counts, and the HDR finish's paint.
         if(shardRuns("refusalGpuTests"))timedSuite("refusalGpuTests",[&]{return refusalGpuTests(device.Get(),context.Get());});
-        if(shardRuns("skinGpuTests"))timedSuite("skinGpuTests",[&]{return skinGpuTests(device.Get(),context.Get());});
+        timedSuite("skinGpuTests",[&]{return skinGpuTests(device.Get(),context.Get());});
         // The same view on the copy route (hdr off): the compute finish paints it for the SDK backends, EDVR's own TAA there asks for nothing.
         if(shardRuns("copyRefusalViewGpuTests"))timedSuite("copyRefusalViewGpuTests",[&]{return copyRefusalViewGpuTests(device.Get(),context.Get());});
         // The first-person contract on the copy route (the weapon support below the output): a qualified map reaches the DLSS and FSR stubs, the
@@ -382,8 +432,12 @@ int main(int argc,char** argv) {
         if(shardRuns("copyForegroundGpuTests"))timedSuite("copyForegroundGpuTests",[&]{return copyForegroundGpuTests(device.Get(),context.Get());});
         // The depth-validated steady detail (the same section, the key's second form): the prep's depth check, its tolerance and its previous depth,
         // through the DLSS and FSR stubs and EDVR's own TAA, and the same scenario against the prep with one rule flipped at a time.
-        if(shardRuns("steadyDepthGpuTests"))timedSuite("steadyDepthGpuTests",[&]{return steadyDepthGpuTests(device.Get(),context.Get());});
+        timedSuite("steadyDepthGpuTests",[&]{return steadyDepthGpuTests(device.Get(),context.Get());});
+        if(shardRuns("offscreenMotionGpuTests"))timedSuite("offscreenMotionGpuTests",[&]{return offscreenMotionGpuTests(device.Get(),context.Get());});
+        if(shardRuns("vehicleFrameGpuTests"))timedSuite("vehicleFrameGpuTests",[&]{return vehicleFrameGpuTests(device.Get(),context.Get());});
+        if(shardRuns("staleRecordGpuTests"))timedSuite("staleRecordGpuTests",[&]{return staleRecordGpuTests(device.Get(),context.Get());});
         if(shardRuns("originOpticalGpuTests"))timedSuite("originOpticalGpuTests",[&]{return originOpticalGpuTests(device.Get(),context.Get());});
+        if(shardRuns("flatDofBlurGpuTests"))timedSuite("flatDofBlurGpuTests",[&]{return flatDofBlurGpuTests(device.Get(),context.Get());});
         // EDVR's own TAA's history depth check (section 104): the best of four texels, shared with the check above. A jittered silhouette keeps its
         // history, a true disocclusion still resets, and both tests against the kernel with the old single-texel rule (and others) in: they must fail.
         if(shardRuns("taaHistoryDepthGpuTests"))timedSuite("taaHistoryDepthGpuTests",[&]{return taaHistoryDepthGpuTests(device.Get(),context.Get());});
@@ -524,11 +578,29 @@ int main(int argc,char** argv) {
     }
     backendFail=true;++f.frame;run(false);backendFail=false;
     bindOriginal();ComPtr<ID3D11ShaderResourceView> recovered;const char* fallbackReason=nullptr;
+    const auto beforeRecovery=edvr::flatMonoResolveStats();
     check(edvr::flatMonoResolveSpatialFallback(device.Get(),context.Get(),f,recovered.GetAddressOf(),&fallbackReason) &&
           recovered && restored() && pixel(recovered.Get())==0xff0000ff &&
-          edvr::flatMonoResolveStats().allocations==preflightAllocations,
+          edvr::flatMonoResolveStats().allocations==preflightAllocations &&
+          edvr::flatMonoResolveStats().spatialAllocations==beforeRecovery.spatialAllocations,
           "preflighted spatial fallback restores state and displays current jittered frame after SDK refusal without allocation");
+    // A recovery whose frame the temporal set does not fit (2026-10-29: a scoped ADS entry's one-frame copy-route recovery, hdr off at the game's
+    // output size, while the set was the HDR route's) uses the recovery's own images and leaves the set alone: no rebuild then, none at the next
+    // resolve. Before, both rebuilt every render-size texture (docs\investigation-flat-scoped-ads-stutter-2026-10-29.md).
+    auto unfit=f;unfit.outputWidth=unfit.outputHeight=w;   // native: the route evaluates at 16x16, not the set's 32x32
+    bindOriginal();ComPtr<ID3D11ShaderResourceView> unfitOut;
+    check(edvr::flatMonoResolveSpatialFallback(device.Get(),context.Get(),unfit,unfitOut.GetAddressOf(),&fallbackReason) &&
+          unfitOut && restored() && pixel(unfitOut.Get(),8,8)==0xff0000ff &&
+          edvr::flatMonoResolveStats().allocations==beforeRecovery.allocations &&
+          edvr::flatMonoResolveStats().spatialAllocations==beforeRecovery.spatialAllocations+2,
+          "a spatial fallback the temporal set does not fit makes its own two images and rebuilds nothing");
+    bindOriginal();ComPtr<ID3D11ShaderResourceView> unfitAgain;
+    check(edvr::flatMonoResolveSpatialFallback(device.Get(),context.Get(),unfit,unfitAgain.GetAddressOf(),&fallbackReason) &&
+          unfitAgain && restored() && edvr::flatMonoResolveStats().spatialAllocations==beforeRecovery.spatialAllocations+2,
+          "a second such spatial fallback reuses its own images");
     ++f.frame;run(true);check(backendReset,"backend failure and fallback invalidate history");
+    check(edvr::flatMonoResolveStats().allocations==beforeRecovery.allocations,
+          "the resolve after an unfit spatial fallback finds the temporal set as it was and rebuilds nothing");
     stats=edvr::flatMonoResolveStats();check(stats.backendFailures==1 && stats.currentContinueRun==0,
         "backend failure and following accepted reset are visible in cumulative statistics");
     f.mode=edvr::FlatMonoResolveMode::Taa;f.reset=true;++f.frame;auto taa=run(true);

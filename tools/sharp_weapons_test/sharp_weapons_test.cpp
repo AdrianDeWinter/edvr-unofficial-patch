@@ -1,12 +1,13 @@
-// fix.sharp_weapons, in the build's gate (docs/dlss-blur-elements-2026-10-14.md, "Built, 2026-10-16: weapons fire in the HDR layer").
+// The weapons fire, in the build's gate (docs/dlss-blur-elements-2026-10-14.md, "Built, 2026-10-16: weapons fire in the HDR layer"). The weapons
+// fire is always on: its setting was retired 2026-10-28, so there is no key to test, only the behaviour it always had.
 //
 //   THE RULE (pure). The weapons-fire family is the exact pair (never the vertex shader alone): the three pairs name kWeaponsFire on the HDR branch of the
 //   production uiLayerFamilyFor and nothing else does (one-token mutants of each pair, a post-tonemap target, the refracting partner 820E/6EAA). It is
-//   taken into the HDR layer and exempt from the density rule. The jitter-cancel table defaults to cancel and is read per pair. The A/B key's words.
-//   THE TWO KEYS (pure). fix.ui_quality and fix.sharp_weapons are independent: for each of the four combinations the family gate, the decisions of every
-//   family and the liveness of the layer's two halves. The layer's machinery runs when either half is live; the interface-only parts (the world route,
-//   the on-foot gate, the after-UI take) when ui_quality's is.
-//   THE PLAN (pure). The tonemap re-issues of an eye-frame (weapons_fire.h sharpTonePlan) for every (HUD, weapons, mode, matched-ready) combination
+//   taken into the HDR layer and exempt from the density rule. The jitter-cancel table defaults to cancel and is read per pair.
+//   THE TWO HALVES (pure). fix.ui_quality and the weapons fire are independent: for each of the four combinations of their live states the family gate, the
+//   decisions of every family and the liveness of the layer's two halves. The layer's machinery runs when either half is live; the interface-only parts (the
+//   world route, the on-foot gate, the after-UI take) when ui_quality's is.
+//   THE PLAN (pure). The tonemap re-issues of an eye-frame (weapons_fire.h sharpTonePlan) for every (HUD, weapons, matched-ready) combination
 //   against a frozen reference table, and the invariants a plan must hold, with mutants of the plan caught by them.
 //   THE CENSUS (pure). Three recorded census frames of the 2026-10-16 flight (log edvr_gfx_20261016_070029: censuses 1, 3 and 4, frame 0; 346, 626 and 719
 //   draw rows) through the production rule and decision as they were before this arc (a frozen copy) and as they are: exactly the weapon rows change
@@ -22,6 +23,7 @@
 //   debug layer reports nothing.
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -41,12 +43,18 @@
 #include <DirectXPackedVector.h>
 #include <wrl/client.h>
 
+#include "../../src/d3d11/crisp_reticle.h"   // C1a: the crisp reticle's arming gate (pure)
+#include "../../src/d3d11/draw_gate_holders.h"   // build 2: the gate holders' names
+#include "../../src/d3d11/draw_mask_line.h"
+#include "../../src/d3d11/draw_state_describe.h"
 #include "../../src/d3d11/flat_ui_layer_math.h"
 #include "../../src/d3d11/menu_flat_rows.h"
 #include "../../src/d3d11/menu_schema.h"
 #include "../../src/d3d11/sharp_weapons.h"
 #include "../../src/d3d11/sharp_weapons_shaders.h"
+#include "../../src/d3d11/target_sharp.h"   // build 4: targetSharpShape
 #include "../../src/d3d11/ui_layer_math.h"
+#include "../../src/d3d11/vs_may_want.h"   // build 2: the may-want byte the family check is skipped by
 #include "temporal_shader_bytecode.h"
 
 namespace edvr {
@@ -63,12 +71,9 @@ static void check(bool ok, const char* why) {
 }
 static void hr(HRESULT r, const char* what) { check(SUCCEEDED(r), what); }
 
-// CR dropped: a checkout with core.autocrlf has CRLF sources and edvr.ini, and the pins search for "\n...\n".
 static std::string readFile(const char* path) {
     std::ifstream f(path, std::ios::binary);
-    std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
-    return s;
+    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
 // ============================================================================================ the rule
@@ -80,7 +85,537 @@ static UiFamilyFacts hdrFacts(uint64_t vs, uint64_t ps) {
     return f;
 }
 
+// The scope's gunsight mark (A2): the pair's draw of 6 indices in 1 instance with the readout atlas bound, named only while the scope lens is armed, and the blend it is taken with.
+static void scopeMarkTests() {
+    UiFamilyFacts f = hdrFacts(kUiVsScopeMark, kUiPsScopeMark);
+    check(uiLayerFamilyFor(f) == UiLayerFamily::kNone, "the pair alone is not the scope mark (it is the weapon and tool material too)");
+    f.scopeMark = true;
+    check(uiLayerFamilyFor(f) == UiLayerFamily::kScopeMark, "the pair with the lens armed, the shape and the atlas is the scope mark on the HDR target");
+    for (int bit = 0; bit < 64; bit += 9) {
+        UiFamilyFacts v = hdrFacts(kUiVsScopeMark ^ (1ull << bit), kUiPsScopeMark);
+        v.scopeMark = true;   // the flag the hook would have set: without it the mutant could never name the family, and the check would hold for any rule
+        check(uiLayerFamilyFor(v) != UiLayerFamily::kScopeMark, "a one-bit change of the vertex shader is not the family, with every other fact true");
+        UiFamilyFacts g = hdrFacts(kUiVsScopeMark, kUiPsScopeMark ^ (1ull << bit));
+        g.scopeMark = true;
+        check(uiLayerFamilyFor(g) != UiLayerFamily::kScopeMark, "a one-bit change of the pixel shader is not the family, armed or not");
+    }
+    check(!weaponsFireVs(kUiVsScopeMark), "the mark's vertex shader is not a weapons-fire one (the hook's earlier branch would otherwise take the draw first)");
+    UiFamilyFacts other = hdrFacts(kUiVsScopeMark, 0xC5A5C7E8216CB9AFull);
+    other.scopeMark = true;
+    check(uiLayerFamilyFor(other) != UiLayerFamily::kScopeMark, "the same vertex shader with the material's pixel shader is not the family");
+    UiFamilyFacts ldr = f;
+    ldr.targetKind = 2;
+    check(uiLayerFamilyFor(ldr) != UiLayerFamily::kScopeMark, "the post-tonemap target never names it");
+    ldr.targetKind = 0;
+    check(uiLayerFamilyFor(ldr) == UiLayerFamily::kNone, "no eye target, no family");
+    check(uiLayerFamilyTakesHdr(UiLayerFamily::kScopeMark) && !uiLayerFamilyIsSceneLines(UiLayerFamily::kScopeMark), "taken by the HDR route, exempt from the density rule");
+    check(std::strcmp(uiLayerFamilyName(UiLayerFamily::kScopeMark), "scope mark") == 0, "the family's name is the log's");
+    // A3: the mark rides the weapons layer, so the weapons half governs it (its arming is the scope zoom key, in the draw hook's facts) and fix.ui_quality's does not
+    check(!uiLayerFamilyEnabled(UiLayerFamily::kScopeMark, true, false) && uiLayerFamilyEnabled(UiLayerFamily::kScopeMark, false, true),
+          "the weapons fire's half governs the mark (a stood-down weapons layer leaves it in the scene), fix.ui_quality's does not");
+    check(uiLayerFamilyUsesWeaponsLayer(UiLayerFamily::kScopeMark) && uiLayerFamilyUsesWeaponsLayer(UiLayerFamily::kWeaponsFire) && uiLayerFamilyUsesWeaponsLayer(UiLayerFamily::kLegacyGlass),
+          "the mark, the weapons fire and the legacy canopy are drawn into the weapons layer");
+    bool others = true;
+    for (size_t i = 1; i < static_cast<size_t>(UiLayerFamily::kCount); ++i) {
+        const UiLayerFamily fam = static_cast<UiLayerFamily>(i);
+        if (fam != UiLayerFamily::kScopeMark && fam != UiLayerFamily::kWeaponsFire && fam != UiLayerFamily::kLegacyGlass) others = others && !uiLayerFamilyUsesWeaponsLayer(fam);
+    }
+    check(others, "no other family is drawn into the weapons layer (the HUD's families and the shield ripple keep their own)");
+
+    // the shape: 6 indices in 1 instance, an indexed kind
+    check(uiScopeMarkShape('X', 6, 1) && uiScopeMarkShape('I', 6, 1) && !uiScopeMarkShape('X', 18, 1) && !uiScopeMarkShape('X', 6, 2) && !uiScopeMarkShape('D', 6, 1) && !uiScopeMarkShape('N', 6, 1) &&
+              !uiScopeMarkShape('X', 0, 0),
+          "the draw shape is 6 indices in 1 instance, indexed: the material's draws (18 indices, several instances) are not it");
+
+    // THE GATE, driven behaviourally: uiScopeMarkFacts is the rule vscreen.cpp's uiLayerFamilyOf asks with the real reads (the vertex shader, the draw's shape, whether the lens is
+    // armed, the pixel shader's hash, whether a learned interface surface is bound). Each condition alone must refuse, all together must name the family, and a refusal must stop
+    // before the reads that follow it (an ordinary draw reads no hash).
+    struct Probe {
+        uint64_t vs = kUiVsScopeMark;
+        char kind = 'X';
+        uint32_t indices = 6, instances = 1;
+        bool armed = true, surface = true;
+        uint64_t ps = kUiPsScopeMark;
+        mutable int armedCalls = 0, psCalls = 0, surfaceCalls = 0;
+        UiLayerFamily family() const {
+            uint64_t readPs = 0;
+            UiFamilyFacts facts = hdrFacts(vs, 0);
+            facts.scopeMark = uiScopeMarkFacts(vs, kind, indices, instances, [&] { ++armedCalls; return armed; }, [&] { ++psCalls; return ps; }, [&] { ++surfaceCalls; return surface; }, &readPs);
+            facts.ps = readPs;
+            return uiLayerFamilyFor(facts);
+        }
+    };
+    {
+        Probe all;
+        check(all.family() == UiLayerFamily::kScopeMark && all.armedCalls == 1 && all.psCalls == 1 && all.surfaceCalls == 1, "the gate: the pair, 6 indices in 1 instance, the lens armed, the pixel shader and a learned surface together name the family");
+        Probe idx;
+        idx.kind = 'I';
+        check(idx.family() == UiLayerFamily::kScopeMark, "the gate: an indexed draw of kind I matches as kind X does");
+        const auto refuses = [&](Probe p, int armedCalls, int psCalls, int surfaceCalls, const char* why) {
+            check(p.family() != UiLayerFamily::kScopeMark && p.armedCalls == armedCalls && p.psCalls == psCalls && p.surfaceCalls == surfaceCalls, why);
+        };
+        Probe p;
+        p.indices = 5;
+        refuses(p, 0, 0, 0, "the gate: 5 indices alone refuses, before the lens, the hash or the surface is asked");
+        p = Probe();
+        p.indices = 12;
+        refuses(p, 0, 0, 0, "the gate: 12 indices alone refuses, before anything is asked");
+        p = Probe();
+        p.instances = 2;
+        refuses(p, 0, 0, 0, "the gate: 2 instances alone refuses, before anything is asked");
+        p = Probe();
+        p.kind = 'D';
+        refuses(p, 0, 0, 0, "the gate: a draw that is not indexed alone refuses, before anything is asked");
+        p = Probe();
+        p.vs = kUiVsScopeMark ^ 1;
+        refuses(p, 0, 0, 0, "the gate: another vertex shader alone refuses, before anything is asked");
+        p = Probe();
+        p.armed = false;
+        refuses(p, 1, 0, 0, "the gate: the lens not armed alone refuses, before the pixel shader's hash is read");
+        p = Probe();
+        p.ps = 0xC5A5C7E8216CB9AFull;
+        refuses(p, 1, 1, 0, "the gate: the material's pixel shader in place of the mark's alone refuses, before the surface is asked");
+        p = Probe();
+        p.surface = false;
+        refuses(p, 1, 1, 1, "the gate: no learned surface alone refuses");
+        // and the facts it hands the rule are the ones the rule's own flag reads: with the hash read and the flag false the pair alone is not the family
+        UiFamilyFacts bare = hdrFacts(kUiVsScopeMark, kUiPsScopeMark);
+        check(uiLayerFamilyFor(bare) == UiLayerFamily::kNone, "the gate: the pair with the flag unset is no family");
+    }
+
+    // C1a: THE SAME GATE, ARMED BY THE CRISP RETICLE'S GATE (crisp_reticle.h) in place of the lens': a weapon the scope lens does not name has its quad named the same family, taken the same way into the
+    // same weapons layer, composited the same way. vscreen.cpp asks scopeZoomMarkArmed() || scopeZoomCrispArmed() (scope_zoom_test scans it); here the rule behind the second answer drives the facts.
+    {
+        edvr::crisp::GateIn cg;
+        cg.onFoot = cg.adsUp = true;   // the scope zoom off: no lens, every sight served
+        cg.wFresh = true;
+        cg.w = 1.0;
+        Probe viaCrisp;
+        viaCrisp.armed = edvr::crisp::armed(cg);
+        check(viaCrisp.family() == UiLayerFamily::kScopeMark && viaCrisp.armedCalls == 1 && viaCrisp.psCalls == 1 && viaCrisp.surfaceCalls == 1,
+              "C1a gate: a sight the crisp gate arms names the family exactly as the lens' arming does (the pair, 6 indices in 1 instance, the pixel shader, a learned surface)");
+        check(uiLayerFamilyUsesWeaponsLayer(UiLayerFamily::kScopeMark) && uiLayerFamilyTakesHdr(UiLayerFamily::kScopeMark) && uiLayerFamilyEnabled(UiLayerFamily::kScopeMark, false, true),
+              "C1a gate: and it is the weapons layer's family, taken by the HDR route, governed by the weapons half, whoever armed it");
+        cg.adsUp = false;   // the hip
+        Probe hip;
+        hip.armed = edvr::crisp::armed(cg);
+        check(hip.family() != UiLayerFamily::kScopeMark && hip.psCalls == 0, "C1a gate: at the hip the gate is down: the family is not named and the pixel shader's hash is not read");
+        cg.adsUp = true;
+        cg.lensKeyOn = cg.itemKnown = cg.lensOwned = true;   // the scope lens names this sight: its quad is the lens' to arm
+        Probe lens;
+        lens.armed = edvr::crisp::armed(cg);
+        check(lens.family() != UiLayerFamily::kScopeMark && lens.psCalls == 0, "C1a gate: a sight the lens names leaves the crisp gate down and the family is named for the lens' arming alone, as before C1");
+    }
+
+    // THE ARMING OF THE FIRST-SEEN LINE: not-armed is structural for the scope mark alone (the lens-armed family that was never taken because its eye's layer was not armed is the one
+    // reason its flight cannot lose); late and not-UI stay transient for it; every other family keeps its rule
+    {
+        check(uiLayerDecisionIsStructural(UiLayerFamily::kScopeMark, UiLayerDecision::kNotArmed) && !uiLayerDecisionIsStructural(UiLayerFamily::kScopeMark, UiLayerDecision::kLate) &&
+                  !uiLayerDecisionIsStructural(UiLayerFamily::kScopeMark, UiLayerDecision::kNotUi) && uiLayerDecisionIsStructural(UiLayerFamily::kScopeMark, UiLayerDecision::kBlendRefused),
+              "not-armed gets a first-seen line for the scope mark; late and not-UI do not");
+        check(!uiLayerDecisionIsStructural(UiLayerFamily::kScreen, UiLayerDecision::kNotArmed) && !uiLayerDecisionIsStructural(UiLayerFamily::kWeaponsFire, UiLayerDecision::kNotArmed) &&
+                  !uiLayerDecisionIsStructural(UiLayerFamily::kFlightHud, UiLayerDecision::kNotArmed) && uiLayerDecisionIsStructural(UiLayerFamily::kScreen, UiLayerDecision::kMrt),
+              "no other family's not-armed gets a line, and the structural decisions are as they were");
+        UiFamilySeenTable<4> seen;
+        check(seen.wanted(UiLayerFamily::kScopeMark, UiLayerDecision::kNotArmed, 1, 2) && seen.record(UiLayerFamily::kScopeMark, UiLayerDecision::kNotArmed, 1, 2) &&
+                  !seen.wanted(UiLayerFamily::kScopeMark, UiLayerDecision::kNotArmed, 1, 2) && !seen.record(UiLayerFamily::kScopeMark, UiLayerDecision::kNotArmed, 1, 2) &&
+                  !seen.wanted(UiLayerFamily::kScreen, UiLayerDecision::kNotArmed, 1, 2) && seen.count == 1,
+              "the scope mark's not-armed prints once for its pair, and another family's does not print");
+    }
+
+    // THE DEPTH PATH. The draw tests depth (GEQUAL) and stencil against a reference and writes neither (the dump census); the view it is drawn against may be bound read-only.
+    {
+        UiDsState gt;
+        gt.depthEnable = true;
+        gt.depthFunc = 7;   // GREATER_EQUAL
+        gt.depthWriteAll = false;
+        gt.stencilEnable = true;
+        gt.readMask = 0xFF;
+        gt.writeMask = 0x00;
+        gt.front.func = 3;   // EQUAL (reference 4)
+        gt.back.func = 3;
+        const UiDsEffect tests = uiLayerDsEffect(gt, true);
+        check(tests.depthTest && tests.stencilTest && !tests.writes() && uiScopeMarkWritesNothing(gt), "the mark's draw state tests depth and stencil and writes nothing");
+        check(uiScopeMarkDepth(tests, gt, true) == UiMarkDepth::kSeeded, "tests the layer can reproduce on a writable view: the seeded copy");
+        UiDsState ro = gt;
+        ro.readOnlyDepth = ro.readOnlyStencil = true;
+        check(uiScopeMarkDepth(uiLayerDsEffect(ro, true), ro, true) == UiMarkDepth::kSeededReadOnly, "the same on a view bound read-only, reproduced: the seeded copy, named read-only");
+        ro.readOnlyStencil = false;
+        check(uiScopeMarkDepth(uiLayerDsEffect(ro, true), ro, true) == UiMarkDepth::kSeededReadOnly, "a view read-only in depth alone is read-only too (the view's flags are either)");
+        check(uiScopeMarkDepth(tests, gt, false) == UiMarkDepth::kTestsOff, "tests the layer cannot reproduce, the draw writing nothing: redrawn with the tests off");
+        check(uiScopeMarkDepth(uiLayerDsEffect(ro, true), ro, false) == UiMarkDepth::kTestsOff, "a read-only view that could not be reproduced is dropped the same way");
+        UiDsState none;
+        check(uiScopeMarkDepth(uiLayerDsEffect(none, true), none, true) == UiMarkDepth::kUntested && uiScopeMarkDepth(uiLayerDsEffect(none, false), none, false) == UiMarkDepth::kUntested,
+              "a draw that tests neither, or with no depth target bound, is untested");
+        UiDsState wd = gt;
+        wd.depthWriteAll = true;
+        check(!uiScopeMarkWritesNothing(wd) && uiScopeMarkDepth(uiLayerDsEffect(wd, true), wd, false) == UiMarkDepth::kRefused && uiScopeMarkDepth(uiLayerDsEffect(wd, true), wd, true) == UiMarkDepth::kSeeded,
+              "a draw that writes depth is never accepted on a read-only view and, when its tests cannot be reproduced, keeps the ordinary refusal");
+        UiDsState wr = gt;
+        wr.writeMask = 0xFF;
+        wr.front.pass = wr.back.pass = 3;   // REPLACE
+        check(!uiScopeMarkWritesNothing(wr) && uiScopeMarkDepth(uiLayerDsEffect(wr, true), wr, false) == UiMarkDepth::kRefused, "a stencil write under a write mask is a write");
+        UiDsState masked = wr;
+        masked.writeMask = 0x00;
+        UiDsState keep = wr;
+        keep.front.pass = keep.back.pass = uids::kKeep;
+        check(uiScopeMarkWritesNothing(masked) && uiScopeMarkWritesNothing(keep), "a stencil operation under a zero write mask, or every operation KEEP, writes nothing");
+        UiDsState masking = wd;   // a read-only view masks the write the state asks for: the state's potential is what is judged, not the view's flags
+        masking.readOnlyDepth = masking.readOnlyStencil = true;
+        check(!uiScopeMarkWritesNothing(masking) && !uiLayerDsEffect(masking, true).writes(), "a depth write the read-only view masks is still the state's potential to write (the layer's copy is writable)");
+
+        // end to end through the pure decision: a test the layer cannot reproduce refuses a family's draw; for the mark it is dropped and the draw is redirected; a writer keeps the refusal
+        UiLayerDrawFacts d;
+        d.family = UiLayerFamily::kScopeMark;
+        d.eyeTarget = true;
+        d.ldrView = false;
+        d.crispHdr = true;
+        d.eye = 1;
+        d.armed = true;
+        d.blend = UiBlendShape::kAdditive;
+        d.ds = tests;
+        d.dsReproducible = false;
+        check(uiLayerDecide(d) == UiLayerDecision::kDepthStencilTest, "a test the layer cannot reproduce is refused by the ordinary decision");
+        UiLayerDrawFacts dropped = d;
+        if (uiScopeMarkDepth(dropped.ds, gt, dropped.dsReproducible) == UiMarkDepth::kTestsOff) dropped.ds.depthTest = dropped.ds.stencilTest = false;
+        check(uiLayerDecide(dropped) == UiLayerDecision::kRedirect, "with the mark's tests dropped the draw is redirected into the layer");
+        UiLayerDrawFacts writer = d;
+        writer.ds = uiLayerDsEffect(wd, true);
+        if (uiScopeMarkDepth(writer.ds, wd, writer.dsReproducible) == UiMarkDepth::kTestsOff) writer.ds.depthTest = writer.ds.stencilTest = false;
+        check(uiLayerDecide(writer) == UiLayerDecision::kDepthStencilTest, "a mark draw that writes depth keeps the refusal");
+        check(std::strcmp(uiMarkDepthName(UiMarkDepth::kUntested), "untested") == 0 && std::strcmp(uiMarkDepthName(UiMarkDepth::kSeeded), "seeded") == 0 &&
+                  std::strcmp(uiMarkDepthName(UiMarkDepth::kSeededReadOnly), "seeded read-only") == 0 && std::strcmp(uiMarkDepthName(UiMarkDepth::kTestsOff), "tests off") == 0,
+              "the paths' names are the press line's labels (tools\\edvr_log.py reads them)");
+    }
+
+    // the decision: ONE, DEST_ALPHA (the dump census, bl=12,7,1/2,7,1) is refused as it stands and additive on an alpha-less target
+    UiBlendRt game;
+    game.enable = true;
+    game.src = uiblend::kOne;
+    game.dst = uiblend::kDestAlpha;
+    game.srcA = uiblend::kOne;
+    game.dstA = uiblend::kDestAlpha;
+    check(uiLayerBlendShape(game) == UiBlendShape::kRefused, "the game's ONE, DEST_ALPHA is refused as it stands (the layer's alpha is not the frame's)");
+    check(!uiLayerFormatHasAlpha(26) && !uiLayerFormatHasAlpha(67) && uiLayerFormatHasAlpha(28) && uiLayerFormatHasAlpha(10) && uiLayerFormatHasAlpha(2),
+          "R11G11B10_FLOAT and the shared-exponent format have no alpha; R8G8B8A8, R16G16B16A16 and R32G32B32A32 do");
+    const UiBlendRt one = uiLayerBlendDestAlphaOne(game);
+    check(one.src == uiblend::kOne && one.dst == uiblend::kOne && uiLayerBlendShape(one) == UiBlendShape::kAdditive, "read as 1 on an alpha-less target it is ONE, ONE: additive");
+    UiBlendRt conv;
+    check(uiLayerConvertBlend(one, &conv) && conv.src == uiblend::kOne && conv.dst == uiblend::kOne && conv.srcA == uiblend::kZero && conv.dstA == uiblend::kOne,
+          "and converts to the layer's additive blend, which keeps the layer's transmittance");
+    UiBlendRt inv = game;
+    inv.dst = uiblend::kInvDestAlpha;
+    check(uiLayerBlendDestAlphaOne(inv).dst == uiblend::kZero, "INV_DEST_ALPHA reads as 0");
+    UiBlendRt untouched = game;
+    untouched.src = uiblend::kSrcAlpha;
+    untouched.dst = uiblend::kInvSrcAlpha;
+    check(uiLayerBlendShape(uiLayerBlendDestAlphaOne(untouched)) == UiBlendShape::kOver, "a blend with no destination-alpha factor is not changed");
+
+    UiLayerDrawFacts d;
+    d.family = UiLayerFamily::kScopeMark;
+    d.eyeTarget = true;
+    d.ldrView = false;
+    d.crispHdr = true;
+    d.eye = 1;
+    d.armed = true;
+    d.blend = UiBlendShape::kAdditive;
+    d.ds.depthTest = true;
+    check(uiLayerDecide(d) == UiLayerDecision::kRedirect, "the mark's draw, read as additive, depth-tested and reproducible, is redirected into the HDR layer");
+    d.blend = uiLayerBlendShape(game);
+    check(uiLayerDecide(d) == UiLayerDecision::kBlendRefused, "the same draw with the blend as the game states it is refused: the rewrite is the family's alone");
+}
+
+// Build 2 (#152): the may-want byte's UI-family bit against the rule. A clear bit must mean kNone on the HDR target (kind 1) for every pixel shader and
+// every runtime fact. It does NOT hold on the post-tonemap target (kind 2: a panel-sized draw is the screen for any vertex shader), which is why the skip
+// is taken on kind 1 only.
+static void mayWantTests() {
+    std::vector<uint64_t> vss = {kUiVsPanel, kUiVsLoader, kUiVsHolo, kUiVsHoloGuiFxOff, kUiVsFlightHud, kUiVsSprite, kUiVsOrbitLines, kUiVsSupercruiseBars,
+                                 kUiVsSpaceDust, kUiVsGuiVector, kUiVsGuiText, kUiVsGuiIcons, kUiVsOnFootHudA, kUiVsOnFootHudB, kUiVsScopeMark,
+                                 kUiVsShieldRefract, kHoloTargetSphere, kUiVsLegacyGlass, 0};
+    for (size_t i = 0; i < kWeaponPairCount; ++i) vss.push_back(kWeaponPairs[i].vs);
+    for (uint64_t h : kHoloFamiliesTake) vss.push_back(h);
+    std::vector<uint64_t> pss = {0, kUiPsOrbitLines, kUiPsSupercruiseBars, kUiPsSpaceDust, kUiPsScopeMark, kUiPsShieldRefract, kUiPsLegacyGlass, 0xEA02FAC2BD6C643Cull, 0xE95634B0F61D218Full};
+    for (size_t i = 0; i < kWeaponPairCount; ++i) pss.push_back(kWeaponPairs[i].ps);
+    uint64_t x = 0x2545F4914F6CDD1Dull;
+    for (unsigned i = 0; i < 200; ++i) { x ^= x << 13; x ^= x >> 7; x ^= x << 17; pss.push_back(x); vss.push_back(x); }
+    const size_t named = vss.size();
+    for (size_t i = 0; i < named && i < 40; ++i)
+        for (int bit = 0; bit < 64; bit += 7) vss.push_back(vss[i] ^ (1ull << bit));   // one-token mutants of the shipped shaders
+    unsigned cleared = 0, wanted = 0;
+    for (uint64_t vs : vss) {
+        const bool may = (vsMayWantByte(vs) & kVsMayUiFamily) != 0;
+        (may ? wanted : cleared) += 1;
+        if (may) continue;
+        for (uint64_t ps : pss)
+            for (unsigned flags = 0; flags < 32; ++flags) {
+                UiFamilyFacts f = hdrFacts(vs, ps);
+                f.nativeOnFoot = (flags & 1) != 0;
+                f.scopeMark = (flags & 2) != 0;
+                f.learnedSurface = (flags & 4) != 0;
+                f.mapOpen = (flags & 8) != 0;
+                f.legacyGlass = (flags & 16) != 0;
+                check(uiLayerFamilyFor(f) == UiLayerFamily::kNone, "a clear UI family bit is kNone on the HDR target for every pixel shader and fact");
+            }
+    }
+    check(cleared > 100 && wanted >= 20, "the check ran over cleared and wanted shaders both");
+    // The exact family the rule names keeps its bit, and the probe's two shaders and the runtime-gated two do too, whatever the facts.
+    for (size_t i = 0; i < kWeaponPairCount; ++i) check(vsMayWantByte(kWeaponPairs[i].vs) & kVsMayUiFamily, "each weapons-fire vertex shader keeps the bit");
+    for (uint64_t h : kHoloFamiliesTake) check(vsMayWantByte(h) & kVsMayUiFamily, "each take hologram keeps the bit");
+    for (uint64_t h : {kUiVsMapCanvas, kUiVsMapSprite, kUiVsMapRings, kUiVsMapStems}) check(vsMayWantByte(h) & kVsMayUiFamily, "each of a map's four overlay vertex shaders keeps the bit");
+    // The System Map's flat plane: a general vertex shader, so it keeps the bit, and it is named only by its pair with the System Map's camera up.
+    for (uint64_t h : {kUiVsMapPlane, kUiVsMapLinesA, kUiVsMapLinesB}) check(vsMayWantByte(h) & kVsMayUiFamily, "the System Map plane's and lines' vertex shaders keep the bit");
+    {
+        UiFamilyFacts lines = hdrFacts(kUiVsMapLinesA, kUiPsMapLines);
+        lines.mapOpen = true;
+        check(uiLayerFamilyFor(lines) == UiLayerFamily::kNone, "the System Map's lines are named only with its camera up");
+        lines.mapSystem = true;
+        check(uiLayerFamilyFor(lines) == UiLayerFamily::kMapPlane, "with its camera up they take the plane icons' family, at any count");
+        lines.vs = kUiVsMapLinesB;
+        check(uiLayerFamilyFor(lines) == UiLayerFamily::kMapPlane, "...and so does the other vertex shader");
+        lines.ps = kUiPsMapPlane;
+        check(uiLayerFamilyFor(lines) == UiLayerFamily::kNone, "...with their own pixel shader only");
+    }
+    {
+        UiFamilyFacts plane = hdrFacts(kUiVsMapPlane, kUiPsMapPlane);
+        plane.mapOpen = true;
+        check(uiLayerFamilyFor(plane) == UiLayerFamily::kNone, "the plane's pair is not named on the Galaxy Map, whose camera is not the System Map's");
+        plane.mapSystem = true;
+        check(uiLayerFamilyFor(plane) == UiLayerFamily::kNone, "with the System Map's camera up, a draw at neither count stays in the scene");
+        plane.mapPlaneGrid = true;
+        check(uiLayerFamilyFor(plane) == UiLayerFamily::kMapGrid, "n=1014 is the grid");
+        plane.mapPlaneGrid = false;
+        plane.mapPlaneIcon = true;
+        check(uiLayerFamilyFor(plane) == UiLayerFamily::kMapPlane && uiLayerFamilyTakesHdr(UiLayerFamily::kMapPlane) && uiLayerFamilyTakesHdr(UiLayerFamily::kMapGrid), "n=6 is an icon on the plane, and both go to the HDR layer");
+        plane.ps = 0x494506A63091DF8Cull;
+        check(uiLayerFamilyFor(plane) == UiLayerFamily::kNone, "another pixel shader with the same vertex shader (the laser rifle) is not named");
+    }
+    check(!(vsMayWantByte(kUiVsGuiVector) & kVsMayUiFamily), "a GUI-direct shader is not named on the HDR target, so its bit is clear there");
+    UiFamilyFacts ldr = hdrFacts(kUiVsGuiVector, 0);
+    ldr.targetKind = 2;
+    check(uiLayerFamilyFor(ldr) == UiLayerFamily::kGuiDirect, "...while the post-tonemap target names it (kind 2 is never skipped)");
+    UiFamilyFacts screen = hdrFacts(0x1234567812345678ull, 0);
+    screen.targetKind = 2;
+    screen.panelSized = true;
+    check(uiLayerFamilyFor(screen) == UiLayerFamily::kScreen && !(vsMayWantByte(screen.vs) & kVsMayUiFamily),
+          "a panel-sized draw is the screen for any vertex shader on kind 2, with the bit clear: the implication holds for kind 1 alone");
+    // The list against the rule's own text: every shader the kind-1 branch tests is in the may-want function.
+    const std::string math = readFile("src/d3d11/ui_layer_math.h");
+    const size_t b0 = math.find("} else if (f.targetKind == 1) {"), b1 = math.find("} else if (f.excluded) {");
+    const size_t w0 = math.find("inline bool uiLayerFamilyHdrVsMayWant"), w1 = math.find("inline UiLayerFamily uiLayerFamilyFor");
+    check(b0 != std::string::npos && b1 > b0 && w0 != std::string::npos && w1 > w0, "the rule and its may-want function are found in ui_layer_math.h");
+    const std::string rule = math.substr(b0, b1 - b0), want = math.substr(w0, w1 - w0);
+    const char* tokens[] = {"kUiVsFlightHud", "kUiVsSprite", "kUiVsOrbitLines", "kUiVsSupercruiseBars", "kUiVsSpaceDust", "kHoloTargetSphere", "kUiVsScopeMark", "kUiVsLegacyGlass", "uiVsIsHoloPanel",
+                            "uiHoloGenericHash", "weaponPairIndex", "shieldRefractPair", "uiOnFootHudMatch", "uiLayerMapFamilyOf"};
+    const char* mapped[] = {"kUiVsFlightHud", "kUiVsSprite", "kUiVsOrbitLines", "kUiVsSupercruiseBars", "kUiVsSpaceDust", "kHoloTargetSphere", "kUiVsScopeMark", "kUiVsLegacyGlass", "uiVsIsHoloPanel",
+                            "uiHoloGenericHash", "weaponsFireVs", "shieldRefractVs", "uiOnFootHudVs", "uiVsIsMapOverlay"};
+    for (size_t i = 0; i < sizeof(tokens) / sizeof(tokens[0]); ++i)
+        if (rule.find(tokens[i]) != std::string::npos)
+            check(want.find(mapped[i]) != std::string::npos, (std::string("the rule tests ") + tokens[i] + " and the may-want function names it").c_str());
+    // Every kUiVs name the rule mentions is one of the tokens above (a new vertex shader in the rule must be added to both).
+    size_t pos = 0;
+    while ((pos = rule.find("kUiVs", pos)) != std::string::npos) {
+        size_t end = pos;
+        while (end < rule.size() && (std::isalnum(static_cast<unsigned char>(rule[end])) || rule[end] == '_')) ++end;
+        const std::string name = rule.substr(pos, end - pos);
+        check(want.find(name) != std::string::npos, (std::string("the rule's ") + name + " is in the may-want function").c_str());
+        pos = end;
+    }
+}
+
+// The text of a function from its signature to the matching close brace (braces in strings and comments are balanced in this tree's sources).
+static std::string bodyFrom(const std::string& text, const std::string& signature) {
+    const size_t at = text.find(signature);
+    if (at == std::string::npos) return std::string();
+    const size_t open = text.find('{', at + signature.size() - 1);
+    if (open == std::string::npos) return std::string();
+    int depth = 0;
+    for (size_t i = open; i < text.size(); ++i) {
+        if (text[i] == '{') ++depth;
+        else if (text[i] == '}' && --depth == 0) return text.substr(at, i - at + 1);
+    }
+    return std::string();
+}
+static size_t countIn(const std::string& t, const std::string& s) {
+    size_t n = 0;
+    for (size_t at = t.find(s); at != std::string::npos; at = t.find(s, at + s.size())) ++n;
+    return n;
+}
+static bool beforeIn(const std::string& t, const std::string& a, const std::string& b) {
+    const size_t x = t.find(a), y = t.find(b);
+    return x != std::string::npos && y != std::string::npos && x < y;
+}
+static bool hasIn(const std::string& t, const std::string& s) { return t.find(s) != std::string::npos; }
+
+// Build 2 (#151, #152, #168): the draw gate's holders, the may-want byte's call sites, the instanced thunk's fast path, the deleted stash.
+static void build2WiringTests() {
+    // Every gate holder has a name, and the names are distinct.
+    for (size_t h = 0; h < kGateHolders; ++h) {
+        const char* n = gateHolderName(h);
+        check(n && n[0] && std::strcmp(n, "unknown") != 0, "every draw-gate holder has a name");
+        for (size_t k = h + 1; k < kGateHolders; ++k) check(std::strcmp(n, gateHolderName(k)) != 0, "holder names are distinct");
+    }
+    char line[512];
+    formatGateHolders(line, sizeof(line), 0);
+    check(std::strcmp(line, "draw gate holders: 0 of 29 terms hold the gate open: none (the gate is closed).") == 0, "the line for an empty set says so");
+    formatGateHolders(line, sizeof(line), gateHolderBit(GateHolder::UiDepth) | gateHolderBit(GateHolder::IntroCurve));
+    check(std::strcmp(line, "draw gate holders: 2 of 29 terms hold the gate open: ui_depth, intro_curve.") == 0, "the line names the holders in order");
+    DrawMaskCounts mc;
+    mc.draws = 14000;
+    mc.skips[1] = 7;
+    formatDrawMaskWindow(line, sizeof(line), 3600, mc);
+    check(std::strstr(line, "draw mask: 1800-frame window ending 3600; 14000 draws through the full path;") &&
+              std::strstr(line, "ui_family 0, screen_motion_ui 7, screen_motion 0, weapon_motion 0, hologram_depth 0."),
+          "the mask line prints every bit's count, zeros included");
+
+    const std::string vscreen = readFile("src/d3d11/vscreen.cpp"), holders = readFile("src/d3d11/draw_gate_holders.h"), motion = readFile("src/d3d11/screen_motion.cpp");
+    // The gate is the holder set: one `if` and one `|=` per holder, each name used once, and the gate reads nothing but the set. A term added to the
+    // gate without a holder bit has no name to add and fails here.
+    const std::string gate = bodyFrom(vscreen, "uint32_t drawGateHolders(State* s) {");
+    check(!gate.empty(), "drawGateHolders is found");
+    const size_t enumAt = holders.find("enum class GateHolder"), enumEnd = holders.find("Count", enumAt);
+    const std::string names = holders.substr(enumAt, enumEnd - enumAt);
+    size_t listed = 0;
+    for (size_t i = names.find('{') + 1; i < names.size();) {
+        while (i < names.size() && !std::isalpha(static_cast<unsigned char>(names[i]))) ++i;
+        size_t e = i;
+        while (e < names.size() && std::isalnum(static_cast<unsigned char>(names[e]))) ++e;
+        if (e == i) break;
+        check(countIn(gate, "GateHolder::" + names.substr(i, e - i) + ")") == 1, "each holder is set by exactly one term of the gate");
+        ++listed;
+        i = e;
+    }
+    check(listed == kGateHolders, "the scan read every holder in the enum");
+    check(countIn(gate, "\n    if (") == kGateHolders && countIn(gate, "m |= gateHolderBit(") == kGateHolders && hasIn(gate, "return m;"),
+          "the gate is one statement per holder and nothing else");
+    check(hasIn(vscreen, "drawGateSet(m != 0);") && countIn(vscreen, "drawGateSample(s);") == 2, "the gate is sampled from the holder set at both places");
+
+    // The instanced thunk has no fast exit (#151, held back until #152 makes it reachable): forwardWithVerdict always runs, with the body cull's and the intro curve's ends after it.
+    const std::string x = bodyFrom(vscreen, "void STDMETHODCALLTYPE hookedDrawIndexedInstanced(");
+    check(!hasIn(x, "drawPathFast") && !hasIn(x, "fast") && hasIn(x, "    forwardWithVerdict(self, v, flags, 'X'"), "the instanced thunk has no fast branch: forwardWithVerdict always runs");
+    check(beforeIn(x, "nativeOnFootBodyCullBegin(", "forwardWithVerdict(self, v, flags, 'X'") && beforeIn(x, "forwardWithVerdict(self, v, flags, 'X'", "if (bodyCull) nativeOnFootBodyCullEnd(self);") &&
+              beforeIn(x, "if (bodyCull) nativeOnFootBodyCullEnd(self);", "introCurveEndDraw();"),
+          "the body cull begins before and ends after the verdict forward, and the intro curve ends after it");
+    check(hasIn(x, "if (v == DrawVerdict::kNone && self == g_state->ownerCtx) {"), "engine velocity's call is behind the verdict alone");
+
+    // The UI family check is skipped inside the branch that calls it and never reaches the probe branch after it.
+    const std::string fwd = bodyFrom(vscreen, "void forwardWithVerdict(ID3D11DeviceContext* self, DrawVerdict v,");
+    check(countIn(fwd, "uiLayerFamilyOf(g_state, kind, count, instances)") == 1 && hasIn(fwd, "vsMaySkip(bindingVsMayWant(), kVsMayUiFamily) && uiLayerTargetKindAt(bindingGeneration(BindSlot::Rtv0)) == 1") &&
+              beforeIn(fwd, "if (owner && uiLayerLive() && g_state->rtv0Eye && v != DrawVerdict::kQuadSkip) {", "vsMaySkip(bindingVsMayWant(), kVsMayUiFamily)") &&
+              beforeIn(fwd, "vsMaySkip(bindingVsMayWant(), kVsMayUiFamily)", "} else if (owner && uiLayerQualityLive() && v != DrawVerdict::kQuadSkip) {") &&
+              hasIn(fwd, "compositeCounted = uiDepthScope.composite;"),
+          "the family skip sits inside the live branch, on kind 1 only, before the probe branch, with the composite census untouched");
+    check(hasIn(x, "vsMaySkip(mayWant, kVsMayScreenUi)") && hasIn(x, "vsMaySkip(mayWant, kVsMayScreenRecognize)") && hasIn(x, "vsMaySkip(bindingVsMayWant(), kVsMayWeaponMotion)") &&
+              hasIn(x, "screenMotionLive() && !uiLayerRedirecting() && !uiLayerWorldReissuePending()"),
+          "the instanced thunk skips each motion call on its own bit, behind the same runtime terms");
+    check(vscreen.find("fssPanelRectDrawArgs") == std::string::npos && vscreen.find("fssPanelRectStartInstance") == std::string::npos &&
+              readFile("src/d3d11/fss_panel_rect.h").find("fssPanelRectDrawArgs") == std::string::npos,
+          "the panel-rect stash and its getters are gone");
+    check(hasIn(vscreen, "args.startInstance,\n                                    args.base);") || hasIn(vscreen, "args.startInstance,\r\n                                    args.base);"),
+          "the rect deriver takes the draw's own arguments");
+    const std::string uiDraw = bodyFrom(motion, "void screenMotionUiDraw(");
+    check(beforeIn(uiDraw, "screenMotionUiPair(", "GetType()"), "screen motion's UI draw tests the shader pair before its virtual context-type call");
+    check(hasIn(readFile("src/d3d11/weapon_motion.cpp"), "weaponMotionFamilyHash(hash)") && hasIn(motion, "screenMotionRecognizePair("), "the subscribers read the same lists as the byte");
+}
+
+// Build 4 (#185, #157): the draw path's own cost. Every change is the same test or the same data, moved; these hold the moves to the sources. The headers' inline
+// predicates are held to the callee's own first test by reading both, since the callees live in translation units a pure rig does not link.
+static void build4WiringTests() {
+    // Item 6: targetSharpShape is the callee's shape, over a grid that includes every near miss.
+    for (char kind : {'X', 'I', 'N', 'D', '?'})
+        for (uint32_t count : {0u, 3u, 5u, 6u, 7u, 100u})
+            for (uint32_t instances : {0u, 1u, 2u})
+                check(targetSharpShape(kind, count, instances) == (kind == 'X' && count == 6 && instances == 1), "targetSharpShape is exactly (X, 6, 1)");
+    const std::string vscreen = readFile("src/d3d11/vscreen.cpp");
+    const std::string sharpCpp = readFile("src/d3d11/target_sharp.cpp");
+    const std::string sharpOn = bodyFrom(sharpCpp, "bool targetSharpOnEyeDraw(");
+    check(hasIn(sharpOn, "if (!targetSharpShape(kind, count, instances))") && !hasIn(sharpCpp, "constexpr char     kKind"),
+          "the callee tests the shape through the shared helper and the constants have one definition");
+    check(hasIn(vscreen, "if (targetSharpShape(kind, count, instances) && targetSharpWantsDraws() &&") &&
+              hasIn(vscreen, "if (holoPatternShape(kind, count, instances) && holoWantsDraws() &&") &&
+              hasIn(vscreen, "if (backdropCompositeShape(kind, count, instances) && backdropWantsDraws() &&") &&
+              hasIn(vscreen, "scrimWantsDraws() && scrimWashShape(kind, count, instances)"),
+          "item 6: the (X, 6, 1) shapes go before the flag loads, and scrim keeps its own order (its shape is count >= 100)");
+    // Item 6: the hash test goes before the guard.
+    check(beforeIn(vscreen, "const uint64_t fssVs = bindingShaderHash(BindSlot::Vs);", "guardedBudget(g_panelCbBudget, [&] {") &&
+              beforeIn(vscreen, "if (fssVs == 0xA888D51024D9798Eull || fssVs == 0xB018D143700AB803ull) guardedBudget(g_panelCbBudget, [&] {", "const uint64_t h = fssVs;"),
+          "item 6: the FSS chrome tracker tests the two vertex shader hashes before it sets the guard up");
+
+    // Item 1: each callee keeps its own first test, and each call site tests it first.
+    const std::string station = readFile("src/d3d11/optimized_station.h");
+    check(hasIn(station, "inline bool optimizedStationSunOff() noexcept { return detail::g_sunOff.load(std::memory_order_acquire); }") &&
+              hasIn(readFile("src/d3d11/optimized_station.cpp"), "if (!optimizedStationSunOff() || vs != kSunVs || ps != kSunPs) return false;") &&
+              hasIn(vscreen, "if (optimizedStationSunOff() && optimizedStationSkipsDraw(bindingShaderHash(BindSlot::Vs), bindingShaderHash(BindSlot::Ps))) return DrawVerdict::kSkip;"),
+          "item 1: the sun skip's acquire load is tested before its two hash arguments are read, by the same accessor the callee uses");
+    const std::string temporalH = readFile("src/d3d11/temporal_pass.h");
+    check(hasIn(temporalH, "inline bool temporalPassRigidDrawMayWant(int eye) { return detail::g_temporalPassWantedFssChrome && eye >= 0 && eye <= 1; }") &&
+              hasIn(readFile("src/d3d11/temporal_pass.cpp"), "if (!temporalPassRigidDrawMayWant(eye)) return false;") &&
+              countIn(vscreen, "temporalPassRigidDrawMayWant(") == 3,
+          "item 1: the temporal pass's rigid-draw first test is one inline predicate used by the callee and by both call sites");
+    const std::string gpuH = readFile("src/d3d11/gpu_frame_timing.h");
+    check(beforeIn(gpuH, "detail::g_gpuFrameCommandLive.load(std::memory_order_relaxed) &&", "!detail::g_gpuFrameInternal;") && hasIn(gpuH, "__forceinline void gpuFrameCommandIfLive("),
+          "item 1: the relaxed load goes before the thread-local, and the draw thunks' call is forced inline");
+    const std::string flatH = readFile("src/d3d11/flat_temporal.h");
+    check(beforeIn(flatH, "__declspec(noinline) inline bool flatTemporalCapturingSlow() {", "__forceinline bool flatTemporalCapturing() {") &&
+              beforeIn(flatH, "if (detail::g_flatTemporalPaused.load(std::memory_order_relaxed)) return false;", "return flatObserveAsOwner(") &&
+              hasIn(flatH, "if (!detail::g_flatTemporalCapturing.load(std::memory_order_relaxed)) return false;" + std::string("\n") + "    return flatTemporalCapturingSlow();"),
+          "item 1: flatTemporalCapturing inlines its first load and keeps the other tests, in order, out of line");
+    check(hasIn(readFile("src/d3d11/ui_layer.h"), "return rtv0Gen == detail::g_uiLayerTargetGen ? detail::g_uiLayerTargetKindCache : uiLayerTargetKind();") &&
+              hasIn(readFile("src/d3d11/ui_layer.cpp"), "if (gen == detail::g_uiLayerTargetGen) return detail::g_uiLayerTargetKindCache;") &&
+              hasIn(vscreen, "uiLayerTargetKindAt(bindingGeneration(BindSlot::Rtv0)) == 1"),
+          "item 1: the target kind's generation compare is inline at the draw path and is the callee's first test");
+    check(hasIn(readFile("src/d3d11/object_probe.h"), "if (detail::g_objectProbeLedgerOn && ctx) objectProbeCandidateDrawIssuedLedgered(ctx,issued);") &&
+              hasIn(readFile("src/d3d11/object_probe.cpp"), "void objectProbeCandidateDrawIssuedLedgered(ID3D11DeviceContext* ctx,bool issued) {" + std::string(1, char(10)) + "    if(detail::g_objectProbeLedgerOn && ctx){") &&
+              countIn(vscreen, "objectProbeCandidateDrawIssued(self,") == 3,
+          "item 1: the candidate-draw note's ledger test is inline in its header, the body keeps it, and the three call sites are unchanged");
+    const std::string blendH = readFile("src/d3d11/blend_probe.h");
+    check(hasIn(blendH, "return detail::g_blendProbePhase.load(std::memory_order_relaxed) == detail::kBlendProbeCollecting;") &&
+              hasIn(readFile("src/d3d11/blend_probe.cpp"), "static_assert(kCollecting == detail::kBlendProbeCollecting"),
+          "item 1: the blend probe's gate is one inline relaxed load, held to the phase enum by a static_assert");
+    check(hasIn(vscreen, "__forceinline bool pixelProbeLive(State* s) { return depthWriterWantsDraws() || (pixelProbeWantsDraws() && s->rtv0Eye); }") && countIn(vscreen, "pixelProbeLive(g_state)") == 12,
+          "item 1: the pixel and depth writer probes' first tests are inline at all twelve thunk sites (six before, six after)");
+
+    // Item 2: one 64-byte block at the head of State, size pinned, and glareClamp is not in it.
+    const std::string block = bodyFrom(vscreen, "struct alignas(64) DrawHot {");
+    check(!block.empty() && hasIn(vscreen, "static_assert(sizeof(DrawHot) == 64 && alignof(DrawHot) == 64") && hasIn(vscreen, "struct State : DrawHot {") && !hasIn(block, "glareClamp"),
+          "item 2: the per-draw State fields are one 64-byte-aligned block at the head of State, without glareClamp");
+    for (const char* field : {"ownerCtx", "rtv0Eye", "rtv0EyeGen", "rtv0Cand", "curveThisDraw", "introCurveThisDraw", "eyeDrawsThisFrame", "bindAuditSeq", "censusSkipCount",
+                              "censusSkipRangeCount", "censusSkipOffCount", "censusAutoW", "quadSkipArmed", "distanceEnabled", "fssBodyFrame", "frameNo"})
+        check(hasIn(block, std::string(" ") + field + " =") || hasIn(block, std::string("* ") + field + " ="), "item 2: every named field is in the block");
+
+    // Item 4: both hooks test "anything open" first; Install needs an active flat runtime; the Scope sits below the open test.
+    check(hasIn(vscreen, "if (flatRuntimeMapBounceAnyOpen()) flatRuntimeMapBouncePreMap(res);") &&
+              hasIn(vscreen, "flatRuntimeMapBounceAnyOpen() ? flatRuntimeMapBounceBeginUnmap(self,res) : FlatMapBounce::Lease{}") &&
+              hasIn(vscreen, "if (mapData0 && flatRuntimeActive()) mapped->pData=flatRuntimeMapBounceInstall(") &&
+              !hasIn(vscreen, "if (!runtimeVrProfile()) flatRuntimeMapBounceBeginUnmap"),
+          "item 4: Map and Unmap skip the bounce while nothing is open, by its own test and not by the profile (a bounce open across a switch still flushes)");
+    const std::string runtime = readFile("src/d3d11/flat_runtime.cpp");
+    const std::string beginUnmap = bodyFrom(runtime, "FlatMapBounce::Lease flatRuntimeMapBounceBeginUnmap(");
+    check(beforeIn(beginUnmap, "if (!mapBounce().anyOpen()) return {};", "flatcpu::Scope shadows(flatcpu::kShadows);") &&
+              hasIn(runtime, "g_flatMapBounce.store(made, std::memory_order_release);") &&
+              hasIn(readFile("src/d3d11/flat_runtime.h"), "g_flatMapBounce.load(std::memory_order_acquire)"),
+          "item 4: the flat CPU scope is below the open test, and the bounce is published with release and read with acquire");
+
+    // Item 9: the hologram pass is skipped on the may-want bit, counted, with the callee's one store made inline.
+    const std::string maskH = readFile("src/d3d11/draw_mask_line.h");
+    check(hasIn(vscreen, "if (vsMaySkip(bindingVsMayWant(), kVsMayHoloDepth)) {") && hasIn(vscreen, "uiDepthHologramSkippedDraw();") &&
+              beforeIn(vscreen.substr(vscreen.find("if (vsMaySkip(bindingVsMayWant(), kVsMayHoloDepth)) {")), "uiDepthHologramSkippedDraw();", "flags.holoDepth = false;") &&
+              beforeIn(vscreen.substr(vscreen.find("if (vsMaySkip(bindingVsMayWant(), kVsMayHoloDepth)) {")), "flags.holoDepth = false;", "maskNoteSkip(MaskSkip::HoloDepth);") &&
+              hasIn(maskH, "\"weapon_motion\", \"hologram_depth\"}") && hasIn(maskH, "WeaponMotion, HoloDepth, Count"),
+          "item 9: a clear bit skips the hologram pass, sets the eye to -1 inline, clears the flag and counts it; the enum and names end with hologram_depth");
+    check(hasIn(readFile("src/d3d11/binding_shadow.cpp"), "s.mayWant = 0xFF;   // a cleared shader slot must not keep a stale may-want byte"),
+          "item 9: bindingInvalidate resets the may-want byte");
+}
+
 static void ruleTests() {
+    // The decision of the legacy canopy's route (ui_layer_math.h).
+    check(uiLegacyGlassHalfRes(4032, 4034, 2016, 2017), "VR at 50 percent: the layer is twice the target on both axes, so the half route");
+    check(!uiLegacyGlassHalfRes(3840, 2160, 3840, 2160), "flat at 1:1 keeps the full route");
+    check(uiLegacyGlassHalfRes(3024, 3024, 2016, 2016) && !uiLegacyGlassHalfRes(3023, 3024, 2016, 2016) && !uiLegacyGlassHalfRes(3024, 3023, 2016, 2016),
+          "the threshold is 1.5 times the target on BOTH axes, inclusive: one pixel short on either axis is the full route");
+    check(!uiLegacyGlassHalfRes(4032, 2016, 2016, 2016) && !uiLegacyGlassHalfRes(2016, 4032, 2016, 2016), "twice on one axis and 1:1 on the other is the full route");
+    check(!uiLegacyGlassHalfRes(0, 4034, 2016, 2017) && !uiLegacyGlassHalfRes(4032, 4034, 0, 2017) && !uiLegacyGlassHalfRes(4032, 0, 2016, 2017) && !uiLegacyGlassHalfRes(4032, 4034, 2016, 0),
+          "a zero size on any side is the full route");
+    check(uiLegacyGlassHalfRes(0xFFFFFFFFu, 0xFFFFFFFFu, 1, 1), "the arithmetic does not overflow on large layers");
     check(kWeaponPairCount == 3, "three weapons-fire pairs");
     for (size_t i = 0; i < kWeaponPairCount; ++i) {
         const WeaponPair& p = kWeaponPairs[i];
@@ -100,7 +635,7 @@ static void ruleTests() {
         check(uiLayerFamilyFor(ldr) == UiLayerFamily::kNone, "no eye target, no family");
     }
     // The shield's refracting partner (820E/6EAA) is NOT a weapons-fire row and never goes into the weapons layer (it samples the pre-DLSS eye HDR copy at the
-    // screen UV); since the shield ripple arc it is the family kShieldRipple, taken into its own displacement layer under fix.sharp_weapons (shield_ripple_test).
+    // screen UV); since the shield ripple arc it is the family kShieldRipple, taken into its own displacement layer (shield_ripple_test).
     check(uiLayerFamilyFor(hdrFacts(0x820E5C131B99361Dull, 0x6EAA86EFE135B2D4ull)) == UiLayerFamily::kShieldRipple,
           "the shield's refracting partner (820E/6EAA) is the shield-ripple family, not weapons fire");
     check(weaponPairIndex(0x820E5C131B99361Dull, 0x6EAA86EFE135B2D4ull) < 0, "...and not in the weapons-fire pair table");
@@ -122,10 +657,15 @@ static void ruleTests() {
     lines.family = UiLayerFamily::kOrbitLines;
     check(uiLayerDecide(lines) == UiLayerDecision::kNoDensityGain, "control: the same facts decline a scene line");
     // Last in the enums: no older number moved.
-    check(static_cast<int>(UiLayerFamily::kWeaponsFire) == static_cast<int>(UiLayerFamily::kMapSprite) + 1 &&
+    check(static_cast<int>(UiLayerFamily::kWeaponsFire) == static_cast<int>(UiLayerFamily::kOnFootHud) + 1 &&
               static_cast<int>(UiLayerFamily::kShieldRipple) == static_cast<int>(UiLayerFamily::kWeaponsFire) + 1 &&
-              static_cast<int>(UiLayerFamily::kShieldRipple) + 1 == static_cast<int>(UiLayerFamily::kCount),
-          "the family is last but one in its enum, the shield ripple last (no older number moved)");
+              static_cast<int>(UiLayerFamily::kScopeMark) == static_cast<int>(UiLayerFamily::kShieldRipple) + 1 &&
+              static_cast<int>(UiLayerFamily::kNormalSpaceDust) == static_cast<int>(UiLayerFamily::kScopeMark) + 1 &&
+              static_cast<int>(UiLayerFamily::kNormalSpaceDust) + 1 == static_cast<int>(UiLayerFamily::kMapMarks) &&
+              static_cast<int>(UiLayerFamily::kMapMarks) + 1 == static_cast<int>(UiLayerFamily::kMapPlane) &&
+              static_cast<int>(UiLayerFamily::kMapGrid) + 1 == static_cast<int>(UiLayerFamily::kLegacyGlass) &&
+              static_cast<int>(UiLayerFamily::kLegacyGlass) + 1 == static_cast<int>(UiLayerFamily::kCount),
+          "the weapons fire, the shield ripple and the scope mark follow the on-foot HUD in that order, the normal-space dust (2026-11-03), the map marks (2026-11-04), the System Map's plane icons and grid and the legacy canopy (2026-11-05) last (no older number moved)");
     check(static_cast<int>(UiLayerDecision::kFamilyOff) == static_cast<int>(UiLayerDecision::kLayerFailed) + 1 &&
               static_cast<int>(UiLayerDecision::kFamilyOff) + 1 == static_cast<int>(UiLayerDecision::kCount) && static_cast<int>(UiLayerDecision::kCount) <= 24,
           "the new decision is last in its enum and the 24-wide tables hold it");
@@ -147,35 +687,18 @@ static void ruleTests() {
               "an unjittered pair set false in the table takes no cancel and leaves the others alone");
     }
 
-    // The key's words: on | plain | off, the old spellings of on and off, and the mapping onto the composite and the route.
-    bool known = true;
-    check(sharpWeaponsParse("on", &known) == SharpWeapons::kOn && known, "on");
-    check(sharpWeaponsParse("plain", &known) == SharpWeapons::kPlain && known, "plain");
-    check(sharpWeaponsParse("off", &known) == SharpWeapons::kOff && known, "off");
-    check(sharpWeaponsParse("true", &known) == SharpWeapons::kOn && known && sharpWeaponsParse("Yes", &known) == SharpWeapons::kOn && known && sharpWeaponsParse("1", &known) == SharpWeapons::kOn && known,
-          "the old spellings of on (true, yes, 1, any case) stay on, silently");
-    check(sharpWeaponsParse("false", &known) == SharpWeapons::kOff && known && sharpWeaponsParse("NO", &known) == SharpWeapons::kOff && known && sharpWeaponsParse("0", &known) == SharpWeapons::kOff && known,
-          "the old spellings of off (false, no, 0) stay off, silently");
-    check(sharpWeaponsParse("matched", &known) == SharpWeapons::kOn && !known, "anything else (the old blend word included) reads as on, and says it was not recognised");
-    check(sharpWeaponsParse("", &known) == SharpWeapons::kOn && !known, "an empty value reads as on");
-    check(sharpWeaponsParse(nullptr, &known) == SharpWeapons::kOn && !known, "no value reads as on");
-    check(sharpWeaponsTakes(SharpWeapons::kOn) && sharpWeaponsTakes(SharpWeapons::kPlain) && !sharpWeaponsTakes(SharpWeapons::kOff),
-          "on and plain take the weapons fire (and the ripple); off leaves all of it in the scene");
-    check(sharpWeaponsBlend(SharpWeapons::kOn) == SharpBlend::kMatched && sharpWeaponsBlend(SharpWeapons::kPlain) == SharpBlend::kPlain,
-          "on is the matched composite, plain the plain add");
-    check(std::strcmp(sharpBlendName(SharpBlend::kMatched), "matched") == 0 && std::strcmp(sharpBlendName(SharpBlend::kPlain), "plain") == 0,
-          "the words the log prints are the composite's");
 }
 
-// ============================================================================================ the two keys
+// ============================================================================================ the two halves
 static void keyTests() {
-    // The family gate over the four combinations, every family: the weapons fire follows fix.sharp_weapons alone, every other family fix.ui_quality alone.
+    // The family gate over the four combinations, every family: the weapons fire follows its own half alone, every other family fix.ui_quality alone.
     for (int q = 0; q < 2; ++q) {
         for (int s = 0; s < 2; ++s) {
             for (size_t f = 1; f < static_cast<size_t>(UiLayerFamily::kCount); ++f) {
                 const UiLayerFamily fam = static_cast<UiLayerFamily>(f);
                 const bool on = uiLayerFamilyEnabled(fam, q != 0, s != 0);
-                check(on == (fam == UiLayerFamily::kWeaponsFire ? s != 0 : fam == UiLayerFamily::kShieldRipple ? true : q != 0), "a family is enabled by its own key and by no other (the ripple, asked without its key, defaults on)");
+                check(on == (fam == UiLayerFamily::kWeaponsFire || fam == UiLayerFamily::kScopeMark || fam == UiLayerFamily::kLegacyGlass ? s != 0 : fam == UiLayerFamily::kShieldRipple ? true : q != 0),
+                      "a family is enabled by its own half and by no other (the scope mark rides the weapons layer, so it is the weapons half's; the ripple, asked without its half, defaults on)");
                 UiLayerDrawFacts d;
                 d.family = fam;
                 d.familyEnabled = on;
@@ -202,19 +725,17 @@ static void keyTests() {
     }
     // Liveness: the layer's machinery runs when either half is live; the interface-only parts follow fix.ui_quality.
     for (int q = 0; q < 2; ++q) {
-        for (int s = 0; s < 2; ++s) {
-            for (int t = 0; t < 2; ++t) {
-                const float target = q ? 1.0f : 0.0f;
-                const bool quality = uiLayerLiveFor(target, t != 0, true, false);
-                const bool weapons = uiLayerWeaponsLiveFor(s != 0, t != 0, true, false);
-                check(quality == (q && t), "fix.ui_quality's half is live for its key and a temporal mode, whatever fix.sharp_weapons says");
-                check(weapons == (s && t), "fix.sharp_weapons' half is live for its key and a temporal mode, whatever fix.ui_quality says");
-                check(uiLayerMachineryLive(quality, weapons) == ((q || s) && t), "the machinery runs when either half is live");
-                check(!uiLayerWeaponsLiveFor(s != 0, t != 0, true, true), "a stood-down layer is not live for the weapons");
-            }
+        for (int t = 0; t < 2; ++t) {
+            const float target = q ? 1.0f : 0.0f;
+            const bool quality = uiLayerLiveFor(target, t != 0, true, false);
+            const bool weapons = uiLayerWeaponsLiveFor(t != 0, true, false);
+            check(quality == (q && t), "fix.ui_quality's half is live for its key and a temporal mode, whatever the weapons fire says");
+            check(weapons == (t != 0), "the weapons fire's half is live for a temporal mode, whatever fix.ui_quality says");
+            check(uiLayerMachineryLive(quality, weapons) == (t != 0), "the machinery runs when either half is live");
+            check(!uiLayerWeaponsLiveFor(t != 0, true, true), "a stood-down layer is not live for the weapons");
         }
     }
-    // The four combinations end to end on the pure rules: the weapons rows are redirected iff fix.sharp_weapons is on, a HUD row iff fix.ui_quality is.
+    // The four combinations end to end on the pure rules: the weapons rows are redirected iff the weapons half is live, a HUD row iff fix.ui_quality is.
     for (int q = 0; q < 2; ++q) {
         for (int s = 0; s < 2; ++s) {
             UiLayerDrawFacts w;
@@ -229,8 +750,13 @@ static void keyTests() {
             h.family = UiLayerFamily::kFlightHud;
             h.familyEnabled = uiLayerFamilyEnabled(h.family, q != 0, s != 0);
             h.blend = UiBlendShape::kPremulOver;
-            check((uiLayerDecide(w) == UiLayerDecision::kRedirect) == (s != 0), "the weapons fire is taken iff fix.sharp_weapons is on");
+            check((uiLayerDecide(w) == UiLayerDecision::kRedirect) == (s != 0), "the weapons fire is taken iff its half is live");
             check((uiLayerDecide(h) == UiLayerDecision::kRedirect) == (q != 0), "the flight HUD is taken iff fix.ui_quality is on");
+            UiLayerDrawFacts m = w;
+            m.family = UiLayerFamily::kScopeMark;
+            m.familyEnabled = uiLayerFamilyEnabled(m.family, q != 0, s != 0);
+            m.blend = UiBlendShape::kAdditive;
+            check((uiLayerDecide(m) == UiLayerDecision::kRedirect) == (s != 0), "the scope mark is taken iff the weapons half is live, whatever fix.ui_quality says");
         }
     }
 }
@@ -238,7 +764,6 @@ static void keyTests() {
 // ============================================================================================ the plan
 struct PlanRef {
     bool hud, weapons;
-    SharpBlend mode;
     bool ready;
     uint8_t count;
     ToneStep steps[3];
@@ -246,21 +771,15 @@ struct PlanRef {
 };
 static const PlanRef kPlanRef[] = {
     // the HUD alone is the one replace it always was; nothing at all is nothing
-    {false, false, SharpBlend::kMatched, true, 0, {}, false, false, false},
-    {false, false, SharpBlend::kPlain, false, 0, {}, false, false, false},
-    {true, false, SharpBlend::kMatched, true, 1, {ToneStep::kHudReplace}, false, false, true},
-    {true, false, SharpBlend::kPlain, false, 1, {ToneStep::kHudReplace}, false, false, true},
-    {true, false, SharpBlend::kMatched, false, 1, {ToneStep::kHudReplace}, false, false, true},
-    // weapons alone
-    {false, true, SharpBlend::kMatched, true, 2, {ToneStep::kWeaponsBase, ToneStep::kWeaponsLit}, true, true, false},
-    {false, true, SharpBlend::kMatched, false, 1, {ToneStep::kWeaponsReplace}, true, false, false},
-    {false, true, SharpBlend::kPlain, true, 1, {ToneStep::kWeaponsReplace}, true, false, false},
-    {false, true, SharpBlend::kPlain, false, 1, {ToneStep::kWeaponsReplace}, true, false, false},
+    {false, false, true, 0, {}, false, false, false},
+    {true, false, true, 1, {ToneStep::kHudReplace}, false, false, true},
+    {true, false, false, 1, {ToneStep::kHudReplace}, false, false, true},
+    // weapons alone: the matched composite when its source pass is ready, the plain add (the fallback) when it is not
+    {false, true, true, 2, {ToneStep::kWeaponsBase, ToneStep::kWeaponsLit}, true, true, false},
+    {false, true, false, 1, {ToneStep::kWeaponsReplace}, true, false, false},
     // weapons first, the HUD added after
-    {true, true, SharpBlend::kMatched, true, 3, {ToneStep::kWeaponsBase, ToneStep::kWeaponsLit, ToneStep::kHudAdd}, true, true, true},
-    {true, true, SharpBlend::kMatched, false, 2, {ToneStep::kWeaponsReplace, ToneStep::kHudAdd}, true, false, true},
-    {true, true, SharpBlend::kPlain, true, 2, {ToneStep::kWeaponsReplace, ToneStep::kHudAdd}, true, false, true},
-    {true, true, SharpBlend::kPlain, false, 2, {ToneStep::kWeaponsReplace, ToneStep::kHudAdd}, true, false, true},
+    {true, true, true, 3, {ToneStep::kWeaponsBase, ToneStep::kWeaponsLit, ToneStep::kHudAdd}, true, true, true},
+    {true, true, false, 2, {ToneStep::kWeaponsReplace, ToneStep::kHudAdd}, true, false, true},
 };
 
 static bool planMatches(const TonePlan& p, const PlanRef& r) {
@@ -271,7 +790,7 @@ static bool planMatches(const TonePlan& p, const PlanRef& r) {
 }
 
 // The invariants a plan holds, independent of the table above: a mutant of the plan must fail one of them.
-static bool planInvariants(const TonePlan& p, bool hud, bool weapons, SharpBlend mode, bool ready) {
+static bool planInvariants(const TonePlan& p, bool hud, bool weapons, bool ready) {
     if (p.count > 3) return false;
     if (!hud && !weapons) return p.count == 0 && !p.clearEye && !p.sourcePass && !p.coverage;
     if (p.count == 0) return false;
@@ -298,7 +817,7 @@ static bool planInvariants(const TonePlan& p, bool hud, bool weapons, SharpBlend
     }
     if (sawHud != hud) return false;
     if (weapons) {
-        const bool matched = mode == SharpBlend::kMatched && ready;
+        const bool matched = ready;
         if (matched != (sawBase && sawLit) || matched == sawReplaceW) return false;
         if (p.sourcePass != matched || !p.clearEye) return false;
         if (toneStepWrite(ToneStep::kWeaponsLit) != ToneWrite::kSubtract || toneStepWrite(ToneStep::kWeaponsBase) != ToneWrite::kReplace) return false;
@@ -311,25 +830,23 @@ static bool planInvariants(const TonePlan& p, bool hud, bool weapons, SharpBlend
 
 static void planTests() {
     for (const PlanRef& r : kPlanRef) {
-        const TonePlan p = sharpTonePlan(r.hud, r.weapons, r.mode, r.ready);
+        const TonePlan p = sharpTonePlan(r.hud, r.weapons, r.ready);
         check(planMatches(p, r), "the plan equals the frozen table");
-        check(planInvariants(p, r.hud, r.weapons, r.mode, r.ready), "the plan holds its invariants");
+        check(planInvariants(p, r.hud, r.weapons, r.ready), "the plan holds its invariants");
     }
-    // Every (hud, weapons, mode, ready) combination holds the invariants (the table above is a subset).
+    // Every (hud, weapons, ready) combination holds the invariants (the table above is a subset).
     for (int h = 0; h < 2; ++h)
         for (int w = 0; w < 2; ++w)
-            for (int m = 0; m < 2; ++m)
-                for (int rdy = 0; rdy < 2; ++rdy)
-                    check(planInvariants(sharpTonePlan(h != 0, w != 0, m ? SharpBlend::kPlain : SharpBlend::kMatched, rdy != 0), h != 0, w != 0,
-                                         m ? SharpBlend::kPlain : SharpBlend::kMatched, rdy != 0),
-                          "every combination holds the plan's invariants");
+            for (int rdy = 0; rdy < 2; ++rdy)
+                check(planInvariants(sharpTonePlan(h != 0, w != 0, rdy != 0), h != 0, w != 0, rdy != 0),
+                      "every combination holds the plan's invariants");
     // The plan's mutants, each caught by an invariant (the matched weapons-and-HUD plan, mutated one token at a time).
-    const TonePlan base = sharpTonePlan(true, true, SharpBlend::kMatched, true);
-    check(planInvariants(base, true, true, SharpBlend::kMatched, true), "control: the real plan passes");
+    const TonePlan base = sharpTonePlan(true, true, true);
+    check(planInvariants(base, true, true, true), "control: the real plan passes");
     auto mut = [&](auto edit) {
         TonePlan p = base;
         edit(p);
-        return planInvariants(p, true, true, SharpBlend::kMatched, true);
+        return planInvariants(p, true, true, true);
     };
     check(!mut([](TonePlan& p) { p.steps[2] = ToneStep::kHudReplace; }), "mutant: the HUD replaces the weapons' light after them");
     check(!mut([](TonePlan& p) { std::swap(p.steps[0], p.steps[1]); }), "mutant: the lit term before the base term");
@@ -457,7 +974,8 @@ static UiBlendRt blendOf(const Row& r) {
     return b;
 }
 
-// The family rule as it stood before this arc (uiLayerFamilyFor at 139a6ff2, the tree this work started from), frozen: no weapons-fire pair.
+// The family rule as it stood before this arc (uiLayerFamilyFor at 139a6ff2, the tree this work started from), frozen: no weapons-fire pair. The normal-space dust's pair
+// (2026-11-03) is in the frozen model too: it is not this arc's change, so the census below still shows exactly the weapons rows and the refraction rows changing.
 static UiLayerFamily frozenFamilyFor(const UiFamilyFacts& f) {
     UiLayerFamily out = UiLayerFamily::kNone;
     if (f.targetKind == 0) {
@@ -468,6 +986,7 @@ static UiLayerFamily frozenFamilyFor(const UiFamilyFacts& f) {
               : (f.vs == kUiVsOrbitLines && f.ps == kUiPsOrbitLines)           ? UiLayerFamily::kOrbitLines
               : (f.vs == kUiVsSupercruiseBars && f.ps == kUiPsSupercruiseBars) ? UiLayerFamily::kSupercruiseBars
               : (f.vs == kUiVsSpaceDust && f.ps == kUiPsSpaceDust)             ? UiLayerFamily::kSpaceDust
+              : (f.vs == kVsNormalSpaceDust && f.ps == kPsNormalSpaceDust)     ? UiLayerFamily::kNormalSpaceDust
               : (uiHoloGenericHash(f.vs) || (f.vs == kHoloTargetSphere && (f.ps == 0xEA02FAC2BD6C643Cull || f.ps == 0xE95634B0F61D218Full)))
                   ? UiLayerFamily::kHoloGeneric : UiLayerFamily::kNone;
     } else if (f.excluded) {
@@ -498,7 +1017,7 @@ struct Tweak {
     int kind = -1;
     bool dsUnreproducible = false;
     bool lateTone = false;
-    bool qualityOn = true, sharpOn = true;
+    bool qualityOn = true, weaponsOn = true;
 };
 struct Verdict {
     UiLayerFamily family = UiLayerFamily::kNone;
@@ -528,7 +1047,7 @@ static Verdict verdictOf(const Census& c, const Row& r, bool production, const T
     g.eye = 0;
     g.armed = true;
     g.lateTone = t.lateTone && g.crispHdr;
-    g.familyEnabled = production ? uiLayerFamilyEnabled(v.family, t.qualityOn, t.sharpOn) : true;
+    g.familyEnabled = production ? uiLayerFamilyEnabled(v.family, t.qualityOn, t.weaponsOn) : true;
     const UiDsEffect effect = uiLayerDsEffect(dsStateOf(r, dsv), dsv != nullptr);
     g.ds = effect;
     g.dsReproducible = !t.dsUnreproducible;
@@ -540,9 +1059,9 @@ static Verdict verdictOf(const Census& c, const Row& r, bool production, const T
 
 static bool isWeaponRow(const Row& r) { return weaponPairIndex(r.vs, r.ps) >= 0; }
 
-static void censusTests(const char* path, unsigned weaponRows, unsigned partnerRows) {
+static void censusTests(const char* path, unsigned weaponRows, unsigned partnerRows, unsigned normalDustRows) {
     const Census c = loadCensus(path);
-    unsigned weapons = 0, partners = 0, changed = 0, same = 0;
+    unsigned weapons = 0, partners = 0, normalDust = 0, changed = 0, same = 0;
     std::map<UiLayerFamily, unsigned> otherTaken;
     for (const Row& r : c.rows) {
         const Verdict was = verdictOf(c, r, false), now = verdictOf(c, r, true);
@@ -559,12 +1078,19 @@ static void censusTests(const char* path, unsigned weaponRows, unsigned partnerR
             ++changed;
         } else {
             check(now.family == was.family && now.decision == was.decision, "every other row is decided exactly as before");
+            // 2026-11-03: the census's normal-space dust rows (E904/0950: a 3072-vertex additive SRC_ALPHA/ONE draw, depth GEQUAL no write, stencil EQUAL) are the
+            // family and are redirected into the HDR layer under the key's default (the layer's depth and stencil seeded: dsReproducible).
+            if (r.vs == kVsNormalSpaceDust && r.ps == kPsNormalSpaceDust) {
+                ++normalDust;
+                check(now.family == UiLayerFamily::kNormalSpaceDust && now.decision == UiLayerDecision::kRedirect, "a normal-space dust row is the family and is redirected into the HDR layer");
+            }
             ++same;
             if (now.decision == UiLayerDecision::kRedirect) ++otherTaken[now.family];
         }
     }
     check(weapons == weaponRows, "the census frame holds the weapons rows the log counted");
     check(partners == partnerRows, "...and the shield's refraction rows");
+    check(normalDust == normalDustRows, "...and the normal-space dust rows");
     check(changed == weapons + partners && same + changed == c.rows.size(), "exactly the weapons rows and the shield-refraction rows change decision");
 
     // One-token mutants of the first weapons row: each is refused for the right reason, or is no longer the family.
@@ -595,20 +1121,20 @@ static void censusTests(const char* path, unsigned weaponRows, unsigned partnerR
         t.lateTone = true;
         check(verdictOf(c, *w, true, t).decision == UiLayerDecision::kToneLate, "mutant: a late tonemap is refused");
         t = Tweak{};
-        t.sharpOn = false;
-        check(verdictOf(c, *w, true, t).decision == UiLayerDecision::kFamilyOff, "mutant: fix.sharp_weapons off is refused for its key");
+        t.weaponsOn = false;
+        check(verdictOf(c, *w, true, t).decision == UiLayerDecision::kFamilyOff, "mutant: a weapons fire whose half is not live is refused for its half");
         t = Tweak{};
         t.qualityOn = false;
         check(verdictOf(c, *w, true, t).decision == UiLayerDecision::kRedirect, "fix.ui_quality off does not refuse the weapons fire");
     }
 
-    // The four key combinations over the whole frame: the weapons rows follow fix.sharp_weapons, every other row fix.ui_quality (a row another family names
-    // is redirected exactly when it was, iff fix.ui_quality is on; with it off it is refused for the key).
+    // The four combinations of the two halves' live states over the whole frame: the weapons rows follow their own half, every other row fix.ui_quality (a row
+    // another family names is redirected exactly when it was, iff fix.ui_quality is on; with it off it is refused for its half).
     for (int q = 0; q < 2; ++q) {
         for (int s = 0; s < 2; ++s) {
             Tweak t;
             t.qualityOn = q != 0;
-            t.sharpOn = s != 0;
+            t.weaponsOn = s != 0;
             for (const Row& r : c.rows) {
                 const Verdict base = verdictOf(c, r, true);
                 const Verdict v = verdictOf(c, r, true, t);
@@ -616,11 +1142,11 @@ static void censusTests(const char* path, unsigned weaponRows, unsigned partnerR
                     check(v.decision == UiLayerDecision::kNotUi, "a row no family names is not UI under any key");
                 } else if (v.family == UiLayerFamily::kWeaponsFire) {
                     check((v.decision == UiLayerDecision::kRedirect) == (s != 0) && (v.decision == UiLayerDecision::kFamilyOff) == (s == 0),
-                          "a weapons row is redirected iff fix.sharp_weapons is on, and refused for the key iff it is off");
+                          "a weapons row is redirected iff its half is live, and refused for the half iff it is not");
                 } else if (v.family == UiLayerFamily::kShieldRipple) {
-                    check(v.decision == UiLayerDecision::kRedirect, "the shield-refraction rows follow the ripple's own half (fix.sharp_weapons's, stood down alone), not fix.ui_quality's, whatever the two say here");
+                    check(v.decision == UiLayerDecision::kRedirect, "the shield-refraction rows follow the ripple's own half (stood down alone), not fix.ui_quality's, whatever the two say here");
                 } else if (q) {
-                    check(v.decision == base.decision, "with fix.ui_quality on every other row is decided as it was, whatever fix.sharp_weapons says");
+                    check(v.decision == base.decision, "with fix.ui_quality on every other row is decided as it was, whatever the weapons half says");
                 } else {
                     check(v.decision == UiLayerDecision::kFamilyOff || base.decision == UiLayerDecision::kVerdict, "with fix.ui_quality off every other family is refused for its key");
                 }
@@ -641,23 +1167,30 @@ static bool before(const std::string& t, const std::string& a, const std::string
     return i != std::string::npos && j != std::string::npos && i < j;
 }
 
-static bool wiredKeys(const std::string& t) {
-    return has(t, "cfg.getString(\"fix.sharp_weapons\", \"on\")") && has(t, "const SharpWeapons sharpMode = sharpWeaponsParse(sharpText.c_str(), &sharpKnown);") &&
-           has(t, "const bool sharp = sharpWeaponsTakes(sharpMode);") && has(t, "const SharpBlend blend = sharpWeaponsBlend(sharpMode);") && !has(t, "advanced.sharp_weapons_blend\", ");
+// The weapons fire has no setting: no read of a key for it, no parse, no off or plain branch, and no second key. The layer's weapons half is live with
+// a temporal mode alone.
+static bool wiredNoKey(const std::string& t) {
+    return has(t, "bool g_weaponsLive = false;") && !has(t, "fix.sharp_weapons") && !has(t, "advanced.sharp_weapons_blend") && !has(t, "sharpWeaponsParse") &&
+           !has(t, "sharpWeaponsTakes") && !has(t, "sharpWeaponsBlend") && !has(t, "SharpWeapons::") && !has(t, "SharpBlend") && !has(t, "g_sharpWeapons") &&
+           !has(t, "g_sharpBlend") && !has(t, "sharpBlendName");
 }
-// The two halves are computed apart: fix.ui_quality's from its key alone, the weapons' from fix.sharp_weapons alone; the machinery is their union.
+// The two halves are computed apart: fix.ui_quality's from its key alone, the weapons' from a temporal mode alone; the machinery is their union.
 static bool wiredLiveness(const std::string& t) {
     return has(t, "const bool quality = uiLayerLiveFor(g_target, g_temporal, g_jitterAsShipped, g_stoodDown);") &&
-           has(t, "g_weaponsLive = uiLayerWeaponsLiveFor(g_sharpWeapons, g_temporal, g_jitterAsShipped, g_stoodDown || g_weaponsStoodDown);") &&
+           has(t, "g_weaponsLive = uiLayerWeaponsLiveFor(g_temporal, g_jitterAsShipped, g_stoodDown || g_weaponsStoodDown);") &&
            has(t, "detail::g_uiQualityLive = quality;") && has(t, "detail::g_uiLayerLive = uiLayerMachineryLive(quality, g_weaponsLive || g_rippleLive);") &&
            before(t, "const bool quality = uiLayerLiveFor(", "detail::g_uiLayerLive = uiLayerMachineryLive(");
 }
 static bool wiredDecision(const std::string& t) {
     return has(t, "f.familyEnabled = uiLayerFamilyEnabled(family, detail::g_uiQualityLive, g_weaponsLive, g_rippleLive);") &&
-           has(t, "family == UiLayerFamily::kWeaponsFire\n                    ? weaponsTakeReady(ctx, f.eye)") &&
-           has(t, "const bool cancel = !g_draw.weapons || weaponsFireJitterCancel(g_draw.vsHash);") &&
-           has(t, "g_draw.jx = cancel ? jx : 0.0f;") && has(t, "g_draw.weapons = family == UiLayerFamily::kWeaponsFire;") &&
-           before(t, "f.familyEnabled = uiLayerFamilyEnabled(", "UiLayerDecision d = uiLayerDecide(f);");
+           has(t, "uiLayerFamilyUsesWeaponsLayer(family)\n                    ? weaponsTakeReady(ctx, f.eye, family == UiLayerFamily::kScopeMark)") &&
+           has(t, "const bool cancel = !g_draw.weapons || family == UiLayerFamily::kLegacyGlass || weaponsFireJitterCancel(g_draw.vsHash);") &&
+           has(t, "g_draw.jx = cancel ? jx : 0.0f;") && has(t, "g_draw.weapons = uiLayerFamilyUsesWeaponsLayer(family);") &&
+           // the mark's stand-down of its own, for the press it happened in, after the half gate and before the decision
+           has(t, "if (family == UiLayerFamily::kScopeMark && markStoodDown()) f.familyEnabled = false;") &&
+           has(t, "bool markStoodDown() { return g_markDown.active(scopeZoomPressId()); }") &&
+           before(t, "f.familyEnabled = uiLayerFamilyEnabled(", "if (family == UiLayerFamily::kScopeMark && markStoodDown()) f.familyEnabled = false;") &&
+           before(t, "if (family == UiLayerFamily::kScopeMark && markStoodDown()) f.familyEnabled = false;", "UiLayerDecision d = uiLayerDecide(f);");
 }
 // The interface-only parts keep fix.ui_quality's liveness.
 static bool wiredQualityOnly(const std::string& t) {
@@ -668,15 +1201,15 @@ static bool wiredQualityOnly(const std::string& t) {
            before(t, "    seedWritersCheck(ctx, count, instances, verdict, drawKind);\n", "    if (!detail::g_uiQualityLive) return false;\n    if (!taken[0] && !taken[1]) return false;");
 }
 static bool wiredVscreen(const std::string& t) {
-    const size_t fn = t.find("UiLayerFamily uiLayerFamilyOf(State* s, char kind, UINT count) {");
+    const size_t fn = t.find("UiLayerFamily uiLayerFamilyOf(State* s, char kind, UINT count, UINT instances) {");
     if (fn == std::string::npos) return false;
     const size_t skip = t.find("if (f.targetKind == 2 && !uiLayerQualityLive()) return UiLayerFamily::kNone;", fn);
     const size_t vs = t.find("f.vs = bindingShaderHash(BindSlot::Vs);", fn);
     const size_t ps = t.find("else if (f.targetKind == 1 && (weaponsFireVs(f.vs) || shieldRefractVs(f.vs)))", fn);
     if (skip == std::string::npos || vs == std::string::npos || ps == std::string::npos || !(skip < vs) || !(vs < ps)) return false;
     // the steps loop: after the game's tonemap draw is re-issued once, before the layer's End
-    const size_t loop = t.find("while (uiLayerCrispToneNext(self)) pureDrawReissue(self, kind, count, instances, args);");
-    const size_t first = t.rfind("pureDrawReissue(self, kind, count, instances, args);", loop);
+    const size_t loop = t.find("while (uiLayerCrispToneNext(self)) pureDrawReissue(ReissueCaller::Tonemap, self, kind, count, instances, args);");
+    const size_t first = t.rfind("pureDrawReissue(ReissueCaller::CrispHud, self, kind, count, instances, args);", loop);
     const size_t end = t.find("uiLayerCrispToneEnd(self);", loop);
     return loop != std::string::npos && first != std::string::npos && end != std::string::npos && first < loop && loop < end &&
            has(t, "} else if (owner && uiLayerQualityLive() && v != DrawVerdict::kQuadSkip) {");
@@ -692,8 +1225,7 @@ static bool wiredSnapshot(const std::string& t) {
     return true;
 }
 static bool wiredIni(const std::string& t) {
-    return has(t, "\nsharp_weapons = on\n") && has(t, "# ui: Sharp weapons | choices on=On, plain=On (plain blend), off=Off (stock) | live | menu performance") &&
-           !has(t, "sharp_weapons_blend = ") && !has(t, "shield_ripple");
+    return !has(t, "sharp_weapons") && !has(t, "Sharp weapons") && !has(t, "shield_ripple");
 }
 
 static void lostPins(const std::string& layer);   // below, with the instrument it pins
@@ -702,27 +1234,29 @@ static void wiringTests() {
                       ini = readFile("edvr.ini");
     check(layer.size() > 100000 && vscreen.size() > 100000 && snap.size() > 1000 && ini.size() > 10000, "the sources are readable from the repo root");
 
-    check(wiredKeys(layer), "ui_layer.cpp reads fix.sharp_weapons as one word (default on), on = matched, plain = plain, off = stock, and no second key");
-    check(!wiredKeys(replaced(layer, "cfg.getString(\"fix.sharp_weapons\", \"on\")", "cfg.getString(\"fix.sharp_weapons\", \"off\")")), "control: a key that defaults off trips the pin");
-    check(!wiredKeys(replaced(layer, "const SharpBlend blend = sharpWeaponsBlend(sharpMode);", "const SharpBlend blend = SharpBlend::kMatched;")), "control: a plain that is never plain trips the pin");
-    check(!wiredKeys(replaced(layer, "const bool sharp = sharpWeaponsTakes(sharpMode);", "const bool sharp = true;")), "control: an off that is never off trips the pin");
-    check(!wiredKeys(layer + "\ncfg.getString(\"advanced.sharp_weapons_blend\", \"matched\");"), "control: a surviving second key trips the pin");
+    check(wiredNoKey(layer), "ui_layer.cpp: the weapons fire has no key, no parse and no off or plain branch");
+    check(!wiredNoKey(layer + "\ncfg.getString(\"fix.sharp_weapons\", \"on\");"), "control: a surviving key read trips the pin");
+    check(!wiredNoKey(layer + "\ncfg.getString(\"advanced.sharp_weapons_blend\", \"matched\");"), "control: a surviving second key trips the pin");
 
     check(wiredLiveness(layer), "ui_layer.cpp: fix.ui_quality's half and the weapons' half are computed apart and the machinery is their union");
     check(!wiredLiveness(replaced(layer, "const bool quality = uiLayerLiveFor(g_target, g_temporal, g_jitterAsShipped, g_stoodDown);",
-                                  "const bool quality = uiLayerLiveFor(g_sharpWeapons ? 1.0f : g_target, g_temporal, g_jitterAsShipped, g_stoodDown);")),
-          "control: a ui_quality half that follows the weapons' key trips the pin");
+                                  "const bool quality = uiLayerLiveFor(g_weaponsLive ? 1.0f : g_target, g_temporal, g_jitterAsShipped, g_stoodDown);")),
+          "control: a ui_quality half that follows the weapons' half trips the pin");
     check(!wiredLiveness(replaced(layer, "detail::g_uiLayerLive = uiLayerMachineryLive(quality, g_weaponsLive || g_rippleLive);", "detail::g_uiLayerLive = quality;")),
           "control: a machinery that ignores the weapons' half trips the pin");
     check(!wiredLiveness(replaced(layer, "detail::g_uiQualityLive = quality;", "detail::g_uiQualityLive = detail::g_uiLayerLive;")),
           "control: a quality flag that is the union trips the pin");
 
-    check(wiredDecision(layer), "ui_layer.cpp: the decision gates each family by its own key, takes the weapons through their own readiness and cancels by the table");
-    check(!wiredDecision(replaced(layer, "f.familyEnabled = uiLayerFamilyEnabled(family, detail::g_uiQualityLive, g_weaponsLive, g_rippleLive);", "f.familyEnabled = true;")), "control: no key gate trips the pin");
+    check(wiredDecision(layer), "ui_layer.cpp: the decision gates each family by its own half, takes the weapons through their own readiness and cancels by the table");
+    check(!wiredDecision(replaced(layer, "f.familyEnabled = uiLayerFamilyEnabled(family, detail::g_uiQualityLive, g_weaponsLive, g_rippleLive);", "f.familyEnabled = true;")), "control: no half gate trips the pin");
     check(!wiredDecision(replaced(layer, "uiLayerFamilyEnabled(family, detail::g_uiQualityLive, g_weaponsLive, g_rippleLive)", "uiLayerFamilyEnabled(family, detail::g_uiLayerLive, g_weaponsLive, g_rippleLive)")),
           "control: a ui_quality gate that reads the union trips the pin");
     check(!wiredDecision(replaced(layer, "g_draw.jx = cancel ? jx : 0.0f;", "g_draw.jx = jx;")), "control: a cancel that ignores the table trips the pin");
     check(!wiredDecision(replaced(layer, "weaponsFireJitterCancel(g_draw.vsHash)", "true")), "control: a table that is never read trips the pin");
+    check(!wiredDecision(replaced(layer, "g_draw.weapons = uiLayerFamilyUsesWeaponsLayer(family);", "g_draw.weapons = family == UiLayerFamily::kWeaponsFire;")), "control: a mark that is not drawn into the weapons layer trips the pin");
+    check(!wiredDecision(replaced(layer, "if (family == UiLayerFamily::kScopeMark && markStoodDown()) f.familyEnabled = false;", "")), "control: a mark with no stand-down of its own trips the pin");
+    check(!wiredDecision(replaced(layer, "bool markStoodDown() { return g_markDown.active(scopeZoomPressId()); }", "bool markStoodDown() { return g_markDown.down; }")),
+          "control: a mark stand-down that does not lapse with the press trips the pin");
 
     check(wiredQualityOnly(layer), "ui_layer.cpp: the world route, the on-foot gate and the after-UI take stay fix.ui_quality's");
     check(!wiredQualityOnly(replaced(layer, "bool uiLayerLiveForWorldRoute() { return detail::g_uiQualityLive; }", "bool uiLayerLiveForWorldRoute() { return detail::g_uiLayerLive; }")),
@@ -733,27 +1267,20 @@ static void wiringTests() {
     check(wiredVscreen(vscreen), "vscreen.cpp: the pixel shader is read for the weapons' vertex shaders, the post-tonemap rules wait for fix.ui_quality, the steps are issued");
     check(!wiredVscreen(replaced(vscreen, "else if (f.targetKind == 1 && (weaponsFireVs(f.vs) || shieldRefractVs(f.vs)))", "else if (f.targetKind == 1 && false)")), "control: no pixel shader read for the pairs trips the pin");
     check(!wiredVscreen(replaced(vscreen, "if (f.targetKind == 2 && !uiLayerQualityLive()) return UiLayerFamily::kNone;", "")), "control: post-tonemap rules that run for the weapons trip the pin");
-    check(!wiredVscreen(replaced(vscreen, "while (uiLayerCrispToneNext(self)) pureDrawReissue(self, kind, count, instances, args);", "")), "control: no loop over the steps trips the pin");
+    check(!wiredVscreen(replaced(vscreen, "while (uiLayerCrispToneNext(self)) pureDrawReissue(ReissueCaller::Tonemap, self, kind, count, instances, args);", "")), "control: no loop over the steps trips the pin");
 
     check(wiredSnapshot(snap), "eye_draw_snapshot.h: the next eye dump watches the three weapons-fire vertex shaders (their constant buffers settle W3)");
     check(!wiredSnapshot(replaced(snap, "case 0x939D01F28D1FEEA8ull: // multicannon rounds\n", "")), "control: an unwatched pair trips the pin");
 
     lostPins(layer);
-    {
-        const size_t at = ini.find("\nsharp_weapons = on\n");
-        const size_t from = ini.rfind("# Draw the ships' weapons fire sharp.", at);
-        const std::string seg = (at != std::string::npos && from != std::string::npos) ? ini.substr(from, at - from) : std::string();
-        check(!seg.empty() && has(seg, "shield-strike ripple"), "edvr.ini: fix.sharp_weapons says it covers the shield-strike ripple");
-        check(has(seg, "plain shades the light alone") && has(seg, "off leaves all of it"), "...and says what on, plain and off do");
-    }
-    check(wiredIni(ini), "edvr.ini documents fix.sharp_weapons (on | plain | off, with one menu row), no second key and no ripple key");
-    check(!wiredIni(replaced(ini, "\nsharp_weapons = on\n", "\nsharp_weapons = off\n")), "control: a key that ships off trips the pin");
+    check(wiredIni(ini), "edvr.ini has no weapons fire setting (retired: always on), no second key and no ripple key");
+    check(!wiredIni(ini + "\nsharp_weapons = off\n"), "control: a setting line trips the pin");
 }
 
 // ============================================================================================ the flat profile
-// fix.sharp_weapons covers both profiles (2026-10-16): the flat adapter (flat_ui_layer.cpp) asks the shared decision for the weapons fire and the shield
+// The weapons fire covers both profiles (2026-10-16): the flat adapter (flat_ui_layer.cpp) asks the shared decision for the weapons fire and the shield
 // refraction when their half of the layer is live, whatever fix.ui_quality says, leaves the HUD alone when only the weapons are live, runs the tone bracket's
-// steps, and hands the door the fact that the picture is EDVR's resolve. The key is on flat's allow-list and its row sits under UI quality on the flat panel.
+// steps, and hands the door the fact that the picture is EDVR's resolve. The weapons fire has no flat allow-list entry or panel row (retired 2026-10-28).
 static bool wiredFlat(const std::string& adapter, const std::string& runtimeH, const std::string& keys) {
     return has(adapter, "if (!flatUiFamilyLive(family, uiLayerQualityLive(), uiLayerWeaponsLive(), uiLayerRippleLive())) return g_lastAsk;") &&
            before(adapter, "if (!flatUiLayerTakesFamily(family)) return g_lastAsk;", "if (!flatUiFamilyLive(family,") &&
@@ -761,14 +1288,17 @@ static bool wiredFlat(const std::string& adapter, const std::string& runtimeH, c
            has(adapter, "uiLayerComposite(frame, 0, picture.Get(), region, uv, false, treated)") &&
            has(adapter, "bool flatUiLayerToneNext(ID3D11DeviceContext* ctx) {") && has(adapter, "return uiLayerCrispToneNext(ctx);") &&
            has(runtimeH, "if (uiTone && flatUiLayerToneBegin(ctx)) { issue(); while (flatUiLayerToneNext(ctx)) issue(); flatUiLayerToneEnd(ctx); }") &&
-           has(keys, "std::strcmp(key, \"fix.sharp_weapons\") == 0");
+           !has(keys, "fix.sharp_weapons");
 }
 static void flatTests() {
     // The family rule.
     check(flatUiLayerTakesFamily(UiLayerFamily::kWeaponsFire) && flatUiLayerTakesFamily(UiLayerFamily::kShieldRipple), "the flat adapter takes the weapons fire and the shield ripple");
-    check(flatUiLayerTakesFamily(UiLayerFamily::kFlightHud) && !flatUiLayerTakesFamily(UiLayerFamily::kHoloGeneric) && !flatUiLayerTakesFamily(UiLayerFamily::kOrbitLines) &&
-              !flatUiLayerTakesFamily(UiLayerFamily::kSpaceDust),
-          "...and still only the cockpit HUD families besides (not the holograms, not the scene lines)");
+    check(flatUiLayerTakesFamily(UiLayerFamily::kFlightHud) && !flatUiLayerTakesFamily(UiLayerFamily::kHoloGeneric),
+          "...and still the cockpit HUD families besides (not the holograms)");
+    // 2026-11-03: the supercruise bars, the two dusts and the orbit lines joined them (they blur under the flat anti-aliasing's history; ui_quality_test pins the rest).
+    check(flatUiLayerTakesFamily(UiLayerFamily::kSupercruiseBars) && flatUiLayerTakesFamily(UiLayerFamily::kSpaceDust) && flatUiLayerTakesFamily(UiLayerFamily::kNormalSpaceDust) &&
+              flatUiLayerTakesFamily(UiLayerFamily::kOrbitLines),
+          "...and, since 2026-11-03, the supercruise bars, the two dusts and the orbit lines");
     // The pairs name their family through the shared rule the flat adapter uses.
     check(flatUiFamilyOf(kUiVsWeaponBeams, kUiPsWeaponBeams) == UiLayerFamily::kWeaponsFire && flatUiFamilyOf(kUiVsMulticannon, kUiPsMulticannon) == UiLayerFamily::kWeaponsFire &&
               flatUiFamilyOf(kUiVsShieldStrike, kUiPsShieldStrike) == UiLayerFamily::kWeaponsFire,
@@ -784,16 +1314,57 @@ static void flatTests() {
                 check(flatUiFamilyLive(UiLayerFamily::kShieldRipple, q != 0, w != 0, r != 0) == (r != 0), "the shield ripple is asked when its half is live, whatever else says");
                 check(flatUiFamilyLive(UiLayerFamily::kFlightHud, q != 0, w != 0, r != 0) == (q != 0), "the HUD families are asked when fix.ui_quality's half is live and not otherwise");
                 check(flatUiFamilyLive(UiLayerFamily::kMapCanvas, q != 0, w != 0, r != 0) == (q != 0), "...the System Map's too");
+                check(flatUiFamilyLive(UiLayerFamily::kScopeMark, q != 0, w != 0, r != 0) == (w != 0) &&
+                          flatUiFamilyLive(UiLayerFamily::kScopeMark, q != 0, w != 0, r != 0) == uiLayerFamilyEnabled(UiLayerFamily::kScopeMark, q != 0, w != 0, r != 0),
+                      "the scope's gunsight mark rides the weapons half in flat's liveness too, as in the VR rule (one list: uiLayerFamilyUsesWeaponsLayer)");
             }
-    // The key and its row.
-    check(flatPageHasRow("fix", "sharp_weapons") && !flatPageHasRow("advanced", "sharp_weapons_blend"), "the flat panel has the Sharp weapons row and no Weapons blend row");
-    int quality = -1, sharp = -1;
+    check(!flatUiLayerTakesFamily(UiLayerFamily::kScopeMark), "...and flat never takes the mark: its lens is VR's, and the flat tick publishes none, so the family is never armed there");
+    // The legacy canopy (kLegacyGlass, 2026-11-05): the pair, named only with the legacy look live, taken into the weapons layer under the weapons half.
+    {
+        const UiLayerFamily g = UiLayerFamily::kLegacyGlass;
+        check(flatUiFamilyOf(kUiVsLegacyGlass, kUiPsLegacyGlass, true) == g && flatUiFamilyFor(kUiVsLegacyGlass, kUiPsLegacyGlass, false, true, true) == g,
+              "legacy: the canopy pair is the legacy glass family when the legacy look is live");
+        check(flatUiFamilyOf(kUiVsLegacyGlass, kUiPsLegacyGlass) == UiLayerFamily::kNone && flatUiFamilyOf(kUiVsLegacyGlass, kUiPsLegacyGlass, false) == UiLayerFamily::kNone &&
+                  flatUiFamilyFor(kUiVsLegacyGlass, kUiPsLegacyGlass, false, true) == UiLayerFamily::kNone && flatUiFamilyFor(kUiVsLegacyGlass, kUiPsLegacyGlass, true, true, false) == UiLayerFamily::kNone,
+              "odyssey: the same pair names no family, with or without a map open: the game's own canopy draw is never asked");
+        check(flatUiFamilyOf(kUiVsLegacyGlass, kUiPsShieldRefract, true) == UiLayerFamily::kNone && flatUiFamilyOf(kUiVsWeaponBeams, kUiPsLegacyGlass, true) != g &&
+                  flatUiFamilyOf(kUiVsLegacyGlass, 0x3EAF4DB5B3E21089ull, true) == UiLayerFamily::kNone && flatUiFamilyOf(kUiVsLegacyGlass, 0x70F56E2EB7032E1Aull, true) == UiLayerFamily::kNone,
+              "...by the exact pair: the canopy vertex shader with another pixel shader (the quality 0-2 canopies) is not the family");
+        check(flatUiLayerTakesFamily(g) && uiLayerFamilyTakesHdr(g) && uiLayerFamilyUsesWeaponsLayer(g), "the family is taken by flat, goes to the HDR route and rides the weapons layer");
+        for (int q = 0; q < 2; ++q)
+            for (int w = 0; w < 2; ++w)
+                check(flatUiFamilyLive(g, q != 0, w != 0, true) == (w != 0) && uiLayerFamilyEnabled(g, q != 0, w != 0, true) == (w != 0),
+                      "the weapons half governs the canopy: fix.ui_quality off does not stop it, a stood-down weapons half does");
+        check(std::strcmp(uiLayerFamilyName(g), "legacy glass") == 0 && std::strcmp(uiLayerFamilyName(g), uiLayerFamilyName(UiLayerFamily::kMapGrid)) != 0, "the family has its own name");
+        // VR: its rule sets the fact only with the legacy look live and the replacement bound, the same two tests as flat's, and the pair is read for that draw alone.
+        UiFamilyFacts vr = hdrFacts(kUiVsLegacyGlass, kUiPsLegacyGlass);
+        check(uiLayerFamilyFor(vr) == UiLayerFamily::kNone, "VR: without the fact (`odyssey`, or a refused swap) the canopy pair on the HDR target names no family");
+        vr.legacyGlass = true;
+        check(uiLayerFamilyFor(vr) == g, "...and with the fact set it is named on the HDR target");
+        vr.targetKind = 2;
+        check(uiLayerFamilyFor(vr) != g, "...and never on the post-tonemap target");
+        check(has(readFile("src/d3d11/vscreen.cpp"), "f.targetKind == 1 && f.vs == kUiVsLegacyGlass && cockpitGlassLegacyLive() && cockpitGlassSwapActive()"),
+              "vscreen.cpp: VR names the canopy only on the HDR target, under the legacy look, with the replacement bound");
+        // The weapons-fire jitter table does not name the canopy, and the layer cancels for it by name as well.
+        check(weaponsFireJitterCancel(kUiVsLegacyGlass) && weaponPairIndexByVs(kUiVsLegacyGlass) < 0, "the canopy is no weapons pair, and the table's default for it is the cancel");
+        check(has(readFile("src/d3d11/ui_layer.cpp"), "const bool cancel = !g_draw.weapons || family == UiLayerFamily::kLegacyGlass || weaponsFireJitterCancel(g_draw.vsHash);"),
+              "ui_layer.cpp: the canopy's jitter is cancelled in the layer by name");
+        // The loss of a layer holding only glass is a loss; glass never counts as weapons fire.
+        const WeaponsLayerLoss onlyGlass = weaponsLayerLoss(10, 0, 0, 9, 3);
+        check(onlyGlass.glass && !onlyGlass.fire && !onlyGlass.mark && !weaponsLayerLoss(10, 0, 0, 10, 3).glass && !weaponsLayerLoss(10, 0, 0, 9, 0).glass,
+              "a layer holding only glass that no re-issue published is lost as glass, not as weapons fire; a published one is not lost");
+        const WeaponsLayerLoss both = weaponsLayerLoss(10, 2, 0, 9, 3);
+        check(both.fire && both.glass, "a layer holding both reports both");
+    }
+    // No setting and no row for the weapons fire (retired 2026-10-28): the flat panel has neither it nor a Weapons blend row.
+    check(!flatPageHasRow("fix", "sharp_weapons") && !flatPageHasRow("advanced", "sharp_weapons_blend"), "the flat panel has no Sharp weapons row and no Weapons blend row");
+    int quality = -1, hud = -1;
     for (size_t i = 0; i < kFlatPageRowCount; ++i) {
         if (std::strcmp(kFlatPageRows[i].key, "ui_quality") == 0) quality = static_cast<int>(i);
-        if (std::strcmp(kFlatPageRows[i].key, "sharp_weapons") == 0) sharp = static_cast<int>(i);
+        if (std::strcmp(kFlatPageRows[i].key, "hud_antialiasing") == 0) hud = static_cast<int>(i);
     }
-    check(quality >= 0 && sharp == quality + 1, "...directly under UI quality, as in VR");
-    check(sharp >= 0 && kFlatPageRows[sharp].read == FlatRowRead::Allowlist, "...read through the allow-listed getters (flat_profile_keys.h names the key)");
+    check(quality >= 0 && hud == quality + 1,
+          "...the flat page has HUD Anti-Aliasing directly under UI quality (VR's Performance page has both rows since 2026-11-03: menuTests)");
     const std::string adapter = readFile("src/d3d11/flat_ui_layer.cpp"), runtimeH = readFile("src/d3d11/flat_runtime.h"), keys = readFile("src/common/flat_profile_keys.h");
     check(adapter.size() > 10000 && runtimeH.size() > 1000 && keys.size() > 500, "the flat sources are readable from the repo root");
     check(wiredFlat(adapter, runtimeH, keys), "flat: the adapter asks the half that governs the family, the tone bracket runs its steps, the door is told the picture is resolved, the key is allow-listed");
@@ -801,52 +1372,46 @@ static void flatTests() {
           "control: an adapter that asks the HUD with fix.ui_quality off (or the weapons with them off) trips the pin");
     check(!wiredFlat(replaced(adapter, "uv, false, treated)", "uv)"), runtimeH, keys), "control: a door never told whether the picture is resolved trips the pin");
     check(!wiredFlat(adapter, replaced(runtimeH, "while (flatUiLayerToneNext(ctx)) issue(); ", ""), keys), "control: a tone bracket with no steps (the matched composite would be one issue short) trips the pin");
-    check(!wiredFlat(adapter, runtimeH, replaced(keys, "std::strcmp(key, \"fix.sharp_weapons\") == 0 ||", "")), "control: a key flat's gate refuses (getString answers off) trips the pin");
+    check(!wiredFlat(adapter, runtimeH, keys + "\nstd::strcmp(key, \"fix.sharp_weapons\") == 0 ||"), "control: a surviving key on flat's allow-list trips the pin");
 }
 
 // ============================================================================================ the menu rows
-// The one Sharp weapons row (On, On (plain blend), Off (stock)): Fix tier, the Performance page, live, directly under UI quality in the table the build generated
-// from the real edvr.ini; there is no Weapons blend row. Dimmed, and refusing steps and typing, with anti-aliasing off.
 static int rowIndex(const char* section, const char* key) {
     const int count = static_cast<int>(sizeof(kMenuRows) / sizeof(kMenuRows[0]));
     for (int i = 0; i < count; ++i)
         if (std::strcmp(kMenuRows[i].section, section) == 0 && std::strcmp(kMenuRows[i].key, key) == 0) return i;
     return -1;
 }
-// menu.cpp's gating of the two rows: one function decides, the page draws them dimmed, a step and a typed value are refused, and the profile's own reading of
-// fix.temporal_aa is the one asked.
+// The weapons fire has no menu row and menu.cpp has no gate for one (retired 2026-10-28): no row in the generated table in any tier, no dimming, no refused
+// steps or typing. A gate left behind would name a row the table no longer has.
 static bool gatedMenu(const std::string& t) {
-    return has(t, "bool isWeaponsRow(const MenuRowDef& d) {") && has(t, "strcmp(d.key, \"sharp_weapons\") == 0") &&
-           has(t, "return weaponsRowDim(temporalModeEnabledFor(flat ? cfg.requestedTemporalMode() : cfg.getString(\"fix.temporal_aa\", \"off\"), flat));") &&
-           has(t, "(weaponsRow && weaponsRowDisabled())") && has(t, "if (isWeaponsRow(d) && weaponsRowDisabled()) {") &&
-           has(t, "if (isWeaponsRow(kMenuRows[defIndex]) && weaponsRowDisabled()) {") && has(t, "Needs temporal AA");
+    return has(t, "isWeaponsRow") || has(t, "weaponsRowDisabled") || has(t, "weaponsRowDim") || has(t, "sharp_weapons");
 }
 static void menuTests() {
     const int count = static_cast<int>(sizeof(kMenuRows) / sizeof(kMenuRows[0]));
     check(count > 10, "the generated menu table is there");
-    const int quality = rowIndex("fix", "ui_quality"), sharp = rowIndex("fix", "sharp_weapons");
-    check(quality >= 0 && sharp >= 0, "UI quality and Sharp weapons are rows");
-    check(sharp == quality + 1, "Sharp weapons is directly under UI quality");
-    check(rowIndex("advanced", "sharp_weapons_blend") < 0, "there is no Weapons blend row (and so no second one in the developer tier)");
-    if (sharp >= 0) {
-        const MenuRowDef& r = kMenuRows[sharp];
-        check(r.tier == MenuTier::Fix && std::strcmp(r.page, "performance") == 0, "Sharp weapons is a Fix-tier row on the Performance page");
-        check(r.kind == MenuKind::Choice && r.applies == 1 && std::strcmp(r.shipped, "on") == 0, "...a live choice that ships on");
-        check(std::strcmp(r.label, "Sharp weapons") == 0, "...labelled plainly");
-        check(std::strcmp(r.choices, "on=On|plain=On (plain blend)|off=Off (stock)") == 0, "...with On, On (plain blend) and Off (stock) as its choices");
+    const int quality = rowIndex("fix", "ui_quality"), hud = rowIndex("fix", "hud_antialiasing");
+    check(quality >= 0 && hud >= 0, "UI quality and HUD Anti-Aliasing are rows");
+    check(hud == quality + 1, "the table has HUD Anti-Aliasing directly under UI quality");
+    check(rowIndex("fix", "sharp_weapons") < 0 && rowIndex("advanced", "sharp_weapons_blend") < 0,
+          "there is no Sharp weapons row and no Weapons blend row, in any tier (the setting is retired)");
+    // VR's Performance page is the Fix-tier rows whose page is "performance" (menu.cpp addSettingRows); UI quality is on it.
+    {
+        bool onPage = false;
+        for (int i = 0; i < count; ++i)
+            if (kMenuRows[i].tier == MenuTier::Fix && std::strcmp(kMenuRows[i].page, "performance") == 0 && i == quality) onPage = true;
+        check(onPage, "UI quality is on VR's Performance page");
+        // 2026-11-03: the HUD Anti-Aliasing row (the key the VR layer reads too) is on VR's Performance page as well, token `menu performance`, directly under UI quality.
+        bool hudOnPage = false;
+        for (int i = 0; i < count; ++i)
+            if (kMenuRows[i].tier == MenuTier::Fix && std::strcmp(kMenuRows[i].page, "performance") == 0 && i == hud) hudOnPage = true;
+        check(hudOnPage, "HUD Anti-Aliasing is on VR's Performance page too");
     }
 
-    // The gate: with anti-aliasing off both rows are dimmed; on, neither. The same table in both profiles (the caller passes the profile's own reading).
-    check(weaponsRowDim(false) && !weaponsRowDim(true), "the weapons row dims exactly when anti-aliasing is off");
     const std::string menu = readFile("src/d3d11/menu.cpp");
     check(menu.size() > 100000, "menu.cpp is readable from the repo root");
-    check(gatedMenu(menu), "menu.cpp dims, refuses steps and refuses typing on the row, asking each profile's own reading of fix.temporal_aa");
-    check(!gatedMenu(replaced(menu, "(weaponsRow && weaponsRowDisabled())", "false")), "control: a row that never dims is caught");
-    check(!gatedMenu(replaced(menu, "if (isWeaponsRow(d) && weaponsRowDisabled()) {", "if (false) {")), "control: a dimmed row that still takes a step is caught");
-    check(!gatedMenu(replaced(menu, "if (isWeaponsRow(kMenuRows[defIndex]) && weaponsRowDisabled()) {", "if (false) {")), "control: a dimmed row that still takes typing is caught");
-    check(!gatedMenu(replaced(menu, "flat ? cfg.requestedTemporalMode() : cfg.getString(\"fix.temporal_aa\", \"off\"), flat)", "cfg.getString(\"fix.temporal_aa\", \"off\"), false)")),
-          "control: a flat profile read as the VR one (it would miss a requested mode the allow-list hides) is caught");
-    check(!gatedMenu(replaced(menu, "strcmp(d.key, \"sharp_weapons\") == 0", "false")), "control: the row left out of the gate is caught");
+    check(!gatedMenu(menu), "menu.cpp has no gate for a Sharp weapons row");
+    check(gatedMenu(menu + "\nbool isWeaponsRow(const MenuRowDef& d) {}"), "control: a surviving row gate trips the pin");
 }
 
 // ============================================================================================ the lost-layer instrument
@@ -930,10 +1495,109 @@ static void dropTests() {
     check(!weaponsLayerDropped(0, 0, 0) && !weaponsLayerDropped(5, 0, 0) && !weaponsLayerDropped(0, 3, 0) && !weaponsLayerDropped(7, 2, 7) && weaponsLayerDropped(7, 2, 6) &&
               weaponsLayerDropped(7, 2, 0),
           "weaponsLayerDropped: an empty layer, a never-used layer and a carried layer are not drops; a layer carried at another frame, or never, is");
+
+    // A3: the scope's gunsight mark shares the layer, so a drop is judged for the whole layer and attributed by kind: the weapons fire's loss and streak are the fire's alone
+    {
+        const WeaponsLayerLoss fire = weaponsLayerLoss(7, 3, 0, 6), mark = weaponsLayerLoss(7, 0, 2, 6), both = weaponsLayerLoss(7, 3, 2, 6);
+        check(fire.fire && !fire.mark && !mark.fire && mark.mark && both.fire && both.mark, "a dropped layer is lost as the kinds it held: fire, mark or both");
+        const WeaponsLayerLoss carried = weaponsLayerLoss(7, 3, 2, 7), empty = weaponsLayerLoss(7, 0, 0, 6), fresh = weaponsLayerLoss(0, 0, 2, 0);
+        check(!carried.fire && !carried.mark && !empty.fire && !empty.mark && !fresh.fire && !fresh.mark, "a carried, an empty and a never-used layer lose nothing, of either kind");
+        // the production bookkeeping frame by frame, both streaks and both stand-downs (ui_layer.cpp beginInner and uiLayerCrispToneEnd)
+        struct KindModel {
+            uint64_t wSeq = 0, wPubSeq = 0;
+            uint32_t wFires = 0, wMarks = 0, fireStreak = 0, markStreak = 0;
+            bool fireDown = false, markDown = false;
+            unsigned fireLost = 0, markLost = 0;
+            void frame(uint64_t f, uint32_t fires, uint32_t marks, bool carries) {
+                if (!fires && !marks) return;
+                const WeaponsLayerLoss l = weaponsLayerLoss(wSeq, wFires, wMarks, wPubSeq);
+                if (l.fire) {
+                    ++fireLost;
+                    if (++fireStreak >= 30) fireDown = true;
+                }
+                if (l.mark) {
+                    ++markLost;
+                    if (++markStreak >= 30) markDown = true;
+                }
+                wSeq = f;
+                wFires = fires;
+                wMarks = marks;
+                if (carries) {
+                    wPubSeq = f;
+                    if (wFires) fireStreak = 0;
+                    if (wMarks) markStreak = 0;
+                }
+            }
+        };
+        {
+            KindModel m;   // a mark every frame of a press and no re-issue ever carries it: the mark stands down, the weapons fire is never touched
+            for (uint64_t f = 1; f <= 100; ++f) m.frame(f, 0, 1, false);
+            check(m.markDown && !m.fireDown && m.markLost == 99 && m.fireLost == 0, "marks lost in a row stand the mark down and never the weapons fire (nor count as its losses)");
+        }
+        {
+            KindModel m;   // the weapons fire lost in a row, no mark: the weapons fire stands down as it always did, the mark is not touched
+            for (uint64_t f = 1; f <= 100; ++f) m.frame(f, 2, 0, false);
+            check(m.fireDown && !m.markDown && m.fireLost == 99 && m.markLost == 0, "weapons fire lost in a row stands the weapons fire down, as before, and not the mark");
+        }
+        {
+            KindModel m;   // both kinds in every frame and no re-issue carries them: each kind is counted on its own
+            for (uint64_t f = 1; f <= 100; ++f) m.frame(f, 1, 1, false);
+            check(m.fireDown && m.markDown, "a layer holding both, lost in a row, stands each kind down on its own count");
+        }
+        {
+            KindModel m;   // the press interleaved with a quiet fire frame that is carried: marks carried every frame never stand anything down
+            for (uint64_t f = 1; f <= 200; ++f) m.frame(f, f % 7 == 0 ? 2 : 0, 1, true);
+            check(!m.markDown && !m.fireDown && m.markLost == 0 && m.fireLost == 0, "marks and weapons fire carried by every re-issue lose nothing");
+        }
+        {
+            KindModel m;   // a mark frame that is carried between lost fire frames must not reset the fire's streak (it did not carry fire)
+            for (uint64_t f = 1; f <= 90; ++f) m.frame(f, f % 2 ? 2 : 0, f % 2 ? 0 : 1, f % 2 == 0);
+            check(m.fireDown && !m.markDown, "carried marks between lost weapons fire never reset the weapons fire's streak");
+        }
+        {
+            // The mark's stand-down lasts the press of the sights it was found in (MarkStandDown, and ui_layer.cpp markStandDown's reset of the streaks): a press whose marks are never
+            // carried stands the route down after 30 lost frames and draws nothing more into the layer; the next press tries it again, and a press that is carried keeps it.
+            struct PressModel {
+                MarkStandDown md;
+                uint32_t press = 1, wMarks = 0, streak = 0, standDowns = 0, drawn = 0;
+                uint64_t wSeq = 0, wPubSeq = 0;
+                void frame(uint64_t f, bool carries) {
+                    if (md.active(press)) return;   // back in the scene: no draw reaches the layer
+                    if (weaponsLayerLoss(wSeq, 0, wMarks, wPubSeq).mark && ++streak >= 30) {
+                        md.stand(press);
+                        streak = 0;
+                        ++standDowns;
+                    }
+                    wSeq = f;
+                    wMarks = 1;
+                    ++drawn;
+                    if (carries) {
+                        wPubSeq = f;
+                        streak = 0;
+                    }
+                }
+            };
+            PressModel m;
+            uint64_t f = 1;
+            for (int i = 0; i < 100; ++i) m.frame(f++, false);
+            check(m.standDowns == 1 && m.drawn == 31 && m.md.active(1), "a press whose marks are never carried stands the route down once, after 30 lost frames, and draws no more into the layer");
+            m.press = 2;
+            check(!m.md.active(2), "the stand-down is over at the next press of the sights");
+            for (int i = 0; i < 100; ++i) m.frame(f++, true);
+            check(m.standDowns == 1 && m.drawn == 131 && !m.md.active(2), "a carried press after a stood-down one keeps the route: marks are drawn into the layer every frame again");
+            m.press = 3;
+            for (int i = 0; i < 100; ++i) m.frame(f++, false);
+            check(m.standDowns == 2 && m.md.active(3) && !m.md.active(4), "a later press that fails stands the route down again, for that press alone");
+            MarkStandDown d;
+            check(!d.active(0) && !d.active(7), "a route never stood down is not down at any press");
+            d.stand(7);
+            check(d.active(7) && d.active(7) && !d.active(8) && !d.active(7), "a stand-down is down for its own press only and is not back once it has lapsed");
+        }
+    }
 }
 
 static bool wiredLost(const std::string& t) {
-    const size_t loss = t.find("++g_win.weaponsLost;\n            noteWeaponsLost(g_draw.eye, e, g_draw.seq);");
+    const size_t loss = t.find("            noteWeaponsLost(g_draw.eye, e, g_draw.seq);\n            // The missing-consumer deadline");
     size_t sights = 0, at = 0;
     while ((at = t.find("noteToneSight(seq, seenRes, ", at)) != std::string::npos) {
         ++sights;
@@ -941,19 +1605,47 @@ static bool wiredLost(const std::string& t) {
     }
     return loss != std::string::npos && sights == 4 && has(t, "void noteToneSight(uint64_t seq, const void* res, int eye, uint8_t outcome) {") &&
            has(t, "if (e.wTarget != g_draw.targetRes) ++e.wOtherTargets;") && has(t, "e.wOtherTargets = 0;") && has(t, "if (!seenRes) seenRes = r.Get();") &&
-           has(t, "if (weaponsLayerDropped(e.wSeq, e.wDraws, e.wPubSeq)) {") &&
-           has(t, "    if (hadWeapons) {\n        // Stamped ONLY by a bracket that carried the weapons layer's content") && has(t, "        e.wPubSeq = seq;\n        e.wMissStreak = 0;") &&
-           has(t, "if (g_lostLines >= 24) return;") && before(t, "noteToneSight(seq, seenRes, eye, 0);", "crispArm(eye, seq, hdrSlot, ta.rtvRes, hdrRes, vs, ps);");
+           has(t, "const WeaponsLayerLoss lost = weaponsLayerLoss(e.wSeq, e.wFires, e.wMarks, e.wPubSeq, e.wGlass);") &&
+           has(t, "    if (hadWeapons) {\n        // Stamped ONLY by a bracket that carried the weapons layer's content") &&
+           has(t, "        e.wPubSeq = seq;\n        e.wPubMatched = plan.sourcePass;\n        if (e.wFires || e.wGlass) e.wMissStreak = 0;\n        if (e.wMarks) e.wMarkMissStreak = 0;") &&
+           has(t, "if (g_lostLines >= 24) return;") && before(t, "noteToneSight(seq, seenRes, eye, 0);", "crispArm(eye, seq, hdrSlot, ta.rtvRes, hdrRes, vs, ps);") &&
+           // A3: the scope mark's loss is counted, noted and stood down apart from the weapons fire's, and its draws are counted apart from the fire's
+           has(t, "if (lost.fire || lost.glass) {\n            if (lost.fire) ++g_win.weaponsLost;") && has(t, "if (lost.mark) {\n            if (!lost.fire && !lost.glass) noteWeaponsLost(g_draw.eye, e, g_draw.seq, true);") &&
+           has(t, "if (++e.wMarkMissStreak >= kCrispHdrMissFrames) {") && has(t, "markStandDown(g_draw.eye, e.wMarkMissStreak, why);") && has(t, "if (++e.wMissStreak >= kCrispHdrMissFrames) {") &&
+           has(t, "                ++e.wMarks;   // the scope's gunsight mark shares the layer") && has(t, "                ++e.wFires;\n                ++g_win.weaponsTaken;") &&
+           has(t, "if (wl && g_draw.family == UiLayerFamily::kWeaponsFire && e.wFireSeq != g_draw.seq) {") && has(t, "if (hadWeapons && e.wFires) {") &&
+           // the mark's stand-down lasts the press, is logged with the eye and the streak, is counted for the press line and starts the next press's count afresh; its lost line is one a press
+           has(t, "g_markDown.stand(press);\n    g_eye[0].wMarkMissStreak = g_eye[1].wMarkMissStreak = 0;") && has(t, "scopeZoomNoteMarkStandDown();") &&
+           has(t, "(press %u, %s eye, streak %u) -- %s.") && has(t, "if (g_markLostPress == press) return;\n        g_markLostPress = press;") &&
+           // a creation failure belongs to the family that asked: the weapons fire's stands the weapons half down, the mark's the mark alone
+           has(t, "if (forMark) markStandDown(eye, g_eye[eye].wMarkMissStreak, why);\n        else weaponsStandDown(why);") &&
+           has(t, "return fail(\"the weapons layer could not be created\");") && !has(t, "weaponsStandDown(\"the weapons layer could not be created\")") &&
+           // the mark's own composite lines at the end of the bracket, for a frame that held a mark whether or not weapons fire was in it too
+           has(t, "if (hadWeapons && e.wMarks) {") && has(t, "if (plan.sourcePass && !markEngagedNoted) {") && has(t, "if (!plan.sourcePass && markPlainPress != scopeZoomPressId()) {");
 }
 static void lostPins(const std::string& layer) {
     check(wiredLost(layer), "ui_layer.cpp: a lost weapons layer prints the eye's state and the last tonemap-shaped draws, rate-limited, and every outcome of the admission is recorded");
-    check(!wiredLost(replaced(layer, "++g_win.weaponsLost;\n            noteWeaponsLost(g_draw.eye, e, g_draw.seq);", "++g_win.weaponsLost;")), "control: no line at the loss trips the pin");
+    check(!wiredLost(replaced(layer, "            noteWeaponsLost(g_draw.eye, e, g_draw.seq);\n            // The missing-consumer deadline, as the HUD layer's", "            // The missing-consumer deadline, as the HUD layer's")), "control: no line at the loss trips the pin");
     check(!wiredLost(replaced(layer, "        noteToneSight(seq, seenRes, eye, 3);\n", "")), "control: an unrecorded outcome trips the pin");
     check(!wiredLost(replaced(layer, "    noteToneSight(seq, seenRes, eye, 0);\n", "")), "control: an unrecorded admission trips the pin");
     check(!wiredLost(replaced(layer, "if (g_lostLines >= 24) return;", "")), "control: an unlimited line trips the pin");
-    check(!wiredLost(replaced(layer, "if (weaponsLayerDropped(e.wSeq, e.wDraws, e.wPubSeq)) {", "if (e.wSeq && e.wDraws && e.wToneSeq != e.wSeq) {")),
+    check(!wiredLost(replaced(layer, "weaponsLayerLoss(e.wSeq, e.wFires, e.wMarks, e.wPubSeq, e.wGlass)", "WeaponsLayerLoss{e.wSeq && e.wDraws && e.wToneSeq != e.wSeq, false}")),
           "control: the frozen drop test (against the latest tonemap's frame) trips the pin");
     check(!wiredLost(replaced(layer, "    if (hadWeapons) {\n        // Stamped ONLY", "    {\n        // Stamped ONLY")), "control: a publication stamped by every re-issue trips the pin");
+    check(!wiredLost(replaced(layer, "if (e.wFires || e.wGlass) e.wMissStreak = 0;", "e.wMissStreak = 0;")), "control: a frame that held a mark alone resetting the weapons fire's streak trips the pin");
+    check(!wiredLost(replaced(layer, "                ++e.wMarks;   // the scope's gunsight mark shares the layer", "                ++e.wFires;   // the scope's gunsight mark shares the layer")),
+          "control: a mark counted as weapons fire trips the pin");
+    check(!wiredLost(replaced(layer, "if (hadWeapons && e.wFires) {", "if (hadWeapons) {")), "control: a mark's composite counted on the weapons line trips the pin");
+    check(!wiredLost(replaced(layer, "markStandDown(g_draw.eye, e.wMarkMissStreak, why);", "weaponsStandDown(why);")), "control: a mark that stands the weapons fire down trips the pin");
+    check(!wiredLost(replaced(layer, "if (forMark) markStandDown(eye, g_eye[eye].wMarkMissStreak, why);\n        else weaponsStandDown(why);", "weaponsStandDown(why);")),
+          "control: a mark's creation failure that stands the weapons half down for the session trips the pin");
+    check(!wiredLost(replaced(layer, "    g_eye[0].wMarkMissStreak = g_eye[1].wMarkMissStreak = 0;   // the next press counts afresh\n", "")), "control: a stand-down that leaves the streak for the next press trips the pin");
+    check(!wiredLost(replaced(layer, "    scopeZoomNoteMarkStandDown();\n", "")), "control: a stand-down the press line does not count trips the pin");
+    check(!wiredLost(replaced(layer, "if (g_markLostPress == press) return;\n        g_markLostPress = press;", "if (g_markLostPress == 0) return;\n        g_markLostPress = 0;")), "control: a lost line once a session, not a press, trips the pin");
+    check(!wiredLost(replaced(layer, "if (hadWeapons && e.wMarks) {", "if (hadWeapons && e.wFires) {")), "control: the mark's composite lines gated on weapons fire trip the pin");
+    check(!wiredLost(replaced(layer, "if (!plan.sourcePass && markPlainPress != scopeZoomPressId()) {", "if (!plan.sourcePass) {")), "control: a plain-composite reason on every frame trips the pin");
+    check(!wiredLost(replaced(layer, "if (wl && g_draw.family == UiLayerFamily::kWeaponsFire && e.wFireSeq != g_draw.seq) {", "if (wl && e.wFireSeq != g_draw.seq) {")),
+          "control: an eye-frame counted as having weapons draws for a mark trips the pin");
 }
 
 // ============================================================================================ the composite (WARP)
@@ -1031,6 +1723,11 @@ static Rgb bilinearAt(uint32_t lx, uint32_t ly) {
     const Rgb a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1);
     const auto mix = [](float p, float q, float t) { return p + (q - p) * t; };
     return {mix(mix(a.r, b.r, fx), mix(c.r, d.r, fx), fy), mix(mix(a.g, b.g, fx), mix(c.g, d.g, fx), fy), mix(mix(a.b, b.b, fx), mix(c.b, d.b, fx), fy)};
+}
+
+// The half-resolution canopy's glass target G in the rig: a pattern of HDR values at the render's size.
+static Rgb glassAt(uint32_t x, uint32_t y) {
+    return {0.25f * static_cast<float>((x * 3 + y) % 7), 0.125f * static_cast<float>((x + y * 5) % 11), 0.5f * static_cast<float>(x % 2)};
 }
 
 struct Fx {
@@ -1289,8 +1986,70 @@ static std::vector<uint8_t> addClamped(const std::vector<uint8_t>& a, const std:
     return out;
 }
 
+// The reproduction behind uiLayerBlendDestAlphaOne: ONE, DEST_ALPHA (the scope mark's blend) into an R11G11B10_FLOAT target adds the source to what the target holds, as ONE, ONE does,
+// because the format has no alpha and the output merger reads its destination alpha as 1. The same blend into an R16G16B16A16_FLOAT target whose alpha is 0 adds nothing of the target.
+static void destAlphaReproduction(Fx& f) {
+    auto vs = f.compile(kToneVs, "vs_5_0");
+    auto ps = f.compile("float4 main(float4 p : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET { return float4(0.5, 0.25, 0.5, 0.0); }", "ps_5_0");
+    ComPtr<ID3D11VertexShader> v;
+    ComPtr<ID3D11PixelShader> p;
+    hr(f.dev->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &v), "the reproduction's VS");
+    hr(f.dev->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, &p), "the reproduction's PS");
+    D3D11_BLEND_DESC bd{};
+    bd.RenderTarget[0].BlendEnable = TRUE;
+    bd.RenderTarget[0].SrcBlend = bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    bd.RenderTarget[0].DestBlend = bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_DEST_ALPHA;
+    bd.RenderTarget[0].BlendOp = bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    ComPtr<ID3D11BlendState> bs;
+    hr(f.dev->CreateBlendState(&bd, &bs), "the reproduction's blend");
+    const auto draw = [&](DXGI_FORMAT fmt, const float clear[4]) {
+        ComPtr<ID3D11Texture2D> t = f.texture(4, 4, fmt, D3D11_BIND_RENDER_TARGET, nullptr, 0);
+        ComPtr<ID3D11RenderTargetView> rtv = f.rtvOf(t.Get());
+        f.ctx->ClearRenderTargetView(rtv.Get(), clear);
+        const D3D11_VIEWPORT vp{0, 0, 4, 4, 0, 1};
+        f.ctx->RSSetViewports(1, &vp);
+        ID3D11RenderTargetView* r = rtv.Get();
+        f.ctx->OMSetRenderTargets(1, &r, nullptr);
+        const float factor[4] = {};
+        f.ctx->OMSetBlendState(bs.Get(), factor, 0xFFFFFFFFu);
+        f.ctx->IASetInputLayout(nullptr);
+        f.ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        f.ctx->VSSetShader(v.Get(), nullptr, 0);
+        f.ctx->PSSetShader(p.Get(), nullptr, 0);
+        f.ctx->Draw(3, 0);
+        f.ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        return t;
+    };
+    // shapeOf, the hook's read of the bound blend, on the real state: the rewrite is what the layer converts (*rtOut), and the game's own factors are what a log line prints (*gameOut)
+    {
+        UiBlendRt rewritten, own, plain;
+        check(shapeOf(bs.Get(), &rewritten, true, &own) == UiBlendShape::kAdditive && rewritten.src == uiblend::kOne && rewritten.dst == uiblend::kOne && own.src == uiblend::kOne &&
+                  own.dst == uiblend::kDestAlpha && own.srcA == uiblend::kOne && own.dstA == uiblend::kDestAlpha,
+              "shapeOf with destination alpha read as 1: the rewritten blend is ONE, ONE and the game's own factors are ONE, DEST_ALPHA");
+        char text[96];
+        describeBlend(own, text, sizeof(text));
+        check(std::strcmp(text, "bl=12,7,1/2,7,1 bm=F") == 0, "the game's blend as a decline prints it is the census's own text for ONE, DEST_ALPHA (bl=12,7,1/2,7,1)");
+        check(shapeOf(bs.Get(), &plain, false, &own) == UiBlendShape::kRefused && plain.dst == uiblend::kDestAlpha && own.dst == uiblend::kDestAlpha, "without the rewrite the blend is refused as it stands, and both outputs are the game's");
+        check(shapeOf(nullptr, &plain, true, &own) == UiBlendShape::kOpaque && !own.enable && !plain.enable, "no blend state bound is the default, opaque, in both outputs");
+    }
+    const float clear[4] = {0.25f, 0.5f, 0.125f, 0.0f};
+    const std::vector<uint8_t> packed = f.read8(draw(DXGI_FORMAT_R11G11B10_FLOAT, clear).Get());
+    uint32_t px = 0;
+    std::memcpy(&px, packed.data(), sizeof(px));
+    const auto f11 = [](uint32_t b) { return std::ldexp(1.0 + (b & 63u) / 64.0, static_cast<int>((b >> 6) & 31u) - 15); };
+    const auto f10 = [](uint32_t b) { return std::ldexp(1.0 + (b & 31u) / 32.0, static_cast<int>((b >> 5) & 31u) - 15); };
+    check(std::fabs(f11(px & 2047u) - 0.75) < 1e-6 && std::fabs(f11((px >> 11) & 2047u) - 0.75) < 1e-6 && std::fabs(f10((px >> 22) & 1023u) - 0.625) < 1e-6,
+          "ONE, DEST_ALPHA into R11G11B10_FLOAT adds the source to the target (0.25 + 0.5, 0.5 + 0.25, 0.125 + 0.5): the destination alpha reads as 1");
+    const std::vector<float> half = f.readHalf(draw(DXGI_FORMAT_R16G16B16A16_FLOAT, clear).Get());
+    check(std::fabs(half[0] - 0.5f) < 1e-3f && std::fabs(half[1] - 0.25f) < 1e-3f && std::fabs(half[2] - 0.5f) < 1e-3f,
+          "control: the same blend into R16G16B16A16_FLOAT with alpha 0 adds nothing of the target (so the rewrite is for the alpha-less format alone)");
+    f.ctx->ClearState();
+}
+
 static void gpuTests() {
     Fx f;
+    destAlphaReproduction(f);
     // Sentinel state on the immediate context, to see the source pass put it back.
     ComPtr<ID3D11Texture2D> sentinelTex = f.texture(4, 4, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_RENDER_TARGET, nullptr, 0);
     ComPtr<ID3D11RenderTargetView> sentinelRtv = f.rtvOf(sentinelTex.Get());
@@ -1319,7 +2078,7 @@ static void gpuTests() {
         f.ctx->RSSetViewports(1, &vp);
         f.ctx->VSSetShader(f.toneVs.Get(), nullptr, 0);
         f.ctx->PSSetShader(f.tonePs.Get(), nullptr, 0);
-        const TonePlan matched = sharpTonePlan(false, true, SharpBlend::kMatched, true);
+        const TonePlan matched = sharpTonePlan(false, true, true);
         // the source pass alone first, to read S and W
         f.clearEye();
         check(sharpSourcePass(f.ctx.Get(), f.deferred.Get(), f.srcVs.Get(), f.srcPs.Get(), f.states, f.fSrv.Get(), f.sRtv.Get(), f.wRtv.Get(), kLw, kLh,
@@ -1381,25 +2140,25 @@ static void gpuTests() {
 
     // ---- the plain sequence (the A/B key, and the matched composite's fall-back)
     f.freshLayers();
-    f.runPlan(sharpTonePlan(false, true, SharpBlend::kPlain, false), f.states);
+    f.runPlan(sharpTonePlan(false, true, false), f.states);
     {
         const std::vector<uint8_t> E = f.read8(f.eTex.Get());
         check(maxDiff(E, TL, 0, kLw, false) <= 1, "the plain sequence leaves T(L) in the 8-bit layer");
     }
     f.freshLayers();
-    f.runPlan(sharpTonePlan(false, true, SharpBlend::kMatched, false), f.states);
+    f.runPlan(sharpTonePlan(false, true, false), f.states);
     check(maxDiff(f.read8(f.eTex.Get()), TL, 0, kLw, false) <= 1, "a matched frame that is not ready is the plain sequence");
 
     // ---- the HUD: alone it is T(H) as it always was; with the weapons it is added to their contribution
     {
         const float junk[4] = {0.3f, 0.6f, 0.9f, 0.5f};
         f.ctx->ClearRenderTargetView(f.eRtv.Get(), junk);
-        f.runPlan(sharpTonePlan(true, false, SharpBlend::kMatched, true), f.states);
+        f.runPlan(sharpTonePlan(true, false, true), f.states);
         const std::vector<uint8_t> E = f.read8(f.eTex.Get());
         check(maxDiff(E, TH, 0, kLw, false) <= 1, "the HUD alone: T(H) replaces the target, as it always has");
         check(std::abs(static_cast<int>(E[3]) - static_cast<int>(std::lround(0.5f * 255.0f))) <= 1, "the HUD alone leaves the alpha to the coverage pass (colour channels only)");
         f.freshLayers();
-        f.runPlan(sharpTonePlan(true, true, SharpBlend::kMatched, true), f.states);
+        f.runPlan(sharpTonePlan(true, true, true), f.states);
         const std::vector<uint8_t> both = f.read8(f.eTex.Get());
         std::vector<uint8_t> want(X.size());
         for (size_t i = 0; i < X.size(); ++i) {
@@ -1430,7 +2189,7 @@ static void gpuTests() {
         st.sourceBlend.Reset();
         hr(f.dev->CreateBlendState(&m, &st.sourceBlend), "a mutant blend");
         f.freshLayers();
-        f.runPlan(sharpTonePlan(false, true, SharpBlend::kMatched, true), st);
+        f.runPlan(sharpTonePlan(false, true, true), st);
         const int e = litError(f.read8(f.eTex.Get()));
         check(e > 15, "mutant: a source pass that replaces W instead of adding to it is caught");
         std::printf("mutant source pass without its add: lit error %d\n", e);
@@ -1438,12 +2197,12 @@ static void gpuTests() {
         SharpPassStates st2 = f.states;
         st2.toneSubtract = st2.toneReplace;
         f.freshLayers();
-        f.runPlan(sharpTonePlan(false, true, SharpBlend::kMatched, true), st2);
+        f.runPlan(sharpTonePlan(false, true, true), st2);
         const int e2 = litError(f.read8(f.eTex.Get()));
         check(e2 > 15, "mutant: a lit step that replaces instead of subtracting is caught");
         std::printf("mutant lit step replacing: lit error %d\n", e2);
         // 3. the base step missing: the target holds nothing to subtract
-        TonePlan p = sharpTonePlan(false, true, SharpBlend::kMatched, true);
+        TonePlan p = sharpTonePlan(false, true, true);
         p.steps[0] = p.steps[1];
         p.count = 1;
         f.freshLayers();
@@ -1452,7 +2211,7 @@ static void gpuTests() {
         check(e3 > 15, "mutant: a missing base step is caught");
         std::printf("mutant missing base step: lit error %d\n", e3);
         // 4. the lit step reading the scratch instead of the weapons layer: the difference is zero
-        TonePlan q = sharpTonePlan(false, true, SharpBlend::kMatched, true);
+        TonePlan q = sharpTonePlan(false, true, true);
         q.steps[1] = ToneStep::kWeaponsBase;
         f.freshLayers();
         f.runPlan(q, f.states);
@@ -1461,8 +2220,66 @@ static void gpuTests() {
         std::printf("mutant lit step reading the scratch: lit error %d\n", e4);
         // control: the real sequence passes the very comparator the mutants fail
         f.freshLayers();
-        f.runPlan(sharpTonePlan(false, true, SharpBlend::kMatched, true), f.states);
+        f.runPlan(sharpTonePlan(false, true, true), f.states);
         check(litError(f.read8(f.eTex.Get())) <= 3, "control: the real sequence passes the comparator");
+    }
+
+    // ---- the half-resolution canopy's add (sharpGlassAddPass): G at the render's size, resampled bilinearly to the layer's size and ADDED to W, colour only, before the source pass adds F_up
+    {
+        ComPtr<ID3D11Texture2D> gTex = f.halfTexture(kFw, kFh, glassAt);
+        ComPtr<ID3D11ShaderResourceView> gSrv = f.srvOf(gTex.Get());
+        const auto glassUp = [](uint32_t lx, uint32_t ly) {
+            const float qx = (lx + 0.5f) / kLw * kFw - 0.5f, qy = (ly + 0.5f) / kLh * kFh - 0.5f;
+            const int x0 = static_cast<int>(std::floor(qx)), y0 = static_cast<int>(std::floor(qy));
+            const float fx = qx - x0, fy = qy - y0;
+            const auto at = [](int x, int y) {
+                x = std::min(std::max(x, 0), static_cast<int>(kFw) - 1);
+                y = std::min(std::max(y, 0), static_cast<int>(kFh) - 1);
+                const Rgb g = glassAt(static_cast<uint32_t>(x), static_cast<uint32_t>(y));
+                return Rgb{roundHalf(g.r), roundHalf(g.g), roundHalf(g.b)};
+            };
+            const Rgb a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1);
+            const auto mix = [](float p, float q, float t) { return p + (q - p) * t; };
+            return Rgb{mix(mix(a.r, b.r, fx), mix(c.r, d.r, fx), fy), mix(mix(a.g, b.g, fx), mix(c.g, d.g, fx), fy), mix(mix(a.b, b.b, fx), mix(c.b, d.b, fx), fy)};
+        };
+        const auto exec = [](ID3D11DeviceContext* c, ID3D11CommandList* l, int restore) { c->ExecuteCommandList(l, restore); };
+        f.freshLayers();
+        ID3D11RenderTargetView* s = sentinelRtv.Get();
+        f.ctx->OMSetRenderTargets(1, &s, nullptr);
+        check(sharpGlassAddPass(f.ctx.Get(), f.deferred.Get(), f.srcVs.Get(), f.srcPs.Get(), f.states, gSrv.Get(), f.wRtv.Get(), kLw, kLh, exec), "the glass add pass runs");
+        ComPtr<ID3D11RenderTargetView> rt;
+        f.ctx->OMGetRenderTargets(1, &rt, nullptr);
+        check(rt.Get() == sentinelRtv.Get(), "the immediate context's render target is back after the glass add");
+        const std::vector<float> W = f.readHalf(f.wTex.Get());
+        float worst = 0;
+        bool alphaKept = true;
+        for (uint32_t y = 0; y < kLh; ++y)
+            for (uint32_t x = 0; x < kLw; ++x) {
+                const size_t i = (static_cast<size_t>(y) * kLw + x) * 4;
+                const Rgb l = lightAt(x, y), g = glassUp(x, y);
+                worst = std::max({worst, std::fabs(W[i] - (roundHalf(l.r) + g.r)), std::fabs(W[i + 1] - (roundHalf(l.g) + g.g)), std::fabs(W[i + 2] - (roundHalf(l.b) + g.b))});
+                alphaKept = alphaKept && W[i + 3] == 1.0f;
+            }
+        std::printf("glass add: W within %.5f of L + bilinear(G)\n", static_cast<double>(worst));
+        check(worst < 0.02f, "the glass add leaves W = L + G resampled bilinearly to the layer's size (to half precision)");
+        check(alphaKept, "the glass add leaves W's alpha alone");
+        // Then the source pass of the same re-issue adds F_up: W = L + G_up + F_up, which is the order the tonemap bracket runs them in.
+        check(sharpSourcePass(f.ctx.Get(), f.deferred.Get(), f.srcVs.Get(), f.srcPs.Get(), f.states, f.fSrv.Get(), f.sRtv.Get(), f.wRtv.Get(), kLw, kLh, exec), "the source pass runs after the glass add");
+        const std::vector<float> W2 = f.readHalf(f.wTex.Get());
+        float worst2 = 0;
+        for (uint32_t y = 0; y < kLh; ++y)
+            for (uint32_t x = 0; x < kLw; ++x) {
+                const size_t i = (static_cast<size_t>(y) * kLw + x) * 4;
+                const Rgb l = lightAt(x, y), g = glassUp(x, y), up = bilinearAt(x, y);
+                worst2 = std::max({worst2, std::fabs(W2[i] - (roundHalf(l.r) + g.r + up.r)), std::fabs(W2[i + 1] - (roundHalf(l.g) + g.g + up.g)), std::fabs(W2[i + 2] - (roundHalf(l.b) + g.b + up.b))});
+            }
+        std::printf("glass add then source pass: W within %.5f of L + G_up + F_up\n", static_cast<double>(worst2));
+        check(worst2 < 0.03f, "after the glass add the source pass gives W = L + G_up + F_up");
+        // The refusals: no source view, no target, no layer size.
+        check(!sharpGlassAddPass(f.ctx.Get(), f.deferred.Get(), f.srcVs.Get(), f.srcPs.Get(), f.states, nullptr, f.wRtv.Get(), kLw, kLh, exec) &&
+                  !sharpGlassAddPass(f.ctx.Get(), f.deferred.Get(), f.srcVs.Get(), f.srcPs.Get(), f.states, gSrv.Get(), nullptr, kLw, kLh, exec) &&
+                  !sharpGlassAddPass(f.ctx.Get(), f.deferred.Get(), f.srcVs.Get(), f.srcPs.Get(), f.states, gSrv.Get(), f.wRtv.Get(), 0, kLh, exec),
+              "the glass add refuses a missing source, target or size");
     }
 
     // ---- the debug layer saw nothing wrong
@@ -1497,11 +2314,15 @@ int main(int argc, char** argv) {
     }
     try {
         ruleTests();
+        mayWantTests();
+        build2WiringTests();
+        build4WiringTests();
+        scopeMarkTests();
         keyTests();
         planTests();
-        censusTests("tools/sharp_weapons_test/fixtures/census_070029_c1_f0.txt", 2, 0);
-        censusTests("tools/sharp_weapons_test/fixtures/census_070029_c3_f0.txt", 4, 2);
-        censusTests("tools/sharp_weapons_test/fixtures/census_070029_c4_f0.txt", 4, 0);
+        censusTests("tools/sharp_weapons_test/fixtures/census_070029_c1_f0.txt", 2, 0, 2);
+        censusTests("tools/sharp_weapons_test/fixtures/census_070029_c3_f0.txt", 4, 2, 2);
+        censusTests("tools/sharp_weapons_test/fixtures/census_070029_c4_f0.txt", 4, 0, 2);
         wiringTests();
         flatTests();
         menuTests();

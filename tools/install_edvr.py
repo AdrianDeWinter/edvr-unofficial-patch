@@ -46,13 +46,13 @@ not undo an edit to it, and clobbering it has cost a session. --ini backs
 it up first and says loudly what it did. The one exception is a settings
 file that is not there: a game update wipes the directory, edvr.ini with it,
 and without the file the F8 menu cannot save anything. An install then restores
-the file from the newest copy edvr-installer.exe mirrored under
+the file from the newest copy ed-up-launcher.exe mirrored under
 %LOCALAPPDATA%\\EDVR\\<leaf>-<store>\\ when there is one, and writes the shipped
 default only when there is not (a new file either way, so no backup, not
 journaled): a default written first would make the installer's own restore skip
 and its next mirror update replace the saved copy with the default. A copy found
 only under another store's folder is not guessed at; no default is written, and
-the install says to run edvr-installer.exe. --verify-only warns about a missing
+the install says to run ed-up-launcher.exe. --verify-only warns about a missing
 file and names where it would come from. The flat half's settings live in
 edvr-flat.ini instead. --ini writes the settings files of the chosen scope:
 both writes edvr.ini and edvr-flat.ini, vr writes edvr.ini, flat writes
@@ -113,6 +113,15 @@ try:
     from tools import steam_library
 except ImportError:
     import steam_library
+_epic_bytecode_policy = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
+try:
+    try:
+        from tools import epic_library
+    except ImportError:
+        import epic_library
+finally:
+    sys.dont_write_bytecode = _epic_bytecode_policy
 try:
     from tools import gen_installer_rc
 except ImportError:
@@ -121,6 +130,11 @@ try:
     from tools import compile_only
 except ImportError:
     import compile_only
+try:
+    from tools import archive_game_exe
+except ImportError:
+    import archive_game_exe
+
 
 GAME_EXE = "EliteDangerous64.exe"
 
@@ -999,6 +1013,8 @@ def _validate_v2_receipt_in(r):
                    ini=ini_target,
                    dlss=os.path.join(target, "nvngx_dlss.dll"),
                    xess=os.path.join(target, "libxess.dll"),
+                   xess_fg=os.path.join(target, "libxess_fg.dll"),
+                   xess_ll=os.path.join(target, "libxell.dll"),
                    xess_license=os.path.join(target, "INTEL-XESS-LICENSE.txt"),
                    xess_third_party=os.path.join(target, "INTEL-XESS-THIRD-PARTY.txt"))
     targets.update({key: os.path.join(target, name) for key, name in FSR4_FILES})
@@ -1011,6 +1027,8 @@ def _validate_v2_receipt_in(r):
         sources = {"graphics": paths["graphics"],
                    "dlss": os.path.join(build_dir(root), "nvngx_dlss.dll"),
                    "xess": os.path.join(build_dir(root), "libxess.dll"),
+                   "xess_fg": os.path.join(build_dir(root), "libxess_fg.dll"),
+                   "xess_ll": os.path.join(build_dir(root), "libxell.dll"),
                    "xess_license": os.path.join(build_dir(root), "INTEL-XESS-LICENSE.txt"),
                    "xess_third_party": os.path.join(build_dir(root), "INTEL-XESS-THIRD-PARTY.txt"),
                    "ini": _ini_source(root, "flat"), "profile": "generated"}
@@ -1404,6 +1422,13 @@ def steam_dirs():
     return steam_library.steam_dirs(GAME_EXE)
 
 
+def epic_dirs():
+    try:
+        return [str(path) for path in epic_library.epic_dirs()] if os.name != "nt" else []
+    except epic_library.InventoryLimitError as exc:
+        raise SystemExit("[edvr] " + str(exc)) from None
+
+
 def frontier_dirs():
     local = os.environ.get("LOCALAPPDATA", "")
     if not local:
@@ -1411,10 +1436,26 @@ def frontier_dirs():
     return _products_under(os.path.join(local, "Frontier_Developments"))
 
 
+def archive_installed_exe(root, target, dry_run=False):
+    """Keep the game exe EDVR is being installed against (archive_game_exe.py).
+
+    The next game update overwrites it in place, and build_diff.py map needs
+    it as the old build. Best effort: a failed or refused archive is reported
+    and never stops the install."""
+    exe = os.path.join(target, GAME_EXE)
+    try:
+        archive_game_exe.archive(exe, archive_game_exe.default_dest(root), dry_run=dry_run,
+                                 out=lambda line: print("[edvr] " + line))
+    except (OSError, ValueError) as exc:
+        print("[edvr] WARNING: could not archive %s (%s); the install continues." % (exe, exc))
+
+
 def resolve_target(spec):
     """A store name, or a path to the directory holding the game exe."""
     if spec == "steam":
         found = steam_dirs()
+    elif spec == "epic":
+        found = epic_dirs()
     elif spec == "frontier":
         found = frontier_dirs()
     else:
@@ -1596,7 +1637,7 @@ def _missing_ini_defaults(root, target, scope, handled=()):
 # ---------------------------------------------------------------------------
 # The settings mirror (src/installer/mirror.cpp, src/common/iniedit.cpp)
 #
-# edvr-installer.exe keeps the newest copies of edvr.ini and edvr-flat.ini under
+# ed-up-launcher.exe keeps the newest copies of edvr.ini and edvr-flat.ini under
 # %LOCALAPPDATA%\EDVR\<leaf>-<store>\ and restores them when the game directory has
 # none, which is what a game update leaves behind. A default written first would
 # make that restore skip, and the installer's next mirror update would replace the
@@ -1635,6 +1676,8 @@ def mirror_root():
 
 def _mirror_source_for(target):
     """The installer's source label for a game directory, from where the directory is."""
+    if os.name != "nt" and any(Path(target).resolve() == Path(path).resolve() for path in epic_dirs()):
+        return "Epic"
     parts = [p.lower() for p in re.split(r"[\\/]", os.path.abspath(target)) if p]
     if "steamapps" in parts:
         return "Steam"
@@ -1667,7 +1710,7 @@ def _mirror_ini_plan(target, scope):
     the newest copy from the mirror folder this directory's source names. blocked:
     (half, target, paths, why), a file with a copy only under another store's
     folder, or a copy that could not be read; no default is written over those,
-    because edvr-installer.exe restores from the copy and a default would stop it.
+    because ed-up-launcher.exe restores from the copy and a default would stop it.
     Nothing here writes."""
     root = mirror_root()
     if not root:
@@ -1857,7 +1900,7 @@ def real_dll_migration(target):
             "shared_bom": shared_bom, "flat_text": flat_text, "flat_bom": flat_bom}
 
 
-REAL_DLL_NEW_SHARED = ("# EDVR settings shared by the VR and flat profiles. advanced.real_dll names the mod EDVR chains through;\r\n"
+REAL_DLL_NEW_SHARED = ("# ED-UP settings shared by the VR and flat profiles. advanced.real_dll names the mod ED-UP chains through;\r\n"
                        "# edvr-flat.ini can override it for the flat profile, or say real_dll = none to run flat without it.\r\n"
                        "[advanced]\r\nreal_dll = %s\r\n")
 
@@ -1943,6 +1986,8 @@ def retire_stale_native_receipt(target, tag, dry_run=False):
         allowed.update(config=paths["config"], profile=descriptor,
                        ini=os.path.join(target, "edvr.ini"), ini_flat=os.path.join(target, "edvr-flat.ini"),
                        dlss=os.path.join(target, "nvngx_dlss.dll"), xess=os.path.join(target, "libxess.dll"),
+                       xess_fg=os.path.join(target, "libxess_fg.dll"),
+                       xess_ll=os.path.join(target, "libxell.dll"),
                        xess_license=os.path.join(target, "INTEL-XESS-LICENSE.txt"),
                        xess_third_party=os.path.join(target, "INTEL-XESS-THIRD-PARTY.txt"))
         allowed.update({key: os.path.join(target, name) for key, name in FSR4_FILES})
@@ -2023,7 +2068,8 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
               if not os.path.isfile(p[k])]
     if include_dlss and not os.path.isfile(os.path.join(build_dir(root), "nvngx_dlss.dll")):
         errors.append("missing optional DLSS source %s" % os.path.join(build_dir(root), "nvngx_dlss.dll"))
-    xess_names = (("xess", "libxess.dll"), ("xess_license", "INTEL-XESS-LICENSE.txt"),
+    xess_names = (("xess", "libxess.dll"), ("xess_fg", "libxess_fg.dll"), ("xess_ll", "libxell.dll"),
+                  ("xess_license", "INTEL-XESS-LICENSE.txt"),
                   ("xess_third_party", "INTEL-XESS-THIRD-PARTY.txt"))
     # The optional runtimes the game directory lacks -- a game update wipes them with the rest -- are installed
     # when this build has them, whether or not --dlss / --xess / --all was given: without nvngx_dlss.dll the
@@ -2063,7 +2109,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
     # could not be read" for every edit. A flat half that can inherit the settings
     # of edvr.ini does (seed_ini, below) and gets no default.
     # A default whose template is not there is a warning, not a refusal: the payload is what the install is for.
-    # The mirror edvr-installer.exe keeps is asked first (see _mirror_ini_plan): a file it holds is restored, not
+    # The mirror ed-up-launcher.exe keeps is asked first (see _mirror_ini_plan): a file it holds is restored, not
     # defaulted, and a copy this tool cannot place with confidence stops the default rather than being overwritten.
     mirror_restore, mirror_blocked = ([], []) if include_ini else _mirror_ini_plan(target, scope)
     mirror_halves = {half for half, _, _, _ in mirror_restore} | {half for half, _, _, _ in mirror_blocked}
@@ -2104,7 +2150,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
             leftovers.append(descriptor)
         if leftovers:
             raise SystemExit("[edvr] flat preflight refused existing VR or unknown profile state; "
-                             "use edvr-installer.exe to convert and restore originals (run its "
+                             "use ed-up-launcher.exe to convert and restore originals (run its "
                              "update/repair once first if this install was made by this tool, so "
                              "it records the files it must prove before converting):\n       " +
                              "\n       ".join(leftovers))
@@ -2146,6 +2192,9 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
                 if name == "libxess.dll":
                     print("[edvr] WARNING: %s is missing, so XeSS cannot run; an install adds it from this build" %
                           os.path.join(target, name))
+                elif name in ("libxess_fg.dll", "libxell.dll"):
+                    print("[edvr] WARNING: %s is missing, so XeSS Frame Generation / Xe Low Latency cannot run; "
+                          "an install adds it from this build" % os.path.join(target, name))
                 else:
                     print("[edvr] WARNING: %s is missing (an XeSS notice file; XeSS itself is not affected); "
                           "an install adds it from this build" % os.path.join(target, name))
@@ -2204,7 +2253,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
                   "the mirror copy %s" % (ini_target, source))
         for _, ini_target, paths, why in mirror_blocked:
             print("[edvr] WARNING: %s is missing, so the F8 menu cannot save settings; a mirror copy exists (%s) "
-                  "but %s, so an install writes no default: run edvr-installer.exe to restore it" %
+                  "but %s, so an install writes no default: run ed-up-launcher.exe to restore it" %
                   (ini_target, ", ".join(paths), why))
         for _, _, ini_target, _ in default_ini:
             # Not a mismatch (no settings file is part of the payload) but the F8 menu cannot save without one.
@@ -2219,7 +2268,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
             if not any(name.startswith("edvr") for name in names.values()):
                 raise ValueError("existing d3d11.dll is a graphics mod")
         except (OSError, ValueError) as exc:
-            raise SystemExit("[edvr] Use edvr-installer.exe to preserve and chain the existing d3d11.dll: %s" % exc)
+            raise SystemExit("[edvr] Use ed-up-launcher.exe to preserve and chain the existing d3d11.dll: %s" % exc)
     known, running = strict_game_running(target)
     if not dry_run and (not known or running):
         print("[edvr] ERROR: native staging requires a proven stopped game%s" % probe_reason())
@@ -2316,7 +2365,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
               "backup)" % (dst, source))
     for half, dst, paths, why in mirror_blocked:
         print("       WARNING  %s is missing and a mirror copy exists (%s) but %s, so no default is written: run "
-              "edvr-installer.exe to restore it" % (dst, ", ".join(paths), why))
+              "ed-up-launcher.exe to restore it" % (dst, ", ".join(paths), why))
     if seed_ini:
         print("       seed     %s (from edvr.ini; a new file, so no backup)" % _ini_target(target, "flat"))
     for half, source, dst, data in default_ini:
@@ -2394,10 +2443,10 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
             print("[edvr] %s settings were missing: restored %s from the copy kept outside the game folder, %s "
                   "(a game update removes this file; the F8 menu needs it to save)" % (half, dst, source))
         except OSError as exc:
-            print("[edvr] WARNING: could not restore %s from %s (%s); run edvr-installer.exe to restore it" %
+            print("[edvr] WARNING: could not restore %s from %s (%s); run ed-up-launcher.exe to restore it" %
                   (dst, source, exc))
     for half, dst, paths, why in mirror_blocked:
-        print("[edvr] WARNING: %s was not written: a mirror copy exists (%s) but %s; run edvr-installer.exe to "
+        print("[edvr] WARNING: %s was not written: a mirror copy exists (%s) but %s; run ed-up-launcher.exe to "
               "restore it" % (dst, ", ".join(paths), why))
     if seed_ini:
         try:
@@ -2751,7 +2800,7 @@ def _scope_self_test():
               "the migrated chain did not land in the default edvr.ini: %r" % shared)
 
         # The settings mirror (%LOCALAPPDATA%\EDVR\<leaf>-<store>\): a missing settings file comes back from the
-        # newest copy edvr-installer.exe kept, not from the shipped default, because a default written first makes
+        # newest copy ed-up-launcher.exe kept, not from the shipped default, because a default written first makes
         # the installer's restore skip and its next mirror update replace the saved copy with the default.
         def mirror_of(g, slug="folder-you-chose"):
             d = os.path.join(local_app_data, "EDVR", os.path.basename(g) + "-" + slug)
@@ -2830,11 +2879,11 @@ def _scope_self_test():
         Path(mirror_of(g, "epic"), "edvr.ini").write_bytes(b"[user]\nepic-mirror=1\n")
         before = tree(g)
         code, text = run(args_for(g, "--scope", "both", "--dry-run", tag="mire"))
-        check(code == 0 and tree(g) == before and "no default is written" in text and "edvr-installer.exe" in text,
+        check(code == 0 and tree(g) == before and "no default is written" in text and "ed-up-launcher.exe" in text,
               "the dry-run plan did not refuse a default over another store's mirror copy: %r" % text)
         code, text = run(args_for(g, "--scope", "both", tag="mire"))
         check(code == 0 and not Path(g, "edvr.ini").exists() and not Path(g, "edvr-flat.ini").exists()
-              and "edvr-installer.exe" in text,
+              and "ed-up-launcher.exe" in text,
               "a default was written over another store's mirror copy, or the install did not say why not: %r" % text)
         # No LOCALAPPDATA (a Linux host): there is no mirror, and the default is written as before.
         os.environ.pop("LOCALAPPDATA")
@@ -2955,10 +3004,12 @@ def _scope_self_test():
         code, _ = run(args_for(g, "--profile", "vr", "--scope", "vr", tag="alias"))
         check(code == "refused" and tree(g) == before, "--profile with --scope was accepted")
 
-        # XeSS-SR for the VR scope: --xess installs the three files beside the
+        # XeSS-SR for the VR scope: --xess installs the XeSS files beside the
         # game (a dry run writes nothing), and verify flags a VR ini that selects
         # xess while its runtime is missing.
         for name, data in (("libxess.dll", b"XESS-RUNTIME"),
+                           ("libxess_fg.dll", b"XESS-FG-RUNTIME"),
+                           ("libxell.dll", b"XESS-LL-RUNTIME"),
                            ("INTEL-XESS-LICENSE.txt", b"XESS-LICENSE"),
                            ("INTEL-XESS-THIRD-PARTY.txt", b"XESS-NOTICES")):
             Path(root, "build", name).write_bytes(data)
@@ -2972,9 +3023,11 @@ def _scope_self_test():
         code, text = run(args_for(g, "--scope", "vr", "--xess", tag="vrxess"))
         check(code == 0, "--scope vr --xess failed: %r" % text)
         check(Path(g, "libxess.dll").read_bytes() == b"XESS-RUNTIME" and
+              Path(g, "libxess_fg.dll").read_bytes() == b"XESS-FG-RUNTIME" and
+              Path(g, "libxell.dll").read_bytes() == b"XESS-LL-RUNTIME" and
               Path(g, "INTEL-XESS-LICENSE.txt").read_bytes() == b"XESS-LICENSE" and
               Path(g, "INTEL-XESS-THIRD-PARTY.txt").read_bytes() == b"XESS-NOTICES",
-              "--scope vr --xess did not install the three XeSS files")
+              "--scope vr --xess did not install the five XeSS files")
         Path(g, "edvr.ini").write_bytes(b"[fix]\ntemporal_aa = xess\n")
         code, _ = run(args_for(g, "--scope", "vr", "--verify-only", tag="vrxess"))
         check(code == 0, "--scope vr verify rejected a selected XeSS with its files verified")
@@ -2990,18 +3043,20 @@ def _scope_self_test():
         code, text = run(args_for(g, "--scope", "vr", "--dry-run", tag="optmiss"))
         check(code == 0 and tree(g) == before, "a --dry-run that would add the optional runtimes wrote files")
         check("nvngx_dlss.dll was missing from the game directory" in text
-              and "libxess.dll, INTEL-XESS-LICENSE.txt, INTEL-XESS-THIRD-PARTY.txt missing" in text
+              and "libxess.dll, libxess_fg.dll, libxell.dll, INTEL-XESS-LICENSE.txt, INTEL-XESS-THIRD-PARTY.txt missing" in text
               and "amd_fidelityfx_loader_dx12.dll, amd_fidelityfx_upscaler_dx12.dll, AMD-FIDELITYFX-LICENSE.txt missing" in text,
               "the dry-run plan did not name the missing optional runtimes: %r" % text)
         code, text = run(args_for(g, "--scope", "vr", tag="optmiss"))
         check(code == 0, "--scope vr with no optional runtimes failed: %r" % text)
         check(Path(g, "nvngx_dlss.dll").read_bytes() == b"DLSS" and Path(g, "libxess.dll").read_bytes() == b"XESS-RUNTIME"
+              and Path(g, "libxess_fg.dll").read_bytes() == b"XESS-FG-RUNTIME"
+              and Path(g, "libxell.dll").read_bytes() == b"XESS-LL-RUNTIME"
               and Path(g, "INTEL-XESS-LICENSE.txt").read_bytes() == b"XESS-LICENSE"
               and Path(g, "INTEL-XESS-THIRD-PARTY.txt").read_bytes() == b"XESS-NOTICES",
               "a plain install did not add the missing DLSS and XeSS runtimes")
         receipt = os.path.join(g, "edvr_native_receipt.json")
         keys = {e["key"] for e in json.loads(Path(receipt).read_text(encoding="utf-8"))["files"]}
-        check({"dlss", "xess", "xess_license", "xess_third_party"} | {key for key, _ in FSR4_FILES} <= keys
+        check({"dlss", "xess", "xess_fg", "xess_ll", "xess_license", "xess_third_party"} | {key for key, _ in FSR4_FILES} <= keys
               and verify_native_receipt(receipt, g)["version"] == 2,
               "the added runtimes are not in a verifying receipt: %r" % keys)
         code, text = run(args_for(g, "--scope", "vr", "--verify-only", tag="optmiss"))
@@ -3175,7 +3230,7 @@ def _main(argv=None):
     ap = argparse.ArgumentParser(
         description="Install a built EDVR into a game directory, verified.")
     ap.add_argument("--target", default="steam",
-                    help="steam, frontier, or a path to the game directory")
+                    help="steam, epic (Linux), frontier, or a path to the game directory")
     ap.add_argument("--scope", choices=SCOPES, default=None,
                     help="what the install is for: both (default), vr, or flat")
     ap.add_argument("--profile", choices=("vr", "flat"), default=None,
@@ -3319,6 +3374,7 @@ def _main(argv=None):
             target = resolve_target(args.target)
             try:
                 if args.verify_only: return native_direct_verify(root, target, args.native_loader, args.native_runtime or "system")
+                archive_installed_exe(root, target, args.dry_run)
                 return native_direct(root, target, args.native_loader, args.native_runtime or "system", args.dry_run)
             except (OSError, ValueError) as exc:
                 print("[edvr] ERROR: direct native operation failed: %s" % exc)
@@ -3341,6 +3397,7 @@ def _main(argv=None):
         root = os.path.abspath(args.root) if args.root else repo_root()
         target = resolve_target(args.target)
         tag = args.tag or short_hash(root)
+        archive_installed_exe(root, target, args.dry_run)
         return native_install(root, target,
                               args.native_receipt,
                               tag, args.dry_run, args.keep_backups)
@@ -3363,6 +3420,8 @@ def _main(argv=None):
     fsr4_source = os.path.join(build_dir(root), FSR4_FILES[0][1])
     if args.fsr4 and not os.path.isfile(fsr4_source):
         ap.error("--fsr4 requested but %s is missing (build with the FSR 4 SDK: python tools/fetch_fsr4.py)" % fsr4_source)
+    if not args.verify_only:
+        archive_installed_exe(root, target, args.dry_run)
     return standard_native_install(root, target, tag, args.dry_run,
                                    args.verify_only,
                                    include_dlss=(args.dlss or (args.all and os.path.isfile(dlss_source))),
@@ -3651,6 +3710,8 @@ def _xess_opt_in_self_test():
         game.mkdir()
         for name, data in (("d3d11.dll", b"FLAT-GRAPHICS"),
                            ("libxess.dll", b"PINNED-XESS"),
+                           ("libxess_fg.dll", b"PINNED-XESS-FG"),
+                           ("libxell.dll", b"PINNED-XESS-LL"),
                            ("INTEL-XESS-LICENSE.txt", b"LICENSE"),
                            ("INTEL-XESS-THIRD-PARTY.txt", b"THIRD-PARTY")):
             (root / "build" / name).write_bytes(data)
@@ -3912,6 +3973,7 @@ def _compile_only_self_test():
             print("compile_build_dir is not <root>/build/compile-build")
             return False
         products = {"d3d11.dll": b"COMPILE-GRAPHICS", "libxess.dll": b"COMPILE-XESS",
+                    "libxess_fg.dll": b"COMPILE-XESS-FG", "libxell.dll": b"COMPILE-XESS-LL",
                     "INTEL-XESS-LICENSE.txt": b"LICENSE", "INTEL-XESS-THIRD-PARTY.txt": b"THIRD-PARTY",
                     "amd_fidelityfx_loader_dx12.dll": b"COMPILE-AMD-LOADER",
                     "amd_fidelityfx_upscaler_dx12.dll": b"COMPILE-AMD-UPSCALER",
@@ -4446,8 +4508,145 @@ def _run_self_test_labelled():
             sys.stdout, sys.stderr = real_out, real_err
 
 
+def _archive_route_self_test():
+    """Every real install route archives the game exe, a dry run as a dry run;
+    no --verify-only route does. The installs themselves are stubbed out."""
+    ok = True
+    tmp = tempfile.mkdtemp(prefix="edvr_archive_route_test_")
+    names = ("archive_installed_exe", "resolve_target", "standard_native_install",
+             "native_install", "native_direct", "native_direct_verify", "verify_native_receipt")
+    saved = {n: globals()[n] for n in names}
+    archived = []
+    try:
+        loader = os.path.join(tmp, "loader.dll")
+        receipt = os.path.join(tmp, "receipt.json")
+        for path in (loader, receipt):
+            with open(path, "wb") as f:
+                f.write(b"x")
+        globals().update(
+            archive_installed_exe=lambda root, target, dry_run=False: archived.append(dry_run),
+            resolve_target=lambda spec: tmp,
+            standard_native_install=lambda *a, **k: 0,
+            native_install=lambda *a, **k: 0,
+            native_direct=lambda *a, **k: 0,
+            native_direct_verify=lambda *a, **k: 0,
+            verify_native_receipt=lambda *a, **k: {"target": tmp})
+        base = ["--root", tmp, "--target", "steam"]
+        native = base + ["--native-openxr", "--dll", "--scope", "vr"]
+        direct = native + ["--no-backup", "--native-loader", loader]
+        for argv, want, what in (
+                (base, [False], "standard install"),
+                (base + ["--dry-run"], [True], "standard dry run"),
+                (base + ["--verify-only"], [], "standard --verify-only"),
+                (native + ["--native-receipt", receipt], [False], "native install"),
+                (native + ["--native-receipt", receipt, "--verify-only"], [], "native --verify-only"),
+                (direct, [False], "direct native install"),
+                (direct + ["--dry-run"], [True], "direct native dry run"),
+                (direct + ["--verify-only"], [], "direct native --verify-only")):
+            del archived[:]
+            try:
+                rc = main(argv)
+            except SystemExit as exc:
+                rc = exc.code
+            if rc != 0 or archived != want:
+                print("archive route: %s returned %r and archived %r, want 0 and %r" % (what, rc, archived, want))
+                ok = False
+    finally:
+        globals().update(saved)
+        shutil.rmtree(tmp, ignore_errors=True)
+    return ok
+
+
+def _epic_import_self_test():
+    with tempfile.TemporaryDirectory(prefix="edvr_epic_import_") as temporary:
+        root = Path(temporary)
+        tools = root / "tools"
+        tools.mkdir()
+        for name in ("install_edvr", "epic_library", "steam_library", "gen_installer_rc",
+                     "compile_only", "archive_game_exe", "build_receipt"):
+            shutil.copyfile(Path(__file__).resolve().parent / (name + ".py"), tools / (name + ".py"))
+        script = ("import runpy, sys; sys.path.insert(0, sys.argv[2]); sys.dont_write_bytecode = False; "
+                  "runpy.run_path(sys.argv[1], run_name='edvr_import_fixture'); "
+                  "assert sys.dont_write_bytecode is False")
+        result = subprocess.run([sys.executable, "-I", "-c", script, str(tools / "install_edvr.py"), str(tools)],
+                                cwd=str(root), capture_output=True, text=True)
+        if result.returncode != 0 or list(tools.glob("__pycache__/epic_library*.pyc")):
+            print("Epic import self-test: new discovery import wrote bytecode or failed")
+            return False
+        return True
+
+
+def _epic_discovery_self_test():
+    if os.name == "nt":
+        return True  # This route discovers Linux managers only.
+    saved_env = dict(os.environ)
+    try:
+        with tempfile.TemporaryDirectory(prefix="edvr_epic_target_") as temporary:
+            home = Path(temporary)
+            os.environ.clear()
+            os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(home / "config"),
+                              XDG_DATA_HOME=str(home / "data"))
+            prefix = home / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            config = home / "config/heroic"
+            installed = config / "legendaryConfig/legendary/installed.json"
+            installed.parent.mkdir(parents=True)
+            games = config / "GamesConfig"
+            games.mkdir()
+            game = home / "custom Unicode é/Products/odyssey"
+            game.mkdir(parents=True)
+            (game / GAME_EXE).write_bytes(b"game fixture")
+            installed.write_text(json.dumps({"Elite": {"install_path": str(game.parent.parent)}}), encoding="utf-8")
+            (games / "Elite.json").write_text(json.dumps({"Elite": {"winePrefix": str(prefix)}}), encoding="utf-8")
+            assert resolve_target("epic") == str(game)
+            assert _mirror_source_for(game) == "Epic"
+            other = home / "second install"
+            other.mkdir()
+            (other / GAME_EXE).write_bytes(b"game fixture")
+            installed.write_text(json.dumps({"Elite": {"install_path": str(game.parent.parent)},
+                                             "Second": {"install_path": str(other)}}), encoding="utf-8")
+            (games / "Second.json").write_text(json.dumps({"Second": {"winePrefix": str(prefix)}}), encoding="utf-8")
+            try:
+                resolve_target("epic")
+                raise AssertionError("Epic target selected an ambiguous install")
+            except SystemExit as exc:
+                assert "2 epic installs" in str(exc)
+            (other / GAME_EXE).unlink()
+            assert resolve_target("epic") == str(game)
+            inventory = home / "config/lutris/games"
+            inventory.mkdir(parents=True)
+            for index in range(513):
+                (inventory / ("entry-%03d.yml" % index)).write_text("runner: other\n", encoding="utf-8")
+            before = {str(p.relative_to(home)): (p.stat().st_mtime_ns, p.read_bytes() if p.is_file() else None)
+                      for p in home.rglob("*")}
+            try:
+                resolve_target("epic")
+                raise AssertionError("Epic target hid an incomplete inventory")
+            except SystemExit as exc:
+                assert str(inventory) in str(exc) and "512-entry scan limit" in str(exc)
+            result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()),
+                                     "--target", "epic", "--dry-run", "--root", str(home)],
+                                    capture_output=True, text=True)
+            assert result.returncode == 1 and result.stdout == ""
+            assert str(inventory) in result.stderr and "512-entry scan limit" in result.stderr
+            assert "Traceback" not in result.stderr
+            after = {str(p.relative_to(home)): (p.stat().st_mtime_ns, p.read_bytes() if p.is_file() else None)
+                     for p in home.rglob("*")}
+            assert after == before, "Epic dry-run failure wrote files"
+        return True
+    except (AssertionError, OSError) as exc:
+        print("Epic target/source self-test failed: %s" % exc)
+        return False
+    finally:
+        os.environ.clear()
+        os.environ.update(saved_env)
+
+
 def self_test():
     ok = True
+    if not _epic_import_self_test(): ok = False
+    if not _epic_discovery_self_test(): ok = False
+    if not _archive_route_self_test(): ok = False
     if not _game_probe_self_test(): ok = False
     if not _xess_opt_in_self_test(): ok = False
     if not _fsr4_opt_in_self_test(): ok = False
@@ -4649,6 +4848,8 @@ def self_test():
         Path(froot, "build", "d3d11.dll").write_bytes(b"FLAT-GRAPHICS")
         Path(froot, "build", "nvngx_dlss.dll").write_bytes(b"FLAT-DLSS")
         Path(froot, "build", "libxess.dll").write_bytes(b"FLAT-XESS")
+        Path(froot, "build", "libxess_fg.dll").write_bytes(b"FLAT-XESS-FG")
+        Path(froot, "build", "libxell.dll").write_bytes(b"FLAT-XESS-LL")
         Path(froot, "build", "INTEL-XESS-LICENSE.txt").write_bytes(b"INTEL-LICENSE")
         Path(froot, "build", "INTEL-XESS-THIRD-PARTY.txt").write_bytes(b"INTEL-THIRD-PARTY")
         for _key, _name in FSR4_FILES:
@@ -4676,6 +4877,8 @@ def self_test():
             assert Path(fgame, "d3d11.dll").read_bytes() == b"FLAT-GRAPHICS"
             assert Path(fgame, "nvngx_dlss.dll").read_bytes() == b"FLAT-DLSS"
             assert Path(fgame, "libxess.dll").read_bytes() == b"FLAT-XESS"
+            assert Path(fgame, "libxess_fg.dll").read_bytes() == b"FLAT-XESS-FG"
+            assert Path(fgame, "libxell.dll").read_bytes() == b"FLAT-XESS-LL"
             assert Path(fgame, "INTEL-XESS-LICENSE.txt").read_bytes() == b"INTEL-LICENSE"
             assert Path(fgame, "INTEL-XESS-THIRD-PARTY.txt").read_bytes() == b"INTEL-THIRD-PARTY"
             for _key, _name in FSR4_FILES:

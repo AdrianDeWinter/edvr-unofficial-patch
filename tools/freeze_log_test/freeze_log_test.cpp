@@ -410,7 +410,7 @@ void sourcePins(const std::string& root) {
     const std::string modeWatch = slurp(root + "\\src\\d3d11\\mode_watch.cpp");
     const size_t commit = at(modeWatch, "void commitPosted(");
     check(commit != none && at(modeWatch, "perfMonitorProfileSwitch();", commit) != none &&
-              at(modeWatch, "perfMonitorProfileSwitch();", commit) < at(modeWatch, "setNotice(\"EDVR switched to its VR fixes\")", commit),
+              at(modeWatch, "perfMonitorProfileSwitch();", commit) < at(modeWatch, "setNotice(\"ED-UP switched to its VR fixes\")", commit),
           "F9.switch: commitPosted calls perfMonitorProfileSwitch before the notice (on every real switch; a stays returns before it)");
     // The page's last drop still takes every candidate, blips included.
     const size_t pageAt = at(perf, "pageDrop(f);", judge);

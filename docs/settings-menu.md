@@ -2,16 +2,16 @@
 
 ## Status
 
+- **2026-10-28: the Sharp weapons setting is RETIRED** (`fix.sharp_weapons`; its VR menu row and its flat F8 row are gone): the weapons fire is always on. The rig note below is history.
 - **2026-10-17 pre-RC3 R1:** separate add-on save completions; failures retain
-  session state and report uncertain persistence. Focused checks 131/0,
-  mutation proof 42/42. Full build PASS, 170.6 s; dated entry below.
-
+  session state and report uncertain persistence. Focused checks 131/0, mutation proof 42/42. Full build PASS, 170.6 s; dated entry below.
 - **Current code state (2026-10-08; dated notes in Status detail):**
-  - Flat F8 panel (2026-10-22): a Visual tab between Performance and Debug (`menu visual`); "Visual tab" below.
-  - Explorer Cam page (2026-10-08): eye trims and head-follow smoothing, live, for everyone. BUILT, NOT FLOWN.
-  - Hotkeys page (2026-10-08): key, pad or HOTAS rebinding of the menu, Explorer
-    Cam, exposure and history keys. FLOWN OK ("worked great"). Sections
-    "Hotkeys page" and "Explorer Cam page" below.
+  - Visual page (2026-10-27, `menu visual`): VR's menu has one now, beside the flat panel's Visual tab; World scale (`visual.world_scale`), the intro settings and the screen curve are on it; BUILT, NOT FLOWN. The Desktop window page (2026-10-28, `menu desktop_window`, docs\desktop-window.md) follows it: `visual.desktop_window` and its aspect and style keys. Sections "What it shows" and "Visual tab" below.
+  - Flat F8 panel: a Visual tab between Performance and Debug (2026-10-22, `menu visual`), a HUD Anti-Aliasing row (2026-10-24, flat-only as `menu flat_performance`; on VR's Performance page too since 2026-11-03, `menu performance`, flown OK the same day); sections below.
+  - Explorer Cam page (2026-10-08): REMOVED with Explorer Cam (F98, 2026-10-24); its keys are retired.
+  - Hotkeys page (2026-10-08): key, pad or HOTAS rebinding of the menu, AA
+    comparison, exposure and history keys (Explorer Cam's key until F98). FLOWN
+    OK ("worked great"). Section "Hotkeys page" below.
   - Performance page: one `UI quality` row (`fix.ui_quality`, off / 100% /
     125%; default 100) drives the cockpit panels' size and the UI layer;
     BUILT, NOT FLOWN as of its 2026-09-23 entry. Gone: the `HUD quality` row,
@@ -204,7 +204,7 @@ ruled-out list); the summary above points here.
 
 ### Hotkeys page (2026-10-08)
 
-BUILT, NOT FLOWN. A page after Fixes: `hotkey.menu`, `.explorer_cam`,
+BUILT, NOT FLOWN. A page after Fixes: `hotkey.menu`, `.compare_aa`,
 `.dump_camera`, and with `menu.developer` also
 `.dump_draws`, `.dump_eyes` (`# ui: ... | hotkey | live` is a row for
 everyone, `# dev: label ... | hotkey` a developer-only one). Enter waits for
@@ -216,14 +216,15 @@ refused WITH ANY MODIFIER, for every hotkey, the menu key too: the menu reads
 them raw, so CTRL+ENTER would also be its Enter and CTRL+ALT+ESCAPE would
 open the panel and close it in one tick. An exact copy of another hotkey is
 refused, naming it; a press Elite also binds WARNS ("also in Elite"): keys are
-watched, never captured. `hotkey.explorer_cam` is the Explorer Cam switch
-(empty = off), checked against on-foot bindings, locked while a session is on.
+watched, never captured. (Until F98 `hotkey.explorer_cam` was the Explorer Cam
+switch, checked against on-foot bindings and locked while a session was on;
+the row and its lock went with Explorer Cam.)
 
 Ending a capture PRIMES every live Hotkey (`hotkeysSuspend(false)`): each
-latch takes what is held, key, pad or HOTAS. The menu ticks before Explorer
-Cam's F5 is polled, so the press that ended a capture (a refused duplicate, an
-unchanged F5) was a fresh edge there. The rig runs the real `Hotkey` in that
-poll order for each outcome and each kind of Explorer key.
+latch takes what is held, key, pad or HOTAS. The menu ticks before some keys
+are polled (Explorer Cam's F5 was one), so the press that ended a capture (a
+refused duplicate, an unchanged key) was a fresh edge there. The rig runs the
+real `Hotkey` in that poll order for each outcome and each kind of key.
 
 Values: `F5`, `CTRL+SHIFT+F9`; `GamePad_Back`; `231D0200:Joy_12`,
 `231D0200:Joy_POV1Up` (vendor then product, as Elite's .binds write it). HOTAS
@@ -232,31 +233,82 @@ GetDeviceState/GetDeviceData after they return (joy_watch.h), makes no device,
 and calls only GetCapabilities and GetDeviceInfo. The four diagnostic keys
 re-resolve live. A flight checks the `joystick watch:` log line, the Joy_N
 against the .binds, and no stall.
-### Explorer Cam page (2026-10-08)
+### Explorer Cam page (2026-10-08; removed in F98)
 
-BUILT, NOT FLOWN. The `menu explorer_cam` rows of edvr.ini (generator page
-`explorer_cam`), for everyone: Eye height, Eye forward, Eye sideways
-(`fix.explorer_cam_eye_trim_up`, `_forward`, `_right`; -0.5..0.5 m, step 0.01,
-shown "+0.15 m") and Head-follow smoothing (`fix.explorer_cam_follow_smoothing_ms`;
-0..200 ms, step 10, "0 ms (exact)"). They are Sean's personal-preference
-settings, shipped at his tuning (0.15, -0.08, 0.0; 0), live, and they work
-while placed in Explorer Cam. R resets a row to the shipped value. The `ui:`
-line's `step`, `unit`, `signed` and `zero` tokens shape a number row; the
-absolute fallback eye keys stay `ui: hidden` (no row). The Explorer Cam KEY is
-on the Hotkeys page only.
+REMOVED on 2026-10-24 with Explorer Cam. It held the `menu explorer_cam` rows:
+the three eye trims and the head-follow smoothing. The `ui:` line's `step`,
+`unit`, `signed` and `zero` tokens it introduced still shape number rows (the
+Native on foot page uses them). The keys are retired: hidden lines in
+`edvr.ini` at their last values, read only to name a value that differs.
 
-### Visual tab (2026-10-22)
+### Visual tab (2026-10-22) and Visual page (2026-10-27)
 
 BUILT, NOT FLOWN. The flat profile's F8 panel has three tabs, Performance, Visual and Debug, in
-that order. Visual lists the `[visual]` options of edvr.ini (a section of user settings, Fix tier,
-like `[fix]`) for everyone: Intro movie (`visual.intro_video`, formerly `fix.intro_video`, which
-left the Performance tab) and Star glow (`visual.star_glow`, 100 to 200 percent in steps of 25,
-live). The rows are the table `kFlatVisualRows` in `menu_flat_rows.h`, kept in edvr.ini order and
-checked against the flat key gate like the other two tabs. `visual` is a page only the flat
-panel builds, as `debug` is: the headset's menu has no such page, so Intro movie keeps its bare
-`menu` token and stays on the Fixes page in VR, and Star glow (`menu visual`) is flat-only until
-VR has the page. A `[visual]` row with no `menu` token is desktop-only, as a `[fix]` row is; the
-installer's window shows every `[visual]` row (flat view: the two the flat profile reads).
+that order. Visual lists the `[visual]` options of edvr.ini that do something in flat (a section of
+user settings, Fix tier, like `[fix]`) for everyone: Intro movie (`visual.intro_video`, formerly
+`fix.intro_video`, which left the Performance tab) and Star glow (`visual.star_glow`, 100 to 400
+percent in steps of 25, live). The rows are the table `kFlatVisualRows` in `menu_flat_rows.h`,
+kept in edvr.ini order and checked against the flat key gate like the other two tabs. Cockpit glass
+(`visual.cockpit_glass`, `odyssey` or `legacy`, live; `docs/cockpit-glass-legacy-port.md` section 8) is the
+third row, on both profiles' Visual pages (`menu visual`). Legacy glass dirt (`visual.cockpit_glass_dirt`, 0 to 300 percent in steps
+of 10, live; the same doc, section 17) is the fourth, directly under it. Its row is dimmed, and refuses steps, typing and reset
+with a line saying why, unless Cockpit glass is `legacy` (`menu.cpp`, `cockpitGlassDirtRowDisabled`): the dirt is only drawn by
+the legacy shader.
+
+Since 2026-10-27 VR's menu has a Visual page of the same name (above, "What it shows"), built from
+the rows whose token is `menu visual`; the flat tab is built from the table whatever the token. The
+two lists differ on purpose, and the token says which row is whose: `menu visual` on a row the flat
+table does not list is VR's alone (World scale, Intro background picture, Screen curve: the flat
+gate refuses their keys, so a flat row would show a value that does nothing); `menu flat_visual` is
+a flat-tab-only row that VR's page must not show (none today: Star glow was one until the headset
+read it, 2026-10-27; its consumers are `flat_star_glow.cpp` and `vr_star_glow.cpp`); Intro movie
+and Star glow are `menu visual` and are on both. The generator (`tools/gen_settings_schema.py`) refuses a `flat_visual` row the table does not
+list, and, for both flat tables, a listed row that has no row in the schema (no `menu` token, a hidden
+key, a key the code does not read), so a tab cannot silently lack a row it names. A `[visual]` row
+with no `menu` token is desktop-only, as a `[fix]` row is; the installer's window shows every
+`[visual]` row (flat view: the two the flat profile reads).
+
+### Flat-only rows on the Performance tab (2026-10-24)
+
+BUILT. The Performance tab is built from `kFlatPageRows` in `menu_flat_rows.h` whatever page a row's `menu`
+token names, and the headset's Performance page is the Fix-tier rows whose page is `performance`. A row that
+does something only in the flat profile therefore takes `menu flat_performance`: a page the headset's menu
+builds none of, so the row is on the flat tab and not on VR's page. The first was HUD Anti-Aliasing
+(`fix.hud_antialiasing`, on or off, default off, live), directly under UI quality; it dims, and refuses a step,
+while UI quality is off or the anti-aliasing is off (`hudAntiAliasingRowDim`; the layer it smooths is live
+only with both on), and its hint and refusal name the cause that applies.
+**2026-11-03: the row is on both menus.** VR's UI layer now smooths its HUD with the same key (`ui_layer.cpp`
+`uiLayerConfigure` reads it; `docs/ui-layer-2026-09-23.md`, "2026-11-03"), so the row's token is `menu performance`: it
+is on VR's Performance page, directly under UI quality, and on the flat tab (`kFlatPageRows` lists it, as before). The
+dim rule reads the running profile's own anti-aliasing: the flat mode in flat, `fix.temporal_aa` in VR. No row uses
+`flat_performance` today; the generator still supports the token. NOT FLOWN.
+`tools/gen_settings_schema.py` refuses the token on a key
+that is not in `[fix]` and on a key `kFlatPageRows` does not list (the row would be on no menu at all); the
+rigs `flat_sharpen_test` and `sharp_weapons_test` hold the placement, the dimming and VR's page. The installer's
+window, VR view, still lists the row.
+
+### XeSS Frame Generation rows (2026-11-12)
+
+Two flat-only rows (`menu flat_performance`, so none on VR's pages) on the Performance tab, under the DLSS preset
+row (`docs/xess-frame-generation-2026-11-12.md`):
+
+- **XeSS Frame Generation** (`fix.xess_frame_generation`, on | off, default off). Live while the bridge exists. The
+  bridge is made at swap-chain creation, so turning it on after a launch without it shows "Takes effect at the
+  next game start." (`xessFgBridged()` false). When the bridge was tried and failed, or stopped on a fault, the
+  hint says "Not running: <reason>" instead (`xessFgProblem()`), since a restart alone will not fix that.
+  While the window is in exclusive fullscreen (`xessFgExclusiveFullscreen()`), the hint on either row says frame
+  generation is paused and to choose Borderless or Windowed in Elite's display options.
+- **XeSS-FG frames** (`fix.xess_generated_frames`, 1 = 2x, 2 = 3x, 3 = 4x, default 1). Also dimmed while the
+  toggle is off. A choice above the GPU's maximum (`xessFgMaxGeneratedFrames()`, known once a bridge has been made; 0 =
+  unknown, all allowed, and the runtime clamps) is skipped when
+  stepping and marked "(not supported)" in the tooltip, because the panel draws only the current value. A stored
+  value above the maximum shows clamped; the file is not rewritten.
+
+Both rows are always on the page and dimmed unless the flat AA mode is XeSS (`xessFgToggleRowDim`,
+`xessFgFramesRowDim`); a dimmed row refuses a change and says why. Both rows read the AA mode and the toggle from the
+values the panel shows (`g_rows`, as the DLSS preset row does), not `Config`: an F8 change reaches `Config` only
+with the reload after the write, so reading it dimmed (and before that, hid) the rows one change late (2026-11-12). The installer's window lists them in the
+flat view only. `flat_sharpen_test` holds the tables and the menu.cpp wiring.
 
 ## The ask
 
@@ -883,16 +935,54 @@ they were there (flown 2026-09-07).
 2. **Fixes.** Every other `[fix]` row tagged `menu`, under the ini's own
    headings ("When the eyes disagree", ...), scrolling. Restart rows are
    shown, badged, and editable: the badge is the point of showing them.
-   Pages in order: Performance, Fixes, Explorer Cam, Hotkeys, Monitor, Status
-   (and, in developer mode, Advanced, Experimental, Instruments). Two pages
-   were added on 2026-10-08, between Fixes and Monitor, without renumbering
-   this list:
-   - **Explorer Cam** (everyone): the rows tagged `menu explorer_cam` -- Eye
-     height, Eye forward, Eye sideways (`fix.explorer_cam_eye_trim_up`,
-     `_forward`, `_right`, metres, step 0.01, shown "+0.15 m") and Head-follow
-     smoothing (`fix.explorer_cam_follow_smoothing_ms`, 0..200 ms in steps of
-     10, "0 ms (exact)"). Live, also while placed in Explorer Cam. The key
-     stays on the Hotkeys page only.
+   Pages in order: Performance, Fixes, Visual, Native on foot, Hotkeys, Monitor,
+   Status (and, in developer mode, Advanced, Experimental, Instruments). Pages
+   added between Fixes and Monitor, without renumbering this list:
+   - **Visual** (everyone, 2026-10-27): the rows tagged `menu visual`, how the world
+     looks through the headset, in `edvr.ini` order under the ini's headings:
+     **Screen curve (on foot, intro, splash)** and **Intro background picture**
+     (both moved here from the Fixes page), **World scale** (`visual.world_scale`,
+     whole percent 50 to 200, step 1, shipped 100, live: above 100 the world looks
+     bigger, below smaller; the runtime moves the two eye origins the game is told
+     about, about their midpoint, by 100 over the percent, and the layer, the menu
+     and EDVR's own panels keep the located eyes, `docs/world-scale.md`) and
+     **Intro movie** (`visual.intro_video`, moved here from the Fixes page) and
+     **Star glow** (`visual.star_glow`, 100 to 400 percent, live; both profiles read it
+     since the VR port, and the headset's hint line says so when Elite's Bloom is off).
+     A live `edvr.ini` with no `world_scale` line is
+     not a problem: the row shows the shipped 100, and the first change appends the
+     line to `[visual]`, as for any key the file lacks (`hotkey_capture_test` pins the
+     append and the page's rows).
+   - **Native on foot** (everyone, 2026-10-14): the rows tagged
+     `menu native_on_foot`. (The Explorer Cam page stood here from 2026-10-08
+     until F98.) Since F128 (2026-10-25) the page is 17 rows under five headings,
+     in `edvr.ini` order, the switch first and the HUD last: **Native on foot VR**
+     (the feature switch, `fix.native_on_foot`); **Look and aim** (Look to aim,
+     Turn style, Snap turn step, Look to aim smoothing); **Aiming down sights**
+     (ADS: sight eye, ADS: Look to Aim, ADS: scope zoom, A1: the scope
+     lens, `fix.native_on_foot_ads_scope_zoom`, on by default since it flew OK; its
+     reference FOV is the developer tier's `experimental.native_on_foot_ads_scope_zoom_fov`
+     row, and the `experimental.native_on_foot_ads_scope_zoom_full_detail` row, on | off, default on since F205, the user's choice of the scoped
+     Executioner's optic: on takes the lens from the left eye drawn as the zoomed view, at full detail, with an equal black edge in each eye's outer view
+     while the zoom stands, the press taking both eyes whatever ADS: sight eye says, and needing a temporal Anti-aliasing mode; off is the digital
+     zoom with no edge; only a full-detail press of the scoped Executioner also shows the view inside a circle around the sight in both eyes, black
+     outside, its radius the widest that still hides the full-detail view's side bars: no other weapon, no press without full detail and no
+     Anti-aliasing-off press draws one, and it has no row of its own: F206, the pilot's word); **Body and
+     view** (Eye height, Weapon view offset, Weapon eye forward, Visor in
+     breathable air); **HUD** (HUD distance, HUD size, HUD
+     element scale, HUD spread, HUD follow). The headings are the ini's own
+     heading blocks above the rows, as on the Fixes page, and the page is built
+     grouped. The row order is the order of the keys in `edvr.ini`, so a row moves
+     by moving its block there; `hotkey_capture_test` pins the 17 keys, their
+     headings and the switch first. The 21 settings F127 took off the page (World
+     markers, Spine bend amount, Body follows weapon eye offset, the four Pistol
+     and four Rifle ADS readout sliders, HUD room, the eight HUD group offsets and
+     HUD follow smoothing) keep their keys, behaviour and defaults: their `ui:`
+     lines have no `menu` token, so they are set in `edvr.ini` or in the
+     installer's settings window, under the last heading ("Native on foot: other
+     settings"). F128 retires `fix.native_on_foot_visor_axis` after its successful
+     training flight. The visor correction stays enabled, with eye-trust and
+     invalid-output safeguards; the test control is gone.
    - **Hotkeys**: the rows of "Hotkeys page (2026-10-08)" above.
 3. **Monitor.** fpsVR's readout, gathered as cheaply as it can be, and
    where each number comes from:
@@ -1086,6 +1176,13 @@ read the two together:
 What this cannot do is name a cause the ring does not carry. A drop with
 no EDVR event and ordinary EDVR costs is the game's or the runtime's, and
 the page says so by calling it clean.
+
+**2026-11-16:** `menu.fps_overlay` is now `off | compact | detailed`, in VR
+and in flat (`compact` is the single line described here, and an old `on`
+reads as `compact`; `detailed` adds frame time, 1% low and a frame-time
+graph). In flat it sits in the screen's top-right corner. Under XeSS Frame
+Generation it shows the rendered and presented rates separately. See
+[design-f8-menu-unification-2026-11-15.md](design-f8-menu-unification-2026-11-15.md).
 
 **The overlay** (`menu.fps_overlay`, off by default, and **a switch on
 the Performance page** since 2026-09-08 -- it is the one thing a player
@@ -1393,7 +1490,7 @@ developer = off
 
 The `[fix]` rows opt in on their existing `ui:` line: `# ui: Sharpening |
 range 0..1 | percent | menu performance` puts a row on the Performance
-page; a bare `| menu` puts it on Fixes. A `[fix]` row with no `menu` token
+page; `| menu visual` puts it on Visual; a bare `| menu` puts it on Fixes. A `[fix]` row with no `menu` token
 stays in the desktop window only.
 
 **The summon default, F8, comes from a measurement** (2026-09-07, all 30

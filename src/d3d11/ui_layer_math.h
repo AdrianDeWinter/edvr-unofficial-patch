@@ -45,7 +45,7 @@
 
 #include "holo_families.h"  // the crisp take's eight hologram VS hashes: kHoloGeneric's match list
 #include "supercruise_lines.h"  // the orbit lines' and the supercruise bars' shader pairs
-#include "weapons_fire.h"  // the weapons-fire pairs (fix.sharp_weapons)
+#include "weapons_fire.h"  // the weapons-fire pairs
 #include "shield_ripple.h"  // the shield refraction pair
 #include "holo_material.h"  // the cockpit holo panels' second vertex shader (Disable GUI effects)
 
@@ -53,9 +53,11 @@ namespace edvr {
 
 // ---------------------------------------------------------------- the key --
 
-// "off" | "100" | "125" | "150" | "200" -> 0 (off) | 1.0 | 1.25 | 1.5 | 2.0: the target HMD Quality, as
+// "off" | "100" | "125" | "150" | "200" -> 0 (off) | 1.0 | 1.25 | 1.5 | 1.5: the target HMD Quality, as
 // a percentage of HMD Quality 1.0 in the file (a plain number, like every
-// numeric key) and "100%" ... "200%" in the F8 menu. Exact text, the way the
+// numeric key) and "100%" ... "150%" in the F8 menu. "200" is clamped to 150
+// (the ceiling since 2026-11-14): a saved 200 reads as 150, for VR and flat alike.
+// Exact text, the way the
 // other choice keys read: "100.0" is not "100". The first
 // spellings -- "1.0", "1" and "1.25" -- are read for one release as 100 and
 // 125, with *alias set to the new spelling for the log's one-time note.
@@ -72,7 +74,7 @@ inline float uiQualityParse(const char* text, bool* recognized, const char** ali
     if (std::strcmp(text, "100") == 0) return 1.0f;
     if (std::strcmp(text, "125") == 0) return 1.25f;
     if (std::strcmp(text, "150") == 0) return 1.5f;
-    if (std::strcmp(text, "200") == 0) return 2.0f;
+    if (std::strcmp(text, "200") == 0) return 1.5f;  // clamped to the 150% ceiling
     if (std::strcmp(text, "1.0") == 0 || std::strcmp(text, "1") == 0) {
         if (alias) *alias = "100";
         return 1.0f;
@@ -85,12 +87,11 @@ inline float uiQualityParse(const char* text, bool* recognized, const char** ali
     return 0.0f;
 }
 
-// The target as the menu and the log say it: "100%", "125%", "150%", "200%", else "off".
+// The target as the menu and the log say it: "100%", "125%", "150%", else "off".
 inline const char* uiQualityLabel(float target) {
     if (target == 1.0f) return "100%";
     if (target == 1.25f) return "125%";
     if (target == 1.5f) return "150%";
-    if (target == 2.0f) return "200%";
     return "off";
 }
 
@@ -533,6 +534,31 @@ inline bool uiLayerSeedWriterInvalidates(const UiDsEffect& writer, uint8_t seede
         seededDepth && !seededMask && !privateDepthWriteThisFrame);
 }
 
+// A repeat seed (the layer is still this frame's copy of this game buffer, and
+// a tested draw now wants stencil bits it lacks) can leave the layer's depth
+// plane as it stands, and copy only the stencil bits, when that depth is
+// provably what a fresh copy would write. The result is byte-identical:
+//  - not stale: uiLayerSeedWriterInvalidates and the clear hook leave the layer
+//    current only while no game write has changed the game's depth since the
+//    seed, so the source depth is unchanged;
+//  - seededDepth: the layer holds a depth copy at all;
+//  - no private depth-write potential this frame (UiLayerPrivateDepthGuard,
+//    noted at every layer issue with rawDepthWritePotential and in noteReplay):
+//    no layer draw has changed the layer's own depth since the copy;
+//  - the same jitter: the copy samples the game's depth with the eye's jitter,
+//    so a fresh copy with another jitter would write other texels;
+//  - the fallback Seeder (no PSSpecifiedStencilRef: NVIDIA) clears STENCIL
+//    only and writes depth in its first pass alone, then one depth-disabled
+//    pass per requested bit, so omitting that first pass leaves exactly the
+//    depth a fresh copy would write.
+// The specified-reference Seeder (AMD, Intel) writes depth and stencil in one
+// pass: skipping it would skip the stencil too, so it gains nothing and the
+// seed stays as it is.
+inline bool uiLayerSeedKeepsDepth(bool stale, bool seededDepth, bool specifiedStencilRef,
+                                  bool privateDepthWriteThisFrame, bool sameJitter) {
+    return !stale && seededDepth && !specifiedStencilRef && !privateDepthWriteThisFrame && sameJitter;
+}
+
 struct UiLayerPrivateDepthGuard {
     uint64_t sequence = 0;
     void note(uint64_t current, bool rawDepthWritePotential) {
@@ -619,7 +645,8 @@ enum class UiLayerFamily : uint8_t {
     kSurface,    // any other eye draw sampling a learned interface surface
     kGuiDirect,  // a GUI-family draw (vector/text/icon) straight into an eye
     kHolo,       // cockpit holo panels (vs 81216C77F90DEDD6; with Elite's Disable
-                 // GUI effects on, vs 1989E6D3B405FDE0: uiVsIsHoloPanel)
+                 // GUI effects on, vs 1989E6D3B405FDE0; close to a planet's
+                 // surface, vs 925ACEDA0153AA5B: uiVsIsHoloPanel)
     kFlightHud,  // flight HUD (vs B7790CBFC6554097)
     kSprite,     // target-time sprite (vs E508648660A352B2)
     kHoloGeneric,  // the crisp take's eight (holo_families.h kHoloFamiliesTake:
@@ -653,20 +680,37 @@ enum class UiLayerFamily : uint8_t {
                  // uiLayerFamilyOf/uiLayerFamilyFor -- uiLayerNoteOther
                  // assigns it, with the eye already known from the taken
                  // target, not derived by family.
-    kMapCanvas,  // flat only (flat_ui_layer_math.h flatUiMapFamilyOf, while GuiFocus 6, 7 or 8 -- the Galaxy Map,
-                 // the System Map, the Orrery -- is open): the map's GUI canvas composite (vs 12382D2EA45E9632 with
-                 // ps 855C469156AB997F), drawn into the HDR scene and taken into the flat UI layer. No VR classifier
-                 // names it: uiLayerFamilyFor's HDR branch never returns it.
-    kMapSprite,  // flat only, the same gate: a map's icon sprite (vs C31238331D8AC3D4 with ps BD0FEB3276C8B2D7, with
+    kMapCanvas,  // while a map is open (flat: flat_ui_layer_math.h flatUiMapFamilyOf, GuiFocus 6, 7 or 8 -- the Galaxy Map,
+                 // the System Map, the Orrery; VR: UiFamilyFacts.mapOpen, uiLayerFamilyFor's HDR branch, docs\galaxy-map-vr-2026-11-03.md):
+                 // the map's GUI canvas composite (vs 12382D2EA45E9632 with ps 855C469156AB997F), drawn into the HDR scene and taken
+                 // into the UI layer. Without mapOpen no VR classifier names it.
+    kMapSprite,  // the same gate: a map's icon sprite (vs C31238331D8AC3D4 with ps BD0FEB3276C8B2D7, with
                  // ps 539A4858CE3A3477 on the System Map, or with ps 964221955A9E77E7 on the Galaxy Map since game build 334473)
+    kOnFootHud,  // F26 (sharp on-foot HUD): the on-foot HUD's panels and flight HUD, VS 95D01BA609BF7500 and 46546443FD3C3F88 with their
+                 // pixel shaders (uiOnFootHudMatch), named only while the facts say native stereo is on foot (UiFamilyFacts.nativeOnFoot)
     kWeaponsFire,  // the weapons fire (weapons_fire.h: beams and bolts, multicannon rounds and the shield strike's additive part, by
                    // their exact vertex/pixel PAIRS): additive world light taken into the eye's OWN additive HDR layer, separate from
-                   // the HUD's over-blend one, and added onto the upscaled picture after the tonemap. Governed by fix.sharp_weapons,
-                   // NOT fix.ui_quality (uiLayerFamilyEnabled). Not a scene LINE: exempt from the density rule. Last in the enum so
-                   // no older family's number moves.
+                   // the HUD's over-blend one, and added onto the upscaled picture after the tonemap. Governed by the weapons fire's own
+                   // half, NOT fix.ui_quality (uiLayerFamilyEnabled). Not a scene LINE: exempt from the density rule. Last in the enum so
+                   // no older family's number moves (kOnFootHud, the on-foot HUD's, sits ahead of it).
     kShieldRipple,  // the shield-strike refraction (shield_ripple.h: vs 820E5C131B99361D with ps 6EAA86EFE135B2D4): the game's own draw, taken out of the scene and
                     // re-issued through the HDR layer route into the eye's R32G32_FLOAT displacement layer D (t0 swapped for a UV ramp), applied at the door after RCAS.
-                    // Governed by fix.sharp_weapons, as a half of the layer of its own. Last in the enum.
+                    // Governed by its own half of the layer, beside the weapons fire's.
+    kScopeMark,     // the optical scope's AR gunsight mark (A2, docs\design-vr-scope-magnification-2026-10-28.md section 9): vs 025B4B9FF54622ED with ps 46F92DC71BF8DFA5 drawing 6 indices
+                    // in 1 instance with the readout atlas bound, named only while the scope lens is armed for the frame (UiFamilyFacts.scopeMark). A3 (section 10): taken out of the scene
+                    // into the eye's additive weapons layer, with the weapons fire (uiLayerFamilyUsesWeaponsLayer), whose tonemap-difference composite lays it over the picture after the
+                    // lens, so the mark keeps its own size and the brightness the game's additive blend gave it. The weapons fire's half governs it. Last in the enum.
+    kNormalSpaceDust,  // the normal-space dust (vs E904D334BC8B11EA with ps 095030F27D2C362A: supercruise_lines.h), the specks near a planet or a station: 512 additive
+                       // quads (a 3072-vertex Draw) into the lit HDR scene target, taken into the HDR layer as they are, the way the supercruise space dust is (the
+                       // vertex shader builds each speck's size itself, so nothing about the draw changes but where it lands). Not a scene LINE: exempt from the density
+                       // rule. Governed by fix.ui_quality, like the rest of the layer's scene draws. Appended after kScopeMark (2026-11-03) so no older family's number moves.
+    kMapMarks,         // the Galaxy Map's rings (vs 94EA991C3A03DBD9 with ps 65DAC561B5613454) and stems (vs 3028E7C6E0E097F9 with ps 6C28D59784CC493D), additive
+                       // (SRC_ALPHA, ONE) with no depth and no stencil into the R11G11B10F scene, named only while a map is open (UiFamilyFacts.mapOpen) and only
+                       // in VR: flat leaves them in its scene (flatUiLayerTakesFamily does not name it). Appended after kNormalSpaceDust (2026-11-04) so no older
+                       // family's number moves (docs\galaxy-map-vr-2026-11-03.md, Fix 2).
+    kMapPlane,         // the System Map's flat icons (vs 88DCF1164C640EC3 with ps FEDE6C9825C3828E, n=6), drawn after the bodies with the depth test the game gave them, named only while the System Map's camera is up (UiFamilyFacts.mapSystem): the vertex shader is a general one, also drawn on the Galaxy Map and in the world.
+    kMapGrid,          // the System Map's grid: the same pair at n=1014, drawn before most bodies at viewport depth 0. In the layer it takes no depth test; the bodies are cut out of the layer after it (galaxy_map_vs.h, THE CUT-OUT BEHIND THE BODIES). Both appended after kMapMarks (2026-11-05).
+    kLegacyGlass,      // the canopy under visual.cockpit_glass = legacy (vs 8C091FFD08644E02 with ps 4E4FF61E8A08FC7E; cockpit_glass.cpp swaps the pixel shader for EDVR's own at bind time): the whole draw is taken into the eye's additive weapons layer W, so the dirt leaves the upscaler. Named only while UiFamilyFacts.legacyGlass is set, which flat's rule and VR's set only while the legacy look is live (docs\cockpit-glass-legacy-port.md, "The dirt layer"). Appended after kMapGrid (2026-11-05).
     kCount
 };
 
@@ -687,31 +731,55 @@ inline const char* uiLayerFamilyName(UiLayerFamily f) {
         case UiLayerFamily::kAfterUi: return "after the UI";
         case UiLayerFamily::kMapCanvas: return "map canvas";
         case UiLayerFamily::kMapSprite: return "map sprite";
+        case UiLayerFamily::kOnFootHud: return "on-foot HUD";
         case UiLayerFamily::kWeaponsFire: return "weapons fire";
         case UiLayerFamily::kShieldRipple: return "shield ripple";
+        case UiLayerFamily::kScopeMark: return "scope mark";
+        case UiLayerFamily::kNormalSpaceDust: return "normal-space dust";
+        case UiLayerFamily::kMapMarks: return "map rings and stems";
+        case UiLayerFamily::kMapPlane: return "map plane icons";
+        case UiLayerFamily::kMapGrid: return "map grid";
+        case UiLayerFamily::kLegacyGlass: return "legacy glass";
         default: return "none";
     }
 }
 
 // The families the crisp take draws into the eye's HDR layer when they are drawn into the lit HDR scene target (the
-// cockpit's holo panels, the flight HUD, the target sprite, the eight holograms, and the three supercruise draws: the
-// orbit lines, the bars and the space dust). The ONE list: ui_layer.cpp's decision and the rigs' routing model both ask it.
-// The two map families (kMapCanvas, kMapSprite) are in it too: the flat layer asks for them only while a map is open
-// (flat_ui_layer_math.h), and no VR family rule names them, so the VR take never reaches them.
+// cockpit's holo panels, the flight HUD, the target sprite, the eight holograms, the three supercruise draws: the
+// orbit lines, the bars and the space dust, and the normal-space dust). The ONE list: ui_layer.cpp's decision and the rigs' routing model both ask it.
+// The three map families (kMapCanvas, kMapSprite, kMapMarks) are in it too: both layers ask for the first two only while a map is open
+// (flat_ui_layer_math.h; VR through UiFamilyFacts.mapOpen), and the third is VR's alone.
 inline bool uiLayerFamilyTakesHdr(UiLayerFamily f) {
     return f == UiLayerFamily::kHolo || f == UiLayerFamily::kFlightHud || f == UiLayerFamily::kSprite ||
            f == UiLayerFamily::kHoloGeneric || f == UiLayerFamily::kOrbitLines ||
            f == UiLayerFamily::kSupercruiseBars || f == UiLayerFamily::kSpaceDust ||
-           f == UiLayerFamily::kMapCanvas || f == UiLayerFamily::kMapSprite || f == UiLayerFamily::kWeaponsFire ||
-           f == UiLayerFamily::kShieldRipple;
+           f == UiLayerFamily::kMapCanvas || f == UiLayerFamily::kMapSprite || f == UiLayerFamily::kOnFootHud ||
+           f == UiLayerFamily::kWeaponsFire || f == UiLayerFamily::kShieldRipple || f == UiLayerFamily::kScopeMark ||
+           f == UiLayerFamily::kNormalSpaceDust || f == UiLayerFamily::kMapMarks || f == UiLayerFamily::kMapPlane || f == UiLayerFamily::kMapGrid ||
+           f == UiLayerFamily::kLegacyGlass;
 }
 
-// Which key governs a family: the weapons fire is fix.sharp_weapons's, and so is the shield ripple (as a half of its own: `rippleOn` is the key with the ripple's own
-// stand-down), every other family is fix.ui_quality's. The two keys are
-// independent (the four combinations are the sharp_weapons_test rig's): fix.ui_quality off takes no interface, fix.sharp_weapons off
-// takes no weapons fire, whatever the other says. `qualityOn` and `sharpOn` are the keys' LIVE states (the layer not stood down).
-inline bool uiLayerFamilyEnabled(UiLayerFamily f, bool qualityOn, bool sharpOn, bool rippleOn = true) {
-    return f == UiLayerFamily::kWeaponsFire ? sharpOn : f == UiLayerFamily::kShieldRipple ? rippleOn : qualityOn;
+// The families drawn into the eye's additive weapons layer W (the weapons fire's light and the scope's gunsight mark, which the game blends additively too, and the legacy
+// canopy's glare and dirt, whose replacement shader's output over a black layer is the same added light) and so composited by the same tonemap difference,
+// T(F_up + L) - T(F_up), after the upscale. The ONE list: the decision, the layer's draw path and the rigs' routing model ask it.
+inline bool uiLayerFamilyUsesWeaponsLayer(UiLayerFamily f) {
+    return f == UiLayerFamily::kWeaponsFire || f == UiLayerFamily::kScopeMark || f == UiLayerFamily::kLegacyGlass;
+}
+
+// Whether the legacy canopy's draw takes the half-resolution route, drawn at the draw target's size and added into the weapons layer: the eye's weapons layer is at least 1.5 times the draw's target on
+// BOTH axes (2 * layer >= 3 * target, in integers). At 1:1 (flat at its native size) the route would only add a pass, so the draw keeps the full route and flat behaves as it did.
+inline bool uiLegacyGlassHalfRes(uint32_t layerW, uint32_t layerH, uint32_t targetW, uint32_t targetH) {
+    if (!layerW || !layerH || !targetW || !targetH) return false;
+    return 2ull * layerW >= 3ull * targetW && 2ull * layerH >= 3ull * targetH;
+}
+
+// Which half governs a family: the weapons fire is its own half, and so is the shield ripple (as a half of its own: `rippleOn` is its live state, with
+// the ripple's own stand-down), every other family is fix.ui_quality's. The scope's gunsight mark rides the weapons layer, so it is the weapons half's (its arming is the
+// scope zoom key, in the draw hook's facts). The halves are
+// independent (the four combinations are the sharp_weapons_test rig's): fix.ui_quality off takes no interface, a stood-down weapons half takes no
+// weapons fire and no mark, whatever the other says. `qualityOn` and `weaponsOn` are the halves' LIVE states (the layer not stood down).
+inline bool uiLayerFamilyEnabled(UiLayerFamily f, bool qualityOn, bool weaponsOn, bool rippleOn = true) {
+    return uiLayerFamilyUsesWeaponsLayer(f) ? weaponsOn : f == UiLayerFamily::kShieldRipple ? rippleOn : qualityOn;
 }
 
 // The two families that are scene geometry rather than interface: the layer takes them for DENSITY alone (their lines
@@ -725,6 +793,16 @@ inline bool uiLayerFamilyIsSceneLines(UiLayerFamily f) {
 // axes (a layer that is wider in one only is not a density gain the strip's width arithmetic is made for).
 inline bool uiLayerWiderThanRender(uint32_t layerW, uint32_t layerH, uint32_t renderW, uint32_t renderH) {
     return renderW != 0 && renderH != 0 && layerW > renderW && layerH > renderH;
+}
+
+// The density rule's test, per profile (2026-11-03). VR keeps the strict rule above: the lines are taken for DENSITY, so a layer that is not wider than the
+// render has nothing to give them. In FLAT the take is for the HISTORY, not the density: the upscaler's temporal history smears a 1 px line or a streak that
+// moves its own width a frame, and a layer drawn after the upscale has no history to smear, whatever its density. So a layer AT LEAST as large as the render on
+// both axes is enough (DLAA at UI quality 100 has render == display, the layer the display's size); only a layer narrower than the render (Elite's supersampling
+// above the UI quality) still refuses kNoDensityGain. The bars' strip shader is exact at ratio 1 (supercruise_bars_binding.h tentHalfWidth clamps to 1 texel).
+inline bool uiLayerSceneLinesFit(uint32_t layerW, uint32_t layerH, uint32_t renderW, uint32_t renderH, bool flat) {
+    if (!flat) return uiLayerWiderThanRender(layerW, layerH, renderW, renderH);
+    return renderW != 0 && renderH != 0 && layerW >= renderW && layerH >= renderH;
 }
 
 // After the UI: whether a later owner draw that WRITES an eye target the UI
@@ -832,6 +910,10 @@ constexpr uint64_t kUiVsHolo = 0x81216C77F90DEDD6ull;
 // effects", user 5 on rc.5: soft panels, ghosting text; the pair in 3 of 3 field logs with the
 // setting on and 0 of 11 with it off).
 constexpr uint64_t kUiVsHoloGuiFxOff = kHoloGuiFxOffVs;
+// The same panels close to a planet's surface: field logs show the game drawing them with a third vertex shader there (and a pixel
+// shader without the shadow stage, holo_material.h), and until it was named they stayed in the scene and the upscaler smeared them
+// (docs/ui-layer-2026-09-23.md, "2026-10-31: field report": FSR, 22 draws a frame for a minute, no family).
+constexpr uint64_t kUiVsHoloNoShadow = kHoloNoShadowVs;
 constexpr uint64_t kUiVsFlightHud = 0xB7790CBFC6554097ull;
 constexpr uint64_t kUiVsSprite = 0xE508648660A352B2ull;
 constexpr uint64_t kUiVsGuiVector = 0x666EF0C4C616F67Eull, kUiVsGuiText = 0x1012E00B3CB44469ull,
@@ -862,10 +944,123 @@ inline bool uiKnownPs(const uint64_t* list, size_t n, uint64_t ps) {
     return false;
 }
 
-// The cockpit holo panels' vertex shaders: the stock one's, and the one the game draws them with
-// while Disable GUI effects is on. The ONE place that says so: both of uiLayerFamilyFor's
+// The cockpit holo panels' vertex shaders: the stock one's, the one the game draws them with
+// while Disable GUI effects is on, and the one it draws them with close to a planet's surface.
+// The ONE place that says so: both of uiLayerFamilyFor's
 // branches ask it, so a panel the HDR take names is named on the post-tonemap target too.
-constexpr bool uiVsIsHoloPanel(uint64_t vs) { return vs == kUiVsHolo || vs == kUiVsHoloGuiFxOff; }
+constexpr bool uiVsIsHoloPanel(uint64_t vs) { return vs == kUiVsHolo || vs == kUiVsHoloGuiFxOff || vs == kUiVsHoloNoShadow; }
+
+// F26 (sharp on-foot HUD): the on-foot HUD's draws, by their full 64-bit shader hashes as the flight logs print them (2026-10-14: VS 95D01BA609BF7500
+// with PS 067CBE05E7EF7F32, CF4ECC0397199145 or F10792B40AE3ED42; VS 46546443FD3C3F88 with PS AD050E528C0E8B17 or EFDF9BCB97E166A1). D005EBB14A22EA0E
+// (the text) is NOT taken yet. The family is named only with UiFamilyFacts.nativeOnFoot, so the same VS on a menu or in flat is never named.
+constexpr uint64_t kUiVsOnFootHudA = 0x95D01BA609BF7500ull, kUiVsOnFootHudB = 0x46546443FD3C3F88ull;
+inline bool uiOnFootHudVs(uint64_t vs) { return vs == kUiVsOnFootHudA || vs == kUiVsOnFootHudB; }
+inline bool uiOnFootHudMatch(uint64_t vs, uint64_t ps) {
+    if (vs == kUiVsOnFootHudA) return ps == 0x067CBE05E7EF7F32ull || ps == 0xCF4ECC0397199145ull || ps == 0xF10792B40AE3ED42ull;
+    if (vs == kUiVsOnFootHudB) return ps == 0xAD050E528C0E8B17ull || ps == 0xEFDF9BCB97E166A1ull;
+    return false;
+}
+
+// A2: the scope's AR gunsight mark. The pair is the weapon and tool material's too (flat_weapon_footprint.h), so the pair is not the key: the mark is that pair drawing kScopeMarkIndices
+// indices in one instance (kind X or I) with the readout atlas bound. The atlas is the texture the weapon readout's composite (vs B10B032BDFD46700) samples: a learned interface
+// surface (ui_depth.cpp learns every texture the GUI renderer draws into), 3525x3133 in the dump census of edvr_gfx_20261028_173510, where the material samples BC-compressed
+// 1024x1024 textures. The family is named only while the scope lens is armed for the frame (scopeZoomMarkArmed).
+constexpr uint64_t kUiVsScopeMark = 0x025B4B9FF54622EDull, kUiPsScopeMark = 0x46F92DC71BF8DFA5ull;
+constexpr uint32_t kScopeMarkIndices = 6, kScopeMarkInstances = 1;
+inline bool uiScopeMarkShape(char kind, uint32_t indices, uint32_t instances) {
+    return (kind == 'X' || kind == 'I') && indices == kScopeMarkIndices && instances == kScopeMarkInstances;
+}
+// The facts gate of the family (vscreen.cpp's uiLayerFamilyOf asks it; sharp_weapons_test drives this very function with stand-ins for what the hook reads): the pair's vertex shader
+// drawing the mark's shape, the lens armed for the frame, then the pixel shader and a learned interface surface bound. The tests are in that order and each is a call the next
+// waits on, so an ordinary draw reads no hash and asks nothing of the lens. *psOut receives the pixel shader's hash once it has been read.
+template <class Armed, class PsHash, class Surface>
+inline bool uiScopeMarkFacts(uint64_t vs, char kind, uint32_t indices, uint32_t instances, Armed&& armed, PsHash&& psHash, Surface&& surfaceBound, uint64_t* psOut = nullptr) {
+    if (vs != kUiVsScopeMark || !uiScopeMarkShape(kind, indices, instances) || !armed()) return false;
+    const uint64_t ps = psHash();
+    if (psOut) *psOut = ps;
+    return ps == kUiPsScopeMark && surfaceBound();
+}
+// The mark's blend is ONE, DEST_ALPHA (the dump census, bl=12,7,1/2,7,1) into the lit R11G11B10_FLOAT eye target. That format has no alpha channel, so D3D11 reads its
+// destination alpha as 1 (tools\sharp_weapons_test destAlphaReproduction runs the blend on WARP) and the blend adds the mark's light to the scene; the layer's alpha is
+// transmittance, so the factor is rewritten to what the game's target gave it, here and nowhere else (every other family keeps destination-alpha factors refused).
+inline bool uiLayerFormatHasAlpha(uint32_t dxgiFormat) {
+    return dxgiFormat != 26 /* R11G11B10_FLOAT */ && dxgiFormat != 67 /* R9G9B9E5_SHAREDEXP */;
+}
+inline UiBlendRt uiLayerBlendDestAlphaOne(UiBlendRt b) {
+    const auto one = [](uint8_t& f) {
+        if (f == uiblend::kDestAlpha) f = uiblend::kOne;
+        else if (f == uiblend::kInvDestAlpha) f = uiblend::kZero;
+    };
+    one(b.src);
+    one(b.dst);
+    return b;
+}
+
+// What the layer does with the scope mark's depth and stencil tests (the draw tests depth GEQUAL and stencil against a reference, writing neither, in the dump census). The mark lies
+// on the sight glass, in front of the world and inside the lens, where nothing nearer is drawn, so a test the layer cannot reproduce is dropped and the mark is still redrawn in
+// the layer, rather than left in the scene to be magnified with the world. The numbers are scope_zoom_s1.h's kMarkPath*.
+enum class UiMarkDepth : uint8_t {
+    kUntested = 0,       // the draw tests neither depth nor stencil
+    kSeeded = 1,         // it tests, against the layer's seeded copy of the game's depth-stencil
+    kSeededReadOnly = 2, // the same, the game's view bound read-only (the draw writes nothing: a read-only view is accepted for the mark alone)
+    kTestsOff = 3,       // the copy could not be made or reproduced: the mark is redrawn with the tests off
+    kRefused = 4         // it tests and writes, and the copy cannot be had: the ordinary refusal
+};
+// The state's potential to write, whatever the view's read-only flags say: depth enabled with the write mask on, or a stencil operation that changes the stencil under a write
+// mask. A read-only view is accepted for the mark only when this is false, so the layer's writable copy cannot be changed by the draw either.
+inline bool uiScopeMarkWritesNothing(const UiDsState& s) {
+    const auto faceWrites = [](const UiDsFace& f) { return f.pass != uids::kKeep || f.fail != uids::kKeep || f.depthFail != uids::kKeep; };
+    const bool depthWrite = s.depthEnable && s.depthWriteAll;
+    const bool stencilWrite = s.stencilEnable && s.writeMask != 0 && (faceWrites(s.front) || faceWrites(s.back));
+    return !depthWrite && !stencilWrite;
+}
+// The path the mark's draw takes: e is what it does with the bound target, reproducible whether the layer could reproduce it (a read-only view counted as reproducible only where
+// uiScopeMarkWritesNothing allowed it), s the state (for the view's flags).
+inline UiMarkDepth uiScopeMarkDepth(const UiDsEffect& e, const UiDsState& s, bool reproducible) {
+    if (!e.tests()) return UiMarkDepth::kUntested;
+    if (reproducible) return (s.readOnlyDepth || s.readOnlyStencil) ? UiMarkDepth::kSeededReadOnly : UiMarkDepth::kSeeded;
+    return e.writes() ? UiMarkDepth::kRefused : UiMarkDepth::kTestsOff;
+}
+inline const char* uiMarkDepthName(UiMarkDepth p) {   // the press line's labels
+    switch (p) {
+        case UiMarkDepth::kUntested: return "untested";
+        case UiMarkDepth::kSeeded: return "seeded";
+        case UiMarkDepth::kSeededReadOnly: return "seeded read-only";
+        case UiMarkDepth::kTestsOff: return "tests off";
+        default: return "refused";
+    }
+}
+
+// THE MAP'S DRAWS (flat draw census 2026-10-10; the VR eye dumps of 2026-11-04, docs\galaxy-map-vr-2026-11-03.md): drawn into the R11G11B10F scene after the bloom
+// and before the tonemap, while the Galaxy Map (GuiFocus 6), the System Map (7) or the Orrery (8) is open. The canvas and the sprites are SRC_ALPHA/INV_SRC_ALPHA with
+// stencil write only and no depth test; the rings and stems are SRC_ALPHA/ONE with neither. flat_ui_layer_math.h's kFlatUiMap* are aliases of the first two.
+constexpr uint64_t kUiVsMapCanvas = 0x12382D2EA45E9632ull, kUiPsMapCanvas = 0x855C469156AB997Full;
+constexpr uint64_t kUiVsMapSprite = 0xC31238331D8AC3D4ull;
+constexpr uint64_t kUiPsMapSpriteA = 0xBD0FEB3276C8B2D7ull;  // the 64x64 / 128x128 BC3 / BC7 icons (Galaxy, Orrery)
+constexpr uint64_t kUiPsMapSpriteB = 0x539A4858CE3A3477ull;  // the System Map's sprites (n=12)
+constexpr uint64_t kUiPsMapSpriteC = 0x964221955A9E77E7ull;  // the Galaxy Map's icons since game build 334473
+constexpr uint64_t kUiVsMapRings = 0x94EA991C3A03DBD9ull, kUiPsMapRings = 0x65DAC561B5613454ull;
+constexpr uint64_t kUiVsMapStems = 0x3028E7C6E0E097F9ull, kUiPsMapStems = 0x6C28D59784CC493Dull;
+constexpr uint64_t kUiVsMapPlane = 0x88DCF1164C640EC3ull, kUiPsMapPlane = 0xFEDE6C9825C3828Eull;
+// The System Map's lines round a body in its close view (dump 100700560001): two vertex shaders with one pixel shader, drawn after the body with its depth test. They take the plane icons' family.
+constexpr uint64_t kUiVsMapLinesA = 0x1DEF9D1F9183B1B8ull, kUiVsMapLinesB = 0xBA16062A2EB66F1Full, kUiPsMapLines = 0x33758387B70944A1ull;
+inline bool uiVsIsSystemMapOnly(uint64_t vs) { return vs == kUiVsMapPlane || vs == kUiVsMapLinesA || vs == kUiVsMapLinesB; }
+// The map frame's tonemap (VR eye dumps, 2026-11-04): vs 6F4B7B60C6C15BBF with ps 5EC48683F6C86A42, the scene at PS t0 and a 1008x1008 R11G11B10F bloom at t1. Its constant
+// buffer b2 is declared CB2[11] (176 bytes).
+constexpr uint64_t kUiVsMapTone = 0x6F4B7B60C6C15BBFull, kUiPsMapTone = 0x5EC48683F6C86A42ull;
+// Does this draw's vertex shader belong to a map's overlay pairs (vscreen.cpp reads the pixel shader's hash only for these, and only with a map open).
+inline bool uiVsIsMapOverlay(uint64_t vs) {
+    return vs == kUiVsMapCanvas || vs == kUiVsMapSprite || vs == kUiVsMapRings || vs == kUiVsMapStems;
+}
+// The map pairs' family, asked for the HDR target while a map is open.
+inline UiLayerFamily uiLayerMapFamilyOf(uint64_t vs, uint64_t ps) {
+    if (vs == kUiVsMapCanvas && ps == kUiPsMapCanvas) return UiLayerFamily::kMapCanvas;
+    if (vs == kUiVsMapSprite && (ps == kUiPsMapSpriteA || ps == kUiPsMapSpriteB || ps == kUiPsMapSpriteC))
+        return UiLayerFamily::kMapSprite;
+    if ((vs == kUiVsMapRings && ps == kUiPsMapRings) || (vs == kUiVsMapStems && ps == kUiPsMapStems))
+        return UiLayerFamily::kMapMarks;
+    return UiLayerFamily::kNone;
+}
 
 struct UiFamilyFacts {
     int targetKind = 0;           // uiLayerTargetKind: 0 no eye target, 1 not 8-bit UNORM, 2 post-tonemap
@@ -873,7 +1068,18 @@ struct UiFamilyFacts {
     bool excluded = false;        // ui_depth's exclude list
     bool panelSized = false;      // srv0IsPanelSized: the 2D screen's composite
     bool learnedSurface = false;  // a learned interface surface in PS slots 0..3
+    bool nativeOnFoot = false;    // F26: fix.native_on_foot_sharp_hud is on, VR, and native stereo on foot (only VR's on-foot path sets it)
+    bool scopeMark = false;       // A2: the scope lens is armed for the frame and this draw is 6 indices in 1 instance with a learned surface (the readout atlas) bound
+    bool mapOpen = false;         // VR: a map is open (the map camera's stage is named, or GuiFocus is 6..8): the HDR branch names the map pairs first. Flat's rule leaves it false
+    bool mapSystem = false;       // VR: the System Map's camera is up, so its flat plane's pair is named
+    bool mapPlaneIcon = false;    // that pair's draw is one of the plane's icons (n=6)
+    bool mapPlaneGrid = false;    // or the grid (n=1014). Flat's census shows the pair at another count too, a mesh of 58416 indices: that stays in the scene
+    bool legacyGlass = false;     // visual.cockpit_glass is legacy (cockpitGlassLegacyLive) and the replacement is bound, so the canopy pair is named; with `odyssey` nothing sets it
 };
+
+// The canopy pair (holo_families.h kHoloCanopy; cockpit_glass_core.h kReplacedPsHash is the same pixel shader, which tools\cockpit_glass_test holds equal). The shadow records the game's
+// hashes, not the swapped shader's, so these are what a draw's key carries while the swap is in.
+constexpr uint64_t kUiVsLegacyGlass = kHoloCanopy, kUiPsLegacyGlass = 0x4E4FF61E8A08FC7Eull;
 
 // How the rule reached its answer, for the family census (ui_layer.cpp).
 enum class UiFamilyWhy : uint8_t {
@@ -903,6 +1109,17 @@ inline const char* uiFamilyWhyName(UiFamilyWhy w) {
     }
 }
 
+// Can any pixel shader and any runtime fact make uiLayerFamilyFor name a family for this vertex shader on the HDR target (kind 1)? The
+// vertex shaders the kind-1 branch above tests, plus the panel and loader pair (the family probe records them whatever the family) and the
+// two runtime-gated names (the scope mark, the on-foot HUD), and a map's four overlay vertex shaders. False means kNone for every pixel shader. Kind 2 has no such answer: a
+// panel-sized draw is the screen for any vertex shader. The sharp_weapons_test rig proves the implication and scans this list against the rule.
+inline bool uiLayerFamilyHdrVsMayWant(uint64_t vs) {
+    return vs == kUiVsPanel || vs == kUiVsLoader || uiVsIsMapOverlay(vs) || vs == kUiVsMapPlane || vs == kUiVsMapLinesA || vs == kUiVsMapLinesB || uiVsIsHoloPanel(vs) || vs == kUiVsFlightHud || vs == kUiVsSprite ||
+           vs == kUiVsOrbitLines || vs == kUiVsSupercruiseBars || vs == kUiVsSpaceDust || vs == kVsNormalSpaceDust || weaponsFireVs(vs) || shieldRefractVs(vs) ||
+           uiHoloGenericHash(vs) || vs == kHoloTargetSphere || uiOnFootHudVs(vs) || vs == kUiVsScopeMark ||
+           vs == kUiVsLegacyGlass;   // runtime-gated like the scope mark (UiFamilyFacts.legacyGlass): the byte holds hashes only, the facts decide per draw
+}
+
 inline UiLayerFamily uiLayerFamilyFor(const UiFamilyFacts& f, UiFamilyWhy* why = nullptr) {
     UiFamilyWhy w = UiFamilyWhy::kOther;
     UiLayerFamily out = UiLayerFamily::kNone;
@@ -916,13 +1133,17 @@ inline UiLayerFamily uiLayerFamilyFor(const UiFamilyFacts& f, UiFamilyWhy* why =
         // is deliberately NOT on that list -- it sits in front of the whole
         // sky, and covering it would smear the stars behind it, the depth
         // pass's own reasoning -- and neither are the two the phase-3
-        // review refused. Two exact target-sphere pixel shaders are now
+        // review refused. The canopy is named below only under the legacy
+        // look (UiFamilyFacts.legacyGlass): it is
+        // taken into the additive layer, which adds light and covers nothing,
+        // so the stars behind it are not touched. Two exact target-sphere pixel shaders are now
         // considered separately: their original screen-depth address must be
         // repaired and all dependencies prepared before redirecting. Unknown
         // sphere variants and the shared world/cockpit corona remain stock.
         // World-marker brackets remain in the original scene. The cockpit holo
-        // panels are two vertex shaders (uiVsIsHoloPanel): the stock one and the
-        // one the game switches in with Disable GUI effects on. An unnamed pair
+        // panels are three vertex shaders (uiVsIsHoloPanel): the stock one, the
+        // one the game switches in with Disable GUI effects on, and the one it
+        // draws them with close to a planet's surface. An unnamed pair
         // gets no decision and no refusal line (2026-10-01: soft, ghosting panels
         // for a user with the setting on), which is why ui_scene_composites.h
         // counts the composites left in the scene. The three supercruise draws (the
@@ -930,18 +1151,30 @@ inline UiLayerFamily uiLayerFamilyFor(const UiFamilyFacts& f, UiFamilyWhy* why =
         // here on the HDR target alone: the vertex shaders of the bars and of the dust
         // are also seen with another pixel shader (the flat recipes), and a draw of
         // theirs into the post-tonemap target is nothing this names.
-        out = uiVsIsHoloPanel(f.vs)    ? UiLayerFamily::kHolo
+        // The map's pairs come first while a map is open (UiFamilyFacts.mapOpen): none of the four vertex shaders is named by a rule below.
+        out = f.mapOpen ? uiLayerMapFamilyOf(f.vs, f.ps) : UiLayerFamily::kNone;
+        if (out == UiLayerFamily::kNone && f.mapSystem && f.vs == kUiVsMapPlane && f.ps == kUiPsMapPlane)
+            out = f.mapPlaneIcon ? UiLayerFamily::kMapPlane : f.mapPlaneGrid ? UiLayerFamily::kMapGrid : UiLayerFamily::kNone;
+        else if (out == UiLayerFamily::kNone && f.mapSystem && (f.vs == kUiVsMapLinesA || f.vs == kUiVsMapLinesB) && f.ps == kUiPsMapLines)
+            out = UiLayerFamily::kMapPlane;
+        if (out == UiLayerFamily::kNone)
+            out = uiVsIsHoloPanel(f.vs)    ? UiLayerFamily::kHolo
               : f.vs == kUiVsFlightHud ? UiLayerFamily::kFlightHud
               : f.vs == kUiVsSprite    ? UiLayerFamily::kSprite
               : (f.vs == kUiVsOrbitLines && f.ps == kUiPsOrbitLines) ? UiLayerFamily::kOrbitLines
               : (f.vs == kUiVsSupercruiseBars && f.ps == kUiPsSupercruiseBars) ? UiLayerFamily::kSupercruiseBars
               : (f.vs == kUiVsSpaceDust && f.ps == kUiPsSpaceDust) ? UiLayerFamily::kSpaceDust
+              : (f.vs == kVsNormalSpaceDust && f.ps == kPsNormalSpaceDust) ? UiLayerFamily::kNormalSpaceDust
               : weaponPairIndex(f.vs, f.ps) >= 0 ? UiLayerFamily::kWeaponsFire
               : shieldRefractPair(f.vs, f.ps) ? UiLayerFamily::kShieldRipple
               : (uiHoloGenericHash(f.vs) ||
                  (f.vs == kHoloTargetSphere &&
                   (f.ps == 0xEA02FAC2BD6C643Cull || f.ps == 0xE95634B0F61D218Full)))
-                  ? UiLayerFamily::kHoloGeneric : UiLayerFamily::kNone;
+                  ? UiLayerFamily::kHoloGeneric
+              : (f.nativeOnFoot && uiOnFootHudMatch(f.vs, f.ps)) ? UiLayerFamily::kOnFootHud
+              : (f.scopeMark && f.vs == kUiVsScopeMark && f.ps == kUiPsScopeMark) ? UiLayerFamily::kScopeMark
+              : (f.legacyGlass && f.vs == kUiVsLegacyGlass && f.ps == kUiPsLegacyGlass) ? UiLayerFamily::kLegacyGlass
+              : UiLayerFamily::kNone;
         if (out != UiLayerFamily::kNone) w = UiFamilyWhy::kDirect;
     } else if (f.excluded) {
         w = UiFamilyWhy::kExcluded;
@@ -1113,7 +1346,8 @@ enum class UiLayerDecision : uint8_t {
     kNotArmed,       // no door frame for this eye last frame (first frames,
                      // key just on, pass not running)
     kNoDensityGain,  // an orbit-line or supercruise-bar draw (scene geometry the layer takes
-                     // for density alone) while the layer is not wider than the render: the
+                     // for density alone) while the layer does not fit the render
+                     // (uiLayerSceneLinesFit: not wider in VR, narrower in flat): the
                      // layer has nothing to give it and it stays in the scene
     kMrt,            // more than one render target bound, or PS UAVs
     kDepthStencilTest,  // tests depth or stencil against a depth target the
@@ -1128,7 +1362,7 @@ enum class UiLayerDecision : uint8_t {
                      // made, or the game has a geometry shader of its own bound): the draw
                      // stays in the scene, and the module's line says which
     kLayerFailed,    // the layer (or its depth target) could not be created
-    kFamilyOff,      // the key that governs the family is off (fix.sharp_weapons for the weapons fire, fix.ui_quality for the rest):
+    kFamilyOff,      // the half that governs the family is off (the weapons fire's own half, fix.ui_quality for the rest):
                      // tested right after the verdict, so an off key is the reason whatever else holds. Last in the enum so no older
                      // decision's number moves.
     kCount
@@ -1168,6 +1402,45 @@ inline const char* uiLayerDecisionName(UiLayerDecision d) {
     }
 }
 
+// The decisions that get a first-seen line of their own. The transient ones -- not armed yet, late this frame -- are counted on the
+// totals line and never get one.
+inline bool uiLayerDecisionIsStructural(UiLayerDecision d) {
+    return d != UiLayerDecision::kNotArmed && d != UiLayerDecision::kLate && d != UiLayerDecision::kNotUi;
+}
+// The scope mark's gets one for not-armed too: the family is named only for a sight the lens magnifies, so a mark the layer never took because its eye's layer was not armed is the
+// one reason its flight cannot afford to lose (the other families reach this decision on their first frames and leave it at the totals line).
+inline bool uiLayerDecisionIsStructural(UiLayerFamily f, UiLayerDecision d) {
+    return uiLayerDecisionIsStructural(d) || (f == UiLayerFamily::kScopeMark && d == UiLayerDecision::kNotArmed);
+}
+
+// The first-seen table behind ui_layer.cpp's noteFamily: one line per (family, decision, vertex shader, pixel shader), a structural
+// decision only, at most Cap lines. wanted() is the whole rule and record() is built on it, so a caller that formats a line's detail text
+// asks wanted() first and pays for the text only when the line will print (the decision of an ordinary draw is made ~100 times a frame and
+// the pair was seen long ago). record() answers whether the line is to be written, and takes the pair into the table when it is.
+template <uint32_t Cap>
+struct UiFamilySeenTable {
+    struct Entry {
+        uint8_t family, decision;
+        uint64_t vs, ps;
+    };
+    Entry entries[Cap];
+    uint32_t count = 0;
+
+    bool wanted(UiLayerFamily f, UiLayerDecision d, uint64_t vs, uint64_t ps) const {
+        if (!uiLayerDecisionIsStructural(f, d)) return false;
+        for (uint32_t i = 0; i < count; ++i) {
+            const Entry& s = entries[i];
+            if (s.family == uint8_t(f) && s.decision == uint8_t(d) && s.vs == vs && s.ps == ps) return false;
+        }
+        return count < Cap;
+    }
+    bool record(UiLayerFamily f, UiLayerDecision d, uint64_t vs, uint64_t ps) {
+        if (!wanted(f, d, vs, ps)) return false;
+        entries[count++] = {uint8_t(f), uint8_t(d), vs, ps};
+        return true;
+    }
+};
+
 // The flat HUD's bloom feed (ui_layer.h uiLayerGlowFeed; docs/cockpit-hud-layer-design-2026-09-27.md, "2026-10-21: the HUD's bloom"): what the
 // pass that makes H' = H + the HUD layer's light came to for one draw.
 enum class UiGlowFeed : uint8_t {
@@ -1189,6 +1462,56 @@ inline const char* uiGlowFeedName(UiGlowFeed v) {
         case UiGlowFeed::kTexture: return "texture";
         case UiGlowFeed::kFormat: return "format";
         case UiGlowFeed::kFault: return "fault";
+        default: return "?";
+    }
+}
+
+// The headset's HUD bloom feed (ui_layer.h uiLayerHeadsetGlowFeed; docs/cockpit-hud-layer-design-2026-09-27.md, "2026-10-28: the HUD's bloom in the
+// headset"). The bloom chain's first level of an eye reads that eye's H at t0; the HUD the layer took from H lives in that eye's HDR HUD layer. Which
+// layer (if any) belongs to the H a first-level draw reads, and whether its light may join this draw's H', is a pure function of four facts per eye,
+// read by the caller. An H is the layer's by IDENTITY (the target its HUD draws were taken from), never by the eye's index or by draw order: the eyes'
+// draws interleave.
+struct UiHeadsetHudEye {
+    bool drawnFromH = false;   // the layer's HUD draws were taken from this very H (the layer's hdrTarget is the first level's t0 resource)
+    bool fresh = false;        // it holds this frame's content (its frame is the frame in progress, it has taken draws, it has a view)
+    bool toned = false;        // the tonemap re-issue already ran for that content (the bloom of this frame is made: too late to join it)
+    bool claimed = false;      // an earlier first-level draw of this frame already took the content (a second one is never fed)
+};
+enum class UiHeadsetHud : uint8_t {
+    kFeed = 0,    // the eye's layer holds this frame's unclaimed light: it joins H'
+    kNoLayer,     // no eye's layer draws from this H (the 2D screen's scene, an H nothing was taken from, the layers not made yet)
+    kNoContent,   // an eye's layer draws from this H but holds no content of this frame (no HUD was drawn before the first level)
+    kToneDone,    // ... but its content was already tonemapped (the first level came after the re-issue)
+    kRepeat,      // ... but an earlier first-level draw of the frame already took it
+    kCount
+};
+// The verdict for an H, and the eye whose layer it is (-1 for kNoLayer). Eye 0 is asked first; one H belongs to one eye.
+inline UiHeadsetHud uiHeadsetHudPick(const UiHeadsetHudEye eyes[2], int* eye) {
+    if (eye) *eye = -1;
+    for (int e = 0; e < 2; ++e) {
+        if (!eyes[e].drawnFromH) continue;
+        if (eye) *eye = e;
+        if (!eyes[e].fresh) return UiHeadsetHud::kNoContent;
+        if (eyes[e].toned) return UiHeadsetHud::kToneDone;
+        if (eyes[e].claimed) return UiHeadsetHud::kRepeat;
+        return UiHeadsetHud::kFeed;
+    }
+    return UiHeadsetHud::kNoLayer;
+}
+// Does any eye still hold a frame's HUD light that no first level has taken? The headset hook looks at first-level draws only while this is true (the pending flag),
+// so an eye-frame outside a cockpit, and an eye already claimed, cost the draw path nothing past one load.
+inline bool uiHeadsetHudWaiting(const UiHeadsetHudEye eyes[2]) {
+    for (int e = 0; e < 2; ++e)
+        if (eyes[e].fresh && !eyes[e].toned && !eyes[e].claimed) return true;
+    return false;
+}
+inline const char* uiHeadsetHudName(UiHeadsetHud v) {
+    switch (v) {
+        case UiHeadsetHud::kFeed: return "feed";
+        case UiHeadsetHud::kNoLayer: return "no-layer";
+        case UiHeadsetHud::kNoContent: return "no-content";
+        case UiHeadsetHud::kToneDone: return "tone-done";
+        case UiHeadsetHud::kRepeat: return "repeat";
         default: return "?";
     }
 }
@@ -1224,8 +1547,8 @@ struct UiLayerDrawFacts {
     UiBlendShape blend = UiBlendShape::kRefused;
     bool layerReady = true;       // the eye's layer exists at the wanted size
     // The orbit lines and the supercruise bars (uiLayerFamilyIsSceneLines) are scene geometry the layer takes for DENSITY: a
-    // layer that is not wider than the render (uiLayerWiderThanRender) has nothing to give them. True for every other
-    // family, and by default, so a family that is not a scene line is decided exactly as it always was.
+    // layer that does not fit the render (uiLayerSceneLinesFit: VR wants it wider, flat at least as large) has nothing to give
+    // them. True for every other family, and by default, so a family that is not a scene line is decided exactly as it always was.
     bool layerWider = true;
     // The family's own private pass exists (the supercruise bars' geometry shader and its state: supercruise_bars.h). True by
     // default and for every family but that one.
@@ -1233,15 +1556,15 @@ struct UiLayerDrawFacts {
     // The HDR HUD take is armed (with fix.ui_quality) and this is one of the
     // cockpit HUD families (the holo panels, the flight HUD, the target
     // sprite, and the crisp take's eight hologram families as kHoloGeneric --
-    // and the three supercruise draws, the orbit lines, the bars and the space
-    // dust: uiLayerFamilyTakesHdr says which)
+    // and the supercruise draws, the orbit lines, the bars and the space
+    // dust, and the normal-space dust: uiLayerFamilyTakesHdr says which)
     // drawn into the
     // lit HDR (pre-tonemap) eye target: the draw goes to the HDR layer, and
     // the tonemap re-issue brings it back over the finished eye. Every other
     // test (eye known, armed, not late, no MRT/UAV, the seeded depth-stencil,
     // the blend) applies exactly as for the LDR take.
     bool crispHdr = false;
-    // The key that governs the family is on (uiLayerFamilyEnabled): fix.sharp_weapons for the weapons fire, fix.ui_quality for every
+    // The half that governs the family is on (uiLayerFamilyEnabled): the weapons fire's own half, fix.ui_quality for every
     // other family. True by default, so a caller that never asks decides exactly as it always did.
     bool familyEnabled = true;
 };
@@ -1435,18 +1758,19 @@ inline int uiWorldFormatRefusal(char* out, size_t size, int eye, uint16_t id) {
 inline bool uiLayerLiveFor(float target, bool temporal, bool jitterAsShipped, bool stoodDown) {
     return target > 0.0f && temporal && jitterAsShipped && !stoodDown;
 }
-// The weapons-fire half of the layer is live under its own key, whatever fix.ui_quality says: fix.sharp_weapons on, a temporal mode on
-// (the layer composites onto the AA output), the jitter as shipped, not stood down, and not the flat profile (VR only). The
-// layer's machinery (the door, the HDR tonemap re-issue, the composite) runs when EITHER half is live; the UI-quality-only parts (the
-// 2D screen, the maps gate, the VR world route, the after-UI take) run on the first alone.
-inline bool uiLayerWeaponsLiveFor(bool sharp, bool temporal, bool jitterAsShipped, bool stoodDown) {
-    return sharp && temporal && jitterAsShipped && !stoodDown;
+// The weapons-fire half of the layer is live whatever fix.ui_quality says: a temporal mode on (the layer composites onto the AA output), the
+// jitter as shipped, and not stood down. Both profiles: in flat the temporal mode is the flat anti-aliasing and the draws come through flat's
+// mono adapter (flat_ui_layer.cpp); the retired fix.sharp_weapons was on in both. The layer's machinery (the door, the HDR tonemap re-issue, the
+// composite) runs when EITHER half is live; the UI-quality-only parts (the 2D screen, the maps gate, the VR world route, the after-UI take)
+// run on the first alone.
+inline bool uiLayerWeaponsLiveFor(bool temporal, bool jitterAsShipped, bool stoodDown) {
+    return temporal && jitterAsShipped && !stoodDown;
 }
 inline bool uiLayerMachineryLive(bool qualityLive, bool weaponsLive) { return qualityLive || weaponsLive; }
-// The shield ripple's half: fix.sharp_weapons is on, a temporal mode is on (the door composites over its output), the jitter as shipped, and not stood
-// down (the layer's or the ripple's own). Both profiles. The machinery runs when it is live too (uiLayerMachineryLive of the union).
-inline bool uiLayerRippleLiveFor(bool taking, bool temporal, bool jitterAsShipped, bool stoodDown) {
-    return taking && temporal && jitterAsShipped && !stoodDown;
+// The shield ripple's half: a temporal mode is on (the door composites over its output), the jitter as shipped, and not stood down (the layer's
+// or the ripple's own). Both profiles. The machinery runs when it is live too (uiLayerMachineryLive of the union).
+inline bool uiLayerRippleLiveFor(bool temporal, bool jitterAsShipped, bool stoodDown) {
+    return temporal && jitterAsShipped && !stoodDown;
 }
 inline const char* uiLayerNotLiveReasonFor(float target, bool temporal, bool jitterAsShipped, bool stoodDown) {
     if (!(target > 0.0f)) return "fix.ui_quality is off";
@@ -1683,6 +2007,23 @@ inline double uiLayerPercentile(float* v, uint32_t n, double frac) {
     if (!v || !n) return 0.0;
     std::sort(v, v + n);
     return uiLayerSortedPercentile(v, n, frac);
+}
+
+// The same number as uiLayerPercentile, by selection instead of a full sort: the interpolation reads only the two order
+// statistics at lo and lo+1, and nth_element leaves every element after lo >= v[lo], so the (lo+1)th statistic is the minimum of
+// the rest. O(n) instead of O(n log n); v is left partitioned (any order is a valid input to another call). Samples are finite
+// timer sums, so there is no NaN to order differently.
+inline double uiLayerPercentileSelect(float* v, uint32_t n, double frac) {
+    if (!v || !n) return 0.0;
+    const double pos = frac * static_cast<double>(n - 1);
+    uint32_t lo = static_cast<uint32_t>(pos);
+    if (lo > n - 1) lo = n - 1;
+    const uint32_t hi = lo + 1 < n ? lo + 1 : lo;
+    const double t = pos - static_cast<double>(lo);
+    std::nth_element(v, v + lo, v + n);
+    const float a = v[lo];
+    const float b = hi != lo ? *std::min_element(v + lo + 1, v + n) : a;
+    return static_cast<double>(a) * (1.0 - t) + static_cast<double>(b) * t;
 }
 
 // THE TONEMAP RE-ISSUE'S SCENE IMAGES (docs/cockpit-hud-layer-design-2026-09-27.md, "2026-10-20: bloom counted twice").

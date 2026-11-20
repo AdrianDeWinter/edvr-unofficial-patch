@@ -51,7 +51,13 @@ const char* contextWrapperFile();
 // entries as it re-selects internal variants (issue #21, where it took all 29
 // of EDVR's patched slots 57 ms after install). Naming it lets reclaim take
 // those slots back without waiting for call evidence that a total bypass makes
-// impossible to gather. Null before the proxy has resolved it.
+// impossible to gather.
+//
+// Chosen at the first call, by the module's own path rather than by what a LoadLibrary of
+// System32's d3d11.dll returned in DllMain (a hook on LoadLibraryExW can answer that with
+// another module; see probeSystemModule in d3d11_proxy.cpp). Call it only once a device exists:
+// until then System32's module may not be mapped, and the answer is the unchecked DllMain handle.
+// Null only when that load failed too.
 void* systemD3D11Module();
 
 // The two entries the whole issue #21 investigation turns on, named by module

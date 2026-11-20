@@ -336,7 +336,8 @@ inline unsigned run() {
                countOf(verifier, "reportFailure(\"deferred-inverse-unproven\");") == 1 && countOf(verifier, "failPhase(s,\"deferred-inverse-unproven\");") == 1,
                "an empty pass is not the failure that fails the phase and marks the prefix uncertain");
         expect(countOf(verifier, "} else if(emptyGBuffer)++s.deferredEmptyGBuffer;\n    else ++s.deferredCameraRefused;") == 1 &&
-               countOf(verifier, "empty-gbuffer-total=%llu work=%s") == 1 && countOf(verifier, "(unsigned long long)s.deferredEmptyGBuffer,flatWorkName(s.work));") == 1,
+               countOf(verifier, "empty-gbuffer-total=%llu pool-cameras=%u") == 1 &&
+               countOf(verifier, "(unsigned long long)s.deferredEmptyGBuffer,resolved.poolCameraCount,poolCameraPickName(poolPick),") == 1,
                "the outcome is counted apart from a refusal, and the HDR camera line carries the total");
         expect(countOf(verifier, "draw.deferredHdrVerified=firstWitness && executionCoherent;") == 1,
                "(and the pass is still not verified: the repairs and the donor-based qualification are untouched)");
@@ -346,7 +347,7 @@ inline unsigned run() {
         expect(verifier.find("if(s.work==FlatWork::Probe && nonzero)return nullptr;") != std::string::npos &&
                verifier.find("if(flatCameraInjectUpstreamOwns() && !flatDeferredVerifyInPhase(nonzero,phaseDomain))return nullptr;") != std::string::npos,
                "the early returns, the Probe work path's and the phase domain's, are where they were");
-        expect(runtime.find("flatRuntimeDeferredDonor(s.prefix,k,s.prefix.sequence+1)") != std::string::npos && countOf(runtime, "flatRuntimeDeferredDonor(") == 2,
+        expect(runtime.find("flatRuntimeDeferredDonor(s.prefix,k,s.prefix.sequence+1,nullptr,d.camera)") != std::string::npos && countOf(runtime, "flatRuntimeDeferredDonor(") == 4,
                "the binding-failure path asks the resolver without the inputs: it never reports an empty pass");
         // the hooks that say a write is a clear
         expect(countOf(vscreen, "flatRuntimeWritten(static_cast<ID3D11Resource*>(info.resource), FlatOverlayMutationOp::Written, true);") == 1 &&
@@ -366,8 +367,8 @@ inline unsigned run() {
                "the model counts an explicit write and a compute write against the ledger");
         const std::string resolver = between(model, "inline FlatDeferredDonor flatRuntimeDeferredDonor(", "inline bool flatRuntimeQualifiedDeferredCamera(");
         expect(countOf(resolver, "flatRuntimeEmptyGBuffer(p,k,gbuffer)") == 1 && countOf(resolver, "if(!out.witnessEntries) {") == 1 &&
-               countOf(resolver, "out.role=FlatDeferredDonorRole::") == 2,
-               "the resolver asks for the answer only where no entry stands on the depth, and still makes a donor in exactly two places");
+               countOf(resolver, "out.role=FlatDeferredDonorRole::") == 3,
+               "the resolver asks for the answer only where no entry stands on the depth, and still makes a donor in exactly three places (the pool rule, the agreeing witness, the named camera of a two-camera entry)");
     }
     std::printf("flat deferred empty g-buffer: %u checks, %u failure(s)\n", checks, failures);
     return failures;

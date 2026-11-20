@@ -1,7 +1,6 @@
 #include "flat_origin_capture.h"
 #include "flat_forward_light.h"
 #include "engine_velocity.h"
-#include "engine_motion_ready.h"
 #include "temporal_shader_bytecode.h"
 #include "dxbc_flat_overlay.h"
 
@@ -39,9 +38,11 @@
 #include "flat_query_cut.h"   // the flat bracket's kept answers, and the sampled check of each
 #include "kinematic_eval_hook.h"
 #include "kinematic_eval_probe.h"
+#include "object_record_writer_hook.h"   // objectRecordWriterHookMatches: the lookup's prologue may be the record-writer hook's
 #include "skin_entity_hook.h"   // F2: the read-only observer of the game's skinning job assembly (identity of skinned characters)
 #include "skin_join_gpu.h"      // F2: the join at the palette chain's dispatch, the pose table, the views the cloned vertex shaders read
 #include "vscreen.h"
+#include "../common/game_build.h"
 #include "../common/log.h"
 #include "../common/runtime_profile.h"
 #include "../common/timing.h"
@@ -125,6 +126,13 @@ bool anyKeyedPs(uint64_t hash) {
         if ((!kFamilies[i].flatOnly || runtimeFlatProfile()) && keyedPs(i, hash, runtimeFlatProfile())) return true;
     return false;
 }
+// The remember gate: a shader the game creates once is kept when any profile's family keys it, because a live
+// VR/flat switch does not re-create it. Which family runs in which profile is decided at the draw, not here.
+bool keyedPsInEitherProfile(uint64_t hash) {
+    for (int i = 0; i < kFamilyCount; ++i)
+        if (keyedPs(i, hash, true) || keyedPs(i, hash, false)) return true;
+    return false;
+}
 
 std::recursive_mutex g_mutex;   // shader memory, patches, eyes, the draw path's slow half
 
@@ -149,6 +157,8 @@ bool g_vsDropSaid = false, g_psDropSaid = false;
 
 struct FamilyState {
     bool derived = false, valid = false;
+    bool derivedFlat = false;   // the profile the derivation and every patch below were made under; a switch derives again
+    bool derivedSkin = false;   // whether the second skin was armed (VR, g_skinWanted) when a skinned family was derived; arming it later derives that family again
     // F2: this family's vertex shader takes the second skin (VR, a skinned family, a vertex shader that passed the analysis); its
     // keyed pairs in kSkinPairs export E. False for good once a patch of it fails to create (skinWhy says why).
     bool skin = false;
@@ -203,12 +213,13 @@ Bound g_bound;
 std::atomic<bool> g_anyBound{false};   // EDVR state may still be bound (owner thread restores)
 
 // --- F2: the second skin (docs/kinematic-motion-injection-2026-09-19.md, "F2 built") -----------------------------
-// VR only. The five skinned vertex shaders get a clone of their own skinning chain that computes the previous position from the
+// VR only. The six skinned vertex shaders (the NPC's body families and its hair's forward pass) get a clone of their own skinning chain that computes the previous position from the
 // previous frame's palette and pose (dxbc_skin_clone.h), the join says which previous base is whose (skin_join.h, JoinCS at the
 // palette chain's dispatch), and the pixel shaders export E to target 7. Every part has a "no" that means no history for that pixel,
 // never a stale answer. Owner thread, under g_mutex.
 SkinJoinGpu g_skin;
 std::atomic<bool> g_skinWanted{false};   // VR profile with the feature live: the hook is armed and the chain dispatch feeds the join
+bool g_skinDeclinedFlat = false;         // armSkinLocked ran in the flat profile and declined: a later configure under VR owes the arm (g_mutex)
 uint32_t g_skinPoseFrame = ~0u;          // the present frame whose first pool snapshot owes a pose table (built at the frame boundary), and that snapshot's eye
 int g_skinPoseEye = -1;
 // The frame's list of the instance-stream entries its skinned draws read (skin_join.h, "the pose table's CPU reference"): every skinned family's substituted
@@ -238,20 +249,6 @@ struct SkinStats {
     bool hookLogged = false;
     uint32_t windowStart = 0;
 } g_skinStats;
-
-// What Explorer Cam's entry fade waits for (engine_motion_ready.h, explorer_cam_fade_core.h "MOTION"), kept at every frame boundary: whether BOTH eyes were
-// handed the engine-motion views since the boundary before (a run of such frames), and whether the palette chain ran with jobs since then and the second
-// skin's join was live for it. Under g_mutex.
-constexpr uint32_t kMotionNeverAsked = 1u << 30, kMotionAskWindow = 30;
-struct MotionReadyState {
-    uint64_t viewsGiven[2] = {0, 0}, viewsSeen[2] = {0, 0};   // views handed out per eye, ever / at the last boundary
-    uint32_t viewsRun = 0;                                    // consecutive boundaries at which both eyes had been given views since the one before
-    uint64_t chainCalls = 0, chainSeen = 0;                   // chain dispatches the join took (with jobs), ever / at the last boundary
-    bool skinJobs = false, skinLive = false;                  // as of the last boundary
-    uint64_t asked = 0, askedSeen = 0;                        // engineVelocityViews calls (either eye), ever / at the last boundary: somebody is consuming the views
-    uint32_t sinceAsk = kMotionNeverAsked;                    // boundaries since the last one at which the views were asked for
-    bool consumer = false;                                    // asked within the last kMotionAskWindow boundaries
-} g_motion;
 
 // The derived blend states, one per game state (held, so a pointer is an
 // identity). A few in practice; cleared past the cap.
@@ -320,7 +317,7 @@ struct Eye {
     Ptr<ID3D11RenderTargetView> slotsRtv;
     Ptr<ID3D11ShaderResourceView> slotsSrv;
     // F2 (VR eyes only): target 7, the skinned characters' E = previous - current position in centimetres and a valid flag, at the
-    // slot target's size. Cleared to zero (valid 0) with the slot target every eye-frame; written by the five skinned pairs' draws.
+    // slot target's size. Cleared to zero (valid 0) with the slot target every eye-frame; written by the skinned pairs' draws.
     Ptr<ID3D11Texture2D> skin;
     Ptr<ID3D11RenderTargetView> skinRtv;
     Ptr<ID3D11ShaderResourceView> skinSrv;
@@ -596,30 +593,92 @@ constexpr uint8_t kAppendBytes[23] = {
     0x48, 0xFF, 0x42, 0x18,                                // inc qword [rdx+18h]
     0x41, 0xFF, 0x85, 0xA4, 0x02, 0x00, 0x00};             // inc dword [r13+2A4h]   the owner's count
 
-#ifndef EDVR_ENGINE_VELOCITY_RIG
-const char* verifyEngine(uintptr_t base) noexcept {
+// The field witnesses (issue 124, docs\design-game-update-signatures-2026-10-25.md, 2026-10-25 round 2): the producer's own instructions
+// that carry, unmasked, the layout the secondary path writes (an item's +0x124 previous position, +0x138 previous rotation, +0x120
+// marker) and the fields it follows to find the item. In FUN_144315A20: the frame (0x4315A29: rbp = rsp+0x100 once 0x4315A31 subtracts
+// 0x1C8), the local item at rsp+0x60 built by the item constructor (the call at 0x4315A5C), its pose at +0x10 (0x4315AA6) and +0x08
+// (0x4315AC8), its second pose block at +0x124 (0x4315AAC, rbp+0x84) and +0x138 (0x4315AD4, rbp+0x98), the record's pose at +0x170
+// (0x4315A6D) and +0x17C (0x4315A7C) and key at +0x250 (0x4315CA3), the owner's dictionary at +0x260 (0x4315CBA) and count at +0x2A4
+// (0x4315DB5), the entry's list at +0x28 (0x4315CCA) with its tail at +0x30 (0x4315CD3), the node's count at +0x18 (0x4315CD7), and the
+// copy of the local into the node's records at +0x20, 0x150 bytes each (0x4315D14, 0x4315D22, 0x4315D27). The marker's dword is one no
+// game code here writes: the item constructor FUN_144C86090 stores +0x118 (0x4C861D6) and then +0x124 (0x4C861F4), nothing between.
+// On an unknown build every one must be found, and the producer's call must reach the constructor found, or engine motion stands down.
+constexpr uint32_t kItemCtorCallRva = 0x4315A5Cu;
+constexpr uint32_t kItemCtorRva = 0x4C86090u;
+constexpr uint32_t kEngineWitnessRvas[20] = {0x4315A29u, 0x4315A31u, kItemCtorCallRva, 0x4315A6Du, 0x4315A7Cu, 0x4315AA6u, 0x4315AACu,
+                                             0x4315AC8u, 0x4315AD4u, 0x4315CA3u, 0x4315CBAu, 0x4315CCAu, 0x4315CD3u, 0x4315CD7u,
+                                             0x4315D14u, 0x4315D22u, 0x4315D27u, 0x4315DB5u, 0x4C861D6u, 0x4C861F4u};
+std::atomic<bool> g_unknownBuildNoted{false};   // the unknown build's "found by signature" line, once per session
+
+// The dictionary lookup's first 32 bytes, as the emit bracket needs them (read at `at`, the running build's copy of kLookupRva): the pin's, or the bytes EDVR's own
+// record-writer hook leaves there (object_record_writer_hook.cpp). That hook replaces the first five bytes with a jump to its relay and leaves the eleven after them; an
+// eye-dump object classification installs it and it stays for the life of the process (a capture only gates it), and it relays to the game's lookup with the registers it was
+// given, so a call through g_lookup still reaches the game's function. Every configure reads this again: an AA off and on re-runs it with the hook in place, and a pin-only
+// compare then stood the feature down for good ("lookup mismatch at RVA 0x3699C00", flight edvr_gfx_20261028_073013). Null: usable; else the reason.
+const char* lookupPrologueWhy(uintptr_t at) noexcept {
+    uint8_t got[sizeof(kLookupPrologue)] = {};
     __try {
-        uint32_t peOff = 0;
-        std::memcpy(&peOff, reinterpret_cast<const void*>(base + 0x3C), 4);
-        if (peOff > 0x1000) return "not build 334925 (no PE header)";
-        uint32_t timestamp = 0, imageSize = 0;
-        std::memcpy(&timestamp, reinterpret_cast<const void*>(base + peOff + 8), 4);
-        std::memcpy(&imageSize, reinterpret_cast<const void*>(base + peOff + 0x50), 4);
-        if (timestamp != KinematicEvalProbe::kExpectedTimestamp || imageSize != KinematicEvalProbe::kExpectedImageSize)
-            return "not build 334925 (PE timestamp/size)";
-        if (std::memcmp(reinterpret_cast<const void*>(base + kLookupRva), kLookupPrologue, sizeof(kLookupPrologue)))
-            return "lookup mismatch at RVA 0x3699C00";
-        if (std::memcmp(reinterpret_cast<const void*>(base + kAppendRva), kAppendBytes, sizeof(kAppendBytes)))
-            return "append sequence mismatch at RVA 0x4315DA5";
-        return nullptr;
+        std::memcpy(got, reinterpret_cast<const void*>(at), sizeof(kLookupPrologue));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "engine image unreadable";
     }
+    if (gamePinMatches(static_cast<uint32_t>(kLookupRva), got, kLookupPrologue, sizeof(kLookupPrologue))) return nullptr;
+    if (objectRecordWriterHookMatches(at)) return nullptr;
+    return "lookup mismatch at RVA 0x3699C00";
+}
+
+#ifndef EDVR_ENGINE_VELOCITY_RIG
+const char* verifyEngine(uintptr_t base) noexcept {
+    if (!gameBuildIdentity(nullptr, nullptr)) return "not build 334925 (no PE header)";
+    // Both in the running build: build 334925, themselves; an unknown build, found by signature (0: not found).
+    const uintptr_t lookup = gameRva(static_cast<uint32_t>(kLookupRva)), append = gameRva(static_cast<uint32_t>(kAppendRva));
+    if (!lookup || !append)
+        return "an unknown build, and the dictionary lookup or the append sequence (0x3699C00, 0x4315DA5 in build 334925) was not found by signature";
+    uint32_t missing = 0;
+    if (!gameRvasFound(kEngineWitnessRvas, sizeof(kEngineWitnessRvas) / sizeof(kEngineWitnessRvas[0]), &missing)) {
+        static char why[160];
+        std::snprintf(why, sizeof(why), "an unknown build, and the record layout's field witness 0x%X (in build 334925) was not found by signature",
+                      missing);
+        return why;
+    }
+    if (!gameBuildKnown()) {
+        // The constructor call's rel32 is masked by the signature: its target is computed here and must be the constructor found.
+        const uintptr_t callAt = gameRva(kItemCtorCallRva), ctorAt = gameRva(kItemCtorRva);
+        uint8_t call[5] = {};
+        int32_t rel = 0;
+        __try {
+            std::memcpy(call, reinterpret_cast<const void*>(base + callAt), sizeof(call));
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return "engine image unreadable";
+        }
+        std::memcpy(&rel, call + 1, 4);
+        if (!callAt || !ctorAt || call[0] != 0xE8 || uint64_t(callAt) + 5u + uint64_t(int64_t(rel)) != uint64_t(ctorAt))
+            return "an unknown build: the producer's call found by signature does not reach the item constructor found by signature";
+    }
+    if (const char* why = lookupPrologueWhy(base + lookup)) return why;
+    __try {
+        uint8_t got[sizeof(kAppendBytes)] = {};
+        std::memcpy(got, reinterpret_cast<const void*>(base + append), sizeof(kAppendBytes));
+        if (!gamePinMatches(static_cast<uint32_t>(kAppendRva), got, kAppendBytes, sizeof(kAppendBytes)))
+            return "append sequence mismatch at RVA 0x4315DA5";
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return "engine image unreadable";
+    }
+    if (!gameBuildKnown() && !g_unknownBuildNoted.exchange(true))
+        Log::get().note("engine motion: the dictionary lookup (0x3699C00 in build 334925) and the append sequence (0x4315DA5) were found by "
+                        "signature on %s at 0x%llX and 0x%llX; the record fields it writes are witnessed.", gameBuildText(),
+                        static_cast<unsigned long long>(lookup), static_cast<unsigned long long>(append));
+    return nullptr;
 }
 #else
 // tools/engine_velocity_test drives this file's draw half on WARP: there is
 // no engine image to check, and the rig's own fixture stands in for the emit.
-const char* verifyEngine(uintptr_t) noexcept { return nullptr; }
+// The one check it keeps is the lookup's prologue, on a fixture the rig sets
+// (engineVelocityLookupFixtureForRig; none: nothing to check).
+const uint8_t* g_rigLookupFixture = nullptr;
+const char* verifyEngine(uintptr_t) noexcept {
+    return g_rigLookupFixture ? lookupPrologueWhy(reinterpret_cast<uintptr_t>(g_rigLookupFixture)) : nullptr;
+}
 #endif
 
 void observeRawCurrentPose(uintptr_t record, uintptr_t node, uintptr_t owner,const emit::Pose& now,
@@ -716,7 +775,19 @@ thread_local bool t_creating = false;
 
 void deriveFamily(int f) {
     FamilyState& s = g_families[f];
+    // A live VR/flat switch: what was derived and patched under the other profile (the second skin is VR's alone, and the
+    // pixel shaders were patched with or without its export) is derived again, from the remembered bytecode. So is a skinned
+    // family derived before the second skin was armed: a session that started flat arms it at its first switch to VR
+    // (armSkinForProfileLocked), and a family derived in VR just ahead of that must take it too.
+    const bool skinArmed = !runtimeFlatProfile() && g_skinWanted.load(std::memory_order_acquire);
+    if (s.derived && (s.derivedFlat != runtimeFlatProfile() || (kFamilies[f].skinned && s.derivedSkin != skinArmed))) {
+        s.patchedVs.clear(); s.patchedPs.clear(); s.guardedPs.clear(); s.psFailed.clear();
+        s.psExports.clear(); s.psZeroes.clear();
+        s.derived = s.valid = false; s.skin = false; s.skinWhy.clear(); s.reason.clear(); s.inputs = EngineVelocityInputs{};
+    }
     if (s.derived) return;
+    s.derivedFlat = runtimeFlatProfile();
+    s.derivedSkin = skinArmed;
     for (auto& [ptr, info] : g_vs) {
         if (info.family != f) continue;
         s.derived = true;
@@ -725,7 +796,13 @@ void deriveFamily(int f) {
         s.valid = engineVelocityDeriveInputs(info.bytes.data(), info.bytes.size(), s.inputs, why);
         if (!s.valid) s.reason = "signature: " + why;
         // F2: a skinned family takes the second skin when its vertex shader's chain is the one the patch clones.
-        if (s.valid && !runtimeFlatProfile() && kFamilies[f].skinned) {
+        // g_skinWanted: a family takes the second skin only once the hook is armed (armSkinLocked), never patching shaders whose
+        // target 7 nothing makes. A session that started flat arms it at its first switch to VR (armSkinForProfileLocked); a
+        // family derived before that is derived again (derivedSkin above).
+        if (s.valid && !runtimeFlatProfile() && kFamilies[f].skinned && g_skinWanted.load(std::memory_order_acquire)) {
+            // A family whose pixel shaders already read the vertex shader's next free register names its own (kFamilies); it must still be free on
+            // the vertex side, which the vertex patch checks.
+            if (s.inputs.skinRegister < 32 && kFamilies[f].skinRegister) s.inputs.skinRegister = kFamilies[f].skinRegister;
             if (s.inputs.skinRegister < 32) s.skin = true;
             else {
                 std::string skinWhy;
@@ -791,7 +868,7 @@ ID3D11PixelShader* patchedPsFor(ID3D11DeviceContext* ctx, int f, ID3D11PixelShad
     Ptr<ID3D11PixelShader> patched;
     std::string why = info == g_ps.end() ? "pixel shader bytecode not kept" : info->second.linked ? "class linkage" : "";
     if (why.empty()) {
-        // F2: the five skinned pairs export E to target 7 (the family's other keyed pixel shaders export the slot only). What target 7 gets from a skinned
+        // F2: the skinned pairs (kSkinPairs) export E to target 7 (the family's other keyed pixel shaders export the slot only). What target 7 gets from a skinned
         // family's pixel shader, best first: its E (a keyed pair); else "no history" written exactly (valid 0), so a pixel it covers never keeps the E an
         // earlier draw of the eye-frame wrote there; else nothing, and then the draw is not substituted at all (the draw path says so): a write-masked
         // draw would leave that earlier E under a surface it is not the answer for.
@@ -881,12 +958,17 @@ bool snapshotOverlayBase(ID3D11DeviceContext* ctx, Eye& e) {
     // FlatRuntimeDrawScope restored the game's MRTs after the prior draw. Do
     // not copy a texture still bound for output or while the private SRV is
     // live. A later bindTarget reattaches MRT6 for this draw.
-    ID3D11RenderTargetView* rt[8] = {};
-    ctx->OMGetRenderTargets(8, rt, nullptr);
-    engineVelocityNoteStateCalls(1);
-    std::array<Ptr<ID3D11RenderTargetView>, 8> held;
-    for (unsigned i = 0; i < 8; ++i) held[i].Attach(rt[i]);
-    for (auto* view : rt) if (view == e.slotsRtv.Get()) return false;
+    // The VR profile's eye passes keep MRT6 bound from one substituted draw to the next (nothing puts the game's targets back between
+    // draws), so the first overlay draw after a keyed one always found it bound and was declined: a copy from a resource that is bound as a
+    // render target is legal and the writes the earlier draws made are ordered before it, so there the copy is taken as it is.
+    if (runtimeFlatProfile()) {
+        ID3D11RenderTargetView* rt[8] = {};
+        ctx->OMGetRenderTargets(8, rt, nullptr);
+        engineVelocityNoteStateCalls(1);
+        std::array<Ptr<ID3D11RenderTargetView>, 8> held;
+        for (unsigned i = 0; i < 8; ++i) held[i].Attach(rt[i]);
+        for (auto* view : rt) if (view == e.slotsRtv.Get()) return false;
+    }
     Ptr<ID3D11ShaderResourceView> boundSrv;
     ctx->PSGetShaderResources(kEngineVelocityOverlaySnapshotSlot, 1, &boundSrv);
     engineVelocityNoteStateCalls(1);
@@ -1201,13 +1283,14 @@ FlatMarkerPlane* flatMarkerPlane(ID3D11DeviceContext* ctx, ID3D11Texture2D* dept
     return plane;
 }
 
-// F2: the eye's target 7, R16G16B16A16_FLOAT at the slot target's size (8 bytes a pixel: about 31 MB an eye at 2016x1949). A failure is
-// remembered until the size changes and costs the eye its second skin only.
+// F2: the eye's target 7, R32G32B32A32_FLOAT at the slot target's size (16 bytes a pixel: about 63 MB an eye at 2016x1949). A character aboard a
+// moving ship carries the ship's travel in E, hundreds of centimetres a frame, and half float's step there is larger than the head's own motion
+// (docs/vr-holo-me-head-flick-2026-11-05.md). A failure is remembered until the size changes and costs the eye its second skin only.
 void makeSkinTarget(ID3D11DeviceContext* ctx, Eye& e, int eye, unsigned width, unsigned height) {
     e.skin.Reset(); e.skinRtv.Reset(); e.skinSrv.Reset(); e.skinBound = false;
     D3D11_TEXTURE2D_DESC d{};
     d.Width = width; d.Height = height; d.MipLevels = 1; d.ArraySize = 1; d.SampleDesc.Count = 1;
-    d.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    d.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
     d.Usage = D3D11_USAGE_DEFAULT;
     d.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     Ptr<ID3D11Device> dev;
@@ -1217,16 +1300,16 @@ void makeSkinTarget(ID3D11DeviceContext* ctx, Eye& e, int eye, unsigned width, u
         e.skin.Reset(); e.skinRtv.Reset(); e.skinSrv.Reset();
         e.skinFailed = true;
         ++g_draw.createFailed;
-        Log::get().note("skin join: eye %d target 7 could not be created (%ux%u R16G16B16A16_FLOAT); this eye goes on without the second skin.", eye, width, height);
+        Log::get().note("skin join: eye %d target 7 could not be created (%ux%u R32G32B32A32_FLOAT); this eye goes on without the second skin.", eye, width, height);
         return;
     }
     if (eye == kEngineVelocitySourceEye)
-        Log::get().note("skin join: on-foot source target 7 created %ux%u R16G16B16A16_FLOAT (%.1f MB) at present frame %u: the skinned characters' previous "
+        Log::get().note("skin join: on-foot source target 7 created %ux%u R32G32B32A32_FLOAT (%.1f MB) at present frame %u: the skinned characters' previous "
                         "position seen on foot, in centimetres beside a valid flag, read by the world route and the screen motion map.",
-                        width, height, double(width) * height * 8.0 / 1e6, frameNow());
+                        width, height, double(width) * height * 16.0 / 1e6, frameNow());
     else
-        Log::get().note("skin join: eye %d target 7 created %ux%u R16G16B16A16_FLOAT (%.1f MB) at present frame %u: the skinned characters' previous position, "
-                        "in centimetres beside a valid flag.", eye, width, height, double(width) * height * 8.0 / 1e6, frameNow());
+        Log::get().note("skin join: eye %d target 7 created %ux%u R32G32B32A32_FLOAT (%.1f MB) at present frame %u: the skinned characters' previous position, "
+                        "in centimetres beside a valid flag.", eye, width, height, double(width) * height * 16.0 / 1e6, frameNow());
 }
 
 bool ensureSlots(ID3D11DeviceContext* ctx, Eye& e, int eye, ID3D11Texture2D* depth) {
@@ -1751,12 +1834,17 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
         sourcePass = depthRes.Get() == static_cast<ID3D11Resource*>(g_sourceDepth.Get());
         if (sourcePass) eye = kEngineVelocitySourceEye;
     }
-    const bool overlayPair = sourcePass && runtimeFlatProfile() &&
-        vsHash == 0xBBE58E40FE88EC80ull && psHash == 0xDB3E8D20CF53FBC0ull;
+    // The overlay pair: decal-like draws of vs_BBE5 / ps_DB3E whose depth state tests GEQUAL and writes no depth, so their MRT6 write carries a depth
+    // (SV_Position.z less a per-material offset) that is not the scene's and the compose's exact test calls the base surface's pixel stale: no history,
+    // the camera term. Guarded in the flat profile's on-foot source pass since 2026-10; in the VR profile's eye passes since 2026-11-02 (the ship hull's
+    // stale-slot streaks: under motion the stale pixels' camera term is 18 to 200 px off the joined hull's, docs/kinematic-motion-injection-2026-09-19.md).
+    const bool overlayDraw = vsHash == 0xBBE58E40FE88EC80ull && psHash == 0xDB3E8D20CF53FBC0ull;
+    const bool overlayPair = overlayDraw && ((sourcePass && runtimeFlatProfile()) || (eyePass && !runtimeFlatProfile()));
     // A different pool producer can change MRT6's substrate. Other scene
     // draws cannot write our private target; their depth writes remain guarded
     // by the consumer's exact DSV comparison.
     if (sourcePass && !overlayPair) g_eyes[kEngineVelocitySourceEye].overlayGroup = false;
+    if (eyePass && !overlayPair && (eye == 0 || eye == 1)) g_eyes[eye].overlayGroup = false;
     auto vsInfo = vs ? g_vs.find(vs) : g_vs.end();
     if (!g_emitLive.load(std::memory_order_acquire) || !(eyePass || sourcePass || selfMarkEyePass) || f < 0 || vsInfo == g_vs.end() ||
         vsInfo->second.family != f) {
@@ -2055,8 +2143,8 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
                 g_guardVerified.game = gameSrv;
             }
             if (++g_draw.overlayGuardedDraws == 1)
-                Log::get().note("engine motion: flat overlay guard active at frame %u: exact BBE/DB3E, %ux%u base, "
-                                "private PS t3, original depth/stencil state retained.", frame, e.width, e.height);
+                Log::get().note("engine motion: %soverlay guard active at frame %u: exact BBE/DB3E, %ux%u base, "
+                                "private PS t3, original depth/stencil state retained.", runtimeFlatProfile() ? "flat " : "", frame, e.width, e.height);
         }
     }
     if (psInstalled) ++g_draw.settersSkipped;
@@ -2485,9 +2573,9 @@ void summaryLocked(uint64_t now, ID3D11DeviceContext* ctx) {
     }
     if (g_draw.overlayCopies || g_draw.overlayGuardedDraws || g_guardedFast || g_draw.overlayDeclinedState ||
         g_draw.overlayDeclinedCreate || g_draw.overlayDeclinedShader)
-        Log::get().note("engine motion: flat overlay guard: copies %llu (%.1f MB), guarded draws %llu, "
+        Log::get().note("engine motion: %soverlay guard: copies %llu (%.1f MB), guarded draws %llu, "
                         "declined state %llu, resource %llu, shader %llu.",
-                        u(g_draw.overlayCopies), double(g_draw.overlayBytes) / 1e6, u(g_draw.overlayGuardedDraws + g_guardedFast),
+                        runtimeFlatProfile() ? "flat " : "", u(g_draw.overlayCopies), double(g_draw.overlayBytes) / 1e6, u(g_draw.overlayGuardedDraws + g_guardedFast),
                         u(g_draw.overlayDeclinedState), u(g_draw.overlayDeclinedCreate), u(g_draw.overlayDeclinedShader));
     if (g_draw.selfMarkSeen || g_draw.selfMarkBinds)
         Log::get().note("engine motion: self-marking pixel shaders at the draw path: %llu draws seen, %llu with no "
@@ -2561,7 +2649,6 @@ void clearLocked() {
     g_skinPoseFrame = ~0u;
     g_skinPoseEye = -1;
     g_skinRefs = SkinRefCollector{};
-    g_motion = MotionReadyState{};
     g_skinStats = SkinStats{};
     for (auto& d : familyDraws) d = 0;
     g_guardedFast = 0;
@@ -2609,24 +2696,35 @@ void attachEmitLocked(bool quiet) {
 // F2: the second skin, VR with the feature live. The hook is armed once (its own line says what it did) and its gate opened; the
 // chain dispatch then feeds the join. A hook that stood down leaves the job table's prefix join, and the log says so.
 void armSkinLocked() {
-    if (runtimeFlatProfile()) return;
+    if (runtimeFlatProfile()) { g_skinDeclinedFlat = true; return; }
+    g_skinDeclinedFlat = false;
     char line[420] = {};
     const SkinHookState state = skinEntityHookArm(line, sizeof(line));
     skinEntityHookSetGate(true);
     if (state == SkinHookState::Armed) Log::get().note("%s", line);
     else Log::get().note("skin join: %s", line);
     g_skinWanted.store(true, std::memory_order_release);
-    Log::get().note("skin join: the second skin is live (VR): the skinned characters' vertex shaders (vs_D99A, 61AE, 114A, 7B0D, 8B58) compute last frame's position "
-                    "from last frame's palette and pose and the five keyed pixel shaders export it to target 7; identity from the %s, checked against the palette "
+    Log::get().note("skin join: the second skin is live (VR): the skinned characters' vertex shaders (vs_D99A, 61AE, 114A, 7B0D, 8B58, A6A3) compute last frame's position "
+                    "from last frame's palette and pose and the keyed pixel shaders export it to target 7; identity from the %s, checked against the palette "
                     "chain's own job table every frame. A character it cannot join has no history for that frame, never a guess.",
                     state == SkinHookState::Armed ? "game's entry list (read-only hook), the table's prefix as the fallback" : "job table's prefix");
+}
+
+// A session that started in the flat profile declined the second skin when engine motion went live (armSkinLocked). The profile
+// switch to VR reaches engineVelocityConfigure again with engine motion already live, which has nothing else to do, so this is
+// the ask: arm it once, now, before the first VR draw derives the skinned families. Only for the decline above: a VR session whose
+// emit hook came up late, or whose arm was never owed, is left as it was.
+void armSkinForProfileLocked() {
+    if (!g_skinDeclinedFlat || runtimeFlatProfile() || !g_emitLive.load(std::memory_order_acquire)) return;
+    Log::get().note("skin join: the session started in the flat profile and is now in VR: arming the second skin at the switch.");
+    armSkinLocked();
 }
 }  // namespace engine_velocity_detail
 
 void engineVelocityConfigure(bool on) {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (on && live.load(std::memory_order_acquire) && !g_emitAttached) { attachEmitLocked(true); return; }
-    if (on == live.load(std::memory_order_acquire)) return;
+    if (on == live.load(std::memory_order_acquire)) { if (on) armSkinForProfileLocked(); return; }
     if (!on) { engineVelocityShutdown(); return; }
     // The emit bracket rides the shared eval hooks, held open by its own
     // want; the bracket itself needs the lookup verified.
@@ -2644,7 +2742,8 @@ void engineVelocityConfigure(bool on) {
         kinematicEvalSetMergeObserver(nullptr,nullptr);
         kinematicEvalSetClearObserver(nullptr);
     } else {
-        g_lookup.store(reinterpret_cast<emit::LookupFn>(base + kLookupRva), std::memory_order_release);
+        const uintptr_t lookupAt = gameRva(static_cast<uint32_t>(kLookupRva));   // found: verifyEngine checked it
+        g_lookup.store(lookupAt ? reinterpret_cast<emit::LookupFn>(base + lookupAt) : nullptr, std::memory_order_release);
         kinematicEvalSetEmitObserver(&observeEmit);
         kinematicEvalSetPrimaryEmitObserver(&observePrimaryEmit);
         kinematicEvalSetPoolCopyObserver(&observePoolCopy);
@@ -2682,6 +2781,7 @@ void engineVelocityShutdown() {
     g_lookup.store(nullptr, std::memory_order_release);
     g_emitLive.store(false, std::memory_order_release);
     g_skinWanted.store(false, std::memory_order_release);
+    g_skinDeclinedFlat = false;
     skinEntityHookSetGate(false);   // the relay then forwards straight to the game's function
     clearLocked();
     if (was) Log::get().note("engine motion: engine-record velocity stood down, state cleared.");
@@ -2689,7 +2789,7 @@ void engineVelocityShutdown() {
 
 void engineVelocityRememberVs(ID3D11VertexShader* shader, uint64_t hash, const void* bytecode, size_t bytes, bool linked) {
     if (t_creating || !shader || !bytecode || !bytes || bytes > 1024u * 1024u) return;
-    const int f = familyForProfile(hash, runtimeFlatProfile());
+    const int f = engine_velocity_family::familyOfVs(hash);   // either profile's family: the profile can switch live
     if (f < 0) return;
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
     // One entry per shader OBJECT: the game may create a keyed hash many times.
@@ -2712,7 +2812,7 @@ void engineVelocityRememberVs(ID3D11VertexShader* shader, uint64_t hash, const v
 }
 
 void engineVelocityRememberPs(ID3D11PixelShader* shader, uint64_t hash, const void* bytecode, size_t bytes, bool linked) {
-    if (t_creating || !shader || !bytecode || !bytes || bytes > 1024u * 1024u || !anyKeyedPs(hash)) return;
+    if (t_creating || !shader || !bytecode || !bytes || bytes > 1024u * 1024u || !keyedPsInEitherProfile(hash)) return;
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_ps.count(shader)) return;
     if (g_ps.size() >= kRememberCap) {
@@ -2739,6 +2839,18 @@ size_t engineVelocityRememberedForRig(bool pixel) {
     return pixel ? g_ps.size() : g_vs.size();
 }
 size_t engineVelocityRememberCapForRig() { return kRememberCap; }
+// profile_switch_tests.h: whether family f is derived, under which profile, and whether it took the second skin.
+bool engineVelocityFamilyStateForRig(int f, bool* derivedFlat, bool* skin, bool* derivedSkin) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    if (f < 0 || f >= kFamilyCount) return false;
+    if (derivedFlat) *derivedFlat = g_families[f].derivedFlat;
+    if (skin) *skin = g_families[f].skin;
+    if (derivedSkin) *derivedSkin = g_families[f].derivedSkin;
+    return g_families[f].derived;
+}
+// pin_tests.h: the 32 bytes the rig's lookup check reads (null: no check), and the pin's size.
+void engineVelocityLookupFixtureForRig(const uint8_t* bytes) { g_rigLookupFixture = bytes; }
+const uint8_t* engineVelocityLookupPinForRig(size_t* n) { if (n) *n = sizeof(kLookupPrologue); return kLookupPrologue; }
 #endif
 
 void engineVelocityAfterFlatDraw(ID3D11DeviceContext* ctx) {
@@ -3053,9 +3165,25 @@ void noteSkinDrawSlow(ID3D11DeviceContext* ctx, uint32_t startInstance, uint32_t
     c.ranges.push_back(instances);
 }
 
+// The quick path's one table scan, remembered: familyForProfile is a pure function of (hash, flat) and constant tables
+// (engine_velocity_families.h), and about nine draws in ten bind the vertex shader the previous slow-half entry saw. Plain statics:
+// beforeDrawSlow runs only on the owner context's draw thunks (and the sampled probe, which is the same thread).
+static int quickFamilyForProfile(uint64_t hash, bool flat) {
+    static bool known = false;
+    static uint64_t memoHash = 0;
+    static bool memoFlat = false;
+    static int memoFamily = -1;
+    if (known && memoHash == hash && memoFlat == flat) return memoFamily;
+    memoFamily = familyForProfile(hash, flat);
+    memoHash = hash;
+    memoFlat = flat;
+    known = true;
+    return memoFamily;
+}
+
 void beforeDrawSlow(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     if (!ctx) return;
-    const int64_t t0 = qpcNow();
+    cache.evGen = bindingEvKeyGeneration();   // build 5, item 4: the inline half's one compare; read with the five below
     cache.vs = bindingGeneration(BindSlot::Vs);
     cache.ps = bindingGeneration(BindSlot::Ps);
     cache.rtv = bindingGeneration(BindSlot::Rtv0);
@@ -3068,12 +3196,14 @@ void beforeDrawSlow(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     // The common case -- not a pool family's vertex shader, nothing of ours
     // bound -- costs no lock (terrain, the interface, every other pass).
     if (!g_anyBound.load(std::memory_order_acquire) &&
-        familyForProfile(bindingShaderHash(BindSlot::Vs), runtimeFlatProfile()) < 0) {
+        quickFamilyForProfile(bindingShaderHash(BindSlot::Vs), runtimeFlatProfile()) < 0) {
         cache.family = -1;
         cache.skin = false;
         ++g_draw.quickPaths;
         return;
     }
+    // Read only for the locked path, which is the one that adds it to slowTicks below: the quick path above never uses it.
+    const int64_t t0 = qpcNow();
     // The draw side's CPU time (engine_motion_cpu.h, Part kDraw): the wait for
     // the engine mutex and the slow half, with the pool apply and any lazy
     // shader patch inside it taken out as their own parts. The quick path above
@@ -3232,12 +3362,28 @@ void psShadowProbe(ID3D11DeviceContext* ctx) {
     }
     livePs->Release();
 }
+
+// The header's one-in-64 draw, out of line (the counter is the header's). A pool family's vertex shader or a keyed or self-marking pixel
+// shader bound makes the draw worth the probe; any other draw is left alone.
+void psShadowProbeSampled(ID3D11DeviceContext* ctx) {
+    if (engine_velocity_family::familyOfVs(bindingShaderHash(BindSlot::Vs)) >= 0 ||
+        engine_velocity_family::anyFamilyPs(bindingShaderHash(BindSlot::Ps))) {
+        // A live shader different from the shadow is normally our installed
+        // substitution, so the probe first excludes its owned identity. The
+        // 162120 capture's live/shadow differences all reproduce EDVR patch
+        // hashes; they are not evidence of a real hook bypass. A different
+        // registered game shader heals the shadow and takes the slow half.
+        psShadowProbe(ctx);
+    }
+}
 } // namespace engine_velocity_detail
 
 void engineVelocityNotePresentFrame(uint32_t presentFrame) noexcept {
     g_frame.store(presentFrame, std::memory_order_release);
     flatOriginWitnessFrameBoundary(presentFrame,flatOriginCaptureEnabled() && runtimeFlatProfile(),g_emitLive.load(std::memory_order_acquire));
 }
+
+uint32_t engineVelocityPresentClock() noexcept { return g_frame.load(std::memory_order_acquire); }
 
 void engineVelocityFrameBoundary(ID3D11DeviceContext* ctx) {
     // Runs while live, and once more after a stand-down that left EDVR state
@@ -3296,20 +3442,6 @@ void engineVelocityFrameBoundary(ID3D11DeviceContext* ctx) {
     // The frame's palette-chain dispatches are joined once: at the first skinned draw that needed the views, or here when no draw did (the history chain must
     // not skip a frame because a character was out of view).
     if (ctx) g_skin.flushPending(ctx);
-    {
-        // The entry fade's signals for the frame that just ended (engineMotionReady): both eyes handed the views since the last boundary, and the skinned jobs.
-        const bool both = g_motion.viewsGiven[0] != g_motion.viewsSeen[0] && g_motion.viewsGiven[1] != g_motion.viewsSeen[1];
-        g_motion.viewsRun = both ? g_motion.viewsRun + 1u : 0u;
-        g_motion.viewsSeen[0] = g_motion.viewsGiven[0];
-        g_motion.viewsSeen[1] = g_motion.viewsGiven[1];
-        g_motion.skinJobs = g_motion.chainCalls != g_motion.chainSeen;
-        g_motion.skinLive = g_motion.skinJobs && g_skin.lastJoinLive();   // (the frame's join has run: a draw needed it, or the flush above)
-        g_motion.chainSeen = g_motion.chainCalls;
-        if (g_motion.asked != g_motion.askedSeen) g_motion.sinceAsk = 0;
-        else if (g_motion.sinceAsk < kMotionNeverAsked) ++g_motion.sinceAsk;
-        g_motion.askedSeen = g_motion.asked;
-        g_motion.consumer = g_motion.sinceAsk <= kMotionAskWindow;
-    }
     skinBuildPoseLocked(ctx);     // F2: the frame's pose table, now that every draw has said which records it read
     if (ctx) pollCaptures(ctx);   // the eye-pass capture's GPU timers, without waiting
     // The on-foot source's slot target lives only while the source is drawn:
@@ -3385,24 +3517,10 @@ bool engineVelocityViews(ID3D11DeviceContext*, int eye, ID3D11Texture2D* sceneDe
     *out = EngineVelocityViews{};
     if (!live.load(std::memory_order_acquire) || eye < 0 || eye > 1 || !sceneDepth) return false;
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
-    ++g_motion.asked;
     const bool given = giveViewsLocked(g_eyes[eye], sceneDepth, out,
                                        {g_draw.viewsAsked, g_draw.viewsGiven, g_draw.refusedNoEmit, g_draw.refusedDepth,
                                         g_draw.refusedFrame, g_draw.refusedInvalid, g_draw.refusedUnwritten, g_draw.refusedPrevious}, false);
-    if (given) ++g_motion.viewsGiven[eye];
     return given;
-}
-
-EngineMotionReady engineMotionReady() {
-    EngineMotionReady r;
-    if (!live.load(std::memory_order_acquire) || !g_emitLive.load(std::memory_order_acquire)) return r;   // the engine's motion is not running: nothing to wait for
-    std::lock_guard<std::recursive_mutex> lock(g_mutex);
-    if (!g_motion.consumer) return r;   // the temporal pass is not asking for the views (it is off, or this is not a scene it runs in): nothing to wait for
-    r.armed = true;
-    r.viewsRun = g_motion.viewsRun;
-    r.skinJobs = g_skinWanted.load(std::memory_order_relaxed) && g_motion.skinJobs;
-    r.skinLive = g_motion.skinLive;
-    return r;
 }
 
 bool engineVelocityTakeCaptureGpu(EngineVelocityCaptureGpu* out) {
@@ -3580,6 +3698,29 @@ bool engineVelocitySourceCameraRows(float (&rows)[6][4]) {
     std::memcpy(rows, c.rows, sizeof(rows));
     return true;
 }
+bool engineVelocityLastSourceCameraRows(float (&rows)[6][4], uint32_t* frame, uint32_t* frameNowOut) {
+    static_assert(sizeof(rows) == kRowsBytes, "the resolver's camera rows are the watch's rows 270..275");
+    if (!frame || !frameNowOut || !live.load(std::memory_order_acquire)) return false;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    const SourceCamera& c = g_sourceCamera;
+    if (!c.scene || !c.rowsKnown) return false;
+    std::memcpy(rows, c.rows, sizeof(rows));
+    *frame = c.frame;
+    *frameNowOut = frameNow();
+    return true;
+}
+bool engineVelocityShadowSceneRows(const ID3D11Buffer* scene, float (&rows)[6][4]) {
+    static_assert(sizeof(rows) == kRowsBytes, "the shadow's rows are the watch's rows 270..275");
+    if (!scene || !live.load(std::memory_order_acquire)) return false;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    for (unsigned i = 1; i < kWatchSlots; i += 2) {   // the scene slots (odd)
+        const WatchInfo& w = g_watchInfo[i];
+        if (w.resource != static_cast<const ID3D11Resource*>(scene) || !w.rowsKnown || w.mapped) continue;
+        std::memcpy(rows, w.rows, kRowsBytes);
+        return true;
+    }
+    return false;
+}
 
 void engineVelocityNotePanelPixels(uint32_t joined, uint32_t masked, uint32_t camera, uint32_t stale, uint32_t corrupt,
                                    uint32_t stamped, uint32_t eyeDraws, uint32_t pixelStride, uint32_t skinned) {
@@ -3609,9 +3750,8 @@ bool engineVelocitySkinWanted() noexcept { return g_skinWanted.load(std::memory_
 void engineVelocityNoteChainDispatch(ID3D11DeviceContext* ctx, uint32_t groups) {
     if (!g_skinWanted.load(std::memory_order_acquire) || !live.load(std::memory_order_acquire)) return;
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
-    // One dispatch of the frame's palette chain (the game makes one or two a frame): noted here, joined once per present frame (SkinJoinGpu::noteChain). A
-    // dispatch the join took is the fade's "a character is loaded"; "its join is live" is read at the boundary, after the frame's one join.
-    if (g_skin.noteChain(ctx, frameNow(), groups)) ++g_motion.chainCalls;
+    // One dispatch of the frame's palette chain (the game makes one or two a frame): noted here, joined once per present frame (SkinJoinGpu::noteChain).
+    g_skin.noteChain(ctx, frameNow(), groups);
 }
 
 ID3D11ShaderResourceView* engineVelocitySkinView(int eye, ID3D11Texture2D* sceneDepth) {

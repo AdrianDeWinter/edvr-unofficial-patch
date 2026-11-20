@@ -144,6 +144,7 @@ static void wordsCells() {
     check(noticeText(Press::Restored, "dlss", "F7") == "AA restored: DLSS", "the restore notice names the mode");
     check(noticeText(Press::Restored, "on", "F7") == "AA restored: TAA" && noticeText(Press::Restored, "dlaa", "F7") == "AA restored: DLAA" &&
           noticeText(Press::Restored, "fsr", "F7") == "AA restored: FSR" && noticeText(Press::Restored, "fsr4", "F7") == "AA restored: FSR 4.1" &&
+          noticeText(Press::Restored, "dittosr", "F7") == "AA restored: DittoSR" &&
           noticeText(Press::Restored, "xess", "F7") == "AA restored: XeSS",
           "every mode has its name");
     check(!noticeText(Press::NothingToCompare, "off", "F7").empty(), "the nothing-to-compare notice exists");
@@ -335,12 +336,12 @@ static void sourcePins(const std::string& root) {
         const size_t at = menu.find("void menuProfileSwitch() {");
         const size_t end = at == std::string::npos ? at : menu.find("\n}\n", at);
         const std::string body = end == std::string::npos ? std::string() : menu.substr(at, end - at);
-        check(!body.empty() && has(body.c_str(), "s.flatNotice.clear();") && has(body.c_str(), "s.flatNoticeUp = false;") && has(body.c_str(), "s.flatNoticeShown = false;"),
+        check(!body.empty() && has(body.c_str(), "s.flatNotice.clear();") && has(body.c_str(), "s.screenNotice.clear();"),
               "a profile switch clears the outgoing profile's queued and displayed flat notice (menuProfileSwitch)");
     }
     check(has(ini, "compare_aa = F7"), "edvr.ini ships the key bound to F7");
     check(std::string(kDefaultKey) == "F7", "and the code's default is the same F7");
-    check(has(ini, "# ui: AA comparison key (empty = off) | hotkey | live"), "the F8 Hotkeys page has the row");
+    check(has(ini, "# ui: AA comparison key | hotkey | live"), "the F8 Hotkeys page has the row");
     check(has(flatKeys, "\"hotkey.compare_aa\""), "the flat profile reads the key");
     check(has(gen, "compare_aa = F7"), "and the flat ini template carries it");
     check(has(readme, "F7"), "release\\README.txt lists the key");

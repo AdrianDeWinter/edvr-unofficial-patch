@@ -325,6 +325,10 @@ ApplyResult applyPlan(const Plan& plan, const PayloadProvider& payload) {
             }
             case Action::Delete: {
                 if (!fileExists(step.from)) break;
+                // The pre-flight checked this hash before any step ran; an earlier step of this same plan may have written the file
+                // since (a placement at a path a retiring record also names). A delete that was made for other bytes must not take
+                // those with it, so the hash is checked again right before the delete, and a mismatch stops and rolls back.
+                if (!step.expectSha.empty() && sha256File(step.from) != step.expectSha) { fail(step.from, ERROR_CRC); break; }
                 clearReadOnly(step.from);
                 if (!protectTarget(step.from)) { fail(step.from, err); break; }
                 if (!DeleteFileW(step.from.c_str())) {

@@ -31,11 +31,31 @@ struct SlotOwner {
     const VTableHook* owner = nullptr;
 };
 
-// More than the two DLLs together ever commit (about two dozen). If it fills,
-// commit() refuses reclaim for the overflowing hook rather than letting it
-// run half-informed: a reclaim that cannot see an owner is a reclaim that can
-// build the loop above.
-constexpr size_t kMaxSlotOwners = 64;
+// One entry per patched slot, InPlace hooks only (the private modes register
+// nothing). The size is the worst case the shipped hooks can commit in ONE
+// session, counted from the replace() calls in 2026-11 with the profile that
+// patches the most, flat:
+//
+//   d3d11 half   device 19 + swap chain 3 + factory 2 + exposure 5 + vScreen 44 = 73
+//                (VR: 15 + 1 + 2 + 5 + 43 = 66)
+//   graphics bridge                                                              1
+//   DirectInput gate, every door array full: keyboard W/A 2x2, game devices 16x2,
+//                joysticks 8x2, mouse 1, factories 8x2                           69
+//                                                                    total      143
+//
+// It was 64, sized in the days of "about two dozen", and vScreen alone has since
+// grown past it: a contributor's Windows logs, InPlace on an RX 6800, printed the
+// registry-full line six times and ran with re-claiming off. LiveCopy never
+// showed it, because the two context hooks (49 of those slots) register nothing
+// there. 256 is 1.8x the worst case, 8 KB of static storage, and a linear scan
+// that runs only for a slot already found displaced.
+//
+// If it still fills, commit() turns re-claiming off for EVERY hook, loudly: a
+// reclaim that cannot see an owner is a reclaim that can build the loop above.
+// That stays all-or-nothing; only the size moved. tools\vtable_test holds both
+// halves: a session's worth of hooks fits, and a registry that does overflow
+// stops reclaim for a hook that is fully registered.
+constexpr size_t kMaxSlotOwners = 256;
 SlotOwner g_slotOwners[kMaxSlotOwners];
 size_t    g_slotOwnerCount = 0;
 
@@ -1985,6 +2005,15 @@ bool vtableWatchFlipAt(uint32_t index, VTableFlip* out) {
 void vtableWatchSetPublishObserverForTest(void (*observer)(uint32_t)) {
     g_publishObserver = observer;
 }
+
+size_t vtableSlotRegistryCapacityForTest() { return kMaxSlotOwners; }
+
+bool vtableSlotRegistryOverflowedForTest() {
+    AcquireSRWLockShared(&g_slotOwnersLock);
+    const bool poisoned = g_slotOwnersPoisoned;
+    ReleaseSRWLockShared(&g_slotOwnersLock);
+    return poisoned;
+}
 #endif
 
 uint32_t vtableWatchCatches() {
@@ -2532,6 +2561,7 @@ bool VTableHook::commit() {
     {
         AcquireSRWLockExclusive(&g_slotOwnersLock);
         bool full = false;
+        size_t placed = 0;   // this hook's slots that made it in
         for (const Patch& p : m_patches) {
             if (g_slotOwnerCount >= kMaxSlotOwners) {
                 full = true;
@@ -2542,6 +2572,7 @@ bool VTableHook::commit() {
             o.slot = p.slot;
             o.replacement = p.replacement;
             o.owner = this;
+            ++placed;
         }
         if (full) {
             // Poison reclaim OUTRIGHT, for everyone. Retiring only this hook
@@ -2552,13 +2583,19 @@ bool VTableHook::commit() {
             // A session without reclaim is the pre-reclaim status quo; a
             // session with a loop is a crash.
             g_slotOwnersPoisoned = true;
+            // The numbers name the hook that did not fit, which the line used to
+            // leave to arithmetic on the source: the table, how many of its
+            // slots are registered, and how big the registry is.
             Log::get().note(
                 "VTableHook: the slot registry is full, so re-claiming is OFF "
                 "for every hook this session -- a hook the registry cannot see "
                 "must not be re-claimed around, so none may be. The hooks "
-                "themselves still work. This means more hooks exist than the "
-                "codebase has ever had; raise kMaxSlotOwners in vtable_hook.cpp.",
-                (void*)m_vtable);
+                "themselves still work. The registry holds %zu of %zu slots; "
+                "the hook on the table at %p patches %zu slots and %zu of them "
+                "are in it. This means more hooks exist than the codebase has "
+                "ever had; raise kMaxSlotOwners in vtable_hook.cpp.",
+                g_slotOwnerCount, kMaxSlotOwners, (void*)m_vtable,
+                m_patches.size(), placed);
         }
         ReleaseSRWLockExclusive(&g_slotOwnersLock);
     }

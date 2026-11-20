@@ -294,6 +294,17 @@ inline void sdkForegroundGpuTests(ID3D11Device* device, ID3D11DeviceContext* con
         mutationFailures=nullptr;if(first)*first=mutationFirst;
         return true;
     };
+    {   // this process's sources, compiled ahead on every core
+        std::vector<std::string> sources;
+        if(shardRuns("sdkForeground:control"))sources.push_back(shipped);
+        int number=0;
+        for(const Mutant& m:mutants) {
+            char unit[40];std::snprintf(unit,sizeof(unit),"sdkForeground:mutant%d",++number);
+            bool once=false;
+            if(shardRuns(unit))sources.push_back(fpgpu::replaceOnce(shipped,m.from,m.to,&once));
+        }
+        fpgpu::precompilePreps(sources);
+    }
     {   // The control: the same source, compiled here and run through the same seam, is the shipped prep and passes.
         int failed=0;std::string first;
         if(shardRuns("sdkForeground:control")){

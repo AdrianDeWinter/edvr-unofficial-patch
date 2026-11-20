@@ -319,6 +319,12 @@ bool vtableWatchFlipAt(uint32_t index, VTableFlip* out);
 // Pauses publication after the first field is written, for a deterministic
 // reader/writer interleaving in the test executable only.
 void vtableWatchSetPublishObserverForTest(void (*observer)(uint32_t));
+
+// The slot registry's capacity, and whether it has overflowed (which turns
+// re-claiming off for every hook for the rest of the process, never back on).
+// For the rig's overflow cell, which must run last for that reason.
+size_t vtableSlotRegistryCapacityForTest();
+bool   vtableSlotRegistryOverflowedForTest();
 #endif
 
 // Has the timeline printed its closing report -- the cost per frame and the

@@ -1628,8 +1628,9 @@ inline int flatHdrRouteTests() {
                    count(menu, "flatFormatSettingsWarningLog(line, sizeof(line), was, label.c_str(), reason, standing, cause, w);") == 1 &&
                    count(menu, "&flatWarnMeasure, &ruler, &warning, s.flatWarnCause);") == 1,
                "the key, the log line and the panel's words all take the same cause");
-        expect(count(menu, "static_assert(static_cast<int>(kFlatPageRowCount) + 1 + FlatSettingsWarning::kMaxLines <= kMenuMaxLines,") == 1,
-               "the flat page's rows, a blank line and a full warning are held to the card's lines at compile time");
+        expect(count(menu, "static_assert(static_cast<int>(kFlatPageRowCount) + 1 + 2 <= kMenuMaxLines,") == 1 &&
+                   count(menu, "static_assert(kFlatStatusMaxLines + FlatSettingsWarning::kMaxLines <= kMenuMaxLines,") == 1,
+               "the flat page's rows, a blank line and the warning's pointer, and the Status page's lines and a full warning, are held to the card's lines at compile time");
         // THE DEPTH-VALIDATED STEADY DETAIL on foot (design doc section 82): always on, with no key (retired 2026-10-01). The flat runtime
         // hands the resolver steadyDetail = true at its two treatment call sites, right after the 3D menu's own blanket policy
         // (FlatMonoResolveFrame::staticScene, from the verified menu copy), which is not this rule's and whose lines are exactly what they

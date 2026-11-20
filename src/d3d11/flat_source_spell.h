@@ -25,6 +25,9 @@ struct FlatSourceSpellWindow {
     // Source-free frames (FlatMonoFrame::sourceFree): the scene held no pool draw and was treated from the camera term alone. Counted at
     // the Present, whether the resolver ran on them or not; the overlay count is the weapon glow passes admitted while no world was named.
     uint64_t sourceFreeFrames = 0, sourceFreeTreated = 0, overlaysUnnamed = 0;
+    // The first-person path (2026-10-29: a tool in hand over bare terrain): the overlays above it admitted, the frames that held one, and
+    // those of them the resolver ran on.
+    uint64_t overlaysFirstPerson = 0, firstPersonFrames = 0, firstPersonTreated = 0;
     bool inSpell = false;
     uint64_t openSpell = 0;
 };
@@ -57,7 +60,10 @@ public:
     // A frame the selector took with no motion source (the view is the camera term alone), and whether the resolver treated it.
     void sourceFreeFrame(bool treated) { ++w_.sourceFreeFrames; if (treated) ++w_.sourceFreeTreated; }
     // A weapon glow pass admitted as an overlay although no draw had named the world: the HDR target's own first camera was the world's.
-    void overlayUnnamed() { ++w_.overlaysUnnamed; }
+    // firstPerson: admitted on the first-person path (a first person in the frame, the first camera the last world's by its shape).
+    void overlayUnnamed(bool firstPerson = false) { ++w_.overlaysUnnamed; if (firstPerson) ++w_.overlaysFirstPerson; }
+    // A frame that held a first-person-path admission, and whether the resolver treated it.
+    void firstPersonUnnamedFrame(bool treated) { ++w_.firstPersonFrames; if (treated) ++w_.firstPersonTreated; }
     // The window since the last take (the state, an open spell and a warm-up in progress, carries over).
     FlatSourceSpellWindow take() {
         FlatSourceSpellWindow out = w_;
@@ -105,7 +111,7 @@ inline int flatSourceSpellLine(char* out, size_t n, const FlatSourceSpellWindow&
     return std::snprintf(out, n,
         "flat source 5s: frames=%llu no-source-frames=%llu spells=%llu longest-spell=%llu open-spell=%llu recoveries=%llu abandoned=%llu "
         "warm-ups-done=%llu warm-frames-total=%llu warm-frames-max=%llu warm-ups-aborted=%llu source-free-frames=%llu source-free-treated=%llu "
-        "overlays-without-named-world=%llu; last no-source frame=%llu: "
+        "overlays-without-named-world=%llu first-person-path=%llu first-person-frames=%llu first-person-treated=%llu; last no-source frame=%llu: "
         "records-on-scene-depth=%u draws=%u same-camera-draws=%u pool-kind-records=%u distinct-pairs=%u; top pairs in the next line",
         static_cast<unsigned long long>(w.frames), static_cast<unsigned long long>(w.noSourceFrames),
         static_cast<unsigned long long>(w.spells), static_cast<unsigned long long>(w.longestSpell),
@@ -114,8 +120,61 @@ inline int flatSourceSpellLine(char* out, size_t n, const FlatSourceSpellWindow&
         static_cast<unsigned long long>(w.warmFrames), static_cast<unsigned long long>(w.warmMax),
         static_cast<unsigned long long>(w.warmAborted), static_cast<unsigned long long>(w.sourceFreeFrames),
         static_cast<unsigned long long>(w.sourceFreeTreated), static_cast<unsigned long long>(w.overlaysUnnamed),
+        static_cast<unsigned long long>(w.overlaysFirstPerson), static_cast<unsigned long long>(w.firstPersonFrames),
+        static_cast<unsigned long long>(w.firstPersonTreated),
         static_cast<unsigned long long>(lastFrame),
         last.records, last.draws, last.sameCameraDraws, last.poolRecords, last.distinctPairs);
+}
+
+// WHAT VETOED THE SOURCE-FREE ADMISSION (2026-11-08, a flat report of DLSS dropping to spatial on a planet when the SRV left the view).
+// The log of it, on foot, had nine spells of no-supported-motion-source-pair over views of ground and sky: records-on-scene-depth 2, one pair, no
+// pool-kind record, the same pair that other windows took source-free. The selector refuses a no-source view only for a stock pool-family draw
+// (FlatMonoFrameInput::unsupportedFamilyDraws) or an unsupported pool-kind record on the HDR's depth, and the summary above lists the HDR's depth
+// alone, so the draw that decided it was named nowhere. This window counts the frames and names the draws:
+//   frames                  frames with a verdict (a final copy was seen);
+//   with-stock-family       of them, frames that held a stock pool-family draw anywhere in a scene-shaped depth;
+//   of-those-selected       of those, the frames the selector took anyway (a supported draw was in view, so the veto was never asked: the SRV
+//                           on screen, if the report is right);
+//   refused-by-family       frames refused for no source whose verdict counted a stock family draw (the selector's own answer);
+//   refused-by-pool         frames refused for no source whose verdict counted none (so an unsupported pool-kind record on the HDR's depth).
+struct FlatSourceVetoWindow {
+    uint64_t frames = 0, withFamily = 0, withFamilySelected = 0, refusedByFamily = 0, refusedByPool = 0;
+    // noSource: refused for no supported motion source pair. selected: the selector took it. familyDraws: the frame held a stock family draw at
+    // its end. verdictFamily: the refusing verdict counted one (FlatMonoSourceless::vetoFamilyDraws).
+    void frame(bool noSource, bool selected, bool familyDraws, bool verdictFamily) {
+        ++frames;
+        if (familyDraws) { ++withFamily; if (selected) ++withFamilySelected; }
+        if (noSource) { if (verdictFamily) ++refusedByFamily; else ++refusedByPool; }
+    }
+};
+
+// One line (under 850 characters at the widest digits, inside kFlatLogLineBudget): the window, then the last refused frame's causes and the
+// stock draws that frame held. depth=hdr says the draw wrote the HDR's own depth, depth=other a different scene-shaped depth. A depth=hdr draw
+// can still be missing from the source line's pairs: that summary walks only the records the selector assembled (the targets' writes, the
+// tone, the sources), and a G-buffer draw is none of them (Sean's 11:03 trace). target is the colour target's size (0x0 for a depth-only draw).
+inline int flatSourceVetoLine(char* out, size_t n, const FlatSourceVetoWindow& w, const FlatMonoSourceless& last, uint64_t lastFrame,
+                              const FlatFamilyVeto (&v)[kFlatFamilyVetoKinds], uint32_t kinds, uint32_t overflowDraws) {
+    char draws[760];
+    size_t at = 0;
+    draws[0] = 0;
+    if (kinds > kFlatFamilyVetoKinds) kinds = kFlatFamilyVetoKinds;
+    for (uint32_t i = 0; i < kinds; ++i) {
+        const auto& e = v[i];
+        const int k = std::snprintf(draws + at, sizeof(draws) - at,
+            "%s[VS=%016llX PS=%016llX draws=%u depth=%s target=%ux%u color=%u camera=%u]", i ? " " : "",
+            static_cast<unsigned long long>(e.vs), static_cast<unsigned long long>(e.ps), e.draws,
+            e.depth && e.depth == last.depth ? "hdr" : "other", e.width, e.height, e.color ? 1u : 0u, e.camera ? 1u : 0u);
+        if (k < 0 || at + static_cast<size_t>(k) >= sizeof(draws)) break;
+        at += static_cast<size_t>(k);
+    }
+    if (!at) std::snprintf(draws, sizeof(draws), "none");
+    return std::snprintf(out, n,
+        "flat source veto 5s: frames=%llu with-stock-family=%llu of-those-selected=%llu refused-by-family=%llu refused-by-pool=%llu; "
+        "last refused frame=%llu: stock-family-draws=%u unsupported-pool-draws=%u kinds=%u past-the-kinds=%u; stock draws: %s",
+        static_cast<unsigned long long>(w.frames), static_cast<unsigned long long>(w.withFamily),
+        static_cast<unsigned long long>(w.withFamilySelected), static_cast<unsigned long long>(w.refusedByFamily),
+        static_cast<unsigned long long>(w.refusedByPool), static_cast<unsigned long long>(lastFrame),
+        last.vetoFamilyDraws, last.vetoPoolDraws, kinds, overflowDraws, draws);
 }
 
 }  // namespace edvr

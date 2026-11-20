@@ -7,6 +7,7 @@ __pycache__/
 edvr_logs/
 edvr_FATAL.txt
 edvr_breadcrumbs.txt
+.venv/
 
 # Claude Code's working directory: agent worktrees, local settings, transcripts.
 .claude/
@@ -32,6 +33,10 @@ third_party/xess/
 # headers and AMD's signed D3D12 runtime DLLs, verified at build time. Dev
 # install only for now; nothing here is packaged or shipped.
 third_party/fsr4/
+
+# Azure Artifact Signing client (Microsoft's NuGet package), fetched and verified by
+# tools/artifact_signing.py fetch. Signing tooling only, never a build input.
+third_party/artifact_signing/
 
 # Pinned Khronos loader binary, fetched by tools/fetch_openxr_loader.py.
 third_party/openxr/loader/

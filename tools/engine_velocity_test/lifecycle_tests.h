@@ -70,6 +70,8 @@ struct Slot { void* ptr = nullptr; uint32_t gen = 1; uint64_t hash = 0; };
 Slot g_slots[static_cast<unsigned>(edvr::BindSlot::Count)];
 ID3D11DepthStencilView* g_eyeDsv[2] = {};
 bool g_hookLive = true;
+// F152: whether EDVR's record-writer hook owns the lookup's prologue now (the stub of objectRecordWriterHookMatches the lookup check asks).
+bool g_writerHookOwns = false;
 unsigned g_emitAttaches = 0, g_emitDetaches = 0;
 // The pool copier's observer as configure registers it (copier_tests.h calls it
 // the way the game's job threads do).
@@ -99,6 +101,14 @@ namespace edvr {
 void* bindingGet(BindSlot s) { return lifecycle_fake::g_slots[static_cast<unsigned>(s)].ptr; }
 uint32_t bindingGeneration(BindSlot s) { return lifecycle_fake::g_slots[static_cast<unsigned>(s)].gen; }
 uint64_t bindingShaderHash(BindSlot s) { return lifecycle_fake::g_slots[static_cast<unsigned>(s)].hash; }
+// Build 5, item 4: the aggregate over the five slots the draw cache follows is the SUM of their fake generations, so every direct bump of one (the tests bump `.gen`
+// by hand) moves it, as the real aggregate moves with the real generations. The real bump sites are tested in scrim_metadata_test, which links binding_shadow.cpp.
+// skin_engine_test includes this file too.
+uint32_t bindingEvKeyGeneration() {
+    using lifecycle_fake::g_slots;
+    return g_slots[static_cast<unsigned>(BindSlot::Vs)].gen + g_slots[static_cast<unsigned>(BindSlot::Ps)].gen + g_slots[static_cast<unsigned>(BindSlot::Rtv0)].gen +
+           g_slots[static_cast<unsigned>(BindSlot::Dsv0)].gen + g_slots[static_cast<unsigned>(BindSlot::Blend)].gen;
+}
 void bindingSetShader(BindSlot s, void* p, uint64_t hash) {
     auto& x = lifecycle_fake::g_slots[static_cast<unsigned>(s)];
     x.ptr = p; x.hash = hash; ++x.gen;
@@ -127,6 +137,18 @@ void kinematicEvalSetMergeObserver(EngineMergeBeginFn,EngineMergeEndFn) noexcept
 const char* kinematicEvalMergeStatus() noexcept { return "rig: hooked"; }
 void kinematicEvalSetClearObserver(EngineClearObserverFn) noexcept {}
 const char* kinematicEvalClearStatus() noexcept { return "rig: hooked"; }
+// src\common\game_build.h's resolver, as on build 334925 (the known build): an RVA is itself.
+uintptr_t gameRva(uint32_t knownRva) noexcept { return knownRva; }
+// ... and its pin compare on that build: an exact compare.
+bool gamePinMatches(uint32_t, const uint8_t* got, const uint8_t* pin, size_t n) noexcept { return got && pin && std::memcmp(got, pin, n) == 0; }
+// ... and the writer hook's own check as the real one makes it (object_record_writer_hook.cpp, matchesBytes): the hook is installed (the rig's flag), the first byte is the jump
+// and the eleven bytes after its five are the prologue's (the relay's displacement is not checked here).
+bool objectRecordWriterHookMatches(uintptr_t at) noexcept {
+    static const uint8_t tail[11] = {0x48, 0x89, 0x6C, 0x24, 0x18, 0x56, 0x57, 0x41, 0x56, 0x48, 0x83};
+    if (!lifecycle_fake::g_writerHookOwns || !at) return false;
+    const uint8_t* b = reinterpret_cast<const uint8_t*>(at);
+    return b[0] == 0xE9 && std::memcmp(b + 5, tail, sizeof(tail)) == 0;
+}
 bool kinematicEvalEmitHookLive(const char** why) noexcept {
     if (why) *why = lifecycle_fake::g_hookLive ? nullptr : "rig: kinematic-build-144315a20 refused";
     return lifecycle_fake::g_hookLive;
@@ -808,7 +830,25 @@ inline void run(const Harness& h) {
     }
     lifecycle_fake::g_objectHash[g.ps2.Get()] = 0x3434972DB5336AA4ull;
     h.context->PSSetShader(g.ps2.Get(), nullptr, 0);   // live only; the hook "missed" the bind
-    edvr::engine_velocity_detail::psShadowProbe(h.context);
+    {
+        // 2026-10-27: the header's one-in-64 draw reaches the probe through psShadowProbeSampled (out of line, so the inline gate stays
+        // small): the probe runs only for a pool family's vertex shader or a keyed or self-marking pixel shader. With neither bound the
+        // bypass bind is left alone (the probe did not run); the shadow's hashes are put back after.
+        auto& vsSlot = lifecycle_fake::g_slots[static_cast<unsigned>(edvr::BindSlot::Vs)];
+        auto& psSlot = lifecycle_fake::g_slots[static_cast<unsigned>(edvr::BindSlot::Ps)];
+        const uint64_t vsHash = vsSlot.hash, psHash = psSlot.hash;
+        void* const shadowPs = psSlot.ptr;
+        h.check(edvr::engine_velocity_family::familyOfVs(vsHash) >= 0,
+                "C: the shadow's vertex shader is a pool family's here, so the sampled probe has its reason to run below");
+        vsSlot.hash = 0x1111111111111111ull;
+        psSlot.hash = 0x2222222222222222ull;
+        edvr::engine_velocity_detail::psShadowProbeSampled(h.context);
+        h.check(psSlot.ptr == shadowPs && psSlot.hash == 0x2222222222222222ull,
+                "C: with neither a pool family's vertex shader nor a keyed pixel shader bound the sampled probe does not run (the bypass bind is not healed)");
+        vsSlot.hash = vsHash;
+        psSlot.hash = psHash;
+    }
+    edvr::engine_velocity_detail::psShadowProbeSampled(h.context);   // the pool family's vertex shader is bound: the probe runs
     h.check(lifecycle_fake::g_slots[static_cast<unsigned>(edvr::BindSlot::Ps)].ptr == g.ps2.Get(),
             "F7: a genuine bypass-bound game shader still heals the shadow");
 
@@ -1512,6 +1552,53 @@ inline void run(const Harness& h) {
                 "flat overlay lifecycle: one base copy per group, refreshed after other producer and next frame");
         h.check(number(summary, "declined state ") == 0 && number(summary, "resource ") == 0 &&
                 number(summary, "shader ") == 0, "flat overlay lifecycle: no guarded path fallback");
+        // The same pair in a VR EYE pass (2026-11-02, the ship hull's stale-slot streaks: the overlay's MRT6 depth is not the scene's, the
+        // compose's exact test calls the base surface's pixel stale and it keeps the camera term). The guard that the flat source pass has had
+        // since 2026-10 now covers the eye passes too: the same one base copy per group, the private t3 for the guarded draw, the game's t3 back
+        // at the next draw, no fallback, and the line says "overlay guard" (not "flat overlay guard") in the VR profile.
+        {
+            edvr::g_runtimeProfile = edvr::RuntimeProfile::Vr;
+            int eyeOverlayNo = 0;
+            auto eyeOverlay = [&] {
+                ++eyeOverlayNo;
+                g.ctx->VSSetShader(overlayVs.Get(), nullptr, 0); g.shadow(BindSlot::Vs, overlayVs.Get(), overlayVsHash);
+                g.setPs(overlayPs.Get(), overlayPsHash);
+                g.ctx->OMSetDepthStencilState(overlayDepth.Get(), 5);
+                edvr::engineVelocityBeforeDraw(g.ctx, true);
+                h.check(edvr::engineVelocityDrawSubstituted(), "VR overlay lifecycle: the overlay draw into an eye produced MRT6");
+                ComPtr<ID3D11ShaderResourceView> bound;
+                g.ctx->PSGetShaderResources(3, 1, &bound);
+                if (!(bound && bound.Get() != sentinel.Get())) std::printf("  VR overlay lifecycle: overlay draw #%d has no private t3 (bound %p, game %p)\n", eyeOverlayNo, static_cast<void*>(bound.Get()), static_cast<void*>(sentinel.Get()));
+                h.check(bound && bound.Get() != sentinel.Get(), "VR overlay lifecycle: the guarded pixel shader has the private snapshot at t3");
+                g.ctx->DrawInstanced(4, 1, 0, 0);
+            };
+            auto eyeUnderlay = [&] {
+                g.setVs(); g.setPs(g.ps.Get(), kPsHash);
+                g.ctx->OMSetDepthStencilState(g.depthState.Get(), 0);
+                g.draw(5);
+                ComPtr<ID3D11ShaderResourceView> bound;
+                g.ctx->PSGetShaderResources(3, 1, &bound);
+                h.check(bound.Get() == sentinel.Get(), "VR overlay lifecycle: the next draw gives the game's t3 back");
+            };
+            g.ordinaryFrame();   // the engine path is live from the first draw of the frames below
+            const size_t eyeMark = g_log.size();
+            g.beginFrame(); g.writeScene(g.sceneA.Get(), g.rows[0]);
+            g.pass(0, 1, 5);
+            eyeOverlay(); eyeOverlay();
+            eyeUnderlay(); eyeOverlay();
+            g.endFrame();
+            g.beginFrame(); g.writeScene(g.sceneA.Get(), g.rows[0]);
+            g.pass(0, 1, 5);
+            eyeOverlay();
+            g.endFrame(true);
+            const std::string eyeSummary = lastLine("engine motion: overlay guard:", eyeMark);
+            if (number(eyeSummary, "copies ") != 3 || number(eyeSummary, "guarded draws ") != 4) std::printf("  VR overlay lifecycle: the summary line is: %s\n", eyeSummary.c_str());
+            h.check(number(eyeSummary, "copies ") == 3 && number(eyeSummary, "guarded draws ") == 4,
+                    "VR overlay lifecycle: one base copy per group in an eye pass, refreshed after another producer and next frame");
+            h.check(number(eyeSummary, "declined state ") == 0 && number(eyeSummary, "resource ") == 0 && number(eyeSummary, "shader ") == 0,
+                    "VR overlay lifecycle: no guarded path fallback");
+            h.check(lastLine("engine motion: flat overlay guard:", eyeMark).empty(), "VR overlay lifecycle: the VR profile's line is not the flat one");
+        }
         edvr::g_runtimeProfile = edvr::RuntimeProfile::LegacyVr;
     }
     // The VR world route's two reads of the on-foot naming (vr_world_route.cpp, design doc section 82): whether a depth is the

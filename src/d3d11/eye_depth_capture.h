@@ -43,6 +43,7 @@
 #include <cstring>
 #include <vector>
 
+#include "../common/dump_file.h"   // the eye dump's .z container
 #include "depth_probe.h"   // depthReadFormat: the probe's own depth-channel table
 
 namespace edvr {
@@ -92,7 +93,7 @@ class EyeDepthCapture {
     // unwind C++ objects through __try (kinematic_eval_hook.cpp's rule).
     // srcTexel 8 (R32G8X24 staged in its own family) converts each texel to
     // its first four bytes, the depth float; the payload is always 4-byte.
-    static bool guardedRows(FILE* f, const uint8_t* p, int64_t pitch, uint32_t rowBytes,
+    static bool guardedRows(dump_file::Writer& f, const uint8_t* p, int64_t pitch, uint32_t rowBytes,
                             uint32_t rows, uint32_t srcTexel, uint32_t* faults) {
         bool ok = true;
         uint8_t* conv = nullptr;
@@ -104,12 +105,12 @@ class EyeDepthCapture {
             for (uint32_t y = 0; y < rows; ++y) {
                 const uint8_t* src = p + static_cast<size_t>(y) * pitch;
                 if (srcTexel == 4) {
-                    ok = fwrite(src, 1, rowBytes, f) == rowBytes && ok;
+                    ok = f.write(src, rowBytes) && ok;
                 } else {
                     const uint32_t n = rowBytes / 4;
                     for (uint32_t x = 0; x < n; ++x)
                         std::memcpy(conv + size_t(x) * 4, src + size_t(x) * srcTexel, 4);
-                    ok = fwrite(conv, 1, rowBytes, f) == rowBytes && ok;
+                    ok = f.write(conv, rowBytes) && ok;
                 }
             }
         }
@@ -117,9 +118,9 @@ class EyeDepthCapture {
         std::free(conv);
         return ok;
     }
-    static bool guardedBytes(FILE* f, const void* p, uint32_t bytes, uint32_t* faults) {
+    static bool guardedBytes(dump_file::Writer& f, const void* p, uint32_t bytes, uint32_t* faults) {
         bool ok = true;
-        __try { ok = fwrite(p, 1, bytes, f) == bytes; }
+        __try { ok = f.write(p, bytes); }
         __except (EXCEPTION_EXECUTE_HANDLER) { ++*faults; ok = false; }
         return ok;
     }
@@ -314,10 +315,10 @@ public:
         for (Record& r : records_) {
             _snwprintf_s(path, MAX_PATH, _TRUNCATE, L"%s\\depth_%s_f%u_%c.bin", dir, stamp,
                          r.frame, r.eye ? 'B' : 'A');
-            FILE* f = nullptr;
-            if (_wfopen_s(&f, path, L"wb") || !f) { ++failures; continue; }
-            bool ok = fwrite("EDVRDEPT", 1, 8, f) == 8;
-            auto u32 = [&](uint32_t v) { ok = fwrite(&v, 4, 1, f) == 1 && ok; };
+            dump_file::Writer f;
+            if (!f.open(path)) { ++failures; continue; }
+            bool ok = f.write("EDVRDEPT", 8);
+            auto u32 = [&](uint32_t v) { ok = f.write(&v, 4) && ok; };
             u32(kFileVersion);            // version 2
             u32(r.frame);
             u32(r.eye);
@@ -347,8 +348,7 @@ public:
                 ctx->Unmap(r.stage.Get(), 0);
             } else ++failures;
             u32(faults - fileFaults);
-            ok = !ferror(f) && ok;
-            if (fclose(f) != 0 || !ok) ++failures;
+            if (!f.close() || !ok) ++failures;
             else ++written;
         }
         return written;

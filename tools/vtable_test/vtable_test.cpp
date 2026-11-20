@@ -41,6 +41,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include "../../src/common/code_hook.h"
 #include "../../src/common/vtable_hook.h"
@@ -546,6 +547,35 @@ static void dominantOtherModuleCells() {
     fill(96, 0, 0);
     hits = vtableDominantOtherModule(table, 96, nullptr, tiny, sizeof(tiny));
     check(hits == 96 && std::strlen(tiny) <= 3, "a name longer than the buffer is cut, not overrun", "the buffer was not respected");
+}
+
+// ---------------------------------------------------------------------------
+// THE SLOT REGISTRY'S CELLS -- fixtures
+//
+// An object that is nothing but a vptr at a table of N executable entries, so a
+// cell can hand a hook as many slots as the real hooks patch. IThing has eight.
+// The d3d11 half patches a context's table at slots past 100.
+struct WideObject {
+    void** vptr = nullptr;
+};
+
+static void** wideTable(size_t entries) {
+    void** t = static_cast<void**>(VirtualAlloc(
+        nullptr, entries * sizeof(void*), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    if (t) for (size_t i = 0; i < entries; ++i) t[i] = reinterpret_cast<void*>(&thunkOne);
+    return t;
+}
+
+// One hook's worth of slots, staged the way every real install does it: attach,
+// replace() each slot with a forward pointer to capture the entry it displaced,
+// then commit. The forward array is the caller's, one cell per slot.
+static bool commitSlots(VTableHook& hook, WideObject& object, const size_t* slots,
+                        size_t count, void* replacement, void** forwards) {
+    if (!hook.attach(&object)) return false;
+    for (size_t i = 0; i < count; ++i) {
+        if (!hook.replace(slots[i], replacement, &forwards[i])) return false;
+    }
+    return hook.commit();
 }
 
 int main() {
@@ -1189,9 +1219,9 @@ int main() {
               "FUN_142845730's own prologue would misdecode: either refused "
               "(no hook) or stolen at the wrong length (a corrupted trampoline)");
 
-        // FreeCameraActivity's update (EliteDangerous64.exe+0x1072A20, build 334925), the
-        // Explorer Cam placement's first target (hotkey.explorer_cam, explorer_cam.cpp
-        // in the d3d11 half): `mov [rsp+20h], rbx` is its first instruction, FIVE
+        // FreeCameraActivity's update (EliteDangerous64.exe+0x1072A20, build 334925; a
+        // CodeHook target until Explorer Cam was removed in F98, kept here as decoder
+        // coverage): `mov [rsp+20h], rbx` is its first instruction, FIVE
         // bytes with no rip-relative displacement, so CodeHook steals exactly five and
         // the 28-byte prologue's later instructions (pushes, a SIB lea, a sub with an
         // imm32) never have to be decoded or moved.
@@ -1200,49 +1230,48 @@ int main() {
         check(codeInstructionLength(freeCamera, sizeof(freeCamera), &disp) == 5 && disp == 0,
               "...and FreeCameraActivity's update prologue: its first instruction is 5 bytes, "
               "no displacement, so 5 are stolen",
-              "Explorer Cam's free-camera hook target would be refused or stolen at the "
+              "a prologue that begins mov [rsp+20h],rbx would be refused or stolen at the "
               "wrong length");
 
-        // The free camera's collision step (EliteDangerous64.exe+0x10921E0, build 334925), Explorer
-        // Cam's second target (hotkey.explorer_cam, explorer_cam.cpp in the d3d11 half): it begins
+        // The free camera's collision step (EliteDangerous64.exe+0x10921E0, build 334925; a
+        // CodeHook target until F98, kept as decoder coverage): it begins
         // `40 55` -- push rbp WITH a REX prefix -- then three one-byte pushes, so the first four
         // instructions are 2+1+1+1 = five bytes with no rip-relative displacement, and CodeHook
         // steals exactly five. A decoder that took `40` for the start of a different instruction
-        // would refuse the hook (placement stands down) or steal a wrong length.
+        // would refuse the hook or steal a wrong length.
         const uint8_t collisionStep[] = {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D,
                                          0xAC, 0x24, 0xB0, 0xFE, 0xFF, 0xFF, 0x48, 0x81, 0xEC, 0x50, 0x02, 0x00, 0x00};
         check(codeInstructionLength(collisionStep, sizeof(collisionStep), &disp) == 2 && disp == 0,
               "...and the free camera's collision step: `40 55` (REX push rbp) is a 2-byte "
               "instruction with no displacement",
-              "Explorer Cam's collision hook would be refused and placement would stand down");
+              "a prologue that begins with a REX push would be refused");
         check(codeInstructionLength(collisionStep + 2, sizeof(collisionStep) - 2, &disp) == 1 &&
                   codeInstructionLength(collisionStep + 3, sizeof(collisionStep) - 3, &disp) == 1 &&
                   codeInstructionLength(collisionStep + 4, sizeof(collisionStep) - 4, &disp) == 1,
               "...followed by three one-byte pushes, so five bytes are stolen",
-              "the collision hook would steal a wrong length");
+              "a REX push and three one-byte pushes would be stolen at a wrong length");
 
-        // Explorer Cam's other three targets (explorer_cam.cpp in the d3d11 half), build 334925.
+        // Two more former targets (until F98), build 334925, kept as decoder coverage.
         // The commander's box push (EliteDangerous64.exe+0x1090250): `48 8B C4` is `mov rax, rsp` (REX.W 8B /r with a register
-        // ModRM, three bytes, no displacement), then `push rbp` and `push rbx`: 3+1+1 = five bytes. The trampoline re-runs the
-        // `mov rax, rsp`, which is why the bypass relay may clobber RAX.
+        // ModRM, three bytes, no displacement), then `push rbp` and `push rbx`: 3+1+1 = five bytes.
         const uint8_t boxPush[] = {0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x41, 0x56, 0x41, 0x57,
                                    0x48, 0x8B, 0xEC, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00};
         check(codeInstructionLength(boxPush, sizeof(boxPush), &disp) == 3 && disp == 0 &&
                   codeInstructionLength(boxPush + 3, sizeof(boxPush) - 3, &disp) == 1 && codeInstructionLength(boxPush + 4, sizeof(boxPush) - 4, &disp) == 1,
               "...and the commander's box push: `mov rax,rsp` is 3 bytes, no displacement, then two pushes: five bytes stolen",
-              "Explorer Cam's box-push hook would be refused or stolen at the wrong length");
+              "a prologue that begins mov rax,rsp would be refused or stolen at the wrong length");
         // The camera UI's update (+0x47CA0E0): two REX/push pairs, then `lea rbp,[rsp-0B8h]` with a SIB and a disp32 (8 bytes, not
         // rip-relative): the five-byte patch lands inside the lea, so twelve bytes are stolen.
         const uint8_t cameraUi[] = {0x40, 0x55, 0x41, 0x56, 0x48, 0x8D, 0xAC, 0x24, 0x48, 0xFF, 0xFF, 0xFF, 0x48, 0x81, 0xEC, 0xB8, 0x01, 0x00, 0x00};
         check(codeInstructionLength(cameraUi, sizeof(cameraUi), &disp) == 2 && codeInstructionLength(cameraUi + 2, sizeof(cameraUi) - 2, &disp) == 2 &&
                   codeInstructionLength(cameraUi + 4, sizeof(cameraUi) - 4, &disp) == 8 && disp == 0,
               "...and the camera UI's update: `push rbp`, `push r14`, then an 8-byte `lea rbp,[rsp-0B8h]` with no displacement to rewrite: twelve bytes stolen",
-              "Explorer Cam's camera-UI hook would be refused or stolen at the wrong length");
-        // The camera controller's update (+0x2DF3EA0): the free camera's first instruction again, `mov [rsp+8], rbx`, five bytes.
+              "a prologue whose patch lands inside a SIB lea would be refused or stolen at the wrong length");
+        // The camera controller's update (+0x2DF3EA0, native on foot's camera signal): `mov [rsp+8], rbx`, five bytes.
         const uint8_t cameraController[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18};
         check(codeInstructionLength(cameraController, sizeof(cameraController), &disp) == 5 && disp == 0,
               "...and the camera controller's update: `mov [rsp+8],rbx` is 5 bytes, no displacement",
-              "Explorer Cam's controller hook would be refused or stolen at the wrong length");
+              "native on foot's controller hook would be refused or stolen at the wrong length");
         // AvatarModelComponent's dither-fade update (+0x3DD8C60, the head hiding's target): `4C 8B DC` is
         // `mov r11,rsp` (REX.WR 8B /r, register ModRM, three bytes, no displacement), then `push rbx` and `push rsi`: 3+1+1 = five bytes. The
         // `mov rax,[rip+d32]` that ends the 16-byte prologue lies beyond the patch, so the rip-relative displacement is never rewritten.
@@ -1250,14 +1279,73 @@ int main() {
         check(codeInstructionLength(avatarFade, sizeof(avatarFade), &disp) == 3 && disp == 0 &&
                   codeInstructionLength(avatarFade + 3, sizeof(avatarFade) - 3, &disp) == 1 && codeInstructionLength(avatarFade + 4, sizeof(avatarFade) - 4, &disp) == 1,
               "...and the avatar dither-fade update: `mov r11,rsp` is 3 bytes, no displacement, then two pushes: five bytes stolen",
-              "Explorer Cam's avatar-fade hook would be refused or stolen at the wrong length");
+              "native on foot's avatar-fade hook would be refused or stolen at the wrong length");
 
-        // The skeleton interface's FindJoint (+0xFDEBB0, shared by RuntimeRigComponent and AnimatedObject; Explorer Cam's skeleton capture): `mov [rsp+8],rbx`
+        // The skeleton interface's FindJoint (+0xFDEBB0, shared by RuntimeRigComponent and AnimatedObject; native on foot's skeleton capture): `mov [rsp+8],rbx`
         // is its first instruction, five bytes with no rip-relative displacement, so CodeHook steals exactly five.
         const uint8_t findJoint[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x01, 0x48, 0x8B, 0xFA};
         check(codeInstructionLength(findJoint, sizeof(findJoint), &disp) == 5 && disp == 0,
               "...and the skeleton FindJoint: `mov [rsp+8],rbx` is 5 bytes, no displacement",
               "the FindJoint hook would be refused or stolen at the wrong length");
+
+        // The SRV radar's placement setter (0x38563A0 in build 334925; srv_radar_anchor.cpp): `sub rsp,48h` (4), `movups xmm0,[rdx]` (3),
+        // `movups [rcx+1528h],xmm0` (7), `movups xmm1,[rdx+10h]` (4). CodeHook steals the first two, seven bytes, none rip-relative.
+        const uint8_t radarSetter[] = {0x48, 0x83, 0xEC, 0x48, 0x0F, 0x10, 0x02, 0x0F, 0x11, 0x81, 0x28, 0x15, 0x00, 0x00, 0x0F, 0x10, 0x4A, 0x10};
+        size_t dispB = 9, dispC = 9, dispD = 9;
+        check(codeInstructionLength(radarSetter, sizeof(radarSetter), &disp) == 4 && disp == 0 &&
+                  codeInstructionLength(radarSetter + 4, sizeof(radarSetter) - 4, &dispB) == 3 && dispB == 0 &&
+                  codeInstructionLength(radarSetter + 7, sizeof(radarSetter) - 7, &dispC) == 7 && dispC == 0 &&
+                  codeInstructionLength(radarSetter + 14, sizeof(radarSetter) - 14, &dispD) == 4 && dispD == 0,
+              "...and the radar placement setter: `sub rsp,48h` 4, `movups xmm0,[rdx]` 3, `movups [rcx+1528h],xmm0` 7, `movups xmm1,[rdx+10h]` 4, no displacement",
+              "the radar setter hook would be refused or stolen at the wrong length");
+
+        // The SRV radar's schematic slot update (0x36BF3C0 in build 334925; srv_radar_anchor.cpp, camera mode): `push rbp` with a REX prefix (2), `push r14` (2), `push r15` (2),
+        // `lea rbp,[rsp-6F0h]` (8: SIB, disp32), `sub rsp,7F0h` (7), then `mov rax,[rip+disp32]` (7, the security cookie). CodeHook steals the three pushes, six bytes, none rip-relative.
+        const uint8_t radarSlot[] = {0x40, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0x10, 0xF9, 0xFF, 0xFF, 0x48, 0x81, 0xEC, 0xF0, 0x07, 0x00, 0x00, 0x48, 0x8B, 0x05, 0xDC, 0xA5, 0x7E, 0x02};
+        size_t slotDisp[6] = {9, 9, 9, 9, 9, 9};
+        check(codeInstructionLength(radarSlot, sizeof(radarSlot), &slotDisp[0]) == 2 && slotDisp[0] == 0 &&
+                  codeInstructionLength(radarSlot + 2, sizeof(radarSlot) - 2, &slotDisp[1]) == 2 && slotDisp[1] == 0 &&
+                  codeInstructionLength(radarSlot + 4, sizeof(radarSlot) - 4, &slotDisp[2]) == 2 && slotDisp[2] == 0 &&
+                  codeInstructionLength(radarSlot + 6, sizeof(radarSlot) - 6, &slotDisp[3]) == 8 && slotDisp[3] == 0 &&
+                  codeInstructionLength(radarSlot + 14, sizeof(radarSlot) - 14, &slotDisp[4]) == 7 && slotDisp[4] == 0 &&
+                  codeInstructionLength(radarSlot + 21, sizeof(radarSlot) - 21, &slotDisp[5]) == 7 && slotDisp[5] == 3,
+              "...and the radar slot update: `push rbp`, `push r14`, `push r15` 2 each, `lea rbp,[rsp-6F0h]` 8, `sub rsp,7F0h` 7, no displacement; the cookie load 7, rip-relative at 3",
+              "the radar slot hook would be refused or stolen at the wrong length");
+
+        // movups xmm0,[rip+disp32] -- seven bytes, displacement at offset 3: measured, so CodeHook can rewrite it.
+        const uint8_t ripMovups[] = {0x0F, 0x10, 0x05, 0x10, 0x20, 0x30, 0x40};
+        check(codeInstructionLength(ripMovups, sizeof(ripMovups), &disp) == 7 && disp == 3,
+              "...and a rip-relative `movups xmm0,[rip+disp32]`, its displacement at offset 3",
+              "a rip-relative movups moved without its displacement rewritten addresses other memory");
+
+        // F212: the look springs' target setter (0x1A8DF40 in build 334925; native_on_foot_f212.h) is a 17-byte leaf of two movss stores and a ret:
+        // `movss [rcx+730h],xmm1` (F3 0F 11 89 disp32, 8 bytes), `movss [rcx+74Ch],xmm2` (8), `ret`. CodeHook steals the first instruction, eight bytes,
+        // none rip-relative; the ret (C3) is not an instruction it will move.
+        const uint8_t lookLeaf[] = {0xF3, 0x0F, 0x11, 0x89, 0x30, 0x07, 0x00, 0x00, 0xF3, 0x0F, 0x11, 0x91, 0x4C, 0x07, 0x00, 0x00, 0xC3};
+        size_t leafDisp[3] = {9, 9, 9};
+        check(codeInstructionLength(lookLeaf, sizeof(lookLeaf), &leafDisp[0]) == 8 && leafDisp[0] == 0 &&
+                  codeInstructionLength(lookLeaf + 8, sizeof(lookLeaf) - 8, &leafDisp[1]) == 8 && leafDisp[1] == 0 &&
+                  codeInstructionLength(lookLeaf + 16, sizeof(lookLeaf) - 16, &leafDisp[2]) == 0,
+              "...and the look springs' target setter: `movss [rcx+730h],xmm1` 8 and `movss [rcx+74Ch],xmm2` 8, no displacement; the `ret` is refused",
+              "the F212 hook would be refused or stolen at the wrong length");
+        // movss in its other shapes: the load (F3 0F 10), a register form, a REX prefix after the F3, a rip-relative operand measured like any other.
+        const uint8_t movssLoad[] = {0xF3, 0x0F, 0x10, 0x02}, movssReg[] = {0xF3, 0x0F, 0x10, 0xC1}, movssRex[] = {0xF3, 0x44, 0x0F, 0x11, 0x89, 0x30, 0x07, 0x00, 0x00},
+                      movssRip[] = {0xF3, 0x0F, 0x10, 0x05, 0x10, 0x20, 0x30, 0x40};
+        size_t ssDisp[4] = {9, 9, 9, 9};
+        check(codeInstructionLength(movssLoad, sizeof(movssLoad), &ssDisp[0]) == 4 && ssDisp[0] == 0 && codeInstructionLength(movssReg, sizeof(movssReg), &ssDisp[1]) == 4 && ssDisp[1] == 0 &&
+                  codeInstructionLength(movssRex, sizeof(movssRex), &ssDisp[2]) == 9 && ssDisp[2] == 0 && codeInstructionLength(movssRip, sizeof(movssRip), &ssDisp[3]) == 8 && ssDisp[3] == 4,
+              "...and `movss` in its load, register, REX and rip-relative (displacement at offset 4) shapes",
+              "the F3 prefix was not measured with the instruction, or a rip-relative movss would be moved without its displacement rewritten");
+
+        // Every other SSE form stays refused: movaps (0F 28), movsd (F2 0F 10), the F3 forms that are not movss (F3 0F 12 movsldup, F3 0F 7E movq, F3 90 pause), an F3 with
+        // nothing after it, an F3 before a 66 prefix, and a 66 F3 order.
+        const uint8_t movaps[] = {0x0F, 0x28, 0x02}, movsd[] = {0xF2, 0x0F, 0x10, 0x02}, movsldup[] = {0xF3, 0x0F, 0x12, 0x02}, movq[] = {0xF3, 0x0F, 0x7E, 0x02},
+                      pause[] = {0xF3, 0x90}, bareF3[] = {0xF3}, f3then66[] = {0xF3, 0x66, 0x0F, 0x10, 0x02}, order66[] = {0x66, 0xF3, 0x0F, 0x10, 0x02}, f3mov[] = {0xF3, 0x89, 0x01};
+        check(codeInstructionLength(movaps, sizeof(movaps), &disp) == 0 && codeInstructionLength(movsd, sizeof(movsd), &disp) == 0 && codeInstructionLength(movsldup, sizeof(movsldup), &disp) == 0 &&
+                  codeInstructionLength(movq, sizeof(movq), &disp) == 0 && codeInstructionLength(pause, sizeof(pause), &disp) == 0 && codeInstructionLength(bareF3, sizeof(bareF3), &disp) == 0 &&
+                  codeInstructionLength(f3then66, sizeof(f3then66), &disp) == 0 && codeInstructionLength(order66, sizeof(order66), &disp) == 0 && codeInstructionLength(f3mov, sizeof(f3mov), &disp) == 0,
+              "...and still refuses `movaps`, `movsd`, every F3 form that is not movss, a bare F3, F3 with a 66 prefix either way, and F3 before an ordinary opcode",
+              "the decoder took an SSE form beyond movups and movss");
 
         // jmp rel32 -- a function that begins with a jump is a linker thunk or
         // somebody else's hook; following it would cut them out.
@@ -2892,6 +2980,221 @@ int main() {
                   "a reader accepted a partially overwritten event");
             vtableWatchStop();
             VirtualFree(table, 0, MEM_RELEASE);
+        }
+    }
+
+    // THE SLOT REGISTRY HOLDS A WHOLE SESSION (2026-11-07).
+    //
+    // A contributor's four Windows logs each printed "the slot registry is full,
+    // so re-claiming is OFF for every hook this session" six times, right after
+    // the exposure fix installed. InPlace commit() registers every patched slot;
+    // the registry held 64; and the d3d11 half alone patches more than that.
+    // Counted from the replace() calls, flat profile, in the order they commit:
+    //
+    //     device 19, swap chain 3, factory 2, exposure 5, vScreen 44  = 73
+    //
+    // (VR is 15 + 1 + 2 + 5 + 43 = 66; the DirectInput gate and the graphics
+    // bridge come on top.) vScreen's 44th slot -- ClearState, the one the two
+    // context hooks SHARE -- is registered LAST, so on a registry that stops
+    // short it is exactly the entry that goes missing, and the missing entry is
+    // what makes one hook read the other as an intruder.
+    //
+    // This cell stages that shape on fake objects and then asks the only
+    // question that matters: is re-claiming still ON? A full registry answers
+    // no for every hook, so the cell reclaims a slot of the FIRST hook, a slot
+    // past where a 64-entry registry stops, and the shared slot. It uses only
+    // the public API, so it runs against the unfixed code unchanged.
+    {
+        constexpr size_t kDevSlots = 19, kSwapSlots = 3, kFactorySlots = 2;
+        constexpr size_t kExposureSlots = 5, kVScreenSlots = 44;
+        constexpr size_t kSharedSlot = 110;   // ClearState: both context hooks patch it
+        constexpr size_t kLateVScreenSlot = 62;   // vScreen's 43rd, entry 72 of 73
+
+        void** devTable = wideTable(64);
+        void** swapTable = wideTable(32);
+        void** factoryTable = wideTable(16);
+        void** ctxTable = wideTable(330);   // a context: 327 methods in the logs
+        if (!devTable || !swapTable || !factoryTable || !ctxTable) {
+            fail("tables for the registry-demand cell", "allocation refused");
+        } else {
+            WideObject dev, swap, factory, ctx;
+            dev.vptr = devTable;
+            swap.vptr = swapTable;
+            factory.vptr = factoryTable;
+            ctx.vptr = ctxTable;
+
+            size_t devSlots[kDevSlots], vsSlots[kVScreenSlots];
+            for (size_t i = 0; i < kDevSlots; ++i) devSlots[i] = 3 + i;
+            for (size_t i = 0; i + 1 < kVScreenSlots; ++i) vsSlots[i] = 20 + i;   // 20..62
+            vsSlots[kVScreenSlots - 1] = kSharedSlot;
+            const size_t swapSlots[kSwapSlots] = {8, 13, 14};
+            const size_t factorySlots[kFactorySlots] = {3, 10};
+            const size_t exposureSlots[kExposureSlots] = {7, 8, 9, 10, kSharedSlot};
+
+            void* fwd[kVScreenSlots] = {};
+            void* fwdSwap[kSwapSlots] = {};
+            void* fwdFactory[kFactorySlots] = {};
+            void* fwdExposure[kExposureSlots] = {};
+            void* fwdDev[kDevSlots] = {};
+
+            VTableHook hDev, hSwap, hFactory, hExposure, hVScreen;
+            const bool staged =
+                commitSlots(hDev, dev, devSlots, kDevSlots,
+                            reinterpret_cast<void*>(&thunkOne), fwdDev) &&
+                commitSlots(hSwap, swap, swapSlots, kSwapSlots,
+                            reinterpret_cast<void*>(&thunkOne), fwdSwap) &&
+                commitSlots(hFactory, factory, factorySlots, kFactorySlots,
+                            reinterpret_cast<void*>(&thunkOne), fwdFactory) &&
+                commitSlots(hExposure, ctx, exposureSlots, kExposureSlots,
+                            reinterpret_cast<void*>(&thunkOne), fwdExposure) &&
+                commitSlots(hVScreen, ctx, vsSlots, kVScreenSlots,
+                            reinterpret_cast<void*>(&thunkOneB), fwd);
+            check(staged, "a flat session's five InPlace hooks all commit (73 slots)",
+                  "a hook did not commit, so the cells below measure nothing");
+
+            if (staged) {
+                const size_t quietDev[] = {devSlots[0]};
+                writeTableSlot(devTable, devSlots[0], reinterpret_cast<void*>(&toolkitOne));
+                check(hDev.reclaim("demand-device", quietDev, 1) == 1 && hDev.lastPassRan(),
+                      "after 73 registrations the FIRST hook can still re-claim a "
+                      "vouched slot",
+                      "re-claiming is off for the whole session -- the registry "
+                      "overflowed on a session's ordinary hooks");
+                check(readTableSlot(devTable, devSlots[0]) == reinterpret_cast<void*>(&thunkOne),
+                      "...and the slot is EDVR's again",
+                      "the slot still holds the intruder");
+
+                const size_t quietLate[] = {kLateVScreenSlot};
+                writeTableSlot(ctxTable, kLateVScreenSlot, reinterpret_cast<void*>(&toolkitOne));
+                check(hVScreen.reclaim("demand-vscreen", quietLate, 1) == 1,
+                      "a slot past entry 64 is re-claimed too",
+                      "vScreen's later slots are not covered by re-claiming");
+
+                // The shared slot, taken by a stranger. Both owners must be IN
+                // the registry for this to read as shared: with either entry
+                // missing, the survivor reads itself as the lone owner and
+                // re-patches, splicing the other out of the chain.
+                const size_t quietShared[] = {kSharedSlot};
+                writeTableSlot(ctxTable, kSharedSlot, reinterpret_cast<void*>(&toolkitOne));
+                check(hExposure.reclaim("demand-exposure", quietShared, 1) == 0 &&
+                          hVScreen.reclaim("demand-vscreen", quietShared, 1) == 0 &&
+                          hExposure.lastPassRan() && hVScreen.lastPassRan(),
+                      "the shared slot is inspected, and conceded by both owners",
+                      "a pass did not run, or an owner re-patched a slot it shares");
+                check(hVScreen.lastPassConceded() == 1 &&
+                          readTableSlot(ctxTable, kSharedSlot) ==
+                              reinterpret_cast<void*>(&toolkitOne),
+                      "...counted as conceded, and the stranger keeps it",
+                      "the shared slot was not recognised as shared");
+            }
+
+            // Unwound in reverse, and the intruder's entry put back first so the
+            // uninstalls restore the way a real teardown does.
+            writeTableSlot(ctxTable, kSharedSlot, reinterpret_cast<void*>(&thunkOneB));
+            hVScreen.uninstall();
+            hExposure.uninstall();
+            hFactory.uninstall();
+            hSwap.uninstall();
+            hDev.uninstall();
+        }
+        void* const tables[] = {devTable, swapTable, factoryTable, ctxTable};
+        for (void* t : tables) {
+            if (t) VirtualFree(t, 0, MEM_RELEASE);
+        }
+    }
+
+    // A REGISTRY THAT DOES OVERFLOW STILL TURNS RE-CLAIMING OFF FOR EVERYONE.
+    //
+    // Raising the capacity must not weaken what the poisoning is for. A hook the
+    // registry cannot see is read by its shared-slot co-owner as an intruder,
+    // and adopting an intruder that is really an EDVR hook builds a call loop.
+    // So when the registry fills, a hook that is FULLY registered must stop
+    // re-claiming too: the cell below registers one bystander while there is
+    // room, proves it can re-claim, then commits hooks until the registry is
+    // past full and asks the bystander again.
+    //
+    // THE LAST CELL, and it has to be: the overflow is permanent for the process
+    // (re-claiming never comes back on), so anything after it that reclaims
+    // would fail for a reason that is not its own.
+    {
+        const size_t capacity = vtableSlotRegistryCapacityForTest();
+        constexpr size_t kHogSlots = 64;   // each hog patches slots 0..63 of its own table
+        const size_t hogs = capacity / kHogSlots + 1;   // strictly more than fits
+
+        void** bystanderTable = wideTable(16);
+        std::vector<void**> hogTables;
+        for (size_t i = 0; i < hogs; ++i) hogTables.push_back(wideTable(80));
+        bool tablesOk = bystanderTable != nullptr;
+        for (void** t : hogTables) tablesOk = tablesOk && t != nullptr;
+        if (!tablesOk || capacity < kHogSlots) {
+            fail("tables for the registry-overflow cell", "allocation refused");
+        } else {
+            WideObject bystander;
+            bystander.vptr = bystanderTable;
+            VTableHook bystanderHook;
+            void* bystanderFwd[1] = {};
+            const size_t bystanderSlot[] = {2};
+            const bool bystanderOk =
+                commitSlots(bystanderHook, bystander, bystanderSlot, 1,
+                            reinterpret_cast<void*>(&thunkOne), bystanderFwd);
+            check(bystanderOk && !vtableSlotRegistryOverflowedForTest(),
+                  "the registry has room for the bystander, and has not overflowed",
+                  "the registry was already full before the cell started");
+
+            const size_t quiet2[] = {2};
+            writeTableSlot(bystanderTable, 2, reinterpret_cast<void*>(&toolkitOne));
+            check(bystanderHook.reclaim("overflow-bystander", quiet2, 1) == 1 &&
+                      bystanderHook.lastPassRan(),
+                  "...and while it has room, the bystander re-claims a vouched slot",
+                  "re-claiming was off before the registry overflowed");
+
+            std::vector<VTableHook*> hooks;
+            std::vector<WideObject*> objects;
+            size_t slots[kHogSlots];
+            void*  fwd[kHogSlots];
+            for (size_t i = 0; i < kHogSlots; ++i) slots[i] = i;
+            bool allCommitted = true;
+            for (size_t i = 0; i < hogs; ++i) {
+                WideObject* o = new WideObject();
+                o->vptr = hogTables[i];
+                VTableHook* h = new VTableHook();
+                objects.push_back(o);
+                hooks.push_back(h);
+                // A commit that overflows still returns true: the hooks work,
+                // only re-claiming is refused.
+                allCommitted = commitSlots(*h, *o, slots, kHogSlots,
+                                           reinterpret_cast<void*>(&thunkOneB), fwd) &&
+                               allCommitted;
+            }
+            check(allCommitted && vtableSlotRegistryOverflowedForTest(),
+                  "committing more slots than the registry holds overflows it, and "
+                  "every hook still commits",
+                  "the registry took more than its capacity, or a hook was refused "
+                  "because of it");
+
+            // The bystander's one slot is registered and always was. It must
+            // stop anyway.
+            writeTableSlot(bystanderTable, 2, reinterpret_cast<void*>(&toolkitOne));
+            check(bystanderHook.reclaim("overflow-bystander", quiet2, 1) == 0 &&
+                      !bystanderHook.lastPassRan(),
+                  "once the registry has overflowed, a FULLY registered hook stops "
+                  "re-claiming too",
+                  "a hook re-claimed after the registry overflowed -- a hook the "
+                  "registry cannot see can be adopted as an intruder");
+            check(readTableSlot(bystanderTable, 2) == reinterpret_cast<void*>(&toolkitOne),
+                  "...and the intruder keeps the slot",
+                  "the slot was written after the registry overflowed");
+
+            for (size_t i = hooks.size(); i-- > 0;) {
+                hooks[i]->uninstall();
+                delete hooks[i];
+                delete objects[i];
+            }
+            bystanderHook.uninstall();
+        }
+        if (bystanderTable) VirtualFree(bystanderTable, 0, MEM_RELEASE);
+        for (void** t : hogTables) {
+            if (t) VirtualFree(t, 0, MEM_RELEASE);
         }
     }
 

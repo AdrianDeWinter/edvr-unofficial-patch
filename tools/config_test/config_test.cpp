@@ -3,9 +3,9 @@
 // The file users edit is the one asserted here. Two properties of the parser
 // that edvr.ini's own layout depends on are proven rather than assumed:
 //
-//   1. a section header may REPEAT -- edvr.ini opens with the settings most
-//      people touch under [fix] and [hotkey], then returns to both further
-//      down for the Explorer Cam block. If a repeat were a parse error, or
+//   1. a section header may REPEAT -- a settings file may return to [fix] or
+//      [hotkey] further down (an installer merge or a hand edit leaves one
+//      that way). If a repeat were a parse error, or
 //      silently discarded everything after it, half the file would do
 //      nothing while still looking perfectly valid in an editor.
 //   2. a key set twice takes the LAST value, because parse() assigns into a
@@ -57,7 +57,7 @@
 #include "../../src/common/star_glow.h"
 #include "../../src/common/temporal_mode.h"
 #include "../../src/common/log.h"
-#include "../../src/d3d11/explorer_cam_follow_core.h"   // the Explorer Cam trims' and smoothing defaults: header-only, no link
+#include "../../src/d3d11/native_on_foot_f162.h"   // F162: the ADS sight eye key's text (a header with no dependencies)
 #include "config_contract_gen.h"   // build\gen: the tables the DLLs register, from the real edvr.ini
 
 using namespace edvr;
@@ -1213,9 +1213,10 @@ static const char* const kRetiredKeys[] = {
 };
 static const int kRetiredKeyCount = int(sizeof(kRetiredKeys) / sizeof(kRetiredKeys[0]));
 
-// Retired by EXACT name, because the bare name is a substring of live keys. [fix] explorer_cam, the on/off switch of the redesigned Explorer Cam, was removed
-// 2026-10-08: Explorer Cam is armed exactly when hotkey.explorer_cam is set. Its qualified name "fix.explorer_cam" is also the beginning of every live
-// fix.explorer_cam_* key (_eye_up, _eye_trim_right, _follow_smoothing_ms ...), so a match counts only when the next character is not part of a name. A hotkey
+// Retired by EXACT name, because the bare name is a substring of other keys. [fix] explorer_cam, the on/off switch of the redesigned Explorer Cam, was removed
+// 2026-10-08: Explorer Cam was then armed exactly when hotkey.explorer_cam was set. Its qualified name "fix.explorer_cam" is also the beginning of every
+// fix.explorer_cam_* key (_eye_up, _eye_trim_right, _follow_smoothing_ms ...; retired in F98 and held by kRetiredNotedKeys), so a match counts only when the
+// next character is not part of a name. A hotkey
 // line spells "hotkey.explorer_cam", which never contains "fix.". The shipped file's [fix] section is held out by the key lookup in main (expectStr, "<unset>"),
 // because there the key is the bare "explorer_cam", which sits in [hotkey] too.
 static const char* const kRetiredExactKeys[] = {
@@ -1283,7 +1284,7 @@ static void retiredKeyScan(const std::wstring& root) {
                                                        " names found, or a live key was flagged");
 
     // The exact-name scan's own control: it finds the retired switch in a read, a message, a comment and at the end of a sentence or of the text, and passes
-    // every live key that begins with it or shares its tail (the hotkey, the eye keys, the trims, the smoothing).
+    // every key that begins with it or shares its tail (the hotkey, the eye keys, the trims, the smoothing: retired in F98, held by kRetiredNotedKeys).
     {
         const std::string retired[] = {
             "Config::get().getBool(\"fix.explorer_cam\", true)",
@@ -1306,7 +1307,7 @@ static void retiredKeyScan(const std::wstring& root) {
         for (const std::string& t : liveKeys) passedAll = passedAll && spellsRetiredKey(t) == nullptr;
         if (foundAll && passedAll && kRetiredExactKeyCount == 6)
             ok("the exact-name scan finds fix.explorer_cam in a read, a message, a comment and at the end of a sentence, and passes hotkey.explorer_cam, "
-               "fix.explorer_cam_eye_*, the trims and the smoothing beside it");
+               "fix.explorer_cam_eye_*, the trims and the smoothing beside it (their own list holds them)");
         else
             fail("the exact-name scan's own control", std::string(foundAll ? "" : "a retired spelling was missed; ") + (passedAll ? "" : "a live key was flagged"));
     }
@@ -1368,6 +1369,125 @@ static void retiredKeyScan(const std::wstring& root) {
             " sources under src (the installer's included) spells a retired key: no reader, no allow-list entry, no message")
                .c_str());
     }
+}
+
+// Explorer Cam's eight keys, retired in F98 with Explorer Cam, the weapon eye's up key, retired in F98c (one eye height with and without an item), and
+// the training connect probe's key, retired in F100 (its hooks and lines removed; the connection retry keeps the hooks it reads), and the ADS left eye
+// close, retired in F106 (the left eye now shows the aiming eye's view, fix.native_on_foot_ads_sight_eye = both), the old look to aim controller's three
+// test keys, retired in F109 (look to aim rides the ADS head aim's map), and the weapon eye's right key, retired in F112 (the eye offset is forward
+// alone; fix.native_on_foot_weapon_view_offset_cm is the sideways setting), and F117's and F120's two panel cursor test keys, retired in F122 (the cursor
+// is hidden by default behind the panel mouse key; drawn, both corrections run at their panel value), and the panel mouse key and the panel cursor test key, retired in
+// F155 (the cursor is always drawn on an on-foot panel in VR at the game's place with the pick mesh's lever undone, hidden where that is not known; F117's and F120's
+// placements were removed), and the aim reticle's placement key,
+// retired in F127 (the reticle always sits on the mouse-aim axis, the former default; its head and game placements were removed),
+// and the visor-axis test key, retired in F128 (the correction is always on in outer mode), and the ADS sight switch, the two ADS sight trims and the full outfit switch, retired
+// in F146 (the ADS eye always takes the game's sight line and the body always draws the full outfit; the pilot's totals are in the tables), and the ADS eye distance, retired in F152
+// (the held weapon's ADS eye depth is the game's unscoped camera plus a baked offset plus the developer tier's trim; the cap's old value is not carried over), and the developer tier's
+// body-draw test dial, retired in F157 (the coat outfit's pack draw it found is always left out of both eyes while the coat is worn), under native on foot's convention
+// for retired keys (its F34, F66 and
+// F96 keys are the same): the shipped file keeps each at its retired value on a hidden retired line,
+// and native_on_foot.cpp's retiredKeysNote reads each once, to name a value that differs. Nothing else may spell them: no other line of the shipped
+// file, no other source, no other function.
+static const char* const kRetiredNotedKeys[] = {
+    "fix.explorer_cam_eye_up", "fix.explorer_cam_eye_forward", "fix.explorer_cam_eye_right", "fix.explorer_cam_eye_trim_up",
+    "fix.explorer_cam_eye_trim_forward", "fix.explorer_cam_eye_trim_right", "fix.explorer_cam_follow_smoothing_ms", "hotkey.explorer_cam",
+    "fix.native_on_foot_weapon_eye_up_cm", "fix.training_connect_probe", "fix.native_on_foot_ads_close_left_eye",
+    "fix.native_on_foot_look_to_aim_yaw_sign", "fix.native_on_foot_look_to_aim_comp_delay", "fix.native_on_foot_look_to_aim_comp_sign",
+    "fix.native_on_foot_weapon_eye_right_cm", "fix.native_on_foot_panel_cursor_fix", "fix.native_on_foot_panel_cursor_follow",
+    "fix.native_on_foot_reticle_follow",
+    "fix.native_on_foot_visor_axis", "fix.native_on_foot_panel_mouse", "fix.native_on_foot_panel_cursor_test",
+    "fix.native_on_foot_ads_game_sight", "fix.native_on_foot_ads_sight_up_cm", "fix.native_on_foot_ads_sight_right_cm", "fix.native_on_foot_body_full_outfit",
+    "fix.native_on_foot_ads_eye_distance_cm",
+    "experimental.native_on_foot_body_draw_hide",
+};
+// The marker line above each: "# ui: hidden -- retired (F98): ignored." (later keys name their own retirement's F number).
+static bool isRetiredNotedMarker(const std::string& line) {
+    static const std::string head = "# ui: hidden -- retired (F", tail = "): ignored.";
+    return line.size() >= head.size() + tail.size() && line.compare(0, head.size(), head) == 0 &&
+           line.compare(line.size() - tail.size(), tail.size(), tail) == 0;
+}
+
+static void retiredNotedKeyScan(const std::wstring& root) {
+    // The shipped file: each key's bare name is spelled on exactly one line, that line is the key in its own section, and the line above it is the marker.
+    const std::string ini = readRepoFile(root, L"edvr.ini");
+    if (ini.empty()) {
+        fail("edvr.ini is readable from the repo root (F98 retired keys)", "could not read it");
+        return;
+    }
+    std::vector<std::string> lines;
+    {
+        size_t at = 0;
+        while (at <= ini.size()) {
+            const size_t nl = ini.find('\n', at);
+            std::string l = ini.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+            if (!l.empty() && l.back() == '\r') l.pop_back();
+            lines.push_back(l);
+            if (nl == std::string::npos) break;
+            at = nl + 1;
+        }
+    }
+    int good = 0;
+    std::string why;
+    for (const char* qualified : kRetiredNotedKeys) {
+        const std::string q(qualified);
+        const std::string section = q.substr(0, q.find('.')), bare = q.substr(q.find('.') + 1);
+        std::string current;
+        int keyed = 0, elsewhere = 0;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            const std::string& l = lines[i];
+            if (!l.empty() && l[0] == '[') {
+                current = l.substr(1, l.find(']') == std::string::npos ? std::string::npos : l.find(']') - 1);
+                continue;
+            }
+            if (!spellsExactKey(l, bare.c_str())) continue;
+            const bool isKey = l.compare(0, bare.size() + 2, bare + " =") == 0 && current == section && i > 0 && isRetiredNotedMarker(lines[i - 1]);
+            if (isKey) ++keyed;
+            else ++elsewhere;
+        }
+        if (keyed == 1 && elsewhere == 0) ++good;
+        else if (why.empty()) why = q + ": " + std::to_string(keyed) + " retired line(s), " + std::to_string(elsewhere) + " other line(s)";
+    }
+    const int count = static_cast<int>(sizeof(kRetiredNotedKeys) / sizeof(kRetiredNotedKeys[0]));
+    if (good == count)
+        ok("the shipped edvr.ini spells each of the twenty-seven retired keys (Explorer Cam's eight and the weapon eye's up from F98, the training connect probe's from "
+           "F100, the ADS left eye close from F106, the old look to aim's three test keys from F109, the weapon eye's right from F112, the two panel cursor test "
+           "keys from F122, the aim reticle's placement from F127, the visor-axis test key from F128, the panel mouse key and the panel cursor test key from the "
+           "panel cursor's F155, the ADS sight switch and trims and the full outfit switch from F146, the ADS eye distance from F152, the body-draw test dial from F157) "
+           "once, as its own hidden retired line, and nowhere else");
+    else
+        fail("the shipped edvr.ini keeps each F98 retired key on one hidden retired line and nowhere else", why);
+
+    // The sources: only native_on_foot.cpp, and only inside retiredKeysNote.
+    std::vector<std::wstring> files;
+    collectSources(root + L"\\src", L"", &files, true);
+    int bad = 0, inNote = 0;
+    for (const std::wstring& rel : files) {
+        const std::string text = readRepoFile(root, (L"src\\" + rel).c_str());
+        const bool noteFile = rel == L"d3d11\\native_on_foot.cpp";
+        size_t lo = std::string::npos, hi = std::string::npos;
+        if (noteFile) {
+            lo = text.find("void retiredKeysNote(");
+            if (lo != std::string::npos) hi = text.find("\n}\n", lo);
+        }
+        for (const char* qualified : kRetiredNotedKeys) {
+            const size_t n = std::strlen(qualified);
+            for (size_t at = text.find(qualified); at != std::string::npos; at = text.find(qualified, at + 1)) {
+                const char next = at + n < text.size() ? text[at + n] : '\0';
+                if (std::isalnum(static_cast<unsigned char>(next)) || next == '_') continue;   // a longer name
+                if (noteFile && lo != std::string::npos && hi != std::string::npos && at > lo && at < hi) {
+                    ++inNote;
+                    continue;
+                }
+                ++bad;
+                fail("a production source spells an F98 retired key outside native on foot's retired-key note", narrow(rel) + " spells " + qualified);
+            }
+        }
+    }
+    if (!bad && inNote >= 2 * count)
+        ok("the twenty-seven retired keys (F98, F98c, F100, F106, F109, F112, F122, F127, F128, the panel cursor's F155, F146, F152, F157) are read and named only in "
+           "native_on_foot.cpp's retiredKeysNote (each read once and named once)");
+    else if (!bad)
+        fail("each F98 retired key is read and named in retiredKeysNote", std::to_string(inNote) + " spellings there, " + std::to_string(2 * count) + " wanted");
 }
 
 // switchProfile (2026-10-12): the settings file follows the profile the frame boundary has set, and a switch reads that
@@ -1528,6 +1648,500 @@ static void switchProfileCases(const std::wstring& scratch) {
 
     runtimeProfileSet(savedProfile);
 }
+
+// --- log.max_mb: the bound, the head, the tail segments, the kept lines (src\common\log_rotate.h) -----------------------------------------------
+//
+// With log.max_mb in force a session keeps its start in its own file (the head, a quarter of max_mb), goes on in rotating tail segments beside it
+// (<head>.tail-NNN.log, the newest four kept) and keeps in the head, after it has ended, the first line of each kind written later and the memory
+// watch's lines. These cases drive the real Log at max_mb = 1 (H 256 KB, K 128 KB, S 160 KB) and pin what is written: the markers' exact texts, where
+// the cut falls, how many segments stay, a segment that cannot be deleted and goes at a later rotation, the budget of kept lines, drops and the volume
+// line. The sessions are left in <scratch>\logrot with a rotation.expect file, and the build hands that directory to tools\edvr_log.py
+// (--check-rotation-dir), which reads each session back with the stitching reader every tool uses and checks it again from the Python side.
+namespace logcases {
+
+const uint64_t kMiB = 1024ull * 1024ull;
+const uint64_t kHead = kMiB / 4, kKept = kMiB / 8, kSegment = (kMiB - kHead - kKept) / 4;
+
+std::string slurp(const std::wstring& path) {
+    std::string body;
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return body;
+    char chunk[65536];
+    DWORD got = 0;
+    while (ReadFile(f, chunk, sizeof(chunk), &got, nullptr) && got) body.append(chunk, got);
+    CloseHandle(f);
+    return body;
+}
+
+bool exists(const std::wstring& path) { return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES; }
+
+std::vector<std::wstring> glob(const std::wstring& dir, const std::wstring& pattern) {
+    std::vector<std::wstring> out;
+    WIN32_FIND_DATAW fd{};
+    HANDLE h = FindFirstFileW((dir + L"\\" + pattern).c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return out;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) out.push_back(fd.cFileName);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// The session's head log: the one file edvr_<tag>_*.log that is not a tail segment.
+std::wstring headOf(const std::wstring& dir, const wchar_t* tag) {
+    for (const std::wstring& name : glob(dir, std::wstring(L"edvr_") + tag + L"_*.log")) {
+        if (name.find(L".tail-") == std::wstring::npos) return name;
+    }
+    return std::wstring();
+}
+
+std::wstring tailName(const std::wstring& head, unsigned n) {
+    wchar_t suffix[24];
+    _snwprintf_s(suffix, _TRUNCATE, L".tail-%03u.log", n);
+    return head.substr(0, head.size() - 4) + suffix;
+}
+
+std::vector<unsigned> tailsOnDisk(const std::wstring& dir, const std::wstring& head) {
+    std::vector<unsigned> out;
+    const std::wstring prefix = head.substr(0, head.size() - 4) + L".tail-";
+    for (const std::wstring& name : glob(dir, prefix + L"*.log")) {
+        out.push_back(static_cast<unsigned>(std::wcstoul(name.c_str() + prefix.size(), nullptr, 10)));
+    }
+    return out;
+}
+
+std::string narrow(const std::wstring& w) {
+    std::string out;
+    for (wchar_t c : w) out.push_back(static_cast<char>(c));
+    return out;
+}
+
+size_t count(const std::string& text, const std::string& needle) {
+    size_t n = 0, from = 0;
+    while ((from = text.find(needle, from)) != std::string::npos) {
+        ++n;
+        from += needle.size();
+    }
+    return n;
+}
+
+template <class F>
+bool waitFor(F ready, ULONGLONG ms = 120000) {
+    const ULONGLONG started = GetTickCount64();
+    while (!ready()) {
+        if (GetTickCount64() - started > ms) return false;
+        Sleep(10);
+    }
+    return true;
+}
+
+void removeSession(const std::wstring& dir, const wchar_t* tag) {
+    for (const std::wstring& name : glob(dir, std::wstring(L"edvr_") + tag + L"_*")) DeleteFileW((dir + L"\\" + name).c_str());
+}
+
+bool openSession(const std::wstring& dir, const wchar_t* tag, const char* iniLines) {
+    std::string ini = "[log]\r\nenabled = 1\r\n";
+    ini += iniLines;
+    if (!writeIni(dir, ini.c_str())) return false;
+    Config::get().init(dir);
+    Log::get().close();
+    removeSession(dir, tag);
+    return Log::get().open(dir, tag);
+}
+
+// The head's end notice, exact, for max_mb = 1.
+std::string headMarker(const std::string& firstSegment) {
+    return "[edvr] log head ends here at 256 KB (a quarter of log.max_mb = 1 MB); the log continues in " + firstSegment +
+           ", only the newest 4 tail segments are kept, and what follows below is the first line of each kind written after this point and the "
+           "memory watch's lines, up to 128 KB.\r\n";
+}
+
+const char* const kSpentText =
+    "[edvr] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no longer fit here); later ones are only in the "
+    "tail segments still on disk.\r\n";
+
+// The head up to its end notice, the notice's line and what follows it (the kept lines).
+struct Head {
+    std::string text;
+    size_t markerAt = std::string::npos;
+    std::string after() const { return markerAt == std::string::npos ? std::string() : text.substr(text.find('\n', markerAt) + 1); }
+};
+
+Head readHead(const std::wstring& dir, const std::wstring& head) {
+    Head h;
+    h.text = slurp(dir + L"\\" + head);
+    h.markerAt = h.text.find("[edvr] log head ends here at ");
+    return h;
+}
+
+// The kept-lines marker's segment number in force at `pos` of the head (0: none before it).
+unsigned keptSegmentAt(const std::string& text, size_t pos) {
+    const char* const mark = "[edvr] kept lines from tail segment ";
+    const size_t at = text.rfind(mark, pos);
+    return at == std::string::npos ? 0u : static_cast<unsigned>(std::strtoul(text.c_str() + at + std::strlen(mark), nullptr, 10));
+}
+
+std::string fillerLine(int width) { return std::string(static_cast<size_t>(width), 'y'); }
+
+void run(const std::wstring& scratch) {
+    const std::wstring dir = scratch + L"\\logrot";
+    CreateDirectoryW(scratch.c_str(), nullptr);
+    CreateDirectoryW(dir.c_str(), nullptr);
+    std::string expect;
+    auto expectLine = [&](const char* tag, const char* key, const std::string& value) { expect += std::string(tag) + "\t" + key + "\t" + value + "\n"; };
+    const std::string filler = fillerLine(900);
+
+    // The numbers: at max_mb = 1 the head is 256 KB, the kept lines 128 KB (64 KB each way) and a segment 160 KB, and they add up to the bound.
+    check(kHead == 262144 && kKept == 131072 && kSegment == 163840 && kHead + kKept + 4 * kSegment == kMiB,
+          "at max_mb = 1: head 256 KB, kept lines 128 KB, four tail segments of 160 KB, together the 1 MB");
+
+    // --- a session that stays under the head: one file, no notice, no segment -----------------------------------------------------------------
+    {
+        if (!openSession(dir, L"rotsmall", "max_mb = 1\r\nbuffer_mb = 16\r\n")) {
+            fail("log rotation: a small session", "the log would not open in the scratch dir");
+        } else {
+            for (int i = 0; i < 100; ++i) Log::get().note("rotsmall line %d %s", i, filler.c_str());
+            Log::get().close();
+            const std::wstring head = headOf(dir, L"rotsmall");
+            const Head h = readHead(dir, head);
+            check(!head.empty() && h.markerAt == std::string::npos && tailsOnDisk(dir, head).empty() && count(h.text, "rotsmall line ") == 100,
+                  "a session that stays under the head's share is one file, whole, with no end notice and no tail segment");
+            check(count(h.text, "paste this whole file and the .tail-NNN.log files beside it.\r\n") == 1,
+                  "the log's second line asks for the tail segments too");
+        }
+    }
+
+    // --- a 1.3 MB burst, then one more line, at the default cap and at max_mb = 1 -------------------------------------------------------------
+    {
+        const std::string burstFiller(1000, 'y');
+        auto burst = [&](const char* ini, const wchar_t* tag) {
+            if (!openSession(dir, tag, ini)) return false;
+            for (int i = 0; i < 1300; ++i) Log::get().note("capfill %d %s", i, burstFiller.c_str());
+            Log::get().note("capmarker after the first burst");
+            Log::get().close();   // joins the flusher and runs the last passes: everything noted is decided before the files are read
+            return true;
+        };
+        if (!burst("buffer_mb = 16\r\n", L"capdefault")) {
+            fail("log.max_mb default", "the log would not open in the scratch dir");
+        } else {
+            const std::wstring head = headOf(dir, L"capdefault");
+            const Head h = readHead(dir, head);
+            check(Log::get().maxBytes() == 16 * kMiB, "with no max_mb line the bound in force is 16 MB", std::to_string(Log::get().maxBytes()) + " bytes");
+            check(count(h.text, "capmarker after the first burst") == 1 && h.markerAt == std::string::npos && tailsOnDisk(dir, head).empty(),
+                  "...and a 1.3 MB session is one file under it: a 4 MB head is not passed");
+        }
+        if (!burst("max_mb = 1\r\nbuffer_mb = 16\r\n", L"capsmall")) {
+            fail("log.max_mb = 1", "the log would not open in the scratch dir");
+        } else {
+            const std::wstring head = headOf(dir, L"capsmall");
+            const Head h = readHead(dir, head);
+            const std::vector<unsigned> tails = tailsOnDisk(dir, head);
+            check(Log::get().maxBytes() == 1 * kMiB, "an explicit max_mb = 1 is a 1 MB bound", std::to_string(Log::get().maxBytes()) + " bytes");
+            check(h.markerAt != std::string::npos && h.markerAt <= kHead && count(h.text, "[edvr] log head ends here at ") == 1,
+                  "a session past the head's share ends its head once, within that share", std::to_string(h.markerAt) + " bytes in");
+            check(h.markerAt != std::string::npos && h.text.find(headMarker(narrow(tailName(head, 1)))) == h.markerAt,
+                  "...with the exact notice: where the head ends, which file the log continues in, the four segments kept, what follows");
+            check(h.markerAt != std::string::npos && h.markerAt > 0 && h.text[h.markerAt - 1] == '\n' && h.text[h.markerAt - 2] == '\r',
+                  "...cut between two lines, never inside one");
+            check(!tails.empty() && tails.size() <= 4 && tails.back() >= 5, "the burst's later lines are in tail segments, only the newest four on disk",
+                  std::to_string(tails.size()) + " on disk, newest " + std::to_string(tails.empty() ? 0 : tails.back()));
+            uint64_t total = h.text.size();
+            bool opens = true, small = true, wholeLines = true;
+            for (unsigned n : tails) {
+                const std::string body = slurp(dir + L"\\" + tailName(head, n));
+                total += body.size();
+                char want[300];
+                _snprintf_s(want, _TRUNCATE, "[edvr] tail segment %u of %s.", n, narrow(head).c_str());
+                opens = opens && body.compare(0, std::strlen(want), want) == 0;
+                small = small && body.size() <= kSegment + 4096;
+                wholeLines = wholeLines && body.size() >= 2 && body.compare(body.size() - 2, 2, "\r\n") == 0;
+            }
+            check(opens && small && wholeLines, "each segment opens with its own notice, ends at a line and is no larger than its share (160 KB)");
+            check(total <= kMiB + 8192, "the head, its kept lines and the segments together are within the 1 MB bound", std::to_string(total) + " bytes");
+            check(!exists(dir + L"\\" + tailName(head, 1)) && !tails.empty() && tails.front() > 1,
+                  "the oldest segments are deleted as later ones open");
+            // The notice of the newest segment names what was deleted before it.
+            if (!tails.empty()) {
+                const std::string top = slurp(dir + L"\\" + tailName(head, tails.back())).substr(0, 1200);
+                check(top.find(" Deleted so far: segment 1 (") != std::string::npos && top.find(" bytes, ") != std::string::npos && top.find(" to ") != std::string::npos,
+                      "...and the newest segment's notice lists the deleted ones, with their bytes and the clock span each covered");
+            }
+            // The one line noted after the burst is first of its kind after the cut: in a segment, and kept in the head under that segment's number.
+            unsigned holder = 0;
+            for (unsigned n : tails) {
+                if (slurp(dir + L"\\" + tailName(head, n)).find("capmarker after the first burst") != std::string::npos) holder = n;
+            }
+            const size_t keptAt = h.text.find("capmarker after the first burst", h.markerAt == std::string::npos ? 0 : h.markerAt);
+            check(holder != 0 && keptAt != std::string::npos && count(h.text, "capmarker after the first burst") == 1 &&
+                      keptAt > h.markerAt && keptSegmentAt(h.text, keptAt) == holder,
+                  "the first line of a new kind after the cut is kept in the head, under a marker naming the segment that holds it",
+                  "holder " + std::to_string(holder) + ", marker " + std::to_string(keptAt == std::string::npos ? 0 : keptSegmentAt(h.text, keptAt)));
+        }
+    }
+
+    // --- max_mb = 0: one file with no bound, as before ----------------------------------------------------------------------------------------
+    {
+        if (!openSession(dir, L"rotnone", "max_mb = 0\r\nbuffer_mb = 16\r\n")) {
+            fail("log.max_mb = 0", "the log would not open in the scratch dir");
+        } else {
+            for (int i = 0; i < 1300; ++i) Log::get().note("nonefill %d %s", i, fillerLine(1000).c_str());
+            Log::get().noteReserved("nonereserved line");
+            Log::get().close();
+            const std::wstring head = headOf(dir, L"rotnone");
+            const Head h = readHead(dir, head);
+            check(h.markerAt == std::string::npos && tailsOnDisk(dir, head).empty() && count(h.text, "nonefill ") == 1300 && count(h.text, "nonereserved line") == 1 &&
+                      h.text.size() > kMiB,
+                  "max_mb = 0 is one file with no bound: past a megabyte, no notice, no segment, every line once");
+        }
+    }
+
+    // --- rotA: the structure, the kinds and a segment that cannot be deleted ----------------------------------------------------------------
+    {
+        const wchar_t* const tag = L"rotA";
+        if (!openSession(dir, tag, "max_mb = 1\r\nbuffer_mb = 16\r\n")) {
+            fail("log rotation rotA", "the log would not open in the scratch dir");
+        } else {
+            int reserved = 0;
+            auto kindLine = [&](const char* name) { Log::get().note("rotA kind %s #%d", name, 0); expectLine("rotA", "once", std::string("rotA kind ") + name + " #0"); };
+            auto pctLine = [&](const char* name) {   // many call sites say note("%s", ...): the text is what tells the kinds apart
+                const std::string text = std::string("rotA pcts ") + name + " #0";
+                Log::get().note("%s", text.c_str());
+                expectLine("rotA", "once", text);
+            };
+            auto reservedLines = [&](int n) {
+                for (int i = 0; i < n; ++i, ++reserved) {
+                    Log::get().noteReserved("rotA reserved #%d", reserved);
+                    expectLine("rotA", "once", "rotA reserved #" + std::to_string(reserved));
+                }
+            };
+            auto fill = [&](const char* name, int lines) {
+                for (int i = 0; i < lines; ++i) Log::get().note("rotA %s fill %d %s", name, i, filler.c_str());
+            };
+            // Before the cut: kinds that live in the head (written once, not kept again), then enough to pass the head's 256 KB.
+            kindLine("headone");
+            pctLine("headtwo");
+            reservedLines(3);
+            fill("zero", 300);
+            // After the cut, into segment 1 and 2: first lines of new kinds, repeats of a kind, a reserved line among them.
+            kindLine("alpha");
+            pctLine("bravo");
+            pctLine("charlie");
+            for (int i = 0; i < 30; ++i) Log::get().note("rotA repeat #%d", i);   // one kind: only the first line, #0, is a first line
+            expectLine("rotA", "once", "rotA repeat #0");
+            reservedLines(6);
+            fill("one", 140);
+            kindLine("delta");
+            fill("one", 40);
+            const std::wstring head = headOf(dir, tag);
+            bool second = waitFor([&] { return exists(dir + L"\\" + tailName(head, 2)); });
+            check(second, "rotA: the second tail segment opens", "tail-002 never appeared in 120 s");
+            if (second) {
+                // The kept lines say which segment they came from, and the number is the segment that holds the line.
+                bool matched = true;
+                std::string why;
+                for (const char* token : {"rotA kind alpha #0", "rotA pcts bravo #0", "rotA pcts charlie #0", "rotA repeat #0"}) {
+                    unsigned holder = 0;
+                    for (unsigned n : {1u, 2u}) {
+                        if (slurp(dir + L"\\" + tailName(head, n)).find(token) != std::string::npos) holder = n;
+                    }
+                    size_t keptAt = std::string::npos;
+                    const bool arrived = waitFor([&] {
+                        const Head h = readHead(dir, head);
+                        keptAt = h.markerAt == std::string::npos ? std::string::npos : h.text.find(token, h.markerAt);
+                        return keptAt != std::string::npos;
+                    }, 30000);
+                    const Head h = readHead(dir, head);
+                    keptAt = h.markerAt == std::string::npos ? std::string::npos : h.text.find(token, h.markerAt);
+                    if (!arrived || holder == 0 || keptSegmentAt(h.text, keptAt) != holder) {
+                        matched = false;
+                        why += std::string(" ") + token + ": holder " + std::to_string(holder) + ", marker " + std::to_string(keptAt == std::string::npos ? 0 : keptSegmentAt(h.text, keptAt));
+                    }
+                }
+                check(matched, "rotA: each kept line is under the marker of the segment that holds it", why);
+            }
+            // A reader holds segment 1 open without sharing delete: the log cannot delete it when the fifth segment opens, and does not stop.
+            HANDLE holdFirst = CreateFileW((dir + L"\\" + tailName(head, 1)).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                           FILE_ATTRIBUTE_NORMAL, nullptr);
+            check(holdFirst != INVALID_HANDLE_VALUE, "rotA: segment 1 can be held open by a reader that does not share delete");
+            kindLine("echo");
+            pctLine("foxtrot");
+            reservedLines(5);
+            fill("two", 800);
+            kindLine("golf");
+            const bool sixth = waitFor([&] { return exists(dir + L"\\" + tailName(head, 6)); });
+            check(sixth, "rotA: later segments open while segment 1 is held", "tail-006 never appeared in 120 s");
+            check(exists(dir + L"\\" + tailName(head, 1)) && !exists(dir + L"\\" + tailName(head, 2)),
+                  "rotA: the held segment 1 is still there (its delete failed and nothing waited), segment 2 was deleted past it");
+            if (holdFirst != INVALID_HANDLE_VALUE) CloseHandle(holdFirst);
+            // Released: the next rotation takes it, with the one that is now the fifth oldest.
+            fill("three", 500);
+            kindLine("hotel");
+            reservedLines(4);
+            const bool eighth = waitFor([&] { return exists(dir + L"\\" + tailName(head, 8)); });
+            check(eighth, "rotA: more segments open after the release", "tail-008 never appeared in 120 s");
+            check(!exists(dir + L"\\" + tailName(head, 1)) && !exists(dir + L"\\" + tailName(head, 3)),
+                  "rotA: segment 1 is deleted at the next rotation after its reader let go, with segment 3");
+            Log::get().note("rotA newest line");
+            Log::get().close();
+            const Head h = readHead(dir, head);
+            const std::vector<unsigned> tails = tailsOnDisk(dir, head);
+            check(tails.size() == 4 && tails.front() >= 5 && tails.back() >= 8 && tails.back() - tails.front() == 3,
+                  "rotA: four consecutive segments are on disk at the end", std::to_string(tails.size()) + " segments, " + std::to_string(tails.empty() ? 0 : tails.front()) + ".." +
+                                                                                 std::to_string(tails.empty() ? 0 : tails.back()));
+            const std::string newestTop = tails.empty() ? std::string() : slurp(dir + L"\\" + tailName(head, tails.back())).substr(0, 1500);
+            check(newestTop.find("Deleted so far:") != std::string::npos && newestTop.find("segment 1 (") != std::string::npos &&
+                      newestTop.find("segment 2 (") != std::string::npos && newestTop.find("segment 3 (") != std::string::npos,
+                  "rotA: the newest segment's notice lists segments 1, 2 and 3 as deleted");
+            check(count(h.text, kSpentText) == 0, "rotA: a session that keeps few lines does not say its kept-lines budget is spent");
+            check(count(h.text, "[edvr] log head ends here at ") == 1, "rotA: the head ends once");
+            expectLine("rotA", "max_bytes", std::to_string(kMiB));
+            expectLine("rotA", "newest", "rotA newest line");
+            expectLine("rotA", "min_segments", "8");
+        }
+    }
+
+    // --- rotB: a burst far past the buffer (drops) and the volume line ------------------------------------------------------------------------
+    {
+        const wchar_t* const tag = L"rotB";
+        if (!openSession(dir, tag, "max_mb = 1\r\nbuffer_mb = 1\r\n")) {
+            fail("log rotation rotB", "the log would not open in the scratch dir");
+        } else {
+            Log::get().setVolumeIntervalMsForTest(400);
+            const uint64_t droppedBefore = Log::get().dropped();
+            for (int i = 0; i < 6000; ++i) Log::get().note("rotB burst %d %s", i, filler.c_str());
+            check(Log::get().dropped() > droppedBefore, "rotB: a 5 MB burst into a 1 MB buffer drops lines (and counts them)", std::to_string(Log::get().dropped()) + " dropped");
+            for (int round = 0; round < 6; ++round) {
+                for (int i = 0; i < 40; ++i) Log::get().note("rotB steady %d %s", i, filler.c_str());
+                Sleep(300);
+            }
+            Log::get().setVolumeIntervalMsForTest(0);
+            Sleep(800);   // two passes, so a volume line the flusher was about to note is already in
+            Log::get().note("rotB newest line");
+            Log::get().setVolumeIntervalMsForTest(300000);
+            Log::get().close();
+            const std::wstring head = headOf(dir, tag);
+            std::string all = slurp(dir + L"\\" + head);
+            for (unsigned n : tailsOnDisk(dir, head)) all += slurp(dir + L"\\" + tailName(head, n));
+            const size_t volumeAt = all.find("log volume (last 400 ms): ");
+            check(count(all, " log line(s) were DROPPED here -- ") >= 1, "rotB: the drop notice is written, into whatever file is current");
+            check(volumeAt != std::string::npos && all.find(" lines. Top kinds by size: \"rotB ", volumeAt) != std::string::npos,
+                  "rotB: the flusher notes a volume line: the window's size and lines, then the biggest kinds, from the kind's own text");
+            check(all.find(" MB in 0 lines.") == std::string::npos, "rotB: and no volume line is written for an empty window");
+            expectLine("rotB", "max_bytes", std::to_string(kMiB));
+            expectLine("rotB", "dropped", "1");
+            expectLine("rotB", "volume", "1");
+            expectLine("rotB", "newest", "rotB newest line");
+        }
+    }
+
+    // --- rotC: the name a second process takes (_mmm_pid): the segments carry it ----------------------------------------------------------------
+    {
+        const wchar_t* const tag = L"rotC";
+        bool pidForm = false;
+        std::wstring head;
+        for (int attempt = 0; attempt < 6 && !pidForm; ++attempt) {
+            if (!writeIni(dir, "[log]\r\nenabled = 1\r\nmax_mb = 1\r\nbuffer_mb = 16\r\n")) break;
+            Config::get().init(dir);
+            Log::get().close();
+            removeSession(dir, tag);
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            wchar_t clash[MAX_PATH];
+            _snwprintf_s(clash, _TRUNCATE, L"%s\\edvr_%s_%04u%02u%02u_%02u%02u%02u.log", dir.c_str(), tag, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+            HANDLE c = CreateFileW(clash, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (c != INVALID_HANDLE_VALUE) CloseHandle(c);
+            if (!Log::get().open(dir, tag)) break;
+            for (int i = 0; i < 600; ++i) Log::get().note("rotC line %d %s", i, filler.c_str());
+            Log::get().note("rotC newest line");
+            Log::get().close();
+            DeleteFileW(clash);   // the empty file that made the name clash is not a session
+            for (const std::wstring& name : glob(dir, std::wstring(L"edvr_") + tag + L"_*.log")) {
+                if (name.find(L".tail-") == std::wstring::npos && name.size() > 25 && name[25] == L'_') {
+                    head = name;
+                    pidForm = true;
+                }
+            }
+        }
+        check(pidForm, "rotC: a second log in the same second takes the _mmm_pid name", "never took it in 6 tries");
+        if (pidForm) {
+            const std::vector<unsigned> tails = tailsOnDisk(dir, head);
+            const Head h = readHead(dir, head);
+            check(!tails.empty() && h.markerAt != std::string::npos && h.text.find(headMarker(narrow(tailName(head, 1)))) == h.markerAt,
+                  "rotC: its end notice names its first segment with the _mmm_pid form", narrow(head));
+            check(!tails.empty() &&
+                      slurp(dir + L"\\" + tailName(head, tails.back())).find("[edvr] tail segment " + std::to_string(tails.back()) + " of " + narrow(head) + ".") == 0,
+                  "rotC: and so does each segment's notice");
+            expectLine("rotC", "max_bytes", std::to_string(kMiB));
+            expectLine("rotC", "pidform", "1");
+            expectLine("rotC", "newest", "rotC newest line");
+        }
+    }
+
+    // --- rotD: the kept-lines budget: 64 KB for each half, one notice when the first is spent -----------------------------------------------
+    {
+        const wchar_t* const tag = L"rotD";
+        if (!openSession(dir, tag, "max_mb = 1\r\nbuffer_mb = 16\r\n")) {
+            fail("log rotation rotD", "the log would not open in the scratch dir");
+        } else {
+            for (int i = 0; i < 300; ++i) Log::get().note("rotD headfill %d %s", i, filler.c_str());
+            // A flood of reserved lines (the memory watch's), over its half.
+            const std::string wide = fillerLine(1000);
+            for (int i = 0; i < 300; ++i) Log::get().noteReserved("rotD reserved #%d %s", i, wide.c_str());
+            // And more kinds than the other half holds: one distinct kind per line (the text before its first digit differs), about 100 bytes each.
+            for (int i = 0; i < 1500; ++i) {
+                char name[16] = {};
+                int v = i;
+                for (int k = 0; k < 8; ++k, v /= 26) name[k] = static_cast<char>('a' + v % 26);
+                Log::get().note("%s", (std::string("rotD kind ") + name + " " + fillerLine(40)).c_str());
+            }
+            Log::get().note("rotD newest line");
+            Log::get().close();
+            const std::wstring head = headOf(dir, tag);
+            const Head h = readHead(dir, head);
+            const std::string kept = h.after();
+            check(count(h.text, kSpentText) == 1, "rotD: the head says once that the kept-lines budget is spent, though both halves ran over");
+            size_t reservedBytes = 0, reservedLines = 0, keptKindBytes = 0;
+            bool consecutive = true;
+            for (size_t at = kept.find("rotD reserved #"); at != std::string::npos; at = kept.find("rotD reserved #", at + 1)) {
+                const size_t lineEnd = kept.find('\n', at);
+                const size_t lineStart = kept.rfind('\n', at) + 1;
+                if (lineEnd == std::string::npos || std::atoi(kept.c_str() + at + 15) != static_cast<int>(reservedLines)) consecutive = false;
+                reservedBytes += lineEnd - lineStart + 1;
+                ++reservedLines;
+            }
+            for (size_t at = kept.find("rotD kind "); at != std::string::npos; at = kept.find("rotD kind ", at + 1)) {
+                const size_t lineEnd = kept.find('\n', at);
+                keptKindBytes += lineEnd - (kept.rfind('\n', at) + 1) + 1;
+            }
+            check(reservedLines > 40 && reservedLines < 300 && consecutive, "rotD: the reserved lines kept are whole, consecutive from the first, and cut off partway",
+                  std::to_string(reservedLines) + " lines");
+            check(reservedBytes <= kKept / 2 && reservedBytes + 1100 > kKept / 2, "rotD: ...at their half of the kept room: no more than 64 KB, and not a line's width short of it",
+                  std::to_string(reservedBytes) + " bytes");
+            check(keptKindBytes <= kKept / 2 + 1 && keptKindBytes + 200 > kKept / 2, "rotD: the first lines of new kinds fill their half the same way",
+                  std::to_string(keptKindBytes) + " bytes");
+            check(kept.size() <= kKept + 2048, "rotD: the head after its end is no larger than the kept room and its notices", std::to_string(kept.size()) + " bytes");
+            expectLine("rotD", "max_bytes", std::to_string(kMiB));
+            expectLine("rotD", "spent", "1");
+            expectLine("rotD", "newest", "rotD newest line");
+        }
+    }
+    Log::get().close();
+    Log::get().setVolumeIntervalMsForTest(300000);
+
+    // The sessions and what is expected of them, for tools\edvr_log.py --check-rotation-dir (build.bat runs it after this exe).
+    HANDLE f = CreateFileW((dir + L"\\rotation.expect").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) {
+        fail("log rotation", "could not write rotation.expect");
+    } else {
+        DWORD w = 0;
+        WriteFile(f, expect.data(), static_cast<DWORD>(expect.size()), &w, nullptr);
+        CloseHandle(f);
+    }
+}
+
+}  // namespace logcases
 
 int main(int argc, char** argv) {
     // Unbuffered, so a crash does not take the output with it: the first run of
@@ -1790,69 +2404,21 @@ int main(int argc, char** argv) {
         }
     }
 
-    // The Explorer Cam switch reads from the shipped file, and the keys of the
-    // old route it replaced are not defined there (kRetiredKeys, above).
-    expectStr("fix.explorer_cam", "<unset>", "the retired [fix] explorer_cam switch is absent from the shipped file (Explorer Cam is armed by its hotkey alone)");
-    expectStr("hotkey.explorer_cam", "F5", "...and the hotkey that arms Explorer Cam ships as F5");
-    expectFloat("fix.explorer_cam_eye_up", 1.68f, "...the fallback eye keys ship at 1.68 up,");
+    // Explorer Cam's eight keys, retired in F98 with Explorer Cam (native on foot is the on-foot VR mode). The shipped file carries each at its last
+    // shipping value as a hidden retired line, so a stock file reads clean; retiredNotedKeyScan holds their names to that block and to the one log note.
+    expectStr("fix.explorer_cam", "<unset>", "the retired [fix] explorer_cam switch is absent from the shipped file");
+    expectStr("hotkey.explorer_cam", "F5", "the retired Explorer Cam key's line keeps its last shipping value, F5");
+    expectFloat("fix.explorer_cam_eye_up", 1.68f, "...the retired fallback eye lines keep 1.68 up,");
     expectFloat("fix.explorer_cam_eye_forward", 0.10f, "...0.10 forward,");
     expectFloat("fix.explorer_cam_eye_right", 0.0f, "...and 0.0 right");
-    // The trims and the smoothing are PERMANENT user settings (Sean, 2026-10-08) and ship with his own tuning. Three places must say the same three numbers: the
-    // shipped file, the constants in explorer_cam_follow_core.h, and the code's fallback for an ini that lacks the keys (which must USE those constants).
-    expectFloat("fix.explorer_cam_eye_trim_up", 0.15f, "the Explorer Cam eye trims ship at Sean's tuning: up 0.15,");
+    expectFloat("fix.explorer_cam_eye_trim_up", 0.15f, "...the retired trims keep up 0.15,");
     expectFloat("fix.explorer_cam_eye_trim_forward", -0.08f, "...forward -0.08,");
     expectFloat("fix.explorer_cam_eye_trim_right", 0.0f, "...right 0.0,");
-    expectFloat("fix.explorer_cam_follow_smoothing_ms", 0.0f, "...and the follow smoothing at 0 (exact follow)");
+    expectFloat("fix.explorer_cam_follow_smoothing_ms", 0.0f, "...and the retired follow smoothing 0");
     expectStr("advanced.explorer_cam_probe", "<unset>", "the retired Explorer Cam probe key is absent from the shipped file (removed 2026-10-09; kRetiredKeys holds its name out of every source)");
     // The transition-flash switch (removed 2026-10-13) is a bare [fix] key like fix.explorer_cam was: the exact-name scan holds its qualified name out of the
     // sources and the file's text, and this lookup holds the [fix] line itself out.
     expectStr("fix.transition_flash", "<unset>", "the retired transition-flash switch is absent from the shipped file (the hold is always on in the VR profile and has no setting)");
-    expectFloat("fix.explorer_cam_eye_trim_up", ecm::kTrimUpDefault, "the shipped up trim is the code constant ecm::kTrimUpDefault");
-    expectFloat("fix.explorer_cam_eye_trim_forward", ecm::kTrimForwardDefault, "...the shipped forward trim is ecm::kTrimForwardDefault");
-    expectFloat("fix.explorer_cam_eye_trim_right", ecm::kTrimRightDefault, "...the shipped right trim is ecm::kTrimRightDefault");
-    expectFloat("fix.explorer_cam_follow_smoothing_ms", static_cast<float>(ecm::kSmoothingMsDefault), "...the shipped smoothing is ecm::kSmoothingMsDefault");
-    {
-        const float trims[3] = {ecm::kTrimUpDefault, ecm::kTrimForwardDefault, ecm::kTrimRightDefault};
-        bool inside = true;
-        for (float v : trims) inside = inside && v >= -ecm::kTrimLimit && v <= ecm::kTrimLimit && ecm::clampTrim(v) == v;
-        if (inside && static_cast<float>(ecm::kSmoothingMsDefault) >= 0.0f && static_cast<float>(ecm::kSmoothingMsDefault) <= ecm::kSmoothingMsMax)
-            ok("every shipped Explorer Cam default is inside its clamp (+-0.5 m, 0..1000 ms)");
-        else
-            fail("every shipped Explorer Cam default is inside its clamp", "a default sits outside what the code would let through");
-    }
-    {
-        // The code's fallback must be the constant, not a number that happens to match today. The control rewrites each call to a literal that
-        // differs and must be caught. The reads are in the settings cache (explorer_cam_settings_core.h), which explorerCamFrameBoundary reads them through once per
-        // configuration change; explorer_cam_fade_test pins that the frame boundary reads none of these keys itself.
-        const std::string source = readRepoFile(dir, L"src\\d3d11\\explorer_cam_settings_core.h");
-        struct Read { const char* key; const char* call; const char* expr; };
-        const Read reads[] = {
-            {"fix.explorer_cam_eye_trim_up", "getFloat", "kTrimUpDefault"},
-            {"fix.explorer_cam_eye_trim_forward", "getFloat", "kTrimForwardDefault"},
-            {"fix.explorer_cam_eye_trim_right", "getFloat", "kTrimRightDefault"},
-            {"fix.explorer_cam_follow_smoothing_ms", "getInt", "kSmoothingMsDefault"},
-        };
-        auto usesConstant = [](const std::string& text, const Read& r) {
-            return text.find(std::string(r.call) + "(\"" + r.key + "\", " + r.expr + ")") != std::string::npos;
-        };
-        if (source.empty()) {
-            fail("explorer_cam_settings_core.h is readable from the repo root", "could not read it");
-        } else {
-            bool all = true, controlsCaught = true;
-            for (const Read& r : reads) {
-                all = all && usesConstant(source, r);
-                std::string flipped = source;
-                const std::string from = std::string(r.call) + "(\"" + r.key + "\", " + r.expr + ")";
-                const size_t at = flipped.find(from);
-                if (at != std::string::npos) flipped.replace(at, from.size(), std::string(r.call) + "(\"" + r.key + "\", 0.0f)");
-                controlsCaught = controlsCaught && at != std::string::npos && !usesConstant(flipped, r);
-            }
-            if (all) ok("explorer_cam_settings_core.h reads each trim and the smoothing with the code constant as its fallback (the shipped value, not a copy of it)");
-            else fail("explorer_cam_settings_core.h reads each trim and the smoothing with the code constant as its fallback", "a read uses another fallback");
-            if (controlsCaught) ok("control: a read rewritten to a literal fallback is caught");
-            else fail("control: a read rewritten to a literal fallback is caught", "the rewritten source still passed, or the call was not found");
-        }
-    }
     expectBool("hotkey.read_game_bindings", true,
                "a key under a repeated [hotkey] reads");
 
@@ -2170,11 +2736,83 @@ int main(int argc, char** argv) {
             Config::get().setAuditTables(nullptr, 0, nullptr, 0);
         }
 
+        // --- F162: fix.native_on_foot_ads_sight_both_eyes (on | off) moved to fix.native_on_foot_ads_sight_eye (both | right | left), over the SHIPPED tables ----
+        //
+        // The same proof: an old-layout line is read as the new key (its text, on or off, which the reader's parse takes for both or right), a line still carrying the
+        // old shipped default is not a choice, a new-layout value is read as it stands, and it is the shipped annotation doing it.
+        {
+            using contractgen::kKnownKeys;
+            using contractgen::kMovedKeys;
+            constexpr size_t kKnownCount = sizeof(kKnownKeys) / sizeof(kKnownKeys[0]);
+            constexpr size_t kMovedCount = sizeof(kMovedKeys) / sizeof(kMovedKeys[0]);
+            static const char* filtered[kMovedCount][3];
+            size_t filteredCount = 0;
+            bool carriesSightEye = false;
+            for (size_t i = 0; i < kMovedCount; ++i) {
+                if (std::string(kMovedKeys[i][0]) == "fix.native_on_foot_ads_sight_both_eyes" && std::string(kMovedKeys[i][1]) == "fix.native_on_foot_ads_sight_eye" &&
+                    std::string(kMovedKeys[i][2]) == "on") {
+                    carriesSightEye = true;
+                    continue;   // the control's tables lose this one move
+                }
+                for (int c = 0; c < 3; ++c) filtered[filteredCount][c] = kMovedKeys[i][c];
+                ++filteredCount;
+            }
+            check(carriesSightEye, "the shipped moved-from map carries fix.native_on_foot_ads_sight_both_eyes to fix.native_on_foot_ads_sight_eye, its shipped default on");
+            int known = 0, retired = 0;
+            for (size_t i = 0; i < kKnownCount; ++i) {
+                if (strcmp(kKnownKeys[i], "fix.native_on_foot_ads_sight_eye") == 0) ++known;
+                if (strcmp(kKnownKeys[i], "fix.native_on_foot_ads_sight_both_eyes") == 0) ++retired;
+            }
+            check(known == 1 && retired == 0, "fix.native_on_foot_ads_sight_eye is a known key, and fix.native_on_foot_ads_sight_both_eyes is not one any more",
+                  std::to_string(known) + " known, " + std::to_string(retired) + " retired still known");
+            {   // the reader's text: both, right and left, either case, and the carried on and off; anything else is both and says so
+                using edvr::nofoot::f162::parse;
+                bool k1 = true, k2 = true, k3 = true, k4 = true, k5 = true, k6 = true, k7 = false;
+                const bool ok = parse("both", &k1) == edvr::nofoot::f162::kBoth && parse(" Right ", &k2) == edvr::nofoot::f162::kRight && parse("LEFT", &k3) == edvr::nofoot::f162::kLeft &&
+                                parse("on", &k4) == edvr::nofoot::f162::kBoth && parse("off", &k5) == edvr::nofoot::f162::kRight && parse("middle", &k6) == edvr::nofoot::f162::kBoth &&
+                                parse(nullptr, &k7) == edvr::nofoot::f162::kBoth;
+                check(ok && k1 && k2 && k3 && k4 && k5 && !k6 && !k7, "the sight eye's text: both, right and left in any case, the carried on and off as both and right, anything else both and not known");
+            }
+
+            Config::get().setAuditTables(kKnownKeys, kKnownCount, kMovedKeys, kMovedCount);
+            if (!writeIni(scratch, "[fix]\r\nnative_on_foot_ads_sight_both_eyes = off\r\n")) {
+                fail("old-layout sight eye ini", "could not write it");
+            } else {
+                Config::get().init(scratch);
+                expectStr("fix.native_on_foot_ads_sight_eye", "off", "an old-layout native_on_foot_ads_sight_both_eyes = off is read as the sight eye's text (the reader takes off for right)");
+                if (!rewriteIni(scratch, "[fix]\r\nnative_on_foot_ads_sight_both_eyes = on\r\n") || !Config::get().reloadIfChanged()) {
+                    fail("old-layout stale sight eye reload", "the edit did not reload");
+                } else {
+                    expectStr("fix.native_on_foot_ads_sight_eye", "<unset>", "an old-layout line still carrying the shipped default on is ignored, not read");
+                }
+                if (!rewriteIni(scratch, "[fix]\r\nnative_on_foot_ads_sight_both_eyes = off\r\nnative_on_foot_ads_sight_eye = left\r\n") || !Config::get().reloadIfChanged()) {
+                    fail("both-layout sight eye reload", "the edit did not reload");
+                } else {
+                    expectStr("fix.native_on_foot_ads_sight_eye", "left", "when both spellings are set, fix.native_on_foot_ads_sight_eye wins");
+                }
+                if (!rewriteIni(scratch, "[fix]\r\nnative_on_foot_ads_sight_eye = right\r\n") || !Config::get().reloadIfChanged()) {
+                    fail("new-layout sight eye reload", "the edit did not reload");
+                } else {
+                    expectStr("fix.native_on_foot_ads_sight_eye", "right", "a new-layout fix.native_on_foot_ads_sight_eye is read as it stands");
+                }
+            }
+            // CONTROL: the same old-layout file over the same tables minus that one move: the choice is stranded under the old name.
+            Config::get().setAuditTables(kKnownKeys, kKnownCount, reinterpret_cast<const char* const(*)[3]>(filtered), filteredCount);
+            if (!writeIni(scratch, "[fix]\r\nnative_on_foot_ads_sight_both_eyes = off\r\n")) {
+                fail("control sight eye ini", "could not write it");
+            } else {
+                Config::get().init(scratch);
+                expectStr("fix.native_on_foot_ads_sight_eye", "<unset>", "control: without the annotation an old-layout native_on_foot_ads_sight_both_eyes is NOT read as the new name");
+            }
+            Config::get().setAuditTables(nullptr, 0, nullptr, 0);
+        }
+
         // --- visual.star_glow: the percentages, read exactly ---------------------
         {
             struct Case { const char* text; int percent; bool recognised; };
             const Case cases[] = {{"100", 100, true}, {"125", 125, true}, {"150", 150, true}, {"175", 175, true}, {"200", 200, true},
-                                  {"", 100, false}, {"off", 100, false}, {"110", 100, false}, {"225", 100, false}, {"150%", 100, false},
+                                  {"250", 250, true}, {"300", 300, true}, {"350", 350, true}, {"400", 400, true},
+                                  {"", 100, false}, {"off", 100, false}, {"110", 100, false}, {"225", 100, false}, {"450", 100, false}, {"150%", 100, false},
                                   {"1.5", 100, false}, {"150.0", 100, false}, {" 150", 100, false}, {"-150", 100, false}};
             for (const Case& c : cases) {
                 bool recognised = false;
@@ -2353,11 +2991,10 @@ int main(int argc, char** argv) {
     //
     // The shipped edvr.ini documents the default commented out ("#max_mb = 16"), so for every install that has not written the line the
     // CODE's fallback is the cap; tools\check_config_contract.py holds a commented default to the code's in the build. This pins the
-    // number itself and then what the log does with it, at sizes that keep the test fast: the default must not stop a 1.3 MB session
-    // (past a 1 MB cap), an explicit max_mb = 1 must stop it with the one line that says so, and an explicit max_mb = 4 keeps 4 and
-    // 0 is no cap (those two by the cap in force, with no writing). The writer has no rotation: a log that reaches its cap says so
-    // once and stops, and the next session opens a new file; the flat profile reads this key the same way (the "log." keys are
-    // allowed in both profiles, and the fallback is one line of one class).
+    // number itself and then what the log does with it, at sizes that keep the test fast (logcases::run above): the default keeps a
+    // 1.3 MB session in one file, an explicit max_mb = 1 gives it a head and rotating tail segments, 0 is one unbounded file, and an
+    // explicit max_mb = 4 keeps 4 (by the bound in force, with no writing). The flat profile reads this key the same way (the "log."
+    // keys are allowed in both profiles, and the fallback is one line of one class).
     {
         const std::string iniText = readRepoFile(dir, L"edvr.ini");
         const std::string logSource = readRepoFile(dir, L"src\\common\\log.cpp");
@@ -2366,241 +3003,60 @@ int main(int argc, char** argv) {
         } else {
             check(iniText.find("\n#max_mb = 16") != std::string::npos && iniText.find("\n#max_mb = 4") == std::string::npos,
                   "the shipped edvr.ini documents log.max_mb at 16, commented out (the code's fallback is the default)");
-            check(logSource.find("getInt(\"log.max_mb\", 16)") != std::string::npos &&
+            check(logSource.find("getInt(\"log.max_mb\", onFootDetail ? 64 : 16)") != std::string::npos &&
                       logSource.find("getInt(\"log.max_mb\", 4)") == std::string::npos,
-                  "the log's fallback for log.max_mb is 16");
+                  "the log's fallback for log.max_mb is 16 (64 with log.on_foot_detail on, F125)");
         }
     }
+    // --- log.on_foot_detail (F125): the detailed on-foot log, off by default, live -------------------------------------------------------------------
+    //
+    // Off, each on-foot measurement writes a 10 s summary; on, every line as before, about 4 MB a minute on foot. The shipped edvr.ini documents the key
+    // commented out at off, and both readers fall back to off: the log (for the cap it opens with, below) and the on-foot code's readKey (for the lines,
+    // re-read on each configuration change). Two readers with two defaults would make the cap and the lines disagree about one setting.
+    {
+        const std::string iniText = readRepoFile(dir, L"edvr.ini");
+        const std::string logSource = readRepoFile(dir, L"src\\common\\log.cpp");
+        const std::string onFootSource = readRepoFile(dir, L"src\\d3d11\\native_on_foot.cpp");
+        if (iniText.empty() || logSource.empty() || onFootSource.empty()) {
+            fail("log.on_foot_detail pins", "could not read edvr.ini, src\\common\\log.cpp or src\\d3d11\\native_on_foot.cpp from the repo root");
+        } else {
+            const size_t logSection = iniText.find("\n[log]");
+            const size_t keyLine = iniText.find("\n#on_foot_detail = off");
+            const size_t nextSection = logSection == std::string::npos ? std::string::npos : iniText.find("\n[", logSection + 1);
+            check(logSection != std::string::npos && keyLine > logSection && (nextSection == std::string::npos || keyLine < nextSection) &&
+                      iniText.find("\non_foot_detail = on") == std::string::npos,
+                  "the shipped edvr.ini documents log.on_foot_detail in [log], commented out at off");
+            check(logSource.find("getBool(\"log.on_foot_detail\", false)") != std::string::npos,
+                  "the log reads log.on_foot_detail with the default off");
+            check(onFootSource.find("getBool(\"log.on_foot_detail\", false)") != std::string::npos &&
+                      onFootSource.find("native on foot log (F125): detail %s") != std::string::npos,
+                  "readKey reads log.on_foot_detail with the default off and announces it (the line --health reads)");
+        }
+    }
+    // The bound in force, and what the log does with it (the head, the tail segments, the kept lines, the volume line): the cases above pin the numbers
+    // without writing; these write real sessions. They leave them in <scratch>\logrot for tools\edvr_log.py --check-rotation-dir, which build.bat runs next.
     if (argc >= 3) {
         const std::wstring scratch = widen(argv[2]);
-        struct CapRun {
-            bool opened = false;
-            uint64_t maxBytes = ~0ull;
-            std::string body;
-        };
-        // One session in the scratch directory: the given [log] lines (a max_mb line or none), one 1.3 MB burst (the flusher's first pass
-        // writes all of it), then a marker line a second pass can only write if the cap has not been reached. `write` false opens and
-        // closes without writing, to read the cap in force.
-        const auto session = [&](const char* maxMbLine, const wchar_t* tag, bool write) {
-            CapRun run;
+        const auto bound = [&](const char* iniLine, const wchar_t* tag, uint64_t want, const char* what) {
             std::string ini = "[log]\r\nenabled = 1\r\nbuffer_mb = 16\r\n";
-            ini += maxMbLine;
-            if (!writeIni(scratch, ini.c_str())) return run;
+            ini += iniLine;
+            if (!writeIni(scratch, ini.c_str())) return;
             Config::get().init(scratch);
             Log::get().close();
-            const std::wstring pattern = std::wstring(L"edvr_") + tag + L"_*.log";
-            {
-                WIN32_FIND_DATAW old{};
-                HANDLE oh = FindFirstFileW((scratch + L"\\" + pattern).c_str(), &old);
-                if (oh != INVALID_HANDLE_VALUE) {
-                    do {
-                        DeleteFileW((scratch + L"\\" + old.cFileName).c_str());
-                    } while (FindNextFileW(oh, &old));
-                    FindClose(oh);
-                }
-            }
-            if (!Log::get().open(scratch, tag)) return run;
-            run.opened = true;
-            run.maxBytes = Log::get().maxBytes();
-            if (write) {
-                const std::string filler(1000, 'y');
-                for (int i = 0; i < 1300; ++i) Log::get().note("capfill %d %s", i, filler.c_str());
-                // The marker must be written AFTER the pass that carried the burst over the cap, or it rides the same write and is
-                // not "after the cap". That used to be two Sleep(700)s against the flusher's 250 ms passes: a wall-clock assumption
-                // that failed in nearly every copy when the machine was loaded (a starved flusher had not yet passed when the marker
-                // went in). Now the test waits on the fact itself: the file on disk has reached the cap, which means a pass has
-                // written bytes and the next pass that has anything to write will see the cap. The wait has no schedule in it, only
-                // a ceiling far past any real stall so a logger that never flushes fails the case rather than hanging the build.
-                if (run.maxBytes && run.maxBytes < 1300ull * 1000ull) {
-                    const ULONGLONG started = GetTickCount64();
-                    for (;;) {
-                        WIN32_FILE_ATTRIBUTE_DATA info{};
-                        WIN32_FIND_DATAW ff{};
-                        HANDLE fh = FindFirstFileW((scratch + L"\\" + pattern).c_str(), &ff);
-                        uint64_t onDisk = 0;
-                        if (fh != INVALID_HANDLE_VALUE) {
-                            FindClose(fh);
-                            if (GetFileAttributesExW((scratch + L"\\" + ff.cFileName).c_str(), GetFileExInfoStandard, &info))
-                                onDisk = (static_cast<uint64_t>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
-                        }
-                        if (onDisk >= run.maxBytes) break;
-                        if (GetTickCount64() - started > 120000ull) {
-                            fail("log.max_mb wait", "the burst never reached the cap on disk in 120 s: " + std::to_string(onDisk) + " bytes");
-                            break;
-                        }
-                        Sleep(5);
-                    }
-                }
-                Log::get().note("capmarker after the first burst");
-                // No sleep: close() joins the flusher and runs the final passes, so everything noted is decided before the file is read.
-            }
+            if (!Log::get().open(scratch, tag)) { fail(what, "the log would not open in the scratch dir"); return; }
+            check(Log::get().maxBytes() == want, what, std::to_string(Log::get().maxBytes()) + " bytes");
             Log::get().close();
-            WIN32_FIND_DATAW fd{};
-            HANDLE h = FindFirstFileW((scratch + L"\\" + pattern).c_str(), &fd);
-            if (h != INVALID_HANDLE_VALUE) {
-                const std::wstring name = fd.cFileName;
-                FindClose(h);
-                HANDLE f = CreateFileW((scratch + L"\\" + name).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                                       FILE_ATTRIBUTE_NORMAL, nullptr);
-                if (f != INVALID_HANDLE_VALUE) {
-                    char chunk[65536];
-                    DWORD got = 0;
-                    while (ReadFile(f, chunk, sizeof(chunk), &got, nullptr) && got) run.body.append(chunk, got);
-                    CloseHandle(f);
-                }
-            }
-            return run;
         };
-        const auto count = [](const std::string& text, const char* needle) {
-            size_t n = 0, from = 0;
-            while ((from = text.find(needle, from)) != std::string::npos) {
-                ++n;
-                from += 1;
-            }
-            return n;
-        };
-        const char* const kCapLine = "log size cap reached; only lines noted as reserved";
-        const uint64_t kMiB = 1024ull * 1024ull;
-
-        const CapRun byDefault = session("", L"capdefault", true);
-        if (!byDefault.opened) {
-            fail("log.max_mb default", "the log would not open in the scratch dir");
-        } else {
-            check(byDefault.maxBytes == 16 * kMiB, "with no max_mb line the cap in force is 16 MB",
-                  std::to_string(byDefault.maxBytes) + " bytes");
-            check(count(byDefault.body, "capmarker after the first burst") == 1 && count(byDefault.body, kCapLine) == 0,
-                  "...and a 1.3 MB session is not stopped by it (the old 4 MB default would not have stopped it either; a 1 MB cap does)");
-        }
-        const CapRun small = session("max_mb = 1\r\n", L"capsmall", true);
-        if (!small.opened) {
-            fail("log.max_mb = 1", "the log would not open in the scratch dir");
-        } else {
-            check(small.maxBytes == 1 * kMiB, "an explicit max_mb = 1 is a 1 MB cap", std::to_string(small.maxBytes) + " bytes");
-            check(count(small.body, kCapLine) == 1 && count(small.body, "capmarker after the first burst") == 0,
-                  "a session past its cap says so exactly once and writes nothing after it (the cap is the truncation: there is no rotation)");
-            check(small.body.size() > 1 * kMiB && small.body.size() < 2 * kMiB,
-                  "...and the file ends at the burst that crossed the cap (past 1 MB, under 2 MB), not at the default's 16 MB",
-                  std::to_string(small.body.size()) + " bytes");
-        }
-        const CapRun four = session("max_mb = 4\r\n", L"capfour", false);
-        check(four.opened && four.maxBytes == 4 * kMiB, "an ini that says max_mb = 4 keeps 4 MB", std::to_string(four.maxBytes) + " bytes");
-        const CapRun none = session("max_mb = 0\r\n", L"capnone", false);
-        check(none.opened && none.maxBytes == 0, "max_mb = 0 is no cap", std::to_string(none.maxBytes) + " bytes");
-        Log::get().close();
-
-        // --- Log::noteReserved: a line that outlives the cap, from a reserve of 1 MiB (2026-10-22, the memory watch's mem: lines) ----------
-        //
-        // Before the cap it is an ordinary line. After it, the lines go on from the reserve, in order, until the reserve cannot take the
-        // next one; the log says so once and writes no more of them. The reserve's arithmetic is held by tools\mem_watch_test; this is
-        // the file: that the lines are on disk, in order, that an ordinary line after the cap still is not, that the notice is the end.
-        const auto readLog = [&](const wchar_t* tag) {
-            std::string body;
-            WIN32_FIND_DATAW fd{};
-            HANDLE h = FindFirstFileW((scratch + L"\\edvr_" + tag + L"_*.log").c_str(), &fd);
-            if (h == INVALID_HANDLE_VALUE) return body;
-            const std::wstring name = fd.cFileName;
-            FindClose(h);
-            HANDLE f = CreateFileW((scratch + L"\\" + name).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-                                   FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (f == INVALID_HANDLE_VALUE) return body;
-            char chunk[65536];
-            DWORD got = 0;
-            while (ReadFile(f, chunk, sizeof(chunk), &got, nullptr) && got) body.append(chunk, got);
-            CloseHandle(f);
-            return body;
-        };
-        const auto openLog = [&](const char* maxMbLine, const wchar_t* tag) {
-            std::string ini = "[log]\r\nenabled = 1\r\nbuffer_mb = 16\r\n";
-            ini += maxMbLine;
-            if (!writeIni(scratch, ini.c_str())) return false;
-            Config::get().init(scratch);
-            Log::get().close();
-            WIN32_FIND_DATAW old{};
-            HANDLE oh = FindFirstFileW((scratch + L"\\edvr_" + tag + L"_*.log").c_str(), &old);
-            if (oh != INVALID_HANDLE_VALUE) {
-                do {
-                    DeleteFileW((scratch + L"\\" + old.cFileName).c_str());
-                } while (FindNextFileW(oh, &old));
-                FindClose(oh);
-            }
-            return Log::get().open(scratch, tag);
-        };
-
-        // Under the default cap a reserved line is an ordinary line: written, timestamped, in order with the notes around it, no cap notice.
-        if (!openLog("", L"resdefault")) {
-            fail("log reserve default", "the log would not open in the scratch dir");
-        } else {
-            Log::get().note("resdefault plain before");
-            Log::get().noteReserved("resdefault reserved %d", 7);
-            Log::get().note("resdefault plain after");
-            Log::get().close();
-            const std::string body = readLog(L"resdefault");
-            const size_t a = body.find("resdefault plain before"), b = body.find("resdefault reserved 7"), c = body.find("resdefault plain after");
-            check(a != std::string::npos && b != std::string::npos && c != std::string::npos && a < b && b < c && count(body, kCapLine) == 0,
-                  "noteReserved under the cap is note(): the line is written in order with the ordinary ones, and no cap is mentioned");
-            const size_t lineStart = b == std::string::npos ? 0 : body.rfind('\n', b) + 1;
-            check(b != std::string::npos && body.size() > lineStart + 14 && body[lineStart] == '[' && body[lineStart + 3] == ':' && body[lineStart + 13] == ']',
-                  "...and it is stamped like the others ([hh:mm:ss.mmm])");
-        }
-
-        // Past a 1 MB cap: the burst crosses it; once the cap notice is on disk, a reserved line, then 1.3 MB of them.
-        if (!openLog("max_mb = 1\r\n", L"respast")) {
-            fail("log reserve past the cap", "the log would not open in the scratch dir");
-        } else {
-            const std::string filler(1000, 'y');
-            for (int i = 0; i < 1300; ++i) Log::get().note("capfill %d %s", i, filler.c_str());
-            const auto waitForBody = [&](const char* needle, const char* why) {
-                const ULONGLONG started = GetTickCount64();
-                while (readLog(L"respast").find(needle) == std::string::npos) {
-                    if (GetTickCount64() - started > 120000ull) {
-                        fail("log reserve wait", std::string("never reached disk in 120 s: ") + why);
-                        return false;
-                    }
-                    Sleep(20);
-                }
-                return true;
-            };
-            // The burst is on disk, then one ordinary line gives the next pass something to write, and that pass finds the cap.
-            const bool burstWritten = waitForBody("capfill 1299 ", "the burst");
-            Log::get().note("resmarker the pass that finds the cap");
-            const bool capSeen = burstWritten && waitForBody(kCapLine, "the cap notice");
-            Log::get().noteReserved("resfirst reserved line after the cap");
-            Log::get().note("resplain ordinary line after the cap");
-            for (int i = 0; i < 1300; ++i) Log::get().noteReserved("resflood %05d %s", i, filler.c_str());
-            Log::get().noteReserved("resnever a line after the flood");
-            Log::get().close();   // joins the flusher and runs the last passes: everything noted is decided before the file is read
-            const std::string body = readLog(L"respast");
-            if (capSeen) {
-                const size_t capAt = body.find(kCapLine), firstAt = body.find("resfirst reserved line after the cap"), floodAt = body.find("resflood 00000 ");
-                check(count(body, kCapLine) == 1 && firstAt != std::string::npos && floodAt != std::string::npos && capAt < firstAt && firstAt < floodAt,
-                      "a reserved line noted after the cap is still written, once, after the cap notice and before the lines that follow it");
-                check(count(body, "resplain ordinary line after the cap") == 0 && count(body, "resmarker") == 0 && count(body, "resnever") == 0,
-                      "...while an ordinary line after the cap is not (the cap is still the cap)");
-                // The reserved lines on disk: whole, consecutive from 0, in order, adding up to no more than 1 MiB.
-                size_t floodLines = 0, reservedBytes = 0;
-                bool consecutive = true;
-                for (size_t at = body.find("resflood "); at != std::string::npos; at = body.find("resflood ", at + 1)) {
-                    const size_t lineStart = body.rfind('\n', at) + 1;
-                    const size_t lineEnd = body.find('\n', at);
-                    if (lineEnd == std::string::npos || body.find(filler, at) == std::string::npos || body.find(filler, at) > lineEnd) consecutive = false;
-                    if (std::atoi(body.c_str() + at + 9) != static_cast<int>(floodLines)) consecutive = false;
-                    reservedBytes += lineEnd - lineStart + 1;
-                    ++floodLines;
-                }
-                const size_t firstBytes = body.find('\n', firstAt) + 1 - (body.rfind('\n', firstAt) + 1);
-                reservedBytes += firstBytes;
-                check(floodLines > 900 && floodLines < 1300 && consecutive,
-                      "the flood is cut off partway (a whole number of lines, consecutive from 0, none missing), not written to its end",
-                      std::to_string(floodLines) + " lines");
-                check(reservedBytes <= kMiB && reservedBytes + 1100 > kMiB,
-                      "...at the reserve: no more than 1 MiB of reserved lines, and not a line's width short of it",
-                      std::to_string(reservedBytes) + " bytes");
-                const char* const spent = "[edvr] the post-cap reserve of 1 MiB for reserved lines is spent; nothing further will be written.";
-                const size_t spentAt = body.find(spent);
-                check(count(body, spent) == 1 && spentAt != std::string::npos && body.size() == spentAt + std::strlen(spent) + 2,
-                      "the reserve says it is spent exactly once, and that notice is the end of the file");
-            }
-        }
+        const uint64_t mib = 1024ull * 1024ull;
+        bound("max_mb = 4\r\n", L"capfour", 4 * mib, "an ini that says max_mb = 4 keeps 4 MB");
+        bound("max_mb = 0\r\n", L"capnone", 0, "max_mb = 0 is no bound");
+        // F125: with the detailed on-foot log on when the log opens, a bound nobody set is 64 MB; one written down wins, 16 included.
+        bound("on_foot_detail = on\r\n", L"capdetail", 64 * mib, "on_foot_detail = on with no max_mb line is a 64 MB bound (F125)");
+        bound("on_foot_detail = off\r\n", L"capdetailoff", 16 * mib, "on_foot_detail = off keeps the 16 MB default");
+        bound("on_foot_detail = on\r\nmax_mb = 4\r\n", L"capdetailfour", 4 * mib, "on_foot_detail = on with max_mb = 4 keeps 4 MB (a size written down wins)");
+        bound("on_foot_detail = on\r\nmax_mb = 16\r\n", L"capdetail16", 16 * mib, "on_foot_detail = on with max_mb = 16 written down keeps 16 MB (the 64 is only for a size nobody set)");
+        bound("on_foot_detail = on\r\nmax_mb =\r\n", L"capdetailempty", 64 * mib, "on_foot_detail = on with an empty max_mb line is 64 MB (an empty value is not set)");
+        logcases::run(scratch);
         Log::get().close();
     }
 
@@ -2611,6 +3067,7 @@ int main(int argc, char** argv) {
     iniNameScan(dir);
     realDllChoiceCases(dir);
     retiredKeyScan(dir);
+    retiredNotedKeyScan(dir);
     if (argc >= 3) {
         const std::wstring scratch = widen(argv[2]);
         floatCases(scratch);
@@ -2692,7 +3149,7 @@ int main(int argc, char** argv) {
     expectStr("advanced.vr_camera_census", "off", "flat scope refuses the VR camera census's key");
     Config::get().set("fix.temporal_aa", "dlss");
     Config::get().set("fix.black_void", "on");
-    Config::get().set("fix.explorer_cam_eye_forward", "12");
+    Config::get().set("fix.native_on_foot_world_markers_lead", "12");
     Config::get().set("experimental.night_vision_realistic", "on");
     Config::get().set("advanced.real_dll", "d3d11_edhm.dll");
     expectStr("fix.temporal_aa", "off", "flat discovery cannot activate stereo temporal AA");
@@ -2716,9 +3173,9 @@ int main(int argc, char** argv) {
     Config::get().set("advanced.eye_depth_capture", "on");
     expectBool("advanced.eye_depth_capture", false,
                "flat profile: eye depth capture reads off, so it cannot arm the depth probe or hold the draw gate open");
-    expectInt("fix.explorer_cam_eye_forward", 0, "flat profile suppresses numeric fix");
-    expectFloat("fix.explorer_cam_eye_forward", 0.0f, "flat profile suppresses float fix");
-    if (Config::get().getIntInRange("fix.explorer_cam_eye_forward", 12, 1, 100) != 0)
+    expectInt("fix.native_on_foot_world_markers_lead", 0, "flat profile suppresses numeric fix");
+    expectFloat("fix.native_on_foot_world_markers_lead", 0.0f, "flat profile suppresses float fix");
+    if (Config::get().getIntInRange("fix.native_on_foot_world_markers_lead", 12, 1, 100) != 0)
         fail("flat bounded getter", "minimum reactivated disabled feature");
     else ok("flat scope precedes bounded numeric defaults");
     expectStr("advanced.real_dll", "d3d11_edhm.dll", "flat scope preserves mod chaining");

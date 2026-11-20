@@ -6,6 +6,8 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <utility>
+#include <vector>
 
 #ifdef EDVR_HAVE_VERSION_HEADER
 #include "edvr_version.h"
@@ -72,17 +74,75 @@ class NativeTrace final {
     DWORD written = 0;
     if (WriteFile(file_, line, length, &written, nullptr)) bytes_ += written;
   }
+  // Many lines, one lock and one WriteFile: each line is exactly what write() would have written (same prefix, same cap, same
+  // 8 MiB stop checked per line), but the lines of a batch share one timestamp.
+  void writeBatch(const std::vector<std::string>& messages) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (file_ == INVALID_HANDLE_VALUE || bytes_ >= 8 * 1024 * 1024) return;
+    SYSTEMTIME time{}; GetSystemTime(&time);
+    const DWORD pid = GetCurrentProcessId(), tid = GetCurrentThreadId();
+    std::string out;
+    uint64_t pending = 0;
+    for (const auto& message : messages) {
+      if (bytes_ + pending >= 8 * 1024 * 1024) break;
+      char line[4608]{};
+      const int n = _snprintf_s(line, sizeof(line), _TRUNCATE,
+          "%04u-%02u-%02u %02u:%02u:%02u.%03u UTC pid=%lu tid=%lu %s\r\n",
+          time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond,
+          time.wMilliseconds, pid, tid, message.c_str());
+      const size_t length = n < 0 ? strlen(line) : size_t(n);
+      out.append(line, length);
+      pending += length;
+    }
+    DWORD written = 0;
+    if (!out.empty() && WriteFile(file_, out.data(), static_cast<DWORD>(out.size()), &written, nullptr)) bytes_ += written;
+  }
  private:
   std::mutex mutex_;
   HANDLE file_ = INVALID_HANDLE_VALUE;
   bool attempted_ = false;
   uint64_t bytes_ = 0;
 };
+// While one of these is alive on a thread, that thread's nativeTracePrintf calls are held and written together by close() (or the
+// destructor): one stdout write and one file write for the whole set instead of one each per line. Only the writing moves; every
+// line's text and truncation are what nativeTracePrintf makes of it.
+class NativeTraceBatch final {
+ public:
+  NativeTraceBatch() : previous_(current()) { current() = this; }
+  ~NativeTraceBatch() { close(); }
+  NativeTraceBatch(const NativeTraceBatch&) = delete;
+  NativeTraceBatch& operator=(const NativeTraceBatch&) = delete;
+  static NativeTraceBatch* active() { return current(); }
+  void add(const char* message) {
+    raw_.append(message);
+    std::string line(message);
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+    lines_.push_back(std::move(line));
+  }
+  // Writes what is held and stops diverting; later prints go straight out. Safe to call twice.
+  void close() {
+    if (closed_) return;
+    closed_ = true;
+    current() = previous_;
+    if (lines_.empty()) return;
+    std::fputs(raw_.c_str(), stdout);
+    NativeTrace::get().writeBatch(lines_);
+    lines_.clear();
+    raw_.clear();
+  }
+ private:
+  static NativeTraceBatch*& current() { static thread_local NativeTraceBatch* p = nullptr; return p; }
+  NativeTraceBatch* previous_;
+  bool closed_ = false;
+  std::string raw_;
+  std::vector<std::string> lines_;
+};
 inline void nativeTracePrintf(const char* format, ...) {
   char message[4096]{};
   va_list arguments; va_start(arguments, format);
   _vsnprintf_s(message, sizeof(message), _TRUNCATE, format, arguments);
   va_end(arguments);
+  if (auto* batch = NativeTraceBatch::active()) { batch->add(message); return; }
   std::fputs(message, stdout);
   size_t n = strlen(message);
   while (n && (message[n - 1] == '\n' || message[n - 1] == '\r')) message[--n] = 0;

@@ -103,6 +103,8 @@ import struct
 import sys
 import tempfile
 
+import dump_io   # tools\dump_io.py: the eye dump's .bin files are NAME or NAME.z
+
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TOOLS)
 
@@ -168,7 +170,7 @@ def decode_view(raw):
 
 
 def read_gate(path):
-    data = open(path, 'rb').read()
+    data = dump_io.read_bytes(path)
     s = io.BytesIO(data)
 
     def take(n, what):
@@ -547,7 +549,7 @@ def eye_cameras(pool_dir, stamp, frame, depth, pool_pos):
         return cams
     import eye_draw_snapshot as snap
     path = os.path.join(pool_dir, 'drawstate_%s.eyemesh.bin' % stamp)
-    if not os.path.exists(path):
+    if not dump_io.exists(path):
         return {}
     cap = snap.read(path)
     per_target = {}
@@ -639,19 +641,19 @@ def run(pool_dir, stamp, args):
     print('== run %s' % stamp)
     ver, frames, frame0, inst_stride, _, _, _, draws = ledger.load_draws(os.path.join(pool_dir, 'draws_%s.bin' % stamp))
     gate_path = os.path.join(pool_dir, 'gate_%s.bin' % stamp)
-    gate = read_gate(gate_path) if os.path.exists(gate_path) else None
+    gate = read_gate(gate_path) if dump_io.exists(gate_path) else None
     frame = args.frame or (gate['first'] if gate else frame0 + 1)
     rows = draws.get(frame)
     if rows is None or not len(rows):
         print('  no ledger rows for frame %d' % frame)
         return 1
     pool = ledger.load_pool(os.path.join(pool_dir, 'pool_%s_%d.bin' % (stamp, frame)))
-    inst = np.frombuffer(open(os.path.join(pool_dir, 'inst_%s_%d.bin' % (stamp, frame)), 'rb').read(), dtype=np.uint32)
+    inst = np.frombuffer(dump_io.read_bytes(os.path.join(pool_dir, 'inst_%s_%d.bin' % (stamp, frame))), dtype=np.uint32)
     stride = max(1, inst_stride // 4)
     depth = {}
     for e in 'AB':
         p = os.path.join(pool_dir, 'depth_%s_f%d_%s.bin' % (stamp, frame, e))
-        if not os.path.exists(p):
+        if not dump_io.exists(p):
             print('  no depth file %s: seen/unseen needs both eyes' % os.path.basename(p))
             return 1
         depth[e] = dd.read(p)
@@ -1242,7 +1244,7 @@ def occluders(pool_dir, stamp, frame, recs, seen, cams, rows_of, args):
     import numpy as np
     import eye_draw_snapshot as snap
     path = os.path.join(pool_dir, 'drawstate_%s.eyemesh.bin' % stamp)
-    if not os.path.exists(path):
+    if not dump_io.exists(path):
         print('  no eyemesh snapshot: no occluder geometry')
         return
     geo = snap.read(path).get('geometry') or snap.empty_geometry()
@@ -1388,6 +1390,9 @@ def self_test():
         open(p, 'wb').write(blob)
         r = read_gate(p)
         assert r['version'] == 3 and r['flags'] == 1 | FLAG_PART_HOOKED
+        zp = os.path.join(tmp, 'gate_Z.bin')
+        dump_io.write_z(zp, blob)   # the compressed container the dump writes, read under the original name
+        assert not os.path.exists(zp) and read_gate(zp) == r, 'a compressed gate file reads the same'
         assert r['counts']['faults'] == COUNTERS.index('faults') and r['gates'][0]['lod'] == 3
         assert r['counts']['part_unlinked'] == len(COUNTERS) + PART_COUNTERS.index('part_unlinked'), 'part counters'
         assert (r['counts']['tables_kept'], r['counts']['tables_dropped']) == (20, 21), 'table counters'

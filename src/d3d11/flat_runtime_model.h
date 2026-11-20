@@ -63,6 +63,7 @@ struct FlatRuntimeDraw {
     //   firstPersonCohort: a supported pool draw of the first-person weapon family under an alternate camera, into the scene's
     //     depth (the cohort that draws before the world, near 0.0675 against 0.025). It is no world motion source, so it joins no
     //     source record, and the frame it is in is mixed-camera (FlatMonoFrame::mixedCamera): the foreground contract qualifies it.
+    //     Unlike alternateHdr it is also set where the HDR route judges the weapon (2026-11-16; flat_runtime.cpp, routeOfWeapon).
     //   alternateHdr: an HDR draw from a second camera that is the world's pose, with no depth write (the weapon's glow pass). No
     //     overlay is planned for it, and on a scene H that is still sound it neither sets nor vetoes the scene camera, as the laser
     //     pair does by its shader hashes.
@@ -148,6 +149,10 @@ struct FlatRuntimeTarget {
     const void* overlayDepth = nullptr;
     uint32_t tones = 0;
     FlatRuntimeWitness firstBad{};
+    // Writes after the target's first that were full-screen constant fills (constantFillPass): the Holo-Me screen draws one over its tone
+    // pass. They are part of `writes.draws`; the copy structure's one-pass rule subtracts them (oneDrawThenFills). The count is read only
+    // there: no other rule looks at it, so the whitelist's tone count and the frame contract are what they were.
+    uint32_t constantFills = 0;
     // Every cause that made the target bad, one bit each (1u << FlatRuntimeConflict), where firstBad keeps only the first. A bad mark
     // that names no cause sets bit 0 (None), so a target is camera-only bad (flatRuntimeCameraConflictSpatialOnly) only when
     // CameraChange is the single bit and nothing else ever marked it.
@@ -218,6 +223,8 @@ struct FlatWitnessWriter {
     uint64_t vs = 0, ps = 0;
     const void* b1 = nullptr;
     uint32_t q = 0;            // 0: no such writer
+    uint64_t cameraHash = 0, writeEpoch = 0;   // the writer's own key (the second-camera donor reads them)
+    uint32_t writeSeq = 0;
     uint8_t terms = 0;
     bool has(uint8_t term) const { return (terms & term) != 0; }
 };
@@ -232,9 +239,18 @@ struct FlatRuntimeCameraWitness {
     bool cameraCurrent = false;   // flatRuntimeCameraCurrent of the first writer; a later writer's failing it is a conflict
     FlatWitnessConflict conflict = FlatWitnessConflict::None;
     FlatWitnessWriter offender;   // the writer that first raised `conflict` (q 0 for none, or for an explicit write)
+    bool offenderHasCamera = false;   // conflict == Camera and the offender bound readable camera rows: offenderCamera holds them
+    // conflict == Camera: the entry goes on counting its writers by camera, so the verifier can name the camera the pass's CB2 belongs to
+    // (flatRuntimeDeferredDonor's `select`). pairClean holds while every later writer was current, in the entry's layout, full viewport,
+    // and bound exactly one of the two cameras; a third camera or any other fault ends it for the rest of the frame.
+    bool pairClean = false;
+    bool depthWritten = false;    // an explicit write reached the depth while conflict was None or Camera (the first reason stays in `conflict`)
+    uint32_t firstWriters = 0, offenderWriters = 0;
+    uint64_t offenderLastWriteEpoch = 0; uint32_t offenderLastWriteSeq = 0;
     unsigned char camera[kFlatCameraBytes]{};
+    unsigned char offenderCamera[kFlatCameraBytes]{};
 };
-static_assert(sizeof(FlatRuntimeCameraWitness) <= 256, "keep the camera witness table small: the prefix is rebuilt every frame");
+static_assert(sizeof(FlatRuntimeCameraWitness) <= 448, "keep the camera witness table small: the prefix is rebuilt every frame");
 constexpr uint32_t kFlatRuntimeWitnesses = 16;
 inline bool flatRuntimeWitnessSameCamera(const FlatRuntimeCameraWitness& a, const FlatRuntimeCameraWitness& b) {
     return a.hasCamera && b.hasCamera && a.b1 == b.b1 && a.cameraHash == b.cameraHash &&
@@ -283,6 +299,10 @@ struct FlatRuntimePrefix {
     uint32_t firstPersonDraws = 0;
     // The draws of a pool family left stock (FlatRuntimeDraw::poolFamilyVs): the selector's FlatMonoFrameInput::unsupportedFamilyDraws.
     uint32_t unsupportedFamilyDraws = 0;
+    // Which draws made unsupportedFamilyDraws, the first kFlatFamilyVetoKinds distinct (vs, ps, depth) and how many draws fell past them: a
+    // log line only (flat_source_spell.h flatSourceVetoLine), never part of a verdict or the contract hash, so a replay judges as it did.
+    FlatFamilyVeto familyVetoes[kFlatFamilyVetoKinds];
+    uint32_t familyVetoKinds = 0, familyVetoOverflowDraws = 0;
     // Temporal AA is off this frame (flat_ui_layer_math.h flatUiMapTemporalOff: a map or the Full System Scanner is open): no temporal
     // resolve, no jitter, no history. The runtime sets it at the frame boundary from the frame's one GuiFocus read; it is false in every
     // recorded trace, so a replay judges a frame as it always did.
@@ -292,6 +312,22 @@ struct FlatRuntimePrefix {
     // frame whose first fault was the camera disagreement but which other faults also marked, so it was refused as before.
     bool cameraConflictWaived = false, cameraConflictKept = false;
 };
+// A stock pool-family draw (FlatRuntimeDraw::poolFamilyVs) into the frame's veto table: its (vs, ps, depth) key, the draws that share it, and
+// what the first of them looked like. Draws past the table's kinds are only counted.
+inline void flatRuntimeNoteFamilyVeto(FlatRuntimePrefix& p, const FlatContractObservation& k) {
+    uint32_t at = 0;
+    while (at < p.familyVetoKinds && !(p.familyVetoes[at].vs == k.vs && p.familyVetoes[at].ps == k.ps && p.familyVetoes[at].depth == k.depth)) ++at;
+    if (at == p.familyVetoKinds) {
+        if (at == kFlatFamilyVetoKinds) { ++p.familyVetoOverflowDraws; return; }
+        FlatFamilyVeto& v = p.familyVetoes[at];
+        v = FlatFamilyVeto{};
+        v.vs = k.vs; v.ps = k.ps; v.depth = k.depth;
+        v.width = k.width; v.height = k.height;
+        v.color = k.color != nullptr; v.camera = k.camera != nullptr;
+        ++p.familyVetoKinds;
+    }
+    ++p.familyVetoes[at].draws;
+}
 // Only a current reducer attestation makes forward-camera refusal global.
 // Retained phase-planning H identity is not current authority. Keep the tone
 // proof after revocation clears hdrCamera/sets hdrBad, so cancellation still
@@ -381,6 +417,7 @@ inline bool flatRuntimeCameraCurrent(const FlatRuntimeDraw& d, uint32_t q, uint6
 inline FlatWitnessWriter flatRuntimeWitnessWriter(const FlatRuntimeDraw& d, uint32_t q, uint64_t frame) {
     const auto& k = d.key;
     FlatWitnessWriter w; w.vs = k.vs; w.ps = k.ps; w.b1 = k.b1; w.q = q;
+    w.cameraHash = k.cameraHash; w.writeEpoch = k.writeEpoch; w.writeSeq = k.writeSeq;
     unsigned terms = 0;
     if (k.camera) terms |= kWitnessTermCamera;
     if (k.writeEpoch == frame) terms |= kWitnessTermEpoch;
@@ -389,6 +426,24 @@ inline FlatWitnessWriter flatRuntimeWitnessWriter(const FlatRuntimeDraw& d, uint
     if (k.camera && (d.cameraHashTrusted || k.cameraHash == flatCameraHash(d.camera))) terms |= kWitnessTermHash;
     w.terms = static_cast<uint8_t>(terms);
     return w;
+}
+// A writer after a Camera conflict: counted against the camera it bound. Anything but a current, full-viewport writer in the entry's layout
+// with exactly one of the two cameras ends pairClean for the rest of the frame.
+inline void flatRuntimeWitnessPairWriter(FlatRuntimeCameraWitness& e, const FlatRuntimeDraw& d, uint32_t q, uint64_t frame) {
+    const auto& k = d.key;
+    const bool layout = k.dsv == e.dsv && k.width == e.width && k.height == e.height && k.depthWidth == e.depthWidth &&
+        k.depthHeight == e.depthHeight && k.format == e.format && k.depthFormat == e.depthFormat;
+    if (!layout || !k.camera || !flat_mono_detail::fullViewport(k, k.width, k.height) || !flatRuntimeCameraCurrent(d, q, frame)) {
+        e.pairClean = false; return;
+    }
+    if (e.hasCamera && e.b1 == k.b1 && e.cameraHash == k.cameraHash && std::memcmp(e.camera, d.camera, kFlatCameraBytes) == 0) {
+        ++e.firstWriters; e.lastWriteEpoch = k.writeEpoch; e.lastWriteSeq = k.writeSeq; return;
+    }
+    if (e.offenderHasCamera && e.offender.b1 == k.b1 && e.offender.cameraHash == k.cameraHash &&
+        std::memcmp(e.offenderCamera, d.camera, kFlatCameraBytes) == 0) {
+        ++e.offenderWriters; e.offenderLastWriteEpoch = k.writeEpoch; e.offenderLastWriteSeq = k.writeSeq; return;
+    }
+    e.pairClean = false;
 }
 // One Screen-kind writer that is not a supported pair, noted while no source record exists on its depth (a source record there means the
 // pool rule alone decides, now and for the rest of the frame: records are never removed). The first writer of a (depth, colour) makes the
@@ -401,7 +456,11 @@ inline void flatRuntimeNoteWitness(FlatRuntimePrefix& p, const FlatRuntimeDraw& 
     FlatRuntimeCameraWitness* e = nullptr;
     for (uint32_t i = 0; i < p.witnessesUsed; ++i)
         if (p.witnesses[i].depth == k.depth && p.witnesses[i].color == k.color) { e = &p.witnesses[i]; break; }
-    if (e && e->conflict != FlatWitnessConflict::None) { ++e->writers; e->last = q; return; }
+    if (e && e->conflict != FlatWitnessConflict::None) {
+        ++e->writers; e->last = q;
+        if (e->conflict == FlatWitnessConflict::Camera && e->pairClean) flatRuntimeWitnessPairWriter(*e, d, q, p.frame);
+        return;
+    }
     const bool full = flat_mono_detail::fullViewport(k, k.width, k.height);
     const bool current = flatRuntimeCameraCurrent(d, q, p.frame);
     if (!e || !e->writers) {   // a new entry, or one a colour write restarted (flatRuntimeWitnessWritten)
@@ -430,6 +489,13 @@ inline void flatRuntimeNoteWitness(FlatRuntimePrefix& p, const FlatRuntimeDraw& 
     else if (!sameCamera) e->conflict = FlatWitnessConflict::Camera;
     else { e->lastWriteEpoch = k.writeEpoch; e->lastWriteSeq = k.writeSeq; return; }
     e->offender = flatRuntimeWitnessWriter(d, q, p.frame);   // this writer raised the conflict; the first reason is kept above
+    if (e->conflict == FlatWitnessConflict::Camera && k.camera) {   // kept so the log can say which camera the pass's CB2 carries
+        std::memcpy(e->offenderCamera, d.camera, kFlatCameraBytes); e->offenderHasCamera = true;
+        // every writer before the offender bound the first camera (an unconflicted entry's writers agree); the offender is the first to bind the second
+        e->pairClean = e->hasCamera && e->cameraCurrent && e->fullViewport;
+        e->firstWriters = e->writers - 1; e->offenderWriters = 1;
+        e->offenderLastWriteEpoch = k.writeEpoch; e->offenderLastWriteSeq = k.writeSeq;
+    }
 }
 enum class FlatDeferredDonorRole : uint8_t { None, Pool, Witness };
 inline const char* flatDeferredDonorRoleName(FlatDeferredDonorRole r) {
@@ -559,9 +625,23 @@ struct FlatDeferredDonor {
     uint64_t entryFirstVs = 0, entryFirstPs = 0;
     bool entryHasCamera = false;
     FlatWitnessWriter offender;
+    // The entry's first camera and, for conflict == Camera, the offender's (null when absent). Log only: neither is ever a donor.
+    const unsigned char* entryCamera = nullptr, *offenderCamera = nullptr;
+    // conflict == Camera: the entry's writers by camera, and whether the verifier may name one of the two (pairSelectable: the entry is the
+    // depth's only one, clean, current, in this draw's layout and written before q). selected: this donor is the camera the caller named.
+    uint32_t firstWriters = 0, offenderWriters = 0;
+    bool pairClean = false, pairSelectable = false, selected = false;
     // The first other entry on the depth that carried another camera (why == OtherCamera): its colour, b1 and camera hash.
     const void* vetoColor = nullptr, *vetoB1 = nullptr;
     uint64_t vetoHash = 0;
+    // Two or more source records on the depth, each a qualified pool record of the pass's SRV0 in its layout (poolSelectable). Records are
+    // one per camera, so these are as many cameras: the held tool's first person beside the world's (2026-11-10). The verifier, which holds
+    // CB2, may name the one CB2 belongs to (`select`), as it does for a two-camera witness entry. poolCameras are the records' 96 bytes, in
+    // record order; selected then says the donor is the named one.
+    static constexpr uint32_t kPoolCameras = 4;
+    uint32_t poolCameraCount = 0;
+    const unsigned char* poolCameras[kPoolCameras] = {};
+    bool poolSelectable = false;
     explicit operator bool() const { return role != FlatDeferredDonorRole::None; }
 };
 // A laser-family H draw is normally an alternate-camera weapon draw. It may
@@ -571,7 +651,8 @@ struct FlatDeferredDonor {
 // names the same scene depth. The image copy's bound b1 is never evidence.
 
 // The one donor resolver: the verifier, its binding-failure path and the model's qualification all ask it, so they cannot disagree.
-// (a) The pool rule is the single qualified source record on the depth, writing the draw's SRV0. (b) Only where no source record of any
+// (a) The pool rule is the single qualified source record on the depth, writing the draw's SRV0, or, where every record on the depth is
+// one, the record whose camera the caller names from CB2 (poolSelectable). (b) Only where no source record of any
 // kind exists on the depth does the witness stand in. (c) It must be an unconflicted entry for (depth, SRV0) of another target, of the
 // draw's dsv, depth format and extent, with a full viewport and a current camera, written before q; (d) and no other entry on the
 // depth may carry a different camera, so a second camera on the depth fails closed. (e) Where no source record and no entry stand on the
@@ -579,7 +660,7 @@ struct FlatDeferredDonor {
 // why == EmptyGBuffer rather than NoEntry (flatRuntimeEmptyGBuffer). It is never a donor: role stays None, so nothing that asks a donor
 // for a camera gets one.
 inline FlatDeferredDonor flatRuntimeDeferredDonor(const FlatRuntimePrefix& p,
-        const FlatContractObservation& k,uint32_t q,const void* const* gbuffer=nullptr) {
+        const FlatContractObservation& k,uint32_t q,const void* const* gbuffer=nullptr,const unsigned char* select=nullptr) {
     using namespace flat_mono_detail;
     FlatDeferredDonor out;
     if(k.depth)for(uint32_t i=0;i<p.sourcesUsed;++i)if(p.sources[i].key.depth==k.depth)++out.poolRecords;
@@ -591,15 +672,30 @@ inline FlatDeferredDonor flatRuntimeDeferredDonor(const FlatRuntimePrefix& p,
        !k.srvView[0] || !k.srvResource[0] || !fullViewport(k,k.width,k.height))return out;
     if(out.poolRecords) {
         out.why=FlatDeferredDonorWhy::PoolRule;
-        const FlatContractRecord* donor=nullptr;
+        // Every source record on the depth must be a qualified pool record of the pass's SRV0 in its layout, current, and before q; one
+        // such record is the donor. Records are one per camera (flatRuntimeSameCamera), so two or more are as many cameras, all of them
+        // known: then only the camera the caller names from CB2 (`select`) is the donor, by its 96 bytes, and only when exactly one record
+        // carries them. Unnamed, or named to none or to two, there is no donor, as before. More records than kPoolCameras: none.
+        const FlatContractRecord* candidates[FlatDeferredDonor::kPoolCameras]{};
+        uint32_t n=0;
         for(uint32_t i=0;i<p.sourcesUsed;++i) {
             const auto& r=p.sources[i];if(r.key.depth!=k.depth)continue;
-            if(donor || r.key.kind!=kFlatContractPool || !r.key.color || !r.key.rtv ||
+            if(n==FlatDeferredDonor::kPoolCameras || r.key.kind!=kFlatContractPool || !r.key.color || !r.key.rtv ||
                r.key.color!=k.srvResource[0] || r.key.color==k.color || r.key.dsv!=k.dsv ||
                r.key.depthFormat!=k.depthFormat || r.key.width!=k.width || r.key.height!=k.height ||
                r.key.depthWidth!=k.width || r.key.depthHeight!=k.height ||
                !fullViewport(r.key,k.width,k.height) || !cameraCurrent(r,p.frame) || r.last>=q)return out;
-            donor=&r;
+            candidates[n++]=&r;
+        }
+        const FlatContractRecord* donor=n==1?candidates[0]:nullptr;
+        if(n>1) {
+            out.poolSelectable=true;out.poolCameraCount=n;
+            for(uint32_t i=0;i<n;++i)out.poolCameras[i]=candidates[i]->camera;
+            if(!select)return out;
+            for(uint32_t i=0;i<n;++i)
+                if(std::memcmp(select,candidates[i]->camera,kFlatCameraBytes)==0){if(donor)return out;donor=candidates[i];}
+            if(!donor)return out;
+            out.selected=true;
         }
         if(!donor)return out;
         out.role=FlatDeferredDonorRole::Pool;out.why=FlatDeferredDonorWhy::None;
@@ -618,7 +714,8 @@ inline FlatDeferredDonor flatRuntimeDeferredDonor(const FlatRuntimePrefix& p,
         if(w.hasCamera && !seen)++out.witnessCameras;
     }
     if(e){out.entry=true;out.writers=e->writers;out.conflict=e->conflict;out.entryCameraHash=e->hasCamera?e->cameraHash:0;out.entryB1=e->b1;
-        out.entryFirst=e->first;out.entryFirstVs=e->firstVs;out.entryFirstPs=e->firstPs;out.entryHasCamera=e->hasCamera;out.offender=e->offender;}
+        out.entryFirst=e->first;out.entryFirstVs=e->firstVs;out.entryFirstPs=e->firstPs;out.entryHasCamera=e->hasCamera;out.offender=e->offender;
+        out.entryCamera=e->hasCamera?e->camera:nullptr;out.offenderCamera=e->offenderHasCamera?e->offenderCamera:nullptr;}
     if(p.witnessOverflow){out.why=FlatDeferredDonorWhy::Overflow;return out;}
     if(!e){
         out.why=FlatDeferredDonorWhy::NoEntry;
@@ -629,7 +726,31 @@ inline FlatDeferredDonor flatRuntimeDeferredDonor(const FlatRuntimePrefix& p,
         }
         return out;
     }
-    if(e->conflict!=FlatWitnessConflict::None){out.why=FlatDeferredDonorWhy::Conflict;return out;}
+    if(e->conflict!=FlatWitnessConflict::None) {
+        out.why=FlatDeferredDonorWhy::Conflict;
+        if(e->conflict!=FlatWitnessConflict::Camera)return out;
+        // Two cameras drew into the entry. Neither is a donor on the entry's say-so, but where the entry is the depth's only one, kept
+        // every writer's camera (pairClean), and stands in this draw's layout, the caller that holds the pass's CB2 may name the one the
+        // CB2 belongs to (`select`: that camera's 96 bytes). Nothing is selected unless the bytes name exactly one of the two.
+        out.firstWriters=e->firstWriters;out.offenderWriters=e->offenderWriters;out.pairClean=e->pairClean;
+        out.pairSelectable=out.witnessEntries==1 && e->pairClean && e->hasCamera && e->cameraCurrent && e->offenderHasCamera &&
+            e->writers && e->color!=k.color && e->rtv && e->dsv==k.dsv && e->depthFormat==k.depthFormat && e->width==k.width &&
+            e->height==k.height && e->depthWidth==k.width && e->depthHeight==k.height && e->fullViewport && e->last<q;
+        if(!out.pairSelectable || !select)return out;
+        const bool isFirst=std::memcmp(select,e->camera,kFlatCameraBytes)==0,isOffender=std::memcmp(select,e->offenderCamera,kFlatCameraBytes)==0;
+        if(isFirst==isOffender)return out;
+        out.role=FlatDeferredDonorRole::Witness;out.why=FlatDeferredDonorWhy::None;out.selected=true;
+        out.color=e->color;out.last=e->last;
+        if(isFirst) {
+            out.b1=e->b1;out.camera=e->camera;out.cameraHash=e->cameraHash;out.writeEpoch=e->writeEpoch;out.writeSeq=e->writeSeq;
+            out.lastWriteEpoch=e->lastWriteEpoch;out.lastWriteSeq=e->lastWriteSeq;out.first=e->first;
+        } else {
+            out.b1=e->offender.b1;out.camera=e->offenderCamera;out.cameraHash=e->offender.cameraHash;out.writeEpoch=e->offender.writeEpoch;
+            out.writeSeq=e->offender.writeSeq;out.lastWriteEpoch=e->offenderLastWriteEpoch;out.lastWriteSeq=e->offenderLastWriteSeq;
+            out.first=e->offender.q;
+        }
+        return out;
+    }
     if(!e->writers){out.why=FlatDeferredDonorWhy::NoEntry;return out;}   // a colour write restarted it, no writer since
     if(e->color==k.color){out.why=FlatDeferredDonorWhy::SameColor;return out;}
     if(!e->rtv || e->dsv!=k.dsv || e->depthFormat!=k.depthFormat || e->width!=k.width || e->height!=k.height ||
@@ -655,7 +776,8 @@ inline FlatDeferredDonor flatRuntimeDeferredDonor(const FlatRuntimePrefix& p,
 inline bool flatRuntimeQualifiedDeferredCamera(const FlatRuntimePrefix& p,const FlatRuntimeTarget& t,
         const FlatRuntimeDraw& d,uint32_t q) {
     if(!d.deferredHdrVerified || d.key.camera || t.writes.draws || t.hdrBad || t.hdrCamera || t.hdrLayoutChanged)return false;
-    const auto donor=flatRuntimeDeferredDonor(p,d.key,q);const auto& projection=d.key.projection[1];
+    // d.camera is the camera the verifier took (the donor's); only a Camera-conflict entry reads it, as the camera the verifier named.
+    const auto donor=flatRuntimeDeferredDonor(p,d.key,q,nullptr,d.camera);const auto& projection=d.key.projection[1];
     return donor && d.key.cameraHash==donor.cameraHash &&
         std::memcmp(d.camera,donor.camera,kFlatCameraBytes)==0 && projection.resource &&
         projection.status==FlatProjectionStatus::Available && projection.width>=kFlatDeferredCameraMinWidth &&
@@ -739,18 +861,20 @@ inline FlatRuntimeTarget* flatRuntimeTarget(FlatRuntimePrefix& p, const void* re
 // A write to a witnessed colour replaces what its writers drew there (a deferred renderer clears the
 // G-buffer after a depth prepass that bound it with colour writes off): the entry restarts empty, and
 // only writers after the write speak for the colour. A write to the witnessed depth is content no
-// writer drew, and a later colour write does not undo it: that conflict stays.
+// writer drew, and a later colour write does not undo it: that conflict stays. A Camera conflict keeps its reason (the log names it) but
+// the pair of cameras no longer describes the depth: pairClean ends, and the write outlives a colour restart.
 inline void flatRuntimeWitnessWritten(FlatRuntimePrefix& p, const void* resource) {
     for (uint32_t i = 0; i < p.witnessesUsed; ++i) {
         auto& w = p.witnesses[i];
         if (w.color == resource) {
             const void* const depth = w.depth;
-            const bool depthWritten = w.conflict == FlatWitnessConflict::Written;
+            const bool depthWritten = w.conflict == FlatWitnessConflict::Written || w.depthWritten;
             w = FlatRuntimeCameraWitness{};
             w.depth = depth; w.color = resource;
             if (depthWritten) w.conflict = FlatWitnessConflict::Written;
-        } else if (w.depth == resource && w.conflict == FlatWitnessConflict::None) {
-            w.conflict = FlatWitnessConflict::Written;
+        } else if (w.depth == resource) {
+            if (w.conflict == FlatWitnessConflict::None) w.conflict = FlatWitnessConflict::Written;
+            else if (w.conflict == FlatWitnessConflict::Camera) { w.pairClean = false; w.depthWritten = true; }
         }
     }
 }
@@ -969,6 +1093,7 @@ inline FlatMonoFrame flatRuntimeObserve(FlatRuntimePrefix& p, const FlatRuntimeD
             (d.effectiveStencilWrite && !d.overlayProtected)) && k.depth == suffix.overlayDepth)
             bad(suffix, FlatRuntimeConflict::OverlaySuffix, suffix.tone);
     }
+    if (d.poolFamilyVs) flatRuntimeNoteFamilyVeto(p, d.key);   // the log's names for the stock family draws counted below
     flatRuntimeReachedDraw(p, k);   // a draw reaches its depth and its colour, and a depth-only draw its depth
     if (d.poolFamilyVs) ++p.unsupportedFamilyDraws;
     if (!k.color) return out;
@@ -1131,7 +1256,7 @@ inline FlatMonoFrame flatRuntimeObserve(FlatRuntimePrefix& p, const FlatRuntimeD
             t->hdrCamera=true;
         }
         if(flatRuntimeQualifiedDeferredCamera(p,*t,d,q)) {
-            const auto donor=flatRuntimeDeferredDonor(p,k,q);
+            const auto donor=flatRuntimeDeferredDonor(p,k,q,nullptr,d.camera);
             t->tone=current();t->tone.deferredCamera=true;t->tone.deferredInverseRepaired=d.deferredInverseRepaired;t->tone.sceneCameraB1=donor.b1;
             t->tone.sceneCameraWriteEpoch=donor.writeEpoch;t->tone.sceneCameraWriteSeq=donor.writeSeq;
             t->tone.key.camera=donor.camera;
@@ -1210,7 +1335,8 @@ inline FlatMonoFrame flatRuntimeObserve(FlatRuntimePrefix& p, const FlatRuntimeD
     }
     if (!t->writes.draws) t->writes = current();
     else { ++t->writes.draws; t->writes.last = q; t->writes.lastInstances = d.instances;
-        if (k.camera) { t->writes.lastWriteEpoch = k.writeEpoch; t->writes.lastWriteSeq = k.writeSeq; } }
+        if (k.camera) { t->writes.lastWriteEpoch = k.writeEpoch; t->writes.lastWriteSeq = k.writeSeq; }
+        if (constantFillPass(k)) ++t->constantFills; }
     if (k.format != 9 && toneHdrSlot(k.vs, k.ps) != ~0u) { ++t->tones; t->tone = current(); }
     if (d.firstPersonCohort && d.supported && k.depth && k.kind == kFlatContractPool) {
         // Not a world source (FlatRuntimeDraw::firstPersonCohort): counted, never a source record. A cohort in two depths is a frame

@@ -11,21 +11,33 @@
 #include "../../src/common/native_temporal.h"
 #include "../../src/common/config.h"
 #include "../../src/common/frame_flag.h"
+#include "../../src/common/temporal_mode.h"   // the map gate's pass verdict bits and flag (temporalMapStillBits, kTemporalFlagMapKeep)
 #include "../../src/d3d11/temporal_pass.h"
 #include "../../src/d3d11/ui_layer.h"
 #include "../../src/d3d11/ui_surfaces.h"
 #include "../../src/d3d11/vr_camera_census.h"
 #include "../../src/d3d11/dlss_floor.h"
+#include "../../src/d3d11/scope_zoom_b3.h"   // B3: the temporal pass's word on eye 0 (nativeTemporalZoom and its neighbours)
 #include "../../src/openxr/native_temporal_client.h"
 #include "../../src/common/system_d3d11.h"
 #include "../../src/d3d11/glitch_frame.h"
 #include "../../src/d3d11/transition_flash_eye_base.h"
 #include "../../src/common/runtime_profile.h"
+#include "../../src/common/game_build.h"
 #pragma comment(linker, "/EXPORT:edvrAcquireNativeTemporal")
 using Microsoft::WRL::ComPtr;
 unsigned checks=0,failures=0,dumps=0;
 void check(bool x,const char* why){++checks;if(!x){++failures;std::printf("FAIL: %s\n",why);}}
 void require(bool x,const char* why){check(x,why);if(!x)throw std::runtime_error(why);}
+// Linker stubs for the game-build resolver (src\common\game_build.h): this rig links the production transition_flash_eye_base.cpp but not
+// game_build.cpp. The test process is an unknown build whose every address the resolver does not find, so the engine fix stands down.
+namespace edvr{
+bool gameBuildIdentity(uint32_t* stamp,uint32_t* size) noexcept{if(stamp)*stamp=0;if(size)*size=0;return true;}
+bool gameBuildKnown() noexcept{return false;}
+const char* gameBuildText() noexcept{return "unknown build (rig)";}
+uintptr_t gameRva(uint32_t) noexcept{return 0;}
+bool gamePinMatches(uint32_t,const uint8_t*,const uint8_t*,size_t) noexcept{return false;}
+}
 bool closeFloat(float a,float b,float epsilon=1e-5f){return std::fabs(a-b)<=epsilon;}
 struct Call {
   unsigned eye=0,flags=0,outW=0,outH=0;float jx=0,jy=0,nearZ=0,farZ=0,headDeg=0;
@@ -50,11 +62,18 @@ void askFromInsideTreat(){
       ID3D11Device* dv=nullptr;unsigned long th=0;reentryWarm=edvr::nativeTemporalWarmTarget(&dv,&th);}
   catch(...){++reentryThrows;}
 }
+// F198: what the Anti-aliasing-off branch of treat publishes (the eye's frustum, the eye offset alone, the submitted texture's size): recorded here, asserted below.
+unsigned eyeTanNotes=0,offsetOnlyNotes=0,submittedSizedNotes=0;float eyeTanLast[2][4]{},offsetOnlyLast[3]{};uint32_t submittedSizedLast[3]{};
+// F202: what the same branch tells the scope lens's depth (temporalPassNoteOffAaSceneDepth): the call count, and the last call's eye, source, region and near plane.
+unsigned offAaDepthNotes=0;int offAaDepthEye=-1;const void* offAaDepthSource=nullptr;uint32_t offAaDepthRegion[4]{};float offAaDepthNear=-1.f;
 extern "C" void edvrTemporalAaNoteHead(int eye,const float* previous,const float* current,const float* offset) {
+  if(!previous&&!current&&offset){++offsetOnlyNotes;std::memcpy(offsetOnlyLast,offset,12);}
   note={};note.eye=unsigned(eye);note.head=previous&&current&&offset;
   if(note.head){std::memcpy(note.previousHead,previous,48);std::memcpy(note.currentHead,current,48);std::memcpy(note.offset,offset,12);}
 }
 namespace edvr {
+unsigned mapLogCalls=0;
+void temporalPassLogMap() { ++mapLogCalls; }
 void temporalPassNoteEyes(int, const float (*previous)[12], const float (*current)[12]) {
   note.eyes=previous&&current;
   if(note.eyes){std::memcpy(note.previousEyes,previous,sizeof(note.previousEyes));
@@ -83,13 +102,25 @@ unsigned worldRouteSceneResets=0;
 namespace edvr{void breadcrumb(const char*){}}
 namespace edvr{void uiLayerNoteTemporal(uint64_t seq,uint32_t eye,const void* out){++uiLayerNotes;uiLayerNoteSeq=seq;uiLayerNoteEye=eye;uiLayerNoteOut=out;}
 void uiLayerNoteSubmitted(uint64_t,uint32_t eye,const void* submitted){++uiLayerSubmits;if(eye<2)uiLayerSubmitted[eye]=submitted;}
+void uiLayerNoteSubmittedSized(uint32_t eye,const void*,uint32_t w,uint32_t h){++submittedSizedNotes;submittedSizedLast[0]=eye;submittedSizedLast[1]=w;submittedSizedLast[2]=h;}
+void temporalPassNoteEyeTan(int eye,const float* tan){++eyeTanNotes;if(eye>=0&&eye<2&&tan)std::memcpy(eyeTanLast[eye],tan,16);}
+void temporalPassNoteOffAaSceneDepth(int eye,ID3D11Texture2D* source,const uint32_t region[4],float nearZ){++offAaDepthNotes;offAaDepthEye=eye;offAaDepthSource=source;if(region)std::memcpy(offAaDepthRegion,region,16);offAaDepthNear=nearZ;}
 void vrWorldRouteNoteSceneReset(){++worldRouteSceneResets;}}
 // The terrain cull cover (src/d3d11/terrain_cull_cover_hook.cpp, docs/terrain-culling.md), which begin() tells the frusta the game is handed: recorded here, asserted below.
 unsigned coverNotes=0;float coverLast[2][4]{};
 namespace edvr{void terrainCullCoverNoteFrusta(const float f[2][4]){++coverNotes;std::memcpy(coverLast,f,sizeof(coverLast));}}
+// The journal watcher's GuiFocus (src/d3d11/journal_watch.cpp), which begin() reads once a frame for the map gate: scripted here.
+bool mapFocusKnown=false;uint32_t mapFocus=0;
+namespace edvr{bool journalGuiFocus(uint32_t* focus){if(focus)*focus=mapFocus;return mapFocusKnown;}}
+// The VR map camera (src/d3d11/flat_stationary_camera_capture.cpp), which begin() asks whether a map view is named: scripted here.
+bool mapViewNamed=false;
+namespace edvr{bool mapCameraAnyOpen() noexcept{return mapViewNamed;}}
 // The light grid cache's jitter probe (src/d3d11/light_grid_cache_hook.cpp), which begin() tells this frame's jitter: recorded here, asserted below.
 unsigned jitterNotes=0;float jitterLastShift[2][2]{};
 namespace edvr{void lightGridCacheNoteJitter(uint64_t,float,float,const float shift[2][2]){++jitterNotes;std::memcpy(jitterLastShift,shift,sizeof(jitterLastShift));}}
+// ... and, for B3, whether eye 0 is zoomed in the frame begin() was given.
+int zoomedFrameNotes=0;bool zoomedFrameLast=false;
+namespace edvr{void lightGridCacheNoteZoomedFrame(bool z){++zoomedFrameNotes;zoomedFrameLast=z;}}
 // The served floor's NGX query (dlaa.cpp), shaped the way the flights'
 // modes lines read (edvr_gfx_20260923_153446.log line 435): quality,
 // balanced and performance take half the output up to the output, ultra
@@ -119,6 +150,8 @@ namespace edvr{
 bool vrWorldRouteOwnsNextFrame(){return routeOwns;}
 // The layer's one predicate for a layer-only eye (src/d3d11/ui_layer.h): the route's re-issued world, or a map's or menu's 2D screen
 // the layer took under the on-foot maps gate. The door cannot tell which, so one stub answers for both.
+namespace detail { bool g_uiLayerMapRunHeld=false; } // the Galaxy Map's run of sprites is never held in this rig; the doors only ask (src/d3d11/ui_layer.h)
+void uiLayerMapRunEndSlow(ID3D11DeviceContext*){}
 bool uiLayerDoorLayerOnly(uint32_t eye,uint64_t seq){return eye<2&&routeTookEye[eye]&&seq!=0&&routeTookSeq==seq;}
 int uiLayerWorldDoorGap(uint64_t,uint32_t,ID3D11Texture2D* frame){++gapCalls;gapFrame=frame;return gapAnswer;}
 void vScreenClearRenderTargetViewRaw(ID3D11DeviceContext* c,ID3D11RenderTargetView* v,const float colour[4]){++rawClears;c->ClearRenderTargetView(v,colour);}
@@ -272,7 +305,7 @@ void glue(EdvrNativeTemporalTable& t,ID3D11Texture2D* source,uint64_t gen,uint64
     edvr::transitionFlashEyeBaseArmForTest();
   }
   { // The install path reads no setting: the hold is always on in the VR profile. Run for real (the test process is not
-    // build 334925, so the identity check refuses and nothing is hooked; what is asserted is that install RAN).
+    // build 334925 and the consumer is not found by signature, so nothing is hooked; what is asserted is that install RAN).
     edvr::transitionFlashEyeBaseResetForTest();
     check(!edvr::transitionFlashEyeBaseInstallAttemptedForTest(),"glue: install: the reset leaves a process that never installed");
     edvr::Config::get().set("fix.transition_flash","0");
@@ -346,6 +379,13 @@ void run(){
          "...and eye 1's own");
    check(!edvr::nativeTemporalEyeGeometry(2,&es,fr,sh),"the eye geometry refuses an eye that does not exist");
    check(edvr::nativeTemporalEyeGeometry(0,nullptr,nullptr,nullptr),"a caller may ask for any subset of the answer");}
+  // The SRV turret HUD's anchored move needs the head and the eyes (vr_camera_census.h): the host's 3x4 row-major matrices, translation in [3], [7], [11], for the frame being drawn.
+  {uint64_t hs=0;float hd[12]{},eh[2][12]{};
+   check(edvr::nativeTemporalHeadPose(&hs,hd,eh)&&hs==2&&closeFloat(hd[3],.1f)&&closeFloat(hd[0],1.f)&&closeFloat(hd[5],1.f)&&closeFloat(hd[10],1.f)&&closeFloat(eh[0][3],-.032f)&&
+         closeFloat(eh[1][3],.032f)&&closeFloat(eh[0][0],1.f)&&closeFloat(eh[1][10],1.f),
+         "the head pose is the head and eyeToHead matrices the host gave (3x4 row-major, translation in [3], [7], [11]), for the frame being drawn");
+   check(edvr::nativeTemporalHeadPose(nullptr,nullptr,nullptr),"a caller may ask for any subset of the head pose");
+   check(edvr::nativeTemporalFrameSequence()==2&&edvr::nativeTemporalFrameSequence()==hs,"the frame sequence is the head pose's, a lock-free read");}
   check(uiLayerNotes>=3&&uiLayerNoteSeq==2&&uiLayerNoteEye==0&&uiLayerNoteOut==source.Get(),"each treated eye is noted to the UI layer with the pass's output");
   check(uiLayerSubmits>=3&&uiLayerSubmitted[0]==source.Get()&&uiLayerSubmitted[1]==source.Get(),"the game's submitted texture is noted per eye for the UI layer's eye check");
   check(std::fabs(c.jx)>.01f||std::fabs(c.jy)>.01f,"known-size jitter engaged");
@@ -362,6 +402,7 @@ void run(){
   check(t.invalidate(t.context)==S_OK,"CPU invalidation");check(treat(t,5,0,source.Get())==E_INVALIDARG,"invalidated frame cannot treat");check(t.beginFrame(t.context,&f,&p)==E_INVALIDARG,"invalidated sequence cannot reopen");
   {uint32_t rw=0,rh=0;float u=0,dn=0;check(!edvr::nativeTemporalRecommended(&rw,&rh)&&!edvr::nativeTemporalVerticalTangents(&u,&dn)&&!edvr::nativeTemporalAsked(&rw,&rh)&&!edvr::nativeTemporalTrueVerticalTangents(&u,&dn),"no recommendation, frustum, ask or true frustum once the channel is invalidated");}
   {uint64_t es=0;float fr[4]{},sh[2]{};check(!edvr::nativeTemporalEyeGeometry(0,&es,fr,sh),"no eye geometry once the channel is invalidated");}
+  {uint64_t hs=0;float hd[12]{},eh[2][12]{};check(!edvr::nativeTemporalHeadPose(&hs,hd,eh)&&edvr::nativeTemporalFrameSequence()==0,"no head pose, and no frame sequence, once the channel is invalidated");}
   f=frame(11,6);p=begin(t,f);auto larger=d.texture(640,480);check(treat(t,6,0,larger.Get())==S_OK,"resize treatment");c=calls.back();
   check((c.flags&1)&&!c.eyes,"resize reset clears the previous eye geometry");check(closeFloat(c.jx,-p.tangentShift[0][0]*640/1.9f),"resize converts jitter to actual pixels");
   Device other;auto foreign=other.texture();check(treat(t,6,1,foreign.Get())==E_INVALIDARG,"wrong device rejected");
@@ -372,7 +413,46 @@ void run(){
   f=frame(11,8);p=begin(t,f);check(p.tangentShift[0][0]==0&&p.tangentShift[0][1]==0,"flipped eye suppresses jitter");
   check(treat(t,8,0,source.Get())==S_OK&&(calls.back().flags&1),"unflipped image resets history");
   f=frame(11,9);begin(t,f,false);check(treat(t,9,0,source.Get())==E_PENDING,"no projection query cannot justify jittered image metadata");
+  // A map is open (GuiFocus 6, 7, 8; temporal_mode.h temporalMapOpen): the frames it opens and closes on take no history and no jitter; between them the pass judges
+  // (flags bit 8) and begin() jitters only behind a frame it kept. The pass is a stub here: it is the rig that plays its word (temporalMapStillBits).
+  // On this channel (the rig's pool of 16 states has none to spare); the sequences continue from the last begun frame, 9.
+  {
+    auto shiftedNow=[](const EdvrNativeTemporalProjection& q){return q.tangentShift[0][0]!=0||q.tangentShift[0][1]!=0||q.tangentShift[1][0]!=0||q.tangentShift[1][1]!=0;};
+    mapFocusKnown=true;mapFocus=0;
+    auto fm=frame(11,10);begin(t,fm);check(treat(t,10,0,source.Get())==S_OK&&treat(t,10,1,source.Get())==S_OK,"map gate: a first frame rebuilds the history");
+    fm=frame(11,11);auto pm=begin(t,fm);
+    check(shiftedNow(pm),"map gate: with no screen open the frame is jittered");
+    check(treat(t,11,0,source.Get())==S_OK&&!(calls.back().flags&1),"map gate: and its history carries");treat(t,11,1,source.Get());
+    // The map opens: the frame it opens on is an edge, so the pass is handed no history and the frame goes out unjittered.
+    mapFocus=6;fm=frame(11,12);pm=begin(t,fm);
+    check(!shiftedNow(pm),"map gate: the Galaxy Map's first frame is not jittered");
+    check(treat(t,12,0,source.Get())==S_OK&&(calls.back().flags&1)&&!(calls.back().flags&edvr::kTemporalFlagMapKeep),"map gate: and hands the pass no history, nothing of the screen before it carried in");treat(t,12,1,source.Get());
+    // Steady: the pass judges (bit 8), the history is not reset by native_temporal, and the jitter waits for the pass's word that the camera followed the head.
+    mapFocus=7;fm=frame(11,13);pm=begin(t,fm);
+    check(!shiftedNow(pm),"map gate: with no word from the pass that the camera followed the head, the next frame is not jittered");
+    check(treat(t,13,0,source.Get())==S_OK&&(calls.back().flags&edvr::kTemporalFlagMapKeep)&&!(calls.back().flags&1),"map gate: the System Map hands the pass its history and the map bit");treat(t,13,1,source.Get());
+    edvr::temporalMapStillBits().store(3u);   // what the pass says when both eyes kept their history
+    mapFocus=6;fm=frame(11,14);pm=begin(t,fm);
+    check(shiftedNow(pm),"map gate: both eyes kept their history, so the next frame is jittered again");
+    check(treat(t,14,0,source.Get())==S_OK&&(calls.back().flags&edvr::kTemporalFlagMapKeep)&&!(calls.back().flags&1),"map gate: and still carries it");treat(t,14,1,source.Get());
+    edvr::temporalMapStillBits().store(1u);   // the pass reset the right eye: the map moved
+    fm=frame(11,15);pm=begin(t,fm);check(!shiftedNow(pm),"map gate: one eye reset (the map moved): no jitter");treat(t,15,0,source.Get());treat(t,15,1,source.Get());
+    // The map closes onto the Full System Scanner (not a map here): the closing frame is an edge, so nothing of the map is carried out; then the history is back.
+    mapFocus=9;fm=frame(11,16);pm=begin(t,fm);
+    check(shiftedNow(pm),"map gate: the Full System Scanner is not a map here: the jitter is back");
+    check(treat(t,16,0,source.Get())==S_OK&&(calls.back().flags&1)&&!(calls.back().flags&edvr::kTemporalFlagMapKeep),"map gate: and the frame after the map still takes no history (the map is not carried out)");treat(t,16,1,source.Get());
+    fm=frame(11,17);pm=begin(t,fm);check(shiftedNow(pm)&&treat(t,17,0,source.Get())==S_OK&&!(calls.back().flags&1)&&!(calls.back().flags&edvr::kTemporalFlagMapKeep),"map gate: then the history is back");treat(t,17,1,source.Get());
+    mapFocusKnown=false;mapFocus=6;fm=frame(11,18);pm=begin(t,fm);check(shiftedNow(pm),"map gate: a focus the journal cannot state is not a map, whatever the stale value");
+    check(!edvr::temporalMapGateFlag().load(),"map gate: the draw thread's flag is down with no map");
+    // The camera source's stage 0 names a map view with the journal silent (on foot, a menu, the half second before the field is read): the gate opens on that frame, edge and all.
+    mapFocusKnown=false;mapFocus=0;mapViewNamed=true;fm=frame(11,19);pm=begin(t,fm);
+    check(!shiftedNow(pm)&&edvr::temporalMapGateFlag().load(),"map gate: a map view named by its camera opens the gate with the journal silent, and the draw thread's flag goes up");
+    mapViewNamed=false;fm=frame(11,20);pm=begin(t,fm);
+    check(shiftedNow(pm)&&!edvr::temporalMapGateFlag().load(),"map gate: the view no longer named closes the gate and the flag");
+    mapFocusKnown=false;mapFocus=0;
+  }
   check(t.close(t.context)==S_OK&&t.close(t.context)==S_FALSE,"idempotent CPU close");
+  check(edvr::mapLogCalls==1,"map gate: the pass's map counters are written once, when the channel closes");
   warmDev=reinterpret_cast<ID3D11Device*>(1);warmThread=1;
   check(!edvr::nativeTemporalWarmTarget(&warmDev,&warmThread),"no warm target once the channel closes");
   {uint32_t rw=0,rh=0;float u=0,dn=0;check(!edvr::nativeTemporalRecommended(&rw,&rh)&&!edvr::nativeTemporalVerticalTangents(&u,&dn)&&!edvr::nativeTemporalAsked(&rw,&rh)&&!edvr::nativeTemporalTrueVerticalTangents(&u,&dn),"no recommendation, frustum, ask or true frustum once the channel closes");}
@@ -388,24 +468,110 @@ void run(){
         closeFloat(c.currentEyes[0][0],1)&&closeFloat(c.previousEyes[1][3],.032f),
         "the canted eye matrix comes from prior history while the other eye keeps its own index");
   edvr::Config::get().set("fix.temporal_aa","off");check(treat(fresh,3,1,source.Get())==S_OK,"current pair freezes AA setting");
-  f=frame(12,4);p=begin(fresh,f);const auto before=dumps;check(treat(fresh,4,0,source.Get())==S_FALSE&&dumps==before+1,"next frame AA off captures untreated eyes");check(p.tangentShift[0][0]==0,"AA off zeros jitter");check(fresh.close(fresh.context)==S_OK,"fresh close");
-  auto dlss=acquire(d,13,"dlss");f=frame(13,1);begin(dlss,f);check(treat(dlss,1,0,source.Get())==S_OK,"DLSS call");c=calls.back();check(c.outW==480&&c.outH==360&&(c.flags&2),"DLSS requests recommended size");
+  // F198: with the temporal mode OFF the pass never runs, so treat publishes the per-eye facts the native on-foot features read from it (the frustum: temporalPassEyeTan; the eye offset's x:
+  // temporalPassEyeOffsetX), from the arrays the pass would have been handed, and the submitted texture's size (the marker fix's eye source 'S'). (The pool holds 16 channels, all used:
+  // the cases ride the AA-off and the DLSS eyes below.)
+  f=frame(12,4);p=begin(fresh,f);const auto before=dumps;
+  const unsigned tan0=eyeTanNotes,offs0=offsetOnlyNotes,sized0=submittedSizedNotes,depthBase=offAaDepthNotes;
+  check(treat(fresh,4,0,source.Get())==S_FALSE&&dumps==before+1,"next frame AA off captures untreated eyes");check(p.tangentShift[0][0]==0,"AA off zeros jitter");
+  check(eyeTanNotes==tan0+1&&closeFloat(eyeTanLast[0][0],f.frusta[0][0])&&closeFloat(eyeTanLast[0][1],f.frusta[0][1])&&closeFloat(eyeTanLast[0][2],f.frusta[0][2])&&closeFloat(eyeTanLast[0][3],f.frusta[0][3]),
+        "F198: AA off publishes the eye's frustum, the array the pass is handed ({L,R,D,U})");
+  check(offsetOnlyNotes==offs0+1&&closeFloat(offsetOnlyLast[0],-.032f),"F198: AA off publishes the eye offset's x, and nothing of the pass's head history");
+  check(submittedSizedNotes==sized0+1&&submittedSizedLast[0]==0&&submittedSizedLast[1]==320&&submittedSizedLast[2]==240,"F198: the submitted texture's size is noted (whatever the mode)");
+  // F202: and it tells the scope lens's depth step the eye, the submitted texture, the Submit region and the near plane this frame's matrix query gave (.025, begin()'s projection note); the right eye
+  // too, and a frame whose query the game did not make hands it the last one's.
+  check(offAaDepthNotes==depthBase+1&&offAaDepthEye==0&&offAaDepthSource==source.Get()&&offAaDepthRegion[0]==0&&offAaDepthRegion[1]==0&&offAaDepthRegion[2]==320&&offAaDepthRegion[3]==240&&closeFloat(offAaDepthNear,.025f),
+        "F202: AA off tells the scope lens's depth step the eye, the submitted texture, its whole region and this frame's near plane");
+  check(treat(fresh,4,1,source.Get())==S_FALSE&&offAaDepthNotes==depthBase+2&&offAaDepthEye==1&&closeFloat(offAaDepthNear,.025f),"F202: and for the right eye, the one the lens reads");
+  f=frame(12,5);p=begin(fresh,f,false);const unsigned depth0=offAaDepthNotes;
+  check(treat(fresh,5,1,source.Get())==S_FALSE&&offAaDepthNotes==depth0+1&&closeFloat(offAaDepthNear,.025f),"F202: a frame the game made no matrix query in hands the depth step the last near plane, so the lens is not left without one");
+  check(fresh.close(fresh.context)==S_OK,"fresh close");
+  auto dlss=acquire(d,13,"dlss");f=frame(13,1);begin(dlss,f);
+  const unsigned tan1=eyeTanNotes,offs1=offsetOnlyNotes,sized1=submittedSizedNotes;
+  check(treat(dlss,1,0,source.Get())==S_OK,"DLSS call");
+  check(eyeTanNotes==tan1&&offsetOnlyNotes==offs1,"F198: with the mode on, treat's AA-off branch publishes nothing (the pass's own notes are what they were)");
+  check(submittedSizedNotes==sized1+1,"F198: the submitted size is noted with the mode on too");
+  check(offAaDepthNotes==depth0+1,"F202: with a mode on the AA-off depth step is never called (the pass makes the depth view itself): the AA-on path is what it was");
+  c=calls.back();check(c.outW==480&&c.outH==360&&(c.flags&2),"DLSS requests recommended size");
   f=frame(13,2);begin(dlss,f);passSucceeds=false;const unsigned notesBefore=uiLayerNotes;check(treat(dlss,2,0,source.Get())==S_FALSE,"filter refusal preserves raw pixels");passSucceeds=true;
   check(uiLayerNotes==notesBefore,"a refused eye is not noted to the UI layer (it must not arm behind raw pixels)");
   f=frame(13,3);p=begin(dlss,f);check(p.tangentShift[0][0]==0&&p.tangentShift[0][1]==0,"refusal disables future jitter");check(dlss.close(dlss.context)==S_OK,"DLSS close");
   auto unknown=acquire(d,14,"invalid-mode");f=frame(14,1);begin(unknown,f);check(treat(unknown,1,0,source.Get())==S_FALSE,"unknown mode is off");check(unknown.close(unknown.context)==S_OK,"unknown close");
-  // FSR 4.1 is its own external engine: bit 1 (external) and bit 8 (FSR 4), never bit 6 (FSR 3.1) or 7 (XeSS); it upscales as fsr does.
-  // With generation 16 this rig takes all sixteen channels of native_temporal.cpp's pool, which channels are never returned to.
-  auto fsr4=acquire(d,16,"fsr4");f=frame(16,1);begin(fsr4,f);check(treat(fsr4,1,0,source.Get())==S_OK,"FSR 4 call");c=calls.back();
-  check((c.flags&2)&&(c.flags&256)&&!(c.flags&64)&&!(c.flags&128)&&c.outW==480&&c.outH==360,"FSR 4 asks for an external engine under its own flag bit, at the recommended size");
-  check(fsr4.close(fsr4.context)==S_OK,"FSR 4 close");
+  { // World scale (common/world_scale.h) moves the eye origins Elite is given: history made at one separation is not history at the next, whatever moved it.
+    // FSR 4.1 rides this channel. The pool holds 16 and close does not return one, and the cases below already use every slot.
+    // Bit 1 (external) and bit 10 (FSR 4) are set, never bit 6 (FSR 3.1), 7 (XeSS), 8 (map) or 9 (Ditto). The separation and
+    // zoom checks read flags bit 0 only, so the engine bits do not change them. The first frame upscales 320x240 to 480x360.
+    auto scaled=acquire(d,16,"fsr4");
+    auto at=[&](uint64_t seq,float halfSeparation){auto g=frame(16,seq);g.eyeToHead[0][3]=-halfSeparation;g.eyeToHead[1][3]=halfSeparation;return g;};
+    auto both=[&](uint64_t seq,float halfSeparation,bool& resetLeft,bool& resetRight){
+      f=at(seq,halfSeparation);begin(scaled,f);
+      const bool left=treat(scaled,seq,0,source.Get())==S_OK;resetLeft=(calls.back().flags&1)!=0;
+      const bool right=treat(scaled,seq,1,source.Get())==S_OK;resetRight=(calls.back().flags&1)!=0;return left&&right;};
+    bool l=false,r=false;
+    check(both(1,.032f,l,r)&&l&&r,"separation: the first frame resets both eyes' history");
+    check((calls.back().flags&2)&&(calls.back().flags&1024)&&!(calls.back().flags&64)&&!(calls.back().flags&128)&&!(calls.back().flags&256)&&!(calls.back().flags&512)&&calls.back().outW==480&&calls.back().outH==360,"FSR 4 asks for an external engine under its own flag bit, at the recommended size");
+    check(both(2,.032f,l,r)&&!l&&!r,"separation: the same separation keeps both histories");
+    check(both(3,.032f+3.0e-5f,l,r)&&!l&&!r,"separation: a 0.06 mm difference (two locates' noise) keeps history");
+    check(both(4,.0246f,l,r)&&l&&r,"separation: 130 percent (64 mm to 49.2 mm) resets both eyes' history at the frame that carries it");
+    check(both(5,.0246f,l,r)&&!l&&!r,"...and the next frame at the same scale keeps it");
+    check(both(6,.0320f,l,r)&&l&&r,"separation: back to 100 percent resets again");
+    check(both(7,.0400f,l,r)&&l&&r&&both(8,.0400f,l,r)&&!l&&!r,"separation: 80 percent (80 mm) resets, and then holds");
+    { // B3: eye 0 drawn as the scope zoom's window (the channel pool is fixed, so this runs on the separation block's channel). The frame says so (zoomed, and the frustum it would have been
+      // told without it); eye 0's history ends at both edges and eye 1's never does; what eye 0 announces to the rest of EDVR (the vertical frustum the panels are sized by) stays the frustum
+      // without the window; the door can ask whether the frame is zoomed, and the counts say.
+      auto zat=[&](uint64_t seq,bool zoomed){auto g=frame(16,seq);if(zoomed){g.zoomed=1;std::memcpy(g.preZoom,g.frusta[0],sizeof(g.preZoom));g.frusta[0][0]=-.2f;g.frusta[0][1]=.2f;g.frusta[0][2]=-.25f;g.frusta[0][3]=.25f;}return g;};
+      auto zboth=[&](uint64_t seq,bool zoomed,bool& resetLeft,bool& resetRight){
+        f=zat(seq,zoomed);begin(scaled,f);
+        const bool left=treat(scaled,seq,0,source.Get())==S_OK;resetLeft=(calls.back().flags&1)!=0;
+        const bool right=treat(scaled,seq,1,source.Get())==S_OK;resetRight=(calls.back().flags&1)!=0;return left&&right;};
+      bool zl=false,zr=false;
+      check(zboth(9,false,zl,zr)&&zl&&zr,"zoom: the frame after a change of the eyes' separation resets both histories");
+      check(zboth(10,false,zl,zr)&&!zl&&!zr&&!zoomedFrameLast,"zoom: an unzoomed frame keeps both histories, and the light grid cache is told it is not zoomed");
+      uint64_t zf0=0,zr0[2]={},ze0=0;check(edvr::nativeTemporalZoomCounts(&zf0,zr0,&ze0),"zoom: the counts are there");
+      check(zboth(11,true,zl,zr)&&zl&&!zr&&zoomedFrameLast,"zoom: the frame that starts the window resets eye 0's history and not eye 1's, and the light grid cache is told it is zoomed");
+      {float zoomed[4]={},pre[4]={};
+       check(edvr::nativeTemporalZoom(11,zoomed,pre)&&closeFloat(zoomed[1],.2f)&&closeFloat(zoomed[3],.25f)&&closeFloat(pre[1],f.preZoom[1])&&!edvr::nativeTemporalZoom(10,nullptr,nullptr)&&!edvr::nativeTemporalZoom(12,nullptr,nullptr),
+             "zoom: the door can ask whether a frame is zoomed, by its sequence, and gets the window and the frustum without it");
+       uint64_t seq=0;check(edvr::nativeTemporalZoomLatest(&seq,nullptr,nullptr)&&seq==11,"zoom: and the latest frame is zoomed");}
+      {float up=0,down=0;
+       check(edvr::nativeTemporalVerticalTangents(&up,&down)&&closeFloat(up,std::fabs(f.preZoom[2]))&&closeFloat(down,std::fabs(f.preZoom[3])),"zoom: eye 0 announces the frustum without the window (the panels' size stays true)");}
+      check(zboth(12,true,zl,zr)&&!zl&&!zr,"zoom: a second frame of the window keeps both histories");
+      check(zboth(13,false,zl,zr)&&zl&&!zr&&!zoomedFrameLast&&!edvr::nativeTemporalZoomLatest(nullptr,nullptr,nullptr),"zoom: the frame that ends the window resets eye 0's history again and not eye 1's");
+      check(zboth(14,false,zl,zr)&&!zl&&!zr,"zoom: and then holds");
+      uint64_t zf1=0,zr1[2]={},ze1=0;check(edvr::nativeTemporalZoomCounts(&zf1,zr1,&ze1)&&zf1==zf0+2&&ze1==ze0+2&&zr1[0]==zr0[0]+2&&zr1[1]==zr0[1],"zoom: two zoomed frames, two history resets of eye 0 at the edges, none of eye 1's");
+      f=zat(15,true);f.preZoom[0]=f.preZoom[1];begin(scaled,f);check(!edvr::nativeTemporalZoomLatest(nullptr,nullptr,nullptr),"zoom: a frame that says zoomed with a frustum without the window that is no frustum is not zoomed");
+      { // the wire form: the provider takes the frame at the size from before B3 (a host with no zoom, or a build from before it) and at the whole size, and no other
+        auto rawBegin=[&](EdvrNativeTemporalFrame& g){EdvrNativeTemporalProjection pj{sizeof(pj),1};HRESULT r=E_FAIL;std::thread cpu([&]{r=scaled.beginFrame(scaled.context,&g,&pj);});cpu.join();return r;};
+        auto g=zat(16,true);g.size=EDVR_NATIVE_TEMPORAL_FRAME_SIZE_NO_ZOOM;   // zoomed, with a pre-zoom frustum, in the bytes past the older size
+        check(rawBegin(g)==S_OK&&!edvr::nativeTemporalZoomLatest(nullptr,nullptr,nullptr),"zoom wire: a frame of the older size is begun and is not zoomed, whatever the bytes past its end say");
+        g=zat(17,true);
+        check(rawBegin(g)==S_OK&&edvr::nativeTemporalZoomLatest(nullptr,nullptr,nullptr),"zoom wire: ... and one of the whole size is begun zoomed");
+        bool refused=true;
+        for(uint32_t bad:{0u,8u,EDVR_NATIVE_TEMPORAL_FRAME_SIZE_NO_ZOOM-4u,EDVR_NATIVE_TEMPORAL_FRAME_SIZE_NO_ZOOM+4u,uint32_t(sizeof(g))-4u,uint32_t(sizeof(g))+4u}){auto h=zat(18,false);h.size=bad;refused=refused&&rawBegin(h)==E_INVALIDARG;}
+        check(refused,"zoom wire: a frame of any other size is refused");
+      }
+    }
+    check(scaled.close(scaled.context)==S_OK,"separation: close");
+  }
   edvr::Config::get().set("fix.temporal_aa","on");edvr::openxr::NativeTemporalClient client;
   require(client.acquire(GetModuleHandleW(nullptr),d.device.Get(),15)==S_OK,"actual client validates provider table");
   edvr::openxr::GeometryInput g{};g.generation=1;g.sequence=1;g.displayTime=1;g.headPose.orientation.w=1;
   g.headFlags=XR_SPACE_LOCATION_POSITION_VALID_BIT|XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;g.viewFlags=XR_VIEW_STATE_POSITION_VALID_BIT|XR_VIEW_STATE_ORIENTATION_VALID_BIT;
   for(unsigned e=0;e<2;++e){g.views[e].pose.orientation.w=1;g.views[e].pose.position.x=e?.03f:-.03f;g.views[e].fov={-.8f,.7f,.7f,-.6f};g.width[e]=480;g.height[e]=360;}
   float shifts[2][2]{};check(client.begin(g,1,shifts)==S_OK,"client converts located geometry");client.noteProjection(1,0,.025f,50000);
-  ComPtr<ID3D11Texture2D> out;vr::VRTextureBounds_t box{};check(client.treat(1,0,source.Get(),nullptr,out,box)==S_OK&&out.Get()==source.Get(),"client retains provider result");check(client.close()==S_OK&&client.close()==S_FALSE,"client close");
+  ComPtr<ID3D11Texture2D> out;vr::VRTextureBounds_t box{};check(client.treat(1,0,source.Get(),nullptr,out,box)==S_OK&&out.Get()==source.Get(),"client retains provider result");
+  { // B3: the host sends a frame with no zoom at the size from before B3 appended its fields (the key-off wire form is the parent's, byte for byte, and a d3d11.dll from before B3 takes it), and one with a zoom whole.
+    // On the client's own channel: the pool of 16 is spent by the cases below.
+    check(EDVR_NATIVE_TEMPORAL_FRAME_SIZE_NO_ZOOM==232u&&offsetof(EdvrNativeTemporalFrame,trueDown)+sizeof(float)==232u&&sizeof(EdvrNativeTemporalFrame)==256u&&
+          edvr::openxr::temporalFrameSize(false)==232u&&edvr::openxr::temporalFrameSize(true)==256u,"zoom wire: a frame with no zoom is sent at the size from before B3 (232 bytes, the parent's), one with a zoom at the whole struct (256)");
+    check(!edvr::nativeTemporalZoomLatest(nullptr,nullptr,nullptr),"zoom wire: the client's frame with no zoom (the begin above) was begun and is not zoomed");
+    edvr::openxr::RawFov pre{};require(edvr::openxr::fovToRaw(g.views[0].fov,pre),"zoom client: the located frustum converts");
+    g.sequence=2;g.views[0].fov={-.2f,.2f,.2f,-.15f};
+    check(client.begin(g,1,shifts,nullptr,0,0,0.f,0.f,&pre)==S_OK&&edvr::nativeTemporalZoomLatest(nullptr,nullptr,nullptr),"zoom wire: the client's frame with a zoom is begun whole, and zoomed");
+    g.sequence=3;
+    check(client.begin(g,1,shifts)==S_OK&&!edvr::nativeTemporalZoomLatest(nullptr,nullptr,nullptr),"zoom wire: and the next frame with none is not zoomed");
+  }
+  check(client.close()==S_OK&&client.close()==S_FALSE,"client close");
   auto omitted=acquire(d,17);f=frame(17,1);begin(omitted,f);
   check(treat(omitted,1,0,source.Get())==S_OK,"omission baseline");
   f=frame(17,2);begin(omitted,f);const auto count=calls.size();

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turn an eye dump (hotkey.dump_eyes: edvr_logs\\eyes\\eye_HHMMSS_L.bmp) into
+"""Turn an eye dump (hotkey.dump_eyes: edvr_logs\\eyes\\eye_<stamp>_L.bmp) into
 a PNG small enough to look at, optionally cropped.
 
     python tools/eye_bmp_to_png.py <eye.bmp> [out.png] [--scale 0.25]
@@ -15,8 +15,11 @@ default name, the scale, the crop and the dry run.
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import sys
+
+import dump_io   # tools\dump_io.py: P and L0 may be NAME.bmp.z, an XOR delta against T and FinalCrisp_LOverview
 
 
 def main(argv: list[str]) -> int:
@@ -36,7 +39,13 @@ def main(argv: list[str]) -> int:
         print('Pillow is not installed: pip install pillow', file=sys.stderr)
         return 2
     Image.MAX_IMAGE_PIXELS = None
-    im = Image.open(a.bmp)
+    if a.bmp.endswith(dump_io.Z_SUFFIX):
+        a.bmp = a.bmp[:-len(dump_io.Z_SUFFIX)]   # named by its .z: the picture's name is the original's
+    try:
+        im = Image.open(io.BytesIO(dump_io.read_bytes(a.bmp)))   # a plain BMP, or a delta rebuilt against its base
+    except (OSError, ValueError) as e:
+        print('%s: %s' % (a.bmp, e), file=sys.stderr)
+        return 1
     if a.crop:
         x, y, w, h = a.crop
         im = im.crop((x, y, x + w, y + h))
@@ -107,6 +116,27 @@ def self_test() -> int:
         cropped = Image.open(crop).convert('RGB')
         expect('crop', cropped.size == (16, 8) and cropped.getpixel((15, 0)) == (0, 255, 0)
                and cropped.getpixel((0, 0)) == (10, 20, 30), 'the cropped pixels')
+
+        # A P picture stored as an XOR delta against its T twin (P##.bmp.z), as the eye dump writes it: the PNG is P's own pixels,
+        # named by either spelling; with the base gone it says so and exits 1.
+        twin = os.path.join(base, 'eye_120000_T00.bmp')
+        src.save(twin)
+        pre = src.copy()
+        pre.putpixel((10, 10), (200, 100, 50))
+        pbmp = os.path.join(base, 'eye_120000_P00.bmp')
+        pre.save(pbmp)
+        with open(pbmp, 'rb') as fh:
+            pbytes = fh.read()
+        dump_io.write_z(pbmp, pbytes, base=twin)
+        os.remove(pbmp)
+        for spelling in (pbmp, pbmp + '.z'):
+            code, said = run(spelling, os.path.join(base, 'p.png'), '--scale', '1')
+            pgot = Image.open(os.path.join(base, 'p.png')).convert('RGB')
+            expect('delta', code == 0 and pgot.getpixel((10, 10)) == (200, 100, 50) and pgot.getpixel((0, 0)) == (255, 0, 0), '%r %r' % (code, said))
+        os.remove(twin)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            code, said = run(pbmp, os.path.join(base, 'p2.png'))
+        expect('delta', code == 1 and not os.path.exists(os.path.join(base, 'p2.png')) and 'base' in err.getvalue(), 'a delta without its base: %r %r' % (code, err.getvalue()))
 
         # A dry run reads and reports and writes nothing: no PNG, no directory.
         before = sorted(os.listdir(base))

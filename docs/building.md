@@ -1,6 +1,6 @@
-# Building EDVR
+# Building ED Unofficial Patch
 
-How to build EDVR from source, check the build without the game or a headset,
+How to build ED-UP from source, check the build without the game or a headset,
 and what the optional DLSS mode and the release package need.
 
 Building needs Visual Studio 2022 with the C++ workload, and Python with the
@@ -48,13 +48,15 @@ window while it runs. The runner holds every test exe to that and fails the
 build if one shows a window or takes the keyboard focus; see
 `docs\build-focus-steal-2026-09-29.md`.
 
-For a native Windows build from Linux, use the **Native Windows release build**
-workflow (`.github/workflows/release.yml`). It runs on Windows Server 2022 with
+For a native Windows build from Linux, use the **Native Windows build**
+workflow (`.github/workflows/release.yml`). It also runs by itself on every pull
+request and every push to `main` (a `codex/release-*` pull request is left to
+its branch's push run). It runs on Windows Server 2022 with
 Visual Studio 2022, Python 3.12, and all five pinned dependencies. It invokes
-the full `build.bat --wait-lock --jobs 4`, including every test rig and the
-installer gate, then calls `package.bat`. The packages contain the exact
-version stamp checked by `package_native.py`. Each successful run uploads the
-full build receipt, installer, native DLLs, three release ZIPs, and
+the full `build.bat --wait-lock --jobs 4`, including every test rig (one of
+them builds the launcher), then calls `package.bat`. The packages contain the
+exact version stamp checked by `package_native.py`. Each successful run uploads
+the full build receipt, launcher, native DLLs, the release ZIPs, and
 `SHA256SUMS`. Build logs, phase timings, and failed flat pixel fixtures are
 uploaded separately even when a gate fails. The workflow does not create a
 GitHub release or use signing secrets.
@@ -62,7 +64,7 @@ GitHub release or use signing secrets.
 A push to a `codex/release-*` branch runs the entire build and package path. If
 the commit already has a release tag, the runner uses its exact version;
 otherwise it creates a temporary local tag, `v0.0.0-ci`, before building. This
-makes the version stamped into the DLLs and installer match the package
+makes the version stamped into the DLLs match the package
 version. The temporary tag exists only on the runner; either branch result is a
 proof artifact, not a release asset. The branch push trigger works before this
 workflow reaches `main`. GitHub does not offer its manual **Run workflow**
@@ -73,7 +75,7 @@ control for a new workflow until the workflow file is on the default branch.
 For a test flight on a Steam Deck or another Linux machine that runs Elite
 under Proton, `tools/linux_toolchain.py` compiles the production DLLs with
 Microsoft's compiler under Wine. It runs `build.bat --compile-only`, which
-skips every test, rig and installer gate, so the result is not validated and
+skips every test and rig, and the launcher build, so the result is not validated and
 not a release asset: a merge or a release still needs CI's full build. Use host
 `python3`, from any shell:
 
@@ -144,9 +146,10 @@ entry that fails is left out and recompiles. The cache skips compiles only:
 every rig still runs on every build. Proof builds carry one version stamp,
 `0.0.0-ci`, because the stamp is in a header that `log.cpp`, `menu.cpp` and
 several other headers and sources include, and a stamp that changed per run
-missed all of them. Two things still recompile every run: the installer (its
-payload embeds the freshly linked DLLs) and `object_classification_test` (an
-`ml64` object carries a timestamp).
+missed all of them. Two things still recompile every run: the launcher (it is
+built twice on purpose, to prove two builds under different versions give the
+same bytes) and `object_classification_test` (an `ml64` object carries a
+timestamp).
 
 After the workflow is on `main`, a manual branch run is also possible:
 
@@ -217,30 +220,102 @@ try {
 
 Write and review release notes before creating the draft. Generate the Thanks
 section from the previous tag, then write each contributor's sentence by hand.
-Only merged PR authors are named; issue and log reporters get the tool's
-general line. Review the final notes file, then attach the three verified ZIPs
-and `SHA256SUMS` to a draft release:
+Only merged PR authors are named, plus anyone the maintainer approved by name
+in `tools/release_credits_approved.json` for a commit in the release. Issue and
+log reporters get the tool's general line. Review the final notes file.
+
+Besides the two ZIPs, the package artifact carries the split assets the
+launcher updates from: `ed-up-core-<version>.zip`, an `ed-up-dlss-<hash>.zip`
+and an `ed-up-xess-<hash>.zip` when the build has those runtimes,
+`ed-up-launcher.exe` when the build has one, and two manifests. `ed-up-manifest-v2.json`
+is the schema-2 manifest launcher 0.2.0 and later read; it names them all with their
+hashes. `ed-up-manifest.json` is a schema-1 bridge: launcher 0.1.0 (shipped in v0.22.0)
+reads only that name and schema, so the bridge sets its `min_launcher` to the
+launcher this build packages and carries that launcher block, which makes
+0.1.0 replace itself and read the schema-2 manifest from then on. It also lists,
+truthfully, each file that has a schema-1 item. It stays until a decision retires it
+(`docs/design-manifest-schema2-2026-11-12.md`). `SHA256SUMS` lists every one of them. The
+workflow never signs. Sign both manifests in your own terminal, because
+`sign_manifest.py` refuses to run anywhere else, and it reads the private key
+from a hidden prompt or, with `--key-stdin`, from one line on stdin so your
+password manager's command line can supply it. The key is never kept in a
+repository or in a session. The signing tool only signs with a key whose public
+half is listed in `src/installer/update_keys.h`. Check the folder before
+attaching anything; the check exits 0 only when both signatures, both schemas,
+the bridge's agreement with the schema-2 manifest, and the size and hash of
+every asset and every file inside the zips all pass:
+
+```powershell
+python tools/sign_manifest.py sign "edvr-artifacts/$runId/ed-up-manifest-v2.json"
+if ($LASTEXITCODE -ne 0) { throw 'Signing the schema-2 manifest failed' }
+python tools/sign_manifest.py sign "edvr-artifacts/$runId/ed-up-manifest.json"
+if ($LASTEXITCODE -ne 0) { throw 'Signing the schema-1 bridge failed' }
+python tools/sign_manifest.py verify "edvr-artifacts/$runId"
+if ($LASTEXITCODE -ne 0) { throw 'The signed release folder did not verify' }
+```
+
+Then attach the two verified ZIPs (`ed-up-<version>.zip`, the files for a manual install,
+and `ed-up-launcher-linux-<version>.zip`, a convenience package outside the signed
+manifest), the split assets, both manifests with
+their `.sig` files, and `SHA256SUMS` to a draft release. A release missing either `.sig` is simply
+not offered to the launcher as an update:
 
 ```powershell
 python tools/release_credits.py --from vPREVIOUS --to "v$version" --thanks --out thanks.md
 if ($LASTEXITCODE -ne 0) { throw 'Review release credits before continuing' }
 # Edit release-notes.md and include the reviewed ## Thanks section from thanks.md.
+$folder = "edvr-artifacts/$runId"
 $assets = @(
-    "edvr-artifacts/$runId/edvr-$version.zip"
-    "edvr-artifacts/$runId/edvr-installer-$version.zip"
-    "edvr-artifacts/$runId/edvr-installer-linux-$version.zip"
-    "edvr-artifacts/$runId/SHA256SUMS"
+    "$folder/ed-up-$version.zip"
+    "$folder/ed-up-launcher-linux-$version.zip"
+    "$folder/ed-up-manifest-v2.json"
+    "$folder/ed-up-manifest-v2.json.sig"
+    "$folder/ed-up-manifest.json"
+    "$folder/ed-up-manifest.json.sig"
+    "$folder/SHA256SUMS"
 )
-gh release create "v$version" @assets --draft --verify-tag --notes-file release-notes.md
+$assets += Get-ChildItem "$folder/ed-up-core-$version.zip", "$folder/ed-up-dlss-*.zip", "$folder/ed-up-xess-*.zip", "$folder/ed-up-launcher.exe" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+gh release create "v$version" @assets --draft --verify-tag --title "ED Unofficial Patch $version" --notes-file release-notes.md
 if ($LASTEXITCODE -ne 0) { throw 'Draft release creation failed' }
 ```
 
 For a prerelease tag, add `--prerelease` to `gh release create` as well.
 
+On native Windows, where `package.bat <version>` packages the release without
+Actions, the same assets land in `dist\`, `SHA256SUMS` included:
+`package_native.py` writes it, and the workflow only checks that it lists the
+files above with their hashes. `package.bat` prints the signing command when
+it finishes. Run `python tools\sign_manifest.py sign
+dist\ed-up-manifest-v2.json` and `... sign dist\ed-up-manifest.json`, then `python tools\sign_manifest.py verify dist`,
+and attach the files from `dist\` the same way. `package_native.py` writes the
+split zips with fixed timestamps and file order, so packaging twice gives the
+same bytes, and it removes older `ed-up-dlss-*.zip` and `ed-up-xess-*.zip` from
+`dist\` when a runtime's contents change.
+
+To sign the binaries (Authenticode, through Azure Artifact Signing), set
+`EDVR_SIGN=1` for the full `build.bat`. It signs `d3d11.dll` and
+`edvr_openxr_runtime.dll` before anything copies them, then
+`ed-up-launcher.exe`, so `package.bat` zips and hashes the signed bytes. Once per machine, run `python
+tools\artifact_signing.py fetch` (Microsoft's signing client, pinned by hash,
+from NuGet), then `az login` as an account that holds `Artifact Signing
+Certificate Profile Signer` on the `ed-up-release` profile. `python
+tools\artifact_signing.py check` says what is missing and `... verify <files>`
+re-checks a file. A build asked to sign that cannot, fails. Every signature is
+timestamped and every signing makes new bytes, so a signed `ed-up-launcher.exe`
+differs from release to release even when its code did not, and an installed
+launcher replaces itself each time (see below). The workflow does not sign.
+
+Build every release by the same route. `ed-up-launcher.exe` is the same bytes
+from two builds on one machine, but a CI build and a local build differ, and an
+installed launcher replaces itself when the digest changes. Replacing an asset on
+a published release also takes a few minutes to reach everyone: the API lists the
+new digest at once while GitHub's download cache can still serve the old file. The
+launcher skips its check while the two disagree and looks again on its next start.
+
 The draft is the review point before publication. A failed build has no package
 artifact and should never be used for a release.
 
-The optional DLSS mode, and an installer that carries NVIDIA's runtime, need
+The optional DLSS mode, and a release that carries NVIDIA's runtime, need
 the DLSS SDK on the machine. Its licence keeps it out of this repository, and
 it is not in the graphics driver either. This command
 
@@ -249,11 +324,11 @@ python tools\fetch_ngx.py
 ```
 
 fetches one pinned commit of NVIDIA's public SDK repository into
-`%LOCALAPPDATA%\EDVR\ngx-sdk` and checks the runtime's hash against the pin in
+`%LOCALAPPDATA%\ED-UP\ngx-sdk` and checks the runtime's hash against the pin in
 the script. `EDVR_NGX_SDK` points the build at a copy somewhere else.
 
-Generating the installer's resources needs the native pair and the bundled
-loader; there is no legacy OpenVR-only package. `package.bat <version>
+Writing the release's settings files (`tools\gen_installer_rc.py
+--release-files`, a step of the full build) needs the native pair and the
+bundled loader; there is no legacy OpenVR-only package. `package.bat <version>
 --no-dlss` packages a build made without the DLSS SDK. When the build contains
-DLSS, the archive keeps its matching DLL and NVIDIA license notice next to the
-installer that embeds it.
+DLSS, the archives keep its matching DLL and NVIDIA license notice.

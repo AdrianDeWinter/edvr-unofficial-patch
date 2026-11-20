@@ -77,6 +77,14 @@ enum class EliteExeKind {
 // Dangerous: Odyssey Executable"). This tells cases apart for the message; it
 // never qualifies an executable.
 EliteExeKind classifyEliteExecutable(const std::wstring& path, std::wstring* fileVersion);
+
+// That discriminator alone, on an executable's version strings.
+bool versionStringsNameLegacyElite(const std::wstring& product, const std::wstring& description);
+
+// The same on a file. It reads only the version resource, with no hash, so listing
+// the installs on a machine stays cheap. A file it cannot read is not legacy by this
+// test: the planner reports that one with its own message.
+bool eliteExeIsLegacy(const std::wstring& path);
 enum class NativeImageKind { Graphics, Runtime, Loader };
 bool validateNativePayloadBytes(const void* data, size_t size, NativeImageKind kind);
 

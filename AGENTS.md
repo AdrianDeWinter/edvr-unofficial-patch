@@ -13,8 +13,8 @@ the full Windows workflow for C++ changes.
 
 Unofficial VR fixes for Elite Dangerous: Odyssey. A proxy DLL
 (`d3d11.dll` beside the game) and EDVR's own OpenXR runtime for
-Elite (`openvr_api.dll` in `Openvr\win64`), a config file, and an
-installer that carries all three.
+Elite (`openvr_api.dll` in `Openvr\win64`), a config file, and a
+launcher (`ed-up-launcher.exe`) that installs and updates them from the release.
 
 The expensive resource on this project is not tokens, it is **test
 flights**. Every wrong hypothesis costs a build, an install, a headset
@@ -25,7 +25,12 @@ session and a log. Everything below exists to spend fewer of them.
 Use the **PowerShell tool**, not Bash. Windows PowerShell 5.1: no `&&` or
 `||` (use `;` and `if ($?)`), no ternary, no `??`. Don't redirect a native
 exe's stderr with `2>&1` — 5.1 wraps each line in an ErrorRecord and sets
-`$?` false on a clean exit.
+`$?` false on a clean exit. Send a file-writing tool's output to `*> $null`
+or a log file and read that: `| Select-Object -First N` stops the pipeline
+and kills the tool mid-write (an install died that way, #100). Pass paths
+to a native exe as arguments: piping strings into one (`$files | git
+checkout --pathspec-from-file=-`) prepends a BOM to the first item, which
+then matches nothing.
 
 `build.bat` must be launched **by absolute path**; a `cmd` invocation that
 never ran the batch still exits 0, which has read as a successful build.
@@ -74,16 +79,25 @@ corrupted. Do not regenerate the one-liner — extend the script.
 |---|---|---|
 | Install a build next to the game | `python tools\install_edvr.py` | `Copy-Item` onto the game directory |
 | Check the install matches the build | `python tools\install_edvr.py --verify-only` | eyeballing timestamps |
-| Find and read a flight log | `python tools\edvr_log.py` (census aggregate: add `--tally vh [--frame N]`) | `Get-Content -Tail` + `Select-String` |
+| Find and read a flight log | `python tools\edvr_log.py` (census aggregate: add `--tally vh [--frame N]`; first command on an on-foot flight: add `--health [--since HH:MM:SS] [--until HH:MM:SS]`, which says which tagged features ran and applied and exits 3 on a NEVER APPLIED one) | `Get-Content -Tail` + `Select-String` |
+| Measure a skinned character's motion error in an eye dump | `python tools\character_motion_check.py --target frontier [--stamp S]` (face, a named draw and the body against the raw input; exits 3 past its limits) | a scratch warp script retyped each session |
+| Read an on-foot recording (needs log.on_foot_detail on; F9 marks a moment) | `python tools\onfoot_check.py --target <game dir> --expect-build HEAD [--mark N]` | reading the on-foot 1 s lines by hand |
 | Reflow release notes or docs | `python tools\reflow_notes.py` | reflowing by hand or by regex |
 | Credit contributors in release notes | `python tools\release_credits.py --from <previous-tag> --thanks` | writing the credits from memory or ad-hoc `gh` queries |
+| Sign a release manifest (the maintainer, in their own terminal: `generate` and `sign` refuse without one, and the private keys never enter a session) | `python tools\sign_manifest.py sign <manifest>`, then `python tools\sign_manifest.py verify <folder>` | signing in CI, or any other tool that sees the private key |
+| Sign the shipped binaries (Authenticode, Azure Artifact Signing; the maintainer's own terminal after `az login`: set `EDVR_SIGN=1`, then run the full `build.bat`) | `python tools\artifact_signing.py check`, `fetch`, `sign`, `verify` | `signtool` by hand, or any certificate or key file in the repo |
+| Try the launcher without touching the real folders | `ed-up-launcher.exe --data-root <scratch folder>` (with `--check-update`, `--update` or `--channel rc`) | running it bare, which copies and registers itself on this machine |
 | Make a worktree that can build | `python tools\worktree.py add <path>` | `git worktree add` alone (no deps) |
+| Post PR replies, a review or a summary | `python tools\pr_post.py --pr N --since <time> ...` | hand-built `gh api` / `gh pr comment` / `gh pr review` calls |
 | Compile on Linux for a test flight | `python3 tools/linux_toolchain.py build-dlls` | running `build.bat` under Wine by hand |
+| Keep the game exe before Steam updates it (`install_edvr.py` also does it on every install; then docs\game-binary-map.md "Re-deriving after a patch") | `python tools\archive_game_exe.py --target steam` (`--dry-run` first) | `Copy-Item` of the exe, or committing it |
 
 Every release's notes carry a `## Thanks` section built from
 `release_credits.py --thanks` and finished by hand. It names only the authors
-of PRs merged in the release; everyone who opened an issue or sent logs gets
-the tool's one general line and is not named. A person writes each sentence.
+of PRs merged in the release, and anyone the maintainer has approved by name in
+`tools\release_credits_approved.json` for a commit in the release. Everyone
+else who opened an issue or sent logs gets the tool's one general line and is
+not named. Add an entry to that file only on the maintainer's word. A person writes each sentence.
 People known only by an anonymised label ("user 2", "the reporter") are not
 named without the maintainer's consent.
 
@@ -183,10 +197,9 @@ minutes after a flight finally reproduced the effect being chased.
   passes that check vacuously.
 - For C++ changes on a non-native host, commit and push the candidate
   branch so Actions can validate that exact commit. The `release.yml`
-  workflow is active on `main`; dispatch it with `gh workflow run
-  release.yml --ref <branch>` (a push to `codex/release-*` already
-  triggers the full build and package path, so do not dispatch a
-  duplicate run). Find the branch run with `gh run list --workflow
+  workflow runs the full build and package path on every pull request
+  and every push to `main` or `codex/release-*`; for a branch with none
+  of those, dispatch it with `gh workflow run release.yml --ref <branch>`. Find the branch run with `gh run list --workflow
   release.yml --branch <branch>`, verify its `headSha` matches the
   candidate with `gh run view <run-id> --json headSha`, then require `gh
   run watch <run-id> --exit-status` to pass before merging or releasing.
@@ -200,8 +213,9 @@ minutes after a flight finally reproduced the effect being chased.
   commands.
 - For an actual release from a non-native host, merge the validated
   source, push the exact clean `vX.Y.Z` tag, and require that tag's full
-  Windows build and package run to pass. Download and verify all three
-  ZIPs with `SHA256SUMS`, generate and review release notes including
+  Windows build and package run to pass. Download and verify every
+  asset with `SHA256SUMS`, have the maintainer sign the manifest,
+  generate and review release notes including
   `release_credits.py`'s `## Thanks` section, then create a draft
   release; publication remains an explicit step. On native Windows, the
   full local build and `package.bat <version>` at the clean version tag
@@ -213,8 +227,8 @@ minutes after a flight finally reproduced the effect being chased.
   `build_lock.py --wait` and then `build.bat` as two commands; another build
   can take the lock between them.
 - The normal `build.bat` path is the validation build: it runs the Python
-  self-tests, compiles the production DLLs, runs the test rigs, builds and
-  checks the self-contained installer, and writes
+  self-tests, compiles the production DLLs, runs the test rigs (one of them
+  builds and checks the launcher), and writes
   `build\full_build_receipt.json` only after all gates pass. Green means
   green; do not report success off a build you did not read.
 - Compiles go through `tools\compile_cache.py`, which skips a compile whose
@@ -228,8 +242,8 @@ minutes after a flight finally reproduced the effect being chased.
   For the install-only rebuild that gives the DLLs the clean commit's
   version, use `build.bat --dll-only` by absolute path. It requires a
   clean working tree and a matching full-build receipt, rebuilds and
-  validates the production DLLs, and skips the test rigs and
-  self-contained installer. It is a promotion step, never a substitute
+  validates the production DLLs, and skips the test rigs and the
+  launcher build. It is a promotion step, never a substitute
   for validating changed source; if its receipt check fails, run the
   full build again. The receipt fingerprints tracked files, untracked
   files git does not ignore, and the ignored dependency folders
@@ -241,6 +255,9 @@ minutes after a flight finally reproduced the effect being chased.
 - After editing, re-read the changed region for the things that have bitten
   here: declaration order, a duplicated census or log string, a shader
   entry-point name collision that would silently disable a new instrument.
+- **Do not name anything `near` or `far` in C++.** `windows.h` defines both
+  as empty macros, so `Case far = spot;` compiles as `Case = spot;` and the
+  error does not name the cause. Write `nearZ`, `farPlane`, `outOfRange`.
 - **Trace a new instrument end to end before flying it.** A summary path
   that set its finished flag before calling the report was dead on
   arrival; a fix that returned early shadowed the probe meant to measure
@@ -288,9 +305,41 @@ minutes after a flight finally reproduced the effect being chased.
 - Do the work asked for. If something adjacent is worth fixing, say so;
   don't fold it in.
 
+## Tracking work
+
+- **Work is tracked in GitHub issues** on
+  `characterecho-sean/ed-unofficial-patch` (`gh issue list`). A finding
+  to act on later — a review follow-up, a retro item, a bug noticed in
+  passing — becomes an issue. Commits and PRs name it (`(#97)`,
+  `Closes #97`). A plan or task list that only hands one session's work
+  to the next can stay a file; anything meant to outlive the session is
+  an issue.
+- `docs\` holds the evidence: an investigation doc carries an arc's
+  journal, and its `## Status` block links the arc's issues.
+- **Re-fetch a PR's reviews and comments right before posting** replies
+  or a summary to it. A review that landed while you worked otherwise
+  goes unanswered (PR #92, twice).
+
 ## Git
 
 - Solo project: **branch, commit, merge to main, push.** No pull requests.
+- **Merge a branch with `git merge --no-ff -F <file> <branch>`.** Do not
+  fast-forward or squash it. That gives main one commit per branch:
+  `git log --first-parent` lists them, `git bisect start --first-parent`
+  steps by them when each step can cost a flight, and `git revert -m 1
+  <merge>` undoes one. The branch's own commits stay reachable from main,
+  and those are the hashes flight logs and `docs\` cite. The merge's subject
+  says what the branch did, with any issue number: that is the line
+  `--first-parent` shows, and `Merge branch 'claude/admiring-leakey-2a6065'`
+  tells the reader nothing.
+- **If the push is rejected because main moved,** redo the merge:
+  `git fetch origin`, `git reset --keep origin/main`, merge again, push. A
+  plain `git pull` hides the other branch's merge from `--first-parent`, and
+  `git pull --rebase=merges` rewrites the branch's commits, so their hashes
+  leave main.
+- **A log flown from the branch names the branch commit, not the merge.** On
+  main, `--expect-build HEAD` exits 2 for it, so pass
+  `--expect-build <branch commit>`.
 - **The task is not done until it is pushed.** After merging run
   `git push`, then `git log origin/main -1` and confirm the commit is
   actually there. A commit made and never pushed has been noticed from the
@@ -362,10 +411,12 @@ the Ghidra scripts, and, kept local and never committed, the game executables fo
 | `src\d3d11\` | the graphics half: hooks, shader fixes, the draw census |
 | `src\openxr\` | the native OpenXR runtime: the OpenVR ABI Elite calls, translated to OpenXR |
 | `src\openvr\compat\` | the OpenVR ABI header |
-| `src\installer\` | the self-contained installer and its log bundler |
+| `src\installer\` | the install engine (planner, settings, log bundler) and the launcher built from it (`update_*`, `launcher_*`, built with `EDUP_LAUNCHER`); the standalone installer exe is no longer built |
 | `src\common\` | config, logging, the crash sentinel |
 | `tools\` | Python tools, each with `--self-test`; C++ test rigs in subdirs |
 | `docs\` | one investigation doc per arc — read its `## Status` block first |
+| `CODING_STANDARDS.md` | review: the judgement rules for every diff, applied by its author before pushing and by its reviewer |
+| `GLOSSARY.md` | the project's terms: game builds, binding, build-map statuses; use them, add a term when one is settled |
 | `.agents\` | agent-only material: handoff prompts, plans; `export-ignore`, never in an archive |
 | `analysis\` | main checkout only: the private `elite-analysis` repository (git-ignored here), see above |
 | `build.bat` | full build, all gates; `--dll-only` is the receipt-guarded promotion path |

@@ -20,6 +20,7 @@
 #include "flat_camera_inject.h"    // stage 2: the camera injector's VR mode
 #include "flat_camera_phase.h"     // flatCameraCheckRowPair: the rows carry the phases they are claimed to
 #include "flat_live_phase.h"       // FlatLivePhase: the flat profile's phase machine, reused
+#include "dittosr_engine.h"   // dittoReleaseFeatures: the world slot, released when the choice leaves DittoSR
 #include "dlaa.h"
 #include "flat_mono_resolve.h"
 #include "gpu_census.h"
@@ -37,6 +38,8 @@
 #include <windows.h>
 #include <cstring>
 #include <string>
+
+#include "native_on_foot.h"   // F0 gate counter (log only)
 
 namespace edvr {
 
@@ -152,6 +155,7 @@ FlatMonoResolveMode resolveModeFromConfig(bool* known) {
     // (only flat_runtime's own, flat_mono_resolve.cpp:259 refuses a short one), so the route would not get its jitter right.
     // FSR 4.1 follows FSR 3.1's path: the route's own slot, the phase cycle as it is.
     if (known) *known = temporalModeEnabled(m) && _stricmp(m.c_str(), "xess") != 0;
+    if (_stricmp(m.c_str(), "dittosr") == 0) return FlatMonoResolveMode::Ditto;
     if (_stricmp(m.c_str(), "fsr") == 0) return FlatMonoResolveMode::Fsr;
     if (_stricmp(m.c_str(), "fsr4") == 0) return FlatMonoResolveMode::Fsr4;
     if (_stricmp(m.c_str(), "dlss") == 0) return FlatMonoResolveMode::Dlss;
@@ -680,6 +684,18 @@ void windDownInjector() {
 }
 }  // namespace
 
+// The eye route does not run while this route owns the frame (native_temporal.cpp layerOnlyTreat
+// returns before the pass), so the pass's engine change never sees a DittoSR choice that only the
+// world slot used. The next accounted boundary drops those histories. An idle key-off frame returns
+// before this and reads no setting.
+void releaseDittoWhenLeft() {
+    const std::string mode = Config::get().getString("fix.temporal_aa", "off");
+    const bool ditto = _stricmp(mode.c_str(), "dittosr") == 0;
+    static bool wasDitto = false;
+    if (wasDitto && !ditto) dittoReleaseFeatures();
+    wasDitto = ditto;
+}
+
 // ---- the frame boundary ------------------------------------------------------------------------------------------------------------
 void vrWorldRouteFrameBoundary() {
     // The route is on in the DLL; only the rigs switch it off (vrWorldRouteSetEnabledForTest), to start a scenario from a cleared route.
@@ -692,6 +708,7 @@ void vrWorldRouteFrameBoundary() {
         g_ownsNext.store(false, std::memory_order_release);
         return;
     }
+    releaseDittoWhenLeft();
     ++g_frameNo;
 
     // The frame that ended. A curved screen (fix.panel_curvature above 0) does not hold the route off: the layer re-issues it through
@@ -814,9 +831,10 @@ void vrWorldRouteFrameBoundary() {
         } else {
             g_notLiveNoted = nullptr;
         }
-        // The 5 s window: zeros included.
+        // The 10 s window: zeros included; the historical 5s line kinds keep their parser names.
         const uint64_t now = GetTickCount64();
-        if (g_windowStartMs && now - g_windowStartMs >= 5000) {
+        if (g_windowStartMs && now - g_windowStartMs >= 10000) {
+            const double windowSeconds = static_cast<double>(now - g_windowStartMs) / 1000.0;
             char line[1200];
             g_win.jitter = vrWorldJitterName(g_jitter);
             uint64_t curveReissues = 0;
@@ -824,10 +842,10 @@ void vrWorldRouteFrameBoundary() {
             g_win.curveReissues = curveReissues - g_curveReissuesSeen;
             g_curveReissuesSeen = curveReissues;
             vrWorldFormatWindow(line, sizeof(line), key, g_machine.state, layerLive, gate, g_win);
-            Log::get().note("%s", line);
+            Log::get().note("%s; window %.1f s", line, windowSeconds);
             char injectLine[512];
             vrWorldFormatInjectWindow(injectLine, sizeof(injectLine), g_win.inject);
-            Log::get().note("%s", injectLine);
+            Log::get().note("%s; window %.1f s", injectLine, windowSeconds);
             // The refusal census's line (the census key on, samples still in flight from before it went off, or the steady detail's depth
             // check, which counts its own frames whatever the census asks): the resolver's sums since the last window beside the route's
             // own treated count. Absent when the census was not wanted and the resolver counted no frame. Its steady-detail= token is
@@ -846,7 +864,7 @@ void vrWorldRouteFrameBoundary() {
                 rw.view = "off";
                 char refusalLine[1024];
                 vrWorldFormatRefusalWindow(refusalLine, sizeof(refusalLine), rw);
-                Log::get().note("%s", refusalLine);
+                Log::get().note("%s; window %.1f s", refusalLine, windowSeconds);
             }
             g_win.reset();
             g_windowStartMs = now;
@@ -877,6 +895,7 @@ void vrWorldRouteFrameBoundary() {
 
     // The state the next frame starts in.
     g_ownsNext.store(g_machine.owned(), std::memory_order_release);
+    if (g_machine.owned()) nativeOnFootCountGate(NativeOnFootGate::WorldRoute);   // F0 gate counter: an owned frame (log only)
     g_startedOwned = g_machine.owned();
     g_vrWorldWants = g_census || (key == VrWorldKey::Auto && g_machine.wantsDraws() && gate && layerLive);
     g_vrWorldWatchWrites = false;

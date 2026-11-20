@@ -12,9 +12,11 @@ from pathlib import Path
 import struct
 import tempfile
 
+import dump_io   # tools\dump_io.py: eye_<stamp>_Holo.bin is NAME or NAME.z
+
 
 def read(path):
-    data = Path(path).read_bytes()
+    data = dump_io.read_bytes(path)
     if len(data) < 16 or data[:8] != b'EDVRHLO1':
         raise ValueError('Not an EDVRHLO1 capture')
     count, stride = struct.unpack_from('<2I', data, 8)
@@ -45,6 +47,9 @@ def self_test():
         assert r['index'] == 1 and r['eligible'] and r['matched']
         assert r['family'] == 'affine streak'
         assert abs(r['rows'][0][3]+.02) < 1e-8
+        zpath = Path(directory)/'holo_z.bin'
+        dump_io.write_z(zpath, good)   # the compressed container the dump writes, read under the original name
+        assert not zpath.exists() and read(zpath) == read(path)
         for bad in (b'', good[:-1], good+b'\0', good[:12]+struct.pack('<I', 272)+good[16:],
                     good[:8]+struct.pack('<I', 129)+good[12:]):
             path.write_bytes(bad)

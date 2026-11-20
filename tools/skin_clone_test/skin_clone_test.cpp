@@ -355,6 +355,45 @@ void caseDeclines() {
         check(refused, "K3.j a t33 that is not the 336-byte pool is declined");
     }
     {
+        // The eyes' forward pass (vs 33A5): after the displacement block one add carries the pose chain's position into the register the matrix multiplies
+        // read. Build that shape from the displaced synthetic: a new register, an add into it from the position, and the multiplies reading it.
+        using namespace edvr::dxbc_skin_detail;
+        const auto base = programOf(compile(skin_clone_synthetic::vertexSource(true), "vs_5_0"));
+        const Plan basePlan = analyse(base);
+        const auto carried = [&](bool negate) {
+            auto w = base;
+            size_t first = 0;
+            const uint32_t fresh = basePlan.temps;
+            w[basePlan.tempsAt + 1] = fresh + 1;
+            for (size_t at = 2; at < w.size(); at += edvr::dxbc_container::instructionLength(w, at)) {
+                if ((w[at] & 0x7ffu) != kMul || isDeclaration(w[at] & 0x7ffu)) continue;
+                const Instr in = parseInstr(w, at);
+                if (in.operand.size() != 3 || typeOf(w[in.operand[2]]) != kTypeCb || in.operandLen[2] != 3 || w[in.operand[2] + 1] != 1) continue;
+                if (w[in.operand[2] + 2] < 270 || w[in.operand[2] + 2] > 272) continue;
+                if (!first) first = at;
+                w[indexWordAt(w, in.operand[1])] = fresh;
+            }
+            const uint32_t sw = 0x00100006u | ((0u | 1u << 2 | 2u << 4 | 2u << 6) << 4);
+            std::vector<uint32_t> add = {0x07000000u, 0x00100072u, fresh, sw, basePlan.posReg, sw, basePlan.posReg};
+            if (negate) add = {0x08000000u, 0x00100072u, fresh, sw | 0x80000000u, 0x00000041u, basePlan.posReg, sw, basePlan.posReg};
+            w.insert(w.begin() + first, add.begin(), add.end());
+            w[1] = uint32_t(w.size());
+            return w;
+        };
+        const auto shape = carried(false);
+        bool analysed = true;
+        Plan plan;
+        try { plan = analyse(shape); } catch (const std::exception&) { analysed = false; }
+        check(analysed, "K3.l a position carried into the multiplies' register by one add after the branch is analysed");
+        check(analysed && plan.posReg == basePlan.posReg && plan.anchorEnd == basePlan.anchorEnd, "K3.m the anchor is the pose chain's own, in the register before the carry, not the carry");
+        bool patchedOk = true;
+        try { patchProgram(shape, 3); } catch (const std::exception&) { patchedOk = false; }
+        check(patchedOk, "K3.n the carried shape patches");
+        bool refused = false;
+        try { analyse(carried(true)); } catch (const std::exception& e) { refused = has(e.what(), "anchor"); }
+        check(refused, "K3.o a carry from a negated register is not a position: declined");
+    }
+    {
         // the derive step reports no skin register for a shader that cannot take the second skin
         Variant noPose;
         noPose.noPose = true;
@@ -374,6 +413,25 @@ void caseProperties(ID3D11Device* dev, ID3D11DeviceContext* ctx) {
         const unsigned examined = skin_clone_tests::run(dev, ctx, vs, ps, displacement ? "synthetic+displacement" : "synthetic", &check, nullptr, displacement ? "K5" : "K4");
         check(examined > 1000, displacement ? "K5.z the properties were exercised on covered pixels" : "K4.z the properties were exercised on covered pixels");
     }
+    // The NPC hair's forward pass: its pixel shader reads SV_IsFrontFace at the register the vertex shader's E would take, so the family names a
+    // register of its own (kFamilies skinRegister), the same on both stages. With E at the vertex shader's next free register that pair is
+    // refused (the pixel patch finds the register occupied); with E one register further the patched pair creates, links and gives the same
+    // pixels and the same exact E. (A pixel-side remap to a different register was tried and gave wrong E on WARP.)
+    {
+        const auto vs = compile(skin_clone_synthetic::vertexSource(false), "vs_5_0");
+        const auto psFront = compile(skin_clone_synthetic::pixelSourceFrontFace(), "ps_5_0");
+        edvr::EngineVelocityInputs in;
+        std::string why;
+        std::vector<BYTE> refused;
+        const bool derived = edvr::engineVelocityDeriveInputs(vs.data(), vs.size(), in, why);
+        check(derived && in.skinRegister < 32, "K4b.a the pair derives with the vertex shader's next free register for E");
+        edvr::EngineVelocityInputs clash = in;
+        clash.skinExport = true;
+        check(!edvr::engineVelocityPatchPs(psFront.data(), psFront.size(), clash, refused, why) && has(why, "occupied"),
+              "K4b.b the pixel shader's SV_IsFrontFace sits at that register: the export is refused, not silently wrong");
+        const unsigned examined = skin_clone_tests::run(dev, ctx, vs, psFront, "synthetic+front-face input", &check, nullptr, "K4b", in.skinRegister + 1);
+        check(examined > 1000, "K4b.z the properties were exercised on covered pixels with E one register further");
+    }
 }
 
 // ---- K9 ------------------------------------------------------------------------------------------------------------------
@@ -387,13 +445,20 @@ std::vector<BYTE> readFile(const std::string& path) {
     return b;
 }
 void caseCorpus(ID3D11Device* dev, ID3D11DeviceContext* ctx, const std::string& dir) {
-    struct Pair { const char* vs; const char* ps; std::vector<std::pair<unsigned, float>> material; bool useMaterial; };
+    struct Pair { const char* vs; const char* ps; std::vector<std::pair<unsigned, float>> material; bool useMaterial; uint32_t skinRegister = ~0u; };
     const Pair pairs[] = {
         {"vs_D99AFDC250D19A3F", "ps_E86271E464CCDC1D", {}, false},
         {"vs_61AE8EB05FDC18DD", "ps_451A82D4DD1BA254", {}, false},
         {"vs_114AF608F86D9ED8", "ps_A17504A2627767F2", {{23, 1000.0f}}, true},   // cb2[5].w: the discard threshold
         {"vs_7B0DC42D383F694C", "ps_0DF03E64DF9DBEF1", {{23, 1000.0f}}, true},
         {"vs_8B589D25B2A0ADDC", "ps_7268762D11A610F2", {}, true},                // an all-zero b2 turns the alpha test off
+        // the hair's forward pass (2026-11-01): E travels in v8 (kFamilies skinRegister; its pixel shader reads SV_IsFrontFace at v7). Its two
+        // discards are a dissolve test (cb2[2].y) and a checkerboard alpha test against cb2[0].y / cb2[0].z: a threshold of -1000 keeps every pixel
+        {"vs_A6A39338C06E03A1", "ps_1AE6AB9A94C0456E", {{1, -1000.0f}, {2, -1000.0f}}, true, 8},
+        // the commander's suit and helmet (2026-11-05): cb2[13].w is the discard threshold, as cb2[5].w is 114A's
+        {"vs_01DA82F8D0EA0C99", "ps_2C3ADCD2FCD47298", {{55, 1000.0f}}, true},
+        // an NPC's eyes (2026-11-05): the discard is t11's alpha against max(v2.w, cb2[4].x), so a cb2[4].x of -1000 leaves v2.w to decide
+        {"vs_33A5025C48FC8259", "ps_7AA0441EE0E88667", {{16, -1000.0f}}, true},
     };
     unsigned present = 0;
     for (const Pair& p : pairs) {
@@ -404,7 +469,7 @@ void caseCorpus(ID3D11Device* dev, ID3D11DeviceContext* ctx, const std::string& 
         }
         ++present;
         const std::string name = std::string(p.vs) + "+" + p.ps;
-        skin_clone_tests::run(dev, ctx, vs, ps, name.c_str(), &check, p.useMaterial ? &p.material : nullptr, "K9");
+        skin_clone_tests::run(dev, ctx, vs, ps, name.c_str(), &check, p.useMaterial ? &p.material : nullptr, "K9", p.skinRegister);
     }
     check(present > 0, "K9.a the dump holds at least one of the game's skinned pairs");
 }

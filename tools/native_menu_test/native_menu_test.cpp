@@ -2,6 +2,12 @@
 #include "../../src/common/frame_flag.h"
 #include "../../src/common/parallel_projection_notice.h"
 #include "../../src/d3d11/menu_panel.h"
+#include "../../src/d3d11/menu_flat_layout.h"
+#include "../../src/d3d11/menu_flat_status.h"
+#include "../../src/d3d11/menu_flat_status_layout.h"
+#include "../../src/d3d11/menu_tab_strip.h"
+#include "../../src/d3d11/menu_flat_footer.h"
+#include "../../src/d3d11/menu_flat_rows.h"
 #include "../../src/openxr/native_menu_client.h"
 #include "../../src/openxr/eye_capture.h"
 #include "../../src/openxr/immediate_executor.h"
@@ -12,7 +18,9 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <cstdio>
+#include <utility>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <thread>
@@ -106,11 +114,528 @@ static bool changedBounds(const std::vector<UINT>& pixels, UINT width, UINT heig
     return true;
 }
 
+// The panel's ruler at a fixed em, as menu.cpp's flatWarnMeasure gives it.
+static int statusRuler(const char* text, void* context) { return edvr::menuPanelMeasureLine(text, *static_cast<int*>(context)); }
+
 int wmain(int argc, wchar_t** argv) {
     SetErrorMode(3);
     if (argc != 2) return 2;
     if (!std::wcscmp(argv[1], L"--dry-run")) {
         std::puts("native_menu_test: dry-run (no WARP device)"); return 0;
+    }
+    if (!std::wcscmp(argv[1], L"--layout")) {
+        // The panel's bitmap height is the on-screen card's shape: the
+        // raster stores its aspect and halfH = halfW * aspect, so a height
+        // that changes between pages changes the card's size. An entries
+        // page therefore reserves its hint box (reserveHint, menu_panel.cpp)
+        // and holds whatever the highlighted row's hint holds, or scrolling
+        // over a row that does (and one that does not) carry a hint makes
+        // the card grow and shrink. A page built without a hint line on
+        // purpose -- the Monitor -- sets no reserveHint and pays nothing
+        // for a box it never fills: the box is part of the bitmap's height,
+        // and carrying it for no reason pushes the page nearer the
+        // raster's 2048-px bound and makes it stop updating sooner. The
+        // Debug tab's heading is measured against the rect layout() draws
+        // it into: the single-line draw path is DT_END_ELLIPSIS, so a
+        // heading wider than its rect reads cut.
+        unsigned checks = 0, fails = 0;
+        auto check = [&](bool ok, const char* name) {
+            ++checks; if (!ok) { ++fails; std::printf("FAIL: %s\n", name); }
+        };
+        edvr::MenuContent page{};
+        page.widthPx = page.cardPx = 256;
+        page.capPx = 34;
+        page.tabCount = 3;
+        for (int i = 0; i < 3; ++i) std::snprintf(page.tabs[i], sizeof(page.tabs[i]), "Tab %d", i);
+        page.activeTab = 1;
+        page.lineCount = 5;
+        for (int i = 0; i < 5; ++i) std::snprintf(page.lines[i].left, sizeof(page.lines[i].left), "Row %d", i);
+        std::strcpy(page.footer, "keys");
+        // The entries-page property: the hint box is row-dependent (the
+        // highlighted row's hint, the rest's none), so a padded entries
+        // page must reserve it -- and keep its height -- whatever the
+        // highlight's hint holds, or the card changes size on a scroll.
+        page.reserveHint = true;
+        const int plain = edvr::menuPanelLayoutHeightForTest(page);
+        check(plain > 0, "a plain page has a layout height");
+        const int hintH = page.capPx * 34 / 10;
+        check(hintH > 0, "the hint box has a height at this cap");
+        const char* hints[] = {
+            "Choose DLSS to change its model preset.",
+            "No runtime width on record yet; the panel stays at the game's own 1920x1080 until a session with VR running has completed once.",
+            "Turn anti-aliasing on to sharpen.",
+            "Currently resolves to 3840x2160.",
+        };
+        for (const char* hint : hints) {
+            std::strcpy(page.hint, hint);
+            check(edvr::menuPanelLayoutHeightForTest(page) == plain,
+                  "a hinted page that reserves its hint box is the same height as an unhinted one");
+        }
+        std::strcpy(page.hint, "");
+        // The Monitor-page guard (dadf5304 regressed it): a page built
+        // without a hint line on purpose sets no reserveHint, so it
+        // reserves the box for nothing and pays hintH for an empty card
+        // region it never shows -- pushing the page toward the raster's
+        // 2048-px bound. Its height must be exactly what it was before the
+        // box was always reserved: a plain, unhinted page is one hint box
+        // shorter than the same page that reserves the box.
+        page.reserveHint = false;
+        const int monitorH = edvr::menuPanelLayoutHeightForTest(page);
+        check(monitorH == plain - hintH,
+              "a page that builds no hint line reserves none and is a hint box shorter than one that does");
+        // The Debug tab's heading, against the rect layout() draws it into
+        // (menuPanelLineRectForTest reads it from layout()'s own text op).
+        // Flat's old fixed raster: cardPx 860, capPx 34 (the reference of menu_flat_layout.h; the sizes the flat card is rasterised at now are checked below). The
+        // heading takes the whole line: its left is pad and its right is
+        // cardW - pad / 2, so the rect is 820 px here; DT_END_ELLIPSIS cuts text
+        // at its right edge. Without the full-width arm in layout() the rect
+        // is the setting split's 503 px and the 805 px sentence is cut.
+        edvr::MenuContent dbg{};
+        dbg.widthPx = dbg.cardPx = 860;
+        dbg.capPx = 34;
+        dbg.tabCount = 1;
+        std::snprintf(dbg.tabs[0], sizeof(dbg.tabs[0]), "Debug");
+        dbg.lineCount = 1;
+        std::snprintf(dbg.lines[0].left, sizeof(dbg.lines[0].left), "For bug reports. Both are off unless you turn them on.");
+        dbg.lines[0].style = edvr::kMenuHeading;
+        std::strcpy(dbg.footer, "keys");
+        int hx0 = 0, hy0 = 0, hx1 = 0, hy1 = 0;
+        edvr::menuPanelLineRectForTest(dbg, 0, &hx0, &hy0, &hx1, &hy1);
+        const int headingBoxW = hx1 - hx0;
+        const int headingW = edvr::menuPanelMeasureLine(dbg.lines[0].left, dbg.capPx);
+        check(hx0 == 27 && headingBoxW == 820,
+              "the heading shares the label inset and retains its full-width prose allowance");
+        check(headingW > 0 && headingW <= headingBoxW,
+              "the Debug heading fits the rect it is drawn into (no ellipsis)");
+        // Restart status has its own full line, including when the primary
+        // value becomes a switch or is being edited. Measure the requested
+        // fonts independently of the layout's rectangle calculations.
+        auto lineHeight = [](int em) {
+            HDC dc = CreateCompatibleDC(nullptr);
+            HFONT font = CreateFontW(-em, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                    ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+            HGDIOBJ old = SelectObject(dc, font);
+            TEXTMETRICW metrics{};
+            GetTextMetricsW(dc, &metrics);
+            SelectObject(dc, old);
+            DeleteObject(font);
+            DeleteDC(dc);
+            return metrics.tmHeight;
+        };
+        for (const int cap : {14, 34, 50, 60, 80}) {
+            edvr::MenuContent badges{};
+            badges.widthPx = badges.cardPx = cap == 14 ? 357 : 860;
+            badges.capPx = cap;
+            badges.lineCount = 9;
+            badges.reserveHint = true;
+            std::strcpy(badges.overlayLine, "58 fps   gpu 11.3 ms   cpu 9.1 ms");
+            for (int i = 0; i < 9; ++i) {
+                auto& l = badges.lines[i];
+                std::strcpy(l.left, "Frame generation");
+                std::strcpy(l.right, "off -> on");
+                l.style = edvr::kMenuRow;
+                l.badge = edvr::kBadgePending;
+                l.reserveBadge = true;
+            }
+            const auto pending = edvr::menuPanelRowRectsForTest(badges, 0);
+            check(pending.label[1] == pending.value[1] && pending.label[3] == pending.value[3],
+                  "a badged row's label and value share the primary baseline");
+            check(pending.value[3] - pending.value[1] >= lineHeight(cap * 10 / 7),
+                  "the primary value has a complete GDI line box");
+            check(pending.badge[1] >= pending.value[3] && pending.badge[3] - pending.badge[1] >= lineHeight(cap * 8 / 10),
+                  "the badge has a complete GDI line below the primary value");
+            check(pending.selectable && pending.hitTop <= pending.label[1] && pending.hitBottom >= pending.badge[3],
+                  "the row's selectable area includes both primary and secondary text");
+            const int visible = edvr::menuPanelEntryRows(badges, 9);
+            check(visible > 0 && visible <= 9 && (cap > 50 || visible == 9),
+                  "the stable badge window retains nine rows at normal sizes and scrolls at larger text sizes");
+            badges.lineCount = visible;
+            const int height = edvr::menuPanelLayoutHeightForTest(badges);
+            std::printf("  badge window at cap %d: %d rows, %d px tall\n", cap, visible, height);
+            check(height <= 2048, "the pending row window and locked readout fit the raster through the maximum cap 80");
+            if (visible < 9) {
+                ++badges.lineCount;
+                check(edvr::menuPanelLayoutHeightForTest(badges) > 2048,
+                      "the large-text window keeps every row that fits but excludes the first overflowing row");
+                --badges.lineCount;
+            }
+            badges.lines[0].badge = edvr::kBadgeNone;
+            badges.lines[0].style = edvr::kMenuRowEdit;
+            const auto editing = edvr::menuPanelRowRectsForTest(badges, 0);
+            check(edvr::menuPanelLayoutHeightForTest(badges) == height && editing.hitBottom == pending.hitBottom,
+                  "editing a reserved restart row preserves page height and pointer geometry");
+            badges.lines[0].badge = edvr::kBadgeRestart;
+            badges.lines[0].toggle = 2;
+            badges.lines[0].right[0] = 0;
+            const auto toggle = edvr::menuPanelRowRectsForTest(badges, 0);
+            check(toggle.badge[3] - toggle.badge[1] >= lineHeight(cap * 8 / 10),
+                  "a restart badge remains readable beside a switch-only primary row");
+        }
+        // The wiring that makes a padded page reserve its hint box is in
+        // menu.cpp's build, which this rig does not link -- so the height
+        // checks above set reserveHint themselves and cannot see it. Read
+        // the source and pin that menu.cpp sets c.reserveHint = true inside
+        // the pad block, before its pad loop: that block is the only place
+        // that runs, so pinning it there (and nowhere else) means a page
+        // that pads its page reserves the box and a page that does not
+        // (the Monitor, the prompt page) does not. Deleting the line, or
+        // moving it outside the pad block, fails here.
+        {
+            std::ifstream in("src/d3d11/menu.cpp");
+            std::string menu((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            const std::string guard = "if (!p.prompt && c.lineCount > 0) {";
+            const std::string padLoop = "for (int i = c.lineCount; i < visibleRows && i < kMenuMaxLines; ++i)";
+            const size_t g = menu.find(guard);
+            const size_t set = menu.find("c.reserveHint = true;");
+            const size_t loop = menu.find(padLoop);
+            check(!menu.empty() && g != std::string::npos && loop != std::string::npos && g < loop,
+                  "menu.cpp's pad block and pad loop can be found in the source");
+            check(set != std::string::npos && g < set && set < loop,
+                  "menu.cpp sets reserveHint inside the pad block, ahead of its pad loop");
+            check(menu.find("c.reserveHint = true;", set + 1) == std::string::npos,
+                  "menu.cpp sets reserveHint in exactly one place (the pad block; the Monitor and prompt pages reserve none)");
+        }
+        // The flat card's sizing (menu_flat_layout.h). Its reference constants were derived from the Performance tab's shape at the old fixed raster (860 px wide,
+        // cap 34): eleven rows, a reserved hint box, three tabs, a two-line footer. Measure that shape here, so a layout change that moves it fails this rig
+        // and the constants are looked at, instead of the flat card drifting from the size it had at 1920x1080.
+        auto flatPage = [](int rows, int card, int cap) {
+            edvr::MenuContent c{};
+            c.widthPx = c.cardPx = card;
+            c.capPx = cap;
+            c.tabCount = 3;
+            std::snprintf(c.tabs[0], sizeof(c.tabs[0]), "Performance");
+            std::snprintf(c.tabs[1], sizeof(c.tabs[1]), "Visual");
+            std::snprintf(c.tabs[2], sizeof(c.tabs[2]), "Debug");
+            c.lineCount = rows;
+            for (int i = 0; i < rows; ++i) std::snprintf(c.lines[i].left, sizeof(c.lines[i].left), "Row %d", i);
+            c.reserveHint = true;
+            std::strcpy(c.footer, "Up/Down row  Left/Right change  Tab page\nline two");
+            return c;
+        };
+        const int perfH = edvr::menuPanelLayoutHeightForTest(flatPage(11, 860, 34));
+        const float perfAspect = static_cast<float>(perfH) / 860.0f;
+        check(std::fabs(perfAspect - 1106.0f / 860.0f) < 0.02f,
+              "the Performance tab's bitmap is still the shape the flat card's reference size was derived from (aspect 1106 / 860)");
+        for (const int outH : {1080, 2160}) {
+            const int outW = outH * 16 / 9;
+            const edvr::FlatCardSize fs = edvr::flatCardSize(outW, outH, edvr::kFlatMenuCardHeightFrac);
+            if (outH == 1080) {
+                check(std::fabs(edvr::flatLegacyCardPx(outW, outH, perfAspect) - static_cast<float>(fs.cardPx)) < 0.01f * static_cast<float>(fs.cardPx),
+                      "the flat card at 1920x1080 is within one percent of the old composite's width for the measured aspect");
+            }
+            // A notice is told from the menu by its raster's height (menu.cpp, ScreenNoticeState::tick): at both output sizes the one-line notice
+            // sits under the bound and the menu's smallest page (the Debug tab, padded to its nine rows) over it.
+            const edvr::FlatCardSize ns = edvr::flatCardSize(outW, outH, edvr::kFlatNoticeHeightFrac);
+            edvr::MenuContent notice{};
+            notice.toast = true;
+            notice.lineCount = 1;
+            std::strcpy(notice.lines[0].left, "Anti-aliasing changed to DLSS (Quality)");
+            notice.widthPx = notice.cardPx = ns.cardPx;
+            notice.capPx = ns.capPx;
+            const int bound = edvr::flatNoticeMaxRasterPx(outH);
+            check(edvr::menuPanelLayoutHeightForTest(notice) < bound, "a one-line flat notice's raster is under the notice bound at this output size");
+            check(edvr::menuPanelLayoutHeightForTest(flatPage(9, fs.cardPx, fs.capPx)) > bound,
+                  "the flat menu's smallest page is over the notice bound at this output size");
+        }
+        {
+            std::ifstream in("src/d3d11/menu.cpp");
+            std::string menu((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            check(!menu.empty() && menu.find("flatCardSize(") != std::string::npos,
+                  "menu.cpp sizes the flat card with flatCardSize");
+            check(menu.find("c.cardPx = c.widthPx = 860;") == std::string::npos, "menu.cpp no longer rasterises the flat card at a fixed 860 px");
+        }
+        // The same heading at the sizes the flat card is rasterised at now: smaller faces must still fit the rect (no ellipsis).
+        for (const int outH : {720, 1080, 1440, 2160}) {
+            const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+            edvr::MenuContent d2 = dbg;
+            d2.widthPx = d2.cardPx = fs.cardPx;
+            d2.capPx = fs.capPx;
+            int ax0 = 0, ay0 = 0, ax1 = 0, ay1 = 0;
+            edvr::menuPanelLineRectForTest(d2, 0, &ax0, &ay0, &ax1, &ay1);
+            const int w2 = edvr::menuPanelMeasureLine(d2.lines[0].left, d2.capPx);
+            if (w2 > ax1 - ax0) std::printf("  heading at %dp: %d px in a %d px rect\n", outH, w2, ax1 - ax0);
+            check(w2 > 0 && w2 <= ax1 - ax0, "the Debug heading fits its rect at the flat card's rasterised size");
+        }
+        // The flat Monitor page at the sizes the flat card is rasterised at (menu.cpp buildMonitor, flat): four tabs, eleven tiles three across (the rendered
+        // three, the presented three under the bridge, the four slow samplers), two note lines (the bridge's and the last drop), three strips (CPU, rendered,
+        // presented) and the footer. It must stay under the raster's 2048-px height bound and, so that it is drawn 1:1, under the share of the output's height
+        // the placement allows (menu_flat_layout.h kFlatMaxHeightFrac).
+        auto flatMonitor = [](int outH) {
+            const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+            edvr::MenuContent c{};
+            c.widthPx = c.cardPx = fs.cardPx;
+            c.capPx = fs.capPx;
+            c.compact = true;
+            c.tabCount = 4;
+            std::snprintf(c.tabs[0], sizeof(c.tabs[0]), "Performance");
+            std::snprintf(c.tabs[1], sizeof(c.tabs[1]), "Visual");
+            std::snprintf(c.tabs[2], sizeof(c.tabs[2]), "Monitor");
+            std::snprintf(c.tabs[3], sizeof(c.tabs[3]), "Debug");
+            c.tileCount = 11;
+            c.tileColumns = 3;
+            c.lineCount = 2;
+            for (int i = 0; i < 2; ++i) {
+                std::snprintf(c.lines[i].left, sizeof(c.lines[i].left), "Note %d", i);
+                c.lines[i].style = edvr::kMenuNote;
+            }
+            c.graphCount = edvr::kMenuMaxGraphs;
+            std::strcpy(c.footer, "Up/Down row  Left/Right change  Tab page\nline two");
+            return c;
+        };
+        for (const int outH : {1080, 1440, 2160}) {
+            const int h = edvr::menuPanelLayoutHeightForTest(flatMonitor(outH));
+            std::printf("  flat Monitor raster at %dp: %d px tall (bound 2048, 1:1 up to %d)\n", outH, h,
+                        static_cast<int>(edvr::kFlatMaxHeightFrac * static_cast<float>(outH)));
+            check(h > 0 && h < 2048, "the flat Monitor page is under the raster's 2048-px height bound at 1080p, 1440p and 2160p");
+            check(static_cast<float>(h) <= edvr::kFlatMaxHeightFrac * static_cast<float>(outH),
+                  "the flat Monitor page is drawn 1:1 (under the placement's height share) at 1080p, 1440p and 2160p");
+        }
+        // The flat monitor panel (menu.cpp buildMonitorPanel; menu_panel.h, the monitor slot): the same content under one tab and a one-line footer, on the menu
+        // card's width and text height. Under the raster's 2048-px bound and drawn 1:1 at 720p, 1080p, 1440p and 2160p, in the upper right corner level with the
+        // menu card and clear of it and its tooltip strip.
+        for (const int outH : {720, 1080, 1440, 2160}) {
+            const int outW = outH * 16 / 9;
+            edvr::MenuContent c = flatMonitor(outH);
+            c.tabCount = 1;
+            c.activeTab = 0;
+            std::snprintf(c.tabs[0], sizeof(c.tabs[0]), "Monitor");
+            std::strcpy(c.footer, "F5 hides this panel");
+            const int h = edvr::menuPanelLayoutHeightForTest(c);
+            std::printf("  flat monitor panel at %dp: %dx%d px (1:1 up to %d px tall)\n", outH, c.widthPx, h,
+                        static_cast<int>(edvr::kFlatMaxHeightFrac * static_cast<float>(outH)));
+            check(h > 0 && h < 2048, "the flat monitor panel is under the raster's 2048-px height bound at 720p, 1080p, 1440p and 2160p");
+            const edvr::FlatPlacement panel = edvr::flatPlace(outW, outH, c.widthPx, h, edvr::FlatCorner::UpperRight);
+            check(panel.oneToOne && panel.w == c.widthPx && panel.h == h, "the flat monitor panel is drawn 1:1 at 720p, 1080p, 1440p and 2160p");
+            const int menuW = edvr::flatBitmapWidth(c.cardPx, true, edvr::kTipRatio);
+            const edvr::FlatPlacement menu = edvr::flatPlace(outW, outH, menuW, h);
+            check(panel.y == menu.y && panel.x + panel.w == outW - static_cast<int>(std::lround(edvr::kFlatMarginFrac * outW)) && menu.x + menu.w < panel.x,
+                  "the flat monitor panel sits in the upper right corner, level with the menu card and clear of the card and its tooltip strip");
+        }
+        // The flat Status page (menu.cpp buildFlatStatus, menu_flat_status.h): five tabs of six, the most lines the page has (every source present) and the warning's
+        // ten note lines under them, compact, with the page's hint and the footer. Under the raster's 2048-px bound and drawn 1:1 at the sizes the card is rasterised
+        // at; every caption and value row (menu_flat_status_layout.h, long values wrapped) fits its column, measured in the note face it is drawn in, and the
+        // Performance tab's pointer fits one line of the card, so nothing is cut at the right edge.
+        {
+            const char* wrapperCaptions[edvr::kFlatStatusMaxLines] = {"ED-UP", "Profile", "Display", "Anti-aliasing", "Upscaling", "Frame generation", "Sharpening",
+                                                                    "HUD quality", "Graphics wrapper", "Keyboard", "Elite settings", "Restart pending", "Last write"};
+            edvr::FlatStatusInput in;
+            in.version = "v1.2.3-123-gabcdef0";
+            in.gameBuild = "334925";
+            in.outW = 3840;
+            in.outH = 2160;
+            in.refreshHz = 144.0f;
+            in.displayMode = edvr::FlatDisplayMode::Windowed;
+            in.aaOn = true;
+            in.aaLabel = "DLSS";
+            in.aaModel = "K";
+            in.aaRun = edvr::FlatAaRun::Paused;
+            in.sceneKnown = true;
+            in.renderW = 2560;
+            in.renderH = 1440;
+            in.sceneOutW = 3840;
+            in.sceneOutH = 2160;
+            in.fg = edvr::FlatFgState::OnIdle;
+            in.fgExclusiveFullscreen = true;
+            in.sharpening = "off";
+            in.hudQuality = "High";
+            in.hudAntiAliasing = "on";
+            in.wrapper = "ReShade64.dll";
+            in.keyboardReady = true;
+            in.eliteWarningActive = true;
+            in.waitingCount = 3;
+            in.waitingLabels = "XeSS Frame Generation...";
+            in.lastWrite = "fix.xess_generated_frames = 3";
+            edvr::FlatStatusLine sl[edvr::kFlatStatusMaxLines];
+            const int sn = edvr::flatStatusLines(in, sl, edvr::kFlatStatusMaxLines);
+            check(sn == edvr::kFlatStatusMaxLines, "the flat Status fixture has every line");
+            for (int i = 0; i < sn; ++i) check(std::strcmp(sl[i].caption, wrapperCaptions[i]) == 0, "the flat Status fixture's lines are in the page's order");
+            for (const int outH : {1080, 1440, 2160}) {
+                const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+                edvr::MenuContent c{};
+                c.widthPx = c.cardPx = fs.cardPx;
+                c.capPx = fs.capPx;
+                c.compact = true;
+                c.tabCount = 5;
+                const char* tabs[5] = {"Performance", "Visual", "Hotkeys", "Status", "Debug"};
+                for (int i = 0; i < 5; ++i) std::snprintf(c.tabs[i], sizeof(c.tabs[i]), "%s", tabs[i]);
+                c.activeTab = 3;
+                int em = edvr::flatStatusEmPx(fs.capPx);
+                edvr::FlatStatusLayout layout;
+                edvr::flatStatusLayout(sl, sn, fs.cardPx, fs.capPx, &statusRuler, &em, &layout);
+                c.rowFontPx = em;
+                c.infoSplitPx = layout.splitPx;
+                const int pad = fs.capPx * 8 / 10;
+                const int captionW = layout.splitPx - pad;
+                const int valueW = fs.cardPx - pad - layout.splitPx;
+                int widest = 0;
+                for (int i = 0; i < layout.rowCount; ++i) {
+                    if (c.lineCount >= edvr::kMenuMaxLines) break;
+                    edvr::MenuLine& l = c.lines[c.lineCount++];
+                    std::snprintf(l.left, sizeof(l.left), "%s", layout.rows[i].caption);
+                    std::snprintf(l.right, sizeof(l.right), "%s", layout.rows[i].value);
+                    l.style = edvr::kMenuInfo;
+                    const int cw = edvr::menuPanelMeasureLine(l.left, em);
+                    const int vw = edvr::menuPanelMeasureLine(l.right, em);
+                    if (vw > widest) widest = vw;
+                    if (cw > captionW || vw > valueW)
+                        std::printf("  Status row %d too wide at %dp: caption %d of %d px, value %d of %d px\n", i, outH, cw, captionW, vw, valueW);
+                    check(cw <= captionW, "the flat Status page's captions fit their column, measured in the face they are drawn in");
+                    check(vw <= valueW, "the flat Status page's values fit their column, measured in the face they are drawn in");
+                }
+                check(layout.rowCount < edvr::kFlatStatusMaxRows, "the flat Status layout dropped no row");
+                for (int i = 0; i < 10; ++i) {
+                    if (c.lineCount >= edvr::kMenuMaxLines) break;
+                    edvr::MenuLine& l = c.lines[c.lineCount++];
+                    std::snprintf(l.left, sizeof(l.left), "Elite's post-processing is not recognised, note line %d", i);
+                    l.style = edvr::kMenuNote;
+                }
+                check(c.lineCount <= edvr::kMenuMaxLines, "the flat Status page's rows and the warning's ten lines fit the card's lines");
+                std::printf("  flat Status at %dp: %d rows, caption column %d px, value column %d px\n", outH, layout.rowCount, captionW, valueW);
+                std::snprintf(c.hint, sizeof(c.hint), "%s", "The page a support thread will ask to see. Tab for the next page.");
+                c.reserveHint = true;
+                std::strcpy(c.footer, "Up/Down row  Left/Right change  Tab page\nline two");
+                const int h = edvr::menuPanelLayoutHeightForTest(c);
+                std::printf("  flat Status raster at %dp: %d px tall (bound 2048, 1:1 up to %d), widest value %d of %d px\n", outH, h,
+                            static_cast<int>(edvr::kFlatMaxHeightFrac * static_cast<float>(outH)), widest, valueW);
+                check(h > 0 && h < 2048, "the flat Status page is under the raster's 2048-px height bound at 1080p, 1440p and 2160p");
+                check(static_cast<float>(h) <= edvr::kFlatMaxHeightFrac * static_cast<float>(outH),
+                      "the flat Status page, worst case, is drawn 1:1 (under the placement's height share) at 1080p, 1440p and 2160p");
+            }
+        // The flat tab strip (menu_tab_strip.h): the five flat tabs, measured in the bold tab face, fit the card's row at every flat size with no
+        // window and no arrows, at or above the floor of the face; and each tab's rect is at least its name's width (the raster draws a name in its rect).
+        {
+            const char* flatTabs[5] = {"Performance", "Visual", "Hotkeys", "Status", "Debug"};
+            for (const int outH : {720, 1080, 1440, 2160}) {
+                const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+                const int room = fs.cardPx - 2 * (fs.capPx * 8 / 10);
+                const int em = edvr::tabStripFitEm(flatTabs, 5, room, fs.capPx, &edvr::menuPanelTabWidth);
+                const int strip = edvr::tabStripWidth(flatTabs, 5, em, edvr::tabStripGapPx(fs.capPx), &edvr::menuPanelTabWidth);
+                std::printf("  flat tab strip at %dp: em %d (default %d, floor %d), %d of %d px\n", outH, em, edvr::tabStripDefaultEm(fs.capPx),
+                            edvr::tabStripMinEm(fs.capPx), strip, room);
+                check(strip <= room, "the flat menu's five tabs fit the card's row, measured in the tab face");
+                check(em >= edvr::tabStripMinEm(fs.capPx), "the flat tab face stays at or above its floor");
+            }
+        }
+        // The flat footer's first-line legends (menu_flat_footer.h) fit the footer line, measured in the Small face it is drawn in (em = the cap height),
+        // at every flat size: the single-line draw path would ellipsise one that did not.
+        for (const int outH : {720, 1080, 1440, 2160}) {
+            const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+            const int line = fs.cardPx - 2 * (fs.capPx * 8 / 10);
+            int widest = 0;
+            for (const char* legend : edvr::kFlatFooterLegends) {
+                const int w = edvr::menuPanelMeasureLine(legend, fs.capPx);
+                if (w > widest) widest = w;
+                if (w > line) std::printf("  flat footer legend too wide at %dp: %d of %d px: %s\n", outH, w, line, legend);
+                check(w <= line, "every flat footer legend fits the footer line, measured in the Small face");
+            }
+            std::printf("  flat footer legends at %dp: widest %d of %d px\n", outH, widest, line);
+        }
+        // Every row label the flat menu shows (menu_flat_rows.h's three tables and the flat Hotkeys page's keys), read from edvr.ini's `# ui:` lines, fits the
+        // actual label rectangle from menu_panel.cpp in the Row face it is drawn in (em cap * 10 / 7), at every flat size. Two labels were
+        // ellipsised on the Performance tab at 1080p (2026-11-16) and nothing measured them.
+        {
+            std::vector<std::string> keys;
+            for (const auto& r : edvr::kFlatPageRows) keys.push_back(r.key);
+            for (const auto& r : edvr::kFlatVisualRows) keys.push_back(r.key);
+            for (const auto& r : edvr::kFlatDebugRows) keys.push_back(r.key);
+            for (const char* k : {"menu", "compare_aa", "monitor_panel"}) keys.push_back(k);
+            std::ifstream ini("edvr.ini");
+            std::vector<std::string> lines;
+            for (std::string l; std::getline(ini, l);) {
+                if (!l.empty() && l.back() == '\r') l.pop_back();
+                lines.push_back(l);
+            }
+            std::vector<std::string> labels;
+            for (const std::string& key : keys) {
+                std::string label;
+                for (size_t i = 0; i < lines.size() && label.empty(); ++i) {
+                    // A key shipped commented out (the Debug tab's, `#flat_cpu_timing = off`) still has its row.
+                    const std::string& l = lines[i];
+                    const size_t at = !l.empty() && l[0] == '#' ? 1 : 0;
+                    if (l.compare(at, key.size(), key) != 0) continue;
+                    size_t p = at + key.size();
+                    while (p < l.size() && l[p] == ' ') ++p;
+                    if (p >= l.size() || l[p] != '=') continue;
+                    // The `# ui:` (or `# dev:`) line is within the four lines above the key.
+                    for (size_t j = i; j > 0 && j + 4 > i && label.empty(); --j) {
+                        const std::string& u = lines[j - 1];
+                        const size_t tag = u.rfind("# ui: ", 0) == 0 ? 6 : u.rfind("# dev: ", 0) == 0 ? 7 : 0;
+                        if (!tag) continue;
+                        const size_t bar = u.find(" |", tag);
+                        label = u.substr(tag, bar == std::string::npos ? std::string::npos : bar - tag);
+                    }
+                }
+                if (label.empty()) std::printf("  flat row label not found in edvr.ini for key %s\n", key.c_str());
+                check(!label.empty(), "every flat row's label is found in edvr.ini");
+                if (!label.empty()) labels.push_back(label);
+            }
+            for (const int outH : {720, 1080, 1440, 2160}) {
+                const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+                edvr::MenuContent probe{};
+                probe.widthPx = probe.cardPx = fs.cardPx;
+                probe.capPx = fs.capPx;
+                probe.lineCount = 1;
+                probe.lines[0].style = edvr::kMenuRow;
+                std::strcpy(probe.lines[0].left, "label");
+                int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+                edvr::menuPanelLineRectForTest(probe, 0, &x0, &y0, &x1, &y1);
+                const int column = x1 - x0;
+                const int em = fs.capPx * 10 / 7;
+                int widest = 0;
+                for (const std::string& label : labels) {
+                    const int w = edvr::menuPanelMeasureLine(label.c_str(), em);
+                    if (w > widest) widest = w;
+                    if (w > column) std::printf("  flat row label too wide at %dp: %d of %d px: %s\n", outH, w, column, label.c_str());
+                    check(w <= column, "every flat row label fits the label column, measured in the Row face");
+                }
+                std::printf("  flat row labels at %dp: %zu labels, widest %d of %d px\n", outH, labels.size(), widest, column);
+            }
+        }
+        // The Performance tab's pointer to the Status tab is one line of the card at every flat size, measured with the note face's em.
+            for (const int outH : {720, 1080, 1440, 2160}) {
+                const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+                const int width = fs.cardPx - 2 * (fs.capPx * 8 / 10);
+                const int w = edvr::menuPanelMeasureLine(edvr::kFlatWarningPointer, fs.capPx * 8 / 7);
+                std::printf("  Performance pointer at %dp: %d of %d px\n", outH, w, width);
+                check(w > 0 && w <= width, "the Performance tab's pointer to the Status tab fits one note line");
+            }
+        }
+        // The detailed frame-rate card (menuPanelBuildReadoutContent, menu.cpp buildReadoutContent): three lines and two strips, at the flat text heights and at the
+        // VR reference face (cap 42, with and without an angular width). Under the raster's height bound, and in flat small enough to be a corner card.
+        {
+            const char* lines[3] = {"render 58.4 / shown 116.8 fps", "17.1 ms   worst 52 fps   cpu 9.1 ms   drops 12", "FG stopped: a wait on the queue timed out"};
+            auto detailed = [&](int cap, int minCard, float deg, float* angular) {
+                edvr::MenuContent c{};
+                const bool ok = edvr::menuPanelBuildReadoutContent(c, lines, 3, cap, minCard, deg, angular);
+                c.graphCount = 2;
+                return std::make_pair(ok, c);
+            };
+            for (const int outH : {1080, 2160}) {
+                const edvr::FlatCardSize fs = edvr::flatCardSize(outH * 16 / 9, outH, edvr::kFlatMenuCardHeightFrac);
+                const auto built = detailed(fs.capPx, fs.capPx * 14, 0.0f, nullptr);
+                const int h = edvr::menuPanelLayoutHeightForTest(built.second);
+                std::printf("  flat detailed readout at %dp: %d x %d px\n", outH, built.second.cardPx, h);
+                check(built.first && built.second.cardPx >= fs.capPx * 14 && built.second.capPx == fs.capPx, "the detailed readout builds at the flat text height");
+                check(h > 0 && h < outH / 4 && built.second.angularWidthDeg == 0.0f, "the flat detailed card is a corner card (under a quarter of the output's height) with no angular width");
+                const edvr::FlatPlacement ur = edvr::flatPlace(outH * 16 / 9, outH, built.second.cardPx, h, edvr::FlatCorner::UpperRight);
+                check(ur.oneToOne && ur.x + ur.w < outH * 16 / 9, "the flat detailed card is composited 1:1 inside the top right corner");
+            }
+            float deg = 0.0f;
+            const auto vr = detailed(42, 42 * 14, 1.1f, &deg);
+            const int vrH = edvr::menuPanelLayoutHeightForTest(vr.second);
+            std::printf("  VR detailed readout: %d x %d px, %.2f degrees wide\n", vr.second.cardPx, vrH, static_cast<double>(deg));
+            check(vr.first && vrH > 0 && vrH < 2048 && deg > 1.0f && deg == vr.second.angularWidthDeg, "the VR detailed card is under the raster bound and carries its angular width");
+            edvr::MenuContent noLines{};
+            check(!edvr::menuPanelBuildReadoutContent(noLines, nullptr, 0, 42, 0, 0.0f, nullptr), "a readout with no lines is refused");
+        }
+        {   // an upper bound on the rows: one more strip than the panel holds would be silently dropped, so it is pinned
+            check(edvr::kMenuMaxGraphs >= 3, "the panel holds the flat Monitor's three strips");
+            check(edvr::kMenuMaxTiles >= 11, "the panel holds the flat Monitor's eleven tiles");
+        }
+        std::printf("native_menu_test: layout %u checks, %u failures (heading %dpx in a %dpx rect)\n",
+                    checks, fails, headingW, headingBoxW);
+        return fails ? 1 : 0;
     }
     if (std::wcscmp(argv[1], L"--self-test")) return 2;
     unsigned checks = 0, fails = 0;
@@ -473,8 +998,96 @@ int wmain(int argc, wchar_t** argv) {
                       "flat resize draws bounded panel pixels");
                 check(visibleBounds[0] >= 0.01f && visibleBounds[0] < 0.05f &&
                       visibleBounds[1] >= 0.01f && visibleBounds[1] < 0.05f &&
-                      visibleBounds[2] < 0.55f && visibleBounds[3] < 0.55f,
-                      "flat panel stays small and anchored near the upper-left corner");
+                      std::fabs((visibleBounds[2] - visibleBounds[0]) * 320.0f - 256.0f) <= 4.0f,
+                      "flat panel is drawn 1:1 (the 256 px raster covers 256 output pixels), anchored near the upper-left corner");
+            }
+            // The monitor panel (menu_panel.h, the second flat slot): its own raster and serial, composited after the menu's in the same call, in the upper
+            // right corner, without advancing the menu's heartbeat; and alone, with the menu hidden.
+            {
+                edvr::MenuContent mon{};
+                mon.widthPx = mon.cardPx = 96;
+                mon.capPx = 14;
+                mon.lineCount = 1;
+                std::strcpy(mon.lines[0].left, "Monitor");
+                std::strcpy(mon.lines[0].right, "60");
+                const uint32_t monSerial = edvr::menuPanelMonitorRasterSerial();
+                mon.slotOwner = edvr::kSlotOwnerMonitorPanel;
+                edvr::menuPanelSubmitMonitor(mon);
+                bool monReady = false;
+                for (unsigned ms = 0; ms < 3000 && !monReady; ms += 5) {
+                    monReady = edvr::menuPanelMonitorWorkerReadyForTest();
+                    if (!monReady) Sleep(5);
+                }
+                check(monReady, "monitor panel raster worker ready");
+                edvr::menuPanelTick(device.Get());
+                check(edvr::menuPanelMonitorRasterReady() && edvr::menuPanelMonitorRasterSerial() != monSerial && edvr::menuPanelFlatRasterReady(),
+                      "the monitor raster is uploaded to its own slot, and the menu's stays live");
+                check(edvr::menuPanelMonitorRasterOwner() == edvr::kSlotOwnerMonitorPanel, "the uploaded monitor raster reports the panel as its owner");
+                {
+                    // The slot is shared with the frame-rate readout: the owner follows the raster actually uploaded, so a stale one is never taken for the other's.
+                    edvr::MenuContent ro = mon;
+                    ro.slotOwner = edvr::kSlotOwnerReadout;
+                    std::strcpy(ro.lines[0].left, "FPS");
+                    edvr::menuPanelSubmitMonitor(ro);
+                    bool roReady = false;
+                    for (unsigned ms = 0; ms < 3000 && !roReady; ms += 5) {
+                        roReady = edvr::menuPanelMonitorWorkerReadyForTest();
+                        if (!roReady) Sleep(5);
+                    }
+                    check(roReady, "readout-tagged monitor raster worker ready");
+                    edvr::menuPanelTick(device.Get());
+                    check(edvr::menuPanelMonitorRasterOwner() == edvr::kSlotOwnerReadout, "after the readout's raster is uploaded the slot reports the readout as its owner");
+                    edvr::menuPanelSubmitMonitor(mon);
+                    roReady = false;
+                    for (unsigned ms = 0; ms < 3000 && !roReady; ms += 5) {
+                        roReady = edvr::menuPanelMonitorWorkerReadyForTest();
+                        if (!roReady) Sleep(5);
+                    }
+                    edvr::menuPanelTick(device.Get());
+                    check(roReady && edvr::menuPanelMonitorRasterOwner() == edvr::kSlotOwnerMonitorPanel, "and the panel again once its raster is uploaded over it");
+                }
+                edvr::MenuGeometry monGeometry{};
+                monGeometry.dist = 1.f;
+                monGeometry.alpha = 1.f;
+                monGeometry.flatCorner = 1;
+                edvr::menuPanelSetMonitorGeometry(monGeometry);
+                ComPtr<ID3D11Texture2D> bothBack;
+                check(makeBackbuffer(device.Get(), context.Get(), bothBack, background, 320, 240), "flat backbuffer for the menu and the monitor panel");
+                if (bothBack) {
+                    const uint32_t beatBefore = edvr::menuDrawnValue();
+                    std::vector<UINT> px;
+                    check(edvr::menuPanelCompositeFlatTexture(bothBack.Get()) && readPixels(device.Get(), context.Get(), bothBack.Get(), px) && px.size() == 320u * 240u,
+                          "the menu and the monitor panel compose in one call");
+                    check(edvr::menuDrawnValue() == beatBefore + 1, "the monitor panel does not advance the menu's heartbeat");
+                    // The menu's 256 px raster ends at x = 6 + 256 = 262; the monitor's 96 px raster ends 2 % (6 px) in from the right edge, at 314.
+                    size_t right = 0, beyond = 0;
+                    for (UINT y = 0; px.size() == 320u * 240u && y < 240; ++y)
+                        for (UINT x = 263; x < 320; ++x) {
+                            const bool changed = px[size_t(y) * 320 + x] != background;
+                            if (x < 314) right += changed;
+                            else if (x >= 316) beyond += changed;
+                        }
+                    check(right > 0 && beyond == 0, "the monitor panel is drawn in the upper right corner, inside the 2 percent margin");
+                }
+                edvr::MenuGeometry hiddenMenu = geometry;
+                hiddenMenu.alpha = 0.f;
+                edvr::menuPanelSetGeometry(hiddenMenu);
+                ComPtr<ID3D11Texture2D> aloneBack;
+                check(makeBackbuffer(device.Get(), context.Get(), aloneBack, background, 320, 240), "flat backbuffer for the monitor panel alone");
+                if (aloneBack) {
+                    const uint32_t beatBefore = edvr::menuDrawnValue();
+                    std::vector<UINT> px;
+                    float aloneBounds[4]{};
+                    check(edvr::menuPanelCompositeFlatTexture(aloneBack.Get()) && readPixels(device.Get(), context.Get(), aloneBack.Get(), px) &&
+                              changedBounds(px, 320, 240, background, aloneBounds) && aloneBounds[0] > 0.6f && aloneBounds[2] < 0.99f,
+                          "the monitor panel composes alone, with the menu hidden, in the right part of the output");
+                    check(edvr::menuDrawnValue() == beatBefore, "the monitor panel alone does not advance the menu's heartbeat");
+                }
+                edvr::menuPanelSetGeometry(geometry);
+                edvr::menuPanelFlatResize();
+                check(!edvr::menuPanelMonitorRasterReady(), "a flat resize retires the monitor panel's raster too");
+                monGeometry.alpha = 0.f;
+                edvr::menuPanelSetMonitorGeometry(monGeometry);
             }
             // A replacement graphics device must build its own raster and
             // context state; no resource from the first device may be reused.

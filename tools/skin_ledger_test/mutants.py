@@ -41,9 +41,11 @@ FILES = {
 }
 HEADER_KEYS = ("ledger",)                       # compiled into the rig: a mutation of one rebuilds the rig
 PIN_KEYS = ("exposure", "probe", "probeh", "bat")   # read by the rig as text: a mutation of one is run through the unmutated rig
-TREE = [("src/d3d11/skin_ledger.h", ROOT / "src" / "d3d11" / "skin_ledger.h")]
+TREE = [("src/d3d11/skin_ledger.h", ROOT / "src" / "d3d11" / "skin_ledger.h"),
+        ("src/common/dump_file.h", ROOT / "src" / "common" / "dump_file.h")]   # skin_ledger.h writes its file through the dump container
 INCLUDE_DIRS = ("src/d3d11",)                   # the rig's /I directories under the header tree (build.bat's compile line has the same)
 RIG = HERE / "skin_ledger_test.cpp"
+DUMP_FILE_SOURCES = [str(ROOT / "src" / "common" / "dump_file.cpp"), str(ROOT / "src" / "common" / "miniz_impl.cpp")]   # the rig links the container writer, as build.bat's compile does
 BUILD_BAT = ROOT / "build.bat"
 RIG_LABEL = ":rig_skin_ledger_test"
 RIG_SOURCE_IN_BAT = "tools\\skin_ledger_test\\skin_ledger_test.cpp"
@@ -262,7 +264,7 @@ class Toolchain:
 
 def build_rig(tc, tree, exe):
     """Compile the rig against the header tree at `tree`; (exit code, output)."""
-    cmd = [tc.cl] + CL_FLAGS + ["/I" + str(tree / d) for d in INCLUDE_DIRS] + ["/Fo" + str(exe.parent) + "\\", "/Fe" + str(exe), str(RIG), "/link", "/INCREMENTAL:NO"] + LINK_ARGS
+    cmd = [tc.cl] + CL_FLAGS + ["/I" + str(tree / d) for d in INCLUDE_DIRS] + ["/Fo" + str(exe.parent) + "\\", "/Fe" + str(exe), str(RIG)] + DUMP_FILE_SOURCES + ["/link", "/INCREMENTAL:NO"] + LINK_ARGS
     done = subprocess.run(cmd, capture_output=True, text=True, env=tc.env, errors="replace", cwd=str(exe.parent))
     return done.returncode, done.stdout + done.stderr
 

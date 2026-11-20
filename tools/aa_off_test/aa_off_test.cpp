@@ -7,13 +7,23 @@
 //   Cut C: map_wait.h's call counts (exact) and sampled ticks (scaled at take), and map_wait_sample.h's sampler.
 //   Cut D: gpu_frame_timing.h's gpuFrameCommandIfLive, with a counting stub for the out-of-line gpuFrameCommand:
 //          with the instrument off, no call is made; on, every call is made.
+//   Cut E: classifier_memo.h (built 2026-10-27, the ui_depth eye-draw memo): a call hits only when something is stored, both halves
+//          of its key equal the stored key and the stored exit is a plain decline; a moved generation or epoch is a miss.
+//   Cut F: vs_may_want.h (build 2, #152): the byte stored beside the bound vertex shader's hash. A clear bit means the subscriber's own
+//          pure predicate rejects every pixel shader for that vertex shader; hash 0 and the shipped shaders are "may want".
+//   Cut H: draw_call_flags.h (build 6, item 3, #184): a draw's own flags and the pure "which second issues for these flags and this verdict" function vscreen.cpp's
+//          forwardWithVerdict calls: a skipped or blocked draw issues nothing, a layered draw issues neither coverage nor hologram, the planet coverage needs only the owner,
+//          and the pending clear is for the draw that set a pending flag alone.
 //
 // Exit codes: 0 pass, 1 a check failed, 2 usage. --dry-run touches nothing.
 #include "../../src/common/gpu_disjoint_clock.h"
+#include "../../src/d3d11/classifier_memo.h"
+#include "../../src/d3d11/draw_call_flags.h"
 #include "../../src/d3d11/draw_fast_path.h"
 #include "../../src/d3d11/frame_span_tile.h"
 #include "../../src/d3d11/gpu_frame_timing.h"
 #include "../../src/d3d11/map_wait.h"
+#include "../../src/d3d11/vs_may_want.h"
 
 // The frame span holds at most kFrameSpanSlots pairs of two timestamps each (gpu_census.cpp); every one must fit the
 // clock's per-record lease budget (kLeases, 512), or a pair would be refused rather than held.
@@ -22,8 +32,13 @@ static_assert(edvr::kFrameSpanSlots * 2u <= edvr::DisjointClock::kLeases,
 
 #include <atomic>
 #include <cmath>
+#include <cstdint>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
+#include <string>
 
 namespace edvr {
 
@@ -80,6 +95,70 @@ void testFastPathTable() {
     check(!edvr::drawFastPathTaken(c), "fast path: the VR world route keeps the full path");
     c = base; c.aaOff = false;
     check(!edvr::drawFastPathTaken(c), "fast path: AA on never takes it (behaviour with AA on is unchanged)");
+}
+
+// F201: the marker fix's bind. forwardWithVerdict binds the patched b0 for a draw the UI layer took (the layer's bracket) and, with the temporal path off, for the game's own single issue:
+// markerFixBindWanted over all four (layered, temporal path) combinations, and the fast path's claim for a decided draw.
+void testMarkerFixBind() {
+    check(edvr::markerFixBindWanted(true, true), "marker bind: layered with a temporal mode on: bound (as before)");
+    check(!edvr::markerFixBindWanted(false, true), "marker bind: not layered with a temporal mode on (the layer stood down, or no family): not bound, as before (the DLSS path is unchanged)");
+    check(edvr::markerFixBindWanted(true, false), "marker bind: layered with the temporal mode off cannot happen, and would be bound");
+    check(edvr::markerFixBindWanted(false, false), "marker bind: not layered with the temporal mode off (Anti-aliasing off, no layer): bound, on the game's own issue (F201)");
+    // with a temporal mode on the answer is `layered`, bit for bit
+    bool same = true;
+    for (int l = 0; l < 2; ++l) same = same && edvr::markerFixBindWanted(l != 0, true) == (l != 0);
+    check(same, "marker bind: with a temporal mode on the predicate is `layered` exactly");
+    // the fast path: a decided draw is claimed while the AA is off; a draw nothing decided still is not; with the AA on nothing changes (the path is never taken there)
+    check(!edvr::drawClaimed(false, false) && edvr::drawClaimed(true, false) && edvr::drawClaimed(false, true) && edvr::drawClaimed(true, true), "claim: a verdict or a pending marker decision claims the draw");
+    const auto fast = [](bool aaOff, bool verdictClaims, bool pending) {
+        // drawPathFast: the pending flag is asked only while the AA is off
+        return edvr::drawFastPathTaken(edvr::DrawPathInputs{aaOff, false, false, false, edvr::drawClaimed(verdictClaims, aaOff && pending)});
+    };
+    check(fast(true, false, false), "claim: AA off, nothing decided: the fast path is taken, as before");
+    check(!fast(true, false, true), "claim: AA off, a marker decision pending: the full path, where the bind is (F201)");
+    check(!fast(true, true, false) && !fast(true, true, true), "claim: AA off, a verdict claims it: the full path, as before");
+    check(!fast(false, false, false) && !fast(false, false, true) && !fast(false, true, true), "claim: AA on never takes the fast path, pending or not (unchanged)");
+}
+
+// F201: the wiring, by a scan of the sources (this rig runs from the repository root, as build.bat does): vscreen.cpp's bind uses the predicate and keeps the Begin and End calls, nothing
+// returns between them, drawPathFast claims a decided draw, and every write of native on foot's pending decision mirrors the flag the fast path reads.
+static std::string slurpFile(const char* path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+static size_t countOf(const std::string& text, const std::string& needle) {
+    size_t n = 0;
+    for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) ++n;
+    return n;
+}
+void testMarkerFixWiring() {
+    const std::string v = slurpFile("src/d3d11/vscreen.cpp"), n = slurpFile("src/d3d11/native_on_foot.cpp");
+    check(!v.empty() && !n.empty(), "marker bind wiring: vscreen.cpp and native_on_foot.cpp open (run from the repository root)");
+    const std::string line = "const bool markerFixed = markerFixBindWanted(layered, temporalPassWantsFssChrome()) && owner && nativeOnFootMarkerFixLive() && nativeOnFootMarkerFixBegin(self);";
+    check(countOf(v, line) == 1 && countOf(v, "nativeOnFootMarkerFixBegin(self)") == 1 && countOf(v, "layered && owner && nativeOnFootMarkerFixLive()") == 0,
+          "marker bind wiring: the bind asks markerFixBindWanted(layered, the temporal path), once, and the old layered-only expression is gone");
+    check(countOf(v, "if (markerFixed) nativeOnFootMarkerFixEnd(self);") == 1, "marker bind wiring: End is called once, on markerFixed");
+    const size_t begin = v.find(line), end = v.find("if (markerFixed) nativeOnFootMarkerFixEnd(self);");
+    bool noReturn = begin != std::string::npos && end != std::string::npos && begin < end;
+    for (size_t at = begin; noReturn && at < end;) {
+        const size_t eol = v.find('\n', at);
+        std::string code = v.substr(at, (eol == std::string::npos ? end : eol) - at);
+        const size_t comment = code.find("//");
+        if (comment != std::string::npos) code.erase(comment);
+        for (size_t r = code.find("return"); r != std::string::npos; r = code.find("return", r + 1)) {
+            const bool wordStart = r == 0 || !(std::isalnum(static_cast<unsigned char>(code[r - 1])) || code[r - 1] == '_');
+            const bool wordEnd = r + 6 >= code.size() || !(std::isalnum(static_cast<unsigned char>(code[r + 6])) || code[r + 6] == '_');
+            if (wordStart && wordEnd) noReturn = false;
+        }
+        if (eol == std::string::npos) break;
+        at = eol + 1;
+    }
+    check(noReturn, "marker bind wiring: no return between the bind and its End, so End is reached on every path where Begin bound");
+    check(countOf(v, "drawClaimed(v != DrawVerdict::kNone, aaOff && nativeOnFootMarkerFixPending())") == 1,
+          "marker bind wiring: drawPathFast claims a decided draw, asking the flag only while the AA is off");
+    check(countOf(n, "g_fix.pending = true;") == 2 && countOf(n, "g_nativeOnFootMarkerFixPending.store(true, std::memory_order_relaxed);") == 2 &&
+              countOf(n, "g_fix.pending = false;") == 2 && countOf(n, "g_nativeOnFootMarkerFixPending.store(false, std::memory_order_relaxed);") == 3,
+          "marker bind wiring: every write of the pending decision mirrors the flag the fast path reads (two sets, two clears, and the shutdown's)");
 }
 
 // Cut B: the bind records. Only AA off with engine velocity closed skips VsSrv33 and Blend.
@@ -302,11 +381,154 @@ void testOverlayLine() {
     check(std::strcmp(field, "frame work span: completed 5400, skipped 3, invalid 2, last 4.257 ms") == 0, "census field: counts and the last pair in ms");
 }
 
+// ---- Cut E: classifier_memo.h -------------------------------------------------------------------------------------------------------
+
+// A hit needs something stored, both halves of the key equal AND the stored exit to be a plain decline; every other call is a miss.
+void testMemoHit() {
+    using namespace edvr::classifiermemo;
+    Memo m;
+    const Key k{5, 7};
+    check(!hit(m, k), "memo: nothing stored is a miss");
+    check(!hit(m, Key{0, 0}), "memo: nothing stored is a miss even for the zero key");
+    store(m, k, Exit::kPlainDecline);
+    check(hit(m, k), "memo: both halves equal after a plain decline is a hit");
+    check(!hit(m, Key{6, 7}), "memo: a moved generation is a miss");
+    check(!hit(m, Key{5, 8}), "memo: a moved epoch is a miss");
+    check(!hit(m, Key{6, 8}), "memo: both moved is a miss");
+    check(!hit(m, Key{4, 7}) && !hit(m, Key{5, 6}), "memo: a key that moved backwards is a miss as well, never a hit");
+    check(!hit(m, Key{0, 0}), "memo: the zero key does not match a stored one");
+    // The stored exit decides what an equal key means.
+    store(m, k, Exit::kOther);
+    check(!hit(m, k), "memo: an equal key after an exit that was not a plain decline is a miss");
+    check(!hit(m, Key{6, 7}) && !hit(m, Key{5, 8}), "memo: a moved key after a non-plain exit is a miss as well");
+    store(m, k, Exit::kPlainDecline);
+    check(hit(m, k), "memo: storing the plain decline again restores the hit");
+    store(m, Key{9, 9}, Exit::kPlainDecline);
+    check(!hit(m, k) && hit(m, Key{9, 9}), "memo: a later store replaces the earlier key");
+    invalidate(m);
+    check(!hit(m, Key{9, 9}) && !m.stored, "memo: invalidate forgets the answer, so the same key misses");
+    // Both classifiers keep a memo of their own: storing in one leaves the other alone.
+    Memo eye, holo;
+    store(eye, k, Exit::kPlainDecline);
+    check(!hit(holo, k) && hit(eye, k), "memo: two memos are independent");
+    // Over a grid of keys against one stored key, exactly the stored key after a plain decline hits.
+    unsigned hits = 0;
+    for (uint32_t g = 3; g < 8; ++g) {
+        for (uint32_t e = 3; e < 8; ++e) {
+            for (int plain = 0; plain < 2; ++plain) {
+                Memo c;
+                store(c, Key{5, 5}, plain ? Exit::kPlainDecline : Exit::kOther);
+                if (hit(c, Key{g, e})) ++hits;
+            }
+        }
+    }
+    check(hits == 1, "memo: over a grid of keys and exits exactly one cell is a hit");
+}
+
+// A model of a run of draws through the memo, as uiDepthOnEyeDraw drives it: key, hit test, and on a miss the full run's exit stored.
+void testMemoRun() {
+    using namespace edvr::classifiermemo;
+    Memo m;
+    unsigned fullRuns = 0;
+    const auto call = [&](Key now, Exit exitIfRun) {
+        if (hit(m, now)) return true;
+        ++fullRuns;
+        store(m, now, exitIfRun);
+        return false;
+    };
+    const Key a{10, 3}, b{11, 3}, c{11, 4};
+    check(!call(a, Exit::kPlainDecline), "run: the first call finds nothing stored and runs in full");
+    check(call(a, Exit::kPlainDecline) && call(a, Exit::kPlainDecline), "run: the repeats hit");
+    check(!call(b, Exit::kOther), "run: a draw whose bindings moved runs in full, and its exit is not a plain decline");
+    check(!call(b, Exit::kOther), "run: its repeat finds the key but not a plain decline, so it runs in full again");
+    check(!call(a, Exit::kPlainDecline), "run: back to the plain draw, the generation has moved");
+    check(call(a, Exit::kPlainDecline), "run: ...and it hits again");
+    check(!call(c, Exit::kPlainDecline), "run: a bump of both runs in full");
+    check(!call(Key{11, 5}, Exit::kPlainDecline), "run: an epoch move alone runs in full");
+    check(fullRuns == 6, "run: of nine calls three hit and six ran in full");
+}
+
 void usage() {
     std::puts("usage: aa_off_test --self-test | --dry-run");
 }
 
 }  // namespace
+
+// Cut F: the may-want byte against the subscribers' own predicates.
+void testVsMayWant() {
+    using namespace edvr;
+    check(vsMayWantByte(0) == kVsMayWantAll, "may want: hash 0 (a shader EDVR never hashed) wants every subscriber");
+    // The shipped shaders: each subscriber's vertex shader keeps its own bit set.
+    for (const ScreenMotionPair& p : kScreenMotionUiPairs) {
+        check((vsMayWantByte(p.vs) & kVsMayScreenUi) != 0, "may want: each screen motion UI vertex shader keeps its bit");
+        check(screenMotionUiPair(p.vs, p.ps), "may want: the pair table answers its own rows");
+    }
+    check((vsMayWantByte(kScreenMotionRecognizePair.vs) & kVsMayScreenRecognize) != 0, "may want: the recognised screen's vertex shader keeps its bit");
+    for (uint64_t vs : kWeaponMotionFamilyVs) check((vsMayWantByte(vs) & kVsMayWeaponMotion) != 0, "may want: each weapon motion vertex shader keeps its bit");
+    check((vsMayWantByte(kUiVsPanel) & kVsMayUiFamily) != 0 && (vsMayWantByte(kUiVsLoader) & kVsMayUiFamily) != 0,
+          "may want: the panel and loader vertex shaders always run the family check (its probe records them)");
+    check((vsMayWantByte(kUiVsScopeMark) & kVsMayUiFamily) != 0, "may want: the scope mark's vertex shader always runs the family check (runtime arming)");
+    check((vsMayWantByte(kUiVsOnFootHudA) & kVsMayUiFamily) != 0 && (vsMayWantByte(kUiVsOnFootHudB) & kVsMayUiFamily) != 0,
+          "may want: the on-foot HUD's vertex shaders always run the family check (runtime on-foot state)");
+    // Random shaders: a clear bit implies the subscriber's predicate rejects the vertex shader whatever the pixel shader.
+    uint64_t x = 0x9E3779B97F4A7C15ull;
+    auto next = [&] { x ^= x << 13; x ^= x >> 7; x ^= x << 17; return x; };
+    unsigned clear[4] = {0, 0, 0, 0}, wrong = 0;
+    for (unsigned i = 0; i < 20000; ++i) {
+        const uint64_t vs = next(), ps = next();
+        const uint8_t m = vsMayWantByte(vs);
+        if (!(m & kVsMayScreenUi)) { ++clear[0]; wrong += screenMotionUiPair(vs, ps); }
+        if (!(m & kVsMayScreenRecognize)) { ++clear[1]; wrong += screenMotionRecognizePair(vs, ps); }
+        if (!(m & kVsMayWeaponMotion)) { ++clear[2]; wrong += weaponMotionFamilyHash(vs); }
+        if (!(m & kVsMayUiFamily)) ++clear[3];
+    }
+    check(wrong == 0, "may want: a clear bit never hides a vertex shader the subscriber's predicate accepts (random shaders)");
+    check(clear[0] == 20000 && clear[1] == 20000 && clear[2] == 20000 && clear[3] == 20000, "may want: an unknown shader clears every bit");
+    // One-token mutants of the shipped shaders: the bit is a function of the vertex shader alone, so a neighbour must not inherit it.
+    unsigned inherited = 0;
+    for (const ScreenMotionPair& p : kScreenMotionUiPairs)
+        for (int bit = 0; bit < 64; ++bit) inherited += ((vsMayWantByte(p.vs ^ (1ull << bit)) & kVsMayScreenUi) != 0) != screenMotionUiPairVs(p.vs ^ (1ull << bit));
+    check(inherited == 0, "may want: the bit tracks the predicate exactly (mutants of the screen motion shaders)");
+    // The skip helpers read one bit each.
+    check(!vsMaySkip(kVsMayWantAll, kVsMayScreenUi) && vsMaySkip(0, kVsMayScreenUi),
+          "may want: a bit set never skips, a bit clear always does");
+}
+
+// Cut H: a draw's own flags (draw_call_flags.h).
+void testDrawCallFlags() {
+    using namespace edvr;
+    DrawCallFlags none;
+    check(!none.uiDepth && !none.holoDepth && !none.composite && !none.planetPending && !none.worldScreenPending, "flags: a fresh DrawCallFlags is all false (what every early return of beginPanelOverride leaves)");
+    check(!drawCallOwnsPending(none), "flags: a draw that set no pending flag owns none (a foreign-context draw never clears the module's)");
+    DrawCallFlags planet; planet.planetPending = true;
+    DrawCallFlags screen; screen.worldScreenPending = true;
+    DrawCallFlags depth; depth.uiDepth = true; depth.holoDepth = true; depth.composite = true;
+    check(drawCallOwnsPending(planet) && drawCallOwnsPending(screen) && !drawCallOwnsPending(depth), "flags: only a planet or world-screen pending flag makes a draw the owner of the pending clear");
+    DrawCallFlags all; all.uiDepth = all.holoDepth = all.composite = all.planetPending = all.worldScreenPending = true;
+    // An ordinary owner draw with every flag set: every second issue is asked for.
+    DrawReissues r = drawReissuesFor(all, true, false);
+    check(r.uiDepthCoverage && r.hologram && r.planet && r.worldScreen, "reissues: an owner draw, not layered, issues the coverage, the hologram passes, the planet and the world screen");
+    // Layered: the take is not in the eye's colour, so the coverage, the hologram passes and the world screen are skipped; the planet coverage has no layered test.
+    r = drawReissuesFor(all, true, true);
+    check(!r.uiDepthCoverage && !r.hologram && r.planet && !r.worldScreen, "reissues: a layered draw skips the coverage, the hologram passes and the world screen, and keeps the planet's (as before)");
+    // A foreign-context draw: its flags are false, so nothing is issued on that context (#184's first stale consumer).
+    r = drawReissuesFor(none, false, false);
+    check(!r.uiDepthCoverage && !r.hologram && !r.planet && !r.worldScreen, "reissues: a draw with no flags of its own issues nothing (a foreign context never takes another draw's)");
+    // The planet and the world screen need the owner.
+    r = drawReissuesFor(all, false, false);
+    check(r.uiDepthCoverage && r.hologram && !r.planet && !r.worldScreen, "reissues: the planet and world-screen coverage need the owner context");
+    // Every combination of the five flags, the owner and layered: a second issue never appears without its own flag.
+    unsigned wrong = 0;
+    for (unsigned bits = 0; bits < 128; ++bits) {
+        DrawCallFlags f;
+        f.uiDepth = bits & 1; f.holoDepth = bits & 2; f.composite = bits & 4; f.planetPending = bits & 8; f.worldScreenPending = bits & 16;
+        const bool owner = bits & 32, layered = bits & 64;
+        const DrawReissues x = drawReissuesFor(f, owner, layered);
+        wrong += (x.uiDepthCoverage && !f.uiDepth) + (x.hologram && !f.holoDepth) + (x.planet && !(f.planetPending && owner)) + (x.worldScreen && !(f.worldScreenPending && owner && !layered));
+        wrong += (f.uiDepth && !layered && !x.uiDepthCoverage) + (f.holoDepth && !layered && !x.hologram) + (f.planetPending && owner && !x.planet);
+    }
+    check(wrong == 0, "reissues: over all 128 flag, owner and layered combinations a second issue is made exactly when its own flag and its conditions hold");
+}
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::strcmp(argv[1], "--dry-run") == 0) {
@@ -318,6 +540,8 @@ int main(int argc, char** argv) {
         return 2;
     }
     testFastPathTable();
+    testMarkerFixBind();
+    testMarkerFixWiring();
     testBindShadows();
     testThunkModel();
     testBindToggle();
@@ -327,6 +551,10 @@ int main(int argc, char** argv) {
     testGpuTimeTile();
     testFrameWorkSlack();
     testOverlayLine();
+    testMemoHit();
+    testMemoRun();
+    testVsMayWant();
+    testDrawCallFlags();
     std::printf("aa_off_test: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

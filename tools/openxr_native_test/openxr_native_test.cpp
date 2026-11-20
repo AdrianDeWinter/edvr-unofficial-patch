@@ -18,12 +18,19 @@
 #include "steam_identity_cases.h"
 #include "comfort_fade_cases.h"
 #include "canted_display_cases.h"
+#include "scope_zoom_host_cases.h"   // B3: the scope zoom window's getter reads counted at the host, by caller
 #include "parallel_projection_notice_cases.h"
 #include "head_pose_cases.h"
 #include "seat_order_cases.h"
 #include "pose_cache_cases.h"
 #include "pose_cache_invalidation_cases.h"
+#include "world_scale_cases.h"   // world scale: the host latch and the wiring pins
+#include "view_fov_note_cases.h"   // F194: the views' field of view in the runtime log (the Quest 3's picture centre 13 deg below the forward axis; change events only)
+#include "position_recentre_cases.h"   // F123: the runtime's position-only recentre (the origin under the head, its yaw kept exactly, no reset, the stored seat untouched)
+#include "seat_origin_cases.h"   // F189: the seat origin in pose math: the numbers the game gets and the layers' physical poses equal the old per-change reference space's, none is made
 #include "pose_cache_lock_cases.h"
+#include "rot_calibrate_cases.h"   // F61 (TEMPORARY): the rotation calibration's pitch overlay
+#include "eye_offset_cases.h"   // F134: the eye offsets are seated vectors; the look turns the seated origin about the physical head
 #include "flat_head_cache_cases.h"
 #include <cstdio>
 #include <cstring>
@@ -695,13 +702,20 @@ int selfTest() {
   edvr::openxr::test::runSteamIdentityCases(check);
   edvr::openxr::test::runComfortFadeCases(check);
   edvr::openxr::test::runCantedDisplayCases(check);
+  edvr::openxr::test::runScopeZoomHostCases(check);
   edvr::openxr::test::runParallelProjectionNoticeCases(check);
+  edvr::openxr::test::runWorldScaleCases(check);
+  edvr::openxr::test::runViewFovNoteCases(check);   // F194
   edvr::openxr::test::runHeadPoseCases(check);
   edvr::openxr::test::runSeatOrderCases(check);
   edvr::openxr::test::runPoseCacheCases(check);
   edvr::openxr::test::runPoseCacheInvalidationCases(check);
+  edvr::openxr::test::runPositionRecentreCases(check);
+  edvr::openxr::test::runSeatOriginCases(check);   // F189
   edvr::openxr::test::runFlatHeadCacheCases(check);
   edvr::openxr::test::runPoseCacheLockCases(check);
+  edvr::openxr::test::runRotCalibrateCases(check);
+  edvr::openxr::test::runEyeOffsetCases(check);   // F134
   Options o;
   check(parse({L"--loader",L"C:\\runtime\\loader.dll"},o)&&o.seconds==10,"default duration");
   check(parse({L"--seconds",L"60",L"--loader",L"D:/a.dll"},o)&&o.seconds==60,"bounded duration");

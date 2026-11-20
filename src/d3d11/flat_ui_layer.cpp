@@ -2,15 +2,18 @@
 // door and the composite are the VR layer's own (ui_layer.cpp), driven here as eye 0. The pure rules are
 // flat_ui_layer_math.h's.
 #include "flat_ui_layer.h"
+#include "cockpit_glass.h"        // cockpitGlassLegacyLive: the canopy is named only under the legacy look
 
 #include "flat_camera_phase.h"     // flatCameraMeasureRowShift: the jitter a draw's camera rows carry
 #include "flat_compute_readback.h" // FlatComputeInternalScope
 #include "flat_ui_layer_math.h"
 #include "exposure_fix.h"         // lookupShaderHash: compare the physical shaders with the draw's cached pair
+#include "supercruise_bars.h"     // the bars' strip pass, bracketed in the flat issue path (flatUiLayerBarsBegin) and its 30 s line
 #include "tonemap_admit.h"        // read-only structural description of the actual game's tone-shaped draw
 #include "ui_layer.h"
 #include "vscreen.h"            // vScreenPSSetShaderResourcesRaw: the bloom feed binds past the shadow
 
+#include "../common/config.h"
 #include "../common/log.h"
 #include "../common/runtime_profile.h"
 
@@ -43,6 +46,11 @@ struct Window {
     uint64_t toneCandidates = 0, toneProven = 0, toneAdmitted = 0, toneReissued = 0, toneDeclined = 0, toneByShape = 0;
     uint64_t copies = 0, doorsArmed = 0, doorUntreated = 0, doorSize = 0;
     uint64_t composites = 0, compositeNone = 0, bindFailed = 0;
+    // The HUD layer's edge smoothing (fix.hud_antialiasing, ui_layer_smaa.h): the layer composites by what they read -- the SMAA output, the raw
+    // layer because the key was off, the raw layer because the passes could not be had -- the key as the last composite read it, and the layer's size then.
+    uint64_t edgeSmoothed = 0, edgeRawKeyOff = 0, edgeRawFault = 0;
+    bool edgeKeyOn = false;
+    uint32_t edgeW = 0, edgeH = 0;
     uint32_t inW = 0, inH = 0, outW = 0, outH = 0;  // the last copy's picture and the display
     double otherX = 0.0, otherY = 0.0;              // the last other-shift draw's measured shift, render pixels
     // The System Map's two families (2026-10-10): the frames a map was open in, and per family (0 canvas, 1 sprite) the
@@ -51,6 +59,13 @@ struct Window {
     uint64_t mapOpenFrames = 0;
     uint64_t mapRefused[2][kRefusals] = {};
     uint64_t mapDeclined[2][kDecisions] = {};
+    // The scene families' (2026-11-03: flatUiSceneSlotOf, 0 supercruise bars, 1 space dust, 2 normal-space dust, 3 orbit lines) refusals by reason, the
+    // same way: the adapter's and the shared decision's. Their asked/decided/taken/refused-at-issue are the family arrays above.
+    uint64_t sceneRefused[kFlatUiSceneSlots][kRefusals] = {};
+    uint64_t sceneDeclined[kFlatUiSceneSlots][kDecisions] = {};
+    // The legacy canopy's (2026-11-05, kLegacyGlass) refusals by reason, the same way; asked/decided/taken/refused-at-issue are the family arrays above.
+    uint64_t glassRefused[kRefusals] = {};
+    uint64_t glassDeclined[kDecisions] = {};
     // The candidates of the tonemaps flatUiMapToneSlotOf names (the maps', the Full System Scanner's): the tone reads the candidate
     // branch saw, and those that proved.
     uint64_t mapToneCandidates = 0, mapToneMatched = 0;
@@ -71,6 +86,8 @@ bool g_glowNoted = false;  // the once-only first feed line
 FlatUiLayerAsk g_lastAsk = FlatUiLayerAsk::kNotAsked;
 UiLayerFamily g_decidedFamily = UiLayerFamily::kNone;  // the family of the last kDecided draw (flatUiLayerNoteIssue's)
 bool g_mapCanvasNoted = false, g_mapSpriteNoted = false;  // the once-only first take of each map family
+bool g_glassNoted = false;                                // the once-only first take of the legacy canopy
+bool g_sceneNoted[kFlatUiSceneSlots] = {};              // the once-only first take of each scene family (flatUiSceneSlotOf)
 bool g_mapToneNoted[2] = {false, false};                  // the once-only first proof from a tonemap of this table: the maps', the scanner's
 bool g_mapFirstToneNoted[2] = {false, false};             // the once-only first candidate line of each (proved or not)
 FlatUiMapAaTally g_mapAa;                                 // temporal AA off on the maps and the Full System Scanner: the map line's counts
@@ -183,6 +200,10 @@ const char* decisionShort(size_t d) {
     case UiLayerDecision::kBlendRefused: return "blend";
     case UiLayerDecision::kLayerFailed: return "layer-failed";
     case UiLayerDecision::kVerdict: return "verdict";
+    // The decisions the scene families (2026-11-03) can come to beyond the ones above: the density rule, the bars' private pass, the governing half.
+    case UiLayerDecision::kNoDensityGain: return "no-density-gain";
+    case UiLayerDecision::kFamilyNotReady: return "family-not-ready";
+    case UiLayerDecision::kFamilyOff: return "family-off";
     default: return "other";
     }
 }
@@ -194,9 +215,9 @@ int mapSlot(UiLayerFamily f) {
     return -1;
 }
 
-// One map family's refusals this window, by reason: the adapter's, the shared decision's, and the refusals at the game's
-// issue ("at-issue"). "other-work=2 late=1 at-issue=3", or "none".
-std::string mapReasons(const Window& w, int slot, uint64_t atIssue) {
+// One family's refusals this window, by reason: the adapter's, the shared decision's, and the refusals at the game's
+// issue ("at-issue"). "other-work=2 late=1 at-issue=3", or "none". The map families' and the scene families' windows both read it.
+std::string reasonsOf(const uint64_t (&refused)[kRefusals], const uint64_t (&declined)[kDecisions], uint64_t atIssue) {
     std::string out;
     const auto add = [&out](const char* name, uint64_t n) {
         if (!n) return;
@@ -204,19 +225,23 @@ std::string mapReasons(const Window& w, int slot, uint64_t atIssue) {
         std::snprintf(buf, sizeof(buf), "%s%s=%llu", out.empty() ? "" : " ", name, static_cast<unsigned long long>(n));
         out += buf;
     };
-    for (size_t r = 0; r < kRefusals; ++r) add(flatUiRefuseName(static_cast<FlatUiRefuse>(r)), w.mapRefused[slot][r]);
-    for (size_t d = 0; d < kDecisions; ++d) add(decisionShort(d), w.mapDeclined[slot][d]);
+    for (size_t r = 0; r < kRefusals; ++r) add(flatUiRefuseName(static_cast<FlatUiRefuse>(r)), refused[r]);
+    for (size_t d = 0; d < kDecisions; ++d) add(decisionShort(d), declined[d]);
     add("at-issue", atIssue);
     return out.empty() ? "none" : out;
 }
 
-// The same refusals as one number (mapReasons' list, summed).
-uint64_t mapRefusedTotal(const Window& w, int slot, uint64_t atIssue) {
+// The same refusals as one number (reasonsOf's list, summed).
+uint64_t refusedTotalOf(const uint64_t (&refused)[kRefusals], const uint64_t (&declined)[kDecisions], uint64_t atIssue) {
     uint64_t n = atIssue;
-    for (size_t r = 0; r < kRefusals; ++r) n += w.mapRefused[slot][r];
-    for (size_t d = 0; d < kDecisions; ++d) n += w.mapDeclined[slot][d];
+    for (size_t r = 0; r < kRefusals; ++r) n += refused[r];
+    for (size_t d = 0; d < kDecisions; ++d) n += declined[d];
     return n;
 }
+std::string mapReasons(const Window& w, int slot, uint64_t atIssue) { return reasonsOf(w.mapRefused[slot], w.mapDeclined[slot], atIssue); }
+uint64_t mapRefusedTotal(const Window& w, int slot, uint64_t atIssue) { return refusedTotalOf(w.mapRefused[slot], w.mapDeclined[slot], atIssue); }
+std::string sceneReasons(const Window& w, int slot, uint64_t atIssue) { return reasonsOf(w.sceneRefused[slot], w.sceneDeclined[slot], atIssue); }
+uint64_t sceneRefusedTotal(const Window& w, int slot, uint64_t atIssue) { return refusedTotalOf(w.sceneRefused[slot], w.sceneDeclined[slot], atIssue); }
 
 }  // namespace
 
@@ -235,14 +260,16 @@ const char* flatUiLayerState() {
 FlatUiLayerAsk flatUiLayerDecide(ID3D11DeviceContext* ctx, const FlatUiLayerDraw& d) {
     g_lastAsk = FlatUiLayerAsk::kNotAsked;
     if (!ctx || !flatUiLayerOn()) return g_lastAsk;
-    // The map families first (only with a map open, on the HDR target); otherwise the shared family rule, as it always was.
-    const UiLayerFamily family = flatUiFamilyFor(d.vs, d.ps, d.mapOpen, d.hdrTarget);
+    // The map families first (only with a map open, on the HDR target); otherwise the shared family rule, as it always was. The legacy canopy joins it only under the legacy look with
+    // EDVR's shader actually bound (a refused replacement leaves the game's own canopy, which the additive layer would get wrong): `odyssey` names nothing here.
+    const UiLayerFamily family = flatUiFamilyFor(d.vs, d.ps, d.mapOpen, d.hdrTarget, cockpitGlassLegacyLive() && cockpitGlassSwapActive());
     if (!flatUiLayerTakesFamily(family)) return g_lastAsk;
-    // The half of the shared layer that governs this family must be live: with fix.ui_quality off and fix.sharp_weapons on, the layer runs for the weapons alone
+    // The half of the shared layer that governs this family must be live: with fix.ui_quality off and the weapons fire on, the layer runs for the weapons alone
     // and the HUD stays in the game's frame (not asked, so not counted); the converse for the weapons.
     if (!flatUiFamilyLive(family, uiLayerQualityLive(), uiLayerWeaponsLive(), uiLayerRippleLive())) return g_lastAsk;
     const size_t fi = static_cast<size_t>(family);
     const int ms = mapSlot(family);
+    const int ss = flatUiSceneSlotOf(family);  // the bars' and the dusts' slot of the per-reason counts (2026-11-03), or -1
     if (ms >= 0) {  // the map asks this frame, counted as they come (the first map-tone candidate reports how many came before it)
         if (g_mapAskFrame != d.frame) { g_mapAskFrame = d.frame; g_mapAsksFrame = 0; }
         ++g_mapAsksFrame;
@@ -254,6 +281,8 @@ FlatUiLayerAsk flatUiLayerDecide(ID3D11DeviceContext* ctx, const FlatUiLayerDraw
         ++g_w.refused[static_cast<size_t>(r)];
         flatUiTrailNoteRefuse(d.frame, r);
         if (ms >= 0) ++g_w.mapRefused[ms][static_cast<size_t>(r)];
+        if (ss >= 0) ++g_w.sceneRefused[ss][static_cast<size_t>(r)];
+        if (family == UiLayerFamily::kLegacyGlass) ++g_w.glassRefused[static_cast<size_t>(r)];
         return g_lastAsk;
     };
     if (d.otherWork) return refuse(FlatUiRefuse::kOtherWork);
@@ -301,6 +330,8 @@ FlatUiLayerAsk flatUiLayerDecide(ID3D11DeviceContext* ctx, const FlatUiLayerDraw
         if (decision >= 0 && static_cast<size_t>(decision) < kDecisions) {
             ++g_w.declined[static_cast<size_t>(decision)];
             if (ms >= 0) ++g_w.mapDeclined[ms][static_cast<size_t>(decision)];
+            if (ss >= 0) ++g_w.sceneDeclined[ss][static_cast<size_t>(decision)];
+            if (family == UiLayerFamily::kLegacyGlass) ++g_w.glassDeclined[static_cast<size_t>(decision)];
         }
         return g_lastAsk;
     }
@@ -320,6 +351,23 @@ bool flatUiLayerBegin(ID3D11DeviceContext* ctx) {
 void flatUiLayerEnd(ID3D11DeviceContext* ctx) {
     FlatComputeInternalScope internal;
     uiLayerEnd(ctx);
+}
+
+bool flatUiLayerDecidedBars() { return g_decidedFamily == UiLayerFamily::kSupercruiseBars; }
+
+void flatUiLayerBarsPrepare(ID3D11DeviceContext* ctx) {
+    FlatComputeInternalScope internal;
+    supercruiseBarsPrepare(ctx);
+}
+
+bool flatUiLayerBarsBegin(ID3D11DeviceContext* ctx, uint32_t vertices) {
+    FlatComputeInternalScope internal;
+    return supercruiseBarsBegin(ctx, vertices);
+}
+
+void flatUiLayerBarsEnd(ID3D11DeviceContext* ctx) {
+    FlatComputeInternalScope internal;
+    supercruiseBarsEnd(ctx);
 }
 
 bool flatUiLayerWriteBackBegin(ID3D11DeviceContext* ctx) {
@@ -343,6 +391,22 @@ void flatUiLayerNoteIssue(uint64_t vs, uint64_t ps, bool taken) {
         return;
     }
     ++g_w.taken[fi];
+    // The first take of each scene family (2026-11-03) is said once too, the way the maps' is below.
+    const int ss = flatUiSceneSlotOf(g_decidedFamily);
+    if (ss >= 0 && !g_sceneNoted[ss]) {
+        g_sceneNoted[ss] = true;
+        Log::get().note("flat ui layer: the first %s taken -- frame %llu, vs %016llX ps %016llX, into the flat HDR layer, composited "
+                        "after the upscale; said once.",
+                        uiLayerFamilyName(g_decidedFamily), static_cast<unsigned long long>(g_takenFrame),
+                        static_cast<unsigned long long>(vs), static_cast<unsigned long long>(ps));
+    }
+    if (g_decidedFamily == UiLayerFamily::kLegacyGlass && !g_glassNoted) {
+        g_glassNoted = true;
+        Log::get().note("flat ui layer: the first %s taken -- frame %llu, vs %016llX ps %016llX, into the flat weapons layer, composited "
+                        "after the upscale with the weapons light; the dirt no longer goes through the upscaler; said once.",
+                        uiLayerFamilyName(g_decidedFamily), static_cast<unsigned long long>(g_takenFrame),
+                        static_cast<unsigned long long>(vs), static_cast<unsigned long long>(ps));
+    }
     // The first take of each map family is said once, with its frame and pair (the first composite's note, for the maps).
     const int ms = mapSlot(g_decidedFamily);
     if (ms < 0) return;
@@ -683,8 +747,22 @@ void flatUiLayerAtCopy(ID3D11DeviceContext* ctx, uint64_t frame, bool treated, u
     // The composite: this frame's HUD over the picture the copy reads (the resolve's, or the game's own after a refusal).
     const uint32_t region[4] = {0, 0, td.Width, td.Height};
     const float uv[4] = {0.0f, 0.0f, 1.0f, 1.0f};
+    // The HUD layer's edge smoothing (fix.hud_antialiasing, off by default; the F8 panel's HUD Anti-Aliasing row): the key is read here, a frame at a time, so a
+    // change is live; the layer decides nothing, it does what the ask says and reports what it did. A key the flat allow-list does not carry reads off, and the
+    // 30 s line shows it.
+    const bool smooth = Config::get().getBool("fix.hud_antialiasing", false);
+    g_w.edgeKeyOn = smooth;
+    uiLayerFlatSetEdgeSmoothing(smooth);
     // `treated`: the picture is the one EDVR's resolve made (unjittered), which the shield ripple reads at D minus the jitter; the game's own is left alone.
     ID3D11Texture2D* out = uiLayerComposite(frame, 0, picture.Get(), region, uv, false, treated);
+    const UiLayerEdgeSmoothingResult edge = uiLayerFlatEdgeSmoothingResult();
+    if (edge.outcome != UiLayerEdgeSmoothing::kNone) {
+        g_w.edgeW = edge.w;
+        g_w.edgeH = edge.h;
+        if (edge.outcome == UiLayerEdgeSmoothing::kSmoothed) ++g_w.edgeSmoothed;
+        else if (edge.outcome == UiLayerEdgeSmoothing::kFault) ++g_w.edgeRawFault;
+        else ++g_w.edgeRawKeyOff;
+    }
     if (!out) {
         ++g_w.compositeNone;
         return;
@@ -803,18 +881,25 @@ void flatUiLayerReport(uint64_t windowSeconds) {
         static_cast<unsigned long long>(w.compositeNone), static_cast<unsigned long long>(w.bindFailed),
         static_cast<unsigned long long>(w.writeBacks), static_cast<unsigned long long>(w.jitterPhase),
         static_cast<unsigned long long>(w.jitterZero), static_cast<unsigned long long>(w.toneByShape));
+    // The HUD layer's edge smoothing (fix.hud_antialiasing), whenever the window composited the layer: the composites that read the SMAA
+    // output, those that read the raw layer because the key was off, those that fell back to it because the passes could not be had, the key as the last
+    // composite read it and the layer's size. A window with composites and all three counts zero says the composite never reached the smoothing.
+    if (w.composites || w.edgeSmoothed || w.edgeRawKeyOff || w.edgeRawFault)
+        Log::get().note("flat ui layer smaa: key=%s smoothed=%llu raw-key-off=%llu raw-fault=%llu size=%ux%u", w.edgeKeyOn ? "on" : "off",
+                        static_cast<unsigned long long>(w.edgeSmoothed), static_cast<unsigned long long>(w.edgeRawKeyOff),
+                        static_cast<unsigned long long>(w.edgeRawFault), w.edgeW, w.edgeH);
     const UiLayerFamily families[4] = {UiLayerFamily::kHolo, UiLayerFamily::kFlightHud, UiLayerFamily::kSprite,
                                        UiLayerFamily::kHoloGeneric};
     const size_t f0 = static_cast<size_t>(families[0]), f1 = static_cast<size_t>(families[1]),
                  f2 = static_cast<size_t>(families[2]), f3 = static_cast<size_t>(families[3]);
     const size_t fc = static_cast<size_t>(UiLayerFamily::kMapCanvas), fs = static_cast<size_t>(UiLayerFamily::kMapSprite);
-    // fix.sharp_weapons in flat (2026-10-16): the weapons fire and the shield ripple, each asked/decided/taken/refused-at-issue. Zeros print, and a window in which
+    // The weapons fire in flat (2026-10-16): the weapons fire and the shield ripple, each asked/decided/taken/refused-at-issue. Zeros print, and a window in which
     // neither pair reached the adapter says so.
     {
         const size_t fw = static_cast<size_t>(UiLayerFamily::kWeaponsFire), fr = static_cast<size_t>(UiLayerFamily::kShieldRipple);
         if (!w.asked[fw] && !w.asked[fr]) {
-            Log::get().note("flat ui layer weapons: not exercised in this window (no weapons-fire or shield-refraction draw was asked; fix.sharp_weapons %s).",
-                            uiLayerWeaponsLive() ? "is live" : "is not live: off, or flat anti-aliasing off, or stood down");
+            Log::get().note("flat ui layer weapons: not exercised in this window (no weapons-fire or shield-refraction draw was asked; the weapons fire %s).",
+                            uiLayerWeaponsLive() ? "is live" : "is not live: flat anti-aliasing off, or stood down");
         } else {
             Log::get().note(
                 "flat ui layer weapons: weapons-fire asked=%llu decided=%llu taken=%llu refused-at-issue=%llu; shield-ripple asked=%llu decided=%llu taken=%llu "
@@ -866,6 +951,38 @@ void flatUiLayerReport(uint64_t windowSeconds) {
         static_cast<unsigned long long>(w.mapJitter[0][2]), static_cast<unsigned long long>(w.mapJitter[0][3]),
         static_cast<unsigned long long>(w.mapJitter[1][0]), static_cast<unsigned long long>(w.mapJitter[1][1]),
         static_cast<unsigned long long>(w.mapJitter[1][2]), static_cast<unsigned long long>(w.mapJitter[1][3]));
+    // The scene families (2026-11-03): the supercruise bars, the supercruise space dust, the normal-space dust and the orbit lines (in flatUiSceneSlotOf's order),
+    // each asked/decided/taken/refused-at-issue and refused in all with the reasons (the adapter's, the shared decision's and the refusals at the game's issue, as
+    // the map line has them). ALWAYS printed, zeros included: a log without this line is a build that never ran it, and a window with all zeros is a flight
+    // without that draw (not in supercruise, not near a body) or one the pair classifier never named. The bars' own strip pass prints its 30 s line from here too
+    // (supercruiseBarsLog), with the layer's half.
+    {
+        const UiLayerFamily scene[kFlatUiSceneSlots] = {UiLayerFamily::kSupercruiseBars, UiLayerFamily::kSpaceDust, UiLayerFamily::kNormalSpaceDust,
+                                                        UiLayerFamily::kOrbitLines};
+        const char* const names[kFlatUiSceneSlots] = {"supercruise-bars", "space-dust", "normal-space-dust", "orbit-lines"};
+        std::string text, barsLayer;
+        for (int i = 0; i < kFlatUiSceneSlots; ++i) {
+            const size_t fi = static_cast<size_t>(scene[i]);
+            char one[640];
+            std::snprintf(one, sizeof(one), "%s%s asked=%llu decided=%llu taken=%llu refused-at-issue=%llu refused=%llu (%s)", i ? "; " : "", names[i],
+                          static_cast<unsigned long long>(w.asked[fi]), static_cast<unsigned long long>(w.decided[fi]),
+                          static_cast<unsigned long long>(w.taken[fi]), static_cast<unsigned long long>(w.atIssue[fi]),
+                          static_cast<unsigned long long>(sceneRefusedTotal(w, i, w.atIssue[fi])), sceneReasons(w, i, w.atIssue[fi]).c_str());
+            text += one;
+            if (i == 0) barsLayer = one;
+        }
+        Log::get().note("flat ui layer scene: %s", text.c_str());
+        const std::string layerText = "flat layer: " + barsLayer;
+        supercruiseBarsLog(layerText.c_str());
+    }
+    // The legacy canopy (kLegacyGlass), the same counts with its reasons. ALWAYS printed: all zeros is `odyssey`, or a window with no canopy drawn.
+    {
+        const size_t fg = static_cast<size_t>(UiLayerFamily::kLegacyGlass);
+        Log::get().note("flat ui layer legacy glass: asked=%llu decided=%llu taken=%llu refused-at-issue=%llu refused=%llu (%s)", static_cast<unsigned long long>(w.asked[fg]),
+                        static_cast<unsigned long long>(w.decided[fg]), static_cast<unsigned long long>(w.taken[fg]), static_cast<unsigned long long>(w.atIssue[fg]),
+                        static_cast<unsigned long long>(refusedTotalOf(w.glassRefused, w.glassDeclined, w.atIssue[fg])),
+                        reasonsOf(w.glassRefused, w.glassDeclined, w.atIssue[fg]).c_str());
+    }
     // The HUD's bloom feed: every first-level draw that asked for H' this window, by what the pass came to. "fed" is the draws that read H'; a
     // window with the layer live and the HUD taken but nothing here is a build that never ran it, or a game with Bloom off (no first level).
     {

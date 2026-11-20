@@ -1,0 +1,7 @@
+// Carry the miniz notice in every distributed graphics DLL, including copies
+// embedded in the standalone installer.
+40067 RCDATA
+BEGIN
+    "miniz - Copyright 2013-2014 RAD Game Tools and Valve Software; Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC. All Rights Reserved.\0"
+END
+40068 RCDATA "third_party/miniz/LICENSE"

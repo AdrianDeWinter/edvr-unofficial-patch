@@ -3,6 +3,10 @@
 #include "../../src/openxr/system_publication.h"
 #include "../../src/openxr/loading_state.h"
 #include "../../src/openxr/frame_cycle_stats.h"
+#include "../../src/openxr/native_trace.h"
+
+#include <algorithm>
+#include <string>
 
 #include <condition_variable>
 #include <atomic>
@@ -865,6 +869,70 @@ void turboPacingTest() {
 }
 }
 
+// The 30 s report's window summary was a full std::sort of up to 4096 doubles, 28 times; it is order statistics by selection now
+// (FrameCycleStats::distribution). Prove the report's text is unchanged: the previous sort-based definition, kept here verbatim,
+// and the selection give the same doubles, and "name=...,mean=%.4f,p50=%.4f,p95=%.4f,p99=%.4f,max=%.4f" (the phase lines'
+// format in reportFrameCycles) prints the same string, on fixed sample sets. NaN is not a fixture: samples are integer tick
+// differences scaled, so none can hold one, and std::sort over NaN is undefined to begin with.
+FrameCycleStats::Dist sortedDistReference(std::vector<double> v) {
+  const unsigned n=unsigned(v.size());double total=0;for(unsigned i=0;i<n;++i)total+=v[i];
+  std::sort(v.begin(),v.end());
+  auto p=[&](unsigned x){return n?v[(n*x+99)/100-1]:0;};
+  return{n?total/n:0,p(50),p(95),p(99),n?v[n-1]:0};
+}
+std::string phaseText(const FrameCycleStats::Dist& d) {
+  char buf[256];std::snprintf(buf,sizeof buf,"native_frame_cycle_phase,window=%llu,name=%s,mean=%.4f,p50=%.4f,p95=%.4f,p99=%.4f,max=%.4f,units=wall_ms,nested=0",
+    1ull,"cycle",d.mean,d.p50,d.p95,d.p99,d.max);return buf;
+}
+void reportSelectionTest() {
+  std::vector<std::vector<double>> sets;
+  sets.push_back({});sets.push_back({7.25});sets.push_back({9.5,0.125});sets.push_back({3,1,2});sets.push_back({4,1,3,2});
+  sets.push_back({1,1,1,2,2,9,9});sets.push_back(std::vector<double>(50,0.5));sets.push_back({0.0,0.0,0.0});
+  uint32_t x=987654321u;
+  std::vector<double> big,asc,desc;
+  for(unsigned i=0;i<FrameCycleStats::capacity;++i){
+    x=x*1664525u+1013904223u;big.push_back(double(x>>10)*1e-4);asc.push_back(double(i)*0.001);desc.push_back(double(FrameCycleStats::capacity-1-i)*0.001);
+  }
+  sets.push_back(big);sets.push_back(asc);sets.push_back(desc);
+  for(unsigned n:{3u,4u,5u,19u,20u,21u,33u,34u,99u,100u,101u,102u,199u,200u,201u,1000u,2700u,4095u})sets.push_back(std::vector<double>(big.begin(),big.begin()+n));
+  {std::vector<double> ties;for(unsigned i=0;i<4096;++i)ties.push_back(double(i%7));sets.push_back(ties);}
+  bool allSame=true;unsigned bad=0;
+  for(const auto& s:sets){
+    const auto want=sortedDistReference(s);
+    std::vector<double> work=s;double total=0;for(double d:work)total+=d;
+    const auto got=FrameCycleStats::distribution(work.data(),unsigned(work.size()),total);
+    const bool same=want.mean==got.mean&&want.p50==got.p50&&want.p95==got.p95&&want.p99==got.p99&&want.max==got.max&&phaseText(want)==phaseText(got);
+    if(!same){allSame=false;++bad;std::printf("  selection differs on a set of %zu: %s | %s\n",s.size(),phaseText(want).c_str(),phaseText(got).c_str());}
+  }
+  check(allSame,"report selection: mean/p50/p95/p99/max and the phase line text equal the sorted definition on every fixture");
+  FrameCycleStats::Dist none=FrameCycleStats::distribution(nullptr,0,0.0);
+  check(none.mean==0&&none.p50==0&&none.p95==0&&none.p99==0&&none.max==0,"report selection: an empty window reads zeros");
+  // A real window through the class: the cycle distribution of known cycles is the reference's.
+  FrameCycleStats stats;FrameCycleStats::Shape shape{};shape.width[0]=shape.width[1]=shape.height[0]=shape.height[1]=2;
+  std::vector<double> cycles;uint64_t tick=1000,seq=0;
+  auto wait=[&](uint64_t nowMs){auto t=stats.waitCallerBegin(tick,7);tick+=1;stats.waitOwnerBegin(t,tick);tick+=1;stats.waitOwnerEnd(t,tick);tick+=1;stats.waitCallerEnd(t,++seq,tick,nowMs,7,shape,true);};
+  auto submit=[&](unsigned eye){auto t=stats.submitCallerBegin(eye,tick,7);tick+=1;stats.submitOwnerBegin(t,tick);tick+=1;stats.submitOwnerEnd(t,tick);stats.submitCallerEnd(t,eye,seq,tick,7,0.0,true);};
+  wait(1);
+  for(unsigned i=0;i<37;++i){tick+=10+(i*7)%13;submit(0);tick+=3;submit(1);tick+=5+(i*5)%11;wait(1+i);}
+  tick+=5;submit(0);tick+=3;submit(1);tick+=5;wait(31000);
+  FrameCycleStats::Report r{};
+  check(stats.takeReport(r)&&r.valid>0,"report selection: a window of cycles reports");
+  // Rebuild what makeReport read for the cycle phase: the report's own cycle Dist must be self-consistent with order statistics.
+  check(r.cycle.p50<=r.cycle.p95&&r.cycle.p95<=r.cycle.p99&&r.cycle.p99<=r.cycle.max&&r.cycle.mean>0,
+    "report selection: a window's cycle percentiles are ordered and its mean is real");
+}
+void traceBatchTest() {
+  check(NativeTraceBatch::active()==nullptr,"trace batch: nothing diverts by default");
+  {
+    NativeTraceBatch batch;
+    check(NativeTraceBatch::active()==&batch,"trace batch: a batch diverts its thread");
+    nativeTracePrintf("trace_batch_test,line=%d\n",1);
+    batch.close();batch.close();
+    check(NativeTraceBatch::active()==nullptr,"trace batch: close() stops diverting, twice is safe");
+  }
+  check(NativeTraceBatch::active()==nullptr,"trace batch: destruction leaves nothing diverting");
+}
+
 int main(int argc, char** argv) {
   if (argc == 2 && std::strcmp(argv[1], "--dry-run") == 0) { std::puts("Would test injected OpenXR frame boundary; no runtime or files."); return 0; }
   if (argc != 2 || std::strcmp(argv[1], "--self-test") != 0) return 2;
@@ -872,5 +940,6 @@ int main(int argc, char** argv) {
   frameEndOwnerBodyRaceTest();
   latePacingSteadyTest(); latePacingSkippedPeriodTest(); latePacingPeriodChangeTest();
   blockedRuntimeIntegrationTest(); boundaryFailures();backgroundFrames();loadingTransitions();turboPacingTest();
+  reportSelectionTest();traceBatchTest();
   std::printf("openxr_frame_test: %u checks, %u failures\n", checks.load(), failures.load()); return failures.load() ? 1 : 0;
 }

@@ -26,6 +26,7 @@
 
 #include "flat_sharpen_rig.h"
 #include "../../src/common/runtime_profile.h"
+#include "../../src/common/star_glow_bloom.h"
 #include "../../src/d3d11/flat_sharpen.h"
 #include "../../src/d3d11/menu_flat_rows.h"
 #include "../../src/d3d11/swapchain_probe.h"
@@ -111,39 +112,37 @@ void printLines(const char* what, const std::string& text, const char* needle) {
 // ---------------------------------------------------------------------------
 // The panel table.
 
+// The body of the function `head` opens in menu.cpp (up to the first closing brace at the start of a line); empty when it is not there.
+std::string functionBody(const std::string& menuCpp, const char* head) {
+    const size_t def = menuCpp.find(head);
+    if (def == std::string::npos) return std::string();
+    const size_t defEnd = menuCpp.find("\n}", def);
+    return defEnd == std::string::npos ? std::string() : menuCpp.substr(def, defEnd - def);
+}
 bool sourceBuildsFlatPageFromTable(const std::string& menuCpp) {
-    const size_t at = menuCpp.find("p.name = kFlatTabNames[0];");
-    if (at == std::string::npos) return false;
-    const size_t end = menuCpp.find("firstSelectable(p);", at);
-    if (end == std::string::npos) return false;
-    const std::string region = menuCpp.substr(at, end - at);
-    return region.find("flatPageHasRow(") != std::string::npos &&
+    const std::string region = functionBody(menuCpp, "void addFlatPerformanceRows(Page& p) {");
+    return !region.empty() && region.find("flatPageHasRow(") != std::string::npos &&
            region.find("strcmp(d.key,") == std::string::npos;
 }
 
-// The Visual tab (2026-10-22): built from kFlatVisualRows, after the Performance tab and before the Debug tab, and from no key list of
-// menu.cpp's own.
-bool sourceBuildsFlatVisualFromTable(const std::string& menuCpp) {
-    const size_t at = menuCpp.find("p.name = kFlatTabNames[1];");
-    const size_t first = menuCpp.find("p.name = kFlatTabNames[0];");
-    const size_t debug = menuCpp.find("p.name = kFlatTabNames[2];");
-    if (at == std::string::npos || first == std::string::npos || debug == std::string::npos || !(first < at && at < debug)) return false;
-    const size_t end = menuCpp.find("firstSelectable(p);", at);
-    if (end == std::string::npos) return false;
-    const std::string region = menuCpp.substr(at, end - at);
-    return region.find("flatVisualHasRow(") != std::string::npos && region.find("strcmp(d.key,") == std::string::npos;
+// The three flat tabs are made by makePage from the one page table (menu_pages.h), each from its own table's walker; the order is the table's, pinned in menu_policy_test.
+bool sourceMakesFlatPagesFromTables(const std::string& menuCpp) {
+    const std::string make = functionBody(menuCpp, "Page makePage(const MenuPageDef& d) {");
+    return !make.empty() && make.find("case MenuPageSource::FlatPerformance: addFlatPerformanceRows(p); break;") != std::string::npos &&
+           make.find("case MenuPageSource::FlatVisual: addFlatVisualRows(p); break;") != std::string::npos &&
+           make.find("case MenuPageSource::FlatDebug: addFlatDebugRows(p); break;") != std::string::npos;
 }
 
-// The Debug tab (2026-10-16): built from kFlatDebugRows and the `menu debug` page, after the Performance and Visual tabs, as the last tab,
-// with its heading, and from no key list of menu.cpp's own.
+// The Visual tab (2026-10-22): built from kFlatVisualRows, and from no key list of menu.cpp's own.
+bool sourceBuildsFlatVisualFromTable(const std::string& menuCpp) {
+    const std::string region = functionBody(menuCpp, "void addFlatVisualRows(Page& p) {");
+    return sourceMakesFlatPagesFromTables(menuCpp) && region.find("flatVisualHasRow(") != std::string::npos && region.find("strcmp(d.key,") == std::string::npos;
+}
+
+// The Debug tab (2026-10-16): built from kFlatDebugRows and the `menu debug` page, with its heading, and from no key list of menu.cpp's own.
 bool sourceBuildsFlatDebugFromTable(const std::string& menuCpp) {
-    const size_t at = menuCpp.find("p.name = kFlatTabNames[2];");
-    const size_t first = menuCpp.find("p.name = kFlatTabNames[0];");
-    if (at == std::string::npos || first == std::string::npos || first > at) return false;
-    const size_t end = menuCpp.find("firstSelectable(p);", at);
-    if (end == std::string::npos) return false;
-    const std::string region = menuCpp.substr(at, end - at);
-    return region.find("flatDebugHasRow(") != std::string::npos && region.find("kFlatDebugPage") != std::string::npos &&
+    const std::string region = functionBody(menuCpp, "void addFlatDebugRows(Page& p) {");
+    return sourceMakesFlatPagesFromTables(menuCpp) && region.find("flatDebugHasRow(") != std::string::npos && region.find("kFlatDebugPage") != std::string::npos &&
            region.find("EntryKind::Heading") != std::string::npos && region.find("For bug reports") != std::string::npos &&
            region.find("strcmp(d.key,") == std::string::npos;
 }
@@ -173,6 +172,108 @@ bool sourceGatesSharpenRow(const std::string& menuCpp) {
            menuCpp.find("if (isSharpenRow(kMenuRows[defIndex]) && sharpenRowDisabled()) {") != std::string::npos;
 }
 
+
+// The HUD Anti-Aliasing row's dimming (2026-10-24), the same shape: one question (hudAntiAliasingRowDim, whose truth table is checked below), asked in the profile's
+// own terms -- fix.ui_quality read as the layer reads it, the anti-aliasing as the running profile reads it (the flat mode through requestedTemporalMode; since
+// 2026-11-03 the row is on VR's Performance page too, where the mode is fix.temporal_aa, as uiLayerConfigure reads it) -- from the
+// row's drawing and from a step. (A switch is never typed, so there is no third site.) The hint and the refused step name the cause that applies.
+bool sourceGatesHudAaRow(const std::string& menuCpp) {
+    const std::string quality = functionBody(menuCpp, "bool hudAntiAliasingUiQualityOn() {");
+    const std::string mode = functionBody(menuCpp, "bool hudAntiAliasingModeOn() {");
+    const std::string disabled = functionBody(menuCpp, "bool hudAntiAliasingRowDisabled() {");
+    const std::string hint = functionBody(menuCpp, "const char* hudAntiAliasingHint() {");
+    const std::string refusal = functionBody(menuCpp, "const char* hudAntiAliasingRefusal() {");
+    return quality.find("getString(\"fix.ui_quality\", \"100\")") != std::string::npos &&
+           quality.find("uiQualityParse(quality.c_str(), nullptr) > 0.0f") != std::string::npos &&
+           mode.find("temporalModeEnabledFor(Config::get().requestedTemporalMode(), true)") != std::string::npos &&
+           mode.find("runtimeFlatProfile() ?") != std::string::npos &&
+           mode.find("temporalModeEnabledFor(Config::get().getString(\"fix.temporal_aa\", \"off\"), false)") != std::string::npos &&
+           disabled.find("hudAntiAliasingRowDim(hudAntiAliasingUiQualityOn(), hudAntiAliasingModeOn())") != std::string::npos &&
+           hint.find("hudAntiAliasingUiQualityOn() ? \"Needs anti-aliasing: turn it on to use this.\" : \"Needs UI quality: turn it on to use this.\"") != std::string::npos &&
+           refusal.find("hudAntiAliasingUiQualityOn() ? \"HUD Anti-Aliasing is inactive: turn anti-aliasing on first.\"") != std::string::npos &&
+           refusal.find("\"HUD Anti-Aliasing is inactive: turn UI quality on above first.\"") != std::string::npos &&
+           menuCpp.find("(hudAaRow && hudAntiAliasingRowDisabled())") != std::string::npos &&
+           menuCpp.find("snprintf(c.hint, sizeof(c.hint), \"%s\", hudAntiAliasingHint());") != std::string::npos &&
+           menuCpp.find("if (isHudAntiAliasingRow(d) && hudAntiAliasingRowDisabled()) {") != std::string::npos &&
+           menuCpp.find("g_s.lastWrite = hudAntiAliasingRefusal();") != std::string::npos;
+}
+
+// The Star glow row's Bloom hint (2026-10-27): with Elite's Bloom option known to be off and the setting above 100, the flat panel's Visual tab says so in a note under its rows and the
+// VR menu says so in the hint line while the Star glow row is highlighted (src/common/star_glow_bloom.h has the words, the condition and the placement functions; the truth tables
+// are checked below and in tools\terrain_checkerboard_test, T7). menu.cpp is 4000 lines the rig cannot draw, so what it holds is that the two sites still ask those functions with
+// the profile's and the page's own terms, that the row is never dimmed or refused for it (a dimmed row stops responding), and that the files are read when a menu opens or the setting
+// changes (the config generation moved), never per frame.
+int occurrences(const std::string& text, const std::string& needle) {
+    int n = 0;
+    for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) ++n;
+    return n;
+}
+bool sourceSaysStarGlowBloom(const std::string& menuCpp) {
+    const std::string build = functionBody(menuCpp, "void buildContent(MenuContent& c) {");
+    const std::string tick = functionBody(menuCpp, "void starGlowBloomTick() {");
+    const std::string opened = functionBody(menuCpp, "void starGlowBloomMenuOpened() {");
+    const std::string configure = functionBody(menuCpp, "void starGlowBloomConfigure() {");
+    const std::string row = functionBody(menuCpp, "bool isStarGlowRow(const MenuRowDef& d) {");
+    const std::string step = functionBody(menuCpp, "void stepRow(int defIndex, int dir, int mult) {");
+    const std::string openMenu = functionBody(menuCpp, "void openMenu(uint64_t now) {");
+    const std::string menuConfigure = functionBody(menuCpp, "void menuConfigure(Config& cfg) {");
+    const size_t dimAt = build.find("const bool dim =");
+    const size_t dimEnd = dimAt == std::string::npos ? std::string::npos : build.find(';', dimAt);
+    const std::string dim = dimEnd == std::string::npos ? std::string() : build.substr(dimAt, dimEnd - dimAt);
+    const size_t note = build.find("sgb::tabNote(runtimeFlatProfile(), strcmp(p.name, kFlatTabNames[1]) == 0, s.starGlowBloom.percent(),");
+    const size_t warning = build.find("if (runtimeFlatProfile() && s.flatWarnActive) {");
+    return !build.empty() && !dim.empty() && !tick.empty() && !opened.empty() && !configure.empty() && !row.empty() && !step.empty() && !openMenu.empty() && !menuConfigure.empty() &&
+           // the flat note: on the Visual tab (the table's own name for it), by the placement function, wrapped like the settings warning, above it
+           note != std::string::npos && warning != std::string::npos && note < warning && occurrences(menuCpp, "sgb::tabNote(") == 1 &&
+           build.find("s.starGlowBloom.state())) {", note) != std::string::npos && build.find("flatWrapWarning(bloomNote,", note) != std::string::npos && build.find("kMenuNote", note) < warning &&
+           // the VR hint: the highlighted Star glow row, by the placement function, into the hint line
+           build.find("sgb::rowHint(runtimeFlatProfile(), hi && isStarGlowRow(d), s.starGlowBloom.percent(), s.starGlowBloom.state())") != std::string::npos &&
+           occurrences(menuCpp, "sgb::rowHint(") == 1 && build.find("snprintf(c.hint, sizeof(c.hint), \"%s\", bloomHint);") != std::string::npos &&
+           // the row is matched by its key, wherever it is drawn, and never dimmed or refused for the hint
+           row.find("strcmp(d.section, \"visual\") == 0 && strcmp(d.key, \"star_glow\") == 0") != std::string::npos && dim.find("tarGlow") == std::string::npos &&
+           step.find("tarGlow") == std::string::npos && occurrences(menuCpp, "isStarGlowRow(") == 2 &&
+           // read when the config's generation moved, never per frame; a menu opening reads again; both profiles configure it and tick it
+           tick.find("if (s.starGlowBloomGenSeen && generation == s.starGlowBloomGen) return;") != std::string::npos && tick.find("Config::get().generation()") != std::string::npos &&
+           tick.find("starGlowPercent(Config::get())") != std::string::npos && tick.find("s.starGlowBloom.noteSetting(percent, &line)") != std::string::npos &&
+           tick.find("Log::get().note(\"%s\", line.c_str());") != std::string::npos &&
+           opened.find("g_s.starGlowBloom.noteMenuOpened(&line)") != std::string::npos && opened.find("Log::get().note(\"%s\", line.c_str());") != std::string::npos &&
+           configure.find("g_s.starGlowBloom.configure(flatEliteGraphicsFolder(), executableDirectory());") != std::string::npos &&
+           occurrences(menuCpp, "starGlowBloomTick();") == 1 && occurrences(openMenu, "starGlowBloomMenuOpened();") == 1 && occurrences(menuConfigure, "starGlowBloomConfigure();") == 1 &&
+           occurrences(menuCpp, "readEliteBloom(") == 0 && occurrences(menuCpp, "noteSetting(") == 1 && occurrences(menuCpp, "noteMenuOpened(") == 1;
+}
+
+// The flat Performance tab is built from kFlatPageRows whatever page a row's `menu` token names (the page token is what keeps a flat-only row off VR's page), and
+// VR's Performance page is the rows whose token is `menu performance`: the two ends of the HUD Anti-Aliasing row's placement.
+bool sourceFlatTabIgnoresPageToken(const std::string& menuCpp) {
+    const std::string region = functionBody(menuCpp, "void addFlatPerformanceRows(Page& p) {");
+    return !region.empty() && region.find("flatPageHasRow(") != std::string::npos && region.find("d.page") == std::string::npos;
+}
+bool sourceVrPerformancePageIsTheToken(const std::string& menuCpp, const std::string& pagesH) {
+    const size_t add = menuCpp.find("void addSettingRows(Page& p, MenuTier tier, const char* page, bool grouped) {");
+    if (add == std::string::npos) return false;
+    const size_t addEnd = menuCpp.find("\n}", add);
+    const std::string addBody = addEnd == std::string::npos ? std::string() : menuCpp.substr(add, addEnd - add);
+    if (addBody.find("if (page && _stricmp(d.page, page) != 0) continue;") == std::string::npos) return false;
+    // The page is a row of the page table (menu_pages.h): the VR "Performance" page, a Settings source of the Fix tier, the token `performance`, ungrouped; makePage hands those to addSettingRows.
+    return pagesH.find("{\"Performance\", false, true, false, MenuPageSource::Settings, MenuPageTier::Fix, \"performance\", false, MenuPagePost::None},") != std::string::npos &&
+           functionBody(menuCpp, "Page makePage(const MenuPageDef& d) {").find("addSettingRows(p, menuTierOf(d.tier), d.token, d.grouped);") != std::string::npos;
+}
+
+// The HUD Anti-Aliasing row of the generated schema is on both menus since 2026-11-03: a Fix-tier on/off choice shipped off and live, on the page
+// `performance` -- the page VR's Performance page is built from, and the flat Performance tab lists the row through kFlatPageRows whatever its token says --
+// once, directly under UI quality's row. (Before then its token was `flat_performance`, flat's own page.)
+bool schemaHudRowIsOnBothMenus(const std::string& schema) {
+    const std::string row = schemaRow(schema, "fix", "hud_antialiasing");
+    if (row.empty()) return false;
+    const size_t quality = schema.find("{\"fix\", \"ui_quality\",");
+    const size_t hud = schema.find("{\"fix\", \"hud_antialiasing\",");
+    if (quality == std::string::npos || hud == std::string::npos || schema.find("{\"fix\", \"hud_antialiasing\",", hud + 1) != std::string::npos) return false;
+    const size_t afterQuality = schema.find("\n    {\"", quality + 1);
+    return afterQuality != std::string::npos && afterQuality + 5 == hud && row.find("\"HUD Anti-Aliasing\"") != std::string::npos &&
+           row.find("MenuKind::Choice, \"off\", \"\", \"\", 0, \"on|off\", false, false, 1,") != std::string::npos &&
+           row.find("MenuTier::Fix, \"performance\",") != std::string::npos && row.find("MenuTier::Fix, \"flat_performance\",") == std::string::npos;
+}
+
 // The one line that hands the resolve's output to the sharpening: flat_runtime.cpp, where the
 // game's output copy's first input is swapped for it. The rig cannot run the flat runtime, and
 // without this line the wrapper is never reached (a flat log would say so after 30 s, in the
@@ -195,8 +296,8 @@ void panelTable(const std::string& root, const std::string& gen) {
     using namespace edvr;
     check(kFlatPageRowCount >= 4 && flatPageHasRow("fix", "temporal_aa") &&
               flatPageHasRow("fix", "temporal_aa_model") && flatPageHasRow("fix", "render_sharpness") &&
-              flatPageHasRow("fix", "ui_quality"),
-          "the flat page has the mode, the DLSS preset, the sharpening and the UI quality");
+              flatPageHasRow("fix", "ui_quality") && flatPageHasRow("fix", "hud_antialiasing"),
+          "the flat page has the mode, the DLSS preset, the sharpening, the UI quality and the HUD Anti-Aliasing");
     check(!flatPageHasRow("fix", "black_void") && !flatPageHasRow("fix", "panel_distance"),
           "no unrelated fix is a row of the flat page");
 
@@ -238,6 +339,13 @@ void panelTable(const std::string& root, const std::string& gen) {
     const FlatPageRow* m3 = flatPageFirstRefused(lacksUiQuality);
     check(m3 && std::strcmp(m3->key, "ui_quality") == 0,
           "control: a gate without fix.ui_quality is caught, by name");
+    const auto lacksHudAa = [](const char* dotted) {
+        return runtimeProfileAllowsKey(dotted) && std::strcmp(dotted, "fix.hud_antialiasing") != 0;
+    };
+    const FlatPageRow* m3b = flatPageFirstRefused(lacksHudAa);
+    check(m3b && std::strcmp(m3b->key, "hud_antialiasing") == 0,
+          "control: a gate without fix.hud_antialiasing is caught, by name (unlisted, the row could never turn the smoothing on)");
+    check(runtimeProfileAllowsKey("fix.hud_antialiasing"), "the flat gate reads fix.hud_antialiasing");
     const auto lacksIntro = [](const char* dotted) {
         return runtimeProfileAllowsKey(dotted) && std::strcmp(dotted, "visual.intro_video") != 0;
     };
@@ -267,6 +375,8 @@ void panelTable(const std::string& root, const std::string& gen) {
     const std::string menuCpp = readWholeFile(std::wstring(root.begin(), root.end()) +
                                               L"\\src\\d3d11\\menu.cpp");
     check(!menuCpp.empty(), "menu.cpp is readable from the repo root");
+    const std::string pagesH = readWholeFile(std::wstring(root.begin(), root.end()) + L"\\src\\d3d11\\menu_pages.h");
+    check(!pagesH.empty(), "menu_pages.h is readable from the repo root");
     check(sourceBuildsFlatPageFromTable(menuCpp), "menu.cpp builds the flat page from flatPageHasRow");
     std::string hardCoded = menuCpp;
     const size_t at = hardCoded.find("if (!flatPageHasRow(d.section, d.key)) continue;");
@@ -316,6 +426,51 @@ void panelTable(const std::string& root, const std::string& gen) {
     check(!noEdit.empty() && !sourceGatesSharpenRow(noEdit), "control: a dimmed row that still takes typing is caught");
     check(!vrDims.empty() && !sourceGatesSharpenRow(vrDims), "control: a row asking about a profile other than the running one is caught");
 
+    // The HUD Anti-Aliasing row's dimming (UI quality off, or the flat anti-aliasing off) is asked in both places, in the layer's own reading of fix.ui_quality and
+    // the flat profile's reading of the mode, and the hint and the refused step name the cause that applies.
+    check(sourceGatesHudAaRow(menuCpp),
+          "menu.cpp dims the HUD Anti-Aliasing row and refuses its steps through hudAntiAliasingRowDim, reading fix.ui_quality as the layer does and the flat mode as the flat profile does");
+    const std::string hudNoDraw = mutated("(hudAaRow && hudAntiAliasingRowDisabled())", "false");
+    const std::string hudNoStep = mutated("if (isHudAntiAliasingRow(d) && hudAntiAliasingRowDisabled()) {", "if (false) {");
+    const std::string hudInverted = mutated("uiQualityParse(quality.c_str(), nullptr) > 0.0f", "uiQualityParse(quality.c_str(), nullptr) <= 0.0f");
+    const std::string hudOtherKey = mutated("getString(\"fix.ui_quality\", \"100\")", "getString(\"fix.temporal_aa\", \"100\")");
+    const std::string hudModeIgnored = mutated("hudAntiAliasingRowDim(hudAntiAliasingUiQualityOn(), hudAntiAliasingModeOn())", "hudAntiAliasingRowDim(hudAntiAliasingUiQualityOn(), true)");
+    const std::string hudModeVrRead = mutated("temporalModeEnabledFor(Config::get().requestedTemporalMode(), true)",
+                                              "temporalModeEnabledFor(Config::get().getString(\"fix.temporal_aa\", \"off\"), true)");
+    const std::string hudModeVrFlatGate = mutated("temporalModeEnabledFor(Config::get().getString(\"fix.temporal_aa\", \"off\"), false)",
+                                                  "temporalModeEnabledFor(Config::get().requestedTemporalMode(), true)");
+    const std::string hudHintOneCause = mutated("hudAntiAliasingUiQualityOn() ? \"Needs anti-aliasing: turn it on to use this.\" : \"Needs UI quality: turn it on to use this.\"",
+                                                "\"Needs UI quality: turn it on to use this.\"");
+    const std::string hudRefusalOneCause = mutated("hudAntiAliasingUiQualityOn() ? \"HUD Anti-Aliasing is inactive: turn anti-aliasing on first.\"",
+                                                   "true ? \"HUD Anti-Aliasing is inactive: turn anti-aliasing on first.\"");
+    check(!hudNoDraw.empty() && !sourceGatesHudAaRow(hudNoDraw), "control: a HUD Anti-Aliasing row that never dims when drawn is caught");
+    check(!hudNoStep.empty() && !sourceGatesHudAaRow(hudNoStep), "control: a dimmed HUD Anti-Aliasing row that still takes a step is caught");
+    check(!hudInverted.empty() && !sourceGatesHudAaRow(hudInverted), "control: a row that dims with UI quality on is caught");
+    check(!hudOtherKey.empty() && !sourceGatesHudAaRow(hudOtherKey), "control: a row that reads some other key for UI quality is caught");
+    check(!hudModeIgnored.empty() && !sourceGatesHudAaRow(hudModeIgnored), "control: a row that does not dim with the anti-aliasing off is caught");
+    check(!hudModeVrRead.empty() && !sourceGatesHudAaRow(hudModeVrRead),
+          "control: a row that reads the mode through the flat gate's fix.temporal_aa (it reads off there) is caught");
+    check(!hudModeVrFlatGate.empty() && !sourceGatesHudAaRow(hudModeVrFlatGate),
+          "control: a VR row that reads the flat mode (VR's own is fix.temporal_aa, as uiLayerConfigure reads it) is caught");
+    check(!hudHintOneCause.empty() && !sourceGatesHudAaRow(hudHintOneCause), "control: a hint that always blames UI quality is caught");
+    check(!hudRefusalOneCause.empty() && !sourceGatesHudAaRow(hudRefusalOneCause), "control: a refused step that does not name the anti-aliasing is caught");
+
+    // THE FLAT-ONLY PLACEMENT (2026-10-24). The flat Performance tab ignores the page token; VR's Performance page is exactly the rows whose token is `menu performance`.
+    check(sourceFlatTabIgnoresPageToken(menuCpp), "menu.cpp builds the flat Performance tab from flatPageHasRow alone, whatever page a row's token names");
+    check(sourceVrPerformancePageIsTheToken(menuCpp, pagesH), "menu.cpp builds VR's Performance page from the rows whose page is `performance`");
+    {
+        const std::string byPage = mutated("if (!flatPageHasRow(d.section, d.key)) continue;",
+                                           "if (!flatPageHasRow(d.section, d.key) || _stricmp(d.page, \"performance\") != 0) continue;");
+        check(!byPage.empty() && !sourceFlatTabIgnoresPageToken(byPage), "control: a flat tab that also asks the page token (it would drop a flat_performance row) is caught");
+        std::string allPages = pagesH;
+        const char* tokenRow = "MenuPageTier::Fix, \"performance\", false,";
+        const size_t tk = allPages.find(tokenRow);
+        if (tk != std::string::npos) allPages.replace(tk, std::strlen(tokenRow), "MenuPageTier::Fix, nullptr, false,");
+        check(tk != std::string::npos && !sourceVrPerformancePageIsTheToken(menuCpp, allPages), "control: a VR Performance page that takes every page's rows is caught");
+        const std::string noFilter = mutated("if (page && _stricmp(d.page, page) != 0) continue;", "");
+        check(!noFilter.empty() && !sourceVrPerformancePageIsTheToken(noFilter, pagesH), "control: an addSettingRows that does not filter by page is caught");
+    }
+
     // THE TABS (Debug 2026-10-16, Visual 2026-10-22). Exactly three, Performance, Visual, Debug, Debug last; the Performance rows are the ones the
     // panel always had bar the Intro movie, in their order; the Visual rows are the two [visual] options; the Debug rows are the two toggles, each
     // read through the gate and built from the table.
@@ -324,30 +479,120 @@ void panelTable(const std::string& root, const std::string& gen) {
           "the flat panel has exactly three tabs: Performance, Visual, then Debug last");
     {
         const char* const order[][2] = {{"fix", "temporal_aa"}, {"fix", "temporal_aa_model"},
-                                        {"fix", "render_sharpness"}, {"fix", "ui_quality"}, {"fix", "sharp_weapons"}, {"fix", "optimized_stations"}};
-        bool same = kFlatPageRowCount == 6;
-        for (size_t i = 0; same && i < 6; ++i)
+                                        {"fix", "dittosr_sharpness"}, {"fix", "dittosr_frame_weight"}, {"fix", "dittosr_anti_shimmer"}, {"fix", "dittosr_sharpen"},
+                                        {"fix", "xess_frame_generation"}, {"fix", "xess_generated_frames"},
+                                        {"fix", "render_sharpness"}, {"fix", "ui_quality"},
+                                        {"fix", "hud_antialiasing"}, {"fix", "optimized_stations"}, {"fix", "station_window_distance"}, {"fix", "skip_rooms_behind_doors"},
+                                        {"menu", "fps_overlay"}, {"menu", "fps_overlay_lock"}};
+        bool same = kFlatPageRowCount == 16;
+        for (size_t i = 0; same && i < 16; ++i)
             same = std::strcmp(kFlatPageRows[i].section, order[i][0]) == 0 && std::strcmp(kFlatPageRows[i].key, order[i][1]) == 0;
-        check(same, "the Performance tab keeps the flat page's six rows in their order (Sharp weapons directly under UI quality)");
+        check(same, "the Performance tab has the flat page's sixteen rows in their order (DittoSR's four rows under the DLSS preset, the two XeSS Frame Generation rows under those, HUD Anti-Aliasing directly under UI quality, "
+                    "Window 3D distance directly under Optimized stations, Skip closed rooms under that)");
     }
-    check(kFlatVisualRowCount == 2 && std::strcmp(kFlatVisualRows[0].section, "visual") == 0 && std::strcmp(kFlatVisualRows[0].key, "intro_video") == 0 &&
+    // The XeSS Frame Generation rows (2026-11-12): read through the gate. The page omits them until Anti-aliasing is XeSS, and omits the frames row until
+    // Frame generation is on (aaDependentRowHidden). A copy still drawn dims. Frames above the GPU's maximum are disabled (every option enabled while the maximum is unknown).
+    check(flatProfileReadsKey("fix.xess_frame_generation") && flatProfileReadsKey("fix.xess_generated_frames"), "the flat gate reads both XeSS Frame Generation keys");
+    check(xessFgToggleRowDim(true, false) && !xessFgToggleRowDim(true, true) && !xessFgToggleRowDim(false, false) && !xessFgToggleRowDim(false, true),
+          "the XeSS Frame Generation toggle is dimmed in flat unless the AA mode is XeSS, and never for VR (which has none)");
+    check(xessFgFramesRowDim(true, false, true) && xessFgFramesRowDim(true, true, false) && !xessFgFramesRowDim(true, true, true),
+          "the frames row is dimmed unless the AA mode is XeSS and XeSS Frame Generation is on");
+    check(xessFgFramesOptionEnabled(1, 0) && xessFgFramesOptionEnabled(3, 0) && xessFgFramesOptionEnabled(1, 1) && !xessFgFramesOptionEnabled(2, 1) &&
+              xessFgFramesOptionEnabled(3, 3) && !xessFgFramesOptionEnabled(4, 3),
+          "frames options above the GPU's maximum are disabled; with the maximum unknown (0) all are enabled");
+    check(xessFgFramesShown(3, 1) == 1 && xessFgFramesShown(3, 0) == 3 && xessFgFramesShown(9, 3) == 3 && xessFgFramesShown(0, 3) == 1 && xessFgFramesShown(2, 3) == 2,
+          "a stored frames value above the maximum is shown clamped");
+    check(menuCpp.find("(xessToggleRow && xessFgToggleRowDisabled())") != std::string::npos && menuCpp.find("xessFgRowRefused(d, &why)") != std::string::npos &&
+              menuCpp.find("syncXessFgRows") == std::string::npos &&
+              menuCpp.find("bool flatAntiAliasingIsXess() { return _stricmp(shownValue(\"fix\", \"temporal_aa\").c_str(), \"xess\") == 0; }") != std::string::npos &&
+              menuCpp.find("bool xessFgToggleOn() { return boolOf(shownValue(\"fix\", \"xess_frame_generation\"), false); }") != std::string::npos &&
+              menuCpp.find("if (ch.disabled) list += \" (not supported)\";") != std::string::npos && menuCpp.find("items[next].disabled") != std::string::npos,
+          "menu.cpp still dims a XeSS row that is on the page, from the values the panel shows, not Config, which lags an F8 change by a reload; refuses a change to a dimmed one, and skips disabled frames options when stepping");
+    check(!aaDependentRowHidden("temporal_aa_model", "dlss", false) && !aaDependentRowHidden("temporal_aa_model", "DLAA", false) &&
+              aaDependentRowHidden("temporal_aa_model", "off", false) && aaDependentRowHidden("temporal_aa_model", "fsr", false) &&
+              aaDependentRowHidden("temporal_aa_model", "fsr4", false) && aaDependentRowHidden("temporal_aa_model", "dittosr", false) &&
+              aaDependentRowHidden("temporal_aa_model", "xess", false),
+          "the DLSS preset is on the page only while Anti-aliasing is DLSS or DLAA");
+    check(!aaDependentRowHidden("dittosr_sharpness", "dittosr", false) && !aaDependentRowHidden("dittosr_frame_weight", "DittoSR", false) &&
+              !aaDependentRowHidden("dittosr_anti_shimmer", "dittosr", false) && !aaDependentRowHidden("dittosr_sharpen", "dittosr", false) &&
+              aaDependentRowHidden("dittosr_sharpness", "dlss", false) && aaDependentRowHidden("dittosr_sharpen", "off", false),
+          "DittoSR's rows are on the page only while Anti-aliasing is DittoSR");
+    check(!aaDependentRowHidden("xess_frame_generation", "xess", false) && aaDependentRowHidden("xess_frame_generation", "dlss", true) &&
+              !aaDependentRowHidden("xess_generated_frames", "xess", true) && aaDependentRowHidden("xess_generated_frames", "xess", false) &&
+              aaDependentRowHidden("xess_generated_frames", "off", true) && !aaDependentRowHidden("render_sharpness", "off", false),
+          "XeSS Frame Generation is on the page only for XeSS, its frames row only while that is on, and other rows are left alone");
+    const size_t hiddenOnce = menuCpp.find("if (menuDependentRowHidden(d)) continue;");
+    check(hiddenOnce != std::string::npos && menuCpp.find("if (menuDependentRowHidden(d)) continue;", hiddenOnce + 1) != std::string::npos &&
+              menuCpp.find("aaDependentRowHidden(d.key, shownValue(\"fix\", \"temporal_aa\").c_str(), xessFgToggleOn())") != std::string::npos &&
+              menuCpp.find("strcmp(d.key, \"temporal_aa\") == 0 || strcmp(d.key, \"xess_frame_generation\") == 0))\n        buildPages();") != std::string::npos,
+          "menu.cpp omits those rows in both page builders and rebuilds the page when Anti-aliasing or Frame generation changes");
+    check(menuCpp.find("xessFgToggleOn() && xessFgExclusiveFullscreen())") != std::string::npos &&
+              menuCpp.find("choose Borderless or Windowed in Elite's display options.") != std::string::npos,
+          "menu.cpp says on the XeSS rows that frame generation is paused in exclusive fullscreen and names the modes that generate");
+    check(kFlatVisualRowCount == 6 && std::strcmp(kFlatVisualRows[0].section, "visual") == 0 && std::strcmp(kFlatVisualRows[0].key, "intro_video") == 0 &&
               std::strcmp(kFlatVisualRows[1].section, "visual") == 0 && std::strcmp(kFlatVisualRows[1].key, "star_glow") == 0 &&
-              flatVisualHasRow("visual", "star_glow") && !flatVisualHasRow("fix", "temporal_aa"),
-          "the Visual tab has the Intro movie, then the Star glow");
+              std::strcmp(kFlatVisualRows[2].section, "visual") == 0 && std::strcmp(kFlatVisualRows[2].key, "cockpit_glass") == 0 &&
+              std::strcmp(kFlatVisualRows[3].section, "visual") == 0 && std::strcmp(kFlatVisualRows[3].key, "cockpit_glass_dirt") == 0 &&
+              std::strcmp(kFlatVisualRows[4].section, "visual") == 0 && std::strcmp(kFlatVisualRows[4].key, "cockpit_glass_lights") == 0 &&
+              std::strcmp(kFlatVisualRows[5].section, "fix") == 0 && std::strcmp(kFlatVisualRows[5].key, "particle_billboard") == 0 &&
+              flatVisualHasRow("visual", "star_glow") && flatVisualHasRow("visual", "cockpit_glass") && flatVisualHasRow("visual", "cockpit_glass_dirt") &&
+              flatVisualHasRow("fix", "particle_billboard") && !flatVisualHasRow("fix", "temporal_aa") && flatProfileReadsKey("fix.particle_billboard") &&
+              flatProfileReadsKey("visual.cockpit_glass_dirt") && flatVisualHasRow("visual", "cockpit_glass_lights") && flatProfileReadsKey("visual.cockpit_glass_lights"),
+          "the Visual tab has the Intro movie, the Star glow, the Cockpit glass, its Legacy glass dirt and lights and the Billboards (the table's order; the tab's is edvr.ini's), and the flat gate reads the dirt and lights keys");
+    check(!flatPageHasRow("fix", "particle_billboard") && !flatDebugHasRow("fix", "particle_billboard"), "the Billboards row is on the Visual tab only");
     check(!flatPageHasRow("visual", "star_glow") && !flatDebugHasRow("visual", "star_glow") && !flatVisualHasRow("advanced", "flat_cpu_timing"),
           "no key is on two tabs");
-    check(sourceBuildsFlatVisualFromTable(menuCpp), "menu.cpp builds the Visual tab, between Performance and Debug, from kFlatVisualRows");
+    check(sourceBuildsFlatVisualFromTable(menuCpp), "menu.cpp builds the Visual tab from kFlatVisualRows");
     {
         std::string listed = menuCpp;
         const char* gate = "!flatVisualHasRow(d.section, d.key)";
         const size_t j = listed.find(gate);
         if (j != std::string::npos) listed.replace(j, std::strlen(gate), "strcmp(d.key, \"star_glow\") != 0");
         check(j != std::string::npos && !sourceBuildsFlatVisualFromTable(listed), "control: a Visual tab built from a key list in menu.cpp is caught");
-        std::string swapped = menuCpp;
-        const char* nameDebug = "p.name = kFlatTabNames[2];";
-        const size_t k = swapped.find(nameDebug);
-        if (k != std::string::npos) swapped.replace(k, std::strlen(nameDebug), "p.name = kFlatTabNames[0];");
-        check(k != std::string::npos && !sourceBuildsFlatVisualFromTable(swapped), "control: a Visual tab with no Debug tab after it is caught");
+        const std::string unmade = mutated("case MenuPageSource::FlatVisual: addFlatVisualRows(p); break;", "");
+        check(!unmade.empty() && !sourceBuildsFlatVisualFromTable(unmade), "control: a Visual tab the page table's maker never builds is caught");
+    }
+    // THE STAR GLOW'S BLOOM HINT (2026-10-27). Said on the Visual tab only, under the condition, as a note; in the VR menu on the highlighted Star glow row, as the hint line.
+    {
+        using edvr::sgb::Bloom;
+        int tabsWithNote = 0, visualTab = -1;
+        for (size_t t = 0; t < kFlatTabCount; ++t) {
+            const bool visual = std::strcmp(kFlatTabNames[t], "Visual") == 0;
+            if (visual) visualTab = static_cast<int>(t);
+            if (edvr::sgb::tabNote(true, visual, 150, Bloom::Off)) ++tabsWithNote;
+        }
+        check(tabsWithNote == 1 && visualTab == 1, "the flat panel's Bloom note is on exactly one of the three tabs, the Visual tab");
+        bool visualTable = true;
+        for (int percent : {100, 125, 150, 175, 200})
+            for (Bloom state : {Bloom::Unknown, Bloom::Off, Bloom::On}) {
+                const bool want = percent > 100 && state == Bloom::Off;
+                visualTable = visualTable && (edvr::sgb::tabNote(true, true, percent, state) != nullptr) == want && edvr::sgb::tabNote(true, false, percent, state) == nullptr &&
+                              (edvr::sgb::rowHint(false, true, percent, state) != nullptr) == want && edvr::sgb::rowHint(false, false, percent, state) == nullptr &&
+                              edvr::sgb::rowHint(true, true, percent, state) == nullptr && edvr::sgb::tabNote(false, true, percent, state) == nullptr;
+            }
+        check(visualTable, "the Bloom note (Visual tab) and the VR hint (highlighted Star glow row) show for 125..400 with Bloom off and for no other setting or Bloom state, and the other profile's place stays empty");
+        check(sourceSaysStarGlowBloom(menuCpp),
+              "menu.cpp says it: the note on the Visual tab above the settings warning, the hint on the highlighted Star glow row, the row never dimmed or refused, read at a menu opening and a change of the setting");
+        const std::string noteEveryTab = mutated("strcmp(p.name, kFlatTabNames[1]) == 0, s.starGlowBloom.percent(),", "true, s.starGlowBloom.percent(),");
+        const std::string noteInVr = mutated("sgb::tabNote(runtimeFlatProfile(),", "sgb::tabNote(true,");
+        const std::string hintEveryRow = mutated("hi && isStarGlowRow(d), s.starGlowBloom.percent()", "hi, s.starGlowBloom.percent()");
+        const std::string hintInFlat = mutated("sgb::rowHint(runtimeFlatProfile(),", "sgb::rowHint(false,");
+        const std::string rowDimmed = mutated("(windowDistanceRow && stationWindowDistanceRowDisabled());", "(windowDistanceRow && stationWindowDistanceRowDisabled()) || isStarGlowRow(d);");
+        const std::string stepRefused = mutated("    if (isOpenxrRenderScaleRow(d)) {\n        // A width for the worn headset", "    if (isStarGlowRow(d)) return;\n    if (isOpenxrRenderScaleRow(d)) {\n        // A width for the worn headset");
+        const std::string everyFrame = mutated("    if (s.starGlowBloomGenSeen && generation == s.starGlowBloomGen) return;\n", "");
+        const std::string noOpenRead = mutated("starGlowBloomMenuOpened();   // Elite's Bloom option is read again", "// Elite's Bloom option is read again");
+        const std::string noVrTick = mutated("        starGlowBloomTick();\n        if (pol.closesOnFocusLoss", "        if (pol.closesOnFocusLoss");
+        const std::string noVrConfigure = mutated("        starGlowBloomConfigure();\n        initKeys();", "        initKeys();");
+        check(!noteEveryTab.empty() && !sourceSaysStarGlowBloom(noteEveryTab), "control: a note on every tab is caught");
+        check(!noteInVr.empty() && !sourceSaysStarGlowBloom(noteInVr), "control: a note asked of a profile other than the running one is caught");
+        check(!hintEveryRow.empty() && !sourceSaysStarGlowBloom(hintEveryRow), "control: a VR hint on every highlighted row is caught");
+        check(!hintInFlat.empty() && !sourceSaysStarGlowBloom(hintInFlat), "control: a VR hint asked of a profile other than the running one is caught");
+        check(!rowDimmed.empty() && !sourceSaysStarGlowBloom(rowDimmed), "control: a Star glow row dimmed for the hint (it would stop responding) is caught");
+        check(!stepRefused.empty() && !sourceSaysStarGlowBloom(stepRefused), "control: a Star glow row that refuses its steps is caught");
+        check(!everyFrame.empty() && !sourceSaysStarGlowBloom(everyFrame), "control: a tick that looks at the setting every frame, with no change of the config generation, is caught");
+        check(!noOpenRead.empty() && !sourceSaysStarGlowBloom(noOpenRead), "control: a menu that does not read Elite's Bloom when it opens is caught");
+        check(!noVrTick.empty() && !sourceSaysStarGlowBloom(noVrTick), "control: a menu that never ticks the Star glow's Bloom is caught");
+        check(!noVrConfigure.empty() && !sourceSaysStarGlowBloom(noVrConfigure), "control: a menu that never gives the Bloom reader its folders is caught");
     }
     check(kFlatDebugRowCount == 2 && flatDebugHasRow("advanced", "flat_cpu_timing") && flatDebugHasRow("advanced", "flat_refusal_view") &&
               std::strcmp(kFlatDebugRows[0].key, "flat_cpu_timing") == 0 && std::strcmp(kFlatDebugRows[1].key, "flat_refusal_view") == 0,
@@ -397,18 +642,23 @@ void panelTable(const std::string& root, const std::string& gen) {
         check(schemaHasRow(schema, r.section, r.key),
               (std::string("the generated schema has the Visual tab's ") + r.section + "." + r.key).c_str());
     }
-    // The Visual rows as generated, Fix tier, each once, in edvr.ini order. Intro movie keeps VR's Fixes page (the headset's menu has no Visual page, so
-    // a `menu visual` token on it would take it out of the headset); Star glow is a choice of five percentages on the page only this panel builds.
+    // The Visual rows as generated, Fix tier, each once, in edvr.ini order. Intro movie and Star glow are `menu visual`, the page VR's menu builds too (2026-10-27; the
+    // headset reads the Star glow since the VR port, so its row moved off `flat_visual`). The tab is built from the table, whatever the page.
     {
         const std::string movie = schemaRow(schema, "visual", "intro_video");
         const std::string glow = schemaRow(schema, "visual", "star_glow");
         check(movie.find("\"Intro movie\"") != std::string::npos && movie.find("\"screen|stock|skip\"") != std::string::npos &&
-                  movie.find("MenuTier::Fix, \"fixes\",") != std::string::npos,
-              "the generated Intro movie row is a Fix-tier choice (screen, stock, skip) still on VR's Fixes page");
+                  movie.find("MenuTier::Fix, \"visual\",") != std::string::npos,
+              "the generated Intro movie row is a Fix-tier choice (screen, stock, skip) on the Visual page VR's menu builds too");
         check(glow.find("\"Star glow\"") != std::string::npos &&
-                  glow.find("MenuKind::Choice, \"100\", \"\", \"\", 2, \"100=100%|125=125%|150=150%|175=175%|200=200%\", false, false, 1,") != std::string::npos &&
+                  glow.find("MenuKind::Choice, \"100\", \"\", \"\", 2, \"100=100%|125=125%|150=150%|175=175%|200=200%|250=250%|300=300%|350=350%|400=400%\", false, false, 1,") != std::string::npos &&
                   glow.find("MenuTier::Fix, \"visual\",") != std::string::npos,
-              "the generated Star glow row is a Fix-tier choice of 100 to 200 percent, shipped 100, live, on the page 'visual'");
+              "the generated Star glow row is a Fix-tier choice of 100 to 400 percent, shipped 100, live, on the Visual page VR's menu builds too");
+        // The VR-only rows of VR's Visual page are not rows of the flat tab: the flat gate refuses their keys, so a flat row would show a value that does nothing.
+        check(schemaHasRow(schema, "visual", "world_scale") && !flatVisualHasRow("visual", "world_scale") && !flatVisualHasRow("fix", "intro_backdrop") &&
+                  !flatVisualHasRow("fix", "panel_curvature") && !flatProfileReadsKey("visual.world_scale") && !flatProfileReadsKey("fix.intro_backdrop") &&
+                  !flatProfileReadsKey("fix.panel_curvature"),
+              "World scale, Intro background picture and Screen curve are on VR's Visual page and not on the flat tab (the flat gate refuses their keys)");
         const size_t a = schema.find("{\"visual\", \"intro_video\",");
         const size_t b = schema.find("{\"visual\", \"star_glow\",");
         check(a != std::string::npos && b != std::string::npos && a < b &&
@@ -416,6 +666,23 @@ void panelTable(const std::string& root, const std::string& gen) {
                   schema.find("{\"visual\", \"star_glow\",", b + 1) == std::string::npos,
               "each Visual row appears once, Intro movie before Star glow");
         check(!schemaHasRow(schema, "fix", "intro_video"), "control: the retired [fix] name has no row");
+    }
+    // The HUD Anti-Aliasing row as generated (2026-11-03): on the page `performance`, which VR's Performance page is built from, and the flat Performance tab lists it
+    // (kFlatPageRows; the tab ignores the page token), so the one key has a row on both menus (VR's smoothing is ui_layer.cpp's uiLayerConfigure; flat's is the adapter's).
+    check(schemaHudRowIsOnBothMenus(schema), "the generated HUD Anti-Aliasing row is a Fix-tier on/off choice, shipped off, live, on the page 'performance' (VR's Performance page), directly under UI quality");
+    check(flatPageHasRow("fix", "hud_antialiasing") && schemaRow(schema, "fix", "hud_antialiasing").find("MenuTier::Fix, \"performance\",") != std::string::npos,
+          "the flat Performance tab has the HUD Anti-Aliasing row and so has VR's Performance page (page 'performance')");
+    {
+        std::string onFlatOnlyPage = schema;
+        const char* perfPage = "MenuTier::Fix, \"performance\",";
+        const size_t hRow = onFlatOnlyPage.find("{\"fix\", \"hud_antialiasing\",");
+        const size_t onPerf = hRow == std::string::npos ? std::string::npos : onFlatOnlyPage.find(perfPage, hRow);
+        if (onPerf != std::string::npos) onFlatOnlyPage.replace(onPerf, std::strlen(perfPage), "MenuTier::Fix, \"flat_performance\",");
+        check(onPerf != std::string::npos && !schemaHudRowIsOnBothMenus(onFlatOnlyPage), "control: a HUD Anti-Aliasing row left on the flat-only page (VR's menu would not show it) is caught");
+        std::string apart = schema;
+        const size_t h = apart.find("{\"fix\", \"hud_antialiasing\",");
+        if (h != std::string::npos) apart.insert(h, "{\"fix\", \"other\", \"Other\"},\n    ");
+        check(h != std::string::npos && !schemaHudRowIsOnBothMenus(apart), "control: a HUD Anti-Aliasing row not directly under UI quality is caught");
     }
     check(!schemaHasRow("", "fix", "render_sharpness"),
           "control: a schema without the row is caught");
@@ -452,6 +719,25 @@ void sharpenRowDim() {
           "control: a row that dims in VR too is caught");
     check(truthTableMisses([](bool flat, bool) { return flat; }) > 0,
           "control: a row that dims with anti-aliasing on is caught");
+}
+
+// The HUD Anti-Aliasing row (2026-10-24): dimmed unless both fix.ui_quality is on and the flat anti-aliasing is on (the layer it smooths is live only then).
+int hudAaTruthTableMisses(bool (*dim)(bool, bool)) {
+    struct Case { bool uiQualityOn, antiAliasingOn, want; };
+    const Case cases[] = {{false, false, true}, {false, true, true}, {true, false, true}, {true, true, false}};
+    int wrong = 0;
+    for (const Case& c : cases) wrong += dim(c.uiQualityOn, c.antiAliasingOn) != c.want;
+    return wrong;
+}
+
+void hudAntiAliasingRowDimTable() {
+    check(hudAaTruthTableMisses(edvr::hudAntiAliasingRowDim) == 0,
+          "the HUD Anti-Aliasing row dims with UI quality off or the anti-aliasing off, and with both on does not");
+    check(hudAaTruthTableMisses([](bool, bool) { return false; }) > 0, "control: a row that never dims is caught");
+    check(hudAaTruthTableMisses([](bool, bool) { return true; }) > 0, "control: a row that always dims is caught");
+    check(hudAaTruthTableMisses([](bool uiQualityOn, bool) { return !uiQualityOn; }) > 0, "control: a row that ignores the anti-aliasing being off is caught");
+    check(hudAaTruthTableMisses([](bool, bool antiAliasingOn) { return !antiAliasingOn; }) > 0, "control: a row that ignores UI quality being off is caught");
+    check(hudAaTruthTableMisses([](bool uiQualityOn, bool antiAliasingOn) { return uiQualityOn && antiAliasingOn; }) > 0, "control: a row that dims with both on is caught");
 }
 
 // ---------------------------------------------------------------------------
@@ -713,6 +999,7 @@ int main(int argc, char** argv) {
     panelTable(argv[2], argv[3]);
     swapChainProbeGuard();
     sharpenRowDim();
+    hudAntiAliasingRowDimTable();
     wrapperContract();
     std::printf("flat_sharpen_test: %u checks, %u failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

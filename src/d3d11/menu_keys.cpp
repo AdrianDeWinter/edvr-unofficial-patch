@@ -410,7 +410,7 @@ void menuAliasSkippedText(const MenuAliasTable& t, char* out, size_t n) {
                 snprintf(why, sizeof(why), "Shift is the menu's own modifier");
                 break;
             case kSkipEdvrHotkey:
-                snprintf(why, sizeof(why), "an EDVR hotkey is on that key");
+                snprintf(why, sizeof(why), "an ED-UP hotkey is on that key");
                 break;
             case kSkipChord:
                 snprintf(why, sizeof(why), "a chord -- the menu adopts bare keys only");

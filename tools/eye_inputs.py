@@ -24,7 +24,7 @@ previous-minus-current motion XY, source depth Z, validity W (1 valid,
 ScreenMotion is RGBA16_FLOAT: previous-minus-current raster motion XY,
 source reversed Z, validity (0 outside, 1 valid, 2 source disocclusion,
 3 source UI requiring current reconstruction).
-SkinE (F2, the second skin; VR only) is RGBA16_FLOAT at the eye's depth size: the skinned characters' exact previous-minus-current position in
+SkinE (F2, the second skin; VR only) is RGBA32_FLOAT (RGBA16_FLOAT in dumps before 2026-11-05) at the eye's depth size: the skinned characters' exact previous-minus-current position in
 CENTIMETRES (xyz), computed by the game's own skinning chain from last frame's palette and pose, and validity W (1 valid, 0 none: no history for that
 character this frame, or no skinned pixel). Where W is 0 xyz is exactly 0. analysis/npc_blur/f2/h1_skin_e.py checks a capture against that contract.
 UI-flags bit 32 means this map was supplied to temporal reconstruction.
@@ -44,9 +44,11 @@ import json
 import struct
 import sys
 
+import dump_io   # tools\dump_io.py: a dump file is NAME or NAME.z (the eye dump compresses its .bin files)
+
 
 def _load(path):
-    data = Path(path).read_bytes()
+    data = dump_io.read_bytes(path)
     if data[:8] != b'EDVRTEX1' or len(data) < 44:
         raise ValueError('Not an EDVRTEX1 capture')
     keys = ('version', 'width', 'height', 'format', 'row_bytes', 'frame', 'eye', 'ui_bound', 'ui_flags')
@@ -69,7 +71,7 @@ def _load_buffer(path):
     resource unchanged; EngineNow row 276 carries the actual engine stamp.
     Availability is explicit in the companion EngineBuffers.json manifest.
     """
-    data = Path(path).read_bytes()
+    data = dump_io.read_bytes(path)
     if len(data) < 40 or data[:8] != b'EDVRBUF1':
         raise ValueError('Not an EDVRBUF1 capture')
     keys = ('version', 'bytes', 'stride', 'format', 'first_element', 'num_elements', 'frame', 'reserved')
@@ -91,7 +93,7 @@ def read(path):
     import numpy as np
     meta, data = _load(path)
     fmt, w, h = meta['format'], meta['width'], meta['height']
-    if fmt == 2:  # Per-frame decision capture: physical motion XY, prior depth Z, flags W.
+    if fmt == 2:  # Per-frame decision capture: physical motion XY, prior depth Z, flags W. Or SkinE.
         image = np.frombuffer(data, '<f4', offset=44).reshape(h, w, 4)
     elif fmt == 10:  # ScreenMotion: raster motion XY, source Z, validity (1/2/3).
         image = np.frombuffer(data, '<f2', offset=44).reshape(h, w, 4).astype('float32')
@@ -126,6 +128,10 @@ def self_test():
         buffer.write_bytes(b'EDVRBUF1' + struct.pack('<8I', 1, 672, 336, 0, 1, 1, 17, 0) + words)
         meta, data = _load_buffer(buffer)
         assert meta['first_element'] == 1 and data[40:] == words
+        # The same buffer as the compressed container the eye dump writes (NAME.z, read under the original name).
+        zbuffer = Path(temp) / 'pool_z.bin'
+        dump_io.write_z(zbuffer, buffer.read_bytes())
+        assert not zbuffer.exists() and _load_buffer(zbuffer) == (meta, data)
         try:
             import numpy as np
         except ImportError:
@@ -147,6 +153,9 @@ def self_test():
         meta, data = _load(path)
         assert meta['ui_flags'] == 32 and meta['frame'] == 17
         assert data[44:] == pixels
+        zpath = Path(temp) / 'screen_z.bin'
+        dump_io.write_z(zpath, payload)
+        assert _load(zpath)[0] == meta and _load(zpath)[1] == data   # compressed, read under the original name
         # Analysis returns NumPy arrays, but validating the file contract
         # must not add a NumPy dependency to the normal DLL build.
         try:

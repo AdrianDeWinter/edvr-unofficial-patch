@@ -942,11 +942,20 @@ inline NamedKeep keepNamedCell(const float centre[3], float radius, const float 
 // lifecycle point (undock, hangar change, ship change, setting toggle) starts every node afresh.
 constexpr uint64_t kSlotNodeMask = (uint64_t(1) << 44) - 1;
 
-constexpr uint32_t kSlotKeyMask = (1u << 14) - 1;
+// Built 2026-11-05 (the concourse cull): the slot carries five flag bits (47..51) and the generation key in the 12 bits above them (52..63). Built 2026-11-06:
+// a sixth flag (the concourse's far-exempt names), so the key is 11 bits (53..63). Built 2026-11-06 (the lift): a seventh flag (the lift's parts), so the key is
+// 10 bits (54..63).
+constexpr uint32_t kSlotKeyMask = (1u << 10) - 1;
+constexpr uint32_t kSlotKeyShift = 54;
+constexpr uint32_t kSlotFlagMask = 127u;
 
 constexpr uint32_t kNodeMechanism = 1;    // the name is a bay mechanism record (Lift, BlastShield, HangarGate ...): a latch candidate
 constexpr uint32_t kNodeHangarLike = 2;   // the name could name the hangar (Hanger, Pad, Lift, Bay ...): the names note wants it
 constexpr uint32_t kNodeShipPrefix = 4;   // the name has a type prefix up to an underscore (the ship tally counts it)
+constexpr uint32_t kNodeConcourseAllow = 8;    // built 2026-11-05: the name is on the concourse cull's allow-list (concourse_cull_core.h), extra prefixes included
+constexpr uint32_t kNodeConcourseAnchor = 16;  // built 2026-11-05: the name is the concourse anchor, Standard_SocialArea
+constexpr uint32_t kNodeConcourseFarExempt = 32;   // built 2026-11-06: the name is the anchor, the hub (SA_StationHub_Compact) or an extra keep name (diag.concourse_keep): kept however far; the lift ignores it
+constexpr uint32_t kNodeLiftPart = 64;   // built 2026-11-06: the name contains TurboLift (the lift's cabin and doors): the lift gate and its survey read these
 
 inline bool slotFits(uintptr_t node) noexcept { return (node & 7u) == 0 && (uint64_t(node) >> 3) <= kSlotNodeMask; }
 
@@ -954,18 +963,18 @@ inline bool slotFits(uintptr_t node) noexcept { return (node & 7u) == 0 && (uint
 inline uint32_t classKey(uint32_t generation) noexcept { return generation & kSlotKeyMask; }
 
 inline uint64_t packSlot(uintptr_t node, NameClass cls, uint32_t flags, uint32_t key) noexcept {
-    return (uint64_t(node) >> 3) | (uint64_t(static_cast<uint8_t>(cls)) << 44) | (uint64_t(flags & 7u) << 47) | (uint64_t(key & kSlotKeyMask) << 50);
+    return (uint64_t(node) >> 3) | (uint64_t(static_cast<uint8_t>(cls)) << 44) | (uint64_t(flags & kSlotFlagMask) << 47) | (uint64_t(key & kSlotKeyMask) << kSlotKeyShift);
 }
 
 // True when the slot holds this node's class and flags under this key; they are written to *cls and *flags.
 inline bool unpackSlot(uint64_t v, uintptr_t node, uint32_t key, NameClass* cls, uint32_t* flags) noexcept {
     if (v == 0) return false;
     if ((v & kSlotNodeMask) != (uint64_t(node) >> 3)) return false;
-    if (((v >> 50) & kSlotKeyMask) != (key & kSlotKeyMask)) return false;
+    if (((v >> kSlotKeyShift) & kSlotKeyMask) != (key & kSlotKeyMask)) return false;
     const uint32_t c = static_cast<uint32_t>((v >> 44) & 7u);
     if (c == 0) return false;
     *cls = static_cast<NameClass>(c);
-    *flags = static_cast<uint32_t>((v >> 47) & 7u);
+    *flags = static_cast<uint32_t>((v >> 47) & kSlotFlagMask);
     return true;
 }
 
@@ -1036,7 +1045,7 @@ constexpr uint64_t kBayStillMs = 2000;   // the latch's movers window (the recor
 // The camera has left the held box by more than this: the seal is released (riding the elevator down, an external camera flying out).
 constexpr float kCameraLeaveM = 2.0f;
 // The camera counts in both directions over this many consecutive frames: it must be outside the held box for this long to release, and inside the
-// bay for this long to re-seal. Explorer Cam is no condition.
+// bay for this long to re-seal.
 constexpr uint32_t kCameraFrames = 10;
 // Built v14.24: a mechanism release (the Lift, a hatch) is not a launch unless the bay stays away. The latched records must be back within these of
 // their sealed poses for kPoseBackFrames consecutive frames (with r1 1) before the seal may come back without the r1 0 to 1 edge.
@@ -1056,7 +1065,7 @@ constexpr uint8_t kReaderMoving = 1;    // r0 1: moving in or locked in
 constexpr uint8_t kReaderDescent = 3;   // r0 3: the descent has started
 
 enum class SealAction : uint8_t { kNone = 0, kRequestEngage = 1, kRelease = 2 };
-enum class ReleaseWhy : uint8_t { kNone = 0, kSettingOff, kUndocked, kCameraLeft, kPadMoved, kHangarChanged, kLaunch, kMechanism, kInHangarLeft, kOnFoot, kOriginShift };
+enum class ReleaseWhy : uint8_t { kNone = 0, kSettingOff, kUndocked, kCameraLeft, kPadMoved, kHangarChanged, kLaunch, kMechanism, kInHangarLeft, kOnFoot, kOriginShift, kPadMissing };
 
 // Release blocker for v0.20.0 (2026-10-14): the seal is for the commander sitting in the ship on the pad. The sealed box is tall (152 x 75 x 258 m for a small pad), so the lift
 // shaft and the concourse above it can lie inside it, and a camera that rode the lift up stayed "in the bay" while the culling hid the station's geometry. The game states the seat
@@ -1095,6 +1104,7 @@ struct SealInputs {
     bool hangarChanged = false;  // the held pad is gone from the store, or another own pad is the nearest for kHeldLostFrames
     bool launched = false;       // not used (no reader for the launch): always false
     bool originShifted = false;  // built 2026-10-15: a common-frame origin shift was detected this tick (the latch read, before the step): a transition
+    bool padMissing = false;     // built 2026-11-06: the sealed own pad's record was missing from kPadMissingPasses informative passes in a row (padMissingRun)
     uint64_t nowMs = 0;
 };
 
@@ -1121,6 +1131,17 @@ struct SealState {
     // This call's request was kept back by holdUntilMs (set per call; the tick logs the first such call of a hold once).
     bool holdBlocked = false;
 };
+
+// Built 2026-11-06: the guard against a sealed cell that has lost its own pad. Informative passes in a row without the own pad's record (the same count as the
+// seal trace's T4). `run` is the count so far; `informative` is whether this pass counts (a complete pass that held a store callback, with the own pad known);
+// `ownInPass` whether the pad's record was in it; `held` whether the seal is on. Not held: 0. An uninformative pass: unchanged. The pad in the pass: 0. Else run + 1.
+constexpr uint32_t kPadMissingPasses = 3;
+inline uint32_t padMissingRun(uint32_t run, bool informative, bool ownInPass, bool held) noexcept {
+    if (!held) return 0;
+    if (!informative) return run;
+    if (ownInPass) return 0;
+    return run + 1;
+}
 
 // A release, or the trigger lapsing: the request starts again.
 inline void clearTrigger(SealState* st) noexcept {
@@ -1286,10 +1307,10 @@ inline bool rigMayVeto(uint32_t slotEpoch, uint32_t epoch, bool bounded, uint8_t
     return slotEpoch == epoch && bounded && verdict == static_cast<uint8_t>(RigVerdict::kOutside);
 }
 
-// Review 7c: the view's centre is ready when the origin the station prefers is read, or the explorer cam's rows are (the only case the rows are
-// preferred). A missing eye pose alone is not a reason to resolve the view again.
-inline bool viewCentreReady(bool originOk, bool poseOk, bool explorerCam) noexcept {
-    return originOk || (poseOk && explorerCam);
+// Review 7c: the view's centre is ready when the origin the station prefers is read. A missing eye pose alone is not a reason to resolve
+// the view again.
+inline bool viewCentreReady(bool originOk) noexcept {
+    return originOk;
 }
 
 // ---- Built v14.24 (2026-10-13, the review of the 013c6122 flight): the rig association per rig, the mechanism pose, the cost summary, the log gate ----
@@ -1386,15 +1407,17 @@ inline uint64_t textKey(const char* s) noexcept {
 // FUN_144314C60 by them, and the identity check comes first.
 inline constexpr uint8_t kStorePrologue[16] = {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0x68, 0xFE, 0xFF};
 
-// The store hook's install decision (store_hook.cpp installOnce). The identity (the PE TimeDateStamp and SizeOfImage the other build-keyed hooks
-// check) is read first; a mismatch refuses whatever the prologue is. identityRead false: the PE header was unreadable. got null: the prologue was
-// unreadable. The caller passes the expected pair from the build's constants (explorer_cam_core.h's ecm::kExpectedTimestamp and ecm::kExpectedImageSize).
-enum class StoreInstall : uint8_t { kInstall = 0, kUnreadable, kWrongIdentity, kWrongPrologue };
-inline StoreInstall storeInstallDecision(bool identityRead, uint32_t stamp, uint32_t size, uint32_t wantStamp, uint32_t wantSize,
-                                         const uint8_t* got, const uint8_t* pin, size_t n) noexcept {
-    if (!identityRead || got == nullptr || pin == nullptr) return StoreInstall::kUnreadable;
-    if (stamp != wantStamp || size != wantSize) return StoreInstall::kWrongIdentity;
-    if (std::memcmp(got, pin, n) != 0) return StoreInstall::kWrongPrologue;
+// The store hook's install decision (store_hook.cpp installOnce), issue 124's pilot of the signature resolver (src\common\game_build.h).
+// identityRead false: the PE header was unreadable. storeRva: where the store is in the running build -- kStoreRva itself on build 334925,
+// the address the signature resolver found on an unknown build, 0 when it found none (kNotFound: the hook stands down as it did on any
+// other build before). got null: the prologue was unreadable. pinMatches: the sixteen bytes read there are the pin (gamePinMatches: an
+// exact compare on build 334925; on an unknown build the bytes the signature masks are skipped and every other byte must match).
+enum class StoreInstall : uint8_t { kInstall = 0, kUnreadable, kNotFound, kWrongPrologue };
+inline StoreInstall storeInstallDecision(bool identityRead, uintptr_t storeRva, const uint8_t* got, bool pinMatches) noexcept {
+    if (!identityRead) return StoreInstall::kUnreadable;
+    if (storeRva == 0) return StoreInstall::kNotFound;
+    if (got == nullptr) return StoreInstall::kUnreadable;
+    if (!pinMatches) return StoreInstall::kWrongPrologue;
     return StoreInstall::kInstall;
 }
 
@@ -1717,9 +1740,11 @@ inline size_t selectMechanism(const LatchCand* cands, size_t n, uintptr_t ownAdd
 
 // Built v14.23: the sun inside the hangar, from the game's pad state. The skip is off while the own pad's latest r0 is 1 (moving in) or 3 (the descent),
 // read fresh. It comes back on when the pad is out (not r1 1 fresh), r0 is neither 1 nor 3 (or stale), and the pad is raised (the geometric test),
-// or on undock, setting off, or a hangar change. An outpost surface (r0 0) never turns it off.
+// or on undock, setting off, or a hangar change. An outpost surface (r0 0) never turns it off, and nor does any port on a planet (`surfacePort`), whatever its pad does: a surface
+// installation's pad descends too (r0 3, r1 1 at a CraterOutpost), and then the skip held the sun off through the concourse and its bay window (Flight 34).
 struct SunInputs {
     bool setting = false;
+    bool surfacePort = false;    // journal_station::atSurfacePort
     bool docked = false;
     bool ownKnown = false;       // the game has named the own pad this dock
     bool r0Fresh = false;        // the own pad's r0 was called within kPadStateFreshMs
@@ -1738,6 +1763,12 @@ struct SunState {
 // Returns true when the skip changed. *why names the change for the state line.
 inline bool sunStep(const SunInputs& in, SunState* st, const char** why) noexcept {
     *why = "";
+    if (in.surfacePort) {
+        if (!st->off) return false;
+        st->off = false;
+        *why = "a port on a planet's surface";
+        return true;
+    }
     const bool moving = in.ownKnown && in.r0Fresh && (in.r0 == kReaderMoving || in.r0 == kReaderDescent);
     if (!st->off) {
         if (in.setting && in.docked && moving) {
@@ -1893,6 +1924,7 @@ inline SealAction sealStep(const SealInputs& in, SealState* st, ReleaseWhy* why)
         else if (st->camOutRun >= kCameraFrames) w = ReleaseWhy::kCameraLeft;
         else if (in.mechanismMoved) w = ReleaseWhy::kMechanism;   // the hatch or the lift moved: the launch
         else if (in.padMoved) w = ReleaseWhy::kPadMoved;
+        else if (in.padMissing) w = ReleaseWhy::kPadMissing;   // built 2026-11-06: a cell that drops its own pad may be wrong: released, held like an origin shift
         else if (in.hangarChanged) w = ReleaseWhy::kHangarChanged;
         else if (in.launched) w = ReleaseWhy::kLaunch;
         else if (in.r1Fresh && !in.inHangar) w = ReleaseWhy::kInHangarLeft;   // the game's r1 1 to 0: the pad left the bay
@@ -1906,9 +1938,9 @@ inline SealAction sealStep(const SealInputs& in, SealState* st, ReleaseWhy* why)
             st->camOutRun = 0;
             if (w == ReleaseWhy::kCameraLeft) st->camInRun = 0;   // the re-seal waits kCameraFrames inside the bay
             // Built 2026-10-15: the transition hold. The origin shift and the Lift keep the re-seal waiting; their Status.json seat reads a second late.
-            if (w == ReleaseWhy::kOriginShift || w == ReleaseWhy::kMechanism) {
+            if (w == ReleaseWhy::kOriginShift || w == ReleaseWhy::kMechanism || w == ReleaseWhy::kPadMissing) {
                 st->holdUntilMs = in.nowMs + kTransitionHoldMs;
-                st->shiftHold = (w == ReleaseWhy::kOriginShift);
+                st->shiftHold = (w == ReleaseWhy::kOriginShift || w == ReleaseWhy::kPadMissing);   // a pad-missing hold is not stepped over by an old edge
             }
             *why = w;
             return SealAction::kRelease;
@@ -2121,11 +2153,12 @@ inline size_t pickShell(const ExplicitObs* obs, size_t n, const float centre[3],
 // Built v14.1: what the store observer does with a record. Judging (the keep and the cull) is sealed-only. Gathering (the camera, the frame's
 // pads, the explicit parts and so the own-pad pick the seal trigger needs) runs while docked and unsealed, so a pad is in hand before the seal.
 // Setting off: nothing. The v14 flight never sealed because the gathering was inside the sealed-only judge (no pad, so no seal, ever).
-enum class StoreMode : uint8_t { kNone = 0, kGather = 1, kJudge = 2 };
+enum class StoreMode : uint8_t { kNone = 0, kGather = 1, kJudge = 2, kConcourse = 3 };
 
-inline StoreMode storeMode(bool setting, bool isSealed, bool docked) noexcept {
+inline StoreMode storeMode(bool setting, bool isSealed, bool docked, bool concourse = false) noexcept {
     if (!setting) return StoreMode::kNone;
     if (isSealed) return StoreMode::kJudge;
+    if (concourse) return StoreMode::kConcourse;   // built 2026-11-05: on foot in social space with the concourse key on (the cull, or only the anchor's sighting)
     return docked ? StoreMode::kGather : StoreMode::kNone;
 }
 

@@ -61,7 +61,7 @@ void drawCensusRequest();
 // not needed: a draw outside the eye textures takes the offscreen record, and an eye draw takes the eye record. A press while armed is
 // refused with a note, as drawCensusRequest does. VR never calls this, and drawCensusRequest's behaviour is unchanged.
 constexpr uint32_t kFlatCensusFrames = 2;
-constexpr uint32_t kFlatCensusLines = 16384;
+constexpr uint32_t kFlatCensusLines = 32768;   // 16384 ran out in a station's shadow and probe passes (log 063641, 16251 lines of frame 0), before the main view
 void drawCensusFlatRequest();
 
 // The automatic arm, for builds too brief to catch by hand (2026-08-25, the
@@ -78,6 +78,8 @@ void drawCensusFlatRequest();
 // Refused silently while a census is armed or running -- the caller fires on
 // a per-draw path and must not be able to spam the log.
 void drawCensusAutoRequest();
+// Pair an eye-run stamp with the census it requests (or the active census it reuses).
+void drawCensusAutoRequestForCapture(const wchar_t* captureId);
 
 // The draw call's own arguments, which no binding shadow carries: where in
 // the index buffer a draw starts, what its indices are offset by, and where

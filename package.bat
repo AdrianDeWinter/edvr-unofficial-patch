@@ -16,4 +16,7 @@ python "%ROOT%\tools\build_receipt.py" --verify-tree "%ROOT%\build\full_build_re
 )
 echo [edvr] staging native release
 call python "%ROOT%\tools\package_native.py" "%VERSION%" %2 || exit /b 1
+echo [edvr] dist\ed-up-manifest-v2.json and dist\ed-up-manifest.json (the schema-1 bridge) are unsigned, and a release without both .sig files is not offered as an update.
+echo [edvr] sign both in your own terminal: python tools\sign_manifest.py sign dist\ed-up-manifest-v2.json
+echo [edvr]                                 python tools\sign_manifest.py sign dist\ed-up-manifest.json
 exit /b 0

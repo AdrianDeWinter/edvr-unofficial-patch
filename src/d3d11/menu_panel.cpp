@@ -1,5 +1,6 @@
 #include "temporal_shader_bytecode.h"
 #include "menu_panel.h"
+#include "menu_flat_layout.h"
 #include "flat_compute_readback.h"
 #include "graphics_runtime.h"
 #include "../common/runtime_profile.h"
@@ -15,6 +16,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -43,34 +45,36 @@ struct Rgb {
     uint8_t r, g, b;
 };
 
-constexpr Rgb kBg = {14, 18, 24};
-constexpr float kBgAlpha = 0.86f;
-constexpr Rgb kTabActive = {255, 150, 40};
-constexpr Rgb kTabIdle = {150, 150, 150};
-constexpr Rgb kLabel = {232, 232, 226};
-constexpr Rgb kValue = {255, 190, 80};
-constexpr Rgb kDimText = {150, 150, 150};
-constexpr Rgb kHeading = {120, 170, 220};
-constexpr Rgb kHighlight = {255, 140, 0};
-constexpr float kHighlightAlpha = 0.22f;
-constexpr Rgb kBadge = {255, 170, 60};
-constexpr Rgb kHint = {190, 190, 190};
-constexpr Rgb kFooter = {140, 140, 140};
-constexpr Rgb kToastText = {255, 200, 120};
+constexpr Rgb kBg = {21, 30, 40};
+constexpr float kBgAlpha = 0.92f;
+constexpr Rgb kSurface = {35, 48, 61};
+constexpr Rgb kStructure = {68, 87, 103};
+constexpr Rgb kTabActive = {228, 235, 240};
+constexpr Rgb kTabIdle = {162, 177, 189};
+constexpr Rgb kLabel = {228, 235, 240};
+constexpr Rgb kValue = {228, 235, 240};
+constexpr Rgb kDimText = {139, 154, 166};
+constexpr Rgb kHeading = {162, 177, 189};
+constexpr Rgb kHighlight = {232, 175, 103};
+constexpr float kHighlightAlpha = 0.10f;
+constexpr Rgb kBadge = {232, 175, 103};
+constexpr Rgb kHint = {162, 177, 189};
+constexpr Rgb kFooter = {162, 177, 189};
+constexpr Rgb kToastText = {228, 235, 240};
 // The switch, the installer's colours: an accent track when on, a grey one
 // when off, with a knob at the end the value is at.
-constexpr Rgb kSwitchOn = {255, 150, 40};
-constexpr Rgb kSwitchOff = {90, 96, 104};
+constexpr Rgb kSwitchOn = {232, 175, 103};
+constexpr Rgb kSwitchOff = {68, 87, 103};
 constexpr Rgb kKnobOn = {24, 20, 16};
 constexpr Rgb kKnobOff = {200, 200, 200};
 // The tooltip: a darker card than the panel, so it reads as being above it.
-constexpr Rgb kPopupBg = {8, 11, 15};
+constexpr Rgb kPopupBg = {21, 30, 40};
 constexpr float kPopupAlpha = 0.97f;
-constexpr Rgb kPopupEdge = {255, 150, 40};
+constexpr Rgb kPopupEdge = {68, 87, 103};
 constexpr Rgb kEditField = {255, 255, 255};
 
-enum class Font { Row, Tab, Small, Hint, Big, Caption, TileSub, Tip };
-constexpr int kFontCount = 8;
+enum class Font { Row, Tab, Small, Hint, Big, Caption, TileSub, Tip, Badge };
+constexpr int kFontCount = 9;
 
 struct Op {
     bool         text = false;
@@ -106,6 +110,7 @@ struct Raster {
     float    cardFrac = 1.0f;    // how much of the width the menu card spans
     int      popupScrollMax = 0; // line-steps the tooltip's body can be scrolled
     double   ms = 0.0;
+    uint8_t  slotOwner = 0;      // MenuContent::slotOwner of the content this was drawn from
 };
 
 struct Dib {
@@ -222,6 +227,19 @@ HFONT makeFont(int emPx, bool bold) {
     return CreateFontIndirectW(&lf);
 }
 
+int fontLineHeight(int emPx) {
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (!dc) return emPx * 14 / 10;
+    HFONT font = makeFont(emPx, false);
+    HGDIOBJ old = font ? SelectObject(dc, font) : nullptr;
+    TEXTMETRICW metrics{};
+    const bool measured = GetTextMetricsW(dc, &metrics) != FALSE;
+    if (old) SelectObject(dc, old);
+    if (font) DeleteObject(font);
+    DeleteDC(dc);
+    return measured ? metrics.tmHeight : emPx * 14 / 10;
+}
+
 std::wstring widen(const char* s) {
     if (!s || !*s) return std::wstring();
     const int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, nullptr, 0);
@@ -286,6 +304,13 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
     const int graphOneH = cap * 32 / 10;
     const int graphH = c.graphCount * graphOneH;
     const int rows = c.lineCount;
+    const int primaryH = (std::max)(rowPitch, fontLineHeight(c.rowFontPx > 0 ? c.rowFontPx : cap * 10 / 7));
+    const int badgeH = fontLineHeight(cap * 8 / 10);
+    int rowsH = 0;
+    for (int i = 0; i < rows; ++i) {
+        const MenuLine& line = c.lines[i];
+        rowsH += line.badge != kBadgeNone || line.reserveBadge ? primaryH + badgeH : rowPitch;
+    }
     // The tile grid: caption, big value, a two-line sub, in a box five
     // tile-units tall, the unit being nine tenths of a cap. Each box is
     // sized to its font's LINE height, not its cap height -- the first
@@ -297,12 +322,26 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
     const int tileH = u * 50 / 10;
     const int tileGap = cap / 4;
     const int tilesH = tileRows > 0 ? tileRows * (tileH + tileGap) + cap / 2 : 0;
-    const int hintHUsed = c.hint[0] ? hintH : 0;
+    // The hint box is hintH tall on a page that holds it, and zero tall
+    // otherwise. On an entries page the row hints are row-dependent (the
+    // highlighted row's set one, the rest set none), so sizing the box to the
+    // hint's presence would make the whole panel grow and shrink by hintH as
+    // the highlight, and with it the scroll, moved over the rows that do and
+    // do not carry one -- the card changed size and shape while the page was
+    // scrolled. An entries page therefore sets reserveHint and the box keeps
+    // its height and is simply empty without a hint, the footer's own rule
+    // for the same reason (kFooterLines below). A page built without a hint
+    // line on purpose -- the Monitor, whose tiles spend the height better --
+    // leaves reserveHint clear and pays nothing for a box it never fills:
+    // the box is part of the bitmap's height, and a Pimax page that carries
+    // it for no reason would sit nearer the raster's 2048-px bound and stop
+    // updating sooner.
+    const bool hintReserved = !c.toast && (c.hint[0] || c.reserveHint);
     // A locked FPS readout sits above the tabs so it stays visible while
     // the menu is scrolled or a tooltip is up.
     const int overlayH = (c.toast || !c.overlayLine[0]) ? 0 : cap * 16 / 10;
-    const int H = pad + overlayH + tabH + tilesH + rows * rowPitch + (c.toast ? cap * 2 / 10 : 0) +
-                  graphH + hintHUsed + footH + pad;
+    const int H = pad + overlayH + tabH + tilesH + rowsH + (c.toast ? cap * 2 / 10 : 0) +
+                  graphH + (hintReserved ? hintH : 0) + footH + pad;
     *outH = H;
 
     // Background.
@@ -345,7 +384,8 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             Op o;
             o.text = true;
             o.str = widen(c.tabs[i]);
-            const int wpx = static_cast<int>(o.str.size()) * cap * 6 / 10 + cap;
+            const int tabEm = c.tabFontPx > 0 ? c.tabFontPx : cap * 9 / 7;
+            const int wpx = menuPanelTabWidth(c.tabs[i], tabEm);
             o.rect = {x, y, x + wpx, y + tabH};
             o.rgb = i == c.activeTab ? kTabActive : kTabIdle;
             o.align = DT_LEFT;
@@ -353,8 +393,9 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             ops.push_back(o);
             if (i == c.activeTab) {
                 Op under;
-                under.rect = {x, y + tabH - cap / 6, x + wpx - cap / 2, y + tabH};
-                under.rgb = kTabActive;
+                const int thickness = (std::max)(1, cap / 12);
+                under.rect = {x, y + tabH - thickness, x + wpx - tabEm / 3, y + tabH};
+                under.rgb = kHighlight;
                 under.alpha = 0.9f;
                 ops.push_back(under);
             }
@@ -382,8 +423,8 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             const int y0 = y + row * (tileH + tileGap);
             Op box;
             box.rect = {x0, y0, x0 + tileW, y0 + tileH};
-            box.rgb = Rgb{255, 255, 255};
-            box.alpha = 0.06f;
+            box.rgb = kSurface;
+            box.alpha = 0.80f;
             ops.push_back(box);
             const int inset = u / 3;
             Op cap1;
@@ -419,7 +460,10 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
     int popupRowTop = -1, popupRowBottom = -1;
     for (int i = 0; i < rows; ++i) {
         const MenuLine& l = c.lines[i];
-        const RECT rr = {pad / 2, y, cardW - pad / 2, y + rowPitch};
+        const bool secondary = l.badge != kBadgeNone || l.reserveBadge;
+        const int textH = secondary ? primaryH : rowPitch;
+        const int rowH = secondary ? primaryH + badgeH : rowPitch;
+        const RECT rr = {pad / 2, y, cardW - pad / 2, y + rowH};
         if (i == c.popupLine) {
             popupRowTop = rr.top;
             popupRowBottom = rr.bottom;
@@ -437,17 +481,28 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             h.alpha = kHighlightAlpha;
             h.radius = cap / 4;
             ops.push_back(h);
+            Op rail;
+            rail.rect = {rr.left, y + cap / 4, rr.left + (std::max)(2, cap / 12), y + rowH - cap / 4};
+            rail.rgb = kHighlight;
+            rail.alpha = 0.95f;
+            ops.push_back(rail);
         }
         // Information rows carry long values, so the split sits further
-        // left for them than for a setting's label and value; a note has
-        // the whole width.
-        const int split = l.style == kMenuNote   ? cardW - pad
-                          : l.style == kMenuInfo ? cardW * 26 / 100
-                                                 : cardW * 6 / 10;
+        // left for them than for a setting's label and value; a note and a
+        // heading have no value on the right and take the whole line. A
+        // heading that kept a setting's split was ellipsised where the label
+        // column ended -- the Debug tab's "For bug reports. Both are off
+        // unless you turn them on." read as "Both are off unl..." -- with
+        // half the card sitting empty beside the cut.
+        const int split = l.style == kMenuNote || l.style == kMenuHeading ? cardW - pad
+                          : l.style == kMenuInfo                          ? (c.infoSplitPx > 0 ? c.infoSplitPx : cardW * 26 / 100)
+                                                                          : cardW * 6 / 10;
         Op left;
         left.text = true;
         left.str = widen(l.left);
-        left.rect = {pad, y, split, y + rowPitch};
+        // Info's split already includes its measured caption/value gap.
+        const int gutter = l.style == kMenuInfo ? 0 : cap / 2;
+        left.rect = {pad, y, split - (l.style == kMenuNote || l.style == kMenuHeading ? 0 : gutter), y + textH};
         left.align = DT_LEFT;
         left.font = l.style == kMenuHeading ? Font::Small : l.style == kMenuNote ? Font::Hint : Font::Row;
         left.rgb = l.style == kMenuHeading        ? kHeading
@@ -455,7 +510,9 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
                    : l.style == kMenuNote         ? kHint
                    : c.toast                      ? kToastText
                                                    : kLabel;
-        if (l.style == kMenuHeading) left.rect.left = pad / 2;
+        // Align the leading edge with other text while retaining the
+        // heading's original full-width allowance for explanatory prose.
+        if (l.style == kMenuHeading) left.rect.right = cardW - pad / 2;
         if (c.toast) left.rect.right = cardW - pad;
         ops.push_back(left);
         // The switch: a pill the width of two knobs, the knob at the end the
@@ -468,7 +525,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             const int h = switchH;
             const int wsw = switchW;
             const int right = cardW - pad;
-            const RECT box = {right - wsw, y + (rowPitch - h) / 2, right, y + (rowPitch + h) / 2};
+            const RECT box = {right - wsw, y + (textH - h) / 2, right, y + (textH + h) / 2};
             const bool on = l.toggle == 2;
             Op track;
             track.rect = box;
@@ -491,7 +548,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             if (l.style == kMenuRowEdit) {
                 // A field behind the typed value, so the row reads as one.
                 Op field;
-                field.rect = {split, y + rowPitch / 6, cardW - pad, y + rowPitch - rowPitch / 6};
+                field.rect = {split, y + textH / 6, cardW - pad, y + textH - textH / 6};
                 field.rgb = kEditField;
                 field.alpha = 0.10f;
                 field.radius = cap / 5;
@@ -504,7 +561,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             }
             right.text = true;
             right.str = widen(l.right);
-            right.rect = {split, y, cardW - pad, y + rowPitch};
+            right.rect = {split, y, cardW - pad, y + textH};
             right.align = l.style == kMenuInfo ? DT_LEFT : DT_RIGHT;
             right.font = Font::Row;
             right.rgb = l.style == kMenuInfo               ? kLabel
@@ -514,23 +571,22 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             if (l.style == kMenuRowEdit) right.rect.right -= cap / 3;
             if (l.toggle) right.rect.right -= switchW + cap / 2;
             ops.push_back(right);
-            if (l.badge == kBadgeRestart || l.badge == kBadgeUnknown || l.badge == kBadgePending || l.badge == kBadgeClash) {
-                Op b;
-                b.text = true;
-                b.str = l.badge == kBadgeRestart ? L"restart"
-                        : l.badge == kBadgePending ? L"at next launch"
-                        : l.badge == kBadgeClash   ? L"also in Elite"
-                                                   : L"?";
-                b.rect = {split, y + rowPitch * 62 / 100, cardW - pad, y + rowPitch};
-                b.align = DT_RIGHT;
-                b.font = Font::Small;
-                b.rgb = l.badge == kBadgeUnknown ? kDimText : kBadge;
-                ops.push_back(b);
-                // The value sits up a little to make room for the badge.
-                ops[ops.size() - 2].rect.bottom = y + rowPitch * 70 / 100;
-            }
         }
-        y += rowPitch;
+        if (l.badge == kBadgeRestart || l.badge == kBadgeUnknown || l.badge == kBadgePending || l.badge == kBadgeClash || l.badge == kBadgeStopped) {
+            Op b;
+            b.text = true;
+            b.str = l.badge == kBadgeRestart ? L"restart"
+                    : l.badge == kBadgePending ? L"at next launch"
+                    : l.badge == kBadgeClash   ? L"also in Elite"
+                    : l.badge == kBadgeStopped ? L"stopped"
+                                               : L"?";
+            b.rect = {split, y + primaryH, cardW - pad, y + rowH};
+            b.align = DT_RIGHT;
+            b.font = Font::Badge;
+            b.rgb = l.badge == kBadgeUnknown ? kDimText : kBadge;
+            ops.push_back(b);
+        }
+        y += rowH;
     }
     for (int g = 0; g < c.graphCount; ++g) {
         // One strip per measure, fpsVR's pair stacked: one bar per frame,
@@ -539,12 +595,13 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
         // over it, red at twice it.
         const MenuGraph& mg = c.graphs[g];
         const int gx0 = pad, gx1 = cardW - pad;
-        const int gy0 = y + cap / 2, gy1 = y + graphOneH - cap / 4;
+        const int legendH = mg.label[0] ? fontLineHeight(cap) : cap / 2;
+        const int gy0 = y + legendH, gy1 = y + graphOneH - cap / 4;
         {
             Op bg;
             bg.rect = {gx0, gy0, gx1, gy1};
-            bg.rgb = Rgb{0, 0, 0};
-            bg.alpha = 0.35f;
+            bg.rgb = kSurface;
+            bg.alpha = 0.80f;
             ops.push_back(bg);
         }
         const float scale = perfGraphScale(mg.samples, mg.count, mg.budgetMs);
@@ -571,7 +628,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             Op line;
             const int ly = gy1 - static_cast<int>(0.5f * plotH + 0.5f);
             line.rect = {gx0, ly, gx1, ly + (cap / 12 > 0 ? cap / 12 : 1)};
-            line.rgb = kLabel;
+            line.rgb = kStructure;
             line.alpha = 0.5f;
             ops.push_back(line);
         }
@@ -579,7 +636,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             Op t;
             t.text = true;
             t.str = widen(mg.label);
-            t.rect = {gx0 + cap / 3, gy0, gx1, gy0 + cap * 14 / 10};
+            t.rect = {gx0, y, gx1, y + legendH};
             t.align = DT_LEFT;
             t.font = Font::Small;
             t.rgb = kFooter;
@@ -598,7 +655,7 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             h.rgb = kHint;
             ops.push_back(h);
         }
-        y += hintHUsed;
+        y += hintReserved ? hintH : 0;
         if (c.footer[0]) {
             // One single-line op per '\n'-separated line, each in its own
             // slot of the two-line box, so the single-line draw path
@@ -823,13 +880,14 @@ bool rasterise(const MenuContent& c, Raster& out) {
     const int u = cap * 9 / 10;
     HFONT fonts[kFontCount] = {
         makeFont(c.rowFontPx > 0 ? c.rowFontPx : cap * 10 / 7, false), // Row
-        makeFont(cap * 9 / 7, true),          // Tab
+        makeFont(c.tabFontPx > 0 ? c.tabFontPx : cap * 9 / 7, true), // Tab
         makeFont(cap * 7 / 7, false),         // Small
         makeFont(cap * 8 / 7, false),         // Hint
         makeFont(u * 15 / 10, true),          // Big: the tiles' numbers
         makeFont(u * 8 / 10, true),           // Caption
         makeFont(u * 72 / 100, false),        // TileSub
         makeFont(cap * 78 / 100, false),      // Tip: the tooltip's body
+        makeFont(cap * 8 / 10, false),        // Badge: a subordinate status line
     };
     execute(colour, ops, false, fonts);
     execute(cover, ops, true, fonts);
@@ -877,6 +935,11 @@ struct Worker {
     MenuContent             pending{};
     bool                    hasReady = false;
     Raster                  ready;
+    // The flat monitor panel's slot (menuPanelSubmitMonitor): its own pending content and finished raster, taken by uploadMonitorRaster.
+    bool                    hasPendingMon = false;
+    MenuContent             pendingMon{};
+    bool                    hasReadyMon = false;
+    Raster                  readyMon;
     // The layout the hit test reads, from the raster most recently uploaded.
     std::vector<LineRect>   liveLines;
     int                     liveW = 0, liveH = 0;
@@ -894,20 +957,33 @@ Worker& g_w = *new Worker;
 void workerMain() {
     for (;;) {
         MenuContent c;
+        bool mon = false;
         {
             std::unique_lock<std::mutex> lock(g_w.m);
-            g_w.cv.wait(lock, [] { return g_w.quit || g_w.hasPending; });
+            g_w.cv.wait(lock, [] { return g_w.quit || g_w.hasPending || g_w.hasPendingMon; });
             if (g_w.quit) return;
-            c = g_w.pending;
-            g_w.hasPending = false;
+            if (g_w.hasPending) {   // the menu's content first
+                c = g_w.pending;
+                g_w.hasPending = false;
+            } else {
+                c = g_w.pendingMon;
+                g_w.hasPendingMon = false;
+                mon = true;
+            }
         }
         Raster r;
         bool ok = false;
         guarded("menuPanel/raster", [&] { ok = rasterise(c, r); });
         if (!ok) continue;
+        r.slotOwner = c.slotOwner;
         std::lock_guard<std::mutex> lock(g_w.m);
-        g_w.ready = std::move(r);
-        g_w.hasReady = true;
+        if (mon) {
+            g_w.readyMon = std::move(r);
+            g_w.hasReadyMon = true;
+        } else {
+            g_w.ready = std::move(r);
+            g_w.hasReady = true;
+        }
     }
 }
 
@@ -959,6 +1035,25 @@ ID3D11SamplerState*  g_samp = nullptr;
 
 std::mutex   g_geomMutex;
 MenuGeometry g_geom;
+
+// The flat monitor panel's raster (menuPanelSubmitMonitor): a second slot beside the menu's, with its own texture, size, serial and geometry. The menu's device
+// objects (the compute shader, the parameter buffer, the sampler, the eye's copy and output textures, the query ring) are shared: both slots are drawn on the
+// frame thread, one after the other.
+ID3D11Texture2D*          g_monTex = nullptr;
+ID3D11ShaderResourceView* g_monSrv = nullptr;
+ID3D11Device*             g_monDevice = nullptr;   // borrowed while g_monTex holds its device
+int                       g_monW = 0, g_monH = 0;
+std::atomic<uint32_t>     g_monSerial{0};
+std::atomic<uint8_t>      g_monOwner{0};           // the uploaded raster's slotOwner, stored before its serial moves
+MenuGeometry              g_monGeom;               // under g_geomMutex, with g_geom
+
+// What one composite draws when it is not the menu's raster (compositeInner's `slot`).
+struct PanelSource {
+    ID3D11ShaderResourceView* srv = nullptr;
+    int   w = 0, h = 0;
+    float aspect = 0.0f;   // h / w
+    MenuGeometry geom;
+};
 
 bool     g_failNoted = false;
 bool     g_fmtNoted = false;
@@ -1148,13 +1243,19 @@ bool makeTex(ID3D11Device* dev, uint32_t w, uint32_t h, DXGI_FORMAT texFmt, DXGI
 }
 
 void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf,
-                     bool flat = false) {
+                     bool flat = false, const PanelSource* slot = nullptr) {
+    // The raster drawn: the menu's (no slot: the globals, as always) or the one the caller names (the flat monitor panel's).
     MenuGeometry g;
-    {
+    if (slot) {
+        g = slot->geom;
+    } else {
         std::lock_guard<std::mutex> lock(g_geomMutex);
         g = g_geom;
     }
-    if (!(g.alpha > 0.0f) || !g_panelSrv || g_panelW <= 0 || g_panelH <= 0) return nullptr;
+    ID3D11ShaderResourceView* const panelSrv = slot ? slot->srv : g_panelSrv;
+    const int panelW = slot ? slot->w : g_panelW;
+    const int panelH = slot ? slot->h : g_panelH;
+    if (!(g.alpha > 0.0f) || !panelSrv || panelW <= 0 || panelH <= 0) return nullptr;
     if (g.overlayRaster) {
         // The menu tick publishes geometry before it can upload the worker's
         // finished raster. Use the width belonging to the texture that is
@@ -1304,21 +1405,21 @@ void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf
         int32_t box[4] = {0, 0, static_cast<int32_t>(regionW), static_cast<int32_t>(regionH)};
         // Read the aspect ONCE: a raster landing between two reads would
         // give the culling box and the shader different panels for a frame.
-        const float aspect = g_panelAspect.load();
+        const float aspect = slot ? slot->aspect : g_panelAspect.load();
         float flatPose[12]{};
         if (flat && aspect > 0.0f) {
-            const float fitHeight = 0.85f * static_cast<float>(regionH) /
-                                    static_cast<float>(regionW ? regionW : 1) / aspect;
-            // The old desktop card was centred and could occupy 85% of the
-            // screen height. Halve both of its screen dimensions, then pin
-            // its upper-left edge two percent in from the output edges.
-            // This is evaluated against the swapchain, not Elite's SS size.
-            g.halfW = 0.5f * (std::min)(g.halfW, fitHeight);
-            constexpr float margin = 0.02f;
-            g.shift = g.dist * (-1.0f + 2.0f * margin) + g.halfW;
-            flatPose[0] = flatPose[4] = flatPose[8] = 1.0f;
-            flatPose[10] = g.halfW * aspect - g.dist * (1.0f - 2.0f * margin) * p.tans[2];
-            xf = flatPose;
+            // The raster was sized from the output's own pixels (menu.cpp sizeContent), so the bitmap is laid at exactly its own pixel size: one bitmap
+            // pixel is one output pixel, its upper-left corner a whole two percent in from the output's (menu_flat_layout.h). A page taller than the
+            // output allows is the one case scaled down. This is evaluated against the swapchain, not Elite's SS size.
+            const FlatPlacement place = flatPlace(static_cast<int>(regionW), static_cast<int>(regionH), panelW, panelH,
+                                                   g.flatCorner == 1 ? FlatCorner::UpperRight : FlatCorner::UpperLeft);
+            if (place.w > 0) {
+                g.halfW = place.halfW * g.dist;
+                g.shift = place.shift * g.dist;
+                flatPose[0] = flatPose[4] = flatPose[8] = 1.0f;
+                flatPose[10] = place.originY * g.dist;
+                xf = flatPose;
+            }
         }
         const float halfH = g.halfW * aspect;
         if (panelBox(xf, p.tans, g.dist, g.curve, g.halfW, halfH, g.shift, regionW, regionH, flipV, g_nativeFrustum && flipU,
@@ -1390,7 +1491,7 @@ void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf
 
             ID3D11ShaderResourceView* nullSrv[2] = {};
             ID3D11UnorderedAccessView* nullUav = nullptr;
-            ID3D11ShaderResourceView* setSrv[2] = {inSrv, g_panelSrv};
+            ID3D11ShaderResourceView* setSrv[2] = {inSrv, panelSrv};
             ctx->CSSetShaderResources(0, 2, nullSrv);
             ctx->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
             ctx->CSSetShader(g_cs, nullptr, 0);
@@ -1425,7 +1526,7 @@ void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf
                 Log::get().note(
                     "menu panel: first composite -- a %dx%d bitmap on a %ux%u %s eye region "
                     "(DXGI_FORMAT %d%s), %.2f m out, curve %.2f, half-width %.2f m%s.",
-                    g_panelW, g_panelH, regionW, regionH, eye == 0 ? "left" : "right",
+                    panelW, panelH, regionW, regionH, eye == 0 ? "left" : "right",
                     static_cast<int>(sd.Format), linear ? ", linear light" : "",
                     static_cast<double>(g.dist), static_cast<double>(g.curve),
                     static_cast<double>(g.halfW),
@@ -1442,6 +1543,43 @@ void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf
     if (dev) dev->Release();
     src->Release();
     return result;
+}
+
+// The flat monitor panel's finished raster, uploaded into its own texture the way menuPanelTick uploads the menu's. Frame thread.
+void uploadMonitorRaster(ID3D11Device* dev) {
+    Raster r;
+    {
+        std::lock_guard<std::mutex> lock(g_w.m);
+        if (!g_w.hasReadyMon) return;
+        r = std::move(g_w.readyMon);
+        g_w.hasReadyMon = false;
+    }
+    guardedBudget(g_budget, [&] {
+        if (!g_monTex || g_monW != r.w || g_monH != r.h) {
+            if (g_monSrv) { g_monSrv->Release(); g_monSrv = nullptr; }
+            if (g_monTex) { g_monTex->Release(); g_monTex = nullptr; }
+            if (!makeTex(dev, static_cast<uint32_t>(r.w), static_cast<uint32_t>(r.h),
+                         DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
+                         D3D11_BIND_SHADER_RESOURCE, &g_monTex, &g_monSrv, nullptr)) {
+                if (g_monSrv) { g_monSrv->Release(); g_monSrv = nullptr; }
+                if (g_monTex) { g_monTex->Release(); g_monTex = nullptr; }
+                failOnce("the monitor panel's texture could not be created");
+                return;
+            }
+            g_monW = r.w;
+            g_monH = r.h;
+            g_monDevice = dev;
+        }
+        ID3D11DeviceContext* ctx = nullptr;
+        dev->GetImmediateContext(&ctx);
+        if (!ctx) return;
+        ctx->UpdateSubresource(g_monTex, 0, nullptr, r.rgba.data(),
+                               static_cast<UINT>(r.w) * 4, 0);
+        ctx->Release();
+        perfMonitorNoteEvent(kEvRaster);
+        g_monOwner.store(r.slotOwner, std::memory_order_relaxed);
+        g_monSerial.fetch_add(1, std::memory_order_release);
+    });
 }
 
 }  // namespace
@@ -1479,9 +1617,9 @@ void* menuPanelCompositeNative(ID3D11Texture2D* src, int eye, const float* bound
 
 bool menuPanelCompositeFlat(IDXGISwapChain* swap) {
     if (!swap || graphicsRuntimeDisabled()) return false;
-    MenuGeometry g;
-    { std::lock_guard<std::mutex> lock(g_geomMutex); g = g_geom; }
-    if (!(g.alpha > 0.0f) || !g_panelSrv) return false;
+    MenuGeometry g, mg;
+    { std::lock_guard<std::mutex> lock(g_geomMutex); g = g_geom; mg = g_monGeom; }
+    if (!((g.alpha > 0.0f && g_panelSrv) || (mg.alpha > 0.0f && g_monSrv))) return false;
     ID3D11Texture2D* back = nullptr;
     if (FAILED(swap->GetBuffer(0, __uuidof(ID3D11Texture2D),
                                reinterpret_cast<void**>(&back))) || !back) return false;
@@ -1493,14 +1631,16 @@ bool menuPanelCompositeFlat(IDXGISwapChain* swap) {
 
 bool menuPanelCompositeFlatTexture(ID3D11Texture2D* back) {
     if (!back || graphicsRuntimeDisabled()) return false;
-    MenuGeometry g;
-    { std::lock_guard<std::mutex> lock(g_geomMutex); g = g_geom; }
-    if (!(g.alpha > 0.0f) || !g_panelSrv) return false;
+    MenuGeometry g, mg;
+    { std::lock_guard<std::mutex> lock(g_geomMutex); g = g_geom; mg = g_monGeom; }
+    const bool menuUp = g.alpha > 0.0f && g_panelSrv;
+    const bool monitorUp = mg.alpha > 0.0f && g_monSrv && g_monW > 0 && g_monH > 0;
+    if (!menuUp && !monitorUp) return false;
     FlatComputeInternalScope internal;
     ID3D11Device* dev = nullptr;
     ID3D11DeviceContext* context = nullptr;
     back->GetDevice(&dev);
-    if (g_panelDevice && g_panelDevice != dev) {
+    if ((g_panelDevice && g_panelDevice != dev) || (g_monDevice && g_monDevice != dev)) {
         menuPanelFlatResize();
         if (dev) dev->Release();
         return false;
@@ -1521,10 +1661,14 @@ bool menuPanelCompositeFlatTexture(ID3D11Texture2D* back) {
     // and depends on a D3D11.1 feature real games essentially never exercise
     // -- exactly the kind of corner a translation layer has every reason to
     // under-test.
+    //
+    // Two slots, in order: the menu's raster (or a notice's, or the readout's), then the monitor panel's over the result. Each is one copy of the
+    // backbuffer, one dispatch and one copy back; they share the eye's textures, so they run one after the other on this thread. Only the menu's
+    // slot advances the menu's heartbeat: the input gate and the not-drawn watchdog follow the menu alone.
+    // compositeInner expects a packed 3x3 rotation followed by XYZ origin.
+    const float identity[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
     bool copied = false;
-    {
-        // compositeInner expects a packed 3x3 rotation followed by XYZ origin.
-        const float identity[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
+    if (menuUp) {
         ID3D11Texture2D* out = static_cast<ID3D11Texture2D*>(
             compositeInner(back, 0, nullptr, identity, true));
         if (out) {
@@ -1533,9 +1677,32 @@ bool menuPanelCompositeFlatTexture(ID3D11Texture2D* back) {
         }
     }
     if (copied) bumpMenuDrawn();
+    bool monitorCopied = false;
+    if (monitorUp) {
+        PanelSource ps;
+        ps.srv = g_monSrv;
+        ps.w = g_monW;
+        ps.h = g_monH;
+        ps.aspect = static_cast<float>(g_monH) / static_cast<float>(g_monW);
+        ps.geom = mg;
+        ID3D11Texture2D* out = static_cast<ID3D11Texture2D*>(
+            compositeInner(back, 0, nullptr, identity, true, &ps));
+        if (out) {
+            context->CopyResource(back, out);
+            monitorCopied = true;
+            static bool monitorNoted = false;
+            if (!monitorNoted) {
+                monitorNoted = true;
+                D3D11_TEXTURE2D_DESC bd{};
+                back->GetDesc(&bd);
+                Log::get().note("menu panel: first monitor panel composite -- a %dx%d bitmap in the upper right corner of a %ux%u output, "
+                                "after the menu's slot (%s this frame).", g_monW, g_monH, bd.Width, bd.Height, copied ? "drawn" : "empty");
+            }
+        }
+    }
     context->Release();
     dev->Release();
-    return copied;
+    return copied || monitorCopied;
 }
 
 void menuPanelFlatResize() {
@@ -1545,6 +1712,10 @@ void menuPanelFlatResize() {
     g_panelDevice = nullptr;
     g_panelW = g_panelH = 0;
     g_panelAspect.store(0.0f);
+    if (g_monSrv) { g_monSrv->Release(); g_monSrv = nullptr; }
+    if (g_monTex) { g_monTex->Release(); g_monTex = nullptr; }
+    g_monDevice = nullptr;
+    g_monW = g_monH = 0;
     if (g_cs) { g_cs->Release(); g_cs = nullptr; }
     g_csTried = false;
     if (g_cb) { g_cb->Release(); g_cb = nullptr; }
@@ -1554,6 +1725,26 @@ void menuPanelFlatResize() {
 
 bool menuPanelFlatRasterReady() { return g_panelSrv != nullptr; }
 uint32_t menuPanelRasterSerial() { return g_rasterSerial.load(std::memory_order_acquire); }
+bool menuPanelMonitorRasterReady() { return g_monSrv != nullptr; }
+uint32_t menuPanelMonitorRasterSerial() { return g_monSerial.load(std::memory_order_acquire); }
+uint8_t menuPanelMonitorRasterOwner() { return g_monOwner.load(std::memory_order_relaxed); }
+
+void menuPanelSubmitMonitor(const MenuContent& c) {
+    std::lock_guard<std::mutex> lock(g_w.m);
+    if (!g_w.started) {
+        g_w.started = true;
+        g_w.quit = false;
+        g_w.thread = std::thread(workerMain);
+    }
+    g_w.pendingMon = c;
+    g_w.hasPendingMon = true;
+    g_w.cv.notify_one();
+}
+
+void menuPanelSetMonitorGeometry(const MenuGeometry& g) {
+    std::lock_guard<std::mutex> lock(g_geomMutex);
+    g_monGeom = g;
+}
 
 bool menuPanelHit(const float org[3], const float dir[3], float dist, float curve, float halfW,
                   float halfH, float shift, float* su, float* sv) {
@@ -1607,12 +1798,83 @@ bool menuPanelWorkerReadyForTest() {
     std::lock_guard<std::mutex> lock(g_w.m);
     return g_w.hasReady && !g_w.hasPending;
 }
+bool menuPanelMonitorWorkerReadyForTest() {
+    std::lock_guard<std::mutex> lock(g_w.m);
+    return g_w.hasReadyMon && !g_w.hasPendingMon;
+}
+// The bitmap height layout() produces for `c`, so the test can assert a
+// page's shape is independent of which rows carry a hint (where it
+// reserves the hint box) and that it reserves nothing on a page that does
+// not. The raster's aspect is a pure function of this height, so a constant
+// height here is a constant on-screen card size (halfH = halfW * aspect).
+int menuPanelLayoutHeightForTest(const MenuContent& c) {
+    std::vector<Op> ops;
+    std::vector<LineRect> lines;
+    int h = 0;
+    layout(c, ops, lines, &h, 0, nullptr);
+    return h;
+}
+// The rect layout() gives the text op it builds for line `i`'s left text: the
+// rect the raster draws that text into. A test measures against this and not
+// against a copy of how layout() derives it, so it fails when layout()'s split
+// changes. All four are zero when the line has no such op.
+void menuPanelLineRectForTest(const MenuContent& c, int i, int* x0, int* y0, int* x1, int* y1) {
+    if (x0) *x0 = 0;
+    if (y0) *y0 = 0;
+    if (x1) *x1 = 0;
+    if (y1) *y1 = 0;
+    if (i < 0 || i >= c.lineCount) return;
+    std::vector<Op> ops;
+    std::vector<LineRect> lines;
+    int h = 0;
+    layout(c, ops, lines, &h, 0, nullptr);
+    if (i >= static_cast<int>(lines.size())) return;
+    // layout() records each row as a fraction of the height; the line's own
+    // text op is the one that starts at that row's top.
+    const int rowTop = static_cast<int>(lines[i].y0 * h + 0.5f);
+    const std::wstring text = widen(c.lines[i].left);
+    for (const Op& o : ops) {
+        if (!o.text || o.rect.top != rowTop || o.str != text) continue;
+        if (x0) *x0 = o.rect.left;
+        if (y0) *y0 = o.rect.top;
+        if (x1) *x1 = o.rect.right;
+        if (y1) *y1 = o.rect.bottom;
+        return;
+    }
+}
+
+MenuPanelRowRectsForTest menuPanelRowRectsForTest(const MenuContent& c, int i) {
+    MenuPanelRowRectsForTest result;
+    if (i < 0 || i >= c.lineCount) return result;
+    std::vector<Op> ops;
+    std::vector<LineRect> lines;
+    int height = 0;
+    layout(c, ops, lines, &height, 0, nullptr);
+    const LineRect& hit = lines[i];
+    result.hitTop = static_cast<int>(hit.y0 * height + 0.5f);
+    result.hitBottom = static_cast<int>(hit.y1 * height + 0.5f);
+    result.selectable = hit.selectable;
+    for (const Op& op : ops) {
+        if (!op.text || op.rect.top < result.hitTop || op.rect.top >= result.hitBottom) continue;
+        int* rect = op.font == Font::Badge ? result.badge
+                    : op.str == widen(c.lines[i].left) ? result.label
+                    : op.str == widen(c.lines[i].right) ? result.value : nullptr;
+        if (!rect) continue;
+        rect[0] = op.rect.left;
+        rect[1] = op.rect.top;
+        rect[2] = op.rect.right;
+        rect[3] = op.rect.bottom;
+    }
+    return result;
+}
 #endif
 
 void menuPanelTick(ID3D11Device* dev) {
     if (!dev) return;
-    if (runtimeFlatProfile() && g_panelDevice && g_panelDevice != dev)
+    if (runtimeFlatProfile() && ((g_panelDevice && g_panelDevice != dev) || (g_monDevice && g_monDevice != dev)))
         menuPanelFlatResize();
+    // The flat monitor panel's raster first: the menu's path below returns early when it has none.
+    if (runtimeFlatProfile()) uploadMonitorRaster(dev);
     Raster r;
     bool have = false;
     {
@@ -1695,8 +1957,58 @@ bool menuPanelStats(int* w, int* h, double* lastMs, float* gpuMs) {
     return true;
 }
 
+int menuPanelEntryRows(const MenuContent& c, int requested) {
+    MenuContent probe = c;
+    probe.toast = false;
+    probe.reserveHint = true;
+    probe.tileCount = probe.graphCount = 0;
+    probe.popupLine = -1;
+    probe.lineCount = (std::max)(1, (std::min)(requested, kMenuMaxLines));
+    for (int i = 0; i < probe.lineCount; ++i) probe.lines[i].reserveBadge = true;
+    for (;;) {
+        std::vector<Op> ops;
+        std::vector<LineRect> lines;
+        int height = 0;
+        layout(probe, ops, lines, &height, 0, nullptr);
+        if (height <= 2048 || probe.lineCount == 1) return probe.lineCount;
+        --probe.lineCount;
+    }
+}
+
+// Measuring creates a DC and a font, and the tab fit asks once per tab per em
+// step at every menu rebuild; the width of a given text at a given size does
+// not change, so remember it. The raster worker also measures tab widths.
+static std::mutex g_measureMutex;
+static std::map<std::string, int> g_measureCache;
+
+static std::string measureKey(bool bold, const char* utf8, int emPx) {
+    std::string k(bold ? "B" : "R");
+    k += std::to_string(emPx);
+    k += ':';
+    k += utf8;
+    return k;
+}
+
+static bool measureCacheGet(bool bold, const char* utf8, int emPx, int* out) {
+    const std::string k = measureKey(bold, utf8, emPx);
+    std::lock_guard<std::mutex> lock(g_measureMutex);
+    const auto it = g_measureCache.find(k);
+    if (it == g_measureCache.end()) return false;
+    *out = it->second;
+    return true;
+}
+
+static void measureCachePut(bool bold, const char* utf8, int emPx, int width) {
+    const std::string k = measureKey(bold, utf8, emPx);
+    std::lock_guard<std::mutex> lock(g_measureMutex);
+    if (g_measureCache.size() >= 1024) g_measureCache.clear();
+    g_measureCache[k] = width;
+}
+
 int menuPanelMeasureLine(const char* utf8, int emPx) {
     if (!utf8 || !*utf8 || emPx <= 0) return 0;
+    int cached = 0;
+    if (measureCacheGet(false, utf8, emPx, &cached)) return cached;
     const std::wstring s = widen(utf8);
     HDC dc = CreateCompatibleDC(nullptr);
     if (!dc) return 0;
@@ -1709,7 +2021,28 @@ int menuPanelMeasureLine(const char* utf8, int emPx) {
     if (old) SelectObject(dc, old);
     if (f) DeleteObject(f);
     DeleteDC(dc);
-    return r.right - r.left;
+    const int w = r.right - r.left;
+    measureCachePut(false, utf8, emPx, w);
+    return w;
+}
+
+int menuPanelTabWidth(const char* utf8, int emPx) {
+    if (!utf8 || !*utf8 || emPx <= 0) return 0;
+    int cached = 0;
+    if (measureCacheGet(true, utf8, emPx, &cached)) return cached;
+    const std::wstring s = widen(utf8);
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (!dc) return 0;
+    HFONT f = makeFont(emPx, true);   // bold, as Font::Tab
+    HGDIOBJ old = f ? SelectObject(dc, f) : nullptr;
+    RECT r = {0, 0, 1, 1};
+    DrawTextW(dc, s.c_str(), -1, &r, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    if (old) SelectObject(dc, old);
+    if (f) DeleteObject(f);
+    DeleteDC(dc);
+    const int w = (r.right - r.left) + emPx / 3;
+    measureCachePut(true, utf8, emPx, w);
+    return w;
 }
 
 bool menuPanelBuildOverlayContent(MenuContent& c, const char* line, float textDegrees,
@@ -1782,6 +2115,44 @@ bool menuPanelBuildOverlayContent(MenuContent& c, const char* line, float textDe
     return true;
 }
 
+bool menuPanelBuildReadoutContent(MenuContent& c, const char* const* lines, int lineCount, int capPx, int minCardPx, float textDegrees,
+                                  float* angularWidthDeg) {
+    if (angularWidthDeg) *angularWidthDeg = 0.0f;
+    if (!lines || lineCount < 1 || lineCount > kMenuMaxLines || capPx < 8) return false;
+    const int cap = capPx;
+    const int pad = cap * 8 / 10;
+    const int em = cap * 8 / 7;   // the overlay's face: smaller than Font::Row's toast face
+    c = MenuContent{};
+    c.toast = true;
+    c.compact = false;
+    c.popupLine = -1;
+    c.capPx = cap;
+    int widest = 0;
+    for (int i = 0; i < lineCount; ++i) {
+        if (!lines[i] || !*lines[i] || strlen(lines[i]) >= sizeof(c.lines[0].left)) return false;
+        memcpy(c.lines[i].left, lines[i], strlen(lines[i]) + 1);
+        c.lines[i].style = kMenuInfo;
+        c.lines[i].badge = kBadgeNone;
+        const int w = menuPanelMeasureLine(lines[i], em);
+        if (w <= 0) return false;
+        if (w > widest) widest = w;
+    }
+    c.lineCount = lineCount;
+    int card = widest + 2 * pad;
+    if (card < minCardPx) card = minCardPx;
+    if (card < 64) card = 64;
+    if (card > 2600) return false;
+    c.cardPx = c.widthPx = card;
+    c.rowFontPx = em;
+    if (textDegrees > 0.0f) {
+        if (!(textDegrees >= 0.6f) || textDegrees > 3.0f) textDegrees = 1.1f;
+        const float halfTextRad = textDegrees * 0.85f * 0.0174532925f * 0.5f;
+        c.angularWidthDeg = 2.0f * atanf((static_cast<float>(card) / static_cast<float>(cap)) * tanf(halfTextRad)) * 57.2957795f;
+        if (angularWidthDeg) *angularWidthDeg = c.angularWidthDeg;
+    }
+    return true;
+}
+
 void menuPanelShutdown() {
     {
         std::lock_guard<std::mutex> lock(g_w.m);
@@ -1795,6 +2166,10 @@ void menuPanelShutdown() {
     if (g_panelSrv) { g_panelSrv->Release(); g_panelSrv = nullptr; }
     if (g_panelTex) { g_panelTex->Release(); g_panelTex = nullptr; }
     g_panelDevice = nullptr;
+    if (g_monSrv) { g_monSrv->Release(); g_monSrv = nullptr; }
+    if (g_monTex) { g_monTex->Release(); g_monTex = nullptr; }
+    g_monDevice = nullptr;
+    g_monW = g_monH = 0;
     if (g_samp) { g_samp->Release(); g_samp = nullptr; }
     if (g_cb) { g_cb->Release(); g_cb = nullptr; }
     if (g_cs) { g_cs->Release(); g_cs = nullptr; }

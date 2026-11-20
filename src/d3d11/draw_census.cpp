@@ -25,6 +25,9 @@ namespace edvr {
 // cross-TU getter.
 namespace detail {
 bool     g_drawCensusPending = false;
+bool     g_drawCensusCaptureIdPending = false;
+bool     g_drawCensusCaptureIdActive = false;
+wchar_t  g_drawCensusCaptureId[16] = L"";
 uint32_t g_drawCensusFramesLeft = 0;
 bool     g_drawCensusOffscreen = false;
 }  // namespace detail
@@ -261,7 +264,13 @@ uint32_t g_censusNo = 0;         // numbers the begin/end lines, so the diff
 uint32_t g_frameOrdinal = 0;     // 0-based frame within the running census
 uint32_t g_draws = 0;            // draws recorded (kept counting past the cap)
 uint32_t g_drawsThisFrame = 0;
-uint32_t g_lines = 0;
+uint32_t g_lines = 0;            // lines written, of every kind
+// The eye draws ("DC": the lit eye's whole frame, the glass and the reticle among them) have a budget of their own, equal to the cap, and every other line (offscreen draws, copies,
+// clears, dispatches) is capped by the same number on its own. Offscreen draws once spent the shared 16384 lines and evicted the eye draws of the later frames (truncated=4704 and 5730 in
+// the ADS censuses of 2026-10-29), which are the ones a census of the sights is taken for.
+uint32_t g_eyeLines = 0;         // lines written for eye draws
+uint32_t g_drawLines = 0;        // ... and for draws of every kind, against g_draws for the end line's truncated=
+bool otherLinesSpent() { return g_lines - g_eyeLines >= g_maxLines; }
 uint32_t g_overflow = 0;         // intern-table misses
 Interned g_tab[kMaxInterned];
 uint32_t g_tabCount = 0;
@@ -700,10 +709,10 @@ void dumpInternTable() {
 void finish() {
     dumpInternTable();
     Log::get().note("DC end census=%u draws=%u off=%u copies=%u disp=%u "
-                    "unseen=%u lines=%u interned=%u overflow=%u truncated=%u",
+                    "unseen=%u eye_lines=%u lines=%u interned=%u overflow=%u truncated=%u capture_id=%ls",
                     g_censusNo, g_draws, g_offDraws, g_copies, g_dispatches,
-                    g_unseen, g_lines, g_tabCount, g_overflow,
-                    g_draws > g_lines ? g_draws - g_lines : 0);
+                    g_unseen, g_eyeLines, g_lines, g_tabCount, g_overflow,
+                    g_draws > g_drawLines ? g_draws - g_drawLines : 0,detail::g_drawCensusCaptureIdActive?detail::g_drawCensusCaptureId:L"");
     if (g_unseen) {
         Log::get().note(
             "DC unseen: %u draws this census returned from the verdict chain "
@@ -714,6 +723,8 @@ void finish() {
             "DC line above. Enable the withheld effects for a census of their draws.",
             g_unseen, g_unseenBy[0], g_unseenBy[1], g_unseenBy[2], g_unseenBy[3]);
     }
+    detail::g_drawCensusCaptureIdActive=false;
+    detail::g_drawCensusCaptureId[0]=L'\0';
 }
 
 }  // namespace
@@ -768,6 +779,20 @@ void drawCensusAutoRequest() {
     // census mechanics, which the begin line below reports as it always has.
 }
 
+void drawCensusAutoRequestForCapture(const wchar_t* captureId) {
+    if(detail::g_drawCensusFramesLeft>0) {
+        Log::get().note("DC eye capture link: capture_id=%ls census=%u state=active_reused",captureId?captureId:L"",g_censusNo);
+        return;
+    }
+    wcsncpy_s(detail::g_drawCensusCaptureId,sizeof(detail::g_drawCensusCaptureId)/sizeof(detail::g_drawCensusCaptureId[0]),captureId?captureId:L"",_TRUNCATE);
+    detail::g_drawCensusCaptureIdPending=true;
+    const bool alreadyPending=detail::g_drawCensusPending;
+    detail::g_drawCensusPending = true;
+    g_forceOffscreen = true;
+    drawGateArm();
+    Log::get().note("DC eye capture link: capture_id=%ls census=%u state=%s",captureId?captureId:L"",g_censusNo+1,alreadyPending?"pending_linked":"new_request");
+}
+
 // The shared body. The only thing the two entry points disagree about is the
 // tag and the index; every binding read below is identical, which is the
 // reason an offscreen line can be read with the same eyes as an eye line.
@@ -778,8 +803,15 @@ static void recordDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count,
     // line cap -- a capped census keeps truthful q values on whatever lines
     // it does write, instead of renumbering the survivors.
     const uint32_t q = g_seq++;
-    if (g_lines >= g_maxLines) return;
-    ++g_lines;
+    if (tag[2] == '\0') {   // "DC": an eye draw, under its own budget
+        if (g_eyeLines >= g_maxLines) return;
+        ++g_eyeLines;
+        ++g_drawLines;
+        ++g_lines;
+    } else {
+        if (otherLinesSpent()) return;
+        ++g_lines;
+    }
 
     char rb[24], db[24], cb[24], s0b[24], s1b[24], s2b[24], s3b[24];
     const char* r = bindingToken(bindingGet(BindSlot::Rtv0), Kind::kView, rb, sizeof(rb));
@@ -985,6 +1017,7 @@ static void recordDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count,
         ID3D11BlendState*        bs = nullptr;
         ID3D11Predicate*         pred = nullptr;
         UINT  ref = 0;
+        ID3D11RasterizerState* rasterizer = nullptr;
         FLOAT bf[4] = {};
         UINT  sampleMask = 0;
         BOOL  predValue = FALSE;
@@ -993,6 +1026,7 @@ static void recordDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count,
             ctx->OMGetDepthStencilState(&dss, &ref);
             ctx->OMGetBlendState(&bs, bf, &sampleMask);
             ctx->GetPredication(&pred, &predValue);
+            ctx->RSGetState(&rasterizer);
             got = true;
         });
         if (got) {
@@ -1048,6 +1082,24 @@ static void recordDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count,
                                 static_cast<unsigned>(fr.StencilDepthFailOp),
                                 static_cast<unsigned>(fr.StencilPassOp), bkb);
                 }
+                // rs= is the rasteriser (2026-11-06, the sun through the hull,
+                // docs\sun-switch-re-2026-11-06.md): cull mode N, F or B, then
+                // c when the front face is counter-clockwise or w when it is
+                // clockwise, depth bias, slope-scaled bias, depth clip. Which
+                // faces a shadow pass keeps decides whether a hollow shell
+                // shades what is inside it. A null state prints the API's
+                // defaults.
+                char rsb[56] = "";
+                {
+                    D3D11_RASTERIZER_DESC rd{};
+                    rd.CullMode = D3D11_CULL_BACK;
+                    rd.DepthClipEnable = TRUE;
+                    if (rasterizer) rasterizer->GetDesc(&rd);
+                    _snprintf_s(rsb, sizeof(rsb), _TRUNCATE, " rs=%c%c/%d/%.2f/%d",
+                                rd.CullMode == D3D11_CULL_NONE ? 'N' : rd.CullMode == D3D11_CULL_FRONT ? 'F' : 'B',
+                                rd.FrontCounterClockwise ? 'c' : 'w', rd.DepthBias,
+                                static_cast<double>(rd.SlopeScaledDepthBias), rd.DepthClipEnable ? 1 : 0);
+                }
                 // bl= is the whole slot-0 blend equation and sm= the sample
                 // mask (2026-09-01, the DSS black planet). Every test that
                 // could reject a pixel AFTER the shader had been recorded or
@@ -1058,7 +1110,7 @@ static void recordDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count,
                 // "opaque, writes land".
                 _snprintf_s(sv, sizeof(sv), _TRUNCATE,
                             " ds=%c%uw%c st=%c%u bm=%X pr=%c"
-                            " bl=%c%u,%u,%u/%u,%u,%u%s sm=%X%s",
+                            " bl=%c%u,%u,%u/%u,%u,%u%s sm=%X%s%s",
                             haveDs ? (dd.DepthEnable ? '1' : '0') : '?',
                             haveDs ? static_cast<unsigned>(dd.DepthFunc) : 0u,
                             haveDs ? (dd.DepthWriteMask ==
@@ -1091,12 +1143,13 @@ static void recordDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count,
                                          bd.RenderTarget[0].BlendOpAlpha)
                                    : 1u,
                             haveBs && bd.AlphaToCoverageEnable ? ",a2c" : "",
-                            sampleMask, so);
+                            sampleMask, so, rsb);
             }
         }
         if (dss) dss->Release();
         if (bs) bs->Release();
         if (pred) pred->Release();
+        if (rasterizer) rasterizer->Release();
     }
 
     Log::get().note(
@@ -1160,8 +1213,9 @@ void drawCensusDrawDirect(ID3D11DeviceContext* ctx, char kind, uint32_t count,
     ++g_draws;
     ++g_drawsThisFrame;
     const uint32_t q = g_seq++;
-    if (g_lines >= g_maxLines) return;
+    if (otherLinesSpent()) return;
     ++g_lines;
+    ++g_drawLines;
 
     ID3D11RenderTargetView* rtv = nullptr;
     ID3D11DepthStencilView* dsv = nullptr;
@@ -1235,7 +1289,7 @@ void drawCensusStructCount(void* dst, uint32_t dstOff, void* srcView,
     ++g_copies;
     ++g_copiesThisFrame;
     const uint32_t q = g_seq++;
-    if (g_lines >= g_maxLines) return;
+    if (otherLinesSpent()) return;
     ++g_lines;
     // The one call that moves a GPU-side element count into an argument
     // buffer -- the write that arms every DrawIndirect/DispatchIndirect
@@ -1258,7 +1312,7 @@ void drawCensusCopy(char kind, void* dst, uint32_t dstSub, uint32_t dstX,
     ++g_copies;
     ++g_copiesThisFrame;
     const uint32_t q = g_seq++;
-    if (g_lines >= g_maxLines) return;
+    if (otherLinesSpent()) return;
     ++g_lines;
 
     // Resources, not views: both arguments arrive as ID3D11Resource*, which is
@@ -1285,7 +1339,7 @@ void drawCensusResolve(void* dst, uint32_t dstSub, void* src, uint32_t srcSub,
     ++g_copies;
     ++g_copiesThisFrame;
     const uint32_t q = g_seq++;
-    if (g_lines >= g_maxLines) return;
+    if (otherLinesSpent()) return;
     ++g_lines;
 
     char db[24], sb[24];
@@ -1307,7 +1361,7 @@ void drawCensusClearColor(void* rtv, const float c[4], bool foreignCtx) {
     ++g_clears;
     ++g_clearsThisFrame;
     const uint32_t q = g_seq++;
-    if (g_lines >= g_maxLines) return;
+    if (otherLinesSpent()) return;
     ++g_lines;
     char rb[24];
     const char* r = bindingToken(rtv, Kind::kView, rb, sizeof(rb));
@@ -1322,7 +1376,7 @@ void drawCensusClearDepth(void* dsv, uint32_t flags, float depth,
     ++g_clears;
     ++g_clearsThisFrame;
     const uint32_t q = g_seq++;
-    if (g_lines >= g_maxLines) return;
+    if (otherLinesSpent()) return;
     ++g_lines;
     char db[24];
     const char* d = bindingToken(dsv, Kind::kView, db, sizeof(db));
@@ -1341,7 +1395,7 @@ void drawCensusQuery(char kind, void* async, bool foreignCtx) {
     ++g_clears;
     ++g_clearsThisFrame;
     const uint32_t q = g_seq++;
-    if (g_lines >= g_maxLines) return;
+    if (otherLinesSpent()) return;
     ++g_lines;
     char ab[24];
     const char* a = bindingToken(async, Kind::kOpaque, ab, sizeof(ab));
@@ -1408,7 +1462,7 @@ void drawCensusDispatch(ID3D11DeviceContext* ctx, uint32_t x, uint32_t y,
     ++g_dispatches;
     ++g_dispThisFrame;
     const uint32_t q = g_seq++;
-    if (g_lines >= g_maxLines) return;
+    if (otherLinesSpent()) return;
     ++g_lines;
 
     // What this dispatch can WRITE: UAV slots 0-7, read straight off the
@@ -1648,10 +1702,14 @@ void drawCensusFrameBoundary(uint32_t frameNo) {
                 static_cast<int>(kMaxLinesCeiling)));
         }
         detail::g_drawCensusFramesLeft = g_framesWanted;
+        detail::g_drawCensusCaptureIdActive=detail::g_drawCensusCaptureIdPending;
+        detail::g_drawCensusCaptureIdPending=false;
         g_frameOrdinal = 0;
         g_draws = 0;
         g_drawsThisFrame = 0;
         g_lines = 0;
+        g_eyeLines = 0;
+        g_drawLines = 0;
         g_overflow = 0;
         g_tabCount = 0;
         g_offThisFrame = 0;
@@ -1690,9 +1748,9 @@ void drawCensusFrameBoundary(uint32_t frameNo) {
         }
         g_cbDumps = 0;
         for (Interned& e : g_tab) e = Interned();
-        Log::get().note("DC begin census=%u frames=%u frame=%u offscreen=%s",
+        Log::get().note("DC begin census=%u frames=%u frame=%u offscreen=%s capture_id=%ls",
                         g_censusNo, g_framesWanted, frameNo,
-                        detail::g_drawCensusOffscreen ? "yes" : "no");
+                        detail::g_drawCensusOffscreen ? "yes" : "no",detail::g_drawCensusCaptureIdActive?detail::g_drawCensusCaptureId:L"");
         if (g_cbWatchHash) {
             Log::get().note("DCW watching vs=%016llX -- every recorded draw "
                             "running that shader dumps its b%u constants "

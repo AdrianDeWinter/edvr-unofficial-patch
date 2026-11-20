@@ -7,6 +7,7 @@
 #include "dlaa.h"               // dlaaReleaseForSwitch: DLSS features released, NGX kept
 #include "engine_velocity.h"    // engineVelocityFlatAbandon: the flat teardown's velocity state
 #include "flat_runtime.h"       // flatRuntimeResize: the flat teardown, run before a commit leaves flat
+#include "dittosr_engine.h"    // dittoReleaseFeatures: DittoSR's histories, released at every switch
 #include "fsr3_engine.h"        // fsr3ReleaseFeatures: FSR's features, released at every switch
 #include "fsr4_engine.h"        // fsr4ReleaseFeatures: FSR 4.1's contexts, released at every switch
 #include "menu.h"               // menuProfileSwitch: the menu closes and forgets the outgoing profile's first-time block
@@ -61,6 +62,7 @@ std::atomic<uint32_t> g_hints{0};
 std::atomic<HANDLE> g_hintEvent{nullptr};
 std::atomic<bool> g_startCalled{false};
 std::atomic<bool> g_started{false};
+std::atomic<int> g_lastStereoValue{-1};   // F190: the StereoscopicMode of the last known read of Settings.xml (the launch's value until the first read)
 
 // The toast the menu shows once per commit. Written on the render thread, read by the menu's poll.
 std::mutex g_noticeMutex;
@@ -279,6 +281,7 @@ private:
             return;
         }
         retryAt_ = 0;
+        if (r.known) g_lastStereoValue.store(r.value, std::memory_order_relaxed);
         const Step s = watch_.onRead(now, r, readAfterWrite_);
         // An unknown read repeats while the file stays invalid, so its line is logged once a second at most; the next line printed says
         // how many were skipped.
@@ -432,8 +435,8 @@ void commitPosted(uint64_t packed) {
         return;
     }
 
-    // Teardown, while the outgoing profile's predicates still answer true (design section 3.3). Every switch releases the DLSS and FSR
-    // features and closes the menu; the flat and VR parts are the outgoing profile's own.
+    // Teardown, while the outgoing profile's predicates still answer true (design section 3.3). Every switch releases the DLSS, FSR,
+    // DittoSR and XeSS features and closes the menu; the flat and VR parts are the outgoing profile's own.
     if (!g_skipTeardown.load(std::memory_order_relaxed)) {
         if (cur == RuntimeProfile::Flat) {
             flatRuntimeResize();
@@ -444,6 +447,7 @@ void commitPosted(uint64_t packed) {
         dlaaReleaseForSwitch();
         fsr3ReleaseFeatures();
         fsr4ReleaseFeatures();
+        dittoReleaseFeatures();
         xessReleaseFeatures();
         menuProfileSwitch();
         g_teardowns.fetch_add(1, std::memory_order_relaxed);
@@ -477,14 +481,14 @@ void commitPosted(uint64_t packed) {
     Log::get().note("%s", line);
 
     if (target == RuntimeProfile::Vr) {
-        setNotice("EDVR switched to its VR fixes");
+        setNotice("ED-UP switched to its VR fixes");
     } else if (target == RuntimeProfile::Flat) {
-        setNotice("EDVR switched to its flat fixes");
+        setNotice("ED-UP switched to its flat fixes");
     } else if (flatRefused) {
-        setNotice("EDVR is paused: its flat fixes are unavailable this session");
+        setNotice("ED-UP is paused: its flat fixes are unavailable this session");
     } else {
         char notice[96];
-        std::snprintf(notice, sizeof(notice), "EDVR is paused: this install does not include %s", mode == GameMode::Vr ? "vr" : "flat");
+        std::snprintf(notice, sizeof(notice), "ED-UP is paused: this install does not include %s", mode == GameMode::Vr ? "vr" : "flat");
         setNotice(notice);
     }
 }
@@ -497,6 +501,7 @@ void modeWatchStart() {
     readPatched(g_inEffect);  // the launch's values: what device creation reads, before any switch can change the file's
 
     const ModeRead launch = runtimeLaunchRead();
+    if (launch.known) g_lastStereoValue.store(launch.value, std::memory_order_relaxed);   // F190
     const std::wstring& path = runtimeSettingsPathWide();
     const size_t slash = path.find_last_of(L'\\');
     if (slash == std::wstring::npos) {
@@ -560,6 +565,8 @@ bool modeWatchNoticeDue(char* out, size_t size) {
     g_noticeDue.store(false, std::memory_order_release);
     return true;
 }
+
+int modeWatchStereoValue() { return g_lastStereoValue.load(std::memory_order_relaxed); }
 
 }  // namespace edvr
 

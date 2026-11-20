@@ -189,7 +189,7 @@ public:
                     NameClass c0 = NameClass::kNone;
                     uint32_t f0 = 0;
                     if (!unpackSlot(w, node, key, &c0, &f0)) continue;
-                } else if (w != 0 && ((w >> 50) & kSlotKeyMask) == key) {
+                } else if (w != 0 && ((w >> kSlotKeyShift) & kSlotKeyMask) == key) {
                     continue;   // a live entry of this generation (another node's)
                 }
                 if (!slots_[i].compare_exchange_strong(w, kBusy, std::memory_order_acq_rel, std::memory_order_acquire)) continue;
@@ -216,7 +216,7 @@ public:
         const uint32_t key = classKey(gen);
         for (size_t i = 0; i < N; ++i) {
             const uint64_t w = slots_[i].load(std::memory_order_relaxed);
-            if (w != 0 && w != kBusy && ((w >> 50) & kSlotKeyMask) == key) ++n;
+            if (w != 0 && w != kBusy && ((w >> kSlotKeyShift) & kSlotKeyMask) == key) ++n;
         }
         return n;
     }

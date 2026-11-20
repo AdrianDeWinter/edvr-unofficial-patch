@@ -236,7 +236,7 @@ STALE_EXE_DIR = re.compile(r"^.+[-_]\d+[-_]\d+$")
 # happened to match STALE_EXE_DIR -- belt-and-suspenders alongside the shape
 # check and the directories-only, top-level-only rule in stale_exe_dirs.
 PROTECTED_EXE_DIR_ENTRIES = {
-    "d3d11.dll", "openvr_api.dll", "edvr-installer.exe", "gen", "obj",
+    "d3d11.dll", "openvr_api.dll", "ed-up-launcher.exe", "gen", "obj",
     "edvr_logs",
 }
 
@@ -441,7 +441,8 @@ def check_acyclic(after):
 
 
 def plan(rigs, quiet, times, serial=(), after=None):
-    """The pool, longest expected first, and the quiet jobs in the order
+    """The pool, longest expected first (an --after producer counted with the
+    longest chain of consumers waiting on it), and the quiet jobs in the order
     named. Every quiet, serial or after label must be a rig, and a rig
     belongs to at most one of the serial groups. A serial or quiet rig that
     splits itself puts its build step in the pool and only its run step
@@ -493,10 +494,27 @@ def plan(rigs, quiet, times, serial=(), after=None):
     pool = [Job(rig, "build" if split(rig) else None)
             for rig in rigs if rig.label not in quiet or split(rig)]
     chain = [sum(estimate(held(by_label[label]), times) for label in group) for group in serial]
+    # A producer named by --after is ranked by the longest path it holds back: its own time plus its
+    # slowest consumer's path. Ranked by its own time alone, a 33 s compile that five 200 s shards wait on
+    # started mid-queue and the shards became the build's tail (2026-11-13).
+    consumers = {}
+    for consumer, producers in after.items():
+        for producer in producers:
+            consumers.setdefault(producer, []).append(consumer)
+    paths = {}
+
+    def path(label):
+        if label not in paths:
+            whole = estimate(Job(by_label[label]), times)
+            paths[label] = whole + max((path(c) for c in consumers.get(label, ())), default=0.0)
+        return paths[label]
 
     def rank(job):
         own = estimate(job, times)
-        return (-chain[job.rig.group] if job.rig.group is not None else -own, -own)
+        if job.rig.group is not None:
+            return (-chain[job.rig.group], -own)
+        held_back = path(job.rig.label) - estimate(Job(job.rig), times) if job.rig.label in consumers else 0.0
+        return (-(own + held_back), -own)
 
     pool.sort(key=rank)
     return pool, [held(by_label[label]) for label in quiet]
@@ -644,6 +662,67 @@ def process_cpu_seconds(pid):
     finally:
         kernel.CloseHandle(handle)
 
+class CpuMeter:
+    """The CPU seconds (user + kernel) a rig's whole process tree used, from a
+    Windows job object of its own that the rig's child is put in at launch:
+    every process it starts joins the job, and the job's accounting keeps the
+    time of processes that have exited. Wall time says little in a pool of
+    rigs that share every core; this says which rig did the work. seconds()
+    is None where it cannot be had (not Windows, or the job could not be made
+    or joined). A process the child starts in the moment before attach() is
+    not counted; cmd.exe starts nothing that fast."""
+
+    def __init__(self):
+        self.job = None
+        self.kernel = None
+        if os.name != "nt":
+            return
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        kernel.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                                     wintypes.DWORD, ctypes.c_void_p]
+        kernel.QueryInformationJobObject.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.kernel = kernel
+        self.job = kernel.CreateJobObjectW(None, None) or None
+
+    def attach(self, process):
+        """Put the Popen `process` in the job; False when it could not be."""
+        if self.job is None:
+            return False
+        if not self.kernel.AssignProcessToJobObject(self.job, int(process._handle)):
+            self.close()
+            return False
+        return True
+
+    def seconds(self):
+        if self.job is None:
+            return None
+        import ctypes
+
+        class Accounting(ctypes.Structure):    # JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+            _fields_ = [("TotalUserTime", ctypes.c_longlong), ("TotalKernelTime", ctypes.c_longlong),
+                        ("ThisPeriodTotalUserTime", ctypes.c_longlong), ("ThisPeriodTotalKernelTime", ctypes.c_longlong),
+                        ("TotalPageFaultCount", ctypes.c_ulong), ("TotalProcesses", ctypes.c_ulong),
+                        ("ActiveProcesses", ctypes.c_ulong), ("TotalTerminatedProcesses", ctypes.c_ulong)]
+
+        info = Accounting()
+        if not self.kernel.QueryInformationJobObject(self.job, 1, ctypes.byref(info),   # JobObjectBasicAccountingInformation
+                                                     ctypes.sizeof(info), None):
+            return None
+        return (info.TotalUserTime + info.TotalKernelTime) / 1e7      # 100 ns units
+
+    def close(self):
+        if self.job is not None:
+            self.kernel.CloseHandle(self.job)
+            self.job = None
+
+
 def process_parents():
     """{pid: parent pid} for every process, from a toolhelp snapshot; None
     where that cannot be had (not Windows, or the snapshot failed)."""
@@ -683,6 +762,31 @@ def process_parents():
         kernel.CloseHandle(snapshot)
 
 
+def process_created(pid):
+    """The live process `pid`'s creation time (FILETIME ticks), or None (not
+    Windows, not allowed, or already gone)."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(ctypes.c_ulonglong)] * 4
+    kernel.GetProcessTimes.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x1000, False, pid)      # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        times = [ctypes.c_ulonglong() for _ in range(4)]
+        if not kernel.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
+            return None
+        return times[0].value
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def tree_cpu_seconds(root, seen):
     """CPU seconds `root` and all its descendants have used. `seen` ({pid:
     seconds}, kept by the caller between calls) remembers each process's last
@@ -692,11 +796,21 @@ def tree_cpu_seconds(root, seen):
     parents = process_parents()
     if parents is None:
         return None, 0
+    # A process keeps its parent's pid after the parent exits, and Windows
+    # reuses pids: a long-lived process whose parent is long gone can name a
+    # pid one of the rig's processes now holds. Only a process created after
+    # its parent is its child. Missed, a self-test toy that sleeps once took
+    # in an unrelated process with 2,879 s of CPU (2026-11-13).
+    born = {root: process_created(root)}
     members, frontier = {root}, [root]
     while frontier:
         parent = frontier.pop()
         for pid, ppid in parents.items():
             if ppid == parent and pid not in members:
+                created = process_created(pid)
+                if created is not None and born.get(parent) is not None and created < born[parent]:
+                    continue
+                born[pid] = created
                 members.add(pid)
                 frontier.append(pid)
     for pid in members:
@@ -831,7 +945,7 @@ def wait_with_progress(process, limit, hard_limit, progress, log_path, window, p
 
 
 def run_rig(title, command, cwd, env, log_path, limit, hard_limit=None, window=None, poll=None,
-            reader=tree_cpu_seconds):
+            reader=tree_cpu_seconds, cpu=None):
     """Run one job's command with its combined output streamed into log_path
     as it is written -- the child holds the file, not a pipe the runner
     reads, so partial output is on disk while it runs and a grandchild that
@@ -845,7 +959,8 @@ def run_rig(title, command, cwd, env, log_path, limit, hard_limit=None, window=N
     limit_hit is the deadline a killed rig ran past, whose exit code is
     TIMEOUT_EXIT and whose output ends with lines saying so, where the whole
     log is, and whether the tree was stalled, busy or only slow; None
-    otherwise."""
+    otherwise. Given a list as `cpu`, the CPU seconds the child's whole tree
+    used (CpuMeter) are appended to it, or None where they cannot be read."""
     window = PROGRESS_WINDOW if window is None else window
     poll = PROGRESS_POLL if poll is None else poll
     scratch = log_path is None
@@ -854,12 +969,15 @@ def run_rig(title, command, cwd, env, log_path, limit, hard_limit=None, window=N
         os.close(handle)
     limit_hit = None
     notes = []
+    meter = CpuMeter() if cpu is not None else None
     try:
         started = time.monotonic()
         with open(log_path, "wb") as log:
             process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                        stdout=log, stderr=subprocess.STDOUT,
                                        **child_process_kwargs())
+            if meter is not None:
+                meter.attach(process)
             progress = Progress(lambda seen: reader(process.pid, seen))
             code, deadline, extensions = wait_with_progress(process, limit, hard_limit, progress,
                                                             log_path, window, poll)
@@ -891,7 +1009,11 @@ def run_rig(title, command, cwd, env, log_path, limit, hard_limit=None, window=N
                        ).encode("utf-8", "replace")
             notes += [line + "\n" for line in diagnose(progress, elapsed, window, log_age, last_line)]
         output += "".join(notes).encode("utf-8", "replace")
+        if meter is not None:
+            cpu.append(meter.seconds())
     finally:
+        if meter is not None:
+            meter.close()
         if scratch:
             try:
                 os.unlink(log_path)
@@ -1056,7 +1178,8 @@ def hard_timeout(limit):
 
 def spawner(script, root, env, exe_dir=None, timeout_for=None, localappdata=None, extend=False):
     """spawn(job) for run_group: runs the job's `build.bat --rig` child and
-    returns (exit code, output, limit_hit) as run_rig does, under the
+    returns (exit code, output, limit_hit) as run_rig does, plus the CPU
+    seconds its process tree used (CpuMeter; None where unknown), under the
     timeout timeout_for(job) names (a function of the job; None: none). With
     `extend`, a rig still using CPU or printing at its timeout is given more
     time, up to hard_timeout of it. The child runs under localappdata when one
@@ -1066,9 +1189,11 @@ def spawner(script, root, env, exe_dir=None, timeout_for=None, localappdata=None
             # Log::open and the sentinel create one level; this is two.
             os.makedirs(log_dir(exe_dir, job), exist_ok=True)
         limit = timeout_for(job) if timeout_for is not None else None
-        return run_rig(job.title, child_command(script, job.rig.label), str(root),
-                       child_env(env, job, exe_dir, localappdata), rig_log_path(exe_dir, job), limit,
-                       hard_limit=hard_timeout(limit) if extend else None)
+        cpu = []
+        code, output, limit_hit = run_rig(job.title, child_command(script, job.rig.label), str(root),
+                                          child_env(env, job, exe_dir, localappdata), rig_log_path(exe_dir, job),
+                                          limit, hard_limit=hard_timeout(limit) if extend else None, cpu=cpu)
+        return code, output, limit_hit, (cpu[0] if cpu else None)
     return spawn
 
 
@@ -1172,15 +1297,17 @@ def tail_lines(output, count):
     return b"".join(lines[-count:]), len(lines) - count
 
 
-def report(out, job, code, seconds, output, kept=(), timeout=None):
-    """One job's banner and output. A job that ran past its timeout (its
+def report(out, job, code, seconds, output, kept=(), timeout=None, cpu=None):
+    """One job's banner and output, with the CPU seconds its process tree used
+    when known. A job that ran past its timeout (its
     `timeout` is the limit it hit) is banner-ed TIMEOUT and prints only the
     tail of its output: the rest is in its log file, which the last line of
     that output names."""
+    extra = "" if cpu is None else ", %.1f s CPU" % cpu
     if timeout is not None:
-        extra = ", TIMEOUT (limit %d s)" % timeout
+        extra += ", TIMEOUT (limit %d s)" % timeout
     else:
-        extra = "" if code == 0 else ", exit code %d" % code
+        extra += "" if code == 0 else ", exit code %d" % code
     if kept:
         extra += ", kept " + ", ".join(kept)
     emit(out, "[edvr] --- %s: %.1f s%s ---\n" % (job.title, seconds, extra))
@@ -1218,11 +1345,12 @@ def run_group(order, jobs, spawn, out, clock=time.monotonic, exe_dir=None, label
     omit it for a fresh set -- a fresh set is correct whenever no pending
     job's --after can point outside this call's own order, which plan()
     guarantees by refusing a --quiet rig on either side. Returns (results,
-    failures) where each entry is (job, code, seconds, output, kept, timeout)
-    in completion order; kept is empty except for a failed job with a
-    directory of its own, and timeout is the limit a job was killed for
-    running past, else None. spawn returns (code, output), or (code, output,
-    timeout) as run_rig does; one that raises fails its job with the error as
+    failures) where each entry is (job, code, seconds, output, kept, timeout,
+    cpu) in completion order; kept is empty except for a failed job with a
+    directory of its own, timeout is the limit a job was killed for
+    running past, else None, and cpu is its tree's CPU seconds or None. spawn
+    returns (code, output), (code, output, timeout) as run_rig does, or
+    (code, output, timeout, cpu) as spawner does; one that raises fails its job with the error as
     its output, since a worker that died without reporting would leave the
     loop below waiting for it forever."""
     if done is None:
@@ -1238,8 +1366,9 @@ def run_group(order, jobs, spawn, out, clock=time.monotonic, exe_dir=None, label
             output = ("[edvr] ERROR: could not run %s: %s: %s\n"
                       % (job.title, type(error).__name__, error)).encode("utf-8", "replace")
         timeout = rest[0] if rest else None
+        cpu = rest[1] if len(rest) > 1 else None
         kept = cleanup_job_exe_dirs(exe_dir, job, labels, code == 0) if exe_dir is not None else ()
-        outcomes.put((job, code, clock() - started, output, kept, timeout))
+        outcomes.put((job, code, clock() - started, output, kept, timeout, cpu))
 
     pending, running, busy, results, failures = list(order), 0, set(), [], []
     while pending or running:
@@ -1254,19 +1383,19 @@ def run_group(order, jobs, spawn, out, clock=time.monotonic, exe_dir=None, label
             running += 1
         if not running:
             break
-        job, code, seconds, output, kept, timeout = outcomes.get()
+        job, code, seconds, output, kept, timeout, cpu = outcomes.get()
         running -= 1
         if job.constrained:
             busy.discard(job.rig.group)
-        results.append((job, code, seconds, output, kept, timeout))
+        results.append((job, code, seconds, output, kept, timeout, cpu))
         if code == 0:
-            report(out, job, code, seconds, output)
+            report(out, job, code, seconds, output, cpu=cpu)
             if job.step == "build" and job.rig.group is not None:
                 pending.insert(0, Job(job.rig, "run"))
             else:
                 done.add(job.rig.label)
             continue
-        failures.append((job, code, seconds, output, kept, timeout))
+        failures.append((job, code, seconds, output, kept, timeout, cpu))
         if len(failures) == 1:
             note = "" if not kept else " (kept %s)" % ", ".join(kept)
             what = ("TIMED OUT after %d s" % timeout if timeout is not None
@@ -1307,6 +1436,23 @@ def save_times(path, times, results):
         if code == 0:
             merged[job.key] = round(recorded_seconds(times.get(job.key), seconds), 2)
     path.write_text(json.dumps(merged, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def cpu_path(times_path):
+    """Where a run's CPU seconds go: rig_cpu.json beside the times file. Kept
+    apart from it because the times set each rig's timeout and order."""
+    return times_path.with_name("rig_cpu.json")
+
+
+def save_cpu(path, results):
+    """{job key: {"cpu": s, "wall": s}} for this run's passing jobs whose CPU
+    was read; the file is replaced, not merged, so it describes one run."""
+    data = {}
+    for job, code, seconds, _output, _kept, _timeout, cpu in results:
+        if code == 0 and cpu is not None:
+            data[job.key] = {"cpu": round(cpu, 2), "wall": round(seconds, 2)}
+    path.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    return data
 
 
 def wrap(labels, indent="       "):
@@ -1414,6 +1560,10 @@ def run(script, jobs, mp, quiet, times_path, dry_run, out, spawn=None, clock=tim
             save_times(times_path, times, results)
         except OSError as error:
             emit(out, "[edvr] NOTE: could not record rig times in %s: %s\n" % (times_path, error))
+        try:
+            save_cpu(cpu_path(times_path), results)
+        except OSError as error:
+            emit(out, "[edvr] NOTE: could not record rig CPU in %s: %s\n" % (cpu_path(times_path), error))
     if failures:
         job, code, timeout = failures[0][0], failures[0][1], failures[0][5]
         what = ("TIMED OUT after %d s" % timeout if timeout is not None
@@ -1427,6 +1577,11 @@ def run(script, jobs, mp, quiet, times_path, dry_run, out, spawn=None, clock=tim
     longest = sorted(results, key=lambda entry: -entry[2])[:5]
     emit(out, "[edvr] longest: " + ", ".join("%s %.1f s" % (job.title, seconds)
                                              for job, _, seconds, *_ in longest) + "\n")
+    measured = [entry for entry in results if entry[6] is not None]
+    if measured:
+        busiest = sorted(measured, key=lambda entry: -entry[6])[:10]
+        emit(out, "[edvr] most CPU (%.1f s in all): " % sum(entry[6] for entry in measured)
+             + ", ".join("%s %.1f s" % (entry[0].title, entry[6]) for entry in busiest) + "\n")
     if findings:
         emit(out, focus_error(findings))
         out.flush()
@@ -1592,6 +1747,14 @@ def self_test():
     pool, _ = plan(rigs, [], {"beta": 30.0, "alpha": 1.5, "gamma": "junk"})
     check(titles(pool) == ["beta", "gamma", "timing", "alpha"],
           "recorded seconds outrank the guess, junk falls back: %r" % pool)
+    pool, _ = plan(rigs, [], {"beta": 30.0, "alpha": 1.5, "gamma": 20.0, "timing": 100.0},
+                   after={"timing": ["alpha"]})
+    check(titles(pool) == ["alpha", "timing", "beta", "gamma"],
+          "an --after producer is ranked by the chain it holds back (1.5 s + 100 s), ahead of a longer rig: %r" % pool)
+    pool, _ = plan(rigs, [], {"beta": 30.0, "alpha": 1.5, "gamma": 20.0, "timing": 1.0},
+                   after={"timing": ["alpha"]})
+    check(titles(pool) == ["beta", "gamma", "alpha", "timing"],
+          "a producer whose consumer is short gains only that: %r" % pool)
     try:
         plan(rigs, ["timing", "nope"], {})
         check(False, "an unknown quiet label is an error")
@@ -1787,12 +1950,13 @@ def self_test():
 
     # --after through run_group: gamma must wait for alpha's real finish, not
     # merely for a launch slot -- proven by giving gamma the longest estimate
-    # (so ranking alone would start it first) and --jobs wide enough that
-    # nothing but the dependency could be holding it back.
+    # (so it ranks right behind the producer that carries its chain, ahead of
+    # beta and timing) and --jobs wide enough that nothing but the dependency
+    # could be holding it back.
     seconds2 = {"alpha": 1.0, "beta": 1.0, "gamma": 9.0, "timing": 1.0}
     pool, _ = plan(rigs, [], seconds2, after={"gamma": ["alpha"]})
-    check(titles(pool) == ["gamma", "alpha", "beta", "timing"],
-          "the consumer ranks by its own estimate, first here despite --after: %r" % pool)
+    check(titles(pool) == ["alpha", "gamma", "beta", "timing"],
+          "the producer carries its consumer's chain; the consumer follows by its own estimate: %r" % pool)
 
     starts.clear()
     alpha_done, order_ok = [False], [True]
@@ -2093,6 +2257,8 @@ def self_test():
 
     self_test_timeouts(check)
     self_test_gates(check)
+    self_test_cpu(check)
+    self_test_tree_birth(check)
 
     if failures:
         for why in failures:
@@ -2140,6 +2306,61 @@ class FakeProcess:
             return 0
         self.clock.now = end
         raise subprocess.TimeoutExpired("fake", timeout)
+
+
+def self_test_cpu(check):
+    """The per-rig CPU meter: the banner and the rig_cpu.json file from fake
+    results, and on Windows a real tree whose grandchild burns CPU and exits
+    before the parent does, which the meter must still count."""
+    out = io.BytesIO()
+    report(out, Job(Rig("alpha", 1)), 0, 12.0, b"", cpu=31.25)
+    check(b"--- alpha: 12.0 s, 31.2 s CPU ---" in out.getvalue(), "the banner carries the CPU seconds")
+    out = io.BytesIO()
+    report(out, Job(Rig("alpha", 1)), 0, 12.0, b"")
+    check(b"--- alpha: 12.0 s ---" in out.getvalue(), "no CPU figure, no CPU in the banner")
+    with tempfile.TemporaryDirectory(prefix="edvr-cpu-test-") as scratch:
+        times = Path(scratch) / "rig_times.json"
+        check(cpu_path(times) == Path(scratch) / "rig_cpu.json", "the CPU file sits beside the times file")
+        data = save_cpu(cpu_path(times), [(Job(Rig("alpha", 1)), 0, 10.0, b"", (), None, 40.0),
+                                          (Job(Rig("beta", 1)), 1, 5.0, b"", (), None, 3.0),
+                                          (Job(Rig("gamma", 1)), 0, 5.0, b"", (), None, None)])
+        check(data == {"alpha": {"cpu": 40.0, "wall": 10.0}}, "only passing jobs with a CPU reading are recorded")
+        check(json.loads(cpu_path(times).read_text(encoding="utf-8")) == data, "the file holds what was recorded")
+    if os.name != "nt":
+        check(CpuMeter().seconds() is None, "no job object off Windows, no reading")
+        return
+    burn = "import time\nt = time.process_time()\nwhile time.process_time() - t < 0.6: pass\n"
+    parent = ("import subprocess, sys\n"
+              "subprocess.run([sys.executable, '-c', %r])\n" % burn)
+    cpu = []
+    code, _output, hit = run_rig("cpu toy", [sys.executable, "-c", parent], os.getcwd(), dict(os.environ),
+                                 None, 60, cpu=cpu)
+    check(code == 0 and hit is None, "the CPU toy ran")
+    check(len(cpu) == 1 and cpu[0] is not None and cpu[0] >= 0.5,
+          "the meter counts a grandchild that has already exited (read %r)" % (cpu,))
+
+
+def self_test_tree_birth(check):
+    """The stall probe's tree walk against a reused pid, on a faked process
+    table so it needs no live process: 1004 is older than the rig's process
+    1001 yet names it as its parent (Windows reused the pid), and is refused.
+    A child created at the same tick as its parent, and one whose creation
+    time cannot be read, are still children."""
+    created = {1001: 200, 1002: 200, 1003: None, 1004: 100}
+    fakes = {"process_parents": lambda: {1001: 1004, 1002: 1001, 1003: 1001, 1004: 1001},
+             "process_created": lambda pid: created.get(pid),
+             "process_cpu_seconds": lambda pid: 1.0}
+    real = {name: globals()[name] for name in fakes}
+    try:
+        globals().update(fakes)
+        seen = {}
+        total, count = tree_cpu_seconds(1001, seen)
+    finally:
+        globals().update(real)
+    check(1004 not in seen,
+          "a process created before the rig's process is not its child, whatever pid it names (read %r)" % sorted(seen))
+    check(sorted(seen) == [1001, 1002, 1003] and count == 3 and total == 3.0,
+          "a child born at its parent's tick, or with no readable birth, still counts (read %r)" % sorted(seen))
 
 
 def self_test_progress(check):
@@ -2547,17 +2768,18 @@ def self_test_timeouts(check):
             # Normal jobs are unaffected: output merged, exit codes carried, the
             # log file holds exactly what the report prints, nothing marks them.
             spawn = spawner(script, root, env, scratch, lambda job: 120.0)
-            code, output, hit = spawn(ok)
+            code, output, hit, cpu = spawn(ok)
+            check(cpu is not None and cpu >= 0, "the spawner reads the rig's CPU seconds: %r" % (cpu,))
             log = rig_log_path(scratch, ok)
             check(code == 0 and hit is None and b"before from ok" in output and b"finished ok" in output,
                   "a normal rig runs as before, stderr merged into its output: %r %r" % (code, output))
             check(os.path.isfile(log) and Path(log).read_bytes() == output,
                   "its output is the same bytes in its log file: %s" % log)
-            code, output, hit = spawn(fail)
+            code, output, hit, _cpu = spawn(fail)
             check(code == 5 and hit is None and b"before from fail" in output,
                   "a failing rig still fails with its own exit code: %r %r" % (code, output))
             before = sorted(os.listdir(scratch))
-            code, output, hit = spawner(script, root, env, None, None)(ok)
+            code, output, hit, _cpu = spawner(script, root, env, None, None)(ok)
             check(code == 0 and b"finished ok" in output and hit is None and sorted(os.listdir(scratch)) == before,
                   "without --exe-dir or a timeout the output is still captured, leaving no file: %r" % output)
 

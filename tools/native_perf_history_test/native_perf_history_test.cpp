@@ -1,6 +1,12 @@
 #include "../../src/d3d11/native_perf_history.h"
 #include "../../src/d3d11/native_benchmark_collector.h"
 #include "../../src/d3d11/frame_ticks.h"
+#include "../../src/d3d11/xess_fg_presented.h"
+#include "../../src/common/perf_presented.h"
+#include "../../src/common/fps_overlay_mode.h"
+#include "../../src/d3d11/menu_flat_layout.h"
+#include "../../src/d3d11/menu_policy.h"
+#include <vector>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -634,6 +640,248 @@ void frameTickCostNote() {
     const FrameTickSummary s = t.cut("edge", FrameTicks::now(), f.QuadPart);
     check(s.marks > 0, "frame ticks: the live clock records marks");
 }
+// ---- the presented frame rate (xess_fg_presented.h, perf_presented.h) -------------------------------------------------------------------------------
+std::string noteOf(fgpresented::Tally& t) {
+    char note[240]="";
+    return t.takeNote(note,sizeof(note))?std::string(note):std::string("<none>");
+}
+void presentedTally() {
+    using fgpresented::Source;using fgpresented::Tally;
+    uint64_t total=0;int64_t qpc=0;Source src=Source::None;
+    {   // nothing sampled: no count at all, which is not a count of zero
+        Tally t;
+        check(!t.get(&total,&qpc,&src)&&!t.unavailable()&&noteOf(t)=="<none>","presented: a tally nobody fed has no count, is not unavailable and says nothing");
+    }
+    {   // XeSS-FG's own count per Present, summed: never rendered * (1 + generated)
+        Tally t;
+        const uint32_t perPresent[]={2,2,1,3,2,3};uint64_t want=0;int64_t at=100;
+        for(uint32_t f:perPresent){t.onStatus(true,f,at);want+=f;at+=17;}
+        check(t.get(&total,&qpc,&src)&&total==want&&total==13,"presented: the status's frames per Present are summed (13 here, not 6 Presents times a factor)");
+        check(src==Source::StatusFrames&&qpc==at-17,"presented: the status is the source and its time is the last Present's");
+        const std::string first=noteOf(t),second=noteOf(t);
+        check(first=="perf: presented frames from XeSS-FG present status (framesPresented, summed per Present)"&&second=="<none>","presented: the source is logged once, in the words the log tool can find");
+        check(!t.wantsStats(),"presented: while the status works, frame statistics are not read");
+    }
+    {   // a status of 0 or above the bound is not a count of one Present's frames; one odd sample in a status that works is dropped
+        Tally t;t.onStatus(true,2,1);t.onStatus(true,0,2);t.onStatus(true,fgpresented::kMaxFramesPerPresent+1,3);t.onStatus(false,0,4);
+        check(t.get(&total,&qpc,&src)&&total==2&&!t.wantsStats(),"presented: an odd status (0, too big, failed) adds nothing and does not end a status that works");
+    }
+    {   // the status call fails: after kProbePresents the statistics take over
+        Tally t;
+        for(unsigned i=0;i<fgpresented::kProbePresents-1;++i)t.onStatus(false,0,i);
+        check(!t.wantsStats()&&!t.get(&total,&qpc,&src),"presented: a status that has failed fewer times than the probe is still waited on");
+        t.onStatus(false,0,99);
+        check(t.wantsStats()&&t.statusWhy()&&std::strstr(t.statusWhy(),"fails"),"presented: a status that never works is given up on after the probe, with its reason");
+        t.onStats(true,false,1000,0,10);   // the baseline
+        check(!t.get(&total,&qpc,&src),"presented: the first frame statistics are a baseline, not frames");
+        t.onStats(true,false,1002,500,20);t.onStats(true,false,1004,600,30);
+        check(t.get(&total,&qpc,&src)&&total==4&&src==Source::FrameStatistics&&qpc==600,"presented: frame statistics add PresentCount's steps, timed by SyncQPCTime");
+        check(noteOf(t)=="perf: presented frames from DXGI frame statistics (PresentCount)","presented: the statistics source is logged when it starts");
+    }
+    {   // a status that says 0 every time
+        Tally t;
+        for(unsigned i=0;i<fgpresented::kProbePresents;++i)t.onStatus(true,0,i);
+        check(t.wantsStats()&&t.statusWhy()&&std::strstr(t.statusWhy(),"never reports"),"presented: a status that always says 0 is given up on, and the reason says so");
+    }
+    {   // wrap, disjoint, a restarted counter
+        Tally t;t.onSwapChainChanged();
+        t.onStats(true,false,0xFFFFFFFEu,0,1);t.onStats(true,false,2,10,2);
+        check(t.get(&total,&qpc,&src)&&total==4,"presented: PresentCount wrapping past 2^32 is a small step (0xFFFFFFFE to 2 is 4)");
+        t.onStats(false,true,0,0,3);t.onStats(true,false,500,20,4);
+        check(t.get(&total,nullptr,nullptr)&&total==4,"presented: a DISJOINT result and the sample after it add nothing (a new baseline)");
+        t.onStats(true,false,501,30,5);
+        check(t.get(&total,nullptr,nullptr)&&total==5,"presented: counting resumes from that baseline");
+        t.onStats(true,false,501+fgpresented::kMaxStatsStep+1,40,6);t.onStats(true,false,502+fgpresented::kMaxStatsStep+1,50,7);
+        check(t.get(&total,nullptr,nullptr)&&total==6,"presented: a step beyond the bound is a restarted counter, not 1000 frames");
+    }
+    {   // the bridge falls back: the count carries on from the plain swap chain's statistics
+        Tally t;
+        for(int i=0;i<10;++i)t.onStatus(true,2,i);
+        noteOf(t);
+        t.onSwapChainChanged();
+        check(t.wantsStats()&&t.get(&total,&qpc,&src)&&total==20&&src==Source::StatusFrames,"presented: after the fall back the count so far stands and statistics are wanted");
+        t.onStats(true,false,50,1000,100);t.onStats(true,false,51,1010,110);t.onStats(true,false,52,1020,120);
+        check(t.get(&total,&qpc,&src)&&total==22&&src==Source::FrameStatistics&&qpc==1020,"presented: the plain swap chain's presents are added from its own baseline (one frame each)");
+        check(noteOf(t)=="perf: presented frames from DXGI frame statistics (PresentCount)","presented: the switch of source is logged");
+    }
+    {   // unavailable: said with the reason, never as 0
+        Tally t;
+        for(unsigned i=0;i<fgpresented::kProbePresents;++i)t.onStatus(false,0,i);
+        for(unsigned i=0;i<fgpresented::kProbePresents;++i)t.onStats(false,false,0,0,i);
+        check(t.unavailable()&&!t.get(&total,&qpc,&src)&&std::strlen(t.unavailableWhy())>0,"presented: neither source works: unavailable with a reason, and no count (not zero)");
+        check(noteOf(t).rfind("perf: presented frames unavailable (",0)==0,"presented: unavailable is logged once with its reason");
+        Tally flat;
+        for(unsigned i=0;i<fgpresented::kProbePresents;++i)flat.onStatus(false,0,i);
+        for(unsigned i=0;i<4*fgpresented::kProbePresents+2;++i)flat.onStats(true,false,7,i,i);
+        check(flat.unavailable()&&std::strstr(flat.unavailableWhy(),"never advance"),"presented: statistics that never advance are unavailable too, not a rate of zero");
+    }
+}
+void presentedRing() {
+    {   // a session without a bridge: nothing observed, and every answer is "absent"
+        PresentedRing r;
+        float v[8];
+        check(!r.any()&&r.count()==0&&r.copy(v,8)==0&&r.stats().count==0&&r.pushes()==0,"presented ring: never fed is empty, with no stats and no samples (absent, not 0)");
+    }
+    {   // 2x generation: the counter gains 2 per rendered frame (17 ms)
+        PresentedRing r;
+        r.observe(0,0,1000);
+        check(!r.any(),"presented ring: the first observation is a baseline");
+        for(int i=1;i<=10;++i)r.observe(uint64_t(2*i),int64_t(17*i),1000);
+        const PerfStats s=r.stats();
+        check(r.count()==10&&std::fabs(s.avgMs-8.5f)<1e-4f,"presented ring: two frames per 17 ms rendered frame is an 8.5 ms period");
+        check(std::fabs(perfFpsOf(s.avgMs)-117.647f)<0.01f,"presented ring: ...which is 117.6 fps shown");
+        float v[16];
+        check(r.copy(v,16)==10&&std::fabs(v[0]-8.5f)<1e-4f&&r.copy(v,4)==4,"presented ring: the strip's samples are those periods, newest last");
+    }
+    {   // the counter lags a Present: no entry, and the time goes to the next one
+        PresentedRing r;r.observe(10,0,1000);r.observe(10,17,1000);
+        check(!r.any(),"presented ring: a Present that did not move the counter makes no entry");
+        r.observe(14,34,1000);
+        check(r.count()==1&&std::fabs(r.periodAt(0)-8.5f)<1e-4f,"presented ring: ...and the next entry spans both (34 ms, 4 frames, 8.5 ms)");
+    }
+    {   // a wrap or restart of the counter, a long gap, a rebase
+        PresentedRing r;r.observe(100,0,1000);r.observe(102,17,1000);
+        r.observe(5,34,1000);
+        check(r.count()==1,"presented ring: a counter that went backwards is a new baseline, not an entry");
+        r.observe(7,51,1000);
+        check(r.count()==2,"presented ring: counting resumes from the new baseline");
+        r.observe(9,51+6000,1000);
+        check(r.count()==2,"presented ring: a 6 s gap (a load) is not an entry");
+        r.rebase();r.observe(11,7000,1000);r.observe(13,7017,1000);
+        check(r.count()==3,"presented ring: a rebase (a profile switch) drops the baseline and keeps the strip");
+    }
+    {   // the mean is every frame over the time it took, not the mean of the per-entry periods
+        PresentedRing r;r.observe(0,0,1000);r.observe(1,10,1000);r.observe(3,50,1000);   // 10 ms for 1 frame, 40 ms for 2 (20 ms each)
+        const PerfStats s=r.stats();
+        check(std::fabs(s.avgMs-50.0f/3.0f)<1e-3f,"presented ring: the mean is 50 ms over 3 frames, not the 15 ms mean of the two periods");
+    }
+    {   // the window
+        PresentedRing r;r.observe(0,0,1000);
+        for(int i=1;i<=200;++i)r.observe(uint64_t(i),int64_t(i)*10,1000);   // 200 entries of 10 ms: 2 s
+        for(int i=201;i<=300;++i)r.observe(uint64_t(i)+uint64_t(i-200),int64_t(i)*10,1000);   // 100 entries of 10 ms for 2 frames: 5 ms
+        check(r.stats(1.0f).count==100&&std::fabs(r.stats(1.0f).avgMs-5.0f)<1e-3f,"presented ring: a one-second window covers the newest 100 entries");
+        check(r.stats().count==300&&r.stats().avgMs<10.0f&&r.stats().avgMs>5.0f,"presented ring: the whole ring covers all of them");
+    }
+    {   // the capacity
+        PresentedRing r;r.observe(0,0,1000);
+        for(int i=1;i<=PresentedRing::kCapacity+50;++i)r.observe(uint64_t(i),int64_t(i)*10,1000);
+        check(r.count()==PresentedRing::kCapacity&&r.pushes()==uint64_t(PresentedRing::kCapacity+50),"presented ring: it keeps the newest kCapacity and counts every push");
+    }
+}
+void presentedBudgets() {
+    check(std::fabs(displayBudgetMs(144.0f)-6.9444f)<1e-3f&&std::fabs(displayBudgetMs(60.0f)-16.6667f)<1e-3f,"budget: the presented budget is the refresh period");
+    check(displayBudgetMs(0.0f)==kUnknownRefreshBudgetMs&&displayBudgetMs(1.0f)==kUnknownRefreshBudgetMs&&displayBudgetMs(5000.0f)==kUnknownRefreshBudgetMs,"budget: an unknown or absurd rate falls back to 11.1 ms");
+    check(std::fabs(renderedBudgetMs(144.0f,0)-6.9444f)<1e-3f,"budget: without frame generation the rendered budget is the refresh period");
+    check(std::fabs(renderedBudgetMs(144.0f,1)-13.8889f)<1e-3f&&std::fabs(renderedBudgetMs(60.0f,3)-66.6667f)<1e-3f,"budget: the rendered budget is that period times (1 + active generated frames)");
+    check(std::fabs(renderedBudgetMs(0.0f,2)-33.3f)<1e-3f,"budget: an unknown rate still scales with the factor");
+    check(presentedStateOf(false,true,false,true)==PresentedState::Absent&&presentedStateOf(false,false,false,false)==PresentedState::Absent,"state: no bridge is absent, whatever else says");
+    check(presentedStateOf(true,true,false,true)==PresentedState::Counting&&presentedStateOf(true,true,false,false)==PresentedState::Measuring,"state: counting needs an entry; before it, measuring");
+    check(presentedStateOf(true,false,true,false)==PresentedState::Unavailable&&presentedStateOf(true,false,false,false)==PresentedState::Measuring,"state: unavailable only when said; not sampled yet is measuring");
+    check(presentedStateOf(true,true,true,true)==PresentedState::Counting,"state: a count that came back after an unavailable verdict is counting");
+}
+struct TileRow{std::string caption,value,sub;};
+std::vector<TileRow> tilesOf(const PerfReadout& r) {
+    std::vector<TileRow> v;
+    emitRateTiles(r,[&](const char* c,const char* val,const char* sub){v.push_back({c,val,sub?sub:""});});
+    return v;
+}
+PerfReadout bridged(PresentedState st,uint32_t active) {
+    PerfReadout r;r.haveRendered=true;r.renderedFps=58.4f;r.renderedMs=17.1f;r.renderedLowFps=52.0f;r.renderedLowMs=19.2f;
+    r.haveCpu=true;r.cpuMs=9.14f;r.presented=st;r.presentedFps=116.8f;r.presentedMs=8.56f;r.presentedLowFps=104.0f;r.presentedLowMs=9.6f;r.activeGenerated=active;
+    return r;
+}
+void readoutText() {
+    char line[160];
+    {   // no bridge: the compact formatter declines, so today's line is printed, and there are three tiles and no note
+        PerfReadout r=bridged(PresentedState::Absent,0);
+        check(!formatCompactLine(r,line,sizeof(line)),"readout: without a bridge the compact formatter leaves the line to the one printed today");
+        const std::vector<TileRow> t=tilesOf(r);
+        char note[80]="x";formatBridgeNote(r,note,sizeof(note));
+        check(t.size()==3&&t[0].caption=="RENDERED"&&t[1].caption=="FRAME TIME"&&t[2].caption=="1% LOW"&&note[0]==0,"readout: without a bridge only the rendered tiles show, and no note");
+    }
+    {   // frame generation 2x
+        PerfReadout r=bridged(PresentedState::Counting,1);
+        check(formatCompactLine(r,line,sizeof(line))&&std::string(line)=="render 58 / shown 117 fps   cpu 9.1 ms","readout: the compact line names both rates and the CPU");
+        r.drops=2;
+        check(formatCompactLine(r,line,sizeof(line))&&std::string(line)=="render 58 / shown 117 fps   cpu 9.1 ms   drops 2","readout: drops are appended only when there were some");
+        const std::vector<TileRow> t=tilesOf(r);
+        check(t.size()==6&&t[0].value=="58.4"&&t[1].value=="17.1"&&t[2].value=="52"&&t[3].caption=="PRESENTED"&&t[3].value=="116.8"&&t[4].caption=="PRESENTED 1% LOW"&&t[4].value=="104","readout: the rendered and presented tiles carry their own numbers");
+        check(t[5].caption=="FRAME GENERATION"&&t[5].value=="x2","readout: the active factor is 1 + the generated frames");
+        r.activeGenerated=3;check(tilesOf(r)[5].value=="x4","readout: three generated frames are x4");
+    }
+    {   // bridged with frame generation off: both shown, equal, x1
+        PerfReadout r=bridged(PresentedState::Counting,0);
+        r.presentedFps=r.renderedFps;
+        const std::vector<TileRow> t=tilesOf(r);
+        check(t.size()==6&&t[5].value=="x1"&&t[5].sub=="off: shown = rendered"&&t[3].value==t[0].value,"readout: with frame generation off the bridge still shows both, equal, at x1");
+    }
+    {   // unavailable and stopped and measuring: three different words
+        PerfReadout r=bridged(PresentedState::Unavailable,0);
+        std::snprintf(r.unavailableWhy,sizeof(r.unavailableWhy),"frame statistics never advance");
+        char note[200];formatBridgeNote(r,note,sizeof(note));
+        check(std::string(note)=="Presented: unavailable (frame statistics never advance)","readout: unavailable is said with its reason");
+        check(formatCompactLine(r,line,sizeof(line))&&std::string(line)=="render 58 fps   shown n/a   cpu 9.1 ms","readout: ...and in the compact line as n/a, not a zero");
+        check(tilesOf(r)[3].value=="--"&&tilesOf(r)[3].sub=="unavailable","readout: ...and in the tile");
+        r=bridged(PresentedState::Counting,0);r.fgStopped=true;std::snprintf(r.stopped,sizeof(r.stopped),"a wait on the queue timed out");
+        formatBridgeNote(r,note,sizeof(note));
+        check(std::string(note)=="FG stopped: a wait on the queue timed out"&&tilesOf(r)[5].sub=="stopped","readout: a stopped bridge is said as FG stopped with the reason");
+        r=bridged(PresentedState::Measuring,0);
+        check(formatCompactLine(r,line,sizeof(line))&&std::string(line)=="render 58 / shown -- fps   cpu 9.1 ms"&&tilesOf(r)[3].sub=="measuring","readout: a count not measured yet is --, not 0");
+        formatBridgeNote(r,note,sizeof(note));check(note[0]==0,"readout: measuring has no note");
+        PerfReadout none;none.presented=PresentedState::Counting;
+        check(formatCompactLine(none,line,sizeof(line))&&std::string(line)=="measuring","readout: no rendered frames yet is \"measuring\"");
+    }
+}
+// ---- the frame-rate readout (fps_overlay_mode.h, menu_flat_layout.h, menu_policy.h) ------------------------------------------------------------------
+void fpsOverlayModes() {
+    check(parseFpsOverlay("off")==FpsOverlayMode::Off&&parseFpsOverlay("compact")==FpsOverlayMode::Compact&&parseFpsOverlay("detailed")==FpsOverlayMode::Detailed,"fps overlay: the three words");
+    check(parseFpsOverlay("on")==FpsOverlayMode::Compact&&parseFpsOverlay("true")==FpsOverlayMode::Compact&&parseFpsOverlay("1")==FpsOverlayMode::Compact&&parseFpsOverlay("yes")==FpsOverlayMode::Compact,"fps overlay: the old on words read as compact");
+    check(parseFpsOverlay("false")==FpsOverlayMode::Off&&parseFpsOverlay("0")==FpsOverlayMode::Off&&parseFpsOverlay("no")==FpsOverlayMode::Off,"fps overlay: the old off words read as off");
+    check(parseFpsOverlay("  Detailed \r")==FpsOverlayMode::Detailed&&parseFpsOverlay("ON")==FpsOverlayMode::Compact,"fps overlay: case and surrounding blanks do not matter");
+    check(parseFpsOverlay("")==FpsOverlayMode::Off&&parseFpsOverlay(nullptr)==FpsOverlayMode::Off&&parseFpsOverlay("loud")==FpsOverlayMode::Off,"fps overlay: empty, missing and unknown read as the default, off");
+    check(!std::strcmp(fpsOverlayWord(FpsOverlayMode::Compact),"compact")&&parseFpsOverlay(fpsOverlayWord(FpsOverlayMode::Detailed))==FpsOverlayMode::Detailed,"fps overlay: the words the menu writes read back");
+}
+void detailedText() {
+    char a[96],b[96];
+    PerfReadout r=bridged(PresentedState::Counting,1);r.drops=3;
+    formatDetailRates(r,a,sizeof(a));formatDetailTimes(r,b,sizeof(b));
+    check(std::string(a)=="render 58.4 / shown 116.8 fps"&&std::string(b)=="17.1 ms   worst 52 fps   cpu 9.1 ms   drops 3","detailed: line 1 the two rates, line 2 frame time, worst, cpu and drops");
+    r=bridged(PresentedState::Absent,0);r.haveCpu=false;
+    formatDetailRates(r,a,sizeof(a));formatDetailTimes(r,b,sizeof(b));
+    check(std::string(a)=="58.4 fps"&&std::string(b)=="17.1 ms   worst 52 fps   drops 0","detailed: without a bridge one rate, and no cpu when it is unknown");
+    r=bridged(PresentedState::Unavailable,0);formatDetailRates(r,a,sizeof(a));
+    check(std::string(a)=="render 58.4 fps   shown n/a","detailed: an unavailable count is n/a, not a number");
+    PerfReadout none;formatDetailRates(none,a,sizeof(a));formatDetailTimes(none,b,sizeof(b));
+    check(std::string(a)=="measuring"&&b[0]==0,"detailed: nothing rendered yet is measuring, with no second line");
+}
+void flatCorner() {
+    for(int outH:{1080,1440,2160}){
+        const int outW=outH*16/9;
+        const FlatCardSize fs=flatCardSize(outW,outH,kFlatMenuCardHeightFrac);
+        const int w=fs.capPx*28,h=fs.capPx*14;
+        const FlatPlacement ul=flatPlace(outW,outH,w,h),ur=flatPlace(outW,outH,w,h,FlatCorner::UpperRight);
+        const int margin=int(std::lround(kFlatMarginFrac*outW));
+        check(ul.oneToOne&&ur.oneToOne&&ur.w==w&&ur.h==h,"flat corner: the readout is composited 1:1 at flat sizes");
+        check(ul.x==margin&&ur.x+ur.w==outW-margin&&ur.y==ul.y,"flat corner: upper right is the same 2% margin from the right edge, at the same height");
+        check(std::fabs((ur.shift-ur.halfW)-(-1.0f+2.0f*float(ur.x)/float(outW)))<1e-5f&&ur.shift>ul.shift,"flat corner: the geometry's left edge is the placed x, to the right of the upper left one");
+    }
+    const FlatPlacement def=flatPlace(1920,1080,300,200);
+    check(def.x==flatPlace(1920,1080,300,200,FlatCorner::UpperLeft).x,"flat corner: the default is upper left, as the menu and notices were placed");
+}
+void readoutMachine() {
+    ScreenReadoutState m;
+    check(!m.tick(false,false,5)&&!m.compositing(),"readout machine: not wanted does nothing");
+    check(m.tick(true,false,5),"readout machine: wanted, it asks for the first raster");
+    m.didSubmit(5);
+    check(!m.compositing()&&!m.tick(true,false,5)&&!m.compositing(),"readout machine: the raster is not shown until the panel has taken one");
+    check(!m.tick(true,false,6)&&m.compositing(),"readout machine: shown once the serial moved");
+    check(m.tick(true,true,6)&&m.compositing(),"readout machine: a refresh is asked for and the card stays up");
+    m.didSubmit(6);
+    check(m.compositing(),"readout machine: a refresh submit does not hide it");
+    m.tick(false,false,7);
+    check(!m.compositing()&&m.tick(true,false,7),"readout machine: the monitor panel (or the menu's locked line) hides it, and it starts again from nothing");
+    m.didSubmit(7);check(!m.compositing(),"readout machine: and is not shown until its own raster is taken");
+}
 }
 int wmain(int argc,wchar_t** argv) {
     if(argc!=2)return 2;
@@ -641,5 +889,7 @@ int wmain(int argc,wchar_t** argv) {
     if(std::wcscmp(argv[1],L"--self-test"))return 2;
     averages();invalidation();agesAndValues();displayBase();callerWorkCrossing();graphs();benchmarkWindows();benchmarkAdmission();
     frameTicksChain();frameTicksTopThree();frameTicksOddClocks();frameTicksUncut();frameShareText();nativeLongFrameFits();frameTickCostNote();
+    fpsOverlayModes();detailedText();flatCorner();readoutMachine();
+    presentedTally();presentedRing();presentedBudgets();readoutText();
     std::printf("native_perf_history_test: %u checks, %u failures\n",checks,failures);return failures?1:0;
 }

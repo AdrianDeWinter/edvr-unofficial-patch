@@ -1,4 +1,5 @@
 #include "openvr_system.h"
+#include "native_trace.h"
 #include "canted_display.h"
 #include "native_cpu_trace.h"
 #include <algorithm>
@@ -169,6 +170,8 @@ HmdMatrix44_t OpenVRSystem::GetProjectionMatrix(EVREye e,float nearZ,float farZ,
       if(liveGeometry) source_.noteProjection(s.geometry.native.sequence,eye,nearZ,farZ);
     }
   }
+  // What this read was answered with (the matrix's own vertical span), for the scope zoom's report of what each getter returned.
+  if(eyeValid(e))source_.noteProjectionRead(eye,false,s.toldRawSet&&liveGeometry,accepted?matrixSpanV(out):0.0f,frameRva(exe_,reinterpret_cast<uintptr_t>(_ReturnAddress())));
   // Record unique clip-plane pairs in each eye/API/live-cache/result bucket.
   // Jitter and frame sequence are deliberately excluded from the key. Separate
   // rejection capacity prevents normal scene queries hiding a bad near/far.
@@ -209,11 +212,13 @@ void OpenVRSystem::GetProjectionRaw(EVREye e,float* l,float* r,float* t,float* b
   const unsigned eye=unsigned(e);
   const bool liveGeometry=geometryValid(s);
   if(opticsAvailable(s)&&eyeValid(e)) {
-    const RawFov base=liveGeometry?s.geometry.raw[eye]:s.optics.raw[eye];
+    // The scope zoom narrows eye 0's matrix; this getter, which the game's UI scale reads, keeps the frustum the game would have been told without it.
+    const RawFov base=liveGeometry?(s.toldRawSet?s.toldRaw[eye]:s.geometry.raw[eye]):s.optics.raw[eye];
     if(liveGeometry) shiftedRawFov(base,s.tangentShift[eye][0],
                                    s.tangentShift[eye][1],out);
     else out=base;
   }
+  if(eyeValid(e))source_.noteProjectionRead(eye,true,s.toldRawSet&&liveGeometry,rawSpanV(out),frameRva(exe_,reinterpret_cast<uintptr_t>(_ReturnAddress())));
   if(l)*l=out.left;if(r)*r=out.right;if(t)*t=out.top;if(b)*b=out.bottom;
 }
 DistortionCoordinates_t OpenVRSystem::ComputeDistortion(EVREye,float,float) { unavailable(3);return {}; }
@@ -225,11 +230,17 @@ HmdMatrix34_t OpenVRSystem::GetEyeToHeadTransform(EVREye e) {
   // it raw, so a canted headset's per-eye yaw and pitch would arrive inverted:
   // the game is given S*E*S, S = diag(1,1,-1), each eye's rotation in its own
   // handedness (canted_display.h, docs/canted-projection.md). On parallel panels
-  // that is the located transform to the bit. The located transform itself stays
-  // what the snapshot holds: the native frame tables and the layer read it there.
-  // Only this answer to the game changes, and nothing reads it back.
-  const HmdMatrix34_t located=liveGeometry?s.geometry.eyeToHead[unsigned(e)]:s.optics.eyeToHead[unsigned(e)];
-  return gameHandedness(located);
+  // that is the snapshot's transform to the bit. The snapshot's transform is the
+  // pair Elite is told, the located eyes moved by the world scale (geometry_snapshot.h);
+  // the layer and EDVR's own drawing read the located views instead. Only this
+  // answer to the game changes, and nothing reads it back.
+  const HmdMatrix34_t told=liveGeometry?s.geometry.eyeToHead[unsigned(e)]:s.optics.eyeToHead[unsigned(e)];
+  noteWorldScaleRead(liveGeometry?s.geometry.native.worldScalePercent:s.optics.worldScalePercent,liveGeometry?s.geometry.native.sequence:s.optics.sequence);
+  return gameHandedness(told);
+}
+void OpenVRSystem::noteWorldScaleRead(uint32_t percent,uint64_t sequence) noexcept {
+  if(percent==worldScaleRead_.load(std::memory_order_relaxed))return;
+  if(worldScaleRead_.exchange(percent,std::memory_order_relaxed)!=percent)source_.noteWorldScaleRead(percent,sequence);
 }
 bool OpenVRSystem::GetTimeSinceLastVsync(float* seconds,uint64_t* frame) {
   NativeCpuTraceSpan trace(EdvrCpuGetTimeSinceLastVsync);
@@ -254,6 +265,16 @@ void OpenVRSystem::GetDeviceToAbsoluteTrackingPose(ETrackingUniverseOrigin origi
   if(!originValid(origin)||!std::isfinite(prediction)){source_.noteHeadCallFailed(call,prediction);trace.finishVoid(0);return;}
   TrackedDevicePose_t p=invalidPose(true);
   const bool located=source_.locateHeadFor(s.generation,origin,prediction,call,p);if(located)poses[0]=p;
+  // F42: every display "now" answer is a sample of the frame's head pose (the latched path, or the cache or hop).
+  if(located&&call.display)g_headPoseProof.sample(&p.mDeviceToAbsoluteTracking.m[0][0],p.bPoseIsValid,
+    t_nowAnsweredLocked?PoseSamplePath::NowLocked:PoseSamplePath::NowOther);
+  // F31: Elite's "now" answer, published for the next frame's input (the world markers' head, the d3d11 half).
+  if(located&&call.display&&p.bPoseIsValid) {
+    const uint32_t answer=publishNowHead(&p.mDeviceToAbsoluteTracking.m[0][0]);
+    if(answer==1)nativeTracePrintf("now head: first published: answer #1 to Elite's now call (rva 0x%X, prediction %.4f s, position %.3f %.3f %.3f)\n",
+      static_cast<unsigned>(call.rva),static_cast<double>(prediction),static_cast<double>(p.mDeviceToAbsoluteTracking.m[0][3]),
+      static_cast<double>(p.mDeviceToAbsoluteTracking.m[1][3]),static_cast<double>(p.mDeviceToAbsoluteTracking.m[2][3]));
+  }
   trace.finishVoid(located?1:0);
 }
 void OpenVRSystem::ResetSeatedZeroPose() {
@@ -294,15 +315,11 @@ float OpenVRSystem::GetFloatTrackedDeviceProperty(TrackedDeviceIndex_t i,ETracke
       if(s.displayFrequencyAvailable&&std::isfinite(s.displayFrequency)&&s.displayFrequency>0)value=s.displayFrequency;
       else e=TrackedProp_ValueNotProvidedByDevice;
     } else {
-      // Effective rendering IPD, derived from runtime eye origins. The full
-      // separation handles asymmetric/canted placement and survives recenter.
+      // Effective rendering IPD, derived from the eye origins Elite is told (the
+      // located ones moved by the world scale). The full separation handles
+      // asymmetric/canted placement and survives recenter.
       if(opticsAvailable(s)) {
-        const auto* eyes=geometryValid(s)?s.geometry.eyeToHead:s.optics.eyeToHead;
-        double squared=0;
-        for(unsigned axis=0;axis<3;++axis) {
-          const double d=double(eyes[1].m[axis][3])-eyes[0].m[axis][3];squared+=d*d;
-        }
-        const double ipd=std::sqrt(squared);
+        const double ipd=eyeSeparation(geometryValid(s)?s.geometry.eyeToHead:s.optics.eyeToHead);
         if(std::isfinite(ipd)&&ipd>0&&ipd<=(std::numeric_limits<float>::max)())value=float(ipd);
       }
       if(!(value>0))e=TrackedProp_ValueNotProvidedByDevice;
@@ -356,7 +373,7 @@ bool OpenVRSystem::PollNextEventWithPose(ETrackingUniverseOrigin origin,VREvent_
 const OpenVRSystem::MeshEntry* OpenVRSystem::eyeMesh(const SystemRead& s,unsigned e,const char*& failure) {
   // Keep temporal jitter out of the retained mesh; its conservative inset
   // leaves the unjittered visible region unmasked.
-  const RawFov fov=geometryValid(s)?s.geometry.raw[e]:s.optics.raw[e];
+  const RawFov fov=geometryValid(s)?(s.toldRawSet?s.toldRaw[e]:s.geometry.raw[e]):s.optics.raw[e];   // the scope zoom's narrowed frustum is never the mesh's
   for(auto& entry:meshes_)if(entry->masks==s.hiddenMasks&&entry->eye==e&&
       std::memcmp(&entry->fov,&fov,sizeof(fov))==0)return entry.get();
   if(meshes_.size()>=64){failure="retention_limit";return nullptr;}
@@ -391,6 +408,7 @@ HiddenAreaMesh_t OpenVRSystem::GetHiddenAreaMesh(EVREye eye) {
     } else if(!s.hiddenMasksCompatible)reason="modified_frustum";
   } catch(...) {reason="allocation_failure";result={};}
   if(meshProbe_[e].take(GetTickCount64()))source_.noteHiddenMesh(e,revision,result.unTriangleCount,reason,dropped);
+  if(result.pVertexData&&result.unTriangleCount)source_.noteHiddenMeshServed(e);
   return result;
 }
 bool OpenVRSystem::GetControllerState(TrackedDeviceIndex_t,VRControllerState_t* state) {if(state)*state={};return false;}

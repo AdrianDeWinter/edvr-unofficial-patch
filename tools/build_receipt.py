@@ -264,7 +264,10 @@ def _self_test_tree_verify(root):
     _write(root / ".gitignore", "build/\ndist/\n")
     _write(root / "source.txt", "one")
     git("add", ".gitignore", "source.txt")
-    git("-c", "user.email=edvr@example.invalid", "-c", "user.name=edvr", "commit", "-q", "-m", "fixture")
+    # Unsigned, whatever the user's global config says: a global commit.gpgsign reached this throwaway repo, and gpg's
+    # passphrase prompt held the gate for six minutes before the commit failed (2026-11-13). linux_toolchain.py does the same.
+    git("-c", "user.email=edvr@example.invalid", "-c", "user.name=edvr", "-c", "commit.gpgsign=false",
+        "commit", "-q", "-m", "fixture")
     receipt = root / "build" / "full_build_receipt.json"
     # Written directly: write_receipt would probe the C++ toolchain, which this test does not need.
     receipt.parent.mkdir(parents=True, exist_ok=True)

@@ -413,7 +413,7 @@ inline int flatHdrCrumbWiringTests() {
     // -- the real Present ---------------------------------------------------------------------------------------------------
     const std::string hooked = body(hook, "HRESULT STDMETHODCALLTYPE hookedPresent(");
     ordered(hooked, {"const bool routeCrumbs = hdrCrumbPresentSide();", "hdrCrumbWrite(\"present\", \"begin\");", "const int64_t presentT0 = qpcNow();",
-                     "g_state->realPresent(self, syncInterval, flags);", "const int64_t presentT1 = qpcNow();",
+                     "g_state->realPresent(self, presentSync, flags);", "const int64_t presentT1 = qpcNow();",
                      "hdrCrumbWrite(\"present\", \"end\", \"hr=0x%08X removed=0x%08X\"", "flatRuntimePresent(self, g_state->frameCounter, hr, flags);"},
             "the real Present is bracketed by its crumbs, outside the clock reads that time it, and before the runtime's frame end");
 
@@ -430,7 +430,9 @@ inline int flatHdrCrumbWiringTests() {
                     "drawHdrTarget(context,g.finishHdr.Get(),f.renderWidth,f.renderHeight,views,overlay?17:8);"},
             "the resolve writes capture, copy, prep, backend and finish in the order it runs them, each crumb before its call");
     const std::string spatial = body(resolve, "bool flatMonoResolveSpatialFallback(ID3D11Device* device,ID3D11DeviceContext* context,const FlatMonoResolveFrame& f,");
-    ordered(spatial, {"CrumbScope crumbs(f.hdr);", "Isolate isolated(", "HdrCrumbSpan copyStep(", "context->CopyResource(g.color.texture.Get(),color.Get());",
+    // The recovery copies into its own input image or the temporal set's when that fits (spatialImages, 2026-10-29), never through resources().
+    ordered(spatial, {"CrumbScope crumbs(f.hdr);", "if(!spatialImages(f,evalW,evalH,&spatialIn,&spatialOut,reason))return false;", "Isolate isolated(",
+                      "HdrCrumbSpan copyStep(", "context->CopyResource(spatialIn->texture.Get(),color.Get());",
                       "drawHdrTarget(context,g.spatialHdr.Get(),f.renderWidth,f.renderHeight,views,1);"},
             "the spatial recovery writes the same capture, copy and finish crumbs around the same calls");
     const std::string isolate = body(resolve, "struct Isolate {");
@@ -513,8 +515,10 @@ inline int flatHdrCrumbWiringTests() {
            count(solve,"const bool celestialBound=f.celestialRecords!=nullptr && !reset;")==1 &&
            count(solve,"const bool skin=engine && f.engine.skin!=nullptr;")==1,
            "prep binds and clears exactly the same fourteen legacy, sixteen foreground, eighteen skinned-source or nineteen planet-record SRV slots once");
-    ordered(spatial, {"context->CopyResource(g.color.texture.Get(),color.Get());", "if(hdr)++stats.hdrCopied;"},
+    ordered(spatial, {"context->CopyResource(spatialIn->texture.Get(),color.Get());", "if(hdr)++stats.hdrCopied;"},
             "the spatial recovery counts its copy too");
+    expect(!spatial.empty() && spatial.find("resources(f,reason)") == std::string::npos,
+           "the spatial recovery never asks resources(), so a fallback frame cannot rebuild the temporal set (2026-10-29, the scoped ADS entry)");
     ordered(resolve, {"\"create-context-state\"", "d1->CreateDeviceContextState(", "\"create-compute-shaders\"", "device->CreateComputeShader(kFlatMonoPrepBytecode",
                       "\"create-constants-sampler\"", "device->CreateBuffer(&cb", "device->CreateSamplerState(&sm",
                       "\"create-hdr-vs\"", "\"create-hdr-ps-finish\"", "\"create-hdr-ps-spatial\"", "\"create-rtv\"", "CreateRenderTargetView(texture,&rv"},

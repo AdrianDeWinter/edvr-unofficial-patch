@@ -34,22 +34,56 @@ struct FlatPageRow {
 inline constexpr FlatPageRow kFlatPageRows[] = {
     {"fix", "temporal_aa",       FlatRowRead::RequestedMode},
     {"fix", "temporal_aa_model", FlatRowRead::Allowlist},
+    // DittoSR's picture controls, under the DLSS preset and dimmed unless Anti-aliasing is DittoSR (menu.cpp). `menu performance`, so VR's page has them too.
+    {"fix", "dittosr_sharpness", FlatRowRead::Allowlist},
+    {"fix", "dittosr_frame_weight", FlatRowRead::Allowlist},
+    {"fix", "dittosr_anti_shimmer", FlatRowRead::Allowlist},
+    {"fix", "dittosr_sharpen", FlatRowRead::Allowlist},
+    // XeSS Frame Generation (2026-11-12): flat only (`menu flat_performance`), dimmed unless the flat AA mode is XeSS (xessFgToggleRowDim), the frames
+    // row dimmed as well while the toggle is off. The tab's order is edvr.ini's: they sit under the DLSS preset row there.
+    {"fix", "xess_frame_generation", FlatRowRead::Allowlist},
+    {"fix", "xess_generated_frames", FlatRowRead::Allowlist},
     {"fix", "render_sharpness",  FlatRowRead::Allowlist},
     {"fix", "ui_quality",        FlatRowRead::Allowlist},
-    {"fix", "sharp_weapons",     FlatRowRead::Allowlist},   // directly under UI quality, as in VR (2026-10-16)
+    // HUD Anti-Aliasing (2026-10-24), directly under UI quality: flat only. Its `menu flat_performance` token (tools\gen_settings_schema.py) is a page VR's
+    // menu builds none of, so the row is on this tab and not on VR's Performance page; the generator fails the build for a `flat_performance` row not listed here.
+    {"fix", "hud_antialiasing",  FlatRowRead::Allowlist},
     {"fix", "optimized_stations", FlatRowRead::Allowlist},
+    // Directly under Optimized stations, and dimmed while that is off (menu.cpp): `menu performance`, so VR's Performance page shows it too (VR culls a carrier only for now).
+    {"fix", "station_window_distance", FlatRowRead::Allowlist},
+    // Under it, and dimmed while Optimized stations is off (menu.cpp): the rooms behind a carrier's shut doors; also `menu performance`, on VR's page.
+    {"fix", "skip_rooms_behind_doors", FlatRowRead::Allowlist},
+    // The frame-rate readout and its copy in the menu card (2026-11-16): `menu performance`, so VR's page has them too (the yaw and pitch rows mean nothing on a
+    // screen and stay VR's). They sit after the [fix] rows: the tab's order is edvr.ini's.
+    {"menu", "fps_overlay", FlatRowRead::Allowlist},
+    {"menu", "fps_overlay_lock", FlatRowRead::Allowlist},
 };
 inline constexpr size_t kFlatPageRowCount = sizeof(kFlatPageRows) / sizeof(kFlatPageRows[0]);
 
-// The Visual tab (2026-10-22): the [visual] options, for every flat user (Fix tier). Both are choices, both live:
+// The Visual tab (2026-10-22): the [visual] options that do something in flat, for every flat user (Fix tier). All are choices, all live:
 //   intro_video  Intro movie  skip, or the game's own movie (flat, 2026-10-14). On the Performance tab until 2026-10-22, as fix.intro_video.
-//                             Its `menu` token is the bare one, so VR's menu, which has no Visual page, still lists it on the Fixes page.
-//   star_glow    Star glow    100 to 200 percent of the halo the game's own bloom draws around a star; its `menu visual` token is the
-//                             page only this panel builds, as `menu debug` is.
+//                             Its `menu visual` token is the page VR's menu builds too (2026-10-27), so the row is on both Visual pages.
+//   star_glow    Star glow    100 to 400 percent of the halo the game's own bloom draws around a star. Its `menu visual` token (2026-10-27) is the page
+//                             VR's menu builds too: the headset reads the key since the VR port, so the row is on both Visual pages. A row only this tab
+//                             should show would be `menu flat_visual`, a page VR builds none of, as `menu flat_performance` is for the Performance tab.
+//   particle_billboard  Billboards  steady, or the game's own (2026-11-03). The VR fix ported to the flat draw thunks (vscreen.cpp FlatParticleScope):
+//                             plumes stay upright and face the viewer instead of swimming when the mouse turns, and the explosions' billboards lose their roll.
+//                             It is a [fix] key with a plain `menu` token, so its row is on VR's Fix page and, listed here, on this tab too; the edvr.ini order
+//                             puts it ahead of the two [visual] rows.
+// The other `menu visual` rows (World scale, Intro background picture, Screen curve) are VR's: the flat gate (flat_profile_keys.h) refuses their keys, so a
+// flat row for them would show a value that does nothing. They are not listed here.
 // Order is the tab's: menu.cpp walks the generated schema (edvr.ini order) and keeps the rows named here, whatever page their token names.
+// tools\gen_settings_schema.py fails the build for a row named here that the schema has no row for (no `menu` token, a key the code does not read).
 inline constexpr FlatPageRow kFlatVisualRows[] = {
     {"visual", "intro_video", FlatRowRead::Allowlist},
     {"visual", "star_glow",   FlatRowRead::Allowlist},
+    // Cockpit glass (2026-11-03): odyssey (the game's) or the Horizons 3.8 look, both profiles; its `menu visual` token is the page VR's menu builds too.
+    {"visual", "cockpit_glass", FlatRowRead::Allowlist},
+    // Legacy glass dirt (2026-11-05): how much dirt the legacy look draws, in percent. Dimmed unless cockpit_glass is legacy (menu.cpp cockpitGlassDirtRowDisabled).
+    {"visual", "cockpit_glass_dirt", FlatRowRead::Allowlist},
+    // Legacy glass lights (2026-11-06): which lights reach that dirt. Dimmed unless cockpit_glass is legacy, as the row above.
+    {"visual", "cockpit_glass_lights", FlatRowRead::Allowlist},
+    {"fix", "particle_billboard", FlatRowRead::Allowlist},
 };
 inline constexpr size_t kFlatVisualRowCount = sizeof(kFlatVisualRows) / sizeof(kFlatVisualRows[0]);
 
@@ -98,11 +132,61 @@ inline bool flatSharpenRowDim(bool flatProfile, bool antiAliasingOn) {
     return flatProfile && !antiAliasingOn;
 }
 
-// Whether the Sharp weapons row is dimmed (and ignores steps and typing): it lays its layer over the temporal pass's
-// output, so with anti-aliasing off there is nothing for them to act on. The same in both profiles (the caller passes the profile's own reading of
-// fix.temporal_aa). One function so a rig can read the whole truth table; menu.cpp asks it and nothing else.
-inline bool weaponsRowDim(bool antiAliasingOn) {
-    return !antiAliasingOn;
+// Whether the HUD Anti-Aliasing row is dimmed (and ignores steps): it smooths the HUD layer, which is live only while fix.ui_quality is not off AND the flat
+// anti-aliasing is on (flat_ui_layer.cpp: flatUiLayerOn is uiLayerCrispOn, whose stand-down reason with no mode is "no temporal mode is on"), so with either off
+// there is nothing for it to act on. Flat only (VR's menu has no such row). One function so a rig can read the whole truth table; menu.cpp asks it and nothing else.
+inline bool hudAntiAliasingRowDim(bool uiQualityOn, bool antiAliasingOn) {
+    return !uiQualityOn || !antiAliasingOn;
+}
+
+// The XeSS Frame Generation rows (2026-11-12). Frames are generated only under XeSS-SR, so under any other mode neither row means anything. The performance
+// page omits them until Anti-aliasing is XeSS-SR, and omits the frames row until Frame generation is on (aaDependentRowHidden). Flat only. The dim below is
+// what a row that is still on the page would do; menu.cpp asks it and nothing else.
+inline bool xessFgToggleRowDim(bool flatProfile, bool antiAliasingIsXess) {
+    return flatProfile && !antiAliasingIsXess;
+}
+
+// The frames row's dim: the toggle's, and while XeSS Frame Generation is off there is nothing for the multiplier to act on.
+inline bool xessFgFramesRowDim(bool flatProfile, bool antiAliasingIsXess, bool frameGenerationOn) {
+    return xessFgToggleRowDim(flatProfile, antiAliasingIsXess) || !frameGenerationOn;
+}
+
+// A child of Anti-aliasing, or of XeSS Frame Generation. The performance page (and the installer's settings list) leaves it out until that parent is
+// the selected value. `key` is the ini key, `aaMode` is fix.temporal_aa, `fgOn` is fix.xess_frame_generation. Anything else stays.
+inline bool aaModeIs(const char* mode, const char* name) {
+    if (!mode || !name) return false;
+    for (; *mode && *name; ++mode, ++name) {
+        char a = *mode, b = *name;
+        if (a >= 'A' && a <= 'Z') a = static_cast<char>(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = static_cast<char>(b - 'A' + 'a');
+        if (a != b) return false;
+    }
+    return *mode == '\0' && *name == '\0';
+}
+
+inline bool aaDependentRowHidden(const char* key, const char* aaMode, bool fgOn) {
+    if (!key) return false;
+    if (!aaMode) aaMode = "";
+    if (std::strcmp(key, "temporal_aa_model") == 0) return !aaModeIs(aaMode, "dlss") && !aaModeIs(aaMode, "dlaa");
+    if (std::strcmp(key, "dittosr_sharpness") == 0 || std::strcmp(key, "dittosr_frame_weight") == 0 ||
+        std::strcmp(key, "dittosr_anti_shimmer") == 0 || std::strcmp(key, "dittosr_sharpen") == 0)
+        return !aaModeIs(aaMode, "dittosr");
+    if (std::strcmp(key, "xess_frame_generation") == 0) return !aaModeIs(aaMode, "xess");
+    if (std::strcmp(key, "xess_generated_frames") == 0) return !aaModeIs(aaMode, "xess") || !fgOn;
+    return false;
+}
+
+// Whether the frames option `frames` (1 = 2x, 2 = 3x, 3 = 4x) can be chosen on this GPU. `maxFrames` is the GPU's maximum generated frames per rendered frame
+// (xessFgMaxGeneratedFrames), 0 while it is not known yet: then every option is enabled.
+inline bool xessFgFramesOptionEnabled(int frames, unsigned maxFrames) {
+    return maxFrames == 0 || (frames >= 1 && static_cast<unsigned>(frames) <= maxFrames);
+}
+
+// The frames value the panel shows for a stored or typed one: clamped to 1 and, when the GPU's maximum is known, to it. The stored value is not rewritten.
+inline int xessFgFramesShown(int stored, unsigned maxFrames) {
+    int v = stored < 1 ? 1 : stored > 3 ? 3 : stored;
+    if (maxFrames != 0 && static_cast<unsigned>(v) > maxFrames) v = static_cast<int>(maxFrames);
+    return v;
 }
 
 // The first Allowlist row whose dotted key `allows` refuses, or null. `allows` is

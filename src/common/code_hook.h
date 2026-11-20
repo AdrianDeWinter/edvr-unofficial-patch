@@ -97,13 +97,21 @@ public:
     // instructions is worth noticing.
     size_t stolenBytes() const { return m_stolen; }
 
+    // The reason the last install() refused, as the same sentence it logged ("" when it did not refuse). A caller that stands
+    // down quotes it, so its own log line says what CodeHook said and not only that it refused.
+    const char* refusal() const { return m_refusal; }
+
 private:
+    // Logs a refusal exactly as before and keeps the text for refusal().
+    void refusedf(const char* fmt, ...);
+
     void*    m_target = nullptr;
     void*    m_replacement = nullptr;
     uint8_t* m_trampoline = nullptr;
     uint8_t  m_original[16] = {};
     size_t   m_stolen = 0;
     bool     m_installed = false;
+    char     m_refusal[320] = {};
 };
 
 // Length of the x86-64 instruction at `code`, or 0 if this decoder does not
@@ -111,8 +119,10 @@ private:
 //
 // NOT a disassembler, and deliberately not: it understands the shapes that
 // actually begin a compiled function -- register moves, stack adjustment,
-// pushes, the load of a parameter into shadow space, and the rip-relative
-// access to a global -- and answers 0 for everything else.
+// pushes, the load of a parameter into shadow space, the rip-relative
+// access to a global, the unaligned SSE move (movups, 0F 10 / 0F 11) a
+// matrix-copying leaf opens with, and its F3-prefixed scalar-single form
+// (movss) a float-storing leaf opens with -- and answers 0 for everything else.
 //
 // RIP-RELATIVE INSTRUCTIONS ARE MEASURED, NOT REFUSED, and the first function
 // this was ever pointed at is why. It began `FF 05 …` -- an increment of a

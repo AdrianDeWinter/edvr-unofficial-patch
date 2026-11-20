@@ -17,6 +17,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "log_reserve.h"
 
@@ -48,19 +49,22 @@ public:
 
     void note(const char* fmt, ...);
 
-    // A line that is still written after the size cap (log.max_mb) is reached. Before the cap it is exactly note(). After it,
-    // the line is written from a reserve of kLogReserveBytes (1 MiB) a session, in the order it was noted, until the reserve
-    // is spent; the log then says so once and writes no more of these either. For the few lines that are the only record of
-    // something slow (the memory watch's mem: lines), not for anything that can be a note(). It has room for a line of
+    // A line that is also kept in the log's head once the head has ended (log.max_mb, log_rotate.h). Before that it is exactly
+    // note(). After it, the line is written to the tail segment like any other and again to the head, from a budget of half the
+    // head's kept-lines room (max_mb/16), in the order it was noted, until the budget is spent; the head then says so once and
+    // keeps no more of these either. So the line outlives its segment. For the few lines that are the only record of something
+    // slow (the memory watch's mem: lines), not for anything that can be a note(). It has room for a line of
     // kLogReservedLineBytes with its stamp; note() has 1200.
     void noteReserved(const char* fmt, ...);
 
     bool isOpen() const { return m_open; }
     uint64_t dropped() const { return m_dropped.load(std::memory_order_relaxed); }
-    // The size cap in force, in bytes (log.max_mb, read when the log opened); 0 means no cap. For the rigs: the default is pinned
-    // by tools\config_test, and the cap's behaviour at a small explicit value with it.
+    // The size bound in force, in bytes (log.max_mb, read when the log opened); 0 means one file with no bound. For the rigs: the
+    // default is pinned by tools\config_test, and the head and the tail segments at a small explicit value with it.
     uint64_t maxBytes() const { return m_maxBytes; }
     const std::wstring& dir() const { return m_dir; }
+    // How often the flusher notes the volume line (300000 ms; a rig sets it short). Not a setting.
+    void setVolumeIntervalMsForTest(uint32_t ms) { m_volumeIntervalMs.store(ms, std::memory_order_relaxed); }
 
 private:
     Log() = default;
@@ -73,8 +77,18 @@ private:
     void startFlusherOnce();
     void flusherMain();
     void writeBuffer(int index);
-    void writeReserved(int index);
-    void append(const char* text, size_t bytes, bool reserved);
+    void writeRotating(std::vector<char>& b, int index);
+    void writeHead(const char* p, size_t n);
+    void writeTail(const char* p, size_t n, size_t bufferOffset);
+    void writeCurrent(const char* p, size_t n);
+    void writeSegment(const char* p, size_t n, bool stamped);
+    void beginTail();
+    bool openSegment();
+    void deleteOldSegments(uint32_t opening);
+    void writeKept(int index, size_t headEnd);
+    uint32_t segmentAt(size_t bufferOffset) const;
+    void noteVolumeIfDue();
+    void append(const char* text, size_t bytes, bool reserved, uint64_t kind);
 
     struct Impl;
     Impl* m_impl = nullptr;
@@ -95,13 +109,11 @@ private:
     uint64_t m_droppedReported = 0;
     bool m_open = false;
 
-    // Hard ceiling, so a long session cannot fill a disk.
-    uint64_t m_maxBytes = 0;      // 0 = unlimited
+    // Hard ceiling, so a long session cannot fill a disk: the head, its kept lines and the four tail segments together (log_rotate.h).
+    uint64_t m_maxBytes = 0;      // 0 = unlimited, one file
+    // The bytes the head file holds. Touched only where the files are written (the flusher, or close() after it is joined).
     uint64_t m_bytesWritten = 0;
-    bool     m_capped = false;
-    // What noteReserved lines have taken of the reserve since the cap. Touched only where the file is written (the flusher,
-    // or close() after it is joined), like m_bytesWritten.
-    LogReserve m_reserve;
+    std::atomic<uint32_t> m_volumeIntervalMs{300000};
 
     // How much unflushed text may queue between two flusher passes. From
     // log.buffer_mb; see the comment on kDefaultBufferMb in log.cpp for why

@@ -163,10 +163,11 @@ void rotationAndRealTimerCase(Device& d) {
     check(gpuTimingBind(d.dev.Get(), d.ctx.Get()), "bind canonical WARP timer owner");
     check(occurrenceCapFor(GpuCensusSection::DoorSharpen) == 4, "K cap: a door section caps at 4 (both eyes, two occurrences each)");
     check(occurrenceCapFor(GpuCensusSection::FrameUiLayerReissues) == 8, "K cap: a per-draw section caps at 8");
-    check(isDoorSection(GpuCensusSection::DoorUiLayerComposite) && isDoorSection(GpuCensusSection::DoorSkyRing),
-          "section split: the last door section (the sky ring's) is still door");
-    check(static_cast<size_t>(GpuCensusSection::DoorSkyRing) + 1 == static_cast<size_t>(GpuCensusSection::FrameHologramPasses),
-          "section split: the sky ring is the last door section, nested inside the whole and in no top-level door total");
+    check(isDoorSection(GpuCensusSection::DoorUiLayerComposite) && isDoorSection(GpuCensusSection::DoorSkyRing) && isDoorSection(GpuCensusSection::DoorScopeZoom),
+          "section split: the last door section (the scope lens's) is still door");
+    check(static_cast<size_t>(GpuCensusSection::DoorSkyRing) + 1 == static_cast<size_t>(GpuCensusSection::DoorScopeZoom) &&
+              static_cast<size_t>(GpuCensusSection::DoorScopeZoom) + 1 == static_cast<size_t>(GpuCensusSection::FrameHologramPasses),
+          "section split: the scope lens (a top-level door item, in the door total) is the last door section, after the sky ring (nested inside the whole and in no top-level door total)");
     check(!isDoorSection(GpuCensusSection::FrameHologramPasses), "section split: the first in-frame section is not door");
 
     ComPtr<ID3D11RenderTargetView> rtv;
@@ -356,7 +357,8 @@ void rotationAndRealTimerCase(Device& d) {
     bool ownersVisited = true, membersSkipped = true, idleWorldSkipped = true;
     for (size_t i = 0; i < kSections; ++i) {
         // The VR world route's and the second skin's sections are turns only once called this window (nextTurnOwner): none was here.
-        if ((i >= kWorldFirst && i < kWorldFirst + kWorldSections) || i == kFssFirst || (i >= kSkinFirst && i < kSkinFirst + kSkinSections)) { idleWorldSkipped = idleWorldSkipped && !visited[i]; continue; }
+        // The scope lens's door section (A1) is the same: a turn only once called this window.
+        if ((i >= kWorldFirst && i < kWorldFirst + kWorldSections) || i == kFssFirst || i == kOnFootDepthFirst || (i >= kSkinFirst && i < kSkinFirst + kSkinSections) || i == kScopeZoomSection || i == kLegacyGlassSection) { idleWorldSkipped = idleWorldSkipped && !visited[i]; continue; }
         if (turnOwnerOf(static_cast<GpuCensusSection>(i)) == static_cast<GpuCensusSection>(i)) ownersVisited = ownersVisited && visited[i];
         else membersSkipped = membersSkipped && !visited[i];
     }
@@ -365,6 +367,21 @@ void rotationAndRealTimerCase(Device& d) {
               visited[static_cast<size_t>(GpuCensusSection::AlteredFixFirst)],
           "altered: the frame rotation visits every turn, the altered-draw ones and the fix sections' shared one too");
     check(membersSkipped, "altered: the fix sections after the first are not turns of their own: the rotation never lands on them");
+    // The legacy canopy's section: not one of the summed altered classes, no turn until called this window, a turn of its own once called.
+    {
+        check(kAlteredTogetherClasses == 3 && kLegacyGlassSection == kAlteredFirst + kAlteredTogetherClasses && turnOwnerOf(GpuCensusSection::AlteredLegacyGlass) == GpuCensusSection::AlteredLegacyGlass &&
+                  alteredSectionOf(AlteredDrawClass::UiLayer) != GpuCensusSection::AlteredLegacyGlass,
+              "legacy glass: the canopy's section follows the three summed classes, owns its turn, and no draw class maps onto it (ui_layer.cpp times it itself)");
+        g_section[kLegacyGlassSection].occurrences = 1;
+        bool seen = false;
+        int at = 0;
+        for (size_t k = 0; k < kSections + 2; ++k) {
+            at = nextTurnOwner(at);
+            seen = seen || at == static_cast<int>(kLegacyGlassSection);
+        }
+        check(seen, "legacy glass: once the canopy has been called this window the rotation gives its section a turn");
+        g_section[kLegacyGlassSection].occurrences = 0;
+    }
 
     gpuCensusShutdown();
     check(gpuTimingShutdown(d.ctx.Get()), "explicit owner shutdown");
@@ -803,8 +820,8 @@ void alteredFixCases() {
         ++cycle;
         onlyOwners = onlyOwners && turnOwnerOf(static_cast<GpuCensusSection>(at)) == static_cast<GpuCensusSection>(at);
     } while (at != 0 && cycle < 200);
-    check(onlyOwners && cycle == static_cast<unsigned>(kSections) - kAlteredFixCount + 1 - static_cast<unsigned>(kWorldSections) - 1 /* the FSS reveal's */ - static_cast<unsigned>(kSkinSections) && cycle == 24,
-          "turns: the rotation lands only on turn owners, and a cycle is one turn for each section but the later fix ones and the idle world-route, FSS reveal and second-skin ones (24: the 20 there were after the terrain's two sections went, 2026-10-01, plus the three hologram sub-sections and the moved HDR HUD draw, 2026-10-13, and the sky ring's door section, 2026-10-13, less the FSS heal's door section, removed 2026-10-15; the key off changes nothing)");
+    check(onlyOwners && cycle == static_cast<unsigned>(kSections) - kAlteredFixCount + 1 - static_cast<unsigned>(kWorldSections) - 1 /* the FSS reveal's */ - 1 /* native on foot's depth readers' */ - static_cast<unsigned>(kSkinSections) - 1 /* the scope lens's */ - 1 /* the legacy glass canopy's */ && cycle == 24,
+          "turns: the rotation lands only on turn owners, and a cycle is one turn for each section but the later fix ones and the idle world-route, FSS reveal, second-skin, scope lens and legacy glass canopy ones (24: the 20 there were after the terrain's two sections went, 2026-10-01, plus the three hologram sub-sections and the moved HDR HUD draw, 2026-10-13, and the sky ring's door section, 2026-10-13, less the FSS heal's door section, removed 2026-10-15; the key off changes nothing)");
     // The same cycle once the VR world route's three sections have been called this window: they take turns, 27.
     for (size_t i = kWorldFirst; i < kWorldFirst + kWorldSections; ++i) g_section[i].occurrences = 1;
     at = 0;
@@ -956,7 +973,7 @@ void seedTableCases() {
     check(!isDoorSection(seed) && occurrenceCapFor(seed) == 8 && turnOwnerOf(seed) == seed,
           "seed section: an in-frame section like the others: per draw, K = 8, a turn of its own in the rotation");
     check(static_cast<size_t>(seed) == kDoorSections + 7 && static_cast<size_t>(seed) + 1 == kWorldFirst &&
-              kWorldFirst + kWorldSections == kFssFirst && kFssFirst + 1 == kSkinFirst && kSkinFirst + kSkinSections == kAlteredFirst &&
+              kWorldFirst + kWorldSections == kFssFirst && kFssFirst + 1 == kOnFootDepthFirst && kOnFootDepthFirst + 1 == kSkinFirst && kSkinFirst + kSkinSections == kAlteredFirst &&
               seed > GpuCensusSection::FrameUiLayerReissues && seed < GpuCensusSection::AlteredPoolFamily,
           "seed section: the eighth in-frame section (the ninth before the terrain's went, 2026-10-01), followed by the three world-route ones, so the altered-draw sections still follow the in-frame ones");
     bool filled = true, distinct = true;
@@ -971,7 +988,7 @@ void seedTableCases() {
               std::strcmp(kFrameBreakdownNames[kFrameSections - 3], "world mips") == 0 &&
               std::strcmp(kFrameBreakdownNames[kFrameSections - 2], "world layer") == 0 &&
               std::strcmp(kFrameBreakdownNames[kFrameSections - 1], "FSS reveal replay") == 0,
-          "seed section: twelve in-frame items, none alike, the eighth named what the UI layer's own line calls the stage, then the world route's three and the FSS reveal's (2026-10-15)");
+          "seed section: twelve in-frame items, none alike, the eighth named what the UI layer's own line calls the stage, then the world route's three and the FSS reveal's (2026-10-15); native on foot's depth readers' (F199) is a line of its own");
 }
 
 void seedLineCases() {
@@ -1225,7 +1242,7 @@ void skinTableCases() {
     using S = GpuCensusSection;
     check(S::FrameSkinSourceClear == static_cast<S>(kSkinFirst) && S::FrameSkinEyeClear == static_cast<S>(kSkinFirst + 1) &&
               S::FrameSkinJoinClear == static_cast<S>(kSkinFirst + 2) && S::FrameSkinJoin == static_cast<S>(kSkinFirst + 3) &&
-              S::FrameSkinPose == static_cast<S>(kSkinFirst + 4) && kSkinSections == 5 && kSkinFirst == kFssFirst + 1,
+              S::FrameSkinPose == static_cast<S>(kSkinFirst + 4) && kSkinSections == 5 && kSkinFirst == kFssFirst + 2 && kOnFootDepthFirst == kFssFirst + 1,
           "second skin: five sections in a row, the source's clear, the eyes' clear, the join's clear pass, the join and the pose table, right after the world route's three");
     bool filled = true, distinct = true;
     for (size_t i = 0; i < kSkinSections; ++i) {
@@ -1503,10 +1520,10 @@ void instrumentCases() {
           "instruments: the hologram sub-sections sit between the resolve umbrella and UI resolve");
     check(isDoorSection(GpuCensusSection::DoorHoloNearLight), "instruments: the hologram sub-sections are door sections (K=4)");
     check(occurrenceCapFor(GpuCensusSection::DoorHoloResolveDraw) == 4, "instruments: a hologram sub-section caps at the door's 4");
-    check(kDoorBreakdownCount == 11, "instruments: eleven door items after the temporal whole (the profiler's ten, then the sky ring)");
+    check(kDoorBreakdownCount == 12, "instruments: twelve door items after the temporal whole (the profiler's ten, then the sky ring and the scope lens)");
     check(GpuCensusSection::AlteredHdrHud > GpuCensusSection::AlteredUiLayer && GpuCensusSection::AlteredHdrHud < GpuCensusSection::AlteredFixFirst,
           "instruments: the moved HDR draw is an altered class, before the fix sections");
-    check(kAlteredClassSections == 3 && std::strstr(kAlteredNames[2], "HDR HUD") != nullptr, "instruments: the altered class has its name");
+    check(kAlteredClassSections == 4 && kAlteredTogetherClasses == 3 && std::strstr(kAlteredNames[2], "HDR HUD") != nullptr, "instruments: the altered class has its name, and the canopy's section is the fourth, outside the summed three");
 
     // The issued counter: real passes only. Three occurrences in the window: two issued a pass, one was an empty scope (no note).
     SectionState& st = g_section[static_cast<size_t>(GpuCensusSection::FrameUiLayerReissues)];
@@ -1786,6 +1803,107 @@ void fssRevealCases() {
     for (auto& s : g_section) s = SectionState{};
 }
 
+// ---- native on foot's depth readers (F199): F85c's reticle march and F119's head-containment grid, now handed the scene depth with Anti-aliasing off ----
+// native_on_foot.cpp opens the scope at the two dispatch call sites (a scan in the wiring cases below holds that); this is the census's half: the section's kind, its turn, its count, and its
+// place and name in the 30 s line, as the FSS reveal's.
+void onFootDepthCases() {
+    using S = GpuCensusSection;
+    constexpr S sec = S::FrameOnFootDepth;
+    check(!isDoorSection(sec) && occurrenceCapFor(sec) == 8 && turnOwnerOf(sec) == sec && static_cast<size_t>(sec) == kOnFootDepthFirst &&
+              static_cast<size_t>(sec) == static_cast<size_t>(S::FrameFssReveal) + 1 && static_cast<size_t>(sec) < static_cast<size_t>(S::FrameSkinSourceClear),
+          "on-foot depth: an in-frame section (per call, K = 8, a turn of its own) right after the FSS reveal's, before the second skin's");
+    // no turn until called this window: off foot, or with no depth reader dispatched, the rotation is what it was
+    for (auto& s : g_section) s = SectionState{};
+    int at = 0;
+    unsigned cycle = 0, turns = 0;
+    do {
+        at = nextTurnOwner(at);
+        ++cycle;
+        if (static_cast<size_t>(at) == kOnFootDepthFirst) ++turns;
+    } while (at != 0 && cycle < 200);
+    check(cycle == 24 && turns == 0, "on-foot depth turns: with no reader called this window the rotation gives it no turn (the cycle is still the 24)");
+    g_section[kOnFootDepthFirst].occurrences = 1;
+    at = 0;
+    cycle = turns = 0;
+    do {
+        at = nextTurnOwner(at);
+        ++cycle;
+        if (static_cast<size_t>(at) == kOnFootDepthFirst) ++turns;
+    } while (at != 0 && cycle < 200);
+    check(cycle == 25 && turns == 1, "on-foot depth turns: once called this window it takes one turn a cycle (25)");
+
+    // the scope counts every occurrence and notes the real pass
+    for (auto& s : g_section) s = SectionState{};
+    g_windowStartMs = GetTickCount64();
+    g_activeSection = static_cast<int>(sec);
+    g_activeCalls = g_activeTimed = 0;
+    g_activeStride = 1;
+    g_activeOffset = 0;
+    g_activeNullDone = false;
+    {
+        GpuCensusScope dispatch(nullptr, sec);
+        dispatch.markIssued();
+    }
+    { GpuCensusScope empty(nullptr, sec); }
+    check(g_section[kOnFootDepthFirst].occurrences == 2 && g_section[kOnFootDepthFirst].issued == 1 && g_activeCalls == 2,
+          "on-foot depth scope: two occurrences counted on its turn, one of them noted as having issued a pass");
+
+    // the 30 s line: 2 occurrences a frame over 200 frames, 8 timed for 0.4 ms, is 0.050 ms a call and 0.100 ms a frame, part of the in-frame total, and on a line of its own (the main
+    // line is at the log's length: one more item there put the worst case 39 characters over)
+    const uint64_t start = GetTickCount64() - 30000;
+    freshWindow(start);
+    g_section[kOnFootDepthFirst].occurrences = 400;
+    g_section[kOnFootDepthFirst].sampler.totals.ms = 0.4;
+    g_section[kOnFootDepthFirst].sampler.totals.samples = 8;
+    logAndResetWindow(start + 30000);
+    const std::string* own = lineWith("EDVR GPU census, native on foot's depth readers");
+    check(own && own->find("on-foot depth 0.100 (2.00/frame)") != std::string::npos && own->find("included in the in-frame figure above") != std::string::npos &&
+              g_lastLog.find("in-frame 0.100 (") != std::string::npos && g_lastLog.find("EDVR ~0.100 ms/frame = door 0.000 (") != std::string::npos &&
+              g_lastLog.find("on-foot depth") == std::string::npos,
+          "on-foot depth line: 0.100 ms a frame on a line of its own, counted in EDVR's in-frame total and not listed in the main line's items");
+    // a window with no depth reader: no line, and the total has nothing of it
+    freshWindow(start);
+    logAndResetWindow(start + 30000);
+    check(lineWith("EDVR GPU census, native on foot's depth readers") == nullptr && g_lastLog.find("in-frame 0.000 (") != std::string::npos,
+          "on-foot depth line: a window with no depth reader dispatched prints no such line, and the in-frame figure is 0.000");
+    for (auto& s : g_section) s = SectionState{};
+}
+
+// The call sites: native_on_foot.cpp opens FrameOnFootDepth's scope around the reticle march's dispatch and copy (f86Dispatch) and around the head-containment grid's dispatches and copy
+// (f119Dispatch), once each, and each scope holds its dispatch and its copy. A scan of the source, as the second skin's is.
+const char* onFootDepthWiringProblem(const std::string& src) {
+    const std::string scope = "GpuCensusScope census(ctx, GpuCensusSection::FrameOnFootDepth);";
+    size_t n = 0, at = 0, first = std::string::npos, second = std::string::npos;
+    while ((at = src.find(scope, at)) != std::string::npos) {
+        (n == 0 ? first : second) = at;
+        ++n;
+        at += scope.size();
+    }
+    if (n != 2) return "FrameOnFootDepth is not begun exactly twice in native_on_foot.cpp (the reticle march and the head-containment grid)";
+    const size_t f86 = src.find("bool f86Dispatch(ID3D11DeviceContext* ctx");
+    const size_t f119 = src.find("void f119Dispatch(ID3D11DeviceContext* ctx");
+    if (f86 == std::string::npos || f119 == std::string::npos || !(f86 < first && first < f119 && f119 < second)) return "the scopes are not one in f86Dispatch and one in f119Dispatch";
+    for (const size_t from : {first, second}) {
+        const size_t dispatch = src.find("ctx->Dispatch(1, 1, 1);", from);
+        const size_t copy = src.find("ctx->CopyResource(g.stage[si], g.out);", from);
+        if (dispatch == std::string::npos || copy == std::string::npos || !(dispatch < copy) || copy - from > 2600) return "a scope does not hold its dispatch and then its copy of the output";
+    }
+    return nullptr;
+}
+void onFootDepthWiringCases() {
+    std::ifstream in("src/d3d11/native_on_foot.cpp", std::ios::binary);
+    const std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    check(bool(in) && !src.empty(), "on-foot depth wiring: native_on_foot.cpp opens (this rig runs from the repository root, as build.bat does)");
+    const char* problem = onFootDepthWiringProblem(src);
+    check(problem == nullptr, problem ? problem : "on-foot depth wiring");
+    const std::string scope = "GpuCensusScope census(ctx, GpuCensusSection::FrameOnFootDepth);";
+    std::string noMarch = src, noGrid = src;
+    noMarch.erase(noMarch.find(scope), scope.size());
+    noGrid.erase(noGrid.rfind(scope), scope.size());
+    check(onFootDepthWiringProblem(noMarch) != nullptr && onFootDepthWiringProblem(noGrid) != nullptr,
+          "on-foot depth wiring: a source without either scope is caught");
+}
+
 void run() {
     instrumentCases();
     estimatorMathCases();
@@ -1803,6 +1921,8 @@ void run() {
     skinLineCases();
     skinTurnCases();
     fssRevealCases();
+    onFootDepthCases();
+    onFootDepthWiringCases();
     skinWiringCases();
     lineLengths();
     failureRateCases();

@@ -98,12 +98,17 @@ void engineVelocityRememberPs(ID3D11PixelShader*, uint64_t hash, const void* byt
                               bool linked);
 
 // The per-draw hook (vscreen's draw hooks, owner context, before the real
-// draw). The inline half is a handful of compares: the slow half runs only
-// when the game has rebound a shader, a render target, the depth target or
-// the blend state, bound another pool view or scene constant buffer, or
-// written a watched source, since the last look.
+// draw). The inline half is five compares (the shadow's one aggregate over its Vs, Ps, Rtv0, Dsv0
+// and Blend generations; the VsSrv33 and VsCb1 pointers; the eye; and, while
+// the overlay guard holds PS t3, that slot's generation) and the sampling
+// counter: the slow half runs only when the game has rebound a shader, a
+// render target, the depth target or the blend state, bound another pool view
+// or scene constant buffer, or written a watched source, since the last look.
 namespace engine_velocity_detail {
 struct DrawCache {
+    // Build 5, item 4: the shadow's one aggregate generation over the five below (bindingEvKeyGeneration). The inline half compares it in place of the five; they
+    // stay, and are still stored, because the slow half reads them. It starts at 0 and the aggregate never takes 0, so a fresh or reset cache is stale.
+    uint32_t evGen = 0;
     uint32_t vs = 0, ps = 0, rtv = 0, dsv = 0, blend = 0;
     const void* pool = nullptr;    // VS t33's view as the shadow last saw it
     const void* scene = nullptr;   // VS b1's buffer, likewise
@@ -113,7 +118,7 @@ struct DrawCache {
     bool guarded = false;   // the overlay guard's private t3 is bound for the draws of this run (kept bound lazily, 2026-10-16 round 4)
     uint32_t srv3 = 0;      // the shadow's generation of PS t3 when it was bound: a game set of t3 over the private one takes the slow half
 };
-constexpr int kMaxFamilies = 16;   // kFamilies must fit: the static_assert in engine_velocity.cpp
+constexpr int kMaxFamilies = 24;   // kFamilies must fit: the static_assert in engine_velocity.cpp
 extern std::atomic<bool> live;
 extern DrawCache cache;                        // owner thread only
 extern uint64_t familyDraws[kMaxFamilies];     // owner thread only: draws that ran substituted
@@ -135,6 +140,9 @@ extern uint32_t g_psShadowProbeN;   // owner thread; the header's sampling count
 // shader absent from the shadow; otherwise it adopts our substitution as
 // game state and destroys restoration ownership.
 void psShadowProbe(ID3D11DeviceContext*);
+// The sampled draw's half of the probe (the header's one-in-64 counter has already fired): runs the probe only when the bound vertex
+// shader is a pool family's or the bound pixel shader a keyed or self-marking one. Out of line, with the two table scans.
+void psShadowProbeSampled(ID3D11DeviceContext*);
 void noteResourceMapped(const ID3D11Resource*, void* data, int mapType) noexcept;
 void noteResourceWrite(const ID3D11Resource*) noexcept;
 constexpr unsigned kPrimaryPoolResources=16;
@@ -164,23 +172,16 @@ inline void engineVelocityBeforeDraw(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     using namespace engine_velocity_detail;
     if (!live.load(std::memory_order_relaxed)) return;
     bool slow = false;
-    if (cache.vs != bindingGeneration(BindSlot::Vs) || cache.ps != bindingGeneration(BindSlot::Ps) ||
-        cache.rtv != bindingGeneration(BindSlot::Rtv0) || cache.dsv != bindingGeneration(BindSlot::Dsv0) ||
-        cache.blend != bindingGeneration(BindSlot::Blend) || cache.pool != bindingGet(BindSlot::VsSrv33) ||
+    if (cache.evGen != bindingEvKeyGeneration() || cache.pool != bindingGet(BindSlot::VsSrv33) ||
         cache.scene != bindingGet(BindSlot::VsCb1) || cache.eye != rtv0Eye ||
         (cache.guarded && cache.srv3 != bindingGeneration(BindSlot::PsSrv3))) {
         beforeDrawSlow(ctx, rtv0Eye);
         slow = true;
-    } else if (((++g_psShadowProbeN) & 63u) == 0u &&
-               (engine_velocity_family::familyOfVs(bindingShaderHash(BindSlot::Vs)) >= 0 ||
-                engine_velocity_family::anyFamilyPs(bindingShaderHash(BindSlot::Ps)))) {
-        // One pool-context draw in 64 checks for an unobserved game bind.
-        // A live shader different from the shadow is normally our installed
-        // substitution, so the probe first excludes its owned identity. The
-        // 162120 capture's live/shadow differences all reproduce EDVR patch
-        // hashes; they are not evidence of a real hook bypass. A different
-        // registered game shader heals the shadow and takes the slow half.
-        psShadowProbe(ctx);
+    } else if (((++g_psShadowProbeN) & 63u) == 0u) {
+        // One pool-context draw in 64 checks for an unobserved game bind: the
+        // out-of-line half does the family scans and the probe, so this gate
+        // stays small enough to inline at its call sites.
+        psShadowProbeSampled(ctx);
     }
     if (cache.family >= 0) ++familyDraws[cache.family];
     if (cache.guarded && !slow) ++g_guardedFast;   // a guarded draw the cache let through: the slow half counts its own
@@ -234,6 +235,8 @@ inline void engineVelocityResourceUnknown(const ID3D11Resource* resource) {
 
 // The present-frame clock (device_hook, once per owned Present).
 void engineVelocityNotePresentFrame(uint32_t presentFrame) noexcept;
+// The present-frame clock the emit folds into its markers and the scene snapshots carry as EN[276].x (the value NotePresentFrame last set). Any thread.
+uint32_t engineVelocityPresentClock() noexcept;
 // The owner thread's frame boundary (vscreen): rotation, the periodic lines.
 void engineVelocityFrameBoundary(ID3D11DeviceContext*);
 // The flat runtime's per-draw restore before the lazy form below: substituted shaders/blend back, the draw cache reset,
@@ -436,6 +439,14 @@ uint64_t engineVelocitySourceFreeFrames();
 // depth is another, or the rows were not seen. Pure reads under the module's own lock: no GPU work, no allocation.
 bool engineVelocitySourceIsNamed(const ID3D11Texture2D* depth);
 bool engineVelocitySourceCameraRows(float (&rows)[6][4]);
+// F61 (TEMPORARY, the native on-foot rotation calibration): the same rows without the this-frame test, with the present frame they were named
+// in and the present frame now (the native on-foot frame boundary runs after the present frame has moved on, so it reads them one frame late).
+// False when nothing was named yet or the rows were not seen. A pure read under the module's lock: no GPU work, no allocation.
+bool engineVelocityLastSourceCameraRows(float (&rows)[6][4], uint32_t* frame, uint32_t* frameNow);
+// F45 (TEMPORARY, the native on-foot marker probe): rows 270..275 of `scene` (a scene constants buffer read from constant 0) as the watch last
+// saw them written at an Unmap, when a scene watch slot follows that buffer and its rows are known. False otherwise. A pure read under the
+// module's lock: no GPU work, nothing staged.
+bool engineVelocityShadowSceneRows(const ID3D11Buffer* scene, float (&rows)[6][4]);
 // The screen shader's panel counts without diagnostics: one present frame in
 // kPanelSampleFrames, one eye pixel in kPanelSampleStride squared (a grid on
 // the eye pixel), raw; pixelStride 1 = every pixel (diagnostics, motion_source).

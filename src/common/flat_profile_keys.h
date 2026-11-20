@@ -23,7 +23,26 @@ inline bool flatProfileReadsKey(const char* key) {
         // on the Debug tab. Unlisted, getBool answers false here whatever the file says, and the timing could never be turned on from the panel.
         std::strcmp(key, "advanced.flat_cpu_timing") == 0 ||
         std::strcmp(key, "hotkey.menu") == 0 ||
+        // Whether the menu's notices show (menu.cpp menuShowNotice): VR's toasts and flat's screen card alike. Unlisted, getBool answers false here whatever
+        // the file says, and no flat notice (a restart waiting, an AA comparison) could be shown.
+        std::strcmp(key, "menu.toasts") == 0 ||
+        // How long a highlighted row rests before its tooltip shows in the strip beside the flat card, the same dwell VR's panel has (menu.cpp
+        // menuReadTooltipDelay). Unlisted, getFloat answers the default here whatever the file says, and the flat tooltip could never be turned off.
+        std::strcmp(key, "menu.tooltip_delay") == 0 ||
+        // The frame-rate readout (menu.cpp, perf_monitor.h): off | compact | detailed, in the top right corner of the flat screen, and its copy at the top of the
+        // open menu card (menu.fps_overlay_lock). Both are Performance tab rows. Unlisted, getString answers the default here whatever the file says and the rows
+        // could never turn the readout on.
+        std::strcmp(key, "menu.fps_overlay") == 0 ||
+        std::strcmp(key, "menu.fps_overlay_lock") == 0 ||
         std::strcmp(key, "fix.temporal_aa_model") == 0 ||
+        // DittoSR's picture controls (dittosr_engine.cpp). Performance-page rows, dimmed until Anti-aliasing is DittoSR.
+        std::strcmp(key, "fix.dittosr_sharpness") == 0 ||
+        std::strcmp(key, "fix.dittosr_frame_weight") == 0 ||
+        std::strcmp(key, "fix.dittosr_anti_shimmer") == 0 ||
+        std::strcmp(key, "fix.dittosr_sharpen") == 0 ||
+        // XeSS Frame Generation (xess_fg.cpp, docs\xess-frame-generation-2026-11-12.md): flat-only rows on the Performance tab.
+        std::strcmp(key, "fix.xess_frame_generation") == 0 ||
+        std::strcmp(key, "fix.xess_generated_frames") == 0 ||
         std::strcmp(key, "hotkey.dump_draws") == 0 ||
         // TEMPORARY (GPU pass profile, 2026-10-12): the flat profile reads the same key. Remove with the arc.
         std::strcmp(key, "hotkey.gpu_pass_profile") == 0 ||
@@ -32,20 +51,61 @@ inline bool flatProfileReadsKey(const char* key) {
         // other value plays the movie (intro_mode.h: introVideoParseFor), so the VR panel and resample stay inert in flat. Unlisted, getString
         // answers "off" here and the skip never arms.
         std::strcmp(key, "visual.intro_video") == 0 ||
-        // The star glow (visual.star_glow, star_glow.h): a percentage of the halo the game's own bloom draws around a star, flat only for now.
+        // The star glow (visual.star_glow, star_glow.h): a percentage of the halo the game's own bloom draws around a star, in both profiles.
         // The Visual tab's row. Unlisted, getString answers "off" here, which the reader takes for the stock 100.
         std::strcmp(key, "visual.star_glow") == 0 ||
+        // The canopy glass (visual.cockpit_glass, cockpit_glass.h): odyssey | legacy, read live at the frame boundary, in both profiles. The Visual tab's row.
+        // Unlisted, getString answers "off" here, which the reader takes for odyssey, and the row could never turn the legacy look on.
+        std::strcmp(key, "visual.cockpit_glass") == 0 ||
+        // The legacy glass's dirt level (visual.cockpit_glass_dirt, cockpit_glass.cpp): percent, 0 to 300, read live with the look, in both profiles. The row under it.
+        // Unlisted, getIntInRange answers 0 here whatever the file says, which is a clean pane, and the row could never raise it.
+        std::strcmp(key, "visual.cockpit_glass_dirt") == 0 ||
+        // Which lights reach that dirt (visual.cockpit_glass_lights, cockpit_glass_core.h lightsLevelOf): off | station, read live with the look, in both profiles. The row under that.
+        // Unlisted, getString answers "off" here whatever the file says, and the row could never turn them on.
+        std::strcmp(key, "visual.cockpit_glass_lights") == 0 ||
+        // The smoke and steam plumes, and the other camera-facing billboards (particle_fix.cpp, docs\particle-billboards.md): steady | stock, in both
+        // profiles, the Visual tab's Billboards row. Unlisted, getString answers "off" here, which the reader takes for "not stock or steady;
+        // running stock", so the row could never turn the fix on.
+        std::strcmp(key, "fix.particle_billboard") == 0 ||
         // The AA comparison key (aa_compare.cpp): turns EDVR's temporal AA off for a side-by-side look and back, runtime only. Unlisted, a hotkey
         // key reads empty in flat, which is unbound.
         std::strcmp(key, "hotkey.compare_aa") == 0 ||
+        // The monitor panel's key (menu.cpp, menu_panel.h's monitor slot): shows and hides the frame-rate gauges in the top right corner. Flat only (see
+        // flatProfileOnlyKey). Unlisted, a hotkey key reads empty in flat, which is unbound, and the panel could never be shown.
+        std::strcmp(key, "hotkey.monitor_panel") == 0 ||
         // The interface quality (flat panel row; ui_panel_scale.cpp's flat factor and the flat UI layer). The VR layer reads it
         // too, but stays inert in flat: it is live only with fix.temporal_aa on through this gate, which refuses that key.
         std::strcmp(key, "fix.ui_quality") == 0 ||
-        // The weapons fire and the shield ripple after the upscale (ui_layer.cpp's weapons and ripple halves, flat_ui_layer.cpp's adapter), on in flat as in VR:
-        // on | plain | off. Unlisted, getString answers "off" here and neither is ever taken.
-        std::strcmp(key, "fix.sharp_weapons") == 0 ||
         // The optimized station (optimized_station.cpp), on in flat as in VR (built v14.34). Unlisted, getString answers "off" here and the station never starts.
         std::strcmp(key, "fix.optimized_stations") == 0 ||
+        // How far from a station window the real view takes over from the bake (optimized_station.cpp, the Window 3D distance row).
+        std::strcmp(key, "fix.station_window_distance") == 0 ||
+        // The rooms behind a carrier's shut bulkhead doors (optimized_station.cpp, the door rule; the Skip rooms behind doors row).
+        std::strcmp(key, "fix.skip_rooms_behind_doors") == 0 ||
+        // TEMPORARY (the concourse cull and its glass panes, optimized_station.cpp and concourse_pane.cpp, docs\concourse-cull-2026-11-05.md): flat and VR alike.
+        // Unlisted, getString answers "off" here (the cull and the pane mode stay off, a hotkey reads empty and binds nothing) and the keys log nothing. Remove with the arc.
+        std::strcmp(key, "diag.concourse_cull") == 0 ||
+        std::strcmp(key, "diag.concourse_keep") == 0 ||
+        std::strcmp(key, "diag.concourse_pane_mode") == 0 ||
+        std::strcmp(key, "diag.concourse_panes") == 0 ||
+        std::strcmp(key, "diag.concourse_clear_share") == 0 ||
+        std::strcmp(key, "diag.concourse_mirror_beyond") == 0 ||
+        std::strcmp(key, "diag.concourse_glow") == 0 ||
+        std::strcmp(key, "diag.concourse_backdrop_radius") == 0 ||
+        std::strcmp(key, "diag.concourse_bake_near") == 0 ||
+        std::strcmp(key, "diag.concourse_bake_dirs") == 0 ||
+        std::strcmp(key, "diag.concourse_glass") == 0 ||
+        std::strcmp(key, "hotkey.concourse_cull") == 0 ||
+        std::strcmp(key, "hotkey.concourse_pane_capture") == 0 ||
+        std::strcmp(key, "hotkey.concourse_pane_mode") == 0 ||
+        std::strcmp(key, "hotkey.concourse_view_test") == 0 ||
+        std::strcmp(key, "hotkey.concourse_backdrop_parallax") == 0 ||
+        std::strcmp(key, "hotkey.concourse_camera_test") == 0 ||
+        std::strcmp(key, "hotkey.concourse_light_test") == 0 ||
+        std::strcmp(key, "hotkey.concourse_room_test") == 0 ||
+        // TEMPORARY (the VR proving build): flat reads them only to log that a press is not in VR.
+        std::strcmp(key, "hotkey.concourse_vr_hold_probe") == 0 ||
+        std::strcmp(key, "hotkey.concourse_vr_camera_probe") == 0 ||
         // The flat jitter cycle's length (flat_runtime.cpp, FlatLivePhase::phaseCount; temporal_math.h). Developer tier, no flat panel
         // row. Unlisted, getInt answers 0 here whatever the file says, which the reader takes for out of range and reads as 8.
         std::strcmp(key, "advanced.temporal_aa_jitter_phases") == 0 ||
@@ -53,11 +113,24 @@ inline bool flatProfileReadsKey(const char* key) {
         // chain (bloom, tone, copy) is in no effects archive, so a running game is the only place its bytecode can be read.
         // Developer tier, no flat panel row. Unlisted, getBool answers false here whatever the file says.
         std::strcmp(key, "advanced.glare_shader_dump") == 0 ||
+        // TEMPORARY (cockpit_glass_probe.h, docs\cockpit-glass-legacy-port.md): the canopy draw's state and constants, flat and VR alike.
+        // Unlisted, getString answers "off" here and the probe never arms in flat. Remove with the probe.
+        std::strcmp(key, "experimental.cockpit_glass_probe") == 0 ||
+        // The HUD layer's edge smoothing (flat_ui_layer.cpp, ui_layer_smaa.h): on | off, off by default, read live a frame at a time. The HUD Anti-Aliasing row
+        // of the flat panel's Performance tab, directly under UI quality. Unlisted, getBool answers false here whatever the file says, which reads as off, so the
+        // row could never turn it on, and the 30 s "flat ui layer smaa:" line shows key=off.
+        std::strcmp(key, "fix.hud_antialiasing") == 0 ||
         // The journal watcher, for the System Map's GuiFocus (journal_watch.h: journalFlatGuiFocus). Its other accessors answer
         // flat with the no-journal values, so enabling the watcher here changes no other flat behaviour. journal_dir names the
         // Saved Games folder when the default is wrong; unlisted, it reads "off" and the watcher looks in a folder named "off".
         std::strcmp(key, "d3d11.journal_watch") == 0 ||
         std::strcmp(key, "d3d11.journal_dir") == 0;
+}
+
+// The keys only the flat profile reads: the VR profile ignores them, so VR's Hotkeys page does not list them and VR's duplicate check does not count them
+// (hotkey_capture.cpp hotkeyPageRows, menu.cpp collectOtherHotkeys). Dotted "section.key"; a null key is not one.
+inline bool flatProfileOnlyKey(const char* key) {
+    return key && std::strcmp(key, "hotkey.monitor_panel") == 0;
 }
 
 }  // namespace edvr

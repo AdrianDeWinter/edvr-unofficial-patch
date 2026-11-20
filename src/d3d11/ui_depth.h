@@ -45,38 +45,64 @@ void uiDepthConfigure(Config& cfg);
 // and then returns false unless one of them was set; clearing flags that are
 // already false is what the guard skips, and nothing else.
 // The MODE ITSELF moves here rather than a bool mirroring it. ui_depth.cpp
-// writes g_uiDepthMode in seven places, and a mirror maintained at seven call
+// writes the mode (detail::g_uiDepthDraw.mode) in seven places, and a mirror maintained at seven call
 // sites is a desync waiting to happen -- the failure this codebase has paid
 // for more than once. One variable, read inline, written where it always was.
+struct DepthShader;   // ui_depth.cpp: the stand-in coverage shader table's entry
 namespace detail {
 enum class UiDepthMode : unsigned char { kNone, kReissue, kReissueScene };
-extern UiDepthMode g_uiDepthMode;
+// uiDepthOnEyeDraw's per-draw outputs, in one struct reset as one block at the top of every call (build 4, item 5): it used to be fourteen stores to
+// globals on separate cache lines. The defaults are the resets: no mode, nothing pending, both eyes -1, no shader, mask slot 0. The accessors below read
+// the fields inline.
+struct UiDepthDraw {
+    UiDepthMode mode = UiDepthMode::kNone;
+    bool planetPending = false, planetSolarPending = false;
+    // F105: the draw uiDepthOnEyeDraw just classified is an in-world screen (world_screen_coverage.h); cleared at the top of every
+    // call, so it only ever answers for that draw.
+    bool worldScreenPending = false;
+    // Whether the eye draw uiDepthOnEyeDraw last classified samples a learned interface surface -- the test that makes a draw a
+    // composite -- rewritten at the top of every call (false before any early return), so it is only ever the answer for the draw
+    // that call was about. Published for the layer's census of the composites it leaves in the scene (ui_scene_composites.h): the
+    // loop that finds the surface already runs for every eye draw with a depth target, and a second one in the layer would double its cost.
+    bool composite = false;
+    bool coronaPending = false, coronaMotion = false;
+    bool wantRebind = false;
+    bool wantMask = false;           // this draw marks the reactive mask
+    int  rebindEye = -1;
+    int  drawEye = -1;
+    int  reissueMaskSlot = 0;        // which cached constant buffer carries it (ui_depth.cpp floorBuffer)
+    DepthShader* reissueShader = nullptr;
+};
+extern UiDepthDraw g_uiDepthDraw;
 extern bool g_uiDepthOn;
 extern bool g_uiDepthStoodDown;
-extern bool g_uiDepthPlanetPending;
-extern bool g_uiDepthPlanetSolarPending;
 // The generic contribution-based
 // coverage below, independent of g_uiDepthOn's own per-family shaders.
 extern bool g_holoDepthOn;
-// Whether the eye draw uiDepthOnEyeDraw last classified samples a learned
-// interface surface -- the test that makes a draw a composite -- rewritten at
-// the top of every call (false before any early return), so it is only ever
-// the answer for the draw that call was about. Published for the layer's
-// census of the composites it leaves in the scene (ui_scene_composites.h): the
-// loop that finds the surface already runs for every eye draw with a depth
-// target, and a second one in the layer would double its cost.
-extern bool g_uiDepthDrawComposite;
+// The hologram pass's classified eye for this draw (-1: none), read by the two reissues that follow the game's draw. Out here so a draw whose
+// vertex shader the may-want byte rejects stores the decline's one write inline (uiDepthHologramSkippedDraw).
+extern int g_holoEye;
 }  // namespace detail
 inline bool uiDepthWantsDraws() {
     return detail::g_uiDepthOn && !detail::g_uiDepthStoodDown;
 }
 inline bool uiDepthPlanetPending() {
-    return detail::g_uiDepthPlanetPending || detail::g_uiDepthPlanetSolarPending;
+    return detail::g_uiDepthDraw.planetPending || detail::g_uiDepthDraw.planetSolarPending;
+}
+inline bool uiDepthWorldScreenPending() {
+    return detail::g_uiDepthDraw.worldScreenPending;
+}
+// Build 6, item 3 (#184): the three pending coverage flags false. A return of vscreen's forwardWithVerdict that never reached the Begin which clears them calls this, and only for
+// a draw whose own DrawCallFlags carried one of them (draw_call_flags.h).
+inline void uiDepthClearPending() {
+    detail::g_uiDepthDraw.planetPending = false;
+    detail::g_uiDepthDraw.planetSolarPending = false;
+    detail::g_uiDepthDraw.worldScreenPending = false;
 }
 // True when the draw uiDepthOnEyeDraw has just classified samples a learned
 // interface surface. Read right after that call, for the same draw.
 inline bool uiDepthDrawSampledSurface() {
-    return detail::g_uiDepthDrawComposite;
+    return detail::g_uiDepthDraw.composite;
 }
 // The hologram/icon depth pass's own draw-path bool, read inline for the
 // same reason uiDepthWantsDraws() is (ui_depth.h's header comment): a
@@ -84,6 +110,9 @@ inline bool uiDepthDrawSampledSurface() {
 inline bool uiDepthHologramWantsDraws() {
     return detail::g_holoDepthOn && uiDepthWantsDraws();
 }
+// What uiDepthHologramOnEyeDraw leaves behind on a plain decline: its first line, g_holoEye = -1 (its other declines store nothing more).
+// Called instead of it for a draw the may-want byte (vs_may_want.h, kVsMayHoloDepth) says it would decline.
+inline void uiDepthHologramSkippedDraw() { detail::g_holoEye = -1; }
 
 // Every draw that did NOT land in an eye texture: learn the target as a UI
 // surface when the bound vertex shader is one of the GUI renderer's
@@ -122,6 +151,8 @@ bool uiDepthIsExcluded(uint64_t vsHash);
 // pixel-stage slot 0..3) or a named direct family, with a depth target
 // bound that is the scene pair's. True means the draw should write its
 // coverage depth; the caller reissues it after the original draw.
+// The plain decline (no family, no composite) is memoised inside (classifier_memo.h), keyed on the bindings and the classifier's
+// own state, so the caller sees the same outputs and counts as before.
 bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw = {});
 
 // The generic, contribution-based hologram/icon depth pass: a family-
@@ -133,6 +164,7 @@ bool uiDepthOnEyeDraw(ID3D11DeviceContext* ctx, const HoloDraw& draw = {});
 // uiDepthOnEyeDraw at the same call site; true means the two reissues
 // below apply after the game's own draw.
 bool uiDepthHologramOnEyeDraw(ID3D11DeviceContext* ctx);
+
 // Pass (a): the game's own draw again, RTV0 rebound to a per-eye scratch
 // target whose blend mirrors the game's own RT0 blend (so RGB accumulates
 // what the game's blend equation actually adds), VS/PS/inputs unchanged.
@@ -212,7 +244,21 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx);
 // Opaque planet motion coverage, separate from UI classification/depth.
 bool uiDepthPlanetBegin(ID3D11DeviceContext* ctx);
 void uiDepthPlanetEnd(ID3D11DeviceContext* ctx);
-void uiDepthReissueEnd(ID3D11DeviceContext* ctx);
+// F105: an in-world screen's coverage into the eye's coverage and edit masks (world_screen_coverage.h). Begin clears
+// the pending flag and returns true only when the masks are bound for the draw's second issue; End puts the game's
+// state back.
+bool uiDepthWorldScreenBegin(ID3D11DeviceContext* ctx);
+void uiDepthWorldScreenEnd(ID3D11DeviceContext* ctx);
+// F116 (native_on_foot_f116.h): the HUD hidden while a terminal fills the view. The hide as the render thread last stepped it at a
+// frame boundary (stepMs, GetTickCount64; 0 never), the last stepped frame's footprint (the larger eye's share of its render
+// pixels covered by an F105 screen; -1 none yet), and running counts: frames stepped, over 15%, hidden, census rows read, and
+// whether an external upscaler ran at the last frame boundary (F105 marks screens only then). Any thread.
+struct UiDepthTerminalState {
+    bool hidden = false, upscaler = false;
+    uint64_t stepMs = 0, stepped = 0, over = 0, hiddenFrames = 0, rows = 0;
+    float footprint = -1.0f;
+};
+UiDepthTerminalState uiDepthTerminalState();void uiDepthReissueEnd(ID3D11DeviceContext* ctx);
 
 // Coverage supports UI history decisions. The temporal pass keeps per-eye
 // raw UI colour and coverage, aligns it with UI motion, and rejects detected

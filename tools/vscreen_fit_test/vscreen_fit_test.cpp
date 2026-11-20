@@ -1115,7 +1115,7 @@ void caseR12() {
               "R12f: the curved screen's swallowed draw calls the instrument once: owner context only, an eye draw, behind the same flag, whether or not the route owns the frame");
         check(has(swallowed, "v == DrawVerdict::kPanel ? g_state->distanceScale : 1.0f, args.base, args.startInstance"),
               "R12f: and tells it the panel distance the draw's constants carry, with the draw's own base vertex and start instance");
-        const std::string gate = functionBody(vs, "bool drawGateSubscribed(State* s) {");
+        const std::string gate = functionBody(vs, "uint32_t drawGateHolders(State* s) {");
         check(has(gate, "vscreenFootprintWanted()"), "R12g: the draw gate lists the instrument (a subscriber that is not listed starves when nothing else is on)");
         check(count(vs, "tkVScreenFootprint.run(") == 1 && before(vs, "tkVrCameraCensus.run(", "tkVScreenFootprint.run(") && before(vs, "tkVScreenFootprint.run(", "tkScreenMotion.run(") &&
                   has(vs, "EDVR_BOUNDARY_TICK(tkVScreenFootprint, \"vscreen_footprint\");"),
@@ -1265,14 +1265,13 @@ void caseR13() {
               "R13d: the accessor the menu reads is declared and defined once");
         // The menu: a toast once, the Status line, the settings pages' note; the VR branch only.
         const std::string tick = functionBody(menu, "void menuTick(ID3D11Device* dev) {");
-        const size_t flatReturn = tick.find("if (runtimeFlatProfile()) {");
+        const size_t placement = tick.find("if (pol.noticePlacement == MenuNoticePlacement::WorldToast) {");
         const size_t toast = tick.find("if (!s.vrSupersamplingToasted) {");
-        const size_t vrBranch = tick.find("guardedBudget(g_budget, [&] {\n        static uint64_t lastNativeRevision = 0;");
-        check(flatReturn != std::string::npos && toast != std::string::npos && vrBranch != std::string::npos && flatReturn < vrBranch && vrBranch < toast &&
+        check(placement != std::string::npos && toast != std::string::npos && placement < toast &&
                   count(menu, "vrss::formatToast(") == 1 && count(menu, "s.toastQueue.push_back(toast);") == 1 &&
-                  has(tick, "s.vrSupersamplingToasted = true;\n                if (s.toasts) {\n                    char toast[96];") &&
+                  has(tick, "s.vrSupersamplingToasted = true;\n                    if (s.toasts) {\n                        char toast[96];") &&
                   has(tick, "vr supersampling: the headset notice is queued as a toast") && has(tick, "vr supersampling: menu.toasts is off, so no toast"),
-              "R13e: the toast is queued once a session, gated on menu.toasts and logged either way, after the flat profile's branch returned: flat never reaches it");
+              "R13e: the toast is queued once a session, gated on menu.toasts and logged either way, inside the world-toast placement: flat never reaches it");
         // The open menu says it in the Status page's hint, and nowhere else: no line is added to any page (the bitmap is refused above
         // 2048 px, which a 48-px cap reaches with a note under a settings page's rows and a 54-px cap with one more Status line; the
         // Pimax has 51-55). The accessor is read exactly twice in menu.cpp, the hint and the toast.

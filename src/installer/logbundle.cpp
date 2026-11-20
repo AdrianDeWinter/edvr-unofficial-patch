@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <shlobj.h>
 
+#include <cstring>
 #include <new>
 
 #include <algorithm>
@@ -118,6 +119,21 @@ struct Found {
 // than the write time, which changes when a folder is copied, restored from
 // a backup or pulled out of somebody else's zip -- exactly the things that
 // happen to a folder on its way into a bug report.
+// With log.max_mb in force a long session is a head log and tail segments beside it, edvr_<tag>_YYYYMMDD_HHMMSS[_mmm_<pid>].tail-NNN.log
+// (src\common\log_rotate.h, tools\log_session.py). A segment is part of its head's session, never a session of its own: it takes its head's stamp,
+// goes into the bundle with it, and is never the newest log. True when `name` is a segment's, with the head's name in `head`.
+bool segmentHead(const std::wstring& name, std::wstring* head) {
+    static const wchar_t kMark[] = L".tail-";
+    const size_t at = name.rfind(kMark);
+    if (at == std::wstring::npos) return false;
+    size_t i = at + (sizeof(kMark) / sizeof(kMark[0]) - 1);
+    const size_t digits = i;
+    while (i < name.size() && name[i] >= L'0' && name[i] <= L'9') ++i;
+    if (i - digits < 3 || name.compare(i, std::wstring::npos, L".log") != 0) return false;
+    if (head) *head = name.substr(0, at) + L".log";
+    return true;
+}
+
 bool stampFromName(const std::wstring& name, FILETIME* out) {
     const size_t dot = name.rfind(L'.');
     if (dot == std::wstring::npos || dot < 15) return false;
@@ -204,6 +220,189 @@ std::wstring desktopFolder() {
         if (dirExists(guess)) return guess;
     }
     return std::wstring();
+}
+
+std::vector<unsigned char> dropFilesBlock(const std::wstring& path) {
+    // Zero-filled, so the path's own terminator and the list's closing empty string are already there.
+    const size_t head = sizeof(DROPFILES);
+    std::vector<unsigned char> block(head + (path.size() + 2) * sizeof(wchar_t), 0);
+    DROPFILES header{};
+    header.pFiles = static_cast<DWORD>(head);
+    header.fWide = TRUE;
+    memcpy(block.data(), &header, head);
+    memcpy(block.data() + head, path.c_str(), path.size() * sizeof(wchar_t));
+    return block;
+}
+
+bool copyFileToClipboard(HWND owner, const std::wstring& path, std::string* error) {
+    auto fail = [&](const char* what) {
+        if (error) *error = std::string(what) + " (Windows error " + std::to_string(GetLastError()) + ")";
+        return false;
+    };
+    if (path.empty()) {
+        if (error) *error = "there is no file to copy";
+        return false;
+    }
+
+    // Another program (a clipboard manager, a remote-desktop client) can hold the clipboard for a few
+    // milliseconds; a short wait is the documented answer and a long one would freeze the window.
+    bool open = false;
+    for (int attempt = 0; attempt < 10 && !open; ++attempt) {
+        open = OpenClipboard(owner) != FALSE;
+        if (!open) Sleep(20);
+    }
+    if (!open) return fail("the clipboard is in use by another program");
+
+    bool ok = false;
+    if (!EmptyClipboard()) {
+        fail("could not clear the clipboard");
+    } else {
+        const std::vector<unsigned char> block = dropFilesBlock(path);
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, block.size());
+        void* bytes = memory ? GlobalLock(memory) : nullptr;
+        if (!bytes) {
+            if (memory) GlobalFree(memory);
+            fail("could not allocate the clipboard data");
+        } else {
+            memcpy(bytes, block.data(), block.size());
+            GlobalUnlock(memory);
+            if (SetClipboardData(CF_HDROP, memory)) {
+                ok = true;  // the clipboard owns the memory now
+            } else {
+                fail("the clipboard refused the file");
+                GlobalFree(memory);
+            }
+        }
+    }
+
+    // Without this, Explorer decides copy or move by the drive; "copy" says the Desktop zip stays put
+    // after a paste. Best effort: a paste without it is a copy in practice.
+    if (ok) {
+        const UINT effectFormat = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+        HGLOBAL effect = effectFormat ? GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD)) : nullptr;
+        DWORD* value = effect ? static_cast<DWORD*>(GlobalLock(effect)) : nullptr;
+        if (value) {
+            *value = DROPEFFECT_COPY;
+            GlobalUnlock(effect);
+            if (!SetClipboardData(effectFormat, effect)) GlobalFree(effect);
+        } else if (effect) {
+            GlobalFree(effect);
+        }
+    }
+    CloseClipboard();
+    return ok;
+}
+
+bool runningUnderWine() {
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    return ntdll && GetProcAddress(ntdll, "wine_get_version") != nullptr;
+}
+
+std::wstring hostHomeFromWineHomeDir(const std::wstring& value) {
+    std::wstring home = value;
+    // Wine hands Windows processes an NT path: \??\Z:\home\deck.
+    if (home.compare(0, 4, L"\\??\\") == 0) home.erase(0, 4);
+    // A drive letter is what makes it a path this process can open. The fallback \??\unix\home\deck
+    // names no drive, so the home is unknown.
+    const bool letter = !home.empty() && ((home[0] >= L'A' && home[0] <= L'Z') || (home[0] >= L'a' && home[0] <= L'z'));
+    if (!letter || home.size() < 2 || home[1] != L':') return std::wstring();
+    if (home.size() > 2 && home[2] != L'\\') return std::wstring();
+    while (home.size() > 3 && home.back() == L'\\') home.pop_back();
+    if (home.size() == 2) home += L'\\';
+    return home;
+}
+
+namespace {
+
+// A folder that exists and, unless this is a dry run, takes a file: the test file is made and removed
+// again. A dry run only asks whether the folder is there.
+bool folderAcceptsFile(const std::wstring& dir, bool dryRun) {
+    if (dir.empty() || !dirExists(dir)) return false;
+    if (dryRun) return true;
+    const std::wstring probe = joinPath(dir, L"edvr-write-test-" + std::to_wstring(GetCurrentProcessId()) + L".tmp");
+    HANDLE h = CreateFileW(probe.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                           FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(h);
+    return true;
+}
+
+}  // namespace
+
+std::wstring logSaveFolder(bool dryRun) {
+    if (!runningUnderWine()) return desktopFolder();
+    wchar_t value[MAX_PATH]{};
+    const DWORD n = GetEnvironmentVariableW(L"WINEHOMEDIR", value, MAX_PATH);
+    const std::wstring home = (n > 0 && n < MAX_PATH) ? hostHomeFromWineHomeDir(value) : std::wstring();
+    if (!home.empty()) {
+        const std::wstring downloads = joinPath(home, L"Downloads");
+        if (folderAcceptsFile(downloads, dryRun)) return downloads;
+        if (folderAcceptsFile(home, dryRun)) return home;
+    }
+    return desktopFolder();
+}
+
+std::string hostPathFor(const std::wstring& windowsPath) {
+    if (runningUnderWine() && !windowsPath.empty()) {
+        using GetUnixName = char*(__cdecl*)(const wchar_t*);
+        const HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+        const GetUnixName convert =
+            kernel ? reinterpret_cast<GetUnixName>(GetProcAddress(kernel, "wine_get_unix_file_name")) : nullptr;
+        if (convert) {
+            char* unixPath = convert(windowsPath.c_str());
+            if (unixPath) {
+                const std::string out = unixPath;
+                HeapFree(GetProcessHeap(), 0, unixPath);
+                if (!out.empty()) return out;
+            }
+        }
+    }
+    return toUtf8(windowsPath);
+}
+
+bool copyTextToClipboard(HWND owner, const std::string& utf8, std::string* error) {
+    const std::wstring text = fromUtf8(utf8);
+    bool open = false;
+    for (int attempt = 0; attempt < 10 && !open; ++attempt) {
+        open = OpenClipboard(owner) != FALSE;
+        if (!open) Sleep(20);
+    }
+    if (!open) {
+        if (error) *error = "the clipboard is in use by another program";
+        return false;
+    }
+    bool ok = false;
+    if (EmptyClipboard()) {
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t));
+        void* bytes = memory ? GlobalLock(memory) : nullptr;
+        if (bytes) {
+            memcpy(bytes, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+            GlobalUnlock(memory);
+            ok = SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
+        }
+        if (!ok && memory) GlobalFree(memory);
+    }
+    if (!ok && error) *error = "the clipboard refused the text (Windows error " + std::to_string(GetLastError()) + ")";
+    CloseClipboard();
+    return ok;
+}
+
+bool showFolderOnHost(const std::wstring& folder) {
+    wchar_t system[MAX_PATH]{};
+    const UINT n = GetSystemDirectoryW(system, MAX_PATH);
+    std::wstring exe = L"winebrowser.exe";
+    if (n > 0 && n < MAX_PATH) {
+        const std::wstring full = joinPath(system, L"winebrowser.exe");
+        if (fileExists(full)) exe = full;
+    }
+    std::wstring command = L"\"" + exe + L"\" \"" + folder + L"\"";
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) return false;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
 }
 
 bool writeZip(const std::wstring& zipPath, const std::vector<std::wstring>& files,
@@ -558,6 +757,7 @@ LogBundle collectLogs(const std::wstring& gameDir, const std::wstring& outDir,
         std::wstring path;
         FILETIME     written{};
         FILETIME     actualWritten{};
+        bool         segment = false;   // a tail segment: it follows its head and is never the newest log
     };
     FILETIME newestLog{};
     FILETIME sessionStart{}, sessionEnd{};
@@ -575,37 +775,46 @@ LogBundle collectLogs(const std::wstring& gameDir, const std::wstring& outDir,
             log.actualWritten = fd.ftLastWriteTime;
             // The name first, the write time only when the name does not carry
             // a stamp -- a log from a custom log.dir, or one somebody renamed.
-            if (!stampFromName(log.name, &log.written)) log.written = fd.ftLastWriteTime;
+            std::wstring headName;
+            log.segment = segmentHead(log.name, &headName);
+            if (!stampFromName(log.segment ? headName : log.name, &log.written)) log.written = fd.ftLastWriteTime;
             logs.push_back(log);
         } while (FindNextFileW(h, &fd));
         FindClose(h);
     }
 
-    if (logs.empty()) {
+    const LogFile* newest = nullptr;
+    int headCount = 0;
+    for (const LogFile& log : logs) {
+        if (log.segment) continue;
+        ++headCount;
+        if (!newest || CompareFileTime(&log.written, &newest->written) > 0) newest = &log;
+    }
+    if (!newest) {
         std::string where;
         for (const std::wstring& dir : logDirs) where += (where.empty() ? "" : " or ") + toUtf8(dir);
-        bundle.notes.push_back("No logs in " + where + " -- has the game been started since EDVR was installed?");
+        bundle.notes.push_back("No logs in " + where + " -- has the game been started since ED-UP was installed?");
     } else {
-        const LogFile* newest = &logs.front();
-        for (const LogFile& log : logs) {
-            if (CompareFileTime(&log.written, &newest->written) > 0) newest = &log;
-        }
         newestLog = newest->written;
         sessionStart = newestLog;
         sessionEnd = newestLog;
         haveNewestLog = true;
-        int sessionCount = 0;
+        int sessionCount = 0, segmentCount = 0;
         for (const LogFile& log : logs) {
             if (secondsBetween(log.written, newest->written) > kSessionWindowSeconds) continue;
             if(CompareFileTime(&log.written,&sessionStart)<0) sessionStart=log.written;
             if(CompareFileTime(&log.actualWritten,&sessionEnd)>0) sessionEnd=log.actualWritten;
             take.push_back({log.path, log.name});
-            ++sessionCount;
+            if (log.segment) ++segmentCount; else ++sessionCount;
         }
         char line[160];
         sprintf_s(line, "%d log%s from the most recent session (of %d in the folder)",
-                  sessionCount, sessionCount == 1 ? "" : "s", static_cast<int>(logs.size()));
+                  sessionCount, sessionCount == 1 ? "" : "s", headCount);
         bundle.notes.push_back(line);
+        if (segmentCount) {
+            sprintf_s(line, "%d tail segment%s of those logs (a long session's later lines, beside its head log)", segmentCount, segmentCount == 1 ? "" : "s");
+            bundle.notes.push_back(line);
+        }
     }
 
     // ---- everything else worth having ---------------------------------

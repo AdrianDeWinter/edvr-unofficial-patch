@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "../common/dump_file.h"   // tonemap_<stamp>.bin goes out as .z
+
 namespace edvr {
 class EyeTonemapSnapshot {
     template<class T> using Ptr=Microsoft::WRL::ComPtr<T>;
@@ -224,10 +226,10 @@ public:
         b.ready=true;b.source.Reset();
     }
     bool write(ID3D11DeviceContext* c,const wchar_t* path,const wchar_t* shaderDir=nullptr) {
-        (void)shaderDir;if(!c || !path)return false;FILE* f=nullptr;if(_wfopen_s(&f,path,L"wb") || !f)return false;
-        bool ok=fwrite("EDVRTON1",1,8,f)==8;
-        auto u32=[&](uint32_t v){ok=fwrite(&v,4,1,f)==1 && ok;};
-        auto text=[&](const std::string& s){u32(static_cast<uint32_t>(s.size()));ok=fwrite(s.data(),1,s.size(),f)==s.size() && ok;};
+        (void)shaderDir;if(!c || !path)return false;dump_file::Writer f;if(!f.open(path))return false;
+        bool ok=f.write("EDVRTON1",8);
+        auto u32=[&](uint32_t v){ok=f.write(&v,4) && ok;};
+        auto text=[&](const std::string& s){u32(static_cast<uint32_t>(s.size()));ok=f.write(s.data(),s.size()) && ok;};
         u32(1);u32(count());u32(declined);u32(bytes);
         for(auto& d:draws_) {
             text(d.meta);
@@ -237,19 +239,19 @@ public:
                 const bool pitchOk=mapped.pData && (!b.row || (mapped.RowPitch>=b.row && (b.slices<=1 || uint64_t(mapped.DepthPitch)>=uint64_t(mapped.RowPitch)*b.rows)));
                 if(!pitchOk) { c->Unmap(b.stage.Get(),0);u32(0);++failures;continue; }
                 u32(b.bytes);const auto p=static_cast<const uint8_t*>(mapped.pData);
-                if(!b.row)ok=fwrite(p,1,b.bytes,f)==b.bytes && ok;
+                if(!b.row)ok=f.write(p,b.bytes) && ok;
                 else for(uint32_t z=0;z<b.slices;++z)for(uint32_t y=0;y<b.rows;++y)
-                    ok=fwrite(p+size_t(z)*mapped.DepthPitch+size_t(y)*mapped.RowPitch,1,b.row,f)==b.row && ok;
+                    ok=f.write(p+size_t(z)*mapped.DepthPitch+size_t(y)*mapped.RowPitch,b.row) && ok;
                 c->Unmap(b.stage.Get(),0);
             }
         }
         std::lock_guard<std::mutex> lock(mutex());u32(count()?2u:0u);
         if(count())for(uint64_t hash:{kVs,kPs}) {
-            ok=fwrite(&hash,8,1,f)==1 && ok;auto it=shaders().find(hash);
+            ok=f.write(&hash,8) && ok;auto it=shaders().find(hash);
             if(it==shaders().end()) { u32(0);++failures; }
-            else { u32(static_cast<uint32_t>(it->second.size()));ok=fwrite(it->second.data(),1,it->second.size(),f)==it->second.size() && ok; }
+            else { u32(static_cast<uint32_t>(it->second.size()));ok=f.write(it->second.data(),it->second.size()) && ok; }
         }
-        u32(failures);ok=!ferror(f) && ok;return fclose(f)==0 && ok;
+        u32(failures);return f.close() && ok;
     }
 };
 }

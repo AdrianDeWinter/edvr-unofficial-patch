@@ -22,6 +22,7 @@ struct AppArgs {
 
     Act          action = Act::None;
     std::wstring dir;                    // --dir, the game folder
+    std::wstring store;                  // --store: canonical source for this exact --dir; empty means detect
     std::string  scope;                  // --scope both|vr|flat; empty means the folder's own, else both
     bool         keepSettings = true;    // --replace-settings
     bool         removeSettings = false; // --remove-settings (uninstall)
@@ -31,10 +32,35 @@ struct AppArgs {
     bool         help = false;
     bool         badArg = false;
     std::wstring badArgText;
+
+#ifdef EDUP_LAUNCHER
+    // The launcher's own flags (docs\design-launcher-2026-11-07.md). The installer's target does not
+    // define EDUP_LAUNCHER, so it neither has these fields nor accepts these flags.
+    std::wstring payloadDir;       // --payload <dir>: install from an unpacked ed-up-<ver>.zip
+    std::wstring dataRoot;         // --data-root <dir>: every launcher folder under here, nothing registered
+    std::wstring planFile;         // --apply-plan <file>: the elevated copy's whole job
+    std::string  channel;          // --channel stable|rc, for this run
+    bool         checkUpdate = false;  // --check-update
+    bool         update = false;       // --update
+    bool         unregister = false;   // --unregister
+    bool         updated = false;      // --updated: started by a self-update (internal)
+    bool         directDryRun = false; // --direct-dry-run: sign in, print the masked command line, start nothing
+    bool         vr = false;           // --vr, for --direct-dry-run
+    bool         novr = false;         // --novr, for --direct-dry-run
+    bool         licenses = false;     // --licenses: print the third-party licence the launcher carries
+    bool         closeAfterStart = false;  // --close-after-start: close once Elite has started, for this run
+    bool         headless = false;     // --headless: start Elite from --dir with no window (needs --vr or --novr)
+#endif
 };
 
 AppArgs parseArgs(int argc, wchar_t** argv);
 std::string usageText();
+
+// Resolve only args.dir through the detection owner. An explicit store needs the
+// exact product folder, and applies to that verified folder alone. The optional
+// inventory keeps callers with an existing scan from scanning the machine again.
+bool describeSelectedDir(const AppArgs& args, GameInstall* out,
+                         const std::vector<GameInstall>* installs = nullptr);
 
 Options optionsFor(const AppArgs& args, bool repair);
 

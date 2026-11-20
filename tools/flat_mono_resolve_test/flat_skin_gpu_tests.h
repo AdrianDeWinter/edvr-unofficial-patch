@@ -211,7 +211,12 @@ inline void scenario(ID3D11Device* device, ID3D11DeviceContext* context, Result*
     f.engine.skin = nullptr;
 }
 
+inline void mutationChecks(ID3D11Device* device, ID3D11DeviceContext* context, int slice, int slices);
+
 inline void tests(ID3D11Device* device, ID3D11DeviceContext* context) {
+    // Sharded (kUnits): the source checks and the shipped scenario are "skinGpuTests"; the mutation loop is kSkinSlices units of its own.
+    constexpr int kSkinSlices = 2;
+    if (shardRuns("skinGpuTests")) {
     // The HLSL's pieces the host and the log lines name.
     {
         const std::string source = kFlatMonoShaderSource;
@@ -232,6 +237,12 @@ inline void tests(ID3D11Device* device, ID3D11DeviceContext* context) {
     Result shipped;
     scenario(device, context, &shipped);
     check(shipped.frames == 1 && shipped.skinned == 8, "skin: the scenario ran against the shipped prep and counted its skinned pixels");
+    }
+    for (int slice = 1; slice <= kSkinSlices; ++slice)
+        if (fpgpu::mutationSliceRuns("skin", slice, kSkinSlices)) mutationChecks(device, context, slice, kSkinSlices);
+}
+
+inline void mutationChecks(ID3D11Device* device, ID3D11DeviceContext* context, int slice, int slices) {
     // The same scenario against the prep with one rule flipped at a time.
     static const fpgpu::Mutant mutants[] = {
         {"the skinned branch ignores the view bit (the flat profile's frame takes it)", "if((debug.w&4)!=0 && r.data[0].x!=0u) {", "if(r.data[0].x!=0u) {", nullptr},
@@ -272,13 +283,23 @@ inline void tests(ID3D11Device* device, ID3D11DeviceContext* context) {
         mutationFailures = nullptr; if (first) *first = mutationFirst;
         return true;
     };
+    {   // this slice's sources, compiled ahead on every core
+        std::vector<std::string> sources{shippedSource};
+        for (size_t index = 0; index < sizeof(mutants) / sizeof(mutants[0]); ++index) {
+            bool once = false;
+            if (fpgpu::mutantInSlice(index, slice, slices)) sources.push_back(fpgpu::replaceOnce(shippedSource, mutants[index].from, mutants[index].to, &once));
+        }
+        fpgpu::precompilePreps(sources);
+    }
     {   // The control: the shipped source compiled here and run through the same seam passes the whole scenario.
         int failed = 0; std::string first;
         const bool ran = runMutated(shippedSource, &failed, &first);
         check(ran && failed == 0, "skin mutations: control: the unmutated prep, compiled here and run through the test seam, passes the whole scenario");
         if (failed) std::printf("flat mono resolve: skin control: %d checks fail; first: %s\n", failed, first.c_str());
     }
-    for (const fpgpu::Mutant& m : mutants) {
+    for (size_t index = 0; index < sizeof(mutants) / sizeof(mutants[0]); ++index) {
+        if (!fpgpu::mutantInSlice(index, slice, slices)) continue;
+        const fpgpu::Mutant& m = mutants[index];
         ++considered;
         bool once = false;
         const std::string hlsl = fpgpu::replaceOnce(shippedSource, m.from, m.to, &once);
@@ -297,7 +318,7 @@ inline void tests(ID3D11Device* device, ID3D11DeviceContext* context) {
     }
     flatMonoResolveTestPrepBytecode(nullptr, 0);
     flatMonoResolveReset();
-    std::printf("flat mono resolve: skin mutations: %d of %zu caught by the scenario\n", caught, considered);
+    std::printf("flat mono resolve: skin mutations (slice %d of %d): %d of %zu caught by the scenario\n", slice, slices, caught, considered);
     check(size_t(caught) == considered, "skin mutations: every mutation was caught");
 }
 }  // namespace skingpu

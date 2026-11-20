@@ -33,6 +33,8 @@
 #include <utility>
 #include <vector>
 
+#include "../common/dump_file.h"   // skin_<stamp>.bin goes out as .z
+
 namespace edvr {
 namespace skin {
 
@@ -474,10 +476,7 @@ public:
 
     bool writeFile(const std::wstring& path) const {
         const std::vector<uint8_t> bytes = serialize();
-        FILE* f = nullptr;
-        if (_wfopen_s(&f, path.c_str(), L"wb") || !f) return false;
-        const bool ok = std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
-        return std::fclose(f) == 0 && ok;
+        return dump_file::writeWhole(path.c_str(), bytes.data(), bytes.size()).ok;   // NAME.z when it compresses
     }
 
 private:

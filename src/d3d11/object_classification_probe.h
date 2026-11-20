@@ -20,6 +20,7 @@
 // the older v1/v2 captures alike.
 #include "object_record_writer_probe.h"
 #include "kinematic_eval_probe.h"
+#include "../common/game_build.h"
 #include <windows.h>
 #include <cstdint>
 #include <cstdio>
@@ -58,7 +59,8 @@ public:
     void reset(){objectRecordWriterProbe.reset();kinematicEvalProbe.reset();testIdentityOverride_=false;}
     void finish(){objectRecordWriterProbe.finish();kinematicEvalProbe.finish();}
     // A fixture runs on a machine whose executable is not Elite's: publish the
-    // identity the record writer expects, so the reader checks the fixture
+    // identity the record writer used (the resolver's, gameBuildIdentity; the
+    // rig's stand-in reports build 334925), so the reader checks the fixture
     // the way it checks a real capture.
     void useExpectedExecutableIdentityForTest(){testIdentityOverride_=true;}
 
@@ -71,11 +73,11 @@ public:
         // touching its BIN so a failed rewrite cannot leave stale success
         // metadata pointing at new or partial bytes.
         if(!DeleteFileW(jsonPath.c_str())&&GetLastError()!=ERROR_FILE_NOT_FOUND)return false;
-        FILE* bin=nullptr;bool binOk=_wfopen_s(&bin,binPath.c_str(),L"wb")==0&&bin;uint64_t offset=0;
-        objectRecordWriterProbe.writeBinary(bin,offset,binOk);
-        if(bin && fclose(bin)!=0)binOk=false;
+        dump_file::Writer bin;bool binOk=bin.open(binPath.c_str());uint64_t offset=0;   // classification_<stamp>.bin.z when it compresses
+        objectRecordWriterProbe.writeBinary(binOk?&bin:nullptr,offset,binOk);
+        if(bin.isOpen() && !bin.close())binOk=false;
         uint32_t peTimestamp=0,peImageSize=0;executableIdentity(peTimestamp,peImageSize);
-        if(testIdentityOverride_){peTimestamp=ObjectRecordWriterProbe::kExpectedTimestamp;peImageSize=ObjectRecordWriterProbe::kExpectedImageSize;}
+        if(testIdentityOverride_)gameBuildIdentity(&peTimestamp,&peImageSize);
         std::ostringstream j;
         j<<"{\n  \"schema\":\"edvr_object_classification_v3\",\n  \"binary\":"<<quote(binName)
          <<",\n  \"executable\":{\"pe_timestamp\":"<<peTimestamp<<",\"image_size\":"<<peImageSize<<"},\n"

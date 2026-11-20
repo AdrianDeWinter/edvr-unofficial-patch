@@ -93,7 +93,24 @@ struct FlatMonoSourceless {
     uint32_t records = 0, draws = 0, sameCameraDraws = 0, poolRecords = 0, distinctPairs = 0;
     Pair top[4];
     uint32_t topCount = 0;
+    // What made the selector refuse the frame rather than take it source-free (2026-11-08, a field report of DLSS dropping to spatial in
+    // ground-and-sky views): the frame's stock pool-family draws (FlatMonoFrameInput::unsupportedFamilyDraws, drawn into a scene-shaped depth that
+    // need not be this one) and the unsupported pool-kind draws on this depth. At least one is non-zero in a refused frame, and the summary
+    // above lists only this depth, so the first is the one the summary cannot show. Both zero in a frame taken source-free.
+    uint32_t vetoFamilyDraws = 0, vetoPoolDraws = 0;
+    const void* depth = nullptr;   // the HDR's depth this summary is about, for telling a veto draw's depth from it
 };
+
+// A draw that vetoed source-free selection: a pool family's vertex shader with a pixel shader the motion producer leaves stock, drawn into a
+// scene-shaped depth (FlatRuntimeDraw::poolFamilyVs). The runtime keeps the first few distinct (vs, ps, depth) of a frame so the log can name
+// them (FlatRuntimePrefix::familyVetoes). Plain data; a log line only, never an input to a verdict.
+struct FlatFamilyVeto {
+    uint64_t vs = 0, ps = 0;
+    const void* depth = nullptr;
+    uint32_t draws = 0, width = 0, height = 0;   // draws of this key; the first draw's colour target's size (0x0 depth-only)
+    bool color = false, camera = false;                     // it wrote a colour target; it carried a camera constant buffer
+};
+inline constexpr uint32_t kFlatFamilyVetoKinds = 4;
 
 struct FlatMonoFrame {
     FlatMonoReason reason = FlatMonoReason::InvalidInput;
@@ -199,6 +216,29 @@ inline bool fullViewport(uint32_t count, const float* viewport, uint32_t w, uint
 inline bool fullViewport(const FlatContractObservation& k, uint32_t w, uint32_t h) {
     return fullViewport(k.viewportCount, k.viewport, w, h);
 }
+// The full-screen constant fill the Holo-Me screen lays over its tone pass, into the image the game's final copy reads
+// (edvr_gfx_20261105_045527 frame 185198, flat_trace_185199.bin: the tone variant CFA91824129ECBBC / 2427BEBC2082175D writes the
+// 1920x1080 image, then this pair writes it again). VS E8FDC0D92EEBA6D7 is a position pass-through; PS 5D07ACB4D5D5D92A reads
+// nothing (no texture, no depth, no matrix) and writes cb1[0].xyz * cb1[90].y with alpha cb1[0].w, so the image after it is a
+// function of the image before it and of constants, never of anything the scene did not draw. The copy structure's "written by one
+// pass" rule counts it as a second pass and declined every frame of the screen (the stand-down reads no-known-tone-pass, and the
+// 3D commander is left to the game's own stretch). It is a pair, not a shape: only a pass whose bytecode was read is named here.
+constexpr uint64_t kConstantFillVs = 0xE8FDC0D92EEBA6D7ull;
+constexpr uint64_t kConstantFillPs = 0x5D07ACB4D5D5D92Aull;
+// A full-viewport constant fill into a colour target with no depth: the only draw that may follow the first writer of the copy's
+// source without making a second image-making pass of it (the copy structure's rule, flat_copy_structure.h). Never the first
+// writer: the runtime counts it only on the writes after the target's first.
+inline bool constantFillPass(const FlatContractObservation& k) {
+    return k.vs == kConstantFillVs && k.ps == kConstantFillPs && k.rtv && !k.depth && !k.dsv &&
+           fullViewport(k, k.width, k.height);
+}
+// `r` is a target's writes and `fills` how many of them after the first were constant fills: one image-making pass, then only fills.
+// The first writer's pair, which is the record's key, is the fill's own: then no image-making pass came first and the target is not one.
+inline bool oneDrawThenFills(const FlatContractRecord& r, uint32_t fills) {
+    if (!fills) return oneDraw(r);
+    if (r.key.vs == kConstantFillVs && r.key.ps == kConstantFillPs) return false;
+    return r.draws == 1u + fills && ordered(r) && r.firstInstances == 1;
+}
 inline bool hdrViewport(uint32_t count, const float* viewport, uint32_t w, uint32_t h) {
     // Complete Epic frames 36865/41961 contain three HDR writes at full XY
     // extent with depth clamped to zero. They do not name the motion source.
@@ -238,6 +278,7 @@ inline void summarizeSourceless(const FlatMonoFrameInput& in, uint32_t count, co
     out = FlatMonoSourceless{};
     FlatMonoSourceless::Pair acc[16];
     uint32_t used = 0;
+    out.depth = depth;
     for (uint32_t i = 0; i < count; ++i) {
         const auto& r = record(in, i);
         const auto& k = r.key;
@@ -395,7 +436,8 @@ inline FlatMonoFrame flatSelectMonoFrame(const FlatMonoFrameInput& in) {
         summarizeSourceless(in, count, hdr->key.depth, *hdrCamera, out.sourceless);
         // A scene that holds no draw of a pool family has nothing the motion producer could have seen move: the camera term is the whole
         // of its motion, and it is selected with no source. One that holds a family draw the producer left stock (an unkeyed pixel
-        // shader) has moving geometry nothing tracks, and stays refused as it always was.
+        // shader) has moving geometry nothing tracks, and stays refused as it always was. The summary keeps which of the two refused it.
+        out.sourceless.vetoFamilyDraws = in.unsupportedFamilyDraws; out.sourceless.vetoPoolDraws = out.unsupportedDraws;
         if (in.unsupportedFamilyDraws || out.unsupportedDraws) return refuse(FlatMonoReason::NoSupportedSource);
         out.sourceFree = true;
     }

@@ -1,6 +1,9 @@
 #pragma once
 // The optimized station (fix.optimized_stations = on | off). See optimized_station.cpp for the rules and docs\optimized-station-2026-10-12.md.
+#include <atomic>
 #include <cstdint>
+
+struct ID3D11DeviceContext;
 
 namespace edvr {
 
@@ -12,6 +15,12 @@ bool optimizedStationOn() noexcept;
 bool optimizedStationGathers() noexcept;
 // Whether the station is sealed in a hangar this frame (one atomic load). The draw path and the hooks read it.
 bool optimizedStationSealed() noexcept;
+namespace detail {
+extern std::atomic<bool> g_sunOff;   // the sun skip is on (optimized_station.cpp writes it with release)
+}
+// The sun skip's own first test, inline for the draw path: optimizedStationSkipsDraw returns false at once while it is false, so a caller tests this before
+// building the call's two hash arguments. The same acquire load.
+inline bool optimizedStationSunOff() noexcept { return detail::g_sunOff.load(std::memory_order_acquire); }
 // The draw path asks: true skips the draw (the sun pair, while the sun skip is on).
 bool optimizedStationSkipsDraw(uint64_t vs, uint64_t ps) noexcept;
 // Built 2026-10-21: how the flat draw path carried out a skipped sun draw (the VR path never issues it and does not report). kNotIssued: the real draw call was
@@ -23,5 +32,13 @@ void optimizedStationNoteSunDraw(SunDrawPath path) noexcept;
 void optimizedStationAfterStore(uintptr_t bucket, uintptr_t record) noexcept;
 // The render thread's frame tick: the setting, the seal and release rules, the 30 s summary.
 void optimizedStationFrame(uint32_t frame);
+
+// TEMPORARY (the concourse cull's VR proving build, hotkey.concourse_vr_camera_probe; docs\concourse-cull-2026-11-05.md): the tone-draw lines of the camera probe. The VR eye draw
+// path asks the armed flag (one atomic load) and, while it is set, hands over each 3-vertex draw; the function logs the game's tonemap once per eye per probe frame.
+namespace detail {
+extern std::atomic<bool> g_vrProbeToneArmed;
+}
+inline bool concourseVrProbeToneArmed() noexcept { return detail::g_vrProbeToneArmed.load(std::memory_order_acquire); }
+void concourseVrProbeToneDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count, uint32_t instances, uint32_t startInstance);
 
 }  // namespace edvr

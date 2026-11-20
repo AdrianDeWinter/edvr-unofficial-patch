@@ -1,4 +1,4 @@
-EDVR - native OpenXR package
+ED Unofficial Patch - native OpenXR package
 ================================
 
 This folder contains the native OpenXR runtime facade, the Khronos loader,
@@ -25,6 +25,6 @@ requirement. No vendor runtime DLL is substituted by this package.
 UNINSTALL
 ---------
 
-Close Elite, remove EDVR's d3d11.dll, openvr_api.dll, openxr_loader.dll and
+Close Elite, remove ED-UP's d3d11.dll, openvr_api.dll, openxr_loader.dll and
 the license notice, then rename openvr_api_orig.dll back to openvr_api.dll.
 Keep the original file untouched until the uninstall is complete.

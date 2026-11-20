@@ -1,4 +1,5 @@
 #include "hotkey_capture.h"
+#include "../common/flat_profile_keys.h"
 #include "menu_pad.h"
 
 #include <cstdio>
@@ -191,20 +192,6 @@ BindCheck hotkeyCheckBinding(const HotkeyBinding& b, const HotkeyOther* others, 
     return r;
 }
 
-bool hotkeyRowLocked(const char* rowKey, bool explorerCamSession) {
-    return explorerCamSession && rowKey && strcmp(rowKey, "explorer_cam") == 0;
-}
-
-size_t hotkeyLockedText(const char* keyText, char* out, size_t cap) {
-    if (!out || cap == 0) return 0;
-    snprintf(out, cap, "Leave Explorer Cam (%s) to change its key", keyText && keyText[0] ? keyText : "its key");
-    return strlen(out);
-}
-
-bool hotkeyCaptureMayBegin(const HotkeyRowContext& ctx) {
-    return !hotkeyRowLocked(ctx.rowKey, ctx.explorerCamSession);
-}
-
 CaptureDecision hotkeyDecide(const CaptureStep& step, const HotkeyRowContext& ctx) {
     CaptureDecision d;
     switch (step.kind) {
@@ -217,10 +204,6 @@ CaptureDecision hotkeyDecide(const CaptureStep& step, const HotkeyRowContext& ct
             break;
     }
     // Everything below would change the row, or says why it will not.
-    if (hotkeyRowLocked(ctx.rowKey, ctx.explorerCamSession)) {
-        d.outcome = CaptureOutcome::Locked;
-        return d;
-    }
     if (step.kind == CaptureKind::ClearRefused ||
         (step.kind == CaptureKind::Cleared && ctx.rowKey && strcmp(ctx.rowKey, "menu") == 0)) {
         d.outcome = CaptureOutcome::ClearRefusedMenu;
@@ -256,6 +239,24 @@ int hotkeyPageRows(const MenuRowDef* rows, int n, bool developer, int* out, int 
         const MenuRowDef& d = rows[i];
         if (d.kind != MenuKind::Hotkey || strcmp(d.page, "hotkeys") != 0) continue;
         if (d.tier != MenuTier::Fix && !developer) continue;
+        char dotted[96];
+        snprintf(dotted, sizeof(dotted), "%s.%s", d.section, d.key);
+        if (flatProfileOnlyKey(dotted)) continue;   // the VR profile does not read it (flat_profile_keys.h)
+        out[count++] = i;
+    }
+    return count;
+}
+
+int hotkeyPageRowsFor(const MenuRowDef* rows, int n, bool flatProfile, bool developer, int* out, int max) {
+    if (!flatProfile) return hotkeyPageRows(rows, n, developer, out, max);
+    int count = 0;
+    for (int i = 0; i < n && count < max; ++i) {
+        const MenuRowDef& d = rows[i];
+        if (d.kind != MenuKind::Hotkey || strcmp(d.page, "hotkeys") != 0) continue;
+        if (d.tier != MenuTier::Fix) continue;
+        char dotted[96];
+        snprintf(dotted, sizeof(dotted), "%s.%s", d.section, d.key);
+        if (!flatProfileReadsKey(dotted)) continue;
         out[count++] = i;
     }
     return count;

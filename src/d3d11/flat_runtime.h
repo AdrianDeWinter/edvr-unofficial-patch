@@ -28,6 +28,14 @@ void flatRuntimeMapBounceNoteMap(ID3D11DeviceContext*, ID3D11Resource*, UINT,
 void* flatRuntimeMapBounceInstall(ID3D11DeviceContext*, ID3D11Resource*, UINT,
                                   D3D11_MAP, void* real);
 FlatMapBounce::Lease flatRuntimeMapBounceBeginUnmap(ID3D11DeviceContext*, ID3D11Resource*);
+// The bounce, published once it is constructed (flat_runtime.cpp mapBounce(), release store inside the static initialiser) so the Map and Unmap hooks can
+// test "anything open" inline, from any thread. Null before the first mapBounce(): nothing can be open then, because open_ rises only in install, which
+// reaches the bounce through mapBounce(). The object is never freed, so the pointer never dangles.
+extern std::atomic<FlatMapBounce*> g_flatMapBounce;
+inline bool flatRuntimeMapBounceAnyOpen() {
+    const FlatMapBounce* bounce = g_flatMapBounce.load(std::memory_order_acquire);
+    return bounce && bounce->anyOpen();
+}
 bool flatRuntimeMapBounceSamplePending(uint32_t width);
 void flatRuntimeMapBounceObserveCopy(uint32_t width, uint64_t ticks);
 void flatRuntimeMapBounceTrackedMap(D3D11_MAP type);
@@ -150,6 +158,11 @@ struct FlatRuntimeDrawScope {
     // (uiComposite).
     bool uiTake=false,uiTaken=false,uiEnded=false,uiTone=false,uiComposite=false;
     uint64_t uiVs=0,uiPs=0;
+    // The supercruise bars (2026-11-03, supercruise_bars.h): the decided draw is the bars family (uiBars; uiBarsVertices is its count), so its issue into the
+    // layer goes through the private strip shader. Prepare runs before the layer's Begin, the strip's Begin after a true one (uiBarsBound), its End before
+    // the layer's End (endActualDraw, and the destructor when that never ran), as vscreen.cpp has them for VR.
+    bool uiBars=false,uiBarsBound=false;
+    uint32_t uiBarsVertices=0;
     // The HUD's bloom (flat_ui_layer.h flatUiGlowWanted): this is the HDR route's trigger draw and it writes a half-size target of H, the bloom
     // chain's first level. Begin binds H' = H + the HUD layer's light at `glowSlot` for the game's issue (glowOriginal holds the game's view then),
     // End puts the game's view back.
@@ -164,6 +177,11 @@ struct FlatRuntimeDrawScope {
     const void* glowHdr=nullptr;
     uint64_t glowVs=0,glowPs=0;
     ID3D11ShaderResourceView* glowOriginal=nullptr;
+    // The depth-of-field blur (flat_dof_blur.h): this draw lays the blur over the scene. Begin binds the mean of the recent frames' blur for the game's issue
+    // (dofBlurOriginal holds the game's view then), End puts the game's view back.
+    bool dofBlur=false;
+    uint64_t dofBlurPs=0;
+    ID3D11ShaderResourceView* dofBlurOriginal=nullptr;
     bool domainPlanned=false,domainStarted=false,domainForeign=false,domainPool=false;
     bool domainProtectedOverlay=false;
     bool domainHdrWriter=false;
@@ -179,7 +197,7 @@ struct FlatRuntimeDrawScope {
     forward_light::Issue forwardIssue{};
     uint64_t lightPayloadToken=0;
     const FlatProjectionBindingPlan* lightPayloadPlan=nullptr;
-    bool needsActualDraw() const { return forwardIssue.kind!=forward_light::Issue::None || lightPayloadToken || drawPacket || domainPlanned || uiTake || uiComposite || uiGlow ||
+    bool needsActualDraw() const { return forwardIssue.kind!=forward_light::Issue::None || lightPayloadToken || drawPacket || domainPlanned || uiTake || uiComposite || uiGlow || dofBlur ||
                                           flatRuntimeNeedsActualDraw(weaponFootprintStarted, overlayPlanned,
                                                                      foregroundPlanned, untrustedPlanned); }
     // After the game's own issue and endActualDraw: the second issues fix.ui_quality's flat layer asks for, each the game's
@@ -191,7 +209,7 @@ struct FlatRuntimeDrawScope {
         if (uiTaken && flatUiLayerWriteBackBegin(ctx)) { issue(); flatUiLayerWriteBackEnd(ctx); }
         // visual.star_glow: a star pass the game just issued into H is issued once more into the star layer, with the game's own state (the hook's real call).
         if (starReplay && flatStarGlowReplayBegin(ctx, starRole, starW, starH)) { issue(); flatStarGlowReplayEnd(ctx); }
-        // The weapons' light is re-issued through the same draw before the HUD's (fix.sharp_weapons: the layer binds each step's source and blend and says when
+        // The weapons' light is re-issued through the same draw before the HUD's (the weapons fire: the layer binds each step's source and blend and says when
         // none is left); with only the HUD in the layer the plan is one step and the loop never runs.
         if (uiTone && flatUiLayerToneBegin(ctx)) { issue(); while (flatUiLayerToneNext(ctx)) issue(); flatUiLayerToneEnd(ctx); }
     }

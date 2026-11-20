@@ -58,6 +58,8 @@ import struct
 import sys
 from pathlib import Path
 
+import dump_io   # tools\dump_io.py: depth_<stamp>_f<frame>_<A|B>.bin is NAME or NAME.z
+
 MAGIC = b'EDVRDEPT'
 VERSIONS = (1, 2)
 V1_FIRST_FLOAT = 256          # version 1: cb1 floats [256, 592) = registers 64..147
@@ -116,7 +118,7 @@ class DepthDump:
 
 
 def read(path):
-    data = Path(path).read_bytes()
+    data = dump_io.read_bytes(path)
     stream = io.BytesIO(data)
 
     def take(n, what):
@@ -240,6 +242,10 @@ def self_test():
         # f32 round-trip: compare within a float epsilon, not bit-exact
         assert abs(d.at(3, 4) - (3 + 4 * 0.01)) < 1e-6, 'depth grid access'
         assert describe(d).count('\n') == 4, 'summary shape'
+        zgood = Path(tmp) / 'depth_TEST_f8_A.bin'
+        dump_io.write_z(zgood, build())   # the compressed container the dump writes: no plain file, read under the original name
+        assert not zgood.exists() and read(zgood).header['version'] == 2 and read(zgood).depth == d.depth, 'a compressed depth capture reads'
+        assert [f.name for f in map(Path, dump_io.glob(str(Path(tmp) / 'depth_*.bin')))] == ['depth_TEST_f7_B.bin', 'depth_TEST_f8_A.bin'], 'the directory listing finds plain and .z'
         # A block clamped to a CB1[276] buffer: registers 256..275, camera intact.
         tight = Path(tmp) / 'tight.bin'
         tight.write_bytes(build(constants=[float(1024 + i) + 0.5 for i in range(80)]))
@@ -302,7 +308,7 @@ def main():
     if not args.path:
         ap.error('a file or directory is required (or --self-test)')
     p = Path(args.path)
-    files = sorted(p.glob('depth_*.bin')) if p.is_dir() else [p]
+    files = [Path(f) for f in dump_io.glob(str(p / 'depth_*.bin'))] if p.is_dir() else [p]   # plain and .z, once each
     if not files:
         print('no depth_*.bin under %s' % p, file=sys.stderr)
         return 1

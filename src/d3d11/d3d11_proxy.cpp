@@ -23,6 +23,7 @@
 #include "../common/runtime_profile.h"
 #include "../common/d3d11_device_identity.h"
 #include "../common/frame_flag.h"
+#include "../common/game_build.h"
 #include "../common/guard.h"
 #include "../common/iniedit.h"
 #include "../common/log.h"
@@ -30,10 +31,12 @@
 #include "../common/module_pin.h"
 #include "../common/native_startup.h"
 #include "../common/proxy.h"
+#include "../common/system_d3d11.h"   // chooseSystemD3D11: the DllMain handle, checked by path
 #include "device_hook.h"
 #include "flat_wrapper_note.h"
 #include "format_support_log.h"
 #include "input_gate.h"
+#include "desktop_window_cursor.h"   // visual.desktop_window: the executable's cursor calls, watched (VR scope)
 #include "loaded_module_match.h"
 #include "vr_ssaa_hold.h"  // vrSsaaHoldEarlyInstall: the Supersampling hold's hooks at DLL load
 #include "mode_watch.h"    // modeWatchStart: the 3D mode watch, started after the profile lines
@@ -58,7 +61,10 @@ const char* const kExportNames[] = {
 constexpr size_t kExportCount = sizeof(kExportNames) / sizeof(kExportNames[0]);
 
 HMODULE g_realModule = nullptr;    // what exports currently forward to
-HMODULE g_systemModule = nullptr;  // Windows' own, always resolved, never null
+// What LoadLibraryW of <System32>\d3d11.dll returned inside DllMain, as it came: usually Windows' own, and not
+// checked there (nothing can be under the loader lock). A hook on LoadLibraryExW can answer that load with another
+// module, so the context probe and slot reclaim do not read this; they read probeSystemModule(), which checks it by path.
+HMODULE g_systemModule = nullptr;
 HMODULE g_selfModule = nullptr;
 std::wstring* g_moduleDir = nullptr;
 // The file name of the graphics wrapper that handles the immediate context, written once before the flag (see
@@ -466,22 +472,28 @@ BOOL CALLBACK initOnceCallback(PINIT_ONCE, PVOID, PVOID*) {
                               "against (%s)",
                               build.c_str(), verified.c_str());
     } else {
-        // Not a warning. Every fix here identifies its target by what that
-        // target does or looks like, so an unfamiliar build is the expected
-        // case rather than a degraded one, and saying otherwise would send
-        // people chasing a problem they do not have.
-        //
-        // This line briefly said the resolution fix would refuse on an unknown
-        // build, which was true while it was pinned to one. It no longer is:
-        // it recognises the code it edits, and reports what it found.
+        // Not a warning, but not a promise either. The fixes that hook the
+        // game's code bind addresses of one build; on another, the signature
+        // resolver (src\common\game_build.h, issue 124) finds each by matching
+        // the known build's whole function, and a fix comes up only where it
+        // found every address it needs. The Oculus route profile and Explorer
+        // Cam stay off on any build but the known one. Until 2026-10-25 this
+        // line said every fix found its target by shape, which was never true
+        // of the hooks.
         edvr::Log::get().note(
-            "game build %s -- not one of the builds this was checked against (%s). Every "
-            "fix here finds its target by what that target does or looks like, not by "
-            "which build compiled it, so an unfamiliar build is expected rather than a "
-            "problem. If anything fails to match, the lines below say so and nothing is "
-            "touched.",
+            "game build %s -- not one of the builds this was checked against (%s). The "
+            "fixes that hook the game look for the code they edit by matching the known "
+            "build's functions (the \"game build:\" line says how many addresses were "
+            "found), and each comes up only where it found everything it needs; the "
+            "Oculus route profile and Explorer Cam stay off. The lines below say what each "
+            "found, and nothing it did not find is touched.",
             build.empty() ? "(unreadable)" : build.c_str(), verified.c_str());
     }
+    // An unknown build: the signature resolver starts here on a thread of its own (issue 124), so no hook pays it on the render thread
+    // or in DllMain, and the VR Supersampling hold, which waited for it, installs on that thread when it is done.
+    // The TEMPORARY instrument (advanced.game_update_check): off, nothing; on, on the known build, the resolver runs once on a background
+    // thread and logs whether it finds every address where the hooks' constants put it.
+    edvr::gameBuildStartup(&edvr::vrSsaaHoldInstallAfterResolve);
 
     if (g_missingExports) {
         edvr::Log::get().note(
@@ -505,6 +517,10 @@ BOOL CALLBACK initOnceCallback(PINIT_ONCE, PVOID, PVOID*) {
         g_patchExeLoadLibraryW.applied ? 1 : 0,
         g_patchExeLoadLibraryExA.applied ? 1 : 0,
         g_patchExeLoadLibraryExW.applied ? 1 : 0);
+
+    // visual.desktop_window: the executable's SetCursorPos, GetCursorPos and ShowCursor, so the cursor can be hidden over the desktop window while it has focus. They pass
+    // through; only ShowCursor's count is changed, and only while the cursor is hidden. The game's mouse lock is not touched. A flat-only install has no desktop window and no hooks.
+    if (edvr::runtimeScopeIncludesVr()) edvr::desktopWindowCursorInstall();
 
     // Now, out from under the loader lock, is when another proxy can safely be
     // brought in.
@@ -546,6 +562,7 @@ void shutdown() {
     edvr::iatHookUninstall(&g_patchExeLoadLibraryW);
     edvr::iatHookUninstall(&g_patchExeLoadLibraryExA);
     edvr::iatHookUninstall(&g_patchExeLoadLibraryExW);
+    edvr::desktopWindowCursorUninstall();
 
     // Before the module goes: a filter pointing into an unmapped image would
     // take the game's own crash reporting down with it.
@@ -609,7 +626,7 @@ namespace edvr {
 // -- the exact failure CopyVptr exists to dodge, not taken because the probe
 // mislabelled the object.
 //
-// Entries pointing into g_systemModule (Windows' own d3d11.dll) mean the
+// Entries pointing into the system module (Windows' own d3d11.dll, probeSystemModule below) mean the
 // runtime owns this object: a vptr swap is safe -- there is no wrapper to
 // break -- and `auto` gives it the LIVE private table, which stays in step
 // with the runtime re-pointing its own entries (the #20/#21 hang) because
@@ -618,7 +635,62 @@ namespace edvr {
 // count here and the object stays InPlace -- issue #6 avoided. A threshold,
 // not all-or-nothing, because a thin wrapper may forward some slots straight
 // to d3d11.dll; a clear majority in d3d11.dll is the runtime's own table.
-void* systemD3D11Module() { return g_systemModule; }
+//
+// WHICH MODULE THAT IS is checked, not assumed. g_systemModule is the return of a LoadLibraryW inside DllMain, and a
+// hook on LoadLibraryExW can answer that load with a different d3d11.dll (src\common\system_d3d11.h). A Windows rig
+// running EDHM ahead of EDVR logged "0 of 96" entries inside Windows' d3d11.dll beside a second line naming d3d11.dll
+// as the module backing 96 of the same 96: both can print only if the handle was not System32's module
+// (docs\windows-d3d11-system-module-2026-11-07.md). What the wrong handle does is in the code: the probe counts against
+// the wrong image and picks the shared table, and reclaim, which adopts a re-point only from the module it was told
+// implements the context, adopts none of Windows' own. That the rig's draws=0 copies=0 is that, and which module the
+// handle was, is not shown yet; the line this writes names it. This is the one place the module is chosen. It is not
+// decided in DllMain, where nothing can be looked up safely; it is decided here, at the first probe, when the device
+// exists and so System32's d3d11.dll is mapped.
+//
+// A verified answer is kept. An unverified one (System32's module not found mapped) is asked again at each call, so a
+// module that was not yet mapped at the first call is still found at the next; it says so each time, three calls
+// a device at most.
+static HMODULE probeSystemModule() {
+    static std::atomic<HMODULE> verified{nullptr};
+    if (HMODULE known = verified.load(std::memory_order_acquire)) return known;
+
+    const SystemD3D11Choice choice = chooseSystemD3D11(g_systemModule);
+    const wchar_t* held = choice.heldPath.empty() ? L"(no module)" : choice.heldPath.c_str();
+    const wchar_t* wanted = choice.wantedPath.empty() ? L"<System32>\\d3d11.dll" : choice.wantedPath.c_str();
+    if (!choice.verified) {
+        Log::get().note(
+            "system d3d11.dll: LoadLibrary returned %S for %S at startup, and System32's own module could "
+            "not be found mapped, so the context probe and slot reclaim use that handle as it is, UNVERIFIED. "
+            "If the probe below says 0 of 96 sampled entries are inside Windows' d3d11.dll, this is the "
+            "first place to look.",
+            held, wanted);
+        return choice.module;
+    }
+    if (std::strcmp(choice.route, "held") == 0) {
+        Log::get().note(
+            "system d3d11.dll: the module LoadLibrary returned at startup is Windows' own (%S); the context "
+            "probe and slot reclaim name it.",
+            held);
+    } else {
+        Log::get().note(
+            "system d3d11.dll: LoadLibrary returned %S for %S at startup -- NOT Windows' own. Something "
+            "answered that load with a different module; a hook on LoadLibraryExW returning its own d3d11.dll "
+            "is the known way (3Dmigoto and EDHM with load_library_redirect = 2). The context probe and slot "
+            "reclaim use the System32 module found mapped instead (%p, by %s). Counted against the handle "
+            "at startup, a context whose methods are all Windows' own reads as a wrapper's, and reclaim "
+            "adopts none of Windows' own re-points of EDVR's hooks.",
+            held, wanted, static_cast<void*>(choice.module), choice.route);
+        // The DllMain load held a reference for the process lifetime; this one is found, not loaded, so it takes its
+        // own. FROM_ADDRESS with the base address, which lies inside the module.
+        HMODULE pinned = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                           reinterpret_cast<LPCWSTR>(choice.module), &pinned);
+    }
+    verified.store(choice.module, std::memory_order_release);
+    return choice.module;
+}
+
+void* systemD3D11Module() { return probeSystemModule(); }
 
 // The mode's name for a log line. One function because three call sites in
 // here print it and a fourth reads it back out of a field report -- and a
@@ -634,7 +706,9 @@ static const char* hookModeName(HookMode m) {
 }
 
 HookMode contextHookModeFor(ID3D11DeviceContext* ctx) {
-    if (!ctx || !g_systemModule) return HookMode::InPlace;
+    // The checked module, before anything else: its identity line is the first thing this probe writes.
+    HMODULE const systemModule = probeSystemModule();
+    if (!ctx || !systemModule) return HookMode::InPlace;
     void** vt = nullptr;
     if (!guarded("contextHookModeFor/read-vptr",
                  [&] { vt = *reinterpret_cast<void***>(ctx); })) {
@@ -644,8 +718,8 @@ HookMode contextHookModeFor(ID3D11DeviceContext* ctx) {
     // wrapper that forwards a handful while intercepting the rest must not be
     // read as the runtime's own.
     constexpr size_t kSample = 96;
-    const size_t inSystem = edvr::vtableEntriesInModule(vt, kSample, g_systemModule);
-    const bool arrayInside = edvr::vtableInsideModule(vt, g_systemModule);
+    const size_t inSystem = edvr::vtableEntriesInModule(vt, kSample, systemModule);
+    const bool arrayInside = edvr::vtableInsideModule(vt, systemModule);
 
     // A HIGH bar, not a bare majority, and the field data is why. A genuine
     // runtime context samples 93-96 of 96 inside d3d11.dll -- essentially all
@@ -745,7 +819,7 @@ HookMode contextHookModeFor(ID3D11DeviceContext* ctx) {
     // code; never a live copy, never a forced mode) is the header's, so the rig can drive it.
     {
         char owner[sizeof(g_wrapperFile)] = {};
-        const size_t owned = edvr::vtableDominantOtherModule(vt, kSample, g_systemModule, owner, sizeof(owner));
+        const size_t owned = edvr::vtableDominantOtherModule(vt, kSample, systemModule, owner, sizeof(owner));
         if (const char* file = flatWrapperFile(mode, probed, owner)) {
             if (!g_wrapperFileSet.load(std::memory_order_acquire)) {
                 std::memcpy(g_wrapperFile, file, std::strlen(file) + 1);
@@ -847,8 +921,10 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
             edvr::oculusRouteInstallEarly(true);
             loaderPhase();
             edvr::inputGateInstallEarly();
-            // The VR Supersampling hold's hooks (vr_ssaa_hold.h): pure memory reads and writes, the build gate first, so a
-            // stranger's process (the installer) refuses them silently. No config, file or log here.
+            // The VR Supersampling hold's hooks (vr_ssaa_hold.h): pure memory reads and writes, the build gate first. In a
+            // process whose main module is not EliteDangerous64.exe (the installer, say) the resolver resolves nothing, so they
+            // refuse silently; on an unknown build of the game they wait for the signature resolve, which never runs here
+            // under the loader lock (gameBuildStartup's thread installs them). No config, file or log here.
             edvr::vrSsaaHoldEarlyInstall();
             break;
 

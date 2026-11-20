@@ -1,4 +1,4 @@
-// Exercise the production coverage pass on D3D11 WARP. Only the game's
+﻿// Exercise the production coverage pass on D3D11 WARP. Only the game's
 // depth-probe selection, logging and raw-hook entry are supplied here.
 // This rig supplies its own binding shadow readers (below), so it asks the
 // header for declarations rather than the inline production ones.
@@ -48,10 +48,28 @@ void FaultBudget::charge() { --m_remaining; }
 bool Config::getBool(const char*, bool) const { std::abort(); }
 float Config::getFloat(const char*, float) const { std::abort(); }
 std::string Config::getString(const char*, const char*) const { std::abort(); }
-void* bindingGet(BindSlot) { std::abort(); }
+// The binding shadow, faked only while rigfake::on (build 5): the eye-draw memo's miss path and the view memo read it, and the checks below drive them
+// with rig values. Off, each aborts as before, so a dependency this rig did not mean to have still fails loudly.
+namespace rigfake {
+bool on = false;
+void* ptr[static_cast<size_t>(BindSlot::Count)] = {};
+uint32_t eyeKey = 1;               // bindingEyeKeyGeneration
+unsigned resolves = 0;             // bindingResolve calls
+struct ViewInfo { const void* view; ResourceInfo info; };
+ViewInfo views[64] = {};           // the views bindingResolve knows (a view not listed does not resolve)
+unsigned viewCount = 0;
+}  // namespace rigfake
+void* bindingGet(BindSlot s) { if (!rigfake::on) std::abort(); return rigfake::ptr[static_cast<size_t>(s)]; }
 uint32_t bindingGeneration(BindSlot) { std::abort(); }
-uint64_t bindingShaderHash(BindSlot) { std::abort(); }
-bool bindingResolve(void*, ResourceInfo*) { std::abort(); }
+uint32_t bindingEyeKeyGeneration() { if (!rigfake::on) std::abort(); return rigfake::eyeKey; }   // the eye-draw memo's key (2026-10-27): read only after the classifier's own on test
+uint64_t bindingShaderHash(BindSlot) { if (!rigfake::on) std::abort(); return 0; }
+bool bindingResolve(void* view, ResourceInfo* out) {
+    if (!rigfake::on) std::abort();
+    ++rigfake::resolves;
+    for (unsigned i = 0; i < rigfake::viewCount; ++i)
+        if (rigfake::views[i].view == view) { *out = rigfake::views[i].info; return true; }
+    return false;
+}
 bool bindingResolveResource(void*, ResourceInfo*) { std::abort(); }
 bool depthProbeIsSceneDepth(const void*) { std::abort(); }
 uint64_t lookupShaderHash(void*) { std::abort(); }
@@ -72,6 +90,7 @@ ID3D11PixelShader* shaderSwapCompilePs(ID3D11DeviceContext* ctx, const char* sou
 }
 float temporalPassDepthAt(float metres) { return 0.025f / metres; }
 bool temporalPassPlanes(float* nearZ, float* farZ) { *nearZ = .025f; *farZ = 10000; return true; }
+bool temporalPassUpscale(float* x, float* y) { *x = 2.0f; *y = 2.0f; return true; }   // F108's surface line; not exercised here
 bool depthProbeSceneDepthFormat(uint32_t, uint32_t, int, ID3D11Texture2D** tex, uint32_t* fmt) {
     *tex = testScene; *fmt = DXGI_FORMAT_D32_FLOAT; return testScene != nullptr;
 }
@@ -166,7 +185,16 @@ std::vector<float> read(ID3D11Device* dev, ID3D11DeviceContext* ctx, ID3D11Resou
 }
 #include "planet_coverage_test.h"
 #include "corona_coverage_test.h"
+#include "zscene_gate_test.h"
+#include "world_screen_coverage_test.h"   // after zscene_gate_test.h: F108's motion-pass check uses its texture helpers
+#include "main_depth_tile_test.h"
 int main(int argc, char** argv) {
+    // The motion prep's absent-layer gate alone, on the adapter asked for (zscene_gate_test.h); never the build's run.
+    if (argc > 1 && std::strcmp(argv[1], "--zscene-gate") == 0) return zgate::runAlone(argc, argv);
+    // main's depth tile alone, the same way (main_depth_tile_test.h).
+    if (argc > 1 && std::strcmp(argv[1], "--main-tile") == 0) return maintile::runAlone(argc, argv);
+    // The gate's CPU half first: no device, and a slot slip fails here in a second (zscene_gate_test.h).
+    zgate::cpuHalf();
     ComPtr<ID3D11Device> dev; ComPtr<ID3D11DeviceContext> ctx;
     D3D_FEATURE_LEVEL level;
     const auto driver = argc>2 && std::strcmp(argv[2],"hardware")==0 ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP;
@@ -178,6 +206,147 @@ int main(int argc, char** argv) {
     hr(created);
     check(gpuTimingBind(dev.Get(),ctx.Get()),"bind canonical WARP timer owner");
     ComPtr<ID3D11InfoQueue> info; dev.As(&info);
+    // Build 4, item 5: uiDepthOnEyeDraw's per-draw outputs are one struct, reset as one block. Its defaults are the twelve resets the call used to make
+    // one by one (mode none, nothing pending, both eyes -1, no shader, mask slot 0), and the ui_depth.h accessors read the same values after a draw.
+    {
+        const detail::UiDepthDraw d0{};
+        check(d0.mode == Mode::kNone && !d0.planetPending && !d0.planetSolarPending && !d0.worldScreenPending && !d0.composite &&
+              !d0.coronaPending && !d0.coronaMotion && !d0.wantRebind && !d0.wantMask && d0.rebindEye == -1 && d0.drawEye == -1 &&
+              d0.reissueMaskSlot == 0 && d0.reissueShader == nullptr,
+              "ui depth draw outputs: the struct's defaults are the old resets (-1 for both eye fields)");
+        detail::UiDepthDraw& g = detail::g_uiDepthDraw;
+        g.mode = Mode::kReissueScene; g.planetPending = g.planetSolarPending = g.worldScreenPending = g.composite = true;
+        g.coronaPending = g.coronaMotion = g.wantRebind = g.wantMask = true;
+        g.rebindEye = g.drawEye = 1; g.reissueMaskSlot = 3; g.reissueShader = &g_depthShaders[1];
+        check(uiDepthPlanetPending() && uiDepthWorldScreenPending() && uiDepthDrawSampledSurface() && uiDepthWantsReissue(),
+              "ui depth draw outputs: the accessors read the fields (control: dirty values are seen)");
+        const bool wasOn = detail::g_uiDepthOn;
+        detail::g_uiDepthOn = false;   // the inline resets (the flag is set), then declines on this flag
+        check(!uiDepthOnEyeDraw(ctx.Get(), HoloDraw{'X', 6, 1, 0, 0, 0}), "ui depth draw outputs: a draw with the pass off declines");
+        detail::g_uiDepthOn = wasOn;
+        check(g.mode == d0.mode && g.planetPending == d0.planetPending && g.planetSolarPending == d0.planetSolarPending &&
+              g.worldScreenPending == d0.worldScreenPending && g.composite == d0.composite && g.coronaPending == d0.coronaPending &&
+              g.coronaMotion == d0.coronaMotion && g.wantRebind == d0.wantRebind && g.wantMask == d0.wantMask && g.rebindEye == -1 &&
+              g.drawEye == -1 && g.reissueMaskSlot == 0 && g.reissueShader == nullptr,
+              "ui depth draw outputs: one call leaves every output at its default");
+        check(!uiDepthPlanetPending() && !uiDepthWorldScreenPending() && !uiDepthDrawSampledSurface() && !uiDepthWantsReissue(),
+              "ui depth draw outputs: the ui_depth.h accessors return the reset values after a draw");
+        const UiDepthDrawProbe pr = uiDepthDrawProbe();
+        check(!pr.coverage && !pr.wantMask && pr.maskSlot == 0 && pr.drawEye == -1, "ui depth draw outputs: the draw probe reads the reset values");
+    }
+    // Build 6, item 5: uiDepthOnEyeDraw is back out of line, in build 4's form (the reset, g_holoDraw = draw, the gate, the memo). Over hit, miss, hit, reissue, hit the
+    // accessors return build 4's values: the outputs are the defaults on every call, and the input draw is copied on every call, a hit included.
+    {
+        detail::UiDepthDraw& g = detail::g_uiDepthDraw;
+        rigfake::on = true;
+        detail::g_uiDepthOn = true;
+        detail::g_uiDepthStoodDown = false;
+        rigfake::eyeKey = 10;
+        classifiermemo::invalidate(g_eyeMemo);
+        const auto defaults = [&] {
+            return g.mode == Mode::kNone && !g.planetPending && !g.planetSolarPending && !g.worldScreenPending && !g.composite && !g.coronaPending && !g.coronaMotion &&
+                   !g.wantRebind && !g.wantMask && g.rebindEye == -1 && g.drawEye == -1 && g.reissueMaskSlot == 0 && g.reissueShader == nullptr &&
+                   !uiDepthPlanetPending() && !uiDepthWorldScreenPending() && !uiDepthDrawSampledSurface() && !uiDepthWantsReissue();
+        };
+        // 1. Miss: Dsv0 unbound is the classifier's first exit (not a plain decline). The input draw is copied.
+        rigfake::ptr[static_cast<size_t>(BindSlot::Dsv0)] = nullptr;
+        g_holoDraw = HoloDraw{};
+        check(!uiDepthOnEyeDraw(ctx.Get(), HoloDraw{'X', 6, 1, 0, 0, 0}), "ui depth memo: a first call is a miss and declines");
+        check(g_holoDraw.kind == 'X' && g_holoDraw.count == 6 && g_holoDraw.instances == 1, "ui depth memo: the input draw is copied on a miss");
+        check(defaults(), "ui depth memo: after a miss the outputs are the defaults (the classifier made no plain-decline write here)");
+        // 2. Hit: store the plain decline at the current key; the next call hits at once. The outputs are reset and the input draw copied, as build 4 did on every call.
+        classifiermemo::store(g_eyeMemo, classifiermemo::Key{rigfake::eyeKey, g_classifierEpoch}, classifiermemo::Exit::kPlainDecline);
+        g.composite = true; g.mode = Mode::kReissue;   // an output the last draw wrote ...
+        g_holoDraw = HoloDraw{'D', 1, 1, 0, 0, 0};
+        const unsigned resolves1 = rigfake::resolves;
+        check(!uiDepthOnEyeDraw(ctx.Get(), HoloDraw{'X', 9, 9, 0, 0, 0}), "ui depth memo: a call at the stored plain-decline key hits and declines");
+        check(defaults(), "ui depth memo: a hit resets the outputs (build 4's unconditional reset)");
+        check(g_holoDraw.kind == 'X' && g_holoDraw.count == 9, "ui depth memo: a hit copies the input draw (build 4's order: the reset, g_holoDraw = draw, the gate, the memo)");
+        check(rigfake::resolves == resolves1, "ui depth memo: a hit resolves nothing");
+        // 3. Reissue: a draw's reissue leaves outputs behind (coronaMotion, a mode); the next call, a hit, puts every default back.
+        g.coronaMotion = true; g.mode = Mode::kReissueScene; g.reissueShader = &g_depthShaders[1];
+        check(!uiDepthOnEyeDraw(ctx.Get()) && defaults(), "ui depth memo: after a reissue wrote coronaMotion and a mode the next hit resets them");
+        check(!uiDepthOnEyeDraw(ctx.Get()) && defaults(), "ui depth memo: another hit, same values");
+        // 4. S2 (maintainer-approved, 2026-11-04): a same-pointer PS SRV 0..3 re-set no longer moves the key (binding_shadow.cpp, tested in scrim_metadata_test), so the memo
+        // stays valid across it; a pointer change moves the key and the next call misses.
+        check(!uiDepthOnEyeDraw(ctx.Get()), "ui depth memo S2: a same-pointer re-set leaves the key where it was ...");
+        rigfake::eyeKey = 11;   // a pointer change (or a shader, target or depth view set) moves the key
+        check(!uiDepthOnEyeDraw(ctx.Get()), "ui depth memo S2: a pointer change moves the key and the call declines");
+        // 5. The pass off and stood down decline before the key is read (the fakes abort once off).
+        rigfake::on = false;
+        detail::g_uiDepthOn = false;
+        check(!uiDepthOnEyeDraw(ctx.Get()), "ui depth memo: the pass off declines before bindingEyeKeyGeneration is read");
+        detail::g_uiDepthOn = true; detail::g_uiDepthStoodDown = true;
+        check(!uiDepthOnEyeDraw(ctx.Get()), "ui depth memo: stood down declines before bindingEyeKeyGeneration is read");
+        detail::g_uiDepthStoodDown = false; detail::g_uiDepthOn = false;
+        classifiermemo::invalidate(g_eyeMemo);
+    }
+    // viewIsSurface (item 5 restored its callers to call it directly): its answer is the view memo's plus the resolve, over fills, puts for other keys that evict, and a
+    // recycled address that now holds another shape.
+    {
+        rigfake::on = true;
+        detail::g_uiDepthOn = true;
+        detail::g_uiDepthStoodDown = false;
+        static char resA[8], resB[8], resC[8];
+        static char viewA, viewB, viewC;
+        const auto resolveAs = [&](const void* view, void* res, uint32_t w) {
+            rigfake::ViewInfo& v = rigfake::views[rigfake::viewCount++];
+            v.view = view;
+            v.info = ResourceInfo();
+            v.info.isTexture2D = true; v.info.a = w; v.info.b = 64; v.info.fmt = 28; v.info.resource = res;
+        };
+        resolveAs(&viewA, resA, 64);   // a learned surface
+        resolveAs(&viewB, resB, 64);   // not learned
+        resolveAs(&viewC, resC, 64);   // learned, then its address is reused for another shape
+        addSurface(resA, 64, 64, 28, 'V');
+        addSurface(resC, 64, 64, 28, 'V');
+        static const BindSlot kSrv[4] = {BindSlot::PsSrv0, BindSlot::PsSrv1, BindSlot::PsSrv2, BindSlot::PsSrv3};
+        const auto bindSrv = [&](const void* a, const void* b, const void* c, const void* d) {
+            rigfake::ptr[static_cast<size_t>(kSrv[0])] = const_cast<void*>(a); rigfake::ptr[static_cast<size_t>(kSrv[1])] = const_cast<void*>(b);
+            rigfake::ptr[static_cast<size_t>(kSrv[2])] = const_cast<void*>(c); rigfake::ptr[static_cast<size_t>(kSrv[3])] = const_cast<void*>(d);
+        };
+        const auto lookup = [&](const char* what, int want) {
+            const int got = uiDepthSampledSurfaceSlot();
+            char label[200];
+            std::snprintf(label, sizeof(label), "ui depth sampled surface: %s -> slot %d", what, want);
+            check(got == want, label);
+        };
+        bindSrv(&viewB, &viewA, nullptr, nullptr);
+        lookup("a first lookup", 1);
+        unsigned resolvesBefore = rigfake::resolves;
+        lookup("the same bindings, same frame", 1);
+        check(rigfake::resolves == resolvesBefore, "ui depth sampled surface: the view memo answers the second lookup without a resolve");
+        for (unsigned i = 0; i < 2 * kMemoSize; ++i) viewIsSurface(reinterpret_cast<const void*>(0x100000 + 16 * static_cast<uintptr_t>(i)));
+        lookup("after puts for 2*kMemoSize other keys", 1);
+        // viewC's memo slot is evicted, and its address now holds another shape. The real path re-resolves, drops the surface and moves the epoch.
+        g_viewMemo.clear();
+        bindSrv(&viewC, nullptr, nullptr, nullptr);
+        lookup("a learned surface, filled", 0);
+        // kMemoProbe keys with the home slot kMemoProbe-1 places before viewC's: the first fill the empties, the last finds the window full and (equal ages) takes its last
+        // slot, which is viewC's. Real puts through viewIsSurface.
+        const uint32_t homeC = PtrMemo<kMemoSize>::home(&viewC);
+        const uint32_t target = (homeC + kMemoSize - (kMemoProbe - 1)) & (kMemoSize - 1);
+        for (uintptr_t at = 0x300000, made = 0; made < kMemoProbe; at += 16)
+            if (PtrMemo<kMemoSize>::home(reinterpret_cast<const void*>(at)) == target) { viewIsSurface(reinterpret_cast<const void*>(at)); ++made; }
+        check(g_viewMemo.slots[homeC].key != &viewC, "ui depth sampled surface: the puts for other keys evicted viewC's memo slot");
+        rigfake::views[2].info.a = 32;   // viewC's resource is now another shape
+        const uint32_t epochBefore = g_classifierEpoch;
+        const uint32_t evictionsBefore = g_evictions;
+        const int got = uiDepthSampledSurfaceSlot();
+        check(got == -1 && g_evictions == evictionsBefore + 1 && g_classifierEpoch != epochBefore,
+              "ui depth sampled surface: after the eviction the real path re-resolves, drops the recycled surface and moves the epoch");
+        bindSrv(&viewB, &viewA, nullptr, nullptr);
+        lookup("refill after the drop", 1);
+        bindSrv(nullptr, nullptr, nullptr, nullptr);
+        lookup("nothing bound", -1);
+        rigfake::on = false;
+        rigfake::viewCount = 0;
+        detail::g_uiDepthOn = false;
+        for (uint32_t n = 0; n < kMaxSurfaces; ++n) g_surfaces[n] = Surface();
+        g_surfaceCount = 0;
+        g_viewMemo.clear();
+        ++g_classifierEpoch;
+    }
     // Create every actual generated production coverage shader.
     for (DepthShader& entry : g_depthShaders) {
         hr(dev->CreatePixelShader(entry.bytecode, entry.len, nullptr, &entry.shader));
@@ -220,10 +389,10 @@ int main(int argc, char** argv) {
     auto coverage = [&](bool menu, bool mark) {
         ComPtr<ID3D11DepthStencilState> before; UINT beforeRef=0;
         ctx->OMGetDepthStencilState(&before,&beforeRef);
-        detail::g_uiDepthOn = true; detail::g_uiDepthMode = menu ? Mode::kReissue : Mode::kReissueScene;
-        g_reissueShader = &g_depthShaders[2]; g_drawEye = 0; g_reissueMaskSlot = 1;
-        g_rebindW = g_rebindH = 8; g_wantRebind = menu; g_rebindEye = 0;
-        g_wantMask = mark;
+        detail::g_uiDepthOn = true; detail::g_uiDepthDraw.mode = menu ? Mode::kReissue : Mode::kReissueScene;
+        detail::g_uiDepthDraw.reissueShader = &g_depthShaders[2]; detail::g_uiDepthDraw.drawEye = 0; detail::g_uiDepthDraw.reissueMaskSlot = 1;
+        g_rebindW = g_rebindH = 8; detail::g_uiDepthDraw.wantRebind = menu; detail::g_uiDepthDraw.rebindEye = 0;
+        detail::g_uiDepthDraw.wantMask = mark;
         check(uiDepthReissueBegin(ctx.Get()), "production coverage begins");
         ctx->Draw(3, 0); uiDepthReissueEnd(ctx.Get());
         ComPtr<ID3D11Buffer> cb; ctx->PSGetConstantBuffers(13, 1, &cb);
@@ -322,9 +491,9 @@ int main(int argc, char** argv) {
         const unsigned slot=holoSurfaceSlot(material);
         ctx->PSSetShaderResources(slot==1?2:1,1,&none);
         ctx->PSSetShaderResources(slot,1,surfSrv.GetAddressOf()); ctx->PSSetSamplers(1,1,sampler.GetAddressOf());
-        detail::g_uiDepthOn=true; detail::g_uiDepthMode=Mode::kReissueScene; g_reissueShader=depthShaderFor(ctx.Get(),material,kHoloPanel,slot);
-        check(g_reissueShader && holoShader(g_reissueShader) && g_reissueShader->slot==slot,"verified holo material selects its own surface binding and motion family");
-        g_drawEye=0; g_reissueMaskSlot=1; g_rebindW=g_rebindH=8; g_wantMask=true;
+        detail::g_uiDepthOn=true; detail::g_uiDepthDraw.mode=Mode::kReissueScene; detail::g_uiDepthDraw.reissueShader=depthShaderFor(ctx.Get(),material,kHoloPanel,slot);
+        check(detail::g_uiDepthDraw.reissueShader && holoShader(detail::g_uiDepthDraw.reissueShader) && detail::g_uiDepthDraw.reissueShader->slot==slot,"verified holo material selects its own surface binding and motion family");
+        detail::g_uiDepthDraw.drawEye=0; detail::g_uiDepthDraw.reissueMaskSlot=1; g_rebindW=g_rebindH=8; detail::g_uiDepthDraw.wantMask=true;
         check(uiDepthReissueBegin(ctx.Get()),"holo coverage begins"); ctx->Draw(3,0); uiDepthReissueEnd(ctx.Get());
         check(uiDepthTemporalDepth(8,8,0,scene.tex.Get(),&ui),"holo private depth published");
         ui->GetResource(privateRes.ReleaseAndGetAddressOf());
@@ -342,6 +511,10 @@ int main(int argc, char** argv) {
     {
         check(depthShaderFor(ctx.Get(),kHoloGuiFxOffPs,kHoloGuiFxOffVs,2)==nullptr && depthShaderFor(ctx.Get(),kHoloGuiFxOffPs,kHoloGuiFxOffVs,1)==nullptr,
               "the Disable-GUI-effects holo pair has no depth stand-in, by vertex family or by slot (its output signature is not the stand-in's input)");
+        // ...nor the pair the game draws them with close to a planet's surface (vs 925ACEDA0153AA5B ps 738A98ED038E58B7, 2026-10-31): its vertex shader
+        // writes TEXCOORD0 only, its surface sits in t1, and the layer takes it as well.
+        check(depthShaderFor(ctx.Get(),kHoloNoShadowPs,kHoloNoShadowVs,1)==nullptr && depthShaderFor(ctx.Get(),kHoloNoShadowPs,kHoloNoShadowVs,2)==nullptr,
+              "the planet-surface holo pair has no depth stand-in, by vertex family or by slot (its output signature is not the stand-in's input)");
         check(depthShaderFor(ctx.Get(),kHoloLitPs,kHoloPanel,2)!=nullptr,"(control) the stock holo pair still has its stand-in");
     }
     surface[3]=1;
@@ -454,8 +627,8 @@ o.tc9.w=1;o.tc13.w=1;o.tc17.x=v.z;o.tc18=float3(.5,0,0);return o;}
                 std::printf("HUD reference case %d: alpha %.6f\n",kind,actualAlpha[0]);
             }
             detail::g_uiDepthOn=true;g_trained=trained;
-            detail::g_uiDepthMode=Mode::kReissueScene;g_reissueShader=&g_depthShaders[1];g_drawEye=0;
-            g_reissueMaskSlot=2;g_rebindW=g_rebindH=8;g_wantMask=true;
+            detail::g_uiDepthDraw.mode=Mode::kReissueScene;detail::g_uiDepthDraw.reissueShader=&g_depthShaders[1];detail::g_uiDepthDraw.drawEye=0;
+            detail::g_uiDepthDraw.reissueMaskSlot=2;g_rebindW=g_rebindH=8;detail::g_uiDepthDraw.wantMask=true;
             check(uiDepthReissueBegin(ctx.Get()),"HUD coverage at zero reactivity begins");
             ctx->Draw(3,0);uiDepthReissueEnd(ctx.Get());ctx->OMSetRenderTargets(0,nullptr,nullptr);
             ComPtr<ID3D11ShaderResourceView> restoredHudSrv;
@@ -499,9 +672,9 @@ o.pos=float4((p*float2(2,-2)+float2(-1,1))*v.x,abs(v.x),v.x);o.tc0=p;return o;}
             const float actualScene=read(dev.Get(),ctx.Get(),target.tex.Get())[1];
             bind(target.dsv.Get());setZ(metres);ctx->VSSetShader(spriteVs.Get(),nullptr,0);
             ctx->PSSetShaderResources(2,1,surfSrv.GetAddressOf());
-            detail::g_uiDepthOn=true;g_trained=trained;detail::g_uiDepthMode=Mode::kReissueScene;
-            g_reissueShader=&g_depthShaders[5];g_drawEye=0;g_reissueMaskSlot=1;
-            g_rebindW=g_rebindH=8;g_wantRebind=false;g_wantMask=true;
+            detail::g_uiDepthOn=true;g_trained=trained;detail::g_uiDepthDraw.mode=Mode::kReissueScene;
+            detail::g_uiDepthDraw.reissueShader=&g_depthShaders[5];detail::g_uiDepthDraw.drawEye=0;detail::g_uiDepthDraw.reissueMaskSlot=1;
+            g_rebindW=g_rebindH=8;detail::g_uiDepthDraw.wantRebind=false;detail::g_uiDepthDraw.wantMask=true;
             check(uiDepthReissueBegin(ctx.Get()),"sprite coverage begins");ctx->Draw(3,0);uiDepthReissueEnd(ctx.Get());
             ComPtr<ID3D11ShaderResourceView> restored;ctx->PSGetShaderResources(2,1,&restored);
             check(restored.Get()==surfSrv.Get(),"sprite restores caller t2");
@@ -546,7 +719,7 @@ o.pos=float4((p*float2(2,-2)+float2(-1,1))*v.x,abs(v.x),v.x);o.tc0=p;return o;}
             ctx->RSSetState(raster.Get());D3D11_VIEWPORT orbitalVp{0,0,8,8,0,1};ctx->RSSetViewports(1,&orbitalVp);ctx->OMSetRenderTargets(1,rtv.GetAddressOf(),scene.dsv.Get());
         };
         ctx->ClearDepthStencilView(scene.dsv.Get(),D3D11_CLEAR_DEPTH,0,0);testScene=scene.tex.Get();bindOrbital();
-        detail::g_uiDepthOn=true;detail::g_uiDepthMode=Mode::kReissueScene;g_reissueShader=&g_depthShaders[7];g_drawEye=0;g_reissueMaskSlot=0;g_rebindW=g_rebindH=8;g_wantMask=true;g_holoDraw={'N',4,2,0,0,0};
+        detail::g_uiDepthOn=true;detail::g_uiDepthDraw.mode=Mode::kReissueScene;detail::g_uiDepthDraw.reissueShader=&g_depthShaders[7];detail::g_uiDepthDraw.drawEye=0;detail::g_uiDepthDraw.reissueMaskSlot=0;g_rebindW=g_rebindH=8;detail::g_uiDepthDraw.wantMask=true;g_holoDraw={'N',4,2,0,0,0};
         check(uiDepthReissueBegin(ctx.Get()),"orbital private reissue begins");ctx->DrawInstanced(4,2,0,0);uiDepthReissueEnd(ctx.Get());
         ComPtr<ID3D11VertexShader> afterVs;ctx->VSGetShader(&afterVs,nullptr,nullptr);check(afterVs.Get()==vs.Get(),"orbital reissue restores original vertex shader");
         ComPtr<ID3D11Buffer> afterCb;ctx->VSGetConstantBuffers(12,1,&afterCb);check(afterCb.Get()==savedCb.Get(),"orbital reissue restores VS constants");afterCb.Reset();
@@ -564,7 +737,7 @@ o.pos=float4((p*float2(2,-2)+float2(-1,1))*v.x,abs(v.x),v.x);o.tc0=p;return o;}
                 orbital_width::detail::g_factor.store(f);
                 ctx->ClearState();uiDepthFrameBoundary(ctx.Get());g_holoMotion[0]=HoloMotion{};
                 ctx->ClearDepthStencilView(scene.dsv.Get(),D3D11_CLEAR_DEPTH,0,0);testScene=scene.tex.Get();bindOrbital();
-                detail::g_uiDepthOn=true;detail::g_uiDepthMode=Mode::kReissueScene;g_reissueShader=&g_depthShaders[7];g_drawEye=0;g_reissueMaskSlot=0;g_rebindW=g_rebindH=8;g_wantMask=true;g_holoDraw={'N',4,2,0,0,0};
+                detail::g_uiDepthOn=true;detail::g_uiDepthDraw.mode=Mode::kReissueScene;detail::g_uiDepthDraw.reissueShader=&g_depthShaders[7];detail::g_uiDepthDraw.drawEye=0;detail::g_uiDepthDraw.reissueMaskSlot=0;g_rebindW=g_rebindH=8;detail::g_uiDepthDraw.wantMask=true;g_holoDraw={'N',4,2,0,0,0};
                 check(uiDepthReissueBegin(ctx.Get()),"orbital twin begins at a scaled factor");
                 ComPtr<ID3D11Buffer> bound;ctx->VSGetConstantBuffers(orbital_width::kSlot,1,&bound);
                 check(bound.Get()!=savedCb.Get(),"the twin binds its own b13, not the caller's");
@@ -592,7 +765,7 @@ o.pos=float4((p*float2(2,-2)+float2(-1,1))*v.x,abs(v.x),v.x);o.tc0=p;return o;}
         // disabled for this coverage family.
         ctx->ClearState();uiDepthFrameBoundary(ctx.Get());ctx->ClearDepthStencilView(scene.dsv.Get(),D3D11_CLEAR_DEPTH,.05f,0);
         testScene=scene.tex.Get();bindOrbital();
-        detail::g_uiDepthOn=true;detail::g_uiDepthMode=Mode::kReissueScene;g_reissueShader=&g_depthShaders[7];g_drawEye=0;g_reissueMaskSlot=0;g_rebindW=g_rebindH=8;g_wantMask=true;g_holoDraw={'N',4,2,0,0,0};
+        detail::g_uiDepthOn=true;detail::g_uiDepthDraw.mode=Mode::kReissueScene;detail::g_uiDepthDraw.reissueShader=&g_depthShaders[7];detail::g_uiDepthDraw.drawEye=0;detail::g_uiDepthDraw.reissueMaskSlot=0;g_rebindW=g_rebindH=8;detail::g_uiDepthDraw.wantMask=true;g_holoDraw={'N',4,2,0,0,0};
         check(uiDepthReissueBegin(ctx.Get()),"orbital coverage begins behind a nearer hull");
         const float hcSentinel[4]={91,.123f,0,0};ctx->ClearRenderTargetView(g_holoMotion[0].target(),hcSentinel);
         // The sentinel is cleared after Begin, then the depth-tested draw is
@@ -611,7 +784,7 @@ o.pos=float4((p*float2(2,-2)+float2(-1,1))*v.x,abs(v.x),v.x);o.tc0=p;return o;}
         instances[23]*=2;instances[24]*=2;instances[25]*=2;
         ctx->UpdateSubresource(vb1.Get(),0,nullptr,instances,0,0);
         ctx->ClearDepthStencilView(scene.dsv.Get(),D3D11_CLEAR_DEPTH,.00625f,0);bindOrbital();
-        detail::g_uiDepthOn=true;detail::g_uiDepthMode=Mode::kReissueScene;g_reissueShader=&g_depthShaders[7];g_drawEye=0;g_reissueMaskSlot=0;g_rebindW=g_rebindH=8;g_wantMask=true;g_holoDraw={'N',4,2,0,0,0};
+        detail::g_uiDepthOn=true;detail::g_uiDepthDraw.mode=Mode::kReissueScene;detail::g_uiDepthDraw.reissueShader=&g_depthShaders[7];detail::g_uiDepthDraw.drawEye=0;detail::g_uiDepthDraw.reissueMaskSlot=0;g_rebindW=g_rebindH=8;detail::g_uiDepthDraw.wantMask=true;g_holoDraw={'N',4,2,0,0,0};
         check(uiDepthReissueBegin(ctx.Get()),"overlapping orbital coverage begins over farther physical depth");ctx->DrawInstanced(4,2,0,0);uiDepthReissueEnd(ctx.Get());
         views[0]=views[1]=nullptr;g_holoMotion[0].views(scene.tex.Get(),views);ComPtr<ID3D11Resource> overlapCoverage;views[0]->GetResource(&overlapCoverage);
         auto overlapIndices=read(dev.Get(),ctx.Get(),overlapCoverage.Get()),overlapDepth=read(dev.Get(),ctx.Get(),overlapCoverage.Get(),1);unsigned overlapCount=0;
@@ -880,14 +1053,20 @@ UN[id.xy]=uiEvidence(id.xy);Result[id.xy]=adaptiveUiReactive(id.xy,float2(id.xy)
             ComPtr<ID3D11ShaderResourceView> bufV;hr(dev->CreateShaderResourceView(buf.Get(),&bufSd,&bufV));
             check(reasons.prepare(ctx.Get(),bufV.Get(),1)==nullptr&&reasons.lastDecision==UiContent::Decision::kDeclinedNotTexture2D,
                   "census: a non-Texture2D resource declines as not-Texture2D");
-            D3D11_TEXTURE2D_DESC arrDesc{};arrDesc.Width=arrDesc.Height=4;arrDesc.MipLevels=1;arrDesc.ArraySize=2;arrDesc.SampleDesc.Count=1;
+            // F108: an array view is tracked (its own path, world_screen_coverage_test.h); one that does not start at mip 0 still
+            // declines as view-shape.
+            D3D11_TEXTURE2D_DESC arrDesc{};arrDesc.Width=arrDesc.Height=4;arrDesc.MipLevels=2;arrDesc.ArraySize=2;arrDesc.SampleDesc.Count=1;
             arrDesc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;arrDesc.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET;
             ComPtr<ID3D11Texture2D> arrTex;hr(dev->CreateTexture2D(&arrDesc,nullptr,&arrTex));
             D3D11_SHADER_RESOURCE_VIEW_DESC arrSd{};arrSd.Format=DXGI_FORMAT_R8G8B8A8_UNORM;
             arrSd.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2DARRAY;arrSd.Texture2DArray.MipLevels=1;arrSd.Texture2DArray.ArraySize=2;
             ComPtr<ID3D11ShaderResourceView> arrV;hr(dev->CreateShaderResourceView(arrTex.Get(),&arrSd,&arrV));
-            check(reasons.prepare(ctx.Get(),arrV.Get(),1)==nullptr&&reasons.lastDecision==UiContent::Decision::kDeclinedViewShape,
-                  "census: an array view declines as view-shape");
+            check(reasons.prepare(ctx.Get(),arrV.Get(),1)!=nullptr&&reasons.lastDecision==UiContent::Decision::kReset,
+                  "census: an array view from mip 0 is tracked (F108)");
+            arrSd.Texture2DArray.MostDetailedMip=1;
+            ComPtr<ID3D11ShaderResourceView> arrMip1;hr(dev->CreateShaderResourceView(arrTex.Get(),&arrSd,&arrMip1));
+            check(reasons.prepare(ctx.Get(),arrMip1.Get(),1)==nullptr&&reasons.lastDecision==UiContent::Decision::kDeclinedViewShape,
+                  "census: an array view that does not start at mip 0 declines as view-shape");
         }
         // End-to-end source -> existing coverage draw -> borrowed eye SRV.
         // t14 must be restored and erased glyphs must keep their edit mark
@@ -938,8 +1117,8 @@ UN[id.xy]=uiEvidence(id.xy);Result[id.xy]=adaptiveUiReactive(id.xy,float2(id.xy)
         for(unsigned f=0;f<3;++f) {
             uiDepthFrameBoundary(ctx.Get());ctx->ClearDepthStencilView(scene.dsv.Get(),D3D11_CLEAR_DEPTH,0,0);
             bind(scene.dsv.Get());setZ(.6f);ctx->PSSetShaderResources(0,1,uiView.GetAddressOf());
-            detail::g_uiDepthOn=true;detail::g_uiDepthMode=Mode::kReissueScene;g_reissueShader=&g_depthShaders[5];g_drawEye=0;g_reissueMaskSlot=1;
-            g_rebindW=g_rebindH=8;g_wantMask=true;g_wantRebind=false;
+            detail::g_uiDepthOn=true;detail::g_uiDepthDraw.mode=Mode::kReissueScene;detail::g_uiDepthDraw.reissueShader=&g_depthShaders[5];detail::g_uiDepthDraw.drawEye=0;detail::g_uiDepthDraw.reissueMaskSlot=1;
+            g_rebindW=g_rebindH=8;detail::g_uiDepthDraw.wantMask=true;detail::g_uiDepthDraw.wantRebind=false;
             check(uiDepthReissueBegin(ctx.Get()),"scrolling sprite coverage begins");ctx->Draw(3,0);uiDepthReissueEnd(ctx.Get());ctx->OMSetRenderTargets(0,nullptr,nullptr);
             auto mark=valuesOf(g_mask[0].srv),edit=valuesOf(uiDepthContentChanges(8,8,0));
             if(f<2)check(mark[3*8+3]>0,"faint sprite stroke retains motion and antialiasing coverage");
@@ -1295,7 +1474,11 @@ UN[id.xy]=uiEvidence(id.xy);Result[id.xy]=adaptiveUiReactive(id.xy,float2(id.xy)
     auto msaa=depth(dev.Get(),DXGI_FORMAT_R32_TYPELESS,DXGI_FORMAT_D32_FLOAT,8,4);
     UiDepthLayer declined; check(!declined.acquire(ctx.Get(),msaa.tex.Get()),"MSAA safely declined");
     testPlanetCoverage(dev.Get(),ctx.Get());
+    testWorldScreenCoverage(dev.Get(),ctx.Get());
+    testWorldScreenHistoryRestart(dev.Get(),ctx.Get());
     testCoronaCoverage(dev.Get(),ctx.Get());
+    zgate::parity(dev.Get(),ctx.Get(),driver==D3D_DRIVER_TYPE_WARP?"WARP":"hardware");
+    maintile::abTest(dev.Get(),ctx.Get());
     if(info) for(UINT64 i=0;i<info->GetNumStoredMessages();++i) {
         SIZE_T size=0; info->GetMessage(i,nullptr,&size); std::vector<unsigned char> storage(size);
         auto* m=reinterpret_cast<D3D11_MESSAGE*>(storage.data()); hr(info->GetMessage(i,m,&size));

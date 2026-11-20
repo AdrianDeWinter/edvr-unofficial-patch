@@ -11,6 +11,9 @@
 #include "mirror.h"
 #include "payload.h"
 #include "../common/elite_graphics_folder.h"
+#ifdef EDUP_LAUNCHER
+#include "launcher_main.h"
+#endif
 
 namespace edvr::installer {
 namespace {
@@ -39,18 +42,25 @@ std::string bullets(const char* title, const std::vector<std::string>& items) {
 }  // namespace
 
 std::string usageText() {
+#ifdef EDUP_LAUNCHER
+    const char* exe = "ed-up-launcher.exe";
+    std::string out = "ED-UP launcher\r\n";
+#else
     const char* exe = "edvr-installer.exe";
-    std::string out = "EDVR installer\r\n";
+    std::string out = "ED-UP installer\r\n";
+#endif
     out +=
            "\r\n"
            "  " + std::string(exe) + "                        open the window\r\n"
            "  " + std::string(exe) + " --install [--dir D]    install or update\r\n"
            "  " + std::string(exe) + " --repair  [--dir D]    repair this install\r\n"
-           "  " + std::string(exe) + " --uninstall [--dir D]  remove EDVR, restoring what it replaced\r\n"
+           "  " + std::string(exe) + " --uninstall [--dir D]  remove ED-UP, restoring what it replaced\r\n"
            "  " + std::string(exe) + " --collect-logs         zip the latest logs onto the Desktop\r\n"
            "\r\n"
            "  --dir <path>         the folder holding EliteDangerous64.exe. Without it, the\r\n"
            "                       installer finds your installs itself and uses the only one.\r\n"
+           "  --store epic|steam|frontier  the store for an exact --dir product folder, when\r\n"
+           "                       detection in this Windows prefix cannot identify its store.\r\n"
            "  --scope both|vr|flat what to install: both (VR and flat), vr (VR only) or flat\r\n"
            "                       (flat only). Without it, the scope already installed is kept,\r\n"
            "                       and a new install gets both.\r\n"
@@ -62,6 +72,39 @@ std::string usageText() {
            "  --remove-settings    with --uninstall, delete the settings files of the installed\r\n"
            "                       scope too.\r\n"
            "  --help               this.\r\n"
+#ifdef EDUP_LAUNCHER
+           "\r\n"
+           "  --check-update       ask GitHub whether a newer release exists, check its signature, and\r\n"
+           "                       say what it found. Writes only the launcher's own state.\r\n"
+           "  --update             --check-update, then download the release's files into the launcher's\r\n"
+           "                       cache, verify each, and adopt its manifest. Touches no game folder.\r\n"
+           "  --channel stable|rc  which releases to look at, for this run (rc includes release candidates).\r\n"
+           "  --payload <dir>      install from an unpacked ed-up-<version>.zip instead of the cache.\r\n"
+           "  --data-root <dir>    keep the launcher's folders, and the settings copies, under <dir>\r\n"
+           "                       instead of %LOCALAPPDATA%\\EDVR, and do not copy, register or update\r\n"
+           "                       the launcher itself.\r\n"
+           "  --unregister         remove the launcher, its Start menu shortcut and its downloaded files.\r\n"
+           "                       ED-UP in your game folders and your settings copies are left alone.\r\n"
+           "  --direct-dry-run --dir <game folder> --vr|--novr\r\n"
+           "                       sign in to Frontier as a direct launch would, print the command line it\r\n"
+           "                       would start Elite with, every token, your machine ID, email and password\r\n"
+           "                       replaced by <masked>, and start nothing. Detected Epic installs need\r\n"
+           "                       Epic's launcher instead; use Play or --headless. Steam needs its client\r\n"
+           "                       running. Frontier uses only the login the window stored, never asking\r\n"
+           "                       for one. An unrecognised folder uses Steam under steamapps, otherwise\r\n"
+           "                       Frontier.\r\n"
+           "  --licenses           print the licence of the third-party code the launcher is ported from.\r\n"
+           "  --close-after-start  close the launcher once Elite has started, instead of staying open\r\n"
+           "                       until it exits. Also a checkbox in the window, which this flag does not change.\r\n"
+           "  --headless [--dir <game folder>] --vr|--novr\r\n"
+           "                       start Elite with no window, through the same route Play uses, and print\r\n"
+           "                       its progress. Without --dir, the folder this exe is in is the game folder,\r\n"
+           "                       so the launcher can be copied into the game's product folder. Then it\r\n"
+           "                       prints its progress, waits for Elite to exit, or with --close-after-start\r\n"
+           "                       returns once Elite has started. Exit 0 when Elite started, 1 when it did not,\r\n"
+           "                       2 for a bad command line. Never asks for a login: a Frontier-store install\r\n"
+           "                       uses the stored login, and fails with a line saying so when there is none.\r\n"
+#endif
            "\r\n"
            "  A copy of your settings files (and the install record) is kept outside the game\r\n"
            "  folder, in %LOCALAPPDATA%\\EDVR, so a game update that wipes the folder cannot take\r\n"
@@ -91,6 +134,15 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             a.badArg = true;
             a.badArgText = L"--scope takes both, vr or flat, not \"" + value + L"\"";
         };
+        auto setStore = [&](const std::wstring& value) {
+            if (value == L"epic") a.store = L"Epic";
+            else if (value == L"steam") a.store = L"Steam";
+            else if (value == L"frontier") a.store = L"Frontier launcher";
+            else {
+                a.badArg = true;
+                a.badArgText = L"--store takes epic, steam or frontier, not \"" + value + L"\"";
+            }
+        };
         if (arg == L"--install")
             a.action = AppArgs::Act::Install;
         else if (arg == L"--repair")
@@ -103,6 +155,11 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             next(&a.dir);
         else if (arg.rfind(L"--dir=", 0) == 0)
             a.dir = arg.substr(6);
+        else if (arg == L"--store") {
+            std::wstring value;
+            if (next(&value)) setStore(value);
+        } else if (arg.rfind(L"--store=", 0) == 0)
+            setStore(arg.substr(8));
         else if (arg == L"--scope") {
             std::wstring value;
             if (next(&value)) setScope(value);
@@ -118,6 +175,44 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             a.removeSettings = true;
         else if (arg == L"--autorun")
             a.autorun = true;
+#ifdef EDUP_LAUNCHER
+        else if (arg == L"--payload")
+            next(&a.payloadDir);
+        else if (arg == L"--data-root")
+            next(&a.dataRoot);
+        else if (arg == L"--apply-plan")
+            next(&a.planFile);
+        else if (arg == L"--channel") {
+            std::wstring value;
+            if (next(&value)) {
+                if (value == L"stable" || value == L"rc") {
+                    a.channel = toUtf8(value);
+                } else {
+                    a.badArg = true;
+                    a.badArgText = L"--channel takes stable or rc, not \"" + value + L"\"";
+                }
+            }
+        } else if (arg == L"--check-update")
+            a.checkUpdate = true;
+        else if (arg == L"--update")
+            a.update = true;
+        else if (arg == L"--unregister")
+            a.unregister = true;
+        else if (arg == L"--updated")
+            a.updated = true;
+        else if (arg == L"--direct-dry-run")
+            a.directDryRun = true;
+        else if (arg == L"--vr")
+            a.vr = true;
+        else if (arg == L"--novr")
+            a.novr = true;
+        else if (arg == L"--licenses")
+            a.licenses = true;
+        else if (arg == L"--close-after-start")
+            a.closeAfterStart = true;
+        else if (arg == L"--headless")
+            a.headless = true;
+#endif
         else if (arg == L"--help" || arg == L"-h" || arg == L"/?")
             a.help = true;
         else {
@@ -125,7 +220,24 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             a.badArgText = L"unknown argument: " + arg;
         }
     }
+    if (!a.store.empty() && a.dir.empty()) {
+        a.badArg = true;
+        a.badArgText = L"--store needs --dir with the exact game's product folder";
+    }
     return a;
+}
+
+bool describeSelectedDir(const AppArgs& args, GameInstall* out,
+                         const std::vector<GameInstall>* installs) {
+    if (args.dir.empty()) return false;
+    // Store context supplied by a host wrapper cannot label a descendant chosen
+    // while searching an arbitrary launcher/library root.
+    if (!args.store.empty() && !gameDirLooksRight(args.dir)) return false;
+    const bool described = installs ? describeDirWithInstalls(args.dir, L"Folder you chose", *installs, out)
+                                   : describeDir(args.dir, L"Folder you chose", out);
+    if (!described) return false;
+    if (!args.store.empty()) out->source = args.store;
+    return true;
 }
 
 Options optionsFor(const AppArgs& args, bool repair) {
@@ -210,7 +322,7 @@ std::string statusReport(const Survey& s, const PayloadInfo& payload, const std:
             out += "\r\n";
         }
     }
-    if (!payload.version.empty()) out += "\r\nThis installer carries EDVR " + payload.version + ".\r\n";
+    if (!payload.version.empty()) out += "\r\nThis installer carries ED-UP " + payload.version + ".\r\n";
     if (s.gameRunningHere) {
         out += "\r\n!  Elite Dangerous is running. Close it before installing anything.\r\n";
     } else if (s.gameRunningElsewhere) {
@@ -238,7 +350,7 @@ std::string planReport(const Plan& plan) {
     out += bullets("  Set by the installer:", plan.merge.forced);
     out += bullets("  Followed a setting that moved, and still applies:", plan.merge.followed);
     out += bullets("  Carried over, no longer used by this version:", plan.merge.retired);
-    out += bullets("  Carried over, not an EDVR setting:", plan.merge.carried);
+    out += bullets("  Carried over, not an ED-UP setting:", plan.merge.carried);
     out += bullets("  Lines you had removed, left commented out:", plan.merge.removed);
     return out;
 }
@@ -274,6 +386,10 @@ bool relaunchElevated(const AppArgs& args) {
         case AppArgs::Act::None: break;
     }
     if (!args.dir.empty()) cmd += L"--dir \"" + args.dir + L"\" ";
+    if (!args.store.empty()) {
+        const wchar_t* store = args.store == L"Epic" ? L"epic" : args.store == L"Steam" ? L"steam" : L"frontier";
+        cmd += std::wstring(L"--store ") + store + L" ";
+    }
     if (!args.scope.empty()) cmd += L"--scope " + fromUtf8(args.scope) + L" ";
     if (!args.keepSettings) cmd += L"--replace-settings ";
     if (args.removeSettings) cmd += L"--remove-settings ";
@@ -300,17 +416,25 @@ int runConsole(const AppArgs& args) {
         return args.badArg ? 2 : 0;
     }
 
+#ifdef EDUP_LAUNCHER
+    // The payload comes from --payload or the adopted manifest, not from this exe.
+    std::string payloadNote;
+    const bool havePayload = launcherPreparePayload(args, &payloadNote);
+#endif
     GameInstall game;
     if (!args.dir.empty()) {
-        if (!describeDir(args.dir, L"Folder you chose", &game)) {
+        if (!describeSelectedDir(args, &game)) {
             writeOut("No EliteDangerous64.exe under " + toUtf8(args.dir) + "\r\n");
             return 2;
         }
     } else {
-        const std::vector<GameInstall> found = findInstalls();
+        size_t legacyLeftOut = 0;
+        const std::vector<GameInstall> found = findInstalls(&legacyLeftOut);
         if (found.empty()) {
-            writeOut("No Elite Dangerous install found. Pass --dir with the folder that holds "
-                     "EliteDangerous64.exe.\r\n");
+            if (legacyLeftOut > 0) writeOut(std::string(onlyLegacyInstallsText()) + "\r\n");
+            writeOut(legacyLeftOut > 0 ? "If Odyssey is installed somewhere else, pass --dir with the folder that holds EliteDangerous64.exe.\r\n"
+                                       : "No Elite Dangerous install found. Pass --dir with the folder that holds "
+                                         "EliteDangerous64.exe.\r\n");
             return 2;
         }
         if (found.size() > 1) {
@@ -335,22 +459,36 @@ int runConsole(const AppArgs& args) {
     if (args.action == AppArgs::Act::None) return 0;
 
     if (args.action == AppArgs::Act::CollectLogs) {
-        const LogBundle bundle = collectLogs(survey.game.dir, desktopFolder());
+        const std::wstring saveFolder = logSaveFolder(args.dryRun);
+        if (args.dryRun) {
+            writeOut("\r\nDry run: would save the log zip to " + hostPathFor(saveFolder) +
+                     ". Nothing was written.\r\n");
+            return 0;
+        }
+        const LogBundle bundle = collectLogs(survey.game.dir, saveFolder);
         for (const std::string& note : bundle.notes) writeOut("  " + note + "\r\n");
         if (!bundle.ok) {
             writeOut(bundle.error + "\r\n");
             return 1;
         }
-        writeOut("\r\nSaved " + toUtf8(bundle.zipPath) + "\r\n");
+        writeOut("\r\nSaved " + hostPathFor(bundle.zipPath) + "\r\n");
         for (const std::wstring& name : bundle.included) writeOut("  " + toUtf8(name) + "\r\n");
         if (!bundle.dumpZipPath.empty()) {
-            writeOut("\r\nCrash dump (private; not for a public issue): " + toUtf8(bundle.dumpZipPath) + "\r\n");
+            writeOut("\r\nCrash dump (private; not for a public issue): " + hostPathFor(bundle.dumpZipPath) + "\r\n");
             for (const std::wstring& name : bundle.dumpEntries) writeOut("  " + toUtf8(name) + "\r\n");
         }
         return 0;
     }
 
+#ifdef EDUP_LAUNCHER
+    const std::wstring mirrorDir = mirrorDirFor(survey.game, launcherMirrorRoot(args));
+    if (!havePayload && args.action != AppArgs::Act::Uninstall) {
+        writeOut("\r\nThere is nothing to install from yet: " + payloadNote + "\r\n");
+        return 5;
+    }
+#else
     const std::wstring mirrorDir = mirrorDirFor(survey.game);
+#endif
     const bool canMirror = args.action != AppArgs::Act::Uninstall;
 
     // A folder with no settings file at all but a mirror outside it is exactly

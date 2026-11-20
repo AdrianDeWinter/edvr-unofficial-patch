@@ -1,0 +1,81 @@
+# The self-tests of the tools a Linux player or the Linux toolchain runs, on
+# Linux. build.bat runs every tool's --self-test on Windows, where the cases
+# that need a Linux filesystem (symlinks, Steam and Flatpak layouts, Wine and
+# Proton prefixes) return early; this job is the gate for those cases.
+# A tool that runs on Linux gets one line in TOOLS.
+name: Linux tools
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/release-*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edvr-linux-tools-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  self-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # edvr_log.py's self-test resolves real commits from the history.
+          fetch-depth: 0
+
+      # The same Python and requirements as the Windows build.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tools/requirements.txt
+
+      - name: Install tool requirements
+        run: python -m pip install -r tools/requirements.txt
+
+      - name: Tool self-tests
+        shell: bash
+        env:
+          TOOLS: |
+            install_proton.py
+            epic_library.py
+            install_edvr.py
+            steam_library.py
+            edvr_log.py
+            onfoot_check.py
+            linux_toolchain.py
+            compile_only.py
+            build_receipt.py
+            archive_game_exe.py
+            package_native.py
+        run: |
+          set -uo pipefail
+          python --version
+          failed=()
+          while IFS= read -r tool; do
+            [ -z "$tool" ] && continue
+            echo "::group::$tool --self-test"
+            start=$SECONDS
+            if python "tools/$tool" --self-test; then
+              status=passed
+            else
+              status="FAILED ($?)"
+              failed+=("$tool")
+            fi
+            echo "::endgroup::"
+            echo "$tool: $status in $((SECONDS - start)) s"
+          done <<< "$TOOLS"
+          if [ ${#failed[@]} -ne 0 ]; then
+            echo "::error::self-tests failed on Linux: ${failed[*]}"
+            exit 1
+          fi
+          echo "every Linux tool self-test passed"

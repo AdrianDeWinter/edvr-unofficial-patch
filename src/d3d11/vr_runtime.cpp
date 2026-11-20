@@ -100,7 +100,7 @@ void buildWhy(State& s) {
                      "routes Elite away from that back end at startup; look for the \"oculus "
                      "route:\" line in this log to see why it did not here (an unknown game "
                      "revision, or the route refused). Reinstalling will not change it. See "
-                     "\"Headsets and VR runtimes\" in the README.",
+                     "\"Headsets\" in the player guide.",
                      s.oculusModule[0] ? s.oculusModule : "an Oculus runtime module");
             break;
         case VrRuntime::ForeignOpenvr:
@@ -304,7 +304,7 @@ void vrRuntimeTick() {
             nameOf(v),
             v == VrRuntime::OculusNative
                 ? " EDVR's openvr half cannot run on this back end, so the fixes that live in it "
-                  "are inert this session; see \"Headsets and VR runtimes\" in the README."
+                  "are inert this session; see \"Headsets\" in the player guide."
                 : "",
             both ? " (An Oculus runtime module is loaded as well.)" : "");
     }

@@ -28,6 +28,7 @@
 #include "flat_light_payload_capture_tests.h"
 #include "flat_forward_light_tests.h"
 #include "flat_forward_light_cache_tests.h"
+#include "flat_issue_epoch_gate_tests.h"
 #include "flat_forward_watch_tests.h"
 #include "flat_texture_description_tests.h"
 #include "flat_forward_light_integration_tests.h"
@@ -46,6 +47,7 @@
 #include "flat_hdr_route_tests.h"
 #include "flat_offscreen_tests.h"
 #include "flat_discovery_policy_tests.h"
+#include "flat_dof_blur_tests.h"
 #include "flat_laser_scene_tone_tests.h"
 #include "flat_deferred_camera_tests.h"
 #include "flat_deferred_failure_capture_tests.h"
@@ -2060,6 +2062,8 @@ void testFlatResolveRoute() {
         {FlatMonoResolveMode::Fsr,  2496,1404, 3840,2160, 3840,2160, false, "trained-upscale"},
         {FlatMonoResolveMode::Fsr4, 2496,1404, 3840,2160, 3840,2160, false, "trained-upscale"},
         {FlatMonoResolveMode::Fsr4, 3840,2160, 3840,2160, 3840,2160, false, "trained-native"},
+        {FlatMonoResolveMode::Ditto, 2496,1404, 3840,2160, 3840,2160, false, "dittosr-upscale"},
+        {FlatMonoResolveMode::Ditto, 3840,2160, 3840,2160, 3840,2160, false, "dittosr-native"},
         {FlatMonoResolveMode::Xess, 2496,1404, 3840,2160, 3840,2160, false, "xess-upscale"},
         {FlatMonoResolveMode::Xess, 3840,2160, 3840,2160, 3840,2160, false, "xess-native-aa"},
         // R > D (section 72 step 2): NVIDIA evaluates DLAA at R and the game's
@@ -2068,6 +2072,7 @@ void testFlatResolveRoute() {
         {FlatMonoResolveMode::Dlaa, 5760,3240, 3840,2160, 5760,3240, false, "dlaa-supersample"},
         {FlatMonoResolveMode::Fsr,  5760,3240, 3840,2160, 5760,3240, false, "fsr-native-aa-supersample"},
         {FlatMonoResolveMode::Fsr4, 5760,3240, 3840,2160, 5760,3240, false, "fsr-native-aa-supersample"},
+        {FlatMonoResolveMode::Ditto, 5760,3240, 3840,2160, 5760,3240, false, "dittosr-native-aa-supersample"},
         {FlatMonoResolveMode::Xess, 5760,3240, 3840,2160, 5760,3240, false, "xess-native-aa-supersample"},
         {FlatMonoResolveMode::Taa,  5760,3240, 3840,2160, 3840,2160, false, "taa-display-grid-down"},
         {FlatMonoResolveMode::Dlaa, 3840,2160, 3840,2160, 3840,2160, false, "dlaa-native"},
@@ -2176,10 +2181,18 @@ int flatTraceMigrate(const char* dirPath) {
 // ---------------------------------------------------------------------------
 namespace {
 constexpr uint64_t kHullVs = 0x66DE2CADB1F4AE6Bull, kHullPs = 0x235567BE2840B3EDull;
+// The control: today's table without the hull pair, and without the pairs keyed since the Krait trace was recorded that it draws
+// (EDHM's AACFDCF2/CAD1F585, keyed 2026-11-16, #230), so it is the table the recording was made under, less the pair under test.
+constexpr uint64_t kEdhmAacfVs = 0xAACFDCF2FB9AD809ull, kEdhmAacfPs = 0xCAD1F585EDDC5641ull;
 bool tableWithoutHullPair(uint64_t vs, uint64_t ps) {
-    return !(vs == kHullVs && ps == kHullPs) && edvr::engine_velocity_family::supportedPair(vs, ps);
+    return !(vs == kHullVs && ps == kHullPs) && !(vs == kEdhmAacfVs && ps == kEdhmAacfPs) &&
+        edvr::engine_velocity_family::supportedPair(vs, ps);
 }
 bool tableNow(uint64_t vs, uint64_t ps) { return edvr::engine_velocity_family::supportedPair(vs, ps); }
+// The hull test's "new table": today's, less the pair keyed after it (CAD1F585), so it and the control differ by the hull pair alone.
+bool tableWithHullPair(uint64_t vs, uint64_t ps) {
+    return !(vs == kEdhmAacfVs && ps == kEdhmAacfPs) && edvr::engine_velocity_family::supportedPair(vs, ps);
+}
 struct RekeyFrame {
     uint64_t frame = 0, storedHash = 0, hash = 0;
     bool storedProduced = false, produced = false;
@@ -2309,8 +2322,8 @@ void testHullPairKeying() {
     check(supportedPair(kHullVs, kHullPs), "the Krait hull pair 66DE2CAD/235567BE is keyed for flat");
     check(supportedPair(kHullVs, 0x864F1F949851B8DEull) && supportedPair(kHullVs, 0xBBDE4E71FB78528Aull),
           "the family's two earlier pixel shaders are still keyed");
-    check(!supportedPair(0xAACFDCF2FB9AD809ull, 0xCAD1F585EDDC5641ull),
-          "CAD1F585 (EDHM-patched, reads t120) is left for later: unkeyed");
+    check(supportedPair(0xAACFDCF2FB9AD809ull, 0xCAD1F585EDDC5641ull),
+          "CAD1F585 (EDHM's build of CF534B32, reads t120) is keyed since 2026-11-16 (#230)");
     check(!supportedPair(0xBBE58E40FE88EC80ull, 0x7311054AB3AAE1DCull),
           "BBE58E40/7311054A (SV_Position input) is left for later: unkeyed");
     check(!supportedPair(kHullVs, 0x818212B5F404C002ull), "a third 66DE2CAD pixel shader stays unkeyed");
@@ -2327,7 +2340,7 @@ void testHullPairKeying() {
         std::vector<unsigned char> bytes;
         std::vector<RekeyFrame> recorded, control, now;
         const bool ok = readTrace(entry.path(), bytes) && rekeyReplay(bytes, nullptr, recorded) &&
-            rekeyReplay(bytes, tableWithoutHullPair, control) && rekeyReplay(bytes, tableNow, now) &&
+            rekeyReplay(bytes, tableWithoutHullPair, control) && rekeyReplay(bytes, tableWithHullPair, now) &&
             recorded.size() == control.size() && control.size() == now.size();
         check(ok, "re-key replay parses every corpus trace under all three decisions");
         if (!ok) continue;
@@ -2780,11 +2793,11 @@ void testFlatWarningWiring() {
          "the hold is 2000 ms: more than one stand-down probe interval, under two"},
         {&menuCpp, "temporalModeEnabled(Config::get().requestedTemporalMode());", 1,
          "and only while a temporal mode is selected"},
-        {&menuCpp, "if (runtimeFlatProfile() && s.flatWarnActive) {", 1, "the panel draws the warning only while it is active"},
-        {&menuCpp, "if (c.lineCount < kMenuMaxLines) c.lines[c.lineCount++].style = kMenuNote;", 2,
-         "the warning, and the wrapper note after it, are note lines below the rows"},
-        {&menuCpp, "FlatWarnRuler ruler{c.capPx * 8 / 7};", 2,
-         "wrapped with the panel's own ruler at the note face's em (the flat warning and the wrapper note: no VR note takes a line)"},
+        {&menuCpp, "if (runtimeFlatProfile() && s.flatWarnActive) {", 1, "the Performance tab draws its pointer to the warning only while it is active"},
+        {&menuCpp, "if (c.lineCount < kMenuMaxLines) c.lines[c.lineCount++].style = kMenuNote;", 3,
+         "the Star glow's Bloom note above it, the warning's pointer, and the wrapper note after it, are note lines below the rows"},
+        {&menuCpp, "FlatWarnRuler ruler{c.capPx * 8 / 7};", 4,
+         "wrapped with the panel's own ruler at the note face's em (the Bloom note, the warning's pointer, the wrapper note and the Status page's warning: no VR note takes a line)"},
         {&menuCpp, "flatWarningTick(now);", 1, "the flat tick runs the warning"},
         {&menuCpp, "s.flatSettingsForce = true;", 1, "Elite's files are looked at when the panel opens"},
         {&menuCpp, "s.flatSettings.setFolder(flatEliteGraphicsFolder());", 1, "from %LOCALAPPDATA%, resolved once"},
@@ -2943,12 +2956,14 @@ void testFlatCpuWiring() {
     const auto beginBody=beginAt!=std::string::npos&&endAt!=std::string::npos?runtimeCpp.substr(beginAt,endAt-beginAt):std::string{};
     const auto endBody=endAt!=std::string::npos&&dtorAt!=std::string::npos?runtimeCpp.substr(endAt,dtorAt-endAt):std::string{};
     bool drawOutsideCallbacks=true;size_t hookAt=0;
+    // The span from beginActualDraw to endActualDraw is a proximity bound, not a ceiling on useful work: since 2026-11-03 the four instanced/indexed/plain
+    // hooks hold a FlatParticleScope block around the game's issue (fix.particle_billboard), the longest span being DrawIndexedInstanced's at 447 characters. Since 2026-11-05 the ConcoursePaneScope line (concourse_pane.h) adds about 80 more to each of the indexed hooks. Since 2026-11-06 each of the four indexed hooks also issues the mirror draw (beginMirror), up to 260 more, so the bound is 850.
     for(unsigned i=0;i<7;++i) {
         const auto before=vscreenCpp.find("if (flatDraw.needsActualDraw()) flatDraw.beginActualDraw",hookAt);
         const auto draw=before==std::string::npos?std::string::npos:vscreenCpp.find("g_state->realDraw",before);
         const auto after=before==std::string::npos?std::string::npos:vscreenCpp.find("if (flatDraw.needsActualDraw()) flatDraw.endActualDraw",before);
         drawOutsideCallbacks=drawOutsideCallbacks&&before!=std::string::npos&&draw!=std::string::npos&&
-            after!=std::string::npos&&before<draw&&draw<after&&after-before<350;
+            after!=std::string::npos&&before<draw&&draw<after&&after-before<850;
         hookAt=after==std::string::npos?vscreenCpp.size():after+1;
     }
     check(beginBody.find("if(!ctx)return;")<beginBody.find("flatcpu::Scope callbacks(flatcpu::kIssueCallbacks);")&&
@@ -3012,8 +3027,8 @@ void testFlatCpuWiring() {
           "the draw wrapper counts its D3D calls at every call site (thirty and more)");
     // ORDER. The census's whole-frame span opens before the Paused return (a stood-down frame is
     // still a frame), the Present's census block sits after the stand-down's frame boundary and
-    // before anything that reads the frame's draw capture, and the flat branch of the menu tick
-    // returns before perfMonitorFrame -- so the census is the only driver of engine motion's clock.
+    // before anything that reads the frame's draw capture, and the monitor's frame recorder leaves engine motion's clock to the
+    // census in the flat profile (checked below).
     auto at = [&](const std::string& text, const char* needle) { return text.find(needle); };
     const size_t open = at(runtimeCpp, "if (!s.gpuFrameTried) gpuFrameOpen(s, context);");
     const size_t lastPausedReturn = runtimeCpp.rfind("if (s.work == FlatWork::Paused) return;");
@@ -3025,39 +3040,41 @@ void testFlatCpuWiring() {
     check(standDown != std::string::npos && tick != std::string::npos && capture != std::string::npos &&
           standDown < tick && tick < capture,
           "the census tick follows the stand-down's frame boundary and precedes the draw capture");
-    auto flatReturnsBeforeMonitor = [](const std::string& text) {
-        const size_t menuTick = text.find("void menuTick(ID3D11Device* dev)");
+    // The menu tick is one body for both profiles (menu_policy.h), and since the Monitor page came to flat (2026-11) the monitor's frame recorder runs in both: the
+    // menu tick calls perfMonitorFrame once, and perf_monitor.cpp itself keeps the flat profile off engine motion's clock (the recorder's cut and its gate belong to
+    // the census there) and off the draw-hook sample.
+    const std::string perfCpp = slurp("src/d3d11/perf_monitor.cpp");
+    const std::string engineGuard = "if (!flatProfile) {\n        const emcpu::Figures em = g_engineMotion.onFrame(";
+    auto engineClockOnlyOutsideFlat = [&](const std::string& monitor, const std::string& menu) {
+        const size_t menuTick = menu.find("void menuTick(ID3D11Device* dev)");
         if (menuTick == std::string::npos) return false;
-        const size_t flat = text.find("if (runtimeFlatProfile()) {", menuTick);
-        if (flat == std::string::npos) return false;
-        // The next outer guardedBudget is the native branch. Inspect the end
-        // of the flat branch itself, independent of its controller cleanup.
-        const size_t native = text.find("\n    guardedBudget(g_budget, [&] {", flat);
-        const size_t perf = text.find("perfMonitorFrame(dev);", menuTick);
-        if (native == std::string::npos || perf == std::string::npos || native >= perf)
-            return false;
-        std::string branch = text.substr(flat, native - flat);
-        if (branch.find("perfMonitorFrame(dev);") != std::string::npos) return false;
-        branch.erase(std::remove_if(branch.begin(), branch.end(), [](char c) {
-            return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-        }), branch.end());
-        const std::string end = "return;}";
-        return branch.size() >= end.size() &&
-               branch.compare(branch.size() - end.size(), end.size(), end) == 0;
+        const size_t call = menu.find("perfMonitorFrame(dev);", menuTick);
+        if (call == std::string::npos || menu.find("perfMonitorFrame(dev);", call + 1) != std::string::npos) return false;
+        const size_t frame = monitor.find("void perfMonitorFrame(ID3D11Device* dev) {");
+        const size_t flatLine = monitor.find("const bool flatProfile = runtimeFlatProfile();", frame);
+        const size_t cut = monitor.find("g_engineMotion.onFrame(", frame);
+        if (frame == std::string::npos || flatLine == std::string::npos || cut == std::string::npos || monitor.find("g_engineMotion.onFrame(", cut + 1) != std::string::npos) return false;
+        const size_t guard = monitor.find(engineGuard, frame);
+        const bool drawArm = monitor.find("detail::g_perfMonitorSampleDraws = !flatProfile && ", frame) != std::string::npos;
+        return flatLine < cut && guard != std::string::npos && guard + engineGuard.size() - std::strlen("g_engineMotion.onFrame(") == cut && drawArm;
     };
-    check(flatReturnsBeforeMonitor(menuCpp),
-          "the flat branch of the menu tick ends before perfMonitorFrame: the census is the flat profile's only driver of engine motion's clock");
-    std::string missingFlatReturn = menuCpp;
-    const size_t nativeBudget = missingFlatReturn.find("\n    guardedBudget(g_budget, [&] {",
-        missingFlatReturn.find("void menuTick(ID3D11Device* dev)"));
-    const size_t flatReturn = missingFlatReturn.rfind("return;", nativeBudget);
-    if (flatReturn != std::string::npos) missingFlatReturn.erase(flatReturn, 7);
-    check(!flatReturnsBeforeMonitor(missingFlatReturn),
-          "menu clock control: deleting the flat return fails the ordering invariant");
+    check(engineClockOnlyOutsideFlat(perfCpp, menuCpp),
+          "the menu tick calls perfMonitorFrame once, and perfMonitorFrame cuts engine motion's recorder and arms the draw sample outside the flat profile only: the census is the flat profile's only driver of engine motion's clock");
+    std::string unguardedPerf = perfCpp;
+    const size_t guardAt = unguardedPerf.find(engineGuard);
+    if (guardAt != std::string::npos) unguardedPerf.replace(guardAt, std::strlen("if (!flatProfile) {"), "{");
+    check(!engineClockOnlyOutsideFlat(unguardedPerf, menuCpp),
+          "monitor clock control: removing the flat guard from the engine motion cut fails the invariant");
+    std::string drawArmPerf = perfCpp;
+    const size_t armAt = drawArmPerf.find("detail::g_perfMonitorSampleDraws = !flatProfile && ");
+    if (armAt != std::string::npos) drawArmPerf.erase(armAt + std::strlen("detail::g_perfMonitorSampleDraws = "), std::strlen("!flatProfile && "));
+    check(!engineClockOnlyOutsideFlat(drawArmPerf, menuCpp),
+          "monitor clock control: arming the draw sample in the flat profile fails the invariant");
     std::string earlyMonitor = menuCpp;
-    if (flatReturn != std::string::npos) earlyMonitor.insert(flatReturn, "perfMonitorFrame(dev);\n");
-    check(!flatReturnsBeforeMonitor(earlyMonitor),
-          "menu clock control: a monitor call inside the flat branch fails the invariant");
+    const size_t worldAt = earlyMonitor.find("const bool world = pol.anchor == MenuAnchor::World;", earlyMonitor.find("void menuTick(ID3D11Device* dev)"));
+    if (worldAt != std::string::npos) earlyMonitor.insert(worldAt, "perfMonitorFrame(dev);\n    ");
+    check(!engineClockOnlyOutsideFlat(perfCpp, earlyMonitor),
+          "monitor clock control: a second monitor call fails the invariant");
     // INSTRUMENT ONLY. The stand-down functions never read the census, and no decision in the
     // runtime reads a figure it produced.
     const size_t first = at(runtimeCpp, "void applyWork(State& s, FlatWork next) {");
@@ -3166,7 +3183,7 @@ void testFlatWitnessWiring() {
           temporalCpp.find("if (full) flatComputeArm(device, g.presents);")!=std::string::npos &&
           temporalCpp.find("flatRuntimeArmProjectionAudit(full);")!=std::string::npos,
           "ordinary discovery avoids compute/manual projection arms and propagates explicit full tier");
-    check(hookCpp.find("flatTemporalArm(route == FlatDrawCaptureRoute::Full);")!=std::string::npos,
+    check(hookCpp.find("flatTemporalArm(g_state->device, route == FlatDrawCaptureRoute::Full);")!=std::string::npos,
           "configured flat census key still gives Shift its explicit full tier");
     // The camera data capture is not the witness: nothing in the bounded region captures or invalidates a camera.
     const size_t from = runtimeCpp.find("bool witnessWalk(const void* buffer) {");
@@ -3374,7 +3391,7 @@ void testFlatSubstitutionWiring() {
         const std::string body = deviceCpp.substr(hookFrom, hookTo - hookFrom);
         const size_t flush = body.find("flatRuntimeBeforePresent();");
         const size_t menu = body.find("menuFlatBeforePresent(self, flags);");
-        const size_t real = body.rfind("g_state->realPresent(self, syncInterval, flags);");   // (the first is the foreign swap chain's)
+        const size_t real = body.rfind("g_state->realPresent(self, presentSync, flags);");   // Elite's own (the foreign swap chain's forwards syncInterval; desktop_vsync.h)
         check(flush != std::string::npos && menu != std::string::npos && real != std::string::npos && flush < menu && menu < real,
               "the Present hook flushes before the menu draws and before the real Present");
     } else {
@@ -3915,8 +3932,15 @@ void testFlatWrapperNoteWiring() {
     struct Pin { const std::string* text; const char* needle; unsigned times; const char* what; };
     const Pin pins[] = {
         {&proxyCpp, "#include \"flat_wrapper_note.h\"", 1, "the probe takes the decision from its header"},
-        {&proxyCpp, "edvr::vtableDominantOtherModule(vt, kSample, g_systemModule, owner, sizeof(owner))", 1,
+        {&proxyCpp, "edvr::vtableDominantOtherModule(vt, kSample, systemModule, owner, sizeof(owner))", 1,
          "the probe asks which module backs the methods, excluding Windows' d3d11.dll"},
+        // The module those two calls and the count read is the one probeSystemModule checked by path (src\common\system_d3d11.h),
+        // never the handle LoadLibrary returned in DllMain: a hook on LoadLibraryExW can answer that with another module, and the
+        // probe then read 0 of 96 for a context whose methods were all Windows' own (docs\windows-d3d11-system-module-2026-11-07.md).
+        {&proxyCpp, "HMODULE const systemModule = probeSystemModule();", 1,
+         "the probe takes Windows' d3d11.dll from probeSystemModule, which checks it by path, not from the DllMain handle"},
+        {&proxyCpp, "edvr::vtableEntriesInModule(vt, kSample, systemModule)", 1,
+         "and counts the context's entries against that module"},
         {&proxyCpp, "flatWrapperFile(mode, probed, owner)", 1, "and lets the header decide from the mode it used and what it alone chose"},
         {&proxyCpp, "g_wrapperFileSet.store(true, std::memory_order_release);", 1, "the name is published once, after it is written"},
         {&proxyCpp, "const char* contextWrapperFile() {", 1, "and read back through one accessor"},
@@ -4092,6 +4116,7 @@ int main(int argc, char** argv) {
     failures += light_payload_test::run();
     failures += forward_light_test::run();
     failures += forward_light_cache_test::run();
+    failures += issue_epoch_gate_test::run();
     failures += forward_watch_test::run();
     failures += texture_description_test::run();
     failures += forward_light_integration_test::run();
@@ -4177,6 +4202,7 @@ int main(int argc, char** argv) {
     failures += flatLogLineTests();
     failures += flatHistoryDepthTests();
     flat_discovery_policy_tests::run(check);
+    flat_dof_blur_tests::run(check);
     if (failures) return 1;
     std::puts("flat temporal collector policy: PASS");
     return 0;

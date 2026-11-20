@@ -33,6 +33,8 @@ import struct
 import sys
 import tempfile
 
+import dump_io   # tools\dump_io.py: the eye dump's .bin files are NAME or NAME.z
+
 # --------------------------------------------------------------------------------------------------------- run-length coding
 
 def rle_pairs(values):
@@ -153,8 +155,7 @@ def census_text(source, census, frame, ids, rows):
 # --------------------------------------------------------------------------------------------------------- SceneZ
 
 def read_scenez(path):
-    with open(path, "rb") as f:
-        b = f.read()
+    b = dump_io.read_bytes(path)   # eye_<stamp>_SceneZ.bin, or its .z
     ver, w, h, fmt, pitch = struct.unpack_from("<5I", b, 8)
     if b[:8] != b"EDVRTEX1" or len(b) != 44 + w * h * 8:
         raise ValueError("%s is not an EDVRTEX1 R32G8X24 image of %dx%d" % (path, w, h))
@@ -294,8 +295,7 @@ def cmd_orbit(a):
     rows = 333
     cb1 = list(struct.unpack_from("<%df" % (rows * 4), cb1_raw, 0))
     # the aux capture of the same frame: entry of vs C7FA0C0F5DD49180, buffers cb2, t0, vb0, vb1
-    with open(os.path.join(a.pool, "aux_%s_%d.bin" % (a.stamp, a.frame)), "rb") as f:
-        aux = f.read()
+    aux = dump_io.read_bytes(os.path.join(a.pool, "aux_%s_%d.bin" % (a.stamp, a.frame)))
     magic, ver, fr, entries, pad = struct.unpack_from("<8sIIII", aux, 0)
     off = 24
     vb0 = vb1 = None
@@ -334,7 +334,7 @@ def cmd_dust(a):
         return np.asarray(Image.open(os.path.join(a.eyes, "eye_%s_C%02d.bmp" % (a.stamp, i))).convert("RGB")).astype(np.float32) / 255.0
 
     def load_d(i):
-        data = open(os.path.join(a.eyes, "eye_%s_D%02d.bin" % (a.stamp, i)), "rb").read()
+        data = dump_io.read_bytes(os.path.join(a.eyes, "eye_%s_D%02d.bin" % (a.stamp, i)))
         if data[:8] != b"EDVRTEX1":
             raise SystemExit("D%02d is not EDVRTEX1" % i)
         return np.frombuffer(data, dtype="<f4", offset=44).reshape(ch, cw, 4)
@@ -461,6 +461,9 @@ def self_test():
         b, ww, hh = read_scenez(p)
         dd, ss = scenez_crop(b, ww, hh, 1, 1, 2, 2)
         assert (ww, hh) == (4, 3) and dd == [5.0, 6.0, 9.0, 10.0] and ss == [5, 6, 9, 10]
+        zp = os.path.join(d, "zz.bin")
+        dump_io.write_z(zp, img)   # the same image as the compressed container the dump writes
+        assert read_scenez(zp)[1:] == (4, 3) and read_scenez(zp)[0] == img, "a compressed SceneZ reads under its original name"
         open(p, "wb").write(img + b"\0")
         try:
             read_scenez(p)

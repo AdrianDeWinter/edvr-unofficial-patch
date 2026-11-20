@@ -364,13 +364,7 @@ DllInfo probeDll(const std::wstring& path) {
 static const char kQualifiedEliteSha256[] =
     "ed5a8f8cd10f9a80d3bda5badd7ba1d4fcfc15996c8c7e018852cb170e264b63";
 
-EliteExeKind classifyEliteExecutable(const std::wstring& path, std::wstring* fileVersion) {
-    const std::string sha = sha256File(path);
-    if (sha.empty()) return EliteExeKind::Unreadable;
-    if (sha == kQualifiedEliteSha256) return EliteExeKind::OdysseyQualified;
-    const std::wstring product = versionString(path, L"ProductName");
-    const std::wstring description = versionString(path, L"FileDescription");
-    if (fileVersion) *fileVersion = versionString(path, L"FileVersion");
+bool versionStringsNameLegacyElite(const std::wstring& product, const std::wstring& description) {
     // Legacy vs Odyssey is the version resource talking: the pre-Odyssey
     // executable names itself "Elite:Dangerous", Odyssey's names itself
     // "Elite Dangerous: Odyssey". An exe that names itself Elite but not
@@ -379,7 +373,20 @@ EliteExeKind classifyEliteExecutable(const std::wstring& path, std::wstring* fil
         containsNoCase(product, L"elite") || containsNoCase(description, L"elite");
     const bool saysOdyssey =
         containsNoCase(product, L"odyssey") || containsNoCase(description, L"odyssey");
-    if (saysElite && !saysOdyssey) return EliteExeKind::Legacy;
+    return saysElite && !saysOdyssey;
+}
+
+bool eliteExeIsLegacy(const std::wstring& path) {
+    return versionStringsNameLegacyElite(versionString(path, L"ProductName"),
+                                         versionString(path, L"FileDescription"));
+}
+
+EliteExeKind classifyEliteExecutable(const std::wstring& path, std::wstring* fileVersion) {
+    const std::string sha = sha256File(path);
+    if (sha.empty()) return EliteExeKind::Unreadable;
+    if (sha == kQualifiedEliteSha256) return EliteExeKind::OdysseyQualified;
+    if (fileVersion) *fileVersion = versionString(path, L"FileVersion");
+    if (eliteExeIsLegacy(path)) return EliteExeKind::Legacy;
     return EliteExeKind::OdysseyUnknown;
 }
 
@@ -429,7 +436,7 @@ std::wstring describeDll(const DllInfo& info) {
     std::wstring s;
     const std::wstring mod = modNameOf(info);
     if (info.kind == DllKind::Edvr) {
-        s = L"EDVR";
+        s = L"ED-UP";
     } else if (!mod.empty()) {
         s = mod;
     } else if (!info.product.empty()) {

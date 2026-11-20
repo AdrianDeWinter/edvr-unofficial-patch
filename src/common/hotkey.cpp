@@ -165,7 +165,7 @@ void hotkeySetNonKeyboardReader(HotkeyHeldFn fn) { g_nonKeyboardReader = fn; }
 
 // Every live Hotkey, so a suspension that lifts can prime them all (hotkey.h). A fixed array of
 // pointers and a lock, both constant-initialised: a Hotkey in another file's static storage
-// (Explorer Cam's F5) registers itself from its constructor whatever the order the files
+// (any file-scope Hotkey) registers itself from its constructor whatever the order the files
 // initialise in, and the registry needs nothing from the CRT to be ready.
 constexpr int kLiveMax = 128;
 static Hotkey*  g_live[kLiveMax];
@@ -325,7 +325,15 @@ bool Hotkey::pressed() {
     // A game-mirrored binding is never filtered by focus; see the note above.
     // A pad or joystick binding takes the same rule: neither device has a
     // window, so "focused" is whether the game has it, as for a key.
-    return pressedWith(readDownNow(), m_bind.kind == HotkeyKind::Key ? heldMods() : 0,
+    //
+    // With the binding up, pressedWith's result and every member it writes
+    // (m_down = false, no edge, no m_missedUnfocused) are the same whatever
+    // `held` and `focused` are, and hotkeysSuspended() is not reached. So the
+    // modifier reads and the foreground-window query are made only when the
+    // binding is down.
+    const bool down = readDownNow();
+    if (!down) return pressedWith(false, 0, false);
+    return pressedWith(true, m_bind.kind == HotkeyKind::Key ? heldMods() : 0,
                        m_gameMirrored || gameHasFocus());
 }
 

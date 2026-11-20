@@ -50,6 +50,11 @@ import argparse
 import re
 import sys
 
+try:
+    from tools import log_session
+except ImportError:
+    import log_session
+
 LINE_RE = re.compile(r'^\[\d{2}:\d{2}:\d{2}\.\d{3}\] (DCO? .*)$')
 # Display names for the two draw tags. DC is the eye-texture draw, DCO the
 # offscreen draw; recordDraw() writes both with the same field layout.
@@ -130,6 +135,10 @@ DRAW_RE = re.compile(r'^DCO? (\d+) #(\d+) ([A-Z]) n=(\d+) i=(\d+) '
                      # comment above says must still fail here. Optional and
                      # out of the signature like the three tails before it.
                      r'(?: so=\S+)?'
+                     # The rasteriser (2026-11-06): cull mode and winding, the
+                     # depth biases, depth clip. Optional and out of the
+                     # signature like the tails above.
+                     r'(?: rs=\S+)?'
                      r'(?: q=\d+)?$')
 FRAME_RE = re.compile(r'^DC frame (\d+) draws=(\d+)(?: \S+=\d+)*$')
 # res= is the underlying resource's identity -- what connects an SRV @id to
@@ -155,7 +164,7 @@ ID_UNK_RE = re.compile(r'^DC id @(\d+) \?$')
 END_RE = re.compile(r'^DC end census=(\d+) draws=(\d+)(?: off=(\d+))?'
                     r'(?: \S+=\d+)*? '
                     r'lines=(\d+) interned=(\d+) overflow=(\d+) '
-                    r'truncated=(\d+)$')
+                    r'truncated=(\d+)(?: capture_id=\S*)?$')
 
 
 class Census(object):
@@ -178,8 +187,8 @@ def parse_logs(paths):
     """Every complete census in the given logs, in encounter order."""
     censuses = []
     for path in paths:
-        with open(path, encoding='utf-8', errors='replace') as f:
-            lines = [m.group(1) for m in map(LINE_RE.match, f) if m]
+        # The whole session: a head log and its tail segments (tools\log_session.py).
+        lines = [m.group(1) for m in map(LINE_RE.match, log_session.read_log_text(path).splitlines()) if m]
         censuses.extend(parse_dc_lines(lines, path))
     return censuses
 
@@ -542,7 +551,7 @@ def self_test():
               'DC %d #%d I n=6 i=1 r=@1 d=- c=@9 s=@4,-,-,- '
               'vp=0,0+1832x1920 z=0.000-1.000 sc=off '
               'ds=17wZ st=14 bm=F pr=- bl=1,5,6,1/2,1,1 sm=FFFFFFFF '
-              'so=rFF/wFF/f8/1,1,2 q=1' % (f, 2),
+              'so=rFF/wFF/f8/1,1,2 rs=Fw/-100/1.50/1 q=1' % (f, 2),
               # The two-faced form of so=, on one half of the overlay pair
               # below. Its twin at #611 carries no tail at all, so this also
               # proves a tail does not stop the two from merging into one
@@ -721,6 +730,19 @@ def self_test():
     if compare(dco[0], dco[1]) != 0:
         print('self-test: compare() refused a parsed pair')
         return 1
+    # The end line the DLL writes now: eye_lines= (the eye draws' own line budget) among the key=int tokens before lines=, and capture_id= (the eye dump's stamp, empty when none)
+    # after truncated=. Both parse; the draws counted are the declared draws.
+    for tail in (' capture_id=120515630001', ' capture_id=', ''):
+        got = parse_dc_lines([m.group(1) for m in map(LINE_RE.match, dc([
+            'DC begin census=7 frames=1 frame=7000 offscreen=yes',
+            'DCO 0 #0 I n=6 i=1 r=@0 d=- c=@2 s=-,-,-,-',
+            'DC frame 0 draws=0 off=1 copies=0 disp=0 clears=0 unseen=0',
+            'DC id @0 tex 64x64 fmt=87', 'DC id @2 buf 256',
+            'DC end census=7 draws=0 off=1 copies=0 disp=0 unseen=0 eye_lines=0 lines=1 '
+            'interned=2 overflow=0 truncated=0' + tail])) if m], 'self-test-eye-lines')
+        if len(got) != 1 or not got[0].complete or got[0].declared_draws != 0 or got[0].declared_off != 1:
+            print('self-test: the end line with eye_lines= and capture_id=%r did not parse as a complete census' % tail)
+            return 1
     print()
     print('self-test: ok')
     return 0

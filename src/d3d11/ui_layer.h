@@ -62,6 +62,8 @@
 
 struct ID3D11DeviceContext;
 struct ID3D11PixelShader;
+struct ID3D11RenderTargetView;
+struct ID3D11DepthStencilView;
 struct ID3D11ShaderResourceView;
 
 struct ID3D11Texture2D;
@@ -72,6 +74,9 @@ namespace edvr {
 // The render-owner cache prepares their restricted DXBC remap before a take.
 void uiLayerRememberHoloPs(ID3D11PixelShader* shader, uint64_t hash,
                            const void* bytes, size_t count, bool linked);
+// vscreen.cpp hookedUnmap, the scene camera block's branch, before the real Unmap, while uiLayerLive(): the block's
+// cb1[120].z kept by buffer for the hologram programs' relief radius (ui_holo_remap.h THE RELIEF). Owner context's thread.
+void uiLayerNoteSceneWrite(const void* resource, const void* data, uint32_t bytes);
 
 class Config;
 
@@ -82,22 +87,26 @@ extern bool g_uiLayerWatching;
 extern bool g_uiSeedDiagnostics;
 extern bool g_uiLayerRedirecting;
 extern bool g_uiLayerIssueBlocked;
+extern bool g_uiLayerMapRunHeld;
 extern bool g_uiLayerCrispOn;
 extern bool g_uiLayerCrispPending;
+extern bool g_uiLayerHudGlowPending;
 extern bool g_uiLayerWorldReissue;
 extern bool g_uiLayerMapsOn;
 extern uint64_t g_uiLayerGateFrame;
 extern uint64_t g_uiLayerNamedAt;
+extern uint32_t g_uiLayerTargetGen;
+extern int g_uiLayerTargetKindCache;
 }  // namespace detail
 
 // The draw path's one gate: fix.ui_quality is on, a temporal mode is on, and
 // the layer has not stood down. One load.
 inline bool uiLayerLive() { return detail::g_uiLayerLive; }
 // The layer's machinery runs for fix.ui_quality (the interface families, the 2D screen, the maps gate, the VR world route, the after-UI
-// take) -- the first half of uiLayerLive(), whose second half is fix.sharp_weapons (the weapons fire in its own HDR layer). With
-// fix.ui_quality off and fix.sharp_weapons on, uiLayerLive() is true and this is false: only the weapons fire is taken.
+// take) -- the first half of uiLayerLive(), whose second half is the weapons fire (in its own HDR layer). With
+// fix.ui_quality off and the weapons fire on, uiLayerLive() is true and this is false: only the weapons fire is taken.
 inline bool uiLayerQualityLive() { return detail::g_uiQualityLive; }
-// The other two halves, each its own: the weapons fire (fix.sharp_weapons on or plain) and the shield ripple that rides the same key. The flat adapter asks them
+// The other two halves, each its own: the weapons fire and the shield ripple, which is a half of its own beside it. The flat adapter asks them
 // to leave a family that is not live where it is (flat_ui_layer.cpp).
 bool uiLayerWeaponsLive();
 bool uiLayerRippleLive();
@@ -110,6 +119,23 @@ bool uiLayerRippleLive();
 // session either way.
 inline bool uiLayerIssueBlocked() { return detail::g_uiLayerIssueBlocked; }
 
+// The VR Galaxy Map's run of sprites (map_run_core.h, docs/galaxy-map-vr-2026-11-03.md "After the fifth flight"): while it is held the real context has the HDR layer and the eye's
+// private D16 bound and the game believes its own targets are bound. Every way into code that reads or sets the output merger ends it first; each is one load while no run is held.
+inline bool uiLayerMapRunHeld() { return detail::g_uiLayerMapRunHeld; }
+// Binds the game's targets back and lets the run go. Idempotent. Ignored from a thread other than the one that holds the run.
+void uiLayerMapRunEndSlow(ID3D11DeviceContext* ctx);
+inline void uiLayerMapRunEnd(ID3D11DeviceContext* ctx) {
+    if (detail::g_uiLayerMapRunHeld) uiLayerMapRunEndSlow(ctx);
+}
+// Lets the run go with no bind: the targets were replaced by the game's own call or a ClearState, or a view was released.
+void uiLayerMapRunDrop();
+// The game sets render targets while a run may be held. True: it sets exactly the targets the run saved, so the caller keeps its shadow and does not make the real call. False: the
+// call is made (a run for other targets has been dropped).
+bool uiLayerMapRunGameSet(ID3D11DeviceContext* ctx, uint32_t n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv, bool hasUav);
+// The game sets the layer's own targets while a run is held, having read them back: nothing hooks OMGetRenderTargets. True: the caller leaves its shadow alone and does not make the real
+// call, so the game's targets stay the saved ones and the layer is never taken for them.
+bool uiLayerMapRunGameSetsOwn(ID3D11DeviceContext* ctx, uint32_t n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv);
+
 // Reads fix.ui_quality and fix.temporal_aa. Live: an "off" composites the frame in flight and
 // redirects nothing from the next draw.
 void uiLayerConfigure(Config& cfg);
@@ -119,6 +145,11 @@ void uiLayerConfigure(Config& cfg);
 // lit HDR target, the G-buffer), 2 an eye target viewed as 8-bit UNORM (the
 // post-tonemap target the UI composites draw into).
 int uiLayerTargetKind();
+// uiLayerTargetKind with its first test inline: `rtv0Gen` is bindingGeneration(BindSlot::Rtv0). When it equals the generation the cache answered for, the cached kind is
+// returned, which is what the callee's first two lines do; otherwise the callee runs. The draw path calls this for every eye draw.
+inline int uiLayerTargetKindAt(uint32_t rtv0Gen) {
+    return rtv0Gen == detail::g_uiLayerTargetGen ? detail::g_uiLayerTargetKindCache : uiLayerTargetKind();
+}
 
 // For an owner-context draw whose family vscreen.cpp recognised
 // (ui_layer_math.h's UiLayerFamily, as an int): true when the draw goes to
@@ -182,6 +213,28 @@ bool uiLayerMultiplyBegin(ID3D11DeviceContext* ctx);
 bool uiLayerWriteBackBegin(ID3D11DeviceContext* ctx);
 void uiLayerWriteBackEnd(ID3D11DeviceContext* ctx);
 
+// The VR Galaxy Map's two more second issues (galaxy_map_ui.h, docs/galaxy-map-vr-2026-11-03.md Fix 3), each closed by uiLayerEnd and each only for a draw the layer took
+// while the map is open and its pointer hooks are armed:
+// a panel draw (vertex shader C4B4B334B26E81A9 or 5DAD41AA66757CE3) re-issued into the eye's panel mask, an A8_UNORM texture at the layer's size that
+// accumulates the draw's alpha (made at the first such draw, cleared once an eye-frame, let go at the frame boundary once the map is shut);
+// and the arrow's draw (4EF6DDB075A927FA), in the layer's bracket with the layer's own target, viewports and scissor, a blend that writes nothing and no depth or stencil:
+// the caller issues its one point there. Both fill in the draw's vertex shader, the eye, the layer's frame sequence and the mask's view. kNoMask: the draw is one of these but
+// the mask could not be made, for the caller to say (the layer does not link galaxy_map_ui.cpp in the rigs that link it whole).
+enum class UiMapBegin { kNotMine, kBound, kNoMask, kNoDepth };
+struct UiMapIssue {
+    ID3D11ShaderResourceView* mask = nullptr;
+    uint64_t vs = 0;
+    uint64_t ps = 0;   // uiLayerMapDepthBegin: the game's pixel shader of the sprite
+    int eye = -1;
+    uint64_t seq = 0;
+};
+UiMapBegin uiLayerMapMaskBegin(ID3D11DeviceContext* ctx, UiMapIssue* out);
+UiMapBegin uiLayerMapProbeBegin(ID3D11DeviceContext* ctx, UiMapIssue* out);
+// And the sprites' depth issue (galaxy_map_ui.h, THE SPRITES' DEPTH), for a Galaxy Map sprite or canvas draw (pixel shader 964221955A9E77E7 or 855C469156AB997F) the layer took into the HDR
+// layer while the map is open in VR: the layer's bracket with the HDR layer's render target kept (write mask 0), the eye's D16 depth bound with its test and write on, the biased rasterizer, the layer's viewports and
+// scissor (closed by uiLayerEnd); the caller issues the draw with the pixel shader swapped (mapui::depthIssue). kNoDepth: the draw is one of these but the depth could not be made.
+UiMapBegin uiLayerMapDepthBegin(ID3D11DeviceContext* ctx, UiMapIssue* out);
+
 // the crisp-HUD half of fix.ui_quality (Phases 1-3 of docs/cockpit-hud-layer-design-2026-09-27.md): the
 // cockpit's HDR HUD families (the holo panels, the flight HUD, the target
 // sprite, the holograms) are taken into a per-eye HDR layer by the ordinary take
@@ -199,12 +252,25 @@ inline bool uiLayerCrispOn() { return detail::g_uiLayerCrispOn; }
 // eye's HDR layer holds this frame's HUD draws and every ordering guard
 // passes; then the caller skips its after-UI read check for the draw and
 // brackets the draw's own issue with uiLayerCrispToneBegin/End.
-bool uiLayerCrispNoteEyeDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count, uint32_t instances,
-                             uint32_t startInstance);
+bool uiLayerCrispNoteEyeDrawBody(ID3D11DeviceContext* ctx, char kind, uint32_t count, uint32_t instances,
+                                 uint32_t startInstance);
+// The per-draw entry, inline: the body's first act is to clear a pending tonemap record, and its second is the shape test, so
+// it is needed only when a tonemap draw is pending (the header flag, set and cleared together with the record on every
+// path) or this draw has the tonemap's shape. Anything else it would leave at that test with nothing to clear.
+inline bool uiLayerCrispNoteEyeDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count, uint32_t instances,
+                                    uint32_t startInstance) {
+    if (!detail::g_uiLayerCrispPending && ((kind != 'D' && kind != 'N') || count != 3 || instances != 1 || startInstance != 0))
+        return false;
+    return uiLayerCrispNoteEyeDrawBody(ctx, kind, count, instances, startInstance);
+}
 // One load for the ordinary draw between admission and issue: an admission is
 // outstanding, so forwardWithVerdict must run the re-issue bracket after the
 // game's own issue.
 inline bool uiLayerCrispPending() { return detail::g_uiLayerCrispPending; }
+// One load for the headset's bloom hook (vr_star_glow.h): an eye's HDR HUD layer holds this frame's HUD light that no first-level draw has taken yet, so
+// the bloom chain's first level, when it comes, is asked for H' = H + the HUD (uiLayerHeadsetGlowFeed). Set at the first HUD draw an eye-frame takes,
+// cleared when the last waiting eye is claimed and at the frame boundary. Read and written on the render thread.
+inline bool uiLayerHudGlowPending() { return detail::g_uiLayerHudGlowPending; }
 // Around the re-issue of the admitted tonemap draw (the game's own draw,
 // re-issued by the caller between them): Begin binds the 8-bit layer, the
 // disabled RGB-only blend, the full-layer viewport and the HDR layer at the
@@ -214,7 +280,7 @@ inline bool uiLayerCrispPending() { return detail::g_uiLayerCrispPending; }
 // through the raw entry points, runs the coverage pass (the HDR layer's
 // transmittance into the 8-bit layer's alpha), and marks the layer's frame.
 bool uiLayerCrispToneBegin(ID3D11DeviceContext* ctx);
-// After each issue of the admitted draw, between Begin and End (fix.sharp_weapons): true when ANOTHER issue of the same draw follows --
+// After each issue of the admitted draw, between Begin and End (the weapons fire): true when ANOTHER issue of the same draw follows --
 // the weapons' light and the HUD's are re-issued one after the other into the 8-bit layer, each with its own HDR source and blend. The
 // caller issues the game's draw again for every true. A frame with the HUD alone is one issue, as it always was (this returns false).
 bool uiLayerCrispToneNext(ID3D11DeviceContext* ctx);
@@ -294,6 +360,11 @@ UiLayerWorldStats uiLayerWorldStats();
 inline bool uiLayerMapsOn() { return detail::g_uiLayerMapsOn; }
 // The rigs' switch for the gate (it is on in production, always): the gate-off path is driven with it.
 void uiLayerSetMapsGateForTest(bool on);
+// The rigs' window onto the bound depth view's resolve memo (resolveBoundDsv, which seedWritersCheck asks): resolves `view` through
+// the memo, keyed by the Dsv0 binding's generation exactly as the draw path does, and reports the window's running hit and miss counts.
+// Returns the resolve's answer. Nothing in production calls it.
+struct ResourceInfo;
+bool uiLayerResolveBoundDsvForTest(void* view, ResourceInfo* info, uint64_t* hits, uint64_t* misses);
 // screen_motion.cpp, once, at the draw that names the screen's source for the frame in flight (the world camera's terrain or
 // scene draw, or the pool-family fallback): the gate judges the frame that ends at the next boundary by it. Attributed to the
 // layer's own frame count, so it is right whichever boundary runs first. Two loads and a store.
@@ -357,6 +428,16 @@ void uiLayerNoteDepthClear(void* dsv, uint32_t flags, float depth, uint8_t stenc
 // could not be told. Identities only, never dereferenced.
 void uiLayerNoteCopy(const void* destination, const void* source);
 void uiLayerNoteSubmitted(uint64_t sequence, uint32_t eye, const void* submitted);
+// F121c: what the game last submitted for an eye (0 left, 1 right), as uiLayerNoteSubmitted was told; null for none yet or an eye other than 0 or 1. An identity, never
+// dereferenced: remlok_fix.cpp's eye-trust guard asks which eye a visor draw's target was submitted for.
+const void* uiLayerSubmittedTarget(uint32_t eye);
+// F198 (submitted_eye.h): the same submit with the texture's size, kept for the native on-foot marker fix's eye source 'S' while the temporal path is NOT running (Anti-aliasing
+// off: the layer is not live and ui depth classifies nothing, so no other source names a marker composite draw's eye). Called from native_temporal.cpp's treat beside
+// uiLayerNoteSubmitted, before its Anti-aliasing-off return; an on-foot or render-mode edge clears it. Identities only.
+void uiLayerNoteSubmittedSized(uint32_t eye, const void* submitted, uint32_t width, uint32_t height);
+// F198: the eye whose submitted texture `res` is (0 or 1), or -1: both eyes' textures known, distinct, each the same for two submits at the same size. Read only; the draw
+// path's answer is the frames before this one's (the draws precede treat), safe because the textures are stable.
+int uiLayerEyeOfSubmitted(const void* res);
 
 // The door, from the native runtime's submit chain (native_temporal.cpp and
 // native_sharpen.cpp, both on the thread the game submits from):
@@ -408,6 +489,20 @@ bool uiLayerDoorFromPass(uint32_t eye);
 // each tonemap admission: the flat frame's number, the raster phase the draw's camera carries in render pixels (right and
 // down), and the scene's render size R. Read only in the flat profile; cleared at the frame boundary.
 void uiLayerFlatSetDraw(uint64_t frame, float jx, float jy, uint32_t renderW, uint32_t renderH);
+// The HUD edge smoothing (fix.hud_antialiasing, both profiles; the flat adapter asks through here; ui_layer_smaa.h; docs/design-flat-ui-quality-2026-10-05.md, "2026-10-24: edge smoothing for
+// the HUD layer"): SMAA 1x over the layer's finished 8-bit content before the composite downsamples it, so the HUD gets the edge smoothing the game's own
+// anti-aliasing would have given it. The adapter asks for the NEXT composite only, once a frame, with the key it just read: `on` smooths the layer, false leaves it as
+// it was. uiLayerComposite takes the ask on entry and clears it, so a caller that never asks (VR) never sees it set: VR reads the same key itself, at every
+// configure (2026-11-03), and smooths both eyes' composites when it is on. The result is what that
+// composite did: kNone (no layer composite ran), kRaw (it ran on the layer as is, as asked), kSmoothed (it read the SMAA output) or kFault (smoothing was asked
+// for, the SMAA resources could not be had, and it read the raw layer); w x h is the layer's size at that composite.
+enum class UiLayerEdgeSmoothing : uint8_t { kNone = 0, kRaw, kSmoothed, kFault };
+struct UiLayerEdgeSmoothingResult {
+    UiLayerEdgeSmoothing outcome = UiLayerEdgeSmoothing::kNone;
+    uint32_t w = 0, h = 0;
+};
+void uiLayerFlatSetEdgeSmoothing(bool on);
+UiLayerEdgeSmoothingResult uiLayerFlatEdgeSmoothingResult();
 // The flat profile's tonemap admission (2026-10-09): the game's tone pass recognised by its known pair (flat_mono_frame.h
 // toneHdrSlot), whatever its vertex count, reading eye 0's fresh HUD or weapons target -- or `alias`, a plain copy of
 // `aliasSource` this frame (the HDR route's post chain copies H before the tone) -- at `hdrSlot`. 1: armed, re-issue between uiLayerCrispToneBegin/End;
@@ -438,12 +533,35 @@ struct UiGlowStar {
 };
 ID3D11ShaderResourceView* uiLayerGlowFeed(ID3D11DeviceContext* ctx, uint64_t frame, uint32_t slot, const void* hdr, int* verdict,
                                           UiGlowStar* star = nullptr);
+// The headset's first level (vr_star_glow.h; visual.star_glow's H' = H + m * S, and the HUD's bloom below). The flat feed above is gated on the flat profile and eye 0's HUD layer.
+// The HUD's bloom in the headset (docs/cockpit-hud-layer-design-2026-09-27.md, "2026-10-28: the HUD's bloom in the headset"). fix.ui_quality takes the cockpit's holo
+// panels, flight HUD and target sprite out of an eye's H into that eye's HDR HUD layer, and the bloom chain reads H: the HUD lost its halo in the headset exactly as
+// it did in flat. At an eye's first level (the draw vr_star_glow.cpp finds by its pixel shader, reading that eye's H at `slot`) this makes H' = H + the HUD
+// layer's premultiplied radiance by flat's pass (kUiGlowFeedPsHlsl) and, when `star` is given, + m * S (visual.star_glow) in the same texture, one command
+// list on the coverage pass's deferred context. Which eye's layer is H's is decided by identity (UiHeadsetHudEye): the layer whose HUD draws were taken
+// from `hdr`. The HUD's body stays in the layer, tonemapped once by the re-issue with the scene's bloom zeroed; H' is bound for this one draw by the caller
+// and reaches no tonemap, so the HUD's light is in the frame once as its body and once, softened, as the bloom the scene's own tonemap adds.
+// Returns H''s view (owned here, valid until the next call or the layer's release) or null, with `out` saying why. `star` may be null or hold no view: then
+// the HUD is the only input, and with no HUD either nothing is made (out->hud names which). With `star` and no HUD (no eye's layer is H's, or its content is not of this
+// frame) H' is a copy of H and m * S, as visual.star_glow made it before the HUD joined; the star input's own out flags (applied, sizeMismatch, unavailable) are set as ever.
+struct UiHeadsetGlow {
+    int hud = 1;                                 // out: the layer's verdict for this H (ui_layer_math.h's UiHeadsetHud as an int; 1 is kNoLayer)
+    int eye = -1;                                // out: the eye whose layer it is (-1: none)
+    bool hudIncluded = false;                    // out: the HUD layer's light is in H'
+    int verdict = 0;                             // out: the pass's UiGlowFeed
+};
+ID3D11ShaderResourceView* uiLayerHeadsetGlowFeed(ID3D11DeviceContext* ctx, uint32_t slot, const void* hdr, UiGlowStar* star, UiHeadsetGlow* out);
+// Eye-frames (per eye) that took HUD draws into the HDR layer since the DLL loaded: the headset hook's window line sets them beside the first levels it fed.
+uint64_t uiLayerHudEyeFrames(int eye);
 // The UiLayerDecision (as an int) the last uiLayerDecide came to: the adapter names its refusals by it.
 int uiLayerLastDecision();
 // How many decisions uiLayerDecide has come to since the DLL loaded: the blend probe (TEMPORARY) compares it before and after a draw's
 // routing to tell "decided: left, with this reason" from "no decision ran for this draw", which uiLayerLastDecision alone cannot (it
 // keeps the previous draw's value, and 0 is a take).
 uint32_t uiLayerDecisionCount();
+// F46 (TEMPORARY, the native on-foot marker probe): the eye whose layer the game's target `res` was redirected from -- the 8-bit layer's
+// target or the HDR HUD layer's, as each eye's last redirected frame left them -- or -1 when neither eye's layer names it. Read only.
+int uiLayerEyeOfGameTarget(const void* res);
 // A game draw the layer did not take, while watching: a write of the depth-stencil buffer a seed copied makes the seed
 // stale (uiLayerNoteOther's first step, alone -- the flat profile has no after-the-UI take).
 void uiLayerNoteSceneDraw(ID3D11DeviceContext* ctx, uint32_t count, uint32_t instances, char drawKind);

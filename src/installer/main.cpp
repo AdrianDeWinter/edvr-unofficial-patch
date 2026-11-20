@@ -12,6 +12,9 @@
 #include <shellapi.h>
 
 #include "app.h"
+#ifdef EDUP_LAUNCHER
+#include "launcher_main.h"
+#endif
 
 namespace {
 
@@ -40,6 +43,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     const AppArgs args = parseArgs(argc ? argc : 0, argv);
     if (argv) LocalFree(argv);
 
+#ifdef EDUP_LAUNCHER
+    // The elevated copy has one job and shows nothing; the update and unregister commands print
+    // to a console when there is one.
+    if (!args.badArg && !args.planFile.empty()) return runApplyPlanFile(args);
+    if (!args.badArg && !args.help && args.headless) return runHeadless(args, attachToConsole());
+    if (!args.badArg && !args.help && launcherHasCommand(args)) return runLauncherCommand(args, attachToConsole());
+#endif
+
     // --autorun is the elevated relaunch of a window session: it belongs in the
     // window, showing the result, not in a console nobody is watching.
     const bool wantsConsole =
@@ -47,5 +58,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
                           args.badArg);
 
     if (wantsConsole && attachToConsole()) return runConsole(args);
+#ifdef EDUP_LAUNCHER
+    int startupCode = 0;
+    if (!launcherStartup(args, &startupCode)) return startupCode;
+#endif
     return runGui(instance, args);
 }

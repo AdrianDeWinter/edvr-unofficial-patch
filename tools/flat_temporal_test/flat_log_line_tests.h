@@ -224,7 +224,8 @@ inline std::vector<Case> buildCases() {
                {{"frames=", 'q', false}, {"no-source-frames=", 'q', false}, {"spells=", 'q', false}, {"longest-spell=", 'q', false}, {"open-spell=", 'q', false},
                 {"recoveries=", 'q', false}, {"abandoned=", 'q', false}, {"warm-ups-done=", 'q', false}, {"warm-frames-total=", 'q', false},
                 {"warm-frames-max=", 'q', false}, {"warm-ups-aborted=", 'q', false}, {"source-free-frames=", 'q', false},
-                {"source-free-treated=", 'q', false}, {"overlays-without-named-world=", 'q', false}, {"last no-source frame=", 'q', false},
+                {"source-free-treated=", 'q', false}, {"overlays-without-named-world=", 'q', false}, {"first-person-path=", 'q', false},
+                {"first-person-frames=", 'q', false}, {"first-person-treated=", 'q', false}, {"last no-source frame=", 'q', false},
                 {"records-on-scene-depth=", 'd', false}, {"same-camera-draws=", 'd', false}, {"pool-kind-records=", 'd', false},
                 {"distinct-pairs=", 'd', false}, {"[VS=", 'n', true}, {" PS=", 'n', true}, {"same-camera=", 'n', true}, {"pool-kind=", 'n', true},
                 {"family-vs=", 'n', true}, {"recipe=", 'n', true}},
@@ -233,6 +234,7 @@ inline std::vector<Case> buildCases() {
                    const uint64_t v = levelQ(l);
                    w.frames = w.noSourceFrames = w.spells = w.recoveries = w.abandoned = w.warmDone = w.warmFrames = w.warmMax = w.warmAborted = v;
                    w.longestSpell = w.openSpell = w.sourceFreeFrames = w.sourceFreeTreated = w.overlaysUnnamed = v;
+                   w.overlaysFirstPerson = w.firstPersonFrames = w.firstPersonTreated = v;
                    FlatMonoSourceless busy;
                    FlatSourcelessPairNote notes[4];
                    if (l != kZero) {
@@ -242,6 +244,32 @@ inline std::vector<Case> buildCases() {
                        for (auto& note : notes) note.familyVs = note.recipe = true;
                    }
                    return flatSourceSpellLine(out, n, w, busy, v, notes, part);
+               },
+               true};
+        cases.push_back(c);
+    }
+    {   // the source-veto line (2026-11-08): one part, the window, the last refusal's causes and its four stock draws
+        Case c{"source-veto", 1, {"flat source veto 5s: frames="},
+               {{"frames=", 'q', false}, {"with-stock-family=", 'q', false}, {"of-those-selected=", 'q', false}, {"refused-by-family=", 'q', false},
+                {"refused-by-pool=", 'q', false}, {"last refused frame=", 'q', false}, {"stock-family-draws=", 'd', false},
+                {"unsupported-pool-draws=", 'd', false}, {"kinds=", 'x', false}, {"past-the-kinds=", 'd', false},
+                {"[VS=", 'n', true}, {" PS=", 'n', true}, {"draws=", 'n', true}, {"depth=", 'n', true},
+                {"target=", 'n', true}, {"color=", 'n', true}, {"camera=", 'n', true}},
+               [](char* out, size_t n, unsigned part, int l) {
+                   if (part) return 0;
+                   FlatSourceVetoWindow w;
+                   const uint64_t v = levelQ(l);
+                   w.frames = w.withFamily = w.withFamilySelected = w.refusedByFamily = w.refusedByPool = v;
+                   FlatMonoSourceless last;
+                   FlatFamilyVeto vetoes[kFlatFamilyVetoKinds];
+                   uint32_t kinds = 0;
+                   if (l != kZero) {
+                       last.vetoFamilyDraws = last.vetoPoolDraws = ~0u;
+                       kinds = kFlatFamilyVetoKinds;
+                       // depth stays null against a null HDR depth: "other", the longer word
+                       for (auto& e : vetoes) { e.vs = e.ps = ~0ull; e.draws = e.width = e.height = ~0u; e.color = e.camera = true; }
+                   }
+                   return flatSourceVetoLine(out, n, w, last, v, vetoes, kinds, levelD(l));
                },
                true};
         cases.push_back(c);
@@ -717,7 +745,7 @@ inline Estimate estimateCall(const NoteCall& call, unsigned digits, const Row* r
 inline std::vector<Measured> measuredFormatters(const std::vector<Case>& cases) {
     struct Map { const char* callee; const char* caseName; };
     static const Map map[] = {{"flatNoCandidateLine(", "no-candidate"}, {"flatIdentityLine(", "identity"}, {"flatSiblingLine(", "sibling"},
-                              {"flatSourceSpellLine(", "source-spell"}, {"flatHistoryLine(", "history"}, {"flatHistoryWritesLine(", "history-writes"},
+                              {"flatSourceSpellLine(", "source-spell"}, {"flatSourceVetoLine(", "source-veto"}, {"flatHistoryLine(", "history"}, {"flatHistoryWritesLine(", "history-writes"},
                               {"flatHistoryVertexLine(", "history-vertex"}, {"flatHistoryExampleLine(", "history-example"}, {"flatShadowLine(", "shadow"},
                               {"flatNoCandidateExampleLine(", "no-candidate-example"}, {"flatIdentityExampleLine(", "identity-example"}};
     std::vector<Measured> out;
