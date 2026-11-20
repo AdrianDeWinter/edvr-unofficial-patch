@@ -483,7 +483,7 @@ void panelTable(const std::string& root, const std::string& gen) {
                                         {"fix", "xess_frame_generation"}, {"fix", "xess_generated_frames"},
                                         {"fix", "render_sharpness"}, {"fix", "ui_quality"},
                                         {"fix", "hud_antialiasing"}, {"fix", "optimized_stations"}, {"fix", "station_window_distance"}, {"fix", "skip_rooms_behind_doors"},
-                                        {"menu", "fps_overlay"}, {"menu", "fps_overlay_lock"}};
+                                        {"menu", "monitor_panel_view"}, {"menu", "fps_overlay_lock"}};
         bool same = kFlatPageRowCount == 16;
         for (size_t i = 0; same && i < 16; ++i)
             same = std::strcmp(kFlatPageRows[i].section, order[i][0]) == 0 && std::strcmp(kFlatPageRows[i].key, order[i][1]) == 0;
