@@ -55,6 +55,8 @@ struct ID3D11Resource;
 struct ID3D11ShaderResourceView;
 struct ID3D11Texture2D;
 struct ID3D11VertexShader;
+struct ID3D11BlendState;
+struct ID3D11RenderTargetView;
 struct D3D11_BUFFER_DESC;
 
 namespace edvr {
@@ -314,6 +316,17 @@ void engineVelocityFlatAbandon() noexcept;
 // The frame ends, after the Present's flush: what the bracket kept for it (the game's render-target set, its blend state, the
 // accepted binding; flat_query_cut.h) is released. A no-op while EDVR's state is still bound: the flush is owed first.
 void engineVelocityFlatFrameEnd() noexcept;
+// The game's blend and colour targets for one flat foreground capture. Shortcut while
+// EDVR's substitute state is not bound and the memo still matches the binding generation.
+// A pending read hits the context and does not update the memo. The blend state and each
+// non-null colour view are AddRef'd for the caller. Colour slots are 0..5.
+void flatQueryGameBlend(ID3D11DeviceContext* ctx, ID3D11BlendState** outState, float factor[4], unsigned int* outMask);
+void flatQueryGameColorTargets(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* colors[6]);
+// The OM hooks (vscreen.cpp) record the set they just passed to bindingSet.
+// flatOmForget runs wherever bindingForgetAll runs.
+void flatOmNoteBlend(ID3D11BlendState* state, const float factor[4], unsigned int mask);
+void flatOmNoteTargets(unsigned n, ID3D11RenderTargetView* const* rtvs);
+void flatOmForget();
 void engineVelocityFlatLazy(bool on) noexcept;
 // The flat CPU census (flat_cpu.h): what engine motion's draw wrapper asks of the D3D
 // immediate context. Every Get and Set on it, and the clears and copies an eye-frame's

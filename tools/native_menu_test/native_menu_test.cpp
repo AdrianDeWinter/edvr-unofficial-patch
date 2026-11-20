@@ -1024,9 +1024,9 @@ int wmain(int argc, wchar_t** argv) {
                       "the monitor raster is uploaded to its own slot, and the menu's stays live");
                 check(edvr::menuPanelMonitorRasterOwner() == edvr::kSlotOwnerMonitorPanel, "the uploaded monitor raster reports the panel as its owner");
                 {
-                    // The slot is shared with the frame-rate readout: the owner follows the raster actually uploaded, so a stale one is never taken for the other's.
+                    // The owner follows the raster actually uploaded, so a stale one is never taken for another owner's (an untagged raster here).
                     edvr::MenuContent ro = mon;
-                    ro.slotOwner = edvr::kSlotOwnerReadout;
+                    ro.slotOwner = edvr::kSlotOwnerNone;
                     std::strcpy(ro.lines[0].left, "FPS");
                     edvr::menuPanelSubmitMonitor(ro);
                     bool roReady = false;
@@ -1034,9 +1034,9 @@ int wmain(int argc, wchar_t** argv) {
                         roReady = edvr::menuPanelMonitorWorkerReadyForTest();
                         if (!roReady) Sleep(5);
                     }
-                    check(roReady, "readout-tagged monitor raster worker ready");
+                    check(roReady, "untagged monitor raster worker ready");
                     edvr::menuPanelTick(device.Get());
-                    check(edvr::menuPanelMonitorRasterOwner() == edvr::kSlotOwnerReadout, "after the readout's raster is uploaded the slot reports the readout as its owner");
+                    check(edvr::menuPanelMonitorRasterOwner() == edvr::kSlotOwnerNone, "after an untagged raster is uploaded the slot reports no owner");
                     edvr::menuPanelSubmitMonitor(mon);
                     roReady = false;
                     for (unsigned ms = 0; ms < 3000 && !roReady; ms += 5) {

@@ -112,9 +112,9 @@ void updateLauncherControls() {
     EnableWindow(lg.update, !lg.session->applying());
     ShowWindow(lg.rc, onScreen ? SW_SHOW : SW_HIDE);
 
-    // Play. Only a route that carries VR or flat gets two buttons: Frontier's, and Steam's once the
-    // launcher starts Elite itself (direct launch, which is off unless the user turned it on). The
-    // setting is offered for a Steam install and for one from Frontier's own store.
+    // Play. Only a route that carries VR or flat gets two buttons: Frontier's, Steam's once the
+    // launcher starts Elite itself, and Epic's once the skip-the-launcher checkbox is on. The
+    // checkbox is offered for Steam, for Frontier's own store, and for Epic.
     lg.playCaption.clear();
     bool showPlay = false, showPair = false, showDirect = false, playEnabled = false;
     bool showVrButton = false, showFlatButton = false;  // within the pair: only the modes this folder has installed
@@ -123,8 +123,11 @@ void updateLauncherControls() {
         const bool anyGame = g.survey.gameRunningHere || g.survey.gameRunningElsewhere;
         playEnabled = !lg.session->playing() && !busy && !anyGame && !g.survey.gameRunStateUnknown;
         const bool frontierStore = route.kind == RouteKind::Frontier && _wcsicmp(g.survey.game.source.c_str(), L"Frontier launcher") == 0;
-        showDirect = (route.kind == RouteKind::Steam || frontierStore) && lg.session->directLaunchOffered();
+        const bool epic = route.kind == RouteKind::Epic;
+        showDirect = (route.kind == RouteKind::Steam || frontierStore || epic) && lg.session->directLaunchOffered();
         const bool directOn = showDirect && lg.session->directLaunch();
+        if (lg.direct)
+            SetWindowTextW(lg.direct, epic ? L"Skip the Epic launcher" : L"Start Elite directly (no Frontier launcher)");
         if (route.kind == RouteKind::Frontier || directOn) {
             // A button only for a mode this folder has installed: a VR-only install gets no flat button, and the reverse.
             // An empty scope (no install the survey can name) keeps both, as before.
@@ -135,8 +138,9 @@ void updateLauncherControls() {
             showPair = true;
             showVrButton = hasVr;
             showFlatButton = hasFlat;
-            lg.playCaption = directOn ? (frontierStore ? L"Signs in itself. If that fails, it starts EDLaunch."
-                                                       : L"Signs in itself. If that fails, it starts through Steam.")
+            lg.playCaption = directOn ? (epic ? L"Starts EDLaunch with the mode you pick, then closes it when Elite exits."
+                                          : frontierStore ? L"Signs in itself. If that fails, it starts EDLaunch."
+                                                          : L"Signs in itself. If that fails, it starts through Steam.")
                              : bothModes ? L"Starts EDLaunch with the mode you pick, then closes it when Elite exits."
                              : hasVr ? L"Starts EDLaunch in VR, then closes it when Elite exits."
                                      : L"Starts EDLaunch in flat, then closes it when Elite exits.";
@@ -352,11 +356,25 @@ bool launcherCommand(int id, int code) {
             const bool want = !ui::checkboxChecked(lg.direct);
             // A Steam install is asked with Steam's words; one from Frontier's store is told about the login.
             const bool frontierStore = g.haveSurvey && _wcsicmp(g.survey.game.source.c_str(), L"Frontier launcher") == 0;
-            const char* question = frontierStore ? kDirectLaunchQuestionFrontier : kDirectLaunchQuestion;
+            const bool epic = g.haveSurvey && _wcsicmp(g.survey.game.source.c_str(), L"Epic") == 0;
+            const char* question = epic ? kDirectLaunchQuestionEpic
+                                        : frontierStore ? kDirectLaunchQuestionFrontier : kDirectLaunchQuestion;
+            const bool was = lg.session->directLaunch();
             lg.session->setDirectLaunch(want, [question]() {
                 return MessageBoxW(g.window, fromUtf8(question).c_str(), kAppTitle,
                                    MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES;
             });
+            if (epic && lg.session->directLaunch() != was) {
+                const std::string scope = installedScope(g.survey);
+                bool vr = launcherRememberedMode() != "flat";
+                if (scope == "flat") vr = false;
+                if (scope == "vr") vr = true;
+                std::string error;
+                if (!lg.session->standInForEdLaunch(g.survey.game.dir, lg.session->directLaunch(), vr, &error)) {
+                    MessageBoxW(g.window, fromUtf8(error).c_str(), kAppTitle, MB_OK | MB_ICONWARNING);
+                    if (lg.session->directLaunch()) lg.session->setDirectLaunch(false, nullptr);
+                }
+            }
             updateLauncherControls();
             return true;
         }

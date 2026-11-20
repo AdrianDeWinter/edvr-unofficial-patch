@@ -1081,9 +1081,10 @@ inline void formatWindow(const WindowReport& r, Lines* out) {
             callsText(calls, sizeof(calls), static_cast<double>(r.emOtherCalls[p]) / sampled);
             tk.add(" + ", "%s %.3f ms (calls %s)", kEmNames[i].name, r.emOtherMs[p] / sampled, calls);
         }
-        // The evaluator relays are counted, on sampled frames only, never clocked.
+        // The evaluator relays: counted and the forward clocked, on the sampled frames only.
         callsText(calls, sizeof(calls), static_cast<double>(r.emRenderCalls[emcpu::kEval] + r.emOtherCalls[emcpu::kEval]) / sampled);
-        tk.add(" + ", "engine eval relays %s calls (counted, not clocked)", calls);
+        const double evalMs = (r.emRenderMs[emcpu::kEval] + r.emOtherMs[emcpu::kEval]) / sampled;
+        tk.add(" + ", "engine eval relays %.3f ms (%s calls on sampled frames; the clock floor is inside this)", evalMs, calls);
         double elsewhere = 0;
         for (unsigned f = 0; f < kFamilies; ++f) if (!kInfo[f].gameThreads) elsewhere += r.otherMs[f];
         tk.add(" + ", "every other family %.3f ms", elsewhere / sampled);

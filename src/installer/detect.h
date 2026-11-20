@@ -38,6 +38,13 @@ std::vector<GameInstall> findInstalls(size_t* legacyLeftOut = nullptr);
 // Confirm the installations named by Epic's .item files in this directory.
 std::vector<GameInstall> findEpicInstalls(const std::wstring& manifestDir);
 
+// Confirm the installations in one Epic launcher journal (installations.jsonl).
+// The current launcher writes that journal under the AppDataPath it records.
+// A missing file is no installs. A journal that cannot be read as a version-1
+// transaction log is no installs: a torn line is not a reason to keep the
+// earlier lines. The executable check is the same one the .item reader uses.
+std::vector<GameInstall> findEpicJournal(const std::wstring& journalPath);
+
 // What to say when the only installs found were legacy ones: they are there, and why
 // they are not offered. Ends without a line break.
 const char* onlyLegacyInstallsText();

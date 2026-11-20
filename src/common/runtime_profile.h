@@ -160,15 +160,26 @@ inline bool runtimeScopeIncludesVr() {
 // row does nothing, with no line in the log. The panel's rows are the table in
 // menu_flat_rows.h, and tools\flat_sharpen_test fails the build for any of
 // them this function refuses.
-// The list itself is flat_profile_keys.h's, shared with the installer's Flat view. The log.* and advanced.real_dll keys are read by
-// every profile; the rest only by flat. advanced.game_update_check (TEMPORARY, issue 124: docs\design-game-update-signatures-2026-10-25.md)
-// is read by every profile too and is not in the installer's view: a hidden instrument, off by default, removed with its arc.
+// The list itself is flat_profile_keys.h's, shared with the installer's Flat view. The log.* keys and the keys in
+// kEveryProfileKeys are read by every profile; the rest only by flat.
+//   advanced.real_dll          -- read by every profile.
+//   advanced.game_update_check -- TEMPORARY (issue 124: docs\design-game-update-signatures-2026-10-25.md): not in the
+//                                 installer's view, a hidden instrument, off by default, removed with its arc.
+//   advanced.game_vram         -- the video memory size Elite is told (game_vram.h): not in the installer's view, a
+//                                 hidden, permanent key. Left off this list it read as "off" under flat with no line
+//                                 saying so (flight 2026-11-20).
 inline bool runtimeProfileAllowsKey(const char* key) {
+    static const char* const kEveryProfileKeys[] = {
+        "advanced.real_dll",
+        "advanced.game_update_check",
+        "advanced.game_vram",
+    };
     if (runtimeVrProfile()) return true;
     if (!key) return false;
-    if (std::strncmp(key, "log.", 4) == 0 || std::strcmp(key, "advanced.real_dll") == 0 ||
-        std::strcmp(key, "advanced.game_update_check") == 0)
-        return true;
+    if (std::strncmp(key, "log.", 4) == 0) return true;
+    for (const char* name : kEveryProfileKeys) {
+        if (std::strcmp(key, name) == 0) return true;
+    }
     return runtimeFlatProfile() && flatProfileReadsKey(key);
 }
 } // namespace edvr

@@ -33,11 +33,13 @@
 #include "../common/proxy.h"
 #include "../common/system_d3d11.h"   // chooseSystemD3D11: the DllMain handle, checked by path
 #include "device_hook.h"
+#include "game_vram_hook.h"   // advanced.game_vram: the game's GetDesc answer, installed before its device
 #include "flat_wrapper_note.h"
 #include "format_support_log.h"
 #include "input_gate.h"
 #include "desktop_window_cursor.h"   // visual.desktop_window: the executable's cursor calls, watched (VR scope)
 #include "loaded_module_match.h"
+#include "net_keepalive.h"  // netKeepaliveInstall: one libcurl handle per HTTP pump, so loading reuses the TLS connection
 #include "vr_ssaa_hold.h"  // vrSsaaHoldEarlyInstall: the Supersampling hold's hooks at DLL load
 #include "mode_watch.h"    // modeWatchStart: the 3D mode watch, started after the profile lines
 #include "oculus_route.h"
@@ -494,6 +496,9 @@ BOOL CALLBACK initOnceCallback(PINIT_ONCE, PVOID, PVOID*) {
     // The TEMPORARY instrument (advanced.game_update_check): off, nothing; on, on the known build, the resolver runs once on a background
     // thread and logs whether it finds every address where the hooks' constants put it.
     edvr::gameBuildStartup(&edvr::vrSsaaHoldInstallAfterResolve);
+    // Before the menu's Continue: the HTTP pumps pay a TLS handshake per file unless each one keeps its
+    // first libcurl multi handle. Build 334925 only; any other bytes and it leaves the game's calls alone.
+    edvr::netKeepaliveInstall();
 
     if (g_missingExports) {
         edvr::Log::get().note(
@@ -858,6 +863,8 @@ extern "C" HRESULT WINAPI edvr_impl_D3D11CreateDevice(
     if (depth.reentrant()) {
         reportLoopOnce();
         target = g_systemCreateDevice ? g_systemCreateDevice : g_realCreateDevice;
+    } else {
+        edvr::gameVramInstall(adapter);
     }
 
     const HRESULT hr =
@@ -866,6 +873,7 @@ extern "C" HRESULT WINAPI edvr_impl_D3D11CreateDevice(
     // Only hook on the way out of the OUTERMOST call. Hooking the device a
     // second time on the way back up would install our vtable copy twice.
     if (SUCCEEDED(hr) && ppDevice && *ppDevice && !depth.reentrant()) {
+        edvr::gameVramNoteDevice(*ppDevice);
         attachToDevice(*ppDevice, nullptr, driverType, flags, hr);
     }
     return hr;
@@ -886,12 +894,15 @@ extern "C" HRESULT WINAPI edvr_impl_D3D11CreateDeviceAndSwapChain(
         reportLoopOnce();
         target = g_systemCreateDeviceAndSwapChain ? g_systemCreateDeviceAndSwapChain
                                                   : g_realCreateDeviceAndSwapChain;
+    } else {
+        edvr::gameVramInstall(adapter);
     }
 
     const HRESULT hr = target(
         adapter, driverType, software, flags, featureLevels, numFeatureLevels, sdkVersion,
         swapChainDesc, ppSwapChain, ppDevice, pFeatureLevel, ppContext);
     if (SUCCEEDED(hr) && ppDevice && *ppDevice && !depth.reentrant()) {
+        edvr::gameVramNoteDevice(*ppDevice);
         attachToDevice(*ppDevice, ppSwapChain ? *ppSwapChain : nullptr, driverType, flags, hr);
     }
     return hr;

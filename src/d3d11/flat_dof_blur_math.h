@@ -22,6 +22,12 @@ constexpr float kFlatDofBlurStillStep = 5e-3f;
 inline bool flatDofBlurComposite(uint64_t ps) {
     return ps == kFlatDofBlurCompositePs || ps == kFlatDofBlurTonePs;
 }
+// The composite's blur input. Bloom on feeds a full-size image. Bloom off feeds the half-size blur (1440x810 scene, 720x405 blur).
+inline bool flatDofBlurCoversScene(uint32_t blurW, uint32_t blurH, uint32_t sceneW, uint32_t sceneH) noexcept {
+    if (!blurW || !blurH || !sceneW || !sceneH) return false;
+    if (blurW == sceneW && blurH == sceneH) return true;
+    return (sceneW % 2u) == 0 && (sceneH % 2u) == 0 && blurW == sceneW / 2u && blurH == sceneH / 2u;
+}
 
 enum class FlatDofBlurStep : uint8_t {
     Average,

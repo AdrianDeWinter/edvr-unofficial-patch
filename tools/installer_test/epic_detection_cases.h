@@ -109,6 +109,34 @@ static void testEpicDetection(const std::wstring& scratch) {
           unknown.source == L"Frontier launcher", "an unmatched explicit store source remains the fallback");
     check(!describeDirWithInstalls(joinPath(root, L"gone"), L"Folder you chose", installs, &unknown),
           "a selected folder without the game executable is still refused");
+
+    // The current launcher's journal: a header, then one snapshot per line.
+    // The last line for an id wins. A Linux row, an unfinished row and a
+    // deletion are not installs, and two snapshots of one folder are one install.
+    const std::wstring journal = joinPath(root, L"installations.jsonl");
+    const std::string journalText =
+        "{\"version\":1,\"writtenAt\":\"2026-11-19T00:00:00Z\",\"entries\":5}\n"
+        "{\"installationId\":\"side\",\"complete\":false,\"dir\":" + jsonString(customRoot) + ",\"platform\":\"Windows\"}\n"
+        "{\"installationId\":\"game\",\"complete\":true,\"dir\":" + jsonString(customRoot) + ",\"platform\":\"Windows\"}\n"
+        "{\"installationId\":\"linux\",\"complete\":true,\"dir\":" + jsonString(unicodeRoot) + ",\"platform\":\"Linux\"}\n"
+        "{\"installationId\":\"gone\",\"complete\":true,\"dir\":" + jsonString(invalidProduct) + ",\"platform\":\"Windows\"}\n"
+        "{\"installationId\":\"gone\",\"deleted\":true}\n"
+        "{\"installationId\":\"game\",\"complete\":true,\"dir\":" + jsonString(customRoot) + ",\"platform\":\"Windows\"}\n";
+    check(writeAll(journal, journalText), "the journal fixture is written");
+    const std::vector<GameInstall> fromJournal = findEpicJournal(journal);
+    check(fromJournal.size() == 1 && fromJournal[0].dir == canonicalPath(customProduct) &&
+              fromJournal[0].source == L"Epic",
+          "the journal offers the one completed Windows install, once");
+    check(findEpicJournal(joinPath(root, L"missing.jsonl")).empty(), "a missing journal is no installs");
+    check(writeAll(journal, "{\"version\":2,\"entries\":0}\n") && findEpicJournal(journal).empty(),
+          "a newer journal version is left unread");
+    check(writeAll(journal, "{\"installationId\":\"game\",\"version\":1}\n") && findEpicJournal(journal).empty(),
+          "a journal whose first line is an install is left unread");
+    check(writeAll(journal,
+                   "{\"version\":1}\n{\"installationId\":\"game\",\"complete\":true,\"dir\":" +
+                       jsonString(customRoot) + ",\"platform\":\"Windows\"}\n{") &&
+              findEpicJournal(journal).empty(),
+          "a torn journal is not applied, so the earlier good line does not count");
     removeTree(root);
 }
 

@@ -120,11 +120,11 @@ constexpr int kMenuMaxGraphs = 3;
 
 // Everything the panel shows, as text. The model builds one of these on
 // every change; the raster lays it out.
-// Who a raster on the monitor slot belongs to (MenuContent::slotOwner, menuPanelMonitorRasterOwner): the slot is shared by the flat monitor panel and the flat
-// frame-rate readout, and the compositor draws a raster only for the owner that asked for it.
+// Who a raster on the monitor slot belongs to (MenuContent::slotOwner, menuPanelMonitorRasterOwner): the compositor draws a raster only for the owner that
+// asked for it. Since 2026-11-19 the flat monitor panel, in any of its views (menu.monitor_panel_view), is the slot's only owner; the separate flat
+// frame-rate readout that once shared it is gone.
 constexpr uint8_t kSlotOwnerNone = 0;      // the menu's slot, or untagged
 constexpr uint8_t kSlotOwnerMonitorPanel = 1;
-constexpr uint8_t kSlotOwnerReadout = 2;
 
 struct MenuContent {
     uint8_t  slotOwner = kSlotOwnerNone;   // monitor slot only: who built this content; carried through the worker to the uploaded raster
@@ -248,7 +248,7 @@ void menuPanelSubmit(const MenuContent& c);
 void menuPanelSubmitMonitor(const MenuContent& c);
 // Whether the monitor panel is drawn and where: alpha > 0 draws it, flatCorner 1 is the upper right corner. It is placed 1:1 like the menu (dist 1).
 void menuPanelSetMonitorGeometry(const MenuGeometry& g);
-// How many monitor-slot rasters have been uploaded (wraps), for the menu's ScreenReadoutState (the monitor panel and the flat frame-rate readout share the slot); and whether one is live.
+// How many monitor-slot rasters have been uploaded (wraps), for the menu's ScreenReadoutState (the flat monitor panel's machine); and whether one is live.
 uint32_t menuPanelMonitorRasterSerial();
 uint8_t  menuPanelMonitorRasterOwner();   // the slotOwner of the raster last uploaded to the monitor slot (kSlotOwnerNone when none is)
 bool menuPanelMonitorRasterReady();

@@ -3138,6 +3138,7 @@ void STDMETHODCALLTYPE hookedOMSetRenderTargets(ID3D11DeviceContext* self, UINT 
     if (uiLayerMapRunHeld() && uiLayerMapRunGameSetsOwn(self, n, rtvs, dsv)) return;
     if (uiLayerMapRunHeld() && uiLayerMapRunGameSet(self, n, rtvs, dsv, false)) {
         bindingSet(BindSlot::Rtv0, (n && rtvs) ? rtvs[0] : nullptr);
+        flatOmNoteTargets(n, rtvs);
         bindingSet(BindSlot::Dsv0, dsv);
         if (flatTemporalCapturing()) flatTemporalBind((n && rtvs) ? rtvs[0] : nullptr, dsv);
         if (temporalPassWantsFssChrome()) temporalPassNoteOmSet(n);
@@ -3160,6 +3161,7 @@ void STDMETHODCALLTYPE hookedOMSetRenderTargets(ID3D11DeviceContext* self, UINT 
     // address after a rebind is not evidence of an identical view. bindingSet
     // bumps the generation either way.
     bindingSet(BindSlot::Rtv0, (n && rtvs) ? rtvs[0] : nullptr);
+    flatOmNoteTargets(n, rtvs);
     bindingSet(BindSlot::Dsv0, dsv);
     if (flatTemporalCapturing()) flatTemporalBind((n && rtvs) ? rtvs[0] : nullptr, dsv);
     // The camera-write tags and P3 (the third view): the colour targets bound, after the shadow holds the new views (docs/sky-flicker-2026-10-13.md).
@@ -3204,6 +3206,7 @@ void STDMETHODCALLTYPE hookedOMSetRtvAndUav(ID3D11DeviceContext* self, UINT n,
             return;
         } else if (uiLayerMapRunGameSet(self, n, rtvs, dsv, uavCount != 0)) {
             bindingSet(BindSlot::Rtv0, (n && rtvs) ? rtvs[0] : nullptr);
+            flatOmNoteTargets(n, rtvs);
             bindingSet(BindSlot::Dsv0, dsv);
             if (flatTemporalCapturing()) flatTemporalBind((n && rtvs) ? rtvs[0] : nullptr, dsv);
             if (temporalPassWantsFssChrome()) temporalPassNoteOmSet(n);
@@ -3217,6 +3220,7 @@ void STDMETHODCALLTYPE hookedOMSetRtvAndUav(ID3D11DeviceContext* self, UINT n,
             depthProbeSample(self, cur);
         }
         bindingSet(BindSlot::Rtv0, (n && rtvs) ? rtvs[0] : nullptr);
+        flatOmNoteTargets(n, rtvs);
         bindingSet(BindSlot::Dsv0, dsv);
         if (flatTemporalCapturing()) flatTemporalBind((n && rtvs) ? rtvs[0] : nullptr, dsv);
         if (temporalPassWantsFssChrome()) temporalPassNoteOmSet(n);
@@ -3366,13 +3370,20 @@ void STDMETHODCALLTYPE hookedSwapDeviceContextState(ID3D11DeviceContext* self, I
 // for a substituted pool draw is then known to be replaced (engine_velocity).
 void STDMETHODCALLTYPE hookedOMSetBlendState(ID3D11DeviceContext* self, ID3D11BlendState* state,
                                              const FLOAT factor[4], UINT sampleMask) {
-    if (g_flatComputeInternal) { g_state->realOMSetBlendState(self, state, factor, sampleMask); return; }
+    if (g_flatComputeInternal) {
+        g_state->realOMSetBlendState(self, state, factor, sampleMask);
+        // The shadow does not move, but the device blend did. The foreground record has to follow or its check disagrees.
+        if (!foreignContext(self)) flatOmNoteBlend(state, factor, sampleMask);
+        return;
+    }
     if (!foreignContext(self)) {
         // Only engine velocity reads Blend (draw_fast_path.h): not recorded while the AA is off.
         if (bindShadowsSkipped(g_aaOffDraw.load(std::memory_order_relaxed), engineVelocityLiveNow()))
             g_shadowsSkipped.store(true, std::memory_order_relaxed);
-        else
+        else {
             bindingSet(BindSlot::Blend, state);
+            flatOmNoteBlend(state, factor, sampleMask);
+        }
     }
     g_state->realOMSetBlendState(self, state, factor, sampleMask);
 }
@@ -3452,7 +3463,7 @@ void STDMETHODCALLTYPE hookedPSSetShader(ID3D11DeviceContext* self, ID3D11PixelS
     g_state->realPSSetShader(self, ps, ci, n);
 }
 
-void forgetBindings(State*) { bindingForgetAll(); }
+void forgetBindings(State*) { bindingForgetAll(); flatOmForget(); }
 
 // Both of these say so the first time they run.
 //
@@ -6529,6 +6540,9 @@ void vScreenOMSetBlendStateRaw(ID3D11DeviceContext* ctx, ID3D11BlendState* state
                                const float blendFactor[4], uint32_t sampleMask) {
     if (!g_state || !g_state->realOMSetBlendState || !ctx) return;
     g_state->realOMSetBlendState(ctx, state, blendFactor, sampleMask);
+    // Past the binding shadow on purpose (engine velocity's derived blend must not look like the game's set).
+    // The foreground record is what OMGet returns, so it follows this set. The blend generation does not.
+    if (ctx == g_state->ownerCtx) flatOmNoteBlend(state, blendFactor, sampleMask);
 }
 
 void vScreenOMSetDepthStencilStateRaw(ID3D11DeviceContext* ctx, ID3D11DepthStencilState* state, uint32_t stencilRef) {

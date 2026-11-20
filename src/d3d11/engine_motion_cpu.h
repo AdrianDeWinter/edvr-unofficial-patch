@@ -45,11 +45,11 @@
 // moves on x64, no lock prefix, no shared cache line. The render thread's
 // per-frame cut reads every slot's totals and takes the deltas.
 //
-// THE ONE THING NEVER CLOCKED, and the report says so: the two evaluator relays
-// (Part kEval) forward straight through unless a diagnostic is attached, so
-// their own work is two loads and a call, about 5 ns. A clock read alone costs
-// more than that, so their calls are COUNTED, on sampled frames, and only the
-// probe branches, which have real work, are clocked.
+// THE EVALUATOR RELAYS (Part kEval) are counted on sampled frames. Their forward
+// is clocked on those same frames, one frame in kSamplePeriod, so a flight can
+// see whether the calls add up. A clock read costs more than one forward, and
+// that floor is inside the printed milliseconds. Unsampled frames stay a gate
+// load. The probe branches are clocked whenever they run.
 //
 // THE ONE GAME FUNCTION PRICED: the pool copier's forward (kGameCopy). Its span is
 // read off the copier relay's own pause and resume readings, less any EDVR scope
@@ -117,7 +117,7 @@ enum Part : unsigned {
     kCopier,     // FUN_144C846A0, the engine's pool copier: relay + observer
     kMerge,      // FUN_1443513A0, the list merge: begin and end
     kClear,      // FUN_143684630, the typed dictionary clear: the observer
-    kEval,       // the evaluator and rig-eval relays: counted; only probe work is clocked
+    kEval,       // the evaluator and rig-eval relays: counted, and the forward clocked, on sampled frames
     kJobs,       // the six job-body brackets (UpdateRenderDataJob and its siblings)
     kBuilder,    // the draw-item builder bracket, the second direct producer, the part test, the LOD setter
     kDraw,       // the pool-family draw side: the slow half of engineVelocityBeforeDraw
@@ -992,8 +992,9 @@ inline PatchTotals patchTotals(const WindowReport& r) noexcept {
     return {w.renderCalls + w.otherCalls, w.renderMs + w.otherMs, (std::max)(w.renderCallMaxMs, w.otherCallMaxMs)};
 }
 
-// kEval: counted on the sampled frames, none clocked but the probe branches. The
-// words say so; a bare "eval 0.00" would read as measured.
+// kEval: counted on the sampled frames, and the forward clocked on those frames.
+// With no ticks recorded the words still say it was not clocked, so a bare
+// "eval 0.00" is not how an unmeasured relay prints.
 inline void appendEvalNote(char* buf, size_t cap, size_t& len, uint64_t calls, double sampledFrames, double msPerFrame) noexcept {
     if (!calls) {
         appendf(buf, cap, len, "eval -");
@@ -1002,7 +1003,7 @@ inline void appendEvalNote(char* buf, size_t cap, size_t& len, uint64_t calls, d
     char perFrame[24];
     callsText(perFrame, sizeof(perFrame), static_cast<double>(calls) / sampledFrames);
     if (msPerFrame > 0.0)
-        appendf(buf, cap, len, "eval %s calls per sampled frame, not clocked (a pass-through; probe work clocked %.2f ms)",
+        appendf(buf, cap, len, "eval %s calls per sampled frame, %.2f ms clocked (the forward on sampled frames, plus any probe; the clock floor is inside it)",
                 perFrame, msPerFrame);
     else
         appendf(buf, cap, len, "eval %s calls per sampled frame, not clocked (a pass-through)", perFrame);

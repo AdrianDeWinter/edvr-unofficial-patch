@@ -289,6 +289,8 @@ std::atomic<bool> g_camLookOn{false};         // TEMPORARY (the camera test): th
 int g_camLookGraceTicks = 0;                  // TEMPORARY: ticks after the look in which a big camera step is its own way back, not another room
 bool g_camLookSurvey = false;                 // TEMPORARY: the names survey was taken in the look: its report lists what is near the room's centre and still kept
 std::atomic<bool> g_liftGateOn{false};       // the tick's: the lift gate is on, the player is in a shut lift cabin (published in the snapshot as `lift`; part of g_concActive)
+std::atomic<bool> g_openCabin{false};        // the camera is within kLiftInsideM of a cabin, doors open or not (published as `openCabin`)
+bool g_openCabinWas = false;                 // the tick's last value: a change bumps the rig epoch so a 40 m veto does not outlive the wider keep
 // The door rule (cc::roomSeenSlab): the tick's verdict, published in the snapshot as `room`. Written by the tick and read by the publication, both under the state lock.
 struct RoomPub {
     bool room = false;    // something is behind a shut door: records wholly outside `slab` are culled
@@ -543,6 +545,7 @@ struct PadSnapshot {
     bool concourse = false;       // built 2026-11-05: the concourse cull is active (the producer veto judges by name)
     bool look = false;            // TEMPORARY (the camera test): the room off and the rest on (cc::concourseJudge)
     bool lift = false;            // built 2026-11-06: the player is in a shut lift cabin: the judgement keeps only what is near (cc::concourseJudge)
+    bool openCabin = false;      // the camera is still inside the cabin: small records are kept out to kOpenCabinCloseM
     bool room = false;            // the door rule: one of the room's own records wholly behind a shut door is culled, whatever the rule above says (cc::roomSeenSlab)
     bool roomOnly = false;        // and that is the only rule (the live room, where the cull stands down)
     bool roomRigs = false;        // TEMPORARY (cc::DoorRuleMode::kRigs): such a record counts as culled in its rig's tally
@@ -1997,7 +2000,7 @@ cc::Judge concourseJudgeHere(const PadSnapshot& s, bool nameReadable, const Node
     *slabbed = false;
     cc::Judge j = s.roomOnly && !s.lift && !s.look ? cc::Judge::kKeepName
                                                    : cc::concourseJudge(nameReadable, (ni.flags & sealed::kNodeConcourseAllow) != 0, sphere, d, r,
-                                                                        (ni.flags & sealed::kNodeConcourseFarExempt) != 0, s.lift, s.look);
+                                                                        (ni.flags & sealed::kNodeConcourseFarExempt) != 0, s.lift, s.look, s.openCabin);
     if (cc::judgeKeeps(j) && roomSlabCulls(s, ni, sphere, c, r)) {
         j = cc::Judge::kCull;
         *slabbed = true;
@@ -2838,6 +2841,7 @@ void publishSnapshot() noexcept {
     s.engagePending = g_engagePending;
     s.concourse = g_concActive.load(std::memory_order_acquire);
     s.lift = g_liftGateOn.load(std::memory_order_acquire);
+    s.openCabin = g_openCabin.load(std::memory_order_acquire);
     s.look = g_camLookOn.load(std::memory_order_acquire);
     s.room = g_roomPub.room;
     s.roomOnly = g_roomPub.room && g_roomPub.only;
@@ -4102,6 +4106,8 @@ void concourseSettingOffTick(uint64_t now) {
     const bool wasActive = g_concWasActive;
     g_concWanted.store(false, std::memory_order_release);
     g_liftGateOn.store(false, std::memory_order_release);
+    g_openCabin.store(false, std::memory_order_release);
+    g_openCabinWas = false;
     if (g_backdropPhase != BackdropPhase::kIdle) {
         concoursePaneBackdropEnd();
         g_backdropPhase = BackdropPhase::kIdle;
@@ -4660,6 +4666,7 @@ cc::LiftReading liftReadNow() noexcept {
         if (!cabin) return r;
         r.cabin = true;
         r.cabinDistM = best;
+        r.cabinRadiusM = cabin->r;
         static const char* const kDoors[4] = {"TurboLiftDoorLeft", "TurboLiftDoorRight", "TurboLiftDoorLeft2", "TurboLiftDoorRight2"};
         const LiftPart* door[4] = {};
         float db[4] = {};
@@ -5536,7 +5543,8 @@ void concourseTick(uint64_t now, uint32_t frame) {
             saidLive = false;
         }
     }
-    const bool gateWanted = armed && social && !sealedNow;
+    const bool inHangar = (g_statusFlags2Now & cc::kFlags2OnFootInHangar) != 0;
+    const bool gateWanted = cc::concourseCullGate(armed, social, sealedNow, inHangar);
     // The door rule (concourse_cull_core.h, roomSeenSlab): at a room whose layout has doors, the camera's place along the anchor's a2, each door's state from its leaves, and the stretch of
     // a2 the camera can see into. The anchor's frame is read once a second while the rule is wanted (the pose read is not free) and held between reads; the camera's place and the leaves
     // are this tick's. A change of what is culled, or of the live room, starts the rigs' verdicts afresh. hotkey.concourse_room_test (TEMPORARY) steps the rule's level.
@@ -5931,6 +5939,12 @@ void concourseTick(uint64_t now, uint32_t frame) {
     if (liftEnded) bumpRigEpoch();
     g_liftWasOn = liftOn;
     g_liftGateOn.store(liftOn, std::memory_order_release);
+    // Doors open, through the doorway: small records stay out to kOpenCabinCloseM. A bake tick reads the moved camera, so this is false while the
+    // look runs, and the player's own camera is read again once the camera is back.
+    const bool openCabin = liftRead.cabin && cc::openCabinReach(liftRead.cabinDistM, liftRead.cabinRadiusM);
+    if (openCabin != g_openCabinWas) bumpRigEpoch();
+    g_openCabinWas = openCabin;
+    g_openCabin.store(openCabin, std::memory_order_release);
     // PROTOTYPE (the backdrop capture): a press while the cull's own part is on lifts it for a moment, as the bay's lifting step does, with the clearing machine untouched.
     // The panes keep their treatment (an exterior pane is opaque over its whole area, as in the lifted phase) and the outside effects stay withheld (feed.effects).
     const bool cullPartRaw = wantCull && clr.cullOn;
@@ -6045,6 +6059,7 @@ void concourseTick(uint64_t now, uint32_t frame) {
                               : sealedNow ? "the hangar seal engaged"
                               : cutNow    ? "the camera cut to another room"
                               : !social   ? "no longer on foot in social space"
+                              : inHangar  ? "on foot in the hangar"
                               : wantCull  ? "the bay glass was approached: the view is clearing (diag.concourse_clear_share)"
                               : inLiveRoom ? "the camera is in the room's live room, whose windows are the game's own"
                                           : "the anchor record was not seen for 5 s";
@@ -6059,12 +6074,12 @@ void concourseTick(uint64_t now, uint32_t frame) {
     g_concWasCull = cullPart;
     if (!wantCull && !transitioned) {
         const uint32_t keyCode = g_concOverride == ConcOverride::kNone ? (g_concKeyOn ? 1u : 0u) : (g_concOverride == ConcOverride::kOn ? 2u : 3u);
-        const uint32_t waitKey = (effective ? 1u : 0u) | (social ? 2u : 0u) | (anchor ? 4u : 0u) | (g_frameCamValid ? 8u : 0u) | (sealedNow ? 16u : 0u) | (keyCode << 5) | (bakeHolds ? 128u : 0u);
+        const uint32_t waitKey = (effective ? 1u : 0u) | (social ? 2u : 0u) | (anchor ? 4u : 0u) | (g_frameCamValid ? 8u : 0u) | (sealedNow ? 16u : 0u) | (keyCode << 5) | (bakeHolds ? 128u : 0u) | (inHangar ? 256u : 0u);
         if (armed && (!g_concWaitSet || waitKey != g_concWaitKey)) {
             g_concWaitSet = true;
             g_concWaitKey = waitKey;
-            Log::get().note("concourse cull: waiting (key=%s social=%d anchor=%d camera=%d sealed=%d no-bake-yet=%d)", concourseKeyText(), social ? 1 : 0, anchor ? 1 : 0,
-                            g_frameCamValid ? 1 : 0, sealedNow ? 1 : 0, bakeHolds ? 1 : 0);
+            Log::get().note("concourse cull: waiting (key=%s social=%d anchor=%d camera=%d sealed=%d hangar=%d no-bake-yet=%d)", concourseKeyText(), social ? 1 : 0, anchor ? 1 : 0,
+                            g_frameCamValid ? 1 : 0, sealedNow ? 1 : 0, inHangar ? 1 : 0, bakeHolds ? 1 : 0);
         } else if (!armed && g_concWasArmed) {
             g_concWaitSet = false;
             Log::get().note("concourse cull: off (the key is off)");

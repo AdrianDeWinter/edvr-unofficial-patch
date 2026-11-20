@@ -53,9 +53,9 @@ inline constexpr FlatPageRow kFlatPageRows[] = {
     {"fix", "station_window_distance", FlatRowRead::Allowlist},
     // Under it, and dimmed while Optimized stations is off (menu.cpp): the rooms behind a carrier's shut doors; also `menu performance`, on VR's page.
     {"fix", "skip_rooms_behind_doors", FlatRowRead::Allowlist},
-    // The frame-rate readout and its copy in the menu card (2026-11-16): `menu performance`, so VR's page has them too (the yaw and pitch rows mean nothing on a
-    // screen and stay VR's). They sit after the [fix] rows: the tab's order is edvr.ini's.
-    {"menu", "fps_overlay", FlatRowRead::Allowlist},
+    // What the monitor panel shows (2026-11-19): `menu flat_performance`, flat only. The frame-rate line in the menu card: `menu performance`, so VR's page has it
+    // too. menu.fps_overlay and its yaw and pitch are VR's head-locked readout and have no row here. They sit after the [fix] rows: the tab's order is edvr.ini's.
+    {"menu", "monitor_panel_view", FlatRowRead::Allowlist},
     {"menu", "fps_overlay_lock", FlatRowRead::Allowlist},
 };
 inline constexpr size_t kFlatPageRowCount = sizeof(kFlatPageRows) / sizeof(kFlatPageRows[0]);

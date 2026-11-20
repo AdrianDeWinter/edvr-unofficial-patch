@@ -368,8 +368,16 @@ int directDryRunLines(const AppArgs& args, DirectEnv env, std::vector<std::strin
     }
     const std::wstring source = commandSource(game);
     if (_wcsicmp(source.c_str(), L"Epic") == 0) {
-        lines->push_back("Epic installs use the Epic Games launcher. Direct launch is unavailable; no sign-in was attempted and nothing was started.");
-        return 3;
+        // Nothing is copied and nothing is started. Play would put this launcher in
+        // EDLaunch.exe's place; Epic then starts it, and it starts the game itself.
+        const LaunchRoute route = routeFor(source, game.dir, args.vr, nullptr, true);
+        if (route.kind == RouteKind::None) {
+            lines->push_back(route.why.empty() ? "Nothing was started." : route.why + " Nothing was started.");
+            return 3;
+        }
+        lines->push_back(std::string("Dry run: nothing was started. EDLaunch.exe would be this launcher, which starts the game directly in ") +
+                         (args.vr ? "VR" : "flat") + " and does not open Frontier's launcher.");
+        return 0;
     }
     env.progress = [lines](const std::string& line) { lines->push_back(line); };
     DirectRequest request;

@@ -8,6 +8,7 @@
 #include "../common/timing.h"
 #include "../common/vram_query.h"
 #include "../common/vram_watch.h"
+#include "game_vram_hook.h"   // gameVramObserve: auto learns its headroom from the same once-a-second figures
 
 namespace edvr {
 namespace {
@@ -41,6 +42,7 @@ void vramWatchTick(int64_t qpc, ID3D11Device* device) {
                 HRESULT result = S_OK;
                 const VramFigures figures = vramRead(g_adapter, &result);
                 *hr = static_cast<long>(result);
+                if (figures.local.valid) gameVramObserve(nowMs(), figures.local.usage, figures.local.budget);
                 return figures;
             },
             [](const char* line) { Log::get().note("%s", line); });

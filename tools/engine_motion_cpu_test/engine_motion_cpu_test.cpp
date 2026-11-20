@@ -950,8 +950,8 @@ void textTests() {
           "text: the evaluator is counted on the sampled frames and says it is not clocked");
     r.part[kEval].otherMs = 84 * 0.05;
     formatOtherParts(line, sizeof(line), r);
-    check(std::string(line).find("probe work clocked 0.05 ms)") != std::string::npos,
-          "text: the evaluator's clocked probe work is named separately");
+    check(std::string(line).find("0.05 ms clocked (the forward on sampled frames, plus any probe; the clock floor is inside it)") != std::string::npos,
+          "text: the evaluator's clocked forward is named, and the clock floor is inside it");
 
     formatSummary(line, sizeof(line), r);
     const std::string summary = line;

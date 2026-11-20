@@ -6,7 +6,7 @@ No. It stays free. A tip at [Ko-fi](https://ko-fi.com/seancharacterecho) is welc
 
 ## Can it affect my account?
 
-ED-UP leaves your account, ships, cargo, credits, and missions alone. The patch itself stays off the network. The optional launcher asks GitHub about updates and, if you turn direct launch on, signs in to Frontier the way the game's own launcher does. It leaves anti-cheat untouched, and it runs under its own name. Frontier has not endorsed it. Frontier's rules are Frontier's. [What it changes](What-it-changes.md) is the concrete list.
+ED-UP leaves your account, ships, cargo, credits, and missions alone. The patch sends nothing of its own. While the game is loading, it keeps the game's own download connections open so later files skip a new handshake. The optional launcher asks GitHub about updates and, if you turn direct launch on, signs in to Frontier the way the game's own launcher does. It leaves anti-cheat untouched, and it runs under its own name. Frontier has not endorsed it. Frontier's rules are Frontier's. [What it changes](What-it-changes.md) is the concrete list.
 
 ## Does it work with Horizons?
 

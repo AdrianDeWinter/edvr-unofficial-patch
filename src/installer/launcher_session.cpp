@@ -291,6 +291,16 @@ void LauncherSession::rememberPlay(const std::wstring& gameDir, const char* mode
     }
 }
 
+bool LauncherSession::standInForEdLaunch(const std::wstring& gameDir, bool on, bool vr, std::string* error) {
+    if (!on) return removeEdLaunchShim(gameDir, error);
+    if (!installEdLaunchShim(env_.selfExe, gameDir, error)) return false;
+    if (!writeEdLaunchMode(gameDir, vr)) {
+        if (error) *error = "The mode for the EDLaunch stand-in could not be written.";
+        return false;
+    }
+    return true;
+}
+
 void LauncherSession::beginPlay(const std::wstring& source, const std::wstring& gameDir, bool vr, bool elevated,
                                 const RouteOps& ops, const WatchNames& names, const WatchTiming& timing) {
     if (playing_) return;
@@ -304,13 +314,22 @@ void LauncherSession::beginPlay(const std::wstring& source, const std::wstring& 
         beginDirectPlay(source, gameDir, vr, ops, names, timing);
         return;
     }
-    startRouteAndWatch(source, gameDir, vr, elevated, ops, names, timing, "Starting Elite...");
+    const bool epicDirect = directLaunch() && _wcsicmp(source.c_str(), L"Epic") == 0;
+    if (epicDirect) {
+        std::string error;
+        if (!installEdLaunchShim(env_.selfExe, gameDir, &error) || !writeEdLaunchMode(gameDir, vr)) {
+            playLine_ = error.empty() ? "The stand-in for EDLaunch.exe could not be written." : error;
+            changed();
+            return;
+        }
+    }
+    startRouteAndWatch(source, gameDir, vr, elevated, ops, names, timing, "Starting Elite...", epicDirect);
 }
 
 void LauncherSession::startRouteAndWatch(const std::wstring& source, const std::wstring& gameDir, bool vr, bool elevated,
                                          const RouteOps& ops, const WatchNames& names, const WatchTiming& timing,
-                                         const std::string& startLine) {
-    const LaunchRoute route = routeFor(source, gameDir, vr);
+                                         const std::string& startLine, bool direct) {
+    const LaunchRoute route = routeFor(source, gameDir, vr, nullptr, direct);
     std::string error;
     if (!startRoute(route, ops, elevated, &error)) {
         playLine_ = error;

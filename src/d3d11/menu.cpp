@@ -360,19 +360,18 @@ struct State {
     edvr::FlatNoticeQueue flatNotice;
     edvr::ScreenNoticeState screenNotice;
 
-    // The head-locked readout (menu.fps_overlay), shown while the menu is
+    // The head-locked readout (menu.fps_overlay, VR only), shown while the menu is
     // down: re-anchored to the head every frame, re-rasterised twice a
     // second.
     bool     overlay = false;   // menu.fps_overlay is compact or detailed
     FpsOverlayMode overlayMode = FpsOverlayMode::Off;
-    ScreenReadoutState flatReadout;   // flat: the readout's raster is the live one on the monitor slot (menu_policy.h)
-    uint32_t readoutSized[2] = {0, 0}; // the output size the flat readout's raster was built for
-    // The flat monitor panel (menu_panel.h, the monitor slot; design doc, 2026-11-16): its key (hotkey.monitor_panel, flat only), whether it is up (session
-    // state, never written), the machine that composites it only once a raster built since it was raised is live (on the monitor slot's own serial), the output
-    // size its raster was built for, and its refresh clock.
+    // The flat monitor panel (menu_panel.h, the monitor slot; design doc, 2026-11-16 and 2026-11-19): its key (hotkey.monitor_panel, flat only), whether it is
+    // up (session state, never written), what it shows (menu.monitor_panel_view, a setting, so it is kept), the machine that composites it only once a raster
+    // built since it was raised is live (on the monitor slot's own serial), the output size its raster was built for, and its refresh clock.
     Hotkey      monitorKey;
     std::string monitorKeyName;
     bool        monitorPanelOpen = false;
+    MonitorPanelView monitorView = MonitorPanelView::Full;
     ScreenReadoutState monitorPanel;
     uint32_t    monitorSized[2] = {0, 0};
     uint64_t    monitorTextMs = 0;
@@ -2600,7 +2599,7 @@ int measureFooterLine(const char* utf8, void* ctx) {
 
 void cancelEdit();
 
-// The frame-rate readout's raster (menu.fps_overlay), VR and flat. Compact is the one line; detailed is a card of two or three lines and a strip of the rendered
+// The frame-rate readout's raster: VR's menu.fps_overlay, and flat's monitor panel in its detailed and compact views (menu.monitor_panel_view). Compact is the one line; detailed is a card of two or three lines and a strip of the rendered
 // frame time (and one of the presented, under the XeSS-FG bridge) against its budget, from the same reading in both profiles. VR: the fixed 42-pixel reference
 // face and an angular width, as the line always had. Flat: the menu's own text height at this output, composited at its own pixel size in the top right corner.
 bool buildReadoutContent(MenuContent& c, FpsOverlayMode mode, bool flat, float textDeg) {
@@ -2609,8 +2608,6 @@ bool buildReadoutContent(MenuContent& c, FpsOverlayMode mode, bool flat, float t
     if (flat) {
         const uint32_t ow = g_flatOutW.load(std::memory_order_relaxed);
         const uint32_t oh = g_flatOutH.load(std::memory_order_relaxed);
-        g_s.readoutSized[0] = ow;
-        g_s.readoutSized[1] = oh;
         cap = flatCardSize(static_cast<int>(ow), static_cast<int>(oh), kFlatMenuCardHeightFrac).capPx;
         deg = 0.0f;
     }
@@ -2655,8 +2652,6 @@ void buildMonitorPanel(MenuContent& c) {
     c.popupLine = -1;
     const uint32_t ow = g_flatOutW.load(std::memory_order_relaxed);
     const uint32_t oh = g_flatOutH.load(std::memory_order_relaxed);
-    s.monitorSized[0] = ow;
-    s.monitorSized[1] = oh;
     const FlatCardSize fs = flatCardSize(static_cast<int>(ow), static_cast<int>(oh), kFlatMenuCardHeightFrac);
     c.cardPx = c.widthPx = fs.cardPx;
     c.capPx = fs.capPx;
@@ -2687,9 +2682,9 @@ void buildContent(MenuContent& c) {
         sizeContent(c, s.widthDeg, s.textDeg, tooltipsOn());
     }
 
-    // If the FPS overlay is locked to the menu, show the same readout at the
-    // top of the menu panel so both are visible for A/B testing.
-    if (s.overlay && s.overlayLock) {
+    // menu.fps_overlay_lock: a frame-rate line at the top of the open menu card, so it can be watched while changing settings. Its own switch since
+    // 2026-11-19, in both profiles: it no longer needs menu.fps_overlay on.
+    if (s.overlayLock) {
         char line[120];
         perfMonitorOverlayLine(line, sizeof(line));
         strncpy(c.overlayLine, line, sizeof(c.overlayLine) - 1);
@@ -5092,7 +5087,6 @@ void menuProfileSwitch() {
     // The outgoing profile's flat notice, queued or on screen, goes with it: Config::switchProfile clears the AA comparison override it described.
     s.flatNotice.clear();
     s.screenNotice.clear();
-    s.flatReadout.clear();
     s.monitorPanelOpen = false;   // session state: the incoming profile starts with the monitor panel down
     s.monitorPanel.clear();
     inputGateSetPrivate(false);
@@ -5203,11 +5197,16 @@ static float menuReadTooltipDelay(Config& cfg) {
     return delay;
 }
 
-// menu.fps_overlay (off | compact | detailed; the old on and off still read) and menu.fps_overlay_lock, in both profiles (the flat allow-list carries them,
-// flat_profile_keys.h); the yaw and pitch are the headset's and are read, with their defaults, in both.
-static void menuReadFpsOverlayKeys(Config& cfg) {
+// The frame-rate keys (2026-11-19). menu.fps_overlay (off | compact | detailed; the old on and off still read) is the head-locked readout, VR only: a profile
+// with the monitor panel (flat) does not read it, and its readout is off. menu.monitor_panel_view (full | detailed | compact) is what that panel shows, flat
+// only. menu.fps_overlay_lock, the line at the top of the open menu card, is read in both and depends on neither. The yaw and pitch are the headset's and
+// are read, with their defaults, in both.
+static void menuReadFpsOverlayKeys(Config& cfg, bool monitorPanelProfile) {
     State& s = g_s;
-    const FpsOverlayMode mode = parseFpsOverlay(cfg.getString("menu.fps_overlay", "off").c_str());
+    const FpsOverlayMode mode =
+        monitorPanelProfile ? FpsOverlayMode::Off : parseFpsOverlay(cfg.getString("menu.fps_overlay", "off").c_str());
+    const MonitorPanelView view =
+        monitorPanelProfile ? parseMonitorPanelView(cfg.getString("menu.monitor_panel_view", "full").c_str()) : MonitorPanelView::Full;
     const bool ovLock = cfg.getBool("menu.fps_overlay_lock", false);
     float yaw = cfg.getFloat("menu.fps_overlay_yaw", 0.0f);
     float pitch = cfg.getFloat("menu.fps_overlay_pitch", 20.0f);
@@ -5215,14 +5214,18 @@ static void menuReadFpsOverlayKeys(Config& cfg) {
     if (!(pitch >= -45.0f) || pitch > 45.0f) pitch = 20.0f;
     if (s.configured && mode != s.overlayMode) {
         Log::get().note("menu: the frame-rate overlay is %s.", fpsOverlayWord(mode));
-        if (s.open && (ovLock || s.overlayLock)) s.contentDirty = true;
         s.overlayTextMs = 0;   // the next tick builds the new shape at once
         s.overlayText.clear();
-        s.flatReadout.clear();
     }
+    if (monitorPanelProfile && (!s.configured || view != s.monitorView)) {
+        // At configure too (a profile switch clears s.configured): a flight log says which view F5 will show.
+        Log::get().note("menu: the monitor panel view is %s (menu.monitor_panel_view).", monitorPanelViewWord(view));
+        s.monitorTextMs = 0;   // up now: the next tick builds the new view at once
+    }
+    s.monitorView = view;
     if (s.configured && ovLock != s.overlayLock) {
-        Log::get().note("menu: the frame-rate overlay is %s while the menu is open.", ovLock ? "locked on" : "no longer locked");
-        if (s.open && mode != FpsOverlayMode::Off) s.contentDirty = true;
+        Log::get().note("menu: the frame-rate line at the top of the menu is %s.", ovLock ? "on" : "off");
+        if (s.open) s.contentDirty = true;
     }
     s.overlayMode = mode;
     s.overlay = mode != FpsOverlayMode::Off;
@@ -5247,7 +5250,7 @@ static void menuReadMenuKeys(Config& cfg) {
     float t = cfg.getFloat("menu.text_degrees", 1.1f);
     if (!(t >= 0.6f) || t > 3.0f) t = 1.1f;
     if (s.configured && t != s.textDeg) {
-        // The floating monitor has its own reference raster. Make a text
+        // VR's head-locked readout has its own reference raster. Make a text
         // setting edit wake its half-second refresh even when the measured
         // line itself has not changed.
         s.overlayTextMs = 0;
@@ -5352,7 +5355,7 @@ void menuConfigure(Config& cfg) {
         s.tooltipsWere = delay > 0.0f;
         s.toasts = false;      // toasts are the world placement's; the flat notice follows s.noticesOn
     }
-    menuReadFpsOverlayKeys(cfg);
+    menuReadFpsOverlayKeys(cfg, pol.monitorPanel);
     s.noticesOn = cfg.getBool("menu.toasts", true);   // flat-listed (flat_profile_keys.h); notices follow it in both profiles
     inputGateConfigure(cfg);
     if (!s.configured) {
@@ -5518,7 +5521,7 @@ void menuFlatBeforePresent(IDXGISwapChain* swap, unsigned flags) {
         }
         perfMonitorNoteSwapChain(swap);   // the display's refresh rate, for the Monitor's budgets (every few seconds)
     }
-    if (!(g_s.screenNotice.compositing(g_s.open) || g_s.flatReadout.compositing() || (g_s.monitorPanelOpen && g_s.monitorPanel.compositing())) ||
+    if (!(g_s.screenNotice.compositing(g_s.open) || (g_s.monitorPanelOpen && g_s.monitorPanel.compositing())) ||
         (flags & DXGI_PRESENT_TEST)) return;
     menuPanelCompositeFlat(swap);
 }
@@ -5579,7 +5582,8 @@ void menuTick(ID3D11Device* dev) {
         // flat census stays the driver of engine motion's clock, which
         // perfMonitorFrame leaves alone there).
         perfMonitorFrame(dev);
-        perfMonitorSetActive((s.open && s.pages[s.page].monitor) || s.monitorPanelOpen);   // the flat monitor panel needs the slow samplers too
+        // The flat monitor panel's full view needs the slow samplers too; its detailed and compact views read only the cheap per-frame figures, as VR's readout does.
+        perfMonitorSetActive((s.open && s.pages[s.page].monitor) || (s.monitorPanelOpen && s.monitorView == MonitorPanelView::Full));
         tickHeldEdit(now);   // a held numeric edit whose burst has ended is written now (menu_edit_hold.h); the worker's results are drained after it
         // Writes the worker finished since last frame.
         drainWrites();
@@ -5956,44 +5960,32 @@ void menuTick(ID3D11Device* dev) {
             }
         }
 
-        // The flat frame-rate readout (menu.fps_overlay): it has the monitor slot (menuPanelSubmitMonitor), top right, so the menu card and the notices (the menu's
-        // slot, top left) never hold it back and it never holds them back. It shares the slot with the monitor panel, which is why the two are never wanted at once
-        // (flatReadoutWanted): each machine reads the slot's serial before its first submit and is composited only once the serial has moved, so the other's
-        // raster left in the slot is never shown as its own. With menu.fps_overlay_lock the open menu's card carries the readout line itself, so the separate
-        // readout waits for the menu to close.
-        if (pol.noticePlacement == MenuNoticePlacement::ScreenCorner) {
-            const bool wanted = flatReadoutWanted(s.overlayMode != FpsOverlayMode::Off, s.monitorPanelOpen, s.open, s.overlayLock);
-            const bool detailed = s.overlayMode == FpsOverlayMode::Detailed;
-            const bool sizeChanged = g_flatOutW.load(std::memory_order_relaxed) != s.readoutSized[0] ||
-                                     g_flatOutH.load(std::memory_order_relaxed) != s.readoutSized[1];
-            const bool refreshDue = sizeChanged || dueMs(s.overlayTextMs, detailed ? 250 : 500);
-            if (s.flatReadout.tick(wanted, refreshDue, menuPanelMonitorRasterSerial()) && (s.flatReadout.submitted || dueMs(s.overlayTextMs, 250))) {
-                s.overlayTextMs = stampMs();   // also paces a build that fails
-                const uint32_t before = menuPanelMonitorRasterSerial();
-                MenuContent rc;
-                if (buildReadoutContent(rc, s.overlayMode, true, 0.0f)) {
-                    rc.slotOwner = kSlotOwnerReadout;
-                    menuPanelSubmitMonitor(rc);
-                    s.flatReadout.didSubmit(before);
-                }
-            }
-        }
-
-        // The flat monitor panel: its own raster (menu_panel.h, the monitor slot, shared with the frame-rate readout above), so it is on screen with the menu, a
-        // notice, or alone. Refreshed on the Monitor page's cadence and at once when the output's size changes; composited only once a raster built since it was
-        // raised is live (the readout's machine, on the monitor slot's serial).
+        // The flat monitor panel (hotkey.monitor_panel): its own raster on the monitor slot (menu_panel.h), top right, so it is on screen with the menu, a notice,
+        // or alone, and none of them holds another back. What it shows is menu.monitor_panel_view: full is the Monitor page (buildMonitorPanel), on the Monitor
+        // page's cadence; detailed and compact are the readout's card and line (buildReadoutContent), about four and two times a second. Each refreshes at once
+        // when the output's size or the view changes, and is composited only once a raster built since the panel was raised is live (on the slot's serial).
         if (pol.monitorPanel) {
-            const bool sizeChanged = g_flatOutW.load(std::memory_order_relaxed) != s.monitorSized[0] ||
-                                     g_flatOutH.load(std::memory_order_relaxed) != s.monitorSized[1];
-            const bool refreshDue = sizeChanged || dueMs(s.monitorTextMs, kMonitorRefreshMs);
-            if (s.monitorPanel.tick(s.monitorPanelOpen, refreshDue, menuPanelMonitorRasterSerial())) {
-                s.monitorTextMs = stampMs();
+            // Down: the clock is cleared, so the next raise builds at once. Kept from the last raster, a raise within 250 ms of it waited out the
+            // failed-build backoff below with nothing in the corner (PR #241 review).
+            if (!s.monitorPanelOpen) s.monitorTextMs = 0;
+            const FpsOverlayMode readout = monitorPanelReadoutMode(s.monitorView);
+            const uint64_t cadenceMs = readout == FpsOverlayMode::Detailed ? 250 : readout == FpsOverlayMode::Compact ? 500 : kMonitorRefreshMs;
+            const uint32_t outW = g_flatOutW.load(std::memory_order_relaxed);
+            const uint32_t outH = g_flatOutH.load(std::memory_order_relaxed);
+            const bool sizeChanged = outW != s.monitorSized[0] || outH != s.monitorSized[1];
+            const bool refreshDue = sizeChanged || dueMs(s.monitorTextMs, cadenceMs);
+            if (s.monitorPanel.tick(s.monitorPanelOpen, refreshDue, menuPanelMonitorRasterSerial()) && (s.monitorPanel.submitted || dueMs(s.monitorTextMs, 250))) {
+                s.monitorTextMs = stampMs();   // also paces a readout build that fails, while the panel stays up
+                s.monitorSized[0] = outW;      // the size this build is for, whichever view builds it
+                s.monitorSized[1] = outH;
                 const uint32_t before = menuPanelMonitorRasterSerial();
                 MenuContent mc;
-                buildMonitorPanel(mc);
-                mc.slotOwner = kSlotOwnerMonitorPanel;
-                menuPanelSubmitMonitor(mc);
-                s.monitorPanel.didSubmit(before);
+                const bool built = readout == FpsOverlayMode::Off ? (buildMonitorPanel(mc), true) : buildReadoutContent(mc, readout, true, 0.0f);
+                if (built) {
+                    mc.slotOwner = kSlotOwnerMonitorPanel;
+                    menuPanelSubmitMonitor(mc);
+                    s.monitorPanel.didSubmit(before);
+                }
             }
         }
 
@@ -6059,7 +6051,7 @@ void menuTick(ID3D11Device* dev) {
                 }
                 // The locked FPS readout refreshes at the same cadence as the
                 // head-locked overlay: twice a second, cheaply.
-                if (s.open && s.overlay && s.overlayLock && dueMs(s.menuOverlayTextMs, 500)) {
+                if (menuHeaderFpsLine(s.open, s.overlayLock) && dueMs(s.menuOverlayTextMs, 500)) {
                     s.menuOverlayTextMs = stampMs();
                     s.contentDirty = true;
                 }
@@ -6116,8 +6108,8 @@ void menuTick(ID3D11Device* dev) {
         }
         menuPanelSetGeometry(g);
         if (pol.monitorPanel || pol.noticePlacement == MenuNoticePlacement::ScreenCorner) {
-            // The monitor slot, in the upper right corner, 1:1 like the menu (menu_flat_layout.h flatPlace): the monitor panel, else the frame-rate readout, each
-            // only once its own raster is the live one. Neither wanted: alpha 0, so nothing stale stays on screen.
+            // The monitor slot, in the upper right corner, 1:1 like the menu (menu_flat_layout.h flatPlace): the monitor panel, in whichever view, only once its
+            // own raster is the live one. Down: alpha 0, so nothing stale stays on screen.
             MenuGeometry mg;
             mg.dist = 1.0f;
             mg.curve = 0.0f;
@@ -6125,8 +6117,7 @@ void menuTick(ID3D11Device* dev) {
             // A raster is drawn only for the owner it was built for: one still in flight for the other (the slot is shared) draws nothing this frame.
             const uint8_t slotOwner = menuPanelMonitorRasterOwner();
             const bool panelLive = s.monitorPanelOpen && s.monitorPanel.compositing() && slotOwner == kSlotOwnerMonitorPanel;
-            const bool readoutLive = s.flatReadout.compositing() && slotOwner == kSlotOwnerReadout;
-            mg.alpha = panelLive || readoutLive ? 1.0f : 0.0f;
+            mg.alpha = panelLive ? 1.0f : 0.0f;
             mg.flatCorner = static_cast<int>(FlatCorner::UpperRight);
             menuPanelSetMonitorGeometry(mg);
         }

@@ -909,14 +909,14 @@ def run(root, out, check):
     #
     # VR's Performance page lists the rows whose token is `menu performance`; the flat tab is built from kFlatPageRows (menu_flat_rows.h) whatever the token says.
     # A row marked flat_performance that kFlatPageRows does not list is therefore on no menu at all (not in the headset, and not on the tab), without a sound; and
-    # the tab's rows are [fix] keys.
+    # the tab's rows are [fix] and [menu] keys ([menu] since 2026-11-19: menu.monitor_panel_view, the flat monitor panel's view).
     flatOnly = [s for s in settings if s.menuPage == FLAT_PERFORMANCE_PAGE]
     if flatOnly:
-        notFix = [s for s in flatOnly if s.section != 'fix']
-        if notFix:
-            print('gen_settings_schema: ERROR: `menu %s` belongs to a [fix] setting: the flat Performance tab '
-                  'lists [fix] rows (the Visual and Debug tabs have their own tokens).' % FLAT_PERFORMANCE_PAGE)
-            for s in notFix:
+        wrongSection = [s for s in flatOnly if s.section not in ('fix', 'menu')]
+        if wrongSection:
+            print('gen_settings_schema: ERROR: `menu %s` belongs to a [fix] or [menu] setting: the flat Performance tab '
+                  'lists [fix] and [menu] rows (the Visual and Debug tabs have their own tokens).' % FLAT_PERFORMANCE_PAGE)
+            for s in wrongSection:
                 print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
             return 1
         listed = flat_page_rows(os.path.join(root, FLAT_PAGE_ROWS_HEADER))
@@ -2054,12 +2054,12 @@ def self_test():
     expect_in(name, said, 'src/d3d11/menu_flat_rows.h')
     expect_in(name, said, 'could not be read')
     expect_in(name, said, 'fix.beta')
-    # The token belongs to a [fix] key, whatever the table says.
+    # The token belongs to a [fix] or [menu] key, whatever the table says.
     name = 'flat-performance-wrong-section'
     said = case(name, '[visual]\n# A glow. Live.\n# ui: Glow | choices 100, 125 | live | menu flat_performance\nglow = 100\n',
                 {'a.cpp': 'std::string g = cfg.getString("visual.glow", "100");\n',
                  'd3d11/menu_flat_rows.h': 'inline constexpr FlatPageRow kFlatPageRows[] = {\n    {"visual", "glow", FlatRowRead::Allowlist},\n};\n'}, 1)
-    expect_in(name, said, 'belongs to a [fix] setting')
+    expect_in(name, said, 'belongs to a [fix] or [menu] setting')
     expect_in(name, said, 'visual.glow')
     # A misspelt token is an unknown page, and the message lists the real one.
     name = 'flat-performance-unknown-spelling'

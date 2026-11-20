@@ -211,7 +211,16 @@ private:
         uint32_t evLen = 0;
         if (!field("\"event\":\"", &ev, &evLen)) return;
         if (sameText(ev, evLen, "Undocked")) {
+            starterRest_ = false;
             set(Kind::kUnknown, onChange);
+            return;
+        }
+        // Chamberlain's Rest is the on-foot start. ApproachSettlement names it and never a StationType.
+        if (sameText(ev, evLen, "ApproachSettlement")) {
+            const char* place = nullptr;
+            uint32_t placeLen = 0;
+            starterRest_ = field("\"Name\":\"", &place, &placeLen) && sameText(place, placeLen, "Chamberlain's Rest") && !has("\"StationType\":\"");
+            if (starterRest_) set(Kind::kCraterPort, onChange);
             return;
         }
         const bool location = sameText(ev, evLen, "Location");
@@ -229,6 +238,7 @@ private:
                 saved_.kind = k;
                 savedChanged_ = true;
             }
+            starterRest_ = false;
             set(k, onChange);
             return;
         }
@@ -253,6 +263,10 @@ private:
         // and true near a planet (Flight 41's, "38 Lyncis 5"), so that is not read. Leaving a carrier is an Undocked.
         if (!location && kind_ == Kind::kFleetCarrier && has("\"OnStation\":false")) return;
         if (location && has("\"OnFoot\":true") && has("\"BodyType\":\"Planet\"")) {
+            if (starterRest_) {
+                set(Kind::kCraterPort, onChange);
+                return;
+            }
             set(surfaceKind(saved_.kind) ? saved_.kind : Kind::kUnknown, onChange);
             return;
         }
@@ -265,6 +279,7 @@ private:
     Saved saved_;
     bool savedChanged_ = false;
     bool unmatched_ = false;
+    bool starterRest_ = false;   // the last ApproachSettlement was Chamberlain's Rest, and named no StationType
     uint64_t unmatchedHash_ = 0;
     uint32_t jumps_ = 0;
 };

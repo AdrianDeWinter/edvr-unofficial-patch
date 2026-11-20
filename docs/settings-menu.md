@@ -996,9 +996,10 @@ they were there (flown 2026-09-07).
      gates the read;
    - the display's rate and frame budget, and the eye size;
    - CPU load (system and Elite's share), RAM, VRAM through
-     `IDXGIAdapter3::QueryVideoMemoryInfo`, and GPU load and temperature
-     through NvAPI where an NVIDIA driver is present (elsewhere "n/a" --
-     fpsVR's AMD path is a vendor library this project does not carry);
+     `IDXGIAdapter3::QueryVideoMemoryInfo`, and GPU load from the Windows
+     GPU Engine counters on the game's adapter (the busiest 3D or compute
+     engine; NVIDIA's own figure is used when it reads higher). Temperature
+     stays NvAPI, so it is present only with an NVIDIA driver;
    - EDVR's own passes' measured cost, from the totals they already keep;
    - **two frame-time strips**, fpsVR's pair: the GPU frame and the
      render thread's busy time, each the last 120 frames against its own
@@ -1180,9 +1181,14 @@ the page says so by calling it clean.
 **2026-11-16:** `menu.fps_overlay` is now `off | compact | detailed`, in VR
 and in flat (`compact` is the single line described here, and an old `on`
 reads as `compact`; `detailed` adds frame time, 1% low and a frame-time
-graph). In flat it sits in the screen's top-right corner. Under XeSS Frame
-Generation it shows the rendered and presented rates separately. See
+graph). Under XeSS Frame Generation it shows the rendered and presented rates
+separately. See
 [design-f8-menu-unification-2026-11-15.md](design-f8-menu-unification-2026-11-15.md).
+
+**2026-11-19:** `menu.fps_overlay` is VR only. Flat no longer reads it and has
+no corner readout: the same compact and detailed shapes are views of the flat
+monitor panel (F5), chosen with `menu.monitor_panel_view`. `menu.fps_overlay_lock`
+is its own switch in both profiles (see below).
 
 **The overlay** (`menu.fps_overlay`, off by default, and **a switch on
 the Performance page** since 2026-09-08 -- it is the one thing a player
@@ -1200,10 +1206,11 @@ It is shown while the
 menu is CLOSED and pinned to the head, the toolkit's overlay, because that
 is what was asked for and a gauge you carry has its uses. `fps_overlay_yaw`
 and `fps_overlay_pitch` put it where you can stop seeing it (default 20
-degrees above the look). `menu.fps_overlay_lock` keeps the readout visible
-while the F8 menu is open, drawing it at the top of the menu panel so you
-can watch FPS while changing settings for A/B tests; it is off by default,
-so the readout clears while the menu is open as before. The lock has no lag:
+degrees above the look). The readout clears while the menu is open.
+`menu.fps_overlay_lock` ("Frame rate in menu") draws a one-line frame rate at
+the top of the open menu panel so you can watch it while changing settings;
+it is off by default. Since 2026-11-19 it is its own switch, in VR and flat:
+it no longer needs `menu.fps_overlay` on, and it hides nothing else. The lock has no lag:
 the door builds its anchor from each frame's own pose (`setMenuHeadLock` on
 the channel) rather than from a value published a frame earlier. Its price
 is the panel's: one region copy plus a composite over the readout's own

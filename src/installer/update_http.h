@@ -27,6 +27,9 @@ struct HttpRequest {
     std::string method = "GET";
     std::string url;
     std::vector<std::pair<std::string, std::string>> headers;
+    // A POST body. Empty keeps the old call: Content-Length 0 and no bytes. A redirect is still
+    // never followed for a POST, body or not.
+    std::string body;
     // Empty: the body is returned in HttpResponse::body. Otherwise a 200 body is
     // written to this file, which is removed again on any failure.
     std::wstring toFile;

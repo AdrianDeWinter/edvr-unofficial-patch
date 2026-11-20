@@ -1449,12 +1449,12 @@ void testUpdater() {
         Updater upDiffer(http, differ);
         check(upDiffer.check().launcherNeedsUpdate, "a different digest with a higher version needs an update");
         UpdaterSettings higher = settingsFor(fresh("up9e"));
-        higher.launcherVersion = "0.3.0";
+        higher.launcherVersion = "0.9.0";
         Updater upHigher(http, higher);
         const UpdateCheck lower = upHigher.check();
         check(lower.outcome == UpdateOutcome::Available && !lower.launcherNeedsUpdate, "a different digest with a lower version is not a launcher update");
         UpdaterSettings equal = settingsFor(fresh("up9f"));
-        equal.launcherVersion = "0.2.9";
+        equal.launcherVersion = "0.4.0";
         Updater upEqual(http, equal);
         check(upEqual.check().launcherNeedsUpdate, "an equal version with a different digest is a launcher update");
     }
@@ -2959,8 +2959,13 @@ void testRoute() {
     const LaunchRoute steam = routeFor(L"Steam", products, true);
     check(steam.kind == RouteKind::Steam && steam.uri == L"steam://rungameid/359320" && !steam.carriesMode, "Steam: the address is steam://rungameid/359320, and it carries no mode");
     const LaunchRoute epic = routeFor(L"Epic", products, false);
-    check(epic.kind == RouteKind::Epic && epic.uri == L"com.epicgames.launcher://apps/9c203b6ed35846e8a4a9ff1e314f6593?action=launch&silent=true" && !epic.carriesMode,
-          "Epic: the address is the launcher URI for app 9c203b6e..., launch and silent");
+    check(epic.kind == RouteKind::Epic &&
+              epic.uri == L"com.epicgames.launcher://apps/3db17abfd650423f993291624b1b2ac1%3A9b8ee44da2e84b139c7444ab002cbc35%3A9c203b6ed35846e8a4a9ff1e314f6593?action=launch&silent=true" &&
+              !epic.carriesMode && epic.exe.empty(),
+          "Epic: the address is the catalog identity, sandbox:catalog:artifact, with launch and silent");
+    const LaunchRoute epicFlat = routeFor(L"Epic", products, false, nullptr, true);
+    check(epicFlat.kind == RouteKind::Epic && epicFlat.carriesMode && epicFlat.exe.empty() && epicFlat.uri == epic.uri,
+          "Epic with the checkbox still asks Epic to start the game, and the mode is carried by the stand-in");
     const LaunchRoute vr = routeFor(L"Frontier launcher", products, true);
     check(vr.kind == RouteKind::Frontier && vr.exe == P(frontier, L"EDLaunch\\EDLaunch.exe") && vr.args == L"/autorun /autoquit /edo /vr" && vr.carriesMode && vr.workDir == P(frontier, L"EDLaunch"),
           "Frontier VR: EDLaunch.exe /autorun /autoquit /edo /vr, from the EDLaunch folder found above Products");
@@ -2976,6 +2981,38 @@ void testRoute() {
     writeAll(P(lone, L"EliteDangerous64.exe"), "x");
     const LaunchRoute none = routeFor(L"Folder you chose", lone, true);
     check(none.kind == RouteKind::None && !none.why.empty() && contains(none.why, "EDLaunch.exe"), "a folder with no EDLaunch.exe above it has no route, and says why: " + none.why);
+    check(routeFor(L"Epic", lone, true, nullptr, true).kind == RouteKind::None,
+          "Epic with the checkbox and no EDLaunch.exe above the folder has no route");
+    const std::wstring forwarded = edLaunchShimCommand(
+        L"C:\\Games\\EDLaunch_orig.exe",
+        L"\"C:\\Games\\EDLaunch.exe\" /Epic -AUTH_LOGIN=unused -AUTH_PASSWORD=secret -AUTH_TYPE=exchangecode -epicusername=\"Sam\"",
+        false, true);
+    check(forwarded == L"\"C:\\Games\\EDLaunch_orig.exe\" /Epic -AUTH_LOGIN=unused -AUTH_PASSWORD=secret -AUTH_TYPE=exchangecode -epicusername=\"Sam\" /autorun /autoquit /edo /novr",
+          "the stand-in keeps Epic's arguments and adds the flat flags: " + narrowUtf8(forwarded));
+    check(edLaunchShimCommand(L"C:\\Games\\EDLaunch_orig.exe", forwarded, true, true) == forwarded,
+          "flags already on the line, including /novr, are not added again");
+    const std::wstring shimRoot = P(tree, L"shim\\Elite");
+    const std::wstring shimEd = P(shimRoot, L"EDLaunch.exe");
+    const std::wstring shimProduct = P(shimRoot, L"Products\\elite-dangerous-odyssey-64");
+    const std::wstring shimSelf = P(tree, L"our-launcher.exe");
+    writeAll(shimEd, "frontier-binary");
+    writeAll(P(shimProduct, L"EliteDangerous64.exe"), "x");
+    writeAll(shimSelf, "our-binary");
+    std::string shimError;
+    check(installEdLaunchShim(shimSelf, shimProduct, &shimError) && readAll(shimEd) == "our-binary" &&
+              readAll(P(shimRoot, L"EDLaunch_orig.exe")) == "frontier-binary",
+          "the stand-in takes EDLaunch.exe's place and keeps Frontier's binary: " + shimError);
+    writeAll(shimSelf, "our-binary-rebuilt");
+    check(installEdLaunchShim(shimSelf, shimProduct, &shimError) && readAll(shimEd) == "our-binary-rebuilt" &&
+              readAll(P(shimRoot, L"EDLaunch_orig.exe")) == "frontier-binary",
+          "a rebuilt launcher replaces only the stand-in: " + shimError);
+    writeAll(shimEd, "game-update");
+    check(installEdLaunchShim(shimSelf, shimProduct, &shimError) && readAll(P(shimRoot, L"EDLaunch_orig.exe")) == "game-update" &&
+              readAll(shimEd) == "our-binary-rebuilt",
+          "a game update becomes the saved EDLaunch and the stand-in is put back: " + shimError);
+    check(removeEdLaunchShim(shimProduct, &shimError) && readAll(shimEd) == "game-update" &&
+              !fileExists(P(shimRoot, L"EDLaunch_orig.exe")),
+          "removing the stand-in puts the saved EDLaunch back: " + shimError);
 
     // The Frontier store's own layout: the game under AppData, EDLaunch under Program Files, and
     // nothing above the game folder that leads to it.
@@ -3950,6 +3987,9 @@ void testDirectPlan() {
     check(directCommandLine(true, "MT", "AT", "", true, true, "") == "\"ServerToken MT AT \" /steam /vr", "no server or game arguments: the quote closes after one space, as in Product.fs");
     check(directCommandLine(true, "MT", "AT", "", false, false, "") == "\"ServerToken MT AT \" /novr", "a product that is not steamaware gets no /steam");
     check(directCommandLine(false, "MT", "AT", "/Zz", true, true, "/g") == "\"\" /steam /vr /g", "an offline product has an empty quoted token");
+    check(directCommandLine(true, "MT", "AT", "/Zz", false, false, "", "ConfigureEpic REF SAND DEP") ==
+              "\"ServerToken MT AT /Zz\" \"ConfigureEpic REF SAND DEP\" /novr",
+          "an Epic line quotes ConfigureEpic and carries /novr, with no /steam");
     check(sameGameVersion("4.2.1.0", "4.2.1.0") && !sameGameVersion("4.2.1.0", "4.2.2.0") && !sameGameVersion("4.2.1", "4.2.1.0") && !sameGameVersion("a.b", "a.b") && sameGameVersion("4.2", "4.2"),
           "game versions are equal as System.Version is: the same numbers in the same count");
     {
@@ -4527,7 +4567,8 @@ void testDirectSession() {
         check(ran == 6, "every fallback case was run through the session");
     }
 
-    // Only a Steam install goes direct, even with the key on.
+    // Steam signs in itself. Epic, with the checkbox on, skips the Epic launcher and starts
+    // its own EDLaunch. A picked folder still takes EDLaunch's ordinary route.
     {
         DirectRig rig("direct-other-stores", "direct_launch=on\n");
         writeAll(P(rig.game.root, L"EDLaunch\\EDLaunch.exe"), "x");
@@ -4540,7 +4581,9 @@ void testDirectSession() {
         timing.closeWaitMs = 100;
         rig.session->beginPlay(L"Epic", rig.game.product, true, false, rig.rec.ops(), names, timing);
         rig.session->shutdown();
-        check(rig.rec.uris.size() == 1 && rig.rec.uris[0].find(L"com.epicgames.launcher://") == 0 && rig.http.requests.empty() && rig.started.empty() && eventTags().empty(), "an Epic install takes its own route and contacts nothing");
+        check(rig.rec.uris.size() == 1 && rig.rec.uris[0].find(L"com.epicgames.launcher://") == 0 && rig.rec.spawns.empty() &&
+                  rig.http.requests.empty() && rig.started.empty() && eventTags().empty(),
+              "an Epic install with the checkbox asks Epic to start the stand-in and contacts nothing");
         DirectRig frontier("direct-frontier-store", "direct_launch=on\n");
         writeAll(P(frontier.game.root, L"EDLaunch\\EDLaunch.exe"), "x");
         frontier.session->beginPlay(L"Folder you chose", frontier.game.product, true, false, frontier.rec.ops(), names, timing);
@@ -4628,9 +4671,9 @@ void testEpicCommands() {
             return std::unique_ptr<SteamSession>();
         };
         std::vector<std::string> out;
-        check(directDryRunLines(args, env, &out, &noWindowsMetadata) == 3 &&
-                  out == std::vector<std::string>{"Epic installs use the Epic Games launcher. Direct launch is unavailable; no sign-in was attempted and nothing was started."},
-              "the host's explicit Epic identity survives a prefix without Windows store metadata");
+        check(directDryRunLines(args, env, &out, &noWindowsMetadata) == 0 && out.size() == 1 &&
+                  contains(out[0], "starts the game directly in VR") && contains(out[0], "does not open Frontier's launcher"),
+              "the host's explicit Epic identity starts the game itself and does not open Frontier's launcher");
         check(steamAttempts == 0 && rig.http.requests.empty() && rig.started.empty() && rig.rec.uris.empty() &&
                   rig.rec.spawns.empty() && eventTags().empty(),
               "an explicit Epic dry run never uses Steam or Frontier authentication and starts nothing");
@@ -4653,8 +4696,8 @@ void testEpicCommands() {
         timing.closeWaitMs = 100;
         beginHeadlessPlay(*rig.session, selected, true, rig.rec.ops(), names, timing);
         rig.session->shutdown();
-        check(rig.rec.uris == std::vector<std::wstring>{L"com.epicgames.launcher://apps/9c203b6ed35846e8a4a9ff1e314f6593?action=launch&silent=true"} && rig.rec.spawns.empty(),
-              "headless Play opens the selected Epic install through Epic even with direct launch enabled");
+        check(rig.rec.uris == std::vector<std::wstring>{L"com.epicgames.launcher://apps/3db17abfd650423f993291624b1b2ac1%3A9b8ee44da2e84b139c7444ab002cbc35%3A9c203b6ed35846e8a4a9ff1e314f6593?action=launch&silent=true"} && rig.rec.spawns.empty(),
+              "headless Play with the checkbox asks Epic to start the stand-in and does not start EDLaunch itself");
         check(rig.http.requests.empty() && rig.started.empty() && eventTags().empty() && rig.loginNotes.empty() && rig.codeNotes.empty(),
               "headless Epic Play never signs in directly, asks for credentials, or starts the game itself");
 
@@ -4666,9 +4709,9 @@ void testEpicCommands() {
               "headless Play resolves the host-selected Epic product without Windows Epic metadata");
         beginHeadlessPlay(*host.session, hostSelected, true, host.rec.ops(), names, timing);
         host.session->shutdown();
-        check(host.rec.uris == std::vector<std::wstring>{L"com.epicgames.launcher://apps/9c203b6ed35846e8a4a9ff1e314f6593?action=launch&silent=true"} && host.rec.spawns.empty() &&
+        check(host.rec.uris == std::vector<std::wstring>{L"com.epicgames.launcher://apps/3db17abfd650423f993291624b1b2ac1%3A9b8ee44da2e84b139c7444ab002cbc35%3A9c203b6ed35846e8a4a9ff1e314f6593?action=launch&silent=true"} && host.rec.spawns.empty() &&
                   host.http.requests.empty() && host.started.empty() && eventTags().empty() && host.loginNotes.empty() && host.codeNotes.empty(),
-              "host-selected Epic headless Play takes only the Epic route, with no authentication");
+              "host-selected Epic headless Play asks Epic to start the stand-in and does not authenticate");
     }
     {
         DirectRig rig("epic-dry-run", "direct_launch=on\n", true);
@@ -4689,8 +4732,9 @@ void testEpicCommands() {
         };
         std::vector<std::string> out;
         const int code = directDryRunLines(args, env, &out, &installs);
-        check(code == 3 && out == std::vector<std::string>{"Epic installs use the Epic Games launcher. Direct launch is unavailable; no sign-in was attempted and nothing was started."},
-              "an Epic direct dry run explains the store route and exits without a direct launch plan");
+        check(code == 0 && out.size() == 1 && contains(out[0], "starts the game directly in VR") &&
+                  contains(out[0], "does not open Frontier's launcher"),
+              "an Epic direct dry run starts the game itself and does not open Frontier's launcher");
         check(steamAttempts == 0 && rig.http.requests.empty() && rig.started.empty() && rig.rec.uris.empty() && rig.rec.spawns.empty() && eventTags().empty(),
               "an Epic direct dry run makes no authentication request, loads no Steam ticket, and starts nothing");
     }

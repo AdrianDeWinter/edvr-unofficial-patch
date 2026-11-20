@@ -17,8 +17,12 @@
 //                                    GlobalMemoryStatusEx, once a second
 //   VRAM                             IDXGIAdapter3::QueryVideoMemoryInfo,
 //                                    once a second
-//   GPU load and temperature         NvAPI, once a second, NVIDIA only --
-//                                    two entry points; elsewhere "n/a"
+//   GPU load                         Windows GPU Engine counters, once a
+//                                    second, on the game's adapter: the
+//                                    busiest 3D or compute engine. NVIDIA's
+//                                    own figure is used when it reads higher.
+//                                    Temperature stays NvAPI, so only an
+//                                    NVIDIA driver shows it (gpu_engine_load.h)
 //   EDVR's own passes                the temporal, DLSS and sharpen totals
 //                                    those passes already keep
 //

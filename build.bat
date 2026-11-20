@@ -744,6 +744,7 @@ python tools\compile_cache.py --prune --keep thunks.obj --keep weapon_ui_getter_
     "src\d3d11\gpu_census.cpp" "src\d3d11\gpu_pass_profile.cpp" "src\d3d11\blend_probe.cpp" ^
     "src\d3d11\d3d11_proxy.cpp" "src\d3d11\device_hook.cpp" ^
     "src\d3d11\format_support_log.cpp" ^
+    "src\d3d11\game_vram_hook.cpp" ^
     "src\d3d11\graphics_bridge.cpp" ^
     "src\d3d11\render_boundary.cpp" ^
     "src\d3d11\exposure_fix.cpp" "src\d3d11\vscreen.cpp" ^
@@ -798,6 +799,7 @@ python tools\compile_cache.py --prune --keep thunks.obj --keep weapon_ui_getter_
     "src\d3d11\sharpen_pass.cpp" ^
     "src\d3d11\flat_sharpen.cpp" "src\d3d11\flat_ui_layer.cpp" "src\d3d11\flat_star_glow.cpp" "src\d3d11\flat_dof_blur.cpp" ^
     "src\d3d11\loader_panel.cpp" ^
+    "src\d3d11\net_keepalive.cpp" ^
     "src\d3d11\splash_dim.cpp" ^
     "src\d3d11\billboard_fix.cpp" ^
     "src\d3d11\particle_fix.cpp" "src\d3d11\shader_swap.cpp" "src\d3d11\sunglare_fix.cpp" ^
@@ -1579,6 +1581,26 @@ if errorlevel 1 ( echo [edvr] ERROR: mem_watch_test build failed & exit /b 1 )
 "%OBJ%\memwatch\mem_watch_test.exe" --self-test "%ROOT%" || exit /b 1
 exit /b 0
 
+:rig_game_vram_test
+echo [edvr] === game_vram_test.exe ===
+REM Build gate for the video memory size Elite is told (src\common\game_vram.h, src\d3d11\game_vram_hook.cpp, the
+REM advanced.game_vram key; docs\memory-growth-2026-10-22.md, "Elite's streaming budget"): the setting's parse (off, auto, a
+REM number of MB from 256, everything else read as off and named), the size reported for each (auto: 85% of it fits the
+REM OS budget less EDVR's share and a margin, never under 4096 MB, never over the card), the call line's exact text, and
+REM by source text that the key is in edvr.ini off the menu, that both device-creation exports install the hook, that
+REM the hook tells the game's calls from everyone else's and stands down in passthrough and outside the game, and that
+REM learning stops at a profile change and never writes over a store it could not read. It links nothing of the DLLs.
+if not exist "%OBJ%\gamevram" mkdir "%OBJ%\gamevram"
+%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
+    /D_CRT_SECURE_NO_WARNINGS /I"src\common" ^
+    /Fo"%OBJ%\gamevram"\ /Fe"%OBJ%\gamevram\game_vram_test.exe" ^
+    "tools\game_vram_test\game_vram_test.cpp" ^
+    /link /INCREMENTAL:NO
+if errorlevel 1 ( echo [edvr] ERROR: game_vram_test build failed & exit /b 1 )
+"%OBJ%\gamevram\game_vram_test.exe" --dry-run || exit /b 1
+"%OBJ%\gamevram\game_vram_test.exe" --self-test "%ROOT%" || exit /b 1
+exit /b 0
+
 :rig_skin_ledger_test
 echo [edvr] === skin_ledger_test.exe ===
 REM Build gate for the skin ledger (src\d3d11\skin_ledger.h, the F2 settling instrument that rides an armed eye run;
@@ -2120,6 +2142,22 @@ if not exist "%OBJ%\hotkeycapturetest" mkdir "%OBJ%\hotkeycapturetest"
 if errorlevel 1 ( echo [edvr] ERROR: hotkey_capture_test build failed & exit /b 1 )
 "%BUILD%\hotkey_capture_test.exe" "%ROOT%" || (
     echo [edvr] ERROR: the Hotkeys page failed its format, capture, joystick or row checks
+    exit /b 1
+)
+exit /b 0
+
+:rig_net_keepalive_test
+echo [edvr] === net_keepalive_test.exe ===
+REM The loading-connection table: one libcurl multi handle per pump thread, the
+REM 50 s refresh, a full table, the return-address gate. No device and no game.
+if not exist "%OBJ%\netkeepalive" mkdir "%OBJ%\netkeepalive"
+%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
+    /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\netkeepalive"\ /Fe"%BUILD%\net_keepalive_test.exe" ^
+    "tools\net_keepalive_test\net_keepalive_test.cpp" ^
+    /link /INCREMENTAL:NO kernel32.lib user32.lib
+if errorlevel 1 ( echo [edvr] ERROR: net_keepalive_test build failed & exit /b 1 )
+"%BUILD%\net_keepalive_test.exe" || (
+    echo [edvr] ERROR: loading connection reuse failed its table checks
     exit /b 1
 )
 exit /b 0
@@ -4555,6 +4593,21 @@ if not exist "%OBJ%\crossprofile" mkdir "%OBJ%\crossprofile"
 if errorlevel 1 ( echo [edvr] ERROR: cross_profile_test build failed & exit /b 1 )
 "%OBJ%\crossprofile\cross_profile_test.exe" --dry-run || exit /b 1
 "%OBJ%\crossprofile\cross_profile_test.exe" --self-test || exit /b 1
+exit /b 0
+
+:rig_gpu_engine_load_test
+echo [edvr] === gpu_engine_load_test.exe ===
+REM The Monitor GPU tile (src\d3d11\gpu_engine_load.h): Windows GPU Engine instance names, per-process shares of one engine
+REM added, distinct engines not added, the game adapter's LUID only, and the tile taking NVIDIA's figure only when it reads
+REM higher. Pure. The source check pins perf_monitor.cpp to that formatter.
+if not exist "%OBJ%\gpuengineload" mkdir "%OBJ%\gpuengineload"
+%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /utf-8 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
+    /Fo"%OBJ%\gpuengineload\\" /Fe"%OBJ%\gpuengineload\gpu_engine_load_test.exe" ^
+    "tools\gpu_engine_load_test\gpu_engine_load_test.cpp" ^
+    /link /INCREMENTAL:NO
+if errorlevel 1 ( echo [edvr] ERROR: gpu_engine_load_test build failed & exit /b 1 )
+"%OBJ%\gpuengineload\gpu_engine_load_test.exe" --dry-run || exit /b 1
+"%OBJ%\gpuengineload\gpu_engine_load_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_flat_clear_test

@@ -23,15 +23,11 @@
 // then shows the result. The whitelist is not consulted and not changed; a frame it selects is never touched, and where
 // the HDR route serves the frame (R >= D) this does nothing at all.
 //
-// THE RISK, AND WHAT IS DONE ABOUT IT. A game anti-aliasing filter between the tone pass and the copy would make S from
-// an image the game has already filtered: FXAA gives a softer double AA, and the game's own temporal AA jitters the
-// camera itself, which fights EDVR's phase. Neither can be told from the structure, but the filter leaves a mark the
-// tone pass does not: it writes an R-sized R8G8B8A8 target (the tone pass's own) and then S. So a frame with one or
-// more such targets between the scene's first consumer and S is declined, refused exactly as it was before this
-// existed, and the F8 panel's Anti-aliasing advice names it. The corpus has 42 frames with a known tone pass (stock and
-// EDHM tone pairs, menu, flight and on foot, R from half of D to 1.5 D) and 3 with Bloom 3 and DoF 2 and an unknown
-// one, and none has such a target; the chain length rides every decline and the 5 s census, so a flight with the
-// game's AA on reads what it was. Relaxing the rule (FXAA is probably fine) is one line, and waits for that flight.
+// THE RISK, AND WHAT IS DONE ABOUT IT. A game anti-aliasing filter after the tone pass writes S itself, so the resolve
+// would run on an image the game has already filtered. Depth of field with bloom off writes full-size images and the
+// tone pass still writes S (a known tone vertex shader): that chain is admitted. A frame whose copy source is not that
+// shader, and which has those images, stays declined, and the F8 panel's Anti-aliasing advice names it. The chain
+// length rides every frame.
 //
 // WHAT IT NAMES. A frame with a copy and no scene at all (startup, a loading screen, a 2D menu) is no-3d-scene: it
 // stands the work down like no-known-output-copy and never warns. A scene whose size is not a uniform scale of the
@@ -308,12 +304,11 @@ inline FlatMonoFrame flatCopyAdmit(FlatRuntimePrefix& p, const FlatHdrFrame& f, 
     if (f.trigger.sequence > src->writes.first) return decline("the-copy-source-was-written-before-the-scene-was-read");
     g.triggerVs = f.trigger.vs; g.triggerPs = f.trigger.ps;
     // The chain between the scene and the copy, measured: R-sized R8G8B8A8 targets other than S that were written after
-    // the first consumer of H and before S. Bloom, depth of field and every tone variant leave none (the corpus has 44
-    // frames of them, all zero): the tone pass writes S itself. A game anti-aliasing filter after the tone pass writes
-    // the target the tone pass made and then S, so it leaves one or more. The resolve then would run on an image the
-    // game has already filtered (FXAA: softer, double AA) or, for the game's temporal AA, whose camera jitter fights
-    // EDVR's; neither can be told from the structure, so a frame with one stays refused exactly as it was, and the
-    // Anti-aliasing advice stays (the F8 panel names it). The count rides the decline, so a flight can read the chain.
+    // the first consumer of H and before S. With bloom on, depth of field stays off this size and the tone pass writes
+    // S, so the count is zero. Bloom off leaves the depth-of-field image full size, and the tone pass still writes S
+    // (a known tone vertex shader). A game anti-aliasing filter writes S itself, so S's writer is not that shader:
+    // the resolve would run on an image the game has already filtered. The count rides every frame, so a flight can
+    // read the chain either way.
     for (uint32_t i = 0; i < p.targetsUsed; ++i) {
         const auto& t = p.targets[i];
         if (t.resource == k.srvResource[0] || !t.writes.draws || t.writes.key.format != 27 ||
@@ -322,7 +317,8 @@ inline FlatMonoFrame flatCopyAdmit(FlatRuntimePrefix& p, const FlatHdrFrame& f, 
             continue;
         ++g.ldrTargetsBefore; g.ldrDrawsBefore += t.writes.draws;
     }
-    if (g.ldrTargetsBefore) return decline("r-sized-image-passes-follow-the-first-consumer-of-the-scene-hdr");
+    if (g.ldrTargetsBefore && !knownToneVs(sk.vs))
+        return decline("r-sized-image-passes-follow-the-first-consumer-of-the-scene-hdr");
 
     // The Full System Scanner's tone pass is in no whitelist, so its frames are this admission's, and a bad H refuses here: the one
     // place a camera-only fault on a temporal-off frame is asked about (waiveCameraOnly), as the reducer's copy branch asks it.

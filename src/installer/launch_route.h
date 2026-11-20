@@ -4,7 +4,7 @@
 // route"):
 //
 //   Steam      steam://rungameid/359320 (steam://run/359320 under Wine)
-//   Epic       com.epicgames.launcher://apps/<app>?action=launch&silent=true
+//   Epic       com.epicgames.launcher://apps/<sandbox>%3A<catalog>%3A<artifact>?action=launch&silent=true
 //   Frontier   EDLaunch.exe /autorun /autoquit /edo /vr   (or /novr)
 //
 // EDLaunch is left running by /autoquit often enough that the launcher watches for the game,
@@ -30,15 +30,20 @@ struct LaunchRoute {
     RouteKind kind = RouteKind::None;
     std::wstring uri;      // Steam and Epic
     std::wstring exe;      // Frontier: the EDLaunch.exe
-    std::wstring args;     // Frontier: its flags, which carry VR or flat
-    std::wstring workDir;  // Frontier: where EDLaunch.exe is
-    // Only the Frontier route can say VR or flat: Steam's and Epic's start Elite in whatever
-    // mode its own settings name.
+    std::wstring args;     // EDLaunch's flags, which carry VR or flat
+    std::wstring workDir;  // where EDLaunch.exe is
+    // Frontier's route carries VR or flat. Steam's address does not. Epic's address does not
+    // either, unless the skip-the-launcher checkbox starts that install's own EDLaunch.
     bool carriesMode = false;
     std::string why;       // when kind is None: why there is no Play button
 };
 
 inline constexpr const wchar_t* kSteamAppId = L"359320";
+// Elite Dangerous on the Epic catalog. The launch address is the sandbox, the
+// catalog item and the artifact, the same kind of fixed identity as Steam's app
+// id. The artifact alone is the old form of that address.
+inline constexpr const wchar_t* kEpicNamespaceId = L"3db17abfd650423f993291624b1b2ac1";
+inline constexpr const wchar_t* kEpicCatalogId = L"9b8ee44da2e84b139c7444ab002cbc35";
 inline constexpr const wchar_t* kEpicAppId = L"9c203b6ed35846e8a4a9ff1e314f6593";
 
 // The EDLaunch.exe for a game folder: the first one found in a folder above it, or in an
@@ -55,8 +60,36 @@ std::wstring findEdLaunchIn(const std::vector<std::wstring>& roots);
 // `frontierRoots`, by default frontierLauncherRoots(). A folder the user picked does not: the
 // store's EDLaunch would start the store's own copy of the game, not that folder's. With no
 // EDLaunch found there is no route.
+// `direct` is the "skip the launcher" checkbox. For an Epic install the address is
+// unchanged: Epic has to start the program, because only then does it pass the exchange
+// code. What changes is that EDLaunch.exe is our stand-in, and the stand-in runs the
+// saved Frontier binary with the mode. Every other source ignores `direct`.
 LaunchRoute routeFor(const std::wstring& source, const std::wstring& gameDir, bool vr,
-                     const std::vector<std::wstring>* frontierRoots = nullptr);
+                     const std::vector<std::wstring>* frontierRoots = nullptr, bool direct = false);
+
+// Frontier's EDLaunch.exe, kept beside the stand-in so a game update can be told from ours
+// and so uninstall can put it back. The mode file is "vr" or "flat".
+inline constexpr const wchar_t* kEdLaunchOrigName = L"EDLaunch_orig.exe";
+inline constexpr const wchar_t* kEdLaunchModeName = L"edvr_launch_mode.txt";
+inline constexpr const wchar_t* kEdLaunchMarkerName = L"edvr_edlaunch.txt";
+
+// The command line that runs the saved EDLaunch. `commandLine` is the full line Epic used,
+// including the leading exe. /autorun /autoquit /edo are added when they are not already
+// there, and so is /vr or /novr when `chooseMode` is set.
+std::wstring edLaunchShimCommand(const std::wstring& origExe, const std::wstring& commandLine, bool vr,
+                                 bool chooseMode);
+
+// -1 when this process is not standing in for EDLaunch.exe. Otherwise the process is the
+// stand-in: it runs the saved EDLaunch and the return value is this process's exit code.
+int runEdLaunchShimIfInvoked();
+
+// Put `selfExe` where Epic starts the game, keeping Frontier's binary as EDLaunch_orig.exe.
+// A missing self file does nothing and returns true. False leaves the folder as it was.
+bool installEdLaunchShim(const std::wstring& selfExe, const std::wstring& gameDir, std::string* error);
+// Put Frontier's binary back. True when there was nothing to put back.
+bool removeEdLaunchShim(const std::wstring& gameDir, std::string* error);
+// The stand-in reads this on the next start Epic makes.
+bool writeEdLaunchMode(const std::wstring& gameDir, bool vr);
 
 struct RouteOps {
     std::function<bool(const std::wstring& uri)> openUri;

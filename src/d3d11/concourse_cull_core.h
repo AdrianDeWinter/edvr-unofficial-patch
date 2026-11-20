@@ -25,6 +25,7 @@ namespace edvr::concourse {
 
 // The Flags2 bits (journal documentation): 0 OnFoot, 14 OnFootSocialSpace. Bit 3 (in station) rides with them in 0x00014009.
 constexpr uint32_t kFlags2OnFoot = 1u << 0;
+constexpr uint32_t kFlags2OnFootInHangar = 1u << 13;
 constexpr uint32_t kFlags2SocialSpace = 1u << 14;
 
 // The anchor record's name: the large station's concourse. Its sighting by the store is the second half of the gate.
@@ -81,10 +82,20 @@ inline bool concourseAllowName(const char* name, const char* extraPrefixes) noex
 inline bool concourseSocialOnFoot(uint32_t flags2, bool known, bool gameplay) noexcept {
     return gameplay && known && (flags2 & kFlags2OnFoot) != 0 && (flags2 & kFlags2SocialSpace) != 0;
 }
+// The concourse list stays off while Status says the commander is still in the hangar. That bit is set on foot beside the ship (Flags2 0x00016009) and clears at the concourse.
+inline bool concourseCullGate(bool armed, bool social, bool sealed, bool inHangar) noexcept {
+    return armed && social && !sealed && !inHangar;
+}
 
 // A record that is small and close is kept whatever its name: a weapon or a prop whose name is generic (Barrel, Slider, Hinge).
 constexpr float kSmallRadiusM = 25.0f;
 constexpr float kCloseDistanceM = 40.0f;
+// Standing in the cabin with the doors open, a small floor panel's centre sits just past 40 m (Orbis flight 062511: the panel
+// drew until the normal cull came on, and came back on the step out of the door, about 2 m). The wider keep covers that step.
+constexpr float kOpenCabinCloseM = 48.0f;
+// The doorway is outside kLiftInsideM and still inside the cabin sphere. Flight 070009: the panel dropped at 1.83 m from the
+// centre, the sphere radius 2.40 m, and a run across the threshold flashed it. The wider keep holds for a step past the sphere.
+constexpr float kOpenCabinPastM = 1.0f;
 // An allowed name whose sphere is wholly farther than this from the camera is culled all the same (the plant stacks, the far hangar lobby, the huge logo);
 // the anchor and the hub are exempt, because the gate reads them from the store.
 constexpr float kAllowedFarM = 200.0f;
@@ -93,20 +104,23 @@ enum class Judge : uint8_t { kKeepName, kKeepUnreadableName, kKeepUnreadableSphe
 
 inline bool judgeKeeps(Judge j) noexcept { return j != Judge::kCull; }
 
-// The lift: while the player stands in a shut cabin the room is not drawn. Kept: an unreadable sphere, and a small record (radius up to kSmallRadiusM) whose
-// surface is within kLiftKeepM. Everything else is culled, whatever its name, the anchor, the hub and the extra keep names included: the cabin does not need them,
-// and a rig holding them would carry the room's records with it.
+// The lift: while the player stands in a shut cabin the room is not drawn. Kept: an unreadable sphere, and a record of at most kLiftFloorRadiusM whose
+// surface is within kLiftKeepM. That covers the floor in front of the doors (HangarLobby is 29.3 m, just past the 25 m prop cap, and the camera in the
+// cabin is outside its sphere) and the hub underfoot. The exterior shell is 90.7 m and stays culled. Everything else is culled, whatever its name.
 constexpr float kLiftKeepM = 8.0f;
+constexpr float kLiftFloorRadiusM = 50.0f;
 
 // One record. A record whose name is unreadable, or an allowed name, is kept unless its sphere is readable and wholly past kAllowedFarM (distance - radius); the
 // anchor and the hub (`farExempt`, computed from the name by the caller) are kept however far. Then: keep an unreadable sphere (not finite, or no radius); keep a
 // small, close record; cull. `lift` (the player is in a shut lift cabin) replaces all of that by the rule above kLiftKeepM; `farExempt` does not apply to it.
+// `openCabin` (the camera is within the cabin sphere plus kOpenCabinPastM, doors already open) uses kOpenCabinCloseM for that small-close keep. The lift and the look ignore it.
 // `look` (TEMPORARY, the camera test) is the keep list turned inside out, what a bake would want: the room off and the rest on. An allowed name is culled however far, the anchor and
 // the hub included. An unreadable name is the room's when it is small and reaches within kAllowedFarM of the camera, which is at the room's centre then (INFERRED). Any other name is the
 // room's when it is small and reaches within kLookReachM: Flight 25's gaps were walkways, doors, panels and people hanging in the bake's way, which a depth filter can only leave out, with
 // nothing behind them, since the bake sees from one place. Not drawn, what is behind them is captured. A large record is kept: it may be the station.
 constexpr float kLookRoomRadiusM = 60.0f, kLookReachM = 60.0f;
-inline Judge concourseJudge(bool nameReadable, bool allowed, bool sphereReadable, float distance, float radius, bool farExempt, bool lift = false, bool look = false) noexcept {
+inline Judge concourseJudge(bool nameReadable, bool allowed, bool sphereReadable, float distance, float radius, bool farExempt, bool lift = false, bool look = false,
+                            bool openCabin = false) noexcept {
     const bool sphereOk = sphereReadable && std::isfinite(distance) && std::isfinite(radius) && radius > 0.0f;
     if (look) {
         if (allowed) return Judge::kCull;
@@ -116,14 +130,15 @@ inline Judge concourseJudge(bool nameReadable, bool allowed, bool sphereReadable
     if (lift) {
         if (!sphereOk) return Judge::kKeepUnreadableSphere;
         const float surface = distance - radius > 0.0f ? distance - radius : 0.0f;
-        if (radius <= kSmallRadiusM && surface <= kLiftKeepM) return Judge::kKeepSmallClose;
+        if (radius <= kLiftFloorRadiusM && surface <= kLiftKeepM) return Judge::kKeepSmallClose;
         return Judge::kCull;
     }
     const bool pastRoom = sphereOk && distance - radius > kAllowedFarM;
     if (!nameReadable) return pastRoom ? Judge::kCull : Judge::kKeepUnreadableName;
     if (allowed) return (!farExempt && pastRoom) ? Judge::kCull : Judge::kKeepName;
     if (!sphereOk) return Judge::kKeepUnreadableSphere;
-    if (radius <= kSmallRadiusM && distance <= kCloseDistanceM) return Judge::kKeepSmallClose;
+    const float closeM = openCabin ? kOpenCabinCloseM : kCloseDistanceM;
+    if (radius <= kSmallRadiusM && distance <= closeM) return Judge::kKeepSmallClose;
     return Judge::kCull;
 }
 
@@ -537,6 +552,11 @@ inline bool liftMoved(const float now[3], const float last[3], float limitM) noe
 // The lift gate: the room is off while the player is inside a cabin whose doors are shut. The reading is from the survey's table (the cabin record named TurboLift,
 // and the four door records nearest it): the doors' separation is about 1.5 m shut and 2.9 m open (the left and right pair) and about 1.4 and 2.65 (the second pair).
 constexpr float kLiftInsideM = 1.3f;       // the camera to the cabin's centre: inside (0.81 to 0.98 shut inside, 2.32 just outside the door)
+// The open-cabin keep, not the shut-cabin rule. True through the doorway: the sphere plus one step. A non-positive radius is not a cabin.
+inline bool openCabinReach(float cabinDistM, float cabinRadiusM) noexcept {
+    if (!std::isfinite(cabinDistM) || !std::isfinite(cabinRadiusM) || !(cabinRadiusM > 0.0f)) return false;
+    return cabinDistM <= cabinRadiusM + kOpenCabinPastM;
+}
 constexpr float kLiftGap1ShutM = 1.55f;    // TurboLiftDoorLeft to TurboLiftDoorRight: over this the doors are open
 constexpr float kLiftGap2ShutM = 1.42f;    // TurboLiftDoorLeft2 to TurboLiftDoorRight2
 constexpr uint32_t kLiftShutReadings = 6;  // both pairs shut, after being seen open, this many ticks running
@@ -544,6 +564,7 @@ constexpr uint64_t kLiftMaxOnMs = 5000;    // the gate arms about 6 s before the
 struct LiftReading {
     bool cabin = false;        // a record named TurboLift is in view
     float cabinDistM = 0.0f;   // the camera to its centre
+    float cabinRadiusM = 0.0f; // that record's radius; the open-cabin keep reads it
     bool doors = false;        // all four door records were read
     float gap1 = 0.0f, gap2 = 0.0f;
 };

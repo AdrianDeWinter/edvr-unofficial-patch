@@ -2669,9 +2669,129 @@ void clearLocked() {
     g_draw.clear();
 }
 
+// What the OM hooks last set, held so a foreground capture can skip OMGet.
+// Owner thread. Cleared on bindingForgetAll (ClearState, a command list that does not restore).
+// A frame boundary bumps the binding generation and does not clear this: the next read misses, asks once, and stores again.
+struct HookBlend {
+    Ptr<ID3D11BlendState> state;
+    float factor[4] = {1.f, 1.f, 1.f, 1.f};
+    UINT mask = ~0u;
+    uint32_t gen = 0;
+    bool valid = false;
+};
+HookBlend g_hookBlend;
+struct HookTargets {
+    Ptr<ID3D11RenderTargetView> rtv[6];
+    uint32_t gen = 0;
+    bool valid = false;
+};
+HookTargets g_hookTargets;
+
 } // namespace engine_velocity_detail
 
 using namespace engine_velocity_detail;
+
+void flatOmForget() {
+    g_hookBlend = HookBlend{};
+    g_hookTargets = HookTargets{};
+}
+
+void flatOmNoteBlend(ID3D11BlendState* state, const float factor[4], unsigned int mask) {
+    const float ones[4] = {1.f, 1.f, 1.f, 1.f};
+    g_hookBlend.state = state;
+    std::memcpy(g_hookBlend.factor, factor ? factor : ones, 4 * sizeof(float));
+    g_hookBlend.mask = mask;
+    g_hookBlend.gen = bindingGeneration(BindSlot::Blend);
+    g_hookBlend.valid = true;
+}
+
+void flatOmNoteTargets(unsigned n, ID3D11RenderTargetView* const* rtvs) {
+    for (unsigned i = 0; i < 6; ++i) {
+        ID3D11RenderTargetView* view = (rtvs && i < n) ? rtvs[i] : nullptr;
+        g_hookTargets.rtv[i] = view;
+    }
+    g_hookTargets.gen = bindingGeneration(BindSlot::Rtv0);
+    g_hookTargets.valid = true;
+}
+
+void flatQueryGameBlend(ID3D11DeviceContext* ctx, ID3D11BlendState** outState, float factor[4], unsigned int* outMask) {
+    const bool fresh = g_hookBlend.valid && g_hookBlend.gen == bindingGeneration(BindSlot::Blend);
+    if (engineVelocityFlatPending() || !fresh) {
+        UINT mask = 0;
+        ctx->OMGetBlendState(outState, factor, &mask);
+        *outMask = mask;
+        if (!engineVelocityFlatPending()) {
+            g_hookBlend.state = *outState;
+            std::memcpy(g_hookBlend.factor, factor, 4 * sizeof(float));
+            g_hookBlend.mask = mask;
+            g_hookBlend.gen = bindingGeneration(BindSlot::Blend);
+            g_hookBlend.valid = true;
+        }
+        return;
+    }
+    const FlatQueryPlan plan = flatQueryCut().plan(FlatQuery::BoundBlend);
+    if (plan == FlatQueryPlan::Shortcut) {
+        *outState = g_hookBlend.state.Get();
+        if (*outState) (*outState)->AddRef();
+        std::memcpy(factor, g_hookBlend.factor, 4 * sizeof(float));
+        *outMask = g_hookBlend.mask;
+        return;
+    }
+    Ptr<ID3D11BlendState> game;
+    UINT mask = 0;
+    ctx->OMGetBlendState(&game, factor, &mask);
+    if (plan == FlatQueryPlan::Sample) {
+        const bool agree = game.Get() == g_hookBlend.state.Get() && mask == g_hookBlend.mask &&
+                           std::memcmp(factor, g_hookBlend.factor, 4 * sizeof(float)) == 0;
+        if (flatQueryCut().compared(FlatQuery::BoundBlend, agree)) {
+            char line[400];
+            flatQueryFallbackLine(line, sizeof(line), FlatQuery::BoundBlend, "the blend last passed to the device was not the bound one");
+            Log::get().note("%s", line);
+        }
+    }
+    g_hookBlend.state = game;
+    std::memcpy(g_hookBlend.factor, factor, 4 * sizeof(float));
+    g_hookBlend.mask = mask;
+    g_hookBlend.gen = bindingGeneration(BindSlot::Blend);
+    g_hookBlend.valid = true;
+    *outState = game.Detach();
+    *outMask = mask;
+}
+
+void flatQueryGameColorTargets(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* colors[6]) {
+    for (unsigned i = 0; i < 6; ++i) colors[i] = nullptr;
+    const bool fresh = g_hookTargets.valid && g_hookTargets.gen == bindingGeneration(BindSlot::Rtv0);
+    if (engineVelocityFlatPending() || !fresh) {
+        ctx->OMGetRenderTargets(6, colors, nullptr);
+        if (!engineVelocityFlatPending()) {
+            for (unsigned i = 0; i < 6; ++i) g_hookTargets.rtv[i] = colors[i];
+            g_hookTargets.gen = bindingGeneration(BindSlot::Rtv0);
+            g_hookTargets.valid = true;
+        }
+        return;
+    }
+    const FlatQueryPlan plan = flatQueryCut().plan(FlatQuery::GameTargets);
+    if (plan == FlatQueryPlan::Shortcut) {
+        for (unsigned i = 0; i < 6; ++i) {
+            colors[i] = g_hookTargets.rtv[i].Get();
+            if (colors[i]) colors[i]->AddRef();
+        }
+        return;
+    }
+    ctx->OMGetRenderTargets(6, colors, nullptr);
+    if (plan == FlatQueryPlan::Sample) {
+        bool agree = true;
+        for (unsigned i = 0; i < 6 && agree; ++i) agree = colors[i] == g_hookTargets.rtv[i].Get();
+        if (flatQueryCut().compared(FlatQuery::GameTargets, agree)) {
+            char line[400];
+            flatQueryFallbackLine(line, sizeof(line), FlatQuery::GameTargets, "the render targets it held were not the bound ones");
+            Log::get().note("%s", line);
+        }
+    }
+    for (unsigned i = 0; i < 6; ++i) g_hookTargets.rtv[i] = colors[i];
+    g_hookTargets.gen = bindingGeneration(BindSlot::Rtv0);
+    g_hookTargets.valid = true;
+}
 
 bool engineVelocityActive() noexcept { return live.load(std::memory_order_acquire); }
 
