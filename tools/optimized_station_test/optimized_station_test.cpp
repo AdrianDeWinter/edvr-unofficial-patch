@@ -1563,15 +1563,15 @@ int main(int argc, char** argv) {
 
     // ---- Release blocker for v0.20.0 (2026-10-14): the seal is for the commander seated in the ship; on foot it never holds -------------------------
     {
-        // Aboard, docked, the pad in the hangar: seals; the seat leaving (Disembark: on foot in the hangar) releases at once, with its own reason.
+        // Aboard, docked, the pad in the hangar: seals. Standing up in that bay keeps the seal. The outside stays dropped.
         se::SealState st;
         se::SealInputs in = inHangar(0);
         check(firstEngage(&st, in, 100, 1000) == 100, "on foot: aboard in the hangar seals");
         in.held = true;
         se::ReleaseWhy why = se::ReleaseWhy::kNone;
         check(se::sealStep(in, &st, &why) == se::SealAction::kNone && why == se::ReleaseWhy::kNone, "on foot: aboard and held keeps the seal");
-        in.aboard = false;   // on foot in the hangar (Flags2 OnFoot | OnFootInHangar): the seat is gone
-        check(se::sealStep(in, &st, &why) == se::SealAction::kRelease && why == se::ReleaseWhy::kOnFoot, "on foot: the seat leaving releases the seal, reason kOnFoot");
+        in.aboard = false;   // on foot in the hangar (Flags2 OnFoot | OnFootInHangar): the seat is gone, the camera is still in the box
+        check(se::sealStep(in, &st, &why) == se::SealAction::kNone && why == se::ReleaseWhy::kNone, "on foot: standing up inside the bay keeps the seal");
         // The release wins over the camera rule: the lift ride up (the camera still inside the tall box) keeps it released, and nothing re-seals on foot.
         in.held = false;
         st = se::SealState{};   // as after a release: no request in flight
@@ -1611,7 +1611,10 @@ int main(int argc, char** argv) {
         check(firstEngage(&st, in, 0, 60000) == 0, "flags unknown: a docked station in the hangar never seals");
         in.held = true;
         se::ReleaseWhy why = se::ReleaseWhy::kNone;
-        check(se::sealStep(in, &st, &why) == se::SealAction::kRelease && why == se::ReleaseWhy::kOnFoot, "flags unknown: a held seal is released");
+        check(se::sealStep(in, &st, &why) == se::SealAction::kNone && why == se::ReleaseWhy::kNone, "flags unknown: still inside the bay, the seal stays");
+        in.cameraOutside = true;
+        in.cameraInBox = false;
+        check(se::sealStep(in, &st, &why) == se::SealAction::kRelease && why == se::ReleaseWhy::kOnFoot, "flags unknown: the camera outside the bay releases");
         // the gate the station applies
         auto aboardOf = [](bool known, bool seated) { return known && seated; };
         check(!aboardOf(false, true) && !aboardOf(true, false) && aboardOf(true, true), "aboard needs the seat known AND seated (a stale 'seated' with the sample unknown is not aboard)");
@@ -3135,10 +3138,14 @@ int main(int argc, char** argv) {
         in.held = true;
         in.originShifted = true;
         in.nowMs = 100;
+        check(se::sealStep(in, &st, &w) == se::SealAction::kNone && w == se::ReleaseWhy::kNone,
+              "transition (a): an origin shift inside the bay, the camera still in the box, keeps the seal");
+        in.cameraOutside = true;
+        in.cameraInBox = false;
         check(se::sealStep(in, &st, &w) == se::SealAction::kRelease && w == se::ReleaseWhy::kOriginShift,
-              "transition (a): a held seal released by the origin shift while the seat still reads aboard");
+              "transition (a): an origin shift with the camera outside the bay still releases");
         check(st.holdUntilMs == 100 + se::kTransitionHoldMs && !st.requested && st.reseal == 0 && !st.mechanism,
-              "transition (a): the release starts the hold (now + kTransitionHoldMs) and asks for no edge");
+              "transition (a): that release starts the hold (now + kTransitionHoldMs) and asks for no edge");
     }
     {
         // (a2) the guard: a held seal whose own pad's record is missing from kPadMissingPasses passes in a row is released, held like an origin shift, no edge needed
@@ -3167,7 +3174,7 @@ int main(int argc, char** argv) {
         in2.padMissing = true;
         in2.originShifted = true;
         in2.nowMs = 100;
-        check(se::sealStep(in2, &st2, &w) == se::SealAction::kRelease && w == se::ReleaseWhy::kOriginShift, "pad missing: an origin shift on the same tick is released as the origin shift");
+        check(se::sealStep(in2, &st2, &w) == se::SealAction::kRelease && w == se::ReleaseWhy::kPadMissing, "pad missing: an origin shift inside the bay does not hide the guard");
         se::SealState st3;
         se::SealInputs in3 = inHangar(0);
         se::sealStep(in3, &st3, &w);
@@ -3994,6 +4001,10 @@ int main(int argc, char** argv) {
         check(!cc::concourseSocialOnFoot(0x00014009u, true, false), "concourse gate: without gameplay it is off (a leftover on-foot bit must not cull the main menu's hangar)");
         check(!cc::concourseSocialOnFoot(0x00014009u, false, true), "concourse gate: with the on-foot word unknown it is off");
         check(!cc::concourseSocialOnFoot(0x00002009u, true, true), "concourse gate: the hangar bits (bit 13) without bit 14 are off");
+        check(cc::concourseCullGate(true, true, false, false) && !cc::concourseCullGate(true, true, false, true),
+              "concourse gate: on foot in the hangar does not run the room list");
+        check(!cc::concourseCullGate(true, true, true, false) && !cc::concourseCullGate(false, true, false, false),
+              "concourse gate: a sealed hangar, or the key off, stays off");
         check(!cc::concourseSocialOnFoot(0u, true, true), "concourse gate: Flags2 0 is off");
         check(!cc::concourseSocialOnFoot(0x00004000u, true, true) && !cc::concourseSocialOnFoot(0x00000001u, true, true), "concourse gate: each of bit 0 and bit 14 alone is off");
 
@@ -4021,6 +4032,25 @@ int main(int argc, char** argv) {
         check(cc::concourseJudge(true, false, true, 40.0f, 25.0f, false) == cc::Judge::kKeepSmallClose && cc::concourseJudge(true, false, true, 40.01f, 25.0f, false) == cc::Judge::kCull &&
                   cc::concourseJudge(true, false, true, 40.0f, 25.01f, false) == cc::Judge::kCull,
               "concourse judge: small and close is radius at most 25 m and distance at most 40 m, both edges inclusive");
+        check(cc::kOpenCabinCloseM == 48.0f, "open cabin: the wider keep is 48 m");
+        check(cc::kOpenCabinPastM == 1.0f, "open cabin: the doorway reach is the cabin sphere plus 1 m");
+        check(cc::openCabinReach(1.83f, 2.40f) && cc::openCabinReach(2.32f, 2.40f) && cc::openCabinReach(3.40f, 2.40f),
+              "open cabin: the threshold and a step past the door stay in the wider keep");
+        check(!cc::openCabinReach(3.41f, 2.40f) && !cc::openCabinReach(1.83f, 0.0f) && !cc::openCabinReach(std::nanf(""), 2.40f),
+              "open cabin: past the doorway, or with no cabin sphere, the 40 m rule returns");
+        check(cc::concourseJudge(true, false, true, 41.0f, 10.0f, false) == cc::Judge::kCull &&
+                  cc::concourseJudge(true, false, true, 41.0f, 10.0f, false, false, false, true) == cc::Judge::kKeepSmallClose,
+              "open cabin: a small floor panel just past 40 m is kept only while the camera is inside the cabin");
+        check(cc::concourseJudge(true, false, true, 48.0f, 25.0f, false, false, false, true) == cc::Judge::kKeepSmallClose &&
+                  cc::concourseJudge(true, false, true, 48.01f, 25.0f, false, false, false, true) == cc::Judge::kCull &&
+                  cc::concourseJudge(true, false, true, 48.0f, 25.01f, false, false, false, true) == cc::Judge::kCull,
+              "open cabin: radius at most 25 m and distance at most 48 m, both edges inclusive");
+        check(cc::concourseJudge(true, false, true, 5.0f, 300.0f, false, false, false, true) == cc::Judge::kCull,
+              "open cabin: a large record around the camera stays culled");
+        check(cc::concourseJudge(true, false, true, 41.0f, 10.0f, false, true, false, true) == cc::Judge::kCull,
+              "open cabin: the shut-cabin lift rule still wins");
+        check(cc::concourseJudge(true, false, true, 5.0f, 2.0f, false, false, true, true) == cc::Judge::kCull,
+              "open cabin: the look still wins");
         check(cc::concourseJudge(true, false, true, std::nanf(""), 10.0f, false) == cc::Judge::kKeepUnreadableSphere &&
                   cc::concourseJudge(true, false, true, 10.0f, std::nanf(""), false) == cc::Judge::kKeepUnreadableSphere &&
                   cc::concourseJudge(true, false, true, 10.0f, 0.0f, false) == cc::Judge::kKeepUnreadableSphere,
@@ -4444,7 +4474,11 @@ int main(int argc, char** argv) {
             check(cc::concourseJudge(true, true, true, 10.3f, 2.4f, false, true) == cc::Judge::kKeepSmallClose && cc::concourseJudge(true, true, true, 0.9f, 2.4f, false, true) == cc::Judge::kKeepSmallClose,
                   "lift judge: a small record within 8 m of the surface is kept (the cabin, 2.4 m radius, 0.9 m away)");
             check(cc::concourseJudge(true, true, true, 10.5f, 2.4f, false, true) == cc::Judge::kCull, "lift judge: a surface just over 8 m is culled");
-            check(cc::concourseJudge(true, true, true, 8.0f, 30.0f, false, true) == cc::Judge::kCull, "lift judge: a large record (radius over 25 m) is culled even when the camera is inside it");
+            check(cc::concourseJudge(true, true, true, 32.0f, 29.3f, false, true) == cc::Judge::kKeepSmallClose, "lift judge: HangarLobby in front of the doors is kept");
+            check(cc::concourseJudge(true, true, true, 40.0f, 29.3f, false, true) == cc::Judge::kCull, "lift judge: HangarLobby whose surface is past 8 m is culled");
+            check(cc::concourseJudge(true, true, true, 0.0f, 42.3f, false, true) == cc::Judge::kKeepSmallClose, "lift judge: the floor hub is kept while the camera is inside it");
+            check(cc::concourseJudge(true, true, true, 0.0f, 90.7f, false, true) == cc::Judge::kCull, "lift judge: the exterior shell is culled even though the camera is inside its sphere");
+            check(cc::concourseJudge(true, true, true, 8.0f, 30.0f, false, true) == cc::Judge::kKeepSmallClose, "lift judge: a record the camera is inside, up to the floor radius, is kept");
             check(cc::concourseJudge(true, true, true, 5000.0f, 900.0f, true, true) == cc::Judge::kCull && cc::concourseJudge(true, true, true, 40.0f, 3.0f, true, true) == cc::Judge::kCull &&
                       cc::concourseJudge(true, true, true, 3.0f, 3.0f, true, true) == cc::Judge::kKeepSmallClose && cc::concourseJudge(true, true, true, 5000.0f, 900.0f, true, false) == cc::Judge::kKeepName,
                   "lift judge: the far exemption (the anchor, the hub, extra keep names) does not apply: a far one is culled, a near small one kept; without the lift it is still kept"); 

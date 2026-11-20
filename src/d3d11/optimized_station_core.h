@@ -1895,8 +1895,8 @@ inline bool fullGatherPass(uint32_t stamp, bool engagePending, bool sealed) noex
 // fresh), the setting is on, Status says docked, the pad pick and cell are valid, and the camera is in the bay for kCameraFrames. Seal at once: no
 // stillness clock, no load-in or arrival rule, no fallback. Releases: setting off, undocked, the camera left, the mechanism moved, the pad moved,
 // the hangar changed, and the own pad leaving the hangar (the r1 1 to 0 edge). A release by the mechanism, the pad moving or the pad leaving the
-// hangar needs a fresh in-hangar edge (0 then 1 of r1) before the next seal; a camera or setting release does not. Built 2026-10-15: an origin shift (a
-// boarding or disembark) releases the seal, or holds the next request, for kTransitionHoldMs; the hold gates the request, not the pose and camera runs.
+// hangar needs a fresh in-hangar edge (0 then 1 of r1) before the next seal; a camera or setting release does not. An origin shift outside the bay releases
+// the seal, or holds the next request, for kTransitionHoldMs. Standing up inside the bay, the pad still in it, keeps the seal. The hold gates the request, not the pose and camera runs.
 inline SealAction sealStep(const SealInputs& in, SealState* st, ReleaseWhy* why) noexcept {
     *why = ReleaseWhy::kNone;
     st->holdBlocked = false;
@@ -1917,10 +1917,14 @@ inline SealAction sealStep(const SealInputs& in, SealState* st, ReleaseWhy* why)
         st->camInRun = 0;
     }
     if (in.held) {
+        // On foot in the bay, the pad still in it and the camera still inside the box: the seal stays. Standing up re-bases the origin; that is not a reason to draw the outside.
+        // The concourse and a camera that has left the box still release.
+        const bool walkingTheBay = !in.aboard && in.inHangar && in.r1Fresh && in.cameraInBox && !in.cameraOutside;
+        const bool shiftInBay = in.originShifted && in.inHangar && in.r1Fresh && in.cameraInBox && !in.cameraOutside;
         ReleaseWhy w = ReleaseWhy::kNone;
         if (!in.docked) w = ReleaseWhy::kUndocked;
-        else if (!in.aboard) w = ReleaseWhy::kOnFoot;   // the seat left: on foot in the hangar, the lift, the concourse. No edge is needed to seal again when the seat comes back
-        else if (in.originShifted) w = ReleaseWhy::kOriginShift;   // built 2026-10-15: the commander is boarding or disembarking (the origin re-based): held kTransitionHoldMs
+        else if (!in.aboard && !walkingTheBay) w = ReleaseWhy::kOnFoot;   // the seat left outside the bay. No edge is needed to seal again when the seat comes back
+        else if (in.originShifted && !shiftInBay) w = ReleaseWhy::kOriginShift;   // an origin re-base outside the bay: held kTransitionHoldMs
         else if (st->camOutRun >= kCameraFrames) w = ReleaseWhy::kCameraLeft;
         else if (in.mechanismMoved) w = ReleaseWhy::kMechanism;   // the hatch or the lift moved: the launch
         else if (in.padMoved) w = ReleaseWhy::kPadMoved;

@@ -1623,7 +1623,7 @@ static void selfTest() {
         static const Former former[] = {
             {"kConcourseBakeBytecode", "concourse_bake", "cs_5_0", 0xD963EA1C4994EA80ull},
             {"kConcourseVrBakeBytecode", "concourse_bake_vr", "cs_5_0", 0x6F4E122A7B402059ull},
-            {"kConcourseBackdropShowBytecode", "concourse_backdrop_show", "ps_5_0", 0x0D3682D6B15A8846ull},
+            {"kConcourseBackdropShowBytecode", "concourse_backdrop_show", "ps_5_0", 0x7E95E3663022402Dull},
             {"kConcourseBackdropCaptureBytecode", "concourse_backdrop_capture", "ps_5_0", 0xED04F1FC6A66AC67ull},
             {"kConcourseBackdropProbeBytecode", "concourse_backdrop_probe", "ps_5_0", 0x1A1F3D87F5EB8498ull},
             {"kConcourseWhiteBytecode", "concourse_pane_white", "ps_5_0", 0x5E83FE5AC04828D4ull},
@@ -1637,7 +1637,10 @@ static void selfTest() {
             check(!std::strcmp(shader.symbol, former[i].symbol) && !std::strcmp(shader.sourceName, former[i].sourceName) && !std::strcmp(shader.entry, "main") &&
                   !std::strcmp(shader.profile, former[i].profile) && shader.macros == nullptr && shader.flags1 == 0 && shader.flags2 == 0,
                   "a concourse shader's symbol, source name, entry, profile and flags are its former compile call's");
-            check(fingerprint.hash == former[i].textHash, "a concourse shader's text is the text the runtime compiled");
+            char hashMsg[120];
+            std::snprintf(hashMsg, sizeof(hashMsg), "a concourse shader's text is the text the runtime compiled (%s %016llX)",
+                          shader.sourceName, fingerprint.hash);
+            check(fingerprint.hash == former[i].textHash, hashMsg);
             check(compile(compiler.fn, text.c_str(), shader, true) && shader.bytes.size() > 4 && !std::memcmp(shader.bytes.data(), "DXBC", 4),
                   "a concourse shader compiles");
         }

@@ -277,6 +277,11 @@ inline std::string backdropShowHlsl() {
         "    float3 s = backdropS(i, dir, t);\n"
         "    pictureDepth = cb1[273].z / max(t * dot(dir, float3(cb1[270].w, cb1[271].w, cb1[272].w)), 1.0);\n"
         "    float4 acc = lookup(s, glassB.x, 7.0);\n"
+        // The floor in front of the lift faces up and sits inside the room's cut, so the bake never wrote it. Leave the game's own pixel.
+        "    float ul = length(up.xyz);\n"
+        "    float3 nn = i.n * rsqrt(max(dot(i.n, i.n), 1e-12));\n"
+        "    float facing = ul > 0.5 ? abs(dot(nn, up.xyz / ul)) : 0.0;\n"
+        "    if (acc.a <= 0.02 && facing > 0.85) discard;\n"
         // Flight 25: a hole took the window's level, and that is 4 on a skylight: white shapes where the bake left the room's things out. Colour over coverage takes the neighbours'
         // colour instead, and only a direction with nothing near it falls back. The sheen is the level's colour at no more than 1, so a bright window is not a washed-out one.
         "    float3 base = (acc.a > 0.02 ? acc.rgb / acc.a : fb) * glassA.rgb;\n"
