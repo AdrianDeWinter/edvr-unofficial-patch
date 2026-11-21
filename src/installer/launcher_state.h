@@ -16,6 +16,10 @@
 //   language           Elite's language, as min-ed-launcher stores it: en, or a
 //                      language folder name (de, es, fr, pt-BR, ru). Missing means
 //                      the Windows language.
+//   vr_3d_mode         the <StereoscopicMode> number written to Elite's Settings.xml for Play VR
+//                      when the store route does not pass /vr (2 = Side by Side, 3 = HMD (Headphones),
+//                      4 = HMD (Speakers), 5 = HMD Cinema, 6 = Mode 6), or "auto" / missing to keep
+//                      and remember whatever VR mode Settings.xml already holds.
 //
 // A line this code does not know (another version's key, a comment) is kept as
 // it was, in place, so a newer launcher's file survives an older one. Saving is
@@ -77,6 +81,10 @@ public:
     // Empty when the file does not name one. Not checked against the known codes.
     std::string language() const;
     void setLanguage(const std::string& code);
+
+    // Preferred VR StereoscopicMode (2..6), or 0 when unset/"auto".
+    int vrStereoMode() const;
+    void setVrStereoMode(int mode);
 
     // The same folder by modeKey's rules: case, slash direction and a trailing separator do not count.
     static bool sameInstall(const std::wstring& a, const std::wstring& b);

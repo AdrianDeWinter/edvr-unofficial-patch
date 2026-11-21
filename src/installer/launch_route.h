@@ -112,10 +112,13 @@ std::wstring defaultEliteSettingsXmlPath();
 // Prepares Elite's Settings.xml for a launch (`vr` = true for VR, false for flat) before starting the
 // store client. Refuses if `gameExeName` (when non-empty) is already running. For flat, replaces only
 // the inner value of <StereoscopicMode> with "0" after backing up the file into `backupDir`. For VR,
-// keeps any recorded headset mode (2..6) unchanged and refuses 0, 1, or an absent/unparseable tag without
-// modifying the file. A parse failure writes nothing.
+// writes `preferredVrMode` when it is 2..6 (backing up first), or keeps any existing headset mode 2..6
+// when `preferredVrMode` is 0 (auto) and refuses 0, 1, or an absent/unparseable tag without modifying
+// the file. When `observedVrMode` is non-null and Settings.xml currently holds a VR mode 2..6, writes
+// that mode to `*observedVrMode` (even on a flat launch before overwriting with 0) so the caller can
+// remember it for alternating back to VR. A parse failure writes nothing.
 bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std::wstring& backupDir, bool vr,
-                                 std::string* error,
+                                 int preferredVrMode, std::string* error, int* observedVrMode = nullptr,
                                  const std::wstring& gameExeName = L"EliteDangerous64.exe");
 
 // The names the watcher looks for, so that a rig can use programs of its own.

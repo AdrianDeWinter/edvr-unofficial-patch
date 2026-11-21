@@ -243,6 +243,7 @@ LauncherSession::LauncherSession(SessionEnv env) : env_(std::move(env)) {
         directLaunch_ = state.directLaunch();
         closeAfterStart_ = state.closeAfterStart();
         steamFrontierLogin_ = state.steamFrontierLogin();
+        vrStereoMode_ = state.vrStereoMode();
     }
 }
 
@@ -267,6 +268,20 @@ void LauncherSession::setLanguage(const std::string& code) {
     state.setLanguage(code);
     createDirectories(env_.roots.launcherDir());
     state.save(nullptr);
+}
+
+void LauncherSession::setVrStereoMode(int mode) {
+    const int normalized = (mode >= 2 && mode <= 6) ? mode : 0;
+    if (normalized == vrStereoMode_) return;
+    vrStereoMode_ = normalized;
+    LauncherState state;
+    std::string error;
+    if (state.load(launcherIniPath(env_.roots), &error)) {
+        state.setVrStereoMode(normalized);
+        createDirectories(env_.roots.launcherDir());
+        state.save(&error);
+    }
+    changed();
 }
 
 void LauncherSession::setCloseAfterStart(bool on) {
@@ -372,10 +387,16 @@ void LauncherSession::startRouteAndWatch(const std::wstring& source, const std::
         return;
     }
     if (!route.carriesMode && env_.prepareLaunchMode) {
-        if (!env_.prepareLaunchMode(vr, &error)) {
+        int observedVrMode = 0;
+        if (!env_.prepareLaunchMode(vr, vrStereoMode_, &observedVrMode, &error)) {
             playLine_ = error.empty() ? "Elite's Settings.xml could not be updated for this launch." : error;
             changed();
             return;
+        }
+        // When vr_3d_mode is unset (auto), remember the VR mode observed in Settings.xml so
+        // alternating Flat -> VR restores the user's exact 3D mode on the next VR launch.
+        if (vrStereoMode_ == 0 && observedVrMode >= 2 && observedVrMode <= 6) {
+            setVrStereoMode(observedVrMode);
         }
     }
     if (!startRoute(route, ops, elevated, &error)) {

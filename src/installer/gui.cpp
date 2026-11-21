@@ -1591,7 +1591,11 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
         case WM_DRAWITEM: {
             const DRAWITEMSTRUCT* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
-            if (item->CtlID == kIdCombo || item->CtlID == kIdScope || item->CtlID == kIdLanguage) {
+            if (item->CtlID == kIdCombo || item->CtlID == kIdScope || item->CtlID == kIdLanguage
+#ifdef EDUP_LAUNCHER
+                || item->CtlID == kIdVrMode
+#endif
+            ) {
                 ui::drawComboItem(item, g.dpi);
                 return TRUE;
             }
@@ -1601,7 +1605,11 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
         case WM_MEASUREITEM: {
             MEASUREITEMSTRUCT* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
-            if (measure->CtlID == kIdCombo || measure->CtlID == kIdScope || measure->CtlID == kIdLanguage) {
+            if (measure->CtlID == kIdCombo || measure->CtlID == kIdScope || measure->CtlID == kIdLanguage
+#ifdef EDUP_LAUNCHER
+                || measure->CtlID == kIdVrMode
+#endif
+            ) {
                 measure->itemHeight = static_cast<UINT>(dp(24));
                 return TRUE;
             }

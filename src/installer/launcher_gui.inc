@@ -21,6 +21,20 @@ enum : int {
     kIdDirect = 1085,
     kIdCloseAfter = 1086,
     kIdSteamFrontier = 1087,
+    kIdVrMode = 1088,
+};
+
+struct VrModeChoice {
+    int mode;
+    const wchar_t* label;
+};
+// Elite Dangerous's in-game Options > Graphics > 3D VR modes, in dropdown order.
+const VrModeChoice kVrModeChoices[] = {
+    {0, L"Auto (from Settings.xml)"},
+    {3, L"HMD (Headphones)"},
+    {4, L"HMD (Speakers)"},
+    {2, L"Side by Side"},
+    {5, L"HMD Cinema"},
 };
 
 // Posted by the session's worker threads: lParam is a heap std::function<void()> to run here.
@@ -39,6 +53,8 @@ struct LauncherGui {
     HWND direct = nullptr;           // "Start Elite directly", for Steam / Frontier / Epic installs
     HWND closeAfter = nullptr;       // "Close the launcher once Elite has started", saved in launcher.ini
     HWND steamFrontier = nullptr;    // "Use Frontier account login", for Steam direct launch
+    HWND vrMode = nullptr;           // preferred VR StereoscopicMode (0=auto, 2..5) for Settings.xml routes
+    RECT vrModeLabelPx{};            // painted "VR 3D mode" label beside vrMode
     std::unique_ptr<LauncherSession> session;
     std::wstring playCaption;        // beside or under the Play buttons, for the folder shown
     int directLeft = 0;              // where the "Start Elite directly" checkbox starts, in design units
@@ -179,7 +195,8 @@ void updateLauncherControls() {
     // launcher starts Elite itself, and Epic's once the skip-the-launcher checkbox is on. The
     // checkbox is offered for Steam, for Frontier's own store, and for Epic.
     lg.playCaption.clear();
-    bool showPlay = false, showPair = false, showDirect = false, showSteamFrontier = false, playEnabled = false;
+    bool showPlay = false, showPair = false, showDirect = false, showSteamFrontier = false, showVrMode = false,
+         playEnabled = false;
     bool showVrButton = false, showFlatButton = false;  // within the pair: only the modes this folder has installed
     if (survey) {
         const LaunchRoute& route = launcherRouteFor(g.survey.game.source, g.survey.game.dir);
@@ -204,6 +221,7 @@ void updateLauncherControls() {
             showPair = true;
             showVrButton = hasVr;
             showFlatButton = hasFlat;
+            showVrMode = !directOn && route.kind != RouteKind::Frontier && hasVr;
             const bool steamFrontierOn = showSteamFrontier && lg.session->steamFrontierLogin();
             if (route.kind == RouteKind::Frontier || directOn) {
                 lg.playCaption = directOn ? (epic ? tr(L"Signs in to Epic and Frontier, starts Elite itself, and exits once Elite is running.")
@@ -232,8 +250,8 @@ void updateLauncherControls() {
     ShowWindow(lg.playVr, onScreen && showPair && showVrButton ? SW_SHOW : SW_HIDE);
     ShowWindow(lg.playFlat, onScreen && showPair && showFlatButton ? SW_SHOW : SW_HIDE);
     // Left to right: Play VR, then Play flat. A lone pair button takes the first slot.
-    MoveWindow(lg.playVr, dp(kMargin + kCardPad), dp(682), dp(114), dp(34), TRUE);
-    MoveWindow(lg.playFlat, dp(kMargin + kCardPad + (showVrButton ? 122 : 0)), dp(682), dp(114), dp(34), TRUE);
+    MoveWindow(lg.playVr, dp(kMargin + kCardPad), dp(680), dp(114), dp(34), TRUE);
+    MoveWindow(lg.playFlat, dp(kMargin + kCardPad + (showVrButton ? 122 : 0)), dp(680), dp(114), dp(34), TRUE);
     for (HWND button : {lg.play, lg.playVr, lg.playFlat}) EnableWindow(button, playEnabled);
 
     // The checkbox sits right of whichever Play buttons are showing, and what is under
@@ -242,9 +260,11 @@ void updateLauncherControls() {
     EnableWindow(lg.direct, !lg.session->playing() && !busy);
     if (ui::checkboxChecked(lg.direct) != lg.session->directLaunch()) ui::toggleCheckbox(lg.direct);
     lg.directLeft = kMargin + kCardPad + (showPair ? 248 : 134);
-    MoveWindow(lg.direct, dp(lg.directLeft), dp(680), dp(kClientWidth - kMargin - kCardPad - lg.directLeft), dp(20), TRUE);
+    MoveWindow(lg.direct, dp(lg.directLeft), dp(678), dp(kClientWidth - kMargin - kCardPad - lg.directLeft), dp(20), TRUE);
 
-    // Bottom options row inside the Launch card: close-after-start and (for Steam direct launch) Frontier login.
+    // Bottom options row inside the Launch card: close-after-start on the left, and either
+    // Steam Frontier login (when Steam direct launch is on) or VR 3D mode selector (when Steam/Epic
+    // writes Settings.xml) on the right.
     ShowWindow(lg.closeAfter, onScreen ? SW_SHOW : SW_HIDE);
     EnableWindow(lg.closeAfter, !busy);
     if (ui::checkboxChecked(lg.closeAfter) != lg.session->closeAfterStartSetting()) ui::toggleCheckbox(lg.closeAfter);
@@ -252,6 +272,21 @@ void updateLauncherControls() {
     EnableWindow(lg.steamFrontier, !lg.session->playing() && !busy);
     if (lg.steamFrontier && ui::checkboxChecked(lg.steamFrontier) != lg.session->steamFrontierLoginSetting())
         ui::toggleCheckbox(lg.steamFrontier);
+    if (lg.vrMode) {
+        ShowWindow(lg.vrMode, onScreen && showVrMode ? SW_SHOW : SW_HIDE);
+        EnableWindow(lg.vrMode, !lg.session->playing() && !busy);
+        const int wantMode = lg.session->vrStereoMode();
+        LRESULT match = 0;
+        const LRESULT count = SendMessageW(lg.vrMode, CB_GETCOUNT, 0, 0);
+        for (LRESULT i = 0; i < count; ++i) {
+            if (static_cast<int>(SendMessageW(lg.vrMode, CB_GETITEMDATA, static_cast<WPARAM>(i), 0)) == wantMode) {
+                match = i;
+                break;
+            }
+        }
+        if (SendMessageW(lg.vrMode, CB_GETCURSEL, 0, 0) != match)
+            SendMessageW(lg.vrMode, CB_SETCURSEL, static_cast<WPARAM>(match), 0);
+    }
 }
 
 void launcherRefresh() {
@@ -268,13 +303,30 @@ void launcherRefresh() {
 void layoutLauncherControls() {
     if (!lg.update) return;
     // These are not in `places`, so a change of scale does not reach their font on its own.
-    for (HWND control : {lg.update, lg.rc, lg.play, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter, lg.steamFrontier})
+    for (HWND control :
+         {lg.update, lg.rc, lg.play, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter, lg.steamFrontier, lg.vrMode})
         if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().body), TRUE);
-    MoveWindow(lg.playVr, dp(kMargin + kCardPad), dp(682), dp(114), dp(34), TRUE);
-    MoveWindow(lg.playFlat, dp(kMargin + kCardPad + 122), dp(682), dp(114), dp(34), TRUE);
-    MoveWindow(lg.play, dp(kMargin + kCardPad), dp(682), dp(124), dp(34), TRUE);
-    MoveWindow(lg.closeAfter, dp(kMargin + kCardPad), dp(732), dp(344), dp(22), TRUE);
-    if (lg.steamFrontier) MoveWindow(lg.steamFrontier, dp(396), dp(732), dp(kClientWidth - kMargin - kCardPad - 396), dp(22), TRUE);
+    MoveWindow(lg.playVr, dp(kMargin + kCardPad), dp(680), dp(114), dp(34), TRUE);
+    MoveWindow(lg.playFlat, dp(kMargin + kCardPad + 122), dp(680), dp(114), dp(34), TRUE);
+    MoveWindow(lg.play, dp(kMargin + kCardPad), dp(680), dp(124), dp(34), TRUE);
+    MoveWindow(lg.closeAfter, dp(kMargin + kCardPad), dp(730), dp(338), dp(22), TRUE);
+    if (lg.steamFrontier)
+        MoveWindow(lg.steamFrontier, dp(396), dp(730), dp(kClientWidth - kMargin - kCardPad - 396), dp(22), TRUE);
+    if (lg.vrMode) {
+        const int cardRight = dp(kClientWidth - kMargin - kCardPad);
+        const int comboW = dp(192);
+        const int comboLeft = cardRight - comboW;
+        const int comboTop = dp(727);
+        MoveWindow(lg.vrMode, comboLeft, comboTop, comboW, dp(26), TRUE);
+        SendMessageW(lg.vrMode, CB_SETITEMHEIGHT, 0, dp(24));
+        SendMessageW(lg.vrMode, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), dp(20));
+        RECT rc{};
+        GetWindowRect(lg.vrMode, &rc);
+        const int frame = (rc.bottom - rc.top) - dp(20);
+        const int fieldItem = dp(26) - frame;
+        if (fieldItem > 0) SendMessageW(lg.vrMode, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), fieldItem);
+        lg.vrModeLabelPx = RECT{dp(386), comboTop, comboLeft - dp(6), comboTop + dp(26)};
+    }
     updateLauncherControls();
 }
 
@@ -314,8 +366,30 @@ void paintLauncherBand(HDC dc) {
     const bool single = lg.play && IsWindowVisible(lg.play);
     const bool underCheckbox = lg.direct && IsWindowVisible(lg.direct);
     const int captionLeft = underCheckbox ? lg.directLeft : pair ? kMargin + kCardPad + 244 : single ? kMargin + kCardPad + 134 : kMargin + kCardPad;
-    RECT caption{dp(captionLeft), dp(underCheckbox ? 701 : 682), dp(kClientWidth - kMargin - kCardPad), dp(730)};
+    RECT caption{dp(captionLeft), dp(underCheckbox ? 698 : 680), dp(kClientWidth - kMargin - kCardPad), dp(725)};
     ui::drawText(dc, lg.playCaption, caption, f.caption, t.subtext, DT_LEFT | DT_VCENTER | DT_WORDBREAK | DT_END_ELLIPSIS);
+    if (lg.vrMode && IsWindowVisible(lg.vrMode)) {
+        ui::drawText(dc, tr(L"VR 3D mode"), lg.vrModeLabelPx, f.caption, t.subtext,
+                     DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+}
+
+void refillVrModeChoices() {
+    if (!lg.vrMode) return;
+    int selectedMode = lg.session ? lg.session->vrStereoMode() : 0;
+    const LRESULT cur = SendMessageW(lg.vrMode, CB_GETCURSEL, 0, 0);
+    if (cur != CB_ERR)
+        selectedMode = static_cast<int>(SendMessageW(lg.vrMode, CB_GETITEMDATA, static_cast<WPARAM>(cur), 0));
+    SendMessageW(lg.vrMode, CB_RESETCONTENT, 0, 0);
+    LRESULT match = 0;
+    for (const VrModeChoice& choice : kVrModeChoices) {
+        const LRESULT idx = SendMessageW(lg.vrMode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(tr(choice.label)));
+        if (idx >= 0) {
+            SendMessageW(lg.vrMode, CB_SETITEMDATA, static_cast<WPARAM>(idx), static_cast<LPARAM>(choice.mode));
+            if (choice.mode == selectedMode) match = idx;
+        }
+    }
+    SendMessageW(lg.vrMode, CB_SETCURSEL, static_cast<WPARAM>(match), 0);
 }
 
 void refillScopeChoices() {
@@ -361,6 +435,7 @@ void applyLauncherLanguage(const std::string& code) {
     setControlText(kIdShowFolder, L"Show folder");
     if (g.search) SendMessageW(g.search, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(tr(L"Search settings")));
     refillScopeChoices();
+    refillVrModeChoices();
     if (g.languageCombo) {
         const LRESULT count = SendMessageW(g.languageCombo, CB_GETCOUNT, 0, 0);
         for (LRESULT i = 0; i < count; ++i) {
@@ -398,7 +473,16 @@ void createLauncherControls(HWND window) {
     lg.direct = ui::makeCheckbox(window, L"Start Elite directly (no Frontier launcher)", kIdDirect, false, f.body);
     lg.closeAfter = ui::makeCheckbox(window, L"Close the launcher once Elite has started", kIdCloseAfter, false, f.body);
     lg.steamFrontier = ui::makeCheckbox(window, L"Use Frontier account login", kIdSteamFrontier, false, f.body);
-    for (HWND control : {lg.update, lg.rc, lg.play, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter, lg.steamFrontier})
+    lg.vrMode = CreateWindowExW(0, L"COMBOBOX", L"",
+                                WS_CHILD | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST |
+                                    CBS_OWNERDRAWFIXED | CBS_HASSTRINGS,
+                                0, 0, 10, 10, window,
+                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdVrMode)), nullptr, nullptr);
+    SendMessageW(lg.vrMode, WM_SETFONT, reinterpret_cast<WPARAM>(f.body), TRUE);
+    if (ui::theme().dark) SetWindowTheme(lg.vrMode, L"DarkMode_CFD", nullptr);
+    refillVrModeChoices();
+    for (HWND control :
+         {lg.update, lg.rc, lg.play, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter, lg.steamFrontier, lg.vrMode})
         ShowWindow(control, SW_HIDE);
 }
 
@@ -462,8 +546,9 @@ void launcherBegin() {
         return started;
     };
     const std::wstring settingsBackupDir = joinPath(env.roots.launcherDir(), L"backups");
-    env.prepareLaunchMode = [settingsBackupDir](bool vr, std::string* error) {
-        return prepareSettingsXmlForLaunch(defaultEliteSettingsXmlPath(), settingsBackupDir, vr, error);
+    env.prepareLaunchMode = [settingsBackupDir](bool vr, int preferredVrMode, int* observedVrMode, std::string* error) {
+        return prepareSettingsXmlForLaunch(defaultEliteSettingsXmlPath(), settingsBackupDir, vr, preferredVrMode, error,
+                                           observedVrMode);
     };
     lg.session.reset(new LauncherSession(env));
     lg.session->start();
@@ -500,7 +585,16 @@ void runLauncherJob(LPARAM param) {
 
 // WM_COMMAND for the launcher's own controls. True when it was one of them.
 bool launcherCommand(int id, int code) {
-    if (code != BN_CLICKED || !lg.session) return false;
+    if (!lg.session) return false;
+    if (id == kIdVrMode && code == CBN_SELCHANGE) {
+        const LRESULT index = SendMessageW(lg.vrMode, CB_GETCURSEL, 0, 0);
+        if (index != CB_ERR) {
+            const int mode = static_cast<int>(SendMessageW(lg.vrMode, CB_GETITEMDATA, static_cast<WPARAM>(index), 0));
+            lg.session->setVrStereoMode(mode);
+        }
+        return true;
+    }
+    if (code != BN_CLICKED) return false;
     switch (id) {
         case kIdUpdate:
             lg.session->beginUpdate();

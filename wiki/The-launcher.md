@@ -32,7 +32,17 @@ From a script, Steam Launch Options, or another launcher such as `min-ed-launche
 "%LOCALAPPDATA%\EDVR\launcher\ed-up-launcher.exe" --update --install --dir "C:\Path\To\Products\elite-dangerous-odyssey-64"
 ```
 
-Every store offers **Play VR** and **Play flat** (filtered to the modes installed in that folder). Frontier's launcher takes `/vr` or `/novr` on its command line. For Steam and Epic without direct launch, the launcher updates `<StereoscopicMode>` in Elite's `Settings.xml` before opening Steam or Epic (backing up `Settings.xml` first): **Play flat** writes `0`, while **Play VR** keeps your existing headset mode (`2`–`6`) unchanged and stops if no headset mode is recorded yet. See [Playing](Playing.md).
+Every store offers **Play VR** and **Play flat** (filtered to the modes installed in that folder). Frontier's launcher takes `/vr` or `/novr` on its command line. For Steam and Epic without direct launch, the launcher updates `<StereoscopicMode>` in Elite's `Settings.xml` before opening Steam or Epic (backing up `Settings.xml` to `backups\Settings.xml.bak` first):
+
+- **Play flat** writes `0` (Off). If `Settings.xml` held a VR mode (`2`–`6`) and **VR 3D mode** was still on `Auto`, the launcher automatically remembers that mode in `launcher.ini` (`vr_3d_mode`) so toggling back to **Play VR** restores it.
+- **Play VR** writes your chosen **VR 3D mode** from the Launch panel (stored as `vr_3d_mode` in `launcher.ini`):
+  - **HMD (Headphones)** (`3`)
+  - **HMD (Speakers)** (`4`)
+  - **Side by Side** (`2`)
+  - **HMD Cinema** (`5`)
+  - **Auto (from Settings.xml)** (`auto`): keeps whichever VR mode `Settings.xml` already holds, and stops without modifying the file if `Settings.xml` is flat (`0`/`1`) or unset.
+
+See [Playing](Playing.md).
 
 An Epic copy is handed to the Epic launcher. Play does not ask for a Frontier password for that install.
 

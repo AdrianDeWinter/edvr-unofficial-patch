@@ -145,6 +145,16 @@ std::string LauncherState::language() const { return get("language"); }
 
 void LauncherState::setLanguage(const std::string& code) { set("language", code); }
 
+int LauncherState::vrStereoMode() const {
+    const std::string value = get("vr_3d_mode");
+    if (value.size() == 1 && value[0] >= '2' && value[0] <= '6') return value[0] - '0';
+    return 0;
+}
+
+void LauncherState::setVrStereoMode(int mode) {
+    set("vr_3d_mode", (mode >= 2 && mode <= 6) ? std::to_string(mode) : std::string("auto"));
+}
+
 bool LauncherState::sameInstall(const std::wstring& a, const std::wstring& b) {
     return !a.empty() && !b.empty() && modeKey(a) == modeKey(b);
 }

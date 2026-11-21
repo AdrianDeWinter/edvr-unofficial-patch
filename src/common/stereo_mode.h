@@ -32,24 +32,71 @@ inline bool parseStereoscopicMode(const char* xml, int* mode) {
     return true;
 }
 
+// Elite Dangerous's in-game Options > Graphics > 3D <StereoscopicMode> values:
+//   0 = Off (flat)
+//   1 = Anaglyph (flat)
+//   2 = Side by Side
+//   3 = HMD (Headphones)
+//   4 = HMD (Speakers)
+//   5 = HMD Cinema
+//   6 = Mode 6 (reserved)
+inline constexpr int kStereoModeOff = 0;
+inline constexpr int kStereoModeAnaglyph = 1;
+inline constexpr int kStereoModeSideBySide = 2;
+inline constexpr int kStereoModeHmdHeadphones = 3;
+inline constexpr int kStereoModeHmdSpeakers = 4;
+inline constexpr int kStereoModeHmdCinema = 5;
+
+inline bool isVrStereoscopicMode(int mode) { return mode >= 2 && mode <= 6; }
+
+inline const char* stereoscopicModeName(int mode) {
+    switch (mode) {
+        case 0: return "Off";
+        case 1: return "Anaglyph";
+        case 2: return "Side by Side";
+        case 3: return "HMD (Headphones)";
+        case 4: return "HMD (Speakers)";
+        case 5: return "HMD Cinema";
+        case 6: return "Mode 6";
+        default: return "Unknown";
+    }
+}
+
 enum class StereoWriteStatus {
-    Unchanged,      // already matches the requested launch (flat: 0; VR: 2..6)
-    Updated,        // flat launch: inner digits of <StereoscopicMode> replaced with "0"
-    TagAbsent,      // <StereoscopicMode> tag not present in XML
+    Unchanged,      // already matches the requested launch (flat: 0; VR: target mode 2..6)
+    Updated,        // <StereoscopicMode> updated to "0" (flat) or target VR mode (2..6)
+    TagAbsent,      // <StereoscopicMode> tag not present in XML (and could not be inserted)
     ParseFailed,    // <StereoscopicMode> tag present but value or closing tag is invalid
-    NoHeadsetMode,  // VR launch requested, but tag is 0 or 1 (no recorded headset mode)
+    NoHeadsetMode,  // VR launch requested, no preferred VR mode configured, and tag is 0 or 1
 };
 
 // Prepares a minimal byte-preserving Settings.xml update for a launch (`vr` = true for VR, false for flat).
-// - Flat: replaces only the digit text inside <StereoscopicMode> with "0" (Unchanged when already 0).
-// - VR: leaves any existing headset mode 2..6 unchanged; refuses 0, 1, absent, or unparseable tags
-//   without inventing a default.
-inline StereoWriteStatus rewriteStereoscopicMode(const std::string& xml, bool vr, std::string* outXml,
-                                                 int* existingMode = nullptr) {
+// - Flat: replaces only the digit text inside <StereoscopicMode> with "0" (Unchanged when already 0;
+//   TagAbsent when no tag is present, which leaves the file untouched).
+// - VR: when `preferredVrMode` is in 2..6, writes that mode (replacing only the digit text inside
+//   <StereoscopicMode>, or inserting the tag before </GraphicsOptions> if absent). When `preferredVrMode`
+//   is 0 (auto), leaves any existing headset mode 2..6 unchanged and refuses 0, 1, or absent tags without
+//   inventing a default.
+// - A parse failure always writes nothing.
+inline StereoWriteStatus rewriteStereoscopicMode(const std::string& xml, bool vr, int preferredVrMode,
+                                                 std::string* outXml, int* existingMode = nullptr) {
     static const char kTag[] = "<StereoscopicMode>";
     static const char kClose[] = "</StereoscopicMode>";
     const size_t openPos = xml.find(kTag);
-    if (openPos == std::string::npos) return StereoWriteStatus::TagAbsent;
+    if (openPos == std::string::npos) {
+        if (vr && isVrStereoscopicMode(preferredVrMode)) {
+            static const char kRootClose[] = "</GraphicsOptions>";
+            const size_t closeRoot = xml.find(kRootClose);
+            if (closeRoot != std::string::npos) {
+                const char* eol = xml.find("\r\n") != std::string::npos ? "\r\n" : "\n";
+                const std::string insert = std::string("\t<StereoscopicMode>") +
+                                           std::to_string(preferredVrMode) + "</StereoscopicMode>" + eol;
+                if (outXml) *outXml = xml.substr(0, closeRoot) + insert + xml.substr(closeRoot);
+                return StereoWriteStatus::Updated;
+            }
+        }
+        return StereoWriteStatus::TagAbsent;
+    }
 
     size_t p = openPos + (sizeof(kTag) - 1);
     while (p < xml.size() && (xml[p] == ' ' || xml[p] == '\t' || xml[p] == '\r' || xml[p] == '\n')) ++p;
@@ -69,8 +116,13 @@ inline StereoWriteStatus rewriteStereoscopicMode(const std::string& xml, bool vr
 
     if (existingMode) *existingMode = v;
     if (vr) {
-        if (v >= 2 && v <= 6) return StereoWriteStatus::Unchanged;
-        return StereoWriteStatus::NoHeadsetMode;
+        int target = 0;
+        if (isVrStereoscopicMode(preferredVrMode)) target = preferredVrMode;
+        else if (isVrStereoscopicMode(v)) target = v;
+        else return StereoWriteStatus::NoHeadsetMode;
+        if (v == target) return StereoWriteStatus::Unchanged;
+        if (outXml) *outXml = xml.substr(0, valStart) + std::to_string(target) + xml.substr(valEnd);
+        return StereoWriteStatus::Updated;
     }
     if (v == 0) return StereoWriteStatus::Unchanged;
     if (outXml) *outXml = xml.substr(0, valStart) + "0" + xml.substr(valEnd);

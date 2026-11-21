@@ -451,7 +451,9 @@ std::wstring defaultEliteSettingsXmlPath() {
 }
 
 bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std::wstring& backupDir, bool vr,
-                                 std::string* error, const std::wstring& gameExeName) {
+                                 int preferredVrMode, std::string* error, int* observedVrMode,
+                                 const std::wstring& gameExeName) {
+    if (observedVrMode) *observedVrMode = 0;
     auto fail = [&](const std::string& text) {
         if (error) *error = text;
         return false;
@@ -466,7 +468,7 @@ bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std:
     if (settingsXmlPath.empty() || !fileExists(settingsXmlPath)) {
         if (vr) {
             return fail("Elite's Settings.xml was not found, so no headset 3D mode is recorded. "
-                        "Turn 3D on in Elite's graphics options once, or use Play flat.");
+                        "Launch Elite once to create Settings.xml, or use Play flat.");
         }
         return true;
     }
@@ -477,19 +479,21 @@ bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std:
 
     std::string updated;
     int existingMode = -1;
-    const edvr::StereoWriteStatus status = edvr::rewriteStereoscopicMode(xml, vr, &updated, &existingMode);
+    const edvr::StereoWriteStatus status =
+        edvr::rewriteStereoscopicMode(xml, vr, preferredVrMode, &updated, &existingMode);
+    if (observedVrMode && edvr::isVrStereoscopicMode(existingMode)) *observedVrMode = existingMode;
     switch (status) {
         case edvr::StereoWriteStatus::Unchanged:
             return true;
         case edvr::StereoWriteStatus::TagAbsent:
             if (vr) {
                 return fail("Elite's Settings.xml has no recorded headset 3D mode. "
-                            "Turn 3D on in Elite's graphics options once, or use Play flat.");
+                            "Pick your VR 3D mode in the launcher or turn 3D on in Elite's graphics options once, or use Play flat.");
             }
             return true;
         case edvr::StereoWriteStatus::NoHeadsetMode:
             return fail("Elite's Settings.xml is set to flat (mode " + std::to_string(existingMode) +
-                        "), with no headset mode recorded. Turn 3D on in Elite's graphics options once, or use Play flat.");
+                        ") and no VR 3D mode is chosen. Pick your VR 3D mode in the launcher or turn 3D on in Elite's graphics options once, or use Play flat.");
         case edvr::StereoWriteStatus::ParseFailed:
             return fail("Elite's Settings.xml could not be parsed, so nothing was changed.");
         case edvr::StereoWriteStatus::Updated:
