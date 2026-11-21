@@ -264,7 +264,8 @@ struct ForwardRuntime {
     ForwardPhaseHold phasePending[phase_failure::kSlots],phaseCommitted[phase_failure::kSlots];
     forward_light::Ledger ledger;
     forward_light::ImmutableDescriptionCache<Ptr<ID3D11DepthStencilView>,ForwardDsvDescription> dsvDescription;
-    forward_light::ImmutableDescriptionCache<Ptr<ID3D11DepthStencilState>,D3D11_DEPTH_STENCIL_DESC> depthDescription;
+    forward_light::ImmutableDescriptionRingCache<Ptr<ID3D11DepthStencilState>,D3D11_DEPTH_STENCIL_DESC,8> depthDescription;
+    forward_light::ImmutableDescriptionRingCache<Ptr<ID3D11BlendState>,D3D11_BLEND_DESC,8> blendDescription;
     struct OmDepthCache {
         bool valid=false;
         uint64_t epoch=0;
@@ -779,6 +780,15 @@ struct State {
     GpuTimer gpuResolveTimer[kGpuResolveTimers];
     bool gpuFrameBusy[kGpuFrameTimers] = {}, gpuResolveBusy[kGpuResolveTimers] = {};
     int gpuFrameOpen = -1, gpuResolveOpen = -1;   // the timer holding this frame's open span
+    // 1-in-16 sampled sub-pass breakdown inside gpuResolveTimer: 0=copy, 1=prep, 2=backend, 3=finish.
+    static constexpr int kResolveStageCount = 4, kResolveStageRing = 2;
+    GpuTimer gpuStageTimer[kResolveStageRing][kResolveStageCount];
+    bool gpuStageBusy[kResolveStageRing][kResolveStageCount] = {};
+    int gpuStageSlot = -1, gpuStageOpen = -1;
+    uint32_t gpuStageCadence = 0;
+    uint32_t gpuStageSamples[kResolveStageCount] = {};
+    double gpuStageSumMs[kResolveStageCount] = {};
+    uint64_t gpuStageLastLogMs = 0;
     bool gpuFrameTried = false;                   // this frame already tried to open its span
     bool censusHooked = false;                    // the resolver's span hooks are installed
     bool crumbGateRead = false;                   // the HDR route's breadcrumbs gate has been set from the DXMT markers (once, first)
@@ -1458,6 +1468,10 @@ FlatMapBounce& mapBounce() {
     static FlatMapBounceD3DDriver* driver = new FlatMapBounceD3DDriver;
     static FlatMapBounce* bounce = [] {
         FlatMapBounce* made = new FlatMapBounce(*driver);
+        // Disable per-flush baseline copies/16-byte row diffs and cap WC verify readbacks
+        // to startup confirmation (4 samples) so production never stalls on GPU WC reads.
+        made->setTelemetry(false);
+        made->setVerifyBudget(4);
         g_flatMapBounce.store(made, std::memory_order_release);
         return made;
     }();
@@ -3375,6 +3389,36 @@ void gpuPoll(State& s) {
         case GpuTimerPoll::Pending: break;
         }
     }
+    for (int r = 0; r < State::kResolveStageRing; ++r) {
+        for (int k = 0; k < State::kResolveStageCount; ++k) {
+            if (!s.gpuStageBusy[r][k] || (r == s.gpuStageSlot && k == s.gpuStageOpen)) continue;
+            switch (s.gpuStageTimer[r][k].poll(ctx, ms)) {
+            case GpuTimerPoll::Ready:
+                ++s.gpuStageSamples[k];
+                s.gpuStageSumMs[k] += ms;
+                s.gpuStageBusy[r][k] = false;
+                break;
+            case GpuTimerPoll::Invalid:
+                s.gpuStageBusy[r][k] = false;
+                break;
+            case GpuTimerPoll::Pending: break;
+            }
+        }
+    }
+    const uint64_t nowMs = GetTickCount64();
+    if (!s.gpuStageLastLogMs) s.gpuStageLastLogMs = nowMs;
+    if (nowMs - s.gpuStageLastLogMs >= 30000ull) {
+        s.gpuStageLastLogMs = nowMs;
+        if (s.gpuStageSamples[0] || s.gpuStageSamples[1] || s.gpuStageSamples[2] || s.gpuStageSamples[3]) {
+            const auto avg = [&](int k) { return s.gpuStageSamples[k] ? s.gpuStageSumMs[k] / s.gpuStageSamples[k] : 0.0; };
+            const double c = avg(0), p = avg(1), b = avg(2), f = avg(3);
+            Log::get().note("flat resolve gpu 30s: samples=%u/%u/%u/%u copy=%.3f prep=%.3f backend=%.3f finish=%.3f sum=%.3f ms (mode=%s %ux%u->%ux%u)",
+                s.gpuStageSamples[0], s.gpuStageSamples[1], s.gpuStageSamples[2], s.gpuStageSamples[3],
+                c, p, b, f, c + p + b + f, flatMonoResolveModeName(s.engine),
+                s.prefix.width, s.prefix.height, s.hdr.outputWidth, s.hdr.outputHeight);
+            for (int k = 0; k < State::kResolveStageCount; ++k) { s.gpuStageSamples[k] = 0; s.gpuStageSumMs[k] = 0.0; }
+        }
+    }
 }
 // A reset drops the spans: only on the verified owner thread, where a span still open can be
 // cancelled cleanly (a timer with an open span released from anywhere else would switch the
@@ -3386,7 +3430,9 @@ void gpuReset(State& s) {
     for (auto& t : s.gpuResolveTimer) t.reset(ctx);
     for (auto& b : s.gpuFrameBusy) b = false;
     for (auto& b : s.gpuResolveBusy) b = false;
-    s.gpuFrameOpen = s.gpuResolveOpen = -1;
+    for (int r = 0; r < State::kResolveStageRing; ++r)
+        for (int k = 0; k < State::kResolveStageCount; ++k) { s.gpuStageTimer[r][k].reset(ctx); s.gpuStageBusy[r][k] = false; }
+    s.gpuFrameOpen = s.gpuResolveOpen = s.gpuStageSlot = s.gpuStageOpen = -1;
 }
 // The resolver's hooks (flat_mono_resolve.h): a timestamp pair around its own dispatches and
 // backend call. Called on the thread that resolves, inside the treatment scope.
@@ -3404,6 +3450,40 @@ void resolveSpanEnd(ID3D11DeviceContext* ctx) noexcept {
     if (s.gpuResolveOpen < 0) return;
     s.gpuResolveTimer[s.gpuResolveOpen].end(ctx);
     s.gpuResolveOpen = -1;
+}
+void resolveStageHook(ID3D11DeviceContext* ctx, uint32_t stage) noexcept {
+    auto& s = state();
+    if (stage == 0u) {
+        if (s.gpuStageSlot >= 0) return;
+        if ((s.gpuStageCadence++ & 15u) != 0) return;
+        for (int r = 0; r < State::kResolveStageRing; ++r) {
+            bool busy = false;
+            for (int k = 0; k < State::kResolveStageCount; ++k) busy = busy || s.gpuStageBusy[r][k];
+            if (busy) continue;
+            if (s.gpuStageTimer[r][0].begin(s.device.Get(), ctx)) {
+                s.gpuStageBusy[r][0] = true;
+                s.gpuStageSlot = r;
+                s.gpuStageOpen = 0;
+            }
+            return;
+        }
+        return;
+    }
+    if (s.gpuStageSlot < 0) return;
+    const int r = s.gpuStageSlot;
+    if (s.gpuStageOpen >= 0) {
+        s.gpuStageTimer[r][s.gpuStageOpen].end(ctx);
+        s.gpuStageOpen = -1;
+    }
+    if (stage < static_cast<uint32_t>(State::kResolveStageCount)) {
+        const int next = static_cast<int>(stage);
+        if (!s.gpuStageBusy[r][next] && s.gpuStageTimer[r][next].begin(s.device.Get(), ctx)) {
+            s.gpuStageBusy[r][next] = true;
+            s.gpuStageOpen = next;
+        }
+    } else {
+        s.gpuStageSlot = -1;
+    }
 }
 
 // The refusal state for the F8 panel's settings warning, published for any thread:
@@ -4562,7 +4642,7 @@ void flatRuntimePresent(IDXGISwapChain* swap, uint64_t frame, HRESULT hr, UINT f
     // The CPU and GPU census (flat_cpu.h): the frame that just ended is cut into its families,
     // the GPU spans that finished are read (never waited for), and every 5 s the window is
     // printed, zeros included. Instrument only: nothing below reads any of it.
-    if (!s.censusHooked) { flatMonoResolveSetSpanHooks(&resolveSpanBegin, &resolveSpanEnd); s.censusHooked = true; }
+    if (!s.censusHooked) { flatMonoResolveSetSpanHooks(&resolveSpanBegin, &resolveSpanEnd); flatMonoResolveSetStageHook(&resolveStageHook); s.censusHooked = true; }
     {
         static const int64_t censusFreq = flatcpu::qpcFrequency();
         const int64_t censusNow = EDVR_FLATCPU_NOW();
@@ -5576,7 +5656,7 @@ static void resourceWritten(State& s, ID3D11Resource* res,const char* entry,
     const Camera* c = camera(res, false);
     if (c) s.cameras.invalidate(*c);
     if (outCamera) *outCamera = c;
-    if (!skipProjectionInvalidate && s.projection) { flatcpu::Scope shadows(flatcpu::kShadows); s.projection->invalidate(res); }
+    if (isBuffer && !skipProjectionInvalidate && s.projection) { flatcpu::Scope shadows(flatcpu::kShadows); s.projection->invalidate(res); }
 }
 // The extents the hooks pass (declared in flat_runtime.h; defined here, outside the anonymous namespace the mutation report is in).
 HistoryWriteExtent flatRuntimeCopyExtent(UINT dstSub,UINT dstX,const void* src,const D3D11_BOX* box) {
@@ -7427,7 +7507,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
             Ptr<ID3D11Resource> actualColor; if (original) original->GetResource(&actualColor);
             if (actualColor.Get() == selected.color) {
                 ID3D11ShaderResourceView* sharpened = flatSharpenView(ctx, original);
-                if (sharpened && sharpened != original) { ctx->PSSetShaderResources(0, 1, &sharpened); replaced = true; }
+                if (sharpened && sharpened != original) { ctx->PSSetShaderResources(0, 1, &sharpened); replaced = true; ownedOutput = true; }
             }
         }
         return;

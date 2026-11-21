@@ -2927,7 +2927,8 @@ void testFlatCpuWiring() {
     check(scan.find("counts.add(flatcpu::kCopyOmGet)")<scan.find("OMGetRenderTargetsAndUnorderedAccessViews")&&
           scan.find("kCopyRtvSlots,D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT")!=std::string::npos&&
           scan.find("kCopyUavSlots,n")!=std::string::npos&&
-          scan.find("if(blend){counts.add(flatcpu::kCopyBlendDesc);blend->GetDesc")!=std::string::npos&&
+          scan.find("blendDescription.describe(blend,")!=std::string::npos&&
+          scan.find("counts.add(flatcpu::kCopyBlendDesc);blend->GetDesc")!=std::string::npos&&
           count(scan,"counts.add(flatcpu::kCopyGetResource)")==2,
           "query counters name actual Gets, requested 8/64 slots, nullable GetDesc and writable-resource queries");
     {

@@ -37,6 +37,7 @@ namespace {
 using Microsoft::WRL::ComPtr;
 // The GPU census's span hooks (flatMonoResolveSetSpanHooks): null unless the flat runtime installed them.
 FlatMonoResolveSpanFn g_spanBegin = nullptr, g_spanEnd = nullptr;
+FlatMonoResolveStageFn g_stageHook = nullptr;
 // One timestamp pair around the resolver's own dispatches and backend call, closed by every exit.
 struct SpanGuard {
     ID3D11DeviceContext* context;
@@ -44,7 +45,10 @@ struct SpanGuard {
     explicit SpanGuard(ID3D11DeviceContext* c) : context(c) {
         if (g_spanBegin && g_spanEnd) { g_spanBegin(context); open = true; }
     }
-    ~SpanGuard() { if (open) g_spanEnd(context); }
+    ~SpanGuard() {
+        if (g_stageHook) g_stageHook(context, 4u);
+        if (open) g_spanEnd(context);
+    }
 };
 // The HDR route's breadcrumbs (flat_hdr_crumbs.h): true while a resolver call that belongs to the route is running and the
 // session's crumbs are live. The three entry points set it (CrumbScope) and the helpers below read it, so none of them is
@@ -1221,6 +1225,7 @@ void flatMonoResolveSetSpanHooks(FlatMonoResolveSpanFn begin, FlatMonoResolveSpa
     g_spanBegin = begin && end ? begin : nullptr;
     g_spanEnd = begin && end ? end : nullptr;
 }
+void flatMonoResolveSetStageHook(FlatMonoResolveStageFn hook) { g_stageHook = hook; }
 
 bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const FlatMonoResolveFrame& f,
                      ID3D11ShaderResourceView** output,const char** reason) {
@@ -1531,11 +1536,13 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
     HdrCrumbSpan copyStep(g_crumbOn,"copy-h","fmt=%s(%u) size=%ux%u",hdrCrumbFormat(static_cast<uint32_t>(colorDesc.Format)),
         static_cast<unsigned>(colorDesc.Format),f.renderWidth,f.renderHeight);
     SpanGuard span(context);   // the GPU census's timestamp pair: this call's own dispatches and the backend
+    if(g_stageHook) g_stageHook(context, 0u);
     context->UpdateSubresource(g.constants.Get(),0,nullptr,&constants,0,0);
     context->CopyResource(g.color.texture.Get(),overlay?cleanColor.Get():color.Get());
     if(overlay) context->CopyResource(g.rawOverlay.texture.Get(),color.Get());
     if(hdr)++stats.hdrCopied;
     copyStep.close();
+    if(g_stageHook) g_stageHook(context, 1u);
     HdrCrumbSpan prepStep(g_crumbOn,"prep","groups=%ux%u",(f.renderWidth+7)/8,(f.renderHeight+7)/8);
     ID3D11Buffer* cb[]={g.constants.Get(),f.engine.sceneNow,f.engine.scenePrev};
     context->CSSetConstantBuffers(0,3,cb);
@@ -1578,6 +1585,7 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
         g.refusalWrite=(slot+1)%4;
         ++g_refusal.sampled;
     }
+    if(g_stageHook) g_stageHook(context, 2u);
     HdrCrumbSpan backendStep(g_crumbOn,"backend","mode=%s in=%ux%u out=%ux%u reset=%u",flatMonoResolveModeName(f.mode),
         f.renderWidth,f.renderHeight,evalW,evalH,reset?1u:0u);
     bool ok=true;
@@ -1627,6 +1635,7 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
     backendStep.close();
     if(hdr && ok)++stats.hdrBackend;
     if(!ok) {++stats.backendFailures;g.history=false;stats.currentContinueRun=0;return false;}
+    if(g_stageHook) g_stageHook(context, 3u);
     if(hdr) {
         // The result goes back into the game's HDR target through a pixel-shader draw: per pixel the backend's output,
         // or the raw input where the rejection mask says the history is not to be trusted; for EDVR's TAA (route y) its

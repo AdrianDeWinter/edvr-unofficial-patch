@@ -61,6 +61,8 @@ template<class Driver, class Faults = NoFaults> class Runtime {
     uint64_t batchBytes_[4]{}, batchTicks_[4]{};
     double rates_[4]{};
     bool frozen_ = false, autoSlow_ = false;
+    bool telemetry_ = true;
+    uint64_t verifyBudget_ = 0;
     unsigned char* data(Slot& s) { return s.bytes + (Faults::unaligned ? 8 : 0); }
     void release(Slot& s, uintptr_t resource) {
         driver_.release(resource,s.context);
@@ -153,7 +155,7 @@ public:
             s.context=r.context; s.real=r.real; s.width=r.width; s.frame=r.frame; s.warned=false;
             if (r.seedValid && r.seed) std::memcpy(data(s),r.seed,r.width);
             else std::memset(data(s),0,r.width);
-            std::memcpy(s.baseline,data(s),r.width);
+            if (telemetry_) std::memcpy(s.baseline,data(s),r.width);
             std::memset(s.bytes+65536,0,64);
             driver_.retain(r.resource,r.context);
             ++bounced_;
@@ -163,6 +165,8 @@ public:
         }
         ++full_; return r.real;
     }
+    void setTelemetry(bool on) noexcept { telemetry_ = on; }
+    void setVerifyBudget(uint64_t maxSamples) noexcept { verifyBudget_ = maxSamples; }
     Lease beginUnmap(uintptr_t resource, uintptr_t context) {
         if (!resource || resource==busy || open_.load(std::memory_order_acquire)==0) return {};
         if constexpr (Faults::skipOffOwner) { if (!driver_.ownerThread) return {}; }
@@ -174,18 +178,21 @@ public:
                 // its record for the matching Unmap, even after standing down.
                 s.key.store(resource,std::memory_order_release); trip(Trip::Context); return {};
             }
-            const auto started=driver_.clockTicks();
-            uint64_t unchanged=0;
-            for (uint32_t offset=0;offset<s.width;offset+=16)
-                if (std::memcmp(data(s)+offset,s.baseline+offset,16)==0) ++unchanged;
-            unchangedRows_+=unchanged; rowsChecked_+=s.width/16;
+            const auto started=telemetry_ ? driver_.clockTicks() : 0ull;
+            if (telemetry_) {
+                uint64_t unchanged=0;
+                for (uint32_t offset=0;offset<s.width;offset+=16)
+                    if (std::memcmp(data(s)+offset,s.baseline+offset,16)==0) ++unchanged;
+                unchangedRows_+=unchanged; rowsChecked_+=s.width/16;
+            }
             const size_t bytes=s.width+(Faults::longFlush ? 1 : 0)-(Faults::shortFlush ? 1 : 0);
             if constexpr (Faults::flushAfterUnmap) driver_.unmapBeforeFlush(s.real,s.width);
             if (!Faults::skipFlush) std::memcpy(s.real,data(s),bytes);
-            const auto finished=driver_.clockTicks();
+            const auto finished=telemetry_ ? driver_.clockTicks() : 0ull;
             const auto count=++flushes_;
             flushBytes_+=bytes; flushTicks_+=finished-started;
-            if (!Faults::verifyOff && mode()==Mode::On && count%16==0) {
+            if (!Faults::verifyOff && mode()==Mode::On && count%16==0 &&
+                (verifyBudget_==0 || verifySamples_.load(std::memory_order_relaxed)<verifyBudget_)) {
                 ++verifySamples_;
                 if (!driver_.verify(s.real,data(s),s.width)) { ++verifyMismatches_; trip(Trip::Verify); }
             }

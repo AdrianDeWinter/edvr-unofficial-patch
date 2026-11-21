@@ -940,7 +940,9 @@ bool fsr3Evaluate(ID3D11DeviceContext* ctx, unsigned eye, ID3D11Texture2D* colou
     dd.flags = settings.debug ? FFX_FSR3UPSCALER_DISPATCH_DRAW_DEBUG_VIEW : 0u;
 
     int qs = -1;
-    if ((e.querySample++ & 15u) == 0) {
+    // Flat never calls fsr3Totals (temporal_pass.cpp is VR-only) and times the resolve
+    // sub-passes in flat_mono_resolve.cpp instead.
+    if (!runtimeFlatProfile() && (e.querySample++ & 15u) == 0) {
         ID3D11Device* dev = nullptr;
         ctx->GetDevice(&dev);
         qs = dev ? acquireQuerySlot(dev, ctx) : -1;

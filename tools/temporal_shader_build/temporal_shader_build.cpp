@@ -536,7 +536,12 @@ static int generateTemporal(const Options& o) {
         {"kFlatMarkerPromoteCsBytecode", "flat_marker_promote_cs", "main", nullptr, {}, false,
          "Texture2D<float2> src:register(t0);RWTexture2D<float4> dst:register(u0);"
          "[numthreads(8,8,1)]void main(uint3 id:SV_DispatchThreadID){uint w,h;dst.GetDimensions(w,h);"
-         "if(id.x<w && id.y<h)dst[id.xy]=float4(src.Load(int3(id.xy,0)),0,0);}", "cs_5_0"}
+         "if(id.x<w && id.y<h)dst[id.xy]=float4(src.Load(int3(id.xy,0)),0,0);}", "cs_5_0"},
+        // Composite twins reading transmittance alpha directly from the HDR HUD layer (skips crispCoveragePass).
+        {"kUiLayerCompositeHdrAlphaBytecode", "ui_layer_composite_hdr_alpha_cs", "main", nullptr, {}, false,
+         edvr::kUiLayerCompositeHdrAlphaHlsl, "cs_5_0"},
+        {"kUiLayerCompositeInPlaceHdrAlphaBytecode", "ui_layer_composite_inplace_hdr_alpha_cs", "main", nullptr, {}, false,
+         edvr::kUiLayerCompositeInPlaceHdrAlphaHlsl, "cs_5_0"}
     };
     const std::string core = extractCore(edvr::kTemporalCsHlsl); // validate before fixed source assembly
     const auto fixed = fixedVariants(core);

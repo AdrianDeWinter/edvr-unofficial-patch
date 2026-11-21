@@ -92,7 +92,7 @@ inline int run() {
            body.find("return value.resource&&value.surface.known;")!=std::string::npos,
            "actual OM DSV query precedes production helper and failed metadata is not retained");
     expect(inOrder("OMGetDepthStencilState(&state,&ref)","depthCache.describe(state,freshDepth,depthHit")&&
-           body.find("else {counts.add(flatcpu::kCopyRawDepthDefault);s.forwardLight.depthDescription.clear();}")!=std::string::npos&&
+           body.find("else {counts.add(flatcpu::kCopyRawDepthDefault);}")!=std::string::npos&&
            body.find("dsvObservationMatches(actualProof,expected,writes)")!=std::string::npos,
            "actual depth state is queried each draw; null/default and read-only write proof remain live");
     const auto wrapperEnd=source.find("bool forwardViewport(",end);

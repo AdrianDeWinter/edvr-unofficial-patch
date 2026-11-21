@@ -53,20 +53,50 @@ class FlatProjectionShadowBank {
         uint32_t width = 0;
         bool valid = false;
         bool mapping = false;
-        // Read only after a complete write sets valid; zeroing this 4 MiB
-        // bank on every stand-down probe serves no observer.
-        unsigned char bytes[MaxWidth];
     };
-    std::unique_ptr<Entry[]> entries_;
+    static constexpr size_t kHashSize = 256;
+    static constexpr size_t kHashMask = kHashSize - 1;
+    Entry entries_[MaxBuffers]{};
+    // Separate contiguous 4 MiB byte storage so metadata lookups never stride
+    // across 64 KB pages (entries_ fits in ~2.5 KB of L1 cache).
+    std::unique_ptr<unsigned char[]> storage_;
+    uint8_t hash_[kHashSize]{}; // 0 = empty, slot + 1 otherwise
     uint64_t epoch_ = 1;
 
-    Entry* find(const void* identity, uint64_t identityGeneration) const {
-        if (!entries_ || !identity || !identityGeneration) return nullptr;
+    static size_t hashSlot(const void* p) noexcept {
+        uint64_t h = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(p));
+        h ^= h >> 16;
+        h *= 0x9E3779B97F4A7C15ull;
+        return static_cast<size_t>(h >> 56) & kHashMask;
+    }
+    void hashInsert(const void* identity, size_t index) noexcept {
+        size_t s = hashSlot(identity);
+        for (size_t step = 0; step < kHashSize; ++step) {
+            const size_t pos = (s + step) & kHashMask;
+            if (!hash_[pos]) { hash_[pos] = static_cast<uint8_t>(index + 1); return; }
+        }
+    }
+    void hashRebuild() noexcept {
+        std::memset(hash_, 0, sizeof(hash_));
         for (size_t i = 0; i < MaxBuffers; ++i)
-            if (entries_[i].identity == identity &&
-                entries_[i].identityGeneration == identityGeneration)
-                return &entries_[i];
-        return nullptr;
+            if (entries_[i].identity) hashInsert(entries_[i].identity, i);
+    }
+    int findIndexByIdentity(const void* identity) const noexcept {
+        if (!storage_ || !identity) return -1;
+        size_t s = hashSlot(identity);
+        for (size_t step = 0; step < kHashSize; ++step) {
+            const uint8_t v = hash_[(s + step) & kHashMask];
+            if (!v) return -1;
+            const size_t idx = static_cast<size_t>(v - 1);
+            if (entries_[idx].identity == identity) return static_cast<int>(idx);
+        }
+        return -1;
+    }
+    unsigned char* slotBytes(size_t index) const noexcept { return storage_.get() + index * MaxWidth; }
+    int findIndex(const void* identity, uint64_t identityGeneration) const noexcept {
+        if (!identityGeneration) return -1;
+        const int idx = findIndexByIdentity(identity);
+        return (idx >= 0 && entries_[idx].identityGeneration == identityGeneration) ? idx : -1;
     }
     bool advance(Entry& entry) {
         entry.valid = false;
@@ -75,10 +105,10 @@ class FlatProjectionShadowBank {
         return true;
     }
 public:
-    FlatProjectionShadowBank() : entries_(new (std::nothrow) Entry[MaxBuffers]) {}
+    FlatProjectionShadowBank() : storage_(new (std::nothrow) unsigned char[MaxBuffers * MaxWidth]) {}
     FlatProjectionShadowBank(const FlatProjectionShadowBank&) = delete;
     FlatProjectionShadowBank& operator=(const FlatProjectionShadowBank&) = delete;
-    bool ready() const { return entries_ != nullptr; }
+    bool ready() const { return storage_ != nullptr; }
     static constexpr size_t capacity() { return MaxBuffers; }
     static constexpr size_t storageBytes() { return MaxBuffers * MaxWidth; }
 
@@ -86,95 +116,106 @@ public:
                         uint32_t width) {
         if (!ready() || !identity || !identityGeneration || width < 16 ||
             width > MaxWidth || width % 16) return false;
-        if (Entry* old = find(identity, identityGeneration)) {
-            if (old->width == width) return true;
-            advance(*old); old->mapping = false;
+        const int existing = findIndexByIdentity(identity);
+        if (existing >= 0) {
+            Entry& old = entries_[existing];
+            if (old.identityGeneration != identityGeneration) return false;
+            if (old.width == width) return true;
+            advance(old); old.mapping = false;
             return false;
         }
-        // A still-registered pointer cannot silently acquire a new lifetime.
-        for (size_t i = 0; i < MaxBuffers; ++i)
-            if (entries_[i].identity == identity) return false;
         for (size_t i = 0; i < MaxBuffers; ++i) if (!entries_[i].identity) {
             Entry& e = entries_[i]; e.identity = identity;
             e.identityGeneration = identityGeneration; e.width = width;
+            hashInsert(identity, i);
             return true;
         }
         return false;
     }
     bool releaseBuffer(const void* identity, uint64_t identityGeneration) {
-        Entry* e = find(identity, identityGeneration);
-        if (!e) return false;
-        e->identity = nullptr; e->identityGeneration = 0; e->width = 0;
-        e->valid = e->mapping = false;
+        const int idx = findIndex(identity, identityGeneration);
+        if (idx < 0) return false;
+        Entry& e = entries_[idx];
+        e.identity = nullptr; e.identityGeneration = 0; e.width = 0;
+        e.valid = e.mapping = false;
         // Do not recycle a write generation into a key from the old lifetime.
-        e->writeGeneration = 0;
+        e.writeGeneration = 0;
+        hashRebuild();
         return true;
     }
     void reset() {
-        if (!entries_) return;
+        if (!storage_) return;
         for (size_t i = 0; i < MaxBuffers; ++i) {
             Entry& e = entries_[i]; e.identity = nullptr;
             e.identityGeneration = e.writeGeneration = 0; e.width = 0;
             e.valid = e.mapping = false;
         }
+        std::memset(hash_, 0, sizeof(hash_));
         if (epoch_ != UINT64_MAX) ++epoch_;
     }
 
     // Map start invalidates the previous contents immediately. A failed/short
     // Unmap capture leaves the entry invalid; there is no inferred old data.
     bool beginMap(const void* identity, uint64_t identityGeneration) {
-        Entry* e = find(identity, identityGeneration);
-        if (!e || e->mapping || !advance(*e)) return false;
-        e->mapping = true;
+        const int idx = findIndex(identity, identityGeneration);
+        if (idx < 0) return false;
+        Entry& e = entries_[idx];
+        if (e.mapping || !advance(e)) return false;
+        e.mapping = true;
         return true;
     }
     bool finishMapFull(const void* identity, uint64_t identityGeneration,
                        const void* bytes, uint32_t width) {
-        Entry* e = find(identity, identityGeneration);
-        if (!e || !e->mapping) return false;
-        e->mapping = false;
-        if (!bytes || width != e->width || e->writeGeneration == UINT64_MAX) return false;
-        std::memcpy(e->bytes, bytes, width);
-        ++e->writeGeneration; e->valid = true;
+        const int idx = findIndex(identity, identityGeneration);
+        if (idx < 0) return false;
+        Entry& e = entries_[idx];
+        if (!e.mapping) return false;
+        e.mapping = false;
+        if (!bytes || width != e.width || e.writeGeneration == UINT64_MAX) return false;
+        std::memcpy(slotBytes(static_cast<size_t>(idx)), bytes, width);
+        ++e.writeGeneration; e.valid = true;
         return true;
     }
     bool captureFullWrite(const void* identity, uint64_t identityGeneration,
                           const void* bytes, uint32_t width) {
-        Entry* e = find(identity, identityGeneration);
-        if (!e || !advance(*e)) return false;
-        if (e->mapping) { e->mapping = false; return false; }
-        e->mapping = false;
-        if (!bytes || width != e->width) return false;
-        std::memcpy(e->bytes, bytes, width); e->valid = true;
+        const int idx = findIndex(identity, identityGeneration);
+        if (idx < 0) return false;
+        Entry& e = entries_[idx];
+        if (!advance(e)) return false;
+        if (e.mapping) { e.mapping = false; return false; }
+        e.mapping = false;
+        if (!bytes || width != e.width) return false;
+        std::memcpy(slotBytes(static_cast<size_t>(idx)), bytes, width); e.valid = true;
         return true;
     }
     // Call for partial/unknown/copy/GPU writes, or any untracked mutation.
     bool invalidate(const void* identity, uint64_t identityGeneration) {
-        Entry* e = find(identity, identityGeneration);
-        if (!e || !advance(*e)) return false;
-        e->mapping = false;
+        const int idx = findIndex(identity, identityGeneration);
+        if (idx < 0) return false;
+        Entry& e = entries_[idx];
+        if (!advance(e)) return false;
+        e.mapping = false;
         return true;
     }
     bool lookup(const void* identity, uint64_t identityGeneration,
                 FlatProjectionShadowView& out) const {
-        const Entry* e = find(identity, identityGeneration);
-        if (!e || !e->valid || e->mapping) return false;
-        out = {identity, identityGeneration, e->writeGeneration,
-               epoch_, e->bytes, e->width};
+        const int idx = findIndex(identity, identityGeneration);
+        if (idx < 0) return false;
+        const Entry& e = entries_[idx];
+        if (!e.valid || e.mapping) return false;
+        out = {identity, identityGeneration, e.writeGeneration,
+               epoch_, slotBytes(static_cast<size_t>(idx)), e.width};
         return true;
     }
     // Failure-only explanation for a failed lookup. The normal successful
     // copy path never calls this or scans the bank a second time.
     FlatProjectionShadowLookupState lookupState(const void* identity, uint64_t identityGeneration) const {
-        if (!entries_ || !identity) return FlatProjectionShadowLookupState::Unregistered;
-        for (size_t i = 0; i < MaxBuffers; ++i) {
-            const Entry& e = entries_[i];
-            if (e.identity != identity) continue;
-            if (e.identityGeneration != identityGeneration) return FlatProjectionShadowLookupState::GenerationMismatch;
-            if (e.mapping) return FlatProjectionShadowLookupState::Mapping;
-            return e.valid ? FlatProjectionShadowLookupState::Ready : FlatProjectionShadowLookupState::Invalid;
-        }
-        return FlatProjectionShadowLookupState::Unregistered;
+        const int idx = findIndexByIdentity(identity);
+        if (idx < 0) return FlatProjectionShadowLookupState::Unregistered;
+        const Entry& e = entries_[idx];
+        if (e.identityGeneration != identityGeneration) return FlatProjectionShadowLookupState::GenerationMismatch;
+        if (e.mapping) return FlatProjectionShadowLookupState::Mapping;
+        return e.valid ? FlatProjectionShadowLookupState::Ready : FlatProjectionShadowLookupState::Invalid;
     }
     bool matches(const FlatProjectionCacheKey& key, uint32_t phase) const {
         FlatProjectionShadowView view{};

@@ -308,6 +308,104 @@ void main(uint3 id : SV_DispatchThreadID) {
 }
 )HLSL";
 
+// Composite twins that read transmittance alpha directly from the HDR HUD layer (t3)
+// when no post-tonemap LDR UI draw touched the 8-bit layer, skipping crispCoveragePass.
+constexpr char kUiLayerCompositeHdrAlphaHlsl[] = R"HLSL(
+Texture2D<float4> Frame : register(t0);
+Texture2D<float4> Layer : register(t1);
+Texture2D<float4> Mult : register(t2);
+Texture2D<float4> HdrAlpha : register(t3);
+RWTexture2D<float4> Out : register(u0);
+cbuffer P : register(b0) {
+    int4   region;
+    float4 uv;
+    float2 layerSize;
+    uint2  outSize;
+    uint   mode;
+    uint   useMult;
+    uint2  pad;
+};
+[numthreads(32, 8, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= outSize.x || id.y >= outSize.y) return;
+    int2 p = region.xy + int2(id.xy);
+    float4 f = Frame.Load(int3(p, 0));
+    float2 span = (uv.zw - uv.xy) * layerSize / float2(outSize);
+    float2 x0 = uv.xy * layerSize + float2(id.xy) * span;
+    float2 x1 = x0 + span;
+    int2 k0 = max(int2(floor(x0)), int2(0, 0));
+    int2 k1 = min(int2(ceil(x1)) - 1, int2(layerSize) - 1);
+    float4 acc = float4(0, 0, 0, 0);
+    float3 accM = float3(0, 0, 0);
+    float wsum = 0;
+    [loop] for (int j = k0.y; j <= min(k1.y, k0.y + 3); ++j) {
+        float wy = min(x1.y, (float)j + 1.0) - max(x0.y, (float)j);
+        if (wy <= 0) continue;
+        [loop] for (int i = k0.x; i <= min(k1.x, k0.x + 3); ++i) {
+            float wx = min(x1.x, (float)i + 1.0) - max(x0.x, (float)i);
+            if (wx <= 0) continue;
+            float4 tap = float4(Layer.Load(int3(i, j, 0)).rgb, saturate(HdrAlpha.Load(int3(i, j, 0)).a));
+            acc += tap * (wx * wy);
+            if (useMult != 0) accM += Mult.Load(int3(i, j, 0)).rgb * (wx * wy);
+            wsum += wx * wy;
+        }
+    }
+    float4 l = wsum > 0 ? acc / wsum : float4(0, 0, 0, 1);
+    float3 m = (useMult != 0 && wsum > 0) ? accM / wsum : float3(1, 1, 1);
+    float3 c = mode == 1 ? l.rgb + float3(0.0, 0.08, 0.25) * (1.0 - l.a * dot(m, 1.0 / 3.0))
+                         : l.rgb + f.rgb * l.a * m;
+    Out[id.xy] = float4(saturate(c), f.a);
+}
+)HLSL";
+
+constexpr char kUiLayerCompositeInPlaceHdrAlphaHlsl[] = R"HLSL(
+RWTexture2D<unorm float4> Frame : register(u0);
+Texture2D<float4> Layer : register(t1);
+Texture2D<float4> Mult : register(t2);
+Texture2D<float4> HdrAlpha : register(t3);
+cbuffer P : register(b0) {
+    int4   region;
+    float4 uv;
+    float2 layerSize;
+    uint2  outSize;
+    uint   mode;
+    uint   useMult;
+    uint2  pad;
+};
+[numthreads(32, 8, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= outSize.x || id.y >= outSize.y) return;
+    int2 p = region.xy + int2(id.xy);
+    float2 span = (uv.zw - uv.xy) * layerSize / float2(outSize);
+    float2 x0 = uv.xy * layerSize + float2(id.xy) * span;
+    float2 x1 = x0 + span;
+    int2 k0 = max(int2(floor(x0)), int2(0, 0));
+    int2 k1 = min(int2(ceil(x1)) - 1, int2(layerSize) - 1);
+    float4 acc = float4(0, 0, 0, 0);
+    float3 accM = float3(0, 0, 0);
+    float wsum = 0;
+    [loop] for (int j = k0.y; j <= min(k1.y, k0.y + 3); ++j) {
+        float wy = min(x1.y, (float)j + 1.0) - max(x0.y, (float)j);
+        if (wy <= 0) continue;
+        [loop] for (int i = k0.x; i <= min(k1.x, k0.x + 3); ++i) {
+            float wx = min(x1.x, (float)i + 1.0) - max(x0.x, (float)i);
+            if (wx <= 0) continue;
+            float4 tap = float4(Layer.Load(int3(i, j, 0)).rgb, saturate(HdrAlpha.Load(int3(i, j, 0)).a));
+            acc += tap * (wx * wy);
+            if (useMult != 0) accM += Mult.Load(int3(i, j, 0)).rgb * (wx * wy);
+            wsum += wx * wy;
+        }
+    }
+    float4 l = wsum > 0 ? acc / wsum : float4(0, 0, 0, 1);
+    float3 m = (useMult != 0 && wsum > 0) ? accM / wsum : float3(1, 1, 1);
+    if (mode == 0 && all(l.rgb == float3(0, 0, 0)) && l.a == 1.0 && all(m == float3(1, 1, 1))) return;
+    float4 f = Frame[p];
+    float3 c = mode == 1 ? l.rgb + float3(0.0, 0.08, 0.25) * (1.0 - l.a * dot(m, 1.0 / 3.0))
+                         : l.rgb + f.rgb * l.a * m;
+    Frame[p] = float4(saturate(c), f.a);
+}
+)HLSL";
+
 constexpr char kUiLayerCoverageVsHlsl[] = R"HLSL(
 struct V { float4 p : SV_POSITION; };
 V main(uint id : SV_VertexID) {

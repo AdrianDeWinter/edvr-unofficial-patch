@@ -3126,7 +3126,7 @@ void STDMETHODCALLTYPE hookedGenerateMips(ID3D11DeviceContext* self,
 void STDMETHODCALLTYPE hookedOMSetRenderTargets(ID3D11DeviceContext* self, UINT n,
                                                 ID3D11RenderTargetView* const* rtvs,
                                                 ID3D11DepthStencilView* dsv) {
-    if (!foreignContext(self)) { flatIssueEpochBumpRt(); flatOmNoteUavBound(false); }
+    if (!foreignContext(self)) { flatIssueEpochBumpRtDsv(dsv); flatOmNoteUavBound(false); }
     if (g_flatComputeInternal) { g_state->realOMSetRenderTargets(self, n, rtvs, dsv); return; }
     ++g_state->thunkHits[kHitOmSet];
     if (foreignContext(self)) {

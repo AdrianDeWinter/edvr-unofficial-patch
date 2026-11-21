@@ -290,7 +290,7 @@ inline int run() {
     expect(count(vscreen, "if(!foreignContext(self))flatIssueEpochRevoke();") == 4 &&
                count(vscreen, "flatIssueEpochRevoke();") == 4,
            "the four owner-context revokes in vscreen.cpp (discard view, swap state, ClearState, command list) are unconditional");
-    expect(count(vscreen, "flatIssueEpochBumpStage();") >= 8 && count(vscreen, "flatIssueEpochBumpRt();") >= 3 &&
+    expect(count(vscreen, "flatIssueEpochBumpStage();") >= 8 && count(vscreen, "flatIssueEpochBumpRt") >= 3 &&
                count(vscreen, "flatIssueEpochBumpCb();") >= 2 && count(vscreen, "flatIssueEpochBumpDepth();") >= 1,
            "the setter hooks and EDVR's own Raw setters still reach the gated bumps");
 
@@ -412,6 +412,17 @@ inline int run() {
         edvr::flatIssueEpochRevoke();
         expect(edvr::flatOmDepthEpochLoad() == d0 + 3 && edvr::flatOmOutputEpochLoad() == o0 + 3 && !edvr::flatOmUavKnownZero(),
                "Revoke bumps both OM sub-epochs and conservatively restores omUavMaybeBound");
+        int fakeDsvA = 0, fakeDsvB = 0;
+        const uint64_t d1 = edvr::flatOmDepthEpochLoad(), o1 = edvr::flatOmOutputEpochLoad();
+        edvr::flatIssueEpochBumpRtDsv(&fakeDsvA);
+        expect(edvr::flatOmDepthEpochLoad() == d1 + 1 && edvr::flatOmOutputEpochLoad() == o1 + 1,
+               "first RT bind after revoke bumps both omDepthEpoch and omOutputEpoch");
+        edvr::flatIssueEpochBumpRtDsv(&fakeDsvA);
+        expect(edvr::flatOmDepthEpochLoad() == d1 + 1 && edvr::flatOmOutputEpochLoad() == o1 + 2,
+               "RTV-only switch keeping the same DSV leaves omDepthEpoch unchanged while bumping omOutputEpoch");
+        edvr::flatIssueEpochBumpRtDsv(&fakeDsvB);
+        expect(edvr::flatOmDepthEpochLoad() == d1 + 2 && edvr::flatOmOutputEpochLoad() == o1 + 3,
+               "switching to a different DSV bumps omDepthEpoch");
         edvr::runtimeProfileSet(savedProfile);
     }
 

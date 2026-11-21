@@ -81,9 +81,14 @@ public:
     uint32_t count() const noexcept { return count_; }
     const Entry& entry(uint32_t i) const noexcept { return entries_[i]; }
     const Entry* find(const void* identity) const noexcept {
-        if (!identity) return nullptr;
-        for (uint32_t i = 0; i < count_; ++i)
-            if (entries_[i].identity == identity) return &entries_[i];
+        if (!identity || !count_) return nullptr;
+        size_t s = hashSlot(identity);
+        for (size_t step = 0; step < kHashSize; ++step) {
+            const uint8_t v = hash_[(s + step) & kHashMask];
+            if (!v) return nullptr;
+            const Entry& e = entries_[v - 1];
+            if (e.identity == identity) return &e;
+        }
         return nullptr;
     }
 
@@ -93,9 +98,10 @@ public:
     // mapped. nullptr when every entry is this frame's or mapped: nothing changed.
     Entry* claim(Holder buffer, uint32_t width, uint64_t frame) noexcept {
         uint32_t index = count_;
+        bool evicted = false;
         if (index == kCapacity) {
             for (uint32_t i = 0; i < kCapacity; ++i) {
-                if (entries_[i].frame != frame && !entries_[i].mapped) { index = i; break; }
+                if (entries_[i].frame != frame && !entries_[i].mapped) { index = i; evicted = true; break; }
             }
             if (index == kCapacity) return nullptr;
         } else {
@@ -106,6 +112,8 @@ public:
         e.buffer = std::move(buffer);
         e.identity = static_cast<const void*>(e.buffer.Get());
         e.width = width;
+        if (evicted) hashRebuild();
+        else if (e.identity) hashInsert(e.identity, index);
         bump<Faults::skipBumpClaim>();
         return &e;
     }
@@ -144,6 +152,7 @@ public:
     // The device or the context went away: every entry, and its reference, is dropped.
     void clear() noexcept {
         for (uint32_t i = 0; i < kCapacity; ++i) entries_[i] = Entry{};
+        std::memset(hash_, 0, sizeof(hash_));
         count_ = 0;
         bump<Faults::skipBumpClear>();
     }
@@ -196,6 +205,27 @@ private:
     // The entry `e` points at, for changing. It came from find(), so it is one of ours.
     Entry& at(const Entry& e) noexcept { return entries_[static_cast<uint32_t>(&e - entries_)]; }
 
+    static constexpr size_t kHashSize = 256;
+    static constexpr size_t kHashMask = kHashSize - 1;
+    static size_t hashSlot(const void* p) noexcept {
+        uint64_t h = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(p));
+        h ^= h >> 16;
+        h *= 0x9E3779B97F4A7C15ull;
+        return static_cast<size_t>(h >> 56) & kHashMask;
+    }
+    void hashInsert(const void* identity, uint32_t index) noexcept {
+        size_t s = hashSlot(identity);
+        for (size_t step = 0; step < kHashSize; ++step) {
+            const size_t pos = (s + step) & kHashMask;
+            if (!hash_[pos]) { hash_[pos] = static_cast<uint8_t>(index + 1); return; }
+        }
+    }
+    void hashRebuild() noexcept {
+        std::memset(hash_, 0, sizeof(hash_));
+        for (uint32_t i = 0; i < count_; ++i)
+            if (entries_[i].identity) hashInsert(entries_[i].identity, i);
+    }
+
     struct Kept {
         bool made = false;
         const void* b1 = nullptr;
@@ -205,6 +235,7 @@ private:
         FlatCameraRows rows;
     };
     Entry entries_[kCapacity];
+    uint8_t hash_[kHashSize]{}; // 0 = empty, slot + 1 otherwise
     uint32_t count_ = 0;
     uint64_t generation_ = 1;
     uint64_t refreshes_ = 0;

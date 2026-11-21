@@ -86,6 +86,37 @@ struct ImmutableDescriptionCache {
     }
     void clear(){held.Reset();description={};valid=false;}
 };
+template<class Hold,class Description,unsigned N=8>
+struct ImmutableDescriptionRingCache {
+    struct Slot { Hold held{}; Description description{}; bool valid=false; };
+    Slot slots[N]{};
+    unsigned next=0;
+    const Description* find(const Hold& actual) const {
+        if(!actual.Get())return nullptr;
+        for(unsigned i=0;i<N;++i)
+            if(slots[i].valid&&slots[i].held.Get()==actual.Get())return &slots[i].description;
+        return nullptr;
+    }
+    const Description* remember(const Hold& actual,const Description& value) {
+        if(!actual.Get())return nullptr;
+        for(unsigned i=0;i<N;++i)
+            if(slots[i].valid&&slots[i].held.Get()==actual.Get()){slots[i].description=value;return &slots[i].description;}
+        unsigned idx=next;
+        for(unsigned i=0;i<N;++i)if(!slots[i].valid){idx=i;break;}
+        slots[idx].held=actual;slots[idx].description=value;slots[idx].valid=true;
+        next=(idx+1)%N;
+        return &slots[idx].description;
+    }
+    template<class Load>
+    const Description* describe(const Hold& actual,Description& scratch,bool& hit,Load&& load) {
+        hit=false;
+        if(!actual.Get())return nullptr;
+        if(const auto* kept=find(actual)){hit=true;return kept;}
+        if(load(scratch))return remember(actual,scratch);
+        return &scratch;
+    }
+    void clear(){for(unsigned i=0;i<N;++i){slots[i].held.Reset();slots[i].description={};slots[i].valid=false;}next=0;}
+};
 template<class Describe>
 inline TextureObservation describeTexture(uint64_t resource,unsigned mip,unsigned slice,unsigned slices,Describe&& describe) {
     TextureDescription d{};const bool texture=resource&&describe(d);

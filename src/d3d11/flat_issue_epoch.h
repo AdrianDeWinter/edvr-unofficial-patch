@@ -23,6 +23,7 @@ struct FlatIssueEpochState {
     std::atomic<uint64_t> omDepthEpoch{1};
     std::atomic<uint64_t> omOutputEpoch{1};
     std::atomic<uint32_t> omUavMaybeBound{1};
+    std::atomic<uintptr_t> omLastDsv{1}; // sentinel 1 never matches a valid pointer or nullptr
     std::atomic<uintptr_t> buffer{0};
     std::atomic<uint32_t> frozen{0};
     std::atomic<uint64_t> reuse{0};
@@ -92,7 +93,17 @@ inline void flatIssueEpochBumpSetter(std::atomic<uint64_t>* counter) noexcept {
 }
 inline void flatIssueEpochBumpDepth() noexcept { flatIssueEpochBumpSetter(&flatIssueEpochState().depthSets); if (flatIssueEpochSettersCounted()) flatIssueEpochState().omDepthEpoch.fetch_add(1, std::memory_order_acq_rel); }
 inline void flatIssueEpochBumpStage() noexcept { flatIssueEpochBumpSetter(&flatIssueEpochState().stageSets); }
-inline void flatIssueEpochBumpRt() noexcept { flatIssueEpochBumpSetter(&flatIssueEpochState().rtSets); if (flatIssueEpochSettersCounted()) { auto& s = flatIssueEpochState(); s.omDepthEpoch.fetch_add(1, std::memory_order_acq_rel); s.omOutputEpoch.fetch_add(1, std::memory_order_acq_rel); } }
+inline void flatIssueEpochBumpRt() noexcept { flatIssueEpochBumpSetter(&flatIssueEpochState().rtSets); if (flatIssueEpochSettersCounted()) { auto& s = flatIssueEpochState(); s.omLastDsv.store(1u, std::memory_order_release); s.omDepthEpoch.fetch_add(1, std::memory_order_acq_rel); s.omOutputEpoch.fetch_add(1, std::memory_order_acq_rel); } }
+inline void flatIssueEpochBumpRtDsv(const void* dsv) noexcept {
+    flatIssueEpochBumpSetter(&flatIssueEpochState().rtSets);
+    if (flatIssueEpochSettersCounted()) {
+        auto& s = flatIssueEpochState();
+        s.omOutputEpoch.fetch_add(1, std::memory_order_acq_rel);
+        const uintptr_t cur = reinterpret_cast<uintptr_t>(dsv);
+        if (s.omLastDsv.exchange(cur, std::memory_order_acq_rel) != cur)
+            s.omDepthEpoch.fetch_add(1, std::memory_order_acq_rel);
+    }
+}
 inline void flatIssueEpochBumpCb() noexcept { flatIssueEpochBumpSetter(&flatIssueEpochState().cb1Sets); }
 // Frame changes, ClearState, command lists and context swaps. No setter counter:
 // a flight with fresh draws and quiet setters reads this instead.
@@ -102,6 +113,7 @@ inline void flatIssueEpochRevoke() noexcept {
     state.omDepthEpoch.fetch_add(1, std::memory_order_acq_rel);
     state.omOutputEpoch.fetch_add(1, std::memory_order_acq_rel);
     state.omUavMaybeBound.store(1u, std::memory_order_release);
+    state.omLastDsv.store(1u, std::memory_order_release);
     state.buffer.store(0, std::memory_order_release);
     state.revokes.fetch_add(1, std::memory_order_relaxed);
 }

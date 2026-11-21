@@ -30,7 +30,7 @@ void forwardReset(State& s,uint64_t frame=0,bool captureLifecycle=true) {
     if(captureLifecycle)forwardPhaseLifecycle(s);
     geometryCertClear();
     auto& f=s.forwardLight;forwardRevoke(s,0,forward_light::Reason::Ownership);f.ledger.reset(frame);
-    f.dsvDescription.clear();f.depthDescription.clear();f.omDepthCache.clear();f.omOutputCache.clear();
+    f.dsvDescription.clear();f.depthDescription.clear();f.blendDescription.clear();f.omDepthCache.clear();f.omOutputCache.clear();
     for(auto& observed:f.phaseObservedDonor)observed={};
     for(auto& a:f.authority)a={};for(auto& h:f.authorityHdr)h.Reset();
     for(auto& h:f.domainHolds)h={};for(auto& h:f.publicationHolds)h={};
@@ -110,7 +110,7 @@ bool forwardDsvActual(State& s,const FlatContractObservation& k,forward_light::S
         });
         counts.add(depthHit?flatcpu::kCopyRawDepthHit:flatcpu::kCopyRawDepthMiss);
         z=*describedDepth;
-    } else {counts.add(flatcpu::kCopyRawDepthDefault);s.forwardLight.depthDescription.clear();}
+    } else {counts.add(flatcpu::kCopyRawDepthDefault);}
     const forward_light::DsvObservationProof actualProof{out,reinterpret_cast<uintptr_t>(resource.Get()),
         static_cast<uint32_t>(v.ViewDimension),format,static_cast<uint32_t>(v.Format),
         z.DepthEnable!=FALSE,z.DepthWriteMask==D3D11_DEPTH_WRITE_MASK_ALL,(v.Flags&D3D11_DSV_READ_ONLY_DEPTH)!=0};
@@ -271,7 +271,15 @@ void forwardDrawWrites(State& s,ID3D11DeviceContext* actualDrawContext) {
     s.context->OMGetRenderTargetsAndUnorderedAccessViews(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,targets,nullptr,0,n,uavs);
     counts.add(flatcpu::kCopyBlendGet);
     Ptr<ID3D11BlendState> blend;FLOAT factors[4]{};UINT mask=0;s.context->OMGetBlendState(&blend,factors,&mask);
-    D3D11_BLEND_DESC desc{};if(blend){counts.add(flatcpu::kCopyBlendDesc);blend->GetDesc(&desc);}
+    D3D11_BLEND_DESC desc{};
+    if(blend){
+        D3D11_BLEND_DESC freshBlend{};
+        bool blendHit=false;
+        const auto* describedBlend=s.forwardLight.blendDescription.describe(blend,freshBlend,blendHit,[&](D3D11_BLEND_DESC& value){
+            counts.add(flatcpu::kCopyBlendDesc);blend->GetDesc(&value);return true;
+        });
+        desc=*describedBlend;
+    }
     unsigned cachedRtvs=0,cachedUavs=0;
     uintptr_t rtvList[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
     uintptr_t uavList[D3D11_1_UAV_SLOT_COUNT]{};
