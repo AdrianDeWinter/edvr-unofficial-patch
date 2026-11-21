@@ -110,11 +110,14 @@ std::wstring showValue(const SettingDef& def, const std::string& fileValue) {
 
 // Validates and canonicalises a hotkey value through the game's own parser and
 // formatter (src/common/hotkey_text.cpp), so the desktop Settings tab accepts
-// exactly the spellings the in-game runtime recognises.
-bool parseHotkeyText(const std::string& raw, std::string* out) {
+// exactly the spellings the in-game runtime recognises. `allowBlank` is false
+// for hotkey.menu so the menu key cannot be cleared from UI (matching edvr.ini
+// and the in-game menu).
+bool parseHotkeyText(const std::string& raw, bool allowBlank, std::string* out) {
     edvr::HotkeyBinding binding;
     if (!edvr::hotkeyParseBinding(raw.c_str(), &binding, true)) return false;
     if (binding.kind == edvr::HotkeyKind::None) {
+        if (!allowBlank) return false;
         out->clear();
         return true;
     }
@@ -140,22 +143,23 @@ bool SettingRow::parseTyped(const std::wstring& typed, std::string* fileValue) c
     const std::string text = toUtf8(typed);
     if (def->kind == SettingKind::Text) {
         if (def->section && strcmp(def->section, "hotkey") == 0) {
-            return parseHotkeyText(text, fileValue);
+            const bool allowBlank = !(def->key && strcmp(def->key, "menu") == 0);
+            return parseHotkeyText(text, allowBlank, fileValue);
         }
         *fileValue = text;
         return true;
     }
-    double value = 0;
-    if (!asNumber(text, &value)) return false;
+    double parsedNum = 0;
+    if (!asNumber(text, &parsedNum)) return false;
     // "30", "30%" and "0.3" all mean the same thing on a percentage setting.
     // The last of those is what the file already holds, so a value that is
     // already a fraction is left alone rather than turned into 0.003.
     if (def->percent) {
-        const bool typedAsFraction = text.find('%') == std::string::npos && value > 0.0 &&
-                                     value <= 1.0 && text.find('.') != std::string::npos;
-        if (!typedAsFraction) value /= 100.0;
+        const bool typedAsFraction = text.find('%') == std::string::npos && parsedNum > 0.0 &&
+                                     parsedNum <= 1.0 && text.find('.') != std::string::npos;
+        if (!typedAsFraction) parsedNum /= 100.0;
     }
-    *fileValue = tidyNumber(value, def->percent ? 4 : (def->precision > 0 ? 4 : 0));
+    *fileValue = tidyNumber(parsedNum, def->percent ? 4 : (def->precision > 0 ? 4 : 0));
     return true;
 }
 
@@ -292,14 +296,25 @@ bool SettingsModel::set(size_t index, const std::string& value) {
     MergeReport report;
     const std::string updated = mergeIni(source, source, &source, {{dotted, value}}, &report);
 
-    // Clear read-only before atomic replace (some store verifiers leave files read-only).
-    const DWORD attrs = GetFileAttributesW(m_iniPath.c_str());
-    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY))
-        SetFileAttributesW(m_iniPath.c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
+    // If the file is read-only, clear read-only for the atomic replace and reapply it afterward.
+    const DWORD origAttrs = GetFileAttributesW(m_iniPath.c_str());
+    const bool wasReadOnly =
+        origAttrs != INVALID_FILE_ATTRIBUTES && (origAttrs & FILE_ATTRIBUTE_READONLY) != 0;
+    if (wasReadOnly && !SetFileAttributesW(m_iniPath.c_str(), origAttrs & ~FILE_ATTRIBUTE_READONLY)) {
+        m_error = "Could not clear read-only on " + toUtf8(m_iniPath) +
+                  ". Check permissions or clear read-only on that file.";
+        return false;
+    }
 
     std::wstring why;
-    if (!writeFileAtomic(m_iniPath, updated, &why)) {
-        m_error = "Could not write " + leaf + ": " + toUtf8(why) +
+    const bool wrote = writeFileAtomic(m_iniPath, updated, &why);
+    if (wasReadOnly) {
+        const DWORD postAttrs = GetFileAttributesW(m_iniPath.c_str());
+        if (postAttrs != INVALID_FILE_ATTRIBUTES)
+            SetFileAttributesW(m_iniPath.c_str(), postAttrs | FILE_ATTRIBUTE_READONLY);
+    }
+    if (!wrote) {
+        m_error = "Could not write " + toUtf8(m_iniPath) + ": " + toUtf8(why) +
                   ". If the game folder is under Program Files, run the installer as "
                   "administrator.";
         return false;

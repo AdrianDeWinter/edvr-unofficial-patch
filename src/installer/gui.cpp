@@ -217,12 +217,16 @@ void setText(HWND control, const std::string& utf8) {
 
 // Where this game's settings copy lives. The launcher keeps it under its data root, so a run
 // with --data-root leaves the user's real folder alone.
-std::wstring mirrorDirOfGame(const GameInstall& game) {
+std::wstring mirrorRootOfApp() {
 #ifdef EDUP_LAUNCHER
-    return mirrorDirFor(game, launcherMirrorRoot(g.args));
+    return launcherMirrorRoot(g.args);
 #else
-    return mirrorDirFor(game);
+    return defaultMirrorRoot();
 #endif
+}
+
+std::wstring mirrorDirOfGame(const GameInstall& game) {
+    return mirrorDirFor(game, mirrorRootOfApp());
 }
 
 // The report keeps no native scrollbar (an EDIT's bar is the one piece of
@@ -1220,8 +1224,11 @@ std::wstring confirmText(const Plan& plan, const wchar_t* verb, bool purge = fal
     if (!lg.developerNote.empty()) text += L"\n! " + lg.developerNote + L"\n";
 #endif
     if (purge) {
-        text += L"\nClean purge removes ED-UP settings (edvr.ini, edvr-flat.ini), logs, backups, "
-                L"install records, and the settings mirror for this folder.\n\nGo ahead?";
+        text += L"\n";
+        text += tr(L"Clean purge permanently deletes ED-UP settings, logs, install records, the "
+                   L"settings mirror, and everything inside edvr_backup\\ (including any backups "
+                   L"of other mods' files or earlier edvr.ini copies).");
+        text += L"\n\nGo ahead?";
     } else {
         text += L"\nA copy of every file replaced goes into edvr_backup\\.\n\nGo ahead?";
     }
@@ -1258,7 +1265,8 @@ void runAction(AppArgs::Act action) {
     args.removeSettings = args.purge;
     args.scope = scopeChoice();
 
-    const std::wstring mirrorDir = mirrorDirOfGame(g.survey.game);
+    const std::wstring mirrorRoot = mirrorRootOfApp();
+    const std::wstring mirrorDir = mirrorDirFor(g.survey.game, mirrorRoot);
     const bool canMirror = action != AppArgs::Act::Uninstall;
 
     // A folder with no settings file at all but a mirror outside it is exactly
@@ -1322,6 +1330,32 @@ void runAction(AppArgs::Act action) {
         // installer new enough to mirror at all -- an install already at the
         // latest build must not have to wait for its next update to get one.
         if (canMirror && plan.nothingToDo) updateMirror(g.survey.game.dir, plan.backupDir, mirrorDir);
+        if (plan.nothingToDo && action == AppArgs::Act::Uninstall && args.purge) {
+            const bool shared = mirrorSharedWithAnotherInstall(g.survey.game, mirrorDir, mirrorRoot, g.installs);
+            const bool hasMirror = !mirrorDir.empty() && dirExists(mirrorDir) && !shared;
+#ifdef EDUP_LAUNCHER
+            const std::wstring edlaunch = findEdLaunch(g.survey.game.dir);
+            const size_t slash = edlaunch.find_last_of(L"\\/");
+            const bool hasShim = !edlaunch.empty() && slash != std::wstring::npos &&
+                                 fileExists(joinPath(edlaunch.substr(0, slash), kEdLaunchMarkerName));
+#else
+            const bool hasShim = false;
+#endif
+            if (hasMirror || hasShim) {
+                if (args.autorun ||
+                    MessageBoxW(g.window, confirmText(plan, L"About to remove ED-UP:", true).c_str(), kAppTitle,
+                                MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES) {
+                    std::vector<std::string> purgeNotes;
+                    purgeAfterUninstall(g.survey.game.dir, mirrorDir, &purgeNotes, !shared);
+                    std::string out = planReport(plan) + "\r\n----\r\n";
+                    for (const std::string& note : purgeNotes) out += "  " + note + "\r\n";
+                    out += "\r\nClean purge complete.\r\n";
+                    setReport(out);
+                    showSurvey();
+                    return;
+                }
+            }
+        }
         setReport(planReport(plan) + "\r\n----\r\n" + planSummary(plan) + "\r\n");
         showSurvey();
         return;
@@ -1375,8 +1409,9 @@ void runAction(AppArgs::Act action) {
     for (const std::string& line : result.done) text += "  " + line + "\r\n";
     if (result.ok) {
         if (action == AppArgs::Act::Uninstall && args.purge) {
+            const bool shared = mirrorSharedWithAnotherInstall(g.survey.game, mirrorDir, mirrorRoot, g.installs);
             std::vector<std::string> purgeNotes;
-            purgeAfterUninstall(g.survey.game.dir, mirrorDir, &purgeNotes);
+            purgeAfterUninstall(g.survey.game.dir, mirrorDir, &purgeNotes, !shared);
             for (const std::string& note : purgeNotes) text += "  " + note + "\r\n";
             text += "\r\nClean purge complete.\r\n";
         } else {

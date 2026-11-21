@@ -974,6 +974,32 @@ def self_test():
         hdef_found = list(_heroic(hdef_cfg, None, home, legenv))
         assert len(hdef_found) == 1 and hdef_found[0].game_dir == hdef_leaf.resolve()
         assert hdef_found[0].prefix == hdef_pfx and hdef_found[0].manager == "heroic"
+        assert hdef_found[0].runner is None and hdef_found[0].runner_kind == "unknown"
+
+        # Heroic fallback matched-runner branch via GamesConfig targeting the default prefix.
+        hdef_wine = executable("runners/heroic-wine/bin/wine")
+        hdef_gc = hdef_cfg / "GamesConfig/9c203b6ed35846e8a4a9ff1e314f6593.json"
+        hdef_gc.write_text(json.dumps({
+            "9c203b6ed35846e8a4a9ff1e314f6593": {
+                "winePrefix": str(hdef_pfx),
+                "wineVersion": {"bin": str(hdef_wine), "type": "wine"},
+                "enviromentOptions": [{"key": "DXVK_HUD", "value": "fps"}, {"key": "UNSAFE_VAR", "value": "1"}],
+            }
+        }), encoding="utf-8")
+        hdef_runner = list(_heroic(hdef_cfg, None, home, legenv))
+        assert len(hdef_runner) == 1
+        assert hdef_runner[0].runner == hdef_wine and hdef_runner[0].runner_kind == "wine"
+        assert hdef_runner[0].config_source == hdef_gc and hdef_runner[0].env == {"DXVK_HUD": "fps"}
+
+        # Heroic fallback deduplicates against installed.json when both point at the default install.
+        hdef_inst = hdef_cfg / "legendaryConfig/legendary/installed.json"
+        hdef_inst.parent.mkdir(parents=True, exist_ok=True)
+        hdef_inst.write_text(json.dumps({
+            "9c203b6ed35846e8a4a9ff1e314f6593": {"install_path": str(hdef_root)}
+        }), encoding="utf-8")
+        hdef_dedup = list(_heroic(hdef_cfg, None, home, legenv))
+        assert len(hdef_dedup) == 1 and hdef_dedup[0].app_name == "9c203b6ed35846e8a4a9ff1e314f6593"
+        assert hdef_dedup[0].source == hdef_inst
 
         # Discovery leaves even absent configured directories absent.
         def snapshot():

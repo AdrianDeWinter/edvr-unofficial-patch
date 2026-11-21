@@ -281,15 +281,20 @@ std::wstring wrappedCommandDir(const std::vector<std::wstring>& wrapped) {
     return slash == std::wstring::npos ? std::wstring() : exe.substr(0, slash);
 }
 
-// Builds a fallback RouteOps when invoked as a Steam %command% wrapper: instead of opening
+// Builds RouteOps when invoked as a Steam %command% wrapper: instead of opening
 // steam://rungameid/359320 (which would re-invoke %command% in a loop), spawn the wrapped exe directly.
 // Because /vr or /novr is passed on the wrapped command line, wrappedCarriesMode is set so VR does not
-// require a separate Settings.xml vr_3d_mode selection.
+// require a separate Settings.xml vr_3d_mode selection. If a wrapped command was given but its exe is
+// missing, fail closed instead of falling back to steam://rungameid (which would loop).
 RouteOps headlessRouteOps(const std::vector<std::wstring>& wrapped, bool vr) {
     RouteOps ops = realRouteOps();
     if (wrapped.empty()) return ops;
     const std::wstring wrappedExe = wrapped.front();
-    if (!fileExists(wrappedExe)) return ops;
+    ops.wrappedCarriesMode = true;
+    if (!fileExists(wrappedExe)) {
+        ops.openUri = [](const std::wstring&) { return false; };
+        return ops;
+    }
     std::wstring extra;
     bool hasMode = false;
     for (size_t i = 1; i < wrapped.size(); ++i) {
@@ -303,7 +308,6 @@ RouteOps headlessRouteOps(const std::vector<std::wstring>& wrapped, bool vr) {
     }
     const std::wstring workDir = wrappedCommandDir(wrapped);
     auto baseSpawn = ops.spawn;
-    ops.wrappedCarriesMode = true;
     ops.openUri = [baseSpawn, wrappedExe, extra, workDir](const std::wstring&) {
         return baseSpawn && baseSpawn(wrappedExe, extra, workDir);
     };
@@ -325,6 +329,10 @@ int headlessPlay(const AppArgs& args, Output& out) {
         const int updateCode = runUpdateCommand(args, out);
         if (updateCode == 3) return updateCode;  // refused manifest
         if (args.action != AppArgs::Act::None && updateCode != 0 && updateCode != 4) return updateCode;
+    }
+    if (!args.wrappedArgs.empty() && !fileExists(args.wrappedArgs.front())) {
+        out.line("Wrapped command executable not found: " + narrowUtf8(args.wrappedArgs.front()));
+        return 2;
     }
     // Without --dir, check a wrapped executable's folder (Steam %command%) first, then this exe's folder.
     std::wstring dir = args.dir;
@@ -395,8 +403,20 @@ int headlessPlay(const AppArgs& args, Output& out) {
     // The window's close: here it ends the wait. The lines are printed after each job, not from a callback.
     env.closeWindow = [&closeRequested]() { closeRequested = true; };
     const std::wstring settingsBackupDir = joinPath(env.roots.launcherDir(), L"backups");
-    env.prepareLaunchMode = [settingsBackupDir](bool vr, edvr::VrHeadsetMode preferredVrMode, std::string* error) {
-        return prepareSettingsXmlForLaunch(defaultEliteSettingsXmlPath(), settingsBackupDir, vr, preferredVrMode, error);
+    const std::wstring gameDirForXml = game.dir;
+    auto lastSettingsSnapshot = std::make_shared<SettingsXmlSnapshot>();
+    env.detectVrMode = [](const std::wstring& dirForXml) {
+        return detectVrHeadsetModeFromSettingsXml(defaultEliteSettingsXmlPath(dirForXml));
+    };
+    env.prepareLaunchMode = [settingsBackupDir, gameDirForXml, lastSettingsSnapshot](
+                                bool vr, edvr::VrHeadsetMode preferredVrMode, std::string* error) {
+        return prepareSettingsXmlForLaunch(defaultEliteSettingsXmlPath(gameDirForXml), settingsBackupDir, vr,
+                                             preferredVrMode, error, L"EliteDangerous64.exe",
+                                             lastSettingsSnapshot.get());
+    };
+    env.restoreLaunchMode = [lastSettingsSnapshot]() {
+        restoreSettingsXmlFromSnapshot(*lastSettingsSnapshot);
+        *lastSettingsSnapshot = SettingsXmlSnapshot();
     };
     // No askLogin or askCode: a headless start never asks. A Frontier-store direct launch without a stored
     // login stops with a line saying so, and the install's own route is not taken by surprise.

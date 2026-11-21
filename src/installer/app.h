@@ -97,11 +97,18 @@ bool isElevated();
 bool elevationBlocksPlay(bool tokenElevated, unsigned long elevationType);
 bool isElevatedForPlay();
 
+// Returns true when `mirrorDir` is also the mirror location for another discovered install in
+// `knownInstalls`, so clean purge will not delete a shared mirror belonging to two folders.
+bool mirrorSharedWithAnotherInstall(const GameInstall& target, const std::wstring& mirrorDir,
+                                    const std::wstring& mirrorRoot,
+                                    const std::vector<GameInstall>& knownInstalls);
+
 // Cleans up artifacts outside the game directory after a --purge uninstall
-// (any EDLaunch stand-in shim and the settings mirror folder), appending notes
-// for what was removed. Shared by console, GUI, and elevated plan apply.
-void purgeAfterUninstall(const std::wstring& gameDir, const std::wstring& mirrorDir,
-                         std::vector<std::string>* notes);
+// (any EDLaunch stand-in shim and, when `removeMirror` is true, the settings mirror folder),
+// appending notes for what was removed. Shared by console, GUI, and elevated plan apply.
+// Returns true if anything was removed.
+bool purgeAfterUninstall(const std::wstring& gameDir, const std::wstring& mirrorDir,
+                         std::vector<std::string>* notes, bool removeMirror = true);
 
 int runConsole(const AppArgs& args);
 int runGui(HINSTANCE instance, const AppArgs& args);

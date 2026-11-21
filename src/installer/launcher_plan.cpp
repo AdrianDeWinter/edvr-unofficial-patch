@@ -189,7 +189,16 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
         return blocked;
     }
     if (plan.nothingToDo) {
-        if (!uninstall) updateMirror(survey.game.dir, plan.backupDir, mirrorDir);
+        if (!uninstall) {
+            updateMirror(survey.game.dir, plan.backupDir, mirrorDir);
+        } else if (file.purge) {
+            const std::vector<GameInstall> known = installs ? *installs : findInstalls();
+            const bool shared = mirrorSharedWithAnotherInstall(survey.game, mirrorDir, paths.dataRoot, known);
+            if (purgeAfterUninstall(survey.game.dir, mirrorDir, &outcome.lines, !shared)) {
+                outcome.status = ApplyOutcome::Status::Done;
+                return outcome;
+            }
+        }
         outcome.status = ApplyOutcome::Status::NothingToDo;
         outcome.lines.push_back(planSummary(plan));
         return outcome;
@@ -211,7 +220,9 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
             outcome.lines.push_back("Mirrored " + saved + " to " + narrowUtf8(mirrorDir) + ".");
         }
     } else if (file.purge) {
-        purgeAfterUninstall(survey.game.dir, mirrorDir, &outcome.lines);
+        const std::vector<GameInstall> known = installs ? *installs : findInstalls();
+        const bool shared = mirrorSharedWithAnotherInstall(survey.game, mirrorDir, paths.dataRoot, known);
+        purgeAfterUninstall(survey.game.dir, mirrorDir, &outcome.lines, !shared);
     }
     outcome.status = ApplyOutcome::Status::Done;
     return outcome;

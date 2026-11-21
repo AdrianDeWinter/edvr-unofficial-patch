@@ -110,18 +110,37 @@ const char* elevatedRefusal();
 // elevated process. `error` says why on false.
 bool startRoute(const LaunchRoute& route, const RouteOps& ops, bool elevated, std::string* error);
 
-// Default path to Elite's Settings.xml under %LOCALAPPDATA% (empty if LocalAppData cannot be resolved).
-std::wstring defaultEliteSettingsXmlPath();
+// Default path to Elite's Settings.xml. On Wine/Linux, derives Elite's Proton compatdata prefix
+// from `gameDir` when it sits under a Steam library (so a launcher running in another prefix still
+// targets Elite's own Settings.xml), falling back to %LOCALAPPDATA%.
+std::wstring defaultEliteSettingsXmlPath(const std::wstring& gameDir = std::wstring());
+
+// Reads Elite's Settings.xml and returns its VR headset mode (3..6) when already set, else NotSet.
+// Used to seed vr_3d_mode once for existing VR players while keeping NotSet for new VR users.
+edvr::VrHeadsetMode detectVrHeadsetModeFromSettingsXml(const std::wstring& settingsXmlPath);
+
+struct SettingsXmlSnapshot {
+    bool modified = false;
+    bool wasReadOnly = false;
+    std::wstring path;
+    std::wstring backupPath;
+};
+
+// Restores Settings.xml from a snapshot written by prepareSettingsXmlForLaunch (e.g. when opening
+// the store URI fails after Settings.xml was already modified), preserving read-only state.
+bool restoreSettingsXmlFromSnapshot(const SettingsXmlSnapshot& snapshot, std::string* error = nullptr);
 
 // Prepares Elite's Settings.xml for a launch (`vr` = true for VR, false for flat) before starting the
 // store client. Refuses if `gameExeName` (when non-empty) is already running. Keeps a one-time
 // Settings.xml.ed-up-original (the untouched original before ED-UP first writes) plus a rolling
-// Settings.xml.bak in `backupDir`. For flat, writes 0 into <StereoscopicMode> (inserting the tag
-// before </GraphicsOptions> if absent). For VR, requires `preferredVrMode` != NotSet (refuses without
-// modifying the file when NotSet) and writes that mode. A parse failure writes nothing.
+// Settings.xml.bak in `backupDir`. If Settings.xml is read-only, temporarily clears read-only for
+// the write and restores it afterward (failing with the file path if read-only cannot be cleared).
+// For flat, leaves <= 1 untouched, rewrites >= 2 to 0, or inserts 0 before </GraphicsOptions>.
+// For VR, requires `preferredVrMode` != NotSet (refuses without modifying the file when NotSet).
 bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std::wstring& backupDir, bool vr,
                                  edvr::VrHeadsetMode preferredVrMode, std::string* error,
-                                 const std::wstring& gameExeName = L"EliteDangerous64.exe");
+                                 const std::wstring& gameExeName = L"EliteDangerous64.exe",
+                                 SettingsXmlSnapshot* snapshot = nullptr);
 
 // The names the watcher looks for, so that a rig can use programs of its own.
 struct WatchNames {

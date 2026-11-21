@@ -20,7 +20,7 @@ From a script, Steam Launch Options, or another launcher such as `min-ed-launche
 - Add `--close-after-start` to exit as soon as Elite is running.
 - Add `--update` to check for and download a signed release before launching (non-blocking if offline).
 - Add `--frontier-login` on a Steam install to sign in with a Frontier email/password instead of Steam's session ticket.
-- In Steam's **Launch Options**, wrap `%command%` using the full path to `ed-up-launcher.exe` (Steam does not expand `%LOCALAPPDATA%` in Launch Options; replace `<your-name>` with your Windows user name) so Steam tracks playtime and injects the Steam Overlay / Steam Input virtual menus:
+- In Steam's **Launch Options**, wrap `%command%` using the full path to `ed-up-launcher.exe` (Steam does not expand `%LOCALAPPDATA%` in Launch Options; replace `<your-name>` with your Windows user name) so ED-UP runs its pre-launch steps and then starts Steam's wrapped `EDLaunch.exe` directly with `/vr` or `/novr` instead of re-entering `steam://rungameid`:
 
 ```text
 "C:\Users\<your-name>\AppData\Local\EDVR\launcher\ed-up-launcher.exe" --headless %command%
@@ -32,11 +32,11 @@ From a script, Steam Launch Options, or another launcher such as `min-ed-launche
 "%LOCALAPPDATA%\EDVR\launcher\ed-up-launcher.exe" --update --install --dir "C:\Path\To\Products\elite-dangerous-odyssey-64"
 ```
 
-Every store offers **Play VR** and **Play flat** (filtered to the modes installed in that folder). Frontier's launcher takes `/vr` or `/novr` on its command line. For Steam and Epic without direct launch, the launcher updates `<StereoscopicMode>` in Elite's `Settings.xml` before opening Steam or Epic, keeping a one-time original backup at `backups\Settings.xml.ed-up-original` and a rolling backup of the previous state at `backups\Settings.xml.bak`:
+Every store offers **Play VR** and **Play flat** (filtered to the modes installed in that folder). Frontier's launcher takes `/vr` or `/novr` on its command line. For Steam and Epic without direct launch, the launcher updates `<StereoscopicMode>` in Elite's `Settings.xml` before opening Steam or Epic, keeping a one-time original backup at `backups\Settings.xml.ed-up-original` and a rolling backup of the previous state at `backups\Settings.xml.bak` (rolling `Settings.xml` back if opening the store client fails):
 
-- **Play flat** writes `0` (Off) into `<StereoscopicMode>` without changing your saved VR preference.
+- **Play flat** leaves `0` (Off) and `1` (Anaglyph) untouched, rewrites `2`..`6` to `0` (or inserts `0` if absent), and never changes your saved VR preference.
 - **Play VR** writes your chosen **VR 3D mode** from the Launch panel (saved as `vr_3d_mode` in `launcher.ini`):
-  - **Not Set** (`not_set`, default): stops before launching in VR and prompts you to choose your preferred 3D mode first.
+  - **Not Set** (`not_set`, default): if `Settings.xml` already holds a VR mode (`3`..`6`), the launcher seeds and saves that mode automatically; otherwise it stops before launching in VR and prompts you to choose your preferred 3D mode first.
   - **HMD (Headphones)** (`hmd_headphones`)
   - **HMD (Speakers)** (`hmd_speakers`)
   - **HMD Cinema (Headphones)** (`hmd_cinema_headphones`)
@@ -50,9 +50,9 @@ An Epic copy is handed to the Epic launcher. Play does not ask for a Frontier pa
 
 On Windows, a checkbox can start the game directly and let you pick headset or monitor. The launcher then signs in to Frontier with your Steam login. It sends what Frontier's own launcher sends: a sign-in ticket from Steam, and an ID for this PC. It stores no password and no token. The checkbox stays off until you turn it on. Frontier has not approved this sign-in.
 
-If your Steam-installed copy uses a separate Frontier email/password account (such as a Frontier-store or alternate account), tick **Use Frontier account login** under Launch (or pass `--frontier-login`).
+If your Steam-installed copy uses a separate Frontier email/password account, tick **Use Frontier account login** under Launch (or pass `--frontier-login`).
 
-Because direct launch starts `EliteDangerous64.exe` directly outside Steam, Steam does not inject its overlay unless the launcher itself is invoked through Steam's Launch Options (`--headless %command%` above). If you rely on Steam Input virtual menus, either wrap `%command%` or leave direct launch unchecked so Steam launches Elite itself.
+Because direct launch starts `EliteDangerous64.exe` directly outside Steam, leave direct launch unchecked if you want Steam itself to launch Elite.
 
 If any part of the sign-in fails, the launcher says why and starts the game through Steam instead.
 

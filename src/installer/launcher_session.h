@@ -106,10 +106,14 @@ struct SessionEnv {
     std::function<bool(const std::string& note, LoginForm* form)> askLogin;
     std::function<bool(const std::string& email, const std::string& note, std::string* code)> askCode;
 
-    // Optional pre-launch Settings.xml update for store routes that do not pass /vr or /novr
-    // (Steam and Epic non-direct). Called before startRoute with the preferred VR headset mode.
-    // Returning false stops Play with *error.
+    // Optional pre-launch Settings.xml helpers for store routes that do not pass /vr or /novr
+    // (Steam and Epic non-direct):
+    // - detectVrMode: reads an existing 3..6 VR mode from Settings.xml to seed vr_3d_mode once.
+    // - prepareLaunchMode: writes Settings.xml before startRoute; returning false stops Play.
+    // - restoreLaunchMode: rolls Settings.xml back from its snapshot if startRoute fails.
+    std::function<edvr::VrHeadsetMode(const std::wstring& gameDir)> detectVrMode;
     std::function<bool(bool vr, edvr::VrHeadsetMode preferredVrMode, std::string* error)> prepareLaunchMode;
+    std::function<void()> restoreLaunchMode;
 };
 
 class LauncherSession {
@@ -177,6 +181,9 @@ public:
     // Preferred VR headset mode, or VrHeadsetMode::NotSet when unset.
     edvr::VrHeadsetMode vrStereoMode() const { return vrStereoMode_; }
     void setVrStereoMode(edvr::VrHeadsetMode mode);
+    // If vrStereoMode() is NotSet and env_.detectVrMode finds an existing 3..6 mode in
+    // Settings.xml, persists that mode to launcher.ini as the new saved default.
+    edvr::VrHeadsetMode seedVrStereoModeFromSettings(const std::wstring& gameDir);
     // Saves the setting to launcher.ini. The window's checkbox; --close-after-start does not write it.
     void setCloseAfterStart(bool on);
     // True once the game has been seen running (or the direct start gave a process), for the run's exit code.

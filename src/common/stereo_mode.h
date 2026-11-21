@@ -113,12 +113,39 @@ enum class StereoWriteStatus {
     NoHeadsetMode,  // VR launch requested while preferred VR 3D mode is NotSet
 };
 
+// Reads the numeric value of <StereoscopicMode> from Elite's Settings.xml.
+// Returns true and writes *outMode (0..6) when a valid tag is present; false if
+// the tag is absent or malformed.
+inline bool readStereoscopicMode(const std::string& xml, int* outMode) {
+    static const char kTag[] = "<StereoscopicMode>";
+    static const char kClose[] = "</StereoscopicMode>";
+    const size_t openPos = xml.find(kTag);
+    if (openPos == std::string::npos) return false;
+    size_t p = openPos + (sizeof(kTag) - 1);
+    while (p < xml.size() && (xml[p] == ' ' || xml[p] == '\t' || xml[p] == '\r' || xml[p] == '\n')) ++p;
+    if (p >= xml.size() || xml[p] < '0' || xml[p] > '9') return false;
+    int v = 0;
+    while (p < xml.size() && xml[p] >= '0' && xml[p] <= '9') {
+        v = v * 10 + (xml[p] - '0');
+        if (v > 6) return false;
+        ++p;
+    }
+    while (p < xml.size() && (xml[p] == ' ' || xml[p] == '\t' || xml[p] == '\r' || xml[p] == '\n')) ++p;
+    const size_t closeLen = sizeof(kClose) - 1;
+    if (p + closeLen > xml.size() || xml.compare(p, closeLen, kClose) != 0) return false;
+    if (outMode) *outMode = v;
+    return true;
+}
+
 // Prepares a minimal byte-preserving Settings.xml update for a launch (`vr` = true for VR, false for flat).
-// - Flat: replaces only the digit text inside <StereoscopicMode> with "0" (Unchanged when already 0),
-//   or inserts <StereoscopicMode>0</StereoscopicMode> before </GraphicsOptions> when the tag is absent.
+// - Flat: leaves values <= 1 (0 Off, 1 Anaglyph) untouched because ED-UP treats <= 1 as flat;
+//   replaces >= 2 with "0", or inserts <StereoscopicMode>0</StereoscopicMode> before </GraphicsOptions>
+//   when the tag is absent.
 // - VR: requires `preferredVrMode` != NotSet; returns NoHeadsetMode (writing nothing) when NotSet.
-//   When set, replaces only the digit text inside <StereoscopicMode> (Unchanged if it already matches),
-//   or inserts the tag before </GraphicsOptions> if absent.
+//   Refusing NotSet is intentional: for a new VR user whose Settings.xml has no headset mode yet,
+//   we cannot guess the right audio/cinema choice (existing 3..6 modes are seeded by the launcher
+//   into launcher.ini before this check). When set, replaces only the digit text inside
+//   <StereoscopicMode> (Unchanged if it already matches), or inserts the tag before </GraphicsOptions>.
 // - A parse failure or missing </GraphicsOptions> always writes nothing.
 inline StereoWriteStatus rewriteStereoscopicMode(const std::string& xml, bool vr, VrHeadsetMode preferredVrMode,
                                                  std::string* outXml, int* existingMode = nullptr) {
@@ -158,6 +185,7 @@ inline StereoWriteStatus rewriteStereoscopicMode(const std::string& xml, bool vr
     if (p + closeLen > xml.size() || xml.compare(p, closeLen, kClose) != 0) return StereoWriteStatus::ParseFailed;
 
     if (existingMode) *existingMode = v;
+    if (!vr && v <= kStereoModeAnaglyph) return StereoWriteStatus::Unchanged;
     if (v == targetMode) return StereoWriteStatus::Unchanged;
     if (outXml) *outXml = xml.substr(0, valStart) + std::to_string(targetMode) + xml.substr(valEnd);
     return StereoWriteStatus::Updated;

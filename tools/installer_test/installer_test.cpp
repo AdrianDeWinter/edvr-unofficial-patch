@@ -7794,6 +7794,26 @@ int wmain(int argc, wchar_t** argv) {
               hasStep(plan, Action::RemoveDir, L"edvr_backup", nullptr) &&
               hasStep(plan, Action::RemoveDir, L"edvr_install", nullptr),
               "clean purge removes edvr_logs, edvr_backup and edvr_install");
+        // edvr_backup\ must be the last RemoveDir so rollback snapshots stay intact if an earlier step fails.
+        int installIdx = -1, backupIdx = -1;
+        for (size_t i = 0; i < plan.steps.size(); ++i) {
+            if (plan.steps[i].action == Action::RemoveDir) {
+                if (leafOf(plan.steps[i].to) == L"edvr_install") installIdx = static_cast<int>(i);
+                if (leafOf(plan.steps[i].to) == L"edvr_backup") backupIdx = static_cast<int>(i);
+            }
+        }
+        check(installIdx >= 0 && backupIdx > installIdx,
+              "clean purge removes edvr_backup after edvr_install");
+
+        // Flat-scope clean purge must leave VR's edvr.ini intact while deleting edvr-flat.ini.
+        {
+            Options flatPurge = purgeOpts;
+            flatPurge.scope = "flat";
+            const Plan flatPlan = planUninstall(s, flatPurge, p);
+            check(!hasStep(flatPlan, Action::Delete, L"edvr.ini", nullptr) &&
+                  hasStep(flatPlan, Action::Delete, L"edvr-flat.ini", nullptr),
+                  "flat-scope clean purge removes edvr-flat.ini without deleting VR's edvr.ini");
+        }
 
         const ApplyResult applied = applyPlan(plan, [](const std::string&, const void**, size_t*) { return false; });
         check(applied.ok, "clean purge applies cleanly", applied.error);
@@ -7835,7 +7855,7 @@ int wmain(int argc, wchar_t** argv) {
             std::string parsed;
             check(row.parseTyped(L"f8", &parsed) && parsed == "F8", "lowercase key canonicalises to F8");
             check(row.parseTyped(L"ctrl+shift+f9", &parsed) && parsed == "CTRL+SHIFT+F9", "modifier chord canonicalises");
-            check(row.parseTyped(L"   ", &parsed) && parsed.empty(), "blank disables the hotkey");
+            check(!row.parseTyped(L"   ", &parsed), "blank is rejected for hotkey.menu (cannot clear menu key from UI)");
             check(row.parseTyped(L"gamepad_back", &parsed) && parsed == "GamePad_Back", "gamepad button canonicalises");
             check(row.parseTyped(L"231d0200:joy_12", &parsed) && parsed == "231D0200:Joy_12", "joystick button canonicalises");
             check(row.parseTyped(L"0x77", &parsed) && parsed == "F8", "raw hex VK_F8 canonicalises through hotkey.cpp to F8");

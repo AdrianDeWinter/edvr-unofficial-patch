@@ -1914,7 +1914,7 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     // settings it had no business touching. edvr.ini for vr and both, edvr-flat.ini for flat and both.
     plan.settingsFile = flatEdition ? "edvr-flat.ini" : "edvr.ini";
     for (const bool flatFile : {false, true}) {
-        if (!o.purge && (flatFile ? scope == "vr" : scope == "flat")) continue;
+        if (flatFile ? scope == "vr" : scope == "flat") continue;
         const char* profile = flatFile ? "flat" : "vr";
         const std::wstring iniPath = settingsPathFor(s.game.dir, profile);
         const std::string iniName = toUtf8(settingsLeafFor(profile));
@@ -1966,8 +1966,9 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         const std::wstring backupsDir = backupRootPath(s.game.dir);
         const std::wstring installDir = stateDirPath(s.game.dir);
         if (dirExists(logsDir)) removeDir(logsDir, "removes edvr_logs\\ (clean purge)");
-        if (dirExists(backupsDir)) removeDir(backupsDir, "removes edvr_backup\\ (clean purge)");
         if (dirExists(installDir)) removeDir(installDir, "removes edvr_install\\ (clean purge)");
+        // Remove edvr_backup\ last so rollback snapshots remain intact if any prior removal fails.
+        if (dirExists(backupsDir)) removeDir(backupsDir, "removes edvr_backup\\ (clean purge)");
     }
 
     if (!changed) {
@@ -1984,8 +1985,9 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         plan.steps.insert(plan.steps.end(), body.begin(), body.end());
         if (o.purge) {
             plan.notes.push_back(
-                "Clean purge: logs in edvr_logs\\, backups in edvr_backup\\, edvr_install\\, and "
-                "this install's settings mirror will be removed permanently.");
+                "Clean purge: logs in edvr_logs\\, edvr_install\\, the settings mirror, and "
+                "everything in edvr_backup\\ (including any saved copies of other mods' files "
+                "or earlier edvr.ini files) will be removed permanently.");
         } else {
             plan.notes.push_back(
                 "Logs in edvr_logs\\ and the backups in edvr_backup\\ are left where they are; delete "

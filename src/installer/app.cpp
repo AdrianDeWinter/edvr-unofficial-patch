@@ -541,13 +541,15 @@ int runConsole(const AppArgs& args) {
     }
 
 #ifdef EDUP_LAUNCHER
-    const std::wstring mirrorDir = mirrorDirFor(survey.game, launcherMirrorRoot(args));
+    const std::wstring mirrorRoot = launcherMirrorRoot(args);
+    const std::wstring mirrorDir = mirrorDirFor(survey.game, mirrorRoot);
     if (!havePayload && args.action != AppArgs::Act::Uninstall) {
         writeOut("\r\nThere is nothing to install from yet: " + payloadNote + "\r\n");
         return 5;
     }
 #else
-    const std::wstring mirrorDir = mirrorDirFor(survey.game);
+    const std::wstring mirrorRoot = defaultMirrorRoot();
+    const std::wstring mirrorDir = mirrorDirFor(survey.game, mirrorRoot);
 #endif
     const bool canMirror = args.action != AppArgs::Act::Uninstall;
 
@@ -601,6 +603,17 @@ int runConsole(const AppArgs& args) {
         // installer new enough to mirror at all -- an install already at the
         // latest build must not have to wait for its next update to get one.
         if (canMirror && !args.dryRun) updateMirror(survey.game.dir, plan.backupDir, mirrorDir);
+        if (args.action == AppArgs::Act::Uninstall && args.purge && !args.dryRun) {
+            const std::vector<GameInstall> known = findInstalls();
+            const bool shared = mirrorSharedWithAnotherInstall(survey.game, mirrorDir, mirrorRoot, known);
+            std::vector<std::string> purgeNotes;
+            if (purgeAfterUninstall(survey.game.dir, mirrorDir, &purgeNotes, !shared)) {
+                for (const std::string& note : purgeNotes) writeOut("  " + note + "\r\n");
+                writeOut("\r\nClean purge complete.\r\n");
+            } else {
+                for (const std::string& note : purgeNotes) writeOut("  " + note + "\r\n");
+            }
+        }
         return 0;
     }
     if (args.dryRun) return 0;
@@ -628,25 +641,58 @@ int runConsole(const AppArgs& args) {
                                        .c_str(),
                                    m.saved));
     } else if (args.purge) {
+        const std::vector<GameInstall> known = findInstalls();
+        const bool shared = mirrorSharedWithAnotherInstall(survey.game, mirrorDir, mirrorRoot, known);
         std::vector<std::string> purgeNotes;
-        purgeAfterUninstall(survey.game.dir, mirrorDir, &purgeNotes);
+        purgeAfterUninstall(survey.game.dir, mirrorDir, &purgeNotes, !shared);
         for (const std::string& note : purgeNotes) writeOut("  " + note + "\r\n");
     }
     writeOut("\r\nDone.\r\n");
     return 0;
 }
 
-void purgeAfterUninstall(const std::wstring& gameDir, const std::wstring& mirrorDir,
-                         std::vector<std::string>* notes) {
+bool mirrorSharedWithAnotherInstall(const GameInstall& target, const std::wstring& mirrorDir,
+                                    const std::wstring& mirrorRoot,
+                                    const std::vector<GameInstall>& knownInstalls) {
+    if (mirrorDir.empty() || mirrorRoot.empty()) return false;
+    for (const GameInstall& other : knownInstalls) {
+        if (_wcsicmp(other.dir.c_str(), target.dir.c_str()) == 0) continue;
+        const std::wstring otherMirror = mirrorDirFor(other, mirrorRoot);
+        if (!otherMirror.empty() && _wcsicmp(otherMirror.c_str(), mirrorDir.c_str()) == 0) return true;
+    }
+    return false;
+}
+
+bool purgeAfterUninstall(const std::wstring& gameDir, const std::wstring& mirrorDir,
+                         std::vector<std::string>* notes, bool removeMirror) {
+    bool removedAny = false;
 #ifdef EDUP_LAUNCHER
     std::string shimError;
-    if (!removeEdLaunchShim(gameDir, &shimError) && !shimError.empty() && notes)
-        notes->push_back(shimError);
+    const std::wstring edlaunch = findEdLaunch(gameDir);
+    const size_t slash = edlaunch.find_last_of(L"\\/");
+    const bool hadShim = !edlaunch.empty() && slash != std::wstring::npos &&
+                         fileExists(joinPath(edlaunch.substr(0, slash), kEdLaunchMarkerName));
+    if (!removeEdLaunchShim(gameDir, &shimError)) {
+        if (!shimError.empty() && notes) notes->push_back(shimError);
+    } else if (hadShim) {
+        removedAny = true;
+        if (notes) notes->push_back("Restored original EDLaunch.exe.");
+    }
 #else
     (void)gameDir;
 #endif
-    if (!mirrorDir.empty() && dirExists(mirrorDir) && removeDirectoryTree(mirrorDir) && notes)
-        notes->push_back("Removed settings mirror " + toUtf8(mirrorDir) + ".");
+    if (!mirrorDir.empty() && dirExists(mirrorDir)) {
+        if (!removeMirror) {
+            if (notes) {
+                notes->push_back("Kept settings mirror " + toUtf8(mirrorDir) +
+                                 " because another install shares it.");
+            }
+        } else if (removeDirectoryTree(mirrorDir)) {
+            removedAny = true;
+            if (notes) notes->push_back("Removed settings mirror " + toUtf8(mirrorDir) + ".");
+        }
+    }
+    return removedAny;
 }
 
 }  // namespace edvr::installer

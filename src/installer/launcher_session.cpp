@@ -284,6 +284,13 @@ void LauncherSession::setVrStereoMode(edvr::VrHeadsetMode mode) {
     changed();
 }
 
+edvr::VrHeadsetMode LauncherSession::seedVrStereoModeFromSettings(const std::wstring& gameDir) {
+    if (vrStereoMode_ != edvr::VrHeadsetMode::NotSet || !env_.detectVrMode) return vrStereoMode_;
+    const edvr::VrHeadsetMode detected = env_.detectVrMode(gameDir);
+    if (detected != edvr::VrHeadsetMode::NotSet) setVrStereoMode(detected);
+    return vrStereoMode_;
+}
+
 void LauncherSession::setCloseAfterStart(bool on) {
     if (on == closeAfterStart_) return;
     closeAfterStart_ = on;
@@ -387,15 +394,24 @@ void LauncherSession::startRouteAndWatch(const std::wstring& source, const std::
         return;
     }
     const bool routeCarriesMode = route.carriesMode || ops.wrappedCarriesMode;
+    // If an existing VR player already has mode 3..6 in Settings.xml and vr_3d_mode is still
+    // NotSet, seed and persist that choice so it survives between sessions; NotSet stays
+    // reserved for a new VR user who has never chosen a headset mode in Settings.xml.
+    if (!routeCarriesMode && vr && vrStereoMode_ == edvr::VrHeadsetMode::NotSet) {
+        seedVrStereoModeFromSettings(gameDir);
+    }
     const bool skipUnsetVr = allowUnsetVrMode && vr && vrStereoMode_ == edvr::VrHeadsetMode::NotSet;
+    bool preparedMode = false;
     if (!routeCarriesMode && env_.prepareLaunchMode && !skipUnsetVr) {
         if (!env_.prepareLaunchMode(vr, vrStereoMode_, &error)) {
             playLine_ = error.empty() ? "Elite's Settings.xml could not be updated for this launch." : error;
             changed();
             return;
         }
+        preparedMode = true;
     }
     if (!startRoute(route, ops, elevated, &error)) {
+        if (preparedMode && env_.restoreLaunchMode) env_.restoreLaunchMode();
         playLine_ = error;
         changed();
         return;

@@ -6106,6 +6106,36 @@ void testSettingsXmlLaunchMode() {
               "inserted <StereoscopicMode> parses back as 3");
     }
 
+    // Flat leaves <= 1 (0 Off and 1 Anaglyph) untouched; rewrites >= 2 to 0; read-only flag is
+    // temporarily cleared for the write and restored afterward, and snapshot rollback restores the
+    // previous file and read-only attribute.
+    {
+        const std::string mode1 = kPrefix + "1" + kSuffix;
+        writeAll(xmlPath, mode1);
+        std::string err;
+        SettingsXmlSnapshot snap;
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, false, edvr::VrHeadsetMode::NotSet, &err, L"", &snap) &&
+                  !snap.modified && readAll(xmlPath) == mode1,
+              "flat launch leaves mode 1 (Anaglyph) untouched: " + err);
+
+        const std::string mode4 = kPrefix + "4" + kSuffix;
+        writeAll(xmlPath, mode4);
+        SetFileAttributesW(xmlPath.c_str(), FILE_ATTRIBUTE_READONLY);
+        snap = SettingsXmlSnapshot();
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, false, edvr::VrHeadsetMode::NotSet, &err, L"", &snap) &&
+                  snap.modified && snap.wasReadOnly && readAll(xmlPath) == kPrefix + "0" + kSuffix,
+              "flat launch updates read-only Settings.xml from 4 to 0: " + err);
+        const DWORD afterWriteAttrs = GetFileAttributesW(xmlPath.c_str());
+        check(afterWriteAttrs != INVALID_FILE_ATTRIBUTES && (afterWriteAttrs & FILE_ATTRIBUTE_READONLY) != 0,
+              "read-only attribute is reapplied after Settings.xml write");
+        check(restoreSettingsXmlFromSnapshot(snap, &err) && readAll(xmlPath) == mode4,
+              "snapshot restore puts back mode 4 after failed launch: " + err);
+        const DWORD afterRestoreAttrs = GetFileAttributesW(xmlPath.c_str());
+        check(afterRestoreAttrs != INVALID_FILE_ATTRIBUTES && (afterRestoreAttrs & FILE_ATTRIBUTE_READONLY) != 0,
+              "read-only attribute is preserved after Settings.xml snapshot restore");
+        SetFileAttributesW(xmlPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+    }
+
     // Parse failure (truncated closing tag) writes nothing, even with a preferred VR mode.
     {
         const std::string broken = kPrefix + "3</Stereo";
@@ -6272,7 +6302,40 @@ void testSettingsXmlLaunchMode() {
         check(order == std::vector<std::string>{"uri"},
               "wrapped Steam %command% skips Settings.xml prepareLaunchMode when carrying /vr");
 
-        // 7. setSteamFrontierLogin(false, false) keeps a shared Frontier login file intact.
+        // 7. Seeding vr_3d_mode from existing 3..6 in Settings.xml persists into launcher.ini,
+        //    and failed openUri rolls Settings.xml back from its snapshot.
+        {
+            const std::wstring seedBase = fresh("settings-xml-seed-and-rollback");
+            const std::wstring seedXml = P(seedBase, L"Settings.xml");
+            const std::wstring seedBackup = P(seedBase, L"backups");
+            writeAll(seedXml, kPrefix + "4" + kSuffix);
+            auto snap = std::make_shared<SettingsXmlSnapshot>();
+            Ui uiSeed;
+            SessionEnv envSeed = envFor(&uiSeed, &http, seedBase, false, P(seedBase, L"self.exe"));
+            envSeed.detectVrMode = [&](const std::wstring&) { return detectVrHeadsetModeFromSettingsXml(seedXml); };
+            envSeed.prepareLaunchMode = [&](bool vr, edvr::VrHeadsetMode mode, std::string* err) {
+                return prepareSettingsXmlForLaunch(seedXml, seedBackup, vr, mode, err, L"", snap.get());
+            };
+            envSeed.restoreLaunchMode = [&]() {
+                restoreSettingsXmlFromSnapshot(*snap);
+                *snap = SettingsXmlSnapshot();
+            };
+            LauncherSession sessSeed(std::move(envSeed));
+            check(sessSeed.seedVrStereoModeFromSettings(epicGame) == edvr::VrHeadsetMode::HmdSpeakers,
+                  "existing mode 4 in Settings.xml seeds vr_3d_mode to HmdSpeakers");
+            LauncherState seededState;
+            seededState.load(P(settingsFor(seedBase).launcherDir, L"launcher.ini"), nullptr);
+            check(seededState.vrStereoMode() == edvr::VrHeadsetMode::HmdSpeakers,
+                  "seeded vr_3d_mode survives in launcher.ini");
+            RouteOps failOps;
+            failOps.openUri = [](const std::wstring&) { return false; };
+            sessSeed.beginPlay(L"Epic", epicGame, false, false, failOps, names, timing);
+            sessSeed.shutdown();
+            check(readAll(seedXml) == kPrefix + "4" + kSuffix,
+                  "failed store URI launch rolls Settings.xml back to mode 4");
+        }
+
+        // 8. setSteamFrontierLogin(false, false) keeps a shared Frontier login file intact.
         const std::wstring loginPath = P(settingsFor(wrapBase).launcherDir, kFrontierLoginFile);
         createDirectories(settingsFor(wrapBase).launcherDir);
         writeAll(loginPath, "saved-frontier-login");

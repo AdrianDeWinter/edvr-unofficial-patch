@@ -663,8 +663,20 @@ void launcherBegin() {
         return started;
     };
     const std::wstring settingsBackupDir = joinPath(env.roots.launcherDir(), L"backups");
-    env.prepareLaunchMode = [settingsBackupDir](bool vr, edvr::VrHeadsetMode preferredVrMode, std::string* error) {
-        return prepareSettingsXmlForLaunch(defaultEliteSettingsXmlPath(), settingsBackupDir, vr, preferredVrMode, error);
+    auto lastSettingsSnapshot = std::make_shared<SettingsXmlSnapshot>();
+    env.detectVrMode = [](const std::wstring& gameDir) {
+        return detectVrHeadsetModeFromSettingsXml(defaultEliteSettingsXmlPath(gameDir));
+    };
+    env.prepareLaunchMode = [settingsBackupDir, lastSettingsSnapshot](
+                                bool vr, edvr::VrHeadsetMode preferredVrMode, std::string* error) {
+        const std::wstring gameDir = g.haveSurvey ? g.survey.game.dir : std::wstring();
+        return prepareSettingsXmlForLaunch(defaultEliteSettingsXmlPath(gameDir), settingsBackupDir, vr,
+                                             preferredVrMode, error, L"EliteDangerous64.exe",
+                                             lastSettingsSnapshot.get());
+    };
+    env.restoreLaunchMode = [lastSettingsSnapshot]() {
+        restoreSettingsXmlFromSnapshot(*lastSettingsSnapshot);
+        *lastSettingsSnapshot = SettingsXmlSnapshot();
     };
     lg.session.reset(new LauncherSession(env));
     lg.session->start();
@@ -673,6 +685,11 @@ void launcherBegin() {
 }
 
 void launcherAfterScan() {
+    if (lg.session && g.haveSurvey) {
+        if (lg.session->seedVrStereoModeFromSettings(g.survey.game.dir) != edvr::VrHeadsetMode::NotSet) {
+            updateLauncherControls();
+        }
+    }
     const std::string& note = launcherStartupNote();
     if (!note.empty() && g.haveSurvey) setReport(note);
     // Open on Play when ED-UP is already installed (the everyday workflow); stay on Setup
@@ -791,13 +808,17 @@ bool launcherCommand(int id, int code) {
         case kIdPlayFlat: {
             if (!g.haveSurvey) return true;
             const bool vr = id != kIdPlayFlat;
-            if (vr && !isElevatedForPlay() && lg.vrMode && IsWindowVisible(lg.vrMode) &&
-                lg.session->vrStereoMode() == edvr::VrHeadsetMode::NotSet) {
-                MessageBoxW(g.window, tr(L"Choose your preferred VR 3D mode before launching in VR."), kAppTitle,
-                            MB_OK | MB_ICONINFORMATION);
-                SetFocus(lg.vrMode);
-                SendMessageW(lg.vrMode, CB_SHOWDROPDOWN, TRUE, 0);
-                return true;
+            if (vr && !isElevatedForPlay() && lg.vrMode && IsWindowVisible(lg.vrMode)) {
+                // Seed from an existing 3..6 value in Settings.xml before treating the user as
+                // unset; NotSet is reserved for a new VR user who has never chosen one yet.
+                lg.session->seedVrStereoModeFromSettings(g.survey.game.dir);
+                if (lg.session->vrStereoMode() == edvr::VrHeadsetMode::NotSet) {
+                    MessageBoxW(g.window, tr(L"Choose your preferred VR 3D mode before launching in VR."), kAppTitle,
+                                MB_OK | MB_ICONINFORMATION);
+                    SetFocus(lg.vrMode);
+                    SendMessageW(lg.vrMode, CB_SHOWDROPDOWN, TRUE, 0);
+                    return true;
+                }
             }
             invalidateLauncherCache();
             lg.session->beginPlay(g.survey.game.source, g.survey.game.dir, vr, isElevatedForPlay(), realRouteOps(), WatchNames(),
