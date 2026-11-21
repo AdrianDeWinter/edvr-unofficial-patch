@@ -1440,15 +1440,28 @@ void testFlatLayerRules() {
     check(flatUiLayerTakesFamily(UiLayerFamily::kHolo) && flatUiLayerTakesFamily(UiLayerFamily::kFlightHud) &&
               flatUiLayerTakesFamily(UiLayerFamily::kSprite),
           "flat layer: the holo panels, the flight HUD and the target sprite are asked for");
-    // The loading screen's ghost (2026-10-09 13:51): one of the hologram's seven pairs taken, six left (no camera rows) --
-    // a family is taken whole or not at all, so the holograms are not asked.
-    check(!flatUiLayerTakesFamily(UiLayerFamily::kHoloGeneric), "flat layer: the holograms family is not asked (taken whole or not at all)");
+    // The holograms (2026-11-20, flat_ui_layer_math.h's rule): the target sphere (the orrery and the target-ship hologram) is taken whole -- both its pairs carry camera rows with
+    // the frame's phase -- and flatUiFamilyOf names kHoloGeneric for it alone. The radar's pairs (no camera rows on any draw; the 2026-10-09 13:51 loading screen's ghost was one
+    // pair of a hologram taken and the rest left) are not named, so they are never asked and stay in the scene. Before 2026-11-20 no hologram was taken.
     {
+        static const uint64_t kSphereVs = 0x5559BD94B6852E83ull, kSpherePsA = 0xEA02FAC2BD6C643Cull, kSpherePsB = 0xE95634B0F61D218Full;
+        check(flatUiLayerTakesFamily(UiLayerFamily::kHoloGeneric), "flat layer: the hologram family is asked for (flatUiFamilyOf names it for the target sphere alone)");
+        check(flatUiFamilyOf(kSphereVs, kSpherePsA) == UiLayerFamily::kHoloGeneric && flatUiFamilyOf(kSphereVs, kSpherePsB) == UiLayerFamily::kHoloGeneric &&
+                  flatUiLayerTakesFamily(flatUiFamilyOf(kSphereVs, kSpherePsA)) && flatUiLayerTakesFamily(flatUiFamilyOf(kSphereVs, kSpherePsB)),
+              "flat layer: both target-sphere pairs (EA02FAC2, E95634B0 with VS 5559BD94) are named and taken");
+        check(flatUiFamilyOf(kSphereVs, 0x0146ABCC53240479ull) == UiLayerFamily::kNone && flatUiFamilyOf(kSphereVs, 0x1ull) == UiLayerFamily::kNone,
+              "flat layer: the sphere VS with the frosted base or any other pixel shader is not named (the remap's two exact programs only)");
         static const uint64_t kHoloVs[] = {0x94D5C556DFD6D705ull, 0xDF3503CD07F9B10Cull, 0x9B34C331902DC1EDull, 0x9611A454527F7FEBull};
         static const uint64_t kHoloPs[] = {0x912477AEF6958379ull, 0x76BF170A625F18E3ull, 0x9FDA9FAB05B654BDull, 0x5270C41523EAF95Aull};
-        bool anyTaken = false;
-        for (int i = 0; i < 4; ++i) anyTaken = anyTaken || flatUiLayerTakesFamily(flatUiFamilyOf(kHoloVs[i], kHoloPs[i]));
-        check(!anyTaken, "flat layer: none of the census's hologram pairs (94D5 the one with camera rows among them) reaches the take");
+        bool anyTaken = false, anyNamed = false;
+        for (int i = 0; i < 4; ++i) {
+            anyTaken = anyTaken || flatUiLayerTakesFamily(flatUiFamilyOf(kHoloVs[i], kHoloPs[i]));
+            anyNamed = anyNamed || flatUiFamilyOf(kHoloVs[i], kHoloPs[i]) != UiLayerFamily::kNone;
+        }
+        check(!anyTaken && !anyNamed, "flat layer: none of the census's radar pairs (94D5 and the others, no camera rows) is named by flat, so none reaches the take");
+        // The shared rule still names the radar's vertex shaders kHoloGeneric (VR takes them): the narrowing is flat's alone.
+        check(uiLayerFamilyFor([&] { UiFamilyFacts f; f.vs = kHoloVs[1]; f.ps = kHoloPs[1]; f.targetKind = 1; return f; }()) == UiLayerFamily::kHoloGeneric,
+              "the shared family rule still names a radar vertex shader kHoloGeneric (VR's take is unchanged)");
     }
     check(!flatUiLayerTakesFamily(UiLayerFamily::kScreen) && !flatUiLayerTakesFamily(UiLayerFamily::kPanel) &&
               !flatUiLayerTakesFamily(UiLayerFamily::kGuiDirect) && !flatUiLayerTakesFamily(UiLayerFamily::kNone) &&
