@@ -211,10 +211,7 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
             outcome.lines.push_back("Mirrored " + saved + " to " + narrowUtf8(mirrorDir) + ".");
         }
     } else if (file.purge) {
-        std::string shimError;
-        removeEdLaunchShim(survey.game.dir, &shimError);
-        if (!mirrorDir.empty() && dirExists(mirrorDir) && removeDirectoryTree(mirrorDir))
-            outcome.lines.push_back("Removed settings mirror " + narrowUtf8(mirrorDir) + ".");
+        purgeAfterUninstall(survey.game.dir, mirrorDir, &outcome.lines);
     }
     outcome.status = ApplyOutcome::Status::Done;
     return outcome;

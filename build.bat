@@ -718,7 +718,7 @@ python tools\compile_cache.py --prune --keep thunks.obj --keep weapon_ui_getter_
     "src\common\log.cpp" "src\common\config.cpp" ^
     "src\common\config_audit.cpp" ^
     "src\common\guard.cpp" "src\common\vtable_hook.cpp" "src\common\code_hook.cpp" ^
-    "src\common\hotkey.cpp" "src\common\proxy.cpp" ^
+    "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" "src\common\proxy.cpp" ^
     "src\common\frame_flag.cpp" "src\common\game_build.cpp" ^
     "src\common\iat_hook.cpp" "src\common\iniedit.cpp" ^
     "src\common\dump_file.cpp" "src\common\dump_file_log.cpp" "src\common\miniz_impl.cpp" ^
@@ -884,7 +884,7 @@ python tools\build_phases.py --mark "%PHASES%" "runtime dll"
 REM The install engine's sources, shared by the launcher and the installer_test rigs below. install_manifest.cpp is the schema-2 parser both halves link;
 REM it needs update_json.cpp and update_util.cpp, so those sit here rather than in LAUNCHER_SRC.
 set INSTALLER_SRC="src\installer\main.cpp" "src\installer\gui.cpp" ^
-    "src\installer\ui.cpp" "src\installer\settings.cpp" ^
+    "src\installer\ui.cpp" "src\installer\settings.cpp" "src\common\hotkey_text.cpp" ^
     "src\installer\settings_view.cpp" "src\installer\logbundle.cpp" ^
     "src\installer\app.cpp" "src\installer\plan.cpp" ^
     "src\installer\apply.cpp" "src\installer\detect.cpp" ^
@@ -1192,7 +1192,7 @@ if not exist "%OBJ%\native_menu" mkdir "%OBJ%\native_menu"
     "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     "src\d3d11\menu_keys.cpp" "src\d3d11\shader_swap.cpp" ^
     "src\common\iat_hook.cpp" "src\common\iniedit.cpp" ^
-    "src\common\vtable_hook.cpp" "src\common\code_hook.cpp" "src\common\hotkey.cpp" ^
+    "src\common\vtable_hook.cpp" "src\common\code_hook.cpp" "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" ^
     "src\common\guard.cpp" "src\common\frame_flag.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib gdi32.lib version.lib dxgi.lib d3dcompiler.lib
@@ -2109,7 +2109,7 @@ if not exist "%OBJ%\inputgatetest" mkdir "%OBJ%\inputgatetest"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\inputgatetest"\ ^
     /Fe"%BUILD%\input_gate_test.exe" "tools\input_gate_test\input_gate_test.cpp" ^
     "src\d3d11\joy_watch.cpp" "src\d3d11\desktop_window_cursor.cpp" "src\common\iat_hook.cpp" "src\common\vtable_hook.cpp" ^
-    "src\common\hotkey.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
+    "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
     "src\common\guard.cpp" "src\common\frame_flag.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib dinput8.lib xinput9_1_0.lib
 if errorlevel 1 ( echo [edvr] ERROR: input_gate_test build failed & exit /b 1 )
@@ -2131,7 +2131,7 @@ if not exist "%OBJ%\hotkeycapturetest" mkdir "%OBJ%\hotkeycapturetest"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /I"%GEN%" /Fo"%OBJ%\hotkeycapturetest"\ ^
     /Fe"%BUILD%\hotkey_capture_test.exe" "tools\hotkey_capture_test\hotkey_capture_test.cpp" ^
-    "src\common\hotkey.cpp" "src\d3d11\joy_watch.cpp" "src\d3d11\hotkey_capture.cpp" ^
+    "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" "src\d3d11\joy_watch.cpp" "src\d3d11\hotkey_capture.cpp" ^
     "src\d3d11\elite_binds.cpp" "src\common\iniedit.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
 if errorlevel 1 ( echo [edvr] ERROR: hotkey_capture_test build failed & exit /b 1 )
@@ -3404,7 +3404,7 @@ REM button, and what nothing here can watch (the mouse, an axis); the active pre
 if not exist "%OBJ%\seat_press_test" mkdir "%OBJ%\seat_press_test"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\seat_press_test\\" /Fe"%BUILD%\seat_press_test.exe" "tools\seat_press_test\seat_press_test.cpp" ^
-    "src\common\hotkey.cpp" "src\d3d11\elite_binds.cpp" "src\common\iniedit.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
+    "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" "src\d3d11\elite_binds.cpp" "src\common\iniedit.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
 if errorlevel 1 ( echo [edvr] ERROR: seat press test build failed & exit /b 1 )
 "%BUILD%\seat_press_test.exe" --dry-run || exit /b 1
@@ -3549,7 +3549,7 @@ if not exist "%OBJ%\insttest" mkdir "%OBJ%\insttest"
     "src\installer\detect.cpp" "src\installer\probe.cpp" ^
     "src\common\iniedit.cpp" "src\installer\state.cpp" ^
     "src\installer\mirror.cpp" ^
-    "src\installer\settings.cpp" "src\installer\logbundle.cpp" ^
+    "src\installer\settings.cpp" "src\common\hotkey_text.cpp" "src\installer\logbundle.cpp" ^
     "src\installer\app.cpp" "src\installer\payload.cpp" ^
     "src\installer\install_manifest.cpp" "src\installer\update_json.cpp" "src\installer\update_util.cpp" ^
     /link /INCREMENTAL:NO %INSTALLER_LIBS%
@@ -3616,7 +3616,7 @@ if errorlevel 1 ( echo [edvr] ERROR: the fake steam_api64.dll build failed & exi
     "tools\launcher_test\launcher_test.cpp" ^
     "src\installer\plan.cpp" "src\installer\apply.cpp" "src\installer\detect.cpp" ^
     "src\installer\probe.cpp" "src\common\iniedit.cpp" "src\installer\state.cpp" ^
-    "src\installer\mirror.cpp" "src\installer\settings.cpp" ^
+    "src\installer\mirror.cpp" "src\installer\settings.cpp" "src\common\hotkey_text.cpp" ^
     "src\installer\logbundle.cpp" "src\installer\app.cpp" "src\installer\payload.cpp" ^
     "src\installer\install_manifest.cpp" "src\installer\update_json.cpp" "src\installer\update_util.cpp" ^
     "src\installer\ui.cpp" %LAUNCHER_SRC% ^

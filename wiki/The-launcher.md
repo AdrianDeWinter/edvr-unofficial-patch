@@ -20,10 +20,10 @@ From a script, Steam Launch Options, or another launcher such as `min-ed-launche
 - Add `--close-after-start` to exit as soon as Elite is running.
 - Add `--update` to check for and download a signed release before launching (non-blocking if offline).
 - Add `--frontier-login` on a Steam install to sign in with a Frontier email/password instead of Steam's session ticket.
-- In Steam's **Launch Options**, wrap `%command%` so Steam tracks playtime and injects the Steam Overlay / Steam Input virtual menus:
+- In Steam's **Launch Options**, wrap `%command%` using the full path to `ed-up-launcher.exe` (Steam does not expand `%LOCALAPPDATA%` in Launch Options; replace `<your-name>` with your Windows user name) so Steam tracks playtime and injects the Steam Overlay / Steam Input virtual menus:
 
 ```text
-"%LOCALAPPDATA%\EDVR\launcher\ed-up-launcher.exe" --headless %command%
+"C:\Users\<your-name>\AppData\Local\EDVR\launcher\ed-up-launcher.exe" --headless %command%
 ```
 
 - As a pre-launch update hook in `min-ed-launcher` (without launching the game through ED-UP):
@@ -32,15 +32,15 @@ From a script, Steam Launch Options, or another launcher such as `min-ed-launche
 "%LOCALAPPDATA%\EDVR\launcher\ed-up-launcher.exe" --update --install --dir "C:\Path\To\Products\elite-dangerous-odyssey-64"
 ```
 
-Every store offers **Play VR** and **Play flat** (filtered to the modes installed in that folder). Frontier's launcher takes `/vr` or `/novr` on its command line. For Steam and Epic without direct launch, the launcher updates `<StereoscopicMode>` in Elite's `Settings.xml` before opening Steam or Epic (backing up `Settings.xml` to `backups\Settings.xml.bak` first):
+Every store offers **Play VR** and **Play flat** (filtered to the modes installed in that folder). Frontier's launcher takes `/vr` or `/novr` on its command line. For Steam and Epic without direct launch, the launcher updates `<StereoscopicMode>` in Elite's `Settings.xml` before opening Steam or Epic, keeping a one-time original backup at `backups\Settings.xml.ed-up-original` and a rolling backup of the previous state at `backups\Settings.xml.bak`:
 
 - **Play flat** writes `0` (Off) into `<StereoscopicMode>` without changing your saved VR preference.
 - **Play VR** writes your chosen **VR 3D mode** from the Launch panel (saved as `vr_3d_mode` in `launcher.ini`):
   - **Not Set** (`not_set`, default): stops before launching in VR and prompts you to choose your preferred 3D mode first.
-  - **HMD (Headphones)** (`3`)
-  - **HMD (Speakers)** (`4`)
-  - **HMD Cinema (Headphones)** (`5`)
-  - **HMD Cinema (Speakers)** (`6`)
+  - **HMD (Headphones)** (`hmd_headphones`)
+  - **HMD (Speakers)** (`hmd_speakers`)
+  - **HMD Cinema (Headphones)** (`hmd_cinema_headphones`)
+  - **HMD Cinema (Speakers)** (`hmd_cinema_speakers`)
 
 See [Playing](Playing.md).
 

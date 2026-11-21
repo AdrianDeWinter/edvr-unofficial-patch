@@ -389,8 +389,9 @@ ApplyResult applyPlan(const Plan& plan, const PayloadProvider& payload) {
             }
             case Action::RemoveDir: {
                 if (!dirExists(step.from)) break;
-                if (!removeDirectoryTree(step.from)) {
-                    fail(step.from, GetLastError());
+                DWORD dirErr = ERROR_SUCCESS;
+                if (!removeDirectoryTree(step.from, &dirErr)) {
+                    fail(step.from, dirErr != ERROR_SUCCESS ? dirErr : GetLastError());
                 } else {
                     result.done.push_back("removed " + toUtf8(leafOf(step.from)) + "\\");
                 }
@@ -449,15 +450,26 @@ ApplyResult applyPlan(const Plan& plan, const PayloadProvider& payload) {
     return result;
 }
 
-bool removeDirectoryTree(const std::wstring& dir) {
+bool removeDirectoryTree(const std::wstring& dir, unsigned long* firstError) {
+    auto recordErr = [&](DWORD e) {
+        if (firstError && *firstError == ERROR_SUCCESS && e != ERROR_SUCCESS) *firstError = e;
+    };
     const DWORD attrs = GetFileAttributesW(dir.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES) return true;
     if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
         clearReadOnly(dir);
-        return DeleteFileW(dir.c_str()) != FALSE;
+        if (!DeleteFileW(dir.c_str())) {
+            recordErr(GetLastError());
+            return false;
+        }
+        return true;
     }
     if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) {
-        return RemoveDirectoryW(dir.c_str()) != FALSE;
+        if (!RemoveDirectoryW(dir.c_str())) {
+            recordErr(GetLastError());
+            return false;
+        }
+        return true;
     }
     WIN32_FIND_DATAW fd{};
     HANDLE h = FindFirstFileW(joinPath(dir, L"*").c_str(), &fd);
@@ -467,16 +479,22 @@ bool removeDirectoryTree(const std::wstring& dir) {
             if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
             const std::wstring child = joinPath(dir, fd.cFileName);
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                if (!removeDirectoryTree(child)) ok = false;
+                if (!removeDirectoryTree(child, firstError)) ok = false;
             } else {
                 clearReadOnly(child);
-                if (!DeleteFileW(child.c_str())) ok = false;
+                if (!DeleteFileW(child.c_str())) {
+                    recordErr(GetLastError());
+                    ok = false;
+                }
             }
         } while (FindNextFileW(h, &fd));
         FindClose(h);
     }
     clearReadOnly(dir);
-    if (!RemoveDirectoryW(dir.c_str())) ok = false;
+    if (!RemoveDirectoryW(dir.c_str())) {
+        recordErr(GetLastError());
+        ok = false;
+    }
     return ok;
 }
 

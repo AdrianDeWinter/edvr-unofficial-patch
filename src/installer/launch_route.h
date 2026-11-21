@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 
+#include "../common/stereo_mode.h"
+
 namespace edvr::installer {
 
 enum class RouteKind { None, Steam, Epic, Frontier };
@@ -96,6 +98,8 @@ struct RouteOps {
     std::function<bool(const std::wstring& uri)> openUri;
     std::function<bool(const std::wstring& exe, const std::wstring& args, const std::wstring& workDir)> spawn;
     bool underWine = false;  // Steam's URI must reach the native client, not Proton's restart event.
+    // True when openUri spawns a wrapped executable (e.g. Steam %command%) that already receives /vr or /novr.
+    bool wrappedCarriesMode = false;
 };
 RouteOps realRouteOps();
 
@@ -110,12 +114,13 @@ bool startRoute(const LaunchRoute& route, const RouteOps& ops, bool elevated, st
 std::wstring defaultEliteSettingsXmlPath();
 
 // Prepares Elite's Settings.xml for a launch (`vr` = true for VR, false for flat) before starting the
-// store client. Refuses if `gameExeName` (when non-empty) is already running. For flat, replaces only
-// the inner value of <StereoscopicMode> with "0" after backing up the file into `backupDir`. For VR,
-// requires `preferredVrMode` in 2..6 (refuses without modifying the file when Not Set / 0) and writes
-// that mode into Settings.xml after backing up. A parse failure writes nothing.
+// store client. Refuses if `gameExeName` (when non-empty) is already running. Keeps a one-time
+// Settings.xml.ed-up-original (the untouched original before ED-UP first writes) plus a rolling
+// Settings.xml.bak in `backupDir`. For flat, writes 0 into <StereoscopicMode> (inserting the tag
+// before </GraphicsOptions> if absent). For VR, requires `preferredVrMode` != NotSet (refuses without
+// modifying the file when NotSet) and writes that mode. A parse failure writes nothing.
 bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std::wstring& backupDir, bool vr,
-                                 int preferredVrMode, std::string* error,
+                                 edvr::VrHeadsetMode preferredVrMode, std::string* error,
                                  const std::wstring& gameExeName = L"EliteDangerous64.exe");
 
 // The names the watcher looks for, so that a rig can use programs of its own.

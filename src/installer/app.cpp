@@ -238,8 +238,11 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
         else {
 #ifdef EDUP_LAUNCHER
             // After --headless, collect trailing wrapped command tokens (e.g. Steam's %command%)
-            // rather than failing with unknown argument.
-            if (a.headless) {
+            // only when the token looks like an executable path (ends with .exe, not a flag).
+            // Arbitrary commands can still be passed after a literal `--`.
+            const bool looksLikeExe = arg.size() > 4 && arg[0] != L'-' &&
+                                      _wcsicmp(arg.c_str() + arg.size() - 4, L".exe") == 0;
+            if (a.headless && looksLikeExe) {
                 for (int j = i; j < argc; ++j) {
                     const std::wstring w = argv[j];
                     if (_wcsicmp(w.c_str(), L"/vr") == 0) a.vr = true;
@@ -625,15 +628,25 @@ int runConsole(const AppArgs& args) {
                                        .c_str(),
                                    m.saved));
     } else if (args.purge) {
-#ifdef EDUP_LAUNCHER
-        std::string shimError;
-        removeEdLaunchShim(survey.game.dir, &shimError);
-#endif
-        if (!mirrorDir.empty() && dirExists(mirrorDir) && removeDirectoryTree(mirrorDir))
-            writeOut("  removed settings mirror " + toUtf8(mirrorDir) + "\r\n");
+        std::vector<std::string> purgeNotes;
+        purgeAfterUninstall(survey.game.dir, mirrorDir, &purgeNotes);
+        for (const std::string& note : purgeNotes) writeOut("  " + note + "\r\n");
     }
     writeOut("\r\nDone.\r\n");
     return 0;
+}
+
+void purgeAfterUninstall(const std::wstring& gameDir, const std::wstring& mirrorDir,
+                         std::vector<std::string>* notes) {
+#ifdef EDUP_LAUNCHER
+    std::string shimError;
+    if (!removeEdLaunchShim(gameDir, &shimError) && !shimError.empty() && notes)
+        notes->push_back(shimError);
+#else
+    (void)gameDir;
+#endif
+    if (!mirrorDir.empty() && dirExists(mirrorDir) && removeDirectoryTree(mirrorDir) && notes)
+        notes->push_back("Removed settings mirror " + toUtf8(mirrorDir) + ".");
 }
 
 }  // namespace edvr::installer

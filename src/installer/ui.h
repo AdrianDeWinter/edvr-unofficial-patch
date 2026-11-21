@@ -104,6 +104,8 @@ int  textWidth(HDC dc, const std::wstring& text, HFONT font);
 
 // A card: the surface everything sits on.
 void paintCard(HDC dc, RECT rect, UINT dpi);
+// A hero card with a thin vertical accent rail on its left interior edge.
+void paintAccentCard(HDC dc, RECT rect, UINT dpi);
 
 enum class ButtonStyle { Primary, Secondary, Tab, TabActive, Link };
 

@@ -67,6 +67,12 @@ bool hotkeyBindingsEqual(const HotkeyBinding& a, const HotkeyBinding& b);
 // or joystick spelling.
 bool hotkeyParseBinding(const char* text, HotkeyBinding* out, bool quiet = false);
 
+// Optional sink for diagnostic lines from the parser in hotkey_text.cpp.
+// hotkey.cpp registers Log::get().note; standalone callers (such as the
+// launcher's Settings tab) leave it null so parsing stays silent.
+using HotkeyNoteFn = void (*)(const char* line);
+void hotkeySetNoteSink(HotkeyNoteFn fn);
+
 // The ini text of a binding, canonical: parse(format(b)) is b for every
 // binding the parser can produce. Returns the length written, 0 for None.
 size_t hotkeyFormatBinding(const HotkeyBinding& b, char* out, size_t cap);

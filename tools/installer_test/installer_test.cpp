@@ -7838,7 +7838,11 @@ int wmain(int argc, wchar_t** argv) {
             check(row.parseTyped(L"   ", &parsed) && parsed.empty(), "blank disables the hotkey");
             check(row.parseTyped(L"gamepad_back", &parsed) && parsed == "GamePad_Back", "gamepad button canonicalises");
             check(row.parseTyped(L"231d0200:joy_12", &parsed) && parsed == "231D0200:Joy_12", "joystick button canonicalises");
-            check(row.parseTyped(L"0x77", &parsed) && parsed == "0x77", "raw hex virtual key accepted");
+            check(row.parseTyped(L"0x77", &parsed) && parsed == "F8", "raw hex VK_F8 canonicalises through hotkey.cpp to F8");
+            check(row.parseTyped(L"0x88", &parsed) && parsed == "0x88", "unnamed raw hex virtual key round-trips");
+            check(!row.parseTyped(L"PGUP", &parsed), "PGUP is rejected to match src/common/hotkey_text.cpp");
+            check(!row.parseTyped(L"INS", &parsed), "INS is rejected to match src/common/hotkey_text.cpp");
+            check(row.parseTyped(L"pageup", &parsed) && parsed == "PAGEUP", "PAGEUP canonicalises cleanly");
             check(!row.parseTyped(L"notakey", &parsed), "unknown key name is rejected");
             check(!row.parseTyped(L"CTRL+", &parsed), "dangling modifier is rejected");
             check(!row.parseTyped(L"231D0200:Joy_999", &parsed), "out-of-range joystick button is rejected");

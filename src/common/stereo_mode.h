@@ -49,7 +49,48 @@ inline constexpr int kStereoModeHmdSpeakers = 4;
 inline constexpr int kStereoModeHmdCinemaHeadphones = 5;
 inline constexpr int kStereoModeHmdCinemaSpeakers = 6;
 
-inline bool isVrStereoscopicMode(int mode) { return mode >= 2 && mode <= 6; }
+inline bool isVrStereoscopicMode(int mode) { return mode >= 3 && mode <= 6; }
+
+// User-selectable VR headset 3D modes for pre-launch Settings.xml writes.
+// Persisted in launcher.ini under readable names (not Elite's internal numbers);
+// Elite's numeric <StereoscopicMode> token is mapped only when writing Settings.xml.
+enum class VrHeadsetMode : int {
+    NotSet = 0,
+    HmdHeadphones = kStereoModeHmdHeadphones,
+    HmdSpeakers = kStereoModeHmdSpeakers,
+    HmdCinemaHeadphones = kStereoModeHmdCinemaHeadphones,
+    HmdCinemaSpeakers = kStereoModeHmdCinemaSpeakers,
+};
+
+inline VrHeadsetMode vrHeadsetModeFromInt(int mode) {
+    switch (mode) {
+        case kStereoModeHmdHeadphones: return VrHeadsetMode::HmdHeadphones;
+        case kStereoModeHmdSpeakers: return VrHeadsetMode::HmdSpeakers;
+        case kStereoModeHmdCinemaHeadphones: return VrHeadsetMode::HmdCinemaHeadphones;
+        case kStereoModeHmdCinemaSpeakers: return VrHeadsetMode::HmdCinemaSpeakers;
+        default: return VrHeadsetMode::NotSet;
+    }
+}
+
+inline int vrHeadsetModeToken(VrHeadsetMode mode) { return static_cast<int>(mode); }
+
+inline const char* vrHeadsetModeConfigValue(VrHeadsetMode mode) {
+    switch (mode) {
+        case VrHeadsetMode::HmdHeadphones: return "hmd_headphones";
+        case VrHeadsetMode::HmdSpeakers: return "hmd_speakers";
+        case VrHeadsetMode::HmdCinemaHeadphones: return "hmd_cinema_headphones";
+        case VrHeadsetMode::HmdCinemaSpeakers: return "hmd_cinema_speakers";
+        default: return "not_set";
+    }
+}
+
+inline VrHeadsetMode vrHeadsetModeFromConfig(const std::string& value) {
+    if (value == "hmd_headphones") return VrHeadsetMode::HmdHeadphones;
+    if (value == "hmd_speakers") return VrHeadsetMode::HmdSpeakers;
+    if (value == "hmd_cinema_headphones") return VrHeadsetMode::HmdCinemaHeadphones;
+    if (value == "hmd_cinema_speakers") return VrHeadsetMode::HmdCinemaSpeakers;
+    return VrHeadsetMode::NotSet;
+}
 
 inline const char* stereoscopicModeName(int mode) {
     switch (mode) {
@@ -65,38 +106,37 @@ inline const char* stereoscopicModeName(int mode) {
 }
 
 enum class StereoWriteStatus {
-    Unchanged,      // already matches the requested launch (flat: 0; VR: preferred mode 2..6)
-    Updated,        // <StereoscopicMode> updated to "0" (flat) or preferred VR mode (2..6)
-    TagAbsent,      // <StereoscopicMode> tag not present in XML (and could not be inserted)
+    Unchanged,      // already matches the requested launch (flat: 0; VR: preferred mode)
+    Updated,        // <StereoscopicMode> updated or inserted for flat (0) or preferred VR mode (3..6)
+    TagAbsent,      // <StereoscopicMode> and </GraphicsOptions> are both absent (cannot insert)
     ParseFailed,    // <StereoscopicMode> tag present but value or closing tag is invalid
-    NoHeadsetMode,  // VR launch requested while preferred VR 3D mode is Not Set (0)
+    NoHeadsetMode,  // VR launch requested while preferred VR 3D mode is NotSet
 };
 
 // Prepares a minimal byte-preserving Settings.xml update for a launch (`vr` = true for VR, false for flat).
-// - Flat: replaces only the digit text inside <StereoscopicMode> with "0" (Unchanged when already 0;
-//   TagAbsent when no tag is present, which leaves the file untouched).
-// - VR: requires `preferredVrMode` in 2..6; returns NoHeadsetMode (writing nothing) when `preferredVrMode`
-//   is Not Set (0 / out of range). When set, replaces only the digit text inside <StereoscopicMode>
-//   (Unchanged if it already matches), or inserts the tag before </GraphicsOptions> if absent.
-// - A parse failure always writes nothing.
-inline StereoWriteStatus rewriteStereoscopicMode(const std::string& xml, bool vr, int preferredVrMode,
+// - Flat: replaces only the digit text inside <StereoscopicMode> with "0" (Unchanged when already 0),
+//   or inserts <StereoscopicMode>0</StereoscopicMode> before </GraphicsOptions> when the tag is absent.
+// - VR: requires `preferredVrMode` != NotSet; returns NoHeadsetMode (writing nothing) when NotSet.
+//   When set, replaces only the digit text inside <StereoscopicMode> (Unchanged if it already matches),
+//   or inserts the tag before </GraphicsOptions> if absent.
+// - A parse failure or missing </GraphicsOptions> always writes nothing.
+inline StereoWriteStatus rewriteStereoscopicMode(const std::string& xml, bool vr, VrHeadsetMode preferredVrMode,
                                                  std::string* outXml, int* existingMode = nullptr) {
     static const char kTag[] = "<StereoscopicMode>";
     static const char kClose[] = "</StereoscopicMode>";
-    if (vr && !isVrStereoscopicMode(preferredVrMode)) return StereoWriteStatus::NoHeadsetMode;
+    const int targetMode = vr ? vrHeadsetModeToken(preferredVrMode) : kStereoModeOff;
+    if (vr && !isVrStereoscopicMode(targetMode)) return StereoWriteStatus::NoHeadsetMode;
 
     const size_t openPos = xml.find(kTag);
     if (openPos == std::string::npos) {
-        if (vr) {
-            static const char kRootClose[] = "</GraphicsOptions>";
-            const size_t closeRoot = xml.find(kRootClose);
-            if (closeRoot != std::string::npos) {
-                const char* eol = xml.find("\r\n") != std::string::npos ? "\r\n" : "\n";
-                const std::string insert = std::string("\t<StereoscopicMode>") +
-                                           std::to_string(preferredVrMode) + "</StereoscopicMode>" + eol;
-                if (outXml) *outXml = xml.substr(0, closeRoot) + insert + xml.substr(closeRoot);
-                return StereoWriteStatus::Updated;
-            }
+        static const char kRootClose[] = "</GraphicsOptions>";
+        const size_t closeRoot = xml.find(kRootClose);
+        if (closeRoot != std::string::npos) {
+            const char* eol = xml.find("\r\n") != std::string::npos ? "\r\n" : "\n";
+            const std::string insert = std::string("\t<StereoscopicMode>") +
+                                       std::to_string(targetMode) + "</StereoscopicMode>" + eol;
+            if (outXml) *outXml = xml.substr(0, closeRoot) + insert + xml.substr(closeRoot);
+            return StereoWriteStatus::Updated;
         }
         return StereoWriteStatus::TagAbsent;
     }
@@ -118,13 +158,8 @@ inline StereoWriteStatus rewriteStereoscopicMode(const std::string& xml, bool vr
     if (p + closeLen > xml.size() || xml.compare(p, closeLen, kClose) != 0) return StereoWriteStatus::ParseFailed;
 
     if (existingMode) *existingMode = v;
-    if (vr) {
-        if (v == preferredVrMode) return StereoWriteStatus::Unchanged;
-        if (outXml) *outXml = xml.substr(0, valStart) + std::to_string(preferredVrMode) + xml.substr(valEnd);
-        return StereoWriteStatus::Updated;
-    }
-    if (v == 0) return StereoWriteStatus::Unchanged;
-    if (outXml) *outXml = xml.substr(0, valStart) + "0" + xml.substr(valEnd);
+    if (v == targetMode) return StereoWriteStatus::Unchanged;
+    if (outXml) *outXml = xml.substr(0, valStart) + std::to_string(targetMode) + xml.substr(valEnd);
     return StereoWriteStatus::Updated;
 }
 

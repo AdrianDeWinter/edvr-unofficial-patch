@@ -16,6 +16,7 @@
 #include "direct_launch.h"
 #include "frontier_login.h"
 #include "launch_route.h"
+#include "launcher_core.h"
 #include "launcher_plan.h"
 #include "launcher_register.h"
 #include "launcher_session.h"
@@ -282,6 +283,8 @@ std::wstring wrappedCommandDir(const std::vector<std::wstring>& wrapped) {
 
 // Builds a fallback RouteOps when invoked as a Steam %command% wrapper: instead of opening
 // steam://rungameid/359320 (which would re-invoke %command% in a loop), spawn the wrapped exe directly.
+// Because /vr or /novr is passed on the wrapped command line, wrappedCarriesMode is set so VR does not
+// require a separate Settings.xml vr_3d_mode selection.
 RouteOps headlessRouteOps(const std::vector<std::wstring>& wrapped, bool vr) {
     RouteOps ops = realRouteOps();
     if (wrapped.empty()) return ops;
@@ -292,9 +295,7 @@ RouteOps headlessRouteOps(const std::vector<std::wstring>& wrapped, bool vr) {
     for (size_t i = 1; i < wrapped.size(); ++i) {
         if (_wcsicmp(wrapped[i].c_str(), L"/vr") == 0 || _wcsicmp(wrapped[i].c_str(), L"/novr") == 0) hasMode = true;
         if (!extra.empty()) extra += L' ';
-        const bool needsQuote = wrapped[i].find_first_of(L" \t\"") != std::wstring::npos;
-        if (needsQuote) extra += L'"' + wrapped[i] + L'"';
-        else extra += wrapped[i];
+        extra += quoteArg(wrapped[i]);
     }
     if (!hasMode) {
         if (!extra.empty()) extra += L' ';
@@ -302,6 +303,7 @@ RouteOps headlessRouteOps(const std::vector<std::wstring>& wrapped, bool vr) {
     }
     const std::wstring workDir = wrappedCommandDir(wrapped);
     auto baseSpawn = ops.spawn;
+    ops.wrappedCarriesMode = true;
     ops.openUri = [baseSpawn, wrappedExe, extra, workDir](const std::wstring&) {
         return baseSpawn && baseSpawn(wrappedExe, extra, workDir);
     };
@@ -318,10 +320,11 @@ int headlessPlay(const AppArgs& args, Output& out) {
         return 2;
     }
     // Optional pre-launch update check when --headless is paired with --update.
-    // Offline/skipped checks do not prevent launching Elite.
+    // Offline/skipped checks (exit 4) do not prevent installing an adopted payload or launching Elite.
     if (args.update) {
         const int updateCode = runUpdateCommand(args, out);
         if (updateCode == 3) return updateCode;  // refused manifest
+        if (args.action != AppArgs::Act::None && updateCode != 0 && updateCode != 4) return updateCode;
     }
     // Without --dir, check a wrapped executable's folder (Steam %command%) first, then this exe's folder.
     std::wstring dir = args.dir;
@@ -338,6 +341,14 @@ int headlessPlay(const AppArgs& args, Output& out) {
         out.line("No EliteDangerous64.exe under " + narrowUtf8(dir.empty() ? args.dir : dir) +
                  ". Put the launcher in the game's product folder, or pass --dir with it.");
         return 2;
+    }
+    // When --headless is paired with --install or --repair, apply the patch before launching Elite.
+    if (args.action == AppArgs::Act::Install || args.action == AppArgs::Act::Repair) {
+        AppArgs installArgs = selectedArgs;
+        installArgs.dir = game.dir;
+        installArgs.headless = false;
+        const int installCode = runConsole(installArgs);
+        if (installCode != 0) return installCode;
     }
     std::vector<unsigned long> running;
     if (!pidsNamed(L"EliteDangerous64.exe", &running)) {
@@ -384,7 +395,7 @@ int headlessPlay(const AppArgs& args, Output& out) {
     // The window's close: here it ends the wait. The lines are printed after each job, not from a callback.
     env.closeWindow = [&closeRequested]() { closeRequested = true; };
     const std::wstring settingsBackupDir = joinPath(env.roots.launcherDir(), L"backups");
-    env.prepareLaunchMode = [settingsBackupDir](bool vr, int preferredVrMode, std::string* error) {
+    env.prepareLaunchMode = [settingsBackupDir](bool vr, edvr::VrHeadsetMode preferredVrMode, std::string* error) {
         return prepareSettingsXmlForLaunch(defaultEliteSettingsXmlPath(), settingsBackupDir, vr, preferredVrMode, error);
     };
     // No askLogin or askCode: a headless start never asks. A Frontier-store direct launch without a stored

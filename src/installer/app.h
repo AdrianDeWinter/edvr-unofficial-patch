@@ -11,6 +11,7 @@
 #include <windows.h>
 
 #include <string>
+#include <vector>
 
 #include "../common/install_scope.h"
 #include "plan.h"
@@ -95,6 +96,12 @@ bool isElevated();
 // TokenElevationTypeDefault) because every desktop process shares the same elevated token.
 bool elevationBlocksPlay(bool tokenElevated, unsigned long elevationType);
 bool isElevatedForPlay();
+
+// Cleans up artifacts outside the game directory after a --purge uninstall
+// (any EDLaunch stand-in shim and the settings mirror folder), appending notes
+// for what was removed. Shared by console, GUI, and elevated plan apply.
+void purgeAfterUninstall(const std::wstring& gameDir, const std::wstring& mirrorDir,
+                         std::vector<std::string>* notes);
 
 int runConsole(const AppArgs& args);
 int runGui(HINSTANCE instance, const AppArgs& args);

@@ -451,12 +451,13 @@ std::wstring defaultEliteSettingsXmlPath() {
 }
 
 bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std::wstring& backupDir, bool vr,
-                                 int preferredVrMode, std::string* error, const std::wstring& gameExeName) {
+                                 edvr::VrHeadsetMode preferredVrMode, std::string* error,
+                                 const std::wstring& gameExeName) {
     auto fail = [&](const std::string& text) {
         if (error) *error = text;
         return false;
     };
-    if (vr && !edvr::isVrStereoscopicMode(preferredVrMode)) {
+    if (vr && preferredVrMode == edvr::VrHeadsetMode::NotSet) {
         return fail("No VR 3D mode is set. Choose your preferred VR 3D mode in the launcher before launching in VR, or use Play flat.");
     }
     if (!gameExeName.empty()) {
@@ -470,6 +471,7 @@ bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std:
         if (vr) {
             return fail("Elite's Settings.xml was not found. Launch Elite once to create Settings.xml, or use Play flat.");
         }
+        // A brand-new install with no Settings.xml yet starts flat by default in Elite.
         return true;
     }
     std::string xml;
@@ -484,10 +486,7 @@ bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std:
         case edvr::StereoWriteStatus::Unchanged:
             return true;
         case edvr::StereoWriteStatus::TagAbsent:
-            if (vr) {
-                return fail("Elite's Settings.xml could not be updated because <StereoscopicMode> and </GraphicsOptions> were not found.");
-            }
-            return true;
+            return fail("Elite's Settings.xml could not be updated because <StereoscopicMode> and </GraphicsOptions> were not found.");
         case edvr::StereoWriteStatus::NoHeadsetMode:
             return fail("No VR 3D mode is set. Choose your preferred VR 3D mode in the launcher before launching in VR, or use Play flat.");
         case edvr::StereoWriteStatus::ParseFailed:
@@ -498,6 +497,11 @@ bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std:
 
     if (backupDir.empty() || !createDirectories(backupDir))
         return fail("Could not create the launcher backup folder for Settings.xml; nothing was changed.");
+    const std::wstring originalBackup = joinPath(backupDir, L"Settings.xml.ed-up-original");
+    if (!fileExists(originalBackup)) {
+        if (!CopyFileW(settingsXmlPath.c_str(), originalBackup.c_str(), TRUE) && !fileExists(originalBackup))
+            return fail("Could not save the original Settings.xml backup before changing it; nothing was changed.");
+    }
     const std::wstring backupPath = joinPath(backupDir, L"Settings.xml.bak");
     if (fileExists(backupPath)) SetFileAttributesW(backupPath.c_str(), FILE_ATTRIBUTE_NORMAL);
     if (!CopyFileW(settingsXmlPath.c_str(), backupPath.c_str(), FALSE))

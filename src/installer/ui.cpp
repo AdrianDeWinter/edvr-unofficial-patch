@@ -204,31 +204,31 @@ void refreshTheme() {
     Theme t;
     t.dark = dark;
     if (dark) {
-        t.windowBg = RGB(32, 32, 32);
-        t.cardBg = RGB(43, 43, 43);
-        t.cardBorder = RGB(58, 58, 58);
-        t.text = RGB(240, 240, 240);
-        t.subtext = RGB(160, 160, 160);
-        t.control = RGB(56, 56, 56);
-        t.controlHover = RGB(68, 68, 68);
-        t.controlBorder = RGB(78, 78, 78);
-        t.good = RGB(108, 203, 130);
-        t.warn = RGB(240, 190, 95);
-        t.bad = RGB(240, 120, 110);
-        t.muted = RGB(130, 130, 130);
+        t.windowBg = RGB(26, 28, 32);
+        t.cardBg = RGB(35, 38, 44);
+        t.cardBorder = RGB(50, 55, 65);
+        t.text = RGB(240, 242, 245);
+        t.subtext = RGB(157, 165, 180);
+        t.control = RGB(45, 49, 57);
+        t.controlHover = RGB(56, 61, 71);
+        t.controlBorder = RGB(70, 76, 89);
+        t.good = RGB(95, 208, 135);
+        t.warn = RGB(242, 184, 87);
+        t.bad = RGB(240, 110, 101);
+        t.muted = RGB(126, 134, 148);
     } else {
-        t.windowBg = RGB(243, 243, 243);
+        t.windowBg = RGB(242, 244, 247);
         t.cardBg = RGB(255, 255, 255);
-        t.cardBorder = RGB(226, 226, 226);
-        t.text = RGB(26, 26, 26);
-        t.subtext = RGB(102, 102, 102);
-        t.control = RGB(251, 251, 251);
-        t.controlHover = RGB(244, 244, 244);
-        t.controlBorder = RGB(214, 214, 214);
-        t.good = RGB(16, 124, 65);
-        t.warn = RGB(157, 93, 0);
-        t.bad = RGB(186, 43, 34);
-        t.muted = RGB(140, 140, 140);
+        t.cardBorder = RGB(221, 225, 232);
+        t.text = RGB(23, 26, 31);
+        t.subtext = RGB(92, 101, 115);
+        t.control = RGB(248, 249, 251);
+        t.controlHover = RGB(238, 240, 244);
+        t.controlBorder = RGB(206, 212, 222);
+        t.good = RGB(18, 122, 67);
+        t.warn = RGB(168, 98, 0);
+        t.bad = RGB(196, 43, 34);
+        t.muted = RGB(135, 144, 158);
     }
     t.accent = systemAccent(dark);
     t.accentHover = mix(t.accent, dark ? RGB(255, 255, 255) : RGB(0, 0, 0), 12);
@@ -338,6 +338,18 @@ void paintCard(HDC dc, RECT rect, UINT dpi) {
     const Theme& t = theme();
     fillRounded(dc, rect, dp(8, dpi), t.cardBg);
     strokeRounded(dc, rect, dp(8, dpi), t.cardBorder);
+}
+
+void paintAccentCard(HDC dc, RECT rect, UINT dpi) {
+    const Theme& t = theme();
+    paintCard(dc, rect, dpi);
+    const int railW = dp(3, dpi) > 2 ? dp(3, dpi) : 2;
+    const int insetY = dp(12, dpi);
+    if (rect.bottom - rect.top > insetY * 2 + 4) {
+        RECT rail{rect.left + dp(3, dpi), rect.top + insetY, rect.left + dp(3, dpi) + railW,
+                  rect.bottom - insetY};
+        fillRounded(dc, rail, railW / 2 + 1, t.accent);
+    }
 }
 
 HWND makeButton(HWND parent, const wchar_t* text, int id, ButtonStyle style, HFONT font) {
@@ -450,6 +462,15 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
     if (owned->style != ButtonStyle::Link) {
         fillRounded(dc, rect, radius, face);
         if (border != face) strokeRounded(dc, rect, radius, border);
+        if (owned->style == ButtonStyle::TabActive && !disabled) {
+            const int barH = dp(2, dpi) > 2 ? dp(2, dpi) : 2;
+            const int padX = dp(10, dpi);
+            if (rect.right - rect.left > padX * 2 + 6) {
+                RECT bar{rect.left + padX, rect.bottom - barH - dp(2, dpi), rect.right - padX,
+                         rect.bottom - dp(2, dpi)};
+                fillRounded(dc, bar, barH, t.accent);
+            }
+        }
     }
     if (focused && !disabled) strokeRounded(dc, rect, radius, t.accent, dp(2, dpi));
 

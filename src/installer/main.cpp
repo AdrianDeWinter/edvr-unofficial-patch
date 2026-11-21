@@ -65,7 +65,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     if (!args.badArg && !args.help && launcherHasCommand(args)) {
         const int code = runLauncherCommand(args, attachToConsole());
         // Allow chaining --update with --install or --repair for headless automation (e.g. min-ed-launcher).
-        if (code != 0 || !args.update || args.action == AppArgs::Act::None) return code;
+        // Exit code 4 means the update check was skipped (offline/rate-limit); proceed with any already-adopted
+        // payload rather than skipping the install. Exit code 3 (refused manifest) or 1 (download failure) stops.
+        if (!args.update || args.action == AppArgs::Act::None) return code;
+        if (code != 0 && code != 4) return code;
         return runConsole(args);
     }
 #endif
