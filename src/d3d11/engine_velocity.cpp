@@ -980,6 +980,58 @@ bool gameBlendsTarget0(ID3D11BlendState* state) {
     return lastBlends;
 }
 
+// 1-in-16 sampled GPU timers for flat engine-motion passes not covered by FrameEngineVelocity (flatMarkerPlane clear and
+// snapshotOverlayBase copy). Reported every 30 s alongside the overlay guard summary; zero steady-state cost.
+struct FlatEngineGpu {
+    static constexpr int kRing = 2;
+    GpuTimer markerClr[kRing], ovlCopy[kRing];
+    bool markerBusy[kRing] = {}, ovlBusy[kRing] = {};
+    int markerOpen = -1, ovlOpen = -1;
+    uint32_t markerCadence = 0, ovlCadence = 0;
+    uint32_t markerN = 0, ovlN = 0;
+    double markerMs = 0.0, ovlMs = 0.0;
+    static void beginOne(ID3D11DeviceContext* ctx, GpuTimer* ring, bool* busy, int& open, uint32_t& cadence) {
+        if (!ctx || !runtimeFlatProfile() || open >= 0) return;
+        if ((cadence++ & 15u) != 0) return;
+        Ptr<ID3D11Device> dev;
+        ctx->GetDevice(&dev);
+        if (!dev) return;
+        for (int i = 0; i < kRing; ++i) {
+            if (busy[i]) continue;
+            if (ring[i].begin(dev.Get(), ctx)) { busy[i] = true; open = i; return; }
+            break;
+        }
+    }
+    static void endOne(ID3D11DeviceContext* ctx, GpuTimer* ring, int& open) {
+        if (open < 0 || !ctx) return;
+        ring[open].end(ctx);
+        open = -1;
+    }
+    static void pollOne(ID3D11DeviceContext* ctx, GpuTimer* ring, bool* busy, int open, uint32_t& n, double& sum) {
+        if (!ctx) return;
+        double ms = 0.0;
+        for (int i = 0; i < kRing; ++i) {
+            if (!busy[i] || i == open) continue;
+            const GpuTimerPoll r = ring[i].poll(ctx, ms);
+            if (r == GpuTimerPoll::Ready) { ++n; sum += ms; busy[i] = false; }
+            else if (r == GpuTimerPoll::Invalid) { busy[i] = false; }
+        }
+    }
+    void poll(ID3D11DeviceContext* ctx) {
+        pollOne(ctx, markerClr, markerBusy, markerOpen, markerN, markerMs);
+        pollOne(ctx, ovlCopy, ovlBusy, ovlOpen, ovlN, ovlMs);
+    }
+    void reset(ID3D11DeviceContext* ctx) {
+        for (int i = 0; i < kRing; ++i) {
+            markerClr[i].reset(ctx); ovlCopy[i].reset(ctx);
+            markerBusy[i] = ovlBusy[i] = false;
+        }
+        markerOpen = ovlOpen = -1;
+        markerN = ovlN = 0;
+        markerMs = ovlMs = 0.0;
+    }
+} g_flatEngineGpu;
+
 bool snapshotOverlayBase(ID3D11DeviceContext* ctx, Eye& e) {
     if (!e.slots || !e.slotsRtv || !e.width || !e.height) return false;
     if (!e.overlayBase) {
@@ -1014,7 +1066,10 @@ bool snapshotOverlayBase(ID3D11DeviceContext* ctx, Eye& e) {
     ctx->PSGetShaderResources(kEngineVelocityOverlaySnapshotSlot, 1, &boundSrv);
     engineVelocityNoteStateCalls(1);
     if (boundSrv.Get() == e.overlayBaseSrv.Get()) return false;
+    FlatEngineGpu::beginOne(ctx, g_flatEngineGpu.ovlCopy, g_flatEngineGpu.ovlBusy, g_flatEngineGpu.ovlOpen, g_flatEngineGpu.ovlCadence);
     ctx->CopyResource(e.overlayBase.Get(), e.slots.Get());
+    FlatEngineGpu::endOne(ctx, g_flatEngineGpu.ovlCopy, g_flatEngineGpu.ovlOpen);
+    g_flatEngineGpu.poll(ctx);
     engineVelocityNoteStateCalls(1);
     ++g_draw.overlayCopies;
     const uint64_t slotBpp = e.slotFormat == DXGI_FORMAT_R32G32B32A32_FLOAT ? 16u : 8u;
@@ -1373,7 +1428,11 @@ FlatMarkerPlane* flatMarkerPlane(ID3D11DeviceContext* ctx, ID3D11Texture2D* dept
         }
     }
     if(plane->frame!=frame) {
-        const float empty[4]={-1,0,0,0};ctx->ClearRenderTargetView(plane->rtv.Get(),empty);
+        const float empty[4]={-1,0,0,0};
+        FlatEngineGpu::beginOne(ctx, g_flatEngineGpu.markerClr, g_flatEngineGpu.markerBusy, g_flatEngineGpu.markerOpen, g_flatEngineGpu.markerCadence);
+        ctx->ClearRenderTargetView(plane->rtv.Get(),empty);
+        FlatEngineGpu::endOne(ctx, g_flatEngineGpu.markerClr, g_flatEngineGpu.markerOpen);
+        g_flatEngineGpu.poll(ctx);
         plane->frame=frame;
         plane->hasPositiveOddWrite=false;
     }
@@ -2715,6 +2774,14 @@ void summaryLocked(uint64_t now, ID3D11DeviceContext* ctx) {
                         "declined state %llu, resource %llu, shader %llu.",
                         runtimeFlatProfile() ? "flat " : "", u(g_draw.overlayCopies), double(g_draw.overlayBytes) / 1e6, u(g_draw.overlayGuardedDraws + g_guardedFast),
                         u(g_draw.overlayDeclinedState), u(g_draw.overlayDeclinedCreate), u(g_draw.overlayDeclinedShader));
+    if (runtimeFlatProfile() && (g_flatEngineGpu.markerN || g_flatEngineGpu.ovlN)) {
+        const double mAvg = g_flatEngineGpu.markerN ? g_flatEngineGpu.markerMs / g_flatEngineGpu.markerN : 0.0;
+        const double oAvg = g_flatEngineGpu.ovlN ? g_flatEngineGpu.ovlMs / g_flatEngineGpu.ovlN : 0.0;
+        Log::get().note("flat engine gpu 30s: samples=%u/%u marker-clr=%.3f ovl-copy=%.3f ms",
+                        g_flatEngineGpu.markerN, g_flatEngineGpu.ovlN, mAvg, oAvg);
+        g_flatEngineGpu.markerN = g_flatEngineGpu.ovlN = 0;
+        g_flatEngineGpu.markerMs = g_flatEngineGpu.ovlMs = 0.0;
+    }
     if (g_draw.depthlessDeclined)
         Log::get().note("engine motion: %skeyed draws that write no depth, drawn as the game's (their slot would not be the depth's surface): %llu, "
                         "last vs %016llX ps %016llX.",
@@ -3045,6 +3112,7 @@ void engineVelocityShutdown() {
     g_skinWanted.store(false, std::memory_order_release);
     g_skinDeclinedFlat = false;
     skinEntityHookSetGate(false);   // the relay then forwards straight to the game's function
+    g_flatEngineGpu.reset(nullptr);
     clearLocked();
     if (was) Log::get().note("engine motion: engine-record velocity stood down, state cleared.");
 }

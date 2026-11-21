@@ -1077,6 +1077,59 @@ int routeBegin(ID3D11DeviceContext* ctx, UiRouteStage stage, int eye, uint64_t s
     return idx;
 }
 
+// 1-in-16 sampled flat-profile crisp HUD GPU breakdown (glowFeed, tonemap re-issue, coverage, HDR clear).
+struct FlatCrispGpu {
+    static constexpr int kRing = 2;
+    GpuTimer glow[kRing], tone[kRing], cov[kRing], clr[kRing];
+    bool glowBusy[kRing] = {}, toneBusy[kRing] = {}, covBusy[kRing] = {}, clrBusy[kRing] = {};
+    int glowOpen = -1, toneOpen = -1, covOpen = -1, clrOpen = -1;
+    uint32_t glowCadence = 0, toneCadence = 0, covCadence = 0, clrCadence = 0;
+    uint32_t glowN = 0, toneN = 0, covN = 0, clrN = 0;
+    double glowMs = 0.0, toneMs = 0.0, covMs = 0.0, clrMs = 0.0;
+    uint64_t deferredCov = 0, materializedCov = 0;
+    static int beginOne(ID3D11DeviceContext* ctx, GpuTimer* ring, bool* busy, int& open, uint32_t& cadence) {
+        if (!ctx || !runtimeFlatProfile() || open >= 0) return -1;
+        if ((cadence++ & 15u) != 0) return -1;
+        Ptr<ID3D11Device> dev;
+        ctx->GetDevice(&dev);
+        if (!dev) return -1;
+        for (int i = 0; i < kRing; ++i) {
+            if (busy[i]) continue;
+            if (ring[i].begin(dev.Get(), ctx)) { busy[i] = true; open = i; return i; }
+            break;
+        }
+        return -1;
+    }
+    static void endOne(ID3D11DeviceContext* ctx, GpuTimer* ring, int& open) {
+        if (open < 0 || !ctx) return;
+        ring[open].end(ctx);
+        open = -1;
+    }
+    static void pollOne(ID3D11DeviceContext* ctx, GpuTimer* ring, bool* busy, int open, uint32_t& n, double& sum) {
+        if (!ctx) return;
+        double ms = 0.0;
+        for (int i = 0; i < kRing; ++i) {
+            if (!busy[i] || i == open) continue;
+            const GpuTimerPoll r = ring[i].poll(ctx, ms);
+            if (r == GpuTimerPoll::Ready) { ++n; sum += ms; busy[i] = false; }
+            else if (r == GpuTimerPoll::Invalid) { busy[i] = false; }
+        }
+    }
+    void poll(ID3D11DeviceContext* ctx) {
+        pollOne(ctx, glow, glowBusy, glowOpen, glowN, glowMs);
+        pollOne(ctx, tone, toneBusy, toneOpen, toneN, toneMs);
+        pollOne(ctx, cov, covBusy, covOpen, covN, covMs);
+        pollOne(ctx, clr, clrBusy, clrOpen, clrN, clrMs);
+    }
+    void reset(ID3D11DeviceContext* ctx) {
+        for (int i = 0; i < kRing; ++i) {
+            glow[i].reset(ctx); tone[i].reset(ctx); cov[i].reset(ctx); clr[i].reset(ctx);
+            glowBusy[i] = toneBusy[i] = covBusy[i] = clrBusy[i] = false;
+        }
+        glowOpen = toneOpen = covOpen = clrOpen = -1;
+    }
+} g_flatCrispGpu;
+
 void routeEnd(ID3D11DeviceContext* ctx, int idx) {
     if (idx < 0 || idx >= static_cast<int>(kRouteRing) || !ctx) return;
     // Closes the moved HDR draw's census item opened by routeBegin (the same slot, the same stage).
@@ -2846,7 +2899,9 @@ bool beginInner(ID3D11DeviceContext* ctx, int which) {
             }
         }
         const int timer = routeBegin(ctx, UiRouteStage::kHdrClear, g_draw.eye, g_draw.seq);
+        FlatCrispGpu::beginOne(ctx, g_flatCrispGpu.clr, g_flatCrispGpu.clrBusy, g_flatCrispGpu.clrOpen, g_flatCrispGpu.clrCadence);
         vScreenClearRenderTargetViewRaw(ctx, e.hdrRtv.Get(), kUiLayerClear);
+        FlatCrispGpu::endOne(ctx, g_flatCrispGpu.clr, g_flatCrispGpu.clrOpen);
         routeEnd(ctx, timer);
         e.hdrSeq = g_draw.seq;
         e.hdrDraws = 0;
@@ -3303,57 +3358,6 @@ bool g_fmtChecked[2] = {}, g_fmtOk[2] = {};
 ID3D11ComputeShader* g_csInPlace = nullptr;
 ID3D11ComputeShader* g_csHdrAlpha = nullptr;
 ID3D11ComputeShader* g_csInPlaceHdrAlpha = nullptr;
-// 1-in-16 sampled flat-profile crisp HUD GPU breakdown (glowFeed, tonemap re-issue, coverage).
-struct FlatCrispGpu {
-    static constexpr int kRing = 2;
-    GpuTimer glow[kRing], tone[kRing], cov[kRing];
-    bool glowBusy[kRing] = {}, toneBusy[kRing] = {}, covBusy[kRing] = {};
-    int glowOpen = -1, toneOpen = -1, covOpen = -1;
-    uint32_t glowCadence = 0, toneCadence = 0, covCadence = 0;
-    uint32_t glowN = 0, toneN = 0, covN = 0;
-    double glowMs = 0.0, toneMs = 0.0, covMs = 0.0;
-    uint64_t deferredCov = 0, materializedCov = 0;
-    static int beginOne(ID3D11DeviceContext* ctx, GpuTimer* ring, bool* busy, int& open, uint32_t& cadence) {
-        if (!ctx || !runtimeFlatProfile() || open >= 0) return -1;
-        if ((cadence++ & 15u) != 0) return -1;
-        Ptr<ID3D11Device> dev;
-        ctx->GetDevice(&dev);
-        if (!dev) return -1;
-        for (int i = 0; i < kRing; ++i) {
-            if (busy[i]) continue;
-            if (ring[i].begin(dev.Get(), ctx)) { busy[i] = true; open = i; return i; }
-            break;
-        }
-        return -1;
-    }
-    static void endOne(ID3D11DeviceContext* ctx, GpuTimer* ring, int& open) {
-        if (open < 0 || !ctx) return;
-        ring[open].end(ctx);
-        open = -1;
-    }
-    static void pollOne(ID3D11DeviceContext* ctx, GpuTimer* ring, bool* busy, int open, uint32_t& n, double& sum) {
-        if (!ctx) return;
-        double ms = 0.0;
-        for (int i = 0; i < kRing; ++i) {
-            if (!busy[i] || i == open) continue;
-            const GpuTimerPoll r = ring[i].poll(ctx, ms);
-            if (r == GpuTimerPoll::Ready) { ++n; sum += ms; busy[i] = false; }
-            else if (r == GpuTimerPoll::Invalid) { busy[i] = false; }
-        }
-    }
-    void poll(ID3D11DeviceContext* ctx) {
-        pollOne(ctx, glow, glowBusy, glowOpen, glowN, glowMs);
-        pollOne(ctx, tone, toneBusy, toneOpen, toneN, toneMs);
-        pollOne(ctx, cov, covBusy, covOpen, covN, covMs);
-    }
-    void reset(ID3D11DeviceContext* ctx) {
-        for (int i = 0; i < kRing; ++i) {
-            glow[i].reset(ctx); tone[i].reset(ctx); cov[i].reset(ctx);
-            glowBusy[i] = toneBusy[i] = covBusy[i] = false;
-        }
-        glowOpen = toneOpen = covOpen = -1;
-    }
-} g_flatCrispGpu;
 bool g_loadChecked[2] = {}, g_loadOk[2] = {};
 unsigned g_inPlaceDeclinedNoted = 0;   // bit per reason, said once
 bool g_inPlaceNoted = false;
@@ -4339,18 +4343,19 @@ void logDsvMemo() {
         "and resolved on a miss (a failed resolve included) %llu times in this window.",
         static_cast<unsigned long long>(g_win.dsvMemoHits), static_cast<unsigned long long>(g_win.dsvMemoMisses));
     if (runtimeFlatProfile() &&
-        (g_flatCrispGpu.glowN || g_flatCrispGpu.toneN || g_flatCrispGpu.covN ||
+        (g_flatCrispGpu.glowN || g_flatCrispGpu.toneN || g_flatCrispGpu.covN || g_flatCrispGpu.clrN ||
          g_flatCrispGpu.deferredCov || g_flatCrispGpu.materializedCov)) {
         const double glowAvg = g_flatCrispGpu.glowN ? g_flatCrispGpu.glowMs / g_flatCrispGpu.glowN : 0.0;
         const double toneAvg = g_flatCrispGpu.toneN ? g_flatCrispGpu.toneMs / g_flatCrispGpu.toneN : 0.0;
         const double covAvg = g_flatCrispGpu.covN ? g_flatCrispGpu.covMs / g_flatCrispGpu.covN : 0.0;
+        const double clrAvg = g_flatCrispGpu.clrN ? g_flatCrispGpu.clrMs / g_flatCrispGpu.clrN : 0.0;
         Log::get().note(
-            "flat crisp hud gpu 30s: samples=%u/%u/%u glow=%.3f tone=%.3f cov=%.3f ms (deferred-cov=%llu materialized=%llu)",
-            g_flatCrispGpu.glowN, g_flatCrispGpu.toneN, g_flatCrispGpu.covN, glowAvg, toneAvg, covAvg,
+            "flat crisp hud gpu 30s: samples=%u/%u/%u/%u glow=%.3f tone=%.3f cov=%.3f clr=%.3f ms (deferred-cov=%llu materialized=%llu)",
+            g_flatCrispGpu.glowN, g_flatCrispGpu.toneN, g_flatCrispGpu.covN, g_flatCrispGpu.clrN, glowAvg, toneAvg, covAvg, clrAvg,
             static_cast<unsigned long long>(g_flatCrispGpu.deferredCov),
             static_cast<unsigned long long>(g_flatCrispGpu.materializedCov));
-        g_flatCrispGpu.glowN = g_flatCrispGpu.toneN = g_flatCrispGpu.covN = 0;
-        g_flatCrispGpu.glowMs = g_flatCrispGpu.toneMs = g_flatCrispGpu.covMs = 0.0;
+        g_flatCrispGpu.glowN = g_flatCrispGpu.toneN = g_flatCrispGpu.covN = g_flatCrispGpu.clrN = 0;
+        g_flatCrispGpu.glowMs = g_flatCrispGpu.toneMs = g_flatCrispGpu.covMs = g_flatCrispGpu.clrMs = 0.0;
         g_flatCrispGpu.deferredCov = g_flatCrispGpu.materializedCov = 0;
     }
 }

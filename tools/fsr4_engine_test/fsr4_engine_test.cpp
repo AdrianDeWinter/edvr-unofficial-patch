@@ -461,6 +461,28 @@ bool flight(ID3D11Device* device, ID3D11DeviceContext* context, const FlightSpec
         }
     }
     if (!check(anyNonZero(device, context, output.Get()), "D3D11 readback of the output holds a nonzero byte")) return false;
+    // Also exercise the zero-copy direct-views path on exact-size cases when the driver accepted shared UAVs.
+    if (spec.pad == 0 && !spec.typelessDepth) {
+        edvr::Fsr4DirectViews direct{};
+        if (edvr::fsr4AcquireDirectViews(context, spec.slot, spec.w, spec.h, spec.outW, spec.outH,
+                                         static_cast<uint32_t>(colourFormat), static_cast<uint32_t>(DXGI_FORMAT_R32_FLOAT),
+                                         static_cast<uint32_t>(DXGI_FORMAT_R16G16_FLOAT), static_cast<uint32_t>(outFormat),
+                                         spec.infinite, spec.hdr, 1u, &direct)) {
+            context->CopyResource(direct.colorTex, colour.Get());
+            context->CopyResource(direct.depthTex, depth.Get());
+            context->CopyResource(direct.motionTex, motion.Get());
+            const char* why = nullptr;
+            if (!edvr::fsr4Evaluate(context, spec.slot, direct.colorTex, direct.depthTex, direct.motionTex, direct.outputTex,
+                                    spec.w, spec.h, spec.outW, spec.outH, 0.125f, -0.25f, false, 11.1f, 0.1f, 1000.0f, 1.0f,
+                                    &why, spec.infinite, spec.hdr)) {
+                if (failureReason) *failureReason = why;
+                std::fprintf(stderr, "fsr4_engine_test: direct zero-copy frame refused: %s\n", why ? why : "unspecified");
+                return false;
+            }
+            if (!check(anyNonZero(device, context, direct.outputTex), "D3D11 readback of direct zero-copy output holds a nonzero byte"))
+                return false;
+        }
+    }
     std::fprintf(stderr, "fsr4_engine_test: PASS %s%s%s%s %ux%u -> %ux%u, %u frames slot=%u\n", spec.hdr ? "HDR" : "LDR",
                  spec.infinite ? " infinite-depth" : "", spec.pad ? " box-copy" : "", spec.typelessDepth ? " typeless-depth" : "",
                  spec.w, spec.h, spec.outW, spec.outH, spec.frames, spec.slot);

@@ -373,6 +373,7 @@ struct State {
     // already; the other backends keep none, so depth[1] is made on the first frame that asks, and while frames ask, the depth the
     // backend is handed alternates between the two images: depthLast is the one the previous frame wrote (0 for every frame that did not ask).
     uint32_t depthLast=0;
+    bool prevDepthDirect=false;
     uint64_t lastFrame=0;
     FlatMonoResolveMode mode=FlatMonoResolveMode::Taa;
     bool hdr=false;   // the resources below are the HDR route's (an HDR input copy, fp16 outputs)
@@ -687,7 +688,7 @@ bool resources(const FlatMonoResolveFrame& f,const char** reason) {
     g.color={};g.rawOverlay={};g.depth[0]={};g.depth[1]={};g.motion={};g.rejection={};g.expected={};g.output[0]={};g.output[1]={};
     g.outputDomain[0]={};g.outputDomain[1]={};g.untrustedCoverageLast=false;
     g.klass={};g.classWidth=g.classHeight=0;   // the refusal census's class texture is the render size: made again by a frame that asks
-    g.width=g.height=g.outWidth=g.outHeight=0;g.evalWidth=g.evalHeight=0;g.current=0;g.depthLast=0;g.history=false;g.hdr=false;
+    g.width=g.height=g.outWidth=g.outHeight=0;g.evalWidth=g.evalHeight=0;g.current=0;g.depthLast=0;g.prevDepthDirect=false;g.history=false;g.hdr=false;
     const bool taa=f.mode==FlatMonoResolveMode::Taa;
     // The images' names for the HDR route's crumbs: which of the private textures each creation is.
     const auto role=[&](const Image& i)->const char* {
@@ -1532,13 +1533,30 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
     // On a reset the previous rows ARE the current rows (above), so they carry the current phase.
     constants.rowsJitter[0]=rowsNow.ndcX;constants.rowsJitter[1]=rowsNow.ndcY;
     constants.rowsJitter[2]=reset?rowsNow.ndcX:rowsBefore.ndcX;constants.rowsJitter[3]=reset?rowsNow.ndcY:rowsBefore.ndcY;
+    // Zero-copy FSR 4 shared views: on frame 2+ when the slot's FSR 4 feature already matches the render/output
+    // sizes and formats, copy H directly into shared color, dispatch prep directly into shared motion/depth[0..1],
+    // and let finishHdr/finish read shared output directly (eliminating 4 of 5 full-screen CopyResource passes).
+    Fsr4DirectViews fsr4Direct{};
+    const bool directFsr4 = f.mode==FlatMonoResolveMode::Fsr4 && !pixels.active() &&
+        fsr4AcquireDirectViews(context,f.slot,f.renderWidth,f.renderHeight,evalW,evalH,
+            static_cast<uint32_t>(hdr?DXGI_FORMAT_R11G11B10_FLOAT:DXGI_FORMAT_R8G8B8A8_UNORM),
+            static_cast<uint32_t>(DXGI_FORMAT_R32_FLOAT),
+            static_cast<uint32_t>(DXGI_FORMAT_R16G16_FLOAT),
+            static_cast<uint32_t>(hdr?DXGI_FORMAT_R16G16B16A16_FLOAT:DXGI_FORMAT_R8G8B8A8_UNORM),
+            true,hdr,depthIndex,&fsr4Direct);
+    ID3D11Texture2D* const copyColorDst = directFsr4 ? fsr4Direct.colorTex : g.color.texture.Get();
+    ID3D11ShaderResourceView* const colorSrv = directFsr4 ? fsr4Direct.colorSrv : g.color.srv.Get();
+    ID3D11UnorderedAccessView* const depthUav = directFsr4 ? fsr4Direct.depthUav : g.depth[depthIndex].uav.Get();
+    ID3D11UnorderedAccessView* const motionUav = directFsr4 ? fsr4Direct.motionUav : g.motion.uav.Get();
+    ID3D11ShaderResourceView* const prevDepthSrv = (directFsr4 && g.prevDepthDirect) ? fsr4Direct.prevDepthSrv : g.depth[prevDepthIndex].srv.Get();
+    ID3D11ShaderResourceView* const resolvedOutSrv = directFsr4 ? fsr4Direct.outputSrv : g.output[taa?index:0].srv.Get();
     // The crumbs' copy step covers the census's timestamps, the constants upload and the copy of H into the private input.
     HdrCrumbSpan copyStep(g_crumbOn,"copy-h","fmt=%s(%u) size=%ux%u",hdrCrumbFormat(static_cast<uint32_t>(colorDesc.Format)),
         static_cast<unsigned>(colorDesc.Format),f.renderWidth,f.renderHeight);
     SpanGuard span(context);   // the GPU census's timestamp pair: this call's own dispatches and the backend
     if(g_stageHook) g_stageHook(context, 0u);
     context->UpdateSubresource(g.constants.Get(),0,nullptr,&constants,0,0);
-    context->CopyResource(g.color.texture.Get(),overlay?cleanColor.Get():color.Get());
+    context->CopyResource(copyColorDst,overlay?cleanColor.Get():color.Get());
     if(overlay) context->CopyResource(g.rawOverlay.texture.Get(),color.Get());
     if(hdr)++stats.hdrCopied;
     copyStep.close();
@@ -1550,13 +1568,13 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
     // and the prep's too, but only on a frame whose steady-detail check runs (last frame's depth). t9 and t10 are the first-person map and
     // stencil, null unless the pair was accepted above.
     ID3D11ShaderResourceView* prepViews[]={nullptr,f.depth,f.engine.slots,f.engine.pool,
-        nullptr,nullptr,nullptr,nullptr,depthCheck?g.depth[prevDepthIndex].srv.Get():nullptr,firstPersonMap,firstPersonStencil,
+        nullptr,nullptr,nullptr,nullptr,depthCheck?prevDepthSrv:nullptr,firstPersonMap,firstPersonStencil,
         nullptr,nullptr,f.untrustedCameraCoverage,nullptr,foreground?f.foregroundMotion:nullptr,nullptr,skin?f.engine.skin:nullptr,
         celestialBound?f.celestialRecords:nullptr};
     const UINT prepViewCount=celestialBound?19:(skin?18:(foreground?16:14));
     context->CSSetShaderResources(0,prepViewCount,prepViews);
     // u5 is the refusal census's class texture, bound only on a frame that samples or paints (u4 is the later kernels' OutColor).
-    ID3D11UnorderedAccessView* prepOutputs[]={g.depth[depthIndex].uav.Get(),g.motion.uav.Get(),g.rejection.uav.Get(),
+    ID3D11UnorderedAccessView* prepOutputs[]={depthUav,motionUav,g.rejection.uav.Get(),
         taa?g.expected.uav.Get():nullptr,nullptr,needClass?g.klass.uav.Get():nullptr};
     context->CSSetUnorderedAccessViews(0,needClass?6:(taa?4:3),prepOutputs,nullptr);
     context->CSSetShader(g.prep.Get(),nullptr,0);
@@ -1613,8 +1631,10 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
             evalW,evalH,f.jitterX,f.jitterY,reset,hdr,reason);
     } else if(f.mode==FlatMonoResolveMode::Fsr4) {
         const float sy=std::sqrt(f.camera[0][1]*f.camera[0][1]+f.camera[1][1]*f.camera[1][1]+f.camera[2][1]*f.camera[2][1]);
-        ok=fsr4Evaluate(context,f.slot,g.color.texture.Get(),g.depth[depthIndex].texture.Get(),g.motion.texture.Get(),
-            g.output[0].texture.Get(),f.renderWidth,f.renderHeight,evalW,evalH,f.jitterX,f.jitterY,reset,f.deltaMs,
+        ok=fsr4Evaluate(context,f.slot,directFsr4?fsr4Direct.colorTex:g.color.texture.Get(),
+            directFsr4?fsr4Direct.depthTex:g.depth[depthIndex].texture.Get(),
+            directFsr4?fsr4Direct.motionTex:g.motion.texture.Get(),
+            directFsr4?fsr4Direct.outputTex:g.output[0].texture.Get(),f.renderWidth,f.renderHeight,evalW,evalH,f.jitterX,f.jitterY,reset,f.deltaMs,
             sdkNear,(std::numeric_limits<float>::max)(),2*std::atan(1/sy),reason,true,hdr);
     } else if(f.mode==FlatMonoResolveMode::Ditto) {
         const char* route=f.slot==0?"flat":upscalerSlotLabel(static_cast<int>(f.slot));
@@ -1634,7 +1654,7 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
     backendStep.result("ok=%u reason=%s",ok?1u:0u,(reason && *reason)?*reason:"none");
     backendStep.close();
     if(hdr && ok)++stats.hdrBackend;
-    if(!ok) {++stats.backendFailures;g.history=false;stats.currentContinueRun=0;return false;}
+    if(!ok) {++stats.backendFailures;g.history=false;g.prevDepthDirect=false;stats.currentContinueRun=0;return false;}
     if(g_stageHook) g_stageHook(context, 3u);
     if(hdr) {
         // The result goes back into the game's HDR target through a pixel-shader draw: per pixel the backend's output,
@@ -1645,13 +1665,13 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
         // clean), instead of showing the raw frame there.
         if(paintNow) {
             // The refusal view: the same draw with the prep's class texture at t11, which the finish paints from.
-            ID3D11ShaderResourceView* paintViews[17]={g.color.srv.Get(),nullptr,nullptr,nullptr,nullptr,
-                g.rejection.srv.Get(),nullptr,g.output[taa?index:0].srv.Get(),nullptr,nullptr,nullptr,g.klass.srv.Get(),
+            ID3D11ShaderResourceView* paintViews[17]={colorSrv,nullptr,nullptr,nullptr,nullptr,
+                g.rejection.srv.Get(),nullptr,resolvedOutSrv,nullptr,nullptr,nullptr,g.klass.srv.Get(),
                 overlay?f.overlayCoverage:nullptr,nullptr,nullptr,nullptr,overlay?g.rawOverlay.srv.Get():nullptr};
             drawHdrTarget(context,g.finishHdr.Get(),f.renderWidth,f.renderHeight,paintViews,overlay?17:13);
         } else {
-            ID3D11ShaderResourceView* views[17]={g.color.srv.Get(),nullptr,nullptr,nullptr,nullptr,
-                g.rejection.srv.Get(),nullptr,g.output[taa?index:0].srv.Get(),nullptr,nullptr,nullptr,nullptr,
+            ID3D11ShaderResourceView* views[17]={colorSrv,nullptr,nullptr,nullptr,nullptr,
+                g.rejection.srv.Get(),nullptr,resolvedOutSrv,nullptr,nullptr,nullptr,nullptr,
                 overlay?f.overlayCoverage:nullptr,nullptr,nullptr,nullptr,overlay?g.rawOverlay.srv.Get():nullptr};
             drawHdrTarget(context,g.finishHdr.Get(),f.renderWidth,f.renderHeight,views,overlay?17:8);
         }
@@ -1661,8 +1681,8 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
         context->ClearState();
         ID3D11Buffer* cb0=g.constants.Get();context->CSSetConstantBuffers(0,1,&cb0);
         // t11 is the prep's class texture, bound only for the refusal view (the finish paints from it when debug.y says so).
-        ID3D11ShaderResourceView* views[12]={g.color.srv.Get(),nullptr,nullptr,nullptr,nullptr,
-            g.rejection.srv.Get(),nullptr,g.output[0].srv.Get(),nullptr,nullptr,nullptr,paintNow?g.klass.srv.Get():nullptr};
+        ID3D11ShaderResourceView* views[12]={colorSrv,nullptr,nullptr,nullptr,nullptr,
+            g.rejection.srv.Get(),nullptr,resolvedOutSrv,nullptr,nullptr,nullptr,paintNow?g.klass.srv.Get():nullptr};
         context->CSSetShaderResources(0,paintNow?12:8,views);
         ID3D11SamplerState* sampler=g.sampler.Get();context->CSSetSamplers(0,1,&sampler);
         ID3D11UnorderedAccessView* out=g.output[1].uav.Get();context->CSSetUnorderedAccessViews(4,1,&out,nullptr);
@@ -1682,7 +1702,7 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
     g.sdkDepthScaleLast=sdkDepthScale;
     g.opticalPriorWorldOnly=flatOriginCaptureEnabled() && flatOriginOpticalPriorDomainSupported(f.foregroundMotion!=nullptr,
         f.untrustedCameraCoverage!=nullptr,f.firstPersonMotion!=nullptr || f.firstPersonStencil!=nullptr);
-    if(!taa)g.depthLast=depthIndex;   // the image the next asking frame reads as last frame's depth (0 while no frame asks)
+    if(!taa) { g.depthLast=depthIndex; g.prevDepthDirect=directFsr4; }   // the image the next asking frame reads as last frame's depth (0 while no frame asks)
     if(originAmbiguous) {
         ++stats.originRebases;stats.lastOriginRebaseM=stepM;
         if(originRebaseLogged<kOriginRebaseLogCap) {

@@ -423,7 +423,7 @@ inline int flatHdrCrumbWiringTests() {
     const std::string solve = body(resolve, "bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const FlatMonoResolveFrame& f,");
     ordered(solve, {"CrumbScope crumbs(f.hdr);", "initialize(device,context,reason)", "initializeHdr(device,reason)", "resources(f,reason)",
                     "hdrTargetView(color.Get(),reason)", "Isolate isolated(", "backendAvailable(f.mode,device,reason)", "HdrCrumbSpan copyStep(",
-                    "SpanGuard span(context);", "context->CopyResource(g.color.texture.Get(),overlay?cleanColor.Get():color.Get());",
+                    "SpanGuard span(context);", "context->CopyResource(copyColorDst,overlay?cleanColor.Get():color.Get());",
                     "if(overlay) context->CopyResource(g.rawOverlay.texture.Get(),color.Get());", "copyStep.close();",
                     "HdrCrumbSpan prepStep(", "context->Dispatch((f.renderWidth+7)/8,(f.renderHeight+7)/8,1);", "prepStep.close();",
                     "HdrCrumbSpan backendStep(", "ok=fsr3Evaluate(", "ok=dlaaEvaluate(", "backendStep.close();",
@@ -495,7 +495,7 @@ inline int flatHdrCrumbWiringTests() {
     ordered(draw, {"\"finish-bind\"", "context->ClearState();", "context->OMSetRenderTargets(1,&rtv,nullptr);", "\"finish-draw\"", "context->Draw(3,0);",
                    "++stats.hdrFinished;"},
             "H's binding as the render target and the draw into it are two crumbed steps, in that order, and the draw is counted");
-    ordered(solve, {"context->CopyResource(g.color.texture.Get(),overlay?cleanColor.Get():color.Get());",
+    ordered(solve, {"context->CopyResource(copyColorDst,overlay?cleanColor.Get():color.Get());",
                     "if(overlay) context->CopyResource(g.rawOverlay.texture.Get(),color.Get());",
                     "if(hdr)++stats.hdrCopied;", "copyStep.close();",
                     "const UINT prepViewCount=celestialBound?19:(skin?18:(foreground?16:14));",
@@ -620,8 +620,8 @@ inline int flatHdrCrumbWiringTests() {
                count(finish, "c=OverlayColor.SampleLevel(") == 0 && count(finish, "OverlayColor.SampleLevel(") == 1,
            "no covered pixel takes a whole sample of either texture as its colour: the overlay's sample is read once, for the sum");
     expect(count(resolve, "overlay?g.rawOverlay.srv.Get():g.color.srv.Get()") == 0 &&
-               count(solve, "ID3D11ShaderResourceView* paintViews[17]={g.color.srv.Get(),nullptr,nullptr,nullptr,nullptr,") == 1 &&
-               count(solve, "ID3D11ShaderResourceView* views[17]={g.color.srv.Get(),nullptr,nullptr,nullptr,nullptr,") == 1 &&
+               count(solve, "ID3D11ShaderResourceView* paintViews[17]={colorSrv,nullptr,nullptr,nullptr,nullptr,") == 1 &&
+               count(solve, "ID3D11ShaderResourceView* views[17]={colorSrv,nullptr,nullptr,nullptr,nullptr,") == 1 &&
                count(solve, "overlay?f.overlayCoverage:nullptr,nullptr,nullptr,nullptr,overlay?g.rawOverlay.srv.Get():nullptr};") == 2,
            "both finish draws read the clean H at t0 in every frame, and bind the mask at t12 and the raw H at t16 in an overlay frame alone");
     expect(count(solve, "paintViews,overlay?17:13);") == 1 && count(solve, "views,overlay?17:8);") == 1 &&

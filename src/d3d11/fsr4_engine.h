@@ -15,9 +15,34 @@
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
+struct ID3D11ShaderResourceView;
 struct ID3D11Texture2D;
+struct ID3D11UnorderedAccessView;
 
 namespace edvr {
+
+// Zero-copy D3D11 views directly over an active FSR 4 slot's shared textures.
+// Returned by fsr4AcquireDirectViews when the slot's feature already matches the caller's sizes/formats
+// and the driver accepted D3D11 UAV bindings on the shared motion/depth textures.
+struct Fsr4DirectViews {
+    ID3D11Texture2D* colorTex = nullptr;
+    ID3D11ShaderResourceView* colorSrv = nullptr;
+    ID3D11Texture2D* depthTex = nullptr;
+    ID3D11UnorderedAccessView* depthUav = nullptr;
+    ID3D11ShaderResourceView* prevDepthSrv = nullptr;
+    ID3D11Texture2D* motionTex = nullptr;
+    ID3D11UnorderedAccessView* motionUav = nullptr;
+    ID3D11Texture2D* outputTex = nullptr;
+    ID3D11ShaderResourceView* outputSrv = nullptr;
+};
+
+// Returns true and fills `out` when `slot` has an active FSR 4 context matching the dimensions/formats and
+// zero-copy shared UAV/SRV views are ready. Does not create a context or latch failures (frame 1 runs the
+// normal fsr4Evaluate path to build and validate the context; steady-state frames take zero-copy views).
+bool fsr4AcquireDirectViews(ID3D11DeviceContext* ctx, unsigned slot,
+                            uint32_t w, uint32_t h, uint32_t outW, uint32_t outH,
+                            uint32_t colourFormat, uint32_t depthFormat, uint32_t motionFormat, uint32_t outFormat,
+                            bool infiniteDepth, bool hdr, uint32_t depthIndex, Fsr4DirectViews* out);
 
 // Was the SDK compiled into this build (EDVR_HAVE_FSR4)? Compile-time, initialises nothing.
 bool fsr4BuiltIn();
