@@ -15,10 +15,14 @@
 namespace edvr::installer {
 namespace {
 
-const wchar_t* kIni = L"edvr.ini";
-const wchar_t* kFlatIni = L"edvr-flat.ini";
-const wchar_t* kBaseIni = L"edvr.ini.base";
-const wchar_t* kFlatBaseIni = L"edvr-flat.ini.base";
+const wchar_t* kIni = L"edup.ini";
+const wchar_t* kFlatIni = L"edup-flat.ini";
+const wchar_t* kBaseIni = L"edup.ini.base";
+const wchar_t* kFlatBaseIni = L"edup-flat.ini.base";
+const wchar_t* kLegacyIni = L"edvr.ini";
+const wchar_t* kLegacyFlatIni = L"edvr-flat.ini";
+const wchar_t* kLegacyBaseIni = L"edvr.ini.base";
+const wchar_t* kLegacyFlatBaseIni = L"edvr-flat.ini.base";
 const wchar_t* kStateIni = L"state.ini";
 const wchar_t* kD3d11 = L"d3d11.dll";
 const wchar_t* kOpenvr = L"openvr_api.dll";
@@ -84,6 +88,103 @@ bool mirrorIni(const std::wstring& from, const std::wstring& mirrorDir, const wc
     return writeGenerations(mirrorDir, name, bytes, checkpoint);
 }
 
+// Rotates a pre-install backup into .1 / .2 generations beside a live ini that already lives in
+// `mirrorDir`, so checkpoint history is preserved without overwriting the live generation 0.
+bool checkpointPreviousIni(const std::wstring& previousPath, const std::wstring& mirrorDir,
+                           const wchar_t* name) {
+    std::string prevBytes, curBytes;
+    if (!readFileBytes(previousPath, &prevBytes) || prevBytes.empty()) return false;
+    const std::wstring curPath = joinPath(mirrorDir, name);
+    if (readFileBytes(curPath, &curBytes) && curBytes == prevBytes) return false;
+    for (int g = 1; g < kMirrorGenerations; ++g) clearReadOnly(generationPath(mirrorDir, name, g));
+    for (int g = kMirrorGenerations - 1; g >= 2; --g) {
+        const std::wstring src = generationPath(mirrorDir, name, g - 1);
+        const std::wstring dst = generationPath(mirrorDir, name, g);
+        if (fileExists(src)) MoveFileExW(src.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
+    return writeFileAtomic(generationPath(mirrorDir, name, 1), prevBytes);
+}
+
+// Finds the newest non-empty generation of `name` (or its legacy counterpart) in `mirrorDir`,
+// falling back to the sibling legacy %LOCALAPPDATA%\EDVR\<install> directory.
+std::wstring findMirroredIni(const std::wstring& mirrorDir, const wchar_t* name,
+                             const wchar_t* legacyName) {
+    std::wstring found = newestGeneration(mirrorDir, name);
+    if (!found.empty()) return found;
+    if (legacyName) {
+        found = newestGeneration(mirrorDir, legacyName);
+        if (!found.empty()) return found;
+    }
+    const std::wstring legacyDir = legacyMirrorDirFor(mirrorDir);
+    if (!legacyDir.empty() && _wcsicmp(legacyDir.c_str(), mirrorDir.c_str()) != 0) {
+        found = newestGeneration(legacyDir, name);
+        if (!found.empty()) return found;
+        if (legacyName) {
+            found = newestGeneration(legacyDir, legacyName);
+            if (!found.empty()) return found;
+        }
+    }
+    return std::wstring();
+}
+
+std::wstring findMirroredFile(const std::wstring& mirrorDir, const wchar_t* name,
+                              const wchar_t* legacyName = nullptr) {
+    const std::wstring primary = joinPath(mirrorDir, name);
+    if (fileExists(primary)) return primary;
+    if (legacyName) {
+        const std::wstring legHere = joinPath(mirrorDir, legacyName);
+        if (fileExists(legHere)) return legHere;
+    }
+    const std::wstring legacyDir = legacyMirrorDirFor(mirrorDir);
+    if (!legacyDir.empty() && _wcsicmp(legacyDir.c_str(), mirrorDir.c_str()) != 0) {
+        const std::wstring inLeg = joinPath(legacyDir, name);
+        if (fileExists(inLeg)) return inLeg;
+        if (legacyName) {
+            const std::wstring legInLeg = joinPath(legacyDir, legacyName);
+            if (fileExists(legInLeg)) return legInLeg;
+        }
+    }
+    return std::wstring();
+}
+
+bool copyMissingFile(const std::wstring& src, const std::wstring& dst) {
+    if (fileExists(dst) || !fileExists(src)) return false;
+    const size_t slash = dst.find_last_of(L"\\/");
+    if (slash != std::wstring::npos && !ensureDirTree(dst.substr(0, slash))) return false;
+    return copyOver(src, dst);
+}
+
+bool copyMissingTree(const std::wstring& srcDir, const std::wstring& dstDir, bool skipLauncherRuntime) {
+    if (!dirExists(srcDir)) return false;
+    bool copiedAny = false;
+    WIN32_FIND_DATAW fd{};
+    HANDLE h = FindFirstFileW(joinPath(srcDir, L"*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    do {
+        const std::wstring name = fd.cFileName;
+        if (name == L"." || name == L"..") continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
+        const std::wstring src = joinPath(srcDir, name);
+        const std::wstring dst = joinPath(dstDir, name);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            copiedAny |= copyMissingTree(src, dst, false);
+        } else {
+            if (skipLauncherRuntime) {
+                std::wstring lower = name;
+                for (wchar_t& c : lower) c = static_cast<wchar_t>(towlower(c));
+                if (lower.compare(0, 15, L"ed-up-launcher.") == 0 ||
+                    lower.compare(0, 5, L"plan-") == 0 ||
+                    lower.compare(0, 7, L"result-") == 0) {
+                    continue;
+                }
+            }
+            copiedAny |= copyMissingFile(src, dst);
+        }
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return copiedAny;
+}
+
 // UTC, formatted the same way state.cpp's utcNow() is -- one clock, one
 // format, wherever a timestamp reaches the report.
 std::string fileSavedUtc(const std::wstring& path) {
@@ -101,7 +202,68 @@ std::string fileSavedUtc(const std::wstring& path) {
 
 std::wstring defaultMirrorRoot() {
     const std::wstring base = localAppDataFolder();
-    return base.empty() ? std::wstring() : joinPath(base, L"EDVR");
+    return base.empty() ? std::wstring() : joinPath(base, L"EDUP");
+}
+
+std::wstring legacyMirrorRootFor(const std::wstring& root) {
+    std::wstring trimmed = root;
+    while (!trimmed.empty() && (trimmed.back() == L'\\' || trimmed.back() == L'/')) trimmed.pop_back();
+    const size_t slash = trimmed.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return std::wstring();
+    const std::wstring leaf = trimmed.substr(slash + 1);
+    if (_wcsicmp(leaf.c_str(), L"EDUP") != 0) return std::wstring();
+    return trimmed.substr(0, slash + 1) + L"EDVR";
+}
+
+std::wstring legacyMirrorDirFor(const std::wstring& mirrorDir) {
+    std::wstring trimmed = mirrorDir;
+    while (!trimmed.empty() && (trimmed.back() == L'\\' || trimmed.back() == L'/')) trimmed.pop_back();
+    const size_t slash = trimmed.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return std::wstring();
+    const std::wstring parent = trimmed.substr(0, slash);
+    const std::wstring leaf = trimmed.substr(slash + 1);
+    const std::wstring legacyRoot = legacyMirrorRootFor(parent);
+    if (legacyRoot.empty() || leaf.empty()) return std::wstring();
+    return joinPath(legacyRoot, leaf);
+}
+
+bool migrateLegacyDataRoot(const std::wstring& newRoot) {
+    const std::wstring oldRoot = legacyMirrorRootFor(newRoot);
+    if (oldRoot.empty() || !dirExists(oldRoot)) return false;
+    if (!ensureDirTree(newRoot)) return false;
+
+    bool migratedAny = false;
+    migratedAny |= copyMissingFile(joinPath(oldRoot, L"game_vram.txt"), joinPath(newRoot, L"game_vram.txt"));
+    migratedAny |= copyMissingFile(joinPath(oldRoot, L"last-station.txt"), joinPath(newRoot, L"last-station.txt"));
+    migratedAny |= copyMissingTree(joinPath(oldRoot, L"launcher"), joinPath(newRoot, L"launcher"), true);
+    migratedAny |= copyMissingTree(joinPath(oldRoot, L"payload"), joinPath(newRoot, L"payload"), false);
+
+    // Per-install folders: copy seat memory, install state, merge bases and DLL backup pairs.
+    // Legacy edvr*.ini files are left in oldRoot so surveyTarget/planInstall can compare timestamps
+    // against any newer <gameDir>\edvr*.ini before migrating to edup*.ini.
+    WIN32_FIND_DATAW fd{};
+    HANDLE h = FindFirstFileW(joinPath(oldRoot, L"*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+                (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                continue;
+            const std::wstring name = fd.cFileName;
+            if (name == L"." || name == L".." ||
+                _wcsicmp(name.c_str(), L"launcher") == 0 ||
+                _wcsicmp(name.c_str(), L"payload") == 0)
+                continue;
+            const std::wstring srcSub = joinPath(oldRoot, name);
+            const std::wstring dstSub = joinPath(newRoot, name);
+            migratedAny |= copyMissingFile(joinPath(srcSub, L"seat.txt"), joinPath(dstSub, L"seat.txt"));
+            migratedAny |= copyMissingFile(joinPath(srcSub, kStateIni), joinPath(dstSub, kStateIni));
+            migratedAny |= copyMissingFile(joinPath(srcSub, kLegacyBaseIni), joinPath(dstSub, kBaseIni));
+            migratedAny |= copyMissingFile(joinPath(srcSub, kLegacyFlatBaseIni), joinPath(dstSub, kFlatBaseIni));
+            migratedAny |= copyMissingTree(joinPath(srcSub, kBackupSub), joinPath(dstSub, kBackupSub), false);
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    return migratedAny;
 }
 
 std::wstring mirrorDirFor(const GameInstall& game, const std::wstring& root) {
@@ -114,40 +276,38 @@ MirrorInfo readMirror(const std::wstring& mirrorDir) {
     info.dir = mirrorDir;
     if (mirrorDir.empty()) return info;
 
-    // The newest generation of each ini that is there and not empty (iniedit.h):
-    // a crash between two writes, or a copy an older build left half-written,
-    // must not hide the settings behind it.
-    const std::wstring iniPath = newestGeneration(mirrorDir, kIni);
-    const std::wstring flatIniPath = newestGeneration(mirrorDir, kFlatIni);
+    const std::wstring iniPath = findMirroredIni(mirrorDir, kIni, kLegacyIni);
+    const std::wstring flatIniPath = findMirroredIni(mirrorDir, kFlatIni, kLegacyFlatIni);
     info.hasIni = !iniPath.empty();
     info.hasFlatIni = !flatIniPath.empty();
-    info.hasBaseIni = fileExists(joinPath(mirrorDir, kBaseIni));
-    info.hasFlatBaseIni = fileExists(joinPath(mirrorDir, kFlatBaseIni));
-    info.hasState = fileExists(joinPath(mirrorDir, kStateIni));
-    // The mirror preserves ownership metadata, not the active runtime scope.
-    // The selected artifact writes a fresh descriptor during repair.
+    info.hasBaseIni = !findMirroredFile(mirrorDir, kBaseIni, kLegacyBaseIni).empty();
+    info.hasFlatBaseIni = !findMirroredFile(mirrorDir, kFlatBaseIni, kLegacyFlatBaseIni).empty();
+    info.hasState = !findMirroredFile(mirrorDir, kStateIni).empty();
 
     const std::wstring backupSub = joinPath(mirrorDir, kBackupSub);
+    const std::wstring legacyDir = legacyMirrorDirFor(mirrorDir);
+    const std::wstring legacyBackupSub = legacyDir.empty() ? std::wstring() : joinPath(legacyDir, kBackupSub);
     info.hasBackupPair =
-        fileExists(joinPath(backupSub, kD3d11)) || fileExists(joinPath(backupSub, kOpenvr));
+        fileExists(joinPath(backupSub, kD3d11)) || fileExists(joinPath(backupSub, kOpenvr)) ||
+        (!legacyBackupSub.empty() &&
+         (fileExists(joinPath(legacyBackupSub, kD3d11)) || fileExists(joinPath(legacyBackupSub, kOpenvr))));
 
-    // When the settings were mirrored: the later of the two files' copies (the
-    // format sorts as text), so a flat-only mirror says when ITS file was saved.
     const std::string iniWhen = info.hasIni ? fileSavedUtc(iniPath) : std::string();
     const std::string flatWhen = info.hasFlatIni ? fileSavedUtc(flatIniPath) : std::string();
     info.savedUtc = flatWhen > iniWhen ? flatWhen : iniWhen;
     return info;
 }
 
-std::vector<std::string> settingsToRestore(const std::wstring& gameDir, const MirrorInfo& mirror,
+std::vector<std::string> settingsToRestore(const std::wstring& targetDir, const MirrorInfo& mirror,
                                            const std::string& scope) {
     std::vector<std::string> names;
-    if (scopeHasVrIni(scope) && mirror.hasIni && !fileExists(joinPath(gameDir, kIni)))
-        names.push_back("edvr.ini");
-    // A flat install is offered its own file even though the runtime would read edvr.ini while it has none: the scope's file is what
-    // the scope is restored to.
-    if (scopeHasFlatIni(scope) && mirror.hasFlatIni && !fileExists(joinPath(gameDir, kFlatIni)))
-        names.push_back("edvr-flat.ini");
+    const bool hasVr = fileExists(joinPath(targetDir, kIni)) || fileExists(joinPath(targetDir, kLegacyIni));
+    const bool hasFlat =
+        fileExists(joinPath(targetDir, kFlatIni)) || fileExists(joinPath(targetDir, kLegacyFlatIni));
+    if (scopeHasVrIni(scope) && mirror.hasIni && !hasVr)
+        names.push_back("edup.ini");
+    if (scopeHasFlatIni(scope) && mirror.hasFlatIni && !hasFlat)
+        names.push_back("edup-flat.ini");
     return names;
 }
 
@@ -163,37 +323,39 @@ MirrorResult updateMirror(const std::wstring& gameDir, const std::wstring& backu
     if (mirrorDir.empty() || !ensureDirTree(mirrorDir)) return result;
     result.ok = true;
 
-    // An install or repair is the checkpoint the generations exist for: the
-    // copy this replaces is kept. Without that, a game folder wiped by an update
-    // and then installed fresh -- because the restore failed or was declined --
-    // overwrote the only saved copy with the defaults it had just written.
-    const std::wstring iniPath = joinPath(gameDir, kIni);
-    if (fileExists(iniPath) && mirrorIni(iniPath, mirrorDir, kIni, true))
-        result.saved.push_back("edvr.ini");
-
-    // The flat profile's own settings file, mirrored whenever a flat install
-    // left one; a VR-only folder simply has nothing to copy.
-    const std::wstring flatIniPath = joinPath(gameDir, kFlatIni);
-    if (fileExists(flatIniPath) && mirrorIni(flatIniPath, mirrorDir, kFlatIni, true))
-        result.saved.push_back("edvr-flat.ini");
+    const bool sameDir = _wcsicmp(gameDir.c_str(), mirrorDir.c_str()) == 0;
+    auto syncOneIni = [&](const wchar_t* name, const wchar_t* legacyName, const char* label) {
+        const std::wstring gameIni = joinPath(gameDir, name);
+        const std::wstring liveIni = joinPath(mirrorDir, name);
+        if (!sameDir && fileExists(gameIni)) {
+            if (mirrorIni(gameIni, mirrorDir, name, true)) result.saved.push_back(label);
+            return;
+        }
+        if (fileExists(liveIni)) {
+            if (!backupDir.empty()) {
+                const std::wstring prevNew = joinPath(backupDir, name);
+                const std::wstring prevOld = joinPath(backupDir, legacyName);
+                if (fileExists(prevNew)) checkpointPreviousIni(prevNew, mirrorDir, name);
+                else if (fileExists(prevOld)) checkpointPreviousIni(prevOld, mirrorDir, name);
+            }
+            result.saved.push_back(label);
+        }
+    };
+    syncOneIni(kIni, kLegacyIni, "edup.ini");
+    syncOneIni(kFlatIni, kLegacyFlatIni, "edup-flat.ini");
 
     const std::wstring basePath = baseIniPath(gameDir);
     if (fileExists(basePath) && copyOver(basePath, joinPath(mirrorDir, kBaseIni)))
-        result.saved.push_back("edvr.ini.base");
+        result.saved.push_back("edup.ini.base");
 
     const std::wstring flatBasePath = flatBaseIniPath(gameDir);
     if (fileExists(flatBasePath) && copyOver(flatBasePath, joinPath(mirrorDir, kFlatBaseIni)))
-        result.saved.push_back("edvr-flat.ini.base");
+        result.saved.push_back("edup-flat.ini.base");
 
     const std::wstring statePathSrc = statePath(gameDir);
     if (fileExists(statePathSrc) && copyOver(statePathSrc, joinPath(mirrorDir, kStateIni)))
         result.saved.push_back("state.ini");
 
-    // Whatever THIS run just backed up -- not a scan for "the newest stamp",
-    // which could just as easily be a settings-window backup that holds no
-    // DLLs at all. A run that backed up neither file (nothing to replace)
-    // leaves whatever pair a previous run mirrored in place, rather than
-    // deleting a good recovery copy because today had nothing to add.
     if (!backupDir.empty()) {
         const std::wstring d3dSrc = joinPath(backupDir, kD3d11);
         const std::wstring ovrSrc = joinPath(backupDir, kOpenvr);
@@ -217,53 +379,54 @@ MirrorResult updateMirrorIni(const std::wstring& gameDir, const std::wstring& mi
     MirrorResult result;
     if (mirrorDir.empty() || !ensureDirTree(mirrorDir)) return result;
 
-    // A setting changed a moment ago, not a checkpoint: the newest copy is
-    // replaced in place and the older generations an install kept stay put. A
-    // generation per toggle would push the copy worth keeping out in three.
+    if (_wcsicmp(gameDir.c_str(), mirrorDir.c_str()) == 0) {
+        result.ok = true;
+        return result;
+    }
+
     const std::wstring iniPath = joinPath(gameDir, kIni);
     if (fileExists(iniPath) && mirrorIni(iniPath, mirrorDir, kIni, false)) {
         result.ok = true;
-        result.saved.push_back("edvr.ini");
+        result.saved.push_back("edup.ini");
     }
 
     const std::wstring flatIniPath = joinPath(gameDir, kFlatIni);
     if (fileExists(flatIniPath) && mirrorIni(flatIniPath, mirrorDir, kFlatIni, false)) {
         result.ok = true;
-        result.saved.push_back("edvr-flat.ini");
+        result.saved.push_back("edup-flat.ini");
     }
     return result;
 }
 
 bool restoreFromMirror(const std::wstring& gameDir, const MirrorInfo& info, const std::string& scope,
-                       std::vector<std::string>* notes) {
+                       std::vector<std::string>* notes, const std::wstring& targetSettingsDir) {
     auto note = [&](const std::string& s) {
         if (notes) notes->push_back(s);
     };
 
-    // The settings files to bring back: the scope's, absent from the folder, held
-    // by the mirror. Nothing else is copied, so a file the folder has is never
-    // overwritten. Each is copied from its newest generation, and neither's
-    // failure is hidden behind the other's success: the flat profile's file lost
-    // while the shared edvr.ini came back is a restore that did not happen, and it
-    // says so.
-    const std::vector<std::string> wanted = settingsToRestore(gameDir, info, scope);
+    const std::wstring destSettingsDir = targetSettingsDir.empty() ? gameDir : targetSettingsDir;
+    const std::vector<std::string> wanted = settingsToRestore(destSettingsDir, info, scope);
     if (wanted.empty()) return false;
+    if (!ensureDirTree(destSettingsDir)) return false;
 
     bool restoredAll = true;
     bool restoredAny = false;
     struct Settings {
         const wchar_t* leaf;
+        const wchar_t* legacyLeaf;
         const char*    name;
         const char*    what;
     };
     const Settings settings[] = {
-        {kIni, "edvr.ini", "edvr.ini"},
-        {kFlatIni, "edvr-flat.ini", "edvr-flat.ini (the flat profile's own settings)"},
+        {kIni, kLegacyIni, "edup.ini", "edup.ini"},
+        {kFlatIni, kLegacyFlatIni, "edup-flat.ini", "edup-flat.ini (the flat profile's own settings)"},
     };
     for (const Settings& one : settings) {
         if (std::find(wanted.begin(), wanted.end(), std::string(one.name)) == wanted.end()) continue;
-        const std::wstring source = newestGeneration(info.dir, one.leaf);
-        if (source.empty() || !copyOver(source, joinPath(gameDir, one.leaf))) {
+        const std::wstring source = findMirroredIni(info.dir, one.leaf, one.legacyLeaf);
+        const std::wstring dst = joinPath(destSettingsDir, one.leaf);
+        if (source.empty() ||
+            (_wcsicmp(source.c_str(), dst.c_str()) != 0 && !copyOver(source, dst))) {
             note(std::string("Could not restore ") + one.what +
                  " from the copy kept outside the game folder.");
             restoredAll = false;
@@ -272,23 +435,20 @@ bool restoreFromMirror(const std::wstring& gameDir, const MirrorInfo& info, cons
         restoredAny = true;
         note(std::string("Restored ") + one.what + " from the copy kept outside the game folder.");
     }
-    // Nothing of the settings came back: the rest of the mirror is not worth
-    // putting into a folder that could not take its settings.
     if (!restoredAny) return false;
 
-    // The record and the bases are restored only where the folder lacks them. A
-    // present one is the current install's, and a mirror copy of it can be an
-    // older one whose hashes would fail the ownership proofs: a scope-based offer
-    // fires when only one settings file is missing, with the rest still there.
     if (info.hasBaseIni || info.hasFlatBaseIni || info.hasState) {
         if (ensureDirTree(stateDirPath(gameDir))) {
             bool copiedAny = false;
-            if (info.hasBaseIni && !fileExists(baseIniPath(gameDir)))
-                copiedAny |= copyOver(joinPath(info.dir, kBaseIni), baseIniPath(gameDir));
-            if (info.hasFlatBaseIni && !fileExists(flatBaseIniPath(gameDir)))
-                copiedAny |= copyOver(joinPath(info.dir, kFlatBaseIni), flatBaseIniPath(gameDir));
-            if (info.hasState && !fileExists(statePath(gameDir)))
-                copiedAny |= copyOver(joinPath(info.dir, kStateIni), statePath(gameDir));
+            const std::wstring baseSrc = findMirroredFile(info.dir, kBaseIni, kLegacyBaseIni);
+            if (!baseSrc.empty() && !fileExists(baseIniPath(gameDir)))
+                copiedAny |= copyOver(baseSrc, baseIniPath(gameDir));
+            const std::wstring flatBaseSrc = findMirroredFile(info.dir, kFlatBaseIni, kLegacyFlatBaseIni);
+            if (!flatBaseSrc.empty() && !fileExists(flatBaseIniPath(gameDir)))
+                copiedAny |= copyOver(flatBaseSrc, flatBaseIniPath(gameDir));
+            const std::wstring stateSrc = findMirroredFile(info.dir, kStateIni);
+            if (!stateSrc.empty() && !fileExists(statePath(gameDir)))
+                copiedAny |= copyOver(stateSrc, statePath(gameDir));
             if (copiedAny) {
                 note("Restored the install record too, so this still merges as an update rather "
                      "than starting over.");
@@ -300,14 +460,18 @@ bool restoreFromMirror(const std::wstring& gameDir, const MirrorInfo& info, cons
         const std::wstring restoreDir =
             joinPath(backupRootPath(gameDir), L"restored-" + timestampName());
         if (ensureDirTree(restoreDir)) {
-            const std::wstring backupSub = joinPath(info.dir, kBackupSub);
+            std::wstring backupSub = joinPath(info.dir, kBackupSub);
+            if (!fileExists(joinPath(backupSub, kD3d11)) && !fileExists(joinPath(backupSub, kOpenvr))) {
+                const std::wstring legacyDir = legacyMirrorDirFor(info.dir);
+                if (!legacyDir.empty()) backupSub = joinPath(legacyDir, kBackupSub);
+            }
             const std::wstring d3dSrc = joinPath(backupSub, kD3d11);
             const std::wstring ovrSrc = joinPath(backupSub, kOpenvr);
             bool any = false;
             if (fileExists(d3dSrc)) any |= copyOver(d3dSrc, joinPath(restoreDir, kD3d11));
             if (fileExists(ovrSrc)) any |= copyOver(ovrSrc, joinPath(restoreDir, kOpenvr));
             if (any) {
-                note("Restored the last backed-up d3d11.dll/openvr_api.dll pair into edvr_backup\\" +
+                note("Restored the last backed-up d3d11.dll/openvr_api.dll pair into edup_backup\\" +
                      toUtf8(leafOf(restoreDir)) + "\\.");
             }
         }

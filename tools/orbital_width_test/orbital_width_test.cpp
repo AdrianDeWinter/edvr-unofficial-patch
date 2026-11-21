@@ -22,7 +22,7 @@
 // edit a copy and must trip the pin.
 //
 // FIXTURES (tools/orbital_width_test/fixtures; game assets, kept as the other rigs keep theirs):
-//   vs_C7FA0C0F5DD49180.dxbc       edvr_logs/shaders of the Frontier install, FNV-1a 64 C7FA0C0F5DD49180
+//   vs_C7FA0C0F5DD49180.dxbc       edup_logs/shaders of the Frontier install, FNV-1a 64 C7FA0C0F5DD49180
 //   draw_180540_23650.bin          the draw of frame 23650, ordinal 346 of the 2026-10-06 18:05:40 eye run (the file layout is
 //                                  in the scratch script that made it, summarised at loadDraw): VS b1 rows 0..332, vertex
 //                                  buffer 0 (8194 x float4), vertex buffer 1 (5 instances x 15 floats), the 2016x1949 target.

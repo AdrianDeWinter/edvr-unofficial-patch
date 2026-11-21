@@ -2,7 +2,7 @@
 //
 //   THE RULE (pure). The exact pair 820E/6EAA is the family kShieldRipple on the HDR branch of the production uiLayerFamilyFor and nothing else is; the ripple's own half (live iff
 //   a temporal mode, not stood down, not flat); the first-draw checks (gain 1 within 1e-6, a linear s0); D's coverage test; the jitter arithmetic.
-//   THE GAME'S SHADER (WARP). The real ps_6EAA (fixtures\ps_6EAA86EFE135B2D4.dxbc, from edvr_logs\shaders) drawn on the UV ramp writes the game's own uv_jit + d:
+//   THE GAME'S SHADER (WARP). The real ps_6EAA (fixtures\ps_6EAA86EFE135B2D4.dxbc, from edup_logs\shaders) drawn on the UV ramp writes the game's own uv_jit + d:
 //   compared with the analytic value for a 2016-wide ramp (the size the flights run) within 1e-6.
 //   THE ROUTE (WARP). The whole chain with the production pieces: the production remap and jitter cancel (ui_layer_math.h) for the draw into D, depth GEQUAL
 //   against a seeded depth, blend off, the real pixel shader on the ramp; the production door pass (the build's bytecode, the production parameter block) over a
@@ -153,7 +153,7 @@ static bool wiredHook(const std::string& v) {
     return has(v, "(weaponsFireVs(f.vs) || shieldRefractVs(f.vs))") && !has(v, "shieldProbe") && !has(v, "advanced.shield_ripple");
 }
 static void wiringTests() {
-    const std::string layer = readFile("src/d3d11/ui_layer.cpp"), vscreen = readFile("src/d3d11/vscreen.cpp"), snap = readFile("src/d3d11/eye_draw_snapshot.h"), ini = readFile("edvr.ini");
+    const std::string layer = readFile("src/d3d11/ui_layer.cpp"), vscreen = readFile("src/d3d11/vscreen.cpp"), snap = readFile("src/d3d11/eye_draw_snapshot.h"), ini = readFile("edup.ini");
     check(layer.size() > 100000 && vscreen.size() > 100000 && snap.size() > 1000 && ini.size() > 10000, "the sources are readable from the repo root");
     check(wiredLayer(layer), "ui_layer.cpp: the ripple before the composite, t0 swapped and restored, D cleared far outside, the checks, the idle release, the key");
     check(!wiredLayer(replaced(layer, "    if (g_rippleLive) guarded(\"shieldRipple.door\", [&] { rippleDoor(e, eye, sequence, frame, region, layerUv, ownedFrame, resolved, &rewritten); });\n", "")),
@@ -173,8 +173,8 @@ static void wiringTests() {
     check(!wiredHook(replaced(vscreen, "(weaponsFireVs(f.vs) || shieldRefractVs(f.vs))", "weaponsFireVs(f.vs)")), "control: no pixel shader read for 820E trips the pin");
     check(has(snap, "case 0x820E5C131B99361Dull: // the shield's refracting bubble"), "eye_draw_snapshot.h: the next eye dump watches 820E (VS b0/b1/b2)");
     check(!has(replaced(snap, "case 0x820E5C131B99361Dull: // the shield's refracting bubble\n", ""), "case 0x820E5C131B99361Dull"), "control: an unwatched 820E trips the pin");
-    // edvr.ini: no key of its own, and no weapons fire key either (the setting is retired; the weapons fire is always on).
-    check(!has(ini, "shield_ripple") && !has(ini, "sharp_weapons"), "edvr.ini: the temporary key is gone, and so is the weapons fire setting");
+    // edup.ini: no key of its own, and no weapons fire key either (the setting is retired; the weapons fire is always on).
+    check(!has(ini, "shield_ripple") && !has(ini, "sharp_weapons"), "edup.ini: the temporary key is gone, and so is the weapons fire setting");
 }
 
 // ============================================================================================ WARP

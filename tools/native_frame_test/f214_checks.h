@@ -289,7 +289,7 @@ void run214(Check&& check) {
 
     // ---- 6. the sites ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini"), rec = slurp("src/common/onfoot_recorder_core.h");
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini"), rec = slurp("src/common/onfoot_recorder_core.h");
         const auto has = [&](const std::string& hay, const char* needle) { return hay.find(needle) != std::string::npos; };
         const auto at = [&](const char* needle) { return cpp.find(needle); };
         check(has(cpp, "cfg.getString(\"experimental.native_on_foot_view_follows_body_moving\", \"on\")") && has(cpp, "g_f214Key.store(on, std::memory_order_relaxed)") &&

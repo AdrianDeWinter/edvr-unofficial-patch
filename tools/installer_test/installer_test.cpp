@@ -5,7 +5,7 @@
 // else's machine: EDHM already holding the d3d11.dll name, another mod's
 // installer having overwritten ours, a game update that put the stock
 // openvr_api.dll back over ours, an original OpenVR runtime lost to a double
-// rename, an edvr.ini full of values tuned in a headset that an update must not
+// rename, an edup.ini full of values tuned in a headset that an update must not
 // throw away. None of them can be produced to order on the machine doing the
 // build, and every one of them is a folder somebody would have to repair by
 // hand if the installer got it wrong.
@@ -156,10 +156,10 @@ static bool problemMentions(const Plan& plan, const char* needle) {
     return false;
 }
 
-// The edvr.ini text a plan would write, pulled back out of its steps.
+// The edup.ini text a plan would write, pulled back out of its steps.
 static std::string plannedIni(const Plan& plan) {
     for (const Step& s : plan.steps) {
-        if (s.action == Action::WriteText && _wcsicmp(leafOf(s.to).c_str(), L"edvr.ini") == 0)
+        if (s.action == Action::WriteText && _wcsicmp(leafOf(s.to).c_str(), L"edup.ini") == 0)
             return s.text;
     }
     return std::string();
@@ -179,7 +179,7 @@ static DllInfo fakeDll(DllKind kind, const std::wstring& path, const std::string
     return d;
 }
 
-// The edvr-flat.ini a VR test payload carries beside its edvr.ini (both editions carry it since the unified install).
+// The edup-flat.ini a VR test payload carries beside its edup.ini (both editions carry it since the unified install).
 static const char* kTestFlatIni = "[fix]\r\ntemporal_aa = off\r\n[advanced]\r\nreal_dll =\r\n";
 
 // ---------------------------------------------------------------------------
@@ -201,8 +201,8 @@ static const TestTableRow kTestTable[] = {
     {"runtime", TargetRoot::Openvr, "openvr_api.dll", kProfileVr, false, ExistingMode::Runtime},
     {"openxr_loader", TargetRoot::Openvr, "openxr_loader.dll", kProfileVr, false, ExistingMode::Replace},
     {"openxr_license", TargetRoot::Openvr, "OPENXR-LOADER-LICENSE.txt", kProfileVr, false, ExistingMode::Replace},
-    {"settings_vr", TargetRoot::Game, "edvr.ini", kProfileVr, false, ExistingMode::Settings},
-    {"settings_flat", TargetRoot::Game, "edvr-flat.ini", kProfileFlat, false, ExistingMode::Settings},
+    {"settings_vr", TargetRoot::Game, "edup.ini", kProfileVr, false, ExistingMode::Settings},
+    {"settings_flat", TargetRoot::Game, "edup-flat.ini", kProfileFlat, false, ExistingMode::Settings},
     {"dittosr_license", TargetRoot::Game, "DITTOSR-LICENSE.txt", kProfileAll, false, ExistingMode::Owned},
     {"dittosr_gsr_license", TargetRoot::Game, "DITTOSR-GSR-LICENSE.txt", kProfileAll, false, ExistingMode::Owned},
     {"dlss", TargetRoot::Game, "nvngx_dlss.dll", 0, true, ExistingMode::Owned},
@@ -290,7 +290,7 @@ static void tvalid(PayloadInfo& p, const std::string& id, bool valid) {
     if (PayloadFileEntry* e = tfind(p, id)) e->valid = valid;
 }
 
-// The VR installer's payload: the runtime, edvr.ini and edvr-flat.ini.
+// The VR installer's payload: the runtime, edup.ini and edup-flat.ini.
 static PayloadInfo testPayload(const std::string& iniText) {
     PayloadInfo p;
     p.version = "v9.9.9-test";
@@ -305,7 +305,7 @@ static PayloadInfo testPayload(const std::string& iniText) {
 
 static const char kFlatGraphicsBytes[] = "TEST-FLAT-D3D11-PAYLOAD";
 
-// A payload with no VR runtime: graphics and edvr-flat.ini only. It can install scope flat and nothing that needs the runtime.
+// A payload with no VR runtime: graphics and edup-flat.ini only. It can install scope flat and nothing that needs the runtime.
 static PayloadInfo flatPayloadFor(const std::string& flatIniText) {
     PayloadInfo p = testPayload(std::string());
     tremove(p, "runtime"); tremove(p, "openxr_loader"); tremove(p, "openxr_license");
@@ -380,7 +380,7 @@ static const char* kNextIni =
     "exposure_shader =            ; empty means find it\r\n";
 
 static void testMerge() {
-    printf("\nedvr.ini merge\n");
+    printf("\nedup.ini merge\n");
 
     const std::string base = kBaseIni;
     const std::string next = kNextIni;
@@ -420,7 +420,7 @@ static void testMerge() {
     check(merged.find("\r\n") != std::string::npos && merged.find("\n\n") == std::string::npos,
           "line endings stay CRLF");
 
-    // No edvr.ini at all -- a first install. There are no opinions to preserve,
+    // No edup.ini at all -- a first install. There are no opinions to preserve,
     // and inferring "deleted" from "absent" here once commented out the entire
     // shipped file: a settings file with nothing set, which the game reads
     // happily and which looks almost right in an editor.
@@ -570,15 +570,15 @@ static void testMerge() {
 }
 
 static void testShippedIni(const std::wstring& root) {
-    printf("\nthe shipped edvr.ini\n");
-    const std::string shipped = readAll(joinPath(root, L"edvr.ini"));
+    printf("\nthe shipped edup.ini\n");
+    const std::string shipped = readAll(joinPath(root, L"edup.ini"));
     if (shipped.empty()) {
-        fail("read the repository's edvr.ini", "not found next to the repo root");
+        fail("read the repository's edup.ini", "not found next to the repo root");
         return;
     }
     MergeReport report;
     expectEq(mergeIni(shipped, shipped, &shipped, {}, &report), shipped,
-             "the real edvr.ini merges with itself unchanged");
+             "the real edup.ini merges with itself unchanged");
 
     // A user file made from the real one, tuned the way somebody in a headset
     // tunes it: the on-foot screen pulled closer, which is the pairing the
@@ -668,7 +668,7 @@ static void testShippedIni(const std::wstring& root) {
     expectEq(iniValue(stranded, "fix.fov_trim_vertical", "<absent>"), tunedTrims,
              "control: it is carried under the old name instead, where nothing reads it");
 
-    // 2026-10-22: fix.intro_video moved to [visual] (edvr.ini: `# moved-from: fix.intro_video (default screen)`), where the flat panel's
+    // 2026-10-22: fix.intro_video moved to [visual] (edup.ini: `# moved-from: fix.intro_video (default screen)`), where the flat panel's
     // Visual tab and the new star_glow live. A file from before the move has the old [fix] line: a value somebody chose follows the key
     // (the older intro_video_size / _lock / _upscale annotations above the same key still carry theirs), the old shipped default is a
     // stale line, not a choice, and is consumed so the new line stands as shipped, and nothing is left under [fix] to shadow it.
@@ -698,7 +698,7 @@ static void testShippedIni(const std::wstring& root) {
     }
 
     // F162: fix.native_on_foot_ads_sight_both_eyes (on | off) became fix.native_on_foot_ads_sight_eye (both | right | left)
-    // (edvr.ini: `# moved-from: fix.native_on_foot_ads_sight_both_eyes (default on) (values on=both, off=right)`). A file from before has the old
+    // (edup.ini: `# moved-from: fix.native_on_foot_ads_sight_both_eyes (default on) (values on=both, off=right)`). A file from before has the old
     // line: off is somebody's choice and arrives as right (the new key's word for it, not the old one), on is the old shipped default, a stale
     // line, not a choice, consumed so the new line stands as shipped (both), and nothing is left under the old name to shadow either.
     {
@@ -769,26 +769,26 @@ static void testShippedIni(const std::wstring& root) {
         check(camRep.retired.size() == 2 && camRep.carried.empty(),
               "both are reported as retired settings, neither as an unknown key");
         check(camMerged.find("temporal_aa_camera = on") != std::string::npos &&
-                  camMerged.find("# carried over from your edvr.ini; this version no longer uses it") !=
+                  camMerged.find("# carried over from your edup.ini; this version no longer uses it") !=
                       std::string::npos,
               "each carried line says this version no longer uses it");
         check(camMerged.find("# ui: Camera-path jitter") == std::string::npos,
               "the retired settings' menu rows are not resurrected");
 
         // The note names the file the user's text came from. The flat edition merges its own
-        // edvr-flat.ini (2026-09-30: a flat install read edvr-flat.ini while every message said
-        // edvr.ini), so the caller says which, and the default stays the VR file's name.
-        const std::string flatMerged = mergeIni(shipped, flown, &previous, {}, nullptr, "edvr-flat.ini");
-        check(flatMerged.find("# carried over from your edvr-flat.ini; this version no longer uses it") !=
+        // edup-flat.ini (2026-09-30: a flat install read edup-flat.ini while every message said
+        // edup.ini), so the caller says which, and the default stays the VR file's name.
+        const std::string flatMerged = mergeIni(shipped, flown, &previous, {}, nullptr, "edup-flat.ini");
+        check(flatMerged.find("# carried over from your edup-flat.ini; this version no longer uses it") !=
                       std::string::npos &&
-                  flatMerged.find("carried over from your edvr.ini") == std::string::npos,
-              "a merge of edvr-flat.ini says the retired line was carried over from edvr-flat.ini");
-        const std::string flatBare = mergeIni(shipped, flown, nullptr, {}, nullptr, "edvr-flat.ini");
-        check(flatBare.find("# carried over from your edvr-flat.ini; not an ED-UP setting this version knows") !=
+                  flatMerged.find("carried over from your edup.ini") == std::string::npos,
+              "a merge of edup-flat.ini says the retired line was carried over from edup-flat.ini");
+        const std::string flatBare = mergeIni(shipped, flown, nullptr, {}, nullptr, "edup-flat.ini");
+        check(flatBare.find("# carried over from your edup-flat.ini; not an ED-UP setting this version knows") !=
                   std::string::npos,
               "...and so does the note for a key this version never shipped");
         check(mergeIni(shipped, flown, nullptr, {}, nullptr, nullptr)
-                      .find("# carried over from your edvr.ini; not an ED-UP setting this version knows") !=
+                      .find("# carried over from your edup.ini; not an ED-UP setting this version knows") !=
                   std::string::npos,
               "no file named: the VR file's name, as before");
 
@@ -850,9 +850,9 @@ static void testShippedIni(const std::wstring& root) {
                      "a retired terrain motion lever is carried with its value, not eaten");
             check(terrainRep.retired.size() == 1 && terrainRep.carried.empty(),
                   "it is reported as a retired setting, not as a key this version never shipped");
-            check(terrainMerged.find("# carried over from your edvr.ini; this version no longer uses it\n" +
+            check(terrainMerged.find("# carried over from your edup.ini; this version no longer uses it\n" +
                                      std::string("terrain_motion = off")) != std::string::npos ||
-                      terrainMerged.find("# carried over from your edvr.ini; this version no longer uses it\r\n" +
+                      terrainMerged.find("# carried over from your edup.ini; this version no longer uses it\r\n" +
                                          std::string("terrain_motion = off")) != std::string::npos,
                   "the carried line follows a note saying this version no longer uses it");
             check(terrainMerged.find("planetary terrain (every terrain") == std::string::npos,
@@ -952,7 +952,7 @@ static void testShippedIni(const std::wstring& root) {
                 }
                 return n;
             };
-            const std::string carriedNote = "# carried over from your edvr.ini; this version no longer uses it";
+            const std::string carriedNote = "# carried over from your edup.ini; this version no longer uses it";
             const auto carriedAs = [&](const std::string& merged, const std::string& line) {
                 return merged.find(carriedNote + "\n" + line) != std::string::npos ||
                        merged.find(carriedNote + "\r\n" + line) != std::string::npos;
@@ -1071,7 +1071,7 @@ static void testShippedIni(const std::wstring& root) {
                 }
                 return n;
             };
-            const std::string carriedNote = "# carried over from your edvr.ini; this version no longer uses it";
+            const std::string carriedNote = "# carried over from your edup.ini; this version no longer uses it";
             const auto carriedAs = [&](const std::string& merged, const std::string& line) {
                 return merged.find(carriedNote + "\n" + line) != std::string::npos ||
                        merged.find(carriedNote + "\r\n" + line) != std::string::npos;
@@ -1208,7 +1208,7 @@ static void testShippedIni(const std::wstring& root) {
                 }
                 return n;
             };
-            const std::string carriedNote = "# carried over from your edvr.ini; this version no longer uses it";
+            const std::string carriedNote = "# carried over from your edup.ini; this version no longer uses it";
             const auto carriedAs = [&](const std::string& merged, const std::string& line) {
                 return merged.find(carriedNote + "\n" + line) != std::string::npos ||
                        merged.find(carriedNote + "\r\n" + line) != std::string::npos;
@@ -1324,7 +1324,7 @@ static void testShippedIni(const std::wstring& root) {
                 }
                 return n;
             };
-            const std::string carriedNote = "# carried over from your edvr.ini; this version no longer uses it";
+            const std::string carriedNote = "# carried over from your edup.ini; this version no longer uses it";
             const auto carriedAs = [&](const std::string& merged, const std::string& line) {
                 return merged.find(carriedNote + "\n" + line) != std::string::npos ||
                        merged.find(carriedNote + "\r\n" + line) != std::string::npos;
@@ -1371,16 +1371,16 @@ static void testShippedIni(const std::wstring& root) {
     }
 }
 
-// A shipped default that CHANGED, against the real edvr.ini: fix.ui_quality went
+// A shipped default that CHANGED, against the real edup.ini: fix.ui_quality went
 // from off to 100 on 2026-09-29. What an existing install does with it is a
 // property of the merge, not of this key, and it is pinned here so a change of that
 // behaviour is a decision. The previous version's file is the shipped one with the
 // old default written back.
 static void testChangedDefault(const std::wstring& root) {
-    printf("\na shipped default that changed (fix.ui_quality: off -> 100), against the real edvr.ini\n");
-    const std::string shipped = readAll(joinPath(root, L"edvr.ini"));
+    printf("\na shipped default that changed (fix.ui_quality: off -> 100), against the real edup.ini\n");
+    const std::string shipped = readAll(joinPath(root, L"edup.ini"));
     if (shipped.empty()) {
-        fail("read the repository's edvr.ini", "not found next to the repo root");
+        fail("read the repository's edup.ini", "not found next to the repo root");
         return;
     }
     expectEq(iniValue(shipped, "fix.ui_quality", "<absent>"), "100", "the shipped default is 100");
@@ -1433,10 +1433,10 @@ static void testChangedDefault(const std::wstring& root) {
 // set is carried with its value under "this version no longer uses it", reported as retired and not adopted, the setting beside it keeps its
 // tuned value, no documentation block is resurrected, and a second merge adds no copy. The shipped file defines none of them.
 static void testCullRetiredKeys(const std::wstring& root) {
-    printf("\nthe 2026-10 advanced and experimental key cull, against the real edvr.ini\n");
-    const std::string shipped = readAll(joinPath(root, L"edvr.ini"));
+    printf("\nthe 2026-10 advanced and experimental key cull, against the real edup.ini\n");
+    const std::string shipped = readAll(joinPath(root, L"edup.ini"));
     if (shipped.empty()) {
-        fail("read the repository's edvr.ini", "not found next to the repo root");
+        fail("read the repository's edup.ini", "not found next to the repo root");
         return;
     }
     const char* const removed[] = {
@@ -1541,10 +1541,10 @@ static void testCullRetiredKeys(const std::wstring& root) {
 // game's own input-assembler flush (docs/scanner-body.md), which has no key. A line somebody set is carried with its value under "this version no longer uses
 // it", reported as retired and not adopted, its documentation block is not resurrected, and a second merge adds no copy. The shipped file defines none of it.
 static void testScannerBodyRetiredKey(const std::wstring& root) {
-    printf("\nthe retired scanned-body key, against the real edvr.ini\n");
-    const std::string shipped = readAll(joinPath(root, L"edvr.ini"));
+    printf("\nthe retired scanned-body key, against the real edup.ini\n");
+    const std::string shipped = readAll(joinPath(root, L"edup.ini"));
     if (shipped.empty()) {
-        fail("read the repository's edvr.ini", "not found next to the repo root");
+        fail("read the repository's edup.ini", "not found next to the repo root");
         return;
     }
     check(shipped.find("\nscanner_body =") == std::string::npos && shipped.find("\n#scanner_body =") == std::string::npos,
@@ -1610,7 +1610,7 @@ static void testPlanner() {
         expectEq(iniValue(plannedIni(plan), "advanced.real_dll"), "",
                  "with no other mod there is nothing to chain to");
         check(hasStep(plan, Action::WriteText, nullptr, L"state.ini"), "it records what it did");
-        check(hasStep(plan, Action::WriteText, nullptr, L"edvr.ini.base"),
+        check(hasStep(plan, Action::WriteText, nullptr, L"edup.ini.base"),
               "it keeps this version's default ini for the next merge");
     }
 
@@ -1730,7 +1730,7 @@ static void testPlanner() {
         s.openxrLoader=fakeDll(DllKind::Foreign,joinPath(s.game.openvrDir,L"openxr_loader.dll"),tsha(payload, "openxr_loader"));
         s.openxrLicense=fakeDll(DllKind::Foreign,joinPath(s.game.openvrDir,L"OPENXR-LOADER-LICENSE.txt"),tsha(payload, "openxr_license"));
         const auto first=planInstall(s,options,payload);
-        s.nativeConfig=fakeDll(DllKind::Foreign,joinPath(s.game.openvrDir,L"edvr_openxr.ini"),first.nextState.nativeConfigSha);
+        s.nativeConfig=fakeDll(DllKind::Foreign,joinPath(s.game.openvrDir,L"edup_openxr.ini"),first.nextState.nativeConfigSha);
         const Plan plan = planInstall(s, options, payload);
         check(plan.nothingToDo, "an install that would change nothing says so");
         check(plan.steps.empty(), "and does nothing");
@@ -1770,18 +1770,18 @@ static void testPlanner() {
         check(hasStep(plan, Action::WritePayload, nullptr, L"d3d11.dll"), "EDVR is put back");
         check(notesMention(plan, "Keeping the chain"), "and the chain to EDHM is kept");
         expectEq(iniValue(plannedIni(plan), "advanced.real_dll"), "d3d11_edhm.dll",
-                 "and written to the new edvr.ini, the one place both profiles read it from");
-        expectEq(iniValue(plannedText(plan, L"edvr-flat.ini"), "advanced.real_dll", "<absent>"), "",
-                 "while the new edvr-flat.ini holds no second copy");
+                 "and written to the new edup.ini, the one place both profiles read it from");
+        expectEq(iniValue(plannedText(plan, L"edup-flat.ini"), "advanced.real_dll", "<absent>"), "",
+                 "while the new edup-flat.ini holds no second copy");
 
-        // An edvr.ini that exists and was emptied on purpose is the user's: a kept chain does not write itself back.
+        // An edup.ini that exists and was emptied on purpose is the user's: a kept chain does not write itself back.
         Survey emptied = s;
         emptied.iniPresent = true;
         emptied.iniText = std::string(kNextIni);
         emptied.baseIniText = kNextIni;
         const Plan quiet = planInstall(emptied, options, payload);
         expectEq(iniValue(plannedIni(quiet).empty() ? emptied.iniText : plannedIni(quiet), "advanced.real_dll", "<absent>"), "",
-                 "an existing edvr.ini whose chain was emptied is not refilled by a kept chain");
+                 "an existing edup.ini whose chain was emptied is not refilled by a kept chain");
         // ...but a run that replaces the settings with the shipped defaults makes the file new, and the chain goes into it.
         Options fresh = options;
         fresh.keepSettings = false;
@@ -1841,7 +1841,7 @@ static void testPlanner() {
         s.openvrOrig = fakeDll(DllKind::Absent,
                                joinPath(s.game.openvrDir, L"openvr_api_orig.dll"), "");
         s.openvrOrigInBackups.push_back(
-            joinPath(dir, L"edvr_backup\\20260101-000000\\openvr_api.dll"));
+            joinPath(dir, L"edup_backup\\20260101-000000\\openvr_api.dll"));
         const Plan plan = planInstall(s, options, payload);
         check(!hasStep(plan, Action::Backup, L"openvr_api.dll", L"openvr_api_orig.dll"),
               "native startup does not copy a legacy runtime back into use");
@@ -1906,7 +1906,7 @@ static void testPlanner() {
         // what that folder is for.
         Survey withBackup = s;
         withBackup.openvrOrigInBackups.push_back(
-            joinPath(dir, L"edvr_backup\\20260101-000000\\openvr_api.dll"));
+            joinPath(dir, L"edup_backup\\20260101-000000\\openvr_api.dll"));
         const Plan recovered = planUninstall(withBackup, options);
         // Copied OVER ours rather than deleting first: the folder is never
         // without an openvr_api.dll, not even for the moment between two steps.
@@ -2060,15 +2060,15 @@ static void testPlanner() {
               "and EDHM gets its name back -- otherwise uninstalling EDVR silently uninstalls it");
         check(hasStep(plan, Action::Rename, L"openvr_api_orig.dll", L"openvr_api.dll"),
               "the game's runtime is put back");
-        check(!hasStep(plan, Action::Delete, L"edvr.ini", nullptr),
+        check(!hasStep(plan, Action::Delete, L"edup.ini", nullptr),
               "settings are left in place by default");
 
         Options withSettings = options;
         withSettings.removeSettings = true;
         const Plan plan2 = planUninstall(s, withSettings);
-        check(hasStep(plan2, Action::Delete, L"edvr.ini", nullptr),
+        check(hasStep(plan2, Action::Delete, L"edup.ini", nullptr),
               "and removed when that is asked for");
-        check(hasStep(plan2, Action::Backup, L"edvr.ini", L"edvr.ini"),
+        check(hasStep(plan2, Action::Backup, L"edup.ini", L"edup.ini"),
               "after a copy goes to the backup folder");
     }
 }
@@ -2088,8 +2088,8 @@ static void testNativePlanner() {
     check(hasStep(fresh,Action::WritePayload,nullptr,L"d3d11.dll"),"native graphics is installed beside Elite");
     check(hasStep(fresh,Action::WritePayload,nullptr,L"openvr_api.dll"),"native runtime is installed in Openvr");
     check(hasStep(fresh,Action::WritePayload,nullptr,L"openxr_loader.dll"),"bundled Khronos loader is installed");
-    check(hasStep(fresh,Action::WriteText,nullptr,L"edvr_openxr.ini"),"native startup config is written");
-    bool systemConfig=false; for(const Step& st:fresh.steps) if(st.action==Action::WriteText && leafOf(st.to)==L"edvr_openxr.ini") systemConfig=st.text.find("runtime=system")!=std::string::npos;
+    check(hasStep(fresh,Action::WriteText,nullptr,L"edup_openxr.ini"),"native startup config is written");
+    bool systemConfig=false; for(const Step& st:fresh.steps) if(st.action==Action::WriteText && leafOf(st.to)==L"edup_openxr.ini") systemConfig=st.text.find("runtime=system")!=std::string::npos;
     check(systemConfig,"config selects the system runtime");
     PayloadInfo half=p; tvalid(half, "runtime", false);
     check(planInstall(s,o,half).blocked,"missing one native payload rejects the whole plan");
@@ -2123,7 +2123,7 @@ static void testFlatPlanner() {
     check(!fresh.blocked, "flat accepts graphics without the native runtime pair");
     check(fresh.nextState.scope == "flat", "a payload with no runtime installs scope flat when asked");
     check(hasStep(fresh, Action::WritePayload, nullptr, L"d3d11.dll"), "flat installs graphics");
-    check(hasStep(fresh, Action::WriteText, nullptr, L"edvr_profile.ini"), "flat installs its descriptor");
+    check(hasStep(fresh, Action::WriteText, nullptr, L"edup_profile.ini"), "flat installs its descriptor");
     check(!hasStep(fresh, Action::WritePayload, nullptr, L"openvr_api.dll"), "flat omits the VR runtime");
     bool makesOpenvr = false;
     for (const Step& step : fresh.steps)
@@ -2171,11 +2171,11 @@ static void testFlatPlanner() {
 }
 
 // ---------------------------------------------------------------------------
-// the flat edition's own settings file (edvr-flat.ini)
+// the flat edition's own settings file (edup-flat.ini)
 //
-// The flat runtime reads edvr-flat.ini first and falls back to edvr.ini only
+// The flat runtime reads edup-flat.ini first and falls back to edup.ini only
 // while there is none (config.cpp). The installer used to merge into and edit
-// edvr.ini for a flat install: it reported success while the game went on
+// edup.ini for a flat install: it reported success while the game went on
 // reading the old flat file, and where there was no flat file it changed the VR
 // profile's tuning. Every case here holds one rule: an operation of an edition
 // changes the file THAT edition's runtime reads, and the other edition's file
@@ -2183,7 +2183,7 @@ static void testFlatPlanner() {
 // ---------------------------------------------------------------------------
 
 // What each shipped edition's defaults look like, in miniature, and the two files
-// a folder can hold: the VR profile's edvr.ini and the flat profile's own, chosen
+// a folder can hold: the VR profile's edup.ini and the flat profile's own, chosen
 // to differ from each other in every way a wrong-file merge could show.
 static const char* kFlatTemplate =
     "# EDVR flat settings.\r\n"
@@ -2207,7 +2207,7 @@ static const char* kFlatTemplateNewer =
     "[advanced]\r\n"
     "real_dll =\r\n";
 
-// The VR profile's edvr.ini -- or, in a folder from before the profiles had files
+// The VR profile's edup.ini -- or, in a folder from before the profiles had files
 // of their own, the one file both read. It carries a section and a value that no
 // flat file above has.
 static const char* kSharedIni =
@@ -2222,7 +2222,7 @@ static const char* kSharedIni =
     "[advanced]\r\n"
     "real_dll =\r\n";
 
-// The flat profile's own edvr-flat.ini, tuned differently.
+// The flat profile's own edup-flat.ini, tuned differently.
 static const char* kFlatOwnIni =
     "# EDVR flat settings.\r\n"
     "\r\n"
@@ -2233,10 +2233,10 @@ static const char* kFlatOwnIni =
     "[advanced]\r\n"
     "real_dll =\r\n";
 
-// What a dry run says when advanced.real_dll is in edvr-flat.ini alone and edvr.ini has none (installer.md quotes it).
+// What a dry run says when advanced.real_dll is in edup-flat.ini alone and edup.ini has none (installer.md quotes it).
 static const char* kMoveNote =
-    "Moving advanced.real_dll (d3d11_edhm.dll) from edvr-flat.ini to edvr.ini, so it is set once and applies to both the VR and flat "
-    "profiles. Both files are backed up first; edvr-flat.ini keeps no value for it (write real_dll = none there to run flat without "
+    "Moving advanced.real_dll (d3d11_edhm.dll) from edup-flat.ini to edup.ini, so it is set once and applies to both the VR and flat "
+    "profiles. Both files are backed up first; edup-flat.ini keeps no value for it (write real_dll = none there to run flat without "
     "the chain).";
 
 // The payload the flat installer carries, for an apply on real files.
@@ -2258,7 +2258,7 @@ static PayloadProvider flatProvider() {
 }
 
 // The live file `leaf` in `dir` named by any step -- read, replaced, moved,
-// removed. A backup's copy under edvr_backup\ is a different path and does not
+// removed. A backup's copy under edup_backup\ is a different path and does not
 // count: what is asked is whether the plan reaches the file the game reads.
 static bool touchesLive(const Plan& plan, const std::wstring& dir, const wchar_t* leaf) {
     const std::wstring live = joinPath(dir, leaf);
@@ -2345,10 +2345,10 @@ static void testUnifiedDescriptor() {
     check(descriptorShaFor("both") == shaOf(both2), "the scope both descriptor is the canonical schema-2 text");
     {   // A fresh install writes the canonical text of the scope it installs, whatever the payload carries.
         const Plan fresh = planInstall(baseSurvey(dir), o, vr);
-        check(plannedText(fresh, L"edvr_profile.ini") == both2, "a fresh VR-payload install writes scope = both");
+        check(plannedText(fresh, L"edup_profile.ini") == both2, "a fresh VR-payload install writes scope = both");
         check(fresh.nextState.scope == "both", "and records scope both");
         const Plan freshFlat = planInstall(baseSurvey(dir), convert, vr);
-        check(plannedText(freshFlat, L"edvr_profile.ini") == flat2, "scope flat writes scope = flat, from the planner");
+        check(plannedText(freshFlat, L"edup_profile.ini") == flat2, "scope flat writes scope = flat, from the planner");
     }
 
     {   // The review's repro: a folder with no descriptor, given the tool's bytes.
@@ -2365,7 +2365,7 @@ static void testUnifiedDescriptor() {
         const Plan plan = planInstall(s, o, vr);
         check(!plan.blocked, "a tool-written both install updates without an installer record", unifiedProblems(plan));
         check(plan.nextState.descriptorSha == shaOf(both2), "the update leaves scope = both");
-        check(!hasStep(plan, Action::WriteText, nullptr, L"edvr_profile.ini"),
+        check(!hasStep(plan, Action::WriteText, nullptr, L"edup_profile.ini"),
               "and does not rewrite a descriptor that already says both");
     }
     {   // (b) The same folder with an older record holding the schema-1 hash: still proceeds.
@@ -2387,7 +2387,7 @@ static void testUnifiedDescriptor() {
         s.state.descriptorSha = shaOf(vr1);
         const Plan plan = planInstall(s, o, vr);
         check(!plan.blocked, "a schema-1 vr descriptor the record names is upgraded in place", unifiedProblems(plan));
-        check(hasStep(plan, Action::WriteText, nullptr, L"edvr_profile.ini"),
+        check(hasStep(plan, Action::WriteText, nullptr, L"edup_profile.ini"),
               "the upgrade rewrites the descriptor");
         check(plan.nextState.descriptorSha == shaOf(both2), "and records scope = both");
     }
@@ -2408,7 +2408,7 @@ static void testUnifiedDescriptor() {
         after.state = update.nextState;
         after.openxrLoader = fakeDll(DllKind::Edvr, joinPath(after.game.openvrDir, L"openxr_loader.dll"), tsha(vr, "openxr_loader"));
         after.openxrLicense = fakeDll(DllKind::Edvr, joinPath(after.game.openvrDir, L"OPENXR-LOADER-LICENSE.txt"), tsha(vr, "openxr_license"));
-        after.nativeConfig = fakeDll(DllKind::Edvr, joinPath(after.game.openvrDir, L"edvr_openxr.ini"), update.nextState.nativeConfigSha);
+        after.nativeConfig = fakeDll(DllKind::Edvr, joinPath(after.game.openvrDir, L"edup_openxr.ini"), update.nextState.nativeConfigSha);
         const Plan conversion = planInstall(after, convert, flat);
         check(!conversion.blocked, "a recorded both install converts to flat through the runtime proofs", unifiedProblems(conversion));
         check(hasStep(conversion, Action::Delete, L"openvr_api.dll", nullptr), "the conversion retires EDVR's runtime");
@@ -2455,7 +2455,7 @@ static void testUnifiedDescriptor() {
 
         // The payload carries no descriptor: the planner writes its own text for the scope, whatever an older installer shipped.
         PayloadInfo retired = vr;
-        check(!planInstall(baseSurvey(dir), o, retired).blocked && plannedText(planInstall(baseSurvey(dir), o, retired), L"edvr_profile.ini") == both2,
+        check(!planInstall(baseSurvey(dir), o, retired).blocked && plannedText(planInstall(baseSurvey(dir), o, retired), L"edup_profile.ini") == both2,
               "a payload carrying a schema-1 descriptor does not change what the planner writes");
     }
     {   // A schema-1 flat install with an older record: the flat update upgrades it to scope = flat.
@@ -2468,7 +2468,7 @@ static void testUnifiedDescriptor() {
     }
 }
 
-// An older flat install wrote its flat defaults into edvr.ini.base. A newer both install changes the descriptor and leaves that record
+// An older flat install wrote its flat defaults into edup.ini.base. A newer both install changes the descriptor and leaves that record
 // behind. The VR customization that equals a flat default must survive the upgrade: the base does not describe the VR file.
 static void testStaleRecordBase() {
     printf("\na stale flat record does not vouch for the VR base\n");
@@ -2493,10 +2493,10 @@ static void testStaleRecordBase() {
     s.flatIniText = kTestFlatIni;
     const Plan plan = planInstall(s, testOptions(), vr);
     check(!plan.blocked, "a both descriptor over a stale flat record is not blocked", unifiedProblems(plan));
-    // A plan with no edvr.ini write leaves the file as the user has it, which is the outcome asserted.
+    // A plan with no edup.ini write leaves the file as the user has it, which is the outcome asserted.
     const std::string planned = plannedIni(plan);
     expectEq(iniValue(planned.empty() ? userVr : planned, "hotkey.dump_draws", "<absent>"), "NUMLOCK",
-             "the edvr.ini the install leaves keeps the VR customization equal to a flat default");
+             "the edup.ini the install leaves keeps the VR customization equal to a flat default");
 }
 
 static void testXessPlanner() {
@@ -2529,10 +2529,10 @@ static void testXessPlanner() {
         const Plan plan = planInstall(s, options, p);
         check(!plan.blocked && !plan.nothingToDo, "identical XeSS files need a metadata-only adoption");
         check(plan.steps.size() == 2 &&
-              hasStep(plan, Action::MakeDir, nullptr, L"edvr_install") &&
+              hasStep(plan, Action::MakeDir, nullptr, L"edup_install") &&
               hasStep(plan, Action::WriteText, nullptr, L"state.ini") &&
-              !hasStep(plan, Action::WriteText, nullptr, L"edvr.ini.base") &&
-              !hasStep(plan, Action::WriteText, nullptr, L"edvr-flat.ini") &&
+              !hasStep(plan, Action::WriteText, nullptr, L"edup.ini.base") &&
+              !hasStep(plan, Action::WriteText, nullptr, L"edup-flat.ini") &&
               !hasStep(plan, Action::WritePayload, nullptr, L"libxess.dll"),
               "adoption writes only the ownership record, not existing files");
         check(notesMention(plan, "libxess.dll (Intel's XeSS-SR runtime) is already this build's"),
@@ -2595,7 +2595,7 @@ static void testXessPlanner() {
         check(plan.blocked && plan.steps.empty() && notesMention(plan, "license notices"),
               "XeSS payload missing a license notice is rejected");
     }
-    {   // The VR edition carries the same three files: its edvr.ini selects XeSS-SR too.
+    {   // The VR edition carries the same three files: its edup.ini selects XeSS-SR too.
         PayloadInfo vr = testPayload(kNextIni);
         tset(vr, "xess", "xess-runtime-new");
         tset(vr, "xess_license", "xess-license-new");
@@ -2657,7 +2657,7 @@ static Survey leftoverSurvey(const std::wstring& dir, const PayloadInfo& p, bool
         : fakeDll(DllKind::OpenVrRuntime, joinPath(nativeDir, L"openvr_api.dll"), "game-vr");
     s.openxrLoader = fakeDll(DllKind::Foreign, joinPath(nativeDir, L"openxr_loader.dll"), loaderSha);
     s.openxrLicense = fakeDll(DllKind::Foreign, joinPath(nativeDir, L"OPENXR-LOADER-LICENSE.txt"), tsha(p, "openxr_license"));
-    s.nativeConfig = fakeDll(DllKind::Foreign, joinPath(nativeDir, L"edvr_openxr.ini"), shaOfText(config));
+    s.nativeConfig = fakeDll(DllKind::Foreign, joinPath(nativeDir, L"edup_openxr.ini"), shaOfText(config));
     s.nativeConfigText = config;
     s.xess = fakeDll(DllKind::Foreign, joinPath(dir, L"libxess.dll"), tsha(p, "xess"));
     s.xessLicense = fakeDll(DllKind::Foreign, joinPath(dir, L"INTEL-XESS-LICENSE.txt"), tsha(p, "xess_license"));
@@ -2688,10 +2688,10 @@ static void testContentOwnership(const std::wstring& scratch) {
               unifiedProblems(plan));
         check(hasStep(plan, Action::Delete, L"openxr_loader.dll", nullptr) &&
               hasStep(plan, Action::Delete, L"OPENXR-LOADER-LICENSE.txt", nullptr) &&
-              hasStep(plan, Action::Delete, L"edvr_openxr.ini", nullptr),
+              hasStep(plan, Action::Delete, L"edup_openxr.ini", nullptr),
               "and removes the loader, licence and startup config, proved by their content");
         check(hasStep(plan, Action::Backup, L"openxr_loader.dll", nullptr) &&
-              hasStep(plan, Action::Backup, L"edvr_openxr.ini", nullptr),
+              hasStep(plan, Action::Backup, L"edup_openxr.ini", nullptr),
               "each of those is backed up before it is removed");
         check(!hasStep(plan, Action::Delete, L"openvr_api.dll", nullptr) &&
               !hasStep(plan, Action::Rename, nullptr, L"openvr_api.dll") &&
@@ -2701,7 +2701,7 @@ static void testContentOwnership(const std::wstring& scratch) {
         check(!hasStep(plan, Action::Delete, L"libxess.dll", nullptr) &&
               !hasStep(plan, Action::Delete, L"INTEL-XESS-LICENSE.txt", nullptr),
               "the XeSS files stay: a flat install uses them");
-        check(plan.nextState.scope == "flat" && plannedText(plan, L"edvr_profile.ini") == flat2,
+        check(plan.nextState.scope == "flat" && plannedText(plan, L"edup_profile.ini") == flat2,
               "and writes scope = flat");
     }
     {   // (b) The state before an Uninstall: EDVR's runtime, a both descriptor, a stale flat record. The uninstall removes what EDVR
@@ -2712,11 +2712,11 @@ static void testContentOwnership(const std::wstring& scratch) {
         s.state.descriptorSha = descriptorShaFor("flat");
         const Plan plan = planUninstall(s, testOptions(), p);
         check(!plan.blocked, "an uninstall of that state is not blocked", unifiedProblems(plan));
-        check(hasStep(plan, Action::Delete, L"edvr_profile.ini", nullptr),
+        check(hasStep(plan, Action::Delete, L"edup_profile.ini", nullptr),
               "removes the both descriptor, though the record says flat");
         check(hasStep(plan, Action::Delete, L"openxr_loader.dll", nullptr) &&
               hasStep(plan, Action::Delete, L"OPENXR-LOADER-LICENSE.txt", nullptr) &&
-              hasStep(plan, Action::Delete, L"edvr_openxr.ini", nullptr),
+              hasStep(plan, Action::Delete, L"edup_openxr.ini", nullptr),
               "removes the loader, licence and startup config without a record");
         // Payload-identical, with no record or receipt listing them: nothing shows EDVR placed them, so they are kept.
         check(!hasStep(plan, Action::Delete, L"libxess.dll", nullptr) &&
@@ -2751,11 +2751,11 @@ static void testContentOwnership(const std::wstring& scratch) {
         s.nativeConfig.sha256 = shaOfText(s.nativeConfigText);
         s.descriptorSha = shaOfText("[install]\r\nschema = 2\r\nscope = both\r\n# edited by hand\r\n");
         const Plan plan = planUninstall(s, testOptions(), p);
-        check(!hasStep(plan, Action::Delete, L"edvr_openxr.ini", nullptr) &&
+        check(!hasStep(plan, Action::Delete, L"edup_openxr.ini", nullptr) &&
               notesMention(plan, "Keeping a changed OpenXR file"),
               "a startup config naming another loader is kept, with a note");
-        check(!hasStep(plan, Action::Delete, L"edvr_profile.ini", nullptr) &&
-              notesMention(plan, "Keeping an unverified edvr_profile.ini"),
+        check(!hasStep(plan, Action::Delete, L"edup_profile.ini", nullptr) &&
+              notesMention(plan, "Keeping an unverified edup_profile.ini"),
               "a descriptor that is not one of EDVR's texts is kept, with a note");
     }
     {   // Planning writes nothing: the cases above are planned over real files, and the folder is listed before and after.
@@ -2764,9 +2764,9 @@ static void testContentOwnership(const std::wstring& scratch) {
         makeTree(joinPath(cdir, L"Openvr\\win64"));
         writeAll(joinPath(cdir, L"Openvr\\win64\\openxr_loader.dll"), kTestLoaderBytes);
         writeAll(joinPath(cdir, L"Openvr\\win64\\OPENXR-LOADER-LICENSE.txt"), kTestLicenseBytes);
-        writeAll(joinPath(cdir, L"Openvr\\win64\\edvr_openxr.ini"), startupConfigFor(cdir));
+        writeAll(joinPath(cdir, L"Openvr\\win64\\edup_openxr.ini"), startupConfigFor(cdir));
         writeAll(joinPath(cdir, L"Openvr\\win64\\openvr_api.dll"), "game-vr");
-        writeAll(joinPath(cdir, L"edvr_profile.ini"), "[install]\r\nschema = 2\r\nscope = both\r\n");
+        writeAll(joinPath(cdir, L"edup_profile.ini"), "[install]\r\nschema = 2\r\nscope = both\r\n");
         writeAll(joinPath(cdir, L"libxess.dll"), kTestXessBytes);
         const std::string before = listing(cdir) + listing(joinPath(cdir, L"Openvr\\win64"));
         planInstall(leftoverSurvey(cdir, p, false, shaOfText(kTestLoaderBytes)), flatOpt, p);
@@ -3158,28 +3158,28 @@ static void testFlatSettingsPlanner() {
     Options bothScope = testOptions();   // the VR payload's default scope, for the chain cases that need both files
     bothScope.scope = "both";
 
-    {   // The legacy shared-INI install: a flat install from before edvr-flat.ini
-        // existed has only edvr.ini. The flat runtime has been reading it, so its
-        // settings carry over into a file of the flat edition's own -- and edvr.ini
+    {   // The legacy shared-INI install: a flat install from before edup-flat.ini
+        // existed has only edup.ini. The flat runtime has been reading it, so its
+        // settings carry over into a file of the flat edition's own -- and edup.ini
         // itself is not touched by anything the plan does.
         Survey s = installedFlatSurvey(dir, flatOld);
         s.iniPresent = true;
         s.iniText = kSharedIni;
         const Plan plan = planInstall(s, options, flatNew);
-        check(!plan.blocked, "a flat update over a legacy shared edvr.ini plans");
-        expectEq(plan.settingsFile, "edvr-flat.ini", "and says the file it works on is edvr-flat.ini");
-        check(hasStep(plan, Action::WriteText, nullptr, L"edvr-flat.ini"),
-              "it writes the flat edition's own edvr-flat.ini");
-        check(!touchesLive(plan, dir, L"edvr.ini"),
-              "and nothing in the plan reads, backs up, replaces or removes edvr.ini");
-        const std::string seeded = plannedText(plan, L"edvr-flat.ini");
+        check(!plan.blocked, "a flat update over a legacy shared edup.ini plans");
+        expectEq(plan.settingsFile, "edup-flat.ini", "and says the file it works on is edup-flat.ini");
+        check(hasStep(plan, Action::WriteText, nullptr, L"edup-flat.ini"),
+              "it writes the flat edition's own edup-flat.ini");
+        check(!touchesLive(plan, dir, L"edup.ini"),
+              "and nothing in the plan reads, backs up, replaces or removes edup.ini");
+        const std::string seeded = plannedText(plan, L"edup-flat.ini");
         expectEq(iniValue(seeded, "fix.temporal_aa"), "dlaa",
                  "the setting the flat runtime was reading carries over");
         expectEq(iniValue(seeded, "fix.render_sharpness"), "0",
                  "and the setting that arrived in this version is adopted beside it");
-        check(!hasStep(plan, Action::Backup, L"edvr-flat.ini", nullptr),
+        check(!hasStep(plan, Action::Backup, L"edup-flat.ini", nullptr),
               "a file that is new has nothing to back up");
-        check(notesMention(plan, "Creating edvr-flat.ini from your edvr.ini"),
+        check(notesMention(plan, "Creating edup-flat.ini from your edup.ini"),
               "the report says where the new file came from");
         check(plan.nextState.iniSha == sha256Bytes(seeded.data(), seeded.size()),
               "the record names the hash of the flat file it writes");
@@ -3194,10 +3194,10 @@ static void testFlatSettingsPlanner() {
         Options fresh = options;
         fresh.keepSettings = false;
         const Plan plan = planInstall(s, fresh, flatNew);
-        const std::string written = plannedText(plan, L"edvr-flat.ini");
+        const std::string written = plannedText(plan, L"edup-flat.ini");
         expectEq(iniValue(written, "fix.temporal_aa"), "off",
-                 "--replace-settings gives the flat file the shipped defaults, not edvr.ini's");
-        check(!touchesLive(plan, dir, L"edvr.ini"), "and still leaves edvr.ini alone");
+                 "--replace-settings gives the flat file the shipped defaults, not edup.ini's");
+        check(!touchesLive(plan, dir, L"edup.ini"), "and still leaves edup.ini alone");
         check(notesMention(plan, "every setting at its default"), "and says so");
     }
 
@@ -3210,7 +3210,7 @@ static void testFlatSettingsPlanner() {
         s.flatIniText = kFlatOwnIni;
         const Plan plan = planInstall(s, options, flatNew);
         check(!plan.blocked, "a flat update over two different files plans");
-        const std::string merged = plannedText(plan, L"edvr-flat.ini");
+        const std::string merged = plannedText(plan, L"edup-flat.ini");
         expectEq(iniValue(merged, "fix.temporal_aa"), "fsr", "the flat file's own setting is kept");
         expectEq(iniValue(merged, "fix.temporal_aa_model"), "l",
                  "a default the flat file had not changed moves with the new version");
@@ -3219,36 +3219,36 @@ static void testFlatSettingsPlanner() {
                  "nothing of the VR profile's tuning is merged into it");
         expectEq(iniValue(merged, "fix.black_void", "<absent>"), "<absent>",
                  "not a single one of its values");
-        check(hasStep(plan, Action::Backup, L"edvr-flat.ini", L"edvr-flat.ini"),
+        check(hasStep(plan, Action::Backup, L"edup-flat.ini", L"edup-flat.ini"),
               "the flat file is backed up before it is changed");
-        check(!touchesLive(plan, dir, L"edvr.ini"), "and edvr.ini is not in the plan at all");
+        check(!touchesLive(plan, dir, L"edup.ini"), "and edup.ini is not in the plan at all");
     }
 
     {   // A setting this version does not know is carried to the end of its section under a note
-        // that names the file it came from. The flat edition's own file is edvr-flat.ini, and a
-        // note saying "your edvr.ini" (the flight of 2026-09-30 read edvr-flat.ini while every
-        // message said edvr.ini) points at a file the flat edition never reads. Seeded from the
-        // shared file, naming edvr.ini is right: that is where the lines were.
+        // that names the file it came from. The flat edition's own file is edup-flat.ini, and a
+        // note saying "your edup.ini" (the flight of 2026-09-30 read edup-flat.ini while every
+        // message said edup.ini) points at a file the flat edition never reads. Seeded from the
+        // shared file, naming edup.ini is right: that is where the lines were.
         Survey s = installedFlatSurvey(dir, flatOld);
         s.iniPresent = true;
         s.iniText = kSharedIni;
         s.flatIniPresent = true;
         s.flatIniText = std::string(kFlatOwnIni) + "stale_line = 1\r\n";
-        const std::string merged = plannedText(planInstall(s, options, flatNew), L"edvr-flat.ini");
+        const std::string merged = plannedText(planInstall(s, options, flatNew), L"edup-flat.ini");
         check(merged.find("stale_line = 1") != std::string::npos &&
-                  merged.find("# carried over from your edvr-flat.ini; not an ED-UP setting this version knows") !=
+                  merged.find("# carried over from your edup-flat.ini; not an ED-UP setting this version knows") !=
                       std::string::npos,
-              "a flat update carries an unknown line under a note naming edvr-flat.ini");
-        check(merged.find("carried over from your edvr.ini") == std::string::npos,
-              "and never one naming edvr.ini, which it did not come from");
+              "a flat update carries an unknown line under a note naming edup-flat.ini");
+        check(merged.find("carried over from your edup.ini") == std::string::npos,
+              "and never one naming edup.ini, which it did not come from");
 
         Survey seed = installedFlatSurvey(dir, flatOld);
         seed.iniPresent = true;
         seed.iniText = kSharedIni;
-        const std::string seeded = plannedText(planInstall(seed, options, flatNew), L"edvr-flat.ini");
-        check(seeded.find("# carried over from your edvr.ini; not an ED-UP setting this version knows") !=
+        const std::string seeded = plannedText(planInstall(seed, options, flatNew), L"edup-flat.ini");
+        check(seeded.find("# carried over from your edup.ini; not an ED-UP setting this version knows") !=
                   std::string::npos,
-              "a seed from the shared file names edvr.ini for the lines it carries over");
+              "a seed from the shared file names edup.ini for the lines it carries over");
     }
 
     {   // A file written by 0.21 (the carried-line note and the file's own header say EDVR) merges again without
@@ -3256,11 +3256,11 @@ static void testFlatSettingsPlanner() {
         const std::string shippedIni = "# ED-UP settings.\r\n\r\n[fix]\r\nblack_void = 1\r\n";
         const std::string oldWording =
             "# EDVR settings.\r\n\r\n[fix]\r\nblack_void = 0\r\n"
-            "# carried over from your edvr.ini; not an EDVR setting this version knows\r\n"
+            "# carried over from your edup.ini; not an EDVR setting this version knows\r\n"
             "stale_line = 7\r\n";
         const std::string merged = mergeIni(shippedIni, oldWording, &shippedIni, {}, nullptr);
         const std::string oldNote = "not an EDVR setting this version knows";
-        const std::string newNote = "# carried over from your edvr.ini; not an ED-UP setting this version knows";
+        const std::string newNote = "# carried over from your edup.ini; not an ED-UP setting this version knows";
         size_t notes = 0, lines = 0;
         for (size_t at = merged.find("carried over from your"); at != std::string::npos;
              at = merged.find("carried over from your", at + 1)) ++notes;
@@ -3283,22 +3283,22 @@ static void testFlatSettingsPlanner() {
         Options fresh = options;
         fresh.keepSettings = false;
         const Plan plan = planInstall(s, fresh, flatNew);
-        expectEq(iniValue(plannedText(plan, L"edvr-flat.ini"), "fix.temporal_aa"), "off",
+        expectEq(iniValue(plannedText(plan, L"edup-flat.ini"), "fix.temporal_aa"), "off",
                  "the flat file is replaced by the shipped defaults");
-        check(hasStep(plan, Action::Backup, L"edvr-flat.ini", L"edvr-flat.ini"),
+        check(hasStep(plan, Action::Backup, L"edup-flat.ini", L"edup-flat.ini"),
               "after a copy of it goes to the backup folder");
-        check(!touchesLive(plan, dir, L"edvr.ini"), "and edvr.ini is not touched");
+        check(!touchesLive(plan, dir, L"edup.ini"), "and edup.ini is not touched");
     }
 
     {   // Nothing installed and no settings at all: the defaults go to the flat
-        // file, and edvr.ini is not created.
+        // file, and edup.ini is not created.
         Survey s = baseSurvey(dir);
         s.haveOpenvrDir = false;
         const Plan plan = planInstall(s, options, flatOld);
-        check(hasStep(plan, Action::WriteText, nullptr, L"edvr-flat.ini"),
-              "a fresh flat install writes edvr-flat.ini");
-        check(!touchesLive(plan, dir, L"edvr.ini"), "and does not create edvr.ini");
-        expectEq(iniValue(plannedText(plan, L"edvr-flat.ini"), "fix.temporal_aa_model"), "k",
+        check(hasStep(plan, Action::WriteText, nullptr, L"edup-flat.ini"),
+              "a fresh flat install writes edup-flat.ini");
+        check(!touchesLive(plan, dir, L"edup.ini"), "and does not create edup.ini");
+        expectEq(iniValue(plannedText(plan, L"edup-flat.ini"), "fix.temporal_aa_model"), "k",
                  "with the shipped defaults in it");
     }
 
@@ -3312,15 +3312,15 @@ static void testFlatSettingsPlanner() {
         s.iniText = kSharedIni;
         const Plan plan = planInstall(s, options, flatOld);
         check(plan.nothingToDo, "an up-to-date flat install has nothing to do");
-        check(!hasStep(plan, Action::WriteText, nullptr, L"edvr-flat.ini"),
-              "it does not rewrite edvr-flat.ini");
-        check(notesMention(plan, "edvr-flat.ini already says what it should"),
+        check(!hasStep(plan, Action::WriteText, nullptr, L"edup-flat.ini"),
+              "it does not rewrite edup-flat.ini");
+        check(notesMention(plan, "edup-flat.ini already says what it should"),
               "and names the file that needed nothing");
     }
 
     {   // A graphics mod in the d3d11.dll slot: the chain decision is ONE value, kept in the shared
-        // edvr.ini (both profiles read it from there; the flat runtime reads edvr-flat.ini first
-        // only for an override or `none`). The flat file gets none, and edvr.ini is changed in
+        // edup.ini (both profiles read it from there; the flat runtime reads edup-flat.ini first
+        // only for an override or `none`). The flat file gets none, and edup.ini is changed in
         // that one key alone, after a copy of it goes to the backup folder.
         Survey s = baseSurvey(dir);
         s.haveOpenvrDir = false;
@@ -3330,34 +3330,34 @@ static void testFlatSettingsPlanner() {
         const Plan plan = planInstall(s, options, flatOld);
         check(hasStep(plan, Action::Rename, L"d3d11.dll", L"d3d11_edhm.dll"),
               "a flat install chains to the mod already in the slot");
-        expectEq(iniValue(plannedText(plan, L"edvr.ini"), "advanced.real_dll"),
-                 "d3d11_edhm.dll", "and the chain target is kept once, in the shared edvr.ini");
-        expectEq(plannedText(plan, L"edvr.ini"),
+        expectEq(iniValue(plannedText(plan, L"edup.ini"), "advanced.real_dll"),
+                 "d3d11_edhm.dll", "and the chain target is kept once, in the shared edup.ini");
+        expectEq(plannedText(plan, L"edup.ini"),
                  std::string(kSharedIni).substr(0, std::string(kSharedIni).rfind("real_dll =")) +
                      "real_dll = d3d11_edhm.dll\r\n",
                  "changing that one line of it and nothing else");
-        check(hasStep(plan, Action::Backup, L"edvr.ini", L"edvr.ini"),
-              "after a copy of edvr.ini goes to the backup folder");
-        expectEq(iniValue(plannedText(plan, L"edvr-flat.ini"), "advanced.real_dll", "<absent>"), "",
-                 "while edvr-flat.ini holds no second copy");
+        check(hasStep(plan, Action::Backup, L"edup.ini", L"edup.ini"),
+              "after a copy of edup.ini goes to the backup folder");
+        expectEq(iniValue(plannedText(plan, L"edup-flat.ini"), "advanced.real_dll", "<absent>"), "",
+                 "while edup-flat.ini holds no second copy");
     }
 
-    {   // The same flat install with no edvr.ini at all: the shared place is made, holding only the chain.
+    {   // The same flat install with no edup.ini at all: the shared place is made, holding only the chain.
         Survey s = baseSurvey(dir);
         s.haveOpenvrDir = false;
         s.d3d11 = fakeDll(DllKind::D3d11Provider, joinPath(dir, L"d3d11.dll"), "edhm", L"3Dmigoto");
         const Plan plan = planInstall(s, options, flatOld);
-        expectEq(iniValue(plannedText(plan, L"edvr.ini"), "advanced.real_dll"), "d3d11_edhm.dll",
-                 "a flat install with no edvr.ini creates one for the chain");
-        expectEq(iniValue(plannedText(plan, L"edvr.ini"), "fix.temporal_aa", "<absent>"), "<absent>",
+        expectEq(iniValue(plannedText(plan, L"edup.ini"), "advanced.real_dll"), "d3d11_edhm.dll",
+                 "a flat install with no edup.ini creates one for the chain");
+        expectEq(iniValue(plannedText(plan, L"edup.ini"), "fix.temporal_aa", "<absent>"), "<absent>",
                  "holding nothing else");
-        check(!hasStep(plan, Action::Backup, L"edvr.ini", L"edvr.ini"), "and a new file has nothing to back up");
-        expectEq(iniValue(plannedText(plan, L"edvr-flat.ini"), "advanced.real_dll", "<absent>"), "",
-                 "while edvr-flat.ini holds no second copy");
+        check(!hasStep(plan, Action::Backup, L"edup.ini", L"edup.ini"), "and a new file has nothing to back up");
+        expectEq(iniValue(plannedText(plan, L"edup-flat.ini"), "advanced.real_dll", "<absent>"), "",
+                 "while edup-flat.ini holds no second copy");
     }
 
     {   // THE USER'S CASE. A hand- or earlier-installer-made layout: advanced.real_dll only in
-    // edvr-flat.ini, edvr.ini empty. The install moves it: edvr.ini gets the value, edvr-flat.ini
+    // edup-flat.ini, edup.ini empty. The install moves it: edup.ini gets the value, edup-flat.ini
     // is emptied of it, both are backed up, and the plan says so.
         const PayloadInfo vr = testPayload(kNextIni);
         Survey s = baseSurvey(dir);
@@ -3368,14 +3368,14 @@ static void testFlatSettingsPlanner() {
                         "real_dll = d3d11_edhm.dll\r\n";            // the value, here alone
         const Plan plan = planInstall(s, bothScope, vr);
         check(!plan.blocked, "an install over the split layout plans");
-        expectEq(iniValue(plannedText(plan, L"edvr.ini"), "advanced.real_dll"), "d3d11_edhm.dll",
-                 "edvr.ini receives the chain");
-        expectEq(iniValue(plannedText(plan, L"edvr-flat.ini"), "advanced.real_dll", "<absent>"), "",
-                 "edvr-flat.ini is emptied of it");
-        expectEq(iniValue(plannedText(plan, L"edvr-flat.ini"), "fix.temporal_aa"), "fsr",
+        expectEq(iniValue(plannedText(plan, L"edup.ini"), "advanced.real_dll"), "d3d11_edhm.dll",
+                 "edup.ini receives the chain");
+        expectEq(iniValue(plannedText(plan, L"edup-flat.ini"), "advanced.real_dll", "<absent>"), "",
+                 "edup-flat.ini is emptied of it");
+        expectEq(iniValue(plannedText(plan, L"edup-flat.ini"), "fix.temporal_aa"), "fsr",
                  "and keeps the rest of the person's flat settings");
-        check(hasStep(plan, Action::Backup, L"edvr.ini", L"edvr.ini") &&
-                  hasStep(plan, Action::Backup, L"edvr-flat.ini", L"edvr-flat.ini"),
+        check(hasStep(plan, Action::Backup, L"edup.ini", L"edup.ini") &&
+                  hasStep(plan, Action::Backup, L"edup-flat.ini", L"edup-flat.ini"),
               "both files are backed up first");
         check(notesMention(plan, kMoveNote),
               "the dry-run report says what moved, from where to where, and how to opt flat out");
@@ -3384,12 +3384,12 @@ static void testFlatSettingsPlanner() {
 
         // Run again over the result: nothing left to move.
         Survey after = s;
-        after.iniText = plannedText(plan, L"edvr.ini");
-        after.flatIniText = plannedText(plan, L"edvr-flat.ini");
+        after.iniText = plannedText(plan, L"edup.ini");
+        after.flatIniText = plannedText(plan, L"edup-flat.ini");
         const Plan second = planInstall(after, bothScope, vr);
         check(!notesMention(second, "Moving advanced.real_dll"), "a second run moves nothing");
-        check(!touchesLive(second, dir, L"edvr.ini") || plannedText(second, L"edvr.ini") == after.iniText,
-              "and does not change edvr.ini");
+        check(!touchesLive(second, dir, L"edup.ini") || plannedText(second, L"edup.ini") == after.iniText,
+              "and does not change edup.ini");
     }
 
     {   // Values that are somebody's decision are not migrated or overwritten.
@@ -3403,20 +3403,20 @@ static void testFlatSettingsPlanner() {
             return planInstall(s, bothScope, vr);
         };
         Plan p = withChain("d3d11_reshade.dll", "d3d11_edhm.dll");
-        check(!notesMention(p, "Moving advanced.real_dll"), "edvr.ini already names a mod: a flat override is not moved");
-        expectEq(iniValue(plannedText(p, L"edvr-flat.ini"), "advanced.real_dll", "<kept>"), "d3d11_edhm.dll",
+        check(!notesMention(p, "Moving advanced.real_dll"), "edup.ini already names a mod: a flat override is not moved");
+        expectEq(iniValue(plannedText(p, L"edup-flat.ini"), "advanced.real_dll", "<kept>"), "d3d11_edhm.dll",
                  "and stays as the flat override");
-        expectEq(iniValue(plannedText(p, L"edvr.ini"), "advanced.real_dll", "<kept>"), "d3d11_reshade.dll",
-                 "while edvr.ini keeps its own");
+        expectEq(iniValue(plannedText(p, L"edup.ini"), "advanced.real_dll", "<kept>"), "d3d11_reshade.dll",
+                 "while edup.ini keeps its own");
         p = withChain("", "none");
-        check(!notesMention(p, "Moving advanced.real_dll"), "`none` in edvr-flat.ini is not moved");
-        expectEq(iniValue(plannedText(p, L"edvr-flat.ini"), "advanced.real_dll", "<kept>"), "none",
+        check(!notesMention(p, "Moving advanced.real_dll"), "`none` in edup-flat.ini is not moved");
+        expectEq(iniValue(plannedText(p, L"edup-flat.ini"), "advanced.real_dll", "<kept>"), "none",
                  "and is kept");
         p = withChain("none", "d3d11_edhm.dll");
-        check(!notesMention(p, "Moving advanced.real_dll"), "`none` in edvr.ini is not overwritten from the flat file");
+        check(!notesMention(p, "Moving advanced.real_dll"), "`none` in edup.ini is not overwritten from the flat file");
     }
 
-    {   // A VR-only install does not manage edvr-flat.ini: it copies the value to edvr.ini and leaves the flat file as it is.
+    {   // A VR-only install does not manage edup-flat.ini: it copies the value to edup.ini and leaves the flat file as it is.
         const PayloadInfo vr = testPayload(kNextIni);
         Survey s = baseSurvey(dir);
         s.iniPresent = true;
@@ -3426,12 +3426,12 @@ static void testFlatSettingsPlanner() {
         Options vrOnly = options;
         vrOnly.scope = "vr";
         const Plan plan = planInstall(s, vrOnly, vr);
-        expectEq(iniValue(plannedText(plan, L"edvr.ini"), "advanced.real_dll"), "d3d11_edhm.dll",
-                 "a VR install copies the flat file's chain to edvr.ini");
-        check(!touchesLive(plan, dir, L"edvr-flat.ini"), "and leaves edvr-flat.ini, outside its scope, alone");
+        expectEq(iniValue(plannedText(plan, L"edup.ini"), "advanced.real_dll"), "d3d11_edhm.dll",
+                 "a VR install copies the flat file's chain to edup.ini");
+        check(!touchesLive(plan, dir, L"edup-flat.ini"), "and leaves edup-flat.ini, outside its scope, alone");
     }
 
-    {   // Flat-only over a flat file that holds it, with edvr.ini present but empty: edvr.ini gets the value in that line alone.
+    {   // Flat-only over a flat file that holds it, with edup.ini present but empty: edup.ini gets the value in that line alone.
         Survey s = installedFlatSurvey(dir, flatOld);
         s.d3d11.sha256 = tsha(flatOld, "graphics");
         trecord(s.state, "graphics", tsha(flatOld, "graphics"));
@@ -3440,12 +3440,12 @@ static void testFlatSettingsPlanner() {
         s.iniPresent = true;
         s.iniText = kSharedIni;
         const Plan plan = planInstall(s, options, flatOld);
-        expectEq(iniValue(plannedText(plan, L"edvr.ini"), "advanced.real_dll"), "d3d11_edhm.dll",
-                 "a flat-only install moves it into the shared edvr.ini too");
-        expectEq(iniValue(plannedText(plan, L"edvr.ini"), "fix.black_void"), "0",
-                 "leaving the rest of edvr.ini as it was");
-        expectEq(iniValue(plannedText(plan, L"edvr-flat.ini"), "advanced.real_dll", "<absent>"), "",
-                 "and emptying edvr-flat.ini of it");
+        expectEq(iniValue(plannedText(plan, L"edup.ini"), "advanced.real_dll"), "d3d11_edhm.dll",
+                 "a flat-only install moves it into the shared edup.ini too");
+        expectEq(iniValue(plannedText(plan, L"edup.ini"), "fix.black_void"), "0",
+                 "leaving the rest of edup.ini as it was");
+        expectEq(iniValue(plannedText(plan, L"edup-flat.ini"), "advanced.real_dll", "<absent>"), "",
+                 "and emptying edup-flat.ini of it");
     }
 
     {   // A flat file made new from the shared one (the seed) carries no second copy of the chain.
@@ -3454,12 +3454,12 @@ static void testFlatSettingsPlanner() {
         s.iniPresent = true;
         s.iniText = "[advanced]\r\nreal_dll = d3d11_edhm.dll\r\n";
         const Plan plan = planInstall(s, options, flatOld);
-        expectEq(iniValue(plannedText(plan, L"edvr-flat.ini"), "advanced.real_dll", "<absent>"), "",
-                 "a seeded edvr-flat.ini keeps no copy of the shared chain value");
-        check(!touchesLive(plan, dir, L"edvr.ini"), "and edvr.ini is not touched");
+        expectEq(iniValue(plannedText(plan, L"edup-flat.ini"), "advanced.real_dll", "<absent>"), "",
+                 "a seeded edup-flat.ini keeps no copy of the shared chain value");
+        check(!touchesLive(plan, dir, L"edup.ini"), "and edup.ini is not touched");
     }
 
-    {   // The mirror image: the VR edition works on edvr.ini and leaves the flat
+    {   // The mirror image: the VR edition works on edup.ini and leaves the flat
         // profile's file exactly as it is.
         const PayloadInfo vr = testPayload(kNextIni);
         Survey s = baseSurvey(dir);
@@ -3471,10 +3471,10 @@ static void testFlatSettingsPlanner() {
         vrOnly.scope = "vr";
         const Plan plan = planInstall(s, vrOnly, vr);
         check(!plan.blocked, "a VR install beside a flat profile's file plans");
-        expectEq(plan.settingsFile, "edvr.ini", "and says its file is edvr.ini");
-        check(hasStep(plan, Action::WriteText, nullptr, L"edvr.ini"), "it writes edvr.ini");
-        check(!touchesLive(plan, dir, L"edvr-flat.ini"),
-              "and the flat profile's edvr-flat.ini is not in the plan at all");
+        expectEq(plan.settingsFile, "edup.ini", "and says its file is edup.ini");
+        check(hasStep(plan, Action::WriteText, nullptr, L"edup.ini"), "it writes edup.ini");
+        check(!touchesLive(plan, dir, L"edup-flat.ini"),
+              "and the flat profile's edup-flat.ini is not in the plan at all");
     }
 
     {   // A base is the defaults of the file the record's edition wrote. Merging
@@ -3495,7 +3495,7 @@ static void testFlatSettingsPlanner() {
         check(!plan.blocked, "a flat to VR conversion plans");
         // Kept means the plan either leaves the file alone or writes it with the
         // person's value; what it must not do is write the VR default over it.
-        const std::string written = plannedText(plan, L"edvr.ini");
+        const std::string written = plannedText(plan, L"edup.ini");
         expectEq(iniValue(written.empty() ? s.iniText : written, "fix.black_void"), "0",
                  "the VR file's value is kept, not read against the flat edition's defaults");
         check(plan.merge.twoWay, "the merge says it had no base to go on");
@@ -3520,13 +3520,13 @@ static void testFlatSettingsPlanner() {
         s.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openvr_api.dll"), "installed-vr");
         s.openvrOrig = fakeDll(DllKind::OpenVrRuntime, joinPath(s.game.openvrDir, L"openvr_api_orig.dll"), "game-vr");
         const Plan plan = planInstall(s, convert, flat);
-        check(!plan.blocked, "a VR to flat conversion over a shared edvr.ini plans",
+        check(!plan.blocked, "a VR to flat conversion over a shared edup.ini plans",
               plan.problems.empty() ? std::string() : plan.problems.front());
-        const std::string seeded = plannedText(plan, L"edvr-flat.ini");
-        expectEq(iniValue(seeded, "fix.black_void"), "0", "what the person chose in edvr.ini carries into edvr-flat.ini");
+        const std::string seeded = plannedText(plan, L"edup-flat.ini");
+        expectEq(iniValue(seeded, "fix.black_void"), "0", "what the person chose in edup.ini carries into edup-flat.ini");
         expectEq(iniValue(seeded, "fix.temporal_aa"), "off",
                  "and what they never chose is the flat edition's default, not the VR one");
-        check(!touchesLive(plan, dir, L"edvr.ini"), "with edvr.ini itself untouched");
+        check(!touchesLive(plan, dir, L"edup.ini"), "with edup.ini itself untouched");
     }
 
     // ---- uninstall: each edition removes its own file and no other ----
@@ -3551,31 +3551,31 @@ static void testFlatSettingsPlanner() {
     {
         const Survey s = installedFlat(true, true);
         const Plan kept = planUninstall(s, options);
-        check(!hasStep(kept, Action::Delete, L"edvr-flat.ini", nullptr) &&
-                  !hasStep(kept, Action::Delete, L"edvr.ini", nullptr),
+        check(!hasStep(kept, Action::Delete, L"edup-flat.ini", nullptr) &&
+                  !hasStep(kept, Action::Delete, L"edup.ini", nullptr),
               "a flat uninstall removes neither settings file by default");
-        check(notesMention(kept, "Leaving edvr-flat.ini in place"), "and names the flat one it left");
+        check(notesMention(kept, "Leaving edup-flat.ini in place"), "and names the flat one it left");
 
         const Plan removed = planUninstall(s, withSettings);
-        check(hasStep(removed, Action::Delete, L"edvr-flat.ini", nullptr),
-              "asked to remove settings, a flat uninstall removes edvr-flat.ini");
-        check(hasStep(removed, Action::Backup, L"edvr-flat.ini", L"edvr-flat.ini"),
+        check(hasStep(removed, Action::Delete, L"edup-flat.ini", nullptr),
+              "asked to remove settings, a flat uninstall removes edup-flat.ini");
+        check(hasStep(removed, Action::Backup, L"edup-flat.ini", L"edup-flat.ini"),
               "after a copy of it goes to the backup folder");
-        check(!touchesLive(removed, dir, L"edvr.ini"),
-              "and never touches the VR profile's edvr.ini");
+        check(!touchesLive(removed, dir, L"edup.ini"),
+              "and never touches the VR profile's edup.ini");
     }
 
     {   // A flat install that never got a file of its own was reading the shared
-        // edvr.ini, which the VR profile uses too: not the flat edition's to remove.
+        // edup.ini, which the VR profile uses too: not the flat edition's to remove.
         const Survey s = installedFlat(true, false);
         const Plan plan = planUninstall(s, withSettings);
-        check(!hasStep(plan, Action::Delete, L"edvr.ini", nullptr),
-              "a legacy flat install's shared edvr.ini is not removed with it");
-        check(notesMention(plan, "edvr.ini was left in place"), "and the report says why");
+        check(!hasStep(plan, Action::Delete, L"edup.ini", nullptr),
+              "a legacy flat install's shared edup.ini is not removed with it");
+        check(notesMention(plan, "edup.ini was left in place"), "and the report says why");
         check(hasStep(plan, Action::Delete, L"d3d11.dll", nullptr), "the rest of the uninstall still happens");
     }
 
-    {   // The VR edition's uninstall removes edvr.ini and leaves the flat file.
+    {   // The VR edition's uninstall removes edup.ini and leaves the flat file.
         Survey s = baseSurvey(dir);
         s.d3d11 = fakeDll(DllKind::Edvr, joinPath(dir, L"d3d11.dll"), "vr-graphics");
         s.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"openvr_api.dll"), "vr-runtime");
@@ -3587,10 +3587,10 @@ static void testFlatSettingsPlanner() {
         s.flatIniPresent = true;
         s.flatIniText = kFlatOwnIni;
         const Plan plan = planUninstall(s, withSettings);
-        check(hasStep(plan, Action::Delete, L"edvr.ini", nullptr),
-              "a VR uninstall asked to remove settings removes edvr.ini");
-        check(!touchesLive(plan, dir, L"edvr-flat.ini"),
-              "and never touches the flat profile's edvr-flat.ini");
+        check(hasStep(plan, Action::Delete, L"edup.ini", nullptr),
+              "a VR uninstall asked to remove settings removes edup.ini");
+        check(!touchesLive(plan, dir, L"edup-flat.ini"),
+              "and never touches the flat profile's edup-flat.ini");
     }
 
     {   // Without a record of the chain, a flat uninstall finds the mod it moved
@@ -3611,15 +3611,15 @@ static void testFlatSettingsPlanner() {
         vr.flatIniText = kFlatOwnIni;   // real_dll empty in the flat file
         vr.otherD3d11.push_back(s.otherD3d11.front());
         check(hasStep(planUninstall(vr, options), Action::Rename, L"d3d11_edhm.dll", L"d3d11.dll"),
-              "a VR uninstall reads edvr.ini for it, whatever the flat file says");
+              "a VR uninstall reads edup.ini for it, whatever the flat file says");
 
-        // The chain lives in edvr.ini now: a flat uninstall finds it there when the flat file holds none, and honours `none`.
+        // The chain lives in edup.ini now: a flat uninstall finds it there when the flat file holds none, and honours `none`.
         Survey shared = installedFlat(true, true);
         shared.iniText = "[advanced]\r\nreal_dll = d3d11_edhm.dll\r\n";
         shared.flatIniText = kFlatOwnIni;
         shared.otherD3d11.push_back(s.otherD3d11.front());
         check(hasStep(planUninstall(shared, options), Action::Rename, L"d3d11_edhm.dll", L"d3d11.dll"),
-              "a flat uninstall puts back the mod edvr.ini names, the flat file holding none");
+              "a flat uninstall puts back the mod edup.ini names, the flat file holding none");
         shared.flatIniText = "[advanced]\r\nreal_dll = none\r\n";
         check(hasStep(planUninstall(shared, options), Action::Rename, L"d3d11_edhm.dll", L"d3d11.dll"),
               "and still puts it back when the flat file says none: that only switched the chain off for flat");
@@ -3707,12 +3707,12 @@ static void testApply(const std::wstring& scratch) {
                  "THE-GAMES-OWN-RUNTIME", "the game's runtime survived under its new name");
         expectEq(readAll(joinPath(gameDir, L"Openvr\\win64\\openvr_api.dll")),
                  "TEST-OPENVR-PAYLOAD", "and ours is in its place");
-        check(fileExists(joinPath(gameDir, L"edvr.ini")), "edvr.ini is written");
-        check(fileExists(joinPath(gameDir, L"edvr_install\\state.ini")), "the record is written");
-        check(fileExists(joinPath(gameDir, L"edvr_install\\edvr.ini.base")),
+        check(fileExists(joinPath(gameDir, L"edup.ini")), "edup.ini is written");
+        check(fileExists(joinPath(gameDir, L"edup_install\\state.ini")), "the record is written");
+        check(fileExists(joinPath(gameDir, L"edup_install\\edup.ini.base")),
               "and this version's default ini is kept for the next merge");
         check(fileExists(joinPath(gameDir,
-                                  L"edvr_backup\\20260827-120000\\openvr_api.dll")),
+                                  L"edup_backup\\20260827-120000\\openvr_api.dll")),
               "the game's runtime is also in the backup folder");
 
         // Read the folder back the way a second run would.
@@ -3721,13 +3721,13 @@ static void testApply(const std::wstring& scratch) {
         expectEq(state.edvrVersion, payload.version, "and names the version installed");
     }
 
-    {   // advanced.real_dll in edvr-flat.ini alone, on real files: planning (what --dry-run does) writes
-        // nothing at all; applying moves the value to edvr.ini, backs up both, and changes nothing else.
+    {   // advanced.real_dll in edup-flat.ini alone, on real files: planning (what --dry-run does) writes
+        // nothing at all; applying moves the value to edup.ini, backs up both, and changes nothing else.
         layOutScratchGame(gameDir);
         const std::string sharedBefore = "[fix]\r\nblack_void = 0\r\n\r\n[advanced]\r\nreal_dll =\r\nexposure_shader =\r\n";
         const std::string flatBefore = "[fix]\r\ntemporal_aa = fsr\r\n\r\n[advanced]\r\nreal_dll = d3d11_edhm.dll\r\n";
-        writeAll(joinPath(gameDir, L"edvr.ini"), sharedBefore);
-        writeAll(joinPath(gameDir, L"edvr-flat.ini"), flatBefore);
+        writeAll(joinPath(gameDir, L"edup.ini"), sharedBefore);
+        writeAll(joinPath(gameDir, L"edup-flat.ini"), flatBefore);
         Survey s = scratchSurvey(gameDir);
         s.iniPresent = true;
         s.iniText = sharedBefore;
@@ -3735,23 +3735,23 @@ static void testApply(const std::wstring& scratch) {
         s.flatIniText = flatBefore;
         const Plan plan = planInstall(s, options, payload);
         check(notesMention(plan, kMoveNote), "the plan names the move");
-        expectEq(readAll(joinPath(gameDir, L"edvr.ini")), sharedBefore, "planning leaves edvr.ini as it was");
-        expectEq(readAll(joinPath(gameDir, L"edvr-flat.ini")), flatBefore, "and edvr-flat.ini");
-        check(!fileExists(joinPath(gameDir, L"d3d11.dll")) && !fileExists(joinPath(gameDir, L"edvr_backup")) &&
-                  !fileExists(joinPath(gameDir, L"edvr_install")),
+        expectEq(readAll(joinPath(gameDir, L"edup.ini")), sharedBefore, "planning leaves edup.ini as it was");
+        expectEq(readAll(joinPath(gameDir, L"edup-flat.ini")), flatBefore, "and edup-flat.ini");
+        check(!fileExists(joinPath(gameDir, L"d3d11.dll")) && !fileExists(joinPath(gameDir, L"edup_backup")) &&
+                  !fileExists(joinPath(gameDir, L"edup_install")),
               "and writes no file, backup or folder anywhere (a --dry-run stops here)");
         const ApplyResult result = applyPlan(plan, provider(false));
         check(result.ok, "the plan applies", result.error);
-        const std::string sharedAfter = readAll(joinPath(gameDir, L"edvr.ini"));
-        const std::string flatAfter = readAll(joinPath(gameDir, L"edvr-flat.ini"));
-        expectEq(iniValue(sharedAfter, "advanced.real_dll"), "d3d11_edhm.dll", "edvr.ini now holds the chain");
+        const std::string sharedAfter = readAll(joinPath(gameDir, L"edup.ini"));
+        const std::string flatAfter = readAll(joinPath(gameDir, L"edup-flat.ini"));
+        expectEq(iniValue(sharedAfter, "advanced.real_dll"), "d3d11_edhm.dll", "edup.ini now holds the chain");
         expectEq(iniValue(sharedAfter, "fix.black_void"), "0", "beside the person's own settings");
-        expectEq(iniValue(flatAfter, "advanced.real_dll", "<absent>"), "", "edvr-flat.ini holds none");
+        expectEq(iniValue(flatAfter, "advanced.real_dll", "<absent>"), "", "edup-flat.ini holds none");
         expectEq(iniValue(flatAfter, "fix.temporal_aa"), "fsr", "and keeps the person's own settings");
-        expectEq(readAll(joinPath(gameDir, L"edvr_backup\\20260827-120000\\edvr.ini")), sharedBefore,
-                 "edvr.ini is in the backup folder as it was");
-        expectEq(readAll(joinPath(gameDir, L"edvr_backup\\20260827-120000\\edvr-flat.ini")), flatBefore,
-                 "and so is edvr-flat.ini");
+        expectEq(readAll(joinPath(gameDir, L"edup_backup\\20260827-120000\\edup.ini")), sharedBefore,
+                 "edup.ini is in the backup folder as it was");
+        expectEq(readAll(joinPath(gameDir, L"edup_backup\\20260827-120000\\edup-flat.ini")), flatBefore,
+                 "and so is edup-flat.ini");
     }
 
     {   // The failure that matters: the rename has happened, then the write
@@ -3800,8 +3800,8 @@ static void testApply(const std::wstring& scratch) {
 
         // A file where the record directory has to go: every step succeeds
         // until the record is written.
-        removeTree(joinPath(gameDir, L"edvr_install"));
-        writeAll(joinPath(gameDir, L"edvr_install"), "not a directory");
+        removeTree(joinPath(gameDir, L"edup_install"));
+        writeAll(joinPath(gameDir, L"edup_install"), "not a directory");
 
         PayloadInfo newer = payload;
         tset(newer, "graphics", "dddd-newer");
@@ -3813,7 +3813,7 @@ static void testApply(const std::wstring& scratch) {
         again.openvrCurrent = fakeDll(DllKind::Edvr, vr, sha256File(vr));
         again.openvrOrig = fakeDll(DllKind::OpenVrRuntime, orig, sha256File(orig));
         again.iniPresent = true;
-        again.iniText = readAll(joinPath(gameDir, L"edvr.ini"));
+        again.iniText = readAll(joinPath(gameDir, L"edup.ini"));
 
         Options second = options;
         second.backupStamp = L"20260827-121500";
@@ -3833,7 +3833,7 @@ static void testApply(const std::wstring& scratch) {
         const ApplyResult result = applyPlan(planInstall(again, second, newer), provider(false));
         realRenames();
         check(!result.ok, "a run that cannot finish fails");
-        check(fileExists(joinPath(gameDir, L"edvr_backup\\20260827-121500\\d3d11.dll")),
+        check(fileExists(joinPath(gameDir, L"edup_backup\\20260827-121500\\d3d11.dll")),
               "the backups it took are still there afterwards");
         check(wroteAFile(result), "having replaced files before it did", result.error);
         check(result.overwrote, "and it admits a file had already been replaced");
@@ -3851,7 +3851,7 @@ static void testApply(const std::wstring& scratch) {
         s.openvrCurrent = fakeDll(DllKind::Edvr, ourVr, sha256File(ourVr));
         s.openvrOrig = fakeDll(DllKind::OpenVrRuntime, theirVr, sha256File(theirVr));
         s.iniPresent = true;
-        s.iniText = readAll(joinPath(gameDir, L"edvr.ini"));
+        s.iniText = readAll(joinPath(gameDir, L"edup.ini"));
         s.state = readState(gameDir);
 
         Options removeAll = options;
@@ -3860,7 +3860,7 @@ static void testApply(const std::wstring& scratch) {
         const ApplyResult result = applyPlan(planUninstall(s, removeAll), provider(false));
         check(result.ok, "uninstalled", result.error);
         check(!fileExists(joinPath(gameDir, L"d3d11.dll")), "d3d11.dll is gone");
-        check(!fileExists(joinPath(gameDir, L"edvr.ini")), "edvr.ini is gone");
+        check(!fileExists(joinPath(gameDir, L"edup.ini")), "edup.ini is gone");
         expectEq(readAll(joinPath(gameDir, L"Openvr\\win64\\openvr_api.dll")),
                  "THE-GAMES-OWN-RUNTIME", "and the game's runtime is back under its own name");
         check(!fileExists(joinPath(gameDir, L"Openvr\\win64\\openvr_api_orig.dll")),
@@ -3872,11 +3872,11 @@ static void testApply(const std::wstring& scratch) {
         Survey s = scratchSurvey(gameDir);
         check(applyPlan(planInstall(s, options, payload), provider(false)).ok, "installed once");
 
-        std::string tuned = readAll(joinPath(gameDir, L"edvr.ini"));
+        std::string tuned = readAll(joinPath(gameDir, L"edup.ini"));
         const size_t at = tuned.find("black_void = 0");
         check(at != std::string::npos, "the installed ini has the setting to tune");
         if (at != std::string::npos) tuned.replace(at, strlen("black_void = 0"), "black_void = 1");
-        writeAll(joinPath(gameDir, L"edvr.ini"), tuned);
+        writeAll(joinPath(gameDir, L"edup.ini"), tuned);
 
         // A new version arrives with a different d3d11.dll and a new default.
         PayloadInfo newer = payload;
@@ -3947,7 +3947,7 @@ static void testMirror(const std::wstring& scratch) {
     const PayloadInfo payload = testPayload(kNextIni);
     const Options options = testOptions();
     const Survey s = scratchSurvey(gameDir);
-    Options vrOnly = options;   // a VR-only folder: the mirror's settings-window case is about edvr.ini alone
+    Options vrOnly = options;   // a VR-only folder: the mirror's settings-window case is about edup.ini alone
     vrOnly.scope = "vr";
     const Plan plan = planInstall(s, vrOnly, payload);
     const ApplyResult applied = applyPlan(plan, provider(false));
@@ -3959,16 +3959,16 @@ static void testMirror(const std::wstring& scratch) {
     {
         const MirrorResult m = updateMirror(gameDir, plan.backupDir, mirrorDir);
         check(m.ok, "updateMirror succeeds against a real install");
-        check(fileExists(joinPath(mirrorDir, L"edvr.ini")), "edvr.ini is mirrored");
-        check(fileExists(joinPath(mirrorDir, L"edvr.ini.base")), "edvr.ini.base is mirrored");
-        check(!fileExists(joinPath(mirrorDir, L"edvr-flat.ini.base")),
+        check(fileExists(joinPath(mirrorDir, L"edup.ini")), "edup.ini is mirrored");
+        check(fileExists(joinPath(mirrorDir, L"edup.ini.base")), "edup.ini.base is mirrored");
+        check(!fileExists(joinPath(mirrorDir, L"edup-flat.ini.base")),
               "a VR install writes no flat base, so none is mirrored");
         check(fileExists(joinPath(mirrorDir, L"state.ini")), "state.ini is mirrored");
         check(fileExists(joinPath(mirrorDir, L"backup\\openvr_api.dll")),
               "the backed-up openvr_api.dll is mirrored -- the game had no d3d11.dll of its own "
-              "to back up, so only this half of the pair exists here, same as in edvr_backup\\");
-        expectEq(readAll(joinPath(mirrorDir, L"edvr.ini")), readAll(joinPath(gameDir, L"edvr.ini")),
-                 "the mirrored edvr.ini matches the live one");
+              "to back up, so only this half of the pair exists here, same as in edup_backup\\");
+        expectEq(readAll(joinPath(mirrorDir, L"edup.ini")), readAll(joinPath(gameDir, L"edup.ini")),
+                 "the mirrored edup.ini matches the live one");
     }
 
     {
@@ -3980,15 +3980,15 @@ static void testMirror(const std::wstring& scratch) {
         check(!info.savedUtc.empty(), "and a saved-at time for it");
     }
 
-    {   // A settings-window save only ever touches edvr.ini -- re-copying the
+    {   // A settings-window save only ever touches edup.ini -- re-copying the
         // record and the DLLs on every toggle would be pointless disk I/O for
         // files that provably did not change.
-        writeAll(joinPath(gameDir, L"edvr.ini"), "[fix]\r\nshare_exposure = 0\r\n");
+        writeAll(joinPath(gameDir, L"edup.ini"), "[fix]\r\nshare_exposure = 0\r\n");
         const MirrorResult m = updateMirrorIni(gameDir, mirrorDir);
         check(m.ok, "updateMirrorIni succeeds");
-        check(m.saved.size() == 1 && m.saved[0] == "edvr.ini",
+        check(m.saved.size() == 1 && m.saved[0] == "edup.ini",
               "and reports only the ini as saved");
-        expectEq(readAll(joinPath(mirrorDir, L"edvr.ini")), "[fix]\r\nshare_exposure = 0\r\n",
+        expectEq(readAll(joinPath(mirrorDir, L"edup.ini")), "[fix]\r\nshare_exposure = 0\r\n",
                  "the mirrored ini picks up the settings-only change");
         check(fileExists(joinPath(mirrorDir, L"backup\\openvr_api.dll")),
               "the backup pair mirrored earlier is untouched");
@@ -4003,13 +4003,13 @@ static void testMirror(const std::wstring& scratch) {
         const MirrorInfo info = readMirror(mirrorDir);
         std::vector<std::string> notes;
         check(restoreFromMirror(wiped, info, "vr", &notes), "restoreFromMirror succeeds");
-        check(fileExists(joinPath(wiped, L"edvr.ini")), "edvr.ini comes back");
-        check(fileExists(joinPath(wiped, L"edvr_install\\edvr.ini.base")),
-              "so does edvr.ini.base");
-        check(fileExists(joinPath(wiped, L"edvr_install\\state.ini")), "so does state.ini");
+        check(fileExists(joinPath(wiped, L"edup.ini")), "edup.ini comes back");
+        check(fileExists(joinPath(wiped, L"edup_install\\edup.ini.base")),
+              "so does edup.ini.base");
+        check(fileExists(joinPath(wiped, L"edup_install\\state.ini")), "so does state.ini");
         check(!notes.empty(), "and it says what it did");
 
-        const std::wstring backupRoot = joinPath(wiped, L"edvr_backup");
+        const std::wstring backupRoot = joinPath(wiped, L"edup_backup");
         const std::wstring stamp = firstSubdirLike(backupRoot, L"restored-*");
         check(!stamp.empty(), "the backup pair lands in its own restored-<stamp> folder");
         check(fileExists(joinPath(joinPath(backupRoot, stamp), L"openvr_api.dll")),
@@ -4035,7 +4035,7 @@ static void testMirror(const std::wstring& scratch) {
         steam.source = L"Steam";
         GameInstall frontier = steam;
         frontier.source = L"Frontier launcher";
-        const std::wstring root = L"C:\\fake\\EDVR";
+        const std::wstring root = L"C:\\fake\\EDUP";
 
         const std::wstring steamDir = mirrorDirFor(steam, root);
         const std::wstring frontierDir = mirrorDirFor(frontier, root);
@@ -4086,7 +4086,7 @@ static std::string listing(const std::wstring& dir) {
 }
 
 // `path` held open by a handle of this test's own, as a reader would. With
-// `shareDelete` it is how Config's read opens edvr.ini now: the POSIX-semantics
+// `shareDelete` it is how Config's read opens edup.ini now: the POSIX-semantics
 // replace goes through under it (the classic one is refused while ANY handle is
 // open, share mode or not -- measured on Windows 11 build 26200). Without, it is
 // how that read used to open it, and how an editor holding a file mid-save does:
@@ -4227,7 +4227,7 @@ static void testAtomicWrite(const std::wstring& scratch) {
     const std::wstring dir = joinPath(scratch, L"atomic");
     removeTree(dir);
     makeTree(dir);
-    const std::wstring target = joinPath(dir, L"edvr.ini");
+    const std::wstring target = joinPath(dir, L"edup.ini");
     realRenames();   // no stand-in, nothing remembered, nothing counted
 
     // What follows uses the REAL renames, and so asserts what holds however many
@@ -4242,7 +4242,7 @@ static void testAtomicWrite(const std::wstring& scratch) {
               "a new file is written", toUtf8(why));
         expectEq(readAll(target), "first\r\n", "with exactly the bytes given");
         check(tries >= 1, "by a replace that was actually made", std::to_string(tries) + " tries");
-        expectEq(listing(dir), "edvr.ini", "and nothing else is left beside it");
+        expectEq(listing(dir), "edup.ini", "and nothing else is left beside it");
 
         check(writeFileAtomic(target, "second, and longer than the first\r\n", &why),
               "an existing file is replaced", toUtf8(why));
@@ -4262,7 +4262,7 @@ static void testAtomicWrite(const std::wstring& scratch) {
               toUtf8(why));
         std::string got = "not empty";
         check(readFileBytes(target, &got) && got.empty(), "and reads back as empty");
-        expectEq(listing(dir), "edvr.ini", "with nothing left beside it after all of that");
+        expectEq(listing(dir), "edup.ini", "with nothing left beside it after all of that");
     }
 
     {   // A reader that holds the target open and does NOT share DELETE refuses
@@ -4288,7 +4288,7 @@ static void testAtomicWrite(const std::wstring& scratch) {
               std::to_string(tries) + " tries");
         check(!why.empty(), "and the failure says why", "no message");
         expectEq(readAll(target), "original\r\n", "the original is exactly as it was");
-        expectEq(listing(dir), "edvr.ini", "and no temporary file is left");
+        expectEq(listing(dir), "edup.ini", "and no temporary file is left");
         check(posixReplaceAttempts() == tries, "every attempt asked the POSIX-semantics rename, once",
               std::to_string(posixReplaceAttempts()) + " calls in " + std::to_string(tries) + " tries");
         check(!posixReplaceRefused(),
@@ -4300,7 +4300,7 @@ static void testAtomicWrite(const std::wstring& scratch) {
     }
 
     {   // A reader that holds the target open and DOES share DELETE -- which is how
-        // Config's read opens edvr.ini -- is replaced under by the POSIX-semantics
+        // Config's read opens edup.ini -- is replaced under by the POSIX-semantics
         // rename, and goes on reading the file it opened. (The classic rename is
         // refused here: measured with cmd's move /Y on Windows 11 build 26200,
         // which is why this rename exists.)
@@ -4338,7 +4338,7 @@ static void testAtomicWrite(const std::wstring& scratch) {
         expectEq(readAll(target), "replaced under the reader\r\n", "and the path holds the new bytes");
         expectEq(readThrough(reader), "held open\r\n", "while the reader still sees the file it opened");
         if (reader != INVALID_HANDLE_VALUE) CloseHandle(reader);
-        expectEq(listing(dir), "edvr.ini", "with nothing left beside it");
+        expectEq(listing(dir), "edup.ini", "with nothing left beside it");
     }
 
     {   // The default policy is the one that was asked for: five tries after the
@@ -4372,7 +4372,7 @@ static void testAtomicWrite(const std::wstring& scratch) {
         check(classicReplaceAttempts() == tries, "every attempt going straight to the classic one",
               std::to_string(classicReplaceAttempts()) + " calls in " + std::to_string(tries) + " tries");
         expectEq(readAll(target), "protected\r\n", "the file is untouched");
-        expectEq(listing(dir), "edvr.ini", "and no temporary file is left");
+        expectEq(listing(dir), "edup.ini", "and no temporary file is left");
         SetFileAttributesW(target.c_str(), FILE_ATTRIBUTE_NORMAL);
     }
 
@@ -4397,7 +4397,7 @@ static void testAtomicWrite(const std::wstring& scratch) {
         expectEq(readAll(target), "after\r\n", "and the write landed");
         check(posixReplaceAttempts() == tries, "every attempt asking the POSIX-semantics rename, once",
               std::to_string(posixReplaceAttempts()) + " calls in " + std::to_string(tries) + " tries");
-        expectEq(listing(dir), "edvr.ini", "with nothing left beside it");
+        expectEq(listing(dir), "edup.ini", "with nothing left beside it");
         printf("  info  it landed on try %d\n", tries);
     }
 
@@ -4451,13 +4451,13 @@ static void testAtomicWrite(const std::wstring& scratch) {
         }
         check(posixReplaceAttempts() == 1, "and the POSIX-semantics rename was still not asked for");
         if (reader != INVALID_HANDLE_VALUE) CloseHandle(reader);
-        expectEq(listing(dir), "edvr.ini", "with no temporary file left");
+        expectEq(listing(dir), "edup.ini", "with no temporary file left");
         realRenames();
     }
 
     {   // A folder that is not there is not a folder to create, and not a failure
         // to retry: it fails without reaching the replace.
-        const std::wstring missing = joinPath(joinPath(dir, L"no-such-folder"), L"edvr.ini");
+        const std::wstring missing = joinPath(joinPath(dir, L"no-such-folder"), L"edup.ini");
         std::wstring why;
         int tries = -1;
         check(!writeFileAtomic(missing, "x", &why, AtomicWriteOptions(), &tries),
@@ -4485,7 +4485,7 @@ static void testReplaceScripts(const std::wstring& scratch) {
     const std::wstring dir = joinPath(scratch, L"scripted");
     removeTree(dir);
     makeTree(dir);
-    const std::wstring target = joinPath(dir, L"edvr.ini");
+    const std::wstring target = joinPath(dir, L"edup.ini");
     const unsigned long kBadPath = ERROR_BAD_PATHNAME;   // an answer nobody recognises
 
     {   // A clean write asks the POSIX-semantics rename once and never the classic one.
@@ -4496,7 +4496,7 @@ static void testReplaceScripts(const std::wstring& scratch) {
         expectCounts("and asked the POSIX-semantics rename once and the classic one never", w, 1, 1,
                      0, false);
         expectEq(readAll(target), "clean\r\n", "with the new bytes");
-        expectEq(listing(dir), "edvr.ini", "and no temporary file is left");
+        expectEq(listing(dir), "edup.ini", "and no temporary file is left");
     }
 
     // Every answer that means "this OS or volume does not do POSIX-semantics
@@ -4545,7 +4545,7 @@ static void testReplaceScripts(const std::wstring& scratch) {
                               "classic rename at all").c_str(),
                      w, 2, 2, 0, false);
         expectEq(readAll(target), "after one busy answer\r\n", "with the new bytes");
-        expectEq(listing(dir), "edvr.ini", "and no temporary file is left");
+        expectEq(listing(dir), "edup.ini", "and no temporary file is left");
     }
 
     {   // An answer the writer does not recognise: the classic rename decides that
@@ -4596,7 +4596,7 @@ static void testReplaceScripts(const std::wstring& scratch) {
         expectCounts((which + "at once: one try, no retry").c_str(), w, 1, 1, 1, true);
         check(!w.why.empty(), "and says why", "no message");
         expectEq(readAll(target), "before\r\n", "the original is exactly as it was");
-        expectEq(listing(dir), "edvr.ini", "and no temporary file is left");
+        expectEq(listing(dir), "edup.ini", "and no temporary file is left");
     }
 
     {   // The POSIX-semantics rename refused for a reason that passes, every time:
@@ -4608,7 +4608,7 @@ static void testReplaceScripts(const std::wstring& scratch) {
         expectCounts("after the first try and the three it was allowed, never asking the classic "
                      "rename", w, 4, 4, 0, false);
         expectEq(readAll(target), "before\r\n", "the original is exactly as it was");
-        expectEq(listing(dir), "edvr.ini", "and no temporary file is left");
+        expectEq(listing(dir), "edup.ini", "and no temporary file is left");
     }
 
     {   // The classic rename refused for a reason that passes, every time.
@@ -4619,7 +4619,7 @@ static void testReplaceScripts(const std::wstring& scratch) {
         expectCounts("after the first try and the three it was allowed, the POSIX-semantics rename "
                      "asked only once", w, 4, 1, 4, true);
         expectEq(readAll(target), "before\r\n", "the original is exactly as it was");
-        expectEq(listing(dir), "edvr.ini", "and no temporary file is left");
+        expectEq(listing(dir), "edup.ini", "and no temporary file is left");
     }
 
     {   // A read-only target never reaches the POSIX-semantics rename, whatever it
@@ -4682,7 +4682,7 @@ static void testReplaceScripts(const std::wstring& scratch) {
         script({}, {});
         check(replaceFileAtomic(staged, target, quick), "the tries and the error are optional");
         expectEq(readAll(target), "staged\r\n", "and the file still lands");
-        expectEq(listing(dir), "edvr.ini", "with nothing left beside it");
+        expectEq(listing(dir), "edup.ini", "with nothing left beside it");
     }
 
     {   // A rotation of the mirror's generations under retries: every replace it
@@ -4692,7 +4692,7 @@ static void testReplaceScripts(const std::wstring& scratch) {
         const std::wstring gdir = joinPath(scratch, L"scripted-generations");
         removeTree(gdir);
         makeTree(gdir);
-        const std::wstring name = L"edvr.ini";
+        const std::wstring name = L"edup.ini";
         std::wstring why;
         g_calls = 0;
         replaceHooksForTest(posixEveryOtherBusy, nullptr);
@@ -4712,7 +4712,7 @@ static void testReplaceScripts(const std::wstring& scratch) {
         expectEq(readAll(generationPath(gdir, name, 1)), "C\r\n", ".1 is the third");
         expectEq(readAll(generationPath(gdir, name, 2)), "B\r\n", ".2 is the second");
         check(!fileExists(generationPath(gdir, name, 3)), "and the first is dropped");
-        expectEq(listing(gdir), "edvr.ini, edvr.ini.1, edvr.ini.2", "with no temporary file left");
+        expectEq(listing(gdir), "edup.ini, edup.ini.1, edup.ini.2", "with no temporary file left");
     }
     realRenames();
 }
@@ -4741,7 +4741,7 @@ static void testReplaceScripts(const std::wstring& scratch) {
 // written over the one that is there.
 static Plan pairPlan(const std::wstring& dir) {
     Plan plan;
-    plan.backupDir = joinPath(dir, L"edvr_backup");
+    plan.backupDir = joinPath(dir, L"edup_backup");
     Step graphics;
     graphics.action = Action::WritePayload;
     graphics.item = "graphics";
@@ -4759,7 +4759,7 @@ static Plan pairPlan(const std::wstring& dir) {
 // ours written where it was.
 static Plan asidePlan(const std::wstring& dir, bool thenOurs) {
     Plan plan;
-    plan.backupDir = joinPath(dir, L"edvr_backup");
+    plan.backupDir = joinPath(dir, L"edup_backup");
     Step aside;
     aside.action = Action::Rename;
     aside.from = joinPath(dir, L"openvr_api.dll");
@@ -4780,7 +4780,7 @@ static Plan asidePlan(const std::wstring& dir, bool thenOurs) {
 // that is there.
 static Plan restorePlan(const std::wstring& dir) {
     Plan plan;
-    plan.backupDir = joinPath(dir, L"edvr_backup");
+    plan.backupDir = joinPath(dir, L"edup_backup");
     Step back;
     back.action = Action::Rename;
     back.from = joinPath(dir, L"openvr_api_orig.dll");
@@ -5071,7 +5071,7 @@ static void testGenerations(const std::wstring& scratch) {
     const std::wstring dir = joinPath(scratch, L"generations");
     removeTree(dir);
     makeTree(dir);
-    const std::wstring name = L"edvr.ini";
+    const std::wstring name = L"edup.ini";
     auto gen = [&](int g) { return readAll(generationPath(dir, name, g)); };
     auto leafOfNewest = [&]() { return toUtf8(leafOf(newestGeneration(dir, name))); };
     std::wstring why;
@@ -5098,7 +5098,7 @@ static void testGenerations(const std::wstring& scratch) {
     expectEq(gen(2), "B\r\n", "the second is .2");
     check(!fileExists(generationPath(dir, name, 3)),
           "and there is no .3: three generations, the oldest dropped");
-    expectEq(listing(dir), "edvr.ini, edvr.ini.1, edvr.ini.2",
+    expectEq(listing(dir), "edup.ini, edup.ini.1, edup.ini.2",
              "nothing else is in the folder, no temporary file among it");
 
     // An install that changed nothing must not age the history out.
@@ -5119,14 +5119,14 @@ static void testGenerations(const std::wstring& scratch) {
           "still one newest copy and the same two behind it: a generation per tweak would lose them");
 
     // Which generation a restore reads.
-    expectEq(leafOfNewest(), "edvr.ini", "the newest generation is the newest copy");
+    expectEq(leafOfNewest(), "edup.ini", "the newest generation is the newest copy");
     DeleteFileW(generationPath(dir, name, 0).c_str());
-    expectEq(leafOfNewest(), "edvr.ini.1",
+    expectEq(leafOfNewest(), "edup.ini.1",
              "with the newest gone -- a crash between two writes -- the one behind it is read");
     writeAll(generationPath(dir, name, 0), "");
-    expectEq(leafOfNewest(), "edvr.ini.1", "an empty newest is passed over too");
+    expectEq(leafOfNewest(), "edup.ini.1", "an empty newest is passed over too");
     DeleteFileW(generationPath(dir, name, 1).c_str());
-    expectEq(leafOfNewest(), "edvr.ini.2", "and so is a missing .1");
+    expectEq(leafOfNewest(), "edup.ini.2", "and so is a missing .1");
     DeleteFileW(generationPath(dir, name, 2).c_str());
     check(newestGeneration(dir, name).empty(), "with nothing but an empty file there is nothing to read");
     check(generationPath(dir, name, 0) == joinPath(dir, name) &&
@@ -5148,7 +5148,7 @@ static void testGenerations(const std::wstring& scratch) {
           "a rotation that cannot move an older copy fails");
     check(gen(0) == "R\r\n" && gen(1) == "Q\r\n" && gen(2) == "P\r\n",
           "with every generation exactly as it was");
-    expectEq(listing(dir), "edvr.ini, edvr.ini.1, edvr.ini.2", "and the staged copy is gone");
+    expectEq(listing(dir), "edup.ini, edup.ini.1, edup.ini.2", "and the staged copy is gone");
     SetFileAttributesW(generationPath(dir, name, 2).c_str(), FILE_ATTRIBUTE_NORMAL);
     check(writeGenerations(dir, name, "S\r\n", true, &why),
           "and once the older copy can be moved the same write goes through", toUtf8(why));
@@ -5173,7 +5173,7 @@ static void testGenerations(const std::wstring& scratch) {
           "and once the newest can be replaced the same write goes through", toUtf8(why));
     check(gen(0) == "S\r\n" && gen(1) == "R\r\n" && gen(2) == "Q\r\n",
           "without pushing a real copy out for the duplicate");
-    expectEq(listing(dir), "edvr.ini, edvr.ini.1, edvr.ini.2", "and no temporary file is left");
+    expectEq(listing(dir), "edup.ini, edup.ini.1, edup.ini.2", "and no temporary file is left");
 
     // A folder that is not there fails cleanly.
     check(!writeGenerations(joinPath(dir, L"no-such-folder"), name, "x", true, &why),
@@ -5189,8 +5189,8 @@ static void testMirrorGenerations(const std::wstring& scratch) {
     removeTree(gameDir);
     removeTree(root);
     makeTree(gameDir);
-    const std::wstring liveIni = joinPath(gameDir, L"edvr.ini");
-    auto mirrored = [&](int g) { return readAll(generationPath(mirrorDir, L"edvr.ini", g)); };
+    const std::wstring liveIni = joinPath(gameDir, L"edup.ini");
+    auto mirrored = [&](int g) { return readAll(generationPath(mirrorDir, L"edup.ini", g)); };
 
     const std::string tuned = "[fix]\r\nshare_exposure = 0\r\nblack_void = 0\r\n";
     const std::string defaults = "[fix]\r\nshare_exposure = 1\r\nblack_void = 1\r\n";
@@ -5208,7 +5208,7 @@ static void testMirrorGenerations(const std::wstring& scratch) {
     const MirrorResult afterInstall = updateMirror(gameDir, L"", mirrorDir);
     check(afterInstall.ok && !afterInstall.saved.empty(), "the fresh install is mirrored");
     expectEq(mirrored(0), defaults, "the newest copy is what the fresh install wrote");
-    expectEq(mirrored(1), tuned, "and the settings it replaced are still there, as edvr.ini.1");
+    expectEq(mirrored(1), tuned, "and the settings it replaced are still there, as edup.ini.1");
 
     // The same install run again, changing nothing, ages nothing.
     check(updateMirror(gameDir, L"", mirrorDir).ok, "an install that changes nothing is mirrored");
@@ -5220,8 +5220,8 @@ static void testMirrorGenerations(const std::wstring& scratch) {
     writeAll(liveIni, touched);
     check(updateMirrorIni(gameDir, mirrorDir).ok, "a settings change is mirrored");
     expectEq(mirrored(0), touched, "as the newest copy");
-    expectEq(mirrored(1), tuned, "and the tuned settings are still edvr.ini.1");
-    check(!fileExists(generationPath(mirrorDir, L"edvr.ini", 2)),
+    expectEq(mirrored(1), tuned, "and the tuned settings are still edup.ini.1");
+    check(!fileExists(generationPath(mirrorDir, L"edup.ini", 2)),
           "with no generation made for the tweak");
 
     // The restore reads the newest.
@@ -5233,7 +5233,7 @@ static void testMirrorGenerations(const std::wstring& scratch) {
         check(info.hasIni, "the mirror offers a restore");
         std::vector<std::string> notes;
         check(restoreFromMirror(wiped, info, "vr", &notes), "and it restores");
-        expectEq(readAll(joinPath(wiped, L"edvr.ini")), touched, "the newest copy comes back");
+        expectEq(readAll(joinPath(wiped, L"edup.ini")), touched, "the newest copy comes back");
     }
 
     // Two more installs that change the ini: three generations, the oldest gone.
@@ -5244,13 +5244,13 @@ static void testMirrorGenerations(const std::wstring& scratch) {
     expectEq(mirrored(0), "[fix]\r\nshare_exposure = 3\r\n", "the newest is the last");
     expectEq(mirrored(1), "[fix]\r\nshare_exposure = 2\r\n", ".1 is the one before it");
     expectEq(mirrored(2), touched, ".2 is the copy from before that");
-    check(!fileExists(generationPath(mirrorDir, L"edvr.ini", 3)),
+    check(!fileExists(generationPath(mirrorDir, L"edup.ini", 3)),
           "and the copy before those is dropped: three generations");
 
     // A restore after a crash between two writes, or a half-written newest, reads
     // the copy behind it rather than offering nothing.
     {
-        DeleteFileW(generationPath(mirrorDir, L"edvr.ini", 0).c_str());
+        DeleteFileW(generationPath(mirrorDir, L"edup.ini", 0).c_str());
         const MirrorInfo info = readMirror(mirrorDir);
         check(info.hasIni, "with the newest missing the mirror still offers a restore");
         const std::wstring wiped = joinPath(scratch, L"mirrorgen-wiped2");
@@ -5258,31 +5258,31 @@ static void testMirrorGenerations(const std::wstring& scratch) {
         makeTree(wiped);
         std::vector<std::string> notes;
         check(restoreFromMirror(wiped, info, "vr", &notes), "and restores");
-        expectEq(readAll(joinPath(wiped, L"edvr.ini")), "[fix]\r\nshare_exposure = 2\r\n",
+        expectEq(readAll(joinPath(wiped, L"edup.ini")), "[fix]\r\nshare_exposure = 2\r\n",
                  "from the newest copy that is there");
-        writeAll(generationPath(mirrorDir, L"edvr.ini", 0), "");
+        writeAll(generationPath(mirrorDir, L"edup.ini", 0), "");
         check(readMirror(mirrorDir).hasIni, "an empty newest does not hide the ones behind it");
     }
 
     // The flat profile's settings file is kept the same way.
     {
-        const std::wstring flat = joinPath(gameDir, L"edvr-flat.ini");
+        const std::wstring flat = joinPath(gameDir, L"edup-flat.ini");
         writeAll(flat, "[fix]\r\nflat = 1\r\n");
         check(updateMirror(gameDir, L"", mirrorDir).ok, "a flat ini is mirrored");
         writeAll(flat, "[fix]\r\nflat = 2\r\n");
         check(updateMirror(gameDir, L"", mirrorDir).ok, "and again");
-        expectEq(readAll(generationPath(mirrorDir, L"edvr-flat.ini", 0)), "[fix]\r\nflat = 2\r\n",
+        expectEq(readAll(generationPath(mirrorDir, L"edup-flat.ini", 0)), "[fix]\r\nflat = 2\r\n",
                  "the flat ini's newest copy");
-        expectEq(readAll(generationPath(mirrorDir, L"edvr-flat.ini", 1)), "[fix]\r\nflat = 1\r\n",
+        expectEq(readAll(generationPath(mirrorDir, L"edup-flat.ini", 1)), "[fix]\r\nflat = 1\r\n",
                  "and the one it replaced");
     }
 
     // Read-only on a mirrored copy -- a launcher's verification does that to
     // files it thinks are its own -- is cleared, as the copy always did.
     {
-        SetFileAttributesW(generationPath(mirrorDir, L"edvr.ini", 0).c_str(),
+        SetFileAttributesW(generationPath(mirrorDir, L"edup.ini", 0).c_str(),
                            FILE_ATTRIBUTE_READONLY);
-        SetFileAttributesW(generationPath(mirrorDir, L"edvr.ini", 2).c_str(),
+        SetFileAttributesW(generationPath(mirrorDir, L"edup.ini", 2).c_str(),
                            FILE_ATTRIBUTE_READONLY);
         writeAll(liveIni, "[fix]\r\nshare_exposure = 4\r\n");
         check(updateMirror(gameDir, L"", mirrorDir).ok, "a mirror with read-only copies is updated");
@@ -5304,15 +5304,15 @@ static void testMirrorGenerations(const std::wstring& scratch) {
 // A value somebody tuned under the OLD name has to survive the whole road an
 // update walks: mirrored outside the game folder, restored after a game update
 // wiped it, and merged into the NEW shipped file by the install that follows
-// (which is the only thing that moves it, edvr.ini's `# moved-from:`). Run end to
+// (which is the only thing that moves it, edup.ini's `# moved-from:`). Run end to
 // end against the real shipped file, with the shipped file's annotations taken out
 // as the control.
 static void testDemotedTrims(const std::wstring& root, const std::wstring& scratch) {
     printf("\nthe demoted field-of-view trims through the mirror, a restore and an install\n");
 
-    const std::string shipped = readAll(joinPath(root, L"edvr.ini"));
+    const std::string shipped = readAll(joinPath(root, L"edup.ini"));
     if (shipped.empty()) {
-        fail("read the repository's edvr.ini", "not found next to the repo root");
+        fail("read the repository's edup.ini", "not found next to the repo root");
         return;
     }
     const std::string tuned =
@@ -5332,11 +5332,11 @@ static void testDemotedTrims(const std::wstring& root, const std::wstring& scrat
     const std::wstring mirrorDir = joinPath(scratch, L"trims-mirror\\trims-test");
     removeTree(joinPath(scratch, L"trims-mirror"));
     layOutScratchGame(gameDir);
-    makeTree(joinPath(gameDir, L"edvr_install"));
-    writeAll(joinPath(gameDir, L"edvr.ini"), oldUser);
+    makeTree(joinPath(gameDir, L"edup_install"));
+    writeAll(joinPath(gameDir, L"edup.ini"), oldUser);
     writeAll(baseIniPath(gameDir), oldBase);
     check(updateMirror(gameDir, L"", mirrorDir).ok, "the old-layout settings are mirrored");
-    expectEq(readAll(joinPath(mirrorDir, L"edvr.ini")), oldUser,
+    expectEq(readAll(joinPath(mirrorDir, L"edup.ini")), oldUser,
              "the mirror keeps them verbatim, under their old names");
 
     // Ran twice: once with the shipped file, once with its annotations removed.
@@ -5350,7 +5350,7 @@ static void testDemotedTrims(const std::wstring& root, const std::wstring& scrat
           "the control's ini really lost its three annotations");
 
     struct Road { const char* name; const std::string* nextIni; bool annotated; };
-    const Road roads[] = {{"shipped edvr.ini", &shipped, true},
+    const Road roads[] = {{"shipped edup.ini", &shipped, true},
                           {"control, annotations removed", &unannotated, false}};
     for (const Road& road : roads) {
         const std::string label = std::string(road.annotated ? "" : "control: ") +
@@ -5363,14 +5363,14 @@ static void testDemotedTrims(const std::wstring& root, const std::wstring& scrat
         const MirrorInfo info = readMirror(mirrorDir);
         std::vector<std::string> notes;
         check(restoreFromMirror(wiped, info, "vr", &notes), (label + "the restore succeeds").c_str());
-        expectEq(readAll(joinPath(wiped, L"edvr.ini")), oldUser,
+        expectEq(readAll(joinPath(wiped, L"edup.ini")), oldUser,
                  (label + "the restored ini is the old layout, verbatim").c_str());
         expectEq(readAll(baseIniPath(wiped)), oldBase,
                  (label + "and its base copy comes back beside it").c_str());
 
         Survey s = scratchSurvey(wiped);
         s.iniPresent = true;
-        s.iniText = readAll(joinPath(wiped, L"edvr.ini"));
+        s.iniText = readAll(joinPath(wiped, L"edup.ini"));
         s.baseIniText = readAll(baseIniPath(wiped));
         const PayloadInfo payload = testPayload(*road.nextIni);
         const Plan plan = planInstall(s, testOptions(), payload);
@@ -5378,7 +5378,7 @@ static void testDemotedTrims(const std::wstring& root, const std::wstring& scrat
         check(!planned.empty(), (label + "the install plans to write an ini").c_str());
         const ApplyResult applied = applyPlan(plan, provider(false));
         check(applied.ok, (label + "the install applies").c_str(), applied.error);
-        const std::string installed = readAll(joinPath(wiped, L"edvr.ini"));
+        const std::string installed = readAll(joinPath(wiped, L"edup.ini"));
         expectEq(installed, planned, (label + "and writes what it planned").c_str());
 
         expectEq(iniValue(installed, "fix.black_void"), "0",
@@ -5414,11 +5414,11 @@ static void layOutFlatGame(const std::wstring& dir) {
     writeAll(joinPath(dir, L"EliteDangerous64.exe"), "not really the game");
 }
 
-// The file the flat runtime reads (config.cpp): edvr-flat.ini first, edvr.ini only
+// The file the flat runtime reads (config.cpp): edup-flat.ini first, edup.ini only
 // while there is none.
 static std::wstring flatRuntimeReads(const std::wstring& dir) {
-    const std::wstring flat = joinPath(dir, L"edvr-flat.ini");
-    return fileExists(flat) ? flat : joinPath(dir, L"edvr.ini");
+    const std::wstring flat = joinPath(dir, L"edup-flat.ini");
+    return fileExists(flat) ? flat : joinPath(dir, L"edup.ini");
 }
 
 // A survey of a scratch folder as a later run would take it -- what is on disk --
@@ -5430,8 +5430,8 @@ static Survey diskSurvey(const std::wstring& dir) {
     const std::wstring graphics = joinPath(dir, L"d3d11.dll");
     s.d3d11 = fileExists(graphics) ? fakeDll(DllKind::Edvr, graphics, sha256File(graphics))
                                    : fakeDll(DllKind::Absent, graphics, "");
-    const std::wstring ini = joinPath(dir, L"edvr.ini");
-    const std::wstring flatIni = joinPath(dir, L"edvr-flat.ini");
+    const std::wstring ini = joinPath(dir, L"edup.ini");
+    const std::wstring flatIni = joinPath(dir, L"edup-flat.ini");
     s.iniPresent = fileExists(ini);
     if (s.iniPresent) s.iniText = readAll(ini);
     s.flatIniPresent = fileExists(flatIni);
@@ -5439,7 +5439,7 @@ static Survey diskSurvey(const std::wstring& dir) {
     s.baseIniText = readAll(baseIniPath(dir));
     s.flatBaseIniText = readAll(flatBaseIniPath(dir));
     s.state = readState(dir);
-    const std::wstring descriptor = joinPath(dir, L"edvr_profile.ini");
+    const std::wstring descriptor = joinPath(dir, L"edup_profile.ini");
     s.descriptorPresent = fileExists(descriptor);
     if (s.descriptorPresent) s.descriptorSha = sha256File(descriptor);
     return s;
@@ -5464,79 +5464,79 @@ static void testFlatSettingsFiles(const std::wstring& scratch) {
     {   // The survey reads both files, each as itself.
         const std::wstring dir = joinPath(scratch, L"flatset-survey");
         layOutFlatGame(dir);
-        writeAll(joinPath(dir, L"edvr.ini"), kSharedIni);
-        writeAll(joinPath(dir, L"edvr-flat.ini"), kFlatOwnIni);
+        writeAll(joinPath(dir, L"edup.ini"), kSharedIni);
+        writeAll(joinPath(dir, L"edup-flat.ini"), kFlatOwnIni);
         const Survey both = surveyTarget(gameAt(dir));
-        check(both.iniPresent && both.iniText == kSharedIni, "the survey reads edvr.ini as itself");
+        check(both.iniPresent && both.iniText == kSharedIni, "the survey reads edup.ini as itself");
         check(both.flatIniPresent && both.flatIniText == kFlatOwnIni,
-              "and edvr-flat.ini as itself");
+              "and edup-flat.ini as itself");
         check(hasSettingsFor(both, "vr") && hasSettingsFor(both, "flat"),
               "each edition finds its settings");
 
-        DeleteFileW(joinPath(dir, L"edvr-flat.ini").c_str());
+        DeleteFileW(joinPath(dir, L"edup-flat.ini").c_str());
         const Survey legacy = surveyTarget(gameAt(dir));
         check(legacy.iniPresent && !legacy.flatIniPresent && legacy.flatIniText.empty(),
-              "a folder from before edvr-flat.ini has only the shared file");
+              "a folder from before edup-flat.ini has only the shared file");
         check(hasSettingsFor(legacy, "vr") && hasSettingsFor(legacy, "flat"),
               "which both editions read");
 
-        DeleteFileW(joinPath(dir, L"edvr.ini").c_str());
-        writeAll(joinPath(dir, L"edvr-flat.ini"), kFlatOwnIni);
+        DeleteFileW(joinPath(dir, L"edup.ini").c_str());
+        writeAll(joinPath(dir, L"edup-flat.ini"), kFlatOwnIni);
         const Survey flatOnly = surveyTarget(gameAt(dir));
         check(!flatOnly.iniPresent && flatOnly.flatIniPresent, "a flat-only folder is read as one");
         check(!hasSettingsFor(flatOnly, "vr") && hasSettingsFor(flatOnly, "flat"),
               "and has settings for the flat edition alone");
 
-        DeleteFileW(joinPath(dir, L"edvr-flat.ini").c_str());
+        DeleteFileW(joinPath(dir, L"edup-flat.ini").c_str());
         const Survey empty = surveyTarget(gameAt(dir));
         check(!hasSettingsFor(empty, "vr") && !hasSettingsFor(empty, "flat"),
               "an empty folder has settings for neither");
     }
 
     {   // A legacy shared-INI flat install, end to end: survey, plan, apply, and a
-        // later update and uninstall. The flat runtime read edvr.ini until now;
-        // from here on it reads edvr-flat.ini, and edvr.ini -- the VR profile's --
+        // later update and uninstall. The flat runtime read edup.ini until now;
+        // from here on it reads edup-flat.ini, and edup.ini -- the VR profile's --
         // is byte for byte what it was throughout.
         const std::wstring dir = joinPath(scratch, L"flatset-legacy");
         layOutFlatGame(dir);
-        writeAll(joinPath(dir, L"edvr.ini"), kSharedIni);
+        writeAll(joinPath(dir, L"edup.ini"), kSharedIni);
         Survey s = surveyTarget(gameAt(dir));
         s.eliteKind = EliteExeKind::OdysseyQualified;
         s.gameRunningHere = s.gameRunningElsewhere = s.gameRunStateUnknown = false;
         const Plan plan = planInstall(s, options, flatOld);
-        check(!plan.blocked, "a flat install over a legacy shared edvr.ini plans",
+        check(!plan.blocked, "a flat install over a legacy shared edup.ini plans",
               plan.problems.empty() ? std::string() : plan.problems.front());
         const ApplyResult result = applyPlan(plan, flatProvider());
         check(result.ok, "and applies", result.error);
-        expectEq(readAll(joinPath(dir, L"edvr.ini")), kSharedIni,
-                 "edvr.ini is exactly as the VR profile left it");
-        const std::string flatText = readAll(joinPath(dir, L"edvr-flat.ini"));
+        expectEq(readAll(joinPath(dir, L"edup.ini")), kSharedIni,
+                 "edup.ini is exactly as the VR profile left it");
+        const std::string flatText = readAll(joinPath(dir, L"edup-flat.ini"));
         expectEq(iniValue(flatText, "fix.temporal_aa"), "dlaa",
-                 "edvr-flat.ini carries the setting the flat runtime was reading");
-        check(flatRuntimeReads(dir) == joinPath(dir, L"edvr-flat.ini"),
+                 "edup-flat.ini carries the setting the flat runtime was reading");
+        check(flatRuntimeReads(dir) == joinPath(dir, L"edup-flat.ini"),
               "and it is the file the flat runtime reads from now on");
         const InstallState state = readState(dir);
         check(state.present && state.profile == "flat", "the record says flat");
         check(state.iniSha == sha256Bytes(flatText.data(), flatText.size()),
-              "and holds the hash of edvr-flat.ini, the file that was written");
+              "and holds the hash of edup-flat.ini, the file that was written");
         expectEq(readAll(flatBaseIniPath(dir)), kFlatTemplate,
-                 "the kept base is the flat edition's shipped file, in edvr-flat.ini.base");
+                 "the kept base is the flat edition's shipped file, in edup-flat.ini.base");
 
         // A later update, with defaults that moved: the flat file merges.
         Options second = options;
         second.backupStamp = L"20260827-121500";
         const Plan update = planInstall(diskSurvey(dir), second, flatNew);
-        check(!update.blocked && !touchesLive(update, dir, L"edvr.ini"),
-              "a later flat update plans without touching edvr.ini");
+        check(!update.blocked && !touchesLive(update, dir, L"edup.ini"),
+              "a later flat update plans without touching edup.ini");
         check(applyPlan(update, flatProvider()).ok, "and applies");
-        expectEq(readAll(joinPath(dir, L"edvr.ini")), kSharedIni, "edvr.ini is still exactly as it was");
-        const std::string updated = readAll(joinPath(dir, L"edvr-flat.ini"));
+        expectEq(readAll(joinPath(dir, L"edup.ini")), kSharedIni, "edup.ini is still exactly as it was");
+        const std::string updated = readAll(joinPath(dir, L"edup-flat.ini"));
         expectEq(iniValue(updated, "fix.render_sharpness"), "0", "the flat file took the new setting");
         expectEq(iniValue(updated, "fix.temporal_aa"), "dlaa", "and kept the one it carried over");
-        expectEq(readAll(joinPath(dir, L"edvr_backup\\20260827-121500\\edvr-flat.ini")), flatText,
+        expectEq(readAll(joinPath(dir, L"edup_backup\\20260827-121500\\edup-flat.ini")), flatText,
                  "with the flat file as it was in the backup folder");
-        check(!fileExists(joinPath(dir, L"edvr_backup\\20260827-121500\\edvr.ini")),
-              "and no copy of edvr.ini, which nothing replaced");
+        check(!fileExists(joinPath(dir, L"edup_backup\\20260827-121500\\edup.ini")),
+              "and no copy of edup.ini, which nothing replaced");
 
         // The uninstall, asked to remove settings, removes the flat edition's.
         Options gone = options;
@@ -5544,11 +5544,11 @@ static void testFlatSettingsFiles(const std::wstring& scratch) {
         gone.removeSettings = true;
         const ApplyResult removed = applyPlan(planUninstall(diskSurvey(dir), gone), flatProvider());
         check(removed.ok, "the flat uninstall applies", removed.error);
-        check(!fileExists(joinPath(dir, L"edvr-flat.ini")), "edvr-flat.ini goes with the flat edition");
-        expectEq(readAll(joinPath(dir, L"edvr_backup\\20260827-123000\\edvr-flat.ini")), updated,
+        check(!fileExists(joinPath(dir, L"edup-flat.ini")), "edup-flat.ini goes with the flat edition");
+        expectEq(readAll(joinPath(dir, L"edup_backup\\20260827-123000\\edup-flat.ini")), updated,
                  "after a copy of it went to the backup folder");
-        expectEq(readAll(joinPath(dir, L"edvr.ini")), kSharedIni,
-                 "and edvr.ini, which is the VR profile's, is left exactly as it was");
+        expectEq(readAll(joinPath(dir, L"edup.ini")), kSharedIni,
+                 "and edup.ini, which is the VR profile's, is left exactly as it was");
         check(!fileExists(joinPath(dir, L"d3d11.dll")), "the rest of the flat edition is gone too");
     }
 
@@ -5556,47 +5556,47 @@ static void testFlatSettingsFiles(const std::wstring& scratch) {
         // flat file, and replacing settings replaces that one and only that one.
         const std::wstring dir = joinPath(scratch, L"flatset-two");
         layOutFlatGame(dir);
-        writeAll(joinPath(dir, L"edvr.ini"), kSharedIni);
-        writeAll(joinPath(dir, L"edvr-flat.ini"), kFlatOwnIni);
+        writeAll(joinPath(dir, L"edup.ini"), kSharedIni);
+        writeAll(joinPath(dir, L"edup-flat.ini"), kFlatOwnIni);
         const Plan plan = planInstall(diskSurvey(dir), options, flatOld);
         check(!plan.blocked && applyPlan(plan, flatProvider()).ok,
               "a flat install over two different files applies");
-        expectEq(readAll(joinPath(dir, L"edvr.ini")), kSharedIni, "edvr.ini is byte for byte the same");
-        const std::string merged = readAll(joinPath(dir, L"edvr-flat.ini"));
+        expectEq(readAll(joinPath(dir, L"edup.ini")), kSharedIni, "edup.ini is byte for byte the same");
+        const std::string merged = readAll(joinPath(dir, L"edup-flat.ini"));
         expectEq(iniValue(merged, "fix.temporal_aa"), "fsr", "the flat file keeps its own setting");
         expectEq(iniValue(merged, "hotkey.menu", "<absent>"), "<absent>",
-                 "and takes nothing from edvr.ini");
+                 "and takes nothing from edup.ini");
 
         Options fresh = options;
         fresh.backupStamp = L"20260827-124500";
         fresh.keepSettings = false;
         check(applyPlan(planInstall(diskSurvey(dir), fresh, flatOld), flatProvider()).ok,
               "asked for fresh defaults, the run applies");
-        expectEq(iniValue(readAll(joinPath(dir, L"edvr-flat.ini")), "fix.temporal_aa"), "off",
+        expectEq(iniValue(readAll(joinPath(dir, L"edup-flat.ini")), "fix.temporal_aa"), "off",
                  "the flat file has the shipped defaults");
-        expectEq(readAll(joinPath(dir, L"edvr_backup\\20260827-124500\\edvr-flat.ini")), merged,
+        expectEq(readAll(joinPath(dir, L"edup_backup\\20260827-124500\\edup-flat.ini")), merged,
                  "with what it held in the backup folder");
-        expectEq(readAll(joinPath(dir, L"edvr.ini")), kSharedIni, "and edvr.ini is still untouched");
+        expectEq(readAll(joinPath(dir, L"edup.ini")), kSharedIni, "and edup.ini is still untouched");
     }
 
-    {   // The VR edition beside a flat profile's file: it updates edvr.ini and the
+    {   // The VR edition beside a flat profile's file: it updates edup.ini and the
         // flat file is exactly what it was.
         const std::wstring dir = joinPath(scratch, L"flatset-vr");
         layOutScratchGame(dir);
-        writeAll(joinPath(dir, L"edvr.ini"), kBaseIni);
-        writeAll(joinPath(dir, L"edvr-flat.ini"), kFlatOwnIni);
+        writeAll(joinPath(dir, L"edup.ini"), kBaseIni);
+        writeAll(joinPath(dir, L"edup-flat.ini"), kFlatOwnIni);
         Survey s = scratchSurvey(dir);
         s.iniPresent = true;
-        s.iniText = readAll(joinPath(dir, L"edvr.ini"));
+        s.iniText = readAll(joinPath(dir, L"edup.ini"));
         s.flatIniPresent = true;
-        s.flatIniText = readAll(joinPath(dir, L"edvr-flat.ini"));
+        s.flatIniText = readAll(joinPath(dir, L"edup-flat.ini"));
         Options vrOnly = options;
         vrOnly.scope = "vr";
         const ApplyResult result = applyPlan(planInstall(s, vrOnly, testPayload(kNextIni)), provider(false));
         check(result.ok, "a VR install beside a flat profile's file applies", result.error);
-        expectEq(iniValue(readAll(joinPath(dir, L"edvr.ini")), "fix.sun_glare"), "vivid",
+        expectEq(iniValue(readAll(joinPath(dir, L"edup.ini")), "fix.sun_glare"), "vivid",
                  "the VR file took the new setting");
-        expectEq(readAll(joinPath(dir, L"edvr-flat.ini")), kFlatOwnIni,
+        expectEq(readAll(joinPath(dir, L"edup-flat.ini")), kFlatOwnIni,
                  "and the flat file is byte for byte the same");
     }
 }
@@ -5604,9 +5604,9 @@ static void testFlatSettingsFiles(const std::wstring& scratch) {
 // The settings window: it reads and writes the file its edition's runtime reads.
 static void testFlatSettingsWindow(const std::wstring& root, const std::wstring& scratch) {
     printf("\nthe settings window and the flat edition's file\n");
-    const std::string shipped = readAll(joinPath(root, L"edvr.ini"));
+    const std::string shipped = readAll(joinPath(root, L"edup.ini"));
     if (shipped.empty()) {
-        fail("read the repository edvr.ini", "not found");
+        fail("read the repository edup.ini", "not found");
         return;
     }
     // Rows by dotted key ("fix.ui_quality"), so a key in two sections is never mistaken for another.
@@ -5618,7 +5618,7 @@ static void testFlatSettingsWindow(const std::wstring& root, const std::wstring&
         return static_cast<size_t>(-1);
     };
     // The flat view shows the keys the flat profile reads (flat_profile_keys.h): fix.ui_quality is one of them, and
-    // fix.black_void is a VR-only row it refuses. The shipped edvr.ini carries ui_quality = 100.
+    // fix.black_void is a VR-only row it refuses. The shipped edup.ini carries ui_quality = 100.
     const std::string flatOwn = "[fix]\r\nui_quality = 0\r\n";
 
     {   // Two files: the flat model shows the flat file's value and writes only
@@ -5626,8 +5626,8 @@ static void testFlatSettingsWindow(const std::wstring& root, const std::wstring&
         const std::wstring dir = joinPath(scratch, L"flatset-window-two");
         removeTree(dir);
         makeTree(dir);
-        writeAll(joinPath(dir, L"edvr.ini"), shipped);
-        writeAll(joinPath(dir, L"edvr-flat.ini"), flatOwn);
+        writeAll(joinPath(dir, L"edup.ini"), shipped);
+        writeAll(joinPath(dir, L"edup-flat.ini"), flatOwn);
 
         SettingsModel flat;
         flat.load(dir, "flat");
@@ -5636,34 +5636,34 @@ static void testFlatSettingsWindow(const std::wstring& root, const std::wstring&
             fail("find the setting to exercise", "fix.ui_quality is not exposed");
             return;
         }
-        check(flat.iniPath() == joinPath(dir, L"edvr-flat.ini"), "the flat window's file is edvr-flat.ini");
-        expectEq(flat.rows()[toggle].value, "0", "it shows the flat file's value, not edvr.ini's");
+        check(flat.iniPath() == joinPath(dir, L"edup-flat.ini"), "the flat window's file is edup-flat.ini");
+        expectEq(flat.rows()[toggle].value, "0", "it shows the flat file's value, not edup.ini's");
         check(flat.set(toggle, "1"), "a change in the flat window is written", flat.lastError());
-        expectEq(iniValue(readAll(joinPath(dir, L"edvr-flat.ini")), "fix.ui_quality"), "1",
-                 "to edvr-flat.ini");
-        expectEq(readAll(joinPath(dir, L"edvr.ini")), shipped, "and edvr.ini is byte for byte the same");
-        const std::wstring backups = joinPath(dir, L"edvr_backup");
+        expectEq(iniValue(readAll(joinPath(dir, L"edup-flat.ini")), "fix.ui_quality"), "1",
+                 "to edup-flat.ini");
+        expectEq(readAll(joinPath(dir, L"edup.ini")), shipped, "and edup.ini is byte for byte the same");
+        const std::wstring backups = joinPath(dir, L"edup_backup");
         const std::wstring stamp = firstSubdirLike(backups, L"settings-*");
-        check(!stamp.empty() && readAll(joinPath(joinPath(backups, stamp), L"edvr-flat.ini")) == flatOwn,
+        check(!stamp.empty() && readAll(joinPath(joinPath(backups, stamp), L"edup-flat.ini")) == flatOwn,
               "with the flat file as it was in the settings backup");
 
         SettingsModel vr;
         vr.load(dir);
-        check(vr.iniPath() == joinPath(dir, L"edvr.ini"), "the VR window's file is edvr.ini");
-        const std::string flatAfter = readAll(joinPath(dir, L"edvr-flat.ini"));
+        check(vr.iniPath() == joinPath(dir, L"edup.ini"), "the VR window's file is edup.ini");
+        const std::string flatAfter = readAll(joinPath(dir, L"edup-flat.ini"));
         check(vr.set(rowFor(vr, "fix.black_void"), "0"), "a change in the VR window is written", vr.lastError());
-        expectEq(iniValue(readAll(joinPath(dir, L"edvr.ini")), "fix.black_void"), "0", "to edvr.ini");
-        expectEq(readAll(joinPath(dir, L"edvr-flat.ini")), flatAfter,
-                 "and edvr-flat.ini is exactly what the flat window left");
+        expectEq(iniValue(readAll(joinPath(dir, L"edup.ini")), "fix.black_void"), "0", "to edup.ini");
+        expectEq(readAll(joinPath(dir, L"edup-flat.ini")), flatAfter,
+                 "and edup-flat.ini is exactly what the flat window left");
     }
 
-    {   // A legacy folder: only the shared edvr.ini. The flat window shows what the
-        // flat runtime is reading, and the first change starts edvr-flat.ini from
-        // it, leaving edvr.ini as it is.
+    {   // A legacy folder: only the shared edup.ini. The flat window shows what the
+        // flat runtime is reading, and the first change starts edup-flat.ini from
+        // it, leaving edup.ini as it is.
         const std::wstring dir = joinPath(scratch, L"flatset-window-legacy");
         removeTree(dir);
         makeTree(dir);
-        writeAll(joinPath(dir, L"edvr.ini"), shipped);
+        writeAll(joinPath(dir, L"edup.ini"), shipped);
         SettingsModel flat;
         flat.load(dir, "flat");
         const size_t toggle = rowFor(flat, "fix.ui_quality");
@@ -5672,20 +5672,20 @@ static void testFlatSettingsWindow(const std::wstring& root, const std::wstring&
             return;
         }
         expectEq(flat.rows()[toggle].value, iniValue(shipped, "fix.ui_quality"),
-                 "with no edvr-flat.ini yet the window shows the shared file's value");
+                 "with no edup-flat.ini yet the window shows the shared file's value");
         check(flat.set(toggle, "0"), "the first change succeeds", flat.lastError());
-        check(fileExists(joinPath(dir, L"edvr-flat.ini")), "and starts edvr-flat.ini");
-        const std::string started = readAll(joinPath(dir, L"edvr-flat.ini"));
+        check(fileExists(joinPath(dir, L"edup-flat.ini")), "and starts edup-flat.ini");
+        const std::string started = readAll(joinPath(dir, L"edup-flat.ini"));
         expectEq(iniValue(started, "fix.ui_quality"), "0", "with the change in it");
         check(started.find("ui_quality = 0") != std::string::npos,
               "and the shared file's line is changed in place, in the new file");
-        expectEq(readAll(joinPath(dir, L"edvr.ini")), shipped, "while edvr.ini is exactly as it was");
-        check(firstSubdirLike(joinPath(dir, L"edvr_backup"), L"settings-*").empty(),
+        expectEq(readAll(joinPath(dir, L"edup.ini")), shipped, "while edup.ini is exactly as it was");
+        check(firstSubdirLike(joinPath(dir, L"edup_backup"), L"settings-*").empty(),
               "a file that did not exist has nothing to back up");
         check(flat.set(toggle, "1"), "the next change succeeds too", flat.lastError());
-        expectEq(iniValue(readAll(joinPath(dir, L"edvr-flat.ini")), "fix.ui_quality"), "1",
+        expectEq(iniValue(readAll(joinPath(dir, L"edup-flat.ini")), "fix.ui_quality"), "1",
                  "and lands in the flat file");
-        expectEq(readAll(joinPath(dir, L"edvr.ini")), shipped, "with edvr.ini untouched again");
+        expectEq(readAll(joinPath(dir, L"edup.ini")), shipped, "with edup.ini untouched again");
     }
 
     {   // Nothing at all: the window says which file is missing.
@@ -5697,9 +5697,9 @@ static void testFlatSettingsWindow(const std::wstring& root, const std::wstring&
         const size_t toggle = rowFor(flat, "fix.ui_quality");
         if (toggle == static_cast<size_t>(-1)) return;
         check(!flat.set(toggle, "0"), "a change with no settings file anywhere fails");
-        check(flat.lastError().find("edvr-flat.ini is not there yet") != std::string::npos,
-              "and names edvr-flat.ini, the file that is missing", flat.lastError());
-        check(!fileExists(joinPath(dir, L"edvr-flat.ini")) && !fileExists(joinPath(dir, L"edvr.ini")),
+        check(flat.lastError().find("edup-flat.ini is not there yet") != std::string::npos,
+              "and names edup-flat.ini, the file that is missing", flat.lastError());
+        check(!fileExists(joinPath(dir, L"edup-flat.ini")) && !fileExists(joinPath(dir, L"edup.ini")),
               "without creating either");
     }
 
@@ -5708,7 +5708,7 @@ static void testFlatSettingsWindow(const std::wstring& root, const std::wstring&
         const std::wstring dir = joinPath(scratch, L"flatset-window-rows");
         removeTree(dir);
         makeTree(dir);
-        writeAll(joinPath(dir, L"edvr.ini"), shipped);
+        writeAll(joinPath(dir, L"edup.ini"), shipped);
         SettingsModel flat;
         flat.load(dir, "flat");
         SettingsModel vr;
@@ -5724,11 +5724,11 @@ static void testFlatSettingsWindow(const std::wstring& root, const std::wstring&
     }
 
     {   // A file from before the movie setting moved to [visual]: the window reads it the way the runtime does, through the moved-from map
-        // (settings.cpp kMovedSettings, generated from edvr.ini), in both views.
+        // (settings.cpp kMovedSettings, generated from edup.ini), in both views.
         const std::wstring dir = joinPath(scratch, L"flatset-window-moved");
         removeTree(dir);
         makeTree(dir);
-        writeAll(joinPath(dir, L"edvr.ini"), "[fix]\r\nintro_video = skip\r\n");
+        writeAll(joinPath(dir, L"edup.ini"), "[fix]\r\nintro_video = skip\r\n");
         for (const char* profile : {"vr", "flat"}) {
             SettingsModel model;
             model.load(dir, profile);
@@ -5743,9 +5743,9 @@ static void testFlatSettingsWindow(const std::wstring& root, const std::wstring&
 // ---------------------------------------------------------------------------
 // the mirror, when only the flat edition's settings were saved
 //
-// A flat install (or a menu edit under one) mirrors edvr-flat.ini alone, and
+// A flat install (or a menu edit under one) mirrors edup-flat.ini alone, and
 // after a game update wipes the folder that file is all there is to recover. The
-// offer, and the copy back, used to look for edvr.ini and pass by a mirror that
+// offer, and the copy back, used to look for edup.ini and pass by a mirror that
 // held only this one; a flat copy that failed was ignored, and the restore could
 // report success after putting back only the shared file.
 // ---------------------------------------------------------------------------
@@ -5759,8 +5759,8 @@ static bool noteHas(const std::vector<std::string>& notes, const char* needle) {
 static void testFlatMirror(const std::wstring& scratch) {
     printf("\nthe mirror, when only the flat edition's settings were saved\n");
 
-    // A fresh flat install on real files, the one this mirrors: edvr-flat.ini, the
-    // record and the base, and no edvr.ini anywhere.
+    // A fresh flat install on real files, the one this mirrors: edup-flat.ini, the
+    // record and the base, and no edup.ini anywhere.
     const std::wstring dir = joinPath(scratch, L"flatmirror-game");
     layOutFlatGame(dir);
     const PayloadInfo flat = flatPayloadFor(kFlatTemplate);
@@ -5769,41 +5769,41 @@ static void testFlatMirror(const std::wstring& scratch) {
     const Plan plan = planInstall(diskSurvey(dir), flatOptions, flat);
     check(!plan.blocked && applyPlan(plan, flatProvider()).ok,
           "a fresh flat install, the one this test mirrors, applies");
-    check(fileExists(joinPath(dir, L"edvr-flat.ini")) && !fileExists(joinPath(dir, L"edvr.ini")),
-          "it leaves edvr-flat.ini and no edvr.ini");
+    check(fileExists(joinPath(dir, L"edup-flat.ini")) && !fileExists(joinPath(dir, L"edup.ini")),
+          "it leaves edup-flat.ini and no edup.ini");
 
     const std::wstring root = joinPath(scratch, L"flatmirror-root");
     removeTree(root);
     const std::wstring mirrorDir = joinPath(root, L"flatmirror-test");
     const MirrorResult saved = updateMirror(dir, plan.backupDir, mirrorDir);
-    check(saved.ok && !saved.saved.empty() && saved.saved.front() == "edvr-flat.ini",
+    check(saved.ok && !saved.saved.empty() && saved.saved.front() == "edup-flat.ini",
           "updateMirror saves the flat settings");
-    check(!fileExists(joinPath(mirrorDir, L"edvr.ini")), "and there is no edvr.ini in the mirror");
-    const std::string mirroredFlat = readAll(joinPath(mirrorDir, L"edvr-flat.ini"));
-    expectEq(mirroredFlat, readAll(joinPath(dir, L"edvr-flat.ini")), "the mirrored copy matches");
+    check(!fileExists(joinPath(mirrorDir, L"edup.ini")), "and there is no edup.ini in the mirror");
+    const std::string mirroredFlat = readAll(joinPath(mirrorDir, L"edup-flat.ini"));
+    expectEq(mirroredFlat, readAll(joinPath(dir, L"edup-flat.ini")), "the mirrored copy matches");
 
     const MirrorInfo info = readMirror(mirrorDir);
     check(!info.hasIni && info.hasFlatIni, "readMirror sees the flat settings alone");
     check(!info.savedUtc.empty(), "and it says when they were saved");
     // The flat install writes its own merge base, and the mirror keeps it beside the record (P3-4).
     check(info.hasState && !info.hasBaseIni && info.hasFlatBaseIni,
-          "with the record and the flat base beside them, and no edvr.ini base");
+          "with the record and the flat base beside them, and no edup.ini base");
 
     {   // The offer, asked as both installers ask it: each file the scope installs that the folder lacks and the mirror holds.
         const std::wstring wipedDir = joinPath(scratch, L"flatmirror-wiped");
         layOutFlatGame(wipedDir);
-        check(settingsToRestore(wipedDir, info, "flat") == std::vector<std::string>{"edvr-flat.ini"},
-              "a wiped flat folder is offered a mirror that holds only edvr-flat.ini, and names that file");
-        check(settingsToRestore(wipedDir, info, "both") == std::vector<std::string>{"edvr-flat.ini"},
-              "a both install of it is offered the same file: edvr.ini is not in the mirror");
+        check(settingsToRestore(wipedDir, info, "flat") == std::vector<std::string>{"edup-flat.ini"},
+              "a wiped flat folder is offered a mirror that holds only edup-flat.ini, and names that file");
+        check(settingsToRestore(wipedDir, info, "both") == std::vector<std::string>{"edup-flat.ini"},
+              "a both install of it is offered the same file: edup.ini is not in the mirror");
         check(settingsToRestore(wipedDir, info, "vr").empty(),
-              "a VR install of it is not: the VR scope installs no edvr-flat.ini");
+              "a VR install of it is not: the VR scope installs no edup-flat.ini");
         check(settingsToRestore(dir, info, "flat").empty(),
               "a folder that still has its settings is offered nothing");
 
-        writeAll(joinPath(wipedDir, L"edvr.ini"), kSharedIni);
-        check(settingsToRestore(wipedDir, info, "flat") == std::vector<std::string>{"edvr-flat.ini"},
-              "a flat scope is offered edvr-flat.ini even with the shared edvr.ini there: its own file is what is missing");
+        writeAll(joinPath(wipedDir, L"edup.ini"), kSharedIni);
+        check(settingsToRestore(wipedDir, info, "flat") == std::vector<std::string>{"edup-flat.ini"},
+              "a flat scope is offered edup-flat.ini even with the shared edup.ini there: its own file is what is missing");
 
         const MirrorInfo none;
         check(settingsToRestore(wipedDir, none, "flat").empty() && settingsToRestore(wipedDir, none, "vr").empty() &&
@@ -5814,8 +5814,8 @@ static void testFlatMirror(const std::wstring& scratch) {
         const std::wstring bareDir = joinPath(scratch, L"flatmirror-bare");
         removeTree(bareDir);
         makeTree(bareDir);
-        check(settingsToRestore(bareDir, vrOnly, "vr") == std::vector<std::string>{"edvr.ini"},
-              "a mirror of edvr.ini is offered to a VR install");
+        check(settingsToRestore(bareDir, vrOnly, "vr") == std::vector<std::string>{"edup.ini"},
+              "a mirror of edup.ini is offered to a VR install");
         check(settingsToRestore(bareDir, vrOnly, "flat").empty(),
               "and not to a flat one, whose own file the mirror does not hold");
     }
@@ -5826,44 +5826,44 @@ static void testFlatMirror(const std::wstring& scratch) {
         makeTree(wipedDir);
         std::vector<std::string> notes;
         check(restoreFromMirror(wipedDir, info, "flat", &notes), "a flat-only mirror is restored");
-        expectEq(readAll(joinPath(wipedDir, L"edvr-flat.ini")), mirroredFlat,
-                 "edvr-flat.ini comes back byte for byte");
-        check(!fileExists(joinPath(wipedDir, L"edvr.ini")), "and no edvr.ini is made up");
-        check(noteHas(notes, "Restored edvr-flat.ini"), "the notes say what was restored");
-        check(fileExists(joinPath(wipedDir, L"edvr_install\\state.ini")), "with the record");
+        expectEq(readAll(joinPath(wipedDir, L"edup-flat.ini")), mirroredFlat,
+                 "edup-flat.ini comes back byte for byte");
+        check(!fileExists(joinPath(wipedDir, L"edup.ini")), "and no edup.ini is made up");
+        check(noteHas(notes, "Restored edup-flat.ini"), "the notes say what was restored");
+        check(fileExists(joinPath(wipedDir, L"edup_install\\state.ini")), "with the record");
         check(fileExists(flatBaseIniPath(wipedDir)) && !fileExists(baseIniPath(wipedDir)),
-              "and the flat base comes back to edvr_install\\edvr-flat.ini.base, and no edvr.ini base is made up");
+              "and the flat base comes back to edup_install\\edup-flat.ini.base, and no edup.ini base is made up");
     }
 
     {   // A present settings file is never restored over: the flat file is the one the folder lacks, the shared one is its own.
         const std::wstring keepDir = joinPath(scratch, L"flatmirror-keep");
         removeTree(keepDir);
         makeTree(keepDir);
-        writeAll(joinPath(keepDir, L"edvr-flat.ini"), "[keep]\r\nthis = 1\r\n");
+        writeAll(joinPath(keepDir, L"edup-flat.ini"), "[keep]\r\nthis = 1\r\n");
         std::vector<std::string> notes;
         check(!restoreFromMirror(keepDir, info, "flat", &notes),
               "a folder whose flat file is present has nothing for a flat restore to do");
-        expectEq(readAll(joinPath(keepDir, L"edvr-flat.ini")), "[keep]\r\nthis = 1\r\n",
-                 "and its edvr-flat.ini is left exactly as it was");
+        expectEq(readAll(joinPath(keepDir, L"edup-flat.ini")), "[keep]\r\nthis = 1\r\n",
+                 "and its edup-flat.ini is left exactly as it was");
     }
 
     {   // A flat copy that fails is a restore that failed: with a directory where the
         // file has to go, nothing can replace it.
         const std::wstring blocked = joinPath(scratch, L"flatmirror-blocked");
         removeTree(blocked);
-        makeTree(joinPath(blocked, L"edvr-flat.ini"));
+        makeTree(joinPath(blocked, L"edup-flat.ini"));
         std::vector<std::string> notes;
         check(!restoreFromMirror(blocked, info, "flat", &notes), "a failed flat copy fails a flat-only restore");
-        check(noteHas(notes, "Could not restore edvr-flat.ini"), "and the notes say which file it was");
-        check(!fileExists(joinPath(blocked, L"edvr_install\\state.ini")),
+        check(noteHas(notes, "Could not restore edup-flat.ini"), "and the notes say which file it was");
+        check(!fileExists(joinPath(blocked, L"edup_install\\state.ini")),
               "nothing else of a mirror whose settings did not come back is put into the folder");
     }
 
     // A mirror holding both files, made by hand: the shared file and the flat one.
     const std::wstring bothDir = joinPath(root, L"both-mirror");
     makeTree(bothDir);
-    writeAll(joinPath(bothDir, L"edvr.ini"), kSharedIni);
-    writeAll(joinPath(bothDir, L"edvr-flat.ini"), kFlatOwnIni);
+    writeAll(joinPath(bothDir, L"edup.ini"), kSharedIni);
+    writeAll(joinPath(bothDir, L"edup-flat.ini"), kFlatOwnIni);
     writeAll(joinPath(bothDir, L"state.ini"), "[edvr]\r\nversion = 1\r\n");
     const MirrorInfo both = readMirror(bothDir);
     check(both.hasIni && both.hasFlatIni, "a mirror can hold both files");
@@ -5874,47 +5874,47 @@ static void testFlatMirror(const std::wstring& scratch) {
         makeTree(wipedDir);
         std::vector<std::string> notes;
         check(restoreFromMirror(wipedDir, both, "both", &notes), "a mirror of both files restores");
-        expectEq(readAll(joinPath(wipedDir, L"edvr.ini")), kSharedIni, "edvr.ini comes back");
-        expectEq(readAll(joinPath(wipedDir, L"edvr-flat.ini")), kFlatOwnIni, "and edvr-flat.ini");
+        expectEq(readAll(joinPath(wipedDir, L"edup.ini")), kSharedIni, "edup.ini comes back");
+        expectEq(readAll(joinPath(wipedDir, L"edup-flat.ini")), kFlatOwnIni, "and edup-flat.ini");
     }
 
     {   // The shared file's success must not hide the flat file's failure.
         const std::wstring blocked = joinPath(scratch, L"flatmirror-flatblocked");
         removeTree(blocked);
-        makeTree(joinPath(blocked, L"edvr-flat.ini"));
+        makeTree(joinPath(blocked, L"edup-flat.ini"));
         std::vector<std::string> notes;
         check(!restoreFromMirror(blocked, both, "both", &notes),
-              "edvr.ini restored and edvr-flat.ini not is not a successful restore");
-        expectEq(readAll(joinPath(blocked, L"edvr.ini")), kSharedIni, "the shared file did come back");
-        check(noteHas(notes, "Restored edvr.ini") && noteHas(notes, "Could not restore edvr-flat.ini"),
+              "edup.ini restored and edup-flat.ini not is not a successful restore");
+        expectEq(readAll(joinPath(blocked, L"edup.ini")), kSharedIni, "the shared file did come back");
+        check(noteHas(notes, "Restored edup.ini") && noteHas(notes, "Could not restore edup-flat.ini"),
               "and the notes name both the one that did and the one that did not");
-        check(fileExists(joinPath(blocked, L"edvr_install\\state.ini")),
+        check(fileExists(joinPath(blocked, L"edup_install\\state.ini")),
               "the record is restored, since some settings came back");
     }
 
     {   // And the other way round.
         const std::wstring blocked = joinPath(scratch, L"flatmirror-sharedblocked");
         removeTree(blocked);
-        makeTree(joinPath(blocked, L"edvr.ini"));
+        makeTree(joinPath(blocked, L"edup.ini"));
         std::vector<std::string> notes;
         check(!restoreFromMirror(blocked, both, "both", &notes),
-              "edvr-flat.ini restored and edvr.ini not is not a successful restore either");
-        expectEq(readAll(joinPath(blocked, L"edvr-flat.ini")), kFlatOwnIni, "the flat file did come back");
-        check(noteHas(notes, "Could not restore edvr.ini"), "and the notes say edvr.ini did not");
+              "edup-flat.ini restored and edup.ini not is not a successful restore either");
+        expectEq(readAll(joinPath(blocked, L"edup-flat.ini")), kFlatOwnIni, "the flat file did come back");
+        check(noteHas(notes, "Could not restore edup.ini"), "and the notes say edup.ini did not");
     }
 
     {   // A both install's two merge bases go to the mirror and come back, each to its own name, in one restore.
         const std::wstring basesGame = joinPath(scratch, L"bases-game");
         removeTree(basesGame);
-        makeTree(joinPath(basesGame, L"edvr_install"));
-        writeAll(joinPath(basesGame, L"edvr.ini"), kSharedIni);
-        writeAll(joinPath(basesGame, L"edvr-flat.ini"), kFlatOwnIni);
-        writeAll(joinPath(basesGame, L"edvr_install\\edvr.ini.base"), "[base]\r\nshared = 1\r\n");
-        writeAll(joinPath(basesGame, L"edvr_install\\edvr-flat.ini.base"), "[base]\r\nflat = 1\r\n");
-        writeAll(joinPath(basesGame, L"edvr_install\\state.ini"), "[edvr]\r\nversion = 1\r\n");
+        makeTree(joinPath(basesGame, L"edup_install"));
+        writeAll(joinPath(basesGame, L"edup.ini"), kSharedIni);
+        writeAll(joinPath(basesGame, L"edup-flat.ini"), kFlatOwnIni);
+        writeAll(joinPath(basesGame, L"edup_install\\edup.ini.base"), "[base]\r\nshared = 1\r\n");
+        writeAll(joinPath(basesGame, L"edup_install\\edup-flat.ini.base"), "[base]\r\nflat = 1\r\n");
+        writeAll(joinPath(basesGame, L"edup_install\\state.ini"), "[edvr]\r\nversion = 1\r\n");
         const std::wstring basesMirror = joinPath(root, L"bases-mirror");
         check(updateMirror(basesGame, L"", basesMirror).ok, "the both install's bases are mirrored");
-        check(fileExists(joinPath(basesMirror, L"edvr.ini.base")) && fileExists(joinPath(basesMirror, L"edvr-flat.ini.base")),
+        check(fileExists(joinPath(basesMirror, L"edup.ini.base")) && fileExists(joinPath(basesMirror, L"edup-flat.ini.base")),
               "both bases are in the mirror");
         const MirrorInfo basesInfo = readMirror(basesMirror);
         check(basesInfo.hasBaseIni && basesInfo.hasFlatBaseIni, "readMirror sees both bases");
@@ -5924,26 +5924,26 @@ static void testFlatMirror(const std::wstring& scratch) {
         makeTree(wipedDir);
         std::vector<std::string> notes;
         check(restoreFromMirror(wipedDir, basesInfo, "both", &notes), "a both restore of the bases succeeds");
-        expectEq(readAll(baseIniPath(wipedDir)), "[base]\r\nshared = 1\r\n", "edvr.ini.base comes back");
-        expectEq(readAll(flatBaseIniPath(wipedDir)), "[base]\r\nflat = 1\r\n", "and edvr-flat.ini.base");
+        expectEq(readAll(baseIniPath(wipedDir)), "[base]\r\nshared = 1\r\n", "edup.ini.base comes back");
+        expectEq(readAll(flatBaseIniPath(wipedDir)), "[base]\r\nflat = 1\r\n", "and edup-flat.ini.base");
 
-        // A folder missing only edvr.ini, with its record and both bases present: the mirror's older copies of those are not put over
+        // A folder missing only edup.ini, with its record and both bases present: the mirror's older copies of those are not put over
         // the current ones; only the missing settings file comes back.
         const std::wstring partialDir = joinPath(scratch, L"bases-partial");
         removeTree(partialDir);
-        makeTree(joinPath(partialDir, L"edvr_install"));
-        writeAll(joinPath(partialDir, L"edvr-flat.ini"), kFlatOwnIni);
-        writeAll(joinPath(partialDir, L"edvr_install\\edvr.ini.base"), "[base]\r\ncurrent = 1\r\n");
-        writeAll(joinPath(partialDir, L"edvr_install\\edvr-flat.ini.base"), "[base]\r\ncurrent flat = 1\r\n");
-        writeAll(joinPath(partialDir, L"edvr_install\\state.ini"), "[edvr]\r\nversion = current\r\n");
+        makeTree(joinPath(partialDir, L"edup_install"));
+        writeAll(joinPath(partialDir, L"edup-flat.ini"), kFlatOwnIni);
+        writeAll(joinPath(partialDir, L"edup_install\\edup.ini.base"), "[base]\r\ncurrent = 1\r\n");
+        writeAll(joinPath(partialDir, L"edup_install\\edup-flat.ini.base"), "[base]\r\ncurrent flat = 1\r\n");
+        writeAll(joinPath(partialDir, L"edup_install\\state.ini"), "[edvr]\r\nversion = current\r\n");
         std::vector<std::string> partialNotes;
         check(restoreFromMirror(partialDir, basesInfo, "both", &partialNotes),
-              "a both restore into a folder missing only edvr.ini succeeds");
-        expectEq(readAll(joinPath(partialDir, L"edvr.ini")), kSharedIni, "edvr.ini comes back");
+              "a both restore into a folder missing only edup.ini succeeds");
+        expectEq(readAll(joinPath(partialDir, L"edup.ini")), kSharedIni, "edup.ini comes back");
         expectEq(readAll(statePath(partialDir)), "[edvr]\r\nversion = current\r\n", "a present state.ini is kept byte for byte");
-        expectEq(readAll(baseIniPath(partialDir)), "[base]\r\ncurrent = 1\r\n", "a present edvr.ini.base is kept byte for byte");
-        expectEq(readAll(flatBaseIniPath(partialDir)), "[base]\r\ncurrent flat = 1\r\n", "a present edvr-flat.ini.base is kept byte for byte");
-        expectEq(readAll(joinPath(partialDir, L"edvr-flat.ini")), kFlatOwnIni, "and the present edvr-flat.ini is untouched");
+        expectEq(readAll(baseIniPath(partialDir)), "[base]\r\ncurrent = 1\r\n", "a present edup.ini.base is kept byte for byte");
+        expectEq(readAll(flatBaseIniPath(partialDir)), "[base]\r\ncurrent flat = 1\r\n", "a present edup-flat.ini.base is kept byte for byte");
+        expectEq(readAll(joinPath(partialDir, L"edup-flat.ini")), kFlatOwnIni, "and the present edup-flat.ini is untouched");
     }
 }
 
@@ -6048,12 +6048,12 @@ static void testSettings(const std::wstring& root, const std::wstring& scratch) 
     const std::wstring dir = joinPath(scratch, L"settings");
     removeTree(dir);
     makeTree(dir);
-    const std::string shipped = readAll(joinPath(root, L"edvr.ini"));
+    const std::string shipped = readAll(joinPath(root, L"edup.ini"));
     if (shipped.empty()) {
-        fail("read the repository edvr.ini", "not found");
+        fail("read the repository edup.ini", "not found");
         return;
     }
-    writeAll(joinPath(dir, L"edvr.ini"), shipped);
+    writeAll(joinPath(dir, L"edup.ini"), shipped);
 
     SettingsModel model;
     model.load(dir);
@@ -6074,7 +6074,7 @@ static void testSettings(const std::wstring& root, const std::wstring& scratch) 
     check(model.rows()[toggle].isRecommended, "and starts at the recommended value");
 
     check(model.set(toggle, "0"), "writing a toggle succeeds", model.lastError());
-    const std::string after = readAll(joinPath(dir, L"edvr.ini"));
+    const std::string after = readAll(joinPath(dir, L"edup.ini"));
     expectEq(iniValue(after, "fix.black_void"), "0", "the new value is in the file");
     check(!model.rows()[toggle].isRecommended,
           "and the row now says it is away from the recommended value");
@@ -6095,7 +6095,7 @@ static void testSettings(const std::wstring& root, const std::wstring& scratch) 
           "the comments are still there");
 
     check(model.set(choice, "realistic"), "writing a choice succeeds", model.lastError());
-    expectEq(iniValue(readAll(joinPath(dir, L"edvr.ini")), "fix.sun_glare"), "realistic",
+    expectEq(iniValue(readAll(joinPath(dir, L"edup.ini")), "fix.sun_glare"), "realistic",
              "the choice landed");
 
     // Every exposed setting must be readable from the shipped file, or the
@@ -6147,7 +6147,7 @@ static void testSettings(const std::wstring& root, const std::wstring& scratch) 
                  (label + "and the row shows it as 20%").c_str());
     }
 
-    // The on-foot width's bounds come from edvr.ini's own `| range` annotation
+    // The on-foot width's bounds come from edup.ini's own `| range` annotation
     // now: fix.vscreen_res_width is "auto" or a width, read with getString by
     // every consumer (the panel patch and the intro upscaler both resolve it
     // through resolveVScreenTargetResolution), so no typed, bounded read is
@@ -6265,21 +6265,21 @@ static void testLogBundle(const std::wstring& scratch) {
 
     const std::wstring dir = joinPath(scratch, L"logs");
     removeTree(dir);
-    makeTree(joinPath(dir, L"edvr_logs"));
+    makeTree(joinPath(dir, L"edup_logs"));
     writeAll(joinPath(dir, L"EliteDangerous64.exe"), "not really the game");
-    writeAll(joinPath(dir, L"edvr.ini"), "[fix]\r\nshare_exposure = 1\r\n");
-    writeAll(joinPath(dir, L"edvr_breadcrumbs.txt"), "d3d11 attached");
-    writeAll(joinPath(dir, L"edvr_FATAL.txt"), "could not load the real openvr");
+    writeAll(joinPath(dir, L"edup.ini"), "[fix]\r\nshare_exposure = 1\r\n");
+    writeAll(joinPath(dir, L"edup_breadcrumbs.txt"), "d3d11 attached");
+    writeAll(joinPath(dir, L"edup_FATAL.txt"), "could not load the real openvr");
     // The native runtime's startup file sits beside its openvr_api.dll.
     const std::string nativeIni = "[openxr]\r\nversion=1\r\nseparate_device=1\r\npose_cache=off\r\n";
     makeTree(joinPath(dir, L"Openvr\\win64"));
     writeAll(joinPath(dir, L"Openvr\\win64\\openvr_api.dll"), "not really a runtime");
-    writeAll(joinPath(dir, L"Openvr\\win64\\edvr_openxr.ini"), nativeIni);
+    writeAll(joinPath(dir, L"Openvr\\win64\\edup_openxr.ini"), nativeIni);
 
     // Two sessions: an old pair and a new pair. Only the new pair belongs in
     // the zip -- an attachment with six launches in it is harder to read, not
     // more informative.
-    const std::wstring logs = joinPath(dir, L"edvr_logs");
+    const std::wstring logs = joinPath(dir, L"edup_logs");
     writeAll(joinPath(logs, L"edvr_gfx_20260101_100000.log"), "an old session");
     writeAll(joinPath(logs, L"edvr_vr_20260101_100003.log"), "an old session");
     Sleep(1100);  // the newest-file test is by write time, so they must differ
@@ -6368,10 +6368,10 @@ static void testLogBundle(const std::wstring& scratch) {
         check(segmentNote, "the bundle says how many tail segments it carries");
         check(countNote, "and its log count is of session logs only: segments are not logs of their own");
     }
-    check(bundleHas(names, "edvr_breadcrumbs.txt"), "the breadcrumbs are in");
-    check(bundleHas(names, "edvr_FATAL.txt"), "the fatal note is in");
-    check(bundleHas(names, "edvr.ini"), "the settings file is in");
-    check(zipPayloadEquals(bundle.zipPath, "edvr_openxr.ini", nativeIni),
+    check(bundleHas(names, "edup_breadcrumbs.txt"), "the breadcrumbs are in");
+    check(bundleHas(names, "edup_FATAL.txt"), "the fatal note is in");
+    check(bundleHas(names, "edup.ini"), "the settings file is in");
+    check(zipPayloadEquals(bundle.zipPath, "edup_openxr.ini", nativeIni),
           "the native runtime's startup file is in, byte for byte (its pose_cache and overlap keys are in no log)");
     check(bundleHas(names,"flat_draw_packets/late/manifest.json")&&bundleHas(names,"flat_draw_packets/late/payload.bin"),
           "packet capture ten minutes into a flight retains its whole folder across member timestamp boundaries");
@@ -6425,7 +6425,7 @@ static void testLogBundle(const std::wstring& scratch) {
         dumpFile(joinPath(local, L"CrashDumps\\EliteDangerous64.exe.4242.dmp"), 12, 44);
         dumpFile(joinPath(local, L"CrashDumps\\EliteDangerous64.exe.99.dmp"), 20, 0);  // a later session's
         dumpFile(joinPath(local, L"CrashDumps\\ctl.exe.7.dmp"), 12, 40);               // not the game
-        bundleStamp(joinPath(dir, L"edvr_breadcrumbs.txt"), 27, 12, 30);
+        bundleStamp(joinPath(dir, L"edup_breadcrumbs.txt"), 27, 12, 30);
 
         SYSTEMTIME at{}; at.wYear = 2026; at.wMonth = 8; at.wDay = 27; at.wHour = 14; at.wMinute = 12; at.wSecond = 30;
         FILETIME around{}; SystemTimeToFileTime(&at, &around);
@@ -6482,33 +6482,33 @@ static void testLogBundle(const std::wstring& scratch) {
         check(collectLogs(dir, scratch, &none).dumpZipPath.empty(), "no dump on the machine, no dump zip");
     }
 
-    {   // A flat install's logs are found where ITS settings file says: edvr-flat.ini
-        // (edvr.ini only while it has none). The VR profile's log.dir, which the
+    {   // A flat install's logs are found where ITS settings file says: edup-flat.ini
+        // (edup.ini only while it has none). The VR profile's log.dir, which the
         // flat runtime never reads, does not send the bundle to the wrong folder.
         const std::wstring flat = joinPath(scratch, L"flatlogs");
         const std::wstring flatLogs = joinPath(flat, L"flat_logs_here");
         removeTree(flat);
         makeTree(flatLogs);
         writeAll(joinPath(flat, L"EliteDangerous64.exe"), "not really the game");
-        writeAll(joinPath(flat, L"edvr_profile.ini"), "[install]\r\nschema = 2\r\nscope = flat\r\n");
-        writeAll(joinPath(flat, L"edvr.ini"), "[log]\r\ndir = " + toUtf8(joinPath(flat, L"vr_logs_nowhere")) + "\r\n");
-        writeAll(joinPath(flat, L"edvr-flat.ini"), "[log]\r\ndir = " + toUtf8(flatLogs) + "\r\n");
+        writeAll(joinPath(flat, L"edup_profile.ini"), "[install]\r\nschema = 2\r\nscope = flat\r\n");
+        writeAll(joinPath(flat, L"edup.ini"), "[log]\r\ndir = " + toUtf8(joinPath(flat, L"vr_logs_nowhere")) + "\r\n");
+        writeAll(joinPath(flat, L"edup-flat.ini"), "[log]\r\ndir = " + toUtf8(flatLogs) + "\r\n");
         writeAll(joinPath(flatLogs, L"edvr_gfx_20260827_140000.log"), "the flat session");
         const LogBundle flatBundle = collectLogs(flat, scratch, &noDumps);
         check(flatBundle.ok, "a flat install's bundle is written", flatBundle.error);
         const std::vector<std::string> flatNames = zipEntryNames(flatBundle.zipPath);
         check(bundleHas(flatNames, "edvr_gfx_20260827_140000.log"),
-              "with the log from the folder edvr-flat.ini names");
-        check(bundleHas(flatNames, "edvr-flat.ini"), "and the flat settings file");
+              "with the log from the folder edup-flat.ini names");
+        check(bundleHas(flatNames, "edup-flat.ini"), "and the flat settings file");
 
-        // Without a flat file yet, the flat runtime is reading edvr.ini, so that is
+        // Without a flat file yet, the flat runtime is reading edup.ini, so that is
         // where log.dir comes from.
-        DeleteFileW(joinPath(flat, L"edvr-flat.ini").c_str());
-        writeAll(joinPath(flat, L"edvr.ini"), "[log]\r\ndir = " + toUtf8(flatLogs) + "\r\n");
+        DeleteFileW(joinPath(flat, L"edup-flat.ini").c_str());
+        writeAll(joinPath(flat, L"edup.ini"), "[log]\r\ndir = " + toUtf8(flatLogs) + "\r\n");
         const LogBundle legacyBundle = collectLogs(flat, scratch, &noDumps);
         check(legacyBundle.ok, "a legacy flat install's bundle is written", legacyBundle.error);
         check(bundleHas(zipEntryNames(legacyBundle.zipPath), "edvr_gfx_20260827_140000.log"),
-              "with the log from the folder the shared edvr.ini names");
+              "with the log from the folder the shared edup.ini names");
     }
 
     {   // The two settings files may name two log folders: both are swept, and a folder both name is swept once. The scope the
@@ -6519,12 +6519,12 @@ static void testLogBundle(const std::wstring& scratch) {
         removeTree(two);
         makeTree(folderA);
         makeTree(folderB);
-        makeTree(joinPath(two, L"edvr_install"));
+        makeTree(joinPath(two, L"edup_install"));
         writeAll(joinPath(two, L"EliteDangerous64.exe"), "not really the game");
-        writeAll(joinPath(two, L"edvr_profile.ini"), "[install]\r\nschema = 2\r\nscope = both\r\n");
-        writeAll(joinPath(two, L"edvr_install\\state.ini"), "[edvr]\r\nversion = v0.19.0\r\nprofile = flat\r\n");
-        writeAll(joinPath(two, L"edvr.ini"), "[log]\r\ndir = " + toUtf8(folderA) + "\r\n");
-        writeAll(joinPath(two, L"edvr-flat.ini"), "[log]\r\ndir = " + toUtf8(folderB) + "\r\n");
+        writeAll(joinPath(two, L"edup_profile.ini"), "[install]\r\nschema = 2\r\nscope = both\r\n");
+        writeAll(joinPath(two, L"edup_install\\state.ini"), "[edvr]\r\nversion = v0.19.0\r\nprofile = flat\r\n");
+        writeAll(joinPath(two, L"edup.ini"), "[log]\r\ndir = " + toUtf8(folderA) + "\r\n");
+        writeAll(joinPath(two, L"edup-flat.ini"), "[log]\r\ndir = " + toUtf8(folderB) + "\r\n");
         // Both folders hold a log of one name: the first keeps it, the second's copy goes in under its folder's prefix.
         writeAll(joinPath(folderA, L"edvr_gfx_20260827_140000.log"), "the vr session");
         writeAll(joinPath(folderB, L"edvr_gfx_20260827_140000.log"), "the flat session");
@@ -6534,16 +6534,16 @@ static void testLogBundle(const std::wstring& scratch) {
         check(split.ok, "a bundle over two log folders is written", split.error);
         if (split.ok) {
             const std::vector<std::string> splitNames = zipEntryNames(split.zipPath);
-            check(bundleHas(splitNames, "edvr_gfx_20260827_140000.log"), "the log in the folder edvr.ini names is in, by its own name");
+            check(bundleHas(splitNames, "edvr_gfx_20260827_140000.log"), "the log in the folder edup.ini names is in, by its own name");
             check(bundleHas(splitNames, "log-folder-2/edvr_gfx_20260827_140000.log"),
-                  "the same name in the folder edvr-flat.ini names is in under its own prefix, not lost");
+                  "the same name in the folder edup-flat.ini names is in under its own prefix, not lost");
             check(bundleHas(splitNames, "edvr_vr_20260827_140003.log"), "and a log only that folder holds keeps its own name");
             bool scopeSaid = false;
             for (const std::string& note : split.notes) scopeSaid |= note == "Install scope: both";
             check(scopeSaid, "the bundle states the scope the canonical descriptor names, not the record's flat");
         }
 
-        writeAll(joinPath(two, L"edvr-flat.ini"), "[log]\r\ndir = " + toUtf8(folderA) + "\r\n");
+        writeAll(joinPath(two, L"edup-flat.ini"), "[log]\r\ndir = " + toUtf8(folderA) + "\r\n");
         const LogBundle once = collectLogs(two, scratch, &noDumps);
         check(once.ok, "a bundle over one log folder named twice is written", once.error);
         if (once.ok) {
@@ -6558,9 +6558,9 @@ static void testLogBundle(const std::wstring& scratch) {
         auto makeGame = [&](const wchar_t* leaf) {
             const std::wstring game = joinPath(scratch, leaf);
             removeTree(game);
-            makeTree(joinPath(game, L"edvr_logs"));
+            makeTree(joinPath(game, L"edup_logs"));
             writeAll(joinPath(game, L"EliteDangerous64.exe"), "not really the game");
-            writeAll(joinPath(game, L"edvr_logs\\edvr_gfx_20260827_140000.log"), "a session");
+            writeAll(joinPath(game, L"edup_logs\\edvr_gfx_20260827_140000.log"), "a session");
             return game;
         };
         auto namesFor = [&](const std::wstring& game, LogBundle* out) {
@@ -6574,17 +6574,17 @@ static void testLogBundle(const std::wstring& scratch) {
         const std::wstring older = makeGame(L"nativeini_older");
         makeTree(joinPath(older, L"Openvr"));
         writeAll(joinPath(older, L"Openvr\\openvr_api_orig.dll"), "the game's own");
-        writeAll(joinPath(older, L"Openvr\\edvr_openxr.ini"), "older layout");
-        check(bundleHas(namesFor(older, &b), "edvr_openxr.ini") &&
-                  zipPayloadEquals(b.zipPath, "edvr_openxr.ini", "older layout"),
+        writeAll(joinPath(older, L"Openvr\\edup_openxr.ini"), "older layout");
+        check(bundleHas(namesFor(older, &b), "edup_openxr.ini") &&
+                  zipPayloadEquals(b.zipPath, "edup_openxr.ini", "older layout"),
               "the startup file is found beside the runtime in the older Openvr\\ layout");
 
         // No openvr dll to search by: the installer's own default folder.
         const std::wstring noDll = makeGame(L"nativeini_nodll");
         makeTree(joinPath(noDll, L"Openvr\\win64"));
-        writeAll(joinPath(noDll, L"Openvr\\win64\\edvr_openxr.ini"), "default folder");
-        check(bundleHas(namesFor(noDll, &b), "edvr_openxr.ini") &&
-                  zipPayloadEquals(b.zipPath, "edvr_openxr.ini", "default folder"),
+        writeAll(joinPath(noDll, L"Openvr\\win64\\edup_openxr.ini"), "default folder");
+        check(bundleHas(namesFor(noDll, &b), "edup_openxr.ini") &&
+                  zipPayloadEquals(b.zipPath, "edup_openxr.ini", "default folder"),
               "with no openvr dll to go by, the startup file is taken from Openvr\\win64");
 
         // A VR install on the packaged defaults has no such file; that is not reported as a fault.
@@ -6592,16 +6592,16 @@ static void testLogBundle(const std::wstring& scratch) {
         const std::vector<std::string> absentNames = namesFor(absent, &b);
         bool absentNoted = false;
         for (const std::string& note : b.notes) absentNoted |= note.find("openxr") != std::string::npos;
-        check(!bundleHas(absentNames, "edvr_openxr.ini") && !absentNoted,
+        check(!bundleHas(absentNames, "edup_openxr.ini") && !absentNoted,
               "a VR install without the startup file adds no entry and no note");
 
         // A flat install has no such runtime: a leftover file is not collected.
         const std::wstring flatGame = makeGame(L"nativeini_flat");
-        writeAll(joinPath(flatGame, L"edvr_profile.ini"), "[install]\r\nschema = 1\r\nprofile = flat\r\n");
+        writeAll(joinPath(flatGame, L"edup_profile.ini"), "[install]\r\nschema = 1\r\nprofile = flat\r\n");
         makeTree(joinPath(flatGame, L"Openvr\\win64"));
         writeAll(joinPath(flatGame, L"Openvr\\win64\\openvr_api.dll"), "a leftover");
-        writeAll(joinPath(flatGame, L"Openvr\\win64\\edvr_openxr.ini"), "a leftover");
-        check(!bundleHas(namesFor(flatGame, &b), "edvr_openxr.ini"),
+        writeAll(joinPath(flatGame, L"Openvr\\win64\\edup_openxr.ini"), "a leftover");
+        check(!bundleHas(namesFor(flatGame, &b), "edup_openxr.ini"),
               "a flat install does not collect a leftover startup file");
     }
 
@@ -6692,7 +6692,7 @@ static Survey recordedBothSurvey(const std::wstring& dir, const PayloadInfo& vr)
     trecord(s.state, "openxr_license", tsha(vr, "openxr_license"));
     trecord(s.state, "runtime", tsha(vr, "runtime"));
     s.state.nativeConfigSha = "config-sha";
-    s.nativeConfig = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"edvr_openxr.ini"), "config-sha");
+    s.nativeConfig = fakeDll(DllKind::Edvr, joinPath(s.game.openvrDir, L"edup_openxr.ini"), "config-sha");
     s.iniPresent = true;
     s.iniText = kNextIni;
     s.baseIniText = kNextIni;
@@ -6717,15 +6717,15 @@ static void testScopes(const std::wstring& scratch) {
         const Plan both = planInstall(baseSurvey(dir), o, vr);
         check(!both.blocked && both.nextState.scope == "both" && both.nextState.profile == "vr",
               "a fresh VR installer installs scope both by default", unifiedProblems(both));
-        check(writesLeaf(both, L"edvr.ini") && writesLeaf(both, L"edvr-flat.ini") &&
-              writesLeaf(both, L"edvr.ini.base") && writesLeaf(both, L"edvr-flat.ini.base"),
+        check(writesLeaf(both, L"edup.ini") && writesLeaf(both, L"edup-flat.ini") &&
+              writesLeaf(both, L"edup.ini.base") && writesLeaf(both, L"edup-flat.ini.base"),
               "scope both writes both settings files and both bases");
         check(hasStep(both, Action::WritePayload, nullptr, L"openvr_api.dll"), "and the VR runtime");
-        expectEq(plannedText(both, L"edvr_profile.ini"), both2, "with the scope both descriptor");
-        expectEq(plannedText(both, L"edvr.ini.base"), kNextIni, "edvr.ini.base is the payload's edvr.ini");
-        expectEq(plannedText(both, L"edvr-flat.ini.base"), kTestFlatIni,
-                 "edvr-flat.ini.base is the payload's edvr-flat.ini");
-        expectEq(iniValue(plannedText(both, L"edvr-flat.ini"), "fix.temporal_aa"), "off",
+        expectEq(plannedText(both, L"edup_profile.ini"), both2, "with the scope both descriptor");
+        expectEq(plannedText(both, L"edup.ini.base"), kNextIni, "edup.ini.base is the payload's edup.ini");
+        expectEq(plannedText(both, L"edup-flat.ini.base"), kTestFlatIni,
+                 "edup-flat.ini.base is the payload's edup-flat.ini");
+        expectEq(iniValue(plannedText(both, L"edup-flat.ini"), "fix.temporal_aa"), "off",
                  "the flat file it writes is the payload's, at its defaults");
     }
     {
@@ -6733,12 +6733,12 @@ static void testScopes(const std::wstring& scratch) {
         vrOpt.scope = "vr";
         const Plan plan = planInstall(baseSurvey(dir), vrOpt, vr);
         check(!plan.blocked && plan.nextState.scope == "vr" && plan.nextState.profile == "vr",
-              "a fresh scope vr install takes the VR runtime and edvr.ini", unifiedProblems(plan));
-        check(writesLeaf(plan, L"edvr.ini") && writesLeaf(plan, L"edvr.ini.base") &&
+              "a fresh scope vr install takes the VR runtime and edup.ini", unifiedProblems(plan));
+        check(writesLeaf(plan, L"edup.ini") && writesLeaf(plan, L"edup.ini.base") &&
               hasStep(plan, Action::WritePayload, nullptr, L"openvr_api.dll"), "and its base");
-        check(!writesLeaf(plan, L"edvr-flat.ini") && !writesLeaf(plan, L"edvr-flat.ini.base"),
+        check(!writesLeaf(plan, L"edup-flat.ini") && !writesLeaf(plan, L"edup-flat.ini.base"),
               "and writes neither flat file");
-        expectEq(plannedText(plan, L"edvr_profile.ini"), vr2, "with the scope vr descriptor");
+        expectEq(plannedText(plan, L"edup_profile.ini"), vr2, "with the scope vr descriptor");
     }
     {
         Survey s = baseSurvey(dir);
@@ -6748,12 +6748,12 @@ static void testScopes(const std::wstring& scratch) {
         const Plan plan = planInstall(s, flatOpt, flat);
         check(!plan.blocked && plan.nextState.scope == "flat" && plan.nextState.profile == "flat",
               "a fresh flat installer installs scope flat", unifiedProblems(plan));
-        check(writesLeaf(plan, L"edvr-flat.ini") && writesLeaf(plan, L"edvr-flat.ini.base"),
-              "and writes edvr-flat.ini with its base");
-        check(!writesLeaf(plan, L"edvr.ini") && !writesLeaf(plan, L"edvr.ini.base") &&
+        check(writesLeaf(plan, L"edup-flat.ini") && writesLeaf(plan, L"edup-flat.ini.base"),
+              "and writes edup-flat.ini with its base");
+        check(!writesLeaf(plan, L"edup.ini") && !writesLeaf(plan, L"edup.ini.base") &&
               !hasStep(plan, Action::WritePayload, nullptr, L"openvr_api.dll"),
-              "and nothing VR: no edvr.ini, no base, no runtime");
-        expectEq(plannedText(plan, L"edvr_profile.ini"), flat2, "with the scope flat descriptor");
+              "and nothing VR: no edup.ini, no base, no runtime");
+        expectEq(plannedText(plan, L"edup_profile.ini"), flat2, "with the scope flat descriptor");
     }
 
     {   // Upgrades: a record with no scope reads its profile.
@@ -6768,9 +6768,9 @@ static void testScopes(const std::wstring& scratch) {
         const Plan plan = planInstall(s, o, vr);
         check(!plan.blocked && plan.nextState.scope == "both", "an old VR record with no scope upgrades to scope both",
               unifiedProblems(plan));
-        check(writesLeaf(plan, L"edvr-flat.ini"), "and its flat settings file is seeded from edvr.ini");
-        check(notesMention(plan, "Creating edvr-flat.ini from your edvr.ini"), "the report says where it came from");
-        expectEq(plannedText(plan, L"edvr_profile.ini"), both2, "and the descriptor becomes scope both");
+        check(writesLeaf(plan, L"edup-flat.ini"), "and its flat settings file is seeded from edup.ini");
+        check(notesMention(plan, "Creating edup-flat.ini from your edup.ini"), "the report says where it came from");
+        expectEq(plannedText(plan, L"edup_profile.ini"), both2, "and the descriptor becomes scope both");
     }
     {
         Survey s = installedFlatSurvey(dir, flat);
@@ -6786,11 +6786,11 @@ static void testScopes(const std::wstring& scratch) {
         const Plan plan = planInstall(recordedBothSurvey(dir, vr), toFlat, flat);
         check(!plan.blocked, "a recorded both install converts to flat through the proofs", unifiedProblems(plan));
         check(hasStep(plan, Action::Delete, L"openvr_api.dll", nullptr), "and the VR runtime is retired");
-        check(!deletesLeaf(plan, L"edvr.ini") && !deletesLeaf(plan, L"edvr-flat.ini"),
+        check(!deletesLeaf(plan, L"edup.ini") && !deletesLeaf(plan, L"edup-flat.ini"),
               "no settings file is deleted by the scope change");
         check(plan.nextState.scope == "flat", "and records scope flat");
     }
-    {   // Flat to both installs the runtime; edvr-flat.ini stays.
+    {   // Flat to both installs the runtime; edup-flat.ini stays.
         Survey s = installedFlatSurvey(dir, flat);
         s.flatIniPresent = true;
         s.flatIniText = kFlatOwnIni;
@@ -6800,21 +6800,21 @@ static void testScopes(const std::wstring& scratch) {
         const Plan plan = planInstall(s, both, vr);
         check(!plan.blocked && plan.nextState.scope == "both", "a flat install widens to scope both", unifiedProblems(plan));
         check(hasStep(plan, Action::WritePayload, nullptr, L"openvr_api.dll"), "and installs the VR runtime");
-        check(writesLeaf(plan, L"edvr.ini"), "and writes edvr.ini beside the flat file");
-        check(!deletesLeaf(plan, L"edvr-flat.ini") && !deletesLeaf(plan, L"edvr.ini"),
-              "edvr-flat.ini is kept, and nothing is deleted");
+        check(writesLeaf(plan, L"edup.ini"), "and writes edup.ini beside the flat file");
+        check(!deletesLeaf(plan, L"edup-flat.ini") && !deletesLeaf(plan, L"edup.ini"),
+              "edup-flat.ini is kept, and nothing is deleted");
     }
-    {   // Both to vr leaves edvr-flat.ini and its base exactly where they are.
+    {   // Both to vr leaves edup-flat.ini and its base exactly where they are.
         Options vrOpt = o;
         vrOpt.scope = "vr";
         const Plan plan = planInstall(recordedBothSurvey(dir, vr), vrOpt, vr);
         check(!plan.blocked && plan.nextState.scope == "vr", "scope both narrows to vr", unifiedProblems(plan));
-        check(!writesLeaf(plan, L"edvr-flat.ini") && !writesLeaf(plan, L"edvr-flat.ini.base") &&
-              !deletesLeaf(plan, L"edvr-flat.ini"),
-              "edvr-flat.ini and its base are left where they are");
-        expectEq(plannedText(plan, L"edvr_profile.ini"), vr2, "and the descriptor says vr");
+        check(!writesLeaf(plan, L"edup-flat.ini") && !writesLeaf(plan, L"edup-flat.ini.base") &&
+              !deletesLeaf(plan, L"edup-flat.ini"),
+              "edup-flat.ini and its base are left where they are");
+        expectEq(plannedText(plan, L"edup_profile.ini"), vr2, "and the descriptor says vr");
     }
-    {   // Vr to both seeds edvr-flat.ini from edvr.ini and writes its base.
+    {   // Vr to both seeds edup-flat.ini from edup.ini and writes its base.
         Survey s = recordedBothSurvey(dir, vr);
         s.state.scope = "vr";
         s.state.descriptorSha = sha256Bytes(vr2.data(), vr2.size());
@@ -6826,11 +6826,11 @@ static void testScopes(const std::wstring& scratch) {
         both.scope = "both";
         const Plan plan = planInstall(s, both, vr);
         check(!plan.blocked && plan.nextState.scope == "both", "scope vr widens to both", unifiedProblems(plan));
-        check(writesLeaf(plan, L"edvr-flat.ini") && writesLeaf(plan, L"edvr-flat.ini.base"),
-              "the flat file is created from edvr.ini, with its base");
-        expectEq(plannedText(plan, L"edvr_profile.ini"), both2, "and the descriptor says both");
+        check(writesLeaf(plan, L"edup-flat.ini") && writesLeaf(plan, L"edup-flat.ini.base"),
+              "the flat file is created from edup.ini, with its base");
+        expectEq(plannedText(plan, L"edup_profile.ini"), both2, "and the descriptor says both");
     }
-    {   // An older flat install's single base is no base for edvr.ini: the VR merge is two-way.
+    {   // An older flat install's single base is no base for edup.ini: the VR merge is two-way.
         Survey s = installedFlatSurvey(dir, flat);
         s.state.scope.clear();
         s.baseIniText = kFlatTemplate;
@@ -6842,21 +6842,21 @@ static void testScopes(const std::wstring& scratch) {
         both.scope = "both";
         const Plan plan = planInstall(s, both, vr);
         check(!plan.blocked, "a legacy flat record widens to both", unifiedProblems(plan));
-        check(plan.merge.twoWay, "edvr.ini merges two-way: the old flat-written base is not its base");
+        check(plan.merge.twoWay, "edup.ini merges two-way: the old flat-written base is not its base");
     }
 
     {   // Uninstall: the scope's settings files go with --remove-settings, and both bases always.
         const std::wstring udir = joinPath(scratch, L"scopes-uninstall");
         removeTree(udir);
-        makeTree(joinPath(udir, L"edvr_install"));
-        writeAll(joinPath(udir, L"edvr_install\\edvr.ini.base"), kNextIni);
-        writeAll(joinPath(udir, L"edvr_install\\edvr-flat.ini.base"), kFlatTemplate);
+        makeTree(joinPath(udir, L"edup_install"));
+        writeAll(joinPath(udir, L"edup_install\\edup.ini.base"), kNextIni);
+        writeAll(joinPath(udir, L"edup_install\\edup-flat.ini.base"), kFlatTemplate);
         Options gone = o;
         gone.removeSettings = true;
         const Plan removedBoth = planUninstall(recordedBothSurvey(udir, vr), gone);
-        check(deletesLeaf(removedBoth, L"edvr.ini") && deletesLeaf(removedBoth, L"edvr-flat.ini"),
+        check(deletesLeaf(removedBoth, L"edup.ini") && deletesLeaf(removedBoth, L"edup-flat.ini"),
               "scope both: --remove-settings removes both settings files");
-        check(deletesLeaf(removedBoth, L"edvr.ini.base") && deletesLeaf(removedBoth, L"edvr-flat.ini.base"),
+        check(deletesLeaf(removedBoth, L"edup.ini.base") && deletesLeaf(removedBoth, L"edup-flat.ini.base"),
               "and both bases");
         Survey vrOnly = recordedBothSurvey(udir, vr);
         // The descriptor on disk names the scope, so the scope vr install says so in both places.
@@ -6864,17 +6864,17 @@ static void testScopes(const std::wstring& scratch) {
         vrOnly.descriptorSha = descriptorShaFor("vr");
         vrOnly.state.descriptorSha = descriptorShaFor("vr");
         const Plan removedVr = planUninstall(vrOnly, gone);
-        check(deletesLeaf(removedVr, L"edvr.ini") && !deletesLeaf(removedVr, L"edvr-flat.ini"),
-              "scope vr: --remove-settings removes edvr.ini and leaves edvr-flat.ini");
-        check(deletesLeaf(removedVr, L"edvr.ini.base") && deletesLeaf(removedVr, L"edvr-flat.ini.base"),
+        check(deletesLeaf(removedVr, L"edup.ini") && !deletesLeaf(removedVr, L"edup-flat.ini"),
+              "scope vr: --remove-settings removes edup.ini and leaves edup-flat.ini");
+        check(deletesLeaf(removedVr, L"edup.ini.base") && deletesLeaf(removedVr, L"edup-flat.ini.base"),
               "and both bases still go");
     }
     {   // Planning writes nothing: every scope, both payloads and an uninstall are planned over real files.
         const std::wstring pdir = joinPath(scratch, L"scopes-plan");
         removeTree(pdir);
         makeTree(pdir);
-        writeAll(joinPath(pdir, L"edvr.ini"), kSharedIni);
-        writeAll(joinPath(pdir, L"edvr-flat.ini"), kFlatOwnIni);
+        writeAll(joinPath(pdir, L"edup.ini"), kSharedIni);
+        writeAll(joinPath(pdir, L"edup-flat.ini"), kFlatOwnIni);
         const std::string before = listing(pdir);
         const Survey s = diskSurvey(pdir);
         size_t steps = 0;
@@ -6965,7 +6965,7 @@ static void testInstallRecords() {
         trecord(st, "graphics", "g-sha");
         FileRecord r;
         r.id = "runtime"; r.root = "openvr"; r.path = "openvr_api.dll"; r.existing = "runtime";
-        r.sha256 = "r-sha"; r.beforeSha256 = "orig-sha"; r.backup = L"edvr_backup\\20261112-101010\\openvr_api.dll";
+        r.sha256 = "r-sha"; r.beforeSha256 = "orig-sha"; r.backup = L"edup_backup\\20261112-101010\\openvr_api.dll";
         st.put(r);
         const InstallState back = parseState(serializeState(st));
         const FileRecord* g = back.file("graphics");
@@ -7105,7 +7105,7 @@ static void testInstallRecords() {
         const Plan plan = planInstall(s, testOptions(), p);
         const FileRecord* l = plan.nextState.file("openxr_loader");
         check(l && l->root == "openvr" && l->path == "openxr_loader.dll" && l->existing == "replace" && l->sha256 == tsha(p, "openxr_loader") &&
-              l->beforeSha256 == "their-loader" && toUtf8(l->backup).find("edvr_backup") == 0,
+              l->beforeSha256 == "their-loader" && toUtf8(l->backup).find("edup_backup") == 0,
               "a replaced file's record names its place, behaviour, hash, and the backup of what it displaced");
         check(plan.nextState.file("graphics") && plan.nextState.file("settings_vr") && plan.nextState.file("settings_flat"),
               "every placed file has a record, settings included");
@@ -7155,7 +7155,7 @@ static void testSchemaReviewFixes(const std::wstring& scratch) {
         const Plan plan = planInstall(s, testOptions(), p);
         check(!plan.blocked, "an update from an SDK-less build plans", unifiedProblems(plan));
         bool deletes = false;
-        for (const Step& st : plan.steps) deletes |= st.action == Action::Delete && st.from.find(dir) == 0 && leafOf(st.from) != L"edvr_profile.ini";
+        for (const Step& st : plan.steps) deletes |= st.action == Action::Delete && st.from.find(dir) == 0 && leafOf(st.from) != L"edup_profile.ini";
         check(!deletes, "and deletes none of the vendor files an earlier install placed");
         check(!plan.nextState.shaOf("dlss").empty() && !plan.nextState.shaOf("xess").empty() &&
               !plan.nextState.shaOf("xess_license").empty() && !plan.nextState.shaOf("xess_third_party").empty(),
@@ -7377,7 +7377,7 @@ static void testReviewFollowUps(const std::wstring& scratch) {
         PayloadInfo p;
         tfile(p, "settings_vr", "NEW-BYTES");
         Plan plan;
-        plan.backupDir = joinPath(game, L"edvr_backup\\recheck");
+        plan.backupDir = joinPath(game, L"edup_backup\\recheck");
         Step write;
         write.action = Action::WritePayload; write.item = "settings_vr"; write.to = path; write.why = "writes";
         Step del;
@@ -7447,15 +7447,15 @@ static void testReviewFollowUps(const std::wstring& scratch) {
         };
         record("graphics", "game", "d3d11.dll", ExistingMode::Chain);                 // legal
         record("runtime", "openvr", "openvr_api.dll", ExistingMode::Runtime);        // legal
-        record("settings_flat", "game", "edvr-flat.ini", ExistingMode::Settings);    // legal
+        record("settings_flat", "game", "edup-flat.ini", ExistingMode::Settings);    // legal
         record("plain", "game", "sub/x.dll", ExistingMode::Replace);                  // legal
         record("badchain", "game", "EliteDangerous64.exe", ExistingMode::Chain);
         record("badruntime", "game", "openvr_api.dll", ExistingMode::Runtime);
         record("badsettings", "game", "other.ini", ExistingMode::Settings);
-        record("badsettingsroot", "openvr", "edvr.ini", ExistingMode::Settings);
-        record("reserved", "game", "edvr_profile.ini", ExistingMode::Replace);
+        record("badsettingsroot", "openvr", "edup.ini", ExistingMode::Settings);
+        record("reserved", "game", "edup_profile.ini", ExistingMode::Replace);
         record("reservedchain", "game", "d3d11_edhm.dll", ExistingMode::Replace);
-        record("backupdir", "game", "edvr_backup/a.dll", ExistingMode::Owned);
+        record("backupdir", "game", "edup_backup/a.dll", ExistingMode::Owned);
         const InstallState back = parseState(serializeState(st));
         check(back.file("graphics") && back.file("runtime") && back.file("settings_flat") && back.file("plain"),
               "records that satisfy the manifest's target check load");
@@ -7758,9 +7758,9 @@ int wmain(int argc, wchar_t** argv) {
         removeTree(dir);
         const std::wstring openvr = joinPath(dir, L"Openvr\\win64");
         makeTree(openvr);
-        makeTree(joinPath(dir, L"edvr_logs"));
-        makeTree(joinPath(dir, L"edvr_backup\\old"));
-        makeTree(joinPath(dir, L"edvr_install"));
+        makeTree(joinPath(dir, L"edup_logs"));
+        makeTree(joinPath(dir, L"edup_backup\\old"));
+        makeTree(joinPath(dir, L"edup_install"));
         const std::string stock = syntheticPe({"VR_InitInternal", "VR_GetGenericInterface"});
         const std::string edvrRt = syntheticPe({"VR_InitInternal", "edvrConfigureNativeRuntime"});
         const std::string edvrGfx = syntheticPe({"edvrAcquireNativeGraphics"});
@@ -7768,13 +7768,13 @@ int wmain(int argc, wchar_t** argv) {
         writeAll(joinPath(dir, L"d3d11.dll"), edvrGfx);
         writeAll(joinPath(openvr, L"openvr_api.dll"), edvrRt);
         writeAll(joinPath(openvr, L"openvr_api_orig.dll"), stock);
-        writeAll(joinPath(dir, L"edvr.ini"), "[fix]\n");
-        writeAll(joinPath(dir, L"edvr-flat.ini"), "[fix]\n");
-        writeAll(joinPath(dir, L"edvr_breadcrumbs.txt"), "crumb");
-        writeAll(joinPath(dir, L"edvr_FATAL.txt"), "fatal");
-        writeAll(joinPath(dir, L"edvr_logs\\session.log"), "log");
-        writeAll(joinPath(dir, L"edvr_backup\\old\\d3d11.dll"), "bak");
-        writeAll(joinPath(dir, L"edvr_install\\install.state"), "profile=vr\nscope=both\n");
+        writeAll(joinPath(dir, L"edup.ini"), "[fix]\n");
+        writeAll(joinPath(dir, L"edup-flat.ini"), "[fix]\n");
+        writeAll(joinPath(dir, L"edup_breadcrumbs.txt"), "crumb");
+        writeAll(joinPath(dir, L"edup_FATAL.txt"), "fatal");
+        writeAll(joinPath(dir, L"edup_logs\\session.log"), "log");
+        writeAll(joinPath(dir, L"edup_backup\\old\\d3d11.dll"), "bak");
+        writeAll(joinPath(dir, L"edup_install\\state.ini"), "[edvr]\r\nversion = 0.22.0\r\nprofile = vr\r\nscope = both\r\n");
 
         PayloadInfo p = testPayload(kNextIni);
         Survey s = surveyTarget(baseSurvey(dir).game);
@@ -7787,44 +7787,45 @@ int wmain(int argc, wchar_t** argv) {
         const Plan plan = planUninstall(s, purgeOpts, p);
         check(!plan.blocked && !plan.nothingToDo, "clean purge plan is not blocked");
         check(!hasStep(plan, Action::Backup, nullptr, nullptr), "clean purge creates no new backups");
-        check(hasStep(plan, Action::Delete, L"edvr.ini", nullptr) &&
-              hasStep(plan, Action::Delete, L"edvr-flat.ini", nullptr),
-              "clean purge deletes both edvr.ini and edvr-flat.ini");
-        check(hasStep(plan, Action::RemoveDir, L"edvr_logs", nullptr) &&
-              hasStep(plan, Action::RemoveDir, L"edvr_backup", nullptr) &&
-              hasStep(plan, Action::RemoveDir, L"edvr_install", nullptr),
-              "clean purge removes edvr_logs, edvr_backup and edvr_install");
-        // edvr_backup\ must be the last RemoveDir so rollback snapshots stay intact if an earlier step fails.
+        check(hasStep(plan, Action::Delete, L"edup.ini", nullptr) &&
+              hasStep(plan, Action::Delete, L"edup-flat.ini", nullptr),
+              "clean purge deletes both edup.ini and edup-flat.ini");
+        check(hasStep(plan, Action::RemoveDir, L"edup_logs", nullptr) &&
+              hasStep(plan, Action::RemoveDir, L"edup_backup", nullptr) &&
+              hasStep(plan, Action::RemoveDir, L"edup_install", nullptr),
+              "clean purge removes edup_logs, edup_backup and edup_install");
+        // edup_backup\ must be the last RemoveDir so rollback snapshots stay intact if an earlier step fails.
         int installIdx = -1, backupIdx = -1;
         for (size_t i = 0; i < plan.steps.size(); ++i) {
             if (plan.steps[i].action == Action::RemoveDir) {
-                if (leafOf(plan.steps[i].to) == L"edvr_install") installIdx = static_cast<int>(i);
-                if (leafOf(plan.steps[i].to) == L"edvr_backup") backupIdx = static_cast<int>(i);
+                if (leafOf(plan.steps[i].from) == L"edup_install") installIdx = static_cast<int>(i);
+                if (leafOf(plan.steps[i].from) == L"edup_backup") backupIdx = static_cast<int>(i);
             }
         }
         check(installIdx >= 0 && backupIdx > installIdx,
-              "clean purge removes edvr_backup after edvr_install");
+              "clean purge removes edup_backup after edup_install");
 
-        // Flat-scope clean purge must leave VR's edvr.ini intact while deleting edvr-flat.ini.
+        // Flat-scope clean purge must leave VR's edup.ini intact while deleting edup-flat.ini.
         {
-            Options flatPurge = purgeOpts;
-            flatPurge.scope = "flat";
-            const Plan flatPlan = planUninstall(s, flatPurge, p);
-            check(!hasStep(flatPlan, Action::Delete, L"edvr.ini", nullptr) &&
-                  hasStep(flatPlan, Action::Delete, L"edvr-flat.ini", nullptr),
-                  "flat-scope clean purge removes edvr-flat.ini without deleting VR's edvr.ini");
+            Survey flatS = s;
+            flatS.state.profile = "flat";
+            flatS.state.scope = "flat";
+            const Plan flatPlan = planUninstall(flatS, purgeOpts, p);
+            check(!hasStep(flatPlan, Action::Delete, L"edup.ini", nullptr) &&
+                  hasStep(flatPlan, Action::Delete, L"edup-flat.ini", nullptr),
+                  "flat-scope clean purge removes edup-flat.ini without deleting VR's edup.ini");
         }
 
         const ApplyResult applied = applyPlan(plan, [](const std::string&, const void**, size_t*) { return false; });
         check(applied.ok, "clean purge applies cleanly", applied.error);
         check(!fileExists(joinPath(dir, L"d3d11.dll")) &&
-              !fileExists(joinPath(dir, L"edvr.ini")) &&
-              !fileExists(joinPath(dir, L"edvr-flat.ini")) &&
-              !fileExists(joinPath(dir, L"edvr_breadcrumbs.txt")) &&
-              !fileExists(joinPath(dir, L"edvr_FATAL.txt")) &&
-              !dirExists(joinPath(dir, L"edvr_logs")) &&
-              !dirExists(joinPath(dir, L"edvr_backup")) &&
-              !dirExists(joinPath(dir, L"edvr_install")),
+              !fileExists(joinPath(dir, L"edup.ini")) &&
+              !fileExists(joinPath(dir, L"edup-flat.ini")) &&
+              !fileExists(joinPath(dir, L"edup_breadcrumbs.txt")) &&
+              !fileExists(joinPath(dir, L"edup_FATAL.txt")) &&
+              !dirExists(joinPath(dir, L"edup_logs")) &&
+              !dirExists(joinPath(dir, L"edup_backup")) &&
+              !dirExists(joinPath(dir, L"edup_install")),
               "all ED-UP files and directories are removed");
         check(fileExists(joinPath(dir, L"EliteDangerous64.exe")) &&
               readAll(joinPath(openvr, L"openvr_api.dll")) == stock,
@@ -7867,6 +7868,130 @@ int wmain(int argc, wchar_t** argv) {
             check(!row.parseTyped(L"CTRL+", &parsed), "dangling modifier is rejected");
             check(!row.parseTyped(L"231D0200:Joy_999", &parsed), "out-of-range joystick button is rejected");
         }
+    }
+
+    {   // Per-user %LOCALAPPDATA%\EDUP settings storage (Option 2) and safe legacy edvr migration.
+        printf("\nper-user settings storage and legacy edvr->edup migration\n");
+        const std::wstring migRoot = joinPath(scratch, L"edup_migration_test");
+        removeTree(migRoot);
+        const std::wstring fakeLocal = joinPath(migRoot, L"local");
+        const std::wstring edupRoot = joinPath(fakeLocal, L"EDUP");
+        const std::wstring edvrRoot = joinPath(fakeLocal, L"EDVR");
+        const std::wstring gameDir = joinPath(migRoot, L"elite-dangerous-odyssey-64");
+        const std::wstring openvr = joinPath(gameDir, L"Openvr\\win64");
+        makeTree(openvr);
+        makeTree(joinPath(edvrRoot, L"launcher"));
+        makeTree(joinPath(edvrRoot, L"payload"));
+        const std::wstring legacyMirror = joinPath(edvrRoot, L"elite-dangerous-odyssey-64-steam");
+        const std::wstring userSettingsDir = joinPath(edupRoot, L"elite-dangerous-odyssey-64-steam");
+        makeTree(legacyMirror);
+
+        // Seed legacy %LOCALAPPDATA%\EDVR artifacts to verify non-destructive data-root migration.
+        writeAll(joinPath(edvrRoot, L"launcher\\launcher.ini"), "channel=rc\r\n");
+        writeAll(joinPath(edvrRoot, L"launcher\\ed-up-launcher.exe"), "old-exe");
+        writeAll(joinPath(edvrRoot, L"payload\\cached.zip"), "zipbytes");
+        writeAll(joinPath(edvrRoot, L"game_vram.txt"), "vram-record");
+        writeAll(joinPath(edvrRoot, L"last-station.txt"), "station-record");
+        writeAll(joinPath(legacyMirror, L"seat.txt"), "edvr-seat 1\n");
+        const std::string staleMirrorIni = "[fix]\r\nblack_void = 0\r\n";
+        writeAll(joinPath(legacyMirror, L"edvr.ini"), staleMirrorIni);
+        // Backdate stale mirror so newer game-dir edits win timestamp comparison.
+        {
+            HANDLE h = CreateFileW(joinPath(legacyMirror, L"edvr.ini").c_str(), FILE_WRITE_ATTRIBUTES,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (h != INVALID_HANDLE_VALUE) {
+                FILETIME oldFt{0x10000000u, 0x01D80000u};
+                SetFileTime(h, &oldFt, &oldFt, &oldFt);
+                CloseHandle(h);
+            }
+        }
+
+        check(migrateLegacyDataRoot(edupRoot), "migrateLegacyDataRoot migrates legacy %LOCALAPPDATA%\\EDVR tree");
+        check(readAll(joinPath(edupRoot, L"launcher\\launcher.ini")) == "channel=rc\r\n" &&
+              readAll(joinPath(edupRoot, L"payload\\cached.zip")) == "zipbytes" &&
+              readAll(joinPath(edupRoot, L"game_vram.txt")) == "vram-record" &&
+              readAll(joinPath(edupRoot, L"last-station.txt")) == "station-record" &&
+              readAll(joinPath(userSettingsDir, L"seat.txt")) == "edvr-seat 1\n" &&
+              !fileExists(joinPath(edupRoot, L"launcher\\ed-up-launcher.exe")) &&
+              !fileExists(joinPath(userSettingsDir, L"edup.ini")),
+              "data-root migration copies state/cache/seat, skips launcher exe, and leaves edvr.ini for timestamp-aware migration");
+
+        // Existing older install: user-edited edvr.ini / edvr-flat.ini in gameDir + legacy edvr_install / edvr_profile / edvr_openxr.
+        const std::string stockOvr = syntheticPe({"VR_InitInternal", "VR_GetGenericInterface"});
+        const std::string userVrIni = "[fix]\r\nblack_void = 1\r\npanel_distance = 0.77\r\n";
+        const std::string userFlatIni = "[fix]\r\ntemporal_aa = xess\r\n";
+        const std::string shippedVrIni = "[fix]\r\nblack_void = 1\r\npanel_distance = 0.0\r\nnew_opt = 1\r\n";
+        const std::string shippedFlatIni = "[fix]\r\ntemporal_aa = off\r\nui_quality = 100\r\n";
+        writeAll(joinPath(gameDir, L"EliteDangerous64.exe"), "stub");
+        writeAll(joinPath(openvr, L"openvr_api.dll"), stockOvr);
+        writeAll(joinPath(gameDir, L"edvr.ini"), userVrIni);
+        writeAll(joinPath(gameDir, L"edvr-flat.ini"), userFlatIni);
+        writeAll(joinPath(gameDir, L"edvr_profile.ini"), "[install]\r\nschema = 2\r\nscope = both\r\n");
+        writeAll(joinPath(openvr, L"edvr_openxr.ini"), "[openxr]\r\nversion=1\r\nloader=x\r\ngraphics=y\r\nruntime=system\r\nseparate_device=1\r\n");
+        makeTree(joinPath(gameDir, L"edvr_install"));
+        writeAll(joinPath(gameDir, L"edvr_install\\edvr.ini.base"), "[fix]\r\nblack_void = 1\r\npanel_distance = 0.0\r\n");
+        writeAll(joinPath(gameDir, L"edvr_install\\state.ini"), "[edvr]\r\nversion = 0.22.0\r\nscope = both\r\nstore_source = Steam\r\n");
+
+        GameInstall gi;
+        gi.dir = gameDir;
+        gi.openvrDir = openvr;
+        gi.source = L"Steam";
+        Survey migSurvey = surveyTarget(gi, userSettingsDir);
+        migSurvey.eliteKind = EliteExeKind::OdysseyQualified;
+        migSurvey.gameRunningHere = migSurvey.gameRunningElsewhere = migSurvey.gameRunStateUnknown = false;
+        check(migSurvey.iniPresent && migSurvey.iniFromLegacy && migSurvey.iniText == userVrIni,
+              "surveyTarget selects newer game-dir edvr.ini over stale legacy EDVR mirror");
+        check(migSurvey.flatIniPresent && migSurvey.flatIniFromLegacy && migSurvey.flatIniText == userFlatIni,
+              "surveyTarget picks up legacy game-dir edvr-flat.ini");
+        check(!migSurvey.legacyIniPaths.empty() && !migSurvey.legacyFlatIniPaths.empty() &&
+              !migSurvey.legacyDescriptorPath.empty() && !migSurvey.legacyNativeConfigPath.empty(),
+              "surveyTarget marks legacy edvr files for safe backup and removal");
+
+        PayloadInfo migPayload = testPayload(shippedVrIni);
+        tsetText(migPayload, "settings_flat", shippedFlatIni);
+        Options migOpts = testOptions();
+        migOpts.scope = "both";
+        migOpts.settingsDir = userSettingsDir;
+        const Plan migPlan = planInstall(migSurvey, migOpts, migPayload);
+        check(!migPlan.blocked && !migPlan.nothingToDo, "legacy migration install plan succeeds");
+        const ApplyResult migApplied = applyPlan(migPlan, [&](const std::string& id, const void** data, size_t* size) {
+            const PayloadFileEntry* e = migPayload.find(id);
+            if (!e) return false;
+            *data = e->data; *size = e->size;
+            return true;
+        });
+        check(migApplied.ok, "legacy migration plan applies cleanly", migApplied.error);
+
+        const std::string migratedVr = readAll(joinPath(userSettingsDir, L"edup.ini"));
+        const std::string migratedFlat = readAll(joinPath(userSettingsDir, L"edup-flat.ini"));
+        check(iniValue(migratedVr, "fix.panel_distance") == "0.77" &&
+              iniValue(migratedVr, "fix.new_opt") == "1",
+              "migrated per-user edup.ini preserves user edits and adopts new defaults");
+        check(iniValue(migratedFlat, "fix.temporal_aa") == "xess" &&
+              iniValue(migratedFlat, "fix.ui_quality") == "100",
+              "migrated per-user edup-flat.ini preserves user edits and adopts new defaults");
+        check(!fileExists(joinPath(gameDir, L"edvr.ini")) &&
+              !fileExists(joinPath(gameDir, L"edvr-flat.ini")) &&
+              !fileExists(joinPath(gameDir, L"edup.ini")) &&
+              !fileExists(joinPath(gameDir, L"edup-flat.ini")),
+              "neither legacy edvr*.ini nor new edup*.ini remains in the game directory");
+        check(fileExists(joinPath(migPlan.backupDir, L"edvr.ini")) &&
+              fileExists(joinPath(migPlan.backupDir, L"edvr-flat.ini")),
+              "legacy edvr.ini and edvr-flat.ini were backed up into edup_backup before removal");
+        check(fileExists(joinPath(gameDir, L"edup_profile.ini")) &&
+              !fileExists(joinPath(gameDir, L"edvr_profile.ini")) &&
+              fileExists(joinPath(openvr, L"edup_openxr.ini")) &&
+              !fileExists(joinPath(openvr, L"edvr_openxr.ini")) &&
+              fileExists(statePath(gameDir)) &&
+              !dirExists(legacyStateDirPath(gameDir)),
+              "profile descriptor, OpenXR config and install record migrated from edvr_* to edup_*");
+
+        // SettingsModel edits the per-user edup.ini directly without writing to gameDir.
+        SettingsModel userModel;
+        check(userModel.load(gameDir, "vr", userSettingsDir) &&
+              _wcsicmp(userModel.iniPath().c_str(), joinPath(userSettingsDir, L"edup.ini").c_str()) == 0,
+              "SettingsModel targets %LOCALAPPDATA%\\EDUP\\<install>\\edup.ini");
+        removeTree(migRoot);
     }
 
     printf("\n%s\n", g_fails == 0 ? "installer_test: all good" : "installer_test: FAILURES");

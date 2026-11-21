@@ -1,7 +1,7 @@
 // The rig for the breadcrumb heartbeat's writer thread (src\common\heartbeat_writer.h, src\common\proxy.cpp,
 // docs/freeze-diagnostics-2026-10-01.md, commit 3).
 //
-// The heartbeat used to write edvr_breadcrumbs.txt on the render thread. It is written by a thread of its own now,
+// The heartbeat used to write edup_breadcrumbs.txt on the render thread. It is written by a thread of its own now,
 // and what has to survive the move is what the file MEANS: the last line before a crash or a kill must still say
 // something true. Every check's label starts with its case id (H1..H10), which is how
 // tools\heartbeat_writer_test\mutants.py tells a mutation that tripped the right check from one that tripped
@@ -442,8 +442,8 @@ uint64_t aliveFrame(const std::string& line) {
     return at == std::string::npos ? 0 : std::strtoull(line.c_str() + at + 18, nullptr, 10);
 }
 
-void deleteCrumbs() { DeleteFileW((exeDir() + L"edvr_breadcrumbs.txt").c_str()); }
-std::vector<std::string> crumbLines() { return linesOf(readFile(exeDir() + L"edvr_breadcrumbs.txt")); }
+void deleteCrumbs() { DeleteFileW((exeDir() + L"edup_breadcrumbs.txt").c_str()); }
+std::vector<std::string> crumbLines() { return linesOf(readFile(exeDir() + L"edup_breadcrumbs.txt")); }
 
 // ---- H7 ---------------------------------------------------------------------------------------------------------
 void realCases() {
@@ -550,7 +550,7 @@ void deathCases() {
     lines = crumbLines();
     check(killCode == 0xC0DEu && !lines.empty() && isAlive(lines.back()) && aliveFrame(lines.back()) > 1,
           "H9.kill: a killed session's last line is a whole heartbeat line with a frame number: it dated the death to the half-minute it always did");
-    const std::string raw = readFile(exeDir() + L"edvr_breadcrumbs.txt");
+    const std::string raw = readFile(exeDir() + L"edup_breadcrumbs.txt");
     check(raw.size() > 2 && raw.compare(raw.size() - 2, 2, "\r\n") == 0, "H9.whole: and the file ends at a line end, not in the middle of one");
     deleteCrumbs();
 }

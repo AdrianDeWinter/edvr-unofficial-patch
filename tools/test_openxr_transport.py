@@ -93,7 +93,7 @@ def run_ticks(executable: Path, proxy: Path) -> int:
             directory = Path(temporary).resolve()
             staged = directory / "d3d11.dll"
             shutil.copyfile(proxy, staged)
-            (directory / "edvr.ini").write_text(configuration("shared", "off", directory, log=True, hotkey=first), encoding="utf-8")
+            (directory / "edup.ini").write_text(configuration("shared", "off", directory, log=True, hotkey=first), encoding="utf-8")
             command = [str(executable), "--graphics-proxy", str(staged), "--tick-live"]
             if then is not None:
                 replacement = directory / "edvr-rebind.ini"
@@ -139,7 +139,7 @@ def run_matrix(executable: Path, proxy: Path, *, dry_run: bool = False) -> int:
             directory = Path(temporary).resolve()
             staged = directory / "d3d11.dll"
             shutil.copyfile(proxy, staged)
-            (directory / "edvr.ini").write_text(configuration(mode, probe, directory), encoding="utf-8")
+            (directory / "edup.ini").write_text(configuration(mode, probe, directory), encoding="utf-8")
             expectation = "--transport-only" if probe == "off" else "--unavailable"
             command = [str(executable), "--graphics-proxy", str(staged), expectation]
             print(f"[edvr] transport fixture: mode={mode}, probe={probe}", flush=True)
@@ -186,11 +186,11 @@ def self_test() -> int:
                 def fail(command, **kwargs):
                     target = Path(command[2]); staged.append(target.parent)
                     self.assertEqual(target.read_bytes(), b"dll")
-                    self.assertTrue((target.parent / "edvr.ini").is_file())
+                    self.assertTrue((target.parent / "edup.ini").is_file())
                     self.assertEqual(command[-1], "--transport-only")
                     # The tap's test switch is the environment, and the ini carries no tap key.
                     self.assertEqual(kwargs["env"][TAP_OFF_VARIABLE], "1")
-                    self.assertNotIn("camera", (target.parent / "edvr.ini").read_text(encoding="utf-8"))
+                    self.assertNotIn("camera", (target.parent / "edup.ini").read_text(encoding="utf-8"))
                     return subprocess.CompletedProcess(command, 7, b"failed\n")
                 with mock.patch.object(subprocess, "run", side_effect=fail) as child, \
                      contextlib.redirect_stdout(io.StringIO()):
@@ -222,7 +222,7 @@ def self_test() -> int:
                 seen = []
                 def child(command, **kwargs):
                     cwd = Path(kwargs["cwd"])
-                    seen.append((command[3:], (cwd / "edvr.ini").read_text(encoding="utf-8"),
+                    seen.append((command[3:], (cwd / "edup.ini").read_text(encoding="utf-8"),
                                  (cwd / "edvr-rebind.ini").read_text(encoding="utf-8") if (cwd / "edvr-rebind.ini").is_file() else None))
                     return subprocess.CompletedProcess(command, 0, b"tick_live: PASS\n")
                 with mock.patch.object(subprocess, "run", side_effect=child), \

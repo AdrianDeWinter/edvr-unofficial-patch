@@ -2190,8 +2190,8 @@ std::wstring copyOfSystemDll(const std::wstring& dest) {
 void testCore() {
     section("core");
     const LauncherRoots real = launcherRoots(L"");
-    check(real.canonical && !real.dataRoot.empty() && real.dataRoot.size() > 4 && real.dataRoot.substr(real.dataRoot.size() - 4) == L"EDVR",
-          "with no --data-root the root is %LOCALAPPDATA%\\EDVR and the run is canonical");
+    check(real.canonical && !real.dataRoot.empty() && real.dataRoot.size() > 4 && real.dataRoot.substr(real.dataRoot.size() - 4) == L"EDUP",
+          "with no --data-root the root is %LOCALAPPDATA%\\EDUP and the run is canonical");
     const LauncherRoots trial = launcherRoots(L"C:\\scratch\\root");
     check(!trial.canonical && trial.dataRoot == L"C:\\scratch\\root" && trial.launcherDir() == L"C:\\scratch\\root\\launcher" &&
               trial.cacheDir() == L"C:\\scratch\\root\\payload" && trial.exePath() == L"C:\\scratch\\root\\launcher\\ed-up-launcher.exe",
@@ -2225,7 +2225,7 @@ void testCore() {
         };
         const std::wstring dir = fresh("core-folder");
         copyOfSystemDll(P(dir, L"d3d11.dll"));
-        writeAll(P(dir, L"edvr.ini"), "[fix]\nx=1\n");
+        writeAll(P(dir, L"edup.ini"), "[fix]\nx=1\n");
         writeAll(P(dir, L"Openvr\\openvr_api.dll"), "runtime");
         writeAll(P(dir, L"unrelated.txt"), "ignored");
         // The manifest carries each present file's real hash: listPayloadFolder hands it on and usePayloadFiles checks the folder against it.
@@ -2233,7 +2233,7 @@ void testCore() {
         const std::string iniSha = sha("[fix]\nx=1\n");
         const std::string runtimeSha = sha("runtime");
         const std::string table = fileEntry("graphics", "d3d11.dll", "game", "d3d11.dll", "{\"profile\": [\"vr\", \"flat\"]}", "chain", graphicsSha) + "," +
-                                  fileEntry("settings_vr", "edvr.ini", "game", "edvr.ini", "{\"profile\": [\"vr\"]}", "settings", iniSha) + "," +
+                                  fileEntry("settings_vr", "edup.ini", "game", "edup.ini", "{\"profile\": [\"vr\"]}", "settings", iniSha) + "," +
                                   fileEntry("runtime", "Openvr/openvr_api.dll", "openvr", "openvr_api.dll", "{\"profile\": [\"vr\"]}", "runtime", runtimeSha) + "," +
                                   fileEntry("dlss", "nvngx_dlss.dll", "game", "nvngx_dlss.dll", "{\"adapter\": \"nvidia\"}", "owned");
         writeAll(P(dir, L"ed-up-manifest-v2.json"), manifestText("2", table));
@@ -2257,7 +2257,7 @@ void testCore() {
         check(load.ok && load.kind == PayloadKind::Folder && load.version == version, "loadLauncherPayload takes the folder: " + load.note);
         const void* data = nullptr;
         size_t size = 0;
-        check(payloadItem("settings_vr", &data, &size) && std::string(static_cast<const char*>(data), size) == "[fix]\nx=1\n", "payloadItem now serves the folder's edvr.ini");
+        check(payloadItem("settings_vr", &data, &size) && std::string(static_cast<const char*>(data), size) == "[fix]\nx=1\n", "payloadItem now serves the folder's edup.ini");
         check(payloadPresent(payloadInfo()) && payloadInfo().version == version, "payloadPresent says there is a payload, with its version");
         resetPayloadFiles();
         check(!payloadPresent(payloadInfo()), "reset: a build with no embedded resources has no payload (the state the launcher starts in)");
@@ -2271,7 +2271,7 @@ void testCore() {
         // (A fresh folder: the files of the first one stay mapped for the pointers payloadItem handed out.)
         const std::wstring tamperedDir = fresh("core-folder-tampered");
         copyOfSystemDll(P(tamperedDir, L"d3d11.dll"));
-        writeAll(P(tamperedDir, L"edvr.ini"), "[fix]\nx=2\n");
+        writeAll(P(tamperedDir, L"edup.ini"), "[fix]\nx=2\n");
         writeAll(P(tamperedDir, L"Openvr\\openvr_api.dll"), "runtime");
         writeAll(P(tamperedDir, L"ed-up-manifest-v2.json"), manifestText("2", table));
         const PayloadLoad tampered = loadLauncherPayload(roots, tamperedDir, g_testKeys);
@@ -2337,7 +2337,7 @@ void testCore() {
     {
         const std::wstring game = fresh("core-dev");
         check(!isDeveloperInstall(game), "a folder with no receipt and no record is not a developer's");
-        writeAll(P(game, L"edvr_install\\state.ini"), "version=1\n");
+        writeAll(P(game, L"edup_install\\state.ini"), "version=1\n");
         check(!isDeveloperInstall(game), "a record alone is not either");
         auto stamp = [](const std::wstring& path, int secondsFromNow) {
             HANDLE f = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -2351,7 +2351,7 @@ void testCore() {
             SetFileTime(f, nullptr, nullptr, &ft);
             CloseHandle(f);
         };
-        stamp(P(game, L"edvr_install\\state.ini"), -1000);
+        stamp(P(game, L"edup_install\\state.ini"), -1000);
         writeAll(P(game, L"edvr_native_receipt.json"), "{}");
         stamp(P(game, L"edvr_native_receipt.json"), -2000);
         check(!isDeveloperInstall(game), "a receipt older than the record is the launcher's own past, not a developer's");
@@ -2426,7 +2426,7 @@ void testRegister() {
     writeAll(P(t.launcherDir, L"launcher.ini"), "channel=rc\n");
     writeAll(P(P(t.launcherDir, L"manifests"), L"x.json"), "{}");
     writeAll(P(t.payloadDir, L"abc"), "cached");
-    writeAll(P(root, L"mirror-folder\\edvr.ini"), "settings");   // beside the launcher folder, as the real mirror is
+    writeAll(P(root, L"mirror-folder\\edup.ini"), "settings");   // beside the launcher folder, as the real mirror is
 
     // An earlier build's ED-UP.lnk that starts this launcher is replaced by the new shortcut.
     CreateDirectoryW(t.startMenuDir.c_str(), nullptr);
@@ -2470,7 +2470,7 @@ void testRegister() {
     check(exists(P(wrong.launcherDir, L"precious.txt")) && exists(link), "and nothing was removed");
     wrong = t;
     wrong.payloadDir = P(root, L"mirror-folder");
-    check(!unregisterLauncher(wrong, std::wstring(), &result, &err) && contains(err, "payload") && exists(P(root, L"mirror-folder\\edvr.ini")), "a cache folder not named payload is refused: " + err);
+    check(!unregisterLauncher(wrong, std::wstring(), &result, &err) && contains(err, "payload") && exists(P(root, L"mirror-folder\\edup.ini")), "a cache folder not named payload is refused: " + err);
 
     // The running exe cannot be deleted: it is held open here without delete sharing, as Windows holds a running image.
     check(makeShortcut(P(t.startMenuDir, L"ED-UP.lnk"), t.exePath), "an earlier build's shortcut can be made for the unregister check");
@@ -2482,7 +2482,7 @@ void testRegister() {
     check(!exists(t.payloadDir), "the downloaded files are gone");
     check(!exists(P(t.launcherDir, L"launcher.ini")) && !exists(P(t.launcherDir, L"manifests")), "the launcher folder's other contents are gone");
     check(result.exeRemains && exists(t.exePath), "the exe that is running stays, and the result says so");
-    check(exists(P(root, L"mirror-folder\\edvr.ini")), "the settings copy beside the launcher folder is untouched");
+    check(exists(P(root, L"mirror-folder\\edup.ini")), "the settings copy beside the launcher folder is untouched");
     std::string said;
     for (const std::string& n : result.notes) said += n + "\n";
     check(contains(said, "game folders") && contains(said, "settings"), "the report says the game folders and the settings copy were left alone: " + said);
@@ -2756,7 +2756,7 @@ void testElevatedApply() {
         const auto r = run(plan, other, &out);
         check(r.second && r.first == 1 && out.status == ApplyOutcome::Status::Failed && !out.lines.empty() && contains(out.lines[0], "downloaded files cannot be used"),
               "a manifest the copy's keys do not verify is refused: " + (out.lines.empty() ? std::string("(no line)") : out.lines[0]));
-        check(!exists(P(game, L"d3d11.dll")) && !exists(P(game, L"edvr_install")), "and the game folder was not touched");
+        check(!exists(P(game, L"d3d11.dll")) && !exists(P(game, L"edup_install")), "and the game folder was not touched");
     }
     // A cached file that no longer matches its hash is refused where it is read.
     {
@@ -2794,7 +2794,7 @@ void testElevatedApply() {
         ApplyOutcome out;
         const auto r = run(plan, g_testKeys, &out);
         check(r.second && r.first == 1 && out.status == ApplyOutcome::Status::Blocked && !out.lines.empty(), "a verified payload gets as far as the planner, which blocks a folder whose exe is not Elite");
-        check(!exists(P(game, L"d3d11.dll")) && !exists(P(game, L"edvr_install")) && !exists(mirrorDir), "and the folder holds nothing new");
+        check(!exists(P(game, L"d3d11.dll")) && !exists(P(game, L"edup_install")) && !exists(mirrorDir), "and the folder holds nothing new");
         std::string said;
         for (const std::string& l : out.lines) said += l + " | ";
         check(contains(outcomeReport(out), "blocked"), "the report says the plan is blocked: " + said);
@@ -2808,7 +2808,7 @@ void testElevatedApply() {
         const std::wstring stray = P(base, L"plan-7-8.txt");
         std::string e;
         writePlanFile(stray, plan, &e);
-        check(applyPlanFile(stray, g_testKeys) == 2 && !exists(P(base, L"result-7-8.txt")) && !exists(resultPath) && !exists(P(game, L"edvr_install")),
+        check(applyPlanFile(stray, g_testKeys) == 2 && !exists(P(base, L"result-7-8.txt")) && !exists(resultPath) && !exists(P(game, L"edup_install")),
               "a plan outside a launcher folder exits 2, writes no result and touches no game folder");
     }
     // The cases above leave their own plan in the launcher folder; applyElevated's leftover check below starts clean.
@@ -2898,24 +2898,27 @@ void testElevatedStoreIdentity() {
         const std::wstring steamMirror = P(base, L"elev-epic-product-steam");
         const std::string epicSettings = "[fix]\nshare_exposure = 1\n";
         const std::string steamSettings = "[fix]\nshare_exposure = 0\n";
-        writeAll(P(epicMirror, L"edvr.ini"), epicSettings);
-        writeAll(P(steamMirror, L"edvr.ini"), steamSettings);
+        // Seed checkpoint generation .1 so restoreFromMirror restores edup.ini into the selected
+        // per-user mirror folder (never into the game folder).
+        writeAll(P(epicMirror, L"edup.ini.1"), epicSettings);
+        writeAll(P(steamMirror, L"edup.ini.1"), steamSettings);
         check(writePlanFile(planPath, epic, &err), "the Epic-selected plan is written for elevated dispatch: " + err);
         DeleteFileW(resultPath.c_str());
         const int code = applyPlanFile(planPath, g_testKeys, &inventory);
         ApplyOutcome out;
         check(code == 1 && readResultFile(resultPath, &out, &err) && out.status == ApplyOutcome::Status::Blocked,
               "the elevated Epic plan verifies its signed payload and reaches the planner refusal");
-        check(readAll(P(epic.dir, L"edvr.ini")) == epicSettings &&
-                  readAll(P(steamMirror, L"edvr.ini")) == steamSettings && !exists(P(epic.dir, L"d3d11.dll")),
+        check(readAll(P(epicMirror, L"edup.ini")) == epicSettings &&
+                  !exists(P(epic.dir, L"edup.ini")) && !exists(P(steamMirror, L"edup.ini")) &&
+                  !exists(P(epic.dir, L"d3d11.dll")),
               "elevated restore uses the selected Epic mirror despite conflicting Steam inventory");
         for (const wchar_t* source : {L"", L"Older store"}) {
             epic.source = source;
-            DeleteFileW(P(epic.dir, L"edvr.ini").c_str());
+            DeleteFileW(P(steamMirror, L"edup.ini").c_str());
             check(writePlanFile(planPath, epic, &err), "the older plan source is readable: " + err);
             const int olderCode = applyPlanFile(planPath, g_testKeys, &inventory);
             check(olderCode == 1 && readResultFile(resultPath, &out, &err) && out.status == ApplyOutcome::Status::Blocked &&
-                      readAll(P(epic.dir, L"edvr.ini")) == steamSettings,
+                      readAll(P(steamMirror, L"edup.ini")) == steamSettings && !exists(P(epic.dir, L"edup.ini")),
                   "an empty or unrecognised older source retains the detected store's restore behavior");
         }
         epic.source = L"Epic";
@@ -5487,16 +5490,16 @@ void testLoginDialog() {
 void testBundleLeavesLoginOut() {
     section("log bundle and the login");
     const std::wstring base = fresh("bundle-login");
-    const std::wstring launcher = P(base, L"EDVR\\launcher");
+    const std::wstring launcher = P(base, L"EDUP\\launcher");
     const std::wstring game = P(base, L"Game");
     saveLogin(P(launcher, L"frontier-login.dat"), kPassword, kMachineToken);
     writeAll(P(launcher, L"ed-up-launcher.log"), std::string("a launcher log that names ") + kEmail + " and " + kAuthToken + "\n");
     writeAll(P(game, L"EliteDangerous64.exe"), "x");
-    writeAll(P(game, L"edvr_logs\\edvr_vr_20260827_140003.log"), "SENTINEL-CONTROL-IN-A-REAL-LOG\n");
+    writeAll(P(game, L"edup_logs\\edvr_vr_20260827_140003.log"), "SENTINEL-CONTROL-IN-A-REAL-LOG\n");
     // The login and the launcher log in the places a bundle looks: the game folder and its log folder.
     const std::string loginBytes = readAll(P(launcher, L"frontier-login.dat")), logBytes = readAll(P(launcher, L"ed-up-launcher.log"));
-    for (const wchar_t* where : {L"frontier-login.dat", L"edvr_logs\\frontier-login.dat"}) writeAll(P(game, where), loginBytes);
-    for (const wchar_t* where : {L"ed-up-launcher.log", L"edvr_logs\\ed-up-launcher.log"}) writeAll(P(game, where), logBytes);
+    for (const wchar_t* where : {L"frontier-login.dat", L"edup_logs\\frontier-login.dat"}) writeAll(P(game, where), loginBytes);
+    for (const wchar_t* where : {L"ed-up-launcher.log", L"edup_logs\\ed-up-launcher.log"}) writeAll(P(game, where), logBytes);
     const DumpSearch noDumps{P(base, L"nodumps_local"), P(base, L"nodumps_temp")};
     const std::wstring out = P(base, L"out");
     createDirectories(out);
@@ -5512,7 +5515,7 @@ void testBundleLeavesLoginOut() {
     // The settings can send logs to any folder, the launcher's own included.
     const std::wstring game2 = P(base, L"Game2");
     writeAll(P(game2, L"EliteDangerous64.exe"), "x");
-    writeAll(P(game2, L"edvr.ini"), "[log]\r\ndir = " + narrowUtf8(launcher) + "\r\n");
+    writeAll(P(game2, L"edup.ini"), "[log]\r\ndir = " + narrowUtf8(launcher) + "\r\n");
     writeAll(P(launcher, L"edvr_vr_20260827_140003.log"), "SENTINEL-CONTROL-IN-THE-LAUNCHER-FOLDER\n");
     const LogBundle second = collectLogs(game2, out, &noDumps);
     std::string names2;

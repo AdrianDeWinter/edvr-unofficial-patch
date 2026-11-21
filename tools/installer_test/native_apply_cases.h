@@ -26,8 +26,8 @@ inline bool writeFile(const std::wstring& path, const char* text) {
 template<class Check>
 void run(Check check,const std::wstring& root,ReplaceHook place=nullptr) {
   CreateDirectoryW(root.c_str(),nullptr);
-  const auto d3d11=root+L"\\d3d11.dll", runtime=root+L"\\openvr_api.dll", ini=root+L"\\edvr.ini";
-  const auto blocker=root+L"\\blocked", backup=root+L"\\edvr_backup";
+  const auto d3d11=root+L"\\d3d11.dll", runtime=root+L"\\openvr_api.dll", ini=root+L"\\edup.ini";
+  const auto blocker=root+L"\\blocked", backup=root+L"\\edup_backup";
   check(writeFile(d3d11,"OLD-GRAPHICS"),"native rollback fixture writes old graphics");
   check(writeFile(runtime,"OLD-RUNTIME"),"native rollback fixture writes old runtime");
   check(writeFile(ini,"OLD-CONFIG"),"native rollback fixture writes old config");
@@ -37,7 +37,7 @@ void run(Check check,const std::wstring& root,ReplaceHook place=nullptr) {
     {Action::WritePayload,L"",d3d11,"d3d11","",{},{},false},
     {Action::WritePayload,L"",runtime,"openvr","",{},{},false},
     {Action::WriteText,L"",ini,"","NEW-CONFIG",{},{},false},
-    {Action::WriteText,L"",blocker+L"\\edvr.ini","","NEW-CONFIG",{},{},false},
+    {Action::WriteText,L"",blocker+L"\\edup.ini","","NEW-CONFIG",{},{},false},
   };
   const PayloadProvider payload=[](const std::string& item,const void** data,size_t* size) {
     static const char graphics[]="NEW-GRAPHICS",runtime[]="NEW-RUNTIME";

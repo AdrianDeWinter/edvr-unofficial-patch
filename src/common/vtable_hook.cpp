@@ -1520,7 +1520,7 @@ bool vtableWatchSlot(void** vtable, size_t slot, size_t slotCount,
             "hurt anyone here); a write that CHANGES a value is stamped with the "
             "frame, the time, the slot, both values, the instruction, the thread "
             "and eight frames of the writer's stack. The first %u get a line "
-            "each and the first %u also go to edvr_breadcrumbs.txt, which "
+            "each and the first %u also go to edup_breadcrumbs.txt, which "
             "survives the process being killed; after %u changes the per-event "
             "lines stop and the shape table carries on. EDVR'S OWN WRITES ARE "
             "NOT HERE: every re-patch this DLL makes goes through a function "

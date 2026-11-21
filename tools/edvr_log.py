@@ -402,15 +402,20 @@ def read_log_text(path):
 
 
 def config_log_dir(game_dir):
-    """log.dir out of the target's edvr.ini, if it sets one.
+    """log.dir out of the target's edup.ini (or legacy edvr.ini), if it sets one.
 
     A section-insensitive scan: the key is read as `log.dir` by the DLL,
     and the ini carries it under a [log] section as `dir`. Both spellings
     appear in the wild, so accept either rather than quietly finding
     nothing.
     """
-    ini = os.path.join(game_dir, "edvr.ini")
-    if not os.path.isfile(ini):
+    ini = None
+    for name in ("edup.ini", "edvr.ini"):
+        cand = os.path.join(game_dir, name)
+        if os.path.isfile(cand):
+            ini = cand
+            break
+    if not ini:
         return None
     section = ""
     try:
@@ -440,17 +445,34 @@ def log_dir_for(game_dir):
     if configured:
         return configured if os.path.isabs(configured) else \
             os.path.join(game_dir, configured)
-    return os.path.join(game_dir, "edvr_logs")
+    primary = os.path.join(game_dir, "edup_logs")
+    legacy = os.path.join(game_dir, "edvr_logs")
+    if os.path.isdir(primary) or not os.path.isdir(legacy):
+        return primary
+    return legacy
 
 
 def log_dirs_for(game_dir, tag):
     """Native OpenXR always follows the executable; legacy halves honor log.dir."""
-    native = os.path.join(game_dir, "edvr_logs")
+    primary = os.path.join(game_dir, "edup_logs")
+    legacy_dir = os.path.join(game_dir, "edvr_logs")
+    native_dirs = []
+    if os.path.isdir(primary) or not os.path.isdir(legacy_dir):
+        native_dirs.append(primary)
+    if os.path.isdir(legacy_dir):
+        native_dirs.append(legacy_dir)
     legacy = log_dir_for(game_dir)
     if tag == "openxr":
-        return [native]
-    if tag == "all" and os.path.normcase(os.path.abspath(native)) != os.path.normcase(os.path.abspath(legacy)):
-        return [legacy, native]
+        return native_dirs
+    if tag == "all":
+        out = [legacy]
+        seen = {os.path.normcase(os.path.abspath(legacy))}
+        for d in native_dirs:
+            k = os.path.normcase(os.path.abspath(d))
+            if k not in seen:
+                seen.add(k)
+                out.append(d)
+        return out
     return [legacy]
 
 
@@ -4625,8 +4647,8 @@ def resolve_target(spec):
         p = os.path.abspath(spec)
         if os.path.isdir(p):
             # The game's own directory, or the `Elite Dangerous` folder above
-            # its Products/<product>: the logs are in the product's edvr_logs.
-            leaves = [] if os.path.isdir(os.path.join(p, "edvr_logs")) \
+            # its Products/<product>: the logs are in the product's edup_logs (or legacy edvr_logs).
+            leaves = [] if (os.path.isdir(os.path.join(p, "edup_logs")) or os.path.isdir(os.path.join(p, "edvr_logs"))) \
                 else _products_under(p)
             return leaves[0] if len(leaves) == 1 else p
         raise SystemExit("[edvr] no such directory: %s" % p)
@@ -17964,7 +17986,7 @@ HEALTH_RULES = (
                 r"largest \|velocity\| yaw (?P<vy>[\d.]+) pitch (?P<vp>[\d.]+), largest \|target\| yaw (?P<ty>[\d.]+) pitch (?P<tp>[\d.]+)"),
     ), _hj_f212),
     _hrule(H_F213, ("F213",), ("(F213)",), (
-        ("ready", r"native on foot recorder \(F213\): ready; it records to edvr_logs\\onfoot while"),
+        ("ready", r"native on foot recorder \(F213\): ready; it records to ed(?:up|vr)_logs\\onfoot while"),
         ("win", r"native on foot recorder \(F213\) (?P<wl>\d+) s: (?P<state>running|not running(?:: .*?)?); records \(drops\): align (?P<a>\d+) \((?P<ad>\d+)\), p1 (?P<p>\d+) \((?P<pd>\d+)\), "
                 r"pin (?P<n>\d+) \((?P<nd>\d+)\), ik (?P<i>\d+) \((?P<id>\d+)\), mark (?P<m>\d+) \((?P<md>\d+)\), rt_eye (?P<e>\d+) \((?P<ed>\d+)\), "
                 r"rt_recentre (?P<r>\d+) \((?P<rd>\d+)\); runtime pushes seen (?P<rt>\d+); (?P<bytes>\d+) bytes written, (?P<seg>\d+) segment\(s\), writer stall max (?P<stall>\d+) ms; "

@@ -3,7 +3,7 @@
 // Drive the captured DE54 vertex shader, not a signature-matching synthetic
 // stand-in, into the stock and patched PS91 pixel shaders on WARP. The scene
 // and packed vertices are small controlled inputs; only the shader bytecode
-// comes from the local game's edvr_logs dump.
+// comes from the local game's edup_logs dump.
 #include "corpus_identity.h"
 #include "shader_tests.h"
 

@@ -457,7 +457,7 @@ void run215(Check&& check) {
 
     // ---- 11. the sites ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini"), rec = slurp("src/common/onfoot_recorder_core.h");
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini"), rec = slurp("src/common/onfoot_recorder_core.h");
         const auto has = [&](const std::string& hay, const char* needle) { return hay.find(needle) != std::string::npos; };
         const auto count = [&](const std::string& hay, const char* needle) {
             int n = 0;

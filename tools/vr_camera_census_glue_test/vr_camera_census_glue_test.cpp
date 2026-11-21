@@ -463,7 +463,7 @@ std::wstring newestLog(const wchar_t* tag) {
     return best;
 }
 void writeIni(const char* body) {
-    HANDLE f = CreateFileW((g_dir + L"\\edvr.ini").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE f = CreateFileW((g_dir + L"\\edup.ini").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
     DWORD written = 0;
     WriteFile(f, body, static_cast<DWORD>(std::strlen(body)), &written, nullptr);

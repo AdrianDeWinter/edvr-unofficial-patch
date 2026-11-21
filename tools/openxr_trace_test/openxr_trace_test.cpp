@@ -98,12 +98,12 @@ int wmain(int argc, wchar_t** argv) {
   c.check(NativeTrace::makeLogPathForExecutable(
       L"C:\\Games\\Elite Dangerous\\bin\\EliteDangerous64.exe", t, 1234, path),
       "typical executable path accepted");
-  c.check(path == L"C:\\Games\\Elite Dangerous\\bin\\edvr_logs\\"
+  c.check(path == L"C:\\Games\\Elite Dangerous\\bin\\edup_logs\\"
               L"edvr_openxr_20260914_042313_007_1234.log",
-      "native path is beside executable in edvr_logs");
+      "native path is beside executable in edup_logs");
   c.check(NativeTrace::makeLogPathForExecutable(
       L"D:\\Games\\é\\EliteDangerous64.exe", t, 9, path) &&
-      path.find(L"D:\\Games\\é\\edvr_logs\\") == 0,
+      path.find(L"D:\\Games\\é\\edup_logs\\") == 0,
       "spaces and non-ASCII path preserved");
   c.check(!NativeTrace::makeLogPathForExecutable(L"EliteDangerous64.exe", t, 9, path),
       "relative executable rejected");
@@ -114,19 +114,19 @@ int wmain(int argc, wchar_t** argv) {
   c.check(!NativeTrace::makeLogPathForExecutable(L"C:Games\\Elite.exe", t, 9, path),
       "drive-relative path rejected");
   c.check(NativeTrace::makeLogPathForExecutable(L"\\\\server\\share\\Elite.exe", t, 9, path) &&
-      path.find(L"\\\\server\\share\\edvr_logs\\") == 0, "UNC executable preserved");
+      path.find(L"\\\\server\\share\\edup_logs\\") == 0, "UNC executable preserved");
   c.check(NativeTrace::makeLogPathForExecutable(L"\\\\?\\C:\\Games\\Elite.exe", t, 9, path),
       "extended executable path supported");
 
   // Real begin must ignore the DLL address and the current directory. The
-  // test executable lives in the workspace; only its edvr_logs is written.
+  // test executable lives in the workspace; only its edup_logs is written.
   wchar_t executable[32768]{};
   c.check(GetModuleFileNameW(nullptr, executable, _countof(executable)) != 0, "process path");
   c.check(NativeTrace::get().begin(nullptr), "real trace opens next to process executable");
   NativeTrace::get().write("openxr_trace_test_marker");
   c.check(NativeTrace::get().begin(reinterpret_cast<void*>(1)), "begin is idempotent and ignores module address");
   const std::wstring exe(executable);
-  const auto directory=exe.substr(0,exe.find_last_of(L"\\/")+1)+L"edvr_logs\\";
+  const auto directory=exe.substr(0,exe.find_last_of(L"\\/")+1)+L"edup_logs\\";
   const auto wildcard=directory+L"edvr_openxr_*_"+std::to_wstring(GetCurrentProcessId())+L".log";
   WIN32_FIND_DATAW found{};
   HANDLE search=FindFirstFileW(wildcard.c_str(),&found);
@@ -143,7 +143,7 @@ int wmain(int argc, wchar_t** argv) {
     } while(FindNextFileW(search,&found));
     FindClose(search);
   }
-  c.check(marker,"native marker readable in executable edvr_logs");
+  c.check(marker,"native marker readable in executable edup_logs");
   std::printf("openxr_trace_test: %u checks, %u failures\n", c.count, c.failures);
   return c.failures ? 1 : 0;
 }

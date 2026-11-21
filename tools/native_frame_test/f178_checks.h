@@ -403,8 +403,8 @@ inline void run178(Check&& check) {
 
     // ---- 8. the source sites: both keys read and logged, the dials applied beside the crouched ones, the line printed -------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini"), logpin = slurp("src/d3d11/native_on_foot_logpin.h");
-        check(!cpp.empty() && !ini.empty() && !logpin.empty(), "F178: the source pins read src/d3d11/native_on_foot.cpp, edvr.ini and native_on_foot_logpin.h (run the rig from the repository root)");
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini"), logpin = slurp("src/d3d11/native_on_foot_logpin.h");
+        check(!cpp.empty() && !ini.empty() && !logpin.empty(), "F178: the source pins read src/d3d11/native_on_foot.cpp, edup.ini and native_on_foot_logpin.h (run the rig from the repository root)");
         const auto has = [&](const std::string& needle) { return cpp.find(needle) != std::string::npos; };
         const auto at = [&](const std::string& needle) { return cpp.find(needle); };
         // both keys: the atomic, the read with its fallback, the clamp, the first-read-and-change log line, the store
@@ -456,7 +456,7 @@ inline void run178(Check&& check) {
                   ini.find("# TEMPORARY (F178): Standing ADS body forward / back") != std::string::npos && ini.find("# TEMPORARY (F178): Standing ADS body left / right") != std::string::npos &&
                   ini.find("# ui: Standing ADS body forward / back | range -20..20 | step 0.5 | unit cm | signed | live\n") != std::string::npos &&
                   ini.find("# ui: Standing ADS body left / right | range -30..30 | step 0.5 | unit cm | signed | live\n") != std::string::npos,
-              "F178 (F181: the pilot's values): edvr.ini has both keys at 4.0 and 23.0 (were 0.0), TEMPORARY, each with its ui: row (-20..20 and -30..30 cm, step 0.5, signed, live), between the crouched left dial and the torso square");
+              "F178 (F181: the pilot's values): edup.ini has both keys at 4.0 and 23.0 (were 0.0), TEMPORARY, each with its ui: row (-20..20 and -30..30 cm, step 0.5, signed, live), between the crouched left dial and the torso square");
     }
 }
 

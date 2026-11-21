@@ -2571,7 +2571,7 @@ def resolve_folder(args):
         return args.dir
     import edvr_log
     game = edvr_log.resolve_target(args.target)
-    cands = [os.path.join(edvr_log.log_dir_for(game), 'onfoot'), os.path.join(game, 'edvr_logs', 'onfoot')]
+    cands = [os.path.join(edvr_log.log_dir_for(game), 'onfoot'), os.path.join(game, 'edup_logs', 'onfoot'), os.path.join(game, 'edvr_logs', 'onfoot')]
     for c in cands:
         if os.path.isdir(c):
             return c

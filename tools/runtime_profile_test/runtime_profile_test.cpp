@@ -287,7 +287,7 @@ void lineCases() {
     checkText("line: an invalid descriptor",
         formatProfileLine(decideLaunch(parseInstallDescriptor("[install]\nschema = 3\n"), readGameMode(nullptr), VrSwitch::None, false, false),
             "invalid", p),
-        "profile: invalid (edvr_profile.ini malformed; fixes disabled, proxy chaining retained; repair the installation)");
+        "profile: invalid (edup_profile.ini malformed; fixes disabled, proxy chaining retained; repair the installation)");
 }
 
 bool leaksSecret(const std::string& s) {

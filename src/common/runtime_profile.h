@@ -41,8 +41,13 @@ inline FileState readBoundedFile(const std::wstring& path, size_t maxBytes, std:
 
 inline ScopeRead readInstallDescriptor(const std::wstring& directory) {
     std::string text;
-    switch (readBoundedFile(directory + L"\\edvr_profile.ini", 4096, text)) {
-    case FileState::Absent: return absentDescriptor();
+    switch (readBoundedFile(directory + L"\\edup_profile.ini", 4096, text)) {
+    case FileState::Absent:
+        switch (readBoundedFile(directory + L"\\edvr_profile.ini", 4096, text)) {
+        case FileState::Absent: return absentDescriptor();
+        case FileState::Unreadable: return ScopeRead{InstallScope::Invalid, 0, true};
+        default: return parseInstallDescriptor(text);
+        }
     case FileState::Unreadable: return ScopeRead{InstallScope::Invalid, 0, true};
     default: return parseInstallDescriptor(text);
     }

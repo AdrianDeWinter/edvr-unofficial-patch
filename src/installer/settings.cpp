@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include "detect.h"
+#include "mirror.h"
 #include "../common/flat_profile_keys.h"
 #include "../common/hotkey.h"
 #include "../common/iniedit.h"
@@ -12,25 +13,6 @@ namespace edvr::installer {
 namespace {
 
 #include "settings_schema.inc"  // generated: kSettings[]
-
-// The backup folder for this session's first change, and the folder above it.
-// (The write itself is iniedit's writeFileAtomic: this rewrites the WHOLE of
-// somebody's edvr.ini on every toggle, and the game re-reads that file about
-// once a second, so a truncate-then-write left a poll reading a 0-byte ini and
-// dropping every setting to its compiled default until the next reload.)
-bool ensureBackupDir(const std::wstring& path) {
-    if (dirExists(path)) return true;
-    const size_t slash = path.find_last_of(L"\\/");
-    if (slash != std::wstring::npos) {
-        const std::wstring parent = path.substr(0, slash);
-        if (!dirExists(parent) && !CreateDirectoryW(parent.c_str(), nullptr) &&
-            GetLastError() != ERROR_ALREADY_EXISTS) {
-            return false;
-        }
-    }
-    return CreateDirectoryW(path.c_str(), nullptr) != 0 ||
-           (GetLastError() == ERROR_ALREADY_EXISTS && dirExists(path));
-}
 
 }  // namespace
 
@@ -183,12 +165,24 @@ const std::vector<SettingDef>& settingDefs() {
     return defs;
 }
 
-bool SettingsModel::load(const std::wstring& gameDir, const std::string& profile) {
+bool ensureDirTreeRecursive(const std::wstring& path) {
+    if (path.empty() || dirExists(path)) return true;
+    const size_t slash = path.find_last_of(L"\\/");
+    if (slash != std::wstring::npos && slash > 2) {
+        if (!ensureDirTreeRecursive(path.substr(0, slash))) return false;
+    }
+    return CreateDirectoryW(path.c_str(), nullptr) != 0 ||
+           (GetLastError() == ERROR_ALREADY_EXISTS && dirExists(path));
+}
+
+bool SettingsModel::load(const std::wstring& gameDir, const std::string& profile,
+                         const std::wstring& settingsDir) {
     m_gameDir = gameDir;
+    m_settingsDir = settingsDir.empty() ? gameDir : settingsDir;
     m_backedUp = false;
     m_profile = profile;
-    m_iniPath = settingsPathFor(gameDir, profile);
-    m_sharedPath = profile == "flat" ? settingsPathFor(gameDir, "vr") : std::wstring();
+    m_iniPath = settingsPathFor(m_settingsDir, profile);
+    m_sharedPath = profile == "flat" ? settingsPathFor(m_settingsDir, "vr") : std::wstring();
     bool fromShared = false;
     m_text = currentText(&fromShared);
     m_loaded = true;
@@ -200,9 +194,37 @@ bool SettingsModel::load(const std::wstring& gameDir, const std::string& profile
 std::string SettingsModel::currentText(bool* fromShared) const {
     *fromShared = false;
     if (fileExists(m_iniPath)) return readTextFile(m_iniPath);
-    if (!m_sharedPath.empty() && fileExists(m_sharedPath)) {
-        *fromShared = true;
-        return readTextFile(m_sharedPath);
+
+    // Fallback before migration: check legacy locations for this profile's own file.
+    const std::wstring legacyMirror = legacyMirrorDirFor(m_settingsDir);
+    const std::wstring ownFallbacks[] = {
+        settingsPathFor(m_gameDir, m_profile),
+        legacySettingsPathFor(m_gameDir, m_profile),
+        legacySettingsPathFor(m_settingsDir, m_profile),
+        legacyMirror.empty() ? std::wstring() : legacySettingsPathFor(legacyMirror, m_profile),
+    };
+    for (const std::wstring& p : ownFallbacks) {
+        if (!p.empty() && _wcsicmp(p.c_str(), m_iniPath.c_str()) != 0 && fileExists(p))
+            return readTextFile(p);
+    }
+
+    if (!m_sharedPath.empty()) {
+        if (fileExists(m_sharedPath)) {
+            *fromShared = true;
+            return readTextFile(m_sharedPath);
+        }
+        const std::wstring sharedFallbacks[] = {
+            settingsPathFor(m_gameDir, "vr"),
+            legacySettingsPathFor(m_gameDir, "vr"),
+            legacySettingsPathFor(m_settingsDir, "vr"),
+            legacyMirror.empty() ? std::wstring() : legacySettingsPathFor(legacyMirror, "vr"),
+        };
+        for (const std::wstring& p : sharedFallbacks) {
+            if (!p.empty() && _wcsicmp(p.c_str(), m_sharedPath.c_str()) != 0 && fileExists(p)) {
+                *fromShared = true;
+                return readTextFile(p);
+            }
+        }
     }
     return std::string();
 }
@@ -282,15 +304,23 @@ bool SettingsModel::set(size_t index, const std::string& value) {
     // somebody changes several things and then wants the one they had. A flat
     // file that does not exist yet has nothing to back up -- this change starts
     // it from the shared edvr.ini, which is not written at all.
+    const bool inSeparateUserDir =
+        !m_settingsDir.empty() && _wcsicmp(m_settingsDir.c_str(), m_gameDir.c_str()) != 0;
     if (!m_backedUp) {
-        if (!fromShared) {
-            const std::wstring backupDir =
-                joinPath(backupRootPath(m_gameDir), L"settings-" + timestampName());
-            if (ensureBackupDir(backupDir)) {
+        if (!fromShared && fileExists(m_iniPath)) {
+            const std::wstring backupBase =
+                inSeparateUserDir ? joinPath(m_settingsDir, L"backup") : backupRootPath(m_gameDir);
+            const std::wstring backupDir = joinPath(backupBase, L"settings-" + timestampName());
+            if (ensureDirTreeRecursive(backupDir)) {
                 CopyFileW(m_iniPath.c_str(), joinPath(backupDir, leafOf(m_iniPath)).c_str(), FALSE);
             }
         }
         m_backedUp = true;   // tried once; a failure here must not block editing
+    }
+
+    if (!ensureDirTreeRecursive(m_settingsDir)) {
+        m_error = "Could not create settings folder " + toUtf8(m_settingsDir) + ".";
+        return false;
     }
 
     MergeReport report;
@@ -315,8 +345,9 @@ bool SettingsModel::set(size_t index, const std::string& value) {
     }
     if (!wrote) {
         m_error = "Could not write " + toUtf8(m_iniPath) + ": " + toUtf8(why) +
-                  ". If the game folder is under Program Files, run the installer as "
-                  "administrator.";
+                  (inSeparateUserDir
+                       ? "."
+                       : ". If the game folder is under Program Files, run the installer as administrator.");
         return false;
     }
     m_text = updated;

@@ -372,7 +372,9 @@ int headlessPlay(const AppArgs& args, Output& out) {
     // else the remembered mode in launcher.ini, else Elite's Settings.xml.
     bool useVr = args.vr;
     if (!args.vr && !args.novr) {
-        const Survey survey = surveyTarget(game);
+        const LauncherRoots roots = launcherRootsFor(args);
+        if (roots.canonical) migrateLegacyDataRoot(roots.dataRoot);
+        const Survey survey = surveyTarget(game, mirrorDirFor(game, roots.dataRoot));
         const std::string scope = installedScope(survey);
         if (scope == "flat") {
             useVr = false;
@@ -527,6 +529,8 @@ bool launcherHasCommand(const AppArgs& args) {
 }
 
 int runLauncherCommand(const AppArgs& args, bool haveConsole) {
+    const LauncherRoots roots = launcherRootsFor(args);
+    if (roots.canonical) migrateLegacyDataRoot(roots.dataRoot);
     Output out(haveConsole);
     int code;
     if (args.licenses) code = runLicensesCommand(out);
@@ -545,6 +549,7 @@ bool launcherStartup(const AppArgs& args, int* exitCode) {
     *exitCode = 0;
     const LauncherRoots roots = launcherRootsFor(args);
     if (!roots.canonical) return true;
+    migrateLegacyDataRoot(roots.dataRoot);
 
     const std::wstring self = selfPath();
 

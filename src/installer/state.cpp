@@ -337,18 +337,34 @@ std::vector<ToolReceipt> readNativeReceiptHistory(const std::wstring& gameDir) {
 }
 
 std::wstring stateDirPath(const std::wstring& gameDir) {
-    return joinPath(gameDir, L"edvr_install");
+    return joinPath(gameDir, L"edup_install");
 }
 std::wstring statePath(const std::wstring& gameDir) {
     return joinPath(stateDirPath(gameDir), L"state.ini");
 }
 std::wstring baseIniPath(const std::wstring& gameDir) {
-    return joinPath(stateDirPath(gameDir), L"edvr.ini.base");
+    return joinPath(stateDirPath(gameDir), L"edup.ini.base");
 }
 std::wstring flatBaseIniPath(const std::wstring& gameDir) {
-    return joinPath(stateDirPath(gameDir), L"edvr-flat.ini.base");
+    return joinPath(stateDirPath(gameDir), L"edup-flat.ini.base");
 }
 std::wstring backupRootPath(const std::wstring& gameDir) {
+    return joinPath(gameDir, L"edup_backup");
+}
+
+std::wstring legacyStateDirPath(const std::wstring& gameDir) {
+    return joinPath(gameDir, L"edvr_install");
+}
+std::wstring legacyStatePath(const std::wstring& gameDir) {
+    return joinPath(legacyStateDirPath(gameDir), L"state.ini");
+}
+std::wstring legacyBaseIniPath(const std::wstring& gameDir) {
+    return joinPath(legacyStateDirPath(gameDir), L"edvr.ini.base");
+}
+std::wstring legacyFlatBaseIniPath(const std::wstring& gameDir) {
+    return joinPath(legacyStateDirPath(gameDir), L"edvr-flat.ini.base");
+}
+std::wstring legacyBackupRootPath(const std::wstring& gameDir) {
     return joinPath(gameDir, L"edvr_backup");
 }
 
@@ -359,15 +375,21 @@ std::string recordedScope(const InstallState& state) {
     return std::string();
 }
 
-// The settings files a scope installs: edvr.ini for vr and both, edvr-flat.ini for flat and both.
+// The settings files a scope installs: edup.ini for vr and both, edup-flat.ini for flat and both.
 bool scopeHasVrIni(const std::string& scope) { return scope != "flat"; }
 bool scopeHasFlatIni(const std::string& scope) { return scope != "vr"; }
 
 const wchar_t* settingsLeafFor(const std::string& profile) {
+    return profile == "flat" ? L"edup-flat.ini" : L"edup.ini";
+}
+std::wstring settingsPathFor(const std::wstring& dir, const std::string& profile) {
+    return joinPath(dir, settingsLeafFor(profile));
+}
+const wchar_t* legacySettingsLeafFor(const std::string& profile) {
     return profile == "flat" ? L"edvr-flat.ini" : L"edvr.ini";
 }
-std::wstring settingsPathFor(const std::wstring& gameDir, const std::string& profile) {
-    return joinPath(gameDir, settingsLeafFor(profile));
+std::wstring legacySettingsPathFor(const std::wstring& dir, const std::string& profile) {
+    return joinPath(dir, legacySettingsLeafFor(profile));
 }
 
 std::string utcNow() {
@@ -489,7 +511,7 @@ void migrateLegacyRecords(const IniDoc& doc, InstallState* s) {
         const bool flat = s->scope == "flat";
         r.id = flat ? "settings_flat" : "settings_vr";
         r.root = "game";
-        r.path = flat ? "edvr-flat.ini" : "edvr.ini";
+        r.path = flat ? "edup-flat.ini" : "edup.ini";
         r.existing = "settings";
         r.sha256 = s->iniSha;
         s->put(r);
@@ -568,8 +590,10 @@ InstallState parseState(const std::string& text) {
 }
 
 InstallState readState(const std::wstring& gameDir) {
-    InstallState s = parseState(readTextFile(statePath(gameDir)));
-    s.hasBaseIni = fileExists(baseIniPath(gameDir));
+    std::string text = readTextFile(statePath(gameDir));
+    if (text.empty()) text = readTextFile(legacyStatePath(gameDir));
+    InstallState s = parseState(text);
+    s.hasBaseIni = fileExists(baseIniPath(gameDir)) || fileExists(legacyBaseIniPath(gameDir));
     return s;
 }
 

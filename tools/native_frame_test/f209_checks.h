@@ -409,7 +409,7 @@ inline void run209(Check&& check) {
               "F209: the frame boundary tries the shop hooks (while the native key is on) and re-reads the remembered objects every frame, before the gates are set");
         check(cpp.find("g_f107Away.step(eyeNeckM, static_cast<double>(f30QpcUs(in.qpc)) * 1e-6, nativeOnFootShopOpen())") != std::string::npos,
               "F209: the Animate post-hook gives F107 the shop signal with every call");
-        const std::string ini = slurp("edvr.ini");
+        const std::string ini = slurp("edup.ini");
         const std::string gone[] = {std::string("livery") + "_game_view", std::string("loadout") + "_game_view"};   // the retired keys' names, built so that the source holds no trace of them
         check(ini.find(gone[0]) == std::string::npos && ini.find(gone[1]) == std::string::npos && cpp.find(gone[0]) == std::string::npos && cpp.find(gone[1]) == std::string::npos &&
                   hooks.find("g_liveryHold") == std::string::npos && hooks.find("g_loadoutHold") == std::string::npos,
@@ -436,7 +436,7 @@ inline void run209(Check&& check) {
                   hl::kOffDisplacement == 0x280,
               "F233: HeadlookCamera's producer 0x1074650 (15 pinned bytes), its vtables 0x518C350 and 0x518C2E0, the look rotation's and displacement's offsets");
         const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), cam = slurp("src/d3d11/native_preview_camera.cpp"), camh = slurp("src/d3d11/native_preview_camera.h"),
-                          core = slurp("src/d3d11/native_preview_camera_core.h"), ini = slurp("edvr.ini"), hooks = slurp("src/d3d11/native_on_foot_hooks.cpp");
+                          core = slurp("src/d3d11/native_preview_camera_core.h"), ini = slurp("edup.ini"), hooks = slurp("src/d3d11/native_on_foot_hooks.cpp");
         const std::string retired[] = {std::string("preview") + "_handover", std::string("preview") + "_headlook", std::string("preview") + "_camera"};   // the retired keys' names, built so that the source holds no trace of them
         check(ini.find(retired[0]) == std::string::npos && ini.find(retired[1]) == std::string::npos && ini.find(retired[2]) == std::string::npos && cpp.find(retired[0]) == std::string::npos &&
                   cpp.find(retired[1]) == std::string::npos && cpp.find("SetHandover") == std::string::npos && cpp.find("SetHeadlook") == std::string::npos && cam.find("SetHandover") == std::string::npos &&

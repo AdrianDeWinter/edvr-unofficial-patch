@@ -493,9 +493,9 @@ inline void run180(Check&& check) {
 
     // ---- the source sites ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini"), logpin = slurp("src/d3d11/native_on_foot_logpin.h"), hooks = slurp("src/d3d11/native_on_foot_hooks.cpp"),
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini"), logpin = slurp("src/d3d11/native_on_foot_logpin.h"), hooks = slurp("src/d3d11/native_on_foot_hooks.cpp"),
                           hdr = slurp("src/d3d11/native_on_foot.h");
-        check(!cpp.empty() && !ini.empty() && !logpin.empty() && !hooks.empty() && !hdr.empty(), "F180: the source pins read the sources and edvr.ini (run the rig from the repository root)");
+        check(!cpp.empty() && !ini.empty() && !logpin.empty() && !hooks.empty() && !hdr.empty(), "F180: the source pins read the sources and edup.ini (run the rig from the repository root)");
         const auto has = [&](const std::string& needle) { return cpp.find(needle) != std::string::npos; };
         const auto at = [&](const std::string& needle) { return cpp.find(needle); };
         // F180a: the weight in the left hand's blend, in the branch that is the left hand's stable pole (a one-handed gun has no such solve)
@@ -545,7 +545,7 @@ inline void run180(Check&& check) {
                   ini.find("# TEMPORARY (F180): Standing ADS spine straighten") != std::string::npos && ini.find("# TEMPORARY (F180): Neck guard distance") != std::string::npos &&
                   ini.find("# ui: Standing ADS spine straighten | range 0..1 | step 0.05 | live\n") != std::string::npos &&
                   ini.find("# ui: Neck guard distance | range 0..20 | step 0.5 | unit cm | live\n") != std::string::npos,
-              "F180 (F181: the pilot's values): edvr.ini has both keys (the spine straighten at 0.9, the neck guard distance at 2.0; were 0.0 and 10.0), TEMPORARY, each with its ui: row, between the standing left dial and the torso square");
+              "F180 (F181: the pilot's values): edup.ini has both keys (the spine straighten at 0.9, the neck guard distance at 2.0; were 0.0 and 10.0), TEMPORARY, each with its ui: row, between the standing left dial and the torso square");
     }
 }
 

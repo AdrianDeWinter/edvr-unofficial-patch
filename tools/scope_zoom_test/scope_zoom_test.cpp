@@ -251,7 +251,7 @@ static void offAaTests() {
     check(hitFar.escaped, "F202: a surface 0.7 m from the eye, depth 0.025 / 0.7, is not the frame");
 }
 static void wiringTests() {
-    const std::string layer = readFile("src/d3d11/ui_layer.cpp"), temporal = readFile("src/d3d11/temporal_pass.cpp"), native = readFile("src/d3d11/native_on_foot.cpp"), ini = readFile("edvr.ini");
+    const std::string layer = readFile("src/d3d11/ui_layer.cpp"), temporal = readFile("src/d3d11/temporal_pass.cpp"), native = readFile("src/d3d11/native_on_foot.cpp"), ini = readFile("edup.ini");
     check(!layer.empty() && !temporal.empty() && !native.empty() && !ini.empty(), "the sources the wiring scans read are readable from the repository root");
     check(wiredDoor(layer), "the lens is at the door, after the ripple, before the weapons/HUD composite, for the right eye, over the upscaler's picture");
     check(!wiredDoor(replaced(layer, "if (eye == 1 && scopeZoomWanted())", "if (eye == 0 && scopeZoomWanted())")), "control: the lens in the left eye is not the wiring");

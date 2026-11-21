@@ -58,7 +58,7 @@
 #include "temporal_shader_bytecode.h"
 
 namespace edvr {
-#include "menu_schema.inc"   // the rows the build generated from edvr.ini (build\gen)
+#include "menu_schema.inc"   // the rows the build generated from edup.ini (build\gen)
 }
 
 using namespace edvr;
@@ -1231,7 +1231,7 @@ static bool wiredIni(const std::string& t) {
 static void lostPins(const std::string& layer);   // below, with the instrument it pins
 static void wiringTests() {
     const std::string layer = readFile("src/d3d11/ui_layer.cpp"), vscreen = readFile("src/d3d11/vscreen.cpp"), snap = readFile("src/d3d11/eye_draw_snapshot.h"),
-                      ini = readFile("edvr.ini");
+                      ini = readFile("edup.ini");
     check(layer.size() > 100000 && vscreen.size() > 100000 && snap.size() > 1000 && ini.size() > 10000, "the sources are readable from the repo root");
 
     check(wiredNoKey(layer), "ui_layer.cpp: the weapons fire has no key, no parse and no off or plain branch");
@@ -1273,7 +1273,7 @@ static void wiringTests() {
     check(!wiredSnapshot(replaced(snap, "case 0x939D01F28D1FEEA8ull: // multicannon rounds\n", "")), "control: an unwatched pair trips the pin");
 
     lostPins(layer);
-    check(wiredIni(ini), "edvr.ini has no weapons fire setting (retired: always on), no second key and no ripple key");
+    check(wiredIni(ini), "edup.ini has no weapons fire setting (retired: always on), no second key and no ripple key");
     check(!wiredIni(ini + "\nsharp_weapons = off\n"), "control: a setting line trips the pin");
 }
 

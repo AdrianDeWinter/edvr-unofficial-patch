@@ -82,8 +82,8 @@ struct EnvironmentReader {
 
 template<class Check>
 void runBootstrapTests(Check&& check) {
-  const std::wstring loader = L"C:\\Program Files\\EDVR\\openxr_loader.dll";
-  const std::wstring graphics = L"d:/EDVR/d3d11.dll";
+  const std::wstring loader = L"C:\\Program Files\\EDUP\\openxr_loader.dll";
+  const std::wstring graphics = L"d:/EDUP/d3d11.dll";
 
   const std::wstring localPath=localFixturePath();
   const std::string valid="[openxr]\nversion=1\nloader=C:\\loader.dll\ngraphics=D:\\d3d11.dll\nruntime=E:\\runtime.json\nseparate_device=1\n";

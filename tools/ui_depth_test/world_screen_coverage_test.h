@@ -124,7 +124,7 @@ void testWorldScreenCoverage(ID3D11Device* dev, ID3D11DeviceContext* ctx) {
 
     // ---- each stand-in's signature is the game shader's ----
     struct Want { const char* name; UINT reg; BYTE mask; D3D_REGISTER_COMPONENT_TYPE type; };
-    // PS EBA95E15B0A66102's input signature (edvr_logs\shaders\ps_EBA95E15B0A66102.dxbc, 3616 bytes, disassembled).
+    // PS EBA95E15B0A66102's input signature (edup_logs\shaders\ps_EBA95E15B0A66102.dxbc, 3616 bytes, disassembled).
     const Want game[4] = {
         {"__USER_VERTEX_FACEINVARIANT", 0, 0x3, D3D_REGISTER_COMPONENT_UINT32},
         {"__USER_VERTEX_M_LIGHTINGNORMAL", 1, 0x7, D3D_REGISTER_COMPONENT_FLOAT32},

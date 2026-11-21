@@ -4,7 +4,7 @@
 // (flat_hdr_route_gpu_tests.h, section 9); what no rig can run is the game's Present, the runtime's draw scope and the two
 // SDKs, so those are read as source.
 //
-// The rig's breadcrumb() collects the lines the route would have put in edvr_breadcrumbs.txt. The real one's own
+// The rig's breadcrumb() collects the lines the route would have put in edup_breadcrumbs.txt. The real one's own
 // behaviour (open, one WriteFile, close, per line) is src\common\proxy.cpp's and is not stood in for here.
 #pragma once
 #include "../../src/d3d11/flat_hdr_crumbs.h"

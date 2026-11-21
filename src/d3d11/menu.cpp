@@ -1566,15 +1566,29 @@ bool menuIniWritePairs(const std::vector<std::pair<std::string, std::string>>& p
         *err = fileName + " could not be read";
         return false;
     }
+    const std::wstring mdir = mirrorDir();
+    const bool pathInMirror =
+        !mdir.empty() && _wcsicmp(path.c_str(), (mdir + L"\\" + leaf).c_str()) == 0;
     if (!g_backedUp) {
         g_backedUp = true;   // tried once; a failure must not block editing
-        const std::wstring root = executableDirectory() + L"\\edvr_backup";
-        if (!dirExistsW(root)) CreateDirectoryW(root.c_str(), nullptr);
-        const std::wstring dir = root + L"\\menu-" + stampName();
-        if (CreateDirectoryW(dir.c_str(), nullptr) || GetLastError() == ERROR_ALREADY_EXISTS) {
-            // Named for the file copied: the flat profile's settings are not an edvr.ini,
-            // and a copy called that could be restored over the VR profile's.
-            CopyFileW(path.c_str(), (dir + L"\\" + leaf).c_str(), FALSE);
+        auto tryBackupIn = [&](const std::wstring& root) {
+            if (root.empty()) return false;
+            if (!dirExistsW(root) && !CreateDirectoryW(root.c_str(), nullptr) &&
+                GetLastError() != ERROR_ALREADY_EXISTS)
+                return false;
+            const std::wstring dir = root + L"\\menu-" + stampName();
+            if (!CreateDirectoryW(dir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
+                return false;
+            return CopyFileW(path.c_str(), (dir + L"\\" + leaf).c_str(), FALSE) != FALSE;
+        };
+        // Prefer the per-user folder's backup subfolder when settings live there (or when the game
+        // folder under Program Files is read-only to unelevated runs).
+        const std::wstring userBackupRoot = mdir.empty() ? std::wstring() : mdir + L"\\backup";
+        const std::wstring gameBackupRoot = executableDirectory() + L"\\edup_backup";
+        if (pathInMirror) {
+            if (!tryBackupIn(userBackupRoot)) tryBackupIn(gameBackupRoot);
+        } else {
+            if (!tryBackupIn(gameBackupRoot)) tryBackupIn(userBackupRoot);
         }
     }
     MergeReport report;
@@ -1588,14 +1602,10 @@ bool menuIniWritePairs(const std::vector<std::pair<std::string, std::string>>& p
         *err = fileName + ": " + utf8Of(why);
         return false;
     }
-    // The mirror of last resort, refreshed so an update that wipes the
-    // folder cannot lose an evening's tuning. A change made just now, not a
-    // checkpoint: it replaces the newest copy in place and leaves the older
-    // generations the installer keeps (edvr.ini.1, edvr.ini.2) alone. Named for
-    // the file actually written, so the flat profile's edvr-flat.ini lands in
-    // the mirror's edvr-flat.ini rather than over the VR profile's edvr.ini.
-    const std::wstring mdir = mirrorDir();
-    if (!mdir.empty()) {
+    // When settings still live beside the game (portable/legacy install), refresh the mirror copy
+    // outside the game folder. When settings already live in %LOCALAPPDATA%\EDUP\<install>, the
+    // write above already updated the canonical per-user file directly.
+    if (!mdir.empty() && !pathInMirror) {
         std::wstring mirrorWhy;
         if (writeGenerations(mdir, leaf, updated, false, &mirrorWhy)) {
             if (!g_mirrorNoted) {

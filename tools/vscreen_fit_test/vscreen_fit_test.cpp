@@ -39,7 +39,7 @@
 //
 // Usage: --self-test [<repo root>] [--only R1,R3,...] [--root <dir>] | --dry-run (does nothing) | --write-fixture <path> [--dry-run]
 // (regenerates tools\vscreen_fit_fixture.log from the formatters; with --dry-run it says what it would write and writes nothing).
-// Run from the repo root (the pins read src\ and edvr.ini). Exit 0 and "PASS" only when every check holds; the first failing label is
+// Run from the repo root (the pins read src\ and edup.ini). Exit 0 and "PASS" only when every check holds; the first failing label is
 // printed as `FAIL: <label>`.
 #include <windows.h>
 
@@ -1067,7 +1067,7 @@ void caseR12() {
     const std::string layer = readFile("src\\d3d11\\ui_layer.cpp");
     const std::string vs = readFile("src\\d3d11\\vscreen.cpp");
     const std::string fp = readFile("src\\d3d11\\vscreen_footprint.cpp");
-    const std::string ini = readFile("edvr.ini");
+    const std::string ini = readFile("edup.ini");
     const std::string flatRuntime = readFile("src\\d3d11\\flat_runtime.cpp");
     const std::string authState = readFile("src\\common\\vscreen_auto_state.cpp");
     check(!res.empty() && !route.empty() && !layer.empty() && !vs.empty() && !fp.empty() && !ini.empty() && !authState.empty(),
@@ -1185,7 +1185,7 @@ void caseR12() {
         const std::string block = (at == std::string::npos || from == std::string::npos) ? std::string() : ini.substr(from, at - from);
         check(!block.empty() && has(block, "world route") && has(block, "fitted") && has(block, "125%") && has(block, "Needs a game restart") &&
                   has(block, "fix.panel_curvature, does not stop it") && !has(block, "fix.panel_curvature at 0"),
-              "R12o: edvr.ini's text for the key names both rules, the route's conditions that matter to a user (a curved screen does not stop it), and the restart");
+              "R12o: edup.ini's text for the key names both rules, the route's conditions that matter to a user (a curved screen does not stop it), and the restart");
         std::string flat;   // the block as running prose: each line break and its comment marker become one space
         for (size_t i = 0; i < block.size(); ++i) {
             if (block[i] != '\n') { flat += block[i]; continue; }

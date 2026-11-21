@@ -1240,7 +1240,7 @@ void sourcePins(const std::string& root) {
   const std::string flag = slurp(root + "\\src\\common\\frame_flag.cpp");
   const std::string flagHeader = slurp(root + "\\src\\common\\frame_flag.h");
   const std::string bat = slurp(root + "\\build.bat");
-  const std::string ini = slurp(root + "\\edvr.ini");
+  const std::string ini = slurp(root + "\\edup.ini");
   check(!host.empty() && !boundary.empty() && !session.empty() && !perf.empty() && !flag.empty() && !flagHeader.empty() && !bat.empty() && !ini.empty(),
         "G1.read: the eight sources the glue lives in were read");
   if (host.empty() || boundary.empty() || session.empty() || perf.empty() || flag.empty() || flagHeader.empty() || bat.empty() || ini.empty()) return;
@@ -1303,7 +1303,7 @@ void sourcePins(const std::string& root) {
         "G1.flag: the request crosses frame_flag: layout v38, the field, and the runtime never holds longer than 5 s");
   check(at(bat, "tools\\slow_regime_test\\slow_regime_test.cpp") != none, "G1.build: build.bat compiles this rig");
   check(at(ini, "#slow_test_ms = 0") != none && at(ini, "# TEST ONLY. 0 (the default) does nothing. A value from 1 to 500 makes the") != none,
-        "G1.ini: advanced.slow_test_ms is documented in edvr.ini as test only, default 0");
+        "G1.ini: advanced.slow_test_ms is documented in edup.ini as test only, default 0");
 }
 
 }  // namespace

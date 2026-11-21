@@ -10,7 +10,7 @@ The log usually shows the cause. A report with no log leaves very little to go o
 
 On Windows the zip is written to the Desktop. Under Wine or Proton it is written to Downloads. The zip is also copied to the clipboard, so Ctrl+V attaches it in Discord or on a GitHub comment.
 
-Inside it: the last session's logs, `edvr_breadcrumbs.txt`, any `edvr_FATAL.txt`, your settings, and the install record. A headset install also includes the runtime's settings file.
+Inside it: the last session's logs, `edup_breadcrumbs.txt`, any `edup_FATAL.txt`, your settings, and the install record. A headset install also includes the runtime's settings file.
 
 If Elite crashed, Save logs writes a second zip, `edvr-crash-dump-<time>.zip`. That file is a copy of the game's memory. Attach the log zip to a public issue. Send the dump in private, and only when someone asks for it.
 
@@ -26,4 +26,4 @@ Say what you expected to see, whether you were in the headset or on a monitor, w
 
 ## If the game never reaches the menu
 
-`edvr_breadcrumbs.txt` sits next to `EliteDangerous64.exe`. It is written as it goes, so a crash that loses the log still leaves this file. Attach it, and attach whatever is in `edvr_logs`.
+`edup_breadcrumbs.txt` sits next to `EliteDangerous64.exe`. It is written as it goes, so a crash that loses the log still leaves this file. Attach it, and attach whatever is in `edup_logs`.

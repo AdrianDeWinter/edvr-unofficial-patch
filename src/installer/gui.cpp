@@ -229,6 +229,8 @@ std::wstring mirrorDirOfGame(const GameInstall& game) {
     return mirrorDirFor(game, mirrorRootOfApp());
 }
 
+void loadSettings(const std::string& edition);
+
 // The report keeps no native scrollbar (an EDIT's bar is the one piece of
 // stock chrome the drawn look could not restyle); the parent paints the
 // same slim thumb the settings list uses, in the report card's right
@@ -677,20 +679,20 @@ void rebuildStatus() {
     }
 
     // One row for the scope's settings files, each with whether it is here and kept. The flat file is read
-    // from edvr-flat.ini and falls back to the shared edvr.ini until it has its own.
+    // from edup-flat.ini and falls back to the shared edup.ini until it has its own.
     StatusRow settings;
     settings.label = tr(L"Your settings");
     std::wstring parts;
     bool allHere = true;
     if (scope != "flat") {
-        parts += s.iniPresent ? tr(L"edvr.ini kept") : tr(L"edvr.ini not yet");
+        parts += s.iniPresent ? tr(L"edup.ini kept") : tr(L"edup.ini not yet");
         allHere = allHere && s.iniPresent;
     }
     if (scope == "both") parts += L"; ";
     if (scope != "vr") {
-        parts += s.flatIniPresent ? tr(L"edvr-flat.ini kept")
-                                  : (s.iniPresent ? tr(L"edvr-flat.ini not yet (edvr.ini is copied into it)")
-                                                  : tr(L"edvr-flat.ini not yet"));
+        parts += s.flatIniPresent ? tr(L"edup-flat.ini kept")
+                                  : (s.iniPresent ? tr(L"edup-flat.ini not yet (edup.ini is copied into it)")
+                                                  : tr(L"edup-flat.ini not yet"));
         allHere = allHere && s.flatIniPresent;
     }
     settings.value = parts;
@@ -865,7 +867,7 @@ void paintInstallScreen(HDC dc) {
                   dp(kActionsNoteY + 20)};
     ui::drawText(dc,
                  tr(L"Nothing is changed until you confirm it, and every file replaced is copied "
-                    L"into edvr_backup\\ first."),
+                    L"into edup_backup\\ first."),
                  reassure, f.caption, t.subtext, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     const RECT report = reportCardRect();
@@ -1038,8 +1040,9 @@ void showSurvey() {
 void loadSettings(const std::string& edition) {
     g.settingsEdition = edition;
     if (!g.haveSurvey) return;
-    g.settings.load(g.survey.game.dir, edition);
-    settingsListSetModel(g.settingsList, &g.settings, mirrorDirOfGame(g.survey.game));
+    const std::wstring mirrorDir = mirrorDirOfGame(g.survey.game);
+    g.settings.load(g.survey.game.dir, edition, mirrorDir);
+    settingsListSetModel(g.settingsList, &g.settings, mirrorDir);
 }
 
 void selectInstall(size_t index) {
@@ -1048,7 +1051,7 @@ void selectInstall(size_t index) {
         showSurvey();
         return;
     }
-    g.survey = surveyTarget(g.installs[index]);
+    g.survey = surveyTarget(g.installs[index], mirrorDirOfGame(g.installs[index]));
     g.haveSurvey = true;
 #ifdef EDUP_LAUNCHER
     invalidateLauncherCache();
@@ -1144,7 +1147,7 @@ void scanForInstalls() {
     // and a better guess than whichever store answered first.
     size_t pick = 0;
     for (size_t i = 0; i < g.installs.size(); ++i) {
-        const Survey candidate = surveyTarget(g.installs[i]);
+        const Survey candidate = surveyTarget(g.installs[i], mirrorDirOfGame(g.installs[i]));
         if (candidate.state.present || candidate.d3d11.kind == DllKind::Edvr ||
             candidate.openvrCurrent.kind == DllKind::Edvr) {
             pick = i;
@@ -1226,11 +1229,11 @@ std::wstring confirmText(const Plan& plan, const wchar_t* verb, bool purge = fal
     if (purge) {
         text += L"\n";
         text += tr(L"Clean purge permanently deletes ED-UP settings, logs, install records, the "
-                   L"settings mirror, and everything inside edvr_backup\\ (including any backups "
-                   L"of other mods' files or earlier edvr.ini copies).");
+                   L"user settings folder, and everything inside edup_backup\\ (including any backups "
+                   L"of other mods' files or earlier edup.ini copies).");
         text += L"\n\nGo ahead?";
     } else {
-        text += L"\nA copy of every file replaced goes into edvr_backup\\.\n\nGo ahead?";
+        text += L"\nA copy of every file replaced goes into edup_backup\\.\n\nGo ahead?";
     }
     return text;
 }
@@ -1241,10 +1244,13 @@ void runAction(AppArgs::Act action) {
     if (g.screen != Screen::Install) showScreen(Screen::Install);
 #endif
 
+    const std::wstring mirrorRoot = mirrorRootOfApp();
+    const std::wstring mirrorDir = mirrorDirFor(g.survey.game, mirrorRoot);
+
     // The folder can change between the survey and the button -- the game gets
     // started, another installer runs. Ask the disk again rather than acting on
     // a picture that may be minutes old.
-    g.survey = surveyTarget(g.survey.game);
+    g.survey = surveyTarget(g.survey.game, mirrorDir);
 
 #ifdef EDUP_LAUNCHER
     if (action != AppArgs::Act::Uninstall && !launcherPayloadReady()) {
@@ -1265,57 +1271,40 @@ void runAction(AppArgs::Act action) {
     args.removeSettings = args.purge;
     args.scope = scopeChoice();
 
-    const std::wstring mirrorRoot = mirrorRootOfApp();
-    const std::wstring mirrorDir = mirrorDirFor(g.survey.game, mirrorRoot);
     const bool canMirror = action != AppArgs::Act::Uninstall;
 
-    // A folder with no settings file at all but a mirror outside it is exactly
-    // the folder a game update just wiped. Asked about, not assumed -- unlike the
-    // command line there is a window right here to ask in -- and only when
-    // "keep my settings" is still checked; unchecking it says fresh defaults
-    // are wanted, and old settings reappearing anyway would be worse than not
-    // finding the mirror at all.
-    //
-    // Asked in the chosen scope's terms: each file the scope installs that the
-    // folder lacks, if the mirror holds it. A file the folder has is never restored over.
     if (canMirror && args.keepSettings) {
         const MirrorInfo mirror = readMirror(mirrorDir);
-        const std::vector<std::string> missing = settingsToRestore(g.survey.game.dir, mirror, args.scope);
-        if (!missing.empty()) {
+        const std::vector<std::string> missing = settingsToRestore(mirrorDir, mirror, args.scope);
+        if (!missing.empty() && !g.survey.iniPresent && !g.survey.flatIniPresent) {
             const std::wstring wanted = fromUtf8(settingsNamesOf(missing));
             const std::wstring text =
-                L"This folder has no " + wanted + L", but settings from an earlier install of it "
-                L"were found outside the game folder, last saved " +
+                L"No " + wanted + L" was found, but settings from an earlier install "
+                L"were found in " + mirror.dir + L", last saved " +
                 fromUtf8(mirror.savedUtc) +
-                L".\n\nRestore them before installing? They are kept at\n" + mirror.dir +
-                L"\nprecisely so a game update wiping this folder cannot take them too.";
+                L".\n\nRestore them before installing?";
             const int answer = MessageBoxW(g.window, text.c_str(), kAppTitle,
                                            MB_YESNO | MB_ICONQUESTION);
 #ifdef EDUP_LAUNCHER
-            // A folder that needs administrator rights is written by the elevated copy, which does this too.
             const bool restoreNow = launcherRestoreHere(answer == IDYES);
 #else
             const bool restoreNow = true;
 #endif
             if (answer == IDYES && restoreNow) {
                 std::vector<std::string> notes;
-                const bool restored = restoreFromMirror(g.survey.game.dir, mirror, args.scope, &notes);
+                const bool restored = restoreFromMirror(g.survey.game.dir, mirror, args.scope, &notes, mirrorDir);
                 if (!restored) {
-                    // Said, not swallowed: some of the saved settings did not come
-                    // back, and carrying on quietly would install over the gap.
                     std::wstring why = L"Not all of your saved settings could be restored:\n\n";
                     for (const std::string& n : notes) why += L"\x2022 " + fromUtf8(n) + L"\n";
-                    why += L"\nThe install carries on with what is in the folder now.";
+                    why += L"\nThe install carries on with what is there now.";
                     MessageBoxW(g.window, why.c_str(), kAppTitle, MB_OK | MB_ICONWARNING);
                 }
-                // Whatever did come back is what the plan is for.
-                g.survey = surveyTarget(g.survey.game);
+                g.survey = surveyTarget(g.survey.game, mirrorDir);
             }
         }
     }
-    // A scope change is planned and shown in the report like any other install:
-    // there is no conversion prompt, and the planner's own proofs gate it.
-    const Options options = optionsFor(args, action == AppArgs::Act::Repair);
+    Options options = optionsFor(args, action == AppArgs::Act::Repair);
+    options.settingsDir = mirrorDir;
     const Plan plan = action == AppArgs::Act::Uninstall
                           ? planUninstall(g.survey, options, payloadInfo())
                           : planInstall(g.survey, options, payloadInfo());
@@ -1416,7 +1405,7 @@ void runAction(AppArgs::Act action) {
             text += "\r\nClean purge complete.\r\n";
         } else {
             text += "\r\nDone. Start Elite Dangerous; ED-UP writes what it managed to install into "
-                    "edvr_logs\\ next to the game.\r\n";
+                    "edup_logs\\ next to the game.\r\n";
         }
         if (canMirror) {
             const MirrorResult m = updateMirror(g.survey.game.dir, plan.backupDir, mirrorDir);
@@ -1439,7 +1428,8 @@ void runAction(AppArgs::Act action) {
     }
     setReport(text);
 
-    g.survey = surveyTarget(g.survey.game);
+    g.survey = surveyTarget(g.survey.game, mirrorDir);
+    loadSettings(g.settingsEdition);
     showSurvey();
 }
 

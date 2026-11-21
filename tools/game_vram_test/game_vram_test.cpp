@@ -1,7 +1,7 @@
 // The rig for advanced.game_vram (docs/memory-growth-2026-10-22.md): the setting parser, the arithmetic that
 // decides what Elite is told (src\common\game_vram.h), the call line's exact text and its buffer limits, the setup
 // key, the learned store and the session rules (src\common\game_vram_learn.h), and by source text the glue that
-// wires it (edvr.ini, d3d11_proxy.cpp, vram_tick.cpp, runtime_profile.h, game_vram_hook.cpp).
+// wires it (edup.ini, d3d11_proxy.cpp, vram_tick.cpp, runtime_profile.h, game_vram_hook.cpp).
 //
 // Every check's label starts with its case id (V1..V10):
 //
@@ -643,7 +643,7 @@ size_t countOf(const std::string& text, const std::string& needle) {
 
 void sourceCases(const std::string& root) {
     std::string ini, proxy, tick;
-    const std::string iniPath = root + "/edvr.ini";
+    const std::string iniPath = root + "/edup.ini";
     const std::string proxyPath = root + "/src/d3d11/d3d11_proxy.cpp";
     const std::string tickPath = root + "/src/d3d11/vram_tick.cpp";
     if (!readFile(iniPath, ini)) {
@@ -654,7 +654,7 @@ void sourceCases(const std::string& root) {
         const size_t key = ini.find("\n#game_vram = auto");
         check(advanced != std::string::npos && key != std::string::npos && experimental != std::string::npos &&
                   advanced < key && key < experimental,
-              "V6 edvr.ini has '#game_vram = auto' inside [advanced]");
+              "V6 edup.ini has '#game_vram = auto' inside [advanced]");
         // The comment block directly above the key: the run of lines starting with '#' before it.
         std::vector<std::string> lines;
         std::istringstream lineStream(ini);
@@ -779,7 +779,7 @@ const char* const kCells[] = {
     "V3 compute Fixed: cap, card-or-under, below the auto floor",
     "V4 compute Auto: different reserves, no OS budget (95% of the card), tiny budget, card already fits, no card size",
     "V5 formatCallLine and settingText: exact text, 16-byte buffer terminated and not overrun",
-    "V6 glue by source text: edvr.ini key and comment, d3d11_proxy.cpp calls, vram_tick.cpp feeds, runtime_profile.h's every-profile key list, "
+    "V6 glue by source text: edup.ini key and comment, d3d11_proxy.cpp calls, vram_tick.cpp feeds, runtime_profile.h's every-profile key list, "
     "game_vram_hook.cpp's caller test, profile and game gates, profile-change stop, unreadable-store guard, Wine whole-card budget guard",
     "V7 setup key, AA classes, safe starting reserves",
     "V8 learned store: round trip, skipped lines, duplicates, upserts, 64-record cap",

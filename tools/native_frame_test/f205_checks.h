@@ -264,7 +264,7 @@ void run205(Check&& check) {
     // ---- 6. the sites -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {
         const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), frame = slurp("src/d3d11/native_frame.cpp"), client = slurp("src/openxr/native_frame_client.h"), host = slurp("src/openxr/native_runtime_host.h"),
-                          ini = slurp("edvr.ini"), build = slurp("build.bat"), stereo = slurp("src/openxr/d3d11_stereo.cpp");
+                          ini = slurp("edup.ini"), build = slurp("build.bat"), stereo = slurp("src/openxr/d3d11_stereo.cpp");
         check(!cpp.empty() && !frame.empty() && !client.empty() && !host.empty() && !ini.empty() && !build.empty() && !stereo.empty(), "F205: the sources the pins read are readable from the repo root");
         // the one point: the key is read in four places only (the config compare, its store, the latch's start and the effective function), everything else asks adsSightEyeMode
         check(countOf(cpp, "g_adsSightEyeKey.load(") == 3 && cpp.find("int adsSightEyeMode() noexcept {\n    return nofoot::f205::effectiveSightEye(g_adsSightEyeKey.load(std::memory_order_relaxed), g_adsSightForceBoth.load(std::memory_order_relaxed));") != std::string::npos &&
@@ -287,7 +287,7 @@ void run205(Check&& check) {
         const std::string menuTest = slurp("tools/hotkey_capture_test/hotkey_capture_test.cpp");
         check(!menuTest.empty() && cpp.find("ads_view_circle") == std::string::npos && cpp.find("g_adsViewCircleKey") == std::string::npos && ini.find("ads_view_circle") == std::string::npos &&
                   ini.find("ADS: view circle") == std::string::npos && menuTest.find("ads_view_circle") == std::string::npos && frame.find("ads_view_circle") == std::string::npos && host.find("ads_view_circle") == std::string::npos,
-              "F205b: the circle has no setting of its own: no reader, atomic or log note in the code, no line or row in edvr.ini, no pin in the menu's test");
+              "F205b: the circle has no setting of its own: no reader, atomic or log note in the code, no line or row in edup.ini, no pin in the menu's test");
         check(ini.find("# The scoped Executioner's full-detail view (ADS: scope zoom full detail, below) is part of this setting: its two black side bars are hidden by a circle") != std::string::npos &&
                   ini.find("a circle, black outside, about the sight in each eye,\n# the widest that still hides those black bars, comes and goes with them (it is part of this view and has no setting of its own).") != std::string::npos &&
                   ini.find("shows each eye's view inside a circle") == std::string::npos,

@@ -153,21 +153,19 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
         return failed("there is no EliteDangerous64.exe in the game folder the plan names");
     const std::wstring mirrorDir = mirrorDirFor(game, paths.dataRoot);
 
-    Survey survey = surveyTarget(game);
+    Survey survey = surveyTarget(game, mirrorDir);
     const bool uninstall = file.action == "uninstall";
     ApplyOutcome outcome;
 
-    // The restore the user agreed to in the window; it writes into the game folder, so it
-    // is done here, with the rights the rest of the work has.
     if (file.restoreMirror && file.keepSettings && !uninstall) {
         const MirrorInfo mirror = readMirror(mirrorDir);
         const std::string scope = file.scope.empty() ? defaultScope(survey) : file.scope;
-        if (!settingsToRestore(survey.game.dir, mirror, scope).empty()) {
+        if (!settingsToRestore(mirrorDir, mirror, scope).empty() && !survey.iniPresent && !survey.flatIniPresent) {
             std::vector<std::string> notes;
-            const bool restored = restoreFromMirror(survey.game.dir, mirror, scope, &notes);
+            const bool restored = restoreFromMirror(survey.game.dir, mirror, scope, &notes, mirrorDir);
             for (const std::string& n : notes) outcome.lines.push_back(n);
-            if (!restored) outcome.lines.push_back("Not all of the saved settings could be restored; carrying on with what is in the folder.");
-            survey = surveyTarget(game);
+            if (!restored) outcome.lines.push_back("Not all of the saved settings could be restored; carrying on with what is there.");
+            survey = surveyTarget(game, mirrorDir);
         }
     }
 
@@ -179,6 +177,7 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
     options.repair = file.action == "repair";
     options.backupStamp = timestampName();
     options.nowUtc = utcNow();
+    options.settingsDir = mirrorDir;
     const Plan plan = uninstall ? planUninstall(survey, options, payloadInfo()) : planInstall(survey, options, payloadInfo());
 
     if (plan.blocked) {

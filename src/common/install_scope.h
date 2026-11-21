@@ -230,7 +230,7 @@ inline LaunchDecision decideLaunch(const ScopeRead& scope, const ModeRead& mode,
 // The launch's one log line, without a trailing newline.
 inline std::string formatProfileLine(const LaunchDecision& d, const char* activeName, const std::string& settingsPath) {
     if (d.scope.scope == InstallScope::Invalid)
-        return "profile: invalid (edvr_profile.ini malformed; fixes disabled, proxy chaining retained; repair the installation)";
+        return "profile: invalid (edup_profile.ini malformed; fixes disabled, proxy chaining retained; repair the installation)";
     std::string out = "profile: ";
     out += activeName;
     out += " (scope ";

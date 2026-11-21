@@ -2,7 +2,7 @@
 //
 //   --dry-run          the same run (the rig never writes a file), for the gate's --dry-run convention
 //   --self-test [root] every check below
-//   --corpus DIR       also the game's own five skinned pairs from an edvr_logs dump (DIR\shaders\*.dxbc), local only: the game's
+//   --corpus DIR       also the game's own five skinned pairs from an edup_logs dump (DIR\shaders\*.dxbc), local only: the game's
 //                      shaders are not in the repository. Case K9.
 //
 // There is no oracle flight for this patch: these properties are the proof (tools/engine_velocity_test/skin_clone_tests.h states them).
@@ -484,12 +484,12 @@ int main(int argc, char** argv) {
         else if (a == "--corpus" && i + 1 < argc) corpus = argv[++i];
         else if (i == 2 && argv[1] == std::string("--self-test")) continue;
         else {
-            std::fprintf(stderr, "usage: skin_clone_test --self-test [repository root] | --dry-run | --corpus <edvr_logs dir>\n");
+            std::fprintf(stderr, "usage: skin_clone_test --self-test [repository root] | --dry-run | --corpus <edup_logs dir>\n");
             return 2;
         }
     }
     if (!selfTest && corpus.empty()) {
-        std::fprintf(stderr, "usage: skin_clone_test --self-test [repository root] | --dry-run | --corpus <edvr_logs dir>\n");
+        std::fprintf(stderr, "usage: skin_clone_test --self-test [repository root] | --dry-run | --corpus <edup_logs dir>\n");
         return 2;
     }
     ComPtr<ID3D11Device> dev;

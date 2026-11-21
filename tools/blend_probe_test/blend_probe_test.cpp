@@ -414,18 +414,18 @@ void testGridText() {
 
 void testInstallLine() {
     char b[kRowBuf];
-    formatInstallLine(b, sizeof(b), false, true, "F3", "edvr.ini");
+    formatInstallLine(b, sizeof(b), false, true, "F3", "edup.ini");
     check(std::strcmp(b, "blend probe: off; hotkey.blend_probe is bound to F3") == 0, "install line, bound: pinned text");
-    formatInstallLine(b, sizeof(b), false, false, "", "edvr.ini");
-    check(std::strcmp(b, "blend probe: off; hotkey.blend_probe is NOT bound -- add \"blend_probe = <a free key>\" under [hotkey] in edvr.ini to use it") == 0,
+    formatInstallLine(b, sizeof(b), false, false, "", "edup.ini");
+    check(std::strcmp(b, "blend probe: off; hotkey.blend_probe is NOT bound -- add \"blend_probe = <a free key>\" under [hotkey] in edup.ini to use it") == 0,
           "install line, unbound or empty: pinned text");
     formatInstallLine(b, sizeof(b), false, false, nullptr, nullptr);
     check(std::strstr(b, "is NOT bound") != nullptr, "install line, unbound with a null key");
-    formatInstallLine(b, sizeof(b), false, true, nullptr, "edvr.ini");
+    formatInstallLine(b, sizeof(b), false, true, nullptr, "edup.ini");
     check(std::strcmp(b, "blend probe: off; hotkey.blend_probe is bound to ") == 0, "install line, a null key text does not crash");
-    formatInstallLine(b, sizeof(b), true, false, "", "edvr.ini");
+    formatInstallLine(b, sizeof(b), true, false, "", "edup.ini");
     check(std::strstr(b, "flat profile") != nullptr && std::strchr(b, '\n') == nullptr, "install line, flat");
-    formatInstallLine(b, sizeof(b), false, false, "", "edvr.ini");
+    formatInstallLine(b, sizeof(b), false, false, "", "edup.ini");
     check(std::strchr(b, '\n') == nullptr && std::strlen(b) < kLogMessageMax, "install line is one line and fits the log");
 }
 

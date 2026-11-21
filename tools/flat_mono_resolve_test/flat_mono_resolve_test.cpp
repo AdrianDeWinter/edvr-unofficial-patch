@@ -43,7 +43,7 @@ int failures=0,backendCalls=0;
 bool backendFail=false,backendReset=false,infiniteSeen=false;
 bool xessCaptureInputs=false; // opt-in for the real mask-less SDK argument fixture
 std::vector<std::string> resetEvents;
-// What the HDR route's breadcrumbs (flat_hdr_crumbs.h) were handed to breadcrumb(), in order: the lines edvr_breadcrumbs.txt would hold.
+// What the HDR route's breadcrumbs (flat_hdr_crumbs.h) were handed to breadcrumb(), in order: the lines edup_breadcrumbs.txt would hold.
 std::vector<std::string> crumbLines;
 // The resolver's one log line per initialisation that says which isolation it chose (flat_isolation_mode.h), in order.
 std::vector<std::string> isolationLines;

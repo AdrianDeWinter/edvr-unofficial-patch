@@ -367,8 +367,15 @@ void noteVehicle(Session& s, bool scorpion, journal_vehicle::Event cause) {
 std::atomic<uint8_t> g_stationKind{0};   // journal_station::Kind, for journalStationKind on the Present thread
 std::atomic<uint32_t> g_carrierJumps{0}; // the latch's CarrierJump count, for journalCarrierJumps
 
-// %LOCALAPPDATA%\EDVR\last-station.txt: the type of the last station the journal named and a hash of its name, so that a load on foot, which names neither, can be told it.
+// %LOCALAPPDATA%\EDUP\last-station.txt: the type of the last station the journal named and a hash of its name, so that a load on foot, which names neither, can be told it.
 std::wstring stationFilePath() {
+    wchar_t appdata[MAX_PATH] = {};
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", appdata, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return std::wstring();
+    return std::wstring(appdata) + L"\\EDUP\\last-station.txt";
+}
+
+std::wstring legacyStationFilePath() {
     wchar_t appdata[MAX_PATH] = {};
     const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", appdata, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return std::wstring();
@@ -379,6 +386,12 @@ void stationLoad(Session& s) {
     const std::wstring path = stationFilePath();
     if (path.empty()) return;
     HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        const std::wstring legacy = legacyStationFilePath();
+        if (!legacy.empty()) {
+            h = CreateFileW(legacy.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
+    }
     if (h == INVALID_HANDLE_VALUE) return;
     char text[128] = {};
     DWORD got = 0;

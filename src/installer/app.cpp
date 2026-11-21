@@ -72,8 +72,8 @@ std::string usageText() {
            "                       of keeping your values.\r\n"
            "  --remove-settings    with --uninstall, delete the settings files of the installed\r\n"
            "                       scope too.\r\n"
-           "  --purge              clean uninstall: removes ED-UP, both settings files, edvr_logs\\,\r\n"
-           "                       edvr_backup\\, edvr_install\\, and this install's settings mirror.\r\n"
+           "  --purge              clean uninstall: removes ED-UP, both settings files, edup_logs\\,\r\n"
+           "                       edup_backup\\, edup_install\\, and this install's user settings folder.\r\n"
            "  --help               this.\r\n"
 #ifdef EDUP_LAUNCHER
            "\r\n"
@@ -83,8 +83,8 @@ std::string usageText() {
            "                       cache, verify each, and adopt its manifest. Touches no game folder.\r\n"
            "  --channel stable|rc  which releases to look at, for this run (rc includes release candidates).\r\n"
            "  --payload <dir>      install from an unpacked ed-up-<version>.zip instead of the cache.\r\n"
-           "  --data-root <dir>    keep the launcher's folders, and the settings copies, under <dir>\r\n"
-           "                       instead of %LOCALAPPDATA%\\EDVR, and do not copy, register or update\r\n"
+           "  --data-root <dir>    keep the launcher's folders, and your settings, under <dir>\r\n"
+           "                       instead of %LOCALAPPDATA%\\EDUP, and do not copy, register or update\r\n"
            "                       the launcher itself.\r\n"
            "  --unregister         remove the launcher, its Start menu shortcut and its downloaded files.\r\n"
            "                       ED-UP in your game folders and your settings copies are left alone.\r\n"
@@ -111,10 +111,9 @@ std::string usageText() {
            "                       Exit 0 when Elite started, 1 when it did not, 2 for bad arguments.\r\n"
 #endif
            "\r\n"
-           "  A copy of your settings files (and the install record) is kept outside the game\r\n"
-           "  folder, in %LOCALAPPDATA%\\EDVR, so a game update that wipes the folder cannot take\r\n"
-           "  it too. --install restores from it automatically when the folder has no settings\r\n"
-           "  file of its own, unless --replace-settings says you want fresh defaults instead.\r\n";
+           "  Your settings files (and a backup of the install record) live outside the game\r\n"
+           "  folder, in %LOCALAPPDATA%\\EDUP, so a game update that wipes the folder cannot take\r\n"
+           "  them too, and editing settings never needs administrator rights.\r\n";
     return out;
 }
 
@@ -334,12 +333,12 @@ std::string statusReport(const Survey& s, const PayloadInfo& payload, const std:
     } else {
         out += "openvr_api.dll    the game's own copy was not found under this folder\r\n";
     }
-    out += std::string("edvr.ini          ") + (s.iniPresent ? "present" : "not present") + "\r\n";
+    out += std::string("edup.ini          ") + (s.iniPresent ? "present" : "not present") + "\r\n";
     // The flat settings file: shown when the scope installs flat, or whenever one is there.
-    // "not present" beside a present edvr.ini means the flat runtime reads edvr.ini until
+    // "not present" beside a present edup.ini means the flat runtime reads edup.ini until
     // the first flat change starts its own from it.
     if (scope != "vr" || s.flatIniPresent)
-        out += std::string("edvr-flat.ini     ") + (s.flatIniPresent ? "present" : "not present") + "\r\n";
+        out += std::string("edup-flat.ini     ") + (s.flatIniPresent ? "present" : "not present") + "\r\n";
     out += std::string("nvngx_dlss.dll    ") +
            (s.ngx.kind == DllKind::Absent ? std::string("not present (NVIDIA's DLSS runtime)")
                                           : toUtf8(describeDll(s.ngx))) +
@@ -381,7 +380,7 @@ std::string planReport(const Plan& plan) {
     // Named for the file the plan works on: the flat edition's is edvr-flat.ini,
     // and a report about "your edvr.ini" would send somebody to the wrong one.
     const std::string kept = "\r\n  Settings kept from your " +
-                             (plan.settingsFile.empty() ? std::string("edvr.ini") : plan.settingsFile) + ":";
+                             (plan.settingsFile.empty() ? std::string("edup.ini") : plan.settingsFile) + ":";
     out += bullets(kept.c_str(), plan.merge.kept);
     out += bullets("  New defaults adopted (you had not changed these):", plan.merge.adopted);
     out += bullets("  Set by the installer:", plan.merge.forced);
@@ -507,7 +506,15 @@ int runConsole(const AppArgs& args) {
         game = found.front();
     }
 
-    Survey survey = surveyTarget(game);
+#ifdef EDUP_LAUNCHER
+    const std::wstring mirrorRoot = launcherMirrorRoot(args);
+    if (args.dataRoot.empty()) migrateLegacyDataRoot(mirrorRoot);
+#else
+    const std::wstring mirrorRoot = defaultMirrorRoot();
+    migrateLegacyDataRoot(mirrorRoot);
+#endif
+    const std::wstring mirrorDir = mirrorDirFor(game, mirrorRoot);
+    Survey survey = surveyTarget(game, mirrorDir);
     const PayloadInfo& payload = payloadInfo();
     std::string scope = scopeFor(args, survey);
     writeOut(statusReport(survey, payload, scope) + "\r\n");
@@ -541,35 +548,20 @@ int runConsole(const AppArgs& args) {
     }
 
 #ifdef EDUP_LAUNCHER
-    const std::wstring mirrorRoot = launcherMirrorRoot(args);
-    const std::wstring mirrorDir = mirrorDirFor(survey.game, mirrorRoot);
     if (!havePayload && args.action != AppArgs::Act::Uninstall) {
         writeOut("\r\nThere is nothing to install from yet: " + payloadNote + "\r\n");
         return 5;
     }
-#else
-    const std::wstring mirrorRoot = defaultMirrorRoot();
-    const std::wstring mirrorDir = mirrorDirFor(survey.game, mirrorRoot);
 #endif
     const bool canMirror = args.action != AppArgs::Act::Uninstall;
 
-    // A folder with no settings file at all but a mirror outside it is exactly
-    // the folder a game update just wiped. Restored by DEFAULT here -- there is no
-    // prompt to answer on a command line -- unless --replace-settings said the
-    // opposite: somebody who asked for fresh defaults should not have last
-    // week's settings appear anyway. --dry-run promises to touch nothing, and
-    // a restore is a write, so it is only ever described there, never done.
-    //
-    // "A settings file" and "a mirror of one" are asked in the chosen scope's
-    // terms: each file the scope installs that the folder lacks, if the mirror
-    // holds it. A file the folder has is never restored over.
     if (canMirror && args.keepSettings) {
         const MirrorInfo mirror = readMirror(mirrorDir);
-        const std::vector<std::string> missing = settingsToRestore(survey.game.dir, mirror, scope);
-        if (!missing.empty()) {
+        const std::vector<std::string> missing = settingsToRestore(mirrorDir, mirror, scope);
+        if (!missing.empty() && !survey.iniPresent && !survey.flatIniPresent) {
             const std::string wanted = settingsNamesOf(missing);
-            writeOut("This folder has no " + wanted + ", but settings from an earlier install of it "
-                     "were found outside the game folder (" + toUtf8(mirror.dir) + "), last saved " +
+            writeOut("No " + wanted + " was found, but settings from an earlier install "
+                     "were found in " + toUtf8(mirror.dir) + ", last saved " +
                      mirror.savedUtc + ".\r\n");
             if (args.dryRun) {
                 writeOut("  Would restore them before installing -- skipped, this is a dry run. "
@@ -577,22 +569,20 @@ int runConsole(const AppArgs& args) {
                          ".\r\n\r\n");
             } else {
                 std::vector<std::string> notes;
-                const bool restored = restoreFromMirror(survey.game.dir, mirror, scope, &notes);
+                const bool restored = restoreFromMirror(survey.game.dir, mirror, scope, &notes, mirrorDir);
                 for (const std::string& n : notes) writeOut("  " + n + "\r\n");
                 if (!restored) {
-                    writeOut("  Could not restore all of it -- carrying on with what is in the "
-                             "folder now.\r\n");
+                    writeOut("  Could not restore all of it -- carrying on with what is there now.\r\n");
                 }
-                // Whatever did come back is what the plan is for, whether or not
-                // all of it did.
-                survey = surveyTarget(game);
+                survey = surveyTarget(game, mirrorDir);
                 scope = scopeFor(args, survey);
                 writeOut("\r\n");
             }
         }
     }
 
-    const Options options = optionsFor(args, args.action == AppArgs::Act::Repair);
+    Options options = optionsFor(args, args.action == AppArgs::Act::Repair);
+    options.settingsDir = mirrorDir;
     const Plan plan = args.action == AppArgs::Act::Uninstall ? planUninstall(survey, options, payload)
                                                              : planInstall(survey, options, payload);
     writeOut(planReport(plan));
@@ -684,12 +674,19 @@ bool purgeAfterUninstall(const std::wstring& gameDir, const std::wstring& mirror
     if (!mirrorDir.empty() && dirExists(mirrorDir)) {
         if (!removeMirror) {
             if (notes) {
-                notes->push_back("Kept settings mirror " + toUtf8(mirrorDir) +
+                notes->push_back("Kept user settings folder " + toUtf8(mirrorDir) +
                                  " because another install shares it.");
             }
         } else if (removeDirectoryTree(mirrorDir)) {
             removedAny = true;
-            if (notes) notes->push_back("Removed settings mirror " + toUtf8(mirrorDir) + ".");
+            if (notes) notes->push_back("Removed user settings folder " + toUtf8(mirrorDir) + ".");
+        }
+    }
+    if (removeMirror && !mirrorDir.empty()) {
+        const std::wstring legacyDir = legacyMirrorDirFor(mirrorDir);
+        if (!legacyDir.empty() && dirExists(legacyDir) && removeDirectoryTree(legacyDir)) {
+            removedAny = true;
+            if (notes) notes->push_back("Removed legacy settings mirror " + toUtf8(legacyDir) + ".");
         }
     }
     return removedAny;

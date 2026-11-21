@@ -288,13 +288,13 @@ inline void run186(Check&& check) {
 
     // ---- 6. the source sites ---------------------------------------------------------------------------------------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini");
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini");
         const auto has = [&](const std::string& needle) { return cpp.find(needle) != std::string::npos; };
         const auto at = [&](const std::string& needle) { return cpp.find(needle); };
         const size_t reachAt = ini.find("\nnative_on_foot_ads_left_reach = "), squareAt = ini.find("\nnative_on_foot_crouch_ads_square = ");
         check(cpp.find("ads_preturn") == std::string::npos && cpp.find("g_adsPreturn") == std::string::npos && ini.find("ads_preturn") == std::string::npos && ini.find("ADS: pre-turn") == std::string::npos &&
                   reachAt != std::string::npos && squareAt != std::string::npos && reachAt < squareAt,
-              "F187: the A/B key experimental.native_on_foot_ads_preturn is gone: nothing reads it, no flag holds it, edvr.ini has neither its entry nor its ui row, and the pre-turn is behaviour");
+              "F187: the A/B key experimental.native_on_foot_ads_preturn is gone: nothing reads it, no flag holds it, edup.ini has neither its entry nor its ui row, and the pre-turn is behaviour");
         const size_t turnAt = at("const nofoot::f186::Turned adsTurn = nofoot::f186::turnAds(adsTerms, g_ltaDrop.load(std::memory_order_relaxed), aimFresh, aimRad, onFoot && !camExternal);"),
                      loopAt = at("if (adsTurn.turned && i == 1) eye[i] += adsTurn.dy;"), shiftAt = at("double sShift[3] = {g_adsLock[0] + g_adsSight.applied[0] + weaponEye.out.ignore[0]");
         check(turnAt != std::string::npos && loopAt != std::string::npos && shiftAt != std::string::npos && turnAt < loopAt && loopAt < shiftAt &&

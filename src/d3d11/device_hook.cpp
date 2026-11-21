@@ -2259,7 +2259,7 @@ void configureDiagnosticHotkeys() {
         {&s.gpuPassKey, &s.gpuPassKeyText, gpuPassProfileKeyPart(Config::get().getString("hotkey.gpu_pass_profile", "")),
          "hotkey.gpu_pass_profile", "GPU pass profile",
          "hotkey: gpu_pass_profile is set but bound nothing, so the GPU pass profile cannot be armed this session.",
-         " Measures the next 30 whole frames (or the COUNT after the key) to edvr_logs\\gpu_pass_profile_<stamp>.csv. Costs nothing until pressed."},
+         " Measures the next 30 whole frames (or the COUNT after the key) to edup_logs\\gpu_pass_profile_<stamp>.csv. Costs nothing until pressed."},
         // TEMPORARY (blend probe, 2026-10-14; blend_probe.h, docs/dlss-blur-elements-2026-10-14.md): default unbound; a press captures 3 frames
         // of the blend-enabled or no-depth-write eye draws that reach a window at the view centre, and a grid of the temporal pass's
         // decisions over it, to the log. Remove with the arc.
@@ -2274,7 +2274,7 @@ void configureDiagnosticHotkeys() {
          "hotkey.dump_eyes", "eye dump",
          "hotkey: dump_eyes is set but bound nothing, so the eye dump cannot be armed this session "
          "(the settings menu's row still can).",
-         " Both eyes go to edvr_logs\\eyes as BMP on each press, one hitch each."},
+         " Both eyes go to edup_logs\\eyes as BMP on each press, one hitch each."},
         // F213: the on-foot flight recorder's mark. Bound by default (F9 is in none of Elite's stock control schemes); a press only counts, writes one mark record when the
         // recorder is running and says so in the log either way. It does not touch the eye dump, which stalls a frame.
         {&s.onFootMarkKey, &s.onFootMarkKeyText, Config::get().getString("hotkey.on_foot_mark", "F9"),
@@ -2327,7 +2327,7 @@ State& ensureState() {
                            "So a moment you noticed can be found in the log afterwards.",
                            &menuActionMarker, nullptr);
         menuRegisterAction("Dump both eyes as seen",
-                           "The dump_eyes key's job: the treated frame, both eyes, to edvr_logs\\eyes as BMP.",
+                           "The dump_eyes key's job: the treated frame, both eyes, to edup_logs\\eyes as BMP.",
                            &menuActionDumpEyes, nullptr);
         menuConfigure(Config::get());
         // The FSS keys come from the GAME's own key configuration, and only
@@ -2863,7 +2863,7 @@ void hookDevice(ID3D11Device* device) {
         Log::get().note("flat shader capture: armed targets=%u stages=VS,PS directory=%ls; watching successful creations, one attempt per exact stage/hash per device; absent attempted lines mean no capture attempt", unsigned(kFlatShaderCaptureCount), s.shaderDumpDir.c_str());
     if (s.shaderDump) {
         Log::get().note("shader dump ARMED: every vertex and pixel shader "
-                        "the game creates is written to edvr_logs\\shaders "
+                        "the game creates is written to edup_logs\\shaders "
                         "by hash. Set glare_shader_dump = 0 afterwards -- "
                         "this costs file writes during loading.");
     }

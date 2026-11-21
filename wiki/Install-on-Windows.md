@@ -9,7 +9,7 @@ The **launcher** installs ED-UP, offers later updates, and has an optional Play 
 1. Download **only** [ed-up-launcher.exe](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest/download/ed-up-launcher.exe), or use the [download page](https://characterecho-sean.github.io/ed-unofficial-patch/). You do not need the `.zip`, `.json`, or `.sig` files listed on the GitHub release — the launcher fetches and verifies the release package for you.
 2. On the [release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest), open `SHA256SUMS` and compare it with the file's SHA-256. That hash is how you check the download is the one this project published.
 3. Windows may say it does not recognise the app, because the publisher is new to it. The warning names CharacterEcho LLC, who signed the file. Choose **More info**, then **Run anyway**.
-4. The first run copies the launcher to `%LOCALAPPDATA%\EDVR\launcher\`, adds a Start menu shortcut, and adds an entry in Windows' list of installed programs. Later runs start from there.
+4. The first run copies the launcher to `%LOCALAPPDATA%\EDUP\launcher\`, adds a Start menu shortcut, and adds an entry in Windows' list of installed programs. Later runs start from there.
 
 The launcher installs from a release it has downloaded: press **Download & install** (or **Download & update**) in the **Updates** section when a release is available. You can also change the in-game menu hotkey (`F8` by default) in the **Settings** tab under **Hotkeys**.
 
@@ -39,9 +39,9 @@ Under **Install ED-UP for:**
 
 You can change this later with Update. A change of choice leaves your settings files in place.
 
-Read the list of files, then confirm. The launcher copies anything it replaces into `edvr_backup`, then writes the patch.
+Read the list of files, then confirm. The launcher copies anything it replaces into `edup_backup`, then writes the patch.
 
-Your choices live in `edvr.ini` (headset) and `edvr-flat.ini` (monitor) next to the game. A later install keeps those files unless you ask it to replace them. A spare copy is kept under `%LOCALAPPDATA%\EDVR`, so a game update that wipes the game folder can be put back.
+Your choices live in `edup.ini` (headset) and `edup-flat.ini` (monitor) next to the game. A later install keeps those files unless you ask it to replace them. A spare copy is kept under `%LOCALAPPDATA%\EDUP`, so a game update that wipes the game folder can be put back.
 
 ## Start Elite
 

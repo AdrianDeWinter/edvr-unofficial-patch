@@ -6,11 +6,11 @@ EDHM installs itself as `d3d11.dll`. Only one file can have that name. The launc
 
 EDHM's uninstaller deletes `d3d11.dll`. After the rename, that name belongs to ED-UP, so the uninstall removes ED-UP and leaves EDHM under the renamed file. Press **Repair**. The launcher recognises that state and puts both back.
 
-The same rename by hand is one step in the [manual install](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/manual-install.md#running-alongside-edhm-by-hand): rename EDHM's file, put ED-UP's `d3d11.dll` in its place, and set the chain in `edvr.ini`.
+The same rename by hand is one step in the [manual install](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/manual-install.md#running-alongside-edhm-by-hand): rename EDHM's file, put ED-UP's `d3d11.dll` in its place, and set the chain in `edup.ini`.
 
 ## ReShade
 
-Install ReShade the way its own instructions say, usually as `dxgi.dll`. ED-UP runs alongside it. Both sets of effects apply. ReShade needs no line in `edvr.ini`.
+Install ReShade the way its own instructions say, usually as `dxgi.dll`. ED-UP runs alongside it. Both sets of effects apply. ReShade needs no line in `edup.ini`.
 
 ## Another mod that wants `d3d11.dll`
 

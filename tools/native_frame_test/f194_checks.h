@@ -164,7 +164,7 @@ void run194(Check&& check) {
     }
     // ---- 3. the source sites ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini"), f109h = slurp("src/d3d11/native_on_foot_f109.h"), f194h = slurp("src/d3d11/native_on_foot_f194.h");
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini"), f109h = slurp("src/d3d11/native_on_foot_f109.h"), f194h = slurp("src/d3d11/native_on_foot_f194.h");
         const auto has = [&](const std::string& needle) { return cpp.find(needle) != std::string::npos; };
         const auto at = [&](const std::string& needle) { return cpp.find(needle); };
         check(!cpp.empty() && !ini.empty() && !f109h.empty() && !f194h.empty(), "F194: the sources the pins read are readable from the repo root");
@@ -174,7 +174,7 @@ void run194(Check&& check) {
                   cpp.find("g_f194Centre") == std::string::npos && cpp.find("f194::Frustum") == std::string::npos && cpp.find("f194::rayAng") == std::string::npos && cpp.find("f194::formatFrus") == std::string::npos &&
                   cpp.find("picture-centre pitch") == std::string::npos && ini.find("look_to_aim_aims_at") == std::string::npos && ini.find("aim at the middle of the picture") == std::string::npos &&
                   ini.find("(F194, A/B): Look to aim: aim at") == std::string::npos,
-              "F194b: part 1 is gone: nothing reads its key, no flag, frustum or centre pitch is left in native_on_foot.cpp, edvr.ini has neither its entry nor its menu row");
+              "F194b: part 1 is gone: nothing reads its key, no flag, frustum or centre pitch is left in native_on_foot.cpp, edup.ini has neither its entry nor its menu row");
         check(f194h.find("rayAng") == std::string::npos && f194h.find("pictureCentrePitch") == std::string::npos && f194h.find("frustumFromChannel") == std::string::npos && f194h.find("pitchInForce") == std::string::npos &&
                   f194h.find("sameFrustum") == std::string::npos && f194h.find("formatFrustum") == std::string::npos && f194h.find("struct Frustum") == std::string::npos &&
                   f194h.find("REMOVED on 2026-10-31 (F194b)") != std::string::npos,
@@ -185,12 +185,12 @@ void run194(Check&& check) {
         check(countOf(cpp, "centreOffset(np.render, &oy, &op)") == 3 && countOf(cpp, "centreOffset(") == 3,
               "F194b: the three callers of centreOffset (the engage's centring, F133's yaw re-centre, the 1 s line's offset) call it as they did before F194");
         // F195b: the two look-to-aim test keys are retired, and look to aim's own 10 deg settle gate with them: nothing reads either key, no flag, count or predicate of the gate is left, F139's gate is the only one,
-        // and edvr.ini has neither entry nor menu row. The needles are stems, cut short on purpose, so that the tree holds no spelling of the retired names outside the docs.
+        // and edup.ini has neither entry nor menu row. The needles are stems, cut short on purpose, so that the tree holds no spelling of the retired names outside the docs.
         check(cpp.find("look_to_aim_eye_height") == std::string::npos && cpp.find("g_ltaEyeHeight") == std::string::npos && cpp.find("f194AsMouse") == std::string::npos && cpp.find("f194Carried") == std::string::npos &&
                   cpp.find("f194Ten") == std::string::npos && cpp.find("g_f109SettleGated") == std::string::npos && cpp.find("g_f109AimPitchAbs") == std::string::npos && cpp.find("ltaGateWould") == std::string::npos && cpp.find("ltaGateRefuses") == std::string::npos &&
                   cpp.find("gatedSeen") == std::string::npos && cpp.find("kF109SettlePitch") == std::string::npos && cpp.find("F98c's settle refused") == std::string::npos && ini.find("look_to_aim_eye_height") == std::string::npos &&
                   ini.find("eye height as mouse look") == std::string::npos && ini.find("\nnative_on_foot_pistol_sprint_swing_phase = 0.5\n\n# ADS: scope zoom FOV") != std::string::npos,
-              "F195b: the eye height key is retired: nothing reads it, the 10 deg gate, its counts and its line fields are gone from native_on_foot.cpp, edvr.ini has neither its entry nor its menu row");
+              "F195b: the eye height key is retired: nothing reads it, the 10 deg gate, its counts and its line fields are gone from native_on_foot.cpp, edup.ini has neither its entry nor its menu row");
         check(f194h.find("ltaGateWould") == std::string::npos && f194h.find("ltaGateRefuses") == std::string::npos && f194h.find("settleVerdict") == std::string::npos && f194h.find("SettleVerdict") == std::string::npos && f194h.find("tenWould") == std::string::npos &&
                   f194h.find("tenRefused") == std::string::npos && f194h.find("kLtaGate") == std::string::npos && f194h.find("RETIRED on 2026-10-31") != std::string::npos,
               "F195b: native_on_foot_f194.h has no gate predicate or verdict and says the key was retired");

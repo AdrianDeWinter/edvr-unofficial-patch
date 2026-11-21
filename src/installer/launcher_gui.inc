@@ -624,7 +624,7 @@ void launcherBegin() {
     env.payloadSwitched = []() {
         // Switched: look at the folder again, then the ordinary install, with its plan and its confirmation.
         if (!g.haveSurvey) return;
-        g.survey = surveyTarget(g.survey.game);
+        g.survey = surveyTarget(g.survey.game, mirrorDirOfGame(g.survey.game));
         showSurvey();
         runAction(AppArgs::Act::Install);
     };
@@ -900,7 +900,8 @@ void launcherApplyElevated(const AppArgs& args, const Plan& plan) {
         } else {
             setReport(shown + "\r\n----\r\n" + outcomeReport(result.outcome));
         }
-        g.survey = surveyTarget(g.survey.game);
+        g.survey = surveyTarget(g.survey.game, mirrorDirOfGame(g.survey.game));
+        loadSettings(g.settingsEdition);
         showSurvey();
     });
 }

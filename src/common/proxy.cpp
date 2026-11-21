@@ -102,7 +102,7 @@ void breadcrumb(const char* stage) {
     }
     // Built by hand rather than with a formatting call: this runs under loader
     // lock and must not touch the CRT locale or heap.
-    static const wchar_t kName[] = L"\\edvr_breadcrumbs.txt";
+    static const wchar_t kName[] = L"\\edup_breadcrumbs.txt";
     if (wcslen(path) + wcslen(kName) >= MAX_PATH) return;
     wcscat_s(path, MAX_PATH, kName);
 
@@ -474,7 +474,7 @@ void writeFatalNote(const std::wstring& dir, const wchar_t* text) {
     OutputDebugStringW(L"\n");
 
     wchar_t path[MAX_PATH];
-    _snwprintf_s(path, _TRUNCATE, L"%s\\edvr_FATAL.txt", dir.c_str());
+    _snwprintf_s(path, _TRUNCATE, L"%s\\edup_FATAL.txt", dir.c_str());
     HANDLE f = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;

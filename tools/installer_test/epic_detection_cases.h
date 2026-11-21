@@ -147,7 +147,7 @@ static void testRelabelledLegacyMirror(const std::wstring& scratch) {
         removeTree(root);
         const std::wstring local = joinPath(root, L"AppData");
         const std::wstring dir = joinPath(root, L"Archive42\\Products\\elite-dangerous-odyssey-64");
-        const std::wstring mirrorRoot = joinPath(local, L"EDVR");
+        const std::wstring mirrorRoot = joinPath(local, L"EDUP");
         const std::wstring legacy = joinPath(mirrorRoot, L"elite-dangerous-odyssey-64-folder-you-chose");
         const std::wstring canonical = joinPath(mirrorRoot, mirrorFolderName(dir, source));
         makeTree(stateDirPath(dir));
@@ -167,9 +167,9 @@ static void testRelabelledLegacyMirror(const std::wstring& scratch) {
         const std::string savedSeat = "edvr-seat 1\nfixture headset\t0.125\t0.25\t-0.5\t0\n";
         check(writeAll(joinPath(dir, L"EliteDangerous64.exe"), "fixture") &&
               writeAll(joinPath(dir, L"d3d11.dll"), kFlatGraphicsBytes) &&
-              writeAll(joinPath(dir, L"edvr_profile.ini"), "[install]\r\nschema = 2\r\nscope = flat\r\n") &&
-              writeAll(joinPath(dir, L"edvr.ini"), tunedVr) &&
-              writeAll(joinPath(dir, L"edvr-flat.ini"), tunedFlat) &&
+              writeAll(joinPath(dir, L"edup_profile.ini"), "[install]\r\nschema = 2\r\nscope = flat\r\n") &&
+              writeAll(joinPath(dir, L"edup.ini"), tunedVr) &&
+              writeAll(joinPath(dir, L"edup-flat.ini"), tunedFlat) &&
               writeAll(flatBaseIniPath(dir), tunedFlat) &&
               writeAll(statePath(dir), serializeState(current.state)),
               "a current generic-folder installation has both tuned settings files and its legacy record");
@@ -184,8 +184,8 @@ static void testRelabelledLegacyMirror(const std::wstring& scratch) {
         const Plan relabel = planInstall(current, options, payload);
         check(!relabel.blocked && !relabel.nothingToDo &&
               !hasStep(relabel, Action::WritePayload, nullptr, nullptr) &&
-              !hasStep(relabel, Action::WriteText, nullptr, L"edvr.ini") &&
-              !hasStep(relabel, Action::WriteText, nullptr, L"edvr-flat.ini"),
+              !hasStep(relabel, Action::WriteText, nullptr, L"edup.ini") &&
+              !hasStep(relabel, Action::WriteText, nullptr, L"edup-flat.ini"),
               "discovering the store plans only an install-record update");
         planReport(relabel);
         mirrorDirFor(current.game, mirrorRoot);
@@ -195,8 +195,8 @@ static void testRelabelledLegacyMirror(const std::wstring& scratch) {
         check(applyPlan(relabel, provider(false)).ok && readState(dir).storeSource == source,
               "the record-only relabel persists the detected store");
         check(sha256File(joinPath(dir, L"d3d11.dll")) == tsha(payload, "graphics") &&
-              readAll(joinPath(dir, L"edvr.ini")) == tunedVr &&
-              readAll(joinPath(dir, L"edvr-flat.ini")) == tunedFlat,
+              readAll(joinPath(dir, L"edup.ini")) == tunedVr &&
+              readAll(joinPath(dir, L"edup-flat.ini")) == tunedFlat,
               "the relabel leaves the current payload and both live settings untouched");
 
         const std::wstring menuMirror = runtimeMirrorDirFor(local, dir, true);
@@ -220,16 +220,16 @@ static void testRelabelledLegacyMirror(const std::wstring& scratch) {
         std::vector<std::string> notes;
         check(restoreFromMirror(dir, readMirror(mirrorDirFor(repaired, mirrorRoot)), "both", &notes),
               "a wipe immediately after the relabel restores without a seeding install");
-        expectEq(readAll(joinPath(dir, L"edvr.ini")), "[fix]\r\nshare_exposure = 0\r\n",
+        expectEq(readAll(joinPath(dir, L"edup.ini")), "[fix]\r\nshare_exposure = 0\r\n",
                  "the VR settings saved before the relabel survive the immediate game-folder wipe");
-        expectEq(readAll(joinPath(dir, L"edvr-flat.ini")), "[fix]\r\ntemporal_aa = off\r\n",
+        expectEq(readAll(joinPath(dir, L"edup-flat.ini")), "[fix]\r\ntemporal_aa = off\r\n",
                  "the flat settings saved before the relabel survive the immediate game-folder wipe");
         const std::string editedVr = "[fix]\r\nshare_exposure = 1\r\n";
         const std::string editedFlat = "[fix]\r\ntemporal_aa = on\r\n";
-        check(writeAll(joinPath(dir, L"edvr.ini"), editedVr) &&
-              writeAll(joinPath(dir, L"edvr-flat.ini"), editedFlat) &&
-              writeGenerations(menuMirror, L"edvr.ini", editedVr, false) &&
-              writeGenerations(menuMirror, L"edvr-flat.ini", editedFlat, false),
+        check(writeAll(joinPath(dir, L"edup.ini"), editedVr) &&
+              writeAll(joinPath(dir, L"edup-flat.ini"), editedFlat) &&
+              writeGenerations(menuMirror, L"edup.ini", editedVr, false) &&
+              writeGenerations(menuMirror, L"edup-flat.ini", editedFlat, false),
               "menu-style changes update both profiles through the runtime-selected mirror");
 
         removeTree(dir);
@@ -240,9 +240,9 @@ static void testRelabelledLegacyMirror(const std::wstring& scratch) {
         notes.clear();
         check(restoreFromMirror(dir, readMirror(mirrorDirFor(repaired, mirrorRoot)), "both", &notes),
               "repair restores directly from the legacy mirror without a seeding install");
-        expectEq(readAll(joinPath(dir, L"edvr.ini")), "[fix]\r\nshare_exposure = 1\r\n",
+        expectEq(readAll(joinPath(dir, L"edup.ini")), "[fix]\r\nshare_exposure = 1\r\n",
                  "the exact latest VR settings survive the relabel and whole game-folder wipe");
-        expectEq(readAll(joinPath(dir, L"edvr-flat.ini")), "[fix]\r\ntemporal_aa = on\r\n",
+        expectEq(readAll(joinPath(dir, L"edup-flat.ini")), "[fix]\r\ntemporal_aa = on\r\n",
                  "the exact latest flat settings survive the relabel and whole game-folder wipe");
         expectEq(readAll(joinPath(edvr::openxr::seatMirrorDirFor(local, dir, false), L"seat.txt")), savedSeat,
                  "the remembered seat remains available after the game-folder wipe");
@@ -267,10 +267,10 @@ static void testRelabelledLegacyMirror(const std::wstring& scratch) {
               "a known store does not adopt a sole foreign-store mirror");
         makeTree(policyLegacy);
         makeTree(policyCanonical);
-        writeAll(joinPath(policyCanonical, L"edvr.ini"), "canonical owner");
+        writeAll(joinPath(policyCanonical, L"edup.ini"), "canonical owner");
         check(mirrorDirFor(policy, mirrorRoot) == policyCanonical &&
               runtimeMirrorDirFor(local, policy.dir, true) == policyCanonical &&
-              readAll(joinPath(policyCanonical, L"edvr.ini")) == "canonical owner",
+              readAll(joinPath(policyCanonical, L"edup.ini")) == "canonical owner",
               "an existing canonical mirror retains ownership even alongside legacy and foreign mirrors");
         removeTree(root);
     }
@@ -282,7 +282,7 @@ static void testLegacyMirrorOwnership(const std::wstring& scratch) {
         const std::wstring root = joinPath(scratch, std::wstring(L"claimed-mirror-") + source);
         removeTree(root);
         const std::wstring local = joinPath(root, L"AppData");
-        const std::wstring mirrorRoot = joinPath(local, L"EDVR");
+        const std::wstring mirrorRoot = joinPath(local, L"EDUP");
         GameInstall first;
         first.source = source;
         first.dir = joinPath(root, first.source == L"Steam" ? L"first\\steamapps\\common\\product"
@@ -299,8 +299,8 @@ static void testLegacyMirrorOwnership(const std::wstring& scratch) {
         state.edvrVersion = "v1";
         state.storeSource = L"Folder you chose";
         check(writeAll(statePath(first.dir), serializeState(state)) &&
-              writeAll(joinPath(first.dir, L"edvr.ini"), "[fix]\r\nshare_exposure = 0\r\n") &&
-              writeAll(joinPath(first.dir, L"edvr-flat.ini"), "[fix]\r\ntemporal_aa = off\r\n") &&
+              writeAll(joinPath(first.dir, L"edup.ini"), "[fix]\r\nshare_exposure = 0\r\n") &&
+              writeAll(joinPath(first.dir, L"edup-flat.ini"), "[fix]\r\ntemporal_aa = off\r\n") &&
               updateMirror(first.dir, L"", legacy).ok,
               "a genuinely generic legacy record and both settings files are mirrored");
         state.storeSource = first.source;
@@ -320,7 +320,7 @@ static void testLegacyMirrorOwnership(const std::wstring& scratch) {
               "the second store refuses another store's claimed generic mirror and read-only lookup writes nothing");
         check(mirrorDirFor(first, mirrorRoot) == legacy && runtimeMirrorDirFor(local, first.dir, false) == legacy,
               "the first store keeps access to its claimed generic mirror");
-        check(writeAll(joinPath(second.dir, L"edvr.ini"), "[fix]\r\nshare_exposure = 1\r\n") &&
+        check(writeAll(joinPath(second.dir, L"edup.ini"), "[fix]\r\nshare_exposure = 1\r\n") &&
               updateMirror(second.dir, L"", mirrorDirFor(second, mirrorRoot)).ok &&
               parseState(readAll(joinPath(secondCanonical, L"state.ini"))).storeSource == second.source,
               "the second store creates and updates its separate canonical mirror");
@@ -353,7 +353,7 @@ static void testLegacyMirrorOwnership(const std::wstring& scratch) {
         // -folder-you-chose mirror beside another store's canonical mirror keeps its own mirror.
         const std::wstring genericRoot = joinPath(root, L"generic-beside-store");
         const std::wstring genericLocal = joinPath(genericRoot, L"AppData");
-        const std::wstring genericMirrorRoot = joinPath(genericLocal, L"EDVR");
+        const std::wstring genericMirrorRoot = joinPath(genericLocal, L"EDUP");
         const std::wstring genericDir = joinPath(genericRoot, L"Custom\\Products\\product");
         const std::wstring genericMirror = joinPath(genericMirrorRoot, L"product-folder-you-chose");
         const std::wstring steamCanonical = joinPath(genericMirrorRoot, L"product-steam");
@@ -389,9 +389,9 @@ static void testLegacyMirrorOwnership(const std::wstring& scratch) {
         check(!fileExists(statePath(first.dir)) && runtimeMirrorDirFor(local, first.dir, false) == legacy &&
               restoreFromMirror(first.dir, readMirror(mirrorDirFor(first, mirrorRoot)), "both", &notes),
               "the first store restores from its claimed generic mirror after a live state and settings wipe");
-        expectEq(readAll(joinPath(first.dir, L"edvr.ini")), "[fix]\r\nshare_exposure = 0\r\n",
+        expectEq(readAll(joinPath(first.dir, L"edup.ini")), "[fix]\r\nshare_exposure = 0\r\n",
                  "the owning store recovers the exact VR settings");
-        expectEq(readAll(joinPath(first.dir, L"edvr-flat.ini")), "[fix]\r\ntemporal_aa = off\r\n",
+        expectEq(readAll(joinPath(first.dir, L"edup-flat.ini")), "[fix]\r\ntemporal_aa = off\r\n",
                  "the owning store recovers the exact flat settings");
         check(readState(first.dir).storeSource == first.source &&
               runtimeMirrorDirFor(local, first.dir, false) == legacy,
@@ -419,15 +419,15 @@ static void testEpicRuntimeMirrors(const std::wstring& scratch) {
     current.iniText = kSharedIni;
     const std::string oldSettings = "[fix]\r\nshare_exposure = 1\r\n";
     check(writeAll(joinPath(dir, L"EliteDangerous64.exe"), "fixture") &&
-          writeAll(joinPath(dir, L"edvr.ini"), oldSettings) &&
+          writeAll(joinPath(dir, L"edup.ini"), oldSettings) &&
           writeAll(statePath(dir), serializeState(current.state)), "the legacy direct-folder install has settings and its old record");
-    const std::wstring mirrorRoot = joinPath(local, L"EDVR");
+    const std::wstring mirrorRoot = joinPath(local, L"EDUP");
     const std::wstring legacyMirror = joinPath(mirrorRoot, L"elite-dangerous-odyssey-64-folder-you-chose");
     const std::wstring expectedMirror = joinPath(mirrorRoot, L"elite-dangerous-odyssey-64-epic");
     const std::wstring steamMirror = joinPath(mirrorRoot, L"elite-dangerous-odyssey-64-steam");
     check(updateMirrorIni(dir, legacyMirror).ok, "the old generic backup remains available");
     makeTree(steamMirror);
-    writeAll(joinPath(steamMirror, L"edvr.ini"), "another install's settings");
+    writeAll(joinPath(steamMirror, L"edup.ini"), "another install's settings");
 
     Options options = testOptions();
     options.scope = "flat";
@@ -442,7 +442,7 @@ static void testEpicRuntimeMirrors(const std::wstring& scratch) {
           "dry-run planning leaves the install record and mirror directories untouched");
     check(applyPlan(recordPlan, provider(false)).ok, "the source-only install record update applies");
     check(readState(dir).storeSource == L"Epic", "the recorded source is the canonical Epic store");
-    check(!fileExists(joinPath(dir, L"d3d11.dll")) && readAll(joinPath(dir, L"edvr.ini")) == oldSettings,
+    check(!fileExists(joinPath(dir, L"d3d11.dll")) && readAll(joinPath(dir, L"edup.ini")) == oldSettings,
           "the record-only update writes neither a payload nor the live settings");
     current.state = readState(dir);
     check(planInstall(current, options, payload).nothingToDo, "the recorded source needs no further update");
@@ -457,12 +457,12 @@ static void testEpicRuntimeMirrors(const std::wstring& scratch) {
     MergeReport report;
     const std::string changed = mergeIni(oldSettings, oldSettings, &oldSettings,
                                          {{"fix.share_exposure", "0"}}, &report);
-    check(writeFileAtomic(joinPath(dir, L"edvr.ini"), changed) &&
-          writeGenerations(runtimeMirror, L"edvr.ini", changed, false),
+    check(writeFileAtomic(joinPath(dir, L"edup.ini"), changed) &&
+          writeGenerations(runtimeMirror, L"edup.ini", changed, false),
           "the F8-style edit saves through the actual runtime-selected mirror");
-    expectEq(readAll(joinPath(legacyMirror, L"edvr.ini")), "[fix]\r\nshare_exposure = 1\r\n",
+    expectEq(readAll(joinPath(legacyMirror, L"edup.ini")), "[fix]\r\nshare_exposure = 1\r\n",
              "the previous generic backup is preserved");
-    expectEq(readAll(joinPath(steamMirror, L"edvr.ini")), "another install's settings",
+    expectEq(readAll(joinPath(steamMirror, L"edup.ini")), "another install's settings",
              "the Steam backup is preserved");
 
     removeTree(dir);
@@ -474,7 +474,7 @@ static void testEpicRuntimeMirrors(const std::wstring& scratch) {
     std::vector<std::string> notes;
     check(restoreFromMirror(dir, readMirror(mirrorDirFor(repaired, mirrorRoot)), "vr", &notes),
           "repair restores from that same Epic mirror after the game update");
-    expectEq(readAll(joinPath(dir, L"edvr.ini")), "[fix]\r\nshare_exposure = 0\r\n",
+    expectEq(readAll(joinPath(dir, L"edup.ini")), "[fix]\r\nshare_exposure = 0\r\n",
              "repair recovers the exact latest runtime setting");
     check(readState(dir).storeSource == L"Epic", "the restored record keeps the runtime mirror identity");
 
@@ -503,7 +503,7 @@ static void testEpicRuntimeMirrors(const std::wstring& scratch) {
     const std::wstring wipedEpic = joinPath(mirrorRoot, L"wiped-product-epic");
     const std::wstring wipedLegacy = joinPath(mirrorRoot, L"wiped-product-folder-you-chose");
     makeTree(wipedEpic);
-    writeAll(joinPath(wipedEpic, L"edvr.ini"), "foreign Epic settings");
+    writeAll(joinPath(wipedEpic, L"edup.ini"), "foreign Epic settings");
     // A slug alone does not bind older mirrors. This fixture represents an
     // owned foreign store, so its installer-authored metadata says so.
     writeAll(joinPath(wipedEpic, L"state.ini"), "[edvr]\r\nversion = test\r\nstore_source = Epic\r\n");
@@ -521,12 +521,12 @@ static void testEpicRuntimeMirrors(const std::wstring& scratch) {
     removeTree(wipedLegacy);
     check(runtimeMirrorDirFor(local, wiped.dir, true) == wipedSteam && dirExists(wipedSteam) &&
           edvr::openxr::seatMirrorDirFor(local, wiped.dir, true) == wipedSteam &&
-          readAll(joinPath(wipedEpic, L"edvr.ini")) == "foreign Epic settings",
+          readAll(joinPath(wipedEpic, L"edup.ini")) == "foreign Epic settings",
           "an inferred Steam create makes its canonical folder and preserves the foreign mirror");
     removeTree(wipedSteam);
     removeTree(wipedEpic);
     makeTree(wipedLegacy);
-    writeAll(joinPath(wipedLegacy, L"edvr.ini"), "legacy settings");
+    writeAll(joinPath(wipedLegacy, L"edup.ini"), "legacy settings");
     const std::string beforeLegacyRead = mirrorFixtureTree(root);
     check(mirrorDirFor(wiped, mirrorRoot) == wipedLegacy &&
           runtimeMirrorDirFor(local, wiped.dir, false) == wipedLegacy &&
@@ -535,13 +535,13 @@ static void testEpicRuntimeMirrors(const std::wstring& scratch) {
           mirrorFixtureTree(root) == beforeLegacyRead && !dirExists(wipedSteam),
           "an inferred Steam source reuses the sole generic mirror in place for reads and writes");
     makeTree(wipedSteam);
-    writeAll(joinPath(wipedSteam, L"edvr.ini"), "canonical Steam settings");
+    writeAll(joinPath(wipedSteam, L"edup.ini"), "canonical Steam settings");
     check(mirrorDirFor(wiped, mirrorRoot) == wipedSteam &&
           runtimeMirrorDirFor(local, wiped.dir, false) == wipedSteam &&
           runtimeMirrorDirFor(local, wiped.dir, true) == wipedSteam &&
           edvr::openxr::seatMirrorDirFor(local, wiped.dir, false) == wipedSteam &&
-          readAll(joinPath(wipedSteam, L"edvr.ini")) == "canonical Steam settings" &&
-          readAll(joinPath(wipedLegacy, L"edvr.ini")) == "legacy settings",
+          readAll(joinPath(wipedSteam, L"edup.ini")) == "canonical Steam settings" &&
+          readAll(joinPath(wipedLegacy, L"edup.ini")) == "legacy settings",
           "an inferred Steam source keeps canonical ownership when a legacy mirror also exists");
     removeTree(root);
 }
@@ -552,14 +552,14 @@ static void testLegacyRuntimeHint(const std::wstring& scratch) {
     removeTree(root);
     const std::wstring local = joinPath(root, L"AppData");
     const std::wstring game = joinPath(root, L"Epic Games\\legacy-game");
-    const std::wstring mirrorRoot = joinPath(local, L"EDVR");
+    const std::wstring mirrorRoot = joinPath(local, L"EDUP");
     const std::wstring legacy = joinPath(mirrorRoot, L"legacy-game-steam");
     const std::wstring canonical = joinPath(mirrorRoot, L"legacy-game-epic");
     makeTree(game);
     makeTree(legacy);
     check(writeAll(joinPath(legacy, L"state.ini"), "[edvr]\r\nversion = v0.22.0\r\n") &&
-          writeAll(joinPath(legacy, L"edvr.ini"), "[fix]\r\nshare_exposure = 0\r\n") &&
-          writeAll(joinPath(legacy, L"edvr-flat.ini"), "[fix]\r\ntemporal_aa = off\r\n") &&
+          writeAll(joinPath(legacy, L"edup.ini"), "[fix]\r\nshare_exposure = 0\r\n") &&
+          writeAll(joinPath(legacy, L"edup-flat.ini"), "[fix]\r\ntemporal_aa = off\r\n") &&
           writeAll(joinPath(legacy, L"seat.txt"), "edvr-seat 1\nlegacy headset\t0.125\t0.25\t-0.5\t0\n"),
           "a pre-store_source mirror retains actual VR, flat and remembered seat settings under its old slug");
     const std::string before = mirrorFixtureTree(root);
@@ -577,14 +577,14 @@ static void testLegacyRuntimeHint(const std::wstring& scratch) {
     std::vector<std::string> notes;
     check(restoreFromMirror(game, readMirror(runtimeMirrorDirFor(local, game, false)), "both", &notes),
           "the legacy runtime selection can recover both missing settings files");
-    expectEq(readAll(joinPath(game, L"edvr.ini")), "[fix]\r\nshare_exposure = 0\r\n",
+    expectEq(readAll(joinPath(game, L"edup.ini")), "[fix]\r\nshare_exposure = 0\r\n",
              "legacy recovery retains the exact VR setting");
-    expectEq(readAll(joinPath(game, L"edvr-flat.ini")), "[fix]\r\ntemporal_aa = off\r\n",
+    expectEq(readAll(joinPath(game, L"edup-flat.ini")), "[fix]\r\ntemporal_aa = off\r\n",
              "legacy recovery retains the exact flat setting");
     makeTree(canonical);
-    writeAll(joinPath(canonical, L"edvr.ini"), "canonical settings");
+    writeAll(joinPath(canonical, L"edup.ini"), "canonical settings");
     check(runtimeMirrorDirFor(local, game, false) == canonical && runtimeMirrorDirFor(local, game, true) == canonical &&
-          readAll(joinPath(canonical, L"edvr.ini")) == "canonical settings",
+          readAll(joinPath(canonical, L"edup.ini")) == "canonical settings",
           "an existing exact canonical mirror takes precedence over the unbound legacy fallback");
     removeTree(canonical);
     writeFileAtomic(joinPath(legacy, L"state.ini"), "[edvr]\r\nversion = test\r\nstore_source = Epic\r\n");

@@ -137,7 +137,7 @@ FlatAnswer ask(const Fixture& f) {
 // A session that starts in the flat profile and is switched to VR live (2026-11-04, Epic, Pimax Crystal Super,
 // edvr_gfx_20261104_133846): the OpenXR runtime is up from launch, the query runs there with the flat profile
 // active, and the game asks the runtime for the eye size again at the 3D-on apply, 260 ms BEFORE the profile
-// commit. The flight read "edvr-flat.ini has no entry for it" and the game built 4508-wide eye targets where a VR
+// commit. The flight read "edup-flat.ini has no entry for it" and the game built 4508-wide eye targets where a VR
 // launch built 4032: Config's getter answers "off" for a key the flat profile does not list, so the value has to
 // come from the VR file at the launch query. Each fixture below is a directory of its own with both files.
 void flatLaunchCases() {
@@ -467,7 +467,7 @@ int wmain(int argc,wchar_t** argv) {
         report.entryCount=parse(report.value.c_str(),entries); report.entries=entries;
         report.matched=1; report.width=3283; report.eyes=eyes;
         check(formatOpenxrResolutionReport(report)==
-              "openxr resolution: this headset is oculus/meta-quest-3 (Oculus, \"Meta Quest 3\"); edvr.ini sets it to 3283 wide = 3283x3542 per eye "
+              "openxr resolution: this headset is oculus/meta-quest-3 (Oculus, \"Meta Quest 3\"); edup.ini sets it to 3283 wide = 3283x3542 per eye "
               "(11.6 MP, 180% of the runtime's 1824x1968). Saved: oculus/meta-quest-3:3283, steamvr-openxr/pimax-crystal-super:4980. "
               "Elite's HMD Quality multiplies this.","the matched line reads as the design states it");
         EdvrNativeRenderViewBounds vdxr[2]; bounds(kQ3Vdxr,vdxr);
@@ -476,7 +476,7 @@ int wmain(int argc,wchar_t** argv) {
         report.entryCount=parse(report.value.c_str(),entries);
         report.matched=0; report.width=0; report.eyes=vdxr;
         check(formatOpenxrResolutionReport(report)==
-              "openxr resolution: this headset is virtualdesktopxr/meta-quest-3 (VirtualDesktopXR, \"Meta Quest 3\"); edvr.ini has no entry for it, "
+              "openxr resolution: this headset is virtualdesktopxr/meta-quest-3 (VirtualDesktopXR, \"Meta Quest 3\"); edup.ini has no entry for it, "
               "so it runs at 100% = 3072x3264 per eye (10.0 MP). Saved: oculus/meta-quest-3:3283. Set it in F8 > Performance with this headset on, "
               "or add \"virtualdesktopxr/meta-quest-3:<width>\" to fix.openxr_resolution (3072 is 100%).","the no-entry line offers the key as a template");
         EdvrNativeRenderViewBounds pimax[2]; bounds(kPimaxSteamB,pimax);

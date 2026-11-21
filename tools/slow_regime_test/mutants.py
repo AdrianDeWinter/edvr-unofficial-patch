@@ -3,7 +3,7 @@
 
 The rig (slow_regime_test.cpp) holds the vendor event log (src\\openxr\\vendor_events.h), the long xrEndFrame episodes (end_frame_episodes.h), the slow regime
 (slow_regime.h), the test trigger's schedule (src\\common\\slow_test.h), the hooks they are fed from (SessionState's observer in session_state.h, FrameBoundary's
-end-of-call hook and the hold in frame_boundary.h) and, by source text, the glue (native_runtime_host.h, perf_monitor.cpp, frame_flag, build.bat, edvr.ini). Every
+end-of-call hook and the hold in frame_boundary.h) and, by source text, the glue (native_runtime_host.h, perf_monitor.cpp, frame_flag, build.bat, edup.ini). Every
 check carries a label "<case>.<what>", a letter and a number. A rig that passes proves little until it is seen to FAIL on a source that breaks the rule it pins. This
 tool does that: for each mutation below it copies the source it edits into a temp directory OUTSIDE the repo, applies one textual edit (or a few that belong
 together), and runs the rig against that copy, requiring it to fail on a check of the case that belongs to the rule (a FAIL label starting with one of the mutation's
@@ -45,7 +45,7 @@ FILES = {
     "flagcpp": ROOT / "src" / "common" / "frame_flag.cpp",
     "flagh": ROOT / "src" / "common" / "frame_flag.h",
     "bat": ROOT / "build.bat",
-    "ini": ROOT / "edvr.ini",
+    "ini": ROOT / "edup.ini",
 }
 HEADER_KEYS = ("events", "episodes", "regime", "schedule", "boundary", "session")     # compiled into the rig: a mutation of one rebuilds the rig
 PIN_KEYS = ("host", "perf", "flagcpp", "flagh", "bat", "ini")                         # read by the rig as text: a mutation of one is run through the unmutated rig
@@ -220,7 +220,7 @@ SS_OBSERVE = "      if (observer_) observer_(buffer, observerContext_);\n"
 SS_UNAVAIL = "      if (r == XR_EVENT_UNAVAILABLE) return lastResult_;\n"
 SS_CLEAR = "    observer_ = nullptr; observerContext_ = nullptr;\n"
 SS_STATECHANGED = "      if (buffer.type != XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) { unhandled(buffer); continue; }\n"
-# the host, perf_monitor.cpp, frame_flag, build.bat, edvr.ini (text pins)
+# the host, perf_monitor.cpp, frame_flag, build.bat, edup.ini (text pins)
 H_OBSERVER = "    state.setEventObserver(vendorEvent,this);\n"
 H_START = "    startInstruments();\n"
 H_SLEEP = "    Sleep(ms);\n  }\n  void writeSlowLine("
@@ -445,7 +445,7 @@ MUTANTS = [
     M("glue-flag-unclamped", "G1", "flagcpp", [(FF_CLAMP, "ms")], "the runtime may be asked to hold a call for any time"),
     M("glue-flag-no-field", "G1", "flagcpp", [(FF_FIELD, "")], "the shared block has no room for the hold"),
     M("glue-not-in-the-build", "G1", "bat", [(B_RIG, "\"tools\\slow_regime_test\\other.cpp\"")], "build.bat does not compile this rig"),
-    M("glue-key-undocumented", "G1", "ini", [(I_KEY, "")], "the key is not documented in edvr.ini"),
+    M("glue-key-undocumented", "G1", "ini", [(I_KEY, "")], "the key is not documented in edup.ini"),
 ]
 
 

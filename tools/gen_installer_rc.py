@@ -9,7 +9,7 @@ What it writes, one mode per run:
   * --launcher-rc: launcher.rc for ed-up-launcher.exe (manifest, icon, its own
     VERSIONINFO from src/installer/launcher_version.h, and the min-ed-launcher
     licence). The launcher carries no embedded payload.
-  * --release-files: build\\edvr-flat.ini and build\\edvr_profile_vr.ini, the two
+  * --release-files: build\\edup-flat.ini and build\\edup_profile_vr.ini, the two
     files the release packs that nothing else makes. The native graphics and
     runtime DLLs, the OpenXR loader and its notice, and any XeSS notices are
     checked first, so a build that is missing one fails here and not at
@@ -38,7 +38,7 @@ RT_MANIFEST = 24
 
 
 def flat_ini_bytes():
-    """The shipped edvr-flat.ini: the flat profile's own default settings."""
+    """The shipped edup-flat.ini: the flat profile's own default settings."""
     return (b'# Experimental flat temporal profile: visual qualification in progress.\r\n'
             b'# F8 opens the AA menu: Off / TAA / DLSS / FSR3 / FSR4 / DittoSR / XeSS-SR and DLSS model presets.\r\n'
             b'# temporal_aa: off, on (TAA), dlaa (native SS), dlss, fsr, fsr4, dittosr, xess. Game SS controls render scale.\r\n'
@@ -57,13 +57,13 @@ def flat_ini_bytes():
             b'flat_origin_capture = off\r\n\r\n'
             b'[log]\r\nenabled = 1\r\n\r\n'
             b'[advanced]\r\n'
-            b'# The mod EDVR chains through (EDHM, ReShade) is set once, in edvr.ini, and applies to the flat profile too.\r\n'
+            b'# The mod ED-UP chains through (EDHM, ReShade) is set once, in edup.ini, and applies to the flat profile too.\r\n'
             b'# Leave this empty to use that. A file name here overrides it for flat; none runs flat without the chain.\r\n'
             b'real_dll =\r\n')
 
 
 def descriptor_bytes():
-    """The edvr_profile.ini the release's zips carry, schema 2: scope both, the one the
+    """The edup_profile.ini the release's zips carry, schema 2: scope both, the one the
     install engine's default names. package_native.py checks the loose descriptor in the
     release against these same bytes; the planner writes its own copy of the text."""
     return b'[install]\r\nschema = 2\r\nscope = both\r\n'
@@ -397,8 +397,8 @@ def ico_bytes():
 
 def write_release_files(build, dry_run):
     """--release-files: check what the release packs from `build`, then write the two files it
-    packs that nothing else makes: edvr-flat.ini (the flat profile's own settings) and
-    edvr_profile_vr.ini (the profile descriptor the zips carry as edvr_profile.ini).
+    packs that nothing else makes: edup-flat.ini (the flat profile's own settings) and
+    edup_profile_vr.ini (the profile descriptor the zips carry as edup_profile.ini).
 
     The native graphics and runtime DLLs and the OpenXR loader with its notice are mandatory, and
     the DLLs and the loader are validated here, so a build that lacks one fails now and not at
@@ -434,11 +434,11 @@ def write_release_files(build, dry_run):
     if dry_run:
         print('gen_installer_rc: dry run; validated the release inputs and wrote nothing')
         return 0
-    with open(os.path.join(build, 'edvr-flat.ini'), 'wb') as f:
+    with open(os.path.join(build, 'edup-flat.ini'), 'wb') as f:
         f.write(flat_ini_bytes())
-    with open(os.path.join(build, 'edvr_profile_vr.ini'), 'wb') as f:
+    with open(os.path.join(build, 'edup_profile_vr.ini'), 'wb') as f:
         f.write(descriptor_bytes())
-    print('gen_installer_rc: wrote edvr-flat.ini and edvr_profile_vr.ini in %s' % build)
+    print('gen_installer_rc: wrote edup-flat.ini and edup_profile_vr.ini in %s' % build)
     return 0
 
 
@@ -450,7 +450,7 @@ def main(argv=None):
     ap.add_argument('--version', default='unknown')
     ap.add_argument('--release-files', action='store_true',
                     help='check the native pair, the loader and any XeSS notices in --build, then write '
-                         'edvr-flat.ini and edvr_profile_vr.ini there')
+                         'edup-flat.ini and edup_profile_vr.ini there')
     ap.add_argument('--version-rc', choices=('graphics', 'runtime'),
                     help='write a standalone VERSIONINFO .rc for this DLL')
     ap.add_argument('--launcher-rc', action='store_true',
@@ -509,14 +509,14 @@ def self_test():
         try:
             # --release-files: a dry run checks and writes nothing.
             assert main(['--release-files', '--build', build, '--dry-run']) == 0
-            assert not os.path.exists(os.path.join(build, 'edvr-flat.ini'))
-            assert not os.path.exists(os.path.join(build, 'edvr_profile_vr.ini'))
+            assert not os.path.exists(os.path.join(build, 'edup-flat.ini'))
+            assert not os.path.exists(os.path.join(build, 'edup_profile_vr.ini'))
             os.remove(os.path.join(build, 'edvr_openxr_runtime.dll'))
             import contextlib, io
             missing = io.StringIO()  # the refusal under test, relabelled below
             with contextlib.redirect_stdout(missing), contextlib.redirect_stderr(missing):
                 code = main(['--release-files', '--build', build])
-            assert code == 1 and not os.path.exists(os.path.join(build, 'edvr-flat.ini'))
+            assert code == 1 and not os.path.exists(os.path.join(build, 'edup-flat.ini'))
             assert 'ERROR: native runtime' in missing.getvalue()
             print('expected-error: ' + missing.getvalue().strip().replace('gen_installer_rc: ERROR: ', '', 1))
             # The flat edition is retired: --profile is no longer an option at all.
@@ -537,12 +537,12 @@ def self_test():
             with contextlib.redirect_stdout(no_notices):
                 assert main(['--release-files', '--build', build]) == 1
             assert 'XeSS runtime lacks license notices' in no_notices.getvalue()
-            assert not os.path.exists(os.path.join(build, 'edvr-flat.ini'))
+            assert not os.path.exists(os.path.join(build, 'edup-flat.ini'))
             print('expected-error: ' + no_notices.getvalue().strip().replace('gen_installer_rc: ERROR: ', '', 1))
             for name in ('INTEL-XESS-LICENSE.txt', 'INTEL-XESS-THIRD-PARTY.txt', 'libxess_fg.dll', 'libxell.dll'):
                 with open(os.path.join(build, name), 'wb') as stream: stream.write(name.encode('ascii'))
             assert main(['--release-files', '--build', build]) == 0
-            with open(os.path.join(build, 'edvr-flat.ini'), 'rb') as stream:
+            with open(os.path.join(build, 'edup-flat.ini'), 'rb') as stream:
                 flat_ini = stream.read()
                 assert flat_ini == flat_ini_bytes()
                 assert b'temporal_aa = off' in flat_ini
@@ -561,7 +561,7 @@ def self_test():
                 assert (b'[visual]\r\n# intro_video: screen plays the launch movie as the game makes it; skip refuses it at launch.\r\n'
                         b'# moved-from: fix.intro_video (default screen)\r\nintro_video = screen\r\n') in flat_ini
                 assert b'[fix]\r\ntemporal_aa = off\r\ntemporal_aa_model = k\r\nui_quality = 100\r\n\r\n' in flat_ini
-            with open(os.path.join(build, 'edvr_profile_vr.ini'), 'rb') as stream:
+            with open(os.path.join(build, 'edup_profile_vr.ini'), 'rb') as stream:
                 assert stream.read() == descriptor_bytes()
             assert descriptor_bytes() == b'[install]\r\nschema = 2\r\nscope = both\r\n'
             # The flat edition's README is folded into release\README.txt; the build

@@ -34,11 +34,11 @@ On Windows the launcher lists each copy. Pick the one you want. On Linux, when b
 
 ## Where do my settings live?
 
-Beside the game, in `edvr.ini` and `edvr-flat.ini`, and in a spare copy under `%LOCALAPPDATA%\EDVR` on Windows. On Linux the spare copy is inside the Proton prefix. Press F8 to change them while you play. [Settings](Settings.md).
+Beside the game, in `edup.ini` and `edup-flat.ini`, and in a spare copy under `%LOCALAPPDATA%\EDUP` on Windows. On Linux the spare copy is inside the Proton prefix. Press F8 to change them while you play. [Settings](Settings.md).
 
 ## The launcher remembered my Frontier password. Where is it?
 
-In `frontier-login.dat`, under `%LOCALAPPDATA%\EDVR\launcher\`, and only while remember is ticked. Untick the box, or remove the launcher, and that file is deleted. [The launcher](The-launcher.md).
+In `frontier-login.dat`, under `%LOCALAPPDATA%\EDUP\launcher\`, and only while remember is ticked. Untick the box, or remove the launcher, and that file is deleted. [The launcher](The-launcher.md).
 
 ## How do I remove it?
 

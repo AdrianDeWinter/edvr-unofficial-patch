@@ -7,7 +7,7 @@ A settings window needs, for every setting: a type, a range, a default, the
 choices where there are any, a short label and an explanation. All of that
 already exists in this repository, in two places -- the accessor call in the
 code says the type, the range and the default; the comment block above the key
-in edvr.ini says what it does. Writing it down a THIRD time in C++ would create
+in edup.ini says what it does. Writing it down a THIRD time in C++ would create
 another list to forget to update, which is exactly the failure
 tools/check_config_contract.py exists to catch between the other two.
 
@@ -19,7 +19,7 @@ build (readers() says why). The only thing added by hand is the part neither
 source can know: what to call the setting in a list,
 and which value is RECOMMENDED (often the shipped default, sometimes not -- a
 0.3 curve with a 0.7 distance is a tested pairing, and neither number is the
-default). That lives in edvr.ini too, on one annotation line above the key:
+default). That lives in edup.ini too, on one annotation line above the key:
 
     # ui: Screen curve (on foot, intro, splash) | recommended 0.3
     panel_curvature = 0.0
@@ -32,7 +32,7 @@ default). That lives in edvr.ini too, on one annotation line above the key:
 
 THE ENFORCEMENT
 
-Every setting that is LIVE in edvr.ini -- uncommented, which is what promoting a
+Every setting that is LIVE in edup.ini -- uncommented, which is what promoting a
 fix to shipped-on looks like -- must have one of those lines. A fix that gets
 promoted and does not appear in the settings window is invisible to everybody
 who does not read ini files, and nothing else in the build would notice: the
@@ -127,7 +127,7 @@ WHAT THE GENERATOR REFUSES (the menu cannot repair any of these at run time)
 The menu runs every bound through atof and steps a number within it, so a
 schema that carries something other than a number does not fail where it is
 made -- it writes 0 in the headset, one press of Up later. Each of these fails
-the build, naming the key and the edvr.ini line:
+the build, naming the key and the edup.ini line:
 
   * a bound that is not a number. getIntInRange("advanced.x", 64, kMin, kMax)
     hands the generator the NAMES kMin and kMax; a constant or an expression
@@ -142,7 +142,7 @@ the build, naming the key and the edvr.ini line:
     list or an empty value say nothing about a range.
   * a dotted key that appears twice, live or commented out. One key is one
     line of the file; the second is a second row in the menu.
-  * a comment line that starts `# key = ...`. edvr.ini writes a commented-out
+  * a comment line that starts `# key = ...`. edup.ini writes a commented-out
     setting `#key = value`, with no space, and these are the only lines this
     parser cannot tell from one: a sentence that happens to begin `word =`
     becomes a row of its own (with the sentence's next words as its value)
@@ -233,7 +233,7 @@ FLAT_PAGE_ROWS_HEADER = os.path.join('src', 'd3d11', 'menu_flat_rows.h')
 FLAT_PAGE_ROWS_RE = re.compile(r'kFlatPageRows\[\]\s*=\s*\{(.*?)\n\};', re.S)
 FLAT_VISUAL_ROWS_RE = re.compile(r'kFlatVisualRows\[\]\s*=\s*\{(.*?)\n\};', re.S)
 FLAT_ROW_RE = re.compile(r'\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,')
-# A heading in edvr.ini: a rule, the title, a rule. The heading a person
+# A heading in edup.ini: a rule, the title, a rule. The heading a person
 # reads in the file is the heading the window shows, so there is no second
 # list of group names to keep in step with this one.
 RULE_RE = re.compile(r'^-{10,}$')
@@ -395,7 +395,7 @@ class Setting(object):
 
 
 def parse_ini(path):
-    """Every setting in edvr.ini, live or commented, with its prose and its
+    """Every setting in edup.ini, live or commented, with its prose and its
     ui: annotation."""
     with open(path, encoding='utf-8', errors='replace') as f:
         lines = f.read().splitlines()
@@ -486,7 +486,7 @@ def parse_ini(path):
         s.live = not commented
         s.description = ' '.join(prose).strip()
         if not s.description and settings and settings[-1].section == section:
-            # edvr.ini documents some settings as a group -- the three
+            # edup.ini documents some settings as a group -- the three
             # head-offset axes, for instance -- with one comment block above
             # the first. The others are not undocumented; they share it.
             s.description = settings[-1].description
@@ -496,7 +496,7 @@ def parse_ini(path):
         s.retiredDefaults = list(retiredDefaults)
         retiredDefaults = []
         s.line = index + 1
-        # Every commented-out setting in edvr.ini is written `#key = value`,
+        # Every commented-out setting in edup.ini is written `#key = value`,
         # no space after the marker; a comment line that starts `# key = ...`
         # is prose that happens to begin with a word and an equals sign.
         s.spaced = commented and line.lstrip('#;')[:1] in (' ', '\t')
@@ -618,7 +618,7 @@ def apply_annotation(setting, text):
 def when_it_applies(setting):
     """live or restart, read out of the prose the setting already carries.
 
-    edvr.ini has said "Live." or "Needs a game restart" at the end of a comment
+    edup.ini has said "Live." or "Needs a game restart" at the end of a comment
     block since long before there was a window to show it in, so that is where
     this comes from rather than from a fourth thing to keep in step. The
     annotation can say `| live` or `| restart` where the prose does not, and
@@ -637,7 +637,7 @@ def when_it_applies(setting):
 def summarise(description):
     """The first sentence, for a row in a list.
 
-    The prose in edvr.ini is written to be read in the file: three to eight
+    The prose in edup.ini is written to be read in the file: three to eight
     lines, with the measurements and the caveats. A settings row has space for
     about one sentence, and a sentence cut off mid-clause reads worse than a
     short one -- so the summary ends where the author ended a sentence, not
@@ -782,7 +782,7 @@ def flat_page_rows(path, table_re=None):
 def run(root, out, check):
     """Generate into `out` (or only check, when `check` is set or `out` is
     None). Returns the process exit code."""
-    ini_path = os.path.join(root, 'edvr.ini')
+    ini_path = os.path.join(root, 'edup.ini')
     code, conflicts = readers(os.path.join(root, 'src'))
     settings = parse_ini(ini_path)
 
@@ -805,8 +805,8 @@ def run(root, out, check):
 
     # ---- the ini's own shape ----------------------------------------------
     #
-    # Two ways a line of edvr.ini becomes a row nobody wrote. A sentence that
-    # begins `word =` parses as a commented-out setting (edvr.ini once spelled
+    # Two ways a line of edup.ini becomes a row nobody wrote. A sentence that
+    # begins `word =` parses as a commented-out setting (edup.ini once spelled
     # a developer key's explanation that way, and the menu grew a Text row
     # whose default was "raw means the culler's cache derives from the"); and a
     # key that is written twice is two rows, the reader taking whichever it
@@ -817,14 +817,14 @@ def run(root, out, check):
         print('gen_settings_schema: ERROR: %d comment line(s) start like a setting.'
               % len(sentences))
         print()
-        print('edvr.ini writes a commented-out setting `#key = value`, with no space after')
+        print('edup.ini writes a commented-out setting `#key = value`, with no space after')
         print('the marker. A sentence that begins `# word = ...` reads the same to this')
         print('parser: it becomes a row of its own, and the comment block above it stops')
         print('belonging to the real key below. Re-wrap the sentence so that no line')
         print('starts with a word and an equals sign; the words themselves stay:')
         print()
         for s in sentences:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
 
     firstAt = {}
@@ -836,7 +836,7 @@ def run(root, out, check):
         else:
             firstAt[dotted] = s.line
     if repeats:
-        print('gen_settings_schema: ERROR: %d key(s) appear in edvr.ini more than once.'
+        print('gen_settings_schema: ERROR: %d key(s) appear in edup.ini more than once.'
               % len(repeats))
         print()
         print('One key is one line of the file, live or commented out: a second copy is a')
@@ -845,7 +845,7 @@ def run(root, out, check):
         print('does not start with the key:')
         print()
         for s, first in repeats:
-            print('  edvr.ini:%d  %s.%s  (first at line %d)' % (s.line, s.section, s.key, first))
+            print('  edup.ini:%d  %s.%s  (first at line %d)' % (s.line, s.section, s.key, first))
         return 1
 
     # A percentage is a number. The window's display multiplies a percent row
@@ -868,7 +868,7 @@ def run(root, out, check):
         print('kind cannot round-trip it. Read the key with getFloat, or drop the token.')
         print()
         for s, kind in fractions:
-            print('  edvr.ini:%d  %s.%s  (%s)' % (s.line, s.section, s.key, kind))
+            print('  edup.ini:%d  %s.%s  (%s)' % (s.line, s.section, s.key, kind))
         return 1
 
     stray = [s for s in settings if s.annotated and s.section not in UI_SECTIONS]
@@ -882,7 +882,7 @@ def run(root, out, check):
         print('remaining sections are plumbing rather than settings. Remove the ui: line:')
         print()
         for s in stray:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
 
     bothAnnotated = [s for s in settings if s.annotated and s.devAnnotated]
@@ -890,7 +890,7 @@ def run(root, out, check):
         print('gen_settings_schema: ERROR: a setting carries both a ui: and a dev: line; '
               'the ui: line already gives the menu its label and choices.')
         for s in bothAnnotated:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
 
     strayDev = [s for s in settings if s.devAnnotated and s.section in EXPOSED_SECTIONS]
@@ -898,7 +898,7 @@ def run(root, out, check):
         print('gen_settings_schema: ERROR: a dev: line belongs outside [%s]; inside it the '
               'ui: line carries the choices.' % ']/['.join(EXPOSED_SECTIONS))
         for s in strayDev:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
 
     badPage = [s for s in settings if s.menuPage and s.menuPage not in MENU_PAGES]
@@ -906,7 +906,7 @@ def run(root, out, check):
         print('gen_settings_schema: ERROR: the menu token names a page this build has no '
               'page for. Pages: %s.' % ', '.join(MENU_PAGES))
         for s in badPage:
-            print('  edvr.ini:%d  %s.%s  (menu %s)' % (s.line, s.section, s.key, s.menuPage))
+            print('  edup.ini:%d  %s.%s  (menu %s)' % (s.line, s.section, s.key, s.menuPage))
         return 1
 
     # ---- `menu flat_performance`: a row of the flat panel's Performance tab and of no page of VR's menu ----
@@ -921,14 +921,14 @@ def run(root, out, check):
             print('gen_settings_schema: ERROR: `menu %s` belongs to a [fix] or [menu] setting: the flat Performance tab '
                   'lists [fix] and [menu] rows (the Visual and Debug tabs have their own tokens).' % FLAT_PERFORMANCE_PAGE)
             for s in wrongSection:
-                print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+                print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
             return 1
         listed = flat_page_rows(os.path.join(root, FLAT_PAGE_ROWS_HEADER))
         if listed is None:
             print('gen_settings_schema: ERROR: `menu %s` needs %s, with the table kFlatPageRows, to check the '
                   'row against; it could not be read.' % (FLAT_PERFORMANCE_PAGE, FLAT_PAGE_ROWS_HEADER.replace(os.sep, '/')))
             for s in flatOnly:
-                print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+                print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
             return 1
         unlisted = [s for s in flatOnly if '%s.%s' % (s.section, s.key) not in listed]
         if unlisted:
@@ -937,7 +937,7 @@ def run(root, out, check):
                   'either. List them there, or give them `menu performance`.'
                   % (len(unlisted), FLAT_PERFORMANCE_PAGE, FLAT_PAGE_ROWS_HEADER.replace(os.sep, '/')))
             for s in unlisted:
-                print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+                print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
             return 1
 
     # ---- `menu flat_visual`: a row of the flat panel's Visual tab and of no page of VR's menu ----
@@ -951,7 +951,7 @@ def run(root, out, check):
             print('gen_settings_schema: ERROR: `menu %s` needs %s, with the table kFlatVisualRows, to check the '
                   'row against; it could not be read.' % (FLAT_VISUAL_PAGE, FLAT_PAGE_ROWS_HEADER.replace(os.sep, '/')))
             for s in flatVisualOnly:
-                print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+                print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
             return 1
         unlisted = [s for s in flatVisualOnly if '%s.%s' % (s.section, s.key) not in listed]
         if unlisted:
@@ -960,7 +960,7 @@ def run(root, out, check):
                   'either. List them there, or give them `menu visual`.'
                   % (len(unlisted), FLAT_VISUAL_PAGE, FLAT_PAGE_ROWS_HEADER.replace(os.sep, '/')))
             for s in unlisted:
-                print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+                print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
             return 1
 
     # ---- a row either flat tab lists must be a row of the schema ----
@@ -1009,7 +1009,7 @@ def run(root, out, check):
         print('gen_settings_schema: ERROR: %d setting(s) carry a step, unit, zero or signed token the menu '
               'cannot use.' % len(badShape))
         for s, faults in badShape:
-            print('  edvr.ini:%d  %s.%s  %s' % (s.line, s.section, s.key, '; '.join(faults)))
+            print('  edup.ini:%d  %s.%s  %s' % (s.line, s.section, s.key, '; '.join(faults)))
         return 1
 
     missing = [s for s in settings
@@ -1018,7 +1018,7 @@ def run(root, out, check):
         print('gen_settings_schema: ERROR: %d live setting(s) are not in the settings window.'
               % len(missing))
         print()
-        print('A setting that is uncommented in edvr.ini is one this build ships ON, and it')
+        print('A setting that is uncommented in edup.ini is one this build ships ON, and it')
         print('has to be reachable by somebody who does not edit ini files. Add one line')
         print('directly above the key:')
         print()
@@ -1027,7 +1027,7 @@ def run(root, out, check):
         print('    # ui: hidden -- <why this one is not for the window>')
         print()
         for s in missing:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
 
     def is_exposed(s):
@@ -1066,7 +1066,7 @@ def run(root, out, check):
         print('`choices 1=on, 0=off` on the ui: line.')
         print()
         for s in disguised:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
 
     silent = [s for s in exposed if when_it_applies(s) is None]
@@ -1080,7 +1080,7 @@ def run(root, out, check):
         print('needed -- or put `| live` or `| restart` on the ui: line.')
         print()
         for s in silent:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
 
     # ---- the menu's rows (docs/settings-menu.md) --------------------------
@@ -1104,7 +1104,7 @@ def run(root, out, check):
         print('gen_settings_schema: ERROR: a `| menu` token belongs to a [%s] setting; '
               'elsewhere the section decides the page.' % ']/['.join(MENU_ROW_SECTIONS))
         for s in strayToken:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
     devSilent = []
     for s in settings:
@@ -1134,7 +1134,7 @@ def run(root, out, check):
         print('gen_settings_schema: ERROR: the `hotkey` token belongs to a [%s] setting.'
               % HOTKEY_SECTION)
         for s in strayHotkey:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
     unmarked = [s for s in settings if s.section == HOTKEY_SECTION and
                 ((s.annotated and not s.hidden) or (s.devAnnotated and not s.devHidden)) and not s.hotkey]
@@ -1143,7 +1143,7 @@ def run(root, out, check):
               '(its value is a key, a pad button or a HOTAS button the menu captures); '
               '`dev: hidden` keeps a key off the menu.' % HOTKEY_SECTION)
         for s in unmarked:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
     hotkeyRows = [s for s in settings if s.section == HOTKEY_SECTION and s.hotkey]
     notText = [s for s in hotkeyRows
@@ -1153,7 +1153,7 @@ def run(root, out, check):
         print('gen_settings_schema: ERROR: a `hotkey` row is a string the code reads with '
               'getString; nothing in src/ does for:')
         for s in notText:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
     hotkeySilent = [s for s in hotkeyRows if s.annotated and when_it_applies(s) is None]
     if hotkeySilent:
@@ -1161,7 +1161,7 @@ def run(root, out, check):
               % len(hotkeySilent))
         print('End the comment block with "Live." or put `| live` on the ui: line.')
         for s in hotkeySilent:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
     for s in hotkeyRows:
         if s.annotated:
@@ -1183,14 +1183,14 @@ def run(root, out, check):
         print('gen_settings_schema: ERROR: %d setting(s) that were taken off the menu have a row '
               'again.' % len(onMenu))
         print()
-        print('The field-of-view trims are set in edvr.ini only (demoted from [fix] to')
+        print('The field-of-view trims are set in edup.ini only (demoted from [fix] to')
         print('[experimental] on 2026-09-29). A `# ui:` line above one, or a bare key with no')
         print('`# dev: hidden` -- the developer tier lists every [experimental] key the code')
         print('reads -- gives it a row. Restore `# dev: hidden`, or, to put a row back on')
         print('purpose, take the key out of OFF_MENU in tools/gen_settings_schema.py:')
         print()
         for s in onMenu:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
 
     # ---- the bounds the menu will clamp to --------------------------------
@@ -1232,7 +1232,7 @@ def run(root, out, check):
         print('    # dev: range 1..256                   (a developer key with no ui: line)')
         print()
         for s, faults in unusable:
-            print('  edvr.ini:%d  %s.%s  %s' % (s.line, s.section, s.key, '; '.join(faults)))
+            print('  edup.ini:%d  %s.%s  %s' % (s.line, s.section, s.key, '; '.join(faults)))
         return 1
     if outside:
         print('gen_settings_schema: ERROR: %d setting(s) document a value outside their own '
@@ -1243,7 +1243,7 @@ def run(root, out, check):
         print('of the row moves back inside; the ini says something the build will not do.')
         print()
         for s, faults in outside:
-            print('  edvr.ini:%d  %s.%s  %s' % (s.line, s.section, s.key, '; '.join(faults)))
+            print('  edup.ini:%d  %s.%s  %s' % (s.line, s.section, s.key, '; '.join(faults)))
         return 1
 
     # After the errors, so that a build that is about to fail says only why.
@@ -1252,7 +1252,7 @@ def run(root, out, check):
               'take effect; the menu shows them with a "?" badge. End the comment block with '
               '"Live." or the sentence that says a restart is needed:' % len(devSilent))
         for s in devSilent:
-            print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
+            print('  edup.ini:%d  %s.%s' % (s.line, s.section, s.key))
 
     if check or not out:
         restarts = len([s for s in exposed if when_it_applies(s) == 'restart'])
@@ -1302,7 +1302,7 @@ def run(root, out, check):
     os.makedirs(out, exist_ok=True)
     menu_path = os.path.join(out, 'menu_schema.inc')
     with open(menu_path, 'w', encoding='utf-8', newline='\r\n') as f:
-        f.write('// Generated by tools/gen_settings_schema.py from edvr.ini and src/.\n')
+        f.write('// Generated by tools/gen_settings_schema.py from edup.ini and src/.\n')
         f.write('// Do not edit, and do not commit: the sources are the ini and the code.\n')
         f.write('// The in-headset menu\'s rows (src/d3d11/menu_schema.h).\n')
         f.write('static const MenuRowDef kMenuRows[] = {\n')
@@ -1352,7 +1352,7 @@ def run(root, out, check):
     os.makedirs(out, exist_ok=True)
     out_path = os.path.join(out, 'settings_schema.inc')
     with open(out_path, 'w', encoding='utf-8', newline='\r\n') as f:
-        f.write('// Generated by tools/gen_settings_schema.py from edvr.ini and src/.\n')
+        f.write('// Generated by tools/gen_settings_schema.py from edup.ini and src/.\n')
         f.write('// Do not edit, and do not commit: the sources are the ini and the code.\n')
         f.write('static const SettingDef kSettings[] = {\n')
         f.write('\n'.join(rows))
@@ -1403,7 +1403,7 @@ def self_test():
         root = os.path.join(base, name)
         src = os.path.join(root, 'src')
         os.makedirs(src)
-        with open(os.path.join(root, 'edvr.ini'), 'w', encoding='utf-8') as f:
+        with open(os.path.join(root, 'edup.ini'), 'w', encoding='utf-8') as f:
             f.write(ini)
         for filename, text in sources.items():
             path = os.path.join(src, filename)
@@ -1645,12 +1645,12 @@ def self_test():
     name = 'bound-constant-names'
     said = case(name, segments_ini % '', segments, 1)
     expect_in(name, said, 'bounds the menu cannot use')
-    expect_in(name, said, 'edvr.ini:3  advanced.panel_curvature_segments')
+    expect_in(name, said, 'edup.ini:3  advanced.panel_curvature_segments')
     expect_in(name, said, 'lower bound "kMinSegments" is not a number')
     expect_in(name, said, 'upper bound "kMaxSegments" is not a number')
     # --check runs the same enforcement, and writes nothing.
     said = case('bound-constant-names-check', segments_ini % '', segments, 1, check=True)
-    expect_in(name, said, 'edvr.ini:3  advanced.panel_curvature_segments')
+    expect_in(name, said, 'edup.ini:3  advanced.panel_curvature_segments')
     # The fix is a `range` on the key's dev: line, and it is what the menu gets.
     name = 'bound-constant-dev-range'
     wrote = case(name, segments_ini % '# dev: range 1..256\n', segments, 0)
@@ -1667,7 +1667,7 @@ def self_test():
     name = 'bound-half-constant'
     said = case(name, count_ini % '',
                 {'a.cpp': 'int c = cfg.getIntInRange("fix.count", 4, 0, kMaxCount);\n'}, 1)
-    expect_in(name, said, 'edvr.ini:4  fix.count')
+    expect_in(name, said, 'edup.ini:4  fix.count')
     expect_in(name, said, 'upper bound "kMaxCount" is not a number')
     expect_not_in(name, said, 'lower bound')
     name = 'bound-constant-ui-range'
@@ -1705,7 +1705,7 @@ def self_test():
             ('range-inverted', 'range 30..0', 'lower bound 30 is above upper bound 0')):
         said = case(name, '[fix]\n# A count. Live.\n# ui: Count | %s\ncount = 1\n' % token,
                     {'a.cpp': 'int c = cfg.getInt("fix.count", 1);\n'}, 1)
-        expect_in(name, said, 'edvr.ini:4  fix.count')
+        expect_in(name, said, 'edup.ini:4  fix.count')
         expect_in(name, said, phrase)
     # An open-ended range is one the menu allows.
     name = 'range-open-ended'
@@ -1720,22 +1720,22 @@ def self_test():
     name = 'default-above-bounds'
     said = case(name, '[fix]\n# A count. Live.\n# ui: Count\ncount = 20\n', ranged, 1)
     expect_in(name, said, 'outside their own bounds')
-    expect_in(name, said, 'edvr.ini:4  fix.count  default 20 is outside 0..10')
+    expect_in(name, said, 'edup.ini:4  fix.count  default 20 is outside 0..10')
     name = 'default-on-the-bound'
     wrote = case(name, '[fix]\n# A count. Live.\n# ui: Count\ncount = 10\n', ranged, 0)
     expect_in(name, wrote, 'SettingKind::Number, "10", "10",\n     "0", "10", 0,')
     name = 'recommended-outside-bounds'
     said = case(name, '[fix]\n# A count. Live.\n# ui: Count | recommended 50\ncount = 5\n', ranged, 1)
-    expect_in(name, said, 'edvr.ini:4  fix.count  recommended 50 is outside 0..10')
+    expect_in(name, said, 'edup.ini:4  fix.count  recommended 50 is outside 0..10')
     name = 'default-below-annotated-range'
     said = case(name, '[fix]\n# A count. Live.\n# ui: Count | range 5..30\ncount = 1\n',
                 {'a.cpp': 'int c = cfg.getInt("fix.count", 5);\n'}, 1)
-    expect_in(name, said, 'edvr.ini:4  fix.count  default 1 is outside 5..30')
+    expect_in(name, said, 'edup.ini:4  fix.count  default 1 is outside 5..30')
     name = 'default-outside-dev-row'
     said = case(name, ('[advanced]\n# A level. Live.\n'
                        '# dev: range 0..255\n#level = 300\n'),
                 {'a.cpp': 'int l = cfg.getInt("advanced.level", 0);\n'}, 1)
-    expect_in(name, said, 'edvr.ini:4  advanced.level  default 300 is outside 0..255')
+    expect_in(name, said, 'edup.ini:4  advanced.level  default 300 is outside 0..255')
     # A word is not compared: auto on a row that also takes a width in pixels.
     name = 'default-word-not-compared'
     wrote = case(name, ('[fix]\n# The width, or auto. Needs a game restart.\n'
@@ -1750,18 +1750,18 @@ def self_test():
     name = 'duplicate-commented-key'
     said = case(name, ('[advanced]\n# A thing. Live.\n#thing = 1\n\n'
                        '# The same thing again. Live.\n#thing = 2\n'), thing, 1)
-    expect_in(name, said, 'appear in edvr.ini more than once')
-    expect_in(name, said, 'edvr.ini:6  advanced.thing  (first at line 3)')
+    expect_in(name, said, 'appear in edup.ini more than once')
+    expect_in(name, said, 'edup.ini:6  advanced.thing  (first at line 3)')
     name = 'duplicate-live-key'
     said = case(name, ('[fix]\n# A thing. Live.\n# ui: Thing\nthing = 1\n\n'
                        '# A thing. Live.\n# ui: Thing\nthing = 2\n'),
                 {'a.cpp': 'int t = cfg.getInt("fix.thing", 1);\n'}, 1)
-    expect_in(name, said, 'edvr.ini:8  fix.thing  (first at line 4)')
+    expect_in(name, said, 'edup.ini:8  fix.thing  (first at line 4)')
     name = 'duplicate-key-two-headers'
     said = case(name, ('[advanced]\n# A thing. Live.\n#thing = 1\n\n'
                        '[log]\n# Unrelated.\n#other = 1\n\n'
                        '[advanced]\n# A thing again. Live.\n#thing = 2\n'), thing, 1)
-    expect_in(name, said, 'edvr.ini:11  advanced.thing  (first at line 3)')
+    expect_in(name, said, 'edup.ini:11  advanced.thing  (first at line 3)')
     name = 'same-key-two-sections'
     wrote = case(name, ('[advanced]\n# A thing. Live.\n#thing = 1\n\n'
                         '[experimental]\n# Another thing. Live.\n#thing = 2\n'),
@@ -1780,7 +1780,7 @@ def self_test():
                        '# thing = raw mean the cache derives from the tangents. Live.\n'
                        '#thing = both\n'), thing, 1)
     expect_in(name, said, 'start like a setting')
-    expect_in(name, said, 'edvr.ini:3  advanced.thing')
+    expect_in(name, said, 'edup.ini:3  advanced.thing')
     # The shape the retired settlement-detail block had in [fix]: a dotted name, not a key
     # the code reads, so no duplicate and no row -- but it cut the paragraph
     # above it off from the real key, whose hint became "changing anything."
@@ -1792,7 +1792,7 @@ def self_test():
                        '# ui: Count\n'
                        'count = 1\n'),
                 {'a.cpp': 'int c = cfg.getInt("fix.count", 1);\n'}, 1)
-    expect_in(name, said, 'edvr.ini:3  fix.advanced.observe')
+    expect_in(name, said, 'edup.ini:3  fix.advanced.observe')
     name = 'sentence-rewrapped'
     wrote = case(name, ('[advanced]\n'
                         '# Which channel it is told through; edges covered with thing = raw\n'

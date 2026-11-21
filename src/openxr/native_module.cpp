@@ -316,7 +316,12 @@ std::wstring localConfigPath() noexcept {
       reinterpret_cast<LPCWSTR>(&configureModule),&current))return {};
   const DWORD n=GetModuleFileNameW(current,filename,_countof(filename));if(!n||n>=_countof(filename))return {};
   wchar_t* slash=wcsrchr(filename,L'\\');wchar_t* other=wcsrchr(filename,L'/');if(other&&(!slash||other>slash))slash=other;
-  if(!slash)return {};*slash=L'\0';return std::wstring(filename)+L"\\edvr_openxr.ini";
+  if(!slash)return {};*slash=L'\0';
+  const std::wstring primary=std::wstring(filename)+L"\\edup_openxr.ini";
+  if(GetFileAttributesW(primary.c_str())!=INVALID_FILE_ATTRIBUTES)return primary;
+  const std::wstring legacy=std::wstring(filename)+L"\\edvr_openxr.ini";
+  if(GetFileAttributesW(legacy.c_str())!=INVALID_FILE_ATTRIBUTES)return legacy;
+  return primary;
 }
 }
 

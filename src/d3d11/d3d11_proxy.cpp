@@ -304,15 +304,11 @@ void loaderPhase() {
                                         : "gfx: FAILED no D3D11CreateDevice");
 }
 
-// The text of the settings file named `leaf`, from the first of the module's directory and the
-// executable's that has it; empty when neither does.
-std::string iniTextBeside(const wchar_t* leaf) {
-    const std::wstring dirs[2] = {*g_moduleDir, edvr::executableDirectory()};
-    for (const std::wstring& dir : dirs) {
-        std::string bytes;
-        if (edvr::readFileBytes(dir + L"\\" + leaf, &bytes, 16u << 20)) return bytes;
-    }
-    return std::string();
+// Reads the bytes of a resolved settings path (up to 16 MiB); empty when absent.
+std::string iniTextAt(const std::wstring& path) {
+    if (path.empty()) return std::string();
+    std::string bytes;
+    return edvr::readFileBytes(path, &bytes, 16u << 20) ? bytes : std::string();
 }
 
 // Loads another d3d11 proxy -- EDHM, ReShade -- and re-points every export at
@@ -329,18 +325,20 @@ void chainThroughOtherProxy(edvr::Config& cfg) {
     // advanced.real_dll is one decision for the install, not one per profile (real_dll_choice.h).
     // Config reads the launch profile's settings file whole, so it cannot say what the OTHER file
     // holds, and its choice of file is left as it was. What Config read is the profile's own value;
-    // when that file is the flat one, the shared file is read for this one key alone, beside the
-    // module first and then the executable, as Config::chooseSettingsPath does. When Config fell
-    // back to the shared file (no flat file yet), its value already is the shared one.
+    // when that file is the flat one, the shared file is read through Config::vrSettingsPath()
+    // (covering %LOCALAPPDATA%\EDUP, module/exe dir, and legacy edvr.ini). When Config fell back
+    // to the shared file (no flat file yet), its value already is the shared one.
     const bool flatProfile = edvr::runtimeFlatProfile();
     const std::string own = cfg.getString("advanced.real_dll", "");
-    const bool ownIsFlatFile = flatProfile && std::strcmp(cfg.iniName(), edvr::kIniNameFlat) == 0;
+    const bool ownIsFlatFile = flatProfile && edvr::isFlatIniName(cfg.iniName());
+    const std::wstring vrPath = ownIsFlatFile ? cfg.vrSettingsPath() : cfg.path();
     const std::string sharedValue =
-        ownIsFlatFile ? edvr::iniValue(iniTextBeside(edvr::kIniNameVrW), "advanced.real_dll") : own;
+        ownIsFlatFile ? edvr::iniValue(iniTextAt(vrPath), "advanced.real_dll") : own;
     const std::string flatValue = ownIsFlatFile ? own : std::string();
     const edvr::RealDllChoice choice = edvr::chooseRealDll(flatProfile, flatValue, sharedValue);
-    const std::string said =
-        edvr::realDllLogLine(choice, flatProfile, edvr::kIniNameVr, edvr::kIniNameFlat);
+    const char* sharedName = edvr::iniNameOfPath(vrPath);
+    const char* flatName = ownIsFlatFile ? cfg.iniName() : edvr::kIniNameFlat;
+    const std::string said = edvr::realDllLogLine(choice, flatProfile, sharedName, flatName);
     if (!said.empty()) edvr::Log::get().note("%s", said.c_str());
     const std::string configured = choice.value;
     if (configured.empty()) return;

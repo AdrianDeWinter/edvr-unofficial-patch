@@ -792,7 +792,7 @@ int main(int argc, char** argv) {
     {
         const std::string rf = slurp(root + "\\src\\d3d11\\remlok_fix.cpp");
         const std::string gen = slurp(root + "\\tools\\temporal_shader_build\\fixed_visor_axis_variants.h");
-        const std::string ini = slurp(root + "\\edvr.ini");
+        const std::string ini = slurp(root + "\\edup.ini");
         check(!rf.empty() && !gen.empty() && !ini.empty(), "V8.sources-readable");
         check(countOf(rf, "kVisorAxisVsBytecode") >= 1 && countOf(gen, "kVisorAxisVsBytecode") == 1, "V8.the-shipped-bytes-are-the-ones-remlok_fix.cpp-creates-and-the-generator-builds");
         check(countOf(rf, "visoraxis::kVisorPsHash") >= 1 && countOf(rf, "Refusal::kOtherPs") >= 1, "V8.a-pixel-shader-other-than-the-designed-one-is-refused");

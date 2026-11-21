@@ -81,15 +81,15 @@ inline std::wstring mirrorDirForSource(const std::wstring& root, const std::wstr
     return exact;
 }
 
-// The menu and seat memory use the store the installer recorded, even when
-// several stores share the same product name. Older records retain the old
-// path-hint / unique-existing-folder fallback. A read-only lookup creates nothing.
-inline std::wstring runtimeMirrorDirFor(const std::wstring& localAppData,
-                                       const std::wstring& gameDir, bool create) {
-    if (localAppData.empty() || gameDir.empty()) return std::wstring();
-    const std::wstring root = localAppData + L"\\EDVR";
-    const std::wstring record = gameDir + L"\\edvr_install\\state.ini";
-    const std::wstring recordedSource = recordedMirrorSource(record);
+inline constexpr const wchar_t* kAppDataDirNameW = L"EDUP";
+inline constexpr const wchar_t* kLegacyAppDataDirNameW = L"EDVR";
+
+// Resolves a per-install directory under `root` (`%LOCALAPPDATA%\EDUP` or legacy `%LOCALAPPDATA%\EDVR`).
+inline std::wstring runtimeMirrorDirForRoot(const std::wstring& root,
+                                            const std::wstring& gameDir, bool create) {
+    if (root.empty() || gameDir.empty()) return std::wstring();
+    std::wstring recordedSource = recordedMirrorSource(gameDir + L"\\edup_install\\state.ini");
+    if (recordedSource.empty()) recordedSource = recordedMirrorSource(gameDir + L"\\edvr_install\\state.ini");
 
     auto exactDir = [&](const std::wstring& source) {
         const std::wstring path = mirrorDirForSource(root, gameDir, source);
@@ -124,6 +124,26 @@ inline std::wstring runtimeMirrorDirFor(const std::wstring& localAppData,
     if (!inferredSource.empty()) return exactDir(inferredSource);
     if (!create) return std::wstring();
     return exactDir(L"Folder you chose");
+}
+
+// Read-only lookup in the legacy `%LOCALAPPDATA%\EDVR` root for un-migrated installs.
+inline std::wstring runtimeLegacyMirrorDirFor(const std::wstring& localAppData,
+                                              const std::wstring& gameDir) {
+    if (localAppData.empty() || gameDir.empty()) return std::wstring();
+    return runtimeMirrorDirForRoot(localAppData + L"\\" + kLegacyAppDataDirNameW, gameDir, false);
+}
+
+// The menu, live settings and seat memory use the store the installer recorded, even when
+// several stores share the same product name. Checks `%LOCALAPPDATA%\EDUP` first, falling
+// back to an existing legacy `%LOCALAPPDATA%\EDVR` directory on read-only lookups.
+inline std::wstring runtimeMirrorDirFor(const std::wstring& localAppData,
+                                        const std::wstring& gameDir, bool create) {
+    if (localAppData.empty() || gameDir.empty()) return std::wstring();
+    const std::wstring primary =
+        runtimeMirrorDirForRoot(localAppData + L"\\" + kAppDataDirNameW, gameDir, create);
+    if (!primary.empty()) return primary;
+    if (!create) return runtimeLegacyMirrorDirFor(localAppData, gameDir);
+    return std::wstring();
 }
 
 }  // namespace edvr

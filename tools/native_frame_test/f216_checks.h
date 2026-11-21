@@ -555,7 +555,7 @@ void run216(Check&& check) {
 
     // ---- 12. the sites ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini"), rec = slurp("src/common/onfoot_recorder_core.h");
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini"), rec = slurp("src/common/onfoot_recorder_core.h");
         const auto has = [&](const std::string& hay, const char* needle) { return hay.find(needle) != std::string::npos; };
         check(has(cpp, "cfg.getString(\"fix.native_on_foot_view_bob\", \"off\") == \"on\"") && has(cpp, "g_f216Keep.store(keep, std::memory_order_relaxed)"), "F216: the key is read on the frame thread (on keeps the game's bob; off, the default, removes it)");
         check(has(ini, "# ui: View bob | choices off, on | recommended off | live | menu native_on_foot\nnative_on_foot_view_bob = off"), "F216: the shipped key is off, a live choice on the Native on foot page");

@@ -226,12 +226,12 @@ inline void run177(Check&& check) {
         check(std::strcmp(line, "aim choice prompt (F177): not shown: menu.aim_choice_prompt is off") == 0, "F177: the not-shown line reads as the log's contract");
         ap::formatNotShown(line, sizeof(line), nullptr);
         check(std::strcmp(line, "aim choice prompt (F177): not shown: ?") == 0, "F177: a missing reason prints a mark, not a crash");
-        ap::formatWriteFailed(line, sizeof(line), "edvr.ini: access denied");
-        check(std::strcmp(line, "aim choice prompt (F177): write failed: edvr.ini: access denied") == 0, "F177: the write-failed line carries the error");
-        ap::formatSaved(line, sizeof(line), ap::writesFor(ap::kLookToAim), "edvr.ini");
-        check(std::strcmp(line, "aim choice prompt (F177): saved fix.native_on_foot_look_to_aim = on and menu.aim_choice_prompt = off to edvr.ini") == 0,
+        ap::formatWriteFailed(line, sizeof(line), "edup.ini: access denied");
+        check(std::strcmp(line, "aim choice prompt (F177): write failed: edup.ini: access denied") == 0, "F177: the write-failed line carries the error");
+        ap::formatSaved(line, sizeof(line), ap::writesFor(ap::kLookToAim), "edup.ini");
+        check(std::strcmp(line, "aim choice prompt (F177): saved fix.native_on_foot_look_to_aim = on and menu.aim_choice_prompt = off to edup.ini") == 0,
               "F177: the saved line names both keys and their values, so a pick whose write never came back reads differently");
-        ap::formatSaved(line, sizeof(line), ap::writesFor(ap::kLater), "edvr.ini");
+        ap::formatSaved(line, sizeof(line), ap::writesFor(ap::kLater), "edup.ini");
         check(std::strcmp(line, "aim choice prompt (F177): saved nothing") == 0, "F177: nothing to save says so");
         check(std::strcmp(ap::kLogPickedMouse, "aim choice prompt (F177): picked mouse aim") == 0 &&
                   std::strcmp(ap::kLogPickedLookToAim, "aim choice prompt (F177): picked look to aim") == 0 && std::strcmp(ap::kLogLater, "aim choice prompt (F177): later") == 0,
@@ -267,7 +267,7 @@ inline void run177(Check&& check) {
             return ss.str();
         };
         const std::string cpp = slurp("src/d3d11/menu.cpp");
-        const std::string ini = slurp("edvr.ini");
+        const std::string ini = slurp("edup.ini");
         const std::string flat = slurp("src/common/flat_profile_keys.h");
         const auto count = [](const std::string& hay, const std::string& needle) {
             size_t n = 0, at = 0;
@@ -277,7 +277,7 @@ inline void run177(Check&& check) {
             }
             return n;
         };
-        check(!cpp.empty() && !ini.empty() && !flat.empty(), "F177: menu.cpp, edvr.ini and src/common/flat_profile_keys.h are read (run from the repository root)");
+        check(!cpp.empty() && !ini.empty() && !flat.empty(), "F177: menu.cpp, edup.ini and src/common/flat_profile_keys.h are read (run from the repository root)");
         check(count(cpp, "aimPromptTick(now);") == 1 && count(cpp, "const aimprompt::Decision d = aimprompt::decide(t);") == 1 && count(cpp, "kSettle") == 0 && count(cpp, "aimPromptSceneMs") == 0 &&
                   count(cpp, "aimPromptFailedAfterScene") == 0 && count(cpp, "sceneArrived()") == 2,
               "F190: the VR tick asks the pure decision once a tick; the settle is the header's (stepFor), not the menu's; the first scene is read twice, for the shown line of the tick and of the first menu open, and no longer for the retry limit");
@@ -306,7 +306,7 @@ inline void run177(Check&& check) {
               "F177: while the page is up Tab does not leave it, and its card and its missing tooltip strip are the geometry's too");
         check(count(ini, "\n[menu]\n") + count(ini, "\r\n[menu]\r\n") == 1 && count(ini, "aim_choice_prompt = on") == 1 &&
                   count(ini, "# ui: Aiming choice at start | choices on, off | recommended on | live | menu native_on_foot") == 1,
-              "F177: edvr.ini declares menu.aim_choice_prompt = on once, as a live on/off row of the Native on foot page");
+              "F177: edup.ini declares menu.aim_choice_prompt = on once, as a live on/off row of the Native on foot page");
         const size_t menuAt = ini.find("\n[menu]"), keyAt = ini.find("aim_choice_prompt = on");
         const size_t nextSection = menuAt == std::string::npos ? std::string::npos : ini.find("\n[", menuAt + 1);
         check(menuAt != std::string::npos && keyAt != std::string::npos && keyAt > menuAt && keyAt < nextSection, "F177: the key sits inside the [menu] section");

@@ -172,11 +172,11 @@ void workerBody(Session& s) {
                 s.open.store(true, std::memory_order_release);
                 s.why.store("", std::memory_order_relaxed);
             } else if (++tries >= kOpenTries) {
-                s.why.store("could not create the file in edvr_logs\\onfoot", std::memory_order_relaxed);
-                g_failedWhy.store("could not create the file in edvr_logs\\onfoot", std::memory_order_relaxed);
+                s.why.store("could not create the file in edup_logs\\onfoot", std::memory_order_relaxed);
+                g_failedWhy.store("could not create the file in edup_logs\\onfoot", std::memory_order_relaxed);
                 g_failed.store(true, std::memory_order_release);
                 g_active.store(false, std::memory_order_relaxed);
-                Log::get().note("native on foot recorder (F213): not recording: could not create a file in edvr_logs\\onfoot (%u tries)", tries);
+                Log::get().note("native on foot recorder (F213): not recording: could not create a file in edup_logs\\onfoot (%u tries)", tries);
             }
         }
         // drain: everything published so far
@@ -358,7 +358,7 @@ void frame(bool wantActive, uint64_t nowMs, const std::string& keysJson, uint32_
     static bool announced = false;
     if (!announced) {   // once, whatever the gate: proves this build has the recorder and that the frame tick reaches it
         announced = true;
-        Log::get().note("native on foot recorder (F213): ready; it records to edvr_logs\\onfoot while log.on_foot_detail is on and native stereo is on foot "
+        Log::get().note("native on foot recorder (F213): ready; it records to edup_logs\\onfoot while log.on_foot_detail is on and native stereo is on foot "
                         "(32 MiB a file, a session keeps its newest 8; hotkey.on_foot_mark marks a moment)");
     }
     Session* s = g_session.load(std::memory_order_acquire);

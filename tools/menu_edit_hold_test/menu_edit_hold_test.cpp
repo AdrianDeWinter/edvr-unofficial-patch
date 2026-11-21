@@ -477,7 +477,7 @@ struct CompletionRig {
                 char text[2048];
                 std::snprintf(text, sizeof(text), format, args...);
                 log = text;
-            }, "edvr.ini");
+            }, "edup.ini");
     }
 };
 
@@ -500,7 +500,7 @@ void caseWriterCompletion() {
             check(has(r.log, job.dotted.c_str()) && has(r.log, job.value.c_str()) && has(r.log, "active this session"),
                   "H15.d every addon completion logs its key, value and already-active session policy");
             if (ok) {
-                check(r.state.lastWrite == job.dotted + " = " + job.value && has(r.log, "written to edvr.ini") && r.file == job.value,
+                check(r.state.lastWrite == job.dotted + " = " + job.value && has(r.log, "written to edup.ini") && r.file == job.value,
                       "H15.e successful setting and approval saves produce the usual last-write status");
             } else {
                 check(has(r.state.lastWrite, "FAILED:") && has(r.state.lastWrite, job.dotted.c_str()) &&

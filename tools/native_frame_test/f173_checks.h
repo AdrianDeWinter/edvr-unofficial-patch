@@ -2,11 +2,11 @@
 //
 // F173: the pilot's flown values are the defaults of the four experimental dials (they stay experimental and TEMPORARY): experimental.native_on_foot_crouch_ads_body_forward_cm 5 (was 0),
 // native_on_foot_crouch_ads_body_left_cm 25 (was 15), native_on_foot_crouch_ads_square 0 (was 1) and native_on_foot_pistol_sprint_swing_phase 0.5 (was 0). A default lives in three places
-// in native_on_foot.cpp and edvr.ini: the atomic's initial value, the cfg fallback and the shipped line; the rig pins all of them, one check per key (the menu's shipped column is read from
+// in native_on_foot.cpp and edup.ini: the atomic's initial value, the cfg fallback and the shipped line; the rig pins all of them, one check per key (the menu's shipped column is read from
 // the ini line and is checked in hotkey_capture_test, the mirror window's default in desktop_window_test). Every other rig in this file set the dial it means, so it still proves what it did.
 //
 // The new non-zero defaults must change nothing standing, at the hip or unarmed. They are gated by the crouched weight (F163) and the detach weight (the sights) for the body moves, by the
-// armed pistol's release weight (F167) for the swing, and the torso square is 0; the rig runs the real functions at the SHIPPED values, read from edvr.ini, with each weight 0.
+// armed pistol's release weight (F167) for the swing, and the torso square is 0; the rig runs the real functions at the SHIPPED values, read from edup.ini, with each weight 0.
 #pragma once
 
 #include "../../src/d3d11/native_on_foot_core.h"
@@ -43,8 +43,8 @@ inline double iniValue(const std::string& ini, const std::string& key) {
 
 template <class Check>
 inline void run173(Check&& check) {
-    const std::string ini = slurpIni("edvr.ini"), cpp = slurpIni("src/d3d11/native_on_foot.cpp");
-    check(!ini.empty() && !cpp.empty(), "F173: the default pins read edvr.ini and src/d3d11/native_on_foot.cpp (run the rig from the repository root)");
+    const std::string ini = slurpIni("edup.ini"), cpp = slurpIni("src/d3d11/native_on_foot.cpp");
+    check(!ini.empty() && !cpp.empty(), "F173: the default pins read edup.ini and src/d3d11/native_on_foot.cpp (run the rig from the repository root)");
     const auto has = [&](const char* needle) { return cpp.find(needle) != std::string::npos; };
 
     // ---- 1. one check per key: the atomic's initial value, the cfg fallback and the shipped line are all the new default --------------------------------------------------------------------

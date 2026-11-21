@@ -24,7 +24,7 @@
 //   crop, the log lines, the ini words (0 is the default centre) and the ini order. Each check has a control that trips.
 //   THE WIRING (source pins, each with a control that trips it): the key is read as one word with the default left_eye (game until F173), the flat profile's allow-list does not carry it,
 //   the window is moved only from the thread-pool callback, the Present hook calls the feature before the census span and the real Present, the draw skip sits in the
-//   verdict and in the three thunks the verdict does not cover, the host hands the eye over after it is captured, the export and the source are built, and edvr.ini
+//   verdict and in the three thunks the verdict does not cover, the host hands the eye over after it is captured, the export and the source are built, and edup.ini
 //   documents the key in [visual] after world_scale.
 // No device and no window. argv[1] is the repository root.
 #include "../../src/common/desktop_window_census.h"
@@ -850,7 +850,7 @@ static void wiring(const std::string& root) {
     const std::string vscreen = readFile(root + "\\src\\d3d11\\vscreen.cpp");
     const std::string host = readFile(root + "\\src\\openxr\\native_runtime_host.h");
     const std::string build = readFile(root + "\\build.bat");
-    const std::string ini = readFile(root + "\\edvr.ini");
+    const std::string ini = readFile(root + "\\edup.ini");
     const std::string flatKeys = readFile(root + "\\src\\common\\flat_profile_keys.h");
     const std::string shaderTool = readFile(root + "\\tools\\temporal_shader_build\\temporal_shader_build.cpp");
     check(!cpp.empty() && !hook.empty() && !vscreen.empty() && !host.empty() && !build.empty() && !ini.empty() && !flatKeys.empty() && !shaderTool.empty(),
@@ -1140,7 +1140,7 @@ static void wiring(const std::string& root) {
           "build.bat exports edvrAcquireDesktopWindow, compiles desktop_window.cpp and runs this rig");
     check(at(shaderTool, "fixed_desktop_window_variants.h") != std::string::npos && at(shaderTool, "kDesktopWindowPsBytecode") != std::string::npos, "the shader build registers the two desktop window shaders");
 
-    // edvr.ini: [visual], after world_scale, the three keys in order, each with its ui: line on the Desktop window page, live, and the sentence the menu reads.
+    // edup.ini: [visual], after world_scale, the three keys in order, each with its ui: line on the Desktop window page, live, and the sentence the menu reads.
     const size_t visual = at(ini, "\n[visual]\n");
     const size_t world = at(ini, "\nworld_scale = 100\n", visual);
     const size_t key = at(ini, "\ndesktop_window = left_eye\n", world);
@@ -1157,11 +1157,11 @@ static void wiring(const std::string& root) {
               uiCrop > aspectKey && cropKey - uiCrop < 200 && shiftKey != std::string::npos && uiShift != std::string::npos && uiShift > cropKey && shiftKey - uiShift < 200 && styleKey != std::string::npos && uiStyle != std::string::npos && uiStyle > shiftKey && styleKey - uiStyle < 160 &&
               count(ini, "\ndesktop_window = ") == 1 && count(ini, "\ndesktop_window_aspect = ") == 1 && count(ini, "\ndesktop_window_crop = ") == 1 && count(ini, "\ndesktop_window_vertical_shift = ") == 1 &&
               count(ini, "\ndesktop_window_style = ") == 1,
-          "edvr.ini: [visual], after world_scale, the five keys in order ship left_eye, full, native, 0 and window, each with its ui: line on the Mirror window page, labelled Image, Shape, Crop, Vertical shift and Style (the page names the window) (the crop two choices, the shift a signed number row, step 5, unit %)");
+          "edup.ini: [visual], after world_scale, the five keys in order ship left_eye, full, native, 0 and window, each with its ui: line on the Mirror window page, labelled Image, Shape, Crop, Vertical shift and Style (the page names the window) (the crop two choices, the shift a signed number row, step 5, unit %)");
     check(ini.rfind("VR only. Live.\n# ui: Image |", key) != std::string::npos && ini.rfind("VR only. Live.\n# ui: Shape |", aspectKey) != std::string::npos &&
               ini.rfind("VR only. Live.\n# ui: Crop |", cropKey) != std::string::npos && ini.rfind("VR only. Live.\n# ui: Vertical shift |", shiftKey) != std::string::npos && ini.rfind("VR only. Live.\n# ui: Style |", styleKey) != std::string::npos,
-          "edvr.ini: each comment says VR only and live");
-    check(at(ini, "menu visual", key) == std::string::npos || at(ini, "menu visual", key) > styleKey, "edvr.ini: none of the five is on the Visual page");
+          "edup.ini: each comment says VR only and live");
+    check(at(ini, "menu visual", key) == std::string::npos || at(ini, "menu visual", key) > styleKey, "edup.ini: none of the five is on the Visual page");
     {   // the words: the shift's 0 is the default centre; the crop's comment says what native and center do, with Elite's two numbers and the mirrored right eye; nothing says straight ahead
         auto unwrapped = [](std::string s) {
             size_t p;
@@ -1181,7 +1181,7 @@ static void wiring(const std::string& root) {
                    at(cw, "hidden area") != std::string::npos;
         };
         check(wordsOk(words, shapeWords, cropWords),
-              "edvr.ini: the shift's comment says 0 is the default centre and what it does nothing for; the crop's comment names both rules, Elite's 1.32 and 0.515, the mirrored 0.485 and that full is never cropped; none says straight ahead");
+              "edup.ini: the shift's comment says 0 is the default centre and what it does nothing for; the crop's comment names both rules, Elite's 1.32 and 0.515, the mirrored 0.485 and that full is never cropped; none says straight ahead");
         check(!wordsOk(replaced(words, "0 is the default centre", "0 is straight ahead"), shapeWords, cropWords), "control: a shift comment that says straight ahead trips the words pin");
         check(!wordsOk(words, replaced(shapeWords, "cut the picture to", "straight ahead cut the picture to"), cropWords), "control: a shape comment that says straight ahead trips the words pin");
         check(!wordsOk(words, shapeWords, replaced(cropWords, "0.485", "0.5")), "control: a crop comment that does not say the right eye's mirror trips the words pin");

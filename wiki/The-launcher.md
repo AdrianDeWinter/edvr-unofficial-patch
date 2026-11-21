@@ -29,7 +29,7 @@ From a script, Steam Launch Options, or another launcher such as `min-ed-launche
 - As a pre-launch update hook in `min-ed-launcher` (without launching the game through ED-UP):
 
 ```text
-"%LOCALAPPDATA%\EDVR\launcher\ed-up-launcher.exe" --update --install --dir "C:\Path\To\Products\elite-dangerous-odyssey-64"
+"%LOCALAPPDATA%\EDUP\launcher\ed-up-launcher.exe" --update --install --dir "C:\Path\To\Products\elite-dangerous-odyssey-64"
 ```
 
 Every store offers **Play VR** and **Play flat** (filtered to the modes installed in that folder). Frontier's launcher takes `/vr` or `/novr` on its command line. For Steam and Epic without direct launch, the launcher updates `<StereoscopicMode>` in Elite's `Settings.xml` before opening Steam or Epic, keeping a one-time original backup at `backups\Settings.xml.ed-up-original` and a rolling backup of the previous state at `backups\Settings.xml.bak` (rolling `Settings.xml` back if opening the store client fails):
@@ -64,7 +64,7 @@ The same checkbox exists for a game bought from Frontier. The launcher asks for 
 
 The first time on a PC, Frontier emails a code. The launcher asks for it and sends it back. Frontier answers with a token for this PC.
 
-The launcher keeps `frontier-login.dat` in `%LOCALAPPDATA%\EDVR\launcher\`:
+The launcher keeps `frontier-login.dat` in `%LOCALAPPDATA%\EDUP\launcher\`:
 
 - your email, stored in the clear
 - that token, locked to your Windows user

@@ -365,7 +365,7 @@ inline void run212(Check&& check) {
               "F212: the look processor hook reads the springs for the local component only (inside F129's co.local), only while native on foot is active");
         check(hs.find("(\"d3d11/native_on_foot_f212.h\"") != std::string::npos, "F212: the header joins tools\\hook_signatures.py's exact-build audit list (the maintainer reviews it before a merge)");
         // no config key: the behaviour is not a setting
-        const std::string ini = slurp("edvr.ini");
+        const std::string ini = slurp("edup.ini");
         check(!ini.empty() && ini.find("conversation_look") == std::string::npos && ini.find("f212") == std::string::npos && ini.find("F212") == std::string::npos,
               "F212: there is no config key for it");
     }

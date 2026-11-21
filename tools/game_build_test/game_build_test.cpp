@@ -390,7 +390,7 @@ void fixtureChecks(const std::string& dir) {
     check(gs::isGameExecutable(L"C:\\Games\\Elite\\EliteDangerous64.exe") && gs::isGameExecutable(L"eLiTeDaNgErOuS64.EXE") &&
               gs::isGameExecutable(L"D:/steam/EliteDangerous64.exe"),
           "the game's executable is EliteDangerous64.exe, in any case, under any folder");
-    check(!gs::isGameExecutable(L"C:\\Games\\Elite\\EDVR-Setup.exe") && !gs::isGameExecutable(L"EliteDangerous64.exe.bak") &&
+    check(!gs::isGameExecutable(L"C:\\Games\\Elite\\EDUP-Setup.exe") && !gs::isGameExecutable(L"EliteDangerous64.exe.bak") &&
               !gs::isGameExecutable(L"EliteDangerous64.ex") && !gs::isGameExecutable(L"C:\\EliteDangerous64.exe\\tool.exe") &&
               !gs::isGameExecutable(L"") && !gs::isGameExecutable(nullptr),
           "any other main module is not the game");

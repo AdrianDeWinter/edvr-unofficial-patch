@@ -9,7 +9,7 @@
 // on WARP they never engage. The pipelines' own teardown under real draws is covered by a flight with the VRAM watch.
 //
 // Cases: a launch in VR; flips to flat and back, two frames each; a re-post of VR that stays; 50 flat/vr cycles with the private bytes
-// after cycles 5 and 50; the settings file falling back to edvr.ini; then the log's switch lines, in order. The control is a second
+// after cycles 5 and 50; the settings file falling back to edup.ini; then the log's switch lines, in order. The control is a second
 // process (--control) with the teardown skipped, flipping vr -> flat: the rig passes only when that process's teardown and menu checks
 // fail, which is what shows the rig can see a skipped teardown.
 //
@@ -66,7 +66,7 @@ std::string describe(const Snapshot& s) {
     char buf[320];
     std::snprintf(buf, sizeof(buf),
                   "profile %u, file %s, generation %u, switches %u, teardowns %u, menu configured %u, hold %u, flat live %u",
-                  s[kProfile], s[kFlatFile] ? "edvr-flat.ini" : "edvr.ini", s[kGeneration], s[kSwitches], s[kTeardowns],
+                  s[kProfile], s[kFlatFile] ? "edup-flat.ini" : "edup.ini", s[kGeneration], s[kSwitches], s[kTeardowns],
                   s[kConfigured], s[kHold], s[kFlatLive]);
     return buf;
 }
@@ -110,14 +110,14 @@ bool writeFile(const std::wstring& path, const std::string& text) {
 }
 
 // A scratch root holding the DLL's own copy and the three settings files the rig is about: the install descriptor (two readers must
-// agree on scope), edvr.ini and edvr-flat.ini, each with one harmless key of its own. Its logs go under it.
+// agree on scope), edup.ini and edup-flat.ini, each with one harmless key of its own. Its logs go under it.
 bool prepare(const std::wstring& root, const std::wstring& dll) {
     CreateDirectoryW(root.c_str(), nullptr);
     CreateDirectoryW((root + L"\\logs").c_str(), nullptr);
     return CopyFileW(dll.c_str(), (root + L"\\d3d11.dll").c_str(), FALSE) &&
-           writeFile(root + L"\\edvr_profile.ini", "[install]\r\nschema = 2\r\nscope = both\r\n") &&
-           writeFile(root + L"\\edvr.ini", "[hotkey]\r\nmenu = F9\r\n") &&
-           writeFile(root + L"\\edvr-flat.ini", "[hotkey]\r\nmenu = F10\r\n");
+           writeFile(root + L"\\edup_profile.ini", "[install]\r\nschema = 2\r\nscope = both\r\n") &&
+           writeFile(root + L"\\edup.ini", "[hotkey]\r\nmenu = F9\r\n") &&
+           writeFile(root + L"\\edup-flat.ini", "[hotkey]\r\nmenu = F10\r\n");
 }
 
 // The log lines this run writes: every edvr_gfx_*.log in the rig's log directory, read whole.
@@ -231,7 +231,7 @@ int runControl(const std::wstring& root) {
         return 2;
     }
     const Snapshot launch = p.read();
-    report(launchState(launch), "control launch: profile Vr, file edvr.ini, switches 0 -- " + describe(launch));
+    report(launchState(launch), "control launch: profile Vr, file edup.ini, switches 0 -- " + describe(launch));
 
     bool framesOk = false;
     const Snapshot after = flipTo(p, d, false, framesOk);
@@ -279,7 +279,7 @@ int runMain(const std::wstring& dllArg) {
         if (FAILED(hr)) return finish();
 
         Snapshot s = p.read();
-        report(launchState(s), "launch: profile Vr, file edvr.ini, switches 0 -- " + describe(s));
+        report(launchState(s), "launch: profile Vr, file edup.ini, switches 0 -- " + describe(s));
 
         bool framesOk = false;
         Snapshot before = s;
@@ -290,7 +290,7 @@ int runMain(const std::wstring& dllArg) {
 
         before = s;
         s = flipTo(p, d, true, framesOk);
-        report(framesOk && realSwitch(before, s, kVr, 0), "flip to vr, two frames: a real switch back to edvr.ini -- " + describe(s));
+        report(framesOk && realSwitch(before, s, kVr, 0), "flip to vr, two frames: a real switch back to edup.ini -- " + describe(s));
         expected.push_back("flat -> vr");
 
         before = s;
@@ -331,11 +331,11 @@ int runMain(const std::wstring& dllArg) {
                       delta, kPrivateToleranceBytes);
         report(delta <= kPrivateToleranceBytes, bytesText);
 
-        DeleteFileW((mainRoot + L"\\edvr-flat.ini").c_str());
+        DeleteFileW((mainRoot + L"\\edup-flat.ini").c_str());
         before = s;
         s = flipTo(p, d, false, framesOk);
         report(framesOk && realSwitch(before, s, kFlat, 0),
-               "edvr-flat.ini deleted, flip to flat: the settings file falls back to edvr.ini -- " + describe(s));
+               "edup-flat.ini deleted, flip to flat: the settings file falls back to edup.ini -- " + describe(s));
         expected.push_back("vr -> flat");
     }
 

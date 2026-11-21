@@ -1,7 +1,6 @@
 #include "apply.h"
 
 #include <windows.h>
-#include <aclapi.h>
 
 #include "../common/iniedit.h"
 #include "probe.h"
@@ -125,51 +124,6 @@ void clearReadOnly(const std::wstring& path) {
     if (attrs == INVALID_FILE_ATTRIBUTES) return;
     if (attrs & FILE_ATTRIBUTE_READONLY)
         SetFileAttributesW(path.c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
-}
-
-bool processIsElevated() {
-    HANDLE token = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
-    TOKEN_ELEVATION elevation{};
-    DWORD size = sizeof(elevation);
-    const BOOL ok = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size);
-    CloseHandle(token);
-    return ok && elevation.TokenIsElevated != 0;
-}
-
-bool isUserEditableIni(const std::wstring& path) {
-    const std::wstring name = leafOf(path);
-    return _wcsicmp(name.c_str(), L"edvr.ini") == 0 || _wcsicmp(name.c_str(), L"edvr-flat.ini") == 0;
-}
-
-// When an elevated install writes edvr.ini or edvr-flat.ini under Program Files, the file
-// inherits admin-only ACLs so the unelevated game (F8 menu) and launcher Settings tab cannot
-// save edits. Grant Authenticated Users modify access on those two files (best-effort).
-void grantUsersWriteAccess(const std::wstring& path) {
-    if (!processIsElevated()) return;
-    BYTE sidBuf[SECURITY_MAX_SID_SIZE]{};
-    DWORD sidSize = sizeof(sidBuf);
-    if (!CreateWellKnownSid(WinAuthenticatedUserSid, nullptr, sidBuf, &sidSize)) return;
-    PACL oldDacl = nullptr;
-    PSECURITY_DESCRIPTOR sd = nullptr;
-    if (GetNamedSecurityInfoW(path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                              nullptr, nullptr, &oldDacl, nullptr, &sd) != ERROR_SUCCESS) {
-        return;
-    }
-    EXPLICIT_ACCESSW ea{};
-    ea.grfAccessPermissions = FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE;
-    ea.grfAccessMode = GRANT_ACCESS;
-    ea.grfInheritance = NO_INHERITANCE;
-    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-    ea.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
-    ea.Trustee.ptstrName = reinterpret_cast<LPWSTR>(sidBuf);
-    PACL newDacl = nullptr;
-    if (SetEntriesInAclW(1, &ea, oldDacl, &newDacl) == ERROR_SUCCESS && newDacl) {
-        SetNamedSecurityInfoW(const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                              nullptr, nullptr, newDacl, nullptr);
-        LocalFree(newDacl);
-    }
-    if (sd) LocalFree(sd);
 }
 
 bool ensureDirTree(const std::wstring& path, std::vector<Undo>* undo) {
@@ -348,7 +302,6 @@ ApplyResult applyPlan(const Plan& plan, const PayloadProvider& payload) {
                 if (!writeWholeFile(step.to, data, size, &err)) {
                     fail(step.to, err);
                 } else {
-                    if (isUserEditableIni(step.to)) grantUsersWriteAccess(step.to);
                     if (!existed)
                         undo.push_back({Undo::Kind::DeleteFile, step.to, std::wstring()});
                     else overwrote = true;
@@ -363,7 +316,6 @@ ApplyResult applyPlan(const Plan& plan, const PayloadProvider& payload) {
                 if (!writeWholeFile(step.to, step.text.data(), step.text.size(), &err)) {
                     fail(step.to, err);
                 } else {
-                    if (isUserEditableIni(step.to)) grantUsersWriteAccess(step.to);
                     if (!existed)
                         undo.push_back({Undo::Kind::DeleteFile, step.to, std::wstring()});
                     else overwrote = true;

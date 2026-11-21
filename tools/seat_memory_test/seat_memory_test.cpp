@@ -452,21 +452,21 @@ void files() {
     // the mirror folder, resolved the installer's way, against a scratch LOCALAPPDATA
     const std::wstring exeSteam = L"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Elite Dangerous\\Products\\elite-dangerous-odyssey-64";
     check(seatMirrorDirFor(root, exeSteam, false).empty(), "no mirror folder and no create: nothing, and nothing made");
-    check(GetFileAttributesW((root + L"\\EDVR").c_str()) == INVALID_FILE_ATTRIBUTES, "...not even the EDVR folder");
+    check(GetFileAttributesW((root + L"\\EDUP").c_str()) == INVALID_FILE_ATTRIBUTES, "...not even the EDVR folder");
     const std::wstring made = seatMirrorDirFor(root, exeSteam, true);
-    check(made == root + L"\\EDVR\\elite-dangerous-odyssey-64-steam" && seatDirExists(made), "create makes <leaf>-steam for a Steam install");
+    check(made == root + L"\\EDUP\\elite-dangerous-odyssey-64-steam" && seatDirExists(made), "create makes <leaf>-steam for a Steam install");
     check(seatMirrorDirFor(root, exeSteam, false) == made, "...and finds it again without create");
     check(seatMirrorDirFor(root, L"D:\\Epic Games\\EliteDangerous\\Products\\elite-dangerous-odyssey-64", false) == made,
           "another store's install of the same leaf finds the one folder that carries the leaf (the installer made it)");
     const std::wstring other = seatMirrorDirFor(root, L"E:\\Games\\Elite Dangerous\\Products\\elite-dangerous-odyssey-64", false);
     check(other == made, "...so does a folder you chose");
     check(seatMirrorDirFor(L"", exeSteam, true).empty() && seatMirrorDirFor(root, L"", true).empty(), "no LOCALAPPDATA or no exe folder: nothing");
-    CreateDirectoryW((root + L"\\EDVR\\elite-dangerous-odyssey-64-epic").c_str(), nullptr);
-    check(seatMirrorDirFor(root, L"D:\\Epic Games\\EliteDangerous\\Products\\elite-dangerous-odyssey-64", false) == root + L"\\EDVR\\elite-dangerous-odyssey-64-epic",
+    CreateDirectoryW((root + L"\\EDUP\\elite-dangerous-odyssey-64-epic").c_str(), nullptr);
+    check(seatMirrorDirFor(root, L"D:\\Epic Games\\EliteDangerous\\Products\\elite-dangerous-odyssey-64", false) == root + L"\\EDUP\\elite-dangerous-odyssey-64-epic",
           "with two folders, the store slug the path implies picks the right one");
     check(seatMirrorDirFor(root, L"E:\\Games\\Elite Dangerous\\Products\\elite-dangerous-odyssey-64", false).empty(),
           "...and with two and no slug, there is no guess");
-    CreateDirectoryW((root + L"\\EDVR\\elite-dangerous-odyssey-64-folder-you-chose").c_str(), nullptr);
+    CreateDirectoryW((root + L"\\EDUP\\elite-dangerous-odyssey-64-folder-you-chose").c_str(), nullptr);
     check(seatMirrorDirFor(root, L"E:\\Games\\Elite Dangerous\\Products\\elite-dangerous-odyssey-64", false).empty(),
           "an old generic folder among several mirrors does not make a read-only legacy lookup unambiguous");
     // a seat in the mirror folder survives as the real thing would: save, drop the book, load

@@ -1,5 +1,5 @@
 // The settings menu's Hotkeys page, below the menu: the value formats a hotkey can
-// have and what they do to edvr.ini, the pad/joystick edge, the joystick
+// have and what they do to edup.ini, the pad/joystick edge, the joystick
 // observation table, the capture state machine, the checks on a captured binding,
 // Elite's bindings read for the same three kinds of device, and which generated
 // rows are on the page in which tier. Everything here is pure or synthetic: no
@@ -1895,7 +1895,7 @@ void testLegacyOnFootRowsStayOutOfMenu() {
                                 "native_on_foot_look_to_aim_comp_sign", "native_on_foot_body_align_trim_right_cm",
                                 "native_on_foot_body_align_trim_up_cm", "native_on_foot_body_align_trim_forward_cm",
                                 "native_on_foot_weapon_eye_right_cm",
-                                // F127: the 21 rows taken off the page (the keys, their behaviour and their defaults stay: set in edvr.ini or the installer's window), and the
+                                // F127: the 21 rows taken off the page (the keys, their behaviour and their defaults stay: set in edup.ini or the installer's window), and the
                                 // aim reticle's placement, retired (a hidden retired line; the reticle always sits on the aim axis)
                                 "native_on_foot_world_markers", "native_on_foot_spine_bend_amount", "native_on_foot_weapon_eye_body",
                                 "native_on_foot_pistol_readout_forward_cm", "native_on_foot_pistol_readout_left_cm", "native_on_foot_pistol_readout_up_cm",
@@ -1918,12 +1918,12 @@ void testLegacyOnFootRowsStayOutOfMenu() {
     for (int i = 0; i < kCount; ++i)
         if (strcmp(kMenuRows[i].page, "native_on_foot") == 0) ++nativePageRows;
     check(nativePageRows == 20, "the Native on foot page has 20 rows (the look to aim ADS vertical aim switch, under Look and aim; F216: View bob, the [fix] key native_on_foot_view_bob, under Comfort; F205 added ADS: view circle and F205b removed it again, the circle following ADS: scope zoom; F177: Aiming choice at start, the [menu] key menu.aim_choice_prompt, which the page shows under Look to aim; "
-                                "A1: ADS: scope zoom joined Aiming down sights; F127: 21 rows went to edvr.ini and the installer's window, and Reticle follows was retired; "
+                                "A1: ADS: scope zoom joined Aiming down sights; F127: 21 rows went to edup.ini and the installer's window, and Reticle follows was retired; "
                                 "F128: Visor axis (test) was retired with the correction always on; the panel cursor's F155 retired its F154's Panel cursor (test) row with the "
                                 "drawn placement shipped; F146: the ADS sight switch, the two ADS sight trims and the full outfit switch were retired, and the four Weapon UI trims "
                                 "went to [experimental]; F152: ADS eye distance was retired, its per-weapon trim is an [experimental] row)");   // the page's own order under Look to aim: the F177 pins in native_frame_test
     // F127: the page's order and its five headings. The switch is always first; look and aim, then aiming down sights, then body and view, the HUD last. kMenuRows is in
-    // edvr.ini order; the group is the ini's heading block above the key, which the page shows as a heading.
+    // edup.ini order; the group is the ini's heading block above the key, which the page shows as a heading.
     {
         struct Want { const char* key; const char* group; const char* section = "fix"; };
         static const Want want[] = {
@@ -2007,7 +2007,7 @@ void testLegacyOnFootRowsStayOutOfMenu() {
         checkf(!found, "%s remains a compatible setting but has no in-headset menu row", key);
     }
     // F146: the four Weapon UI trims are [experimental] rows, shown in the developer tier under their own heading: a number from -30 to 30 in steps of 0.5 cm with an explicit sign,
-    // live, labelled without "(test)". They carry the old fix. values over through edvr.ini's moved-from lines (tools/config_test and tools/installer_test hold that).
+    // live, labelled without "(test)". They carry the old fix. values over through edup.ini's moved-from lines (tools/config_test and tools/installer_test hold that).
     // F152: the fifth, "ADS eye forward / back", beside them on the same page and tier, shaped the same (it carries no old value over: the key it replaces changed meaning).
     {
         static const struct { const char* key; const char* label; } want[] = {
@@ -2252,7 +2252,7 @@ void testLegacyOnFootRowsStayOutOfMenu() {
         }
         check(found == 0, "Look to aim's three test rows (aim at the middle of the picture, eye height as mouse look, keep the aim's pitch; F194, F195) are gone with their keys: no experimental \"Look to aim: ...\" row, no row of those keys");
     }
-    // F157: the developer tier's "Body draw to hide (test)" dial (F154 to F156) is retired: the key stays in edvr.ini on a hidden retired line (`# ui: hidden -- retired (F157)`), so it
+    // F157: the developer tier's "Body draw to hide (test)" dial (F154 to F156) is retired: the key stays in edup.ini on a hidden retired line (`# ui: hidden -- retired (F157)`), so it
     // has a row in neither menu, the developer tier's included, and the dial's heading is gone with it.
     {
         int found = 0, headed = 0;
@@ -2267,11 +2267,11 @@ void testLegacyOnFootRowsStayOutOfMenu() {
 // ---------------------------------------------------------------------------
 // 7b. The Visual page of VR's menu (2026-10-27): how the world looks, apart from the fixes. World scale is a whole-percent number from 50 to 200, live; Desktop window (visual.desktop_window,
 // what Elite's window on the desktop shows) was on it until 2026-10-28, when it and its two new keys moved to the Mirror window page, then the Desktop window page (testDesktopWindowPage); the intro settings and the
-// screen curve moved onto it from the Fixes page; Star glow, which both profiles read, is on it too; and a live edvr.ini without the world_scale line takes
+// screen curve moved onto it from the Fixes page; Star glow, which both profiles read, is on it too; and a live edup.ini without the world_scale line takes
 // the first change from the menu as an appended line.
 
 // 7c. The Mirror window page of VR's menu (the Desktop window page, 2026-10-28, until F173; its page id is unchanged, and since F174 its rows' labels leave out the window's name, which the page gives), right after Visual: what the window shows, the picture's shape, how far up or down it is cut (round 7: a signed whole-percent
-// number row; round 8: how the shape is cut, native or center) and the window's style, the five [visual] keys, Fix tier, in edvr.ini order, no group headings needed (the page is the group), choices in the words the file gives them.
+// number row; round 8: how the shape is cut, native or center) and the window's style, the five [visual] keys, Fix tier, in edup.ini order, no group headings needed (the page is the group), choices in the words the file gives them.
 void testDesktopWindowPage() {
     printf("desktop window page\n");
     constexpr int kCount = static_cast<int>(sizeof(kMenuRows) / sizeof(kMenuRows[0]));
@@ -2301,7 +2301,7 @@ void testDesktopWindowPage() {
         if (strcmp(kMenuRows[i].key, "desktop_window_vertical_shift") == 0) shift = i;
         ++at;
     }
-    check(inOrder && at == kWant, "VR's Mirror window page is Image, Shape, Crop, Vertical shift and Style, [visual] Fix-tier rows (the shift a number, the rest choices), live, in edvr.ini order");
+    check(inOrder && at == kWant, "VR's Mirror window page is Image, Shape, Crop, Vertical shift and Style, [visual] Fix-tier rows (the shift a number, the rest choices), live, in edup.ini order");
     // F173: the mirror window shows the left eye by default (the shipped choice), the other four rows keep their words
     check(mode >= 0 && strcmp(kMenuRows[mode].shipped, "left_eye") == 0, "F173: the Mirror window row (visual.desktop_window) ships on left_eye");
     for (int i = 0; i < kCount; ++i) {
@@ -2352,7 +2352,7 @@ void testVisualPage() {
         if (strcmp(kMenuRows[i].key, "world_scale") == 0) world = i;
         ++at;
     }
-    check(inOrder && at == kWant, "VR's Visual page is Screen curve, Intro background picture, VR Galaxy and System Map fixes, World scale, Intro movie, Star glow, Cockpit glass, Legacy glass dirt and Legacy glass lights, Fix tier, in edvr.ini order under their headings (the desktop window rows moved to their own page, 2026-10-28)");
+    check(inOrder && at == kWant, "VR's Visual page is Screen curve, Intro background picture, VR Galaxy and System Map fixes, World scale, Intro movie, Star glow, Cockpit glass, Legacy glass dirt and Legacy glass lights, Fix tier, in edup.ini order under their headings (the desktop window rows moved to their own page, 2026-10-28)");
     for (int i = 0; i < kCount; ++i) {
         const bool moved = strcmp(kMenuRows[i].key, "panel_curvature") == 0 || strcmp(kMenuRows[i].key, "intro_backdrop") == 0 || strcmp(kMenuRows[i].key, "intro_video") == 0;
         if (moved && strcmp(kMenuRows[i].section, "advanced") != 0) checkf(strcmp(kMenuRows[i].page, "fixes") != 0, "%s.%s is no longer on the Fixes page", kMenuRows[i].section, kMenuRows[i].key);
@@ -2396,7 +2396,7 @@ void testVisualPage() {
     const std::string updated = mergeIni(source, source, &source, {{"visual.world_scale", "130"}}, &report);
     const size_t line = updated.find("world_scale = 130"), visual = updated.find("[visual]");
     check(iniValue(updated, "visual.world_scale", "<unset>") == "130" && line != std::string::npos && line > visual,
-          "a live edvr.ini with no world_scale line takes the menu's first write as a line appended inside [visual]");
+          "a live edup.ini with no world_scale line takes the menu's first write as a line appended inside [visual]");
     check(iniValue(updated, "fix.temporal_aa", "<unset>") == "dlss" && iniValue(updated, "visual.star_glow", "<unset>") == "100",
           "...and the neighbouring settings are untouched");
 }

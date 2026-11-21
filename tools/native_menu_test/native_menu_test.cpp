@@ -531,7 +531,7 @@ int wmain(int argc, wchar_t** argv) {
             }
             std::printf("  flat footer legends at %dp: widest %d of %d px\n", outH, widest, line);
         }
-        // Every row label the flat menu shows (menu_flat_rows.h's three tables and the flat Hotkeys page's keys), read from edvr.ini's `# ui:` lines, fits the
+        // Every row label the flat menu shows (menu_flat_rows.h's three tables and the flat Hotkeys page's keys), read from edup.ini's `# ui:` lines, fits the
         // actual label rectangle from menu_panel.cpp in the Row face it is drawn in (em cap * 10 / 7), at every flat size. Two labels were
         // ellipsised on the Performance tab at 1080p (2026-11-16) and nothing measured them.
         {
@@ -540,7 +540,7 @@ int wmain(int argc, wchar_t** argv) {
             for (const auto& r : edvr::kFlatVisualRows) keys.push_back(r.key);
             for (const auto& r : edvr::kFlatDebugRows) keys.push_back(r.key);
             for (const char* k : {"menu", "compare_aa", "monitor_panel"}) keys.push_back(k);
-            std::ifstream ini("edvr.ini");
+            std::ifstream ini("edup.ini");
             std::vector<std::string> lines;
             for (std::string l; std::getline(ini, l);) {
                 if (!l.empty() && l.back() == '\r') l.pop_back();
@@ -566,8 +566,8 @@ int wmain(int argc, wchar_t** argv) {
                         label = u.substr(tag, bar == std::string::npos ? std::string::npos : bar - tag);
                     }
                 }
-                if (label.empty()) std::printf("  flat row label not found in edvr.ini for key %s\n", key.c_str());
-                check(!label.empty(), "every flat row's label is found in edvr.ini");
+                if (label.empty()) std::printf("  flat row label not found in edup.ini for key %s\n", key.c_str());
+                check(!label.empty(), "every flat row's label is found in edup.ini");
                 if (!label.empty()) labels.push_back(label);
             }
             for (const int outH : {720, 1080, 1440, 2160}) {

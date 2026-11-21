@@ -382,15 +382,15 @@ inline void run193(Check&& check) {
 
     // ---- 10. the source sites ------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini");
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini");
         const auto has = [&](const std::string& needle) { return cpp.find(needle) != std::string::npos; };
         const auto at = [&](const std::string& needle) { return cpp.find(needle); };
-        // The A/B key is retired (the pilot flew it on and said so): nothing reads it, no flag holds it, edvr.ini has neither its entry nor its menu row. The needles are the key's and the flag's
+        // The A/B key is retired (the pilot flew it on and said so): nothing reads it, no flag holds it, edup.ini has neither its entry nor its menu row. The needles are the key's and the flag's
         // stems, cut short on purpose, so that the tree holds no spelling of the retired names outside the docs.
         check(cpp.find("native_on_foot_ads_body_follows") == std::string::npos && cpp.find("g_adsBodyFollows") == std::string::npos && cpp.find("followOn") == std::string::npos &&
                   ini.find("native_on_foot_ads_body_follows") == std::string::npos && ini.find("ADS: body follows the camera") == std::string::npos && ini.find("(F193, A/B)") == std::string::npos &&
                   ini.find("\nnative_on_foot_pistol_sprint_swing_phase = 0.5\n") != std::string::npos,
-              "F193: the A/B key is gone: nothing reads it, no flag holds it, edvr.ini has neither its entry nor its menu row, and the camera rule is the behaviour");
+              "F193: the A/B key is gone: nothing reads it, no flag holds it, edup.ini has neither its entry nor its menu row, and the camera rule is the behaviour");
         // the rule's site: the camera is pc.eyeYSelected (E), never the drawn eye or the carried raise added back
         check(has("if (nofoot::f193::wanted(g_f193Stop.stopped, pc.detachW, f97W)) {") &&
                   has("f193r = nofoot::f193::cameraTarget(hipAt, N0[1], f97W, pc.eyeYSelected, f97H, legsRoomM, pc.detachW);") && has("if (f193r.ok) at = f193r.at;") &&

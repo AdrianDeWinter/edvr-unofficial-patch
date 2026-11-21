@@ -538,7 +538,7 @@ void panelTable(const std::string& root, const std::string& gen) {
               flatVisualHasRow("visual", "star_glow") && flatVisualHasRow("visual", "cockpit_glass") && flatVisualHasRow("visual", "cockpit_glass_dirt") &&
               flatVisualHasRow("fix", "particle_billboard") && !flatVisualHasRow("fix", "temporal_aa") && flatProfileReadsKey("fix.particle_billboard") &&
               flatProfileReadsKey("visual.cockpit_glass_dirt") && flatVisualHasRow("visual", "cockpit_glass_lights") && flatProfileReadsKey("visual.cockpit_glass_lights"),
-          "the Visual tab has the Intro movie, the Star glow, the Cockpit glass, its Legacy glass dirt and lights and the Billboards (the table's order; the tab's is edvr.ini's), and the flat gate reads the dirt and lights keys");
+          "the Visual tab has the Intro movie, the Star glow, the Cockpit glass, its Legacy glass dirt and lights and the Billboards (the table's order; the tab's is edup.ini's), and the flat gate reads the dirt and lights keys");
     check(!flatPageHasRow("fix", "particle_billboard") && !flatDebugHasRow("fix", "particle_billboard"), "the Billboards row is on the Visual tab only");
     check(!flatPageHasRow("visual", "star_glow") && !flatDebugHasRow("visual", "star_glow") && !flatVisualHasRow("advanced", "flat_cpu_timing"),
           "no key is on two tabs");
@@ -642,7 +642,7 @@ void panelTable(const std::string& root, const std::string& gen) {
         check(schemaHasRow(schema, r.section, r.key),
               (std::string("the generated schema has the Visual tab's ") + r.section + "." + r.key).c_str());
     }
-    // The Visual rows as generated, Fix tier, each once, in edvr.ini order. Intro movie and Star glow are `menu visual`, the page VR's menu builds too (2026-10-27; the
+    // The Visual rows as generated, Fix tier, each once, in edup.ini order. Intro movie and Star glow are `menu visual`, the page VR's menu builds too (2026-10-27; the
     // headset reads the Star glow since the VR port, so its row moved off `flat_visual`). The tab is built from the table, whatever the page.
     {
         const std::string movie = schemaRow(schema, "visual", "intro_video");

@@ -4,8 +4,11 @@ analysis/
 __pycache__/
 *.pyc
 *.edvrlog
+edup_logs/
 edvr_logs/
+edup_FATAL.txt
 edvr_FATAL.txt
+edup_breadcrumbs.txt
 edvr_breadcrumbs.txt
 .venv/
 

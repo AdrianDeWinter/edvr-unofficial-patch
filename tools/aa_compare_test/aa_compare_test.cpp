@@ -185,7 +185,7 @@ static void removeTree(const std::wstring& dir) {
 // The same file under a flat Settings.xml (3D mode 0): the profile is flat, the allow-list gates generic reads, and the AA mode is still answered
 // around it by requestedTemporalMode, which is what the flat adapter calls. The override rides the same way.
 static void flatProfileCells(const std::wstring& dir) {
-    const std::wstring ini = dir + L"\\edvr.ini";
+    const std::wstring ini = dir + L"\\edup.ini";
     check(writeFile(ini, "[fix]\ntemporal_aa = dlss\nui_quality = 100\n"), "flat: the fixture ini is written");
     check(pinGraphicsMode(dir + L"\\flat_localappdata", 0), "flat: the fixture Settings.xml (3D mode 0) is in place");
     Config& cfg = Config::get();
@@ -202,7 +202,7 @@ static void flatProfileCells(const std::wstring& dir) {
 
 static void configCells(const std::wstring& dir) {
     check(pinGraphicsMode(dir + L"\\vr_localappdata", 4), "the fixture Settings.xml (3D mode 4) is in place");
-    const std::wstring ini = dir + L"\\edvr.ini";
+    const std::wstring ini = dir + L"\\edup.ini";
     const std::string original = "[fix]\ntemporal_aa = dlss\nui_quality = 100\n";
     check(writeFile(ini, original), "the fixture ini is written");
     Config& cfg = Config::get();
@@ -316,7 +316,7 @@ static bool has(const std::string& text, const char* needle) { return text.find(
 static void sourcePins(const std::string& root) {
     const std::string hook = slurp(root + "\\src\\d3d11\\device_hook.cpp");
     const std::string menu = slurp(root + "\\src\\d3d11\\menu.cpp");
-    const std::string ini = slurp(root + "\\edvr.ini");
+    const std::string ini = slurp(root + "\\edup.ini");
     const std::string flatKeys = slurp(root + "\\src\\common\\flat_profile_keys.h");
     const std::string gen = slurp(root + "\\tools\\gen_installer_rc.py");
     const std::string readme = slurp(root + "\\release\\README.txt");
@@ -339,7 +339,7 @@ static void sourcePins(const std::string& root) {
         check(!body.empty() && has(body.c_str(), "s.flatNotice.clear();") && has(body.c_str(), "s.screenNotice.clear();"),
               "a profile switch clears the outgoing profile's queued and displayed flat notice (menuProfileSwitch)");
     }
-    check(has(ini, "compare_aa = F7"), "edvr.ini ships the key bound to F7");
+    check(has(ini, "compare_aa = F7"), "edup.ini ships the key bound to F7");
     check(std::string(kDefaultKey) == "F7", "and the code's default is the same F7");
     check(has(ini, "# ui: AA comparison key | hotkey | live"), "the F8 Hotkeys page has the row");
     check(has(flatKeys, "\"hotkey.compare_aa\""), "the flat profile reads the key");
