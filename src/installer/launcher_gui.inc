@@ -33,8 +33,9 @@ const VrModeChoice kVrModeChoices[] = {
     {0, L"Not Set"},
     {3, L"HMD (Headphones)"},
     {4, L"HMD (Speakers)"},
+    {5, L"HMD Cinema (Headphones)"},
+    {6, L"HMD Cinema (Speakers)"},
     {2, L"Side by Side"},
-    {5, L"HMD Cinema"},
 };
 
 // Posted by the session's worker threads: lParam is a heap std::function<void()> to run here.
@@ -309,12 +310,12 @@ void layoutLauncherControls() {
     MoveWindow(lg.playVr, dp(kMargin + kCardPad), dp(680), dp(114), dp(34), TRUE);
     MoveWindow(lg.playFlat, dp(kMargin + kCardPad + 122), dp(680), dp(114), dp(34), TRUE);
     MoveWindow(lg.play, dp(kMargin + kCardPad), dp(680), dp(124), dp(34), TRUE);
-    MoveWindow(lg.closeAfter, dp(kMargin + kCardPad), dp(730), dp(338), dp(22), TRUE);
+    MoveWindow(lg.closeAfter, dp(kMargin + kCardPad), dp(730), dp(334), dp(22), TRUE);
     if (lg.steamFrontier)
         MoveWindow(lg.steamFrontier, dp(396), dp(730), dp(kClientWidth - kMargin - kCardPad - 396), dp(22), TRUE);
     if (lg.vrMode) {
         const int cardRight = dp(kClientWidth - kMargin - kCardPad);
-        const int comboW = dp(192);
+        const int comboW = dp(212);
         const int comboLeft = cardRight - comboW;
         const int comboTop = dp(727);
         MoveWindow(lg.vrMode, comboLeft, comboTop, comboW, dp(26), TRUE);
@@ -325,7 +326,7 @@ void layoutLauncherControls() {
         const int frame = (rc.bottom - rc.top) - dp(20);
         const int fieldItem = dp(26) - frame;
         if (fieldItem > 0) SendMessageW(lg.vrMode, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), fieldItem);
-        lg.vrModeLabelPx = RECT{dp(386), comboTop, comboLeft - dp(6), comboTop + dp(26)};
+        lg.vrModeLabelPx = RECT{dp(382), comboTop, comboLeft - dp(6), comboTop + dp(26)};
     }
     updateLauncherControls();
 }

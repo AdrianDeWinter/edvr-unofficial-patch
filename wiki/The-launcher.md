@@ -39,8 +39,9 @@ Every store offers **Play VR** and **Play flat** (filtered to the modes installe
   - **Not Set** (`not_set`, default): stops before launching in VR and prompts you to choose your preferred 3D mode first.
   - **HMD (Headphones)** (`3`)
   - **HMD (Speakers)** (`4`)
+  - **HMD Cinema (Headphones)** (`5`)
+  - **HMD Cinema (Speakers)** (`6`)
   - **Side by Side** (`2`)
-  - **HMD Cinema** (`5`)
 
 See [Playing](Playing.md).
 

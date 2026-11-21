@@ -5992,7 +5992,10 @@ void testSettingsXmlLaunchMode() {
         check(std::string(edvr::stereoscopicModeName(2)) == "Side by Side", "mode 2 maps to Side by Side");
         check(std::string(edvr::stereoscopicModeName(3)) == "HMD (Headphones)", "mode 3 maps to HMD (Headphones)");
         check(std::string(edvr::stereoscopicModeName(4)) == "HMD (Speakers)", "mode 4 maps to HMD (Speakers)");
-        check(std::string(edvr::stereoscopicModeName(5)) == "HMD Cinema", "mode 5 maps to HMD Cinema");
+        check(std::string(edvr::stereoscopicModeName(5)) == "HMD Cinema (Headphones)",
+              "mode 5 maps to HMD Cinema (Headphones)");
+        check(std::string(edvr::stereoscopicModeName(6)) == "HMD Cinema (Speakers)",
+              "mode 6 maps to HMD Cinema (Speakers)");
 
         const std::wstring iniPath = P(base, L"vr_mode_state.ini");
         LauncherState st;

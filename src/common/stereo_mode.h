@@ -32,20 +32,22 @@ inline bool parseStereoscopicMode(const char* xml, int* mode) {
     return true;
 }
 
-// Elite Dangerous's in-game Options > Graphics > 3D <StereoscopicMode> values:
-//   0 = Off (flat)
-//   1 = Anaglyph (flat)
-//   2 = Side by Side
-//   3 = HMD (Headphones)
-//   4 = HMD (Speakers)
-//   5 = HMD Cinema
-//   6 = Mode 6 (reserved)
+// Elite Dangerous's in-game Options > Graphics > 3D <StereoscopicMode> values
+// (matching the option token order in EliteDangerous64.exe):
+//   0 = Off ($THREE_D_OFF, flat)
+//   1 = Anaglyph ($THREE_D_ANAGLYPH, flat)
+//   2 = Side by Side ($THREE_D_SIDE_BY_SIDE)
+//   3 = HMD (Headphones) ($THREE_D_HMD_WITH_HEADPHONES)
+//   4 = HMD (Speakers) ($THREE_D_HMD_WITH_SPEAKERS)
+//   5 = HMD Cinema (Headphones) ($THREE_D_HMD_CINEMA_WITH_HEADPHONES)
+//   6 = HMD Cinema (Speakers) ($THREE_D_HMD_CINEMA_WITH_SPEAKERS)
 inline constexpr int kStereoModeOff = 0;
 inline constexpr int kStereoModeAnaglyph = 1;
 inline constexpr int kStereoModeSideBySide = 2;
 inline constexpr int kStereoModeHmdHeadphones = 3;
 inline constexpr int kStereoModeHmdSpeakers = 4;
-inline constexpr int kStereoModeHmdCinema = 5;
+inline constexpr int kStereoModeHmdCinemaHeadphones = 5;
+inline constexpr int kStereoModeHmdCinemaSpeakers = 6;
 
 inline bool isVrStereoscopicMode(int mode) { return mode >= 2 && mode <= 6; }
 
@@ -56,8 +58,8 @@ inline const char* stereoscopicModeName(int mode) {
         case 2: return "Side by Side";
         case 3: return "HMD (Headphones)";
         case 4: return "HMD (Speakers)";
-        case 5: return "HMD Cinema";
-        case 6: return "Mode 6";
+        case 5: return "HMD Cinema (Headphones)";
+        case 6: return "HMD Cinema (Speakers)";
         default: return "Unknown";
     }
 }
