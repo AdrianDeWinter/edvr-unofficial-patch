@@ -32,7 +32,6 @@
 #include "launcher_l10n.h"
 #include "ui.h"
 #ifdef EDUP_LAUNCHER
-#include "edlaunch_shim.h"
 #include "game_language.h"
 #include "launch_route.h"
 #include "launcher_login_dialog.h"
