@@ -5,8 +5,8 @@
 // the usual answers -- WinUI, WPF, a WebView -- is the one that made this a
 // single executable in the first place: no runtime to install, nothing to
 // download, nothing that can be missing on somebody's machine. So the modern
-// parts are drawn here, with GDI+ for antialiased shapes and GDI for text,
-// both of which ship with Windows.
+// parts are drawn here, with analytical antialiased shapes and GDI for text,
+// both of which need nothing outside stock Windows DLLs.
 //
 // What that buys: real typography (Segoe UI Variable where it exists), cards
 // on a tinted background, an accent-filled primary button that reacts to the
@@ -60,7 +60,7 @@ const Fonts& fonts();
 void         buildFonts(UINT dpi);   // rebuilt on DPI change
 void         releaseFonts();
 
-// GDI+ has to be alive for any of the shape drawing below.
+// Initialises and tears down the UI layer's theme and font resources.
 void startup();
 void shutdown();
 
@@ -70,8 +70,8 @@ int dp(int value96, UINT dpi);
 // a dark title bar to match a dark window, and rounded corners.
 void applyWindowChrome(HWND window);
 
-// Shapes. Antialiased, which is the whole reason GDI+ is here: an aliased
-// rounded rectangle looks worse than a square one.
+// Shapes. Analytically antialiased into a premultiplied DIB and alpha-blended:
+// an aliased rounded rectangle looks worse than a square one.
 void fillRounded(HDC dc, RECT rect, int radius, COLORREF fill);
 void strokeRounded(HDC dc, RECT rect, int radius, COLORREF stroke, int inset = 0);
 void fillCircle(HDC dc, int centreX, int centreY, int radius, COLORREF fill);

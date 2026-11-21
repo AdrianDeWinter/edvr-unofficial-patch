@@ -2,18 +2,19 @@
 
 #include <commctrl.h>
 #include <dwmapi.h>
-#include <objidl.h>
-#include <gdiplus.h>
 
+#include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace edvr::installer::ui {
 namespace {
 
-ULONG_PTR g_gdiplusToken = 0;
-Theme     g_theme;
-Fonts     g_fonts;
-bool      g_themeRead = false;
+Theme g_theme;
+Fonts g_fonts;
+bool  g_themeRead = false;
+bool  g_keyboardFocus = false;
+bool  g_mousePressing = false;
 
 // Per-control state for the owner-drawn ones. A handful of buttons and
 // checkboxes, so a vector scan is cheaper than a map and easier to read.
@@ -41,35 +42,184 @@ COLORREF mix(COLORREF a, COLORREF b, int percentB) {
     return RGB(r, g, bl);
 }
 
-Gdiplus::Color gdip(COLORREF c, BYTE alpha = 255) {
-    return Gdiplus::Color(alpha, GetRValue(c), GetGValue(c), GetBValue(c));
+float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+uint32_t packPremul(float r, float g, float b, float alpha) {
+    const float a = clampf(alpha, 0.0f, 1.0f);
+    const uint32_t ab = static_cast<uint32_t>(a * 255.0f + 0.5f);
+    if (ab == 0) return 0u;
+    const uint32_t rb = static_cast<uint32_t>(clampf(r, 0.0f, 255.0f) * a + 0.5f);
+    const uint32_t gb = static_cast<uint32_t>(clampf(g, 0.0f, 255.0f) * a + 0.5f);
+    const uint32_t bb = static_cast<uint32_t>(clampf(b, 0.0f, 255.0f) * a + 0.5f);
+    return (ab << 24) | ((rb > ab ? ab : rb) << 16) | ((gb > ab ? ab : gb) << 8) |
+           (bb > ab ? ab : bb);
 }
 
-void configureGraphics(Gdiplus::Graphics& g) {
-    g.SetSmoothingMode(Gdiplus::SmoothingModeHighQuality);
-    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
-    g.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+uint32_t packPremulColor(COLORREF c, float alpha) {
+    return packPremul(static_cast<float>(GetRValue(c)), static_cast<float>(GetGValue(c)),
+                      static_cast<float>(GetBValue(c)), alpha);
 }
 
-// A rounded rectangle as a floating-point GDI+ path. Floating-point arcs paired
-// with PixelOffsetModeHighQuality avoid the half-pixel shift and edge clipping
-// that make integer GDI+ corners and small circles look stepped.
-Gdiplus::GraphicsPath* roundedPathF(float x, float y, float w, float h, float r) {
-    Gdiplus::GraphicsPath* path = new Gdiplus::GraphicsPath();
-    if (w <= 0.0f || h <= 0.0f) return path;
-    if (r * 2.0f > w) r = w * 0.5f;
-    if (r * 2.0f > h) r = h * 0.5f;
-    if (r <= 0.25f) {
-        path->AddRectangle(Gdiplus::RectF(x, y, w, h));
-        return path;
+// Analytical signed distance to a rounded box centred at (cx, cy) with
+// half-extents (hx, hy) and corner radius r. Negative inside, zero on edge.
+float sdRoundedBox(float px, float py, float cx, float cy, float hx, float hy, float r) {
+    const float qx = std::fabs(px - cx) - (hx - r);
+    const float qy = std::fabs(py - cy) - (hy - r);
+    const float ox = qx > 0.0f ? qx : 0.0f;
+    const float oy = qy > 0.0f ? qy : 0.0f;
+    const float inside = qx > qy ? qx : qy;
+    return std::sqrt(ox * ox + oy * oy) + (inside < 0.0f ? inside : 0.0f) - r;
+}
+
+float sdSegment(float px, float py, float ax, float ay, float bx, float by) {
+    const float pax = px - ax;
+    const float pay = py - ay;
+    const float bax = bx - ax;
+    const float bay = by - ay;
+    const float denom = bax * bax + bay * bay;
+    const float h = denom > 0.0f ? clampf((pax * bax + pay * bay) / denom, 0.0f, 1.0f) : 0.0f;
+    return std::hypot(pax - bax * h, pay - bay * h);
+}
+
+// Renders a tile [x0, x0 + w) x [y0, y0 + h) into a premultiplied 32-bit BGRA
+// DIB and composites it onto dc via GdiAlphaBlend. Gives identical analytical
+// subpixel antialiasing across Windows and Wine without GDI+ region fallbacks.
+template <typename PixelFn>
+void blendTile(HDC dc, int x0, int y0, int w, int h, PixelFn&& pixelAt) {
+    if (w <= 0 || h <= 0) return;
+    HDC memDc = CreateCompatibleDC(dc);
+    if (!memDc) return;
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = w;
+    bmi.bmiHeader.biHeight = -h;  // top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bmp = CreateDIBSection(memDc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bmp || !bits) {
+        if (bmp) DeleteObject(bmp);
+        DeleteDC(memDc);
+        return;
     }
-    const float d = r * 2.0f;
-    path->AddArc(x, y, d, d, 180.0f, 90.0f);
-    path->AddArc(x + w - d, y, d, d, 270.0f, 90.0f);
-    path->AddArc(x + w - d, y + h - d, d, d, 0.0f, 90.0f);
-    path->AddArc(x, y + h - d, d, d, 90.0f, 90.0f);
-    path->CloseFigure();
-    return path;
+    uint32_t* dst = static_cast<uint32_t*>(bits);
+    for (int iy = 0; iy < h; ++iy) {
+        const float py = static_cast<float>(y0 + iy) + 0.5f;
+        uint32_t* row = dst + static_cast<size_t>(iy) * static_cast<size_t>(w);
+        for (int ix = 0; ix < w; ++ix) {
+            const float px = static_cast<float>(x0 + ix) + 0.5f;
+            row[ix] = pixelAt(px, py);
+        }
+    }
+    HGDIOBJ prev = SelectObject(memDc, bmp);
+    BLENDFUNCTION bf{};
+    bf.BlendOp = AC_SRC_OVER;
+    bf.BlendFlags = 0;
+    bf.SourceConstantAlpha = 255;
+    bf.AlphaFormat = AC_SRC_ALPHA;
+    GdiAlphaBlend(dc, x0, y0, w, h, memDc, 0, 0, w, h, bf);
+    SelectObject(memDc, prev);
+    DeleteObject(bmp);
+    DeleteDC(memDc);
+}
+
+void fillAndStrokeRounded(HDC dc, RECT rect, int radius, COLORREF fill, COLORREF stroke,
+                          bool hasFill, bool hasStroke) {
+    const int w = rect.right - rect.left;
+    const int h = rect.bottom - rect.top;
+    if (w <= 0 || h <= 0 || (!hasFill && !hasStroke)) return;
+
+    const float hx = static_cast<float>(w) * 0.5f;
+    const float hy = static_cast<float>(h) * 0.5f;
+    const float cx = static_cast<float>(rect.left) + hx;
+    const float cy = static_cast<float>(rect.top) + hy;
+    const float maxR = hx < hy ? hx : hy;
+    const float r = clampf(static_cast<float>(radius), 0.0f, maxR);
+
+    if (r <= 0.25f) {
+        if (hasFill) fillRect(dc, rect, fill);
+        if (hasStroke) {
+            fillRect(dc, RECT{rect.left, rect.top, rect.right, rect.top + 1}, stroke);
+            fillRect(dc, RECT{rect.left, rect.bottom - 1, rect.right, rect.bottom}, stroke);
+            fillRect(dc, RECT{rect.left, rect.top + 1, rect.left + 1, rect.bottom - 1}, stroke);
+            fillRect(dc, RECT{rect.right - 1, rect.top + 1, rect.right, rect.bottom - 1}, stroke);
+        }
+        return;
+    }
+
+    const float fr = static_cast<float>(GetRValue(fill));
+    const float fg = static_cast<float>(GetGValue(fill));
+    const float fb = static_cast<float>(GetBValue(fill));
+    const float sr = static_cast<float>(GetRValue(stroke));
+    const float sg = static_cast<float>(GetGValue(stroke));
+    const float sb = static_cast<float>(GetBValue(stroke));
+
+    auto pixelAt = [=](float px, float py) -> uint32_t {
+        const float sd = sdRoundedBox(px, py, cx, cy, hx, hy, r);
+        if (hasFill && hasStroke) {
+            const float outerCov = clampf(0.5f - sd, 0.0f, 1.0f);
+            if (outerCov <= 0.0f) return 0u;
+            const float innerCov = clampf(0.5f - (sd + 1.0f), 0.0f, 1.0f);
+            const float rr = sr + (fr - sr) * innerCov;
+            const float gg = sg + (fg - sg) * innerCov;
+            const float bb = sb + (fb - sb) * innerCov;
+            return packPremul(rr, gg, bb, outerCov);
+        }
+        if (hasFill) {
+            const float cov = clampf(0.5f - sd, 0.0f, 1.0f);
+            return cov > 0.0f ? packPremul(fr, fg, fb, cov) : 0u;
+        }
+        const float d = std::fabs(sd + 0.5f) - 0.5f;
+        const float cov = clampf(0.5f - d, 0.0f, 1.0f);
+        return cov > 0.0f ? packPremul(sr, sg, sb, cov) : 0u;
+    };
+
+    const int corner = static_cast<int>(std::ceil(r)) + 1;
+    if (w <= corner * 2 || h <= corner * 2 || static_cast<long long>(w) * h <= 65536LL) {
+        blendTile(dc, rect.left, rect.top, w, h, pixelAt);
+        return;
+    }
+
+    // Large cards: blend only the four small corner tiles and paint the
+    // straight edges and interior directly with GDI FillRect.
+    blendTile(dc, rect.left, rect.top, corner, corner, pixelAt);
+    blendTile(dc, rect.right - corner, rect.top, corner, corner, pixelAt);
+    blendTile(dc, rect.left, rect.bottom - corner, corner, corner, pixelAt);
+    blendTile(dc, rect.right - corner, rect.bottom - corner, corner, corner, pixelAt);
+
+    if (hasFill && hasStroke) {
+        fillRect(dc, RECT{rect.left + corner, rect.top, rect.right - corner, rect.top + 1}, stroke);
+        fillRect(dc, RECT{rect.left + corner, rect.top + 1, rect.right - corner, rect.top + corner},
+                 fill);
+        fillRect(dc, RECT{rect.left + corner, rect.bottom - 1, rect.right - corner, rect.bottom},
+                 stroke);
+        fillRect(
+            dc,
+            RECT{rect.left + corner, rect.bottom - corner, rect.right - corner, rect.bottom - 1},
+            fill);
+        fillRect(dc, RECT{rect.left, rect.top + corner, rect.left + 1, rect.bottom - corner},
+                 stroke);
+        fillRect(dc, RECT{rect.right - 1, rect.top + corner, rect.right, rect.bottom - corner},
+                 stroke);
+        fillRect(dc, RECT{rect.left + 1, rect.top + corner, rect.right - 1, rect.bottom - corner},
+                 fill);
+    } else if (hasFill) {
+        fillRect(dc, RECT{rect.left + corner, rect.top, rect.right - corner, rect.top + corner},
+                 fill);
+        fillRect(dc, RECT{rect.left, rect.top + corner, rect.right, rect.bottom - corner}, fill);
+        fillRect(dc,
+                 RECT{rect.left + corner, rect.bottom - corner, rect.right - corner, rect.bottom},
+                 fill);
+    } else {
+        fillRect(dc, RECT{rect.left + corner, rect.top, rect.right - corner, rect.top + 1}, stroke);
+        fillRect(dc, RECT{rect.left + corner, rect.bottom - 1, rect.right - corner, rect.bottom},
+                 stroke);
+        fillRect(dc, RECT{rect.left, rect.top + corner, rect.left + 1, rect.bottom - corner},
+                 stroke);
+        fillRect(dc, RECT{rect.right - 1, rect.top + corner, rect.right, rect.bottom - corner},
+                 stroke);
+    }
 }
 
 bool systemPrefersDark() {
@@ -162,16 +312,46 @@ LRESULT CALLBACK ownedProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
             break;
         }
         case WM_LBUTTONDOWN:
+            g_keyboardFocus = false;
+            g_mousePressing = true;
             if (owned) {
                 owned->pressed = true;
                 InvalidateRect(hwnd, nullptr, TRUE);
             }
+            {
+                const LRESULT res = DefSubclassProc(hwnd, message, wparam, lparam);
+                g_mousePressing = false;
+                return res;
+            }
+        case WM_RBUTTONDOWN:
+            g_keyboardFocus = false;
             break;
         case WM_LBUTTONUP:
             if (owned) {
                 owned->pressed = false;
                 InvalidateRect(hwnd, nullptr, TRUE);
             }
+            break;
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+            if (!g_keyboardFocus) {
+                g_keyboardFocus = true;
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+            break;
+        case WM_SETFOCUS:
+            if (!g_mousePressing && (GetKeyState(VK_LBUTTON) & 0x8000) == 0 &&
+                (GetKeyState(VK_MENU) & 0x8000) == 0) {
+                const bool navKey = ((GetKeyState(VK_TAB) | GetKeyState(VK_LEFT) |
+                                      GetKeyState(VK_RIGHT) | GetKeyState(VK_UP) |
+                                      GetKeyState(VK_DOWN)) &
+                                     0x8000) != 0;
+                if (navKey) g_keyboardFocus = true;
+            }
+            InvalidateRect(hwnd, nullptr, TRUE);
+            break;
+        case WM_KILLFOCUS:
+            InvalidateRect(hwnd, nullptr, TRUE);
             break;
         case WM_NCDESTROY:
             RemoveWindowSubclass(hwnd, ownedProc, 1);
@@ -191,15 +371,11 @@ LRESULT CALLBACK ownedProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
 }  // namespace
 
 void startup() {
-    Gdiplus::GdiplusStartupInput input;
-    Gdiplus::GdiplusStartup(&g_gdiplusToken, &input, nullptr);
     refreshTheme();
 }
 
 void shutdown() {
     releaseFonts();
-    if (g_gdiplusToken) Gdiplus::GdiplusShutdown(g_gdiplusToken);
-    g_gdiplusToken = 0;
 }
 
 int dp(int value96, UINT dpi) { return MulDiv(value96, static_cast<int>(dpi), 96); }
@@ -285,77 +461,85 @@ void applyWindowChrome(HWND window) {
 }
 
 void fillRounded(HDC dc, RECT rect, int radius, COLORREF fill) {
-    const float w = static_cast<float>(rect.right - rect.left);
-    const float h = static_cast<float>(rect.bottom - rect.top);
-    if (w <= 0.5f || h <= 0.5f) return;
-    Gdiplus::Graphics graphics(dc);
-    configureGraphics(graphics);
-    // Inset slightly so antialiased corner fringes never clip against a child HWND's
-    // bounds and stay flush beneath a 0.5-pixel-centred 1 px stroke.
-    Gdiplus::GraphicsPath* path = roundedPathF(static_cast<float>(rect.left) + 0.5f,
-                                               static_cast<float>(rect.top) + 0.5f,
-                                               w - 1.0f, h - 1.0f, static_cast<float>(radius));
-    Gdiplus::SolidBrush brush(gdip(fill));
-    graphics.FillPath(&brush, path);
-    delete path;
+    fillAndStrokeRounded(dc, rect, radius, fill, fill, true, false);
 }
 
 void strokeRounded(HDC dc, RECT rect, int radius, COLORREF stroke, int inset) {
-    const float pad = static_cast<float>(inset) + 0.5f;
-    const float w = static_cast<float>(rect.right - rect.left) - pad * 2.0f;
-    const float h = static_cast<float>(rect.bottom - rect.top) - pad * 2.0f;
-    if (w <= 0.5f || h <= 0.5f) return;
-    const float r = static_cast<float>(radius) > static_cast<float>(inset)
-                        ? static_cast<float>(radius - inset)
-                        : 0.0f;
-    Gdiplus::Graphics graphics(dc);
-    configureGraphics(graphics);
-    Gdiplus::GraphicsPath* path = roundedPathF(static_cast<float>(rect.left) + pad,
-                                               static_cast<float>(rect.top) + pad, w, h, r);
-    Gdiplus::Pen pen(gdip(stroke), 1.0f);
-    graphics.DrawPath(&pen, path);
-    delete path;
+    RECT r{rect.left + inset, rect.top + inset, rect.right - inset, rect.bottom - inset};
+    const int rad = radius > inset ? (radius - inset) : 0;
+    fillAndStrokeRounded(dc, r, rad, stroke, stroke, false, true);
 }
 
 void fillCircle(HDC dc, int centreX, int centreY, int radius, COLORREF fill) {
-    const float r = static_cast<float>(radius);
-    if (r <= 0.0f) return;
-    Gdiplus::Graphics graphics(dc);
-    configureGraphics(graphics);
-    Gdiplus::SolidBrush brush(gdip(fill));
-    graphics.FillEllipse(&brush, static_cast<float>(centreX) - r, static_cast<float>(centreY) - r,
-                         r * 2.0f, r * 2.0f);
+    if (radius <= 0) return;
+    const float cx = static_cast<float>(centreX);
+    const float cy = static_cast<float>(centreY);
+    const float rad = static_cast<float>(radius);
+    const int x0 = centreX - radius - 1;
+    const int y0 = centreY - radius - 1;
+    const int side = radius * 2 + 2;
+    blendTile(dc, x0, y0, side, side, [=](float px, float py) -> uint32_t {
+        const float sd = std::hypot(px - cx, py - cy) - rad;
+        const float cov = clampf(0.5f - sd, 0.0f, 1.0f);
+        return cov > 0.0f ? packPremulColor(fill, cov) : 0u;
+    });
 }
 
 void paintToggle(HDC dc, RECT box, bool on, UINT dpi) {
     const Theme& t = theme();
-    const float x = static_cast<float>(box.left) + 0.5f;
-    const float y = static_cast<float>(box.top) + 0.5f;
-    const float w = static_cast<float>(box.right - box.left) - 1.0f;
-    const float h = static_cast<float>(box.bottom - box.top) - 1.0f;
-    if (w <= 2.0f || h <= 2.0f) return;
+    const int w = box.right - box.left;
+    const int h = box.bottom - box.top;
+    if (w <= 2 || h <= 2) return;
 
-    Gdiplus::Graphics graphics(dc);
-    configureGraphics(graphics);
-
-    const float r = h * 0.5f;
-    Gdiplus::GraphicsPath* track = roundedPathF(x, y, w, h, r);
-    Gdiplus::SolidBrush trackBrush(gdip(on ? t.accent : t.control));
-    graphics.FillPath(&trackBrush, track);
-    if (!on) {
-        Gdiplus::Pen borderPen(gdip(t.controlBorder), 1.0f);
-        graphics.DrawPath(&borderPen, track);
-    }
-    delete track;
-
+    const float hx = static_cast<float>(w) * 0.5f;
+    const float hy = static_cast<float>(h) * 0.5f;
+    const float cx = static_cast<float>(box.left) + hx;
+    const float cy = static_cast<float>(box.top) + hy;
+    const float trackR = hx < hy ? hx : hy;
     const float inset = static_cast<float>(dp(3, dpi));
-    const float knobR = (h * 0.5f) - inset;
-    if (knobR > 1.0f) {
-        const float cy = y + h * 0.5f;
-        const float cx = on ? (x + w - r) : (x + r);
-        Gdiplus::SolidBrush knobBrush(gdip(on ? t.accentText : t.subtext));
-        graphics.FillEllipse(&knobBrush, cx - knobR, cy - knobR, knobR * 2.0f, knobR * 2.0f);
-    }
+    const float knobR = trackR - inset;
+    const float knobCx = on ? (static_cast<float>(box.right) - trackR)
+                            : (static_cast<float>(box.left) + trackR);
+
+    const COLORREF trackFill = on ? t.accent : t.control;
+    const COLORREF trackBorder = t.controlBorder;
+    const COLORREF knobColor = on ? t.accentText : t.subtext;
+
+    const float fr = static_cast<float>(GetRValue(trackFill));
+    const float fg = static_cast<float>(GetGValue(trackFill));
+    const float fb = static_cast<float>(GetBValue(trackFill));
+    const float sr = static_cast<float>(GetRValue(trackBorder));
+    const float sg = static_cast<float>(GetGValue(trackBorder));
+    const float sb = static_cast<float>(GetBValue(trackBorder));
+    const float kr = static_cast<float>(GetRValue(knobColor));
+    const float kg = static_cast<float>(GetGValue(knobColor));
+    const float kb = static_cast<float>(GetBValue(knobColor));
+
+    blendTile(dc, box.left, box.top, w, h, [=](float px, float py) -> uint32_t {
+        const float trackSd = sdRoundedBox(px, py, cx, cy, hx, hy, trackR);
+        const float outerCov = clampf(0.5f - trackSd, 0.0f, 1.0f);
+        if (outerCov <= 0.0f) return 0u;
+
+        float rr = fr;
+        float gg = fg;
+        float bb = fb;
+        if (!on) {
+            const float innerCov = clampf(0.5f - (trackSd + 1.0f), 0.0f, 1.0f);
+            rr = sr + (fr - sr) * innerCov;
+            gg = sg + (fg - sg) * innerCov;
+            bb = sb + (fb - sb) * innerCov;
+        }
+        if (knobR > 1.0f) {
+            const float knobSd = std::hypot(px - knobCx, py - cy) - knobR;
+            const float knobCov = clampf(0.5f - knobSd, 0.0f, 1.0f);
+            if (knobCov > 0.0f) {
+                rr = rr + (kr - rr) * knobCov;
+                gg = gg + (kg - gg) * knobCov;
+                bb = bb + (kb - bb) * knobCov;
+            }
+        }
+        return packPremul(rr, gg, bb, outerCov);
+    });
 }
 
 void fillRect(HDC dc, RECT rect, COLORREF fill) {
@@ -385,8 +569,7 @@ int textWidth(HDC dc, const std::wstring& text, HFONT font) {
 
 void paintCard(HDC dc, RECT rect, UINT dpi) {
     const Theme& t = theme();
-    fillRounded(dc, rect, dp(8, dpi), t.cardBg);
-    strokeRounded(dc, rect, dp(8, dpi), t.cardBorder);
+    fillAndStrokeRounded(dc, rect, dp(8, dpi), t.cardBg, t.cardBorder, true, true);
 }
 
 void paintAccentCard(HDC dc, RECT rect, UINT dpi) {
@@ -456,7 +639,7 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
     if (!owned) return;
     const Theme& t = theme();
     const bool disabled = (item->itemState & ODS_DISABLED) != 0;
-    const bool showFocus = (item->itemState & ODS_FOCUS) != 0 &&
+    const bool showFocus = g_keyboardFocus && (item->itemState & ODS_FOCUS) != 0 &&
                            (item->itemState & ODS_NOFOCUSRECT) == 0 && !disabled;
 
     wchar_t label[256]{};
@@ -529,21 +712,12 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
             const int barH = dp(2, dpi) > 2 ? dp(2, dpi) : 2;
             const int padX = dp(8, dpi);
             if (rect.right - rect.left > padX * 2 + 6) {
-                Gdiplus::Graphics graphics(dc);
-                configureGraphics(graphics);
-                Gdiplus::GraphicsPath* bar = roundedPathF(
-                    static_cast<float>(rect.left + padX),
-                    static_cast<float>(rect.bottom - barH),
-                    static_cast<float>((rect.right - rect.left) - padX * 2),
-                    static_cast<float>(barH), static_cast<float>(barH) * 0.5f);
-                Gdiplus::SolidBrush brush(gdip(t.accent));
-                graphics.FillPath(&brush, bar);
-                delete bar;
+                RECT bar{rect.left + padX, rect.bottom - barH, rect.right - padX, rect.bottom};
+                fillRounded(dc, bar, barH / 2 + 1, t.accent);
             }
         }
     } else if (owned->style != ButtonStyle::Link && owned->style != ButtonStyle::Tab) {
-        fillRounded(dc, rect, radius, face);
-        if (border != face) strokeRounded(dc, rect, radius, border);
+        fillAndStrokeRounded(dc, rect, radius, face, border, true, border != face);
     }
     if (showFocus) strokeRounded(dc, rect, radius, t.accent, dp(2, dpi));
 
@@ -579,31 +753,65 @@ void drawCheckbox(const DRAWITEMSTRUCT* item, UINT dpi) {
 
     const COLORREF face = owned->checked ? (disabled ? mix(t.accent, t.cardBg, 55) : t.accent)
                                          : (owned->hot ? t.controlHover : t.cardBg);
-    fillRounded(dc, box, dp(4, dpi), face);
-    strokeRounded(dc, box, dp(4, dpi), owned->checked ? face : t.controlBorder);
+    const COLORREF border = owned->checked ? face : t.controlBorder;
+    const bool isChecked = owned->checked;
+    const float halfSide = static_cast<float>(side) * 0.5f;
+    const float cx = static_cast<float>(box.left) + halfSide;
+    const float cy = static_cast<float>(box.top) + halfSide;
+    const float boxR = clampf(static_cast<float>(dp(4, dpi)), 0.0f, halfSide);
+    const float s = static_cast<float>(side);
+    const float bx = static_cast<float>(box.left);
+    const float by = static_cast<float>(box.top);
+    const float p0x = bx + s * 0.25f, p0y = by + s * 0.52f;
+    const float p1x = bx + s * 0.43f, p1y = by + s * 0.70f;
+    const float p2x = bx + s * 0.76f, p2y = by + s * 0.31f;
+    const float tickHalfW = static_cast<float>(dp(2, dpi)) * 0.48f;
 
-    if (owned->checked) {
-        // A tick, drawn rather than typed: Segoe MDL2 is not on every machine
-        // and a font fallback here would put a box glyph in a checkbox.
-        Gdiplus::Graphics graphics(dc);
-        configureGraphics(graphics);
-        Gdiplus::Pen pen(gdip(t.accentText), static_cast<Gdiplus::REAL>(dp(2, dpi)));
-        pen.SetStartCap(Gdiplus::LineCapRound);
-        pen.SetEndCap(Gdiplus::LineCapRound);
-        const float x = static_cast<float>(box.left), y = static_cast<float>(box.top);
-        const float s = static_cast<float>(side);
-        Gdiplus::PointF points[3] = {
-            {x + s * 0.26f, y + s * 0.52f}, {x + s * 0.43f, y + s * 0.70f},
-            {x + s * 0.75f, y + s * 0.31f}};
-        graphics.DrawLines(&pen, points, 3);
-    }
+    const float fr = static_cast<float>(GetRValue(face));
+    const float fg = static_cast<float>(GetGValue(face));
+    const float fb = static_cast<float>(GetBValue(face));
+    const float sr = static_cast<float>(GetRValue(border));
+    const float sg = static_cast<float>(GetGValue(border));
+    const float sb = static_cast<float>(GetBValue(border));
+    const float tr = static_cast<float>(GetRValue(t.accentText));
+    const float tg = static_cast<float>(GetGValue(t.accentText));
+    const float tb = static_cast<float>(GetBValue(t.accentText));
+
+    blendTile(dc, box.left, box.top, side, side, [=](float px, float py) -> uint32_t {
+        const float sd = sdRoundedBox(px, py, cx, cy, halfSide, halfSide, boxR);
+        const float outerCov = clampf(0.5f - sd, 0.0f, 1.0f);
+        if (outerCov <= 0.0f) return 0u;
+        float rr = fr;
+        float gg = fg;
+        float bb = fb;
+        if (!isChecked) {
+            const float innerCov = clampf(0.5f - (sd + 1.0f), 0.0f, 1.0f);
+            rr = sr + (fr - sr) * innerCov;
+            gg = sg + (fg - sg) * innerCov;
+            bb = sb + (fb - sb) * innerCov;
+        } else {
+            // A tick, drawn analytically rather than typed: Segoe MDL2 is not on
+            // every machine and a font fallback would put a box glyph here.
+            const float d1 = sdSegment(px, py, p0x, p0y, p1x, p1y);
+            const float d2 = sdSegment(px, py, p1x, p1y, p2x, p2y);
+            const float tickSd = (d1 < d2 ? d1 : d2) - tickHalfW;
+            const float tickCov = clampf(0.5f - tickSd, 0.0f, 1.0f);
+            if (tickCov > 0.0f) {
+                rr = rr + (tr - rr) * tickCov;
+                gg = gg + (tg - gg) * tickCov;
+                bb = bb + (tb - bb) * tickCov;
+            }
+        }
+        return packPremul(rr, gg, bb, outerCov);
+    });
 
     RECT textRect = item->rcItem;
     textRect.left = box.right + dp(10, dpi);
     drawText(dc, label, textRect, fonts().body, disabled ? t.muted : t.text,
              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-    if ((item->itemState & ODS_FOCUS) != 0 && (item->itemState & ODS_NOFOCUSRECT) == 0 && !disabled) {
+    if (g_keyboardFocus && (item->itemState & ODS_FOCUS) != 0 &&
+        (item->itemState & ODS_NOFOCUSRECT) == 0 && !disabled) {
         RECT focus = item->rcItem;
         strokeRounded(dc, focus, dp(4, dpi), t.accent);
     }
