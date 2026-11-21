@@ -12,10 +12,12 @@ namespace edvr {
 // How the resolver isolates the game's pipeline state (flat_isolation_mode.h has the definition): the context state swap, or
 // the explicit state capture a DXMT device gets.
 enum class FlatContextIsolation : uint8_t;
-enum class FlatMonoResolveMode { Taa, Dlaa, Dlss, Fsr, Xess, Ditto };
+enum class FlatMonoResolveMode { Taa, Dlaa, Dlss, Fsr, Xess, Ditto, Fsr4 };
 // The mode as the logs and the HDR route's breadcrumbs (flat_hdr_crumbs.h) spell it.
 inline const char* flatMonoResolveModeName(FlatMonoResolveMode mode) {
-    return mode == FlatMonoResolveMode::Ditto ? "dittosr" : mode == FlatMonoResolveMode::Xess ? "xess"
+    return mode == FlatMonoResolveMode::Ditto ? "dittosr"
+         : mode == FlatMonoResolveMode::Fsr4 ? "fsr4"
+         : mode == FlatMonoResolveMode::Xess ? "xess"
          : mode == FlatMonoResolveMode::Fsr ? "fsr" : mode == FlatMonoResolveMode::Dlss ? "dlss"
          : mode == FlatMonoResolveMode::Dlaa ? "dlaa" : "taa";
 }
@@ -90,7 +92,7 @@ inline FlatResolveRoute flatResolveRoute(FlatMonoResolveMode mode,
         out.name = smaller ? "dittosr-upscale" : "dittosr-native";
         return out;
     }
-    // FSR: Native AA is the 1.0x case of the same upscaler (equal render and
+    // FSR (FSR 4.1 included): Native AA is the 1.0x case of the same upscaler (equal render and
     // upscale sizes, already exercised on the R == D route), so supersampling
     // mirrors NVIDIA: evaluate at E = R and let the game's copy downsample.
     if (larger) {
@@ -181,6 +183,11 @@ struct FlatMonoResolveFrame {
     //     refused pixels can be SEEN. Painted every frame it is set. A reset frame does neither.
     bool refusalCensus = false;
     uint32_t refusalView = 0;
+    // The flat census's slot probe (2026-11-20, the shop glass edge; docs/fsr-upscaler-design-2026-09-16.md journal).
+    // The flat NumLock draw census is armed: log the 9x9 block at the render target's centre (slot code, stored depth, scene depth,
+    // class byte) the prep read. slotProbeCensus is that census's number, for the log line.
+    bool slotProbe = false;
+    uint32_t slotProbeCensus = 0;
     EngineVelocityViews engine{};
     uint64_t frame = 0;
     float deltaMs = 0;

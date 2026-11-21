@@ -113,6 +113,12 @@ inline bool flatProfileReadsKey(const char* key) {
         // chain (bloom, tone, copy) is in no effects archive, so a running game is the only place its bytecode can be read.
         // Developer tier, no flat panel row. Unlisted, getBool answers false here whatever the file says.
         std::strcmp(key, "advanced.glare_shader_dump") == 0 ||
+        // The offscreen draw skip (vscreen.cpp readCensusSkip): flat has no eye texture, so every scene draw is offscreen and this names a
+        // draw by hiding its shape in a target of that size. Developer tier, empty is off. Unlisted, getString answers "off" here, which the
+        // parser refuses, and nothing is skipped (Epic 2026-11-20 14:05: the plant test hid nothing).
+        std::strcmp(key, "advanced.census_skip_offscreen") == 0 ||
+        // Its vs:HASH terms only (flatCensusSkipsDraw): every draw of one vertex shader, whatever its index count.
+        std::strcmp(key, "advanced.census_skip") == 0 ||
         // TEMPORARY (cockpit_glass_probe.h, docs\cockpit-glass-legacy-port.md): the canopy draw's state and constants, flat and VR alike.
         // Unlisted, getString answers "off" here and the probe never arms in flat. Remove with the probe.
         std::strcmp(key, "experimental.cockpit_glass_probe") == 0 ||

@@ -818,7 +818,7 @@ void testMonoFrameSelection() {
         "HDR must contain at least one observed matching camera");
     reject([](auto& f) {
         for (uint32_t i = 0; i < 7; ++i) f.world[i].key.ps = 0;
-        f.world[8].key.ps = 0xA6070F9DD1CFB601ull;  // Captured DE54 PS still unqualified.
+        f.world[8].key.ps = 0xE364F5637AB0261Cull;  // Captured DE54 PS still unqualified (A6070F9D was keyed 2026-11-20).
     }, FlatMonoReason::NoSupportedSource,
         "VS families with unsupported PSs cannot name a motion source");
     reject([](auto& f) { f.input.supportedPair = nullptr; }, FlatMonoReason::InvalidInput,
@@ -849,7 +849,7 @@ void testMonoFrameSelection() {
         f.world[21].draws = 1; }, FlatMonoReason::BrokenLineage,
         "an intervening write to tone output breaks the observed handoff");
     check(!engine_velocity_family::supportedPair(0xEB5234DB6ADB491Dull, 0xB7D50283329322C3ull) &&
-          !engine_velocity_family::supportedPair(0xDE545DC8EE4FBB87ull, 0xA6070F9DD1CFB601ull) &&
+          !engine_velocity_family::supportedPair(0xDE545DC8EE4FBB87ull, 0xE364F5637AB0261Cull) &&
           engine_velocity_family::supportedPair(0xDE545DC8EE4FBB87ull, 0x91F8937EDA723663ull),
           "flat metadata admits PS91 but keeps unqualified captured pairs excluded");
 
@@ -2060,6 +2060,8 @@ void testFlatResolveRoute() {
         {FlatMonoResolveMode::Dlss, 2496,1404, 3840,2160, 3840,2160, false, "trained-upscale"},
         {FlatMonoResolveMode::Dlss, 3840,2160, 3840,2160, 3840,2160, false, "trained-native"},
         {FlatMonoResolveMode::Fsr,  2496,1404, 3840,2160, 3840,2160, false, "trained-upscale"},
+        {FlatMonoResolveMode::Fsr4, 2496,1404, 3840,2160, 3840,2160, false, "trained-upscale"},
+        {FlatMonoResolveMode::Fsr4, 3840,2160, 3840,2160, 3840,2160, false, "trained-native"},
         {FlatMonoResolveMode::Ditto, 2496,1404, 3840,2160, 3840,2160, false, "dittosr-upscale"},
         {FlatMonoResolveMode::Ditto, 3840,2160, 3840,2160, 3840,2160, false, "dittosr-native"},
         {FlatMonoResolveMode::Xess, 2496,1404, 3840,2160, 3840,2160, false, "xess-upscale"},
@@ -2069,6 +2071,7 @@ void testFlatResolveRoute() {
         {FlatMonoResolveMode::Dlss, 5760,3240, 3840,2160, 5760,3240, false, "dlss-as-dlaa-supersample"},
         {FlatMonoResolveMode::Dlaa, 5760,3240, 3840,2160, 5760,3240, false, "dlaa-supersample"},
         {FlatMonoResolveMode::Fsr,  5760,3240, 3840,2160, 5760,3240, false, "fsr-native-aa-supersample"},
+        {FlatMonoResolveMode::Fsr4, 5760,3240, 3840,2160, 5760,3240, false, "fsr-native-aa-supersample"},
         {FlatMonoResolveMode::Ditto, 5760,3240, 3840,2160, 5760,3240, false, "dittosr-native-aa-supersample"},
         {FlatMonoResolveMode::Xess, 5760,3240, 3840,2160, 5760,3240, false, "xess-native-aa-supersample"},
         {FlatMonoResolveMode::Taa,  5760,3240, 3840,2160, 3840,2160, false, "taa-display-grid-down"},
@@ -2088,6 +2091,10 @@ void testFlatResolveRoute() {
     check(std::strcmp(flatResolveRoute(FlatMonoResolveMode::Dlaa, 2496, 1404, 3840, 2160).failReason,
                       "flat-dlaa-requires-native-render-size") == 0,
           "the DLAA upscale refusal's log token is stable");
+    check(std::strcmp(flatMonoResolveModeName(FlatMonoResolveMode::Fsr4), "fsr4") == 0 &&
+          std::strcmp(flatMonoResolveModeName(FlatMonoResolveMode::Fsr), "fsr") == 0 &&
+          std::strcmp(flatMonoResolveModeName(FlatMonoResolveMode::Xess), "xess") == 0,
+          "FSR 4.1 has its own mode name beside fsr's and xess's");
     check(flatResolveRoute(FlatMonoResolveMode::Taa, 0, 2160, 3840, 2160).refused &&
           flatResolveRoute(FlatMonoResolveMode::Dlss, 3840, 2160, 3840, 0).refused,
           "a zero on any axis refuses the route");
@@ -4019,7 +4026,7 @@ void testFlatQueryCutWiring() {
     }
     // The coverage classification no longer reads the context for what the shadow knows.
     const size_t coverageFrom = runtimeCpp.find("flatcpu::Scope coverage(flatcpu::kCoverage);");
-    const size_t coverageTo = coverageFrom == std::string::npos ? std::string::npos : runtimeCpp.find("if (continuesRun) {", coverageFrom);
+    const size_t coverageTo = coverageFrom == std::string::npos ? std::string::npos : runtimeCpp.find("if (continuesRun || motionOnlyRun) {", coverageFrom);
     check(coverageFrom != std::string::npos && coverageTo != std::string::npos && coverageFrom < coverageTo,
           "the coverage classification can be delimited");
     if (coverageFrom != std::string::npos && coverageTo != std::string::npos && coverageFrom < coverageTo) {

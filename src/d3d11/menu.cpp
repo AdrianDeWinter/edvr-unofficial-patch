@@ -1,6 +1,7 @@
 #include "menu.h"
 
 #include <windows.h>
+#include <dxgi.h>
 
 #include <algorithm>
 #include <atomic>
@@ -475,10 +476,9 @@ bool isOpenxrRenderScaleRow(const MenuRowDef& d) {
 }
 
 // fix.temporal_aa_model (the DLSS preset row): NVIDIA's reconstruction
-// model, which only DLSS and DLAA read (temporal_mode.h). It stays on the
-// Performance page under every mode -- rather than dropping out of the list
-// on a mode change, which read as the setting vanishing -- and dims and
-// stops responding to input instead.
+// model, which only DLSS and DLAA read (temporal_mode.h). The performance
+// page omits it until one of those is the Anti-aliasing choice (aaDependentRowHidden).
+// A copy that is still on the page dims and stops responding, as a backstop.
 bool isDlssPresetRow(const MenuRowDef& d) {
     return strcmp(d.section, "fix") == 0 && strcmp(d.key, "temporal_aa_model") == 0;
 }
@@ -535,9 +535,9 @@ const char* hudAntiAliasingRefusal() {
                                         : "HUD Anti-Aliasing is inactive: turn UI quality on above first.";
 }
 
-// fix.xess_frame_generation and fix.xess_generated_frames (the XeSS Frame Generation and XeSS-FG frames rows, flat Performance tab only, 2026-11-12). Both are
-// always on the page and DIMMED while the flat anti-aliasing mode is not XeSS; the frames row is dimmed as well while the toggle is off. A dimmed row refuses a
-// change with a line saying why. The mode is read as the flat runtime reads it (requestedTemporalMode), live; the rows are flat only, so a VR menu never has them.
+// fix.xess_frame_generation and fix.xess_generated_frames (the XeSS Frame Generation and XeSS-FG frames rows, flat Performance tab only, 2026-11-12). The page
+// omits both until Anti-aliasing is XeSS-SR, and omits the frames row until Frame generation is on. A copy still on the page dims and refuses a change. The
+// mode is the value the panel shows (shownValue), live; the rows are flat only, so a VR menu never has them.
 bool isXessFgToggleRow(const MenuRowDef& d) {
     return strcmp(d.section, "fix") == 0 && strcmp(d.key, "xess_frame_generation") == 0;
 }
@@ -562,9 +562,9 @@ const std::string& shownValue(const char* section, const char* key) {
 
 bool flatAntiAliasingIsXess() { return _stricmp(shownValue("fix", "temporal_aa").c_str(), "xess") == 0; }
 
-// fix.dittosr_sharpness, fix.dittosr_frame_weight, fix.dittosr_anti_shimmer and fix.dittosr_sharpen. They stay on the
-// Performance page, like the DLSS preset, and dim until Anti-aliasing is DittoSR. The mode is the value the panel shows,
-// so the rows light up on the same change that selects DittoSR, before the ini write reaches Config.
+// fix.dittosr_sharpness, fix.dittosr_frame_weight, fix.dittosr_anti_shimmer and fix.dittosr_sharpen. The performance page
+// omits them until Anti-aliasing is DittoSR. The mode is the value the panel shows, so they appear on the same change
+// that selects DittoSR, before the ini write reaches Config. A copy still on the page dims and stops responding.
 bool isDittoRow(const MenuRowDef& d) {
     return strcmp(d.section, "fix") == 0 &&
            (strcmp(d.key, "dittosr_sharpness") == 0 || strcmp(d.key, "dittosr_frame_weight") == 0 ||
@@ -1180,6 +1180,67 @@ const char* nvidiaLabel() {
     return temporalNvidiaLabel(quality);
 }
 
+// The adapter the game device was created on, read once per device. Unknown until that read: DLSS and FSR 4.1
+// stay out of the list rather than being offered on a GPU that has not been named yet.
+edvr::TemporalGpu g_menuGpu = edvr::TemporalGpu::Unknown;
+ID3D11Device* g_menuGpuDevice = nullptr;
+
+bool processIsWine() {
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    return ntdll && GetProcAddress(ntdll, "wine_get_version") != nullptr;
+}
+
+const char* temporalGpuName(edvr::TemporalGpu gpu) {
+    switch (gpu) {
+        case edvr::TemporalGpu::Nvidia: return "NVIDIA";
+        case edvr::TemporalGpu::Amd: return "AMD";
+        case edvr::TemporalGpu::Other: return "other";
+        default: return "unknown";
+    }
+}
+
+edvr::TemporalGpu temporalGpuOfDevice(ID3D11Device* dev, uint32_t* vendorOut, uint32_t* deviceOut) {
+    if (vendorOut) *vendorOut = 0;
+    if (deviceOut) *deviceOut = 0;
+    if (!dev) return edvr::TemporalGpu::Unknown;
+    IDXGIDevice* dxgi = nullptr;
+    if (FAILED(dev->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgi))) || !dxgi)
+        return edvr::TemporalGpu::Unknown;
+    IDXGIAdapter* adapter = nullptr;
+    edvr::TemporalGpu gpu = edvr::TemporalGpu::Unknown;
+    if (SUCCEEDED(dxgi->GetAdapter(&adapter)) && adapter) {
+        DXGI_ADAPTER_DESC desc{};
+        if (SUCCEEDED(adapter->GetDesc(&desc))) {
+            if (vendorOut) *vendorOut = desc.VendorId;
+            if (deviceOut) *deviceOut = desc.DeviceId;
+            gpu = edvr::temporalGpuFromAdapter(desc.VendorId, desc.DeviceId, desc.Description, processIsWine());
+        }
+        adapter->Release();
+    }
+    dxgi->Release();
+    return gpu;
+}
+
+void noteMenuGpu(ID3D11Device* dev) {
+    if (dev == g_menuGpuDevice && g_menuGpuDevice) return;
+    uint32_t vendor = 0, device = 0;
+    const edvr::TemporalGpu next = temporalGpuOfDevice(dev, &vendor, &device);
+    const bool changed = next != g_menuGpu || dev != g_menuGpuDevice;
+    g_menuGpuDevice = dev;
+    g_menuGpu = next;
+    if (!changed) return;
+    g_s.contentDirty = true;
+    if (!dev) return;
+    Log::get().note("performance menu: adapter vendor=0x%04X device=0x%04X is %s; Anti-aliasing lists %s%s",
+                    vendor, device, temporalGpuName(next),
+                    next == edvr::TemporalGpu::Nvidia ? "DLSS/DLAA" : "no DLSS",
+                    next == edvr::TemporalGpu::Amd ? " and FSR 4.1" : ", no FSR 4.1");
+}
+
+bool temporalAaRow(const MenuRowDef& d) {
+    return strcmp(d.section, "fix") == 0 && strcmp(d.key, "temporal_aa") == 0;
+}
+
 std::vector<ChoiceItem> choicesOf(const MenuRowDef& d) {
     std::vector<ChoiceItem> out;
     std::string packed(d.choices);
@@ -1198,18 +1259,21 @@ std::vector<ChoiceItem> choicesOf(const MenuRowDef& d) {
                 c.value = item;
                 c.label = item;
             }
-            if (strcmp(d.section, "fix") == 0 && strcmp(d.key, "temporal_aa") == 0 && c.value == "dlss") {
+            if (temporalAaRow(d) && c.value == "dlss") {
                 c.label = nvidiaLabel();
             }
-            if (runtimeFlatProfile() && strcmp(d.section, "fix") == 0 &&
-                strcmp(d.key, "temporal_aa") == 0) {
+            if (runtimeFlatProfile() && temporalAaRow(d)) {
                 if (c.value == "off") c.label = "Off";
                 else if (c.value == "on") c.label = "TAA";
                 else if (c.value == "dlss") c.label = nvidiaLabel();
                 else if (c.value == "fsr") c.label = "FSR3";
+                else if (c.value == "fsr4") c.label = "FSR4";
             }
             // XeSS-FG frames: an option above what the GPU can generate (xessFgMaxGeneratedFrames, 0 while unknown = all enabled) is disabled.
             if (isXessFgFramesRow(d)) c.disabled = !xessFgFramesOptionEnabled(atoi(c.value.c_str()), xessFgMaxGeneratedFrames());
+            // DLSS/DLAA on an NVIDIA adapter, FSR 4.1 on an AMD adapter. A disabled choice is skipped by stepping and left
+            // out of the choice list. The stored value still displays, so an ini that already names one keeps its label.
+            if (temporalAaRow(d) && !edvr::temporalAaChoiceOffered(c.value.c_str(), g_menuGpu)) c.disabled = true;
             out.push_back(c);
         }
         pos = bar + 1;
@@ -1642,12 +1706,19 @@ void stopWriter() {
 // ---------------------------------------------------------------------------
 // Pages
 
+// DLSS preset, DittoSR's rows, and the XeSS Frame Generation rows. Omitted until their parent is the selected value.
+bool menuDependentRowHidden(const MenuRowDef& d) {
+    if (strcmp(d.section, "fix") != 0) return false;
+    return aaDependentRowHidden(d.key, shownValue("fix", "temporal_aa").c_str(), xessFgToggleOn());
+}
+
 void addSettingRows(Page& p, MenuTier tier, const char* page, bool grouped) {
     const char* lastGroup = nullptr;
     for (int i = 0; i < kRowDefCount; ++i) {
         const MenuRowDef& d = kMenuRows[i];
         if (d.tier != tier) continue;
         if (page && _stricmp(d.page, page) != 0) continue;
+        if (menuDependentRowHidden(d)) continue;
         if (grouped && d.group[0] && (!lastGroup || strcmp(lastGroup, d.group) != 0)) {
             Entry h;
             h.kind = EntryKind::Heading;
@@ -1884,6 +1955,7 @@ void addFlatPerformanceRows(Page& p) {
     for (int i = 0; i < kRowDefCount; ++i) {
         const MenuRowDef& d = kMenuRows[i];
         if (!flatPageHasRow(d.section, d.key)) continue;
+        if (menuDependentRowHidden(d)) continue;
         Entry e;
         e.kind = EntryKind::Setting;
         e.def = i;
@@ -1988,6 +2060,13 @@ void buildPages() {
     const int keepHighlight = s.pages.empty() ? 0 : s.pages[s.page].highlight;
     const int keepScroll = s.pages.empty() ? 0 : s.pages[s.page].scroll;
     const size_t keepCount = s.pages.empty() ? 0 : s.pages[s.page].entries.size();
+    // The row under the highlight, so a parent change that adds or drops its children puts the highlight back on that row
+    // rather than on the first one. -1 when the highlight is not a setting.
+    int keepDef = -1;
+    if (!s.pages.empty() && s.page >= 0 && s.page < static_cast<int>(s.pages.size()) &&
+        keepHighlight >= 0 && keepHighlight < static_cast<int>(s.pages[s.page].entries.size()) &&
+        s.pages[s.page].entries[keepHighlight].kind == EntryKind::Setting)
+        keepDef = s.pages[s.page].entries[keepHighlight].def;
     s.pages.clear();
     const bool flat = runtimeFlatProfile();
     for (size_t i = 0; i < kMenuPageCount; ++i) {
@@ -2006,6 +2085,13 @@ void buildPages() {
             keepHighlight >= 0 && keepHighlight < static_cast<int>(p.entries.size())) {
             p.highlight = keepHighlight;
             p.scroll = keepScroll;
+        } else if (strcmp(p.name, keepName) == 0 && keepDef >= 0) {
+            for (size_t i = 0; i < p.entries.size(); ++i) {
+                if (p.entries[i].kind == EntryKind::Setting && p.entries[i].def == keepDef) {
+                    p.highlight = static_cast<int>(i);
+                    break;
+                }
+            }
         }
     }
     s.contentDirty = true;
@@ -2981,6 +3067,8 @@ void buildContent(MenuContent& c) {
                 } else if (d.kind == MenuKind::Choice) {
                     std::string list;
                     for (const ChoiceItem& ch : choicesOf(d)) {
+                        // Anti-aliasing drops a vendor mode this GPU cannot run. XeSS-FG keeps its "(not supported)" line.
+                        if (ch.disabled && temporalAaRow(d)) continue;
                         if (!list.empty()) list += ", ";
                         list += ch.label;
                         if (ch.disabled) list += " (not supported)";
@@ -3302,6 +3390,10 @@ void enqueueChange(WriteJob& job, bool held = false) {
     s.menuWroteDotted = job.dotted;
     // An F8 pick of the anti-aliasing mode ends an AA comparison that is showing it off (aa_compare.h): the player's choice wins.
     if (job.dotted == "fix.temporal_aa") aaCompareNoteMenuEdit();
+    // The DLSS preset, DittoSR's rows and the XeSS Frame Generation rows come and go with this choice.
+    if (strcmp(d.section, "fix") == 0 &&
+        (strcmp(d.key, "temporal_aa") == 0 || strcmp(d.key, "xess_frame_generation") == 0))
+        buildPages();
     s.lastWrite = job.headset.empty() ? "writing " + job.dotted + " = " + job.value
                                       : "writing " + job.headset + " = " + job.toValue;
     s.contentDirty = true;
@@ -5345,6 +5437,7 @@ void menuNoteConfigReloaded() {
     State& s = g_s;
     if (!s.configured) return;
     std::vector<std::string> changed;
+    bool parentsChanged = false;
     for (int i = 0; i < kRowDefCount; ++i) {
         const MenuRowDef& d = kMenuRows[i];
         RowState& r = g_rows[i];
@@ -5357,6 +5450,9 @@ void menuNoteConfigReloaded() {
         if (v != r.value) {
             const std::string was = r.value;
             r.value = v;
+            if (strcmp(d.section, "fix") == 0 &&
+                (strcmp(d.key, "temporal_aa") == 0 || strcmp(d.key, "xess_frame_generation") == 0))
+                parentsChanged = true;
             if (!byMenu && openxrScaleRow) {
                 // The list would toast truncated; say what it means here.
                 // A hand edit that touched only another headset's entry
@@ -5406,6 +5502,7 @@ void menuNoteConfigReloaded() {
     }
     s.menuWroteDotted.clear();
     s.menuWroteDotted2.clear();
+    if (parentsChanged) buildPages();
     if (!changed.empty()) s.contentDirty = true;
     if (s.toasts && !s.open) {
         for (size_t i = 0; i < changed.size() && i < 3; ++i) s.toastQueue.push_back(changed[i]);
@@ -5444,6 +5541,7 @@ static void menuDrainPluginRows();
 
 void menuTick(ID3D11Device* dev) {
     State& s = g_s;
+    noteMenuGpu(dev);
     menuDrainPluginRows();
     if (!s.configured) return;
     {

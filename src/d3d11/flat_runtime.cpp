@@ -1,5 +1,6 @@
 #include "concourse_pane.h"   // TEMPORARY: the bake's frames (docs\concourse-cull-2026-11-05.md)
 #include "flat_light_payload_capture.h"
+#include "draw_census.h"   // the census's slot probe: drawCensusArmed, drawCensusNumber
 #include <sstream>
 #include "flat_origin_capture.h"
 #include "flat_runtime.h"
@@ -20,6 +21,7 @@
 #include "flat_celestial.h"    // planet patch motion: the rows' tangents for the records the resolve binds (fetchCelestialRecords)
 #include "celestial_motion.h"
 #include "xess_engine.h"
+#include "fsr4_engine.h"
 #include "dittosr_engine.h"
 #include "xess_fg.h"   // xessFgWanted: the resolver keeps the edge strip's motion for frame generation
 #include "flat_projection_recipes.h"
@@ -119,6 +121,21 @@ bool FlatMapBounceD3DDriver::verify(void* real, const void* cached, size_t bytes
 std::atomic<bool> g_flatRuntimeLive{false};
 std::atomic<FlatMapBounce*> g_flatMapBounce{nullptr};   // flat_runtime.h: flatRuntimeMapBounceAnyOpen
 namespace {
+// The flat census's slot probe (2026-11-20, the shop glass edge; docs/fsr-upscaler-design-2026-09-16.md journal).
+// The slot probe's frames: the first resolve of each NumLock census starts a run of kSlotProbeFrames resolves (the census itself lasts
+// two, and the refused pixels flicker on some jitter phases only). Render thread only. Unarmed: one census load and one compare.
+constexpr uint32_t kSlotProbeFrames = 8;
+uint32_t g_slotProbeLeft = 0, g_slotProbeCensus = 0;
+bool flatSlotProbeWanted(uint32_t& census) {
+    if (drawCensusArmed()) {
+        const uint32_t n = drawCensusNumber();
+        if (n != g_slotProbeCensus) { g_slotProbeCensus = n; g_slotProbeLeft = kSlotProbeFrames; }
+    }
+    if (!g_slotProbeLeft) return false;
+    --g_slotProbeLeft;
+    census = g_slotProbeCensus;
+    return true;
+}
 std::atomic<bool> nativeScale{false};
 std::atomic<uint64_t> mapBouncePresentEpoch{1};
 std::atomic<bool> foreignWork{false};
@@ -4425,6 +4442,7 @@ void flatRuntimePresent(IDXGISwapChain* swap, uint64_t frame, HRESULT hr, UINT f
     }
     if (mode != s.mode) {
         if (s.engine == FlatMonoResolveMode::Xess) xessReleaseFeatures();
+        if (s.engine == FlatMonoResolveMode::Fsr4) fsr4ReleaseFeatures();
         if (s.engine == FlatMonoResolveMode::Ditto) dittoReleaseFeatures();
         s.haveResolvePlan=false;s.resolvePreflight={};s.resolvePreflightRetryMs=0;
         s.mode = mode; reset();
@@ -4433,6 +4451,7 @@ void flatRuntimePresent(IDXGISwapChain* swap, uint64_t frame, HRESULT hr, UINT f
         engineVelocityConfigure(enabled);
         s.phase.resetHistory();
         s.engine = _stricmp(mode.c_str(), "xess") == 0 ? FlatMonoResolveMode::Xess :
+            _stricmp(mode.c_str(), "fsr4") == 0 ? FlatMonoResolveMode::Fsr4 :
             _stricmp(mode.c_str(), "dittosr") == 0 ? FlatMonoResolveMode::Ditto :
             _stricmp(mode.c_str(), "fsr") == 0 ? FlatMonoResolveMode::Fsr :
             _stricmp(mode.c_str(), "dlss") == 0 ? FlatMonoResolveMode::Dlss :
@@ -4483,10 +4502,12 @@ void flatRuntimePresent(IDXGISwapChain* swap, uint64_t frame, HRESULT hr, UINT f
     Ptr<ID3D11Device> actualDevice; swap->GetDevice(IID_PPV_ARGS(&actualDevice));
     if (s.device && actualDevice.Get() != s.device.Get()) {
         flatRuntimeResize();
-        // Resize releases the features. End both device bindings before this
+        // Resize releases the features. End the device bindings before this
         // render thread adopts the replacement device. DittoSR's shutdown only
         // releases its shaders and histories; it does not wait on the GPU.
+        // FSR 4's bridge is bound the same way as XeSS and does wait.
         xessShutdown();
+        fsr4Shutdown();
         dittoShutdown();
         s.thread = GetCurrentThreadId();
     }
@@ -6396,8 +6417,9 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     const FlatPairFacts& pairFact = s.pairFacts.get(k.vs, k.ps, runtimeFlatProfile());
     d.supported = pairFact.supported; d.instances = instances;
     // A pool family's vertex shader left stock (an unkeyed pixel shader), drawn into the scene's depth: it moves with no motion source, so a
-    // scene holding one is never source-free (design section 104; the selector's unsupportedFamilyDraws).
-    d.poolFamilyVs = !d.supported && k.depth && pairFact.familyVs &&
+    // scene holding one is never source-free (design section 104; the selector's unsupportedFamilyDraws). A motion-only pair is substituted
+    // and is not this: counting it stock vetoed every empty-terrain frame (7B0D/0DF0, edvr_gfx_20261120_101637).
+    d.poolFamilyVs = pairFact.familyVs && !pairFact.motionKeyed && k.depth &&
         flatContractKind(false, k.depth, k.depth, k.depthWidth, k.depthHeight, 26, s.prefix.width, s.prefix.height, false) == kFlatContractScreen;
     // A draw that is not a pool-family draw cannot be a substituted producer: it sees the game's state, and so does
     // everything EDVR reads of the context for it below.
@@ -6933,9 +6955,14 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     }
     // A same-depth draw without camera rows is certified at H through the
     // complete scene-source table. It cannot be assigned to a camera bucket.
+    // 7B0D and 114A are not scene sources, so d.supported already keeps them out of the foreground, weapon camera
+    // included. foregroundSharesWorld still applies to a scene-source weapon family (AACF): the world's camera is not the gun.
+    const bool foregroundSharesWorld=
+        (s.namedDepth && k.camera && std::memcmp(s.namedCamera,d.camera,sizeof(d.camera))==0) ||
+        (!s.namedDepth && worldPredicted().predicted);
     const bool foregroundCandidate=d.supported && weaponMotionFamilyVs(k.vs) && k.camera && k.depth &&
         k.kind==kFlatContractPool && k.format==23 && sceneExtent &&
-        flat_mono_detail::fullViewport(k,k.width,k.height);
+        flat_mono_detail::fullViewport(k,k.width,k.height) && !foregroundSharesWorld;
     // The first-person pool family can draw before the world into the same
     // depth. It is not the scene source: the VR screen-motion naming path uses
     // the same family exclusion before choosing its world camera.
@@ -7051,6 +7078,35 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     // (qualifyProjection reads the shaders, the viewport and the constant buffers, and is skipped under Upstream).
     const bool continuesRun = sourceCandidate && s.namedDepth == k.depth && s.namedConstants == k.b1 &&
         std::memcmp(s.namedCamera, d.camera, sizeof(d.camera)) == 0;
+    // A motion key that is not a scene source (flatSource false) still substitutes when it draws the named world's
+    // depth and camera. d.supported stays false, so the selector does not record a second source.
+    // 2026-11-20 (Epic, a weapons shop; docs/fsr-upscaler-design-2026-09-16.md journal): so does a first-person weapon family's draw that
+    // shares the world's depth, constants and camera. sourceShape leaves the weapon families out so the held gun is never the world source,
+    // but these draws are world objects (the shop's displayed weapons, AACF/CF534B32): left stock they wrote depth with no slot over keyed
+    // surfaces, and seen edge-on, under a pixel wide, their pixels were stale and refused on alternate jitter phases. The held gun draws
+    // with its own projection, so the camera test keeps it out, and the selector still never takes these as a source (sourceCandidate).
+    const bool motionOnlyRun = pairFact.motionKeyed && (!d.supported || weaponMotionFamilyVs(k.vs)) && k.camera && k.depth &&
+        s.namedDepth == k.depth && s.namedConstants == k.b1 &&
+        std::memcmp(s.namedCamera, d.camera, sizeof(d.camera)) == 0 &&
+        sceneExtent && (k.format==23 || k.format==26) && flat_mono_detail::fullViewport(k, k.width, k.height);
+    // The flat census's slot probe (2026-11-20, the shop glass edge; docs/fsr-upscaler-design-2026-09-16.md journal). While the NumLock census
+    // runs, every keyed draw into a depth that is not offered for substitution, and why: such a draw renders stock and writes depth with no
+    // slot, the stale pixels the slot probe found under a thin object once every unkeyed draw was hidden. At most 64 lines a census.
+    if (pairFact.motionKeyed && k.depth && !continuesRun && !motionOnlyRun && drawCensusArmed()) {
+        static uint32_t lines = 0, census = 0;
+        const uint32_t n = drawCensusNumber();
+        if (n != census) { census = n; lines = 0; }
+        if (lines < 64) {
+            ++lines;
+            Log::get().note("flat slot probe: keyed draw not substituted: frame=%llu vs %016llX ps %016llX %c n=%u i=%u supported=%d weaponVs=%d "
+                            "camera=%d sceneExtent=%d format=%u fullViewport=%d named=%d sameDepth=%d sameConstants=%d sameCamera=%d vetoed=%d",
+                (unsigned long long)s.prefix.frame, (unsigned long long)k.vs, (unsigned long long)k.ps, kind, count, instances,
+                d.supported ? 1 : 0, weaponMotionFamilyVs(k.vs) ? 1 : 0, k.camera ? 1 : 0, sceneExtent ? 1 : 0, (unsigned)k.format,
+                flat_mono_detail::fullViewport(k, k.width, k.height) ? 1 : 0, s.namedDepth ? 1 : 0, s.namedDepth == k.depth ? 1 : 0,
+                s.namedConstants == k.b1 ? 1 : 0, std::memcmp(s.namedCamera, d.camera, sizeof(d.camera)) == 0 ? 1 : 0,
+                (sourceShape && !sourceCandidate) ? 1 : 0);
+        }
+    }
     splitContinued = continuesRun;
     flatcpu::drawSplitSetContinued(continuesRun);
     if (continuesRun && pairFact.toneSlot == ~0u && !pairFact.copyPair && pairFact.mapToneSlot == ~0u &&
@@ -7132,7 +7188,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
             }
         }
     }
-    if (continuesRun) {
+    if (continuesRun || motionOnlyRun) {
         FlatComputeInternalScope guard;
         // Engine motion's draw wrapper, lazy form (engine_velocity.h): the game's render targets saved once per binding, then
         // BeforeDraw (the shader substitution, MRT6, the blend state), and EDVR's state stays bound for the next producer
@@ -7417,6 +7473,15 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     f.refusalView = s.refusalView ? 1u : 0u;
     f.refusalCensus = s.refusalCensusFrames > 0;
     if (s.refusalCensusFrames) --s.refusalCensusFrames;
+    // The flat census's slot probe (2026-11-20, the shop glass edge; docs/fsr-upscaler-design-2026-09-16.md journal).
+    // The slot probe rides the flat NumLock census: unarmed this is one bool read. The "requested" line says the runtime reached the
+    // resolver call armed; a later "size=" or "unreadable" line from the resolver says whether the prep ran. Requested with neither
+    // line after it is a resolve that refused before its prep.
+    if (flatSlotProbeWanted(f.slotProbeCensus)) {
+        f.slotProbe = true;
+        Log::get().note("flat slot probe: frame=%llu census=%u requested (copy route); a resolver line follows only if the prep ran",
+            (unsigned long long)s.prefix.frame, f.slotProbeCensus);
+    }
     nativeScale.store(f.renderWidth >= f.outputWidth && f.renderHeight >= f.outputHeight,
                       std::memory_order_release);
     f.configuredDlssPreset=s.preset;
@@ -7857,6 +7922,12 @@ void FlatRuntimeDrawScope::treatHdr(const FlatMonoFrame& selected, uint32_t srvS
     f.refusalView = s.refusalView ? 1u : 0u;
     f.refusalCensus = s.refusalCensusFrames > 0;
     if (s.refusalCensusFrames) --s.refusalCensusFrames;
+    // The census's slot probe: see the copy route's block.
+    if (flatSlotProbeWanted(f.slotProbeCensus)) {
+        f.slotProbe = true;
+        Log::get().note("flat slot probe: frame=%llu census=%u requested (HDR route); a resolver line follows only if the prep ran",
+            (unsigned long long)s.prefix.frame, f.slotProbeCensus);
+    }
     if(selected.mixedCamera) {
         f.untrustedCameraCoverage=s.untrusted.view();
         if(!f.untrustedCameraCoverage) {

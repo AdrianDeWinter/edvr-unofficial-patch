@@ -245,7 +245,7 @@ inline FlatProjectionRecipes flatProjectionDrawRecipes(uint64_t vs, uint64_t ps)
     case 0x436193B352A2897Eull: if (ps == 0x51EE1F922FD220B0ull) result.add(S::Vertex,1,L::ForwardColumns,270); break;
     case 0x4D24A7A6C2D12733ull: if (ps == 0xB70DF49F678E806Full) result.add(S::Vertex,1,L::ForwardColumns,270); break;
     case 0xDE545DC8EE4FBB87ull: if (ps == 0xA6070F9DD1CFB601ull) result.add(S::Vertex,1,L::ForwardColumns,270); break;
-    case 0x98397963AAEC45D3ull: if (ps == 0x8717694A527EC745ull) result.add(S::Vertex,1,L::ForwardColumns,270); break;
+    case 0x98397963AAEC45D3ull: if (ps == 0x8717694A527EC745ull || ps == 0x33DFFE4870508698ull) result.add(S::Vertex,1,L::ForwardColumns,270); break;
     case 0xD005EBB14A22EA0Eull:
         if (ps == 0x302226F2D8C0938Aull || ps == 0xE92C14AA3E51C743ull) result.add(S::Vertex,0,L::ForwardDp4,4); break;
     case 0xE308565BF97FDE0Bull: if (ps == 0x0544F1CC95FD1F12ull) result.add(S::Vertex,1,L::ForwardColumns,270); break;

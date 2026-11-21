@@ -343,10 +343,10 @@ inline int flatSourceFreeWiringTests() {
 
     // -- the draw scope flags the stock family draw, and the model counts it before the colour test --
     const std::string flagged =
-        "d.poolFamilyVs=!d.supported&&k.depth&&pairFact.familyVs&&"
+        "d.poolFamilyVs=pairFact.familyVs&&!pairFact.motionKeyed&&k.depth&&"
         "flatContractKind(false,k.depth,k.depth,k.depthWidth,k.depthHeight,26,s.prefix.width,s.prefix.height,false)==kFlatContractScreen;";
     expect(count(runtime, flagged) == 1, "the draw scope flags a pool-family vertex shader left stock into a scene-sized depth");
-    expect(count(replaced(runtime, "d.poolFamilyVs=!d.supported&&k.depth", "d.poolFamilyVs=k.depth"), flagged) == 0,
+    expect(count(replaced(runtime, "d.poolFamilyVs=pairFact.familyVs&&!pairFact.motionKeyed&&k.depth", "d.poolFamilyVs=k.depth"), flagged) == 0,
            "mutation control: a flag that also takes the substituted draws fails the wiring");
     expect(ordered(model, {"if(d.poolFamilyVs)++p.unsupportedFamilyDraws;", "if(!k.color)returnout;"}),
            "the model counts the stock family draw before it returns for a draw with no colour target");

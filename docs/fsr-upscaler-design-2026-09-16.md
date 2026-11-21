@@ -8,32 +8,34 @@ read 2026-09-16) unless marked believed.
 
 ## Status
 
-- **State (2026-09-17): route 1 MERGED TO MAIN** after flights 1 to 3 on
-  Sean's rigs (Pimax and Quest 3, both clean; the VRAM figure fixed first,
-  c752ca3). `fix.temporal_aa = fsr` ships in the next release; the "works on
-  AMD" note waits on flight 4. AMD ships no Direct3D 11 backend for the FSR
-  3.1 upscaler (vendor-stated), so "the latest FSR 3" comes from only two
-  places: (1) the community D3D11 port (metarutaiga, hardened by OptiScaler;
-  MIT; FSR 3.1.2) compiled into d3d11.dll, which is route 1; (2) a D3D12
-  sidecar running AMD's signed DLL (FSR 4.1 on RDNA3/RDNA4, 3.1.5 elsewhere),
-  route 2, not built. The full reasoning is in Status detail below.
-- **Recommendation:** route 1 first, as `fix.temporal_aa = fsr`, a third
-  engine at the seam where the pass already chooses between NVIDIA's history
-  and its own (section 3); route 2 as a fourth engine (section 5) once route
-  1 has flown on both rigs and an AMD supporter has reported.
-- **Route 1 build (2026-09-16 evening, branch
-  `claude/fsr3-amd-nvidia-upscaling-00b69f`, since merged):** Track A
-  4d0a5fb, Track B b8cd3b2, merged with main 2c7c21e, Track C 6294f1f (WARP
-  rig `tools\fsr3_engine_test`, 31 checks). Full text: Status detail below.
-- **Flights (numbers in the journal):** 1 FLOWN 2026-09-17 06:00 (e70a44e,
-  Pimax, RTX 5090): clean, fsr 1.6 to 2.1 ms per stereo pair against NGX's
-  2.9 to 3.6, 83 to 89 fps; Sean: slightly better than the pass's own
-  history, not DLSS. 2 and 3 (06:07, Quest 3, VirtualDesktopXR): clean, 1.1
-  to 1.4 ms, 86 to 90 fps. Full entries: Status detail below.
-- **Next:** flight 4, an AMD supporter's log (the gate for a "works on
-  AMD" release note); the exported-symbols nit in the fetch tool (Open);
-  route 2 (FSR 4.1 through a D3D12 sidecar, section 5) only if DLSS-class
-  quality on RDNA3/RDNA4 is wanted, which is Sean's call after flight 4.
+- **State (2026-11-20): route 2 MERGED TO MAIN** on Sean's word
+  (`claude/fsr-4-1-flat-vr-support-5f6ea4`). `fix.temporal_aa = fsr4` (FSR 4.1 through
+  AMD's signed D3D12 DLLs over a D3D11/D3D12 bridge, modelled on XeSS's),
+  flat and VR, beside `fsr` (route 1, unchanged). The runtime stays a dev
+  install (`install_edvr.py --fsr4`), not in the packages (D8).
+  Facts, decisions D7 to D9 and the flight plan: journal, "2026-10-23:
+  route 2". Flights 5 and 6 (journal): FSR 4.1.1 clean on the Radeon
+  8060S, 0.8 ms of GPU; held keys cut the bridge's evaluate from 6.6 to
+  0.27 ms (52 to 60 fps). The station streaks Sean reported then may be
+  the station shimmer below (not checked). A main-menu crash after a display change was in
+  Elite's occlusion culler, before FSR 4 ran (set aside).
+- **Held keys (2026-10-24):** the bridge keeps a context's D3D11 keys
+  until it is destroyed; `diag.fsr4_shared_locks` removed (journal).
+- **Route 1 (2026-09-17): MERGED TO MAIN** after flights 1 to 3 (Pimax
+  and Quest 3, RTX 5090, clean; fsr 1.1 to 2.1 ms per stereo pair; Sean:
+  slightly better than the pass's own history, not DLSS). The community
+  D3D11 port (FSR 3.1.2) compiled into d3d11.dll. Build, flights and
+  reasoning: Status detail below.
+- **Station shimmer (2026-11-20, journal): FIXED in flight** (Epic, flat,
+  FSR 4). Pixels whose motion slot no surface owned showed the raw jittered
+  frame. Keyed: the plants (DE54/A607), the bar lights (2684/2376); keyed
+  depthless blended draws (the shop glass) and world-camera weapon draws
+  (AACF) handled. The NumLock census's slot probe names the next one.
+- **Next:** the flicker at flight 7's spot (a hull panel's edge in the
+  main menu) is in the game's image under F7 and in DLSS on Windows too,
+  so not FSR 4's (flight 7 entry): the no-EDVR baseline there, when Sean
+  chooses. Then VR, the AMD licence and the installer payload (D8). Route 1's flight 4 (an AMD
+  supporter's log) and the exported-symbols nit (Open) still stand.
 - **Open:** the reactive mask under FSR (off in flight 1, D3); the jitter
   phase count above 1:1; FSR 3.1's quality in VR against the pass's own
   history, which is what an AMD user gets today; and a cosmetic nit seen
@@ -42,13 +44,11 @@ read 2026-09-16) unless marked believed.
   symbols (inert: nothing imports them; fix in the fetch tool by building
   the port without its export macro, with `--verify` checking for it);
   and the create's VRAM figure, meaningless in the field (flight 1
-  journal). CLOSED by Track A: the
-  build recipe (CMake, `/MT` forced, the upscaler-only targets) and the
-  d3d11-import stop of 3.5 (neither library imports d3d11, dxgi or
-  d3dcompiler by name). DECIDED (D6): the port's prebuilt shader compiler
-  is accepted as a build-time-only tool.
-- **Ruled out (2026-09-16, vendor-stated):** an official AMD D3D11 backend
-  (none exists); FSR 4 on D3D11 (D3D12-only signed DLLs, RDNA3/RDNA4 only);
+  journal). Closed: Track A's build recipe and d3d11-import stop
+  (journal), the prebuilt shader compiler (D6, section 6).
+- **Ruled out (2026-09-16, vendor-stated; 2026-10-23 additions in the
+  journal):** an official AMD D3D11 backend (none exists); FSR 4 on D3D11
+  or Vulkan (D3D12-only signed DLLs; officially RX 7000/9000 only);
   reaching FSR 4 through the driver's FSR 3.1-to-4 override (D3D12 ffx-api
   titles only); FSR 3.1.5 on D3D11 (it exists only inside the D3D12 DLL,
   and its one change over 3.1.4 is a negative-RCAS-output fix, moot with
@@ -57,9 +57,11 @@ read 2026-09-16) unless marked believed.
   device; the native OpenXR half (src\openxr\) is the only packaged VR half.
   Field rigs: an RTX 5090 with a Pimax Crystal Super and a Quest 3; the
   Steam rig also carries an AMD iGPU (gate on the DXGI vendor id, never on
-  adapter count). No AMD discrete card in-house: AMD verification needs a
-  supporter's log. FSR needs typed UAV loads (vendor-stated); cards without
-  them (believed: NVIDIA before Maxwell) must get a clean refusal.
+  adapter count); since 2026-10-23 a Ryzen AI Max+ 395 (Radeon 8060S, RDNA
+  3.5, gfx1151) on CachyOS, Mesa 26.2.5 RADV, Proton (DXVK + vkd3d-proton),
+  compile-only builds from tools/linux_toolchain.py since 2026-10-24.
+  FSR needs typed UAV loads (vendor-stated); cards without them (believed:
+  NVIDIA before Maxwell) must get a clean refusal.
 - **Detail:** 1 what exists; 2 what AMD ships; 3 the design; 4 flights;
   5 the sidecar; 6 decisions; 7 declined; journal at the end.
 
@@ -690,3 +692,526 @@ class of upscaler): that is route 2's go/no-go.
   stands: `advanced.temporal_aa_fsr_reactive` stays off by default and
   live. Ruled out: the reactive mask as a needed input for Elite's HUD
   under FSR 3.1, because both headsets read fine without it.
+- 2026-10-23: route 2, FSR 4.1 through the D3D12 bridge. Sean's ask: FSR
+  4.1 alongside FSR 3.1, flat and VR, on his Strix Halo (Radeon 8060S,
+  RDNA 3.5). **Facts (read 2026-10-23, vendor-stated unless marked):**
+  FSR 4.1.0 shipped in FidelityFX SDK v2.2.0 (2026-03-23), 4.1.1 in v2.3.0
+  (2026-06-24, the latest tag), which added FSR 4.1 on RX 7000 (RDNA 3,
+  INT8 model; RDNA 4 runs FP8). AMD's SDK: "FSR4 requires an AMD 7000
+  series discrete GPU or AMD 9000 series GPU or later" (`ml.md`); GPUOpen
+  puts RDNA 3.5 and RDNA 2 on the FSR 3 path, and the API "will
+  automatically select AMD FidelityFX Super Resolution 3.1.5" on other
+  hardware. So **RDNA 3.5 is not officially covered**. Files:
+  `Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll` (the app
+  calls it) and `amd_fidelityfx_upscaler_dx12.dll` (28.8 MB, beside it);
+  ffx-api headers `Kits/FidelityFX/api/include/{ffx_api.h,
+  ffx_api_types.h, dx12/ffx_api_dx12.h}` and
+  `Kits/FidelityFX/upscalers/include/ffx_upscale.h`. No Vulkan FSR 4.
+  Licence: `docs/license.md` opens with a binary-only redistribution
+  licence and then lists every file, the signed DLLs included, under MIT;
+  ambiguous, so read before shipping (D8). **Proton:** Valve's Wine has
+  an `amdxc64` shim (proton_11.0, experimental_11.0) whose
+  `UpdateFfxApiProvider` loads AMD's driver-side `amdxcffx64.dll` (FSR
+  4.1.1, bundled by Proton Experimental and Proton-CachyOS) when
+  `FSR4_UPGRADE=1`; Experimental auto-enables it only for discrete Navi3x
+  ids, not Strix Halo's 0x1586. vkd3d-proton 3.0 maps AGS WMMA to
+  `VK_KHR_cooperative_matrix` (RADV GFX11+ since Mesa 23.3); gfx1151 has
+  no FP8, so it would take INT8. Believed (community reports, no gfx1151
+  report on 4.1.1 found): the upgrade path runs the INT8 model on RDNA 3.5
+  iGPUs at about 25% fps cost. Precedent: OptiScaler's "FSR4 w/Dx12" for
+  D3D11 games is this bridge (shared NT-handle textures, shared fence),
+  and runs under Proton.
+  **Decisions (Sean, 2026-10-23):** **D7** `fsr4` is its own value
+  ("FSR 4.1" in the menus) and runs only when AMD's runtime offers a 4.x
+  provider for the device (`ffxQueryDescGetVersions`); otherwise it refuses
+  once, naming what was offered and, on Wine, the `FSR4_UPGRADE=1` launch
+  option, and the frame falls back as every refusal does. It never runs
+  3.1.5 in `fsr4`'s name. **D8** this pass ships a dev install only
+  (`tools\fetch_fsr4.py`, the build, the workflow, `install_edvr.py
+  --fsr4`); the installer payload and release packages wait for a working
+  flight and Sean's read of the licence. **D9** the branch is not merged to
+  main until Sean says it is ready to ship to users.
+  **Design:** a fourth engine, `src\d3d11\fsr4_engine.{h,cpp}`, one context
+  per upscaler slot (0 and 1 the eyes, 2 the VR world route; flat uses 0).
+  The bridge is XeSS's (`xess_engine.cpp`: D3D12 device by LUID, shared
+  textures with `SHARED_KEYEDMUTEX | SHARED_NTHANDLE`, the shared fence,
+  an allocator ring), copied rather than factored so the flown XeSS path
+  is not touched; factoring both onto one bridge is a follow-up. Inputs
+  follow route 1's measured contract (jitter and motion vectors in render
+  pixels, scale 1, current to previous; reversed Z; infinite depth and the
+  HDR route's HDR bit as `fsr` sets them), believed to carry over because
+  ffx-api's upscale contract is FSR 3.1's. FSR 4 differs in three places:
+  automatic exposure on both routes, not only the HDR one (AMD's `ml.md`
+  makes the exposure input optional only under `AUTO_EXPOSURE` and
+  recommends it; route 1's LDR route has neither, which FSR 3.1 accepts);
+  LDR colour (display-referred, UNORM) is declared non-linear sRGB
+  (`NON_LINEAR_COLORSPACE` at create, `NON_LINEAR_COLOR_SRGB` at dispatch)
+  as AMD's FSR 4 notes ask; and inputs are copied into shared textures of
+  exactly the render size, because FSR 4's auto exposure reads the whole
+  texture (OptiScaler's finding). The D3D12 device is made at feature
+  level 12_0 (FSR 4 needs Shader Model 6.6), and AMD's loader is never
+  unloaded. No reactive mask, no warm-up and no sharpening in this pass.
+  **Flight 5 signatures** (Strix Halo, Proton Experimental or
+  Proton-CachyOS, `FSR4_UPGRADE=1 %command%`, flat then VR): the
+  provider line names 4.1.x (upgrade path works) or the refusal names
+  3.1.5 only (it does not; ruled out without the launch option is the
+  control); a bridge refusal names the failing call and HRESULT (shared
+  texture or fence plumbing under DXVK/RADV); a stall shows as the
+  bounded fence wait's line or a log that stops mid-frame (the D3D11-side
+  GPU wait on the D3D12 signal; OptiScaler waits on the CPU on Linux for
+  this reason); ghosting or doubled edges point at the jitter or motion
+  sign, which route 1 measured but route 2 has not; the 30 s bridge line
+  gives the cost.
+- 2026-10-23 evening: route 2 built and installed for flight 5. Windows
+  workflow run 40031975573 green at 5dcc0608 (runs 40026994003 and
+  40029535701 failed on two rig checks the new case moved: the HDR route's
+  source count and the flat resolver's key-off golden order; both fixed in
+  the rigs, no golden re-recorded). On the runner's Microsoft Basic Render
+  adapter (vendor 0x1414) the rig made the D3D12 device, loaded AMD's
+  signed loader and got "FSR 3.1.5, 2.3.4" from the version query, so
+  `fsr4` refused as D7 says: the first evidence that the bridge's probe
+  works against AMD's real DLLs. In that log `ffxConfigure rc=2` is the
+  signed loader declining the context-less debug route; AMD's per-context
+  messages still reach the log through the create descriptor's
+  `fpMessage`, so the line's "routed" overstates it (fix its wording with
+  the next source change). Installed on the Strix Halo (Steam, flat scope,
+  `--fsr4`, tag ci-40031975573) from the run's `edvr-build` artifact plus
+  `fetch_fsr4.py`'s DLLs and a `build\edvr-flat.ini` written by
+  `gen_installer_rc.flat_ini_bytes()` (the artifact carries neither);
+  `--verify-only` clean; `edvr-flat.ini` set to `temporal_aa = fsr4` (one
+  line, diffed). Elite runs Proton Experimental 11.0-20261014, which ships
+  `contrib/amdxcffx64.dll` (FSR 4.1.1) and the `amdxc64` shim; the launch
+  option `FSR4_UPGRADE=1 %command%` is Sean's to set. CI branch builds are
+  stamped 0.0.0-ci, so the flight log's build check is `edvr_log.py
+  --expect-build 0.0.0-ci`, with the install receipt's hashes as the
+  stronger tie to this run.
+- 2026-10-23 night, flight 5 (ci-40031975573 at 5dcc0608; Steam, flat,
+  Strix Halo, Proton Experimental, `FSR4_UPGRADE=1` read from the game
+  process's environment; log `edvr_gfx_20261023_203819.log`, build check
+  passed). **FSR 4.1.1 is offered and runs:** "AMD's runtime offers FSR
+  4.1.1, 3.1.5, 2.3.4 for this device", provider 4.1.1 on every context.
+  2560x720 to 5120x1440 (2x a side), LDR, infinite depth, flags 0x138.
+  Every dispatch rc=0, no message from AMD's runtime, no refusal, no
+  stall (dispatch #3000 reached); jitter live at #3000 (0.000, -0.167).
+  About a dozen live switches among fsr4, fsr, dlss, on and xess
+  destroyed and rebuilt the context cleanly (2.5 ms; 130 ms the first
+  time). The bridge line over 1799 evaluations, median/p95: GPU 2.8/3.1 ms
+  for the whole step, of which the D3D12 dispatch 1.7/1.7, copy-in 0.39,
+  copy-out 0.18; render-thread CPU 6.3/7.1 ms, with the allocator wait 0
+  and the submit 0.013, so the CPU goes elsewhere in the evaluate (the
+  D3D11 flushes, the timer queries or ffxDispatch's recording under
+  vkd3d-proton; not split yet). Hidden at 60 fps here; split it before
+  calling FSR 4 cheap. DXVK reports the GPU as vendor 0x10DE
+  (`DXVK_ENABLE_NVAPI=1`) with the real device id 0x1586; AMD's runtime
+  offered 4.1.1 regardless. The camera position was constant in every
+  sample read, so motion was barely exercised; Sean has not yet judged
+  the image.
+- 2026-10-23 night, the next launch crashed (`edvr_gfx_20261023_204910.log`,
+  same build). Run 1 had exited cleanly (breadcrumbs: "process exit" at
+  20:48:21) before the machine suspended and resumed (20:48:24 to 20:48:26).
+  Run 2 died 21 s in, at the main menu (its game journal holds only the
+  Fileheader): `UNHANDLED exception 0xC0000005 at 0x144BD17A0 in
+  EliteDangerous64.exe +0x4BD17A0`, watchdog exit code 3221225477. The
+  faulting instruction is `vmovups ymm2,[rcx-0x20]`, the head of an AVX2
+  loop over 96-byte records, in function 0x4BD1550 (its .pdata chunk). No
+  direct call or jmp reaches it; the file holds one absolute pointer to it,
+  so it is called through a table or vtable. Ruled out: FSR 4 as the
+  cause, because run 2 has no `fsr4:` line (the probe, whose first line is
+  the adapter match, never ran, so no D3D12 device existed), the flat
+  runtime treated no frame (`treated=0`), and the log, flushed every
+  250 ms, runs to 1.2 s before the fault. **Whose code (2026-10-24, READ
+  from the exe's RTTI):** the pointer sits in slot 11 of the vtable whose
+  locator names `MaskedOcclusionCullingAVX2::MaskedOcclusionCullingPrivate`
+  (base `MaskedOcclusionCulling`): Intel's Masked Occlusion Culling
+  library. The loop (INFERRED from the instructions) is its hierarchical-Z
+  test: per 96-byte tile, two depth vectors and a mask, blended by mask,
+  min, then `zMax >= zBuf`; a read past the tile buffer means the buffer
+  was freed or sized for another resolution. **What differed:** the
+  ultrawide (DP-1) disconnected at 20:48:22, before the suspend; run 1
+  opened at 5120x1440, run 2 at 2560x1600 (the laptop panel) and resized
+  to 2560x1440 and then 1x1601 within a second, with the game's
+  `Settings.xml` now present (run 1: absent). Leading suspicion: the
+  game's culler set up for a degenerate window. Weaker lead: the light
+  grid cache (`docs\light-grid-cache-2026-10-13.md`; no key, always on,
+  detours the cluster builder 0x58B250), which ran at the main menu in
+  run 2 (contexts 1920x1080 and 256x256 at 20:49:27) and not in run 1.
+  Not checked: whether EDVR's kept display mode made the 1x1601 resize.
+  Set aside by Sean on 2026-10-24 in favour of FSR 4; the next launch on
+  the same panel (03:10) did not crash.
+- 2026-10-24: the render-thread stall. Log `edvr_gfx_20261024_031006.log`
+  (same build, laptop panel, 1280x800 to 2560x1600, on foot in a
+  station). **Same spot, same minute:** FSR 4 35 fps, FSR 3 36 to 38,
+  FSR 4 again 35 to 38 (5 s frame counts across Sean's F8 switches at
+  03:12:36 to 03:12:57); in space both held the 60 fps cap. FSR 4's
+  D3D12 dispatch is 0.80 ms there (1.7 ms at 2560x720 to 5120x1440); the
+  render thread spends 3.2 to 4.3 ms a frame in the evaluate (6.3 to
+  7.9 ms on the ultrawide), with the allocator wait and the submit ~0,
+  and the span shrinks and grows with the GPU work (3.4 ms when the
+  ultrawide's dispatch fell to 0.75 ms): a wait on the GPU, not work.
+  Ruled out: a newer Mesa as the fix for this cost, because Mesa 26.2.5
+  is current in every repository here (only `mesa-git` 26.3 is newer)
+  and the GPU part is under 1 ms at the panel's size; the time is the
+  render thread waiting. **Mechanism found in DXVK's source** (Proton
+  Experimental ships DXVK v3.1.1-97-ga78a467ca): `IDXGIKeyedMutex::
+  ReleaseSync` calls `WaitForResource(image, SynchronizeAll,
+  READ_WRITE)`, a CPU wait until the GPU has finished every pending use
+  of the texture; `AcquireSync` is a CPU-side lock; D3D11 fence
+  `Signal` and `Wait` are GPU-side. The bridge releases its three input
+  keys right after queueing the input copies (so the render thread waits
+  for the game's frame so far) and the output key after the output copy
+  (so it waits for FSR 4 too). D3D12 never uses the keyed mutex: the
+  shared fences already order the work. The XeSS bridge does the same.
+  **Instrument (flight 6):** the evaluate's CPU span split into phases,
+  one 30 s line `fsr4: slot=N cpu phases over ...` beside the bridge
+  line, and the temporary key `diag.fsr4_shared_locks`: `held` keeps a
+  context's keys from its first use to its destruction, `alternate`
+  flips between per-frame and held at each 30 s window. Signatures: H1
+  (the releases are the stall) `give-in` and `give-out` carry most of the
+  eval median under `locks=per-frame` and fall to ~0 under `locks=held`,
+  with the evaluations a second rising at a fixed spot; H2 (AMD's
+  recording) `record` carries it under both; H3 (DXVK's flushes)
+  `signal-in` or `signal-out` carries it. Held keys that broke the
+  interop would show as a stale, black or flickering image only in the
+  held windows, or refusals in the log.
+- 2026-10-24: flight 6, H1 confirmed. Log `edvr_gfx_20261024_060947.log`
+  (the CI build of c967b6ca, v0.0.0-ci, `locks alternate` logged; laptop
+  panel, out 2560x1600, in 1280x800 then 2176x1360 after a quality
+  change at 06:13:22; read mid-flight, five windows to 06:13:57; every
+  dispatch rc=0, no refusals). Medians, ms:
+
+  | window | locks | evals/s | eval | give-in | give-out | record |
+  |---|---|---|---|---|---|---|
+  | 06:11:27 (79 s, load) | per-frame | 15.3 | 3.620 | 2.228 | 1.229 | 0.076 |
+  | 06:11:57 | held | 60.0 | 0.245 | 0.000 | 0.000 | 0.184 |
+  | 06:12:27 | per-frame | 52.3 | 6.594 | 4.886 | 1.323 | 0.170 |
+  | 06:12:57 | held | 59.7 | 0.271 | 0.000 | 0.000 | 0.199 |
+  | 06:13:27 (2176x1360) | per-frame | 46.9 | 7.042 | 5.341 | 1.336 | 0.176 |
+  | 06:13:57 (2176x1360) | held | 58.4 | 1.619 | 0.000 | 0.000 | 0.263 |
+
+  The two key releases are the stall: under per-frame they are 95% of
+  the evaluate; under held it falls from 6.6 to 0.27 ms and the game
+  reaches its 60 fps cap. FSR 4's GPU side did not change (D3D12 wait
+  1.2 to 1.4 ms, d3d11 total 1.4 to 1.8 ms in both modes). Ruled out:
+  AMD's recording as the stall (H2), because `record` is 0.08 to 0.26 ms
+  under both; DXVK's fence flushes (H3), because `signal-in` and
+  `signal-out` stay under 0.01 ms. Sean, after the flight: the image
+  looked mostly clean, with no stale or black frames; certain parts of it
+  flicker, which DLSS on his Windows rig does not show. Not yet tied to
+  the held windows. Candidates, each with what would tell it apart:
+  (a) the jitter cycle: FSR 3 and FSR 4 get the configured 8 phases
+  (`flat jitter: ... phases=8` in this log) where AMD asks for 8 x the
+  scale squared, 32 at 1280x800 to 2560x1600 (XeSS-SR alone gets a
+  scale-aware count): flicker on fine static detail with an 8-frame
+  period, fixed by `advanced.temporal_aa_jitter_phases = 32` (live
+  reload, no build); (b) no reactive or transparency mask (both routes
+  pass none): flicker or smear on holograms, screens, particles and
+  glass, unchanged by (a); (c) the held locks racing the copies: flicker
+  that comes and goes with the 30 s `alternate` windows; (d) FSR 4's
+  model on RDNA 3.5 (`FSR4_UPGRADE`): FSR 4 flickers where FSR 3 and
+  XeSS-SR at the same spot do not, and (a) does not help. A DLSS rig on
+  Windows differs in GPU, platform and jitter use, so it is not a control
+  here; the same-spot F8 comparison on this rig is.
+- 2026-10-24: flight 7 (log `edvr_gfx_20261024_063126.log`, same CI
+  build, `locks alternate`). A reproducible spot: the main menu hangar,
+  where only the lower edge of one square hull panel flickers (Sean's
+  screenshot). FSR 4 ran 2176x1360 to 2560x1600 (1.18x per axis). Ruled
+  out at this spot: the jitter cycle (a), because 32 phases took effect at
+  06:32:03 (`flat jitter: the cycle is 32 phases`) and the flicker did not
+  change; at 1.18x AMD's own count is about 12, so 8 was near it anyway.
+  The 2x case (1280x800) is untested. Then, same flight: ruled out (c),
+  the held locks, because the flicker is constant, not in 30 s windows;
+  ruled out (d), FSR 4's model, because the edge flickers under FSR 3
+  (06:39:52 on) and EDVR's own TAA (06:39:46) too, so it is in what all
+  three temporal paths share. F7 stops the jitter as well (phase back to
+  (0,0), warming), so "everything flickers with AA off" is the game's own
+  image. XeSS-SR was not tested: `libxess.dll is missing beside EDVR`
+  (the flight 6 install had no `--xess`), so it fell back to spatial.
+  The scene is still: `pool records joined 417600 (with motion 0)`,
+  `flat camera origin 5s: frames=300 moved=0`, no history resets. Yet the
+  refusal census the NumLock press armed (06:38:34 to 06:38:44, FSR 4)
+  counts about 250 to 340 refused pixels a frame, classes `stale` (the
+  steady-detail depth check failed: last frame's depth at the reprojected
+  spot is off by more than 1%) and `range` (the reprojection leaves the
+  screen or is not finite); a refused pixel shows the raw jittered frame
+  under every engine. Lead, not yet placed on the edge: (e) EDVR refuses
+  that edge's pixels, at a depth edge the jitter moves. Discriminator:
+  `advanced.flat_refusal_view` at the spot (pink stale refused, white any
+  other refusal), and TAA or FSR 3 at the same spot on Windows. Aside:
+  the adapter reports vendor 0x10DE with device 0x1586 (the 8060S), a
+  spoofed NVIDIA vendor, which matters to anything gated on vendor id.
+  Then Sean, refusal view on at the spot: the flickering edge is yellow,
+  a stale slot KEPT (`flat_mono_refusal.h`: the pool slot under it is a
+  draw's that a later draw covered, and the steady-detail check kept the
+  camera-term history, confirmed by last frame's depth). Ruled out: (e)
+  as stated, EDVR refusing the edge, because its pixels are kept, not
+  refused; the ~300 refused a frame are elsewhere. So the edge has
+  history and zero motion under all three paths and still flickers.
+  Left: (f) the edge's own content defeats a non-ML history clamp and
+  FSR 4 alike (a thin feature the jitter samples in some phases only;
+  DLSS holds it), or (g) the covering draw's pixels differ frame to
+  frame beyond the jitter (a jitter or camera mismatch on that draw).
+  Discriminator for platform against content: TAA and FSR 3 at the same
+  spot on Windows. Sean: not every yellow pixel flickers, and the edge
+  keeps flickering inside the view. The view paints each class colour at
+  twice the resolved pixel's own luma (`refusalPaint`), so the class stays
+  yellow while the resolved brightness pulses: the history is kept every
+  frame and the resolve itself oscillates. Note with it: under F7 the
+  jitter stops and the camera does not move (`moved=0`), yet "a lot of
+  things flicker", so the game's own image changes frame to frame here.
+  Sean: under F7 that same edge flickers, and with DLSS on his Windows
+  rig it flickers too, only less. So the edge changes frame to frame in
+  the image every temporal path is given, on both platforms, and each
+  path passes some of it through (DLSS the least). Ruled out: Proton,
+  RADV or the AMD GPU as the source, and anything specific to FSR 4.
+  Left: the game's own rendering of that edge, or one of EDVR's
+  always-on non-AA fixes making it change. Discriminator: the no-EDVR
+  baseline at the spot (`install_edvr.py --suspend`, then `--resume`).
+- 2026-10-24: held keys shipped. Flights 6 and 7 showed nothing the held
+  keys break: no stale or black frames, and the one flicker Sean saw is
+  constant, present with AA off (F7) and under DLSS on Windows, so not
+  the locks'. The bridge now takes each shared texture's D3D11 key on a
+  context's first use and keeps it until the context is destroyed
+  (`SharedTexture::held`, `keepKeys`, `Feature::releaseHeldKeys`);
+  `diag.fsr4_shared_locks`, its allowlist entry, the per-frame path and
+  the phase line's `locks=` label are gone. The probe logs `fsr4:
+  shared-texture keys are taken on a context's first use and held until
+  it is destroyed`, which names a build with the change. On native
+  Windows D3D11 still holds the key for every copy it makes, as its
+  runtime requires; D3D12 never takes it, as before. The phase line's
+  `give-in` and `give-out` keep their names and now time the keep.
+  Expected in the next flight: `give-in` and `give-out` about 0 in every
+  window, eval median 0.2 to 1.6 ms, evaluations a second at the cap.
+- 2026-11-20: concourse bar shimmer (Epic, Windows, Radeon 8060S, flat,
+  `fsr4`, FSR 4.1.2; in 960x600, out 1920x1200, game SS; 8 phases; log
+  `edvr_gfx_20261120_133313`, build `v0.22.3-47-gf422c72c-dirty`). Sean's
+  still-camera recording at the bar: the frame-to-frame difference lights
+  the lamp strips under the bar canopy (VS 359BF8FF / PS 92FF8499,
+  six-index additive quads, up to 168 instances a draw), the planter and
+  awning plants, and a floor-level strip. Every region's flicker peaks at
+  7 to 8 Hz, one 8-phase cycle at the game's 55 to 57 fps, plants
+  included. The 5 s census shows no phase refusals (`failed-frames=0`),
+  and the strip pair has a projection recipe, so it is jittered. Ruled
+  out: plant sway as the source, because the plants flicker at the jitter
+  cycle's frequency like the strips. Ruled out: `flat_lamp_quads` (an
+  uncommitted change that drew each strip four times, half a pixel apart,
+  at quarter strength through its own blend state), because the strips
+  shimmered with it live, and it changed the scene from stock (blurred
+  strips, and the game's `INV_BLEND_FACTOR, ONE` colour and `SRC_ALPHA,
+  ONE` alpha replaced). Removed. Hypothesis: the cycle is too short for a
+  2x upscale. Both vendors suggest 8 x (output / render)^2, 32 here;
+  XeSS-SR raises its count to that automatically
+  (`temporalXessJitterPhases`), FSR 3.1, FSR 4, DLSS and DittoSR do not.
+  Discriminator, live in one session at the same spot:
+  `advanced.temporal_aa_jitter_phases` 8 against 32. If 32 settles the
+  strips and plants, FSR and DLSS take the ratio-scaled count as XeSS does
+  (behaviour, no key). If not, a draw jittered by an offset other than the
+  one FSR is given is next, checked in an eye dump.
+- 2026-11-20, 32 phases (log `edvr_gfx_20261120_134822`, build 6B00B11D
+  linked 20:44 UTC, lamp quads removed; `flat jitter: ... phases=32`, no
+  refusals): Sean at the bar, the same strips and plants flicker faster
+  than at 8. Ruled out: too few jitter phases as the cause, because a
+  longer cycle made the flicker faster rather than settling it; the 7 to 8
+  Hz peak at 8 phases was the sequence repeating, not undersampling. The
+  pixels follow each frame's own phase, so their history is not used.
+  Hypotheses: (a) those draws are drawn without the jitter (a projection
+  the injected camera does not reach), so FSR sees them move by minus the
+  phase each frame; (b) they carry the jitter but FSR rejects their
+  history (reactive or disocclusion). Discriminator: per-draw jitter state
+  for VS 359BF8FF / PS 92FF8499 and the plant pairs.
+- 2026-11-20, motion source view (`advanced.flat_refusal_view = on`, same
+  session, 8 phases): the flickering strip and plant pixels are pink,
+  "stale slot refused (shown raw)" (flat_mono_refusal.h:146). The cause is
+  EDVR's, not FSR 4's: a pixel whose engine slot was overdrawn (its depth
+  no longer the slot's, flat_mono_shader_source.h:268) keeps the camera
+  term only if last frame's depth confirms it (`historyDepthMatches`,
+  steady detail), and a refused one shows the raw current frame in place
+  of the backend's (`flat refusal census 5s`: refused=7392 of 20.7M
+  sampled, all class stale; stale-kept=890978). A leaf or a lamp housing
+  about a texel wide is often missing from last frame's jittered raster,
+  so the check refuses it on alternate phases and the raw jittered frame
+  shows: the shimmer. Hypothesis (b), history refused, confirmed in this
+  form; (a), unjittered draws, is not needed to explain it. The census
+  (`DCO 0` lines) names the unkeyed depth writers on the scene depth @71:
+  the plants are most likely VS 33A5025C / PS 0FCAA3CF (168 indices,
+  forward) after the depth-only prepass F516BF02 / B40B0462 (168), the
+  same vertex shaders the engine motion table files as an NPC's eyes with
+  "432- and 168-index meshes ... not identified"; the lamp housings are
+  most likely 2684F02B / 2376A8D9 (6-index quads into the G-buffer, depth
+  write on). Also unkeyed and depth-writing: 617C6E44 / 627FEC64, A8E4D93B
+  / 75D12D85, 01A029C7 / 130FC0A7, and unkeyed pixel shaders on keyed
+  vertex shaders (7B0D / A6E5, 114A / FDC4, DE54 / 0420, 61AE / 3F14).
+  Bytecode for the first five pairs is in the Epic `edvr_logs\shaders`
+  dump. Not yet confirmed which pair covers the pink pixels.
+- 2026-11-20, naming the plants (`advanced.census_skip_offscreen`, now
+  read on flat and applied in the flat draw hooks through
+  `flatCensusSkipsDraw` and FlatStationSunGate; log
+  `edvr_gfx_20261120_144558`, build 6B00BDBF): `960x600:X:168` dropped
+  about 40 draws a frame and the plants stayed. Ruled out: VS 33A5025C /
+  PS 0FCAA3CF and its prepass F516BF02 / B40B0462 at 168 indices as the
+  plants, because hiding every 168-index draw in the scene left them; the
+  engine motion table's "NPC's eyes" label for 33A5 stands. Next
+  candidate: the F516 prepass ahead of A8E4D93B / 75D12D85 and 01A029C7 /
+  130FC0A7, one mesh family at 2964, 1488, 3000, 1500, 3018, 744 and 732
+  indices.
+- 2026-11-20, naming the plants, continued (flat now honours
+  `advanced.census_skip` vs:HASH terms; log `edvr_gfx_20261120_150101`,
+  build 6B00C0F3): `vs:A8E4D93B8B294505 vs:01A029C7DBD48554` dropped about
+  20 draws a frame and the plants stayed. Ruled out: the A8E4 / 01A0 mesh
+  family as the plants, because hiding every draw of both vertex shaders
+  left them (the earlier four-size hide was not decisive, three of its
+  seven sizes still drew). Next: 39 vertex shaders write the 960x600 scene
+  depth; EB5234DB6ADB491D, the keyed station material family, is 1329 of
+  their 1712 draws, so it is hidden alone first.
+- 2026-11-20, plants and lights named (live `advanced.census_skip` vs:HASH
+  halving at the bar, Sean watching, build 6B00C0F3): hiding
+  EB5234DB6ADB491D removed most of the station and left the plants (ruled
+  out: the station material family as the plants). Eight shaders together
+  hid both plants and lights; then 2684F02B / DE545DC8 / F516BF02 /
+  617C6E44 hid both; then 2684F02B and DE545DC8 hid both; then 2684F02B
+  alone hid the lights and brought the plants back. The lights are VS
+  2684F02B9B0BB0DE / PS 2376A8D9AA874372 (6-index quads into the G-buffer,
+  depth write on, not a keyed family). The plants are VS DE545DC8EE4FBB87,
+  a keyed family (engine_velocity_families.h:44: E46E3E48, CB429E04,
+  03B17F89, 60D69AB6, flat 91F8937E), drawn at the bar with four unkeyed
+  pixel shaders: 042056C6 (26 draws), A6070F9D (9), 430AF34F (7), 3AF0C44D
+  (5). Disassembled from the Epic dump (fxc /dumpbin): A6070F9D, 430AF34F
+  and 3AF0C44D each have a discard (alpha cutout); 042056C6 and the keyed
+  E46E3E48 have none. So the plants are among the three cutout shaders.
+  Each draws over keyed station surfaces with no slot of its own, which is
+  the stale-slot refusal. Fix: key the three cutout pairs on DE545DC8 (the
+  established route, bytecode in the dump), and the light quads, which
+  first need a check that 2684F02B is a pool family at all.
+- 2026-11-20, the plants keyed: DE545DC8 / A6070F9DD1CFB601 joins the
+  family (engine_velocity_families.h), moved from the harness's candidates
+  to its keyed pairs; it passes the corpus harness whole on WARP against
+  the Epic dump (40960 texels, 0 mismatches; MRT6 4604 covered, 0 bad;
+  3588 discarded, 0 bad). The two tests that used A6070F9D as their
+  unqualified DE54 example now use E364F563, which stays a candidate.
+  Ruled out as game variants: 430AF34F and 3AF0C44D, the other two cutout
+  pixel shaders the census showed on DE545DC8, because both declare
+  `o6.xy` and write `utof o6.x` / `mov o6.y, v<pos>.z`, EDVR's own marker:
+  they are this family's generated substitutes, which the census sees
+  while the lazy substitution leaves them bound (kSelfMarking's 2026-09-28
+  note), and the patcher refuses them ("output target 6 or above
+  occupied"). The same holds for E06E61AE, DCCCEDD6 and AD6196D0, keyed on
+  EB5234DB earlier today as "unkeyed station materials": each writes the
+  marker, and the harness refuses E06E61AE. Expected in the next flight at
+  the bar: the plant pixels green (joined) in the motion source view and
+  no longer shimmering; the light quads (2684F02B / 2376A8D9) still pink
+  until they are keyed.
+- 2026-11-20, plants fixed in flight: with DE545DC8 / A6070F9D keyed (and
+  E06E61AE, DCCCEDD6, AD6196D0 removed from EB5234DB, with a test that
+  they stay unkeyed; the full corpus run then passed 21 real pairs past
+  where E06E61AE used to stop it), Sean at the bar: the plants no longer
+  shimmer; the light strips under the bar still do from some angles. This
+  confirms the arc's diagnosis for the plants: a keyed draw writes its own
+  slot, so its pixels are never stale and the raw frame is never shown.
+  The lights are keyed next as a family of their own, VS 2684F02B / PS
+  2376A8D9: the same instance-record inputs as DE54
+  (INSTANCEANDMODELDATAINDEX at v0), the record id at the pixel shader's
+  v0, four targets, no discard.
+- 2026-11-20, lights fixed in flight (2684F02B / 2376A8D9 keyed as a
+  family of its own; passes the corpus harness whole on WARP, 40960
+  texels, 0 mismatches, MRT6 8192 covered, 0 bad; build 6B00D8B0): Sean at
+  the bar, the light strips no longer shimmer. Left: at a weapons shop
+  (render 1280x800, output 2560x1600, a window resize), a thin vertical
+  strip on the edge of a board seen through glass flickers (recording
+  20261120-2339, x 176-192, y 144-256 of 916x516). That census
+  (`edvr_gfx_20261120_163721`) has no blended draw writing depth, so the
+  glass makes no stale slot. Its unkeyed depth writers include 2684F02B
+  with a second pixel shader, 1878CD810D57381B (29 draws), absent from the
+  dump; 042056C6 on DE545DC8 (29) writes the o6 marker, so it is a
+  generated substitute. Next: `census_skip = vs:2684F02B9B0BB0DE` at the
+  shop names the edge, and `glare_shader_dump = 1` captures 1878CD81 for
+  the harness. Correction to the first entry today: the lamp strips' stock
+  blend reads `bl=15,2,1/5,2,1`, which is SRC_ALPHA, ONE for colour and
+  alpha alike (the census's first digit is the enable), not
+  INV_BLEND_FACTOR for colour.
+- 2026-11-20, the shop board's edge through glass (build 6B00D8B0, census
+  `edvr_gfx_20261120_164620`, live hides with Sean watching the motion
+  source view): the shimmering edge is pink (stale slot refused, shown
+  raw), and only through the glass. Ruled out, each by hiding it live with
+  the edge still pink: 41E245D4 / 6EF82262 (alpha-blended, depth-writing,
+  36 indices here; its vertex shader takes a plain POSITION, so it is not
+  keyable anyway); every unkeyed depth-writing mesh in the census, in
+  three groups (2684F02B, F516BF02, C53F124D, D46473DB, 87FCE198,
+  72BDD292, ACE405F4, 0EE43D81; A8E4D93B, 617C6E44, 01A029C7, 5B0068AF;
+  01DA82F8, 114AF608, 33A5025C, AFFEF018, 3D05E7CF); EDVR's concourse
+  glass pass (`diag.concourse_pane_mode = off`); the blended G-buffer
+  overlay BC3EE3F509EB3956 (about 200 draws a frame, recorded with EDVR's
+  BA58469C bound). Hiding the 3-index full-screen passes (F9CFC798,
+  CFCA8FFC, FC1193AF, DEF19B03) froze the frame, so they were not tested.
+  Also ruled out: rasterizer depth bias (every draw in the view has bias
+  0). Of the remaining unkeyed pixel shaders on keyed vertex shaders,
+  3F144D0A (61AE) and C25BBDB7 (01DA) write the o6 marker (generated),
+  4A8F3C1D (01DA) does not. Not yet known: which draw last wrote the stale
+  pixels' depth, or whose slot they hold. Next: an instrument that reads
+  the slot (record code, stored depth) and the scene depth at the view
+  centre for a few frames, so the record and the depth step name the
+  overdraw instead of hiding draws one group at a time.
+- 2026-11-20, the shop glass named by the slot probe (TEMPORARY,
+  flat_mono_resolve.cpp slotProbe*, riding the NumLock census: a 33x33
+  block at the view centre over 8 resolves; log
+  `edvr_gfx_20261120_174131`, build 6B00E4E0): in every probed frame about
+  460 of the 1089 pixels behind the glass were stale, none refused, every
+  stale pixel held one record's slot (one code a frame), and the scene
+  depth was 1.6e-6 farther than the stored depth throughout (about a
+  centimetre at that range). So nothing overdrew the board: a keyed draw
+  in front of it wrote MRT6 and no depth. The census names it:
+  5B4D8E894EEDA8B4 / 4375B72964F386CD, keyed (its substitute is BA58469C),
+  alpha-blended (SRC_ALPHA, INV_SRC_ALPHA), GEQUAL with depth writes off.
+  This is the hazard the overlay guard already handles for BBE58E40 /
+  DB3E8D20 (engine_velocity.cpp, "The overlay pair"), on another pair. Fix
+  (root cause, both profiles): a keyed draw whose depth state is off, or
+  writes off under a test other than EQUAL, is not substituted outside the
+  overlay pair (`depthWritesOff`, cached per state object), so it writes
+  no slot and the surface behind keeps its own; an EQUAL pass over its own
+  prepass stays substituted. Counted in a new "engine motion: ... keyed
+  draws that write no depth, drawn as the game's" line with the last pair.
+  Expected at the shop: that line naming 5B4D / 4375, the board's pixels
+  through the glass no longer stale (the probe's stale count near zero
+  there), the edge no longer pink or shimmering.
+- 2026-11-20, the glass fix as built (build after 6B00E4E0; the first form
+  failed the flat lazy rig's pinned 440 context calls, because an
+  OMGetDepthStencilState on every keyed draw made it 480): the decline is
+  asked only of a keyed draw whose game blend state blends target 0
+  (`gameBlendsTarget0`, the blend object's own description, no context
+  call), and only then of the depth state (`depthWritesOff`: depth off, or
+  writes off under a test other than EQUAL). It sits after the blend is
+  known in engineVelocityBeforeDraw and declines through restore(); the
+  flat bracket's kDeclined flush puts the game's render targets back, so
+  the glass draws exactly as the game's with MRT6 off. The rig's counts
+  are unchanged (440, 3, 43). Not covered: an opaque keyed draw that
+  writes no depth outside the overlay pair (none seen so far).
+- 2026-11-20, the glass fix in flight (build 6B00EB21, log
+  `edvr_gfx_20261120_175527`): "keyed draws that write no depth, drawn as
+  the game's: 447941, last vs 5B4D8E894EEDA8B4 ps 4375B72964F386CD"; the
+  probe behind the glass shows 0 stale pixels in most of its 8 frames
+  (about 460 before). Sean still sees pink at the edge. The rest is
+  another cause: on 3 of 8 frames a one-pixel column of stale pixels (29
+  in one frame, all refused), each holding one background record's slot
+  (391) under a surface about 3% nearer (depth 0.001495 over a stored
+  0.001447): a thin vertical object in front, drawn by an unkeyed depth
+  writer, there on some jitter phases only. The earlier live hides at the
+  shop were confounded: the glass's stale pixels kept the view pink
+  whatever was hidden, so their "still pink" ruled nothing out for this
+  edge. Next: hide 2684F02B (the light-strip family, whose second pixel
+  shader 1878CD81 is unkeyed, 29 draws at the shop) with the dump on to
+  capture 1878CD81.
+- 2026-11-20, the thin edge named (log `edvr_gfx_20261120_180644`, build
+  6B00ED8D; the probe now also logs, while the NumLock census runs, each
+  keyed draw into a depth that is not offered for substitution and which
+  run condition failed): seen only straight on (Sean: at about 45 degrees
+  it does not show), the stale column is a surface under a pixel wide. The
+  keyed draws not offered: AACFDCF2FB9AD809 / CF534B32F491561A, small
+  meshes (6 to 120 indices, up to 4 instances) with the world's depth,
+  constants and camera, refused only because sourceShape leaves the
+  first-person weapon families out; and 01DA82F8 / 2C3ADCD2 under another
+  camera (hidden earlier with no effect). Hiding vs:AACFDCF2FB9AD809 live:
+  the edge is gone (Sean). So the shop's displayed weapons are drawn by
+  the weapon family with the world camera, left stock, writing depth with
+  no slot. Fix: motionOnlyRun also takes a weapon-family draw that shares
+  the world's depth, constants and camera (substituted, never a source:
+  sourceCandidate still leaves it out; the held gun's own projection fails
+  the camera test). Expected: those AACF draws gone from the "keyed draw
+  not substituted" lines, and no stale column at the shop edge.

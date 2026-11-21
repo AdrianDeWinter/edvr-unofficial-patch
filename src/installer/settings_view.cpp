@@ -13,6 +13,7 @@
 #include "detect.h"
 #include "mirror.h"
 #include "ui.h"
+#include "../d3d11/menu_flat_rows.h"
 
 #pragma comment(lib, "comctl32.lib")
 
@@ -105,26 +106,19 @@ void rebuildItems(List* list) {
 
     const std::vector<SettingRow>& rows = list->model->rows();
 
-    // NVIDIA's preset row is hidden for FSR and DittoSR. DittoSR's own rows are
-    // shown only while DittoSR is the anti-aliasing. Found fresh each rebuild.
-    bool hideAaPreset = false;
-    bool showDitto = false;
+    // The DLSS preset, DittoSR's rows and XeSS Frame Generation appear only while their parent is selected.
+    // Found fresh each rebuild.
+    std::string aaHeld = "off";
+    bool fgOn = false;
     for (const SettingRow& r : rows) {
-        if (isVscreenKey(*r.def, "temporal_aa")) {
-            hideAaPreset = _stricmp(effectiveValue(r).c_str(), "fsr") == 0 ||
-                           _stricmp(effectiveValue(r).c_str(), "dittosr") == 0;
-            showDitto = _stricmp(effectiveValue(r).c_str(), "dittosr") == 0;
-            break;
-        }
+        if (isVscreenKey(*r.def, "temporal_aa")) aaHeld = effectiveValue(r);
+        else if (isVscreenKey(*r.def, "xess_frame_generation"))
+            fgOn = _stricmp(effectiveValue(r).c_str(), "on") == 0;
     }
 
     for (size_t i = 0; i < rows.size(); ++i) {
         if (!matches(rows[i], needle)) continue;
-        if (hideAaPreset && isVscreenKey(*rows[i].def, "temporal_aa_model")) continue;
-        if (!showDitto && (isVscreenKey(*rows[i].def, "dittosr_sharpness") ||
-                           isVscreenKey(*rows[i].def, "dittosr_frame_weight") ||
-                           isVscreenKey(*rows[i].def, "dittosr_anti_shimmer") ||
-                           isVscreenKey(*rows[i].def, "dittosr_sharpen"))) continue;
+        if (rows[i].def && aaDependentRowHidden(rows[i].def->key, aaHeld.c_str(), fgOn)) continue;
         const std::wstring wanted = headingFor(*rows[i].def);
         if (!haveHeading || wanted != heading) {
             heading = wanted;
@@ -503,11 +497,12 @@ void paint(List* list) {
 
 void applyValue(List* list, size_t rowIndex, const std::string& value) {
     if (!list->model) return;
-    // DittoSR's rows and the DLSS preset appear or leave with this choice.
+    // Child rows appear or leave with Anti-aliasing, and the frames row with Frame generation.
     // The click returns as soon as this write finishes, so rebuilding the
     // list here is the paint the next frame sees.
-    const bool aa = rowIndex < list->model->rows().size() && list->model->rows()[rowIndex].def &&
-                    isVscreenKey(*list->model->rows()[rowIndex].def, "temporal_aa");
+    const bool reshapes = rowIndex < list->model->rows().size() && list->model->rows()[rowIndex].def &&
+                          (isVscreenKey(*list->model->rows()[rowIndex].def, "temporal_aa") ||
+                           isVscreenKey(*list->model->rows()[rowIndex].def, "xess_frame_generation"));
     if (!list->model->set(rowIndex, value)) {
         list->error = list->model->lastError();
         MessageBoxW(GetParent(list->hwnd), fromUtf8(list->error).c_str(), kAppTitle,
@@ -518,7 +513,7 @@ void applyValue(List* list, size_t rowIndex, const std::string& value) {
         // on install: the mirror exists so a game update between now and the
         // next install cannot take today's change with it.
         updateMirrorIni(list->model->gameDir(), list->mirrorDir);
-        if (aa) {
+        if (reshapes) {
             rebuildItems(list);
             updateScrollbar(list);
         }

@@ -467,6 +467,7 @@ struct DrawStats {
     uint64_t poolCapacity = 0, poolExposed = 0;
     uint64_t overlayCopies = 0, overlayBytes = 0, overlayGuardedDraws = 0;
     uint64_t overlayDeclinedState = 0, overlayDeclinedCreate = 0, overlayDeclinedShader = 0;
+    uint64_t depthlessDeclined = 0, depthlessVs = 0, depthlessPs = 0;   // keyed draws that write no depth, drawn as the game's (depthWritesOff)
     const char* blendRefusedWhy = nullptr;
     uint64_t viewsAsked = 0, viewsGiven = 0;
     // Why a view request was refused, first failing test: the emit side stood
@@ -937,6 +938,40 @@ bool overlayDepthState(ID3D11DeviceContext* ctx) {
     // fragments that passed it, while depth remains unchanged.
     return d.DepthEnable && d.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ZERO &&
            d.DepthFunc == D3D11_COMPARISON_GREATER_EQUAL;
+}
+
+// 2026-11-20 (the shop glass, docs/fsr-upscaler-design-2026-09-16.md journal): whether the bound depth state can leave a fragment's depth out
+// of the buffer (depth off, or writes off under a test other than EQUAL). Cached by state object: D3D11 returns one object per description, so the answer for a pointer does not change
+// while it is bound, and the keyed draws (about 1400 a frame at a station) pay one Get and a compare.
+bool depthWritesOff(ID3D11DeviceContext* ctx) {
+    static ID3D11DepthStencilState* lastState = nullptr;
+    static bool lastOff = false;
+    Ptr<ID3D11DepthStencilState> state;
+    UINT reference = 0;
+    ctx->OMGetDepthStencilState(&state, &reference);
+    engineVelocityNoteStateCalls(1);
+    if (!state) return false;   // the default state: depth on, writes on
+    if (state.Get() == lastState) return lastOff;
+    D3D11_DEPTH_STENCIL_DESC d{};
+    state->GetDesc(&d);
+    lastState = state.Get();
+    // An EQUAL test with writes off is a material pass over its own depth pre-pass: every fragment it keeps has the buffer's depth, so its
+    // slot is the surface's and it stays substituted. Any other test lets a fragment in front of the stored surface through.
+    lastOff = !d.DepthEnable || (d.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ZERO && d.DepthFunc != D3D11_COMPARISON_EQUAL);
+    return lastOff;
+}
+
+// Whether a blend state blends target 0, from the object's own description (no context call). Cached by object, as depthWritesOff is.
+bool gameBlendsTarget0(ID3D11BlendState* state) {
+    static ID3D11BlendState* lastState = nullptr;
+    static bool lastBlends = false;
+    if (!state) return false;   // the default state: no blending
+    if (state == lastState) return lastBlends;
+    D3D11_BLEND_DESC d{};
+    state->GetDesc(&d);
+    lastState = state;
+    lastBlends = d.RenderTarget[0].BlendEnable != FALSE;
+    return lastBlends;
 }
 
 bool snapshotOverlayBase(ID3D11DeviceContext* ctx, Eye& e) {
@@ -2085,6 +2120,18 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
         g_bound.blendGen = bindingGeneration(BindSlot::Blend);   // (unchanged when only the target-7 mode was derived again)
         ++g_draw.blendApplied;
     }
+    // 2026-11-20 (the shop glass, docs/fsr-upscaler-design-2026-09-16.md journal): a blended keyed draw that writes no depth is not substituted,
+    // outside the overlay pair's guard above. Its MRT6 write would carry its own depth over the surface the depth buffer still holds (the station
+    // glass 5B4D/4375, alpha-blended a centimetre in front of a board: about 460 stale pixels of a 33x33 probe, every one the glass's record,
+    // depth 1.6e-6 farther than stored), so every pixel behind it is a stale slot and its high-contrast edges show the raw frame on the jitter
+    // phases the depth check refuses. A slot must describe the surface in the depth buffer; drawn as the game's, the draw writes none and the
+    // surface behind keeps its own. Asked only of a draw whose game blend state blends target 0 (the blend object's own description, no
+    // context call), so the opaque producers' context calls stay as the flat lazy census measured them.
+    if (!overlayPair && gameBlendsTarget0(g_bound.gameBlend.Get()) && depthWritesOff(ctx)) {
+        ++g_draw.depthlessDeclined; g_draw.depthlessVs = vsHash; g_draw.depthlessPs = psHash;
+        restore(ctx);   // puts the game's shaders and blend back and resets g_bound, so the next substituted draw derives ours again
+        return;
+    }
     // The setters only where the patched shader is not still installed (the
     // performance review, item 3): a visit that only re-verified the sources
     // -- a cb1 re-map, a pool append, a blend change -- finds ours bound when
@@ -2577,6 +2624,10 @@ void summaryLocked(uint64_t now, ID3D11DeviceContext* ctx) {
                         "declined state %llu, resource %llu, shader %llu.",
                         runtimeFlatProfile() ? "flat " : "", u(g_draw.overlayCopies), double(g_draw.overlayBytes) / 1e6, u(g_draw.overlayGuardedDraws + g_guardedFast),
                         u(g_draw.overlayDeclinedState), u(g_draw.overlayDeclinedCreate), u(g_draw.overlayDeclinedShader));
+    if (g_draw.depthlessDeclined)
+        Log::get().note("engine motion: %skeyed draws that write no depth, drawn as the game's (their slot would not be the depth's surface): %llu, "
+                        "last vs %016llX ps %016llX.",
+                        runtimeFlatProfile() ? "flat " : "", u(g_draw.depthlessDeclined), u(g_draw.depthlessVs), u(g_draw.depthlessPs));
     if (g_draw.selfMarkSeen || g_draw.selfMarkBinds)
         Log::get().note("engine motion: self-marking pixel shaders at the draw path: %llu draws seen, %llu with no "
                         "eye attributable (not the eye's colour at slot 0, and the depth probe named none), %llu "

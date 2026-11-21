@@ -139,9 +139,9 @@ inline bool hudAntiAliasingRowDim(bool uiQualityOn, bool antiAliasingOn) {
     return !uiQualityOn || !antiAliasingOn;
 }
 
-// The XeSS Frame Generation rows (2026-11-12). Both are dimmed while the flat anti-aliasing mode is not XeSS: frames are generated only under XeSS-SR, so under
-// any other mode neither row means anything. They stay on the page, so the page's rows never change with the mode. Flat only (VR's menu has no such row). One
-// function per row so a rig can read the truth table; menu.cpp asks them and nothing else.
+// The XeSS Frame Generation rows (2026-11-12). Frames are generated only under XeSS-SR, so under any other mode neither row means anything. The performance
+// page omits them until Anti-aliasing is XeSS-SR, and omits the frames row until Frame generation is on (aaDependentRowHidden). Flat only. The dim below is
+// what a row that is still on the page would do; menu.cpp asks it and nothing else.
 inline bool xessFgToggleRowDim(bool flatProfile, bool antiAliasingIsXess) {
     return flatProfile && !antiAliasingIsXess;
 }
@@ -149,6 +149,31 @@ inline bool xessFgToggleRowDim(bool flatProfile, bool antiAliasingIsXess) {
 // The frames row's dim: the toggle's, and while XeSS Frame Generation is off there is nothing for the multiplier to act on.
 inline bool xessFgFramesRowDim(bool flatProfile, bool antiAliasingIsXess, bool frameGenerationOn) {
     return xessFgToggleRowDim(flatProfile, antiAliasingIsXess) || !frameGenerationOn;
+}
+
+// A child of Anti-aliasing, or of XeSS Frame Generation. The performance page (and the installer's settings list) leaves it out until that parent is
+// the selected value. `key` is the ini key, `aaMode` is fix.temporal_aa, `fgOn` is fix.xess_frame_generation. Anything else stays.
+inline bool aaModeIs(const char* mode, const char* name) {
+    if (!mode || !name) return false;
+    for (; *mode && *name; ++mode, ++name) {
+        char a = *mode, b = *name;
+        if (a >= 'A' && a <= 'Z') a = static_cast<char>(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = static_cast<char>(b - 'A' + 'a');
+        if (a != b) return false;
+    }
+    return *mode == '\0' && *name == '\0';
+}
+
+inline bool aaDependentRowHidden(const char* key, const char* aaMode, bool fgOn) {
+    if (!key) return false;
+    if (!aaMode) aaMode = "";
+    if (std::strcmp(key, "temporal_aa_model") == 0) return !aaModeIs(aaMode, "dlss") && !aaModeIs(aaMode, "dlaa");
+    if (std::strcmp(key, "dittosr_sharpness") == 0 || std::strcmp(key, "dittosr_frame_weight") == 0 ||
+        std::strcmp(key, "dittosr_anti_shimmer") == 0 || std::strcmp(key, "dittosr_sharpen") == 0)
+        return !aaModeIs(aaMode, "dittosr");
+    if (std::strcmp(key, "xess_frame_generation") == 0) return !aaModeIs(aaMode, "xess");
+    if (std::strcmp(key, "xess_generated_frames") == 0) return !aaModeIs(aaMode, "xess") || !fgOn;
+    return false;
 }
 
 // Whether the frames option `frames` (1 = 2x, 2 = 3x, 3 = 4x) can be chosen on this GPU. `maxFrames` is the GPU's maximum generated frames per rendered frame

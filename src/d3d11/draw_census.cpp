@@ -767,6 +767,11 @@ void drawCensusFlatRequest() {
                     g_censusNo + 1, kFlatCensusFrames, kFlatCensusLines);
 }
 
+// The flat census's slot probe (2026-11-20, the shop glass edge; docs/fsr-upscaler-design-2026-09-16.md journal).
+uint32_t drawCensusNumber() {
+    return detail::g_drawCensusPending ? g_censusNo + 1 : g_censusNo;
+}
+
 void drawCensusAutoRequest() {
     // Silent when armed: the caller is a per-draw trigger, and the ordinary
     // case -- the build keeps drawing while its own census runs -- must not

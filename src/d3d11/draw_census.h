@@ -63,6 +63,9 @@ void drawCensusRequest();
 constexpr uint32_t kFlatCensusFrames = 2;
 constexpr uint32_t kFlatCensusLines = 32768;   // 16384 ran out in a station's shadow and probe passes (log 063641, 16251 lines of frame 0), before the main view
 void drawCensusFlatRequest();
+// The flat census's slot probe (2026-11-20, the shop glass edge; docs/fsr-upscaler-design-2026-09-16.md journal).
+// The number the running (or about to start) census carries in its "census #N" line, for the flat slot probe's log lines.
+uint32_t drawCensusNumber();
 
 // The automatic arm, for builds too brief to catch by hand (2026-08-25, the
 // FSS ring split). The FSS body "tiles in" over the first frames after a

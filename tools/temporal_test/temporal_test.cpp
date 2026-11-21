@@ -92,18 +92,44 @@ int main() {
     for (float scale : {0.0f, -1.0f, NAN, INFINITY}) {
         if (strcmp(edvr::temporalNvidiaLabel(scale), "DLSS / DLAA")) { ++g_fails; puts("FAIL: unknown scale label"); }
     }
-    for (const char* mode : {"on", "ON", "dlaa", "DLAA", "dlss", "DLSS", "fsr", "dittosr", "DittoSR", "xess", "XeSS"}) {
+    for (const char* mode : {"on", "ON", "dlaa", "DLAA", "dlss", "DLSS", "fsr", "fsr4", "FSR4", "dittosr", "DittoSR", "xess", "XeSS"}) {
         if (!edvr::temporalModeEnabled(mode)) { ++g_fails; printf("FAIL: bundled temporal mode %s\n", mode); }
     }
     for (const char* mode : {"off", "OFF", "", "bogus"}) {
         if (edvr::temporalModeEnabled(mode)) { ++g_fails; printf("FAIL: inactive temporal mode %s\n", mode); }
     }
-    for (const char* mode : {"on", "dlaa", "dlss", "fsr"}) {
+    for (const char* mode : {"on", "dlaa", "dlss", "fsr", "fsr4"}) {
         check(edvr::temporalModeEnabledFor(mode, true) && edvr::temporalModeEnabledFor(mode, false),
               "existing temporal modes stay active in flat and VR");
     }
     check(edvr::temporalModeEnabledFor("XeSS", true) && edvr::temporalModeEnabledFor("XeSS", false),
           "XeSS producers arm in flat and VR, including mixed-case ini value");
+    // The performance menu's Anti-aliasing list. DLSS and DLAA are one NVIDIA choice; FSR 4.1 is AMD's. The rest stay.
+    {
+        using edvr::TemporalGpu;
+        const char* shared[] = {"off", "on", "fsr", "dittosr", "xess", "DittoSR", "XeSS"};
+        const auto offers = [&](TemporalGpu gpu, const char* value) { return edvr::temporalAaChoiceOffered(value, gpu); };
+        bool nvidiaOk = offers(TemporalGpu::Nvidia, "dlss") && offers(TemporalGpu::Nvidia, "DLAA") &&
+                        !offers(TemporalGpu::Nvidia, "fsr4");
+        bool amdOk = offers(TemporalGpu::Amd, "fsr4") && offers(TemporalGpu::Amd, "FSR4") &&
+                     !offers(TemporalGpu::Amd, "dlss") && !offers(TemporalGpu::Amd, "dlaa");
+        bool restOk = true;
+        for (TemporalGpu gpu : {TemporalGpu::Nvidia, TemporalGpu::Amd, TemporalGpu::Other, TemporalGpu::Unknown})
+            for (const char* value : shared) restOk = restOk && offers(gpu, value);
+        bool hiddenOk = !offers(TemporalGpu::Other, "dlss") && !offers(TemporalGpu::Other, "fsr4") &&
+                        !offers(TemporalGpu::Unknown, "dlss") && !offers(TemporalGpu::Unknown, "dlaa") &&
+                        !offers(TemporalGpu::Unknown, "fsr4");
+        check(nvidiaOk && amdOk && restOk && hiddenOk, "DLSS/DLAA are listed on NVIDIA, FSR 4.1 on AMD, and the other modes on every GPU");
+        check(edvr::temporalGpuFromAdapter(0x10DE, 0x2B85, L"NVIDIA GeForce RTX 5090", false) == TemporalGpu::Nvidia &&
+              edvr::temporalGpuFromAdapter(0x1002, 0x744C, L"", false) == TemporalGpu::Amd &&
+              edvr::temporalGpuFromAdapter(0x8086, 0x7D55, L"Intel Arc", false) == TemporalGpu::Other &&
+              edvr::temporalGpuFromAdapter(0, 0, L"", false) == TemporalGpu::Unknown,
+              "a PCI vendor id names NVIDIA, AMD, anything else, or no adapter");
+        check(edvr::temporalGpuFromAdapter(0x10DE, 0x1586, L"NVIDIA GeForce", true) == TemporalGpu::Amd &&
+              edvr::temporalGpuFromAdapter(0x10DE, 0x744C, L"AMD Radeon 8060S", false) == TemporalGpu::Amd &&
+              edvr::temporalGpuFromAdapter(0x10DE, 0x2B85, L"NVIDIA GeForce RTX 5090", true) == TemporalGpu::Nvidia,
+              "a spoofed NVIDIA vendor stays AMD when the name says Radeon, or under Wine for the 8060S's device id");
+    }
     // The VR map gate: the Galaxy Map, System Map and Orrery (GuiFocus 6, 7, 8) and nothing else; an unknown focus (on foot, a menu) is no map.
     check(edvr::temporalMapOpen(false, true, 6) && edvr::temporalMapOpen(false, true, 7) && edvr::temporalMapOpen(false, true, 8),
           "the Galaxy Map, the System Map and the Orrery are maps");
@@ -146,6 +172,13 @@ int main() {
     check(edvr::temporalEngineForProfile("fsr", true) == edvr::TemporalEngine::Amd &&
           edvr::temporalEngineForProfile("dlaa", false) == edvr::TemporalEngine::Nvidia,
           "the profile-aware engine leaves the other engines unchanged");
+    check(edvr::temporalEngineFor("fsr4") == edvr::TemporalEngine::AmdFsr4 && edvr::temporalEngineFor("FSR4") == edvr::TemporalEngine::AmdFsr4 &&
+          edvr::temporalEngineFor("fsr") == edvr::TemporalEngine::Amd && edvr::temporalExternalEngine("fsr4"),
+          "fsr4 is its own engine, an external one, and fsr stays FSR 3.1's");
+    check(edvr::temporalEngineForProfile("fsr4", true) == edvr::TemporalEngine::AmdFsr4 &&
+          edvr::temporalEngineForProfile("fsr4", false) == edvr::TemporalEngine::AmdFsr4 &&
+          edvr::temporalExternalEngineFor("fsr4", true) && edvr::temporalExternalEngineFor("fsr4", false),
+          "fsr4 reads as the same external engine in flat and in VR, as fsr does");
     check(edvr::temporalEngineFor("dittosr") == edvr::TemporalEngine::Ditto &&
               edvr::temporalEngineFor("DittoSR") == edvr::TemporalEngine::Ditto &&
               edvr::temporalExternalEngine("dittosr") &&

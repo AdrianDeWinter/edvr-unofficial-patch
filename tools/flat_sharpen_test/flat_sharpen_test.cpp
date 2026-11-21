@@ -490,8 +490,8 @@ void panelTable(const std::string& root, const std::string& gen) {
         check(same, "the Performance tab has the flat page's sixteen rows in their order (DittoSR's four rows under the DLSS preset, the two XeSS Frame Generation rows under those, HUD Anti-Aliasing directly under UI quality, "
                     "Window 3D distance directly under Optimized stations, Skip closed rooms under that)");
     }
-    // The XeSS Frame Generation rows (2026-11-12): read through the gate, dimmed (never hidden) unless the flat AA mode is XeSS, the frames row dimmed as well while the
-    // toggle is off, and frames above the GPU's maximum disabled (every option enabled while the maximum is unknown).
+    // The XeSS Frame Generation rows (2026-11-12): read through the gate. The page omits them until Anti-aliasing is XeSS, and omits the frames row until
+    // Frame generation is on (aaDependentRowHidden). A copy still drawn dims. Frames above the GPU's maximum are disabled (every option enabled while the maximum is unknown).
     check(flatProfileReadsKey("fix.xess_frame_generation") && flatProfileReadsKey("fix.xess_generated_frames"), "the flat gate reads both XeSS Frame Generation keys");
     check(xessFgToggleRowDim(true, false) && !xessFgToggleRowDim(true, true) && !xessFgToggleRowDim(false, false) && !xessFgToggleRowDim(false, true),
           "the XeSS Frame Generation toggle is dimmed in flat unless the AA mode is XeSS, and never for VR (which has none)");
@@ -507,7 +507,25 @@ void panelTable(const std::string& root, const std::string& gen) {
               menuCpp.find("bool flatAntiAliasingIsXess() { return _stricmp(shownValue(\"fix\", \"temporal_aa\").c_str(), \"xess\") == 0; }") != std::string::npos &&
               menuCpp.find("bool xessFgToggleOn() { return boolOf(shownValue(\"fix\", \"xess_frame_generation\"), false); }") != std::string::npos &&
               menuCpp.find("if (ch.disabled) list += \" (not supported)\";") != std::string::npos && menuCpp.find("items[next].disabled") != std::string::npos,
-          "menu.cpp dims both XeSS rows in place (no page rebuild) from the values the panel shows, not Config, which lags an F8 change by a reload; refuses a change to a dimmed one, and skips disabled frames options when stepping");
+          "menu.cpp still dims a XeSS row that is on the page, from the values the panel shows, not Config, which lags an F8 change by a reload; refuses a change to a dimmed one, and skips disabled frames options when stepping");
+    check(!aaDependentRowHidden("temporal_aa_model", "dlss", false) && !aaDependentRowHidden("temporal_aa_model", "DLAA", false) &&
+              aaDependentRowHidden("temporal_aa_model", "off", false) && aaDependentRowHidden("temporal_aa_model", "fsr", false) &&
+              aaDependentRowHidden("temporal_aa_model", "fsr4", false) && aaDependentRowHidden("temporal_aa_model", "dittosr", false) &&
+              aaDependentRowHidden("temporal_aa_model", "xess", false),
+          "the DLSS preset is on the page only while Anti-aliasing is DLSS or DLAA");
+    check(!aaDependentRowHidden("dittosr_sharpness", "dittosr", false) && !aaDependentRowHidden("dittosr_frame_weight", "DittoSR", false) &&
+              !aaDependentRowHidden("dittosr_anti_shimmer", "dittosr", false) && !aaDependentRowHidden("dittosr_sharpen", "dittosr", false) &&
+              aaDependentRowHidden("dittosr_sharpness", "dlss", false) && aaDependentRowHidden("dittosr_sharpen", "off", false),
+          "DittoSR's rows are on the page only while Anti-aliasing is DittoSR");
+    check(!aaDependentRowHidden("xess_frame_generation", "xess", false) && aaDependentRowHidden("xess_frame_generation", "dlss", true) &&
+              !aaDependentRowHidden("xess_generated_frames", "xess", true) && aaDependentRowHidden("xess_generated_frames", "xess", false) &&
+              aaDependentRowHidden("xess_generated_frames", "off", true) && !aaDependentRowHidden("render_sharpness", "off", false),
+          "XeSS Frame Generation is on the page only for XeSS, its frames row only while that is on, and other rows are left alone");
+    const size_t hiddenOnce = menuCpp.find("if (menuDependentRowHidden(d)) continue;");
+    check(hiddenOnce != std::string::npos && menuCpp.find("if (menuDependentRowHidden(d)) continue;", hiddenOnce + 1) != std::string::npos &&
+              menuCpp.find("aaDependentRowHidden(d.key, shownValue(\"fix\", \"temporal_aa\").c_str(), xessFgToggleOn())") != std::string::npos &&
+              menuCpp.find("strcmp(d.key, \"temporal_aa\") == 0 || strcmp(d.key, \"xess_frame_generation\") == 0))\n        buildPages();") != std::string::npos,
+          "menu.cpp omits those rows in both page builders and rebuilds the page when Anti-aliasing or Frame generation changes");
     check(menuCpp.find("xessFgToggleOn() && xessFgExclusiveFullscreen())") != std::string::npos &&
               menuCpp.find("choose Borderless or Windowed in Elite's display options.") != std::string::npos,
           "menu.cpp says on the XeSS rows that frame generation is paused in exclusive fullscreen and names the modes that generate");

@@ -40,6 +40,7 @@
 #include "dlaa.h"
 #include "fsr3_engine.h"
 #include "dittosr_engine.h"
+#include "fsr4_engine.h"   // FSR 4.1: AMD's own D3D12 runtime behind a D3D11/D3D12 bridge
 #include "xess_engine.h"   // XeSS-SR: the VR eye pass's Intel engine (xessAvailable, xessEvaluate, xessSlotTotals)
 #include "object_probe.h"   // objectProbeArmLedger: the armed frame's draw ledger
 #include "pixel_probe.h"    // pixelProbeArm: who drew this pixel, the same armed frame
@@ -584,7 +585,8 @@ double windowPercentile(double* v, int n, double frac) {
 }
 
 // engine is only meaningful for FullFrame (None is always Own). AMD's run
-// prints fsr3VersionLabel() ("fsr", or "fsr 3.1.2" once the port is linked)
+// prints fsr3VersionLabel() ("fsr", or "fsr 3.1.2" once the port is linked), and
+// FSR 4.1's fsr4VersionLabel() ("fsr4", or "fsr 4.1.1" once a context exists),
 // in place of "full-frame ngx", which is NVIDIA's brand name, not AMD's.
 // lean is only meaningful for the own path: which of its two shaders ran.
 const char* treatmentName(Treatment t, edvr::TemporalEngine engine, bool lean) {
@@ -593,6 +595,8 @@ const char* treatmentName(Treatment t, edvr::TemporalEngine engine, bool lean) {
                                        ? edvr::fsr3VersionLabel()
                                        : engine == edvr::TemporalEngine::Ditto
                                        ? edvr::dittoVersionLabel()
+                                       : engine == edvr::TemporalEngine::AmdFsr4
+                                       ? edvr::fsr4VersionLabel()
                                        : engine == edvr::TemporalEngine::Intel
                                        ? "full-frame xess"
                                        : "full-frame ngx";
@@ -1140,6 +1144,7 @@ bool                       g_dlaaFailNoted = false;   // NVIDIA's (dlaa, dlss)
 bool                       g_fsrFailNoted = false;    // AMD's (fsr)
 bool                       g_dittoFailNoted = false;  // DittoSR
 bool                       g_xessFailNoted = false;   // Intel's (xess)
+bool                       g_fsr4FailNoted = false;   // AMD's FSR 4.1 (fsr4)
 bool                       g_trainedNoted = false;   // the first trained frame's line
 // The AMD engaged/upscale-engaged lines, separate from g_dlaaNoted/
 // g_dlssNoted: those are session-lifetime "once" flags, and a live switch
@@ -1149,6 +1154,8 @@ bool                       g_fsrNoted = false;
 bool                       g_dittoNoted = false;
 bool                       g_dittoUpscaleNoted = false;
 bool                       g_xessNoted = false;   // the XeSS engaged line, once per session like g_dlaaNoted
+bool                       g_fsr4Noted = false;   // ...and FSR 4.1's, with its own upscale flag
+bool                       g_fsr4UpscaleNoted = false;
 bool                       g_fsrUpscaleNoted = false;
 uint32_t                   g_dlaaTreats = 0;
 ID3D11Buffer*              g_cb = nullptr;
@@ -1202,7 +1209,7 @@ constexpr float kHistoryC = 0.5f;   // the history fetch's cubic C (0.5 = Catmul
 // from a gate that never opened from a switch that was off.
 enum class WarmState { Pending, Off, Done, Failed, Late };
 WarmState   g_warmState = WarmState::Pending;
-bool        g_trainedWanted = false;   // fix.temporal_aa = dlaa | dlss | fsr (an external engine)
+bool        g_trainedWanted = false;   // fix.temporal_aa = dlaa | dlss | fsr | fsr4 | xess (an external engine)
 // Which external engine g_trainedWanted means, set alongside it
 // (temporalPassConfigure): Own when g_trainedWanted is false. warmTrainedOnce
 // reads this to choose dlaaWarm or fsr3Warm and to word its log correctly.
@@ -4578,14 +4585,17 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
         bool zcWritten = false;
         // Which engine THIS frame asks for, declared once for the whole
         // trained path below (bit 1 = an external engine at all, bit 6 =
-        // AMD's rather than NVIDIA's, bit 7 XeSS, bit 9 DittoSR;
-        // temporal_pass.h documents them).
+        // AMD's rather than NVIDIA's, bit 7 XeSS, bit 9 DittoSR, bit 10 FSR 4.1.
+        // Bit 8 is the map (kTemporalFlagMapKeep), not an engine. temporal_pass.h
+        // documents them. amdEngine stays FSR 3.1's alone.
         const bool amdEngine = (flags & 64u) != 0;
         const bool intelEngine = (flags & 128u) != 0;
         const bool dittoEngine = (flags & 512u) != 0;
+        const bool fsr4Engine = (flags & 1024u) != 0;
         const edvr::TemporalEngine engineNow = (flags & 2u) == 0
                                                    ? edvr::TemporalEngine::Own
-                                                   : (dittoEngine ? edvr::TemporalEngine::Ditto
+                                                   : (fsr4Engine ? edvr::TemporalEngine::AmdFsr4
+                                                       : dittoEngine ? edvr::TemporalEngine::Ditto
                                                        : intelEngine ? edvr::TemporalEngine::Intel
                                                        : amdEngine ? edvr::TemporalEngine::Amd
                                                                    : edvr::TemporalEngine::Nvidia);
@@ -4605,6 +4615,7 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                     engineNow == edvr::TemporalEngine::Nvidia ? "NVIDIA's"
                         : engineNow == edvr::TemporalEngine::Intel ? "XeSS's"
                         : engineNow == edvr::TemporalEngine::Ditto ? "DittoSR's"
+                        : engineNow == edvr::TemporalEngine::AmdFsr4 ? "FSR 4.1's"
                                                                    : "the pass's own history");
             }
             if (g_engineRan == edvr::TemporalEngine::Ditto) {
@@ -4626,18 +4637,39 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                     engineNow == edvr::TemporalEngine::Nvidia ? "NVIDIA's"
                         : engineNow == edvr::TemporalEngine::Amd ? "AMD's"
                         : engineNow == edvr::TemporalEngine::Ditto ? "DittoSR's"
+                        : engineNow == edvr::TemporalEngine::AmdFsr4 ? "FSR 4.1's"
+                                                                 : "the pass's own history");
+            }
+            if (g_engineRan == edvr::TemporalEngine::AmdFsr4) {
+                // Every slot's context (the eyes' and the world route's); the next FSR 4 treat rebuilds whichever it needs.
+                edvr::fsr4ReleaseFeatures();
+                Log::get().note(
+                    "temporal aa: the engine changed to %s, so FSR 4.1's contexts are released "
+                    "here, on the render thread.",
+                    engineNow == edvr::TemporalEngine::Nvidia ? "NVIDIA's"
+                        : engineNow == edvr::TemporalEngine::Amd ? "AMD's"
+                        : engineNow == edvr::TemporalEngine::Intel ? "XeSS's"
+                        : engineNow == edvr::TemporalEngine::Ditto ? "DittoSR's"
                                                                  : "the pass's own history");
             }
             g_engineRan = engineNow;
         }
         // The refusal line's once-flag, this engine's own (F1).
-        bool& engineFailNoted = dittoEngine ? g_dittoFailNoted : amdEngine ? g_fsrFailNoted : intelEngine ? g_xessFailNoted : g_dlaaFailNoted;
+        bool& engineFailNoted = fsr4Engine ? g_fsr4FailNoted
+                                : dittoEngine ? g_dittoFailNoted
+                                : amdEngine ? g_fsrFailNoted
+                                : intelEngine ? g_xessFailNoted : g_dlaaFailNoted;
         // The trained path copies the colour into R8G8B8A8_UNORM, which is
         // only legal within that family (the review of 2026-09-04, F9): any
         // other family runs the pass's own history and says so once.
         if ((flags & 2u) != 0 && fmtIndex != 0 && !engineFailNoted) {
             engineFailNoted = true;
-            if (amdEngine) {
+            if (fsr4Engine) {
+                Log::get().note(
+                    "temporal aa: fsr4 was asked for, but the game submits %s and AMD is "
+                    "handed R8G8B8A8, a different family. The pass's own history runs instead.",
+                    formatName(sd.Format));
+            } else if (amdEngine) {
                 Log::get().note(
                     "temporal aa: fsr was asked for, but the game submits %s and AMD is "
                     "handed R8G8B8A8, a different family. The pass's own history runs instead.",
@@ -4761,14 +4793,20 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
         if ((flags & 2u) != 0 && fmtIndex == 0) {
             warmNoteFirstTreat();   // before NGX's first ask, below
             const char* why = "";
-            const bool engineAvailable = dittoEngine ? edvr::dittoAvailable(dev, &why)
+            const bool engineAvailable = fsr4Engine ? edvr::fsr4Available(dev, &why)
+                                         : dittoEngine ? edvr::dittoAvailable(dev, &why)
                                          : amdEngine ? edvr::fsr3Available(dev, &why)
                                          : intelEngine ? edvr::xessAvailable(dev, &why)
                                                        : dlaaAvailable(dev, &why);
             if (!engineAvailable) {
                 if (!dittoEngine && !engineFailNoted) {
                     engineFailNoted = true;
-                    if (amdEngine) {
+                    if (fsr4Engine) {
+                        Log::get().note(
+                            "temporal aa: fsr4 was asked for, but %s. The pass's own "
+                            "history runs instead.",
+                            why);
+                    } else if (amdEngine) {
                         Log::get().note(
                             "temporal aa: fsr was asked for, but %s. The pass's own "
                             "history runs instead.",
@@ -4795,13 +4833,13 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
             } else {
                 ID3D11ComputeShader* mvCs = motionShader(ctx, diagnostics);
                 const bool eyeRunTrace = eye == 0 && g_eyeRunLeft > 0 &&
-                                         g_eyeRunTaken < kEyeRun && !amdEngine && !intelEngine && !dittoEngine;
+                                         g_eyeRunTaken < kEyeRun && !amdEngine && !intelEngine && !dittoEngine && !fsr4Engine;
                 // TEMPORARY, the blend probe (blend_probe.h): a collecting capture wants eye 0's per-pixel decisions too. The same
                 // capture-only shader variant, which leaves the production motion output as it was.
                 const bool probeTrace = eye == 0 && blendProbeGridWanted();
-                if (probeTrace && (amdEngine || intelEngine || dittoEngine))
+                if (probeTrace && (amdEngine || intelEngine || dittoEngine || fsr4Engine))
                     blendProbeGridRefuse("the upscaler path is not NVIDIA's: the capture-only decision shader runs only for DLSS");
-                const bool traceRequested = eyeRunTrace || (probeTrace && !amdEngine && !intelEngine && !dittoEngine);
+                const bool traceRequested = eyeRunTrace || (probeTrace && !amdEngine && !intelEngine && !dittoEngine && !fsr4Engine);
                 // The blend probe's decision texture (65 MB at the DLAA size) is not kept past its capture; an eye run releases its own
                 // with its artifacts, so only a texture nobody is waiting for goes.
                 if (!traceRequested && eye == 0 && e.dlDecision && g_eyeRunLeft <= 0 && !g_eyeRunReady) {
@@ -4864,7 +4902,7 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                                                                       : "the capture-only decision shader could not be created");
                     }
                 } else if (eye == 0 && g_eyeRunLeft > 0 &&
-                           g_eyeRunTaken < kEyeRun && (amdEngine || intelEngine || dittoEngine)) {
+                           g_eyeRunTaken < kEyeRun && (amdEngine || intelEngine || dittoEngine || fsr4Engine)) {
                     g_eyeDecisions[g_eyeRunTaken].error = "non_nvidia_trace_unsupported";
                 } else if (probeTrace && !made) {
                     blendProbeGridRefuse("the pass's own textures were not made this frame");
@@ -5093,7 +5131,7 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                     // bottom (top = -frusta[2], bottom = frusta[3]):
                     // tanNow[2] is the negative down tangent, tanNow[3] the
                     // positive up one.
-                    const float fovY = amdEngine
+                    const float fovY = amdEngine || fsr4Engine
                                            ? std::atan(-tanNow[2]) + std::atan(tanNow[3])
                                            : 0.0f;
                     if ((gpuCensusBegin(ctx, GpuCensusSection::DoorUpscaler),
@@ -5106,6 +5144,12 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                                     ? edvr::xessEvaluate(ctx, static_cast<unsigned>(eye),
                                                         e.dlColour, e.dlDepth, e.dlMv, e.dlOut,
                                                         w, h, oW, oH, jxNow, jyNow, resetHist, false, &why)
+                                : fsr4Engine
+                                    ? edvr::fsr4Evaluate(ctx, static_cast<unsigned>(eye),
+                                                        e.dlColour,
+                                                        e.dlDepth, e.dlMv, e.dlOut,
+                                                        w, h, oW, oH, jxNow, jyNow, resetHist, frameMs,
+                                                        nearZ, farZ, fovY, &why)
                                 : amdEngine
                                     ? edvr::fsr3Evaluate(ctx, static_cast<unsigned>(eye),
                                                         e.dlColour,
@@ -5120,7 +5164,21 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                         gpuCensusEnd(ctx, GpuCensusSection::DoorUpscaler);
                         usedDlaa = true;
                         e.dlHaveHistory = true;
-                        if (dittoEngine) {
+                        if (fsr4Engine) {
+                            if (!g_fsr4Noted || (oW != w && !g_fsr4UpscaleNoted)) {
+                                g_fsr4Noted = true;
+                                if (oW != w) g_fsr4UpscaleNoted = true;
+                                Log::get().note(
+                                    "temporal aa: %s engaged -- AMD's FSR 4.1 takes the "
+                                    "%ux%u frame, its depth%s and the pass's own motion "
+                                    "vectors, jittered as before%s; the pass's history and "
+                                    "clip stand aside. Its price prints in the totals.",
+                                    edvr::fsr4VersionLabel(), w, h,
+                                    depthSrv ? "" : " (none in hand yet: no depth until the "
+                                                    "probe finds it)",
+                                    oW != w ? " and brings it back to the unit-quality size" : "");
+                            }
+                        } else if (dittoEngine) {
                             if (!g_dittoNoted || (oW != w && !g_dittoUpscaleNoted)) {
                                 g_dittoNoted = true;
                                 if (oW != w) g_dittoUpscaleNoted = true;
@@ -5234,7 +5292,12 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                         const bool unityFrame = oW == w && oH == h;
                         if (!unityFrame && !dittoEngine && !engineFailNoted) {
                             engineFailNoted = true;
-                            if (amdEngine) {
+                            if (fsr4Engine) {
+                                Log::get().note(
+                                    "temporal aa: fsr4 was asked for, but %s. The pass's own "
+                                    "history runs instead.",
+                                    why);
+                            } else if (amdEngine) {
                                 Log::get().note(
                                     "temporal aa: fsr was asked for, but %s. The pass's own "
                                     "history runs instead.",
@@ -5265,7 +5328,7 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                     if (usedDlaa && eye == 0 && g_eyeRunLeft > 0 &&
                         g_eyeRunTaken < kEyeRun) {
                         EyeDecisionFrame& decision = g_eyeDecisions[g_eyeRunTaken];
-                        decision.dlssSuccess = !amdEngine && !intelEngine && !dittoEngine;
+                        decision.dlssSuccess = !amdEngine && !intelEngine && !dittoEngine && !fsr4Engine;
                         decision.outputW = oW; decision.outputH = oH;
                         decision.uiMode = uiResolve ? EyeUiMode::Legacy : EyeUiMode::None;
                         uint32_t wantW=0,wantH=0,cw=0,ch=0,cx=0,cy=0;
@@ -5419,6 +5482,7 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
             // A full frame is whichever engine flags bit 6 asked for;
             // nothing else ran means Own, same as treatment.
             g_slots[qs].engine = !usedDlaa      ? edvr::TemporalEngine::Own
+                                 : (flags & 1024u) ? edvr::TemporalEngine::AmdFsr4
                                  : (flags & 512u)  ? edvr::TemporalEngine::Ditto
                                  : (flags & 128u)  ? edvr::TemporalEngine::Intel
                                  : (flags & 64u)   ? edvr::TemporalEngine::Amd
@@ -5864,6 +5928,7 @@ void temporalPassConfigure(Config& cfg) {
         g_fsrFailNoted = false;
         g_dittoFailNoted = false;
         g_xessFailNoted = false;
+        g_fsr4FailNoted = false;
     }
     // (The per-draw terrain hook that sat here, advanced.terrain_motion,
     // retired 2026-10-01: terrain takes the camera's motion, which the
@@ -5945,7 +6010,7 @@ void warmFailNote(double ms) {   // L-FAIL: one string, whichever gate or refusa
 void warmTrainedOnce(ID3D11DeviceContext* ctx) {
     if (g_warmState != WarmState::Pending || !ctx) return;                              // G1
     if (!g_trainedWanted) {                                                             // G2
-        g_warmWhy = "fix.temporal_aa was not an external engine (dlaa, dlss or fsr) when the "
+        g_warmWhy = "fix.temporal_aa was not an external engine (dlaa, dlss, fsr, fsr4 or xess) when the "
                     "warm-up first ran; a reload does not re-arm it";
         g_warmState = WarmState::Off;
         return;
@@ -5957,6 +6022,12 @@ void warmTrainedOnce(ID3D11DeviceContext* ctx) {
         g_warmWhy = g_temporalEngine == edvr::TemporalEngine::Ditto
                         ? "DittoSR builds its shaders and history at the first submitted frame; it has no warm-up"
                         : "XeSS builds its per-eye features at the first submitted frame; it has no warm-up";
+        g_warmState = WarmState::Off;
+        return;
+    }
+    // Nor has FSR 4.1: its contexts are made per slot at the first submitted frame (the warm-up below is FSR 3.1's and NVIDIA's).
+    if (g_temporalEngine == edvr::TemporalEngine::AmdFsr4) {                             // G2b
+        g_warmWhy = "FSR 4.1 builds its per-slot contexts at the first submitted frame; it has no warm-up";
         g_warmState = WarmState::Off;
         return;
     }
@@ -6911,19 +6982,22 @@ bool temporalPassTrainedTotals(uint32_t* frames, double* avgMs, double* maxMs, u
     const bool amdEngine = g_temporalEngine == edvr::TemporalEngine::Amd;
     const bool intelEngine = g_temporalEngine == edvr::TemporalEngine::Intel;
     const bool dittoEngine = g_temporalEngine == edvr::TemporalEngine::Ditto;
-    if (amd) *amd = amdEngine || dittoEngine;
-    if (engineLabel) *engineLabel = dittoEngine ? edvr::dittoVersionLabel()
+    const bool fsr4Engine = g_temporalEngine == edvr::TemporalEngine::AmdFsr4;
+    if (amd) *amd = amdEngine || dittoEngine || fsr4Engine;
+    if (engineLabel) *engineLabel = fsr4Engine ? edvr::fsr4VersionLabel()
+                                    : dittoEngine ? edvr::dittoVersionLabel()
                                     : amdEngine ? edvr::fsr3VersionLabel()
                                     : intelEngine ? "XeSS" : "NVIDIA";
     if (dittoEngine) return edvr::dittoTotals(frames, avgMs, maxMs, resets);
     if (amdEngine) return edvr::fsr3Totals(frames, avgMs, maxMs, resets);
-    if (intelEngine) {
+    if (intelEngine || fsr4Engine) {
         // Both eyes' slots pooled: the mean weighs each slot by its evaluations, as the trained line's average pools every call.
         uint32_t n[2] = {}, r[2] = {};
         double avg[2] = {}, peak[2] = {};
         bool any = false;
         for (unsigned eye = 0; eye < 2; ++eye)
-            any = edvr::xessSlotTotals(eye, &n[eye], &r[eye], &avg[eye], &peak[eye]) || any;
+            any = (fsr4Engine ? edvr::fsr4SlotTotals(eye, &n[eye], &r[eye], &avg[eye], &peak[eye])
+                              : edvr::xessSlotTotals(eye, &n[eye], &r[eye], &avg[eye], &peak[eye])) || any;
         if (!any) return false;
         const uint64_t all = uint64_t(n[0]) + uint64_t(n[1]);
         if (frames) *frames = uint32_t(all);
@@ -7085,6 +7159,7 @@ void temporalPassShutdown() {
     dittoShutdown();
     // No xessShutdown here: it signals, flushes and waits on the GPU, and this teardown can run under the loader lock
     // (device_hook.cpp, shutdownDeviceHooks). The XeSS bridge is left for the process, as at exit (xess_engine.cpp, g_state).
+    // The same for fsr4Shutdown, whose bridge is the same kind of D3D12 device and GPU wait.
     if (g_csMv) { g_csMv->Release(); g_csMv = nullptr; }
     if (g_csMvFast) { g_csMvFast->Release(); g_csMvFast = nullptr; }
     if (g_csMvTrace) { g_csMvTrace->Release(); g_csMvTrace = nullptr; }

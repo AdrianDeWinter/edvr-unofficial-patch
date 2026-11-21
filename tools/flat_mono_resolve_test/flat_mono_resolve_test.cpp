@@ -6,6 +6,7 @@
 #include "../../src/d3d11/dlaa.h"
 #include "../../src/d3d11/dittosr_engine.h"
 #include "../../src/d3d11/fsr3_engine.h"
+#include "../../src/d3d11/fsr4_engine.h"
 #include "../../src/d3d11/engine_velocity_emit.h"
 #include "../../src/d3d11/flat_hdr_crumbs.h"
 #include "../../src/d3d11/flat_capture_directory.h"
@@ -249,6 +250,12 @@ ID3D11ComputeShader* shaderSwapCreateCs(ID3D11DeviceContext* context,const void*
 }
 bool dlaaAvailable(ID3D11Device*,const char**){return true;}
 bool fsr3Available(ID3D11Device*,const char**){return true;}
+bool fsr4Available(ID3D11Device*,const char**){return true;}
+void fsr4ReleaseFeatures(){}
+void fsr4Shutdown(){}
+bool fsr4BuiltIn(){return true;}
+const char* fsr4VersionLabel(){return "fsr4";}
+bool fsr4SlotTotals(unsigned,uint32_t*,uint32_t*,double*,double*){return false;}
 bool dittoAvailable(ID3D11Device*,const char**){return true;}
 bool xessAvailable(ID3D11Device*,const char**){return true;}
 void xessReleaseFeatures(){}
@@ -283,6 +290,19 @@ bool fsr3Evaluate(ID3D11DeviceContext* c,unsigned slot,ID3D11Texture2D* colour,I
                                   readPixel(c,colour,&observedBackendOutside,4,1,1);
     infiniteSeen=infinite;check(nearZ==expectedNear && std::abs(fov-1.5707963f)<1e-5f,"FSR actual near and FOV");
     return backend(c,depth,mv,mask,out,jx,jy,reset,why);
+}
+// FSR 4.1 takes fsr3Evaluate's arguments without the reactive mask; the route and the planes are FSR's.
+bool fsr4Evaluate(ID3D11DeviceContext* c,unsigned slot,ID3D11Texture2D* colour,ID3D11Texture2D* depth,ID3D11Texture2D* mv,
+    ID3D11Texture2D* out,uint32_t w,uint32_t h,uint32_t outW,uint32_t outH,float jx,float jy,bool reset,float,
+    float nearZ,float,float fov,const char** why,bool infinite,bool hdr) {
+    backendSlots.push_back(static_cast<int>(slot));
+    observedInW=w;observedInH=h;observedOutW=outW;observedOutH=outH;
+    observedHdr=hdr;observedColourFormat=DXGI_FORMAT_UNKNOWN;observedOutFormat=DXGI_FORMAT_UNKNOWN;
+    {D3D11_TEXTURE2D_DESC d{};colour->GetDesc(&d);observedColourFormat=d.Format;out->GetDesc(&d);observedOutFormat=d.Format;}
+    if(hdr) observedBackendPixels=readPixel(c,colour,&observedBackendCenter,4,8,8) &&
+                                  readPixel(c,colour,&observedBackendOutside,4,1,1);
+    infiniteSeen=infinite;check(nearZ==expectedNear && std::abs(fov-1.5707963f)<1e-5f,"FSR 4 actual near and FOV");
+    return backend(c,depth,mv,nullptr,out,jx,jy,reset,why);
 }
 // The rig links flat_mono_resolve.cpp and not dittosr_engine.cpp. DittoSR is not given a near plane or a FOV.
 bool dittoEvaluate(ID3D11DeviceContext* c,unsigned slot,const char*,const DittoFrameViews& views,
@@ -587,6 +607,10 @@ int main(int argc,char** argv) {
     check(pixel(taa.Get())==0xff0000ff,"TAA reset spatial upsample");f.reset=false;++f.frame;taa=run(true);
     check(pixel(taa.Get())==0xff0000ff,"TAA static color remains stable");
     f.mode=edvr::FlatMonoResolveMode::Fsr;++f.frame;run(true);check(infiniteSeen,"FSR receives explicit infinite-depth mode");
+    // FSR 4's call came after the key-off goldens were recorded, so its hash is taken back out of their log (as hashMark does below).
+    infiniteSeen=false;f.mode=edvr::FlatMonoResolveMode::Fsr4;++f.frame;
+    {const size_t fsr4Mark=motionHashLog.size();run(true);motionHashLog.resize(fsr4Mark);}
+    check(infiniteSeen,"FSR 4 receives explicit infinite-depth mode");
     f.mode=edvr::FlatMonoResolveMode::Dlss;++f.frame;auto retained=run(true);
     auto beforeInvalidate=edvr::flatMonoResolveStats();
     edvr::flatMonoResolveInvalidateHistory();++f.frame;auto invalidated=run(true);

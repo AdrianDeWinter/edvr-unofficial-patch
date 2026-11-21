@@ -27,7 +27,8 @@
 namespace edvr {
 
 struct FlatPairFacts {
-    bool supported = false;       // a keyed pool-family pair (engineVelocityPoolFamilyPair)
+    bool supported = false;       // a keyed pool-family pair that is a flat scene source (a motion-only family is keyed and not one)
+    bool motionKeyed = false;     // the motion producer substitutes this pixel shader (keyed whether or not the pair is a scene source)
     bool familyVs = false;        // a pool family's vertex shader, keyed pixel shader or not (engineVelocityPoolFamilyVs)
     uint32_t toneSlot = ~0u;      // flat_mono_detail::toneHdrSlot: the HDR lineage slot of a registry tone pass, else ~0u
     uint32_t mapToneSlot = ~0u;   // flatUiMapToneSlotOf: the map frames' and the Full System Scanner's tonemap (the UI layer's own table), else ~0u
@@ -36,7 +37,7 @@ struct FlatPairFacts {
     bool uiMayAsk = false;        // flatUiFamilyFor names the pair for some (map open, HDR target)
     bool legacyGlassPair = false; // the canopy pair (flatUiLegacyGlassPair): asked about only while the legacy look is live, a runtime fact the memo does not hold; uiMayAsk stays false for it
     friend bool operator==(const FlatPairFacts& a, const FlatPairFacts& b) {
-        return a.supported == b.supported && a.familyVs == b.familyVs && a.toneSlot == b.toneSlot && a.mapToneSlot == b.mapToneSlot &&
+        return a.supported == b.supported && a.motionKeyed == b.motionKeyed && a.familyVs == b.familyVs && a.toneSlot == b.toneSlot && a.mapToneSlot == b.mapToneSlot &&
                a.sourceTone == b.sourceTone && a.copyPair == b.copyPair && a.uiMayAsk == b.uiMayAsk && a.legacyGlassPair == b.legacyGlassPair;
     }
 };
@@ -46,7 +47,8 @@ struct FlatPairFacts {
 inline FlatPairFacts flatPairFactsFresh(uint64_t vs, uint64_t ps, bool flat) noexcept {
     FlatPairFacts f;
     const int family = engine_velocity_family::familyForProfile(vs, flat);
-    f.supported = engine_velocity_family::keyedPs(family, ps, flat);
+    f.motionKeyed = engine_velocity_family::keyedPs(family, ps, flat);
+    f.supported = f.motionKeyed && (!flat || engine_velocity_family::flatSceneSource(family));
     f.familyVs = family >= 0;
     f.toneSlot = flat_mono_detail::toneHdrSlot(vs, ps);
     f.mapToneSlot = flatUiMapToneSlotOf(vs, ps);

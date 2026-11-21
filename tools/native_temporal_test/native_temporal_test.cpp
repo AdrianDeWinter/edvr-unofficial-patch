@@ -498,7 +498,10 @@ void run(){
   f=frame(13,3);p=begin(dlss,f);check(p.tangentShift[0][0]==0&&p.tangentShift[0][1]==0,"refusal disables future jitter");check(dlss.close(dlss.context)==S_OK,"DLSS close");
   auto unknown=acquire(d,14,"invalid-mode");f=frame(14,1);begin(unknown,f);check(treat(unknown,1,0,source.Get())==S_FALSE,"unknown mode is off");check(unknown.close(unknown.context)==S_OK,"unknown close");
   { // World scale (common/world_scale.h) moves the eye origins Elite is given: history made at one separation is not history at the next, whatever moved it.
-    auto scaled=acquire(d,16);
+    // FSR 4.1 rides this channel. The pool holds 16 and close does not return one, and the cases below already use every slot.
+    // Bit 1 (external) and bit 10 (FSR 4) are set, never bit 6 (FSR 3.1), 7 (XeSS), 8 (map) or 9 (Ditto). The separation and
+    // zoom checks read flags bit 0 only, so the engine bits do not change them. The first frame upscales 320x240 to 480x360.
+    auto scaled=acquire(d,16,"fsr4");
     auto at=[&](uint64_t seq,float halfSeparation){auto g=frame(16,seq);g.eyeToHead[0][3]=-halfSeparation;g.eyeToHead[1][3]=halfSeparation;return g;};
     auto both=[&](uint64_t seq,float halfSeparation,bool& resetLeft,bool& resetRight){
       f=at(seq,halfSeparation);begin(scaled,f);
@@ -506,6 +509,7 @@ void run(){
       const bool right=treat(scaled,seq,1,source.Get())==S_OK;resetRight=(calls.back().flags&1)!=0;return left&&right;};
     bool l=false,r=false;
     check(both(1,.032f,l,r)&&l&&r,"separation: the first frame resets both eyes' history");
+    check((calls.back().flags&2)&&(calls.back().flags&1024)&&!(calls.back().flags&64)&&!(calls.back().flags&128)&&!(calls.back().flags&256)&&!(calls.back().flags&512)&&calls.back().outW==480&&calls.back().outH==360,"FSR 4 asks for an external engine under its own flag bit, at the recommended size");
     check(both(2,.032f,l,r)&&!l&&!r,"separation: the same separation keeps both histories");
     check(both(3,.032f+3.0e-5f,l,r)&&!l&&!r,"separation: a 0.06 mm difference (two locates' noise) keeps history");
     check(both(4,.0246f,l,r)&&l&&r,"separation: 130 percent (64 mm to 49.2 mm) resets both eyes' history at the frame that carries it");

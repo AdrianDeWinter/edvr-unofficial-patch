@@ -234,6 +234,8 @@ void corpus(ID3D11Device* device, ID3D11DeviceContext* context, const std::wstri
         {L"vs_114AF608F86D9ED8", L"ps_A17504A2627767F2", false}, {L"vs_D99AFDC250D19A3F", L"ps_E86271E464CCDC1D", false},
         // 2026-11-01 (Frontier 15:43, an NPC's hair): the hair's forward pass, keyed for VR with the second skin.
         {L"vs_A6A39338C06E03A1", L"ps_1AE6AB9A94C0456E", false},
+        // 2026-11-20 (Epic concourse): the flat hair pixel shader. Same vertex shader, flatPs.
+        {L"vs_A6A39338C06E03A1", L"ps_ED91F94EC94FA5C2", false},
         // 2026-11-05 (Frontier 12:48, Holo-Me): the commander's suit and helmet, keyed for VR with the second skin.
         {L"vs_01DA82F8D0EA0C99", L"ps_2C3ADCD2FCD47298", false},
         // 2026-11-05 (Frontier 14:37, a bartender): an NPC's eyes, keyed for VR with the second skin.
@@ -241,6 +243,10 @@ void corpus(ID3D11Device* device, ID3D11DeviceContext* context, const std::wstri
         // 2026-11-08 (Frontier 11:03, on foot beside the SRV at a planet): the family's stock G-buffer material that
         // refused the view for want of a source, drawn with the HDR world camera's bytes. Keyed in both profiles.
         {L"vs_DE545DC8EE4FBB87", L"ps_60D69AB6C65C549A", false},
+        // 2026-11-20 (Epic bar): the family's alpha-cutout material, the station's plants. A candidate since flight 6.
+        {L"vs_DE545DC8EE4FBB87", L"ps_A6070F9DD1CFB601", false},
+        // 2026-11-20 (Epic bar): the light strips under the bar, a family of their own.
+        {L"vs_2684F02B9B0BB0DE", L"ps_2376A8D9AA874372", false},
     };
     for (const auto& p : pairs) onePair(device, context, root, p, &check);
     // Candidates: pairs seen drawing stock that are not keyed. Each is tried
@@ -249,7 +255,6 @@ void corpus(ID3D11Device* device, ID3D11DeviceContext* context, const std::wstri
     // Flight 6 (153446): another DE54 stock pixel shader. It is not keyed
     // while its live owner/coverage is assessed.
     const Pair candidates[] = {
-        {L"vs_DE545DC8EE4FBB87", L"ps_A6070F9DD1CFB601", false},
         // 2026-11-08: a flat user's spell of no-supported-motion-source-pair began on this pair (an untrusted nominee at
         // frame 3986). It passes whole on WARP, but no trace has named it as the refusing draw and its camera has not been
         // compared with the HDR's, so it is not keyed: a pair with another camera would turn treated frames into refusals.
@@ -362,7 +367,7 @@ int wmain(int argc, wchar_t** argv) {
           !edvr::engineVelocityPoolFamilyPair(shellVs, shellPs), "cockpit shell is excluded from VR motion producer");
     edvr::g_runtimeProfile = edvr::RuntimeProfile::Flat;
     check(edvr::engineVelocityPoolFamilyPair(edgeVs, edgePs) &&
-          !edvr::engineVelocityPoolFamilyPair(edgeVs, 0xA6070F9DD1CFB601ull),
+          !edvr::engineVelocityPoolFamilyPair(edgeVs, 0xE364F5637AB0261Cull),
           "flat admits only the draw-qualified front-face pair");
     check(edvr::engineVelocityPoolFamilyVs(shellVs) &&
           edvr::engineVelocityPoolFamilyPair(shellVs, shellPs), "exact cockpit shell pair is eligible in flat");
@@ -381,6 +386,16 @@ int wmain(int argc, wchar_t** argv) {
               edvr::engineVelocityPoolFamilyPair(stationVs, detailPs) &&
               edvr::engineVelocityPoolFamilyPair(edgeVs, alphaPs),
               "Coriolis: the three exact qualified station pairs are eligible in each runtime profile");
+        // 2026-11-20: three shaders the census showed on the station's vertex shader write EDVR's o6 marker. They are its
+        // generated substitutes, never game materials, and stay unkeyed (keyed by mistake that day, then removed).
+        check(!edvr::engineVelocityPoolFamilyPair(stationVs, 0xE06E61AEC72FF659ull) &&
+              !edvr::engineVelocityPoolFamilyPair(stationVs, 0xDCCCEDD6AEDE0D14ull) &&
+              !edvr::engineVelocityPoolFamilyPair(stationVs, 0xAD6196D0F32902A5ull),
+              "Coriolis: EDVR's generated station substitutes are not keyed as game variants");
+        check(edvr::engineVelocityPoolFamilyPair(0xDE545DC8EE4FBB87ull, 0xA6070F9DD1CFB601ull) &&
+              edvr::engineVelocityPoolFamilyPair(0x2684F02B9B0BB0DEull, 0x2376A8D9AA874372ull) &&
+              !edvr::engineVelocityPoolFamilyPair(0x2684F02B9B0BB0DEull, stationPs),
+              "Epic bar: the plants' cutout pair and the light strips' pair are eligible in each runtime profile, the strips' alone");
         check(!edvr::engineVelocityPoolFamilyPair(stationVs, alphaPs) &&
               !edvr::engineVelocityPoolFamilyPair(edgeVs, stationPs) &&
               !edvr::engineVelocityPoolFamilyPair(edgeVs, detailPs),
@@ -414,11 +429,9 @@ int wmain(int argc, wchar_t** argv) {
     check(edvr::engineVelocityPoolFamilyPair(hullVs, hullPs) &&
           edvr::engineVelocityPoolFamilyPair(hullVs, hullSiblingPs),
           "flat keys the hull pair beside its sibling");
-    // The F10 NPC pairs (2026-10-08, docs/kinematic-motion-injection-2026-09-19.md): the walking NPC's rigid body
-    // (8B58, and 7B0D's two base-0 draws) and skinned body (7B0D, 114A, D99A). Keyed for VR alone, because these
-    // vertex shaders are weapon_motion's first-person families and flat's foreground and source routing is qualified
-    // with them unkeyed; each pixel shader belongs to its own vertex shader only. The hashes are the ones
-    // recomputed from the dumped bytecode (FNV-1a 64), not retyped from a name.
+    // The NPC pairs. 8B58 and the eyes stay VR-only. The body, face, hair and suit are keyed on flat too
+    // (Epic concourse 2026-11-20). Hair's flat pixel shader is ED91, not the VR shader 1AE6. Each pixel shader
+    // belongs to its own vertex shader only.
     struct NpcPair { uint64_t vs, ps; };
     constexpr NpcPair npcPairs[] = {
         {0x8B589D25B2A0ADDCull, 0x7268762D11A610F2ull}, {0x7B0DC42D383F694Cull, 0x0DF03E64DF9DBEF1ull},
@@ -426,6 +439,19 @@ int wmain(int argc, wchar_t** argv) {
         {0xA6A39338C06E03A1ull, 0x1AE6AB9A94C0456Eull},   // 2026-11-01: the NPC hair's forward pass
         {0x01DA82F8D0EA0C99ull, 0x2C3ADCD2FCD47298ull},   // 2026-11-05: the commander's suit and helmet
         {0x33A5025C48FC8259ull, 0x7AA0441EE0E88667ull},   // 2026-11-05: an NPC's eyes
+    };
+    constexpr NpcPair flatNpcPairs[] = {
+        {0x7B0DC42D383F694Cull, 0x0DF03E64DF9DBEF1ull},
+        {0x114AF608F86D9ED8ull, 0xA17504A2627767F2ull}, {0xD99AFDC250D19A3Full, 0xE86271E464CCDC1Dull},
+        {0xA6A39338C06E03A1ull, 0x1AE6AB9A94C0456Eull},
+        {0x01DA82F8D0EA0C99ull, 0x2C3ADCD2FCD47298ull},
+    };
+    constexpr NpcPair flatOnlyNpcPairs[] = {
+        {0xA6A39338C06E03A1ull, 0xED91F94EC94FA5C2ull},
+    };
+    constexpr NpcPair vrOnlyNpcPairs[] = {
+        {0x8B589D25B2A0ADDCull, 0x7268762D11A610F2ull},
+        {0x33A5025C48FC8259ull, 0x7AA0441EE0E88667ull},
     };
     static_assert(edvr::engine_velocity_family::kFamilyCount <= edvr::engine_velocity_detail::kMaxFamilies,
                   "every keyed family has its own substituted-draw counter");
@@ -441,10 +467,29 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
     edvr::g_runtimeProfile = edvr::RuntimeProfile::Flat;
-    for (const auto& a : npcPairs) {
+    for (const auto& a : flatNpcPairs) {
+        const int family = edvr::engine_velocity_family::familyOfVs(a.vs);
+        check(edvr::engineVelocityPoolFamilyVs(a.vs) && edvr::engineVelocityPoolFamilyPair(a.vs, a.ps) &&
+              edvr::engine_velocity_family::keyedPs(family, a.ps, true) &&
+              !edvr::engine_velocity_family::supportedPair(a.vs, a.ps) &&
+              !edvr::engine_velocity_family::flatSceneSource(family),
+              "flat: the body, face, hair and suit are keyed for motion and are not scene sources");
+    }
+    for (const auto& a : flatOnlyNpcPairs) {
+        const int family = edvr::engine_velocity_family::familyOfVs(a.vs);
+        check(edvr::engine_velocity_family::keyedPs(family, a.ps, true) &&
+              !edvr::engine_velocity_family::supportedPair(a.vs, a.ps),
+              "flat: the concourse hair pixel shader is keyed for motion and is not a scene source");
+    }
+    for (const auto& a : vrOnlyNpcPairs) {
         check(!edvr::engineVelocityPoolFamilyVs(a.vs) && !edvr::engineVelocityPoolFamilyPair(a.vs, a.ps) &&
               !edvr::engine_velocity_family::supportedPair(a.vs, a.ps),
-              "F10: the NPC pairs stay unkeyed in flat (the weapon families' foreground and source routing)");
+              "flat: the rigid body and the eyes stay unkeyed");
+    }
+    edvr::g_runtimeProfile = edvr::RuntimeProfile::Vr;
+    for (const auto& a : flatOnlyNpcPairs) {
+        check(!edvr::engineVelocityPoolFamilyPair(a.vs, a.ps),
+              "VR: the flat hair pixel shader stays unkeyed");
     }
     edvr::g_runtimeProfile = edvr::RuntimeProfile::LegacyVr;
     shader_tests::run({device.Get(), context.Get(), &check});

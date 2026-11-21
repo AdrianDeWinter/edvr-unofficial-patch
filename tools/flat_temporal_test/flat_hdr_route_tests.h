@@ -1187,8 +1187,9 @@ inline int flatHdrRouteTests() {
         expect(superFrame.selected() && flatHdrTriggerSeen(superFrame, FlatMonoResolveMode::Taa) == FlatFrameSeen::None &&
                    flatHdrTriggerSeen(superFrame, FlatMonoResolveMode::Dlss) == FlatFrameSeen::Treatable &&
                    flatHdrTriggerSeen(superFrame, FlatMonoResolveMode::Dlaa) == FlatFrameSeen::Treatable &&
-                   flatHdrTriggerSeen(superFrame, FlatMonoResolveMode::Fsr) == FlatFrameSeen::Treatable,
-               "a selected frame is treatable to the route for DLSS, DLAA and FSR above D, and not for EDVR's TAA there");
+                   flatHdrTriggerSeen(superFrame, FlatMonoResolveMode::Fsr) == FlatFrameSeen::Treatable &&
+                   flatHdrTriggerSeen(superFrame, FlatMonoResolveMode::Fsr4) == FlatFrameSeen::Treatable,
+               "a selected frame is treatable to the route for DLSS, DLAA, FSR and FSR 4.1 above D, and not for EDVR's TAA there");
         Sim taaAbove, dlssAbove;
         runs(superFrame, FlatMonoResolveMode::Taa, true, &taaAbove);
         runs(superFrame, FlatMonoResolveMode::Dlss, true, &dlssAbove);
@@ -1573,8 +1574,9 @@ inline int flatHdrRouteTests() {
         // The resolver hands the frame's bit down to each engine, with no literal in its place.
         const std::string resolve = slurpSource("src/d3d11/flat_mono_resolve.cpp");
         expect(count(resolve, "f.jitterX,f.jitterY,reset,f.deltaMs,reason,hdr);") == 1 &&
-                   count(resolve, "2*std::atan(1/sy),reason,true,hdr);") == 1,
-               "the resolver's backend calls pass the frame's hdr bit to the DLSS/DLAA evaluate and to the FSR evaluate");
+                   count(resolve, "2*std::atan(1/sy),reason,true,hdr);") == 2 && count(resolve, "ok=fsr4Evaluate(") == 1 &&
+                   count(resolve, "ok=fsr3Evaluate(") == 1,
+               "the resolver's backend calls pass the frame's hdr bit to the DLSS/DLAA evaluate and to the FSR 3.1 and FSR 4 evaluates");
     }
 
     // ---- the wiring no rig can run: the runtime's default, merge and publication, and the panel's use of them ---------

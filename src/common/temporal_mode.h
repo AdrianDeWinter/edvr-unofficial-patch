@@ -15,6 +15,7 @@ inline bool temporalModeEnabled(const std::string& mode) {
            _stricmp(mode.c_str(), "dlaa") == 0 ||
            _stricmp(mode.c_str(), "dlss") == 0 ||
            _stricmp(mode.c_str(), "fsr") == 0 ||
+           _stricmp(mode.c_str(), "fsr4") == 0 ||
            _stricmp(mode.c_str(), "dittosr") == 0 ||
            _stricmp(mode.c_str(), "xess") == 0;
 }
@@ -236,20 +237,23 @@ struct TemporalFootTracker {
 };
 
 // Which history the temporal pass hands the frame to. Own is the pass's own
-// clip; Nvidia, Amd and Intel are the external, trained upscalers (docs\
+// clip; Nvidia, Amd, Intel and AmdFsr4 are the external, trained upscalers (docs\
 // fsr-upscaler-design-2026-09-16.md, section 3); Intel is XeSS-SR. Anything the mode string
 // does not name (off included) reads as Own: off never reaches the seam,
 // and an unrecognised value already falls back to the pass's own history
 // (temporalModeEnabled above), so there is nothing else to run.
 // Intel is XeSS-SR. Ditto is DittoSR 0.5.0, an alternative to FSR on the same inputs.
-// The VR eye pass runs each per eye; flat runs each through flat_mono_resolve.
-enum class TemporalEngine { Own, Nvidia, Amd, Intel, Ditto };
+// AmdFsr4 is AMD's FSR 4.1 through AMD's own D3D12 runtime (fsr4_engine.h). Amd stays
+// FSR 3.1's alone (its warm, its reactive mask). Ditto keeps the value it has on main;
+// AmdFsr4 is appended after it. The VR eye pass runs each per eye; flat runs each through flat_mono_resolve.
+enum class TemporalEngine { Own, Nvidia, Amd, Intel, Ditto, AmdFsr4 };
 
 inline TemporalEngine temporalEngineFor(const std::string& mode) {
     if (_stricmp(mode.c_str(), "dlaa") == 0 || _stricmp(mode.c_str(), "dlss") == 0) {
         return TemporalEngine::Nvidia;
     }
     if (_stricmp(mode.c_str(), "fsr") == 0) return TemporalEngine::Amd;
+    if (_stricmp(mode.c_str(), "fsr4") == 0) return TemporalEngine::AmdFsr4;
     if (_stricmp(mode.c_str(), "dittosr") == 0) return TemporalEngine::Ditto;
     if (_stricmp(mode.c_str(), "xess") == 0) return TemporalEngine::Intel;
     return TemporalEngine::Own;
@@ -278,6 +282,55 @@ inline bool temporalExternalEngineFor(const std::string& mode, bool flatProfile)
 inline const char* temporalNvidiaLabel(float hmdQuality) {
     if (!std::isfinite(hmdQuality) || hmdQuality <= 0.0f) return "DLSS / DLAA";
     return hmdQuality >= 1.0f ? "DLAA" : "DLSS";
+}
+
+// The GPU the performance menu's Anti-aliasing list is for: the adapter the game device was created on.
+// Unknown (no device yet) offers neither vendor runtime. Other is Intel, a software adapter, or anything else.
+enum class TemporalGpu { Unknown, Nvidia, Amd, Other };
+
+// True when the performance menu may offer this fix.temporal_aa value. dlss and dlaa are NVIDIA's runtime
+// (one choice: the row labels it DLSS or DLAA). fsr4 is AMD's FSR 4.1. Off, TAA, FSR 3.1, DittoSR and XeSS-SR
+// stay on every GPU. A value the ini does not list is offered, so an unknown word is not hidden as if it were a vendor mode.
+inline bool temporalAaChoiceOffered(const char* value, TemporalGpu gpu) {
+    if (!value || !value[0]) return false;
+    if (_stricmp(value, "dlss") == 0 || _stricmp(value, "dlaa") == 0) return gpu == TemporalGpu::Nvidia;
+    if (_stricmp(value, "fsr4") == 0) return gpu == TemporalGpu::Amd;
+    return true;
+}
+
+// Case-insensitive substring of a DXGI description. ASCII letters only; a description is a vendor's English name.
+inline bool temporalGpuNameHas(const wchar_t* text, const wchar_t* needle) {
+    if (!text || !needle || !needle[0]) return false;
+    for (const wchar_t* p = text; *p; ++p) {
+        const wchar_t* a = p;
+        const wchar_t* b = needle;
+        while (*a && *b) {
+            wchar_t ca = *a, cb = *b;
+            if (ca >= L'A' && ca <= L'Z') ca = static_cast<wchar_t>(ca - L'A' + L'a');
+            if (cb >= L'A' && cb <= L'Z') cb = static_cast<wchar_t>(cb - L'A' + L'a');
+            if (ca != cb) break;
+            ++a;
+            ++b;
+        }
+        if (!*b) return true;
+    }
+    return false;
+}
+
+// Who made this adapter. The description wins when it names the maker, because a wrapper can spoof the PCI vendor:
+// DXVK_ENABLE_NVAPI reports NVIDIA's 0x10DE and keeps the real device id (flight 7: device 0x1586, the Radeon 8060S).
+// That one device stays AMD under Wine even when the description was spoofed too. 0x1002 is AMD, 0x1022 is AMD's old
+// vendor id, 0x10DE is NVIDIA. A zero vendor with no name is Unknown.
+inline TemporalGpu temporalGpuFromAdapter(uint32_t vendorId, uint32_t deviceId, const wchar_t* description, bool wine) {
+    if (wine && vendorId == 0x10DEu && deviceId == 0x1586u) return TemporalGpu::Amd;
+    if (temporalGpuNameHas(description, L"radeon") || temporalGpuNameHas(description, L"amd")) return TemporalGpu::Amd;
+    if (temporalGpuNameHas(description, L"nvidia") || temporalGpuNameHas(description, L"geforce") ||
+        temporalGpuNameHas(description, L"quadro"))
+        return TemporalGpu::Nvidia;
+    if (vendorId == 0x1002u || vendorId == 0x1022u) return TemporalGpu::Amd;
+    if (vendorId == 0x10DEu) return TemporalGpu::Nvidia;
+    if (vendorId == 0u && !(description && description[0])) return TemporalGpu::Unknown;
+    return TemporalGpu::Other;
 }
 
 }  // namespace edvr
