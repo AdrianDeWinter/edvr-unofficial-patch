@@ -30,7 +30,7 @@ struct VrModeChoice {
 };
 // Elite Dangerous's in-game Options > Graphics > 3D VR modes, in dropdown order.
 const VrModeChoice kVrModeChoices[] = {
-    {0, L"Auto (from Settings.xml)"},
+    {0, L"Not Set"},
     {3, L"HMD (Headphones)"},
     {4, L"HMD (Speakers)"},
     {2, L"Side by Side"},
@@ -546,9 +546,8 @@ void launcherBegin() {
         return started;
     };
     const std::wstring settingsBackupDir = joinPath(env.roots.launcherDir(), L"backups");
-    env.prepareLaunchMode = [settingsBackupDir](bool vr, int preferredVrMode, int* observedVrMode, std::string* error) {
-        return prepareSettingsXmlForLaunch(defaultEliteSettingsXmlPath(), settingsBackupDir, vr, preferredVrMode, error,
-                                           observedVrMode);
+    env.prepareLaunchMode = [settingsBackupDir](bool vr, int preferredVrMode, std::string* error) {
+        return prepareSettingsXmlForLaunch(defaultEliteSettingsXmlPath(), settingsBackupDir, vr, preferredVrMode, error);
     };
     lg.session.reset(new LauncherSession(env));
     lg.session->start();
@@ -662,6 +661,14 @@ bool launcherCommand(int id, int code) {
         case kIdPlayFlat: {
             if (!g.haveSurvey) return true;
             const bool vr = id != kIdPlayFlat;
+            if (vr && !isElevatedForPlay() && lg.vrMode && IsWindowVisible(lg.vrMode) &&
+                lg.session->vrStereoMode() == 0) {
+                MessageBoxW(g.window, tr(L"Choose your preferred VR 3D mode before launching in VR."), kAppTitle,
+                            MB_OK | MB_ICONINFORMATION);
+                SetFocus(lg.vrMode);
+                SendMessageW(lg.vrMode, CB_SHOWDROPDOWN, TRUE, 0);
+                return true;
+            }
             invalidateLauncherCache();
             lg.session->beginPlay(g.survey.game.source, g.survey.game.dir, vr, isElevatedForPlay(), realRouteOps(), WatchNames(),
                                   WatchTiming());

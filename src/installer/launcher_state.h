@@ -18,8 +18,8 @@
 //                      the Windows language.
 //   vr_3d_mode         the <StereoscopicMode> number written to Elite's Settings.xml for Play VR
 //                      when the store route does not pass /vr (2 = Side by Side, 3 = HMD (Headphones),
-//                      4 = HMD (Speakers), 5 = HMD Cinema, 6 = Mode 6), or "auto" / missing to keep
-//                      and remember whatever VR mode Settings.xml already holds.
+//                      4 = HMD (Speakers), 5 = HMD Cinema, 6 = Mode 6), or "not_set" / missing when
+//                      the user has not chosen a VR 3D mode yet.
 //
 // A line this code does not know (another version's key, a comment) is kept as
 // it was, in place, so a newer launcher's file survives an older one. Saving is
@@ -82,7 +82,7 @@ public:
     std::string language() const;
     void setLanguage(const std::string& code);
 
-    // Preferred VR StereoscopicMode (2..6), or 0 when unset/"auto".
+    // Preferred VR StereoscopicMode (2..6), or 0 when Not Set.
     int vrStereoMode() const;
     void setVrStereoMode(int mode);
 

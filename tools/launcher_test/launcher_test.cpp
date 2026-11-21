@@ -5997,56 +5997,53 @@ void testSettingsXmlLaunchMode() {
         const std::wstring iniPath = P(base, L"vr_mode_state.ini");
         LauncherState st;
         std::string err;
-        check(st.load(iniPath, &err) && st.vrStereoMode() == 0, "unset vr_3d_mode reads as 0 (auto)");
+        check(st.load(iniPath, &err) && st.vrStereoMode() == 0, "default vr_3d_mode reads as 0 (Not Set)");
         st.setVrStereoMode(4);
         check(st.save(&err), "vr_3d_mode=4 saves cleanly");
         LauncherState reload;
         check(reload.load(iniPath, &err) && reload.vrStereoMode() == 4 && reload.get("vr_3d_mode") == "4",
               "vr_3d_mode=4 round-trips through launcher.ini");
         reload.setVrStereoMode(0);
-        check(reload.save(&err) && reload.get("vr_3d_mode") == "auto" && reload.vrStereoMode() == 0,
-              "clearing vr_3d_mode writes auto and reads as 0");
+        check(reload.save(&err) && reload.get("vr_3d_mode") == "not_set" && reload.vrStereoMode() == 0,
+              "clearing vr_3d_mode writes not_set and reads as 0");
     }
 
-    // Mode 3 -> flat launch writes 0, backs up original, reports observedVrMode=3, and leaves surrounding XML identical.
+    // Mode 3 -> flat launch writes 0, backs up original, and leaves surrounding XML byte-for-byte identical.
     {
         const std::string orig = kPrefix + "3" + kSuffix;
         writeAll(xmlPath, orig);
         std::string err;
-        int observed = 0;
-        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, false, 0, &err, &observed, L""),
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, false, 0, &err, L""),
               "flat launch rewrites mode 3 to 0: " + err);
-        check(observed == 3, "flat launch reports observed VR mode 3 before overwriting with 0");
         check(readAll(xmlPath) == kPrefix + "0" + kSuffix,
               "only <StereoscopicMode> changed from 3 to 0; surrounding XML is byte-for-byte unchanged");
         check(readAll(P(backupDir, L"Settings.xml.bak")) == orig,
               "original Settings.xml was backed up before modifying it");
     }
 
-    // Auto mode (0): mode 3 stays 3 on VR launch; mode 4 stays 4 on VR launch (never hardcoded to 3).
+    // Not Set (0): VR launch ALWAYS stops and prompts, even if Settings.xml already holds 3 or 0, leaving file untouched.
     {
         const std::string mode3 = kPrefix + "3" + kSuffix;
         writeAll(xmlPath, mode3);
         std::string err;
-        int observed = 0;
-        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 0, &err, &observed, L""),
-              "VR launch (auto) keeps existing mode 3: " + err);
-        check(observed == 3 && readAll(xmlPath) == mode3, "mode 3 fixture stays 3 for VR launch");
+        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 0, &err, L"") && contains(err, "No VR 3D mode"),
+              "VR launch when Not Set stops and prompts even if Settings.xml has mode 3: " + err);
+        check(readAll(xmlPath) == mode3, "Settings.xml is untouched when VR launch is refused for Not Set");
 
-        const std::string mode4 = kPrefix + "4" + kSuffix;
-        writeAll(xmlPath, mode4);
-        observed = 0;
-        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 0, &err, &observed, L""),
-              "VR launch (auto) keeps existing mode 4: " + err);
-        check(observed == 4 && readAll(xmlPath) == mode4, "mode 4 fixture stays 4 for VR launch");
+        const std::string mode0 = kPrefix + "0" + kSuffix;
+        writeAll(xmlPath, mode0);
+        err.clear();
+        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 0, &err, L"") && contains(err, "No VR 3D mode"),
+              "VR launch when Not Set stops and prompts when Settings.xml is mode 0: " + err);
+        check(readAll(xmlPath) == mode0, "mode 0 fixture is untouched when VR launch is refused for Not Set");
     }
 
-    // Preferred VR mode (e.g. 3 or 4): switches mode 0 -> 4 and mode 3 -> 4, backing up before changing.
+    // Preferred VR mode (e.g. 3 or 4): switches mode 0 -> 4, mode 3 -> 4, and keeps matching mode unchanged.
     {
         const std::string mode0 = kPrefix + "0" + kSuffix;
         writeAll(xmlPath, mode0);
         std::string err;
-        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 4, &err, nullptr, L""),
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 4, &err, L""),
               "VR launch with preferred mode 4 rewrites mode 0 to 4: " + err);
         check(readAll(xmlPath) == kPrefix + "4" + kSuffix,
               "only <StereoscopicMode> changed from 0 to 4; surrounding XML is byte-for-byte unchanged");
@@ -6055,41 +6052,35 @@ void testSettingsXmlLaunchMode() {
 
         const std::string mode3 = kPrefix + "3" + kSuffix;
         writeAll(xmlPath, mode3);
-        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 4, &err, nullptr, L""),
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 4, &err, L""),
               "VR launch with preferred mode 4 updates mode 3 to 4: " + err);
         check(readAll(xmlPath) == kPrefix + "4" + kSuffix,
               "preferred mode 4 overrides existing mode 3 cleanly");
+
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 4, &err, L""),
+              "VR launch with preferred mode 4 keeps matching mode 4 unchanged: " + err);
+        check(readAll(xmlPath) == kPrefix + "4" + kSuffix, "mode 4 stays 4");
     }
 
-    // Absent tag: auto VR fails untouched; explicit preferred VR mode inserts tag; flat leaves untouched.
+    // Absent tag: Not Set VR fails untouched; explicit preferred VR mode inserts tag; flat leaves untouched.
     {
         const std::string noTag = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\r\n<GraphicsOptions>\r\n\t<Version>1</Version>\r\n</GraphicsOptions>\r\n";
         writeAll(xmlPath, noTag);
         std::string err;
-        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 0, &err, nullptr, L"") && !err.empty(),
-              "VR launch (auto) with absent <StereoscopicMode> fails with a clear message: " + err);
-        check(readAll(xmlPath) == noTag, "absent-tag fixture is not modified on auto VR launch");
+        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 0, &err, L"") && !err.empty(),
+              "VR launch (Not Set) with absent <StereoscopicMode> fails with a clear message: " + err);
+        check(readAll(xmlPath) == noTag, "absent-tag fixture is not modified on Not Set VR launch");
         // Flat launch with absent tag leaves file unmodified and succeeds.
         err.clear();
-        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, false, 0, &err, nullptr, L"") && readAll(xmlPath) == noTag,
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, false, 0, &err, L"") && readAll(xmlPath) == noTag,
               "flat launch with absent <StereoscopicMode> leaves file untouched and proceeds");
         // VR launch with an explicitly chosen preferred mode inserts <StereoscopicMode>3</StereoscopicMode>.
         err.clear();
-        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 3, &err, nullptr, L""),
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 3, &err, L""),
               "VR launch with preferred mode 3 inserts <StereoscopicMode>3</StereoscopicMode>: " + err);
         int parsed = -1;
         check(edvr::parseStereoscopicMode(readAll(xmlPath).c_str(), &parsed) && parsed == 3,
               "inserted <StereoscopicMode> parses back as 3");
-    }
-
-    // Mode 0 asked for VR with auto (0): not modified and failure is visible (no invented headset default).
-    {
-        const std::string mode0 = kPrefix + "0" + kSuffix;
-        writeAll(xmlPath, mode0);
-        std::string err;
-        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 0, &err, nullptr, L"") && contains(err, "flat"),
-              "VR launch (auto) when Settings.xml is mode 0 refuses without inventing a default: " + err);
-        check(readAll(xmlPath) == mode0, "mode 0 fixture is not modified on refused VR launch");
     }
 
     // Parse failure (truncated closing tag) writes nothing, even with a preferred VR mode.
@@ -6097,9 +6088,9 @@ void testSettingsXmlLaunchMode() {
         const std::string broken = kPrefix + "3</Stereo";
         writeAll(xmlPath, broken);
         std::string err;
-        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, false, 0, &err, nullptr, L"") && readAll(xmlPath) == broken,
+        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, false, 0, &err, L"") && readAll(xmlPath) == broken,
               "parse failure writes nothing on flat launch: " + err);
-        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 3, &err, nullptr, L"") && readAll(xmlPath) == broken,
+        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, true, 3, &err, L"") && readAll(xmlPath) == broken,
               "parse failure writes nothing on VR launch even with preferred mode: " + err);
     }
 
@@ -6109,17 +6100,18 @@ void testSettingsXmlLaunchMode() {
         writeAll(xmlPath, mode3);
         HANDLE fakeGame = startProgram(P(g_fakes, kFakeGame), L"--run-ms 5000");
         std::string err;
-        const bool ok = prepareSettingsXmlForLaunch(xmlPath, backupDir, false, 0, &err, nullptr, kFakeGame);
+        const bool ok = prepareSettingsXmlForLaunch(xmlPath, backupDir, false, 0, &err, kFakeGame);
         endProgram(fakeGame);
         check(!ok && contains(err, "already running") && readAll(xmlPath) == mode3,
               "running game refuses Settings.xml write and leaves file untouched: " + err);
     }
 
-    // LauncherSession Epic non-direct alternation:
-    //   1. Start at mode 3 with vr_3d_mode unset -> Play flat writes 0 AND auto-remembers vr_3d_mode=3.
-    //   2. Play VR -> restores 3 from launcher.ini before opening Epic URI.
-    //   3. User switches preferred VR mode to 4 (HMD Speakers) -> Play VR writes 4 before opening Epic URI.
-    //   4. Fresh session with vr_3d_mode unset and Settings.xml at 0 -> Play VR refuses and never opens Epic URI.
+    // LauncherSession Epic non-direct workflow:
+    //   1. Default is Not Set (0): Play VR stops and prompts without touching Settings.xml or opening Epic URI.
+    //   2. Play flat while Not Set writes 0 to Settings.xml and leaves vr_3d_mode Not Set.
+    //   3. User selects HMD (Headphones) (3) -> saved in launcher.ini; Play VR writes 3 before opening Epic URI.
+    //   4. Alternating back to Play flat writes 0; next Play VR restores 3 from launcher.ini.
+    //   5. Switching preference to HMD (Speakers) (4) writes 4 on Play VR.
     {
         const std::wstring sessBase = fresh("settings-xml-epic-session");
         const std::wstring sessXml = P(sessBase, L"Settings.xml");
@@ -6147,80 +6139,94 @@ void testSettingsXmlLaunchMode() {
         timing.closeWaitMs = 100;
 
         auto makePrepare = [&]() {
-            return [&](bool vr, int preferredVrMode, int* observedVrMode, std::string* error) {
+            return [&](bool vr, int preferredVrMode, std::string* error) {
                 order.push_back(vr ? ("xml:vr:" + std::to_string(preferredVrMode)) : "xml:flat");
-                return prepareSettingsXmlForLaunch(sessXml, sessBackup, vr, preferredVrMode, error, observedVrMode, L"");
+                return prepareSettingsXmlForLaunch(sessXml, sessBackup, vr, preferredVrMode, error, L"");
             };
         };
 
-        // 1. Play flat from mode 3 -> writes 0 before opening Epic URI, and auto-saves vr_3d_mode=3.
+        // 1. Default Not Set: Play VR refuses and never opens Epic URI.
         writeAll(sessXml, kPrefix + "3" + kSuffix);
-        Ui ui;
-        SessionEnv env = envFor(&ui, &http, sessBase, false, P(sessBase, L"self.exe"));
-        env.prepareLaunchMode = makePrepare();
-        LauncherSession session(std::move(env));
-        session.beginPlay(L"Epic", epicGame, false, false, ops, names, timing);
-        session.shutdown();
+        Ui ui0;
+        SessionEnv env0 = envFor(&ui0, &http, sessBase, false, P(sessBase, L"self.exe"));
+        env0.prepareLaunchMode = makePrepare();
+        LauncherSession session0(std::move(env0));
+        check(session0.vrStereoMode() == 0, "new session starts with vr_3d_mode Not Set (0)");
+        session0.beginPlay(L"Epic", epicGame, true, false, ops, names, timing);
+        check(!session0.playing() && openedUris.empty() && order == std::vector<std::string>{"xml:vr:0"} &&
+                  contains(session0.playLine(), "No VR 3D mode"),
+              "Epic Play VR stops and prompts when VR 3D mode is Not Set: " + session0.playLine());
+        check(readAll(sessXml) == kPrefix + "3" + kSuffix, "refused VR launch leaves Settings.xml untouched");
+
+        // 2. Play flat while Not Set writes 0 before opening Epic URI, leaving vr_3d_mode Not Set.
+        order.clear();
+        openedUris.clear();
+        Ui ui1;
+        SessionEnv env1 = envFor(&ui1, &http, sessBase, false, P(sessBase, L"self.exe"));
+        env1.prepareLaunchMode = makePrepare();
+        LauncherSession session1(std::move(env1));
+        session1.beginPlay(L"Epic", epicGame, false, false, ops, names, timing);
+        session1.shutdown();
         check(order == std::vector<std::string>{"xml:flat", "uri"},
               "Epic Play flat writes Settings.xml before opening the Epic protocol address");
         check(openedUris.size() == 1 && contains(narrowUtf8(openedUris[0]), "com.epicgames.launcher://apps/"),
               "Epic protocol address was opened");
         check(readAll(sessXml) == kPrefix + "0" + kSuffix,
               "Epic Play flat updated Settings.xml to mode 0");
-        check(session.vrStereoMode() == 3, "Epic Play flat auto-remembered VR mode 3 in session");
-        LauncherState st;
-        st.load(P(settingsFor(sessBase).launcherDir, L"launcher.ini"), nullptr);
-        check(st.mode(epicGame) == "flat", "Epic Play flat remembered flat mode");
-        check(st.vrStereoMode() == 3, "Epic Play flat persisted vr_3d_mode=3 in launcher.ini");
+        check(session1.vrStereoMode() == 0, "Play flat keeps vr_3d_mode Not Set");
 
-        // 2. Toggle back to Play VR while Settings.xml is still 0 -> restores mode 3 from launcher.ini!
+        // 3. User selects HMD (Headphones) (3) -> saved in launcher.ini; Play VR writes 3.
         order.clear();
         openedUris.clear();
         Ui ui2;
         SessionEnv env2 = envFor(&ui2, &http, sessBase, false, P(sessBase, L"self.exe"));
         env2.prepareLaunchMode = makePrepare();
         LauncherSession session2(std::move(env2));
-        check(session2.vrStereoMode() == 3, "new session loaded remembered vr_3d_mode=3 from launcher.ini");
+        session2.setVrStereoMode(3);
         session2.beginPlay(L"Epic", epicGame, true, false, ops, names, timing);
         session2.shutdown();
         check(order == std::vector<std::string>{"xml:vr:3", "uri"},
-              "Epic Play VR restores mode 3 before opening the Epic protocol address");
-        check(readAll(sessXml) == kPrefix + "3" + kSuffix,
-              "alternating Flat -> VR restored Settings.xml back to mode 3");
+              "Epic Play VR writes chosen mode 3 before opening Epic URI");
+        check(readAll(sessXml) == kPrefix + "3" + kSuffix, "Epic Play VR updated Settings.xml from 0 to 3");
+        LauncherState st;
+        st.load(P(settingsFor(sessBase).launcherDir, L"launcher.ini"), nullptr);
+        check(st.vrStereoMode() == 3, "launcher.ini remembered vr_3d_mode=3");
 
-        // 3. User switches preferred VR mode to 4 (HMD Speakers) -> Play VR writes 4.
+        // 4. Alternate back to Play flat (3 -> 0), then new session loads 3 and Play VR restores 3 (0 -> 3).
         order.clear();
         openedUris.clear();
         Ui ui3;
         SessionEnv env3 = envFor(&ui3, &http, sessBase, false, P(sessBase, L"self.exe"));
         env3.prepareLaunchMode = makePrepare();
         LauncherSession session3(std::move(env3));
-        session3.setVrStereoMode(4);
-        session3.beginPlay(L"Epic", epicGame, true, false, ops, names, timing);
+        check(session3.vrStereoMode() == 3, "new session reloads remembered vr_3d_mode=3 from launcher.ini");
+        session3.beginPlay(L"Epic", epicGame, false, false, ops, names, timing);
         session3.shutdown();
-        check(order == std::vector<std::string>{"xml:vr:4", "uri"},
-              "Epic Play VR with chosen mode 4 writes mode 4 before opening the Epic URI");
-        check(readAll(sessXml) == kPrefix + "4" + kSuffix, "Epic Play VR updated Settings.xml from 3 to 4");
+        check(readAll(sessXml) == kPrefix + "0" + kSuffix, "alternating VR -> Flat wrote 0");
 
-        // 4. Fresh session with vr_3d_mode unset (0) and Settings.xml at 0 -> refuses and never opens Epic URI.
-        const std::wstring cleanBase = fresh("settings-xml-epic-refuse");
-        const std::wstring cleanXml = P(cleanBase, L"Settings.xml");
-        const std::wstring cleanBackup = P(cleanBase, L"backups");
-        writeAll(cleanXml, kPrefix + "0" + kSuffix);
         order.clear();
         openedUris.clear();
         Ui ui4;
-        SessionEnv env4 = envFor(&ui4, &http, cleanBase, false, P(cleanBase, L"self.exe"));
-        env4.prepareLaunchMode = [&](bool vr, int preferredVrMode, int* observedVrMode, std::string* error) {
-            order.push_back("xml:vr:" + std::to_string(preferredVrMode));
-            return prepareSettingsXmlForLaunch(cleanXml, cleanBackup, vr, preferredVrMode, error, observedVrMode, L"");
-        };
+        SessionEnv env4 = envFor(&ui4, &http, sessBase, false, P(sessBase, L"self.exe"));
+        env4.prepareLaunchMode = makePrepare();
         LauncherSession session4(std::move(env4));
         session4.beginPlay(L"Epic", epicGame, true, false, ops, names, timing);
-        check(!session4.playing() && openedUris.empty() && order == std::vector<std::string>{"xml:vr:0"} &&
-                  contains(session4.playLine(), "Settings.xml"),
-              "Epic Play VR stops before opening Epic URI when Settings.xml is 0 and no VR mode is chosen: " +
-                  session4.playLine());
+        session4.shutdown();
+        check(readAll(sessXml) == kPrefix + "3" + kSuffix, "alternating Flat -> VR restored remembered mode 3");
+
+        // 5. Switch preferred VR mode to 4 (HMD Speakers) -> Play VR writes 4.
+        order.clear();
+        openedUris.clear();
+        Ui ui5;
+        SessionEnv env5 = envFor(&ui5, &http, sessBase, false, P(sessBase, L"self.exe"));
+        env5.prepareLaunchMode = makePrepare();
+        LauncherSession session5(std::move(env5));
+        session5.setVrStereoMode(4);
+        session5.beginPlay(L"Epic", epicGame, true, false, ops, names, timing);
+        session5.shutdown();
+        check(order == std::vector<std::string>{"xml:vr:4", "uri"},
+              "Epic Play VR with chosen mode 4 writes mode 4 before opening the Epic URI");
+        check(readAll(sessXml) == kPrefix + "4" + kSuffix, "Epic Play VR updated Settings.xml from 3 to 4");
     }
 }
 

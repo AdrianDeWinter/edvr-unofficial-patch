@@ -152,7 +152,7 @@ int LauncherState::vrStereoMode() const {
 }
 
 void LauncherState::setVrStereoMode(int mode) {
-    set("vr_3d_mode", (mode >= 2 && mode <= 6) ? std::to_string(mode) : std::string("auto"));
+    set("vr_3d_mode", (mode >= 2 && mode <= 6) ? std::to_string(mode) : std::string("not_set"));
 }
 
 bool LauncherState::sameInstall(const std::wstring& a, const std::wstring& b) {

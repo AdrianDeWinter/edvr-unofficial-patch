@@ -34,13 +34,13 @@ From a script, Steam Launch Options, or another launcher such as `min-ed-launche
 
 Every store offers **Play VR** and **Play flat** (filtered to the modes installed in that folder). Frontier's launcher takes `/vr` or `/novr` on its command line. For Steam and Epic without direct launch, the launcher updates `<StereoscopicMode>` in Elite's `Settings.xml` before opening Steam or Epic (backing up `Settings.xml` to `backups\Settings.xml.bak` first):
 
-- **Play flat** writes `0` (Off). If `Settings.xml` held a VR mode (`2`–`6`) and **VR 3D mode** was still on `Auto`, the launcher automatically remembers that mode in `launcher.ini` (`vr_3d_mode`) so toggling back to **Play VR** restores it.
-- **Play VR** writes your chosen **VR 3D mode** from the Launch panel (stored as `vr_3d_mode` in `launcher.ini`):
+- **Play flat** writes `0` (Off) into `<StereoscopicMode>` without changing your saved VR preference.
+- **Play VR** writes your chosen **VR 3D mode** from the Launch panel (saved as `vr_3d_mode` in `launcher.ini`):
+  - **Not Set** (`not_set`, default): stops before launching in VR and prompts you to choose your preferred 3D mode first.
   - **HMD (Headphones)** (`3`)
   - **HMD (Speakers)** (`4`)
   - **Side by Side** (`2`)
   - **HMD Cinema** (`5`)
-  - **Auto (from Settings.xml)** (`auto`): keeps whichever VR mode `Settings.xml` already holds, and stops without modifying the file if `Settings.xml` is flat (`0`/`1`) or unset.
 
 See [Playing](Playing.md).
 

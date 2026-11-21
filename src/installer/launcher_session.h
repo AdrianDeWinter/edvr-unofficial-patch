@@ -107,10 +107,9 @@ struct SessionEnv {
     std::function<bool(const std::string& email, const std::string& note, std::string* code)> askCode;
 
     // Optional pre-launch Settings.xml update for store routes that do not pass /vr or /novr
-    // (Steam and Epic non-direct). Called before startRoute with the preferred VR mode (0 = auto,
-    // 2..6 = StereoscopicMode). If *observedVrMode receives 2..6 while preferredVrMode was 0, the
-    // session saves it in launcher.ini so alternating Flat -> VR restores it. Returning false stops Play.
-    std::function<bool(bool vr, int preferredVrMode, int* observedVrMode, std::string* error)> prepareLaunchMode;
+    // (Steam and Epic non-direct). Called before startRoute with the preferred VR mode (0 = Not Set,
+    // 2..6 = StereoscopicMode). Returning false stops Play with *error.
+    std::function<bool(bool vr, int preferredVrMode, std::string* error)> prepareLaunchMode;
 };
 
 class LauncherSession {
@@ -173,7 +172,7 @@ public:
     // The saved language code, or empty when the file names none (the window then uses Windows).
     const std::string& language() const { return language_; }
     void setLanguage(const std::string& code);
-    // Preferred VR StereoscopicMode (2..6), or 0 for auto (from Settings.xml).
+    // Preferred VR StereoscopicMode (2..6), or 0 for Not Set.
     int vrStereoMode() const { return vrStereoMode_; }
     void setVrStereoMode(int mode);
     // Saves the setting to launcher.ini. The window's checkbox; --close-after-start does not write it.
