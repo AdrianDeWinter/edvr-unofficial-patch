@@ -4038,6 +4038,10 @@ void testFlatQueryCutWiring() {
               "the coverage classification does not read the depth view or the shaders off the context itself");
         check(count(region, "coverageDepthResource(") == 3 && count(region, "coverageShadersMatch(") == 2,
               "(control: the delimited text is the classification, and asks through the policy)");
+        const size_t recipesPos = region.find("flatProjectionDrawRecipes(");
+        const size_t unassocPos = region.find("\"scene-projection-depth-unassociated\"");
+        check(recipesPos != std::string::npos && unassocPos != std::string::npos && recipesPos < unassocPos,
+              "scene-projection-depth-unassociated is gated by recipe classification so depthless non-projection HDR passes never fail the phase");
     }
     // The frame's end comes after the Present's flush, inside the same function.
     const size_t before = runtimeCpp.find("void flatRuntimeBeforePresent() {");

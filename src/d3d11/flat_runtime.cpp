@@ -7586,22 +7586,29 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
             // recipe branch this candidate draw took. Orthogonal to whether
             // qualifyProjection then accepted or locally/globally refused it.
             ++s.covSceneDraws;
+            bool fastCoverageHandled = false;
             if (!s.projectionFrames && flatCameraInjectUpstreamOwns()) {
                 // Upstream owns projection jitter: qualifyProjection would return nullptr and
-                // refuseDraw would bypass. Run only the live owned-depth & extent phase checks
-                // without constructing a 1 KB FlatProjectionRecipes struct per scene draw.
+                // refuseDraw would bypass. Check the live owned-depth & extent conditions first;
+                // fall through to full recipe classification whenever a phase refusal could fire,
+                // so depthless non-projection draws into phaseHdr (e.g. bloom-off HDR pass-through
+                // copy DEF19B03/DED87960 at SS < 1.0) keep the exact recipe gate and never falsely
+                // fail the phase with scene-projection-depth-unassociated.
                 FlatComputeInternalScope guard;
                 Ptr<ID3D11Resource> depthHold;
                 const void* depthResource = coverageDepthResource(ctx, k, depthHold);
                 const bool owned = depthResource && (depthResource == s.namedDepth || depthResource == s.phaseDepth.Get());
-                if (!owned && k.color == s.phaseHdr.Get()) failPhase(s, "scene-projection-depth-unassociated");
-                if (nonzeroPhase(s) && owned) {
-                    if (s.phaseDepth && depthResource != s.phaseDepth.Get()) failPhase(s, "scene-depth-changed");
-                    else if (k.width != s.phaseWidth || k.height != s.phaseHeight) failPhase(s, "render-extent-changed");
+                const bool unassociatedPhaseHdr = !owned && k.color == s.phaseHdr.Get();
+                const bool phaseMismatch = nonzeroPhase(s) && owned &&
+                    ((s.phaseDepth && depthResource != s.phaseDepth.Get()) ||
+                     k.width != s.phaseWidth || k.height != s.phaseHeight);
+                if (!unassociatedPhaseHdr && !phaseMismatch) {
+                    ++s.covExact;
+                    ++s.rows.legacyPrepSkipped;
+                    fastCoverageHandled = true;
                 }
-                ++s.covExact;
-                ++s.rows.legacyPrepSkipped;
-            } else {
+            }
+            if (!fastCoverageHandled) {
             if(s.projectionFrames && !deferredProjection)captureLocalProjection(s,k.vs,k.ps);
             const auto recipes=flatProjectionDrawRecipes(k.vs,k.ps);
             if(recipes.count) {
