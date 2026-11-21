@@ -36,6 +36,9 @@ inline UiLayerFamily flatUiFamilyOf(uint64_t vs, uint64_t ps, bool legacyGlass =
     f.legacyGlass = legacyGlass;
     f.targetKind = 1;
     UiLayerFamily out = uiLayerFamilyFor(f);
+    // The hologram family (kHoloGeneric) is named in flat for the target sphere alone: VS kHoloTargetSphere, whose two PSes uiLayerFamilyFor names exactly
+    // (EA02FAC2, E95634B0). The radar's pairs stay unnamed, so they are never asked, never counted, and stay in the scene. The rule is flatUiLayerTakesFamily's comment.
+    if (out == UiLayerFamily::kHoloGeneric && vs != kHoloTargetSphere) out = UiLayerFamily::kNone;
     if (out != UiLayerFamily::kNone) return out;
     f.targetKind = 2;
     return uiLayerFamilyFor(f);
@@ -302,13 +305,16 @@ struct FlatUiMapAaTally {
 // additive light, so a pair left in the scene for want of camera rows only stays as smeared as it was, and the layer sums with it; the refraction (820E) is one
 // draw. Neither is asked unless its own half of the shared layer is live (flatUiFamilyLive), so fix.ui_quality off leaves the weapons taken and the HUD alone.
 //
-// NOR THE HOLOGRAMS (2026-10-09 13:51 flight, the loading screen's ghost). A hologram is several pairs drawn together;
-// in flat only one of them (94D5C556DFD6D705 / 912477AEF6958379) carries camera rows the jitter can be read from, the
-// other six stay in the frame (no-camera-rows). Taking the one split one picture: that part unjittered over the
-// upscale, the rest jittered through it, and the taken part flipping in and out of the layer as the route treated or
-// refused each frame. A family is taken whole or not at all, so the holograms stay in the game's frame, as before the port.
+// THE HOLOGRAMS, taken in part (the one rule; flatUiFamilyOf names the family only for the pairs it takes). The target sphere (the orrery and the
+// target-ship hologram: VS 5559BD94B6852E83 with PS EA02FAC2BD6C643C or E95634B0F61D218F) is taken whole: both its pairs carry camera rows with exactly the frame's phase
+// (2026-11-20 observation, 30 s in the cockpit: 1800 draws a pair, every one the phase, none zero or other). Left in the scene it writes no depth and no motion slot, so its
+// pixels take deep space's camera motion and smear when the ship turns. The take also needs the screen-depth remap (ui_holo_remap.h, admitted by the shared layer's begin step
+// from the DXBC captured at creation); a draw it cannot admit is refused to stock there, never taken unremapped.
+// The radar's pairs (DF3503CD, 5453D19B, A2C2D551, 9B34C331, 9611A454, B932058F, the icon core F8D8A92E) stay in the game's frame: they carry no camera rows on any draw, so their
+// jitter cannot be read (2026-10-09 13:51 flight, the loading screen's ghost: one pair of a hologram taken and six left split one picture). The frosted base 0146ABCC53240479
+// is no part of the hologram: it is drawn with the station menu's base VS (C4B4B334), never with the sphere's, and no family names it.
 inline bool flatUiLayerTakesFamily(UiLayerFamily f) {
-    return f == UiLayerFamily::kHolo || f == UiLayerFamily::kFlightHud || f == UiLayerFamily::kSprite ||
+    return f == UiLayerFamily::kHolo || f == UiLayerFamily::kFlightHud || f == UiLayerFamily::kSprite || f == UiLayerFamily::kHoloGeneric ||
            f == UiLayerFamily::kMapCanvas || f == UiLayerFamily::kMapSprite || f == UiLayerFamily::kWeaponsFire || f == UiLayerFamily::kShieldRipple ||
            f == UiLayerFamily::kSupercruiseBars || f == UiLayerFamily::kSpaceDust || f == UiLayerFamily::kNormalSpaceDust ||
            f == UiLayerFamily::kOrbitLines || f == UiLayerFamily::kLegacyGlass;   // the glass is named only under the legacy look (flatUiFamilyFor's legacyGlass)

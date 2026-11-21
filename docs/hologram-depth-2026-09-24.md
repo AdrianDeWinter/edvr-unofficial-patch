@@ -11,6 +11,9 @@
   a UI-covered pixel. The rounds 8-10 detail (the triangles' pixel
   shader, the near-light pass cost, the filler depth, the HEATSINK
   cause) is in `## Round history` below.
+- **Flat (2026-11-21, journal at the end): FIXED in flight.** The orrery and
+  target hologram (VS 5559BD94) are taken into the flat UI layer with the
+  remap admitted; the radar (no camera rows) stays in the scene.
 - **Open:**
   - Which of the five radar-contact families paints the bars (listed
     from the draw ledger, not individually confirmed).
@@ -629,3 +632,53 @@ and three mutants caught. Saves 0.021 ms an eye, 0.043 a frame, when elements ar
 free otherwise). Hash re-pinned (0xB1BF8BF2F8942B44 -> 0x8F6D7BD410192BF8); the old text is
 tools\ui_holo_pass_test\near_light_reference.h. The full table of the day is the last entry of
 docs\ui-layer-2026-09-23.md.
+- 2026-11-20, flat: the orrery and target hologram smear when the ship
+  turns (Epic, flat, FSR 4 and FSR 3.1 alike; recording 2026-11-20 200114;
+  build aedaeaf7 plus a temporary A/B switch, log
+  `edvr_gfx_20261120_202712`). Both are drawn by VS 5559BD94B6852E83 (the
+  target sphere, PS EA02FAC2 / E95634B0): hiding vs:5559BD94 live removed
+  both, and nothing else in three hide groups did. With the ship flying
+  straight, head look alone does not smear them; turning the ship does.
+  The slot probe with the orrery at the view centre: no slot (code -1) and
+  scene depth about 1.25e-8, so the hologram writes neither depth nor a
+  slot, and its pixels take deep space's camera term, which carries the
+  ship's turn while the cockpit-fixed hologram does not move. Flat keeps
+  holograms in the scene on purpose (flat_ui_layer_math.h
+  flatUiLayerTakesFamily, "NOR THE HOLOGRAMS", 2026-10-09: only one of a
+  hologram's pairs carries camera rows in flat, so a take would split it),
+  and the hologram depth pass does not run in flat (EDVR GPU census:
+  hologram passes -), so this is not a regression of today's changes.
+  Ruled out: the keyed depthless decline (the shop glass fix), because the
+  smear stayed with `advanced.flat_keyed_depthless_decline = off` (canopy
+  substituted again; the switch was temporary and is removed); FSR 4
+  itself, because FSR 3.1 smears the same; the 2026-11-20 review commit
+  (aedaeaf7), whose render changes are FSR 4 key-failure handling, a VR
+  context release and the AA-off blend memo.
+- 2026-11-20, flat hologram observation (observe-only build on aedaeaf7,
+  flat_ui_layer.cpp flatUiLayerObserveHolo; log
+  `edvr_gfx_20261120_205453`, Sean in the cockpit with the orrery and a
+  target): over a 30 s window the target sphere's two pairs,
+  5559BD94B6852E83 with EA02FAC2BD6C643C and with E95634B0F61D218F (the
+  orrery and the target hologram), were asked 1800 times each, every one
+  with camera rows carrying exactly the frame's phase (phase=1800, zero=0,
+  other=0), none refused. The radar's pairs (DF3503CD, 5453D19B, A2C2D551,
+  9B34C331, 9611A454, B932058F) had no camera rows (norows on every draw),
+  as on 2026-10-09. So the target sphere can be taken whole into the flat
+  UI layer with the frame's phase cancelled, as VR does (ui_layer.cpp: the
+  layer takes the eye's jitter, and ui_holo_remap.h bakes it into the
+  screen-depth remap), and the radar, a separate hologram, stays in the
+  scene without splitting one. Next: take the target-sphere pairs in flat,
+  with the remap admitted.
+- 2026-11-21, flat: the orrery and target hologram fixed in flight (log
+  `edvr_gfx_20261121_035958`, build aedaeaf7 plus this change).
+  flatUiFamilyOf names kHoloGeneric in flat for the target sphere alone
+  (VS 5559BD94 with PS EA02FAC2 or E95634B0) and flatUiLayerTakesFamily
+  takes it; the radar's pairs stay unnamed and in the scene. In the
+  cockpit window: holograms asked=5044 decided=5042 taken=5042
+  refused-at-issue=0; "crisp holo remap: prepared PS EA02FAC2 ... admitted
+  VS 5559BD94 PS EA02FAC2 eye 0 input 1280x800 layer 2560x1600", relief
+  radius from cb1[120].z 0.6086. Sean: no smear when the ship turns. The
+  observe-only instrument is removed; the rule and its evidence are in
+  flat_ui_layer_math.h's comment. The temporary key
+  advanced.flat_keyed_depthless_decline (the A/B that ruled out the shop
+  glass fix) was never committed.
