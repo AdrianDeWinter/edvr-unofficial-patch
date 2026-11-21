@@ -13,6 +13,7 @@
 #include <string>
 
 namespace edvr {
+void frameSpanTakeWindow(double* meanMs, unsigned* n) noexcept;
 namespace {
 
 constexpr size_t kSections = static_cast<size_t>(GpuCensusSection::Count);
@@ -552,8 +553,14 @@ void logAndResetWindow(uint64_t now) {
     formatGapDetail(gapDetail, sizeof(gapDetail), gap);
     Log::get().note("%s", gapDetail);
     // The overlay's frame work span pair, on a line of its own (the main line is at the log's length; last, so the seed's line still follows the main line at once): frame_span_tile.h formats the field.
-    Log::get().note("EDVR GPU census, the overlay's GPU time: %s. All-time counts. With the application clock off, completed 0 means the pair never ran; "
-                    "skipped or invalid climbing with completed flat means it ran and was voided.", workSpanField);
+    double wsMean = 0.0;
+    unsigned wsWinN = 0;
+    frameSpanTakeWindow(&wsMean, &wsWinN);
+    char wsMeanBuf[48];
+    if (wsWinN) std::snprintf(wsMeanBuf, sizeof(wsMeanBuf), " 30s mean %.3f ms (n=%u).", wsMean, wsWinN);
+    else std::snprintf(wsMeanBuf, sizeof(wsMeanBuf), " 30s mean - (n=0).");
+    Log::get().note("EDVR GPU census, the overlay's GPU time: %s. All-time counts.%s With the application clock off, completed 0 means the pair never ran; "
+                    "skipped or invalid climbing with completed flat means it ran and was voided.", workSpanField, wsMeanBuf);
 
     for (auto& st : g_section) {
         st.baseMs = st.sampler.totals.ms;
@@ -653,6 +660,8 @@ GpuIntervals<kFrameSpanSlots, GpuQueryOwner::GpuCensus> g_frameSpan;
 std::atomic<bool> g_frameWorkOpenFlag{false};   // a pair is open (begun, not yet ended)
 uint64_t g_frameSpanCompleted = 0;   // pairs read back, all time
 double g_frameSpanLastMs = 0.0;      // the last pair read back
+double g_frameSpanWinMs = 0.0;       // 30 s window sum for mean frame work span
+unsigned g_frameSpanWinN = 0;        // 30 s window completed pairs
 
 namespace detail {
 std::atomic<bool> g_frameWorkArmed{false};
@@ -684,8 +693,17 @@ void frameSpanPoll(ID3D11DeviceContext* ctx) {
     g_frameSpan.poll(ctx);
     const unsigned got = g_frameSpan.totals.samples - before;
     if (got == 0) return;
-    g_frameSpanLastMs = (g_frameSpan.totals.ms - beforeMs) / static_cast<double>(got);
+    const double deltaMs = g_frameSpan.totals.ms - beforeMs;
+    g_frameSpanLastMs = deltaMs / static_cast<double>(got);
+    g_frameSpanWinMs += deltaMs;
+    g_frameSpanWinN += got;
     g_frameSpanCompleted += got;
+}
+void frameSpanTakeWindow(double* meanMs, unsigned* n) noexcept {
+    if (meanMs) *meanMs = g_frameSpanWinN ? g_frameSpanWinMs / static_cast<double>(g_frameSpanWinN) : 0.0;
+    if (n) *n = g_frameSpanWinN;
+    g_frameSpanWinMs = 0.0;
+    g_frameSpanWinN = 0;
 }
 
 void gpuCensusFrame(ID3D11DeviceContext* ctx) noexcept {
@@ -739,6 +757,8 @@ void gpuCensusNoteEyeRun() noexcept { ++g_windowEyeRuns; }
 void gpuCensusShutdown() noexcept {
     for (auto& st : g_section) { st.sampler.reset(); st.nullSampler.reset(); }
     g_frameSpan.reset();
+    g_frameSpanWinMs = 0.0;
+    g_frameSpanWinN = 0;
     resetSeedNotes();
 }
 

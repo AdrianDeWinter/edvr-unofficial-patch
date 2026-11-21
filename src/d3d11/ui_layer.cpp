@@ -1077,9 +1077,12 @@ int routeBegin(ID3D11DeviceContext* ctx, UiRouteStage stage, int eye, uint64_t s
     return idx;
 }
 
-// 1-in-16 sampled flat-profile crisp HUD GPU breakdown (glowFeed, tonemap re-issue, coverage, HDR clear).
+// 1-in-16 sampled flat-profile crisp HUD GPU breakdown (glowFeed, tonemap re-issue, coverage, HDR clear),
+// plus 1-in-32 per-frame redirected HDR HUD draw and colourless write-back GPU sums.
 struct FlatCrispGpu {
     static constexpr int kRing = 2;
+    static constexpr int kDrawSlots = 128;
+    static constexpr int kWbSlots = 64;
     GpuTimer glow[kRing], tone[kRing], cov[kRing], clr[kRing];
     bool glowBusy[kRing] = {}, toneBusy[kRing] = {}, covBusy[kRing] = {}, clrBusy[kRing] = {};
     int glowOpen = -1, toneOpen = -1, covOpen = -1, clrOpen = -1;
@@ -1087,6 +1090,63 @@ struct FlatCrispGpu {
     uint32_t glowN = 0, toneN = 0, covN = 0, clrN = 0;
     double glowMs = 0.0, toneMs = 0.0, covMs = 0.0, clrMs = 0.0;
     uint64_t deferredCov = 0, materializedCov = 0;
+    // 1-in-32 frame-level HDR HUD draws & write-backs timing (1 sampled frame in flight at a time).
+    GpuTimer drawTimer[kDrawSlots], wbTimer[kWbSlots];
+    bool drawBusy[kDrawSlots] = {}, wbBusy[kWbSlots] = {};
+    int drawOpen = -1, wbOpen = -1;
+    int drawUsed = 0, wbUsed = 0;
+    int drawPending = 0, wbPending = 0;
+    uint64_t drawSampleSeq = 0;
+    uint32_t drawCadence = 0;
+    double drawFrameMs = 0.0, wbFrameMs = 0.0;
+    uint32_t drawFrameOk = 0, wbFrameOk = 0;
+    uint32_t hudDrawFrames = 0, hudDrawTotal = 0, wbFrames = 0, wbTotal = 0;
+    double hudDrawMs = 0.0, wbMs = 0.0;
+    void maybeArmDrawFrame(uint64_t seq) {
+        if (!runtimeFlatProfile() || !seq || drawPending > 0 || wbPending > 0 || drawOpen >= 0 || wbOpen >= 0) return;
+        if (drawSampleSeq == seq) return;
+        if ((drawCadence++ & 31u) != 0) return;
+        drawSampleSeq = seq;
+        drawUsed = wbUsed = 0;
+        drawFrameMs = wbFrameMs = 0.0;
+        drawFrameOk = wbFrameOk = 0;
+    }
+    void beginDraw(ID3D11DeviceContext* ctx, uint64_t seq) {
+        if (!ctx || !runtimeFlatProfile() || seq != drawSampleSeq || drawOpen >= 0 || drawUsed >= kDrawSlots) return;
+        Ptr<ID3D11Device> dev;
+        ctx->GetDevice(&dev);
+        if (!dev) return;
+        const int idx = drawUsed;
+        if (drawTimer[idx].begin(dev.Get(), ctx)) {
+            drawBusy[idx] = true;
+            drawOpen = idx;
+            ++drawUsed;
+            ++drawPending;
+        }
+    }
+    void endDraw(ID3D11DeviceContext* ctx) {
+        if (drawOpen < 0 || !ctx) return;
+        drawTimer[drawOpen].end(ctx);
+        drawOpen = -1;
+    }
+    void beginWb(ID3D11DeviceContext* ctx, uint64_t seq) {
+        if (!ctx || !runtimeFlatProfile() || seq != drawSampleSeq || wbOpen >= 0 || wbUsed >= kWbSlots) return;
+        Ptr<ID3D11Device> dev;
+        ctx->GetDevice(&dev);
+        if (!dev) return;
+        const int idx = wbUsed;
+        if (wbTimer[idx].begin(dev.Get(), ctx)) {
+            wbBusy[idx] = true;
+            wbOpen = idx;
+            ++wbUsed;
+            ++wbPending;
+        }
+    }
+    void endWb(ID3D11DeviceContext* ctx) {
+        if (wbOpen < 0 || !ctx) return;
+        wbTimer[wbOpen].end(ctx);
+        wbOpen = -1;
+    }
     static int beginOne(ID3D11DeviceContext* ctx, GpuTimer* ring, bool* busy, int& open, uint32_t& cadence) {
         if (!ctx || !runtimeFlatProfile() || open >= 0) return -1;
         if ((cadence++ & 15u) != 0) return -1;
@@ -1120,13 +1180,51 @@ struct FlatCrispGpu {
         pollOne(ctx, tone, toneBusy, toneOpen, toneN, toneMs);
         pollOne(ctx, cov, covBusy, covOpen, covN, covMs);
         pollOne(ctx, clr, clrBusy, clrOpen, clrN, clrMs);
+        if (!ctx) return;
+        double ms = 0.0;
+        if (drawPending > 0) {
+            for (int i = 0; i < drawUsed; ++i) {
+                if (!drawBusy[i] || i == drawOpen) continue;
+                const GpuTimerPoll r = drawTimer[i].poll(ctx, ms);
+                if (r == GpuTimerPoll::Ready) { drawFrameMs += ms; ++drawFrameOk; drawBusy[i] = false; --drawPending; }
+                else if (r == GpuTimerPoll::Invalid) { drawBusy[i] = false; --drawPending; }
+            }
+            if (drawPending == 0 && drawOpen < 0 && drawFrameOk > 0) {
+                hudDrawMs += drawFrameMs;
+                hudDrawTotal += drawFrameOk;
+                ++hudDrawFrames;
+                drawFrameMs = 0.0;
+                drawFrameOk = 0;
+            }
+        }
+        if (wbPending > 0) {
+            for (int i = 0; i < wbUsed; ++i) {
+                if (!wbBusy[i] || i == wbOpen) continue;
+                const GpuTimerPoll r = wbTimer[i].poll(ctx, ms);
+                if (r == GpuTimerPoll::Ready) { wbFrameMs += ms; ++wbFrameOk; wbBusy[i] = false; --wbPending; }
+                else if (r == GpuTimerPoll::Invalid) { wbBusy[i] = false; --wbPending; }
+            }
+            if (wbPending == 0 && wbOpen < 0 && wbFrameOk > 0) {
+                wbMs += wbFrameMs;
+                wbTotal += wbFrameOk;
+                ++wbFrames;
+                wbFrameMs = 0.0;
+                wbFrameOk = 0;
+            }
+        }
     }
     void reset(ID3D11DeviceContext* ctx) {
         for (int i = 0; i < kRing; ++i) {
             glow[i].reset(ctx); tone[i].reset(ctx); cov[i].reset(ctx); clr[i].reset(ctx);
             glowBusy[i] = toneBusy[i] = covBusy[i] = clrBusy[i] = false;
         }
-        glowOpen = toneOpen = covOpen = clrOpen = -1;
+        for (int i = 0; i < kDrawSlots; ++i) { drawTimer[i].reset(ctx); drawBusy[i] = false; }
+        for (int i = 0; i < kWbSlots; ++i) { wbTimer[i].reset(ctx); wbBusy[i] = false; }
+        glowOpen = toneOpen = covOpen = clrOpen = drawOpen = wbOpen = -1;
+        drawUsed = wbUsed = drawPending = wbPending = 0;
+        drawSampleSeq = 0;
+        drawFrameMs = wbFrameMs = 0.0;
+        drawFrameOk = wbFrameOk = 0;
     }
 } g_flatCrispGpu;
 
@@ -2899,6 +2997,7 @@ bool beginInner(ID3D11DeviceContext* ctx, int which) {
             }
         }
         const int timer = routeBegin(ctx, UiRouteStage::kHdrClear, g_draw.eye, g_draw.seq);
+        g_flatCrispGpu.maybeArmDrawFrame(g_draw.seq);
         FlatCrispGpu::beginOne(ctx, g_flatCrispGpu.clr, g_flatCrispGpu.clrBusy, g_flatCrispGpu.clrOpen, g_flatCrispGpu.clrCadence);
         vScreenClearRenderTargetViewRaw(ctx, e.hdrRtv.Get(), kUiLayerClear);
         FlatCrispGpu::endOne(ctx, g_flatCrispGpu.clr, g_flatCrispGpu.clrOpen);
@@ -3223,6 +3322,7 @@ bool beginInner(ID3D11DeviceContext* ctx, int which) {
         } else if (g_draw.hdr) {
             ++e.hdrDraws;
             ++g_win.hdrRedirected;
+            g_flatCrispGpu.beginDraw(ctx, g_draw.seq);
         } else {
             ++e.draws;
             e.chainOpen = false;  // the UI has started: a pass over the eye no longer carries its identity
@@ -4344,18 +4444,28 @@ void logDsvMemo() {
         static_cast<unsigned long long>(g_win.dsvMemoHits), static_cast<unsigned long long>(g_win.dsvMemoMisses));
     if (runtimeFlatProfile() &&
         (g_flatCrispGpu.glowN || g_flatCrispGpu.toneN || g_flatCrispGpu.covN || g_flatCrispGpu.clrN ||
+         g_flatCrispGpu.hudDrawFrames || g_flatCrispGpu.wbFrames ||
          g_flatCrispGpu.deferredCov || g_flatCrispGpu.materializedCov)) {
         const double glowAvg = g_flatCrispGpu.glowN ? g_flatCrispGpu.glowMs / g_flatCrispGpu.glowN : 0.0;
         const double toneAvg = g_flatCrispGpu.toneN ? g_flatCrispGpu.toneMs / g_flatCrispGpu.toneN : 0.0;
         const double covAvg = g_flatCrispGpu.covN ? g_flatCrispGpu.covMs / g_flatCrispGpu.covN : 0.0;
         const double clrAvg = g_flatCrispGpu.clrN ? g_flatCrispGpu.clrMs / g_flatCrispGpu.clrN : 0.0;
+        const double hudDrawAvg = g_flatCrispGpu.hudDrawFrames ? g_flatCrispGpu.hudDrawMs / g_flatCrispGpu.hudDrawFrames : 0.0;
+        const double hudDrawPerFr = g_flatCrispGpu.hudDrawFrames ? static_cast<double>(g_flatCrispGpu.hudDrawTotal) / g_flatCrispGpu.hudDrawFrames : 0.0;
+        const double wbAvg = g_flatCrispGpu.wbFrames ? g_flatCrispGpu.wbMs / g_flatCrispGpu.wbFrames : 0.0;
+        const double wbPerFr = g_flatCrispGpu.wbFrames ? static_cast<double>(g_flatCrispGpu.wbTotal) / g_flatCrispGpu.wbFrames : 0.0;
         Log::get().note(
-            "flat crisp hud gpu 30s: samples=%u/%u/%u/%u glow=%.3f tone=%.3f cov=%.3f clr=%.3f ms (deferred-cov=%llu materialized=%llu)",
-            g_flatCrispGpu.glowN, g_flatCrispGpu.toneN, g_flatCrispGpu.covN, g_flatCrispGpu.clrN, glowAvg, toneAvg, covAvg, clrAvg,
+            "flat crisp hud gpu 30s: samples=%u/%u/%u/%u glow=%.3f tone=%.3f cov=%.3f clr=%.3f hud-draws=%.3f (%.1f/fr n=%u) wb=%.3f (%.1f/fr n=%u) ms (deferred-cov=%llu materialized=%llu)",
+            g_flatCrispGpu.glowN, g_flatCrispGpu.toneN, g_flatCrispGpu.covN, g_flatCrispGpu.clrN,
+            glowAvg, toneAvg, covAvg, clrAvg,
+            hudDrawAvg, hudDrawPerFr, g_flatCrispGpu.hudDrawFrames,
+            wbAvg, wbPerFr, g_flatCrispGpu.wbFrames,
             static_cast<unsigned long long>(g_flatCrispGpu.deferredCov),
             static_cast<unsigned long long>(g_flatCrispGpu.materializedCov));
         g_flatCrispGpu.glowN = g_flatCrispGpu.toneN = g_flatCrispGpu.covN = g_flatCrispGpu.clrN = 0;
         g_flatCrispGpu.glowMs = g_flatCrispGpu.toneMs = g_flatCrispGpu.covMs = g_flatCrispGpu.clrMs = 0.0;
+        g_flatCrispGpu.hudDrawFrames = g_flatCrispGpu.hudDrawTotal = g_flatCrispGpu.wbFrames = g_flatCrispGpu.wbTotal = 0;
+        g_flatCrispGpu.hudDrawMs = g_flatCrispGpu.wbMs = 0.0;
         g_flatCrispGpu.deferredCov = g_flatCrispGpu.materializedCov = 0;
     }
 }
@@ -5367,6 +5477,7 @@ bool uiLayerBegin(ID3D11DeviceContext* ctx) { return beginGuarded(ctx, 0); }
 
 void uiLayerEnd(ID3D11DeviceContext* ctx) {
     if (!g_draw.active) return;
+    g_flatCrispGpu.endDraw(ctx);
     g_draw.drawRoute.end([&](int slot) { routeEnd(ctx, slot); });
     if (g_draw.glassCensus) {
         g_draw.glassCensus = false;
@@ -5457,11 +5568,13 @@ bool uiLayerWriteBackBegin(ID3D11DeviceContext* ctx) {
     ++g_win.writeBacks;
     // The colourless re-issue is the layer's own work: timed to its End.
     g_draw.wbRouteSlot = routeBegin(ctx, UiRouteStage::kWriteBack, g_draw.eye, g_draw.seq);
+    g_flatCrispGpu.beginWb(ctx, g_draw.seq);
     return true;
 }
 
 void uiLayerWriteBackEnd(ID3D11DeviceContext* ctx) {
     if (!g_draw.wbActive) return;
+    g_flatCrispGpu.endWb(ctx);
     routeEnd(ctx, g_draw.wbRouteSlot);
     g_draw.wbRouteSlot = -1;
     guarded("uiLayer.writeBackEnd", [&] {

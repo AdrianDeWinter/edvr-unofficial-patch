@@ -789,6 +789,18 @@ struct State {
     uint32_t gpuStageSamples[kResolveStageCount] = {};
     double gpuStageSumMs[kResolveStageCount] = {};
     uint64_t gpuStageLastLogMs = 0;
+    // 1-in-16 sampled pre-resolve / post-resolve GPU vs CPU split (discriminates CPU-induced GPU bubble vs GPU work).
+    static constexpr int kSplitRing = 2;
+    GpuTimer gpuSplitPre[kSplitRing], gpuSplitPost[kSplitRing];
+    bool gpuSplitPreBusy[kSplitRing] = {}, gpuSplitPostBusy[kSplitRing] = {};
+    bool gpuSplitPreDiscard[kSplitRing] = {};
+    int gpuSplitPreSlot = -1, gpuSplitPostSlot = -1, gpuSplitArmedPost = -1;
+    uint32_t gpuSplitCadence = 0;
+    uint32_t gpuSplitPreSamples = 0, gpuSplitPostSamples = 0;
+    double gpuSplitPreSumMs = 0.0, gpuSplitPostSumMs = 0.0;
+    int64_t splitCpuDrawStart = 0, splitCpuResEnd = 0;
+    uint32_t splitCpuPreSamples = 0, splitCpuPostSamples = 0;
+    double splitCpuPreSumMs = 0.0, splitCpuPostSumMs = 0.0;
     bool gpuFrameTried = false;                   // this frame already tried to open its span
     bool censusHooked = false;                    // the resolver's span hooks are installed
     bool crumbGateRead = false;                   // the HDR route's breadcrumbs gate has been set from the DXMT markers (once, first)
@@ -3356,8 +3368,35 @@ bool depthView(ID3D11Texture2D* depth) {
 // A GpuTimer stays owned until its sample is read, a few frames on; with none free the frame
 // is skipped and counted. Nested spans borrow the frame's open disjoint scope, so a resolver
 // span costs one timestamp pair.
+inline int64_t flatSplitQpcNow() noexcept {
+    LARGE_INTEGER t{};
+    QueryPerformanceCounter(&t);
+    return t.QuadPart;
+}
+inline double flatSplitQpcMs(int64_t dt) noexcept {
+    static const double kScale = [] {
+        LARGE_INTEGER f{};
+        QueryPerformanceFrequency(&f);
+        return f.QuadPart > 0 ? 1000.0 / static_cast<double>(f.QuadPart) : 0.0;
+    }();
+    return static_cast<double>(dt) * kScale;
+}
 void gpuFrameOpen(State& s, ID3D11DeviceContext* ctx) {
     s.gpuFrameTried = true;
+    s.splitCpuDrawStart = flatSplitQpcNow();
+    s.splitCpuResEnd = 0;
+    if (s.gpuSplitPreSlot < 0 && s.gpuSplitPostSlot < 0 && s.gpuSplitArmedPost < 0 &&
+        (s.gpuSplitCadence++ & 15u) == 0) {
+        for (int r = 0; r < State::kSplitRing; ++r) {
+            if (s.gpuSplitPreBusy[r] || s.gpuSplitPostBusy[r]) continue;
+            if (s.gpuSplitPre[r].begin(s.device.Get(), ctx)) {
+                s.gpuSplitPreBusy[r] = true;
+                s.gpuSplitPreDiscard[r] = false;
+                s.gpuSplitPreSlot = r;
+            }
+            break;
+        }
+    }
     for (int i = 0; i < State::kGpuFrameTimers; ++i) {
         if (s.gpuFrameBusy[i]) continue;
         if (s.gpuFrameTimer[i].begin(s.device.Get(), ctx)) { s.gpuFrameBusy[i] = true; s.gpuFrameOpen = i; return; }
@@ -3366,8 +3405,25 @@ void gpuFrameOpen(State& s, ID3D11DeviceContext* ctx) {
     s.census.noteGpuSkipped();
 }
 void gpuFrameClose(State& s) {
+    ID3D11DeviceContext* ctx = s.context.Get();
+    if (s.splitCpuResEnd != 0) {
+        const int64_t dt = flatSplitQpcNow() - s.splitCpuResEnd;
+        if (dt >= 0) { s.splitCpuPostSumMs += flatSplitQpcMs(dt); ++s.splitCpuPostSamples; }
+        s.splitCpuResEnd = 0;
+    }
+    s.splitCpuDrawStart = 0;
+    if (s.gpuSplitPreSlot >= 0) {
+        s.gpuSplitPre[s.gpuSplitPreSlot].end(ctx);
+        s.gpuSplitPreDiscard[s.gpuSplitPreSlot] = true;  // frame did not resolve; drop pre sample
+        s.gpuSplitPreSlot = -1;
+    }
+    if (s.gpuSplitPostSlot >= 0) {
+        s.gpuSplitPost[s.gpuSplitPostSlot].end(ctx);
+        s.gpuSplitPostSlot = -1;
+    }
+    s.gpuSplitArmedPost = -1;
     if (s.gpuFrameOpen < 0) return;
-    s.gpuFrameTimer[s.gpuFrameOpen].end(s.context.Get());
+    s.gpuFrameTimer[s.gpuFrameOpen].end(ctx);
     s.gpuFrameOpen = -1;
 }
 void gpuPoll(State& s) {
@@ -3405,18 +3461,62 @@ void gpuPoll(State& s) {
             }
         }
     }
+    for (int r = 0; r < State::kSplitRing; ++r) {
+        if (s.gpuSplitPreBusy[r] && r != s.gpuSplitPreSlot) {
+            switch (s.gpuSplitPre[r].poll(ctx, ms)) {
+            case GpuTimerPoll::Ready:
+                if (!s.gpuSplitPreDiscard[r]) { ++s.gpuSplitPreSamples; s.gpuSplitPreSumMs += ms; }
+                s.gpuSplitPreBusy[r] = false;
+                s.gpuSplitPreDiscard[r] = false;
+                break;
+            case GpuTimerPoll::Invalid:
+                s.gpuSplitPreBusy[r] = false;
+                s.gpuSplitPreDiscard[r] = false;
+                break;
+            case GpuTimerPoll::Pending: break;
+            }
+        }
+        if (s.gpuSplitPostBusy[r] && r != s.gpuSplitPostSlot) {
+            switch (s.gpuSplitPost[r].poll(ctx, ms)) {
+            case GpuTimerPoll::Ready:
+                ++s.gpuSplitPostSamples;
+                s.gpuSplitPostSumMs += ms;
+                s.gpuSplitPostBusy[r] = false;
+                break;
+            case GpuTimerPoll::Invalid:
+                s.gpuSplitPostBusy[r] = false;
+                break;
+            case GpuTimerPoll::Pending: break;
+            }
+        }
+    }
     const uint64_t nowMs = GetTickCount64();
     if (!s.gpuStageLastLogMs) s.gpuStageLastLogMs = nowMs;
     if (nowMs - s.gpuStageLastLogMs >= 30000ull) {
         s.gpuStageLastLogMs = nowMs;
+        double resSum = 0.0;
         if (s.gpuStageSamples[0] || s.gpuStageSamples[1] || s.gpuStageSamples[2] || s.gpuStageSamples[3]) {
             const auto avg = [&](int k) { return s.gpuStageSamples[k] ? s.gpuStageSumMs[k] / s.gpuStageSamples[k] : 0.0; };
             const double c = avg(0), p = avg(1), b = avg(2), f = avg(3);
+            resSum = c + p + b + f;
             Log::get().note("flat resolve gpu 30s: samples=%u/%u/%u/%u copy=%.3f prep=%.3f backend=%.3f finish=%.3f sum=%.3f ms (mode=%s %ux%u->%ux%u)",
                 s.gpuStageSamples[0], s.gpuStageSamples[1], s.gpuStageSamples[2], s.gpuStageSamples[3],
-                c, p, b, f, c + p + b + f, flatMonoResolveModeName(s.engine),
+                c, p, b, f, resSum, flatMonoResolveModeName(s.engine),
                 s.prefix.width, s.prefix.height, s.hdr.outputWidth, s.hdr.outputHeight);
             for (int k = 0; k < State::kResolveStageCount; ++k) { s.gpuStageSamples[k] = 0; s.gpuStageSumMs[k] = 0.0; }
+        }
+        if (s.gpuSplitPreSamples || s.gpuSplitPostSamples || s.splitCpuPreSamples || s.splitCpuPostSamples) {
+            const double gPre = s.gpuSplitPreSamples ? s.gpuSplitPreSumMs / s.gpuSplitPreSamples : 0.0;
+            const double gPost = s.gpuSplitPostSamples ? s.gpuSplitPostSumMs / s.gpuSplitPostSamples : 0.0;
+            const double cPre = s.splitCpuPreSamples ? s.splitCpuPreSumMs / s.splitCpuPreSamples : 0.0;
+            const double cPost = s.splitCpuPostSamples ? s.splitCpuPostSumMs / s.splitCpuPostSamples : 0.0;
+            Log::get().note("flat frame split 30s: samples=%u/%u gpu-pre=%.3f gpu-res=%.3f gpu-post=%.3f sum=%.3f ms | cpu-pre=%.3f cpu-post=%.3f ms (cpu-n=%u/%u)",
+                s.gpuSplitPreSamples, s.gpuSplitPostSamples, gPre, resSum, gPost, gPre + resSum + gPost,
+                cPre, cPost, s.splitCpuPreSamples, s.splitCpuPostSamples);
+            s.gpuSplitPreSamples = s.gpuSplitPostSamples = 0;
+            s.gpuSplitPreSumMs = s.gpuSplitPostSumMs = 0.0;
+            s.splitCpuPreSamples = s.splitCpuPostSamples = 0;
+            s.splitCpuPreSumMs = s.splitCpuPostSumMs = 0.0;
         }
     }
 }
@@ -3432,12 +3532,28 @@ void gpuReset(State& s) {
     for (auto& b : s.gpuResolveBusy) b = false;
     for (int r = 0; r < State::kResolveStageRing; ++r)
         for (int k = 0; k < State::kResolveStageCount; ++k) { s.gpuStageTimer[r][k].reset(ctx); s.gpuStageBusy[r][k] = false; }
+    for (int r = 0; r < State::kSplitRing; ++r) {
+        s.gpuSplitPre[r].reset(ctx); s.gpuSplitPost[r].reset(ctx);
+        s.gpuSplitPreBusy[r] = s.gpuSplitPostBusy[r] = s.gpuSplitPreDiscard[r] = false;
+    }
     s.gpuFrameOpen = s.gpuResolveOpen = s.gpuStageSlot = s.gpuStageOpen = -1;
+    s.gpuSplitPreSlot = s.gpuSplitPostSlot = s.gpuSplitArmedPost = -1;
+    s.splitCpuDrawStart = s.splitCpuResEnd = 0;
 }
 // The resolver's hooks (flat_mono_resolve.h): a timestamp pair around its own dispatches and
 // backend call. Called on the thread that resolves, inside the treatment scope.
 void resolveSpanBegin(ID3D11DeviceContext* ctx) noexcept {
     auto& s = state();
+    if (s.splitCpuDrawStart != 0) {
+        const int64_t dt = flatSplitQpcNow() - s.splitCpuDrawStart;
+        if (dt >= 0) { s.splitCpuPreSumMs += flatSplitQpcMs(dt); ++s.splitCpuPreSamples; }
+        s.splitCpuDrawStart = 0;
+    }
+    if (s.gpuSplitPreSlot >= 0) {
+        s.gpuSplitPre[s.gpuSplitPreSlot].end(ctx);
+        s.gpuSplitArmedPost = s.gpuSplitPreSlot;
+        s.gpuSplitPreSlot = -1;
+    }
     if (s.gpuResolveOpen >= 0) return;
     for (int i = 0; i < State::kGpuResolveTimers; ++i) {
         if (s.gpuResolveBusy[i]) continue;
@@ -3447,9 +3563,19 @@ void resolveSpanBegin(ID3D11DeviceContext* ctx) noexcept {
 }
 void resolveSpanEnd(ID3D11DeviceContext* ctx) noexcept {
     auto& s = state();
-    if (s.gpuResolveOpen < 0) return;
-    s.gpuResolveTimer[s.gpuResolveOpen].end(ctx);
-    s.gpuResolveOpen = -1;
+    if (s.gpuResolveOpen >= 0) {
+        s.gpuResolveTimer[s.gpuResolveOpen].end(ctx);
+        s.gpuResolveOpen = -1;
+    }
+    s.splitCpuResEnd = flatSplitQpcNow();
+    if (s.gpuSplitArmedPost >= 0) {
+        const int r = s.gpuSplitArmedPost;
+        s.gpuSplitArmedPost = -1;
+        if (!s.gpuSplitPostBusy[r] && s.gpuSplitPost[r].begin(s.device.Get(), ctx)) {
+            s.gpuSplitPostBusy[r] = true;
+            s.gpuSplitPostSlot = r;
+        }
+    }
 }
 void resolveStageHook(ID3D11DeviceContext* ctx, uint32_t stage) noexcept {
     auto& s = state();
