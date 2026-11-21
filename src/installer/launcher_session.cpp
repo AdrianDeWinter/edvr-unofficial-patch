@@ -361,14 +361,32 @@ void LauncherSession::startRouteAndWatch(const std::wstring& source, const std::
                                          const std::string& startLine, bool direct) {
     const LaunchRoute route = routeFor(source, gameDir, vr, nullptr, direct);
     std::string error;
+    if (elevated) {
+        playLine_ = elevatedRefusal();
+        changed();
+        return;
+    }
+    if (route.kind == RouteKind::None) {
+        playLine_ = route.why.empty() ? "No launch route for this install." : route.why;
+        changed();
+        return;
+    }
+    if (!route.carriesMode && env_.prepareLaunchMode) {
+        if (!env_.prepareLaunchMode(vr, &error)) {
+            playLine_ = error.empty() ? "Elite's Settings.xml could not be updated for this launch." : error;
+            changed();
+            return;
+        }
+    }
     if (!startRoute(route, ops, elevated, &error)) {
         playLine_ = error;
         changed();
         return;
     }
-    // Every start remembers its install. The Frontier route is the only one that carried a choice of
-    // mode, so only its mode is remembered.
-    rememberPlay(gameDir, route.carriesMode ? (vr ? "vr" : "flat") : nullptr);
+    // Every start remembers its install. Mode is remembered whenever the route carries a mode flag
+    // or Settings.xml was updated for the chosen mode.
+    const bool modeApplied = route.carriesMode || static_cast<bool>(env_.prepareLaunchMode);
+    rememberPlay(gameDir, modeApplied ? (vr ? "vr" : "flat") : nullptr);
     playing_ = true;
     gameStarted_ = false;
     playLine_ = startLine;

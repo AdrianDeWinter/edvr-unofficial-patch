@@ -2,11 +2,15 @@
 
 #include <windows.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <tlhelp32.h>
 
 #include <algorithm>
 #include <cwctype>
 
+#include "../common/elite_graphics_folder.h"
+#include "../common/iniedit.h"
+#include "../common/stereo_mode.h"
 #include "detect.h"
 #include "direct_launch.h"
 #include "logbundle.h"
@@ -430,6 +434,81 @@ bool pidsNamed(const std::wstring& exeName, std::vector<unsigned long>* pids) {
     }
     CloseHandle(snapshot);
     return ok;
+}
+
+std::wstring defaultEliteSettingsXmlPath() {
+    PWSTR path = nullptr;
+    std::wstring base;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &path)) && path) {
+        base = path;
+        CoTaskMemFree(path);
+    } else {
+        wchar_t env[MAX_PATH]{};
+        if (GetEnvironmentVariableW(L"LOCALAPPDATA", env, MAX_PATH)) base = env;
+    }
+    const std::wstring folder = edvr::eliteGraphicsFolderUnder(base);
+    return folder.empty() ? std::wstring() : joinPath(folder, L"Settings.xml");
+}
+
+bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std::wstring& backupDir, bool vr,
+                                 std::string* error, const std::wstring& gameExeName) {
+    auto fail = [&](const std::string& text) {
+        if (error) *error = text;
+        return false;
+    };
+    if (!gameExeName.empty()) {
+        std::vector<unsigned long> running;
+        if (!pidsNamed(gameExeName, &running))
+            return fail("Windows would not list the running programs, so Settings.xml was not changed.");
+        if (!running.empty())
+            return fail("Elite is already running, so Settings.xml was not changed.");
+    }
+    if (settingsXmlPath.empty() || !fileExists(settingsXmlPath)) {
+        if (vr) {
+            return fail("Elite's Settings.xml was not found, so no headset 3D mode is recorded. "
+                        "Turn 3D on in Elite's graphics options once, or use Play flat.");
+        }
+        return true;
+    }
+    std::string xml;
+    std::string readErr;
+    if (!readFileBytes(settingsXmlPath, &xml, 4ull << 20, &readErr))
+        return fail("Elite's Settings.xml could not be read, so nothing was changed.");
+
+    std::string updated;
+    int existingMode = -1;
+    const edvr::StereoWriteStatus status = edvr::rewriteStereoscopicMode(xml, vr, &updated, &existingMode);
+    switch (status) {
+        case edvr::StereoWriteStatus::Unchanged:
+            return true;
+        case edvr::StereoWriteStatus::TagAbsent:
+            if (vr) {
+                return fail("Elite's Settings.xml has no recorded headset 3D mode. "
+                            "Turn 3D on in Elite's graphics options once, or use Play flat.");
+            }
+            return true;
+        case edvr::StereoWriteStatus::NoHeadsetMode:
+            return fail("Elite's Settings.xml is set to flat (mode " + std::to_string(existingMode) +
+                        "), with no headset mode recorded. Turn 3D on in Elite's graphics options once, or use Play flat.");
+        case edvr::StereoWriteStatus::ParseFailed:
+            return fail("Elite's Settings.xml could not be parsed, so nothing was changed.");
+        case edvr::StereoWriteStatus::Updated:
+            break;
+    }
+
+    if (backupDir.empty() || !createDirectories(backupDir))
+        return fail("Could not create the launcher backup folder for Settings.xml; nothing was changed.");
+    const std::wstring backupPath = joinPath(backupDir, L"Settings.xml.bak");
+    if (fileExists(backupPath)) SetFileAttributesW(backupPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+    if (!CopyFileW(settingsXmlPath.c_str(), backupPath.c_str(), FALSE))
+        return fail("Could not back up Settings.xml before changing it; nothing was changed.");
+
+    const DWORD attrs = GetFileAttributesW(settingsXmlPath.c_str());
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY))
+        SetFileAttributesW(settingsXmlPath.c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
+    if (!writeFileAtomic(settingsXmlPath, updated))
+        return fail("Could not write Elite's Settings.xml.");
+    return true;
 }
 
 WatchOutcome watchLaunch(const WatchNames& names, const WatchTiming& timing, const std::atomic<bool>* cancel,

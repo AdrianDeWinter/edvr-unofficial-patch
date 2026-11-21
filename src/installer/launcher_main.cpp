@@ -383,6 +383,10 @@ int headlessPlay(const AppArgs& args, Output& out) {
     env.post = [&queue](std::function<void()> job) { queue.push(std::move(job)); };
     // The window's close: here it ends the wait. The lines are printed after each job, not from a callback.
     env.closeWindow = [&closeRequested]() { closeRequested = true; };
+    const std::wstring settingsBackupDir = joinPath(env.roots.launcherDir(), L"backups");
+    env.prepareLaunchMode = [settingsBackupDir](bool vr, std::string* error) {
+        return prepareSettingsXmlForLaunch(defaultEliteSettingsXmlPath(), settingsBackupDir, vr, error);
+    };
     // No askLogin or askCode: a headless start never asks. A Frontier-store direct launch without a stored
     // login stops with a line saying so, and the install's own route is not taken by surprise.
     // No start(): there is no payload to load and no update to check here.

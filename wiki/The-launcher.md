@@ -32,7 +32,7 @@ From a script, Steam Launch Options, or another launcher such as `min-ed-launche
 "%LOCALAPPDATA%\EDVR\launcher\ed-up-launcher.exe" --update --install --dir "C:\Path\To\Products\elite-dangerous-odyssey-64"
 ```
 
-Frontier's launcher is the one that takes a headset or monitor choice from ED-UP. Through Steam or Epic, the game starts in the mode it is already set to. Steam's own VR and non-VR options still apply. See [Playing](Playing.md).
+Every store offers **Play VR** and **Play flat** (filtered to the modes installed in that folder). Frontier's launcher takes `/vr` or `/novr` on its command line. For Steam and Epic without direct launch, the launcher updates `<StereoscopicMode>` in Elite's `Settings.xml` before opening Steam or Epic (backing up `Settings.xml` first): **Play flat** writes `0`, while **Play VR** keeps your existing headset mode (`2`–`6`) unchanged and stops if no headset mode is recorded yet. See [Playing](Playing.md).
 
 An Epic copy is handed to the Epic launcher. Play does not ask for a Frontier password for that install.
 

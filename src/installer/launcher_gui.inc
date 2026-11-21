@@ -192,9 +192,11 @@ void updateLauncherControls() {
         showSteamFrontier = route.kind == RouteKind::Steam && directOn;
         if (lg.direct)
             SetWindowTextW(lg.direct, epic ? tr(L"Skip the Epic launcher") : tr(L"Start Elite directly (no Frontier launcher)"));
-        if (route.kind == RouteKind::Frontier || directOn) {
+        if (route.kind != RouteKind::None) {
             // A button only for a mode this folder has installed: a VR-only install gets no flat button, and the reverse.
             // An empty scope (no install the survey can name) keeps both, as before.
+            // Every valid route (Frontier, Steam, Epic, direct or store) offers Play VR / Play flat;
+            // non-direct Steam/Epic write StereoscopicMode in Settings.xml before opening the store URI.
             const std::string scope = installedScope(g.survey);
             const bool hasVr = scope.empty() || scope == "both" || scope == "vr";
             const bool hasFlat = scope.empty() || scope == "both" || scope == "flat";
@@ -203,24 +205,23 @@ void updateLauncherControls() {
             showVrButton = hasVr;
             showFlatButton = hasFlat;
             const bool steamFrontierOn = showSteamFrontier && lg.session->steamFrontierLogin();
-            lg.playCaption = directOn ? (epic ? tr(L"Signs in to Epic and Frontier, starts Elite itself, and exits once Elite is running.")
-                                          : frontierStore ? tr(L"Signs in itself. If that fails, it starts EDLaunch.")
-                                          : steamFrontierOn ? tr(L"Signs in with your Frontier account. If that fails, it starts through Steam.")
-                                                            : tr(L"Signs in itself. If that fails, it starts through Steam."))
-                             : bothModes ? tr(L"Starts EDLaunch with the mode you pick, then closes it when Elite exits.")
-                             : hasVr ? tr(L"Starts EDLaunch in VR, then closes it when Elite exits.")
-                                     : tr(L"Starts EDLaunch in flat, then closes it when Elite exits.");
+            if (route.kind == RouteKind::Frontier || directOn) {
+                lg.playCaption = directOn ? (epic ? tr(L"Signs in to Epic and Frontier, starts Elite itself, and exits once Elite is running.")
+                                              : frontierStore ? tr(L"Signs in itself. If that fails, it starts EDLaunch.")
+                                              : steamFrontierOn ? tr(L"Signs in with your Frontier account. If that fails, it starts through Steam.")
+                                                                : tr(L"Signs in itself. If that fails, it starts through Steam."))
+                                 : bothModes ? tr(L"Starts EDLaunch with the mode you pick, then closes it when Elite exits.")
+                                 : hasVr ? tr(L"Starts EDLaunch in VR, then closes it when Elite exits.")
+                                         : tr(L"Starts EDLaunch in flat, then closes it when Elite exits.");
+            } else {
+                lg.playCaption = route.kind == RouteKind::Steam
+                                     ? tr(L"Sets Elite's 3D mode in Settings.xml, then starts Elite through Steam.")
+                                     : tr(L"Sets Elite's 3D mode in Settings.xml, then starts Elite through Epic.");
+            }
             // With a choice, the remembered mode is the primary button; a lone button is the primary one.
             const bool flat = launcherRememberedMode() == "flat";
             ui::setButtonStyle(lg.playVr, (bothModes ? !flat : hasVr) ? ui::ButtonStyle::Primary : ui::ButtonStyle::Secondary);
             ui::setButtonStyle(lg.playFlat, (bothModes ? flat : hasFlat) ? ui::ButtonStyle::Primary : ui::ButtonStyle::Secondary);
-        } else if (route.kind != RouteKind::None) {
-            showPlay = true;
-            const wchar_t* store = route.kind == RouteKind::Steam ? L"Steam" : L"Epic";
-            std::wstring mode = tr(L"Elite's 3D mode is unknown.");
-            if (g.mode.known)
-                mode = g.mode.mode == edvr::GameMode::Flat ? tr(L"Elite is set to flat (3D off).") : tr(L"Elite is set to VR (3D on).");
-            lg.playCaption = std::wstring(tr(L"Starts Elite through ")) + store + tr(L", which uses the mode Elite is set to. ") + mode;
         } else {
             lg.playCaption = fromUtf8(route.why);
         }
@@ -460,6 +461,10 @@ void launcherBegin() {
         if (!started) takeInstanceMutex(0);
         return started;
     };
+    const std::wstring settingsBackupDir = joinPath(env.roots.launcherDir(), L"backups");
+    env.prepareLaunchMode = [settingsBackupDir](bool vr, std::string* error) {
+        return prepareSettingsXmlForLaunch(defaultEliteSettingsXmlPath(), settingsBackupDir, vr, error);
+    };
     lg.session.reset(new LauncherSession(env));
     lg.session->start();
     if (lg.session->includeReleaseCandidates()) ui::toggleCheckbox(lg.rc);
@@ -566,6 +571,9 @@ bool launcherCommand(int id, int code) {
             invalidateLauncherCache();
             lg.session->beginPlay(g.survey.game.source, g.survey.game.dir, vr, isElevatedForPlay(), realRouteOps(), WatchNames(),
                                   WatchTiming());
+            g.mode = eliteGameMode();
+            rebuildStatus();
+            InvalidateRect(g.window, nullptr, FALSE);
             return true;
         }
         default:

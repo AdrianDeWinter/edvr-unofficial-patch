@@ -106,6 +106,18 @@ const char* elevatedRefusal();
 // elevated process. `error` says why on false.
 bool startRoute(const LaunchRoute& route, const RouteOps& ops, bool elevated, std::string* error);
 
+// Default path to Elite's Settings.xml under %LOCALAPPDATA% (empty if LocalAppData cannot be resolved).
+std::wstring defaultEliteSettingsXmlPath();
+
+// Prepares Elite's Settings.xml for a launch (`vr` = true for VR, false for flat) before starting the
+// store client. Refuses if `gameExeName` (when non-empty) is already running. For flat, replaces only
+// the inner value of <StereoscopicMode> with "0" after backing up the file into `backupDir`. For VR,
+// keeps any recorded headset mode (2..6) unchanged and refuses 0, 1, or an absent/unparseable tag without
+// modifying the file. A parse failure writes nothing.
+bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std::wstring& backupDir, bool vr,
+                                 std::string* error,
+                                 const std::wstring& gameExeName = L"EliteDangerous64.exe");
+
 // The names the watcher looks for, so that a rig can use programs of its own.
 struct WatchNames {
     std::wstring game = L"EliteDangerous64.exe";

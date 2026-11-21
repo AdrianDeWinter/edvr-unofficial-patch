@@ -105,6 +105,10 @@ struct SessionEnv {
     // Frontier-store install cannot ask, so direct launch stops where it would have.
     std::function<bool(const std::string& note, LoginForm* form)> askLogin;
     std::function<bool(const std::string& email, const std::string& note, std::string* code)> askCode;
+
+    // Optional pre-launch Settings.xml update for store routes that do not pass /vr or /novr
+    // (Steam and Epic non-direct). Called before startRoute; returning false stops Play with *error.
+    std::function<bool(bool vr, std::string* error)> prepareLaunchMode;
 };
 
 class LauncherSession {
