@@ -816,7 +816,7 @@ void testHudSmoothVr(Rig& r) {
     const uint32_t whole[4] = {0, 0, kDoorW, kDoorH};
     const float uv[4] = {0, 0, 1, 1};
     auto& cfg = Config::get();
-    const auto round = [&](const char* key, UiLayerEdgeSmoothing expect, const char* what) {
+    const auto round = [&](const char* key, UiLayerEdgeSmoothing expect, HudAaMode expectMode, const char* what) {
         cfg.set("fix.hud_antialiasing", key);
         uiLayerConfigure(cfg);
         g_stubs.mayTake = true;
@@ -828,11 +828,13 @@ void testHudSmoothVr(Rig& r) {
         check(out != nullptr, "the composite runs");
         if (out) out->Release();
         const UiLayerEdgeSmoothingResult edge = uiLayerFlatEdgeSmoothingResult();
-        check(edge.outcome == expect && edge.w && edge.h, what);
+        check(edge.outcome == expect && edge.applied == expectMode && edge.w && edge.h, what);
     };
-    round("off", UiLayerEdgeSmoothing::kRaw, "VR, fix.hud_antialiasing off (shipped): the composite reads the raw layer");
-    round("on", UiLayerEdgeSmoothing::kSmoothed, "VR, fix.hud_antialiasing on: the composite reads the SMAA output of the layer (live: the next configure takes it)");
-    round("off", UiLayerEdgeSmoothing::kRaw, "VR, fix.hud_antialiasing off again: the composite reads the raw layer");
+    round("off", UiLayerEdgeSmoothing::kRaw, HudAaMode::kOff, "VR, fix.hud_antialiasing off (shipped): the composite reads the raw layer");
+    round("fxaa", UiLayerEdgeSmoothing::kSmoothed, HudAaMode::kFxaa, "VR, fix.hud_antialiasing fxaa: the composite reads the FXAA output of the layer");
+    round("smaa", UiLayerEdgeSmoothing::kSmoothed, HudAaMode::kSmaa, "VR, fix.hud_antialiasing smaa: the composite reads the SMAA output of the layer");
+    round("on", UiLayerEdgeSmoothing::kSmoothed, HudAaMode::kSmaa, "VR, legacy fix.hud_antialiasing on: maps to SMAA");
+    round("off", UiLayerEdgeSmoothing::kRaw, HudAaMode::kOff, "VR, fix.hud_antialiasing off again: the composite reads the raw layer");
     cfg.set("fix.hud_antialiasing", "off");
     uiLayerConfigure(cfg);
 }

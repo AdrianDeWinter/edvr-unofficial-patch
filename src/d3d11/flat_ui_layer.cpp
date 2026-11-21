@@ -46,10 +46,10 @@ struct Window {
     uint64_t toneCandidates = 0, toneProven = 0, toneAdmitted = 0, toneReissued = 0, toneDeclined = 0, toneByShape = 0;
     uint64_t copies = 0, doorsArmed = 0, doorUntreated = 0, doorSize = 0;
     uint64_t composites = 0, compositeNone = 0, bindFailed = 0;
-    // The HUD layer's edge smoothing (fix.hud_antialiasing, ui_layer_smaa.h): the layer composites by what they read -- the SMAA output, the raw
-    // layer because the key was off, the raw layer because the passes could not be had -- the key as the last composite read it, and the layer's size then.
+    // The HUD layer's edge smoothing (fix.hud_antialiasing, ui_layer_smaa.h): the layer composites by what they read -- the FXAA or SMAA output, the raw
+    // layer because the key was off, the raw layer because the passes could not be had -- the mode as the last composite read it, and the layer's size then.
     uint64_t edgeSmoothed = 0, edgeRawKeyOff = 0, edgeRawFault = 0;
-    bool edgeKeyOn = false;
+    HudAaMode edgeKeyMode = HudAaMode::kOff;
     uint32_t edgeW = 0, edgeH = 0;
     uint32_t inW = 0, inH = 0, outW = 0, outH = 0;  // the last copy's picture and the display
     double otherX = 0.0, otherY = 0.0;              // the last other-shift draw's measured shift, render pixels
@@ -750,8 +750,8 @@ void flatUiLayerAtCopy(ID3D11DeviceContext* ctx, uint64_t frame, bool treated, u
     // The HUD layer's edge smoothing (fix.hud_antialiasing, off by default; the F8 panel's HUD Anti-Aliasing row): the key is read here, a frame at a time, so a
     // change is live; the layer decides nothing, it does what the ask says and reports what it did. A key the flat allow-list does not carry reads off, and the
     // 30 s line shows it.
-    const bool smooth = Config::get().getBool("fix.hud_antialiasing", false);
-    g_w.edgeKeyOn = smooth;
+    const HudAaMode smooth = hudAaParse(Config::get().getString("fix.hud_antialiasing", "off").c_str());
+    g_w.edgeKeyMode = smooth;
     uiLayerFlatSetEdgeSmoothing(smooth);
     // When modifying `picture` in place via CS UAV, clear PS t0 first so D3D11 never sees the same
     // resource bound as both PS SRV and CS UAV simultaneously.
@@ -912,7 +912,7 @@ void flatUiLayerReport(uint64_t windowSeconds) {
     // output, those that read the raw layer because the key was off, those that fell back to it because the passes could not be had, the key as the last
     // composite read it and the layer's size. A window with composites and all three counts zero says the composite never reached the smoothing.
     if (w.composites || w.edgeSmoothed || w.edgeRawKeyOff || w.edgeRawFault)
-        Log::get().note("flat ui layer smaa: key=%s smoothed=%llu raw-key-off=%llu raw-fault=%llu size=%ux%u", w.edgeKeyOn ? "on" : "off",
+        Log::get().note("flat ui layer smaa: key=%s smoothed=%llu raw-key-off=%llu raw-fault=%llu size=%ux%u", hudAaName(w.edgeKeyMode),
                         static_cast<unsigned long long>(w.edgeSmoothed), static_cast<unsigned long long>(w.edgeRawKeyOff),
                         static_cast<unsigned long long>(w.edgeRawFault), w.edgeW, w.edgeH);
     const UiLayerFamily families[4] = {UiLayerFamily::kHolo, UiLayerFamily::kFlightHud, UiLayerFamily::kSprite,

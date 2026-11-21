@@ -1331,6 +1331,12 @@ std::string displayValue(const MenuRowDef& d, const std::string& v) {
                     if (_stricmp(c.value.c_str(), word) == 0) return c.label;
                 }
             }
+            if (isHudAntiAliasingRow(d)) {
+                const char* word = hudAaName(hudAaParse(v.c_str()));
+                for (const ChoiceItem& c : choicesOf(d)) {
+                    if (_stricmp(c.value.c_str(), word) == 0) return c.label;
+                }
+            }
             // A stored value above what the GPU can generate is shown as the clamped one (the file is not rewritten).
             if (isXessFgFramesRow(d)) {
                 char shown[8];
@@ -3601,7 +3607,9 @@ void stepRow(int defIndex, int dir, int mult) {
             const std::vector<ChoiceItem> items = choicesOf(d);
             if (items.empty()) return;
             int at = -1;
-            const std::string curWord = isFpsOverlayRow(d) ? std::string(fpsOverlayWord(parseFpsOverlay(cur.c_str()))) : cur;
+            const std::string curWord = isFpsOverlayRow(d)
+                                            ? std::string(fpsOverlayWord(parseFpsOverlay(cur.c_str())))
+                                            : (isHudAntiAliasingRow(d) ? std::string(hudAaName(hudAaParse(cur.c_str()))) : cur);
             for (size_t i = 0; i < items.size(); ++i) {
                 if (_stricmp(items[i].value.c_str(), curWord.c_str()) == 0) at = static_cast<int>(i);
             }

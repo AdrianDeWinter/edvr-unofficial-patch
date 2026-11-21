@@ -285,12 +285,16 @@ int main(int argc, char** argv) {
     check(!candidate(r, hdr, first), "the proving tone has no captured weapon content to reissue");
     // The rig has not set fix.hud_antialiasing, which is off by default, so this first composite reads the raw layer.
     runCase(r, hdr, "off", first + 1, false, nullptr, false);
-    // It is live: on, the next frame's composite reads the smoothed layer; off again, the raw one; on once more for the frames below.
+    // It is live: legacy on maps to SMAA, fxaa runs single-pass FXAA, smaa runs SMAA, and off restores the raw layer.
     cfg.set("fix.hud_antialiasing", "on");
     runCase(r, hdr, "off", first + 2, false, nullptr, true);
+    check(uiLayerFlatEdgeSmoothingResult().applied == HudAaMode::kSmaa, "legacy fix.hud_antialiasing=on resolves to SMAA");
+    cfg.set("fix.hud_antialiasing", "fxaa");
+    runCase(r, hdr, "off", first + 3, false, nullptr, true);
+    check(uiLayerFlatEdgeSmoothingResult().applied == HudAaMode::kFxaa, "fix.hud_antialiasing=fxaa runs FXAA");
     cfg.set("fix.hud_antialiasing", "off");
-    runCase(r, hdr, "100", first + 3, false, nullptr, false);
-    cfg.set("fix.hud_antialiasing", "on");
+    runCase(r, hdr, "100", first + 4, false, nullptr, false);
+    cfg.set("fix.hud_antialiasing", "smaa");
     // Also prove a second physical target for frame N+4. Its first decision
     // in that frame will be abandoned, while the later weapon target is
     // captured and copied into the actual tone input.
@@ -299,17 +303,17 @@ int main(int argc, char** argv) {
     if (other.srv) {
         g_stubs.eyeRes[0] = other.tex.Get();
         bindWeapon(r, other);
-        check(flatUiLayerDecide(r.ctx.Get(), weaponFacts(first + 3, other)) == FlatUiLayerAsk::kRefused,
+        check(flatUiLayerDecide(r.ctx.Get(), weaponFacts(first + 4, other)) == FlatUiLayerAsk::kRefused,
               "a new target is still refused until a tone proves it");
-        check(!candidate(r, other, first + 3), "the second target is proven without captured content");
+        check(!candidate(r, other, first + 4), "the second target is proven without captured content");
         g_stubs.eyeRes[0] = hdr.tex.Get();
-        runCase(r, hdr, "100", first + 4, true, &other, true);
+        runCase(r, hdr, "100", first + 5, true, &other, true);
         // Owned UAV-capable resolve buffer: composite runs in place over frameTex with t0 preserved.
-        runCase(r, hdr, "100", first + 5, false, nullptr, true, true);
+        runCase(r, hdr, "100", first + 6, false, nullptr, true, true);
     }
     // The last captured content is stale in the next frame, even though the
     // same HDR target and tone pair are still bound.
-    check(!candidate(r, hdr, first + 6), "stale weapon content is refused in the next flat frame");
+    check(!candidate(r, hdr, first + 7), "stale weapon content is refused in the next flat frame");
     uiLayerShutdown();
     std::printf("flat_weapon_admission_test: %u checks, %u failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

@@ -541,7 +541,10 @@ static int generateTemporal(const Options& o) {
         {"kUiLayerCompositeHdrAlphaBytecode", "ui_layer_composite_hdr_alpha_cs", "main", nullptr, {}, false,
          edvr::kUiLayerCompositeHdrAlphaHlsl, "cs_5_0"},
         {"kUiLayerCompositeInPlaceHdrAlphaBytecode", "ui_layer_composite_inplace_hdr_alpha_cs", "main", nullptr, {}, false,
-         edvr::kUiLayerCompositeInPlaceHdrAlphaHlsl, "cs_5_0"}
+         edvr::kUiLayerCompositeInPlaceHdrAlphaHlsl, "cs_5_0"},
+        // Single-pass premultiplied-alpha-aware FXAA over the finished 8-bit UI layer (fix.hud_antialiasing = fxaa).
+        {"kUiLayerFxaaBytecode", "ui_layer_fxaa_cs", "main", nullptr, {}, false,
+         edvr::kUiLayerFxaaHlsl, "cs_5_0"}
     };
     const std::string core = extractCore(edvr::kTemporalCsHlsl); // validate before fixed source assembly
     const auto fixed = fixedVariants(core);

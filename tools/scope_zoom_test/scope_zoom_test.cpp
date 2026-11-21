@@ -107,7 +107,7 @@ static std::string replaced(std::string text, const std::string& from, const std
 static bool wiredDoor(const std::string& layer) {
     const size_t fn = layer.find("ID3D11Texture2D* uiLayerComposite(uint64_t sequence, uint32_t eye");
     if (fn == std::string::npos) return false;
-    const std::string body = layer.substr(fn, 9400);   // the function is about 9200 bytes with B3's left door and F202's comment; a margin for a line or two, so a window can't reach into the next function and satisfy a pin there
+    const std::string body = layer.substr(fn, 9600);   // the function is about 9840 bytes; compositeInner sits near 9390, so 9600 stays inside the function
     return before(body, "rippleDoor(e, eye, sequence", "scopeZoomDoor(lensArgs") && before(body, "scopeZoomDoor(lensArgs", "if (!e.srv || !e.rtv || e.compositedSeq == sequence) return handOn();") &&
            before(body, "scopeZoomDoor(lensArgs", "compositeInner(e, eye, frame") && has(body, "if (eye == 1 && scopeZoomWanted())") &&
            has(body, "lensArgs.resolved = scopezoom::lensPictureResolved(e.doorFromPass, g_temporal);") && has(body, "lensArgs.gameOwn = lensArgs.resolved && !e.doorFromPass;");
@@ -116,7 +116,7 @@ static bool wiredDoor(const std::string& layer) {
 static bool wiredLeftDoor(const std::string& layer) {
     const size_t fn = layer.find("ID3D11Texture2D* uiLayerComposite(uint64_t sequence, uint32_t eye");
     if (fn == std::string::npos) return false;
-    const std::string body = layer.substr(fn, 9400);
+    const std::string body = layer.substr(fn, 9600);
     return before(body, "rippleDoor(e, eye, sequence", "scopeZoomLeftDoor(leftArgs)") && before(body, "scopeZoomLeftDoor(leftArgs)", "scopeZoomDoor(lensArgs") &&
            before(body, "scopeZoomLeftDoor(leftArgs)", "if (!e.srv || !e.rtv || e.compositedSeq == sequence) return handOn();") && has(body, "if (eye == 0 && scopeZoomWanted())") &&
            has(body, "leftArgs.resolved = e.doorFromPass;") && has(body, "leftArgs.frame = frame;");
