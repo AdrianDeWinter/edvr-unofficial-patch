@@ -275,12 +275,15 @@ inline void mutationChecks(Rig& r) {
         {"the old rule: the one texel the previous raster position falls in", kCall, kOldRule, nullptr},
         {"there is no history depth check in taa()", kCall, "weight=.9;", nullptr},
         {"the history depth check is inverted", kCall, "if(!historyDepthMatches(previous,ExpectedDepth.Load(int3(q,0))))weight=.9;", nullptr},
-        {"one texel, not four", kLoop,
-         "[unroll]for(int y=0;y<1;++y)[unroll]for(int x=0;x<1;++x)best=min(best,abs(HistoryDepth.Load(int3(clamp(base+int2(x,y),0,hi),0))-expected));", nullptr},
-        {"sixteen texels, not four", kLoop,
-         "[unroll]for(int y=-1;y<3;++y)[unroll]for(int x=-1;x<3;++x)best=min(best,abs(HistoryDepth.Load(int3(clamp(base+int2(x,y),0,hi),0))-expected));", nullptr},
-        {"the check reads this frame's depth, not last frame's", kLoop,
-         "[unroll]for(int y=0;y<2;++y)[unroll]for(int x=0;x<2;++x)best=min(best,abs(SceneDepth.Load(int3(clamp(base+int2(x,y),0,hi),0))-expected));", nullptr},
+        {"one texel, not four",
+         "const float4 diff=abs(footprint-expected);\n    if(min(min(diff.x,diff.y),min(diff.z,diff.w))<=tol)return true;",
+         "if(abs(d00-expected)<=tol)return true;", nullptr},
+        {"sixteen texels, not four",
+         "const float4 diff=abs(footprint-expected);\n    if(min(min(diff.x,diff.y),min(diff.z,diff.w))<=tol)return true;",
+         "float best=3.402823e38;[unroll]for(int y=-1;y<3;++y)[unroll]for(int x=-1;x<3;++x)best=min(best,abs(HistoryDepth.Load(int3(clamp(base+int2(x,y),0,hi),0))-expected));if(best<=tol)return true;", nullptr},
+        {"the check reads this frame's depth, not last frame's",
+         "const float d00=HistoryDepth.Load(int3(clamp(base,0,hi),0));\n    const float d10=HistoryDepth.Load(int3(clamp(base+int2(1,0),0,hi),0));\n    const float d01=HistoryDepth.Load(int3(clamp(base+int2(0,1),0,hi),0));\n    const float d11=HistoryDepth.Load(int3(clamp(base+int2(1,1),0,hi),0));",
+         "const float d00=SceneDepth.Load(int3(clamp(base,0,hi),0));\n    const float d10=SceneDepth.Load(int3(clamp(base+int2(1,0),0,hi),0));\n    const float d01=SceneDepth.Load(int3(clamp(base+int2(0,1),0,hi),0));\n    const float d11=SceneDepth.Load(int3(clamp(base+int2(1,1),0,hi),0));", nullptr},
         {"the previous phase has the wrong sign", "prev*float2(size.xy)+jitter.zw-.5", "prev*float2(size.xy)-jitter.zw-.5", nullptr},
         {"the half texel is dropped", "prev*float2(size.xy)+jitter.zw-.5", "prev*float2(size.xy)+jitter.zw", nullptr},
         {"the previous phase's axes are swapped", "prev*float2(size.xy)+jitter.zw-.5", "prev*float2(size.xy)+jitter.wz-.5", nullptr},
@@ -317,10 +320,7 @@ inline void mutationChecks(Rig& r) {
         {"the horizontal fraction weights the rows and the vertical one the columns", "lerp(lerp(d00,d10,at.x),lerp(d01,d11,at.x),at.y)",
          "lerp(lerp(d00,d10,at.y),lerp(d01,d11,at.y),at.x)", nullptr},
         {"a footprint outside the image is asked, its edge texels repeated",
-         "if(any(base<0) || any(base>=hi))return false;\n    const float d00=HistoryDepth.Load(int3(base,0)), d10=HistoryDepth.Load(int3(base+int2(1,0),0));\n"
-         "    const float d01=HistoryDepth.Load(int3(base+int2(0,1),0)), d11=HistoryDepth.Load(int3(base+int2(1,1),0));",
-         "const float d00=HistoryDepth.Load(int3(clamp(base,0,hi),0)), d10=HistoryDepth.Load(int3(clamp(base+int2(1,0),0,hi),0));\n"
-         "    const float d01=HistoryDepth.Load(int3(clamp(base+int2(0,1),0,hi),0)), d11=HistoryDepth.Load(int3(clamp(base+int2(1,1),0,hi),0));", nullptr},
+         "if(any(base<0) || any(base>=hi))return false;", "", nullptr},
         {"a zero or non-finite texel does not bar the footprint", "if(!all(isfinite(footprint)) || !all(footprint>0))return false;", "", nullptr},
     };
     const std::string shipped = edvr::kFlatMonoShaderSource;

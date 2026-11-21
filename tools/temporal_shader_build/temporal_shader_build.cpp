@@ -531,7 +531,12 @@ static int generateTemporal(const Options& o) {
         // target, so the finish and the spatial recovery are draws: one triangle vertex shader and two pixel shaders.
         {"kFlatMonoHdrVsBytecode", "flat_mono_hdr_vs", "hdrVs", nullptr, {}, true, nullptr, "vs_5_0"},
         {"kFlatMonoFinishHdrBytecode", "flat_mono_finish_hdr_ps", "finishHdr", nullptr, {}, true, nullptr, "ps_5_0"},
-        {"kFlatMonoSpatialHdrBytecode", "flat_mono_spatial_hdr_ps", "spatialHdr", nullptr, {}, true, nullptr, "ps_5_0"}
+        {"kFlatMonoSpatialHdrBytecode", "flat_mono_spatial_hdr_ps", "spatialHdr", nullptr, {}, true, nullptr, "ps_5_0"},
+        // One-shot R32G32_FLOAT -> R32G32B32A32_FLOAT flat marker-plane promotion when ForeignPool first draws mid-frame.
+        {"kFlatMarkerPromoteCsBytecode", "flat_marker_promote_cs", "main", nullptr, {}, false,
+         "Texture2D<float2> src:register(t0);RWTexture2D<float4> dst:register(u0);"
+         "[numthreads(8,8,1)]void main(uint3 id:SV_DispatchThreadID){uint w,h;dst.GetDimensions(w,h);"
+         "if(id.x<w && id.y<h)dst[id.xy]=float4(src.Load(int3(id.xy,0)),0,0);}", "cs_5_0"}
     };
     const std::string core = extractCore(edvr::kTemporalCsHlsl); // validate before fixed source assembly
     const auto fixed = fixedVariants(core);

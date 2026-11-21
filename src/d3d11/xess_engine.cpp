@@ -158,6 +158,7 @@ struct FeatureSlot {
     // Bridge timing lives per slot, so it outlives a feature rebuild. The sets are reset on the owner context at shutdown.
     std::array<BridgeSet, kBridgeSets> bridge;
     BridgeWindow window;
+    uint32_t timingSample = 0;   // 1-in-16 sampling stride for GPU bridge/execute timing (index 0 always sampled)
     char d12Note[96] = "";   // why this slot's D3D12 execute timestamps are absent, when they are
 };
 
@@ -178,6 +179,7 @@ struct State {
     // One counter for every slot: all slots signal the one shared fence in this order, so a wait on a slot's own
     // value also covers the other slots' earlier work, and the value never goes backwards.
     uint64_t nextFenceValue = 0;
+    uint64_t unflushedConsumer = 0;   // latest consumer Signal() not yet flushed on ownerContext; flushed on releaseSlot or next signal-in
     uint64_t d12TimestampHz = 0;   // queue ticks per second; 0 when the queue reports none (bridge timing then off)
     uint32_t evaluations = 0, resets = 0, failures = 0;
     bool untrackedSubmission = false;
@@ -454,6 +456,13 @@ bool releaseSlot(State& state, unsigned slot, const char** why) {
     if (!feature) return true;
     if (state.untrackedSubmission)
         return fail(why, "a submitted D3D12 command list has no completed fence; retaining its resources");
+    if (state.unflushedConsumer && state.ownerContext) {
+        const uint64_t completed = state.fence12->GetCompletedValue();
+        if (completed != UINT64_MAX && completed < feature->lastUseValue) {
+            state.ownerContext->Flush();
+            state.unflushedConsumer = 0;
+        }
+    }
     if (!waitFor(state, feature->lastUseValue, why, "release")) return false;
     if (feature->context) {
         const xess_result_t rc = state.api.destroyContext(feature->context);
@@ -1006,8 +1015,10 @@ bool xessEvaluate(ID3D11DeviceContext* context, unsigned slot,
         holder.failedFeature.record(key, keyWhy);
         return returnLatchedFailure(holder.failedFeature, why);
     }
+    // Sample GPU bridge and D3D12 execute timing 1 in 16 evaluations (index 0 always sampled).
+    const bool sampleTiming = (holder.timingSample++ & 15u) == 0;
     // Bridge timing opens before the input copies: total, then copy-in. The guard cancels them on any failure below.
-    BridgeSet* bridge = beginBridge(holder, device.Get(), context);
+    BridgeSet* bridge = sampleTiming ? beginBridge(holder, device.Get(), context) : nullptr;
     BridgeGuard guard(bridge, context);
     context->CopyResource(feature.color.d11.Get(), colour);
     context->CopyResource(feature.motion.d11.Get(), motion);
@@ -1028,6 +1039,7 @@ bool xessEvaluate(ID3D11DeviceContext* context, unsigned slot,
         bridge->timers[kBridgeWait].begin(device.Get(), context);
     }
     context->Flush();
+    state.unflushedConsumer = 0;
     feature.lastUseValue = producer;
     LARGE_INTEGER queueWaitBegan{}, queueWaitEnded{};
     QueryPerformanceCounter(&queueWaitBegan);
@@ -1063,7 +1075,8 @@ bool xessEvaluate(ID3D11DeviceContext* context, unsigned slot,
     params.inputWidth = width;
     params.inputHeight = height;
     // The two timestamps bracket xessD3D12Execute alone; the barriers around it are outside the measured span.
-    if (command.timingHeap.Get()) list->EndQuery(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    const bool sampleD12Timing = sampleTiming && command.timingHeap.Get() != nullptr;
+    if (sampleD12Timing) list->EndQuery(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
     const xess_result_t rc = state.api.execute(feature.context, list, &params);
     if (rc != XESS_RESULT_SUCCESS) {
         ++state.failures;
@@ -1076,7 +1089,7 @@ bool xessEvaluate(ID3D11DeviceContext* context, unsigned slot,
         }
         return fail(why, "xessD3D12Execute returned %d (frame %u)", int(rc), state.evaluations + 1);
     }
-    if (command.timingHeap.Get()) {
+    if (sampleD12Timing) {
         list->EndQuery(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
         list->ResolveQueryData(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2,
                                command.timingReadback.Get(), 0);
@@ -1105,7 +1118,7 @@ bool xessEvaluate(ID3D11DeviceContext* context, unsigned slot,
     QueryPerformanceCounter(&submitBegan);
     state.queue->ExecuteCommandLists(1, lists);
     if (commit) commit(true);
-    command.timingPending = command.timingHeap.Get() != nullptr;
+    command.timingPending = sampleD12Timing;
     const uint64_t done = ++state.nextFenceValue;
     hr = state.queue->Signal(state.fence12.Get(), done);
     QueryPerformanceCounter(&submitEnded);
@@ -1151,7 +1164,8 @@ bool xessEvaluate(ID3D11DeviceContext* context, unsigned slot,
         return fail(why, "D3D11 consumer Signal(%llu) failed 0x%08X; resources retained",
                     static_cast<unsigned long long>(consumer), unsigned(hr));
     }
-    context->Flush();
+    // Steady-state frames defer this Flush() to Present() or the next signal-in; releaseSlot() flushes before waiting.
+    state.unflushedConsumer = consumer;
     feature.lastUseValue = consumer;
     LARGE_INTEGER ended{}, frequency{};
     QueryPerformanceCounter(&ended);

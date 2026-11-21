@@ -606,12 +606,18 @@ inline int flatHdrCrumbWiringTests() {
     expect(!finish.empty() && count(shader, "Texture2D<float4> OverlayColor : register(t16);") == 1 &&
                count(shader, "register(t16)") == 1,
            "the finish's raw-overlay texture is declared once, at t16");
-    ordered(finish, {"refused=reject>0;", "c=refused?Color.SampleLevel(LinearClamp,rasterUv,0).rgb:History.Load(int3(p,0)).rgb;",
-                     "if(debug.z!=0) {", "if(covered>0) {", "const float3 raw=OverlayColor.SampleLevel(LinearClamp,rasterUv,0).rgb;",
-                     "c=refused?raw:c+raw-Color.SampleLevel(LinearClamp,rasterUv,0).rgb;", "if(debug.y!=0)c=refusalPaint("},
+    ordered(finish, {"refused=any(Rejection.GatherRed(LinearClamp,rasterUv)>0);",
+                     "if(refused)c=Color.SampleLevel(LinearClamp,rasterUv,0).rgb;",
+                     "else c=History.Load(int3(p,0)).rgb;",
+                     "if(debug.z!=0) {", "if(any(OverlayCoverage.GatherRed(LinearClamp,rasterUv)>0)) {",
+                     "const float3 raw=OverlayColor.SampleLevel(LinearClamp,rasterUv,0).rgb;",
+                     "if(refused)c=raw;", "else c=c+raw-Color.SampleLevel(LinearClamp,rasterUv,0).rgb;",
+                     "if(debug.y!=0)c=refusalPaint("},
             "a covered pixel keeps its world and adds the overlay's contribution (raw minus clean, both at the jittered position); a refused one is the raw sample");
-    expect(!finish.empty() && count(finish, "c=Color.SampleLevel(") == 0 && count(finish, "c=OverlayColor.SampleLevel(") == 0 &&
-               count(finish, "OverlayColor.SampleLevel(") == 1,
+    const size_t overlayPos = finish.find("if(debug.z!=0)");
+    const std::string overlayBlock = overlayPos != std::string::npos ? finish.substr(overlayPos) : std::string();
+    expect(!finish.empty() && !overlayBlock.empty() && count(overlayBlock, "c=Color.SampleLevel(") == 0 &&
+               count(finish, "c=OverlayColor.SampleLevel(") == 0 && count(finish, "OverlayColor.SampleLevel(") == 1,
            "no covered pixel takes a whole sample of either texture as its colour: the overlay's sample is read once, for the sum");
     expect(count(resolve, "overlay?g.rawOverlay.srv.Get():g.color.srv.Get()") == 0 &&
                count(solve, "ID3D11ShaderResourceView* paintViews[17]={g.color.srv.Get(),nullptr,nullptr,nullptr,nullptr,") == 1 &&

@@ -58,7 +58,8 @@ inline bool flatForegroundBoundProjectionPhase(ID3D11DeviceContext* ctx,
                                      uint32_t width, uint32_t height,
                                      float expectedNear,
                                       const char** reason = nullptr,
-                                      FlatForegroundProjectionLookupFailure* lookupFailure = nullptr) {
+                                      FlatForegroundProjectionLookupFailure* lookupFailure = nullptr,
+                                      ID3D11DeviceContext1* cachedCtx1 = nullptr) {
     auto refuse = [&](const char* why) { if (reason) *reason = why; return false; };
     if (reason) *reason = nullptr;
     if (lookupFailure) lookupFailure->copy.kind = FlatProjectionCopyFailureKind::None;
@@ -66,9 +67,10 @@ inline bool flatForegroundBoundProjectionPhase(ID3D11DeviceContext* ctx,
         return refuse("foreign phase missing CPU witness or recipe range");
     Microsoft::WRL::ComPtr<ID3D11Buffer> buffer;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext1> ctx1;
+    ID3D11DeviceContext1* activeCtx1 = cachedCtx1;
     UINT first = 0, count = 4096;
-    if (SUCCEEDED(ctx->QueryInterface(IID_PPV_ARGS(&ctx1))))
-        ctx1->VSGetConstantBuffers1(slot, 1, &buffer, &first, &count);
+    if (!activeCtx1 && SUCCEEDED(ctx->QueryInterface(IID_PPV_ARGS(&ctx1)))) activeCtx1 = ctx1.Get();
+    if (activeCtx1) activeCtx1->VSGetConstantBuffers1(slot, 1, &buffer, &first, &count);
     else ctx->VSGetConstantBuffers(slot, 1, &buffer);
     if (!buffer || count < row + 4) return refuse("foreign phase short bound projection");
     const uint64_t offset = (uint64_t(first) + row) * 16;

@@ -16,6 +16,13 @@ namespace edvr {
 
 struct FlatIssueEpochState {
     std::atomic<uint64_t> epoch{1};
+    // Sub-epochs for OM state that survives shader/CB switches:
+    // - omDepthEpoch: DSV binding and depth-stencil state (bumped by RT/DSV, DepthStencilState, Revoke).
+    // - omOutputEpoch: RTV[0..7], OM UAVs, and blend state (bumped by RT/DSV, OM UAV, BlendState, Revoke).
+    // - omUavMaybeBound: 0 only when OMSetRenderTargets/ClearState proved no OM UAVs are bound; conservatively 1 otherwise.
+    std::atomic<uint64_t> omDepthEpoch{1};
+    std::atomic<uint64_t> omOutputEpoch{1};
+    std::atomic<uint32_t> omUavMaybeBound{1};
     std::atomic<uintptr_t> buffer{0};
     std::atomic<uint32_t> frozen{0};
     std::atomic<uint64_t> reuse{0};
@@ -37,11 +44,22 @@ inline FlatIssueEpochState& flatIssueEpochState() {
 inline uint64_t flatIssueEpochLoad() noexcept {
     return flatIssueEpochState().epoch.load(std::memory_order_acquire);
 }
+inline uint64_t flatOmDepthEpochLoad() noexcept {
+    return flatIssueEpochState().omDepthEpoch.load(std::memory_order_acquire);
+}
+inline uint64_t flatOmOutputEpochLoad() noexcept {
+    return flatIssueEpochState().omOutputEpoch.load(std::memory_order_acquire);
+}
+inline bool flatOmUavKnownZero() noexcept {
+    return flatIssueEpochState().omUavMaybeBound.load(std::memory_order_acquire) == 0;
+}
 inline bool flatIssueEpochFrozen() noexcept {
     return flatIssueEpochState().frozen.load(std::memory_order_acquire) != 0;
 }
 inline void flatIssueEpochFreeze() noexcept {
-    flatIssueEpochState().frozen.store(1, std::memory_order_release);
+    auto& state = flatIssueEpochState();
+    state.omUavMaybeBound.store(1u, std::memory_order_release);
+    state.frozen.store(1, std::memory_order_release);
 }
 inline void flatIssueEpochBump(std::atomic<uint64_t>* counter) noexcept {
     auto& state = flatIssueEpochState();
@@ -61,18 +79,29 @@ inline void flatIssueEpochBump(std::atomic<uint64_t>* counter) noexcept {
 // gated: they cover ClearState, command lists, context swaps and writes of the certified buffer, not the
 // per-draw setters.
 inline bool flatIssueEpochSettersCounted() noexcept { return !runtimeVrProfile(); }
+inline void flatOmNoteUavBound(bool maybeBound) noexcept {
+    if (flatIssueEpochSettersCounted())
+        flatIssueEpochState().omUavMaybeBound.store(maybeBound ? 1u : 0u, std::memory_order_release);
+}
+inline void flatIssueEpochBumpOutput() noexcept {
+    if (flatIssueEpochSettersCounted())
+        flatIssueEpochState().omOutputEpoch.fetch_add(1, std::memory_order_acq_rel);
+}
 inline void flatIssueEpochBumpSetter(std::atomic<uint64_t>* counter) noexcept {
     if (flatIssueEpochSettersCounted()) flatIssueEpochBump(counter);
 }
-inline void flatIssueEpochBumpDepth() noexcept { flatIssueEpochBumpSetter(&flatIssueEpochState().depthSets); }
+inline void flatIssueEpochBumpDepth() noexcept { flatIssueEpochBumpSetter(&flatIssueEpochState().depthSets); if (flatIssueEpochSettersCounted()) flatIssueEpochState().omDepthEpoch.fetch_add(1, std::memory_order_acq_rel); }
 inline void flatIssueEpochBumpStage() noexcept { flatIssueEpochBumpSetter(&flatIssueEpochState().stageSets); }
-inline void flatIssueEpochBumpRt() noexcept { flatIssueEpochBumpSetter(&flatIssueEpochState().rtSets); }
+inline void flatIssueEpochBumpRt() noexcept { flatIssueEpochBumpSetter(&flatIssueEpochState().rtSets); if (flatIssueEpochSettersCounted()) { auto& s = flatIssueEpochState(); s.omDepthEpoch.fetch_add(1, std::memory_order_acq_rel); s.omOutputEpoch.fetch_add(1, std::memory_order_acq_rel); } }
 inline void flatIssueEpochBumpCb() noexcept { flatIssueEpochBumpSetter(&flatIssueEpochState().cb1Sets); }
 // Frame changes, ClearState, command lists and context swaps. No setter counter:
 // a flight with fresh draws and quiet setters reads this instead.
 inline void flatIssueEpochRevoke() noexcept {
     auto& state = flatIssueEpochState();
     state.epoch.fetch_add(1, std::memory_order_acq_rel);
+    state.omDepthEpoch.fetch_add(1, std::memory_order_acq_rel);
+    state.omOutputEpoch.fetch_add(1, std::memory_order_acq_rel);
+    state.omUavMaybeBound.store(1u, std::memory_order_release);
     state.buffer.store(0, std::memory_order_release);
     state.revokes.fetch_add(1, std::memory_order_relaxed);
 }

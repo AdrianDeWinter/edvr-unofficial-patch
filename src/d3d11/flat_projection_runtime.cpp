@@ -164,6 +164,8 @@ void FlatProjectionRuntime::reset() {
         entry.mapBytes = nullptr;
     }
     shadows_.reset(); context_.Reset(); owner_ = 0; nextGeneration_ = 1;
+    std::memset(findIndex_, kFindEmpty, sizeof(findIndex_));
+    findIndexReady_ = true;
     rejectGen_.fetch_add(1, std::memory_order_relaxed);
     coldEnabled_ = false; coldAttempts_ = 0; planCapabilityReady_ = false;
     status_ = {};
@@ -264,9 +266,35 @@ void FlatProjectionRuntime::pollColdReadbacks() {
         clearCold(item);
     }
 }
+void FlatProjectionRuntime::insertFindIndex(uint32_t slot) noexcept {
+    ID3D11Resource* resource = tracked_[slot].buffer.Get();
+    if (!resource) return;
+    uint32_t i = rejectIndex(resource) & (kFindSlots - 1);
+    for (uint32_t n = 0; n < kFindSlots; ++n) {
+        if (findIndex_[i] == kFindEmpty || findIndex_[i] == slot) {
+            findIndex_[i] = static_cast<uint8_t>(slot);
+            return;
+        }
+        i = (i + 1) & (kFindSlots - 1);
+    }
+}
+void FlatProjectionRuntime::rebuildFindIndex() noexcept {
+    std::memset(findIndex_, kFindEmpty, sizeof(findIndex_));
+    findIndexReady_ = true;
+    for (uint32_t s = 0; s < kBuffers; ++s) {
+        if (tracked_[s].buffer) insertFindIndex(s);
+    }
+}
 FlatProjectionRuntime::Tracked* FlatProjectionRuntime::find(ID3D11Resource* resource) {
     if (!resource) return nullptr;
-    for (auto& entry : tracked_) if (entry.buffer.Get() == resource) return &entry;
+    if (!findIndexReady_) rebuildFindIndex();
+    uint32_t i = rejectIndex(resource) & (kFindSlots - 1);
+    for (uint32_t n = 0; n < kFindSlots; ++n) {
+        const uint8_t slot = findIndex_[i];
+        if (slot == kFindEmpty) return nullptr;
+        if (tracked_[slot].buffer.Get() == resource) return &tracked_[slot];
+        i = (i + 1) & (kFindSlots - 1);
+    }
     return nullptr;
 }
 void FlatProjectionRuntime::discard(Tracked& entry) {
@@ -276,6 +304,7 @@ void FlatProjectionRuntime::discard(Tracked& entry) {
     entry.mapped = entry.promoted = entry.privateReady = entry.pending = false;
     entry.mutationSerial = 1; entry.mutationOverflow = false;
     entry.mapBytes = nullptr;
+    rebuildFindIndex();
 }
 FlatProjectionRuntime::Tracked* FlatProjectionRuntime::track(ID3D11Resource* resource) {
     if (Tracked* known = find(resource)) return known;
@@ -315,6 +344,7 @@ FlatProjectionRuntime::Tracked* FlatProjectionRuntime::track(ID3D11Resource* res
         (desc.CPUAccessFlags & D3D11_CPU_ACCESS_WRITE) != 0;
     if (bounceRegistered_) bounceRegistered_(desc);
     free->mutationSerial = 1; free->mutationOverflow = false;
+    insertFindIndex(static_cast<uint32_t>(free - tracked_));
     return free;
 }
 bool FlatProjectionRuntime::observeCreateBuffer(ID3D11Buffer* buffer, const void* initialData) {

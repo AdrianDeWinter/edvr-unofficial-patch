@@ -251,8 +251,14 @@ private:
     Tracked* find(ID3D11Resource* resource);
     Tracked* track(ID3D11Resource* resource);
     Tracked* trackOrReject(ID3D11Resource* resource);
+    void rebuildFindIndex() noexcept;
+    void insertFindIndex(uint32_t slot) noexcept;
     void rememberReject(ID3D11Resource* resource) noexcept;
     static uint32_t rejectIndex(ID3D11Resource* resource) noexcept;
+    static constexpr uint32_t kFindSlots = 256;
+    static constexpr uint8_t kFindEmpty = 0xFFu;
+    uint8_t findIndex_[kFindSlots]{};
+    bool findIndexReady_ = false;
     static constexpr uint32_t kRejectSlots = 4096;
     struct RejectSlot {
         uintptr_t ptr = 0;

@@ -869,7 +869,9 @@ void flatTemporalStart(ID3D11Device* device) {
     std::memset(&g, 0, sizeof(g));
     g.epoch = 1;
     g.device = device;
-    g.captureBudget = flatCaptureBudget(FlatCaptureTier::Full);
+    // Bound automatic startup discovery to General (1000 ms / 3 useful frames) so passive observers do not burn
+    // 1.3-2.8 ms/frame on the render thread for the first two minutes of gameplay; Shift+dump_draws still arms Full.
+    g.captureBudget = flatCaptureBudget(FlatCaptureTier::General);
     g_passiveRearmAvailable.store(true, std::memory_order_release);
     g_waitingForPresent.store(true, std::memory_order_release);
     Log::get().note("flat temporal: passive discovery armed, awaiting first owned Present thread; the trigger's collection budget is reported at that boundary. Requested=%s; treatment is reported separately by flat runtime",

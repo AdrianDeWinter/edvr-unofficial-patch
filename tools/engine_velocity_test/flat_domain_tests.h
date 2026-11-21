@@ -124,14 +124,19 @@ inline void run(const lifecycle_tests::Harness& h) {
         ComPtr<ID3D11ShaderResourceView> owners;h.check(engineVelocityFlatDomainSlots(game.sourceDepth.Get(),&owners),"null-PS final ownership accessible");
         if(owners) {
             ComPtr<ID3D11Resource> resource;owners->GetResource(&resource);
-            const auto pixels=lifecycle_tests::readTexture(h,resource.Get(),4,&width);
+            ComPtr<ID3D11Texture2D> ownerTex;resource.As(&ownerTex);
+            D3D11_TEXTURE2D_DESC ownerDesc{};if(ownerTex)ownerTex->GetDesc(&ownerDesc);
+            const unsigned ch=ownerDesc.Format==DXGI_FORMAT_R32G32B32A32_FLOAT?4u:2u;
+            if(domain==FlatEngineDomain::World)h.check(ch==2u,"flat marker plane starts as R32G32_FLOAT before any ForeignPool draw");
+            else h.check(ch==4u,"flat marker plane promotes to R32G32B32A32_FLOAT once ForeignPool draws");
+            const auto pixels=lifecycle_tests::readTexture(h,resource.Get(),ch,&width);
             unsigned marked=0;const float expected=domain==FlatEngineDomain::World?0.f:domain==FlatEngineDomain::ForeignPool?-13.f:11.f;
-            for(size_t i=0;i<pixels.size()/4;++i)if(pixels[i*4]!=-1) {
-                h.check(pixels[i*4]==expected,"null-PS marker names exact camera domain and slot");
-                h.check(pixels[i*4+1]==depth[i*2],"null-PS marker stores exact passing device depth");
+            for(size_t i=0;i<pixels.size()/ch;++i)if(pixels[i*ch]!=-1) {
+                h.check(pixels[i*ch]==expected,"null-PS marker names exact camera domain and slot");
+                h.check(pixels[i*ch+1]==depth[i*2],"null-PS marker stores exact passing device depth");
                 if(domain==FlatEngineDomain::ForeignPool) {
-                    if(!(pixels[i*4+2]<=1 && pixels[i*4+3]==1))std::printf("null tuple %.9g %.9g %.9g %.9g\n",pixels[i*4],pixels[i*4+1],pixels[i*4+2],pixels[i*4+3]);
-                    h.check(pixels[i*4+2]<=1 && pixels[i*4+3]==1,"null foreign marker stamps native primitive and actual draw token");
+                    if(!(pixels[i*ch+2]<=1 && pixels[i*ch+3]==1))std::printf("null tuple %.9g %.9g %.9g %.9g\n",pixels[i*ch],pixels[i*ch+1],pixels[i*ch+2],pixels[i*ch+3]);
+                    h.check(pixels[i*ch+2]<=1 && pixels[i*ch+3]==1,"null foreign marker stamps native primitive and actual draw token");
                 }
                 ++marked;
             }
@@ -352,14 +357,20 @@ float4 main(Input i,uint primitive:SV_PrimitiveID):SV_Target0 {
             ComPtr<ID3D11ShaderResourceView> ownerAAgain;
             h.check(engineVelocityFlatDomainSlots(depthA.Get(),&ownerAAgain) && ownerAAgain==ownerA,
                 "first DSV marker remains retrievable after second");
-            auto pixels=[&](ID3D11ShaderResourceView* owner){
+            auto pixels=[&](ID3D11ShaderResourceView* owner,unsigned* outCh=nullptr){
                 ComPtr<ID3D11Resource> resource;if(owner)owner->GetResource(&resource);
-                UINT width=0;return resource?lifecycle_tests::readTexture(h,resource.Get(),4,&width):std::vector<float>{};
+                ComPtr<ID3D11Texture2D> tex;if(resource)resource.As(&tex);
+                D3D11_TEXTURE2D_DESC td{};if(tex)tex->GetDesc(&td);
+                const unsigned ch=td.Format==DXGI_FORMAT_R32G32B32A32_FLOAT?4u:2u;
+                if(outCh)*outCh=ch;
+                UINT width=0;return resource?lifecycle_tests::readTexture(h,resource.Get(),ch,&width):std::vector<float>{};
             };
-            const auto beforeA=pixels(ownerA.Get()),beforeB=pixels(ownerB.Get());
+            unsigned chA=0,chB=0;
+            const auto beforeA=pixels(ownerA.Get(),&chA),beforeB=pixels(ownerB.Get(),&chB);
+            h.check(chB==4u,"foreign DSV uses R32G32B32A32_FLOAT");
             unsigned worldA=0,foreignB=0;
-            for(size_t i=0;i<beforeA.size()/4;++i)worldA+=beforeA[i*4]==0.f;
-            for(size_t i=0;i<beforeB.size()/4;++i)foreignB+=beforeB[i*4]==-13.f;
+            for(size_t i=0;i<beforeA.size()/chA;++i)worldA+=beforeA[i*chA]==0.f;
+            for(size_t i=0;i<beforeB.size()/chB;++i)foreignB+=beforeB[i*chB]==-13.f;
             h.check(worldA>0 && foreignB>0,"different DSVs contain their own original marker tuples");
             game.writeScene(game.sceneA.Get(),game.rows[0]);
             engineVelocityNoteSource(depthB.Get(),game.sceneA.Get());
@@ -372,8 +383,8 @@ float4 main(Input i,uint primitive:SV_PrimitiveID):SV_Target0 {
             const auto finalA=pixels(afterA.Get()),finalB=pixels(afterB.Get());
             h.check(finalA==beforeA,"world producer on second DSV preserves first DSV marker bytes");
             unsigned preservedForeign=0;
-            for(size_t i=0;i<beforeB.size()/4 && i<finalB.size()/4;++i)
-                if(beforeB[i*4]==-13.f && std::memcmp(&beforeB[i*4],&finalB[i*4],4*sizeof(float))==0)++preservedForeign;
+            for(size_t i=0;i<beforeB.size()/chB && i<finalB.size()/chB;++i)
+                if(beforeB[i*chB]==-13.f && std::memcmp(&beforeB[i*chB],&finalB[i*chB],4*sizeof(float))==0)++preservedForeign;
             h.check(preservedForeign==foreignB,"world producer does not clear prior foreign tuples on its DSV");
         }
     }

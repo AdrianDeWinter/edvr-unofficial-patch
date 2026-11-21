@@ -73,13 +73,14 @@ inline const std::vector<std::string>& pins() {
         "const float2 raster=prev*float2(size.xy)+jitter.zw-.5;",
         "const int2 base=int2(floor(raster));",
         "const float tol=max(kStaleDepthFloor,expected*kStaleDepthRel);",
-        "float best=3.402823e38;",
-        "[unroll]for(int y=0;y<2;++y)[unroll]for(int x=0;x<2;++x)best=min(best,abs(HistoryDepth.Load(int3(clamp(base+int2(x,y),0,hi),0))-expected));",
-        "if(best<=tol)return true;",
-        "if(any(base<0) || any(base>=hi))return false;",
-        "const float d00=HistoryDepth.Load(int3(base,0)), d10=HistoryDepth.Load(int3(base+int2(1,0),0));",
-        "const float d01=HistoryDepth.Load(int3(base+int2(0,1),0)), d11=HistoryDepth.Load(int3(base+int2(1,1),0));",
+        "const float d00=HistoryDepth.Load(int3(clamp(base,0,hi),0));",
+        "const float d10=HistoryDepth.Load(int3(clamp(base+int2(1,0),0,hi),0));",
+        "const float d01=HistoryDepth.Load(int3(clamp(base+int2(0,1),0,hi),0));",
+        "const float d11=HistoryDepth.Load(int3(clamp(base+int2(1,1),0,hi),0));",
         "const float4 footprint=float4(d00,d10,d01,d11);",
+        "const float4 diff=abs(footprint-expected);",
+        "if(min(min(diff.x,diff.y),min(diff.z,diff.w))<=tol)return true;",
+        "if(any(base<0) || any(base>=hi))return false;",
         "if(!all(isfinite(footprint)) || !all(footprint>0))return false;",
         "const float2 at=raster-float2(base);",
         "const float planeDepth=lerp(lerp(d00,d10,at.x),lerp(d01,d11,at.x),at.y);",
@@ -107,9 +108,9 @@ inline std::string pinFailure(const std::string& source) {
         if (at < from) return "out of order: " + pin;
         from = at;
     }
-    // 1 (the point test's) + 4 (the footprint's) reads inside the function, and the 4 of the junction test's quad (historyQuad, pinned in
+    // 4 (shared between the point test and the footprint) reads inside the function, and the 4 of the junction test's quad (historyQuad, pinned in
     // flat_history_junction_tests.h).
-    if (countOf(source, "HistoryDepth.Load(") != 9 || countOf(fn, "HistoryDepth.Load(") != 5) return "HistoryDepth is read somewhere else, or not by every texel";
+    if (countOf(source, "HistoryDepth.Load(") != 8 || countOf(fn, "HistoryDepth.Load(") != 4) return "HistoryDepth is read somewhere else, or not by every texel";
     return std::string();
 }
 
@@ -136,7 +137,7 @@ inline void textPins(Sink& t) {
         {"return junctionPersists(base,raster,footprint,expected,tol);", "return false;"},
         {"return junctionPersists(base,raster,footprint,expected,tol);", "return junctionPersists(base,raster,footprint,expected,2.0*tol);"},
         {"abs(planeDepth-expected)<=tol", "abs(planeDepth-expected)<=2.0*tol"},
-        {"if(best<=tol)return true;", "if(best<=tol)return true;\n    if(best<=tol)return true;"},
+        {"if(min(min(diff.x,diff.y),min(diff.z,diff.w))<=tol)return true;", "if(min(min(diff.x,diff.y),min(diff.z,diff.w))<=tol)return true;\n    if(min(min(diff.x,diff.y),min(diff.z,diff.w))<=tol)return true;"},
         {"const float2 at=raster-float2(base);", "const float2 at=float2(.5,.5);"},
     };
     for (const auto& e : edits) {

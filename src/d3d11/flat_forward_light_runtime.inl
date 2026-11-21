@@ -30,7 +30,7 @@ void forwardReset(State& s,uint64_t frame=0,bool captureLifecycle=true) {
     if(captureLifecycle)forwardPhaseLifecycle(s);
     geometryCertClear();
     auto& f=s.forwardLight;forwardRevoke(s,0,forward_light::Reason::Ownership);f.ledger.reset(frame);
-    f.dsvDescription.clear();f.depthDescription.clear();
+    f.dsvDescription.clear();f.depthDescription.clear();f.omDepthCache.clear();f.omOutputCache.clear();
     for(auto& observed:f.phaseObservedDonor)observed={};
     for(auto& a:f.authority)a={};for(auto& h:f.authorityHdr)h.Reset();
     for(auto& h:f.domainHolds)h={};for(auto& h:f.publicationHolds)h={};
@@ -64,7 +64,18 @@ bool forwardSrv(State& s,unsigned slot,bool raw,forward_light::Surface& out,
 }
 bool forwardDsvActual(State& s,const FlatContractObservation& k,forward_light::Surface& out,
                       Ptr<ID3D11DepthStencilView>& dsv,Ptr<ID3D11Resource>& resource,bool& writes) {
-    // Actual mutable bindings are queried on every draw. The one-entry caches
+    // Reuse the OM DSV + depth-stencil observation while omDepthEpoch is unchanged (survives VS/PS/CB/blend switches).
+    const uint64_t omDepthEpoch=flatOmDepthEpochLoad();
+    auto& omDsv=s.forwardLight.omDepthCache;
+    if(omDsv.valid&&omDsv.epoch==omDepthEpoch&&!flatIssueEpochFrozen()&&
+       !foreignWork.load(std::memory_order_acquire)&&!s.prefix.uncertain&&omDsv.dsv) {
+        dsv=omDsv.dsv;resource=omDsv.resource;out=omDsv.proof.surface;
+        const forward_light::DsvRequirement expected{reinterpret_cast<uintptr_t>(k.depth),k.depthWidth,k.depthHeight,
+            D3D11_DSV_DIMENSION_TEXTURE2D,DXGI_FORMAT_R32G8X24_TYPELESS,DXGI_FORMAT_D32_FLOAT_S8X24_UINT};
+        return forward_light::dsvObservationMatches(omDsv.proof,expected,writes);
+    }
+    omDsv.clear();
+    // Actual mutable bindings are queried on epoch miss. The one-entry caches
     // retain COM identities only for descriptions that cannot change while a
     // view/state is alive; a different binding immediately takes the miss path.
     flatcpu::CopyCounter counts;
@@ -103,6 +114,12 @@ bool forwardDsvActual(State& s,const FlatContractObservation& k,forward_light::S
     const forward_light::DsvObservationProof actualProof{out,reinterpret_cast<uintptr_t>(resource.Get()),
         static_cast<uint32_t>(v.ViewDimension),format,static_cast<uint32_t>(v.Format),
         z.DepthEnable!=FALSE,z.DepthWriteMask==D3D11_DEPTH_WRITE_MASK_ALL,(v.Flags&D3D11_DSV_READ_ONLY_DEPTH)!=0};
+    if(!flatIssueEpochFrozen()&&!foreignWork.load(std::memory_order_acquire)&&!s.prefix.uncertain&&
+       flatOmDepthEpochLoad()==omDepthEpoch) {
+        omDsv.valid=true;omDsv.epoch=omDepthEpoch;omDsv.dsv=dsv;omDsv.resource=resource;omDsv.proof=actualProof;
+    } else {
+        omDsv.clear();
+    }
     const forward_light::DsvRequirement expected{reinterpret_cast<uintptr_t>(k.depth),k.depthWidth,k.depthHeight,
         D3D11_DSV_DIMENSION_TEXTURE2D,DXGI_FORMAT_R32G8X24_TYPELESS,DXGI_FORMAT_D32_FLOAT_S8X24_UINT};
     return forward_light::dsvObservationMatches(actualProof,expected,writes);
@@ -239,6 +256,13 @@ void forwardDrawWrites(State& s,ID3D11DeviceContext* actualDrawContext) {
         return; // No forward dependency can observe these mutations; no D3D query.
     }
     counts.add(flatcpu::kCopyGuardFallback);
+    const uint64_t omOutEpoch=flatOmOutputEpochLoad();
+    auto& omOut=s.forwardLight.omOutputCache;
+    if(known&&omOut.valid&&omOut.epoch==omOutEpoch&&!flatIssueEpochFrozen()) {
+        for(unsigned i=0;i<omOut.rtvCount;++i)forwardMutation(s,omOut.rtvs[i],false);
+        for(unsigned i=0;i<omOut.uavCount;++i)forwardMutation(s,omOut.uavs[i]);
+        return;
+    }
     FlatComputeInternalScope internal;
     ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
     ID3D11UnorderedAccessView* uavs[D3D11_1_UAV_SLOT_COUNT]{};
@@ -248,15 +272,29 @@ void forwardDrawWrites(State& s,ID3D11DeviceContext* actualDrawContext) {
     counts.add(flatcpu::kCopyBlendGet);
     Ptr<ID3D11BlendState> blend;FLOAT factors[4]{};UINT mask=0;s.context->OMGetBlendState(&blend,factors,&mask);
     D3D11_BLEND_DESC desc{};if(blend){counts.add(flatcpu::kCopyBlendDesc);blend->GetDesc(&desc);}
+    unsigned cachedRtvs=0,cachedUavs=0;
+    uintptr_t rtvList[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
+    uintptr_t uavList[D3D11_1_UAV_SLOT_COUNT]{};
     for(unsigned i=0;i<D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT;++i)if(targets[i]) {
         counts.add(flatcpu::kCopyRtvBound);
         Ptr<ID3D11RenderTargetView> view;view.Attach(targets[i]);
         const auto slot=desc.IndependentBlendEnable?i:0;
         if(!blend||desc.RenderTarget[slot].RenderTargetWriteMask){counts.add(flatcpu::kCopyGetResource);Ptr<ID3D11Resource> resource;view->GetResource(&resource);
+            rtvList[cachedRtvs++]=reinterpret_cast<uintptr_t>(resource.Get());
             forwardMutation(s,reinterpret_cast<uintptr_t>(resource.Get()),false);}
     }
     for(unsigned i=0;i<n;++i)if(uavs[i]){counts.add(flatcpu::kCopyUavBound);Ptr<ID3D11UnorderedAccessView> view;view.Attach(uavs[i]);
-        counts.add(flatcpu::kCopyGetResource);Ptr<ID3D11Resource> resource;view->GetResource(&resource);forwardMutation(s,reinterpret_cast<uintptr_t>(resource.Get()));}
+        counts.add(flatcpu::kCopyGetResource);Ptr<ID3D11Resource> resource;view->GetResource(&resource);
+        const auto ptr=reinterpret_cast<uintptr_t>(resource.Get());
+        uavList[cachedUavs++]=ptr;
+        forwardMutation(s,ptr);}
+    if(known&&!flatIssueEpochFrozen()&&flatOmOutputEpochLoad()==omOutEpoch) {
+        omOut.valid=true;omOut.epoch=omOutEpoch;omOut.rtvCount=cachedRtvs;omOut.uavCount=cachedUavs;
+        for(unsigned i=0;i<cachedRtvs;++i)omOut.rtvs[i]=rtvList[i];
+        for(unsigned i=0;i<cachedUavs;++i)omOut.uavs[i]=uavList[i];
+    } else {
+        omOut.clear();
+    }
 }
 bool forwardConverterState(State& s,unsigned width,unsigned height) {
     forward_light::ConverterRaster raster;raster.width=width;raster.height=height;

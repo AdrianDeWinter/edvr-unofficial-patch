@@ -160,14 +160,14 @@ template<class Check> void run(Check check) {
                sampled=body(temporal,"void flatTemporalAfterPresent("),finished=body(temporal,"void finishDiscovery(");
     check(start.find("g_flatTemporalManual.store(false")!=std::string::npos &&
           start.find("g_flatTemporalOwnerThread.store(0")!=std::string::npos &&
-          start.find("g.captureBudget = flatCaptureBudget(FlatCaptureTier::Full);")!=std::string::npos &&
+          start.find("g.captureBudget = flatCaptureBudget(FlatCaptureTier::General);")!=std::string::npos &&
           start.find("g_passiveRearmAvailable.store(true")!=std::string::npos &&
           start.find("g_waitingForPresent.store(true")!=std::string::npos &&
           before(owned,"flatOwnerClaimOnPresent(","first owned Present on thread") &&
           before(owned,"first owned Present on thread","g_flatTemporalCapturing.store(true") &&
           before(sampled,"if (frameDraws) ++g.usefulFrames;","report(frame, \"sample\");") &&
           finished.find("report(frame, \"final\");")!=std::string::npos,
-          "discovery passive rearm: restart resets manual demand and 120-second/12000-frame budget, then first owned Present activates distinct sample/final reports");
+          "discovery passive rearm: restart resets manual demand and 1-second/3-frame budget, then first owned Present activates distinct sample/final reports");
     const auto stop=body(temporal,"void flatTemporalStop(");
     check(stop.find("g_passiveRearmAvailable.store(false")!=std::string::npos &&
           stop.find("g_waitingForPresent.store(false")!=std::string::npos,

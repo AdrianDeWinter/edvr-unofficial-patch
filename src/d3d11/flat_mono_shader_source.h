@@ -234,13 +234,14 @@ bool historyDepthMatches(float2 prev,float expected) {
     const float2 raster=prev*float2(size.xy)+jitter.zw-.5;   // the previous raster position in texel-centre coordinates: the 2x2 below surrounds it
     const int2 base=int2(floor(raster));
     const float tol=max(kStaleDepthFloor,expected*kStaleDepthRel);
-    float best=3.402823e38;
-    [unroll]for(int y=0;y<2;++y)[unroll]for(int x=0;x<2;++x)best=min(best,abs(HistoryDepth.Load(int3(clamp(base+int2(x,y),0,hi),0))-expected));
-    if(best<=tol)return true;
-    if(any(base<0) || any(base>=hi))return false;
-    const float d00=HistoryDepth.Load(int3(base,0)), d10=HistoryDepth.Load(int3(base+int2(1,0),0));
-    const float d01=HistoryDepth.Load(int3(base+int2(0,1),0)), d11=HistoryDepth.Load(int3(base+int2(1,1),0));
+    const float d00=HistoryDepth.Load(int3(clamp(base,0,hi),0));
+    const float d10=HistoryDepth.Load(int3(clamp(base+int2(1,0),0,hi),0));
+    const float d01=HistoryDepth.Load(int3(clamp(base+int2(0,1),0,hi),0));
+    const float d11=HistoryDepth.Load(int3(clamp(base+int2(1,1),0,hi),0));
     const float4 footprint=float4(d00,d10,d01,d11);
+    const float4 diff=abs(footprint-expected);
+    if(min(min(diff.x,diff.y),min(diff.z,diff.w))<=tol)return true;
+    if(any(base<0) || any(base>=hi))return false;
     if(!all(isfinite(footprint)) || !all(footprint>0))return false;
     const float2 at=raster-float2(base);
     const float planeDepth=lerp(lerp(d00,d10,at.x),lerp(d01,d11,at.x),at.y);
@@ -250,10 +251,9 @@ bool historyDepthMatches(float2 prev,float expected) {
 // 0 = camera term, 1 = exact engine motion, 2 = explicitly reject history, 3 = the camera term if the depth check confirms it (a stale
 // slot with flags.w==2). `cls` is what the pixel is (kClass*): the refusal census and view read it, nothing else does, and no return
 // below depends on it.
-uint engineBefore(int2 q,float2 uv,float depth,out float4 before,out uint cls) {
+uint engineBefore(int2 q,float2 uv,float depth,float2 es,out float4 before,out uint cls) {
     before=0; cls=kClassNone;
     if(flags.y==0)return 0;
-    float2 es=Slots.Load(int3(q,0));
     if(!(es.x>=1))return 0;
     if(!(depth>0) || es.x>=4294967296.0){cls=kClassSentinel;return 2;}
     // A slot written by a keyed draw that something has since drawn over: the pixel's owner is not the
@@ -317,10 +317,9 @@ uint engineBefore(int2 q,float2 uv,float depth,out float4 before,out uint cls) {
 // this pixel's own depth the way the record moved. Returns false, leaving the camera term, for anything else: the bit clear, a slot code
 // that is no record, a masked, non-rig or stale-marker record, a skinned one, or one the rows cannot reproject. The caller validates the
 // answer against last frame's depth (historyDepthMatches) exactly as it validates the camera term.
-bool staleRecordBefore(int2 q,float2 uv,float depth,out float4 before) {
+bool staleRecordBefore(float2 uv,float depth,float2 es,out float4 before) {
     before=0;
     if((debug.w&16)==0)return false;
-    float2 es=Slots.Load(int3(q,0));
     if(!(es.x>=1) || es.x>=4294967296.0)return false;
     uint code=uint(es.x);
     if(float(code)!=es.x || (code&1)==0)return false;
@@ -414,22 +413,36 @@ void prep(uint3 id:SV_DispatchThreadID) {
     // views are unbound, so no pixel is attached and the branch below is the code that was here before.
     bool untrusted=false;
     if((debug.w&1)!=0)untrusted=UntrustedCameraCoverage.Load(int3(q,0))>0;
+    float2 owner=float2(-1,0);
+    bool slotLoaded=false;
     bool foreground=false;
     if((debug.w&2)!=0) {
         // A first-person mark names this pixel only while its depth is still the pixel's. World draws leave no
         // mark (section 104), so a world surface drawn over a first-person one keeps the world's motion.
-        float2 owner=Slots.Load(int3(q,0));
+        owner=Slots.Load(int3(q,0));
+        slotLoaded=true;
         foreground=owner.x < -1 && asuint(owner.y)==asuint(depth);
     }
-    bool attached=route.z!=0 && (FirstPersonStencil.Load(int3(q,0)).y&16)!=0;
-    // The bit is not the weapon's alone: the game's characters carry it too (measured 2026-10-08 in the eye depth stencil: a walking NPC's
-    // whole silhouette, 8,359 px, and the commander's own body, 785,022 px, read 0x10). A character is a world surface drawn by a shader
-    // the weapon map never captures, so the map holds nothing (w 0) under it, and it must take the world path, an engine record if joined,
-    // else the camera term, as every other world pixel does. A texel is first-person only if the map covers it (w 1 valid or 2 new: the
-    // matcher saw a weapon mesh there, whether or not it could place it) or it is within reach (kFirstPersonReachDepth): a weapon or arm
-    // the matcher missed on a frame it declined (more than four mesh occurrences, an arena write) stays first-person and keeps no history,
-    // never the camera term, which would ghost it.
-    if(attached && FirstPersonMotion.Load(int3(q,0)).w==0 && depth<kFirstPersonReachDepth)attached=false;
+    // Nested if rather than &&: FXC does not short-circuit logical &&, which previously issued unconditional
+    // null-SRV Loads against FirstPersonStencil and FirstPersonMotion on every flat pixel when route.z == 0.
+    bool attached=false;
+    float4 fpMotion=0;
+    bool fpMotionLoaded=false;
+    if(route.z!=0) {
+        attached=(FirstPersonStencil.Load(int3(q,0)).y&16)!=0;
+        // The bit is not the weapon's alone: the game's characters carry it too (measured 2026-10-08 in the eye depth stencil: a walking NPC's
+        // whole silhouette, 8,359 px, and the commander's own body, 785,022 px, read 0x10). A character is a world surface drawn by a shader
+        // the weapon map never captures, so the map holds nothing (w 0) under it, and it must take the world path, an engine record if joined,
+        // else the camera term, as every other world pixel does. A texel is first-person only if the map covers it (w 1 valid or 2 new: the
+        // matcher saw a weapon mesh there, whether or not it could place it) or it is within reach (kFirstPersonReachDepth): a weapon or arm
+        // the matcher missed on a frame it declined (more than four mesh occurrences, an arena write) stays first-person and keeps no history,
+        // never the camera term, which would ghost it.
+        if(attached && depth<kFirstPersonReachDepth) {
+            fpMotion=FirstPersonMotion.Load(int3(q,0));
+            fpMotionLoaded=true;
+            if(fpMotion.w==0)attached=false;
+        }
+    }
     if(untrusted) {
         // A later world draw may have overwritten the same encoded depth.
         // Coverage remains a conservative camera-ambiguity veto.
@@ -453,7 +466,7 @@ void prep(uint3 id:SV_DispatchThreadID) {
         // the prep writes below depends on it. A pixel with no sample, or a valid sample refused here, carries 0.
         if(!foregroundValid && foregroundSample.w==2 && foregroundSample.x>=1 && foregroundSample.x<=7)cls|=uint(foregroundSample.x)<<4;
     } else if(attached) {
-        float4 m=FirstPersonMotion.Load(int3(q,0));
+        float4 m=fpMotionLoaded?fpMotion:FirstPersonMotion.Load(int3(q,0));
         // The previous position in render pixels. Leaving the frame is disocclusion, not something to extrapolate.
         float2 prevPx=float2(q)+.5+m.xy;
         // The map's depth is fp16, within half an ulp (a relative 2^-11) of the surface; the .0005 covers that. A missing,
@@ -474,8 +487,9 @@ void prep(uint3 id:SV_DispatchThreadID) {
         motion=valid?m.xy:0; reject=valid?0:1; expected=valid?depth:0;
         cls=valid?kClassWeapon:kClassWeaponRefused;
     } else if(flags.x==0 && isfinite(depth) && depth>=0 && depth<=1) {
+        if(!slotLoaded && flags.y!=0)owner=Slots.Load(int3(q,0));
         float4 before;
-        uint kind=engineBefore(q,rawUv,depth,before,cls);
+        uint kind=engineBefore(q,rawUv,depth,owner,before,cls);
         // HLSL logical operators do not short-circuit: putting cameraBefore's
         // out parameter in || would overwrite the exact engine result.
         bool valid=kind==1;
@@ -485,7 +499,7 @@ void prep(uint3 id:SV_DispatchThreadID) {
         bool recordKept=false;
         if(kind==3) {
             float4 recordBefore;
-            const bool recordOk=staleRecordBefore(q,rawUv,depth,recordBefore);
+            const bool recordOk=staleRecordBefore(rawUv,depth,owner,recordBefore);
             if(recordOk) {
                 const float2 recordPrev=recordBefore.xy/recordBefore.w*float2(.5,-.5)+.5;
                 const float2 recordMotion=(recordPrev-rawUv)*float2(size.xy);
@@ -690,11 +704,10 @@ void finish(uint3 id:SV_DispatchThreadID) {
     if(any(id.xy>=size.zw))return;
     float2 uv=(float2(id.xy)+.5)/float2(size.zw);
     float2 rasterUv=uv+jitter.xy/float2(size.xy);
-    int2 q=int2(floor(rasterUv*float2(size.xy)-.5));
-    float reject=0;
-    [unroll]for(int y=0;y<2;++y)[unroll]for(int x=0;x<2;++x)
-        reject=max(reject,Rejection.Load(int3(clamp(q+int2(x,y),0,int2(size.xy)-1),0)));
-    float4 c=reject>0?Color.SampleLevel(LinearClamp,rasterUv,0):History.Load(int3(id.xy,0));
+    const bool refused=any(Rejection.GatherRed(LinearClamp,rasterUv)>0);
+    float4 c;
+    if(refused)c=Color.SampleLevel(LinearClamp,rasterUv,0);
+    else c=History.Load(int3(id.xy,0));
     if(debug.y!=0)c.rgb=refusalPaint(c.rgb,refusalClassAt(rasterUv));
     OutColor[id.xy]=c;
 }
@@ -727,12 +740,9 @@ float4 finishHdr(float4 pos:SV_Position):SV_Target {
         // EDVR's TAA output is final (its own rejection ran inside it): a plain copy.
         c=History.Load(int3(p,0)).rgb;
     } else {
-        int2 q=int2(floor(rasterUv*float2(size.xy)-.5));
-        float reject=0;
-        [unroll]for(int y=0;y<2;++y)[unroll]for(int x=0;x<2;++x)
-            reject=max(reject,Rejection.Load(int3(clamp(q+int2(x,y),0,int2(size.xy)-1),0)));
-        refused=reject>0;
-        c=refused?Color.SampleLevel(LinearClamp,rasterUv,0).rgb:History.Load(int3(p,0)).rgb;
+        refused=any(Rejection.GatherRed(LinearClamp,rasterUv)>0);
+        if(refused)c=Color.SampleLevel(LinearClamp,rasterUv,0).rgb;
+        else c=History.Load(int3(p,0)).rgb;
     }
     if(debug.z!=0) {
         // Protected late overlays (a weapon's glow, a sight's lens and glow quads: draws the game made into H after the world). In an
@@ -745,13 +755,10 @@ float4 finishHdr(float4 pos:SV_Position):SV_Target {
         // clamps the sum. A refused covered pixel is the raw sample itself, which is what the sum comes to for it, taken without the
         // rounding of the round trip. The raw sample is bilinear, so a pixel counts as covered when any of its four source taps is
         // (the one-pixel filtered edge of an overlay).
-        int2 q=int2(floor(rasterUv*float2(size.xy)-.5));
-        float covered=0;
-        [unroll]for(int y=0;y<2;++y)[unroll]for(int x=0;x<2;++x)
-            covered=max(covered,OverlayCoverage.Load(int3(clamp(q+int2(x,y),0,int2(size.xy)-1),0)));
-        if(covered>0) {
+        if(any(OverlayCoverage.GatherRed(LinearClamp,rasterUv)>0)) {
             const float3 raw=OverlayColor.SampleLevel(LinearClamp,rasterUv,0).rgb;
-            c=refused?raw:c+raw-Color.SampleLevel(LinearClamp,rasterUv,0).rgb;
+            if(refused)c=raw;
+            else c=c+raw-Color.SampleLevel(LinearClamp,rasterUv,0).rgb;
         }
     }
     if(debug.y!=0)c=refusalPaint(c,refusalClassAt(rasterUv));

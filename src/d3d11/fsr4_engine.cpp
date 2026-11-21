@@ -267,6 +267,7 @@ struct FeatureSlot {
     // Bridge timing lives per slot, so it outlives a context rebuild. The sets are reset on the owner context at shutdown.
     std::array<BridgeSet, kBridgeSets> bridge;
     BridgeWindow window;
+    uint32_t timingSample = 0;   // 1-in-16 sampling stride for GPU bridge/dispatch timing (index 0 always sampled)
     char d12Note[96] = "";   // why this slot's D3D12 dispatch timestamps are absent, when they are
 };
 
@@ -291,6 +292,7 @@ struct State {
     // One counter for every slot: all slots signal the one shared fence in this order, so a wait on a slot's own value also
     // covers the other slots' earlier work, and the value never goes backwards.
     uint64_t nextFenceValue = 0;
+    uint64_t unflushedConsumer = 0;   // latest consumer Signal() not yet flushed on ownerContext; flushed on releaseSlot or next signal-in
     uint64_t d12TimestampHz = 0;   // queue ticks per second; 0 when the queue reports none (bridge timing then off)
     uint32_t evaluations = 0, resets = 0, failures = 0;
     bool untrackedSubmission = false;
@@ -632,6 +634,13 @@ bool releaseSlot(State& state, unsigned slot, const char** why) {
     if (!feature) return true;
     if (state.untrackedSubmission)
         return fail(why, "a submitted D3D12 command list has no completed fence; retaining its resources");
+    if (state.unflushedConsumer && state.ownerContext) {
+        const uint64_t completed = state.fence12->GetCompletedValue();
+        if (completed != UINT64_MAX && completed < feature->lastUseValue) {
+            state.ownerContext->Flush();
+            state.unflushedConsumer = 0;
+        }
+    }
     if (!waitFor(state, feature->lastUseValue, why, "release")) return false;
     if (feature->context) {
         const ffxReturnCode_t rc = state.api.destroy(&feature->context, nullptr);
@@ -1268,8 +1277,11 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
         return false;
     }
     phase.end(kPhaseTakeIn);
+    // Sample GPU bridge and D3D12 dispatch timing 1 in 16 evaluations (index 0 always sampled) instead of issuing
+    // 12 D3D11 query Ends + 2 D3D12 timestamps on every frame.
+    const bool sampleTiming = (holder.timingSample++ & 15u) == 0;
     // Bridge timing opens before the input copies: total, then copy-in. The guard cancels them on any failure below.
-    BridgeSet* bridge = beginBridge(holder, device.Get(), ctx);
+    BridgeSet* bridge = sampleTiming ? beginBridge(holder, device.Get(), ctx) : nullptr;
     BridgeGuard guard(bridge, ctx);
     copyInput(ctx, feature.color.d11.Get(), colour, w, h, colourPlan.exact);
     copyInput(ctx, feature.motion.d11.Get(), mv, w, h, motionPlan.exact);
@@ -1292,6 +1304,7 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
         bridge->timers[kBridgeWait].begin(device.Get(), ctx);
     }
     ctx->Flush();
+    state.unflushedConsumer = 0;
     feature.lastUseValue = producer;
     phase.end(kPhaseSignalIn);
     LARGE_INTEGER queueWaitBegan{}, queueWaitEnded{};
@@ -1349,7 +1362,8 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
     dispatch.flags = fsr4DispatchFlags(hdr);
 
     // The two timestamps bracket ffxDispatch alone; the barriers around it are outside the measured span.
-    if (command.timingHeap.Get()) list->EndQuery(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    const bool sampleD12Timing = sampleTiming && command.timingHeap.Get() != nullptr;
+    if (sampleD12Timing) list->EndQuery(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
     const ffxReturnCode_t rc = state.api.dispatch(&feature.context, &dispatch.header);
     if (rc != FFX_API_RETURN_OK) {
         ++state.failures;
@@ -1376,7 +1390,7 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
         return fail(why, "%s", text);
     }
     feature.dispatchStrikes = 0;
-    if (command.timingHeap.Get()) {
+    if (sampleD12Timing) {
         list->EndQuery(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
         list->ResolveQueryData(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2,
                                command.timingReadback.Get(), 0);
@@ -1396,7 +1410,7 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
     LARGE_INTEGER submitBegan{}, submitEnded{};
     QueryPerformanceCounter(&submitBegan);
     state.queue->ExecuteCommandLists(1, lists);
-    command.timingPending = command.timingHeap.Get() != nullptr;
+    command.timingPending = sampleD12Timing;
     const uint64_t done = ++state.nextFenceValue;
     hr = state.queue->Signal(state.fence12.Get(), done);
     QueryPerformanceCounter(&submitEnded);
@@ -1444,7 +1458,9 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
         return fail(why, "D3D11 consumer Signal(%llu) failed 0x%08X; resources retained",
                     static_cast<unsigned long long>(consumer), unsigned(hr));
     }
-    ctx->Flush();
+    // Steady-state frames do not need a second Flush() here: Present() and the next frame's signal-in Flush() both
+    // submit this Signal(), while releaseSlot() flushes explicitly before waiting if teardown arrives first.
+    state.unflushedConsumer = consumer;
     feature.lastUseValue = consumer;
     phase.end(kPhaseSignalOut);
     LARGE_INTEGER ended{};
