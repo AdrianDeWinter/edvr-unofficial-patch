@@ -81,8 +81,8 @@ const wchar_t* kTipText = L"ED-UP is free. If it makes your flight more enjoyabl
 #endif
 const wchar_t* kDiscordUrl = L"https://discord.gg/AWJ6djKKzr";
 constexpr int kTabY = 140;
-constexpr int kTabH = 30;
-constexpr int kTabRuleY = 175;
+constexpr int kTabH = 32;
+constexpr int kTabRuleY = kTabY + kTabH;
 constexpr int kContentTop = 184;
 #ifdef EDUP_LAUNCHER
 // Launcher layout (96-dpi units): three workflow screens (Play, Setup, Settings).

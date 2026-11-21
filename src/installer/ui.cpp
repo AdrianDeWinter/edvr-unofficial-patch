@@ -45,20 +45,25 @@ Gdiplus::Color gdip(COLORREF c, BYTE alpha = 255) {
     return Gdiplus::Color(alpha, GetRValue(c), GetGValue(c), GetBValue(c));
 }
 
-// A rounded rectangle as a GDI+ path. GDI's own RoundRect is not antialiased,
-// and at the radii used here that reads as a jagged edge rather than a corner.
-Gdiplus::GraphicsPath* roundedPath(const RECT& rect, int radius) {
+void configureGraphics(Gdiplus::Graphics& g) {
+    g.SetSmoothingMode(Gdiplus::SmoothingModeHighQuality);
+    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+    g.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+}
+
+// A rounded rectangle as a floating-point GDI+ path. Floating-point arcs paired
+// with PixelOffsetModeHighQuality avoid the half-pixel shift and edge clipping
+// that make integer GDI+ corners and small circles look stepped.
+Gdiplus::GraphicsPath* roundedPathF(float x, float y, float w, float h, float r) {
     Gdiplus::GraphicsPath* path = new Gdiplus::GraphicsPath();
-    const int x = rect.left, y = rect.top;
-    const int w = rect.right - rect.left, h = rect.bottom - rect.top;
-    int r = radius;
-    if (r * 2 > w) r = w / 2;
-    if (r * 2 > h) r = h / 2;
-    if (r <= 0) {
-        path->AddRectangle(Gdiplus::Rect(x, y, w, h));
+    if (w <= 0.0f || h <= 0.0f) return path;
+    if (r * 2.0f > w) r = w * 0.5f;
+    if (r * 2.0f > h) r = h * 0.5f;
+    if (r <= 0.25f) {
+        path->AddRectangle(Gdiplus::RectF(x, y, w, h));
         return path;
     }
-    const int d = r * 2;
+    const float d = r * 2.0f;
     path->AddArc(x, y, d, d, 180.0f, 90.0f);
     path->AddArc(x + w - d, y, d, d, 270.0f, 90.0f);
     path->AddArc(x + w - d, y + h - d, d, d, 0.0f, 90.0f);
@@ -280,33 +285,77 @@ void applyWindowChrome(HWND window) {
 }
 
 void fillRounded(HDC dc, RECT rect, int radius, COLORREF fill) {
+    const float w = static_cast<float>(rect.right - rect.left);
+    const float h = static_cast<float>(rect.bottom - rect.top);
+    if (w <= 0.5f || h <= 0.5f) return;
     Gdiplus::Graphics graphics(dc);
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    Gdiplus::GraphicsPath* path = roundedPath(rect, radius);
+    configureGraphics(graphics);
+    // Inset slightly so antialiased corner fringes never clip against a child HWND's
+    // bounds and stay flush beneath a 0.5-pixel-centred 1 px stroke.
+    Gdiplus::GraphicsPath* path = roundedPathF(static_cast<float>(rect.left) + 0.5f,
+                                               static_cast<float>(rect.top) + 0.5f,
+                                               w - 1.0f, h - 1.0f, static_cast<float>(radius));
     Gdiplus::SolidBrush brush(gdip(fill));
     graphics.FillPath(&brush, path);
     delete path;
 }
 
 void strokeRounded(HDC dc, RECT rect, int radius, COLORREF stroke, int inset) {
-    RECT r = rect;
-    r.left += inset;
-    r.top += inset;
-    r.right -= inset + 1;
-    r.bottom -= inset + 1;
+    const float pad = static_cast<float>(inset) + 0.5f;
+    const float w = static_cast<float>(rect.right - rect.left) - pad * 2.0f;
+    const float h = static_cast<float>(rect.bottom - rect.top) - pad * 2.0f;
+    if (w <= 0.5f || h <= 0.5f) return;
+    const float r = static_cast<float>(radius) > static_cast<float>(inset)
+                        ? static_cast<float>(radius - inset)
+                        : 0.0f;
     Gdiplus::Graphics graphics(dc);
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    Gdiplus::GraphicsPath* path = roundedPath(r, radius);
+    configureGraphics(graphics);
+    Gdiplus::GraphicsPath* path = roundedPathF(static_cast<float>(rect.left) + pad,
+                                               static_cast<float>(rect.top) + pad, w, h, r);
     Gdiplus::Pen pen(gdip(stroke), 1.0f);
     graphics.DrawPath(&pen, path);
     delete path;
 }
 
 void fillCircle(HDC dc, int centreX, int centreY, int radius, COLORREF fill) {
+    const float r = static_cast<float>(radius);
+    if (r <= 0.0f) return;
     Gdiplus::Graphics graphics(dc);
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    configureGraphics(graphics);
     Gdiplus::SolidBrush brush(gdip(fill));
-    graphics.FillEllipse(&brush, centreX - radius, centreY - radius, radius * 2, radius * 2);
+    graphics.FillEllipse(&brush, static_cast<float>(centreX) - r, static_cast<float>(centreY) - r,
+                         r * 2.0f, r * 2.0f);
+}
+
+void paintToggle(HDC dc, RECT box, bool on, UINT dpi) {
+    const Theme& t = theme();
+    const float x = static_cast<float>(box.left) + 0.5f;
+    const float y = static_cast<float>(box.top) + 0.5f;
+    const float w = static_cast<float>(box.right - box.left) - 1.0f;
+    const float h = static_cast<float>(box.bottom - box.top) - 1.0f;
+    if (w <= 2.0f || h <= 2.0f) return;
+
+    Gdiplus::Graphics graphics(dc);
+    configureGraphics(graphics);
+
+    const float r = h * 0.5f;
+    Gdiplus::GraphicsPath* track = roundedPathF(x, y, w, h, r);
+    Gdiplus::SolidBrush trackBrush(gdip(on ? t.accent : t.control));
+    graphics.FillPath(&trackBrush, track);
+    if (!on) {
+        Gdiplus::Pen borderPen(gdip(t.controlBorder), 1.0f);
+        graphics.DrawPath(&borderPen, track);
+    }
+    delete track;
+
+    const float inset = static_cast<float>(dp(3, dpi));
+    const float knobR = (h * 0.5f) - inset;
+    if (knobR > 1.0f) {
+        const float cy = y + h * 0.5f;
+        const float cx = on ? (x + w - r) : (x + r);
+        Gdiplus::SolidBrush knobBrush(gdip(on ? t.accentText : t.subtext));
+        graphics.FillEllipse(&knobBrush, cx - knobR, cy - knobR, knobR * 2.0f, knobR * 2.0f);
+    }
 }
 
 void fillRect(HDC dc, RECT rect, COLORREF fill) {
@@ -407,7 +456,8 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
     if (!owned) return;
     const Theme& t = theme();
     const bool disabled = (item->itemState & ODS_DISABLED) != 0;
-    const bool focused = (item->itemState & ODS_FOCUS) != 0;
+    const bool showFocus = (item->itemState & ODS_FOCUS) != 0 &&
+                           (item->itemState & ODS_NOFOCUSRECT) == 0 && !disabled;
 
     wchar_t label[256]{};
     GetWindowTextW(item->hwndItem, label, 256);
@@ -437,24 +487,26 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
             face = owned->hot ? t.controlHover : t.control;
             break;
         case ButtonStyle::TabActive:
-            face = t.cardBg;
-            border = t.cardBorder;
+            // Top-level tabs use a clean underline only (no card box behind the label).
+            face = t.windowBg;
+            border = t.windowBg;
             ink = t.text;
             break;
         case ButtonStyle::Tab:
-            face = owned->hot ? mix(t.windowBg, t.cardBg, 60) : t.windowBg;
-            border = face;
-            ink = t.subtext;
+            face = t.windowBg;
+            border = t.windowBg;
+            ink = owned->hot ? t.text : t.subtext;
             break;
         case ButtonStyle::SegmentActive:
-            face = t.control;
-            border = t.controlBorder;
+            // Segmented controls inside cards use a button highlight only (no underline).
+            face = mix(t.cardBg, t.accent, t.dark ? 22 : 12);
+            border = mix(t.cardBorder, t.accent, 55);
             ink = t.text;
             break;
         case ButtonStyle::Segment:
-            face = owned->hot ? mix(t.cardBg, t.control, 70) : t.cardBg;
+            face = owned->hot ? t.control : t.cardBg;
             border = t.cardBorder;
-            ink = t.subtext;
+            ink = owned->hot ? t.text : t.subtext;
             break;
         case ButtonStyle::Link:
             face = t.windowBg;
@@ -467,22 +519,33 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
         border = mix(border, t.windowBg, 55);
         ink = t.muted;
     }
-    if (owned->pressed && !disabled) face = mix(face, RGB(0, 0, 0), t.dark ? 0 : 8);
+    if (owned->pressed && !disabled && owned->style != ButtonStyle::Tab &&
+        owned->style != ButtonStyle::TabActive) {
+        face = mix(face, RGB(0, 0, 0), t.dark ? 0 : 8);
+    }
 
-    if (owned->style != ButtonStyle::Link) {
-        fillRounded(dc, rect, radius, face);
-        if (border != face) strokeRounded(dc, rect, radius, border);
-        if ((owned->style == ButtonStyle::TabActive || owned->style == ButtonStyle::SegmentActive) && !disabled) {
+    if (owned->style == ButtonStyle::TabActive) {
+        if (!disabled) {
             const int barH = dp(2, dpi) > 2 ? dp(2, dpi) : 2;
-            const int padX = dp(10, dpi);
+            const int padX = dp(8, dpi);
             if (rect.right - rect.left > padX * 2 + 6) {
-                RECT bar{rect.left + padX, rect.bottom - barH - dp(2, dpi), rect.right - padX,
-                         rect.bottom - dp(2, dpi)};
-                fillRounded(dc, bar, barH, t.accent);
+                Gdiplus::Graphics graphics(dc);
+                configureGraphics(graphics);
+                Gdiplus::GraphicsPath* bar = roundedPathF(
+                    static_cast<float>(rect.left + padX),
+                    static_cast<float>(rect.bottom - barH),
+                    static_cast<float>((rect.right - rect.left) - padX * 2),
+                    static_cast<float>(barH), static_cast<float>(barH) * 0.5f);
+                Gdiplus::SolidBrush brush(gdip(t.accent));
+                graphics.FillPath(&brush, bar);
+                delete bar;
             }
         }
+    } else if (owned->style != ButtonStyle::Link && owned->style != ButtonStyle::Tab) {
+        fillRounded(dc, rect, radius, face);
+        if (border != face) strokeRounded(dc, rect, radius, border);
     }
-    if (focused && !disabled) strokeRounded(dc, rect, radius, t.accent, dp(2, dpi));
+    if (showFocus) strokeRounded(dc, rect, radius, t.accent, dp(2, dpi));
 
     RECT textRect = rect;
     if (owned->style == ButtonStyle::Link) {
@@ -523,7 +586,7 @@ void drawCheckbox(const DRAWITEMSTRUCT* item, UINT dpi) {
         // A tick, drawn rather than typed: Segoe MDL2 is not on every machine
         // and a font fallback here would put a box glyph in a checkbox.
         Gdiplus::Graphics graphics(dc);
-        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        configureGraphics(graphics);
         Gdiplus::Pen pen(gdip(t.accentText), static_cast<Gdiplus::REAL>(dp(2, dpi)));
         pen.SetStartCap(Gdiplus::LineCapRound);
         pen.SetEndCap(Gdiplus::LineCapRound);
@@ -540,7 +603,7 @@ void drawCheckbox(const DRAWITEMSTRUCT* item, UINT dpi) {
     drawText(dc, label, textRect, fonts().body, disabled ? t.muted : t.text,
              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-    if ((item->itemState & ODS_FOCUS) && !disabled) {
+    if ((item->itemState & ODS_FOCUS) != 0 && (item->itemState & ODS_NOFOCUSRECT) == 0 && !disabled) {
         RECT focus = item->rcItem;
         strokeRounded(dc, focus, dp(4, dpi), t.accent);
     }
