@@ -14,6 +14,51 @@ bool isLowerHex(const std::string& text, size_t digits) {
     return true;
 }
 
+namespace {
+
+std::string encodeHex(const unsigned char* bytes, size_t size, const char* digits) {
+    if (!bytes || size == 0) return std::string();
+    std::string out;
+    out.reserve(size * 2);
+    for (size_t i = 0; i < size; ++i) {
+        out.push_back(digits[bytes[i] >> 4]);
+        out.push_back(digits[bytes[i] & 15]);
+    }
+    return out;
+}
+
+int hexNibble(char c, bool lowerOnly) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (!lowerOnly && c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+}  // namespace
+
+std::string hexLower(const unsigned char* bytes, size_t size) { return encodeHex(bytes, size, "0123456789abcdef"); }
+
+std::string hexUpper(const unsigned char* bytes, size_t size) { return encodeHex(bytes, size, "0123456789ABCDEF"); }
+
+bool decodeHex(const std::string& text, std::vector<unsigned char>* out, bool lowerOnly) {
+    if (out) out->clear();
+    if (text.empty() || text.size() % 2 != 0) return false;
+    std::vector<unsigned char> decoded;
+    decoded.reserve(text.size() / 2);
+    for (size_t i = 0; i < text.size(); i += 2) {
+        const int hi = hexNibble(text[i], lowerOnly);
+        const int lo = hexNibble(text[i + 1], lowerOnly);
+        if (hi < 0 || lo < 0) return false;
+        decoded.push_back(static_cast<unsigned char>(hi * 16 + lo));
+    }
+    if (out) *out = std::move(decoded);
+    return true;
+}
+
+bool samePath(const std::wstring& a, const std::wstring& b) {
+    return !a.empty() && !b.empty() && _wcsicmp(a.c_str(), b.c_str()) == 0;
+}
+
 std::wstring widenUtf8(const std::string& text) {
     if (text.empty()) return std::wstring();
     const int n = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);

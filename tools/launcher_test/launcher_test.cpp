@@ -61,6 +61,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -5868,6 +5869,111 @@ void testLauncherTranslations() {
     check(uiStrings >= 40, "the scan saw the launcher's buttons and labels: " + std::to_string(uiStrings));
 }
 
+void testLauncherFixes() {
+    section("launcher fixes (elevation, purge, frontier login, headless args, utils, pre-verified cache)");
+
+    // UAC-disabled ("Never notify") reports TokenElevationTypeDefault with TokenIsElevated=1;
+    // Play should only be blocked by explicit Run-as-administrator (TokenElevationTypeFull).
+    check(elevationBlocksPlay(true, TokenElevationTypeFull), "Run as administrator (TokenElevationTypeFull) blocks Play");
+    check(!elevationBlocksPlay(true, TokenElevationTypeDefault), "UAC-disabled admin (TokenElevationTypeDefault) does not block Play");
+    check(!elevationBlocksPlay(false, TokenElevationTypeLimited), "standard split-token user does not block Play");
+    check(!elevationBlocksPlay(false, TokenElevationTypeFull), "non-elevated token never blocks Play");
+
+    // update_util shared hex and path helpers.
+    const unsigned char sampleBytes[3] = {0x0a, 0xbc, 0xf0};
+    check(hexLower(sampleBytes, 3) == "0abcf0", "hexLower encodes lower-case hex");
+    check(hexUpper(sampleBytes, 3) == "0ABCF0", "hexUpper encodes upper-case hex");
+    std::vector<unsigned char> decoded;
+    check(decodeHex("0AbCf0", &decoded) && decoded.size() == 3 && decoded[0] == 0x0a && decoded[1] == 0xbc && decoded[2] == 0xf0,
+          "decodeHex decodes mixed-case hex");
+    check(!decodeHex("0AbCf0", &decoded, true), "decodeHex(lowerOnly=true) rejects upper case");
+    check(decodeHex("0abcf0", &decoded, true) && decoded.size() == 3, "decodeHex(lowerOnly=true) accepts lower case");
+    check(!decodeHex("abc", &decoded) && !decodeHex("", &decoded) && !decodeHex("zzzz", &decoded),
+          "decodeHex rejects odd, empty and non-hex strings");
+    check(samePath(L"C:\\Games\\Elite", L"c:\\games\\elite") && !samePath(L"", L"") && !samePath(L"C:\\a", L"C:\\b"),
+          "samePath compares non-empty paths case-insensitively");
+
+    // LauncherState::steamFrontierLogin persistence.
+    const std::wstring base = fresh("fixes");
+    {
+        const std::wstring iniPath = P(base, L"launcher.ini");
+        LauncherState st;
+        std::string err;
+        check(st.load(iniPath, &err) && !st.steamFrontierLogin(), "steam_frontier_login defaults to off");
+        st.setSteamFrontierLogin(true);
+        check(st.save(&err), "steam_frontier_login=on saves: " + err);
+        LauncherState reloaded;
+        check(reloaded.load(iniPath, &err) && reloaded.steamFrontierLogin(), "steam_frontier_login=on round-trips");
+        reloaded.setSteamFrontierLogin(false);
+        check(reloaded.save(&err), "steam_frontier_login=off saves");
+        LauncherState reloadedOff;
+        check(reloadedOff.load(iniPath, &err) && !reloadedOff.steamFrontierLogin(), "steam_frontier_login=off round-trips");
+    }
+
+    // PlanFile purge round-trip and backwards compatibility.
+    {
+        const std::wstring planPath = P(base, L"purge-plan.txt");
+        PlanFile out;
+        out.action = "uninstall";
+        out.dir = L"D:\\Elite\\Products\\elite-dangerous-odyssey-64";
+        out.source = L"Steam";
+        out.purge = true;
+        out.removeSettings = true;
+        std::string err;
+        check(writePlanFile(planPath, out, &err), "purge PlanFile writes: " + err);
+        check(contains(readAll(planPath), "purge=1"), "purge=1 is serialized");
+        PlanFile in;
+        check(readPlanFile(planPath, &in, &err) && in.purge && in.removeSettings, "purge PlanFile reads back: " + err);
+
+        // Older plan file without purge= still parses with purge=false.
+        PlanFile plain;
+        plain.action = "uninstall";
+        plain.dir = out.dir;
+        plain.source = out.source;
+        check(writePlanFile(planPath, plain, &err) && !contains(readAll(planPath), "purge="),
+              "non-purge PlanFile omits purge=");
+        PlanFile plainIn;
+        check(readPlanFile(planPath, &plainIn, &err) && !plainIn.purge, "plan without purge= defaults purge=false");
+    }
+
+    // CLI args: --purge, --frontier-login, /vr, /novr, --headless with Steam %command% args and --.
+    {
+        const AppArgs purgeArgs = parse({L"--uninstall", L"--purge"});
+        check(!purgeArgs.badArg && purgeArgs.action == AppArgs::Act::Uninstall && purgeArgs.purge && purgeArgs.removeSettings,
+              "--purge sets purge and removeSettings");
+        const AppArgs fl = parse({L"--headless", L"/novr", L"--frontier-login", L"--close-after-start"});
+        check(!fl.badArg && fl.headless && fl.novr && !fl.vr && fl.frontierLogin && fl.closeAfterStart && launcherHasCommand(fl),
+              "--headless accepts /novr, --frontier-login and --close-after-start");
+        const AppArgs steamCmd = parse({L"--headless", L"C:\\Steam\\Elite Dangerous\\EDLaunch.exe", L"/VR", L"/autorun"});
+        check(!steamCmd.badArg && steamCmd.headless && steamCmd.vr && !steamCmd.novr &&
+              steamCmd.wrappedArgs.size() == 3 && steamCmd.wrappedArgs[0] == L"C:\\Steam\\Elite Dangerous\\EDLaunch.exe",
+              "--headless accepts Steam %command% trailing executable and /VR switch");
+        const AppArgs dashDash = parse({L"--headless", L"--", L"C:\\Steam\\EDLaunch.exe", L"/novr"});
+        check(!dashDash.badArg && dashDash.headless && dashDash.novr && dashDash.wrappedArgs.size() == 2,
+              "--headless accepts -- separator before wrapped command");
+        const std::string usage = usageText();
+        check(contains(usage, "--purge") && contains(usage, "--frontier-login") && contains(usage, "%command%"),
+              "usageText documents --purge, --frontier-login and Steam %command%");
+    }
+
+    // Pre-verified set skips redundant re-hashing in commitManifest.
+    {
+        const Rel a = loadRel("relA");
+        const std::wstring upBase = fresh("fixes-preverified");
+        ScriptedHttp http;
+        http.replies[latestUrl()] = ok(releaseJson(a), "\"etag-pv\"");
+        serveRelease(&http, a);
+        Updater up(http, settingsFor(upBase));
+        const UpdateCheck c = up.check();
+        std::set<std::string> verified;
+        std::string err;
+        check(c.outcome == UpdateOutcome::Available && up.downloadUpdate(c, nullptr, nullptr, &err, &verified),
+              "downloadUpdate populates verifiedOut: " + err);
+        check(verified.size() == a.manifest.files.size(), "verifiedOut contains every manifest file hash");
+        check(up.commitManifest(c, &err, &verified), "commitManifest succeeds with preVerified hashes: " + err);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -5939,6 +6045,7 @@ int main(int argc, char** argv) {
     testBundleLeavesLoginOut();
     testStoreDryRun();
     testArgs();
+    testLauncherFixes();
     endFakes();
     SetEnvironmentVariableW(L"EDUP_FAKE_STEAM_LOG", nullptr);
 

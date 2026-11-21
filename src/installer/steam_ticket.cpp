@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "launch_route.h"
+#include "update_util.h"
 
 namespace edvr::installer {
 namespace {
@@ -73,14 +74,7 @@ public:
             ticketHandle_ = 0;
             return fail(kUnableToGetUser);
         }
-        static const char digits[] = "0123456789ABCDEF";
-        std::string hex;
-        hex.reserve(count * 2);
-        for (std::uint32_t i = 0; i < count; ++i) {
-            hex.push_back(digits[raw[i] >> 4]);
-            hex.push_back(digits[raw[i] & 15]);
-        }
-        *ticketHex = hex;
+        *ticketHex = hexUpper(raw, count);
         return true;
     }
 

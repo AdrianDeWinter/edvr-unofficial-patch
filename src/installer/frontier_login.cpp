@@ -17,33 +17,6 @@ constexpr const char kHeader[] = "EDUP-FRONTIER-LOGIN 1";
 // This program's own, so a blob protected here does not open for code that merely calls DPAPI.
 constexpr char kEntropy[] = "ED-UP launcher / Frontier login / v1";
 
-std::string toHex(const unsigned char* bytes, size_t size) {
-    static const char digits[] = "0123456789abcdef";
-    std::string out;
-    out.reserve(size * 2);
-    for (size_t i = 0; i < size; ++i) {
-        out.push_back(digits[bytes[i] >> 4]);
-        out.push_back(digits[bytes[i] & 15]);
-    }
-    return out;
-}
-
-bool fromHex(const std::string& text, std::vector<unsigned char>* out) {
-    out->clear();
-    if (text.empty() || text.size() % 2 != 0) return false;
-    auto digit = [](char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        return -1;
-    };
-    for (size_t i = 0; i < text.size(); i += 2) {
-        const int hi = digit(text[i]), lo = digit(text[i + 1]);
-        if (hi < 0 || lo < 0) return false;
-        out->push_back(static_cast<unsigned char>(hi * 16 + lo));
-    }
-    return true;
-}
-
 DATA_BLOB entropyBlob() {
     DATA_BLOB blob;
     blob.pbData = reinterpret_cast<BYTE*>(const_cast<char*>(kEntropy));
@@ -58,14 +31,14 @@ bool protect(const std::string& plain, std::string* hex) {
     DATA_BLOB entropy = entropyBlob();
     DATA_BLOB out{};
     if (!CryptProtectData(&in, L"ED-UP Frontier login", &entropy, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out)) return false;
-    *hex = toHex(out.pbData, out.cbData);
+    *hex = hexLower(out.pbData, out.cbData);
     LocalFree(out.pbData);
     return true;
 }
 
 bool unprotect(const std::string& hex, std::string* plain) {
     std::vector<unsigned char> bytes;
-    if (!fromHex(hex, &bytes)) return false;
+    if (!decodeHex(hex, &bytes, true)) return false;
     DATA_BLOB in;
     in.pbData = bytes.data();
     in.cbData = static_cast<DWORD>(bytes.size());

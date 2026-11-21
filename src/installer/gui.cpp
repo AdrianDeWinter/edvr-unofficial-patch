@@ -32,6 +32,7 @@
 #include "launcher_l10n.h"
 #include "ui.h"
 #ifdef EDUP_LAUNCHER
+#include "edlaunch_shim.h"
 #include "game_language.h"
 #include "launch_route.h"
 #include "launcher_login_dialog.h"
@@ -50,6 +51,7 @@ enum : int {
     kIdCombo = 1001,
     kIdBrowse = 1002,
     kIdChkKeep = 1012,
+    kIdChkPurge = 1013,
     kIdInstall = 1020,
     kIdRepair = 1021,
     kIdUninstall = 1022,
@@ -77,9 +79,31 @@ const wchar_t* kTipText = L"ED-UP is free. If it makes your flight more enjoyabl
 #endif
 const wchar_t* kDiscordUrl = L"https://discord.gg/AWJ6djKKzr";
 #ifdef EDUP_LAUNCHER
-// The launcher's update and Play band sits between the report card and the tip line (launcher_gui.inc).
-constexpr int kTipTop = 758;  // the tip line's top: the painted sentence and both links share it
+// Section card geometry (96-dpi units): Status -> Updates -> Install & repair -> Log -> Launch.
+constexpr int kStatusTop = 182;
+constexpr int kStatusBottom = 364;
+constexpr int kActionsTop = 434;
+constexpr int kActionsBottom = 550;
+constexpr int kActionsChkY = 458;
+constexpr int kActionsBtnY = 484;
+constexpr int kActionsNoteY = 524;
+constexpr int kReportTop = 558;
+constexpr int kReportBottom = 648;
+constexpr int kReportEditY = 582;
+constexpr int kReportEditH = 60;
+constexpr int kTipTop = 762;  // footer Discord link sits cleanly below the Launch card
 #else
+constexpr int kStatusTop = 182;
+constexpr int kStatusBottom = 382;
+constexpr int kActionsTop = 390;
+constexpr int kActionsBottom = 508;
+constexpr int kActionsChkY = 414;
+constexpr int kActionsBtnY = 440;
+constexpr int kActionsNoteY = 480;
+constexpr int kReportTop = 516;
+constexpr int kReportBottom = 648;
+constexpr int kReportEditY = 540;
+constexpr int kReportEditH = 100;
 constexpr int kTipTop = 658;  // the tip line's top: the painted sentence and both links share it
 #endif
 
@@ -124,6 +148,7 @@ struct Gui {
     HWND languageCombo = nullptr;
     HWND report = nullptr;
     HWND chkKeep = nullptr;
+    HWND chkPurge = nullptr;
     HWND install = nullptr;
     HWND repair = nullptr;
     HWND uninstall = nullptr;
@@ -185,7 +210,7 @@ std::wstring mirrorDirOfGame(const GameInstall& game) {
 // stock chrome the drawn look could not restyle); the parent paints the
 // same slim thumb the settings list uses, in the report card's right
 // gutter, and drives the EDIT by lines when it is dragged.
-const RECT kReportCard{kMargin, 524, kClientWidth - kMargin, 650};
+const RECT kReportCard{kMargin, kReportTop, kClientWidth - kMargin, kReportBottom};
 
 RECT reportCardRect() {
     return RECT{dp(kReportCard.left), dp(kReportCard.top), dp(kReportCard.right),
@@ -334,7 +359,7 @@ void applyLayout() {
         HDC dc = GetDC(g.window);
         const HFONT font = ui::fonts().body;
         int x = dp(kMargin + kCardPad);
-        const int y = dp(436);
+        const int y = dp(kActionsBtnY);
         const int h = dp(34);
         const int gap = dp(8);
         const int limit = dp(kClientWidth - kMargin - kCardPad);
@@ -432,8 +457,8 @@ void applyLayout() {
     }
     // From 8 units after Save logs to the card's inner edge (kClientWidth - kMargin - kCardPad = 676). The labels measure
     // 60 and 70 units at 96 dpi, so the widths are not equal: 70 and 78 leave 5 and 4 units a side.
-    if (g.copyPath) MoveWindow(g.copyPath, dp(520), dp(436), dp(70), dp(34), TRUE);
-    if (g.showFolder) MoveWindow(g.showFolder, dp(598), dp(436), dp(kClientWidth - kMargin - kCardPad - 598), dp(34), TRUE);
+    if (g.copyPath) MoveWindow(g.copyPath, dp(520), dp(kActionsBtnY), dp(70), dp(34), TRUE);
+    if (g.showFolder) MoveWindow(g.showFolder, dp(598), dp(kActionsBtnY), dp(kClientWidth - kMargin - kCardPad - 598), dp(34), TRUE);
 
     // Shown or hidden by the scope, not by the screen alone, so it runs after the loop above.
     syncSettingsSelector();
@@ -520,7 +545,10 @@ void rebuildStatus() {
     } else if (s.d3d11.kind == DllKind::Absent) {
         fixes.value = tr(L"not installed");
     } else {
-        fixes.value = describeDll(s.d3d11) + L" " + tr(L"holds the d3d11.dll name");
+        const bool edupPresent = s.state.present || s.openvrCurrent.kind == DllKind::Edvr;
+        fixes.value = describeDll(s.d3d11) + L" \x2014 " +
+                      tr(edupPresent ? L"holds d3d11.dll; Repair chains both"
+                                     : L"holds d3d11.dll; Install chains both");
     }
     g.status.push_back(fixes);
 
@@ -648,16 +676,17 @@ void rebuildStatus() {
     // when the scope leaves that half out, said again: somebody who installed VR only and
     // then turned 3D off is owed the reason the flat fixes are not there.
     if (!g.mode.known) {
-        g.modeLine = tr(L"Elite's 3D mode is unknown: ED-UP starts in VR.");
+        g.modeLine = scope == "flat" ? tr(L"Elite's 3D mode is unset: flat install runs its flat fixes.")
+                                     : tr(L"Elite's 3D mode is unknown: ED-UP starts in VR.");
     } else if (g.mode.mode == edvr::GameMode::Flat) {
         g.modeLine = tr(L"Elite's 3D mode is off: ED-UP runs its flat fixes.");
     } else {
         g.modeLine = tr(L"Elite's 3D mode is on: ED-UP runs its VR fixes.");
     }
-    if (g.mode.mode == edvr::GameMode::Flat && scope == "vr") {
+    if (g.mode.known && g.mode.mode == edvr::GameMode::Flat && scope == "vr") {
         g.scopeLine = tr(L"This install does not include flat: ED-UP stays out of the way.");
-    } else if (g.mode.mode == edvr::GameMode::Vr && scope == "flat") {
-        g.scopeLine = tr(L"This install does not include VR: ED-UP stays out of the way.");
+    } else if (g.mode.known && g.mode.mode == edvr::GameMode::Vr && scope == "flat") {
+        g.scopeLine = tr(L"This install does not include VR: turn 3D off in Elite or use Play flat.");
     }
 }
 
@@ -692,34 +721,35 @@ void paintInstallScreen(HDC dc) {
     const ui::Theme& t = ui::theme();
     const ui::Fonts& f = ui::fonts();
 
-    // The window is not taller than it was, so the status card, the actions card
-    // and the report card are fitted into the space the one-install layout left.
-    RECT card{dp(kMargin), dp(186), dp(kClientWidth - kMargin), dp(384)};
+    RECT card{dp(kMargin), dp(kStatusTop), dp(kClientWidth - kMargin), dp(kStatusBottom)};
     ui::paintCard(dc, card, g.dpi);
 
-    int y = 202;
+    RECT statusHead{dp(kMargin + kCardPad), dp(kStatusTop + 6), dp(kClientWidth - kMargin - kCardPad),
+                    dp(kStatusTop + 22)};
+    ui::drawText(dc, tr(L"Status"), statusHead, f.heading, t.text, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    int y = kStatusTop + 24;
     for (const StatusRow& row : g.status) {
-        const int centre = dp(y + 10);
+        const int centre = dp(y + 9);
         ui::fillCircle(dc, dp(kMargin + kCardPad + 5), centre, dp(4), colourFor(row.tone));
 
-        RECT label{dp(kMargin + kCardPad + 20), dp(y), dp(kMargin + kCardPad + 180), dp(y + 20)};
+        RECT label{dp(kMargin + kCardPad + 20), dp(y), dp(kMargin + kCardPad + 180), dp(y + 19)};
         ui::drawText(dc, row.label, label, f.body, t.subtext,
                      DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         RECT value{dp(kMargin + kCardPad + 190), dp(y), dp(kClientWidth - kMargin - kCardPad),
-                   dp(y + 20)};
+                   dp(y + 19)};
         ui::drawText(dc, row.value, value, f.body, t.text,
                      DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-        // 20 apart, not 22: seven rows and the two lines under them fit the card at the window's fixed height.
-        y += 20;
+        y += 19;
     }
 
     if (!g.modeLine.empty()) {
-        RECT mode{dp(kMargin + kCardPad), dp(y + 2), dp(kClientWidth - kMargin - kCardPad), dp(y + 20)};
+        RECT mode{dp(kMargin + kCardPad), dp(y + 2), dp(kClientWidth - kMargin - kCardPad), dp(y + 18)};
         ui::drawText(dc, g.modeLine, mode, f.caption, t.text, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
         if (!g.scopeLine.empty()) {
-            RECT scope{dp(kMargin + kCardPad), dp(y + 20), dp(kClientWidth - kMargin - kCardPad),
-                       dp(y + 38)};
+            RECT scope{dp(kMargin + kCardPad), dp(y + 18), dp(kClientWidth - kMargin - kCardPad),
+                       dp(y + 34)};
             ui::drawText(dc, g.scopeLine, scope, f.caption, colourFor(Tone::Warn),
                          DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
@@ -732,10 +762,16 @@ void paintInstallScreen(HDC dc) {
     ui::drawText(dc, tr(L"Install ED-UP for:"), scopeLabel, f.body, t.subtext,
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-    RECT actions{dp(kMargin), dp(394), dp(kClientWidth - kMargin), dp(512)};
+    RECT actions{dp(kMargin), dp(kActionsTop), dp(kClientWidth - kMargin), dp(kActionsBottom)};
     ui::paintCard(dc, actions, g.dpi);
 
-    RECT reassure{dp(kMargin + kCardPad), dp(478), dp(kClientWidth - kMargin - kCardPad), dp(498)};
+    RECT actionsHead{dp(kMargin + kCardPad), dp(kActionsTop + 6), dp(kClientWidth - kMargin - kCardPad),
+                     dp(kActionsTop + 22)};
+    ui::drawText(dc, tr(L"Install & repair"), actionsHead, f.heading, t.text,
+                 DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    RECT reassure{dp(kMargin + kCardPad), dp(kActionsNoteY), dp(kClientWidth - kMargin - kCardPad),
+                  dp(kActionsNoteY + 20)};
     ui::drawText(dc,
                  tr(L"Nothing is changed until you confirm it, and every file replaced is copied "
                     L"into edvr_backup\\ first."),
@@ -743,6 +779,10 @@ void paintInstallScreen(HDC dc) {
 
     const RECT report = reportCardRect();
     ui::paintCard(dc, report, g.dpi);
+
+    RECT reportHead{dp(kMargin + kCardPad), dp(kReportTop + 6), dp(kClientWidth - kMargin - kCardPad),
+                    dp(kReportTop + 22)};
+    ui::drawText(dc, tr(L"Log"), reportHead, f.heading, t.text, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     if (g.report) {
         int content = 0, page = 0, pos = 0;
@@ -848,6 +888,24 @@ void paintWindow(HWND window) {
 // behaviour
 // ---------------------------------------------------------------------------
 
+const wchar_t* installButtonLabel() {
+    if (!g.haveSurvey) return tr(L"Install");
+    const bool installed = g.survey.d3d11.kind == DllKind::Edvr ||
+                           g.survey.openvrCurrent.kind == DllKind::Edvr || g.survey.state.present;
+    if (!installed) return tr(L"Install");
+    std::string payloadVersion;
+#ifdef EDUP_LAUNCHER
+    if (launcherPayloadReady()) payloadVersion = lg.session->payload().version;
+#else
+    payloadVersion = payloadInfo().version;
+#endif
+    const bool sameVersion = !payloadVersion.empty() && g.survey.d3d11.kind == DllKind::Edvr &&
+                             !installRecordStale(g.survey) &&
+                             g.survey.state.edvrVersion == payloadVersion &&
+                             installedScope(g.survey) == scopeChoice();
+    return sameVersion ? tr(L"Reinstall") : tr(L"Update");
+}
+
 void showSurvey() {
     // Read again on every change: the game's 3D switch is flipped outside this window.
     g.mode = eliteGameMode();
@@ -875,13 +933,11 @@ void showSurvey() {
     // which is exactly when somebody wants it.
     EnableWindow(g.collectLogs, TRUE);
 
-    const bool installed = g.survey.d3d11.kind == DllKind::Edvr ||
-                           g.survey.openvrCurrent.kind == DllKind::Edvr || g.survey.state.present;
-    SetWindowTextW(g.install, installed ? tr(L"Update") : tr(L"Install"));
+    SetWindowTextW(g.install, installButtonLabel());
 #ifdef EDUP_LAUNCHER
     updateLauncherControls();
 #endif
-    InvalidateRect(g.window, nullptr, TRUE);
+    applyLayout();
 }
 
 // Loads one settings file into the settings screen. Before a folder is chosen there
@@ -901,6 +957,9 @@ void selectInstall(size_t index) {
     }
     g.survey = surveyTarget(g.installs[index]);
     g.haveSurvey = true;
+#ifdef EDUP_LAUNCHER
+    invalidateLauncherCache();
+#endif
     // The scope this folder gets: the one the run was started with, else the folder's own, else both.
     SendMessageW(g.scopeCombo, CB_SETCURSEL, scopeIndex(g.args.scope.empty() ? defaultScope(g.survey) : g.args.scope), 0);
     g.mode = eliteGameMode();
@@ -1016,6 +1075,15 @@ void browseForFolder() {
     dialog->GetOptions(&options);
     dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
     dialog->SetTitle(L"Pick the folder that holds EliteDangerous64.exe");
+    if (g.haveSurvey && !g.survey.game.dir.empty()) {
+        IShellItem* initial = nullptr;
+        if (SUCCEEDED(SHCreateItemFromParsingName(g.survey.game.dir.c_str(), nullptr,
+                                                  IID_PPV_ARGS(&initial))) &&
+            initial) {
+            dialog->SetFolder(initial);
+            initial->Release();
+        }
+    }
 
     std::wstring picked;
     if (SUCCEEDED(dialog->Show(g.window))) {
@@ -1043,7 +1111,7 @@ void browseForFolder() {
     addInstall(game);
 }
 
-std::wstring confirmText(const Plan& plan, const wchar_t* verb) {
+std::wstring confirmText(const Plan& plan, const wchar_t* verb, bool purge = false) {
     std::wstring text = std::wstring(verb) + L"\n\n";
     for (const std::string& note : plan.notes) text += L"\x2022 " + fromUtf8(note) + L"\n";
     if (!plan.problems.empty()) {
@@ -1053,7 +1121,12 @@ std::wstring confirmText(const Plan& plan, const wchar_t* verb) {
 #ifdef EDUP_LAUNCHER
     if (!lg.developerNote.empty()) text += L"\n! " + lg.developerNote + L"\n";
 #endif
-    text += L"\nA copy of every file replaced goes into edvr_backup\\.\n\nGo ahead?";
+    if (purge) {
+        text += L"\nClean purge removes ED-UP settings (edvr.ini, edvr-flat.ini), logs, backups, "
+                L"install records, and the settings mirror for this folder.\n\nGo ahead?";
+    } else {
+        text += L"\nA copy of every file replaced goes into edvr_backup\\.\n\nGo ahead?";
+    }
     return text;
 }
 
@@ -1080,7 +1153,8 @@ void runAction(AppArgs::Act action) {
     args.store = selectedSource == L"Epic" || selectedSource == L"Steam" || selectedSource == L"Frontier launcher"
                      ? selectedSource : std::wstring();
     args.keepSettings = ui::checkboxChecked(g.chkKeep);
-    args.removeSettings = false;
+    args.purge = (action == AppArgs::Act::Uninstall) && ui::checkboxChecked(g.chkPurge);
+    args.removeSettings = args.purge;
     args.scope = scopeChoice();
 
     const std::wstring mirrorDir = mirrorDirOfGame(g.survey.game);
@@ -1162,7 +1236,7 @@ void runAction(AppArgs::Act action) {
         // taken the foreground would be enough to modify a game folder. That
         // is not hypothetical: it happened twice during development, to a real
         // install, while windows were being opened for screenshots.
-        const int answer = MessageBoxW(g.window, confirmText(plan, verb).c_str(), kAppTitle,
+        const int answer = MessageBoxW(g.window, confirmText(plan, verb, args.purge).c_str(), kAppTitle,
                                        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
         if (answer != IDYES) return;
     }
@@ -1199,8 +1273,23 @@ void runAction(AppArgs::Act action) {
     text += "\r\n----\r\n";
     for (const std::string& line : result.done) text += "  " + line + "\r\n";
     if (result.ok) {
-        text += "\r\nDone. Start Elite Dangerous; ED-UP writes what it managed to install into "
-                "edvr_logs\\ next to the game.\r\n";
+        if (action == AppArgs::Act::Uninstall && args.purge) {
+#ifdef EDUP_LAUNCHER
+            if (_wcsicmp(g.survey.game.source.c_str(), L"Epic") == 0) {
+                std::string shimError;
+                removeEdLaunchShim(g.survey.game.dir, &shimError);
+            }
+#endif
+            if (!mirrorDir.empty() && dirExists(mirrorDir)) {
+                if (removeDirectoryTree(mirrorDir)) {
+                    text += "  Removed settings mirror " + toUtf8(mirrorDir) + "\r\n";
+                }
+            }
+            text += "\r\nClean purge complete.\r\n";
+        } else {
+            text += "\r\nDone. Start Elite Dangerous; ED-UP writes what it managed to install into "
+                    "edvr_logs\\ next to the game.\r\n";
+        }
         if (canMirror) {
             const MirrorResult m = updateMirror(g.survey.game.dir, plan.backupDir, mirrorDir);
             if (m.ok) {
@@ -1371,7 +1460,11 @@ void createControls(HWND window) {
      // it to checked threw that flag away without a word.
     g.chkKeep = ui::makeCheckbox(window, L"Keep the settings I have changed", kIdChkKeep,
                                  g.args.keepSettings, f.body);
-    place(g.chkKeep, kMargin + kCardPad, 404, 420, 24, Screen::Install);
+    place(g.chkKeep, kMargin + kCardPad, kActionsChkY, 314, 22, Screen::Install);
+
+    g.chkPurge = ui::makeCheckbox(window, L"Clean purge on uninstall", kIdChkPurge,
+                                  g.args.purge, f.body);
+    place(g.chkPurge, 366, kActionsChkY, 310, 22, Screen::Install);
 
     g.install = ui::makeButton(window, L"Install", kIdInstall, ui::ButtonStyle::Primary, f.body);
     g.repair = ui::makeButton(window, L"Repair", kIdRepair, ui::ButtonStyle::Secondary, f.body);
@@ -1379,10 +1472,10 @@ void createControls(HWND window) {
                                  f.body);
     g.collectLogs = ui::makeButton(window, L"Save logs", kIdCollectLogs,
                                    ui::ButtonStyle::Secondary, f.body);
-    place(g.install, kMargin + kCardPad, 436, 124, 34, Screen::Install);
-    place(g.repair, 172, 436, 104, 34, Screen::Install);
-    place(g.uninstall, 284, 436, 104, 34, Screen::Install);
-    place(g.collectLogs, 396, 436, 116, 34, Screen::Install);
+    place(g.install, kMargin + kCardPad, kActionsBtnY, 124, 34, Screen::Install);
+    place(g.repair, 172, kActionsBtnY, 104, 34, Screen::Install);
+    place(g.uninstall, 284, kActionsBtnY, 104, 34, Screen::Install);
+    place(g.collectLogs, 396, kActionsBtnY, 116, 34, Screen::Install);
     if (runningUnderWine()) {
         g.copyPath = ui::makeButton(window, L"Copy path", kIdCopyPath, ui::ButtonStyle::Secondary, f.body);
         g.showFolder = ui::makeButton(window, L"Show folder", kIdShowFolder, ui::ButtonStyle::Secondary, f.body);
@@ -1412,7 +1505,7 @@ void createControls(HWND window) {
                                nullptr);
     SendMessageW(g.report, WM_SETFONT, reinterpret_cast<WPARAM>(f.body), TRUE);
     SetWindowSubclass(g.report, reportProc, 1, 0);
-    place(g.report, kMargin + kCardPad - 4, 536, 636, 102, Screen::Install);
+    place(g.report, kMargin + kCardPad - 4, kReportEditY, 636, kReportEditH, Screen::Install);
 
 #ifndef EDUP_LAUNCHER   // the launcher carries no tip link
     g.tip = ui::makeButton(window, L"leave a tip", kIdKofi, ui::ButtonStyle::Link, f.caption);
@@ -1578,6 +1671,7 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                     ShellExecuteW(window, L"open", kDiscordUrl, nullptr, nullptr, SW_SHOWNORMAL);
                     return 0;
                 case kIdChkKeep:
+                case kIdChkPurge:
                     ui::toggleCheckbox(reinterpret_cast<HWND>(lparam));
                     return 0;
                 default: return 0;

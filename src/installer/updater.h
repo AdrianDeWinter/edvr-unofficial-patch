@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <functional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -89,14 +90,17 @@ public:
     UpdateCheck check();
 
     // Fills the payload cache for `check.manifest`, fetching only assets that hold a
-    // file the cache lacks. Stops at `cancel`.
+    // file the cache lacks. Stops at `cancel`. When `verifiedOut` is non-null, it
+    // receives the sha256 hashes verified during this call so commitManifest can
+    // skip a second full-file hash pass immediately after.
     bool downloadUpdate(const UpdateCheck& check, const std::atomic<bool>* cancel, const DownloadProgress& progress,
-                        std::string* error);
+                        std::string* error, std::set<std::string>* verifiedOut = nullptr);
 
     // Adopts a checked manifest whose files are all in the cache: saves it as
     // manifests\<sha>.json and .sig, makes it current, raises highest_issued, keeps
     // the newest three manifests and prunes the cache to what they list.
-    bool commitManifest(const UpdateCheck& check, std::string* error);
+    bool commitManifest(const UpdateCheck& check, std::string* error,
+                        const std::set<std::string>* preVerified = nullptr);
 
     // Re-verifies the current manifest from disk and lists its files in the cache
     // as payload files, ready for usePayloadFiles. Works offline. The manifest's
