@@ -474,6 +474,8 @@ static int generateTemporal(const Options& o) {
     const std::string mapSmaaWeights = mapSmaaSource(edvr::kMapSmaaWeightsHlsl);
     const std::string mapSmaaBlend = mapSmaaSource(edvr::kMapSmaaBlendHlsl);
     const std::string uiLayerSmaaEdges = mapSmaaSource(edvr::kUiLayerSmaaEdgesHlsl);
+    const std::string uiLayerSmaaWeights = mapSmaaSource(edvr::kUiLayerSmaaWeightsHlsl);
+    const std::string uiLayerSmaaBlend = mapSmaaSource(edvr::kUiLayerSmaaBlendHlsl);
     std::vector<Variant> variants = {
         {"kEyeJumpLatticeBytecode", "eye_jump_lattice_cs", "main", nullptr, {}, false, edvr::kEyeJumpLatticeHlsl},
         // F85c: the reticle's hit depth (reticle_depth_shader.h): one thread marches the aim line through an eye's scene depth. Its own source, entry "main".
@@ -521,9 +523,10 @@ static int generateTemporal(const Options& o) {
         {"kFlatMapSmaaEdgesBytecode", "flat_map_smaa_edges_cs", "smaaEdges", nullptr, {}, false, mapSmaaEdges.c_str()},
         {"kFlatMapSmaaWeightsBytecode", "flat_map_smaa_weights_cs", "smaaWeights", nullptr, {}, false, mapSmaaWeights.c_str()},
         {"kFlatMapSmaaBlendBytecode", "flat_map_smaa_blend_cs", "smaaBlend", nullptr, {}, false, mapSmaaBlend.c_str()},
-        // The HUD layer's edge smoothing (ui_layer_smaa_shader.h): the one pass that is not the map's, SMAA's colour edge test over four channels. Its
-        // weights and blend are kFlatMapSmaaWeightsBytecode and kFlatMapSmaaBlendBytecode above (plain SMAA, no colour transform).
+        // The HUD layer's edge smoothing (ui_layer_smaa_shader.h): 32x8 tile-culled indirect-dispatch SMAA over four channels.
         {"kUiLayerSmaaEdgesBytecode", "ui_layer_smaa_edges_cs", "uiSmaaEdges", nullptr, {}, false, uiLayerSmaaEdges.c_str()},
+        {"kUiLayerSmaaWeightsBytecode", "ui_layer_smaa_weights_cs", "uiSmaaWeights", nullptr, {}, false, uiLayerSmaaWeights.c_str()},
+        {"kUiLayerSmaaBlendBytecode", "ui_layer_smaa_blend_cs", "uiSmaaBlend", nullptr, {}, false, uiLayerSmaaBlend.c_str()},
         // The HDR route's pixel-shader half (section 81): the result goes back into the game's HDR target, a render
         // target, so the finish and the spatial recovery are draws: one triangle vertex shader and two pixel shaders.
         {"kFlatMonoHdrVsBytecode", "flat_mono_hdr_vs", "hdrVs", nullptr, {}, true, nullptr, "vs_5_0"},

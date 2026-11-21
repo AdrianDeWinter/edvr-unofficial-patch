@@ -534,6 +534,17 @@ inline bool uiLayerSeedWriterInvalidates(const UiDsEffect& writer, uint8_t seede
         seededDepth && !seededMask && !privateDepthWriteThisFrame);
 }
 
+// A stencil-only game write cannot change an unmodified seeded depth plane even
+// when the layer also carries seeded stencil bits (e.g. AMD/Intel SV_StencilRef
+// one-pass seeds always set seededMask = 0xFF). Dropping only seededMask keeps
+// the depth copy alive for subsequent depth-only draws while still forcing a
+// re-seed if a later draw tests any stencil bit.
+inline bool uiLayerSeedWriterDropsStencilOnly(const UiDsEffect& writer, uint8_t seededMask,
+                                              bool seededDepth, bool privateDepthWriteThisFrame) {
+    return writer.stencilWrite && !writer.depthWrite &&
+           seededDepth && seededMask != 0 && !privateDepthWriteThisFrame;
+}
+
 // A repeat seed (the layer is still this frame's copy of this game buffer, and
 // a tested draw now wants stencil bits it lacks) can leave the layer's depth
 // plane as it stands, and copy only the stencil bits, when that depth is

@@ -7419,8 +7419,11 @@ void seedWritersCheck(ID3D11DeviceContext* ctx, uint32_t count, uint32_t instanc
             const UiDsState ds = dsStateOfNoted(ctx, dsv,
                 matchingDiagnostic ? &ref : nullptr, matchingDiagnostic ? &fmt : nullptr);
             const UiDsEffect writer = uiLayerDsEffect(ds, true);
-            const bool invalidated = matchingFresh && uiLayerSeedWriterInvalidates(writer,
-                l->seededMask, l->seededDepth, g_privateDepthGuard.active(g_lastRedirectSeq));
+            const bool privateGuard = g_privateDepthGuard.active(g_lastRedirectSeq);
+            const bool dropStencilOnly = matchingFresh && uiLayerSeedWriterDropsStencilOnly(
+                writer, l->seededMask, l->seededDepth, privateGuard);
+            const bool invalidated = matchingFresh && !dropStencilOnly && uiLayerSeedWriterInvalidates(
+                writer, l->seededMask, l->seededDepth, privateGuard);
             if (matchingFresh && writer.writes() && !invalidated) ++g_win.depthOnlySeedPreservedWriters;
             if (matchingDiagnostic) {
                 const UiSeedKey key = uiSeedDrawKey(ds, count, instances, verdict,
@@ -7428,7 +7431,9 @@ void seedWritersCheck(ID3D11DeviceContext* ctx, uint32_t count, uint32_t instanc
                     static_cast<uint32_t>(fmt), drawKind);
                 g_seedCensus.event(eye, hdr, g_lastRedirectSeq, key, invalidated);
             }
-            if (invalidated) {
+            if (dropStencilOnly) {
+                l->seededMask = 0;
+            } else if (invalidated) {
                 l->seq = 0;
                 ++g_win.seedStale;
             }

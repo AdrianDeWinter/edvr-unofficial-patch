@@ -140,7 +140,7 @@ struct FlatRuntimeDrawScope {
     ID3D11DeviceContext* ctx = nullptr;
     ID3D11ShaderResourceView* original = nullptr;
     bool gameHadTarget6 = false;   // the game's own slot 6 was occupied under a substituted draw
-    bool producer = false, replaced = false;
+    bool producer = false, replaced = false, ownedOutput = false;
     bool splitContinued = false;   // continuesRun, for the destructor shell's class
     bool drawCaptureStarted = false;
     void* drawPacket=nullptr;

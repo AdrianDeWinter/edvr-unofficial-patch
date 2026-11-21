@@ -717,7 +717,7 @@ void flatUiGlowEnd(ID3D11DeviceContext* ctx, uint32_t slot, ID3D11ShaderResource
 }
 
 void flatUiLayerAtCopy(ID3D11DeviceContext* ctx, uint64_t frame, bool treated, uint32_t outW, uint32_t outH,
-                       ID3D11ShaderResourceView** original, bool* replaced) {
+                       ID3D11ShaderResourceView** original, bool* replaced, bool ownedFrame) {
     if (!ctx || !original || !replaced || !flatUiLayerOn()) return;
     ++g_w.copies;
     FlatComputeInternalScope internal;
@@ -753,8 +753,14 @@ void flatUiLayerAtCopy(ID3D11DeviceContext* ctx, uint64_t frame, bool treated, u
     const bool smooth = Config::get().getBool("fix.hud_antialiasing", false);
     g_w.edgeKeyOn = smooth;
     uiLayerFlatSetEdgeSmoothing(smooth);
+    // When modifying `picture` in place via CS UAV, clear PS t0 first so D3D11 never sees the same
+    // resource bound as both PS SRV and CS UAV simultaneously.
+    if (ownedFrame) {
+        ID3D11ShaderResourceView* none = nullptr;
+        ctx->PSSetShaderResources(0, 1, &none);
+    }
     // `treated`: the picture is the one EDVR's resolve made (unjittered), which the shield ripple reads at D minus the jitter; the game's own is left alone.
-    ID3D11Texture2D* out = uiLayerComposite(frame, 0, picture.Get(), region, uv, false, treated);
+    ID3D11Texture2D* out = uiLayerComposite(frame, 0, picture.Get(), region, uv, ownedFrame, treated);
     const UiLayerEdgeSmoothingResult edge = uiLayerFlatEdgeSmoothingResult();
     if (edge.outcome != UiLayerEdgeSmoothing::kNone) {
         g_w.edgeW = edge.w;
@@ -763,12 +769,32 @@ void flatUiLayerAtCopy(ID3D11DeviceContext* ctx, uint64_t frame, bool treated, u
         else if (edge.outcome == UiLayerEdgeSmoothing::kFault) ++g_w.edgeRawFault;
         else ++g_w.edgeRawKeyOff;
     }
+    auto restoreNow = [&] {
+        if (ownedFrame) {
+            ID3D11ShaderResourceView* back = now.Get();
+            ctx->PSSetShaderResources(0, 1, &back);
+        }
+    };
     if (!out) {
+        restoreNow();
         ++g_w.compositeNone;
         return;
     }
     D3D11_SHADER_RESOURCE_VIEW_DESC vd{};
     now->GetDesc(&vd);
+    if (out == picture.Get()) {
+        out->Release();
+        restoreNow();
+        ++g_w.composites;
+        if (!g_firstCompositeNoted) {
+            g_firstCompositeNoted = true;
+            Log::get().note("flat ui layer: first composite -- frame %llu, the cockpit HUD layer in place over the %ux%u picture the "
+                            "game's output copy reads (display %ux%u, %s), kept at the copy's t0 in view format %d.",
+                            static_cast<unsigned long long>(frame), td.Width, td.Height, outW, outH,
+                            treated ? "resolved by EDVR" : "the game's own, the resolve refused", static_cast<int>(vd.Format));
+        }
+        return;
+    }
     if (!g_view || g_viewTex != out || g_viewFmt != vd.Format) {
         g_view.Reset();
         g_viewTex = nullptr;
@@ -783,6 +809,7 @@ void flatUiLayerAtCopy(ID3D11DeviceContext* ctx, uint64_t frame, bool treated, u
     }
     out->Release();  // the composite's reference; the layer keeps its own
     if (!g_view) {
+        restoreNow();
         ++g_w.bindFailed;
         if (!g_bindNoted) {
             g_bindNoted = true;

@@ -7668,7 +7668,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
             const bool easu=flatMonoResolveLastSpatialWasEasu();
             const bool smaa=easu&&flatMonoResolveLastSpatialWasSmaa();
             ID3D11ShaderResourceView* spatial=easu?outputView.Get():flatSharpenView(ctx,outputView.Get());
-            ctx->PSSetShaderResources(0,1,&spatial);replaced=true;
+            ctx->PSSetShaderResources(0,1,&spatial);replaced=true;ownedOutput=true;
             s.treated=true;s.temporalAccepted=false;s.havePrevious=false;s.reason="map-temporal-off";
             flatUiLayerMapAaCopy(true,easu,smaa);
             if (s.prefix.cameraConflictWaived) ++s.cameraConflictSpatialWindow;   // a frame the HDR writers' camera disagreement would have refused
@@ -7693,7 +7693,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
         // count spatial recovery as a temporal evaluation/history success.
         if(flatMonoResolveSpatialFallback(s.device.Get(),ctx,f,&outputView,&fallbackReason)) {
             refuse(s);++s.spatialFallbacks;
-            ID3D11ShaderResourceView* fallback=outputView.Get();ctx->PSSetShaderResources(0,1,&fallback);replaced=true;s.treated=true;
+            ID3D11ShaderResourceView* fallback=outputView.Get();ctx->PSSetShaderResources(0,1,&fallback);replaced=true;ownedOutput=true;s.treated=true;
             s.reason="spatial-fallback";
             if(s.spatialFallbacks<=4)Log::get().note("flat runtime fallback: temporal=%s output=spatial history=invalid raster-phase=(%.4g,%.4g)",temporalReason,f.jitterX,f.jitterY);
         } else {
@@ -7707,6 +7707,9 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     // samples it (flat_sharpen.h). The interface is drawn after that copy, so it is never sharpened. At 0,
     // after a refusal or for a view the pass cannot use this is the resolve's own view; never in place.
     ID3D11ShaderResourceView* replacement = flatSharpenView(ctx, outputView.Get()); ctx->PSSetShaderResources(0, 1, &replacement); replaced = true;
+    // TAA returns its ping-pong history buffer when unsharpened (cannot be overwritten in place);
+    // all other engines output a dedicated finish buffer, and RCAS always writes its own buffer.
+    ownedOutput = (s.engine != FlatMonoResolveMode::Taa) || (replacement != outputView.Get());
     s.previous = selected; s.previousColor = actualColor; s.havePrevious = s.treated = true; s.temporalAccepted=true;s.lastMs = now; ++s.accepted;
     forwardPhaseSelected(s,selected);
     s.previousRowsX = f.rowsJitterX; s.previousRowsY = f.rowsJitterY; // the phase the rows now stored in s.previous carry
@@ -7743,7 +7746,7 @@ bool FlatRuntimeDrawScope::recover(const char* temporalReason) {
     Ptr<ID3D11ShaderResourceView> outputView;const char* reason="unverified-copy-handoff";
     if(valid && flatMonoResolveSpatialFallback(s.device.Get(),ctx,f,&outputView,&reason)) {
         ++s.spatialFallbacks;s.treated=true;
-        auto* replacement=outputView.Get();ctx->PSSetShaderResources(0,1,&replacement);replaced=true;
+        auto* replacement=outputView.Get();ctx->PSSetShaderResources(0,1,&replacement);replaced=true;ownedOutput=true;
         if(s.spatialFallbacks<=8)Log::get().note("flat runtime early fallback: frame=%llu temporal=%s output=spatial phase=(%.5g,%.5g) history=invalid",
             (unsigned long long)s.prefix.frame,temporalReason,f.jitterX,f.jitterY);
         return true;
@@ -7805,7 +7808,7 @@ bool FlatRuntimeDrawScope::treatNoScene(bool stoodDown) {
     const bool easu=flatMonoResolveLastSpatialWasEasu();
     const bool smaa=easu&&flatMonoResolveLastSpatialWasSmaa();
     ID3D11ShaderResourceView* spatial=easu?outputView.Get():flatSharpenView(ctx,outputView.Get());
-    ctx->PSSetShaderResources(0,1,&spatial);replaced=true;
+    ctx->PSSetShaderResources(0,1,&spatial);replaced=true;ownedOutput=true;
     s.treated=true;s.temporalAccepted=false;s.havePrevious=false;s.streak=0;s.reason="no-scene-spatial";
     s.noSceneWindow.noteTreated(easu,smaa);
     return true;
@@ -8124,7 +8127,7 @@ void FlatRuntimeDrawScope::beginActualDraw(ID3D11Buffer* indirectArgs,UINT indir
     }
     if(uiComposite) {
         auto& s=state();
-        flatUiLayerAtCopy(ctx,s.prefix.frame,s.treated||s.hdrTreated,s.prefix.width,s.prefix.height,&original,&replaced);
+        flatUiLayerAtCopy(ctx,s.prefix.frame,s.treated||s.hdrTreated,s.prefix.width,s.prefix.height,&original,&replaced,ownedOutput);
     }
     // The bloom chain's first level reads H' (the HUD's light added) in place of H for this one draw; endActualDraw puts the game's view back.
     if(uiGlow && !glowOriginal) {

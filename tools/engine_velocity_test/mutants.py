@@ -116,7 +116,7 @@ HEADER_MUTATIONS = [
      "if(claims>kClaimViewMax || leases>kMaxPools)return declined();", "claim check C10"),
     ("copier-claim-ignores-the-limit", "if(plans || claims>kClaimViewMax || leases>kMaxPools)return declined();",
      "if(plans || leases>kMaxPools)return declined();", "claim check C10"),
-    ("copier-claim-ignores-hits", "if(claimed[i]>=source && offset%kBytes==0 && offset/kBytes<count)return false;", "if(false)return false;", "claim check C8"),
+    ("copier-claim-ignores-hits", "if(offset%kBytes==0 && offset/kBytes<count)return false;", "if(false)return false;", "claim check C8"),
     ("copier-claim-range-one-short", "offset/kBytes<count)return false;", "offset/kBytes+1<count)return false;", "claim check C8"),
     ("copier-claim-ignores-ambiguity", "if(matches>1)return false;   // (a) ambiguous", "", "claim check C9"),
     ("copier-claim-ignores-fit", "if(stride!=kBytes || firstSlot>slots || count>slots-firstSlot)return false;   // (b) does not fit",

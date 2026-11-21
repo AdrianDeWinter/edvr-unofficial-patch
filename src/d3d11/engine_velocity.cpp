@@ -1011,7 +1011,8 @@ bool snapshotOverlayBase(ID3D11DeviceContext* ctx, Eye& e) {
     ctx->CopyResource(e.overlayBase.Get(), e.slots.Get());
     engineVelocityNoteStateCalls(1);
     ++g_draw.overlayCopies;
-    g_draw.overlayBytes += uint64_t(e.width) * e.height * 8u;
+    const uint64_t slotBpp = e.slotFormat == DXGI_FORMAT_R32G32B32A32_FLOAT ? 16u : 8u;
+    g_draw.overlayBytes += uint64_t(e.width) * e.height * slotBpp;
     return true;
 }
 
@@ -1401,10 +1402,12 @@ bool ensureSlots(ID3D11DeviceContext* ctx, Eye& e, int eye, ID3D11Texture2D* dep
     // When the slot target was made, for the flight's timeline (the depth
     // pair is re-created on boarding, and this follows it).
     if (eye == kEngineVelocitySourceEye)
-        Log::get().note("engine motion: on-foot source slot target %s %ux%u R32G32 (%.1f MB) for the source depth %p at "
+        Log::get().note("engine motion: on-foot source slot target %s %ux%u %s (%.1f MB) for the source depth %p at "
                         "present frame %u -- the 2D screen's scene is drawn there, not in the eyes, so its pool draws "
                         "record slot and depth here%s.", wasDepth ? "re-created" : "created", dd.Width, dd.Height,
-                        double(dd.Width) * dd.Height * 8.0 / 1e6, static_cast<const void*>(depth),
+                        slotFormat == DXGI_FORMAT_R32G32B32A32_FLOAT ? "R32G32B32A32" : "R32G32",
+                        double(dd.Width) * dd.Height * (slotFormat == DXGI_FORMAT_R32G32B32A32_FLOAT ? 16.0 : 8.0) / 1e6,
+                        static_cast<const void*>(depth),
                         frameNow(), wasDepth ? " (the source was re-made)" : "");
     else if (wasDepth)
         Log::get().note("engine motion: eye %d slot target re-created %ux%u for depth texture %p (was %ux%u for %p) at "

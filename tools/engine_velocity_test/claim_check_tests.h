@@ -174,7 +174,10 @@ inline void runCopierCheck(ID3D11Device* device,Check check) {
         check(false,"claim check C8: pool fixtures");return;
     }
     static Record src[4]={record(10),record(20),record(30),record(40)},mappedA[4]={src[0],src[1],src[2],src[3]},mappedB[4]={src[0],src[1],src[2],src[3]};
-    static Record extra[6]={record(50),record(51),record(52),record(53),record(54),record(55)},clean=record(60);
+    constexpr unsigned kExtraCount=copy::kClaimViewMax+2;
+    static Record extra[kExtraCount]{},clean=record(60);
+    static bool extraInit=false;
+    if(!extraInit){for(unsigned i=0;i<kExtraCount;++i)extra[i]=record(float(50+i));extraInit=true;}
     const uintptr_t baseA=reinterpret_cast<uintptr_t>(mappedA),baseB=reinterpret_cast<uintptr_t>(mappedB);
     auto refill=[&]{for(unsigned i=0;i<4;++i){mappedA[i]=src[i];mappedB[i]=src[i];}};
     auto mapA=[&]{return copy::beginMap(poolA.Get(),mappedA,sizeof(mappedA),336,D3D11_MAP_WRITE_DISCARD,1,kFrame);};
@@ -196,7 +199,7 @@ inline void runCopierCheck(ID3D11Device* device,Check check) {
     };
     static Tree detachedTree(1,1);static Destination detachedDestination;detachedTree.item(0,0,0)=record(5);
     // ---- C8: under live claims and a held patch, copies that touch neither take the mutex 0 times and allocate nothing ----------------------
-    for(unsigned live=1;live<=copy::kClaimViewMax;++live) {
+    for(unsigned live:{1u,2u,4u,16u,copy::kClaimViewMax}) {
         constexpr unsigned N=1000;
         auto traffic=[&]{for(unsigned i=0;i<N;++i){copy::copier(baseA,336,addressOf(src[3]),3,1,kFrame);copy::copier(baseB,336,addressOf(src[3]),0,1,kFrame);}};
         auto setup=[&]{copy::reset();refill();mapA();join(0);for(unsigned i=0;i<live;++i)claim(extra[i],kFrame);};   // a patch at slot 0, `live` claims
@@ -221,15 +224,15 @@ inline void runCopierCheck(ID3D11Device* device,Check check) {
               ("claim check C8: with the check off the same copies take the mutex "+std::to_string(2*N)+" times (the counters are live)"+suffix).c_str());
     }
     copy::reset();
-    // ---- C10: a plan in flight, more than four claims: every copy takes the mutex, as before; back under the limits the check returns ----------
+    // ---- C10: a plan in flight, more than kClaimViewMax claims: every copy takes the mutex, as before; back under the limits the check returns --
     {
-        refill();mapA();for(unsigned i=0;i<5;++i)claim(extra[i],kFrame);
+        refill();mapA();for(unsigned i=0;i<copy::kClaimViewMax+1;++i)claim(extra[i],kFrame);
         copy::copier(baseA,336,addressOf(src[3]),3,1,kFrame);
         check(copy::g_stats.copies==1 && copy::stats().copierPrecheckDeclined==1 && copy::stats().copierPrechecked==0,
-              "claim check C10: five live claims: a copy that touches none of them takes the mutex and is counted as declined");
-        copy::invalidateEmission(addressOf(extra[4]));
+              "claim check C10: over-limit live claims: a copy that touches none of them takes the mutex and is counted as declined");
+        copy::invalidateEmission(addressOf(extra[copy::kClaimViewMax]));
         copy::copier(baseA,336,addressOf(src[3]),3,1,kFrame);
-        check(copy::g_stats.copies==1 && copy::stats().copierPrechecked==1 && published(),"claim check C10: back to four claims, the same copy is handed back without the mutex");
+        check(copy::g_stats.copies==1 && copy::stats().copierPrechecked==1 && published(),"claim check C10: back to kClaimViewMax claims, the same copy is handed back without the mutex");
         copy::reset();refill();mapA();claim(extra[0],kFrame);claim(detachedTree.item(0,0,0),kFrame);
         void* plan=copy::beginMergeOpaque(detachedDestination.ptr(),detachedTree.anchor(0),kFrame);
         copy::copier(baseA,336,addressOf(src[3]),3,1,kFrame);
@@ -282,10 +285,10 @@ inline void runCopierCheck(ID3D11Device* device,Check check) {
         {"a patch one slot past the range, a claim elsewhere",true,false,{2},{0},0,false,3,0,2,336,true},
         {"a patch, a claim elsewhere, a range past the lease",true,false,{0},{1},0,false,3,3,2,336,false},
         {"two patches around the range (the bound is a span, so the mutex)",true,false,{0,3},{},1,false,3,1,2,336,false},
-        {"four claims elsewhere",true,false,{},{0,1},2,false,3,3,1,336,true},
-        {"five claims elsewhere",true,false,{},{0,1},3,false,3,3,1,336,false},
-        {"five claims, one of them in the range",true,false,{},{0,1,3},2,false,3,3,1,336,false},
-        {"four claims, one of them in the range",true,false,{},{0,1,3},1,false,3,3,1,336,false},
+        {"kClaimViewMax claims elsewhere",true,false,{},{0,1},copy::kClaimViewMax-2,false,3,3,1,336,true},
+        {"kClaimViewMax+1 claims elsewhere",true,false,{},{0,1},copy::kClaimViewMax-1,false,3,3,1,336,false},
+        {"kClaimViewMax+1 claims, one of them in the range",true,false,{},{0,1,3},copy::kClaimViewMax-2,false,3,3,1,336,false},
+        {"kClaimViewMax claims, one of them in the range",true,false,{},{0,1,3},copy::kClaimViewMax-3,false,3,3,1,336,false},
         {"a plan in flight, a claim elsewhere",true,false,{},{0},0,true,3,3,1,336,false},
     };
     for(const auto& sc:scenarios) {
@@ -373,7 +376,7 @@ inline void runCopierCheck(ID3D11Device* device,Check check) {
 inline void run(ID3D11Device* device,Check check) {
     (void)device;
     // ---- C1: zero-hit calls under a live claim take no mutex and allocate nothing -----------------------------------------
-    for(unsigned live=1;live<=copy::kClaimViewMax;++live) {
+    for(unsigned live:{1u,2u,4u,16u,copy::kClaimViewMax}) {
         Tree eight(1,8),source(1,2);Destination dst;std::vector<Record> claims(live,record(7));
         for(unsigned i=0;i<live;++i)claims[i]=record(float(7+i));
         constexpr unsigned N=1000;
@@ -512,30 +515,31 @@ inline void run(ID3D11Device* device,Check check) {
             }
         }
     }
-    // ---- C4: more than four claims ---------------------------------------------------------------------------------------------
+    // ---- C4: more than kClaimViewMax claims ---------------------------------------------------------------------------------------
     {
         Tree tree(1,1),source(1,2);Destination dst;tree.item(0,0,0)=record(40);
-        std::vector<Record> r;for(unsigned i=0;i<6;++i)r.push_back(record(float(50+i)));
-        copy::reset();for(unsigned i=0;i<4;++i)claim(r[i],kFrame);
+        constexpr unsigned kMax=copy::kClaimViewMax;
+        std::vector<Record> r;for(unsigned i=0;i<kMax+2;++i)r.push_back(record(float(50+i)));
+        copy::reset();for(unsigned i=0;i<kMax;++i)claim(r[i],kFrame);
         copy::invalidateDictionary(tree.ptr());copy::endMergeOpaque(copy::beginMergeOpaque(dst.ptr(),source.anchor(0),kFrame),true);
         auto s=copy::stats();
-        check(copy::g_stats.clearCalls==0 && copy::g_stats.mergeCalls==0 && s.clearPrechecked==1 && s.mergePrechecked==1 && copy::g_claimView.count.load()==4,
-              "claim check C4: with four claims live (the limit) a miss is handed back without the mutex");
-        claim(r[4],kFrame);
-        check(copy::g_claimView.count.load()==copy::kClaimViewMax+1 && published(),"claim check C4: a fifth claim makes the snapshot say 'more than it holds'");
+        check(copy::g_stats.clearCalls==0 && copy::g_stats.mergeCalls==0 && s.clearPrechecked==1 && s.mergePrechecked==1 && copy::g_claimView.count.load()==kMax,
+              "claim check C4: with kClaimViewMax claims live (the limit) a miss is handed back without the mutex");
+        claim(r[kMax],kFrame);
+        check(copy::g_claimView.count.load()==copy::kClaimViewMax+1 && published(),"claim check C4: an over-limit claim makes the snapshot say 'more than it holds'");
         copy::invalidateDictionary(tree.ptr());void* plan=copy::beginMergeOpaque(dst.ptr(),source.anchor(0),kFrame);
         s=copy::stats();
         check(copy::g_stats.clearCalls==1 && copy::g_stats.mergeCalls==1 && s.clearPrechecked==1 && s.mergePrechecked==1 && s.precheckDeclined==2 &&
               plan!=copy::mergeNoClaimsToken() && copy::g_mergePlans.size()==1,
-              "claim check C4: with five claims live both calls take the mutex as before (a plan is registered), and are counted as declined");
+              "claim check C4: above the limit both calls take the mutex as before (a plan is registered), and are counted as declined");
         copy::endMergeOpaque(plan,true);
-        // The fifth claim is the one in the list: the locked path revokes it.
+        // The extra claim is the one in the list: the locked path revokes it.
         claim(tree.item(0,0,0),kFrame);
-        check(copy::g_emissions.size()==6 && copy::g_claimView.count.load()==copy::kClaimViewMax+1,"claim check C4: six claims live");
+        check(copy::g_emissions.size()==kMax+2 && copy::g_claimView.count.load()==copy::kClaimViewMax+1,"claim check C4: kClaimViewMax+2 claims live");
         copy::invalidateDictionary(tree.ptr());
-        check(!heldLocked(addressOf(tree.item(0,0,0))) && copy::g_emissions.size()==5 && published(),"claim check C4: with more than four claims a claim in the freed nodes is revoked");
-        copy::invalidateEmission(addressOf(r[4]));
-        check(copy::g_emissions.size()==4 && copy::g_claimView.count.load()==4 && published(),"claim check C4: back to four claims the snapshot holds them again");
+        check(!heldLocked(addressOf(tree.item(0,0,0))) && copy::g_emissions.size()==kMax+1 && published(),"claim check C4: above the limit a claim in the freed nodes is revoked");
+        copy::invalidateEmission(addressOf(r[kMax]));
+        check(copy::g_emissions.size()==kMax && copy::g_claimView.count.load()==kMax && published(),"claim check C4: back to kClaimViewMax claims the snapshot holds them again");
         copy::invalidateDictionary(tree.ptr());
         check(copy::g_stats.clearCalls==2 && copy::stats().clearPrechecked==2,"claim check C4: and the check works again");
         copy::reset();
@@ -565,7 +569,8 @@ inline void run(ID3D11Device* device,Check check) {
     }
     // ---- C6: the snapshot is exact, sorted, and rewritten only when it changes -------------------------------------------------------
     {
-        std::vector<Record> r;for(unsigned i=0;i<6;++i)r.push_back(record(float(70+i)));
+        constexpr unsigned kMax=copy::kClaimViewMax;
+        std::vector<Record> r;for(unsigned i=0;i<kMax+2;++i)r.push_back(record(float(70+i)));
         copy::reset();
         const uint32_t seq0=copy::g_claimView.seq.load();
         check(copy::g_claimView.count.load()==0 && !copy::g_claimView.plans.load() && published(),"claim check C6: after a reset the snapshot is empty");
@@ -578,8 +583,8 @@ inline void run(ID3D11Device* device,Check check) {
         check(copy::g_claimView.seq.load()==seq1 && published(),"claim check C6: a repeated claim and calls that change no claim do not rewrite the snapshot");
         copy::invalidateEmission(addressOf(r[0]));
         check(copy::g_claimView.count.load()==2 && copy::g_claimView.seq.load()==seq1+2 && published(),"claim check C6: erasing a claim rewrites it once");
-        for(unsigned i=0;i<5;++i)claim(r[i],kFrame);
-        check(copy::g_claimView.count.load()==copy::kClaimViewMax+1 && published(),"claim check C6: five claims publish 'more than the snapshot holds'");
+        for(unsigned i=0;i<kMax+1;++i)claim(r[i],kFrame);
+        check(copy::g_claimView.count.load()==copy::kClaimViewMax+1 && published(),"claim check C6: kClaimViewMax+1 claims publish 'more than the snapshot holds'");
         copy::invalidateEmission(0);
         check(copy::g_claimView.count.load()==0 && published(),"claim check C6: clearing every claim empties it");
         copy::reset();

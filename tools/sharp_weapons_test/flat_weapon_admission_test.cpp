@@ -131,7 +131,7 @@ bool candidate(Rig& r, Tex& hdr, uint64_t frame) {
 }
 
 void runCase(Rig& r, Tex& hdr, const char* quality, uint64_t frame,
-             bool copyTone = false, Tex* firstDecided = nullptr, bool expectSmoothed = false) {
+             bool copyTone = false, Tex* firstDecided = nullptr, bool expectSmoothed = false, bool ownedFrame = false) {
     auto& cfg = Config::get();
     cfg.set("fix.ui_quality", quality);
     uiLayerConfigure(cfg);
@@ -202,15 +202,35 @@ void runCase(Rig& r, Tex& hdr, const char* quality, uint64_t frame,
     }
     check(flatweapontest::published(frame), "the tone bracket published this frame's weapon light");
 
+    ComPtr<ID3D11Texture2D> ownedTex;
+    ComPtr<ID3D11ShaderResourceView> ownedSrv;
+    ID3D11Texture2D* frameTex = r.frame[0].tex.Get();
     ID3D11ShaderResourceView* frameSource = r.frame[0].srv.Get();
-    const auto originalPixels = readPixels(r, r.frame[0].tex.Get());
+    if (ownedFrame) {
+        D3D11_TEXTURE2D_DESC od{};
+        od.Width = kDoorW;
+        od.Height = kDoorH;
+        od.MipLevels = od.ArraySize = 1;
+        od.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        od.SampleDesc.Count = 1;
+        od.Usage = D3D11_USAGE_DEFAULT;
+        od.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET;
+        std::vector<uint32_t> black(size_t(kDoorW) * kDoorH, 0xFF000000u);
+        D3D11_SUBRESOURCE_DATA init{black.data(), kDoorW * 4u, 0};
+        check(SUCCEEDED(r.dev->CreateTexture2D(&od, &init, &ownedTex)) &&
+              SUCCEEDED(r.dev->CreateShaderResourceView(ownedTex.Get(), nullptr, &ownedSrv)),
+              "the UAV-capable owned frame is created for the in-place copy case");
+        frameTex = ownedTex.Get();
+        frameSource = ownedSrv.Get();
+    }
+    const auto originalPixels = readPixels(r, frameTex);
     check((at(originalPixels, kDoorW, kDoorW / 2, kDoorH / 2) & 0xFFu) == 0,
           "the uncomposited frame has no weapon red");
     r.ctx->OMSetRenderTargets(0, nullptr, nullptr);
     r.ctx->PSSetShaderResources(0, 1, &frameSource);
     ID3D11ShaderResourceView* original = nullptr;
-    bool replaced = false;
-    flatUiLayerAtCopy(r.ctx.Get(), frame, true, kDoorW, kDoorH, &original, &replaced);
+    bool replaced = ownedFrame;
+    flatUiLayerAtCopy(r.ctx.Get(), frame, true, kDoorW, kDoorH, &original, &replaced, ownedFrame);
     // The HUD layer's edge smoothing (fix.hud_antialiasing, off by default): with the key off the adapter asked for the layer as it is and the composite read the
     // raw layer; with it on the composite read the SMAA output. A key the flat allow-list lacked would read off here and fail the smoothed cases.
     const UiLayerEdgeSmoothingResult edge = uiLayerFlatEdgeSmoothingResult();
@@ -222,7 +242,12 @@ void runCase(Rig& r, Tex& hdr, const char* quality, uint64_t frame,
     if (composite) composite->GetResource(&resource);
     ComPtr<ID3D11Texture2D> output;
     if (resource) resource.As(&output);
-    check(replaced && output && composite.Get() != frameSource, "the flat copy binds a published composite");
+    if (ownedFrame) {
+        check(output && output.Get() == frameTex && composite.Get() == frameSource,
+              "the owned flat copy composites in place and rebinds t0 to the same view");
+    } else {
+        check(replaced && output && composite.Get() != frameSource, "the flat copy binds a published composite");
+    }
     if (output) {
         const auto pixels = readPixels(r, output.Get());
         const uint32_t pixel = at(pixels, kDoorW, kDoorW / 2, kDoorH / 2);
@@ -279,10 +304,12 @@ int main(int argc, char** argv) {
         check(!candidate(r, other, first + 3), "the second target is proven without captured content");
         g_stubs.eyeRes[0] = hdr.tex.Get();
         runCase(r, hdr, "100", first + 4, true, &other, true);
+        // Owned UAV-capable resolve buffer: composite runs in place over frameTex with t0 preserved.
+        runCase(r, hdr, "100", first + 5, false, nullptr, true, true);
     }
     // The last captured content is stale in the next frame, even though the
     // same HDR target and tone pair are still bound.
-    check(!candidate(r, hdr, first + 5), "stale weapon content is refused in the next flat frame");
+    check(!candidate(r, hdr, first + 6), "stale weapon content is refused in the next flat frame");
     uiLayerShutdown();
     std::printf("flat_weapon_admission_test: %u checks, %u failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

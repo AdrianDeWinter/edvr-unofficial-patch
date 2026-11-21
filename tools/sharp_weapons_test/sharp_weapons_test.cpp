@@ -1285,7 +1285,7 @@ static bool wiredFlat(const std::string& adapter, const std::string& runtimeH, c
     return has(adapter, "if (!flatUiFamilyLive(family, uiLayerQualityLive(), uiLayerWeaponsLive(), uiLayerRippleLive())) return g_lastAsk;") &&
            before(adapter, "if (!flatUiLayerTakesFamily(family)) return g_lastAsk;", "if (!flatUiFamilyLive(family,") &&
            before(adapter, "if (!flatUiFamilyLive(family,", "++g_w.asked[fi];") &&
-           has(adapter, "uiLayerComposite(frame, 0, picture.Get(), region, uv, false, treated)") &&
+           has(adapter, "uiLayerComposite(frame, 0, picture.Get(), region, uv, ownedFrame, treated)") &&
            has(adapter, "bool flatUiLayerToneNext(ID3D11DeviceContext* ctx) {") && has(adapter, "return uiLayerCrispToneNext(ctx);") &&
            has(runtimeH, "if (uiTone && flatUiLayerToneBegin(ctx)) { issue(); while (flatUiLayerToneNext(ctx)) issue(); flatUiLayerToneEnd(ctx); }") &&
            !has(keys, "fix.sharp_weapons");
@@ -1370,7 +1370,7 @@ static void flatTests() {
     check(wiredFlat(adapter, runtimeH, keys), "flat: the adapter asks the half that governs the family, the tone bracket runs its steps, the door is told the picture is resolved, the key is allow-listed");
     check(!wiredFlat(replaced(adapter, "if (!flatUiFamilyLive(family, uiLayerQualityLive(), uiLayerWeaponsLive(), uiLayerRippleLive())) return g_lastAsk;", ""), runtimeH, keys),
           "control: an adapter that asks the HUD with fix.ui_quality off (or the weapons with them off) trips the pin");
-    check(!wiredFlat(replaced(adapter, "uv, false, treated)", "uv)"), runtimeH, keys), "control: a door never told whether the picture is resolved trips the pin");
+    check(!wiredFlat(replaced(adapter, "uv, ownedFrame, treated)", "uv)"), runtimeH, keys), "control: a door never told whether the picture is resolved trips the pin");
     check(!wiredFlat(adapter, replaced(runtimeH, "while (flatUiLayerToneNext(ctx)) issue(); ", ""), keys), "control: a tone bracket with no steps (the matched composite would be one issue short) trips the pin");
     check(!wiredFlat(adapter, runtimeH, keys + "\nstd::strcmp(key, \"fix.sharp_weapons\") == 0 ||"), "control: a surviving key on flat's allow-list trips the pin");
 }
