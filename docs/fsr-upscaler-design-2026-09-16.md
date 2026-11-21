@@ -8,29 +8,29 @@ read 2026-09-16) unless marked believed.
 
 ## Status
 
-- **State (2026-10-24): route 2 FLOWN FLAT, BRANCH ONLY; held keys
-  shipped against the render-thread stall.** `fix.temporal_aa = fsr4` (FSR 4.1 through
-  AMD's signed D3D12 DLLs over a D3D11/D3D12 bridge, modelled on XeSS's)
-  on `claude/fsr-4-1-flat-vr-support-5f6ea4`, flat and VR, beside `fsr`
-  (route 1, unchanged). Not merged to main until Sean says it ships (D9).
+- **State (2026-11-20): route 2 MERGED TO MAIN** on Sean's word
+  (`claude/fsr-4-1-flat-vr-support-5f6ea4`). `fix.temporal_aa = fsr4` (FSR 4.1 through
+  AMD's signed D3D12 DLLs over a D3D11/D3D12 bridge, modelled on XeSS's),
+  flat and VR, beside `fsr` (route 1, unchanged). The runtime stays a dev
+  install (`install_edvr.py --fsr4`), not in the packages (D8).
   Facts, decisions D7 to D9 and the flight plan: journal, "2026-10-23:
-  route 2". Flight 5 (journal, "2026-10-23 night"): FSR 4.1.1 ran on the
-  Radeon 8060S through `FSR4_UPGRADE=1`, every dispatch clean. Its GPU
-  work is small (0.8 ms); the bridge held the render thread 3 to 8 ms a
-  frame in DXVK's keyed-mutex `ReleaseSync` (flight 6, journal): held keys
-  cut the evaluate from 6.6 to 0.27 ms, 52 to 60 fps. Same spot, FSR 4 35 to 38 fps,
-  FSR 3 36 to 38. Sean reports artifacts (vertical streaks in a station,
-  FSR 3 comparison pending). A main-menu crash after a display change
-  was in Elite's occlusion culler, before FSR 4 ran (set aside).
-- **Held keys (2026-10-24):** the bridge takes a context's D3D11 keys
-  once and keeps them until it is destroyed; `diag.fsr4_shared_locks`,
-  flight 6's A/B, is removed (journal, "held keys shipped"). Its flight
-  is next.
+  route 2". Flights 5 and 6 (journal): FSR 4.1.1 clean on the Radeon
+  8060S, 0.8 ms of GPU; held keys cut the bridge's evaluate from 6.6 to
+  0.27 ms (52 to 60 fps). The station streaks Sean reported then may be
+  the station shimmer below (not checked). A main-menu crash after a display change was in
+  Elite's occlusion culler, before FSR 4 ran (set aside).
+- **Held keys (2026-10-24):** the bridge keeps a context's D3D11 keys
+  until it is destroyed; `diag.fsr4_shared_locks` removed (journal).
 - **Route 1 (2026-09-17): MERGED TO MAIN** after flights 1 to 3 (Pimax
   and Quest 3, RTX 5090, clean; fsr 1.1 to 2.1 ms per stereo pair; Sean:
   slightly better than the pass's own history, not DLSS). The community
   D3D11 port (FSR 3.1.2) compiled into d3d11.dll. Build, flights and
   reasoning: Status detail below.
+- **Station shimmer (2026-11-20, journal): FIXED in flight** (Epic, flat,
+  FSR 4). Pixels whose motion slot no surface owned showed the raw jittered
+  frame. Keyed: the plants (DE54/A607), the bar lights (2684/2376); keyed
+  depthless blended draws (the shop glass) and world-camera weapon draws
+  (AACF) handled. The NumLock census's slot probe names the next one.
 - **Next:** the flicker at flight 7's spot (a hull panel's edge in the
   main menu) is in the game's image under F7 and in DLSS on Windows too,
   so not FSR 4's (flight 7 entry): the no-EDVR baseline there, when Sean
@@ -981,3 +981,237 @@ class of upscaler): that is route 2's go/no-go.
   `give-in` and `give-out` keep their names and now time the keep.
   Expected in the next flight: `give-in` and `give-out` about 0 in every
   window, eval median 0.2 to 1.6 ms, evaluations a second at the cap.
+- 2026-11-20: concourse bar shimmer (Epic, Windows, Radeon 8060S, flat,
+  `fsr4`, FSR 4.1.2; in 960x600, out 1920x1200, game SS; 8 phases; log
+  `edvr_gfx_20261120_133313`, build `v0.22.3-47-gf422c72c-dirty`). Sean's
+  still-camera recording at the bar: the frame-to-frame difference lights
+  the lamp strips under the bar canopy (VS 359BF8FF / PS 92FF8499,
+  six-index additive quads, up to 168 instances a draw), the planter and
+  awning plants, and a floor-level strip. Every region's flicker peaks at
+  7 to 8 Hz, one 8-phase cycle at the game's 55 to 57 fps, plants
+  included. The 5 s census shows no phase refusals (`failed-frames=0`),
+  and the strip pair has a projection recipe, so it is jittered. Ruled
+  out: plant sway as the source, because the plants flicker at the jitter
+  cycle's frequency like the strips. Ruled out: `flat_lamp_quads` (an
+  uncommitted change that drew each strip four times, half a pixel apart,
+  at quarter strength through its own blend state), because the strips
+  shimmered with it live, and it changed the scene from stock (blurred
+  strips, and the game's `INV_BLEND_FACTOR, ONE` colour and `SRC_ALPHA,
+  ONE` alpha replaced). Removed. Hypothesis: the cycle is too short for a
+  2x upscale. Both vendors suggest 8 x (output / render)^2, 32 here;
+  XeSS-SR raises its count to that automatically
+  (`temporalXessJitterPhases`), FSR 3.1, FSR 4, DLSS and DittoSR do not.
+  Discriminator, live in one session at the same spot:
+  `advanced.temporal_aa_jitter_phases` 8 against 32. If 32 settles the
+  strips and plants, FSR and DLSS take the ratio-scaled count as XeSS does
+  (behaviour, no key). If not, a draw jittered by an offset other than the
+  one FSR is given is next, checked in an eye dump.
+- 2026-11-20, 32 phases (log `edvr_gfx_20261120_134822`, build 6B00B11D
+  linked 20:44 UTC, lamp quads removed; `flat jitter: ... phases=32`, no
+  refusals): Sean at the bar, the same strips and plants flicker faster
+  than at 8. Ruled out: too few jitter phases as the cause, because a
+  longer cycle made the flicker faster rather than settling it; the 7 to 8
+  Hz peak at 8 phases was the sequence repeating, not undersampling. The
+  pixels follow each frame's own phase, so their history is not used.
+  Hypotheses: (a) those draws are drawn without the jitter (a projection
+  the injected camera does not reach), so FSR sees them move by minus the
+  phase each frame; (b) they carry the jitter but FSR rejects their
+  history (reactive or disocclusion). Discriminator: per-draw jitter state
+  for VS 359BF8FF / PS 92FF8499 and the plant pairs.
+- 2026-11-20, motion source view (`advanced.flat_refusal_view = on`, same
+  session, 8 phases): the flickering strip and plant pixels are pink,
+  "stale slot refused (shown raw)" (flat_mono_refusal.h:146). The cause is
+  EDVR's, not FSR 4's: a pixel whose engine slot was overdrawn (its depth
+  no longer the slot's, flat_mono_shader_source.h:268) keeps the camera
+  term only if last frame's depth confirms it (`historyDepthMatches`,
+  steady detail), and a refused one shows the raw current frame in place
+  of the backend's (`flat refusal census 5s`: refused=7392 of 20.7M
+  sampled, all class stale; stale-kept=890978). A leaf or a lamp housing
+  about a texel wide is often missing from last frame's jittered raster,
+  so the check refuses it on alternate phases and the raw jittered frame
+  shows: the shimmer. Hypothesis (b), history refused, confirmed in this
+  form; (a), unjittered draws, is not needed to explain it. The census
+  (`DCO 0` lines) names the unkeyed depth writers on the scene depth @71:
+  the plants are most likely VS 33A5025C / PS 0FCAA3CF (168 indices,
+  forward) after the depth-only prepass F516BF02 / B40B0462 (168), the
+  same vertex shaders the engine motion table files as an NPC's eyes with
+  "432- and 168-index meshes ... not identified"; the lamp housings are
+  most likely 2684F02B / 2376A8D9 (6-index quads into the G-buffer, depth
+  write on). Also unkeyed and depth-writing: 617C6E44 / 627FEC64, A8E4D93B
+  / 75D12D85, 01A029C7 / 130FC0A7, and unkeyed pixel shaders on keyed
+  vertex shaders (7B0D / A6E5, 114A / FDC4, DE54 / 0420, 61AE / 3F14).
+  Bytecode for the first five pairs is in the Epic `edvr_logs\shaders`
+  dump. Not yet confirmed which pair covers the pink pixels.
+- 2026-11-20, naming the plants (`advanced.census_skip_offscreen`, now
+  read on flat and applied in the flat draw hooks through
+  `flatCensusSkipsDraw` and FlatStationSunGate; log
+  `edvr_gfx_20261120_144558`, build 6B00BDBF): `960x600:X:168` dropped
+  about 40 draws a frame and the plants stayed. Ruled out: VS 33A5025C /
+  PS 0FCAA3CF and its prepass F516BF02 / B40B0462 at 168 indices as the
+  plants, because hiding every 168-index draw in the scene left them; the
+  engine motion table's "NPC's eyes" label for 33A5 stands. Next
+  candidate: the F516 prepass ahead of A8E4D93B / 75D12D85 and 01A029C7 /
+  130FC0A7, one mesh family at 2964, 1488, 3000, 1500, 3018, 744 and 732
+  indices.
+- 2026-11-20, naming the plants, continued (flat now honours
+  `advanced.census_skip` vs:HASH terms; log `edvr_gfx_20261120_150101`,
+  build 6B00C0F3): `vs:A8E4D93B8B294505 vs:01A029C7DBD48554` dropped about
+  20 draws a frame and the plants stayed. Ruled out: the A8E4 / 01A0 mesh
+  family as the plants, because hiding every draw of both vertex shaders
+  left them (the earlier four-size hide was not decisive, three of its
+  seven sizes still drew). Next: 39 vertex shaders write the 960x600 scene
+  depth; EB5234DB6ADB491D, the keyed station material family, is 1329 of
+  their 1712 draws, so it is hidden alone first.
+- 2026-11-20, plants and lights named (live `advanced.census_skip` vs:HASH
+  halving at the bar, Sean watching, build 6B00C0F3): hiding
+  EB5234DB6ADB491D removed most of the station and left the plants (ruled
+  out: the station material family as the plants). Eight shaders together
+  hid both plants and lights; then 2684F02B / DE545DC8 / F516BF02 /
+  617C6E44 hid both; then 2684F02B and DE545DC8 hid both; then 2684F02B
+  alone hid the lights and brought the plants back. The lights are VS
+  2684F02B9B0BB0DE / PS 2376A8D9AA874372 (6-index quads into the G-buffer,
+  depth write on, not a keyed family). The plants are VS DE545DC8EE4FBB87,
+  a keyed family (engine_velocity_families.h:44: E46E3E48, CB429E04,
+  03B17F89, 60D69AB6, flat 91F8937E), drawn at the bar with four unkeyed
+  pixel shaders: 042056C6 (26 draws), A6070F9D (9), 430AF34F (7), 3AF0C44D
+  (5). Disassembled from the Epic dump (fxc /dumpbin): A6070F9D, 430AF34F
+  and 3AF0C44D each have a discard (alpha cutout); 042056C6 and the keyed
+  E46E3E48 have none. So the plants are among the three cutout shaders.
+  Each draws over keyed station surfaces with no slot of its own, which is
+  the stale-slot refusal. Fix: key the three cutout pairs on DE545DC8 (the
+  established route, bytecode in the dump), and the light quads, which
+  first need a check that 2684F02B is a pool family at all.
+- 2026-11-20, the plants keyed: DE545DC8 / A6070F9DD1CFB601 joins the
+  family (engine_velocity_families.h), moved from the harness's candidates
+  to its keyed pairs; it passes the corpus harness whole on WARP against
+  the Epic dump (40960 texels, 0 mismatches; MRT6 4604 covered, 0 bad;
+  3588 discarded, 0 bad). The two tests that used A6070F9D as their
+  unqualified DE54 example now use E364F563, which stays a candidate.
+  Ruled out as game variants: 430AF34F and 3AF0C44D, the other two cutout
+  pixel shaders the census showed on DE545DC8, because both declare
+  `o6.xy` and write `utof o6.x` / `mov o6.y, v<pos>.z`, EDVR's own marker:
+  they are this family's generated substitutes, which the census sees
+  while the lazy substitution leaves them bound (kSelfMarking's 2026-09-28
+  note), and the patcher refuses them ("output target 6 or above
+  occupied"). The same holds for E06E61AE, DCCCEDD6 and AD6196D0, keyed on
+  EB5234DB earlier today as "unkeyed station materials": each writes the
+  marker, and the harness refuses E06E61AE. Expected in the next flight at
+  the bar: the plant pixels green (joined) in the motion source view and
+  no longer shimmering; the light quads (2684F02B / 2376A8D9) still pink
+  until they are keyed.
+- 2026-11-20, plants fixed in flight: with DE545DC8 / A6070F9D keyed (and
+  E06E61AE, DCCCEDD6, AD6196D0 removed from EB5234DB, with a test that
+  they stay unkeyed; the full corpus run then passed 21 real pairs past
+  where E06E61AE used to stop it), Sean at the bar: the plants no longer
+  shimmer; the light strips under the bar still do from some angles. This
+  confirms the arc's diagnosis for the plants: a keyed draw writes its own
+  slot, so its pixels are never stale and the raw frame is never shown.
+  The lights are keyed next as a family of their own, VS 2684F02B / PS
+  2376A8D9: the same instance-record inputs as DE54
+  (INSTANCEANDMODELDATAINDEX at v0), the record id at the pixel shader's
+  v0, four targets, no discard.
+- 2026-11-20, lights fixed in flight (2684F02B / 2376A8D9 keyed as a
+  family of its own; passes the corpus harness whole on WARP, 40960
+  texels, 0 mismatches, MRT6 8192 covered, 0 bad; build 6B00D8B0): Sean at
+  the bar, the light strips no longer shimmer. Left: at a weapons shop
+  (render 1280x800, output 2560x1600, a window resize), a thin vertical
+  strip on the edge of a board seen through glass flickers (recording
+  20261120-2339, x 176-192, y 144-256 of 916x516). That census
+  (`edvr_gfx_20261120_163721`) has no blended draw writing depth, so the
+  glass makes no stale slot. Its unkeyed depth writers include 2684F02B
+  with a second pixel shader, 1878CD810D57381B (29 draws), absent from the
+  dump; 042056C6 on DE545DC8 (29) writes the o6 marker, so it is a
+  generated substitute. Next: `census_skip = vs:2684F02B9B0BB0DE` at the
+  shop names the edge, and `glare_shader_dump = 1` captures 1878CD81 for
+  the harness. Correction to the first entry today: the lamp strips' stock
+  blend reads `bl=15,2,1/5,2,1`, which is SRC_ALPHA, ONE for colour and
+  alpha alike (the census's first digit is the enable), not
+  INV_BLEND_FACTOR for colour.
+- 2026-11-20, the shop board's edge through glass (build 6B00D8B0, census
+  `edvr_gfx_20261120_164620`, live hides with Sean watching the motion
+  source view): the shimmering edge is pink (stale slot refused, shown
+  raw), and only through the glass. Ruled out, each by hiding it live with
+  the edge still pink: 41E245D4 / 6EF82262 (alpha-blended, depth-writing,
+  36 indices here; its vertex shader takes a plain POSITION, so it is not
+  keyable anyway); every unkeyed depth-writing mesh in the census, in
+  three groups (2684F02B, F516BF02, C53F124D, D46473DB, 87FCE198,
+  72BDD292, ACE405F4, 0EE43D81; A8E4D93B, 617C6E44, 01A029C7, 5B0068AF;
+  01DA82F8, 114AF608, 33A5025C, AFFEF018, 3D05E7CF); EDVR's concourse
+  glass pass (`diag.concourse_pane_mode = off`); the blended G-buffer
+  overlay BC3EE3F509EB3956 (about 200 draws a frame, recorded with EDVR's
+  BA58469C bound). Hiding the 3-index full-screen passes (F9CFC798,
+  CFCA8FFC, FC1193AF, DEF19B03) froze the frame, so they were not tested.
+  Also ruled out: rasterizer depth bias (every draw in the view has bias
+  0). Of the remaining unkeyed pixel shaders on keyed vertex shaders,
+  3F144D0A (61AE) and C25BBDB7 (01DA) write the o6 marker (generated),
+  4A8F3C1D (01DA) does not. Not yet known: which draw last wrote the stale
+  pixels' depth, or whose slot they hold. Next: an instrument that reads
+  the slot (record code, stored depth) and the scene depth at the view
+  centre for a few frames, so the record and the depth step name the
+  overdraw instead of hiding draws one group at a time.
+- 2026-11-20, the shop glass named by the slot probe (TEMPORARY,
+  flat_mono_resolve.cpp slotProbe*, riding the NumLock census: a 33x33
+  block at the view centre over 8 resolves; log
+  `edvr_gfx_20261120_174131`, build 6B00E4E0): in every probed frame about
+  460 of the 1089 pixels behind the glass were stale, none refused, every
+  stale pixel held one record's slot (one code a frame), and the scene
+  depth was 1.6e-6 farther than the stored depth throughout (about a
+  centimetre at that range). So nothing overdrew the board: a keyed draw
+  in front of it wrote MRT6 and no depth. The census names it:
+  5B4D8E894EEDA8B4 / 4375B72964F386CD, keyed (its substitute is BA58469C),
+  alpha-blended (SRC_ALPHA, INV_SRC_ALPHA), GEQUAL with depth writes off.
+  This is the hazard the overlay guard already handles for BBE58E40 /
+  DB3E8D20 (engine_velocity.cpp, "The overlay pair"), on another pair. Fix
+  (root cause, both profiles): a keyed draw whose depth state is off, or
+  writes off under a test other than EQUAL, is not substituted outside the
+  overlay pair (`depthWritesOff`, cached per state object), so it writes
+  no slot and the surface behind keeps its own; an EQUAL pass over its own
+  prepass stays substituted. Counted in a new "engine motion: ... keyed
+  draws that write no depth, drawn as the game's" line with the last pair.
+  Expected at the shop: that line naming 5B4D / 4375, the board's pixels
+  through the glass no longer stale (the probe's stale count near zero
+  there), the edge no longer pink or shimmering.
+- 2026-11-20, the glass fix as built (build after 6B00E4E0; the first form
+  failed the flat lazy rig's pinned 440 context calls, because an
+  OMGetDepthStencilState on every keyed draw made it 480): the decline is
+  asked only of a keyed draw whose game blend state blends target 0
+  (`gameBlendsTarget0`, the blend object's own description, no context
+  call), and only then of the depth state (`depthWritesOff`: depth off, or
+  writes off under a test other than EQUAL). It sits after the blend is
+  known in engineVelocityBeforeDraw and declines through restore(); the
+  flat bracket's kDeclined flush puts the game's render targets back, so
+  the glass draws exactly as the game's with MRT6 off. The rig's counts
+  are unchanged (440, 3, 43). Not covered: an opaque keyed draw that
+  writes no depth outside the overlay pair (none seen so far).
+- 2026-11-20, the glass fix in flight (build 6B00EB21, log
+  `edvr_gfx_20261120_175527`): "keyed draws that write no depth, drawn as
+  the game's: 447941, last vs 5B4D8E894EEDA8B4 ps 4375B72964F386CD"; the
+  probe behind the glass shows 0 stale pixels in most of its 8 frames
+  (about 460 before). Sean still sees pink at the edge. The rest is
+  another cause: on 3 of 8 frames a one-pixel column of stale pixels (29
+  in one frame, all refused), each holding one background record's slot
+  (391) under a surface about 3% nearer (depth 0.001495 over a stored
+  0.001447): a thin vertical object in front, drawn by an unkeyed depth
+  writer, there on some jitter phases only. The earlier live hides at the
+  shop were confounded: the glass's stale pixels kept the view pink
+  whatever was hidden, so their "still pink" ruled nothing out for this
+  edge. Next: hide 2684F02B (the light-strip family, whose second pixel
+  shader 1878CD81 is unkeyed, 29 draws at the shop) with the dump on to
+  capture 1878CD81.
+- 2026-11-20, the thin edge named (log `edvr_gfx_20261120_180644`, build
+  6B00ED8D; the probe now also logs, while the NumLock census runs, each
+  keyed draw into a depth that is not offered for substitution and which
+  run condition failed): seen only straight on (Sean: at about 45 degrees
+  it does not show), the stale column is a surface under a pixel wide. The
+  keyed draws not offered: AACFDCF2FB9AD809 / CF534B32F491561A, small
+  meshes (6 to 120 indices, up to 4 instances) with the world's depth,
+  constants and camera, refused only because sourceShape leaves the
+  first-person weapon families out; and 01DA82F8 / 2C3ADCD2 under another
+  camera (hidden earlier with no effect). Hiding vs:AACFDCF2FB9AD809 live:
+  the edge is gone (Sean). So the shop's displayed weapons are drawn by
+  the weapon family with the world camera, left stock, writing depth with
+  no slot. Fix: motionOnlyRun also takes a weapon-family draw that shares
+  the world's depth, constants and camera (substituted, never a source:
+  sourceCandidate still leaves it out; the held gun's own projection fails
+  the camera test). Expected: those AACF draws gone from the "keyed draw
+  not substituted" lines, and no stale column at the shop edge.

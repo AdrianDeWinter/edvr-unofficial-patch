@@ -818,7 +818,7 @@ void testMonoFrameSelection() {
         "HDR must contain at least one observed matching camera");
     reject([](auto& f) {
         for (uint32_t i = 0; i < 7; ++i) f.world[i].key.ps = 0;
-        f.world[8].key.ps = 0xA6070F9DD1CFB601ull;  // Captured DE54 PS still unqualified.
+        f.world[8].key.ps = 0xE364F5637AB0261Cull;  // Captured DE54 PS still unqualified (A6070F9D was keyed 2026-11-20).
     }, FlatMonoReason::NoSupportedSource,
         "VS families with unsupported PSs cannot name a motion source");
     reject([](auto& f) { f.input.supportedPair = nullptr; }, FlatMonoReason::InvalidInput,
@@ -849,7 +849,7 @@ void testMonoFrameSelection() {
         f.world[21].draws = 1; }, FlatMonoReason::BrokenLineage,
         "an intervening write to tone output breaks the observed handoff");
     check(!engine_velocity_family::supportedPair(0xEB5234DB6ADB491Dull, 0xB7D50283329322C3ull) &&
-          !engine_velocity_family::supportedPair(0xDE545DC8EE4FBB87ull, 0xA6070F9DD1CFB601ull) &&
+          !engine_velocity_family::supportedPair(0xDE545DC8EE4FBB87ull, 0xE364F5637AB0261Cull) &&
           engine_velocity_family::supportedPair(0xDE545DC8EE4FBB87ull, 0x91F8937EDA723663ull),
           "flat metadata admits PS91 but keeps unqualified captured pairs excluded");
 
@@ -4026,7 +4026,7 @@ void testFlatQueryCutWiring() {
     }
     // The coverage classification no longer reads the context for what the shadow knows.
     const size_t coverageFrom = runtimeCpp.find("flatcpu::Scope coverage(flatcpu::kCoverage);");
-    const size_t coverageTo = coverageFrom == std::string::npos ? std::string::npos : runtimeCpp.find("if (continuesRun) {", coverageFrom);
+    const size_t coverageTo = coverageFrom == std::string::npos ? std::string::npos : runtimeCpp.find("if (continuesRun || motionOnlyRun) {", coverageFrom);
     check(coverageFrom != std::string::npos && coverageTo != std::string::npos && coverageFrom < coverageTo,
           "the coverage classification can be delimited");
     if (coverageFrom != std::string::npos && coverageTo != std::string::npos && coverageFrom < coverageTo) {

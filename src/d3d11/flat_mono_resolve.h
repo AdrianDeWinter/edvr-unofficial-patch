@@ -183,6 +183,11 @@ struct FlatMonoResolveFrame {
     //     refused pixels can be SEEN. Painted every frame it is set. A reset frame does neither.
     bool refusalCensus = false;
     uint32_t refusalView = 0;
+    // The flat census's slot probe (2026-11-20, the shop glass edge; docs/fsr-upscaler-design-2026-09-16.md journal).
+    // The flat NumLock draw census is armed: log the 9x9 block at the render target's centre (slot code, stored depth, scene depth,
+    // class byte) the prep read. slotProbeCensus is that census's number, for the log line.
+    bool slotProbe = false;
+    uint32_t slotProbeCensus = 0;
     EngineVelocityViews engine{};
     uint64_t frame = 0;
     float deltaMs = 0;

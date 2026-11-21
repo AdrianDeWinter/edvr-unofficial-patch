@@ -121,10 +121,11 @@ template<class Check> void run(Check check) {
         check(flatDofBlurRetryAllowed(r, b, 101) && flatDofBlurRetryAllowed(r, c, 101), "dof blur retry: a changed size or format tries at once");
         check(flatDofBlurRetryFailed(r, b, 101), "dof blur retry: a failure of a new shape is logged");
         check(flatDofBlurRetryAllowed(r, a, 102), "dof blur retry: only the last failed shape is remembered");
-        check(flatDofBlurCoversScene(1440, 810, 1440, 810) && flatDofBlurCoversScene(720, 405, 1440, 810),
+        check(flatDofBlurCoversScene(1440, 810, 1440, 810) && flatDofBlurCoversScene(720, 405, 1440, 810) &&
+              flatDofBlurCoversScene(1280, 360, 2560, 720),
               "dof blur: the composite accepts a full-size blur and the half-size blur bloom off feeds it");
         check(!flatDofBlurCoversScene(720, 405, 1440, 811) && !flatDofBlurCoversScene(360, 202, 1440, 810) &&
-              !flatDofBlurCoversScene(0, 405, 1440, 810),
+              !flatDofBlurCoversScene(0, 405, 1440, 810) && !flatDofBlurCoversScene(256, 256, 2560, 720),
               "dof blur: a blur that is not the scene or exactly half of it is refused");
         flatDofBlurRetryClear(r);
         check(flatDofBlurRetryAllowed(r, b, 102), "dof blur retry: a clear (resize, device change) tries at once");
@@ -159,5 +160,6 @@ template<class Check> void run(Check check) {
     check(runtime.find("flatDofBlurFrame(") != std::string::npos, "dof blur wiring: Present lets idle images go");
     check(runtime.find("flatDofBlurRelease(") != std::string::npos, "dof blur wiring: a reset releases the images");
     check(runtime.find("flatDofBlurLogWindow(") != std::string::npos, "dof blur wiring: the 5 s window says what it did");
+    check(runtime.find("!flatDofBlurCoversScene(") != std::string::npos, "dof blur wiring: the composite's verification accepts the half-size blur");
 }
 }  // namespace flat_dof_blur_tests

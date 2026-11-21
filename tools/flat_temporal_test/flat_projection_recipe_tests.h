@@ -326,6 +326,7 @@ inline int flatProjectionRecipeTests() {
         {0x4D24A7A6C2D12733ull,0xB70DF49F678E806Full,1,FlatProjectionPatchLayout::ForwardColumns,270},
         {0xDE545DC8EE4FBB87ull,0xA6070F9DD1CFB601ull,1,FlatProjectionPatchLayout::ForwardColumns,270},
         {0x98397963AAEC45D3ull,0x8717694A527EC745ull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0x98397963AAEC45D3ull,0x33DFFE4870508698ull,1,FlatProjectionPatchLayout::ForwardColumns,270},
         {0xD005EBB14A22EA0Eull,0x302226F2D8C0938Aull,0,FlatProjectionPatchLayout::ForwardDp4,4},
         {0xD005EBB14A22EA0Eull,0xE92C14AA3E51C743ull,0,FlatProjectionPatchLayout::ForwardDp4,4},
         {0xE308565BF97FDE0Bull,0x0544F1CC95FD1F12ull,1,FlatProjectionPatchLayout::ForwardColumns,270},
@@ -350,7 +351,7 @@ inline int flatProjectionRecipeTests() {
         {0x889A5279E68F0672ull,0xF70549D991FF0E9Bull,1,FlatProjectionPatchLayout::ForwardColumns,270},
         {0x76ED1E4F8C72C26Eull,0x7ECF7C83FD5AD373ull,0,FlatProjectionPatchLayout::ForwardDp4,4},
     };
-    expect(sizeof(epicStation)/sizeof(epicStation[0])==30,
+    expect(sizeof(epicStation)/sizeof(epicStation[0])==31,
         "station projection census complete");
     for (size_t i=0;i<sizeof(epicStation)/sizeof(epicStation[0]);++i) {
         const auto& pair=epicStation[i];

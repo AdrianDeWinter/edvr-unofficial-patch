@@ -11,7 +11,9 @@
 #include "temporal_shader_bytecode.h"
 #include <d3d11_1.h>
 #include <wrl/client.h>
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <vector>
@@ -816,6 +818,180 @@ void pollRefusalCensus(ID3D11DeviceContext* context) {
 }
 // The ring is consumed in order, so the next sample may be taken only if the slot it would write is not still waiting to be read.
 bool refusalSlotFree() { return !g.refusalPending[g.refusalWrite]; }
+
+// ---- The flat census's slot probe (2026-11-20, the shop glass edge; docs/fsr-upscaler-design-2026-09-16.md journal) -------------------
+// THE SLOT PROBE (FlatMonoResolveFrame::slotProbe, set by the flat runtime while the NumLock draw census is armed). For the 9x9 render
+// pixels around the render target's centre it reports what the prep read (the Slots texture's code es.x and stored depth es.y, the scene
+// depth) and what it decided (the class byte). Why copies and not a UAV the prep writes: the prep's inputs are read back exactly as bound
+// (the same SRVs' resources), so the comparison is the shader's own, and no shader or bytecode changes. The class byte needs OutClass, which
+// the prep writes when debug.x or debug.y is set: a probe frame sets debug.x (the census sample flag, which nothing else reads) and never
+// debug.y, so the refusal view is not painted. Each probed frame copies the block into three small staging textures after the prep
+// dispatch (CopySubresourceRegion; a source created with D3D11_BIND_DEPTH_STENCIL must be copied whole, so it is copied whole into a
+// staging texture of its own size) and queues it; slotProbePoll maps it with DO_NOT_WAIT on later resolves, never a same-frame Map.
+struct SlotProbePlane {
+    ComPtr<ID3D11Texture2D> staging;
+    UINT x=0,y=0;   // the block's top-left texel inside the staging texture
+    UINT bytes=0;   // bytes per texel of the view's format (the Slots view is R32G32B32A32_FLOAT in the field, 2026-11-20 17:04)
+};
+struct SlotProbePending {
+    uint64_t frame=0;
+    uint32_t census=0,width=0,height=0,left=0,top=0,polls=0;
+    SlotProbePlane slots,depth,klass;
+};
+std::vector<SlotProbePending>& g_slotProbe=*new std::vector<SlotProbePending>;   // leaked on purpose, like g_refusal: no COM release at unload
+constexpr uint32_t kSlotProbeSize=33;          // render pixels a side, centred (9 missed the edge in the field, 2026-11-20 17:22)
+constexpr uint32_t kSlotProbeMaxPending=12;     // the runtime probes 8 resolves a census; a whole depth-stencil copy is about 8 MB at 1280x800
+constexpr uint32_t kSlotProbeMaxPolls=240;
+void slotProbeUnreadable(uint64_t frame,uint32_t census,const char* why,uint32_t detail=0) {
+    if(detail)Log::get().note("flat slot probe: frame=%llu census=%u unreadable: %s detail=0x%X",(unsigned long long)frame,census,why,detail);
+    else Log::get().note("flat slot probe: frame=%llu census=%u unreadable: %s",(unsigned long long)frame,census,why);
+}
+// Copies the block of one plane the prep read; the reason is a static string.
+// `wanted` is the format the plane must have; `alsoWanted` (UNKNOWN for none) is a wider one whose first channels are read the same way.
+bool slotProbeStage(ID3D11Device* device,ID3D11DeviceContext* context,ID3D11ShaderResourceView* view,DXGI_FORMAT wanted,uint32_t left,uint32_t top,
+                    SlotProbePlane& out,const char** why,uint32_t* detail,DXGI_FORMAT alsoWanted=DXGI_FORMAT_UNKNOWN) {
+    if(!view){*why="no-view";return false;}
+    D3D11_SHADER_RESOURCE_VIEW_DESC vd{};view->GetDesc(&vd);
+    if(vd.Format!=wanted && (alsoWanted==DXGI_FORMAT_UNKNOWN || vd.Format!=alsoWanted)){*why="view-format-not-readable";*detail=static_cast<uint32_t>(vd.Format);return false;}
+    // The scene depth's view is R32_FLOAT_X8X24_TYPELESS in the field (D32 depth with stencil, 2026-11-20 17:13): 8 bytes, the depth float first.
+    out.bytes=vd.Format==DXGI_FORMAT_R32G32B32A32_FLOAT?16u:
+              (vd.Format==DXGI_FORMAT_R32G32_FLOAT||vd.Format==DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS)?8u:4u;
+    UINT mip=0,slice=0;
+    if(vd.ViewDimension==D3D11_SRV_DIMENSION_TEXTURE2D)mip=vd.Texture2D.MostDetailedMip;
+    else if(vd.ViewDimension==D3D11_SRV_DIMENSION_TEXTURE2DARRAY){mip=vd.Texture2DArray.MostDetailedMip;slice=vd.Texture2DArray.FirstArraySlice;}
+    else {*why="view-dimension-not-readable";*detail=static_cast<uint32_t>(vd.ViewDimension);return false;}
+    ComPtr<ID3D11Resource> resource;view->GetResource(&resource);
+    ComPtr<ID3D11Texture2D> texture;
+    if(!resource || FAILED(resource.As(&texture))){*why="not-a-2d-texture";return false;}
+    D3D11_TEXTURE2D_DESC d{};texture->GetDesc(&d);
+    if(d.SampleDesc.Count!=1){*why="multisampled";return false;}
+    const UINT mw=d.Width>>mip?d.Width>>mip:1u,mh=d.Height>>mip?d.Height>>mip:1u;
+    if(left+kSlotProbeSize>mw || top+kSlotProbeSize>mh){*why="plane-smaller-than-the-block";*detail=mw;return false;}
+    const bool whole=(d.BindFlags&D3D11_BIND_DEPTH_STENCIL)!=0;
+    D3D11_TEXTURE2D_DESC sd{};sd.Width=whole?mw:kSlotProbeSize;sd.Height=whole?mh:kSlotProbeSize;sd.MipLevels=1;sd.ArraySize=1;
+    sd.Format=d.Format;sd.SampleDesc.Count=1;sd.Usage=D3D11_USAGE_STAGING;sd.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+    if(FAILED(device->CreateTexture2D(&sd,nullptr,out.staging.ReleaseAndGetAddressOf()))){*why="staging-create-failed";return false;}
+    const UINT sub=D3D11CalcSubresource(mip,slice,d.MipLevels);
+    if(whole) {
+        context->CopySubresourceRegion(out.staging.Get(),0,0,0,0,texture.Get(),sub,nullptr);
+        out.x=left;out.y=top;
+    } else {
+        const D3D11_BOX box{left,top,0,left+kSlotProbeSize,top+kSlotProbeSize,1};
+        context->CopySubresourceRegion(out.staging.Get(),0,0,0,0,texture.Get(),sub,&box);
+        out.x=out.y=0;
+    }
+    return true;
+}
+void slotProbeCapture(ID3D11Device* device,ID3D11DeviceContext* context,const FlatMonoResolveFrame& f,ID3D11ShaderResourceView* depthView,
+                      ID3D11Texture2D* classTexture) {
+    if(g_slotProbe.size()>=kSlotProbeMaxPending){slotProbeUnreadable(f.frame,f.slotProbeCensus,"too-many-pending-reads",static_cast<uint32_t>(g_slotProbe.size()));return;}
+    if(f.renderWidth<kSlotProbeSize || f.renderHeight<kSlotProbeSize){slotProbeUnreadable(f.frame,f.slotProbeCensus,"render-smaller-than-9x9");return;}
+    SlotProbePending p;
+    p.frame=f.frame;p.census=f.slotProbeCensus;p.width=f.renderWidth;p.height=f.renderHeight;
+    p.left=f.renderWidth/2-kSlotProbeSize/2;p.top=f.renderHeight/2-kSlotProbeSize/2;
+    const char* why=nullptr;uint32_t detail=0;
+    if(!slotProbeStage(device,context,f.engine.slots,DXGI_FORMAT_R32G32_FLOAT,p.left,p.top,p.slots,&why,&detail,DXGI_FORMAT_R32G32B32A32_FLOAT)) {
+        char text[64];std::snprintf(text,sizeof(text),"slots-%s",why);slotProbeUnreadable(f.frame,f.slotProbeCensus,text,detail);return;
+    }
+    if(!slotProbeStage(device,context,depthView,DXGI_FORMAT_R32_FLOAT,p.left,p.top,p.depth,&why,&detail,DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS)) {
+        char text[64];std::snprintf(text,sizeof(text),"depth-%s",why);slotProbeUnreadable(f.frame,f.slotProbeCensus,text,detail);return;
+    }
+    if(!classTexture){slotProbeUnreadable(f.frame,f.slotProbeCensus,"class-texture-missing");return;}
+    {   // the class texture is ours: R8_UINT at the render size, never a depth-stencil
+        D3D11_TEXTURE2D_DESC sd{};sd.Width=kSlotProbeSize;sd.Height=kSlotProbeSize;sd.MipLevels=1;sd.ArraySize=1;sd.Format=DXGI_FORMAT_R8_UINT;
+        sd.SampleDesc.Count=1;sd.Usage=D3D11_USAGE_STAGING;sd.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        if(FAILED(device->CreateTexture2D(&sd,nullptr,p.klass.staging.GetAddressOf()))){slotProbeUnreadable(f.frame,f.slotProbeCensus,"class-staging-create-failed");return;}
+        const D3D11_BOX box{p.left,p.top,0,p.left+kSlotProbeSize,p.top+kSlotProbeSize,1};
+        context->CopySubresourceRegion(p.klass.staging.Get(),0,0,0,0,classTexture,0,&box);
+    }
+    g_slotProbe.push_back(std::move(p));
+}
+void slotProbeReport(const SlotProbePending& p,const uint8_t* slotsData,UINT slotsPitch,const uint8_t* depthData,UINT depthPitch,
+                     const uint8_t* classData,UINT classPitch) {
+    struct Px {int dx,dy;float code,stored,depth,zw[2];uint32_t storedBits,depthBits;uint32_t cls;bool stale;};
+    std::vector<Px> px(kSlotProbeSize*kSlotProbeSize);
+    uint32_t stale=0,refused=0;
+    for(uint32_t y=0;y<kSlotProbeSize;++y)for(uint32_t x=0;x<kSlotProbeSize;++x) {
+        Px& o=px[y*kSlotProbeSize+x];
+        float es[4]{},d;
+        std::memcpy(es,slotsData+(p.slots.y+y)*slotsPitch+(p.slots.x+x)*p.slots.bytes,p.slots.bytes>=16u?16u:8u);
+        o.zw[0]=es[2];o.zw[1]=es[3];
+        std::memcpy(&d,depthData+(p.depth.y+y)*depthPitch+(p.depth.x+x)*p.depth.bytes,4);
+        o.dx=static_cast<int>(x)-static_cast<int>(kSlotProbeSize/2);o.dy=static_cast<int>(y)-static_cast<int>(kSlotProbeSize/2);
+        o.code=es[0];o.stored=es[1];o.depth=d;
+        std::memcpy(&o.storedBits,&es[1],4);std::memcpy(&o.depthBits,&d,4);
+        o.cls=classData[(p.klass.y+y)*classPitch+(p.klass.x+x)];
+        // Stale as the prep sees it (engineBefore): a slot code of at least 1 whose stored depth is not, bit for bit, the pixel's depth.
+        o.stale=o.code>=1.f && o.depthBits!=o.storedBits;
+        if(o.stale)++stale;
+        if(o.cls&kFlatMonoClassRefusedBit)++refused;
+    }
+    Log::get().note("flat slot probe: frame=%llu census=%u size=%ux%u centre=(%u,%u) block=%ux%u stale=%u refused=%u",(unsigned long long)p.frame,p.census,
+        p.width,p.height,p.width/2,p.height/2,kSlotProbeSize,kSlotProbeSize,stale,refused);
+    // The stale pixels' slot codes, most frequent first (whose record the overdrawn pixels still hold), and their depth step's range.
+    if(stale) {
+        struct CodeCount {float code;uint32_t n;};
+        std::vector<CodeCount> codes;
+        double lo=1e30,hi=-1e30;
+        for(const Px& o:px) {
+            if(!o.stale)continue;
+            const double dlt=static_cast<double>(o.depth)-static_cast<double>(o.stored);
+            if(dlt<lo)lo=dlt; if(dlt>hi)hi=dlt;
+            bool found=false;
+            for(CodeCount& c:codes)if(c.code==o.code){++c.n;found=true;break;}
+            if(!found)codes.push_back({o.code,1u});
+        }
+        std::sort(codes.begin(),codes.end(),[](const CodeCount& a,const CodeCount& b){return a.n>b.n;});
+        char list[256]="";size_t at=0;
+        for(size_t i=0;i<codes.size() && i<8 && at<sizeof(list)-32;++i)
+            at+=static_cast<size_t>(std::snprintf(list+at,sizeof(list)-at,"%s%.9g x%u",i?", ":"",static_cast<double>(codes[i].code),codes[i].n));
+        Log::get().note("flat slot probe: frame=%llu stale codes (%zu distinct): %s; depth-stored from %.9g to %.9g (reversed Z: positive is nearer)",
+            (unsigned long long)p.frame,codes.size(),list,lo,hi);
+    }
+    // Every stale or refused pixel up to kSlotProbeLines (the cap is said), and three ordinary ones to compare.
+    constexpr uint32_t kSlotProbeLines=48;
+    uint32_t samples=0,lines=0,skipped=0;
+    for(const Px& o:px) {
+        const bool isRefused=(o.cls&kFlatMonoClassRefusedBit)!=0;
+        const bool sample=!o.stale && !isRefused;
+        if(sample){if(samples>=3)continue;++samples;}
+        else if(lines>=kSlotProbeLines){++skipped;continue;}
+        else ++lines;
+        char code[40],slot[24]="none";
+        const bool integral=o.code>=0.f && o.code<4294967296.f && o.code==std::floor(o.code);
+        if(integral)std::snprintf(code,sizeof(code),"%llu",static_cast<unsigned long long>(o.code));else std::snprintf(code,sizeof(code),"%.9g",o.code);
+        if(integral && o.code>=1.f && (static_cast<unsigned long long>(o.code)&1u))
+            std::snprintf(slot,sizeof(slot),"%llu",(static_cast<unsigned long long>(o.code)-1)/2);
+        Log::get().note("flat slot probe px (%d,%d): code=%s slot=%s stored=%.9g (0x%08X) depth=%.9g (0x%08X) delta=%.9g zw=%.9g,%.9g class=%s byte=0x%02X refused=%u%s",
+            o.dx,o.dy,code,slot,o.stored,o.storedBits,o.depth,o.depthBits,static_cast<double>(o.depth)-static_cast<double>(o.stored),
+            static_cast<double>(o.zw[0]),static_cast<double>(o.zw[1]),
+            flatMonoClassName(o.cls&kFlatMonoClassMask),o.cls,isRefused?1u:0u,sample?" note=normal-sample":"");
+    }
+    if(skipped)Log::get().note("flat slot probe: frame=%llu %u more stale or refused pixels not listed (cap %u)",(unsigned long long)p.frame,skipped,kSlotProbeLines);
+}
+// Reads back the probes the GPU has finished, oldest first, without waiting. Nothing queued (every unarmed frame): one empty() test.
+void slotProbePoll(ID3D11DeviceContext* context) {
+    if(g_slotProbe.empty()||!context)return;
+    for(size_t i=0;i<g_slotProbe.size();) {
+        SlotProbePending& p=g_slotProbe[i];
+        ID3D11Texture2D* planes[3]={p.slots.staging.Get(),p.depth.staging.Get(),p.klass.staging.Get()};
+        D3D11_MAPPED_SUBRESOURCE m[3]{};
+        int mapped=0;HRESULT hr=S_OK;
+        for(;mapped<3;++mapped) {hr=context->Map(planes[mapped],0,D3D11_MAP_READ,D3D11_MAP_FLAG_DO_NOT_WAIT,&m[mapped]);if(hr!=S_OK)break;}
+        if(mapped==3) {
+            slotProbeReport(p,static_cast<const uint8_t*>(m[0].pData),m[0].RowPitch,static_cast<const uint8_t*>(m[1].pData),m[1].RowPitch,
+                static_cast<const uint8_t*>(m[2].pData),m[2].RowPitch);
+        }
+        for(int k=0;k<mapped;++k)context->Unmap(planes[k],0);
+        if(mapped==3){g_slotProbe.erase(g_slotProbe.begin()+i);continue;}
+        if(hr!=DXGI_ERROR_WAS_STILL_DRAWING || ++p.polls>kSlotProbeMaxPolls) {
+            slotProbeUnreadable(p.frame,p.census,hr==DXGI_ERROR_WAS_STILL_DRAWING?"mapping-timed-out":"mapping-failed",static_cast<uint32_t>(hr));
+            g_slotProbe.erase(g_slotProbe.begin()+i);continue;
+        }
+        ++i;
+    }
+}
+// ---- end of the slot probe --------------------------------------------------------------------------------------------------------------
 // The first-person inputs (FlatMonoResolveFrame::firstPersonMotion and firstPersonStencil, section 82), checked the way
 // inputTexture checks the colour and depth views, and answered by name: null when the view is fit to bind, else a static
 // reason. The reason goes to stats.firstPersonRefusal and the log; a refusal never refuses the frame, it only drops the pair.
@@ -1120,6 +1296,7 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
     if(hdr && !initializeHdr(device,reason))return false;
     opticalPoll(context);
     pollRefusalCensus(context);   // the samples the GPU finished since the last call (nothing pending: one flag test per slot)
+    slotProbePoll(context);       // The flat census's slot probe (2026-11-20, the shop glass edge; docs/fsr-upscaler-design-2026-09-16.md journal).
     ComPtr<ID3D11Texture2D> color,depth,cleanColor,overlayMask,untrustedMask;
     const bool overlay=f.cleanColor || f.overlayCoverage;
     if(overlay && (!hdr || !f.cleanColor || !f.overlayCoverage))
@@ -1283,7 +1460,14 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
             }
         }
     }
-    const bool needClass=sampleNow || paintNow;
+    // The flat census's slot probe (2026-11-20, the shop glass edge; docs/fsr-upscaler-design-2026-09-16.md journal).
+    // The slot probe needs the class texture (OutClass) on its frames; a reset frame has nothing to read (every pixel refused).
+    bool probeNow=f.slotProbe && !reset;
+    if(f.slotProbe && reset)slotProbeUnreadable(f.frame,f.slotProbeCensus,"reset-frame-no-class-no-slots-read");
+    if(probeNow && !ensureClassTexture(f.renderWidth,f.renderHeight)) {
+        probeNow=false;slotProbeUnreadable(f.frame,f.slotProbeCensus,"class-texture-unavailable");
+    }
+    const bool needClass=sampleNow || paintNow || probeNow;
     const uint32_t index=taa?g.current:0;
     // THE STEADY-DETAIL DEPTH CHECK (FlatMonoResolveFrame::steadyDetail). The menu's blanket policy wins, so a frame with staticScene has nothing
     // for the check to do. Otherwise the frame needs last frame's depth beside the one it writes: EDVR's TAA has it (depth[index^1]); the
@@ -1324,7 +1508,7 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
     constants.flags[0]=reset;constants.flags[1]=engine;constants.flags[2]=taa;constants.flags[3]=f.staticScene?1u:(depthCheck?2u:0u);
     constants.route[0]=hdr?1u:0u;constants.route[1]=(hdr&&taa)?1u:0u;
     constants.route[2]=firstPersonMap?1u:0u;constants.route[3]=firstPersonMap?f.firstPersonPhaseMode:0u;
-    constants.debug[0]=sampleNow?1u:0u;constants.debug[1]=paintNow?1u:0u;
+    constants.debug[0]=(sampleNow||probeNow)?1u:0u;constants.debug[1]=paintNow?1u:0u;   // probeNow (the census's slot probe): debug.x only, so OutClass is written and nothing is painted
     constants.debug[2]=overlay?1u:0u;
     constants.debug[3]=(foreground?2u:(untrusted?1u:0u))|(skin?4u:0u);
     if(f.staleRecordTerm && depthCheck)constants.debug[3]|=16u;
@@ -1374,6 +1558,8 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
     context->CSSetUnorderedAccessViews(0,6,nullUavs,nullptr);context->CSSetShaderResources(0,prepViewCount,nullViews);
     if(hdr)++stats.hdrPrepped;
     prepStep.close();
+    // The flat census's slot probe (2026-11-20, the shop glass edge; docs/fsr-upscaler-design-2026-09-16.md journal).
+    if(probeNow)slotProbeCapture(device,context,f,f.depth,g.klass.texture.Get());
     if(sampleNow) {
         // The census sample: clear the counters, reduce the class texture the prep just wrote into them, copy them to the next
         // staging slot (read back by pollRefusalCensus a few frames from now). b0 (the constants) is still bound from the prep.

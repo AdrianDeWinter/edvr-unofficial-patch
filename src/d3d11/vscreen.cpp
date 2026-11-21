@@ -5486,6 +5486,36 @@ static inline bool flatStationSkipsDraw(ID3D11DeviceContext* self) {
     return self == g_state->ownerCtx && optimizedStationSkipsDraw(bindingShaderHash(BindSlot::Vs), bindingShaderHash(BindSlot::Ps));
 }
 
+// advanced.census_skip_offscreen in the flat profile: the offscreen probe beginPanelOverride runs for VR, which flat draws never reach. Every
+// flat scene draw is offscreen (no eye textures), so a spec names a draw shape in a target of that size, and FlatStationSunGate keeps it off
+// the GPU the way it keeps the station's sun off. Owner context only; one load while no spec is set. Counted in censusSkipped, which the
+// frame boundary reports as "census skip: N draw(s) dropped". advanced.census_skip's vs:HASH terms apply here too (a mesh family draws
+// many index counts, so a shape names one level of detail and the vertex shader names them all); its kind:count terms stay VR's.
+static inline bool flatCensusSkipsDraw(ID3D11DeviceContext* self, char kind, uint32_t count) {
+    State* s = g_state;
+    if ((!s->censusSkipOffCount && !s->censusSkipCount) || self != s->ownerCtx) return false;
+    if (s->censusSkipCount) {
+        const uint64_t h = bindingShaderHash(BindSlot::Vs);
+        for (uint32_t i = 0; i < s->censusSkipCount; ++i) {
+            if (s->censusSkip[i].vsHash && s->censusSkip[i].vsHash == h) {
+                ++s->censusSkipped;
+                return true;
+            }
+        }
+    }
+    if (!s->censusSkipOffCount) return false;
+    ResourceInfo info;
+    if (!bindingResolveProbe(bindingGet(BindSlot::Rtv0), &info) || !info.isTexture2D) return false;
+    for (uint32_t i = 0; i < s->censusSkipOffCount; ++i) {
+        const State::OffSkip& o = s->censusSkipOff[i];
+        if (info.a != o.w || info.b != o.h) continue;
+        if (o.kind && (o.kind != kind || o.n != count)) continue;
+        ++s->censusSkipped;
+        return true;
+    }
+    return false;
+}
+
 // The station's skipped sun draw, once the flat runtime's scope has observed it and (when it planned anything) begun. Every flat draw builds one of these
 // between beginActualDraw and the real call; for any draw but a skipped sun draw it does nothing (issues() is true, restore() is a no-op). What the
 // scope does depends on needsActualDraw():
@@ -5500,16 +5530,17 @@ static inline bool flatStationSkipsDraw(ID3D11DeviceContext* self) {
 static edvr::stationmask::Mask g_stationSunMask;
 class FlatStationSunGate {
 public:
-    FlatStationSunGate(ID3D11DeviceContext* self, const FlatRuntimeDrawScope& scope, bool stationSkip) : ctx_(self) {
-        if (!stationSkip) return;
+    // hideSkip: a draw advanced.census_skip_offscreen names (flatCensusSkipsDraw), kept off the GPU the same way but not counted as the sun.
+    FlatStationSunGate(ID3D11DeviceContext* self, const FlatRuntimeDrawScope& scope, bool stationSkip, bool hideSkip = false) : ctx_(self) {
+        if (!stationSkip && !hideSkip) return;
         if (!scope.needsActualDraw()) {
             issue_ = false;
-            optimizedStationNoteSunDraw(SunDrawPath::kNotIssued);
+            if (stationSkip) optimizedStationNoteSunDraw(SunDrawPath::kNotIssued);
             return;
         }
         masked_ = g_stationSunMask.begin(self, &stationMaskSetBlend, &stationMaskSetDepth);
         issue_ = masked_;
-        optimizedStationNoteSunDraw(masked_ ? SunDrawPath::kMasked : SunDrawPath::kNotIssued);
+        if (stationSkip) optimizedStationNoteSunDraw(masked_ ? SunDrawPath::kMasked : SunDrawPath::kNotIssued);
     }
     bool issues() const { return issue_; }
     void restore() {
@@ -5564,6 +5595,7 @@ void STDMETHODCALLTYPE hookedDraw(ID3D11DeviceContext* self, UINT count, UINT st
     if (gpuPassProfileCapturing()) gpuPassProfileNoteDraw(self, 'D', count, 1);
     if (runtimeFlatProfile()) {
         const bool stationSkip = flatStationSkipsDraw(self);
+        bool hideSkip = false;
         // Planet patch motion (celestial_motion.h): the flat profile's capture of a colour-pass patch draw, before the game's own issue.
         if (self == g_state->ownerCtx && celestialMotionLive() && bindingShaderHash(BindSlot::Vs) == kCelestialPatchVs) celestialMotionNoteDraw(self);
         // TEMPORARY (cockpit_glass_probe.h): the canopy draw's state, before anything substitutes a binding; one load while off.
@@ -5576,10 +5608,11 @@ void STDMETHODCALLTYPE hookedDraw(ID3D11DeviceContext* self, UINT count, UINT st
             DrawArgs args;
             args.base = static_cast<int32_t>(start);
             flatCensusDraw(self, 'D', count, 1, args);
+            hideSkip = flatCensusSkipsDraw(self, 'D', count);
         }
         FlatRuntimeDrawScope flatDraw(self, 1, 'D', count, 0, static_cast<int32_t>(start));
         if (flatDraw.needsActualDraw()) flatDraw.beginActualDraw();
-        FlatStationSunGate sun(self, flatDraw, stationSkip);   // built 2026-10-21: only a skipped sun draw is changed (no real call, or a masked one)
+        FlatStationSunGate sun(self, flatDraw, stationSkip, hideSkip);   // built 2026-10-21: only a skipped sun draw is changed (no real call, or a masked one)
         {
             FlatParticleScope particle(self, 'D', count, 1);
             ConcoursePaneScope pane(self, count, start, 0, 'D', kConcoursePaneCalls);   // TEMPORARY (concourse_pane.h): the outside's non-indexed draws (beams, flares, the scatter) are withheld here; no mirror, the glass is indexed
@@ -5589,7 +5622,7 @@ void STDMETHODCALLTYPE hookedDraw(ID3D11DeviceContext* self, UINT count, UINT st
         if (flatDraw.needsActualDraw()) flatDraw.endActualDraw();
         // visual.cockpit_glass = legacy (cockpit_glass.h): over the game's ice or condensation canopy draw, the legacy dirt, drawn again with EDVR's overlay; one relaxed load otherwise
         if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDraw(self, count, start); cockpitGlassOverlayEnd(self); }
-        if (!stationSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDraw(self, count, start); });
+        if (!stationSkip && !hideSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDraw(self, count, start); });
         return;
     }
     if (g_vrWorldInternal) { g_state->realDraw(self, count, start); return; }   // the world route's own draw (vr_world_route.h)
@@ -5673,6 +5706,7 @@ void STDMETHODCALLTYPE hookedDrawIndexed(ID3D11DeviceContext* self, UINT count,
     if (gpuPassProfileCapturing()) gpuPassProfileNoteDraw(self, 'I', count, 1);
     if (runtimeFlatProfile()) {
         const bool stationSkip = flatStationSkipsDraw(self);
+        bool hideSkip = false;
         if (self == g_state->ownerCtx && celestialMotionLive() && bindingShaderHash(BindSlot::Vs) == kCelestialPatchVs) celestialMotionNoteDraw(self);
         if (cockpitGlassLegacyLive() && self == g_state->ownerCtx) cockpitGlassBeforeDraw(self); if (cockpitGlassProbeLive() && self == g_state->ownerCtx) cockpitGlassProbeDraw(self, 'I', count, 1);   // TEMPORARY (cockpit_glass_probe.h)
         ++g_state->thunkHits[kHitDrawIndexed];
@@ -5682,10 +5716,11 @@ void STDMETHODCALLTYPE hookedDrawIndexed(ID3D11DeviceContext* self, UINT count,
             args.start = startIndex;
             args.base = baseVertex;
             flatCensusDraw(self, 'I', count, 1, args);
+            hideSkip = flatCensusSkipsDraw(self, 'I', count);
         }
         FlatRuntimeDrawScope flatDraw(self, 1, 'I', count, startIndex, baseVertex);
         if (flatDraw.needsActualDraw()) flatDraw.beginActualDraw();
-        FlatStationSunGate sun(self, flatDraw, stationSkip);
+        FlatStationSunGate sun(self, flatDraw, stationSkip, hideSkip);
         {
             FlatParticleScope particle(self, 'I', count, 1);
             ConcoursePaneScope pane(self, count, startIndex, baseVertex, 'I', kConcoursePaneCalls);
@@ -5697,7 +5732,7 @@ void STDMETHODCALLTYPE hookedDrawIndexed(ID3D11DeviceContext* self, UINT count,
         sun.restore();
         if (flatDraw.needsActualDraw()) flatDraw.endActualDraw();
         if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawIndexed(self, count, startIndex, baseVertex); cockpitGlassOverlayEnd(self); }
-        if (!stationSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDrawIndexed(self, count, startIndex, baseVertex); });
+        if (!stationSkip && !hideSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDrawIndexed(self, count, startIndex, baseVertex); });
         return;
     }
     if (g_vrWorldInternal) { g_state->realDrawIndexed(self, count, startIndex, baseVertex); return; }
@@ -5777,6 +5812,7 @@ void STDMETHODCALLTYPE hookedDrawInstanced(ID3D11DeviceContext* self, UINT perIn
     if (gpuPassProfileCapturing()) gpuPassProfileNoteDraw(self, 'N', perInstance, instances);
     if (runtimeFlatProfile()) {
         const bool stationSkip = flatStationSkipsDraw(self);
+        bool hideSkip = false;
         if (self == g_state->ownerCtx && celestialMotionLive() && bindingShaderHash(BindSlot::Vs) == kCelestialPatchVs) celestialMotionNoteDraw(self);
         if (cockpitGlassLegacyLive() && self == g_state->ownerCtx) cockpitGlassBeforeDraw(self); if (cockpitGlassProbeLive() && self == g_state->ownerCtx) cockpitGlassProbeDraw(self, 'N', perInstance, instances);   // TEMPORARY (cockpit_glass_probe.h)
         if (self == g_state->ownerCtx && flatTemporalCapturing())
@@ -5786,11 +5822,12 @@ void STDMETHODCALLTYPE hookedDrawInstanced(ID3D11DeviceContext* self, UINT perIn
             args.base = static_cast<int32_t>(startVertex);
             args.startInstance = startInstance;
             flatCensusDraw(self, 'N', perInstance, instances, args);
+            hideSkip = flatCensusSkipsDraw(self, 'N', perInstance);
         }
         FlatRuntimeDrawScope flatDraw(self, instances, 'N', perInstance, 0,
                                       static_cast<int32_t>(startVertex), startInstance);
         if (flatDraw.needsActualDraw()) flatDraw.beginActualDraw();
-        FlatStationSunGate sun(self, flatDraw, stationSkip);
+        FlatStationSunGate sun(self, flatDraw, stationSkip, hideSkip);
         {
             FlatParticleScope particle(self, 'N', perInstance, instances);
             ConcoursePaneScope pane(self, perInstance, startVertex, 0, 'N', kConcoursePaneCalls);   // TEMPORARY (concourse_pane.h): the outside's non-indexed draws (beams, flares, the scatter) are withheld here; no mirror, the glass is indexed
@@ -5799,7 +5836,7 @@ void STDMETHODCALLTYPE hookedDrawInstanced(ID3D11DeviceContext* self, UINT perIn
         sun.restore();
         if (flatDraw.needsActualDraw()) flatDraw.endActualDraw();
         if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawInstanced(self, perInstance, instances, startVertex, startInstance); cockpitGlassOverlayEnd(self); }
-        if (!stationSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDrawInstanced(self, perInstance, instances, startVertex, startInstance); });
+        if (!stationSkip && !hideSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDrawInstanced(self, perInstance, instances, startVertex, startInstance); });
         return;
     }
     if (g_vrWorldInternal) { g_state->realDrawInstanced(self, perInstance, instances, startVertex, startInstance); return; }
@@ -5869,6 +5906,7 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(ID3D11DeviceContext* self,
     if (gpuPassProfileCapturing()) gpuPassProfileNoteDraw(self, 'X', perInstance, instances);
     if (runtimeFlatProfile()) {
         const bool stationSkip = flatStationSkipsDraw(self);
+        bool hideSkip = false;
         if (self == g_state->ownerCtx && celestialMotionLive() && bindingShaderHash(BindSlot::Vs) == kCelestialPatchVs) celestialMotionNoteDraw(self);
         if (cockpitGlassLegacyLive() && self == g_state->ownerCtx) cockpitGlassBeforeDraw(self); if (cockpitGlassProbeLive() && self == g_state->ownerCtx) cockpitGlassProbeDraw(self, 'X', perInstance, instances);   // TEMPORARY (cockpit_glass_probe.h)
         if (self == g_state->ownerCtx && flatTemporalCapturing())
@@ -5879,11 +5917,12 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(ID3D11DeviceContext* self,
             args.base = baseVertex;
             args.startInstance = startInstance;
             flatCensusDraw(self, 'X', perInstance, instances, args);
+            hideSkip = flatCensusSkipsDraw(self, 'X', perInstance);
         }
         FlatRuntimeDrawScope flatDraw(self, instances, 'X', perInstance, startIndex,
                                       baseVertex, startInstance);
         if (flatDraw.needsActualDraw()) flatDraw.beginActualDraw();
-        FlatStationSunGate sun(self, flatDraw, stationSkip);
+        FlatStationSunGate sun(self, flatDraw, stationSkip, hideSkip);
         {
             FlatParticleScope particle(self, 'X', perInstance, instances);
             ConcoursePaneScope pane(self, perInstance, startIndex, baseVertex, 'X', kConcoursePaneCalls);
@@ -5898,7 +5937,7 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(ID3D11DeviceContext* self,
         sun.restore();
         if (flatDraw.needsActualDraw()) flatDraw.endActualDraw();
         if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance); cockpitGlassOverlayEnd(self); }
-        if (!stationSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance); });
+        if (!stationSkip && !hideSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance); });
         return;
     }
     if (g_vrWorldInternal) { g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance); return; }
