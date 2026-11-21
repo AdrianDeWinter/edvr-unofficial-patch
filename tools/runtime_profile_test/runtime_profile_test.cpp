@@ -241,6 +241,15 @@ void decisionCases() {
         "decision: no switch leaves mode 4 as Vr");
     const LaunchDecision invalid = decideLaunch(parseInstallDescriptor("[install]\nschema=3\n"), mode4, VrSwitch::None, false, false);
     check(invalid.active == RuntimeProfile::Invalid, "decision: an invalid descriptor is Invalid whatever the mode");
+
+    const ScopeRead flatOnly = parseInstallDescriptor("[install]\r\nschema = 2\r\nscope = flat\r\n");
+    const ModeRead absentTag = readGameMode("<Settings><PresetName>Custom</PresetName></Settings>");
+    const LaunchDecision flatUnknown = decideLaunch(flatOnly, absentTag, VrSwitch::None, true, true);
+    check(flatUnknown.effective == GameMode::Flat && !flatUnknown.cmdApplied && flatUnknown.active == RuntimeProfile::Flat,
+        "decision: flat-only scope with missing StereoscopicMode tag runs Flat (#223)");
+    const LaunchDecision flatExplicitVr = decideLaunch(flatOnly, mode4, VrSwitch::None, true, true);
+    check(flatExplicitVr.effective == GameMode::Vr && !flatExplicitVr.cmdApplied && flatExplicitVr.active == RuntimeProfile::Passthrough,
+        "decision: flat-only scope with explicit VR mode 4 still stands down as Passthrough");
 }
 
 void lineCases() {

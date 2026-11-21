@@ -138,7 +138,7 @@ RouteOps realRouteOps() {
 }
 
 const char* elevatedRefusal() {
-    return "This launcher is running with administrator rights, and Elite must not be started from one. Close it and open it again normally.";
+    return "This launcher is running with administrator rights, and Elite must not be started from an elevated launcher. Close it and open it again normally (without Run as administrator), or start Elite from Steam, Epic, or Frontier's launcher.";
 }
 
 bool startRoute(const LaunchRoute& route, const RouteOps& ops, bool elevated, std::string* error) {

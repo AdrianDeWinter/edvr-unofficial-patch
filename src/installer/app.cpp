@@ -12,6 +12,7 @@
 #include "payload.h"
 #include "../common/elite_graphics_folder.h"
 #ifdef EDUP_LAUNCHER
+#include "launch_route.h"
 #include "launcher_main.h"
 #endif
 
@@ -71,6 +72,8 @@ std::string usageText() {
            "                       of keeping your values.\r\n"
            "  --remove-settings    with --uninstall, delete the settings files of the installed\r\n"
            "                       scope too.\r\n"
+           "  --purge              clean uninstall: removes ED-UP, both settings files, edvr_logs\\,\r\n"
+           "                       edvr_backup\\, edvr_install\\, and this install's settings mirror.\r\n"
            "  --help               this.\r\n"
 #ifdef EDUP_LAUNCHER
            "\r\n"
@@ -96,14 +99,16 @@ std::string usageText() {
            "  --licenses           print the licence of the third-party code the launcher is ported from.\r\n"
            "  --close-after-start  close the launcher once Elite has started, instead of staying open\r\n"
            "                       until it exits. Also a checkbox in the window, which this flag does not change.\r\n"
-           "  --headless [--dir <game folder>] --vr|--novr\r\n"
+           "  --frontier-login     with direct launch on a Steam install, sign in with a Frontier\r\n"
+           "                       account instead of Steam.\r\n"
+           "  --headless [--dir <game folder>] [--vr|--novr|/vr|/novr] [--update] [--] [%command%]\r\n"
            "                       start Elite with no window, through the same route Play uses, and print\r\n"
-           "                       its progress. Without --dir, the folder this exe is in is the game folder,\r\n"
-           "                       so the launcher can be copied into the game's product folder. Then it\r\n"
-           "                       prints its progress, waits for Elite to exit, or with --close-after-start\r\n"
-           "                       returns once Elite has started. Exit 0 when Elite started, 1 when it did not,\r\n"
-           "                       2 for a bad command line. Never asks for a login: a Frontier-store install\r\n"
-           "                       uses the stored login, and fails with a line saying so when there is none.\r\n"
+           "                       its progress. Without --dir, uses a wrapped command's folder or this\r\n"
+           "                       exe's folder. Without --vr/--novr, uses the install's scope, remembered\r\n"
+           "                       mode, or Elite's Settings.xml. Trailing arguments (such as Steam's\r\n"
+           "                       %command%) are accepted. Combine --update with --install or --repair\r\n"
+           "                       to update and apply headlessly (e.g. from min-ed-launcher).\r\n"
+           "                       Exit 0 when Elite started, 1 when it did not, 2 for bad arguments.\r\n"
 #endif
            "\r\n"
            "  A copy of your settings files (and the install record) is kept outside the game\r\n"
@@ -173,7 +178,11 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             a.keepSettings = false;
         else if (arg == L"--remove-settings")
             a.removeSettings = true;
-        else if (arg == L"--autorun")
+        else if (arg == L"--purge") {
+            a.purge = true;
+            a.removeSettings = true;
+            if (a.action == AppArgs::Act::None) a.action = AppArgs::Act::Uninstall;
+        } else if (arg == L"--autorun")
             a.autorun = true;
 #ifdef EDUP_LAUNCHER
         else if (arg == L"--payload")
@@ -202,9 +211,9 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             a.updated = true;
         else if (arg == L"--direct-dry-run")
             a.directDryRun = true;
-        else if (arg == L"--vr")
+        else if (arg == L"--vr" || _wcsicmp(arg.c_str(), L"/vr") == 0)
             a.vr = true;
-        else if (arg == L"--novr")
+        else if (arg == L"--novr" || _wcsicmp(arg.c_str(), L"/novr") == 0)
             a.novr = true;
         else if (arg == L"--licenses")
             a.licenses = true;
@@ -212,10 +221,34 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             a.closeAfterStart = true;
         else if (arg == L"--headless")
             a.headless = true;
+        else if (arg == L"--frontier-login")
+            a.frontierLogin = true;
+        else if (arg == L"--" && a.headless) {
+            for (int j = i + 1; j < argc; ++j) {
+                const std::wstring w = argv[j];
+                if (_wcsicmp(w.c_str(), L"/vr") == 0) a.vr = true;
+                else if (_wcsicmp(w.c_str(), L"/novr") == 0) a.novr = true;
+                a.wrappedArgs.push_back(w);
+            }
+            break;
+        }
 #endif
         else if (arg == L"--help" || arg == L"-h" || arg == L"/?")
             a.help = true;
         else {
+#ifdef EDUP_LAUNCHER
+            // After --headless, collect trailing wrapped command tokens (e.g. Steam's %command%)
+            // rather than failing with unknown argument.
+            if (a.headless) {
+                for (int j = i; j < argc; ++j) {
+                    const std::wstring w = argv[j];
+                    if (_wcsicmp(w.c_str(), L"/vr") == 0) a.vr = true;
+                    else if (_wcsicmp(w.c_str(), L"/novr") == 0) a.novr = true;
+                    a.wrappedArgs.push_back(w);
+                }
+                break;
+            }
+#endif
             a.badArg = true;
             a.badArgText = L"unknown argument: " + arg;
         }
@@ -244,7 +277,8 @@ Options optionsFor(const AppArgs& args, bool repair) {
     Options o;
     o.scope = args.scope;
     o.keepSettings = args.keepSettings;
-    o.removeSettings = args.removeSettings;
+    o.removeSettings = args.removeSettings || args.purge;
+    o.purge = args.purge;
     o.repair = repair;
     o.backupStamp = timestampName();
     o.nowUtc = utcNow();
@@ -371,6 +405,28 @@ bool isElevated() {
     return ok && elevation.TokenIsElevated != 0;
 }
 
+bool elevationBlocksPlay(bool tokenElevated, unsigned long elevationType) {
+    return tokenElevated && elevationType == TokenElevationTypeFull;
+}
+
+bool isElevatedForPlay() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+    TOKEN_ELEVATION elevation{};
+    DWORD size = sizeof(elevation);
+    const BOOL ok = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size);
+    if (!ok || elevation.TokenIsElevated == 0) {
+        CloseHandle(token);
+        return false;
+    }
+    TOKEN_ELEVATION_TYPE type = TokenElevationTypeDefault;
+    DWORD typeSize = sizeof(type);
+    const BOOL typeOk = GetTokenInformation(token, TokenElevationType, &type, sizeof(type), &typeSize);
+    CloseHandle(token);
+    if (!typeOk) return true;
+    return elevationBlocksPlay(true, static_cast<unsigned long>(type));
+}
+
 bool relaunchElevated(const AppArgs& args) {
     wchar_t self[MAX_PATH]{};
     if (GetModuleFileNameW(nullptr, self, MAX_PATH) == 0) return false;
@@ -393,6 +449,7 @@ bool relaunchElevated(const AppArgs& args) {
     if (!args.scope.empty()) cmd += L"--scope " + fromUtf8(args.scope) + L" ";
     if (!args.keepSettings) cmd += L"--replace-settings ";
     if (args.removeSettings) cmd += L"--remove-settings ";
+    if (args.purge) cmd += L"--purge ";
     if (args.dryRun) cmd += L"--dry-run ";
     if (args.convertProfile) cmd += L"--convert-profile ";
     cmd += L"--autorun";
@@ -567,6 +624,13 @@ int runConsole(const AppArgs& args) {
                                     "folder cannot take it too):")
                                        .c_str(),
                                    m.saved));
+    } else if (args.purge) {
+#ifdef EDUP_LAUNCHER
+        std::string shimError;
+        removeEdLaunchShim(survey.game.dir, &shimError);
+#endif
+        if (!mirrorDir.empty() && dirExists(mirrorDir) && removeDirectoryTree(mirrorDir))
+            writeOut("  removed settings mirror " + toUtf8(mirrorDir) + "\r\n");
     }
     writeOut("\r\nDone.\r\n");
     return 0;

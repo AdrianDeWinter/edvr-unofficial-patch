@@ -349,6 +349,39 @@ static void testLegacyMirrorOwnership(const std::wstring& scratch) {
               mirrorFixtureTree(root) == beforeRefusal,
               "Folder you chose cannot bypass a claimed generic mirror's owner through an exact-name match");
 
+        // Issue #225: a browsed or --dir install with an unowned or generic-owned
+        // -folder-you-chose mirror beside another store's canonical mirror keeps its own mirror.
+        const std::wstring genericRoot = joinPath(root, L"generic-beside-store");
+        const std::wstring genericLocal = joinPath(genericRoot, L"AppData");
+        const std::wstring genericMirrorRoot = joinPath(genericLocal, L"EDVR");
+        const std::wstring genericDir = joinPath(genericRoot, L"Custom\\Products\\product");
+        const std::wstring genericMirror = joinPath(genericMirrorRoot, L"product-folder-you-chose");
+        const std::wstring steamCanonical = joinPath(genericMirrorRoot, L"product-steam");
+        makeTree(stateDirPath(genericDir));
+        makeTree(genericMirror);
+        makeTree(steamCanonical);
+        writeAll(joinPath(genericDir, L"EliteDangerous64.exe"), "fixture");
+        InstallState genericState;
+        genericState.edvrVersion = "0.22.0";
+        genericState.storeSource = L"Folder you chose";
+        writeAll(statePath(genericDir), serializeState(genericState));
+        GameInstall genericInstall;
+        genericInstall.dir = genericDir;
+        genericInstall.source = L"Folder you chose";
+        // Pre-#219 unowned generic mirror beside a canonical Steam mirror.
+        check(mirrorDirFor(genericInstall, genericMirrorRoot) == genericMirror &&
+              runtimeMirrorDirFor(genericLocal, genericDir, false) == genericMirror &&
+              runtimeMirrorDirFor(genericLocal, genericDir, true) == genericMirror &&
+              edvr::openxr::seatMirrorDirFor(genericLocal, genericDir, false) == genericMirror,
+              "generic install with unowned -folder-you-chose mirror keeps its mirror beside another store");
+        // Generic-owned mirror beside a canonical Steam mirror.
+        writeAll(joinPath(genericMirror, L"state.ini"), serializeState(genericState));
+        check(mirrorDirFor(genericInstall, genericMirrorRoot) == genericMirror &&
+              runtimeMirrorDirFor(genericLocal, genericDir, false) == genericMirror &&
+              runtimeMirrorDirFor(genericLocal, genericDir, true) == genericMirror &&
+              edvr::openxr::seatMirrorDirFor(genericLocal, genericDir, false) == genericMirror,
+              "generic install with generic-owned -folder-you-chose mirror keeps its mirror beside another store");
+
         removeTree(first.dir);
         makeTree(first.dir);
         writeAll(joinPath(first.dir, L"EliteDangerous64.exe"), "fixture");

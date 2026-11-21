@@ -5,6 +5,7 @@
 #include "detect.h"
 #include "../common/flat_profile_keys.h"
 #include "../common/iniedit.h"
+#include "../common/pad_names.h"
 #include "state.h"
 
 namespace edvr::installer {
@@ -107,6 +108,141 @@ std::wstring showValue(const SettingDef& def, const std::string& fileValue) {
     return fromUtf8(tidyNumber(value * 100.0, 1)) + L"%";
 }
 
+// Validates and canonicalises a hotkey value using the same grammar as
+// src/common/hotkey.cpp (empty = unbound, optional CTRL/ALT/SHIFT modifiers +
+// key name/character/0x##, GamePad_*, or 8-hex-digit device + Joy_*).
+bool parseHotkeyText(const std::string& raw, std::string* out) {
+    size_t b = raw.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) {
+        out->clear();
+        return true;
+    }
+    size_t e = raw.find_last_not_of(" \t\r\n");
+    std::string s = raw.substr(b, e - b + 1);
+
+    if (_strnicmp(s.c_str(), "GamePad_", 8) == 0) {
+        const edvr::PadName* p = edvr::padNameFind(s.c_str());
+        if (!p) return false;
+        *out = p->elite;
+        return true;
+    }
+
+    auto isHex = [](char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    };
+    if (s.size() > 9 && s[8] == ':') {
+        bool devHex = true;
+        for (int i = 0; i < 8; ++i) {
+            if (!isHex(s[i])) {
+                devHex = false;
+                break;
+            }
+        }
+        if (devHex) {
+            std::string dev = s.substr(0, 8);
+            for (char& c : dev) c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
+            std::string rest = s.substr(9);
+            size_t rb = rest.find_first_not_of(" \t");
+            if (rb == std::string::npos) return false;
+            rest = rest.substr(rb);
+            if (_strnicmp(rest.c_str(), "Joy_", 4) != 0) return false;
+            const char* r = rest.c_str() + 4;
+            if (_strnicmp(r, "POV", 3) == 0) {
+                r += 3;
+                if (*r < '1' || *r > '4') return false;
+                const char hat = *r++;
+                static const char* const kDirs[4] = {"Up", "Right", "Down", "Left"};
+                for (const char* dir : kDirs) {
+                    if (_stricmp(r, dir) == 0) {
+                        *out = dev + ":Joy_POV" + std::string(1, hat) + dir;
+                        return true;
+                    }
+                }
+                return false;
+            }
+            if (*r < '1' || *r > '9') return false;
+            int n = 0;
+            for (const char* p = r; *p; ++p) {
+                if (*p < '0' || *p > '9') return false;
+                n = n * 10 + (*p - '0');
+                if (n > 128) return false;
+            }
+            *out = dev + ":Joy_" + std::to_string(n);
+            return true;
+        }
+    }
+
+    bool ctrl = false, alt = false, shift = false;
+    size_t pos = 0;
+    while (true) {
+        while (pos < s.size() && (s[pos] == ' ' || s[pos] == '\t')) ++pos;
+        size_t w = pos;
+        while (w < s.size() && isalpha(static_cast<unsigned char>(s[w]))) ++w;
+        std::string word = s.substr(pos, w - pos);
+        for (char& c : word) c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
+        int mod = 0;
+        if (word == "CTRL" || word == "CONTROL") mod = 1;
+        else if (word == "ALT" || word == "MENU") mod = 2;
+        else if (word == "SHIFT") mod = 3;
+        if (!mod) break;
+        size_t after = w;
+        while (after < s.size() && (s[after] == ' ' || s[after] == '\t')) ++after;
+        if (after >= s.size() || (s[after] != '+' && s[after] != '-')) break;
+        if (mod == 1) ctrl = true;
+        else if (mod == 2) alt = true;
+        else shift = true;
+        pos = after + 1;
+    }
+    size_t kb = s.find_first_not_of(" \t", pos);
+    if (kb == std::string::npos) return false;
+    std::string key = s.substr(kb);
+
+    std::string canonical;
+    if (key.size() >= 3 && key[0] == '0' && (key[1] == 'x' || key[1] == 'X')) {
+        for (size_t i = 2; i < key.size(); ++i) {
+            if (!isHex(key[i])) return false;
+        }
+        const long v = strtol(key.c_str(), nullptr, 16);
+        if (v <= 0 || v > 0xFF) return false;
+        char buf[8];
+        sprintf_s(buf, "0x%02X", static_cast<unsigned>(v));
+        canonical = buf;
+    } else if (key.size() == 1 && key[0] > 0x20 && key[0] < 0x7F) {
+        char c = key[0];
+        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+        canonical.assign(1, c);
+    } else {
+        static const char* const kKnownKeys[] = {
+            "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+            "F13", "F14", "F15", "F16", "F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24",
+            "SCROLLLOCK", "SCROLL", "PAUSE", "BREAK", "NUMLOCK", "CAPSLOCK", "PRINTSCREEN",
+            "INSERT", "INS", "DELETE", "DEL", "HOME", "END", "PAGEUP", "PGUP", "PAGEDOWN", "PGDN",
+            "NUMPAD0", "NUMPAD1", "NUMPAD2", "NUMPAD3", "NUMPAD4",
+            "NUMPAD5", "NUMPAD6", "NUMPAD7", "NUMPAD8", "NUMPAD9",
+            "MULTIPLY", "DIVIDE", "ADD", "SUBTRACT", "DECIMAL", "NUMPADDOT",
+            "RIGHT", "LEFT", "UP", "DOWN", "RIGHTARROW", "LEFTARROW", "UPARROW", "DOWNARROW",
+            "SPACE", "TAB", "ENTER", "RETURN", "BACKSPACE", "ESCAPE", "ESC", "APPS", "MENU_KEY",
+            "BACKSLASH", "SLASH", "LEFTBRACKET", "RIGHTBRACKET", "SEMICOLON", "APOSTROPHE",
+            "QUOTE", "COMMA", "PERIOD", "DOT", "GRAVE", "BACKTICK", "TILDE", "MINUS", "DASH",
+            "EQUALS", "PLUS", "HASH", "POUND",
+        };
+        for (const char* name : kKnownKeys) {
+            if (_stricmp(key.c_str(), name) == 0) {
+                canonical = name;
+                break;
+            }
+        }
+        if (canonical.empty()) return false;
+    }
+
+    std::string prefix;
+    if (ctrl) prefix += "CTRL+";
+    if (alt) prefix += "ALT+";
+    if (shift) prefix += "SHIFT+";
+    *out = prefix + canonical;
+    return true;
+}
+
 }  // namespace
 
 std::wstring SettingRow::shown() const {
@@ -121,6 +257,9 @@ bool SettingRow::parseTyped(const std::wstring& typed, std::string* fileValue) c
     if (!def) return false;
     const std::string text = toUtf8(typed);
     if (def->kind == SettingKind::Text) {
+        if (def->section && strcmp(def->section, "hotkey") == 0) {
+            return parseHotkeyText(text, fileValue);
+        }
         *fileValue = text;
         return true;
     }
@@ -270,6 +409,11 @@ bool SettingsModel::set(size_t index, const std::string& value) {
 
     MergeReport report;
     const std::string updated = mergeIni(source, source, &source, {{dotted, value}}, &report);
+
+    // Clear read-only before atomic replace (some store verifiers leave files read-only).
+    const DWORD attrs = GetFileAttributesW(m_iniPath.c_str());
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY))
+        SetFileAttributesW(m_iniPath.c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
 
     std::wstring why;
     if (!writeFileAtomic(m_iniPath, updated, &why)) {

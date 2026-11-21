@@ -75,9 +75,10 @@ inline std::wstring mirrorDirForSource(const std::wstring& root, const std::wstr
         if (owner == requested) return legacy;
         return generic ? std::wstring() : exact;
     }
+    if (generic) return exact;
     const std::wstring unique = uniqueExistingMirrorDir(root, gameDir);
     if (!unique.empty() && _wcsicmp(unique.c_str(), legacy.c_str()) == 0) return unique;
-    return generic ? std::wstring() : exact;
+    return exact;
 }
 
 // The menu and seat memory use the store the installer recorded, even when

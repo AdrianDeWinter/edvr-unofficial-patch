@@ -217,6 +217,11 @@ inline LaunchDecision decideLaunch(const ScopeRead& scope, const ModeRead& mode,
     } else if (cmd == VrSwitch::Vr && applyVr) {
         d.effective = GameMode::Vr;
         d.cmdApplied = true;
+    } else if (scope.scope == InstallScope::Flat && !mode.known) {
+        // Issue #223: Elite omits <StereoscopicMode> from Settings.xml until the player changes 3D
+        // settings. An explicit Flat-only install should run Flat rather than standing down when no
+        // VR mode is recorded; Both and Vr installs keep design Q2 (unknown -> Vr).
+        d.effective = GameMode::Flat;
     }
     d.active = activeProfileFor(scope.scope, d.effective);
     return d;
