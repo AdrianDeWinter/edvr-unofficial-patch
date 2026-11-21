@@ -107,7 +107,7 @@ void paintCard(HDC dc, RECT rect, UINT dpi);
 // A hero card with a thin vertical accent rail on its left interior edge.
 void paintAccentCard(HDC dc, RECT rect, UINT dpi);
 
-enum class ButtonStyle { Primary, Secondary, Tab, TabActive, Link };
+enum class ButtonStyle { Primary, Secondary, Tab, TabActive, Segment, SegmentActive, Link };
 
 // Owner-drawn button. `style` is remembered per control, and the pointer is
 // tracked so it can light up under the mouse.

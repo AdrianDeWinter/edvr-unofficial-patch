@@ -320,7 +320,7 @@ void drawText(HDC dc, const std::wstring& text, RECT rect, HFONT font, COLORREF 
     HFONT previous = static_cast<HFONT>(SelectObject(dc, font));
     const int previousMode = SetBkMode(dc, TRANSPARENT);
     const COLORREF previousColour = SetTextColor(dc, colour);
-    DrawTextW(dc, text.c_str(), -1, &rect, format);
+    DrawTextW(dc, text.c_str(), -1, &rect, format | DT_NOPREFIX);
     SetTextColor(dc, previousColour);
     SetBkMode(dc, previousMode);
     SelectObject(dc, previous);
@@ -446,6 +446,16 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
             border = face;
             ink = t.subtext;
             break;
+        case ButtonStyle::SegmentActive:
+            face = t.control;
+            border = t.controlBorder;
+            ink = t.text;
+            break;
+        case ButtonStyle::Segment:
+            face = owned->hot ? mix(t.cardBg, t.control, 70) : t.cardBg;
+            border = t.cardBorder;
+            ink = t.subtext;
+            break;
         case ButtonStyle::Link:
             face = t.windowBg;
             border = face;
@@ -462,7 +472,7 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
     if (owned->style != ButtonStyle::Link) {
         fillRounded(dc, rect, radius, face);
         if (border != face) strokeRounded(dc, rect, radius, border);
-        if (owned->style == ButtonStyle::TabActive && !disabled) {
+        if ((owned->style == ButtonStyle::TabActive || owned->style == ButtonStyle::SegmentActive) && !disabled) {
             const int barH = dp(2, dpi) > 2 ? dp(2, dpi) : 2;
             const int padX = dp(10, dpi);
             if (rect.right - rect.left > padX * 2 + 6) {
@@ -481,8 +491,8 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
         drawText(dc, label, textRect, fonts().caption, ink, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }
-    drawText(dc, label, textRect, owned->style == ButtonStyle::TabActive ? fonts().bodyBold
-                                                                        : fonts().body,
+    const bool boldTab = owned->style == ButtonStyle::TabActive || owned->style == ButtonStyle::SegmentActive;
+    drawText(dc, label, textRect, boldTab ? fonts().bodyBold : fonts().body,
              ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 

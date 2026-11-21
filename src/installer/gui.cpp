@@ -99,8 +99,8 @@ constexpr int kActionsBtnY = 350;
 constexpr int kActionsNoteY = 398;
 constexpr int kReportTop = 446;
 constexpr int kReportBottom = 684;
-constexpr int kReportEditY = 478;
-constexpr int kReportEditH = 196;
+constexpr int kReportEditY = 484;
+constexpr int kReportEditH = 190;
 constexpr int kTipTop = 694;
 #else
 constexpr int kContentBottom = 650;
@@ -345,8 +345,8 @@ std::string editionFor(const std::string& scope) {
 void syncSettingsSelector() {
     if (!g.settingsVr || !g.settingsFlat) return;
     const std::string scope = scopeChoice();
-    ui::setButtonStyle(g.settingsVr, g.settingsEdition == "vr" ? ui::ButtonStyle::TabActive : ui::ButtonStyle::Tab);
-    ui::setButtonStyle(g.settingsFlat, g.settingsEdition == "flat" ? ui::ButtonStyle::TabActive : ui::ButtonStyle::Tab);
+    ui::setButtonStyle(g.settingsVr, g.settingsEdition == "vr" ? ui::ButtonStyle::SegmentActive : ui::ButtonStyle::Segment);
+    ui::setButtonStyle(g.settingsFlat, g.settingsEdition == "flat" ? ui::ButtonStyle::SegmentActive : ui::ButtonStyle::Segment);
     const bool settingsShown = g.screen == Screen::Settings;
     ShowWindow(g.settingsVr, settingsShown && scope != "flat" ? SW_SHOW : SW_HIDE);
     ShowWindow(g.settingsFlat, settingsShown && scope != "vr" ? SW_SHOW : SW_HIDE);
@@ -1530,10 +1530,9 @@ void createControls(HWND window) {
     SendMessageW(g.scopeCombo, CB_SETCURSEL, 0, 0);
     place(g.scopeCombo, kClientWidth - kMargin - kCardPad - 218, kScopeY, 218, 30, Screen::Install);
 
-    // The settings screen's file selector, two tab-like buttons. Which of them shows is
-    // the scope's call (syncSettingsSelector), not the screen's alone.
-    g.settingsVr = ui::makeButton(window, L"VR", kIdSettingsVr, ui::ButtonStyle::TabActive, f.body);
-    g.settingsFlat = ui::makeButton(window, L"Flat", kIdSettingsFlat, ui::ButtonStyle::Tab, f.body);
+    // The settings screen's file selector, two segmented buttons inside the Settings card.
+    g.settingsVr = ui::makeButton(window, L"VR", kIdSettingsVr, ui::ButtonStyle::SegmentActive, f.body);
+    g.settingsFlat = ui::makeButton(window, L"Flat", kIdSettingsFlat, ui::ButtonStyle::Segment, f.body);
     place(g.settingsVr, 390, 230, 148, 32, Screen::Settings);
     place(g.settingsFlat, 546, 230, 150, 32, Screen::Settings);
 
