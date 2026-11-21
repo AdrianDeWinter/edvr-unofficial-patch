@@ -138,8 +138,10 @@ void flatUiLayerNoteSceneDraw(ID3D11DeviceContext* ctx, uint32_t count, uint32_t
 // The game's output copy, right before its issue, after the resolve and the sharpening bound what it reads at t0. The
 // door (arming the next frame) and the composite: this frame's HUD over that picture, bound at t0 in its place.
 // `original` and `replaced` are the draw scope's own (the game's t0, put back after the draw).
+// `ownedFrame` is true when t0 holds an EDVR-owned, full-frame rewritten, non-history texture
+// (e.g. resolve finish or RCAS output), letting shield ripple and HUD composite run in place.
 void flatUiLayerAtCopy(ID3D11DeviceContext* ctx, uint64_t frame, bool treated, uint32_t outW, uint32_t outH,
-                       ID3D11ShaderResourceView** original, bool* replaced);
+                       ID3D11ShaderResourceView** original, bool* replaced, bool ownedFrame = false);
 
 // The HUD's bloom (ui_layer.h UiGlowFeed). The HDR route's trigger draw -- the first draw that reads the scene H after its last write -- is the
 // bloom chain's first level when it writes a target of half H's size, and the HUD the layer took is not in H. flatUiGlowWanted: this trigger

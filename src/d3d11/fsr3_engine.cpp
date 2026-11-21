@@ -185,6 +185,7 @@ struct EyeCtx {
     bool     failDiagnostics = false;
     bool     failInfiniteDepth = false;
     bool     failHdr = false;
+    uint32_t querySample = 0;   // 1-in-16 GPU timing stride (index 0 always sampled)
     char     failWhy[256] = {};
 };
 // One per upscaler slot (dlaa.h, kUpscalerSlots: the eyes' two, and the VR world
@@ -938,11 +939,16 @@ bool fsr3Evaluate(ID3D11DeviceContext* ctx, unsigned eye, ID3D11Texture2D* colou
     dd.viewSpaceToMetersFactor = 1.0f;
     dd.flags = settings.debug ? FFX_FSR3UPSCALER_DISPATCH_DRAW_DEBUG_VIEW : 0u;
 
-    ID3D11Device* dev = nullptr;
-    ctx->GetDevice(&dev);
-    const int qs = dev ? acquireQuerySlot(dev, ctx) : -1;
-    if (dev) dev->Release();
-    if (qs >= 0) g_qring[qs].eye = static_cast<int>(eye);
+    int qs = -1;
+    // Flat never calls fsr3Totals (temporal_pass.cpp is VR-only) and times the resolve
+    // sub-passes in flat_mono_resolve.cpp instead.
+    if (!runtimeFlatProfile() && (e.querySample++ & 15u) == 0) {
+        ID3D11Device* dev = nullptr;
+        ctx->GetDevice(&dev);
+        qs = dev ? acquireQuerySlot(dev, ctx) : -1;
+        if (dev) dev->Release();
+        if (qs >= 0) g_qring[qs].eye = static_cast<int>(eye);
+    }
     // Same TIF/throw risk as ensureContext's create call above (ExecuteGpuJobsDX11
     // and RegisterResourceDX11 both carry TIF-guarded D3D11 calls a real dispatch
     // can reach), folded into the same why-string contract rather than crashing.

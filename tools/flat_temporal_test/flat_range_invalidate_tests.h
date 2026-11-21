@@ -511,11 +511,11 @@ inline int flatRangeInvalidateWiringTests() {
     expect(has(bufferBytes, "if(dim!=D3D11_RESOURCE_DIMENSION_BUFFER)return0;") && has(bufferBytes, "returnd.ByteWidth;"),
            "a copy's source size is a buffer's byte width and nothing for a texture");
     const std::string updateHook = compact(body(runtimeSource, "void flatRuntimeUpdate("));
-    expect(count(updateHook, compact("resourceWritten(state(), res,\"flatRuntimeUpdate\",FlatOverlayMutationOp::Written,flatRuntimeUpdateExtent(0,box));")) == 1,
+    expect(count(updateHook, compact("resourceWritten(state(), res,\"flatRuntimeUpdate\",FlatOverlayMutationOp::Written,flatRuntimeUpdateExtent(0,box),false,true,&c,trackedProjection);")) == 1,
            "UpdateSubresource's box reaches the history through flatRuntimeUpdateExtent");
     expect(count(replaced(updateHook, "flatRuntimeUpdateExtent(0,box)", "historyWholeWrite(HistoryWriteEntry::Update)"), compact("flatRuntimeUpdateExtent(0,box)")) == 0,
            "mutation control: an update that drops its box on the way to the history is not what the text says");
-    expect(has(compact(body(runtimeSource, "void flatRuntimeMap(")), "resourceWritten(state(), res,\"flatRuntimeMap\",FlatOverlayMutationOp::Written,historyWholeWrite(HistoryWriteEntry::Map));"),
+    expect(has(compact(body(runtimeSource, "void flatRuntimeMap(")), "resourceWritten(state(), res,\"flatRuntimeMap\",FlatOverlayMutationOp::Written,historyWholeWrite(HistoryWriteEntry::Map),false,true,&c,trackedProjection);"),
            "a map is a whole-resource write");
     expect(has(compact(body(runtimeSource, "void flatRuntimeWrittenExtent(")), "resourceWritten(state(), res,\"flatRuntimeWritten\",FlatOverlayMutationOp::Written,extent);") &&
                has(compact(body(runtimeSource, "void flatRuntimeWritten(ID3D11Resource* res,FlatOverlayMutationOp provenance,bool constantFill)")), "historyWholeWrite(clear?HistoryWriteEntry::Clear:HistoryWriteEntry::Other)"),

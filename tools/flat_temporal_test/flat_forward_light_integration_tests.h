@@ -158,7 +158,7 @@ inline unsigned run() {
     expect(qualify!=std::string::npos&&recertify<reduce,"original binding receipt precedes reducer");
     expect(runtime.find("forwardBeginIssue(state(),forwardIssue,indirectArgs!=nullptr)")<runtime.find("if(!weaponFootprintStarted)return;"),"actual begin is not hidden behind diagnostic footprint");
     expect(runtime.find("forwardReturn(state(),forwardIssue)")!=std::string::npos&&runtime.find("forwardAbandon(state(),forwardIssue)")!=std::string::npos&&
-        header.find("return forwardIssue.kind!=forward_light::Issue::None")!=std::string::npos,"actual return/cancel callbacks are scheduled with probes off");
+        header.find("return (forwardIssue.kind!=forward_light::Issue::None && !forwardCertEpoch)")!=std::string::npos,"actual return/cancel callbacks are scheduled with probes off");
     expect(adapter.find("projectionFrames")==std::string::npos&&adapter.find("flatOriginCapture")==std::string::npos&&adapter.find("lightLive(")==std::string::npos,
         "production qualification never depends on Full/probe flags");
     expect(runtime.find("forwardReset(s);finishLightAudit")!=std::string::npos&&runtime.find("forwardReset(s); finishLightAudit")!=std::string::npos&&

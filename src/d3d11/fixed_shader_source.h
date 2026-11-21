@@ -308,6 +308,217 @@ void main(uint3 id : SV_DispatchThreadID) {
 }
 )HLSL";
 
+// Composite twins that read transmittance alpha directly from the HDR HUD layer (t3)
+// when no post-tonemap LDR UI draw touched the 8-bit layer, skipping crispCoveragePass.
+constexpr char kUiLayerCompositeHdrAlphaHlsl[] = R"HLSL(
+Texture2D<float4> Frame : register(t0);
+Texture2D<float4> Layer : register(t1);
+Texture2D<float4> Mult : register(t2);
+Texture2D<float4> HdrAlpha : register(t3);
+RWTexture2D<float4> Out : register(u0);
+cbuffer P : register(b0) {
+    int4   region;
+    float4 uv;
+    float2 layerSize;
+    uint2  outSize;
+    uint   mode;
+    uint   useMult;
+    uint2  pad;
+};
+[numthreads(32, 8, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= outSize.x || id.y >= outSize.y) return;
+    int2 p = region.xy + int2(id.xy);
+    float4 f = Frame.Load(int3(p, 0));
+    float2 span = (uv.zw - uv.xy) * layerSize / float2(outSize);
+    float2 x0 = uv.xy * layerSize + float2(id.xy) * span;
+    float2 x1 = x0 + span;
+    int2 k0 = max(int2(floor(x0)), int2(0, 0));
+    int2 k1 = min(int2(ceil(x1)) - 1, int2(layerSize) - 1);
+    float4 acc = float4(0, 0, 0, 0);
+    float3 accM = float3(0, 0, 0);
+    float wsum = 0;
+    [loop] for (int j = k0.y; j <= min(k1.y, k0.y + 3); ++j) {
+        float wy = min(x1.y, (float)j + 1.0) - max(x0.y, (float)j);
+        if (wy <= 0) continue;
+        [loop] for (int i = k0.x; i <= min(k1.x, k0.x + 3); ++i) {
+            float wx = min(x1.x, (float)i + 1.0) - max(x0.x, (float)i);
+            if (wx <= 0) continue;
+            float4 tap = float4(Layer.Load(int3(i, j, 0)).rgb, saturate(HdrAlpha.Load(int3(i, j, 0)).a));
+            acc += tap * (wx * wy);
+            if (useMult != 0) accM += Mult.Load(int3(i, j, 0)).rgb * (wx * wy);
+            wsum += wx * wy;
+        }
+    }
+    float4 l = wsum > 0 ? acc / wsum : float4(0, 0, 0, 1);
+    float3 m = (useMult != 0 && wsum > 0) ? accM / wsum : float3(1, 1, 1);
+    float3 c = mode == 1 ? l.rgb + float3(0.0, 0.08, 0.25) * (1.0 - l.a * dot(m, 1.0 / 3.0))
+                         : l.rgb + f.rgb * l.a * m;
+    Out[id.xy] = float4(saturate(c), f.a);
+}
+)HLSL";
+
+constexpr char kUiLayerCompositeInPlaceHdrAlphaHlsl[] = R"HLSL(
+RWTexture2D<unorm float4> Frame : register(u0);
+Texture2D<float4> Layer : register(t1);
+Texture2D<float4> Mult : register(t2);
+Texture2D<float4> HdrAlpha : register(t3);
+cbuffer P : register(b0) {
+    int4   region;
+    float4 uv;
+    float2 layerSize;
+    uint2  outSize;
+    uint   mode;
+    uint   useMult;
+    uint2  pad;
+};
+[numthreads(32, 8, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= outSize.x || id.y >= outSize.y) return;
+    int2 p = region.xy + int2(id.xy);
+    float2 span = (uv.zw - uv.xy) * layerSize / float2(outSize);
+    float2 x0 = uv.xy * layerSize + float2(id.xy) * span;
+    float2 x1 = x0 + span;
+    int2 k0 = max(int2(floor(x0)), int2(0, 0));
+    int2 k1 = min(int2(ceil(x1)) - 1, int2(layerSize) - 1);
+    float4 acc = float4(0, 0, 0, 0);
+    float3 accM = float3(0, 0, 0);
+    float wsum = 0;
+    [loop] for (int j = k0.y; j <= min(k1.y, k0.y + 3); ++j) {
+        float wy = min(x1.y, (float)j + 1.0) - max(x0.y, (float)j);
+        if (wy <= 0) continue;
+        [loop] for (int i = k0.x; i <= min(k1.x, k0.x + 3); ++i) {
+            float wx = min(x1.x, (float)i + 1.0) - max(x0.x, (float)i);
+            if (wx <= 0) continue;
+            float4 tap = float4(Layer.Load(int3(i, j, 0)).rgb, saturate(HdrAlpha.Load(int3(i, j, 0)).a));
+            acc += tap * (wx * wy);
+            if (useMult != 0) accM += Mult.Load(int3(i, j, 0)).rgb * (wx * wy);
+            wsum += wx * wy;
+        }
+    }
+    float4 l = wsum > 0 ? acc / wsum : float4(0, 0, 0, 1);
+    float3 m = (useMult != 0 && wsum > 0) ? accM / wsum : float3(1, 1, 1);
+    if (mode == 0 && all(l.rgb == float3(0, 0, 0)) && l.a == 1.0 && all(m == float3(1, 1, 1))) return;
+    float4 f = Frame[p];
+    float3 c = mode == 1 ? l.rgb + float3(0.0, 0.08, 0.25) * (1.0 - l.a * dot(m, 1.0 / 3.0))
+                         : l.rgb + f.rgb * l.a * m;
+    Frame[p] = float4(saturate(c), f.a);
+}
+)HLSL";
+
+// Single-pass premultiplied-alpha-aware FXAA 3.11 over the finished 8-bit UI layer (fix.hud_antialiasing = fxaa).
+// The layer stores premultiplied light in rgb and transmittance in a ((0,0,0,1) = empty, a = 0 = opaque), so the
+// edge metric combines luminance with coverage (1 - a) to detect both additive HUD lines and dark opaque panel edges.
+constexpr char kUiLayerFxaaHlsl[] = R"HLSL(
+Texture2D<float4> Src : register(t0);
+SamplerState LinearClamp : register(s0);
+RWTexture2D<float4> Out : register(u0);
+cbuffer Metrics : register(b0) {
+    float4 metrics; // 1/w, 1/h, w, h
+};
+
+float hudLuma(float4 c) {
+    return dot(c.rgb, float3(0.299, 0.587, 0.114)) + (1.0 - c.a);
+}
+
+[numthreads(32, 8, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    int2 p = int2(id.xy);
+    int2 dim = int2(metrics.zw);
+    if (p.x >= dim.x || p.y >= dim.y) return;
+
+    float4 cM = Src.Load(int3(p, 0));
+    float lM = hudLuma(cM);
+    int xW = max(p.x - 1, 0);
+    int xE = min(p.x + 1, dim.x - 1);
+    int yN = max(p.y - 1, 0);
+    int yS = min(p.y + 1, dim.y - 1);
+
+    float lN = hudLuma(Src.Load(int3(p.x, yN, 0)));
+    float lS = hudLuma(Src.Load(int3(p.x, yS, 0)));
+    float lW = hudLuma(Src.Load(int3(xW, p.y, 0)));
+    float lE = hudLuma(Src.Load(int3(xE, p.y, 0)));
+
+    float lMin = min(lM, min(min(lN, lS), min(lW, lE)));
+    float lMax = max(lM, max(max(lN, lS), max(lW, lE)));
+    float lRange = lMax - lMin;
+    if (lRange < max(0.0312, lMax * 0.125)) {
+        Out[p] = cM;
+        return;
+    }
+
+    float lNW = hudLuma(Src.Load(int3(xW, yN, 0)));
+    float lNE = hudLuma(Src.Load(int3(xE, yN, 0)));
+    float lSW = hudLuma(Src.Load(int3(xW, yS, 0)));
+    float lSE = hudLuma(Src.Load(int3(xE, yS, 0)));
+
+    float edgeH = abs(-2.0 * lW + lNW + lSW) + abs(-2.0 * lM + lN + lS) * 2.0 + abs(-2.0 * lE + lNE + lSE);
+    float edgeV = abs(-2.0 * lN + lNW + lNE) + abs(-2.0 * lM + lW + lE) * 2.0 + abs(-2.0 * lS + lSW + lSE);
+    bool horz = edgeH >= edgeV;
+
+    float lAvg = (2.0 * (lN + lS + lW + lE) + (lNW + lNE + lSW + lSE)) / 12.0;
+    float subpix = saturate(abs(lAvg - lM) / lRange);
+    subpix = (-2.0 * subpix + 3.0) * subpix * subpix;
+    float subpixBlend = subpix * subpix * 0.75;
+
+    float l1 = horz ? lN : lW;
+    float l2 = horz ? lS : lE;
+    float g1 = abs(l1 - lM);
+    float g2 = abs(l2 - lM);
+    bool steep1 = g1 >= g2;
+    float gradScaled = 0.25 * max(g1, g2);
+    float stepLen = horz ? metrics.y : metrics.x;
+    float lLocalAvg = steep1 ? 0.5 * (l1 + lM) : 0.5 * (l2 + lM);
+    if (steep1) stepLen = -stepLen;
+
+    float2 uv = (float2(p) + 0.5) * metrics.xy;
+    float2 edgeUv = uv;
+    if (horz) edgeUv.y += stepLen * 0.5;
+    else edgeUv.x += stepLen * 0.5;
+
+    float2 off = horz ? float2(metrics.x, 0.0) : float2(0.0, metrics.y);
+    static const float kSteps[8] = { 1.0, 1.5, 2.0, 2.0, 2.0, 4.0, 4.0, 8.0 };
+
+    float2 uv1 = edgeUv - off;
+    float2 uv2 = edgeUv + off;
+    float e1 = hudLuma(Src.SampleLevel(LinearClamp, uv1, 0)) - lLocalAvg;
+    float e2 = hudLuma(Src.SampleLevel(LinearClamp, uv2, 0)) - lLocalAvg;
+    bool d1 = abs(e1) >= gradScaled;
+    bool d2 = abs(e2) >= gradScaled;
+
+    [unroll] for (int i = 1; i < 8; ++i) {
+        if (d1 && d2) break;
+        float s = kSteps[i];
+        if (!d1) {
+            uv1 -= off * s;
+            e1 = hudLuma(Src.SampleLevel(LinearClamp, uv1, 0)) - lLocalAvg;
+            d1 = abs(e1) >= gradScaled;
+        }
+        if (!d2) {
+            uv2 += off * s;
+            e2 = hudLuma(Src.SampleLevel(LinearClamp, uv2, 0)) - lLocalAvg;
+            d2 = abs(e2) >= gradScaled;
+        }
+    }
+
+    float dist1 = horz ? (uv.x - uv1.x) : (uv.y - uv1.y);
+    float dist2 = horz ? (uv2.x - uv.x) : (uv2.y - uv.y);
+    bool nearer1 = dist1 < dist2;
+    float distMin = min(dist1, dist2);
+    float span = max(dist1 + dist2, 1e-6);
+    bool centerSmaller = lM < lLocalAvg;
+    bool goodSpan = ((nearer1 ? e1 : e2) < 0.0) != centerSmaller;
+    float edgeBlend = goodSpan ? (0.5 - distMin / span) : 0.0;
+    float finalBlend = max(edgeBlend, subpixBlend);
+
+    float2 finalUv = uv;
+    if (horz) finalUv.y += finalBlend * stepLen;
+    else finalUv.x += finalBlend * stepLen;
+
+    Out[p] = Src.SampleLevel(LinearClamp, finalUv, 0);
+}
+)HLSL";
+
 constexpr char kUiLayerCoverageVsHlsl[] = R"HLSL(
 struct V { float4 p : SV_POSITION; };
 V main(uint id : SV_VertexID) {

@@ -202,6 +202,7 @@ inline uint64_t makeGate(bool sampled, uint32_t renderTid) noexcept {
     return (sampled ? kSampledBit : uint64_t(0)) | renderTid;
 }
 inline bool gateClocks(uint64_t gate) noexcept {
+    if (gate == kNoThread || gate == 0) return false;
     return (gate & kSampledBit) != 0 || static_cast<uint32_t>(gate) == currentThreadId();
 }
 // Sampled and never-render gates, for the calibration.
@@ -361,8 +362,12 @@ inline void drawSplitSetContinued(bool continued) noexcept { t_drawSplit.continu
 // scope and commits the exclusive shell and the copy-check residual.
 class DrawSplitCtor {
 public:
-    DrawSplitCtor() noexcept { drawSplitArm(DrawSplitState::Ctor); }
+    DrawSplitCtor() noexcept {
+        active_ = gateClocks(g_gate.load(std::memory_order_relaxed));
+        if (active_) drawSplitArm(DrawSplitState::Ctor);
+    }
     ~DrawSplitCtor() {
+        if (!active_) return;
         const unsigned shell = t_drawSplit.continued ? kSplitCtorContinued : kSplitCtorRest;
         const unsigned copy = t_drawSplit.continued ? kSplitCopyContinued : kSplitCopyRest;
         drawSplitAdd(shell, t_drawSplit.shellTicks, t_drawSplit.shellCalls);
@@ -372,15 +377,21 @@ public:
     }
     DrawSplitCtor(const DrawSplitCtor&) = delete;
     DrawSplitCtor& operator=(const DrawSplitCtor&) = delete;
+private:
+    bool active_ = false;
 };
 // Constructed immediately before the draw destructor's kOther scope.
 class DrawSplitDtor {
 public:
     explicit DrawSplitDtor(bool continued) noexcept {
-        drawSplitArm(DrawSplitState::Dtor);
-        t_drawSplit.continued = continued;
+        active_ = gateClocks(g_gate.load(std::memory_order_relaxed));
+        if (active_) {
+            drawSplitArm(DrawSplitState::Dtor);
+            t_drawSplit.continued = continued;
+        }
     }
     ~DrawSplitDtor() {
+        if (!active_) return;
         const unsigned shell = t_drawSplit.continued ? kSplitDtorContinued : kSplitDtorRest;
         drawSplitAdd(shell, t_drawSplit.shellTicks, t_drawSplit.shellCalls);
         t_drawSplit.phase = DrawSplitState::Idle;
@@ -388,6 +399,8 @@ public:
     }
     DrawSplitDtor(const DrawSplitDtor&) = delete;
     DrawSplitDtor& operator=(const DrawSplitDtor&) = delete;
+private:
+    bool active_ = false;
 };
 
 // ---- the render thread's per-frame cut -----------------------------------------------------

@@ -276,7 +276,9 @@ inline void runCopier(ID3D11Device* device,Check check) {
     equivalent("a claim with no lease",[&]{claim(src[2],kFrame);},[&](bool r){copyOf(r,baseA,336,addressOf(src[2]),2,1);},false);
     equivalent("a claim elsewhere",[&]{mapA();claim(src[0],kFrame);},[&](bool r){copyOf(r,baseA,336,source,0,1);},true);   // the claim check (round 6) hands it back
     // Round 6: the copier's claim check, against the frozen locked copier, on every shape of claim, patch and lease around the range.
-    static Record extra[3]={record(50),record(51),record(52)};
+    static Record extra[copy::kClaimViewMax+1]{};
+    static bool extraInit=false;
+    if(!extraInit){for(unsigned i=0;i<copy::kClaimViewMax+1;++i)extra[i]=record(float(50+i));extraInit=true;}
     equivalent("a claim elsewhere, no lease",[&]{claim(src[0],kFrame);},[&](bool r){copyOf(r,baseB,336,source,0,1);},true);
     equivalent("a claim just below the range",[&]{mapA();claim(src[2],kFrame);},[&](bool r){copyOf(r,baseA,336,source,3,1);},true);
     equivalent("a claim just past the range",[&]{mapA();claim(src[3],kFrame);},[&](bool r){copyOf(r,baseA,336,addressOf(src[2]),2,1);},true);
@@ -286,6 +288,8 @@ inline void runCopier(ID3D11Device* device,Check check) {
     equivalent("four claims elsewhere",[&]{mapA();claim(src[0],kFrame);claim(src[1],kFrame);claim(extra[0],kFrame);claim(extra[1],kFrame);},
                [&](bool r){copyOf(r,baseA,336,source,0,1);},true);
     equivalent("five claims elsewhere",[&]{mapA();claim(src[0],kFrame);claim(src[1],kFrame);claim(extra[0],kFrame);claim(extra[1],kFrame);claim(extra[2],kFrame);},
+               [&](bool r){copyOf(r,baseA,336,source,0,1);},true);
+    equivalent("over-limit claims elsewhere",[&]{mapA();for(unsigned i=0;i<copy::kClaimViewMax+1;++i)claim(extra[i],kFrame);},
                [&](bool r){copyOf(r,baseA,336,source,0,1);},false);
     equivalent("four claims, the fourth in the range",[&]{mapA();mappedA[3]=src[3];claim(src[0],kFrame);claim(src[1],kFrame);claim(extra[0],kFrame);claim(src[3],kFrame);},
                [&](bool r){copyOf(r,baseA,336,source,3,1);},false);

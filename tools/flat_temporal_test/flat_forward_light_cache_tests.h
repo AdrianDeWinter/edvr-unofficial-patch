@@ -92,7 +92,7 @@ inline int run() {
            body.find("return value.resource&&value.surface.known;")!=std::string::npos,
            "actual OM DSV query precedes production helper and failed metadata is not retained");
     expect(inOrder("OMGetDepthStencilState(&state,&ref)","depthCache.describe(state,freshDepth,depthHit")&&
-           body.find("else {counts.add(flatcpu::kCopyRawDepthDefault);s.forwardLight.depthDescription.clear();}")!=std::string::npos&&
+           body.find("else {counts.add(flatcpu::kCopyRawDepthDefault);}")!=std::string::npos&&
            body.find("dsvObservationMatches(actualProof,expected,writes)")!=std::string::npos,
            "actual depth state is queried each draw; null/default and read-only write proof remain live");
     const auto wrapperEnd=source.find("bool forwardViewport(",end);
@@ -131,7 +131,8 @@ inline int run() {
            cbBody.find("finish(out,snapshot.copied,bytes,")!=std::string::npos&&
            cbBody.find("constantsMetadata(buffer.Get())")!=std::string::npos,
            "each Geometry proof re-reads actual VS CB/range/width; diagnostic path remains available");
-    expect(count(issue,"lightBoundCb(s,s.context.Get(),0,1,270,96,cb,0,true)")==1&&
+    expect(count(issue,"forwardBoundCb1(s,cb,cbHash)")==1&&
+           count(source,"lightBoundCb(s,s.context.Get(),0,1,270,96,cb,0,true)")==1&&
            count(issue,"flatcpu::Scope shaderCost(flatcpu::kIssueShader)")==1&&
            count(issue,"flatcpu::Scope depthCost(flatcpu::kIssueDsv)")==1&&
            count(issue,"flatcpu::Scope constantsCost(flatcpu::kIssueConstants)")==1&&

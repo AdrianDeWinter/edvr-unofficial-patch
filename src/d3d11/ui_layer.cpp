@@ -389,6 +389,10 @@ struct Eye {
     // small pass reading it carries it on, once (uiLayerFollowReader,
     // ui_layer_math.h). Cleared by that follow and by the first taken UI draw.
     bool chainOpen = false;
+    // Deferred crisp-HUD alpha transfer: true after crispToneEnd skips crispCoveragePass
+    // so uiLayerComposite reads HdrAlpha directly from e.hdrSrv unless a post-tonemap LDR
+    // draw or HUD SMAA requires e.rtv.a to be materialized first.
+    bool coveragePending = false;
 
     // The per-channel transmittance a multiply leaves (made at the first
     // multiply, cleared to 1 at the first multiply of each frame).
@@ -557,9 +561,10 @@ struct Eye {
     Ptr<ID3D11ShaderResourceView> copySrv;
     uint32_t copyW = 0, copyH = 0;
     DXGI_FORMAT copyFmt = DXGI_FORMAT_UNKNOWN;
-    // The HUD edge smoothing (fix.hud_antialiasing, both profiles): SMAA 1x on the layer at the layer's size, its output read in the layer's place (ui_layer_smaa.h).
-    // Made at the first composite that asks, released with the layer and when the ask stops.
+    // The HUD edge smoothing (fix.hud_antialiasing, both profiles): FXAA or SMAA 1x on the layer at the layer's size, its output read in the layer's place (ui_layer_smaa.h).
+    // Made at the first composite that asks, released with the layer and when the ask stops or switches modes.
     UiLayerSmaa smaa;
+    UiLayerFxaa fxaa;
 };
 Eye g_eye[2];
 
@@ -779,7 +784,7 @@ struct Window {
     // the key was off, the raw layer because the passes could not be had -- the key as the last composite saw it, and the layer's size then. VR's logTotals prints
     // them; the flat profile keeps its own (flat_ui_layer.cpp) and skips logTotals.
     uint64_t hudSmoothed = 0, hudRawKeyOff = 0, hudRawFault = 0;
-    bool hudKeyOn = false;
+    HudAaMode hudKeyMode = HudAaMode::kOff;
     uint32_t hudW = 0, hudH = 0;
     // afterWrites' own breakdown: taken into the layer after the UI (kept
     // over it), left as a post pass (an eye-sized input), or refused at
@@ -1071,6 +1076,157 @@ int routeBegin(ID3D11DeviceContext* ctx, UiRouteStage stage, int eye, uint64_t s
     ++g_routeHead;
     return idx;
 }
+
+// 1-in-16 sampled flat-profile crisp HUD GPU breakdown (glowFeed, tonemap re-issue, coverage, HDR clear),
+// plus 1-in-32 per-frame redirected HDR HUD draw and colourless write-back GPU sums.
+struct FlatCrispGpu {
+    static constexpr int kRing = 2;
+    static constexpr int kDrawSlots = 128;
+    static constexpr int kWbSlots = 64;
+    GpuTimer glow[kRing], tone[kRing], cov[kRing], clr[kRing];
+    bool glowBusy[kRing] = {}, toneBusy[kRing] = {}, covBusy[kRing] = {}, clrBusy[kRing] = {};
+    int glowOpen = -1, toneOpen = -1, covOpen = -1, clrOpen = -1;
+    uint32_t glowCadence = 0, toneCadence = 0, covCadence = 0, clrCadence = 0;
+    uint32_t glowN = 0, toneN = 0, covN = 0, clrN = 0;
+    double glowMs = 0.0, toneMs = 0.0, covMs = 0.0, clrMs = 0.0;
+    uint64_t deferredCov = 0, materializedCov = 0;
+    // 1-in-32 frame-level HDR HUD draws & write-backs timing (1 sampled frame in flight at a time).
+    GpuTimer drawTimer[kDrawSlots], wbTimer[kWbSlots];
+    bool drawBusy[kDrawSlots] = {}, wbBusy[kWbSlots] = {};
+    int drawOpen = -1, wbOpen = -1;
+    int drawUsed = 0, wbUsed = 0;
+    int drawPending = 0, wbPending = 0;
+    uint64_t drawSampleSeq = 0;
+    uint32_t drawCadence = 0;
+    double drawFrameMs = 0.0, wbFrameMs = 0.0;
+    uint32_t drawFrameOk = 0, wbFrameOk = 0;
+    uint32_t hudDrawFrames = 0, hudDrawTotal = 0, wbFrames = 0, wbTotal = 0;
+    double hudDrawMs = 0.0, wbMs = 0.0;
+    void maybeArmDrawFrame(uint64_t seq) {
+        if (!runtimeFlatProfile() || !seq || drawPending > 0 || wbPending > 0 || drawOpen >= 0 || wbOpen >= 0) return;
+        if (drawSampleSeq == seq) return;
+        if ((drawCadence++ & 31u) != 0) return;
+        drawSampleSeq = seq;
+        drawUsed = wbUsed = 0;
+        drawFrameMs = wbFrameMs = 0.0;
+        drawFrameOk = wbFrameOk = 0;
+    }
+    void beginDraw(ID3D11DeviceContext* ctx, uint64_t seq) {
+        if (!ctx || !runtimeFlatProfile() || seq != drawSampleSeq || drawOpen >= 0 || drawUsed >= kDrawSlots) return;
+        Ptr<ID3D11Device> dev;
+        ctx->GetDevice(&dev);
+        if (!dev) return;
+        const int idx = drawUsed;
+        if (drawTimer[idx].begin(dev.Get(), ctx)) {
+            drawBusy[idx] = true;
+            drawOpen = idx;
+            ++drawUsed;
+            ++drawPending;
+        }
+    }
+    void endDraw(ID3D11DeviceContext* ctx) {
+        if (drawOpen < 0 || !ctx) return;
+        drawTimer[drawOpen].end(ctx);
+        drawOpen = -1;
+    }
+    void beginWb(ID3D11DeviceContext* ctx, uint64_t seq) {
+        if (!ctx || !runtimeFlatProfile() || seq != drawSampleSeq || wbOpen >= 0 || wbUsed >= kWbSlots) return;
+        Ptr<ID3D11Device> dev;
+        ctx->GetDevice(&dev);
+        if (!dev) return;
+        const int idx = wbUsed;
+        if (wbTimer[idx].begin(dev.Get(), ctx)) {
+            wbBusy[idx] = true;
+            wbOpen = idx;
+            ++wbUsed;
+            ++wbPending;
+        }
+    }
+    void endWb(ID3D11DeviceContext* ctx) {
+        if (wbOpen < 0 || !ctx) return;
+        wbTimer[wbOpen].end(ctx);
+        wbOpen = -1;
+    }
+    static int beginOne(ID3D11DeviceContext* ctx, GpuTimer* ring, bool* busy, int& open, uint32_t& cadence) {
+        if (!ctx || !runtimeFlatProfile() || open >= 0) return -1;
+        if ((cadence++ & 15u) != 0) return -1;
+        Ptr<ID3D11Device> dev;
+        ctx->GetDevice(&dev);
+        if (!dev) return -1;
+        for (int i = 0; i < kRing; ++i) {
+            if (busy[i]) continue;
+            if (ring[i].begin(dev.Get(), ctx)) { busy[i] = true; open = i; return i; }
+            break;
+        }
+        return -1;
+    }
+    static void endOne(ID3D11DeviceContext* ctx, GpuTimer* ring, int& open) {
+        if (open < 0 || !ctx) return;
+        ring[open].end(ctx);
+        open = -1;
+    }
+    static void pollOne(ID3D11DeviceContext* ctx, GpuTimer* ring, bool* busy, int open, uint32_t& n, double& sum) {
+        if (!ctx) return;
+        double ms = 0.0;
+        for (int i = 0; i < kRing; ++i) {
+            if (!busy[i] || i == open) continue;
+            const GpuTimerPoll r = ring[i].poll(ctx, ms);
+            if (r == GpuTimerPoll::Ready) { ++n; sum += ms; busy[i] = false; }
+            else if (r == GpuTimerPoll::Invalid) { busy[i] = false; }
+        }
+    }
+    void poll(ID3D11DeviceContext* ctx) {
+        pollOne(ctx, glow, glowBusy, glowOpen, glowN, glowMs);
+        pollOne(ctx, tone, toneBusy, toneOpen, toneN, toneMs);
+        pollOne(ctx, cov, covBusy, covOpen, covN, covMs);
+        pollOne(ctx, clr, clrBusy, clrOpen, clrN, clrMs);
+        if (!ctx) return;
+        double ms = 0.0;
+        if (drawPending > 0) {
+            for (int i = 0; i < drawUsed; ++i) {
+                if (!drawBusy[i] || i == drawOpen) continue;
+                const GpuTimerPoll r = drawTimer[i].poll(ctx, ms);
+                if (r == GpuTimerPoll::Ready) { drawFrameMs += ms; ++drawFrameOk; drawBusy[i] = false; --drawPending; }
+                else if (r == GpuTimerPoll::Invalid) { drawBusy[i] = false; --drawPending; }
+            }
+            if (drawPending == 0 && drawOpen < 0 && drawFrameOk > 0) {
+                hudDrawMs += drawFrameMs;
+                hudDrawTotal += drawFrameOk;
+                ++hudDrawFrames;
+                drawFrameMs = 0.0;
+                drawFrameOk = 0;
+            }
+        }
+        if (wbPending > 0) {
+            for (int i = 0; i < wbUsed; ++i) {
+                if (!wbBusy[i] || i == wbOpen) continue;
+                const GpuTimerPoll r = wbTimer[i].poll(ctx, ms);
+                if (r == GpuTimerPoll::Ready) { wbFrameMs += ms; ++wbFrameOk; wbBusy[i] = false; --wbPending; }
+                else if (r == GpuTimerPoll::Invalid) { wbBusy[i] = false; --wbPending; }
+            }
+            if (wbPending == 0 && wbOpen < 0 && wbFrameOk > 0) {
+                wbMs += wbFrameMs;
+                wbTotal += wbFrameOk;
+                ++wbFrames;
+                wbFrameMs = 0.0;
+                wbFrameOk = 0;
+            }
+        }
+    }
+    void reset(ID3D11DeviceContext* ctx) {
+        for (int i = 0; i < kRing; ++i) {
+            glow[i].reset(ctx); tone[i].reset(ctx); cov[i].reset(ctx); clr[i].reset(ctx);
+            glowBusy[i] = toneBusy[i] = covBusy[i] = clrBusy[i] = false;
+        }
+        for (int i = 0; i < kDrawSlots; ++i) { drawTimer[i].reset(ctx); drawBusy[i] = false; }
+        for (int i = 0; i < kWbSlots; ++i) { wbTimer[i].reset(ctx); wbBusy[i] = false; }
+        glowOpen = toneOpen = covOpen = clrOpen = drawOpen = wbOpen = -1;
+        drawUsed = wbUsed = drawPending = wbPending = 0;
+        drawSampleSeq = 0;
+        drawFrameMs = wbFrameMs = 0.0;
+        drawFrameOk = wbFrameOk = 0;
+    }
+} g_flatCrispGpu;
 
 void routeEnd(ID3D11DeviceContext* ctx, int idx) {
     if (idx < 0 || idx >= static_cast<int>(kRouteRing) || !ctx) return;
@@ -1389,6 +1545,7 @@ bool ensureLayer(ID3D11Device* dev, Eye& e, uint32_t w, uint32_t h, int eye) {
     e.seq = 0;
     e.draws = 0;
     e.chainOpen = false;
+    e.coveragePending = false;
     if (!dev || !w || !h ||
         !makeTarget(dev, w, h, DXGI_FORMAT_R8G8B8A8_UNORM, &e.tex, &e.rtv, &e.srv))
         return false;
@@ -1800,8 +1957,9 @@ bool releaseLayers() {
     bool any = false;
     for (Eye& e : g_eye) {
         any = any || e.tex || e.mTex || e.maskTex || e.mapDepthTex || e.ds.tex || e.dsCopy || e.dsDirect[0].depth || e.dsDirect[1].depth || e.out || e.copy || e.frameSrv || e.frameUav ||
-              e.hdrTex || e.hdrDs.tex || e.wTex || e.gTex || e.gDs.tex || e.smaa.ready();
+              e.hdrTex || e.hdrDs.tex || e.wTex || e.gTex || e.gDs.tex || e.smaa.ready() || e.fxaa.ready();
         e.smaa.releaseTargets();
+        e.fxaa.releaseTargets();
         e.coverage.reset();
         e.tex.Reset();
         e.rtv.Reset();
@@ -2487,7 +2645,7 @@ void restore(ID3D11DeviceContext* ctx) {
     }
     vScreenRSSetViewportsRaw(ctx, g_draw.vpCount, g_draw.vp);
     if (g_draw.scissorSet) ctx->RSSetScissorRects(g_draw.scCount, g_draw.sc);
-    ctx->OMSetBlendState(g_draw.blend, g_draw.factor, g_draw.sampleMask);
+    vScreenOMSetBlendStateRaw(ctx, g_draw.blend, g_draw.factor, g_draw.sampleMask);
     // A map sprite issue's depth-stencil state and rasterizer state (galaxy_map_ui.h, THE SPRITES' DEPTH): the game's back, a null state included.
     if (g_draw.dsStateSaved) vScreenOMSetDepthStencilStateRaw(ctx, g_draw.dsState, g_draw.dsRef);
     if (g_draw.rsStateSaved) ctx->RSSetState(g_draw.rsState);
@@ -2653,6 +2811,8 @@ void describeSampler(ID3D11DeviceContext* ctx, UINT slot, char* out, size_t n) {
                 name(sd.AddressV), name(sd.AddressW), static_cast<unsigned>(sd.Filter));
 }
 
+bool materializeDeferredCoverage(ID3D11DeviceContext* ctx, Eye& e, int eye, uint64_t seq);
+
 // One issue of a decided draw into the layer (which = 0) or into the
 // multiply transmittance (which = 1). the crisp-HUD half of fix.ui_quality: a decided draw with
 // g_draw.hdr goes into the eye's HDR HUD layer instead -- same map, jitter
@@ -2735,7 +2895,10 @@ bool beginInner(ID3D11DeviceContext* ctx, int which) {
         e.draws = 0;
         e.target = g_draw.targetRes;
         e.chainOpen = false;  // the layer starts with a UI draw: no re-issue's HUD, no chain to follow
+        e.coveragePending = false;
         ++g_win.clears;
+    } else if (which == 0 && !g_draw.hdr && e.seq == g_draw.seq && e.coveragePending) {
+        materializeDeferredCoverage(ctx, e, g_draw.eye, g_draw.seq);
     }
     if (rp && e.dSeq != g_draw.seq) {
         const FLOAT clearD[4] = {kShieldRippleNoCover, kShieldRippleNoCover, 0.0f, 0.0f};
@@ -2834,7 +2997,10 @@ bool beginInner(ID3D11DeviceContext* ctx, int which) {
             }
         }
         const int timer = routeBegin(ctx, UiRouteStage::kHdrClear, g_draw.eye, g_draw.seq);
+        g_flatCrispGpu.maybeArmDrawFrame(g_draw.seq);
+        FlatCrispGpu::beginOne(ctx, g_flatCrispGpu.clr, g_flatCrispGpu.clrBusy, g_flatCrispGpu.clrOpen, g_flatCrispGpu.clrCadence);
         vScreenClearRenderTargetViewRaw(ctx, e.hdrRtv.Get(), kUiLayerClear);
+        FlatCrispGpu::endOne(ctx, g_flatCrispGpu.clr, g_flatCrispGpu.clrOpen);
         routeEnd(ctx, timer);
         e.hdrSeq = g_draw.seq;
         e.hdrDraws = 0;
@@ -3063,7 +3229,7 @@ bool beginInner(ID3D11DeviceContext* ctx, int which) {
     if (which == 0 && g_draw.hdr && mapui::systemOpen() && e.mapPunchSeq != g_draw.seq &&
         (g_draw.family == UiLayerFamily::kMapPlane || g_draw.family == UiLayerFamily::kMapCanvas || g_draw.family == UiLayerFamily::kMapSprite))
         mapBodiesPunch(ctx, e);
-    ctx->OMSetBlendState(layerBlend, factor, sampleMask);
+    vScreenOMSetBlendStateRaw(ctx, layerBlend, factor, sampleMask);
     if (mapRunStep != maprun::Step::kKeep) vScreenSetRenderTargetsRaw(ctx, 1, &target, layerDsv);
     if (mapRunIssue) {
         g_draw.mapRunBound = true;
@@ -3156,6 +3322,7 @@ bool beginInner(ID3D11DeviceContext* ctx, int which) {
         } else if (g_draw.hdr) {
             ++e.hdrDraws;
             ++g_win.hdrRedirected;
+            g_flatCrispGpu.beginDraw(ctx, g_draw.seq);
         } else {
             ++e.draws;
             e.chainOpen = false;  // the UI has started: a pass over the eye no longer carries its identity
@@ -3289,26 +3456,30 @@ bool g_fmtChecked[2] = {}, g_fmtOk[2] = {};
 // UAVs of each frame view (D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD: an optional capability for every format
 // but R32). Either missing and the in-place composite is simply not taken: the out-of-place one is.
 ID3D11ComputeShader* g_csInPlace = nullptr;
+ID3D11ComputeShader* g_csHdrAlpha = nullptr;
+ID3D11ComputeShader* g_csInPlaceHdrAlpha = nullptr;
 bool g_loadChecked[2] = {}, g_loadOk[2] = {};
 unsigned g_inPlaceDeclinedNoted = 0;   // bit per reason, said once
 bool g_inPlaceNoted = false;
 // The HUD layer's edge smoothing (ui_layer.h, uiLayerFlatSetEdgeSmoothing): the flat adapter's ask for the next composite, taken and cleared on entry to
-// uiLayerComposite, and what that composite did with it. The VR profile never sets the ask; its own key is g_hudSmoothVr below.
+// uiLayerComposite, and what that composite did with it. The VR profile never sets the ask; its own key is g_hudAaVr below.
 struct FlatEdgeSmoothing {
-    bool ask = false;
+    HudAaMode ask = HudAaMode::kOff;
     UiLayerEdgeSmoothingResult result;
 };
 FlatEdgeSmoothing g_flatEdge;
 // VR's half of fix.hud_antialiasing (2026-11-03: one key for both profiles, off by default, live): read by uiLayerConfigure, on every reconfigure, and used only
 // while the profile is not flat (the flat adapter reads the same key itself, a frame at a time, and asks per composite through g_flatEdge). uiLayerComposite smooths
 // an eye's HUD layer when either asks.
-bool g_hudSmoothVr = false;
+HudAaMode g_hudAaVr = HudAaMode::kOff;
 
 void compileOnce(ID3D11DeviceContext* ctx) {
     if (g_cs || g_csTried || !ctx) return;
     g_csTried = true;
     g_cs = shaderSwapCreateCs(ctx,kUiLayerCompositeBytecode,sizeof(kUiLayerCompositeBytecode),"ui_layer_composite_cs","ui quality: layer");
     g_csInPlace = shaderSwapCreateCs(ctx,kUiLayerCompositeInPlaceBytecode,sizeof(kUiLayerCompositeInPlaceBytecode),"ui_layer_composite_inplace_cs","ui quality: layer");
+    g_csHdrAlpha = shaderSwapCreateCs(ctx,kUiLayerCompositeHdrAlphaBytecode,sizeof(kUiLayerCompositeHdrAlphaBytecode),"ui_layer_composite_hdr_alpha_cs","ui quality: layer");
+    g_csInPlaceHdrAlpha = shaderSwapCreateCs(ctx,kUiLayerCompositeInPlaceHdrAlphaBytecode,sizeof(kUiLayerCompositeInPlaceHdrAlphaBytecode),"ui_layer_composite_inplace_hdr_alpha_cs","ui quality: layer");
 }
 
 bool makeTex(ID3D11Device* dev, uint32_t w, uint32_t h, DXGI_FORMAT texFmt, DXGI_FORMAT viewFmt,
@@ -3408,9 +3579,29 @@ UiLayerSmaa* edgeSmoothingFor(Eye& e, uint32_t eye, ID3D11Device* dev) {
     return nullptr;
 }
 
+UiLayerFxaa* fxaaSmoothingFor(Eye& e, uint32_t eye, ID3D11Device* dev) {
+    UiLayerSmaaFail fail;
+    const char* who = runtimeFlatProfile() ? "flat ui layer fxaa" : eye == 0 ? "ui layer fxaa (left eye)" : "ui layer fxaa (right eye)";
+    switch (uiLayerFxaaEnsure(e.fxaa, dev, e.w, e.h, &fail)) {
+        case UiLayerSmaaState::kMade:
+            Log::get().note("%s: ready at %ux%u -- output R8G8B8A8, %.1f MB", who, e.w, e.h,
+                            uiLayerMB(uiLayerBytes(e.w, e.h, 4)));
+            return &e.fxaa;
+        case UiLayerSmaaState::kReady:
+            return &e.fxaa;
+        case UiLayerSmaaState::kFailed:
+            Log::get().note("%s: stood down at %ux%u -- %s hr=0x%08X", who, e.w, e.h, fail.what ? fail.what : "a creation failed",
+                            static_cast<unsigned>(fail.hr));
+            return nullptr;
+        case UiLayerSmaaState::kStoodDown:
+            return nullptr;
+    }
+    return nullptr;
+}
+
 ID3D11Texture2D* compositeInner(Eye& e, uint32_t eye, ID3D11Texture2D* frame,
                                 const uint32_t region[4], const float layerUv[4], bool useMult,
-                                bool ownedFrame, const char** why, bool smooth) {
+                                bool ownedFrame, const char** why, HudAaMode aaMode) {
     D3D11_TEXTURE2D_DESC fd{};
     frame->GetDesc(&fd);
     const DXGI_FORMAT view = uiLayerFrameView(fd.Format);
@@ -3550,13 +3741,20 @@ ID3D11Texture2D* compositeInner(Eye& e, uint32_t eye, ID3D11Texture2D* frame,
                         eye == 0 ? "left" : "right", rw, rh, viewName(view),
                         uiLayerMB(uiLayerBytes(rw, rh)));
     }
-    // The HUD layer's edge smoothing (fix.hud_antialiasing; both profiles since 2026-11-03): the SMAA resources for the layer's size are made here (per eye) and the
-    // passes run inside the timed span below, so VR's "ui quality: layer" price line includes their cost. Not asked for, nothing is kept.
+    // The HUD layer's edge smoothing (fix.hud_antialiasing; both profiles since 2026-11-03): the FXAA or SMAA resources for the layer's size are made here (per eye)
+    // and run inside the timed span below, so VR's "ui quality: layer" price line includes their cost. Inactive pass resources are released promptly.
     UiLayerSmaa* smaa = nullptr;
-    if (smooth)
+    UiLayerFxaa* fxaa = nullptr;
+    if (aaMode == HudAaMode::kSmaa) {
+        if (e.fxaa.ready()) e.fxaa.releaseTargets();
         smaa = edgeSmoothingFor(e, eye, dev.Get());
-    else if (e.smaa.ready())
-        e.smaa.releaseTargets();
+    } else if (aaMode == HudAaMode::kFxaa) {
+        if (e.smaa.ready()) e.smaa.releaseTargets();
+        fxaa = fxaaSmoothingFor(e, eye, dev.Get());
+    } else {
+        if (e.smaa.ready()) e.smaa.releaseTargets();
+        if (e.fxaa.ready()) e.fxaa.releaseTargets();
+    }
 
     UiLayerCompositeParams p{};
     if (viaCopy) {
@@ -3584,13 +3782,21 @@ ID3D11Texture2D* compositeInner(Eye& e, uint32_t eye, ID3D11Texture2D* frame,
     // The compute stage is saved and put back around the dispatch (the
     // sharpen's discipline: other passes own slots here).
     ID3D11ComputeShader* savedCs = nullptr;
-    ID3D11ShaderResourceView* savedSrv[3] = {};
+    ID3D11ShaderResourceView* savedSrv[4] = {};
     ID3D11UnorderedAccessView* savedUav = nullptr;
     ID3D11Buffer* savedCb = nullptr;
     ctx->CSGetShader(&savedCs, nullptr, nullptr);
-    ctx->CSGetShaderResources(0, 3, savedSrv);
+    ctx->CSGetShaderResources(0, 4, savedSrv);
     ctx->CSGetUnorderedAccessViews(0, 1, &savedUav);
     ctx->CSGetConstantBuffers(0, 1, &savedCb);
+
+    // If HUD AA (FXAA or SMAA) will run (or the HdrAlpha composite shader is unavailable) while
+    // crisp-HUD alpha is still deferred, materialize e.rtv.a before HUD AA / composite.
+    const bool canUseHdrAlpha =
+        e.coveragePending && !smaa && !fxaa && e.hdrSrv && (inPlaceUav ? g_csInPlaceHdrAlpha != nullptr : g_csHdrAlpha != nullptr);
+    if (e.coveragePending && !canUseHdrAlpha) {
+        materializeDeferredCoverage(ctx.Get(), e, static_cast<int>(eye), e.seq);
+    }
 
     const int qs = routeBegin(ctx.Get(), UiRouteStage::kComposite, static_cast<int>(eye), e.seq);
     gpuCensusBegin(ctx.Get(), GpuCensusSection::DoorUiLayerComposite);
@@ -3598,26 +3804,36 @@ ID3D11Texture2D* compositeInner(Eye& e, uint32_t eye, ID3D11Texture2D* frame,
         D3D11_BOX box{region[0], region[1], 0, region[2], region[3], 1};
         ctx->CopySubresourceRegion(e.copy.Get(), 0, 0, 0, 0, frame, 0, &box);
     }
-    // The layer the composite reads: its SMAA output when the passes ran, else the layer itself.
+    // The layer the composite reads: its FXAA or SMAA output when the pass ran, else the layer itself.
     ID3D11ShaderResourceView* layerSrv = e.srv.Get();
-    bool smoothed = false;
+    HudAaMode appliedAa = HudAaMode::kOff;
     if (smaa) {
         if (ID3D11ShaderResourceView* output = uiLayerSmaaRun(*smaa, ctx.Get(), e.srv.Get())) {
             layerSrv = output;
-            smoothed = true;
+            appliedAa = HudAaMode::kSmaa;
+        }
+    } else if (fxaa) {
+        if (ID3D11ShaderResourceView* output = uiLayerFxaaRun(*fxaa, ctx.Get(), e.srv.Get())) {
+            layerSrv = output;
+            appliedAa = HudAaMode::kFxaa;
         }
     }
-    ID3D11ShaderResourceView* nullSrv[3] = {};
+    const bool smoothed = appliedAa != HudAaMode::kOff;
+    const bool useHdrAlpha = canUseHdrAlpha && !smoothed;
+    ID3D11ShaderResourceView* nullSrv[4] = {};
     ID3D11UnorderedAccessView* nullUav = nullptr;
-    ctx->CSSetShaderResources(0, 3, nullSrv);
+    ctx->CSSetShaderResources(0, 4, nullSrv);
     ctx->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-    ctx->CSSetShader(inPlaceUav ? g_csInPlace : g_cs, nullptr, 0);
+    ID3D11ComputeShader* dispatchCs =
+        useHdrAlpha ? (inPlaceUav ? g_csInPlaceHdrAlpha : g_csHdrAlpha) : (inPlaceUav ? g_csInPlace : g_cs);
+    ctx->CSSetShader(dispatchCs, nullptr, 0);
     ctx->CSSetConstantBuffers(0, 1, &g_cb);
     // In place the frame is bound ONLY as the UAV: slot 0 stays null, so the one texture is never an
     // SRV and a UAV in the same dispatch (the hazard D3D11 resolves by silently dropping a binding).
-    ID3D11ShaderResourceView* srvs[3] = {inPlaceUav ? nullptr : frameSrv, layerSrv,
-                                         useMult ? e.mSrv.Get() : nullptr};
-    ctx->CSSetShaderResources(0, 3, srvs);
+    ID3D11ShaderResourceView* srvs[4] = {inPlaceUav ? nullptr : frameSrv, layerSrv,
+                                         useMult ? e.mSrv.Get() : nullptr,
+                                         useHdrAlpha ? e.hdrSrv.Get() : nullptr};
+    ctx->CSSetShaderResources(0, 4, srvs);
     ID3D11UnorderedAccessView* uav = inPlaceUav ? inPlaceUav : e.outUav.Get();
     ctx->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
     ctx->Dispatch((rw + kUiLayerCompositeGroupX - 1) / kUiLayerCompositeGroupX,
@@ -3625,10 +3841,10 @@ ID3D11Texture2D* compositeInner(Eye& e, uint32_t eye, ID3D11Texture2D* frame,
     routeEnd(ctx.Get(), qs);
     gpuCensusEnd(ctx.Get(), GpuCensusSection::DoorUiLayerComposite);
 
-    ctx->CSSetShaderResources(0, 3, nullSrv);
+    ctx->CSSetShaderResources(0, 4, nullSrv);
     ctx->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
     ctx->CSSetShader(savedCs, nullptr, 0);
-    ctx->CSSetShaderResources(0, 3, savedSrv);
+    ctx->CSSetShaderResources(0, 4, savedSrv);
     ctx->CSSetUnorderedAccessViews(0, 1, &savedUav, nullptr);
     ctx->CSSetConstantBuffers(0, 1, &savedCb);
     if (savedCs) savedCs->Release();
@@ -3638,15 +3854,17 @@ ID3D11Texture2D* compositeInner(Eye& e, uint32_t eye, ID3D11Texture2D* frame,
     if (savedCb) savedCb->Release();
 
     ++g_win.composites;
-    g_flatEdge.result.outcome = !smooth ? UiLayerEdgeSmoothing::kRaw : (smoothed ? UiLayerEdgeSmoothing::kSmoothed : UiLayerEdgeSmoothing::kFault);
+    const bool smoothWanted = aaMode != HudAaMode::kOff;
+    g_flatEdge.result.outcome = !smoothWanted ? UiLayerEdgeSmoothing::kRaw : (smoothed ? UiLayerEdgeSmoothing::kSmoothed : UiLayerEdgeSmoothing::kFault);
+    g_flatEdge.result.applied = appliedAa;
     g_flatEdge.result.w = e.w;
     g_flatEdge.result.h = e.h;
     // VR's window (the flat profile counts the same outcome in its own, from uiLayerFlatEdgeSmoothingResult): both eyes' composites.
     if (!runtimeFlatProfile()) {
-        if (!smooth) ++g_win.hudRawKeyOff;
+        if (!smoothWanted) ++g_win.hudRawKeyOff;
         else if (smoothed) ++g_win.hudSmoothed;
         else ++g_win.hudRawFault;
-        g_win.hudKeyOn = smooth;
+        g_win.hudKeyMode = aaMode;
         g_win.hudW = e.w;
         g_win.hudH = e.h;
     }
@@ -4224,6 +4442,32 @@ void logDsvMemo() {
         "ui quality: depth view memo: the bound depth view's resource was answered from the Dsv0-generation memo %llu times "
         "and resolved on a miss (a failed resolve included) %llu times in this window.",
         static_cast<unsigned long long>(g_win.dsvMemoHits), static_cast<unsigned long long>(g_win.dsvMemoMisses));
+    if (runtimeFlatProfile() &&
+        (g_flatCrispGpu.glowN || g_flatCrispGpu.toneN || g_flatCrispGpu.covN || g_flatCrispGpu.clrN ||
+         g_flatCrispGpu.hudDrawFrames || g_flatCrispGpu.wbFrames ||
+         g_flatCrispGpu.deferredCov || g_flatCrispGpu.materializedCov)) {
+        const double glowAvg = g_flatCrispGpu.glowN ? g_flatCrispGpu.glowMs / g_flatCrispGpu.glowN : 0.0;
+        const double toneAvg = g_flatCrispGpu.toneN ? g_flatCrispGpu.toneMs / g_flatCrispGpu.toneN : 0.0;
+        const double covAvg = g_flatCrispGpu.covN ? g_flatCrispGpu.covMs / g_flatCrispGpu.covN : 0.0;
+        const double clrAvg = g_flatCrispGpu.clrN ? g_flatCrispGpu.clrMs / g_flatCrispGpu.clrN : 0.0;
+        const double hudDrawAvg = g_flatCrispGpu.hudDrawFrames ? g_flatCrispGpu.hudDrawMs / g_flatCrispGpu.hudDrawFrames : 0.0;
+        const double hudDrawPerFr = g_flatCrispGpu.hudDrawFrames ? static_cast<double>(g_flatCrispGpu.hudDrawTotal) / g_flatCrispGpu.hudDrawFrames : 0.0;
+        const double wbAvg = g_flatCrispGpu.wbFrames ? g_flatCrispGpu.wbMs / g_flatCrispGpu.wbFrames : 0.0;
+        const double wbPerFr = g_flatCrispGpu.wbFrames ? static_cast<double>(g_flatCrispGpu.wbTotal) / g_flatCrispGpu.wbFrames : 0.0;
+        Log::get().note(
+            "flat crisp hud gpu 30s: samples=%u/%u/%u/%u glow=%.3f tone=%.3f cov=%.3f clr=%.3f hud-draws=%.3f (%.1f/fr n=%u) wb=%.3f (%.1f/fr n=%u) ms (deferred-cov=%llu materialized=%llu)",
+            g_flatCrispGpu.glowN, g_flatCrispGpu.toneN, g_flatCrispGpu.covN, g_flatCrispGpu.clrN,
+            glowAvg, toneAvg, covAvg, clrAvg,
+            hudDrawAvg, hudDrawPerFr, g_flatCrispGpu.hudDrawFrames,
+            wbAvg, wbPerFr, g_flatCrispGpu.wbFrames,
+            static_cast<unsigned long long>(g_flatCrispGpu.deferredCov),
+            static_cast<unsigned long long>(g_flatCrispGpu.materializedCov));
+        g_flatCrispGpu.glowN = g_flatCrispGpu.toneN = g_flatCrispGpu.covN = g_flatCrispGpu.clrN = 0;
+        g_flatCrispGpu.glowMs = g_flatCrispGpu.toneMs = g_flatCrispGpu.covMs = g_flatCrispGpu.clrMs = 0.0;
+        g_flatCrispGpu.hudDrawFrames = g_flatCrispGpu.hudDrawTotal = g_flatCrispGpu.wbFrames = g_flatCrispGpu.wbTotal = 0;
+        g_flatCrispGpu.hudDrawMs = g_flatCrispGpu.wbMs = 0.0;
+        g_flatCrispGpu.deferredCov = g_flatCrispGpu.materializedCov = 0;
+    }
 }
 
 void logTotals(double seconds) {
@@ -4275,7 +4519,7 @@ void logTotals(double seconds) {
     // layer's size then. A window with composites and all three counts zero says the composite never reached the smoothing. The passes run inside the composite's timed
     // span, so the "ui quality: layer" price line below includes their cost.
     if (g_win.composites || g_win.hudSmoothed || g_win.hudRawKeyOff || g_win.hudRawFault)
-        Log::get().note("ui quality: hud smaa: key=%s smoothed=%llu raw-key-off=%llu raw-fault=%llu size=%ux%u", g_win.hudKeyOn ? "on" : "off",
+        Log::get().note("ui quality: hud smaa: key=%s smoothed=%llu raw-key-off=%llu raw-fault=%llu size=%ux%u", hudAaName(g_win.hudKeyMode),
                         static_cast<unsigned long long>(g_win.hudSmoothed), static_cast<unsigned long long>(g_win.hudRawKeyOff),
                         static_cast<unsigned long long>(g_win.hudRawFault), g_win.hudW, g_win.hudH);
     uiSurfacesLogAtlas();  // the glyph atlas instrument's write counts, when one is watched
@@ -4548,7 +4792,7 @@ void uiLayerConfigure(Config& cfg) {
     // VR's half of the HUD edge smoothing (fix.hud_antialiasing, off by default, live; 2026-11-03): read on every configure and used by uiLayerComposite only while the
     // profile is not flat (the flat adapter reads the key itself, a frame at a time). The layer's composite runs only while fix.ui_quality is not off and a temporal
     // mode is on, so the key does nothing before then.
-    g_hudSmoothVr = !runtimeFlatProfile() && cfg.getBool("fix.hud_antialiasing", false);
+    g_hudAaVr = runtimeFlatProfile() ? HudAaMode::kOff : hudAaParse(cfg.getString("fix.hud_antialiasing", "off").c_str());
     // The flat profile reads its mode around the gate (fix.temporal_aa reads off there): its half of the layer -- the cockpit
     // HUD families through the mono adapter, flat_ui_layer.cpp -- and its panel factor arm with the flat anti-aliasing.
     const bool flatAa = runtimeFlatProfile() && temporalModeEnabledFor(cfg.requestedTemporalMode(), true);
@@ -5233,6 +5477,7 @@ bool uiLayerBegin(ID3D11DeviceContext* ctx) { return beginGuarded(ctx, 0); }
 
 void uiLayerEnd(ID3D11DeviceContext* ctx) {
     if (!g_draw.active) return;
+    g_flatCrispGpu.endDraw(ctx);
     g_draw.drawRoute.end([&](int slot) { routeEnd(ctx, slot); });
     if (g_draw.glassCensus) {
         g_draw.glassCensus = false;
@@ -5323,11 +5568,13 @@ bool uiLayerWriteBackBegin(ID3D11DeviceContext* ctx) {
     ++g_win.writeBacks;
     // The colourless re-issue is the layer's own work: timed to its End.
     g_draw.wbRouteSlot = routeBegin(ctx, UiRouteStage::kWriteBack, g_draw.eye, g_draw.seq);
+    g_flatCrispGpu.beginWb(ctx, g_draw.seq);
     return true;
 }
 
 void uiLayerWriteBackEnd(ID3D11DeviceContext* ctx) {
     if (!g_draw.wbActive) return;
+    g_flatCrispGpu.endWb(ctx);
     routeEnd(ctx, g_draw.wbRouteSlot);
     g_draw.wbRouteSlot = -1;
     guarded("uiLayer.writeBackEnd", [&] {
@@ -5686,7 +5933,10 @@ static ID3D11ShaderResourceView* glowFeedPass(ID3D11DeviceContext* ctx, const Ey
         verdict = UiGlowFeed::kFault;
         return nullptr;
     }
+    FlatCrispGpu::beginOne(ctx, g_flatCrispGpu.glow, g_flatCrispGpu.glowBusy, g_flatCrispGpu.glowOpen, g_flatCrispGpu.glowCadence);
     vScreenExecuteCommandListRaw(ctx, list.Get(), 1);
+    FlatCrispGpu::endOne(ctx, g_flatCrispGpu.glow, g_flatCrispGpu.glowOpen);
+    g_flatCrispGpu.poll(ctx);
     verdict = UiGlowFeed::kFed;
     if (use) use->applied = true;
     if (star) star->hudIncluded = hud != nullptr;
@@ -6313,8 +6563,11 @@ bool crispCoveragePass(ID3D11DeviceContext* ctx, Eye& e, int eye, uint64_t seq) 
     try {
         const UiCoverageBindings bindings{e.hdrSrv.Get(), e.rtv.Get(), g_covVs, g_covPs,
                                           blend, e.w, e.h};
+        FlatCrispGpu::beginOne(ctx, g_flatCrispGpu.cov, g_flatCrispGpu.covBusy, g_flatCrispGpu.covOpen, g_flatCrispGpu.covCadence);
         ok = e.coverage.execute(ctx, g_crispDeferred.Get(), bindings, vScreenExecuteCommandListRaw, &failure);
+        FlatCrispGpu::endOne(ctx, g_flatCrispGpu.cov, g_flatCrispGpu.covOpen);
     } catch (const std::exception&) {
+        FlatCrispGpu::endOne(ctx, g_flatCrispGpu.cov, g_flatCrispGpu.covOpen);
         e.coverage.reset();
         ok = false;
         failure = "command exception";
@@ -6336,6 +6589,16 @@ bool crispCoveragePass(ID3D11DeviceContext* ctx, Eye& e, int eye, uint64_t seq) 
 // re-issue, not a post pass to name) and brackets its issue with
 // uiLayerCrispToneBegin/End.
 namespace {
+bool materializeDeferredCoverage(ID3D11DeviceContext* ctx, Eye& e, int eye, uint64_t seq) {
+    if (!e.coveragePending) return true;
+    const bool ok = crispCoveragePass(ctx, e, eye, seq);
+    if (ok) {
+        ++g_win.hdrCoveragePasses;
+        ++g_flatCrispGpu.materializedCov;
+        e.coveragePending = false;
+    }
+    return ok;
+}
 // An admitted tonemap, pending its re-issue right after the game's own issue: VR's structural admission and the flat
 // profile's known-pair one (uiLayerCrispAdmitFlat) both arm it here.
 void crispArm(int eye, uint64_t seq, int hdrSlot, const void* rtvRes, const void* hdrRes, uint64_t vs, uint64_t ps) {
@@ -6909,6 +7172,7 @@ bool uiLayerCrispToneBegin(ID3D11DeviceContext* ctx) {
             }
         }
         g_crispSave.routeSlot = routeBegin(ctx, UiRouteStage::kHdrTonemap, p.eye, p.seq);
+        FlatCrispGpu::beginOne(ctx, g_flatCrispGpu.tone, g_flatCrispGpu.toneBusy, g_flatCrispGpu.toneOpen, g_flatCrispGpu.toneCadence);
         g_crispSave.active = true;
         ok = true;
         if (runtimeFlatProfile()) flatUiTrailNoteReissue(p.seq, FlatUiTrailReissue::kBegun, 0, 0);
@@ -6980,6 +7244,8 @@ void uiLayerCrispToneEnd(ID3D11DeviceContext* ctx) {
     const bool hadWeapons = g_crispSave.weapons, fellBack = g_crispSave.fellBack, faulted = g_crispSave.faulted;
     const char* plainWhy = g_crispSave.plainWhy;
     routeEnd(ctx, g_crispSave.routeSlot);
+    FlatCrispGpu::endOne(ctx, g_flatCrispGpu.tone, g_flatCrispGpu.toneOpen);
+    g_flatCrispGpu.poll(ctx);
     g_crispSave.routeSlot = -1;
     // Everything the game had, put back through the raw entry points.
     if (!guarded("uiLayer.crispToneEnd", [&] {
@@ -7007,24 +7273,32 @@ void uiLayerCrispToneEnd(ID3D11DeviceContext* ctx) {
         // A step's bind faulted: the 8-bit layer holds part of the frame's light. It is withheld whole (the picture stays the game's), and the
         // path stands down with the reason.
         vScreenClearRenderTargetViewRaw(ctx, e.rtv.Get(), kUiLayerClear);
+        e.coveragePending = false;
         crispStandDown("a fault while binding a step of the tonemap re-issue");
         return;
     }
     // The coverage pass: without it the layer's alpha is stale, so a failure
     // clears the layer (the HUD misses the frame; the picture stays whole). A frame with the weapons' light alone has no HUD alpha to
     // transfer: its 8-bit layer was cleared to alpha 1 and the weapons added no coverage.
+    // On the flat profile, when the HdrAlpha composite shader is ready, defer the pass: uiLayerComposite reads e.hdrSrv.a directly
+    // unless a post-tonemap LDR UI draw or HUD SMAA needs e.rtv.a materialized first.
+    if (plan.coverage && runtimeFlatProfile() && !g_csHdrAlpha && !g_csTried) compileOnce(ctx);
+    const bool deferCoverage = plan.coverage && runtimeFlatProfile() && g_csHdrAlpha != nullptr && e.hdrSrv != nullptr;
+    e.coveragePending = deferCoverage;
     bool covered = true;
     bool ranCover = true;
-    if (plan.coverage) {
+    if (plan.coverage && !deferCoverage) {
         covered = false;
         ranCover = guarded("uiLayer.crispCoverage", [&] {
             covered = crispCoveragePass(ctx, e, eye, seq);
         });
     }
     if (ranCover && covered) {
-        if (plan.coverage) ++g_win.hdrCoveragePasses;
+        if (deferCoverage) ++g_flatCrispGpu.deferredCov;
+        else if (plan.coverage) ++g_win.hdrCoveragePasses;
     } else {
         vScreenClearRenderTargetViewRaw(ctx, e.rtv.Get(), kUiLayerClear);
+        e.coveragePending = false;
         // The tonemap ran, but its alpha transfer did not. Retire this
         // frame's unpublished HUD before a flat-profile re-arm; otherwise
         // beginInner mistakes it for a new missed consumer and backs off
@@ -7419,8 +7693,11 @@ void seedWritersCheck(ID3D11DeviceContext* ctx, uint32_t count, uint32_t instanc
             const UiDsState ds = dsStateOfNoted(ctx, dsv,
                 matchingDiagnostic ? &ref : nullptr, matchingDiagnostic ? &fmt : nullptr);
             const UiDsEffect writer = uiLayerDsEffect(ds, true);
-            const bool invalidated = matchingFresh && uiLayerSeedWriterInvalidates(writer,
-                l->seededMask, l->seededDepth, g_privateDepthGuard.active(g_lastRedirectSeq));
+            const bool privateGuard = g_privateDepthGuard.active(g_lastRedirectSeq);
+            const bool dropStencilOnly = matchingFresh && uiLayerSeedWriterDropsStencilOnly(
+                writer, l->seededMask, l->seededDepth, privateGuard);
+            const bool invalidated = matchingFresh && !dropStencilOnly && uiLayerSeedWriterInvalidates(
+                writer, l->seededMask, l->seededDepth, privateGuard);
             if (matchingFresh && writer.writes() && !invalidated) ++g_win.depthOnlySeedPreservedWriters;
             if (matchingDiagnostic) {
                 const UiSeedKey key = uiSeedDrawKey(ds, count, instances, verdict,
@@ -7428,7 +7705,9 @@ void seedWritersCheck(ID3D11DeviceContext* ctx, uint32_t count, uint32_t instanc
                     static_cast<uint32_t>(fmt), drawKind);
                 g_seedCensus.event(eye, hdr, g_lastRedirectSeq, key, invalidated);
             }
-            if (invalidated) {
+            if (dropStencilOnly) {
+                l->seededMask = 0;
+            } else if (invalidated) {
                 l->seq = 0;
                 ++g_win.seedStale;
             }
@@ -7719,8 +7998,8 @@ constexpr uint32_t kEyeRearmWindow = 2000, kEyeSwapPersist = 30;
 ID3D11Texture2D* uiLayerComposite(uint64_t sequence, uint32_t eye, ID3D11Texture2D* frame,
                                   const uint32_t region[4], const float layerUv[4], bool ownedFrame, bool resolved) {
     // The flat adapter's ask for this composite (uiLayerFlatSetEdgeSmoothing), taken whatever happens below so it never carries to another call.
-    const bool smooth = g_flatEdge.ask || (!runtimeFlatProfile() && g_hudSmoothVr);  // VR: the key's, both eyes
-    g_flatEdge.ask = false;
+    const HudAaMode aaMode = g_flatEdge.ask != HudAaMode::kOff ? g_flatEdge.ask : (!runtimeFlatProfile() ? g_hudAaVr : HudAaMode::kOff);  // VR: the key's, both eyes
+    g_flatEdge.ask = HudAaMode::kOff;
     g_flatEdge.result = UiLayerEdgeSmoothingResult{};
     if (eye > 1 || !frame || !region || !layerUv) return nullptr;
     g_seedCensus.door(eye, sequence);
@@ -7854,7 +8133,7 @@ ID3D11Texture2D* uiLayerComposite(uint64_t sequence, uint32_t eye, ID3D11Texture
     ID3D11Texture2D* result = nullptr;
     const char* why = nullptr;
     const bool ran = guardedBudget(g_compositeBudget, [&] {
-        result = compositeInner(e, eye, frame, region, layerUv, useMult, ownedFrame, &why, smooth);
+        result = compositeInner(e, eye, frame, region, layerUv, useMult, ownedFrame, &why, aaMode);
     });
     markFrame.composited = result != nullptr;
     if (!result) {
@@ -7902,6 +8181,7 @@ void settleIssueFence(ID3D11DeviceContext* ctx) {
 }  // namespace
 
 void uiLayerFrameBoundary(ID3D11DeviceContext* ctx) {
+    uiBlendShapeCacheEnable(true);
     // A run of map sprites never outlives a frame: its references are let go and the game's targets are on the context for everything the boundary and the next frame do.
     uiLayerMapRunEnd(ctx);
     settleIssueFence(ctx);
@@ -8071,7 +8351,7 @@ void uiLayerFlatSetDraw(uint64_t frame, float jx, float jy, uint32_t renderW, ui
     g_flatDraw.renderH = renderH;
 }
 
-void uiLayerFlatSetEdgeSmoothing(bool on) { g_flatEdge.ask = on; }
+void uiLayerFlatSetEdgeSmoothing(HudAaMode mode) { g_flatEdge.ask = mode; }
 UiLayerEdgeSmoothingResult uiLayerFlatEdgeSmoothingResult() { return g_flatEdge.result; }
 
 int uiLayerLastDecision() { return g_lastDecision; }
@@ -8125,8 +8405,11 @@ void releaseDeviceObjects() {
     g_hdrSeedGpu.reset();  // release-only; the old device may already be gone
     g_hdrSeedActive = 0;
     releaseLayers();
-    // releaseLayers let go of the SMAA targets; the passes, samplers, lookup textures and the remembered failure belong to the device.
-    for (Eye& e : g_eye) e.smaa.releaseAll();
+    // releaseLayers let go of the HUD AA targets; the passes, samplers, lookup textures and the remembered failure belong to the device.
+    for (Eye& e : g_eye) {
+        e.smaa.releaseAll();
+        e.fxaa.releaseAll();
+    }
     for (RouteSlot& s : g_route) {
         s.timer.reset();
         s.inUse = false;
@@ -8197,6 +8480,16 @@ void releaseDeviceObjects() {
         g_csInPlace->Release();
         g_csInPlace = nullptr;
     }
+    if (g_csHdrAlpha) {
+        g_csHdrAlpha->Release();
+        g_csHdrAlpha = nullptr;
+    }
+    if (g_csInPlaceHdrAlpha) {
+        g_csInPlaceHdrAlpha->Release();
+        g_csInPlaceHdrAlpha = nullptr;
+    }
+    g_flatCrispGpu.reset(nullptr);
+    for (int i = 0; i < 2; ++i) g_eye[i].coveragePending = false;
     g_csTried = false;
     // The Galaxy Map's states and the tone's buffers (the per-eye mask and depth textures went with releaseLayers): states of the old device must not meet the new context.
     for (int i = 0; i < 2; ++i) {
@@ -8210,6 +8503,7 @@ void releaseDeviceObjects() {
     g_mapTone.patch.Reset();
     g_mapTone.width = 0;
     for (int i = 0; i < 2; ++i) g_fmtChecked[i] = g_fmtOk[i] = g_loadChecked[i] = g_loadOk[i] = false;
+    uiBlendShapeCacheClear();
 }
 }  // namespace
 
@@ -8224,6 +8518,7 @@ void uiLayerDeviceReset() {
 }
 
 void uiLayerShutdown() {
+    uiBlendShapeCacheEnable(false);
     g_holoBinding.clear(); g_holoCache.reset();
     detail::g_uiLayerIssueBlocked = false;
     g_holoSettleFailed = 0;

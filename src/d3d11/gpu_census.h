@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 struct ID3D11DeviceContext;
@@ -210,6 +211,23 @@ void gpuCensusEnd(ID3D11DeviceContext* ctx, GpuCensusSection section) noexcept;
 // gpuCensusNoteIssued: this occurrence issued at least one real GPU pass (a draw or a dispatch), as opposed to an empty scope that
 // returned before issuing anything. Counted per section per window ("issued" on the line); unconditional and cheap.
 void gpuCensusNoteIssued(GpuCensusSection section) noexcept;
+
+namespace gpu_census_detail {
+// Inline fast-path counters drained into g_section[i].issued by gpu_census.cpp.
+// Active only when gpu_census.cpp is linked, so test rigs that stub gpuCensusNoteIssued
+// without linking gpu_census.cpp still observe every call through their stub.
+inline bool g_inlineIssuedActive = false;
+inline uint64_t g_inlineIssued[static_cast<size_t>(GpuCensusSection::Count)] = {};
+}  // namespace gpu_census_detail
+
+inline void gpuCensusNoteIssuedFast(GpuCensusSection section) noexcept {
+    if (gpu_census_detail::g_inlineIssuedActive) {
+        if (section < GpuCensusSection::Count)
+            ++gpu_census_detail::g_inlineIssued[static_cast<size_t>(section)];
+        return;
+    }
+    gpuCensusNoteIssued(section);
+}
 
 class GpuCensusScope {
 public:

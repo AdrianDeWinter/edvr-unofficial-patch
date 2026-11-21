@@ -83,11 +83,11 @@ MUTATIONS = [("key-ignores-" + name, anchor, "", "O1") for name, anchor in KEY_I
     ("triangle-ignores-indirect-n", "(a.kind == 'D' || a.kind == 'N');", "(a.kind == 'D');", "O3"),
     # The memo.
     ("memo-ignores-the-frame", "if (frame != frame_) return FlatOffscreenNo::OtherFrame;", "", "O4"),
-    ("memo-keeps-the-sources-camera-pointer", "draw_.key.camera = d.key.camera ? draw_.camera : nullptr;", "draw_.key.camera = d.key.camera;", "O4"),
-    ("memo-reuse-keeps-the-old-instances", "draw_.instances = instances;", "(void)instances;", "O4"),
-    ("memo-recopies-the-held-key", "if (valid_ && frame_ == frame && key_.same(key)) return;   // already held: nothing to copy", "", "O4"),
-    ("memo-forget-keeps-it", "void forget() noexcept { valid_ = false; }", "void forget() noexcept {}", "O4"),
-    ("memo-lookup-skips-the-key", "return key_.same(now) ? FlatOffscreenNo::None : FlatOffscreenNo::KeyDiffers;", "return FlatOffscreenNo::None;", "O4"),
+    ("memo-keeps-the-sources-camera-pointer", "slots_[idx].draw.key.camera = d.key.camera ? slots_[idx].draw.camera : nullptr;", "slots_[idx].draw.key.camera = d.key.camera;", "O4"),
+    ("memo-reuse-keeps-the-old-instances", "d.instances = instances;", "(void)instances;", "O4"),
+    ("memo-recopies-the-held-key", "if (slots_[i].key.same(key)) { lastHit_ = i; return; }   // already held: nothing to copy", "", "O4"),
+    ("memo-forget-keeps-it", "void forget() noexcept { used_ = 0; next_ = 0; lastHit_ = 0; }", "void forget() noexcept {}", "O4"),
+    ("memo-lookup-skips-the-key", "return FlatOffscreenNo::KeyDiffers;", "return FlatOffscreenNo::None;", "O4"),
 ]
 COUNT_MUTATIONS = [
     ("line-drops-the-rest-count", 'if (n > 3) put(", and %u more", n - 3);', "", "O6"),

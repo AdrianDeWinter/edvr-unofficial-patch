@@ -408,7 +408,7 @@ inline int flatOffscreenTests() {
                 {&liveBody, "live.overlayOpen = overlayOpen(s) || overlaySuffixActive.load(std::memory_order_acquire);", 1, "overlayOpen is the model's open suffix or the active flag"},
                 {&liveBody, "live.projectionAudit = s.projectionFrames != 0;", 1, "projectionAudit is the F10 audit's frame count"},
                 {&liveBody, "live.weaponFootprint = s.weaponFootprint.active();", 1, "weaponFootprint is the probe's armed state"},
-                {&liveBody, "live.foregroundTouchesDepth = s.foreground.active() && k.depth != nullptr;", 1, "foregroundTouchesDepth is the probe's active state and the draw's depth"},
+                {&liveBody, "live.foregroundTouchesDepth = s.foreground.active() && k.depth != nullptr && (k.depth == s.namedDepth || k.depth == s.phaseDepth.Get() || (k.depthWidth == s.prefix.width && k.depthHeight == s.prefix.height));", 1, "foregroundTouchesDepth is the probe's active state and a scene depth"},
                 {&liveBody, "live.hdrCouldConsume = flatHdrCouldConsume(s.hdr, k);", 1, "hdrCouldConsume is the detector's own gate"},
                 // The key from the binding shadow.
                 {&keyBody, "now.rtv = bindingGet(BindSlot::Rtv0); now.dsv = bindingGet(BindSlot::Dsv0);", 1, "the key reads the RTV and DSV bindings"},
@@ -417,7 +417,7 @@ inline int flatOffscreenTests() {
                 {&keyBody, "now.b1 = bindingGet(BindSlot::VsCb1);", 1, "the constant buffer at b1"},
                 {&keyBody, "now.viewportCount = s.viewportCount;", 1, "the viewport count"},
                 {&keyBody, "std::memcpy(now.viewport, &s.viewport, sizeof(now.viewport));", 1, "and the viewport"},
-                {&keyBody, "rows = s.cameras.probe(now.b1, bindingGeneration(BindSlot::VsCb1), s.prefix.frame);", 1, "the camera rows come from the table's probe, as in the constructor"},
+                {&keyBody, "rows = s.cameras.probeHeld(now.b1, bindingGeneration(BindSlot::VsCb1), s.prefix.frame);", 1, "the camera rows come from the table's probe, as in the constructor"},
                 {&keyBody, "now.cameraHash = rows->have ? rows->hash : 0; now.writeEpoch = rows->have ? rows->epoch : 0; now.writeSeq = rows->have ? rows->sequence : 0;", 1, "with their hash and write provenance"},
                 // The fast path's steps.
                 {&tryBody, "s.drawVs = k.vs; s.drawPs = k.ps;", 1, "the current draw's identities are stored"},
@@ -459,7 +459,7 @@ inline int flatOffscreenTests() {
                        "O5: the fast path asks, then restores, reduces, observes, records the trace and notes the UI layer, in the slow path's order");
                 const size_t sReduce = at(ctor, "flatRuntimeObserve(s.prefix, d)"), sDetect = at(ctor, "flatHdrObserveDraw(s.hdr, k, s.prefix.sequence"),
                              sTrace = at(ctor, "flatTraceRecord(s.traceRing, d,"), sNote = at(ctor, "flatUiLayerNoteSceneDraw(ctx, count, instances, kind)"),
-                             sSubst = at(ctor, "if (!d.supported) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);");
+                             sSubst = at(ctor, "if (!d.supported && !pairFact.motionKeyed) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);");
                 expect(sSubst < sReduce && sReduce < sDetect && sDetect < sTrace && sTrace < sNote && sSubst != std::string::npos && sNote != std::string::npos,
                        "O5: and the constructor does the same five things in that order");
             }
@@ -545,7 +545,7 @@ inline int flatOffscreenTests() {
             expect(countOf(ctor, "s.foregroundDomainFrame!=s.prefix.frame") >= 1, "O5: gate: the foreground domain's once-a-frame reset is keyed on the frame");
             expect(countOf(ctor, "const bool diagnostics = flatTemporalNeedsOriginalState() || s.drawCapture.active() || s.drawPackets.armed();") == 1,
                    "O5: gate: the constructor's diagnostics definition is the one the live field repeats");
-            expect(countOf(ctor, "if (!d.supported) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);") == 1,
+            expect(countOf(ctor, "if (!d.supported && !pairFact.motionKeyed) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);") == 1,
                    "O5: gate: a draw that is not supported sees the game's state");
         }
     }

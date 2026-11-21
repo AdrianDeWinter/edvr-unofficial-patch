@@ -17,6 +17,16 @@ void testSeedWriterRule() {
           "all depth and mixed writers retain legacy invalidation");
     check(!uiLayerSeedWriterInvalidates(UiDsEffect{}, 255, true, true),
           "read-only and KEEP no-writer effects remain no invalidation");
+    check(uiLayerSeedWriterDropsStencilOnly(stencil, 255, true, false) &&
+          uiLayerSeedWriterDropsStencilOnly(stencil, 4, true, false),
+          "stencil-only game writer on an unmodified depth+stencil seed drops stencil mask only");
+    check(!uiLayerSeedWriterDropsStencilOnly(stencil, 0, true, false) &&
+          !uiLayerSeedWriterDropsStencilOnly(stencil, 255, true, true) &&
+          !uiLayerSeedWriterDropsStencilOnly(stencil, 255, false, false) &&
+          !uiLayerSeedWriterDropsStencilOnly(depth, 255, true, false) &&
+          !uiLayerSeedWriterDropsStencilOnly(mixed, 255, true, false) &&
+          !uiLayerSeedWriterDropsStencilOnly(UiDsEffect{}, 255, true, false),
+          "drop-stencil-only never triggers on depth-only seeds, private depth writes, unseeded depth, or depth writers");
     UiLayerPrivateDepthGuard guard;
     check(guard.active(0) && !guard.active(71), "sequence zero/bootstrap remains conservative");
     guard.note(71, true);
@@ -214,9 +224,14 @@ struct FreshWorld {
         const UiDsEffect effect = uiLayerDsEffect(description, true);
         for (Cache& c : caches) {
             if (c.seq != seq || c.source != games[game].tex.Get()) continue;
-            const bool dirty = optimized ? uiLayerSeedWriterInvalidates(effect, c.mask, c.depth,
-                privateDepthGuard.active(seq)) : effect.writes();
-            if (dirty) c.seq = 0; else if (effect.writes()) ++preserved;
+            const bool guardActive = privateDepthGuard.active(seq);
+            const bool dropStencilOnly = optimized && uiLayerSeedWriterDropsStencilOnly(
+                effect, c.mask, c.depth, guardActive);
+            const bool dirty = optimized ? (!dropStencilOnly && uiLayerSeedWriterInvalidates(
+                effect, c.mask, c.depth, guardActive)) : effect.writes();
+            if (dropStencilOnly) { c.mask = 0; ++preserved; }
+            else if (dirty) c.seq = 0;
+            else if (effect.writes()) ++preserved;
         }
         D3D11_DEPTH_STENCIL_VIEW_DESC vd{}; games[game].dsv->GetDesc(&vd); vd.Flags = viewFlags;
         ComPtr<ID3D11DepthStencilView> view;
@@ -474,10 +489,9 @@ void testSeedFreshnessGpu(Gpu& g) {
         check(old.consume(0, 0) && opt.consume(0, 0), "interleaved depth consumers complete");
         compareFreshWorlds(old, opt, 0, 0);
     }
-    const unsigned wanted = opt.seeder.usesSpecifiedStencilRef() ? 4 : 1;
-    check(old.seeds == 4 && opt.seeds == wanted && old.seedCopies == 4 && opt.seedCopies == wanted &&
-          old.seedDraws == 4 && opt.seedDraws == wanted && old.seedClears == 4 && opt.seedClears == wanted,
-          "observed three-writer route removes exactly three copies/draws/clears only on depth-only fallback");
+    check(old.seeds == 4 && opt.seeds == 1 && old.seedCopies == 4 && opt.seedCopies == 1 &&
+          old.seedDraws == 4 && opt.seedDraws == 1 && old.seedClears == 4 && opt.seedClears == 1,
+          "observed three-writer route removes all three redundant copies/draws/clears on both per-bit and specified-stencil-ref seeders");
     check(old.gameWriterCommands == 3 && opt.gameWriterCommands == 3,
           "optimization changes no original source draw command count");
     // Growth reads bit4: a fresh current-source copy must precede its test.

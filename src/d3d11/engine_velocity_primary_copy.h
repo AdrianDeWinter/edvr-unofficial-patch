@@ -147,7 +147,7 @@ inline bool g_poolsDirty=false;
 // the locked walk would act on takes the mutex and does what it always did, from scratch. What the locked path does when no
 // address of the call is a claim and no plan exists is: count, and change nothing else (merge: register an empty plan whose only
 // later effect is a counter, or on a native unwind the revoking of later claims, which the fixed token does more strictly).
-constexpr uint32_t kClaimViewMax=4;
+constexpr uint32_t kClaimViewMax=64;
 struct ClaimView {
     std::atomic<uint32_t> seq{0},count{0};   // count: live claims, or kClaimViewMax+1 when more are live than the view holds
     std::atomic<bool> plans{false};          // a detached merge plan is registered
@@ -158,15 +158,19 @@ struct ClaimViewState {   // the same fields as plain values: the writer's mirro
     uint32_t count=0;bool plans=false;uintptr_t address[kClaimViewMax]{};
     bool operator==(const ClaimViewState& o) const {
         if(count!=o.count || plans!=o.plans)return false;
-        for(uint32_t i=0;i<kClaimViewMax;++i)if(address[i]!=o.address[i])return false;
+        const uint32_t n=count<=kClaimViewMax?count:0u;
+        for(uint32_t i=0;i<n;++i)if(address[i]!=o.address[i])return false;
         return true;
     }
     // Whether any live claim is one of the 8 record slots of the list node `node` at index [first, last).
+    // `address[0..n)` is sorted ascending, so lower_bound jumps straight to the first claim >= records.
     bool holds(uintptr_t node,uint64_t first=0,uint64_t last=8) const {
-        for(uint32_t i=0;i<count && i<kClaimViewMax;++i) {
-            const uintptr_t records=node+emit::kNodeRecords;
-            if(address[i]<records)continue;
-            const uintptr_t offset=address[i]-records;
+        const uint32_t n=count<=kClaimViewMax?count:kClaimViewMax;
+        const uintptr_t records=node+emit::kNodeRecords;
+        const uintptr_t* it=std::lower_bound(address,address+n,records);
+        const uintptr_t limit=records<=UINTPTR_MAX-uintptr_t(8)*kBytes?records+uintptr_t(8)*kBytes:UINTPTR_MAX;
+        for(;it!=address+n && *it<limit;++it) {
+            const uintptr_t offset=*it-records;
             if(offset%kBytes==0 && offset/kBytes>=first && offset/kBytes<last && offset/kBytes<8)return true;
         }
         return false;
@@ -185,7 +189,8 @@ inline bool readClaimView(ClaimViewState& out) noexcept {
     const uint32_t before=g_claimView.seq.load(std::memory_order_acquire);
     if(before&1u)return false;
     out.count=g_claimView.count.load(std::memory_order_relaxed);out.plans=g_claimView.plans.load(std::memory_order_relaxed);
-    for(uint32_t i=0;i<kClaimViewMax;++i)out.address[i]=g_claimView.address[i].load(std::memory_order_relaxed);
+    const uint32_t n=out.count<=kClaimViewMax?out.count:0u;
+    for(uint32_t i=0;i<n;++i)out.address[i]=g_claimView.address[i].load(std::memory_order_relaxed);
 #ifdef EDVR_ENGINE_VELOCITY_RIG
     if(g_claimMidRead)g_claimMidRead();
 #endif
@@ -299,7 +304,8 @@ private:
         g_claimView.seq.store(sequence+1,std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_release);
         g_claimView.count.store(next.count,std::memory_order_relaxed);g_claimView.plans.store(next.plans,std::memory_order_relaxed);
-        for(uint32_t i=0;i<kClaimViewMax;++i)g_claimView.address[i].store(next.address[i],std::memory_order_relaxed);
+        const uint32_t storeCount=next.count<=kClaimViewMax?next.count:0u;
+        for(uint32_t i=0;i<storeCount;++i)g_claimView.address[i].store(next.address[i],std::memory_order_relaxed);
         g_claimView.seq.store(sequence+2,std::memory_order_release);
     }
     static void publish() noexcept {
@@ -511,7 +517,8 @@ inline bool copierClaimCheck(uintptr_t base,uint32_t stride,uintptr_t source,uin
     const uint32_t claims=g_claimView.count.load(std::memory_order_relaxed);
     const bool plans=g_claimView.plans.load(std::memory_order_relaxed);
     uintptr_t claimed[kClaimViewMax];
-    for(uint32_t i=0;i<kClaimViewMax;++i)claimed[i]=g_claimView.address[i].load(std::memory_order_relaxed);
+    const uint32_t loadClaims=claims<=kClaimViewMax?claims:0u;
+    for(uint32_t i=0;i<loadClaims;++i)claimed[i]=g_claimView.address[i].load(std::memory_order_relaxed);
     const uint32_t leases=g_poolView.count.load(std::memory_order_relaxed);
     uint32_t matches=0,slots=0,patchLo=~0u,patchHi=0;
     for(uint32_t i=0;i<leases && leases<=kMaxPools;++i)if(g_poolView.base[i].load(std::memory_order_relaxed)==base) {
@@ -524,9 +531,11 @@ inline bool copierClaimCheck(uintptr_t base,uint32_t stride,uintptr_t source,uin
     std::atomic_thread_fence(std::memory_order_acquire);
     if(g_publishSeq.load(std::memory_order_relaxed)!=before)return declined();
     if(plans || claims>kClaimViewMax || leases>kMaxPools)return declined();
-    for(uint32_t i=0;i<claims && i<kClaimViewMax;++i) {   // (d) a claim in the range: the locked copier consumes it
-        const uintptr_t offset=claimed[i]-source;
-        if(claimed[i]>=source && offset%kBytes==0 && offset/kBytes<count)return false;
+    const uintptr_t rangeEnd=source+uintptr_t(count)*kBytes;
+    const uintptr_t* it=std::lower_bound(claimed,claimed+claims,source);
+    for(;it!=claimed+claims && *it<rangeEnd;++it) {   // (d) a claim in the range: the locked copier consumes it
+        const uintptr_t offset=*it-source;
+        if(offset%kBytes==0 && offset/kBytes<count)return false;
     }
     if(matches>1)return false;   // (a) ambiguous
     if(matches==1) {

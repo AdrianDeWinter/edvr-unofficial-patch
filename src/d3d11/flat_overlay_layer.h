@@ -6,6 +6,7 @@
 // that every following H write up to the consumer is one of these draws.
 #include "dxbc_flat_overlay.h"
 #include "flat_compute_readback.h"
+#include "flat_query_cut.h"
 #include <d3d11_1.h>
 #include <wrl/client.h>
 #include <array>
@@ -495,9 +496,8 @@ public:
         Ptr<ID3D11Predicate> predicate;BOOL predicateValue=FALSE;
         ctx->GetPredication(&predicate,&predicateValue);
         if (predicate) return refuse("predication-bound",reason);
-        ID3D11ClassInstance* classes[256]{};UINT classCount=256;
-        ctx->PSGetShader(&game.ps,classes,&classCount);
-        for (UINT i=0;i<classCount;++i) if (classes[i]) classes[i]->Release();
+        UINT classCount=0;
+        ctx->PSGetShader(&game.ps,nullptr,&classCount);
         if (!game.ps || classCount) return refuse("PS-linkage-or-null",reason);
         ctx->OMGetBlendState(&game.blend,game.factors,&game.sampleMask);
         if(privateReplayMode) {
@@ -542,15 +542,17 @@ public:
             ctx->OMSetRenderTargets(1,&target,replayDsv_.Get());
             ctx->OMSetBlendState(nullptr,nullptr,saved_.sampleMask);
             ctx->PSSetShader(coverage.Get(),nullptr,0);
-            ID3D11RenderTargetView* held[8]{};ID3D11DepthStencilView* heldDsv=nullptr;
-            ctx->OMGetRenderTargets(8,held,&heldDsv);
-            bool kept=held[0]==target && heldDsv==replayDsv_.Get();
-            for(unsigned i=0;i<8;++i) { if(i && held[i])kept=false;if(held[i])held[i]->Release(); }
-            if(heldDsv)heldDsv->Release();
-            Ptr<ID3D11PixelShader> heldPs;ctx->PSGetShader(&heldPs,nullptr,nullptr);
-            Ptr<ID3D11BlendState> heldBlend;UINT heldMask=0;ctx->OMGetBlendState(&heldBlend,nullptr,&heldMask);
-            if(heldPs.Get()!=coverage.Get() || heldBlend || heldMask!=saved_.sampleMask)kept=false;
-            if(!kept) { restore();return refuse("replay-private-bindings-dropped",reason); }
+            if (!completedDraws_ || flatQueryCut().checkingThisFrame()) {
+                ID3D11RenderTargetView* held[8]{};ID3D11DepthStencilView* heldDsv=nullptr;
+                ctx->OMGetRenderTargets(8,held,&heldDsv);
+                bool kept=held[0]==target && heldDsv==replayDsv_.Get();
+                for(unsigned i=0;i<8;++i) { if(i && held[i])kept=false;if(held[i])held[i]->Release(); }
+                if(heldDsv)heldDsv->Release();
+                Ptr<ID3D11PixelShader> heldPs;ctx->PSGetShader(&heldPs,nullptr,nullptr);
+                Ptr<ID3D11BlendState> heldBlend;UINT heldMask=0;ctx->OMGetBlendState(&heldBlend,nullptr,&heldMask);
+                if(heldPs.Get()!=coverage.Get() || heldBlend || heldMask!=saved_.sampleMask)kept=false;
+                if(!kept) { restore();return refuse("replay-private-bindings-dropped",reason); }
+            }
             return true;
         }
         const char* blendWhy=nullptr;
@@ -590,30 +592,33 @@ public:
         ctx->OMSetBlendState(blend.Get(),game.factors,game.sampleMask);
         ctx->PSSetShader(patched.Get(),nullptr,0);
         // Some translation layers silently drop incompatible targets. Verify
-        // the private target before allowing the original game Draw to run.
-        ID3D11RenderTargetView* check[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
-        ID3D11DepthStencilView* checkDepth=nullptr;
-        ctx->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,check,&checkDepth);
-        bool kept=checkDepth==game.dsv.Get();
-        for (UINT i=0;i<D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT;++i) {
-            if (check[i]!=attach[i]) kept=false;
-            if (check[i]) check[i]->Release();
-        }
-        if (checkDepth) checkDepth->Release();
-        Ptr<ID3D11PixelShader> checkPs;
-        ctx->PSGetShader(&checkPs,nullptr,nullptr);
-        if (checkPs.Get()!=patched.Get()) kept=false;
-        Ptr<ID3D11BlendState> checkBlend; FLOAT checkFactors[4]{}; UINT checkMask=0;
-        ctx->OMGetBlendState(&checkBlend,checkFactors,&checkMask);
-        if (checkBlend.Get()!=blend.Get() || checkMask!=game.sampleMask ||
-            std::memcmp(checkFactors,game.factors,sizeof(checkFactors))!=0) kept=false;
-        if (!kept) {
-            ctx->PSSetShader(game.ps.Get(),nullptr,0);
-            ID3D11RenderTargetView* restoreRt[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
-            for (UINT i=0;i<D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT;++i) restoreRt[i]=game.rtv[i].Get();
-            ctx->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,restoreRt,game.dsv.Get());
-            ctx->OMSetBlendState(game.blend.Get(),game.factors,game.sampleMask);
-            return refuse("private-MRT7-PS-or-blend-dropped",reason);
+        // the private target on the first draw of each frame and on sampled
+        // checking frames before allowing the original game Draw to run.
+        if (!completedDraws_ || flatQueryCut().checkingThisFrame()) {
+            ID3D11RenderTargetView* check[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
+            ID3D11DepthStencilView* checkDepth=nullptr;
+            ctx->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,check,&checkDepth);
+            bool kept=checkDepth==game.dsv.Get();
+            for (UINT i=0;i<D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT;++i) {
+                if (check[i]!=attach[i]) kept=false;
+                if (check[i]) check[i]->Release();
+            }
+            if (checkDepth) checkDepth->Release();
+            Ptr<ID3D11PixelShader> checkPs;
+            ctx->PSGetShader(&checkPs,nullptr,nullptr);
+            if (checkPs.Get()!=patched.Get()) kept=false;
+            Ptr<ID3D11BlendState> checkBlend; FLOAT checkFactors[4]{}; UINT checkMask=0;
+            ctx->OMGetBlendState(&checkBlend,checkFactors,&checkMask);
+            if (checkBlend.Get()!=blend.Get() || checkMask!=game.sampleMask ||
+                std::memcmp(checkFactors,game.factors,sizeof(checkFactors))!=0) kept=false;
+            if (!kept) {
+                ctx->PSSetShader(game.ps.Get(),nullptr,0);
+                ID3D11RenderTargetView* restoreRt[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
+                for (UINT i=0;i<D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT;++i) restoreRt[i]=game.rtv[i].Get();
+                ctx->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,restoreRt,game.dsv.Get());
+                ctx->OMSetBlendState(game.blend.Get(),game.factors,game.sampleMask);
+                return refuse("private-MRT7-PS-or-blend-dropped",reason);
+            }
         }
         saved_=std::move(game);active_=true;
         return true;

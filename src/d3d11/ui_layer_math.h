@@ -87,6 +87,36 @@ inline float uiQualityParse(const char* text, bool* recognized, const char** ali
     return 0.0f;
 }
 
+// fix.hud_antialiasing: off | fxaa | smaa (legacy on/1/true/yes -> smaa).
+enum class HudAaMode : uint8_t { kOff = 0, kFxaa = 1, kSmaa = 2 };
+
+inline HudAaMode hudAaParse(const char* raw) {
+    if (!raw) return HudAaMode::kOff;
+    while (*raw == ' ' || *raw == '\t') ++raw;
+    auto eq = [](const char* a, const char* b) {
+        while (*a && *b) {
+            const char ca = *a >= 'A' && *a <= 'Z' ? static_cast<char>(*a - 'A' + 'a') : *a;
+            if (ca != *b) return false;
+            ++a;
+            ++b;
+        }
+        while (*a == ' ' || *a == '\t') ++a;
+        return *a == '\0' && *b == '\0';
+    };
+    if (eq(raw, "fxaa")) return HudAaMode::kFxaa;
+    if (eq(raw, "smaa") || eq(raw, "on") || eq(raw, "1") || eq(raw, "true") || eq(raw, "yes")) return HudAaMode::kSmaa;
+    return HudAaMode::kOff;
+}
+
+inline const char* hudAaName(HudAaMode mode) {
+    switch (mode) {
+        case HudAaMode::kFxaa: return "fxaa";
+        case HudAaMode::kSmaa: return "smaa";
+        case HudAaMode::kOff:
+        default: return "off";
+    }
+}
+
 // The target as the menu and the log say it: "100%", "125%", "150%", else "off".
 inline const char* uiQualityLabel(float target) {
     if (target == 1.0f) return "100%";
@@ -532,6 +562,17 @@ inline bool uiLayerSeedWriterInvalidates(const UiDsEffect& writer, uint8_t seede
                                         bool seededDepth, bool privateDepthWriteThisFrame) {
     return writer.writes() && !(writer.stencilWrite && !writer.depthWrite &&
         seededDepth && !seededMask && !privateDepthWriteThisFrame);
+}
+
+// A stencil-only game write cannot change an unmodified seeded depth plane even
+// when the layer also carries seeded stencil bits (e.g. AMD/Intel SV_StencilRef
+// one-pass seeds always set seededMask = 0xFF). Dropping only seededMask keeps
+// the depth copy alive for subsequent depth-only draws while still forcing a
+// re-seed if a later draw tests any stencil bit.
+inline bool uiLayerSeedWriterDropsStencilOnly(const UiDsEffect& writer, uint8_t seededMask,
+                                              bool seededDepth, bool privateDepthWriteThisFrame) {
+    return writer.stencilWrite && !writer.depthWrite &&
+           seededDepth && seededMask != 0 && !privateDepthWriteThisFrame;
 }
 
 // A repeat seed (the layer is still this frame's copy of this game buffer, and

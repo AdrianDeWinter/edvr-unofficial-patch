@@ -474,6 +474,8 @@ static int generateTemporal(const Options& o) {
     const std::string mapSmaaWeights = mapSmaaSource(edvr::kMapSmaaWeightsHlsl);
     const std::string mapSmaaBlend = mapSmaaSource(edvr::kMapSmaaBlendHlsl);
     const std::string uiLayerSmaaEdges = mapSmaaSource(edvr::kUiLayerSmaaEdgesHlsl);
+    const std::string uiLayerSmaaWeights = mapSmaaSource(edvr::kUiLayerSmaaWeightsHlsl);
+    const std::string uiLayerSmaaBlend = mapSmaaSource(edvr::kUiLayerSmaaBlendHlsl);
     std::vector<Variant> variants = {
         {"kEyeJumpLatticeBytecode", "eye_jump_lattice_cs", "main", nullptr, {}, false, edvr::kEyeJumpLatticeHlsl},
         // F85c: the reticle's hit depth (reticle_depth_shader.h): one thread marches the aim line through an eye's scene depth. Its own source, entry "main".
@@ -521,14 +523,28 @@ static int generateTemporal(const Options& o) {
         {"kFlatMapSmaaEdgesBytecode", "flat_map_smaa_edges_cs", "smaaEdges", nullptr, {}, false, mapSmaaEdges.c_str()},
         {"kFlatMapSmaaWeightsBytecode", "flat_map_smaa_weights_cs", "smaaWeights", nullptr, {}, false, mapSmaaWeights.c_str()},
         {"kFlatMapSmaaBlendBytecode", "flat_map_smaa_blend_cs", "smaaBlend", nullptr, {}, false, mapSmaaBlend.c_str()},
-        // The HUD layer's edge smoothing (ui_layer_smaa_shader.h): the one pass that is not the map's, SMAA's colour edge test over four channels. Its
-        // weights and blend are kFlatMapSmaaWeightsBytecode and kFlatMapSmaaBlendBytecode above (plain SMAA, no colour transform).
+        // The HUD layer's edge smoothing (ui_layer_smaa_shader.h): 32x8 tile-culled indirect-dispatch SMAA over four channels.
         {"kUiLayerSmaaEdgesBytecode", "ui_layer_smaa_edges_cs", "uiSmaaEdges", nullptr, {}, false, uiLayerSmaaEdges.c_str()},
+        {"kUiLayerSmaaWeightsBytecode", "ui_layer_smaa_weights_cs", "uiSmaaWeights", nullptr, {}, false, uiLayerSmaaWeights.c_str()},
+        {"kUiLayerSmaaBlendBytecode", "ui_layer_smaa_blend_cs", "uiSmaaBlend", nullptr, {}, false, uiLayerSmaaBlend.c_str()},
         // The HDR route's pixel-shader half (section 81): the result goes back into the game's HDR target, a render
         // target, so the finish and the spatial recovery are draws: one triangle vertex shader and two pixel shaders.
         {"kFlatMonoHdrVsBytecode", "flat_mono_hdr_vs", "hdrVs", nullptr, {}, true, nullptr, "vs_5_0"},
         {"kFlatMonoFinishHdrBytecode", "flat_mono_finish_hdr_ps", "finishHdr", nullptr, {}, true, nullptr, "ps_5_0"},
-        {"kFlatMonoSpatialHdrBytecode", "flat_mono_spatial_hdr_ps", "spatialHdr", nullptr, {}, true, nullptr, "ps_5_0"}
+        {"kFlatMonoSpatialHdrBytecode", "flat_mono_spatial_hdr_ps", "spatialHdr", nullptr, {}, true, nullptr, "ps_5_0"},
+        // One-shot R32G32_FLOAT -> R32G32B32A32_FLOAT flat marker-plane promotion when ForeignPool first draws mid-frame.
+        {"kFlatMarkerPromoteCsBytecode", "flat_marker_promote_cs", "main", nullptr, {}, false,
+         "Texture2D<float2> src:register(t0);RWTexture2D<float4> dst:register(u0);"
+         "[numthreads(8,8,1)]void main(uint3 id:SV_DispatchThreadID){uint w,h;dst.GetDimensions(w,h);"
+         "if(id.x<w && id.y<h)dst[id.xy]=float4(src.Load(int3(id.xy,0)),0,0);}", "cs_5_0"},
+        // Composite twins reading transmittance alpha directly from the HDR HUD layer (skips crispCoveragePass).
+        {"kUiLayerCompositeHdrAlphaBytecode", "ui_layer_composite_hdr_alpha_cs", "main", nullptr, {}, false,
+         edvr::kUiLayerCompositeHdrAlphaHlsl, "cs_5_0"},
+        {"kUiLayerCompositeInPlaceHdrAlphaBytecode", "ui_layer_composite_inplace_hdr_alpha_cs", "main", nullptr, {}, false,
+         edvr::kUiLayerCompositeInPlaceHdrAlphaHlsl, "cs_5_0"},
+        // Single-pass premultiplied-alpha-aware FXAA over the finished 8-bit UI layer (fix.hud_antialiasing = fxaa).
+        {"kUiLayerFxaaBytecode", "ui_layer_fxaa_cs", "main", nullptr, {}, false,
+         edvr::kUiLayerFxaaHlsl, "cs_5_0"}
     };
     const std::string core = extractCore(edvr::kTemporalCsHlsl); // validate before fixed source assembly
     const auto fixed = fixedVariants(core);

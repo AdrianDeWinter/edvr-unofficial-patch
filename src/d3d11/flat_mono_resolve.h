@@ -401,6 +401,9 @@ bool flatMonoResolve(ID3D11Device*, ID3D11DeviceContext*, const FlatMonoResolveF
 // issues except the two queries.
 using FlatMonoResolveSpanFn = void (*)(ID3D11DeviceContext*) noexcept;
 void flatMonoResolveSetSpanHooks(FlatMonoResolveSpanFn begin, FlatMonoResolveSpanFn end);
+// Optional sub-pass markers inside flatMonoResolve (0=copyBegin, 1=prepBegin, 2=backendBegin, 3=finishBegin, 4=finishEnd).
+using FlatMonoResolveStageFn = void (*)(ID3D11DeviceContext*, uint32_t stage) noexcept;
+void flatMonoResolveSetStageHook(FlatMonoResolveStageFn hook);
 // Recover an already rendered jittered frame after backend refusal. This
 // spatial resolve uses no temporal history or SDK and borrows the same frame
 // inputs; successful output is AddRef'd (on the HDR route it is written into H by a

@@ -103,12 +103,12 @@ inline void run(const lifecycle_tests::Harness& h) {
             h.check(SUCCEEDED(slotsRes.As(&slotsTex)), "source-free: a slot texture");
             D3D11_TEXTURE2D_DESC sd{};
             if (slotsTex) slotsTex->GetDesc(&sd);
-            h.check(sd.Width == 40 && sd.Height == 24 && sd.Format == DXGI_FORMAT_R32G32B32A32_FLOAT,
-                    "source-free: the slot target is the flat marker plane, 40x24 RGBA32F");
+            h.check(sd.Width == 40 && sd.Height == 24 && sd.Format == DXGI_FORMAT_R32G32_FLOAT,
+                    "source-free: the slot target is the flat marker plane, 40x24 RG32F before any ForeignPool draw");
             UINT w = 0;
-            const auto slots = readTexture(h, slotsRes.Get(), 4, &w);
+            const auto slots = readTexture(h, slotsRes.Get(), 2, &w);
             unsigned empty = 0, other = 0;
-            for (size_t i = 0; i + 3 < slots.size(); i += 4) (slots[i] == -1.0f ? empty : other) += 1;
+            for (size_t i = 0; i + 1 < slots.size(); i += 2) (slots[i] == -1.0f ? empty : other) += 1;
             h.check(empty == 40u * 24u && other == 0, "source-free: every texel of the slot target is the empty marker");
             ComPtr<ID3D11Resource> poolRes;
             v2.pool->GetResource(&poolRes);
@@ -202,9 +202,9 @@ inline void run(const lifecycle_tests::Harness& h) {
             UINT w = 0;
             ComPtr<ID3D11Resource> slotsRes;
             v.slots->GetResource(&slotsRes);
-            const auto slots = readTexture(h, slotsRes.Get(), 4, &w);
+            const auto slots = readTexture(h, slotsRes.Get(), 2, &w);
             unsigned stale = 0;
-            for (size_t i = 0; i + 3 < slots.size(); i += 4) stale += slots[i] != -1.0f;
+            for (size_t i = 0; i + 1 < slots.size(); i += 2) stale += slots[i] != -1.0f;
             h.check(stale == 0, "source-free: the markers of the pool-bearing frame before are gone: the plane was cleared for this frame");
             const auto prev = readBuffer(h, v.scenePrev);
             h.check(prev.size() >= 277 * 4 && std::memcmp(&prev[270 * 4], &game.rows[0][270 * 4], sizeof(r1.v)) == 0,

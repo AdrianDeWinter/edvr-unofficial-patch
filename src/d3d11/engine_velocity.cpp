@@ -35,6 +35,7 @@
 #include "engine_motion_cpu.h"   // the CPU instrument: the draw side, apply, the tees and the lazy patches are timed here
 #include "exposure_fix.h"   // lookupShaderHash: the PS shadow probe reads the registry
 #include "flat_compute_readback.h"
+#include "flat_issue_epoch.h"
 #include "flat_query_cut.h"   // the flat bracket's kept answers, and the sampled check of each
 #include "kinematic_eval_hook.h"
 #include "kinematic_eval_probe.h"
@@ -373,9 +374,12 @@ struct FlatMarkerPlane {
     Ptr<ID3D11Texture2D> depth, slots;
     Ptr<ID3D11RenderTargetView> rtv;
     Ptr<ID3D11ShaderResourceView> srv;
+    DXGI_FORMAT format=DXGI_FORMAT_UNKNOWN;
     uint32_t frame=~0u;
+    bool hasPositiveOddWrite=false;
 };
 std::array<FlatMarkerPlane,4> g_flatMarkerPlanes;
+Ptr<ID3D11ComputeShader> g_flatMarkerPromoteCs;
 struct FlatDomainSaved {
     Ptr<ID3D11DeviceContext> context;
     Ptr<ID3D11VertexShader> vs;
@@ -545,8 +549,10 @@ constexpr size_t kCaptureSamples = 4096;
 CaptureTimer g_captureTimers[kCaptureTimers];
 std::vector<double> g_captureMs[kCaptureKinds];
 uint64_t g_captureUntimed = 0, g_captureInvalid = 0;
+uint32_t g_captureSample[kCaptureKinds] = {};   // 1-in-16 GPU timing stride per kind (index 0 always sampled)
 
 int beginCapture(ID3D11DeviceContext* ctx, int kind) {
+    if ((g_captureSample[kind]++ & 15u) != 0) return -1;
     for (int i = 0; i < kCaptureTimers; ++i) {
         CaptureTimer& t = g_captureTimers[i];
         if (t.pending) continue;
@@ -926,11 +932,29 @@ ID3D11PixelShader* guardedOverlayPsFor(ID3D11DeviceContext* ctx, int f, ID3D11Pi
     return patched.Get();
 }
 
+struct HookDepthState {
+    Ptr<ID3D11DepthStencilState> state;
+    bool valid = false;
+};
+HookDepthState g_hookDepthState;
+struct HookBlend {
+    Ptr<ID3D11BlendState> state;
+    float factor[4] = {1.f, 1.f, 1.f, 1.f};
+    UINT mask = ~0u;
+    uint32_t gen = 0;
+    bool valid = false;
+};
+HookBlend g_hookGameBlend;
+
 bool overlayDepthState(ID3D11DeviceContext* ctx) {
     Ptr<ID3D11DepthStencilState> state;
-    UINT reference = 0;
-    ctx->OMGetDepthStencilState(&state, &reference);
-    engineVelocityNoteStateCalls(1);
+    if (runtimeFlatProfile() && g_hookDepthState.valid && !flatIssueEpochFrozen()) {
+        state = g_hookDepthState.state;
+    } else {
+        UINT reference = 0;
+        ctx->OMGetDepthStencilState(&state, &reference);
+        engineVelocityNoteStateCalls(1);
+    }
     if (!state) return false;
     D3D11_DEPTH_STENCIL_DESC d{};
     state->GetDesc(&d);
@@ -946,15 +970,21 @@ bool overlayDepthState(ID3D11DeviceContext* ctx) {
 bool depthWritesOff(ID3D11DeviceContext* ctx) {
     static ID3D11DepthStencilState* lastState = nullptr;
     static bool lastOff = false;
-    Ptr<ID3D11DepthStencilState> state;
-    UINT reference = 0;
-    ctx->OMGetDepthStencilState(&state, &reference);
-    engineVelocityNoteStateCalls(1);
-    if (!state) return false;   // the default state: depth on, writes on
-    if (state.Get() == lastState) return lastOff;
+    Ptr<ID3D11DepthStencilState> ownedState;
+    ID3D11DepthStencilState* rawState = nullptr;
+    if (runtimeFlatProfile() && g_hookDepthState.valid && !flatIssueEpochFrozen()) {
+        rawState = g_hookDepthState.state.Get();
+    } else {
+        UINT reference = 0;
+        ctx->OMGetDepthStencilState(&ownedState, &reference);
+        engineVelocityNoteStateCalls(1);
+        rawState = ownedState.Get();
+    }
+    if (!rawState) return false;   // the default state: depth on, writes on
+    if (rawState == lastState) return lastOff;
     D3D11_DEPTH_STENCIL_DESC d{};
-    state->GetDesc(&d);
-    lastState = state.Get();
+    rawState->GetDesc(&d);
+    lastState = rawState;
     // An EQUAL test with writes off is a material pass over its own depth pre-pass: every fragment it keeps has the buffer's depth, so its
     // slot is the surface's and it stays substituted. Any other test lets a fragment in front of the stored surface through.
     lastOff = !d.DepthEnable || (d.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ZERO && d.DepthFunc != D3D11_COMPARISON_EQUAL);
@@ -973,6 +1003,58 @@ bool gameBlendsTarget0(ID3D11BlendState* state) {
     lastBlends = d.RenderTarget[0].BlendEnable != FALSE;
     return lastBlends;
 }
+
+// 1-in-16 sampled GPU timers for flat engine-motion passes not covered by FrameEngineVelocity (flatMarkerPlane clear and
+// snapshotOverlayBase copy). Reported every 30 s alongside the overlay guard summary; zero steady-state cost.
+struct FlatEngineGpu {
+    static constexpr int kRing = 2;
+    GpuTimer markerClr[kRing], ovlCopy[kRing];
+    bool markerBusy[kRing] = {}, ovlBusy[kRing] = {};
+    int markerOpen = -1, ovlOpen = -1;
+    uint32_t markerCadence = 0, ovlCadence = 0;
+    uint32_t markerN = 0, ovlN = 0;
+    double markerMs = 0.0, ovlMs = 0.0;
+    static void beginOne(ID3D11DeviceContext* ctx, GpuTimer* ring, bool* busy, int& open, uint32_t& cadence) {
+        if (!ctx || !runtimeFlatProfile() || open >= 0) return;
+        if ((cadence++ & 15u) != 0) return;
+        Ptr<ID3D11Device> dev;
+        ctx->GetDevice(&dev);
+        if (!dev) return;
+        for (int i = 0; i < kRing; ++i) {
+            if (busy[i]) continue;
+            if (ring[i].begin(dev.Get(), ctx)) { busy[i] = true; open = i; return; }
+            break;
+        }
+    }
+    static void endOne(ID3D11DeviceContext* ctx, GpuTimer* ring, int& open) {
+        if (open < 0 || !ctx) return;
+        ring[open].end(ctx);
+        open = -1;
+    }
+    static void pollOne(ID3D11DeviceContext* ctx, GpuTimer* ring, bool* busy, int open, uint32_t& n, double& sum) {
+        if (!ctx) return;
+        double ms = 0.0;
+        for (int i = 0; i < kRing; ++i) {
+            if (!busy[i] || i == open) continue;
+            const GpuTimerPoll r = ring[i].poll(ctx, ms);
+            if (r == GpuTimerPoll::Ready) { ++n; sum += ms; busy[i] = false; }
+            else if (r == GpuTimerPoll::Invalid) { busy[i] = false; }
+        }
+    }
+    void poll(ID3D11DeviceContext* ctx) {
+        pollOne(ctx, markerClr, markerBusy, markerOpen, markerN, markerMs);
+        pollOne(ctx, ovlCopy, ovlBusy, ovlOpen, ovlN, ovlMs);
+    }
+    void reset(ID3D11DeviceContext* ctx) {
+        for (int i = 0; i < kRing; ++i) {
+            markerClr[i].reset(ctx); ovlCopy[i].reset(ctx);
+            markerBusy[i] = ovlBusy[i] = false;
+        }
+        markerOpen = ovlOpen = -1;
+        markerN = ovlN = 0;
+        markerMs = ovlMs = 0.0;
+    }
+} g_flatEngineGpu;
 
 bool snapshotOverlayBase(ID3D11DeviceContext* ctx, Eye& e) {
     if (!e.slots || !e.slotsRtv || !e.width || !e.height) return false;
@@ -1008,10 +1090,14 @@ bool snapshotOverlayBase(ID3D11DeviceContext* ctx, Eye& e) {
     ctx->PSGetShaderResources(kEngineVelocityOverlaySnapshotSlot, 1, &boundSrv);
     engineVelocityNoteStateCalls(1);
     if (boundSrv.Get() == e.overlayBaseSrv.Get()) return false;
+    FlatEngineGpu::beginOne(ctx, g_flatEngineGpu.ovlCopy, g_flatEngineGpu.ovlBusy, g_flatEngineGpu.ovlOpen, g_flatEngineGpu.ovlCadence);
     ctx->CopyResource(e.overlayBase.Get(), e.slots.Get());
+    FlatEngineGpu::endOne(ctx, g_flatEngineGpu.ovlCopy, g_flatEngineGpu.ovlOpen);
+    g_flatEngineGpu.poll(ctx);
     engineVelocityNoteStateCalls(1);
     ++g_draw.overlayCopies;
-    g_draw.overlayBytes += uint64_t(e.width) * e.height * 8u;
+    const uint64_t slotBpp = e.slotFormat == DXGI_FORMAT_R32G32B32A32_FLOAT ? 16u : 8u;
+    g_draw.overlayBytes += uint64_t(e.width) * e.height * slotBpp;
     return true;
 }
 
@@ -1154,6 +1240,24 @@ struct KeptMemo {
     bool valid = false;
 };
 KeptMemo g_keptMemo;
+// Single-entry memo for slowPath's dsv->GetResource() lookup (owner thread, cleared on frame end / abandon / clear).
+struct SourceDepthMemo {
+    uint32_t dsvGen = 0;
+    Ptr<ID3D11DepthStencilView> dsv;
+    Ptr<ID3D11Resource> res;
+    bool valid = false;
+};
+SourceDepthMemo g_sourceDepthMemo;
+// Cached ID3D11DeviceContext1 QI for ForeignPool token CB save/restore (under g_mutex, cleared on clear / abandon).
+struct FlatDomainCtx1Cache {
+    Ptr<ID3D11DeviceContext> raw;
+    Ptr<ID3D11DeviceContext1> ctx1;
+    bool queried = false;
+};
+FlatDomainCtx1Cache g_flatDomainCtx1;
+// Last context/auxStageEpoch where GS/HS/DS/Predication were proven null in engineVelocityFlatDomainBeginDraw (under g_mutex).
+ID3D11DeviceContext* g_flatAuxNullCtx = nullptr;
+uint64_t g_flatAuxNullEpoch = 0;
 
 // The game's render-target set as the context holds it now: eight views and the depth view, MRT6 only when it is
 // EDVR's own (which is then not part of the set, and reported by the flag).
@@ -1186,6 +1290,7 @@ void flatSaveTargets(ID3D11DeviceContext* ctx) {
     const bool held = g_flatGame.saved && g_flatGame.rtvGen == rtvGen && g_flatGame.dsvGen == dsvGen;
     FlatQueryPlan plan = FlatQueryPlan::Ask;
     if (held) {
+        if (!flatQueryCut().checkingThisFrame() && !flatQueryCut().fellBack(FlatQuery::GameTargets)) return;
         plan = flatQueryCut().plan(FlatQuery::GameTargets);
         if (plan == FlatQueryPlan::Shortcut) return;
     }
@@ -1284,7 +1389,10 @@ void invalidate(Eye& e, Invalid why) {
 }
 
 // --- The eye pass --------------------------------------------------------------
-FlatMarkerPlane* flatMarkerPlane(ID3D11DeviceContext* ctx, ID3D11Texture2D* depth) {
+// Flat marker planes start as R32G32_FLOAT (halving clear, MRT6 write, overlay-guard copy, and prep read bandwidth
+// across all ship/cockpit/SRV scenes without ForeignPool draws) and promote losslessly to R32G32B32A32_FLOAT only
+// when ForeignPool provenance actually draws onto that depth target.
+FlatMarkerPlane* flatMarkerPlane(ID3D11DeviceContext* ctx, ID3D11Texture2D* depth, bool needProvenance = false) {
     if(!ctx || !depth)return nullptr;
     D3D11_TEXTURE2D_DESC dd{};depth->GetDesc(&dd);
     if(dd.SampleDesc.Count!=1 || dd.ArraySize!=1){++g_draw.depthUnsupported;return nullptr;}
@@ -1299,9 +1407,10 @@ FlatMarkerPlane* flatMarkerPlane(ID3D11DeviceContext* ctx, ID3D11Texture2D* dept
         // A current-frame marker, or either source-depth pin, is never evicted.
         if(!plane)return nullptr;
         *plane=FlatMarkerPlane{};
+        const DXGI_FORMAT fmt=needProvenance?DXGI_FORMAT_R32G32B32A32_FLOAT:DXGI_FORMAT_R32G32_FLOAT;
         D3D11_TEXTURE2D_DESC d{};
         d.Width=dd.Width;d.Height=dd.Height;d.MipLevels=1;d.ArraySize=1;d.SampleDesc.Count=1;
-        d.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;d.Usage=D3D11_USAGE_DEFAULT;
+        d.Format=fmt;d.Usage=D3D11_USAGE_DEFAULT;
         d.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
         Ptr<ID3D11Device> dev;ctx->GetDevice(&dev);
         if(FAILED(dev->CreateTexture2D(&d,nullptr,&plane->slots)) ||
@@ -1310,10 +1419,65 @@ FlatMarkerPlane* flatMarkerPlane(ID3D11DeviceContext* ctx, ID3D11Texture2D* dept
             *plane=FlatMarkerPlane{};++g_draw.createFailed;return nullptr;
         }
         plane->depth=depth;
+        plane->format=fmt;
+    } else if(needProvenance && plane->format!=DXGI_FORMAT_R32G32B32A32_FLOAT) {
+        Ptr<ID3D11Device> dev;ctx->GetDevice(&dev);
+        D3D11_TEXTURE2D_DESC d{};
+        d.Width=dd.Width;d.Height=dd.Height;d.MipLevels=1;d.ArraySize=1;d.SampleDesc.Count=1;
+        d.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;d.Usage=D3D11_USAGE_DEFAULT;
+        d.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_UNORDERED_ACCESS;
+        Ptr<ID3D11Texture2D> nextSlots;Ptr<ID3D11RenderTargetView> nextRtv;
+        Ptr<ID3D11ShaderResourceView> nextSrv;Ptr<ID3D11UnorderedAccessView> nextUav;
+        if(FAILED(dev->CreateTexture2D(&d,nullptr,&nextSlots)) ||
+           FAILED(dev->CreateRenderTargetView(nextSlots.Get(),nullptr,&nextRtv)) ||
+           FAILED(dev->CreateShaderResourceView(nextSlots.Get(),nullptr,&nextSrv)) ||
+           FAILED(dev->CreateUnorderedAccessView(nextSlots.Get(),nullptr,&nextUav))) {
+            ++g_draw.createFailed;return nullptr;
+        }
+        if(plane->frame==frame && plane->srv) {
+            if(!g_flatMarkerPromoteCs) {
+                t_creating=true;
+                dev->CreateComputeShader(kFlatMarkerPromoteCsBytecode,sizeof(kFlatMarkerPromoteCsBytecode),nullptr,&g_flatMarkerPromoteCs);
+                t_creating=false;
+            }
+            if(!g_flatMarkerPromoteCs){++g_draw.createFailed;return nullptr;}
+            FlatComputeInternalScope internal;
+            Ptr<ID3D11ComputeShader> oldCs;ctx->CSGetShader(&oldCs,nullptr,nullptr);
+            Ptr<ID3D11ShaderResourceView> oldSrv;ctx->CSGetShaderResources(0,1,&oldSrv);
+            Ptr<ID3D11UnorderedAccessView> oldUav;ctx->CSGetUnorderedAccessViews(0,1,&oldUav);
+            ID3D11ShaderResourceView* inSrv=plane->srv.Get();
+            ID3D11UnorderedAccessView* outUav=nextUav.Get();
+            ctx->CSSetShader(g_flatMarkerPromoteCs.Get(),nullptr,0);
+            ctx->CSSetShaderResources(0,1,&inSrv);
+            ctx->CSSetUnorderedAccessViews(0,1,&outUav,nullptr);
+            ctx->Dispatch((dd.Width+7)/8,(dd.Height+7)/8,1);
+            ID3D11ShaderResourceView* restoreSrv=oldSrv.Get();
+            ID3D11UnorderedAccessView* restoreUav=oldUav.Get();
+            ctx->CSSetUnorderedAccessViews(0,1,&restoreUav,nullptr);
+            ctx->CSSetShaderResources(0,1,&restoreSrv);
+            ctx->CSSetShader(oldCs.Get(),nullptr,0);
+        } else {
+            const float empty[4]={-1,0,0,0};ctx->ClearRenderTargetView(nextRtv.Get(),empty);
+            plane->frame=frame;
+            plane->hasPositiveOddWrite=false;
+        }
+        plane->slots=std::move(nextSlots);plane->rtv=std::move(nextRtv);plane->srv=std::move(nextSrv);
+        plane->format=DXGI_FORMAT_R32G32B32A32_FLOAT;
+        Eye& se=g_eyes[kEngineVelocitySourceEye];
+        if(se.depth.Get()==depth) {
+            se.overlayBase.Reset();se.overlayBaseSrv.Reset();se.overlayGroup=false;
+            se.slots=plane->slots;se.slotsRtv=plane->rtv;se.slotsSrv=plane->srv;
+            se.slotFormat=plane->format;
+        }
     }
     if(plane->frame!=frame) {
-        const float empty[4]={-1,0,0,0};ctx->ClearRenderTargetView(plane->rtv.Get(),empty);
+        const float empty[4]={-1,0,0,0};
+        FlatEngineGpu::beginOne(ctx, g_flatEngineGpu.markerClr, g_flatEngineGpu.markerBusy, g_flatEngineGpu.markerOpen, g_flatEngineGpu.markerCadence);
+        ctx->ClearRenderTargetView(plane->rtv.Get(),empty);
+        FlatEngineGpu::endOne(ctx, g_flatEngineGpu.markerClr, g_flatEngineGpu.markerOpen);
+        g_flatEngineGpu.poll(ctx);
         plane->frame=frame;
+        plane->hasPositiveOddWrite=false;
     }
     return plane;
 }
@@ -1360,7 +1524,7 @@ bool ensureSlots(ID3D11DeviceContext* ctx, Eye& e, int eye, ID3D11Texture2D* dep
             e.overlayBase.Reset();e.overlayBaseSrv.Reset();e.overlayGroup=false;
             e.gameMark.Reset();e.gameMarkSrv.Reset();e.gameMarkFrame=~0u;
             e.depth=depth;e.slots=plane->slots;e.slotsRtv=plane->rtv;e.slotsSrv=plane->srv;
-            e.width=dd.Width;e.height=dd.Height;e.slotFormat=DXGI_FORMAT_R32G32B32A32_FLOAT;
+            e.width=dd.Width;e.height=dd.Height;e.slotFormat=plane->format;
         }
         return true;
     }
@@ -1401,10 +1565,12 @@ bool ensureSlots(ID3D11DeviceContext* ctx, Eye& e, int eye, ID3D11Texture2D* dep
     // When the slot target was made, for the flight's timeline (the depth
     // pair is re-created on boarding, and this follows it).
     if (eye == kEngineVelocitySourceEye)
-        Log::get().note("engine motion: on-foot source slot target %s %ux%u R32G32 (%.1f MB) for the source depth %p at "
+        Log::get().note("engine motion: on-foot source slot target %s %ux%u %s (%.1f MB) for the source depth %p at "
                         "present frame %u -- the 2D screen's scene is drawn there, not in the eyes, so its pool draws "
                         "record slot and depth here%s.", wasDepth ? "re-created" : "created", dd.Width, dd.Height,
-                        double(dd.Width) * dd.Height * 8.0 / 1e6, static_cast<const void*>(depth),
+                        slotFormat == DXGI_FORMAT_R32G32B32A32_FLOAT ? "R32G32B32A32" : "R32G32",
+                        double(dd.Width) * dd.Height * (slotFormat == DXGI_FORMAT_R32G32B32A32_FLOAT ? 16.0 : 8.0) / 1e6,
+                        static_cast<const void*>(depth),
                         frameNow(), wasDepth ? " (the source was re-made)" : "");
     else if (wasDepth)
         Log::get().note("engine motion: eye %d slot target re-created %ux%u for depth texture %p (was %ux%u for %p) at "
@@ -1697,18 +1863,25 @@ bool bindTarget(ID3D11DeviceContext* ctx, Eye& e, ID3D11DepthStencilView* dsv) {
     }
     if (bound != dsv) return false;
     if (rt[kEngineVelocityTarget] && rt[kEngineVelocityTarget] != e.slotsRtv.Get()) { ++g_draw.targetOccupied; return false; }
-    ID3D11UnorderedAccessView* uav[8] = {};
-    ctx->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 8, uav);
-    engineVelocityNoteStateCalls(1);
-    bool anyUav = false;
-    for (auto* u : uav) if (u) { anyUav = true; u->Release(); }
-    if (anyUav) { ++g_draw.uavBound; return false; }
+    const bool remembered = g_flatGame.saved && g_keptMemo.valid && g_keptMemo.rtvGen == rtvGenNow && g_keptMemo.dsvGen == dsvGenNow;
+    const FlatQueryPlan plan = remembered ? flatQueryCut().plan(FlatQuery::TargetsKept) : FlatQueryPlan::Ask;
+    const bool shortcutValidated = plan == FlatQueryPlan::Shortcut && flatOmUavKnownZero() && !flatIssueEpochFrozen();
+    if (!shortcutValidated) {
+        ID3D11UnorderedAccessView* uav[8] = {};
+        ctx->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 8, uav);
+        engineVelocityNoteStateCalls(1);
+        bool anyUav = false;
+        for (auto* u : uav) if (u) { anyUav = true; u->Release(); }
+        if (anyUav) { ++g_draw.uavBound; return false; }
+    }
     if (rt[kEngineVelocityTarget] == e.slotsRtv.Get()) {
         e.skinBound = e.skinRtv && rt[kSkinTarget] == e.skinRtv.Get();
         return true;
     }
-    const EngineVelocityBindRefusal refusal = engineVelocityValidateTargets(rt, dsv, e.width, e.height);
-    if (refusal != EngineVelocityBindRefusal::None) { ++g_draw.bindRefused[static_cast<int>(refusal)]; return false; }
+    if (!shortcutValidated) {
+        const EngineVelocityBindRefusal refusal = engineVelocityValidateTargets(rt, dsv, e.width, e.height);
+        if (refusal != EngineVelocityBindRefusal::None) { ++g_draw.bindRefused[static_cast<int>(refusal)]; return false; }
+    }
     rt[kEngineVelocityTarget] = e.slotsRtv.Get();
     // F2: target 7 joins it where the game has nothing there (the same size by construction; it is not the game's to refuse).
     ID3D11RenderTargetView* const gameRt7 = rt[kSkinTarget];
@@ -1723,8 +1896,6 @@ bool bindTarget(ID3D11DeviceContext* ctx, Eye& e, ID3D11DepthStencilView* dsv) {
     // The runtime drops a set it cannot take; then the game's own goes back. It takes or drops a given set the
     // same way every time, so the read-back that says which is made once per binding (the same set under the same
     // generations), and again on the sampled frames to check that.
-    const bool remembered = g_flatGame.saved && g_keptMemo.valid && g_keptMemo.rtvGen == rtvGenNow && g_keptMemo.dsvGen == dsvGenNow;
-    const FlatQueryPlan plan = remembered ? flatQueryCut().plan(FlatQuery::TargetsKept) : FlatQueryPlan::Ask;
     bool kept = true;
     if (plan != FlatQueryPlan::Shortcut) {
         ID3D11RenderTargetView* now[8] = {};
@@ -1863,10 +2034,22 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     // On foot no pool draw targets an eye: the source pass is a pool family
     // draw into the depth screen_motion named this frame or the last two.
     bool sourcePass = false;
+    ID3D11Resource* sourceDepthRaw = nullptr;
     if (!eyePass && f >= 0 && dsv && g_sourceDepth && frameNow() - g_sourceNoted <= 2u) {
-        Ptr<ID3D11Resource> depthRes;
-        dsv->GetResource(&depthRes);
-        sourcePass = depthRes.Get() == static_cast<ID3D11Resource*>(g_sourceDepth.Get());
+        const uint32_t dsvGenNow = bindingGeneration(BindSlot::Dsv0);
+        if (g_sourceDepthMemo.valid && g_sourceDepthMemo.dsvGen == dsvGenNow &&
+            g_sourceDepthMemo.dsv.Get() == dsv) {
+            sourceDepthRaw = g_sourceDepthMemo.res.Get();
+        } else {
+            Ptr<ID3D11Resource> res;
+            dsv->GetResource(&res);
+            g_sourceDepthMemo.dsv = dsv;
+            g_sourceDepthMemo.res = res;
+            g_sourceDepthMemo.dsvGen = dsvGenNow;
+            g_sourceDepthMemo.valid = true;
+            sourceDepthRaw = g_sourceDepthMemo.res.Get();
+        }
+        sourcePass = sourceDepthRaw == static_cast<ID3D11Resource*>(g_sourceDepth.Get());
         if (sourcePass) eye = kEngineVelocitySourceEye;
     }
     // The overlay pair: decal-like draws of vs_BBE5 / ps_DB3E whose depth state tests GEQUAL and writes no depth, so their MRT6 write carries a depth
@@ -1946,8 +2129,8 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     const bool newFrame = e.frame != frame;
     Ptr<ID3D11Texture2D> depthTex;
     if (newFrame || e.bindingStale || e.rtvGen != cache.rtv || e.dsvGen != cache.dsv) {
-        Ptr<ID3D11Resource> depthRes;
-        dsv->GetResource(&depthRes);
+        Ptr<ID3D11Resource> depthRes = sourceDepthRaw;
+        if (!depthRes) dsv->GetResource(&depthRes);
         if (!depthRes || FAILED(depthRes.As(&depthTex))) { restore(ctx); return; }
     }
     if (newFrame) {
@@ -1961,9 +2144,12 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
         e.overlayGroup = false;
         e.rtvGen = e.dsvGen = 0;
         e.bindingStale = false;
+        // In flat profile, flatMarkerPlane() already cleared the slot target on first use this frame and target 7 is
+        // never created; skip opening a dead GpuTimer + census span around an empty no-op.
+        const bool needEyeClear = !runtimeFlatProfile() || (e.skinRtv && eye != kEngineVelocitySourceEye);
         const float cleared[4] = {-1.0f, 0.0f, 0.0f, 0.0f};
-        const int clearTimer = beginCapture(ctx, kCaptureClear);
-        {
+        const int clearTimer = needEyeClear ? beginCapture(ctx, kCaptureClear) : -1;
+        if (needEyeClear) {
             // The census (issue #38): the eye-frame's clear, its own span --
             // a separate call site from the snapshot below, not merged with it.
             GpuCensusScope census(ctx, GpuCensusSection::FrameEngineVelocity);
@@ -1996,22 +2182,33 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
         checkSources(ctx, e, eye);
         if (e.invalid) { e.overlayGroup = false; restore(ctx); return; }
     }
+    // If no positive odd slot has been written onto this flat plane yet this frame, every pixel has slots.x <= 0, so
+    // the guarded shader's (base.x == slotCode >= 1) check is mathematically false everywhere; skip the full-frame copy.
+    bool flatPlaneCleanForOverlay = false;
+    if (overlayPair && runtimeFlatProfile() && eye == kEngineVelocitySourceEye && !(e.overlayGroup && e.overlayBaseSrv)) {
+        for (const auto& plane : g_flatMarkerPlanes) {
+            if (plane.depth.Get() == e.depth.Get() && plane.frame == frame) {
+                flatPlaneCleanForOverlay = !plane.hasPositiveOddWrite;
+                break;
+            }
+        }
+    }
     bool guardOverlay = false;
     // The overlay guard's base snapshot wants the game's own bindings (no MRT6 over the slot target, no
     // private t3): a run of substituted draws kept bound lazily is put back first, as the per-draw
     // restore always had before this draw. The cache is left alone -- this visit is under way.
     // Only when a NEW snapshot is to be copied: a draw of the group whose snapshot exists draws with the private t3 as it is (lazy guard, round 4).
-    if (overlayPair && g_flatPending.load(std::memory_order_relaxed) && !(e.overlayGroup && e.overlayBaseSrv)) {
+    if (overlayPair && !flatPlaneCleanForOverlay && g_flatPending.load(std::memory_order_relaxed) && !(e.overlayGroup && e.overlayBaseSrv)) {
         ++g_draw.flatFlushBy[static_cast<unsigned>(EngineVelocityFlushCause::kOverlay)];
         flatRestoreLocked(ctx);
         e.bindingStale = true;   // MRT6 went: the binding below is made again, and needs the depth texture it reads
         if (!depthTex) {
-            Ptr<ID3D11Resource> depthRes;
-            dsv->GetResource(&depthRes);
+            Ptr<ID3D11Resource> depthRes = sourceDepthRaw;
+            if (!depthRes) dsv->GetResource(&depthRes);
             if (!depthRes || FAILED(depthRes.As(&depthTex))) { restore(ctx); return; }
         }
     }
-    if (overlayPair) {
+    if (overlayPair && !flatPlaneCleanForOverlay) {
         if (!overlayDepthState(ctx)) {
             e.overlayGroup = false;
             ++g_draw.overlayDeclinedState;
@@ -2032,6 +2229,20 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     }
     // A draw that is not a guarded overlay draw sees the game's t3, not the group's private one (the lazy guard keeps it bound across the group).
     if (!guardOverlay && g_bound.guardSrv3) guardRestoreT3(ctx);
+    // Early-out blended depthless draws BEFORE bindTarget / derived blend when the game's blend state is already tracked.
+    if (!overlayPair && runtimeFlatProfile() && g_flatGame.saved) {
+        const uint32_t blendGenNow = bindingGeneration(BindSlot::Blend);
+        const bool derivedNow = g_bound.derivedBlend && blendGenNow == g_bound.blendGen;
+        ID3D11BlendState* knownGameBlend = nullptr;
+        if (derivedNow) knownGameBlend = g_bound.gameBlend.Get();
+        else if (g_gameBlendMemo.valid && g_gameBlendMemo.gen == blendGenNow) knownGameBlend = g_gameBlendMemo.state.Get();
+        else if (g_hookGameBlend.valid && g_hookGameBlend.gen == blendGenNow) knownGameBlend = g_hookGameBlend.state.Get();
+        if (knownGameBlend && gameBlendsTarget0(knownGameBlend) && depthWritesOff(ctx)) {
+            ++g_draw.depthlessDeclined; g_draw.depthlessVs = vsHash; g_draw.depthlessPs = psHash;
+            restore(ctx);
+            return;
+        }
+    }
     if (e.bindingStale || e.rtvGen != cache.rtv || e.dsvGen != cache.dsv) {
         // Another pass binding of the same eye-frame must draw into the same
         // depth the slot target was made for.
@@ -2071,6 +2282,14 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
         // does not read it again; the sampled frames read it as well and compare.
         const uint32_t blendGenNow = bindingGeneration(BindSlot::Blend);
         const bool flat = runtimeFlatProfile() && g_flatGame.saved;   // the lazy bracket's draw, not VR's
+        if (flat && !(g_gameBlendMemo.valid && g_gameBlendMemo.gen == blendGenNow) &&
+            g_hookGameBlend.valid && g_hookGameBlend.gen == blendGenNow) {
+            g_gameBlendMemo.state = g_hookGameBlend.state;
+            std::memcpy(g_gameBlendMemo.factor, g_hookGameBlend.factor, sizeof(g_gameBlendMemo.factor));
+            g_gameBlendMemo.mask = g_hookGameBlend.mask;
+            g_gameBlendMemo.gen = blendGenNow;
+            g_gameBlendMemo.valid = true;
+        }
         const bool remembered = flat && g_gameBlendMemo.valid && g_gameBlendMemo.gen == blendGenNow;
         const FlatQueryPlan plan = remembered ? flatQueryCut().plan(FlatQuery::GameBlend) : FlatQueryPlan::Ask;
         if (derivedBound) {
@@ -2102,6 +2321,12 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
                 g_gameBlendMemo.valid = true;
             }
         }
+        // Check depthWritesOff BEFORE deriving/binding MRT6 blend state so declined draws avoid redundant OMSetBlendState + restore.
+        if (!overlayPair && gameBlendsTarget0(game.Get()) && depthWritesOff(ctx)) {
+            ++g_draw.depthlessDeclined; g_draw.depthlessVs = vsHash; g_draw.depthlessPs = psHash;
+            restore(ctx);
+            return;
+        }
         const char* refused = nullptr;
         ID3D11BlendState* derived = derivedBlendFor(ctx, game.Get(), &refused, false, skinMode);
         if (!derived) {
@@ -2121,13 +2346,8 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
         ++g_draw.blendApplied;
     }
     // 2026-11-20 (the shop glass, docs/fsr-upscaler-design-2026-09-16.md journal): a blended keyed draw that writes no depth is not substituted,
-    // outside the overlay pair's guard above. Its MRT6 write would carry its own depth over the surface the depth buffer still holds (the station
-    // glass 5B4D/4375, alpha-blended a centimetre in front of a board: about 460 stale pixels of a 33x33 probe, every one the glass's record,
-    // depth 1.6e-6 farther than stored), so every pixel behind it is a stale slot and its high-contrast edges show the raw frame on the jitter
-    // phases the depth check refuses. A slot must describe the surface in the depth buffer; drawn as the game's, the draw writes none and the
-    // surface behind keeps its own. Asked only of a draw whose game blend state blends target 0 (the blend object's own description, no
-    // context call), so the opaque producers' context calls stay as the flat lazy census measured them.
-    if (!overlayPair && gameBlendsTarget0(g_bound.gameBlend.Get()) && depthWritesOff(ctx)) {
+    // outside the overlay pair's guard above. Checked above before derived blend; keep this check for the derivedBound == true path.
+    if (derivedBound && !overlayPair && gameBlendsTarget0(g_bound.gameBlend.Get()) && depthWritesOff(ctx)) {
         ++g_draw.depthlessDeclined; g_draw.depthlessVs = vsHash; g_draw.depthlessPs = psHash;
         restore(ctx);   // puts the game's shaders and blend back and resets g_bound, so the next substituted draw derives ours again
         return;
@@ -2238,6 +2458,14 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     // The eye is usable only now: a draw that exports ownership is about to
     // be issued (MRT6 bound alone once counted as written).
     e.written = true;
+    if (runtimeFlatProfile() && eye == kEngineVelocitySourceEye) {
+        for (auto& plane : g_flatMarkerPlanes) {
+            if (plane.depth.Get() == e.depth.Get() && plane.frame == frame) {
+                plane.hasPositiveOddWrite = true;
+                break;
+            }
+        }
+    }
     if (e.substFrame != frame) { e.substFrame = frame; ++g_draw.eyeFramesSubstituted; }
     // When substitution starts again after a quiet stretch, for the flight's
     // timeline (boarding, a scene change).
@@ -2624,6 +2852,14 @@ void summaryLocked(uint64_t now, ID3D11DeviceContext* ctx) {
                         "declined state %llu, resource %llu, shader %llu.",
                         runtimeFlatProfile() ? "flat " : "", u(g_draw.overlayCopies), double(g_draw.overlayBytes) / 1e6, u(g_draw.overlayGuardedDraws + g_guardedFast),
                         u(g_draw.overlayDeclinedState), u(g_draw.overlayDeclinedCreate), u(g_draw.overlayDeclinedShader));
+    if (runtimeFlatProfile() && (g_flatEngineGpu.markerN || g_flatEngineGpu.ovlN)) {
+        const double mAvg = g_flatEngineGpu.markerN ? g_flatEngineGpu.markerMs / g_flatEngineGpu.markerN : 0.0;
+        const double oAvg = g_flatEngineGpu.ovlN ? g_flatEngineGpu.ovlMs / g_flatEngineGpu.ovlN : 0.0;
+        Log::get().note("flat engine gpu 30s: samples=%u/%u marker-clr=%.3f ovl-copy=%.3f ms",
+                        g_flatEngineGpu.markerN, g_flatEngineGpu.ovlN, mAvg, oAvg);
+        g_flatEngineGpu.markerN = g_flatEngineGpu.ovlN = 0;
+        g_flatEngineGpu.markerMs = g_flatEngineGpu.ovlMs = 0.0;
+    }
     if (g_draw.depthlessDeclined)
         Log::get().note("engine motion: %skeyed draws that write no depth, drawn as the game's (their slot would not be the depth's surface): %llu, "
                         "last vs %016llX ps %016llX.",
@@ -2681,7 +2917,7 @@ void releasePrimaryPoolsLocked() {
 }
 
 void clearLocked() {
-    g_flatDomainSaved={};g_flatDomainShaders.clear();g_flatDomainTokenBuffer.Reset();
+    g_flatDomainSaved={};g_flatDomainShaders.clear();g_flatDomainTokenBuffer.Reset();g_flatMarkerPromoteCs.Reset();
     for(auto& plane:g_flatMarkerPlanes)plane=FlatMarkerPlane{};
     releasePrimaryPoolsLocked();
     for (auto& e : g_eyes) e = Eye{};
@@ -2709,7 +2945,13 @@ void clearLocked() {
     // own references to the blend states, so the cache can go.
     g_blends.clear();
     g_gameBlendMemo = GameBlendMemo{};   // a held reference to the game's blend state must not outlive the session
+    g_hookGameBlend = HookBlend{};
+    g_hookDepthState = HookDepthState{};
     g_keptMemo = KeptMemo{};
+    g_sourceDepthMemo = SourceDepthMemo{};
+    g_flatDomainCtx1 = FlatDomainCtx1Cache{};
+    g_flatAuxNullCtx = nullptr;
+    g_flatAuxNullEpoch = 0;
     cache = DrawCache{};
     if (g_table) g_table->clear();
     if (g_census) g_census->clear();
@@ -2723,13 +2965,6 @@ void clearLocked() {
 // What the OM hooks last set, held so a foreground capture can skip OMGet.
 // Owner thread. Cleared on bindingForgetAll (ClearState, a command list that does not restore).
 // A frame boundary bumps the binding generation and does not clear this: the next read misses, asks once, and stores again.
-struct HookBlend {
-    Ptr<ID3D11BlendState> state;
-    float factor[4] = {1.f, 1.f, 1.f, 1.f};
-    UINT mask = ~0u;
-    uint32_t gen = 0;
-    bool valid = false;
-};
 HookBlend g_hookBlend;
 struct HookTargets {
     Ptr<ID3D11RenderTargetView> rtv[6];
@@ -2744,6 +2979,8 @@ using namespace engine_velocity_detail;
 
 void flatOmForget() {
     g_hookBlend = HookBlend{};
+    g_hookGameBlend = HookBlend{};
+    g_hookDepthState = HookDepthState{};
     g_hookTargets = HookTargets{};
 }
 
@@ -2754,6 +2991,20 @@ void flatOmNoteBlend(ID3D11BlendState* state, const float factor[4], unsigned in
     g_hookBlend.mask = mask;
     g_hookBlend.gen = bindingGeneration(BindSlot::Blend);
     g_hookBlend.valid = true;
+}
+
+void flatOmNoteGameBlend(ID3D11BlendState* state, const float factor[4], unsigned int mask) {
+    const float ones[4] = {1.f, 1.f, 1.f, 1.f};
+    g_hookGameBlend.state = state;
+    std::memcpy(g_hookGameBlend.factor, factor ? factor : ones, 4 * sizeof(float));
+    g_hookGameBlend.mask = mask;
+    g_hookGameBlend.gen = bindingGeneration(BindSlot::Blend);
+    g_hookGameBlend.valid = true;
+}
+
+void flatOmNoteDepthState(ID3D11DepthStencilState* state) {
+    g_hookDepthState.state = state;
+    g_hookDepthState.valid = true;
 }
 
 void flatOmNoteTargets(unsigned n, ID3D11RenderTargetView* const* rtvs) {
@@ -2954,6 +3205,7 @@ void engineVelocityShutdown() {
     g_skinWanted.store(false, std::memory_order_release);
     g_skinDeclinedFlat = false;
     skinEntityHookSetGate(false);   // the relay then forwards straight to the game's function
+    g_flatEngineGpu.reset(nullptr);
     clearLocked();
     if (was) Log::get().note("engine motion: engine-record velocity stood down, state cleared.");
 }
@@ -3058,17 +3310,15 @@ bool engineVelocityFlatDomainBeginDraw(ID3D11DeviceContext* ctx,ID3D11Texture2D*
     ctx->PSGetShader(&saved.ps,nullptr,&classes);if(classes)return fail("flat-domain-PS-linkage");
     if(!saved.vs)return fail("flat-domain-shader-missing");
     if(saved.ps && (!psBytes || !psSize))return fail("flat-domain-PS-bytecode-missing");
-    if(saved.ps)try {
-        const auto chunks=dxbc_engine_velocity_detail::parseContainer(psBytes,psSize,dxbc_engine_velocity_detail::kPs50);
-        for(const auto& chunk:chunks)if(chunk.tag==dxbc_engine_velocity_detail::kTagOsgn)
-            for(const auto& output:dxbc_engine_velocity_detail::parseSignature(chunk.bytes))
-                if(output.systemValue && output.systemValue!=64)return fail("flat-domain-depth-or-coverage-output");
-    } catch(...) {return fail("flat-domain-output-signature");}
-    Ptr<ID3D11GeometryShader> gs;Ptr<ID3D11HullShader> hs;Ptr<ID3D11DomainShader> ds;
-    ctx->GSGetShader(&gs,nullptr,nullptr);ctx->HSGetShader(&hs,nullptr,nullptr);ctx->DSGetShader(&ds,nullptr,nullptr);
-    if(gs || hs || ds)return fail("flat-domain-unsupported-shader-stage");
-    Ptr<ID3D11Predicate> predicate;BOOL predicateValue=FALSE;ctx->GetPredication(&predicate,&predicateValue);
-    if(predicate)return fail("flat-domain-predication");
+    const uint64_t auxEpoch=flatAuxStageEpochLoad();
+    if(flatIssueEpochFrozen() || g_flatAuxNullCtx!=ctx || g_flatAuxNullEpoch!=auxEpoch) {
+        Ptr<ID3D11GeometryShader> gs;Ptr<ID3D11HullShader> hs;Ptr<ID3D11DomainShader> ds;
+        ctx->GSGetShader(&gs,nullptr,nullptr);ctx->HSGetShader(&hs,nullptr,nullptr);ctx->DSGetShader(&ds,nullptr,nullptr);
+        if(gs || hs || ds){g_flatAuxNullEpoch=0;return fail("flat-domain-unsupported-shader-stage");}
+        Ptr<ID3D11Predicate> predicate;BOOL predicateValue=FALSE;ctx->GetPredication(&predicate,&predicateValue);
+        if(predicate){g_flatAuxNullEpoch=0;return fail("flat-domain-predication");}
+        if(!flatIssueEpochFrozen() && flatAuxStageEpochLoad()==auxEpoch){g_flatAuxNullCtx=ctx;g_flatAuxNullEpoch=auxEpoch;}
+    }
     ID3D11Buffer* so[4]{};ctx->SOGetTargets(4,so);bool busy=false;
     for(auto* p:so)if(p){busy=true;p->Release();}
     if(busy)return fail("flat-domain-stream-output");
@@ -3091,6 +3341,13 @@ bool engineVelocityFlatDomainBeginDraw(ID3D11DeviceContext* ctx,ID3D11Texture2D*
         return s.originalVs==saved.vs && s.originalPs==saved.ps && s.domain==domain && s.coverage==coverage;});
     if(shader==g_flatDomainShaders.end()) {
         if(g_flatDomainShaders.size()>=64)return fail("flat-domain-shader-cap");
+        // Validate the PS output signature on cache miss only; cached shaders already passed this check.
+        if(saved.ps)try {
+            const auto chunks=dxbc_engine_velocity_detail::parseContainer(psBytes,psSize,dxbc_engine_velocity_detail::kPs50);
+            for(const auto& chunk:chunks)if(chunk.tag==dxbc_engine_velocity_detail::kTagOsgn)
+                for(const auto& output:dxbc_engine_velocity_detail::parseSignature(chunk.bytes))
+                    if(output.systemValue && output.systemValue!=64)return fail("flat-domain-depth-or-coverage-output");
+        } catch(...) {return fail("flat-domain-output-signature");}
         EngineVelocityInputs inputs{};std::string why;
         if(pool) {
             if(!engineVelocityDeriveInputs(vsBytes,vsSize,inputs,why))return fail("flat-domain-pool-contract");
@@ -3136,8 +3393,9 @@ bool engineVelocityFlatDomainBeginDraw(ID3D11DeviceContext* ctx,ID3D11Texture2D*
     ctx->OMGetBlendState(&saved.blend,saved.factor,&saved.sampleMask);
     const char* blendReason=nullptr;ID3D11BlendState* blend=derivedBlendFor(ctx,saved.blend.Get(),&blendReason,true);
     if(!blend)return fail(blendReason?blendReason:"flat-domain-blend");
-    FlatMarkerPlane* plane=flatMarkerPlane(ctx,depth);
+    FlatMarkerPlane* plane=flatMarkerPlane(ctx,depth,domain==FlatEngineDomain::ForeignPool);
     if(!plane)return fail("flat-domain-slot-allocation");
+    if(domain==FlatEngineDomain::WorldPool)plane->hasPositiveOddWrite=true;
     if(domain==FlatEngineDomain::ForeignPool) {
         if(shader->tokenSlot>=D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT)
             return fail("flat-domain-token-slot-unavailable");
@@ -3147,7 +3405,13 @@ bool engineVelocityFlatDomainBeginDraw(ID3D11DeviceContext* ctx,ID3D11Texture2D*
             if(FAILED(dev->CreateBuffer(&d,nullptr,&g_flatDomainTokenBuffer)))return fail("flat-domain-token-buffer-allocation");
         }
         saved.tokenSlot=shader->tokenSlot;
-        ctx->QueryInterface(IID_PPV_ARGS(&saved.rangedContext));
+        if(!g_flatDomainCtx1.queried || g_flatDomainCtx1.raw.Get()!=ctx) {
+            g_flatDomainCtx1.raw=ctx;
+            g_flatDomainCtx1.ctx1.Reset();
+            ctx->QueryInterface(IID_PPV_ARGS(&g_flatDomainCtx1.ctx1));
+            g_flatDomainCtx1.queried=true;
+        }
+        saved.rangedContext=g_flatDomainCtx1.ctx1;
         if(saved.rangedContext)saved.rangedContext->PSGetConstantBuffers1(saved.tokenSlot,1,&saved.tokenOriginal,&saved.tokenFirst,&saved.tokenCount);
         else ctx->PSGetConstantBuffers(saved.tokenSlot,1,&saved.tokenOriginal);
         const float token[4]={float(writerToken),0,0,0};ctx->UpdateSubresource(g_flatDomainTokenBuffer.Get(),0,nullptr,token,0,0);
@@ -3176,10 +3440,15 @@ bool engineVelocityFlatSourceShaders(ID3D11DeviceContext* ctx,uint64_t vsHash,ui
     if(!ctx||!runtimeFlatProfile())return false;
     Ptr<ID3D11VertexShader> vs;Ptr<ID3D11PixelShader> ps;
     ctx->VSGetShader(&vs,nullptr,nullptr);ctx->PSGetShader(&ps,nullptr,nullptr);
-    Ptr<ID3D11GeometryShader> gs;Ptr<ID3D11HullShader> hs;Ptr<ID3D11DomainShader> ds;
-    ctx->GSGetShader(&gs,nullptr,nullptr);ctx->HSGetShader(&hs,nullptr,nullptr);ctx->DSGetShader(&ds,nullptr,nullptr);
-    Ptr<ID3D11Predicate> predicate;BOOL predicateValue=FALSE;ctx->GetPredication(&predicate,&predicateValue);
-    if(gs||hs||ds||predicate)return false;
+    static uint64_t s_auxNullEpoch=0;
+    const uint64_t auxEpoch=flatAuxStageEpochLoad();
+    if(flatIssueEpochFrozen()||s_auxNullEpoch!=auxEpoch) {
+        Ptr<ID3D11GeometryShader> gs;Ptr<ID3D11HullShader> hs;Ptr<ID3D11DomainShader> ds;
+        ctx->GSGetShader(&gs,nullptr,nullptr);ctx->HSGetShader(&hs,nullptr,nullptr);ctx->DSGetShader(&ds,nullptr,nullptr);
+        Ptr<ID3D11Predicate> predicate;BOOL predicateValue=FALSE;ctx->GetPredication(&predicate,&predicateValue);
+        if(gs||hs||ds||predicate) { s_auxNullEpoch=0; return false; }
+        if(!flatIssueEpochFrozen()&&flatAuxStageEpochLoad()==auxEpoch) s_auxNullEpoch=auxEpoch;
+    }
     const bool originalVs=lookupShaderHash(vs.Get())==vsHash;
     const bool originalPs=lookupShaderHash(ps.Get())==psHash;
     if(originalVs&&originalPs)return true;
@@ -3231,8 +3500,10 @@ bool engineVelocityFlatBeginDraw(ID3D11DeviceContext* ctx, bool* gameHadTarget6)
     if (gameHadTarget6) *gameHadTarget6 = g_flatGame.rtv[kEngineVelocityTarget] != nullptr;
     engineVelocityBeforeDraw(ctx, false);
     if (!engineVelocityDrawSubstituted()) {
-        std::lock_guard<std::recursive_mutex> lock(g_mutex);
-        flatFlushLocked(ctx, EngineVelocityFlushCause::kDeclined, wasBound);
+        if (wasBound || g_flatGame.bound || g_flatPending.load(std::memory_order_relaxed)) {
+            std::lock_guard<std::recursive_mutex> lock(g_mutex);
+            flatFlushLocked(ctx, EngineVelocityFlushCause::kDeclined, wasBound);
+        }
         return false;
     }
     gpuRunBegin(ctx);   // a no-op inside a run the bracket kept bound
@@ -3242,7 +3513,7 @@ bool engineVelocityFlatBeginDraw(ID3D11DeviceContext* ctx, bool* gameHadTarget6)
 
 void engineVelocityFlatEndDraw(ID3D11DeviceContext* ctx) {
     g_flatGame.bound = true;   // the draw was substituted: MRT6 is bound over the game's set, kept or not
-    gpuCensusNoteIssued(GpuCensusSection::AlteredPoolFamily);   // this draw is one of the run's (an eager flush below ends the run)
+    gpuCensusNoteIssuedFast(GpuCensusSection::AlteredPoolFamily);   // this draw is one of the run's (an eager flush below ends the run)
     // A capture wants the game's state back at once. The overlay guard no longer does: its private t3 stays bound across the group's draws and goes
     // back where the rest of the run's state goes.
     if (!g_flatLazy) {
@@ -3250,7 +3521,8 @@ void engineVelocityFlatEndDraw(ID3D11DeviceContext* ctx) {
         flatFlushLocked(ctx, EngineVelocityFlushCause::kEager);
         return;
     }
-    g_flatPending.store(true, std::memory_order_release);
+    if (!g_flatPending.load(std::memory_order_relaxed))
+        g_flatPending.store(true, std::memory_order_release);
 }
 
 void engineVelocityFlatFlush(ID3D11DeviceContext* ctx, EngineVelocityFlushCause cause) {
@@ -3268,6 +3540,7 @@ void engineVelocityFlatFrameEnd() noexcept {
     g_flatGame = FlatGame{};
     g_gameBlendMemo = GameBlendMemo{};
     g_keptMemo = KeptMemo{};
+    g_sourceDepthMemo = SourceDepthMemo{};
 }
 
 void engineVelocityFlatAbandon() noexcept {
@@ -3279,6 +3552,10 @@ void engineVelocityFlatAbandon() noexcept {
     g_flatGame = FlatGame{};
     g_gameBlendMemo = GameBlendMemo{};
     g_keptMemo = KeptMemo{};
+    g_sourceDepthMemo = SourceDepthMemo{};
+    g_flatDomainCtx1 = FlatDomainCtx1Cache{};
+    g_flatAuxNullCtx = nullptr;
+    g_flatAuxNullEpoch = 0;
     g_flatPending.store(false, std::memory_order_release);
     g_eyes[kEngineVelocitySourceEye].bindingStale = true;
     cache = DrawCache{};
@@ -3502,7 +3779,7 @@ void noteResourceWrite(const ID3D11Resource* resource) noexcept {
 // Zero hooked binds for it is expected. All live/shadow shader differences
 // in the first three 162120 capture frames reproduce our generated hashes;
 // those captures supply no evidence of a real bypass. Sampled by the header
-// (one quick-pathed pool-context draw in 64): when the live pixel shader is
+// (one quick-pathed pool-context draw in 256): when the live pixel shader is
 // neither the shadow's nor our installed patch, the truth is written into
 // the shadow and the draw takes the slow half, which
 // then reads the real shader. Only ever the owner thread.
@@ -3534,7 +3811,7 @@ void psShadowProbe(ID3D11DeviceContext* ctx) {
     livePs->Release();
 }
 
-// The header's one-in-64 draw, out of line (the counter is the header's). A pool family's vertex shader or a keyed or self-marking pixel
+// The header's one-in-256 draw, out of line (the counter is the header's). A pool family's vertex shader or a keyed or self-marking pixel
 // shader bound makes the draw worth the probe; any other draw is left alone.
 void psShadowProbeSampled(ID3D11DeviceContext* ctx) {
     if (engine_velocity_family::familyOfVs(bindingShaderHash(BindSlot::Vs)) >= 0 ||
@@ -3607,6 +3884,7 @@ void engineVelocityFrameBoundary(ID3D11DeviceContext* ctx) {
     }
     g_bound = Bound{};
     g_anyBound.store(false, std::memory_order_release);
+    g_sourceDepthMemo = SourceDepthMemo{};
     if (!live.load(std::memory_order_acquire)) return;
     cache = DrawCache{};
     ++g_draw.frames;
@@ -3713,6 +3991,7 @@ bool engineVelocityTakeCaptureGpu(EngineVelocityCaptureGpu* out) {
     out->untimed = g_captureUntimed;
     out->invalid = g_captureInvalid;
     g_captureUntimed = g_captureInvalid = 0;
+    for (int k = 0; k < kCaptureKinds; ++k) g_captureSample[k] = 0;
     return any || out->untimed || out->invalid;
 }
 

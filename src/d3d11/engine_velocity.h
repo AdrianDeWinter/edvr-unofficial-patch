@@ -56,6 +56,7 @@ struct ID3D11ShaderResourceView;
 struct ID3D11Texture2D;
 struct ID3D11VertexShader;
 struct ID3D11BlendState;
+struct ID3D11DepthStencilState;
 struct ID3D11RenderTargetView;
 struct D3D11_BUFFER_DESC;
 
@@ -142,7 +143,7 @@ extern uint32_t g_psShadowProbeN;   // owner thread; the header's sampling count
 // shader absent from the shadow; otherwise it adopts our substitution as
 // game state and destroys restoration ownership.
 void psShadowProbe(ID3D11DeviceContext*);
-// The sampled draw's half of the probe (the header's one-in-64 counter has already fired): runs the probe only when the bound vertex
+// The sampled draw's half of the probe (the header's one-in-256 counter has already fired): runs the probe only when the bound vertex
 // shader is a pool family's or the bound pixel shader a keyed or self-marking one. Out of line, with the two table scans.
 void psShadowProbeSampled(ID3D11DeviceContext*);
 void noteResourceMapped(const ID3D11Resource*, void* data, int mapType) noexcept;
@@ -179,8 +180,8 @@ inline void engineVelocityBeforeDraw(ID3D11DeviceContext* ctx, bool rtv0Eye) {
         (cache.guarded && cache.srv3 != bindingGeneration(BindSlot::PsSrv3))) {
         beforeDrawSlow(ctx, rtv0Eye);
         slow = true;
-    } else if (((++g_psShadowProbeN) & 63u) == 0u) {
-        // One pool-context draw in 64 checks for an unobserved game bind: the
+    } else if (((++g_psShadowProbeN) & 255u) == 0u) {
+        // One pool-context draw in 256 checks for an unobserved game bind: the
         // out-of-line half does the family scans and the probe, so this gate
         // stays small enough to inline at its call sites.
         psShadowProbeSampled(ctx);
@@ -325,6 +326,8 @@ void flatQueryGameColorTargets(ID3D11DeviceContext* ctx, ID3D11RenderTargetView*
 // The OM hooks (vscreen.cpp) record the set they just passed to bindingSet.
 // flatOmForget runs wherever bindingForgetAll runs.
 void flatOmNoteBlend(ID3D11BlendState* state, const float factor[4], unsigned int mask);
+void flatOmNoteGameBlend(ID3D11BlendState* state, const float factor[4], unsigned int mask);
+void flatOmNoteDepthState(ID3D11DepthStencilState* state);
 void flatOmNoteTargets(unsigned n, ID3D11RenderTargetView* const* rtvs);
 void flatOmForget();
 void engineVelocityFlatLazy(bool on) noexcept;

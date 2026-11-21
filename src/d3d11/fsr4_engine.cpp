@@ -146,6 +146,8 @@ struct FfxApi {
 
 struct SharedTexture {
     ComPtr<ID3D11Texture2D> d11;
+    ComPtr<ID3D11ShaderResourceView> srv;
+    ComPtr<ID3D11UnorderedAccessView> uav;
     ComPtr<IDXGIKeyedMutex> key;  // null only where the runtime exposes none
     ComPtr<ID3D12Resource> d12;
     HANDLE handle = nullptr;
@@ -162,6 +164,15 @@ struct SharedTexture {
     void releaseHeld() {
         if (held && key) key->ReleaseSync(0);
         held = false;
+    }
+    void reset() {
+        releaseHeld();
+        srv.Reset();
+        uav.Reset();
+        d11.Reset();
+        key.Reset();
+        d12.Reset();
+        if (handle) { CloseHandle(handle); handle = nullptr; }
     }
 };
 
@@ -234,7 +245,9 @@ struct Feature {
     Fsr4ContextKey key;
     ffxContext context = nullptr;
     std::unique_ptr<ContextDescs> descs;
-    SharedTexture color, motion, depth, output;
+    SharedTexture color, motion, depth, depthAlt, output;
+    bool directReady = false;      // zero-copy D3D11 SRV/UAV views available over shared textures
+    bool dirtyOnD11 = false;       // D3D11 queued reads on shared output since last producer Signal
     std::array<CommandSlot, kCommandRing> commands;
     unsigned nextCommand = 0;
     uint64_t lastUseValue = 0;
@@ -250,6 +263,7 @@ struct Feature {
         color.releaseHeld();
         motion.releaseHeld();
         depth.releaseHeld();
+        depthAlt.releaseHeld();
         output.releaseHeld();
     }
     ~Feature() { releaseHeldKeys(); }
@@ -267,6 +281,7 @@ struct FeatureSlot {
     // Bridge timing lives per slot, so it outlives a context rebuild. The sets are reset on the owner context at shutdown.
     std::array<BridgeSet, kBridgeSets> bridge;
     BridgeWindow window;
+    uint32_t timingSample = 0;   // 1-in-16 sampling stride for GPU bridge/dispatch timing (index 0 always sampled)
     char d12Note[96] = "";   // why this slot's D3D12 dispatch timestamps are absent, when they are
 };
 
@@ -291,6 +306,7 @@ struct State {
     // One counter for every slot: all slots signal the one shared fence in this order, so a wait on a slot's own value also
     // covers the other slots' earlier work, and the value never goes backwards.
     uint64_t nextFenceValue = 0;
+    uint64_t unflushedConsumer = 0;   // latest consumer Signal() not yet flushed on ownerContext; flushed on releaseSlot or next signal-in
     uint64_t d12TimestampHz = 0;   // queue ticks per second; 0 when the queue reports none (bridge timing then off)
     uint32_t evaluations = 0, resets = 0, failures = 0;
     bool untrackedSubmission = false;
@@ -632,6 +648,25 @@ bool releaseSlot(State& state, unsigned slot, const char** why) {
     if (!feature) return true;
     if (state.untrackedSubmission)
         return fail(why, "a submitted D3D12 command list has no completed fence; retaining its resources");
+    if (feature->dirtyOnD11 && state.ownerContext) {
+        ComPtr<ID3D11DeviceContext4> ctx4;
+        if (SUCCEEDED(state.ownerContext->QueryInterface(IID_PPV_ARGS(ctx4.GetAddressOf())))) {
+            const uint64_t drain = ++state.nextFenceValue;
+            if (SUCCEEDED(ctx4->Signal(state.fence11.Get(), drain))) {
+                state.ownerContext->Flush();
+                feature->lastUseValue = drain;
+                feature->dirtyOnD11 = false;
+                state.unflushedConsumer = 0;
+            }
+        }
+    }
+    if (state.unflushedConsumer && state.ownerContext) {
+        const uint64_t completed = state.fence12->GetCompletedValue();
+        if (completed != UINT64_MAX && completed < feature->lastUseValue) {
+            state.ownerContext->Flush();
+            state.unflushedConsumer = 0;
+        }
+    }
     if (!waitFor(state, feature->lastUseValue, why, "release")) return false;
     if (feature->context) {
         const ffxReturnCode_t rc = state.api.destroy(&feature->context, nullptr);
@@ -827,6 +862,24 @@ bool makeContext(State& state, Feature& feature, const char** why) {
     return true;
 }
 
+bool makeSharedViews(ID3D11Device* d11, SharedTexture& target, DXGI_FORMAT format, bool wantSrv, bool wantUav) {
+    if (!d11 || !target.d11) return false;
+    if (wantSrv) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = format;
+        sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        sd.Texture2D.MipLevels = 1;
+        if (FAILED(d11->CreateShaderResourceView(target.d11.Get(), &sd, target.srv.ReleaseAndGetAddressOf()))) return false;
+    }
+    if (wantUav) {
+        D3D11_UNORDERED_ACCESS_VIEW_DESC ud{};
+        ud.Format = format;
+        ud.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+        if (FAILED(d11->CreateUnorderedAccessView(target.d11.Get(), &ud, target.uav.ReleaseAndGetAddressOf()))) return false;
+    }
+    return true;
+}
+
 bool makeFeature(State& state, unsigned slot, const Fsr4ContextKey& key, const char** why) {
     auto feature = std::make_unique<Feature>();
     feature->slot = slot;
@@ -836,10 +889,40 @@ bool makeFeature(State& state, unsigned slot, const Fsr4ContextKey& key, const c
     const DXGI_FORMAT motionFormat = static_cast<DXGI_FORMAT>(key.motionFormat);
     const DXGI_FORMAT outFormat = static_cast<DXGI_FORMAT>(key.outFormat);
     if (!makeShared(state, slot, feature->color, "color", key.inW, key.inH, colourFormat, false, why) ||
-        !makeShared(state, slot, feature->motion, "motion", key.inW, key.inH, motionFormat, false, why) ||
-        !makeShared(state, slot, feature->depth, "depth", key.inW, key.inH, depthFormat, false, why) ||
         !makeShared(state, slot, feature->output, "output", key.outW, key.outH, outFormat, true, why))
         return false;
+    // Try zero-copy UAV-capable shared motion + ping-pong depth textures so flat_mono_resolve can write prep directly
+    // and finishHdr/finish can read color/output directly (eliminating 4 of 5 full-screen CopyResource passes).
+    // If a driver or DXVK refuses UAV bind on shared R16G16F/R32F, fall back cleanly to the copy path.
+    const char* directWhy = nullptr;
+    bool directOk = false;
+    {
+        QuietFeatureFailure quiet;
+        directOk = makeShared(state, slot, feature->motion, "motion", key.inW, key.inH, motionFormat, true, &directWhy) &&
+                   makeShared(state, slot, feature->depth, "depth", key.inW, key.inH, depthFormat, true, &directWhy) &&
+                   makeShared(state, slot, feature->depthAlt, "depth-alt", key.inW, key.inH, depthFormat, true, &directWhy) &&
+                   makeSharedViews(state.d11.Get(), feature->color, colourFormat, true, false) &&
+                   makeSharedViews(state.d11.Get(), feature->motion, motionFormat, false, true) &&
+                   makeSharedViews(state.d11.Get(), feature->depth, depthFormat, true, true) &&
+                   makeSharedViews(state.d11.Get(), feature->depthAlt, depthFormat, true, true) &&
+                   makeSharedViews(state.d11.Get(), feature->output, outFormat, true, false);
+    }
+    if (directOk) {
+        feature->directReady = true;
+        Log::get().note("fsr4: slot=%u direct zero-copy views ready (color/motion/depth[2]/output)", slot);
+    } else {
+        feature->color.srv.Reset();
+        feature->output.srv.Reset();
+        feature->motion.reset();
+        feature->depth.reset();
+        feature->depthAlt.reset();
+        feature->directReady = false;
+        Log::get().note("fsr4: slot=%u direct zero-copy unavailable (%s); falling back to copy path",
+                        slot, directWhy ? directWhy : "view creation failed");
+        if (!makeShared(state, slot, feature->motion, "motion", key.inW, key.inH, motionFormat, false, why) ||
+            !makeShared(state, slot, feature->depth, "depth", key.inW, key.inH, depthFormat, false, why))
+            return false;
+    }
     state.slots[slot].d12Note[0] = '\0';
     for (CommandSlot& command : feature->commands) {
         HRESULT hr = state.d12->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -860,15 +943,23 @@ bool makeFeature(State& state, unsigned slot, const Fsr4ContextKey& key, const c
     return true;
 }
 
-void transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
-                D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = resource;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore = before;
-    barrier.Transition.StateAfter = after;
-    list->ResourceBarrier(1, &barrier);
+void transition4(ID3D12GraphicsCommandList* list,
+                 ID3D12Resource* r0, D3D12_RESOURCE_STATES b0, D3D12_RESOURCE_STATES a0,
+                 ID3D12Resource* r1, D3D12_RESOURCE_STATES b1, D3D12_RESOURCE_STATES a1,
+                 ID3D12Resource* r2, D3D12_RESOURCE_STATES b2, D3D12_RESOURCE_STATES a2,
+                 ID3D12Resource* r3, D3D12_RESOURCE_STATES b3, D3D12_RESOURCE_STATES a3) {
+    D3D12_RESOURCE_BARRIER barriers[4]{};
+    ID3D12Resource* const res[4] = {r0, r1, r2, r3};
+    const D3D12_RESOURCE_STATES before[4] = {b0, b1, b2, b3};
+    const D3D12_RESOURCE_STATES after[4] = {a0, a1, a2, a3};
+    for (int i = 0; i < 4; ++i) {
+        barriers[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[i].Transition.pResource = res[i];
+        barriers[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barriers[i].Transition.StateBefore = before[i];
+        barriers[i].Transition.StateAfter = after[i];
+    }
+    list->ResourceBarrier(4, barriers);
 }
 
 // What a caller's texture needs to become one of the bridge's shared textures: the typed format it maps to, and whether a plain
@@ -1151,6 +1242,48 @@ bool fsr4Available(ID3D11Device* dev, const char** why) {
 #endif
 }
 
+bool fsr4AcquireDirectViews(ID3D11DeviceContext* ctx, unsigned slot,
+                            uint32_t w, uint32_t h, uint32_t outW, uint32_t outH,
+                            uint32_t colourFormat, uint32_t depthFormat, uint32_t motionFormat, uint32_t outFormat,
+                            bool infiniteDepth, bool hdr, uint32_t depthIndex, Fsr4DirectViews* out) {
+#if !EDVR_HAVE_FSR4
+    (void)ctx; (void)slot; (void)w; (void)h; (void)outW; (void)outH;
+    (void)colourFormat; (void)depthFormat; (void)motionFormat; (void)outFormat;
+    (void)infiniteDepth; (void)hdr; (void)depthIndex; (void)out;
+    return false;
+#else
+    if (!ctx || !out || slot >= kUpscalerSlots || !g_state || !g_state->d11 || !g_state->d12 || g_state->untrackedSubmission)
+        return false;
+    State& state = *g_state;
+    const DWORD thread = GetCurrentThreadId();
+    if (!state.ownerThread || state.ownerThread != thread || state.ownerContext.Get() != ctx) return false;
+    Feature* feature = state.slots[slot].feature.get();
+    if (!feature || !feature->directReady) return false;
+    Fsr4ContextKey key;
+    key.inW = w; key.inH = h; key.outW = outW; key.outH = outH;
+    key.infiniteDepth = infiniteDepth; key.hdr = hdr;
+    key.colourFormat = colourFormat; key.depthFormat = depthFormat;
+    key.motionFormat = motionFormat; key.outFormat = outFormat;
+    if (!(feature->key == key)) return false;
+    SharedTexture* const all[] = {&feature->color, &feature->motion, &feature->depth, &feature->depthAlt, &feature->output};
+    if (!takeKeys(all, nullptr, "D3D11 direct views")) return false;
+    keepKeys(all);
+    SharedTexture& curDepth = (depthIndex & 1u) ? feature->depthAlt : feature->depth;
+    SharedTexture& prevDepth = (depthIndex & 1u) ? feature->depth : feature->depthAlt;
+    out->colorTex = feature->color.d11.Get();
+    out->colorSrv = feature->color.srv.Get();
+    out->depthTex = curDepth.d11.Get();
+    out->depthUav = curDepth.uav.Get();
+    out->prevDepthSrv = prevDepth.srv.Get();
+    out->motionTex = feature->motion.d11.Get();
+    out->motionUav = feature->motion.uav.Get();
+    out->outputTex = feature->output.d11.Get();
+    out->outputSrv = feature->output.srv.Get();
+    return out->colorTex && out->colorSrv && out->depthTex && out->depthUav && out->prevDepthSrv &&
+           out->motionTex && out->motionUav && out->outputTex && out->outputSrv;
+#endif
+}
+
 bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colour,
                   ID3D11Texture2D* depth, ID3D11Texture2D* mv, ID3D11Texture2D* out,
                   uint32_t w, uint32_t h, uint32_t outW, uint32_t outH, float jx, float jy,
@@ -1261,78 +1394,29 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
     // CPU phases (kPhase*) run on from the end of the allocator wait; the checks before it are the part of the eval span they omit.
     PhaseClock phase(allocEnded);
     phase.end(kPhaseReset);
-    SharedTexture* const inputs[] = {&feature.color, &feature.motion, &feature.depth};
-    if (!takeKeys(inputs, why, "D3D11 input copy")) {
-        command.list->Close();   // Reset opened it; no D3D12 work was submitted.
-        // A missed key is not a failed create: latching it would leave this size off until the key changes.
-        return false;
-    }
-    phase.end(kPhaseTakeIn);
-    // Bridge timing opens before the input copies: total, then copy-in. The guard cancels them on any failure below.
-    BridgeSet* bridge = beginBridge(holder, device.Get(), ctx);
-    BridgeGuard guard(bridge, ctx);
-    copyInput(ctx, feature.color.d11.Get(), colour, w, h, colourPlan.exact);
-    copyInput(ctx, feature.motion.d11.Get(), mv, w, h, motionPlan.exact);
-    copyInput(ctx, feature.depth.d11.Get(), depth, w, h, depthPlan.exact);
-    phase.end(kPhaseCopyIn);
-    keepKeys(inputs);
-    phase.end(kPhaseGiveIn);
-    const uint64_t producer = ++state.nextFenceValue;
-    hr = ctx4->Signal(state.fence11.Get(), producer);
-    if (FAILED(hr)) {
-        command.list->Close();   // Reset opened it; no D3D12 work was submitted.
-        // The three D3D11 input copies may already be queued. Without a fence, releasing their shared textures would race those
-        // copies.
-        state.untrackedSubmission = true;
-        return fail(why, "D3D11 producer Signal(%llu) failed 0x%08X; resources retained",
-                    static_cast<unsigned long long>(producer), unsigned(hr));
-    }
-    if (bridge) {   // copy-in ends after the Signal is enqueued; the wait starts there
-        bridge->timers[kBridgeCopyIn].end(ctx);
-        bridge->timers[kBridgeWait].begin(device.Get(), ctx);
-    }
-    ctx->Flush();
-    feature.lastUseValue = producer;
-    phase.end(kPhaseSignalIn);
-    LARGE_INTEGER queueWaitBegan{}, queueWaitEnded{};
-    QueryPerformanceCounter(&queueWaitBegan);
-    hr = state.queue->Wait(state.fence12.Get(), producer);
-    QueryPerformanceCounter(&queueWaitEnded);
-    submitMs += qpcSpanMs(queueWaitBegan, queueWaitEnded);
-    phase.end(kPhaseQueueWait);
-    if (FAILED(hr)) {
-        command.list->Close();   // No command list was submitted.
-        return fail(why, "D3D12 producer Wait(%llu) failed 0x%08X",
-                    static_cast<unsigned long long>(producer), unsigned(hr));
-    }
+
+    // Sample GPU bridge and D3D12 dispatch timing 1 in 16 evaluations (index 0 always sampled) instead of issuing
+    // 12 D3D11 query Ends + 2 D3D12 timestamps on every frame.
+    const bool sampleTiming = (holder.timingSample++ & 15u) == 0;
+    SharedTexture& activeDepth = (feature.depthAlt.d11 && depth == feature.depthAlt.d11.Get()) ? feature.depthAlt : feature.depth;
+
+    // Record the D3D12 command list BEFORE D3D11 Flush()/Signal(producer) so ExecuteCommandLists fires immediately after
+    // the producer fence instead of adding ~0.17 ms of CPU recording delay to the cross-queue GPU wait bubble.
     ID3D12GraphicsCommandList* list = command.list.Get();
-    // Inputs go to NON_PIXEL_SHADER_RESOURCE and the output to UNORDERED_ACCESS, which is what AMD's contract asks of a DX12
-    // caller (ml.md, "Input resources") and what the FfxApiResource states below declare. The shared textures are in COMMON when
-    // D3D12 gets them from D3D11 and go back to COMMON before the D3D11 side touches them again.
-    transition(list, feature.color.d12.Get(), D3D12_RESOURCE_STATE_COMMON,
-               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    transition(list, feature.motion.d12.Get(), D3D12_RESOURCE_STATE_COMMON,
-               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    transition(list, feature.depth.d12.Get(), D3D12_RESOURCE_STATE_COMMON,
-               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    transition(list, feature.output.d12.Get(), D3D12_RESOURCE_STATE_COMMON,
-               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    transition4(list,
+                feature.color.d12.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                feature.motion.d12.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                activeDepth.d12.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                feature.output.d12.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     ffxDispatchDescUpscale dispatch{};
     dispatch.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
     dispatch.commandList = list;
     dispatch.color = ffxApiGetResourceDX12(feature.color.d12.Get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    dispatch.depth = ffxApiGetResourceDX12(feature.depth.d12.Get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+    dispatch.depth = ffxApiGetResourceDX12(activeDepth.d12.Get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
     dispatch.motionVectors = ffxApiGetResourceDX12(feature.motion.d12.Get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-    // exposure, reactive and transparencyAndComposition stay empty, as route 1 leaves them: preExposure is 1, both routes have
-    // AMD's automatic exposure (fsr4CreateFlags), and EDVR has no reactive or transparency mask in this pass.
-    // The UAV usage is stated rather than left to the helper, which derives it from the opened resource's own flags: a shared
-    // resource opened through vkd3d-proton is not known to carry ALLOW_UNORDERED_ACCESS (makeShared logs what it does carry).
     dispatch.output = ffxApiGetResourceDX12(feature.output.d12.Get(), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS,
                                             FFX_API_RESOURCE_USAGE_UAV);
-    // dlaa.h's jitter is positive right/down in render pixels, the same axes AMD's contract takes (ml.md, "Camera jitter": the
-    // projection is shifted by +2*jx/width and -2*jy/height), and route 1 measured both signs and the motion scale as identities
-    // (fsr3_engine.cpp). A motion vector in render pixels needs scale 1: AMD's range is [-width, width] in render pixels.
     dispatch.jitterOffset = FfxApiFloatCoords2D{jx, jy};
     dispatch.motionVectorScale = FfxApiFloatCoords2D{1.0f, 1.0f};
     dispatch.renderSize = FfxApiDimensions2D{w, h};
@@ -1349,21 +1433,18 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
     dispatch.flags = fsr4DispatchFlags(hdr);
 
     // The two timestamps bracket ffxDispatch alone; the barriers around it are outside the measured span.
-    if (command.timingHeap.Get()) list->EndQuery(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+    const bool sampleD12Timing = sampleTiming && command.timingHeap.Get() != nullptr;
+    if (sampleD12Timing) list->EndQuery(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
     const ffxReturnCode_t rc = state.api.dispatch(&feature.context, &dispatch.header);
     if (rc != FFX_API_RETURN_OK) {
         ++state.failures;
         ++feature.dispatchStrikes;
-        // AMD may have recorded part of its work before failing; the next attempt starts its history afresh.
         feature.firstDispatch = true;
-        // The command list was never submitted; it is safe to close/reset on the next frame, while the producer signal remains a
-        // no-op handoff.
         list->Close();
         char text[160];
         std::snprintf(text, sizeof(text), "ffxDispatch returned %u (%s) (frame %u)", unsigned(rc), ffxReturnName(rc),
                       state.evaluations + 1);
         if (feature.dispatchStrikes >= kDispatchStrikes) {
-            // A dispatch that fails every time will keep failing; stop paying the copies for it until the key or mode changes.
             holder.failedFeature.record(key, text);
             Log::get().note("fsr4: slot=%u %u consecutive dispatch failures; this key will not retry until the key or mode changes: %s",
                             slot, feature.dispatchStrikes, text);
@@ -1376,27 +1457,70 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
         return fail(why, "%s", text);
     }
     feature.dispatchStrikes = 0;
-    if (command.timingHeap.Get()) {
+    if (sampleD12Timing) {
         list->EndQuery(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
         list->ResolveQueryData(command.timingHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2,
                                command.timingReadback.Get(), 0);
     }
-    transition(list, feature.color.d12.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-               D3D12_RESOURCE_STATE_COMMON);
-    transition(list, feature.motion.d12.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-               D3D12_RESOURCE_STATE_COMMON);
-    transition(list, feature.depth.d12.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-               D3D12_RESOURCE_STATE_COMMON);
-    transition(list, feature.output.d12.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-               D3D12_RESOURCE_STATE_COMMON);
+    transition4(list,
+                feature.color.d12.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON,
+                feature.motion.d12.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON,
+                activeDepth.d12.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON,
+                feature.output.d12.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
     hr = list->Close();
     if (FAILED(hr)) return fail(why, "D3D12 FSR 4 command close failed 0x%08X", unsigned(hr));
     phase.end(kPhaseRecord);
+
+    SharedTexture* const inputs[] = {&feature.color, &feature.motion, &activeDepth};
+    if (!takeKeys(inputs, why, "D3D11 input copy")) {
+        // A missed key is not a failed create: latching it would leave this size off until the key changes.
+        return false;
+    }
+    phase.end(kPhaseTakeIn);
+    // Bridge timing opens before the input copies: total, then copy-in. The guard cancels them on any failure below.
+    BridgeSet* bridge = sampleTiming ? beginBridge(holder, device.Get(), ctx) : nullptr;
+    BridgeGuard guard(bridge, ctx);
+    const bool directColor = colour == feature.color.d11.Get();
+    const bool directMotion = mv == feature.motion.d11.Get();
+    const bool directDepth = depth == activeDepth.d11.Get();
+    if (!directColor) copyInput(ctx, feature.color.d11.Get(), colour, w, h, colourPlan.exact);
+    if (!directMotion) copyInput(ctx, feature.motion.d11.Get(), mv, w, h, motionPlan.exact);
+    if (!directDepth) copyInput(ctx, activeDepth.d11.Get(), depth, w, h, depthPlan.exact);
+    phase.end(kPhaseCopyIn);
+    keepKeys(inputs);
+    phase.end(kPhaseGiveIn);
+    const uint64_t producer = ++state.nextFenceValue;
+    hr = ctx4->Signal(state.fence11.Get(), producer);
+    if (FAILED(hr)) {
+        // Any queued D3D11 input copies may still be in flight. Without a fence, releasing their shared textures would race.
+        state.untrackedSubmission = true;
+        return fail(why, "D3D11 producer Signal(%llu) failed 0x%08X; resources retained",
+                    static_cast<unsigned long long>(producer), unsigned(hr));
+    }
+    if (bridge) {   // copy-in ends after the Signal is enqueued; the wait starts there
+        bridge->timers[kBridgeCopyIn].end(ctx);
+        bridge->timers[kBridgeWait].begin(device.Get(), ctx);
+    }
+    ctx->Flush();
+    state.unflushedConsumer = 0;
+    feature.dirtyOnD11 = false;
+    feature.lastUseValue = producer;
+    phase.end(kPhaseSignalIn);
+    LARGE_INTEGER queueWaitBegan{}, queueWaitEnded{};
+    QueryPerformanceCounter(&queueWaitBegan);
+    hr = state.queue->Wait(state.fence12.Get(), producer);
+    QueryPerformanceCounter(&queueWaitEnded);
+    submitMs += qpcSpanMs(queueWaitBegan, queueWaitEnded);
+    phase.end(kPhaseQueueWait);
+    if (FAILED(hr)) {
+        return fail(why, "D3D12 producer Wait(%llu) failed 0x%08X",
+                    static_cast<unsigned long long>(producer), unsigned(hr));
+    }
     ID3D12CommandList* lists[] = {list};
     LARGE_INTEGER submitBegan{}, submitEnded{};
     QueryPerformanceCounter(&submitBegan);
     state.queue->ExecuteCommandLists(1, lists);
-    command.timingPending = command.timingHeap.Get() != nullptr;
+    command.timingPending = sampleD12Timing;
     const uint64_t done = ++state.nextFenceValue;
     hr = state.queue->Signal(state.fence12.Get(), done);
     QueryPerformanceCounter(&submitEnded);
@@ -1425,8 +1549,9 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
     }
     phase.end(kPhaseTakeOut);
     // FSR 4 wrote the output in the format the caller's texture has (the HDR route's R16G16B16A16_FLOAT, or the LDR route's
-    // RGBA8): a plain copy, no widening.
-    ctx->CopyResource(out, feature.output.d11.Get());
+    // RGBA8): skip CopyResource completely when the caller reads feature.output.d11 directly.
+    const bool directOut = out == feature.output.d11.Get();
+    if (!directOut) ctx->CopyResource(out, feature.output.d11.Get());
     phase.end(kPhaseCopyOut);
     keepKeys(result);
     phase.end(kPhaseGiveOut);
@@ -1436,16 +1561,10 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
         guard.disarm();
         phase.end(kPhaseCopyOut);   // the timer ends are copy-out's too, and the give-out above is not
     }
-    const uint64_t consumer = ++state.nextFenceValue;
-    hr = ctx4->Signal(state.fence11.Get(), consumer);
-    if (FAILED(hr)) {
-        // The copy work can still be queued on D3D11. Without its completion signal we cannot safely recycle shared textures.
-        state.untrackedSubmission = true;
-        return fail(why, "D3D11 consumer Signal(%llu) failed 0x%08X; resources retained",
-                    static_cast<unsigned long long>(consumer), unsigned(hr));
-    }
-    ctx->Flush();
-    feature.lastUseValue = consumer;
+    // Steady-state frames do not need a per-frame consumer Signal() (~0.116 ms CPU on WDDM2): the next frame's
+    // producer Signal() on this same FIFO D3D11 context already orders all reads of feature.output before D3D12
+    // reuses the slot, and releaseSlot() issues an explicit drain Signal()+Flush() before teardown.
+    feature.dirtyOnD11 = true;
     phase.end(kPhaseSignalOut);
     LARGE_INTEGER ended{};
     QueryPerformanceCounter(&ended);
@@ -1465,12 +1584,14 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
     ++state.evaluations;
     if (reset) ++state.resets;
     if (state.evaluations <= 3 || state.evaluations % 3000 == 0)
-        Log::get().note("fsr4: slot=%u dispatch #%u rc=0 in=%ux%u out=%ux%u hdr=%u infinite=%u jitter=(%.3f,%.3f) reset=%u fences=%llu/%llu/%llu copy-in=%s/%s/%s provider=%s",
+        Log::get().note("fsr4: slot=%u dispatch #%u rc=0 in=%ux%u out=%ux%u hdr=%u infinite=%u jitter=(%.3f,%.3f) reset=%u fences=%llu/%llu/0 copy-in=%s/%s/%s out=%s provider=%s",
                         slot, state.evaluations, w, h, outW, outH, hdr ? 1u : 0u, infiniteDepth ? 1u : 0u, jx, jy,
                         reset ? 1u : 0u, static_cast<unsigned long long>(producer),
-                        static_cast<unsigned long long>(done), static_cast<unsigned long long>(consumer),
-                        colourPlan.exact ? "whole" : "box", depthPlan.exact ? "whole" : "box",
-                        motionPlan.exact ? "whole" : "box", g_label);
+                        static_cast<unsigned long long>(done),
+                        directColor ? "direct" : (colourPlan.exact ? "whole" : "box"),
+                        directDepth ? "direct" : (depthPlan.exact ? "whole" : "box"),
+                        directMotion ? "direct" : (motionPlan.exact ? "whole" : "box"),
+                        directOut ? "direct" : "copy", g_label);
     if (why) *why = nullptr;
     return true;
 #endif

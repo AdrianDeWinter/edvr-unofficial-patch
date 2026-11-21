@@ -176,6 +176,43 @@ inline void uiLayerSmaaGpuTests(ID3D11Device* device, ID3D11DeviceContext* conte
                   : pass == 2 ? "HUD layer SMAA: a full-width horizontal dark band comes out unchanged"
                               : "HUD layer SMAA: a full-height vertical dark band comes out unchanged");
         }
+
+        // (e) multi-frame moving HUD across 32x8 tile borders on a non-tile-aligned size (77x53):
+        // verifies tile-culling cleans up previously occupied tiles, blends across tile boundaries,
+        // and leaves untouched tiles at exact (0, 0, 0, 1).
+        {
+            edvr::UiLayerSmaa tileSmaa;
+            constexpr uint32_t tw = 77, th = 53;
+            auto patchBox = [&](uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
+                std::vector<Px> px = clearLayer(tw, th);
+                for (uint32_t y = y0; y < y1 && y < th; ++y)
+                    for (uint32_t x = x0; x < x1 && x < tw; ++x)
+                        if (y >= y0 + (x - x0) / 4) px[size_t(y) * tw + x] = white;
+                return px;
+            };
+            // Frame 1: staircase straddling x=32 (horizontal tile border) and y=8 (vertical tile border).
+            const std::vector<Px> f1 = patchBox(20, 4, 48, 20);
+            std::vector<Px> o1;
+            check(smooth(device, context, tileSmaa, f1, tw, th, o1), "HUD layer SMAA: tile-culled pass runs on 77x53 frame 1");
+            check(between(o1, &Px::r) >= 8 && between(o1, &Px::a) >= 8, "HUD layer SMAA: tile-culled pass smooths across 32x8 tile borders");
+            // Frame 2: HUD moves to a disjoint region; frame 1's tiles must return cleanly to (0,0,0,1).
+            const std::vector<Px> f2 = patchBox(44, 28, 72, 46);
+            std::vector<Px> o2;
+            check(smooth(device, context, tileSmaa, f2, tw, th, o2), "HUD layer SMAA: tile-culled pass runs on 77x53 frame 2");
+            bool oldCleared = true;
+            for (uint32_t y = 0; y < 24; ++y)
+                for (uint32_t x = 0; x < 52; ++x) {
+                    const Px& p = o2[size_t(y) * tw + x];
+                    oldCleared = oldCleared && p.r == 0 && p.g == 0 && p.b == 0 && p.a == 255;
+                }
+            check(oldCleared, "HUD layer SMAA: moving HUD clears previously occupied tiles back to exact (0,0,0,1)");
+            check(between(o2, &Px::r) >= 8, "HUD layer SMAA: moved HUD in new tiles is smoothed");
+            // Frame 3: all-clear layer restores every tile to exact (0,0,0,1).
+            const std::vector<Px> f3 = clearLayer(tw, th);
+            std::vector<Px> o3;
+            check(smooth(device, context, tileSmaa, f3, tw, th, o3) && same(o3, f3),
+                  "HUD layer SMAA: clearing the HUD after moving restores exact (0,0,0,1) everywhere");
+        }
     }
 
     // The compute stage: the two samplers come back, the resource slots and the unordered-access slot a pass used are left empty.
@@ -246,5 +283,60 @@ inline void uiLayerSmaaGpuTests(ID3D11Device* device, ID3D11DeviceContext* conte
         s.releaseAll();
         check(edvr::uiLayerSmaaEnsure(s, device, 96, 96, &again) == edvr::UiLayerSmaaState::kMade,
               "HUD layer SMAA: a device change (release all) clears what failed, so the size is tried afresh");
+    }
+
+    // Single-pass premultiplied-alpha-aware FXAA (fix.hud_antialiasing = fxaa): white staircase, dark alpha-only staircase,
+    // all-clear invariance, target resize and failure stand-down.
+    {
+        auto smoothFxaa = [&](edvr::UiLayerFxaa& f, const std::vector<Px>& in, uint32_t w, uint32_t h, std::vector<Px>& out) {
+            ComPtr<ID3D11Texture2D> layer = ::texture(device, w, h, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_SHADER_RESOURCE, in.data(), w * 4);
+            if (!layer) return false;
+            ComPtr<ID3D11ShaderResourceView> srv = ::view(device, layer.Get());
+            if (!srv) return false;
+            edvr::UiLayerSmaaFail fail;
+            const edvr::UiLayerSmaaState st = edvr::uiLayerFxaaEnsure(f, device, w, h, &fail);
+            if (st != edvr::UiLayerSmaaState::kReady && st != edvr::UiLayerSmaaState::kMade) return false;
+            ID3D11ShaderResourceView* res = edvr::uiLayerFxaaRun(f, context, srv.Get());
+            if (!res || res != f.outSrv.Get()) return false;
+            std::vector<unsigned char> bytes;
+            if (!readWhole(context, f.out.Get(), bytes, 4) || bytes.size() != size_t(w) * h * 4) return false;
+            out.resize(size_t(w) * h);
+            std::memcpy(out.data(), bytes.data(), bytes.size());
+            return true;
+        };
+
+        edvr::UiLayerFxaa fx;
+        std::vector<Px> out;
+        check(smoothFxaa(fx, staircase(kSize, kSize, Px{255, 255, 255, 0}), kSize, kSize, out), "HUD layer FXAA: white staircase runs on WARP");
+        check(between(out, &Px::r) > 0 && between(out, &Px::a) > 0, "HUD layer FXAA: white staircase produces intermediate rgb and transmittance");
+
+        check(smoothFxaa(fx, staircase(kSize, kSize, Px{0, 0, 0, 0}), kSize, kSize, out), "HUD layer FXAA: dark opaque staircase runs on WARP");
+        bool darkRgbZero = true;
+        for (const Px& p : out)
+            if (p.r || p.g || p.b) darkRgbZero = false;
+        check(darkRgbZero && between(out, &Px::a) > 0, "HUD layer FXAA: dark opaque staircase smooths transmittance while keeping rgb zero");
+
+        check(smoothFxaa(fx, clearLayer(kSize, kSize), kSize, kSize, out), "HUD layer FXAA: clear layer runs on WARP");
+        bool allClear = true;
+        for (const Px& p : out)
+            if (p.r || p.g || p.b || p.a != 255) allClear = false;
+        check(allClear, "HUD layer FXAA: all-clear layer stays exact (0, 0, 0, 255)");
+
+        edvr::UiLayerSmaaFail fail;
+        check(edvr::uiLayerFxaaEnsure(fx, device, 48, 40, &fail) == edvr::UiLayerSmaaState::kMade && fx.w == 48 && fx.h == 40,
+              "HUD layer FXAA: resize re-makes output target");
+        fx.releaseTargets();
+        check(!fx.ready() && !fx.out && fx.fxaaCs && fx.linear, "HUD layer FXAA: releaseTargets keeps device shader and sampler");
+        fx.releaseAll();
+        check(!fx.fxaaCs && !fx.linear, "HUD layer FXAA: releaseAll drops device objects");
+        edvr::UiLayerSmaaFail told;
+        check(edvr::uiLayerFxaaEnsure(fx, nullptr, 96, 96, &told) == edvr::UiLayerSmaaState::kFailed && told.what && FAILED(told.hr),
+              "HUD layer FXAA: failed ensure reports kFailed once");
+        edvr::UiLayerSmaaFail again;
+        check(edvr::uiLayerFxaaEnsure(fx, device, 96, 96, &again) == edvr::UiLayerSmaaState::kStoodDown && !fx.ready(),
+              "HUD layer FXAA: next call at failed size stands down");
+        check(edvr::uiLayerFxaaEnsure(fx, device, 80, 80, &again) == edvr::UiLayerSmaaState::kMade && fx.ready(),
+              "HUD layer FXAA: new size retries and succeeds");
+        fx.releaseAll();
     }
 }

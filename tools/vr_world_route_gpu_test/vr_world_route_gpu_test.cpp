@@ -268,6 +268,10 @@ bool dlaaEvaluate(ID3D11DeviceContext* c, int slot, ID3D11Texture2D* colour, ID3
 bool fsr3Evaluate(ID3D11DeviceContext*, unsigned, ID3D11Texture2D*, ID3D11Texture2D*, ID3D11Texture2D*, ID3D11Texture2D*,
                   ID3D11Texture2D*, uint32_t, uint32_t, uint32_t, uint32_t, float, float, bool, float, float, float, float,
                   const char**, bool, bool) { return false; }
+bool fsr4AcquireDirectViews(ID3D11DeviceContext*, unsigned, uint32_t, uint32_t, uint32_t, uint32_t,
+                            uint32_t, uint32_t, uint32_t, uint32_t, bool, bool, uint32_t, Fsr4DirectViews*) {
+    return false;
+}
 bool fsr4Evaluate(ID3D11DeviceContext*, unsigned, ID3D11Texture2D*, ID3D11Texture2D*, ID3D11Texture2D*,
                   ID3D11Texture2D*, uint32_t, uint32_t, uint32_t, uint32_t, float, float, bool, float, float, float, float,
                   const char**, bool, bool) { return false; }

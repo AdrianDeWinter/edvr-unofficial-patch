@@ -57,6 +57,8 @@
 // totals line counts every case and names each shader pair once.
 #pragma once
 
+#include "ui_layer_math.h"
+
 #include <cstdint>
 #include <cstddef>
 
@@ -490,18 +492,19 @@ bool uiLayerDoorFromPass(uint32_t eye);
 // down), and the scene's render size R. Read only in the flat profile; cleared at the frame boundary.
 void uiLayerFlatSetDraw(uint64_t frame, float jx, float jy, uint32_t renderW, uint32_t renderH);
 // The HUD edge smoothing (fix.hud_antialiasing, both profiles; the flat adapter asks through here; ui_layer_smaa.h; docs/design-flat-ui-quality-2026-10-05.md, "2026-10-24: edge smoothing for
-// the HUD layer"): SMAA 1x over the layer's finished 8-bit content before the composite downsamples it, so the HUD gets the edge smoothing the game's own
-// anti-aliasing would have given it. The adapter asks for the NEXT composite only, once a frame, with the key it just read: `on` smooths the layer, false leaves it as
-// it was. uiLayerComposite takes the ask on entry and clears it, so a caller that never asks (VR) never sees it set: VR reads the same key itself, at every
-// configure (2026-11-03), and smooths both eyes' composites when it is on. The result is what that
-// composite did: kNone (no layer composite ran), kRaw (it ran on the layer as is, as asked), kSmoothed (it read the SMAA output) or kFault (smoothing was asked
-// for, the SMAA resources could not be had, and it read the raw layer); w x h is the layer's size at that composite.
+// the HUD layer"): off, FXAA (single-pass premultiplied-alpha-aware FXAA 3.11), or SMAA 1x over the layer's finished 8-bit content before the composite downsamples it, so the HUD gets the edge
+// smoothing the game's own anti-aliasing would have given it. Legacy `on`/`1`/`true`/`yes` map to SMAA. The adapter asks for the NEXT composite only, once a frame, with the key it just read.
+// uiLayerComposite takes the ask on entry and clears it, so a caller that never asks (VR) never sees it set: VR reads the same key itself, at every configure (2026-11-03), and smooths both
+// eyes' composites accordingly. The result is what that composite did: kNone (no layer composite ran), kRaw (it ran on the layer as is, as asked), kSmoothed (it read the FXAA or SMAA output,
+// named by `applied`) or kFault (smoothing was asked for, the resources could not be had, and it read the raw layer); w x h is the layer's size at that composite.
 enum class UiLayerEdgeSmoothing : uint8_t { kNone = 0, kRaw, kSmoothed, kFault };
 struct UiLayerEdgeSmoothingResult {
     UiLayerEdgeSmoothing outcome = UiLayerEdgeSmoothing::kNone;
+    HudAaMode applied = HudAaMode::kOff;
     uint32_t w = 0, h = 0;
 };
-void uiLayerFlatSetEdgeSmoothing(bool on);
+void uiLayerFlatSetEdgeSmoothing(HudAaMode mode);
+inline void uiLayerFlatSetEdgeSmoothing(bool on) { uiLayerFlatSetEdgeSmoothing(on ? HudAaMode::kSmaa : HudAaMode::kOff); }
 UiLayerEdgeSmoothingResult uiLayerFlatEdgeSmoothingResult();
 // The flat profile's tonemap admission (2026-10-09): the game's tone pass recognised by its known pair (flat_mono_frame.h
 // toneHdrSlot), whatever its vertex count, reading eye 0's fresh HUD or weapons target -- or `alias`, a plain copy of

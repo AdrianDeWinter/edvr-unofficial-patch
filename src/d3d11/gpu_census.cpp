@@ -13,6 +13,7 @@
 #include <string>
 
 namespace edvr {
+void frameSpanTakeWindow(double* meanMs, unsigned* n) noexcept;
 namespace {
 
 constexpr size_t kSections = static_cast<size_t>(GpuCensusSection::Count);
@@ -332,7 +333,19 @@ void formatSkinDetail(char* out, size_t n, const Snapshot (&items)[kSkinSections
                   edvrTotal, list.c_str());
 }
 
+struct InlineIssuedInit {
+    InlineIssuedInit() noexcept { gpu_census_detail::g_inlineIssuedActive = true; }
+} g_inlineIssuedInit;
+
+void drainInlineIssued() noexcept {
+    for (size_t i = 0; i < static_cast<size_t>(GpuCensusSection::Count); ++i) {
+        g_section[i].issued += gpu_census_detail::g_inlineIssued[i];
+        gpu_census_detail::g_inlineIssued[i] = 0;
+    }
+}
+
 void logAndResetWindow(uint64_t now) {
+    drainInlineIssued();
     const uint64_t frames = g_windowFrames;
     // A window an eye run fell in prices the run along with the features: its copies and its draw census are in the figures.
     const char* eyeNote = g_windowEyeRuns
@@ -552,8 +565,14 @@ void logAndResetWindow(uint64_t now) {
     formatGapDetail(gapDetail, sizeof(gapDetail), gap);
     Log::get().note("%s", gapDetail);
     // The overlay's frame work span pair, on a line of its own (the main line is at the log's length; last, so the seed's line still follows the main line at once): frame_span_tile.h formats the field.
-    Log::get().note("EDVR GPU census, the overlay's GPU time: %s. All-time counts. With the application clock off, completed 0 means the pair never ran; "
-                    "skipped or invalid climbing with completed flat means it ran and was voided.", workSpanField);
+    double wsMean = 0.0;
+    unsigned wsWinN = 0;
+    frameSpanTakeWindow(&wsMean, &wsWinN);
+    char wsMeanBuf[48];
+    if (wsWinN) std::snprintf(wsMeanBuf, sizeof(wsMeanBuf), " 30s mean %.3f ms (n=%u).", wsMean, wsWinN);
+    else std::snprintf(wsMeanBuf, sizeof(wsMeanBuf), " 30s mean - (n=0).");
+    Log::get().note("EDVR GPU census, the overlay's GPU time: %s. All-time counts.%s With the application clock off, completed 0 means the pair never ran; "
+                    "skipped or invalid climbing with completed flat means it ran and was voided.", workSpanField, wsMeanBuf);
 
     for (auto& st : g_section) {
         st.baseMs = st.sampler.totals.ms;
@@ -653,6 +672,8 @@ GpuIntervals<kFrameSpanSlots, GpuQueryOwner::GpuCensus> g_frameSpan;
 std::atomic<bool> g_frameWorkOpenFlag{false};   // a pair is open (begun, not yet ended)
 uint64_t g_frameSpanCompleted = 0;   // pairs read back, all time
 double g_frameSpanLastMs = 0.0;      // the last pair read back
+double g_frameSpanWinMs = 0.0;       // 30 s window sum for mean frame work span
+unsigned g_frameSpanWinN = 0;        // 30 s window completed pairs
 
 namespace detail {
 std::atomic<bool> g_frameWorkArmed{false};
@@ -684,11 +705,21 @@ void frameSpanPoll(ID3D11DeviceContext* ctx) {
     g_frameSpan.poll(ctx);
     const unsigned got = g_frameSpan.totals.samples - before;
     if (got == 0) return;
-    g_frameSpanLastMs = (g_frameSpan.totals.ms - beforeMs) / static_cast<double>(got);
+    const double deltaMs = g_frameSpan.totals.ms - beforeMs;
+    g_frameSpanLastMs = deltaMs / static_cast<double>(got);
+    g_frameSpanWinMs += deltaMs;
+    g_frameSpanWinN += got;
     g_frameSpanCompleted += got;
+}
+void frameSpanTakeWindow(double* meanMs, unsigned* n) noexcept {
+    if (meanMs) *meanMs = g_frameSpanWinN ? g_frameSpanWinMs / static_cast<double>(g_frameSpanWinN) : 0.0;
+    if (n) *n = g_frameSpanWinN;
+    g_frameSpanWinMs = 0.0;
+    g_frameSpanWinN = 0;
 }
 
 void gpuCensusFrame(ID3D11DeviceContext* ctx) noexcept {
+    drainInlineIssued();
     const bool appClockOn = gpuFrameClockLive();
     if (!appClockOn) frameSpanEnd(ctx);   // before the census closes its scope: the pair lies in that scope
     gpuTimingCensusScopeEnd(ctx, GetTickCount64());   // the frame's spans are all issued; closing lets their result be read
@@ -737,8 +768,11 @@ void gpuCensusFrame(ID3D11DeviceContext* ctx) noexcept {
 void gpuCensusNoteEyeRun() noexcept { ++g_windowEyeRuns; }
 
 void gpuCensusShutdown() noexcept {
+    for (auto& v : gpu_census_detail::g_inlineIssued) v = 0;
     for (auto& st : g_section) { st.sampler.reset(); st.nullSampler.reset(); }
     g_frameSpan.reset();
+    g_frameSpanWinMs = 0.0;
+    g_frameSpanWinN = 0;
     resetSeedNotes();
 }
 

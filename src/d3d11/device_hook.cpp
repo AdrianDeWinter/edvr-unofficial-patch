@@ -1919,13 +1919,10 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
     if (dev && desktopWindowPresent(self, dev, flags, runtimeFlatProfile())) frameTick("desktop_window");
     // The frame's GPU work span ends here (2026-10-14, gpu_census.cpp): EDVR's door work is done and the real Present is next, on
     // the game's own context. Before this call, so the pair is still inside the census scope that the boundary after the Present closes.
-    if (dev && gpuCensusFrameWorkOpen()) {
-        ID3D11DeviceContext* workContext = nullptr;
-        dev->GetImmediateContext(&workContext);
-        if (workContext) {
-            gpuCensusFrameWorkEnd(workContext);
-            workContext->Release();
-        }
+    ID3D11DeviceContext* workContext = nullptr;
+    if (dev) dev->GetImmediateContext(&workContext);
+    if (workContext && gpuCensusFrameWorkOpen()) {
+        gpuCensusFrameWorkEnd(workContext);
     }
     // The desktop window's vertical sync (desktop_vsync.h): in VR the headset paces the frame, so Elite's Present never waits for the monitor; the flat
     // profile keeps Elite's own. The trace below keeps the value Elite asked for.
@@ -1970,11 +1967,9 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
     // the paired consumer registers. Exclude registration from Present timing.
     if (SUCCEEDED(hr) && !(flags & DXGI_PRESENT_TEST))
         renderBoundaryNoteOwnedPresent(dev);
-    ID3D11DeviceContext* timingContext = nullptr;
-    if (dev) dev->GetImmediateContext(&timingContext);
-    if (timingContext) {
-        gpuFramePresent(timingContext, g_state->frameCounter + 1);
-        timingContext->Release();
+    if (workContext) {
+        gpuFramePresent(workContext, g_state->frameCounter + 1);
+        workContext->Release();
     }
     frameTick("gpu_frame_present");
 

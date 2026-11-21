@@ -292,6 +292,10 @@ bool fsr3Evaluate(ID3D11DeviceContext* c,unsigned slot,ID3D11Texture2D* colour,I
     return backend(c,depth,mv,mask,out,jx,jy,reset,why);
 }
 // FSR 4.1 takes fsr3Evaluate's arguments without the reactive mask; the route and the planes are FSR's.
+bool fsr4AcquireDirectViews(ID3D11DeviceContext*, unsigned, uint32_t, uint32_t, uint32_t, uint32_t,
+                            uint32_t, uint32_t, uint32_t, uint32_t, bool, bool, uint32_t, Fsr4DirectViews*) {
+    return false;
+}
 bool fsr4Evaluate(ID3D11DeviceContext* c,unsigned slot,ID3D11Texture2D* colour,ID3D11Texture2D* depth,ID3D11Texture2D* mv,
     ID3D11Texture2D* out,uint32_t w,uint32_t h,uint32_t outW,uint32_t outH,float jx,float jy,bool reset,float,
     float nearZ,float,float fov,const char** why,bool infinite,bool hdr) {

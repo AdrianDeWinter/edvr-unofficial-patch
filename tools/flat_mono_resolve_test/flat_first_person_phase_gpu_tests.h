@@ -599,7 +599,7 @@ inline void mutationChecks(fpgpu::Fixture& fx, int slice, int slices) {
         {"the mode is read from route.y", "if(route.w==1)m.xy+=", "if(route.y==1)m.xy+=", nullptr},
         {"mode 2 and above do not reject", " else if(route.w!=0)valid=false;", "", nullptr},
         {"only mode 2 rejects; other values pass as given", "else if(route.w!=0)valid=false;", "else if(route.w==2)valid=false;", nullptr},
-        {"mode 2 leaves the attached pixel to the camera term", "bool attached=route.z!=0 && (FirstPersonStencil", "bool attached=route.z!=0 && route.w<2 && (FirstPersonStencil", nullptr},
+        {"mode 2 leaves the attached pixel to the camera term", "if(route.z!=0) {", "if(route.z!=0 && route.w<2) {", nullptr},
         {"the validity test runs on the corrected vector", "float2 prevPx=float2(q)+.5+m.xy;",
          "float2 prevPx=float2(q)+.5+m.xy+(route.w==1?jitter.xy-jitter.zw:0);", nullptr},
         {"the correction is also added to world pixels", "motion=(prev-rawUv)*float2(size.xy);",
