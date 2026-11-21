@@ -5942,8 +5942,11 @@ void testLauncherFixes() {
         check(!purgeArgs.badArg && purgeArgs.action == AppArgs::Act::Uninstall && purgeArgs.purge && purgeArgs.removeSettings,
               "--purge sets purge and removeSettings");
         const AppArgs fl = parse({L"--headless", L"/novr", L"--frontier-login", L"--close-after-start"});
-        check(!fl.badArg && fl.headless && fl.novr && !fl.vr && fl.frontierLogin && fl.closeAfterStart && launcherHasCommand(fl),
+        check(!fl.badArg && fl.headless && fl.novr && !fl.vr && fl.frontierLogin && fl.closeAfterStart && !launcherHasCommand(fl),
               "--headless accepts /novr, --frontier-login and --close-after-start");
+        const AppArgs upInst = parse({L"--update", L"--install"});
+        check(!upInst.badArg && upInst.update && upInst.action == AppArgs::Act::Install && launcherHasCommand(upInst),
+              "--update --install parses cleanly and chains update before install");
         const AppArgs steamCmd = parse({L"--headless", L"C:\\Steam\\Elite Dangerous\\EDLaunch.exe", L"/VR", L"/autorun"});
         check(!steamCmd.badArg && steamCmd.headless && steamCmd.vr && !steamCmd.novr &&
               steamCmd.wrappedArgs.size() == 3 && steamCmd.wrappedArgs[0] == L"C:\\Steam\\Elite Dangerous\\EDLaunch.exe",

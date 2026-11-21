@@ -7796,7 +7796,7 @@ int wmain(int argc, wchar_t** argv) {
               "clean purge removes edvr_logs, edvr_backup and edvr_install");
 
         const ApplyResult applied = applyPlan(plan, [](const std::string&, const void**, size_t*) { return false; });
-        check(applied.ok, "clean purge applies cleanly: " + applied.error);
+        check(applied.ok, "clean purge applies cleanly", applied.error);
         check(!fileExists(joinPath(dir, L"d3d11.dll")) &&
               !fileExists(joinPath(dir, L"edvr.ini")) &&
               !fileExists(joinPath(dir, L"edvr-flat.ini")) &&
@@ -7813,6 +7813,7 @@ int wmain(int argc, wchar_t** argv) {
         // Safety gate still holds when openvr_api_orig.dll is missing.
         Survey unsafe = baseSurvey(dir);
         unsafe.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(openvr, L"openvr_api.dll"), "rt");
+        unsafe.openvrCurrent.nativeRuntimeExports = true;
         unsafe.openvrOrig.kind = DllKind::Absent;
         check(planUninstall(unsafe, purgeOpts, p).blocked,
               "clean purge still refuses when openvr_api_orig.dll is missing");
