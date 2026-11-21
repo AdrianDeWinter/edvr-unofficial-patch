@@ -116,6 +116,10 @@ bool LauncherState::closeAfterStart() const { return get("close_after_start") ==
 
 void LauncherState::setCloseAfterStart(bool on) { set("close_after_start", on ? "on" : "off"); }
 
+bool LauncherState::steamFrontierLogin() const { return get("steam_frontier_login") == "on"; }
+
+void LauncherState::setSteamFrontierLogin(bool on) { set("steam_frontier_login", on ? "on" : "off"); }
+
 std::string LauncherState::modeKey(const std::wstring& installFolder) {
     std::wstring folder = installFolder;
     for (wchar_t& c : folder) {

@@ -191,6 +191,7 @@ struct Options {
     bool keepSettings = true;   // merge each settings file the scope installs rather than replace it
     bool repair = false;        // rewrite our files even when they look right
     bool removeSettings = false;  // uninstall: delete the installed edition's settings file too
+    bool purge = false;           // uninstall: clean purge — also remove both INIs, logs, backups, install dir and mirror
     std::wstring backupStamp;   // folder name under edvr_backup\; caller supplies the clock
     std::string  nowUtc;        // stamped into the install record
 };
@@ -202,6 +203,7 @@ enum class Action {
     WritePayload,  // write the payload file with id `item` to `to`
     WriteText,     // write `text` to `to`
     Delete,        // remove `from`
+    RemoveDir,     // recursively remove EDVR-owned directory `from` (clean purge only)
 };
 
 struct Step {

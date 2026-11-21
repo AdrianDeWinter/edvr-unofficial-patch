@@ -41,10 +41,6 @@ std::wstring selfPath() {
     return std::wstring(buffer, n);
 }
 
-bool samePath(const std::wstring& a, const std::wstring& b) {
-    return !a.empty() && !b.empty() && _wcsicmp(a.c_str(), b.c_str()) == 0;
-}
-
 // Text for a console, or, with none (--unregister run from Windows' list of programs), collected
 // for one message box at the end.
 class Output {
@@ -169,17 +165,19 @@ int runUpdateCommand(const AppArgs& args, Output& out) {
         lastAsset = name;
         out.line("Downloading " + name);
     };
-    if (!updater.downloadUpdate(check, nullptr, progress, &error)) {
+    std::set<std::string> verified;
+    if (!updater.downloadUpdate(check, nullptr, progress, &error, &verified)) {
         out.line("The download did not finish: " + error);
         return 1;
     }
     PayloadCache cache(roots.cacheDir());
     for (const ManifestFile& f : check.manifest.files) {
-        const bool ok = cache.hasVerified(f.sha256, f.size);
+        const bool ok = verified.find(f.sha256) != verified.end() ? cache.hasSized(f.sha256, f.size)
+                                                                  : cache.hasVerified(f.sha256, f.size);
         out.line(std::string(ok ? "  verified " : "  NOT VERIFIED ") + f.path + "  " + f.sha256);
         if (!ok) return 1;
     }
-    if (!updater.commitManifest(check, &error)) {
+    if (!updater.commitManifest(check, &error, &verified)) {
         out.line("The manifest could not be adopted: " + error);
         return 1;
     }
@@ -206,7 +204,7 @@ int runLicensesCommand(Output& out) {
 // --direct-dry-run on the real network and the real Steam client. The elevated copy is refused before
 // anything is contacted.
 int runDirectDryRun(const AppArgs& args, Output& out) {
-    if (isElevated()) {
+    if (isElevatedForPlay()) {
         out.line(elevatedRefusal());
         return 2;
     }
@@ -274,17 +272,60 @@ std::wstring commandSource(const GameInstall& game) {
     return lowered.find(L"\\steamapps\\") == std::wstring::npos ? L"Frontier launcher" : L"Steam";
 }
 
+// Infers the game folder from a wrapped command (e.g. Steam %command% passing "...\EDLaunch.exe").
+std::wstring wrappedCommandDir(const std::vector<std::wstring>& wrapped) {
+    if (wrapped.empty()) return std::wstring();
+    const std::wstring& exe = wrapped.front();
+    const size_t slash = exe.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? std::wstring() : exe.substr(0, slash);
+}
+
+// Builds a fallback RouteOps when invoked as a Steam %command% wrapper: instead of opening
+// steam://rungameid/359320 (which would re-invoke %command% in a loop), spawn the wrapped exe directly.
+RouteOps headlessRouteOps(const std::vector<std::wstring>& wrapped, bool vr) {
+    RouteOps ops = realRouteOps();
+    if (wrapped.empty()) return ops;
+    const std::wstring wrappedExe = wrapped.front();
+    if (!fileExists(wrappedExe)) return ops;
+    std::wstring extra;
+    bool hasMode = false;
+    for (size_t i = 1; i < wrapped.size(); ++i) {
+        if (_wcsicmp(wrapped[i].c_str(), L"/vr") == 0 || _wcsicmp(wrapped[i].c_str(), L"/novr") == 0) hasMode = true;
+        if (!extra.empty()) extra += L' ';
+        const bool needsQuote = wrapped[i].find_first_of(L" \t\"") != std::wstring::npos;
+        if (needsQuote) extra += L'"' + wrapped[i] + L'"';
+        else extra += wrapped[i];
+    }
+    if (!hasMode) {
+        if (!extra.empty()) extra += L' ';
+        extra += vr ? L"/vr" : L"/novr";
+    }
+    const std::wstring workDir = wrappedCommandDir(wrapped);
+    auto baseSpawn = ops.spawn;
+    ops.openUri = [baseSpawn, wrappedExe, extra, workDir](const std::wstring&) {
+        return baseSpawn && baseSpawn(wrappedExe, extra, workDir);
+    };
+    return ops;
+}
+
 int headlessPlay(const AppArgs& args, Output& out) {
-    if (args.vr == args.novr) {
-        out.line("--headless needs exactly one of --vr and --novr. --dir names the game's product folder; without it, the folder this exe is in is used.");
+    if (args.vr && args.novr) {
+        out.line("--headless cannot take both --vr and --novr.");
         return 2;
     }
-    if (isElevated()) {
+    if (isElevatedForPlay()) {
         out.line(elevatedRefusal());
         return 2;
     }
-    // Without --dir, the folder this exe is in: a player can copy the launcher into the game folder and run it there.
+    // Optional pre-launch update check when --headless is paired with --update.
+    // Offline/skipped checks do not prevent launching Elite.
+    if (args.update) {
+        const int updateCode = runUpdateCommand(args, out);
+        if (updateCode == 3) return updateCode;  // refused manifest
+    }
+    // Without --dir, check a wrapped executable's folder (Steam %command%) first, then this exe's folder.
     std::wstring dir = args.dir;
+    if (dir.empty()) dir = wrappedCommandDir(args.wrappedArgs);
     if (dir.empty()) {
         const std::wstring self = selfPath();
         const size_t slash = self.find_last_of(L'\\');
@@ -308,12 +349,37 @@ int headlessPlay(const AppArgs& args, Output& out) {
         return 1;
     }
 
+    // Decide VR vs flat when neither --vr nor --novr was given: honor a single-mode install scope,
+    // else the remembered mode in launcher.ini, else Elite's Settings.xml.
+    bool useVr = args.vr;
+    if (!args.vr && !args.novr) {
+        const Survey survey = surveyTarget(game);
+        const std::string scope = installedScope(survey);
+        if (scope == "flat") {
+            useVr = false;
+        } else if (scope == "vr") {
+            useVr = true;
+        } else {
+            LauncherState state;
+            std::string remembered;
+            if (state.load(joinPath(launcherRootsFor(args).launcherDir(), L"launcher.ini"), nullptr))
+                remembered = state.mode(game.dir);
+            if (remembered == "flat") useVr = false;
+            else if (remembered == "vr") useVr = true;
+            else {
+                const edvr::ModeRead mode = eliteGameMode();
+                useVr = !(mode.known && mode.mode == edvr::GameMode::Flat);
+            }
+        }
+    }
+
     // Declared before the session, so the workers can post into it until the session is gone.
     HeadlessQueue queue;
     bool closeRequested = false;
     SessionEnv env;
     env.roots = launcherRootsFor(args);
     env.closeAfterStartArg = args.closeAfterStart;
+    env.frontierLoginArg = args.frontierLogin;
     env.post = [&queue](std::function<void()> job) { queue.push(std::move(job)); };
     // The window's close: here it ends the wait. The lines are printed after each job, not from a callback.
     env.closeWindow = [&closeRequested]() { closeRequested = true; };
@@ -328,7 +394,7 @@ int headlessPlay(const AppArgs& args, Output& out) {
         shown = session.playLine();
         if (!shown.empty()) out.line(shown);
     };
-    beginHeadlessPlay(session, game, args.vr, realRouteOps(), WatchNames(), WatchTiming());
+    beginHeadlessPlay(session, game, useVr, headlessRouteOps(args.wrappedArgs, useVr), WatchNames(), WatchTiming());
     show();
     bool finished = closeRequested || !session.playing();
     while (!finished) {
@@ -383,7 +449,7 @@ int directDryRunLines(const AppArgs& args, DirectEnv env, std::vector<std::strin
     DirectRequest request;
     request.productDir = game.dir;
     request.vr = args.vr;
-    request.frontier = _wcsicmp(source.c_str(), L"Frontier launcher") == 0;
+    request.frontier = _wcsicmp(source.c_str(), L"Frontier launcher") == 0 || args.frontierLogin;
     // A dry run never asks and never changes the stored login, whatever the caller handed in.
     env.prompts = FrontierPrompts();
     lines->push_back(request.frontier ? "Dry run for an install from Frontier's own store, with the stored login."

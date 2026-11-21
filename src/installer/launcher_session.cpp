@@ -195,7 +195,9 @@ void LauncherSession::beginUpdate() {
             return;
         }
         Updater updater(*http, settings);
-        if (!updater.downloadUpdate(check, &cancel_, progress, &error) || !updater.commitManifest(check, &error)) {
+        std::set<std::string> verified;
+        if (!updater.downloadUpdate(check, &cancel_, progress, &error, &verified) ||
+            !updater.commitManifest(check, &error, &verified)) {
             post([this, error]() { updateFailed("the update did not finish: " + error); });
             return;
         }
@@ -240,7 +242,22 @@ LauncherSession::LauncherSession(SessionEnv env) : env_(std::move(env)) {
     if (state.load(launcherIniPath(env_.roots), nullptr)) {
         directLaunch_ = state.directLaunch();
         closeAfterStart_ = state.closeAfterStart();
+        steamFrontierLogin_ = state.steamFrontierLogin();
     }
+}
+
+void LauncherSession::setSteamFrontierLogin(bool on) {
+    if (!on) deleteFrontierLogin(frontierLoginPath(env_.roots));
+    if (on == steamFrontierLogin_) return;
+    steamFrontierLogin_ = on;
+    LauncherState state;
+    std::string error;
+    if (state.load(launcherIniPath(env_.roots), &error)) {
+        state.setSteamFrontierLogin(on);
+        createDirectories(env_.roots.launcherDir());
+        state.save(&error);
+    }
+    changed();
 }
 
 void LauncherSession::setLanguage(const std::string& code) {
@@ -433,7 +450,7 @@ void LauncherSession::beginDirectPlay(const std::wstring& source, const std::wst
     playLine_ = "Signing in to Frontier...";
     changed();
     const std::string base = env_.frontierBase.empty() ? std::string(kFrontierApiBase) : env_.frontierBase;
-    const bool frontierStore = _wcsicmp(source.c_str(), L"Steam") != 0;
+    const bool frontierStore = _wcsicmp(source.c_str(), L"Steam") != 0 || steamFrontierLogin();
     spawn([this, source, gameDir, vr, ops, names, timing, base, frontierStore]() {
         std::unique_ptr<HttpClient> http = makeHttp();
         DirectEnv direct;

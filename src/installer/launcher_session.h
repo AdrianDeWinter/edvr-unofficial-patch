@@ -67,6 +67,7 @@ struct SessionEnv {
     std::wstring payloadDir;       // --payload, or empty
     std::string  channelOverride;  // --channel for this run, or empty to read launcher.ini
     bool         closeAfterStartArg = false;  // --close-after-start for this run; the saved setting is read too
+    bool         frontierLoginArg = false;    // --frontier-login for this run; uses Frontier account on Steam direct launch
     bool         updatedFlag = false;  // started by a self-update: carry on into the update
     std::wstring selfExe;          // the running exe: hashed for the check, replaced by self-update
     const char* const* keys = nullptr;  // null means the release keys
@@ -159,6 +160,10 @@ public:
     bool closeAfterStart() const { return closeAfterStart_ || env_.closeAfterStartArg; }
     // The saved setting alone, which is what the window's checkbox shows.
     bool closeAfterStartSetting() const { return closeAfterStart_; }
+    // Whether direct launch on a Steam install signs in with a Frontier account instead of Steam.
+    bool steamFrontierLogin() const { return steamFrontierLogin_ || env_.frontierLoginArg; }
+    bool steamFrontierLoginSetting() const { return steamFrontierLogin_; }
+    void setSteamFrontierLogin(bool on);
     // The saved language code, or empty when the file names none (the window then uses Windows).
     const std::string& language() const { return language_; }
     void setLanguage(const std::string& code);
@@ -216,6 +221,7 @@ private:
     bool playing_ = false;
     bool directLaunch_ = false;
     bool closeAfterStart_ = false;
+    bool steamFrontierLogin_ = false;
     bool gameStarted_ = false;
     std::string language_;
     bool applying_ = false;

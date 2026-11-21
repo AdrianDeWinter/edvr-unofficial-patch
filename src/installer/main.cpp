@@ -54,8 +54,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     // The elevated copy has one job and shows nothing; the update and unregister commands print
     // to a console when there is one.
     if (!args.badArg && !args.planFile.empty()) return runApplyPlanFile(args);
-    if (!args.badArg && !args.help && args.headless) return runHeadless(args, attachToConsole());
-    if (!args.badArg && !args.help && launcherHasCommand(args)) return runLauncherCommand(args, attachToConsole());
+    // --headless never opens the GUI window, even when no console is attached (e.g. Steam %command%).
+    if (args.headless && !args.help) {
+        if (args.badArg) {
+            if (attachToConsole()) runConsole(args);
+            return 2;
+        }
+        return runHeadless(args, attachToConsole());
+    }
+    if (!args.badArg && !args.help && launcherHasCommand(args)) {
+        const int code = runLauncherCommand(args, attachToConsole());
+        // Allow chaining --update with --install or --repair for headless automation (e.g. min-ed-launcher).
+        if (code != 0 || !args.update || args.action == AppArgs::Act::None) return code;
+        return runConsole(args);
+    }
 #endif
 
     // --autorun is the elevated relaunch of a window session: it belongs in the

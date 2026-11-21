@@ -61,6 +61,11 @@ public:
     bool closeAfterStart() const;
     void setCloseAfterStart(bool on);
 
+    // True only when the file says "on". When on, direct launch on a Steam install signs in with
+    // Frontier email/password instead of Steam's auth ticket (for non-Steam Frontier accounts).
+    bool steamFrontierLogin() const;
+    void setSteamFrontierLogin(bool on);
+
     static std::string modeKey(const std::wstring& installFolder);
     std::string mode(const std::wstring& installFolder) const;
     void setMode(const std::wstring& installFolder, const std::string& mode);

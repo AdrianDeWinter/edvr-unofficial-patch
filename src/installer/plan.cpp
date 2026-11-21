@@ -1714,6 +1714,7 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
 
     std::vector<std::pair<std::wstring, std::wstring>> backupNames;  // file name -> the path that took it (backupNameFor)
     auto backup = [&](const std::wstring& path, const std::string& why) {
+        if (o.purge) return;  // clean purge removes edvr_backup\ rather than creating a new backup
         Step st;
         st.action = Action::Backup;
         st.from = path;
@@ -1721,6 +1722,14 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         st.why = why;
         body.push_back(st);
         wantBackupDir = true;
+    };
+    auto removeDir = [&](const std::wstring& path, const std::string& why) {
+        Step st;
+        st.action = Action::RemoveDir;
+        st.from = path;
+        st.why = why;
+        body.push_back(st);
+        changed = true;
     };
     auto remove = [&](const std::wstring& path, const std::string& why,
                       const std::string& expectSha = std::string()) {
@@ -1905,13 +1914,16 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     // settings it had no business touching. edvr.ini for vr and both, edvr-flat.ini for flat and both.
     plan.settingsFile = flatEdition ? "edvr-flat.ini" : "edvr.ini";
     for (const bool flatFile : {false, true}) {
-        if (flatFile ? scope == "vr" : scope == "flat") continue;
+        if (!o.purge && (flatFile ? scope == "vr" : scope == "flat")) continue;
         const char* profile = flatFile ? "flat" : "vr";
         const std::wstring iniPath = settingsPathFor(s.game.dir, profile);
         const std::string iniName = toUtf8(settingsLeafFor(profile));
         const bool ownPresent = flatFile ? s.flatIniPresent : s.iniPresent;
         if (ownPresent) {
-            if (o.removeSettings) {
+            if (o.purge) {
+                remove(iniPath, "removes " + iniName + " (clean purge)");
+                plan.notes.push_back("Removing " + iniName + " (clean purge).");
+            } else if (o.removeSettings) {
                 backup(iniPath, "your " + iniName);
                 remove(iniPath, "removes " + iniName);
                 plan.notes.push_back("Removing " + iniName + " (a copy is kept in the backup folder).");
@@ -1919,7 +1931,7 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                 plan.notes.push_back(
                     "Leaving " + iniName + " in place, so a reinstall finds your settings again.");
             }
-        } else if (flatFile && flatEdition && s.iniPresent) {
+        } else if (!o.purge && flatFile && flatEdition && s.iniPresent) {
             // A flat install that never got a file of its own -- one made before
             // edvr-flat.ini existed -- has been reading the shared edvr.ini, which the
             // VR profile uses too. It is not the flat edition's to remove.
@@ -1945,6 +1957,19 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     if (fileExists(flatBaseIniPath(s.game.dir)))
         remove(flatBaseIniPath(s.game.dir), "removes the kept default edvr-flat.ini");
 
+    if (o.purge) {
+        for (const wchar_t* extra : {L"edvr_breadcrumbs.txt", L"edvr_FATAL.txt"}) {
+            const std::wstring extraPath = joinPath(s.game.dir, extra);
+            if (fileExists(extraPath)) remove(extraPath, "removes ED-UP crash artifact (clean purge)");
+        }
+        const std::wstring logsDir = joinPath(s.game.dir, L"edvr_logs");
+        const std::wstring backupsDir = backupRootPath(s.game.dir);
+        const std::wstring installDir = stateDirPath(s.game.dir);
+        if (dirExists(logsDir)) removeDir(logsDir, "removes edvr_logs\\ (clean purge)");
+        if (dirExists(backupsDir)) removeDir(backupsDir, "removes edvr_backup\\ (clean purge)");
+        if (dirExists(installDir)) removeDir(installDir, "removes edvr_install\\ (clean purge)");
+    }
+
     if (!changed) {
         plan.nothingToDo = true;
         plan.notes.push_back("ED-UP does not appear to be installed here.");
@@ -1957,9 +1982,15 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             plan.steps.push_back(mk);
         }
         plan.steps.insert(plan.steps.end(), body.begin(), body.end());
-        plan.notes.push_back(
-            "Logs in edvr_logs\\ and the backups in edvr_backup\\ are left where they are; delete "
-            "them by hand if you want them gone.");
+        if (o.purge) {
+            plan.notes.push_back(
+                "Clean purge: logs in edvr_logs\\, backups in edvr_backup\\, edvr_install\\, and "
+                "this install's settings mirror will be removed permanently.");
+        } else {
+            plan.notes.push_back(
+                "Logs in edvr_logs\\ and the backups in edvr_backup\\ are left where they are; delete "
+                "them by hand if you want them gone.");
+        }
     }
     return plan;
 }

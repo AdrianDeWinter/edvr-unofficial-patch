@@ -7750,6 +7750,100 @@ int wmain(int argc, wchar_t** argv) {
     testReviewFollowUps(scratch);
     testScopeArgs();
 
+    {   // Clean purge uninstall: removes ED-UP binaries, both INIs, logs, backups, install record,
+        // and crash files, restores openvr_api_orig.dll, leaves game files intact, and still blocks
+        // when the game's original OpenVR runtime cannot be proved.
+        printf("\nclean purge uninstall\n");
+        const std::wstring dir = joinPath(scratch, L"purge-uninstall");
+        removeTree(dir);
+        const std::wstring openvr = joinPath(dir, L"Openvr\\win64");
+        makeTree(openvr);
+        makeTree(joinPath(dir, L"edvr_logs"));
+        makeTree(joinPath(dir, L"edvr_backup\\old"));
+        makeTree(joinPath(dir, L"edvr_install"));
+        const std::string stock = syntheticPe({"VR_InitInternal", "VR_GetGenericInterface"});
+        const std::string edvrRt = syntheticPe({"VR_InitInternal", "edvrConfigureNativeRuntime"});
+        const std::string edvrGfx = syntheticPe({"edvrAcquireNativeGraphics"});
+        writeAll(joinPath(dir, L"EliteDangerous64.exe"), "game");
+        writeAll(joinPath(dir, L"d3d11.dll"), edvrGfx);
+        writeAll(joinPath(openvr, L"openvr_api.dll"), edvrRt);
+        writeAll(joinPath(openvr, L"openvr_api_orig.dll"), stock);
+        writeAll(joinPath(dir, L"edvr.ini"), "[fix]\n");
+        writeAll(joinPath(dir, L"edvr-flat.ini"), "[fix]\n");
+        writeAll(joinPath(dir, L"edvr_breadcrumbs.txt"), "crumb");
+        writeAll(joinPath(dir, L"edvr_FATAL.txt"), "fatal");
+        writeAll(joinPath(dir, L"edvr_logs\\session.log"), "log");
+        writeAll(joinPath(dir, L"edvr_backup\\old\\d3d11.dll"), "bak");
+        writeAll(joinPath(dir, L"edvr_install\\install.state"), "profile=vr\nscope=both\n");
+
+        PayloadInfo p = testPayload(kNextIni);
+        Survey s = surveyTarget(baseSurvey(dir).game);
+        s.eliteKind = EliteExeKind::OdysseyQualified;
+        s.gameRunningHere = s.gameRunningElsewhere = s.gameRunStateUnknown = false;
+
+        Options purgeOpts = testOptions();
+        purgeOpts.purge = true;
+        purgeOpts.removeSettings = true;
+        const Plan plan = planUninstall(s, purgeOpts, p);
+        check(!plan.blocked && !plan.nothingToDo, "clean purge plan is not blocked");
+        check(!hasStep(plan, Action::Backup, nullptr, nullptr), "clean purge creates no new backups");
+        check(hasStep(plan, Action::Delete, L"edvr.ini", nullptr) &&
+              hasStep(plan, Action::Delete, L"edvr-flat.ini", nullptr),
+              "clean purge deletes both edvr.ini and edvr-flat.ini");
+        check(hasStep(plan, Action::RemoveDir, L"edvr_logs", nullptr) &&
+              hasStep(plan, Action::RemoveDir, L"edvr_backup", nullptr) &&
+              hasStep(plan, Action::RemoveDir, L"edvr_install", nullptr),
+              "clean purge removes edvr_logs, edvr_backup and edvr_install");
+
+        const ApplyResult applied = applyPlan(plan, [](const std::string&, const void**, size_t*) { return false; });
+        check(applied.ok, "clean purge applies cleanly: " + applied.error);
+        check(!fileExists(joinPath(dir, L"d3d11.dll")) &&
+              !fileExists(joinPath(dir, L"edvr.ini")) &&
+              !fileExists(joinPath(dir, L"edvr-flat.ini")) &&
+              !fileExists(joinPath(dir, L"edvr_breadcrumbs.txt")) &&
+              !fileExists(joinPath(dir, L"edvr_FATAL.txt")) &&
+              !dirExists(joinPath(dir, L"edvr_logs")) &&
+              !dirExists(joinPath(dir, L"edvr_backup")) &&
+              !dirExists(joinPath(dir, L"edvr_install")),
+              "all ED-UP files and directories are removed");
+        check(fileExists(joinPath(dir, L"EliteDangerous64.exe")) &&
+              readAll(joinPath(openvr, L"openvr_api.dll")) == stock,
+              "game executable stays intact and stock openvr_api.dll is restored");
+
+        // Safety gate still holds when openvr_api_orig.dll is missing.
+        Survey unsafe = baseSurvey(dir);
+        unsafe.openvrCurrent = fakeDll(DllKind::Edvr, joinPath(openvr, L"openvr_api.dll"), "rt");
+        unsafe.openvrOrig.kind = DllKind::Absent;
+        check(planUninstall(unsafe, purgeOpts, p).blocked,
+              "clean purge still refuses when openvr_api_orig.dll is missing");
+    }
+
+    {   // hotkey.menu is exposed in the desktop settings schema and validated by SettingRow::parseTyped.
+        printf("\nhotkey setting exposure and validation\n");
+        const SettingDef* menuKey = nullptr;
+        for (const SettingDef& d : settingDefs()) {
+            if (strcmp(d.section, "hotkey") == 0 && strcmp(d.key, "menu") == 0) {
+                menuKey = &d;
+                break;
+            }
+        }
+        check(menuKey != nullptr, "hotkey.menu is exposed in settings_schema.inc");
+        if (menuKey) {
+            SettingRow row;
+            row.def = menuKey;
+            std::string parsed;
+            check(row.parseTyped(L"f8", &parsed) && parsed == "F8", "lowercase key canonicalises to F8");
+            check(row.parseTyped(L"ctrl+shift+f9", &parsed) && parsed == "CTRL+SHIFT+F9", "modifier chord canonicalises");
+            check(row.parseTyped(L"   ", &parsed) && parsed.empty(), "blank disables the hotkey");
+            check(row.parseTyped(L"gamepad_back", &parsed) && parsed == "GamePad_Back", "gamepad button canonicalises");
+            check(row.parseTyped(L"231d0200:joy_12", &parsed) && parsed == "231D0200:Joy_12", "joystick button canonicalises");
+            check(row.parseTyped(L"0x77", &parsed) && parsed == "0x77", "raw hex virtual key accepted");
+            check(!row.parseTyped(L"notakey", &parsed), "unknown key name is rejected");
+            check(!row.parseTyped(L"CTRL+", &parsed), "dangling modifier is rejected");
+            check(!row.parseTyped(L"231D0200:Joy_999", &parsed), "out-of-range joystick button is rejected");
+        }
+    }
+
     printf("\n%s\n", g_fails == 0 ? "installer_test: all good" : "installer_test: FAILURES");
     return g_fails == 0 ? 0 : 1;
 }

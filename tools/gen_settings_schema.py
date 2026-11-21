@@ -172,6 +172,10 @@ import sys
 # that change how the picture looks, which somebody does come here to turn on, and
 # its keys are user settings exactly as [fix]'s are.
 EXPOSED_SECTIONS = ('fix', 'visual')
+# Individual keys outside EXPOSED_SECTIONS that also belong in the installer's
+# desktop settings window (the menu hotkey is the one key someone needs to reach
+# from the desktop when F8 clashes with another app before ever opening the menu).
+EXPOSED_KEYS = ('hotkey.menu',)
 # The sections whose keys may carry a `ui:` line at all. The installer's
 # window still shows only EXPOSED_SECTIONS; what a ui: line buys a developer
 # key is its LABEL and its CHOICES in the in-headset menu, so that demoting a
@@ -1026,8 +1030,11 @@ def run(root, out, check):
             print('  edvr.ini:%d  %s.%s' % (s.line, s.section, s.key))
         return 1
 
+    def is_exposed(s):
+        return s.section in EXPOSED_SECTIONS or ('%s.%s' % (s.section, s.key)) in EXPOSED_KEYS
+
     unknown = [s for s in settings
-               if s.annotated and not s.hidden and s.section in EXPOSED_SECTIONS
+               if s.annotated and not s.hidden and is_exposed(s)
                and '%s.%s' % (s.section, s.key) not in code]
     if unknown:
         for s in unknown:
@@ -1036,7 +1043,7 @@ def run(root, out, check):
         return 1
 
     exposed = [s for s in settings
-               if s.annotated and not s.hidden and s.section in EXPOSED_SECTIONS]
+               if s.annotated and not s.hidden and is_exposed(s)]
 
     # A whole-number setting bounded 0 to 1 has two states, and a text box is
     # the wrong way to offer two states. Either it should be read with getBool
@@ -1340,7 +1347,7 @@ def run(root, out, check):
                 'true' if when_it_applies(s) == 'restart' else 'false',
                 'true' if s.percent else 'false',
                 'true' if s.headset else 'false',
-                c_string(s.group)))
+                c_string(s.group or ('Hotkeys' if s.section == HOTKEY_SECTION else ''))))
 
     os.makedirs(out, exist_ok=True)
     out_path = os.path.join(out, 'settings_schema.inc')
