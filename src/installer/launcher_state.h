@@ -13,6 +13,9 @@
 //                      lower-cased, with backslashes and no trailing separator
 //   last_install       the install folder Play was last pressed for, as a path; the
 //                      window opens on it while it is still an install it can use
+//   language           Elite's language, as min-ed-launcher stores it: en, or a
+//                      language folder name (de, es, fr, pt-BR, ru). Missing means
+//                      the Windows language.
 //
 // A line this code does not know (another version's key, a comment) is kept as
 // it was, in place, so a newer launcher's file survives an older one. Saving is
@@ -65,6 +68,10 @@ public:
     // Empty when the file has none.
     std::wstring lastInstall() const;
     void setLastInstall(const std::wstring& installFolder);
+
+    // Empty when the file does not name one. Not checked against the known codes.
+    std::string language() const;
+    void setLanguage(const std::string& code);
 
     // The same folder by modeKey's rules: case, slash direction and a trailing separator do not count.
     static bool sameInstall(const std::wstring& a, const std::wstring& b);

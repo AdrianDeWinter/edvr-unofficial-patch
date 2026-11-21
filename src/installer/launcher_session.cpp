@@ -8,6 +8,7 @@
 #include <mutex>
 
 #include "frontier_login.h"
+#include "game_language.h"
 #include "launch_route.h"
 #include "launcher_state.h"
 #include "probe.h"
@@ -59,7 +60,10 @@ UpdaterSettings LauncherSession::updaterSettings() const {
 
 void LauncherSession::start() {
     LauncherState state;
-    if (state.load(launcherIniPath(env_.roots), nullptr)) channel_ = state.channel();
+    if (state.load(launcherIniPath(env_.roots), nullptr)) {
+        channel_ = state.channel();
+        language_ = state.language();
+    }
     if (!env_.channelOverride.empty()) channel_ = env_.channelOverride;
 
     // The payload first: it is what makes Install available. The window is already up.
@@ -237,6 +241,15 @@ LauncherSession::LauncherSession(SessionEnv env) : env_(std::move(env)) {
         directLaunch_ = state.directLaunch();
         closeAfterStart_ = state.closeAfterStart();
     }
+}
+
+void LauncherSession::setLanguage(const std::string& code) {
+    language_ = code;
+    LauncherState state;
+    if (!state.load(launcherIniPath(env_.roots), nullptr)) return;
+    state.setLanguage(code);
+    createDirectories(env_.roots.launcherDir());
+    state.save(nullptr);
 }
 
 void LauncherSession::setCloseAfterStart(bool on) {
@@ -465,6 +478,10 @@ void LauncherSession::beginDirectPlay(const std::wstring& source, const std::wst
         request.productDir = gameDir;
         request.vr = vr;
         request.frontier = frontierStore;
+        request.languageCode = language_.empty() ? systemGameLanguageCode() : canonicalGameLanguage(language_);
+        const std::wstring edlaunch = findEdLaunch(gameDir);
+        const size_t slash = edlaunch.find_last_of(L"\\/");
+        request.languageArg = gameLanguageArgument(slash == std::wstring::npos ? std::wstring() : edlaunch.substr(0, slash), request.languageCode);
         DirectPlan plan = planDirectLaunch(direct, request);
         if (cancel_) return;  // the window is closing
 

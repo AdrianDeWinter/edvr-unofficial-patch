@@ -159,6 +159,9 @@ public:
     bool closeAfterStart() const { return closeAfterStart_ || env_.closeAfterStartArg; }
     // The saved setting alone, which is what the window's checkbox shows.
     bool closeAfterStartSetting() const { return closeAfterStart_; }
+    // The saved language code, or empty when the file names none (the window then uses Windows).
+    const std::string& language() const { return language_; }
+    void setLanguage(const std::string& code);
     // Saves the setting to launcher.ini. The window's checkbox; --close-after-start does not write it.
     void setCloseAfterStart(bool on);
     // True once the game has been seen running (or the direct start gave a process), for the run's exit code.
@@ -214,6 +217,7 @@ private:
     bool directLaunch_ = false;
     bool closeAfterStart_ = false;
     bool gameStarted_ = false;
+    std::string language_;
     bool applying_ = false;
     std::string playLine_;
 };

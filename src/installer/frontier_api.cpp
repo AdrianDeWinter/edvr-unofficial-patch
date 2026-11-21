@@ -140,6 +140,10 @@ HttpResponse FrontierApi::send(const std::string& path, const std::vector<std::p
     return http_.get(request);
 }
 
+void FrontierApi::setLang(const std::string& lang) {
+    if (!lang.empty()) lang_ = lang;
+}
+
 bool FrontierApi::syncTime() {
     // The local clock is read before the call, as createGetRunningTime does, so that a slow answer
     // does not make the server's time look later than it is.
@@ -204,7 +208,7 @@ ApiResult FrontierApi::frontierFirstSignIn(const std::string& email, const std::
                                     {{"email", hexOfBytes(email)},
                                      {"password", hexOfBytes(password)},
                                      {"machineId", machineId},
-                                     {"lang", kFrontierLang},
+                                     {"lang", lang_},
                                      {"fTime", fTime()}},
                                     std::string(), true);
     ApiResult result = classify(reply, false);
@@ -220,7 +224,7 @@ ApiResult FrontierApi::frontierFirstSignIn(const std::string& email, const std::
 ApiResult FrontierApi::frontierMachineToken(const std::string& machineId, const std::string& plainCode, const std::string& encCode,
                                             std::string* machineToken) {
     const HttpResponse reply = send("/3.0/user/frontier/token",
-                                    {{"machineId", machineId}, {"plainCode", plainCode}, {"encCode", encCode}, {"lang", kFrontierLang}},
+                                    {{"machineId", machineId}, {"plainCode", plainCode}, {"encCode", encCode}, {"lang", lang_}},
                                     std::string(), true);
     ApiResult result = classify(reply, false);
     if (result.outcome != ApiOutcome::Ok) return result;
@@ -239,7 +243,7 @@ ApiResult FrontierApi::frontierAuth(const std::string& email, const std::string&
                                      {"password", hexOfBytes(password)},
                                      {"machineId", machineId},
                                      {"machineToken", machineToken},
-                                     {"lang", kFrontierLang},
+                                     {"lang", lang_},
                                      {"fTime", fTime()}},
                                     std::string(), true);
     ApiResult result = classify(reply, false);

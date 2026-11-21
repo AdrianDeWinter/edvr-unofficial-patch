@@ -50,22 +50,22 @@ bool launcherPayloadReady() { return lg.session && lg.session->payloadState() ==
 bool launcherBusy() { return lg.session && (lg.session->updating() || lg.session->applying()); }
 
 const wchar_t* launcherNoPayloadText() {
-    return L"There is nothing to install from yet.\r\n\r\n"
-           L"Press Download when the line below says an update is available, or start the launcher with "
-           L"--payload and the folder of an unpacked ed-up zip.";
+    return tr(L"There is nothing to install from yet.\r\n\r\n"
+              L"Press Download when the line below says an update is available, or start the launcher with "
+              L"--payload and the folder of an unpacked ed-up zip.");
 }
 
 std::wstring launcherSubtitle() {
     std::wstring head;
     if (!lg.session || lg.session->payloadState() == PayloadState::Loading) {
-        head = L"loading";
+        head = tr(L"loading");
     } else if (lg.session->payloadState() == PayloadState::Ready) {
         head = fromUtf8(lg.session->payload().version);
     } else {
-        head = L"no release downloaded yet";
+        head = tr(L"no release downloaded yet");
     }
-    return head + L"  \x00b7  launcher " + fromUtf8(EDUP_LAUNCHER_VERSION) +
-           L"  \x00b7  unofficial patch for Elite Dangerous in VR and flat";
+    return head + L"  \x00b7  " + tr(L"launcher") + L" " + fromUtf8(EDUP_LAUNCHER_VERSION) +
+           L"  \x00b7  " + tr(L"unofficial patch for Elite Dangerous in VR and flat");
 }
 
 // The remembered mode of the folder on screen, "vr" or "flat", else "vr".
@@ -127,7 +127,7 @@ void updateLauncherControls() {
         showDirect = (route.kind == RouteKind::Steam || frontierStore || epic) && lg.session->directLaunchOffered();
         const bool directOn = showDirect && lg.session->directLaunch();
         if (lg.direct)
-            SetWindowTextW(lg.direct, epic ? L"Skip the Epic launcher" : L"Start Elite directly (no Frontier launcher)");
+            SetWindowTextW(lg.direct, epic ? tr(L"Skip the Epic launcher") : tr(L"Start Elite directly (no Frontier launcher)"));
         if (route.kind == RouteKind::Frontier || directOn) {
             // A button only for a mode this folder has installed: a VR-only install gets no flat button, and the reverse.
             // An empty scope (no install the survey can name) keeps both, as before.
@@ -138,12 +138,12 @@ void updateLauncherControls() {
             showPair = true;
             showVrButton = hasVr;
             showFlatButton = hasFlat;
-            lg.playCaption = directOn ? (epic ? L"Signs in to Epic and Frontier, starts Elite itself, and exits once Elite is running."
-                                          : frontierStore ? L"Signs in itself. If that fails, it starts EDLaunch."
-                                                          : L"Signs in itself. If that fails, it starts through Steam.")
-                             : bothModes ? L"Starts EDLaunch with the mode you pick, then closes it when Elite exits."
-                             : hasVr ? L"Starts EDLaunch in VR, then closes it when Elite exits."
-                                     : L"Starts EDLaunch in flat, then closes it when Elite exits.";
+            lg.playCaption = directOn ? (epic ? tr(L"Signs in to Epic and Frontier, starts Elite itself, and exits once Elite is running.")
+                                          : frontierStore ? tr(L"Signs in itself. If that fails, it starts EDLaunch.")
+                                                          : tr(L"Signs in itself. If that fails, it starts through Steam."))
+                             : bothModes ? tr(L"Starts EDLaunch with the mode you pick, then closes it when Elite exits.")
+                             : hasVr ? tr(L"Starts EDLaunch in VR, then closes it when Elite exits.")
+                                     : tr(L"Starts EDLaunch in flat, then closes it when Elite exits.");
             // With a choice, the remembered mode is the primary button; a lone button is the primary one.
             const bool flat = launcherRememberedMode() == "flat";
             ui::setButtonStyle(lg.playVr, (bothModes ? !flat : hasVr) ? ui::ButtonStyle::Primary : ui::ButtonStyle::Secondary);
@@ -151,14 +151,14 @@ void updateLauncherControls() {
         } else if (route.kind != RouteKind::None) {
             showPlay = true;
             const wchar_t* store = route.kind == RouteKind::Steam ? L"Steam" : L"Epic";
-            std::wstring mode = L"Elite's 3D mode is unknown.";
+            std::wstring mode = tr(L"Elite's 3D mode is unknown.");
             if (g.mode.known)
-                mode = g.mode.mode == edvr::GameMode::Flat ? L"Elite is set to flat (3D off)." : L"Elite is set to VR (3D on).";
-            lg.playCaption = std::wstring(L"Starts Elite through ") + store + L", which uses the mode Elite is set to. " + mode;
+                mode = g.mode.mode == edvr::GameMode::Flat ? tr(L"Elite is set to flat (3D off).") : tr(L"Elite is set to VR (3D on).");
+            lg.playCaption = std::wstring(tr(L"Starts Elite through ")) + store + tr(L", which uses the mode Elite is set to. ") + mode;
         } else {
             lg.playCaption = fromUtf8(route.why);
         }
-        if (gameHere || g.survey.gameRunningElsewhere) lg.playCaption = L"Elite is already running.";
+        if (gameHere || g.survey.gameRunningElsewhere) lg.playCaption = tr(L"Elite is already running.");
     }
     if (lg.session->playing() || !lg.session->playLine().empty()) lg.playCaption = fromUtf8(lg.session->playLine());
     ShowWindow(lg.play, onScreen && showPlay ? SW_SHOW : SW_HIDE);
@@ -220,7 +220,7 @@ void paintLauncherBand(HDC dc) {
     if (lg.session->checkState() == CheckState::Refused) colour = t.warn;
     else if (lg.session->checkState() == CheckState::Skipped) colour = t.subtext;
     RECT line{dp(kMargin + kCardPad), dp(666), dp(330), dp(692)};
-    ui::drawText(dc, fromUtf8(lg.session->updateLine()), line, f.body, colour, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    ui::drawText(dc, trLine(lg.session->updateLine()), line, f.body, colour, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     // Under the "Start Elite directly" checkbox when that is showing, which is a line shorter than the
     // card's second row; otherwise beside the pair of buttons, or beside the single one.
@@ -230,6 +230,76 @@ void paintLauncherBand(HDC dc) {
     const int captionLeft = underCheckbox ? lg.directLeft : pair ? kMargin + kCardPad + 252 : single ? kMargin + kCardPad + 134 : kMargin + kCardPad;
     RECT caption{dp(captionLeft), dp(underCheckbox ? 719 : 698), dp(kClientWidth - kMargin - kCardPad), dp(underCheckbox ? 749 : 742)};
     ui::drawText(dc, lg.playCaption, caption, f.caption, t.subtext, DT_LEFT | DT_VCENTER | DT_WORDBREAK | DT_END_ELLIPSIS);
+}
+
+void refillScopeChoices() {
+    if (!g.scopeCombo) return;
+    const LRESULT sel = SendMessageW(g.scopeCombo, CB_GETCURSEL, 0, 0);
+    SendMessageW(g.scopeCombo, CB_RESETCONTENT, 0, 0);
+    for (const wchar_t* choice : kScopeChoices) {
+        SendMessageW(g.scopeCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(tr(choice)));
+    }
+    SendMessageW(g.scopeCombo, CB_SETCURSEL, sel == CB_ERR ? 0 : sel, 0);
+}
+
+void setControlText(int id, const wchar_t* english) {
+    if (HWND control = GetDlgItem(g.window, id)) SetWindowTextW(control, tr(english));
+}
+
+// The words on the window, in the language `code` names. Does not write launcher.ini.
+void applyLauncherLanguage(const std::string& code) {
+    l10nSet(code.empty() ? systemGameLanguageCode() : canonicalGameLanguage(code));
+    setControlText(kIdTabInstall, L"Setup");
+    setControlText(kIdTabSettings, L"Settings");
+    setControlText(kIdBrowse, L"Browse...");
+    setControlText(kIdChkKeep, L"Keep the settings I have changed");
+    setControlText(kIdInstall, L"Install");
+    if (g.haveSurvey && g.install) {
+        const bool installed = g.survey.d3d11.kind == DllKind::Edvr || g.survey.openvrCurrent.kind == DllKind::Edvr || g.survey.state.present;
+        SetWindowTextW(g.install, installed ? tr(L"Update") : tr(L"Install"));
+    }
+    setControlText(kIdRepair, L"Repair");
+    setControlText(kIdUninstall, L"Uninstall");
+    setControlText(kIdCollectLogs, L"Save logs");
+    setControlText(kIdSettingsVr, L"VR");
+    setControlText(kIdSettingsFlat, L"Flat");
+    setControlText(kIdUpdate, L"Download");
+    setControlText(kIdRc, L"Include release candidates");
+    setControlText(kIdPlay, L"Play");
+    setControlText(kIdPlayVr, L"Play VR");
+    setControlText(kIdPlayFlat, L"Play flat");
+    setControlText(kIdDirect, L"Start Elite directly (no Frontier launcher)");
+    setControlText(kIdCloseAfter, L"Close the launcher once Elite has started");
+    setControlText(kIdDiscord, L"Ask on Discord");
+    setControlText(kIdCopyPath, L"Copy path");
+    setControlText(kIdShowFolder, L"Show folder");
+    if (g.search) SendMessageW(g.search, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(tr(L"Search settings")));
+    refillScopeChoices();
+    if (g.languageCombo) {
+        const LRESULT count = SendMessageW(g.languageCombo, CB_GETCOUNT, 0, 0);
+        for (LRESULT i = 0; i < count; ++i) {
+            const auto stored = reinterpret_cast<const char*>(SendMessageW(g.languageCombo, CB_GETITEMDATA, static_cast<WPARAM>(i), 0));
+            if (stored && l10nCode() == stored) {
+                SendMessageW(g.languageCombo, CB_SETCURSEL, static_cast<WPARAM>(i), 0);
+                break;
+            }
+        }
+    }
+    if (g.haveSurvey) rebuildStatus();
+    if (lg.session) updateLauncherControls();
+    if (lg.session && lg.session->payloadState() == PayloadState::None)
+        setReport(toUtf8(launcherNoPayloadText()));
+    applyLayout();
+}
+
+// CB_SETITEMDATA keeps the code. The pointer is a string literal, so it outlives the control.
+void fillLanguageCombo() {
+    if (!g.languageCombo) return;
+    SendMessageW(g.languageCombo, CB_RESETCONTENT, 0, 0);
+    for (const char* code : kLanguageCodes) {
+        const LRESULT index = SendMessageW(g.languageCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(gameLanguageName(code)));
+        if (index >= 0) SendMessageW(g.languageCombo, CB_SETITEMDATA, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(code));
+    }
 }
 
 void createLauncherControls(HWND window) {

@@ -29,8 +29,10 @@
 #include "product_title.h"
 #include "settings.h"
 #include "settings_view.h"
+#include "launcher_l10n.h"
 #include "ui.h"
 #ifdef EDUP_LAUNCHER
+#include "game_language.h"
 #include "launch_route.h"
 #include "launcher_login_dialog.h"
 #include "launcher_main.h"
@@ -64,6 +66,7 @@ enum : int {
     kIdSettingsVr = 1062,
     kIdSettingsFlat = 1063,
     kIdScope = 1070,
+    kIdLanguage = 1071,
 };
 
 const UINT kMsgFirstScan = WM_APP + 1;
@@ -94,6 +97,8 @@ const int kCardPad = 20;
 // The scope prompt's three choices, in the order the combo lists them. The
 // default is the folder's own scope, else both.
 const wchar_t* kScopeChoices[] = {L"VR and flat (recommended)", L"VR only", L"Flat only"};
+RECT g_scopePromptPx{};
+const char* kLanguageCodes[] = {"en", "de", "es", "fr", "pt-BR", "ru"};
 
 enum class Screen { Install, Settings };
 
@@ -116,6 +121,7 @@ struct Gui {
     HWND window = nullptr;
     HWND combo = nullptr;
     HWND scopeCombo = nullptr;
+    HWND languageCombo = nullptr;
     HWND report = nullptr;
     HWND chkKeep = nullptr;
     HWND install = nullptr;
@@ -302,6 +308,8 @@ void syncSettingsSelector() {
     ShowWindow(g.settingsFlat, settingsShown && scope != "vr" ? SW_SHOW : SW_HIDE);
 }
 
+void rebuildStatus();
+void applyLayout();
 #ifdef EDUP_LAUNCHER
 #include "launcher_gui.inc"
 #endif
@@ -319,6 +327,48 @@ void applyLayout() {
         if (visible) MoveWindow(p.hwnd, dp(p.x), dp(p.y), dp(p.w), dp(p.h), TRUE);
     }
 
+    // The four action buttons are sized to their labels. A translation of "Save logs" is wider
+    // than the English word, and a fixed width clips it.
+    if (g.install && g.screen == Screen::Install) {
+        HWND buttons[] = {g.install, g.repair, g.uninstall, g.collectLogs};
+        HDC dc = GetDC(g.window);
+        const HFONT font = ui::fonts().body;
+        int x = dp(kMargin + kCardPad);
+        const int y = dp(436);
+        const int h = dp(34);
+        const int gap = dp(8);
+        const int limit = dp(kClientWidth - kMargin - kCardPad);
+        for (HWND button : buttons) {
+            if (!button) continue;
+            wchar_t label[256]{};
+            GetWindowTextW(button, label, 256);
+            int width = ui::textWidth(dc, label, font) + dp(28);
+            if (width < dp(96)) width = dp(96);
+            if (x + width > limit) width = limit - x;
+            if (width < dp(48)) width = dp(48);
+            MoveWindow(button, x, y, width, h, TRUE);
+            x += width + gap;
+        }
+        ReleaseDC(g.window, dc);
+    }
+    // The scope prompt is measured too, and the combo starts after it so a longer translation is not clipped.
+    if (g.scopeCombo && (g.screen == Screen::Install)) {
+        HDC dc = GetDC(g.window);
+        const wchar_t* prompt = tr(L"Install ED-UP for:");
+        const int textW = ui::textWidth(dc, prompt, ui::fonts().body);
+        ReleaseDC(g.window, dc);
+        const int labelLeft = dp(220);
+        const int right = dp(kClientWidth - kMargin);
+        int comboLeft = labelLeft + textW + dp(10);
+        int comboW = right - comboLeft;
+        if (comboW < dp(150)) {
+            comboW = dp(150);
+            comboLeft = right - comboW;
+        }
+        g_scopePromptPx = RECT{labelLeft, dp(146), comboLeft - dp(8), dp(176)};
+        MoveWindow(g.scopeCombo, comboLeft, dp(146), comboW, dp(30), TRUE);
+    }
+
     // The tip link finishes a sentence that is painted, not a control, so where
     // it goes depends on how wide that sentence renders -- which changes with
     // the font, the scale and the language of the machine it is running on.
@@ -327,7 +377,9 @@ void applyLayout() {
     if (g.tip || g.discord) {
         HDC dc = GetDC(g.window);
         const HFONT caption = ui::fonts().caption;
-        const int discordWidth = ui::textWidth(dc, L"Ask on Discord", caption) + dp(2);
+        wchar_t discordLabel[128] = L"Ask on Discord";
+        if (g.discord) GetWindowTextW(g.discord, discordLabel, 128);
+        const int discordWidth = ui::textWidth(dc, discordLabel, caption) + dp(2);
 #ifndef EDUP_LAUNCHER   // the launcher has no tip link, so there is no sentence to measure
         const int prefix = ui::textWidth(dc, kTipText, caption);
         const int space = ui::textWidth(dc, L" ", caption);
@@ -344,7 +396,11 @@ void applyLayout() {
     // set to land the field at exactly the 30 units the Browse button
     // beside it gets; the text centres itself within the item.
     // The scope prompt's combo is sized the same way.
-    for (HWND combo : {g.combo, g.scopeCombo}) {
+#ifdef EDUP_LAUNCHER
+    if (g.languageCombo)
+        MoveWindow(g.languageCombo, dp(kClientWidth - kMargin - 168), dp(16), dp(168), dp(30), TRUE);
+#endif
+    for (HWND combo : {g.combo, g.scopeCombo, g.languageCombo}) {
         if (!combo) continue;
         SendMessageW(combo, CB_SETITEMHEIGHT, 0, dp(24));  // dropdown rows
         SendMessageW(combo, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), dp(22));
@@ -454,31 +510,31 @@ void rebuildStatus() {
     g.statusPath = s.game.dir;
 
     StatusRow fixes;
-    fixes.label = L"The fixes";
+    fixes.label = tr(L"The fixes");
     fixes.tone = toneForOurs(s.d3d11.kind);
     // A record older than the files says nothing about what is installed, its version included.
     const bool stale = installRecordStale(s);
     if (s.d3d11.kind == DllKind::Edvr) {
-        fixes.value = L"ED-UP installed as d3d11.dll";
+        fixes.value = tr(L"ED-UP installed as d3d11.dll");
         if (!s.state.edvrVersion.empty() && !stale) fixes.value += L" \x00b7 " + fromUtf8(s.state.edvrVersion);
     } else if (s.d3d11.kind == DllKind::Absent) {
-        fixes.value = L"not installed";
+        fixes.value = tr(L"not installed");
     } else {
-        fixes.value = describeDll(s.d3d11) + L" holds the d3d11.dll name";
+        fixes.value = describeDll(s.d3d11) + L" " + tr(L"holds the d3d11.dll name");
     }
     g.status.push_back(fixes);
 
     StatusRow vr;
-    vr.label = L"Flash fix, native on foot";
+    vr.label = tr(L"Flash fix, native on foot");
     if (!s.haveOpenvrDir) {
         vr.tone = Tone::Warn;
-        vr.value = L"no Openvr folder found under this install";
+        vr.value = tr(L"no Openvr folder found under this install");
     } else if (s.openvrCurrent.kind == DllKind::Edvr) {
         vr.tone = Tone::Good;
-        vr.value = L"ED-UP installed as openvr_api.dll";
+        vr.value = tr(L"ED-UP installed as openvr_api.dll");
     } else if (s.openvrCurrent.kind == DllKind::OpenVrRuntime) {
         vr.tone = Tone::Muted;
-        vr.value = L"not installed \x00b7 the game's own runtime is in place";
+        vr.value = tr(L"not installed \x00b7 the game's own runtime is in place");
     } else {
         vr.tone = toneForOurs(s.openvrCurrent.kind);
         vr.value = describeDll(s.openvrCurrent);
@@ -487,9 +543,9 @@ void rebuildStatus() {
 
     if (stale) {
         StatusRow record;
-        record.label = L"Install record";
+        record.label = tr(L"Install record");
         record.tone = Tone::Warn;
-        record.value = L"older than the files here; Update refreshes it";
+        record.value = tr(L"older than the files here; Update refreshes it");
         g.status.push_back(record);
     }
 
@@ -498,34 +554,34 @@ void rebuildStatus() {
     const std::string scope = scopeChoice();
     if (s.haveOpenvrDir) {
         StatusRow orig;
-        orig.label = L"The game's runtime";
+        orig.label = tr(L"The game's runtime");
         if (scope == "flat") {
             if (s.openvrCurrent.kind == DllKind::OpenVrRuntime) {
                 orig.tone = Tone::Good;
-                orig.value = L"the game's own runtime is in place";
+                orig.value = tr(L"the game's own runtime is in place");
             } else if (s.openvrOrig.kind == DllKind::OpenVrRuntime) {
                 orig.tone = Tone::Good;
-                orig.value = L"safe, renamed openvr_api_orig.dll";
+                orig.value = tr(L"safe, renamed openvr_api_orig.dll");
             } else if (s.openvrCurrent.kind == DllKind::Edvr) {
                 orig.tone = Tone::Warn;
-                orig.value = L"ED-UP's runtime is in place; flat restores the game's own";
+                orig.value = tr(L"ED-UP's runtime is in place; flat restores the game's own");
             } else {
                 orig.tone = Tone::Muted;
-                orig.value = L"not found";
+                orig.value = tr(L"not found");
             }
         } else {
             if (s.openvrCurrent.kind == DllKind::Edvr) {
                 orig.tone = Tone::Good;
-                orig.value = L"ED-UP's own runtime is in place";
+                orig.value = tr(L"ED-UP's own runtime is in place");
             } else if (s.openvrCurrent.kind == DllKind::OpenVrRuntime) {
                 orig.tone = Tone::Muted;
-                orig.value = L"the game's own runtime; the install replaces it";
+                orig.value = tr(L"the game's own runtime; the install replaces it");
             } else if (s.openvrOrig.kind == DllKind::OpenVrRuntime) {
                 orig.tone = Tone::Good;
-                orig.value = L"safe, renamed openvr_api_orig.dll";
+                orig.value = tr(L"safe, renamed openvr_api_orig.dll");
             } else {
                 orig.tone = Tone::Muted;
-                orig.value = L"not found";
+                orig.value = tr(L"not found");
             }
         }
         g.status.push_back(orig);
@@ -534,18 +590,18 @@ void rebuildStatus() {
     // One row for the scope's settings files, each with whether it is here and kept. The flat file is read
     // from edvr-flat.ini and falls back to the shared edvr.ini until it has its own.
     StatusRow settings;
-    settings.label = L"Your settings";
+    settings.label = tr(L"Your settings");
     std::wstring parts;
     bool allHere = true;
     if (scope != "flat") {
-        parts += s.iniPresent ? L"edvr.ini kept" : L"edvr.ini not yet";
+        parts += s.iniPresent ? tr(L"edvr.ini kept") : tr(L"edvr.ini not yet");
         allHere = allHere && s.iniPresent;
     }
     if (scope == "both") parts += L"; ";
     if (scope != "vr") {
-        parts += s.flatIniPresent ? L"edvr-flat.ini kept"
-                                  : (s.iniPresent ? L"edvr-flat.ini not yet (edvr.ini is copied into it)"
-                                                  : L"edvr-flat.ini not yet");
+        parts += s.flatIniPresent ? tr(L"edvr-flat.ini kept")
+                                  : (s.iniPresent ? tr(L"edvr-flat.ini not yet (edvr.ini is copied into it)")
+                                                  : tr(L"edvr-flat.ini not yet"));
         allHere = allHere && s.flatIniPresent;
     }
     settings.value = parts;
@@ -554,37 +610,37 @@ void rebuildStatus() {
 
     if (!s.state.chainTarget.empty()) {
         StatusRow chain;
-        chain.label = L"Alongside";
+        chain.label = tr(L"Alongside");
         chain.tone = Tone::Good;
-        chain.value = (s.state.chainMod.empty() ? std::wstring(L"another mod")
+        chain.value = (s.state.chainMod.empty() ? std::wstring(tr(L"another mod"))
                                                 : s.state.chainMod) +
-                      L", chained through " + s.state.chainTarget;
+                      tr(L", chained through ") + s.state.chainTarget;
         g.status.push_back(chain);
     }
 
     if (s.gameRunningHere) {
         StatusRow running;
-        running.label = L"Elite Dangerous";
+        running.label = tr(L"Elite Dangerous");
         running.tone = Tone::Bad;
-        running.value = L"running \x2014 close it before installing anything";
+        running.value = tr(L"running \x2014 close it before installing anything");
         g.status.push_back(running);
     } else if (s.gameRunningElsewhere) {
         // Not a warning: the copy running belongs to another install and this
         // one is free. Said anyway, because somebody who can see the game on
         // their other monitor is owed the reason the buttons are still live.
         StatusRow running;
-        running.label = L"Elite Dangerous";
+        running.label = tr(L"Elite Dangerous");
         running.tone = Tone::Muted;
-        running.value = L"running from a different folder \x2014 not this install";
+        running.value = tr(L"running from a different folder \x2014 not this install");
         g.status.push_back(running);
     } else if (s.gameRunStateUnknown) {
         // The buttons stay live on purpose: a click re-surveys, which may well
         // succeed the second time, and when it does not the plan says why it
         // refuses rather than the buttons being greyed with no reason given.
         StatusRow running;
-        running.label = L"Elite Dangerous";
+        running.label = tr(L"Elite Dangerous");
         running.tone = Tone::Warn;
-        running.value = L"could not check whether it is running \x2014 nothing will be installed";
+        running.value = tr(L"could not check whether it is running \x2014 nothing will be installed");
         g.status.push_back(running);
     }
 
@@ -592,16 +648,16 @@ void rebuildStatus() {
     // when the scope leaves that half out, said again: somebody who installed VR only and
     // then turned 3D off is owed the reason the flat fixes are not there.
     if (!g.mode.known) {
-        g.modeLine = L"Elite's 3D mode is unknown: ED-UP starts in VR.";
+        g.modeLine = tr(L"Elite's 3D mode is unknown: ED-UP starts in VR.");
     } else if (g.mode.mode == edvr::GameMode::Flat) {
-        g.modeLine = L"Elite's 3D mode is off: ED-UP runs its flat fixes.";
+        g.modeLine = tr(L"Elite's 3D mode is off: ED-UP runs its flat fixes.");
     } else {
-        g.modeLine = L"Elite's 3D mode is on: ED-UP runs its VR fixes.";
+        g.modeLine = tr(L"Elite's 3D mode is on: ED-UP runs its VR fixes.");
     }
     if (g.mode.mode == edvr::GameMode::Flat && scope == "vr") {
-        g.scopeLine = L"This install does not include flat: ED-UP stays out of the way.";
+        g.scopeLine = tr(L"This install does not include flat: ED-UP stays out of the way.");
     } else if (g.mode.mode == edvr::GameMode::Vr && scope == "flat") {
-        g.scopeLine = L"This install does not include VR: ED-UP stays out of the way.";
+        g.scopeLine = tr(L"This install does not include VR: ED-UP stays out of the way.");
     }
 }
 
@@ -670,16 +726,19 @@ void paintInstallScreen(HDC dc) {
     }
 
     // The scope prompt sits on the tab row, to the right of the tabs.
-    RECT scopeLabel{dp(372), dp(146), dp(484), dp(176)};
-    ui::drawText(dc, L"Install ED-UP for:", scopeLabel, f.body, t.subtext, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    RECT scopeLabel = g_scopePromptPx.right > g_scopePromptPx.left
+                          ? g_scopePromptPx
+                          : RECT{dp(372), dp(146), dp(484), dp(176)};
+    ui::drawText(dc, tr(L"Install ED-UP for:"), scopeLabel, f.body, t.subtext,
+                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     RECT actions{dp(kMargin), dp(394), dp(kClientWidth - kMargin), dp(512)};
     ui::paintCard(dc, actions, g.dpi);
 
     RECT reassure{dp(kMargin + kCardPad), dp(478), dp(kClientWidth - kMargin - kCardPad), dp(498)};
     ui::drawText(dc,
-                 L"Nothing is changed until you confirm it, and every file replaced is copied "
-                 L"into edvr_backup\\ first.",
+                 tr(L"Nothing is changed until you confirm it, and every file replaced is copied "
+                    L"into edvr_backup\\ first."),
                  reassure, f.caption, t.subtext, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     const RECT report = reportCardRect();
@@ -707,10 +766,9 @@ void paintSettingsScreen(HDC dc) {
     RECT note{dp(kMargin + kCardPad), dp(202), dp(kClientWidth - kMargin - kCardPad), dp(222)};
     const std::wstring where =
         g.settings.loaded()
-            ? L"Written into the " + std::wstring(settingsLeafFor(g.settingsEdition)) +
-                  L" of the install above, and live within a second. The few that need a game "
-                  L"restart are marked."
-            : L"Pick an install above first.";
+            ? std::wstring(tr(L"Written into the ")) + settingsLeafFor(g.settingsEdition) +
+                  tr(L" of the install above, and live within a second. The few that need a game restart are marked.")
+            : tr(L"Pick an install above first.");
     ui::drawText(dc, where, note, f.caption, t.subtext, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     // The search box is a real edit control with its 3D border taken off, so
@@ -740,7 +798,24 @@ void paintWindow(HWND window) {
     ui::fillRect(dc, client, t.windowBg);
 
     RECT title{dp(kMargin), dp(18), dp(kClientWidth - kMargin), dp(50)};
-    ui::drawText(dc, kProductTitle, title, f.title, t.text, DT_LEFT | DT_SINGLELINE);
+#ifdef EDUP_LAUNCHER
+    RECT languageLabel{};
+    if (g.languageCombo) {
+        RECT comboRc{};
+        GetWindowRect(g.languageCombo, &comboRc);
+        MapWindowPoints(nullptr, window, reinterpret_cast<POINT*>(&comboRc), 2);
+        languageLabel = comboRc;
+        languageLabel.right = comboRc.left - dp(8);
+        languageLabel.left = languageLabel.right - dp(120);
+        if (languageLabel.left < dp(kMargin)) languageLabel.left = dp(kMargin);
+        title.right = languageLabel.left - dp(12);
+    }
+#endif
+    ui::drawText(dc, kProductTitle, title, f.title, t.text, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+#ifdef EDUP_LAUNCHER
+    if (g.languageCombo)
+        ui::drawText(dc, tr(L"Language"), languageLabel, f.body, t.subtext, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+#endif
 
 #ifdef EDUP_LAUNCHER
     const std::wstring subtitle = launcherSubtitle();
@@ -802,7 +877,7 @@ void showSurvey() {
 
     const bool installed = g.survey.d3d11.kind == DllKind::Edvr ||
                            g.survey.openvrCurrent.kind == DllKind::Edvr || g.survey.state.present;
-    SetWindowTextW(g.install, installed ? L"Update" : L"Install");
+    SetWindowTextW(g.install, installed ? tr(L"Update") : tr(L"Install"));
 #ifdef EDUP_LAUNCHER
     updateLauncherControls();
 #endif
@@ -1323,7 +1398,7 @@ void createControls(HWND window) {
                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdSearch)), nullptr,
                                nullptr);
     SendMessageW(g.search, WM_SETFONT, reinterpret_cast<WPARAM>(f.body), TRUE);
-    SendMessageW(g.search, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Search settings"));
+    SendMessageW(g.search, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(tr(L"Search settings")));
     // 318 wide, so the box ends 8 units short of the VR button at x=370.
     place(g.search, kMargin + kCardPad, 252, 310, 28, Screen::Settings);
 
@@ -1360,7 +1435,20 @@ void createControls(HWND window) {
     }
 
 #ifdef EDUP_LAUNCHER
+    g.languageCombo = CreateWindowExW(0, L"COMBOBOX", L"",
+                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST |
+                                          CBS_OWNERDRAWFIXED | CBS_HASSTRINGS,
+                                      0, 0, 10, 10, window,
+                                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdLanguage)), nullptr, nullptr);
+    SendMessageW(g.languageCombo, WM_SETFONT, reinterpret_cast<WPARAM>(f.body), TRUE);
+    if (ui::theme().dark) SetWindowTheme(g.languageCombo, L"DarkMode_CFD", nullptr);
+    fillLanguageCombo();
     createLauncherControls(window);
+    {
+        LauncherState state;
+        state.load(joinPath(launcherRootsFor(g.args).launcherDir(), L"launcher.ini"), nullptr);
+        applyLauncherLanguage(state.language());
+    }
 #endif
 
     // Deliberately not an explanation of what Install, Repair and Uninstall do.
@@ -1411,7 +1499,7 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
         case WM_DRAWITEM: {
             const DRAWITEMSTRUCT* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
-            if (item->CtlID == kIdCombo || item->CtlID == kIdScope) {
+            if (item->CtlID == kIdCombo || item->CtlID == kIdScope || item->CtlID == kIdLanguage) {
                 ui::drawComboItem(item, g.dpi);
                 return TRUE;
             }
@@ -1421,7 +1509,7 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
         case WM_MEASUREITEM: {
             MEASUREITEMSTRUCT* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
-            if (measure->CtlID == kIdCombo || measure->CtlID == kIdScope) {
+            if (measure->CtlID == kIdCombo || measure->CtlID == kIdScope || measure->CtlID == kIdLanguage) {
                 measure->itemHeight = static_cast<UINT>(dp(24));
                 return TRUE;
             }
@@ -1446,6 +1534,25 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                 scopeChanged();
                 return 0;
             }
+#ifdef EDUP_LAUNCHER
+            if (id == kIdLanguage && code == CBN_SELCHANGE) {
+                const LRESULT index = SendMessageW(g.languageCombo, CB_GETCURSEL, 0, 0);
+                const auto stored = index == CB_ERR ? nullptr
+                    : reinterpret_cast<const char*>(SendMessageW(g.languageCombo, CB_GETITEMDATA, static_cast<WPARAM>(index), 0));
+                if (stored) {
+                    if (lg.session) lg.session->setLanguage(stored);
+                    else {
+                        LauncherState state;
+                        const std::wstring path = joinPath(launcherRootsFor(g.args).launcherDir(), L"launcher.ini");
+                        state.load(path, nullptr);
+                        state.setLanguage(stored);
+                        state.save(nullptr);
+                    }
+                    applyLauncherLanguage(stored);
+                }
+                return 0;
+            }
+#endif
 #ifdef EDUP_LAUNCHER
             if (launcherCommand(id, code)) return 0;
 #endif

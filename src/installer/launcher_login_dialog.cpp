@@ -1,6 +1,7 @@
 #include "launcher_login_dialog.h"
 
 #include "frontier_login.h"
+#include "launcher_l10n.h"
 #include "ui.h"
 #include "update_util.h"
 
@@ -135,7 +136,7 @@ void submit(State* s) {
         f.remember = ui::checkboxChecked(s->remember);
         if (!loginFormComplete(f)) {
             wipeString(&f.password);
-            say(s, L"Enter both the email and the password.");
+            say(s, tr(L"Enter both the email and the password."));
             focusBox(s, f.email.empty() ? s->email : s->password);
             return;
         }
@@ -144,7 +145,7 @@ void submit(State* s) {
     } else {
         s->codeText = trimmed(readEdit(s->code));
         if (s->codeText.empty()) {
-            say(s, L"Type the code from the email.");
+            say(s, tr(L"Type the code from the email."));
             focusBox(s, s->code);
             return;
         }
@@ -171,11 +172,11 @@ void paint(State* s) {
         ui::strokeRounded(dc, *frame, radius, t.controlBorder);
     }
     if (s->kind == Kind::Login) {
-        ui::drawText(dc, L"Email", l.labelA, f.caption, t.subtext, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
-        ui::drawText(dc, L"Password", l.labelB, f.caption, t.subtext, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
+        ui::drawText(dc, tr(L"Email"), l.labelA, f.caption, t.subtext, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
+        ui::drawText(dc, tr(L"Password"), l.labelB, f.caption, t.subtext, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
         ui::drawText(dc, s->privacy, l.privacy, f.caption, t.subtext, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS);
     } else {
-        ui::drawText(dc, L"Code", l.labelA, f.caption, t.subtext, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
+        ui::drawText(dc, tr(L"Code"), l.labelA, f.caption, t.subtext, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
     }
     EndPaint(s->window, &ps);
 }
@@ -193,7 +194,7 @@ void createControls(State* s) {
     if (s->kind == Kind::Login) {
         s->email = makeEdit(s->window, kIdEmail, false);
         s->password = makeEdit(s->window, kIdPassword, true);
-        s->remember = ui::makeCheckbox(s->window, L"Remember my password on this PC", kIdRemember, s->form.remember, f.body);
+        s->remember = ui::makeCheckbox(s->window, tr(L"Remember my password on this PC"), kIdRemember, s->form.remember, f.body);
         placeEdit(*s, s->email, l.frameA);
         placeEdit(*s, s->password, l.frameB);
         MoveWindow(s->remember, l.remember.left, l.remember.top, l.remember.right - l.remember.left, l.remember.bottom - l.remember.top, TRUE);
@@ -202,8 +203,8 @@ void createControls(State* s) {
         s->code = makeEdit(s->window, kIdCode, false);
         placeEdit(*s, s->code, l.frameA);
     }
-    s->ok = ui::makeButton(s->window, s->kind == Kind::Login ? L"Sign in" : L"Continue", kIdOk, ui::ButtonStyle::Primary, f.body);
-    s->cancel = ui::makeButton(s->window, L"Cancel", kIdCancel, ui::ButtonStyle::Secondary, f.body);
+    s->ok = ui::makeButton(s->window, s->kind == Kind::Login ? tr(L"Sign in") : tr(L"Continue"), kIdOk, ui::ButtonStyle::Primary, f.body);
+    s->cancel = ui::makeButton(s->window, tr(L"Cancel"), kIdCancel, ui::ButtonStyle::Secondary, f.body);
     placeButton(s->ok, l.ok);
     placeButton(s->cancel, l.cancel);
     refreshOk(s);
@@ -365,9 +366,11 @@ bool run(State* s, const FrontierDialogOptions& options) {
 bool showFrontierLogin(const FrontierDialogOptions& options, const std::string& note, LoginForm* form) {
     State s;
     s.kind = Kind::Login;
-    s.title = L"Sign in to Frontier";
+    s.title = tr(L"Sign in to Frontier");
     s.note = widenUtf8(note);
-    s.privacy = widenUtf8(loginPrivacyLine(options.underWine));
+    s.privacy = options.underWine
+                    ? tr(L"Your password goes only to Frontier's servers. Under Wine or Proton the saved password is not strongly protected on this PC.")
+                    : tr(L"Your password goes only to Frontier's servers. It is stored encrypted for this Windows user, and only if the box is ticked.");
     s.form.email = form->email;
     s.form.remember = form->remember;
     const bool ran = run(&s, options);
@@ -382,8 +385,11 @@ bool showFrontierLogin(const FrontierDialogOptions& options, const std::string& 
 bool showFrontierCode(const FrontierDialogOptions& options, const std::string& email, const std::string& note, std::string* code) {
     State s;
     s.kind = Kind::Code;
-    s.title = L"Enter the code from Frontier";
-    s.body = L"Frontier emailed a verification code to " + widenUtf8(email) + L".";
+    s.title = tr(L"Enter the code from Frontier");
+    std::wstring body = tr(L"Frontier emailed a verification code to %s.");
+    const size_t at = body.find(L"%s");
+    if (at != std::wstring::npos) body.replace(at, 2, widenUtf8(email));
+    s.body = body;
     s.note = widenUtf8(note);
     const bool accepted = run(&s, options) && s.accepted;
     if (accepted) *code = s.codeText;

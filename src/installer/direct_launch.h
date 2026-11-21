@@ -82,6 +82,9 @@ struct DirectRequest {
     std::wstring productDir;  // the Products\ folder of the game: GameInstall.dir
     bool vr = true;
     bool frontier = false;    // an install from Frontier's own store: its sign-in, and no /steam
+    // Frontier's `lang`, and the /language argument (English\\UK). Empty omits the flag.
+    std::string languageCode;
+    std::string languageArg;
 };
 
 struct DirectPlan {
@@ -110,14 +113,14 @@ std::string fallbackLine(const std::string& reason, bool frontierStore = false);
 std::string maskSecrets(const std::string& text, const std::vector<std::string>& secrets);
 
 // The game's arguments, as Product.createArgString builds them without the watchdog:
-//   "ServerToken <machineToken> <authToken> <serverArgs>" [/steam] /vr|/novr [gameArgs]
+//   "ServerToken <machineToken> <authToken> <serverArgs>" [/language X] [/steam] /vr|/novr [gameArgs]
 // `steamAware` is false for a Frontier-store install, which never gets /steam. An offline product has an
 // empty quoted token. `serverArgs` and `gameArgs` are the product's own.
 // `configureEpic`, when set, is one quoted argument before the mode: ConfigureEpic, the refresh
 // token, the sandbox and the deployment. Steam's line leaves it empty.
 std::string directCommandLine(bool online, const std::string& machineToken, const std::string& authToken,
                               const std::string& serverArgs, bool steamAware, bool vr, const std::string& gameArgs,
-                              const std::string& configureEpic = "");
+                              const std::string& configureEpic = "", const std::string& language = "");
 
 // The stand-in for EDLaunch.exe. Epic has already passed an exchange code on `commandLine`.
 // This signs in and starts EliteDangerous64.exe. It does not start Frontier's launcher.

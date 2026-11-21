@@ -107,6 +107,8 @@ public:
 
     // Asks for the server's time. True when the server answered, false when the local clock is used.
     bool syncTime();
+    // What Frontier-store calls send as `lang`. Empty leaves the default, "en".
+    void setLang(const std::string& lang);
     // The running time, in whole seconds, as the text the other calls send.
     std::string fTime() const;
 
@@ -142,6 +144,7 @@ private:
     std::string base_;
     const std::atomic<bool>* cancel_;
     ApiClock clock_;
+    std::string lang_ = kFrontierLang;
     long long baseSeconds_ = 0;
     unsigned long long baseTick_ = 0;
 };

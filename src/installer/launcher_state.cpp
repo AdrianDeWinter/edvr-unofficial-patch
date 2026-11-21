@@ -137,6 +137,10 @@ std::wstring LauncherState::lastInstall() const { return widenUtf8(get("last_ins
 
 void LauncherState::setLastInstall(const std::wstring& installFolder) { set("last_install", narrowUtf8(installFolder)); }
 
+std::string LauncherState::language() const { return get("language"); }
+
+void LauncherState::setLanguage(const std::string& code) { set("language", code); }
+
 bool LauncherState::sameInstall(const std::wstring& a, const std::wstring& b) {
     return !a.empty() && !b.empty() && modeKey(a) == modeKey(b);
 }

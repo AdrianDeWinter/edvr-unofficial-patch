@@ -2,6 +2,9 @@
 // MIT licence, "Copyright (c) 2017 Chris": see third_party\min_ed_launcher\LICENSE.
 #include "direct_launch.h"
 
+#include "game_language.h"
+#include "launcher_core.h"
+
 #include <cctype>
 #include <cstdlib>
 
@@ -315,12 +318,14 @@ bool sameGameVersion(const std::string& a, const std::string& b) {
 
 std::string directCommandLine(bool online, const std::string& machineToken, const std::string& authToken,
                               const std::string& serverArgs, bool steamAware, bool vr, const std::string& gameArgs,
-                              const std::string& configureEpic) {
+                              const std::string& configureEpic, const std::string& language) {
     std::string options;
     auto add = [&](const std::string& piece) {
         if (!options.empty()) options += ' ';
         options += piece;
     };
+    // min-ed puts /language first, then the platform token, then the mode.
+    if (!language.empty()) add("/language " + language);
     if (!configureEpic.empty()) add("\"" + configureEpic + "\"");
     if (steamAware) add("/steam");
     add(vr ? "/vr" : "/novr");
@@ -382,6 +387,7 @@ DirectPlan planDirectLaunch(const DirectEnv& env, const DirectRequest& request) 
     // 3. Frontier's clock, then 4. a ticket from Steam: the order App.fs takes them in.
     if (stopped()) return fallback(plan, "The sign-in was stopped");
     FrontierApi api(*env.http, env.apiBase, env.cancel, env.clock);
+    if (!request.languageCode.empty()) api.setLang(request.languageCode);
     say("Asking Frontier for the time...");
     api.syncTime();
 
@@ -444,7 +450,7 @@ DirectPlan planDirectLaunch(const DirectEnv& env, const DirectRequest& request) 
     plan.workDir = request.productDir;
     plan.steamAppId = !request.frontier;
     plan.args = widenUtf8(directCommandLine(!info.offline, session.machineToken, session.authToken, serverArgs, info.steamAware && !request.frontier,
-                                            request.vr, product->gameArgs));
+                                            request.vr, product->gameArgs, "", request.languageArg));
     plan.start = true;
     return plan;
 }
@@ -630,6 +636,11 @@ bool startGameFromEpicCommand(const std::wstring& installDir, const std::wstring
     if (!readMachineId(MachineIdKeys(), &machineId, &machineError)) return fail(machineError);
 
     FrontierApi api(http, kFrontierApiBase);
+    LauncherState languageState;
+    languageState.load(joinPath(launcherRoots(L"").launcherDir(), L"launcher.ini"), nullptr);
+    const std::string languageCode = languageState.language().empty() ? systemGameLanguageCode() : canonicalGameLanguage(languageState.language());
+    api.setLang(languageCode);
+    const std::string languageArg = gameLanguageArgument(installDir, languageCode);
     api.syncTime();
     FrontierSession session;
     const ApiResult signedIn = api.epicAuth(machineId, access->text, &session);
@@ -652,7 +663,7 @@ bool startGameFromEpicCommand(const std::wstring& installDir, const std::wstring
     if (!product->serverArgs.empty()) serverArgs += (serverArgs.empty() ? "" : " ") + product->serverArgs;
     const std::string configure = "ConfigureEpic " + refresh->text + " " + sandbox + " " + deployment;
     const std::wstring args = widenUtf8(directCommandLine(!info.offline, session.machineToken, session.authToken, serverArgs,
-                                                         false, vr, product->gameArgs, configure));
+                                                         false, vr, product->gameArgs, configure, languageArg));
     if (!startGameProcess(exe, args, productDir))
         return fail("Elite's program could not be started.");
     return true;

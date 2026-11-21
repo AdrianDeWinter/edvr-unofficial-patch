@@ -68,6 +68,7 @@
 #include "../../src/installer/app.h"
 #include "../../src/installer/detect.h"
 #include "../../src/installer/direct_launch.h"
+#include "../../src/installer/game_language.h"
 #include "../../src/installer/frontier_api.h"
 #include "../../src/installer/frontier_login.h"
 #include "../../src/installer/launch_route.h"
@@ -103,6 +104,7 @@ namespace {
 int g_checks = 0;
 int g_fails = 0;
 std::wstring g_fixtures;
+std::wstring g_repo;
 std::wstring g_scratch;
 std::string g_testKey, g_otherKey;
 const char* g_testKeys[2] = {nullptr, nullptr};
@@ -4031,6 +4033,20 @@ void testDirectPlan() {
     check(directCommandLine(true, "MT", "AT", "/Zz", false, false, "", "ConfigureEpic REF SAND DEP") ==
               "\"ServerToken MT AT /Zz\" \"ConfigureEpic REF SAND DEP\" /novr",
           "an Epic line quotes ConfigureEpic and carries /novr, with no /steam");
+    check(directCommandLine(true, "MT", "AT", "", true, true, "", "", "English\\\\UK") ==
+              "\"ServerToken MT AT \" /language English\\\\UK /steam /vr",
+          "a language is the first flag, as min-ed-launcher writes it");
+    {
+        const char blob[] = "noise English\\\\UK tail";
+        check(gameLanguageInBytes(blob, sizeof(blob) - 1) == "English\\\\UK", "a LocalResources image yields its GameLanguage string");
+        const char none[] = "no language here";
+        check(gameLanguageInBytes(none, sizeof(none) - 1).empty(), "an image without GameLanguage yields nothing");
+        check(canonicalGameLanguage("DE") == "de" && canonicalGameLanguage("pt-br") == "pt-BR" && canonicalGameLanguage("en") == "en",
+              "a language code is the folder name Elite ships");
+        check(gameLanguageArgument(L"", "de") == "German\\\\DE", "with no EDLaunch folder a known language still has its GameLanguage string");
+        check(gameLanguageArgument(L"", "zz") == gameLanguageArgument(L"", systemGameLanguageCode()),
+              "an unknown code follows the Windows language");
+    }
     check(sameGameVersion("4.2.1.0", "4.2.1.0") && !sameGameVersion("4.2.1.0", "4.2.2.0") && !sameGameVersion("4.2.1", "4.2.1.0") && !sameGameVersion("a.b", "a.b") && sameGameVersion("4.2", "4.2"),
           "game versions are equal as System.Version is: the same numbers in the same count");
     {
@@ -4508,7 +4524,7 @@ void testDirectSession() {
         check(rig.session->playing() && contains(rig.session->playLine(), "Signing in"), "Play marks the session busy at once, with the first line: " + rig.session->playLine());
         check(rig.ui.pump([&]() { return rig.restored == 1; }), "the window comes back when the game exits");
         check(rig.started.size() == 1 && rig.started[0].exe == P(rig.game.product, L"EliteDangerous64.exe") && rig.started[0].dir == rig.game.product, "the game is started once, from its own folder");
-        check(!rig.started.empty() && narrowUtf8(rig.started[0].args) == std::string("\"ServerToken ") + kMachineToken + " " + kAuthToken + " /Zz\" /steam /novr /edo --foo", "with the port's command line, /novr for flat");
+        check(!rig.started.empty() && narrowUtf8(rig.started[0].args) == std::string("\"ServerToken ") + kMachineToken + " " + kAuthToken + " /Zz\" /language " + gameLanguageArgument(L"", systemGameLanguageCode()) + " /steam /novr /edo --foo", "with the port's command line, /novr for flat");
         check(rig.rec.uris.empty() && rig.rec.spawns.empty(), "no store address is opened and nothing is spawned");
         check(rig.ui.aside == std::vector<bool>{true, false} && rig.ui.closed == 0,
               "the window stepped aside once when the game started, came back when it ended, and was not closed");
@@ -4994,7 +5010,7 @@ void testStoreSession() {
         }
         check(rig.started.size() == 1 && rig.started[0].exe == P(rig.game.product, L"EliteDangerous64.exe") && rig.started[0].dir == rig.game.product, "the game is started once, from its own folder");
         const std::string args = rig.started.empty() ? std::string() : narrowUtf8(rig.started[0].args);
-        check(args == std::string("\"ServerToken ") + kMachineToken + " " + kAuthToken + " /Zz\" /vr /edo --foo", "the command line has no /steam, the token the code earned (not the one the server's reply names) and the auth token: " + args);
+        check(args == std::string("\"ServerToken ") + kMachineToken + " " + kAuthToken + " /Zz\" /language " + gameLanguageArgument(L"", systemGameLanguageCode()) + " /vr /edo --foo", "the command line has no /steam, the token the code earned (not the one the server's reply names) and the auth token: " + args);
         check(!contains(args, "/steam") && !contains(args, kServerMachineToken), "no /steam, and the server's own machine token is not used");
         check(eventIndex(eventTags(), "load") < 0 && eventIndex(eventTags(), "init") < 0 && eventIndex(eventTags(), "START") >= 0, "Steam's library was never loaded, and the game was started: " + joined(eventTags()));
         check(rig.rec.uris.empty() && rig.rec.spawns.empty() && rig.minimised == 1 && rig.ui.closed == 0, "no store address and no EDLaunch, and the window stepped aside once and was not closed");
@@ -5025,7 +5041,7 @@ void testStoreSession() {
         check(auth && auth->method == "POST" && queryNames(auth->url) == "email,password,machineId,machineToken,lang,fTime" && queryValue(auth->url, "password") == hexed(kPassword) && queryValue(auth->url, "machineToken") == kMachineToken,
               "it is the call with the machine token, and the password goes with it");
         check(rig.loginNotes.empty() && rig.codeNotes.empty(), "nothing was asked");
-        check(!rig.started.empty() && narrowUtf8(rig.started[0].args) == std::string("\"ServerToken ") + kMachineToken + " " + kAuthToken + " /Zz\" /novr /edo --foo", "flat is /novr, and still no /steam");
+        check(!rig.started.empty() && narrowUtf8(rig.started[0].args) == std::string("\"ServerToken ") + kMachineToken + " " + kAuthToken + " /Zz\" /language " + gameLanguageArgument(L"", systemGameLanguageCode()) + " /novr /edo --foo", "flat is /novr, and still no /steam");
         StoredLogin saved;
         check(loadFrontierLogin(rig.loginPath, &saved) && saved.password == kPassword && saved.machineToken == kMachineToken, "the stored login is kept");
         check(!rig.anyLineLeaks() && !treeHasSkipping(rig.base, frontierNeedles(true), L"frontier-login.dat"), "no sentinel in a line or another file");
@@ -5655,6 +5671,203 @@ void testArgs() {
     check(!launcherPreparePayload(parse({L"--payload", L"Z:\\nowhere"}), &note) && !note.empty(), "a payload folder that is not there gives no payload and a note: " + note);
 }
 
+// A button or label added in the launcher window must be a tr() key, and that key must have a
+// non-empty translation in every language Elite ships. A translation that is a copy of the English
+// fails too, except the words a language really spells the same (listed in sameAsEnglish).
+void testLauncherTranslations() {
+    section("launcher translations");
+    const char* langs[] = {"de", "es", "fr", "pt-BR", "ru"};
+    auto sameAsEnglish = [](const std::wstring& english, const char* lang) {
+        if (english == L"Elite Dangerous") return true;
+        if (english == L"VR" && (std::strcmp(lang, "de") == 0 || std::strcmp(lang, "ru") == 0)) return true;
+        if (english == L"launcher" && std::strcmp(lang, "de") != 0 && std::strcmp(lang, "ru") != 0) return true;
+        if (english == L"Code" && (std::strcmp(lang, "de") == 0 || std::strcmp(lang, "fr") == 0)) return true;
+        return false;
+    };
+    auto hex = [](char c) {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    auto parseString = [&](const std::string& src, size_t& i, std::wstring& out) -> bool {
+        if (i + 1 >= src.size() || src[i] != 'L' || src[i + 1] != '"') return false;
+        i += 2;
+        out.clear();
+        while (i < src.size()) {
+            const char c = src[i++];
+            if (c == '"') return true;
+            if (c != '\\' || i >= src.size()) {
+                out.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+                continue;
+            }
+            const char e = src[i++];
+            if (e == 'n') out.push_back(L'\n');
+            else if (e == 'r') out.push_back(L'\r');
+            else if (e == 't') out.push_back(L'\t');
+            else if (e == '\\' || e == '"') out.push_back(static_cast<wchar_t>(e));
+            else if (e == 'x' || e == 'u') {
+                int value = 0;
+                int digits = 0;
+                while (digits < 4 && i < src.size()) {
+                    const int h = hex(src[i]);
+                    if (h < 0) break;
+                    value = value * 16 + h;
+                    ++i;
+                    ++digits;
+                }
+                out.push_back(static_cast<wchar_t>(value));
+            } else {
+                out.push_back(static_cast<wchar_t>(e));
+            }
+        }
+        return false;
+    };
+    auto hasLetter = [](const std::wstring& text) {
+        for (wchar_t c : text) {
+            if ((c >= L'A' && c <= L'Z') || (c >= L'a' && c <= L'z')) return true;
+        }
+        return false;
+    };
+    auto stripComments = [](const std::string& src) {
+        std::string out;
+        for (size_t i = 0; i < src.size();) {
+            if (src.compare(i, 2, "/*") == 0) {
+                const size_t end = src.find("*/", i + 2);
+                i = end == std::string::npos ? src.size() : end + 2;
+                out.push_back('\n');
+                continue;
+            }
+            if (src.compare(i, 2, "//") == 0) {
+                while (i < src.size() && src[i] != '\n') ++i;
+                continue;
+            }
+            if (src[i] == '"') {
+                out.push_back(src[i++]);
+                while (i < src.size() && src[i] != '"') {
+                    if (src[i] == '\\' && i + 1 < src.size()) out.push_back(src[i++]);
+                    out.push_back(src[i++]);
+                }
+                if (i < src.size()) out.push_back(src[i++]);
+                continue;
+            }
+            out.push_back(src[i++]);
+        }
+        return out;
+    };
+    // The launcher build. #ifndef EDUP_LAUNCHER is the installer-only half of gui.cpp.
+    auto launcherSource = [&](const std::string& src) {
+        std::string out;
+        std::vector<bool> keep{true};
+        size_t line = 0;
+        while (line < src.size()) {
+            size_t end = src.find('\n', line);
+            if (end == std::string::npos) end = src.size();
+            std::string row = src.substr(line, end - line);
+            const std::string trimmed = [&]() {
+                size_t s = 0;
+                while (s < row.size() && (row[s] == ' ' || row[s] == '\t')) ++s;
+                return row.substr(s);
+            }();
+            const bool ifdef = trimmed.compare(0, 6, "#ifdef") == 0;
+            const bool ifndef = trimmed.compare(0, 7, "#ifndef") == 0;
+            const bool isElse = trimmed.compare(0, 5, "#else") == 0;
+            const bool endif = trimmed.compare(0, 6, "#endif") == 0;
+            if (ifdef || ifndef) {
+                const bool launcher = trimmed.find("EDUP_LAUNCHER") != std::string::npos;
+                const bool branch = !launcher ? true : ifdef;
+                keep.push_back(keep.back() && branch);
+            } else if (isElse && keep.size() > 1) {
+                const bool parent = keep[keep.size() - 2];
+                keep.back() = parent && !keep.back();
+            } else if (endif && keep.size() > 1) {
+                keep.pop_back();
+            } else if (keep.back()) {
+                out += row;
+                out.push_back('\n');
+            }
+            line = end < src.size() ? end + 1 : src.size();
+        }
+        return out;
+    };
+    auto readRepo = [&](const wchar_t* rel) { return readAll(P(g_repo, rel)); };
+    const std::string catalog = stripComments(readRepo(L"src\\installer\\launcher_l10n.cpp"));
+    check(!catalog.empty(), "launcher_l10n.cpp was read");
+    struct Row { std::wstring en; std::wstring text[5]; };
+    std::vector<Row> rows;
+    for (size_t i = 0; i < catalog.size();) {
+        if (catalog.compare(i, 2, "L\"") != 0) { ++i; continue; }
+        // A catalog row is { L"english", L"de", ... five more }.
+        size_t brace = i;
+        while (brace > 0 && (catalog[brace - 1] == ' ' || catalog[brace - 1] == '\t' || catalog[brace - 1] == '\n' || catalog[brace - 1] == '\r')) --brace;
+        if (brace == 0 || catalog[brace - 1] != '{') { ++i; continue; }
+        Row row;
+        size_t at = i;
+        bool ok = parseString(catalog, at, row.en);
+        for (int n = 0; ok && n < 5; ++n) {
+            while (at < catalog.size() && catalog[at] != 'L' && catalog[at] != '}') ++at;
+            if (at >= catalog.size() || catalog.compare(at, 2, "L\"") != 0) { ok = false; break; }
+            ok = parseString(catalog, at, row.text[n]);
+        }
+        if (ok) rows.push_back(row);
+        i = at > i ? at : i + 1;
+    }
+    check(rows.size() >= 40, "the translation table has a row per launcher string: " + std::to_string(rows.size()));
+    std::map<std::wstring, Row> byEnglish;
+    for (const Row& row : rows) {
+        check(byEnglish.find(row.en) == byEnglish.end(), "a launcher string is in the table once");
+        for (int n = 0; n < 5; ++n) {
+            if (row.text[n].empty())
+                check(false, "missing " + std::string(langs[n]) + " translation for: " + narrowUtf8(row.en));
+            else if (row.text[n] == row.en && !sameAsEnglish(row.en, langs[n]))
+                check(false, "the " + std::string(langs[n]) + " translation copies the English: " + narrowUtf8(row.en));
+        }
+        byEnglish[row.en] = row;
+    }
+
+    const wchar_t* files[] = {L"src\\installer\\gui.cpp", L"src\\installer\\launcher_gui.inc", L"src\\installer\\launcher_login_dialog.cpp", L"src\\installer\\launcher_l10n.cpp"};
+    int uiStrings = 0;
+    for (const wchar_t* rel : files) {
+        const std::string source = launcherSource(stripComments(readRepo(rel)));
+        check(!source.empty(), "read " + narrowUtf8(std::wstring(rel)));
+        for (size_t i = 0; i < source.size();) {
+            if (source.compare(i, 2, "L\"") != 0) { ++i; continue; }
+            size_t at = i;
+            std::wstring text;
+            std::wstring joined;
+            if (!parseString(source, at, text)) { ++i; continue; }
+            joined = text;
+            for (;;) {
+                size_t look = at;
+                while (look < source.size() && (source[look] == ' ' || source[look] == '\t' || source[look] == '\n' || source[look] == '\r')) ++look;
+                std::wstring more;
+                if (source.compare(look, 2, "L\"") != 0 || !parseString(source, look, more)) break;
+                joined += more;
+                at = look;
+            }
+            size_t pre = i;
+            while (pre > 0 && (source[pre - 1] == ' ' || source[pre - 1] == '\t' || source[pre - 1] == '\n' || source[pre - 1] == '\r')) --pre;
+            const bool insideTr = pre >= 3 && source.compare(pre - 3, 3, "tr(") == 0;
+            size_t lineStart = source.rfind('\n', i);
+            lineStart = lineStart == std::string::npos ? 0 : lineStart + 1;
+            const size_t lineEnd = source.find('\n', i);
+            const std::string line = source.substr(lineStart, (lineEnd == std::string::npos ? source.size() : lineEnd) - lineStart);
+            const bool ui = insideTr || line.find("makeButton") != std::string::npos || line.find("makeCheckbox") != std::string::npos ||
+                            line.find("setControlText") != std::string::npos || line.find("drawText") != std::string::npos ||
+                            line.find(".label") != std::string::npos || line.find(".value") != std::string::npos ||
+                            line.find("EM_SETCUEBANNER") != std::string::npos || line.find("kScopeChoices") != std::string::npos ||
+                            line.find("say(") != std::string::npos || line.find(".title") != std::string::npos || line.find(".body") != std::string::npos;
+            if (ui && hasLetter(joined)) {
+                ++uiStrings;
+                const bool known = byEnglish.find(joined) != byEnglish.end();
+                if (!known) check(false, "launcher text has no translation in every language: " + narrowUtf8(joined));
+            }
+            i = at;
+        }
+    }
+    check(uiStrings >= 40, "the scan saw the launcher's buttons and labels: " + std::to_string(uiStrings));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -5667,6 +5880,7 @@ int main(int argc, char** argv) {
         std::printf("usage: launcher_test <repo root> <fixtures dir> <scratch dir> <fakes dir>\n");
         return 2;
     }
+    g_repo = widenUtf8(argv[1]);
     g_fixtures = widenUtf8(argv[2]);
     g_scratch = widenUtf8(argv[3]);
     g_fakes = widenUtf8(argv[4]);
@@ -5715,6 +5929,7 @@ int main(int argc, char** argv) {
     testMachineId();
     testLayoutDpi();
     testDirectPlan();
+    testLauncherTranslations();
     testDirectSession();
     testEpicCommands();
     testDryRun();
