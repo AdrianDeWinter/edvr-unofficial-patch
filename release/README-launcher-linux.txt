@@ -93,5 +93,7 @@ wrapper sets --dir and --store itself and refuses them there.
 Play starts Elite through Steam, so it is not for an Epic copy. Start the game
 from Heroic, Legendary, Lutris or Epic, so that program signs you in.
 
-Keep any existing required Elite launch options. Headset and OpenXR setup and
-Proton gameplay are not covered by this package.
+Keep any existing required Elite launch options. On hybrid-GPU systems (NVIDIA
++ integrated GPU), if Elite or ED-UP selects the integrated GPU under Proton,
+set __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia. Headset and
+OpenXR setup and Proton gameplay are not covered by this package.

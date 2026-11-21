@@ -4,14 +4,14 @@ Use this page for Steam, the Epic Games Launcher, and Frontier's own launcher. L
 
 ## Get ED-UP
 
-The **launcher** installs ED-UP, offers later updates, and has a Play button.
+The **launcher** installs ED-UP, offers later updates, and has an optional Play button.
 
-1. Download [ed-up-launcher.exe](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest/download/ed-up-launcher.exe), or use the [download page](https://characterecho-sean.github.io/ed-unofficial-patch/).
+1. Download **only** [ed-up-launcher.exe](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest/download/ed-up-launcher.exe), or use the [download page](https://characterecho-sean.github.io/ed-unofficial-patch/). You do not need the `.zip`, `.json`, or `.sig` files listed on the GitHub release — the launcher fetches and verifies the release package for you.
 2. On the [release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest), open `SHA256SUMS` and compare it with the file's SHA-256. That hash is how you check the download is the one this project published.
 3. Windows may say it does not recognise the app, because the publisher is new to it. The warning names CharacterEcho LLC, who signed the file. Choose **More info**, then **Run anyway**.
 4. The first run copies the launcher to `%LOCALAPPDATA%\EDVR\launcher\`, adds a Start menu shortcut, and adds an entry in Windows' list of installed programs. Later runs start from there.
 
-The launcher installs from a release it has downloaded: press **Download** when it says an update is available.
+The launcher installs from a release it has downloaded: press **Download & install** (or **Download & update**) in the **Updates** section when a release is available. You can also change the in-game menu hotkey (`F8` by default) in the **Settings** tab under **Hotkeys**.
 
 ## Close the game
 
@@ -58,12 +58,14 @@ Then read [Playing](Playing.md). The optional Play button is [the launcher](The-
 The window is enough. The same program also accepts:
 
 ```text
+ed-up-launcher.exe --update --install --scope both
 ed-up-launcher.exe --install --scope both
 ed-up-launcher.exe --repair
 ed-up-launcher.exe --uninstall
+ed-up-launcher.exe --uninstall --purge
 ed-up-launcher.exe --collect-logs
 ```
 
-`--scope` is `both`, `vr`, or `flat`. With one install on the PC, you can omit `--dir`. With several copies, pass `--dir` and the product folder, or use the window. `--dry-run` prints the plan and writes nothing.
+`--scope` is `both`, `vr`, or `flat`. `--update` can be combined with `--install` or `--repair` to fetch a signed release before applying it. `--purge` performs a clean uninstall (removing settings, logs, backups, and the settings mirror). With one install on the PC, you can omit `--dir`. With several copies, pass `--dir` and the product folder, or use the window. `--dry-run` prints the plan and writes nothing.
 
 Placing each file yourself is [written up separately](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/manual-install.md), from the `ed-up-<version>.zip` on the release. Use the launcher unless you have a reason to copy the files by hand.

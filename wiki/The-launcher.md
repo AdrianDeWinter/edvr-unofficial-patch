@@ -14,7 +14,23 @@ Play starts Elite through Steam, Epic, or Frontier's launcher, and waits until t
 
 It reopens on the install you last pressed Play for.
 
-From a script, `--headless` starts Elite the way Play does, with no launcher window, and waits until Elite exits. Add `--close-after-start` to return as soon as the game is running.
+From a script, Steam Launch Options, or another launcher such as `min-ed-launcher`, `--headless` starts Elite the way Play does with no launcher window, and waits until Elite exits.
+
+- Pass `--vr` / `/vr` or `--novr` / `/novr` to pick the mode, or omit them to use the installed scope, the last mode used for that folder, or Elite's `Settings.xml`.
+- Add `--close-after-start` to exit as soon as Elite is running.
+- Add `--update` to check for and download a signed release before launching (non-blocking if offline).
+- Add `--frontier-login` on a Steam install to sign in with a Frontier email/password instead of Steam's session ticket.
+- In Steam's **Launch Options**, wrap `%command%` so Steam tracks playtime and injects the Steam Overlay / Steam Input virtual menus:
+
+```text
+"%LOCALAPPDATA%\EDVR\launcher\ed-up-launcher.exe" --headless %command%
+```
+
+- As a pre-launch update hook in `min-ed-launcher` (without launching the game through ED-UP):
+
+```text
+"%LOCALAPPDATA%\EDVR\launcher\ed-up-launcher.exe" --update --install --dir "C:\Path\To\Products\elite-dangerous-odyssey-64"
+```
 
 Frontier's launcher is the one that takes a headset or monitor choice from ED-UP. Through Steam or Epic, the game starts in the mode it is already set to. Steam's own VR and non-VR options still apply. See [Playing](Playing.md).
 
@@ -23,6 +39,10 @@ An Epic copy is handed to the Epic launcher. Play does not ask for a Frontier pa
 ## Starting through Steam, past the Steam window
 
 On Windows, a checkbox can start the game directly and let you pick headset or monitor. The launcher then signs in to Frontier with your Steam login. It sends what Frontier's own launcher sends: a sign-in ticket from Steam, and an ID for this PC. It stores no password and no token. The checkbox stays off until you turn it on. Frontier has not approved this sign-in.
+
+If your Steam-installed copy uses a separate Frontier email/password account (such as a Frontier-store or alternate account), tick **Use Frontier account login** under Launch (or pass `--frontier-login`).
+
+Because direct launch starts `EliteDangerous64.exe` directly outside Steam, Steam does not inject its overlay unless the launcher itself is invoked through Steam's Launch Options (`--headless %command%` above). If you rely on Steam Input virtual menus, either wrap `%command%` or leave direct launch unchecked so Steam launches Elite itself.
 
 If any part of the sign-in fails, the launcher says why and starts the game through Steam instead.
 

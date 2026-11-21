@@ -22,13 +22,14 @@ An update keeps settings you have changed. A file you edited is kept when a late
 
 Open the launcher and press **Uninstall**.
 
-It removes ED-UP's files and restores the game's `openvr_api.dll`. If another mod was chained behind ED-UP, that mod goes back under its own name. `edvr.ini` stays, unless you ask for the settings to go too, so a later install finds them.
+It removes ED-UP's files and restores the game's `openvr_api.dll`. If another mod was chained behind ED-UP, that mod goes back under its own name. `edvr.ini` and `edvr-flat.ini` stay by default so a later install finds them. Tick **Clean purge on uninstall** before pressing **Uninstall** (or pass `--purge`) to also delete both settings files, `edvr_logs`, `edvr_backup`, `edvr_install`, crash artifacts, and this folder's settings mirror.
 
 From a terminal on Windows:
 
 ```text
 ed-up-launcher.exe --uninstall
 ed-up-launcher.exe --uninstall --remove-settings
+ed-up-launcher.exe --uninstall --purge
 ```
 
 On Linux, run `./ed-up-launcher.sh` and press **Uninstall**. For an Epic copy, add `--store epic`. [Epic on Linux](Install-on-Linux.md#epic-on-linux).
