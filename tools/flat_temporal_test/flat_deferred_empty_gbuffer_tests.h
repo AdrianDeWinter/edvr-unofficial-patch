@@ -358,7 +358,7 @@ inline unsigned run() {
                countOf(runtime, "clear || constantFill);") == 1 && countOf(runtime, "flatRuntimeWritten(s.prefix, res, constantFill);") == 1,
                "the flag reaches the model from the clears and from nothing else");
         // the model: the draw count sits before the colourless return, the exemption is the shared one
-        expect(model.find("flatRuntimeReachedDraw(p, k);   // a draw reaches its depth and its colour, and a depth-only draw its depth\n"
+        expect(model.find("flatRuntimeReachedDraw(p, k, d.knownNotB1Unread);   // a draw reaches its depth and its colour, and a depth-only draw its depth\n"
                           "    if (d.poolFamilyVs) ++p.unsupportedFamilyDraws;\n    if (!k.color) return out;") != std::string::npos,
                "the model counts a draw before the colourless return, so a depth-only draw reaches the depth");
         const std::string drawCount = between(model, "inline void flatRuntimeReachedDraw(", "// Whether the deferred lighting pass reads inputs");

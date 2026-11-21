@@ -56,6 +56,7 @@ struct ID3D11ShaderResourceView;
 struct ID3D11Texture2D;
 struct ID3D11VertexShader;
 struct ID3D11BlendState;
+struct ID3D11DepthStencilState;
 struct ID3D11RenderTargetView;
 struct D3D11_BUFFER_DESC;
 
@@ -325,6 +326,8 @@ void flatQueryGameColorTargets(ID3D11DeviceContext* ctx, ID3D11RenderTargetView*
 // The OM hooks (vscreen.cpp) record the set they just passed to bindingSet.
 // flatOmForget runs wherever bindingForgetAll runs.
 void flatOmNoteBlend(ID3D11BlendState* state, const float factor[4], unsigned int mask);
+void flatOmNoteGameBlend(ID3D11BlendState* state, const float factor[4], unsigned int mask);
+void flatOmNoteDepthState(ID3D11DepthStencilState* state);
 void flatOmNoteTargets(unsigned n, ID3D11RenderTargetView* const* rtvs);
 void flatOmForget();
 void engineVelocityFlatLazy(bool on) noexcept;

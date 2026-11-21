@@ -142,6 +142,7 @@ struct FlatRuntimeDrawScope {
     bool gameHadTarget6 = false;   // the game's own slot 6 was occupied under a substituted draw
     bool producer = false, replaced = false, ownedOutput = false;
     bool splitContinued = false;   // continuesRun, for the destructor shell's class
+    bool fastProducerDtor = false; // flatProducerContinueEarly: skip full dtor shell when nothing else is armed
     bool drawCaptureStarted = false;
     void* drawPacket=nullptr;
     bool drawPacketExecuted=false;
@@ -195,9 +196,14 @@ struct FlatRuntimeDrawScope {
     unsigned domainWidth=0,domainHeight=0;
     float domainCamera[6][4]{};
     forward_light::Issue forwardIssue{};
+    // Non-zero when a direct draw's Issue::Geometry was certified from the live
+    // geometryCert() in the constructor with no other actual-draw consumer:
+    // needsActualDraw() stays false, and ~FlatRuntimeDrawScope verifies inline
+    // that flatIssueEpochLoad() == forwardCertEpoch after realDraw returns.
+    uint64_t forwardCertEpoch = 0;
     uint64_t lightPayloadToken=0;
     const FlatProjectionBindingPlan* lightPayloadPlan=nullptr;
-    bool needsActualDraw() const { return forwardIssue.kind!=forward_light::Issue::None || lightPayloadToken || drawPacket || domainPlanned || uiTake || uiComposite || uiGlow || dofBlur ||
+    bool needsActualDraw() const { return (forwardIssue.kind!=forward_light::Issue::None && !forwardCertEpoch) || lightPayloadToken || drawPacket || domainPlanned || uiTake || uiComposite || uiGlow || dofBlur ||
                                           flatRuntimeNeedsActualDraw(weaponFootprintStarted, overlayPlanned,
                                                                      foregroundPlanned, untrustedPlanned); }
     // After the game's own issue and endActualDraw: the second issues fix.ui_quality's flat layer asks for, each the game's

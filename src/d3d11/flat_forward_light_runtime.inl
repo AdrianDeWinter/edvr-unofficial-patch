@@ -30,7 +30,7 @@ void forwardReset(State& s,uint64_t frame=0,bool captureLifecycle=true) {
     if(captureLifecycle)forwardPhaseLifecycle(s);
     geometryCertClear();
     auto& f=s.forwardLight;forwardRevoke(s,0,forward_light::Reason::Ownership);f.ledger.reset(frame);
-    f.dsvDescription.clear();f.depthDescription.clear();f.blendDescription.clear();f.omDepthCache.clear();f.omOutputCache.clear();
+    f.dsvDescription.clear();f.depthDescription.clear();f.blendDescription.clear();f.omDepthCache.clear();f.omOutputCache.clear();f.omCb1Cache.clear();
     for(auto& observed:f.phaseObservedDonor)observed={};
     for(auto& a:f.authority)a={};for(auto& h:f.authorityHdr)h.Reset();
     for(auto& h:f.domainHolds)h={};for(auto& h:f.publicationHolds)h={};
@@ -198,6 +198,23 @@ bool forwardObserveFromCert(State& s,const FlatRuntimeDraw& d,forward_light::Iss
     if(f.ledger.overflow)forwardRevoke(s,0,Reason::Overflow);
     return true;
 }
+void forwardBoundCb1(State& s,lightaudit::Cb& cb,uint64_t& payloadHash) {
+    const uint64_t cb1Epoch=flatCb1EpochLoad();
+    auto& cache=s.forwardLight.omCb1Cache;
+    if(cache.valid&&cache.epoch==cb1Epoch&&cache.frame==s.prefix.frame&&!flatIssueEpochFrozen()&&
+       !foreignWork.load(std::memory_order_acquire)&&!s.prefix.uncertain) {
+        cb=cache.cb;payloadHash=cache.hash;return;
+    }
+    cache.clear();
+    lightBoundCb(s,s.context.Get(),0,1,270,96,cb,0,true);
+    payloadHash=flatCameraHash(cb.payload);
+    if(cb.status==lightaudit::Full&&cb.fresh==lightaudit::Current&&cb.buffer&&
+       !flatIssueEpochFrozen()&&!foreignWork.load(std::memory_order_acquire)&&!s.prefix.uncertain&&
+       flatCb1EpochLoad()==cb1Epoch) {
+        cache.valid=true;cache.epoch=cb1Epoch;cache.frame=s.prefix.frame;cache.cb=cb;cache.hash=payloadHash;
+        flatIssueEpochPublishCb1(cb.buffer);
+    }
+}
 forward_light::Issue forwardObserveDomain(State& s,const FlatRuntimeDraw& d) {
     using namespace forward_light;Issue issue;auto& f=s.forwardLight;const auto& k=d.key;
     if(!k.depth||flatContractKind(false,k.depth,k.depth,k.depthWidth,k.depthHeight,26,s.prefix.width,s.prefix.height,false)!=kFlatContractScreen)return issue;
@@ -211,8 +228,8 @@ forward_light::Issue forwardObserveDomain(State& s,const FlatRuntimeDraw& d) {
     if(writes)forwardMutation(s,raw.resource,false); // depth draw invalidates old conversion, not coherent earlier geometry
     Role role=d.supported?Role::Origin:typedRole(k.vs,k.ps);
     if(role==Role::Unknown){f.ledger.observe(raw,role,writes,false,{},nullptr,s.prefix.sequence+1);if(writes)forwardRevoke(s,raw.resource,Reason::UnknownWriter);return issue;}
-    if(!d.supported&&!d.poolFamilyVs&&!forwardActualPair(s,k.vs,k.ps)){f.ledger.observe(raw,Role::Unknown,true,false,{},nullptr,s.prefix.sequence+1);forwardRevoke(s,raw.resource,Reason::UnknownWriter);return issue;}
-    lightaudit::Cb cb;lightBoundCb(s,s.context.Get(),0,1,270,96,cb);
+    if(!d.supported&&!d.poolFamilyVs&&!engineVelocityFlatSourceShaders(s.context.Get(),k.vs,k.ps)){f.ledger.observe(raw,Role::Unknown,true,false,{},nullptr,s.prefix.sequence+1);forwardRevoke(s,raw.resource,Reason::UnknownWriter);return issue;}
+    lightaudit::Cb cb;uint64_t cbHash=0;forwardBoundCb1(s,cb,cbHash);
     const bool current=flatRuntimeCameraCurrent(d,s.prefix.sequence+1,s.prefix.frame)&&cb.buffer==reinterpret_cast<uintptr_t>(k.b1)&&
         cb.status==lightaudit::Full&&cb.fresh==lightaudit::Current&&cb.before.writeQ<k.writeSeq&&
         !std::memcmp(cb.payload,d.camera,96);
@@ -225,7 +242,7 @@ forward_light::Issue forwardObserveDomain(State& s,const FlatRuntimeDraw& d) {
             issue.raw=raw;issue.vs=k.vs;issue.ps=k.ps;issue.depthWrite=writes;
             issue.phaseX=s.phase.currentX;issue.phaseY=s.phase.currentY;std::memcpy(issue.camera,d.camera,96);
             issue.constants[0]={cb.buffer,cb.before.generation,cb.before.mutation,cb.before.writeGeneration,cb.before.bank,
-                cb.before.writeFrame,cb.first,cb.count,cb.width,cb.before.writeQ,96,static_cast<uint32_t>(flatCameraHash(cb.payload))};
+                cb.before.writeFrame,cb.first,cb.count,cb.width,cb.before.writeQ,96,static_cast<uint32_t>(cbHash)};
             if(!f.phaseReceipt.frozen)f.phaseObservedDonor[index]=issue.constants[0];}
     }
     if(auto* domain=f.ledger.domain(raw))if(domain->failure!=Reason::None)forwardRevoke(s,raw.resource,domain->failure);
@@ -256,6 +273,13 @@ void forwardDrawWrites(State& s,ID3D11DeviceContext* actualDrawContext) {
         return; // No forward dependency can observe these mutations; no D3D query.
     }
     counts.add(flatcpu::kCopyGuardFallback);
+    // When no publication and no authority are live, RTV mutations (forgetSources=false) are a no-op;
+    // when OM UAVs are also known zero (and setters not frozen), no UAV mutation can run either.
+    if(known&&!anyLivePublication&&flatOmUavKnownZero()&&!flatIssueEpochFrozen()) {
+        bool anyLiveAuth=false;
+        for(const auto& a:s.forwardLight.authority)anyLiveAuth|=a.live;
+        if(!anyLiveAuth)return;
+    }
     const uint64_t omOutEpoch=flatOmOutputEpochLoad();
     auto& omOut=s.forwardLight.omOutputCache;
     if(known&&omOut.valid&&omOut.epoch==omOutEpoch&&!flatIssueEpochFrozen()) {
@@ -445,9 +469,9 @@ bool forwardIssueValid(State& s,const forward_light::Issue& issue) {
         bool proven=false;uintptr_t provenDsv=0;
         {
             flatcpu::Scope constantsCost(flatcpu::kIssueConstants);
-            lightaudit::Cb cb;lightBoundCb(s,s.context.Get(),0,1,270,96,cb,0,true);
+            lightaudit::Cb cb;uint64_t cbHash=0;forwardBoundCb1(s,cb,cbHash);
             const ConstantIdentity id{cb.buffer,cb.before.generation,cb.before.mutation,cb.before.writeGeneration,cb.before.bank,
-                cb.before.writeFrame,cb.first,cb.count,cb.width,cb.before.writeQ,96,static_cast<uint32_t>(flatCameraHash(cb.payload))};
+                cb.before.writeFrame,cb.first,cb.count,cb.width,cb.before.writeQ,96,static_cast<uint32_t>(cbHash)};
             proven=cb.status==lightaudit::Full&&cb.fresh==lightaudit::Current&&same(id,issue.constants[0])&&!std::memcmp(cb.payload,issue.camera,96);
             if(proven)provenDsv=reinterpret_cast<uintptr_t>(dsv.Get());
         }

@@ -2987,7 +2987,7 @@ void testFlatCpuWiring() {
         {&runtimeCpp, "flatcpu::kProjection", 3, "qualifyProjection, the private binding and its restore"},
         {&runtimeCpp, "flatcpu::kShadows", 7, "the constant-buffer shadow observers and map-cache install/flush"},
         {&runtimeCpp, "flatcpu::kWitness", 1, "the camera witness"},
-        {&runtimeCpp, "flatcpu::kEngineDraw", 5, "engine motion's draw wrapper: naming, its begin (the slow path and the producer continuation), its end, and the flush of what it kept bound"},
+        {&runtimeCpp, "flatcpu::kEngineDraw", 6, "engine motion's draw wrapper: naming, its begin (the slow path and the producer continuation), its end (both dtors), and the flush of what it kept bound"},
         {&runtimeCpp, "flatcpu::kResolve", 2, "the treatment at the copy draw and at the HDR route's trigger"},
         {&runtimeCpp, "flatcpu::kHdrRoute", 4, "the HDR route's trigger detector on every draw (both fast paths), and its selection at the trigger"},
         {&runtimeCpp, "flatcpu::kTrackers", 5, "the state trackers"},
@@ -3224,7 +3224,7 @@ void testFlatCameraTableWiring() {
         {"using CameraTable = FlatCameraTable<Ptr<ID3D11Buffer>>;", 1, "the runtime's table is the header's, holding COM references"},
         // The draw path asks the table, and times the search only when it is made afresh.
         {"const uint32_t b1Binding = bindingGeneration(BindSlot::VsCb1);", 1, "the draw reads the b1 slot's binding generation"},
-        {"s.cameras.probe(k.b1, b1Binding, s.prefix.frame)", 1, "the draw asks for the kept answer"},
+        {"s.cameras.probeHeld(k.b1, b1Binding, s.prefix.frame)", 1, "the draw asks for the kept answer"},
         {"s.cameras.refresh(k.b1, b1Binding, s.prefix.frame)", 1, "and makes it afresh when there is none"},
         // Every change of an entry, and where it comes from.
         {"s.cameras.claim(std::move(buffer), d.ByteWidth, s.prefix.frame)", 1, "a buffer joins through the table"},
@@ -3281,10 +3281,10 @@ void testFlatSubstitutionWiring() {
         // The runtime's own sites: what each says to the policy.
         {&runtimeCpp, "engineVelocityFlatLazy(!diagnostics);", 1, "the draw scope turns the lazy form off while a diagnostic capture is armed"},
         {&runtimeCpp, "if (diagnostics) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);", 1, "and puts the game's state back at once"},
-        {&runtimeCpp, "if (!d.supported) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);", 1,
-         "a draw that is not a pool-family draw puts the game's state back"},
-        {&runtimeCpp, "if (d.supported && (!continuesRun || coverageReads)) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);", 1,
-         "so does a pool-family draw that is not a plain continuation of the run, or that EDVR reads the context for"},
+        {&runtimeCpp, "if (!d.supported && !pairFact.motionKeyed) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);", 1,
+         "a draw that is not a pool-family or motion-keyed draw puts the game's state back"},
+        {&runtimeCpp, "if ((d.supported || pairFact.motionKeyed) && (!(continuesRun || motionOnlyRun) || coverageReads))", 1,
+         "so does a pool-family or motion-keyed draw that is not a plain continuation of the run, or that EDVR reads the context for"},
         {&runtimeCpp, "flatRuntimeSubstitution(ctx, FlatSubstEvent::kDispatch);", 1, "a dispatch puts the game's state back"},
         {&runtimeCpp, "flatRuntimeSubstitution(state().context.Get(), FlatSubstEvent::kPresent);", 1, "the Present puts it back before the real Present"},
         {&runtimeCpp, "flatRuntimeSubstitution(nullptr, FlatSubstEvent::kResize);", 1, "a resize forgets it, touching no context"},
@@ -3294,7 +3294,7 @@ void testFlatSubstitutionWiring() {
         {&runtimeCpp, "engineVelocityFlatFlush(ctx, flushCauseOf(event));", 1, "a flush names its cause"},
         {&runtimeCpp, "engineVelocityFlatAbandon();", 1, "an abandon"},
         {&runtimeCpp, "producer = engineVelocityFlatBeginDraw(ctx, &gameHadTarget6);", 1, "the producer branch opens the lazy bracket"},
-        {&runtimeCpp, "engineVelocityFlatEndDraw(ctx);", 1, "and closes it"},
+        {&runtimeCpp, "engineVelocityFlatEndDraw(ctx);", 2, "and closes it (both fast and slow dtors)"},
         {&runtimeCpp, "case FlatSubstEvent::kDispatch: return EngineVelocityFlushCause::kDispatch;", 1, "a dispatch's cause"},
         {&runtimeCpp, "case FlatSubstEvent::kClear: return EngineVelocityFlushCause::kClear;", 1, "a clear's cause"},
         {&runtimeCpp, "case FlatSubstEvent::kCopy: return EngineVelocityFlushCause::kCopy;", 1, "a copy's cause"},
@@ -3363,10 +3363,10 @@ void testFlatSubstitutionWiring() {
         "engineVelocityFlatLazy(!diagnostics);",
         "if (diagnostics) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);",
         "d.supported = pairFact.supported;",
-        "if (!d.supported) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);",
+        "if (!d.supported && !pairFact.motionKeyed) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);",
         "d.hdrCopyVerified=verifyHdrCopy(ctx,d);",
         "const bool continuesRun =",
-        "if (d.supported && (!continuesRun || coverageReads)) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);",
+        "if ((d.supported || pairFact.motionKeyed) && (!(continuesRun || motionOnlyRun) || coverageReads))",
         "flatcpu::Scope coverage(flatcpu::kCoverage);",
         "qualifyProjection(s,recipes,",
         "producer = engineVelocityFlatBeginDraw(ctx, &gameHadTarget6);",
@@ -4034,7 +4034,7 @@ void testFlatQueryCutWiring() {
         const std::string region = runtimeCpp.substr(coverageFrom, coverageTo - coverageFrom);
         check(count(region, "GetRenderTargets") == 0 && count(region, "GetShader") == 0,
               "the coverage classification does not read the depth view or the shaders off the context itself");
-        check(count(region, "coverageDepthResource(") == 2 && count(region, "coverageShadersMatch(") == 2,
+        check(count(region, "coverageDepthResource(") == 3 && count(region, "coverageShadersMatch(") == 2,
               "(control: the delimited text is the classification, and asks through the policy)");
     }
     // The frame's end comes after the Present's flush, inside the same function.

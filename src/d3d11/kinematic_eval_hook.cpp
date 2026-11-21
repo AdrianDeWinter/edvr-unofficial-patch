@@ -53,6 +53,14 @@ static_assert(decltype(observer)::is_always_lock_free,
 alignas(8) std::atomic<uintptr_t> evalGate{0};
 static_assert(decltype(evalGate)::is_always_lock_free,
               "The x64 relay reads the aligned atomic pointer directly.");
+// Dedicated relay gates for evalObserved (observer / cull gate probe) and
+// rigEvalObserved (observer / rig or direct veto). Neither is needed by
+// emitWanted alone, so keeping them separate avoids ~12k+ worker-thread relay
+// entries/frame when only engine velocity is active.
+alignas(8) std::atomic<uintptr_t> evalObsGate{0};
+alignas(8) std::atomic<uintptr_t> rigEvalGate{0};
+static_assert(decltype(evalObsGate)::is_always_lock_free && decltype(rigEvalGate)::is_always_lock_free,
+              "The x64 relay reads the aligned atomic pointer directly.");
 // Engine-record velocity's own want on the hook set (the 2026-09-23
 // performance review, item 1): the emit bracket rides the direct-producer
 // relay, which gates on evalGate, so the emit holds the gate open itself.
@@ -277,9 +285,9 @@ EDVR_JOB_PROTO(3) EDVR_JOB_PROTO(4) EDVR_JOB_PROTO(5)
 #undef EDVR_JOB_PROTO
 
 HookEntry g_evalEntry{"kinematic-eval",KinematicEvalProbe::kEvalRva,
-                      reinterpret_cast<void*>(&evalObserved)};
+                      reinterpret_cast<void*>(&evalObserved),&evalObsGate};
 HookEntry g_rigEvalEntry{"kinematic-rig-eval",KinematicEvalProbe::kRigEvalRva,
-                         reinterpret_cast<void*>(&rigEvalObserved)};
+                         reinterpret_cast<void*>(&rigEvalObserved),&rigEvalGate};
 HookEntry g_jobEntries[KinematicEvalProbe::kJobCount]={
     {"kinematic-job-0",kJobRvas[0],reinterpret_cast<void*>(&job0)},
     {"kinematic-job-1",kJobRvas[1],reinterpret_cast<void*>(&job1)},
@@ -1340,6 +1348,8 @@ const char* attachKinematicEvalHooks(KinematicEvalProbe* probe) noexcept {
         if(!patchIsOurs(g_evalEntry,base))return "opcode_mismatch";
         observer.store(probe,std::memory_order_release);
         evalGate.store(1,std::memory_order_release);
+        evalObsGate.store(1,std::memory_order_release);
+        rigEvalGate.store(1,std::memory_order_release);
         return "installed";
     } catch(...) {return "install_failed";}
 }
@@ -1350,13 +1360,19 @@ const char* attachKinematicEvalHooks(KinematicEvalProbe* probe) noexcept {
 // attach published gate=1, and the detach then wrote gate=0, leaving a live
 // consumer deaf (2026-09-20 review finding 4).
 void recomputeGateLocked() noexcept {
-    const bool open=observer.load(std::memory_order_acquire)!=nullptr ||
+    const bool hasObs=observer.load(std::memory_order_acquire)!=nullptr;
+    const bool hasGateProbe=gateProbeWanted.load(std::memory_order_acquire);
+    const bool hasDirectVeto=directVetoWanted.load(std::memory_order_acquire);
+    const bool hasRigVeto=rigVetoWanted.load(std::memory_order_acquire);
+    const bool open=hasObs ||
                     emitWanted.load(std::memory_order_acquire) ||
                     schedulerWanted.load(std::memory_order_acquire) ||
-                    gateProbeWanted.load(std::memory_order_acquire) ||
-                    directVetoWanted.load(std::memory_order_acquire) ||
-                    rigVetoWanted.load(std::memory_order_acquire);
+                    hasGateProbe ||
+                    hasDirectVeto ||
+                    hasRigVeto;
     evalGate.store(open?uintptr_t(1):uintptr_t(0),std::memory_order_release);
+    evalObsGate.store((hasObs || hasGateProbe)?uintptr_t(1):uintptr_t(0),std::memory_order_release);
+    rigEvalGate.store((hasObs || hasRigVeto || hasDirectVeto)?uintptr_t(1):uintptr_t(0),std::memory_order_release);
     primaryGate.store(emitWanted.load(std::memory_order_acquire) &&
         g_primaryEntry.ready.load(std::memory_order_acquire) &&
         g_poolCopyEntry.ready.load(std::memory_order_acquire) &&

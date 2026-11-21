@@ -131,7 +131,8 @@ inline int run() {
            cbBody.find("finish(out,snapshot.copied,bytes,")!=std::string::npos&&
            cbBody.find("constantsMetadata(buffer.Get())")!=std::string::npos,
            "each Geometry proof re-reads actual VS CB/range/width; diagnostic path remains available");
-    expect(count(issue,"lightBoundCb(s,s.context.Get(),0,1,270,96,cb,0,true)")==1&&
+    expect(count(issue,"forwardBoundCb1(s,cb,cbHash)")==1&&
+           count(source,"lightBoundCb(s,s.context.Get(),0,1,270,96,cb,0,true)")==1&&
            count(issue,"flatcpu::Scope shaderCost(flatcpu::kIssueShader)")==1&&
            count(issue,"flatcpu::Scope depthCost(flatcpu::kIssueDsv)")==1&&
            count(issue,"flatcpu::Scope constantsCost(flatcpu::kIssueConstants)")==1&&

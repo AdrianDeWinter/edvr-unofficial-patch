@@ -21,6 +21,7 @@
 #include <cstdint>
 
 #include "engine_velocity_families.h"
+#include "flat_inert_pairs.h"
 #include "flat_mono_frame.h"
 #include "flat_ui_layer_math.h"
 
@@ -36,9 +37,10 @@ struct FlatPairFacts {
     bool copyPair = false;        // the final copy's shader pair (the draw must also write the output to be the copy)
     bool uiMayAsk = false;        // flatUiFamilyFor names the pair for some (map open, HDR target)
     bool legacyGlassPair = false; // the canopy pair (flatUiLegacyGlassPair): asked about only while the legacy look is live, a runtime fact the memo does not hold; uiMayAsk stays false for it
+    bool b1Unread = false;        // flatProjectionB1Unread: inert/shadow/star pairs that never read VS b1
     friend bool operator==(const FlatPairFacts& a, const FlatPairFacts& b) {
         return a.supported == b.supported && a.motionKeyed == b.motionKeyed && a.familyVs == b.familyVs && a.toneSlot == b.toneSlot && a.mapToneSlot == b.mapToneSlot &&
-               a.sourceTone == b.sourceTone && a.copyPair == b.copyPair && a.uiMayAsk == b.uiMayAsk && a.legacyGlassPair == b.legacyGlassPair;
+               a.sourceTone == b.sourceTone && a.copyPair == b.copyPair && a.uiMayAsk == b.uiMayAsk && a.legacyGlassPair == b.legacyGlassPair && a.b1Unread == b.b1Unread;
     }
 };
 
@@ -55,6 +57,7 @@ inline FlatPairFacts flatPairFactsFresh(uint64_t vs, uint64_t ps, bool flat) noe
     f.sourceTone = flatUiSourceTonePair(vs, ps);
     f.copyPair = vs == flat_mono_detail::kCopyVs && ps == flat_mono_detail::kCopyPs;
     f.legacyGlassPair = flatUiLegacyGlassPair(vs, ps);
+    f.b1Unread = flatProjectionB1Unread(vs, ps);
     for (int map = 0; map < 2 && !f.uiMayAsk; ++map)
         for (int hdr = 0; hdr < 2 && !f.uiMayAsk; ++hdr)
             f.uiMayAsk = flatUiFamilyFor(vs, ps, map != 0, hdr != 0) != UiLayerFamily::kNone;

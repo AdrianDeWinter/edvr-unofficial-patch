@@ -932,11 +932,29 @@ ID3D11PixelShader* guardedOverlayPsFor(ID3D11DeviceContext* ctx, int f, ID3D11Pi
     return patched.Get();
 }
 
+struct HookDepthState {
+    Ptr<ID3D11DepthStencilState> state;
+    bool valid = false;
+};
+HookDepthState g_hookDepthState;
+struct HookBlend {
+    Ptr<ID3D11BlendState> state;
+    float factor[4] = {1.f, 1.f, 1.f, 1.f};
+    UINT mask = ~0u;
+    uint32_t gen = 0;
+    bool valid = false;
+};
+HookBlend g_hookGameBlend;
+
 bool overlayDepthState(ID3D11DeviceContext* ctx) {
     Ptr<ID3D11DepthStencilState> state;
-    UINT reference = 0;
-    ctx->OMGetDepthStencilState(&state, &reference);
-    engineVelocityNoteStateCalls(1);
+    if (runtimeFlatProfile() && g_hookDepthState.valid && !flatIssueEpochFrozen()) {
+        state = g_hookDepthState.state;
+    } else {
+        UINT reference = 0;
+        ctx->OMGetDepthStencilState(&state, &reference);
+        engineVelocityNoteStateCalls(1);
+    }
     if (!state) return false;
     D3D11_DEPTH_STENCIL_DESC d{};
     state->GetDesc(&d);
@@ -953,9 +971,13 @@ bool depthWritesOff(ID3D11DeviceContext* ctx) {
     static ID3D11DepthStencilState* lastState = nullptr;
     static bool lastOff = false;
     Ptr<ID3D11DepthStencilState> state;
-    UINT reference = 0;
-    ctx->OMGetDepthStencilState(&state, &reference);
-    engineVelocityNoteStateCalls(1);
+    if (runtimeFlatProfile() && g_hookDepthState.valid && !flatIssueEpochFrozen()) {
+        state = g_hookDepthState.state;
+    } else {
+        UINT reference = 0;
+        ctx->OMGetDepthStencilState(&state, &reference);
+        engineVelocityNoteStateCalls(1);
+    }
     if (!state) return false;   // the default state: depth on, writes on
     if (state.Get() == lastState) return lastOff;
     D3D11_DEPTH_STENCIL_DESC d{};
@@ -2174,6 +2196,20 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     }
     // A draw that is not a guarded overlay draw sees the game's t3, not the group's private one (the lazy guard keeps it bound across the group).
     if (!guardOverlay && g_bound.guardSrv3) guardRestoreT3(ctx);
+    // Early-out blended depthless draws BEFORE bindTarget / derived blend when the game's blend state is already tracked.
+    if (!overlayPair && runtimeFlatProfile() && g_flatGame.saved) {
+        const uint32_t blendGenNow = bindingGeneration(BindSlot::Blend);
+        const bool derivedNow = g_bound.derivedBlend && blendGenNow == g_bound.blendGen;
+        ID3D11BlendState* knownGameBlend = nullptr;
+        if (derivedNow) knownGameBlend = g_bound.gameBlend.Get();
+        else if (g_gameBlendMemo.valid && g_gameBlendMemo.gen == blendGenNow) knownGameBlend = g_gameBlendMemo.state.Get();
+        else if (g_hookGameBlend.valid && g_hookGameBlend.gen == blendGenNow) knownGameBlend = g_hookGameBlend.state.Get();
+        if (knownGameBlend && gameBlendsTarget0(knownGameBlend) && depthWritesOff(ctx)) {
+            ++g_draw.depthlessDeclined; g_draw.depthlessVs = vsHash; g_draw.depthlessPs = psHash;
+            restore(ctx);
+            return;
+        }
+    }
     if (e.bindingStale || e.rtvGen != cache.rtv || e.dsvGen != cache.dsv) {
         // Another pass binding of the same eye-frame must draw into the same
         // depth the slot target was made for.
@@ -2213,6 +2249,14 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
         // does not read it again; the sampled frames read it as well and compare.
         const uint32_t blendGenNow = bindingGeneration(BindSlot::Blend);
         const bool flat = runtimeFlatProfile() && g_flatGame.saved;   // the lazy bracket's draw, not VR's
+        if (flat && !(g_gameBlendMemo.valid && g_gameBlendMemo.gen == blendGenNow) &&
+            g_hookGameBlend.valid && g_hookGameBlend.gen == blendGenNow) {
+            g_gameBlendMemo.state = g_hookGameBlend.state;
+            std::memcpy(g_gameBlendMemo.factor, g_hookGameBlend.factor, sizeof(g_gameBlendMemo.factor));
+            g_gameBlendMemo.mask = g_hookGameBlend.mask;
+            g_gameBlendMemo.gen = blendGenNow;
+            g_gameBlendMemo.valid = true;
+        }
         const bool remembered = flat && g_gameBlendMemo.valid && g_gameBlendMemo.gen == blendGenNow;
         const FlatQueryPlan plan = remembered ? flatQueryCut().plan(FlatQuery::GameBlend) : FlatQueryPlan::Ask;
         if (derivedBound) {
@@ -2244,6 +2288,12 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
                 g_gameBlendMemo.valid = true;
             }
         }
+        // Check depthWritesOff BEFORE deriving/binding MRT6 blend state so declined draws avoid redundant OMSetBlendState + restore.
+        if (!overlayPair && gameBlendsTarget0(game.Get()) && depthWritesOff(ctx)) {
+            ++g_draw.depthlessDeclined; g_draw.depthlessVs = vsHash; g_draw.depthlessPs = psHash;
+            restore(ctx);
+            return;
+        }
         const char* refused = nullptr;
         ID3D11BlendState* derived = derivedBlendFor(ctx, game.Get(), &refused, false, skinMode);
         if (!derived) {
@@ -2263,13 +2313,8 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
         ++g_draw.blendApplied;
     }
     // 2026-11-20 (the shop glass, docs/fsr-upscaler-design-2026-09-16.md journal): a blended keyed draw that writes no depth is not substituted,
-    // outside the overlay pair's guard above. Its MRT6 write would carry its own depth over the surface the depth buffer still holds (the station
-    // glass 5B4D/4375, alpha-blended a centimetre in front of a board: about 460 stale pixels of a 33x33 probe, every one the glass's record,
-    // depth 1.6e-6 farther than stored), so every pixel behind it is a stale slot and its high-contrast edges show the raw frame on the jitter
-    // phases the depth check refuses. A slot must describe the surface in the depth buffer; drawn as the game's, the draw writes none and the
-    // surface behind keeps its own. Asked only of a draw whose game blend state blends target 0 (the blend object's own description, no
-    // context call), so the opaque producers' context calls stay as the flat lazy census measured them.
-    if (!overlayPair && gameBlendsTarget0(g_bound.gameBlend.Get()) && depthWritesOff(ctx)) {
+    // outside the overlay pair's guard above. Checked above before derived blend; keep this check for the derivedBound == true path.
+    if (derivedBound && !overlayPair && gameBlendsTarget0(g_bound.gameBlend.Get()) && depthWritesOff(ctx)) {
         ++g_draw.depthlessDeclined; g_draw.depthlessVs = vsHash; g_draw.depthlessPs = psHash;
         restore(ctx);   // puts the game's shaders and blend back and resets g_bound, so the next substituted draw derives ours again
         return;
@@ -2867,6 +2912,8 @@ void clearLocked() {
     // own references to the blend states, so the cache can go.
     g_blends.clear();
     g_gameBlendMemo = GameBlendMemo{};   // a held reference to the game's blend state must not outlive the session
+    g_hookGameBlend = HookBlend{};
+    g_hookDepthState = HookDepthState{};
     g_keptMemo = KeptMemo{};
     cache = DrawCache{};
     if (g_table) g_table->clear();
@@ -2881,13 +2928,6 @@ void clearLocked() {
 // What the OM hooks last set, held so a foreground capture can skip OMGet.
 // Owner thread. Cleared on bindingForgetAll (ClearState, a command list that does not restore).
 // A frame boundary bumps the binding generation and does not clear this: the next read misses, asks once, and stores again.
-struct HookBlend {
-    Ptr<ID3D11BlendState> state;
-    float factor[4] = {1.f, 1.f, 1.f, 1.f};
-    UINT mask = ~0u;
-    uint32_t gen = 0;
-    bool valid = false;
-};
 HookBlend g_hookBlend;
 struct HookTargets {
     Ptr<ID3D11RenderTargetView> rtv[6];
@@ -2902,6 +2942,8 @@ using namespace engine_velocity_detail;
 
 void flatOmForget() {
     g_hookBlend = HookBlend{};
+    g_hookGameBlend = HookBlend{};
+    g_hookDepthState = HookDepthState{};
     g_hookTargets = HookTargets{};
 }
 
@@ -2912,6 +2954,20 @@ void flatOmNoteBlend(ID3D11BlendState* state, const float factor[4], unsigned in
     g_hookBlend.mask = mask;
     g_hookBlend.gen = bindingGeneration(BindSlot::Blend);
     g_hookBlend.valid = true;
+}
+
+void flatOmNoteGameBlend(ID3D11BlendState* state, const float factor[4], unsigned int mask) {
+    const float ones[4] = {1.f, 1.f, 1.f, 1.f};
+    g_hookGameBlend.state = state;
+    std::memcpy(g_hookGameBlend.factor, factor ? factor : ones, 4 * sizeof(float));
+    g_hookGameBlend.mask = mask;
+    g_hookGameBlend.gen = bindingGeneration(BindSlot::Blend);
+    g_hookGameBlend.valid = true;
+}
+
+void flatOmNoteDepthState(ID3D11DepthStencilState* state) {
+    g_hookDepthState.state = state;
+    g_hookDepthState.valid = true;
 }
 
 void flatOmNoteTargets(unsigned n, ID3D11RenderTargetView* const* rtvs) {
@@ -3337,10 +3393,15 @@ bool engineVelocityFlatSourceShaders(ID3D11DeviceContext* ctx,uint64_t vsHash,ui
     if(!ctx||!runtimeFlatProfile())return false;
     Ptr<ID3D11VertexShader> vs;Ptr<ID3D11PixelShader> ps;
     ctx->VSGetShader(&vs,nullptr,nullptr);ctx->PSGetShader(&ps,nullptr,nullptr);
-    Ptr<ID3D11GeometryShader> gs;Ptr<ID3D11HullShader> hs;Ptr<ID3D11DomainShader> ds;
-    ctx->GSGetShader(&gs,nullptr,nullptr);ctx->HSGetShader(&hs,nullptr,nullptr);ctx->DSGetShader(&ds,nullptr,nullptr);
-    Ptr<ID3D11Predicate> predicate;BOOL predicateValue=FALSE;ctx->GetPredication(&predicate,&predicateValue);
-    if(gs||hs||ds||predicate)return false;
+    static uint64_t s_auxNullEpoch=0;
+    const uint64_t auxEpoch=flatAuxStageEpochLoad();
+    if(flatIssueEpochFrozen()||s_auxNullEpoch!=auxEpoch) {
+        Ptr<ID3D11GeometryShader> gs;Ptr<ID3D11HullShader> hs;Ptr<ID3D11DomainShader> ds;
+        ctx->GSGetShader(&gs,nullptr,nullptr);ctx->HSGetShader(&hs,nullptr,nullptr);ctx->DSGetShader(&ds,nullptr,nullptr);
+        Ptr<ID3D11Predicate> predicate;BOOL predicateValue=FALSE;ctx->GetPredication(&predicate,&predicateValue);
+        if(gs||hs||ds||predicate) { s_auxNullEpoch=0; return false; }
+        if(!flatIssueEpochFrozen()&&flatAuxStageEpochLoad()==auxEpoch) s_auxNullEpoch=auxEpoch;
+    }
     const bool originalVs=lookupShaderHash(vs.Get())==vsHash;
     const bool originalPs=lookupShaderHash(ps.Get())==psHash;
     if(originalVs&&originalPs)return true;

@@ -73,6 +73,10 @@ struct FlatRuntimeDraw {
     // scene's extent (design section 104). Set only by the runtime (engineVelocityPoolFamilyVs, flatContractKind) and carried by the
     // trace (kFlatTracePoolFamilyVs). It moves with no motion source tracking it, so the frame holding one is never source-free.
     bool poolFamilyVs = false;
+    // Optional runtime-only precomputed pair hints (default false so trace replays
+    // always run the exact shader table checks).
+    bool knownNotTone = false;
+    bool knownNotB1Unread = false;
 };
 // Exact bytecode-qualified image filters, with a position/UV passthrough VS.
 // Live shader verification and resource/frame provenance remain mandatory.
@@ -269,6 +273,7 @@ struct FlatRuntimeReached {
 constexpr uint32_t kFlatRuntimeReached = 64;
 struct FlatRuntimePrefix {
     FlatRuntimeTarget targets[128]{};
+    const void* targetResources[128]{};   // compact mirror of targets[i].resource for L1-friendly scans
     FlatContractRecord sources[32]{};
     // The source-free camera witness (FlatRuntimeCameraWitness). A table that overflows fails closed: no witness that frame.
     FlatRuntimeCameraWitness witnesses[kFlatRuntimeWitnesses]{};
@@ -279,6 +284,7 @@ struct FlatRuntimePrefix {
     uint32_t reachedUsed = 0;
     bool reachedOverflow = false;
     uint32_t targetsUsed = 0, sourcesUsed = 0, sequence = 0, copies = 0;
+    uint32_t lastTargetIdx = ~0u, lastSourceIdx = ~0u, openOverlayCount = 0;
     uint32_t imageCopiesAccepted = 0, imageCopiesRefused = 0;
     // Verified image copies that were the first write into their HDR and so conflicted with nothing (FlatRuntimeTarget::imageCopyFirst).
     uint32_t imageCopiesFirstWrite = 0;
@@ -563,8 +569,8 @@ inline void flatRuntimeReachedWrite(FlatRuntimePrefix& p, const void* resource, 
 // nothing a camera placed. The star pre-pass is different: it writes depth with the jittered b0 matrices, so a Detailed Surface Scanner
 // frame whose only draw on the depth is the star pre-pass is judged empty here although its depth holds star fragments. Whether that
 // shows on screen is not flown yet.
-inline void flatRuntimeReachedDraw(FlatRuntimePrefix& p, const FlatContractObservation& k) {
-    if (!p.reachedUsed || flatProjectionB1Unread(k.vs, k.ps)) return;
+inline void flatRuntimeReachedDraw(FlatRuntimePrefix& p, const FlatContractObservation& k, bool knownNotB1Unread = false) {
+    if (!p.reachedUsed || (!knownNotB1Unread && flatProjectionB1Unread(k.vs, k.ps))) return;
     for (uint32_t i = 0; i < p.reachedUsed; ++i) {
         auto& e = p.reached[i];
         if ((k.depth && e.resource == k.depth) || (k.color && e.resource == k.color)) ++e.draws;
@@ -850,13 +856,23 @@ inline bool flatRuntimeQualifiedLaserSceneCamera(const FlatRuntimePrefix& p,
     return imageSources == 1;
 }
 inline FlatRuntimeTarget* flatRuntimeTarget(FlatRuntimePrefix& p, const void* resource) {
-    for (uint32_t i = 0; i < p.targetsUsed; ++i) if (p.targets[i].resource == resource) return &p.targets[i];
-    if (!resource || p.targetsUsed == 128) {
-        flatRuntimeMarkUncertain(p, !resource ? FlatRuntimeUncertainCause::MissingTarget : FlatRuntimeUncertainCause::TargetCapacity,
-                                 resource);
+    if (!resource) {
+        flatRuntimeMarkUncertain(p, FlatRuntimeUncertainCause::MissingTarget, resource);
         return nullptr;
     }
-    auto& t = p.targets[p.targetsUsed++]; t.resource = resource; return &t;
+    if (p.lastTargetIdx < p.targetsUsed && p.targetResources[p.lastTargetIdx] == resource)
+        return &p.targets[p.lastTargetIdx];
+    for (uint32_t i = 0; i < p.targetsUsed; ++i) {
+        if (p.targetResources[i] == resource) { p.lastTargetIdx = i; return &p.targets[i]; }
+    }
+    if (p.targetsUsed == 128) {
+        flatRuntimeMarkUncertain(p, FlatRuntimeUncertainCause::TargetCapacity, resource);
+        return nullptr;
+    }
+    const uint32_t idx = p.targetsUsed++;
+    p.targetResources[idx] = resource;
+    p.lastTargetIdx = idx;
+    auto& t = p.targets[idx]; t.resource = resource; return &t;
 }
 // A write to a witnessed colour replaces what its writers drew there (a deferred renderer clears the
 // G-buffer after a depth prepass that bound it with colour writes off): the entry restarts empty, and
@@ -896,6 +912,7 @@ inline void flatRuntimeWritten(FlatRuntimePrefix& p, const void* resource, bool 
     flatRuntimeReachedWrite(p, resource, constantFill);   // constantFill: a clear, which carries no content
 }
 inline void flatRuntimeOverlayFailed(FlatRuntimePrefix& p, const void* resource = nullptr) {
+    if (!p.openOverlayCount) return;
     for (uint32_t i = 0; i < p.targetsUsed; ++i) {
         auto& t = p.targets[i];
         if (t.overlayOpen && (!resource || t.resource == resource))
@@ -904,10 +921,13 @@ inline void flatRuntimeOverlayFailed(FlatRuntimePrefix& p, const void* resource 
     }
 }
 inline bool flatRuntimeOverlaySeal(FlatRuntimePrefix& p, const void* resource) {
+    if (!p.openOverlayCount) return false;
     for(uint32_t i=0;i<p.targetsUsed;++i) {
+        if(p.targetResources[i]!=resource) continue;
         auto& t=p.targets[i];
-        if(t.resource==resource && t.overlayOpen && !t.hdrBad) {
+        if(t.overlayOpen && !t.hdrBad) {
             t.overlayOpen=false;
+            if (p.openOverlayCount) --p.openOverlayCount;
             return true;
         }
     }
@@ -1085,16 +1105,18 @@ inline FlatMonoFrame flatRuntimeObserve(FlatRuntimePrefix& p, const FlatRuntimeD
     // A late scene-depth draw can invalidate the clean HDR snapshot even when
     // it renders into a different colour target (or has no colour target).
     // The runtime supplies the effective write state after the draw is bound.
-    for (uint32_t i = 0; i < p.targetsUsed; ++i) {
-        auto& suffix = p.targets[i];
-        if (suffix.overlayOpen && d.supported)
-            bad(suffix, FlatRuntimeConflict::OverlaySuffix, suffix.tone);
-        if (suffix.overlayOpen && (d.effectiveDepthWrite ||
-            (d.effectiveStencilWrite && !d.overlayProtected)) && k.depth == suffix.overlayDepth)
-            bad(suffix, FlatRuntimeConflict::OverlaySuffix, suffix.tone);
+    if (p.openOverlayCount) {
+        for (uint32_t i = 0; i < p.targetsUsed; ++i) {
+            auto& suffix = p.targets[i];
+            if (suffix.overlayOpen && d.supported)
+                bad(suffix, FlatRuntimeConflict::OverlaySuffix, suffix.tone);
+            if (suffix.overlayOpen && (d.effectiveDepthWrite ||
+                (d.effectiveStencilWrite && !d.overlayProtected)) && k.depth == suffix.overlayDepth)
+                bad(suffix, FlatRuntimeConflict::OverlaySuffix, suffix.tone);
+        }
     }
     if (d.poolFamilyVs) flatRuntimeNoteFamilyVeto(p, d.key);   // the log's names for the stock family draws counted below
-    flatRuntimeReachedDraw(p, k);   // a draw reaches its depth and its colour, and a depth-only draw its depth
+    flatRuntimeReachedDraw(p, k, d.knownNotB1Unread);   // a draw reaches its depth and its colour, and a depth-only draw its depth
     if (d.poolFamilyVs) ++p.unsupportedFamilyDraws;
     if (!k.color) return out;
     auto* t = flatRuntimeTarget(p, k.color); if (!t) return out;
@@ -1298,7 +1320,11 @@ inline FlatMonoFrame flatRuntimeObserve(FlatRuntimePrefix& p, const FlatRuntimeD
             // Keep the first known camera draw separate from earlier HDR writes
             // without b1. Assigning its later write to those draws invents provenance.
             if (!t->hdrCamera && (!secondCamera || sceneLaserCamera)) { t->tone = current(); t->hdrCamera = true; }
-            if (overlay) { t->overlayOpen = true; t->overlayDepth = k.depth; }
+            if (overlay) {
+                if (!t->overlayOpen) ++p.openOverlayCount;
+                t->overlayOpen = true;
+                t->overlayDepth = k.depth;
+            }
         }
     }
     if (t->writes.draws && t->writes.key.format == 26 &&
@@ -1337,7 +1363,7 @@ inline FlatMonoFrame flatRuntimeObserve(FlatRuntimePrefix& p, const FlatRuntimeD
     else { ++t->writes.draws; t->writes.last = q; t->writes.lastInstances = d.instances;
         if (k.camera) { t->writes.lastWriteEpoch = k.writeEpoch; t->writes.lastWriteSeq = k.writeSeq; }
         if (constantFillPass(k)) ++t->constantFills; }
-    if (k.format != 9 && toneHdrSlot(k.vs, k.ps) != ~0u) { ++t->tones; t->tone = current(); }
+    if (k.format != 9 && !d.knownNotTone && toneHdrSlot(k.vs, k.ps) != ~0u) { ++t->tones; t->tone = current(); }
     if (d.firstPersonCohort && d.supported && k.depth && k.kind == kFlatContractPool) {
         // Not a world source (FlatRuntimeDraw::firstPersonCohort): counted, never a source record. A cohort in two depths is a frame
         // this cannot name the scene of, and refuses as every uncertain frame does.
@@ -1347,11 +1373,22 @@ inline FlatMonoFrame flatRuntimeObserve(FlatRuntimePrefix& p, const FlatRuntimeD
         ++p.firstPersonDraws;
     } else if (d.supported && k.depth && k.kind == kFlatContractPool) {
         FlatContractRecord* source = nullptr;
-        for (uint32_t i = 0; i < p.sourcesUsed; ++i) if (p.sources[i].key.depth == k.depth && flatRuntimeSameCamera(p.sources[i], d)) { source = &p.sources[i]; break; }
+        if (p.lastSourceIdx < p.sourcesUsed && p.sources[p.lastSourceIdx].key.depth == k.depth &&
+            flatRuntimeSameCamera(p.sources[p.lastSourceIdx], d)) {
+            source = &p.sources[p.lastSourceIdx];
+        } else {
+            for (uint32_t i = 0; i < p.sourcesUsed; ++i) {
+                if (p.sources[i].key.depth == k.depth && flatRuntimeSameCamera(p.sources[i], d)) {
+                    source = &p.sources[i];
+                    p.lastSourceIdx = i;
+                    break;
+                }
+            }
+        }
         if (!source) {
             if (p.sourcesUsed == 32)
                 flatRuntimeMarkUncertain(p, FlatRuntimeUncertainCause::SourceCapacity,k.depth,k.color,k.vs,k.ps);
-            else p.sources[p.sourcesUsed++] = current();
+            else { p.lastSourceIdx = p.sourcesUsed; p.sources[p.sourcesUsed++] = current(); }
         } else {
             if (!fullViewport(k, k.width, k.height) || source->key.dsv != k.dsv ||
                 source->key.width != k.width || source->key.height != k.height ||

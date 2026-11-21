@@ -144,40 +144,60 @@ inline FlatOffscreenKey flatOffscreenKeyOf(const FlatContractObservation& k, uin
 }
 
 // ---- the memo ---------------------------------------------------------------------------------------------------------------------
-// The previous verified draw of its kind: its key and its draw record. The record is a pure function of the key (nothing in it is set by a
-// block the fast path skips), so a draw with the same key reuses it with only its instance count changed.
+// Recently verified draws of this kind (small ring): each entry holds its key and draw record. The record is a pure function of the
+// key (nothing in it is set by a block the fast path skips), so a draw matching any live entry reuses it with only its instance count
+// changed. Multiple slots prevent two alternating shadow/offscreen shader pairs from evicting each other every draw.
 class FlatOffscreenMemo {
 public:
-    bool valid() const noexcept { return valid_; }
+    static constexpr uint32_t kSlots = 8;
+    bool valid() const noexcept { return used_ != 0; }
     uint64_t frame() const noexcept { return frame_; }
-    const FlatOffscreenKey& key() const noexcept { return key_; }
-    void forget() noexcept { valid_ = false; }
-    // The reason the draw (key `now`, frame `frame`) cannot reuse the verified draw, or None.
+    const FlatOffscreenKey& key() const noexcept { return slots_[lastHit_].key; }
+    void forget() noexcept { used_ = 0; next_ = 0; lastHit_ = 0; }
+    // The reason the draw (key `now`, frame `frame`) cannot reuse a verified draw, or None.
     FlatOffscreenNo lookup(uint64_t frame, const FlatOffscreenKey& now) const noexcept {
-        if (!valid_) return FlatOffscreenNo::NoMemo;
+        if (!used_) return FlatOffscreenNo::NoMemo;
         if (frame != frame_) return FlatOffscreenNo::OtherFrame;
-        return key_.same(now) ? FlatOffscreenNo::None : FlatOffscreenNo::KeyDiffers;
+        if (slots_[lastHit_].key.same(now)) return FlatOffscreenNo::None;
+        for (uint32_t i = 0; i < used_; ++i) {
+            if (i == lastHit_) continue;
+            if (slots_[i].key.same(now)) { lastHit_ = i; return FlatOffscreenNo::None; }
+        }
+        return FlatOffscreenNo::KeyDiffers;
     }
     // A verified draw of this frame: the draw conditions and the live conditions held, and its slow path did nothing beyond what the fast
-    // path does. The record's camera pointer is re-pointed at the memo's own copy of the rows.
+    // path does. The record's camera pointer is re-pointed at the slot's own copy of the rows.
     void record(uint64_t frame, const FlatOffscreenKey& key, const FlatRuntimeDraw& d) {
-        if (valid_ && frame_ == frame && key_.same(key)) return;   // already held: nothing to copy
-        valid_ = true; frame_ = frame; key_ = key; draw_ = d;
-        draw_.key.camera = d.key.camera ? draw_.camera : nullptr;
+        if (used_ && frame_ != frame) { used_ = 0; next_ = 0; lastHit_ = 0; }
+        for (uint32_t i = 0; i < used_; ++i) {
+            if (slots_[i].key.same(key)) { lastHit_ = i; return; }   // already held: nothing to copy
+        }
+        const uint32_t idx = used_ < kSlots ? used_++ : (next_++ % kSlots);
+        frame_ = frame;
+        slots_[idx].key = key;
+        slots_[idx].draw = d;
+        slots_[idx].draw.key.camera = d.key.camera ? slots_[idx].draw.camera : nullptr;
+        lastHit_ = idx;
     }
     // The draw record for a hit, its instance count set. Owner thread; valid until the next record().
     FlatRuntimeDraw& use(uint32_t instances) noexcept {
-        draw_.instances = instances;
-        if (draw_.key.camera) draw_.key.camera = draw_.camera;
-        return draw_;
+        auto& d = slots_[lastHit_].draw;
+        d.instances = instances;
+        if (d.key.camera) d.key.camera = d.camera;
+        return d;
     }
-    const FlatRuntimeDraw& held() const noexcept { return draw_; }
+    const FlatRuntimeDraw& held() const noexcept { return slots_[lastHit_].draw; }
 
 private:
-    bool valid_ = false;
+    struct Slot {
+        FlatOffscreenKey key{};
+        FlatRuntimeDraw draw{};
+    };
+    uint32_t used_ = 0;
+    uint32_t next_ = 0;
+    mutable uint32_t lastHit_ = 0;
     uint64_t frame_ = 0;
-    FlatOffscreenKey key_{};
-    FlatRuntimeDraw draw_{};
+    Slot slots_[kSlots]{};
 };
 
 }  // namespace edvr

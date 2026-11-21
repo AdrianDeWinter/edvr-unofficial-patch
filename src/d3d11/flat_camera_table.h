@@ -72,6 +72,7 @@ public:
         uint32_t width = 0;
         uint64_t frame = 0;               // the frame of the last capture
         uint32_t sequence = 0;            // its write sequence
+        uint64_t hash = 0;                // precomputed flatCameraHash(rows) at capture()
         void* mapped = nullptr;           // while the game has the buffer mapped for writing
         bool valid = false;               // the rows below are a complete write's
         unsigned char rows[kFlatCameraBytes]{};
@@ -79,6 +80,7 @@ public:
 
     // ---- reading: never changes anything, never invalidates ------------------------------------------
     uint32_t count() const noexcept { return count_; }
+    uint32_t mappedCount() const noexcept { return mappedCount_; }
     const Entry& entry(uint32_t i) const noexcept { return entries_[i]; }
     const Entry* find(const void* identity) const noexcept {
         if (!identity || !count_) return nullptr;
@@ -124,7 +126,10 @@ public:
         bump<Faults::skipBumpInvalidate>();
     }
     void setMapped(const Entry& e, void* mapped) noexcept {
-        at(e).mapped = mapped;
+        Entry& m = at(e);
+        if (!m.mapped && mapped) ++mappedCount_;
+        else if (m.mapped && !mapped && mappedCount_) --mappedCount_;
+        m.mapped = mapped;
         bump<Faults::skipBumpMapped>();
     }
     // A complete write was seen, whole: its rows, whether they were usable, the frame and the sequence
@@ -132,6 +137,7 @@ public:
     void capture(const Entry& e, const void* bytes, uint64_t frame, uint32_t sequence) noexcept {
         Entry& m = at(e);
         m.valid = flatCaptureCameraRows(m.rows, bytes, m.width);
+        m.hash = m.valid ? flatCameraHash(m.rows) : 0;
         m.frame = frame;
         m.sequence = sequence;
         bump<Faults::skipBumpCapture>();
@@ -147,6 +153,7 @@ public:
             entries_[i].valid = false;
             entries_[i].mapped = nullptr;
         }
+        mappedCount_ = 0;
         bump<Faults::skipBumpNewFrame>();
     }
     // The device or the context went away: every entry, and its reference, is dropped.
@@ -154,6 +161,7 @@ public:
         for (uint32_t i = 0; i < kCapacity; ++i) entries_[i] = Entry{};
         std::memset(hash_, 0, sizeof(hash_));
         count_ = 0;
+        mappedCount_ = 0;
         bump<Faults::skipBumpClear>();
     }
 
@@ -168,6 +176,16 @@ public:
         if (kept_.tableGeneration != generation_) return nullptr;
         return &kept_.rows;
     }
+    // Same-pointer rebind probe: when the cached answer came from a valid entry in
+    // entries_ (which holds a strong COM ref preventing address reuse) and tableGeneration
+    // has not moved, a rebind of the exact same b1 pointer cannot point at a different buffer.
+    const FlatCameraRows* probeHeld(const void* b1, uint32_t bindGeneration, uint64_t frame) const noexcept {
+        if (const FlatCameraRows* hit = probe(b1, bindGeneration, frame)) return hit;
+        if (kept_.made && kept_.rows.have && kept_.b1 == b1 && kept_.frame == frame &&
+            kept_.tableGeneration == generation_)
+            return &kept_.rows;
+        return nullptr;
+    }
     // The answer made afresh, exactly as a draw has always been answered, and kept for the next one.
     const FlatCameraRows& refresh(const void* b1, uint32_t bindGeneration, uint64_t frame) noexcept {
         ++refreshes_;
@@ -176,7 +194,7 @@ public:
             if (c->valid && c->frame == frame) {
                 std::memcpy(r.rows, c->rows, sizeof(r.rows));
                 r.have = true;
-                r.hash = flatCameraHash(r.rows);
+                r.hash = c->hash;
                 r.epoch = c->frame;
                 r.sequence = c->sequence;
             }
@@ -237,6 +255,7 @@ private:
     Entry entries_[kCapacity];
     uint8_t hash_[kHashSize]{}; // 0 = empty, slot + 1 otherwise
     uint32_t count_ = 0;
+    uint32_t mappedCount_ = 0;
     uint64_t generation_ = 1;
     uint64_t refreshes_ = 0;
     Kept kept_;
