@@ -290,6 +290,7 @@ struct ForwardRuntime {
     } omCb1Cache;
     forward_light::Authority authority[forward_light::kPublications];
     Ptr<ID3D11Resource> authorityHdr[forward_light::kPublications];
+    uint32_t liveAuthorities=0;
     bool ownerKnown=false,upstream=false;
     struct DomainHold {Ptr<ID3D11Resource> raw;Ptr<ID3D11DepthStencilView> view;Ptr<ID3D11Buffer> buffer;};
     DomainHold domainHolds[forward_light::kDomains];
@@ -303,12 +304,14 @@ struct ForwardRuntime {
 // bindings, camera and arguments reuses it instead of rebuilding the record.
 struct ProducerContinuation {
     bool armed = false;
+    bool supported = false;
     uint64_t frame = 0;
     char kind = 0;
     uint32_t count = 0, start = 0, instances = 0, startInstance = 0;
     int32_t base = 0;
     uint32_t rtvGen = 0, dsvGen = 0, vsGen = 0, psGen = 0, b1Gen = 0;
     FlatRuntimeDraw draw{};
+    FlatReduceMemo reduceMemo{};
 };
 struct State {
     ForwardRuntime forwardLight;
@@ -501,10 +504,43 @@ struct State {
     Ptr<ID3D11Resource> uavs[8];
     const void* namedDepth = nullptr, *namedConstants = nullptr;
     unsigned char namedCamera[kFlatCameraBytes]{};
-    static constexpr uint32_t kProducerRunSlots = 4;
+    static constexpr uint32_t kProducerRunSlots = 16;
     ProducerContinuation producerRuns[kProducerRunSlots]{};
     uint32_t producerRunNext = 0;
     uint32_t producerRunLast = 0;
+    struct EffectiveDepthCache {
+        uint64_t depthEpoch = 0;
+        Ptr<ID3D11DepthStencilState> state;
+        D3D11_DEPTH_STENCIL_DESC desc{};
+        bool isDefault = true;
+        bool valid = false;
+        void clear() { depthEpoch = 0; state.Reset(); desc = {}; isDefault = true; valid = false; }
+    } effectiveDepthCache;
+    struct RememberedVsRing {
+        static constexpr uint32_t kSlots = 16;
+        struct Slot {
+            uint64_t hash = 0;
+            Ptr<ID3D11VertexShader> shader;
+        };
+        Slot slots[kSlots]{};
+        uint32_t next = 0;
+        bool contains(ID3D11VertexShader* vs, uint64_t hash) const noexcept {
+            if (!vs) return false;
+            for (const auto& e : slots)
+                if (e.shader.Get() == vs && e.hash == hash) return true;
+            return false;
+        }
+        void remember(ID3D11VertexShader* vs, uint64_t hash) {
+            if (!vs || contains(vs, hash)) return;
+            slots[next].hash = hash;
+            slots[next].shader = vs;
+            next = (next + 1) % kSlots;
+        }
+        void clear() {
+            for (auto& e : slots) { e.hash = 0; e.shader.Reset(); }
+            next = 0;
+        }
+    } rememberedVs;
     // The draw that named the world this frame (its shaders), and how often the camera it named was not the one H selected (design
     // section 104, the grenade hold: a first-person camera that names the world makes every world draw after it a "foreign" draw).
     uint64_t namedVs = 0, namedPs = 0;
@@ -1379,7 +1415,7 @@ template<class Draw,class Key>static bool namingVetoed(State& s,const Draw& d,co
     }
     return true;
 }
-bool owner() { return state().thread == GetCurrentThreadId(); }
+bool owner() { return state().thread == flatcpu::currentThreadId(); }
 void armDrawPackets(State& s,uint64_t frame) {
     const auto root=Config::get().logDir()+L"\\flat_draw_packets";
     const auto leaf=root+L"\\capture_"+std::to_wstring(GetTickCount64())+L"_"+std::to_wstring(GetCurrentProcessId());
@@ -3856,6 +3892,7 @@ void flatRuntimeResize() {
     // census window are the session's and stay.
     flatHdrBeginFrame(s.hdr, 0, 0); if (flatOriginCaptureEnabled()) s.passiveScene.reset(); s.hdrTreated = false;
     g_sceneSizes.store(0, std::memory_order_release);
+    s.effectiveDepthCache.clear(); s.rememberedVs.clear();
     s.prefix = FlatRuntimePrefix{}; s.context.Reset(); s.device.Reset(); s.thread = 0; s.viewportCount = 0;
 }
 void flatRuntimeBeforePresent() {
@@ -3895,7 +3932,7 @@ bool flatRuntimePassiveRearmBusy() {
            s.projectionFrames != 0 || s.drawCapture.active() || s.drawPackets.armed();
 }
 void flatRuntimeCreateBuffer(ID3D11Buffer* buffer, const void* initialData) {
-    if (state().projection) state().projection->noteResourceCreated();
+    if (state().projection) state().projection->noteBufferCreated(buffer);
     if(owner() && state().projection) {
         flatcpu::Scope shadows(flatcpu::kShadows);
         state().projection->observeCreateBuffer(buffer,initialData);
@@ -5574,6 +5611,7 @@ void flatRuntimeClearBindings() {
         if (overlayOpen(state())) overlayFail(state(), "overlay-clear-state");
         flatcpu::Scope tracker(flatcpu::kTrackers);
         state().viewportCount = 0; for (auto& u : state().uavs) u.Reset();
+        state().effectiveDepthCache.clear();
         // ClearState took engine motion's bound state with the game's: nothing left to put back, and nothing safe to touch.
         flatRuntimeSubstitution(nullptr, FlatSubstEvent::kClearState);
     }
@@ -5780,11 +5818,14 @@ FlatRuntimeDispatchScope::FlatRuntimeDispatchScope(ID3D11DeviceContext* ctx) {
 static void resourceWritten(State& s, ID3D11Resource* res,const char* entry,
                             FlatOverlayMutationOp provenance=FlatOverlayMutationOp::Written,
                             const HistoryWriteExtent& extent=HistoryWriteExtent{},bool constantFill=false,
-                            bool skipProjectionInvalidate=false,const Camera** outCamera=nullptr) {
+                            bool skipProjectionInvalidate=false,const Camera** outCamera=nullptr,
+                            bool knownConstantBuffer=false) {
     // Buffers cannot appear in 2D-texture tables (forward ledger/authority, overlay targets, untrusted coverage,
     // prefix render targets/sources, HDR target); GetType() is lock-free and avoids pointer-recycling hazards.
-    D3D11_RESOURCE_DIMENSION dim=D3D11_RESOURCE_DIMENSION_UNKNOWN;
-    if(res)res->GetType(&dim);
+    const Camera* c = camera(res, false);
+    const bool isKnownCb = knownConstantBuffer || c != nullptr;
+    D3D11_RESOURCE_DIMENSION dim=isKnownCb ? D3D11_RESOURCE_DIMENSION_BUFFER : D3D11_RESOURCE_DIMENSION_UNKNOWN;
+    if(!isKnownCb && res)res->GetType(&dim);
     const bool isBuffer=dim==D3D11_RESOURCE_DIMENSION_BUFFER;
     if(!isBuffer)forwardMutation(s,reinterpret_cast<uintptr_t>(res));
     lightAuditMutation(s,res);
@@ -5799,7 +5840,7 @@ static void resourceWritten(State& s, ID3D11Resource* res,const char* entry,
         *write={res,s.prefix.frame,s.prefix.sequence};
     }
     // The mutation report (flatRuntimeOverlayResourceMutation) counts the same API call for the history; this notification only invalidates.
-    if(s.engine!=FlatMonoResolveMode::Taa)
+    if(!isKnownCb && s.engine!=FlatMonoResolveMode::Taa)
         domainResourceWritten(s,res,"foreground-depth-or-unknown-mutation",extent,false);
     if(!isBuffer) {
         if(s.untrusted.active())s.untrusted.noteMutation(res,
@@ -5815,10 +5856,9 @@ static void resourceWritten(State& s, ID3D11Resource* res,const char* entry,
         if (flatOriginCaptureEnabled()) s.passiveScene.explicitWrite(reinterpret_cast<uintptr_t>(res));
         flatHdrObserveExplicitWrite(s.hdr, res);   // a write into the HDR target after the route's trigger is counted
     }
-    const Camera* c = camera(res, false);
     if (c) s.cameras.invalidate(*c);
     if (outCamera) *outCamera = c;
-    if (isBuffer && !skipProjectionInvalidate && s.projection) { flatcpu::Scope shadows(flatcpu::kShadows); s.projection->invalidate(res); }
+    if (isBuffer && !skipProjectionInvalidate && s.projection && !s.projection->writeRejected(res)) { flatcpu::Scope shadows(flatcpu::kShadows); s.projection->invalidate(res); }
 }
 // The extents the hooks pass (declared in flat_runtime.h; defined here, outside the anonymous namespace the mutation report is in).
 HistoryWriteExtent flatRuntimeCopyExtent(UINT dstSub,UINT dstX,const void* src,const D3D11_BOX* box) {
@@ -6036,9 +6076,10 @@ void flatRuntimeMap(ID3D11Resource* res, D3D11_MAP type, void* bytes) {
     flatcpu::Scope lookup(flatcpu::kResource);
     auto& s = state();
     const bool observeProjection = s.projection && !s.projection->writeRejected(res);
+    const bool trackedProjection = observeProjection && s.projection->containsTracked(res);
     const Camera* c = nullptr;
     resourceWritten(state(), res,"flatRuntimeMap",FlatOverlayMutationOp::Written,
-                    historyWholeWrite(HistoryWriteEntry::Map),false,observeProjection,&c);
+                    historyWholeWrite(HistoryWriteEntry::Map),false,true,&c,trackedProjection);
     if (c) state().cameras.setMapped(*c, bytes);
     if (observeProjection) {
         flatcpu::Scope shadows(flatcpu::kShadows); s.projection->observeMap(res,type,bytes);
@@ -6047,8 +6088,8 @@ void flatRuntimeMap(ID3D11Resource* res, D3D11_MAP type, void* bytes) {
 void flatRuntimeUnmap(ID3D11Resource* res) {
     if (!owner() || state().work == FlatWork::Paused) return;
     flatcpu::Scope lookup(flatcpu::kResource);
-    if (state().projection && state().projection->containsTracked(res)) { flatcpu::Scope shadows(flatcpu::kShadows);
-        state().projection->observeUnmap(res,state().prefix.frame,state().prefix.sequence); }
+    if (state().projection)
+        state().projection->observeUnmapIfTracked(res,state().prefix.frame,state().prefix.sequence);
     if (state().cameras.mappedCount()) {
         if (auto* c = camera(res, false)) {
             if (c->mapped) { capture(*c, c->mapped); if (state().work == FlatWork::Full) cameraWitness(res); }
@@ -6061,9 +6102,10 @@ void flatRuntimeUpdate(ID3D11Resource* res, const void* bytes, const D3D11_BOX* 
     flatcpu::Scope lookup(flatcpu::kResource);
     auto& s = state();
     const bool observeProjection = s.projection && !s.projection->writeRejected(res);
+    const bool trackedProjection = observeProjection && s.projection->containsTracked(res);
     const Camera* c = nullptr;
     resourceWritten(state(), res,"flatRuntimeUpdate",FlatOverlayMutationOp::Written,
-                    flatRuntimeUpdateExtent(0,box),false,observeProjection,&c);
+                    flatRuntimeUpdateExtent(0,box),false,true,&c,trackedProjection);
     if (c) {
         if (!box || (box->left == 0 && box->right == c->width)) { capture(*c, bytes); if (state().work == FlatWork::Full) cameraWitness(res); }
     }
@@ -6142,15 +6184,66 @@ static const char* domainOriginalInertRefusal(ID3D11DeviceContext* context,
     b.noPredicate=!predicate;
     return flatDomainInertRefusal(proof,b);
 }
+static void readEffectiveDepth(State& s, ID3D11DeviceContext* ctx, D3D11_DEPTH_STENCIL_DESC& out,
+                               bool* outIsDefault = nullptr) {
+    out = {};
+    out.DepthEnable = TRUE;
+    out.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+    const bool frozen = flatIssueEpochFrozen();
+    const bool ownerCtx = ctx && ctx == s.context.Get();
+    const uint64_t ep = flatOmDepthEpochLoad();
+    auto& cache = s.effectiveDepthCache;
+    if (!frozen && ownerCtx && cache.valid && cache.depthEpoch == ep) {
+        out = cache.desc;
+        if (outIsDefault) *outIsDefault = cache.isDefault;
+        return;
+    }
+    const uintptr_t tracked = (!frozen && ownerCtx)
+        ? flatIssueEpochState().omLastDepthState.load(std::memory_order_acquire)
+        : 1u;
+    if (tracked != 1u) {
+        auto* raw = reinterpret_cast<ID3D11DepthStencilState*>(tracked);
+        if (cache.valid && cache.isDefault == (raw == nullptr) && (!raw || cache.state.Get() == raw)) {
+            cache.depthEpoch = ep;
+            out = cache.desc;
+            if (outIsDefault) *outIsDefault = cache.isDefault;
+            return;
+        }
+        if (raw) raw->GetDesc(&out);
+        if (!flatIssueEpochFrozen() && flatOmDepthEpochLoad() == ep) {
+            cache.depthEpoch = ep;
+            cache.state = raw;
+            cache.desc = out;
+            cache.isDefault = (raw == nullptr);
+            cache.valid = true;
+        } else {
+            cache.clear();
+        }
+        if (outIsDefault) *outIsDefault = (raw == nullptr);
+        return;
+    }
+    Ptr<ID3D11DepthStencilState> bound;
+    UINT stencilRef = 0;
+    ctx->OMGetDepthStencilState(&bound, &stencilRef);
+    if (bound) bound->GetDesc(&out);
+    if (!frozen && ownerCtx && !flatIssueEpochFrozen() && flatOmDepthEpochLoad() == ep) {
+        cache.depthEpoch = ep;
+        cache.state = bound;
+        cache.desc = out;
+        cache.isDefault = !bound;
+        cache.valid = true;
+    } else if (ownerCtx) {
+        cache.clear();
+    }
+    if (outIsDefault) *outIsDefault = !bound;
+}
 // Asked only of a draw the planner would otherwise refuse. The game's state
 // is restored first, as for the inert query; a null state writes depth.
 static bool domainDrawPreservesSurface(ID3D11DeviceContext* context) {
     flatRuntimeSubstitution(context,FlatSubstEvent::kOtherDraw);
     FlatComputeInternalScope guard;
-    Ptr<ID3D11DepthStencilState> depthState;UINT stencilRef=0;
-    context->OMGetDepthStencilState(&depthState,&stencilRef);
-    D3D11_DEPTH_STENCIL_DESC depth{};depth.DepthEnable=TRUE;depth.DepthWriteMask=D3D11_DEPTH_WRITE_MASK_ALL;
-    if(depthState)depthState->GetDesc(&depth);
+    D3D11_DEPTH_STENCIL_DESC depth{};
+    readEffectiveDepth(state(), context, depth);
     return flatDomainPreservesSurface(depth);
 }
 // The foreground (first-person) contract of a mixed-camera frame (design section 104): an SDK frame is handed the qualified
@@ -6283,7 +6376,7 @@ FlatOffscreenLive flatOffscreenLiveOf(State& s, bool auditing, const FlatContrac
     live.overlayOpen = overlayOpen(s) || overlaySuffixActive.load(std::memory_order_acquire);
     live.projectionAudit = s.projectionFrames != 0;
     live.weaponFootprint = s.weaponFootprint.active();
-    live.foregroundTouchesDepth = s.foreground.active() && k.depth != nullptr;
+    live.foregroundTouchesDepth = s.foreground.active() && k.depth != nullptr && (k.depth == s.namedDepth || k.depth == s.phaseDepth.Get() || (k.depthWidth == s.prefix.width && k.depthHeight == s.prefix.height));
     live.hdrCouldConsume = flatHdrCouldConsume(s.hdr, k);
     return live;
 }
@@ -6325,7 +6418,10 @@ bool flatOffscreenTry(State& s, ID3D11DeviceContext* context, const FlatOffscree
     const auto oldTargets = s.prefix.targetsUsed;
     {
         flatcpu::Scope reduce(flatcpu::kReduce);   // the reducer: the count, q and the target's record
-        flatRuntimeObserve(s.prefix, d);
+        if (!flatRuntimeObserveFast(s.prefix, d, memo.reduceMemo())) {
+            flatRuntimeObserve(s.prefix, d);
+            flatRuntimeRecordReduceMemo(s.prefix, d, memo.reduceMemo());
+        }
     }
     if (k.format == 26 || flatOriginCaptureEnabled()) {
         flatcpu::Scope hdrScope(flatcpu::kHdrRoute);   // could-consume was false: the detector may count a candidate draw but cannot fire
@@ -6353,11 +6449,17 @@ void flatOffscreenRecord(State& s, const FlatRuntimeDraw& d, const FlatPairFacts
     const FlatOffscreenKey key = flatOffscreenKeyOf(k, bindingGeneration(BindSlot::Rtv0), bindingGeneration(BindSlot::Dsv0));
     if (s.offscreen.valid() && s.offscreen.frame() == s.prefix.frame && s.offscreen.lookup(s.prefix.frame, key) == FlatOffscreenNo::None) return;
     s.offscreen.record(s.prefix.frame, key, d);
+    flatRuntimeRecordReduceMemo(s.prefix, d, s.offscreen.reduceMemo());
     ++s.offscreenCounts.recorded;
 }
 void armFastForwardCert(const State& s, char kind, forward_light::Issue& issue, uint64_t& certEpoch) noexcept {
     if (issue.kind != forward_light::Issue::Geometry || kind == 'G' || kind == 'F') return;
     const uint64_t ep = flatIssueEpochLoad();
+    if (issue.fastCertEpoch && issue.fastCertEpoch == ep && !flatIssueEpochFrozen()) {
+        issue.issued = true;
+        certEpoch = ep;
+        return;
+    }
     if (forward_light::geometryIssueReuse(geometryCert(), issue, ep, s.prefix.frame, s.phase.currentX, s.phase.currentY, flatIssueEpochFrozen())) {
         issue.issued = true;
         certEpoch = ep;
@@ -6366,7 +6468,9 @@ void armFastForwardCert(const State& s, char kind, forward_light::Issue& issue, 
 // Returns the matching slot index in s.producerRuns (or ~0u) when this draw is the same continued producer.
 uint32_t flatProducerRunFind(const State& s, const FlatRuntimeDraw& live, const FlatPairFacts& pair,
                              char kind, uint32_t count, uint32_t instances, bool auditing) {
-    if (!live.supported || !live.key.camera) return ~0u;
+    const bool motionOnly = pair.motionKeyed && !live.supported && !weaponMotionFamilyVs(live.key.vs);
+    if ((!live.supported && !motionOnly) || !live.key.camera) return ~0u;
+    if (motionOnly && s.foreground.active()) return ~0u;
     if (pair.toneSlot != ~0u || pair.copyPair || pair.mapToneSlot != ~0u || pair.uiMayAsk || pair.sourceTone) return ~0u;
     if (!flatCameraInjectUpstreamOwns() || s.work != FlatWork::Full || s.projectionFrames != 0 || auditing) return ~0u;
     if (flatTemporalNeedsOriginalState() || s.drawCapture.active() || s.drawPackets.armed()) return ~0u;
@@ -6383,7 +6487,7 @@ uint32_t flatProducerRunFind(const State& s, const FlatRuntimeDraw& live, const 
     for (uint32_t k = 0; k < State::kProducerRunSlots; ++k) {
         const uint32_t idx = (s.producerRunLast + k) % State::kProducerRunSlots;
         const auto& held = s.producerRuns[idx];
-        if (!held.armed || held.frame != s.prefix.frame || !held.draw.supported) continue;
+        if (!held.armed || held.frame != s.prefix.frame || held.supported != live.supported) continue;
         if (held.rtvGen != rtvGen || held.dsvGen != dsvGen || held.vsGen != vsGen || held.psGen != psGen) continue;
         const auto& a = held.draw.key;
         if (a.color != b.color || a.rtv != b.rtv || a.depth != b.depth || a.dsv != b.dsv || a.b1 != b.b1 ||
@@ -6414,6 +6518,7 @@ void flatProducerRunRemember(State& s, const FlatRuntimeDraw& d, char kind, uint
     s.producerRunLast = idx;
     auto& held = s.producerRuns[idx];
     held.armed = true;
+    held.supported = d.supported;
     held.frame = s.prefix.frame;
     held.kind = kind;
     held.count = count;
@@ -6427,13 +6532,15 @@ void flatProducerRunRemember(State& s, const FlatRuntimeDraw& d, char kind, uint
     held.psGen = psGen;
     held.b1Gen = b1Gen;
     held.draw = d;
+    if (held.draw.key.camera) held.draw.key.camera = held.draw.camera;
+    flatRuntimeRecordReduceMemo(s.prefix, held.draw, held.reduceMemo);
 }
 // The forward observation, the reducer, the detector, the trace and the substitution for a draw
 // already known to be the same pipeline as the saved producer. `d` is that saved record.
-void flatProducerServe(State& s, ID3D11DeviceContext* context, FlatRuntimeDraw& d, const FlatPairFacts& pair,
-                       const FlatOffscreenArgs& offscreenArgs, bool auditing, uint32_t offscreenTargetsBefore,
-                       bool offscreenUncertainBefore, char kind, uint32_t count, uint32_t instances,
-                       bool& producer, bool& gameHadTarget6, forward_light::Issue& forwardIssue) {
+void flatProducerServe(State& s, ID3D11DeviceContext* context, FlatRuntimeDraw& d, FlatReduceMemo& reduceMemo,
+                       const FlatPairFacts& pair, const FlatOffscreenArgs& offscreenArgs, bool auditing,
+                       uint32_t offscreenTargetsBefore, bool offscreenUncertainBefore, char kind, uint32_t count,
+                       uint32_t instances, bool& producer, bool& gameHadTarget6, forward_light::Issue& forwardIssue) {
     d.knownNotTone = (pair.toneSlot == ~0u);
     d.knownNotB1Unread = !pair.b1Unread;
     const auto& k = d.key;
@@ -6441,11 +6548,15 @@ void flatProducerServe(State& s, ID3D11DeviceContext* context, FlatRuntimeDraw& 
     s.drawPs = k.ps;
     forwardFrame(s);
     forwardDrawWrites(s, context);
-    if (k.color) forwardMutation(s, reinterpret_cast<uintptr_t>(k.color), false);
+    if (k.color && (s.forwardLight.ledger.livePublications || s.forwardLight.liveAuthorities))
+        forwardMutation(s, reinterpret_cast<uintptr_t>(k.color), false);
     forwardIssue = forwardObserveDomain(s, d);
     {
         flatcpu::Scope reduce(flatcpu::kReduce);
-        flatRuntimeObserve(s.prefix, d);
+        if (!flatRuntimeObserveFast(s.prefix, d, reduceMemo)) {
+            flatRuntimeObserve(s.prefix, d);
+            flatRuntimeRecordReduceMemo(s.prefix, d, reduceMemo);
+        }
     }
     if (k.format == 26 || flatOriginCaptureEnabled()) {
         flatcpu::Scope hdrScope(flatcpu::kHdrRoute);
@@ -6457,7 +6568,7 @@ void flatProducerServe(State& s, ID3D11DeviceContext* context, FlatRuntimeDraw& 
         flatTraceRecord(s.traceRing, d, false, nullptr, s.prefix.sequence);
     }
     if (s.engine != FlatMonoResolveMode::Taa && k.depth) ++s.foregroundCounts.worldUnmarked;
-    if (s.foreground.active())
+    if (d.supported && s.foreground.active())
         s.foreground.worldSource(context, s.prefix.frame, s.prefix.sequence,
             static_cast<ID3D11Texture2D*>(const_cast<void*>(k.depth)),
             static_cast<ID3D11DepthStencilView*>(const_cast<void*>(k.dsv)));
@@ -6474,7 +6585,8 @@ void flatProducerServe(State& s, ID3D11DeviceContext* context, FlatRuntimeDraw& 
 bool flatProducerContinueEarly(State& s, ID3D11DeviceContext* context, const FlatOffscreenArgs& offscreenArgs,
                                bool auditing, uint32_t offscreenTargetsBefore, bool offscreenUncertainBefore,
                                char kind, uint32_t count, uint32_t instances, bool& producer, bool& gameHadTarget6,
-                               forward_light::Issue& forwardIssue) {
+                               forward_light::Issue& forwardIssue, bool& outSupported) {
+    if (!s.namedDepth) return false;
     if (count == 3 && instances == 1 && (kind == 'D' || kind == 'N')) return false;
     if (!flatCameraInjectUpstreamOwns() || s.work != FlatWork::Full || s.projectionFrames != 0 || auditing) return false;
     if (flatTemporalNeedsOriginalState() || s.drawCapture.active() || s.drawPackets.armed()) return false;
@@ -6484,22 +6596,25 @@ bool flatProducerContinueEarly(State& s, ID3D11DeviceContext* context, const Fla
     const uint32_t dsvGen = bindingGeneration(BindSlot::Dsv0);
     const uint32_t vsGen = bindingGeneration(BindSlot::Vs);
     const uint32_t psGen = bindingGeneration(BindSlot::Ps);
+    const uint32_t b1Gen = bindingGeneration(BindSlot::VsCb1);
     const void* rtvPtr = bindingGet(BindSlot::Rtv0);
     const void* dsvPtr = bindingGet(BindSlot::Dsv0);
     const void* b1Ptr = bindingGet(BindSlot::VsCb1);
     const uint64_t vsHash = bindingShaderHash(BindSlot::Vs);
     const uint64_t psHash = bindingShaderHash(BindSlot::Ps);
+    const bool fgActive = s.foreground.active();
     for (uint32_t k = 0; k < State::kProducerRunSlots; ++k) {
         const uint32_t idx = (s.producerRunLast + k) % State::kProducerRunSlots;
-        const auto& held = s.producerRuns[idx];
+        auto& held = s.producerRuns[idx];
         if (!held.armed || held.frame != s.prefix.frame) continue;
+        if (!held.supported && fgActive) continue;
         const auto& a = held.draw.key;
         if (held.rtvGen != rtvGen || held.dsvGen != dsvGen || held.vsGen != vsGen || held.psGen != psGen) continue;
         if (rtvPtr != a.rtv || dsvPtr != a.dsv || b1Ptr != a.b1) continue;
         if (vsHash != a.vs || psHash != a.ps) continue;
         if (s.viewportCount != a.viewportCount) continue;
         if (std::memcmp(&s.viewport, a.viewport, sizeof(a.viewport)) != 0) continue;
-        const FlatCameraRows* rows = s.cameras.probeHeld(a.b1, bindingGeneration(BindSlot::VsCb1), s.prefix.frame);
+        const FlatCameraRows* rows = s.cameras.probeHeld(a.b1, b1Gen, s.prefix.frame);
         if (!rows || !rows->have || rows->hash != a.cameraHash || rows->epoch != a.writeEpoch || rows->sequence != a.writeSeq) continue;
         if (s.namedDepth != a.depth || s.namedConstants != a.b1) continue;
         if (flatHdrCouldConsume(s.hdr, a)) continue;
@@ -6507,9 +6622,10 @@ bool flatProducerContinueEarly(State& s, ID3D11DeviceContext* context, const Fla
         FlatRuntimeDraw d = held.draw;
         d.instances = instances;
         if (d.key.camera) d.key.camera = d.camera;
+        outSupported = held.supported;
         const FlatPairFacts& pair = s.pairFacts.get(a.vs, a.ps, runtimeFlatProfile());
-        flatProducerServe(s, context, d, pair, offscreenArgs, auditing, offscreenTargetsBefore, offscreenUncertainBefore,
-                          kind, count, instances, producer, gameHadTarget6, forwardIssue);
+        flatProducerServe(s, context, d, held.reduceMemo, pair, offscreenArgs, auditing, offscreenTargetsBefore,
+                          offscreenUncertainBefore, kind, count, instances, producer, gameHadTarget6, forwardIssue);
         return true;
     }
     return false;
@@ -6518,15 +6634,17 @@ bool flatProducerContinueEarly(State& s, ID3D11DeviceContext* context, const Fla
 bool flatProducerContinue(State& s, ID3D11DeviceContext* context, FlatRuntimeDraw& d, const FlatPairFacts& pair,
                           const FlatOffscreenArgs& offscreenArgs, bool auditing, uint32_t offscreenTargetsBefore,
                           bool offscreenUncertainBefore, char kind, uint32_t count, uint32_t instances,
-                          bool& producer, bool& gameHadTarget6, forward_light::Issue& forwardIssue) {
+                          bool& producer, bool& gameHadTarget6, forward_light::Issue& forwardIssue, bool& outSupported) {
     const uint32_t idx = flatProducerRunFind(s, d, pair, kind, count, instances, auditing);
     if (idx == ~0u) return false;
     s.producerRunLast = idx;
-    d = s.producerRuns[idx].draw;
+    auto& held = s.producerRuns[idx];
+    d = held.draw;
     d.instances = instances;
     if (d.key.camera) d.key.camera = d.camera;   // the saved pointer addressed the previous draw's stack array
-    flatProducerServe(s, context, d, pair, offscreenArgs, auditing, offscreenTargetsBefore, offscreenUncertainBefore,
-                      kind, count, instances, producer, gameHadTarget6, forwardIssue);
+    outSupported = held.supported;
+    flatProducerServe(s, context, d, held.reduceMemo, pair, offscreenArgs, auditing, offscreenTargetsBefore,
+                      offscreenUncertainBefore, kind, count, instances, producer, gameHadTarget6, forwardIssue);
     return true;
 }
 }  // namespace
@@ -6617,10 +6735,11 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     if (flatOffscreenTry(s, context, offscreenArgs, auditing)) return;
     const uint32_t offscreenTargetsBefore = s.prefix.targetsUsed;
     const bool offscreenUncertainBefore = s.prefix.uncertain;
+    bool continuedSupported = false;
     if (flatProducerContinueEarly(s, context, offscreenArgs, auditing, offscreenTargetsBefore, offscreenUncertainBefore,
-                                  kind, count, instances, producer, gameHadTarget6, forwardIssue)) {
+                                  kind, count, instances, producer, gameHadTarget6, forwardIssue, continuedSupported)) {
         ctx = context;
-        splitContinued = true;
+        splitContinued = continuedSupported;
         fastProducerDtor = true;
         armFastForwardCert(s, kind, forwardIssue, forwardCertEpoch);
         weaponDrawKind=kind;weaponDrawCount=count;weaponDrawStart=start;weaponDrawBase=base;
@@ -6751,6 +6870,9 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     // stay inside the lazy substitution run instead of flushing and rebinding MRT6+blend+PS on every draw.
     if (!d.supported && !pairFact.motionKeyed) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);
     k.kind = flatContractKind(d.supported, k.color, k.depth, k.width, k.height, k.format, s.prefix.width, s.prefix.height, k.color == s.prefix.output);
+    // FP16 image intermediates use the same scene-size predicate; their
+    // producer admission remains separate from the format-23/26 motion source.
+    const bool sceneExtent = flatContractKind(false, k.color, k.depth, k.width, k.height, k.format==9?26:k.format, s.prefix.width, s.prefix.height, false) == kFlatContractScreen;
     const bool tone = pairFact.toneSlot != ~0u;
     const bool copy = pairFact.copyPair && k.color == s.prefix.output;
     if(!copy && s.drawCapture.active()) {
@@ -6759,8 +6881,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
         // admission can reserve samples for late motion producers before the
         // private MRT6 substitution. The later predicate remains authoritative.
         const bool motionEligible=d.supported && k.camera && k.depth &&
-            flatContractKind(false,k.color,k.depth,k.width,k.height,k.format==9?26:k.format,
-                s.prefix.width,s.prefix.height,false)==kFlatContractScreen &&
+            sceneExtent &&
             (k.format==23||k.format==26)&&flat_mono_detail::fullViewport(k,k.width,k.height);
         drawCaptureStarted=s.drawCapture.before(ctx,instances,kind,count,start,base,startInstance,
             k.vs,k.ps,bindingGet(BindSlot::Vs),bindingGet(BindSlot::Ps),motionEligible);
@@ -6779,11 +6900,11 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     }
     if (cameraKept && flatProducerContinue(s, context, d, pairFact, offscreenArgs, auditing, offscreenTargetsBefore,
                                      offscreenUncertainBefore, kind, count, instances,
-                                     producer, gameHadTarget6, forwardIssue)) {
-        splitContinued = true;
+                                     producer, gameHadTarget6, forwardIssue, continuedSupported)) {
+        splitContinued = continuedSupported;
         fastProducerDtor = true;
         armFastForwardCert(s, kind, forwardIssue, forwardCertEpoch);
-        flatcpu::drawSplitSetContinued(true);
+        flatcpu::drawSplitSetContinued(continuedSupported);
         return;
     }
     {
@@ -6798,7 +6919,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
         d.dofCompositeVerified=verifyDofComposite(ctx,d);
         d.imageSourceCameraIndependentVerified=verifyCameraIndependentImageSource(ctx,d);
         deferredPlan=verifyDeferredHdrCamera(s,d);
-        {
+        if (s.projectionFrames != 0 || lightLive(s)) {
             flatcpu::Scope captureCost(flatcpu::kCopyCapture,s.projectionFrames!=0||lightLive(s));
             captureCopyProvenance(s,ctx,d);
             lightPayloadToken=captureLightPayloadBefore(s,d,kind,count,start,base,instances,startInstance);
@@ -6856,15 +6977,16 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
         return weaponRoute;
     };
     const auto copyWeapon=[&]() { return routeOfWeapon()==FlatWeaponRoute::Copy; };
+    bool sameNamedCamera = s.namedDepth && k.camera && std::memcmp(s.namedCamera, d.camera, sizeof(d.camera)) == 0;
     if(d.supported && k.camera && k.depth && k.kind==kFlatContractPool && k.format==23 && weaponMotionFamilyVs(k.vs) &&
        flat_mono_detail::fullViewport(k,k.width,k.height) &&
-       flatContractKind(false,k.color,k.depth,k.width,k.height,k.format,s.prefix.width,s.prefix.height,false)==kFlatContractScreen &&
+       sceneExtent &&
        routeOfWeapon()!=FlatWeaponRoute::Unchanged) {
         // The first-person camera, not the world's: the world camera is the named one once H has named it, and the last named world's
         // (near plane and projection scale: the domain's own prediction, below) before that, so a weapon-family draw under the world's
         // camera stays a world source.
         const bool predictedWorld=!s.namedDepth && worldPredicted().predicted;
-        const bool worldCamera=s.namedDepth && std::memcmp(s.namedCamera,d.camera,sizeof(d.camera))==0;
+        const bool worldCamera=sameNamedCamera;
         d.firstPersonCohort=!predictedWorld && !worldCamera;
         if(d.firstPersonCohort)++s.copyWeaponWindow.cohortDraws;
     }
@@ -6924,9 +7046,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     effectiveDepth.DepthWriteMask=D3D11_DEPTH_WRITE_MASK_ALL;
     if(depthStateNeeded) {
         FlatComputeInternalScope guard;
-        Ptr<ID3D11DepthStencilState> boundDepth;
-        UINT stencilRef=0;ctx->OMGetDepthStencilState(&boundDepth,&stencilRef);
-        if(boundDepth)boundDepth->GetDesc(&effectiveDepth);
+        readEffectiveDepth(s, ctx, effectiveDepth);
         d.effectiveDepthWrite=effectiveDepth.DepthEnable &&
             effectiveDepth.DepthWriteMask==D3D11_DEPTH_WRITE_MASK_ALL;
         d.effectiveStencilWrite=effectiveDepth.StencilEnable && effectiveDepth.StencilWriteMask!=0;
@@ -7164,9 +7284,6 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     // projection readiness, no source naming or substitution, no resolve. A copy draw the
     // selector selects ends the stand-down at the Present.
     if (s.work == FlatWork::Probe) return;
-    // FP16 image intermediates use the same scene-size predicate; their
-    // producer admission remains separate from the format-23/26 motion source.
-    const bool sceneExtent = flatContractKind(false, k.color, k.depth, k.width, k.height, k.format==9?26:k.format, s.prefix.width, s.prefix.height, false) == kFlatContractScreen;
     const bool sourceShape=d.supported && !weaponMotionFamilyVs(k.vs) && k.camera && k.depth && sceneExtent &&
         (k.format==23 || k.format==26) && flat_mono_detail::fullViewport(k,k.width,k.height);
     // Before the world is named, a source draw of a camera the selected world's reference rules out is no source candidate (namingVetoed).
@@ -7286,7 +7403,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     // 7B0D and 114A are not scene sources, so d.supported already keeps them out of the foreground, weapon camera
     // included. foregroundSharesWorld still applies to a scene-source weapon family (AACF): the world's camera is not the gun.
     const bool foregroundSharesWorld=
-        (s.namedDepth && k.camera && std::memcmp(s.namedCamera,d.camera,sizeof(d.camera))==0) ||
+        sameNamedCamera ||
         (!s.namedDepth && worldPredicted().predicted);
     const bool foregroundCandidate=d.supported && weaponMotionFamilyVs(k.vs) && k.camera && k.depth &&
         k.kind==kFlatContractPool && k.format==23 && sceneExtent &&
@@ -7300,6 +7417,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
         flatcpu::Scope engine(flatcpu::kEngineDraw);
         s.namedDepth=k.depth;s.namedConstants=k.b1;s.namedWorldQ=s.prefix.sequence;s.namedVs=k.vs;s.namedPs=k.ps;
         std::memcpy(s.namedCamera,d.camera,sizeof(d.camera));
+        sameNamedCamera = true;
         {float namedRows[6][4];std::memcpy(namedRows,d.camera,sizeof(namedRows));s.worldReference=flatDomainWorldReference(namedRows);}
         engineVelocityNoteSource(static_cast<ID3D11Texture2D*>(const_cast<void*>(k.depth)),static_cast<ID3D11Buffer*>(const_cast<void*>(k.b1)));
     }
@@ -7328,7 +7446,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
             // world's): it is not predicted, and is classified, captured and marked as the first-person draw it is.
             const bool predictedWorld=!s.namedDepth && k.camera && worldPredicted().predicted;
             if(!s.namedDepth && k.camera && worldPredicted().nearEqual && !worldPredicted().predicted)++s.predictedScaleRejectedWindow;
-            const bool worldCamera=s.namedDepth && k.camera && std::memcmp(s.namedCamera,d.camera,sizeof(d.camera))==0;
+            const bool worldCamera=sameNamedCamera;
             auto witness=[&](unsigned kind){
                 if(!candidate->pendingNull.add(s.prefix.frame,k.depth,k.depthWidth,k.depthHeight,rows,s.phase.currentX,s.phase.currentY,
                                                k.vs,k.ps,kind))
@@ -7406,7 +7524,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     // state first: an F10 audit's captures (s.projectionFrames), and the legacy route's qualification of the projection
     // (qualifyProjection reads the shaders, the viewport and the constant buffers, and is skipped under Upstream).
     const bool continuesRun = sourceCandidate && s.namedDepth == k.depth && s.namedConstants == k.b1 &&
-        std::memcmp(s.namedCamera, d.camera, sizeof(d.camera)) == 0;
+        sameNamedCamera;
     // A motion key that is not a scene source (flatSource false) still substitutes when it draws the named world's
     // depth and camera. d.supported stays false, so the selector does not record a second source.
     // 2026-11-20 (Epic, a weapons shop; docs/fsr-upscaler-design-2026-09-16.md journal): so does a first-person weapon family's draw that
@@ -7416,7 +7534,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     // with its own projection, so the camera test keeps it out, and the selector still never takes these as a source (sourceCandidate).
     const bool motionOnlyRun = pairFact.motionKeyed && (!d.supported || weaponMotionFamilyVs(k.vs)) && k.camera && k.depth &&
         s.namedDepth == k.depth && s.namedConstants == k.b1 &&
-        std::memcmp(s.namedCamera, d.camera, sizeof(d.camera)) == 0 &&
+        sameNamedCamera &&
         sceneExtent && (k.format==23 || k.format==26) && flat_mono_detail::fullViewport(k, k.width, k.height);
     // The flat census's slot probe (2026-11-20, the shop glass edge; docs/fsr-upscaler-design-2026-09-16.md journal). While the NumLock census
     // runs, every keyed draw into a depth that is not offered for substitution, and why: such a draw renders stock and writes depth with no
@@ -7432,13 +7550,19 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
                 (unsigned long long)s.prefix.frame, (unsigned long long)k.vs, (unsigned long long)k.ps, kind, count, instances,
                 d.supported ? 1 : 0, weaponMotionFamilyVs(k.vs) ? 1 : 0, k.camera ? 1 : 0, sceneExtent ? 1 : 0, (unsigned)k.format,
                 flat_mono_detail::fullViewport(k, k.width, k.height) ? 1 : 0, s.namedDepth ? 1 : 0, s.namedDepth == k.depth ? 1 : 0,
-                s.namedConstants == k.b1 ? 1 : 0, std::memcmp(s.namedCamera, d.camera, sizeof(d.camera)) == 0 ? 1 : 0,
+                s.namedConstants == k.b1 ? 1 : 0, sameNamedCamera ? 1 : 0,
                 (sourceShape && !sourceCandidate) ? 1 : 0);
         }
     }
     splitContinued = continuesRun;
     flatcpu::drawSplitSetContinued(continuesRun);
-    if (continuesRun && pairFact.toneSlot == ~0u && !pairFact.copyPair && pairFact.mapToneSlot == ~0u &&
+    const bool rememberMotionOnly = motionOnlyRun && !d.supported && !weaponMotionFamilyVs(k.vs) &&
+        !s.foreground.active() && !domainPlanned && !overlayPlanned && !untrustedPlanned && !foregroundPlanned &&
+        !d.hdrCopyVerified && !d.menuHdrCopyVerified && !d.dofCompositeVerified &&
+        !d.imageSourceCameraIndependentVerified && !d.forwardHdrVerified && !d.deferredHdrVerified && !deferredPlan &&
+        !d.alternateHdr && !d.overlayProtected && !forwardConsumer(k.vs, k.ps) &&
+        !(k.vs == forward_light::kDepthVs && k.ps == forward_light::kDepthPs);
+    if ((continuesRun || rememberMotionOnly) && pairFact.toneSlot == ~0u && !pairFact.copyPair && pairFact.mapToneSlot == ~0u &&
         !pairFact.uiMayAsk && !pairFact.sourceTone)
         flatProducerRunRemember(s, d, kind, count, start, base, instances, startInstance);
     const bool coverageReads = s.projection && sceneExtent && k.color != s.prefix.output &&
@@ -8537,13 +8661,13 @@ void FlatRuntimeDrawScope::beginActualDraw(ID3D11Buffer* indirectArgs,UINT indir
             bytes=flatProbeShaderLookup('v',domainVs,&vsBytes,&vsSize) &&
                 (!domainPs || flatProbeShaderLookup('p',domainPs,&psBytes,&psSize));
         }
-        Ptr<ID3D11DepthStencilState> depthState;UINT stencilRef=0;
-        ctx->OMGetDepthStencilState(&depthState,&stencilRef);D3D11_DEPTH_STENCIL_DESC dd{};
-        dd.DepthEnable=TRUE;dd.DepthWriteMask=D3D11_DEPTH_WRITE_MASK_ALL;
-        if(depthState)depthState->GetDesc(&dd);
+        D3D11_DEPTH_STENCIL_DESC dd{};
+        readEffectiveDepth(s, ctx, dd);
         EdvrFlatForegroundStateReceipt stateReceipt{};
         auto readStateReceipt=[&]{
             if(!stateReceipt.valid) {
+                Ptr<ID3D11DepthStencilState> depthState;UINT stencilRef=0;
+                ctx->OMGetDepthStencilState(&depthState,&stencilRef);
                 stateReceipt.valid=1;stateReceipt.boundColors=boundColors;
                 stateReceipt.independentBlend=bd.IndependentBlendEnable?1u:0u;
                 stateReceipt.alphaToCoverage=bd.AlphaToCoverageEnable?1u:0u;
@@ -8633,7 +8757,10 @@ void FlatRuntimeDrawScope::beginActualDraw(ID3D11Buffer* indirectArgs,UINT indir
                 inputs.vs=domainVs;inputs.ps=domainPs;
                 Ptr<ID3D11VertexShader> originalVs=domainBoundVs;
                 if(!originalVs)ctx->VSGetShader(&originalVs,nullptr,nullptr);
-                if(originalVs)AnimatedVertexHistory::rememberShader(originalVs.Get(),vsBytes,vsSize);
+                if(originalVs && !s.rememberedVs.contains(originalVs.Get(), domainVs)) {
+                    AnimatedVertexHistory::rememberShader(originalVs.Get(),vsBytes,vsSize);
+                    s.rememberedVs.remember(originalVs.Get(), domainVs);
+                }
                 if(weaponDrawKind!='X')failDomain("capture","foreground-draw-kind");
                 else if(candidate->motion.capture(ctx,&foregroundOriginalDraw,weaponDrawCount,weaponDrawInstances,weaponDrawStart,weaponDrawBase,
                     weaponDrawStartInstance,static_cast<unsigned>(s.prefix.frame),inputs))++s.foregroundCounts.captured;

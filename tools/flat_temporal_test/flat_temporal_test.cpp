@@ -2893,10 +2893,11 @@ void testFlatCpuWiring() {
     const std::string engineH = slurp("src/d3d11/engine_velocity.h");
     const std::string cpuH = slurp("src/d3d11/flat_cpu.h");
     const std::string forwardCpp = slurp("src/d3d11/flat_forward_light_runtime.inl");
+    const std::string projectionCpp = slurp("src/d3d11/flat_projection_runtime.cpp");
     const std::string vscreenCpp = slurp("src/d3d11/vscreen.cpp");
     const std::string menuCpp = slurp("src/d3d11/menu.cpp");
     check(!runtimeCpp.empty() && !resolveCpp.empty() && !resolveH.empty() && !injectCpp.empty() && !temporalCpp.empty() &&
-           !engineCpp.empty() && !engineH.empty() && !cpuH.empty() && !menuCpp.empty() && !vscreenCpp.empty(),
+           !engineCpp.empty() && !engineH.empty() && !cpuH.empty() && !projectionCpp.empty() && !menuCpp.empty() && !vscreenCpp.empty(),
           "the census's sources are readable from the repo root");
     auto count = [](const std::string& text, const std::string& needle) {
         unsigned n = 0;
@@ -2985,7 +2986,8 @@ void testFlatCpuWiring() {
         {&runtimeCpp, "flatcpu::kResource", 5, "Written, WrittenExtent, Map, Unmap and Update time their lookups"},
         {&runtimeCpp, "flatcpu::kCoverage", 1, "coverage classification"},
         {&runtimeCpp, "flatcpu::kProjection", 3, "qualifyProjection, the private binding and its restore"},
-        {&runtimeCpp, "flatcpu::kShadows", 7, "the constant-buffer shadow observers and map-cache install/flush"},
+        {&runtimeCpp, "flatcpu::kShadows", 6, "the constant-buffer shadow observers and map-cache install/flush"},
+        {&projectionCpp, "flatcpu::kShadows", 1, "tracked unmap shadow capture"},
         {&runtimeCpp, "flatcpu::kWitness", 1, "the camera witness"},
         {&runtimeCpp, "flatcpu::kEngineDraw", 6, "engine motion's draw wrapper: naming, its begin (the slow path and the producer continuation), its end (both dtors), and the flush of what it kept bound"},
         {&runtimeCpp, "flatcpu::kResolve", 2, "the treatment at the copy draw and at the HDR route's trigger"},

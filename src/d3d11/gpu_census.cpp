@@ -333,7 +333,19 @@ void formatSkinDetail(char* out, size_t n, const Snapshot (&items)[kSkinSections
                   edvrTotal, list.c_str());
 }
 
+struct InlineIssuedInit {
+    InlineIssuedInit() noexcept { gpu_census_detail::g_inlineIssuedActive = true; }
+} g_inlineIssuedInit;
+
+void drainInlineIssued() noexcept {
+    for (size_t i = 0; i < static_cast<size_t>(GpuCensusSection::Count); ++i) {
+        g_section[i].issued += gpu_census_detail::g_inlineIssued[i];
+        gpu_census_detail::g_inlineIssued[i] = 0;
+    }
+}
+
 void logAndResetWindow(uint64_t now) {
+    drainInlineIssued();
     const uint64_t frames = g_windowFrames;
     // A window an eye run fell in prices the run along with the features: its copies and its draw census are in the figures.
     const char* eyeNote = g_windowEyeRuns
@@ -707,6 +719,7 @@ void frameSpanTakeWindow(double* meanMs, unsigned* n) noexcept {
 }
 
 void gpuCensusFrame(ID3D11DeviceContext* ctx) noexcept {
+    drainInlineIssued();
     const bool appClockOn = gpuFrameClockLive();
     if (!appClockOn) frameSpanEnd(ctx);   // before the census closes its scope: the pair lies in that scope
     gpuTimingCensusScopeEnd(ctx, GetTickCount64());   // the frame's spans are all issued; closing lets their result be read
@@ -755,6 +768,7 @@ void gpuCensusFrame(ID3D11DeviceContext* ctx) noexcept {
 void gpuCensusNoteEyeRun() noexcept { ++g_windowEyeRuns; }
 
 void gpuCensusShutdown() noexcept {
+    for (auto& v : gpu_census_detail::g_inlineIssued) v = 0;
     for (auto& st : g_section) { st.sampler.reset(); st.nullSampler.reset(); }
     g_frameSpan.reset();
     g_frameSpanWinMs = 0.0;

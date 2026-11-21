@@ -21,6 +21,7 @@
 #include <d3d11_1.h>   // ID3D11BlendState1, for the logic-op refusal
 #include <wrl/client.h>
 
+#include <atomic>
 #include <cstdio>
 
 #include "ui_layer_math.h"     // UiBlendRt, UiBlendShape, UiDsState, uiLayerBlendShape
@@ -70,27 +71,100 @@ inline void describeDs(const UiDsState& s, UINT ref, DXGI_FORMAT viewFmt, char* 
                 s.readOnlyStencil ? " read-only stencil" : "");
 }
 
+// Owner-thread bounded cache for immutable ID3D11BlendState descriptions read by
+// shapeOf(). Disabled by default (ownerThread == 0) so standalone unit tests with
+// synthetic or transient blend objects never observe cached state; enabled on the
+// render thread by ui_layer.cpp and cleared on device reset and shutdown so held
+// COM references prevent pointer-address reuse without leaking past the device.
+struct UiBlendShapeCacheEntry {
+    Microsoft::WRL::ComPtr<ID3D11BlendState> state;
+    UiBlendRt rt;
+    bool refused = false;
+};
+
+struct UiBlendShapeCacheState {
+    static constexpr unsigned kCapacity = 16;
+    std::atomic<DWORD> ownerThread{0};
+    UiBlendShapeCacheEntry entries[kCapacity]{};
+    unsigned count = 0;
+    unsigned nextEvict = 0;
+};
+
+inline UiBlendShapeCacheState& uiBlendShapeCacheState() {
+    static UiBlendShapeCacheState state;
+    return state;
+}
+
+inline void uiBlendShapeCacheEnable(bool enable) noexcept {
+    auto& state = uiBlendShapeCacheState();
+    if (!enable) {
+        state.ownerThread.store(0, std::memory_order_release);
+        return;
+    }
+    const DWORD tid = ::GetCurrentThreadId();
+    if (state.ownerThread.load(std::memory_order_relaxed) == tid) return;
+    DWORD expected = 0;
+    state.ownerThread.compare_exchange_strong(expected, tid, std::memory_order_acq_rel);
+}
+
+inline void uiBlendShapeCacheClear() noexcept {
+    auto& state = uiBlendShapeCacheState();
+    const DWORD owner = state.ownerThread.load(std::memory_order_acquire);
+    if (owner != 0 && owner != ::GetCurrentThreadId()) return;
+    for (unsigned i = 0; i < UiBlendShapeCacheState::kCapacity; ++i)
+        state.entries[i] = UiBlendShapeCacheEntry{};
+    state.count = 0;
+    state.nextEvict = 0;
+}
+
 // The shape of a bound blend state, alpha-to-coverage and logic ops refused. destAlphaOne: the target has no alpha channel and the family reads destination-alpha factors as
 // what D3D11 gives them there (ui_layer_math.h uiLayerBlendDestAlphaOne); *rtOut is then the rewritten blend, the one the layer converts. *gameOut, when asked for, is the game's own
 // factors, as bound: what a log line that speaks of the game's blend prints.
 inline UiBlendShape shapeOf(ID3D11BlendState* bs, UiBlendRt* rtOut, bool destAlphaOne = false, UiBlendRt* gameOut = nullptr) {
     UiBlendRt rt;  // null state: D3D11's default -- blending off, all written
     if (bs) {
-        D3D11_BLEND_DESC d{};
-        bs->GetDesc(&d);
-        rt = uiLayerBlendRtFrom(d.RenderTarget[0]);
+        bool refused = false;
+        auto& cache = uiBlendShapeCacheState();
+        const bool useCache = cache.ownerThread.load(std::memory_order_relaxed) == ::GetCurrentThreadId();
+        bool hit = false;
+        if (useCache) {
+            for (unsigned i = 0; i < cache.count; ++i) {
+                if (cache.entries[i].state.Get() == bs) {
+                    rt = cache.entries[i].rt;
+                    refused = cache.entries[i].refused;
+                    hit = true;
+                    break;
+                }
+            }
+        }
+        if (!hit) {
+            D3D11_BLEND_DESC d{};
+            bs->GetDesc(&d);
+            rt = uiLayerBlendRtFrom(d.RenderTarget[0]);
+            refused = d.AlphaToCoverageEnable != FALSE;
+            if (!refused) {
+                Microsoft::WRL::ComPtr<ID3D11BlendState1> bs1;
+                if (SUCCEEDED(bs->QueryInterface(__uuidof(ID3D11BlendState1),
+                                                 reinterpret_cast<void**>(bs1.GetAddressOf()))) &&
+                    bs1) {
+                    D3D11_BLEND_DESC1 d1{};
+                    bs1->GetDesc1(&d1);
+                    if (d1.RenderTarget[0].LogicOpEnable) refused = true;
+                }
+            }
+            if (useCache) {
+                const unsigned slot = cache.count < UiBlendShapeCacheState::kCapacity
+                                          ? cache.count++
+                                          : (cache.nextEvict++ & (UiBlendShapeCacheState::kCapacity - 1u));
+                cache.entries[slot].state = bs;
+                cache.entries[slot].rt = rt;
+                cache.entries[slot].refused = refused;
+            }
+        }
         if (gameOut) *gameOut = rt;
         if (destAlphaOne) rt = uiLayerBlendDestAlphaOne(rt);
         if (rtOut) *rtOut = rt;
-        if (d.AlphaToCoverageEnable) return UiBlendShape::kRefused;
-        Microsoft::WRL::ComPtr<ID3D11BlendState1> bs1;
-        if (SUCCEEDED(bs->QueryInterface(__uuidof(ID3D11BlendState1),
-                                         reinterpret_cast<void**>(bs1.GetAddressOf()))) &&
-            bs1) {
-            D3D11_BLEND_DESC1 d1{};
-            bs1->GetDesc1(&d1);
-            if (d1.RenderTarget[0].LogicOpEnable) return UiBlendShape::kRefused;
-        }
+        if (refused) return UiBlendShape::kRefused;
     } else {
         if (gameOut) *gameOut = rt;
         if (rtOut) *rtOut = rt;

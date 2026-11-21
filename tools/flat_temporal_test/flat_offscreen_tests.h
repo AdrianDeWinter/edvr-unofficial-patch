@@ -408,7 +408,7 @@ inline int flatOffscreenTests() {
                 {&liveBody, "live.overlayOpen = overlayOpen(s) || overlaySuffixActive.load(std::memory_order_acquire);", 1, "overlayOpen is the model's open suffix or the active flag"},
                 {&liveBody, "live.projectionAudit = s.projectionFrames != 0;", 1, "projectionAudit is the F10 audit's frame count"},
                 {&liveBody, "live.weaponFootprint = s.weaponFootprint.active();", 1, "weaponFootprint is the probe's armed state"},
-                {&liveBody, "live.foregroundTouchesDepth = s.foreground.active() && k.depth != nullptr;", 1, "foregroundTouchesDepth is the probe's active state and the draw's depth"},
+                {&liveBody, "live.foregroundTouchesDepth = s.foreground.active() && k.depth != nullptr && (k.depth == s.namedDepth || k.depth == s.phaseDepth.Get() || (k.depthWidth == s.prefix.width && k.depthHeight == s.prefix.height));", 1, "foregroundTouchesDepth is the probe's active state and a scene depth"},
                 {&liveBody, "live.hdrCouldConsume = flatHdrCouldConsume(s.hdr, k);", 1, "hdrCouldConsume is the detector's own gate"},
                 // The key from the binding shadow.
                 {&keyBody, "now.rtv = bindingGet(BindSlot::Rtv0); now.dsv = bindingGet(BindSlot::Dsv0);", 1, "the key reads the RTV and DSV bindings"},

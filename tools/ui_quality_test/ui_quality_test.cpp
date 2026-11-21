@@ -3320,7 +3320,7 @@ void testSupercruiseLines() {
         // The System Map in the layer: the grid takes no test; the cut-out comes first at the first draw after the bodies, in the colour issue of the HDR layer; the markers' constants are read before the real Unmap.
         {
             const std::string layerText = slurp("src/d3d11/ui_layer.cpp");
-            const size_t cutout = layerText.find("mapBodiesPunch(ctx, e);"), blend = layerText.find("ctx->OMSetBlendState(layerBlend, factor, sampleMask);");
+            const size_t cutout = layerText.find("mapBodiesPunch(ctx, e);"), blend = layerText.find("vScreenOMSetBlendStateRaw(ctx, layerBlend, factor, sampleMask);");
             const size_t unmapTee = screen.find("mapui::bodyConstantsUnmapped(res);"), realUnmap = screen.find("s->realUnmap(self, res, sub);", unmapTee);
             check(layerText.find("if (family == UiLayerFamily::kMapGrid) f.ds.depthTest = f.ds.stencilTest = false;") != std::string::npos && cutout != std::string::npos && blend != std::string::npos && cutout < blend &&
                       layerText.find("which == 0 && g_draw.hdr && mapui::systemOpen() && e.mapPunchSeq != g_draw.seq") != std::string::npos && unmapTee != std::string::npos && realUnmap != std::string::npos &&

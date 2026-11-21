@@ -1,6 +1,7 @@
 #include "flat_projection_runtime.h"
 #include "flat_issue_epoch.h"
 #include "flat_compute_readback.h"
+#include "flat_cpu.h"
 #include <cstring>
 
 namespace edvr {
@@ -70,7 +71,7 @@ void get(ID3D11DeviceContext1* context, FlatProjectionStage stage, UINT slot,
 }
 
 bool FlatProjectionRuntime::owner() const {
-    return context_ && owner_ == GetCurrentThreadId();
+    return context_ && owner_ == flatcpu::currentThreadId();
 }
 bool FlatProjectionRuntime::refuse(FlatProjectionRuntimeRefusal reason) {
     status_.last = reason;
@@ -147,7 +148,7 @@ bool FlatProjectionRuntime::initialize(ID3D11DeviceContext* context) {
     return true;
 }
 void FlatProjectionRuntime::reset() {
-    if (context_ && owner_ != GetCurrentThreadId()) return;
+    if (context_ && owner_ != flatcpu::currentThreadId()) return;
     for (auto& item : cold_) clearCold(item);
     for (auto& plan : plans_) {
         plan.plan.initialize(nullptr, nullptr, 0);
@@ -370,12 +371,13 @@ uint32_t FlatProjectionRuntime::rejectIndex(ID3D11Resource* resource) noexcept {
 bool FlatProjectionRuntime::writeRejected(ID3D11Resource* resource) const noexcept {
     if (!resource) return true;
     const uint32_t gen = rejectGen_.load(std::memory_order_acquire);
+    const uintptr_t target = reinterpret_cast<uintptr_t>(resource);
     uint32_t i = rejectIndex(resource);
     for (uint32_t n = 0; n < 8; ++n) {
-        const uint32_t g = reject_[i].gen;
+        const uint32_t g = reject_[i].gen.load(std::memory_order_acquire);
         if (g != gen) return false;
-        if (reject_[i].ptr == reinterpret_cast<uintptr_t>(resource)) {
-            if (reject_[i].gen != gen) return false;
+        if (reject_[i].ptr.load(std::memory_order_acquire) == target) {
+            if (reject_[i].gen.load(std::memory_order_acquire) != gen) return false;
             return true;
         }
         i = (i + 1) & (kRejectSlots - 1);
@@ -385,14 +387,30 @@ bool FlatProjectionRuntime::writeRejected(ID3D11Resource* resource) const noexce
 void FlatProjectionRuntime::noteResourceCreated() noexcept {
     rejectGen_.fetch_add(1, std::memory_order_release);
 }
+void FlatProjectionRuntime::noteBufferCreated(ID3D11Buffer* buffer) noexcept {
+    if (!buffer) return;
+    ID3D11Resource* resource = buffer;
+    const uintptr_t target = reinterpret_cast<uintptr_t>(resource);
+    uint32_t i = rejectIndex(resource);
+    for (uint32_t n = 0; n < 8; ++n) {
+        uintptr_t expected = target;
+        if (reject_[i].ptr.load(std::memory_order_relaxed) == target)
+            reject_[i].ptr.compare_exchange_strong(expected, 0,
+                std::memory_order_release, std::memory_order_relaxed);
+        i = (i + 1) & (kRejectSlots - 1);
+    }
+}
 void FlatProjectionRuntime::rememberReject(ID3D11Resource* resource) noexcept {
     if (!resource) return;
     const uint32_t gen = rejectGen_.load(std::memory_order_relaxed);
+    const uintptr_t target = reinterpret_cast<uintptr_t>(resource);
     uint32_t i = rejectIndex(resource);
     for (uint32_t n = 0; n < 8; ++n) {
-        if (reject_[i].gen != gen || reject_[i].ptr == reinterpret_cast<uintptr_t>(resource)) {
-            reject_[i].ptr = reinterpret_cast<uintptr_t>(resource);
-            reject_[i].gen = gen;
+        const uint32_t g = reject_[i].gen.load(std::memory_order_relaxed);
+        const uintptr_t p = reject_[i].ptr.load(std::memory_order_relaxed);
+        if (g != gen || p == 0 || p == target) {
+            reject_[i].ptr.store(target, std::memory_order_relaxed);
+            reject_[i].gen.store(gen, std::memory_order_release);
             return;
         }
         i = (i + 1) & (kRejectSlots - 1);
@@ -426,7 +444,7 @@ void FlatProjectionRuntime::observeMap(ID3D11Resource* resource, D3D11_MAP type,
 FlatProjectionBounceSource FlatProjectionRuntime::bounceSource(ID3D11Resource* resource) {
     FlatProjectionBounceSource result{};
     if (!owner()) return result;
-    Tracked* entry = track(resource);
+    Tracked* entry = trackOrReject(resource);
     if (!entry || !entry->dynamicWrite) return result;
     result.width = entry->width;
     result.eligible = true;
@@ -435,27 +453,39 @@ FlatProjectionBounceSource FlatProjectionRuntime::bounceSource(ID3D11Resource* r
     if (result.seedValid) result.seed = view.bytes;
     return result;
 }
+void FlatProjectionRuntime::observeUnmapEntry(Tracked& entry, uint64_t frame, uint32_t sequence) {
+    if (!entry.mapped) return;
+    const bool sample = bounceSampleWants_ && bounceSampleWants_(entry.width);
+    LARGE_INTEGER before{}, after{};
+    if (sample) QueryPerformanceCounter(&before);
+    const bool complete = shadows_.finishMapFull(entry.buffer.Get(), entry.generation,
+                                                   entry.mapBytes, entry.width);
+    if (sample && complete) {
+        QueryPerformanceCounter(&after);
+        bounceSampleRecord_(entry.width,
+            after.QuadPart > before.QuadPart ? static_cast<uint64_t>(after.QuadPart - before.QuadPart) : 0);
+    }
+    entry.mapped = false; entry.mapBytes = nullptr;
+    if (complete) {
+        entry.writeFrame=frame;entry.writeSequence=sequence;
+        ++status_.fullWrites;
+        if (bounceFullWrite_) bounceFullWrite_(entry.width);
+    }
+    else { ++status_.invalidations; refuse(FlatProjectionRuntimeRefusal::MissingFullWrite); }
+}
 void FlatProjectionRuntime::observeUnmap(ID3D11Resource* resource, uint64_t frame, uint32_t sequence) {
     if (!owner()) return;
     Tracked* entry = find(resource);
-    if (!entry || !entry->mapped) return;
-    const bool sample = bounceSampleWants_ && bounceSampleWants_(entry->width);
-    LARGE_INTEGER before{}, after{};
-    if (sample) QueryPerformanceCounter(&before);
-    const bool complete = shadows_.finishMapFull(entry->buffer.Get(), entry->generation,
-                                                   entry->mapBytes, entry->width);
-    if (sample && complete) {
-        QueryPerformanceCounter(&after);
-        bounceSampleRecord_(entry->width,
-            after.QuadPart > before.QuadPart ? static_cast<uint64_t>(after.QuadPart - before.QuadPart) : 0);
-    }
-    entry->mapped = false; entry->mapBytes = nullptr;
-    if (complete) {
-        entry->writeFrame=frame;entry->writeSequence=sequence;
-        ++status_.fullWrites;
-        if (bounceFullWrite_) bounceFullWrite_(entry->width);
-    }
-    else { ++status_.invalidations; refuse(FlatProjectionRuntimeRefusal::MissingFullWrite); }
+    if (!entry) return;
+    observeUnmapEntry(*entry, frame, sequence);
+}
+bool FlatProjectionRuntime::observeUnmapIfTracked(ID3D11Resource* resource, uint64_t frame, uint32_t sequence) {
+    if (!owner()) return false;
+    Tracked* entry = find(resource);
+    if (!entry) return false;
+    flatcpu::Scope shadows(flatcpu::kShadows);
+    observeUnmapEntry(*entry, frame, sequence);
+    return true;
 }
 void FlatProjectionRuntime::observeUpdate(ID3D11Resource* resource, const void* bytes,
                                           const D3D11_BOX* box, uint64_t frame, uint32_t sequence) {

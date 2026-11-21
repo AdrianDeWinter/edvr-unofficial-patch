@@ -970,19 +970,21 @@ bool overlayDepthState(ID3D11DeviceContext* ctx) {
 bool depthWritesOff(ID3D11DeviceContext* ctx) {
     static ID3D11DepthStencilState* lastState = nullptr;
     static bool lastOff = false;
-    Ptr<ID3D11DepthStencilState> state;
+    Ptr<ID3D11DepthStencilState> ownedState;
+    ID3D11DepthStencilState* rawState = nullptr;
     if (runtimeFlatProfile() && g_hookDepthState.valid && !flatIssueEpochFrozen()) {
-        state = g_hookDepthState.state;
+        rawState = g_hookDepthState.state.Get();
     } else {
         UINT reference = 0;
-        ctx->OMGetDepthStencilState(&state, &reference);
+        ctx->OMGetDepthStencilState(&ownedState, &reference);
         engineVelocityNoteStateCalls(1);
+        rawState = ownedState.Get();
     }
-    if (!state) return false;   // the default state: depth on, writes on
-    if (state.Get() == lastState) return lastOff;
+    if (!rawState) return false;   // the default state: depth on, writes on
+    if (rawState == lastState) return lastOff;
     D3D11_DEPTH_STENCIL_DESC d{};
-    state->GetDesc(&d);
-    lastState = state.Get();
+    rawState->GetDesc(&d);
+    lastState = rawState;
     // An EQUAL test with writes off is a material pass over its own depth pre-pass: every fragment it keeps has the buffer's depth, so its
     // slot is the surface's and it stays substituted. Any other test lets a fragment in front of the stored surface through.
     lastOff = !d.DepthEnable || (d.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ZERO && d.DepthFunc != D3D11_COMPARISON_EQUAL);
@@ -1238,6 +1240,24 @@ struct KeptMemo {
     bool valid = false;
 };
 KeptMemo g_keptMemo;
+// Single-entry memo for slowPath's dsv->GetResource() lookup (owner thread, cleared on frame end / abandon / clear).
+struct SourceDepthMemo {
+    uint32_t dsvGen = 0;
+    Ptr<ID3D11DepthStencilView> dsv;
+    Ptr<ID3D11Resource> res;
+    bool valid = false;
+};
+SourceDepthMemo g_sourceDepthMemo;
+// Cached ID3D11DeviceContext1 QI for ForeignPool token CB save/restore (under g_mutex, cleared on clear / abandon).
+struct FlatDomainCtx1Cache {
+    Ptr<ID3D11DeviceContext> raw;
+    Ptr<ID3D11DeviceContext1> ctx1;
+    bool queried = false;
+};
+FlatDomainCtx1Cache g_flatDomainCtx1;
+// Last context/auxStageEpoch where GS/HS/DS/Predication were proven null in engineVelocityFlatDomainBeginDraw (under g_mutex).
+ID3D11DeviceContext* g_flatAuxNullCtx = nullptr;
+uint64_t g_flatAuxNullEpoch = 0;
 
 // The game's render-target set as the context holds it now: eight views and the depth view, MRT6 only when it is
 // EDVR's own (which is then not part of the set, and reported by the flag).
@@ -1270,6 +1290,7 @@ void flatSaveTargets(ID3D11DeviceContext* ctx) {
     const bool held = g_flatGame.saved && g_flatGame.rtvGen == rtvGen && g_flatGame.dsvGen == dsvGen;
     FlatQueryPlan plan = FlatQueryPlan::Ask;
     if (held) {
+        if (!flatQueryCut().checkingThisFrame() && !flatQueryCut().fellBack(FlatQuery::GameTargets)) return;
         plan = flatQueryCut().plan(FlatQuery::GameTargets);
         if (plan == FlatQueryPlan::Shortcut) return;
     }
@@ -2013,10 +2034,22 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     // On foot no pool draw targets an eye: the source pass is a pool family
     // draw into the depth screen_motion named this frame or the last two.
     bool sourcePass = false;
-    Ptr<ID3D11Resource> sourceDepthRes;
+    ID3D11Resource* sourceDepthRaw = nullptr;
     if (!eyePass && f >= 0 && dsv && g_sourceDepth && frameNow() - g_sourceNoted <= 2u) {
-        dsv->GetResource(&sourceDepthRes);
-        sourcePass = sourceDepthRes.Get() == static_cast<ID3D11Resource*>(g_sourceDepth.Get());
+        const uint32_t dsvGenNow = bindingGeneration(BindSlot::Dsv0);
+        if (g_sourceDepthMemo.valid && g_sourceDepthMemo.dsvGen == dsvGenNow &&
+            g_sourceDepthMemo.dsv.Get() == dsv) {
+            sourceDepthRaw = g_sourceDepthMemo.res.Get();
+        } else {
+            Ptr<ID3D11Resource> res;
+            dsv->GetResource(&res);
+            g_sourceDepthMemo.dsv = dsv;
+            g_sourceDepthMemo.res = res;
+            g_sourceDepthMemo.dsvGen = dsvGenNow;
+            g_sourceDepthMemo.valid = true;
+            sourceDepthRaw = g_sourceDepthMemo.res.Get();
+        }
+        sourcePass = sourceDepthRaw == static_cast<ID3D11Resource*>(g_sourceDepth.Get());
         if (sourcePass) eye = kEngineVelocitySourceEye;
     }
     // The overlay pair: decal-like draws of vs_BBE5 / ps_DB3E whose depth state tests GEQUAL and writes no depth, so their MRT6 write carries a depth
@@ -2096,7 +2129,7 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     const bool newFrame = e.frame != frame;
     Ptr<ID3D11Texture2D> depthTex;
     if (newFrame || e.bindingStale || e.rtvGen != cache.rtv || e.dsvGen != cache.dsv) {
-        Ptr<ID3D11Resource> depthRes = sourceDepthRes;
+        Ptr<ID3D11Resource> depthRes = sourceDepthRaw;
         if (!depthRes) dsv->GetResource(&depthRes);
         if (!depthRes || FAILED(depthRes.As(&depthTex))) { restore(ctx); return; }
     }
@@ -2170,7 +2203,7 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
         flatRestoreLocked(ctx);
         e.bindingStale = true;   // MRT6 went: the binding below is made again, and needs the depth texture it reads
         if (!depthTex) {
-            Ptr<ID3D11Resource> depthRes = sourceDepthRes;
+            Ptr<ID3D11Resource> depthRes = sourceDepthRaw;
             if (!depthRes) dsv->GetResource(&depthRes);
             if (!depthRes || FAILED(depthRes.As(&depthTex))) { restore(ctx); return; }
         }
@@ -2915,6 +2948,10 @@ void clearLocked() {
     g_hookGameBlend = HookBlend{};
     g_hookDepthState = HookDepthState{};
     g_keptMemo = KeptMemo{};
+    g_sourceDepthMemo = SourceDepthMemo{};
+    g_flatDomainCtx1 = FlatDomainCtx1Cache{};
+    g_flatAuxNullCtx = nullptr;
+    g_flatAuxNullEpoch = 0;
     cache = DrawCache{};
     if (g_table) g_table->clear();
     if (g_census) g_census->clear();
@@ -3273,11 +3310,15 @@ bool engineVelocityFlatDomainBeginDraw(ID3D11DeviceContext* ctx,ID3D11Texture2D*
     ctx->PSGetShader(&saved.ps,nullptr,&classes);if(classes)return fail("flat-domain-PS-linkage");
     if(!saved.vs)return fail("flat-domain-shader-missing");
     if(saved.ps && (!psBytes || !psSize))return fail("flat-domain-PS-bytecode-missing");
-    Ptr<ID3D11GeometryShader> gs;Ptr<ID3D11HullShader> hs;Ptr<ID3D11DomainShader> ds;
-    ctx->GSGetShader(&gs,nullptr,nullptr);ctx->HSGetShader(&hs,nullptr,nullptr);ctx->DSGetShader(&ds,nullptr,nullptr);
-    if(gs || hs || ds)return fail("flat-domain-unsupported-shader-stage");
-    Ptr<ID3D11Predicate> predicate;BOOL predicateValue=FALSE;ctx->GetPredication(&predicate,&predicateValue);
-    if(predicate)return fail("flat-domain-predication");
+    const uint64_t auxEpoch=flatAuxStageEpochLoad();
+    if(flatIssueEpochFrozen() || g_flatAuxNullCtx!=ctx || g_flatAuxNullEpoch!=auxEpoch) {
+        Ptr<ID3D11GeometryShader> gs;Ptr<ID3D11HullShader> hs;Ptr<ID3D11DomainShader> ds;
+        ctx->GSGetShader(&gs,nullptr,nullptr);ctx->HSGetShader(&hs,nullptr,nullptr);ctx->DSGetShader(&ds,nullptr,nullptr);
+        if(gs || hs || ds){g_flatAuxNullEpoch=0;return fail("flat-domain-unsupported-shader-stage");}
+        Ptr<ID3D11Predicate> predicate;BOOL predicateValue=FALSE;ctx->GetPredication(&predicate,&predicateValue);
+        if(predicate){g_flatAuxNullEpoch=0;return fail("flat-domain-predication");}
+        if(!flatIssueEpochFrozen() && flatAuxStageEpochLoad()==auxEpoch){g_flatAuxNullCtx=ctx;g_flatAuxNullEpoch=auxEpoch;}
+    }
     ID3D11Buffer* so[4]{};ctx->SOGetTargets(4,so);bool busy=false;
     for(auto* p:so)if(p){busy=true;p->Release();}
     if(busy)return fail("flat-domain-stream-output");
@@ -3364,7 +3405,13 @@ bool engineVelocityFlatDomainBeginDraw(ID3D11DeviceContext* ctx,ID3D11Texture2D*
             if(FAILED(dev->CreateBuffer(&d,nullptr,&g_flatDomainTokenBuffer)))return fail("flat-domain-token-buffer-allocation");
         }
         saved.tokenSlot=shader->tokenSlot;
-        ctx->QueryInterface(IID_PPV_ARGS(&saved.rangedContext));
+        if(!g_flatDomainCtx1.queried || g_flatDomainCtx1.raw.Get()!=ctx) {
+            g_flatDomainCtx1.raw=ctx;
+            g_flatDomainCtx1.ctx1.Reset();
+            ctx->QueryInterface(IID_PPV_ARGS(&g_flatDomainCtx1.ctx1));
+            g_flatDomainCtx1.queried=true;
+        }
+        saved.rangedContext=g_flatDomainCtx1.ctx1;
         if(saved.rangedContext)saved.rangedContext->PSGetConstantBuffers1(saved.tokenSlot,1,&saved.tokenOriginal,&saved.tokenFirst,&saved.tokenCount);
         else ctx->PSGetConstantBuffers(saved.tokenSlot,1,&saved.tokenOriginal);
         const float token[4]={float(writerToken),0,0,0};ctx->UpdateSubresource(g_flatDomainTokenBuffer.Get(),0,nullptr,token,0,0);
@@ -3466,7 +3513,7 @@ bool engineVelocityFlatBeginDraw(ID3D11DeviceContext* ctx, bool* gameHadTarget6)
 
 void engineVelocityFlatEndDraw(ID3D11DeviceContext* ctx) {
     g_flatGame.bound = true;   // the draw was substituted: MRT6 is bound over the game's set, kept or not
-    gpuCensusNoteIssued(GpuCensusSection::AlteredPoolFamily);   // this draw is one of the run's (an eager flush below ends the run)
+    gpuCensusNoteIssuedFast(GpuCensusSection::AlteredPoolFamily);   // this draw is one of the run's (an eager flush below ends the run)
     // A capture wants the game's state back at once. The overlay guard no longer does: its private t3 stays bound across the group's draws and goes
     // back where the rest of the run's state goes.
     if (!g_flatLazy) {
@@ -3474,7 +3521,8 @@ void engineVelocityFlatEndDraw(ID3D11DeviceContext* ctx) {
         flatFlushLocked(ctx, EngineVelocityFlushCause::kEager);
         return;
     }
-    g_flatPending.store(true, std::memory_order_release);
+    if (!g_flatPending.load(std::memory_order_relaxed))
+        g_flatPending.store(true, std::memory_order_release);
 }
 
 void engineVelocityFlatFlush(ID3D11DeviceContext* ctx, EngineVelocityFlushCause cause) {
@@ -3492,6 +3540,7 @@ void engineVelocityFlatFrameEnd() noexcept {
     g_flatGame = FlatGame{};
     g_gameBlendMemo = GameBlendMemo{};
     g_keptMemo = KeptMemo{};
+    g_sourceDepthMemo = SourceDepthMemo{};
 }
 
 void engineVelocityFlatAbandon() noexcept {
@@ -3503,6 +3552,10 @@ void engineVelocityFlatAbandon() noexcept {
     g_flatGame = FlatGame{};
     g_gameBlendMemo = GameBlendMemo{};
     g_keptMemo = KeptMemo{};
+    g_sourceDepthMemo = SourceDepthMemo{};
+    g_flatDomainCtx1 = FlatDomainCtx1Cache{};
+    g_flatAuxNullCtx = nullptr;
+    g_flatAuxNullEpoch = 0;
     g_flatPending.store(false, std::memory_order_release);
     g_eyes[kEngineVelocitySourceEye].bindingStale = true;
     cache = DrawCache{};
@@ -3726,7 +3779,7 @@ void noteResourceWrite(const ID3D11Resource* resource) noexcept {
 // Zero hooked binds for it is expected. All live/shadow shader differences
 // in the first three 162120 capture frames reproduce our generated hashes;
 // those captures supply no evidence of a real bypass. Sampled by the header
-// (one quick-pathed pool-context draw in 64): when the live pixel shader is
+// (one quick-pathed pool-context draw in 256): when the live pixel shader is
 // neither the shadow's nor our installed patch, the truth is written into
 // the shadow and the draw takes the slow half, which
 // then reads the real shader. Only ever the owner thread.
@@ -3758,7 +3811,7 @@ void psShadowProbe(ID3D11DeviceContext* ctx) {
     livePs->Release();
 }
 
-// The header's one-in-64 draw, out of line (the counter is the header's). A pool family's vertex shader or a keyed or self-marking pixel
+// The header's one-in-256 draw, out of line (the counter is the header's). A pool family's vertex shader or a keyed or self-marking pixel
 // shader bound makes the draw worth the probe; any other draw is left alone.
 void psShadowProbeSampled(ID3D11DeviceContext* ctx) {
     if (engine_velocity_family::familyOfVs(bindingShaderHash(BindSlot::Vs)) >= 0 ||
@@ -3831,6 +3884,7 @@ void engineVelocityFrameBoundary(ID3D11DeviceContext* ctx) {
     }
     g_bound = Bound{};
     g_anyBound.store(false, std::memory_order_release);
+    g_sourceDepthMemo = SourceDepthMemo{};
     if (!live.load(std::memory_order_acquire)) return;
     cache = DrawCache{};
     ++g_draw.frames;

@@ -149,7 +149,7 @@ inline FlatOffscreenKey flatOffscreenKeyOf(const FlatContractObservation& k, uin
 // changed. Multiple slots prevent two alternating shadow/offscreen shader pairs from evicting each other every draw.
 class FlatOffscreenMemo {
 public:
-    static constexpr uint32_t kSlots = 8;
+    static constexpr uint32_t kSlots = 16;
     bool valid() const noexcept { return used_ != 0; }
     uint64_t frame() const noexcept { return frame_; }
     const FlatOffscreenKey& key() const noexcept { return slots_[lastHit_].key; }
@@ -177,6 +177,7 @@ public:
         slots_[idx].key = key;
         slots_[idx].draw = d;
         slots_[idx].draw.key.camera = d.key.camera ? slots_[idx].draw.camera : nullptr;
+        slots_[idx].reduce = {};
         lastHit_ = idx;
     }
     // The draw record for a hit, its instance count set. Owner thread; valid until the next record().
@@ -186,12 +187,14 @@ public:
         if (d.key.camera) d.key.camera = d.camera;
         return d;
     }
+    FlatReduceMemo& reduceMemo() noexcept { return slots_[lastHit_].reduce; }
     const FlatRuntimeDraw& held() const noexcept { return slots_[lastHit_].draw; }
 
 private:
     struct Slot {
         FlatOffscreenKey key{};
         FlatRuntimeDraw draw{};
+        FlatReduceMemo reduce{};
     };
     uint32_t used_ = 0;
     uint32_t next_ = 0;

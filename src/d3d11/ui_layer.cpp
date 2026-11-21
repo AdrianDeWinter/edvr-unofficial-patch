@@ -2645,7 +2645,7 @@ void restore(ID3D11DeviceContext* ctx) {
     }
     vScreenRSSetViewportsRaw(ctx, g_draw.vpCount, g_draw.vp);
     if (g_draw.scissorSet) ctx->RSSetScissorRects(g_draw.scCount, g_draw.sc);
-    ctx->OMSetBlendState(g_draw.blend, g_draw.factor, g_draw.sampleMask);
+    vScreenOMSetBlendStateRaw(ctx, g_draw.blend, g_draw.factor, g_draw.sampleMask);
     // A map sprite issue's depth-stencil state and rasterizer state (galaxy_map_ui.h, THE SPRITES' DEPTH): the game's back, a null state included.
     if (g_draw.dsStateSaved) vScreenOMSetDepthStencilStateRaw(ctx, g_draw.dsState, g_draw.dsRef);
     if (g_draw.rsStateSaved) ctx->RSSetState(g_draw.rsState);
@@ -3229,7 +3229,7 @@ bool beginInner(ID3D11DeviceContext* ctx, int which) {
     if (which == 0 && g_draw.hdr && mapui::systemOpen() && e.mapPunchSeq != g_draw.seq &&
         (g_draw.family == UiLayerFamily::kMapPlane || g_draw.family == UiLayerFamily::kMapCanvas || g_draw.family == UiLayerFamily::kMapSprite))
         mapBodiesPunch(ctx, e);
-    ctx->OMSetBlendState(layerBlend, factor, sampleMask);
+    vScreenOMSetBlendStateRaw(ctx, layerBlend, factor, sampleMask);
     if (mapRunStep != maprun::Step::kKeep) vScreenSetRenderTargetsRaw(ctx, 1, &target, layerDsv);
     if (mapRunIssue) {
         g_draw.mapRunBound = true;
@@ -8181,6 +8181,7 @@ void settleIssueFence(ID3D11DeviceContext* ctx) {
 }  // namespace
 
 void uiLayerFrameBoundary(ID3D11DeviceContext* ctx) {
+    uiBlendShapeCacheEnable(true);
     // A run of map sprites never outlives a frame: its references are let go and the game's targets are on the context for everything the boundary and the next frame do.
     uiLayerMapRunEnd(ctx);
     settleIssueFence(ctx);
@@ -8502,6 +8503,7 @@ void releaseDeviceObjects() {
     g_mapTone.patch.Reset();
     g_mapTone.width = 0;
     for (int i = 0; i < 2; ++i) g_fmtChecked[i] = g_fmtOk[i] = g_loadChecked[i] = g_loadOk[i] = false;
+    uiBlendShapeCacheClear();
 }
 }  // namespace
 
@@ -8516,6 +8518,7 @@ void uiLayerDeviceReset() {
 }
 
 void uiLayerShutdown() {
+    uiBlendShapeCacheEnable(false);
     g_holoBinding.clear(); g_holoCache.reset();
     detail::g_uiLayerIssueBlocked = false;
     g_holoSettleFailed = 0;

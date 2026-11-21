@@ -150,8 +150,8 @@ struct Publication {
 };
 struct Ledger {
     uint64_t frame=0,serial=0;Domain domains[kDomains]{};Publication publications[kPublications]{};
-    uint32_t used=0;bool overflow=false;
-    void reset(uint64_t f=0){for(auto& d:domains)d={};for(auto& p:publications)p={};used=0;overflow=false;frame=f;}
+    uint32_t used=0,livePublications=0,resetGen=0;bool overflow=false;
+    void reset(uint64_t f=0){for(auto& d:domains)d={};for(auto& p:publications)p={};used=0;livePublications=0;++resetGen;overflow=false;frame=f;}
     void begin(uint64_t f){if(frame!=f)reset(f);}
     Domain* domain(const Surface& raw) {
         for(unsigned i=0;i<used;++i)if(domains[i].raw.resource==raw.resource){
@@ -173,17 +173,19 @@ struct Ledger {
     }
     void mutation(uint64_t resource,bool forgetSources=true) {
         if(forgetSources)for(auto& d:domains)if(d.hasProjection&&(!resource||d.raw.resource==resource))d.failure=Reason::StaleDonor;
-        for(auto& p:publications)if(!resource||p.raw.resource==resource||p.linear.resource==resource)p.live=false;
+        for(auto& p:publications)if(p.live&&(!resource||p.raw.resource==resource||p.linear.resource==resource)){p.live=false;--livePublications;}
     }
     uint64_t publish(const Surface& raw,const Surface& linear,uint32_t q) {
         mutation(linear.resource);Publication* slot=nullptr;
         for(auto& p:publications)if(p.linear.resource==linear.resource){slot=&p;break;}
         if(!slot)for(auto& p:publications)if(!p.token){slot=&p;break;}
-        if(!slot){overflow=true;return 0;}*slot={raw,linear,++serial,frame,q,true,false,false};return serial;
+        if(!slot){overflow=true;return 0;}
+        if(slot->live)--livePublications;
+        *slot={raw,linear,++serial,frame,q,true,false,false};++livePublications;return serial;
     }
     void issued(uint64_t token){for(auto& p:publications)if(p.token==token&&p.live)p.issued=true;}
     void returned(uint64_t token){for(auto& p:publications)if(p.token==token&&p.live&&p.issued)p.returned=true;}
-    void abandon(uint64_t token){for(auto& p:publications)if(p.token==token)p.live=false;}
+    void abandon(uint64_t token){for(auto& p:publications)if(p.token==token&&p.live){p.live=false;--livePublications;}}
     const Publication* find(const Surface& raw,const Surface& linear,uint32_t q,Reason& why)const {
         if(overflow){why=Reason::Overflow;return nullptr;}
         for(const auto& p:publications)if(plane(p.raw,raw)&&plane(p.linear,linear)) {
@@ -285,7 +287,7 @@ inline OutputWatchDecision outputWatch(const Ledger& ledger,const Authority (&au
 }
 struct Issue {
     enum Kind:uint32_t {None,Converter,Light,Geometry,Count};Kind kind=None;
-    uint64_t token=0,frame=0,color=0,vs=0,ps=0;uint32_t q=0,linearSlot=0;
+    uint64_t token=0,frame=0,color=0,vs=0,ps=0,fastCertEpoch=0;uint32_t q=0,linearSlot=0;
     Surface raw{},linear{};ConstantIdentity constants[2]{};
     float phaseX=0,phaseY=0;unsigned char camera[96]{};bool depthWrite=false,donated=false,issued=false,returned=false;
 };
