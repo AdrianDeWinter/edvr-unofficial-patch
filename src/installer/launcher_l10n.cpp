@@ -175,7 +175,6 @@ const Row kRows[] = {
      L"\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043f\u0440\u0435\u0434\u043f\u043e\u0447\u0438\u0442\u0430\u0435\u043c\u044b\u0439 \u0440\u0435\u0436\u0438\u043c 3D VR \u043f\u0435\u0440\u0435\u0434 \u0437\u0430\u043f\u0443\u0441\u043a\u043e\u043c \u0432 VR."},
     {L"HMD (Headphones)", L"HMD (Kopfh\u00f6rer)", L"HMD (Auriculares)", L"HMD (Casque)", L"HMD (Fones de ouvido)", L"HMD (\u041d\u0430\u0443\u0448\u043d\u0438\u043a\u0438)"},
     {L"HMD (Speakers)", L"HMD (Lautsprecher)", L"HMD (Altavoces)", L"HMD (Haut-parleurs)", L"HMD (Alto-falantes)", L"HMD (\u0414\u0438\u043d\u0430\u043c\u0438\u043a\u0438)"},
-    {L"Side by Side", L"Nebeneinander", L"Lado a lado", L"C\u00f4te \u00e0 c\u00f4te", L"Lado a lado", L"\u0420\u044f\u0434\u043e\u043c (SBS)"},
     {L"HMD Cinema (Headphones)", L"HMD-Kino (Kopfh\u00f6rer)", L"Cine HMD (Auriculares)", L"Cin\u00e9ma HMD (Casque)", L"Cinema HMD (Fones)", L"\u041a\u0438\u043d\u043e HMD (\u041d\u0430\u0443\u0448\u043d\u0438\u043a\u0438)"},
     {L"HMD Cinema (Speakers)", L"HMD-Kino (Lautsprecher)", L"Cine HMD (Altavoces)", L"Cin\u00e9ma HMD (Haut-parleurs)", L"Cinema HMD (Alto-falantes)", L"\u041a\u0438\u043d\u043e HMD (\u0414\u0438\u043d\u0430\u043c\u0438\u043a\u0438)"},
     {L"Skip the Epic launcher", L"Epic-Launcher \u00fcberspringen", L"Omitir el launcher de Epic", L"Passer le launcher Epic", L"Pular o launcher da Epic", L"\u041f\u0440\u043e\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043b\u0430\u0443\u043d\u0447\u0435\u0440 Epic"},

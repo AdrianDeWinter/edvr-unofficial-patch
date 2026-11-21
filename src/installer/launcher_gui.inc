@@ -28,14 +28,13 @@ struct VrModeChoice {
     int mode;
     const wchar_t* label;
 };
-// Elite Dangerous's in-game Options > Graphics > 3D VR modes, in dropdown order.
+// Elite Dangerous's in-game Options > Graphics > 3D headset modes, in dropdown order.
 const VrModeChoice kVrModeChoices[] = {
     {0, L"Not Set"},
     {3, L"HMD (Headphones)"},
     {4, L"HMD (Speakers)"},
     {5, L"HMD Cinema (Headphones)"},
     {6, L"HMD Cinema (Speakers)"},
-    {2, L"Side by Side"},
 };
 
 // Posted by the session's worker threads: lParam is a heap std::function<void()> to run here.

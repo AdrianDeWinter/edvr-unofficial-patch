@@ -41,7 +41,6 @@ Every store offers **Play VR** and **Play flat** (filtered to the modes installe
   - **HMD (Speakers)** (`4`)
   - **HMD Cinema (Headphones)** (`5`)
   - **HMD Cinema (Speakers)** (`6`)
-  - **Side by Side** (`2`)
 
 See [Playing](Playing.md).
 
