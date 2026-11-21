@@ -3014,6 +3014,47 @@ void testRoute() {
               !fileExists(P(shimRoot, L"EDLaunch_orig.exe")),
           "removing the stand-in puts the saved EDLaunch back: " + shimError);
 
+    // A copy that cannot be staged, and a replace that cannot move the live file, leave both names as they were.
+    {
+        const std::wstring root = P(tree, L"shim-fail\\Elite");
+        const std::wstring ed = P(root, L"EDLaunch.exe");
+        const std::wstring orig = P(root, L"EDLaunch_orig.exe");
+        const std::wstring product = P(root, L"Products\\elite-dangerous-odyssey-64");
+        const std::wstring self = P(tree, L"shim-fail-launcher.exe");
+        writeAll(ed, "frontier-binary");
+        writeAll(P(product, L"EliteDangerous64.exe"), "x");
+        writeAll(self, "our-binary");
+        const std::wstring blocked = P(root, L"EDLaunch.exe.edvr-new");
+        check(CreateDirectoryW(blocked.c_str(), nullptr) != FALSE, "the blocked staging name is a directory");
+        std::string err;
+        check(!installEdLaunchShim(self, product, &err) && readAll(ed) == "frontier-binary" && !fileExists(orig) &&
+                  !fileExists(P(root, L"edvr_edlaunch.txt")),
+              "a failed copy leaves EDLaunch.exe and EDLaunch_orig.exe as they were: " + err);
+        check(RemoveDirectoryW(blocked.c_str()) != FALSE, "the blocked staging directory is removed");
+        HANDLE lock = CreateFileW(ed.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        check(lock != INVALID_HANDLE_VALUE && !installEdLaunchShim(self, product, &err),
+              "a live EDLaunch.exe that cannot be moved is not replaced: " + err);
+        if (lock != INVALID_HANDLE_VALUE) CloseHandle(lock);
+        check(readAll(ed) == "frontier-binary" && !fileExists(orig) && !fileExists(P(root, L"edvr_edlaunch.txt")),
+              "a failed replace leaves the live EDLaunch.exe and does not create EDLaunch_orig.exe");
+        check(installEdLaunchShim(self, product, &err) && readAll(ed) == "our-binary" && readAll(orig) == "frontier-binary",
+              "install after the failed replace still keeps Frontier's binary: " + err);
+        lock = CreateFileW(ed.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        check(lock != INVALID_HANDLE_VALUE && !removeEdLaunchShim(product, &err),
+              "remove does not delete a live EDLaunch.exe it cannot replace: " + err);
+        if (lock != INVALID_HANDLE_VALUE) CloseHandle(lock);
+        check(readAll(ed) == "our-binary" && readAll(orig) == "frontier-binary",
+              "a failed remove leaves the stand-in and the saved EDLaunch in place");
+        check(DeleteFileW(ed.c_str()) != FALSE && !fileExists(ed) && fileExists(orig), "the live launcher can be removed for the restore case");
+        check(removeEdLaunchShim(product, &err) && readAll(ed) == "frontier-binary" && !fileExists(orig) &&
+                  !fileExists(P(root, L"edvr_edlaunch.txt")),
+              "a missing EDLaunch.exe is restored from EDLaunch_orig.exe: " + err);
+        writeAll(ed, "live");
+        writeAll(orig, "saved-without-marker");
+        check(!installEdLaunchShim(self, product, &err) && readAll(ed) == "live" && readAll(orig) == "saved-without-marker",
+              "an EDLaunch_orig.exe with no marker still refuses the install and changes nothing: " + err);
+    }
+
     // The Frontier store's own layout: the game under AppData, EDLaunch under Program Files, and
     // nothing above the game folder that leads to it.
     const std::wstring apart = P(tree, L"AppData\\Frontier_Developments\\Products\\elite-dangerous-odyssey-64");
@@ -4613,6 +4654,14 @@ void testDirectSession() {
         check(question.find("Start Elite directly instead of through Frontier's launcher?") == 0 && contains(question, "No password or token is stored.") && contains(question, "Frontier has not approved this.") &&
                   contains(question, "Untick this at any time to go back to Frontier's launcher.") && question.size() > 11 && question.substr(question.size() - 11) == "Turn it on?",
               "the question says what the setting does and that Frontier has not approved it");
+        const std::string epicQuestion = kDirectLaunchQuestionEpic;
+        check(epicQuestion.find("Skip the Epic launcher and pick VR or flat here?") == 0 &&
+                  contains(epicQuestion, "signs in to Epic and Frontier") && contains(epicQuestion, "starts Elite itself") &&
+                  contains(epicQuestion, "EDLaunch_orig.exe") && contains(epicQuestion, "exits once Elite is running") &&
+                  contains(epicQuestion, "Frontier has not approved this.") && epicQuestion.find("stores nothing") == std::string::npos &&
+                  epicQuestion.find("password") == std::string::npos && epicQuestion.find("secret") == std::string::npos &&
+                  epicQuestion.size() > 11 && epicQuestion.substr(epicQuestion.size() - 11) == "Turn it on?",
+              "the Epic question says the stand-in signs in and starts Elite, and does not claim that nothing is stored");
     }
 }
 

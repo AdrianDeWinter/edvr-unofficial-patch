@@ -21,6 +21,7 @@
 #include "flat_camera_phase.h"     // flatCameraCheckRowPair: the rows carry the phases they are claimed to
 #include "flat_live_phase.h"       // FlatLivePhase: the flat profile's phase machine, reused
 #include "dittosr_engine.h"   // dittoReleaseFeatures: the world slot, released when the choice leaves DittoSR
+#include "fsr4_engine.h"      // fsr4ReleaseFeatures: the world slot, released when the choice leaves fsr4
 #include "dlaa.h"
 #include "flat_mono_resolve.h"
 #include "gpu_census.h"
@@ -685,15 +686,19 @@ void windDownInjector() {
 }  // namespace
 
 // The eye route does not run while this route owns the frame (native_temporal.cpp layerOnlyTreat
-// returns before the pass), so the pass's engine change never sees a DittoSR choice that only the
-// world slot used. The next accounted boundary drops those histories. An idle key-off frame returns
-// before this and reads no setting.
+// returns before the pass), so the pass's engine change never sees a DittoSR or FSR 4 choice that
+// only the world slot used. The next accounted boundary drops those histories. An idle key-off
+// frame returns before this and reads no setting.
 void releaseDittoWhenLeft() {
     const std::string mode = Config::get().getString("fix.temporal_aa", "off");
     const bool ditto = _stricmp(mode.c_str(), "dittosr") == 0;
+    const bool fsr4 = _stricmp(mode.c_str(), "fsr4") == 0;
     static bool wasDitto = false;
+    static bool wasFsr4 = false;
     if (wasDitto && !ditto) dittoReleaseFeatures();
+    if (wasFsr4 && !fsr4) fsr4ReleaseFeatures();
     wasDitto = ditto;
+    wasFsr4 = fsr4;
 }
 
 // ---- the frame boundary ------------------------------------------------------------------------------------------------------------

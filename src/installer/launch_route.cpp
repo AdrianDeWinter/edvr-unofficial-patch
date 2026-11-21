@@ -226,6 +226,33 @@ std::wstring modulePath() {
     return (n > 0 && n < 1024) ? std::wstring(buf, n) : std::wstring();
 }
 
+// `src` takes `dest`'s name. A failure leaves `dest` where it was when it already existed.
+bool replaceWith(const std::wstring& dest, const std::wstring& src) {
+    if (!fileExists(dest)) return MoveFileW(src.c_str(), dest.c_str()) != FALSE;
+    if (ReplaceFileW(dest.c_str(), src.c_str(), nullptr, REPLACEFILE_IGNORE_MERGE_ERRORS, nullptr, nullptr)) return true;
+    const std::wstring aside = dest + L".edvr-aside";
+    DeleteFileW(aside.c_str());
+    if (!MoveFileW(dest.c_str(), aside.c_str())) return false;
+    if (!MoveFileW(src.c_str(), dest.c_str())) {
+        MoveFileW(aside.c_str(), dest.c_str());
+        return false;
+    }
+    DeleteFileW(aside.c_str());
+    return true;
+}
+
+// EDLaunch_orig.exe in the same places findEdLaunch looks, for a live file that is already gone.
+std::wstring findEdLaunchOrig(const std::wstring& gameDir) {
+    std::wstring folder = gameDir;
+    for (int level = 0; level < 8 && !folder.empty(); ++level) {
+        for (const std::wstring& candidate : {joinPath(folder, kEdLaunchOrigName), joinPath(joinPath(folder, L"EDLaunch"), kEdLaunchOrigName)}) {
+            if (fileExists(candidate)) return candidate;
+        }
+        folder = parentOf(folder);
+    }
+    return std::wstring();
+}
+
 }  // namespace
 
 std::wstring edLaunchShimCommand(const std::wstring& origExe, const std::wstring& commandLine, bool vr,
@@ -283,26 +310,80 @@ bool installEdLaunchShim(const std::wstring& selfExe, const std::wstring& gameDi
     const bool marked = !recorded.empty();
     if (marked && liveHash == selfHash) return true;
 
-    auto copySelf = [&]() {
-        if (!CopyFileW(selfExe.c_str(), edlaunch.c_str(), FALSE))
-            return fail("The stand-in could not be copied into EDLaunch.exe's place.");
-        if (!writeSmallText(marker, sha256File(edlaunch)))
-            return fail("The stand-in was copied, but its marker could not be written.");
-        return true;
-    };
     // The marker names the stand-in we wrote. The same hash means that copy is still there
     // and this launcher has been rebuilt, so only the copy is replaced. A different hash is
     // a game update putting Frontier's binary back, and that binary becomes the saved one.
-    if (marked && std::string(recorded.begin(), recorded.end()) == liveHash) return copySelf();
-    if (!marked && fileExists(orig))
+    const bool replaceCopyOnly = marked && narrowUtf8(recorded) == liveHash;
+    if (!replaceCopyOnly && !marked && fileExists(orig))
         return fail("EDLaunch_orig.exe is already beside EDLaunch.exe, so the stand-in was not installed.");
-    if (marked || !fileExists(orig)) {
-        if (fileExists(orig) && !DeleteFileW(orig.c_str()))
-            return fail("The saved EDLaunch is in use, so it could not be replaced.");
-        if (!MoveFileW(edlaunch.c_str(), orig.c_str()))
-            return fail("EDLaunch.exe is in use, so the stand-in could not take its place.");
+
+    const std::wstring staged = joinPath(dir, L"EDLaunch.exe.edvr-new");
+    const std::wstring liveAside = joinPath(dir, L"EDLaunch.exe.edvr-old");
+    const std::wstring savedAside = joinPath(dir, L"EDLaunch_orig.exe.edvr-bak");
+    auto drop = [](const std::wstring& path) { DeleteFileW(path.c_str()); };
+    const std::string oldMarker = narrowUtf8(recorded);
+    auto restoreMarker = [&]() {
+        if (marked) writeSmallText(marker, oldMarker);
+        else drop(marker);
+    };
+    drop(staged);
+    if (!CopyFileW(selfExe.c_str(), staged.c_str(), FALSE)) {
+        drop(staged);
+        return fail("The stand-in could not be copied into EDLaunch.exe's place.");
     }
-    return copySelf();
+
+    if (replaceCopyOnly) {
+        drop(liveAside);
+        if (!MoveFileW(edlaunch.c_str(), liveAside.c_str())) {
+            drop(staged);
+            return fail("EDLaunch.exe is in use, so the stand-in could not take its place.");
+        }
+        if (!MoveFileW(staged.c_str(), edlaunch.c_str())) {
+            MoveFileW(liveAside.c_str(), edlaunch.c_str());
+            drop(staged);
+            return fail("The stand-in could not be copied into EDLaunch.exe's place.");
+        }
+        const std::string hash = sha256File(edlaunch);
+        if (hash.empty() || !writeSmallText(marker, hash)) {
+            if (replaceWith(edlaunch, liveAside)) restoreMarker();
+            else if (!hash.empty()) writeSmallText(marker, hash);
+            return fail("The stand-in was copied, but its marker could not be written.");
+        }
+        drop(liveAside);
+        return true;
+    }
+
+    const bool hadSaved = fileExists(orig);
+    if (hadSaved) {
+        drop(savedAside);
+        if (!MoveFileW(orig.c_str(), savedAside.c_str())) {
+            drop(staged);
+            return fail("The saved EDLaunch is in use, so it could not be replaced.");
+        }
+    }
+    if (!MoveFileW(edlaunch.c_str(), orig.c_str())) {
+        if (hadSaved) MoveFileW(savedAside.c_str(), orig.c_str());
+        drop(staged);
+        return fail("EDLaunch.exe is in use, so the stand-in could not take its place.");
+    }
+    if (!MoveFileW(staged.c_str(), edlaunch.c_str())) {
+        // The live file is at orig. Put it back before restoring the previous saved binary over that name.
+        if (MoveFileW(orig.c_str(), edlaunch.c_str()) && hadSaved) MoveFileW(savedAside.c_str(), orig.c_str());
+        drop(staged);
+        return fail("The stand-in could not be copied into EDLaunch.exe's place.");
+    }
+    const std::string hash = sha256File(edlaunch);
+    if (hash.empty() || !writeSmallText(marker, hash)) {
+        if (replaceWith(edlaunch, orig)) {
+            if (hadSaved) MoveFileW(savedAside.c_str(), orig.c_str());
+            restoreMarker();
+        } else if (!hash.empty()) {
+            writeSmallText(marker, hash);
+        }
+        return fail("The stand-in was copied, but its marker could not be written.");
+    }
+    if (hadSaved) drop(savedAside);
+    return true;
 }
 
 bool removeEdLaunchShim(const std::wstring& gameDir, std::string* error) {
@@ -310,17 +391,25 @@ bool removeEdLaunchShim(const std::wstring& gameDir, std::string* error) {
         if (error) *error = text;
         return false;
     };
-    const std::wstring edlaunch = findEdLaunch(gameDir);
-    if (edlaunch.empty()) return true;
-    const std::wstring dir = parentOf(edlaunch);
-    const std::wstring orig = joinPath(dir, kEdLaunchOrigName);
-    const std::wstring marker = joinPath(dir, kEdLaunchMarkerName);
-    if (!fileExists(marker)) return true;
-    if (!fileExists(orig)) return fail("The saved EDLaunch is missing, so the original file was left where it is.");
-    if (!DeleteFileW(edlaunch.c_str())) return fail("EDLaunch.exe is in use, so the original could not be put back.");
-    if (!MoveFileW(orig.c_str(), edlaunch.c_str()))
-        return fail("The original EDLaunch could not be moved back into place.");
-    DeleteFileW(marker.c_str());
+    std::wstring edlaunch = findEdLaunch(gameDir);
+    std::wstring orig;
+    std::wstring dir;
+    if (!edlaunch.empty()) {
+        dir = parentOf(edlaunch);
+        orig = joinPath(dir, kEdLaunchOrigName);
+        if (!fileExists(joinPath(dir, kEdLaunchMarkerName))) return true;
+        if (!fileExists(orig)) return fail("The saved EDLaunch is missing, so the original file was left where it is.");
+    } else {
+        orig = findEdLaunchOrig(gameDir);
+        if (orig.empty()) return true;
+        dir = parentOf(orig);
+        edlaunch = joinPath(dir, L"EDLaunch.exe");
+    }
+    // Do not delete the live file first: a failed replace has to leave it where it was.
+    if (!replaceWith(edlaunch, orig))
+        return fail(fileExists(edlaunch) ? "EDLaunch.exe is in use, so the original could not be put back."
+                                         : "The original EDLaunch could not be moved back into place.");
+    DeleteFileW(joinPath(dir, kEdLaunchMarkerName).c_str());
     DeleteFileW(joinPath(dir, kEdLaunchModeName).c_str());
     return true;
 }

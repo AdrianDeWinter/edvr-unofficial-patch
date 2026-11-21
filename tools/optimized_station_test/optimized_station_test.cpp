@@ -4797,9 +4797,56 @@ int main(int argc, char** argv) {
                         check(rest.kind() == K::kCraterPort, "station type: Chamberlain's Rest, with no StationType, is a CraterPort");
                         feed(rest, "{ \"event\":\"Location\", \"Docked\":false, \"OnFoot\":true, \"Body\":\"HIP 97950 ABC 2 k\", \"BodyType\":\"Planet\" }\n");
                         check(rest.kind() == K::kCraterPort, "station type: the on-foot location after it keeps the CraterPort");
+                        feed(rest, "{ \"event\":\"Disembark\", \"OnPlanet\":true, \"OnStation\":false }\n");
+                        check(rest.kind() == K::kCraterPort, "station type: an on-planet Disembark during that visit keeps the CraterPort");
                         feed(rest, "{ \"event\":\"ApproachSettlement\", \"Name\":\"Other Rest\" }\n");
+                        check(rest.kind() != K::kCraterPort, "station type: another settlement is not a CraterPort");
                         feed(rest, "{ \"event\":\"Location\", \"Docked\":false, \"OnFoot\":true, \"Body\":\"LP 1 a\", \"BodyType\":\"Planet\" }\n");
                         check(rest.kind() == K::kUnknown, "station type: another settlement does not keep it");
+                        feed(rest, "{ \"event\":\"ApproachSettlement\", \"Name\":\"Typed Port\", \"StationName\":\"Typed Port\", \"StationType\":\"Orbis\" }\n");
+                        check(rest.kind() == K::kOrbis, "station type: an approach that names a station takes that type");
+                    }
+                    {
+                        js::Latch gone;
+                        feed(gone, "{ \"event\":\"ApproachSettlement\", \"Name\":\"Chamberlain's Rest\" }\n");
+                        feed(gone, "{ \"event\":\"Location\", \"Docked\":false, \"OnFoot\":true, \"BodyType\":\"Planet\", \"Body\":\"body\" }\n");
+                        check(gone.kind() == K::kCraterPort, "station type: the on-foot planet location after Chamberlain's Rest is a CraterPort");
+                        feed(gone, "{ \"event\":\"Location\", \"Docked\":false, \"OnFoot\":false, \"BodyType\":\"Null\", \"Body\":\"body\" }\n");
+                        check(gone.kind() == K::kUnknown, "station type: a location that is not that on-foot visit is not a CraterPort");
+                        feed(gone, "{ \"event\":\"Location\", \"Docked\":false, \"OnFoot\":true, \"BodyType\":\"Planet\", \"Body\":\"other\" }\n");
+                        check(gone.kind() != K::kCraterPort, "station type: a later on-foot planet location is not a CraterPort");
+                    }
+                    {
+                        js::Latch undockedRest;
+                        feed(undockedRest, "{ \"event\":\"ApproachSettlement\", \"Name\":\"Chamberlain's Rest\" }\n");
+                        feed(undockedRest, "{ \"event\":\"Undocked\" }\n");
+                        check(undockedRest.kind() == K::kUnknown, "station type: Undocked still clears a CraterPort");
+                        feed(undockedRest, "{ \"event\":\"Location\", \"Docked\":false, \"OnFoot\":true, \"BodyType\":\"Planet\", \"Body\":\"body\" }\n");
+                        check(undockedRest.kind() != K::kCraterPort, "station type: after Undocked an on-foot planet location is not a CraterPort");
+                    }
+                    {
+                        js::Latch lift;
+                        feed(lift, "{ \"event\":\"ApproachSettlement\", \"Name\":\"Chamberlain's Rest\" }\n");
+                        feed(lift, "{ \"event\":\"Liftoff\", \"PlayerControlled\":true }\n");
+                        check(lift.kind() != K::kCraterPort, "station type: liftoff leaves the CraterPort");
+                        feed(lift, "{ \"event\":\"Disembark\", \"OnPlanet\":true, \"OnStation\":false }\n");
+                        check(lift.kind() != K::kCraterPort, "station type: an on-planet Disembark after liftoff does not keep the CraterPort");
+                        js::Latch jump;
+                        feed(jump, "{ \"event\":\"ApproachSettlement\", \"Name\":\"Chamberlain's Rest\" }\n");
+                        feed(jump, "{ \"event\":\"FSDJump\", \"StarSystem\":\"A\" }\n");
+                        check(jump.kind() != K::kCraterPort, "station type: an FSD jump leaves the CraterPort");
+                        js::Latch cruise;
+                        feed(cruise, "{ \"event\":\"ApproachSettlement\", \"Name\":\"Chamberlain's Rest\" }\n");
+                        feed(cruise, "{ \"event\":\"SupercruiseEntry\", \"StarSystem\":\"A\" }\n");
+                        check(cruise.kind() != K::kCraterPort, "station type: supercruise leaves the CraterPort");
+                    }
+                    {
+                        js::Latch realPort;
+                        feed(realPort, "{ \"event\":\"Docked\", \"StationName\":\"Real Port\", \"StationType\":\"CraterPort\" }\n");
+                        feed(realPort, "{ \"event\":\"Disembark\", \"OnPlanet\":true, \"OnStation\":false }\n");
+                        check(realPort.kind() == K::kCraterPort, "station type: a CraterPort named by StationType holds through Disembark");
+                        feed(realPort, "{ \"event\":\"Liftoff\" }\n");
+                        check(realPort.kind() == K::kCraterPort, "station type: liftoff does not clear a StationType CraterPort");
                     }
                     {
                         // A port on a planet: real lines from a CraterOutpost, Flight 37. Only Docked and Undocked name it.

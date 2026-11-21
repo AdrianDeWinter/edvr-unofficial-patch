@@ -229,7 +229,8 @@ void gpuCensusEnd(ID3D11DeviceContext*, GpuCensusSection) noexcept {}
 bool dlaaAvailable(ID3D11Device*, const char**) { return true; }
 bool fsr3Available(ID3D11Device*, const char**) { return true; }
 bool fsr4Available(ID3D11Device*, const char**) { return true; }
-void fsr4ReleaseFeatures() {}
+int g_fsr4Releases = 0;
+void fsr4ReleaseFeatures() { ++g_fsr4Releases; }
 void fsr4Shutdown() {}
 bool fsr4BuiltIn() { return true; }
 const char* fsr4VersionLabel() { return "fsr4"; }
@@ -443,7 +444,7 @@ void reset(World& w) {
     // The camera injector may be mid-flush from the last scenario (it restores what it wrote on its first pass-through call):
     // give the route the frames it needs to wind it down, then wipe the model.
     for (int i = 0; i < 4; ++i) { gameWorldRefreshes(); vrWorldRouteFrameBoundary(); }
-    g_log.clear(); g_calls.clear(); g_backendCalls = 0; g_mipsResets = 0;
+    g_log.clear(); g_calls.clear(); g_backendCalls = 0; g_mipsResets = 0; g_fsr4Releases = 0;
     g_inj = InjectorModel{}; g_game = GameCameras{};
     g_gate = g_layerLive = g_named = g_rowsKnown = g_viewsReady = true;
     g_panelW = kW; g_panelH = kH; g_realMismatch = false;
@@ -823,6 +824,22 @@ void scenarios(World& w) {
           "key off while owned: the resolver's textures and the mipped screen are let go, once");
     vrWorldRouteFrameBoundary();
     check(flatMonoResolveStats().fullResets == resetsBefore + 1 && g_mipsResets == mipsBefore + 1, "key off: and not again on the boundaries after");
+
+    // FSR 4 on the world slot is released when the mode leaves fsr4, and only on a boundary that accounts the frame.
+    g_fsr4Releases = 0;
+    Config::get().set("fix.temporal_aa", "fsr4");
+    vrWorldRouteFrameBoundary();
+    check(g_fsr4Releases == 0, "fsr4: an idle key-off boundary does not release");
+    configure(true);
+    Config::get().set("fix.temporal_aa", "fsr4");
+    vrWorldRouteFrameBoundary();
+    vrWorldRouteFrameBoundary();
+    check(g_fsr4Releases == 0, "fsr4: an accounted boundary that is still fsr4 does not release");
+    Config::get().set("fix.temporal_aa", "dlss");
+    vrWorldRouteFrameBoundary();
+    check(g_fsr4Releases == 1, "fsr4: leaving fsr4 on an accounted boundary releases once");
+    vrWorldRouteFrameBoundary();
+    check(g_fsr4Releases == 1, "fsr4: a later boundary does not release again");
     stage2(w);
 }
 

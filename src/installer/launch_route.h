@@ -62,8 +62,8 @@ std::wstring findEdLaunchIn(const std::vector<std::wstring>& roots);
 // EDLaunch found there is no route.
 // `direct` is the "skip the launcher" checkbox. For an Epic install the address is
 // unchanged: Epic has to start the program, because only then does it pass the exchange
-// code. What changes is that EDLaunch.exe is our stand-in, and the stand-in runs the
-// saved Frontier binary with the mode. Every other source ignores `direct`.
+// code. What changes is that EDLaunch.exe is our stand-in, which signs in and starts
+// Elite itself. Every other source ignores `direct`.
 LaunchRoute routeFor(const std::wstring& source, const std::wstring& gameDir, bool vr,
                      const std::vector<std::wstring>* frontierRoots = nullptr, bool direct = false);
 
@@ -80,7 +80,8 @@ std::wstring edLaunchShimCommand(const std::wstring& origExe, const std::wstring
                                  bool chooseMode);
 
 // -1 when this process is not standing in for EDLaunch.exe. Otherwise the process is the
-// stand-in: it runs the saved EDLaunch and the return value is this process's exit code.
+// stand-in: it signs in to Epic and Frontier, starts Elite itself, and the return value
+// is this process's exit code. It exits once Elite is running.
 int runEdLaunchShimIfInvoked();
 
 // Put `selfExe` where Epic starts the game, keeping Frontier's binary as EDLaunch_orig.exe.

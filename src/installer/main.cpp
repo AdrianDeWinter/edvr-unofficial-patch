@@ -40,7 +40,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
 #ifdef EDUP_LAUNCHER
     // Epic starts the file named EDLaunch.exe and passes the exchange code on its command
-    // line. When that file is our stand-in, run the saved EDLaunch and do not open a window.
+    // line. When that file is our stand-in, it signs in, starts Elite, and this process exits.
     const int shim = runEdLaunchShimIfInvoked();
     if (shim >= 0) return shim;
 #endif

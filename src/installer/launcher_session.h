@@ -35,13 +35,16 @@ inline constexpr const char* kDirectLaunchQuestion =
     "is yours. Untick this at any time to go back to Frontier's launcher.\n\n"
     "Turn it on?";
 
-// An Epic install cannot sign in the way Steam does. The checkbox skips the Epic launcher
-// and starts that install's EDLaunch with the mode. Nothing is stored.
+// Epic still starts EDLaunch.exe and passes the exchange code. The stand-in signs in to Epic and
+// Frontier, starts Elite itself, and exits once Elite is running. Frontier's binary is kept aside
+// until the box is unticked.
 inline constexpr const char* kDirectLaunchQuestionEpic =
     "Skip the Epic launcher and pick VR or flat here?\n\n"
-    "Play then starts this install's EDLaunch with that mode, and closes it when Elite exits. "
-    "It does not sign in and stores nothing. Epic still has to be signed in on this PC. Untick this "
-    "to hand the start back to the Epic launcher, which cannot carry a mode.\n\n"
+    "The stand-in signs in to Epic and Frontier, then starts Elite itself. You can pick VR or flat here. "
+    "Frontier's EDLaunch is kept as EDLaunch_orig.exe until you untick this, and this program exits once "
+    "Elite is running.\n\n"
+    "Frontier has not approved this. It could act against an account that signs in this way, and the choice "
+    "is yours. Untick this at any time to put Frontier's EDLaunch back.\n\n"
     "Turn it on?";
 
 // The same question for an install from Frontier's own store, where the launcher asks for the login itself.

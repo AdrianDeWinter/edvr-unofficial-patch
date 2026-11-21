@@ -215,22 +215,11 @@ private:
             set(Kind::kUnknown, onChange);
             return;
         }
-        // Chamberlain's Rest is the on-foot start. ApproachSettlement names it and never a StationType.
-        if (sameText(ev, evLen, "ApproachSettlement")) {
-            const char* place = nullptr;
-            uint32_t placeLen = 0;
-            starterRest_ = field("\"Name\":\"", &place, &placeLen) && sameText(place, placeLen, "Chamberlain's Rest") && !has("\"StationType\":\"");
-            if (starterRest_) set(Kind::kCraterPort, onChange);
-            return;
-        }
-        const bool location = sameText(ev, evLen, "Location");
-        const bool jump = sameText(ev, evLen, "CarrierJump");
-        if (jump) ++jumps_;
-        if (!location && !jump && !sameText(ev, evLen, "Docked") && !sameText(ev, evLen, "Embark") && !sameText(ev, evLen, "Disembark")) return;
-        const char* type = nullptr;
-        const char* name = nullptr;
-        uint32_t typeLen = 0, nameLen = 0;
-        if (field("\"StationType\":\"", &type, &typeLen) && field("\"StationName\":\"", &name, &nameLen)) {
+        auto takeNamedStation = [&]() -> bool {
+            const char* type = nullptr;
+            const char* name = nullptr;
+            uint32_t typeLen = 0, nameLen = 0;
+            if (!field("\"StationType\":\"", &type, &typeLen) || !field("\"StationName\":\"", &name, &nameLen)) return false;
             const Kind k = kindOf(type, typeLen);
             const uint64_t h = hashName(name, nameLen);
             if (saved_.nameHash != h || saved_.kind != k) {
@@ -240,10 +229,40 @@ private:
             }
             starterRest_ = false;
             set(k, onChange);
+            return true;
+        };
+        // Chamberlain's Rest has no StationType. The synthetic CraterPort is only this visit: another approach, or leaving, drops it.
+        if (sameText(ev, evLen, "ApproachSettlement")) {
+            const char* place = nullptr;
+            uint32_t placeLen = 0;
+            const bool starter = field("\"Name\":\"", &place, &placeLen) && sameText(place, placeLen, "Chamberlain's Rest") && !has("\"StationType\":\"");
+            if (starter) {
+                starterRest_ = true;
+                set(Kind::kCraterPort, onChange);
+                return;
+            }
+            starterRest_ = false;
+            if (!takeNamedStation()) set(Kind::kUnknown, onChange);
             return;
         }
+        // Liftoff, a jump and supercruise are not a StationType, so they would otherwise leave the synthetic kind in place.
+        if (sameText(ev, evLen, "Liftoff") || sameText(ev, evLen, "FSDJump") || sameText(ev, evLen, "Supercruise") ||
+            sameText(ev, evLen, "SupercruiseEntry") || sameText(ev, evLen, "SupercruiseExit")) {
+            const bool synthetic = starterRest_;
+            starterRest_ = false;
+            if (synthetic) set(Kind::kUnknown, onChange);
+            return;
+        }
+        const bool location = sameText(ev, evLen, "Location");
+        const bool jump = sameText(ev, evLen, "CarrierJump");
+        if (jump) ++jumps_;
+        if (!location && !jump && !sameText(ev, evLen, "Docked") && !sameText(ev, evLen, "Embark") && !sameText(ev, evLen, "Disembark")) return;
+        if (takeNamedStation()) return;
         // A CarrierJump names the carrier when docked in it ("Docked":true, its StationType; 2025-08-13's journal). One that names none was still written aboard: the type stays.
         if (jump) return;
+        const bool onFootPlanet = location && has("\"OnFoot\":true") && has("\"BodyType\":\"Planet\"");
+        // Not this visit's on-foot planet: drop the flag before the kind is chosen, or the next planet becomes a CraterPort.
+        if (location && !onFootPlanet) starterRest_ = false;
         // A load on foot: the station's name is its Body, and the last one saved says what it is.
         const char* body = nullptr;
         uint32_t bodyLen = 0;
@@ -257,12 +276,20 @@ private:
             }
             return;
         }
-        // At a port on a planet: see the head of this file.
-        if (!location && surfaceKind(kind_) && has("\"OnPlanet\":true")) return;
+        // At a port on a planet: see the head of this file. A StationType surface kind holds. The synthetic CraterPort does not, once this visit is over.
+        if (!location && surfaceKind(kind_) && has("\"OnPlanet\":true")) {
+            const bool syntheticCrater = kind_ == Kind::kCraterPort && !starterRest_ && saved_.kind != Kind::kCraterPort;
+            const char* place = nullptr;
+            uint32_t placeLen = 0;
+            const bool named = field("\"Name\":\"", &place, &placeLen) || field("\"StationName\":\"", &place, &placeLen);
+            const bool otherPlace = named && !sameText(place, placeLen, "Chamberlain's Rest");
+            if (!syntheticCrater && !(starterRest_ && otherPlace)) return;
+            starterRest_ = false;
+        }
         // On a fleet carrier, likewise: Disembark and Embark there name no station ("OnStation":false). They say "OnPlanet":false at a barycentre (Flight 39's journal, "38 Lyncis 4+5")
         // and true near a planet (Flight 41's, "38 Lyncis 5"), so that is not read. Leaving a carrier is an Undocked.
         if (!location && kind_ == Kind::kFleetCarrier && has("\"OnStation\":false")) return;
-        if (location && has("\"OnFoot\":true") && has("\"BodyType\":\"Planet\"")) {
+        if (onFootPlanet) {
             if (starterRest_) {
                 set(Kind::kCraterPort, onChange);
                 return;
@@ -279,7 +306,7 @@ private:
     Saved saved_;
     bool savedChanged_ = false;
     bool unmatched_ = false;
-    bool starterRest_ = false;   // the last ApproachSettlement was Chamberlain's Rest, and named no StationType
+    bool starterRest_ = false;   // this visit is Chamberlain's Rest with no StationType; leaving clears it
     uint64_t unmatchedHash_ = 0;
     uint32_t jumps_ = 0;
 };

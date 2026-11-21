@@ -3377,13 +3377,12 @@ void STDMETHODCALLTYPE hookedOMSetBlendState(ID3D11DeviceContext* self, ID3D11Bl
         return;
     }
     if (!foreignContext(self)) {
-        // Only engine velocity reads Blend (draw_fast_path.h): not recorded while the AA is off.
+        // The shadow stays put while AA is off, but the blend memo must follow the device or the generation lies.
         if (bindShadowsSkipped(g_aaOffDraw.load(std::memory_order_relaxed), engineVelocityLiveNow()))
             g_shadowsSkipped.store(true, std::memory_order_relaxed);
-        else {
+        else
             bindingSet(BindSlot::Blend, state);
-            flatOmNoteBlend(state, factor, sampleMask);
-        }
+        flatOmNoteBlend(state, factor, sampleMask);
     }
     g_state->realOMSetBlendState(self, state, factor, sampleMask);
 }

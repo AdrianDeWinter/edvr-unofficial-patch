@@ -1071,12 +1071,6 @@ echo [edvr] NOT Windows validated and NOT a release asset: no Python gates, rigs
 echo        launcher build ran. tools\linux_toolchain.py writes its receipt next.
 exit /b 0
 
-:compile_only_finish
-echo [edvr] COMPILE-ONLY build finished in %BUILD%
-echo [edvr] NOT Windows validated and NOT a release asset: no Python gates, rigs or
-echo        installer ran. tools\linux_toolchain.py writes its receipt next.
-exit /b 0
-
 REM ===========================================================================
 REM  Test rigs. Each is a subroutine that tools\run_jobs.py runs in its own
 REM  "build.bat --rig <label>" child, several at a time, once the DLLs above

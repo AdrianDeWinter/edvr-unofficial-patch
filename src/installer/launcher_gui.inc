@@ -138,7 +138,7 @@ void updateLauncherControls() {
             showPair = true;
             showVrButton = hasVr;
             showFlatButton = hasFlat;
-            lg.playCaption = directOn ? (epic ? L"Starts EDLaunch with the mode you pick, then closes it when Elite exits."
+            lg.playCaption = directOn ? (epic ? L"Signs in to Epic and Frontier, starts Elite itself, and exits once Elite is running."
                                           : frontierStore ? L"Signs in itself. If that fails, it starts EDLaunch."
                                                           : L"Signs in itself. If that fails, it starts through Steam.")
                              : bothModes ? L"Starts EDLaunch with the mode you pick, then closes it when Elite exits."
@@ -371,8 +371,24 @@ bool launcherCommand(int id, int code) {
                 if (scope == "vr") vr = true;
                 std::string error;
                 if (!lg.session->standInForEdLaunch(g.survey.game.dir, lg.session->directLaunch(), vr, &error)) {
+                    // A failed turn-on can already have written the stand-in (the mode file failed after it).
+                    // Turning the setting off has to take that file back, and must not touch a folder that has none.
+                    if (lg.session->directLaunch()) {
+                        const std::wstring live = findEdLaunch(g.survey.game.dir);
+                        std::wstring marker;
+                        const size_t slash = live.find_last_of(L"\\/");
+                        if (!live.empty() && slash != std::wstring::npos)
+                            marker = joinPath(live.substr(0, slash), kEdLaunchMarkerName);
+                        lg.session->setDirectLaunch(false, nullptr);
+                        if (!marker.empty() && fileExists(marker)) {
+                            std::string restoreError;
+                            if (!removeEdLaunchShim(g.survey.game.dir, &restoreError) && !restoreError.empty()) {
+                                if (!error.empty()) error += " ";
+                                error += restoreError;
+                            }
+                        }
+                    }
                     MessageBoxW(g.window, fromUtf8(error).c_str(), kAppTitle, MB_OK | MB_ICONWARNING);
-                    if (lg.session->directLaunch()) lg.session->setDirectLaunch(false, nullptr);
                 }
             }
             updateLauncherControls();

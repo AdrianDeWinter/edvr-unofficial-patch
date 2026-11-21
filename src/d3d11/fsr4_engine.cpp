@@ -1262,11 +1262,10 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
     PhaseClock phase(allocEnded);
     phase.end(kPhaseReset);
     SharedTexture* const inputs[] = {&feature.color, &feature.motion, &feature.depth};
-    const char* keyWhy = nullptr;
-    if (!takeKeys(inputs, &keyWhy, "D3D11 input copy")) {
+    if (!takeKeys(inputs, why, "D3D11 input copy")) {
         command.list->Close();   // Reset opened it; no D3D12 work was submitted.
-        holder.failedFeature.record(key, keyWhy);
-        return returnLatchedFailure(holder.failedFeature, why);
+        // A missed key is not a failed create: latching it would leave this size off until the key changes.
+        return false;
     }
     phase.end(kPhaseTakeIn);
     // Bridge timing opens before the input copies: total, then copy-in. The guard cancels them on any failure below.
@@ -1420,9 +1419,9 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
     }
     phase.end(kPhaseWaitOut);
     SharedTexture* const result[] = {&feature.output};
-    if (!takeKeys(result, &keyWhy, "D3D11 output copy")) {
-        holder.failedFeature.record(key, keyWhy);
-        return returnLatchedFailure(holder.failedFeature, why);
+    if (!takeKeys(result, why, "D3D11 output copy")) {
+        // The dispatch ran; the copy has not. The output was not acquired, so the next frame retries.
+        return false;
     }
     phase.end(kPhaseTakeOut);
     // FSR 4 wrote the output in the format the caller's texture has (the HDR route's R16G16B16A16_FLOAT, or the LDR route's
