@@ -102,6 +102,7 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 #include "mem_tick.h"        // memWatchTick: the process memory watch, once per owned Present (one atomic read; its thread does the sampling)
 #include "vertex_resync_hook.h"   // vertexResyncInstall at startup, vertexResyncPoll once a second: the f3d vertex-buffer cache repair (both profiles)
 #include "light_grid_cache_hook.h"   // lightGridCacheInstall at startup, lightGridCachePoll once a second, lightGridCacheNoteFrame per Present: the fragment-culling grid cache (both profiles)
+#include "stream_load_probe.h"       // TEMPORARY: read-only StreamLoad + fRes pump diagnostic probes (build 334925)
 #include "vehicle_rig.h"   // vehicleRigInstall at startup, vehicleRigPoll once a second (the vehicle frame's rigs, issue 186)
 #include "terrain_cull_cover_hook.h"   // terrainCullCoverInstall at startup, terrainCullCoverPoll once a second: the terrain cull frustum cover (VR)
 #include "cross_profile_cost.h"   // the flat hooks' and the creation captures' cost while VR is active (log only)
@@ -1808,6 +1809,7 @@ void presentFrameBoundary() {
             // The vertex-buffer resync's 60 s count and its ten-minute heartbeat: it needs no vScreen State, so it is asked here, after the reload, in both profiles.
             vertexResyncPoll(stampMs());
             lightGridCachePoll(stampMs());
+            streamLoadProbePoll(stampMs());
             // The vehicle rig's 30 s health line (issue 186).
             vehicleRigPoll(stampMs());
             // The terrain cull cover's ten-minute heartbeat (written while its hook is live, zero counts included).
@@ -3148,6 +3150,8 @@ void hookDevice(ID3D11Device* device) {
             // The light grid cache (light_grid_cache_hook.cpp; docs/light-grid-cache-2026-10-13.md): a CodeHook on the game's fragment-culling cluster builder, once, in BOTH
             // profiles -- the builder is the game's. No key: exact, and verified against the game's own rebuild while it runs. A build that is not 334925 is one log line.
             lightGridCacheInstall();
+            // TEMPORARY: read-only StreamLoad + fRes pump diagnostic probes (stream_load_probe.h, build 334925 only).
+            streamLoadProbeInstall();
             // The vehicle rig (vehicle_rig.cpp, issue 186): a hook on the camera's SetTarget that reads the player vehicle's rigs and supplies the flat profile's vehicle frame, both profiles; no key. A build that is not 334925 is one log line.
             vehicleRigInstall();
             // The terrain cull cover (terrain_cull_cover_hook.cpp; docs/terrain-culling.md): a CodeHook on the game's cull-plane builder, always on for a scope with VR (the flat
@@ -3541,6 +3545,7 @@ void shutdownDeviceHooks() {
     uiPanelScaleShutdown();  // fix.ui_quality's four operands, back to the game's
     vrSsaaHoldShutdown();    // the Supersampling hold's loader slot, back to the game's
     vertexResyncShutdown();  // the vertex-buffer resync's session line (the hook itself stays; the game's process exit says the line through Log::setExitLine)
+    streamLoadProbeShutdown();
     shutdownGlitchFrameFix();
     transitionFlashEyeBaseShutdown();
     shutdownVScreenFixes();
