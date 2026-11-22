@@ -41,6 +41,7 @@
 #include "launcher_main.h"
 #include "launcher_session.h"
 #include "layout_dpi.h"
+#include "update_cache.h"
 #include "vr_headset.h"
 #endif
 
@@ -90,9 +91,9 @@ constexpr int kTabRuleY = kTabY + kTabH;
 constexpr int kContentTop = 184;
 #ifdef EDUP_LAUNCHER
 // Launcher layout (96-dpi units): three workflow screens (Play, Setup, Settings).
-// Play holds Launch hero + optional Update banner + auto-sized Status card.
+// Play holds Launch hero + optional Update banner + VR headset readout + Status card.
 // Setup holds Updates -> Install & repair (with scope selector) -> tall Log.
-constexpr int kContentBottom = 684;
+constexpr int kContentBottom = 724;
 constexpr int kUpdatesTop = 184;
 constexpr int kUpdatesBottom = 256;
 constexpr int kActionsTop = 268;
@@ -102,10 +103,10 @@ constexpr int kActionsChkY = 318;
 constexpr int kActionsBtnY = 350;
 constexpr int kActionsNoteY = 398;
 constexpr int kReportTop = 446;
-constexpr int kReportBottom = 684;
+constexpr int kReportBottom = 724;
 constexpr int kReportEditY = 484;
-constexpr int kReportEditH = 190;
-constexpr int kTipTop = 694;
+constexpr int kReportEditH = 230;
+constexpr int kTipTop = 734;
 #else
 constexpr int kContentBottom = 650;
 constexpr int kStatusTop = 184;
@@ -127,7 +128,7 @@ constexpr int kTipTop = 658;  // the tip line's top: the painted sentence and bo
 // once at layout time.
 const int kClientWidth = 740;
 #ifdef EDUP_LAUNCHER
-const int kClientHeight = 720;
+const int kClientHeight = 760;
 #else
 const int kClientHeight = 688;
 #endif
@@ -1480,11 +1481,18 @@ void saveLogs() {
 #ifdef EDUP_LAUNCHER
     std::vector<MemoryBundleEntry> extraEntries;
     {
-        const ULONGLONG now = GetTickCount64();
-        const VrHeadsetReport vr =
-            (lg.vrHaveReport && now - lg.vrLastProbeMs < 3000)
-                ? lg.vrReport
-                : probeVrHeadset(g.survey.game.dir, g.args.payloadDir);
+        // Never run a blocking live OpenXR DLL probe on the UI thread while saving logs:
+        // reuse the background report for this install when available, otherwise run a
+        // fast static-only snapshot (registry, local config, VR services, USB).
+        VrHeadsetReport vr;
+        if (lg.vrHaveReport && _wcsicmp(lg.vrReportGameDir.c_str(), g.survey.game.dir.c_str()) == 0) {
+            vr = lg.vrReport;
+        } else {
+            VrProbeOptions opts;
+            opts.gameDir = g.survey.game.dir;
+            opts.allowLiveProbe = false;
+            vr = probeVrHeadset(opts);
+        }
         extraEntries.push_back({L"vr-environment.txt", formatVrEnvironmentSnapshot(vr)});
     }
     const LogBundle bundle = collectLogs(g.survey.game.dir, logSaveFolder(), nullptr, &extraEntries);
@@ -1501,8 +1509,13 @@ void saveLogs() {
             text += "\r\n";
             for (const std::string& note : bundle.notes) text += "  " + note + "\r\n";
         }
+#ifdef EDUP_LAUNCHER
+        text += "\r\nAttach it to a GitHub issue, or drop it on Discord. It holds ED-UP's own "
+                "logs, settings, and a redacted VR runtime summary, and nothing else.\r\n";
+#else
         text += "\r\nAttach it to a GitHub issue, or drop it on Discord. It holds ED-UP's own "
                 "logs and settings and nothing else.\r\n";
+#endif
         // The same zip, as a copied file: Ctrl+V in Discord or a GitHub comment attaches it. Only the
         // logs zip -- the crash dump below is private and never goes on the clipboard.
         std::string clipError;

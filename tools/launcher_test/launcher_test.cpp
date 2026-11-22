@@ -6490,7 +6490,7 @@ void testVrHeadsetDetection() {
         in.activeManifest = {true, in.activeRuntimePath, L"Virtual Desktop XR", L"C:\\VirtualDesktop\\vdxr.dll",
                              true, true};
         in.runningProcesses = {"virtualdesktop.streamer.exe"};
-        in.liveProbe = {true, true, true, true, 0, L"Virtual Desktop XR", L"1.0.29", L"Oculus Quest 3"};
+        in.liveProbe = {true, true, false, true, true, 0, L"Virtual Desktop XR", L"1.0.29", L"Oculus Quest 3"};
         const VrHeadsetReport r = resolveVrHeadsetStatus(in);
         check(r.status == VrStatusKind::Ready && r.headsetName == L"Meta Quest 3" &&
                   r.runtimeDisplayName == L"Virtual Desktop (VDXR)" && r.runtimeVersion == L"1.0.29",
@@ -6501,7 +6501,7 @@ void testVrHeadsetDetection() {
         in.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
         in.activeManifest = {true, in.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll", true, true};
         in.runningProcesses = {"vrserver.exe", "alvr_dashboard.exe"};
-        in.liveProbe = {true, true, true, true, 0, L"SteamVR/OpenXR", L"2.8.4", L"Oculus Quest 3"};
+        in.liveProbe = {true, true, false, true, true, 0, L"SteamVR/OpenXR", L"2.8.4", L"Oculus Quest 3"};
         const VrHeadsetReport r = resolveVrHeadsetStatus(in);
         check(r.status == VrStatusKind::Ready && r.runtimeDisplayName == L"SteamVR" && r.transportName == L"ALVR",
               "SteamVR + ALVR bridge resolves to Ready with ALVR transport note");
@@ -6511,7 +6511,7 @@ void testVrHeadsetDetection() {
         in.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
         in.activeManifest = {true, in.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll", true, true};
         in.runningProcesses = {"vrserver.exe"};
-        in.liveProbe = {true, true, true, false, -35, L"SteamVR/OpenXR", L"2.8.4", L""};
+        in.liveProbe = {true, true, false, true, false, -35, L"SteamVR/OpenXR", L"2.8.4", L""};
         const VrHeadsetReport r = resolveVrHeadsetStatus(in);
         check(r.status == VrStatusKind::Standby && r.headsetName.empty(),
               "SteamVR running with XR_ERROR_FORM_FACTOR_UNAVAILABLE resolves to Standby");
@@ -6567,7 +6567,7 @@ void testVrHeadsetDetection() {
         readyIn.activeManifest = {true, readyIn.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll",
                                   true, true};
         readyIn.runningProcesses = {"vrserver.exe", "notepad.exe", "secret_app.exe"};
-        readyIn.liveProbe = {true, true, true, true, 0, L"SteamVR/OpenXR", L"2.8.4", L"IndexHMD"};
+        readyIn.liveProbe = {true, true, false, true, true, 0, L"SteamVR/OpenXR", L"2.8.4", L"IndexHMD"};
         const VrHeadsetReport ready = resolveVrHeadsetStatus(readyIn);
         check(evaluateVrLaunchPreflight(ready) == VrPreflightWarning::None,
               "Ready state triggers no Play VR pre-flight warning");
@@ -6607,6 +6607,53 @@ void testVrHeadsetDetection() {
         missingFileIn.activeManifest.jsonExists = false;
         check(evaluateVrLaunchPreflight(resolveVrHeadsetStatus(missingFileIn)) == VrPreflightWarning::MissingRuntimeFile,
               "missing OpenXR runtime JSON triggers MissingRuntimeFile pre-flight warning");
+
+        // Local edup_openxr.ini runtime=system vs explicit path parsing.
+        const LocalOpenXrRuntimeConfig sysCfg =
+            parseLocalOpenXrRuntimeConfig("[openxr]\r\nversion=1\r\nruntime=system\r\n");
+        check(sysCfg.mode == LocalOpenXrRuntimeMode::System, "edup_openxr.ini runtime=system parses as System");
+        const LocalOpenXrRuntimeConfig pathCfg =
+            parseLocalOpenXrRuntimeConfig("[openxr]\nruntime=C:\\XR\\custom.json\n");
+        check(pathCfg.mode == LocalOpenXrRuntimeMode::ExplicitPath && pathCfg.explicitPath == L"C:\\XR\\custom.json",
+              "edup_openxr.ini runtime=<path> parses as ExplicitPath");
+
+        // OpenComposite active as Openvr\win64\openvr_api.dll warns even with healthy SteamVR OpenXR.
+        VrProbeInputs ocShimIn = readyIn;
+        ocShimIn.openVrShimIsOpenComposite = true;
+        const VrHeadsetReport ocShim = resolveVrHeadsetStatus(ocShimIn);
+        check(ocShim.openCompositeWarning && evaluateVrLaunchPreflight(ocShim) == VrPreflightWarning::OpenComposite,
+              "active OpenComposite openvr_api.dll triggers warning even when SteamVR OpenXR is Ready");
+
+        // Non-form-factor xrGetSystem failure (e.g. XR_ERROR_INSTANCE_LOST = -13) maps to Error, not Standby.
+        VrProbeInputs lostIn = readyIn;
+        lostIn.liveProbe = {true, true, false, true, false, -13, L"SteamVR/OpenXR", L"2.8.4", L""};
+        const VrHeadsetReport lost = resolveVrHeadsetStatus(lostIn);
+        check(lost.status == VrStatusKind::Error && evaluateVrLaunchPreflight(lost) == VrPreflightWarning::RuntimeError,
+              "xrGetSystem XR_ERROR_INSTANCE_LOST resolves to Error and RuntimeError preflight (not Standby)");
+
+        // Timed-out live probe maps to Error and records timeout in snapshot.
+        VrProbeInputs toIn = readyIn;
+        toIn.liveProbe = {true, true, true, false, false, -997, L"", L"", L""};
+        const VrHeadsetReport timedOut = resolveVrHeadsetStatus(toIn);
+        check(timedOut.status == VrStatusKind::Error && timedOut.liveProbeTimedOut &&
+                  formatVrEnvironmentSnapshot(timedOut).find("live_probe_timeout: yes") != std::string::npos,
+              "timed-out OpenXR probe resolves to Error with live_probe_timeout in snapshot");
+
+        // User path redaction for public support ZIP.
+        check(redactUserPath(L"C:\\Users\\Alice\\AppData\\Local\\vdxr.json") ==
+                  L"C:\\Users\\<user>\\AppData\\Local\\vdxr.json",
+              "Windows user profile path segment is redacted");
+        check(redactUserPath(L"/home/bob/.config/openxr/1/active_runtime.json") ==
+                  L"/home/<user>/.config/openxr/1/active_runtime.json",
+              "Linux home path segment is redacted");
+        VrProbeInputs piiIn = readyIn;
+        piiIn.activeRuntimePath = L"C:\\Users\\Alice\\AppData\\Local\\OpenXR\\vdxr.json";
+        piiIn.activeManifest.libraryPath = L"C:\\Users\\Alice\\AppData\\Local\\OpenXR\\vdxr.dll";
+        piiIn.availableRuntimePaths = {L"/home/bob/.local/share/openxr/wivrn.json"};
+        const std::string redactedSnap = formatVrEnvironmentSnapshot(resolveVrHeadsetStatus(piiIn));
+        check(redactedSnap.find("Alice") == std::string::npos && redactedSnap.find("bob") == std::string::npos &&
+                  redactedSnap.find("<user>") != std::string::npos,
+              "VR environment snapshot redacts usernames from all runtime paths");
     }
 }
 
