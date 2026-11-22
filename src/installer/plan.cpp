@@ -454,6 +454,9 @@ const FileBlurb kBlurbs[] = {
     {"xess_third_party", "XeSS", nullptr, nullptr, "xess"},
     {"xess_fg", "XeSS", "Intel's XeSS Frame Generation runtime", "for xess_frame_generation", "xess"},
     {"xess_ll", "XeSS", "Intel's Xe Low Latency runtime", "for xess_frame_generation", "xess"},
+    {"fsr4_loader", "FSR 4", "AMD's FSR 4 runtime", "for temporal_aa = fsr4", nullptr},
+    {"fsr4_upscaler", "FSR 4", "AMD's FSR 4 upscaler", "for temporal_aa = fsr4", "fsr4_loader"},
+    {"fsr4_license", "FSR 4", nullptr, nullptr, "fsr4_loader"},
     {"openxr_loader", "OpenXR", nullptr, nullptr, nullptr},
     {"openxr_license", "OpenXR", nullptr, nullptr, nullptr},
     {"dittosr_license", "DittoSR", nullptr, nullptr, "graphics"},
@@ -1303,7 +1306,7 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         }
     }
 
-    // ---- existing = owned: a vendor runtime or notice (NVIDIA's DLSS, Intel's XeSS-SR) placed beside the game. Three rules: a copy that
+    // ---- existing = owned: a vendor runtime or notice (NVIDIA's DLSS, Intel's XeSS-SR, AMD's FSR 4) placed beside the game. Three rules: a copy that
     // is not EDVR's -- the user's own, or one the vendor's updater replaced -- is left alone; only the copy the record says EDVR placed
     // is ever replaced or removed, by its hash; and where `when` rules the adapter out (the DLSS runtime is 59 MB and no other card
     // can use it) nothing is placed, though a copy already there is still recognised. The report says what happened to each file
@@ -1312,6 +1315,12 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     if (p.find("xess") && (!p.find("xess_license") || !p.find("xess_third_party"))) {
         plan.blocked = true;
         plan.problems.push_back("XeSS runtime lacks its license notices; nothing will be installed.");
+        return plan;
+    }
+    // AMD's licence terms travel with the runtime too: the loader without its notice, or without the upscaler it loads, is not installed.
+    if (p.find("fsr4_loader") && (!p.find("fsr4_license") || !p.find("fsr4_upscaler"))) {
+        plan.blocked = true;
+        plan.problems.push_back("FSR 4 runtime lacks its license notice or its upscaler; nothing will be installed.");
         return plan;
     }
     auto placeOwned = [&](const Placed& f) {

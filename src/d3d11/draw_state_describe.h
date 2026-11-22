@@ -23,6 +23,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <mutex>
 
 #include "ui_layer_math.h"     // UiBlendRt, UiBlendShape, UiDsState, uiLayerBlendShape
 #include "ui_layer_shaders.h"  // uiLayerBlendRtFrom, uiLayerDsStateFrom
@@ -85,6 +86,7 @@ struct UiBlendShapeCacheEntry {
 struct UiBlendShapeCacheState {
     static constexpr unsigned kCapacity = 16;
     std::atomic<DWORD> ownerThread{0};
+    std::mutex lock;   // guards entries, count and nextEvict; taken only by an owner thread and by the clear
     UiBlendShapeCacheEntry entries[kCapacity]{};
     unsigned count = 0;
     unsigned nextEvict = 0;
@@ -107,10 +109,14 @@ inline void uiBlendShapeCacheEnable(bool enable) noexcept {
     state.ownerThread.compare_exchange_strong(expected, tid, std::memory_order_acq_rel);
 }
 
+// Callable from any thread. Ownership is dropped first, so no thread starts a new cache access, and
+// the entries are then emptied under the lock the owner holds for each lookup and insert; an access
+// already in flight finishes before the clear, and one that began before the drop sees the owner
+// gone when it takes the lock and does not insert. Nothing is left holding the old device.
 inline void uiBlendShapeCacheClear() noexcept {
     auto& state = uiBlendShapeCacheState();
-    const DWORD owner = state.ownerThread.load(std::memory_order_acquire);
-    if (owner != 0 && owner != ::GetCurrentThreadId()) return;
+    state.ownerThread.store(0, std::memory_order_release);
+    std::lock_guard<std::mutex> lock(state.lock);
     for (unsigned i = 0; i < UiBlendShapeCacheState::kCapacity; ++i)
         state.entries[i] = UiBlendShapeCacheEntry{};
     state.count = 0;
@@ -125,9 +131,11 @@ inline UiBlendShape shapeOf(ID3D11BlendState* bs, UiBlendRt* rtOut, bool destAlp
     if (bs) {
         bool refused = false;
         auto& cache = uiBlendShapeCacheState();
-        const bool useCache = cache.ownerThread.load(std::memory_order_relaxed) == ::GetCurrentThreadId();
+        const DWORD tid = ::GetCurrentThreadId();
+        const bool useCache = cache.ownerThread.load(std::memory_order_acquire) == tid;
         bool hit = false;
         if (useCache) {
+            std::lock_guard<std::mutex> lock(cache.lock);
             for (unsigned i = 0; i < cache.count; ++i) {
                 if (cache.entries[i].state.Get() == bs) {
                     rt = cache.entries[i].rt;
@@ -152,7 +160,10 @@ inline UiBlendShape shapeOf(ID3D11BlendState* bs, UiBlendRt* rtOut, bool destAlp
                     if (d1.RenderTarget[0].LogicOpEnable) refused = true;
                 }
             }
-            if (useCache) {
+            std::unique_lock<std::mutex> lock(cache.lock, std::defer_lock);
+            if (useCache) lock.lock();
+            // A clear that ran while the description was read has dropped ownership: insert nothing.
+            if (useCache && cache.ownerThread.load(std::memory_order_acquire) == tid) {
                 const unsigned slot = cache.count < UiBlendShapeCacheState::kCapacity
                                           ? cache.count++
                                           : (cache.nextEvict++ & (UiBlendShapeCacheState::kCapacity - 1u));

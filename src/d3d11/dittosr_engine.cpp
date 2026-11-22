@@ -62,6 +62,32 @@ struct Clock {
     }
 };
 
+// The four live tuning keys, parsed once and read again at most every 500 ms, so a menu change lands within about a second
+// and the per-eye evaluation does not look up and parse them every frame. Render thread, like the rest of this file's state.
+struct DittoTuning {
+    float sharpness = 0.6f;
+    float frameWeight = 2.0f;
+    int sharpenMode = 0;
+    float antiShimmer = -1.0f;
+    ULONGLONG readAtMs = 0;
+    bool read = false;
+};
+
+const DittoTuning& dittoTuning() {
+    static DittoTuning cached;
+    const ULONGLONG now = GetTickCount64();
+    if (!cached.read || now - cached.readAtMs >= 500) {
+        Config& cfg = Config::get();
+        cached.sharpness = cfg.getFloat("fix.dittosr_sharpness", 0.6f);
+        cached.frameWeight = cfg.getFloat("fix.dittosr_frame_weight", 2.0f);
+        cached.sharpenMode = dittoSharpenModeFromText(cfg.getString("fix.dittosr_sharpen", "standard").c_str());
+        cached.antiShimmer = dittoAntiShimmerFromText(cfg.getString("fix.dittosr_anti_shimmer", "auto").c_str());
+        cached.readAtMs = now;
+        cached.read = true;
+    }
+    return cached;
+}
+
 ID3D11Device* g_dev = nullptr;
 ID3D11ComputeShader* g_convert = nullptr;
 ID3D11ComputeShader* g_motion = nullptr;
@@ -391,10 +417,11 @@ bool dittoEvaluate(ID3D11DeviceContext* ctx, unsigned slot, const char* route, c
     ev.depthInverted = true;
     ev.hasReactive = views.reactive != nullptr;
     ev.autoExposure = ev.hdr;
-    ev.sharpness = Config::get().getFloat("fix.dittosr_sharpness", 0.6f);
-    ev.frameWeight = Config::get().getFloat("fix.dittosr_frame_weight", 2.0f);
-    ev.sharpenMode = dittoSharpenModeFromText(Config::get().getString("fix.dittosr_sharpen", "cas").c_str());
-    ev.antiShimmer = dittoAntiShimmerFromText(Config::get().getString("fix.dittosr_anti_shimmer", "auto").c_str());
+    const DittoTuning& tuning = dittoTuning();
+    ev.sharpness = tuning.sharpness;
+    ev.frameWeight = tuning.frameWeight;
+    ev.sharpenMode = tuning.sharpenMode;
+    ev.antiShimmer = tuning.antiShimmer;
     const DittoCb packed = dittoFillConstants(ev);
 
     SavedCs saved;

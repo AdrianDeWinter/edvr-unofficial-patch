@@ -12,7 +12,8 @@ read 2026-09-16) unless marked believed.
   (`claude/fsr-4-1-flat-vr-support-5f6ea4`). `fix.temporal_aa = fsr4` (FSR 4.1 through
   AMD's signed D3D12 DLLs over a D3D11/D3D12 bridge, modelled on XeSS's),
   flat and VR, beside `fsr` (route 1, unchanged). The runtime stays a dev
-  install (`install_edup.py --fsr4`), not in the packages (D8).
+  install (`install_edup.py --fsr4`). **D8 reversed by the maintainer 2026-11-21:
+  the runtime ships in the packages, the launcher installs it, AMD's DLLs are not re-signed.**
   Facts, decisions D7 to D9 and the flight plan: journal, "2026-10-23:
   route 2". Flights 5 and 6 (journal): FSR 4.1.1 clean on the Radeon
   8060S, 0.8 ms of GPU; held keys cut the bridge's evaluate from 6.6 to
@@ -34,7 +35,7 @@ read 2026-09-16) unless marked believed.
 - **Next:** the flicker at flight 7's spot (a hull panel's edge in the
   main menu) is in the game's image under F7 and in DLSS on Windows too,
   so not FSR 4's (flight 7 entry): the no-EDVR baseline there, when Sean
-  chooses. Then VR, the AMD licence and the installer payload (D8). Route 1's flight 4 (an AMD
+  chooses. Then VR (the AMD licence and the installer payload: done 2026-11-21, journal). Route 1's flight 4 (an AMD
   supporter's log) and the exported-symbols nit (Open) still stand.
 - **Open:** the reactive mask under FSR (off in flight 1, D3); the jitter
   phase count above 1:1; FSR 3.1's quality in VR against the pass's own
@@ -1215,3 +1216,5 @@ class of upscaler): that is route 2's go/no-go.
   sourceCandidate still leaves it out; the held gun's own projection fails
   the camera test). Expected: those AACF draws gone from the "keyed draw
   not substituted" lines, and no stale column at the shop edge.
+
+- 2026-11-21, D8 reversed: the maintainer decided to ship AMD's FSR 4.1 runtime in the release. build.bat copies the loader, the upscaler and AMD-FIDELITYFX-LICENSE.txt into build\ from the pinned SDK; tools\package_native.py packs them in an ed-up-fsr4-<hash>.zip and the manifest, and refuses a build that lacks them ("the build has no AMD FSR 4 runtime"); the launcher's plan installs them under the XeSS rules (owned: a foreign copy is left alone, only the recorded copy is replaced or removed, the licence travels with the loader). AMD's DLLs keep AMD's own Authenticode signature: no signing step names them, and package_native's self-test asserts that.

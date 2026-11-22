@@ -98,8 +98,12 @@ std::string gameLanguageArgument(const std::wstring& edLaunchDir, const std::str
     std::string chosen = canonicalGameLanguage(code);
     if (!knownOf(chosen)) chosen = systemGameLanguageCode();
     // min-ed uses a non-English code only when its satellite folder is beside EDLaunch.
-    if (chosen != "en" && !edLaunchDir.empty() && !folderExists(join(edLaunchDir, std::wstring(chosen.begin(), chosen.end()))))
-        chosen = systemGameLanguageCode();
+    // English is always installed, so it is the last resort when the system's language has no folder either.
+    auto missing = [&](const std::string& c) {
+        return c != "en" && !edLaunchDir.empty() && !folderExists(join(edLaunchDir, std::wstring(c.begin(), c.end())));
+    };
+    if (missing(chosen)) chosen = systemGameLanguageCode();
+    if (missing(chosen)) chosen = "en";
     if (!edLaunchDir.empty()) {
         const std::wstring dll = chosen == "en"
             ? join(edLaunchDir, L"LocalResources.dll")

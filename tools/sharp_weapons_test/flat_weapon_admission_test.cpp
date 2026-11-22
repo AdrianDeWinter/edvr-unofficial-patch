@@ -289,12 +289,12 @@ int main(int argc, char** argv) {
     cfg.set("fix.hud_antialiasing", "on");
     runCase(r, hdr, "off", first + 2, false, nullptr, true);
     check(uiLayerFlatEdgeSmoothingResult().applied == HudAaMode::kSmaa, "legacy fix.hud_antialiasing=on resolves to SMAA");
-    cfg.set("fix.hud_antialiasing", "fxaa");
+    cfg.set("fix.hud_antialiasing", "light");
     runCase(r, hdr, "off", first + 3, false, nullptr, true);
-    check(uiLayerFlatEdgeSmoothingResult().applied == HudAaMode::kFxaa, "fix.hud_antialiasing=fxaa runs FXAA");
+    check(uiLayerFlatEdgeSmoothingResult().applied == HudAaMode::kFxaa, "fix.hud_antialiasing=light runs FXAA");
     cfg.set("fix.hud_antialiasing", "off");
     runCase(r, hdr, "100", first + 4, false, nullptr, false);
-    cfg.set("fix.hud_antialiasing", "smaa");
+    cfg.set("fix.hud_antialiasing", "sharp");
     // Also prove a second physical target for frame N+4. Its first decision
     // in that frame will be abandoned, while the later weapon target is
     // captured and copied into the actual tone input.

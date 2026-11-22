@@ -535,23 +535,27 @@ bool readEosClient(const std::wstring& path, std::string* clientId, std::string*
     CloseHandle(f);
     if (!ok || read < bytes.size()) return false;
     const std::string mark = std::string("x\0y\0z\0a\0", 8);
-    const size_t at = bytes.find(mark);
-    if (at == std::string::npos || (at % 2) != 0) return false;
-    size_t end = 0;
-    const std::string id = utf16Ascii(bytes, at, &end);
-    if (id.size() < 16 || id.size() > 80) return false;
-    size_t next = end;
-    while (next + 1 < bytes.size()) {
-        const unsigned char lo = static_cast<unsigned char>(bytes[next]);
-        const unsigned char hi = static_cast<unsigned char>(bytes[next + 1]);
-        if (hi == 0 && lo >= 32 && lo < 127) break;
-        next += 2;
+    // The first hit can be an odd-aligned byte pattern or a string that is too short, so every
+    // even-aligned hit is tried until one gives an id and a secret that pass the length checks.
+    for (size_t at = bytes.find(mark); at != std::string::npos; at = bytes.find(mark, at + 1)) {
+        if ((at % 2) != 0) continue;
+        size_t end = 0;
+        const std::string id = utf16Ascii(bytes, at, &end);
+        if (id.size() < 16 || id.size() > 80) continue;
+        size_t next = end;
+        while (next + 1 < bytes.size()) {
+            const unsigned char lo = static_cast<unsigned char>(bytes[next]);
+            const unsigned char hi = static_cast<unsigned char>(bytes[next + 1]);
+            if (hi == 0 && lo >= 32 && lo < 127) break;
+            next += 2;
+        }
+        const std::string secret = utf16Ascii(bytes, next, nullptr);
+        if (secret.size() < 16 || secret.size() > 80 || secret.find(' ') != std::string::npos) continue;
+        *clientId = id;
+        *clientSecret = secret;
+        return true;
     }
-    const std::string secret = utf16Ascii(bytes, next, nullptr);
-    if (secret.size() < 16 || secret.size() > 80 || secret.find(' ') != std::string::npos) return false;
-    *clientId = id;
-    *clientSecret = secret;
-    return true;
+    return false;
 }
 
 std::wstring productDirUnder(const std::wstring& installDir) {

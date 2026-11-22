@@ -79,8 +79,13 @@ inline float dittoAntiShimmerFromText(const char* text) {
     return dittoClamp(asked, 0.0f, 0.9f);
 }
 
-// rcas is 1. cas, and any other word, is 0.
-inline int dittoSharpenModeFromText(const char* text) { return text && dittoSameText(text, "rcas") ? 1 : 0; }
+// halo_free (the older word rcas) is 1. standard (the older word cas), and any other word, is 0.
+inline int dittoSharpenModeFromText(const char* text) {
+    return text && (dittoSameText(text, "halo_free") || dittoSameText(text, "rcas")) ? 1 : 0;
+}
+
+// The word the menu and the ini use for a mode.
+inline const char* dittoSharpenWord(int mode) { return mode == 1 ? "halo_free" : "standard"; }
 
 inline DittoCb dittoFillConstants(const DittoEval& in) {
     DittoCb k{};

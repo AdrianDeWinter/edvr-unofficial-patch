@@ -831,8 +831,10 @@ void testHudSmoothVr(Rig& r) {
         check(edge.outcome == expect && edge.applied == expectMode && edge.w && edge.h, what);
     };
     round("off", UiLayerEdgeSmoothing::kRaw, HudAaMode::kOff, "VR, fix.hud_antialiasing off (shipped): the composite reads the raw layer");
-    round("fxaa", UiLayerEdgeSmoothing::kSmoothed, HudAaMode::kFxaa, "VR, fix.hud_antialiasing fxaa: the composite reads the FXAA output of the layer");
-    round("smaa", UiLayerEdgeSmoothing::kSmoothed, HudAaMode::kSmaa, "VR, fix.hud_antialiasing smaa: the composite reads the SMAA output of the layer");
+    round("light", UiLayerEdgeSmoothing::kSmoothed, HudAaMode::kFxaa, "VR, fix.hud_antialiasing light: the composite reads the FXAA output of the layer");
+    round("sharp", UiLayerEdgeSmoothing::kSmoothed, HudAaMode::kSmaa, "VR, fix.hud_antialiasing sharp: the composite reads the SMAA output of the layer");
+    round("fxaa", UiLayerEdgeSmoothing::kSmoothed, HudAaMode::kFxaa, "VR, older fix.hud_antialiasing fxaa: reads as light");
+    round("smaa", UiLayerEdgeSmoothing::kSmoothed, HudAaMode::kSmaa, "VR, older fix.hud_antialiasing smaa: reads as sharp");
     round("on", UiLayerEdgeSmoothing::kSmoothed, HudAaMode::kSmaa, "VR, legacy fix.hud_antialiasing on: maps to SMAA");
     round("off", UiLayerEdgeSmoothing::kRaw, HudAaMode::kOff, "VR, fix.hud_antialiasing off again: the composite reads the raw layer");
     cfg.set("fix.hud_antialiasing", "off");

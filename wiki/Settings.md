@@ -53,7 +53,7 @@ In a headset, **HMD Image Quality** is the size the game renders. Below 1.0 the 
 
 [The full upscaler notes](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/fixes.md#upscaling-dlss-fsr-dittosr-and-xess).
 
-Choosing DittoSR lights four rows under it: **DittoSR sharpness** (60 is the look it ships with), **DittoSR frame weight** (2; lower is steadier, higher is crisper), **DittoSR anti-shimmer** (Auto, Off, or a strength from 0.1 to 0.9), and **DittoSR filter** (CAS, or RCAS). In the game they stay on the page for the other choices and do not respond until DittoSR is selected, the same way the DLSS preset waits for DLSS and frame generation waits for XeSS. The launcher hides them until DittoSR is selected. Frame weight and anti-shimmer are tuning keys. ED-UP's **Sharpening** row is a separate pass after the upscaler. A change applies on the next frame.
+Choosing DittoSR lights four rows under it: **DittoSR sharpness** (60 is the look it ships with), **DittoSR frame weight** (2; lower is steadier, higher is crisper), **DittoSR anti-shimmer** (Auto, Off, or a strength from 0.1 to 0.9), and **DittoSR filter** (Standard, or Halo-free). In the game they stay on the page for the other choices and do not respond until DittoSR is selected, the same way the DLSS preset waits for DLSS and frame generation waits for XeSS. The launcher hides them until DittoSR is selected. Frame weight and anti-shimmer are tuning keys. ED-UP's **Sharpening** row is a separate pass after the upscaler. A change applies on the next frame.
 
 ### Frame generation on a monitor
 

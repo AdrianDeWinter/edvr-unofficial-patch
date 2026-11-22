@@ -399,16 +399,32 @@ bool removeEdLaunchShim(const std::wstring& gameDir, std::string* error) {
     std::wstring edlaunch = findEdLaunch(gameDir);
     std::wstring orig;
     std::wstring dir;
+    std::wstring marked;
     if (!edlaunch.empty()) {
         dir = parentOf(edlaunch);
         orig = joinPath(dir, kEdLaunchOrigName);
+        marked = readSmallText(joinPath(dir, kEdLaunchMarkerName));
         if (!fileExists(joinPath(dir, kEdLaunchMarkerName))) return true;
         if (!fileExists(orig)) return fail("The saved EDLaunch is missing, so the original file was left where it is.");
+        // The marker holds the stand-in's hash. A different live file is one the store wrote
+        // after a game update, and the saved copy is the older one: keep the live file.
+        if (marked.empty()) return true;
+        const std::string liveHash = sha256File(edlaunch);
+        // An unreadable file is not proof of a store update: deleting the saved copy then could lose Frontier's original.
+        if (liveHash.empty()) return fail("EDLaunch.exe could not be read, so the original file was left where it is.");
+        if (narrowUtf8(marked) != liveHash) {
+            DeleteFileW(orig.c_str());
+            DeleteFileW(joinPath(dir, kEdLaunchMarkerName).c_str());
+            DeleteFileW(joinPath(dir, kEdLaunchModeName).c_str());
+            return true;
+        }
     } else {
         orig = findEdLaunchOrig(gameDir);
         if (orig.empty()) return true;
         dir = parentOf(orig);
         edlaunch = joinPath(dir, L"EDLaunch.exe");
+        // Without the marker the saved file is not known to be ours to put back.
+        if (!fileExists(joinPath(dir, kEdLaunchMarkerName))) return true;
     }
     // Do not delete the live file first: a failed replace has to leave it where it was.
     if (!replaceWith(edlaunch, orig))

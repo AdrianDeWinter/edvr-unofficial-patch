@@ -39,6 +39,7 @@
 #include "aa_compare.h"     // aaCompareNoteMenuEdit(): an F8 pick of the AA mode ends an AA comparison
 #include "cockpit_glass_core.h"   // parseLook, dirtRowDim: the Legacy glass dirt row dims unless visual.cockpit_glass is legacy
 #include "device_hook.h"
+#include "dittosr_math.h"   // dittoSharpenModeFromText, dittoSharpenWord: the DittoSR filter row shows the older words as the choices they mean
 #include "elite_binds.h"
 #include "flat_elite_settings.h"
 #include "flat_runtime.h"
@@ -569,6 +570,11 @@ bool isDittoRow(const MenuRowDef& d) {
     return strcmp(d.section, "fix") == 0 &&
            (strcmp(d.key, "dittosr_sharpness") == 0 || strcmp(d.key, "dittosr_frame_weight") == 0 ||
             strcmp(d.key, "dittosr_anti_shimmer") == 0 || strcmp(d.key, "dittosr_sharpen") == 0);
+}
+
+// The DittoSR filter row shows the older ini words (cas, rcas) as the choice they now mean.
+bool isDittoSharpenRow(const MenuRowDef& d) {
+    return strcmp(d.section, "fix") == 0 && strcmp(d.key, "dittosr_sharpen") == 0;
 }
 
 bool antiAliasingIsDitto() { return _stricmp(shownValue("fix", "temporal_aa").c_str(), "dittosr") == 0; }
@@ -1333,6 +1339,12 @@ std::string displayValue(const MenuRowDef& d, const std::string& v) {
             }
             if (isHudAntiAliasingRow(d)) {
                 const char* word = hudAaName(hudAaParse(v.c_str()));
+                for (const ChoiceItem& c : choicesOf(d)) {
+                    if (_stricmp(c.value.c_str(), word) == 0) return c.label;
+                }
+            }
+            if (isDittoSharpenRow(d)) {
+                const char* word = dittoSharpenWord(dittoSharpenModeFromText(v.c_str()));
                 for (const ChoiceItem& c : choicesOf(d)) {
                     if (_stricmp(c.value.c_str(), word) == 0) return c.label;
                 }
@@ -3637,7 +3649,9 @@ void stepRow(int defIndex, int dir, int mult) {
             int at = -1;
             const std::string curWord = isFpsOverlayRow(d)
                                             ? std::string(fpsOverlayWord(parseFpsOverlay(cur.c_str())))
-                                            : (isHudAntiAliasingRow(d) ? std::string(hudAaName(hudAaParse(cur.c_str()))) : cur);
+                                            : (isHudAntiAliasingRow(d) ? std::string(hudAaName(hudAaParse(cur.c_str())))
+                                               : isDittoSharpenRow(d) ? std::string(dittoSharpenWord(dittoSharpenModeFromText(cur.c_str())))
+                                                                      : cur);
             for (size_t i = 0; i < items.size(); ++i) {
                 if (_stricmp(items[i].value.c_str(), curWord.c_str()) == 0) at = static_cast<int>(i);
             }

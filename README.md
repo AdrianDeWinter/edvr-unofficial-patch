@@ -95,7 +95,9 @@ under the NVIDIA RTX SDKs licence. It is distributed unmodified as part of this
 application, as that licence allows, and only placed on machines with an NVIDIA
 card. Intel's XeSS runtimes, `libxess.dll`, `libxess_fg.dll` and `libxell.dll`,
 ship with Intel's licence and third-party notices (`INTEL-XESS-LICENSE.txt`,
-`INTEL-XESS-THIRD-PARTY.txt`), and the Khronos OpenXR loader,
+`INTEL-XESS-THIRD-PARTY.txt`), AMD's FSR 4 runtime, `amd_fidelityfx_loader_dx12.dll` and
+`amd_fidelityfx_upscaler_dx12.dll`, with AMD's licence (`AMD-FIDELITYFX-LICENSE.txt`),
+distributed unmodified and not re-signed, and the Khronos OpenXR loader,
 `openxr_loader.dll`, with its notice (`OPENXR-LOADER-LICENSE.txt`). The `fsr`
 engine is AMD's FidelityFX Super Resolution 3.1 upscaler through its community
 Direct3D 11 port (the optiscaler project's FidelityFX-SDK-DX11, MIT), compiled

@@ -191,7 +191,7 @@ def write_signing(out):
 def package_table_manifest():
     """A manifest of nothing but package_native.FILES, with one zip per group: the real table must pass."""
     manifest = copy.deepcopy(good_manifest()[0])
-    manifest["assets"] = [{"name": group + ".zip", "sha256": "0" * 64, "size": 1} for group in ("core", "dlss", "xess")]
+    manifest["assets"] = [{"name": group + ".zip", "sha256": "0" * 64, "size": 1} for group in ("core", "dlss", "xess", "fsr4")]
     manifest["files"] = [pn.manifest_file_entry(f, f.group + ".zip", b"x") for f in pn.FILES]
     return manifest
 

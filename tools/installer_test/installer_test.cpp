@@ -211,6 +211,9 @@ static const TestTableRow kTestTable[] = {
     {"xess_third_party", TargetRoot::Game, "INTEL-XESS-THIRD-PARTY.txt", 0, false, ExistingMode::Owned},
     {"xess_fg", TargetRoot::Game, "libxess_fg.dll", kProfileFlat, false, ExistingMode::Owned},
     {"xess_ll", TargetRoot::Game, "libxell.dll", kProfileFlat, false, ExistingMode::Owned},
+    {"fsr4_loader", TargetRoot::Game, "amd_fidelityfx_loader_dx12.dll", 0, false, ExistingMode::Owned},
+    {"fsr4_upscaler", TargetRoot::Game, "amd_fidelityfx_upscaler_dx12.dll", 0, false, ExistingMode::Owned},
+    {"fsr4_license", TargetRoot::Game, "AMD-FIDELITYFX-LICENSE.txt", 0, false, ExistingMode::Owned},
 };
 
 static PayloadFileEntry* tfind(PayloadInfo& p, const std::string& id) {
@@ -7164,6 +7167,45 @@ static void testSchemaReviewFixes(const std::wstring& scratch) {
         const Plan un = planUninstall(s, testOptions());
         check(hasStep(un, Action::Delete, L"nvngx_dlss.dll", nullptr) && hasStep(un, Action::Delete, L"libxess.dll", nullptr),
               "an uninstall still removes them, by the hash rule");
+    }
+
+    {   // AMD's FSR 4 runtime travels as XeSS's does: placed with its notice, a foreign copy left alone, removed by the hash rule,
+        // and refused whole without its notice.
+        PayloadInfo p = testPayload(kNextIni);
+        tset(p, "fsr4_loader", "amd-loader-new");
+        tset(p, "fsr4_upscaler", "amd-upscaler-new");
+        tset(p, "fsr4_license", "amd-license-new");
+        Survey s = baseSurvey(dir);
+        s.state.present = true; s.state.scope = "both"; s.state.profile = "vr";
+        const Plan fresh = planInstall(s, testOptions(), p);
+        check(!fresh.blocked && hasStep(fresh, Action::WritePayload, nullptr, L"amd_fidelityfx_loader_dx12.dll") &&
+              hasStep(fresh, Action::WritePayload, nullptr, L"amd_fidelityfx_upscaler_dx12.dll") &&
+              hasStep(fresh, Action::WritePayload, nullptr, L"AMD-FIDELITYFX-LICENSE.txt") &&
+              fresh.nextState.shaOf("fsr4_loader") == tsha(p, "fsr4_loader") && !fresh.nextState.shaOf("fsr4_license").empty(),
+              "the FSR 4 runtime and its licence are placed and recorded", unifiedProblems(fresh));
+        Survey foreign = s;
+        foreign.targets.push_back(fakeDll(DllKind::Foreign, joinPath(dir, L"amd_fidelityfx_loader_dx12.dll"), "someone-elses"));
+        const Plan kept = planInstall(foreign, testOptions(), p);
+        check(!kept.blocked && !hasStep(kept, Action::WritePayload, nullptr, L"amd_fidelityfx_loader_dx12.dll") &&
+              notesMention(kept, "A different amd_fidelityfx_loader_dx12.dll is present; left alone") && kept.nextState.shaOf("fsr4_loader").empty(),
+              "a foreign FSR 4 loader is left alone and not recorded");
+        Survey ours = s;
+        trecord(ours.state, "fsr4_loader", "amd-loader-new");
+        trecord(ours.state, "fsr4_upscaler", "amd-upscaler-new");
+        trecord(ours.state, "fsr4_license", "amd-license-new");
+        ours.targets.push_back(fakeDll(DllKind::Foreign, joinPath(dir, L"amd_fidelityfx_loader_dx12.dll"), "amd-loader-new"));
+        ours.targets.push_back(fakeDll(DllKind::Foreign, joinPath(dir, L"amd_fidelityfx_upscaler_dx12.dll"), "amd-upscaler-new"));
+        ours.targets.push_back(fakeDll(DllKind::Foreign, joinPath(dir, L"AMD-FIDELITYFX-LICENSE.txt"), "amd-license-new"));
+        const Plan un = planUninstall(ours, testOptions());
+        check(hasStep(un, Action::Delete, L"amd_fidelityfx_loader_dx12.dll", nullptr) &&
+              hasStep(un, Action::Delete, L"amd_fidelityfx_upscaler_dx12.dll", nullptr) &&
+              hasStep(un, Action::Delete, L"AMD-FIDELITYFX-LICENSE.txt", nullptr),
+              "an uninstall removes the FSR 4 files EDVR placed, by the hash rule");
+        PayloadInfo noNotice = p;
+        tdrop(noNotice, "fsr4_license");
+        const Plan refused = planInstall(s, testOptions(), noNotice);
+        check(refused.blocked && refused.steps.empty() && notesMention(refused, "FSR 4 runtime lacks its license notice"),
+              "an FSR 4 runtime without AMD's licence is not installed");
     }
 
     {   // A target below the root: the planner makes its folder, and the plan applies.

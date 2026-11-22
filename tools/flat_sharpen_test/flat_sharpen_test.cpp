@@ -270,7 +270,7 @@ bool schemaHudRowIsOnBothMenus(const std::string& schema) {
     if (quality == std::string::npos || hud == std::string::npos || schema.find("{\"fix\", \"hud_antialiasing\",", hud + 1) != std::string::npos) return false;
     const size_t afterQuality = schema.find("\n    {\"", quality + 1);
     return afterQuality != std::string::npos && afterQuality + 5 == hud && row.find("\"HUD Anti-Aliasing\"") != std::string::npos &&
-           row.find("MenuKind::Choice, \"off\", \"\", \"\", 2, \"off|fxaa=FXAA|smaa=SMAA\", false, false, 1,") != std::string::npos &&
+           row.find("MenuKind::Choice, \"off\", \"\", \"\", 2, \"off|light=Light (FXAA)|sharp=Sharp (SMAA)\", false, false, 1,") != std::string::npos &&
            row.find("MenuTier::Fix, \"performance\",") != std::string::npos && row.find("MenuTier::Fix, \"flat_performance\",") == std::string::npos;
 }
 
