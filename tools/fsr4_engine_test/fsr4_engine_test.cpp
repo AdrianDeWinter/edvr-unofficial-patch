@@ -199,7 +199,7 @@ bool formatSelfTest() {
 
 // ---- flags ----
 
-// AMD's real bit values (FidelityFX SDK v2.3.0 ffx_upscale.h), written out as numbers: the engine static_asserts the same
+// AMD's real bit values (FidelityFX SDK v2.4.0 ffx_upscale.h), written out as numbers: the engine static_asserts the same
 // constants against AMD's enum, so a drift in either side fails a build with the SDK, and this rig pins what the flags mean
 // in a build without it.
 bool flagsSelfTest() {
