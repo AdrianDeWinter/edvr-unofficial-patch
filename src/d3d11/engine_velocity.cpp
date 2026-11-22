@@ -967,9 +967,19 @@ bool overlayDepthState(ID3D11DeviceContext* ctx) {
 // 2026-11-20 (the shop glass, docs/fsr-upscaler-design-2026-09-16.md journal): whether the bound depth state can leave a fragment's depth out
 // of the buffer (depth off, or writes off under a test other than EQUAL). Cached by state object: D3D11 returns one object per description, so the answer for a pointer does not change
 // while it is bound, and the keyed draws (about 1400 a frame at a station) pay one Get and a compare.
+// The cached object is held by reference, so its address cannot be handed to a different state while it is cached.
+// Owner thread; clearLocked lets both go with the rest of the session's state.
+struct StateAnswerCache {
+    Ptr<ID3D11DepthStencilState> depthState;
+    bool depthOff = false;
+    Ptr<ID3D11BlendState> blendState;
+    bool blends = false;
+};
+StateAnswerCache g_stateAnswers;
+
 bool depthWritesOff(ID3D11DeviceContext* ctx) {
-    static ID3D11DepthStencilState* lastState = nullptr;
-    static bool lastOff = false;
+    Ptr<ID3D11DepthStencilState>& lastState = g_stateAnswers.depthState;
+    bool& lastOff = g_stateAnswers.depthOff;
     Ptr<ID3D11DepthStencilState> ownedState;
     ID3D11DepthStencilState* rawState = nullptr;
     if (runtimeFlatProfile() && g_hookDepthState.valid && !flatIssueEpochFrozen()) {
@@ -981,7 +991,7 @@ bool depthWritesOff(ID3D11DeviceContext* ctx) {
         rawState = ownedState.Get();
     }
     if (!rawState) return false;   // the default state: depth on, writes on
-    if (rawState == lastState) return lastOff;
+    if (rawState == lastState.Get()) return lastOff;
     D3D11_DEPTH_STENCIL_DESC d{};
     rawState->GetDesc(&d);
     lastState = rawState;
@@ -993,10 +1003,10 @@ bool depthWritesOff(ID3D11DeviceContext* ctx) {
 
 // Whether a blend state blends target 0, from the object's own description (no context call). Cached by object, as depthWritesOff is.
 bool gameBlendsTarget0(ID3D11BlendState* state) {
-    static ID3D11BlendState* lastState = nullptr;
-    static bool lastBlends = false;
+    Ptr<ID3D11BlendState>& lastState = g_stateAnswers.blendState;
+    bool& lastBlends = g_stateAnswers.blends;
     if (!state) return false;   // the default state: no blending
-    if (state == lastState) return lastBlends;
+    if (state == lastState.Get()) return lastBlends;
     D3D11_BLEND_DESC d{};
     state->GetDesc(&d);
     lastState = state;
@@ -2947,6 +2957,7 @@ void clearLocked() {
     g_gameBlendMemo = GameBlendMemo{};   // a held reference to the game's blend state must not outlive the session
     g_hookGameBlend = HookBlend{};
     g_hookDepthState = HookDepthState{};
+    g_stateAnswers = StateAnswerCache{};
     g_keptMemo = KeptMemo{};
     g_sourceDepthMemo = SourceDepthMemo{};
     g_flatDomainCtx1 = FlatDomainCtx1Cache{};

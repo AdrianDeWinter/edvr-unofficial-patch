@@ -218,8 +218,10 @@ int main() {
               "anti-shimmer text: auto and junk stay on the ratio curve, off is 0, a number is clamped to 0..0.9");
         check(edvr::dittoSharpenModeFromText("cas") == 0 && edvr::dittoSharpenModeFromText("CAS") == 0 &&
                   edvr::dittoSharpenModeFromText(nullptr) == 0 && edvr::dittoSharpenModeFromText("rcas") == 1 &&
-                  edvr::dittoSharpenModeFromText("RCAS") == 1,
-              "the filter text is RCAS or CAS");
+                  edvr::dittoSharpenModeFromText("RCAS") == 1 && edvr::dittoSharpenModeFromText("standard") == 0 &&
+                  edvr::dittoSharpenModeFromText("halo_free") == 1 && edvr::dittoSharpenModeFromText("HALO_FREE") == 1 &&
+                  std::strcmp(edvr::dittoSharpenWord(0), "standard") == 0 && std::strcmp(edvr::dittoSharpenWord(1), "halo_free") == 0,
+              "the filter text is halo_free or standard, and the older rcas and cas are read as those");
         check(edvr::dittoSharpenModeFromText("rcasx") == 0, "an unrecognized filter uses CAS");
         check(edvr::dittoAntiShimmerFromText("inf") == -1.0f &&
                   edvr::dittoAntiShimmerFromText("nan") == -1.0f,

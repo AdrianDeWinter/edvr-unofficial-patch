@@ -87,7 +87,7 @@ inline float uiQualityParse(const char* text, bool* recognized, const char** ali
     return 0.0f;
 }
 
-// fix.hud_antialiasing: off | fxaa | smaa (legacy on/1/true/yes -> smaa).
+// fix.hud_antialiasing: off | light | sharp. The older words are still read: fxaa is light; smaa, on, 1, true and yes are sharp.
 enum class HudAaMode : uint8_t { kOff = 0, kFxaa = 1, kSmaa = 2 };
 
 inline HudAaMode hudAaParse(const char* raw) {
@@ -103,15 +103,15 @@ inline HudAaMode hudAaParse(const char* raw) {
         while (*a == ' ' || *a == '\t') ++a;
         return *a == '\0' && *b == '\0';
     };
-    if (eq(raw, "fxaa")) return HudAaMode::kFxaa;
-    if (eq(raw, "smaa") || eq(raw, "on") || eq(raw, "1") || eq(raw, "true") || eq(raw, "yes")) return HudAaMode::kSmaa;
+    if (eq(raw, "light") || eq(raw, "fxaa")) return HudAaMode::kFxaa;
+    if (eq(raw, "sharp") || eq(raw, "smaa") || eq(raw, "on") || eq(raw, "1") || eq(raw, "true") || eq(raw, "yes")) return HudAaMode::kSmaa;
     return HudAaMode::kOff;
 }
 
 inline const char* hudAaName(HudAaMode mode) {
     switch (mode) {
-        case HudAaMode::kFxaa: return "fxaa";
-        case HudAaMode::kSmaa: return "smaa";
+        case HudAaMode::kFxaa: return "light";
+        case HudAaMode::kSmaa: return "sharp";
         case HudAaMode::kOff:
         default: return "off";
     }

@@ -3059,6 +3059,34 @@ void testRoute() {
         writeAll(orig, "saved-without-marker");
         check(!installEdLaunchShim(self, product, &err) && readAll(ed) == "live" && readAll(orig) == "saved-without-marker",
               "an EDLaunch_orig.exe with no marker still refuses the install and changes nothing: " + err);
+        check(removeEdLaunchShim(product, &err) && readAll(ed) == "live" && readAll(orig) == "saved-without-marker",
+              "remove with no marker leaves the live file and the saved file alone: " + err);
+        DeleteFileW(orig.c_str());
+    }
+
+    // A store update replaces the stand-in after it was installed: turning the stand-in off keeps the
+    // store's file and drops the stale saved copy, marker and mode.
+    {
+        const std::wstring root = P(tree, L"shim-store\\Elite");
+        const std::wstring ed = P(root, L"EDLaunch.exe");
+        const std::wstring orig = P(root, L"EDLaunch_orig.exe");
+        const std::wstring product = P(root, L"Products\\elite-dangerous-odyssey-64");
+        const std::wstring self = P(tree, L"shim-store-launcher.exe");
+        writeAll(ed, "frontier-old");
+        writeAll(P(product, L"EliteDangerous64.exe"), "x");
+        writeAll(self, "our-binary");
+        std::string err;
+        check(installEdLaunchShim(self, product, &err) && writeEdLaunchMode(product, false) && readAll(ed) == "our-binary",
+              "the stand-in is installed for the store-update case: " + err);
+        writeAll(ed, "frontier-new");
+        check(removeEdLaunchShim(product, &err) && readAll(ed) == "frontier-new" && !fileExists(orig) &&
+                  !fileExists(P(root, L"edvr_edlaunch.txt")) && !fileExists(P(root, L"edvr_launch_mode.txt")),
+              "a live EDLaunch.exe the store replaced is kept and the stale saved copy, marker and mode are removed: " + err);
+        // With the live file gone, a saved copy with no marker is not restored.
+        DeleteFileW(ed.c_str());
+        writeAll(orig, "saved-without-marker");
+        check(removeEdLaunchShim(product, &err) && !fileExists(ed) && readAll(orig) == "saved-without-marker",
+              "with no live EDLaunch.exe and no marker, the saved copy is left alone: " + err);
     }
 
     // The Frontier store's own layout: the game under AppData, EDLaunch under Program Files, and
@@ -4050,6 +4078,8 @@ void testDirectPlan() {
         check(gameLanguageArgument(L"", "de") == "German\\\\DE", "with no EDLaunch folder a known language still has its GameLanguage string");
         check(gameLanguageArgument(L"", "zz") == gameLanguageArgument(L"", systemGameLanguageCode()),
               "an unknown code follows the Windows language");
+        check(gameLanguageArgument(L"C:\\edup-no-such-folder", "de") == gameLanguageArgument(L"", "en"),
+              "a language whose folder is missing, with the Windows language's folder missing too, is English");
     }
     check(sameGameVersion("4.2.1.0", "4.2.1.0") && !sameGameVersion("4.2.1.0", "4.2.2.0") && !sameGameVersion("4.2.1", "4.2.1.0") && !sameGameVersion("a.b", "a.b") && sameGameVersion("4.2", "4.2"),
           "game versions are equal as System.Version is: the same numbers in the same count");
