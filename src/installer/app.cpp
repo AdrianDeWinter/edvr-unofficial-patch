@@ -188,6 +188,8 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             next(&a.payloadDir);
         else if (arg == L"--data-root")
             next(&a.dataRoot);
+        else if (arg == L"--user-data-root")
+            next(&a.userDataRoot);
         else if (arg == L"--apply-plan")
             next(&a.planFile);
         else if (arg == L"--channel") {
@@ -454,6 +456,14 @@ bool relaunchElevated(const AppArgs& args) {
     if (args.purge) cmd += L"--purge ";
     if (args.dryRun) cmd += L"--dry-run ";
     if (args.convertProfile) cmd += L"--convert-profile ";
+#ifndef EDUP_LAUNCHER
+    // The elevated copy can run as another account (an administrator's password typed on a standard user's desktop); the
+    // settings it moves belong to the user who asked, so it is told their folder (checked there: userDataRootOf).
+    {
+        const std::wstring userRoot = args.userDataRoot.empty() ? defaultMirrorRoot() : args.userDataRoot;
+        if (!userRoot.empty()) cmd += L"--user-data-root \"" + userRoot + L"\" ";
+    }
+#endif
     cmd += L"--autorun";
 
     SHELLEXECUTEINFOW info{};
@@ -510,7 +520,7 @@ int runConsole(const AppArgs& args) {
     const std::wstring mirrorRoot = launcherMirrorRoot(args);
     if (args.dataRoot.empty()) migrateLegacyDataRoot(mirrorRoot);
 #else
-    const std::wstring mirrorRoot = defaultMirrorRoot();
+    const std::wstring mirrorRoot = userDataRootOf(args.userDataRoot);
     migrateLegacyDataRoot(mirrorRoot);
 #endif
     const std::wstring mirrorDir = mirrorDirFor(game, mirrorRoot);

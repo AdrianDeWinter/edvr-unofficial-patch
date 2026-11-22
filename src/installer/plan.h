@@ -236,6 +236,10 @@ struct Step {
     // `from` must exist. Without this a source that has gone is skipped in
     // silence, and a run that restored nothing reports success.
     bool         required = false;
+    // A clean purge's folder removal: it runs after every other step, cannot be undone, and a failure is reported and
+    // passed over instead of rolling back an uninstall that has already finished (the folders it removes hold the
+    // rollback's own snapshots).
+    bool         bestEffort = false;
 };
 
 struct Plan {

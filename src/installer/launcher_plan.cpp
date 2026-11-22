@@ -152,6 +152,10 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
     if (!described)
         return failed("there is no EliteDangerous64.exe in the game folder the plan names");
     const std::wstring mirrorDir = mirrorDirFor(game, paths.dataRoot);
+    // This copy is elevated and writes, restores and removes the live settings in this per-install folder, which the
+    // user owns: a link there would send those writes somewhere else, as planPathsFor refuses for the folders above it.
+    if (!mirrorDir.empty() && GetFileAttributesW(mirrorDir.c_str()) != INVALID_FILE_ATTRIBUTES && missingOrLink(mirrorDir))
+        return failed("the settings folder for this game is a link; the installer will not write through it");
 
     Survey survey = surveyTarget(game, mirrorDir);
     const bool uninstall = file.action == "uninstall";

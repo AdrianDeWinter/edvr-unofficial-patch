@@ -1596,6 +1596,49 @@ def _ini_target(target, half):
     return os.path.join(target, "edup.ini" if half == "vr" else "edup-flat.ini")
 
 
+def _legacy_ini_name(half):
+    return "edvr.ini" if half == "vr" else "edvr-flat.ini"
+
+
+def _live_ini_path(target, half):
+    """This user's live settings file, %LOCALAPPDATA%\\EDUP\\<leaf>-<store>\\edup[-flat].ini (config.cpp's first
+    candidate), or None where there is no LOCALAPPDATA."""
+    root = mirror_root()
+    if not root:
+        return None
+    return os.path.join(_mirror_dir(root, target, _mirror_source_for(target)), os.path.basename(_ini_target(target, half)))
+
+
+def _ini_candidates(target, half):
+    """The files the runtime reads one half's settings from, in its order (src/common/config.cpp chooseSettingsPath):
+    the live per-user file, the game folder's edup file, then its legacy edvr file. The legacy mirror comes last and is
+    the restore plan's business (_mirror_ini_plan), not a settings file of the install."""
+    paths = [_live_ini_path(target, half), _ini_target(target, half), os.path.join(target, _legacy_ini_name(half))]
+    return [path for path in paths if path]
+
+
+def _settings_present(target, half):
+    """Whether the runtime finds a settings file for this half without the mirror."""
+    return any(os.path.isfile(path) for path in _ini_candidates(target, half))
+
+
+def _effective_ini(target, half):
+    """The file the runtime reads for this half, or None; the flat half falls back to the VR half's files."""
+    for path in _ini_candidates(target, half):
+        if os.path.isfile(path):
+            return path
+    if half == "flat":
+        return _effective_ini(target, "vr")
+    return None
+
+
+def _ini_write_target(target, half):
+    """Where --ini writes this half: the live per-user file when there is one (the runtime reads it first, so a file
+    written beside the game would be ignored), else the game folder's file."""
+    live = _live_ini_path(target, half)
+    return live if live and os.path.isfile(live) else _ini_target(target, half)
+
+
 def _ini_pairs(root, target, scope):
     """(source, target, receipt key, bytes) for each settings file the scope
     owns; see _ini_template for source and bytes. A both install's flat file
@@ -1604,10 +1647,10 @@ def _ini_pairs(root, target, scope):
     pairs = []
     if scope in ("both", "vr"):
         source, data = _ini_template(root, "vr")
-        pairs.append((source, _ini_target(target, "vr"), "ini", data))
+        pairs.append((source, _ini_write_target(target, "vr"), "ini", data))
     if scope in ("both", "flat"):
         source, data = _ini_template(root, "flat")
-        pairs.append((source, _ini_target(target, "flat"),
+        pairs.append((source, _ini_write_target(target, "flat"),
                       "ini" if scope == "flat" else "ini_flat", data))
     return pairs
 
@@ -1625,9 +1668,11 @@ def _missing_ini_defaults(root, target, scope, handled=()):
     missing = []
     for half in halves:
         dst = _ini_target(target, half)
-        if os.path.isfile(dst) or half in handled:
+        # Present anywhere the runtime reads (the live per-user file, the game folder's edup or legacy edvr file):
+        # a default beside the game would then either be ignored or, worse, outrank the tuned legacy file.
+        if _settings_present(target, half) or half in handled:
             continue
-        if half == "flat" and (os.path.isfile(_ini_target(target, "vr")) or "vr" in handled):
+        if half == "flat" and (_settings_present(target, "vr") or "vr" in handled):
             continue
         source, data = _ini_template(root, half)
         missing.append((half, source, dst, data))
@@ -1674,6 +1719,12 @@ def mirror_root():
     return os.path.join(base, "EDUP") if base else None
 
 
+def legacy_mirror_root():
+    """%LOCALAPPDATA%\\EDVR, where the launcher kept its copies before the move to EDUP; None without LOCALAPPDATA."""
+    base = os.environ.get("LOCALAPPDATA", "")
+    return os.path.join(base, "EDVR") if base else None
+
+
 def _mirror_source_for(target):
     """The installer's source label for a game directory, from where the directory is."""
     if os.name != "nt" and any(Path(target).resolve() == Path(path).resolve() for path in epic_dirs()):
@@ -1718,12 +1769,16 @@ def _mirror_ini_plan(target, scope):
     halves = {"both": ("vr", "flat"), "vr": ("vr",), "flat": ("flat",)}[scope]
     source = _mirror_source_for(target)
     restores, blocked = [], []
+    legacy_root = legacy_mirror_root()
     for half in halves:
         dst = _ini_target(target, half)
-        if os.path.isfile(dst):
+        if _settings_present(target, half):
             continue
         name = os.path.basename(dst)
         found = _mirror_newest(_mirror_dir(root, target, source), name)
+        if not found and legacy_root:
+            # The mirror ed-up-launcher.exe kept before the move to EDUP, under the old names.
+            found = _mirror_newest(_mirror_dir(legacy_root, target, source), _legacy_ini_name(half))
         if found:
             try:
                 with open(found, "rb") as stream:
@@ -1733,6 +1788,9 @@ def _mirror_ini_plan(target, scope):
             continue
         others = [path for path in (_mirror_newest(_mirror_dir(root, target, s), name)
                                     for s in MIRROR_SOURCES if s != source) if path]
+        if legacy_root:
+            others += [path for path in (_mirror_newest(_mirror_dir(legacy_root, target, s), _legacy_ini_name(half))
+                                         for s in MIRROR_SOURCES if s != source) if path]
         if others:
             blocked.append((half, dst, others,
                             "it is kept under another store's folder than the %s this path suggests" %
@@ -1771,10 +1829,8 @@ def _selects_fsr4(target, scope):
 
 def _ini_temporal_mode(target, half):
     """Read one half's effective temporal mode, including the flat half's ini fallback."""
-    ini = _ini_target(target, half)
-    if half == "flat" and not os.path.isfile(ini):
-        ini = os.path.join(target, "edup.ini")
-    if not os.path.isfile(ini):
+    ini = _effective_ini(target, half)
+    if not ini or not os.path.isfile(ini):
         return "off"
     section = ""
     mode = "off"
@@ -2803,7 +2859,7 @@ def _scope_self_test():
         # newest copy ed-up-launcher.exe kept, not from the shipped default, because a default written first makes
         # the installer's restore skip and its next mirror update replace the saved copy with the default.
         def mirror_of(g, slug="folder-you-chose"):
-            d = os.path.join(local_app_data, "EDUP", os.path.basename(g) + "-" + slug)
+            d = os.path.join(local_app_data, "EDVR", os.path.basename(g) + "-" + slug)
             os.makedirs(d, exist_ok=True)
             return d
 
@@ -2814,13 +2870,13 @@ def _scope_self_test():
         check(_mirror_source_for(g) == "Folder you chose",
               "the scratch game directory reads as a store's: %s" % _mirror_source_for(g))
         m = mirror_of(g)
-        Path(m, "edup.ini").write_bytes(b"[user]\nmirror=newest\n")
-        Path(m, "edup.ini.1").write_bytes(b"[user]\nmirror=older\n")
-        Path(m, "edup-flat.ini").write_bytes(b"[user]\nflat-mirror=1\n")
+        Path(m, "edvr.ini").write_bytes(b"[user]\nmirror=newest\n")
+        Path(m, "edvr.ini.1").write_bytes(b"[user]\nmirror=older\n")
+        Path(m, "edvr-flat.ini").write_bytes(b"[user]\nflat-mirror=1\n")
         before, mirror_before = tree(g), tree(m)
         code, text = run(args_for(g, "--scope", "both", "--dry-run", tag="mira"))
         check(code == 0 and tree(g) == before and tree(m) == mirror_before, "a --dry-run that would restore from the mirror wrote files")
-        check(text.count("restore  ") == 2 and os.path.join(m, "edup.ini") in text and "default  " not in text,
+        check(text.count("restore  ") == 2 and os.path.join(m, "edvr.ini") in text and "default  " not in text,
               "the dry-run plan did not name the two mirror restores and no default: %r" % text)
         code, text = run(args_for(g, "--scope", "both", "--verify-only", tag="mira"))
         check(code == 1 and tree(g) == before, "--verify-only wrote files, or passed with no payload installed")
@@ -2840,22 +2896,22 @@ def _scope_self_test():
         os.remove(os.path.join(g, "edup.ini"))
         before = tree(g)
         code, text = run(args_for(g, "--scope", "both", "--verify-only", tag="mira"))
-        check(code == 0 and tree(g) == before and "restores it from the mirror copy %s" % os.path.join(m, "edup.ini") in text,
+        check(code == 0 and tree(g) == before and "restores it from the mirror copy %s" % os.path.join(m, "edvr.ini") in text,
               "--verify-only did not name the mirror copy a missing edup.ini would come back from: %r" % text)
         # A newest generation that is empty is passed over for the one behind it; one that exists is never overwritten.
         g = game("mirror-b", user_ini=b"[user]\nkeep=existing\n")
         m = mirror_of(g)
-        Path(m, "edup.ini").write_bytes(b"")
-        Path(m, "edup.ini.1").write_bytes(b"[user]\nmirror=gen1\n")
-        Path(m, "edup-flat.ini").write_bytes(b"[user]\nflat-mirror=2\n")
+        Path(m, "edvr.ini").write_bytes(b"")
+        Path(m, "edvr.ini.1").write_bytes(b"[user]\nmirror=gen1\n")
+        Path(m, "edvr-flat.ini").write_bytes(b"[user]\nflat-mirror=2\n")
         code, text = run(args_for(g, "--scope", "both", tag="mirb"))
         check(code == 0 and Path(g, "edup.ini").read_bytes() == b"[user]\nkeep=existing\n"
               and Path(g, "edup-flat.ini").read_bytes() == b"[user]\nflat-mirror=2\n" and "seed     " not in text,
               "an existing edup.ini was overwritten from the mirror, or the flat file was seeded over its mirror copy: %r" % text)
         g = game("mirror-c")
         m = mirror_of(g)
-        Path(m, "edup.ini").write_bytes(b"")
-        Path(m, "edup.ini.1").write_bytes(b"[user]\nmirror=gen1\n")
+        Path(m, "edvr.ini").write_bytes(b"")
+        Path(m, "edvr.ini.1").write_bytes(b"[user]\nmirror=gen1\n")
         code, text = run(args_for(g, "--scope", "both", tag="mirc"))
         check(code == 0 and Path(g, "edup.ini").read_bytes() == b"[user]\nmirror=gen1\n"
               and Path(g, "edup-flat.ini").read_bytes() == b"[user]\nmirror=gen1\n" and "default  " not in text,
@@ -2869,14 +2925,14 @@ def _scope_self_test():
         # The store is read from where the directory is: a Steam library path looks in the -steam folder.
         g = game(os.path.join("steamapps", "common", "Elite Dangerous", "Products", "mirror-steam"))
         check(_mirror_source_for(g) == "Steam", "a path under steamapps is not read as Steam")
-        Path(mirror_of(g, "steam"), "edup.ini").write_bytes(b"[user]\nsteam-mirror=1\n")
+        Path(mirror_of(g, "steam"), "edvr.ini").write_bytes(b"[user]\nsteam-mirror=1\n")
         code, text = run(args_for(g, "--scope", "vr", tag="mirsteam"))
         check(code == 0 and Path(g, "edup.ini").read_bytes() == b"[user]\nsteam-mirror=1\n",
               "a Steam path did not restore from the -steam mirror folder: %r" % text)
         # A copy kept only under another store's folder is the installer's to restore: no default over it, and the
         # install says so; --dry-run and --verify-only write nothing.
         g = game("mirror-e")
-        Path(mirror_of(g, "epic"), "edup.ini").write_bytes(b"[user]\nepic-mirror=1\n")
+        Path(mirror_of(g, "epic"), "edvr.ini").write_bytes(b"[user]\nepic-mirror=1\n")
         before = tree(g)
         code, text = run(args_for(g, "--scope", "both", "--dry-run", tag="mire"))
         check(code == 0 and tree(g) == before and "no default is written" in text and "ed-up-launcher.exe" in text,
@@ -2885,6 +2941,24 @@ def _scope_self_test():
         check(code == 0 and not Path(g, "edup.ini").exists() and not Path(g, "edup-flat.ini").exists()
               and "ed-up-launcher.exe" in text,
               "a default was written over another store's mirror copy, or the install did not say why not: %r" % text)
+        # A live per-user file (%LOCALAPPDATA%\EDUP\<leaf>-<store>\edup.ini, what the runtime reads first) is the
+        # settings: nothing is restored beside the game and no default is written there to outrank anything.
+        g = game("mirror-live")
+        live = os.path.join(local_app_data, "EDUP", os.path.basename(g) + "-folder-you-chose")
+        os.makedirs(live, exist_ok=True)
+        Path(live, "edup.ini").write_bytes(b"[user]\nlive=1\n")
+        Path(live, "edup-flat.ini").write_bytes(b"[user]\nlive-flat=1\n")
+        code, text = run(args_for(g, "--scope", "both", tag="mirlive"))
+        check(code == 0 and not Path(g, "edup.ini").exists() and not Path(g, "edup-flat.ini").exists()
+              and "default  " not in text and "restore  " not in text
+              and Path(live, "edup.ini").read_bytes() == b"[user]\nlive=1\n",
+              "a live per-user settings file was shadowed by a default or restore beside the game: %r" % text)
+        # A tuned legacy edvr.ini beside the game is the settings too: no edup.ini default is written over it.
+        g = game("legacy-beside")
+        Path(g, "edvr.ini").write_bytes(b"[user]\nlegacy=1\n")
+        code, text = run(args_for(g, "--scope", "vr", tag="legbeside"))
+        check(code == 0 and not Path(g, "edup.ini").exists() and Path(g, "edvr.ini").read_bytes() == b"[user]\nlegacy=1\n",
+              "a default edup.ini was written beside a tuned legacy edvr.ini, which it would outrank: %r" % text)
         # No LOCALAPPDATA (a Linux host): there is no mirror, and the default is written as before.
         os.environ.pop("LOCALAPPDATA")
         try:

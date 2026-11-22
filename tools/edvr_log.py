@@ -461,19 +461,25 @@ def log_dirs_for(game_dir, tag):
         native_dirs.append(primary)
     if os.path.isdir(legacy_dir):
         native_dirs.append(legacy_dir)
-    legacy = log_dir_for(game_dir)
     if tag == "openxr":
         return native_dirs
+    # The graphics log follows log.dir when the ini sets one; otherwise both folders beside the game are searched, so a
+    # flight from before the edvr_logs -> edup_logs rename is still found (the caller sorts the logs newest first).
+    configured = config_log_dir(game_dir)
+    if configured:
+        graphics = [configured if os.path.isabs(configured) else os.path.join(game_dir, configured)]
+    else:
+        graphics = [d for d in (primary, legacy_dir) if os.path.isdir(d)] or [primary]
     if tag == "all":
-        out = [legacy]
-        seen = {os.path.normcase(os.path.abspath(legacy))}
+        out = list(graphics)
+        seen = {os.path.normcase(os.path.abspath(d)) for d in out}
         for d in native_dirs:
             k = os.path.normcase(os.path.abspath(d))
             if k not in seen:
                 seen.add(k)
                 out.append(d)
         return out
-    return [legacy]
+    return graphics
 
 
 def find_logs(directory, tag=None):
@@ -26462,6 +26468,21 @@ def self_test():
             print("native and redirected legacy discovery did not remain independent")
             ok = False
         os.remove(os.path.join(game, "edvr.ini"))
+
+        # After the edvr_logs -> edup_logs rename both folders sit beside the game: the graphics logs of both are
+        # searched (newest first across them), so last week's flight in edvr_logs is still found.
+        renamed = os.path.join(game, "edup_logs")
+        os.makedirs(renamed)
+        with open(os.path.join(renamed, "edvr_gfx_20260911_070000.log"), "wb") as f:
+            f.write(b"[00:00:00.001] version 0.14.1-93-gf78eba4 (build 68C0A1F2)\n")
+        if log_dirs_for(game, "gfx") != [renamed, logs]:
+            print("graphics discovery did not search both edup_logs and edvr_logs: %r" % log_dirs_for(game, "gfx"))
+            ok = False
+        if main(["--target", game, "--list"]) != 0:
+            print("--list over edup_logs and edvr_logs failed")
+            ok = False
+        os.remove(os.path.join(renamed, "edvr_gfx_20260911_070000.log"))
+        os.rmdir(renamed)
 
         # Native discovery remains beside the executable even if legacy logs
         # are redirected by log.dir, and --all combines both directories.

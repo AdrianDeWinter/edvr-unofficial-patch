@@ -34,7 +34,7 @@ On Windows the launcher lists each copy. Pick the one you want. On Linux, when b
 
 ## Where do my settings live?
 
-Beside the game, in `edup.ini` and `edup-flat.ini`, and in a spare copy under `%LOCALAPPDATA%\EDUP` on Windows. On Linux the spare copy is inside the Proton prefix. Press F8 to change them while you play. [Settings](Settings.md).
+In `edup.ini` and `edup-flat.ini` under `%LOCALAPPDATA%\EDUP`, one copy for each Windows user. On Linux that folder is inside the Proton prefix. Settings from an older version stay beside the game as `edvr.ini` and `edvr-flat.ini` and are read until your first save. Press F8 to change them while you play. [Settings](Settings.md).
 
 ## The launcher remembered my Frontier password. Where is it?
 

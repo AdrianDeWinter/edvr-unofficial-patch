@@ -221,7 +221,7 @@ std::wstring mirrorRootOfApp() {
 #ifdef EDUP_LAUNCHER
     return launcherMirrorRoot(g.args);
 #else
-    return defaultMirrorRoot();
+    return userDataRootOf(g.args.userDataRoot);
 #endif
 }
 

@@ -17,7 +17,7 @@ This section is for a Steam copy. That includes Flatpak Steam, when Steam's file
 ./ed-up-launcher.sh
 ```
 
-Run it as your normal user, without sudo. The launcher window opens on your Odyssey folder. Install, Update, Repair and Uninstall are buttons in that window. The launcher installs from a release it has downloaded: press **Download** when it says an update is available.
+Run it as your normal user, without sudo. The launcher window opens on your Odyssey folder. Install, Update, Repair and Uninstall are buttons in that window. The launcher installs from a release it has downloaded: press **Download & install** when it says an update is available.
 
 To see what would run first:
 

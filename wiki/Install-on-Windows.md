@@ -41,7 +41,7 @@ You can change this later with Update. A change of choice leaves your settings f
 
 Read the list of files, then confirm. The launcher copies anything it replaces into `edup_backup`, then writes the patch.
 
-Your choices live in `edup.ini` (headset) and `edup-flat.ini` (monitor) next to the game. A later install keeps those files unless you ask it to replace them. A spare copy is kept under `%LOCALAPPDATA%\EDUP`, so a game update that wipes the game folder can be put back.
+Your choices live in `edup.ini` (headset) and `edup-flat.ini` (monitor) under `%LOCALAPPDATA%\EDUP`, in a folder named after the game folder and its store, one copy for each Windows user. Because they are outside the game folder, a game update cannot wipe them. A later install keeps those files unless you ask it to replace them. Settings from an older version, `edvr.ini` and `edvr-flat.ini` beside the game, are copied there and left where they were.
 
 ## Start Elite
 

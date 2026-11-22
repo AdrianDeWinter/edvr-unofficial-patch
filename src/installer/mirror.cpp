@@ -205,6 +205,32 @@ std::wstring defaultMirrorRoot() {
     return base.empty() ? std::wstring() : joinPath(base, L"EDUP");
 }
 
+bool acceptableUserDataRoot(const std::wstring& root) {
+    std::wstring trimmed = root;
+    while (!trimmed.empty() && (trimmed.back() == L'\\' || trimmed.back() == L'/')) trimmed.pop_back();
+    for (wchar_t& c : trimmed)
+        if (c == L'/') c = L'\\';
+    // An absolute drive path: X:\...
+    if (trimmed.size() < 4 || trimmed[1] != L':' || trimmed[2] != L'\\' || !iswalpha(trimmed[0])) return false;
+    if (trimmed.find(L"\\..") != std::wstring::npos || trimmed.find(L"\\.\\") != std::wstring::npos) return false;
+    static const wchar_t kTail[] = L"\\AppData\\Local\\EDUP";
+    const size_t tailLen = sizeof(kTail) / sizeof(kTail[0]) - 1;
+    if (trimmed.size() <= tailLen + 2 || _wcsicmp(trimmed.c_str() + trimmed.size() - tailLen, kTail) != 0) return false;
+    // No existing component may be a junction or symbolic link.
+    for (size_t at = trimmed.find(L'\\', 3); ; at = trimmed.find(L'\\', at + 1)) {
+        const std::wstring prefix = at == std::wstring::npos ? trimmed : trimmed.substr(0, at);
+        const DWORD attributes = GetFileAttributesW(prefix.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+        if (at == std::wstring::npos) break;
+    }
+    return true;
+}
+
+std::wstring userDataRootOf(const std::wstring& asked) {
+    if (!asked.empty() && acceptableUserDataRoot(asked)) return asked;
+    return defaultMirrorRoot();
+}
+
 std::wstring legacyMirrorRootFor(const std::wstring& root) {
     std::wstring trimmed = root;
     while (!trimmed.empty() && (trimmed.back() == L'\\' || trimmed.back() == L'/')) trimmed.pop_back();

@@ -1598,6 +1598,24 @@ bool menuIniWritePairs(const std::vector<std::pair<std::string, std::string>>& p
     // the file for a moment), so config.cpp's size check never meets half a save
     // and a reload that lands between two writes cannot fail the second.
     std::wstring why;
+    // Copy on write: settings read from the game folder (an install not migrated yet, another Windows user's first save,
+    // a game folder under Program Files) are saved to this user's own %LOCALAPPDATA%\EDUP\<install> copy, and the
+    // process reads that copy from then on. The game folder's file is left for other users and older versions.
+    if (!mdir.empty() && !pathInMirror) {
+        const std::wstring userPath = mdir + L"\\" + (isFlatIniName(fileName.c_str()) ? kIniNameFlatW : kIniNameVrW);
+        std::wstring userWhy;
+        if (writeFileAtomic(userPath, updated, &userWhy)) {
+            Config::get().adoptSettingsPath(userPath);
+            Log::get().note("menu: settings saved to %s, this user's own copy; the game folder's %s is left as it was.",
+                            utf8Of(userPath).c_str(), utf8Of(leaf).c_str());
+            return true;
+        }
+        if (!g_mirrorFailNoted) {
+            g_mirrorFailNoted = true;
+            Log::get().note("menu: this user's settings copy %s could not be written (%s); saving to %s instead.",
+                            utf8Of(userPath).c_str(), utf8Of(userWhy).c_str(), utf8Of(path).c_str());
+        }
+    }
     if (!writeFileAtomic(path, updated, &why)) {
         *err = fileName + ": " + utf8Of(why);
         return false;

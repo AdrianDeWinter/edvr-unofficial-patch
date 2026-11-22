@@ -343,7 +343,14 @@ ApplyResult applyPlan(const Plan& plan, const PayloadProvider& payload) {
                 if (!dirExists(step.from)) break;
                 DWORD dirErr = ERROR_SUCCESS;
                 if (!removeDirectoryTree(step.from, &dirErr)) {
-                    fail(step.from, dirErr != ERROR_SUCCESS ? dirErr : GetLastError());
+                    const DWORD code = dirErr != ERROR_SUCCESS ? dirErr : GetLastError();
+                    if (step.bestEffort) {
+                        // A purge folder: everything that can roll back has already run, so say what is left and go on.
+                        result.done.push_back("could not remove all of " + toUtf8(step.from) + "\\ (" + errorText(code) +
+                                              "); delete what is left by hand");
+                    } else {
+                        fail(step.from, code);
+                    }
                 } else {
                     result.done.push_back("removed " + toUtf8(leafOf(step.from)) + "\\");
                 }

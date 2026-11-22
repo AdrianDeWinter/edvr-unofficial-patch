@@ -201,8 +201,8 @@ static const TestTableRow kTestTable[] = {
     {"runtime", TargetRoot::Openvr, "openvr_api.dll", kProfileVr, false, ExistingMode::Runtime},
     {"openxr_loader", TargetRoot::Openvr, "openxr_loader.dll", kProfileVr, false, ExistingMode::Replace},
     {"openxr_license", TargetRoot::Openvr, "OPENXR-LOADER-LICENSE.txt", kProfileVr, false, ExistingMode::Replace},
-    {"settings_vr", TargetRoot::Game, "edup.ini", kProfileVr, false, ExistingMode::Settings},
-    {"settings_flat", TargetRoot::Game, "edup-flat.ini", kProfileFlat, false, ExistingMode::Settings},
+    {"settings_vr", TargetRoot::Game, "edvr.ini", kProfileVr, false, ExistingMode::Settings},
+    {"settings_flat", TargetRoot::Game, "edvr-flat.ini", kProfileFlat, false, ExistingMode::Settings},
     {"dittosr_license", TargetRoot::Game, "DITTOSR-LICENSE.txt", kProfileAll, false, ExistingMode::Owned},
     {"dittosr_gsr_license", TargetRoot::Game, "DITTOSR-GSR-LICENSE.txt", kProfileAll, false, ExistingMode::Owned},
     {"dlss", TargetRoot::Game, "nvngx_dlss.dll", 0, true, ExistingMode::Owned},
@@ -7945,7 +7945,7 @@ int wmain(int argc, wchar_t** argv) {
               "surveyTarget picks up legacy game-dir edvr-flat.ini");
         check(!migSurvey.legacyIniPaths.empty() && !migSurvey.legacyFlatIniPaths.empty() &&
               !migSurvey.legacyDescriptorPath.empty() && !migSurvey.legacyNativeConfigPath.empty(),
-              "surveyTarget marks legacy edvr files for safe backup and removal");
+              "surveyTarget finds the legacy edvr files it copies from");
 
         PayloadInfo migPayload = testPayload(shippedVrIni);
         tsetText(migPayload, "settings_flat", shippedFlatIni);
@@ -7970,21 +7970,42 @@ int wmain(int argc, wchar_t** argv) {
         check(iniValue(migratedFlat, "fix.temporal_aa") == "xess" &&
               iniValue(migratedFlat, "fix.ui_quality") == "100",
               "migrated per-user edup-flat.ini preserves user edits and adopts new defaults");
-        check(!fileExists(joinPath(gameDir, L"edvr.ini")) &&
-              !fileExists(joinPath(gameDir, L"edvr-flat.ini")) &&
+        // The game folder's files are copied, never removed: an older DLL or runtime (a release installed with --payload
+        // or from the cache) reads only those names, and other Windows users read them until they save their own copy.
+        check(readAll(joinPath(gameDir, L"edvr.ini")) == userVrIni &&
+              readAll(joinPath(gameDir, L"edvr-flat.ini")) == userFlatIni &&
               !fileExists(joinPath(gameDir, L"edup.ini")) &&
               !fileExists(joinPath(gameDir, L"edup-flat.ini")),
-              "neither legacy edvr*.ini nor new edup*.ini remains in the game directory");
-        check(fileExists(joinPath(migPlan.backupDir, L"edvr.ini")) &&
-              fileExists(joinPath(migPlan.backupDir, L"edvr-flat.ini")),
-              "legacy edvr.ini and edvr-flat.ini were backed up into edup_backup before removal");
+              "the legacy edvr.ini and edvr-flat.ini stay in the game directory, untouched, and no edup*.ini is written there");
         check(fileExists(joinPath(gameDir, L"edup_profile.ini")) &&
-              !fileExists(joinPath(gameDir, L"edvr_profile.ini")) &&
+              readAll(joinPath(gameDir, L"edvr_profile.ini")) == readAll(joinPath(gameDir, L"edup_profile.ini")) &&
               fileExists(joinPath(openvr, L"edup_openxr.ini")) &&
-              !fileExists(joinPath(openvr, L"edvr_openxr.ini")) &&
+              fileExists(joinPath(openvr, L"edvr_openxr.ini")) &&
               fileExists(statePath(gameDir)) &&
-              !dirExists(legacyStateDirPath(gameDir)),
-              "profile descriptor, OpenXR config and install record migrated from edvr_* to edup_*");
+              dirExists(legacyStateDirPath(gameDir)),
+              "edup_* descriptor, OpenXR config and record are written; the legacy edvr_profile.ini is kept in step, "
+              "edvr_openxr.ini and edvr_install\\ are left for older versions");
+
+        {   // A game-folder edvr.ini edited after the live file (an older DLL kept saving there) wins at the next install,
+            // and the live file it replaces is backed up first.
+            const std::string newerGameIni = std::string(userVrIni) + "\r\n[fix]\r\nlater_edit = 1\r\n";
+            writeAll(joinPath(gameDir, L"edvr.ini"), newerGameIni);
+            HANDLE h = CreateFileW(joinPath(gameDir, L"edvr.ini").c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, nullptr,
+                                   OPEN_EXISTING, 0, nullptr);
+            if (h != INVALID_HANDLE_VALUE) {
+                FILETIME later{};
+                GetSystemTimeAsFileTime(&later);
+                ULARGE_INTEGER t;
+                t.LowPart = later.dwLowDateTime; t.HighPart = later.dwHighDateTime;
+                t.QuadPart += 10ull * 60ull * 10000000ull;   // ten minutes after now: newer than the live file
+                later.dwLowDateTime = t.LowPart; later.dwHighDateTime = t.HighPart;
+                SetFileTime(h, nullptr, nullptr, &later);
+                CloseHandle(h);
+            }
+            const Survey again = surveyTarget(gi, userSettingsDir);
+            check(again.iniPresent && again.iniFromLegacy && again.iniText == newerGameIni,
+                  "a game-folder edvr.ini newer than the live edup.ini is the one the next install merges");
+        }
 
         // SettingsModel edits the per-user edup.ini directly without writing to gameDir.
         SettingsModel userModel;

@@ -84,7 +84,9 @@ _VR, _FLAT, _EITHER, _NVIDIA = {"profile": ["vr"]}, {"profile": ["flat"]}, {"pro
 #   d3d11.dll        every profile; a foreign DLL at the target is chained to
 #   openvr_api.dll   VR profiles only (flat keeps the game's own runtime); the game's original is kept
 #   openxr_loader / licence   VR profiles only, replaced
-#   edup.ini / edup-flat.ini  merged into the settings already there; each for its own profile
+#   edup.ini / edup-flat.ini  merged into the settings already there; each for its own profile. The manifest
+#                    targets stay game edvr.ini / edvr-flat.ini: launchers v0.22.0-v0.22.3 refuse a settings file
+#                    with any other target, and the current launcher places settings by profile, not by target.
 #   nvngx_dlss.dll   only where the survey found an NVIDIA adapter; a foreign copy is left alone
 #   libxess.dll and its two notices   every install; foreign copies are left alone
 #   libxess_fg.dll, libxell.dll   flat profiles only (XeSS Frame Generation and Xe Low Latency); as libxess.dll
@@ -94,8 +96,8 @@ FILES = (
     PackagedFile("openxr_loader", "openvr/openxr_loader.dll", "core", "openvr", "openxr_loader.dll", _VR, "replace"),
     PackagedFile("openxr_license", "openvr/OPENXR-LOADER-LICENSE.txt", "core", "openvr",
                  "OPENXR-LOADER-LICENSE.txt", _VR, "replace"),
-    PackagedFile("settings_vr", "edup.ini", "core", "game", "edup.ini", _VR, "settings"),
-    PackagedFile("settings_flat", "edup-flat.ini", "core", "game", "edup-flat.ini", _FLAT, "settings"),
+    PackagedFile("settings_vr", "edup.ini", "core", "game", "edvr.ini", _VR, "settings"),
+    PackagedFile("settings_flat", "edup-flat.ini", "core", "game", "edvr-flat.ini", _FLAT, "settings"),
     # DittoSR is inside d3d11.dll, so these notices are manifest files, not extra
     # zip members: the launcher installs a manifest file and would otherwise
     # copy the DLL without them.
@@ -1091,6 +1093,18 @@ def self_test():
             by_id = {entry["id"]: entry for entry in parsed["files"]}
             assert by_id["graphics"]["existing"] == "chain" and by_id["graphics"]["when"] == {"profile": ["vr", "flat"]}
             assert by_id["runtime"]["target"] == {"root": "openvr", "path": "openvr_api.dll"}
+            # Launchers v0.22.0-v0.22.3 (install_manifest.cpp targetProblem / checkFiles) refuse a settings
+            # file that does not target game edvr.ini (vr) or edvr-flat.ini (flat), which would refuse the
+            # whole update. The member names inside the zip may change; these targets may not.
+            assert by_id["settings_vr"]["target"] == {"root": "game", "path": "edvr.ini"}
+            assert by_id["settings_flat"]["target"] == {"root": "game", "path": "edvr-flat.ini"}
+            assert by_id["settings_vr"]["when"] == {"profile": ["vr"]} and by_id["settings_flat"]["when"] == {"profile": ["flat"]}
+            legacy_reserved = ("edvr_install/", "edvr_backup/")
+            legacy_written = {"edvr_profile.ini", "edvr_openxr.ini", "openvr_api_orig.dll"}
+            for entry in parsed["files"]:
+                folded = entry["target"]["path"].lower()
+                assert not folded.startswith(legacy_reserved) and folded not in legacy_written, entry
+                assert not folded.endswith(".base"), entry
             assert by_id["dlss"]["when"] == {"adapter": "nvidia"} and "when" not in by_id["xess"]
             # The schema-1 bridge for launcher 0.1.0: valid under that release's rules, it sends that
             # launcher to this release's, and it lists the same bytes the schema-2 manifest does.

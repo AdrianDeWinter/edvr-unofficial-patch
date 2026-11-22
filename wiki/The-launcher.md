@@ -4,7 +4,7 @@ The launcher installs ED-UP, keeps it up to date, and has a Play button. You can
 
 ## What it talks to
 
-It asks GitHub whether a newer release exists, and it downloads a release only after you press Download. Each request carries the launcher's name and version. A release is offered only when its signature matches a public key built into the launcher. A changed or substituted release is refused. If GitHub cannot be reached, the launcher says so in one line and carries on.
+It asks GitHub whether a newer release exists, and it downloads a release only after you press Download & install. Each request carries the launcher's name and version. A release is offered only when its signature matches a public key built into the launcher. A changed or substituted release is refused. If GitHub cannot be reached, the launcher says so in one line and carries on.
 
 With direct launch turned on, described below, it also signs in to Frontier at `api.zaonce.net`. That is the whole list.
 

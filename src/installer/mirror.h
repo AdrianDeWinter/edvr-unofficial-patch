@@ -29,6 +29,11 @@ namespace edvr::installer {
 // edit or an install must never fail because its safety net could not be
 // found.
 std::wstring defaultMirrorRoot();
+// The data root an elevated copy uses for the user's settings: `asked` (--user-data-root, from the unelevated parent) when it
+// names a folder <drive>:\...\AppData\Local\EDUP with no link along the path, else this process's own defaultMirrorRoot().
+// The check keeps a crafted argument from pointing the elevated writes anywhere else.
+std::wstring userDataRootOf(const std::wstring& asked);
+bool acceptableUserDataRoot(const std::wstring& root);
 
 // Legacy %LOCALAPPDATA%\EDVR root corresponding to `root` (when `root` ends in EDUP), else empty.
 std::wstring legacyMirrorRootFor(const std::wstring& root);

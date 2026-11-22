@@ -326,23 +326,15 @@ bool SettingsModel::set(size_t index, const std::string& value) {
     MergeReport report;
     const std::string updated = mergeIni(source, source, &source, {{dotted, value}}, &report);
 
-    // If the file is read-only, clear read-only for the atomic replace and reapply it afterward.
+    // A read-only settings file is somebody's decision (writeFileAtomic's rule, iniedit.h): it is refused, never unlocked.
     const DWORD origAttrs = GetFileAttributesW(m_iniPath.c_str());
-    const bool wasReadOnly =
-        origAttrs != INVALID_FILE_ATTRIBUTES && (origAttrs & FILE_ATTRIBUTE_READONLY) != 0;
-    if (wasReadOnly && !SetFileAttributesW(m_iniPath.c_str(), origAttrs & ~FILE_ATTRIBUTE_READONLY)) {
-        m_error = "Could not clear read-only on " + toUtf8(m_iniPath) +
-                  ". Check permissions or clear read-only on that file.";
+    if (origAttrs != INVALID_FILE_ATTRIBUTES && (origAttrs & FILE_ATTRIBUTE_READONLY) != 0) {
+        m_error = toUtf8(m_iniPath) + " is read-only, so the change was not saved. Clear read-only on that file to edit it here.";
         return false;
     }
 
     std::wstring why;
     const bool wrote = writeFileAtomic(m_iniPath, updated, &why);
-    if (wasReadOnly) {
-        const DWORD postAttrs = GetFileAttributesW(m_iniPath.c_str());
-        if (postAttrs != INVALID_FILE_ATTRIBUTES)
-            SetFileAttributesW(m_iniPath.c_str(), postAttrs | FILE_ATTRIBUTE_READONLY);
-    }
     if (!wrote) {
         m_error = "Could not write " + toUtf8(m_iniPath) + ": " + toUtf8(why) +
                   (inSeparateUserDir

@@ -557,6 +557,15 @@ bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std:
 
     if (backupDir.empty() || !createDirectories(backupDir))
         return fail("Could not create the launcher backup folder for Settings.xml; nothing was changed.");
+    // A read-only Settings.xml is a decision the player made (to stop Elite resetting their graphics): it is never
+    // unlocked behind their back, the rule writeFileAtomic keeps for every file (iniedit.h). Nothing is backed up or
+    // changed; the message says what to do.
+    {
+        const DWORD attrs = GetFileAttributesW(settingsXmlPath.c_str());
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY) != 0)
+            return fail("Elite's Settings.xml is read-only, so its 3D mode was not changed. Clear read-only on " +
+                        narrowUtf8(settingsXmlPath) + ", or set the 3D mode in Elite's own options.");
+    }
     const std::wstring originalBackup = joinPath(backupDir, L"Settings.xml.ed-up-original");
     if (!fileExists(originalBackup)) {
         if (!CopyFileW(settingsXmlPath.c_str(), originalBackup.c_str(), TRUE) && !fileExists(originalBackup))
@@ -567,19 +576,8 @@ bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std:
     if (!CopyFileW(settingsXmlPath.c_str(), backupPath.c_str(), FALSE))
         return fail("Could not back up Settings.xml before changing it; nothing was changed.");
 
-    const DWORD origAttrs = GetFileAttributesW(settingsXmlPath.c_str());
-    const bool wasReadOnly =
-        origAttrs != INVALID_FILE_ATTRIBUTES && (origAttrs & FILE_ATTRIBUTE_READONLY) != 0;
-    if (wasReadOnly && !SetFileAttributesW(settingsXmlPath.c_str(), origAttrs & ~FILE_ATTRIBUTE_READONLY)) {
-        return fail("Elite's Settings.xml is read-only and could not be unlocked. Check permissions or clear "
-                    "read-only on: " + narrowUtf8(settingsXmlPath));
-    }
+    const bool wasReadOnly = false;   // refused above
     const bool wrote = writeFileAtomic(settingsXmlPath, updated);
-    if (wasReadOnly) {
-        const DWORD postAttrs = GetFileAttributesW(settingsXmlPath.c_str());
-        if (postAttrs != INVALID_FILE_ATTRIBUTES)
-            SetFileAttributesW(settingsXmlPath.c_str(), postAttrs | FILE_ATTRIBUTE_READONLY);
-    }
     if (!wrote) {
         return fail("Could not write Elite's Settings.xml at " + narrowUtf8(settingsXmlPath) +
                     ". Check that the file is writable.");

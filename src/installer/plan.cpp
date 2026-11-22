@@ -741,6 +741,26 @@ Survey surveyTarget(const GameInstall& game, const std::wstring& settingsDir) {
         if (fileExists(gameLegacyPath)) pushUniquePath(legacyPaths, gameLegacyPath);
 
         if (fileExists(livePath)) {
+            // A game-folder copy written after the live file wins: an older DLL, or a launcher that has not
+            // moved the settings yet, keeps editing the game folder's file, and those edits are the newest.
+            // The live file is backed up before it is overwritten (manageSettings).
+            if (separateSettingsDir) {
+                FILETIME liveTime{};
+                if (fileWriteTime(livePath, &liveTime)) {
+                    std::vector<std::wstring> newer;
+                    for (const std::wstring& gamePath : {gameNewPath, gameLegacyPath}) {
+                        FILETIME ft{};
+                        if (fileWriteTime(gamePath, &ft) && CompareFileTime(&ft, &liveTime) > 0) newer.push_back(gamePath);
+                    }
+                    const std::wstring chosen = newestLegacyCandidate(newer);
+                    if (!chosen.empty()) {
+                        *present = true;
+                        *text = readTextFile(chosen);
+                        *fromLegacy = true;
+                        return;
+                    }
+                }
+            }
             *present = true;
             *text = readTextFile(livePath);
             *fromLegacy = false;
@@ -1427,16 +1447,8 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             }
             writeText(config, destination, "selects the Windows OpenXR runtime"); changed = true;
         }
-        if (migratingLegacyCfg) {
-            if (s.nativeConfig.path != s.legacyNativeConfigPath)
-                backup(s.legacyNativeConfigPath, "the legacy OpenXR startup configuration");
-            Step delLegacy;
-            delLegacy.action = Action::Delete;
-            delLegacy.from = s.legacyNativeConfigPath;
-            delLegacy.why = "removes legacy edvr_openxr.ini after migrating to edup_openxr.ini";
-            body.push_back(delLegacy);
-            changed = true;
-        }
+        // A legacy edvr_openxr.ini is kept, not deleted: an older runtime (a release installed with --payload or from the cache)
+        // reads only that name.
     } else {
         // Flat owns no VR runtime. What a VR install left in Openvr\win64 is retired only by its proofs: the runtime when it is EDVR's
         // build (proved above), and each OpenXR file by its hash or its content, whether or not this folder's record lists it.
@@ -1526,13 +1538,11 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         writeText(descriptor, descriptorPath, "declares the installed ED-UP scope");
         changed = true;
     }
-    if (migratingLegacyDesc) {
+    // A legacy edvr_profile.ini is kept and kept in step, not deleted: an older DLL (a release installed with --payload or from
+    // the cache) reads only that name, and a stale scope there would start the wrong profile.
+    if (migratingLegacyDesc && readTextFile(s.legacyDescriptorPath) != descriptor) {
         backup(s.legacyDescriptorPath, "the legacy edvr_profile.ini descriptor");
-        Step delLegacy;
-        delLegacy.action = Action::Delete;
-        delLegacy.from = s.legacyDescriptorPath;
-        delLegacy.why = "removes legacy edvr_profile.ini after migrating to edup_profile.ini";
-        body.push_back(delLegacy);
+        writeText(descriptor, s.legacyDescriptorPath, "keeps the legacy edvr_profile.ini on the installed ED-UP scope");
         changed = true;
     }
 
@@ -1593,21 +1603,17 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     if (setShared) vrForced.emplace_back(kChainKey, sharedSet);
     if (setFlat) flatForced.emplace_back(kChainKey, "");
 
+    // The game folder's settings files are copied into the live file, never deleted: an older DLL (a release
+    // installed with --payload or from the cache, or this one before its first save) reads only the game
+    // folder, and other Windows users on this install read it until they first save their own copy.
     auto retireLegacySettings = [&](const std::vector<std::wstring>& legacyPaths,
                                     const std::wstring& liveIniPath,
                                     const std::string& iniName) {
         for (const std::wstring& legacyPath : legacyPaths) {
             if (_wcsicmp(legacyPath.c_str(), liveIniPath.c_str()) == 0) continue;
-            backup(legacyPath, "your legacy " + say(leafOf(legacyPath)) + ", before migrating to " + iniName);
-            Step del;
-            del.action = Action::Delete;
-            del.from = legacyPath;
-            del.expectSha = sha256File(legacyPath);
-            del.why = "removes legacy " + say(leafOf(legacyPath)) + " after migrating to " + iniName;
-            body.push_back(del);
-            changed = true;
-            plan.notes.push_back("Migrating " + say(leafOf(legacyPath)) + " from the game folder to " +
-                                 iniName + " in your user folder (a backup copy is kept in edup_backup\\).");
+            plan.notes.push_back("Your settings are copied to " + iniName + " in your user folder. The game folder's " +
+                                 say(leafOf(legacyPath)) + " is kept for other Windows users and older versions.");
+            break;   // one note: the game folder's files are all kept
         }
     };
 
@@ -1642,14 +1648,14 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             plan.notes.push_back("Writing " + iniName + " (every setting at its default).");
         } else if (!o.keepSettings) {
             merged = mergeIni(payloadText, std::string(), nullptr, useForced, &plan.merge);
-            if (!fromLegacy) backup(iniPath, "your " + iniName + ", before it is replaced");
+            if (fileExists(iniPath)) backup(iniPath, "your " + iniName + ", before it is replaced");
             plan.notes.push_back(
                 "Replacing " + iniName + " with the shipped defaults. Your old file is in the "
                 "backup folder.");
         } else {
             merged = mergeIni(payloadText, ownText, base, useForced, &plan.merge, iniName.c_str());
             if (merged != ownText) {
-                if (!fromLegacy) backup(iniPath, "your " + iniName + ", before it is updated");
+                if (fileExists(iniPath)) backup(iniPath, "your " + iniName + ", before it is updated");
 
                 char line[256];
                 sprintf_s(
@@ -1672,7 +1678,7 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         } else if (legacyPaths.empty()) {
             plan.notes.push_back(iniName + " already says what it should -- left alone.");
         }
-        retireLegacySettings(legacyPaths, iniPath, iniName);
+        if (fromLegacy) retireLegacySettings(legacyPaths, iniPath, iniName);
         (isFlat ? flatSha : vrSha) = sha256Bytes(merged.data(), merged.size());
         recordFile(file, isFlat ? flatSha : vrSha);
     };
@@ -1696,12 +1702,12 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                    "[advanced]\r\nreal_dll = " + sharedSet + "\r\n";
         }
         if (text != s.iniText || s.iniFromLegacy) {
-            if (s.iniPresent && !s.iniFromLegacy) backup(sharedPath, "your edup.ini, before the chain is written to it");
+            if (fileExists(sharedPath)) backup(sharedPath, "your edup.ini, before the chain is written to it");
             writeText(text, sharedPath, "writes advanced.real_dll to edup.ini");
             changed = true;
             plan.notes.push_back(std::string(s.iniPresent ? "Updating" : "Creating") +
                                  " edup.ini: advanced.real_dll = " + sharedSet + ", the one place both profiles read it from.");
-            retireLegacySettings(s.legacyIniPaths, sharedPath, "edup.ini");
+            if (s.iniFromLegacy) retireLegacySettings(s.legacyIniPaths, sharedPath, "edup.ini");
         }
     }
     // The record's settings digest is the VR file's when the scope has one (the file the older records named), else the flat file's.
@@ -1788,14 +1794,8 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         rec.to = statePath(s.game.dir);
         rec.why = "records what was installed";
         plan.steps.push_back(rec);
-
-        if (dirExists(legacyStateDirPath(s.game.dir))) {
-            Step rmLegacyState;
-            rmLegacyState.action = Action::RemoveDir;
-            rmLegacyState.from = legacyStateDirPath(s.game.dir);
-            rmLegacyState.why = "removes legacy edvr_install\\ after migrating to edup_install\\";
-            plan.steps.push_back(rmLegacyState);
-        }
+        // A legacy edvr_install\ is left in place: removing it is the one step here with no undo, and an older launcher or
+        // installer still reads its record from there. A clean purge removes it.
     }
 
     plan.nextState = next;
@@ -1850,12 +1850,14 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         body.push_back(st);
         wantBackupDir = true;
     };
+    std::vector<Step> purgeDirs;   // a clean purge's folder removals: after every other step, best effort (Step::bestEffort)
     auto removeDir = [&](const std::wstring& path, const std::string& why) {
         Step st;
         st.action = Action::RemoveDir;
         st.from = path;
         st.why = why;
-        body.push_back(st);
+        st.bestEffort = true;
+        purgeDirs.push_back(st);
         changed = true;
     };
     auto remove = [&](const std::wstring& path, const std::string& why,
@@ -2134,11 +2136,13 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             plan.steps.push_back(mk);
         }
         plan.steps.insert(plan.steps.end(), body.begin(), body.end());
+        // Last: every file step above has run (and can still roll back) before a folder holding the snapshots goes.
+        plan.steps.insert(plan.steps.end(), purgeDirs.begin(), purgeDirs.end());
         if (o.purge) {
             plan.notes.push_back(
-                "Clean purge: logs in edup_logs\\, edup_install\\, the user settings folder, and "
-                "everything in edup_backup\\ (including any saved copies of other mods' files "
-                "or earlier edup.ini files) will be removed permanently.");
+                "Clean purge: logs in edup_logs\\ and edvr_logs\\, edup_install\\, the user settings folder, and "
+                "everything in edup_backup\\ and edvr_backup\\ (including any saved copies of other mods' files "
+                "or earlier settings files) will be removed permanently.");
         } else {
             plan.notes.push_back(
                 "Logs in edup_logs\\ and the backups in edup_backup\\ are left where they are; delete "

@@ -40,6 +40,7 @@ struct AppArgs {
     // define EDUP_LAUNCHER, so it neither has these fields nor accepts these flags.
     std::wstring payloadDir;       // --payload <dir>: install from an unpacked ed-up-<ver>.zip
     std::wstring dataRoot;         // --data-root <dir>: every launcher folder under here, nothing registered
+    std::wstring userDataRoot;     // --user-data-root <dir>: the unelevated user's %LOCALAPPDATA%\EDUP, passed to the elevated copy
     std::wstring planFile;         // --apply-plan <file>: the elevated copy's whole job
     std::string  channel;          // --channel stable|rc, for this run
     bool         checkUpdate = false;  // --check-update

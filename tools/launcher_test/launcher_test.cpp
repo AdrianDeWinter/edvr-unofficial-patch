@@ -6109,9 +6109,9 @@ void testSettingsXmlLaunchMode() {
               "inserted <StereoscopicMode> parses back as 3");
     }
 
-    // Flat leaves <= 1 (0 Off and 1 Anaglyph) untouched; rewrites >= 2 to 0; read-only flag is
-    // temporarily cleared for the write and restored afterward, and snapshot rollback restores the
-    // previous file and read-only attribute.
+    // Flat leaves <= 1 (0 Off and 1 Anaglyph) untouched; rewrites >= 2 to 0; a read-only Settings.xml is the player's
+    // decision and is refused, not unlocked: the file, its attribute and the backups stay as they were. Snapshot rollback
+    // restores the previous file after a failed launch.
     {
         const std::string mode1 = kPrefix + "1" + kSuffix;
         writeAll(xmlPath, mode1);
@@ -6125,18 +6125,21 @@ void testSettingsXmlLaunchMode() {
         writeAll(xmlPath, mode4);
         SetFileAttributesW(xmlPath.c_str(), FILE_ATTRIBUTE_READONLY);
         snap = SettingsXmlSnapshot();
+        err.clear();
+        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, false, edvr::VrHeadsetMode::NotSet, &err, L"", &snap) &&
+                  !snap.modified && readAll(xmlPath) == mode4 && contains(err, "read-only"),
+              "flat launch refuses to change a read-only Settings.xml and says why: " + err);
+        const DWORD afterRefuseAttrs = GetFileAttributesW(xmlPath.c_str());
+        check(afterRefuseAttrs != INVALID_FILE_ATTRIBUTES && (afterRefuseAttrs & FILE_ATTRIBUTE_READONLY) != 0,
+              "the refused Settings.xml keeps its read-only attribute");
+        SetFileAttributesW(xmlPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+
+        snap = SettingsXmlSnapshot();
         check(prepareSettingsXmlForLaunch(xmlPath, backupDir, false, edvr::VrHeadsetMode::NotSet, &err, L"", &snap) &&
-                  snap.modified && snap.wasReadOnly && readAll(xmlPath) == kPrefix + "0" + kSuffix,
-              "flat launch updates read-only Settings.xml from 4 to 0: " + err);
-        const DWORD afterWriteAttrs = GetFileAttributesW(xmlPath.c_str());
-        check(afterWriteAttrs != INVALID_FILE_ATTRIBUTES && (afterWriteAttrs & FILE_ATTRIBUTE_READONLY) != 0,
-              "read-only attribute is reapplied after Settings.xml write");
+                  snap.modified && readAll(xmlPath) == kPrefix + "0" + kSuffix,
+              "flat launch updates a writable Settings.xml from 4 to 0: " + err);
         check(restoreSettingsXmlFromSnapshot(snap, &err) && readAll(xmlPath) == mode4,
               "snapshot restore puts back mode 4 after failed launch: " + err);
-        const DWORD afterRestoreAttrs = GetFileAttributesW(xmlPath.c_str());
-        check(afterRestoreAttrs != INVALID_FILE_ATTRIBUTES && (afterRestoreAttrs & FILE_ATTRIBUTE_READONLY) != 0,
-              "read-only attribute is preserved after Settings.xml snapshot restore");
-        SetFileAttributesW(xmlPath.c_str(), FILE_ATTRIBUTE_NORMAL);
     }
 
     // Parse failure (truncated closing tag) writes nothing, even with a preferred VR mode.

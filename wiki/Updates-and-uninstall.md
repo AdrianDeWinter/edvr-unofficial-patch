@@ -14,7 +14,7 @@ Starting the game from Epic does not put the patch back after a verify. Repair d
 
 ## Updating ED-UP
 
-The [launcher](The-launcher.md) offers a newer release when one exists, and downloads it when you press Download. The release signature has to match the key inside the launcher.
+The [launcher](The-launcher.md) offers a newer release when one exists, and downloads it when you press Download & install. The release signature has to match the key inside the launcher.
 
 An update keeps settings you have changed. A file you edited is kept when a later release no longer ships that file. DLSS and XeSS files stay when a release does not carry them.
 

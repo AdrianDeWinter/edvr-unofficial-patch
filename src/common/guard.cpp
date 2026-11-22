@@ -273,6 +273,16 @@ void FaultBudget::charge() {
 Sentinel::Sentinel(const wchar_t* dir, const wchar_t* name) {
     _snwprintf_s(m_path, _TRUNCATE, L"%s\\%s.armed", dir, name);
     m_tripped = GetFileAttributesW(m_path) != INVALID_FILE_ATTRIBUTES;
+    // A session from before the edvr_logs -> edup_logs rename armed its sentinel in edvr_logs; it counts too, once.
+    const size_t dirLen = wcslen(dir);
+    static const wchar_t kNew[] = L"edup_logs";
+    const size_t newLen = sizeof(kNew) / sizeof(kNew[0]) - 1;
+    if (dirLen >= newLen && _wcsicmp(dir + dirLen - newLen, kNew) == 0 &&
+        (dirLen == newLen || dir[dirLen - newLen - 1] == L'\\' || dir[dirLen - newLen - 1] == L'/')) {
+        _snwprintf_s(m_legacyPath, _TRUNCATE, L"%.*s%s\\%s.armed", static_cast<int>(dirLen - newLen), dir, L"edvr_logs", name);
+        if (GetFileAttributesW(m_legacyPath) != INVALID_FILE_ATTRIBUTES) m_tripped = true;
+        else m_legacyPath[0] = L'\0';
+    }
 }
 
 bool Sentinel::arm() {
@@ -325,6 +335,10 @@ void Sentinel::clearTrip() {
     // Deleting it on the refusing launch keeps the protection -- a hook that
     // really does crash still gets thrown out every other launch, and says so
     // -- while costing a false trip one session instead of all of them.
+    if (m_legacyPath[0]) {
+        DeleteFileW(m_legacyPath);   // the pre-rename sentinel costs one session too; it is never armed again
+        m_legacyPath[0] = L'\0';
+    }
     if (!DeleteFileW(m_path) && GetFileAttributesW(m_path) != INVALID_FILE_ATTRIBUTES) {
         // Still there. Left unsaid, this is a permanent lockout wearing a
         // one-session message: the file cannot be removed (read-only, or held by
