@@ -394,7 +394,7 @@ LOD-scale and LOD-distance forms exact for those rows. v1/v2 still read.
 
 **What the second flight showed** (parked at Cranfield, the Leg C pose;
 six of eight items MET, one not evidenced, one optional and not run):
-1. MET: `edvr_log.py --expect-build HEAD` exit 0; the configure line
+1. MET: `edup_log.py --expect-build HEAD` exit 0; the configure line
    with both hooks `hooked`; `frame work = caller work per cycle
    (runtime timing v5` at 02:04:41.
 2. MET: ~680 records/frame from 02:07:08 on (>= 200 on nearly every
@@ -636,7 +636,7 @@ test.
 
 Parked at Cranfield (the Leg C pose), `fix.settlement_detail = auto`,
 observe 0, k_max 4 (the game's s 1.5 at the slider's floor):
-1. `edvr_log.py --expect-build HEAD` exits 0; the configure line says
+1. `edup_log.py --expect-build HEAD` exits 0; the configure line says
    `acts by scaling the game's LOD scale right after the engine sets it
    each frame (FUN_142819D90)`, with the setter and part test `hooked`
    and the plane test `matched`. A setter `STOOD DOWN` means no acting:
@@ -993,7 +993,7 @@ frame, caller work 12.90 -> 12.90 ms)`.
 
 Parked at Cranfield, the ini as shipped (auto, k_max 6, observe 0), the
 in-game detail slider at its default (s 1.0); then close to the buildings:
-1. `edvr_log.py --expect-build HEAD` exits 0; the configure line reads
+1. `edup_log.py --expect-build HEAD` exits 0; the configure line reads
    `on (auto: acts by ...) -- k in [1, 6.00], auto's policy on the next
    line`, every hook `hooked`/`matched`, and the two policy lines follow.
 2. Step lines naming the slots and whose: `up 0.25` while a quarter of a

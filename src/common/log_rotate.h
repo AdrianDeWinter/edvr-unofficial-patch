@@ -10,7 +10,7 @@
 //   tail      T = M - H - K   split in 4 segments of S = T/4, named <head>.tail-001.log ..., the oldest deleted as a fifth opens
 //
 // so the head (with K), plus 4 segments, is at most M. The head says where it ends and where the log goes on, each segment says which
-// it is and what was deleted before it, and tools\edvr_log.py reads the three as one session.
+// it is and what was deleted before it, and tools\edup_log.py reads the three as one session.
 #pragma once
 
 #include <cstddef>

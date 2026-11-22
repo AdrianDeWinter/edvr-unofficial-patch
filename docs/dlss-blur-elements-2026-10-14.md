@@ -56,7 +56,7 @@
 - **Confound:** AA off may not render the same pixels as DLSS. Check the AA-off render size before reading "worse than AA off" as a bug.
 - **Flight plan:** section "Flight plan" below. Set `fix.particle_billboard = stock` first.
 - **Next flight:** one session, five elements, two presses each (still, then head moving), the railing across a pad raise and lower. Read
-  the log with `python tools\edvr_log.py --target steam --expect-build HEAD`, then grep `blend probe`.
+  the log with `python tools\edup_log.py --target steam --expect-build HEAD`, then grep `blend probe`.
 - **Ruled out:** the 2026-09-29 pad-into-layer rule as wired in 9122f31e (docs/openxr-performance-review-2026-09-14.md:1660); reactive
   bias or sharpening as a fix (docs/hologram-depth-2026-09-24.md "Ruled out"). Do not propose them again.
 
@@ -151,7 +151,7 @@ arrived (a menu, no VR), none was a candidate, or none reached the window.
 4. Element 2: press during the pad's raise and again during its lower, with the railing at the centre of the view.
 5. The `temporal_aa_debug = motion_source` view of the railing cannot be taken on this build (see Status). The grid's `p` and `e` columns
    are its replacement.
-6. After the flight: `python tools\edvr_log.py --target steam --expect-build HEAD --version`, then read the `blend probe` lines.
+6. After the flight: `python tools\edup_log.py --target steam --expect-build HEAD --version`, then read the `blend probe` lines.
 
 ## Reading the output
 
@@ -369,7 +369,7 @@ accepted that later over-blends no longer dim the beams). The matched difference
 taken as 0, as the HUD route does. A failure of the weapons layer stands down the weapons alone (`sharp weapons: stands down`); the missing tonemap
 consumer stands down the shared re-issue, HUD and weapons both.
 
-**Flight (Frontier VR, DLSS K).** Read the log with `python tools\edvr_log.py --target frontier --expect-build HEAD`, then grep `sharp weapons`. Fire
+**Flight (Frontier VR, DLSS K).** Read the log with `python tools\edup_log.py --target frontier --expect-build HEAD`, then grep `sharp weapons`. Fire
 beams and multicannon over space, a planet and near a star, head still then moving; hit a shield; an eye dump during a burst for W3. Pass: the 30 s
 line at 2 or more a frame while firing with 0 left in the scene, no trails, beams cut by hulls and never over the cockpit, the beam over a planet or
 star as bright as stock (A/B: `advanced.sharp_weapons_blend = plain` is brighter there), the dump's tonemap input without the beams. Repeat with
@@ -499,7 +499,7 @@ stall) and the covered samples per pair go in the 30 s line. The answer tells wh
   snapshot watch, the ini row with no `# ui:` line); the debug layer reports nothing.
 
 **Not verified until a flight:** R1's gain is INFERRED as 1 from 100257 and is checked live; the real refraction offsets, the idle release in a
-long session and the instrument's counts have never run in the game. Read the log with `python tools\edvr_log.py --target steam --expect-build HEAD`,
+long session and the instrument's counts have never run in the game. Read the log with `python tools\edup_log.py --target steam --expect-build HEAD`,
 then grep `shield ripple`. Compare `sharp` against `stock` and `none` on the same strike.
 
 ## Flat port, 2026-10-16: `fix.sharp_weapons` in the flat edition (`claude/flat-sharp-weapons`, built on `claude/shield-ripple` and `claude/flat-debug-menu`, NOT FLOWN)

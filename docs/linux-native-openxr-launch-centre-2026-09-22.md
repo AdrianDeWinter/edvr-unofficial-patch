@@ -44,7 +44,7 @@
 ## Log evidence (2026-09-22)
 
 Bundle `edvr-logs-20260922-122318.zip`, three launches in one session.
-Full grep-only reading via `tools\edvr_log.py --dir`; no whole-file
+Full grep-only reading via `tools\edup_log.py --dir`; no whole-file
 reads of the 1528-line breadcrumbs file.
 
 - Launch 1 (11:10:08 local): `module_startup,graphics_unavailable=

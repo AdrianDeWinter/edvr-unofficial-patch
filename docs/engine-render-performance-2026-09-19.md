@@ -869,7 +869,7 @@ EyeDrawSnapshot in pass A so the two unknown hashes get named via
 tools/dxbc_disasm.py.
 
 **Tool gap (recorded, not yet built):** the per-vh tally needed read-only
-python one-liners because tools/edvr_log.py has no aggregation mode; a
+python one-liners because tools/edup_log.py has no aggregation mode; a
 `--tally <field>` mode would close it. Also noted: census truncation makes
 frame 0 samples copy-flooded — tally frames 1+ in future analyses.
 
@@ -1394,7 +1394,7 @@ With EDVR installed, this rig at this settlement is pacer-limited (88-89
 fps), not pipeline-bound. This closes the occlusion-culling arc at Phase A
 by its own gate - the cheapest possible kill, which is the design working.
 
-**Capture defect (recorded as a tool gap):** edvr_cpu.wprp's 512x1 MiB
+**Capture defect (recorded as a tool gap):** edup_cpu.wprp's 512x1 MiB
 buffer set is a ~13.7 s ring at the measured 37.8 MB/s - the designed clean
 parked leg was overwritten before the 300 s stop; the decoded window is
 post-pose-4 (stable 401-frame sub-window analyzed, 88 fps). The walk-vs-emit
@@ -1505,7 +1505,7 @@ already in the log plus a distance reading and the per-frame record/draw
 counts.
 
 **A valid Phase A needs:** (1) file-mode WPR (the EDVRCPU file profile
-exists in edvr_cpu.wprp; cpu_profile.py asserts memory mode - a tool
+exists in edup_cpu.wprp; cpu_profile.py asserts memory mode - a tool
 change), the cockpit leg FIRST and the capture stopped before any eye run;
 (2) no capture instruments armed during the leg (a second leg with them on
 measures their cost); (3) the analyzer emitting WaitReturnUs /
@@ -1683,7 +1683,7 @@ nothing about a radius.
 **The flight (one session, one ini, two legs, two captures):**
 environment to state in the entry: build HEAD built with
 EDVR_PROFILE_SYMBOLS=1 (so EDVR's own frames resolve; `python
-tools\edvr_log.py --target frontier --expect-build HEAD --version`),
+tools\edup_log.py --target frontier --expect-build HEAD --version`),
 Pimax Crystal Super on Pimax OpenXR with the log's openxr_resolution
 line, DLSS state, Pimax smart smoothing OFF (a half-rate throttle fills
 the regions with waiting; the analyzer separates it, a clean leg is
@@ -2789,7 +2789,7 @@ the post-submit phase and reads 8.5 ms in a 22 ms cycle.
 Parked at the Cranfield settlement, same spot and settings as shadow
 flight 1 (LODDistanceScale 0.001, MaterialQuality 0), 02:04-02:09 local
 (the gfx log is local time, UTC-6; the openxr log is UTC). Build
-v0.17.0-365-gfa6565b (edvr_log.py --expect-build HEAD exit 0). Logs:
+v0.17.0-365-gfa6565b (edup_log.py --expect-build HEAD exit 0). Logs:
 edvr_gfx_20260923_020437.log, edvr_openxr_20260923_020439_013_4144.log,
 Frontier install. fix.settlement_detail = auto (shadow only, never
 acts), advanced.settlement_detail_max unset (compiled default 4.0).
@@ -2911,7 +2911,7 @@ EdvrNativeTimingFrame::callerWorkMs (timing ABI v5), landed by
 
 ### 2026-09-23 -- First acting flight (b55e06b): the governor finds and holds its operating point, 50 -> 71-75 fps at the parked pad, unnoticed from the cockpit
 
-Build v0.17.0-370-gb55e06b (edvr_log.py --expect-build b55e06b exit
+Build v0.17.0-370-gb55e06b (edup_log.py --expect-build b55e06b exit
 0), 03:30-03:35 local (gfx log edvr_gfx_20260923_033053.log; runtime
 log edvr_openxr_20260923_033054_701_6520.log, UTC). Parked at
 Cranfield, same spot and settings as the shadow flights
@@ -3454,7 +3454,7 @@ Flight: Steam, parked in the cockpit at a settlement pad, head still.
 AA on for at least 90 s, then F7 (hotkey.compare_aa, the AA comparison
 key) for AA off for at least 90 s, then F7 again for AA on for at least
 60 s. No other key: every line read here prints on its own 30 s window.
-Read line 5 per window and `draw hook CPU:`, after `edvr_log.py
+Read line 5 per window and `draw hook CPU:`, after `edup_log.py
 --expect-build HEAD`. (`perf baseline F5` is the baseline probe's VR
 draw-hook line, performance.md. That probe, 5d8f6810, is on neither
 this branch nor main, so this build prints no such line.)
@@ -3535,7 +3535,7 @@ clock takes draw 32.
 
 Flight: the same leg on Steam. Park at a settlement pad, head still.
 AA on for at least 90 s, F7 for AA off for at least 90 s, F7 for AA on
-for at least 60 s. Read the three lines per window after `edvr_log.py
+for at least 60 s. Read the three lines per window after `edup_log.py
 --expect-build HEAD`.
 
 What to read:
@@ -3913,7 +3913,7 @@ code.
 Flight: parked at the Cranfield pad, AA on for at least 3 minutes,
 nothing building on the machine. Read the `ui depth memo:` line (hit
 rate, verified hits, mismatches), the step lines (v:ui-depth) and
-ui_depth's own window counts, after `edvr_log.py --expect-build HEAD`.
+ui_depth's own window counts, after `edup_log.py --expect-build HEAD`.
 
 **Memo flown (2026-10-27, Steam log `edvr_gfx_20261027_122848.log`,
 build 1fc4deb2; same rig).**
@@ -4872,7 +4872,7 @@ neighbours at matched draw counts.
 
 Flown 2026-10-28 05:17-05:25 on Steam, parked at the Cranfield pad, AA
 on (temporal AA line: full-frame NGX, 4032x4034). Build e261adc6
-(`edvr_log.py --expect-build HEAD` matches), log
+(`edup_log.py --expect-build HEAD` matches), log
 `edvr_gfx_20261028_051715.log`. No build ran: no build output in any
 checkout was written between 05:17 and 05:26.
 

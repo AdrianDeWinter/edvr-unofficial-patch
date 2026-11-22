@@ -280,12 +280,12 @@ green, every gate including the new `hud_parity` self-test.
     the centre terms (m02/m12), which are all the jitter moves.
   - The tonemap VS already varies in the wild: EDHM flies vs
     `642017A6FEDAE0E8` with the same PS (edhm-black-cockpit-2026-09-15.md).
-- **Flight checklist (Steam):** install (`python tools\install_edvr.py
+- **Flight checklist (Steam):** install (`python tools\install_edup.py
   --target steam`), set `advanced.hud_census = on`, `fix.ui_quality` off,
   HMD Quality 0.75 with DLSS. Cockpit in space (2 min), then a station
   with a target locked (2 min), one bright scene and one dark (G-E); press
   the eye-dump hotkey once with panels on screen (G-F). After:
-  `python tools\edvr_log.py --target steam --expect-build HEAD`, then
+  `python tools\edup_log.py --target steam --expect-build HEAD`, then
   `--grep "hud layer census:"`, and `python tools\hud_parity.py <ledger
   dir> --verbose`.
 
@@ -294,7 +294,7 @@ green, every gate including the new `hud_parity` self-test.
 Short flight (~2 min: menu, cockpit, the FSS scanner mid-flight, a
 HUD-present stretch of ~270 frames at 2600x2514 = HMD Quality 0.75, DLSS
 on, EDHM installed and active). Build stamp verified by
-`edvr_log.py --expect-build HEAD` before any counter was read. 9,596
+`edup_log.py --expect-build HEAD` before any counter was read. 9,596
 `hud layer census:` lines harvested; the per-gate verdicts:
 
 - **G-A SETTLED.** Holo: 22.0 draws/frame (11/eye), the lit HDR target
@@ -535,7 +535,7 @@ it (decision 5 stands).
   0.75 with DLSS, cockpit with the panels up (a station with a target
   locked for the busy scene). The panels should read as sharp as at 1.0,
   with no brightness step against pass-off (the G-F budget) and no halo
-  (accepted). After: `python tools\edvr_log.py --target steam
+  (accepted). After: `python tools\edup_log.py --target steam
   --expect-build HEAD`, then the "crisp hud" and "ui quality" lines:
   taken 22-24/frame, re-issues 2.00/frame, declines none, the HDR layer's
   size/memory, the route GPU times. Validate the jitter cancel visually

@@ -15,7 +15,7 @@
   Invalidation); the withdrawals are counted by reason in `native_pose_cache_invalidations`; the cache's lock covers only copies, never a
   sort or an allocation; tests per route in `tools\openxr_native_test\pose_cache_invalidation_cases.h`.
 - **Open.** (1) Flight on Pimax or SteamVR: hangar, `on` against `off`. (2) The original's in-wait `next` slot is early by k periods
-  after a skipped frame (measured by `target_delta`, accepted in the 10-11 flight). (3) `edvr_log.py` does not parse the two cache
+  after a skipped frame (measured by `target_delta`, accepted in the 10-11 flight). (3) `edup_log.py` does not parse the two cache
   lines; read them with `--grep native_pose_cache`.
 - **Ruled out.** A torn record in `PoseCache` (2026-10-15): every field of the record is written and read under `mutex_`, there is no unlocked
   read of `rec_`; the one `openxr_native_test` failure ("a reader on another thread never sees a record half-written") was the test's
@@ -81,7 +81,7 @@ others, only while the key is on.
 
 ## Flight checklist
 
-On a Pimax or SteamVR headset, hangar. Confirm the build first: `python tools\edvr_log.py --target steam --expect-build HEAD --version`.
+On a Pimax or SteamVR headset, hangar. Confirm the build first: `python tools\edup_log.py --target steam --expect-build HEAD --version`.
 
 1. `pose_cache=on`: `native_owner_invoke` for `locateHead` and `pollEvent` should read `per_frame` near 0; `native_pose_cache` shows hits
    at 8-9 a frame, angle p95 under 0.3 deg, age 2-8 ms.

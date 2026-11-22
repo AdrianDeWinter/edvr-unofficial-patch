@@ -6,7 +6,7 @@
 // for what no rig can run because it needs the game: that with the key off every entry point returns before touching
 // anything, that the detour's observe branch ends the call ahead of every write, and that the only store observe mode makes
 // is the return slot. Each pin is counted against the same text with the needle removed, so the scan is known to be able to
-// fail. A last group holds the log lines the DLL writes to the lines tools\edvr_log.py's --camera-census fixture carries.
+// fail. A last group holds the log lines the DLL writes to the lines tools\edup_log.py's --camera-census fixture carries.
 //
 // --self-test runs everything and prints "vr camera census: PASS" only when every check holds.
 // --print-lines prints the golden lines (what the reader's fixture holds). --dry-run runs nothing.
@@ -1159,7 +1159,7 @@ void testEpisodeSession() {
 // ---------------------------------------------------------------------------
 struct Golden { const char* name; std::string text; };
 
-// The lines tools\edvr_log.py's --camera-census fixture carries are built here from fixed inputs, so a drift of either
+// The lines tools\edup_log.py's --camera-census fixture carries are built here from fixed inputs, so a drift of either
 // side breaks a build: this rig pins the exact text, and the next group finds each line in the reader's own source.
 std::vector<Golden> goldenLines() {
     std::vector<Golden> out;
@@ -2153,7 +2153,7 @@ void testSourcePins(const std::string& injectCpp) {
 
 // ---------------------------------------------------------------------------
 // The reader's fixture: a synthetic flight log written by the very formatters the DLL compiles, from cameras built by the
-// derive model, so the rows the eye draws read back are the rows a camera's call composed. tools\edvr_log.py's
+// derive model, so the rows the eye draws read back are the rows a camera's call composed. tools\edup_log.py's
 // --camera-census self-test reads tools\camera_census_fixture.log; this rig holds that file to exactly what the formatters
 // write (--print-fixture regenerates it), so a drift of either the writer or the reader breaks a build.
 //
@@ -2190,7 +2190,7 @@ std::string fixtureLog() {
         ms += 37;
     };
     char line[kVrCensusLineBytes + 1];
-    put("version 0.18.0-rc.4-31-g0a1b2c3d (build 68C0A1F2) -- synthetic fixture for edvr_log.py --camera-census");
+    put("version 0.18.0-rc.4-31-g0a1b2c3d (build 68C0A1F2) -- synthetic fixture for edup_log.py --camera-census");
     put("vr camera census: on (advanced.vr_camera_census); the census itself never writes a camera (the route's injection, when it runs, is its own); owner thread 4321; "
         "5 s lines: 36 windows, then one per 12; cameras first 64, call sequences first 3 and eye draws first 4 on-foot frames "
         "(tone drawn, journal read=yes says on foot; while the route jitters, only a non-zero phase); line budget 724");
@@ -2646,7 +2646,7 @@ void testReaderFixture() {
     const bool same = sameWithinRounding(normalised, built, &why);
     if (!same) std::printf("  note  %s\n", why.c_str());
     check(same,
-          "the reader's fixture file is what the DLL's formatters write for the scripted session, to the last digits of its numbers (python tools\\edvr_log.py --camera-census reads it; regenerate with --print-fixture)");
+          "the reader's fixture file is what the DLL's formatters write for the scripted session, to the last digits of its numbers (python tools\\edup_log.py --camera-census reads it; regenerate with --print-fixture)");
     check(sameWithinRounding("a 1.0000001 b 0x1F", "a 1.0000002 b 0x1F", nullptr) && !sameWithinRounding("a 1.0001 b", "a 1.0002 b", nullptr) &&
           !sameWithinRounding("a 1 b 0x1F", "a 1 b 0x1E", nullptr) && !sameWithinRounding("a 1 b", "a 1 c", nullptr) && !sameWithinRounding("a 1", "a 1 ", nullptr) &&
           sameWithinRounding("x=-0 y=1e-09", "x=0 y=3e-09", nullptr),

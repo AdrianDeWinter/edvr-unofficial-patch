@@ -37,7 +37,7 @@ Native Scene Init opens an adjacent `edvr_openxr_YYYYMMDD_HHMMSS_mmm_PID.log`
 using UTC. It includes the build version, configuration source, runtime/device
 identity, first menu captures for each eye, pose failures, frame/menu totals,
 GPU teardown stages and callback retirement. Existing stdout diagnostics remain
-available to desktop fixtures. `tools/edvr_log.py --file <path>` recognizes the
+available to desktop fixtures. `tools/edup_log.py --file <path>` recognizes the
 native build record.
 
 ## Verification
@@ -72,7 +72,7 @@ started. The first manual result is recorded below.
 ## Manual Frontier flight
 
 Use the Frontier installation directly under the user's authorization. Install
-and verify the native and graphics DLLs together with `tools/install_edvr.py
+and verify the native and graphics DLLs together with `tools/install_edup.py
 --native-openxr --dll --no-backup --native-loader <absolute-loader>
 --native-runtime <absolute-manifest> --target frontier`. This writes only the
 paired DLLs and `Openvr/win64/edvr_openxr.ini`; the live game INI and original

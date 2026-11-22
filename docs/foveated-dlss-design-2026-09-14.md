@@ -653,7 +653,7 @@ temporal aa price: full-frame ngx, 400x304, 8 stereo pairs (window closed), ms p
 temporal aa price: foveated ngx, 400x304, 6 stereo pairs (window closed), ms per pair median/p95: prep 0.02/0.03 reduce 0.01/0.02 periphery 0.43/22.76 centre 0.41/3.00 full 0.00/0.00 compose 0.01/0.02 ui 0.00/0.00 other 0.00/0.00 dropped 0 unmeasured pairs, 0 lone eyes, 0 no-slot frames, 0 region leases
 ```
 
-Installed into the Frontier directory with `install_edvr.py --target
+Installed into the Frontier directory with `install_edup.py --target
 frontier` and verified with `--verify-only`. Sean flew it the same
 evening: log `edvr_gfx_20260915_195200.log`, 19:52:00 to 19:56:01,
 version line `v0.17.0-rc.2-5-g749a4e9 (build 6AA9F0B0)`, and
@@ -1099,7 +1099,7 @@ the supersample retirement. Two things the flight should be read with:
   reads worse than A's, this gap is the first suspect, before the crop.
 Build v0.17.0-rc.3-64-gc4c1490 (green, smoke PASSED including the region
 self-test), rebuilt clean-stamped on the 1947c90 commit and installed
-into FRONTIER with tools/install_edvr.py (dry run, install, verify) as
+into FRONTIER with tools/install_edup.py (dry run, install, verify) as
 v0.17.0-rc.3-65-g1947c90, read with `--expect-build 1947c90`. On Sean's
 ask the Frontier ini was then edited (Edit tool, diffed against a
 snapshot, CRLF kept, four hunks): [fix] temporal_aa fsr -> dlss (the FSR

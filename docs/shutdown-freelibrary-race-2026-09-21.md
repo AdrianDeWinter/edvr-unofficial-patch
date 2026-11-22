@@ -39,7 +39,7 @@
   writes `edvr-crash-dump-<time>.zip` (Elite's `Temp\...\CrashDumps` minidump
   and any Windows Error Reporting one, within 3 minutes of the session's end,
   deflated through tar.exe, kept out of the log zip). Read the breadcrumbs with
-  `python tools\edvr_log.py --file <breadcrumbs> --grep "crash: (fault-page|ledger|cell)"`.
+  `python tools\edup_log.py --file <breadcrumbs> --grep "crash: (fault-page|ledger|cell)"`.
   A dump's unloaded-module list can independently identify an old image, when present.
 - **Next, new reporter:** request the normal Save logs archive from this
   same session: `edvr_breadcrumbs.txt` (`crash: fault-page`, `crash: ledger`,
@@ -50,7 +50,7 @@
 - **Earlier reporter's planned flight:** install the instrumented build,
   capture Save logs and dump at normal exit, then control EDHM and overlay
   separately. That reporter crashed every session.
-- **Environment:** build v0.17.0 in both logged flights (`edvr_log.py
+- **Environment:** build v0.17.0 in both logged flights (`edup_log.py
   --expect-build v0.17.0` matched); "separate device" mode (the default for
   every normal install); flight 2 on VirtualDesktopXR / Meta Quest 3.
 - **Detail:** the original Status narrative, verbatim, is under Status
@@ -140,10 +140,10 @@ flight already ruled out), to see which component the race needs.
 ## First flight
 
 `edvr-logs-20260921-142342.zip`, supplied by the user, read with
-`tools\edvr_log.py`.
+`tools\edup_log.py`.
 
 - Build confirmed: v0.17.0 (build 6AAC7CA4, linked 2026-09-17 23:49:56 UTC).
-  `edvr_log.py --expect-build v0.17.0` matched on both the gfx and the
+  `edup_log.py --expect-build v0.17.0` matched on both the gfx and the
   openxr log -- exit 0, current public release, not a stale DLL.
 - Chain, from `edvr_install_state.ini`: `chain_target = d3d11_edhm.dll`,
   `chain_mod = EDHM`. The user runs EDHM chained under EDVR.
@@ -430,7 +430,7 @@ design.
   unmapped memory 31 ms later, both times.
 - The Steam overlay as a bystander: turning it off (EDHM still chained)
   stopped the crash. It is a required part of the chain, not incidental.
-- A stale build: `edvr_log.py --expect-build v0.17.0` matched on both logs,
+- A stale build: `edup_log.py --expect-build v0.17.0` matched on both logs,
   both flights.
 - A fixed 31 ms gap after the shutdown returns (the Status "Open" bullet's
   cadence idea): the 2026-10-13 bundle (v0.19.1 build 6ACAF769, the
@@ -536,7 +536,7 @@ analysis above and worth its own look before trusting the fix.
   true. The `pinned=` log line itself is not checked by any rig.
 - A repro flight from this reporter (or anyone reproducing today) with the
   fix installed, confirming the crash is gone AND the new diagnostic line
-  fired, read with `edvr_log.py --expect-build` against the exact commit
+  fired, read with `edup_log.py --expect-build` against the exact commit
   first.
 - Consider, separately and not blocking this fix, the still-open EDHM-alone
   question -- if the mechanism is confirmed process-wide rather than

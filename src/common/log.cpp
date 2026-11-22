@@ -285,7 +285,7 @@ bool Log::open(const std::wstring& dir, const wchar_t* tag) {
     // other's CREATE_ALWAYS. The second arrival takes a name with the
     // millisecond and its pid appended, the form the native trace has always
     // used (native_trace.h), which every reader of these names accepts
-    // (tools\edvr_log.py, the installer's log bundle).
+    // (tools\edup_log.py, the installer's log bundle).
     SYSTEMTIME st;
     GetLocalTime(&st);
     wchar_t path[MAX_PATH];

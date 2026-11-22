@@ -658,7 +658,7 @@ class SegmentWriter {
     Stats stats_;
 };
 
-// ---- the window line (the log's one line a window; tools\edvr_log.py --health reads it) -----------------------------------------------------------------------------------------
+// ---- the window line (the log's one line a window; tools\edup_log.py --health reads it) -----------------------------------------------------------------------------------------
 struct WindowFacts {
     uint32_t seconds = 0;
     bool running = false;          // the writer has a segment open

@@ -270,7 +270,7 @@ and recenter work, and exit is normal. The graphics log must show `native=1
 profile=1 profile_failure=0 installed=1` and a refused Elite probe; the native
 log must then identify successful initialization and the selected OpenXR
 runtime. `rejected=0` does not prove the bypass worked. Check these through
-`tools/edvr_log.py --target frontier --expect-build 663b49d`; the archived DLL
+`tools/edup_log.py --target frontier --expect-build 663b49d`; the archived DLL
 hashes distinguish this build from another dirty build at the same commit.
 
 Then cover Quest/VDXR, Pimax/PiOpenXR and SteamVR OpenXR as available,

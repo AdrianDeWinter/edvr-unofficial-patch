@@ -16,9 +16,9 @@ probe setting was found; confirm the resulting mode in the flight log.
 Build from the final clean commit, then install and verify both proxies:
 
 ```powershell
-python tools/install_edvr.py --target frontier --dll --openvr --dry-run
-python tools/install_edvr.py --target frontier --dll --openvr
-python tools/install_edvr.py --target frontier --dll --openvr --verify-only
+python tools/install_edup.py --target frontier --dll --openvr --dry-run
+python tools/install_edup.py --target frontier --dll --openvr
+python tools/install_edup.py --target frontier --dll --openvr --verify-only
 ```
 
 Record that commit as the flight's expected build. Record actual per-eye sizes,
@@ -58,11 +58,11 @@ reading counters. This flight's expected build is `f08098c`, even if branch
 HEAD has advanced since installation:
 
 ```powershell
-python tools/edvr_log.py --target frontier --tag gfx --expect-build f08098c --version
-python tools/edvr_log.py --target frontier --tag vr --expect-build f08098c --version
-python tools/edvr_log.py --target frontier --tag gfx --expect-build f08098c --grep 'context hook|exposure fix installed|vScreen fixes installed|vScreen totals|hook|disabled|sentinel|PROBE|exception'
-python tools/edvr_log.py --target frontier --tag gfx --expect-build f08098c --grep 'census|first Present|shader|shutdown'
-python tools/edvr_log.py --target frontier --tag vr --expect-build f08098c --grep 'census|shutdown'
+python tools/edup_log.py --target frontier --tag gfx --expect-build f08098c --version
+python tools/edup_log.py --target frontier --tag vr --expect-build f08098c --version
+python tools/edup_log.py --target frontier --tag gfx --expect-build f08098c --grep 'context hook|exposure fix installed|vScreen fixes installed|vScreen totals|hook|disabled|sentinel|PROBE|exception'
+python tools/edup_log.py --target frontier --tag gfx --expect-build f08098c --grep 'census|first Present|shader|shutdown'
+python tools/edup_log.py --target frontier --tag vr --expect-build f08098c --grep 'census|shutdown'
 ```
 
 PR #33 passes this configuration's flight gate only when the log confirms live

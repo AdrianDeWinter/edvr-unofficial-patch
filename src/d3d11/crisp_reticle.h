@@ -63,7 +63,7 @@ struct PressLine {
 };
 constexpr size_t kPressLineBytes = 640;
 
-// The tagged lines, built here so the --health rule's fixtures read their format literals (tools\edvr_log.py). The announce is written once a session. The press line is written for every
+// The tagged lines, built here so the --health rule's fixtures read their format literals (tools\edup_log.py). The announce is written once a session. The press line is written for every
 // press of the sights the gate was eligible in: armed ticks 0 beside eligible ticks above 0 says the gate never armed, taken 0 beside armed ticks says the quad never reached the layer.
 inline int formatAnnounce(char* buf, size_t n) {
     return std::snprintf(buf, n,

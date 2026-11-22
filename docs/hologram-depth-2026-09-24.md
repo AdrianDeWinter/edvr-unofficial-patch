@@ -619,7 +619,7 @@ Next flight (Frontier, the log's build line naming this commit): a cockpit
 with holograms in view, both eyes, a minute or more. `resolved eye-frames`
 first: near 0 with `listed draws` above 0 means the ui layer's crisp take
 owns the holograms and the pass did not run (fly with `fix.ui_quality` off).
-Then `python tools\edvr_log.py --target frontier --expect-build HEAD --grep
+Then `python tools\edup_log.py --target frontier --expect-build HEAD --grep
 "near-light"`.
 
 

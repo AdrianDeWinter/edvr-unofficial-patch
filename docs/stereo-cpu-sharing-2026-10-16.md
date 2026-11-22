@@ -180,7 +180,7 @@ irreducible from outside short of item 7.
 
 - Build: the installed Frontier probe DLL `v0.20.0-rc.2-12-g8f50e8ad` (it has
   the F5 per-kind draw counts). Check it first with
-  `python tools\edvr_log.py --target frontier --expect-build 8f50e8ad --version`.
+  `python tools\edup_log.py --target frontier --expect-build 8f50e8ad --version`.
 - On foot in a hangar, standing still, one heading, HUD and DLSS as usual. Run
   four legs of 75 s each: cinema, Explorer Cam (SCROLLLOCK), cinema, Explorer
   Cam. Each leg holds two whole 30 s runtime windows. The log marks the

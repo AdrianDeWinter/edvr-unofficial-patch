@@ -6,7 +6,7 @@ writes the rest to rotating segments beside it, edvr_<tag>_YYYYMMDD_HHMMSS.tail-
 ends, it also carries the first line of each kind written after that and the memory watch's lines, under a marker for the segment each belongs to.
 
 stitch() puts that back in order: the head up to its end marker; then for k = 1..last the segment's own text when the file exists, else one GAP line
-and the lines the head kept from that segment. Every tool that reads a flight log goes through read_log_text() (tools\\edvr_log.py owns the
+and the lines the head kept from that segment. Every tool that reads a flight log goes through read_log_text() (tools\\edup_log.py owns the
 names). The markers are written by Log in src\\common\\log.cpp; their texts are pinned there by tools\\config_test and here by --self-test.
 
     python tools\\log_session.py --self-test
@@ -28,7 +28,7 @@ HEAD_CUT_RE = re.compile(r"^\[edvr\] log head ends here at (?P<head>\d+) KB \(a 
                          r"the log continues in (?P<first>\S+), only the newest 4 tail segments are kept, and what follows below is the "
                          r"first line of each kind written after this point and the memory watch's lines, up to (?P<kept>\d+) KB\.$")
 SEGMENT_TOP_RE = re.compile(r"^\[edvr\] tail segment (?P<n>\d+) of (?P<head>\S+)\.(?: Deleted so far:(?P<deleted>.*)\.)?$")
-GAP_FORMAT = "[edvr_log] GAP: tail segment %d was deleted; the first line of each kind kept from it follows"
+GAP_FORMAT = "[edup_log] GAP: tail segment %d was deleted; the first line of each kind kept from it follows"
 VOLUME_RE = re.compile(r"^\[\d\d:\d\d:\d\d\.\d\d\d\] log volume \(last (?P<n>\d+) (?P<unit>minutes|ms)\): (?P<mb>\d+\.\d\d) MB in (?P<lines>\d+) lines\. "
                        r"Top kinds by size: \"(?P<kind>.*?)\" (?P<kmb>\d+\.\d\d) MB (?P<klines>\d+) lines")
 STAMP_RE = re.compile(r"^\[(\d\d):(\d\d):(\d\d)\.(\d\d\d)\] ")
@@ -243,7 +243,7 @@ def check_dir(directory, head_re, expect_path):
         if files:
             last = info["last"]
             check(tag, sorted(files) == list(range(last - len(files) + 1, last + 1)), "the newest segments are not the ones on disk")
-            check(tag, text.count("[edvr_log] GAP: tail segment ") == len(info["deleted"]), "a GAP line for each deleted segment, once")
+            check(tag, text.count("[edup_log] GAP: tail segment ") == len(info["deleted"]), "a GAP line for each deleted segment, once")
             if last >= TAIL_SEGMENTS + 1:
                 top = SEGMENT_TOP_RE.match(_read(files[last]).splitlines()[0])
                 check(tag, bool(top) and top.group("deleted") is not None, "the newest segment's marker does not list what was deleted")
@@ -345,7 +345,7 @@ def self_test():
     if KEPT_SPENT != ("[edvr] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no longer fit here); later ones "
                       "are only in the tail segments still on disk."):
         fail("the budget-spent marker text changed")
-    if GAP_FORMAT % 2 != "[edvr_log] GAP: tail segment 2 was deleted; the first line of each kind kept from it follows":
+    if GAP_FORMAT % 2 != "[edup_log] GAP: tail segment 2 was deleted; the first line of each kind kept from it follows":
         fail("the GAP line's text changed")
     vol = '[10:05:00.250] log volume (last 5 minutes): 4.62 MB in 31204 lines. Top kinds by size: "DC frame " 2.10 MB 12000 lines; "x " 0.90 MB 400 lines'
     if not VOLUME_RE.match(vol):
@@ -483,8 +483,8 @@ def main(argv=None):
         return 0
     if args.check_dir:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        import edvr_log
-        return 1 if check_dir(args.check_dir, edvr_log.LOG_RE, args.expect or os.path.join(args.check_dir, "rotation.expect")) else 0
+        import edup_log
+        return 1 if check_dir(args.check_dir, edup_log.LOG_RE, args.expect or os.path.join(args.check_dir, "rotation.expect")) else 0
     ap.print_help()
     return 1
 

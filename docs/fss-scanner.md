@@ -1717,7 +1717,7 @@ with the debug layer, through the production ops. The name is not
 (`sync`) and live inis carry it.
 
 Flight plan (Sean's headset, VR, a ringed planet, Frontier install,
-`python tools\edvr_log.py --target frontier --expect-build HEAD --version`
+`python tools\edup_log.py --target frontier --expect-build HEAD --version`
 first):
 
 1. `fss_eye_sync = off`. Zoom onto a ringed planet and watch the reveal.

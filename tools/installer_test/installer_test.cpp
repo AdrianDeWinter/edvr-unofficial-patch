@@ -2300,7 +2300,7 @@ static Survey installedFlatSurvey(const std::wstring& dir, const PayloadInfo& in
 // ---------------------------------------------------------------------------
 // the unified descriptor (schema 2) against the planner
 //
-// install_edvr.py writes `scope = both` with no installer record. The installer
+// install_edup.py writes `scope = both` with no installer record. The installer
 // must take that folder as the VR edition it is: update it, keep its descriptor
 // when it already says that, upgrade a schema-1 or record-less copy in place,
 // and convert it to flat only through the runtime ownership proofs. A modified
@@ -2313,7 +2313,7 @@ static std::string unifiedProblems(const Plan& plan) {
     return out;
 }
 
-// A `both` folder install_edvr.py wrote: EDVR's runtime and graphics in place,
+// A `both` folder install_edup.py wrote: EDVR's runtime and graphics in place,
 // the game's original runtime kept in a backup, its descriptor, and no record.
 static Survey toolBothSurvey(const std::wstring& dir, const PayloadInfo& vr) {
     Survey s = baseSurvey(dir);
@@ -2640,7 +2640,7 @@ static PayloadInfo contentPayload() {
     return p;
 }
 
-// The startup config the planner writes for a folder: the text install_edvr.py and the installer both produce.
+// The startup config the planner writes for a folder: the text install_edup.py and the installer both produce.
 static std::string startupConfigFor(const std::wstring& dir) {
     return "[openxr]\r\nversion=1\r\nloader=" + toUtf8(joinPath(joinPath(dir, L"Openvr\\win64"), L"openxr_loader.dll")) +
            "\r\ngraphics=" + toUtf8(joinPath(dir, L"d3d11.dll")) + "\r\nruntime=system\r\nseparate_device=1\r\n";
@@ -2851,7 +2851,7 @@ static std::string jsonString(const std::wstring& path) {
     return out + "\"";
 }
 
-// A version 2 native receipt as install_edvr.py writes it, with one entry: the loader it placed. The key carries a \u escape.
+// A version 2 native receipt as install_edup.py writes it, with one entry: the loader it placed. The key carries a \u escape.
 static std::string receiptText(const std::wstring& target, const char* state, const std::string& loaderSha) {
     return std::string("{\"version\": 2, \"kind\": \"edvr-native-openxr\", \"target\": ") + jsonString(target) +
            ", \"state\": \"" + state + "\", \"files\": [{\"key\": \"lo\\u0061der\", \"target\": " +
@@ -2876,7 +2876,7 @@ static void testToolReceipts(const std::wstring& scratch) {
               got[0].files[0].installedSha == "now" && got[0].files[0].backup.empty(),
               "the installed native receipt is read, its \\u-escaped key decoded");
     }
-    {   // Of the backup-named siblings the newest stamp wins, then the highest counter, as install_edvr.py picks its current receipt.
+    {   // Of the backup-named siblings the newest stamp wins, then the highest counter, as install_edup.py picks its current receipt.
         const std::wstring dir = fresh(L"siblings");
         writeAll(joinPath(dir, L"edvr_native_receipt.json"), receiptText(dir, "installed", "base"));
         writeAll(joinPath(dir, L"edvr_native_receipt.json.pre-a-20261012-090000.bak"), receiptText(dir, "installed", "older"));
@@ -2969,7 +2969,7 @@ static std::string syntheticPe(const std::vector<std::string>& exports) {
     return img;
 }
 
-// The tool's layout over a stock game, as install_edvr.py leaves it: EDVR's runtime in place, the game's own runtime in the tool's backup
+// The tool's layout over a stock game, as install_edup.py leaves it: EDVR's runtime in place, the game's own runtime in the tool's backup
 // beside it, and the receipt naming both. Each step runs over real files: survey, update, re-survey, then either flat conversion or uninstall.
 static void testToolAdoption(const std::wstring& scratch) {
     printf("\nthe original runtime the tool backed up, over real files\n");
@@ -3079,7 +3079,7 @@ static void testToolAdoption(const std::wstring& scratch) {
         check(planUninstall(s, testOptions(), vr).blocked, "and uninstall is still blocked");
     }
 
-    // Two tool installs, as install_edvr.py leaves them: the first receipt (plain name) backs up the game's runtime, the second (a
+    // Two tool installs, as install_edup.py leaves them: the first receipt (plain name) backs up the game's runtime, the second (a
     // backup-named sibling, the current one) backs up the first EDVR runtime. The stock runtime is in the older receipt's backup only.
     const std::wstring firstBackup = joinPath(openvr, L"openvr_api.dll.pre-first-20261012-101500.bak");
     const std::wstring secondBackup = joinPath(openvr, L"openvr_api.dll.pre-second-20261013-101500.bak");
@@ -8013,6 +8013,27 @@ int wmain(int argc, wchar_t** argv) {
               _wcsicmp(userModel.iniPath().c_str(), joinPath(userSettingsDir, L"edup.ini").c_str()) == 0,
               "SettingsModel targets %LOCALAPPDATA%\\EDUP\\<install>\\edup.ini");
         removeTree(migRoot);
+    }
+
+    {   // Linux (Proton): the per-game settings folder follows Elite's own prefix, where the game's DLL reads it.
+        printf("\nsettings folder under Proton follows Elite's prefix\n");
+        const std::wstring lib = joinPath(scratch, L"proton_root\\steamapps");
+        const std::wstring gameDir = joinPath(lib, L"common\\Elite Dangerous\\Products\\elite-dangerous-odyssey-64");
+        const std::wstring pfxLocal = joinPath(lib, L"compatdata\\359320\\pfx\\drive_c\\users\\steamuser\\AppData\\Local");
+        makeTree(gameDir);
+        check(protonLocalAppDataForGame(gameDir).empty(), "no compatdata prefix yet: no Proton folder is named");
+        makeTree(pfxLocal);
+        check(_wcsicmp(protonLocalAppDataForGame(gameDir).c_str(), pfxLocal.c_str()) == 0,
+              "a game under a Steam library names its compatdata 359320 prefix's AppData\\Local");
+        const std::wstring own = defaultMirrorRoot();
+        check(_wcsicmp(settingsRootForGame(gameDir, own, true).c_str(), joinPath(pfxLocal, L"EDUP").c_str()) == 0,
+              "under Wine the launcher's default root becomes the game prefix's EDUP folder");
+        check(settingsRootForGame(gameDir, own, false) == own, "on Windows the default root is used as it is");
+        const std::wstring chosen = joinPath(scratch, L"chosen_data_root");
+        check(settingsRootForGame(gameDir, chosen, true) == chosen, "a --data-root the caller chose is used as given, even under Wine");
+        check(settingsRootForGame(joinPath(scratch, L"not_steam\\game"), own, true) == own,
+              "a game outside a Steam library keeps the default root");
+        removeTree(joinPath(scratch, L"proton_root"));
     }
 
     printf("\n%s\n", g_fails == 0 ? "installer_test: all good" : "installer_test: FAILURES");

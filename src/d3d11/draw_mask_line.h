@@ -1,6 +1,6 @@
 // The may-want byte's counters and window line (vs_may_want.h; perf_monitor.cpp prints the line every 1800 frames beside "draw hook CPU:"). Counts what
 // the byte skipped, per subscriber, and the draws that went through the full path, so a window of zeros can be told from a build without the byte:
-// the line is written every window. tools\edvr_log.py --perf-windows parses it; its self-test holds the fragments below to this file.
+// the line is written every window. tools\edup_log.py --perf-windows parses it; its self-test holds the fragments below to this file.
 #pragma once
 #include <cstddef>
 #include <cstdint>

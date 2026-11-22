@@ -395,7 +395,7 @@ Current change points:
 - `tools/package_native.py` assumes a native archive. Keep its strict pair
   validation and add equally strict flat validation. Match embedded and loose
   payload hashes for each artifact, including descriptor and notices.
-- Extend `tools/install_edvr.py` with the same explicit profile semantics,
+- Extend `tools/install_edup.py` with the same explicit profile semantics,
   verify-only checks and true no-write dry runs. Installation and verification
   continue to use that sanctioned tool; no ad-hoc file copies.
 
@@ -453,7 +453,7 @@ zero/decline reason distinguishes an unused probe from success.
 | Who owns scaling? | Scene/output extent, spatial-upscale draws, backend accepted sizes and UI target extent |
 | What breaks continuity? | Menu/cockpit/on-foot/map transitions, resize, alt-tab, camera cuts, duplicate/test Present and device changes |
 
-Verify logs with `tools/edvr_log.py --expect-build HEAD` and the actual target.
+Verify logs with `tools/edup_log.py --expect-build HEAD` and the actual target.
 Record hardware, backend versions/sizes and fixed two-view limits. New parsers
 belong in `tools/` with self-tests/build gates.
 
@@ -1467,7 +1467,7 @@ scheduler.
 
 ## 25. Expanded preparation flight, 2026-09-24
 
-Reviewed Epic `edvr_gfx_20260924_130742.log` with `tools/edvr_log.py
+Reviewed Epic `edvr_gfx_20260924_130742.log` with `tools/edup_log.py
 --expect-build ad8b586a`: version `v0.17.0-559-gad8b586a`, build `6AB56497`,
 linked 17:57:43 UTC. This is the installed expanded-recipe build. The user
 reported running it; no visual quality or corona-smear result was supplied.
@@ -1624,7 +1624,7 @@ of this diagnostic.
 
 ## 27. Focused binding flight, 2026-09-24
 
-Verified Epic `edvr_gfx_20260924_161644.log` with `tools/edvr_log.py
+Verified Epic `edvr_gfx_20260924_161644.log` with `tools/edup_log.py
 --expect-build 25a634b2`: version `v0.17.0-561-g25a634b2`, build `6AB57975`,
 linked 19:26:45 UTC. DLSS created successfully at 16:17:16.701, quality preset
 K, 1920x1080 input to 2560x1440 output. This is mono D3D11; headset/runtime are
@@ -3195,7 +3195,7 @@ Read the entire bounded probe output with the sanctioned reader, checking
 the build before interpreting any measurements:
 
 ```text
-python tools\edvr_log.py --target steam --expect-build HEAD --grep "flat origin (witness|optical)|optimized station: the coordinate origin shifted"
+python tools\edup_log.py --target steam --expect-build HEAD --grep "flat origin (witness|optical)|optimized station: the coordinate origin shifted"
 ```
 
 Require matching clocks/stamps, actual record rows and an inward maneuver
@@ -3221,7 +3221,7 @@ for the fixture. Log: `build/rc3-review/f1-origin-instrumentation-full-build.log
 `edvr_gfx_20261016_172537.log` matches the installed clean build
 `v0.20.0-rc.2-97-g3c0516e3` (`6AD2B128`). Flat `/novr`, DLSS, render and
 output both 3840x2160. The file was checked again after analysis: 28,871
-lines, unchanged. All flight evidence was read through `tools/edvr_log.py`.
+lines, unchanged. All flight evidence was read through `tools/edup_log.py`.
 
 | Time / resolver frame | Camera step | Independent evidence |
 |---|---|---|
@@ -3442,7 +3442,7 @@ refused hook produce coverage rather than a false successful measurement.
 Read the bounded summary first, verifying the build with the sanctioned reader:
 
 ```text
-python tools\edvr_log.py --target steam --expect-build HEAD --grep "flat world witness:|flat world witness coverage:|store hook:" --tail 16
+python tools\edup_log.py --target steam --expect-build HEAD --grep "flat world witness:|flat world witness coverage:|store hook:" --tail 16
 ```
 
 Then select one reported frame with `--grep "resolver-frame=N"` to inspect
@@ -3961,13 +3961,13 @@ session. A new game process re-arms the one-shot if a repeat becomes necessary.
 
 Environment: Windows x64/D3D11, Steam flat `/novr`, existing DLSS model M and
 3840x2160 output; no VR runtime/headset is involved. The same shared Steam
-package is updated through `tools/install_edvr.py --scope both`, because this
+package is updated through `tools/install_edup.py --scope both`, because this
 existing installation already contains both profiles; normal flat-only
 preflight correctly refuses a silent conversion. Live `edvr-flat.ini` and
 `edvr.ini` are preserved. The post-commit DLL promotion and installed-file hash
 verification must pass before the capture instructions are handed over.
 
-Next: use `tools/edvr_log.py --target steam --expect-build <capture-commit>`
+Next: use `tools/edup_log.py --target steam --expect-build <capture-commit>`
 first, then read the stationary capture lines and trace the first actual
 non-inherited pose producer with Sol. Stationary identity evidence cannot
 validate a shift that never occurred; producer completion versus emitted
@@ -4108,7 +4108,7 @@ settings, docked and seated at a station/carrier, menus closed to the normal
 cockpit for 30 seconds without input. The one-shot arms automatically; no F10
 or travel is needed. Report Done and leave the game running until the
 build-matched log and added identity rows have been checked. The shared Steam
-package is maintained through `install_edvr.py --scope both`; live
+package is maintained through `install_edup.py --scope both`; live
 `edvr-flat.ini` and `edvr.ini` are preserved.
 
 Validation: the full absolute-path `build.bat --wait-lock` retry passed all
@@ -5003,7 +5003,7 @@ frame resets preserve it. Device/context/work-tier changes invalidate matching
 and release held resources without rearming the budget; frozen receipts survive
 to reporting. Present emits bounded ordinary log chunks before its early exits,
 followed by a final completion marker. The existing sanctioned
-`tools/edvr_log.py --phase-failure` verifies the metadata, record order,
+`tools/edup_log.py --phase-failure` verifies the metadata, record order,
 payload lengths/counts and hashes before reporting a usable pair. Never-called,
 awaiting, cancelled, missing-bootstrap and incomplete output remain
 distinguishable. There is no GPU readback or new config key; the origin probe
@@ -5993,7 +5993,7 @@ chased further.
 
 Sean reported that changing `fix.temporal_aa` from the F8 menu made flat
 temporal AA disengage until restart. Verified Epic `edvr_gfx_20260925_193443.log`
-with `tools/edvr_log.py --expect-build HEAD`: `v0.18.0-rc.2`, build `6AB6DC53`.
+with `tools/edup_log.py --expect-build HEAD`: `v0.18.0-rc.2`, build `6AB6DC53`.
 Menu writes ran 19:35:00-19:35:55 from the main menu (plus further toggles to
 19:36:38); the scene came up at 19:35:15 (frame 32172). From that frame to
 session end, every treated frame was a full reset: `accepted-history-5s=0`,
@@ -7793,7 +7793,7 @@ it stood before that flight: what the rigs pin, not what a headset showed.
   structural refusal; a frame the copy route treats keeps its verdict. (6) The
   four captures are 6.2 MB untrimmed, not 7.1.
 - What the flight must show. Install on the Epic install (its ini kept) and
-  read the log's version line first (`edvr_log.py --expect-build HEAD`). SS
+  read the log's version line first (`edup_log.py --expect-build HEAD`). SS
   1.0 (R = D), DLSS, EDHM chained, game AA off; four legs of a minute or two:
   the hangar and a bright star, each with Bloom 3 and DoF 2 on, then both 0.
   (1) Key off, the default, all four legs, an F10 on each. Pass: a `flat hdr
@@ -7857,7 +7857,7 @@ it stood before that flight: what the rigs pin, not what a headset showed.
   reuses this detector (its rule (iii) already skips a copy of H, pinned,
   because the VR frame's exposure chain reads one).
 - Flight (Epic, 2026-09-30). Log `edvr_gfx_20260930_125014.log`, version
-  v0.18.0-rc.4-57-g1cb352d7 (`edvr_log.py --expect-build 1cb352d7` exits 0).
+  v0.18.0-rc.4-57-g1cb352d7 (`edup_log.py --expect-build 1cb352d7` exits 0).
   The main-menu hangar and a bright star, key auto. Every `flat hdr route 5s:`
   window from 12:54:10 to 12:55:15 shows `state=active`, `treated` equal or
   nearly equal to `frames` (449 to 450 in 5 s), `declined=0`,
@@ -7870,7 +7870,7 @@ it stood before that flight: what the rigs pin, not what a headset showed.
   legs, FSR, EDVR TAA at R = D, game FXAA on, ReShade chained. R < D is the
   next bullet.
 - Flight at R < D (Epic, 2026-09-30). Log `edvr_gfx_20260930_133152.log`,
-  version v0.18.0-rc.4-65-geba67321 (`edvr_log.py --expect-build eba67321`
+  version v0.18.0-rc.4-65-geba67321 (`edup_log.py --expect-build eba67321`
   exits 0). Key auto from startup (`read at startup`); Sean set Elite's
   supersampling to 0.75 with bloom on (Custom preset: AAMode 0, BloomQuality
   3, DOFEnabled 2). At 13:32:30 the first trigger, a probe frame of the
@@ -8504,7 +8504,7 @@ What was built, by piece (each read back against the code):
    on-foot frames the eye's b1 rows 270..273 read back from the GPU with what
    EDVR advertised for that eye. A frame counts as on foot when the tone was
    seen AND Elite's journal says on foot (a cockpit, a hangar and a menu draw
-   the same tone). `python tools\edvr_log.py --camera-census` reads it back
+   the same tone). `python tools\edup_log.py --camera-census` reads it back
    and does the join (below). With the key off nothing is installed,
    allocated or logged (rig-pinned with a counting operator new).
 7. Curvature. With `fix.panel_curvature` above 0 the game's screen draw is
@@ -8572,9 +8572,9 @@ out and holstered, then board and disembark once, with the 3D map open for
 ten seconds. For the cost comparison, fly the same spot with the key off
 first (or read an earlier log): `EDVR ~ 4.8-5.2 ms`.
 Read, in this order (HEAD is the installed build):
-  python tools\edvr_log.py --target frontier --expect-build HEAD --version
-  python tools\edvr_log.py --target frontier --expect-build HEAD --grep "vr world route|vr world mips|layer-only|LAYER-ONLY|EDVR GPU census: |LONG FRAME"
-  python tools\edvr_log.py --target frontier --camera-census --expect-build HEAD
+  python tools\edup_log.py --target frontier --expect-build HEAD --version
+  python tools\edup_log.py --target frontier --expect-build HEAD --grep "vr world route|vr world mips|layer-only|LAYER-ONLY|EDVR GPU census: |LONG FRAME"
+  python tools\edup_log.py --target frontier --camera-census --expect-build HEAD
 - PASS: `vr world route 5s:` shows `state=owned` after the first seconds,
   `treated` within 2% of `trigger`, `declined` near 0 and `selection=selected`,
   `eye-takes` twice `owned-frames`, `door-layer-only` equal to `eye-takes`,
@@ -8638,7 +8638,7 @@ treated-frame machine as flat (warm 8, grace 3, late-write latch 3).
 
 **Flight 1 of the route, analysed (2026-09-30).** Read and diagnosed; no code
 changed. Log `edvr_gfx_20260930_161545.log`, v0.18.0-rc.4-104-gbde47f81
-(`edvr_log.py --target frontier --expect-build bde47f81` exits 0). Sean turned
+(`edup_log.py --target frontier --expect-build bde47f81` exits 0). Sean turned
 the census (16:17:21) and the route (16:17:40) on live from the in-VR menu and
 had set `panel_curvature` 0 there (16:16:21). He stood on foot in a station
 from 16:20:05 (screen motion names the source by its "hangar" rule: the
@@ -8744,7 +8744,7 @@ the route resolves at DLAA 5040x2835 on slot 2.
    page): 90 s auto, 90 s off, 90 s auto. Read the 30 s windows that fall
    wholly inside a leg (they end at :15.8 and :45.8): EDVR ~, application
    render p50 and frames a window.
-3. CAMERA CENSUS (`edvr_log.py --camera-census`): 470 lines, 4.63 million
+3. CAMERA CENSUS (`edup_log.py --camera-census`): 470 lines, 4.63 million
    refresh calls over 30,345 frames, all on the render thread (owner 13304),
    hook installed from 16:17:21.665, no fault: the detour runs safely in VR.
    THE EYE CAMERAS ARE KIND 5 AND THE ON-FOOT WORLD CAMERA IS KIND 3. On foot a
@@ -8901,7 +8901,7 @@ tests.h); the sign of zero on a real driver is untested.
 (4) The instruments and the reader, below.
 
 THE TWO OPEN POINTS, settled from the census call lines (frame 13804, every
-kind-3 call's composed rows read as a projection; `edvr_log.py --camera-census`
+kind-3 call's composed rows read as a projection; `edup_log.py --camera-census`
 now prints the same split for flight 1):
 (a) THE WEAPON'S PHASE TERM: the weapon takes THE SAME PHASE. The weapon is not
 another camera: its calls are six of the 54 kind-3 calls, the same camera
@@ -9001,7 +9001,7 @@ the route is not jittering) and, while the route jitters, only a frame whose
 phase is non-zero is sampled (flight 1 spent its whole sample on warm-up
 frames). Its key-off path leaves the relay to the route
 (flatCameraInjectPause(flatCameraVrQuiet())) and its notes say the census
-itself never writes a camera. `python tools\edvr_log.py --camera-census` labels
+itself never writes a camera. `python tools\edup_log.py --camera-census` labels
 a camera by the KIND OF EACH LOGGED CALL (the first-seen kind of an object is no
 identity), splits one object's projections (flight 1: world camera
 0x25FEFC53770, 54.0 calls a frame, 48 at near 0.025 and 6 at near 0.0675, "the
@@ -9017,7 +9017,7 @@ and the rest n/a (it predates stage 2). The census rigs print the route's two
 lines through the route's own formatters, so a format drift fails the build.
 
 FLIGHT PLAN. Frontier, the flight-1 environment; the installed build is the
-one `python tools\edvr_log.py --target frontier --expect-build HEAD --version`
+one `python tools\edup_log.py --target frontier --expect-build HEAD --version`
 names (the coordinator installs). Keys (live `edvr.ini` by the Edit tool, or
 the in-headset menu, developer mode, Experimental page):
 `experimental.temporal_aa_on_foot_world = auto`,
@@ -9025,7 +9025,7 @@ the in-headset menu, developer mode, Experimental page):
 `fix.ui_quality` on. Turn `advanced.vr_camera_census` ON LIVE only after the
 route owns the world and its 5 s line reads `jitter=on` (the census samples the
 first frames after it starts; they must be jittered ones), and leave it on.
-Read with `python tools\edvr_log.py --target frontier --expect-build HEAD
+Read with `python tools\edup_log.py --target frontier --expect-build HEAD
 --grep "vr world route"` (the route lines) and `--camera-census` (the verdict);
 note the clock at every change.
 1. SAME SPOT, standing still, no menu, weapon not drawn, the same scene in view,
@@ -9089,7 +9089,7 @@ turned on after the route owns the world, or its eye budget is spent on frames
 with no phase and (i) STOPs with that reason. A settlement's extra kind-3
 calls are unknown. The sceneNear anchor never resets, so a context with a
 larger scene near would count its scene cameras as first-person (counters
-only). edvr_log.py is now about 250 KB: the census reader could be its own
+only). edup_log.py is now about 250 KB: the census reader could be its own
 module (not done).
 
 - ruled out: opening the window on the CURRENT frame's naming, because the
@@ -9110,7 +9110,7 @@ module (not done).
 
 **Flight 2 of the route (stage 2's first flight), analysed (2026-09-30).** Read
 and diagnosed; no code changed. Log `edvr_gfx_20260930_202113.log` (8,721 lines,
-20:21:13-20:31:43), v0.18.0-rc.4-132-g80a8cc7d (`edvr_log.py --target frontier
+20:21:13-20:31:43), v0.18.0-rc.4-132-g80a8cc7d (`edup_log.py --target frontier
 --expect-build 80a8cc7d` exits 0; Sean tagged rc.5 at c7241450, so `describe`
 now reads rc.5-17). The same build's first session (`..._201531.log`) has the
 route owning 12,872 frames (20:17:47-20:20:11), jitter on throughout, no census;
@@ -9567,7 +9567,7 @@ log shows if the code never ran, and its key-off contract.
    whether the struct has two fields of view or one); (d) the refusal line's
    `weapon=` not falling against a mode-2 window; (e) Sean seeing the weapon
    swim against the world with jitter on and not off while the log says mode 1.
-5. THE READER, `edvr_log.py --camera-census`: parses the refusal line, the
+5. THE READER, `edup_log.py --camera-census`: parses the refusal line, the
    steady-detail and view lines and the inject line's `fov=`; prints a refusal
    section (per window: key state, view, treated, samples, share refused and
    its cause mix, forgiven, with the route's `fp-mode`, `inj-fp` and fov beside
@@ -9600,7 +9600,7 @@ auto`); the flight sets `texture_lod_bias = 0` under [advanced].
 
 FLIGHT PLAN (Frontier, a settlement, flight 2's settings: eye fraction 0.5,
 curvature 0, UI quality on, route auto, jitter on; install by
-tools\install_edvr.py; `edvr_log.py --target frontier --expect-build HEAD
+tools\install_edup.py; `edup_log.py --target frontier --expect-build HEAD
 --version` first, then `--camera-census`). Turn `advanced.vr_camera_census` on
 live AFTER the route owns the world (legs A, B); leg C's weapon numbers are on
 the always-on route lines and need no census key. Sean scores the shimmer 0-3
@@ -9672,7 +9672,7 @@ either the flat route reads the gates through one explicit accessor like
 or flat gets its own allowlisted keys (new keys: Sean's call). Cost: files
 runtime_profile.h (one key: the steady-detail one), config.h/.cpp (accessor),
 flat_runtime.cpp (about 45 lines), the refusal formatter moved into
-flat_mono_refusal.h, edvr_log.py (the section on a log with no census lines,
+flat_mono_refusal.h, edup_log.py (the section on a log with no census lines,
 plus a fixture), flat_temporal_test and config_test pins; one full build
 (about 3 min) and one --dll-only promotion, and the flight is at Sean's desk.
 Risk: low to moderate; flat_runtime.cpp is production for Epic testers, but
@@ -9827,7 +9827,7 @@ ones the check refused) and `forgiven=` is `stale-kept=` (not refused: the
 camera term, confirmed by last frame's depth); new `depth-check=RAN/SKIPPED`
 (resolves with the key on whose prep ran the check, and those that could not;
 a reset frame is neither). The line now also prints while only the key is on.
-`edvr_log.py --camera-census` reads both spellings, totals each key state
+`edup_log.py --camera-census` reads both spellings, totals each key state
 alone, prints stale-kept as a share of all pixels and, with the key on, of
 the stale pixels, and WARNs on: key on and no depth-check frame at all, key on
 and the check never ran, key off with stale-kept or checked frames; one note:
@@ -9868,7 +9868,7 @@ flip with `depth-check` ran > 0 would be the sign, and the key is the revert.
 (3) Flat's stale share on foot is unknown, so "kept" there has no number
 until a flat census exists.
 
-FLIGHT PLAN (install by tools\install_edvr.py; `edvr_log.py --target <t>
+FLIGHT PLAN (install by tools\install_edup.py; `edup_log.py --target <t>
 --expect-build HEAD --version` first; VR legs `--camera-census` with
 `advanced.vr_camera_census = on`, flat legs `--grep "steady"`).
 1. VR, the main menu, HMD Cinema (fix.vscreen_res_width 4032), key on: calm as
@@ -10030,7 +10030,7 @@ has not moved (release review R2, confirmed on main 73e02a7b; the reader's STORE
 WARNs on the token). A build before this printed `persisted=<value>` whether or not
 the write happened.
 
-THE READER. `python tools\edvr_log.py --target frontier --vscreen-fit
+THE READER. `python tools\edup_log.py --target frontier --vscreen-fit
 --expect-build HEAD`: RULE (the width recomputed from the line's own tokens, to
 16 px, and what the panel patch applied), INSTRUMENT, ON FOOT, STABLE (the windows'
 distance-normalised medians within 8%), SHAPE (the median window shape against
@@ -10068,8 +10068,8 @@ the width: 3408x1917 at 5120).
 FLIGHT PLAN (Frontier or Epic; one on-foot spot, standing still 60 s a leg, so
 two 30 s windows). Every leg, `edvr.ini`: `[fix]` `temporal_aa = dlss`,
 `ui_quality = 100`, `panel_curvature = 0`, `panel_distance = 0.7`; `[experimental]`
-`temporal_aa_on_foot_world = auto`. Install by `tools\install_edvr.py`; the
-first line of every read is `edvr_log.py --expect-build HEAD --vscreen-fit`.
+`temporal_aa_on_foot_world = auto`. Install by `tools\install_edup.py`; the
+first line of every read is `edup_log.py --expect-build HEAD --vscreen-fit`.
 A. Delete `edvr_logs\vscreen_auto_footprint.txt`, `vscreen_res_width = auto`.
    Expect `rule=fitted source=seed route=run ... auto = 3504 wide`, applied
    3504x1971, the armed line, then windows with `on-foot` above 0, `skipped=0`,
@@ -10159,7 +10159,7 @@ check unless edvr-flat.ini says off. The 3D menu's blanket policy is
 untouched. An existing ini with no line now reads on; one with an explicit off
 keeps it. The VR refusal line is now printed while only this key is on, i.e.
 in every route session, with census=off and the depth check's frame counts:
-edvr_log.py reads such a window as `census-off` (summarised on one line, no
+edup_log.py reads such a window as `census-off` (summarised on one line, no
 WARN) instead of a census that never measured. A flat session that starts on
 says so once at startup; one that starts off says nothing (its 5 s line has
 steady-detail=off).
@@ -10281,8 +10281,8 @@ on-foot spot, 60 s a leg, so two 30 s windows). Every leg, `edvr.ini`: `[fix]`
 `temporal_aa = dlss`, `ui_quality = 100`, `panel_distance = 0.7`,
 `vscreen_res_width = auto`; `[experimental]` `temporal_aa_on_foot_world = auto`,
 `on_foot_maps_sharp = off` (one change at a time; leg E turns it on). Install by
-`tools\install_edvr.py`; the first line of every read is
-`edvr_log.py --expect-build HEAD --route-curve` (and `--vscreen-fit` for the width).
+`tools\install_edup.py`; the first line of every read is
+`edup_log.py --expect-build HEAD --route-curve` (and `--vscreen-fit` for the width).
 A. `panel_curvature = 0.3`; delete `edvr_logs\vscreen_auto_footprint.txt`. Expect
    `rule=fitted source=seed route=run ... auto = 3504 wide` on a 4032 eye (the
    width flat gives; before this build `rule=legacy route=no`, 5040), the OWNS
@@ -10327,7 +10327,7 @@ changes shape or place when the route engages or releases (the layer's strip is
 not the substitution's: compare `curve=`'s C/S/G with the `panel curvature:`
 line); `draws=0` at 0.3 (the instrument's new call never ran); A's `fp=` off B's
 by more than a few percent (it read something other than the flat quad).
-`edvr_log.py --route-curve` says the route's half of this in seven verdicts: CURVE,
+`edup_log.py --route-curve` says the route's half of this in seven verdicts: CURVE,
 RE-ISSUE, READY, STOOD DOWN, STALE BUILD, OWNS and FAULT (exit 1 on a STOP, 3 when
 the log has no route line); `--vscreen-fit` reads the footprint and the width.
 
@@ -10349,7 +10349,7 @@ bracket and takes no eye), the `ui_quality_test` wiring pins (the curve branch,
 exact text, the recognition at three places; 23 in-rig controls),
 `vscreen_fit_test` (the rule no longer consults the curve; the footprint's
 second call site; 87 of 87 mutants), `on_foot_maps_test` P4a (three places),
-and the reader (`edvr_log.py --self-test` builds its logs from the formatter-held
+and the reader (`edup_log.py --self-test` builds its logs from the formatter-held
 lines of `camera_census_fixture.log`, pins every token it swaps, and every verdict
 has a mutant that must fail it).
 CURVATURE 0 is held by `panel_curve_test` C1 (nothing wanted; the re-issue is not
@@ -10418,7 +10418,7 @@ workable, that's our upscale"): (1) flat R < D upscales whatever bloom, depth
 of field and blur do; (2) the stand-down line and the F8 warning say the real
 cause, and flat's supersampling advice goes; (3) TAA above the output works or
 says why, and the startup false warning goes; (4) VR only: a warning when
-Elite's Supersampling is below 1. Readers: `python tools\edvr_log.py --target
+Elite's Supersampling is below 1. Readers: `python tools\edup_log.py --target
 <game dir> --flat-upscale --expect-build HEAD` and `--vr-supersampling`.
 
 **Evidence.**
@@ -10810,7 +10810,7 @@ jittered frame and at every change of the count or the key (a mode change
 shows its settling frame too), and `jitter_phases=N` in the close totals.
 Flat: `phases=N` on the 5 s `flat jitter:` line. World route: `phases=N` just
 before `jitter=` on its 5 s line. One read for all three:
-`python tools\edvr_log.py --target frontier --expect-build HEAD --grep "phases="`.
+`python tools\edup_log.py --target frontier --expect-build HEAD --grep "phases="`.
 
 Rigs and mutants. `temporal_test` (the rule's table: 32 at 2x, 18 at 1.5x, 72
 at 3x, 19 for the Pimax pair; the ceiling exact; the floor of eight and the
@@ -10833,7 +10833,7 @@ route, because it resolves at R = D. Not ruled out: that more phases is not
 the lever; the flight below measures the count alone.
 
 The flight (one session with the terrain retirement's regression flight;
-verify the build with `python tools\edvr_log.py --target <t> --expect-build
+verify the build with `python tools\edup_log.py --target <t> --expect-build
 HEAD`):
 
 1. VR, cockpit, landed at a hills spot, HMD Image Quality 0.5, DLSS. Key OFF:
@@ -10910,7 +10910,7 @@ are gone: the source of 2630bdfd reverted (`temporalJitterPhaseCount`,
 count, the VR eye pass's count and its log lines, the `phases=` tokens), and
 `jitter_phase_mutants.py` with its `build.bat` lines. The fixed eight Halton
 (2,3) phases stay, byte-identical to the switch off, and no log carries a phase
-count now (nothing in `tools\edvr_log.py` read one). It flew with no visible
+count now (nothing in `tools\edup_log.py` read one). It flew with no visible
 change, and the shimmer it was built for was the checkerboard. The unflown flat
 light-grid risk above (a phase out to 0.496 under the 120-pixel tiles) goes with
 it. An existing ini that carries the line keeps it as a retired setting ("carried
@@ -10954,7 +10954,7 @@ nothing checks the selected temporal mode.
 THE LOG: `vr terrain checkerboard:` lines, the worker's start, the first read and each
 change (16 at most, then a limit line). No such line at all means the worker never
 started (a flat session, an older build, or no VR menu tick); "read, off" is a line
-too. `python tools\edvr_log.py --target frontier --expect-build HEAD
+too. `python tools\edup_log.py --target frontier --expect-build HEAD
 --terrain-checkerboard` reads them (exit 1 with no line).
 GATES. `tools\terrain_checkerboard_test`: 188 checks over 6 cases (fixtures written to
 a temp directory: Custom true and false, the highest version winning with the
@@ -10992,11 +10992,11 @@ Evidence: `edvr-logs-20261002-190903.zip`, graphics log
 `edvr_gfx_20261002_190718.log`. Flat profile, RX 9070 XT, FSR 3.1.2,
 3440x1440 render and output, SS 1.0, game AA/bloom/DoF off. No VR runtime
 loaded. Version v0.18.0, PE link stamp 6ABED11D (2026-10-01 21:31:09 UTC).
-`edvr_log.py --expect-build HEAD --version` accepts the release tag as a
+`edup_log.py --expect-build HEAD --version` accepts the release tag as a
 substring of HEAD's description; that does not prove exact HEAD. The tag's
 flat runtime, camera, HDR and copy-selection code matches this checkout.
 
-Timeline from `edvr_log.py --flat-upscale` and targeted `--grep`:
+Timeline from `edup_log.py --flat-upscale` and targeted `--grep`:
 
 - Startup/loading: no-3d-scene; stand-down entered 19:07:25.464.
 - 19:07:38.982: a probe selected and resumed. FSR initialized and made its
@@ -11591,7 +11591,7 @@ Sean reports a different supporter loses AA on unholstering a laser rifle
 and regains it on holstering. Bundle edvr-logs-20261003-154551.zip contains
 one graphics log (8340 lines), settings and breadcrumbs, no shaders/traces.
 Literal build v0.18.1, stamp 6AC026D1, linked 2026-10-02 21:49:05 UTC.
-edvr_log --expect-build HEAD accepts the v0.18.1 release prefix at source
+edup_log --expect-build HEAD accepts the v0.18.1 release prefix at source
 0fa51a88; this is not an exact source-commit identity proof. The exact
 weapon exception is unchanged between the release and current source.
 
@@ -12413,7 +12413,7 @@ configuration, or VR behavior change is included.
 
 Committed and pushed `40c3a1c7` to main. Receipt-guarded `--dll-only` promotion
 passed from the clean tree. Installed `v0.18.1-29-g40c3a1c7` to Epic flat at
-14:05 MDT using `install_edvr.py`; dry-run wrote nothing, install and
+14:05 MDT using `install_edup.py`; dry-run wrote nothing, install and
 `--verify-only` passed, and the installed DLL ProductVersion is this version.
 Backup tag `flat-foreground-40c3a1c7`, stamp `20261004-140552`.
 `edvr-flat.ini` SHA256 remains
@@ -14850,7 +14850,7 @@ unique`), as before.
 
 Committed as 3d5ecaf6, fast-forwarded main and pushed; origin/main confirmed.
 Receipt-guarded `--dll-only` promotion passed in 52 s. Epic flat install via
-`install_edvr.py` (dry run, install, `--verify-only`); the installed DLL is
+`install_edup.py` (dry run, install, `--verify-only`); the installed DLL is
 `v0.18.2-19-g3d5ecaf6`. `edvr-flat.ini` (17EA3670...) and `nvngx_dlss.dll`
 (3975567B...) hashes are unchanged and `edvr.ini` stays absent. Frontier was
 not installed.
@@ -15259,11 +15259,11 @@ is a count of the pixels `taa()` zeroes at the roof, not a threshold.
 Committed as 36003718 (the shader and its tests), main merged in as 3db65989
 and this entry as 2d8e6761; fast-forwarded main and pushed, origin/main
 confirmed. Receipt-guarded `--dll-only` promotion passed. Epic flat install via
-`install_edvr.py` (dry run, install, `--verify-only`); the installed DLL is
+`install_edup.py` (dry run, install, `--verify-only`); the installed DLL is
 `v0.18.2-34-g2d8e6761`, SHA256 D5B6A47E814AE5CA..., the build's own.
 `edvr-flat.ini` (8A00D126...) and `nvngx_dlss.dll` (3975567B...) are unchanged
 and `edvr.ini` stays absent. Frontier was not installed. Read the flight
-against that literal version: `edvr_log.py --target <the Epic game directory>
+against that literal version: `edup_log.py --target <the Epic game directory>
 --expect-build 2d8e6761` (`epic` is not an alias) exits 2 on any other build;
 today it names the 5f7e43e8 flight's log as a mismatch, as it should.
 
@@ -16738,7 +16738,7 @@ digits). The legends that trailed the old lines are comments above the formatter
   family draw at all and take the camera term alone; `recoveries` end a spell with a treated frame and `warm-frames`
   count the zero-phase frames after it (two, by `FlatLivePhase`); `abandoned` ends one with another refusal.
 
-Left whole on purpose, each with its reason in the rig's table: `flat map bounce 5s:` (parsed by `tools\edvr_log.py
+Left whole on purpose, each with its reason in the rig's table: `flat map bounce 5s:` (parsed by `tools\edup_log.py
 --map-bounce`; about 900 characters in the log, 1,121 at 12-digit counters, out of reach at 20; a split needs the
 parser to join the parts, a separate change), `flat foreground ownership:` (a one-time probe, `kLimit` 2 reports;
 1,051 at 20 digits), `flat overlay admission refused:` (at most six a session; 1,074), `flat runtime conflict:` (962),
@@ -17395,7 +17395,7 @@ The user reported no visible AA effect on the main menu's 3D ship/hangar
 background, then confirmed AA appeared to work in the loaded station/hangar.
 The running Steam flat `/novr` log is `edvr_gfx_20261017_162438.log` under
 `C:\Steam\steamapps\common\Elite Dangerous\Products\elite-dangerous-odyssey-64\edvr_logs`.
-`edvr_log.py --expect-build HEAD --version` verifies `v0.20.0-rc.3`, build
+`edup_log.py --expect-build HEAD --version` verifies `v0.20.0-rc.3`, build
 `6AD3EB57`. The origin probe remains off. No rendering change or install was
 made for this investigation.
 
@@ -17528,7 +17528,7 @@ and visible AA validation remain pending; main stays unmerged for that check.
 Clean commit `c7c14898` was promoted with `--dll-only --wait-lock` in 34.2
 seconds and installed/verified for Steam flat. Installed product version is
 `v0.20.0-rc.3-1-gc7c14898`; DLSS remains selected and the origin probe remains
-off. Use `edvr_log.py --target steam --expect-build c7c14898` for this test:
+off. Use `edup_log.py --target steam --expect-build c7c14898` for this test:
 the following Python-only installer maintenance does not change the renderer.
 
 Installation initially stopped on an obsolete October 10 native receipt even
@@ -17952,7 +17952,7 @@ nothing checks directly. Test rig:
 `tools/flat_temporal_test/flat_deferred_forward_omission_captures.h`, all
 31 repair, and the 35 rc.5 captures are refused by the new repair.
 
-Flight signature (check `edvr_log.py --expect-build 6b8f62c1` first):
+Flight signature (check `edup_log.py --expect-build 6b8f62c1` first):
 - **Ran:** in supercruise or on a planet, `flat deferred HDR camera:` shows
   `relation=forward-mismatch accepted=1 repair=whole prepared=1`.
   `flat deferred inverse execution:` reads `uploaded whole-camera clone
@@ -18611,7 +18611,7 @@ captures, the 35 inverse-only captures and every negative the repair's rig uses.
 ### 2026-10-24 (flown): the probe names the check, the donor camera carries 1.0001x the phase
 
 Flown: the probe build `v0.21.0-2-g396bce13` on the same rig, two logs (`edvr_gfx_20261024_151628`, `_151924`, same scene, DLAA 2560x1440,
-the second with the DLSS preset row on L). `edvr_log.py --expect-build 396bce13` matches. 85 `whole-omission refused` lines and 22 `bytes` lines.
+the second with the DLSS preset row on L). `edup_log.py --expect-build 396bce13` matches. 85 `whole-omission refused` lines and 22 `bytes` lines.
 
 Result. Every refusal is `stage=dephase check=translation row=0 col=3 qualified=1 upstream=1 repairable=1`: the match stage passed (Forward), the gate
 passed, the patch and rematch stages were never reached. Residual 2e-7 to 3.3e-7 against a bound of 1.97e-7 in the first log (ratio 1.1 to 1.7)
@@ -18669,7 +18669,7 @@ phases) and checks every one repairs, that the zero-phase pair matches the stric
 refused. With the allowance set to zero the generator test fails on 1,466 of the 2,688 and the captures on 22 checks: it would have caught this. The 31
 supercruise and 35 rc.5 captures and the probe-agreement test are unchanged.
 
-Flight signature: `edvr_log.py --expect-build` the new commit; `flat deferred HDR camera:` shows `relation=forward-mismatch accepted=1 repair=whole prepared=1` on every
+Flight signature: `edup_log.py --expect-build` the new commit; `flat deferred HDR camera:` shows `relation=forward-mismatch accepted=1 repair=whole prepared=1` on every
 nonzero phase; no `flat deferred whole-omission refused:` line; no `deferred-inverse-unproven` and no 4-frame cycle at 2560x1440 (the runtime window reads `treated-jittered`).
 A `whole-omission refused ... stage=rematch` would mean the matcher change missed; a persisting `stage=dephase` that the allowance did not cover (read `ratio`).
 The probe lines stay in this build so the flight reads either way.
@@ -18828,7 +18828,7 @@ Sean, Epic, flat, DLAA/FSR/XeSS/DLSS (model M): stars show on very dark cockpit 
 
 Discriminating pairs: H1 vs the rest by `ui_quality off` and by still-versus-rotating; H2 vs H3 by where the stars sit and what colour the view gives them.
 
-**Flight (Epic, flat, no build; one session).** Read the log with `python tools\edvr_log.py --target "C:\Program Files\Epic Games\EliteDangerous\Products\elite-dangerous-odyssey-64" --expect-build HEAD` (Epic is a path, not a name). 1) In `edvr-flat.ini` set `flat_refusal_view = on` (Edit tool; live, the log prints `flat runtime: refusal view on` and the legend). 2) Find the artifact, ship still: screenshot (view on) then F8/ini view off, same spot, screenshot. 3) Same with the ship rolling slowly. 4) Press NumLock once with the artifact on screen (census plus the 600-frame class census, `flat capture general`). 5) Set `fix.ui_quality = off`, repeat 2. 6) F7 on and off once. Read: the screenshots' colours on the starred pixels, the class counts, and whether step 5 changes anything. Also note `fix.particle_billboard = steady` is set in this ini; `billboard roll-free ... none of the 16 vertex shaders drew` at 20:15:54, so it is not in play there, and `stock` is a free control if H1-H4 all fail.
+**Flight (Epic, flat, no build; one session).** Read the log with `python tools\edup_log.py --target "C:\Program Files\Epic Games\EliteDangerous\Products\elite-dangerous-odyssey-64" --expect-build HEAD` (Epic is a path, not a name). 1) In `edvr-flat.ini` set `flat_refusal_view = on` (Edit tool; live, the log prints `flat runtime: refusal view on` and the legend). 2) Find the artifact, ship still: screenshot (view on) then F8/ini view off, same spot, screenshot. 3) Same with the ship rolling slowly. 4) Press NumLock once with the artifact on screen (census plus the 600-frame class census, `flat capture general`). 5) Set `fix.ui_quality = off`, repeat 2. 6) F7 on and off once. Read: the screenshots' colours on the starred pixels, the class counts, and whether step 5 changes anything. Also note `fix.particle_billboard = steady` is set in this ini; `billboard roll-free ... none of the 16 vertex shaders drew` at 20:15:54, so it is not in play there, and `stock` is a free control if H1-H4 all fail.
 
 **Ruled out here:** route dropout (450/450 treated); star_glow and smooth_bloom (not running); the stars being drawn onto an opaque cockpit pixel by the game (depth test fails, and F7 is clean); steady detail as an A/B (always on).
 
@@ -19202,7 +19202,7 @@ No key: a session started in flat gets what a session started in VR gets.
 **Flight (Epic, no ini edits, one flight decides it).** Launch in flat, step out on foot near characters (a station concourse or a settlement), then turn 3D on in the game so the profile goes flat to VR. Stay on foot with a character in view for a minute, then board or leave as you like.
 1. In the log, at the `profile switch: flat -> vr` line and within the same second: `skin join: the session started in the flat profile and is now in VR: arming the second skin at the switch.`, then `skin join: hook armed: EliteDangerous64.exe+0x4C56BA0 ...`, then `skin join: the second skin is live (VR)`. All three absent, or only the `live` line absent after an `engine motion: ... stood down`, means the sweep did not reach the call or engine motion was down at the switch: nothing else in this change would have run.
 2. With a character in view on foot: `skin join: on-foot source target 7 created ...` once and `vr world route refusal 5s: ... skinned-joined=N` with N above 0. N = 0 with a character in view means the route did not read E, which would be a defect in the F15 path and not in this change (a VR start would show it too).
-3. `python tools\edvr_log.py --target <epic game dir> --expect-build HEAD --health` first: the version line must match this branch's build.
+3. `python tools\edup_log.py --target <epic game dir> --expect-build HEAD --health` first: the version line must match this branch's build.
 Refuted if the arm line shows but no character has motion: then the cost on foot is not what the F15 entry says, and this change is parity with a VR start and nothing more.
 
 ## 2026-11-04, flight 13:38: the second skin at the switch to VR, on foot (issue #186 follow-up), FLOWN
@@ -19343,7 +19343,7 @@ When `ensureImages` in `flat_dof_blur.cpp` failed, only `g_win.failed` counted i
 
 ### 2026-11-08, the source-free veto's draw is named, BUILT, NOT FLOWN
 
-**Report.** A flat user: DLSS drops out on a planet when the view of their SRV goes off screen. Zip `edvr-logs-20261108-155010`: one graphics log (no runtime log in flat), the inis, breadcrumbs. Environment: flat (`/novr`), Steam, RTX 3070 Ti Laptop GPU (8 GB), 2560x1080 output, game supersampling 0.65 so a 1664x702 render, DLSS quality, preset K (the feature made at 15:48:27, no backend failure). `v0.22.0-rc.7`, build 6AED3509: `edvr_log.py --expect-build v0.22.0-rc.7` passes.
+**Report.** A flat user: DLSS drops out on a planet when the view of their SRV goes off screen. Zip `edvr-logs-20261108-155010`: one graphics log (no runtime log in flat), the inis, breadcrumbs. Environment: flat (`/novr`), Steam, RTX 3070 Ti Laptop GPU (8 GB), 2560x1080 output, game supersampling 0.65 so a 1664x702 render, DLSS quality, preset K (the feature made at 15:48:27, no backend failure). `v0.22.0-rc.7`, build 6AED3509: `edup_log.py --expect-build v0.22.0-rc.7` passes.
 
 **What the log holds.** A two-minute session: the menu, LoadGame at 15:48:54, then on foot (`flat vehicle frame 30s: gate=off(on-foot)`). No SRV, so the report itself is not reproduced. From 15:49:10.894 to 15:49:55 `flat runtime refusal 5s` reads 320, 60, 280, 123, 210, 130, 68 and 171 `no-supported-motion-source-pair` (1,362 frames, each one SMAA 1x and EASU instead of DLSS). `flat source 5s` counts the spells (the longest 333 frames), each ending in a recovery and its two warm-up frames. The refused frames hold, on the HDR's depth, 2 records and 27 to 32 draws of one pair (VS 7E38A6AA1269C901, PS 7CECABDE34FFBE9E, the deferred sun pass), `pool-kind-records=0`, `family-vs=0`: ground and sky. The same pair is taken source-free between the spells (`source-free-treated` 195 at 15:49:55, 315 at 15:50:00).
 
@@ -19364,7 +19364,7 @@ What each reading means:
 
 The shaders named then say what the draw is (a geyser's rock, the SRV's own wheels or shadow, a settlement piece) and which fix is right: key its pixel shader into the family, or narrow the veto to the selected depth. Neither is decided before the flight.
 
-**Flight to ask for.** The reporter, on this build, at a planet with the SRV: bring it into view and out a few times, on foot and seated, then `python tools\edvr_log.py --target <game dir> --expect-build <commit> --grep "flat source (veto )?5s"`. The `flat vehicle frame 30s:` gate says on foot or SRV per window.
+**Flight to ask for.** The reporter, on this build, at a planet with the SRV: bring it into view and out a few times, on foot and seated, then `python tools\edup_log.py --target <game dir> --expect-build <commit> --grep "flat source (veto )?5s"`. The `flat vehicle frame 30s:` gate says on foot or SRV per window.
 
 **Validation.** A full `build.bat --wait-lock` on native Windows passed every gate, exit 0, and wrote `build\full_build_receipt.json`. The first run stopped on two source pins, both about where the new lines sat, not about behaviour: the model's naming call came between `flatRuntimeReachedDraw` and the count, which `flat_deferred_empty_gbuffer_tests.h` holds adjacent, and the copy selector's cause line came before its comment. Both moved. Cases are in `flat_source_free_tests.h`: the refusal's causes and depth, the table (shared keys, a fifth kind counted and not kept), the window by cause, both depth words, the zero line, and the wiring with mutation controls. `flat_log_line_tests.h` measures the line at 868 characters at 12 digits and 916 at 20, under the 1,000 budget. Not flown.
 

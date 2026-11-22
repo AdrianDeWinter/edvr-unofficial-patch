@@ -254,7 +254,7 @@ Unconfirmed: whether the probe sees native-stereo eye draws. The census rule che
 - VR (Epic's both install with the game in VR mode, `advanced.vr_camera_census` on for the camera source; set in Epic's edvr.ini
   2026-10-28): the scoped Executioner in ADS, 10 s still and 10 s turning the head; the unscoped copy; one eye dump in scoped ADS. The
   first three scoped presses arm the probe on their own.
-- Read `edvr_log.py --expect-build <installed build> --health` first, then the four lines.
+- Read `edup_log.py --expect-build <installed build> --health` first, then the four lines.
 
 **After S0:** see-through glass and M under about 2.5 for every zooming weapon: build A behind the key. An opaque screen: A with that draw
 moved after the door, or B3. Zoom above 2.5: A's detail is likely too low, so put B3 to the maintainer. A per-frame VR field found: read it;
@@ -452,7 +452,7 @@ the ring and everything outside are unchanged, that an open ring leaves the fram
 - The bare Executioner, and two unscoped weapons (a 48 deg rifle and a 52 deg pistol).
 - In one scoped ADS: switch the key off and back on, and move the reference FOV row to 64.8 and back (the row is on the Experimental
   page, which shows with the menu's Developer mode on).
-- Read `edvr_log.py --expect-build 5a47ad8f --health` first, then the S1 lines.
+- Read `edup_log.py --expect-build 5a47ad8f --health` first, then the S1 lines.
 
 **2026-10-29, A1 VR flight** (Epic in VR, `edvr_gfx_20261029_093933`, `5a47ad8f`, build matched; the key on from 09:40:56). `--health` exit 3 for
 F85c only, as on every flight of this line; `scope zoom (S1)` PARTIAL, 19 presses. Dumps `094209717001` (scoped Executioner, ADS), `094230243002`
@@ -708,7 +708,7 @@ found ten things. Each, in one line:
   skip line by item and scope and says `N sight(s) ... (first press P)`. A `--since` window that starts after a sight's first press has its geometry lines and not the skip line, and reads as a census that never ran.
 - **7. The press line's worst case is the longest item the held-item buffer can hold.** `kLensItemChars` is 63 and the formatter cuts the item there, so the bound does not rest on the caller. With 63 characters, every
   counter six digits and the new count, the line needed about 1216 bytes against the log's 1167. Eight labels are shorter (`not optical`, `jitter none`, `other frame`, `FOV from bare copy`, `c to far point`,
-  `picture seq`, `mark depth`, `read on`): the worst case is now 1160 bytes in the 1168-byte buffer, inside the log's 1200 with its stamp and marker. `edvr_log.py` reads the new labels; a press line of an earlier build is
+  `picture seq`, `mark depth`, `read on`): the worst case is now 1160 bytes in the 1168-byte buffer, inside the log's 1200 with its stamp and marker. `edup_log.py` reads the new labels; a press line of an earlier build is
   UNPARSED, as A2's and A3's first were.
 - **8. `flatUiFamilyLive` asks the one list** (`uiLayerFamilyUsesWeaponsLayer`), so the mark is the weapons half's there too. Flat still never takes it: it is not in `flatUiLayerTakesFamily` and the flat tick publishes no
   lens. Rig: the three halves in every combination, and the take list.
@@ -789,7 +789,7 @@ look for the lens's detail, the chevron's place, the HUD's size, shadows, the le
   `src\common\scope_zoom_window.h` (the request the two halves share, its wire form, the one window function, the runtime's report). The table's flag is `LensEntry::renderedScoped` in
   `scope_zoom_s1.h` (only the scoped Executioner). The frame thread: `s1::b3Tick` in `native_on_foot.cpp`. The runtime: `scope_zoom_state.h` and `NativeRuntimeHost::applyScopeZoom`. The doors:
   `scopeZoomLeftDoor` and the third pass `kScopeZoomMagnifyB3CsHlsl` in `scope_zoom.cpp`, `scope_zoom_shaders.h`. Rigs: `native_frame_test` (`b3_checks.h`), `scope_zoom_test`, `openxr_system_test`,
-  `native_temporal_test`, `openxr_stereo_test` (`share_cases.h`); `--health` reads the three lines (`edvr_log.py`, tag B3).
+  `native_temporal_test`, `openxr_stereo_test` (`share_cases.h`); `--health` reads the three lines (`edup_log.py`, tag B3).
 - **How the narrowing reaches the game, and when.** The frame thread decides once a tick (the frame boundary): `b3Gate` holds the window while the key, the lens's gate, a rendered entry,
   the sight eye at `both` and the share (at least 0.9; 0.999 to start) stand; the window's centre is the left eye's direction to the far point c (the lens's c, 100 m along E -> S), latched at the first
   frame it can start, with w at 1, and held. M is the lens's target M. The strip goes black over 0.1 s first and the zoom is asked for once it is (`b3StripStep`), so the narrowed picture is never
@@ -845,7 +845,7 @@ look for the lens's detail, the chevron's place, the HUD's size, shadows, the le
   desktop mirror (visual.desktop_window shows the left eye, so it shows the zoomed picture during the window); the cost of the window copy and the third pass (the existing GPU timers cover pass 2).
 - **Flight card (B3-1, Epic in VR, the full-detail key on the Experimental page with the menu's Developer mode on).** The scoped Executioner in ADS with the scope zoom on and the sight eye at both:
   the key off then on in one press (A then B3), still and turning; an eye dump with each; then look at the lens's detail, the chevron's place, the HUD's size, shadows, the left eye's outer edge (black
-  while the window stands), the sky and horizon in the lens against A's, and stutter on entry. Read `edvr_log.py --expect-build 9faeadb9 --health` first (S1, B3), then the B3 and runtime lines: the
+  while the window stands), the sky and horizon in the lens against A's, and stutter on entry. Read `edup_log.py --expect-build 9faeadb9 --health` first (S1, B3), then the B3 and runtime lines: the
   span ratio against M, `no matrices` (the game building the left render from the raw getter), and the raw getter's callers if the lens's sky is wrong.
 
 **Review fixes (B3-1)** (2026-10-29, the review of `161b1954`, `reviews\scope-zoom-b3-1-review-2026-10-29.md`; the full local build and all its gates green, nothing flown):
@@ -911,7 +911,7 @@ that the right eye's share cannot cover, black while eye 0 is narrowed. B3-2 put
    narrowed left picture uncovered: with the share drawn the shader makes every uncovered pixel of a narrowed frame the fill, and with no share drawn it clears the left eye to black in place of its own picture (this build; rig:
    `narrowed with no share`). So the frame that passes, and the one after, are covered whatever their own share does.
 6. **Instruments.** The runtime line ends `; edge fill M: frames black B, world W, view V, stretched S; held copies N, black for want of a held picture N, held age at the end N frames X ms, largest world turn X deg; passed past a
-   share not drawn N` (`formatB3Runtime`); the press line carries `edge M` and `lens outside the copy on N of N frames, area mean X max X`; `edvr_log.py --health` reads all three with exact-text rules: PARTIAL when the
+   share not drawn N` (`formatB3Runtime`); the press line carries `edge M` and `lens outside the copy on N of N frames, area mean X max X`; `edup_log.py --health` reads all three with exact-text rules: PARTIAL when the
    fill asked drew on no frame (a press with the counts at zero is one that did not run it), a world or view fill with no held copy, more than a tenth of the narrowed frames black for want of a held picture, or the lens outside
    the copy on most frames. Both lines fit the log's 1167 bytes with every count six digits.
 - **Not verified, for the flight.** How the held picture looks (frozen HUD or weapon in the strip, edge extension past the held image when the head turns); `stretched` against the visor's rim; the held copy's cost (one eye-sized
@@ -921,7 +921,7 @@ that the right eye's share cannot cover, black while eye 0 is narrowed. B3-2 put
   `native_on_foot_ads_scope_zoom_full_detail = on` (the maintainer's) and no edge line, so `..._edge = world` was added under it with the Edit tool (diffed: two lines added). A narrowed frame
   whose share is not drawn now blacks the left eye for that frame (item 5), where B3-1 left the zoomed picture uncovered; expect it only at a hitch such as an eye dump.
 - **Flight card (B3-2, Epic in VR).**
-  - Read `edvr_log.py --expect-build c92b5107 --health` first, then the press lines' `edge` and the runtime line's fill counts.
+  - Read `edup_log.py --expect-build c92b5107 --health` first, then the press lines' `edge` and the runtime line's fill counts.
   - Fill: the scoped Executioner in ADS with full detail on, sight eye both. Switch the edge key through `world`, `view`, `stretched` and `black` across one or two presses. Hold still, then
     turn your head left and right inside the scope. Judge the far-left strip in each mode: a dark line, a visible seam, a smear, a frozen or swimming visor rim.
   - Lens reach: turn your head away from the gun while scoped. `lens outside the copy` counts it.
@@ -961,15 +961,15 @@ that the right eye's share cannot cover, black while eye 0 is narrowed. B3-2 put
    Executioner's optic at full detail with an equal black edge in both eyes' outer view while the zoom stands; off, the digital zoom with no edge. Under `[experimental]`, `# ui:` row, default off, live, as before.
 5. **Instruments.** Runtime line: `...; right-eye mirror strip on N frames, widest X of its width; passed past a share not drawn N` (frames the compositor drew the right eye's mirror strip on; the widest share of the
    right eye's middle row it took, columns at least half black; `none` with no frame). Press line: `press N key on; asked ...` (no edge word). Announce: `scope zoom (B3): full detail on; for the table's ...`. The trace line
-   carries `mirror_frames` and `mirror_width_max`. `edvr_log.py --health`: a press with the zoom and the runtime's report but no mirror-strip frame is PARTIAL (`the right eye's mirror strip drew on no frame while the left
+   carries `mirror_frames` and `mirror_width_max`. `edup_log.py --health`: a press with the zoom and the runtime's report but no mirror-strip frame is PARTIAL (`the right eye's mirror strip drew on no frame while the left
    eye was zoomed for N frame(s): the right eye's outer view stayed lit against the left eye's black edge`); a press with no runtime report cannot be judged on it. A report in B3-2's form (the fill's counts), a press line
    or an announce with the edge word is UNPARSED. Both lines fit the log's 1167 bytes with every count six digits (rig).
 6. **Rig.** `openxr_stereo_test`: the mirror at strip 0 / NaN / 0.5 / 1, narrowed (at share 1 and 0.5), with no share; corners black, interior bit for bit; asymmetric canted displays against the rig's own arithmetic with the eyes
    exchanged. `openxr_system_test`: the mirror tally over a run, the press taking it, the strip reaching the runtime on the ramp. `openxr_native_test`: the host's close takes it. `native_frame_test`, `scope_zoom_test`,
-   `edvr_log.py --self-test`: the lines, the wiring (no edge anywhere) and the health rules.
+   `edup_log.py --self-test`: the lines, the wiring (no edge anywhere) and the health rules.
 - **Not verified, for the flight.** How the right eye's edge reads against the left's (whether the two edges fuse as one dark rim or the right one is noticed on its own); its width on this Pimax (`widest` in the runtime
   line); the cost of the one more triangle in the right eye; whether the lens reaching outside the copy on a head turn is judged enough to need a larger copy.
-- **Flight card (B3-3, Epic in VR).** Read `edvr_log.py --expect-build <build> --health` first, then each press's `lens outside the copy` and the runtime line's `right-eye mirror strip`. Scoped Executioner in ADS, full
+- **Flight card (B3-3, Epic in VR).** Read `edup_log.py --expect-build <build> --health` first, then each press's `lens outside the copy` and the runtime line's `right-eye mirror strip`. Scoped Executioner in ADS, full
   detail on, sight eye both: hold still, then turn your head left and right inside the scope, and judge the two outer edges together. Then full detail off for one press: no edge in either eye.
 
 ## 12. Crisp sights (C1)
@@ -1023,7 +1023,7 @@ question (the scope effects) is answered from one eye dump a weapon, not from a 
   (`writeEyeAlphaBmp`) and `eye_<stamp>_withhold.json` (`writeWithholdRecord`), `writeEyeDecisionArtifacts` puts the same fields in `decisions.json`.
 - `src\d3d11\draw_census.cpp`: `otherLinesSpent`, the eye budget in `recordDraw`, `eye_lines=` and a `truncated=` that counts the draws that got no line. `tools\diff_draw_census.py`: its end-line pattern takes `capture_id=`
   (the line has carried it since the capture ids) and the new token.
-- `tools\sight_candidates.py` (numpy; `--self-test` in `build.bat`'s desk group), `tools\edvr_log.py` (`--health` rule `crisp reticle (C1)`, tag `C1`), rigs: `scope_zoom_test` (`crisp_sights_cases.h`: the gate as a truth table, the
+- `tools\sight_candidates.py` (numpy; `--self-test` in `build.bat`'s desk group), `tools\edup_log.py` (`--health` rule `crisp reticle (C1)`, tag `C1`), rigs: `scope_zoom_test` (`crisp_sights_cases.h`: the gate as a truth table, the
   hip, the edges, the key off, the door's counts and freshness, the lines, the withhold cycle's order and records, the wiring scans with controls), `sharp_weapons_test` (the family named by the crisp gate), `diff_draw_census.py`.
 
 **Log lines and fields (exact).**
@@ -1045,7 +1045,7 @@ glass draws may share pixels, and the median reference holds only if each candid
 weapon-edge arc's ADS dumps differ from a plain dump by exactly the candidates their json names; a dump taken at the hip is untouched.
 
 **Flight card (C1, Epic or Frontier in VR).**
-- Read `edvr_log.py --target <game> --expect-build <build> --health` first: the `crisp reticle (C1)` row, then the press lines. Fly the non-optical weapons: P-15, Tormentor, Intimidator, the bare Eclipse, and the optical ones
+- Read `edup_log.py --target <game> --expect-build <build> --health` first: the `crisp reticle (C1)` row, then the press lines. Fly the non-optical weapons: P-15, Tormentor, Intimidator, the bare Eclipse, and the optical ones
   with the scope zoom key on (their lines should be absent: the lens owns them) and off (they are served).
 - A/B in one press: edit `experimental.native_on_foot_ads_crisp_reticle` in the live `edvr.ini` (on / off, live) during one ADS press and look at the reticle both ways: crispness, brightness against stock, a bloom halo,
   a pop at the raise or the lower.
@@ -1074,7 +1074,7 @@ good on all counts". `--health` exits 3 on F91 and F85c NEVER APPLIED, both alre
 **2026-10-30, the crisp reticle key retired** (the maintainer: "Yes, retire it", asked with the key quoted). `experimental.native_on_foot_ads_crisp_reticle` (on | off, live, default on) is gone and its on is the behaviour:
 the reader, the atomic, the gate's key field (`crisp::GateIn::keyOn`), the startup note `native on foot ADS crisp reticle (C1, TEMPORARY)`, the ini entry and its Experimental page row are removed. The announce is written once a
 session and neither line names a key (formats above). Rigs: `scope_zoom_test` checks that the key is read nowhere (the source, `edvr.ini`, `crisp_reticle.h`), with controls that put the read, the ini entry and the field back;
-`sharp_weapons_test`'s key-off case became a sight the lens names; `edvr_log.py --self-test` reads the keyed formats as UNPARSED. A stale `native_on_foot_ads_crisp_reticle` line in a live `edvr.ini` is read by nothing. Built `1418cc88` (full build, all gates; `--dll-only` on the clean
+`sharp_weapons_test`'s key-off case became a sight the lens names; `edup_log.py --self-test` reads the keyed formats as UNPARSED. A stale `native_on_foot_ads_crisp_reticle` line in a live `edvr.ini` is read by nothing. Built `1418cc88` (full build, all gates; `--dll-only` on the clean
 tree), installed on Epic `--scope both --xess`, `--verify-only` passed; the live Epic `edvr.ini` lost its two crisp reticle lines (the comment and the key, edited with the Edit tool, diffed: two deletions). Not flown; the
 behaviour is the flown on.
 
@@ -1086,7 +1086,7 @@ merge. Kept: the draw census's own line budget for eye draws and the end line's 
 nowhere (the header absent, none of its names in the four sources), with controls that put the header, the arming and the json record back. The scope glass stays in the scene, through the upscaler, as the game draws it. Built `3d2944fc` (full build, all gates;
 `--dll-only` on the clean tree), installed on Epic `--scope both --xess`, `--verify-only` passed; the live `edvr.ini` needed no edit (the cycle had no key). Not flown.
 
-**F205** (2026-11-01, `25b94de6` on `claude/full-detail-scope` from origin/main 97acace1; full build green: `native_frame_test` 3781, `openxr_stereo_test` 29724, the `edvr_log.py` self-test; installed on Frontier as v0.22.0-rc.4-51-g386229c0, verified; NOT FLOWN).
+**F205** (2026-11-01, `25b94de6` on `claude/full-detail-scope` from origin/main 97acace1; full build green: `native_frame_test` 3781, `openxr_stereo_test` 29724, the `edup_log.py` self-test; installed on Frontier as v0.22.0-rc.4-51-g386229c0, verified; NOT FLOWN).
 
 The pilot's asks, 2026-11-01, on the full-detail scope:
 - "make it turned on by default";

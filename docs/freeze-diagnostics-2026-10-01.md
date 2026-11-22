@@ -41,7 +41,7 @@
 - **New log lines:** `monitor: FREEZE`, `monitor: long frame counts reason=`, `monitor:
   worst long frame N of M`, `stall sampler: armed|off`, `stall:`, `stall sampler counts`,
   runtime `native_long_cycle_counts`, `native_long_cycle_worst`, and `native_long_cycle_
-  summary` extended; read with `python tools\edvr_log.py --target steam --freezes`. Added
+  summary` extended; read with `python tools\edup_log.py --target steam --freezes`. Added
   2026-10-02: `vram:`, `slow test:`, `native_xr_event(s)`, `native_end_frame_episode(s)`,
   `native_slow_regime`, `native_end_frame_hold`.
 - **Gates:** rigs `freeze_log_test` (41 mutants), `stall_sampler_test` (32),
@@ -167,7 +167,7 @@ fails `H5.writer` alone.
 
 ## Test plan for Sean
 
-1. Install the build (`python tools\install_edvr.py --target steam --dry-run`, then for
+1. Install the build (`python tools\install_edup.py --target steam --dry-run`, then for
    real). Set `advanced.freeze_test_ms = 1200` under `[advanced]` in the live edvr.ini
    (Edit tool, diff before and after).
 2. One VR session of a few minutes. At about 60 s the game stops for 1.2 s. Expect in the
@@ -180,7 +180,7 @@ fails `H5.writer` alone.
    lines in the graphics log, `native_long_cycle_summary` with buckets and
    `native_long_cycle_worst` in the runtime log. Kill the game from Task Manager in another
    session: the counts of the last five minutes are the `periodic` ones.
-4. `python tools\edvr_log.py --target steam --freezes --expect-build HEAD` reads all of it.
+4. `python tools\edup_log.py --target steam --freezes --expect-build HEAD` reads all of it.
 5. Set the key back to 0. A normal session: no `stall:` lines unless the game really stalls;
    `edvr_breadcrumbs.txt` still gets an `alive` line every 30 s (check it is written, then
    kill the game: the last line is an `alive` line).
@@ -218,13 +218,13 @@ vendor.
      `native_slow_regime,event=end,...,reason=recovered`.
 9. Quit from the menu. Expect `native_slow_regime_summary,reason=session_close,regimes=1`,
    `native_end_frame_episodes_summary` and `native_xr_events_summary` in the runtime log.
-10. `python tools\edvr_log.py --target steam --freezes --expect-build HEAD`: a SLOW REGIME
+10. `python tools\edup_log.py --target steam --freezes --expect-build HEAD`: a SLOW REGIME
     section marked DELIBERATE, `SLOW  SLOW REGIME`, `PASS  SLOW TEST` (a WARN names what
     the chain lacks), the verdict SLOW, exit 4; END-FRAME EPISODES, VENDOR EVENTS and VRAM
     sections. A verdict of PASS here would be the bug.
 11. Set the key back to 0. A normal session ends with `native_slow_regime_summary` at
     `regimes=0` and the reader's `PASS  SLOW REGIME`.
-12. A log from v0.18.0 or earlier has none of these lines: `python tools\edvr_log.py --file
+12. A log from v0.18.0 or earlier has none of these lines: `python tools\edup_log.py --file
     <edvr_gfx_*.log> --runtime-file <edvr_openxr_*.log> --freezes` rebuilds a regime from
     its LONG FRAME, `native_long_cycle`, FREEZE and `vScreen totals` lines and prints it
     as RECONSTRUCTED; the 2026-10-02 bundle reads 11:14:38.1 to 11:15:35.2, the vendor's

@@ -7,7 +7,7 @@ using Microsoft.Diagnostics.Tracing.Etlx;
 // own text log, and answers where a frame cycle's CPU time went: per region of
 // the cycle, per thread, and per scheduler wait with the waker that ended it.
 //
-//   dotnet EdvrCpuProfile.dll --input <etl> --pid <pid> --output <report.json>
+//   dotnet EdupCpuProfile.dll --input <etl> --pid <pid> --output <report.json>
 //                             [--runtime-log <edvr_openxr_*.log>] [--frames <frames.jsonl>]
 //
 // report.json keeps every key it has always carried; the per-frame detail is
@@ -22,7 +22,7 @@ internal static class Program
             if (args.Length == 1 && args[0] == "--self-test")
             {
                 SelfTests.Run();
-                Console.WriteLine("EdvrCpuProfile self-test passed");
+                Console.WriteLine("EdupCpuProfile self-test passed");
                 return 0;
             }
 
@@ -50,7 +50,7 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"EdvrCpuProfile: {ex.Message}");
+            Console.Error.WriteLine($"EdupCpuProfile: {ex.Message}");
             return 1;
         }
     }
@@ -59,7 +59,7 @@ internal static class Program
                                    string? Symbols, string? EdvrExport, int EdvrExportWindow,
                                    string EdvrExportRegion, bool GpuCoverage = false);
 
-    private const string Usage = "usage: EdvrCpuProfile --input <etl> --pid <pid> --output <report.json> " +
+    private const string Usage = "usage: EdupCpuProfile --input <etl> --pid <pid> --output <report.json> " +
                                  "[--runtime-log <log>] [--frames <frames.jsonl>] [--symbols <dir>] " +
                                  "[--edvr-export <path> --edvr-export-window <n> [--edvr-export-region R1]] " +
                                  "[--gpu-coverage] | --self-test";

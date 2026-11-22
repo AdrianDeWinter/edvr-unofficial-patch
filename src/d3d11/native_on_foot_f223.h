@@ -131,13 +131,13 @@ struct LeadStats {
     void clear() noexcept { *this = LeadStats{}; }
 };
 
-// The F224 window's line. tools\edvr_log.py reads it.
+// The F224 window's line. tools\edup_log.py reads it.
 inline int formatLeadLine(char* buf, size_t n, uint32_t seconds, const LeadStats& s) noexcept {
     return std::snprintf(buf, n, "native on foot body move lead (F224) %u s: %u active calls, the lead rms %.1f mm, largest %+.1f mm; %u over the limit", seconds, s.active, s.active ? std::sqrt(s.sumSq / s.active) * 1000.0 : 0.0,
                          s.largestM * 1000.0, s.over);
 }
 
-// The window's line. tools\edvr_log.py reads it.
+// The window's line. tools\edup_log.py reads it.
 inline int formatLine(char* buf, size_t n, uint32_t seconds, const Stats& s) noexcept {
     return std::snprintf(buf, n, "native on foot root jump (F223) %u s: %u calls taken, the largest %+.2f m; %u refused (the camera itself moved); the move now %+.2f m", seconds, s.taken, s.largestM, s.refused,
                          s.moveM);

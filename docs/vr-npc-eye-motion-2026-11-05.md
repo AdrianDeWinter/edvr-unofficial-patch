@@ -75,7 +75,7 @@ The pair also draws 432- and 168-index meshes, not identified. They take the key
 
 ## What the flight must show
 
-`python tools\edvr_log.py --target <install> --expect-build <commit>` first.
+`python tools\edup_log.py --target <install> --expect-build <commit>` first.
 
 - Confirmed: the log has the family's derive line for `vs_33A5025C48FC8259`, and in a
   dump the eyes' pixels have SkinE.w 1 and take the engine path, with the holes in

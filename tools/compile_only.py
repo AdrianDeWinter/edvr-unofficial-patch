@@ -6,13 +6,13 @@ tools/linux_toolchain.py runs `build.bat --compile-only` under Wine, and that
 compiles the production DLLs into <root>/build/compile-build with none of the
 full build's validation gates.  This module is the one definition of such a
 build's identity, shared by the toolchain that writes its receipt and by
-`install_edvr.py --compile-only`, which refuses a build whose tree has moved.
+`install_edup.py --compile-only`, which refuses a build whose tree has moved.
 
   source_fingerprint(root)  HEAD plus build_receipt.py's input fingerprint.  An
                             edit since the compile changes it, and so does any
                             commit, even a docs-only one: the DLLs report the
                             version `git describe` gave at compile time, and
-                            `edvr_log.py --expect-build HEAD` would not match
+                            `edup_log.py --expect-build HEAD` would not match
                             them after one.
   write_receipt(...)        compile_only_receipt.json beside the outputs: kind,
                             validated=false, commit, describe, the fingerprint,

@@ -458,7 +458,7 @@ collision class in AGENTS.md before flying.
 
 Branch codex/kinematic-tracker. Build via the detached PowerShell
 idiom (handoff file), ~5 min, read the tail for all gates green.
-Install: python tools\install_edvr.py --target frontier, then
+Install: python tools\install_edup.py --target frontier, then
 --verify-only. Journal: dated settlement-doc entry + both Status
 blocks. Commit message to a file, UTF-8 no BOM, git commit -F; merge
 --no-ff to main; push; git log origin/main -1. Trace every new
@@ -730,7 +730,7 @@ tuning anywhere in the chain.
 
 Stage B shipped as 6b90d0b on codex/stage-b-ownership, built as
 v0.17.0-129-g305eeffc-dirty (pre-commit describe), installed to
-frontier (d3d11.dll sha256 81d5d27f434b2458, install_edvr.py
+frontier (d3d11.dll sha256 81d5d27f434b2458, install_edup.py
 --verify-only green). Gates: kinematic_motion_test 78 checks, 0
 failures (rig grew 0x280 -> 0x2C0 for the +0x270 sphere read; cases
 13-17 cover the LOD swap, three 132856 flight fixtures under 1 mm,
@@ -958,7 +958,7 @@ ship landing in view, temporal_aa_debug = movers HELD through the
 burst -- the protocol the 15:40 entry asked for. Right build
 (v0.17.0-137-g784f017d-dirty == the instrumented temporal_pass.cpp of
 6fd1e17; HEAD's merge commit 1fe33b9 post-dates the link, hence the
-edvr_log.py --expect-build mismatch note).
+edup_log.py --expect-build mismatch note).
 
 Findings, all from the new burst artifacts:
 
@@ -1271,7 +1271,7 @@ per-record job_mask distribution.
 ## 2026-09-20 (19:10: flight 190122 -- job attribution is a symmetric null)
 
 Flight edvr_gfx_20260920_190122.log (build v0.17.0-160-g4ee8c97d-dirty
-= the 89bbfd5 content, hoist included; verified via edvr_log.py).
+= the 89bbfd5 content, hoist included; verified via edup_log.py).
 fix.engine_motion on, >60 s, normal view, no eye burst. CodeHook:
 eval, jobs 0/1/2/4/5 and rig-eval all installed; job3 refused as usual
 (thunk prologue). One STAND-DOWN note is the menu period (10,554 of
@@ -2173,7 +2173,7 @@ repeats and pose changes within one frame were 0 in all eight windows; rows 270.
 changing inside an eye pass, because capture 043720 holds one block per pass.
 
 **What the next flight must show** (the build's own log first:
-`python tools\edvr_log.py --target frontier --expect-build HEAD`): the same scenario --
+`python tools\edup_log.py --target frontier --expect-build HEAD`): the same scenario --
 landing ship, fix.engine_motion=on, fix.temporal_aa=dlss, advanced.temporal_aa_diagnostics
 =1, the motion_source view. (1) no STOOD DOWN line; views given ~ eye-frames; invalidated
 ~0 (if not, the reason names the next fact), binding shadow disagreed 0, blend refused 0,
@@ -3420,7 +3420,7 @@ diagnosis reproducible.
 
 ### 2026-09-28 -- Post-F7 eye run 054658: engine motion holds, remaining world-covered detail still blurs
 
-Frontier log edvr_gfx_20260928_054242 matches HEAD 7664e386 via edvr_log.py.
+Frontier log edvr_gfx_20260928_054242 matches HEAD 7664e386 via edup_log.py.
 Sean reports building-like hull detail and seams still soft while the station
 rotates. The 16-frame capture uses 2037x1969 -> 4074x3938 per eye, CSV/D frames
 24366-24381. This is a different station angle from 162120, so coverage
@@ -4201,8 +4201,8 @@ Sean approved the plan (analysis\npc_blur\f2\f2_build_plan.md, 2.1-2.7): one fli
   identity swaps (now judged by coherence: records of one character share a previous position, and a group that moves differently from itself is
   a swap, one that moves together is a pacing hitch). Re-run on 154827: every hard check passes, 0 incoherent groups, 31 bases in hitches.
   `analyse()` in skin_ledger.h makes the same skip. Rig cases and mutants for both.
-- Flight (one, everything on): install on Frontier (`python tools\install_edvr.py --target frontier`), VR, F10's scene (a walking NPC within
-  about 10 m), Explorer Cam in, the eye-dump key once, then `python tools\edvr_log.py --target frontier --expect-build HEAD` and
+- Flight (one, everything on): install on Frontier (`python tools\install_edup.py --target frontier`), VR, F10's scene (a walking NPC within
+  about 10 m), Explorer Cam in, the eye-dump key once, then `python tools\edup_log.py --target frontier --expect-build HEAD` and
   `python analysis\npc_blur\f2\h1_skin_e.py <the capture directory>`.
 - Log signatures. WORKING: at start `skin join: hook armed: EliteDangerous64.exe+0x4C540E0 ... READ ONLY`, `skin join: the second skin is live
   (VR)`, one `skin join: eye N target 7 created ...` an eye; every 30 s `skin join: source=hook|hook+prefix hook=armed frames=N ... joined=J
@@ -4285,7 +4285,7 @@ Doubts. (a) The non-exporting skinned pixel-shader pairs (61AE with FC43/4504) w
 
 ### 2026-10-08 F13 (0975c0a4, log edvr_gfx_20261008_212129, eye runs 212348 and 212416): F2 is exact when the join is live; a second chain dispatch in a frame switches it off for four frames of seven
 
-Diagnosis only, no code changed. MEASURED = a log line, a dump number or file:line; INFERRED = said so. Build matched (`v0.18.3-72-g0975c0a4`, edvr_log.py --expect-build HEAD). Sean: the first dump (212348, 21:23:48) NPC walking, the second (212416, 21:24:16) "the whole scene having a history reset". F5 entry 21:23:41.8. The scripts (h9_refs.py, h10_pairs.py, h11_attrib.py, f15.py on m16_212348/212416) are local and gitignored. The summary lines are per 30 s window, not cumulative.
+Diagnosis only, no code changed. MEASURED = a log line, a dump number or file:line; INFERRED = said so. Build matched (`v0.18.3-72-g0975c0a4`, edup_log.py --expect-build HEAD). Sean: the first dump (212348, 21:23:48) NPC walking, the second (212416, 21:24:16) "the whole scene having a history reset". F5 entry 21:23:41.8. The scripts (h9_refs.py, h10_pairs.py, h11_attrib.py, f15.py on m16_212348/212416) are local and gitignored. The summary lines are per 30 s window, not cumulative.
 
 1. The walking NPC (212348, scene frame 13649, NPC 17.2 m away, 1,812 px). Crop 0, MEASURED: engine kind 1 (joined) on 1,812 of 1,812 px; SkinE valid on 1,573 (86.8%), which is every skinned pixel (the other 239 px are five rigid base-0 marker records, no E needed); |E| p50 0.84 / p90 1.93 / p99 3.25 / max 3.42 cm; h1_skin_e.py with w > 0.5 PASS. Residual beyond the used MV (f15.py, 12 pairs): limb median-of-blocks mean 0.30 px (range 0.07-0.94, p90 mean 1.34), against F11's walker 0.60 and F12's standing NPC 0.15. 212416 (NPC 12.8 m, 3,742 px, SkinE valid 3,203, |E| p50 1.14 cm): kind 1 on 100%, kind 2 in none of the 16 crops, residual 0.19 mean (0.10-0.36, p90 0.60, 15 pairs): the floor the doc asked for.
  The 0.94 in 212348 is not noise. D00 engine kinds in a 40 px ring round the tracked mask, per crop: crops 0-4 and 9-11 kind 1 about 2.3-2.5k px, kind 2 none; crops 5-8 and 12-15 kind 1 about 0.5k (the rigid marker records), kind 2 about 1.6-1.8k: the WHOLE skinned body is masked (valid 0, camera term only) in 8 of the 16 frames. The pairs with a masked NPC and a walking root (k = 5, 6) show root residual 1.11 / 1.34 px and limb 0.94 / 0.81; the joined pairs k = 9-11 give 0.26 / 0.24 / 0.23. In k = 12-15 the NPC was nearly still (root <= 0.10), so the masking cost little.
@@ -4374,13 +4374,13 @@ What changed (every item is VR; the flat profile's views, bindings and shader pa
 - engine_velocity.cpp: the source Eye gets its own target 7, R16G16B16A16F at the source depth's size (3808x2142 in the F14 flight, 65.3 MB), beside its slot target; a source draw of the exporting pair writes it; it is cleared at the frame's FIRST skinned draw, not at the frame's start (most frames on foot draw no character); the pose table and the pool scatter run for the source's pool snapshot as for an eye's (`g_skinPoseEye <= kEngineVelocitySourceEye`). `EngineVelocityViews::skin` (new, AddRef'd, released at every call site) is set by `engineVelocitySourceViews` only while a skinned draw wrote it this frame, never by `engineVelocityViews` (the eyes' own view is the compose's `engineVelocitySkinView`), and never in the flat profile.
 - flat_mono_shader_source.h / flat_mono_resolve.cpp: the prep binds the view at t17 and sets bit 2 (value 4) of `debug.w` only when the frame carries one. A record with a palette base (`data[0].x != 0`) then takes `prev = world + (EN[275] - EB[275]) + E/100` through the shared `engineReprojectRowsE` (skinned) with the SOURCE pass's rows, class 15 `skinned` (accepted, so it gets its own census slot 24, the stripe is 25 counters); a texel with no valid flag or a non-finite E is class `masked` (kind 2: no history, as Explorer Cam). The TAA kernel's three `debug.w != 0` tests are now `(debug.w & 3) != 0`: the first draft shared the constants and would have read bit 2 as "alternate-camera coverage present" and shown every pixel's current colour (the TAA case F of flat_skin_gpu_tests.h failed on it before the fix, and fails again with the fix reverted).
 - fixed_shader_source.h (`kScreenMotionPs`) / screen_motion.cpp: the same branch as the eye-route fallback (t15, `engine.w`), kind 7 counted as joined and in its own slot, painted as joined (17).
-- Logs: `vr world route refusal 5s:` ends `skinned-joined=N`; `skin join: on-foot source target 7 created WxH ...`; the second-skin line ends `on-foot source ... handed ... N times (live M), cleared K times`; the on-foot pixels line says how many joined pixels were a skinned character's. tools\edvr_log.py parses and prints `skinned-joined`.
+- Logs: `vr world route refusal 5s:` ends `skinned-joined=N`; `skin join: on-foot source target 7 created WxH ...`; the second-skin line ends `on-foot source ... handed ... N times (live M), cleared K times`; the on-foot pixels line says how many joined pixels were a skinned character's. tools\edup_log.py parses and prints `skinned-joined`.
 
 Flat-profile proof: the flat resolver's engine views carry no `skin` (a flat source has no target 7), so bit 2 is never set, the prep binds the fourteen or sixteen slots it always did, and the skinned branch is not taken. Held by: flat_mono_resolve_test (a record with a base and a joined marker, no view: the whole output bit for bit the base-0 record's; a base with no marker, no view: bit for bit a not-rig surface; a rigid record with the view bound: unchanged; EDVR's TAA with the view bound blends as without it; 14 prep mutants, each caught, including the view bit ignored and a rigid record taking the branch); skin_engine_test L13.j-l (skinned shaders in the flat profile make no target 7, bind none, patch no vertex shader) and the mutant that removes ALL the flat layers (the vrOnly families, the skinDraw guard, the flat source's early return, the wantSkin guard; any one alone is equivalent by design) is caught. The prep's binding pins in flat_temporal_test were re-pinned on purpose (18 slots when skinned).
 
 Not live: a source frame whose job table changed shape has valid 0 and E 0 at every drawn pixel (L13.g), which the prep reads as masked (no history), exactly as Explorer Cam; a frame whose skinned draws wrote nothing hands out no view, so the bit is clear and the record is a not-rig surface (the camera term), as before F15.
 
-Rigs: skin_engine_test 1647 checks (L13 new, 9 new engine mutants, 69 in all), engine_velocity_test 15462 (panel K/L/R/P cases, 11 screen-shader mutants), flat_mono_resolve_test (skin scenario), vr_world_route_test (token, class 15, a mutant), flat_temporal_test (log gate: 0 failures), edvr_log --self-test.
+Rigs: skin_engine_test 1647 checks (L13 new, 9 new engine mutants, 69 in all), engine_velocity_test 15462 (panel K/L/R/P cases, 11 screen-shader mutants), flat_mono_resolve_test (skin scenario), vr_world_route_test (token, class 15, a mutant), flat_temporal_test (log gate: 0 failures), edup_log --self-test.
 
 What to look for in the F15 flight (VR, a skinned NPC in view on foot in the first-person panel, then Explorer Cam):
 - First person: `skin join: on-foot source target 7 created ...` once; `vr world route refusal 5s: ... skinned-joined=N` with N > 0 while the character is in view (N = 0 with the character in view means the route did not read E; the line before it, the second-skin line, shows whether target 7 was handed out); `masked` in the same line is the skinned pixels with no valid texel. Cost: the second-skin line's `cleared` count and `engine velocity` in-frame ms.
@@ -4456,7 +4456,7 @@ Full build green on the merged tree (branch `claude/laughing-chandrasekhar-a1e5e
 - Log signatures. Working: `engine motion: family vs_A6A39338C06E03A1: live; substituted N binds ... patched [ps_1AE6AB9A94C0456E]` with N above 0 once an NPC with hair is in view; `skin join: second skin this window: binds writing E` higher than before; no `takes no second skin` line for vs_A6A3; in an eye dump the hair box has slot codes other than 0xBF800000 and SkinE valid on most of it. Not working: that family line says STOOD DOWN or `refused [...]`, or the hair box still reads slot -1.
 - Cost to read: hair draws gain the cloned vertex chain (about 8 draws an NPC across both eyes, 5,079 and 25,521 indices each).
 - Flown 2026-11-01 on the installed build (g45857cf4): the pilot, "Hair looks good now"; merged to main on his word. No eye dump or log was read for it, so the slot and SkinE signatures above are unconfirmed and the real-pair WARP checks (K9, corpus identity) never finished. The next flight bullet below was the plan.
-- Next flight (as planned): an NPC with hair that turns its head or walks, DLSS on, the eye-dump key once, then `python tools\edvr_log.py --target frontier --expect-build HEAD --health`. The scripts that produced the numbers above (hair box, per-frame motion, the raw-frame shift, the ledger and the pair scan) are in the hand-over folder `npc-hair-20261101-scripts`.
+- Next flight (as planned): an NPC with hair that turns its head or walks, DLSS on, the eye-dump key once, then `python tools\edup_log.py --target frontier --expect-build HEAD --health`. The scripts that produced the numbers above (hair box, per-frame motion, the raw-frame shift, the ledger and the pair scan) are in the hand-over folder `npc-hair-20261101-scripts`.
 - Open, separate: the same dump shows the camera term itself wrong for every pixel without a record on some frames. In 154858 the chosen camera rows equal the previous frame's (zero rotation delta, 24324 and 24328) and, on 24330, jump 5.5 cm in translation and back on 24331, while the raw frames moved under 1 px. The recorded motion at the hair on those two frames is -42.7 and +43.7 px, on the wall (4 to 7 m) -3.8 to -7.5 and +4.9 to +8.6, and on the face (E) 0.9 and 1.2. This is the camera-pick family of the sky flicker arc (`docs/sky-flicker-2026-10-13.md`) showing up on foot with the eye-target rule on (`changed_picks=0`), and it hits the nearest unowned surface hardest, which is the hair. It is not fixed here. Issue 167.
 
 ### 2026-11-01 ship external camera "AA not engaging on some textures": not the hair family (ruled out, no code change)
@@ -4479,7 +4479,7 @@ The pilot asked to chase the streaks of the entry above (dump `180433299003`: 27
 - The draw is not named by anything we hold, so the capture is built. `src/d3d11/depth_writer_probe.*` rides the pixel probe's seam and key: with `advanced.pixel_probe` set to any point, the eye-dump key also arms it for the run's first frame. After every draw that can write an eye's scene depth (depth on, write mask all, the depth probe's scene view or another view of the same texture) it copies the depth and runs a compute pass that stamps the draw's id wherever the depth differs from the copy before it. At the frame's close it writes `edvr_logs\pool\depthwriter_<stamp>_e0.bin` and `_e1.bin` (EDVRTEX1, DXGI 42, the id of the last draw that changed each pixel's depth) and `depthwriter_<stamp>.json` (per id: shaders, counts, depth function and write, stencil, blend and RT0 mask, RTV0, the rasteriser's DepthBias, SlopeScaledDepthBias, clamp, clip and cull, and the pixels it owns at the end), and the log names the 24 draws owning the most pixels. Cost: one depth copy and one compute pass per depth-writing draw of that one frame, a hitch on top of the eye dump's. A depth clear between draws makes the next draw look like the writer of everything it did not repaint (not hooked).
 - Read it with `python tools\depth_writer_join.py --stamp <run>`: it takes the run's EngineSlots and Z, finds the stale pixels (marked, and the two depths differ in a bit), and counts the writer ids over them grouped by shader pair and state. `tools\depth_writer_join.py --self-test` is in the build; `tools\depth_writer_probe_test` (66 checks on WARP: last writer wins, an unchanged repaint owns nothing, a read-only draw is not followed, a second view of the same texture is, an array depth is declined once, the compute state comes back, the files and log) is a build gate.
 - Predictions the flight settles: (1) the stale pixels' writers are one or a few ids whose rows show a nonzero DepthBias or slope bias, or a depth function other than GEQUAL, or a different depth write order than the keyed draw; (2) if they are the keyed draw's own id, the keyed draw wrote a depth other than its SV_Position.z (bias), and the fix is for the slot's depth to be compared with the bias taken in; (3) if the table has an unkeyed pool pair there, that pair is the one to key or to read. A result that fits none (the stale pixels' writers are all id 0: the depth was never changed after the clear, so the slot is the one that is wrong) would put the question on the slot write instead.
-- Flight (the pilot): `edvr.ini` in the Frontier folder has `pixel_probe = 0.5,0.5` (set for this build). Start the game, take the ship out, put the external camera on it (camera suite, ship front) until the hull streaks show, hold still, press the eye-dump key (INSERT) once, then quit the game. Read: `python tools\edvr_log.py --target frontier --expect-build HEAD --version`, then the log's `depth writer probe:` lines (armed, done with draws followed above 100 an eye and `2 map(s)`, then the owners), then `python tools\depth_writer_join.py --stamp <the run's stamp, in the armed line>`. For the camera gate's orbital-speed origin jumps (14 of 16 frames in the last ship dump): the eye run's `motion.csv` `jumped` column already carries them; a second dump with the ship slow or parked (a hangar, a station's pad view) tells whether the streaks follow the speed.
+- Flight (the pilot): `edvr.ini` in the Frontier folder has `pixel_probe = 0.5,0.5` (set for this build). Start the game, take the ship out, put the external camera on it (camera suite, ship front) until the hull streaks show, hold still, press the eye-dump key (INSERT) once, then quit the game. Read: `python tools\edup_log.py --target frontier --expect-build HEAD --version`, then the log's `depth writer probe:` lines (armed, done with draws followed above 100 an eye and `2 map(s)`, then the owners), then `python tools\depth_writer_join.py --stamp <the run's stamp, in the armed line>`. For the camera gate's orbital-speed origin jumps (14 of 16 frames in the last ship dump): the eye run's `motion.csv` `jumped` column already carries them; a second dump with the ship slow or parked (a hangar, a station's pad view) tells whether the streaks follow the speed.
 
 ### 2026-11-02 the hull streaks named: the overlay draws' slot depth, and the stale pixels' camera term (VR, overlay guard extended to the eye passes, ON MAIN f5e0b924 on the pilot's word before the flight, NOT FLOWN)
 
@@ -4531,7 +4531,7 @@ The fix the entry above proposed, on the pilot's word. `kMaxRows` (`skin_join.h`
 - New test, `skin_join_test` J8.f: a filler entity of 18 jobs of 4,000 bones puts the real characters at rows 72,001 and beyond; after three warm frames every job joins, `cap` is 0, and the last job's base (past row 65,536) has a previous base. Before the change those jobs were counted as `cap` failures.
 - Validation: full `build.bat --wait-lock` on native Windows, all gates passed (422 s; skin_join_test 156 checks and 84 mutants, skin_join_gpu_test 59 checks and 59 mutants, skin_engine_test 1940, skin_clone_test 249, skin_ledger_test 78).
 - Cost, not measured: the tables are 92 bytes a row, 16.6 MB at 180,224 rows against 6 MB; the 3-table clear covers 2.75 times the rows (4 to 5 us a frame at 65,536 measured on 10-09).
-- Flight check, same station with NPCs in view (a Mission Giver conversation and the concourse): `python tools\edvr_log.py --target <install> --expect-build HEAD --grep "skin join"`. Working: `failed: ... cap 0` in every window (it was 30% of jobs), `compose: skinned pixels on the trained path (joined N, masked M)` with M a small share (216,494 masked against 1,226,027 joined in the 05:29:36 window). In an eye dump, `masked_by_base.py` (shared notes folder) reads no masked skinned pixel at base >= 65,536. Refuted if `cap` is 0 and NPCs still show masked pixels: the next suspects are `pose` (12% of jobs) and `prefix`, and `binds writing no history`.
+- Flight check, same station with NPCs in view (a Mission Giver conversation and the concourse): `python tools\edup_log.py --target <install> --expect-build HEAD --grep "skin join"`. Working: `failed: ... cap 0` in every window (it was 30% of jobs), `compose: skinned pixels on the trained path (joined N, masked M)` with M a small share (216,494 masked against 1,226,027 joined in the 05:29:36 window). In an eye dump, `masked_by_base.py` (shared notes folder) reads no masked skinned pixel at base >= 65,536. Refuted if `cap` is 0 and NPCs still show masked pixels: the next suspects are `pose` (12% of jobs) and `prefix`, and `binds writing no history`.
 - Also asked for the Holo-Me repro: the log's `skin join` lines above are the cheap check there; a steady commander-only scene probably keeps its rows low, so `cap` near 0 with masked pixels would be a different cause.
 
 ## 2026-11-03 (the VR overlay guard's copy cost, read from seven flights)

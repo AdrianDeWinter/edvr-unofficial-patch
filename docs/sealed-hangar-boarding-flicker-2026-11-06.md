@@ -27,7 +27,7 @@ State: DIAGNOSED to ranked hypotheses only. No cause proven. The video matches n
 
 **Ruled out for this video:** see the last section.
 
-**Next step (cheapest).** When it recurs, immediately press the log mark key (NumLock, as in the 11-03 flights) and keep the log; then read `python tools\edvr_log.py --target steam --expect-build HEAD --grep "optimized station"` at that time. A `sealed in` within 1 s, plus trace dumps or `missing from N`, proves hypothesis 1. On a build with the guard, the line to look for is `optimized station: guard:`; the bay vanishing with no such line argues against hypothesis 1. Also run one boarding with `fix.optimized_stations` off and flip it on in F8 (a cheap A/B). Ask Sean whether the clip is his and which build; a clip with a log changes everything above.
+**Next step (cheapest).** When it recurs, immediately press the log mark key (NumLock, as in the 11-03 flights) and keep the log; then read `python tools\edup_log.py --target steam --expect-build HEAD --grep "optimized station"` at that time. A `sealed in` within 1 s, plus trace dumps or `missing from N`, proves hypothesis 1. On a build with the guard, the line to look for is `optimized station: guard:`; the bay vanishing with no such line argues against hypothesis 1. Also run one boarding with `fix.optimized_stations` off and flip it on in F8 (a cheap A/B). Ask Sean whether the clip is his and which build; a clip with a log changes everything above.
 
 ## Detail
 

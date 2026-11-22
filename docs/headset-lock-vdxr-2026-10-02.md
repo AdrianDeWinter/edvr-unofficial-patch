@@ -59,7 +59,7 @@
 
 Nothing here changes what the game draws, how frames are paced or when the runtime calls
 the vendor, except the test hold. Each line is written by the half named; the reader is
-`python tools\edvr_log.py --target steam --freezes`.
+`python tools\edup_log.py --target steam --freezes`.
 
 1. **Graphics memory** (graphics log, `src\common\vram_watch.h`, `src\d3d11\vram_tick.cpp`,
    one call in the Present hook, VR and flat alike). `vram: reason=armed|periodic|pressure|

@@ -194,15 +194,15 @@ exact text, worst-case length). Mutants caught: contention counting removed -> `
 is counted once, under other, while it is still blocked`; run counting removed -> `FAIL: flat lazy: with the lazy form off every run of
 the overlay sequence is filed as an eager capture run, with its D3D calls`.
 
-Flight plan (flat, Steam or Epic install, one on-foot settlement, 2 min; `python tools\install_edvr.py --target steam --scope flat`, then
-`--verify-only`, then `python tools\edvr_log.py --target steam --expect-build HEAD` first):
+Flight plan (flat, Steam or Epic install, one on-foot settlement, 2 min; `python tools\install_edup.py --target steam --scope flat`, then
+`--verify-only`, then `python tools\edup_log.py --target steam --expect-build HEAD` first):
 1. DLSS on: read `draw hook flat branch`, `draw hook remainder`, `ctor lookup block`, `ctor predicate block`, `draw dtor
    shell`, the by-part hooks, the contention line and the runs line. The per-draw cost is what H1/H2 rank; one flight eliminates several.
 2. A/B: F8 `fix.temporal_aa` off and back (the census runs only while a temporal mode is selected; the thunk scopes then cost a gate
    load and a compare). For a true no-EDVR baseline see below.
 3. Compare the lock-free share (`primary copy lock-free exits`, expect over 90%) against the 2026-10-16 log's 84-86% no-claim calls.
 
-`install_edvr.py --suspend` exists (`--target <dir|steam|epic|frontier>`, `--dry-run` to preview). It renames the game directory's
+`install_edup.py --suspend` exists (`--target <dir|steam|epic|frontier>`, `--dry-run` to preview). It renames the game directory's
 d3d11.dll to d3d11.dll.edvr-suspended (one rename, hashed before and after; only an EDVR build is accepted) and `--resume` puts it back.
 It refuses unless the game is PROVEN stopped, and the DLL is loaded at launch, so each leg of an A/B needs a game restart: suspend,
 launch, fly, quit, resume. Settings, receipts and backups stay. It takes the graphics proxy only, so a d3d11 chain behind it (Sean's
@@ -300,7 +300,7 @@ a load and a compare), and `clocksWanted()` is on under Windows and off under Wi
  A. An adaptive period: kRenderPeriod 16 while draws a frame are under about 3000, backing off to 64 above it (the price is per
     clocked frame and grows with draws; a settlement frame is where it hurts and where the figure is least needed once calibrated).
  B. Off by default outside a diagnostic: clocksWanted() default false, on for `EDVR_FLAT_CPU_CLOCKS=1` or an F8 diagnostics toggle;
-    a user report then needs the toggle, and `edvr_log.py` and the reports' tooling would have to say "census off" (the line already
+    a user report then needs the toggle, and `edup_log.py` and the reports' tooling would have to say "census off" (the line already
     prints `clocks off, no thread clocked` with present p50/p95 and the GPU spans, so the log stays parseable). This needs a quoted
     key or env decision from Sean (Scope control) and a release-note line.
  C. Keep the families but drop the per-bind and per-block scopes from the shipped build (compile flag), leaving them for flights.
@@ -311,7 +311,7 @@ enough. The always-on part that remains is the gate load and compare per scope (
 ## 2026-10-16, results: round 2 flown, and the AA-off A/B
 
 Recorded from the coordinator's analysis of the two flat flights below; the logs are the evidence (check each with
-`python tools\edvr_log.py --target steam --expect-build HEAD` before reading counters off it).
+`python tools\edup_log.py --target steam --expect-build HEAD` before reading counters off it).
 
 ### Round 2 (`edvr_gfx_20261016_060143.log`, DLSS, 14.6k draws a frame)
 - EDVR render-thread CPU, floor-net: 5.17 ms a frame, 353 ns a draw. Present p50 14.91 ms, GPU span p50 12.52 ms, 63.6 fps. The census's
@@ -778,9 +778,9 @@ rendering change, configuration key or performance improvement is claimed.
 ## 2026-10-17: Steam carrier fast/slow/fast cost capture
 
 The follow-up installed and separately verified the flat payload using
-`tools/install_edvr.py --target steam --scope flat`; settings were preserved.
+`tools/install_edup.py --target steam --scope flat`; settings were preserved.
 Sean completed the requested fast/slow/fast comparison and quit normally.
-`tools/edvr_log.py --target steam --expect-build HEAD --version` verified
+`tools/edup_log.py --target steam --expect-build HEAD --version` verified
 `edvr_gfx_20261017_185739.log`: `v0.20.0-rc.4-2-g137d4743`, PE `6AD4140F`,
 flat `/novr`. Subsequent reads pinned `--expect-build 137d4743`. This is the
 local RTX 5090/DLSS setup, 2496x1404 rendering into 3840x2160, not the AMD/FSR
@@ -1670,7 +1670,7 @@ turn at least 90 degrees to the fast view for 30 seconds, and return to the
 same slow view for 30 seconds. Record FPS for each leg and whether AA stays
 visibly engaged. Do not press F7, NumLock or its modifier chords during
 these windows. Normal quit afterwards is fine; no live object read is needed.
-Use `edvr_log.py --target steam --expect-build ee68d075` before reading.
+Use `edup_log.py --target steam --expect-build ee68d075` before reading.
 Compare DSV/depth hits and misses, actual getter stage equalities, raw ns/call
 and per-frame cost normalized by call/draw counts, discovery-zero windows,
 and AA continuation/reset counters. Different carrier positions/views or
@@ -1936,7 +1936,7 @@ DLSS selected, menus closed and FPS uncapped. Wait two minutes, then hold
 slow 30 seconds, turn at least 90 degrees to fast 30 seconds, return to the
 same slow view 30 seconds; record FPS and visible AA continuity. No F7,
 NumLock, Ready or diagnostic arm is required. Normal quit afterward is fine.
-Read the resulting log with `edvr_log.py --expect-build 709ba499` first.
+Read the resulting log with `edup_log.py --expect-build 709ba499` first.
 Check nonzero draw-issue-callback time/calls and reached Geometry/Light DSV
 Get counters; absent counters with clocks active mean the new stage did
 not run, not a proven zero cost. Keep raw OM Get counters' historical scope
@@ -2151,7 +2151,7 @@ close menus and wait two minutes in the slow view. Hold slow for 30 seconds,
 turn at least 90 degrees to the same fast view for 30 seconds, then return
 to the same slow view for 30 seconds. No F7, NumLock or manual capture arm.
 Normal quit afterward is fine. Read the log with
-`edvr_log.py --target steam --expect-build 041f8e78` first. Compare callback
+`edup_log.py --target steam --expect-build 041f8e78` first. Compare callback
 residual plus three children with old callback gross, update clock-floor
 estimates and check raw-domain/cache counters, draw load, route and AA
 history/refusal/reset/backend continuity. Shader/DSV/constant child calls

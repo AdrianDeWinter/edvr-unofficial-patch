@@ -22,7 +22,7 @@ loader inside SteamVR or another headset vendor's installation.
   original VR DLL for uninstall. It never deploys a partial native package. A
   game update's newer original replaces the recovery original only after both
   versions have been backed up.
-- Normal `install_edvr.py` invocations always install the complete native
+- Normal `install_edup.py` invocations always install the complete native
   package. `--dll` and `--openvr` remain compatibility aliases for that same
   package. A fresh install does not require an original OpenVR DLL to run.
   Existing foreign graphics DLLs require the GUI installer's chaining logic.

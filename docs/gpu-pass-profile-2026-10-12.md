@@ -48,7 +48,7 @@ Flight plan (one press each; the hangar trial is off for all three):
 2. Sealed hangar, seated, with Optimized station off: press once. Compare lighting_volume and the top passes with step 1.
 3. Supercruise: press once. Compare hud_overlay and the top passes with step 1.
 A press during a capture is refused with a note. A capture arms at the next frame boundary, not mid-frame.
-Check the first line of the log: the version line must name the built commit (edvr_log.py --expect-build HEAD).
+Check the first line of the log: the version line must name the built commit (edup_log.py --expect-build HEAD).
 
 Build gates: tools\gpu_pass_profile_test --self-test (in build.bat). The DLL build compiles src\d3d11\gpu_pass_profile.cpp.
 Still open: no flight yet; the overhead below is an estimate, not a measurement.

@@ -199,7 +199,7 @@ In the graphics log: `world scale: 130% (live, visual.world_scale; 100%
 before)` when the key changes, and `native temporal: history reset, the eye
 separation moved from ...` when the temporal pass drops its history.
 
-`edvr_log.py --health` has a "world scale" rule that reads the runtime
+`edup_log.py --health` has a "world scale" rule that reads the runtime
 log: OK when every latched value was followed by a read at that value,
 NEVER APPLIED when one was not, silent when the value never left 100.
 

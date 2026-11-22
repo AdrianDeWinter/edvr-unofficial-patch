@@ -285,7 +285,7 @@ static void scopeMarkTests() {
         check(uiLayerDecide(writer) == UiLayerDecision::kDepthStencilTest, "a mark draw that writes depth keeps the refusal");
         check(std::strcmp(uiMarkDepthName(UiMarkDepth::kUntested), "untested") == 0 && std::strcmp(uiMarkDepthName(UiMarkDepth::kSeeded), "seeded") == 0 &&
                   std::strcmp(uiMarkDepthName(UiMarkDepth::kSeededReadOnly), "seeded read-only") == 0 && std::strcmp(uiMarkDepthName(UiMarkDepth::kTestsOff), "tests off") == 0,
-              "the paths' names are the press line's labels (tools\\edvr_log.py reads them)");
+              "the paths' names are the press line's labels (tools\\edup_log.py reads them)");
     }
 
     // the decision: ONE, DEST_ALPHA (the dump census, bl=12,7,1/2,7,1) is refused as it stands and additive on an alpha-less target

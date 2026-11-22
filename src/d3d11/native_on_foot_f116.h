@@ -298,7 +298,7 @@ struct SubmittedRun {
     }
 };
 
-// ---- The lines (the Log adds the time); tools\edvr_log.py --health's `HUD hide (F116)` reads them by their first words --------------------------------
+// ---- The lines (the Log adds the time); tools\edup_log.py --health's `HUD hide (F116)` reads them by their first words --------------------------------
 inline void footprintText(char* out, size_t size, float footprint) noexcept {
     if (footprint >= 0.0f) std::snprintf(out, size, "%.1f%%", static_cast<double>(footprint) * 100.0);
     else std::snprintf(out, size, "unknown");

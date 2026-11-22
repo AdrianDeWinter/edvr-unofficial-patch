@@ -5,7 +5,7 @@ Agent material for the 2026-10-23 retarget. Not a repo tool, not in the build ga
 Ported from .agents/build-334473/retarget.py; run with the repo's Python.
 
 Scope: tracked text files under src/ and tools/, excluding src/installer/ and
-tools/install_edvr.py, tools/build_diff.py, tools/build_diff_targets.json.
+tools/install_edup.py, tools/build_diff.py, tools/build_diff_targets.json.
 
   retarget.py --dry-run   print the summary and write the full log; change no source file
   retarget.py --apply     rewrite the in-scope source files (refuses a second run)
@@ -38,7 +38,7 @@ OLD_SHA = '6891f70a021fa9f3a0e00458c284f48d1226e68ae7fc02ad48081aed47857e93'
 NEW_SHA = 'ed5a8f8cd10f9a80d3bda5badd7ba1d4fcfc15996c8c7e018852cb170e264b63'
 OLD_PREFIX, NEW_PREFIX = '6891f70a', 'ed5a8f8c'
 OLD_ABBR, NEW_ABBR = '6891f70a...7857e93', 'ed5a8f8c...e264b63'
-EXCLUDED_FILES = {'tools/install_edvr.py', 'tools/build_diff.py', 'tools/build_diff_targets.json'}
+EXCLUDED_FILES = {'tools/install_edup.py', 'tools/build_diff.py', 'tools/build_diff_targets.json'}
 EXCLUDED_PREFIX = ('src/installer/',)
 
 # Identity values: hex (any 0x spelling) and decimal. SizeOfImage is unchanged.

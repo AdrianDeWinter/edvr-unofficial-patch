@@ -26,7 +26,7 @@ D3D12 DLLs (about 29 MB) into `%LOCALAPPDATA%\EDVR\fsr4-sdk`; `third_party\fsr4`
 or `EDVR_FSR4_SDK` name another copy, and `EDVR_FSR4_SDK=none` forces the build
 without it. A build with no copy still succeeds, and `fix.temporal_aa = fsr4`
 then refuses at run time. The DLLs land in `build\` and
-`python tools\install_edvr.py --fsr4` places them beside the game; the
+`python tools\install_edup.py --fsr4` places them beside the game; the
 installer and the release packages do not carry them yet.
 
 Then build:
@@ -95,7 +95,7 @@ terms; without it `setup` stops before downloading. Everything lives in the
 Git-ignored `.toolchains/windows/` of the main checkout (`EDVR_TOOLCHAIN_HOME`
 moves it) and serves every worktree. A tree's output, a worktree's included, is
 `build/compile-build` in that tree, with a `compile_only_receipt.json` that
-`install_edvr.py --compile-only` checks (`tools/compile_only.py`).
+`install_edup.py --compile-only` checks (`tools/compile_only.py`).
 
 It differs from CI's build in a few ways: the MSVC (14.44.35207) and Windows
 SDK (10.0.26100) are CI's own; shaders compile with the SDK's own

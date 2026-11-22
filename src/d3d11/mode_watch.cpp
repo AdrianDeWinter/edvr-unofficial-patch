@@ -239,7 +239,7 @@ private:
         if (s.outcome != Outcome::Posted) return;
         postMode(now, GameMode::Vr, true);
         Log::get().note("mode watch: eye submits began after the live session; the game is a VR game");
-        Log::get().note("mode watch: live-rise t=%llu -> posted vr", static_cast<unsigned long long>(now));  // edvr_log.py parses this line
+        Log::get().note("mode watch: live-rise t=%llu -> posted vr", static_cast<unsigned long long>(now));  // edup_log.py parses this line
     }
 
     // The suffix every read and write line carries: the last full second's eye submits (zero until the first sample completes).
@@ -422,7 +422,7 @@ void commitPosted(uint64_t packed) {
     const bool flatRefused = target == RuntimeProfile::Flat && !flatSwitchAvailable();
     if (flatRefused) {
         target = RuntimeProfile::Passthrough;
-        // The "profile switch: " prefix makes --switches show it as a note row beside the switch line (tools\edvr_log.py).
+        // The "profile switch: " prefix makes --switches show it as a note row beside the switch line (tools\edup_log.py).
         Log::get().note("profile switch: flat refused, ResizeBuffers was not hooked this session (posted %s t=%llu from %s); the switch runs "
                         "as passthrough",
                         cls, t, from);

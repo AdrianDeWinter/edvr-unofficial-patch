@@ -292,9 +292,34 @@ bool migrateLegacyDataRoot(const std::wstring& newRoot) {
     return migratedAny;
 }
 
+bool processUnderWine() {
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    return ntdll && GetProcAddress(ntdll, "wine_get_version") != nullptr;
+}
+
+std::wstring protonLocalAppDataForGame(const std::wstring& gameDir) {
+    if (gameDir.empty()) return std::wstring();
+    std::wstring lowered = gameDir;
+    for (wchar_t& c : lowered) c = c == L'/' ? L'\\' : static_cast<wchar_t>(towlower(c));
+    const size_t pos = lowered.find(L"\\steamapps\\");
+    if (pos == std::wstring::npos) return std::wstring();
+    const std::wstring pfxLocal = gameDir.substr(0, pos) +
+        L"\\steamapps\\compatdata\\359320\\pfx\\drive_c\\users\\steamuser\\AppData\\Local";   // 359320: Elite's Steam app id
+    return dirExists(pfxLocal) ? pfxLocal : std::wstring();
+}
+
+std::wstring settingsRootForGame(const std::wstring& gameDir, const std::wstring& root, bool underWine) {
+    if (root.empty() || !underWine) return root;
+    const std::wstring ownDefault = defaultMirrorRoot();
+    if (ownDefault.empty() || _wcsicmp(root.c_str(), ownDefault.c_str()) != 0) return root;
+    const std::wstring pfxLocal = protonLocalAppDataForGame(gameDir);
+    return pfxLocal.empty() ? root : joinPath(pfxLocal, L"EDUP");
+}
+
 std::wstring mirrorDirFor(const GameInstall& game, const std::wstring& root) {
     if (root.empty() || game.dir.empty()) return std::wstring();
-    return edvr::mirrorDirForSource(root, game.dir, game.source);
+    // Under Wine the game reads the EDUP folder of its own Proton prefix; the launcher may run in another prefix.
+    return edvr::mirrorDirForSource(settingsRootForGame(game.dir, root, processUnderWine()), game.dir, game.source);
 }
 
 MirrorInfo readMirror(const std::wstring& mirrorDir) {

@@ -200,8 +200,8 @@ secondary image positions, sharp at any magnification).
 
 ## Flight 1: identification
 
-Nothing to build: current HEAD, installed with `tools\install_edvr.py`. First
-question afterwards, as always: `python tools\edvr_log.py --target steam
+Nothing to build: current HEAD, installed with `tools\install_edup.py`. First
+question afterwards, as always: `python tools\edup_log.py --target steam
 --expect-build HEAD`.
 
 Settings (edvr.ini; set before launch, the first two need a restart):

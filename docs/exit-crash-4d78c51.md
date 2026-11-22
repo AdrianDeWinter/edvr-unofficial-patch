@@ -67,7 +67,7 @@ Open hypotheses and what separates them:
 Close the game and the Epic launcher's game process first. In the repo (or a
 worktree with the tool):
 
-    python tools\install_edvr.py --target "C:\Program Files\Epic Games\EliteDangerous\Products\elite-dangerous-odyssey-64" --suspend
+    python tools\install_edup.py --target "C:\Program Files\Epic Games\EliteDangerous\Products\elite-dangerous-odyssey-64" --suspend
 
 That renames `d3d11.dll` to `d3d11.dll.edvr-suspended` (one rename, hash checked,
 refused while the game runs). Fly 3 sessions: load a commander, quit to desktop,
@@ -103,7 +103,7 @@ freed by the game's pool teardown: MEM_FREE with no EDVR involvement).
 
 ## Journal
 
-**2026-10-09.** Opened. Added `--suspend` / `--resume` to `tools\install_edvr.py`
+**2026-10-09.** Opened. Added `--suspend` / `--resume` to `tools\install_edup.py`
 with a self-test (passes; dry run against the Epic dir resolves). Static analysis
 of the global done by a delegated agent (report above, mid-confidence on the
 token field name, high on the single writer, single releaser and single

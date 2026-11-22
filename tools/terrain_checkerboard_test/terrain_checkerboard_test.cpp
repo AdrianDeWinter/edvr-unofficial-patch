@@ -19,7 +19,7 @@
 //   T4  the monitor's rule: the first read is published, a rewrite flips the state at the next poll, a known state stands against one bad
 //       read (a half-written file) and goes to Unknown on the second, a transient does not accumulate, a change of preset is a change
 //   T5  the worker thread on a real log: the flat profile starts nothing and logs nothing; the VR profile starts once, publishes the
-//       state and a version at each change, says it in the log (start, each change), is stopped by its flag, and tools\edvr_log.py
+//       state and a version at each change, says it in the log (start, each change), is stopped by its flag, and tools\edup_log.py
 //       --terrain-checkerboard reads what it wrote
 //   T6  the wiring, as source pins: the toast and the Status hint in menu.cpp (the toast's latch set before menu.toasts is tested, no
 //       line added to any page, the hint after the supersampling one), the render thread never reads a file, the flat profile never
@@ -31,7 +31,7 @@
 //       when, the three log lines) and the source pins that keep it one parser
 //
 // Usage: --self-test [<repo root>] [--only T1,T3,...] [--root <dir>] | --dry-run (does nothing). Run from the repo root (the pins read src\
-// and T5 runs python tools\edvr_log.py). Exit 0 and "PASS" only when every check holds; the first failing label is printed as `FAIL: <label>`.
+// and T5 runs python tools\edup_log.py). Exit 0 and "PASS" only when every check holds; the first failing label is printed as `FAIL: <label>`.
 #include <windows.h>
 
 #include <cstdarg>
@@ -751,7 +751,7 @@ std::string runReader(const std::wstring& log, int* rc) {
     for (wchar_t c : log) narrow.push_back(static_cast<char>(c));
     std::string script = g_root;
     if (!script.empty() && script.back() != '\\' && script.back() != '/') script += '\\';
-    script += "tools\\edvr_log.py";
+    script += "tools\\edup_log.py";
     const std::string cmd = "python \"" + script + "\" --file \"" + narrow + "\" --terrain-checkerboard 2>&1";
     std::string out;
     *rc = -1;
@@ -912,7 +912,7 @@ void caseT5() {
         const std::string out = runReader(logPath, &rc);
         check(rc == 0 && has(out, "vr terrain checkerboard verdict:") && has(out, "PASS (READER) the worker started") && has(out, "5 read line(s) in the order they were logged") &&
                   has(out, "read ") && has(out, ": ON in preset Custom (Custom.4.4.fxcfg), TerrainCheckerboardRenderingEnabled=true") && has(out, "WARN (HEADSET)"),
-              "T5e: tools\\edvr_log.py --terrain-checkerboard reads the lines the real worker wrote: the worker, the five reads, and no menu line (the rig has no menu)");
+              "T5e: tools\\edup_log.py --terrain-checkerboard reads the lines the real worker wrote: the worker, the five reads, and no menu line (the rig has no menu)");
         edvr::terrainCheckerboardTestReset();
     }
     edvr::g_runtimeProfile = RuntimeProfile::Vr;

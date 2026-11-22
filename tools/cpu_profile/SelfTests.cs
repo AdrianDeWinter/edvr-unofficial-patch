@@ -59,7 +59,7 @@ internal static class SelfTests
         GameBuildMismatchReport();
         SymbolAnnotation();
         ReportShape();
-        Console.WriteLine($"EdvrCpuProfile self-test: {_checks} checks");
+        Console.WriteLine($"EdupCpuProfile self-test: {_checks} checks");
     }
 
     private static void Check(bool condition, string name)

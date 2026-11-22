@@ -716,7 +716,7 @@ before and after. Exact binaries and receipts are archived in
   are pinned to Khronos SDK 1.1.46 with the upstream license retained.
 
 Set the census key in each proxy's applicable INI before launch. Use
-`tools/install_edvr.py` for installation and `tools/edvr_log.py` to retrieve
+`tools/install_edup.py` for installation and `tools/edup_log.py` to retrieve
 logs and verify build identity. The selected test installation is Frontier.
 Preserve its tuned INI and runtime choice when enabling the census; use a
 backup and review the single-key change before installing it. Steam is not the

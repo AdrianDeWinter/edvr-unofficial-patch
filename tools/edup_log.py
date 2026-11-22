@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 """Find the log a flight just wrote, and say whether it is the build you made.
 
-    python tools/edvr_log.py --target steam --version
-    python tools/edvr_log.py --target steam --expect-build HEAD
-    python tools/edvr_log.py --target steam --grep "Stats\\[4[0-9]\\]"
-    python tools/edvr_log.py --target steam --tail 80
-    python tools/edvr_log.py --target frontier --tally vh
-    python tools/edvr_log.py --target frontier --tally vh --frame 1
-    python tools/edvr_log.py --target steam --tally offscreen
-    python tools/edvr_log.py --target steam --tally pose
-    python tools/edvr_log.py --target frontier --tally cover
-    python tools/edvr_log.py --target frontier --tally periodic --expect-build HEAD
-    python tools/edvr_log.py --target frontier --tally periodic --window-ms 250
-    python tools/edvr_log.py --target frontier --tally periodic --infer-runs
-    python tools/edvr_log.py --target frontier --camera-census --expect-build HEAD
-    python tools/edvr_log.py --target frontier --maps-sharp --expect-build HEAD
-    python tools/edvr_log.py --target frontier --vscreen-fit --expect-build HEAD
-    python tools/edvr_log.py --target epic --flat-upscale --expect-build HEAD
-    python tools/edvr_log.py --target frontier --vr-supersampling --expect-build HEAD
-    python tools/edvr_log.py --target frontier --ui-composites --expect-build HEAD
-    python tools/edvr_log.py --target frontier --terrain-checkerboard --expect-build HEAD
-    python tools/edvr_log.py --target frontier --route-curve --expect-build HEAD
-    python tools/edvr_log.py --target steam --map-bounce --expect-build HEAD
-    python tools/edvr_log.py --target steam --freezes --expect-build HEAD
-    python tools/edvr_log.py --target steam --switches
-    python tools/edvr_log.py --target epic --health --expect-build HEAD
-    python tools/edvr_log.py --target epic --health --since 08:08:40 --until 08:10:00
-    python tools/edvr_log.py --list
+    python tools/edup_log.py --target steam --version
+    python tools/edup_log.py --target steam --expect-build HEAD
+    python tools/edup_log.py --target steam --grep "Stats\\[4[0-9]\\]"
+    python tools/edup_log.py --target steam --tail 80
+    python tools/edup_log.py --target frontier --tally vh
+    python tools/edup_log.py --target frontier --tally vh --frame 1
+    python tools/edup_log.py --target steam --tally offscreen
+    python tools/edup_log.py --target steam --tally pose
+    python tools/edup_log.py --target frontier --tally cover
+    python tools/edup_log.py --target frontier --tally periodic --expect-build HEAD
+    python tools/edup_log.py --target frontier --tally periodic --window-ms 250
+    python tools/edup_log.py --target frontier --tally periodic --infer-runs
+    python tools/edup_log.py --target frontier --camera-census --expect-build HEAD
+    python tools/edup_log.py --target frontier --maps-sharp --expect-build HEAD
+    python tools/edup_log.py --target frontier --vscreen-fit --expect-build HEAD
+    python tools/edup_log.py --target epic --flat-upscale --expect-build HEAD
+    python tools/edup_log.py --target frontier --vr-supersampling --expect-build HEAD
+    python tools/edup_log.py --target frontier --ui-composites --expect-build HEAD
+    python tools/edup_log.py --target frontier --terrain-checkerboard --expect-build HEAD
+    python tools/edup_log.py --target frontier --route-curve --expect-build HEAD
+    python tools/edup_log.py --target steam --map-bounce --expect-build HEAD
+    python tools/edup_log.py --target steam --freezes --expect-build HEAD
+    python tools/edup_log.py --target steam --switches
+    python tools/edup_log.py --target epic --health --expect-build HEAD
+    python tools/edup_log.py --target epic --health --since 08:08:40 --until 08:10:00
+    python tools/edup_log.py --list
 
 This is the sanctioned replacement for `Get-Content <some path> -Tail 200 |
 Select-String ...`, retyped once a flight for a month.
@@ -401,6 +401,27 @@ def read_log_text(path):
     return log_session.read_log_text(path)
 
 
+def _settings_candidates(game_dir):
+    """The settings files the runtime reads for this game, in its order (src/common/config.cpp): this user's live copy
+    under %LOCALAPPDATA%\\EDUP\\<leaf>-<store>\\edup.ini (the newest when the store cannot be told from here), then the
+    game folder's edup.ini and its legacy edvr.ini."""
+    out = []
+    base = os.environ.get("LOCALAPPDATA", "")
+    leaf = os.path.basename(os.path.normpath(game_dir))
+    if base and leaf:
+        root = os.path.join(base, "EDUP")
+        try:
+            live = [os.path.join(root, name, "edup.ini") for name in os.listdir(root)
+                    if name.lower().startswith(leaf.lower() + "-")]
+        except OSError:
+            live = []
+        live = [path for path in live if os.path.isfile(path)]
+        live.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+        out.extend(live)
+    out.extend(os.path.join(game_dir, name) for name in ("edup.ini", "edvr.ini"))
+    return out
+
+
 def config_log_dir(game_dir):
     """log.dir out of the target's edup.ini (or legacy edvr.ini), if it sets one.
 
@@ -410,8 +431,7 @@ def config_log_dir(game_dir):
     nothing.
     """
     ini = None
-    for name in ("edup.ini", "edvr.ini"):
-        cand = os.path.join(game_dir, name)
+    for cand in _settings_candidates(game_dir):
         if os.path.isfile(cand):
             ini = cand
             break
@@ -26425,7 +26445,7 @@ def self_test():
             print("version_matches(%r, %r) != %s" % (a, e, want))
             ok = False
 
-    tmp = tempfile.mkdtemp(prefix="edvr_log_test_")
+    tmp = tempfile.mkdtemp(prefix="edup_log_test_")
     try:
         game = os.path.join(tmp, "game")
         logs = os.path.join(game, "edvr_logs")
@@ -26468,6 +26488,27 @@ def self_test():
             print("native and redirected legacy discovery did not remain independent")
             ok = False
         os.remove(os.path.join(game, "edvr.ini"))
+
+        # log.dir in this user's live settings copy (%LOCALAPPDATA%\EDUP\<leaf>-<store>\edup.ini), which the runtime
+        # reads before anything beside the game.
+        saved_local = os.environ.get("LOCALAPPDATA")
+        os.environ["LOCALAPPDATA"] = os.path.join(tmp, "local")
+        try:
+            live = os.path.join(tmp, "local", "EDUP", os.path.basename(game) + "-steam")
+            os.makedirs(live)
+            with open(os.path.join(live, "edup.ini"), "wb") as f:
+                f.write(("[log]\ndir = %s\n" % other).encode("utf-8"))
+            with open(os.path.join(game, "edvr.ini"), "wb") as f:
+                f.write(b"[log]\ndir = nowhere\n")
+            if log_dir_for(game) != other:
+                print("log_dir_for did not read log.dir from the live per-user settings copy: %r" % log_dir_for(game))
+                ok = False
+            os.remove(os.path.join(game, "edvr.ini"))
+        finally:
+            if saved_local is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = saved_local
 
         # After the edvr_logs -> edup_logs rename both folders sit beside the game: the graphics logs of both are
         # searched (newest first across them), so last week's flight in edvr_logs is still found.
@@ -26895,7 +26936,7 @@ def self_test_log_session():
         "KEPT_FROM": (log_session.KEPT_FROM, "[edvr] kept lines from tail segment "),
         "KEPT_SPENT": (log_session.KEPT_SPENT, "[edvr] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no "
                                                "longer fit here); later ones are only in the tail segments still on disk."),
-        "GAP": (log_session.GAP_FORMAT % 3, "[edvr_log] GAP: tail segment 3 was deleted; the first line of each kind kept from it follows"),
+        "GAP": (log_session.GAP_FORMAT % 3, "[edup_log] GAP: tail segment 3 was deleted; the first line of each kind kept from it follows"),
     }
     for name, (got, want) in pins.items():
         if got != want:
@@ -26908,7 +26949,7 @@ def self_test_log_session():
         if not m or m.group("tag") != want:
             fail("LOG_RE no longer takes the head %s" % name)
 
-    tmp = tempfile.mkdtemp(prefix="edvr_log_session_")
+    tmp = tempfile.mkdtemp(prefix="edup_log_session_")
     try:
         def run(args):
             buf = io.StringIO()
@@ -26943,15 +26984,15 @@ def self_test_log_session():
         if rc != 0 or "version 0.22.0-5-gabcdef0" not in out:
             fail("--version does not read the head: %s" % out)
         rc, out = run(["--dir", tmp, "--tag", "gfx", "--nth", "1", "--grep", r"alpha|beta|GAP|segment \d line"])
-        want = ["[edvr_log] GAP: tail segment 1 was deleted", "alpha #0", "[edvr_log] GAP: tail segment 2 was deleted", "beta #0", "segment 3 line", "segment 4 line",
+        want = ["[edup_log] GAP: tail segment 1 was deleted", "alpha #0", "[edup_log] GAP: tail segment 2 was deleted", "beta #0", "segment 3 line", "segment 4 line",
                 "segment 5 line", "segment 6 line"]
-        got = [l for l in out.splitlines() if not l.startswith("[edvr] ") or "[edvr_log]" in l]
+        got = [l for l in out.splitlines() if not l.startswith("[edvr] ") or "[edup_log]" in l]
         if rc != 0 or len(got) != len(want) or any(w not in g for w, g in zip(want, got)):
             fail("--grep on a stitched session: %r" % out)
         rc, out = run(["--dir", tmp, "--tag", "gfx", "--nth", "0", "--tail", "40"])
         lines = out.splitlines()
-        if rc != 0 or lines.count("[edvr_log] GAP: tail segment 4 was deleted; the first line of each kind kept from it follows") != 1 or \
-                lines[lines.index("[edvr_log] GAP: tail segment 4 was deleted; the first line of each kind kept from it follows") + 1].find("delta #0") < 0:
+        if rc != 0 or lines.count("[edup_log] GAP: tail segment 4 was deleted; the first line of each kind kept from it follows") != 1 or \
+                lines[lines.index("[edup_log] GAP: tail segment 4 was deleted; the first line of each kind kept from it follows") + 1].find("delta #0") < 0:
             fail("a segment missing in the middle is not a GAP with its kept line: %r" % out)
         # --file on a head reads the stitched session; on a lone segment, only that.
         rc, out = run(["--file", os.path.join(tmp, "edvr_gfx_20261110_060503.log"), "--grep", "segment 4 line"])
@@ -29825,7 +29866,7 @@ def self_test_periodic():
     check(len(sc["events"]) == 3 and sc["unparsed"]["count"] == 0,
           "expected 3 events and no unparsed lines from the rig lines")
 
-    tmp = tempfile.mkdtemp(prefix="edvr_log_periodic_")
+    tmp = tempfile.mkdtemp(prefix="edup_log_periodic_")
     try:
         # --- one flight: graphics log (local prefix) + runtime log (UTC) ---
         # Local is UTC-7 here. (a) sits beside a summary's `at` with no SLOW

@@ -101,7 +101,7 @@ contract covering all 255 settings. DLSS 310.7.0 was verified against the
 pinned SDK and carried in the installer. Documentation reflow, local link
 checks and `git diff --check` passed.
 
-The Frontier package was installed through `tools/install_edvr.py --target
+The Frontier package was installed through `tools/install_edup.py --target
 frontier --all`, following its successful dry run. A separate `--verify-only`
 pass verified the native DLL pair, loader and bootstrap configuration. The
 user's `edvr.ini` was byte-unchanged across installation. The Windows-selected
@@ -134,8 +134,8 @@ and exit normally. Check a render-resolution change across its required restart
 separately if convenient. The same build should later be checked on the
 available Pimax/SteamVR OpenXR and Quest/Meta or VDXR paths.
 
-Confirm the installed build with `tools/install_edvr.py --verify-only`, then
-read matching `openxr` and `gfx` logs through `tools/edvr_log.py`. Look for
+Confirm the installed build with `tools/install_edup.py --verify-only`, then
+read matching `openxr` and `gfx` logs through `tools/edup_log.py`. Look for
 `native_submit_window`, active temporal/sharpen/menu treatment, valid GPU
 timing and normal teardown. A correct flight qualifies integration; it does not
 establish a speedup without a controlled baseline at matching dimensions.

@@ -7,7 +7,7 @@
 //   2. the gate (when there is a lens) and the ease (M from 1 to its value over 0.25 s);
 //   3. the lens as a function: the tangent plane of an eye, the 128 rays over the depth, the open-sight rule, r(theta), the mask, the source of a magnified pixel, the window of the
 //      picture the passes touch, the layout of the buffer the first pass fills and the second reads, a reference march the GPU rig compares the shader with;
-//   4. the instrument's accumulators and its two lines (the announce, one line a press), which tools\edvr_log.py renders its --health fixtures from.
+//   4. the instrument's accumulators and its two lines (the announce, one line a press), which tools\edup_log.py renders its --health fixtures from.
 #pragma once
 
 #include <algorithm>

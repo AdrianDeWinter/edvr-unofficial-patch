@@ -33,7 +33,7 @@
   .text for the call-site signature, one match with the same head, else inert. Log: `terrain
   cull cover: hook live at exe+0x443E800 (..)` or `inert: <why>`; one `first call: in aspect ..
   vfov .. -> out ..`; `armed; N of M calls widened in the last 10 min (..)` every 10 min, zeros
-  included. `python tools\edvr_log.py --tally cover` tables them.
+  included. `python tools\edup_log.py --tally cover` tables them.
 - **FLOWN (2026-10-10, Quest 3 via VD, 90 Hz, Frontier, test build 52fe241c; gfx
   edvr_gfx_20261010_190514.log, runtime edvr_openxr_20261010_190515_484_25604.log).** Cover
   off 19:05:14-19:10:54 and 19:14:27-end, on 19:10:54-19:14:27: pilot 20 black flashes with
@@ -92,7 +92,7 @@ culler follows the report, not the optics.
   game thread asks for the head pose "now" (GetDeviceToAbsoluteTrackingPose,
   return RVA 0x4E3881, prediction ~0 s) and selects terrain with it; the frame is
   drawn with the display-time pose. Measured on the Crystal Super / Pimax
-  OpenXR, build e256e9bb, `edvr_log.py --tally pose` on
+  OpenXR, build e256e9bb, `edup_log.py --tally pose` on
   `edvr_openxr_20261009_144149_193_26440.log`: under `off` that pose is
   **-41 to -44 ms** from the drawn frame's display time and turned 0.9 deg mean,
   up to 4.1 deg, from the drawn pose, r = +0.98 against head speed. Pilot:
@@ -130,7 +130,7 @@ culler follows the report, not the optics.
   drawn one and a head turn's leading edge goes missing. (Census: eye cameras
   are built twice a frame, via wrapper slot 16 and a second thread via slot 26.)
 - **Instruments on e256e9bb (temporary):** a `pose gap:` line per caller every
-  2 s in the runtime log (`edvr_log.py --tally pose`), and `advanced.cull_pose`
+  2 s in the runtime log (`edup_log.py --tally pose`), and `advanced.cull_pose`
   = off | display | next | display_direct | next_direct (`_direct` adds a 2-byte
   latch-bypass hot patch at 0x4E36EE). Build 332841 only.
 - **Next:** ship `display` as the behaviour with no key, propose removing the
@@ -335,7 +335,7 @@ ships beside it, for a different defect (the cull cover, below); it writes one
 function of the game, and it has no key either.
 
 **Measured (flight 3, 2026-10-09, Crystal Super via Pimax OpenXR, build
-e256e9bb, `edvr_openxr_20261009_144149_193_26440.log`, `edvr_log.py --tally
+e256e9bb, `edvr_openxr_20261009_144149_193_26440.log`, `edup_log.py --tally
 pose`).** Under `off` the call returning to exe+0x4E3881 was located
 **-41 to -44 ms** from the drawn frame's display time, its pose turned **0.9
 deg mean and up to 4.1 deg** from the drawn pose, and that angle correlated
@@ -371,10 +371,10 @@ that function and widens its two float arguments to the largest tangents of the
 frusta the game is handed, over both eyes. No render size changes, nothing is
 cropped, and the cost is not measurable (19 to 25 calls a frame of arithmetic). VR
 only; another game build is searched for the call site and left alone unless there
-is exactly one match. `python tools\edvr_log.py --target <store> --tally cover`
+is exactly one match. `python tools\edup_log.py --target <store> --tally cover`
 reads the `terrain cull cover:` lines.
 
-**Reading a log.** `python tools\edvr_log.py --target <store> --tally pose`
+**Reading a log.** `python tools\edup_log.py --target <store> --tally pose`
 tables the `pose gap:` lines by (thread, return address). Elite's game-thread
 caller should read a gap of about one display period (+11 ms at 90 Hz) and an
 angle to the drawn pose of about head speed times that period (r near +1: it is
@@ -776,7 +776,7 @@ it directly.
   on) and their summed index counts, since tile LOD varies. A culler whose
   frustum widens admits more tiles at the edges, so the group that feeds it
   should show more draws and indices than its neighbouring off windows.
-  `edvr_log.py --tally cull` tables the windows and the paired differences,
+  `edup_log.py --tally cull` tables the windows and the paired differences,
   leaving out windows in which the head moved faster than 20 deg/s.
 - `advanced.cull_probe = measure` is the positive control. The old guard
   (`fix.cull_guard = symmetric`) is proven to remove the squares, and a counter
@@ -1004,7 +1004,7 @@ short l, long m) unresolved U; >1deg match .. short .. (1p .., 2p+ ..) long .. (
 max X deg (class); late frames n; window S s`
 
 `late frames` is the runtime's late-frame count (frame_boundary.h) over the window, `window` its length (60 s, less for a window cut short by a mode change or the end of
-the run, which writes its last lines at close). `python tools\edvr_log.py --target <t> --tally pose` tables them per mode and thread with per-minute rates after the
+the run, which writes its last lines at close). `python tools\edup_log.py --target <t> --tally pose` tables them per mode and thread with per-minute rates after the
 `pose gap:` table. Tests: tools\openxr_pose_test (the classification at the quarter-period and 1.5-period boundaries on both signs, the thresholds, the store and its
 overflow, the unresolved paths, the window and the mode split, the exact line, tools\pose_slot_fixture.log held byte for byte), tools\openxr_native_test (the same through
 the host), the log tool's `--self-test`.
@@ -1129,7 +1129,7 @@ middle third within 0.1 of the midline. `head=` is the angular speed between the
 `edge black: event eye=E frame=N t=HH:MM:SS.mmm points=K cells=WxH centre=X,Y region=R border=B head=H deg/s` for the first 60 events (then `edge black: 60 events listed;
 further events are counted in the summaries only.`); every 60 s, events or none, `edge black: 60 s: frames N eyes-sampled M events E (outer-bottom a, outer-middle b, ...,
 centre c) largest K points; transient points total T; black-start points (black now, lit before, still black) S; samples lost L`; and `edge black: closed -- totals for the
-run: ...` when the channel closes. `python tools\edvr_log.py --target <t> --tally edge` tables them. No `edge black:` start line means the watch never ran.
+run: ...` when the channel closes. `python tools\edup_log.py --target <t> --tally edge` tables them. No `edge black:` start line means the watch never ran.
 
 *Cost.* The CPU side is about a dozen D3D calls and the judgement of one grid (three passes over 16384 bytes: 25 to 28 us measured in the rig (28.4 in the loaded full build), on the development machine, a render-thread cost per eye-frame, under the 40 us line); the GPU
 side is 16384 single-texel loads and stores, a 64 KB copy and a 64 KB Map. The log's `periodic work: edge_black` line carries the measured per-eye figure from a real flight. Memory: 64 KB x 4 x 2 staging.
@@ -1223,7 +1223,7 @@ checks (an aligned entry, a decodable prologue, a trampoline in reach) stand as 
 once a second with the config tick, the window closed at the change); `terrain cull cover: call N of 4: in aspect A vfov V deg -> out aspect A' vfov V' deg (widened|unchanged); T=t H=h;
 mode on|off` for the session's first four calls; `terrain cull cover: S s: mode on|off calls N widened W; last in aspect A vfov V deg -> out aspect A' vfov V' deg; T=t H=h` every 60 s,
 calls or none, and at each change. In VR expect about two calls a frame (180 a second at 90 Hz) with the eye's own aspect and vFOV as the in-values.
-`python tools\edvr_log.py --target <t> --tally cover` tables them per mode and joins the edge-black 60 s summaries to the mode in force at their start and end (`mixed` when a change fell
+`python tools\edup_log.py --target <t> --tally cover` tables them per mode and joins the edge-black 60 s summaries to the mode in force at their start and end (`mixed` when a change fell
 inside one).
 
 *Tests.* tools\terrain_cover_test (build.bat `:rig_terrain_cover_test`, 11308 checks): the rule for the three rigs, a symmetric headset, an input already wider, bad input, the key off, a
@@ -1256,7 +1256,7 @@ cover's own call census were the evidence. The watch, its shader, staging, rig, 
 **What ships (Sean approved: ship the cover as behaviour with no key, keep `next` exactly as in 0.19, remove what is no longer needed).** A fresh branch from main with only:
 src\d3d11\terrain_cull_cover_core.h (the rule, the gate, the signature scan, the lines), terrain_cull_cover_hook.cpp/.h (the relay, the detour, the heartbeat), the wiring (device_hook.cpp
 installs it in the startup block and polls it with the config tick; native_temporal.cpp's begin() tells it the frusta the game is handed), tools\terrain_cover_test and its
-build.bat rig, `edvr_log.py --tally cover`. Always on in VR; installed in VR only (a flat session says it is inert, once). The key is gone everywhere (it never reached main, so
+build.bat rig, `edup_log.py --tally cover`. Always on in VR; installed in VR only (a flat session says it is inert, once). The key is gone everywhere (it never reached main, so
 there is no retired-key entry), and so are the mode lines, the four first-call lines and the 60 s census. The lines, as shipped (the fixture's values):
 
 ```

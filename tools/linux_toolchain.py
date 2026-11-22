@@ -452,11 +452,11 @@ def build_dlls(layout, root, clean=False):
     print("linux_toolchain: COMPILE-ONLY build of %s (%s), NOT Windows validated: %s" % (root, describe, path.parent))
     if describe.endswith("-dirty"):
         print("linux_toolchain: WARNING: compiled from a dirty tree; commit, then compile, before a build "
-              "that will be flown (edvr_log.py --expect-build HEAD will not match it)")
+              "that will be flown (edup_log.py --expect-build HEAD will not match it)")
     hint = "" if root == REPO else " --root %s" % root
     print("Install it for a test flight (close Elite first):\n"
-          "    python3 tools/install_edvr.py --target steam --compile-only%s --dry-run\n"
-          "    python3 tools/install_edvr.py --target steam --compile-only%s" % (hint, hint))
+          "    python3 tools/install_edup.py --target steam --compile-only%s --dry-run\n"
+          "    python3 tools/install_edup.py --target steam --compile-only%s" % (hint, hint))
     return 0
 
 

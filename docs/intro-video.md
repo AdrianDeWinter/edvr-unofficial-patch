@@ -1012,7 +1012,7 @@ the tick never ran)` and the `created for eye` lines still sit after
 
 ### 9. Flight reading
 
-FIRST: `python tools\edvr_log.py --target steam --expect-build HEAD --version`
+FIRST: `python tools\edup_log.py --target steam --expect-build HEAD --version`
 -- exit 2 means a stale DLL and nothing below is evidence. Then read the gfx
 log in this order, with the openxr log beside it.
 
@@ -1133,7 +1133,7 @@ untouched by the instrumentation; nothing committed):
 | I6 present park | Present-thread cost of the runtime-start invoke | `present_park,ms=<n>,jobs=<n>,reason=runtime_start,result=<EVRInitError>,path=<present_queue\|inline>` |
 | warm-up | `advanced.temporal_aa_warm` (default on) | `temporal aa: NVIDIA warmed before the first submitted frame -- initialisation A ms, eye 0 B ms, eye 1 C ms ...` (L-DONE) |
 
-**Flight reading, in order.** First `edvr_log.py --expect-build HEAD`:
+**Flight reading, in order.** First `edup_log.py --expect-build HEAD`:
 exit 2 kills the log as evidence. Then: did the warm-up run at all
 (L-START present, or L-LATE naming why -- dead tick, the gate never
 opened, or off); if it ran, did it help (L-DONE before the first `native
@@ -1449,7 +1449,7 @@ cull-off state per distinct rasterizer state of the game (4 kept).
 
 **Next flight (one session, two launches):** Steam or Frontier, default
 `visual.intro_video = screen`, `fix.panel_curvature = 0.3`, then 0. Read
-`python tools\edvr_log.py --target steam --expect-build HEAD --grep
+`python tools\edup_log.py --target steam --expect-build HEAD --grep
 "intro video curve|splash curve|intro curve|SURFACE strip|intro video
 size"` first. At 0.3 watch the movie, the splash, the loading dialogs
 over it and the cut into the menu. PASS: a bent screen like the on-foot

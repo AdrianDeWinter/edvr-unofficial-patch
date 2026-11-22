@@ -17,7 +17,7 @@
 //   - the gate's combine: with the key off the gate is today's byJournal || byDepth for every input;
 //   - the door's predicate: the layer holds an eye's WHOLE picture when it TOOK that eye's 2D screen composite in this
 //     sequence and every draw the game made into an eye-sized target this frame was taken;
-//   - the 5 s window and the text of every line the feature logs (the reader, tools\edvr_log.py --maps-sharp, parses them).
+//   - the 5 s window and the text of every line the feature logs (the reader, tools\edup_log.py --maps-sharp, parses them).
 // It never touches D3D: the runtime hands it facts.
 //
 // THE KEY-OFF CONTRACT. With the key off nothing here is ever consulted: uiMapsGateHeld answers byJournal || byDepth,
@@ -135,7 +135,7 @@ struct UiMapsWindow {
 };
 
 // ---- the text of every line ---------------------------------------------------------------------------------------------
-// The reader (tools\edvr_log.py --maps-sharp) parses these; the first words of each are its anchors.
+// The reader (tools\edup_log.py --maps-sharp) parses these; the first words of each are its anchors.
 inline int uiMapsFormatOn(char* out, size_t size, uint64_t frame, bool carriedWorld, const char* journal) {
     return std::snprintf(out, size,
         "on foot maps sharp: ON at frame=%llu (the maps gate is on): the 2D screen is the world only while a world "

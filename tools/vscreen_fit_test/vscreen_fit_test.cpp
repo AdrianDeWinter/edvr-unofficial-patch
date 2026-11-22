@@ -21,7 +21,7 @@
 //       interpolation, an even thinning that keeps the median and the p10 across a long session)
 //   R8  the stored record: the codec round trip, the est=p10 tag, and what it refuses (an older build's median record, which has no tag)
 //   R9  the log's text: the `vScreen resolution:` line names the rule and why, the menu hint fits its buffer, the 30 s line's
-//       tokens (the reader, tools\edvr_log.py --vscreen-fit, parses exactly these), the save-failed token (only after a failed save)
+//       tokens (the reader, tools\edup_log.py --vscreen-fit, parses exactly these), the save-failed token (only after a failed save)
 //       and the SAVE FAILED line
 //   R10 the setting parse (keyTextIsAuto)
 //   R11 the state files on disk (vscreen_auto_state.cpp): the footprint's round trip beside the eye width's, in a temp directory,
@@ -653,7 +653,7 @@ void caseR8() {
 }
 
 // ---- R9: the log's text --------------------------------------------------------------------------------------------------
-// The tokens before " -- " of a line: key=value pairs, the way edvr_log.py reads them.
+// The tokens before " -- " of a line: key=value pairs, the way edup_log.py reads them.
 std::vector<std::pair<std::string, std::string>> tokensOf(const std::string& line, const char* from) {
     std::vector<std::pair<std::string, std::string>> out;
     size_t at = from ? line.find(from) : 0;
@@ -679,7 +679,7 @@ std::string tok(const std::vector<std::pair<std::string, std::string>>& v, const
 }
 
 // ---- the fixture: tools\vscreen_fit_fixture.log, what a good flight on Sean's rig writes, held to exactly what the formatters write ----
-// edvr_log.py --vscreen-fit's own self-test reads the checked-in file. Regenerate it with `vscreen_fit_test.exe --write-fixture <path>`
+// edup_log.py --vscreen-fit's own self-test reads the checked-in file. Regenerate it with `vscreen_fit_test.exe --write-fixture <path>`
 // after a deliberate change to a line's text; the check below fails the build until the file says what the formatters say.
 std::vector<fit::WindowLine> fixtureWindows() {
     std::vector<fit::WindowLine> out;

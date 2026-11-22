@@ -45,8 +45,8 @@ import xml.etree.ElementTree as ET
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-PROFILE = ROOT / "tools" / "cpu_profile" / "edvr_cpu.wprp"
-ANALYZER = ROOT / "build" / "cpu_profile" / "EdvrCpuProfile.dll"
+PROFILE = ROOT / "tools" / "cpu_profile" / "edup_cpu.wprp"
+ANALYZER = ROOT / "build" / "cpu_profile" / "EdupCpuProfile.dll"
 SMOKE = ROOT / "build" / "openxr_trace_test.exe"
 GAME = "EliteDangerous64.exe"
 
@@ -56,9 +56,9 @@ def source_hashes():
     # a new one must invalidate the validated-build stamp like Program.cs does.
     sources = sorted("tools/cpu_profile/" + path.name
                      for path in (ROOT / "tools" / "cpu_profile").glob("*.cs"))
-    names = (*sources, "tools/cpu_profile/EdvrCpuProfile.csproj",
+    names = (*sources, "tools/cpu_profile/EdupCpuProfile.csproj",
              "tools/cpu_profile/Directory.Build.props",
-             "tools/cpu_profile/edvr_cpu.wprp", "src/common/native_cpu_trace_events.h")
+             "tools/cpu_profile/edup_cpu.wprp", "src/common/native_cpu_trace_events.h")
     # Normalize source line endings so git's Windows checkout conversion is inert.
     return {name: hashlib.sha256((ROOT / name).read_text(encoding="utf-8").encode("utf-8")).hexdigest()
             for name in names}
@@ -89,7 +89,7 @@ def build_analyzer(args):
         raise ValueError("TraceEvent assemblies were not found; supply --trace-event-directory. No download is performed.")
     output = ANALYZER.parent
     intermediate = str(output / "obj") + os.sep
-    command = [dotnet, "build", str(ROOT / "tools/cpu_profile/EdvrCpuProfile.csproj"),
+    command = [dotnet, "build", str(ROOT / "tools/cpu_profile/EdupCpuProfile.csproj"),
                "-c", "Release", "--nologo", "--output", str(output),
                "-p:TraceEventDirectory=" + str(dependency),
                "-p:BaseIntermediateOutputPath=" + intermediate,
@@ -506,17 +506,17 @@ def native_log_time(line):
 
 def flight_version(target, pid, expected, process_created):
     # Keep all flight-log discovery/reading in the sanctioned log module.
-    import edvr_log
-    for directory in edvr_log.log_dirs_for(str(target), "openxr"):
-        for _, _, path in edvr_log.find_logs(directory, "openxr"):
+    import edup_log
+    for directory in edup_log.log_dirs_for(str(target), "openxr"):
+        for _, _, path in edup_log.find_logs(directory, "openxr"):
             if Path(path).name.endswith("_%d.log" % pid):
-                line, actual, _ = edvr_log.version_line(edvr_log.read_text(path))
+                line, actual, _ = edup_log.version_line(edup_log.read_text(path))
                 logged = native_log_time(line)
                 # Native timestamps truncate to milliseconds; allow that precision
                 # only, so a recent old log cannot pass after PID reuse.
                 if logged is None or logged < process_created - 0.001:
                     continue
-                if not edvr_log.version_matches(actual, expected):
+                if not edup_log.version_matches(actual, expected):
                     raise ValueError("Captured flight build %r does not match %r" % (actual, expected))
                 return dict(log=path, version=actual)
     raise FileNotFoundError("No fresh native flight log found for captured PID %d" % pid)
@@ -572,7 +572,7 @@ def validate_gpu_smoke_report(report):
 
 
 def installed_receipt(target):
-    import install_edvr
+    import install_edup
     primary = target / "edvr_native_receipt.json"
     # Reinstalls preserve earlier receipts and write a new uniquely named sibling.
     candidates = [primary, *target.glob("edvr_native_receipt.json.pre-*.bak*")]
@@ -580,7 +580,7 @@ def installed_receipt(target):
     errors = []
     for path in candidates:
         try:
-            return install_edvr.verify_native_receipt(str(path), str(target)), str(path)
+            return install_edup.verify_native_receipt(str(path), str(target)), str(path)
         except (OSError, ValueError) as exc:
             errors.append(str(exc))
     raise ValueError("No receipt verifies the active native install: " + (errors[0] if errors else str(target)))
@@ -788,14 +788,14 @@ def plan(args):
     gpu = getattr(args, "gpu", False)
     if gpu and args.memory_ring:
         raise ValueError("--gpu requires file mode; --memory-ring is not supported")
-    import install_edvr
-    import edvr_log
-    target = Path(install_edvr.resolve_target(args.target)).resolve()
+    import install_edup
+    import edup_log
+    target = Path(install_edup.resolve_target(args.target)).resolve()
     executable = target / GAME
     if not executable.is_file():
         raise ValueError("Game executable is missing: " + str(executable))
     receipt, receipt_path = installed_receipt(target)
-    expected = edvr_log.expected_version(args.expect_build, str(ROOT))
+    expected = edup_log.expected_version(args.expect_build, str(ROOT))
     dotnet = shutil.which("dotnet")
     wpr = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "wpr.exe"
     for path in (PROFILE, ANALYZER, wpr, *([SMOKE] if args.smoke_first else [])):
@@ -1405,7 +1405,7 @@ def self_test():
 
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp)
-        import edvr_log
+        import edup_log
         process_created = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc).timestamp()
         stale = directory / "stale_321.log"
         stale.write_text("2025-01-02 03:04:05.000 UTC pid=321 tid=1 "
@@ -1416,21 +1416,21 @@ def self_test():
         fresh_good = directory / "good_321.log"
         fresh_good.write_text("2026-01-02 03:04:05.200 UTC pid=321 tid=1 "
                               "module_init,version=fixture,durable_log=1\n", encoding="utf-8")
-        with mock.patch.object(edvr_log, "log_dirs_for", return_value=[str(directory)]):
-            with mock.patch.object(edvr_log, "find_logs", return_value=[("", "openxr", str(stale))]):
+        with mock.patch.object(edup_log, "log_dirs_for", return_value=[str(directory)]):
+            with mock.patch.object(edup_log, "find_logs", return_value=[("", "openxr", str(stale))]):
                 try:
                     flight_version(directory, 321, "fixture", process_created)
                     check(False)
                 except FileNotFoundError:
                     check(True)
-            with mock.patch.object(edvr_log, "find_logs", return_value=[
+            with mock.patch.object(edup_log, "find_logs", return_value=[
                     ("", "openxr", str(fresh_bad)), ("", "openxr", str(stale))]):
                 try:
                     flight_version(directory, 321, "fixture", process_created)
                     check(False)
                 except ValueError:
                     check(True)
-            with mock.patch.object(edvr_log, "find_logs", return_value=[
+            with mock.patch.object(edup_log, "find_logs", return_value=[
                     ("", "openxr", str(fresh_good)), ("", "openxr", str(stale))]):
                 check(flight_version(directory, 321, "fixture", process_created)["log"] == str(fresh_good))
 
@@ -1462,16 +1462,16 @@ def self_test():
                                   output=str(directory / "absent"), wait_seconds=10,
                                   max_seconds=10, smoke_first=False, start_key=None, stop_key=None,
                                   start_after_seconds=None, memory_ring=False, status_json=None)
-        import install_edvr
+        import install_edup
         sibling_receipt = target / "edvr_native_receipt.json.pre-fixture-20260918-120000.bak"
         sibling_receipt.write_text("{}", encoding="utf-8")
-        with mock.patch.object(install_edvr, "verify_native_receipt", side_effect=lambda path, _: {"files": []}
+        with mock.patch.object(install_edup, "verify_native_receipt", side_effect=lambda path, _: {"files": []}
                                if path == str(sibling_receipt) else (_ for _ in ()).throw(ValueError("stale"))):
             check(installed_receipt(target)[1] == str(sibling_receipt))
         before = snapshot()
-        with mock.patch.object(install_edvr, "resolve_target", return_value=str(target)):
-            with mock.patch.object(install_edvr, "verify_native_receipt", return_value={"files": []}):
-                with mock.patch.object(edvr_log, "expected_version", return_value="fixture"):
+        with mock.patch.object(install_edup, "resolve_target", return_value=str(target)):
+            with mock.patch.object(install_edup, "verify_native_receipt", return_value={"files": []}):
+                with mock.patch.object(edup_log, "expected_version", return_value="fixture"):
                     with mock.patch(__name__ + ".PROFILE", profile), \
                             mock.patch(__name__ + ".ANALYZER", analyzer), \
                             mock.patch(__name__ + ".invoke",

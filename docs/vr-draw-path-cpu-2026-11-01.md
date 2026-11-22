@@ -107,7 +107,7 @@ publish. `pending` and `bound` clear within one draw; `measure`, `census`,
    polled, world 0, world 1), and add `sceneRefused[kSceneNotSceneDepth]`
    (29316; today printed only in measure mode). Print both on the tee's cost
    line after `over %u s`, reset with the fast-call count. Extend the
-   `edvr_log.py` parse (about 16778, not end-anchored) with a self-test fixture
+   `edup_log.py` parse (about 16778, not end-anchored) with a self-test fixture
    for the new text.
 2. **Scene-depth test without the probe (keyed).** A separate predicate, used
    only for `worldDraw`'s `sceneRefWhy` argument when the probe is not wanted:
@@ -274,13 +274,13 @@ the epoch, and removing them is not worth a rig rewrite for one compare each.
   agreement counting.
 - `experimental.vr_cpu_benchmark_idle` (item 2): removed with the used flag,
   `reset(skipCleanClear)` (always clears, as before #161), the `benchmark
-  collector: ... entry clears` line and its `edvr_log.py` parser and row.
+  collector: ... entry clears` line and its `edup_log.py` parser and row.
 - `experimental.vr_cpu_depth_slot_cache` (item 4): removed with
   `depth_slot_cache.h`, `uiDepthSetSlotCache`, the `depth slot cache:` line,
-  its rig and its `edvr_log.py` parsing; the UI depth pass works the slot out
+  its rig and its `edup_log.py` parsing; the UI depth pass works the slot out
   every call, as before #162.
 - The `vr draw path key:` line, `vrDrawPathKeySweep` and `parse_perf_keys` are
-  gone (nothing uses them). `edvr_log.py --perf-windows` tables the `draw hook
+  gone (nothing uses them). `edup_log.py --perf-windows` tables the `draw hook
   CPU:` windows with no dropped-window logic.
 - Kept: item 3, the re-issue counter (#159) with `--tally reissue`, and the
   `tee held (#155)` tail on the tee cost line.
@@ -296,7 +296,7 @@ The rest of this section describes the keys as they were flown.
 - Read once per config sweep into a relaxed atomic (the `g_aaOffDraw` pattern,
   vscreen.cpp:6162). A stale read only falls back to today.
 - Each change logs one line with the key, its value and the frame number.
-  `edvr_log.py` drops any perf window that contains a flip.
+  `edup_log.py` drops any perf window that contains a flip.
 - A menu flip writes the live `edvr.ini` and the `%LOCALAPPDATA%\EDVR` mirror;
   removing the keys means cleaning both.
 
@@ -311,7 +311,7 @@ One session, no restart, keys flipped from F8, measurement families off
 4. F7, only `vr_eye_rows_without_aa` off.
 5. A short cockpit leg, all keys on: no-regression only.
 
-First `python tools\edvr_log.py --target steam --expect-build HEAD --version`,
+First `python tools\edup_log.py --target steam --expect-build HEAD --version`,
 then `--health --since/--until` per leg. Expected: in keys-off AA-off legs
 `_hj_f100_tee` reports NEVER APPLIED (exit 3) by design.
 
@@ -510,7 +510,7 @@ unconditional.
      bit, and the key state. Written every window, so zeros mean it ran.
    - A gate-holder bitmask beside the `drawGateSet` calls, logged on
      change, naming which term of `drawGateSubscribed` holds the gate.
-   - `edvr_log.py --perf-windows` prints both.
+   - `edup_log.py --perf-windows` prints both.
 6. **Temporary key** `vr_draw_mask = on | off`, live from F8, default on.
    Off runs every subscriber as today. Listed in Status; removed or kept as the
    behaviour once flown.
@@ -525,7 +525,7 @@ unconditional.
   `uiLayerFamilyFor` returns none" for every target kind.
 - A source-scan test: every term of `drawGateSubscribed` has a holder bit, and
   every stand-down flag the mask reads bumps the generation.
-- `edvr_log.py --self-test`: the `draw mask:` and holder lines parsed.
+- `edup_log.py --self-test`: the `draw mask:` and holder lines parsed.
 
 ### Flight
 
@@ -1021,7 +1021,7 @@ v0.22.0-rc.4-50-g277fae1f` on line 2 of each), in the Steam game's
 
 To reproduce a log figure, run `Select-String` on the log for the quoted prefix
 (`marker fix (F87c) eye`, `draw mask:`, `instance stream`), or use `python
-tools\edvr_log.py --target steam --nth N`.
+tools\edup_log.py --target steam --nth N`.
 
 #### A1-a: two copies from one Unmap (agreed)
 
@@ -1074,7 +1074,7 @@ copy each merged range once into one buffer.
 - Keep `plan[e]` per eye for `windows`, `nearest` and `clusters`, so those
   counters keep their meaning.
 - Log requested entries (both plans summed) beside copied entries (the merge),
-  and eye 0's ring beside eye 1's. `edvr_log.py`'s F87c parser and its
+  and eye 0's ring beside eye 1's. `edup_log.py`'s F87c parser and its
   self-test follow the line.
 - **Test seam:** a rig test over random histories and centres. It asserts that
   the merged ranges hold exactly the union of both plans' entries, and that
@@ -1135,7 +1135,7 @@ copy each merged range once into one buffer.
 - **Why it matters:** a depth-only pass would land in this count, and
   `engine-render-pipeline.md` found no depth pass at a parked settlement.
 - **Test before any B1 design:** split those draws by RTV0 and DSV size and
-  format, and by vertex shader. The existing logs cannot do it: `edvr_log.py
+  format, and by vertex shader. The existing logs cannot do it: `edup_log.py
   --target steam --nth 1 --tally vh` prints `no draw-census lines (DC/DCO/DC
   frame) in this log`. So build 3 adds a per-window count of non-eye draws by
   target size and format. It rides on build 3's flight; it needs no flight of
@@ -1330,7 +1330,7 @@ take the review's corrections.
      - The ms is `g_win.streamCopyTicks`: the whole function, planning and
        merge included, so the cut it shows is a lower bound on the copy's
        own saving.
-   - `edvr_log.py`:
+   - `edup_log.py`:
      - Keep `PERF_COPY_RE` (line 17249) for build-2 logs such as L2, and add
        a regex for the new line. `--perf-windows` prints the merged copy
        when the new line is there, the old per-eye figures when not.
@@ -1353,7 +1353,7 @@ take the review's corrections.
      context draws as `DC` with `t=f`, whatever their target. DrawAuto is
      not recorded in VR, nor are the sun, desktop-window and coat-pack
      skips. The tally reports the `t=i` and `t=f` lines apart.
-   - **The tally (new code in `edvr_log.py`):** `--tally vh` today reduces
+   - **The tally (new code in `edup_log.py`):** `--tally vh` today reduces
      `DCO` lines to one count (lines 557-562), never resolves `@N` tokens
      and does not parse `d=` (337-339). Add `--tally offscreen`: group the
      `DCO` lines (and the `t=i`/`t=f` `DC` lines) by `r=` and `d=`, resolve
@@ -1411,10 +1411,10 @@ header's own `mergePlans` and merged lookup:
 - A fault in one merged range (`MergedPlan::fault`): that range and every
   `plan[e]` window inside it read as empty, the lookup skips the range, and
   every other range still returns its entries.
-- `edvr_log.py --self-test` for `--tally offscreen`: a fixture census with
+- `edup_log.py --self-test` for `--tally offscreen`: a fixture census with
   `DCO` lines, `@N` tokens, the `DC id` table and `t=i`/`t=f` lines groups by
   resolved target, and reports `off=` against the `DCO` line count.
-- `edvr_log.py --self-test`: the new per-eye text and the new line parse, the
+- `edup_log.py --self-test`: the new per-eye text and the new line parse, the
   health rule matches the new line, `--perf-windows` prints the merged copy for
   a new log and the per-eye copy for an L2-style log, and the source pin holds.
 
@@ -1437,7 +1437,7 @@ with `EDVR_PROFILE_SYMBOLS=1`.
 1. A 100 s profile capture.
 2. After it stops: one census press.
 
-First command after: `edvr_log.py --target steam --expect-build HEAD
+First command after: `edup_log.py --target steam --expect-build HEAD
 --version`, then `--health`.
 
 ### Pass criteria
@@ -1479,7 +1479,7 @@ findings, both on the non-eye counter. Dispositions:
 | 8 | Top-N method and threads undefined | Moot, as 5 |
 | 9 | The census already records this | Taken: B1 by census (item 3) |
 | 10 | The cross-check wording; the hook range | Moot, as 5 |
-| 11 | `edvr_log.py`: health pattern, keep the old regex, exact text, eye 0's whole-stream bytes | Taken (item 2) |
+| 11 | `edup_log.py`: health pattern, keep the old regex, exact text, eye 0's whole-stream bytes | Taken (item 2) |
 | 12 | Put the merged lookup in the header so the rig tests shipped code | Taken (item 1, test seams) |
 | 13 | Copied = requested does not prove the merge never ran | Taken: `windows joined`, the new line's presence (never-ran section) |
 | 14 | 0.697 uncited; use named per copy | Taken (pass criteria) |
@@ -1506,7 +1506,7 @@ context.
 
 Build `cfa5e806` (`EDVR_PROFILE_SYMBOLS=1`), the L2 spot (Shamash 1 a, the
 concourse), standing still, DLAA. Log `edvr_gfx_20261103_184210.log`;
-`edvr_log.py --expect-build HEAD` matches. A 100 s `cpu_profile.py` capture
+`edup_log.py --expect-build HEAD` matches. A 100 s `cpu_profile.py` capture
 from 18:44:35 (pid 26996, 2,926 frames in windows 1-20, 0 events lost, symbols
 matched 2 of 2), then one census press (census frame 19271). The flight-only
 ini settings are reverted; the live `edvr.ini` matches its pre-flight backup.
@@ -1550,7 +1550,7 @@ frame; the same method and scripts as build 2, notes outside the repo in
   game exe also fell 1.24 ms, so the scene differs and the totals are not this
   build's saving. Build 3's saving is the copy's 0.19 ms, post-submit.
 
-**B1, what the non-eye draws are.** `edvr_log.py --tally offscreen`: one census
+**B1, what the non-eye draws are.** `edup_log.py --tally offscreen`: one census
 frame, 676 `DCO` lines, `off=` 676, none cut. The eye is 2632x2684. Formats are
 DXGI numbers.
 
@@ -1770,7 +1770,7 @@ themselves.
      equality is an upper bound for S2, not its saving.
    - The line goes beside `draw mask:` in `perf_monitor.cpp`, on its
      1800-frame window, formatted by a header function (about 300
-     characters). `edvr_log.py` gets a parse fixture and a self-test, and
+     characters). `edup_log.py` gets a parse fixture and a self-test, and
      `--perf-windows` prints it; `--health` works by feature tag, so no
      health rule.
 8. **The analyzer reports own time.** In `tools\cpu_profile`'s EDVR export
@@ -1860,7 +1860,7 @@ and 9), nearly all in the draw path.
 - Item 4: `flat_map_bounce_test` gains "`anyOpen()` false: `preMap` and
   `beginUnmap` touch nothing" and a flat-to-VR switch with one bounce open: the
   next Unmap still flushes it.
-- Item 7: `edvr_log.py` parses the new line (fixture, self-test).
+- Item 7: `edup_log.py` parses the new line (fixture, self-test).
 - Item 8: the analyzer's tests gain an own/below case, and its own total equals
   `callerSamplesTopFrameInEdvr`.
 - Item 9: a clear bit implies `classifyHologramDraw` declines, over every hash
@@ -2271,7 +2271,7 @@ S2) would save. A code survey (Opus, read-only, notes outside the repo:
      frame stream (Argon review).
    - Item 3's front-cache lookups and hits.
 
-   `edvr_log.py`: a regex, a fixture and a self-test; `--perf-windows` prints
+   `edup_log.py`: a regex, a fixture and a self-test; `--perf-windows` prints
    the line.
 
 ### Item 7: the cross-profile probe's count without a locked add (maintainer's choice, 2026-11-04)
@@ -2336,7 +2336,7 @@ thread equals the calls.
 - Item 4: `tools\engine_velocity_test`: the aggregate moves exactly when one of
   the five generations moves, including forget-all and the frame boundary.
 - Item 4 also: a reset `DrawCache{}` takes the slow path before any bind.
-- Item 6: `edvr_log.py --self-test`; in `ui_depth_test`, a same-pointer re-set
+- Item 6: `edup_log.py --self-test`; in `ui_depth_test`, a same-pointer re-set
   makes the real memo miss and the shadow memo hit.
 
 ### What the log and profile show if the code never ran
@@ -2901,7 +2901,7 @@ lines in `beginPanelOverride` and `forwardWithVerdict` sit on those loads (the
   `ui_depth_test`: after `uiDepthEnd`, `uiDepthWantsReissue()` is false.
 - Item 3 also: `DrawCallFlags` carries `planetPending` and
   `worldScreenPending`; the source-text check covers them.
-- Item 4: `edvr_log.py --self-test` without the retired lines; the build's
+- Item 4: `edup_log.py --self-test` without the retired lines; the build's
   gates.
 - Item 5: the removed symbols absent (a source-text check); `ui_depth_test`
   over hit, miss, hit, reissue gives build 4's accessor values.
@@ -3218,7 +3218,7 @@ repo: `b6-rereview.md`. It supersedes N7's disposition and adds to N1 and N9:
   draw's own `flags.planetPending` or `flags.worldScreenPending` is set, which
   only the owner's eye draw that set them can be. Begin already clears them on
   entry, so this covers exactly the early returns and the `layered` case.
-- **N1, added:** item 4's seam gets an `edvr_log.py --self-test` fixture for
+- **N1, added:** item 4's seam gets an `edup_log.py --self-test` fixture for
   the `build 6 counts:` line, drift figures included.
 - **N9, amended:** seven mirrored modules have no rig (`particle_fix.cpp` and
   `sunglare_fix.cpp`, `build.bat:727`; `quad_probe.cpp`, `:709`;
@@ -3329,7 +3329,7 @@ replaces it.
     `DrawHot::interest`, `g_drawInterestPtr`, every module's `...InterestBits()`
     and `...RecomputeInterest()`, the install store, and the drift check in
     `bindingAudit`. Every ladder site goes back to its build 5 flag test.
-  - The TEMPORARY `build 6 counts:` line, its counters and its `edvr_log.py`
+  - The TEMPORARY `build 6 counts:` line, its counters and its `edup_log.py`
     parser.
 - **Kept:** S2, the #184 fix (`DrawCallFlags` with the pending flags, N7's
   clear), item 5's revert, `draw mask:` (a standing line), and builds 1-5's

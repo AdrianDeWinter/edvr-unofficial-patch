@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PlatformTarget>x64</PlatformTarget>
-    <AssemblyName>EdvrCpuProfile</AssemblyName>
+    <AssemblyName>EdupCpuProfile</AssemblyName>
     <OutputPath>$(MSBuildProjectDirectory)\..\..\build\cpu_profile\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <TraceEventDirectory Condition="'$(TraceEventDirectory)' == ''">C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\PrivateAssemblies</TraceEventDirectory>

@@ -553,7 +553,7 @@ inline void flatDescribeWarnCause(char* out, size_t size, const FlatWarningCause
 }
 
 // The log line for a change that has started to be held (FlatWarnHold): what is on show and what is waiting. It does not begin
-// with shown, changed or hidden, the three words tools\edvr_log.py's F8 reader parses after "flat settings warning: ", so it is
+// with shown, changed or hidden, the three words tools\edup_log.py's F8 reader parses after "flat settings warning: ", so it is
 // neither counted as a warning nor mistaken for one. A `changed` line about two seconds after it is that cause being adopted;
 // none is the change coming back before the hold ran out.
 inline int flatFormatWarnHeldLog(char* out, size_t size, const FlatWarningCause& onShow, const FlatWarningCause& computed) {

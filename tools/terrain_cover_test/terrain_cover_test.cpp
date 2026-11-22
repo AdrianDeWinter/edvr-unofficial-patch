@@ -9,7 +9,7 @@
 //       (four pointers and two floats on the stack): ONLY arguments 5 and 6 change, the other four registers and the return value are the caller's; no tangents, a frustum
 //       the cull already covers and a flat session pass through bit for bit; the first call that had the frusta and the ten-minute heartbeat are what the log says (and nothing
 //       else is written); a refusal is one line
-//   C6  tools\terrain_cover_fixture.log is what the production hook writes for the scripted session (python tools\edvr_log.py --tally cover reads it)
+//   C6  tools\terrain_cover_fixture.log is what the production hook writes for the scripted session (python tools\edup_log.py --tally cover reads it)
 //   C7  the wiring, read as text
 //
 //   terrain_cover_test --self-test <repo root> | --dry-run | --print-fixture
@@ -728,7 +728,7 @@ int main(int argc, char** argv) {
         const std::string built = fixtureLog();
         const std::string fixture = slurp(root + "\\tools\\terrain_cover_fixture.log");
         check(!fixture.empty(), "C6 tools\\terrain_cover_fixture.log is readable");
-        check(fixture == built, "C6 the log tool's fixture file is what the production hook writes for the scripted session, byte for byte (python tools\\edvr_log.py --tally cover reads it; regenerate with --print-fixture)");
+        check(fixture == built, "C6 the log tool's fixture file is what the production hook writes for the scripted session, byte for byte (python tools\\edup_log.py --tally cover reads it; regenerate with --print-fixture)");
         check(occurrences(built, "hook live at exe+0x44414E0") == 1 && occurrences(built, "terrain cull cover: first call: ") == 1 && occurrences(built, "terrain cull cover: armed; ") == 3 &&
                   occurrences(built, "\n") == 5 && occurrences(built, "armed; 60000 of 60001 calls widened") == 1 && occurrences(built, "armed; 0 of 0 calls widened") == 1 && occurrences(built, "armed; 0 of 60000 calls widened") == 1,
               "C6 ...and it carries the live line, one first call, and three heartbeats: 60000 of 60001 widened, 0 of 0 and 0 of 60000, and no other line");

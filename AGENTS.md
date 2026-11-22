@@ -77,9 +77,9 @@ corrupted. Do not regenerate the one-liner — extend the script.
 
 | Operation | Use | Never |
 |---|---|---|
-| Install a build next to the game | `python tools\install_edvr.py` | `Copy-Item` onto the game directory |
-| Check the install matches the build | `python tools\install_edvr.py --verify-only` | eyeballing timestamps |
-| Find and read a flight log | `python tools\edvr_log.py` (census aggregate: add `--tally vh [--frame N]`; first command on an on-foot flight: add `--health [--since HH:MM:SS] [--until HH:MM:SS]`, which says which tagged features ran and applied and exits 3 on a NEVER APPLIED one) | `Get-Content -Tail` + `Select-String` |
+| Install a build next to the game | `python tools\install_edup.py` | `Copy-Item` onto the game directory |
+| Check the install matches the build | `python tools\install_edup.py --verify-only` | eyeballing timestamps |
+| Find and read a flight log | `python tools\edup_log.py` (census aggregate: add `--tally vh [--frame N]`; first command on an on-foot flight: add `--health [--since HH:MM:SS] [--until HH:MM:SS]`, which says which tagged features ran and applied and exits 3 on a NEVER APPLIED one) | `Get-Content -Tail` + `Select-String` |
 | Measure a skinned character's motion error in an eye dump | `python tools\character_motion_check.py --target frontier [--stamp S]` (face, a named draw and the body against the raw input; exits 3 past its limits) | a scratch warp script retyped each session |
 | Read an on-foot recording (needs log.on_foot_detail on; F9 marks a moment) | `python tools\onfoot_check.py --target <game dir> --expect-build HEAD [--mark N]` | reading the on-foot 1 s lines by hand |
 | Reflow release notes or docs | `python tools\reflow_notes.py` | reflowing by hand or by regex |
@@ -90,7 +90,7 @@ corrupted. Do not regenerate the one-liner — extend the script.
 | Make a worktree that can build | `python tools\worktree.py add <path>` | `git worktree add` alone (no deps) |
 | Post PR replies, a review or a summary | `python tools\pr_post.py --pr N --since <time> ...` | hand-built `gh api` / `gh pr comment` / `gh pr review` calls |
 | Compile on Linux for a test flight | `python3 tools/linux_toolchain.py build-dlls` | running `build.bat` under Wine by hand |
-| Keep the game exe before Steam updates it (`install_edvr.py` also does it on every install; then docs\game-binary-map.md "Re-deriving after a patch") | `python tools\archive_game_exe.py --target steam` (`--dry-run` first) | `Copy-Item` of the exe, or committing it |
+| Keep the game exe before Steam updates it (`install_edup.py` also does it on every install; then docs\game-binary-map.md "Re-deriving after a patch") | `python tools\archive_game_exe.py --target steam` (`--dry-run` first) | `Copy-Item` of the exe, or committing it |
 
 Every release's notes carry a `## Thanks` section built from
 `release_credits.py --thanks` and finished by hand. It names only the authors
@@ -102,11 +102,11 @@ People known only by an anonymised label ("user 2", "the reporter") are not
 named without the maintainer's consent.
 
 ```bash
-python tools\install_edvr.py --target steam --dry-run
-python tools\install_edvr.py --target steam
-python tools\install_edvr.py --target steam --scope flat --xess
-python tools\install_edvr.py --target steam --scope flat --verify-only
-python tools\edvr_log.py --target steam --expect-build HEAD --version
+python tools\install_edup.py --target steam --dry-run
+python tools\install_edup.py --target steam
+python tools\install_edup.py --target steam --scope flat --xess
+python tools\install_edup.py --target steam --scope flat --verify-only
+python tools\edup_log.py --target steam --expect-build HEAD --version
 ```
 
 Anything that writes files takes `--dry-run`, and `--dry-run` **writes
@@ -125,7 +125,7 @@ minutes after a flight finally reproduced the effect being chased.
   name the specific log line, draw call, counter or struct field that
   would confirm or refute it, and get that evidence before editing code.
 - **The first question about any flight log is whether it is the right
-  build.** `python tools\edvr_log.py --target steam --expect-build HEAD`
+  build.** `python tools\edup_log.py --target steam --expect-build HEAD`
   exits 2 when it is not. A log from a stale DLL is not evidence, and
   counters read off one have cost a session before.
 - **When a flight refutes a hypothesis, write it down** as a one-line
@@ -171,17 +171,17 @@ minutes after a flight finally reproduced the effect being chased.
 - **Linux test flight (Steam Deck, Proton).** For a build Sean will fly, CI
   first is not required; CI is for a merge or release. Commit to the branch
   before compiling: a dirty tree compiles as `vX.Y.Z-dirty`, which
-  `edvr_log.py --expect-build HEAD` will not match. Close Elite, then:
+  `edup_log.py --expect-build HEAD` will not match. Close Elite, then:
 
   ```bash
   python3 tools/linux_toolchain.py build-dlls
-  python3 tools/install_edvr.py --target steam --scope flat --xess --compile-only --dry-run
-  python3 tools/install_edvr.py --target steam --scope flat --xess --compile-only
-  python3 tools/install_edvr.py --target steam --scope flat --xess --compile-only --verify-only
-  python3 tools/edvr_log.py --target steam --expect-build HEAD --version
+  python3 tools/install_edup.py --target steam --scope flat --xess --compile-only --dry-run
+  python3 tools/install_edup.py --target steam --scope flat --xess --compile-only
+  python3 tools/install_edup.py --target steam --scope flat --xess --compile-only --verify-only
+  python3 tools/edup_log.py --target steam --expect-build HEAD --version
   ```
 
-  To fly a worktree, give `build-dlls` and `install_edvr.py` `--root
+  To fly a worktree, give `build-dlls` and `install_edup.py` `--root
   <worktree>`. `--target steam` finds the game on Linux
   (`tools/steam_library.py`: `~/.local/share/Steam`, `~/.steam/steam`, then
   every library in `libraryfolders.vdf`). `--compile-only` installs from
@@ -270,7 +270,7 @@ minutes after a flight finally reproduced the effect being chased.
   Read it, edit it with the Edit tool, diff before and after. A bad anchor
   has corrupted Sean's working config.
 - `edvr.ini` in a game directory carries the settings of whoever flew
-  last. A reinstall does not undo an edit to it. `install_edvr.py` does not
+  last. A reinstall does not undo an edit to it. `install_edup.py` does not
   overwrite an existing one unless `--ini` says so (and backs it up when it
   does); a missing one it writes, from the newest copy in the `%LOCALAPPDATA%\EDVR`
   mirror when there is one, else from the shipped default.

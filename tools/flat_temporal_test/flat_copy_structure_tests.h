@@ -226,7 +226,7 @@ inline void renameTone(edvr::FlatTraceEvent& e, void* context) {
 }  // namespace copy_structure_test
 
 // ---- the fixture: tools\flat_upscale_fixture.log, a good flight below the output and three episodes, held to what the formatters write --
-// edvr_log.py --flat-upscale's own self-test reads the checked-in file. Regenerate it with `flat_temporal_test.exe --write-fixture <path>`
+// edup_log.py --flat-upscale's own self-test reads the checked-in file. Regenerate it with `flat_temporal_test.exe --write-fixture <path>`
 // after a deliberate change to a line's text; the check in flatCopyStructureTests fails the build until the file says what the formatters
 // say. The lines the DLL writes inline (the key's, the route's, the runtime's counters) are copied from real logs (the rc.5 user's of
 // 2026-10-01 and Sean's of 2026-09-30) and held to the runtime's source by the pins there. The base is a good flight: a startup of

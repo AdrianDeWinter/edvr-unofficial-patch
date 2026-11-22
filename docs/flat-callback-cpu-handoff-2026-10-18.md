@@ -230,8 +230,8 @@ still valid. Compare residual plus the three children with 052052's
 5.976 ms. Residual alone is not the old callback family.
 
 Steam flat is installed and verified as `v0.20.0-rc.4-26-g1012c7c2`
-(`python tools\install_edvr.py --target steam --scope flat`, no `--ini`).
-After the flight, `python tools\edvr_log.py --target steam --expect-build
+(`python tools\install_edup.py --target steam --scope flat`, no `--ini`).
+After the flight, `python tools\edup_log.py --target steam --expect-build
 1012c7c2`. `041f8e78` remains the baseline log's build. A later
 documentation commit is not the DLL.
 
@@ -240,8 +240,8 @@ documentation commit is not the DLL.
 Only use sanctioned tools for flight logs and install:
 
 ```powershell
-python tools/edvr_log.py --target steam --expect-build 041f8e78 --version
-python tools/edvr_log.py --file '<pinned log path>' --expect-build 041f8e78 --grep '<needed fields>'
+python tools/edup_log.py --target steam --expect-build 041f8e78 --version
+python tools/edup_log.py --file '<pinned log path>' --expect-build 041f8e78 --grep '<needed fields>'
 ```
 
 Do not use HEAD for this installed DLL after documentation commits. Steam

@@ -14,6 +14,7 @@
 #include "detect.h"
 #include "direct_launch.h"
 #include "logbundle.h"
+#include "mirror.h"
 #include "probe.h"
 #include "update_util.h"
 
@@ -436,17 +437,8 @@ bool pidsNamed(const std::wstring& exeName, std::vector<unsigned long>* pids) {
     return ok;
 }
 
-std::wstring protonSteamLocalAppDataFor(const std::wstring& gameDir) {
-    if (gameDir.empty()) return std::wstring();
-    std::wstring lowered = gameDir;
-    for (wchar_t& c : lowered) c = c == L'/' ? L'\\' : static_cast<wchar_t>(towlower(c));
-    const size_t pos = lowered.find(L"\\steamapps\\");
-    if (pos == std::wstring::npos) return std::wstring();
-    const std::wstring steamapps = gameDir.substr(0, pos) + L"\\steamapps";
-    const std::wstring pfxLocal =
-        steamapps + L"\\compatdata\\" + kSteamAppId + L"\\pfx\\drive_c\\users\\steamuser\\AppData\\Local";
-    return dirExists(pfxLocal) ? pfxLocal : std::wstring();
-}
+// The one derivation lives with the settings folder's (mirror.h), so Settings.xml and the settings files agree on the prefix.
+std::wstring protonSteamLocalAppDataFor(const std::wstring& gameDir) { return protonLocalAppDataForGame(gameDir); }
 
 std::wstring defaultEliteSettingsXmlPath(const std::wstring& gameDir) {
     // Under Wine/Proton, a launcher started outside Elite's own compatdata prefix would otherwise

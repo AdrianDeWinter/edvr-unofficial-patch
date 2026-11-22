@@ -600,7 +600,7 @@ luma error, against the floor.
    - The GPU pass profiler (`hotkey.gpu_pass_profile`, built, not flown) at a
      settlement, for one eye's share of Elite's GPU frame (H9).
    - A `frame generation (shadow)` line once a second, with an
-     `edvr_log.py --health` tag. A run with no such line reads NEVER
+     `edup_log.py --health` tag. A run with no such line reads NEVER
      APPLIED, which tells it apart from a clean score.
    - **Flight:** a settlement in a ship, low flight, the SRV, on foot in a
      settlement, supercruise near a planet, a station interior, and a

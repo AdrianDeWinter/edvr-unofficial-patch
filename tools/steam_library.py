@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Where Steam keeps Elite Dangerous: one resolver for install_edvr.py and edvr_log.py.
+"""Where Steam keeps Elite Dangerous: one resolver for install_edup.py and edup_log.py.
 
 On Windows the Steam root is in the registry, with C:\\Steam as the fallback
 for a rig whose entry has gone missing. On Linux (Steam Deck, Proton) it is

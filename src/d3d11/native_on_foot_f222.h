@@ -112,7 +112,7 @@ struct Stats {
     void clear() noexcept { *this = Stats{}; }
 };
 
-// The window's line. tools\edvr_log.py reads it.
+// The window's line. tools\edup_log.py reads it.
 inline int formatLine(char* buf, size_t n, uint32_t seconds, bool keyOn, const Stats& s) noexcept {
     return std::snprintf(buf, n, "native on foot eye in its own frame (F222) %u s: experimental.native_on_foot_steady_body_in_turns is %s; %u pin calls, %u rows taken; the body's turn taken out of the heading mean %.2f deg, largest %.2f",
                          seconds, keyOn ? "on" : "off", s.calls, s.taken, s.measured ? s.turnSumDeg / s.measured : 0.0, s.turnMaxDeg);

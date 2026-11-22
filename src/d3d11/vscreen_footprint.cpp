@@ -6,7 +6,7 @@
 //
 // WHAT THE LOG WOULD SHOW IF THIS NEVER RAN: no `vscreen footprint` line at all -- not even the one-time arming line. A run
 // that is armed but sees no composite (the screen is not on show, the shader pair changed) prints the 30 s line with
-// draws=0; one that sees it and cannot read a source prints skipped= with the reasons in why=. tools\edvr_log.py
+// draws=0; one that sees it and cannot read a source prints skipped= with the reasons in why=. tools\edup_log.py
 // --vscreen-fit says which of those it is.
 //
 // WHAT THE LOG SHOWS WHEN A SAVE FAILS (the stored footprint could not be written): a `vscreen footprint: SAVE FAILED (Win32 error N)` line

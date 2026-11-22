@@ -174,7 +174,7 @@ curvature 0.2, UI quality 125. Windows/driver/DLSS DLL versions were not
 recorded.
 
 Actual release identity is v0.20.0-rc.2, PE `6AD165AB`, linked
-2026-10-15 23:45:47 UTC, tag commit `f2b99bdf`. `edvr_log.py
+2026-10-15 23:45:47 UTC, tag commit `f2b99bdf`. `edup_log.py
 --expect-build HEAD` accepts the bare tag, but this is not current HEAD
 at analysis checkout `fbb391a2`. The latest breadcrumb at tick 90268468 is this report's final
 crash; earlier records in that file belong to historical sessions and must

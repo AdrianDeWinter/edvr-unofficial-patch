@@ -176,7 +176,7 @@ void runPoseGapCases(Check&& check) {
     std::string normalised;
     for(char ch:fixture)if(ch!='\r')normalised+=ch;
     check(!fixture.empty(),"tools/pose_gap_fixture.log is readable from the repo root");
-    check(normalised==built,"the log tool's fixture file is what the aggregator writes for the scripted flight, byte for byte (python tools\\edvr_log.py --tally pose reads it; regenerate with --print-pose-fixture)");
+    check(normalised==built,"the log tool's fixture file is what the aggregator writes for the scripted flight, byte for byte (python tools\\edup_log.py --tally pose reads it; regenerate with --print-pose-fixture)");
     size_t lineCount=0;for(char ch:built)if(ch=='\n')++lineCount;
     check(lineCount==24&&built.find("pose gap: tid 24212 calls 120 from exe+0x4E3881 prediction 0.0 ms target-minus-display mean 11.11 ms (min 11.11 max 11.11)")!=std::string::npos&&
               built.find("failed 3")!=std::string::npos&&built.find("fallback 1")!=std::string::npos&&built.find("from outside prediction 11.0 ms")!=std::string::npos,

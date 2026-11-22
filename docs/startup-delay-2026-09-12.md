@@ -37,7 +37,7 @@
 
 Users reported a longer black screen before Elite's intro video. The Frontier
 run on `e9802b7` supplies direct timing evidence: both graphics and VR logs
-passed `tools/edvr_log.py --target frontier --expect-build e9802b7`, queried
+passed `tools/edup_log.py --target frontier --expect-build e9802b7`, queried
 separately by tag. The graphics log is `edvr_gfx_20260912_042547.log`, linked
 stamp `6AA4C1E3`; the VR log is `edvr_vr_20260912_042607.log`, stamp
 `6AA4C1EA`.
@@ -109,7 +109,7 @@ correction.
 ## Frontier verification: 58d1566
 
 The clean build passed in `build/frontier-58d1566.log` and was installed and
-hash-verified through `tools/install_edvr.py`, preserving the Frontier INI. The
+hash-verified through `tools/install_edup.py`, preserving the Frontier INI. The
 subsequent graphics log `edvr_gfx_20260912_044925.log` (stamp `6AA52D5B`) and
 VR log `edvr_vr_20260912_044927.log` (stamp `6AA52D63`) both passed
 `--expect-build 58d1566` and report `v0.15.1-25-g58d1566`.
@@ -198,7 +198,7 @@ and pixel compile and in its two log messages, reached only from `fss_panel.cpp`
 sets `experimental.fss_panel_distance` away from 1.0 or `experimental.target_indicator = sharp`. In a default install
 nothing of EDVR's loads it.
 
-**Next flight**: any VR launch on the native runtime. `edvr_log.py --tag openxr --expect-build HEAD` first. The runtime
+**Next flight**: any VR launch on the native runtime. `edup_log.py --tag openxr --expect-build HEAD` first. The runtime
 log has `runtime_shaders,source=precompiled,created=4,stretch_ms=<ms>` and `runtime_startup_steps` has `shaders=` of a few
 milliseconds where the 2026-09-15 flight had ~443. The pictures do not change (same shaders, same bytes). With
 `experimental.fss_panel_distance = 0.7` or `experimental.target_indicator = sharp`, the proxy's `replacement vertex

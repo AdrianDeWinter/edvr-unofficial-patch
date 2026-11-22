@@ -68,7 +68,7 @@ issue (26 and 28 September). Read the Status block first.
 
 Logs are local time (UTC+1); edvr_openxr logs are UTC. Builds: rc.2 is
 6AB6DC53, linked 2026-09-25 20:40 UTC; rc.3 is 6AB9BF39, linked 2026-09-28
-01:13 UTC. Both match the version lines; the edvr_log.py `--expect-build`
+01:13 UTC. Both match the version lines; the edup_log.py `--expect-build`
 check passed for rc.3.
 
 ### The five launches in the bundles
@@ -211,7 +211,7 @@ The reporter reinstalled from `edvr-installer-0.18.0.zip` and says the
 symptoms are the same ("previously I'd been using the zip with individual
 files in it"). Bundle edvr-logs-20261002-090639.zip, 300,953 bytes, from the
 issue comment. All three gfx logs read `v0.18.0 (build 6ABED11D)`, linked
-2026-10-01 21:31 UTC, the tag's release build; `edvr_log.py --expect-build
+2026-10-01 21:31 UTC, the tag's release build; `edup_log.py --expect-build
 v0.18.0` passed. Local time is UTC+1.
 
 ### The three launches

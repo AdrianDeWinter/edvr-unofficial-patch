@@ -12,7 +12,7 @@ read 2026-09-16) unless marked believed.
   (`claude/fsr-4-1-flat-vr-support-5f6ea4`). `fix.temporal_aa = fsr4` (FSR 4.1 through
   AMD's signed D3D12 DLLs over a D3D11/D3D12 bridge, modelled on XeSS's),
   flat and VR, beside `fsr` (route 1, unchanged). The runtime stays a dev
-  install (`install_edvr.py --fsr4`), not in the packages (D8).
+  install (`install_edup.py --fsr4`), not in the packages (D8).
   Facts, decisions D7 to D9 and the flight plan: journal, "2026-10-23:
   route 2". Flights 5 and 6 (journal): FSR 4.1.1 clean on the Radeon
   8060S, 0.8 ms of GPU; held keys cut the bridge's evaluate from 6.6 to
@@ -306,7 +306,7 @@ gfx log.
   Licence: the port's MIT notice goes into `third_party\ffx-dx11\` and the
   README's third-party section, as `src\d3d11\fsr\README.md` does for FSR
   1. Nothing new is shipped: the installer manifest
-  (install_edvr.py:884-896) and payload (payload.h:18-23) are untouched.
+  (install_edup.py:884-896) and payload (payload.h:18-23) are untouched.
 
 ### 3.3 The input mapping
 
@@ -376,7 +376,7 @@ gfx log.
 
 ## 4. Flights, in order
 
-Read each with `python tools\edvr_log.py --target <t> --expect-build <sha>
+Read each with `python tools\edup_log.py --target <t> --expect-build <sha>
 --grep "fsr3|temporal aa"`.
 
 - **Flight 1: Sean, RTX 5090, Pimax at the eye-mask flights' resolution,
@@ -434,7 +434,7 @@ class of upscaler): that is route 2's go/no-go.
   with fences in place of the mutex.
 - Shipping: two AMD DLLs beside the game's exe by the `nvngx_dlss.dll`
   pattern (conditional RCDATA in tools\gen_installer_rc.py:200-203,
-  payload.h and payload.cpp, plan.cpp:417-467, install_edvr.py:945-946)
+  payload.h and payload.cpp, plan.cpp:417-467, install_edup.py:945-946)
   and their licence file. Whether the signed DLLs carry terms beyond the
   SDK's MIT is unverified and must be read before shipping. Whether the
   DLL's 3.1.5 path runs on NVIDIA and Intel is unverified (believed yes:
@@ -727,7 +727,7 @@ class of upscaler): that is route 2's go/no-go.
   once, naming what was offered and, on Wine, the `FSR4_UPGRADE=1` launch
   option, and the frame falls back as every refusal does. It never runs
   3.1.5 in `fsr4`'s name. **D8** this pass ships a dev install only
-  (`tools\fetch_fsr4.py`, the build, the workflow, `install_edvr.py
+  (`tools\fetch_fsr4.py`, the build, the workflow, `install_edup.py
   --fsr4`); the installer payload and release packages wait for a working
   flight and Sean's read of the licence. **D9** the branch is not merged to
   main until Sean says it is ready to ship to users.
@@ -782,7 +782,7 @@ class of upscaler): that is route 2's go/no-go.
   line, diffed). Elite runs Proton Experimental 11.0-20261014, which ships
   `contrib/amdxcffx64.dll` (FSR 4.1.1) and the `amdxc64` shim; the launch
   option `FSR4_UPGRADE=1 %command%` is Sean's to set. CI branch builds are
-  stamped 0.0.0-ci, so the flight log's build check is `edvr_log.py
+  stamped 0.0.0-ci, so the flight log's build check is `edup_log.py
   --expect-build 0.0.0-ci`, with the install receipt's hashes as the
   stronger tie to this run.
 - 2026-10-23 night, flight 5 (ci-40031975573 at 5dcc0608; Steam, flat,
@@ -965,7 +965,7 @@ class of upscaler): that is route 2's go/no-go.
   RADV or the AMD GPU as the source, and anything specific to FSR 4.
   Left: the game's own rendering of that edge, or one of EDVR's
   always-on non-AA fixes making it change. Discriminator: the no-EDVR
-  baseline at the spot (`install_edvr.py --suspend`, then `--resume`).
+  baseline at the spot (`install_edup.py --suspend`, then `--resume`).
 - 2026-10-24: held keys shipped. Flights 6 and 7 showed nothing the held
   keys break: no stale or black frames, and the one flicker Sean saw is
   constant, present with AA off (F7) and under DLSS on Windows, so not

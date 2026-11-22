@@ -82,7 +82,7 @@ constexpr uint32_t kStep = 16;               // widths are multiples of 16, so w
 // median) gives p10 = 4991 (an exponential skew) and 5000 (half-normal), and 4985..5002 for 30 to 60 samples a window. The
 // working value is 5000 px at distance 0.7, so m = 3504 / 5000 = 0.7008 -> 0.70, and the seed footprint is the width that
 // makes 0.70 give the chosen 3504: 3504 / 0.70 = 5006 px. The unit fraction below is that footprint at distance 1.0 as a
-// fraction of the eye: 5006 x 0.7 / 4032 = 0.86910. The first session's own p10 replaces the seed; tools\edvr_log.py
+// fraction of the eye: 5006 x 0.7 / 4032 = 0.86910. The first session's own p10 replaces the seed; tools\edup_log.py
 // --vscreen-fit says how far the two are apart (within 5% passes). (A seed left at the WIDTH, 3504, would fit 2453 and floor.)
 constexpr double kChosenWidthPx = 3504.0;
 constexpr double kSeedFootprintPx = 5006.0;
@@ -426,7 +426,7 @@ inline bool parseRecord(const char* text, Record* out) {
     return true;
 }
 
-// ---- the log's own text (the reader, tools\edvr_log.py --vscreen-fit, parses exactly this; the rig runs both) -------------
+// ---- the log's own text (the reader, tools\edup_log.py --vscreen-fit, parses exactly this; the rig runs both) -------------
 inline const char* ruleName(Rule r) { return r == Rule::Fitted ? "fitted" : "legacy"; }
 inline const char* sourceName(Source s) { return s == Source::Measured ? "measured" : (s == Source::Seed ? "seed" : "none"); }
 

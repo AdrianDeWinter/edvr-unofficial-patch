@@ -33,7 +33,7 @@ the bar; report each finding with the file, the line and the rule.
 
 - **Reuse the owner of a lookup or an interpretation.** A second copy of an
   existing job drifts from the first. Installs resolve through
-  `install_edvr.resolve_target` and `steam_library.py`; builds map through
+  `install_edup.resolve_target` and `steam_library.py`; builds map through
   `tools\build_diff.py map`; the native build has one recipe,
   `.github\workflows\release.yml`. A change that re-derives what an owner
   already provides is a finding even when it works. (#121, #103)

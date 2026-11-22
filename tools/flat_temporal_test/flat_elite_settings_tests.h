@@ -665,7 +665,7 @@ inline int flatEliteSettingsTests() {
         catches(showHide<DefectiveHold<Defect::ShowAndHideKeepPending>>(k1440, k256), "a hide that leaves a change waiting is caught");
 
         // The held line (menu.cpp says it once when a hold begins): what is on show and what is waiting, in the sizes the key carries.
-        // It never begins with shown, changed or hidden, the three words tools\edvr_log.py's F8 reader parses after the prefix.
+        // It never begins with shown, changed or hidden, the three words tools\edup_log.py's F8 reader parses after the prefix.
         const FlatWarningCause c1440 = flatWarningCause(true, true, false, true, true, 1440, 810, 3840, 2160);
         const FlatWarningCause c256 = flatWarningCause(true, true, false, true, true, 256, 256, 3840, 2160);
         const FlatWarningCause taa = flatWarningCause(true, true, true, false, true, 3840, 2160, 2560, 1440);

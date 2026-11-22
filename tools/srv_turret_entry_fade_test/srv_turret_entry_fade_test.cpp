@@ -8,7 +8,7 @@
 //   linear over kFadeInMs and never rises; the view going off ends the hold at once; a move that is never published ends it at kPublishWaitMs; no move key means no hold; the level stays
 //   in [0, 1] and is exactly 0 outside a run; staying on never re-triggers, a new edge does, one during a fade-in cuts the run short and starts again at 1.
 //   THE LINES: the run line, the skipped line, the trace header and a full trace line fit the log's 1200-character line, carry the frames and the signal, say FIRED only when the cap fired,
-//   and none contains a phrase tools/edvr_log.py's turret rule reads.
+//   and none contains a phrase tools/edup_log.py's turret rule reads.
 //   THE EARLY EDGE (srv_turret_sheet_latch.h): the gunner sheet's draw raises the view before Status.json does; Status.json taking over is no edge and says how long it lagged; a latch with no
 //   sheet draw for a second expires; a non-Scorpion never raises it; the off edge stays Status-driven (a sheet that stops does not turn a Status-on view off, a Status off edge with the sheet
 //   still drawing latches again on its next draw, but a draw from before the off edge does not: leaving the turret turns the view off at the Status.json edge); and the entry fade's hold starts on the early edge.
@@ -410,7 +410,7 @@ static void latchCases() {
 }
 
 static bool noReadPhrase(const char* line) {
-    // The phrases tools/edvr_log.py's turret rule (H_SRV_TURRET_LABELS) matches a line on: none of these lines may contain one.
+    // The phrases tools/edup_log.py's turret rule (H_SRV_TURRET_LABELS) matches a line on: none of these lines may contain one.
     static const char* labels[] = {"srv turret view", "srv turret camera", "srv turret settings", "srv turret hud", "srv turret anchor", "srv turret:"};
     for (const char* l : labels)
         if (std::strstr(line, l)) return false;

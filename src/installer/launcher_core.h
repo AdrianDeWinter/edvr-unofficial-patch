@@ -77,7 +77,7 @@ PayloadLoad loadLauncherPayload(const LauncherRoots& roots, const std::wstring& 
 // resources, with nothing loaded, says false.
 bool payloadPresent(const PayloadInfo& info);
 
-// install_edvr.py puts branch builds in the same folders. A folder whose
+// install_edup.py puts branch builds in the same folders. A folder whose
 // edvr_native_receipt.json or edvr_flat_receipt.json (or a backup-named sibling of either) was
 // written after the install record, or that has a receipt and no record at all, belongs to
 // whoever is developing here: a hash-based repair would overwrite a build about to be flown.

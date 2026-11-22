@@ -236,7 +236,7 @@ comfort, scanners' FSS sync, and performance's cull guard, FOV trim and
 resolution; intro and on-foot-panel use it only for their R rows. The NGX DLL
 (`nvngx_dlss.dll`) for DLSS only. Profile and ini always. Flat already
 installs as graphics + profile + ini (+ NGX) with no runtime (plan.cpp:314,
-571; install_edvr.py:1186-1189).
+571; install_edup.py:1186-1189).
 
 ## 5. The plugin contract
 
@@ -336,7 +336,7 @@ when ReShade was removed). The rules:
   auto-selected, a recommended set), receipts that list plugins and
   versions, Modify without touching settings, F8 rows only for installed
   plugins, the contract gate per plugin, and a startup line naming the plugin
-  set (`edvr_log.py --expect-plugins`).
+  set (`edup_log.py --expect-plugins`).
 - **Phase 4:** the add-on tier of section 6. (Separate first-party DLLs are
   not planned: Q1 chose monolithic.)
 - **Phase 5 (Q7):** graphics-only VR, after Phase 1 and Phase 3's component

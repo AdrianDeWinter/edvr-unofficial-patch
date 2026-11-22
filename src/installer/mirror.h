@@ -61,6 +61,18 @@ bool migrateLegacyDataRoot(const std::wstring& newRoot);
 std::wstring mirrorDirFor(const GameInstall& game,
                           const std::wstring& root = defaultMirrorRoot());
 
+// Linux (Proton): Elite runs in its own Wine prefix, steamapps\compatdata\359320\pfx, and its DLL reads that prefix's
+// %LOCALAPPDATA%\EDUP. A launcher started in another prefix (its own, or a wrapper's) would keep the per-game settings
+// folder where the game never looks. mirrorDirFor therefore uses the game's prefix under Wine, for the launcher's default
+// root only: a --data-root the caller chose is used as given.
+bool processUnderWine();
+// <steam library>\steamapps\compatdata\359320\pfx\drive_c\users\steamuser\AppData\Local for a game under a Steam library,
+// when that folder exists; else empty.
+std::wstring protonLocalAppDataForGame(const std::wstring& gameDir);
+// The root mirrorDirFor uses: `root`, or the game's Proton prefix's EDUP folder when `underWine` and `root` is this
+// process's defaultMirrorRoot().
+std::wstring settingsRootForGame(const std::wstring& gameDir, const std::wstring& root, bool underWine);
+
 // What the mirror currently holds, read back for a restore offer.
 //
 // edvr.ini and edvr-flat.ini are kept as three generations (iniedit.h,

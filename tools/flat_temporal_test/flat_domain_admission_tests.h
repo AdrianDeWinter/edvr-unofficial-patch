@@ -376,7 +376,7 @@ inline void composeRows(float (&out)[6][4], double yaw, double pitch, double rol
     }
     out[3][0] = out[3][1] = out[3][3] = 0.0f; out[3][2] = nearPlane; out[4][3] = out[5][3] = 0.0f;
 }
-// The rows of two cameras of one object, from a real flight (tools\edvr_log.py's self-test, flight 1): the scene camera and the first-person
+// The rows of two cameras of one object, from a real flight (tools\edup_log.py's self-test, flight 1): the scene camera and the first-person
 // weapon camera. Rows 270..273 as the log prints them; rows 274 and 275 are zero here (the scale reads rows 0..2 only).
 inline void loggedRows(float (&out)[6][4], bool weapon) {
     static const float scene[16] = {-1.04384f, -0.007344862f, 0, 0.113728f, -2.103792e-08f, 1.866733f, 0, 0.03455516f,

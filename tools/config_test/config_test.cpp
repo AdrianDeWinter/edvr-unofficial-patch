@@ -1657,7 +1657,7 @@ static void switchProfileCases(const std::wstring& scratch) {
 // (<head>.tail-NNN.log, the newest four kept) and keeps in the head, after it has ended, the first line of each kind written later and the memory
 // watch's lines. These cases drive the real Log at max_mb = 1 (H 256 KB, K 128 KB, S 160 KB) and pin what is written: the markers' exact texts, where
 // the cut falls, how many segments stay, a segment that cannot be deleted and goes at a later rotation, the budget of kept lines, drops and the volume
-// line. The sessions are left in <scratch>\logrot with a rotation.expect file, and the build hands that directory to tools\edvr_log.py
+// line. The sessions are left in <scratch>\logrot with a rotation.expect file, and the build hands that directory to tools\edup_log.py
 // (--check-rotation-dir), which reads each session back with the stitching reader every tool uses and checks it again from the Python side.
 namespace logcases {
 
@@ -2132,7 +2132,7 @@ void run(const std::wstring& scratch) {
     Log::get().close();
     Log::get().setVolumeIntervalMsForTest(300000);
 
-    // The sessions and what is expected of them, for tools\edvr_log.py --check-rotation-dir (build.bat runs it after this exe).
+    // The sessions and what is expected of them, for tools\edup_log.py --check-rotation-dir (build.bat runs it after this exe).
     HANDLE f = CreateFileW((dir + L"\\rotation.expect").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) {
         fail("log rotation", "could not write rotation.expect");
@@ -3036,7 +3036,7 @@ int main(int argc, char** argv) {
         }
     }
     // The bound in force, and what the log does with it (the head, the tail segments, the kept lines, the volume line): the cases above pin the numbers
-    // without writing; these write real sessions. They leave them in <scratch>\logrot for tools\edvr_log.py --check-rotation-dir, which build.bat runs next.
+    // without writing; these write real sessions. They leave them in <scratch>\logrot for tools\edup_log.py --check-rotation-dir, which build.bat runs next.
     if (argc >= 3) {
         const std::wstring scratch = widen(argv[2]);
         const auto bound = [&](const char* iniLine, const wchar_t* tag, uint64_t want, const char* what) {

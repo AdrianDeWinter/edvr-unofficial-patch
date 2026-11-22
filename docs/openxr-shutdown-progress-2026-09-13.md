@@ -99,7 +99,7 @@ including 201 explicit-module checks, 207 bootstrap checks, 168 Present checks,
 the five-case transport matrix and the 254-key configuration contract. All 471
 source hashes remained unchanged throughout the build. Parent review tightened
 both-export discovery and exception handling, then verified the actual summary
-records through `tools/edvr_log.py`.
+records through `tools/edup_log.py`.
 
 In the ready fixture, the three service-point observations occurred on render
 thread 40284 inside the forwarded shutdown interval. The next window reported
@@ -130,7 +130,7 @@ preserved. The installer kept both preceding DLLs in backups tagged
 
 The user reported, "Ran it, seemed normal," on the established Frontier,
 Pimax-through-SteamVR setup. Both installed DLL hashes still matched the
-qualified `e4f4ef9` binaries. `tools/edvr_log.py --expect-build 10eee4c`
+qualified `e4f4ef9` binaries. `tools/edup_log.py --expect-build 10eee4c`
 independently verified the precommit version of each new log:
 `edvr_gfx_20260913_132808.log` and `edvr_vr_20260913_132809.log`. Frontier was
 absent from the postflight process snapshot.

@@ -108,7 +108,7 @@ struct Stats {
 };
 
 // The window's line. A reader tells a rifle at the hip that never reached the step (no line), the rest solution held steadily (applied most calls, few switches) and a rifle that kept
-// switching (switches a second). tools\edvr_log.py reads it.
+// switching (switches a second). tools\edup_log.py reads it.
 inline int formatLine(char* buf, size_t n, uint32_t seconds, const Stats& s) noexcept {
     return std::snprintf(buf, n, "native on foot rifle torso (F218) %u s: rifle calls %u, rest applied %u, refused %u, held %u; switches %u; largest slide %.1f cm", seconds, s.calls, s.applied, s.refused,
                          s.held, s.switches, s.offsetMaxM * 100.0);

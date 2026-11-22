@@ -854,7 +854,7 @@ void launcherBeginAction() {
     lg.developerNote.clear();
     if (g.haveSurvey && isDeveloperInstall(g.survey.game.dir))
         lg.developerNote =
-            L"This folder was last changed by a branch build (install_edvr.py), not by this launcher. Going on "
+            L"This folder was last changed by a branch build (install_edup.py), not by this launcher. Going on "
             L"replaces that build with this release.";
 }
 

@@ -332,8 +332,8 @@ mapped WRITE_DISCARD block whose contents are undefined and unused.
 
 ### Flight plan
 
-1. Install the branch on Frontier VR (`python tools\install_edvr.py`, `--verify-only`), check the log's version
-   line (`python tools\edvr_log.py --target ... --expect-build HEAD`).
+1. Install the branch on Frontier VR (`python tools\install_edup.py`, `--verify-only`), check the log's version
+   line (`python tools\edup_log.py --target ... --expect-build HEAD`).
 2. Same session, hot-reload A/B: `fix.particle_billboard = stock` then `steady` in `edvr.ini` (polled once a
    second), 2 minutes each, away from smoke. With `steady` and the target retired, expect `particle target
    retired` and the `particle` reader `not exercised`.

@@ -1,7 +1,7 @@
 // What holds the draw gate open (draw_gate.h): one name per term of the gate's subscription, so the log can say which feature keeps the fast path
 // (draw_fast_path.h) from running in a scene. vscreen.cpp's drawGateHolders sets one bit per term and the gate is "any bit" (drawGateSample); the line is
 // written when the set changes (and once at the first sample). The sharp_weapons_test rig scans drawGateHolders: every name below is used once,
-// and a term added to the gate without a name fails the build. tools\edvr_log.py --perf-windows parses the line; its self-test holds the
+// and a term added to the gate without a name fails the build. tools\edup_log.py --perf-windows parses the line; its self-test holds the
 // fragments below to this file.
 #pragma once
 #include <cstddef>

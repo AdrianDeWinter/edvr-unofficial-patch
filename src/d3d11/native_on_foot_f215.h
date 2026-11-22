@@ -241,7 +241,7 @@ struct Stats {
 };
 
 // The window's line. A reader tells the key off, a key on that never ran (no active call), and a rule that ran with a shift near 0 (active calls with a mean near 0) apart; shifted is the count
-// of pose writes that carried a shift (a rule that was active but never wrote a shifted pose is a rule that did nothing). tools\edvr_log.py reads it.
+// of pose writes that carried a shift (a rule that was active but never wrote a shifted pose is a rule that did nothing). tools\edup_log.py reads it.
 inline int formatLine(char* buf, size_t n, uint32_t seconds, const Stats& s, uint32_t shifted) noexcept {
     char mv[112];
     if (s.active) std::snprintf(mv, sizeof(mv), "mean %+.1f cm (min %+.1f, max %+.1f) over %u active calls", s.ySum / s.active * 100.0, s.yMin * 100.0, s.yMax * 100.0, s.active);

@@ -363,7 +363,7 @@ SHA-256. The check runs that plan and applies it if anything needs changing.
 
 - Automatic for EDVR's own files and recognised mods. An unknown foreign DLL is
   asked about once. An unreadable one is reported and nothing is touched, as today.
-- **Developer installs are left alone.** `install_edvr.py` puts branch builds in
+- **Developer installs are left alone.** `install_edup.py` puts branch builds in
   the same folders, and a hash-based repair would overwrite a build about to be
   flown. A folder whose `edvr_native_receipt.json` or `edvr_flat_receipt.json` is
   newer than the install record belongs to the developer.
@@ -408,7 +408,7 @@ output is not shared or pasted.
 |---|---|---|---|
 | T1 | Steam running, `SteamAppId=359320` set, `MinEdLauncher.exe "<Steam install>\EDLaunch.exe" /steam /autorun /autoquit /edo /vr /dryrun`, from a plain shell | Prints the dry-run command line. Repeat without the variable as a control | `--wrap` is required on Steam |
 | T2 | The same without `/dryrun` | The game reaches the menu with no relaunch through Steam. Steam shows it running, playtime counts, the overlay works, and SteamVR files it as `steam.app.359320` | As T1, or note what is lost |
-| T3 | T2 with EDVR installed, once with `/vr` and once with `/novr` | `edvr_log.py` shows the right build and the `profile:` line with the flag applied, both logs exist with no stand-down, and `/novr` has no `openvr_api.dll` load | Direct launch changes something EDVR depends on: find what before porting |
+| T3 | T2 with EDVR installed, once with `/vr` and once with `/novr` | `edup_log.py` shows the right build and the `profile:` line with the flag applied, both logs exist with no stand-down, and `/novr` has no `openvr_api.dll` load | Direct launch changes something EDVR depends on: find what before porting |
 | T4 | Frontier store, `MinEdLauncher.exe /frontier <profile> /autorun /autoquit /edo /vr`, launched twice | Finds the separate product folder. 2FA is asked once. The second launch is silent | Frontier stays on the EDLaunch route |
 | T5 | Deck, the current installer through `proton runinprefix` | The window draws and works, `--collect-logs` reaches the host, and a test build can reach GitHub and verify a P-256 signature | Fix it, or rethink the one exe |
 | T6 | Deck, Windows min-ed-launcher under Proton, with `EDLaunch.exe` swapped for it in Steam's `%command%` | A Windows exe in the prefix gets a ticket and starts the game | Linux stays on the EDLaunch route |

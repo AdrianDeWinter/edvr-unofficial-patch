@@ -45,7 +45,7 @@ case variants; no user/machine environment or registry setting is changed.
 
 ## Installer and launcher
 
-`tools/install_edvr.py --target frontier --native-openxr --dll --native-receipt
+`tools/install_edup.py --target frontier --native-openxr --dll --native-receipt
 ABS` stages the built native DLL as `Openvr/win64/openvr_api.dll` together with
 its paired `d3d11.dll`. Both existing DLLs and the preserved original must
 exist. A new receipt journals the transaction, records source/previous hashes
@@ -188,8 +188,8 @@ capability is actually connected.
 The user explicitly authorizes destructive use of the Frontier installation for
 these tests. Install the appropriate DLLs there and let the user launch the
 game normally; scripted EDLaunch startup, per-flight backups and automatic
-restoration are not required. Continue using `tools/install_edvr.py` to install
-and verify the selected build, and `tools/edvr_log.py` for evidence. Do not
+restoration are not required. Continue using `tools/install_edup.py` to install
+and verify the selected build, and `tools/edup_log.py` for evidence. Do not
 extend this authorization to another installation or to deleting unrelated
 data.
 
@@ -210,7 +210,7 @@ SteamVR closed. Verify the exact installed pair before launch, use EDLaunch's
 normal Play action, and inspect startup, both eyes, head tracking, loading
 transitions, cockpit/on-foot rendering and normal game exit. Record any missing
 EDVR feature separately from bootstrap or transport failures. Collect the
-graphics log through `tools/edvr_log.py`, the launch receipt and the
+graphics log through `tools/edup_log.py`, the launch receipt and the
 corresponding Pimax client/server interval. Require separate-device ownership,
 actual stereo submissions and complete cleanup; a launcher PID or a visible
 desktop window alone is not a pass. Native startup/teardown diagnostics must be

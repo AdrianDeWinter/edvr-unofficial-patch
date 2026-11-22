@@ -170,7 +170,7 @@ code-or-data question for this model.
 ## Ruled out
 
 - ruled out: an EDVR cause, because Sean reproduced it with EDVR suspended
-  (`install_edvr.py --suspend`, 2026-10-21), and Optimized stations and AA were
+  (`install_edup.py --suspend`, 2026-10-21), and Optimized stations and AA were
   ruled out before that.
 - ruled out: a 4.4.2.0 code change on the LoD path, because every function on
   it maps IDENTICAL or RELOC-ONLY from 332841 (list above).
@@ -248,6 +248,6 @@ Commit before compiling, then the compile-only path in AGENTS.md. Keep
 4. Only if B restored nothing: quit, set `texture_lod_bias = -1`, relaunch,
    repeat step 1 (H6).
 
-Read: `python3 tools/edvr_log.py --target steam --expect-build HEAD
+Read: `python3 tools/edup_log.py --target steam --expect-build HEAD
 --grep "lod view:|detail_at_output"`, then the census diffs A→B, A→C and
 C→A. H0 first.

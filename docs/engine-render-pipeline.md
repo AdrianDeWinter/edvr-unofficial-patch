@@ -358,7 +358,7 @@ otherwise.
   a 4 KiB-block .text change map that tells Ghidra where to look first;
   `capture` re-baselines after a verified update. Extend the targets JSON as
   new VA-bound rows land.
-* **Tooling:** `python tools/edvr_log.py --tally vh [--frame N]` aggregates
+* **Tooling:** `python tools/edup_log.py --tally vh [--frame N]` aggregates
   census draws per shader content hash with per-eye subcounts, percentages,
   and avg n=/i= (landed 2026-09-21; self-tested, reproduces the flight-064511
   reference counts exactly). Census caveat it encodes: per-draw detail dies
@@ -371,9 +371,9 @@ otherwise.
 
 (The batched protocol above was flown 2026-09-21; its questions are
 answered in the engine arc. This is the gate build's validation flight —
-install the gate build first, `tools/install_edvr.py --target frontier`,
+install the gate build first, `tools/install_edup.py --target frontier`,
 then `--verify-only`; identity-check logs with
-`edvr_log.py --expect-build HEAD`.)
+`edup_log.py --expect-build HEAD`.)
 
 Flight context: `temporal_aa = off` for both legs — the user's running
 choice until engine-truth motion vectors land, and the measurement-clean

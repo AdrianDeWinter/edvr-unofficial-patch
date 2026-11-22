@@ -105,9 +105,9 @@ Useful initial commands, run in the active worktree:
 
 ```powershell
 $game = 'C:\Users\seanm\AppData\Local\Frontier_Developments\Products\elite-dangerous-odyssey-64'
-python tools/edvr_log.py --target $game --expect-build 22cabf3c --version
-python tools/edvr_log.py --target $game --expect-build 22cabf3c --grep 'native preview camera:|CodeHook native-preview'
-python tools/edvr_log.py --target $game --expect-build 22cabf3c --health
+python tools/edup_log.py --target $game --expect-build 22cabf3c --version
+python tools/edup_log.py --target $game --expect-build 22cabf3c --grep 'native preview camera:|CodeHook native-preview'
+python tools/edup_log.py --target $game --expect-build 22cabf3c --health
 python tools/eye_bmp_to_png.py --help
 ```
 

@@ -8,7 +8,7 @@
 //   1. the window: the zoomed told frustum;
 //   2. the reprojection: a lens pixel's world point, from the right eye's depth, through the left eye's zoomed rows (the parallax of the 6.3 cm removed per pixel);
 //   3. the decisions: the gate and the hold of the window, the strip's ramp, the lens's source for a frame and why it fell back to A, the reset edge;
-//   4. the instrument: the accumulators' final figures and the press line, which tools\edvr_log.py renders its --health fixtures from.
+//   4. the instrument: the accumulators' final figures and the press line, which tools\edup_log.py renders its --health fixtures from.
 #pragma once
 
 #include "scope_zoom_s1.h"

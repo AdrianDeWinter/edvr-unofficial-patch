@@ -177,7 +177,7 @@ struct WorldScreenCensus {
     }
 };
 
-// F108's line (the Log adds the time); tools\edvr_log.py --health's `terminal hold (F108)` reads it by its first words.
+// F108's line (the Log adds the time); tools\edup_log.py --health's `terminal hold (F108)` reads it by its first words.
 // heldWhy: UiContent's decisions for the held draws, as text ("none" when every marked draw was tracked).
 inline int worldScreenFormatF108(char* out, size_t size, const WorldScreenWindow& w, const WorldScreenCensus& c, const char* heldWhy) {
     return std::snprintf(out, size,
@@ -194,7 +194,7 @@ inline int worldScreenFormatF108(char* out, size_t size, const WorldScreenWindow
         static_cast<unsigned long long>(c.duringScreen), static_cast<unsigned long long>(c.freshPx), c.changeFrames);
 }
 
-// The line (the Log adds the time); tools\edvr_log.py --health reads it by its first words.
+// The line (the Log adds the time); tools\edup_log.py --health reads it by its first words.
 inline int worldScreenFormatWindow(char* out, size_t size, const WorldScreenWindow& w) {
     return std::snprintf(out, size,
         "ui depth world screens (F105): %u frames, seen %u, marked %u (eye 0 %u, eye 1 %u); refused: no eye %u, no mask %u, "

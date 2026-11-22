@@ -495,7 +495,7 @@ c2ecc7487c6633000b93600a97fbbbffd4928c6b76be61ad9e6c5c2fe3d1c6e5; installation
 used no `--ini`.
 
 The human controller flight is recorded in `edvr_gfx_20261011_144257.log` (912
-lines, 231.3 KB). The sanctioned `edvr_log.py --expect-build HEAD` matched it:
+lines, 231.3 KB). The sanctioned `edup_log.py --expect-build HEAD` matched it:
 version v0.19.1-26-g85e79e18-dirty, build 6ACBF433 linked at 20:40:19 UTC. At
 14:43:05.686 the EXE XINPUT9_1_0 gate was installed; at .735 Elite slot 0 was
 observed and private; at .736 flat pad navigation became active on proven
@@ -1464,7 +1464,7 @@ the output back (:660-751); the first evaluation pins one thread and context (:6
 temporal_pass.cpp (dispatch :3979-3987) with one context per slot (eye 0, eye 1, world = 2; kUpscalerSlots = 3); xess maps to
 TemporalEngine::Own and VR refuses it (temporal_mode.h:19-23, temporal_pass.cpp:4495, native_temporal readConfig). VR's jitter is a
 fixed 8-phase cycle; XeSS needs ceil(8 x scale^2) phases (temporal_math.h:100-116). The installer and package ship libxess for flat
-only (plan.cpp:589, gen_installer_rc.py:402-405, package_native.py:74, install_edvr.py). The live profile switch never calls
+only (plan.cpp:589, gen_installer_rc.py:402-405, package_native.py:74, install_edup.py). The live profile switch never calls
 xessReleaseFeatures directly.
 
 Units (each behind the full build; Haiku implementers, reviewed):
@@ -1476,7 +1476,7 @@ Units (each behind the full build; Haiku implementers, reviewed):
   The world route (slot 2) maps xess to the same engine if its route allows a third engine without restructuring; otherwise it
   stays on its current fallback and the report says so.
 - X3, config, menu and payload: the VR choices line gains `xess=XeSS-SR` (edvr.ini, menu schema), and libxess.dll with its two
-  licence files installs and packages for every scope (install_edvr.py --xess for vr too; installer plan; package).
+  licence files installs and packages for every scope (install_edup.py --xess for vr too; installer plan; package).
 - Hypotheses for the first flight: XH1 the bridge's copies and fences cost under 1 ms per eye at about 4032x4034 on the 5090 (read
   the totals line); XH2 the jitter sign matches (a wrong sign shows as shimmering or a half-pixel swim on static edges); XH3 two
   slots keep independent history (a wrong sharing shows as ghosting that alternates between eyes).

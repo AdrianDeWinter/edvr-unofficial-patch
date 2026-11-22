@@ -242,7 +242,7 @@ They do not rule out game-driven resets or mismatched camera/depth inputs
 during the reported head movement.
 
 The exact retained baseline backups were hash-checked, staged separately from
-the current build outputs, installed through `tools/install_edvr.py`, and
+the current build outputs, installed through `tools/install_edup.py`, and
 verified again. Current INI bytes were preserved. Use `--expect-build cc3d882`
 for the next flight and the staged rollback root when verifying the current
 installation. The subsequent headset comparison confirmed that the rollback did

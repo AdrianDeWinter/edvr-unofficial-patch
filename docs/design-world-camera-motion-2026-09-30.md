@@ -42,7 +42,7 @@
   be flown: the key and the route switch are gone): census on, one on-foot leg
   with the gate and the route as built, and the arrival leg (load into on-foot
   play), judged against the logged baselines in this doc rather than a live
-  comparison. Read with `python tools\edvr_log.py --target frontier
+  comparison. Read with `python tools\edup_log.py --target frontier
   --expect-build HEAD --maps-sharp` and `--camera-census`.
 - **Open (2026-10-01, corrected):** the arrival spell, not Cinema mode. After
   a load into on-foot play every frame is declined for 27 s
@@ -334,7 +334,7 @@ the key. That check is why this could ride the build: the log of 2026-09-30
 shows on-foot eye draws at 2 a frame, the composites.
 
 **8.2 Log lines** (all `on foot maps sharp`, none while the key is off; the
-reader is `edvr_log.py --maps-sharp`, fixture `tools\maps_sharp_fixture.log`
+reader is `edup_log.py --maps-sharp`, fixture `tools\maps_sharp_fixture.log`
 held to the formatters by on_foot_maps_test P7):
 - `ON at frame=` once per switch in, with the carried state and the journal;
   `OFF at frame=` (key went off / screen motion is not live / the layer's own

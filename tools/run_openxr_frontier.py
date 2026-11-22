@@ -19,11 +19,11 @@ from unittest.mock import patch
 try:
     from tools.openxr_pe import validate_frontier_imports
     from tools.run_openxr_native import child_environment
-    from tools.install_edvr import resolve_target, native_paths, verify_native_receipt
+    from tools.install_edup import resolve_target, native_paths, verify_native_receipt
 except ImportError:
     from openxr_pe import validate_frontier_imports
     from run_openxr_native import child_environment
-    from install_edvr import resolve_target, native_paths, verify_native_receipt
+    from install_edup import resolve_target, native_paths, verify_native_receipt
 
 ROOT = Path(__file__).resolve().parents[1]
 DENY = {'elitedangerous64.exe', 'edlaunch.exe', 'vrserver.exe',

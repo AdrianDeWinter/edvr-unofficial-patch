@@ -400,7 +400,7 @@ motion's found line is written once. The stale comments in
 
 VR, Frontier, build 334925 (the resolver does not depend on the VR runtime), log
 `edvr_gfx_20261025_114350.log`, version v0.21.1-41-gc041596b (the log's
-version line matched `edvr_log.py --expect-build HEAD`), `advanced.game_update_check = on`.
+version line matched `edup_log.py --expect-build HEAD`), `advanced.game_update_check = on`.
 
 - `game update check: 315 of 318 found, all equal; not found: 0x52EB4F8
   (data-ref-failed), 0x52EC240 (data-ref-failed), 0x52EC248 (data-ref-failed)

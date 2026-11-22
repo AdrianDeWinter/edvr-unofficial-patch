@@ -2,7 +2,7 @@
 //
 //   THE PURE RULES (src/common/desktop_window_math.h). The setting's words, the picture's shape from the eye and its bounds, the fit, where the picture goes in the swap
 //   chain's buffer under each scaling (a window of the picture's shape is filled exactly; any other is undistorted with bars), the pixel rectangles of two eyes, the
-//   window's plan on a monitor, the format answers and the three log lines tools\edvr_log.py --health reads.
+//   window's plan on a monitor, the format answers and the three log lines tools\edup_log.py --health reads.
 //   THE WINDOW RULES (round 2): the framed, sizable style (0x94020000 -> 0x14CC0000), which style bits are ours, when a client is off the picture's shape, the correction that
 //   keeps the dimension the user changed more and clamps to the work area (minimum client height 240), and the census of the skipped draws.
 //   THE CURSOR (rounds 3 to 5): the client-centre test, the DirectInput cooperative level's words and

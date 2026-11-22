@@ -454,7 +454,7 @@ struct Stats {
 };
 
 // The window's line. A reader tells the key on (the game's bob kept: idle), the key off with no running (nothing to remove), and the key off with running frames and none removing (the filter
-// never took hold). tools\edvr_log.py reads it.
+// never took hold). tools\edup_log.py reads it.
 inline int formatLine(char* buf, size_t n, uint32_t seconds, const Stats& s) noexcept {
     return std::snprintf(buf, n,
                          "native on foot view bob (F216) %u s: fix.native_on_foot_view_bob is %s; game frames %u, running %u, removing %u; up rms %.1f max %.1f mm, right rms %.1f max %.1f mm, "
@@ -485,7 +485,7 @@ struct HudStats {
     double rmsMm(int axis) const noexcept { return shifted ? std::sqrt(sumSqMm[axis] / shifted) : 0.0; }
 };
 
-// tools\edvr_log.py reads it: the key on with the F216 line removing and no call shifted is the shift that never ran.
+// tools\edup_log.py reads it: the key on with the F216 line removing and no call shifted is the shift that never ran.
 inline int formatHudLine(char* buf, size_t n, uint32_t seconds, const HudStats& s) noexcept {
     return std::snprintf(buf, n,
                          "native on foot hud with the view (F220) %u s: experimental.native_on_foot_hud_stays_with_view is %s; placement calls %u, with a shift %u; up rms %.1f max %.1f mm, "

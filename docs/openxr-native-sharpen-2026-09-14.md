@@ -63,7 +63,7 @@ thread/process IDs. Native files written by previous builds beside the DLL had
 UTC filenames. The 8 MiB trace budget, unique creation, concurrent reader
 sharing and stdout diagnostics are unchanged.
 
-`tools/edvr_log.py --tag openxr` discovers the new files; `--tag all` also
+`tools/edup_log.py --tag openxr` discovers the new files; `--tag all` also
 searches the native directory when legacy logging uses a custom `log.dir`. The
 support-bundle timestamp parser recognizes the native suffix, so the default
 shared log directory includes matching graphics and native logs in the same

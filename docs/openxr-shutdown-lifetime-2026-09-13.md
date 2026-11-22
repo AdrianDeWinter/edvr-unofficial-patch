@@ -104,7 +104,7 @@ bootstrap checks, 168 Present checks, the five-case transport matrix and the
 254-key configuration contract. All 471 source hashes remained unchanged during
 the build.
 
-Parent inspection through `tools/edvr_log.py --expect-build 00df52c` verified
+Parent inspection through `tools/edup_log.py --expect-build 00df52c` verified
 the actual paired fixture logs as `v0.16.2-69-g00df52c-dirty`. The ready child
 records render caller 15088 with 210 entries/exits before the positive window
 and 215 afterward, with three service samples. Its next window is alive with
@@ -122,7 +122,7 @@ links them to the checkpoint commit after it is pushed.
 
 ## Frontier gate
 
-Both shipping proxies were installed through `tools/install_edvr.py` and
+Both shipping proxies were installed through `tools/install_edup.py` and
 independently verified against the qualified build. The graphics SHA256 is
 `0561a85a5a904f8278554810875a06b5a568cfbc0e398a9c42865c7b3e6948eb`; the VR
 SHA256 is `76f8b09fa3a5a7647ac37d91514d6f3e1eed84f69b9ae7df1d9f2dc6548f9b92`.
@@ -145,7 +145,7 @@ configuration changes.
 The user reported "Ran it" for the `2f051db` installation. Visual/tracking and
 crash-free exit confirmation was requested separately and is pending; it is not
 inferred from that report. Both installed DLL hashes still match the qualified
-binaries. `tools/edvr_log.py --expect-build 00df52c` independently verified
+binaries. `tools/edup_log.py --expect-build 00df52c` independently verified
 `edvr_gfx_20260913_140138.log` and `edvr_vr_20260913_140139.log` against the
 precommit build. The postflight process snapshot contains no
 `EliteDangerous64.exe`.

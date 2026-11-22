@@ -26,7 +26,7 @@ differ only in documentation, but the old binary's dirty suffix means its exact
 source must not be inferred from the revision alone. Installed binary hashes
 are recorded in the local evidence archive.
 
-All flight-log reads used `tools/edvr_log.py`. The local archive is
+All flight-log reads used `tools/edup_log.py`. The local archive is
 `build/steam-exit-20260914/`: matched-build log excerpts, binary/capture
 hashes, two process snapshots, thread descriptions, and PNG views of the
 supplied BMPs. It excludes the process command line and authentication
@@ -169,7 +169,7 @@ being a blocked native owner join or OpenXR cleanup operation, because those
 finish before the continued game loop.
 
 The local evidence archive is `build/frontier-lod-exit-20260914/`. It contains
-the matched logs read through `edvr_log`, SHA-256 identities for the game and
+the matched logs read through `edup_log`, SHA-256 identities for the game and
 DLLs, two thread snapshots and thread descriptions. Command lines and account
 credentials are excluded.
 
@@ -259,7 +259,7 @@ stalled instance; it did not fix the shutdown defect.
 
 The diagnostic binaries and tested source hashes were reverified before
 installation. The Frontier dry run passed and wrote nothing, then
-`tools/install_edvr.py --target frontier --all` installed the diagnostic pair.
+`tools/install_edup.py --target frontier --all` installed the diagnostic pair.
 A separate `--verify-only` pass verified the native pair, loader and bootstrap
 configuration. The user's `edvr.ini` remained byte-unchanged. The installation
 receipt in the Frontier product directory is
@@ -324,7 +324,7 @@ module-relative frames are used. Nearest exported symbols with large offsets
 are not function identities.
 
 The separate archive `build/frontier-lod-exit-20260914/flight-192254/` contains
-matched logs read through `edvr_log`, binary identities, two thread snapshots,
+matched logs read through `edup_log`, binary identities, two thread snapshots,
 thread descriptions, eye previews, the original small draw ledger and its
 family counts. The previous PID 4772 archive is preserved. PID 9720 was not
 terminated during collection. No production C++ change, new build, install,

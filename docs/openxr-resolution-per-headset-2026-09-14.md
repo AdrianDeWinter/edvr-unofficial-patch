@@ -85,7 +85,7 @@ functions, the self-test and retest structure) is kept. Every file:line below
 was re-read against HEAD d160499 for this revision. A review pass on the same
 day corrected four things the first draft had wrong, each named where it sits:
 the live ini values (`1.0` and `0.90`, not `1.8` and `1.0`), the tool that
-merges (the installer executable, never `install_edvr.py --ini`), the
+merges (the installer executable, never `install_edup.py --ini`), the
 `retired-default:` annotation's leak through the schema generator, and the
 attribution of the parity doc's 4068x4016 flight.
 
@@ -101,10 +101,10 @@ the whole install (edvr.ini:442-450), read once per native host start
 
 Sean flies two headsets from two installs, through four runtimes. All of the
 following are native flight logs from 2026-09-14 (UTC), read with `python
-tools\edvr_log.py --target <store> --tag openxr --nth N
+tools\edup_log.py --target <store> --tag openxr --nth N
 --grep ' (runtime|size,0|openxr_render_scale|openxr_render_size,eye=0),'`,
 where `--nth 0` is the newest log in that install and `--list` prints the
-numbering (edvr_log.py:271-274). `--file` is not the way to name one of these:
+numbering (edup_log.py:271-274). `--file` is not the way to name one of these:
 it is resolved with `os.path.abspath` against the current directory and ignores
 `--target` (:293-297), so a bare log name prints `no such log`; a full path
 works. The `runtime,` field is `XrInstanceProperties.runtimeName` verbatim
@@ -1334,9 +1334,9 @@ Edit-tool removal from the live file alone leaves the mirror carrying the old
 line and a game-update restore brings the audit line back; after the removal
 make one F8 write or run the installer so the mirror follows.
 
-Which tool merges. `python tools\install_edvr.py --target <store> --ini` does
+Which tool merges. `python tools\install_edup.py --target <store> --ini` does
 not merge: `--ini` means "also overwrite the target's edvr.ini with the
-repository's -- this discards tuned settings" (install_edvr.py:1065-1067), the
+repository's -- this discards tuned settings" (install_edup.py:1065-1067), the
 stage copies `root/edvr.ini` over the target with a backup (:984-991), and
 `--verify-only` with `--ini` demands byte equality with the repository file
 (:949-954). No `mergeIni` caller exists under `tools/`. The three-way merge
@@ -1346,7 +1346,7 @@ settings app and the menu's forced-key path (settings.cpp:259, menu.cpp:670).
 The first draft of this revision told the retest to run `--ini` after flight 1
 and "confirm the value survived"; that would have replaced Sean's whole tuned
 Frontier file with the shipped one and failed its own assertion.
-`install_edvr.py --ini` is never pointed at a live file in this document. The
+`install_edup.py --ini` is never pointed at a live file in this document. The
 merge is exercised on the desk instead, on a copy: the iniedit self-test (or a
 scratch run of the installer's merge on a copy of each live file taken after
 flight 1) asserts that a file carrying the flight-1 entry merges into the
@@ -1392,7 +1392,7 @@ requested=1.000000`, `scaled=4980x4916`. Either live file as it stands today
 (the old key's line only, nothing under the new key):
 `matched=0,entries=0,requested=1.000000`.
 
-Graphics log (d3d11.dll, what `python tools\edvr_log.py` reads by default),
+Graphics log (d3d11.dll, what `python tools\edup_log.py` reads by default),
 exactly one of:
 
 - `openxr resolution: this headset is oculus/meta-quest-3 (Oculus, "Meta Quest
@@ -1444,7 +1444,7 @@ What the log shows if the new code never ran, each case distinguishable:
   graphics DLL that accepts only v2/184, and a new host sends v2/184 to an old
   graphics DLL that accepts only v1/16; both return FALSE and print the same
   line. The `-1` says one side is stale, not which; only `python
-  tools\install_edvr.py --target <store> --verify-only` tells which, and it is
+  tools\install_edup.py --target <store> --verify-only` tells which, and it is
   run before every flight. Loud, not a silent 100%.
 - New graphics DLL, export ran, log enabled: the `this headset is` line is
   present. Its absence with a `key=` trace line present means the export code
@@ -1636,11 +1636,11 @@ nothing unless the example line in the comment is counted as a key line (claim
 
 ### Retest plan
 
-The two tools, named once: `python tools\install_edvr.py --target <store>
+The two tools, named once: `python tools\install_edup.py --target <store>
 --verify-only` is the guard **before** every flight (it is what rules out the
-stale-DLL `-1`); `python tools\edvr_log.py --target <store> --expect-build
+stale-DLL `-1`); `python tools\edup_log.py --target <store> --expect-build
 HEAD` is the check **after** every flight, of the log the flight just produced
-(it exits 2 on a build mismatch), and `--tag openxr` (edvr_log.py:269-270;
+(it exits 2 on a build mismatch), and `--tag openxr` (edup_log.py:269-270;
 native logs live in `edvr_logs\` beside the executable, :120-128) reads the
 host trace lines so nobody hand-greps the native log.
 
@@ -1650,7 +1650,7 @@ ReadAllBytes(path))`, never `Get-Content`) and record the four
 `openxr_render_scale` lines and write times as they are at that moment (as of
 this revision: Frontier `1.0` at 20:06:28 UTC, Steam `0.90` at 21:20:24 UTC,
 mirrors identical), because the first draft of this plan was written against
-values that had already changed; then build; `python tools\install_edvr.py
+values that had already changed; then build; `python tools\install_edup.py
 --target <store>` then `--verify-only`, never with `--ini` (it overwrites the
 live file, "Migration" above); leave `edvr.ini` untouched (that is the
 migration under test); run the unpaired native diagnostic
@@ -1711,7 +1711,7 @@ B is a relaunch. Quit through Elite's own menu. Read the ini back (decode with
 "Migration" predicts: `openxr_resolution = oculus/<sys>:3283` appended bare at
 the end of `[fix]` (iniedit.cpp:597-598) with `openxr_render_scale = 1.0` still
 under the old prose. Confirm the mirror copy updated (its write time and
-bytes). Do not run `install_edvr.py --ini`; the merge is checked on the desk on
+bytes). Do not run `install_edup.py --ini`; the merge is checked on the desk on
 a copy, as "Migration" says, and the old line is removed by hand only after
 that.
 
@@ -2031,7 +2031,7 @@ revision are marked and kept for the record.
     (:597-598), so with the key renamed the F8 write lands with no comment
     block until an installer merge. The merge is reached only from
     src/installer/plan.cpp:543-553, settings.cpp:259 and menu.cpp:670;
-    tools/install_edvr.py has no caller and its `--ini` overwrites
+    tools/install_edup.py has no caller and its `--ini` overwrites
     (:984-991, :1065-1067).
 17. `announceEyeTextureSize` (native_temporal.cpp:178, inside the eye
     treat at :170-190) runs before the `temporal_aa` on/off check (:190)
@@ -2132,9 +2132,9 @@ revision are marked and kept for the record.
     `movedOld` (built at :241-246, tested at :302) suppresses it only for
     keys carrying a `moved-from`,
     which this design does not add.
-28. `python tools\install_edvr.py --ini` overwrites: the help text says
+28. `python tools\install_edup.py --ini` overwrites: the help text says
     "also overwrite the target's edvr.ini with the repository's -- this
-    discards tuned settings" (install_edvr.py:1065-1067), the stage copies
+    discards tuned settings" (install_edup.py:1065-1067), the stage copies
     `root/edvr.ini` over the target with a backup (:984-991), and
     `--verify-only` with `--ini` demands byte equality (:949-954); no
     `mergeIni` caller exists under tools/. SETTLED for this revision by
@@ -2177,7 +2177,7 @@ revision are marked and kept for the record.
     condition and no other, and the lifecycle stops the old host before a
     new one starts (runtime_lifecycle.h:41-47, :61-64), which closes the
     query-to-publish window.
-36. `edvr_log.py --file` resolves against the current directory with
+36. `edup_log.py --file` resolves against the current directory with
     `os.path.abspath` and ignores `--target` (:293-297); `--nth N` (:271-272)
     or a full path names one of an install's logs. The 12:46 and 12:50 logs
     are build v0.16.2-88-gbe44d38-dirty with `pairs=5831` and `pairs=4627`,

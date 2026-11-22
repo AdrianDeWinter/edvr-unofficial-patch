@@ -3,7 +3,7 @@
 // S0 (src\d3d11\scope_zoom_s0.h): the pure parts of the first scope zoom flight. clipZoom reads the projection scale of an eye's scene rows; PressTracker finds the hip, the settled value
 // and the ramp of one scalar across a press of the sights (a camera's FOV in flat, the readout's two FOVs and the eyes' p11 in VR); CameraTable holds the cameras the view-constant
 // refresh hook saw; probePoints and lensEye put the lens centre in an eye's pixels and the pixel probe's four points about it; the line formats are the DLL's own, which
-// tools\edvr_log.py renders its --health fixtures from.
+// tools\edup_log.py renders its --health fixtures from.
 #pragma once
 
 #include "../../src/d3d11/scope_zoom_s0.h"

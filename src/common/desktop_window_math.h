@@ -1,5 +1,5 @@
 // visual.desktop_window (docs\desktop-window.md): the pure rules. What the setting's words mean, the shape of the picture, where it goes in the swap chain's
-// buffer, the window that shows it, the formats it may be drawn in, and the two log lines tools\edvr_log.py --health reads. No device and no window here;
+// buffer, the window that shows it, the formats it may be drawn in, and the two log lines tools\edup_log.py --health reads. No device and no window here;
 // tools\desktop_window_test runs every function.
 //
 // THE PICTURE. One eye is drawn as the eye's bounds sub-rect, in pixels, so its shape is |du| x texW over |dv| x texH. Both eyes side by side is the sum of the two
@@ -572,7 +572,7 @@ inline DwFormats desktopWindowFormats(DXGI_FORMAT source, DXGI_FORMAT buffer) {
     return f;
 }
 
-// The two lines the graphics half writes that tools\edvr_log.py --health reads (its self-test renders its fixtures from these literals). The first is said when the
+// The two lines the graphics half writes that tools\edup_log.py --health reads (its self-test renders its fixtures from these literals). The first is said when the
 // setting is first read and at each change, the second every 10 s while the window is being drawn.
 inline int desktopWindowSettingLine(char* out, size_t size, const char* value, const char* was) {
     if (was) return std::snprintf(out, size, "desktop window: setting %s (was %s)", value, was);

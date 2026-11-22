@@ -52,7 +52,7 @@
 - **Answered by Flight 20:** H47 yes: the game writes this camera every frame before `0x1EA9C0` (284 of 284 held writes overwritten), so a write need not be put back.
 - **2026-11-16, a user's bar windows:** one bar pane cleared while the panes beside it kept the bake. The clear now fades all the outside glass together and is judged on its total share of the main view: 25e49f5d, FLOWN OK from a flat launch (log `edvr_gfx_20261116_120304`), merged to main. A session started in VR still gets no flat bake. See "A user's bar windows, and the clear on all the outside glass".
 - **Next flight:** none set. Flight 59 flown on Steam's a89e193e, log `edvr_gfx_20261109_055831`: the windows were treated at every setting stepped, in VR and in flat (see "Flight 59 results"). The H63 glass census is removed, at Sean's word (see "The glass census for H63"). Flight 58 flown on Frontier's a6caa1b8, log `edvr_gfx_20261109_052109`. Steam's `edvr.ini` is back as it was before Flight 58. Flight 57 flown on d5241a7b, log `edvr_gfx_20261109_045925`: since a settings change, the Orbis's glass draws with pixel shader `500D228FA85C483C`. H62's record data from Flight 56 is not yet read. See "Flight 57 results".
-- **Merged to main 2026-11-08** as 649c4639 at Sean's word, after the cube dump was removed and flat's bake was guarded on the camera's producer hook (see "Before the merge to main"). The next flight is whatever main carries. Flight 55 flown on e9e3e1f3, log `edvr_gfx_20261108_130757`: the VR bake works (every face covered, every dump unwritten 0.0%), and the draw diff names H62's band as one mesh (VS `EB5234DB6ADB491D`, PS `CB9F297EFF264251`). Open: a flat bake in a session started in VR (the flat camera hooks are not bound), and VR's re-bake right after a switch back (it starts before the tone draw returns). See "Flight 55 results". Flight 54 was on e08534eb: Flight 54 flown on e08534eb, log `edvr_gfx_20261108_124344`: the fence refused every call, so three bakes captured nothing. See "Flight 54 results". Flight 53 flown on d7189728, log `edvr_gfx_20261108_104337`: Sean, "that seems to have fixed the issue". But a band of the room's upper structure comes and goes between frames (H62), and the third bake published face 1 with it unwritten. Proposed: write every dwell frame, so the cube keeps whatever any frame showed past the cut, and log which draws differ between a face's frames, to name the band's source. The instrument's dwell, counters and cube dump are TEMPORARY and go when H58 to H61 are settled. Flight 52 flown on 194805e2, log `edvr_gfx_20261108_092319`: the VR bake runs by itself and lands within 7 mm, with a pale hole where the far structure should be. H58 to H61 are open (see "Flight 52 results"). Flight 51 flown: the camera route, the capture point and the hold all work; the per-eye reader does not. Flight 50 flown: the hold works (replayed 15, empty 0), the camera probe refused the head's stack address, and the tone draws were found with no eye. Flight 49 flown: the bake's fix holds. New temporary keys: `hotkey.concourse_vr_hold_probe` (numpad `*`), `hotkey.concourse_vr_camera_probe` (numpad `-`). An `AsteroidBase` and a `Dodec` now run with no keys in flat. Flight 47 (the carrier in flat) and Flight 40 are still to fly. Then Flight 40 (an `Outpost` and a `CraterOutpost`, no keys), both on c841a58b: `python tools\edvr_log.py --target steam --expect-build c841a58b --grep "concourse|CarrierJump"`. H54, the bar's bake, is moot at a carrier now that it takes none. The lists are in their sections. A carrier's jump is built and not flown: during the jump itself the windows keep the bake of the system left, as no journal event marks a passenger's departure. Flight 35's descent and orbital hangar are still to fly, and Flight 34's items 2 to 4 (lamps, the bar's clear, a wedge in the windows) are still open. `hotkey.concourse_light_test` has done its job and is to be proposed for removal with the others. Flight 32 flown on c32cd19b, log `edvr_gfx_20261107_113241`: no one light family is it. `Root` and `Perturbator` are on the allow-list in that build. New temporary key: `hotkey.concourse_light_test`. `fix.station_window_distance` is meant to stay. `diag.concourse_cull` now defaults to `auto`, and the keys below are temporary overrides, to be proposed for removal, quoted, when the arc closes. Keys: `hotkey.concourse_camera_test` Insert in both Steam inis (F10 is Elite's screenshot key, and F11 is the photo camera in Sean's bindings); `diag.concourse_glass` in `edvr-flat.ini`; `hotkey.concourse_backdrop_parallax` F9 in both Steam inis; `diag.concourse_backdrop_radius`; `hotkey.concourse_view_test` F6 in both Steam inis; `hotkey.concourse_cull` F2, `hotkey.concourse_pane_capture` F3, `hotkey.concourse_pane_mode` F4 in both Steam inis, `diag.concourse_glow` in `edvr-flat.ini`, and `log.max_mb = 200` there for these flights only (two censuses filled the default). Keys in both Steam inis: `hotkey.concourse_cull` F2 (the cull and the mirrors), `hotkey.concourse_pane_capture` F3 (logs a ranking by screen coverage and the kept names, changes nothing), `hotkey.concourse_pane_mode` F4.
+- **Merged to main 2026-11-08** as 649c4639 at Sean's word, after the cube dump was removed and flat's bake was guarded on the camera's producer hook (see "Before the merge to main"). The next flight is whatever main carries. Flight 55 flown on e9e3e1f3, log `edvr_gfx_20261108_130757`: the VR bake works (every face covered, every dump unwritten 0.0%), and the draw diff names H62's band as one mesh (VS `EB5234DB6ADB491D`, PS `CB9F297EFF264251`). Open: a flat bake in a session started in VR (the flat camera hooks are not bound), and VR's re-bake right after a switch back (it starts before the tone draw returns). See "Flight 55 results". Flight 54 was on e08534eb: Flight 54 flown on e08534eb, log `edvr_gfx_20261108_124344`: the fence refused every call, so three bakes captured nothing. See "Flight 54 results". Flight 53 flown on d7189728, log `edvr_gfx_20261108_104337`: Sean, "that seems to have fixed the issue". But a band of the room's upper structure comes and goes between frames (H62), and the third bake published face 1 with it unwritten. Proposed: write every dwell frame, so the cube keeps whatever any frame showed past the cut, and log which draws differ between a face's frames, to name the band's source. The instrument's dwell, counters and cube dump are TEMPORARY and go when H58 to H61 are settled. Flight 52 flown on 194805e2, log `edvr_gfx_20261108_092319`: the VR bake runs by itself and lands within 7 mm, with a pale hole where the far structure should be. H58 to H61 are open (see "Flight 52 results"). Flight 51 flown: the camera route, the capture point and the hold all work; the per-eye reader does not. Flight 50 flown: the hold works (replayed 15, empty 0), the camera probe refused the head's stack address, and the tone draws were found with no eye. Flight 49 flown: the bake's fix holds. New temporary keys: `hotkey.concourse_vr_hold_probe` (numpad `*`), `hotkey.concourse_vr_camera_probe` (numpad `-`). An `AsteroidBase` and a `Dodec` now run with no keys in flat. Flight 47 (the carrier in flat) and Flight 40 are still to fly. Then Flight 40 (an `Outpost` and a `CraterOutpost`, no keys), both on c841a58b: `python tools\edup_log.py --target steam --expect-build c841a58b --grep "concourse|CarrierJump"`. H54, the bar's bake, is moot at a carrier now that it takes none. The lists are in their sections. A carrier's jump is built and not flown: during the jump itself the windows keep the bake of the system left, as no journal event marks a passenger's departure. Flight 35's descent and orbital hangar are still to fly, and Flight 34's items 2 to 4 (lamps, the bar's clear, a wedge in the windows) are still open. `hotkey.concourse_light_test` has done its job and is to be proposed for removal with the others. Flight 32 flown on c32cd19b, log `edvr_gfx_20261107_113241`: no one light family is it. `Root` and `Perturbator` are on the allow-list in that build. New temporary key: `hotkey.concourse_light_test`. `fix.station_window_distance` is meant to stay. `diag.concourse_cull` now defaults to `auto`, and the keys below are temporary overrides, to be proposed for removal, quoted, when the arc closes. Keys: `hotkey.concourse_camera_test` Insert in both Steam inis (F10 is Elite's screenshot key, and F11 is the photo camera in Sean's bindings); `diag.concourse_glass` in `edvr-flat.ini`; `hotkey.concourse_backdrop_parallax` F9 in both Steam inis; `diag.concourse_backdrop_radius`; `hotkey.concourse_view_test` F6 in both Steam inis; `hotkey.concourse_cull` F2, `hotkey.concourse_pane_capture` F3, `hotkey.concourse_pane_mode` F4 in both Steam inis, `diag.concourse_glow` in `edvr-flat.ini`, and `log.max_mb = 200` there for these flights only (two censuses filled the default). Keys in both Steam inis: `hotkey.concourse_cull` F2 (the cull and the mirrors), `hotkey.concourse_pane_capture` F3 (logs a ranking by screen coverage and the kept names, changes nothing), `hotkey.concourse_pane_mode` F4.
 
 ## What the earlier attempt learned
 
@@ -164,7 +164,7 @@ Flat on Steam is enough; VR after. Fly from the hangar, so the lift transition i
 6. Take the lift to the hangar and come back, cull on. Note any flash at the doors.
 7. If it is cheap, repeat steps 1 and 5 at a second station type.
 
-After the flight: `python tools\edvr_log.py --target steam --expect-build c9f096db --grep "concourse"`.
+After the flight: `python tools\edup_log.py --target steam --expect-build c9f096db --grep "concourse"`.
 
 ## Flight 1 results
 
@@ -221,7 +221,7 @@ On the second build, flat. Start with F2 off, in the hangar, so the lift transit
 5. Lift to the hangar and back, cull on. Any flash at the doors?
 6. If it is cheap, repeat steps 1 and 3 at a second station type.
 
-Then: `python tools\edvr_log.py --target steam --expect-build e7b4b49b --grep "concourse"`.
+Then: `python tools\edup_log.py --target steam --expect-build e7b4b49b --grep "concourse"`.
 
 ## Flight 2 results
 
@@ -247,7 +247,7 @@ On the third build, flat, at the same station. Start with F2 off.
 6. NumLock with the mirror on, looking at the bay from across the room, then NumLock at a shop window.
 7. If it is cheap, repeat 2 and 5 at a second station type.
 
-Then: `python tools\edvr_log.py --target steam --expect-build b19b368d --grep "concourse"`.
+Then: `python tools\edup_log.py --target steam --expect-build b19b368d --grep "concourse"`.
 
 ## Flight 3 results
 
@@ -271,7 +271,7 @@ On the fourth build, flat, at the same station. Start with F2 off.
 5. Back away from the bay while looking at it: where does it close, and does it flicker?
 6. If it is cheap, repeat 3 and 4 at a second station type.
 
-Then: `python tools\edvr_log.py --target steam --expect-build bc09083f --grep "concourse"`.
+Then: `python tools\edup_log.py --target steam --expect-build bc09083f --grep "concourse"`.
 
 ## Flight 4 results
 
@@ -292,7 +292,7 @@ On the fifth build, flat, at the same station.
 3. F4 at `mirror`: clean panes? Then the bay's clear once, for the view through it with everything back.
 4. If it is cheap, a second station type.
 
-Then: `python tools\edvr_log.py --target steam --expect-build 0e586d70 --grep "concourse"`.
+Then: `python tools\edup_log.py --target steam --expect-build 0e586d70 --grep "concourse"`.
 
 ## Flight 5 results
 
@@ -309,7 +309,7 @@ On the sixth build, flat, at the same station.
 3. F4 at `mirror`: clean panes? Then the bay's clear once.
 4. If it is cheap, a second station type.
 
-Then: `python tools\edvr_log.py --target steam --expect-build d42c6471 --grep "concourse"`.
+Then: `python tools\edup_log.py --target steam --expect-build d42c6471 --grep "concourse"`.
 
 ## Flight 6 results
 
@@ -328,7 +328,7 @@ On the seventh build, flat, at the same station.
 3. F2 off and on at a fixed view of the room: does anything change?
 4. If it is cheap, a second station type.
 
-Then: `python tools\edvr_log.py --target steam --expect-build a41de79b --grep "concourse"`.
+Then: `python tools\edup_log.py --target steam --expect-build a41de79b --grep "concourse"`.
 
 ## Flight 7 results
 
@@ -347,7 +347,7 @@ On the eighth build, flat, at the same station.
 3. F4 at `mirror`: are the two trails gone?
 4. If it is cheap, a second station type.
 
-Then: `python tools\edvr_log.py --target steam --expect-build b14a788d --grep "concourse"`.
+Then: `python tools\edup_log.py --target steam --expect-build b14a788d --grep "concourse"`.
 
 ## Flight 8 results
 
@@ -364,7 +364,7 @@ On the ninth build, flat, at the same station.
 5. If it is cheap, a second station type.
 6. For `docs\sun-switch-re-2026-11-06.md`: in the concourse, F2 off, one NumLock.
 
-Then: `python tools\edvr_log.py --target steam --expect-build 4eead728 --grep "concourse"`.
+Then: `python tools\edup_log.py --target steam --expect-build 4eead728 --grep "concourse"`.
 
 ## Flight 9 notes
 
@@ -380,7 +380,7 @@ On build 990a2b44, flat, at the same station.
 4. Are the two trails gone?
 5. If it is cheap, a second station type.
 
-Then: `python tools\edvr_log.py --target steam --expect-build 990a2b44 --grep "concourse"`.
+Then: `python tools\edup_log.py --target steam --expect-build 990a2b44 --grep "concourse"`.
 
 ## Flight 11
 
@@ -391,7 +391,7 @@ On build 481d97b0, flat, Steam. One out-and-back, F2 pressed once while still se
 3. Look straight up at a skylight: does it stay mirrored?
 4. Lift back, cross the bay, board, sit 15 s. Did anything vanish on the way out of the lift or after boarding?
 
-Then: `python tools\edvr_log.py --target steam --expect-build 481d97b0 --grep "walk survey|concourse cull|concourse clear|clearing pane|guard"`.
+Then: `python tools\edup_log.py --target steam --expect-build 481d97b0 --grep "walk survey|concourse cull|concourse clear|clearing pane|guard"`.
 
 ## Flight 11 results
 
@@ -413,7 +413,7 @@ On build f09f42df, flat, Steam. F2 once while still seated, as before.
 3. Walk up to the ship services counter: does its window clear, and does it return when you turn away?
 4. Lift back. Say when the frames drop: in the cabin before it arrives, or after. Cross the bay, board, sit 15 s.
 
-Then: `python tools\edvr_log.py --target steam --expect-build f09f42df --grep "walk survey|concourse cull|concourse clear|clearing pane|guard"`.
+Then: `python tools\edup_log.py --target steam --expect-build f09f42df --grep "walk survey|concourse cull|concourse clear|clearing pane|guard"`.
 
 ## Flight 12 results
 
@@ -432,7 +432,7 @@ On build eb9b6b8e, flat, Steam. F2 once while still seated, as before. No NumLoc
 3. Turn round, stand just outside a lift door for 3 s, go in and ride down. Stay still until the doors have opened, then walk out. Board if you like.
 4. Are the angled skylights right at the bar window's colour?
 
-Then: `python tools\edvr_log.py --target steam --expect-build eb9b6b8e --grep "lift survey|concourse cull: the camera"`.
+Then: `python tools\edup_log.py --target steam --expect-build eb9b6b8e --grep "lift survey|concourse cull: the camera"`.
 
 ## Flight 13 results
 
@@ -453,7 +453,7 @@ On build a3f17170, flat, Steam. F2 once while still seated, as before.
 3. Step into a lift and, if the panel lets you, back out without riding, so the doors reopen with no cut. Is the room whole when they open?
 4. If you have a minute: the `concourse_keep` test in "The view through the windows".
 
-Then: `python tools\edvr_log.py --target steam --expect-build a3f17170 --grep "concourse cull: lift|concourse cull: on|concourse cull: off|walk survey: zone"`.
+Then: `python tools\edup_log.py --target steam --expect-build a3f17170 --grep "concourse cull: lift|concourse cull: on|concourse cull: off|walk survey: zone"`.
 
 ## Flight 14 results
 
@@ -474,7 +474,7 @@ On build 9a1d039f, flat, Steam. Take `concourse_keep` out of `edvr-flat.ini` fir
 4. Ride down, and press NumLock once the doors are shut. Frame rate in the cabin?
 5. Put `concourse_keep` back, F4 at `off`, and F2 to compare at the same spot. Then take it out.
 
-Then: `python tools\edvr_log.py --target steam --expect-build 9a1d039f --grep "concourse view test|concourse cull: lift|walk survey: zone"`.
+Then: `python tools\edup_log.py --target steam --expect-build 9a1d039f --grep "concourse view test|concourse cull: lift|walk survey: zone"`.
 
 ## Flight 15 results
 
@@ -681,7 +681,7 @@ Which store record is the band, and why does its verdict change between frames w
 
 ## Flight 56, the list as written
 
-VR, Steam, the doc commit on top of 5507d8e7, promoted by `--dll-only` (the version line names it; `python tools\edvr_log.py --target steam --expect-build <that commit> --grep "concourse bake: vr"`). A station on the list (the Orbis or the Dodec), on foot in the room, by a ride up or a load in the room; nothing to look at in particular. Read the `vr capture` lines for the band's frames (the 20 to 50 m cut), then the `vr record diff` lines for the same face and frames, and the `vr record kept near` table.
+VR, Steam, the doc commit on top of 5507d8e7, promoted by `--dll-only` (the version line names it; `python tools\edup_log.py --target steam --expect-build <that commit> --grep "concourse bake: vr"`). A station on the list (the Orbis or the Dodec), on foot in the room, by a ride up or a load in the room; nothing to look at in particular. Read the `vr capture` lines for the band's frames (the 20 to 50 m cut), then the `vr record diff` lines for the same face and frames, and the `vr record kept near` table.
 
 ## Flight 56 results
 
@@ -709,7 +709,7 @@ Flown 2026-11-08 on 44ce478f, log `edvr_gfx_20261108_201340`. Sean, during it: "
 
 ## Flight 57, the list as written
 
-VR, Steam, the merged tree with the census, promoted by `--dll-only` (`python tools\edvr_log.py --target steam --expect-build <that commit> --grep "concourse glass census|concourse cull 5s|concourse pane capture|concourse bake: vr: finished"`). Fly to a first station and go up to its room, then to an `Orbis` (or any second station) and up to its room, as in Flight 56. In each room: look straight at a large window and press F3 once; press F2 (the cull off), wait 5 s, look at the same window and press F3 again; press F2 to put the cull back.
+VR, Steam, the merged tree with the census, promoted by `--dll-only` (`python tools\edup_log.py --target steam --expect-build <that commit> --grep "concourse glass census|concourse cull 5s|concourse pane capture|concourse bake: vr: finished"`). Fly to a first station and go up to its room, then to an `Orbis` (or any second station) and up to its room, as in Flight 56. In each room: look straight at a large window and press F3 once; press F2 (the cull off), wait 5 s, look at the same window and press F3 again; press F2 to put the cull back.
 
 ## Flight 57 results
 
@@ -737,7 +737,7 @@ VR, Steam, on the installed d5241a7b, with nothing to build. Two lines in Steam'
 2. At Ultra, set Shadow Quality to its lowest, apply and look for 15 s, then put it back. Do the same for Spot Shadow Quality.
 3. Set back what you fly with.
 
-Read with `python tools\edvr_log.py --target steam --expect-build d5241a7b --grep "concourse glass census|copy call|concourse cull 5s"`. At each level the census names the glass's pixel shader, and the `copy call` line names the offset each apply changed. The dump holds each new shader's code, which can be compared with `66B08F89`'s. The 5 s cull line's panes known, at High against Ultra, says whether `500D228F` draws only the glass. After the flight, take both lines out of `edvr.ini`.
+Read with `python tools\edup_log.py --target steam --expect-build d5241a7b --grep "concourse glass census|copy call|concourse cull 5s"`. At each level the census names the glass's pixel shader, and the `copy call` line names the offset each apply changed. The dump holds each new shader's code, which can be compared with `66B08F89`'s. The 5 s cull line's panes known, at High against Ultra, says whether `500D228F` draws only the glass. After the flight, take both lines out of `edvr.ini`.
 
 ## Flight 58 results
 
@@ -789,7 +789,7 @@ Flown 2026-11-09 on Steam's a89e193e, log `edvr_gfx_20261109_055831`, at MacLeod
 - **The logo stayed out:** at low Spot Shadows it is drawn with `8717694A527EC745` in place of `98337732`, and the layout check passed it by. No line shows either one matched.
 - **Not in the log:** Material Medium, and `33DFFE48` (probably High or Medium with low Spot Shadows).
 - **VR's re-bake after the switch back worked:** the first try (06:03:46.705) ended before aiming, with no rows back. The second, 0.28 s later, covered every face in 250 ms. Flight 55 had two tries end before aiming and no later one.
-- **A separate problem, by eye:** at the start, in VR, Sean saw blurry double vision on parts of the scene. The game had been launched with Steam's VR option while Elite's `Settings.xml` held `StereoscopicMode` 0 (the file was written at 05:37:02; this log reads "3D mode 0" at startup, and the mode rose to 3 at frame 325). It went away after the 3D mode was cycled off and on. Sean takes it for a separate problem. The frame median there was 11.18 ms against a 11.1 ms period. Not chased in this arc. Read with `python tools\edvr_log.py --target steam --expect-build <commit> --grep "glass's layout|concourse glass census|copy call|concourse cull 5s"`. Each new glass shader should log one `joins the glass family` line. At every step the census should read `matched as a pane` above 0, with only the logo's `98337732` named beside the glass's vertex shader.
+- **A separate problem, by eye:** at the start, in VR, Sean saw blurry double vision on parts of the scene. The game had been launched with Steam's VR option while Elite's `Settings.xml` held `StereoscopicMode` 0 (the file was written at 05:37:02; this log reads "3D mode 0" at startup, and the mode rose to 3 at frame 325). It went away after the 3D mode was cycled off and on. Sean takes it for a separate problem. The frame median there was 11.18 ms against a 11.1 ms period. Not chased in this arc. Read with `python tools\edup_log.py --target steam --expect-build <commit> --grep "glass's layout|concourse glass census|copy call|concourse cull 5s"`. Each new glass shader should log one `joins the glass family` line. At every step the census should read `matched as a pane` above 0, with only the logo's `98337732` named beside the glass's vertex shader.
 
 ## A user's bar windows, and the clear on all the outside glass (2026-11-16)
 
@@ -812,7 +812,7 @@ Flat, Frontier, the 25e49f5d install, a large station (Coriolis or Orbis), Windo
 3. Back on the concourse, set 150, then 250: the whole bar window clears together, from further away as the value rises.
 4. The bay, then the ship services counter: each clears about where it did before, and walking away it goes back to the bake once, without flicker.
 
-Read with `python tools\edvr_log.py --target <the elite-dangerous-odyssey-64 folder> --expect-build 25e49f5d --grep "concourse clear|pane shares|pane 5s"` (`--target frontier` names two installs on Sean's machine).
+Read with `python tools\edup_log.py --target <the elite-dangerous-odyssey-64 folder> --expect-build 25e49f5d --grep "concourse clear|pane shares|pane 5s"` (`--target frontier` names two installs on Sean's machine).
 
 **First try, not a test of the change:** flown 2026-11-16 on 25e49f5d, log `edvr_gfx_20261116_115714`, at a Coriolis. Sean: "the snapshot is not displaying correctly and it's falling back to a grey haze". The game started in VR (3D mode 3) and switched to flat at 11:57:46 (`profile switch: vr -> flat`). The flat bake then refused: `concourse camera test: concourse-camera-test-producer: 0x2874290 is already patched by another EDVR module; skipped`, then `concourse bake: flat: no bake`. With no cube the panes were drawn `mirror-steady`, a flat fill: that is the grey (`panes treated 45407 draws (mode mirror-steady, 1 slots)`). This is the open item "a flat bake in a session started in VR", not 25e49f5d. The clear itself ran on the total: it lifted at 3.2 to 8.3% of the view against a 3.2% entry (Window 3D distance 250 in Frontier's `edvr-flat.ini`). Fly the list again from a flat launch: Elite's 3D mode off before the game starts, or `/novr`.
 
@@ -843,7 +843,7 @@ Flown 2026-11-08 in VR on e9e3e1f3, log `edvr_gfx_20261108_130757`, at an `Orbis
 
 ## Flight 55, the list as written
 
-VR, Steam, e9e3e1f3 (a1e8a4c8's source with a doc commit on top, promoted by `--dll-only`). Read with `python tools\edvr_log.py --target steam --expect-build e9e3e1f3 --grep "concourse bake: (vr|dump)"`. It is Flight 54's list again: the Dodec or this Orbis, on foot in the room, by a ride up or a load in the room. Look at the window, then at the room's far end.
+VR, Steam, e9e3e1f3 (a1e8a4c8's source with a doc commit on top, promoted by `--dll-only`). Read with `python tools\edup_log.py --target steam --expect-build e9e3e1f3 --grep "concourse bake: (vr|dump)"`. It is Flight 54's list again: the Dodec or this Orbis, on foot in the room, by a ride up or a load in the room. Look at the window, then at the room's far end.
 
 - **The log:** the stub lines in aimed windows read `written 0x15` with `0 foreign`, and show the `pads` values. Every face's capture lines say `writes`, each `dump` line reads `unwritten 0.0%`, and the `vr draw diff` lines name the band's draws.
 - **If the stub writes nothing again,** the bake should stop after six windows with "the stub wrote no call", not hold the headset for a second.
@@ -874,7 +874,7 @@ An adversarial review of the branch against main found eight items. All are fixe
 
 ## Flight 54, the list as written
 
-VR, Steam, e08534eb (the fixes above on bb69891c, promoted by `--dll-only`). Read with `python tools\edvr_log.py --target steam --expect-build e08534eb --grep "concourse bake: (vr|dump)"`. Also watch the stub lines' `foreign` count (it should be 0 on aimed frames) and the finish line's "frames not at the centre" (a lease gap would show there).
+VR, Steam, e08534eb (the fixes above on bb69891c, promoted by `--dll-only`). Read with `python tools\edup_log.py --target steam --expect-build e08534eb --grep "concourse bake: (vr|dump)"`. Also watch the stub lines' `foreign` count (it should be 0 on aimed frames) and the finish line's "frames not at the centre" (a lease gap would show there).
 
 1. **The same Dodec,** on foot in the room, by a ride up or a load in the room. Look at the window, then turn round and look up the room's other end (face 1, where Flight 53's last bake left a band).
 2. **The log:** every face's `vr capture` lines say `writes`, and each `dump` line should read `unwritten 0.0%`. The `vr draw diff` lines on the band's frames name the draws to identify.
@@ -896,7 +896,7 @@ Flown 2026-11-08 in VR on d7189728, log `edvr_gfx_20261108_104337`, at the same 
 
 ## Flight 53, the list as written
 
-VR, Steam, d7189728 (c168c2af's source with the doc commit on top, promoted by `--dll-only`). Read with `python tools\edvr_log.py --target steam --expect-build d7189728 --grep "concourse bake: (vr|dump)"`, and look at the images in `edvr_logs\concourse_bake\`.
+VR, Steam, d7189728 (c168c2af's source with the doc commit on top, promoted by `--dll-only`). Read with `python tools\edup_log.py --target steam --expect-build d7189728 --grep "concourse bake: (vr|dump)"`, and look at the images in `edvr_logs\concourse_bake\`.
 
 1. **The same Dodec, or any station on the list,** on foot in its room, by a ride up or a load in the room. The freeze is about three times as long (15 aimed frames). Look at the same window and say whether the hole is still there.
 2. **The log:** each `vr capture` line has the frame's dwell (0, 1 or 2 of 3), whether it wrote, and the counts by distance. The `dump` lines give each direction's unwritten and far shares.
@@ -929,7 +929,7 @@ Built on Flights 50 and 51 and the research in "Flight 51 results". The pure mat
 
 ## Flight 52, the list as written
 
-VR, Steam, 194805e2, DLSS on. Read with `python tools\edvr_log.py --target steam --expect-build 194805e2 --grep "concourse bake: vr|concourse cull"`.
+VR, Steam, 194805e2, DLSS on. Read with `python tools\edup_log.py --target steam --expect-build 194805e2 --grep "concourse bake: vr|concourse cull"`.
 
 1. **A station that bakes in flat** (a Coriolis, Orbis, asteroid base, dodec or port), on foot in its room, by a ride up or a load in the room. In the headset: a short freeze (the hold), then the windows show the station, sunlit, in stereo, with the cull on. Say whether anything moves wrongly with your head (sliding means the worlds differ), and whether a band at the top or bottom of the windows is empty or pale.
 2. **The log:** `vr: the bake is available`, `vr world check` (what it found, and whether it applied an offset), the `vr aim` and `vr capture` lines, then `vr: finished ... faces covered`. Both orders are on the finish line.
@@ -960,7 +960,7 @@ VR, Steam, 4b74d75c, log `edvr_gfx_20261108_065519` (06:55 to 06:57), runtime lo
 
 ## Flight 51, the list as written
 
-VR, Steam, 4b74d75c, DLSS on. Read with `python tools\edvr_log.py --target steam --expect-build 4b74d75c --grep "concourse"`.
+VR, Steam, 4b74d75c, DLSS on. Read with `python tools\edup_log.py --target steam --expect-build 4b74d75c --grep "concourse"`.
 
 1. **On foot at a station: numpad `-` twice,** a few seconds apart. A flash 30 m up for 5 frames should be seen. The log: `call 0 ... wrote yes` on frames 1 to 5, the six calls of a frame, `tone: ... eye 0 (by the draw's order ...)` and `eye 1` with depth and `temporal eye rows`.
 2. **Numpad `*` once:** say how the hold looked (frozen, world-locked, or black).
@@ -1039,7 +1039,7 @@ c841a58b, log `edvr_gfx_20261108_044500`, build matched. Sean suspended the carr
 
 ## Flight 47, the list as written
 
-Flat, Steam, on the carrier, on c841a58b, no keys needed. Read with `python tools\edvr_log.py --target steam --expect-build c841a58b --grep "concourse"`.
+Flat, Steam, on the carrier, on c841a58b, no keys needed. Read with `python tools\edup_log.py --target steam --expect-build c841a58b --grep "concourse"`.
 
 1. **Arrival.** The log: `concourse cull: a fleet carrier's windows show the real sky`, and no `concourse camera test` bake lines.
 2. **The bar from afar,** from the central space: stars, the planet and the sun in its windows; no ships. Look down and to the sides through the glass too: is any of the carrier's own hull missing, with stars where it should be?
@@ -1077,7 +1077,7 @@ Flat, Steam, ed2627b9, log `edvr_gfx_20261108_040806` (04:08 to 04:19), build ma
 
 ## Flight 46, the list as written
 
-Flat, Steam, on the carrier, no keys needed, on ed2627b9 (the door rule with the first-move watch; 6982c973 was not flown). The door rule runs by itself; numpad `/` now steps it: records (the default), records and rigs, off, and round again, with a "Doors: ..." notice each time. Read with `python tools\edvr_log.py --target steam --expect-build ed2627b9 --grep "concourse doors"`.
+Flat, Steam, on the carrier, no keys needed, on ed2627b9 (the door rule with the first-move watch; 6982c973 was not flown). The door rule runs by itself; numpad `/` now steps it: records (the default), records and rigs, off, and round again, with a "Doors: ..." notice each time. Read with `python tools\edup_log.py --target steam --expect-build ed2627b9 --grep "concourse doors"`.
 
 1. **The elevator bay.** Stand by the lift, more than 5 m from its shut door, facing it. The log: `concourse doors: the door at a2 -11.0 is shut` with its rest, then `the camera is at a2 ...; behind a shut door ... above a2 -11.0`. Ten seconds still at each of the three steps of `/` (records, records and rigs, off), then once more back to records.
 2. **Through the door.** Walk to it: the central space should be there before its leaves part, with no empty room or pop as it opens. Through, and back. The log's `started opening, frame N` line says how far from the door you were when it began, which is what `kDoorNearM` (5 m) should be.
@@ -1284,7 +1284,7 @@ Build 6813f060, Steam, at the same `CraterOutpost`, with F2. Sean: "Flight is cl
 
 ## Flight 37, the list as written
 
-On build 6813f060, flat, Steam, at the same surface port, with F2. Then: `python tools\edvr_log.py --target steam --expect-build 6813f060 --grep "concourse"`.
+On build 6813f060, flat, Steam, at the same surface port, with F2. Then: `python tools\edup_log.py --target steam --expect-build 6813f060 --grep "concourse"`.
 
 1. Stand where the clip was, looking through the logo glass at the bay, and move about: is the flicker gone? That patch should now hold still, with the logo glass's own reflection on top of the bake.
 2. Does the logo glass look like itself, and does the bay keep its look where nothing stands in front of it?
@@ -1308,7 +1308,7 @@ Build c8c23caf, log `edvr_gfx_20261107_134444`, flat, Steam, at the `CraterOutpo
 
 ## Flight 36, the list as written
 
-On build c8c23caf, flat, Steam, at a surface port. F2 turns the cull and bake on there: the type table still leaves a surface port to the game until this has been seen. Then: `python tools\edvr_log.py --target steam --expect-build c8c23caf --grep "concourse"`.
+On build c8c23caf, flat, Steam, at a surface port. F2 turns the cull and bake on there: the type table still leaves a surface port to the game until this has been seen. Then: `python tools\edup_log.py --target steam --expect-build c8c23caf --grep "concourse"`.
 
 1. Walk into the room and press F2. About 2 s later the bake should run and the cull come on. In the log: `concourse cull: the room is a surface port's`, `concourse camera test: armed: no ride`, `concourse bake:`, `concourse cull: on`.
 2. Frame time: stand still, facing away from the bay, F2 on and off a few times. Then the same facing the bay.
@@ -1333,7 +1333,7 @@ Build 073e8dac, log `edvr_gfx_20261107_125458`, flat, Steam, already at the `Cra
 
 ## Flight 35, the list as written
 
-On build 073e8dac, flat, Steam. Answers two things: the sun at a surface port, and what that port's records are called. Then: `python tools\edvr_log.py --target steam --expect-build 073e8dac --grep "concourse names"`.
+On build 073e8dac, flat, Steam. Answers two things: the sun at a surface port, and what that port's records are called. Then: `python tools\edup_log.py --target steam --expect-build 073e8dac --grep "concourse names"`.
 
 1. Dock at a surface port, stay aboard until the pad has gone down, then walk to the concourse: is the sun on through the bay window, and does the room look as it does with `fix.optimized_stations` off?
 2. In the log, `optimized station: a port on a planet's surface (type CraterOutpost, ...): the sun stays on`, and no `sun light inside the hangar off` while you are there.
@@ -1372,7 +1372,7 @@ On build 8e317e3f, flat, Steam, no keys.
 3. Walk up to the bar until it clears, and back: any jump in the room's brightness as it does? The cones stay off then too, as the scatter does.
 4. The windows: does a pale wedge still show in them? The bake's frames still draw the cones, so a wedge there would be the same thing, in the picture. If it does, say, and they can go from the bake too.
 
-Then: `python tools\edvr_log.py --target steam --expect-build 8e317e3f --grep "concourse withheld"`. `light cones` should appear with a count of about 46 a frame.
+Then: `python tools\edup_log.py --target steam --expect-build 8e317e3f --grep "concourse withheld"`. `light cones` should appear with a count of about 46 a frame.
 
 ## Flight 33 results
 
@@ -1392,7 +1392,7 @@ On build baac9204, flat, Steam, HOME as before, now 28 steps. The order puts fir
 2. The last step turns every light off together. Is the pale look still there on an unlit room?
 3. A few metres in, the step that did it: what does it change there?
 
-Then: `python tools\edvr_log.py --target steam --expect-build baac9204 --grep "concourse light test"`.
+Then: `python tools\edup_log.py --target steam --expect-build baac9204 --grep "concourse light test"`.
 
 What each answer means: a glow step means the veil is additive sprites over the room, and the next question is which instance, since the room's own lamps share the family. Still pale with every light off means it is laid down in the material pass or the sky before the lights, which this key cannot reach, and the next step reads the material pass's constants.
 
@@ -1415,13 +1415,13 @@ On build c32cd19b, flat, Steam, no other keys. `hotkey.concourse_light_test` is 
 2. Go through all 15. Which step takes the pale look away, leaving the room lit as it is further in? Note the eight digits. Others will darken things in their own ways: that is fine, and it is useful to know which.
 3. Do the same a few metres in, for that step only: does it change anything there?
 
-Then: `python tools\edvr_log.py --target steam --expect-build c32cd19b --grep "concourse light test"`. Each line says how many draws the step before left out; 0 says a step matched nothing, and that it proves nothing.
+Then: `python tools\edup_log.py --target steam --expect-build c32cd19b --grep "concourse light test"`. Each line says how many draws the step before left out; 0 says a step matched nothing, and that it proves nothing.
 
 What it would say if no step takes it away: the light is in a family's constants before its draw, or in a draw not on the list, and the next step is to dump one family's instance data.
 
 ## Flight 31, the list as written
 
-On build 0448d071, flat, Steam, no keys pressed, with `concourse_keep = Root,Perturbator` in `edvr-flat.ini`. The log line: `python tools\edvr_log.py --target steam --expect-build 0448d071 --grep "concourse bake|concourse cull: (diag|a station|a window|on|off)|concourse names: (kept|small|culled)|concourse backdrop: distance"`.
+On build 0448d071, flat, Steam, no keys pressed, with `concourse_keep = Root,Perturbator` in `edvr-flat.ini`. The log line: `python tools\edup_log.py --target steam --expect-build 0448d071 --grep "concourse bake|concourse cull: (diag|a station|a window|on|off)|concourse names: (kept|small|culled)|concourse backdrop: distance"`.
 
 1. Walk the length of the bar: do any tables still flicker or pop in? If they do, stand where one does and press F3, which names what is kept close to you.
 2. If they do not, comment the key out, which is live, and walk it again: does the flicker come back? That is what proves it.
@@ -1443,7 +1443,7 @@ Build edbc145c, flat, Steam, 3840x2160, log `edvr_gfx_20261107_102412`, one scre
 
 ## Flight 30, the list as written
 
-On build edbc145c, flat, Steam, pressing neither F2 nor Insert unless a step says so. A clip while walking would help, since that is the question. The log line: `python tools\edvr_log.py --target steam --expect-build edbc145c --grep "concourse bake|concourse cull: (diag|a station|a window|waiting|on|off)|concourse camera test: (armed|mode 3: the window)|concourse backdrop: distance|journal: (the station|the last station|no station)"`.
+On build edbc145c, flat, Steam, pressing neither F2 nor Insert unless a step says so. A clip while walking would help, since that is the question. The log line: `python tools\edup_log.py --target steam --expect-build edbc145c --grep "concourse bake|concourse cull: (diag|a station|a window|waiting|on|off)|concourse camera test: (armed|mode 3: the window)|concourse backdrop: distance|journal: (the station|the last station|no station)"`.
 
 1. Walk with a window in view: do the edges still ripple and swim? Does the far station still smear? Turning on the spot tells the camera's motion from the camera's position.
 2. Step F9 through `distance by depth`, `distance by sphere` and `distance off`, the same walk each time. Which looks best? By depth is now a march, so this compares it with a rigid picture at a fixed distance, and with no parallax at all.
@@ -1472,7 +1472,7 @@ Build cf61f513, flat, Steam, 3840x2160, log `edvr_gfx_20261107_095540`, one clip
 
 ## Flight 29, the list as written
 
-On build cf61f513, flat, Steam, a fresh load in the ship, **pressing neither F2 nor Insert**. The log line: `python tools\edvr_log.py --target steam --expect-build cf61f513 --grep "concourse bake|concourse cull: (diag|a station|a window|waiting|on|off)|concourse camera test: (armed|mode 3: the window)|journal: (the station|the last station)|status flags changed"`. The list is Flight 28's below, which still stands, and:
+On build cf61f513, flat, Steam, a fresh load in the ship, **pressing neither F2 nor Insert**. The log line: `python tools\edup_log.py --target steam --expect-build cf61f513 --grep "concourse bake|concourse cull: (diag|a station|a window|waiting|on|off)|concourse camera test: (armed|mode 3: the window)|journal: (the station|the last station)|status flags changed"`. The list is Flight 28's below, which still stands, and:
 
 1. The first ride: are the large pale areas gone, and the seam with them? The sharp station should now fill every window. `finished` should say 5 frames captured, with the hold somewhat longer: about 12 frames against 9.
 2. The pale leaf shape, if it is still there: F2 off, then F9, as in Flight 28's list.
@@ -1508,7 +1508,7 @@ On build f14a8134, flat, Steam, a fresh load in the ship. **Press neither F2 nor
 6. Performance tab: is Window 3D distance under Optimized stations, dimmed with its hint when that is off? At 200, does the bar clear from further away?
 7. Undock: `concourse bake: the station is left behind: the cube is released` about 5 s later.
 
-Then: `python tools\edvr_log.py --target steam --expect-build f14a8134 --grep "concourse bake|concourse cull: (diag|a window|waiting|on|off)|concourse camera test: (armed|mode 3: the window)|status flags changed"`.
+Then: `python tools\edup_log.py --target steam --expect-build f14a8134 --grep "concourse bake|concourse cull: (diag|a window|waiting|on|off)|concourse camera test: (armed|mode 3: the window)|status flags changed"`.
 
 What it would say if the new code never ran: `diag.concourse_cull = auto: off`, or no `armed:` line. `camera hooks` says whether the install took. `armed: no ride` names the direct path, and `waiting (... no-bake-yet=1)` is the cull held for it.
 
@@ -1559,7 +1559,7 @@ On build 93a3e4f8, flat, Steam, the keys and steps as Flight 25: a fresh load in
 3. Is anything missing that was there on Flight 26? Clipping removes whatever is within 50 m along each axis, in a box around the room's centre.
 4. If the seam is still there: F9 off the depth mode, and tell me whether it changes. `diag.concourse_bake_near` is read at each ride up, 5 to 400, and now moves the plane too.
 
-Then: `python tools\edvr_log.py --target steam --expect-build 93a3e4f8 --grep "concourse bake|concourse names: (kept near|the survey above)|concourse camera test: (armed|mode 3: the window)|concourse cull: the camera cut|concourse clear|status flags changed"`.
+Then: `python tools\edup_log.py --target steam --expect-build 93a3e4f8 --grep "concourse bake|concourse names: (kept near|the survey above)|concourse camera test: (armed|mode 3: the window)|concourse cull: the camera cut|concourse clear|status flags changed"`.
 
 What it would say: each `capture N` ends `near plane 50.000 m`. `near plane 0.025 m` means the write at camera+0x234 did not reach the projection, and the seam says nothing about the idea.
 
@@ -1574,7 +1574,7 @@ On build 31720543, flat, Steam, the keys and steps as Flight 25: a fresh load in
 5. Moving, with windows in view: does it still smear? Standing still and turning, against walking, tells history from the rest.
 6. `diag.concourse_glass` in `edvr-flat.ini` is live: `r,g,b,haze,blur,fresnel`.
 
-Then: `python tools\edvr_log.py --target steam --expect-build 31720543 --grep "concourse bake|concourse names: (kept near|the survey above)|concourse camera test: (armed|mode 3: the window)|concourse cull: the camera cut|concourse clear|status flags changed"`.
+Then: `python tools\edup_log.py --target steam --expect-build 31720543 --grep "concourse bake|concourse names: (kept near|the survey above)|concourse camera test: (armed|mode 3: the window)|concourse cull: the camera cut|concourse clear|status flags changed"`.
 
 What it would say: `capture N` five times, one per direction, then `finished` and `the hold ends` with its milliseconds, against 219 before. `kept near the centre` names what could still stand in the bake's way. No such lines: the survey did not run in the bake.
 
@@ -1605,7 +1605,7 @@ On build 5cdb2575, flat, Steam, with any anti-aliasing mode that runs the resolv
 6. Frame rate looking out from the lift bank, with the bake on the windows, against what you are used to. F4 steps the pane modes, and `Windows: captured view` is the bake's.
 7. If you ride down and up again it bakes again. `diag.concourse_bake_near` (default 50) and `diag.concourse_bake_dirs` (default 11111, in the order +a2 -a2 +a0 -a0 up) in `edvr-flat.ini` are read at each ride up, so a window that goes blank with a digit at 0 needed that direction.
 
-Then: `python tools\edvr_log.py --target steam --expect-build 5cdb2575 --grep "concourse bake|concourse camera test: (armed|mode 3 \(|mode 3: the window)|concourse cull: the camera cut|concourse pane: mode|status flags changed|walk survey: zone"`.
+Then: `python tools\edup_log.py --target steam --expect-build 5cdb2575 --grep "concourse bake|concourse camera test: (armed|mode 3 \(|mode 3: the window)|concourse cull: the camera cut|concourse pane: mode|status flags changed|walk survey: zone"`.
 
 If the code never ran: no `concourse camera test: armed` line, so F2 or the mode was off. Not ready: `the cube is NOT READY`. Fired with nothing captured: `NOTHING CAPTURED`, and `concourse bake: a frame refused` if it got that far. Ran: `capture N` lines with the forward axis of each direction and the field of view, about 90, then `finished`, then `the hold ends` with its Presents and milliseconds. A direction missing from the capture lines means the tail is too short.
 
@@ -1635,7 +1635,7 @@ On build c1f3ca32, flat, Steam. Hides nothing: the view jumps just before you ar
 3. Ride up. It fires by itself just before arrival. In the first direction especially: is the station there at once, or does it fill in? Blurred, then sharp? Lit properly? Anything missing that the look from the ride down had? Which direction is the empty one, if any?
 4. Ride down and up again for a second look. It fires on rides up only.
 
-Then: `python tools\edvr_log.py --target steam --expect-build c1f3ca32 --grep "concourse camera test|concourse cull: the camera cut|flat camera origin|flat resolve reset|walk survey: zone|status flags changed"`.
+Then: `python tools\edup_log.py --target steam --expect-build c1f3ca32 --grep "concourse camera test|concourse cull: the camera cut|flat camera origin|flat resolve reset|walk survey: zone|status flags changed"`.
 
 If the code never ran: `not installed` or `NOT CALLED` per hook. Never armed: no `armed:` line, so F2 was off or the lift gate did not come on. Armed with no sighting: `the anchor was not seen`. Fired: `the window opens N ms after arming`, its gaps saying whether the doors were still shut, and the camera cut's line coming after it, which gives the time left. `the look's first 16 ticks` gives what a bake of that many frames would have cost right there.
 
@@ -1663,7 +1663,7 @@ On build 19881a34, flat, Steam. Hides nothing: the view jumps and turns, and tha
 3. Ride down. When the doors have shut the view goes to the room's centre and turns through six directions, 0.8 s each: ahead, three quarter turns, straight up, straight down. What can you see? Is the station whole? Is it lit properly, or dark or flat? Sharp, or blurred and low in detail? Does it pop in over the 0.8 s? Is any of the room left floating, and any people or ships?
 4. Ride up and down once more, for a second look.
 
-Then: `python tools\edvr_log.py --target steam --expect-build 19881a34 --grep "concourse camera test|flat camera origin|flat resolve reset|flat draw census|DC (begin|end)|walk survey: zone|status flags changed"`.
+Then: `python tools\edup_log.py --target steam --expect-build 19881a34 --grep "concourse camera test|flat camera origin|flat resolve reset|flat draw census|DC (begin|end)|walk survey: zone|status flags changed"`.
 
 If the code never ran: `not installed` or `NOT CALLED` per hook. A ride with no room: `NO ANCHOR HERE` and `written 0`. Ran: `written N`, `camera after` equal to the centre in the window's first line, and `RV cam minus camera after` near 0. `walk survey` frame means in the window price an unobstructed frame, one ride only.
 
@@ -1690,7 +1690,7 @@ On build ac4ab507, flat, Steam. Hides nothing, and the view should jump: that is
 4. On a ride where the view moved, a NumLock inside the 3 s for a census, if it is easy to catch.
 5. Did your character, the cabin's sound or the lift itself do anything odd during the 3 s?
 
-Then: `python tools\edvr_log.py --target steam --expect-build ac4ab507 --grep "concourse camera test|flat camera origin|flat resolve reset"`.
+Then: `python tools\edup_log.py --target steam --expect-build ac4ab507 --grep "concourse camera test|flat camera origin|flat resolve reset"`.
 
 If the code never ran: `not installed` or `NOT CALLED` per hook. Ran and wrote, nothing followed: `written N`, with `flat camera origin` steady. Reached: `RV cam minus camera after` near 0, `flat camera origin` stepping about 30 m, and the view moves. In log only, `RV cam minus camera after` near 0 says this producer's camera is view 0's, with nothing written.
 
@@ -1713,7 +1713,7 @@ On build 1bba08e9, flat, Steam. Hides nothing, and may glitch. F2 once. Insert s
 2. Insert to `lift 30 m at the eye pose`. Ride. When the doors have shut, does the view jump, and does it come back after 3 s? Does anything vanish?
 3. Insert to `turn 90 degrees at the eye pose`. Ride back. Same questions.
 
-Then: `python tools\edvr_log.py --target steam --expect-build 1bba08e9 --grep "concourse camera test|flat camera origin|flat resolve reset"`.
+Then: `python tools\edup_log.py --target steam --expect-build 1bba08e9 --grep "concourse camera test|flat camera origin|flat resolve reset"`.
 
 If the code never ran: `not installed` or `NOT CALLED` per hook. Ran and wrote, nothing followed: `written N`, `RV cam minus eye pose after` not near 0, `flat camera origin` steady. Reached: that difference near 0, `flat camera origin` stepping about 30 m, a reset, and the view moves.
 
@@ -1753,7 +1753,7 @@ On build bad4cf70, flat, Steam. Hides nothing, and may glitch: this test only as
 4. Insert to `turn 90 degrees, held`, ride back. Same question.
 5. On any ride that moved the view, a NumLock inside the 3 s for a census, if it is easy to catch.
 
-Then: `python tools\edvr_log.py --target steam --expect-build bad4cf70 --grep "concourse camera test|flat camera origin|flat resolve reset|walk survey: zone|lift survey"`.
+Then: `python tools\edup_log.py --target steam --expect-build bad4cf70 --grep "concourse camera test|flat camera origin|flat resolve reset|walk survey: zone|lift survey"`.
 
 What would appear if the code never ran: `the hook on 0x1EA9C0 is installed` is missing (or a line says why not), or `hook calls 0` with `THE HOOK WAS NOT CALLED`. Acting with no effect: `camera written on N` with the slot minus written not 0.
 
@@ -1767,7 +1767,7 @@ On build 2a140a30, flat, Steam. F2 once, then F4 to `Windows: captured view`: au
 4. `diag.concourse_glass` in `edvr-flat.ini`, `r,g,b,haze,blur,fresnel`, live: what looks most like glass?
 5. At the lift bank, camera still, F4 between `Windows: captured view` and `Windows: flat light`, about 5 s each, with the room filled, for the frame time.
 
-Then: `python tools\edvr_log.py --target steam --expect-build 2a140a30 --grep "concourse backdrop|concourse pane: mode|walk survey: zone"`.
+Then: `python tools\edup_log.py --target steam --expect-build 2a140a30 --grep "concourse backdrop|concourse pane: mode|walk survey: zone"`.
 
 ## Flight 18, the list as written
 
@@ -1779,7 +1779,7 @@ On build f50a46a2, flat, Steam. F2 once.
 4. Turn quickly: does it smear?
 5. With the camera still, F4 between `Windows: captured view` and `Windows: flat light`, about 5 s each, for the frame time.
 
-Then: `python tools\edvr_log.py --target steam --expect-build f50a46a2 --grep "concourse backdrop|concourse pane: mode|walk survey: zone"`.
+Then: `python tools\edup_log.py --target steam --expect-build f50a46a2 --grep "concourse backdrop|concourse pane: mode|walk survey: zone"`.
 
 ## Flight 17, the list as flown
 
@@ -1790,13 +1790,13 @@ On build a2fca02e, flat, Steam. F2 once. F6 lifts the cull for 200 ms and captur
 3. Turn quickly: does it smear or swim? Walk 10-20 m: how soon does it read wrong? Press F6 again from there.
 4. Look up at a skylight and press F6. Try to catch a ship in view, and say how much a frozen one bothers you.
 
-Then: `python tools\edvr_log.py --target steam --expect-build a2fca02e --grep "concourse backdrop|concourse pane: mode|walk survey: zone"`.
+Then: `python tools\edup_log.py --target steam --expect-build a2fca02e --grep "concourse backdrop|concourse pane: mode|walk survey: zone"`.
 
 ## Earlier: the size test
 
 On build b4f82839, flat, Steam. Take `concourse_keep` out of `edvr-flat.ini` first if it is there. F2 once. At the lift bank, facing across the room, away from the bay windows, F6 steps 150, 80, 40, 20 and 10 m, then back to the flat fill. About 5 s each, no NumLock. What is the smallest size that looks right? Is anything still missing there?
 
-Then: `python tools\edvr_log.py --target steam --expect-build b4f82839 --grep "concourse view test|concourse names: culled|walk survey: zone"`.
+Then: `python tools\edup_log.py --target steam --expect-build b4f82839 --grep "concourse view test|concourse names: culled|walk survey: zone"`.
 
 ## Performance candidates
 

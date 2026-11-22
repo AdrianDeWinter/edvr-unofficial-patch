@@ -220,7 +220,7 @@ off, the ground is the camera term's, as in v0.18.2. (4) Read the `body N of
 ### 2026-10-07 -- planet patch motion flown OK
 
 The flight: Frontier, `v0.18.2-62-gc136ba80` (verified with
-`edvr_log.py --expect-build c136ba80`), Pimax, DLSS, a supercruise approach
+`edup_log.py --expect-build c136ba80`), Pimax, DLSS, a supercruise approach
 to a planet. Sean: "Planet looks great now."
 
 From `edvr_gfx_20261007_045509.log`:
@@ -611,7 +611,7 @@ tools\config_test the key's absence from the shipped ini.
 
 The flight (a regression check, not a measurement of a gain). Install the
 build, verify the log's build line with
-`python tools\edvr_log.py --target frontier --expect-build HEAD`, DLSS on,
+`python tools\edup_log.py --target frontier --expect-build HEAD`, DLSS on,
 the HMD quality of the 09:09 flight, one low flight over a planet's terrain,
 and if it is cheap a glide beside a fast-rotating body.
 

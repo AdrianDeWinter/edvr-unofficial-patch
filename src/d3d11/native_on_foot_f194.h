@@ -76,7 +76,7 @@ struct Second {
 
 // ---- the lines -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-// The height line while look to aim is engaged: every 10 s by default, every second with log.on_foot_detail (F125). (tools\edvr_log.py reads these formats from this file: keep a quoted copy of a line out of the comments, where the reader's search would find it first. It reads the
+// The height line while look to aim is engaged: every 10 s by default, every second with log.on_foot_detail (F125). (tools\edup_log.py reads these formats from this file: keep a quoted copy of a line out of the comments, where the reader's search would find it first. It reads the
 // lines of the builds before F194b and before F195b too: the first began with the picture-centre pitch in force and gave the forward axis's and the ray's pitch from the aim; the second had look to aim's own
 // 10 deg gate in the settle field, "look to aim's 10 deg gate would have refused (skipped) N of M pin calls, F138/F139's 20 deg gate refused N, taken N".)
 // F125 (the log diet): seconds is the window the line covers, 10 by default, 1 with log.on_foot_detail, and 1 to 10 when a disengage closes a window early; it prints where "1 s" did.
