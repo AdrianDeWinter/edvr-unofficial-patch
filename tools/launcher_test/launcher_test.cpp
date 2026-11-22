@@ -98,6 +98,7 @@
 #include "../../src/installer/update_util.h"
 #include "../../src/installer/update_zip.h"
 #include "../../src/installer/updater.h"
+#include "../../src/installer/vr_headset.h"
 
 using namespace edvr::installer;
 
@@ -6404,6 +6405,152 @@ void testSettingsXmlLaunchMode() {
     }
 }
 
+void testVrHeadsetDetection() {
+    section("vr headset detection");
+
+    // 1. Multi-platform OpenXR classification across Windows & Linux ecosystems.
+    check(classifyVrPlatform(L"C:\\Program Files (x86)\\Steam\\steamapps\\common\\SteamVR\\steamxr_win64.json") ==
+              VrPlatform::SteamVr,
+          "SteamVR OpenXR JSON classifies as SteamVr");
+    check(classifyVrPlatform(L"C:\\Program Files\\Virtual Desktop Streamer\\OpenXR\\vdxr_win64.json") ==
+              VrPlatform::VirtualDesktopVdxr,
+          "Virtual Desktop VDXR JSON classifies as VirtualDesktopVdxr");
+    check(classifyVrPlatform(L"C:\\Program Files\\Oculus\\Support\\oculus-runtime\\oculus_openxr_64.json") ==
+              VrPlatform::MetaLink,
+          "Oculus OpenXR JSON classifies as MetaLink");
+    check(classifyVrPlatform(L"C:\\Program Files\\Pimax\\Runtime\\pimax-openxr.json") == VrPlatform::Pimax,
+          "Pimax OpenXR JSON classifies as Pimax");
+    check(classifyVrPlatform(L"C:\\Windows\\System32\\MixedRealityRuntime.json") == VrPlatform::WindowsMixedReality,
+          "WMR OpenXR JSON classifies as WindowsMixedReality");
+    check(classifyVrPlatform(L"C:\\Program Files\\Varjo\\varjo-openxr\\VarjoOpenXR.json") == VrPlatform::Varjo,
+          "Varjo OpenXR JSON classifies as Varjo");
+    check(classifyVrPlatform(L"C:\\Program Files\\VIVE\\Updater\\App\\ViveRuntime\\ViveOpenXR.json") == VrPlatform::Vive,
+          "Vive OpenXR JSON classifies as Vive");
+    check(classifyVrPlatform(L"/usr/share/openxr/1/openxr_wivrn.json") == VrPlatform::Wivrn,
+          "Linux WiVRn JSON classifies as Wivrn");
+    check(classifyVrPlatform(L"/usr/share/openxr/1/openxr_monado.json") == VrPlatform::Monado,
+          "Linux Monado JSON classifies as Monado");
+    check(classifyVrPlatform(L"C:\\Apps\\CustomXR\\my_xr.json") == VrPlatform::Custom,
+          "unknown valid OpenXR JSON classifies as Custom");
+
+    // 2. OpenXR runtime JSON parsing & relative library_path resolution.
+    {
+        const std::string json =
+            R"({"file_format_version":"1.0.0","runtime":{"name":"Virtual Desktop XR","library_path":"./vdxr_64.dll"}})";
+        const OpenXrManifestInfo m =
+            parseOpenXrRuntimeJson(json, L"C:\\Program Files\\Virtual Desktop Streamer\\OpenXR\\vdxr_win64.json");
+        check(m.valid && m.runtimeName == L"Virtual Desktop XR" &&
+                  m.libraryPath == L"C:\\Program Files\\Virtual Desktop Streamer\\OpenXR\\./vdxr_64.dll",
+              "parseOpenXrRuntimeJson resolves relative library_path and runtime.name");
+    }
+    {
+        const std::string vrpath =
+            R"({"external_drivers":["C:\\Program Files\\ALVR\\alvr_driver"],"runtime":["C:\\SteamVR"]})";
+        const std::vector<std::wstring> drivers = parseOpenVrExternalDrivers(vrpath);
+        check(drivers.size() == 1 && drivers[0].find(L"ALVR") != std::wstring::npos,
+              "parseOpenVrExternalDrivers extracts external SteamVR drivers");
+    }
+
+    // 3. USB VID/PID hardware identification (including negative checks for non-VR Valve hardware).
+    check(identifyUsbVrHeadset(L"USB\\VID_28DE&PID_2300\\12345", L"Valve Index HMD").name == L"Valve Index",
+          "Valve Index HMD VID/PID identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_28DE&PID_1205\\12345", L"Steam Deck Controller").name.empty(),
+          "Steam Deck controller is never misidentified as a VR headset");
+    check(identifyUsbVrHeadset(L"USB\\VID_2833&PID_018C\\12345", L"Quest 3").name == L"Meta Quest 3",
+          "Meta Quest 3 USB identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_2833&PID_0186\\12345", L"Quest 2").name == L"Meta Quest 2",
+          "Meta Quest 2 USB identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_35BD&PID_0101\\12345", L"Bigscreen Beyond").name == L"Bigscreen Beyond",
+          "Bigscreen Beyond USB identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_054C&PID_0CDE\\12345", L"PS VR2").name == L"PlayStation VR2",
+          "PlayStation VR2 PC adapter USB identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_03F0&PID_0580\\12345", L"HP Reverb Virtual Reality Headset G2").name ==
+              L"HP Reverb G2",
+          "HP Reverb G2 USB identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_34A4&PID_0012\\12345", L"Pimax Crystal Light").name ==
+              L"Pimax Crystal Light",
+          "Pimax Crystal Light USB identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_0BB4&PID_032B\\12345", L"VIVE Pro 2").name == L"HTC Vive Pro 2",
+          "HTC Vive Pro 2 USB identified");
+
+    // 4. Safety guard: never auto-launch SteamVR when vrserver is not running.
+    check(!shouldRunLiveOpenXrProbe(VrPlatform::SteamVr, {}, false, false),
+          "SteamVR is never live-probed when vrserver is not running");
+    check(shouldRunLiveOpenXrProbe(VrPlatform::SteamVr, {"vrserver.exe"}, false, false),
+          "SteamVR is live-probed once vrserver.exe is already running");
+    check(shouldRunLiveOpenXrProbe(VrPlatform::Wivrn, {}, true, true),
+          "Linux/Proton WiVRn with XR_RUNTIME_JSON is safe to probe");
+    check(!shouldRunLiveOpenXrProbe(VrPlatform::SteamVr, {}, true, true),
+          "even under Wine with XR_RUNTIME_JSON, SteamVR is never probed without vrserver");
+
+    // 5. End-to-end status resolution across platforms and states.
+    {
+        VrProbeInputs in;
+        in.activeRuntimePath = L"C:\\VirtualDesktop\\vdxr_win64.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"Virtual Desktop XR", L"C:\\VirtualDesktop\\vdxr.dll",
+                             true, true};
+        in.runningProcesses = {"virtualdesktop.streamer.exe"};
+        in.liveProbe = {true, true, true, true, 0, L"Virtual Desktop XR", L"1.0.29", L"Oculus Quest 3"};
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::Ready && r.headsetName == L"Meta Quest 3" &&
+                  r.runtimeDisplayName == L"Virtual Desktop (VDXR)" && r.runtimeVersion == L"1.0.29",
+              "VDXR + Quest 3 live probe resolves to Ready with cleaned Meta Quest 3 name");
+    }
+    {
+        VrProbeInputs in;
+        in.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll", true, true};
+        in.runningProcesses = {"vrserver.exe", "alvr_dashboard.exe"};
+        in.liveProbe = {true, true, true, true, 0, L"SteamVR/OpenXR", L"2.8.4", L"Oculus Quest 3"};
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::Ready && r.runtimeDisplayName == L"SteamVR" && r.transportName == L"ALVR",
+              "SteamVR + ALVR bridge resolves to Ready with ALVR transport note");
+    }
+    {
+        VrProbeInputs in;
+        in.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll", true, true};
+        in.runningProcesses = {"vrserver.exe"};
+        in.liveProbe = {true, true, true, false, -35, L"SteamVR/OpenXR", L"2.8.4", L""};
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::Standby && r.headsetName.empty(),
+              "SteamVR running with XR_ERROR_FORM_FACTOR_UNAVAILABLE resolves to Standby");
+    }
+    {
+        VrProbeInputs in;
+        in.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll", true, true};
+        in.usbHeadset = {L"Bigscreen Beyond", VrPlatform::SteamVr};
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::RuntimeInactive && r.headsetName == L"Bigscreen Beyond" && r.headsetFromUsb,
+              "USB-connected headset with inactive SteamVR resolves to RuntimeInactive with hardware name");
+    }
+    {
+        VrProbeInputs in;
+        in.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll", true, true};
+        in.runningProcesses = {"ovrserver_x64.exe"};
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::RuntimeInactive && r.runtimeMismatch &&
+                  r.mismatchRuntimeName == L"Meta Horizon Link",
+              "Meta Horizon Link running while SteamVR is active OpenXR flags runtime mismatch");
+    }
+    {
+        VrProbeInputs in;
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::NotConfigured && r.runtimeDisplayName.empty(),
+              "no OpenXR runtime resolves to NotConfigured");
+    }
+    {
+        VrProbeInputs in;
+        in.activeRuntimePath = L"C:\\Missing\\steamxr_win64.json";
+        in.activeManifest.jsonExists = false;
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::NotConfigured && r.activeRuntimeMissingFile,
+              "missing OpenXR runtime JSON resolves to NotConfigured with activeRuntimeMissingFile");
+    }
+}
+
 }  // namespace
 
 void testEdhm2dMigoto() {
@@ -7020,6 +7167,7 @@ int main(int argc, char** argv) {
     testLauncherFixes();
     testSettingsXmlLaunchMode();
     testEdhm2dMigoto();
+    testVrHeadsetDetection();
     endFakes();
     SetEnvironmentVariableW(L"EDUP_FAKE_STEAM_LOG", nullptr);
 

@@ -584,6 +584,29 @@ void paintAccentCard(HDC dc, RECT rect, UINT dpi) {
     }
 }
 
+int paintStatusPill(HDC dc, int left, int top, int height, COLORREF toneColour,
+                    const std::wstring& text, HFONT font, UINT dpi) {
+    const Theme& t = theme();
+    const int padX = dp(8, dpi);
+    const int dotR = dp(3, dpi) > 2 ? dp(3, dpi) : 2;
+    const int dotGap = dp(6, dpi);
+    const int labelW = textWidth(dc, text, font);
+    const int pillW = padX + dotR * 2 + dotGap + labelW + padX;
+    RECT pill{left, top, left + pillW, top + height};
+
+    const COLORREF fill = mix(t.cardBg, toneColour, t.dark ? 22 : 12);
+    const COLORREF border = mix(t.cardBorder, toneColour, t.dark ? 44 : 34);
+    const COLORREF textColour = t.dark ? mix(toneColour, RGB(255, 255, 255), 22)
+                                       : mix(toneColour, RGB(0, 0, 0), 14);
+    fillAndStrokeRounded(dc, pill, height / 2, fill, border, true, true);
+    fillCircle(dc, left + padX + dotR, top + height / 2, dotR, toneColour);
+
+    RECT labelRect{left + padX + dotR * 2 + dotGap, top, pill.right - padX + dp(2, dpi),
+                   pill.bottom};
+    drawText(dc, text, labelRect, font, textColour, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    return pillW;
+}
+
 HWND makeButton(HWND parent, const wchar_t* text, int id, ButtonStyle style, HFONT font) {
     HWND button = CreateWindowExW(0, L"BUTTON", text,
                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 10, 10,

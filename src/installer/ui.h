@@ -110,6 +110,10 @@ int  textWidth(HDC dc, const std::wstring& text, HFONT font);
 void paintCard(HDC dc, RECT rect, UINT dpi);
 // A hero card with a thin vertical accent rail on its left interior edge.
 void paintAccentCard(HDC dc, RECT rect, UINT dpi);
+// A compact capsule status pill: soft semantic fill, border, leading dot, and label.
+// Returns the pixel width drawn (for right-edge chaining if needed).
+int  paintStatusPill(HDC dc, int left, int top, int height, COLORREF toneColour,
+                     const std::wstring& text, HFONT font, UINT dpi);
 
 enum class ButtonStyle { Primary, Secondary, Tab, TabActive, Segment, SegmentActive, Link };
 

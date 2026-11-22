@@ -21,7 +21,11 @@ enum : int {
     kIdCloseAfter = 1086,
     kIdSteamFrontier = 1087,
     kIdVrMode = 1088,
+    kIdVrRefresh = 1089,
 };
+
+constexpr UINT_PTR kTimerVrProbe = 2001;
+constexpr UINT kVrProbeIntervalMs = 5000;
 
 struct VrModeChoice {
     edvr::VrHeadsetMode mode;
@@ -50,6 +54,7 @@ constexpr int kLaunchOptNoDirectY = kLaunchDividerY + 12;
 constexpr int kLaunchBottomWithDirect = kLaunchOptWithDirectY + 42;
 constexpr int kLaunchBottomNoDirect = kLaunchOptNoDirectY + 42;
 constexpr int kPlayBannerH = 46;
+constexpr int kVrCardH = 104;
 
 struct LauncherGui {
     HWND update = nullptr;
@@ -60,8 +65,17 @@ struct LauncherGui {
     HWND closeAfter = nullptr;       // "Close the launcher once Elite has started", saved in launcher.ini
     HWND steamFrontier = nullptr;    // "Use Frontier account login", for Steam direct launch
     HWND vrMode = nullptr;           // preferred VR headset mode (NotSet or HMD modes) for Settings.xml routes
+    HWND vrRefresh = nullptr;        // manual Refresh button in the VR headset readout card
     RECT vrModeLabelPx{};            // painted "VR 3D mode" label beside vrMode
     std::unique_ptr<LauncherSession> session;
+    VrHeadsetReport vrReport;
+    std::thread vrProbeThread;
+    std::atomic<bool> vrShuttingDown{false};
+    bool vrProbing = false;
+    bool vrProbePending = false;
+    bool vrHaveReport = false;
+    uint64_t vrProbeGen = 0;
+    ULONGLONG vrLastProbeMs = 0;
     std::wstring playCaption;        // beside the Play buttons on Screen::Play
     int playCaptionLeft = 320;       // right of visible Play buttons, in design units
     int launchBottom = kLaunchBottomWithDirect;
@@ -100,8 +114,68 @@ void invalidateLauncherCache() {
     lg.layoutDirty = true;
 }
 
-int launcherStatusTop() {
+int launcherVrTop() {
     return lg.playBannerShown ? (lg.launchBottom + 10 + kPlayBannerH + 10) : (lg.launchBottom + 12);
+}
+
+int launcherStatusTop() {
+    return launcherVrTop() + kVrCardH + (lg.playBannerShown ? 10 : 12);
+}
+
+void startVrHeadsetProbe(bool force) {
+    if (!g.window || lg.vrShuttingDown.load()) return;
+    if (lg.vrProbing) {
+        if (force) lg.vrProbePending = true;
+        return;
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (!force && lg.vrHaveReport && now - lg.vrLastProbeMs < 3000) return;
+
+    if (lg.vrProbeThread.joinable()) lg.vrProbeThread.join();
+
+    lg.vrProbing = true;
+    lg.vrProbePending = false;
+    const uint64_t gen = ++lg.vrProbeGen;
+    if (!lg.vrHaveReport) {
+        lg.vrReport = VrHeadsetReport{};
+        lg.vrReport.status = VrStatusKind::Checking;
+    }
+    if (lg.vrRefresh) {
+        SetWindowTextW(lg.vrRefresh, tr(L"Checking..."));
+        EnableWindow(lg.vrRefresh, FALSE);
+    }
+    InvalidateRect(g.window, nullptr, FALSE);
+
+    const std::wstring gameDir = g.haveSurvey ? g.survey.game.dir : std::wstring();
+    const std::wstring payloadDir = g.args.payloadDir;
+    const HWND window = g.window;
+
+    lg.vrProbeThread = std::thread([window, gameDir, payloadDir, gen]() {
+        VrHeadsetReport report = probeVrHeadset(gameDir, payloadDir);
+        if (lg.vrShuttingDown.load()) return;
+        std::function<void()>* job = new std::function<void()>([report = std::move(report), gen]() {
+            if (lg.vrShuttingDown.load() || gen != lg.vrProbeGen) return;
+            lg.vrProbing = false;
+            lg.vrHaveReport = true;
+            lg.vrLastProbeMs = GetTickCount64();
+            lg.vrReport = report;
+            if (lg.vrRefresh) {
+                SetWindowTextW(lg.vrRefresh, tr(L"Refresh"));
+                EnableWindow(lg.vrRefresh, TRUE);
+            }
+            InvalidateRect(g.window, nullptr, FALSE);
+            if (lg.vrProbePending) startVrHeadsetProbe(true);
+        });
+        if (!PostMessageW(window, kMsgLauncherJob, 0, reinterpret_cast<LPARAM>(job))) delete job;
+    });
+}
+
+bool launcherTimer(WPARAM timerId) {
+    if (timerId != kTimerVrProbe) return false;
+    if (g.screen == Screen::Play && g.window && !IsIconic(g.window) && !lg.vrProbing) {
+        startVrHeadsetProbe(false);
+    }
+    return true;
 }
 
 bool launcherPayloadReady() { return lg.session && lg.session->payloadState() == PayloadState::Ready; }
@@ -364,12 +438,27 @@ void updateLauncherControls() {
             lg.vrModeLabelPx = RECT{dp(innerLeft + 344), comboTop, comboLeft - dp(8), comboTop + dp(28)};
         }
 
+        if (lg.vrRefresh) {
+            const int wRefresh = ui::textWidth(dc, tr(L"Refresh"), ui::fonts().caption);
+            const int wChecking = ui::textWidth(dc, tr(L"Checking..."), ui::fonts().caption);
+            const int labelPx = (wRefresh > wChecking ? wRefresh : wChecking) + dp(22);
+            int btnW = g.dpi > 0 ? MulDiv(labelPx, 96, static_cast<int>(g.dpi)) : 82;
+            if (btnW < 76) btnW = 76;
+            if (btnW > 136) btnW = 136;
+            const int vrTop = launcherVrTop();
+            MoveWindow(lg.vrRefresh, dp(innerRight - btnW), dp(vrTop + 9), dp(btnW), dp(24), TRUE);
+        }
+
         ReleaseDC(g.window, dc);
     }
 
     ShowWindow(lg.update, (onPlay || onSetup) && available ? SW_SHOW : SW_HIDE);
     EnableWindow(lg.update, !lg.session->applying());
     ShowWindow(lg.rc, onSetup ? SW_SHOW : SW_HIDE);
+    if (lg.vrRefresh) {
+        ShowWindow(lg.vrRefresh, onPlay ? SW_SHOW : SW_HIDE);
+        EnableWindow(lg.vrRefresh, !lg.vrProbing);
+    }
 
     ShowWindow(lg.playVr, onPlay && showPair && showVrButton ? SW_SHOW : SW_HIDE);
     ShowWindow(lg.playFlat, onPlay && showPair && showFlatButton ? SW_SHOW : SW_HIDE);
@@ -423,8 +512,176 @@ void layoutLauncherControls() {
     for (HWND control :
          {lg.update, lg.rc, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter, lg.steamFrontier, lg.vrMode})
         if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().body), TRUE);
+    if (lg.vrRefresh)
+        SendMessageW(lg.vrRefresh, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().caption), TRUE);
     lg.layoutDirty = true;
     updateLauncherControls();
+}
+
+std::wstring fillVrPlaceholders(const wchar_t* pattern, const std::wstring& a,
+                                const std::wstring& b = L"", const std::wstring& c = L"") {
+    std::wstring out = pattern ? pattern : L"";
+    const std::wstring* vals[3] = {&a, &b, &c};
+    for (int i = 0; i < 3; ++i) {
+        const size_t at = out.find(L"%s");
+        if (at == std::wstring::npos) break;
+        out.replace(at, 2, *vals[i]);
+    }
+    return out;
+}
+
+void paintLauncherVrCard(HDC dc) {
+    const ui::Theme& t = ui::theme();
+    const ui::Fonts& f = ui::fonts();
+    const int top = launcherVrTop();
+    const int bottom = top + kVrCardH;
+
+    const RECT card{dp(kMargin), dp(top), dp(kClientWidth - kMargin), dp(bottom)};
+    ui::paintCard(dc, card, g.dpi);
+
+    const VrHeadsetReport& vr = lg.vrReport;
+    const wchar_t* badgeText = tr(L"Checking...");
+    COLORREF badgeColour = t.muted;
+    switch (vr.status) {
+        case VrStatusKind::Ready:
+            badgeText = tr(L"Ready");
+            badgeColour = t.good;
+            break;
+        case VrStatusKind::Standby:
+            badgeText = tr(L"Standby");
+            badgeColour = t.warn;
+            break;
+        case VrStatusKind::RuntimeInactive:
+            badgeText = tr(L"Runtime off");
+            badgeColour = (vr.headsetFromUsb || vr.runtimeMismatch) ? t.warn : t.muted;
+            break;
+        case VrStatusKind::NotConfigured:
+            badgeText = tr(L"Not configured");
+            badgeColour = t.warn;
+            break;
+        case VrStatusKind::Error:
+            badgeText = tr(L"Check failed");
+            badgeColour = t.bad;
+            break;
+        case VrStatusKind::Checking:
+        default:
+            badgeText = tr(L"Checking...");
+            badgeColour = t.muted;
+            break;
+    }
+
+    const int innerLeftPx = dp(kMargin + kCardPad);
+    const int innerRightPx = dp(kClientWidth - kMargin - kCardPad);
+
+    const std::wstring heading = tr(L"VR headset");
+    const int headW = ui::textWidth(dc, heading, f.heading);
+    RECT headRect{innerLeftPx, dp(top + 10), innerLeftPx + headW + dp(4), dp(top + 32)};
+    ui::drawText(dc, heading, headRect, f.heading, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    ui::paintStatusPill(dc, innerLeftPx + headW + dp(10), dp(top + 11), dp(20), badgeColour, badgeText,
+                        f.caption, g.dpi);
+
+    // Primary readout line: detected headset (left, bold) + active VR runtime (right, caption).
+    std::wstring headsetLine;
+    bool headsetDim = false;
+    if (vr.status == VrStatusKind::Checking) {
+        headsetLine = tr(L"Checking VR headset and runtime...");
+        headsetDim = true;
+    } else if (!vr.headsetName.empty()) {
+        headsetLine = vr.headsetName;
+    } else if (vr.status == VrStatusKind::Ready) {
+        headsetLine = tr(L"VR headset detected");
+    } else if (vr.status == VrStatusKind::Standby) {
+        headsetLine = tr(L"Waiting for headset");
+        headsetDim = true;
+    } else if (vr.status == VrStatusKind::NotConfigured) {
+        headsetLine = tr(L"No VR runtime found");
+        headsetDim = true;
+    } else {
+        headsetLine = tr(L"No headset detected");
+        headsetDim = true;
+    }
+
+    std::wstring runtimeValue = vr.runtimeDisplayName.empty() ? std::wstring(tr(L"None")) : vr.runtimeDisplayName;
+    if (!vr.runtimeVersion.empty() && !vr.runtimeDisplayName.empty()) {
+        runtimeValue += L" " + vr.runtimeVersion;
+    }
+    const std::wstring runtimeLine =
+        vr.status == VrStatusKind::Checking ? std::wstring()
+                                            : (std::wstring(tr(L"VR runtime")) + L": " + runtimeValue);
+
+    int headsetRightPx = innerRightPx;
+    if (!runtimeLine.empty()) {
+        const int maxRuntimeW = (innerRightPx - innerLeftPx) * 46 / 100;
+        int rtW = ui::textWidth(dc, runtimeLine, f.caption) + dp(4);
+        if (rtW > maxRuntimeW) rtW = maxRuntimeW;
+        const int rtLeftPx = innerRightPx - rtW;
+        RECT rtRect{rtLeftPx, dp(top + 40), innerRightPx, dp(top + 60)};
+        ui::drawText(dc, runtimeLine, rtRect, f.caption, t.subtext,
+                     DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        headsetRightPx = rtLeftPx - dp(12);
+    }
+
+    RECT headsetRect{innerLeftPx, dp(top + 39), headsetRightPx, dp(top + 60)};
+    ui::drawText(dc, headsetLine, headsetRect, headsetDim ? f.body : f.bodyBold,
+                 headsetDim ? t.subtext : t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    // Detail & guidance line (up to 2 lines).
+    std::wstring detailLine;
+    COLORREF detailColour = t.subtext;
+    const std::wstring rtName = vr.runtimeDisplayName.empty() ? std::wstring(L"OpenXR") : vr.runtimeDisplayName;
+    switch (vr.status) {
+        case VrStatusKind::Checking:
+            detailLine = tr(L"Inspecting the active OpenXR runtime, running VR services, and connected hardware.");
+            break;
+        case VrStatusKind::Ready:
+            if (!vr.transportName.empty()) {
+                detailLine = fillVrPlaceholders(tr(L"Connected via %s and ready for VR launch."), vr.transportName);
+            } else {
+                detailLine = tr(L"Connected and ready for VR launch.");
+            }
+            break;
+        case VrStatusKind::Standby:
+            detailLine = fillVrPlaceholders(
+                tr(L"%s is running, but no active headset responded. Wake or connect your headset, then refresh."),
+                rtName);
+            break;
+        case VrStatusKind::RuntimeInactive:
+            if (vr.runtimeMismatch && !vr.mismatchRuntimeName.empty()) {
+                detailLine = fillVrPlaceholders(
+                    tr(L"%s is running while %s is set as your active OpenXR runtime. Switch OpenXR or start %s."),
+                    vr.mismatchRuntimeName, rtName, rtName);
+                detailColour = t.warn;
+            } else if (vr.headsetFromUsb) {
+                detailLine = fillVrPlaceholders(
+                    tr(L"Detected over USB. Start %s to connect before launching Elite in VR."), rtName);
+            } else {
+                detailLine = fillVrPlaceholders(
+                    tr(L"%s is your active OpenXR runtime, but is not running yet. Start it or connect your headset."),
+                    rtName);
+            }
+            break;
+        case VrStatusKind::NotConfigured:
+            if (vr.activeRuntimeMissingFile) {
+                detailLine = tr(L"Active OpenXR runtime file is missing. Open SteamVR, Meta Horizon Link, Virtual Desktop, or Pimax Play to restore it.");
+                detailColour = t.warn;
+            } else if (vr.headsetFromUsb) {
+                detailLine = tr(L"Detected over USB, but no active OpenXR runtime is registered yet.");
+                detailColour = t.warn;
+            } else {
+                detailLine = tr(L"No active OpenXR runtime is registered. Start SteamVR, Meta Horizon Link, Virtual Desktop, Pimax Play, or WiVRn to enable VR.");
+            }
+            break;
+        case VrStatusKind::Error:
+            detailLine = fillVrPlaceholders(
+                tr(L"The active OpenXR runtime could not be queried. Restart %s and refresh."), rtName);
+            detailColour = t.warn;
+            break;
+    }
+
+    RECT detailRect{innerLeftPx, dp(top + 63), innerRightPx, dp(bottom - 8)};
+    ui::drawText(dc, detailLine, detailRect, f.caption, detailColour,
+                 DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS);
 }
 
 std::wstring launcherFormattedUpdateLine(COLORREF* colourOut) {
@@ -479,6 +736,8 @@ void paintLauncherPlay(HDC dc) {
         RECT line{dp(kMargin + kCardPad), dp(bannerTop + 8), dp(lg.updateTextRight), dp(bannerTop + kPlayBannerH - 8)};
         ui::drawText(dc, text, line, f.body, colour, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
+
+    paintLauncherVrCard(dc);
 }
 
 // Paints the Updates card at the top of Screen::Install (Setup tab).
@@ -559,6 +818,7 @@ void applyLauncherLanguage(const std::string& code) {
     setControlText(kIdDiscord, L"Ask on Discord");
     setControlText(kIdCopyPath, L"Copy path");
     setControlText(kIdShowFolder, L"Show folder");
+    if (lg.vrRefresh) SetWindowTextW(lg.vrRefresh, lg.vrProbing ? tr(L"Checking...") : tr(L"Refresh"));
     if (g.search) SendMessageW(g.search, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(tr(L"Search settings")));
     refillScopeChoices();
     refillVrModeChoices();
@@ -606,8 +866,9 @@ void createLauncherControls(HWND window) {
     SendMessageW(lg.vrMode, WM_SETFONT, reinterpret_cast<WPARAM>(f.body), TRUE);
     if (ui::theme().dark) SetWindowTheme(lg.vrMode, L"DarkMode_CFD", nullptr);
     refillVrModeChoices();
+    lg.vrRefresh = ui::makeButton(window, L"Refresh", kIdVrRefresh, ui::ButtonStyle::Secondary, f.caption);
     for (HWND control :
-         {lg.update, lg.rc, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter, lg.steamFrontier, lg.vrMode})
+         {lg.update, lg.rc, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter, lg.steamFrontier, lg.vrMode, lg.vrRefresh})
         ShowWindow(control, SW_HIDE);
 }
 
@@ -689,6 +950,7 @@ void launcherBegin() {
     lg.session.reset(new LauncherSession(env));
     lg.session->start();
     if (lg.session->includeReleaseCandidates()) ui::toggleCheckbox(lg.rc);
+    if (g.window) SetTimer(g.window, kTimerVrProbe, kVrProbeIntervalMs, nullptr);
     launcherRefresh();
 }
 
@@ -698,6 +960,7 @@ void launcherAfterScan() {
             updateLauncherControls();
         }
     }
+    startVrHeadsetProbe(false);
     const std::string& note = launcherStartupNote();
     if (!note.empty() && g.haveSurvey) setReport(note);
     // Open on Play when ED-UP is already installed (the everyday workflow); stay on Setup
@@ -710,7 +973,12 @@ void launcherAfterScan() {
 
 void launcherShutdown() {
     // A worker stuck connecting can hold the join for up to a network timeout, so the window goes first.
-    if (g.window) ShowWindow(g.window, SW_HIDE);
+    if (g.window) {
+        KillTimer(g.window, kTimerVrProbe);
+        ShowWindow(g.window, SW_HIDE);
+    }
+    lg.vrShuttingDown.store(true);
+    if (lg.vrProbeThread.joinable()) lg.vrProbeThread.join();
     if (lg.session) lg.session->shutdown();
 }
 
@@ -745,6 +1013,9 @@ bool launcherCommand(int id, int code) {
     switch (id) {
         case kIdUpdate:
             lg.session->beginUpdate();
+            return true;
+        case kIdVrRefresh:
+            startVrHeadsetProbe(true);
             return true;
         case kIdCloseAfter:
             ui::toggleCheckbox(lg.closeAfter);

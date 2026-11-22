@@ -944,7 +944,8 @@ set LAUNCHER_SRC="src\installer\launcher_core.cpp" "src\installer\launcher_regis
     "src\installer\machine_id.cpp" "src\installer\steam_ticket.cpp" ^
     "src\installer\direct_launch.cpp" "src\installer\frontier_login.cpp" ^
     "src\installer\launcher_login_dialog.cpp" ^
-    "src\installer\game_language.cpp" "src\installer\launcher_l10n.cpp"
+    "src\installer\game_language.cpp" "src\installer\launcher_l10n.cpp" ^
+    "src\installer\vr_headset.cpp"
 
 if defined EDVR_DLL_ONLY goto dll_only_finish
 

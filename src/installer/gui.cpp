@@ -18,7 +18,9 @@
 #include <shlobj.h>
 #include <uxtheme.h>
 
+#include <atomic>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "app.h"
@@ -39,6 +41,7 @@
 #include "launcher_main.h"
 #include "launcher_session.h"
 #include "layout_dpi.h"
+#include "vr_headset.h"
 #endif
 
 #pragma comment(lib, "comctl32.lib")
@@ -1064,6 +1067,7 @@ void selectInstall(size_t index) {
     g.haveSurvey = true;
 #ifdef EDUP_LAUNCHER
     invalidateLauncherCache();
+    startVrHeadsetProbe(true);
 #endif
     // The scope this folder gets: the one the run was started with, else the folder's own, else both.
     SendMessageW(g.scopeCombo, CB_SETCURSEL, scopeIndex(g.args.scope.empty() ? defaultScope(g.survey) : g.args.scope), 0);
@@ -1527,6 +1531,7 @@ void showScreen(Screen screen) {
     if (g.tabPlay)
         ui::setButtonStyle(g.tabPlay,
                            screen == Screen::Play ? ui::ButtonStyle::TabActive : ui::ButtonStyle::Tab);
+    if (screen == Screen::Play) startVrHeadsetProbe(false);
 #endif
     ui::setButtonStyle(g.tabInstall,
                        screen == Screen::Install ? ui::ButtonStyle::TabActive : ui::ButtonStyle::Tab);
@@ -1930,6 +1935,10 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         case kMsgLauncherJob:
             runLauncherJob(lparam);
             return 0;
+
+        case WM_TIMER:
+            if (launcherTimer(wparam)) return 0;
+            break;
 #endif
 
         case kMsgFirstScan: {
