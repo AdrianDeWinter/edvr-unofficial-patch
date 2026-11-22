@@ -583,7 +583,7 @@ if defined XESS (
     echo [edvr] NO XeSS SDK. Flat XeSS-SR will refuse at runtime. Fetch with tools\fetch_xess.py.
 )
 
-REM AMD FSR 4.1 (FidelityFX SDK v2.3.0, tools\fetch_fsr4.py) for the flat profile and VR: AMD's own signed D3D12
+REM AMD FSR 4.1 (FidelityFX SDK v2.4.0, tools\fetch_fsr4.py) for the flat profile and VR: AMD's own signed D3D12
 REM DLLs, loaded at run time over the D3D11/D3D12 bridge in src\d3d11\fsr4_engine.cpp, as XeSS's is. Nothing is
 REM linked; the headers are the only compile input. EDVR_FSR4_SDK names a copy explicitly, or forces the no-SDK
 REM path with the literal value "none" (proving fix.temporal_aa=fsr4's runtime refusal even on a machine that

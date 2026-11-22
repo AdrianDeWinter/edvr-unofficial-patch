@@ -30,7 +30,7 @@
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 #include "gpu_timing.h"
-// AMD's FidelityFX SDK v2.3.0 headers (the ffx-api: C descriptors over five exported functions), staged by the build under
+// AMD's FidelityFX SDK v2.4.0 headers (the ffx-api: C descriptors over five exported functions), staged by the build under
 // <sdk>\include\FidelityFX\. ffx_api_loader.h is not used: it is a header of inline GetProcAddress calls that this file does by
 // hand, and it #pragma errors off Windows. The headers declare their functions dllexport; nothing here names those functions, it
 // takes the Pfn typedefs and resolves the exports from AMD's loader at run time.
