@@ -483,14 +483,40 @@ inline int flatOverlayLayerGpuTests(ID3D11Device* device, ID3D11DeviceContext* c
                 &reason,false,false,false,&sample) && reason &&
                 std::strcmp(reason,"dual-source-blend")==0,
                 "sampled active dual-source blend still refuses before game draw");
-            expect(sample.captured && sample.failures==1 && sample.frame==20 &&
-                sample.ps==ps.Get() && sample.vs==actualVs.Get() &&
-                sample.hdr==instrumented.Get() && sample.dsv==instrumentedDsv.Get() &&
-                sample.activeRtvMask==1 && sample.activeRtvCount==1 &&
-                std::memcmp(&sample.blend,&actual,sizeof(actual))==0 &&
-                sample.effectiveSlots==1 && sample.effectiveChannels[0]==7 &&
-                !sample.psOutputSignatureKnown,
-                "first refusal captures actual descriptor, bindings and effective RGB dependency");
+            // One check per field, each naming what it saw: the condition passes on a local WARP and failed on the CI
+            // runner's (2026-11-21, a5231ca3), and a single combined check could not say which part.
+            // The descriptor is compared field by field: memcmp also compared the padding after each target's
+            // RenderTargetWriteMask, which GetDesc need not write.
+            auto sameTarget = [](const D3D11_RENDER_TARGET_BLEND_DESC& a, const D3D11_RENDER_TARGET_BLEND_DESC& b) {
+                return a.BlendEnable==b.BlendEnable && a.SrcBlend==b.SrcBlend && a.DestBlend==b.DestBlend &&
+                       a.BlendOp==b.BlendOp && a.SrcBlendAlpha==b.SrcBlendAlpha && a.DestBlendAlpha==b.DestBlendAlpha &&
+                       a.BlendOpAlpha==b.BlendOpAlpha && a.RenderTargetWriteMask==b.RenderTargetWriteMask;
+            };
+            bool sameBlend=sample.blend.AlphaToCoverageEnable==actual.AlphaToCoverageEnable &&
+                           sample.blend.IndependentBlendEnable==actual.IndependentBlendEnable;
+            for(unsigned i=0;i<D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT;++i)
+                sameBlend=sameBlend && sameTarget(sample.blend.RenderTarget[i],actual.RenderTarget[i]);
+            char seen[256];
+            auto field = [&](bool ok, const char* what) {
+                if (ok) return;
+                std::snprintf(seen,sizeof(seen),"first refusal captures actual descriptor, bindings and effective RGB "
+                    "dependency: %s (captured %d failures %llu frame %llu ps %d vs %d hdr %d dsv %d mask %u count %u "
+                    "slots %u ch0 %u signature %d)",what,sample.captured?1:0,
+                    static_cast<unsigned long long>(sample.failures),static_cast<unsigned long long>(sample.frame),
+                    sample.ps==ps.Get()?1:0,sample.vs==actualVs.Get()?1:0,sample.hdr==instrumented.Get()?1:0,
+                    sample.dsv==instrumentedDsv.Get()?1:0,sample.activeRtvMask,sample.activeRtvCount,
+                    sample.effectiveSlots,static_cast<unsigned>(sample.effectiveChannels[0]),
+                    sample.psOutputSignatureKnown?1:0);
+                expect(false,seen);
+            };
+            field(sample.captured && sample.failures==1 && sample.frame==20,"captured once, at frame 20");
+            field(sample.ps==ps.Get(),"the pixel shader is the bound one");
+            field(sample.vs==actualVs.Get(),"the vertex shader is the bound one");
+            field(sample.hdr==instrumented.Get() && sample.dsv==instrumentedDsv.Get(),"the target and depth are the bound ones");
+            field(sample.activeRtvMask==1 && sample.activeRtvCount==1,"one active render target, slot 0");
+            field(sameBlend,"the blend descriptor is GetDesc's");
+            field(sample.effectiveSlots==1 && sample.effectiveChannels[0]==7,"slot 0's RGB depends on SRC1");
+            field(!sample.psOutputSignatureKnown,"no original PS output signature is claimed");
             ComPtr<ID3D11BlendState> stillBlend;context->OMGetBlendState(&stillBlend,nullptr,nullptr);
             ComPtr<ID3D11PixelShader> stillPs;context->PSGetShader(&stillPs,nullptr,nullptr);
             ID3D11RenderTargetView* stillRtv=nullptr;ID3D11DepthStencilView* stillDsv=nullptr;
