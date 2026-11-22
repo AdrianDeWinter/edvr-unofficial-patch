@@ -1648,14 +1648,14 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             plan.notes.push_back("Writing " + iniName + " (every setting at its default).");
         } else if (!o.keepSettings) {
             merged = mergeIni(payloadText, std::string(), nullptr, useForced, &plan.merge);
-            if (fileExists(iniPath)) backup(iniPath, "your " + iniName + ", before it is replaced");
+            if (!fromLegacy || fileExists(iniPath)) backup(iniPath, "your " + iniName + ", before it is replaced");
             plan.notes.push_back(
                 "Replacing " + iniName + " with the shipped defaults. Your old file is in the "
                 "backup folder.");
         } else {
             merged = mergeIni(payloadText, ownText, base, useForced, &plan.merge, iniName.c_str());
             if (merged != ownText) {
-                if (fileExists(iniPath)) backup(iniPath, "your " + iniName + ", before it is updated");
+                if (!fromLegacy || fileExists(iniPath)) backup(iniPath, "your " + iniName + ", before it is updated");
 
                 char line[256];
                 sprintf_s(
@@ -1702,7 +1702,7 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                    "[advanced]\r\nreal_dll = " + sharedSet + "\r\n";
         }
         if (text != s.iniText || s.iniFromLegacy) {
-            if (fileExists(sharedPath)) backup(sharedPath, "your edup.ini, before the chain is written to it");
+            if ((s.iniPresent && !s.iniFromLegacy) || fileExists(sharedPath)) backup(sharedPath, "your edup.ini, before the chain is written to it");
             writeText(text, sharedPath, "writes advanced.real_dll to edup.ini");
             changed = true;
             plan.notes.push_back(std::string(s.iniPresent ? "Updating" : "Creating") +
