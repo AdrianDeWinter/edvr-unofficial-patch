@@ -36,6 +36,8 @@ experimental; their visual quality is not yet qualified.
 - [fix] temporal_aa also accepts off, on (TAA), dlaa, dlss, fsr or xess (default off).
 - XeSS-SR needs libxess.dll beside the game; the release includes it when built with the SDK.
 - libxess_fg.dll (XeSS Frame Generation) and libxell.dll (Xe Low Latency) ship beside it, from the same SDK.
+- FSR 4 needs amd_fidelityfx_loader_dx12.dll and amd_fidelityfx_upscaler_dx12.dll beside the game; the launcher installs them
+  with AMD-FIDELITYFX-LICENSE.txt. They are AMD's own signed files, unmodified.
 - Game supersampling controls render scale; DLAA requires native SS.
 - [visual] intro_video = skip leaves out the launch movie (the F8 menu's Visual
   tab, Intro movie row, does the same; it applies at the next launch). The

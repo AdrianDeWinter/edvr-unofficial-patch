@@ -71,7 +71,7 @@ class PackagedFile(NamedTuple):
     """One file of the manifest's `files`: the one place a payload file is declared."""
     id: str            # [a-z0-9_]{1,32}, the stable name the install record is keyed by
     source: str        # its path inside its zip (and an unpacked --payload folder)
-    group: str         # the zip that holds it: core, dlss or xess
+    group: str         # the zip that holds it: core, dlss, xess or fsr4
     root: str          # target.root: game or openvr
     path: str          # target.path under that root
     when: Optional[dict]  # None means always; keys profile and adapter, as in the schema
@@ -90,6 +90,10 @@ _VR, _FLAT, _EITHER, _NVIDIA = {"profile": ["vr"]}, {"profile": ["flat"]}, {"pro
 #   nvngx_dlss.dll   only where the survey found an NVIDIA adapter; a foreign copy is left alone
 #   libxess.dll and its two notices   every install; foreign copies are left alone
 #   libxess_fg.dll, libxell.dll   flat profiles only (XeSS Frame Generation and Xe Low Latency); as libxess.dll
+#   AMD's FSR 4 loader, upscaler and licence   every install; foreign copies are left alone. Unlike XeSS's they are
+#                    REQUIRED in a release (_amd_runtime_problems): AMD's own signed DLLs, never re-signed
+AMD_LOADER, AMD_UPSCALER = "amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_upscaler_dx12.dll"
+AMD_LICENSE = "AMD-FIDELITYFX-LICENSE.txt"
 FILES = (
     PackagedFile("graphics", "d3d11.dll", "core", "game", "d3d11.dll", _EITHER, "chain"),
     PackagedFile("runtime", "openvr/openvr_api.dll", "core", "openvr", "openvr_api.dll", _VR, "runtime"),
@@ -111,12 +115,15 @@ FILES = (
                  None, "owned"),
     PackagedFile("xess_fg", "libxess_fg.dll", "xess", "game", "libxess_fg.dll", _FLAT, "owned"),
     PackagedFile("xess_ll", "libxell.dll", "xess", "game", "libxell.dll", _FLAT, "owned"),
+    PackagedFile("fsr4_loader", "amd_fidelityfx_loader_dx12.dll", "fsr4", "game", "amd_fidelityfx_loader_dx12.dll", None, "owned"),
+    PackagedFile("fsr4_upscaler", "amd_fidelityfx_upscaler_dx12.dll", "fsr4", "game", "amd_fidelityfx_upscaler_dx12.dll", None, "owned"),
+    PackagedFile("fsr4_license", "AMD-FIDELITYFX-LICENSE.txt", "fsr4", "game", "AMD-FIDELITYFX-LICENSE.txt", None, "owned"),
 )
 # Members that ship in a zip without an entry in the manifest's files: notices, and the profile
 # descriptor, which the planner no longer reads (it writes its own).
 _EXTRA_MEMBERS = {"core": ("edup_profile.ini", "LICENSE.txt", "DXBC-HASH-LICENSE.txt", "MINIZ-LICENSE.txt",
                            "FIDELITYFX-SDK-DX11-LICENSE.txt", "MIN-ED-LAUNCHER-LICENSE.txt"),
-                  "dlss": ("NVIDIA-DLSS-LICENSE.txt",), "xess": ()}
+                  "dlss": ("NVIDIA-DLSS-LICENSE.txt",), "xess": (), "fsr4": ()}
 
 
 def _group_names(group):
@@ -126,6 +133,7 @@ def _group_names(group):
 CORE_NAMES = _group_names("core")
 DLSS_NAMES = _group_names("dlss")
 XESS_NAMES = _group_names("xess")
+FSR4_NAMES = _group_names("fsr4")
 
 
 def manifest_file_entry(file, asset, data):
@@ -136,7 +144,7 @@ def manifest_file_entry(file, asset, data):
         entry["when"] = json.loads(json.dumps(file.when))
     entry["existing"] = file.existing
     return entry
-SPLIT_PATTERNS = ("ed-up-dlss-*.zip", "ed-up-xess-*.zip")
+SPLIT_PATTERNS = ("ed-up-dlss-*.zip", "ed-up-xess-*.zip", "ed-up-fsr4-*.zip")
 
 
 def _version(value):
@@ -174,6 +182,11 @@ def _files(root, no_dlss):
         for name in ("libxess_fg.dll", "libxell.dll"):
             if (build / name).is_file():
                 result.append((build / name, name))
+    # AMD's FSR 4 runtime: the loader, the upscaler it loads and AMD's licence, always. package() refuses a build that lacks
+    # them (_amd_runtime_problems), so a release never ships a stub-only FSR 4 without saying so. They keep AMD's own
+    # Authenticode signature: nothing here or in the artifact signing step re-signs them.
+    result.extend(((build / AMD_LOADER, AMD_LOADER), (build / AMD_UPSCALER, AMD_UPSCALER),
+                   (build / AMD_LICENSE, AMD_LICENSE)))
     # Both settings files ship: edup.ini for VR, and edup-flat.ini for the flat
     # runtime (config.cpp reads edup-flat.ini first). Each keeps its own name.
     result.extend([(root / "edup.ini", "edup.ini"),
@@ -332,6 +345,20 @@ def _embedded_resource(executable, resource_id, required=True):
         kernel.FreeLibrary(handle)
 
 
+def _amd_runtime_problems(root):
+    """Why build\\ cannot supply AMD's FSR 4 runtime to a release: a list of messages, empty when the two DLLs and the
+    licence are there and the licence is not empty (AMD's licence requires its notice with every copy)."""
+    build = root / "build"
+    missing = [name for name in (AMD_LOADER, AMD_UPSCALER, AMD_LICENSE) if not (build / name).is_file()]
+    if missing:
+        return ["the build has no AMD FSR 4 runtime (missing from build\\: %s). Fetch the SDK with "
+                "tools\\fetch_fsr4.py and run the full build.bat, which copies them; a release must not ship "
+                "a stub-only FSR 4" % ", ".join(missing)]
+    if not (build / AMD_LICENSE).read_bytes().strip():
+        return ["build\\%s is empty: AMD's licence must travel with its DLLs" % AMD_LICENSE]
+    return []
+
+
 def _validate_release_files(files):
     """The two checks on the loose release files that no other step makes: the profile descriptor
     declares the scope the release installs (the bytes gen_installer_rc.py writes), and a release
@@ -436,13 +463,15 @@ def _split_outputs(root, version, files):
     memory so a dry run builds and checks them and writes nothing. The launcher
     exe, build\\ed-up-launcher.exe, is required (_validate_launcher)."""
     present = {name: source for source, name in files}
-    data = {name: present[name].read_bytes() for name in CORE_NAMES + DLSS_NAMES + XESS_NAMES
+    data = {name: present[name].read_bytes() for name in CORE_NAMES + DLSS_NAMES + XESS_NAMES + FSR4_NAMES
             if name in present}
     groups = [("ed-up-core-%s.zip" % version, [name for name in CORE_NAMES if name in data])]
     if DLSS_NAMES[0] in data:
         groups.append(("ed-up-dlss", [name for name in DLSS_NAMES if name in data]))
     if XESS_NAMES[0] in data:
         groups.append(("ed-up-xess", [name for name in XESS_NAMES if name in data]))
+    if FSR4_NAMES[0] in data:
+        groups.append(("ed-up-fsr4", [name for name in FSR4_NAMES if name in data]))
     outputs, assets, held = [], [], {}
     for name, members in groups:
         pairs = [(member, data[member]) for member in members]
@@ -528,6 +557,9 @@ def package(root, version, no_dlss=False, dry_run=False):
     archive = dist / ("ed-up-" + version + ".zip"); temporary_archive = dist / (".edvr-" + version + ".zip.tmp")
     if not _inside(stage, dist) or not _inside(final_stage, dist) or not _inside(archive, dist):
         raise ValueError("resolved staging destination escapes repository dist")
+    amd = _amd_runtime_problems(root)
+    if amd:
+        raise ValueError("cannot package a release:" + chr(10) + "  " + (chr(10) + "  ").join(amd))
     files = _files(root, no_dlss)
     missing = [str(src) for src, _ in files if not src.is_file()]
     if missing:
@@ -925,7 +957,8 @@ def self_test():
                                  "openvr/OPENXR-LOADER-LICENSE.txt",
                                  "README.txt", "openvr/READ-ME-FIRST.txt", "edup.ini", "edup-flat.ini",
                                  "LICENSE.txt", "DXBC-HASH-LICENSE.txt", "MINIZ-LICENSE.txt",
-                                 "DITTOSR-LICENSE.txt", "DITTOSR-GSR-LICENSE.txt", LAUNCHER_LICENSE_NAME}
+                                 "DITTOSR-LICENSE.txt", "DITTOSR-GSR-LICENSE.txt", LAUNCHER_LICENSE_NAME,
+                                 AMD_LOADER, AMD_UPSCALER, AMD_LICENSE}
                 assert not [name for name in names if name.endswith((".exe", ".sh", ".py"))], names
             (root / "build" / "edvr_openxr_runtime.dll").write_bytes(b"payload")
             dlss = root / "build" / "nvngx_dlss.dll"
@@ -1041,6 +1074,8 @@ def self_test():
             dist = root / "dist"
             dlss_names = {"nvngx_dlss.dll", "NVIDIA-DLSS-LICENSE.txt"}
             xess_names = set(xess_files)
+            fsr4_files = [AMD_LOADER, AMD_UPSCALER, AMD_LICENSE]
+            fsr4_names = set(fsr4_files)
             core_names = {"d3d11.dll", "openvr/openvr_api.dll", "openvr/openxr_loader.dll",
                           "openvr/OPENXR-LOADER-LICENSE.txt", "edup.ini", "edup-flat.ini",
                           "edup_profile.ini", "LICENSE.txt", "DXBC-HASH-LICENSE.txt", "MINIZ-LICENSE.txt",
@@ -1052,7 +1087,7 @@ def self_test():
 
             def split_assets(directory):
                 return {kind: sorted(p.name for p in directory.glob("ed-up-%s-*.zip" % kind))
-                        for kind in ("dlss", "xess")}
+                        for kind in ("dlss", "xess", "fsr4")}
 
             def members(path):
                 with zipfile.ZipFile(path) as opened:
@@ -1064,15 +1099,17 @@ def self_test():
             assert package(root, "4.0.0", no_dlss=True) == 0
             core = dist / "ed-up-core-4.0.0.zip"
             found = split_assets(dist)
-            assert len(found["dlss"]) == 1 and len(found["xess"]) == 1, found
+            assert len(found["dlss"]) == 1 and len(found["xess"]) == 1 and len(found["fsr4"]) == 1, found
             dlss_zip, xess_zip = dist / found["dlss"][0], dist / found["xess"][0]
+            fsr4_zip = dist / found["fsr4"][0]
             assert members(core) == core_names, members(core)
             assert members(dlss_zip) == dlss_names and members(xess_zip) == xess_names
+            assert members(fsr4_zip) == fsr4_names
             assert not list(dist.rglob("*.sig")), "packaging wrote a signature"
             assert not [p for p in dist.iterdir() if p.name.startswith(".")], "a temporary was left"
             # The two archives keep their member lists.
             with zipfile.ZipFile(dist / "ed-up-4.0.0.zip") as archive:
-                assert set(archive.namelist()) == core_names | dlss_names | xess_names | {
+                assert set(archive.namelist()) == core_names | dlss_names | xess_names | fsr4_names | {
                     "README.txt", "openvr/READ-ME-FIRST.txt"}
             assert members(dist / "ed-up-launcher-linux-4.0.0.zip") == {
                 LAUNCHER_ASSET, LAUNCHER_LINUX_WRAPPER, LINUX_EPIC_LIBRARY, LAUNCHER_LINUX_SH, LAUNCHER_LINUX_README}
@@ -1087,7 +1124,7 @@ def self_test():
             assert parsed["launcher"] == {"version": "0.1.0", "asset": LAUNCHER_ASSET,
                                           "sha256": hashlib.sha256(b"launcher exe").hexdigest(), "size": 12}
             assert (dist / LAUNCHER_ASSET).read_bytes() == b"launcher exe"
-            assert [asset["name"] for asset in parsed["assets"]] == [core.name, dlss_zip.name, xess_zip.name]
+            assert [asset["name"] for asset in parsed["assets"]] == [core.name, dlss_zip.name, xess_zip.name, fsr4_zip.name]
             assert [entry["id"] for entry in parsed["files"]] == [file.id for file in FILES]
             assert "edup_profile.ini" not in {entry["path"] for entry in parsed["files"]}
             by_id = {entry["id"]: entry for entry in parsed["files"]}
@@ -1128,19 +1165,46 @@ def self_test():
             assert sign_manifest.load_manifest(bridge_bytes)[1], "the schema-2 reader must refuse the bridge"
             assert by_id["xess_fg"]["when"] == {"profile": ["flat"]} and by_id["xess_ll"]["when"] == {"profile": ["flat"]}
             assert by_id["xess_fg"]["asset"] == by_id["xess"]["asset"] == by_id["xess_ll"]["asset"]
+            # AMD's runtime: always listed, no condition, owned like XeSS's, one zip, and none of it in the schema-1 bridge.
+            assert all(by_id[i]["existing"] == "owned" and "when" not in by_id[i] and by_id[i]["asset"] == fsr4_zip.name
+                       for i in ("fsr4_loader", "fsr4_upscaler", "fsr4_license"))
+            assert not {"fsr4_loader", "fsr4_upscaler", "fsr4_license"} & set(sign_manifest.BRIDGE_ITEM_OF_FILE)
             lines = []
             assert sign_manifest.verify_directory(dist, allow_unsigned=True, out=lines.append), lines
             assert not sign_manifest.verify_directory(dist, out=lambda line: None), "unsigned dist verified"
             dlss = next(entry for entry in parsed["files"] if entry["id"] == "dlss")
             assert dlss["asset"] == dlss_zip.name and dlss["path"] == "nvngx_dlss.dll"
             # Two runs give the same bytes, and a new version keeps the DLSS and XeSS names.
-            first = {path: path.read_bytes() for path in (core, dlss_zip, xess_zip, dist / MANIFEST, dist / BRIDGE)}
+            first = {path: path.read_bytes() for path in (core, dlss_zip, xess_zip, fsr4_zip, dist / MANIFEST, dist / BRIDGE)}
             assert package(root, "4.0.0", no_dlss=True) == 0
             assert all(path.read_bytes() == data for path, data in first.items()), "packaging is not deterministic"
             assert package(root, "4.0.1", no_dlss=True) == 0
             assert split_assets(dist) == found and (dist / "ed-up-core-4.0.1.zip").is_file()
             assert dlss_zip.read_bytes() == first[dlss_zip] and xess_zip.read_bytes() == first[xess_zip]
             assert json.loads((dist / MANIFEST).read_text(encoding="ascii"))["version"] == "4.0.1"
+            # A build without AMD's runtime is refused whole, naming what is missing, and writes nothing; an empty
+            # licence is refused too. The files return afterwards.
+            for victim in (AMD_LOADER, AMD_UPSCALER, AMD_LICENSE):
+                held = (root / "build" / victim).read_bytes()
+                (root / "build" / victim).unlink()
+                for dry in (True, False):
+                    before_refusal = snapshot()
+                    try:
+                        package(root, "4.0.1", no_dlss=True, dry_run=dry)
+                        raise AssertionError("a release without %s was packaged" % victim)
+                    except ValueError as error:
+                        assert "no AMD FSR 4 runtime" in str(error) and victim in str(error), str(error)
+                        print("expected-error: " + str(error).splitlines()[1].strip()[:96])
+                    assert snapshot() == before_refusal, "a refused release wrote under dist"
+                (root / "build" / victim).write_bytes(held)
+            held = (root / "build" / AMD_LICENSE).read_bytes()
+            (root / "build" / AMD_LICENSE).write_bytes(b"   ")
+            try:
+                package(root, "4.0.1", no_dlss=True, dry_run=True)
+                raise AssertionError("an empty AMD licence was packaged")
+            except ValueError as error:
+                assert "licence must travel" in str(error), str(error)
+            (root / "build" / AMD_LICENSE).write_bytes(held)
             # A changed runtime gets a new name and the old one goes.
             dlss_dll = root / "build" / "nvngx_dlss.dll"
             kept = dlss_dll.read_bytes()
@@ -1241,12 +1305,19 @@ def self_test():
             keys_header.write_text(real_keys_text, encoding="utf-8")
             assert package(root, "4.0.6", no_dlss=True, dry_run=True) == 0   # and the good one passes again
 
+            # AMD's DLLs keep AMD's own Authenticode signature: no signing step of the build or of artifact_signing.py
+            # names them (AMD's licence allows redistribution unmodified, and re-signing would modify them).
+            for signing_text in ((ROOT / "build.bat").read_text(encoding="utf-8", errors="replace"),
+                                 (ROOT / "tools" / "artifact_signing.py").read_text(encoding="utf-8")):
+                for line in signing_text.splitlines():
+                    if "artifact_signing.py sign" in line or "signtool" in line.lower():
+                        assert "amd_fidelityfx" not in line.lower() and "fsr4" not in line.lower(), line
             # Every table entry is a legal target and the table passes the manifest's own rules, on a
             # manifest of nothing but the table.
             legal = {"schema": sign_manifest.MANIFEST_SCHEMA, "version": "1.0.0", "build": "b", "tag": "t",
                      "issued": 1,
                      "assets": [{"name": name + ".zip", "sha256": "0" * 64, "size": 1}
-                                for name in ("core", "dlss", "xess")],
+                                for name in ("core", "dlss", "xess", "fsr4")],
                      "files": [manifest_file_entry(file, file.group + ".zip", b"x") for file in FILES]}
             assert sign_manifest.validate_manifest(legal) == [], sign_manifest.validate_manifest(legal)
             assert len({file.id for file in FILES}) == len(FILES)

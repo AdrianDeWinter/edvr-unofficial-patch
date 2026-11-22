@@ -590,9 +590,10 @@ REM path with the literal value "none" (proving fix.temporal_aa=fsr4's runtime r
 REM already has the SDK staged); else the checkout's own third_party\fsr4; else the machine's copy under
 REM %LOCALAPPDATA%\EDVR\fsr4-sdk. The copy is VERIFIED first, and a mismatch fails the build. Without any SDK
 REM the build still succeeds: fsr4_engine.cpp compiles as a refusing stub. The two DLLs and the licence land in
-REM %BUILD% for tools\install_edup.py --fsr4 and the rig; they are NOT in the self-contained installer and NOT
-REM in the release packages (docs\fsr-upscaler-design-2026-09-16.md, decision D8), and tools\package_native.py
-REM and tools\gen_installer_rc.py name the files they carry, so these three are never picked up by accident.
+REM %BUILD% for tools\install_edup.py --fsr4, the rig and the release: tools\package_native.py packs them as it packs
+REM XeSS's and REFUSES a release whose build lacks them, and the launcher installs them. They keep AMD's own signature:
+REM nothing in this file signs them (the maintainer's 2026-11-21 reversal of decision D8 in
+REM docs\fsr-upscaler-design-2026-09-16.md).
 set FSR4=
 set FSR4_NONE=
 if /i "%EDVR_FSR4_SDK%"=="none" set FSR4_NONE=1

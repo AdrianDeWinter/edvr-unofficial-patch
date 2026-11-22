@@ -11,7 +11,7 @@ What it writes, one mode per run:
     licence). The launcher carries no embedded payload.
   * --release-files: build\\edup-flat.ini and build\\edup_profile_vr.ini, the two
     files the release packs that nothing else makes. The native graphics and
-    runtime DLLs, the OpenXR loader and its notice, and any XeSS notices are
+    runtime DLLs, the OpenXR loader and its notice, and any XeSS or AMD notices are
     checked first, so a build that is missing one fails here and not at
     packaging.
 
@@ -162,6 +162,8 @@ def versioninfo_lines(version, file_description, internal_name, original_filenam
 
 
 LAUNCHER_VERSION_HEADER = ('src', 'installer', 'launcher_version.h')
+AMD_RUNTIME_FILES = ('amd_fidelityfx_loader_dx12.dll', 'amd_fidelityfx_upscaler_dx12.dll')
+AMD_LICENSE_FILE = 'AMD-FIDELITYFX-LICENSE.txt'
 # min-ed-launcher's MIT licence, which direct launch's ported code obliges the launcher to carry.
 # src/installer/launcher_main.cpp reads this id; package_native.py checks the bytes.
 IDR_MIN_ED_LAUNCHER_LICENSE = 120
@@ -430,6 +432,12 @@ def write_release_files(build, dry_run):
                      or not os.path.isfile(os.path.join(build, 'INTEL-XESS-THIRD-PARTY.txt'))):
         print('gen_installer_rc: ERROR: XeSS runtime lacks license notices')
         return 1
+    # AMD's FSR 4 runtime is optional at build time (a build without the SDK has none, and package_native.py refuses to
+    # release such a build), but a DLL without AMD's licence is refused here: the notice travels with every copy.
+    any_amd = any(os.path.exists(os.path.join(build, name)) for name in AMD_RUNTIME_FILES)
+    if any_amd and not os.path.isfile(os.path.join(build, AMD_LICENSE_FILE)):
+        print('gen_installer_rc: ERROR: AMD FSR 4 runtime lacks its license notice')
+        return 1
 
     if dry_run:
         print('gen_installer_rc: dry run; validated the release inputs and wrote nothing')
@@ -542,6 +550,16 @@ def self_test():
             for name in ('INTEL-XESS-LICENSE.txt', 'INTEL-XESS-THIRD-PARTY.txt', 'libxess_fg.dll', 'libxell.dll'):
                 with open(os.path.join(build, name), 'wb') as stream: stream.write(name.encode('ascii'))
             assert main(['--release-files', '--build', build]) == 0
+            # An AMD FSR 4 DLL without AMD's licence is refused; with it, accepted.
+            with open(os.path.join(build, AMD_RUNTIME_FILES[0]), 'wb') as stream: stream.write(b'amd loader')
+            no_amd_notice = io.StringIO()
+            with contextlib.redirect_stdout(no_amd_notice):
+                assert main(['--release-files', '--build', build]) == 1
+            assert 'AMD FSR 4 runtime lacks its license notice' in no_amd_notice.getvalue()
+            print('expected-error: ' + no_amd_notice.getvalue().strip().replace('gen_installer_rc: ERROR: ', '', 1))
+            with open(os.path.join(build, AMD_LICENSE_FILE), 'wb') as stream: stream.write(b'amd licence')
+            assert main(['--release-files', '--build', build]) == 0
+            os.remove(os.path.join(build, AMD_RUNTIME_FILES[0])); os.remove(os.path.join(build, AMD_LICENSE_FILE))
             with open(os.path.join(build, 'edup-flat.ini'), 'rb') as stream:
                 flat_ini = stream.read()
                 assert flat_ini == flat_ini_bytes()

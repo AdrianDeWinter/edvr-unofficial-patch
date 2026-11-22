@@ -88,8 +88,8 @@ build by build.bat from tools/fetch_fsr4.py. A plain install adds the ones the g
 directory lacks and leaves a foreign one alone; --fsr4 installs all three, backing
 up a foreign one; --all includes them when built; a plain --verify-only fails when
 the effective ini selects fsr4 and the DLLs are missing or differ from the build.
-This is a developer install only: the self-contained installer and the release
-packages do not carry AMD's DLLs (docs/fsr-upscaler-design-2026-09-16.md, D8).
+The release packages carry the three files, and the launcher installs them as it
+installs XeSS's; AMD's DLLs keep AMD's own signature and are never re-signed.
 
 Exit 0 when everything asked for landed and verified, 1 otherwise.
 """
@@ -145,8 +145,8 @@ FLAT_KIND = "edvr-flat"
 PROFILE_FILE = "edup_profile.ini"
 
 # AMD's FSR 4.1 runtime, staged into the build by build.bat from tools/fetch_fsr4.py: the loader the engine
-# calls, the upscaler provider beside it, and AMD's licence. (receipt key, file name), in install order. A
-# developer install only (docs/fsr-upscaler-design-2026-09-16.md, D8): no installer or package carries them.
+# calls, the upscaler provider beside it, and AMD's licence. (receipt key, file name), in install order. The
+# release packages carry them too (tools/package_native.py), and the launcher installs them as it does XeSS's.
 FSR4_FILES = (("fsr4_loader", "amd_fidelityfx_loader_dx12.dll"),
               ("fsr4_upscaler", "amd_fidelityfx_upscaler_dx12.dll"),
               ("fsr4_license", "AMD-FIDELITYFX-LICENSE.txt"))

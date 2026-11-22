@@ -26,8 +26,13 @@ D3D12 DLLs (about 29 MB) into `%LOCALAPPDATA%\EDVR\fsr4-sdk`; `third_party\fsr4`
 or `EDVR_FSR4_SDK` name another copy, and `EDVR_FSR4_SDK=none` forces the build
 without it. A build with no copy still succeeds, and `fix.temporal_aa = fsr4`
 then refuses at run time. The DLLs land in `build\` and
-`python tools\install_edup.py --fsr4` places them beside the game; the
-installer and the release packages do not carry them yet.
+`python tools\install_edup.py --fsr4` places them beside the game. A release
+carries them: `package_native.py` packs the two DLLs and
+`AMD-FIDELITYFX-LICENSE.txt` into an `ed-up-fsr4-<hash>.zip` and lists them in the
+manifest, the launcher installs them as it installs XeSS's, and packaging fails
+("the build has no AMD FSR 4 runtime") when the build has none. AMD's licence
+allows redistributing the binaries unmodified, so they keep AMD's own Authenticode
+signature and no signing step touches them.
 
 Then build:
 
@@ -226,7 +231,8 @@ log reporters get the tool's general line. Review the final notes file.
 
 Besides the two ZIPs, the package artifact carries the split assets the
 launcher updates from: `ed-up-core-<version>.zip`, an `ed-up-dlss-<hash>.zip`
-and an `ed-up-xess-<hash>.zip` when the build has those runtimes,
+an `ed-up-xess-<hash>.zip` when the build has those runtimes, an
+`ed-up-fsr4-<hash>.zip` (AMD's FSR 4 runtime, which every release has),
 `ed-up-launcher.exe` when the build has one, and two manifests. `ed-up-manifest-v2.json`
 is the schema-2 manifest launcher 0.2.0 and later read; it names them all with their
 hashes. `ed-up-manifest.json` is a schema-1 bridge: launcher 0.1.0 (shipped in v0.22.0)
@@ -274,7 +280,7 @@ $assets = @(
     "$folder/ed-up-manifest.json.sig"
     "$folder/SHA256SUMS"
 )
-$assets += Get-ChildItem "$folder/ed-up-core-$version.zip", "$folder/ed-up-dlss-*.zip", "$folder/ed-up-xess-*.zip", "$folder/ed-up-launcher.exe" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+$assets += Get-ChildItem "$folder/ed-up-core-$version.zip", "$folder/ed-up-dlss-*.zip", "$folder/ed-up-xess-*.zip", "$folder/ed-up-fsr4-*.zip", "$folder/ed-up-launcher.exe" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
 gh release create "v$version" @assets --draft --verify-tag --title "ED Unofficial Patch $version" --notes-file release-notes.md
 if ($LASTEXITCODE -ne 0) { throw 'Draft release creation failed' }
 ```
@@ -289,7 +295,7 @@ it finishes. Run `python tools\sign_manifest.py sign
 dist\ed-up-manifest-v2.json` and `... sign dist\ed-up-manifest.json`, then `python tools\sign_manifest.py verify dist`,
 and attach the files from `dist\` the same way. `package_native.py` writes the
 split zips with fixed timestamps and file order, so packaging twice gives the
-same bytes, and it removes older `ed-up-dlss-*.zip` and `ed-up-xess-*.zip` from
+same bytes, and it removes older `ed-up-dlss-*.zip`, `ed-up-xess-*.zip` and `ed-up-fsr4-*.zip` from
 `dist\` when a runtime's contents change.
 
 To sign the binaries (Authenticode, through Azure Artifact Signing), set

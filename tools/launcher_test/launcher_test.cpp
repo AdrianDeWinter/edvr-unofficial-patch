@@ -447,7 +447,7 @@ void testShapes() {
     }
     const std::wstring tableBase = P(P(g_fixtures, L"shapes"), widenUtf8(tableLabel));
     Manifest table;
-    check(loadVerifiedManifest(readAll(tableBase + L".json"), readAll(tableBase + L".sig"), g_testKeys, &table, &err) && table.files.size() == 14,
+    check(loadVerifiedManifest(readAll(tableBase + L".json"), readAll(tableBase + L".sig"), g_testKeys, &table, &err) && table.files.size() == 17,
           "the packager's file table is read whole: " + err);
     auto byId = [&](const char* id) -> const ManifestFile* {
         for (const ManifestFile& f : table.files) if (f.id == id) return &f;
