@@ -24,8 +24,16 @@ constexpr uint32_t kBoostPendingThreshold = 8u;
 
 // Frame-time thresholds (ms) where the render-thread pump boost steps down to
 // avoid amplifying stutter on tight frames.
-constexpr double kFlatTightFrameMs = 20.0;
+constexpr double kFlatTightFrameMs = 33.0;
 constexpr double kVrTightFrameMs = 11.0;
+
+// StreamCategory entry flag bitfield (build 334925, entry +0x14).
+constexpr uint32_t kFlagLoadableBit = 0x20000000u;
+
+inline bool isEntryWantLoad(float prio, uint32_t flags) noexcept {
+    const uint32_t state = (flags >> 24u) & 0x1Fu;
+    return state == 0u && prio > 0.0f && (flags & kFlagLoadableBit) != 0u;
+}
 
 // Storage bus types matching Windows STORAGE_BUS_TYPE enum values.
 constexpr uint32_t kBusTypeUsb = 7u;
@@ -170,7 +178,10 @@ inline StreamBoostPlan computeStreamBoostPlan(const SystemProfile& sys) noexcept
     plan.poolCap = std::max(kStockPoolCap, std::min(kMaxPoolCap, chosenPool));
 
     // 4. Render-thread completion pump budgets (flat vs VR, normal vs tight frame).
-    if (sys.logicalCpus >= 10u) {
+    if (sys.logicalCpus >= 16u) {
+        plan.flatPumpTimeUs = 4000u;
+        plan.flatPumpMaxIter = 256u;
+    } else if (sys.logicalCpus >= 10u) {
         plan.flatPumpTimeUs = 3500u;
         plan.flatPumpMaxIter = 256u;
     } else if (sys.logicalCpus >= 6u) {

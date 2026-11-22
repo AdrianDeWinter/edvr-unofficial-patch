@@ -80,7 +80,7 @@ void testSystemPlans() {
         CHECK(p.standDownReason == nullptr);
         CHECK(p.streamLoadCap == 127u);
         CHECK(p.poolCap == 32u);
-        CHECK(p.flatPumpTimeUs == 3500u);
+        CHECK(p.flatPumpTimeUs == 4000u);
         CHECK(p.flatPumpMaxIter == 256u);
         CHECK(p.flatTightTimeUs == 2000u);
         CHECK(p.vrPumpTimeUs == 2000u);
@@ -197,26 +197,26 @@ void testPumpBudgetSelection() {
         CHECK(b.maxIter == 64u);
     }
 
-    // Backlog via wantLoad > 64 in flat mode with headroom.
+    // Backlog via wantLoad > 64 in flat mode with headroom (including 24.5 ms spawn frames).
     {
         PumpInput in{};
         in.wantLoad = kBoostWantLoadThreshold + 1u;
         in.flatProfile = true;
-        in.frameMsEma = 12.0;
+        in.frameMsEma = 24.5;
         const PumpBudget b = selectPumpBudget(plan, in);
         CHECK(b.boosted);
         CHECK(!b.tightThrottled);
-        CHECK(b.timeUs == 3500u);
+        CHECK(b.timeUs == 4000u);
         CHECK(b.maxIter == 256u);
     }
 
-    // Backlog via pending > 8 in flat mode on tight frame (> 20 ms).
+    // Backlog via pending > 8 in flat mode on genuinely tight frame (> 33 ms / < 30 FPS).
     {
         PumpInput in{};
         in.wantLoad = 0u;
         in.pending = kBoostPendingThreshold + 1u;
         in.flatProfile = true;
-        in.frameMsEma = 24.5;
+        in.frameMsEma = 36.0;
         const PumpBudget b = selectPumpBudget(plan, in);
         CHECK(b.boosted);
         CHECK(b.tightThrottled);
@@ -286,6 +286,28 @@ void testFrameMsEma() {
     CHECK(std::fabs(ema - 11.0) < 1e-6);
 }
 
+void testEntryWantLoadFlags() {
+    // Unloaded (state 0 in bits 28..24) + loadable bit + positive prio -> true,
+    // even when unrelated lower flag bits are non-zero.
+    CHECK(isEntryWantLoad(1.0f, kFlagLoadableBit));
+    CHECK(isEntryWantLoad(0.25f, kFlagLoadableBit | 0x00000003u));
+    CHECK(isEntryWantLoad(100.0f, kFlagLoadableBit | 0x00FFFFFFu));
+
+    // Zero or negative priority -> false.
+    CHECK(!isEntryWantLoad(0.0f, kFlagLoadableBit));
+    CHECK(!isEntryWantLoad(-1.0f, kFlagLoadableBit));
+
+    // Missing loadable bit -> false.
+    CHECK(!isEntryWantLoad(1.0f, 0u));
+
+    // Non-zero states (1=req, 2=loading, 4=loaded, 5/7=unloading) -> false.
+    CHECK(!isEntryWantLoad(1.0f, kFlagLoadableBit | (1u << 24u)));
+    CHECK(!isEntryWantLoad(1.0f, kFlagLoadableBit | (2u << 24u)));
+    CHECK(!isEntryWantLoad(1.0f, kFlagLoadableBit | (4u << 24u)));
+    CHECK(!isEntryWantLoad(1.0f, kFlagLoadableBit | (5u << 24u)));
+    CHECK(!isEntryWantLoad(1.0f, kFlagLoadableBit | (7u << 24u)));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -299,6 +321,7 @@ int main(int argc, char** argv) {
     testSystemPlans();
     testPumpBudgetSelection();
     testFrameMsEma();
+    testEntryWantLoadFlags();
     std::printf("stream_boost_test: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed == 0 ? 0 : 1;
 }

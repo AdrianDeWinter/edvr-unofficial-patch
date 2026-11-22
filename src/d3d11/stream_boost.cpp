@@ -80,7 +80,6 @@ constexpr size_t kOffFresPoolFree = 0x20u;
 constexpr size_t kOffFresPoolCap = 0x28u;
 constexpr size_t kOffFresActiveCount = 0x18u;
 
-constexpr uint32_t kFlagLoadableBit = 0x20000000u;
 constexpr uint64_t kMaxPrioScan = 8192u;
 constexpr uint32_t kMaxEntryIndex = 1u << 24;
 constexpr size_t kMaxCategories = 8u;
@@ -125,6 +124,7 @@ struct BurstStats {
     uint64_t boostedCalls = 0u;
     uint64_t evictBrakes = 0u;
     uint64_t tightThrottles = 0u;
+    uint32_t maxWantLoad = 0u;
     double elapsedUsSum = 0.0;
     double elapsedUsMax = 0.0;
     uint64_t lastBoostTickMs = 0u;
@@ -420,7 +420,8 @@ __declspec(noinline) bool readCategoryQuickHeader(uintptr_t category, CategoryQu
     }
 }
 
-// Counts unloaded loadable entries, stopping as soon as count exceeds kBoostWantLoadThreshold.
+// Counts unloaded loadable entries with positive priority, stopping once count exceeds kBoostWantLoadThreshold.
+// Each 8-byte prioList item is { float prio (+0), uint32_t entryIdx (+4) }.
 __declspec(noinline) bool countWantLoadCapped(uintptr_t prioListPtr, uint64_t prioCount,
                                               uintptr_t entriesPtr, uint32_t* outCount) noexcept {
     if (!outCount) return false;
@@ -429,17 +430,19 @@ __declspec(noinline) bool countWantLoadCapped(uintptr_t prioListPtr, uint64_t pr
     const uint64_t n = prioCount > kMaxPrioScan ? kMaxPrioScan : prioCount;
     const uint32_t stopAt = kBoostWantLoadThreshold + 1u;
     __try {
-        const auto* prio = reinterpret_cast<const uint8_t*>(prioListPtr);
-        const auto* entries = reinterpret_cast<const uint8_t*>(entriesPtr);
+        const auto* prioBase = reinterpret_cast<const uint8_t*>(prioListPtr);
+        const auto* entriesBase = reinterpret_cast<const uint8_t*>(entriesPtr);
         uint32_t want = 0u;
         for (uint64_t i = 0; i < n; ++i) {
-            uint32_t idx = 0;
-            std::memcpy(&idx, prio + i * kPrioStride, sizeof(idx));
-            if (idx >= kMaxEntryIndex) continue;
-            uint32_t flags = 0;
-            std::memcpy(&flags, entries + static_cast<size_t>(idx) * kEntryStride + kOffEntryFlags, sizeof(flags));
-            if ((flags & kFlagLoadableBit) == 0u) continue;
-            if ((flags & 3u) == 0u) {
+            const uint8_t* item = prioBase + i * kPrioStride;
+            float prio = 0.0f;
+            uint32_t entryIdx = 0u;
+            std::memcpy(&prio, item, sizeof(prio));
+            std::memcpy(&entryIdx, item + 4u, sizeof(entryIdx));
+            if (entryIdx >= kMaxEntryIndex) continue;
+            uint32_t flags = 0u;
+            std::memcpy(&flags, entriesBase + static_cast<size_t>(entryIdx) * kEntryStride + kOffEntryFlags, sizeof(flags));
+            if (isEntryWantLoad(prio, flags)) {
                 ++want;
                 if (want >= stopAt) break;
             }
@@ -473,16 +476,15 @@ __declspec(noinline) uint32_t countPendingCapped(uintptr_t exeBase, uint32_t lim
         std::memcpy(&mgr, reinterpret_cast<const void*>(service + kOffFresServiceMgr), sizeof(mgr));
         if (mgr < kMinValidPtr) return 0u;
 
-        const uintptr_t sentinel = mgr + kOffFresMgrPendingHead;
-        uintptr_t cur = 0;
-        std::memcpy(&cur, reinterpret_cast<const void*>(sentinel), sizeof(cur));
+        uintptr_t node = 0;
+        std::memcpy(&node, reinterpret_cast<const void*>(mgr + kOffFresMgrPendingHead), sizeof(node));
         uint32_t count = 0u;
-        while (cur >= kMinValidPtr && cur != sentinel && count < limit) {
-            ++count;
+        while (node >= kMinValidPtr && count < limit) {
             uintptr_t next = 0;
-            std::memcpy(&next, reinterpret_cast<const void*>(cur), sizeof(next));
-            if (next == cur) break;
-            cur = next;
+            std::memcpy(&next, reinterpret_cast<const void*>(node), sizeof(next));
+            if (next < kMinValidPtr || next == node) break;
+            ++count;
+            node = next;
         }
         return count;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -663,6 +665,7 @@ __declspec(noinline) void __fastcall fresPumpDetour(uintptr_t owner, const uint3
     if (!g_burstLock.test_and_set(std::memory_order_acquire)) {
         g_burst.boostedCalls += 1u;
         if (chosen.tightThrottled) g_burst.tightThrottles += 1u;
+        if (wantLoad > g_burst.maxWantLoad) g_burst.maxWantLoad = wantLoad;
         g_burst.elapsedUsSum += elapsedUs;
         if (elapsedUs > g_burst.elapsedUsMax) g_burst.elapsedUsMax = elapsedUs;
         g_burst.lastBoostTickMs = GetTickCount64();
@@ -720,8 +723,9 @@ void flushBurstReportIfReady(uint64_t nowMs, bool force) noexcept {
         : 0.0;
     const double maxMs = snap.elapsedUsMax / 1000.0;
     Log::get().note(
-        "stream_boost: load burst finished (boostedCalls=%llu avg=%.2fms max=%.2fms tight=%llu evictBrake=%llu profile=%s)",
+        "stream_boost: load burst finished (boostedCalls=%llu maxWant=%u avg=%.2fms max=%.2fms tight=%llu evictBrake=%llu profile=%s)",
         static_cast<unsigned long long>(snap.boostedCalls),
+        static_cast<unsigned>(snap.maxWantLoad),
         avgMs,
         maxMs,
         static_cast<unsigned long long>(snap.tightThrottles),
