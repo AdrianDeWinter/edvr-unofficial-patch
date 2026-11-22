@@ -6711,8 +6711,15 @@ void testEdhm2dMigoto() {
             check(readD3dxKey(ini, "System", "load_library_redirect").value == "2" &&
                       readD3dxKey(ini, "System", "allow_platform_update").value == "0" &&
                       readD3dxKey(ini, "Device", "upscaling").value == "1" &&
-                      readEdhmHideReloadMessages(ini) && readEdhmHideWarnings(ini),
-                  "elevated opt-out restored original d3dx.ini compat keys while preserving [Logging] toggles");
+                      !readEdhmHideReloadMessages(ini) && !readEdhmHideWarnings(ini) &&
+                      readD3dxKey(ini, "Logging", "show_warnings").value == "1",
+                  "elevated opt-out restored original d3dx.ini compat and backed-up [Logging] keys");
+        }
+        {
+            ApplyOutcome blockedLog;
+            auto lr = runLogging("show_reload_message", true, &blockedLog);
+            check(lr.second && lr.first == 1 && blockedLog.status == ApplyOutcome::Status::Blocked,
+                  "elevated edhm_logging blocks when 2DMigoto is not active");
         }
 
         // Re-enable via elevated edhm_apply, simulate AV deleting d3d11_edhm.dll, then payload-free elevated edhm_restore restores both DLL & d3dx.ini!
@@ -6838,6 +6845,55 @@ void testEdhm2dMigoto() {
                 check(corruptCheck.outcome == UpdateOutcome::Available,
                       "updater.check() offers Available when opted-in cache file is same-length corrupt");
             }
+        }
+
+        // Sean #6: opted-in user whose optional EDHM zip download/verification fails (e.g. AV quarantine)
+        // STILL downloads and adopts the core ED-UP update cleanly, surfacing a non-fatal warning.
+        {
+            const std::wstring base6 = fresh("edhm-optin-nonfatal-update");
+            const LauncherRoots roots6 = launcherRoots(base6);
+            std::string err6;
+            {
+                CreateDirectoryW(roots6.launcherDir().c_str(), nullptr);
+                LauncherState st6;
+                st6.load(P(roots6.launcherDir(), L"launcher.ini"), nullptr);
+                st6.setEdhm2dMigoto(true);
+                check(st6.save(&err6), "saves edhm_2dmigoto=on for non-fatal opt-in update test: " + err6);
+            }
+            ScriptedHttp http6;
+            http6.replies[latestUrl()] = ok(releaseJson(rel), "\"etag-edhm-6\"");
+            serveRelease(&http6, rel);
+            // Break ONLY the optional EDHM asset download (simulating AV/network failure on that zip).
+            std::string edhmAssetName;
+            for (const ManifestAsset& a : rel.manifest.assets) {
+                if (a.name.rfind("ed-up-edhm-", 0) == 0) { edhmAssetName = a.name; break; }
+            }
+            check(!edhmAssetName.empty(), "schema-3 fixture has ed-up-edhm-* asset");
+            Reply brokenOptIn;
+            brokenOptIn.status = 500;
+            http6.replies[kDownloads + rel.name + "/" + edhmAssetName] = brokenOptIn;
+            Updater up6(http6, settingsFor(base6));
+            const UpdateCheck c6 = up6.check();
+            check(c6.outcome == UpdateOutcome::Available, "check sees schema-3 release with broken EDHM asset");
+            std::string optInWarn6;
+            check(up6.downloadUpdate(c6, nullptr, {}, &err6, nullptr, &optInWarn6),
+                  "downloadUpdate still succeeds for core files when opt-in EDHM asset fails: " + err6);
+            check(!optInWarn6.empty(),
+                  "downloadUpdate reports non-fatal opt-in warning when EDHM asset fails");
+            check(up6.commitManifest(c6, &err6),
+                  "commitManifest adopts core ED-UP release even when opt-in EDHM blob is missing: " + err6);
+            Manifest m6;
+            std::vector<PayloadFile> f6;
+            check(up6.loadCurrentManifest(&m6, &f6, &err6),
+                  "loadCurrentManifest succeeds for core files after non-fatal opt-in failure: " + err6);
+            bool hasCore6 = false;
+            bool hasEdhm6 = false;
+            for (const PayloadFile& pf : f6) {
+                if (pf.id == "graphics") hasCore6 = true;
+                if (pf.id == "edhm_2dmigoto") hasEdhm6 = true;
+            }
+            check(hasCore6 && !hasEdhm6,
+                  "adopted release has core files ready and omits unavailable opt-in EDHM file");
         }
     }
 }

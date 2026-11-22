@@ -203,20 +203,25 @@ void LauncherSession::beginUpdate() {
         }
         Updater updater(*http, settings);
         std::set<std::string> verified;
-        if (!updater.downloadUpdate(check, &cancel_, progress, &error, &verified) ||
+        std::string optInWarning;
+        if (!updater.downloadUpdate(check, &cancel_, progress, &error, &verified, &optInWarning) ||
             !updater.commitManifest(check, &error, &verified)) {
             post([this, error]() { updateFailed("the update did not finish: " + error); });
             return;
         }
         // The payload the window installs from is now the adopted manifest, not a --payload folder.
         const PayloadLoad load = loadLauncherPayload(roots, std::wstring(), settings.keys);
-        post([this, load]() {
+        post([this, load, optInWarning]() {
             updating_ = false;
             payloadLoaded(load);
             if (!load.ok) {
                 updateLine_ = sentence("the update was downloaded but could not be switched to: " + load.note);
                 changed();
                 return;
+            }
+            if (!optInWarning.empty() ||
+                (edhm2dMigoto_ && load.hasOptInEdhmAsset && payloadInfo().find("edhm_2dmigoto") == nullptr)) {
+                edhmWarning_ = kEdhmInterferenceWarning;
             }
             updateLine_ = "ED-UP " + check_.manifest.version + " is ready to install.";
             checkState_ = CheckState::UpToDate;

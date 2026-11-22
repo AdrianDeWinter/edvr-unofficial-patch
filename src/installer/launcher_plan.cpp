@@ -158,36 +158,6 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
     if (!described)
         return failed("there is no EliteDangerous64.exe in the game folder the plan names");
 
-    if (file.action == "edhm_logging") {
-        if (file.d3dxLoggingKey != "show_reload_message" && file.d3dxLoggingKey != "show_warnings")
-            return failed("the plan names an unknown d3dx.ini logging key");
-        const std::wstring d3dxPath = joinPath(game.dir, L"d3dx.ini");
-        const DWORD attrs = GetFileAttributesW(d3dxPath.c_str());
-        if (attrs == INVALID_FILE_ATTRIBUTES)
-            return failed("d3dx.ini was not found in the selected game folder");
-        if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0 || (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0)
-            return failed("d3dx.ini is a link or folder; the installer will not write through it");
-        std::string current;
-        if (!edvr::readFileBytes(d3dxPath, &current))
-            return failed("d3dx.ini could not be read");
-        const std::string updated = file.d3dxLoggingKey == "show_warnings"
-                                        ? setEdhmHideWarnings(current, file.d3dxHideFlag)
-                                        : setEdhmHideReloadMessages(current, file.d3dxHideFlag);
-        const char* valStr = file.d3dxHideFlag ? "0" : "1";
-        ApplyOutcome outcome;
-        if (updated == current) {
-            outcome.status = ApplyOutcome::Status::NothingToDo;
-            outcome.lines.push_back("d3dx.ini already has " + file.d3dxLoggingKey + " = " + valStr + ".");
-            return outcome;
-        }
-        std::wstring writeErr;
-        if (!edvr::writeFileAtomic(d3dxPath, updated, &writeErr))
-            return failed("d3dx.ini could not be updated" +
-                          (writeErr.empty() ? std::string() : (": " + narrowUtf8(writeErr))));
-        outcome.status = ApplyOutcome::Status::Done;
-        outcome.lines.push_back("Updated d3dx.ini [Logging] " + file.d3dxLoggingKey + " = " + valStr + ".");
-        return outcome;
-    }
     const std::wstring mirrorDir = mirrorDirFor(game, paths.dataRoot);
     // This copy is elevated and writes, restores and removes the live settings in this per-install folder, which the
     // user owns: a link there would send those writes somewhere else, as planPathsFor refuses for the folders above it.
@@ -195,17 +165,20 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
         return failed("the settings folder for this game is a link; the installer will not write through it");
 
     Survey survey = surveyTarget(game, mirrorDir);
-    if (file.action == "edhm_apply" || file.action == "edhm_restore" || file.action == "edhm_dismiss") {
+    if (file.action == "edhm_apply" || file.action == "edhm_restore" || file.action == "edhm_dismiss" ||
+        file.action == "edhm_logging") {
         Options edhmOpts;
         edhmOpts.edhm2dMigoto = file.action == "edhm_apply";
         edhmOpts.backupStamp = timestampName();
         edhmOpts.nowUtc = utcNow();
         edhmOpts.settingsDir = mirrorDir;
-        const Plan plan = file.action == "edhm_dismiss"
-                              ? planEdhmDismiss(survey, edhmOpts)
-                              : file.action == "edhm_restore"
-                                    ? planEdhmRestore(survey, edhmOpts)
-                                    : planEdhmToggle(survey, edhmOpts, payloadInfo());
+        const Plan plan = file.action == "edhm_logging"
+                              ? planEdhmLogging(survey, edhmOpts, file.d3dxLoggingKey, file.d3dxHideFlag)
+                              : file.action == "edhm_dismiss"
+                                    ? planEdhmDismiss(survey, edhmOpts)
+                                    : file.action == "edhm_restore"
+                                          ? planEdhmRestore(survey, edhmOpts)
+                                          : planEdhmToggle(survey, edhmOpts, payloadInfo());
         if (plan.blocked) {
             ApplyOutcome blocked;
             blocked.status = ApplyOutcome::Status::Blocked;

@@ -167,9 +167,13 @@ int runUpdateCommand(const AppArgs& args, Output& out) {
         out.line("Downloading " + name);
     };
     std::set<std::string> verified;
-    if (!updater.downloadUpdate(check, nullptr, progress, &error, &verified)) {
+    std::string optInWarning;
+    if (!updater.downloadUpdate(check, nullptr, progress, &error, &verified, &optInWarning)) {
         out.line("The download did not finish: " + error);
         return 1;
+    }
+    if (!optInWarning.empty()) {
+        out.line("Warning: optional EDHM 2DMigoto asset was skipped (" + optInWarning + "); continuing with core ED-UP.");
     }
     const bool wantOptIn = state.edhm2dMigoto();
     PayloadCache cache(roots.cacheDir());
@@ -177,6 +181,10 @@ int runUpdateCommand(const AppArgs& args, Output& out) {
         if (!wantOptIn && !f.when.option.empty()) continue;
         const bool ok = verified.find(f.sha256) != verified.end() ? cache.hasSized(f.sha256, f.size)
                                                                   : cache.hasVerified(f.sha256, f.size);
+        if (!ok && !f.when.option.empty()) {
+            out.line("  WARNING (opt-in unavailable) " + f.path + "  " + f.sha256);
+            continue;
+        }
         out.line(std::string(ok ? "  verified " : "  NOT VERIFIED ") + f.path + "  " + f.sha256);
         if (!ok) return 1;
     }

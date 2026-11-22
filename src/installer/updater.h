@@ -96,7 +96,8 @@ public:
     // receives the sha256 hashes verified during this call so commitManifest can
     // skip a second full-file hash pass immediately after.
     bool downloadUpdate(const UpdateCheck& check, const std::atomic<bool>* cancel, const DownloadProgress& progress,
-                        std::string* error, std::set<std::string>* verifiedOut = nullptr);
+                        std::string* error, std::set<std::string>* verifiedOut = nullptr,
+                        std::string* optInWarningOut = nullptr);
 
     // Adopts a checked manifest whose files are all in the cache: saves it as
     // manifests\<sha>.json and .sig, makes it current, raises highest_issued, keeps

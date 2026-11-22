@@ -599,11 +599,13 @@ if defined EDHM2DM (
     copy /Y "%EDHM2DM%\bin\d3d11_edhm.dll" "%BUILD%\d3d11_edhm.dll" >nul || exit /b 1
     copy /Y "%EDHM2DM%\LICENSE.GPL.txt" "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt" >nul || exit /b 1
     copy /Y "%EDHM2DM%\EDHM-2DMIGOTO-THIRD-PARTY.txt" "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt" >nul || exit /b 1
+    copy /Y "%EDHM2DM%\ed-up-edhm-source-0.1.8.tar.gz" "%BUILD%\ed-up-edhm-source-0.1.8.tar.gz" >nul || exit /b 1
     echo [edvr] EDHM_2DMigoto runtime: %EDHM2DM%
 ) else (
     if exist "%BUILD%\d3d11_edhm.dll" del /q "%BUILD%\d3d11_edhm.dll"
     if exist "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt" del /q "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt"
     if exist "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt" del /q "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt"
+    if exist "%BUILD%\ed-up-edhm-source-0.1.8.tar.gz" del /q "%BUILD%\ed-up-edhm-source-0.1.8.tar.gz"
     echo [edvr] NO EDHM_2DMigoto runtime staged. Optional EDHM 2DMigoto asset will be omitted. Fetch with tools\fetch_edhm_2dmigoto.py.
 )
 

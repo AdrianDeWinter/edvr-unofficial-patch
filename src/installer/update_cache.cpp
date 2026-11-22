@@ -104,11 +104,13 @@ void PayloadCache::removeTemporaries() const {
 bool PayloadCache::ensureFiles(const Manifest& manifest, const AssetFetcher& fetcher, std::string* error,
                                std::vector<std::string>* fetchedAssets,
                                std::set<std::string>* verifiedOut,
-                               bool includeOptIn) {
+                               bool includeOptIn,
+                               std::string* optInWarningOut) {
     if (!createDirectories(root_)) return setError(error, "the payload folder cannot be created");
     removeTemporaries();
     if (fetchedAssets) fetchedAssets->clear();
     if (verifiedOut) verifiedOut->clear();
+    if (optInWarningOut) optInWarningOut->clear();
 
     std::set<std::string> verified;
     int index = 0;
@@ -127,12 +129,22 @@ bool PayloadCache::ensureFiles(const Manifest& manifest, const AssetFetcher& fet
         }
         if (missing.empty()) continue;
 
+        bool assetOnlyOptIn = true;
+        for (const ManifestFile* f : missing) {
+            if (f->when.option.empty()) { assetOnlyOptIn = false; break; }
+        }
+
         const std::wstring zipPath = temporaryPath("asset-" + std::to_string(index));
         auto discard = [&]() { DeleteFileW(zipPath.c_str()); };
         std::string fetchError;
         if (!fetcher(asset, zipPath, &fetchError)) {
             discard();
-            return setError(error, asset.name + ": " + (fetchError.empty() ? std::string("the download failed") : fetchError));
+            const std::string msg = asset.name + ": " + (fetchError.empty() ? std::string("the download failed") : fetchError);
+            if (assetOnlyOptIn && fetchError != "cancelled") {
+                if (optInWarningOut && optInWarningOut->empty()) *optInWarningOut = msg;
+                continue;
+            }
+            return setError(error, msg);
         }
         if (fetchedAssets) fetchedAssets->push_back(asset.name);
 
@@ -140,11 +152,21 @@ bool PayloadCache::ensureFiles(const Manifest& manifest, const AssetFetcher& fet
         unsigned long long size = 0;
         if (!fileSizeOf(zipPath, &size) || size != asset.size) {
             discard();
-            return setError(error, asset.name + ": the download is not the size the manifest lists");
+            const std::string msg = asset.name + ": the download is not the size the manifest lists";
+            if (assetOnlyOptIn) {
+                if (optInWarningOut && optInWarningOut->empty()) *optInWarningOut = msg;
+                continue;
+            }
+            return setError(error, msg);
         }
         if (sha256File(zipPath) != asset.sha256) {
             discard();
-            return setError(error, asset.name + ": the download does not match the manifest's hash");
+            const std::string msg = asset.name + ": the download does not match the manifest's hash";
+            if (assetOnlyOptIn) {
+                if (optInWarningOut && optInWarningOut->empty()) *optInWarningOut = msg;
+                continue;
+            }
+            return setError(error, msg);
         }
 
         std::string problem;
@@ -175,7 +197,13 @@ bool PayloadCache::ensureFiles(const Manifest& manifest, const AssetFetcher& fet
             }
         }
         discard();
-        if (!problem.empty()) return setError(error, problem);
+        if (!problem.empty()) {
+            if (assetOnlyOptIn) {
+                if (optInWarningOut && optInWarningOut->empty()) *optInWarningOut = problem;
+                continue;
+            }
+            return setError(error, problem);
+        }
     }
     if (verifiedOut) *verifiedOut = std::move(verified);
     return true;

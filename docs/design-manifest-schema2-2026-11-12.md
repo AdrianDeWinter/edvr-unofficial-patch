@@ -333,3 +333,19 @@ it, and a schema-1 manifest cannot carry what the schema-2 engine installs).
 
 Open: the bridge is kept until the maintainer decides that no 0.1.0 launcher is
 worth stranding. Not flown: a 0.1.0 launcher against a signed bridge.
+
+## 2026-11-22: schema 3 and `existing = opt_in`
+
+Schema 3 (`ed-up-manifest-v3.json`) extends schema 2 with `when.option` and
+`existing = opt_in` for the optional tailored 2DMigoto EDHM runtime
+(`game/d3d11_edhm.dll`). Releases keep emitting an unchanged
+`ed-up-manifest-v2.json` alongside schema 3 so `v0.22.x` launchers continue to
+update without rejecting unknown manifest keys or `existing` modes.
+
+Backward-compatibility note on `state.ini`: older planners (`v0.22.x`) do not
+recognise `existing = opt_in` and drop such `[file.*]` sections into
+`refusedRecords` (losing `before_sha256` and `backup` if they overwrite
+`state.ini`). Because `ed-up-manifest-v2.json` self-updates `v0.22.x`
+launchers to the schema-3 launcher before any `opt_in` file can be installed,
+an older planner will not encounter an active `opt_in` record unless someone
+deliberately downgrades the launcher binary.

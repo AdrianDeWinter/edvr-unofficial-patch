@@ -327,7 +327,8 @@ UpdateCheck Updater::check() {
 
 bool Updater::downloadUpdate(const UpdateCheck& check, const std::atomic<bool>* cancel,
                              const DownloadProgress& progress, std::string* error,
-                             std::set<std::string>* verifiedOut) {
+                             std::set<std::string>* verifiedOut,
+                             std::string* optInWarningOut) {
     if (check.outcome != UpdateOutcome::Available) {
         if (error) *error = "there is no update to download";
         return false;
@@ -363,7 +364,7 @@ bool Updater::downloadUpdate(const UpdateCheck& check, const std::atomic<bool>* 
     };
     LauncherState state;
     const bool wantOptIn = state.load(statePath(), nullptr) && state.edhm2dMigoto();
-    return cache.ensureFiles(check.manifest, fetcher, error, nullptr, verifiedOut, wantOptIn);
+    return cache.ensureFiles(check.manifest, fetcher, error, nullptr, verifiedOut, wantOptIn, optInWarningOut);
 }
 
 bool Updater::commitManifest(const UpdateCheck& check, std::string* error,
@@ -380,10 +381,11 @@ bool Updater::commitManifest(const UpdateCheck& check, std::string* error,
 
     LauncherState state;
     if (!state.load(statePath(), error)) return false;
-    const bool wantOptIn = state.edhm2dMigoto();
 
+    // Require every core file in the cache, but never block adopting a core ED-UP update
+    // when an optional opt-in file (such as EDHM 2DMigoto) is missing or quarantined.
     PayloadCache cache(settings_.cacheDir);
-    if (!cache.hasAll(verified, preVerified, wantOptIn))
+    if (!cache.hasAll(verified, preVerified, false))
         return fail("the payload cache does not hold every file of this release yet");
 
     const std::wstring dir = joinPath(settings_.launcherDir, L"manifests");

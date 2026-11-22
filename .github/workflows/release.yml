@@ -335,6 +335,11 @@ jobs:
           $names += 'ed-up-manifest.json'
           $names += @($manifest.assets | ForEach-Object { $_.name })
           if ($manifest.launcher) { $names += $manifest.launcher.asset }
+          if (@($manifest.assets | Where-Object { $_.name -like 'ed-up-edhm-*.zip' }).Count -gt 0) {
+            $edhmSrc = @(Get-ChildItem 'dist\ed-up-edhm-source-*.tar.gz' -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+            if ($edhmSrc.Count -ne 1) { throw "Expected one dist/ed-up-edhm-source-*.tar.gz archive beside ed-up-edhm-*.zip, found $($edhmSrc.Count)" }
+            $names += $edhmSrc
+          }
           # package_native.py writes SHA256SUMS. Check it lists exactly these names,
           # each with its file's hash, so the packager and this list cannot drift apart.
           $sumsPath = Join-Path 'dist' 'SHA256SUMS'
@@ -398,6 +403,7 @@ jobs:
           if-no-files-found: error
           path: |
             dist/ed-up-*.zip
+            dist/ed-up-edhm-source-*.tar.gz
             dist/ed-up-manifest-v3.json
             dist/ed-up-manifest-v2.json
             dist/ed-up-manifest.json

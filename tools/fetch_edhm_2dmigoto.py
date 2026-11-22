@@ -30,6 +30,7 @@ COMMIT = "2cbeaa381c57f4848144d3a1510ed34f8f41f0e5"
 SOURCE_TREE_URL = "https://github.com/%s/tree/%s" % (REPO, COMMIT)
 SOURCE_ARCHIVE_URL = "https://github.com/%s/archive/%s.tar.gz" % (REPO, COMMIT)
 SOURCE_ARCHIVE_SHA256 = "17bfffe33ff43439a72e003c87c530dfcf07aa4c19950fa3e8d027a57a4e1401"
+SOURCE_ARCHIVE_NAME = "ed-up-edhm-source-%s.tar.gz" % VERSION
 RELEASE_URL = "https://github.com/%s/releases/download/%s" % (REPO, TAG)
 RAW_URL = "https://raw.githubusercontent.com/%s/%s" % (REPO, COMMIT)
 
@@ -38,6 +39,10 @@ FILES = {
     "bin/d3d11_edhm.dll": (
         RELEASE_URL + "/d3d11_edhm.dll",
         "3480813a4ecffce90c7b29e57b62788ea0b1a6aff5be06120cdf237fea054eb4",
+    ),
+    SOURCE_ARCHIVE_NAME: (
+        SOURCE_ARCHIVE_URL,
+        SOURCE_ARCHIVE_SHA256,
     ),
     "LICENSE.GPL.txt": (
         RAW_URL + "/LICENSE.GPL.txt",

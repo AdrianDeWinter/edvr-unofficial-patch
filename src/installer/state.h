@@ -46,16 +46,24 @@ struct EdhmD3dxKeyBackup {
     }
 };
 
-// Backed-up d3dx.ini keys modified when the experimental EDHM 2DMigoto option is enabled,
-// so disabling it (or uninstalling) restores only those keys without clobbering other d3dx.ini edits.
+// Backed-up d3dx.ini keys modified while the experimental EDHM 2DMigoto option is managed,
+// so disabling it, standing down, or uninstalling restores only keys ED-UP changed without
+// clobbering later user/EDHM-UI edits.
 struct EdhmD3dxBackup {
-    bool              saved = false;
-    EdhmD3dxKeyBackup loadLibraryRedirect;  // [System] load_library_redirect
-    EdhmD3dxKeyBackup allowPlatformUpdate;  // [System] allow_platform_update
-    EdhmD3dxKeyBackup upscaling;            // [Device] upscaling
+    bool              saved = false;               // compat keys (load_library_redirect, allow_platform_update, upscaling)
+    EdhmD3dxKeyBackup loadLibraryRedirect;         // [System] load_library_redirect
+    EdhmD3dxKeyBackup allowPlatformUpdate;         // [System] allow_platform_update
+    EdhmD3dxKeyBackup upscaling;                   // [Device] upscaling
+    bool              loggingReloadSaved = false;  // [Logging] show_reload_message
+    EdhmD3dxKeyBackup showReloadMessage;
+    bool              loggingWarningsSaved = false; // [Logging] show_warnings
+    EdhmD3dxKeyBackup showWarnings;
+    bool anySaved() const { return saved || loggingReloadSaved || loggingWarningsSaved; }
     bool operator==(const EdhmD3dxBackup& o) const {
         return saved == o.saved && loadLibraryRedirect == o.loadLibraryRedirect &&
-               allowPlatformUpdate == o.allowPlatformUpdate && upscaling == o.upscaling;
+               allowPlatformUpdate == o.allowPlatformUpdate && upscaling == o.upscaling &&
+               loggingReloadSaved == o.loggingReloadSaved && showReloadMessage == o.showReloadMessage &&
+               loggingWarningsSaved == o.loggingWarningsSaved && showWarnings == o.showWarnings;
     }
 };
 

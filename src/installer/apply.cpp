@@ -301,7 +301,15 @@ ApplyResult applyPlan(const Plan& plan, const PayloadProvider& payload) {
                     break;
                 }
                 const bool existed = fileExists(step.to);
-                clearReadOnly(step.to);
+                if (step.refuseReadOnly && existed) {
+                    const DWORD attrs = GetFileAttributesW(step.to.c_str());
+                    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY) != 0) {
+                        fail(step.to, ERROR_ACCESS_DENIED);
+                        break;
+                    }
+                } else {
+                    clearReadOnly(step.to);
+                }
                 if (existed && !protectTarget(step.to)) { fail(step.to, err); break; }
                 if (!writeWholeFile(step.to, data, size, &err)) {
                     fail(step.to, err);
@@ -326,7 +334,15 @@ ApplyResult applyPlan(const Plan& plan, const PayloadProvider& payload) {
                     }
                 }
                 const bool existed = fileExists(step.to);
-                clearReadOnly(step.to);
+                if (step.refuseReadOnly && existed) {
+                    const DWORD attrs = GetFileAttributesW(step.to.c_str());
+                    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY) != 0) {
+                        fail(step.to, ERROR_ACCESS_DENIED);
+                        break;
+                    }
+                } else {
+                    clearReadOnly(step.to);
+                }
                 if (existed && !protectTarget(step.to)) { fail(step.to, err); break; }
                 if (!writeWholeFile(step.to, step.text.data(), step.text.size(), &err)) {
                     fail(step.to, err);

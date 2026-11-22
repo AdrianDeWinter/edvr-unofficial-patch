@@ -57,7 +57,8 @@ public:
     bool ensureFiles(const Manifest& manifest, const AssetFetcher& fetcher, std::string* error,
                      std::vector<std::string>* fetchedAssets = nullptr,
                      std::set<std::string>* verifiedOut = nullptr,
-                     bool includeOptIn = true);
+                     bool includeOptIn = true,
+                     std::string* optInWarningOut = nullptr);
 
     // Removes every cached file no manifest in `keep` lists, and any leftover
     // temporary file. Files whose names are not hashes are left alone.

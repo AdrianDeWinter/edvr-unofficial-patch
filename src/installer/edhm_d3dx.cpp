@@ -143,8 +143,18 @@ ParsedKeyLine parseKeyLine(const std::string& body) {
 
 }  // namespace
 
+bool isUtf16D3dx(const std::string& bytes) {
+    if (bytes.size() >= 2) {
+        const unsigned char b0 = static_cast<unsigned char>(bytes[0]);
+        const unsigned char b1 = static_cast<unsigned char>(bytes[1]);
+        if ((b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF)) return true;
+    }
+    return bytes.find('\0') != std::string::npos;
+}
+
 D3dxKeyRead readD3dxKey(const std::string& iniText, const char* section, const char* key) {
     D3dxKeyRead result;
+    if (isUtf16D3dx(iniText)) return result;
     bool hasBom = false;
     std::string defaultEol;
     const std::vector<RawLine> lines = splitLines(iniText, &hasBom, &defaultEol);
@@ -168,12 +178,14 @@ D3dxKeyRead readD3dxKey(const std::string& iniText, const char* section, const c
 
 std::string setD3dxKey(const std::string& iniText, const char* section, const char* key,
                        const std::string& value) {
+    if (isUtf16D3dx(iniText)) return iniText;
     bool hasBom = false;
     std::string defaultEol;
     std::vector<RawLine> lines = splitLines(iniText, &hasBom, &defaultEol);
 
     std::string curSection;
-    bool updatedActive = false;
+    size_t lastActiveMatch = static_cast<size_t>(-1);
+    ParsedKeyLine lastActiveParsed;
     size_t lastCommentedMatch = static_cast<size_t>(-1);
     size_t lastSectionEnd = static_cast<size_t>(-1);
     bool inTargetSection = false;
@@ -190,8 +202,8 @@ std::string setD3dxKey(const std::string& iniText, const char* section, const ch
         const ParsedKeyLine parsed = parseKeyLine(lines[i].body);
         if (parsed.isKey && asciiEq(parsed.key, key)) {
             if (!parsed.commented) {
-                lines[i].body = parsed.prefix + value + parsed.inlineComment;
-                updatedActive = true;
+                lastActiveMatch = i;
+                lastActiveParsed = parsed;
             } else {
                 lastCommentedMatch = i;
             }
@@ -199,7 +211,10 @@ std::string setD3dxKey(const std::string& iniText, const char* section, const ch
     }
     if (inTargetSection) lastSectionEnd = lines.size();
 
-    if (updatedActive) return joinLines(lines, hasBom);
+    if (lastActiveMatch != static_cast<size_t>(-1)) {
+        lines[lastActiveMatch].body = lastActiveParsed.prefix + value + lastActiveParsed.inlineComment;
+        return joinLines(lines, hasBom);
+    }
 
     const std::string newBody = std::string(key) + " = " + value;
     if (lastCommentedMatch != static_cast<size_t>(-1)) {
@@ -244,29 +259,28 @@ std::string setD3dxKey(const std::string& iniText, const char* section, const ch
 }
 
 std::string removeD3dxKey(const std::string& iniText, const char* section, const char* key) {
+    if (isUtf16D3dx(iniText)) return iniText;
     bool hasBom = false;
     std::string defaultEol;
     std::vector<RawLine> lines = splitLines(iniText, &hasBom, &defaultEol);
 
-    std::vector<RawLine> kept;
-    kept.reserve(lines.size());
     std::string curSection;
-    for (RawLine& line : lines) {
+    size_t lastActiveMatch = static_cast<size_t>(-1);
+    for (size_t i = 0; i < lines.size(); ++i) {
         std::string sec;
-        if (parseSectionHeader(line.body, &sec)) {
+        if (parseSectionHeader(lines[i].body, &sec)) {
             curSection = sec;
-            kept.push_back(std::move(line));
             continue;
         }
-        if (asciiEq(curSection, section)) {
-            const ParsedKeyLine parsed = parseKeyLine(line.body);
-            if (parsed.isKey && !parsed.commented && asciiEq(parsed.key, key)) {
-                continue;
-            }
+        if (!asciiEq(curSection, section)) continue;
+        const ParsedKeyLine parsed = parseKeyLine(lines[i].body);
+        if (parsed.isKey && !parsed.commented && asciiEq(parsed.key, key)) {
+            lastActiveMatch = i;
         }
-        kept.push_back(std::move(line));
     }
-    return joinLines(kept, hasBom);
+    if (lastActiveMatch == static_cast<size_t>(-1)) return iniText;
+    lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(lastActiveMatch));
+    return joinLines(lines, hasBom);
 }
 
 EdhmD3dxBackup snapshotEdhmD3dxCompat(const std::string& iniText) {
@@ -294,16 +308,39 @@ std::string applyEdhmD3dxCompat(const std::string& iniText) {
 }
 
 std::string restoreEdhmD3dxCompat(const std::string& iniText, const EdhmD3dxBackup& backup) {
-    if (!backup.saved) return iniText;
-    auto restoreOne = [](const std::string& text, const char* section, const char* key,
-                         const EdhmD3dxKeyBackup& saved) {
+    if (!backup.anySaved() || isUtf16D3dx(iniText)) return iniText;
+    auto restoreIfStillOurs = [](const std::string& text, const char* section, const char* key,
+                                 const EdhmD3dxKeyBackup& saved, const char* expectedEdupValue) {
+        const D3dxKeyRead cur = readD3dxKey(text, section, key);
+        if (!cur.present || cur.value != expectedEdupValue) return text;
         return saved.present ? setD3dxKey(text, section, key, saved.value)
                              : removeD3dxKey(text, section, key);
     };
-    std::string out = restoreOne(iniText, "System", "load_library_redirect", backup.loadLibraryRedirect);
-    out = restoreOne(out, "System", "allow_platform_update", backup.allowPlatformUpdate);
-    out = restoreOne(out, "Device", "upscaling", backup.upscaling);
+    std::string out = iniText;
+    if (backup.saved) {
+        out = restoreIfStillOurs(out, "System", "load_library_redirect", backup.loadLibraryRedirect, "0");
+        out = restoreIfStillOurs(out, "System", "allow_platform_update", backup.allowPlatformUpdate, "1");
+        out = restoreIfStillOurs(out, "Device", "upscaling", backup.upscaling, "0");
+    }
+    if (backup.loggingReloadSaved) {
+        out = restoreIfStillOurs(out, "Logging", "show_reload_message", backup.showReloadMessage, "0");
+    }
+    if (backup.loggingWarningsSaved) {
+        out = restoreIfStillOurs(out, "Logging", "show_warnings", backup.showWarnings, "0");
+    }
     return out;
+}
+
+std::string restoreEdhmLoggingKey(const std::string& iniText, const char* key,
+                                  const EdhmD3dxKeyBackup& saved, bool hasSaved) {
+    if (isUtf16D3dx(iniText)) return iniText;
+    if (hasSaved) {
+        const D3dxKeyRead cur = readD3dxKey(iniText, "Logging", key);
+        if (!cur.present || cur.value != "0") return iniText;
+        return saved.present ? setD3dxKey(iniText, "Logging", key, saved.value)
+                             : removeD3dxKey(iniText, "Logging", key);
+    }
+    return setD3dxKey(iniText, "Logging", key, "1");
 }
 
 bool readEdhmHideReloadMessages(const std::string& iniText) {

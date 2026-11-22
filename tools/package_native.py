@@ -71,6 +71,8 @@ EDHM_LICENSE_FILE = ("third_party", "edhm_2dmigoto_notice", "NOTICE.txt")
 EDHM_LICENSE_RESOURCE = 121
 EDHM_GPL_FILE = ("third_party", "edhm_2dmigoto_notice", "LICENSE.GPL.txt")
 EDHM_GPL_RESOURCE = 122
+import fetch_edhm_2dmigoto
+EDHM_SOURCE_ARCHIVE = fetch_edhm_2dmigoto.SOURCE_ARCHIVE_NAME
 KEYS_HEADER = ("src", "installer", "update_keys.h")
 
 
@@ -162,7 +164,7 @@ def manifest_file_entry(file, asset, data):
         entry["when"] = json.loads(json.dumps(file.when))
     entry["existing"] = file.existing
     return entry
-SPLIT_PATTERNS = ("ed-up-dlss-*.zip", "ed-up-xess-*.zip", "ed-up-fsr4-*.zip", "ed-up-edhm-*.zip")
+SPLIT_PATTERNS = ("ed-up-dlss-*.zip", "ed-up-xess-*.zip", "ed-up-fsr4-*.zip", "ed-up-edhm-*.zip", "ed-up-edhm-source-*.tar.gz")
 
 
 def _version(value):
@@ -649,6 +651,12 @@ def package(root, version, no_dlss=False, dry_run=False):
     print("[edvr] Linux launcher plan: %s (%s)" % (
         launcher_linux_archive, ", ".join(name for _, name in launcher_linux)))
     split = _split_outputs(root, version, files)
+    if (root / "build" / "d3d11_edhm.dll").is_file():
+        edhm_source = root / "build" / EDHM_SOURCE_ARCHIVE
+        if not edhm_source.is_file():
+            raise ValueError(
+                "EDHM_2DMigoto runtime is staged without its GPLv3 Corresponding Source archive: %s" % edhm_source)
+        split.append((EDHM_SOURCE_ARCHIVE, edhm_source.read_bytes()))
     for name, blob in split:
         print("[edvr] split asset plan: %s (%d bytes)" % (dist / name, len(blob)))
     sums = dist / SUMS_NAME
@@ -1201,7 +1209,16 @@ def self_test():
                 pass
             (root / "build" / "EDHM-2DMIGOTO-LICENSE.txt").write_bytes(b"GPLv3 text")
             (root / "build" / "EDHM-2DMIGOTO-THIRD-PARTY.txt").write_bytes(b"PCRE2 + DirectXTK notices")
+            try:
+                package(root, "4.0.0", no_dlss=True, dry_run=True)
+                raise AssertionError("EDHM_2DMigoto accepted without Corresponding Source archive")
+            except ValueError:
+                pass
+            (root / "build" / EDHM_SOURCE_ARCHIVE).write_bytes(b"pinned GPLv3 corresponding source tarball")
             assert package(root, "4.0.0", no_dlss=True) == 0
+            assert (dist / EDHM_SOURCE_ARCHIVE).read_bytes() == b"pinned GPLv3 corresponding source tarball"
+            sums_edhm = (dist / SUMS_NAME).read_text(encoding="ascii")
+            assert (hashlib.sha256(b"pinned GPLv3 corresponding source tarball").hexdigest() + "  " + EDHM_SOURCE_ARCHIVE) in sums_edhm
             assert (dist / V2_MANIFEST).read_bytes() == v2_without_edhm, "ed-up-manifest-v2.json changed when EDHM was added!"
             v3_with_edhm, v3_problems = sign_manifest.load_manifest((dist / MANIFEST).read_bytes())
             assert v3_problems == [], v3_problems
@@ -1236,7 +1253,7 @@ def self_test():
             assert [(e["id"], e["target"], e.get("when"), e["existing"]) for e in v2_parsed["files"]] == golden_v2_descriptors
             assert all("edhm" not in a["name"] for a in v2_parsed["assets"])
             assert sign_manifest.verify_directory(dist, allow_unsigned=True, out=lambda line: None)
-            for name in ("d3d11_edhm.dll", "EDHM-2DMIGOTO-LICENSE.txt", "EDHM-2DMIGOTO-THIRD-PARTY.txt"):
+            for name in ("d3d11_edhm.dll", "EDHM-2DMIGOTO-LICENSE.txt", "EDHM-2DMIGOTO-THIRD-PARTY.txt", EDHM_SOURCE_ARCHIVE):
                 (root / "build" / name).unlink()
             assert package(root, "4.0.0", no_dlss=True) == 0
             assert "edup_profile.ini" not in {entry["path"] for entry in parsed["files"]}

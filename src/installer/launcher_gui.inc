@@ -1205,7 +1205,20 @@ void launcherSetEdhmLoggingFlag(std::string key, bool wantHide) {
     }
     const std::wstring mirrorDir = mirrorDirOfGame(g.survey.game);
     g.survey = surveyTarget(g.survey.game, mirrorDir);
-    if (!g.survey.d3dxIniPresent || g.survey.d3dxIniUnreadable) {
+    Options options;
+    options.nowUtc = utcNow();
+    options.settingsDir = mirrorDir;
+    const Plan plan = planEdhmLogging(g.survey, options, key, wantHide);
+    if (plan.blocked) {
+        if (!plan.problems.empty()) {
+            std::wstring text;
+            for (const std::string& p : plan.problems) text += fromUtf8(p) + L"\n\n";
+            MessageBoxW(g.window, text.c_str(), kAppTitle, MB_OK | MB_ICONWARNING);
+        }
+        launcherUpdateSettingsToggle();
+        return;
+    }
+    if (plan.nothingToDo) {
         launcherUpdateSettingsToggle();
         return;
     }
@@ -1240,25 +1253,11 @@ void launcherSetEdhmLoggingFlag(std::string key, bool wantHide) {
         return;
     }
 
-    const std::wstring d3dxPath = joinPath(g.survey.game.dir, L"d3dx.ini");
-    std::string current;
-    if (!readFileBytes(d3dxPath, &current)) {
-        MessageBoxW(g.window, L"d3dx.ini could not be read. Close anything holding it open and try again.",
-                    kAppTitle, MB_OK | MB_ICONWARNING);
-        g.survey = surveyTarget(g.survey.game, mirrorDir);
-        launcherUpdateSettingsToggle();
-        return;
-    }
-    const std::string updated = key == "show_warnings"
-                                    ? setEdhmHideWarnings(current, wantHide)
-                                    : setEdhmHideReloadMessages(current, wantHide);
-    if (updated != current) {
-        std::wstring writeErr;
-        if (!writeFileAtomic(d3dxPath, updated, &writeErr)) {
-            std::wstring msg = L"Could not update d3dx.ini.";
-            if (!writeErr.empty()) msg += L"\n\n" + writeErr;
-            MessageBoxW(g.window, msg.c_str(), kAppTitle, MB_OK | MB_ICONWARNING);
-        }
+    const ApplyResult result = applyPlan(plan, PayloadProvider{});
+    if (!result.ok) {
+        std::wstring msg = L"Could not update d3dx.ini.";
+        if (!result.error.empty()) msg += L"\n\n" + fromUtf8(result.error);
+        MessageBoxW(g.window, msg.c_str(), kAppTitle, MB_OK | MB_ICONWARNING);
     }
     g.survey = surveyTarget(g.survey.game, mirrorDir);
     launcherUpdateSettingsToggle();
@@ -1293,10 +1292,10 @@ void launcherUpdateSettingsToggle() {
     const bool hasEdhmDll = diskDll && diskDll->kind != DllKind::Absent;
     const bool hasPendingRestore =
         g.haveSurvey && (active2d || (hasEdhmDll && g.survey.state.file("edhm_2dmigoto") != nullptr) ||
-                         (g.survey.d3dxIniPresent && g.survey.state.edhmD3dxBackup.saved));
+                         (g.survey.d3dxIniPresent && !g.survey.d3dxIniReadOnly && !g.survey.d3dxIniUtf16 &&
+                          g.survey.state.edhmD3dxBackup.anySaved()));
     const bool externalEdhmKept =
-        hasEdhmDll && !g.survey.state.edhmExternalSha.empty() &&
-        _stricmp(diskDll->sha256.c_str(), g.survey.state.edhmExternalSha.c_str()) == 0;
+        hasEdhmDll && !active2d && !g.survey.state.edhmExternalSha.empty();
     const bool payloadReady = launcherPayloadReady();
     const bool hasPayloadAsset = payloadReady && payloadInfo().find("edhm_2dmigoto") != nullptr;
     const bool hasOptInAsset = lg.session->payload().hasOptInEdhmAsset;
@@ -1381,7 +1380,9 @@ void launcherUpdateSettingsToggle() {
     };
     rows.push_back(std::move(migotoRow));
 
-    const bool d3dxUsable = g.haveSurvey && g.survey.d3dxIniPresent && !g.survey.d3dxIniUnreadable;
+    const bool managed2d = active2d && migotoRow.on;
+    const bool d3dxReadable = g.haveSurvey && g.survey.d3dxIniPresent && !g.survey.d3dxIniUnreadable && !g.survey.d3dxIniUtf16;
+    const bool d3dxUsable = managed2d && d3dxReadable && !g.survey.d3dxIniReadOnly && !g.survey.gameRunningHere;
     auto buildLoggingRow = [&](std::wstring labelText, std::wstring descText, const wchar_t* search,
                                const char* keyName, bool hiddenNow) {
         LauncherToggleRow r;
@@ -1392,16 +1393,28 @@ void launcherUpdateSettingsToggle() {
         r.label = std::move(labelText);
         r.description = std::move(descText);
         r.searchTerms = search;
-        r.on = d3dxUsable && hiddenNow;
+        r.on = d3dxReadable && hiddenNow;
         r.busy = busy;
         if (!g.haveSurvey) {
             r.statusText = tr(L"No install selected");
+            r.statusTone = LauncherRowTone::Muted;
+        } else if (!managed2d) {
+            r.statusText = tr(L"Requires 2DMigoto");
             r.statusTone = LauncherRowTone::Muted;
         } else if (!g.survey.d3dxIniPresent) {
             r.statusText = tr(L"d3dx.ini not found");
             r.statusTone = LauncherRowTone::Muted;
         } else if (g.survey.d3dxIniUnreadable) {
             r.statusText = tr(L"d3dx.ini unreadable");
+            r.statusTone = LauncherRowTone::Warn;
+        } else if (g.survey.d3dxIniUtf16) {
+            r.statusText = tr(L"d3dx.ini unsupported encoding");
+            r.statusTone = LauncherRowTone::Warn;
+        } else if (g.survey.d3dxIniReadOnly) {
+            r.statusText = tr(L"d3dx.ini read-only");
+            r.statusTone = LauncherRowTone::Warn;
+        } else if (g.survey.gameRunningHere) {
+            r.statusText = tr(L"Close Elite first");
             r.statusTone = LauncherRowTone::Warn;
         } else if (busy) {
             r.statusText = tr(L"Applying...");
@@ -1420,17 +1433,17 @@ void launcherUpdateSettingsToggle() {
 
     rows.push_back(buildLoggingRow(
         tr(L"Hide Refresh/Reload messages from EDHM"),
-        tr(L"Sets [Logging] show_reload_message in d3dx.ini (checked = 0, unchecked = 1) to hide EDHM refresh and reload banners."),
+        tr(L"Sets [Logging] show_reload_message = 0 in d3dx.ini while 2DMigoto is active; unchecking or turning 2DMigoto off restores your original setting."),
         L"edhm d3dx.ini logging show_reload_message refresh reload messages banners hide",
         "show_reload_message",
-        d3dxUsable && readEdhmHideReloadMessages(g.survey.d3dxIniText)));
+        d3dxReadable && readEdhmHideReloadMessages(g.survey.d3dxIniText)));
 
     rows.push_back(buildLoggingRow(
         tr(L"Hide Warnings from EDHM"),
-        tr(L"Sets [Logging] show_warnings in d3dx.ini (checked = 0, unchecked = 1) to hide EDHM warning banners."),
+        tr(L"Sets [Logging] show_warnings = 0 in d3dx.ini while 2DMigoto is active; unchecking or turning 2DMigoto off restores your original setting."),
         L"edhm d3dx.ini logging show_warnings warnings banners hide",
         "show_warnings",
-        d3dxUsable && readEdhmHideWarnings(g.survey.d3dxIniText)));
+        d3dxReadable && readEdhmHideWarnings(g.survey.d3dxIniText)));
 
     settingsListSetLauncherToggles(g.settingsList, std::move(rows));
 }

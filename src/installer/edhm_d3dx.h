@@ -18,6 +18,11 @@ struct D3dxKeyRead {
     std::string value;
 };
 
+// Returns true if `bytes` looks like UTF-16 (UTF-16 LE/BE BOM or embedded NUL
+// bytes). ED-UP only edits UTF-8 / ASCII d3dx.ini files and refuses UTF-16
+// rather than appending ASCII bytes onto a UTF-16 file.
+bool isUtf16D3dx(const std::string& bytes);
+
 // Reads the last active (uncommented) occurrence of `key` under `[section]`.
 // Section and key matching are ASCII case-insensitive. Lines whose first
 // non-whitespace character is ';' are comments; inline ';' comments are
@@ -26,7 +31,9 @@ D3dxKeyRead readD3dxKey(const std::string& iniText, const char* section, const c
 
 // Sets `key` under `[section]` to `value`, preserving comments, unrelated keys,
 // inline comments, indentation, UTF-8 BOM, and line-ending style (CRLF or LF).
-// - Active occurrence(s) in `[section]` are updated in place.
+// - Only the last active occurrence in `[section]` (the effective last-wins
+//   entry read by readD3dxKey) is updated in place, so duplicate keys across
+//   repeated sections are not collapsed.
 // - Otherwise, if a commented `; key = ...` line exists in `[section]`,
 //   `key = value` is inserted immediately after the last commented occurrence
 //   so the template comment stays intact.
@@ -36,14 +43,14 @@ D3dxKeyRead readD3dxKey(const std::string& iniText, const char* section, const c
 std::string setD3dxKey(const std::string& iniText, const char* section, const char* key,
                        const std::string& value);
 
-// Removes all active (uncommented) occurrences of `key` under `[section]`
-// while keeping commented lines and all other keys/sections intact.
+// Removes the last active (uncommented) occurrence of `key` under `[section]`
+// while keeping commented lines and any earlier duplicate lines intact.
 std::string removeD3dxKey(const std::string& iniText, const char* section, const char* key);
 
 // Captures the original values of the three ED-UP compatibility keys:
-//   [System] load_library_redirect
-//   [System] allow_platform_update
-//   [Device] upscaling
+//   [System] load_library_redirect  (EDHM_2DMigoto DirectX11/D3D11Wrapper.cpp: >1 redirects LoadLibrary("d3d11.dll") to outer ED-UP)
+//   [System] allow_platform_update  (EDHM_2DMigoto DirectX11/HackerDevice.cpp & HackerContext.cpp: 0 returns E_NOINTERFACE for Device1/Context1)
+//   [Device] upscaling              (EDHM_2DMigoto DirectX11/HackerDXGI.cpp: legacy swapchain/backbuffer upscaler)
 EdhmD3dxBackup snapshotEdhmD3dxCompat(const std::string& iniText);
 
 // Applies ED-UP compatibility values to d3dx.ini:
@@ -52,9 +59,16 @@ EdhmD3dxBackup snapshotEdhmD3dxCompat(const std::string& iniText);
 //   [Device] upscaling = 0
 std::string applyEdhmD3dxCompat(const std::string& iniText);
 
-// Restores the three ED-UP compatibility keys from `backup`, leaving all other
-// keys (including [Logging] show_reload_message and EDHM themes) untouched.
+// Restores any backed-up ED-UP compatibility keys (and backed-up [Logging]
+// keys, if recorded) ONLY while each key still holds ED-UP's applied value,
+// leaving later player or EDHM-UI edits intact.
 std::string restoreEdhmD3dxCompat(const std::string& iniText, const EdhmD3dxBackup& backup);
+
+// Restores a single backed-up [Logging] key when unchecking its checkbox.
+// When `hasSaved` is true, restores the recorded value (or removes the key if
+// originally absent) only while it still holds "0". Otherwise sets "1".
+std::string restoreEdhmLoggingKey(const std::string& iniText, const char* key,
+                                  const EdhmD3dxKeyBackup& saved, bool hasSaved);
 
 // Reads [Logging] show_reload_message from d3dx.ini.
 // Returns true ("On" / hidden) when show_reload_message is "0";

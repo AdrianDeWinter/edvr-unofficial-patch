@@ -97,8 +97,10 @@ struct Survey {
     bool                 edhmConfigPresent = false;  // d3dx.ini or EDHM-ini\ beside the game
     bool                 d3dxIniPresent = false;     // <game>\d3dx.ini exists
     bool                 d3dxIniUnreadable = false;  // <game>\d3dx.ini exists but could not be read
-    std::string          d3dxIniText;                // contents of <game>\d3dx.ini when present & readable
-    std::string          d3dxIniSha;                 // SHA-256 of d3dxIniText when present & readable
+    bool                 d3dxIniReadOnly = false;    // <game>\d3dx.ini has FILE_ATTRIBUTE_READONLY
+    bool                 d3dxIniUtf16 = false;       // <game>\d3dx.ini is UTF-16 (unsupported)
+    std::string          d3dxIniText;                // contents of <game>\d3dx.ini when present, readable, and UTF-8/ASCII
+    std::string          d3dxIniSha;                 // SHA-256 of d3dxIniText when present, readable, and UTF-8/ASCII
     bool                 iniPresent = false;
     bool                 descriptorPresent = false;
     std::string          descriptorSha;
@@ -246,6 +248,8 @@ struct Step {
     // passed over instead of rolling back an uninstall that has already finished (the folders it removes hold the
     // rollback's own snapshots).
     bool         bestEffort = false;
+    // Refuse to unlock a read-only target file (e.g. a player's read-only d3dx.ini).
+    bool         refuseReadOnly = false;
 };
 
 struct Plan {
@@ -276,6 +280,10 @@ Plan planEdhmDismiss(const Survey& survey, const Options& options);
 // EDHM-only toggle plan (installs/updates 2DMigoto + d3dx.ini compat keys when options.edhm2dMigoto is true,
 // or delegates to planEdhmRestore when false) without modifying core ED-UP DLLs or edup*.ini settings.
 Plan planEdhmToggle(const Survey& survey, const Options& options, const PayloadInfo& payload);
+// Narrow plan for toggling one of EDHM's [Logging] keys (show_reload_message or show_warnings)
+// while 2DMigoto is managed: checks Elite running / read-only / UTF-16, records the original value
+// in state.ini, and restores it on uncheck.
+Plan planEdhmLogging(const Survey& survey, const Options& options, const std::string& key, bool wantHide);
 
 // The one-paragraph summary shown before anything is done.
 std::string planSummary(const Plan& plan);
