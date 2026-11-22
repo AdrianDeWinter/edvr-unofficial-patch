@@ -40,6 +40,33 @@ std::wstring widenUtf8(const std::string& text) {
     return out;
 }
 
+std::string narrowUtf8(const std::wstring& text) {
+    if (text.empty()) return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), &out[0], n, nullptr, nullptr);
+    return out;
+}
+
+bool isKnownVrServiceProcess(const std::string& lowerProc) {
+    static const char* const kKnown[] = {
+        "vrserver.exe", "vrmonitor.exe", "vrcompositor.exe", "vrserver", "vrmonitor",
+        "ovrserver_x64.exe", "oculusclient.exe", "metaquestlink.exe",
+        "virtualdesktop.streamer.exe", "virtualdesktop.service.exe",
+        "alvr_dashboard.exe", "alvr_launcher.exe", "alvr_dashboard", "alvr_launcher",
+        "pi_server.exe", "pimaxclient.exe", "pimaxplay.exe", "piservice.exe", "piservice_launcher.exe",
+        "mixedrealityportal.exe", "holoshellapp.exe",
+        "varjobase.exe", "varjoserver.exe",
+        "viveconsole.exe", "vivehub.exe", "viveruntime.exe",
+        "wivrn-server", "monado-service", "envision",
+    };
+    for (const char* name : kKnown) {
+        if (lowerProc == name) return true;
+    }
+    return false;
+}
+
 std::wstring trimW(const std::wstring& s) {
     size_t a = 0;
     while (a < s.size() && std::iswspace(s[a])) ++a;
@@ -854,6 +881,18 @@ bool shouldRunLiveOpenXrProbe(VrPlatform activePlatform, const std::vector<std::
 
 VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in) {
     VrHeadsetReport report;
+    report.underWine = in.underWine;
+    report.activeRuntimeFromEnv = in.activeRuntimeFromEnv;
+    report.activeRuntimePath = in.activeRuntimePath;
+    report.activeLibraryPath = in.activeManifest.libraryPath;
+    report.availableRuntimes = in.availableRuntimePaths;
+    for (const std::string& proc : in.runningProcesses) {
+        if (isKnownVrServiceProcess(proc) &&
+            std::find(report.runningVrServices.begin(), report.runningVrServices.end(), proc) ==
+                report.runningVrServices.end()) {
+            report.runningVrServices.push_back(proc);
+        }
+    }
 
     // 1. Identify active OpenXR runtime.
     const bool hasActivePath = !in.activeRuntimePath.empty();
@@ -883,6 +922,7 @@ VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in) {
             report.activePlatform = livePlat;
         }
     }
+    report.openCompositeWarning = (report.activePlatform == VrPlatform::OpenComposite);
     report.runtimeDisplayName = vrPlatformDisplayName(report.activePlatform, fallbackCustomName);
     report.runtimeVersion = in.liveProbe.runtimeVersion;
 
@@ -1035,6 +1075,103 @@ VrHeadsetReport probeVrHeadset(const std::wstring& gameDir, const std::wstring& 
     }
 
     return resolveVrHeadsetStatus(in);
+}
+
+VrPreflightWarning evaluateVrLaunchPreflight(const VrHeadsetReport& report) {
+    if (report.status == VrStatusKind::Checking) return VrPreflightWarning::None;
+    if (report.openCompositeWarning) return VrPreflightWarning::OpenComposite;
+    if (report.status == VrStatusKind::NotConfigured) {
+        return report.activeRuntimeMissingFile ? VrPreflightWarning::MissingRuntimeFile
+                                               : VrPreflightWarning::NoRuntime;
+    }
+    if (report.status == VrStatusKind::Error) return VrPreflightWarning::RuntimeError;
+    if (report.status == VrStatusKind::RuntimeInactive && report.runtimeMismatch) {
+        return VrPreflightWarning::RuntimeMismatch;
+    }
+    return VrPreflightWarning::None;
+}
+
+std::string formatVrEnvironmentSnapshot(const VrHeadsetReport& report) {
+    auto statusName = [](VrStatusKind kind) -> const char* {
+        switch (kind) {
+            case VrStatusKind::Ready: return "ready";
+            case VrStatusKind::Standby: return "standby";
+            case VrStatusKind::RuntimeInactive: return "runtime_inactive";
+            case VrStatusKind::NotConfigured: return "not_configured";
+            case VrStatusKind::Error: return "error";
+            case VrStatusKind::Checking:
+            default: return "checking";
+        }
+    };
+    auto preflightName = [](VrPreflightWarning w) -> const char* {
+        switch (w) {
+            case VrPreflightWarning::NoRuntime: return "no_runtime";
+            case VrPreflightWarning::MissingRuntimeFile: return "missing_runtime_file";
+            case VrPreflightWarning::RuntimeMismatch: return "runtime_mismatch";
+            case VrPreflightWarning::OpenComposite: return "opencomposite_active";
+            case VrPreflightWarning::RuntimeError: return "runtime_error";
+            case VrPreflightWarning::None:
+            default: return "none";
+        }
+    };
+
+    std::string out;
+    out += "ED-UP VR Environment Snapshot\r\n";
+    out += "=============================\r\n";
+    out += std::string("status: ") + statusName(report.status) + "\r\n";
+    out += std::string("preflight_warning: ") + preflightName(evaluateVrLaunchPreflight(report)) + "\r\n";
+    out += "runtime: " +
+           (report.runtimeDisplayName.empty() ? std::string("(none)")
+                                              : narrowUtf8(report.runtimeDisplayName) +
+                                                    (report.runtimeVersion.empty()
+                                                         ? std::string()
+                                                         : " " + narrowUtf8(report.runtimeVersion))) +
+           "\r\n";
+    out += std::string("runtime_source: ") +
+           (report.activeRuntimePath.empty() ? "(none)"
+                                             : (report.activeRuntimeFromEnv ? "XR_RUNTIME_JSON" : "registry")) +
+           "\r\n";
+    if (!report.activeRuntimePath.empty()) {
+        out += "active_runtime_json: " + narrowUtf8(report.activeRuntimePath) +
+               (report.activeRuntimeMissingFile ? " [MISSING]" : "") + "\r\n";
+    }
+    if (!report.activeLibraryPath.empty()) {
+        out += "active_runtime_library: " + narrowUtf8(report.activeLibraryPath) +
+               (report.activeLibraryMissingFile ? " [MISSING]" : "") + "\r\n";
+    }
+    out += "headset: " +
+           (report.headsetName.empty() ? std::string("(none)") : narrowUtf8(report.headsetName)) + "\r\n";
+    out += std::string("headset_source: ") +
+           (report.headsetName.empty() ? "(none)" : (report.headsetFromUsb ? "usb" : "openxr")) + "\r\n";
+    if (!report.transportName.empty()) {
+        out += "transport: " + narrowUtf8(report.transportName) + "\r\n";
+    }
+    if (report.openXrResult != 0) {
+        out += "openxr_result: " + std::to_string(report.openXrResult) + "\r\n";
+    }
+    out += std::string("runtime_mismatch: ") +
+           (report.runtimeMismatch ? ("yes (" + narrowUtf8(report.mismatchRuntimeName) + ")") : "no") + "\r\n";
+    out += std::string("opencomposite_warning: ") + (report.openCompositeWarning ? "yes" : "no") + "\r\n";
+    out += std::string("under_wine: ") + (report.underWine ? "yes" : "no") + "\r\n";
+
+    out += "running_vr_services: ";
+    if (report.runningVrServices.empty()) {
+        out += "(none)\r\n";
+    } else {
+        for (size_t i = 0; i < report.runningVrServices.size(); ++i) {
+            if (i > 0) out += ", ";
+            out += report.runningVrServices[i];
+        }
+        out += "\r\n";
+    }
+
+    if (!report.availableRuntimes.empty()) {
+        out += "available_openxr_runtimes:\r\n";
+        for (const std::wstring& rt : report.availableRuntimes) {
+            out += "  - " + narrowUtf8(rt) + "\r\n";
+        }
+    }
+    return out;
 }
 
 }  // namespace edvr::installer

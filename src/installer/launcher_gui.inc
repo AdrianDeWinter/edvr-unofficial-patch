@@ -644,19 +644,30 @@ void paintLauncherVrCard(HDC dc) {
             detailLine = tr(L"Inspecting the active OpenXR runtime, running VR services, and connected hardware.");
             break;
         case VrStatusKind::Ready:
-            if (!vr.transportName.empty()) {
+            if (vr.openCompositeWarning) {
+                detailLine = tr(L"OpenComposite is active. ED-UP already includes its own OpenXR bridge, so stacking both can break VR.");
+                detailColour = t.warn;
+            } else if (!vr.transportName.empty()) {
                 detailLine = fillVrPlaceholders(tr(L"Connected via %s and ready for VR launch."), vr.transportName);
             } else {
                 detailLine = tr(L"Connected and ready for VR launch.");
             }
             break;
         case VrStatusKind::Standby:
-            detailLine = fillVrPlaceholders(
-                tr(L"%s is running, but no active headset responded. Wake or connect your headset, then refresh."),
-                rtName);
+            if (vr.openCompositeWarning) {
+                detailLine = tr(L"OpenComposite is active. ED-UP already includes its own OpenXR bridge, so stacking both can break VR.");
+                detailColour = t.warn;
+            } else {
+                detailLine = fillVrPlaceholders(
+                    tr(L"%s is running, but no active headset responded. Wake or connect your headset, then refresh."),
+                    rtName);
+            }
             break;
         case VrStatusKind::RuntimeInactive:
-            if (vr.runtimeMismatch && !vr.mismatchRuntimeName.empty()) {
+            if (vr.openCompositeWarning) {
+                detailLine = tr(L"OpenComposite is active. ED-UP already includes its own OpenXR bridge, so stacking both can break VR.");
+                detailColour = t.warn;
+            } else if (vr.runtimeMismatch && !vr.mismatchRuntimeName.empty()) {
                 detailLine = fillVrPlaceholders(
                     tr(L"%s is running while %s is set as your active OpenXR runtime. Switch OpenXR or start %s."),
                     vr.mismatchRuntimeName, rtName, rtName);
@@ -1150,6 +1161,43 @@ bool launcherCommand(int id, int code) {
                     SetFocus(lg.vrMode);
                     SendMessageW(lg.vrMode, CB_SHOWDROPDOWN, TRUE, 0);
                     return true;
+                }
+            }
+            if (vr && lg.vrHaveReport) {
+                const VrPreflightWarning warn = evaluateVrLaunchPreflight(lg.vrReport);
+                if (warn != VrPreflightWarning::None) {
+                    const std::wstring rtName =
+                        lg.vrReport.runtimeDisplayName.empty() ? std::wstring(L"OpenXR") : lg.vrReport.runtimeDisplayName;
+                    std::wstring prompt;
+                    switch (warn) {
+                        case VrPreflightWarning::NoRuntime:
+                            prompt = tr(L"No active OpenXR runtime was found. Elite may fail to start in VR.\n\nLaunch in VR anyway?");
+                            break;
+                        case VrPreflightWarning::MissingRuntimeFile:
+                            prompt = tr(L"Your active OpenXR runtime file is missing. Open SteamVR, Meta Horizon Link, Virtual Desktop, or Pimax Play to restore it.\n\nLaunch in VR anyway?");
+                            break;
+                        case VrPreflightWarning::RuntimeMismatch:
+                            prompt = fillVrPlaceholders(
+                                tr(L"%s is running while %s is set as your active OpenXR runtime. Elite may connect to the wrong runtime or fail to start in VR.\n\nLaunch in VR anyway?"),
+                                lg.vrReport.mismatchRuntimeName, rtName);
+                            break;
+                        case VrPreflightWarning::OpenComposite:
+                            prompt = tr(L"OpenComposite is set as your active runtime. ED-UP already includes its own OpenXR bridge, and stacking both can break VR.\n\nLaunch in VR anyway?");
+                            break;
+                        case VrPreflightWarning::RuntimeError:
+                            prompt = fillVrPlaceholders(
+                                tr(L"Your active OpenXR runtime (%s) reported an error and may not start cleanly.\n\nLaunch in VR anyway?"),
+                                rtName);
+                            break;
+                        case VrPreflightWarning::None:
+                        default:
+                            break;
+                    }
+                    if (!prompt.empty() &&
+                        MessageBoxW(g.window, prompt.c_str(), kAppTitle,
+                                    MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+                        return true;
+                    }
                 }
             }
             invalidateLauncherCache();

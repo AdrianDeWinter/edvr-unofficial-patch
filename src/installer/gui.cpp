@@ -1477,7 +1477,20 @@ void showSavedFolder() {
 void saveLogs() {
     if (!g.haveSurvey) return;
     const bool wine = runningUnderWine();
+#ifdef EDUP_LAUNCHER
+    std::vector<MemoryBundleEntry> extraEntries;
+    {
+        const ULONGLONG now = GetTickCount64();
+        const VrHeadsetReport vr =
+            (lg.vrHaveReport && now - lg.vrLastProbeMs < 3000)
+                ? lg.vrReport
+                : probeVrHeadset(g.survey.game.dir, g.args.payloadDir);
+        extraEntries.push_back({L"vr-environment.txt", formatVrEnvironmentSnapshot(vr)});
+    }
+    const LogBundle bundle = collectLogs(g.survey.game.dir, logSaveFolder(), nullptr, &extraEntries);
+#else
     const LogBundle bundle = collectLogs(g.survey.game.dir, logSaveFolder());
+#endif
     g.hostButtonsShown = false;
 
     std::string text;

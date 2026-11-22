@@ -6559,6 +6559,55 @@ void testVrHeadsetDetection() {
         ui::setThemeMode(ui::ThemeMode::System);
         check(ui::themeMode() == ui::ThemeMode::System, "ThemeMode::System restores system-following mode");
     }
+
+    // 7. Play VR pre-flight guard (soft warning only on real misconfigurations) & VR environment snapshot.
+    {
+        VrProbeInputs readyIn;
+        readyIn.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        readyIn.activeManifest = {true, readyIn.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll",
+                                  true, true};
+        readyIn.runningProcesses = {"vrserver.exe", "notepad.exe", "secret_app.exe"};
+        readyIn.liveProbe = {true, true, true, true, 0, L"SteamVR/OpenXR", L"2.8.4", L"IndexHMD"};
+        const VrHeadsetReport ready = resolveVrHeadsetStatus(readyIn);
+        check(evaluateVrLaunchPreflight(ready) == VrPreflightWarning::None,
+              "Ready state triggers no Play VR pre-flight warning");
+        const std::string snap = formatVrEnvironmentSnapshot(ready);
+        check(snap.find("status: ready") != std::string::npos &&
+                  snap.find("headset: Valve Index") != std::string::npos &&
+                  snap.find("running_vr_services: vrserver.exe") != std::string::npos &&
+                  snap.find("secret_app.exe") == std::string::npos &&
+                  snap.find("notepad.exe") == std::string::npos,
+              "VR environment snapshot captures VR services only and never leaks arbitrary processes");
+
+        VrProbeInputs offIn;
+        offIn.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        offIn.activeManifest = {true, offIn.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll",
+                                true, true};
+        check(evaluateVrLaunchPreflight(resolveVrHeadsetStatus(offIn)) == VrPreflightWarning::None,
+              "normal RuntimeInactive (SteamVR not started yet) does not block or warn Play VR");
+
+        VrProbeInputs mismatchIn = offIn;
+        mismatchIn.runningProcesses = {"ovrserver_x64.exe"};
+        check(evaluateVrLaunchPreflight(resolveVrHeadsetStatus(mismatchIn)) == VrPreflightWarning::RuntimeMismatch,
+              "runtime mismatch triggers RuntimeMismatch pre-flight warning");
+
+        VrProbeInputs ocIn;
+        ocIn.activeRuntimePath = L"C:\\OpenComposite\\opencomposite.json";
+        ocIn.activeManifest = {true, ocIn.activeRuntimePath, L"OpenComposite", L"C:\\OpenComposite\\oc.dll", true, true};
+        const VrHeadsetReport oc = resolveVrHeadsetStatus(ocIn);
+        check(oc.openCompositeWarning && evaluateVrLaunchPreflight(oc) == VrPreflightWarning::OpenComposite,
+              "OpenComposite active triggers OpenComposite compatibility warning and pre-flight warning");
+
+        VrProbeInputs noneIn;
+        check(evaluateVrLaunchPreflight(resolveVrHeadsetStatus(noneIn)) == VrPreflightWarning::NoRuntime,
+              "missing OpenXR runtime triggers NoRuntime pre-flight warning");
+
+        VrProbeInputs missingFileIn;
+        missingFileIn.activeRuntimePath = L"C:\\Gone\\vdxr.json";
+        missingFileIn.activeManifest.jsonExists = false;
+        check(evaluateVrLaunchPreflight(resolveVrHeadsetStatus(missingFileIn)) == VrPreflightWarning::MissingRuntimeFile,
+              "missing OpenXR runtime JSON triggers MissingRuntimeFile pre-flight warning");
+    }
 }
 
 }  // namespace

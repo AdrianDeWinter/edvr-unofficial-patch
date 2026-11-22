@@ -75,10 +75,18 @@ struct DumpSearch {
     std::wstring tempDir;
 };
 
+// An in-memory text/data file added alongside the collected logs (e.g. a VR
+// environment snapshot produced by the launcher).
+struct MemoryBundleEntry {
+    std::wstring name;   // entry name inside the zip
+    std::string  bytes;
+};
+
 // Everything from one install, zipped into `outDir` (the Desktop, normally).
 // `gameDir` must be the folder holding EliteDangerous64.exe.
 LogBundle collectLogs(const std::wstring& gameDir, const std::wstring& outDir,
-                      const DumpSearch* dumpSearch = nullptr);
+                      const DumpSearch* dumpSearch = nullptr,
+                      const std::vector<MemoryBundleEntry>* extraEntries = nullptr);
 
 // The user's Desktop, or an empty string if Windows will not say where it is.
 std::wstring desktopFolder();
@@ -131,6 +139,7 @@ bool showFolderOnHost(const std::wstring& folder);
 // game still has open, most likely, which is exactly when this gets pressed.
 bool writeZip(const std::wstring& zipPath, const std::vector<std::wstring>& files,
               const std::vector<std::wstring>& names, std::string* error,
-              std::vector<std::wstring>* skippedOut = nullptr);
+              std::vector<std::wstring>* skippedOut = nullptr,
+              const std::vector<MemoryBundleEntry>* extraEntries = nullptr);
 
 }  // namespace edvr::installer

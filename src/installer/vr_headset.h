@@ -90,9 +90,12 @@ struct VrHeadsetReport {
     VrPlatform runningBridge = VrPlatform::Unknown;
     VrPlatform mismatchPlatform = VrPlatform::Unknown;
     bool runtimeMismatch = false;
+    bool openCompositeWarning = false;
     bool headsetFromUsb = false;
     bool activeRuntimeMissingFile = false;
     bool activeLibraryMissingFile = false;
+    bool underWine = false;
+    bool activeRuntimeFromEnv = false;
     int openXrResult = 0;
 
     std::wstring headsetName;          // e.g. "Meta Quest 3", "Valve Index", empty when none
@@ -100,6 +103,19 @@ struct VrHeadsetReport {
     std::wstring runtimeVersion;       // e.g. "2.8.4" when live OpenXR reported one
     std::wstring transportName;        // e.g. "Virtual Desktop", "ALVR", "Steam Link", "USB"
     std::wstring mismatchRuntimeName;  // other running runtime when runtimeMismatch is true
+    std::wstring activeRuntimePath;
+    std::wstring activeLibraryPath;
+    std::vector<std::wstring> availableRuntimes;
+    std::vector<std::string> runningVrServices;  // matched VR services only (never arbitrary user processes)
+};
+
+enum class VrPreflightWarning {
+    None,
+    NoRuntime,
+    MissingRuntimeFile,
+    RuntimeMismatch,
+    OpenComposite,
+    RuntimeError,
 };
 
 // Pure helpers (unit-tested directly in launcher_test).
@@ -112,6 +128,8 @@ bool isPlatformServiceRunning(VrPlatform platform, const std::vector<std::string
 bool shouldRunLiveOpenXrProbe(VrPlatform activePlatform, const std::vector<std::string>& lowerProcesses,
                               bool underWine, bool activeFromEnv);
 VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in);
+VrPreflightWarning evaluateVrLaunchPreflight(const VrHeadsetReport& report);
+std::string formatVrEnvironmentSnapshot(const VrHeadsetReport& report);
 
 // Live system probe (runs safely on a worker thread; never auto-starts SteamVR).
 // `gameDir` and `payloadDir` are optional search hints for openxr_loader.dll.
