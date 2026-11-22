@@ -1066,7 +1066,8 @@ void onClick(List* list, int x, int y) {
 
     size_t launcherLinkRow = 0;
     if (launcherLinkHit(list, x, y, &launcherLinkRow)) {
-        if (list->launcherRows[launcherLinkRow].onAction) list->launcherRows[launcherLinkRow].onAction();
+        auto cb = list->launcherRows[launcherLinkRow].onAction;
+        if (cb) cb();
         return;
     }
 
@@ -1097,7 +1098,9 @@ void onClick(List* list, int x, int y) {
             const LauncherRowGeo geo = launcherGeometryFor(list, rect, row);
             const POINT point{x, y};
             if (row.enabled && !row.busy && PtInRect(&geo.controlHit, point) && row.onToggle) {
-                row.onToggle(!row.on);
+                const bool nextOn = !row.on;
+                auto cb = row.onToggle;
+                cb(nextOn);
             }
             return;
         }

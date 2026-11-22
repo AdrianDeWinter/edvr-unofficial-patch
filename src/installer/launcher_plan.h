@@ -32,7 +32,7 @@
 namespace edvr::installer {
 
 struct PlanFile {
-    std::string  action;                 // install | repair | uninstall | edhm_logging
+    std::string  action;                 // install | repair | uninstall | edhm_apply | edhm_restore | edhm_logging
     std::wstring dir;                    // the game folder
     std::wstring source;                 // how it was found ("Steam", "Epic", ...), for the planner
     std::string  scope;                  // both | vr | flat, or empty for the folder's own
@@ -43,7 +43,7 @@ struct PlanFile {
     bool         edhm2dMigoto = false;   // opt-in tailored 2DMigoto d3d11_edhm.dll placement / restore
     std::string  d3dxLoggingKey;         // edhm_logging: "show_reload_message" or "show_warnings"
     bool         d3dxHideFlag = false;   // edhm_logging: true -> "0" (hidden), false -> "1" (shown)
-    std::string  manifestSha;            // the adopted manifest, 64 lower-case hex; empty only to uninstall or edhm_logging
+    std::string  manifestSha;            // the adopted manifest, 64 lower-case hex; empty only to uninstall, edhm_restore, or edhm_logging
 };
 
 bool writePlanFile(const std::wstring& path, const PlanFile& plan, std::string* error);

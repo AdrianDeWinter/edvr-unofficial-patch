@@ -115,7 +115,7 @@ bool missingOrLink(const std::wstring& path) {
 ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* const* keys,
                      const std::vector<GameInstall>* installs) {
     if (file.action != "install" && file.action != "repair" && file.action != "uninstall" &&
-        file.action != "edhm_logging")
+        file.action != "edhm_apply" && file.action != "edhm_restore" && file.action != "edhm_logging")
         return failed("the plan names an action this launcher does not know");
     if (file.dir.empty()) return failed("the plan names no game folder");
 
@@ -132,7 +132,7 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
         if (!updater.loadManifestFile(joinPath(paths.manifestsDir, widenUtf8(file.manifestSha)) + L".json", &manifest, &files, &error) ||
             !usePayloadFiles(manifest, files, &error))
             return failed("the downloaded files cannot be used: " + error);
-    } else if (file.action != "uninstall" && file.action != "edhm_logging") {
+    } else if (file.action != "uninstall" && file.action != "edhm_restore" && file.action != "edhm_logging") {
         return failed("the plan names no payload to install from");
     }
 
@@ -191,6 +191,42 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
         return failed("the settings folder for this game is a link; the installer will not write through it");
 
     Survey survey = surveyTarget(game, mirrorDir);
+    if (file.action == "edhm_apply" || file.action == "edhm_restore") {
+        Options edhmOpts;
+        edhmOpts.edhm2dMigoto = file.action == "edhm_apply";
+        edhmOpts.backupStamp = timestampName();
+        edhmOpts.nowUtc = utcNow();
+        edhmOpts.settingsDir = mirrorDir;
+        const Plan plan = file.action == "edhm_restore"
+                              ? planEdhmRestore(survey, edhmOpts)
+                              : planEdhmToggle(survey, edhmOpts, payloadInfo());
+        if (plan.blocked) {
+            ApplyOutcome blocked;
+            blocked.status = ApplyOutcome::Status::Blocked;
+            for (const std::string& p : plan.problems) blocked.lines.push_back(p);
+            if (blocked.lines.empty()) blocked.lines.push_back(planSummary(plan));
+            return blocked;
+        }
+        if (plan.nothingToDo) {
+            ApplyOutcome nothing;
+            nothing.status = ApplyOutcome::Status::NothingToDo;
+            nothing.lines.push_back(planSummary(plan));
+            return nothing;
+        }
+        const ApplyResult result =
+            applyPlan(plan, file.action == "edhm_restore" ? PayloadProvider{} : PayloadProvider{payloadItem});
+        ApplyOutcome outcome;
+        for (const std::string& line : result.done) outcome.lines.push_back(line);
+        if (!result.ok) {
+            outcome.status = ApplyOutcome::Status::Failed;
+            outcome.lines.push_back(result.error);
+            if (result.rolledBack)
+                outcome.lines.push_back("Installed files and metadata were restored; recovery backups were kept.");
+            return outcome;
+        }
+        outcome.status = ApplyOutcome::Status::Done;
+        return outcome;
+    }
     const bool uninstall = file.action == "uninstall";
     ApplyOutcome outcome;
 

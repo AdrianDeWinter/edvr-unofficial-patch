@@ -8299,7 +8299,7 @@ int wmain(int argc, wchar_t** argv) {
             st.chainTarget = L"d3d11_edhm.dll";
             st.chainMod = L"EDHM";
             writeAll(statePath(gameDir), serializeState(st));
-            check(applyPlan(planInstall(surveyEdhm(), opt, p2), providerFor(p2)).ok,
+            check(applyPlan(planEdhmToggle(surveyEdhm(), opt, p2), providerFor(p2)).ok,
                   "re-enabling backs up player's newer stdEdhmV2");
             check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == migotoV2, "2DMigoto v2 installed over stdEdhmV2");
             Options uopt;
@@ -8518,16 +8518,111 @@ int wmain(int argc, wchar_t** argv) {
             opt.backupStamp = L"t12e";
             check(applyPlan(planInstall(surveyEdhm(), opt, p2), providerFor(p2)).ok,
                   "re-enable before planUninstall applies");
+            // Finding #4: d3dx.ini-only drift is repaired on normal (non-repair) planInstall.
+            writeAll(joinPath(gameDir, L"d3dx.ini"),
+                     setD3dxKey(readAll(joinPath(gameDir, L"d3dx.ini")), "Device", "upscaling", "1"));
+            opt.repair = false;
+            opt.backupStamp = L"t12f";
+            {
+                const Plan fixIniPlan = planInstall(surveyEdhm(), opt, p2);
+                check(!fixIniPlan.nothingToDo, "d3dx.ini-only drift is NOT dropped as nothingToDo on normal reinstall");
+                const ApplyResult fr = applyPlan(fixIniPlan, providerFor(p2));
+                check(fr.ok && readD3dxKey(readAll(joinPath(gameDir, L"d3dx.ini")), "Device", "upscaling").value == "0",
+                      "normal reinstall restored d3dx.ini upscaling = 0", fr.error);
+            }
+            // Finding #2: editing d3dx.ini after planning causes applyPlan to refuse rather than overwrite user edits.
+            {
+                writeAll(joinPath(gameDir, L"d3dx.ini"),
+                         setD3dxKey(readAll(joinPath(gameDir, L"d3dx.ini")), "Device", "upscaling", "1"));
+                const Plan stalePlan = planInstall(surveyEdhm(), opt, p2);
+                const std::string concurrentEdit =
+                    setD3dxKey(readAll(joinPath(gameDir, L"d3dx.ini")), "Logging", "custom_user_edit", "42");
+                writeAll(joinPath(gameDir, L"d3dx.ini"), concurrentEdit);
+                const ApplyResult sr = applyPlan(stalePlan, providerFor(p2));
+                check(!sr.ok && readAll(joinPath(gameDir, L"d3dx.ini")) == concurrentEdit,
+                      "stale plan refuses to overwrite concurrent d3dx.ini edits");
+                // Re-apply cleanly from fresh survey so state is consistent for uninstall tests below.
+                check(applyPlan(planInstall(surveyEdhm(), opt, p2), providerFor(p2)).ok,
+                      "fresh plan after concurrent edit applies cleanly");
+            }
+            // Finding #3: unreadable d3dx.ini blocks uninstall rather than discarding backup state.
+            {
+                Survey sUnreadable = surveyEdhm();
+                sUnreadable.d3dxIniPresent = true;
+                sUnreadable.d3dxIniUnreadable = true;
+                Options uopt;
+                uopt.backupStamp = L"t12unr";
+                const Plan blockedU = planUninstall(sUnreadable, uopt, p2);
+                check(blockedU.blocked, "planUninstall blocks when d3dx.ini is unreadable and backup is saved");
+            }
+            // Finding #1 (P1): same-second backupStamp on non-purge uninstall must NOT overwrite recorded EDHM backup.
             {
                 Options uopt;
-                uopt.backupStamp = L"t12u";
-                const ApplyResult ur = applyPlan(planUninstall(surveyEdhm(), uopt, p2), providerFor(p2));
-                check(ur.ok, "planUninstall with backed-up d3dx.ini succeeds", ur.error);
+                uopt.backupStamp = L"t12e";  // exact same stamp as the opt-in that created the backup!
+                const Plan uplan = planUninstall(surveyEdhm(), uopt, p2);
+                const ApplyResult ur = applyPlan(uplan, providerFor(p2));
+                check(ur.ok, "same-stamp non-purge planUninstall succeeds without clobbering original EDHM backup", ur.error);
+                check(readAll(joinPath(gameDir, L"d3d11.dll")) == stdEdhmV2,
+                      "same-stamp non-purge uninstall restored exact original stdEdhmV2 bytes");
                 const std::string diskIni = readAll(joinPath(gameDir, L"d3dx.ini"));
                 check(readD3dxKey(diskIni, "System", "load_library_redirect").value == "2" &&
                           !readD3dxKey(diskIni, "System", "allow_platform_update").present &&
                           readD3dxKey(diskIni, "Device", "upscaling").value == "1",
                       "planUninstall restored backed-up d3dx.ini compatibility keys");
+            }
+            // Finding #6: planEdhmToggle on unpatched folder (no ED-UP) is nothingToDo (never silently installs ED-UP).
+            {
+                Options topt;
+                topt.edhm2dMigoto = true;
+                topt.backupStamp = L"t12t0";
+                const Plan tplan = planEdhmToggle(surveyEdhm(), topt, p2);
+                check(tplan.nothingToDo && !tplan.blocked,
+                      "planEdhmToggle does not install core ED-UP into an unpatched folder");
+            }
+            // Finding #7: player's external EDHM update stays protected across TWO consecutive ED-UP installs,
+            // while explicit planEdhmToggle can still re-apply 2DMigoto.
+            {
+                opt.edhm2dMigoto = true;
+                opt.backupStamp = L"t12g1";
+                check(applyPlan(planInstall(surveyEdhm(), opt, p2), providerFor(p2)).ok,
+                      "install before external EDHM update test applies");
+                const std::string stdEdhmV3 = syntheticPe({"D3D11CreateDevice"}) + "STD-EDHM-V3-PLAYER";
+                writeAll(joinPath(gameDir, L"d3d11_edhm.dll"), stdEdhmV3);
+                opt.backupStamp = L"t12g2";
+                check(applyPlan(planInstall(surveyEdhm(), opt, p2), providerFor(p2)).ok,
+                      "1st install after player EDHM update applies");
+                check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV3,
+                      "1st install kept player's newer EDHM DLL");
+                opt.backupStamp = L"t12g3";
+                opt.repair = true;
+                check(applyPlan(planInstall(surveyEdhm(), opt, p2), providerFor(p2)).ok,
+                      "2nd install/repair after player EDHM update applies");
+                check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV3,
+                      "2nd install/repair STILL kept player's newer EDHM DLL via edhmExternalSha");
+                opt.repair = false;
+                Options topt;
+                topt.edhm2dMigoto = true;
+                topt.backupStamp = L"t12g4";
+                const ApplyResult tr = applyPlan(planEdhmToggle(surveyEdhm(), topt, p2), providerFor(p2));
+                check(tr.ok && readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == migotoV2,
+                      "explicit planEdhmToggle re-applies 2DMigoto after external EDHM update", tr.error);
+            }
+            // Finding #8: uninstall when ED-UP is chained to another mod (ReShade) still restores d3d11_edhm.dll!
+            {
+                const std::string reshadeDll = syntheticPe({"D3D11CreateDevice"}) + "RESHADE-DLL";
+                writeAll(joinPath(gameDir, L"d3d11_reshade.dll"), reshadeDll);
+                InstallState st = readState(gameDir);
+                st.chainTarget = L"d3d11_reshade.dll";
+                st.chainMod = L"ReShade";
+                writeAll(statePath(gameDir), serializeState(st));
+                Options uopt;
+                uopt.backupStamp = L"t12rs";
+                const ApplyResult ur = applyPlan(planUninstall(surveyEdhm(), uopt, p2), providerFor(p2));
+                check(ur.ok, "uninstall when chained to ReShade with active 2DMigoto succeeds", ur.error);
+                check(readAll(joinPath(gameDir, L"d3d11.dll")) == reshadeDll,
+                      "uninstall restored chained ReShade to d3d11.dll");
+                check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) != migotoV2,
+                      "uninstall also restored standard d3d11_edhm.dll even when chained to another mod");
             }
         }
 

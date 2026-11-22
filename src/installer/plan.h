@@ -98,6 +98,7 @@ struct Survey {
     bool                 d3dxIniPresent = false;     // <game>\d3dx.ini exists
     bool                 d3dxIniUnreadable = false;  // <game>\d3dx.ini exists but could not be read
     std::string          d3dxIniText;                // contents of <game>\d3dx.ini when present & readable
+    std::string          d3dxIniSha;                 // SHA-256 of d3dxIniText when present & readable
     bool                 iniPresent = false;
     bool                 descriptorPresent = false;
     std::string          descriptorSha;
@@ -266,8 +267,11 @@ Plan planInstall(const Survey& survey, const Options& options, const PayloadInfo
 // file, which can only keep more files than the full proof would: callers that remove files pass the payload the installer carries.
 // (Until stage 3 of docs\design-manifest-schema2-2026-11-12.md keeps a record per file id, the ownership proofs name those files by id.)
 Plan planUninstall(const Survey& survey, const Options& options, const PayloadInfo& payload = PayloadInfo());
-// Payload-free restore of the player's backed-up standard d3d11_edhm.dll (for offline opt-out or antivirus-interference recovery).
+// Payload-free restore of the player's backed-up standard d3d11_edhm.dll and d3dx.ini keys (for offline opt-out or antivirus-interference recovery).
 Plan planEdhmRestore(const Survey& survey, const Options& options);
+// EDHM-only toggle plan (installs/updates 2DMigoto + d3dx.ini compat keys when options.edhm2dMigoto is true,
+// or delegates to planEdhmRestore when false) without modifying core ED-UP DLLs or edup*.ini settings.
+Plan planEdhmToggle(const Survey& survey, const Options& options, const PayloadInfo& payload);
 
 // The one-paragraph summary shown before anything is done.
 std::string planSummary(const Plan& plan);

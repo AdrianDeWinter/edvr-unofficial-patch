@@ -256,6 +256,10 @@ ApplyResult applyPlan(const Plan& plan, const PayloadProvider& payload) {
                     if (step.required) fail(step.from, ERROR_FILE_NOT_FOUND);
                     break;  // an optional source that is not there is not an error
                 }
+                if (!step.expectSha.empty() && sha256File(step.from) != step.expectSha) {
+                    fail(step.from, ERROR_CRC);
+                    break;
+                }
                 clearReadOnly(step.to);
                 if (!protectTarget(step.to)) { fail(step.to, err); break; }
                 if (!CopyFileW(step.from.c_str(), step.to.c_str(), FALSE)) {
@@ -310,6 +314,17 @@ ApplyResult applyPlan(const Plan& plan, const PayloadProvider& payload) {
                 break;
             }
             case Action::WriteText: {
+                if (!step.from.empty()) {
+                    if (!fileExists(step.from)) {
+                        if (step.required || !step.expectSha.empty()) {
+                            fail(step.from, ERROR_FILE_NOT_FOUND);
+                            break;
+                        }
+                    } else if (!step.expectSha.empty() && sha256File(step.from) != step.expectSha) {
+                        fail(step.from, ERROR_CRC);
+                        break;
+                    }
+                }
                 const bool existed = fileExists(step.to);
                 clearReadOnly(step.to);
                 if (existed && !protectTarget(step.to)) { fail(step.to, err); break; }

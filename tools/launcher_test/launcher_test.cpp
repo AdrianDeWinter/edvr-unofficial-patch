@@ -6679,14 +6679,82 @@ void testEdhm2dMigoto() {
                   "elevated opt-out restored original d3dx.ini compat keys while preserving [Logging] toggles");
         }
 
-        // Re-enable, simulate AV deleting d3d11_edhm.dll, then opt-out via applyPlanFile restores original!
-        r = runElev(true, &out);
-        check(r.second && r.first == 0 && contains(readAll(P(game, L"d3d11_edhm.dll")), "2DMIGOTO-SIGNED-DLL-1.5.0"),
-              "elevated re-enable placed 2DMigoto again");
-        DeleteFileW(P(game, L"d3d11_edhm.dll").c_str());
-        r = runElev(false, &out);
-        check(r.second && r.first == 0 && readAll(P(game, L"d3d11_edhm.dll")) == stdEdhm,
-              "elevated AV-missing fallback restored original standard d3d11_edhm.dll");
+        // Re-enable via elevated edhm_apply, simulate AV deleting d3d11_edhm.dll, then payload-free elevated edhm_restore restores both DLL & d3dx.ini!
+        {
+            PlanFile pfApply;
+            pfApply.action = "edhm_apply";
+            pfApply.dir = game;
+            pfApply.source = L"Folder you chose";
+            pfApply.manifestSha = sha(rel.manifestBytes);
+            pfApply.edhm2dMigoto = true;
+            const std::wstring paPath = P(roots.launcherDir(), L"plan-9000-4.txt");
+            const std::wstring raPath = P(roots.launcherDir(), L"result-9000-4.txt");
+            DeleteFileW(raPath.c_str());
+            std::string aerr;
+            writePlanFile(paPath, pfApply, &aerr);
+            const int acode = applyPlanFile(paPath, g_testKeys);
+            ApplyOutcome aout;
+            check(acode == 0 && readResultFile(raPath, &aout, &aerr) && aout.status == ApplyOutcome::Status::Done &&
+                      contains(readAll(P(game, L"d3d11_edhm.dll")), "2DMIGOTO-SIGNED-DLL-1.5.0") &&
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "System", "load_library_redirect").value == "0",
+                  "elevated edhm_apply placed 2DMigoto and patched d3dx.ini");
+            DeleteFileW(paPath.c_str());
+            DeleteFileW(raPath.c_str());
+
+            DeleteFileW(P(game, L"d3d11_edhm.dll").c_str());
+            // Finding #10: payload-free elevated edhm_restore (no manifestSha!) restores DLL and d3dx.ini.
+            PlanFile pfRest;
+            pfRest.action = "edhm_restore";
+            pfRest.dir = game;
+            pfRest.source = L"Folder you chose";
+            const std::wstring prPath = P(roots.launcherDir(), L"plan-9000-5.txt");
+            const std::wstring rrPath = P(roots.launcherDir(), L"result-9000-5.txt");
+            DeleteFileW(rrPath.c_str());
+            writePlanFile(prPath, pfRest, &aerr);
+            const int rcode = applyPlanFile(prPath, g_testKeys);
+            ApplyOutcome rout;
+            check(rcode == 0 && readResultFile(rrPath, &rout, &aerr) && rout.status == ApplyOutcome::Status::Done &&
+                      readAll(P(game, L"d3d11_edhm.dll")) == stdEdhm &&
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "System", "load_library_redirect").value == "2",
+                  "payload-free elevated edhm_restore restored standard DLL and backed-up d3dx.ini keys");
+            DeleteFileW(prPath.c_str());
+            DeleteFileW(rrPath.c_str());
+        }
+
+        // Finding #9: losing ONLY the cached opt-in EDHM file (e.g. AV quarantine before restart)
+        // does not break core loadCurrentManifest, and updater.check() offers the release for
+        // cache repair rather than reporting UpToDate. Uses a fresh data root whose cache files
+        // are not memory-mapped by this test process's earlier usePayloadFiles call.
+        {
+            const std::wstring base9 = fresh("edhm-cache-loss");
+            ScriptedHttp http9;
+            http9.replies[latestUrl()] = ok(releaseJson(rel), "\"etag-edhm-9\"");
+            serveRelease(&http9, rel);
+            Updater up9(http9, settingsFor(base9));
+            const UpdateCheck c9 = up9.check();
+            std::string err9;
+            check(c9.outcome == UpdateOutcome::Available && adopt(&up9, c9, &err9),
+                  "fresh schema-3 release adopts cleanly for cache-loss test: " + err9);
+            Manifest m;
+            std::vector<PayloadFile> files;
+            check(up9.loadCurrentManifest(&m, &files, &err9), "manifest loads before deleting cached EDHM file");
+            std::wstring cachedEdhm;
+            for (const PayloadFile& pf : files) {
+                if (pf.id == "edhm_2dmigoto") { cachedEdhm = pf.path; break; }
+            }
+            check(!cachedEdhm.empty() && DeleteFileW(cachedEdhm.c_str()) != 0,
+                  "deleted only cached edhm_2dmigoto blob to simulate AV quarantine");
+            Manifest m2;
+            std::vector<PayloadFile> files2;
+            check(up9.loadCurrentManifest(&m2, &files2, &err9),
+                  "loadCurrentManifest still succeeds for core files when opt-in EDHM cache file is missing: " + err9);
+            bool foundEdhm = false;
+            for (const PayloadFile& pf : files2) if (pf.id == "edhm_2dmigoto") foundEdhm = true;
+            check(!foundEdhm, "missing opt-in EDHM cache file is omitted from loaded payload list");
+            const UpdateCheck repairCheck = up9.check();
+            check(repairCheck.outcome == UpdateOutcome::Available,
+                  "updater.check() offers release to repair missing opt-in cache file instead of UpToDate");
+        }
     }
 }
 

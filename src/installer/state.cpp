@@ -561,6 +561,7 @@ InstallState parseState(const std::string& text) {
         s.edhmD3dxBackup.upscaling.present = get("edhm_d3dx_backup", "upscaling_present") == "1";
         s.edhmD3dxBackup.upscaling.value = get("edhm_d3dx_backup", "upscaling");
     }
+    s.edhmExternalSha = get("edhm", "external_sha256");
 
     // The per-file records. A record written by this installer has [file.<id>] sections and they are all that is read. One written
     // before them (installer 0.22, launcher 0.1.0) has none, and is read into records from its component fields.
@@ -682,6 +683,10 @@ std::string serializeState(const InstallState& state) {
         out += std::string("upscaling_present = ") + (state.edhmD3dxBackup.upscaling.present ? "1" : "0") + "\r\n";
         if (state.edhmD3dxBackup.upscaling.present)
             out += "upscaling = " + clean(state.edhmD3dxBackup.upscaling.value) + "\r\n";
+    }
+    if (!state.edhmExternalSha.empty()) {
+        out += "\r\n[edhm]\r\n";
+        out += "external_sha256 = " + state.edhmExternalSha + "\r\n";
     }
     return out;
 }

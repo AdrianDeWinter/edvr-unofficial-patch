@@ -226,8 +226,27 @@ UpdateCheck Updater::check() {
     const ReleaseAsset& manifestAsset = *manifestAssetPtr;
     const ReleaseAsset& signatureAsset = *signatureAssetPtr;
 
-    // Same manifest as the one already adopted: nothing to download.
-    if (!manifestAsset.digest.empty() && manifestAsset.digest == state.currentManifest())
+    auto currentManifestCacheComplete = [&]() -> bool {
+        if (state.currentManifest().empty()) return true;
+        const std::wstring base =
+            joinPath(joinPath(settings_.launcherDir, L"manifests"), widenUtf8(state.currentManifest()));
+        std::string mBytes, sText;
+        if (!readFileBytes(base + L".json", &mBytes, kMaxManifestBytes, nullptr) ||
+            !readFileBytes(base + L".sig", &sText, 1024, nullptr))
+            return false;
+        if (sha256Bytes(mBytes.data(), mBytes.size()) != state.currentManifest()) return false;
+        Manifest curManifest;
+        if (!loadVerifiedManifest(mBytes, sText, keys(), &curManifest, nullptr)) return false;
+        PayloadCache cache(settings_.cacheDir);
+        for (const ManifestFile& f : curManifest.files) {
+            if (!cache.hasSized(f.sha256, f.size)) return false;
+        }
+        return true;
+    };
+    const bool cacheComplete = currentManifestCacheComplete();
+
+    // Same manifest as the one already adopted: nothing to download (unless cached payload files are missing).
+    if (!manifestAsset.digest.empty() && manifestAsset.digest == state.currentManifest() && cacheComplete)
         return outcomeOnly(UpdateOutcome::UpToDate, "ED-UP is up to date");
 
     auto fetchSmall = [&](const ReleaseAsset& asset, std::string* bytes, UpdateCheck* failure) {
@@ -278,7 +297,7 @@ UpdateCheck Updater::check() {
     if (manifest.tag != tag)
         return outcomeOnly(UpdateOutcome::Refused, "the release " + tag + " was refused: its manifest is for another tag");
     // A re-offered release whose digest GitHub did not report is caught here.
-    if (manifestSha == state.currentManifest())
+    if (manifestSha == state.currentManifest() && cacheComplete)
         return outcomeOnly(UpdateOutcome::UpToDate, "ED-UP is up to date");
     if (manifest.issued < state.highestIssued())
         return outcomeOnly(UpdateOutcome::UpToDate, "the release " + tag + " is older than one already accepted and was ignored");
@@ -432,7 +451,12 @@ bool Updater::loadManifestFile(const std::wstring& jsonPath, Manifest* manifest,
     PayloadCache cache(settings_.cacheDir);
     std::vector<PayloadFile> list;
     for (const ManifestFile& f : loaded.files) {
-        if (!cache.hasSized(f.sha256, f.size)) return fail("the payload cache lacks " + f.path + "; connect and update to repair it");
+        if (!cache.hasSized(f.sha256, f.size)) {
+            // Optional opt-in files (such as EDHM 2DMigoto) missing from cache must not disable
+            // core ED-UP Install/Repair; callers see the file as absent until re-downloaded.
+            if (f.when.option == "edhm_2dmigoto") continue;
+            return fail("the payload cache lacks " + f.path + "; connect and update to repair it");
+        }
         PayloadFile p;
         p.id = f.id;
         p.path = cache.pathFor(f.sha256);

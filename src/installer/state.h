@@ -124,6 +124,9 @@ struct InstallState {
     std::string nativeOriginalSha;
 
     EdhmD3dxBackup edhmD3dxBackup;
+    // Hash of a player-installed d3d11_edhm.dll kept after an external EDHM update so later
+    // ED-UP installs/repairs continue respecting it until the player explicitly reapplies 2DMigoto.
+    std::string    edhmExternalSha;
 };
 
 std::wstring stateDirPath(const std::wstring& gameDir);
