@@ -248,7 +248,16 @@ int main(int argc,char** argv){
         for(int i=0;i<4;++i){g_gpu.uiClear.timer.poll(ctx.Get());g_gpu.uiDraw.timer.poll(ctx.Get());g_gpu.eyeClear.timer.poll(ctx.Get());g_gpu.projection.timer.poll(ctx.Get());}
         d=screenMotionGpuDiagnostics();
         check(d.uiClearReady+d.uiClearInvalid<=d.uiClearSubmitted&&d.uiDrawReady+d.uiDrawInvalid<=d.uiDrawSubmitted&&d.eyeClearReady+d.eyeClearInvalid<=d.eyeClearSubmitted&&d.projectionReady+d.projectionInvalid<=d.projectionSubmitted,"screen GPU diagnostics retire only submitted samples");
-        check(d.uiClearReady+d.uiDrawReady+d.eyeClearReady+d.projectionReady>0,"screen GPU diagnostics retire WARP timestamp samples without waiting");
+        // Retired means ready or invalid: the shared GPU clock files a sample whose scope saw a disjoint clock, or that was
+        // read late, as invalid (gpu_timing.cpp DisjointReason), which a shared CI runner's WARP does now and then
+        // (2026-11-22, still after the GPU wait). Either way the diagnostics' own polls retired it without waiting.
+        {
+            const unsigned ready=d.uiClearReady+d.uiDrawReady+d.eyeClearReady+d.projectionReady;
+            const unsigned invalid=d.uiClearInvalid+d.uiDrawInvalid+d.eyeClearInvalid+d.projectionInvalid;
+            if(ready+invalid==0) std::printf("screen GPU diagnostics: 0 retired (ready %u, invalid %u, submitted %u/%u/%u/%u)\n",
+                ready,invalid,unsigned(d.uiClearSubmitted),unsigned(d.uiDrawSubmitted),unsigned(d.eyeClearSubmitted),unsigned(d.projectionSubmitted));
+            check(ready+invalid>0,"screen GPU diagnostics retire WARP timestamp samples without waiting");
+        }
     }
     // The game's first-person stencil is independent of surface distance.
     // Exercise both eyes, scenery at the same depth, the previous screen
