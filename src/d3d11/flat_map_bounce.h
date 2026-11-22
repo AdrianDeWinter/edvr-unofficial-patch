@@ -155,8 +155,10 @@ public:
             s.context=r.context; s.real=r.real; s.width=r.width; s.frame=r.frame; s.warned=false;
             if (r.seedValid && r.seed) std::memcpy(data(s),r.seed,r.width);
             else std::memset(data(s),0,r.width);
-            if (telemetry_) std::memcpy(s.baseline,data(s),r.width);
-            std::memset(s.bytes+65536,0,64);
+            if (telemetry_) {
+                std::memcpy(s.baseline,data(s),r.width);
+                std::memset(s.bytes+65536,0,64);
+            }
             driver_.retain(r.resource,r.context);
             ++bounced_;
             ++open_;

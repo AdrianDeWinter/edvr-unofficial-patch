@@ -98,6 +98,14 @@ class FlatProjectionShadowBank {
         const int idx = findIndexByIdentity(identity);
         return (idx >= 0 && entries_[idx].identityGeneration == identityGeneration) ? idx : -1;
     }
+    int resolveIndex(const void* identity, uint64_t identityGeneration, int slotHint) const noexcept {
+        if (!storage_ || !identity || !identityGeneration) return -1;
+        if (slotHint >= 0 && static_cast<size_t>(slotHint) < MaxBuffers) {
+            const Entry& e = entries_[slotHint];
+            if (e.identity == identity && e.identityGeneration == identityGeneration) return slotHint;
+        }
+        return findIndex(identity, identityGeneration);
+    }
     bool advance(Entry& entry) {
         entry.valid = false;
         if (entry.writeGeneration == UINT64_MAX) return false;
@@ -113,14 +121,18 @@ public:
     static constexpr size_t storageBytes() { return MaxBuffers * MaxWidth; }
 
     bool registerBuffer(const void* identity, uint64_t identityGeneration,
-                        uint32_t width) {
+                        uint32_t width, int* outSlot = nullptr) {
+        if (outSlot) *outSlot = -1;
         if (!ready() || !identity || !identityGeneration || width < 16 ||
             width > MaxWidth || width % 16) return false;
         const int existing = findIndexByIdentity(identity);
         if (existing >= 0) {
             Entry& old = entries_[existing];
             if (old.identityGeneration != identityGeneration) return false;
-            if (old.width == width) return true;
+            if (old.width == width) {
+                if (outSlot) *outSlot = existing;
+                return true;
+            }
             advance(old); old.mapping = false;
             return false;
         }
@@ -128,12 +140,13 @@ public:
             Entry& e = entries_[i]; e.identity = identity;
             e.identityGeneration = identityGeneration; e.width = width;
             hashInsert(identity, i);
+            if (outSlot) *outSlot = static_cast<int>(i);
             return true;
         }
         return false;
     }
-    bool releaseBuffer(const void* identity, uint64_t identityGeneration) {
-        const int idx = findIndex(identity, identityGeneration);
+    bool releaseBuffer(const void* identity, uint64_t identityGeneration, int slotHint = -1) {
+        const int idx = resolveIndex(identity, identityGeneration, slotHint);
         if (idx < 0) return false;
         Entry& e = entries_[idx];
         e.identity = nullptr; e.identityGeneration = 0; e.width = 0;
@@ -156,8 +169,8 @@ public:
 
     // Map start invalidates the previous contents immediately. A failed/short
     // Unmap capture leaves the entry invalid; there is no inferred old data.
-    bool beginMap(const void* identity, uint64_t identityGeneration) {
-        const int idx = findIndex(identity, identityGeneration);
+    bool beginMap(const void* identity, uint64_t identityGeneration, int slotHint = -1) {
+        const int idx = resolveIndex(identity, identityGeneration, slotHint);
         if (idx < 0) return false;
         Entry& e = entries_[idx];
         if (e.mapping || !advance(e)) return false;
@@ -165,8 +178,8 @@ public:
         return true;
     }
     bool finishMapFull(const void* identity, uint64_t identityGeneration,
-                       const void* bytes, uint32_t width) {
-        const int idx = findIndex(identity, identityGeneration);
+                       const void* bytes, uint32_t width, int slotHint = -1) {
+        const int idx = resolveIndex(identity, identityGeneration, slotHint);
         if (idx < 0) return false;
         Entry& e = entries_[idx];
         if (!e.mapping) return false;
@@ -177,8 +190,8 @@ public:
         return true;
     }
     bool captureFullWrite(const void* identity, uint64_t identityGeneration,
-                          const void* bytes, uint32_t width) {
-        const int idx = findIndex(identity, identityGeneration);
+                          const void* bytes, uint32_t width, int slotHint = -1) {
+        const int idx = resolveIndex(identity, identityGeneration, slotHint);
         if (idx < 0) return false;
         Entry& e = entries_[idx];
         if (!advance(e)) return false;
@@ -189,8 +202,8 @@ public:
         return true;
     }
     // Call for partial/unknown/copy/GPU writes, or any untracked mutation.
-    bool invalidate(const void* identity, uint64_t identityGeneration) {
-        const int idx = findIndex(identity, identityGeneration);
+    bool invalidate(const void* identity, uint64_t identityGeneration, int slotHint = -1) {
+        const int idx = resolveIndex(identity, identityGeneration, slotHint);
         if (idx < 0) return false;
         Entry& e = entries_[idx];
         if (!advance(e)) return false;
@@ -198,8 +211,8 @@ public:
         return true;
     }
     bool lookup(const void* identity, uint64_t identityGeneration,
-                FlatProjectionShadowView& out) const {
-        const int idx = findIndex(identity, identityGeneration);
+                FlatProjectionShadowView& out, int slotHint = -1) const {
+        const int idx = resolveIndex(identity, identityGeneration, slotHint);
         if (idx < 0) return false;
         const Entry& e = entries_[idx];
         if (!e.valid || e.mapping) return false;

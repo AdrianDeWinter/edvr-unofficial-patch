@@ -288,6 +288,7 @@ struct FeatureSlot {
 struct State {
     ComPtr<ID3D11Device> d11;
     ComPtr<ID3D11DeviceContext> ownerContext;
+    ComPtr<ID3D11DeviceContext4> ownerCtx4;
     DWORD ownerThread = 0;
     ComPtr<ID3D11Device5> d11v5;
     ComPtr<ID3D12Device> d12;
@@ -322,6 +323,7 @@ struct State {
         fence12.Reset();
         queue.Reset();
         d12.Reset();
+        ownerCtx4.Reset();
         ownerContext.Reset();
         d11v5.Reset();
         d11.Reset();
@@ -443,11 +445,12 @@ void noteSample(std::vector<double>& samples, double ms) {
 
 // Milliseconds between two QueryPerformanceCounter readings.
 double qpcSpanMs(const LARGE_INTEGER& from, const LARGE_INTEGER& to) {
-    LARGE_INTEGER frequency{};
-    QueryPerformanceFrequency(&frequency);
-    return frequency.QuadPart > 0
-        ? static_cast<double>(to.QuadPart - from.QuadPart) * 1000.0 / static_cast<double>(frequency.QuadPart)
-        : 0.0;
+    static const double kMsPerTick = []() {
+        LARGE_INTEGER frequency{};
+        QueryPerformanceFrequency(&frequency);
+        return frequency.QuadPart > 0 ? 1000.0 / static_cast<double>(frequency.QuadPart) : 0.0;
+    }();
+    return static_cast<double>(to.QuadPart - from.QuadPart) * kMsPerTick;
 }
 
 // Cuts an evaluation's CPU span into phases: each end() adds the time since the previous end (or since the start stamp) to its
@@ -1300,9 +1303,16 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
         return fail(why, "invalid FSR 4 context, dimensions, or jitter");
     LARGE_INTEGER began{};
     QueryPerformanceCounter(&began);
+    const DWORD thread = GetCurrentThreadId();
     ComPtr<ID3D11Device> device;
-    ctx->GetDevice(device.GetAddressOf());
-    if (!fsr4Available(device.Get(), why)) return false;
+    ID3D11Device* devPtr = nullptr;
+    if (g_available && g_state && g_state->ownerThread == thread && g_state->ownerContext.Get() == ctx) {
+        devPtr = g_state->d11.Get();
+    } else {
+        ctx->GetDevice(device.GetAddressOf());
+        if (!fsr4Available(device.Get(), why)) return false;
+        devPtr = device.Get();
+    }
     State& state = *g_state;
     FeatureSlot& holder = state.slots[slot];
     if (state.untrackedSubmission) {
@@ -1314,13 +1324,15 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
         if (why) *why = reason;
         return false;
     }
-    const DWORD thread = GetCurrentThreadId();
     if (state.ownerThread && (state.ownerThread != thread || state.ownerContext.Get() != ctx))
         return fail(why, "FSR 4 backend must use its original D3D11 immediate context/render thread");
     if (!state.ownerThread) { state.ownerThread = thread; state.ownerContext = ctx; }
-    ComPtr<ID3D11DeviceContext4> ctx4;
-    HRESULT hr = ctx->QueryInterface(IID_PPV_ARGS(ctx4.GetAddressOf()));
-    if (FAILED(hr)) return fail(why, "ID3D11DeviceContext4/Signal/Wait unavailable 0x%08X", unsigned(hr));
+    HRESULT hr = S_OK;
+    if (!state.ownerCtx4) {
+        hr = ctx->QueryInterface(IID_PPV_ARGS(state.ownerCtx4.GetAddressOf()));
+        if (FAILED(hr)) return fail(why, "ID3D11DeviceContext4/Signal/Wait unavailable 0x%08X", unsigned(hr));
+    }
+    ID3D11DeviceContext4* ctx4 = state.ownerCtx4.Get();
     // Bridge timing is read here, between evaluations, from results the GPU has finished. Its 30 s line is due here too.
     sweepBridge(state, slot, ctx);
     if (holder.window.executed && GetTickCount64() - holder.window.startedAt >= kBridgeReportMs) reportSlot(state, slot);
@@ -1328,11 +1340,31 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
     // Everything that can refuse for a reason of the caller's inputs does so before any D3D11 work is queued, so a refusal here
     // leaves nothing in flight and latches nothing.
     SourcePlan colourPlan, depthPlan, motionPlan, outPlan;
-    if (!planInput(colour, Fsr4Role::Colour, w, h, "color", colourPlan, why) ||
-        !planInput(depth, Fsr4Role::Depth, w, h, "depth", depthPlan, why) ||
-        !planInput(mv, Fsr4Role::Motion, w, h, "motion", motionPlan, why) ||
-        !planOutput(out, outW, outH, outPlan, why))
+    const Feature* cached = holder.feature.get();
+    const bool cachedIn = cached && cached->key.inW == w && cached->key.inH == h &&
+                          cached->key.infiniteDepth == infiniteDepth && cached->key.hdr == hdr;
+    const bool cachedOut = cached && cached->key.outW == outW && cached->key.outH == outH &&
+                           cached->key.infiniteDepth == infiniteDepth && cached->key.hdr == hdr;
+    if (cachedIn && colour && colour == cached->color.d11.Get()) {
+        colourPlan = {static_cast<DXGI_FORMAT>(cached->key.colourFormat), true};
+    } else if (!planInput(colour, Fsr4Role::Colour, w, h, "color", colourPlan, why)) {
         return false;
+    }
+    if (cachedIn && depth && (depth == cached->depth.d11.Get() || depth == cached->depthAlt.d11.Get())) {
+        depthPlan = {static_cast<DXGI_FORMAT>(cached->key.depthFormat), true};
+    } else if (!planInput(depth, Fsr4Role::Depth, w, h, "depth", depthPlan, why)) {
+        return false;
+    }
+    if (cachedIn && mv && mv == cached->motion.d11.Get()) {
+        motionPlan = {static_cast<DXGI_FORMAT>(cached->key.motionFormat), true};
+    } else if (!planInput(mv, Fsr4Role::Motion, w, h, "motion", motionPlan, why)) {
+        return false;
+    }
+    if (cachedOut && out && out == cached->output.d11.Get()) {
+        outPlan = {static_cast<DXGI_FORMAT>(cached->key.outFormat), true};
+    } else if (!planOutput(out, outW, outH, outPlan, why)) {
+        return false;
+    }
     float camNear = 0.0f, camFar = 0.0f;
     const char* planesWhy = nullptr;
     if (!fsr4CameraPlanes(nearZ, farZ, infiniteDepth, &camNear, &camFar, &planesWhy)) return fail(why, "%s", planesWhy);
@@ -1478,7 +1510,7 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
     }
     phase.end(kPhaseTakeIn);
     // Bridge timing opens before the input copies: total, then copy-in. The guard cancels them on any failure below.
-    BridgeSet* bridge = sampleTiming ? beginBridge(holder, device.Get(), ctx) : nullptr;
+    BridgeSet* bridge = sampleTiming ? beginBridge(holder, devPtr, ctx) : nullptr;
     BridgeGuard guard(bridge, ctx);
     const bool directColor = colour == feature.color.d11.Get();
     const bool directMotion = mv == feature.motion.d11.Get();
@@ -1499,7 +1531,7 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
     }
     if (bridge) {   // copy-in ends after the Signal is enqueued; the wait starts there
         bridge->timers[kBridgeCopyIn].end(ctx);
-        bridge->timers[kBridgeWait].begin(device.Get(), ctx);
+        bridge->timers[kBridgeWait].begin(devPtr, ctx);
     }
     ctx->Flush();
     state.unflushedConsumer = 0;
@@ -1539,7 +1571,7 @@ bool fsr4Evaluate(ID3D11DeviceContext* ctx, unsigned slot, ID3D11Texture2D* colo
                                 static_cast<unsigned long long>(done), unsigned(hr));
     if (bridge) {   // the wait ends once the D3D12 signal has passed; copy-out starts there
         bridge->timers[kBridgeWait].end(ctx);
-        bridge->timers[kBridgeCopyOut].begin(device.Get(), ctx);
+        bridge->timers[kBridgeCopyOut].begin(devPtr, ctx);
     }
     phase.end(kPhaseWaitOut);
     SharedTexture* const result[] = {&feature.output};

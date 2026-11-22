@@ -1268,6 +1268,8 @@ FlatDomainCtx1Cache g_flatDomainCtx1;
 // Last context/auxStageEpoch where GS/HS/DS/Predication were proven null in engineVelocityFlatDomainBeginDraw (under g_mutex).
 ID3D11DeviceContext* g_flatAuxNullCtx = nullptr;
 uint64_t g_flatAuxNullEpoch = 0;
+// Bit 0: RT+PS readback verified this frame; bit 1: token CB slot readback verified this frame (under g_mutex).
+uint32_t g_flatDomainVerifiedMask = 0;
 
 // The game's render-target set as the context holds it now: eight views and the depth view, MRT6 only when it is
 // EDVR's own (which is then not part of the set, and reported by the flag).
@@ -2596,7 +2598,7 @@ void skinBuildPoseLocked(ID3D11DeviceContext* ctx) {
 void summaryLocked(uint64_t now, ID3D11DeviceContext* ctx) {
     const double seconds = std::max(1.0, double(now - g_windowStartMs) / 1000.0);
     const double frames = std::max<double>(1.0, double(g_draw.frames));
-    const auto r = [](const std::atomic<uint64_t>& c) { return static_cast<unsigned long long>(c.load(std::memory_order_relaxed)); };
+    const auto r = [](const auto& c) { return static_cast<unsigned long long>(c.load(std::memory_order_relaxed)); };
     const auto u = [](uint64_t v) { return static_cast<unsigned long long>(v); };
     const uint64_t sampled = g_emitSampled.exchange(0), sampledTicks = g_emitSampledTicks.exchange(0);
     const double freq = double(std::max<int64_t>(1, qpcFrequency()));
@@ -2963,6 +2965,7 @@ void clearLocked() {
     g_flatDomainCtx1 = FlatDomainCtx1Cache{};
     g_flatAuxNullCtx = nullptr;
     g_flatAuxNullEpoch = 0;
+    g_flatDomainVerifiedMask = 0;
     cache = DrawCache{};
     if (g_table) g_table->clear();
     if (g_census) g_census->clear();
@@ -3333,10 +3336,12 @@ bool engineVelocityFlatDomainBeginDraw(ID3D11DeviceContext* ctx,ID3D11Texture2D*
     ID3D11Buffer* so[4]{};ctx->SOGetTargets(4,so);bool busy=false;
     for(auto* p:so)if(p){busy=true;p->Release();}
     if(busy)return fail("flat-domain-stream-output");
-    ID3D11UnorderedAccessView* uavs[8]{};
-    ctx->OMGetRenderTargetsAndUnorderedAccessViews(0,nullptr,nullptr,0,8,uavs);
-    for(auto* p:uavs)if(p){busy=true;p->Release();}
-    if(busy)return fail("flat-domain-uav");
+    if(flatIssueEpochFrozen() || !flatOmUavKnownZero()) {
+        ID3D11UnorderedAccessView* uavs[8]{};
+        ctx->OMGetRenderTargetsAndUnorderedAccessViews(0,nullptr,nullptr,0,8,uavs);
+        for(auto* p:uavs)if(p){busy=true;p->Release();}
+        if(busy)return fail("flat-domain-uav");
+    }
     ID3D11RenderTargetView* targets[8]{};ctx->OMGetRenderTargets(8,targets,&saved.depth);
     for(unsigned i=0;i<8;++i)saved.targets[i].Attach(targets[i]);
     if(!saved.depth || targets[kEngineVelocityTarget])return fail("flat-domain-native-MRT6-or-depth");
@@ -3401,7 +3406,8 @@ bool engineVelocityFlatDomainBeginDraw(ID3D11DeviceContext* ctx,ID3D11Texture2D*
         }
         g_flatDomainShaders.push_back(std::move(entry));shader=g_flatDomainShaders.end()-1;
     }
-    ctx->OMGetBlendState(&saved.blend,saved.factor,&saved.sampleMask);
+    if(bindingGeneration(BindSlot::Blend)!=0)flatQueryGameBlend(ctx,&saved.blend,saved.factor,&saved.sampleMask);
+    else ctx->OMGetBlendState(&saved.blend,saved.factor,&saved.sampleMask);
     const char* blendReason=nullptr;ID3D11BlendState* blend=derivedBlendFor(ctx,saved.blend.Get(),&blendReason,true);
     if(!blend)return fail(blendReason?blendReason:"flat-domain-blend");
     FlatMarkerPlane* plane=flatMarkerPlane(ctx,depth,domain==FlatEngineDomain::ForeignPool);
@@ -3434,17 +3440,21 @@ bool engineVelocityFlatDomainBeginDraw(ID3D11DeviceContext* ctx,ID3D11Texture2D*
     if(shader->patchedVs)vScreenVSSetShaderRaw(ctx,shader->patchedVs.Get(),nullptr,0);
     vScreenPSSetShaderRaw(ctx,shader->patchedPs.Get(),nullptr,0);
     g_flatDomainSaved=std::move(saved);
-    ID3D11RenderTargetView* verified[8]{};ctx->OMGetRenderTargets(8,verified,nullptr);
-    bool bound=verified[kEngineVelocityTarget]==plane->rtv.Get();
-    for(unsigned i=0;i<8;++i)if(i!=kEngineVelocityTarget && verified[i]!=g_flatDomainSaved.targets[i].Get())bound=false;
-    Ptr<ID3D11PixelShader> heldPs;ctx->PSGetShader(&heldPs,nullptr,nullptr);
-    if(heldPs!=shader->patchedPs)bound=false;
-    if(g_flatDomainSaved.tokenSlot!=~0u) {
-        Ptr<ID3D11Buffer> tokenBound;ctx->PSGetConstantBuffers(g_flatDomainSaved.tokenSlot,1,&tokenBound);
-        if(tokenBound!=g_flatDomainTokenBuffer)bound=false;
+    const uint32_t needVerify=g_flatDomainSaved.tokenSlot!=~0u?3u:1u;
+    if((g_flatDomainVerifiedMask&needVerify)!=needVerify || flatQueryCut().checkingThisFrame()) {
+        ID3D11RenderTargetView* verified[8]{};ctx->OMGetRenderTargets(8,verified,nullptr);
+        bool bound=verified[kEngineVelocityTarget]==plane->rtv.Get();
+        for(unsigned i=0;i<8;++i)if(i!=kEngineVelocityTarget && verified[i]!=g_flatDomainSaved.targets[i].Get())bound=false;
+        Ptr<ID3D11PixelShader> heldPs;ctx->PSGetShader(&heldPs,nullptr,nullptr);
+        if(heldPs!=shader->patchedPs)bound=false;
+        if(g_flatDomainSaved.tokenSlot!=~0u) {
+            Ptr<ID3D11Buffer> tokenBound;ctx->PSGetConstantBuffers(g_flatDomainSaved.tokenSlot,1,&tokenBound);
+            if(tokenBound!=g_flatDomainTokenBuffer)bound=false;
+        }
+        for(auto* view:verified)if(view)view->Release();
+        if(!bound){engineVelocityFlatDomainEndDraw(ctx);return fail("flat-domain-slot-bind-refused");}
+        g_flatDomainVerifiedMask|=needVerify;
     }
-    for(auto* view:verified)if(view)view->Release();
-    if(!bound){engineVelocityFlatDomainEndDraw(ctx);return fail("flat-domain-slot-bind-refused");}
     return true;
 }
 bool engineVelocityFlatSourceShaders(ID3D11DeviceContext* ctx,uint64_t vsHash,uint64_t psHash) {
@@ -3552,6 +3562,7 @@ void engineVelocityFlatFrameEnd() noexcept {
     g_gameBlendMemo = GameBlendMemo{};
     g_keptMemo = KeptMemo{};
     g_sourceDepthMemo = SourceDepthMemo{};
+    g_flatDomainVerifiedMask = 0;
 }
 
 void engineVelocityFlatAbandon() noexcept {
@@ -3567,6 +3578,7 @@ void engineVelocityFlatAbandon() noexcept {
     g_flatDomainCtx1 = FlatDomainCtx1Cache{};
     g_flatAuxNullCtx = nullptr;
     g_flatAuxNullEpoch = 0;
+    g_flatDomainVerifiedMask = 0;
     g_flatPending.store(false, std::memory_order_release);
     g_eyes[kEngineVelocitySourceEye].bindingStale = true;
     cache = DrawCache{};
@@ -3896,6 +3908,7 @@ void engineVelocityFrameBoundary(ID3D11DeviceContext* ctx) {
     g_bound = Bound{};
     g_anyBound.store(false, std::memory_order_release);
     g_sourceDepthMemo = SourceDepthMemo{};
+    g_flatDomainVerifiedMask = 0;
     if (!live.load(std::memory_order_acquire)) return;
     cache = DrawCache{};
     ++g_draw.frames;

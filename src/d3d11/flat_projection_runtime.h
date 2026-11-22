@@ -122,10 +122,12 @@ public:
     void pollColdReadbacks(); // owner Present; never flushes or blocks on Map
     bool observeCreateBuffer(ID3D11Buffer* buffer, const void* initialData);
     void observeMap(ID3D11Resource* resource, D3D11_MAP type, const void* bytes);
+    void observeMapSlot(int slot, ID3D11Resource* resource, D3D11_MAP type, const void* bytes);
     void observeUnmap(ID3D11Resource* resource, uint64_t frame = 0, uint32_t sequence = 0);
     bool observeUnmapIfTracked(ID3D11Resource* resource, uint64_t frame = 0, uint32_t sequence = 0);
     // Called after the real Map and before observeMap invalidates the shadow.
     FlatProjectionBounceSource bounceSource(ID3D11Resource* resource);
+    int findTrackedSlot(ID3D11Resource* resource) noexcept;
     bool containsTracked(ID3D11Resource* resource) { return find(resource) != nullptr; }
     // A map or update of a resource already found not to be a projection buffer. The scope around the
     // observer can skip it. A later CreateBuffer clears any rejection for that address so a reused
@@ -145,6 +147,8 @@ public:
     }
     void observeUpdate(ID3D11Resource* resource, const void* bytes, const D3D11_BOX* box,
                        uint64_t frame = 0, uint32_t sequence = 0);
+    void observeUpdateSlot(int slot, ID3D11Resource* resource, const void* bytes, const D3D11_BOX* box,
+                           uint64_t frame = 0, uint32_t sequence = 0);
     void invalidate(ID3D11Resource* resource);
     void invalidateAll();
 
@@ -199,6 +203,8 @@ private:
         // Live plans referencing this buffer; promoted only while nonzero, so
         // a retired plan's buffers become evictable again (section 72 step 3).
         uint32_t planRefs = 0;
+        uint64_t lastUseSerial = 0;
+        int16_t shadowSlot = -1;
     };
     struct CachedPlan {
         bool used = false;
@@ -227,6 +233,7 @@ private:
     DWORD owner_ = 0;
     uint64_t nextGeneration_ = 1;
     uint64_t nextUseSerial_ = 1;
+    uint64_t nextTrackedUse_ = 1;
     uint32_t coldAttempts_ = 0;
     bool coldEnabled_ = false;
     bool (*bounceSampleWants_)(uint32_t) = nullptr;
@@ -254,6 +261,7 @@ private:
     Tracked* find(ID3D11Resource* resource);
     Tracked* track(ID3D11Resource* resource);
     Tracked* trackOrReject(ID3D11Resource* resource);
+    Tracked* trackOrRejectMiss(ID3D11Resource* resource);
     void rebuildFindIndex() noexcept;
     void insertFindIndex(uint32_t slot) noexcept;
     void rememberReject(ID3D11Resource* resource) noexcept;
@@ -269,7 +277,10 @@ private:
     };
     RejectSlot reject_[kRejectSlots]{};
     std::atomic<uint32_t> rejectGen_{1};
+    void observeMapEntry(Tracked& entry, D3D11_MAP type, const void* bytes);
     void observeUnmapEntry(Tracked& entry, uint64_t frame, uint32_t sequence);
+    void observeUpdateEntry(Tracked& entry, const void* bytes, const D3D11_BOX* box,
+                            uint64_t frame, uint32_t sequence);
     void discard(Tracked& entry);
     void mutate(Tracked& entry);
     bool queueCold(Tracked& entry);

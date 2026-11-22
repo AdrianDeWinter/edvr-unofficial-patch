@@ -54,6 +54,7 @@
 //     the record's history is uncertified the same way. Mixed calls never
 //     commit a joined history.
 #include <windows.h>
+#include <intrin.h>
 
 #include <atomic>
 #include <cstdint>
@@ -114,13 +115,46 @@ inline uint64_t mixBits(uint64_t x) {
     return x;
 }
 
+inline uint32_t currentThreadShard() noexcept {
+#if defined(_M_X64)
+    const uint32_t tid = static_cast<uint32_t>(__readgsdword(0x48));
+#else
+    const uint32_t tid = static_cast<uint32_t>(GetCurrentThreadId());
+#endif
+    return ((tid >> 2) ^ (tid >> 6)) & 15u;
+}
+
+// 16 cache-line-padded slots indexed by thread shard to eliminate cross-core
+// cache-line bouncing on high-frequency worker counters.
+struct ShardedCounter {
+    static constexpr size_t kShards = 16;
+    struct alignas(64) Slot { std::atomic<uint64_t> value{0}; };
+    Slot slots[kShards];
+    uint64_t fetch_add(uint64_t n, std::memory_order order = std::memory_order_relaxed) noexcept {
+        return slots[currentThreadShard()].value.fetch_add(n, order);
+    }
+    uint64_t load(std::memory_order order = std::memory_order_relaxed) const noexcept {
+        uint64_t sum = 0;
+        for (const auto& s : slots) sum += s.value.load(order);
+        return sum;
+    }
+    void store(uint64_t v, std::memory_order order = std::memory_order_relaxed) noexcept {
+        slots[0].value.store(v, order);
+        for (size_t i = 1; i < kShards; ++i) slots[i].value.store(0, order);
+    }
+    operator uint64_t() const noexcept { return load(std::memory_order_relaxed); }
+};
+
 // Counters. Relaxed atomics: several job threads emit at once.
 struct Stats {
-    std::atomic<uint64_t> calls{0}, callsWithItems{0}, itemsAppended{0}, drained{0}, tooMany{0};
+    ShardedCounter calls, callsWithItems, itemsAppended;
+    std::atomic<uint64_t> drained{0}, tooMany{0};
     std::atomic<uint64_t> readFaults{0}, locateFailures{0}, disagreements{0}, writeFaults{0};
-    std::atomic<uint64_t> itemsJoined{0}, itemsMoving{0}, itemsMasked{0};
-    std::atomic<uint64_t> recordsMoving{0}, firstSeen{0}, gaps{0}, identityResets{0};
-    std::atomic<uint64_t> repeats{0}, sameFrameChanges{0}, overflow{0};
+    ShardedCounter itemsJoined, itemsMoving, itemsMasked;
+    ShardedCounter recordsMoving, firstSeen, gaps;
+    std::atomic<uint64_t> identityResets{0};
+    ShardedCounter repeats;
+    std::atomic<uint64_t> sameFrameChanges{0}, overflow{0};
     // Why a call was masked beyond the three baseline cases above: the
     // previous frame's pose was not certified (a same-tick change or a
     // failed call then), or this call itself failed provenance.
@@ -131,20 +165,22 @@ struct Stats {
     // evaluated, of those moving since their previous evaluated frame, split
     // by whether any call that frame appended items; gaps of census records,
     // split by whether the record was evaluated (without items) in between.
-    std::atomic<uint64_t> censusFrames{0}, censusMovingDrawn{0}, censusMovingUndrawn{0};
+    ShardedCounter censusFrames, censusMovingDrawn, censusMovingUndrawn;
     std::atomic<uint64_t> gapsEvaluatedBetween{0}, gapsUnevaluated{0};
     void clear() {
-        for (auto* c : {&calls, &callsWithItems, &itemsAppended, &drained, &tooMany, &readFaults,
-                        &locateFailures, &disagreements, &writeFaults, &itemsJoined, &itemsMoving,
-                        &itemsMasked, &recordsMoving, &firstSeen, &gaps, &identityResets, &repeats,
-                        &sameFrameChanges, &overflow, &uncertifiedHistory, &callsUnproven, &taints,
-                        &censusFrames, &censusMovingDrawn, &censusMovingUndrawn, &gapsEvaluatedBetween,
-                        &gapsUnevaluated})
+        for (auto* c : {&calls, &callsWithItems, &itemsAppended, &itemsJoined, &itemsMoving, &itemsMasked,
+                        &recordsMoving, &firstSeen, &gaps, &repeats, &censusFrames, &censusMovingDrawn,
+                        &censusMovingUndrawn})
+            c->store(0, std::memory_order_relaxed);
+        for (auto* c : {&drained, &tooMany, &readFaults, &locateFailures, &disagreements, &writeFaults,
+                        &identityResets, &sameFrameChanges, &overflow, &uncertifiedHistory, &callsUnproven,
+                        &taints, &gapsEvaluatedBetween, &gapsUnevaluated})
             c->store(0, std::memory_order_relaxed);
         for (auto& c : gapAge) c.store(0, std::memory_order_relaxed);
     }
 };
-inline void bump(std::atomic<uint64_t>& c, uint64_t n = 1) { c.fetch_add(n, std::memory_order_relaxed); }
+inline void bump(std::atomic<uint64_t>& c, uint64_t n = 1) noexcept { c.fetch_add(n, std::memory_order_relaxed); }
+inline void bump(ShardedCounter& c, uint64_t n = 1) noexcept { c.fetch_add(n, std::memory_order_relaxed); }
 inline unsigned gapBucket(uint32_t age) { return age <= 2 ? 0u : age <= 4 ? 1u : age <= 8 ? 2u : age <= 64 ? 3u : 4u; }
 
 // The previous-pose table: per engine record (pointer, with record+0x18 as

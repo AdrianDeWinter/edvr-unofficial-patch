@@ -7,6 +7,7 @@
 #include <vector>
 #include "animated_history_ledger.h"
 #include "animated_history_writes.h"
+#include "flat_issue_epoch.h"
 #include "panel_curve.h"
 #include "shader_swap.h"
 #include "temporal_shader_bytecode.h"
@@ -110,16 +111,23 @@ public:
            instances!=1 || !count || count%3 || count>maxVertices)return refuse("draw-shape");
         ctx->IAGetPrimitiveTopology(&out.topology);
         if(out.topology!=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST)return refuse("topology");
-        Ptr<ID3D11GeometryShader> gs;Ptr<ID3D11HullShader> hs;Ptr<ID3D11DomainShader> dom;
-        ctx->GSGetShader(&gs,nullptr,nullptr);ctx->HSGetShader(&hs,nullptr,nullptr);ctx->DSGetShader(&dom,nullptr,nullptr);
-        if(gs || hs || dom)return refuse("tessellation-or-geometry-shader");
-        Ptr<ID3D11Predicate> predicate;BOOL pred=FALSE;ctx->GetPredication(&predicate,&pred);
-        if(predicate)return refuse("predication");
+        const bool flatEpochTrusted=extended && runtimeFlatProfile() && !flatIssueEpochFrozen();
+        const uint64_t auxEpoch=flatEpochTrusted?flatAuxStageEpochLoad():0;
+        if(!flatEpochTrusted || auxNullCtx_!=ctx || auxNullEpoch_!=auxEpoch) {
+            Ptr<ID3D11GeometryShader> gs;Ptr<ID3D11HullShader> hs;Ptr<ID3D11DomainShader> dom;
+            ctx->GSGetShader(&gs,nullptr,nullptr);ctx->HSGetShader(&hs,nullptr,nullptr);ctx->DSGetShader(&dom,nullptr,nullptr);
+            if(gs || hs || dom){auxNullEpoch_=0;return refuse("tessellation-or-geometry-shader");}
+            Ptr<ID3D11Predicate> predicate;BOOL pred=FALSE;ctx->GetPredication(&predicate,&pred);
+            if(predicate){auxNullEpoch_=0;return refuse("predication");}
+            if(flatEpochTrusted && flatAuxStageEpochLoad()==auxEpoch){auxNullCtx_=ctx;auxNullEpoch_=auxEpoch;}
+        }
         ID3D11Buffer* targets[4]{};ctx->SOGetTargets(4,targets);bool busy=false;
         for(auto* p:targets)if(p){busy=true;p->Release();}if(busy)return refuse("stream-output-bound");
-        ID3D11UnorderedAccessView* uavs[8]{};
-        ctx->OMGetRenderTargetsAndUnorderedAccessViews(0,nullptr,nullptr,0,8,uavs);
-        for(auto* p:uavs)if(p){busy=true;p->Release();}if(busy)return refuse("uav-bound");
+        if(!flatEpochTrusted || !flatOmUavKnownZero()) {
+            ID3D11UnorderedAccessView* uavs[8]{};
+            ctx->OMGetRenderTargetsAndUnorderedAccessViews(0,nullptr,nullptr,0,8,uavs);
+            for(auto* p:uavs)if(p){busy=true;p->Release();}if(busy)return refuse("uav-bound");
+        }
         Geometry& key=out.geometry;
         ctx->VSGetShader(&key.original,nullptr,nullptr);ctx->IAGetInputLayout(&key.layout);
         ctx->IAGetVertexBuffers(1,1,&key.vertices,&key.stride,&key.offset);
@@ -197,7 +205,6 @@ public:
             out.candidateCount=take;
         }
         auto found=std::find_if(records_.begin(),records_.end(),[&](const Record& r){return matches(r.geometry,key) && r.frame[next]!=frame;});
-        Ptr<ID3D11Device> dev;ctx->GetDevice(&dev);
         if(found==records_.end()) {
             const uint64_t requested=uint64_t(count)*32;
             auto overBudget=[&]{return records_.size()>=maxRecords || uint64_t(bytes_)+requested>maxBytes;};
@@ -227,6 +234,7 @@ public:
                 }
             }
             if(overBudget())return refuseKeyed("history-budget",HistoryLedger::RefusedBudget);
+            Ptr<ID3D11Device> dev;ctx->GetDevice(&dev);
             Record record;record.geometry=key;record.capture=std::move(reclaimedCapture);
             indexRange(key,record.ibFirst,record.ibEnd);record.bornFrame=frame;
             if(!allocate(dev.Get(),record)){failed_=true;return refuseKeyed("resource-creation",HistoryLedger::RefusedOther);}
@@ -245,17 +253,24 @@ public:
         out.instanceIndex=instanceView_;
         D3D11_BOX box{out.instanceByteOffset,0,0,out.instanceByteOffset+4,1,1};
         ctx->CopySubresourceRegion(instance_.Get(),0,0,0,0,out.instanceBuffer.Get(),0,&box);
-        Ptr<ID3D11ComputeShader> saved;ID3D11ClassInstance* classes[256]{};UINT count=256;
-        ctx->CSGetShader(&saved,classes,&count);ID3D11ShaderResourceView* srvs[2]{};
+        Ptr<ID3D11ComputeShader> saved;UINT count=0;
+        ctx->CSGetShader(&saved,nullptr,&count);
+        ID3D11ClassInstance* classes[256];
+        if(count) {
+            if(count>256)count=256;
+            saved.Reset();
+            ctx->CSGetShader(&saved,classes,&count);
+        }
+        ID3D11ShaderResourceView* srvs[2]{};
         ctx->CSGetShaderResources(0,2,srvs);Ptr<ID3D11UnorderedAccessView> uav;ctx->CSGetUnorderedAccessViews(0,1,&uav);
         ID3D11ShaderResourceView* in[2]={instanceView_.Get(),out.pool.Get()};
         ctx->CSSetShaderResources(0,2,in);ID3D11UnorderedAccessView* target=out.identityUav.Get();
         ctx->CSSetUnorderedAccessViews(0,1,&target,nullptr);ctx->CSSetShader(identify_.Get(),nullptr,0);ctx->Dispatch(1,1,1);
         ID3D11ShaderResourceView* none[2]{};ID3D11UnorderedAccessView* noUav=nullptr;
         ctx->CSSetShaderResources(0,2,none);ctx->CSSetUnorderedAccessViews(0,1,&noUav,nullptr);
-        ctx->CSSetShader(saved.Get(),classes,count);ctx->CSSetShaderResources(0,2,srvs);
+        ctx->CSSetShader(saved.Get(),count?classes:nullptr,count);ctx->CSSetShaderResources(0,2,srvs);
         UINT keep=~0u;ctx->CSSetUnorderedAccessViews(0,1,uav.GetAddressOf(),&keep);
-        for(auto* p:srvs)if(p)p->Release();for(UINT i=0;i<count;++i)classes[i]->Release();
+        for(auto* p:srvs)if(p)p->Release();for(UINT i=0;i<count;++i)if(classes[i])classes[i]->Release();
     }
     void bindPositions(ID3D11DeviceContext* ctx,const Capture& out) {
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);ctx->GSSetShader(out.streamOutput.Get(),nullptr,0);
@@ -289,8 +304,10 @@ public:
                   unsigned start,int base,unsigned startInstance,unsigned frame,Capture& out,bool retainIndex=false,bool extended=false) {
         if(!draw){out=Capture{};out.refusal="missing-draw";return false;}
         if(!prepareCapture(ctx,count,instances,start,base,startInstance,frame,out,extended))return false;
-        Ptr<ID3D11Device> dev;ctx->GetDevice(&dev);
-        if(!initializeIdentity(ctx,dev.Get())){out.refusal="resource-creation";return false;}
+        if(!instanceView_) {
+            Ptr<ID3D11Device> dev;ctx->GetDevice(&dev);
+            if(!initializeIdentity(ctx,dev.Get())){out.refusal="resource-creation";return false;}
+        }
         submitIdentity(ctx,out);submitPositions(ctx,draw,startInstance,out);
         if(retainIndex && !retainInstanceIndex(ctx,out)){out.refusal="index-snapshot-creation";return false;}
         if(extended)ensureVertexSet(ctx,out);
@@ -928,6 +945,7 @@ private:
     unsigned retainFrame_=~0u,retainNext_=0;uint64_t retainCreated_=0,retainUsed_=0;
     Ptr<ID3D11ComputeShader> identify_;Ptr<ID3D11Buffer> instance_;Ptr<ID3D11ShaderResourceView> instanceView_;
     unsigned bytes_=0,reclaimedRecords_=0,reclaimedBytes_=0;bool failed_=false;
+    ID3D11DeviceContext* auxNullCtx_=nullptr;uint64_t auxNullEpoch_=0;
     // What erased records leave for the next ones (allocateBuffers): the stream-output shaders by VS, and the two buffer sets.
     struct StreamOutput {Ptr<ID3D11VertexShader> vs;Ptr<ID3D11GeometryShader> gs;unsigned lastUsed=0;};
     static constexpr unsigned kStreamOutputs=64;

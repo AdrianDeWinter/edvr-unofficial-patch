@@ -3126,8 +3126,8 @@ void STDMETHODCALLTYPE hookedGenerateMips(ID3D11DeviceContext* self,
 void STDMETHODCALLTYPE hookedOMSetRenderTargets(ID3D11DeviceContext* self, UINT n,
                                                 ID3D11RenderTargetView* const* rtvs,
                                                 ID3D11DepthStencilView* dsv) {
-    if (!foreignContext(self)) { flatIssueEpochBumpRtDsv(dsv); flatOmNoteUavBound(false); }
     if (g_flatComputeInternal) { g_state->realOMSetRenderTargets(self, n, rtvs, dsv); return; }
+    if (!foreignContext(self)) { flatIssueEpochBumpRtDsv(dsv); flatOmNoteUavBound(false); }
     ++g_state->thunkHits[kHitOmSet];
     if (foreignContext(self)) {
         g_state->realOMSetRenderTargets(self, n, rtvs, dsv);
@@ -3176,14 +3176,25 @@ void STDMETHODCALLTYPE hookedOMSetRtvAndUav(ID3D11DeviceContext* self, UINT n,
                                             UINT uavCount,
                                             ID3D11UnorderedAccessView* const* uavs,
                                             const UINT* counts) {
-    // 0xFFFFFFFF keeps the current targets. Anything else can replace the depth view.
+    if (g_flatComputeInternal) { g_state->realOMSetRtvAndUav(self, n, rtvs, dsv, uavStart, uavCount, uavs, counts); return; }
+    // 0xFFFFFFFF keeps the current targets or UAVs. Anything else replaces the whole array.
     if (!foreignContext(self)) {
         if (n != 0xFFFFFFFFu) flatIssueEpochBumpRtDsv(dsv);
         else flatIssueEpochBumpOutput();
-        if (uavCount > 0) flatOmNoteUavBound(true);
-        else if (n != 0xFFFFFFFFu) flatOmNoteUavBound(false);
+        constexpr UINT kKeepUnorderedAccessViews = 0xFFFFFFFFu;
+        constexpr UINT kMaxUavSlots = 64u;   // D3D11_1_UAV_SLOT_COUNT
+        if (uavCount != kKeepUnorderedAccessViews) {
+            bool anyUav = false;
+            if (uavCount > kMaxUavSlots) {
+                anyUav = true;
+            } else if (uavs) {
+                for (UINT i = 0; i < uavCount; ++i) {
+                    if (uavs[i]) { anyUav = true; break; }
+                }
+            }
+            flatOmNoteUavBound(anyUav);
+        }
     }
-    if (g_flatComputeInternal) { g_state->realOMSetRtvAndUav(self, n, rtvs, dsv, uavStart, uavCount, uavs, counts); return; }
     // A foreign deferred context cannot write the immediate target yet, but
     // an eventual command list or undocumented cross-context path must not
     // silently preserve the protected suffix.
@@ -3265,10 +3276,10 @@ void STDMETHODCALLTYPE hookedPSSetShaderResources(ID3D11DeviceContext* self, UIN
 
 void STDMETHODCALLTYPE hookedVSSetConstantBuffers(ID3D11DeviceContext* self, UINT start,
                                                   UINT n, ID3D11Buffer* const* bufs) {
+    if (g_flatComputeInternal) { g_state->realVSSetConstantBuffers(self, start, n, bufs); return; }
     if (!foreignContext(self) && start <= 1u && 1u - start < n) {
         if (flatIssueEpochNoteCb1(bufs ? bufs[1u - start] : nullptr, 0u, 0u)) flatIssueEpochBumpCb();
     }
-    if (g_flatComputeInternal) { g_state->realVSSetConstantBuffers(self, start, n, bufs); return; }
     ++g_state->thunkHits[kHitVsCb];
     if (foreignContext(self)) {
         g_state->realVSSetConstantBuffers(self, start, n, bufs);
@@ -3320,24 +3331,33 @@ void STDMETHODCALLTYPE hookedVSSetShaderResources(ID3D11DeviceContext* self, UIN
 // only forward: a missed call is a frozen certificate, not a guessed binding.
 void STDMETHODCALLTYPE hookedGSSetShader(ID3D11DeviceContext* self, ID3D11GeometryShader* shader,
                                          ID3D11ClassInstance* const* classes, UINT n) {
+    if (g_flatComputeInternal) { g_state->realGSSetShader(self, shader, classes, n); return; }
     if (!foreignContext(self) && flatIssueEpochNoteAux(0u, shader)) flatIssueEpochBumpStage();
     g_state->realGSSetShader(self, shader, classes, n);
 }
 void STDMETHODCALLTYPE hookedHSSetShader(ID3D11DeviceContext* self, ID3D11HullShader* shader,
                                          ID3D11ClassInstance* const* classes, UINT n) {
+    if (g_flatComputeInternal) { g_state->realHSSetShader(self, shader, classes, n); return; }
     if (!foreignContext(self) && flatIssueEpochNoteAux(1u, shader)) flatIssueEpochBumpStage();
     g_state->realHSSetShader(self, shader, classes, n);
 }
 void STDMETHODCALLTYPE hookedDSSetShader(ID3D11DeviceContext* self, ID3D11DomainShader* shader,
                                          ID3D11ClassInstance* const* classes, UINT n) {
+    if (g_flatComputeInternal) { g_state->realDSSetShader(self, shader, classes, n); return; }
     if (!foreignContext(self) && flatIssueEpochNoteAux(2u, shader)) flatIssueEpochBumpStage();
     g_state->realDSSetShader(self, shader, classes, n);
 }
 void STDMETHODCALLTYPE hookedSetPredication(ID3D11DeviceContext* self, ID3D11Predicate* predicate, BOOL value) {
+    if (g_flatComputeInternal) { g_state->realSetPredication(self, predicate, value); return; }
     if (!foreignContext(self) && flatIssueEpochNoteAux(3u, predicate)) flatIssueEpochBumpStage();
     g_state->realSetPredication(self, predicate, value);
 }
 void STDMETHODCALLTYPE hookedOMSetDepthStencilState(ID3D11DeviceContext* self, ID3D11DepthStencilState* state, UINT ref) {
+    if (g_flatComputeInternal) {
+        g_state->realOMSetDepthStencilState(self, state, ref);
+        if (!foreignContext(self)) flatOmNoteDepthState(state);
+        return;
+    }
     if (!foreignContext(self)) {
         if (flatIssueEpochNoteDepthState(state)) flatIssueEpochBumpDepth();
         flatOmNoteDepthState(state);
@@ -3346,6 +3366,7 @@ void STDMETHODCALLTYPE hookedOMSetDepthStencilState(ID3D11DeviceContext* self, I
 }
 void STDMETHODCALLTYPE hookedVSSetConstantBuffers1(ID3D11DeviceContext* self, UINT start, UINT n,
                                                    ID3D11Buffer* const* bufs, const UINT* first, const UINT* counts) {
+    if (g_flatComputeInternal) { g_state->realVSSetConstantBuffers1(self, start, n, bufs, first, counts); return; }
     if (!foreignContext(self) && start <= 1u && 1u - start < n) {
         const UINT idx = 1u - start;
         if (flatIssueEpochNoteCb1(bufs ? bufs[idx] : nullptr, first ? first[idx] : 0u, counts ? counts[idx] : 0u))
@@ -3385,13 +3406,13 @@ void STDMETHODCALLTYPE hookedSwapDeviceContextState(ID3D11DeviceContext* self, I
 // for a substituted pool draw is then known to be replaced (engine_velocity).
 void STDMETHODCALLTYPE hookedOMSetBlendState(ID3D11DeviceContext* self, ID3D11BlendState* state,
                                              const FLOAT factor[4], UINT sampleMask) {
-    if (!foreignContext(self)) flatIssueEpochBumpOutput();
     if (g_flatComputeInternal) {
         g_state->realOMSetBlendState(self, state, factor, sampleMask);
         // The shadow does not move, but the device blend did. The foreground record has to follow or its check disagrees.
         if (!foreignContext(self)) flatOmNoteBlend(state, factor, sampleMask);
         return;
     }
+    if (!foreignContext(self)) flatIssueEpochBumpOutput();
     if (!foreignContext(self)) {
         // The shadow stays put while AA is off, but the blend memo must follow the device or the generation lies.
         if (bindShadowsSkipped(g_aaOffDraw.load(std::memory_order_relaxed), engineVelocityLiveNow()))
@@ -3449,8 +3470,8 @@ uint64_t shaderHashMemo(State::ShaderMemo& m, void* shader, uint8_t* mayWant = n
 
 void STDMETHODCALLTYPE hookedVSSetShader(ID3D11DeviceContext* self, ID3D11VertexShader* vs,
                                          ID3D11ClassInstance* const* ci, UINT n) {
-    if (!foreignContext(self)) flatIssueEpochBumpStage();
     if (g_flatComputeInternal) { g_state->realVSSetShader(self, vs, ci, n); return; }
+    if (!foreignContext(self)) flatIssueEpochBumpStage();
     if (!foreignContext(self)) {
         uint8_t mayWant = kVsMayWantAll;
         const uint64_t h = shaderHashMemo(g_state->vsMemo, vs, &mayWant);
@@ -3464,8 +3485,8 @@ void STDMETHODCALLTYPE hookedVSSetShader(ID3D11DeviceContext* self, ID3D11Vertex
 
 void STDMETHODCALLTYPE hookedPSSetShader(ID3D11DeviceContext* self, ID3D11PixelShader* ps,
                                          ID3D11ClassInstance* const* ci, UINT n) {
-    if (!foreignContext(self)) flatIssueEpochBumpStage();
     if (g_flatComputeInternal) { g_state->realPSSetShader(self, ps, ci, n); return; }
+    if (!foreignContext(self)) flatIssueEpochBumpStage();
     if (!foreignContext(self)) {
         const uint64_t h = shaderHashMemo(g_state->psMemo, ps);
         bindingSetShader(BindSlot::Ps, ps, h);

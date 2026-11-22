@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <unordered_map>
 #include <vector>
 #include <mutex>
@@ -82,22 +83,23 @@ alignas(64) inline std::atomic<bool> g_claimsLive{false};
 alignas(64) inline std::atomic<bool> g_emissionsLive{false};
 // Calls that took that exit, counted without the mutex and folded into stats() as clearCalls/clearNoClaims and
 // mergeCalls/mergeWithoutClaims, so every counter the log prints keeps its meaning.
-alignas(64) inline std::atomic<uint64_t> g_clearSkipped{0};
-alignas(64) inline std::atomic<uint64_t> g_mergeSkipped{0};
+// Sharded across 16 cache-line-padded slots so Elite's job threads do not bounce one cache line.
+inline emit::ShardedCounter g_clearSkipped;
+inline emit::ShardedCounter g_mergeSkipped;
 // The claim-aware exits (claim snapshot below): clears and merges that found claims live, walked the list without the mutex and
 // touched none; and the calls that went to the mutex for a reason other than a hit.
-alignas(64) inline std::atomic<uint64_t> g_clearPrechecked{0};
-alignas(64) inline std::atomic<uint64_t> g_mergePrechecked{0};
-alignas(64) inline std::atomic<uint64_t> g_precheckDeclined{0};
+inline emit::ShardedCounter g_clearPrechecked;
+inline emit::ShardedCounter g_mergePrechecked;
+inline emit::ShardedCounter g_precheckDeclined;
 // The pool copier's lock-free exit counts the same way: every copy (stats().copies) and those that found no active
 // lease at their base (stats().copierNoLease).
-alignas(64) inline std::atomic<uint64_t> g_copierSkipped{0};
-inline std::atomic<uint64_t> g_copierNoLeaseSkipped{0};
+inline emit::ShardedCounter g_copierSkipped;
+inline emit::ShardedCounter g_copierNoLeaseSkipped;
 // The copier's claim check (see copierClaimCheck): copies it handed back, those among them that found no lease, and copies that wanted it
 // and took the mutex for a reason other than a hit. Folded into stats() beside the two above.
-alignas(64) inline std::atomic<uint64_t> g_copierPrechecked{0};
-inline std::atomic<uint64_t> g_copierPrecheckedNoLease{0};
-inline std::atomic<uint64_t> g_copierPrecheckDeclined{0};
+inline emit::ShardedCounter g_copierPrechecked;
+inline emit::ShardedCounter g_copierPrecheckedNoLease;
+inline emit::ShardedCounter g_copierPrecheckDeclined;
 // What the copier's lock-free exit needs besides g_emissionsLive: whether any pool holds a patch, and the active leases
 // (base address, slots = bytes / kBytes). A seqlock: the writer holds g_mutex, makes seq odd, rewrites, makes it even;
 // a reader keeps what it read only if seq was even and unchanged on both sides. Both flags are stored inside the
@@ -351,24 +353,55 @@ private:
         g_poolView.seq.store(sequence+2,std::memory_order_release);
     }
 };
-// Address set for the observers' bounded walks of Elite's lists: up to kInline entries live in an inline array searched
-// linearly (a walk of eight nodes is 64 item addresses, so it never touches the heap), and the first insert past that
-// moves everything into a std::unordered_set for good. insert().second, size(), count() and forEach() answer as the
-// unordered_set they replace did; like it, forEach has no defined order.
-class AddressSet {
+// Address set for the observers' bounded walks of Elite's lists: up to kInline entries live on the stack (linear scan up to
+// kLinearLimit, then an O(1) open-addressed stack hash table up to kInline), and the first insert past kInline moves
+// everything into a std::unordered_set. insert().second, size(), count() and forEach() answer as the unordered_set they
+// replace did; like it, forEach has no defined order.
+template<size_t InlineCap>
+class AddressSetT {
 public:
-    static constexpr size_t kInline=64;
+    static constexpr size_t kInline=InlineCap;
+    static constexpr size_t kHashSlots=InlineCap*2;
+    static_assert((kHashSlots&(kHashSlots-1))==0 && InlineCap<=256,"power-of-two stack hash table using uint16_t slots");
     std::pair<const uintptr_t*,bool> insert(uintptr_t value) {
         if(spill_) {const auto r=spill_->insert(value);return {&*r.first,r.second};}
-        for(size_t i=0;i<count_;++i)if(inline_[i]==value)return {&inline_[i],false};
-        if(count_<kInline){inline_[count_]=value;return {&inline_[count_++],true};}
+        if(!hashed_) {
+            for(size_t i=0;i<count_;++i)if(inline_[i]==value)return {&inline_[i],false};
+            if(count_<kInline) {
+                const size_t idx=count_++;
+                inline_[idx]=value;
+                if(count_==kLinearLimit)buildTable();
+                return {&inline_[idx],true};
+            }
+        } else {
+            size_t slot=hashSlot(value);
+            while(table_[slot]!=0) {
+                const size_t idx=size_t(table_[slot]-1);
+                if(inline_[idx]==value)return {&inline_[idx],false};
+                slot=(slot+1)&(kHashSlots-1);
+            }
+            if(count_<kInline) {
+                const size_t idx=count_++;
+                inline_[idx]=value;
+                table_[slot]=uint16_t(idx+1);
+                return {&inline_[idx],true};
+            }
+        }
         auto spill=std::make_unique<std::unordered_set<uintptr_t>>(inline_,inline_+count_);
         const auto r=spill->insert(value);spill_=std::move(spill);return {&*r.first,true};
     }
     size_t size() const {return spill_?spill_->size():count_;}
     size_t count(uintptr_t value) const {
         if(spill_)return spill_->count(value);
-        for(size_t i=0;i<count_;++i)if(inline_[i]==value)return 1;
+        if(!hashed_) {
+            for(size_t i=0;i<count_;++i)if(inline_[i]==value)return 1;
+            return 0;
+        }
+        size_t slot=hashSlot(value);
+        while(table_[slot]!=0) {
+            if(inline_[size_t(table_[slot]-1)]==value)return 1;
+            slot=(slot+1)&(kHashSlots-1);
+        }
         return 0;
     }
     template<class F> void forEach(F&& visit) const {
@@ -376,10 +409,28 @@ public:
         else for(size_t i=0;i<count_;++i)visit(inline_[i]);
     }
 private:
+    static constexpr size_t kLinearLimit=8;
+    static size_t hashSlot(uintptr_t value) noexcept {
+        uint64_t x=static_cast<uint64_t>(value);
+        x^=x>>16;x*=0x9E3779B97F4A7C15ull;
+        return static_cast<size_t>((x>>48)&(kHashSlots-1));
+    }
+    void buildTable() noexcept {
+        std::memset(table_,0,sizeof(table_));
+        for(size_t i=0;i<count_;++i) {
+            size_t slot=hashSlot(inline_[i]);
+            while(table_[slot]!=0)slot=(slot+1)&(kHashSlots-1);
+            table_[slot]=uint16_t(i+1);
+        }
+        hashed_=true;
+    }
     uintptr_t inline_[kInline];
+    uint16_t table_[kHashSlots];
     size_t count_=0;
+    bool hashed_=false;
     std::unique_ptr<std::unordered_set<uintptr_t>> spill_;
 };
+using AddressSet = AddressSetT<64>;
 inline emit::Pose current(const uint32_t* r) { return emit::Pose{{r[4],r[5],r[6],r[2],r[3]}}; }
 inline void overflow(uint32_t frame) {
     g_poolsDirty=true;
@@ -671,7 +722,7 @@ template<class Visit> inline bool walkDictionary(uintptr_t dictionary,uint64_t& 
     if(!dictionary || dictionary>UINTPTR_MAX-0x20 ||
        !emit::read(dictionary+0x10,&buckets,8) || !emit::read(dictionary+0x18,&count,8) ||
        count>kMaxEmissions || (count && (!buckets || buckets>UINTPTR_MAX-count*8)))return false;
-    AddressSet entries,nodes;
+    AddressSetT<256> entries,nodes;
     for(uint64_t b=0;b<count;++b){
         const uintptr_t sentinel=buckets+uintptr_t(b)*8;uintptr_t entry=0;
         if(!emit::read(sentinel,&entry,8))return false;
@@ -733,6 +784,22 @@ template<bool SkipNoClaims> inline void invalidateDictionaryImpl(uintptr_t dicti
     }
     auto fail=[](){g_emissions.clear();++g_emissionEpoch;++g_stats.sourceResets;++g_stats.clearFailed;};
     try {
+        if constexpr(SkipNoClaims) {
+            if(g_mergePlans.empty()) {
+                // No merge plan needs an address-set check: collect only addresses currently claimed in g_emissions
+                // so large dictionaries never spill to std::unordered_set.
+                AddressSet matched;
+                if(!walkDictionary(dictionary,g_stats.clearNodes,[&](uintptr_t node){
+                       for(uint32_t i=0;i<8;++i) {
+                           const uintptr_t addr=node+emit::kNodeRecords+uintptr_t(i)*kBytes;
+                           if(g_emissions.find(addr)!=g_emissions.end())matched.insert(addr);
+                       }
+                       return true;
+                   })){fail();return;}
+                matched.forEach([](uintptr_t address){const auto n=g_emissions.erase(address);g_stats.invalidated+=n;g_stats.clearedClaims+=n;});
+                return;
+            }
+        }
         AddressSet addresses;
         if(!walkDictionary(dictionary,g_stats.clearNodes,[&](uintptr_t node){
                for(uint32_t i=0;i<8;++i)addresses.insert(node+emit::kNodeRecords+uintptr_t(i)*kBytes);
@@ -771,7 +838,7 @@ template<class Visit> inline bool walkMerge(uintptr_t destination,uintptr_t sour
     uintptr_t dstLinks[2]{},srcLinks[2]{};
     if(!destination || !source || destination==source ||
        !emit::read(destination,dstLinks,sizeof(dstLinks)) || !emit::read(source,srcLinks,sizeof(srcLinks)))return false;
-    AddressSet visited;
+    AddressSetT<256> visited;
     uintptr_t tail=dstLinks[1],node=srcLinks[0],previous=source;
     uint64_t tailCount=0;
     if(dstLinks[0]==destination) {

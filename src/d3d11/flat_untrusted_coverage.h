@@ -63,20 +63,34 @@ struct FlatUntrustedObservedCamera {
 // regression. A missing camera is its own group and remains unaccountable.
 inline FlatUntrustedObservedCamera* flatUntrustedObserveCamera(
     FlatUntrustedObservedCamera* entries,uint32_t capacity,uint32_t& used,
-    const void* depth,const unsigned char* camera,bool* inserted=nullptr) {
+    const void* depth,const unsigned char* camera,bool* inserted=nullptr,
+    uint64_t cameraHash=0,uint32_t* lastHit=nullptr) {
     if(inserted)*inserted=false;
+    const bool hasCam=camera!=nullptr;
+    const auto matches=[&](const FlatUntrustedObservedCamera& prior) -> bool {
+        if(prior.depth!=depth || prior.hasCamera!=hasCam)return false;
+        if(!hasCam)return true;
+        if(cameraHash && prior.cameraHash && prior.cameraHash!=cameraHash)return false;
+        return std::memcmp(prior.camera,camera,kFlatCameraBytes)==0;
+    };
+    if(lastHit && *lastHit<used && matches(entries[*lastHit])) {
+        ++entries[*lastHit].draws;
+        return &entries[*lastHit];
+    }
     for(uint32_t i=0;i<used;++i) {
         auto& prior=entries[i];
-        if(prior.depth==depth && prior.hasCamera==(camera!=nullptr) &&
-           (!camera || std::memcmp(prior.camera,camera,kFlatCameraBytes)==0)) {
+        if(matches(prior)) {
             ++prior.draws;
+            if(lastHit)*lastHit=i;
             return &prior;
         }
     }
     if(used==capacity)return nullptr;
-    auto& entry=entries[used++];
-    entry={};entry.depth=depth;entry.hasCamera=camera!=nullptr;entry.draws=1;
-    if(camera)std::memcpy(entry.camera,camera,kFlatCameraBytes);
+    const uint32_t idx=used++;
+    auto& entry=entries[idx];
+    entry={};entry.depth=depth;entry.hasCamera=hasCam;entry.draws=1;
+    if(hasCam){entry.cameraHash=cameraHash;std::memcpy(entry.camera,camera,kFlatCameraBytes);}
+    if(lastHit)*lastHit=idx;
     if(inserted)*inserted=true;
     return &entry;
 }
