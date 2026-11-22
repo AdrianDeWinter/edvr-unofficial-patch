@@ -14,6 +14,7 @@
 #ifdef EDUP_LAUNCHER
 #include "launch_route.h"
 #include "launcher_main.h"
+#include "launcher_state.h"
 #endif
 
 namespace edvr::installer {
@@ -283,6 +284,7 @@ Options optionsFor(const AppArgs& args, bool repair) {
     o.keepSettings = args.keepSettings;
     o.removeSettings = args.removeSettings || args.purge;
     o.purge = args.purge;
+    o.edhm2dMigoto = args.edhm2dMigoto;
     o.repair = repair;
     o.backupStamp = timestampName();
     o.nowUtc = utcNow();
@@ -593,6 +595,14 @@ int runConsole(const AppArgs& args) {
 
     Options options = optionsFor(args, args.action == AppArgs::Act::Repair);
     options.settingsDir = mirrorDir;
+#ifdef EDUP_LAUNCHER
+    if (!options.edhm2dMigoto) {
+        LauncherState ls;
+        if (ls.load(joinPath(launcherRootsFor(args).launcherDir(), L"launcher.ini"), nullptr)) {
+            options.edhm2dMigoto = ls.edhm2dMigoto();
+        }
+    }
+#endif
     const Plan plan = args.action == AppArgs::Act::Uninstall ? planUninstall(survey, options, payload)
                                                              : planInstall(survey, options, payload);
     writeOut(planReport(plan));

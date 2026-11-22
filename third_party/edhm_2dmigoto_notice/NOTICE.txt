@@ -1,0 +1,35 @@
+EDHM_2DMigoto (optional tailored 2DMigoto runtime for EDHM)
+===========================================================
+
+ED-UP optionally ships a pinned, signed copy of d3d11_edhm.dll from
+EDHM_2DMigoto (https://github.com/Fenris159/EDHM_2DMigoto), opt-in only.
+When enabled, ED-UP places d3d11_edhm.dll together with the full GPLv3
+license text (EDHM-2DMIGOTO-LICENSE.txt) and bundled third-party notices
+(EDHM-2DMIGOTO-THIRD-PARTY.txt) beside the game, and backs up your
+existing standard d3d11_edhm.dll for restoration when turned off.
+
+Project lineage & source offer:
+  - EDHM_2DMigoto: https://github.com/Fenris159/EDHM_2DMigoto (GNU GPLv3)
+  - XXMI-Libs-Package: https://github.com/SpectrumQT/XXMI-Libs-Package (GNU GPLv3)
+  - 3Dmigoto: https://github.com/bo3b/3Dmigoto (GNU GPLv3)
+  - Deviare-InProcess / Nektra: https://github.com/nektra (GNU GPLv3)
+
+Bundled third-party components inside d3d11_edhm.dll:
+  - PCRE2 10.30 (BSD 3-clause license with binary exemption;
+    https://github.com/PCRE2Project/pcre2/releases/tag/pcre2-10.30)
+  - DirectXTK (MIT License; Copyright (c) Microsoft Corporation;
+    https://github.com/microsoft/DirectXTK)
+  - crc32c-hw 1.0.5 (zlib-style license)
+
+EDHM (Elite Dangerous HUD Mod):
+  - EDHM is a separate community project (https://github.com/psychicEgg/EDHM).
+    ED-UP does not bundle EDHM themes or shaders; this optional runtime only
+    replaces the 3Dmigoto d3d11_edhm.dll loader in an existing EDHM install
+    when opted in.
+
+Full source code for the pinned EDHM_2DMigoto release is available at
+https://github.com/Fenris159/EDHM_2DMigoto/releases (pinned by tag and
+SHA-256 in tools/fetch_edhm_2dmigoto.py). The full text of GNU GPLv3,
+COPYING.txt, AUTHORS.txt, PCRE2's BSD license, and DirectXTK's MIT license
+are shipped in EDHM-2DMIGOTO-LICENSE.txt and EDHM-2DMIGOTO-THIRD-PARTY.txt
+whenever the optional runtime is packaged or installed.

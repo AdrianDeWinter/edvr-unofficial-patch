@@ -194,26 +194,30 @@ struct TestTableRow {
     const char* path;
     unsigned profiles;     // when.profile bits, 0 for none
     bool nvidia;           // when.adapter = nvidia
+    const char* option;    // when.option, nullptr for none
     ExistingMode existing;
 };
 static const TestTableRow kTestTable[] = {
-    {"graphics", TargetRoot::Game, "d3d11.dll", kProfileAll, false, ExistingMode::Chain},
-    {"runtime", TargetRoot::Openvr, "openvr_api.dll", kProfileVr, false, ExistingMode::Runtime},
-    {"openxr_loader", TargetRoot::Openvr, "openxr_loader.dll", kProfileVr, false, ExistingMode::Replace},
-    {"openxr_license", TargetRoot::Openvr, "OPENXR-LOADER-LICENSE.txt", kProfileVr, false, ExistingMode::Replace},
-    {"settings_vr", TargetRoot::Game, "edvr.ini", kProfileVr, false, ExistingMode::Settings},
-    {"settings_flat", TargetRoot::Game, "edvr-flat.ini", kProfileFlat, false, ExistingMode::Settings},
-    {"dittosr_license", TargetRoot::Game, "DITTOSR-LICENSE.txt", kProfileAll, false, ExistingMode::Owned},
-    {"dittosr_gsr_license", TargetRoot::Game, "DITTOSR-GSR-LICENSE.txt", kProfileAll, false, ExistingMode::Owned},
-    {"dlss", TargetRoot::Game, "nvngx_dlss.dll", 0, true, ExistingMode::Owned},
-    {"xess", TargetRoot::Game, "libxess.dll", 0, false, ExistingMode::Owned},
-    {"xess_license", TargetRoot::Game, "INTEL-XESS-LICENSE.txt", 0, false, ExistingMode::Owned},
-    {"xess_third_party", TargetRoot::Game, "INTEL-XESS-THIRD-PARTY.txt", 0, false, ExistingMode::Owned},
-    {"xess_fg", TargetRoot::Game, "libxess_fg.dll", kProfileFlat, false, ExistingMode::Owned},
-    {"xess_ll", TargetRoot::Game, "libxell.dll", kProfileFlat, false, ExistingMode::Owned},
-    {"fsr4_loader", TargetRoot::Game, "amd_fidelityfx_loader_dx12.dll", 0, false, ExistingMode::Owned},
-    {"fsr4_upscaler", TargetRoot::Game, "amd_fidelityfx_upscaler_dx12.dll", 0, false, ExistingMode::Owned},
-    {"fsr4_license", TargetRoot::Game, "AMD-FIDELITYFX-LICENSE.txt", 0, false, ExistingMode::Owned},
+    {"graphics", TargetRoot::Game, "d3d11.dll", kProfileAll, false, nullptr, ExistingMode::Chain},
+    {"runtime", TargetRoot::Openvr, "openvr_api.dll", kProfileVr, false, nullptr, ExistingMode::Runtime},
+    {"openxr_loader", TargetRoot::Openvr, "openxr_loader.dll", kProfileVr, false, nullptr, ExistingMode::Replace},
+    {"openxr_license", TargetRoot::Openvr, "OPENXR-LOADER-LICENSE.txt", kProfileVr, false, nullptr, ExistingMode::Replace},
+    {"settings_vr", TargetRoot::Game, "edvr.ini", kProfileVr, false, nullptr, ExistingMode::Settings},
+    {"settings_flat", TargetRoot::Game, "edvr-flat.ini", kProfileFlat, false, nullptr, ExistingMode::Settings},
+    {"dittosr_license", TargetRoot::Game, "DITTOSR-LICENSE.txt", kProfileAll, false, nullptr, ExistingMode::Owned},
+    {"dittosr_gsr_license", TargetRoot::Game, "DITTOSR-GSR-LICENSE.txt", kProfileAll, false, nullptr, ExistingMode::Owned},
+    {"dlss", TargetRoot::Game, "nvngx_dlss.dll", 0, true, nullptr, ExistingMode::Owned},
+    {"xess", TargetRoot::Game, "libxess.dll", 0, false, nullptr, ExistingMode::Owned},
+    {"xess_license", TargetRoot::Game, "INTEL-XESS-LICENSE.txt", 0, false, nullptr, ExistingMode::Owned},
+    {"xess_third_party", TargetRoot::Game, "INTEL-XESS-THIRD-PARTY.txt", 0, false, nullptr, ExistingMode::Owned},
+    {"xess_fg", TargetRoot::Game, "libxess_fg.dll", kProfileFlat, false, nullptr, ExistingMode::Owned},
+    {"xess_ll", TargetRoot::Game, "libxell.dll", kProfileFlat, false, nullptr, ExistingMode::Owned},
+    {"fsr4_loader", TargetRoot::Game, "amd_fidelityfx_loader_dx12.dll", 0, false, nullptr, ExistingMode::Owned},
+    {"fsr4_upscaler", TargetRoot::Game, "amd_fidelityfx_upscaler_dx12.dll", 0, false, nullptr, ExistingMode::Owned},
+    {"fsr4_license", TargetRoot::Game, "AMD-FIDELITYFX-LICENSE.txt", 0, false, nullptr, ExistingMode::Owned},
+    {"edhm_2dmigoto", TargetRoot::Game, "d3d11_edhm.dll", 0, false, "edhm_2dmigoto", ExistingMode::OptIn},
+    {"edhm_2dmigoto_license", TargetRoot::Game, "EDHM-2DMIGOTO-LICENSE.txt", 0, false, "edhm_2dmigoto", ExistingMode::Owned},
+    {"edhm_2dmigoto_third_party", TargetRoot::Game, "EDHM-2DMIGOTO-THIRD-PARTY.txt", 0, false, "edhm_2dmigoto", ExistingMode::Owned},
 };
 
 static PayloadFileEntry* tfind(PayloadInfo& p, const std::string& id) {
@@ -236,7 +240,8 @@ static PayloadFileEntry& tfile(PayloadInfo& p, const std::string& id, const std:
         fresh.file.target.path = row->path;
         fresh.file.when.profiles = row->profiles;
         fresh.file.when.adapterNvidia = row->nvidia;
-        fresh.file.when.present = row->profiles != 0 || row->nvidia;
+        if (row->option) fresh.file.when.option = row->option;
+        fresh.file.when.present = row->profiles != 0 || row->nvidia || row->option != nullptr;
         fresh.file.existing = row->existing;
         p.files.push_back(std::move(fresh));
         e = &p.files.back();
@@ -7620,7 +7625,7 @@ static void testManifestFiles(const std::wstring& root) {
             check(at != std::string::npos, (std::string("the packager declares ") + row.id).c_str());
             if (at == std::string::npos) continue;
             std::string decl = text.substr(at, text.find("),", at) - at + 2);
-            const char* when = row.nvidia ? "_NVIDIA" : row.profiles == kProfileAll ? "_EITHER" : row.profiles == kProfileVr ? "_VR"
+            const char* when = row.option ? "_EDHM_OPT" : row.nvidia ? "_NVIDIA" : row.profiles == kProfileAll ? "_EITHER" : row.profiles == kProfileVr ? "_VR"
                               : row.profiles == kProfileFlat ? "_FLAT" : "None";
             const std::string tail = std::string("\"") + (row.root == TargetRoot::Game ? "game" : "openvr") + "\", \"" + row.path + "\"";
             std::string flattened;
@@ -8076,6 +8081,297 @@ int wmain(int argc, wchar_t** argv) {
         check(settingsRootForGame(joinPath(scratch, L"not_steam\\game"), own, true) == own,
               "a game outside a Steam library keeps the default root");
         removeTree(joinPath(scratch, L"proton_root"));
+    }
+
+    {   // Optional tailored 2DMigoto runtime for EDHM: backup on opt-in, upgrade preservation,
+        // exact opt-out restore, antivirus-missing restore, player-update respect, tampered-backup
+        // refusal, no-prior-DLL removal, non-EDHM safety, missing-notices block, and uninstall restore.
+        printf("\noptional tailored 2DMigoto runtime for EDHM\n");
+        const std::wstring edhmRoot = joinPath(scratch, L"edhm_2dmigoto");
+        removeTree(edhmRoot);
+        const std::wstring gameDir = joinPath(edhmRoot, L"game");
+        const std::wstring openvr = joinPath(gameDir, L"Openvr\\win64");
+        const std::wstring userSettingsDir = joinPath(edhmRoot, L"user_settings");
+        makeTree(openvr);
+        makeTree(userSettingsDir);
+        const std::string stockOpenvr = syntheticPe({"VR_InitInternal", "VR_GetGenericInterface"});
+        const std::string edupGfx = syntheticPe({"edvrAcquireNativeGraphics"});
+        const std::string edupRt = syntheticPe({"VR_InitInternal", "edvrConfigureNativeRuntime"});
+        const std::string loaderBytes = syntheticPe({"xrGetInstanceProcAddr"});
+        const std::string stdEdhmV1 = syntheticPe({"D3D11CreateDevice"}) + "3Dmigoto_STD_EDHM_V1";
+        const std::string stdEdhmV2 = syntheticPe({"D3D11CreateDevice"}) + "3Dmigoto_STD_EDHM_V2_PLAYER_UPDATE";
+        const std::string migotoV1 = syntheticPe({"D3D11CreateDevice"}) + "2DMigoto_V1";
+        const std::string migotoV2 = syntheticPe({"D3D11CreateDevice"}) + "2DMigoto_V2";
+        const std::string gplText = "GNU GENERAL PUBLIC LICENSE Version 3\n";
+        const std::string thirdPartyText = "EDHM_2DMigoto PCRE2 DirectXTK notices\n";
+
+        auto makeEdhmPayload = [&](const std::string& migotoBytes, bool includeNotices) {
+            PayloadInfo p;
+            p.version = "v0.99.0";
+            auto add = [&](const char* id, TargetRoot root, const char* path, ExistingMode mode,
+                           unsigned profiles, const char* opt, const std::string& bytes) {
+                PayloadFileEntry e;
+                e.file.id = id;
+                e.file.target.root = root;
+                e.file.target.path = path;
+                e.file.existing = mode;
+                e.file.when.profiles = profiles;
+                if (opt) { e.file.when.option = opt; e.file.when.present = true; }
+                else if (profiles) e.file.when.present = true;
+                e.owned = std::make_shared<const std::string>(bytes);
+                e.data = e.owned->data();
+                e.size = e.owned->size();
+                e.sha = sha256Bytes(e.data, e.size);
+                e.file.sha256 = e.sha;
+                e.file.size = e.size;
+                e.valid = true;
+                p.files.push_back(std::move(e));
+            };
+            add("graphics", TargetRoot::Game, "d3d11.dll", ExistingMode::Chain, kProfileAll, nullptr, edupGfx);
+            add("runtime", TargetRoot::Openvr, "openvr_api.dll", ExistingMode::Runtime, kProfileVr, nullptr, edupRt);
+            add("openxr_loader", TargetRoot::Openvr, "openxr_loader.dll", ExistingMode::Replace, kProfileVr, nullptr, loaderBytes);
+            add("openxr_license", TargetRoot::Openvr, "OPENXR-LOADER-LICENSE.txt", ExistingMode::Replace, kProfileVr, nullptr, "Apache-2.0\n");
+            add("settings_vr", TargetRoot::Game, "edvr.ini", ExistingMode::Settings, kProfileVr, nullptr, "[fix]\r\n[advanced]\r\nreal_dll =\r\n");
+            add("settings_flat", TargetRoot::Game, "edvr-flat.ini", ExistingMode::Settings, kProfileFlat, nullptr, "[fix]\r\n");
+            if (!migotoBytes.empty()) {
+                add("edhm_2dmigoto", TargetRoot::Game, "d3d11_edhm.dll", ExistingMode::OptIn, 0, "edhm_2dmigoto", migotoBytes);
+                if (includeNotices) {
+                    add("edhm_2dmigoto_license", TargetRoot::Game, "EDHM-2DMIGOTO-LICENSE.txt", ExistingMode::Owned, 0, "edhm_2dmigoto", gplText);
+                    add("edhm_2dmigoto_third_party", TargetRoot::Game, "EDHM-2DMIGOTO-THIRD-PARTY.txt", ExistingMode::Owned, 0, "edhm_2dmigoto", thirdPartyText);
+                }
+            }
+            return p;
+        };
+        auto providerFor = [](const PayloadInfo& p) {
+            return [&p](const std::string& id, const void** data, size_t* size) {
+                const PayloadFileEntry* f = p.find(id);
+                if (!f) return false;
+                *data = f->data;
+                *size = f->size;
+                return true;
+            };
+        };
+
+        writeAll(joinPath(gameDir, L"EliteDangerous64.exe"), "stub");
+        writeAll(joinPath(openvr, L"openvr_api.dll"), stockOpenvr);
+        GameInstall gi;
+        gi.dir = gameDir;
+        gi.openvrDir = openvr;
+        gi.source = L"Steam";
+        auto surveyEdhm = [&]() {
+            Survey s = surveyTarget(gi, userSettingsDir);
+            s.eliteKind = EliteExeKind::OdysseyQualified;
+            s.gameRunningHere = s.gameRunningElsewhere = s.gameRunStateUnknown = false;
+            return s;
+        };
+
+        // 1. Non-EDHM folder: turning option ON drops no orphan d3d11_edhm.dll or notices.
+        const PayloadInfo p1 = makeEdhmPayload(migotoV1, true);
+        Options opt;
+        opt.scope = "both";
+        opt.backupStamp = L"t1";
+        opt.nowUtc = "2026-11-22T00:00:00Z";
+        opt.settingsDir = userSettingsDir;
+        opt.edhm2dMigoto = true;
+        {
+            const Survey s0 = surveyEdhm();
+            const Plan plan = planInstall(s0, opt, p1);
+            check(!plan.blocked, "non-EDHM folder with edhm2dMigoto=true is not blocked");
+            const ApplyResult r = applyPlan(plan, providerFor(p1));
+            check(r.ok, "non-EDHM install applies", r.error);
+            check(!fileExists(joinPath(gameDir, L"d3d11_edhm.dll")) &&
+                  !fileExists(joinPath(gameDir, L"EDHM-2DMIGOTO-LICENSE.txt")) &&
+                  !fileExists(joinPath(gameDir, L"EDHM-2DMIGOTO-THIRD-PARTY.txt")),
+                  "non-EDHM folder gets no orphan d3d11_edhm.dll or notices");
+        }
+
+        // 2. Missing notices blocks install when option is ON.
+        writeAll(joinPath(gameDir, L"d3d11_edhm.dll"), stdEdhmV1);
+        {
+            const PayloadInfo noNotices = makeEdhmPayload(migotoV1, false);
+            const Survey s1 = surveyEdhm();
+            const Plan blocked = planInstall(s1, opt, noNotices);
+            check(blocked.blocked, "edhm_2dmigoto without license notices is blocked");
+        }
+
+        // 3. Opt-in over standard d3d11_edhm.dll: backs up standard DLL, writes 2DMigoto + notices.
+        opt.backupStamp = L"t2";
+        {
+            const Survey s1 = surveyEdhm();
+            const Plan plan = planInstall(s1, opt, p1);
+            check(!plan.blocked && !plan.nothingToDo, "opt-in over standard d3d11_edhm.dll produces work");
+            const ApplyResult r = applyPlan(plan, providerFor(p1));
+            check(r.ok, "opt-in applies cleanly", r.error);
+            check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == migotoV1, "d3d11_edhm.dll is now 2DMigoto v1");
+            check(readAll(joinPath(gameDir, L"EDHM-2DMIGOTO-LICENSE.txt")) == gplText &&
+                  readAll(joinPath(gameDir, L"EDHM-2DMIGOTO-THIRD-PARTY.txt")) == thirdPartyText,
+                  "both 2DMigoto license notices were placed");
+            const InstallState st = readState(gameDir);
+            const FileRecord* rec = st.file("edhm_2dmigoto");
+            check(rec != nullptr && rec->existing == "opt_in" &&
+                  rec->sha256 == sha256Bytes(migotoV1.data(), migotoV1.size()) &&
+                  rec->beforeSha256 == sha256Bytes(stdEdhmV1.data(), stdEdhmV1.size()) && !rec->backup.empty(),
+                  "state.ini records 2DMigoto hash, original standard before_sha256 and backup path");
+            check(readAll(joinPath(gameDir, rec->backup)) == stdEdhmV1,
+                  "recorded backup holds exact original standard d3d11_edhm.dll bytes");
+        }
+
+        // 4. Upgrade 2DMigoto v1 -> v2 preserves original standard d3d11_edhm.dll backup & before_sha256.
+        const PayloadInfo p2 = makeEdhmPayload(migotoV2, true);
+        opt.backupStamp = L"t3";
+        {
+            const Survey s2 = surveyEdhm();
+            const Plan plan = planInstall(s2, opt, p2);
+            check(!plan.blocked && !plan.nothingToDo, "2DMigoto v1->v2 upgrade produces work");
+            const ApplyResult r = applyPlan(plan, providerFor(p2));
+            check(r.ok, "2DMigoto upgrade applies", r.error);
+            check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == migotoV2, "d3d11_edhm.dll upgraded to 2DMigoto v2");
+            const InstallState st = readState(gameDir);
+            const FileRecord* rec = st.file("edhm_2dmigoto");
+            check(rec != nullptr && rec->beforeSha256 == sha256Bytes(stdEdhmV1.data(), stdEdhmV1.size()) &&
+                  readAll(joinPath(gameDir, rec->backup)) == stdEdhmV1,
+                  "2DMigoto upgrade preserves original standard d3d11_edhm.dll backup");
+        }
+
+        // 5. Antivirus interference: 2DMigoto d3d11_edhm.dll deleted from disk -> opt-out restores original!
+        DeleteFileW(joinPath(gameDir, L"d3d11_edhm.dll").c_str());
+        check(!fileExists(joinPath(gameDir, L"d3d11_edhm.dll")), "simulated AV removed d3d11_edhm.dll");
+        opt.edhm2dMigoto = false;
+        opt.backupStamp = L"t4";
+        {
+            const Survey sAv = surveyEdhm();
+            const Plan plan = planInstall(sAv, opt, p2);
+            check(!plan.blocked && !plan.nothingToDo, "AV-missing fallback restore plan is not blocked");
+            const ApplyResult r = applyPlan(plan, providerFor(p2));
+            check(r.ok, "AV-missing fallback restore applies", r.error);
+            check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV1,
+                  "AV-missing fallback restored original standard d3d11_edhm.dll");
+            check(!fileExists(joinPath(gameDir, L"EDHM-2DMIGOTO-LICENSE.txt")) &&
+                  !fileExists(joinPath(gameDir, L"EDHM-2DMIGOTO-THIRD-PARTY.txt")),
+                  "AV-missing fallback removed 2DMigoto notices");
+            check(readState(gameDir).file("edhm_2dmigoto") == nullptr, "edhm_2dmigoto record cleared after restore");
+        }
+
+        // 6. Re-enable, then tamper with backup -> opt-out MUST block rather than claim Standard.
+        opt.edhm2dMigoto = true;
+        opt.backupStamp = L"t5";
+        {
+            const Survey sRe = surveyEdhm();
+            check(applyPlan(planInstall(sRe, opt, p2), providerFor(p2)).ok, "re-enabled 2DMigoto v2");
+            const InstallState st = readState(gameDir);
+            const std::wstring bakPath = joinPath(gameDir, st.file("edhm_2dmigoto")->backup);
+            const std::string savedBak = readAll(bakPath);
+            writeAll(bakPath, "CORRUPTED_BACKUP");
+            opt.edhm2dMigoto = false;
+            opt.backupStamp = L"t6";
+            const Plan blocked = planInstall(surveyEdhm(), opt, p2);
+            check(blocked.blocked, "opt-out blocks when standard backup hash no longer matches");
+            // Restore valid backup, then verify exact normal opt-out restores standard DLL cleanly.
+            writeAll(bakPath, savedBak);
+            const Plan restorePlan = planInstall(surveyEdhm(), opt, p2);
+            check(!restorePlan.blocked && applyPlan(restorePlan, providerFor(p2)).ok, "exact opt-out succeeds once backup is intact");
+            check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV1, "exact opt-out restored standard d3d11_edhm.dll");
+        }
+
+        // 7. Player updates EDHM themselves while option is ON -> NOT silently overwritten!
+        opt.edhm2dMigoto = true;
+        opt.backupStamp = L"t7";
+        check(applyPlan(planInstall(surveyEdhm(), opt, p1), providerFor(p1)).ok, "enabled 2DMigoto v1");
+        writeAll(joinPath(gameDir, L"d3d11_edhm.dll"), stdEdhmV2);  // player ran EDHM updater!
+        opt.backupStamp = L"t8";
+        {
+            const Plan plan = planInstall(surveyEdhm(), opt, p2);
+            check(!plan.blocked, "player-updated EDHM install plan is not blocked");
+            check(applyPlan(plan, providerFor(p2)).ok, "player-updated EDHM install finishes");
+            check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV2,
+                  "player's newer standard d3d11_edhm.dll was kept, NOT silently overwritten");
+            check(readState(gameDir).file("edhm_2dmigoto") == nullptr, "ownership cleared after player updated EDHM");
+            check(!fileExists(joinPath(gameDir, L"EDHM-2DMIGOTO-LICENSE.txt")), "leftover 2DMigoto notices cleaned up");
+        }
+
+        // 8. Next explicit opt-in backs up the player's NEW stdEdhmV2, and uninstall (--purge) restores stdEdhmV2 as d3d11.dll!
+        opt.edhm2dMigoto = true;
+        opt.backupStamp = L"t9";
+        {
+            // Ensure chainTarget points at d3d11_edhm.dll for unchain test.
+            InstallState st = readState(gameDir);
+            st.chainTarget = L"d3d11_edhm.dll";
+            st.chainMod = L"EDHM";
+            writeAll(statePath(gameDir), serializeState(st));
+            check(applyPlan(planInstall(surveyEdhm(), opt, p2), providerFor(p2)).ok,
+                  "re-enabling backs up player's newer stdEdhmV2");
+            check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == migotoV2, "2DMigoto v2 installed over stdEdhmV2");
+            Options uopt;
+            uopt.purge = true;
+            uopt.removeSettings = true;
+            uopt.settingsDir = userSettingsDir;
+            const Plan uplan = planUninstall(surveyEdhm(), uopt, p2);
+            check(!uplan.blocked, "purge uninstall with active 2DMigoto is not blocked");
+            const ApplyResult ur = applyPlan(uplan, providerFor(p2));
+            check(ur.ok, "purge uninstall applies", ur.error);
+            check(readAll(joinPath(gameDir, L"d3d11.dll")) == stdEdhmV2,
+                  "uninstall restored player's backed-up stdEdhmV2 back to d3d11.dll before purging backups");
+            check(!fileExists(joinPath(gameDir, L"d3d11_edhm.dll")) &&
+                  !fileExists(joinPath(gameDir, L"EDHM-2DMIGOTO-LICENSE.txt")),
+                  "uninstall removed 2DMigoto d3d11_edhm.dll and its notices");
+        }
+
+        // 9. Fresh EDHM sitting in d3d11.dll + edhm2dMigoto=true in ONE pass:
+        //    chains d3d11.dll, backs up original stdEdhmV2, places 2DMigoto in d3d11_edhm.dll,
+        //    and later opt-out restores stdEdhmV2 into d3d11_edhm.dll!
+        {
+            check(readAll(joinPath(gameDir, L"d3d11.dll")) == stdEdhmV2, "fresh EDHM sits in d3d11.dll");
+            opt.edhm2dMigoto = true;
+            opt.backupStamp = L"t9b";
+            Survey sFresh = surveyEdhm();
+            sFresh.d3d11.kind = DllKind::Foreign;
+            sFresh.d3d11.product = L"3Dmigoto";
+            const Plan onePass = planInstall(sFresh, opt, p2);
+            check(!onePass.blocked, "fresh EDHM in d3d11.dll + edhm2dMigoto=true plans in one pass");
+            const ApplyResult rOne = applyPlan(onePass, providerFor(p2));
+            check(rOne.ok, "fresh EDHM one-pass install applies", rOne.error);
+            check(readAll(joinPath(gameDir, L"d3d11.dll")) == edupGfx &&
+                  readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == migotoV2,
+                  "one-pass install placed ED-UP d3d11.dll and 2DMigoto d3d11_edhm.dll");
+            const InstallState st = readState(gameDir);
+            const FileRecord* rec = st.file("edhm_2dmigoto");
+            check(rec != nullptr && rec->beforeSha256 == sha256Bytes(stdEdhmV2.data(), stdEdhmV2.size()) &&
+                  readAll(joinPath(gameDir, rec->backup)) == stdEdhmV2,
+                  "one-pass install backed up original d3d11.dll bytes for opt-out restore");
+            opt.edhm2dMigoto = false;
+            opt.backupStamp = L"t9c";
+            const ApplyResult rOff = applyPlan(planInstall(surveyEdhm(), opt, p2), providerFor(p2));
+            check(rOff.ok && readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV2,
+                  "opt-out after one-pass install restores original standard EDHM into d3d11_edhm.dll", rOff.error);
+        }
+
+        // 10. No-prior-DLL opt-in (only d3dx.ini present) -> exact opt-out deletes our d3d11_edhm.dll.
+        DeleteFileW(joinPath(gameDir, L"d3d11_edhm.dll").c_str());
+        {
+            InstallState st = readState(gameDir);
+            st.chainTarget.clear();
+            st.chainMod.clear();
+            writeAll(statePath(gameDir), serializeState(st));
+        }
+        writeAll(joinPath(gameDir, L"d3dx.ini"), "[Loader]\n");
+        opt.edhm2dMigoto = true;
+        opt.backupStamp = L"t10";
+        {
+            const ApplyResult r = applyPlan(planInstall(surveyEdhm(), opt, p2), providerFor(p2));
+            check(r.ok, "opt-in with d3dx.ini only applies", r.error);
+            check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == migotoV2, "2DMigoto placed when d3dx.ini present");
+            check(readState(gameDir).file("edhm_2dmigoto")->beforeSha256.empty(), "no prior DLL recorded");
+            opt.edhm2dMigoto = false;
+            opt.backupStamp = L"t11";
+            const Plan offPlan = planInstall(surveyEdhm(), opt, p2);
+            const ApplyResult rOff = applyPlan(offPlan, providerFor(p2));
+            check(!offPlan.blocked && rOff.ok, "opt-out with no prior DLL applies", rOff.error);
+            check(!fileExists(joinPath(gameDir, L"d3d11_edhm.dll")) &&
+                  !fileExists(joinPath(gameDir, L"EDHM-2DMIGOTO-LICENSE.txt")),
+                  "opt-out removed 2DMigoto d3d11_edhm.dll and notices cleanly");
+        }
+
+        removeTree(edhmRoot);
     }
 
     printf("\n%s\n", g_fails == 0 ? "installer_test: all good" : "installer_test: FAILURES");

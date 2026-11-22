@@ -178,6 +178,7 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
     options.keepSettings = file.keepSettings;
     options.removeSettings = file.removeSettings || file.purge;
     options.purge = file.purge;
+    options.edhm2dMigoto = file.edhm2dMigoto;
     options.repair = file.action == "repair";
     options.backupStamp = timestampName();
     options.nowUtc = utcNow();
@@ -247,6 +248,7 @@ bool writePlanFile(const std::wstring& path, const PlanFile& p, std::string* err
     text += "keep_settings=" + yesNo(p.keepSettings) + "\n";
     text += "remove_settings=" + yesNo(p.removeSettings) + "\n";
     if (p.purge) text += "purge=1\n";
+    if (p.edhm2dMigoto) text += "edhm_2dmigoto=1\n";
     text += "restore_mirror=" + yesNo(p.restoreMirror) + "\n";
     text += "manifest=" + p.manifestSha + "\n";
     std::wstring why;
@@ -259,8 +261,8 @@ bool readPlanFile(const std::wstring& path, PlanFile* plan, std::string* error) 
     if (!readFileBytes(path, &text, 1u << 16, error)) return false;
     std::map<std::string, std::string> m;
     if (!parseLines(text, &m, error)) return false;
-    static const std::set<std::string> known = {"version",        "action",          "dir",            "source", "scope",
-                                                "keep_settings",  "remove_settings", "purge",          "restore_mirror", "manifest"};
+    static const std::set<std::string> known = {"version",        "action",          "dir",            "source",        "scope",
+                                                "keep_settings",  "remove_settings", "purge",          "edhm_2dmigoto", "restore_mirror", "manifest"};
     for (const auto& entry : m) {
         if (!known.count(entry.first)) return setError(error, "the plan has a key this launcher does not know: " + entry.first);
     }
@@ -275,6 +277,7 @@ bool readPlanFile(const std::wstring& path, PlanFile* plan, std::string* error) 
         !boolOf(m, "restore_mirror", &p.restoreMirror, error))
         return false;
     if (m.count("purge") && !boolOf(m, "purge", &p.purge, error)) return false;
+    if (m.count("edhm_2dmigoto") && !boolOf(m, "edhm_2dmigoto", &p.edhm2dMigoto, error)) return false;
     if (p.action.empty() || p.dir.empty()) return setError(error, "the plan lacks an action or a folder");
     if (!p.manifestSha.empty() && !isLowerHex(p.manifestSha, 64)) return setError(error, "the plan's manifest is not a 64-character hash");
     if (!p.scope.empty() && p.scope != "both" && p.scope != "vr" && p.scope != "flat") return setError(error, "the plan names an unknown scope");

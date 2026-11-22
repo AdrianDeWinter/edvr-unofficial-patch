@@ -4,7 +4,7 @@ The launcher installs ED-UP, keeps it up to date, and has a Play button. You can
 
 ## What it talks to
 
-It asks GitHub whether a newer release exists, and it downloads a release only after you press Download & install. Each request carries the launcher's name and version. A release is offered only when its signature matches a public key built into the launcher. A changed or substituted release is refused. If GitHub cannot be reached, the launcher says so in one line and carries on.
+It asks GitHub whether a newer release exists, and it downloads a release only after you press Download & install. Each request carries the launcher's name and version. A release — including its core files and any optional signed runtime assets (DLSS, XeSS, and the optional tailored 2DMigoto runtime for EDHM) — is offered only when its manifest signature matches a public key built into the launcher. A changed or substituted release is refused. If GitHub cannot be reached, the launcher says so in one line and carries on.
 
 With direct launch turned on, described below, it also signs in to Frontier at `api.zaonce.net`. That is the whole list.
 
@@ -56,7 +56,18 @@ Because direct launch starts `EliteDangerous64.exe` directly outside Steam, leav
 
 If any part of the sign-in fails, the launcher says why and starts the game through Steam instead.
 
-The sign-in comes from [min-ed-launcher](https://github.com/rfvgyhn/min-ed-launcher) (MIT). `ed-up-launcher.exe --licenses` prints that licence.
+The sign-in comes from [min-ed-launcher](https://github.com/rfvgyhn/min-ed-launcher) (MIT). `ed-up-launcher.exe --licenses` prints that licence and the optional EDHM 2DMigoto third-party notices.
+
+## Experimental EDHM 2DMigoto runtime
+
+Under **Settings** (available in both the VR and Flat views), **EDHM compatibility** offers an opt-in toggle: **(Experimental) Use tailored 2DMigoto dll for EDHM compatibility improvements.**
+
+- It is off by default and asks for confirmation before turning on.
+- The tailored `d3d11_edhm.dll` comes strictly from ED-UP's own signed release (pinned at build time from [Fenris159/EDHM_2DMigoto](https://github.com/Fenris159/EDHM_2DMigoto)) and is installed and removed through the normal installer plan, with no separate download or unsigned cache.
+- When enabled in an install where EDHM is present, ED-UP backs up your current standard `d3d11_edhm.dll` into `edup_backup\` and installs the signed 2DMigoto build together with its licence notices (`EDHM-2DMIGOTO-LICENSE.txt` and `EDHM-2DMIGOTO-THIRD-PARTY.txt`).
+- Turning the option off (or uninstalling ED-UP) restores your backed-up original standard `d3d11_edhm.dll` and removes the 2DMigoto notices. If antivirus or external interference removes `d3d11_edhm.dll` while the option is enabled, the launcher unchecks the option, restores your original `d3d11_edhm.dll`, and displays a warning below the setting.
+- If you update EDHM yourself while the option is enabled, ED-UP leaves your newer standard `d3d11_edhm.dll` in place instead of silently overwriting it.
+- Licences: `EDHM_2DMigoto` (derived from `3Dmigoto` and `XXMI-Libs-Package`) is licensed under GNU GPLv3, with bundled PCRE2 (BSD 3-clause) and DirectXTK (MIT) notices. EDHM itself is a separate community project (`psychicEgg/EDHM`). Run `ed-up-launcher.exe --licenses` for the full disclosure.
 
 ## Frontier's own store
 

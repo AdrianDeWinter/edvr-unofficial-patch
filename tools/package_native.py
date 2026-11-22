@@ -55,6 +55,7 @@ STAMP_KEYS = ("FileVersion", "ProductVersion")
 # XeSS go in zips named by a hash of their contents, so an unchanged runtime keeps
 # its asset name from release to release.
 MANIFEST = sign_manifest.MANIFEST_NAME
+V2_MANIFEST = sign_manifest.V2_NAME
 BRIDGE = sign_manifest.BRIDGE_NAME
 SUMS_NAME = "SHA256SUMS"
 LAUNCHER_ASSET = "ed-up-launcher.exe"
@@ -64,6 +65,9 @@ LAUNCHER_VERSION_HEADER = ("src", "installer", "launcher_version.h")
 LAUNCHER_LICENSE_FILE = ("third_party", "min_ed_launcher", "LICENSE")
 LAUNCHER_LICENSE_NAME = "MIN-ED-LAUNCHER-LICENSE.txt"
 LAUNCHER_LICENSE_RESOURCE = 120
+# The EDHM_2DMigoto / 3Dmigoto / XXMI / PCRE2 / DirectXTK / EDHM notice carried as RCDATA 121 by the launcher.
+EDHM_LICENSE_FILE = ("third_party", "edhm_2dmigoto_notice", "NOTICE.txt")
+EDHM_LICENSE_RESOURCE = 121
 KEYS_HEADER = ("src", "installer", "update_keys.h")
 
 
@@ -80,6 +84,7 @@ class PackagedFile(NamedTuple):
 
 # The profiles an install covers: both writes vr and flat, so d3d11.dll (every profile) lists both.
 _VR, _FLAT, _EITHER, _NVIDIA = {"profile": ["vr"]}, {"profile": ["flat"]}, {"profile": ["vr", "flat"]}, {"adapter": "nvidia"}
+_EDHM_OPT = {"option": "edhm_2dmigoto"}
 # What src\installer\plan.cpp's planInstall does with each file today:
 #   d3d11.dll        every profile; a foreign DLL at the target is chained to
 #   openvr_api.dll   VR profiles only (flat keeps the game's own runtime); the game's original is kept
@@ -118,12 +123,21 @@ FILES = (
     PackagedFile("fsr4_loader", "amd_fidelityfx_loader_dx12.dll", "fsr4", "game", "amd_fidelityfx_loader_dx12.dll", None, "owned"),
     PackagedFile("fsr4_upscaler", "amd_fidelityfx_upscaler_dx12.dll", "fsr4", "game", "amd_fidelityfx_upscaler_dx12.dll", None, "owned"),
     PackagedFile("fsr4_license", "AMD-FIDELITYFX-LICENSE.txt", "fsr4", "game", "AMD-FIDELITYFX-LICENSE.txt", None, "owned"),
+    # Optional tailored 2DMigoto runtime for EDHM (schema 3 only; stripped from ed-up-manifest-v2.json
+    # so v0.22.x launchers keep updating). Stored under edhm_2dmigoto/ inside the archive so a manual
+    # unzip never overwrites a player's standard d3d11_edhm.dll.
+    PackagedFile("edhm_2dmigoto", "edhm_2dmigoto/d3d11_edhm.dll", "edhm", "game", "d3d11_edhm.dll",
+                 _EDHM_OPT, "opt_in"),
+    PackagedFile("edhm_2dmigoto_license", "edhm_2dmigoto/EDHM-2DMIGOTO-LICENSE.txt", "edhm", "game",
+                 "EDHM-2DMIGOTO-LICENSE.txt", _EDHM_OPT, "owned"),
+    PackagedFile("edhm_2dmigoto_third_party", "edhm_2dmigoto/EDHM-2DMIGOTO-THIRD-PARTY.txt", "edhm", "game",
+                 "EDHM-2DMIGOTO-THIRD-PARTY.txt", _EDHM_OPT, "owned"),
 )
 # Members that ship in a zip without an entry in the manifest's files: notices, and the profile
 # descriptor, which the planner no longer reads (it writes its own).
 _EXTRA_MEMBERS = {"core": ("edup_profile.ini", "LICENSE.txt", "DXBC-HASH-LICENSE.txt", "MINIZ-LICENSE.txt",
                            "FIDELITYFX-SDK-DX11-LICENSE.txt", "MIN-ED-LAUNCHER-LICENSE.txt"),
-                  "dlss": ("NVIDIA-DLSS-LICENSE.txt",), "xess": (), "fsr4": ()}
+                  "dlss": ("NVIDIA-DLSS-LICENSE.txt",), "xess": (), "fsr4": (), "edhm": ()}
 
 
 def _group_names(group):
@@ -134,6 +148,7 @@ CORE_NAMES = _group_names("core")
 DLSS_NAMES = _group_names("dlss")
 XESS_NAMES = _group_names("xess")
 FSR4_NAMES = _group_names("fsr4")
+EDHM_NAMES = _group_names("edhm")
 
 
 def manifest_file_entry(file, asset, data):
@@ -144,7 +159,7 @@ def manifest_file_entry(file, asset, data):
         entry["when"] = json.loads(json.dumps(file.when))
     entry["existing"] = file.existing
     return entry
-SPLIT_PATTERNS = ("ed-up-dlss-*.zip", "ed-up-xess-*.zip", "ed-up-fsr4-*.zip")
+SPLIT_PATTERNS = ("ed-up-dlss-*.zip", "ed-up-xess-*.zip", "ed-up-fsr4-*.zip", "ed-up-edhm-*.zip")
 
 
 def _version(value):
@@ -187,6 +202,10 @@ def _files(root, no_dlss):
     # Authenticode signature: nothing here or in the artifact signing step re-signs them.
     result.extend(((build / AMD_LOADER, AMD_LOADER), (build / AMD_UPSCALER, AMD_UPSCALER),
                    (build / AMD_LICENSE, AMD_LICENSE)))
+    if (build / "d3d11_edhm.dll").is_file():
+        result.extend(((build / "d3d11_edhm.dll", "edhm_2dmigoto/d3d11_edhm.dll"),
+                       (build / "EDHM-2DMIGOTO-LICENSE.txt", "edhm_2dmigoto/EDHM-2DMIGOTO-LICENSE.txt"),
+                       (build / "EDHM-2DMIGOTO-THIRD-PARTY.txt", "edhm_2dmigoto/EDHM-2DMIGOTO-THIRD-PARTY.txt")))
     # Both settings files ship: edup.ini for VR, and edup-flat.ini for the flat
     # runtime (config.cpp reads edup-flat.ini first). Each keeps its own name.
     result.extend([(root / "edup.ini", "edup.ini"),
@@ -370,6 +389,11 @@ def _validate_release_files(files):
         notice = by_name.get("NVIDIA-DLSS-LICENSE.txt")
         if notice is None or not notice.read_bytes().strip():
             raise ValueError("the DLSS runtime requires its NVIDIA license notice")
+    if "edhm_2dmigoto/d3d11_edhm.dll" in by_name:
+        for notice_name in ("edhm_2dmigoto/EDHM-2DMIGOTO-LICENSE.txt", "edhm_2dmigoto/EDHM-2DMIGOTO-THIRD-PARTY.txt"):
+            notice = by_name.get(notice_name)
+            if notice is None or not notice.read_bytes().strip():
+                raise ValueError("the EDHM_2DMigoto runtime requires its license notices (%s)" % notice_name)
 
 
 def _write_zip_entry(output, source, name):
@@ -439,6 +463,8 @@ def _validate_launcher(root):
         if stamp.get(key) != version:
             problems.append("%s %s is %s, but launcher_version.h says %s" % (LAUNCHER_ASSET, key, stamp.get(key), version))
     for resource_id in range(IDR_MANIFEST, IDR_FILE_BASE + len(FILES) + 1):
+        if resource_id in (LAUNCHER_LICENSE_RESOURCE, EDHM_LICENSE_RESOURCE):
+            continue
         if _embedded_resource(launcher, resource_id, required=False) is not None:
             problems.append("%s carries resource %d: the launcher has no embedded payload" % (LAUNCHER_ASSET, resource_id))
     licence = _embedded_resource(launcher, LAUNCHER_LICENSE_RESOURCE, required=False)
@@ -447,6 +473,12 @@ def _validate_launcher(root):
         problems.append("%s does not carry resource %d, the min-ed-launcher licence" % (LAUNCHER_ASSET, LAUNCHER_LICENSE_RESOURCE))
     elif not licence_file.is_file() or licence != licence_file.read_bytes():
         problems.append("%s resource %d differs from %s" % (LAUNCHER_ASSET, LAUNCHER_LICENSE_RESOURCE, "/".join(LAUNCHER_LICENSE_FILE)))
+    edhm_licence = _embedded_resource(launcher, EDHM_LICENSE_RESOURCE, required=False)
+    edhm_licence_file = root.joinpath(*EDHM_LICENSE_FILE)
+    if edhm_licence is None:
+        problems.append("%s does not carry resource %d, the EDHM_2DMigoto licence notice" % (LAUNCHER_ASSET, EDHM_LICENSE_RESOURCE))
+    elif not edhm_licence_file.is_file() or edhm_licence != edhm_licence_file.read_bytes():
+        problems.append("%s resource %d differs from %s" % (LAUNCHER_ASSET, EDHM_LICENSE_RESOURCE, "/".join(EDHM_LICENSE_FILE)))
     keys = sign_manifest.header_keys(root.joinpath(*KEYS_HEADER))
     if len(keys) != 2:
         problems.append("update_keys.h lists %d keys; a release needs the main key and the recovery key" % len(keys))
@@ -459,11 +491,12 @@ def _validate_launcher(root):
 
 
 def _split_outputs(root, version, files):
-    """The split assets and the two unsigned manifests (schema 2, and the schema-1 bridge) as [(file name, bytes)], all in
-    memory so a dry run builds and checks them and writes nothing. The launcher
-    exe, build\\ed-up-launcher.exe, is required (_validate_launcher)."""
+    """The split assets and the three unsigned manifests (schema 3, schema 2 for v0.22.x
+    launchers, and the schema-1 bridge) as [(file name, bytes)], all in memory so a dry run
+    builds and checks them and writes nothing. The launcher exe, build\\ed-up-launcher.exe,
+    is required (_validate_launcher)."""
     present = {name: source for source, name in files}
-    data = {name: present[name].read_bytes() for name in CORE_NAMES + DLSS_NAMES + XESS_NAMES + FSR4_NAMES
+    data = {name: present[name].read_bytes() for name in CORE_NAMES + DLSS_NAMES + XESS_NAMES + FSR4_NAMES + EDHM_NAMES
             if name in present}
     groups = [("ed-up-core-%s.zip" % version, [name for name in CORE_NAMES if name in data])]
     if DLSS_NAMES[0] in data:
@@ -472,6 +505,8 @@ def _split_outputs(root, version, files):
         groups.append(("ed-up-xess", [name for name in XESS_NAMES if name in data]))
     if FSR4_NAMES[0] in data:
         groups.append(("ed-up-fsr4", [name for name in FSR4_NAMES if name in data]))
+    if EDHM_NAMES[0] in data:
+        groups.append(("ed-up-edhm", [name for name in EDHM_NAMES if name in data]))
     outputs, assets, held = [], [], {}
     for name, members in groups:
         pairs = [(member, data[member]) for member in members]
@@ -502,10 +537,16 @@ def _split_outputs(root, version, files):
     if problems:
         raise ValueError("the manifest is not valid:\n  " + "\n  ".join(problems))
     outputs.append((MANIFEST, (json.dumps(manifest, indent=2, ensure_ascii=True) + "\n").encode("ascii")))
+    # Schema 2 for v0.22.x launchers: strictly free of schema-3-only files and keys.
+    manifest_v2 = sign_manifest.make_v2_manifest(manifest)
+    problems = sign_manifest.validate_manifest_v2(manifest_v2) + sign_manifest.v2_agreement(manifest_v2, manifest)
+    if problems:
+        raise ValueError("the schema-2 manifest is not valid:\n  " + "\n  ".join(problems))
+    outputs.append((V2_MANIFEST, (json.dumps(manifest_v2, indent=2, ensure_ascii=True) + "\n").encode("ascii")))
     # The schema-1 bridge for launcher 0.1.0 (v0.22.0), which reads only ed-up-manifest.json at
-    # schema 1: it sends that launcher to this release's launcher, which reads the schema-2 manifest.
-    bridge = sign_manifest.make_bridge(manifest)
-    problems = sign_manifest.validate_bridge(bridge) + sign_manifest.bridge_agreement(bridge, manifest)
+    # schema 1: it sends that launcher to this release's launcher.
+    bridge = sign_manifest.make_bridge(manifest_v2)
+    problems = sign_manifest.validate_bridge(bridge) + sign_manifest.bridge_agreement(bridge, manifest_v2)
     if problems:
         raise ValueError("the schema-1 bridge is not valid:\n  " + "\n  ".join(problems))
     outputs.append((BRIDGE, (json.dumps(bridge, indent=2, ensure_ascii=True) + "\n").encode("ascii")))
@@ -761,7 +802,13 @@ def self_test():
         # The launcher carries the min-ed-launcher licence as resource 120, the bytes of the file in third_party;
         # a case puts a payload resource into it, or spoils the licence. It is the one exe whose resources
         # the release reads.
-        launcher_resources = {LAUNCHER_LICENSE_RESOURCE: root.joinpath(*LAUNCHER_LICENSE_FILE).read_bytes()}
+        edhm_notice_file = root.joinpath(*EDHM_LICENSE_FILE)
+        edhm_notice_file.parent.mkdir(parents=True, exist_ok=True)
+        edhm_notice_file.write_bytes(b"EDHM_2DMigoto GPLv3 third-party notice")
+        launcher_resources = {
+            LAUNCHER_LICENSE_RESOURCE: root.joinpath(*LAUNCHER_LICENSE_FILE).read_bytes(),
+            EDHM_LICENSE_RESOURCE: edhm_notice_file.read_bytes(),
+        }
 
         def fake_resource(executable, resource_id, required=True):
             assert Path(executable).name == LAUNCHER_ASSET, "the release reads resources of the launcher only: " + str(executable)
@@ -807,7 +854,7 @@ def self_test():
                 listed[name] = digest
             manifest_doc = json.loads((root / "dist" / MANIFEST).read_text(encoding="ascii"))
             expected = {name + "-1.2.3.zip" for name in ("ed-up", "ed-up-launcher-linux")}
-            expected |= {MANIFEST, BRIDGE} | {asset["name"] for asset in manifest_doc["assets"]}
+            expected |= {MANIFEST, V2_MANIFEST, BRIDGE} | {asset["name"] for asset in manifest_doc["assets"]}
             if manifest_doc.get("launcher"): expected.add(manifest_doc["launcher"]["asset"])
             assert set(listed) == expected, sorted(listed)
             for name, digest in listed.items():
@@ -1125,7 +1172,40 @@ def self_test():
                                           "sha256": hashlib.sha256(b"launcher exe").hexdigest(), "size": 12}
             assert (dist / LAUNCHER_ASSET).read_bytes() == b"launcher exe"
             assert [asset["name"] for asset in parsed["assets"]] == [core.name, dlss_zip.name, xess_zip.name, fsr4_zip.name]
-            assert [entry["id"] for entry in parsed["files"]] == [file.id for file in FILES]
+            assert [entry["id"] for entry in parsed["files"]] == [file.id for file in FILES if file.group != "edhm"]
+            # Pin v0.22.x compatibility: ed-up-manifest-v2.json is strictly schema 2 and stays
+            # byte-for-byte identical whether or not the optional EDHM_2DMigoto asset is staged.
+            v2_without_edhm = (dist / V2_MANIFEST).read_bytes()
+            v2_parsed, v2_problems = sign_manifest.load_manifest_v2(v2_without_edhm)
+            assert v2_problems == [] and v2_parsed["schema"] == 2, v2_problems
+            # Stage EDHM_2DMigoto with notices: schema 3 adds ed-up-edhm-*.zip and its 3 entries,
+            # while ed-up-manifest-v2.json stays completely unchanged for v0.22.x launchers.
+            (root / "build" / "d3d11_edhm.dll").write_bytes(b"2dmigoto runtime")
+            try:
+                package(root, "4.0.0", no_dlss=True, dry_run=True)
+                raise AssertionError("EDHM_2DMigoto accepted without license notices")
+            except ValueError:
+                pass
+            (root / "build" / "EDHM-2DMIGOTO-LICENSE.txt").write_bytes(b"GPLv3 text")
+            (root / "build" / "EDHM-2DMIGOTO-THIRD-PARTY.txt").write_bytes(b"PCRE2 + DirectXTK notices")
+            assert package(root, "4.0.0", no_dlss=True) == 0
+            assert (dist / V2_MANIFEST).read_bytes() == v2_without_edhm, "ed-up-manifest-v2.json changed when EDHM was added!"
+            v3_with_edhm, v3_problems = sign_manifest.load_manifest((dist / MANIFEST).read_bytes())
+            assert v3_problems == [], v3_problems
+            assert [entry["id"] for entry in v3_with_edhm["files"]] == [file.id for file in FILES]
+            v3_by_id = {entry["id"]: entry for entry in v3_with_edhm["files"]}
+            assert v3_by_id["edhm_2dmigoto"]["existing"] == "opt_in"
+            assert v3_by_id["edhm_2dmigoto"]["when"] == {"option": "edhm_2dmigoto"}
+            assert v3_by_id["edhm_2dmigoto"]["target"] == {"root": "game", "path": "d3d11_edhm.dll"}
+            assert all(e["id"] not in ("edhm_2dmigoto", "edhm_2dmigoto_license", "edhm_2dmigoto_third_party")
+                       for e in v2_parsed["files"])
+            assert all("option" not in (e.get("when") or {}) and e["existing"] != "opt_in"
+                       for e in v2_parsed["files"])
+            assert all("edhm" not in a["name"] for a in v2_parsed["assets"])
+            assert sign_manifest.verify_directory(dist, allow_unsigned=True, out=lambda line: None)
+            for name in ("d3d11_edhm.dll", "EDHM-2DMIGOTO-LICENSE.txt", "EDHM-2DMIGOTO-THIRD-PARTY.txt"):
+                (root / "build" / name).unlink()
+            assert package(root, "4.0.0", no_dlss=True) == 0
             assert "edup_profile.ini" not in {entry["path"] for entry in parsed["files"]}
             by_id = {entry["id"]: entry for entry in parsed["files"]}
             assert by_id["graphics"]["existing"] == "chain" and by_id["graphics"]["when"] == {"profile": ["vr", "flat"]}
@@ -1145,6 +1225,7 @@ def self_test():
             assert by_id["dlss"]["when"] == {"adapter": "nvidia"} and "when" not in by_id["xess"]
             # The schema-1 bridge for launcher 0.1.0: valid under that release's rules, it sends that
             # launcher to this release's, and it lists the same bytes the schema-2 manifest does.
+            v2_current, _ = sign_manifest.load_manifest_v2((dist / V2_MANIFEST).read_bytes())
             bridge_bytes = (dist / BRIDGE).read_bytes()
             assert bridge_bytes.decode("ascii") and b"\r" not in bridge_bytes and bridge_bytes.endswith(b"\n")
             bridge, problems = sign_manifest.load_bridge(bridge_bytes)
@@ -1153,8 +1234,8 @@ def self_test():
                 1, "4.0.0", "v4.0.0", "v4.0.0", 1794000000)
             assert bridge["min_launcher"] == bridge["launcher"]["version"] == parsed["launcher"]["version"]
             assert bridge["launcher"] == parsed["launcher"] and bridge["launcher"]["asset"] == LAUNCHER_ASSET
-            assert bridge["assets"] == parsed["assets"]
-            assert sign_manifest.bridge_agreement(bridge, parsed) == []
+            assert bridge["assets"] == v2_current["assets"]
+            assert sign_manifest.bridge_agreement(bridge, v2_current) == []
             assert {entry["item"] for entry in bridge["files"]} <= set(sign_manifest.ITEMS)
             assert [entry["item"] for entry in bridge["files"]] == [
                 item for item in sign_manifest.ITEMS if item in {
@@ -1290,6 +1371,11 @@ def self_test():
             launcher_resources[LAUNCHER_LICENSE_RESOURCE] = good_licence + b" "
             refused_launcher("launcher with another licence", "resource 120 differs from third_party/min_ed_launcher/LICENSE")
             launcher_resources[LAUNCHER_LICENSE_RESOURCE] = good_licence
+            good_edhm = launcher_resources.pop(EDHM_LICENSE_RESOURCE)
+            refused_launcher("launcher without EDHM notice", "does not carry resource 121")
+            launcher_resources[EDHM_LICENSE_RESOURCE] = good_edhm + b" "
+            refused_launcher("launcher with wrong EDHM notice", "resource 121 differs from third_party/edhm_2dmigoto_notice/NOTICE.txt")
+            launcher_resources[EDHM_LICENSE_RESOURCE] = good_edhm
             rfc = sign_manifest.RFC_PUBLIC.lower()
             real_pair = [k for k in re.findall(r'"([0-9a-f]{128})"', real_keys_text)]
             assert len(real_pair) == 2 and real_pair[0] != rfc and real_pair[1] != rfc, "the repository's own keys"
@@ -1317,7 +1403,7 @@ def self_test():
             legal = {"schema": sign_manifest.MANIFEST_SCHEMA, "version": "1.0.0", "build": "b", "tag": "t",
                      "issued": 1,
                      "assets": [{"name": name + ".zip", "sha256": "0" * 64, "size": 1}
-                                for name in ("core", "dlss", "xess", "fsr4")],
+                                for name in ("core", "dlss", "xess", "fsr4", "edhm")],
                      "files": [manifest_file_entry(file, file.group + ".zip", b"x") for file in FILES]}
             assert sign_manifest.validate_manifest(legal) == [], sign_manifest.validate_manifest(legal)
             assert len({file.id for file in FILES}) == len(FILES)

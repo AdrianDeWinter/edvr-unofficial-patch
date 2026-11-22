@@ -16,11 +16,33 @@
 
 #include <windows.h>
 
+#include <functional>
 #include <string>
 
 #include "settings.h"
 
 namespace edvr::installer {
+
+enum class LauncherRowTone { Muted, Accent, Good, Warn, Bad };
+
+// A launcher-managed toggle rendered cleanly inside the Settings options list
+// (outside edup.ini), with wrapped label, inline status, optional action link,
+// and an optional warning strip below the row (e.g. antivirus interference).
+struct LauncherToggleRow {
+    bool visible = false;
+    std::wstring group;
+    std::wstring label;
+    std::wstring description;
+    std::wstring searchTerms;
+    bool on = false;
+    bool busy = false;
+    std::wstring statusText;
+    LauncherRowTone statusTone = LauncherRowTone::Muted;
+    std::wstring actionLink;
+    std::wstring warning;
+    std::function<void(bool)> onToggle;
+    std::function<void()> onAction;
+};
 
 HWND createSettingsList(HWND parent, int id, UINT dpi);
 
@@ -28,6 +50,7 @@ HWND createSettingsList(HWND parent, int id, UINT dpi);
 // mirror.h); empty is a valid value meaning "no mirror for this install",
 // which a write simply skips.
 void settingsListSetModel(HWND list, SettingsModel* model, const std::wstring& mirrorDir);
+void settingsListSetLauncherToggle(HWND list, const LauncherToggleRow& row);
 void settingsListSetFilter(HWND list, const std::wstring& needle);
 void settingsListRescale(HWND list, UINT dpi);
 

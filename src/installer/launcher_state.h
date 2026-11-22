@@ -19,6 +19,9 @@
 //   vr_3d_mode         the VR headset mode written to Elite's Settings.xml for Play VR when the
 //                      store route does not pass /vr: hmd_headphones, hmd_speakers,
 //                      hmd_cinema_headphones, hmd_cinema_speakers, or not_set (default).
+//   edhm_2dmigoto      on: opt-in to the signed tailored 2DMigoto d3d11_edhm.dll shipped in ED-UP's
+//                      release, backing up the player's standard d3d11_edhm.dll for restoration on
+//                      opt-out or uninstall. Missing, or anything but "on", is off.
 //
 // A line this code does not know (another version's key, a comment) is kept as
 // it was, in place, so a newer launcher's file survives an older one. Saving is
@@ -86,6 +89,10 @@ public:
     // Preferred VR headset mode, or VrHeadsetMode::NotSet when unset/unknown.
     edvr::VrHeadsetMode vrStereoMode() const;
     void setVrStereoMode(edvr::VrHeadsetMode mode);
+
+    // True only when the file says "on". Off is the default.
+    bool edhm2dMigoto() const;
+    void setEdhm2dMigoto(bool on);
 
     // The same folder by modeKey's rules: case, slash direction and a trailing separator do not count.
     static bool sameInstall(const std::wstring& a, const std::wstring& b);

@@ -153,6 +153,10 @@ void LauncherState::setVrStereoMode(edvr::VrHeadsetMode mode) {
     set("vr_3d_mode", edvr::vrHeadsetModeConfigValue(mode));
 }
 
+bool LauncherState::edhm2dMigoto() const { return get("edhm_2dmigoto") == "on"; }
+
+void LauncherState::setEdhm2dMigoto(bool on) { set("edhm_2dmigoto", on ? "on" : "off"); }
+
 bool LauncherState::sameInstall(const std::wstring& a, const std::wstring& b) {
     return !a.empty() && !b.empty() && modeKey(a) == modeKey(b);
 }

@@ -48,7 +48,7 @@ EXCLUDED_PARTS = {"__pycache__", ".pytest_cache"}
 # Git-ignored folders that are compiled inputs and so stay in the fingerprint
 # (see THE INPUT RULE above).  Relative to the repository root, forward slashes.
 DEPENDENCY_ROOTS = ("third_party/ngx", "third_party/ffx-dx11", "third_party/openxr/loader", "third_party/xess",
-                    "third_party/fsr4")
+                    "third_party/fsr4", "third_party/edhm_2dmigoto")
 
 
 def _excluded(relative):
@@ -340,7 +340,7 @@ def _self_test_in_git_tree(root):
     git("init", "-q")
     _write(root / ".gitignore", "build/\ndist/\n__pycache__/\n*.pyc\nreviews/\nscratch.log\n"
            "third_party/ngx/\nthird_party/ffx-dx11/\nthird_party/openxr/loader/\nthird_party/xess/\n"
-           "third_party/fsr4/\n")
+           "third_party/fsr4/\nthird_party/edhm_2dmigoto/\n")
     _write(root / "source.txt", "one")
     _write(root / "tools" / "tool.py", "one")
     git("add", ".gitignore", "source.txt", "tools/tool.py")
@@ -359,6 +359,7 @@ def _self_test_in_git_tree(root):
     _write(root / "third_party" / "xess" / "include" / "xess" / "xess.h", "one")
     _write(root / "third_party" / "fsr4" / "include" / "FidelityFX" / "upscalers" / "include" / "ffx_upscale.h", "one")
     _write(root / "third_party" / "openxr" / "loader" / "openxr_loader.dll", "one")
+    _write(root / "third_party" / "edhm_2dmigoto" / "bin" / "d3d11_edhm.dll", "one")
     first = input_fingerprint(root)
 
     # Changes that must not matter.
@@ -379,6 +380,8 @@ def _self_test_in_git_tree(root):
              "a change under third_party/fsr4 does not affect the input fingerprint"),
             ("third_party/openxr/loader/openxr_loader.dll",
              "a change under third_party/openxr/loader does not affect the input fingerprint"),
+            ("third_party/edhm_2dmigoto/bin/d3d11_edhm.dll",
+             "a change under third_party/edhm_2dmigoto does not affect the input fingerprint"),
             ("source.txt", "a tracked source change does not affect the input fingerprint"),
             ("tools/tool.py", "a tracked tool change does not affect the input fingerprint"),
             ("src/new_file.cpp", "an untracked, not-ignored file's change does not affect the input fingerprint")):

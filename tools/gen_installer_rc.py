@@ -164,10 +164,13 @@ def versioninfo_lines(version, file_description, internal_name, original_filenam
 LAUNCHER_VERSION_HEADER = ('src', 'installer', 'launcher_version.h')
 AMD_RUNTIME_FILES = ('amd_fidelityfx_loader_dx12.dll', 'amd_fidelityfx_upscaler_dx12.dll')
 AMD_LICENSE_FILE = 'AMD-FIDELITYFX-LICENSE.txt'
-# min-ed-launcher's MIT licence, which direct launch's ported code obliges the launcher to carry.
-# src/installer/launcher_main.cpp reads this id; package_native.py checks the bytes.
+# min-ed-launcher's MIT licence, which direct launch's ported code obliges the launcher to carry,
+# and the EDHM_2DMigoto / 3Dmigoto / XXMI / PCRE2 / DirectXTK / EDHM notice for the optional
+# tailored 2DMigoto runtime. src/installer/launcher_main.cpp reads both; package_native.py checks them.
 IDR_MIN_ED_LAUNCHER_LICENSE = 120
 LAUNCHER_LICENSE_FILE = ('third_party', 'min_ed_launcher', 'LICENSE')
+IDR_EDHM_2DMIGOTO_LICENSE = 121
+EDHM_LICENSE_FILE = ('third_party', 'edhm_2dmigoto_notice', 'NOTICE.txt')
 LAUNCHER_COMMENTS = 'Source and releases: https://github.com/characterecho-sean/ed-unofficial-patch'
 
 
@@ -191,6 +194,7 @@ def write_launcher_rc(root, out, dry_run):
     are the same bytes."""
     manifest = os.path.join(root, 'src', 'installer', 'installer.manifest')
     license_path = os.path.join(root, *LAUNCHER_LICENSE_FILE)
+    edhm_license_path = os.path.join(root, *EDHM_LICENSE_FILE)
     try:
         version = launcher_version(root)
     except (OSError, ValueError) as exc:
@@ -198,6 +202,9 @@ def write_launcher_rc(root, out, dry_run):
         return 1
     if not os.path.isfile(license_path):
         print('gen_installer_rc: ERROR: %s is missing: the launcher carries it' % license_path)
+        return 1
+    if not os.path.isfile(edhm_license_path):
+        print('gen_installer_rc: ERROR: %s is missing: the launcher carries it' % edhm_license_path)
         return 1
     try:
         import xml.etree.ElementTree as ElementTree
@@ -218,6 +225,7 @@ def write_launcher_rc(root, out, dry_run):
         '1 %d "%s"' % (RT_MANIFEST, rc_path(manifest)),
         '1 ICON "%s"' % rc_path(icon_path),
         '%d RCDATA "%s"' % (IDR_MIN_ED_LAUNCHER_LICENSE, rc_path(license_path)),
+        '%d RCDATA "%s"' % (IDR_EDHM_2DMIGOTO_LICENSE, rc_path(edhm_license_path)),
         '',
     ] + versioninfo_lines(
         version,
@@ -438,6 +446,11 @@ def write_release_files(build, dry_run):
     if any_amd and not os.path.isfile(os.path.join(build, AMD_LICENSE_FILE)):
         print('gen_installer_rc: ERROR: AMD FSR 4 runtime lacks its license notice')
         return 1
+    if os.path.exists(os.path.join(build, 'd3d11_edhm.dll')) and (
+            not os.path.isfile(os.path.join(build, 'EDHM-2DMIGOTO-LICENSE.txt'))
+            or not os.path.isfile(os.path.join(build, 'EDHM-2DMIGOTO-THIRD-PARTY.txt'))):
+        print('gen_installer_rc: ERROR: EDHM_2DMigoto runtime lacks license notices')
+        return 1
 
     if dry_run:
         print('gen_installer_rc: dry run; validated the release inputs and wrote nothing')
@@ -633,6 +646,13 @@ def self_test():
         os.makedirs(os.path.join(lroot, 'third_party', 'min_ed_launcher'))
         with open(os.path.join(lroot, 'third_party', 'min_ed_launcher', 'LICENSE'), 'w') as stream:
             stream.write('MIT License\n')
+        no_edhm = io.StringIO()
+        with contextlib.redirect_stdout(no_edhm):
+            assert main(['--launcher-rc', '--root', lroot, '--out', lout]) == 1
+        assert 'edhm_2dmigoto_notice' in no_edhm.getvalue() and not os.path.exists(lout)
+        os.makedirs(os.path.join(lroot, 'third_party', 'edhm_2dmigoto_notice'))
+        with open(os.path.join(lroot, 'third_party', 'edhm_2dmigoto_notice', 'NOTICE.txt'), 'w') as stream:
+            stream.write('EDHM_2DMigoto GPLv3 Notice\n')
         assert main(['--launcher-rc', '--root', lroot, '--out', lout, '--dry-run']) == 0 and not os.path.exists(lout)
         assert main(['--launcher-rc', '--root', lroot, '--out', lout, '--version', 'v9.9.9-5-gabc-dirty']) == 0
         with open(os.path.join(lout, 'launcher.rc'), encoding='utf-8') as stream:
@@ -641,8 +661,8 @@ def self_test():
         assert 'FileDescription", "ED-UP Launcher"' in launcher_text
         assert 'FileVersion", "0.1.0"' in launcher_text and 'ProductVersion", "0.1.0"' in launcher_text
         assert 'FILEVERSION 0,1,0,0' in launcher_text
-        # No payload, only the licence as 120, and not the build's describe.
-        assert launcher_text.count('RCDATA') == 1 and '120 RCDATA "' in launcher_text and 'LICENSE"' in launcher_text
+        # No payload, only the two licence notices as 120 and 121, and not the build's describe.
+        assert launcher_text.count('RCDATA') == 2 and '120 RCDATA "' in launcher_text and '121 RCDATA "' in launcher_text
         assert '9.9.9' not in launcher_text
         assert '24 "' in launcher_text and 'ICON' in launcher_text
         with open(os.path.join(lout, 'launcher.rc'), 'rb') as stream:

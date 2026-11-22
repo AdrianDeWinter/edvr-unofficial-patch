@@ -186,19 +186,35 @@ int runUpdateCommand(const AppArgs& args, Output& out) {
     return 0;
 }
 
-// The text of min-ed-launcher's licence, which gen_installer_rc.py embeds as RCDATA 120.
+// The third-party licence texts embedded by gen_installer_rc.py:
+//   120: min-ed-launcher (MIT, direct launch)
+//   121: EDHM_2DMigoto / 3Dmigoto / XXMI (GPLv3), PCRE2 (BSD), DirectXTK (MIT), EDHM notice
 constexpr int kLicenseResource = 120;
+constexpr int kEdhmLicenseResource = 121;
 
-int runLicensesCommand(Output& out) {
-    HRSRC found = FindResourceW(nullptr, MAKEINTRESOURCEW(kLicenseResource), RT_RCDATA);
+bool loadRcText(int id, std::string* out) {
+    HRSRC found = FindResourceW(nullptr, MAKEINTRESOURCEW(id), RT_RCDATA);
     HGLOBAL loaded = found ? LoadResource(nullptr, found) : nullptr;
     const void* data = loaded ? LockResource(loaded) : nullptr;
     const DWORD size = found ? SizeofResource(nullptr, found) : 0;
-    if (!data || size == 0) {
+    if (!data || size == 0) return false;
+    out->assign(static_cast<const char*>(data), size);
+    return true;
+}
+
+int runLicensesCommand(Output& out) {
+    std::string minEd;
+    if (!loadRcText(kLicenseResource, &minEd)) {
         out.line("This launcher carries no licence text. That is a build fault: please report it.");
         return 1;
     }
-    out.raw(std::string(static_cast<const char*>(data), size));
+    out.raw(minEd);
+    std::string edhm;
+    if (loadRcText(kEdhmLicenseResource, &edhm)) {
+        if (!minEd.empty() && minEd.back() != '\n') out.raw("\n");
+        out.raw("\n------------------------------------------------------------------------\n\n");
+        out.raw(edhm);
+    }
     return 0;
 }
 

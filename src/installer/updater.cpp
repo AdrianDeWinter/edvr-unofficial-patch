@@ -82,8 +82,27 @@ const ReleaseAsset* findAsset(const std::vector<ReleaseAsset>& assets, const std
     return nullptr;
 }
 
+bool findSignedManifest(const std::vector<ReleaseAsset>& assets, const ReleaseAsset** manifestOut,
+                        const ReleaseAsset** sigOut) {
+    if (const ReleaseAsset* m3 = findAsset(assets, kManifestAssetName)) {
+        if (const ReleaseAsset* s3 = findAsset(assets, kSignatureAssetName)) {
+            if (manifestOut) *manifestOut = m3;
+            if (sigOut) *sigOut = s3;
+            return true;
+        }
+    }
+    if (const ReleaseAsset* m2 = findAsset(assets, kManifestV2AssetName)) {
+        if (const ReleaseAsset* s2 = findAsset(assets, kSignatureV2AssetName)) {
+            if (manifestOut) *manifestOut = m2;
+            if (sigOut) *sigOut = s2;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool holdsSignedManifest(const std::vector<ReleaseAsset>& assets) {
-    return findAsset(assets, kManifestAssetName) && findAsset(assets, kSignatureAssetName);
+    return findSignedManifest(assets, nullptr, nullptr);
 }
 
 std::vector<std::pair<std::string, std::string>> githubHeaders(const std::string& etag) {
@@ -200,8 +219,12 @@ UpdateCheck Updater::check() {
     if (!tagName || !tagName->isString() || tagName->text.empty())
         return outcomeOnly(UpdateOutcome::Skipped, "a release has no tag, so the update check was skipped");
     const std::string tag = tagName->text;
-    const ReleaseAsset& manifestAsset = *findAsset(assets, kManifestAssetName);
-    const ReleaseAsset& signatureAsset = *findAsset(assets, kSignatureAssetName);
+    const ReleaseAsset* manifestAssetPtr = nullptr;
+    const ReleaseAsset* signatureAssetPtr = nullptr;
+    if (!findSignedManifest(assets, &manifestAssetPtr, &signatureAssetPtr))
+        return outcomeOnly(UpdateOutcome::UpToDate, "the latest release carries no signed update");
+    const ReleaseAsset& manifestAsset = *manifestAssetPtr;
+    const ReleaseAsset& signatureAsset = *signatureAssetPtr;
 
     // Same manifest as the one already adopted: nothing to download.
     if (!manifestAsset.digest.empty() && manifestAsset.digest == state.currentManifest())

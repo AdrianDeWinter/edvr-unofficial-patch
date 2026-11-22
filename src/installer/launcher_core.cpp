@@ -47,19 +47,27 @@ bool listPayloadFolder(const std::wstring& dir, Manifest* out, std::vector<Paylo
         return false;
     };
     if (!dirExists(dir)) return fail("the --payload folder does not exist");
-    const std::wstring manifestPath = joinPath(dir, widenUtf8(kManifestAssetName));
+    std::string chosenName = kManifestAssetName;
+    std::wstring manifestPath = joinPath(dir, widenUtf8(kManifestAssetName));
+    if (!fileExists(manifestPath)) {
+        const std::wstring v2Path = joinPath(dir, widenUtf8(kManifestV2AssetName));
+        if (fileExists(v2Path)) {
+            chosenName = kManifestV2AssetName;
+            manifestPath = v2Path;
+        }
+    }
     std::string bytes, readError;
     if (!readFileBytes(manifestPath, &bytes, kMaxManifestBytes, &readError))
-        return fail(std::string("that folder has no ") + kManifestAssetName + " (" + readError +
-                    "); point --payload at an unpacked ed-up-<version>.zip with its schema-2 manifest beside the files");
+        return fail(std::string("that folder has no ") + kManifestAssetName + " or " + kManifestV2AssetName + " (" + readError +
+                    "); point --payload at an unpacked ed-up-<version>.zip with its release manifest beside the files");
     JsonValue root;
     std::string parseError;
-    if (!parseJson(bytes, &root, &parseError)) return fail(std::string(kManifestAssetName) + " is not valid JSON: " + parseError);
+    if (!parseJson(bytes, &root, &parseError)) return fail(chosenName + " is not valid JSON: " + parseError);
     Manifest manifest;
     long long schemaSeen = 0;
     const ManifestParse parsed = parseManifest(root, &manifest, &parseError, &schemaSeen);
     if (parsed == ManifestParse::SchemaTooNew) return fail(kSchemaTooNewMessage);
-    if (parsed != ManifestParse::Ok) return fail(std::string(kManifestAssetName) + " is refused: " + parseError);
+    if (parsed != ManifestParse::Ok) return fail(chosenName + " is refused: " + parseError);
 
     // The manifest is unsigned here: the folder is the user's own, named with --payload. A file the
     // folder does not hold is skipped, as a folder unpacked from the core zip alone lacks the DLSS and

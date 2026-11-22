@@ -94,8 +94,10 @@ bool isReservedDeviceName(const std::string& segment) {
            stem[3] >= '0' && stem[3] <= '9';
 }
 
-bool parseWhen(const Json& obj, ManifestWhen* out, std::string* error, const std::string& where) {
-    if (!shapeOk(obj, {}, {"profile", "adapter"}, error, where)) return false;
+bool parseWhen(const Json& obj, long long schema, ManifestWhen* out, std::string* error, const std::string& where) {
+    const bool okShape = schema >= 3 ? shapeOk(obj, {}, {"profile", "adapter", "option"}, error, where)
+                                     : shapeOk(obj, {}, {"profile", "adapter"}, error, where);
+    if (!okShape) return false;
     if (obj.keys.empty()) return failWith(error, where + " is empty");
     ManifestWhen when;
     when.present = true;
@@ -116,23 +118,29 @@ bool parseWhen(const Json& obj, ManifestWhen* out, std::string* error, const std
             return failWith(error, where + ".adapter must be nvidia");
         when.adapterNvidia = true;
     }
+    if (const Json* option = obj.find("option")) {
+        if (!option->isString() || option->text != "edhm_2dmigoto")
+            return failWith(error, where + ".option must be edhm_2dmigoto");
+        when.option = option->text;
+    }
     *out = when;
     return true;
 }
 
-bool parseExisting(const Json* v, ExistingMode* out) {
+bool parseExisting(const Json* v, long long schema, ExistingMode* out) {
     if (!v || !v->isString()) return false;
     if (v->text == "replace") *out = ExistingMode::Replace;
     else if (v->text == "owned") *out = ExistingMode::Owned;
     else if (v->text == "chain") *out = ExistingMode::Chain;
     else if (v->text == "runtime") *out = ExistingMode::Runtime;
     else if (v->text == "settings") *out = ExistingMode::Settings;
+    else if (schema >= 3 && v->text == "opt_in") *out = ExistingMode::OptIn;
     else return false;
     return true;
 }
 
-bool parseFile(const Json& file, size_t index, const std::set<std::string>& assetNames, ManifestFile* out,
-               std::string* error) {
+bool parseFile(const Json& file, size_t index, long long schema, const std::set<std::string>& assetNames,
+               ManifestFile* out, std::string* error) {
     const std::string where = "files[" + std::to_string(index) + "]";
     if (!shapeOk(file, {"id", "asset", "path", "sha256", "size", "target", "existing"}, {"when"}, error, where))
         return false;
@@ -164,10 +172,11 @@ bool parseFile(const Json& file, size_t index, const std::set<std::string>& asse
     f.target.path = path->text;
 
     if (const Json* when = file.find("when")) {
-        if (!parseWhen(*when, &f.when, error, label + " when")) return false;
+        if (!parseWhen(*when, schema, &f.when, error, label + " when")) return false;
     }
-    if (!parseExisting(file.find("existing"), &f.existing))
-        return failWith(error, label + " existing must be replace, owned, chain, runtime or settings");
+    if (!parseExisting(file.find("existing"), schema, &f.existing))
+        return failWith(error, label + (schema >= 3 ? " existing must be replace, owned, chain, runtime, settings or opt_in"
+                                                    : " existing must be replace, owned, chain, runtime or settings"));
     *out = std::move(f);
     return true;
 }
@@ -180,7 +189,7 @@ bool startsWithFolded(const std::string& folded, const char* prefix) {
 // Why a target may not be a payload file: it is a name or a folder the installer itself writes (the fixed steps), or, under the game
 // root, it reaches into the default Openvr folder where it would alias the openvr root. Names are compared case-folded, the way
 // Windows compares them. Empty when the target is free to use. sign_manifest.py's _reserved_target_problem says the same.
-std::string reservedTargetReason(const ManifestTarget& target) {
+std::string reservedTargetReason(const ManifestTarget& target, ExistingMode mode) {
     const std::string path = foldAscii(target.path);
     const size_t slash = path.rfind('/');
     const std::string leaf = slash == std::string::npos ? path : path.substr(slash + 1);
@@ -196,19 +205,22 @@ std::string reservedTargetReason(const ManifestTarget& target) {
         return "is a file the installer writes itself";
     if (leaf.size() >= 5 && leaf.compare(leaf.size() - 5, 5, ".base") == 0)
         return "is a .base copy the installer keeps";
-    if (topLevel && path.size() >= 10 && startsWithFolded(path, "d3d11_") && path.compare(path.size() - 4, 4, ".dll") == 0)
+    if (topLevel && path.size() >= 10 && startsWithFolded(path, "d3d11_") && path.compare(path.size() - 4, 4, ".dll") == 0) {
+        if (mode == ExistingMode::OptIn && target.root == TargetRoot::Game && path == "d3d11_edhm.dll")
+            return std::string();
         return "is a name a chained graphics DLL is parked under";
+    }
     return std::string();
 }
 
 // Everything a target must satisfy by itself for a file placed under `mode`, or "" when it does: the path rule, the reserved names, and
-// the names the chain, runtime and settings behaviours are pinned to (the planner's rules for them are written for one file each).
+// the names the chain, runtime, settings and opt_in behaviours are pinned to (the planner's rules for them are written for one file each).
 // The sentence continues "file <id> ". The profile a settings file serves is a cross-file rule (checkFiles); here it only has to be a
 // profile's own ini. Shared with the install records (targetAllowed), so a hand-edited state.ini is held to what a manifest is.
 std::string targetProblem(const ManifestTarget& target, ExistingMode mode) {
     std::string why;
     if (!isTargetPath(target.path, &why)) return "target.path is refused: " + why;
-    const std::string reason = reservedTargetReason(target);
+    const std::string reason = reservedTargetReason(target, mode);
     if (!reason.empty()) return "target " + reason;
     const std::string path = foldAscii(target.path);
     switch (mode) {
@@ -225,6 +237,10 @@ std::string targetProblem(const ManifestTarget& target, ExistingMode mode) {
                  path != "edvr.ini" && path != "edvr-flat.ini"))
                 return "is a settings file and must target game edup.ini or edup-flat.ini";
             break;
+        case ExistingMode::OptIn:
+            if (target.root != TargetRoot::Game || path != "d3d11_edhm.dll")
+                return "is an opt_in file and must target game d3d11_edhm.dll";
+            break;
         default:
             break;
     }
@@ -236,6 +252,7 @@ std::string targetProblem(const ManifestTarget& target, ExistingMode mode) {
 bool checkFiles(const std::vector<ManifestFile>& files, std::string* error) {
     const ManifestFile* chain = nullptr;
     const ManifestFile* runtime = nullptr;
+    const ManifestFile* optIn = nullptr;
     const ManifestFile* settings[2] = {nullptr, nullptr};  // vr, flat
     for (const ManifestFile& f : files) {
         const std::string problem = targetProblem(f.target, f.existing);
@@ -248,6 +265,12 @@ bool checkFiles(const std::vector<ManifestFile>& files, std::string* error) {
             case ExistingMode::Runtime:
                 if (runtime) return failWith(error, "file " + f.id + " is a second runtime file (after " + runtime->id + ")");
                 runtime = &f;
+                break;
+            case ExistingMode::OptIn:
+                if (f.when.option != "edhm_2dmigoto")
+                    return failWith(error, "file " + f.id + " is an opt_in file and needs when.option edhm_2dmigoto");
+                if (optIn) return failWith(error, "file " + f.id + " is a second opt_in file (after " + optIn->id + ")");
+                optIn = &f;
                 break;
             case ExistingMode::Settings: {
                 if (f.when.profiles != kProfileVr && f.when.profiles != kProfileFlat)
@@ -315,9 +338,16 @@ bool targetAllowed(const ManifestTarget& target, ExistingMode mode, std::string*
     return false;
 }
 
-bool whenHolds(const ManifestWhen& when, unsigned installedProfiles, bool nvidiaAdapter) {
+bool whenHolds(const ManifestWhen& when, unsigned installedProfiles, bool nvidiaAdapter, bool edhm2dMigoto) {
     if (when.profiles != 0 && (when.profiles & installedProfiles) == 0) return false;
     if (when.adapterNvidia && !nvidiaAdapter) return false;
+    if (!when.option.empty()) {
+        if (when.option == "edhm_2dmigoto") {
+            if (!edhm2dMigoto) return false;
+        } else {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -334,6 +364,7 @@ const char* existingName(ExistingMode mode) {
         case ExistingMode::Owned: return "owned";
         case ExistingMode::Chain: return "chain";
         case ExistingMode::Runtime: return "runtime";
+        case ExistingMode::OptIn: return "opt_in";
         default: return "settings";
     }
 }
@@ -354,7 +385,7 @@ ManifestParse parseManifest(const JsonValue& root, Manifest* out, std::string* e
                             std::to_string(kManifestSchema);
         return ManifestParse::SchemaTooNew;
     }
-    if (schema->integer != kManifestSchema)
+    if (schema->integer < kMinManifestSchema)
         return malformed("schema " + std::to_string(schema->integer) + " is no longer read; this launcher reads " +
                          std::to_string(kManifestSchema));
 
@@ -408,7 +439,7 @@ ManifestParse parseManifest(const JsonValue& root, Manifest* out, std::string* e
     std::set<std::string> ids;
     for (size_t i = 0; i < files->items.size(); ++i) {
         ManifestFile f;
-        if (!parseFile(files->items[i], i, assetNames, &f, &why)) return fail(false);
+        if (!parseFile(files->items[i], i, schema->integer, assetNames, &f, &why)) return fail(false);
         if (!ids.insert(f.id).second) return malformed("file " + f.id + " is listed twice");
         m.files.push_back(std::move(f));
     }

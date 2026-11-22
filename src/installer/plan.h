@@ -94,6 +94,7 @@ struct Survey {
     std::string          nativeConfigText;
     DllInfo              openxrLicense; // Khronos notice
     std::vector<DllInfo> otherD3d11;  // d3d11_*.dll beside it: chain targets, ours or theirs
+    bool                 edhmConfigPresent = false;  // d3dx.ini or EDHM-ini\ beside the game
     bool                 iniPresent = false;
     bool                 descriptorPresent = false;
     std::string          descriptorSha;
@@ -198,6 +199,7 @@ struct Options {
     bool repair = false;        // rewrite our files even when they look right
     bool removeSettings = false;  // uninstall: delete the installed edition's settings file too
     bool purge = false;           // uninstall: clean purge — also remove both INIs, logs, backups, install dir and mirror
+    bool edhm2dMigoto = false;    // experimental: place signed 2DMigoto d3d11_edhm.dll over EDHM's standard DLL
     std::wstring backupStamp;   // folder name under edup_backup\; caller supplies the clock
     std::string  nowUtc;        // stamped into the install record
     // Per-user settings folder (%LOCALAPPDATA%\EDUP\<install>). When empty, falls back to
@@ -261,6 +263,8 @@ Plan planInstall(const Survey& survey, const Options& options, const PayloadInfo
 // file, which can only keep more files than the full proof would: callers that remove files pass the payload the installer carries.
 // (Until stage 3 of docs\design-manifest-schema2-2026-11-12.md keeps a record per file id, the ownership proofs name those files by id.)
 Plan planUninstall(const Survey& survey, const Options& options, const PayloadInfo& payload = PayloadInfo());
+// Payload-free restore of the player's backed-up standard d3d11_edhm.dll (for offline opt-out or antivirus-interference recovery).
+Plan planEdhmRestore(const Survey& survey, const Options& options);
 
 // The one-paragraph summary shown before anything is done.
 std::string planSummary(const Plan& plan);

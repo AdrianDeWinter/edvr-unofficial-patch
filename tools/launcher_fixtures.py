@@ -191,7 +191,7 @@ def write_signing(out):
 def package_table_manifest():
     """A manifest of nothing but package_native.FILES, with one zip per group: the real table must pass."""
     manifest = copy.deepcopy(good_manifest()[0])
-    manifest["assets"] = [{"name": group + ".zip", "sha256": "0" * 64, "size": 1} for group in ("core", "dlss", "xess", "fsr4")]
+    manifest["assets"] = [{"name": group + ".zip", "sha256": "0" * 64, "size": 1} for group in ("core", "dlss", "xess", "fsr4", "edhm")]
     manifest["files"] = [pn.manifest_file_entry(f, f.group + ".zip", b"x") for f in pn.FILES]
     return manifest
 
@@ -235,16 +235,17 @@ def shape_cases():
     # schema: read alone first, so a newer one is refused whatever else the file holds.
     mutate("schema-1", lambda m: m.update(schema=1))
     mutate("schema-0", lambda m: m.update(schema=0))
-    mutate("schema-3", lambda m: m.update(schema=3))
+    mutate("schema-2", lambda m: m.update(schema=2))
     mutate("schema-4", lambda m: m.update(schema=4))
-    add("schema-3-junk-body", '{"schema": 3, "anything": [1, 2, {"x": null}]}')
-    add("schema-3-bare", '{"schema": 3}')
+    mutate("schema-5", lambda m: m.update(schema=5))
+    add("schema-4-junk-body", '{"schema": 4, "anything": [1, 2, {"x": null}]}')
+    add("schema-4-bare", '{"schema": 4}')
     mutate("schema-true", lambda m: m.update(schema=True))
-    mutate("schema-float", lambda m: m.update(schema=2.0))
-    mutate("schema-text", lambda m: m.update(schema="2"))
+    mutate("schema-float", lambda m: m.update(schema=3.0))
+    mutate("schema-text", lambda m: m.update(schema="3"))
     mutate("schema-null", lambda m: m.update(schema=None))
     mutate("schema-missing", lambda m: m.pop("schema"))
-    mutate("schema-negative", lambda m: m.update(schema=-2))
+    mutate("schema-negative", lambda m: m.update(schema=-3))
     mutate("min-launcher-present", lambda m: m.update(min_launcher="0.1.0"))
 
     for key in ("version", "build", "tag"):
@@ -337,6 +338,8 @@ def shape_cases():
     mutate("when-profile-both", lambda m: m["files"][0].update(when={"profile": ["flat", "vr"]}))
     mutate("when-adapter", lambda m: m["files"][0].update(when={"adapter": "nvidia"}))
     mutate("when-both-keys", lambda m: m["files"][0].update(when={"profile": ["flat"], "adapter": "nvidia"}))
+    mutate("when-option-edhm", lambda m: m["files"][0].update(when={"option": "edhm_2dmigoto"}))
+    mutate("when-v2-rejects-option", lambda m: (m.update(schema=2), m["files"][0].update(when={"option": "edhm_2dmigoto"})))
     for name, bad in (("empty", {}), ("list", []), ("null", None), ("text", "vr"), ("route", {"route": "x"}),
                       ("option", {"profile": ["vr"], "option": "x"}), ("profile-empty", {"profile": []}),
                       ("profile-text", {"profile": "vr"}), ("profile-unknown", {"profile": ["both"]}),
@@ -351,6 +354,23 @@ def shape_cases():
     mutate("existing-chain", lambda m: m["files"][0].update(existing="chain"))
     mutate("existing-runtime", lambda m: m["files"][1].update(existing="runtime"))
     mutate("existing-settings", lambda m: m["files"][2].update(existing="settings"))
+    mutate("existing-opt-in", lambda m: m["files"].append(dict(
+        copy.deepcopy(m["files"][0]), id="edhm_2dmigoto", existing="opt_in", when={"option": "edhm_2dmigoto"},
+        target={"root": "game", "path": "d3d11_edhm.dll"})))
+    mutate("existing-v2-rejects-opt-in", lambda m: (m.update(schema=2), m["files"].append(dict(
+        copy.deepcopy(m["files"][0]), id="edhm_2dmigoto", existing="opt_in",
+        target={"root": "game", "path": "d3d11_edhm.dll"}))))
+    mutate("constraint-opt-in-no-option", lambda m: m["files"].append(dict(
+        copy.deepcopy(m["files"][0]), id="edhm_2dmigoto", existing="opt_in", when={"profile": ["vr"]},
+        target={"root": "game", "path": "d3d11_edhm.dll"})))
+    mutate("constraint-opt-in-wrong-target", lambda m: m["files"].append(dict(
+        copy.deepcopy(m["files"][0]), id="edhm_2dmigoto", existing="opt_in", when={"option": "edhm_2dmigoto"},
+        target={"root": "game", "path": "d3d11_other.dll"})))
+    mutate("constraint-second-opt-in", lambda m: (
+        m["files"].append(dict(copy.deepcopy(m["files"][0]), id="edhm_a", existing="opt_in",
+                               when={"option": "edhm_2dmigoto"}, target={"root": "game", "path": "d3d11_edhm.dll"})),
+        m["files"].append(dict(copy.deepcopy(m["files"][0]), id="edhm_b", existing="opt_in",
+                               when={"option": "edhm_2dmigoto"}, target={"root": "game", "path": "d3d11_edhm.dll"}))))
     mutate("existing-missing", lambda m: m["files"][0].pop("existing"))
     for name, bad in (("unknown", "merge"), ("upper", "Replace"), ("empty", ""), ("number", 1), ("null", None),
                       ("list", ["replace"])):
@@ -436,12 +456,12 @@ def shape_cases():
     add("not-json", "{")
     add("trailing-junk", text + "x")
     add("trailing-value", text.strip() + " {}")
-    add("duplicate-key", text.replace('"schema": 2,', '"schema": 2, "schema": 2,', 1))
+    add("duplicate-key", text.replace('"schema": 3,', '"schema": 3, "schema": 3,', 1))
     add("duplicate-key-nested", text.replace('"size": 8,\n', '"size": 8, "size": 8,\n', 1))
-    add("duplicate-key-escaped", text.replace('"schema": 2,', '"schema": 2, "sch\\u0065ma": 2,', 1))
-    add("leading-zero", text.replace('"schema": 2', '"schema": 02', 1))
+    add("duplicate-key-escaped", text.replace('"schema": 3,', '"schema": 3, "sch\\u0065ma": 3,', 1))
+    add("leading-zero", text.replace('"schema": 3', '"schema": 03', 1))
     add("nan-value", text.replace('"issued": 1794000000', '"issued": NaN', 1))
-    add("trailing-comma", text.replace('"schema": 2,', '"schema": 2,,', 1))
+    add("trailing-comma", text.replace('"schema": 3,', '"schema": 3,,', 1))
     add("single-quotes", text.replace('"schema"', "'schema'", 1))
     add("control-char-in-string", text.replace('"version": "1.0.0"', '"version": "1.\t0.0"', 1))
     add("bom", b"\xef\xbb\xbf" + sm._dump(base))
@@ -475,10 +495,71 @@ def deterministic_zip(members):
     return buffer.getvalue()
 
 
-def release(out, name, version, issued, graphics, launcher_version=None, schema=None):
+def _synthetic_graphics_dll():
+    """Minimal x64 PE that satisfies probe.cpp's validateNativePayloadBytes(Graphics)."""
+    import struct
+    providers = (
+        b"D3D11CreateDevice", b"D3D11CreateDeviceAndSwapChain",
+        b"edvrAcquireNativeGraphics", b"edvrAcquireNativeMenu", b"edvrAcquireNativeTemporal",
+        b"edvrAcquireNativeSharpen", b"edvrAcquireNativeFrame",
+        b"edvrAcquireNativeTiming", b"edvrAcquireGraphicsBridge", b"edvrAcquireRenderBoundary",
+        b"edvrQueryNativeRenderSettings", b"edvrPublishNativeRenderSizing", b"edvrQueryNativeRenderSizing",
+    )
+    all_names = list(providers) + [b"edvrNativeStartupRouting"]
+    n = len(all_names)
+    text_rva, text_off, text_sz = 0x1000, 0x200, 0x200
+    rdata_rva, rdata_off, rdata_sz = 0x2000, 0x400, 0x600
+    rdata = bytearray(rdata_sz)
+    # 16-byte routing marker at start of .rdata (RVA 0x2000)
+    struct.pack_into("<4I", rdata, 0, 16, 1, 1, 0)
+    exp_pos = 0x20
+    fn_pos = exp_pos + 40
+    name_pos = fn_pos + 4 * n
+    ord_pos = name_pos + 4 * n
+    str_pos = ord_pos + 2 * n
+    fn_rvas = [text_rva + i for i in range(len(providers))] + [rdata_rva]
+    name_rvas = []
+    cur = str_pos
+    for nm in all_names:
+        name_rvas.append(rdata_rva + cur)
+        rdata[cur:cur + len(nm) + 1] = nm + b"\x00"
+        cur += len(nm) + 1
+    for i, rva in enumerate(fn_rvas):
+        struct.pack_into("<I", rdata, fn_pos + 4 * i, rva)
+    for i, rva in enumerate(name_rvas):
+        struct.pack_into("<I", rdata, name_pos + 4 * i, rva)
+        struct.pack_into("<H", rdata, ord_pos + 2 * i, i)
+    struct.pack_into(
+        "<10I", rdata, exp_pos,
+        0, 0, 0, rdata_rva + str_pos, 1, n, n,
+        rdata_rva + fn_pos, rdata_rva + name_pos, rdata_rva + ord_pos,
+    )
+    exp_size = cur - exp_pos
+    img = bytearray(rdata_off + rdata_sz)
+    img[0:2] = b"MZ"
+    struct.pack_into("<I", img, 0x3C, 0x80)
+    img[0x80:0x84] = b"PE\x00\x00"
+    # COFF header (20 bytes at 0x84): AMD64, 2 sections, optional header size 0xF0
+    struct.pack_into("<HHIIIHH", img, 0x84, 0x8664, 2, 0, 0, 0, 0xF0, 0x2022)
+    # Optional header PE32+ (240 bytes at 0x98): magic 0x20B, SizeOfImage 0x3000, SizeOfHeaders 0x200, 16 data dirs
+    opt = 0x98
+    struct.pack_into("<H", img, opt, 0x20B)
+    struct.pack_into("<I", img, opt + 56, 0x3000)
+    struct.pack_into("<I", img, opt + 60, 0x200)
+    struct.pack_into("<I", img, opt + 108, 16)
+    struct.pack_into("<II", img, opt + 112, rdata_rva + exp_pos, exp_size)
+    # Section headers (40 bytes each at 0x188)
+    sec = opt + 0xF0
+    struct.pack_into("<8sIIIIIIHHI", img, sec, b".text\x00\x00\x00", text_sz, text_rva, text_sz, text_off, 0, 0, 0, 0, 0x60000020)
+    struct.pack_into("<8sIIIIIIHHI", img, sec + 40, b".rdata\x00\x00", rdata_sz, rdata_rva, rdata_sz, rdata_off, 0, 0, 0, 0, 0x40000040)
+    img[rdata_off:rdata_off + rdata_sz] = rdata
+    return bytes(img)
+
+
+def release(out, name, version, issued, graphics, launcher_version=None, schema=None, include_edhm=False):
     """One release folder: a core zip, a DLSS zip (identical across releases), a
-    signed manifest and, if asked, a launcher entry. `schema` overrides the
-    manifest's schema after it was validated as schema 2, for a release the
+    signed manifest and, if asked, a launcher entry or optional EDHM 2DMigoto zip.
+    `schema` overrides the manifest's schema after validation, for a release the
     launcher cannot read. Returns the folder."""
     folder = out / "releases" / name
     rng = random.Random(5)
@@ -486,6 +567,8 @@ def release(out, name, version, issued, graphics, launcher_version=None, schema=
     dlss_name = "ed-up-dlss-%s.zip" % hashlib.sha256(dlss).hexdigest()[:12]
     core_members = {"d3d11.dll": graphics, "Openvr/win64/openvr_api.dll": b"runtime " + version.encode(),
                     "edup.ini": b"[fix]\nversion=" + version.encode() + b"\n"}
+    if include_edhm:
+        core_members["edup-flat.ini"] = b"[fix]\nversion=" + version.encode() + b"\n"
     core = deterministic_zip(core_members)
     core_name = "ed-up-core-%s.zip" % version
     by_id = {f.id: f for f in pn.FILES}
@@ -495,12 +578,37 @@ def release(out, name, version, issued, graphics, launcher_version=None, schema=
         pn.manifest_file_entry(runtime, core_name, core_members["Openvr/win64/openvr_api.dll"]),
         pn.manifest_file_entry(by_id["settings_vr"], core_name, core_members["edup.ini"]),
     ]
+    if include_edhm:
+        files.append(pn.manifest_file_entry(by_id["settings_flat"], core_name, core_members["edup-flat.ini"]))
     nvngx = zipfile.ZipFile(io.BytesIO(dlss)).read("nvngx_dlss.dll")
     files.append(pn.manifest_file_entry(by_id["dlss"], dlss_name, nvngx))
+    assets = [{"name": core_name, "sha256": hashlib.sha256(core).hexdigest(), "size": len(core)},
+              {"name": dlss_name, "sha256": hashlib.sha256(dlss).hexdigest(), "size": len(dlss)}]
+    if include_edhm:
+        edhm_pe = bytearray(512)
+        edhm_pe[0:2] = b"MZ"
+        edhm_pe[0x3C] = 0x80
+        edhm_pe[0x80:0x84] = b"PE\x00\x00"
+        edhm_pe[0x84:0x86] = b"\x64\x86"
+        edhm_pe[0x94] = 0xF0
+        edhm_pe[0x98:0x9A] = b"\x0B\x02"
+        edhm_pe[0x98 + 108] = 16  # NumberOfRvaAndSizes
+        edhm_dll_bytes = bytes(edhm_pe) + b"2DMIGOTO-SIGNED-DLL-" + version.encode()
+        edhm_members = {
+            "edhm_2dmigoto/d3d11_edhm.dll": edhm_dll_bytes,
+            "edhm_2dmigoto/EDHM-2DMIGOTO-LICENSE.txt": b"GNU GENERAL PUBLIC LICENSE Version 3\n",
+            "edhm_2dmigoto/EDHM-2DMIGOTO-THIRD-PARTY.txt": b"EDHM_2DMigoto PCRE2 DirectXTK\n",
+        }
+        edhm_zip = deterministic_zip(edhm_members)
+        edhm_name = "ed-up-edhm-%s.zip" % hashlib.sha256(edhm_zip).hexdigest()[:12]
+        assets.append({"name": edhm_name, "sha256": hashlib.sha256(edhm_zip).hexdigest(), "size": len(edhm_zip)})
+        files.append(pn.manifest_file_entry(by_id["edhm_2dmigoto"], edhm_name, edhm_members["edhm_2dmigoto/d3d11_edhm.dll"]))
+        files.append(pn.manifest_file_entry(by_id["edhm_2dmigoto_license"], edhm_name, edhm_members["edhm_2dmigoto/EDHM-2DMIGOTO-LICENSE.txt"]))
+        files.append(pn.manifest_file_entry(by_id["edhm_2dmigoto_third_party"], edhm_name, edhm_members["edhm_2dmigoto/EDHM-2DMIGOTO-THIRD-PARTY.txt"]))
+        write(folder / edhm_name, edhm_zip)
     manifest = {"schema": sm.MANIFEST_SCHEMA, "version": version, "build": "v" + version, "tag": "v" + version,
                 "issued": issued,
-                "assets": [{"name": core_name, "sha256": hashlib.sha256(core).hexdigest(), "size": len(core)},
-                           {"name": dlss_name, "sha256": hashlib.sha256(dlss).hexdigest(), "size": len(dlss)}],
+                "assets": assets,
                 "files": files}
     write(folder / core_name, core)
     write(folder / dlss_name, dlss)
@@ -524,9 +632,10 @@ def write_releases(out):
     release(out, "relOld", "0.9.0", 1790000000, b"graphics old")
     release(out, "relC", "1.2.0", 1794000200, b"graphics three")
     release(out, "relD", "1.3.0", 1794000300, b"graphics four", launcher_version="0.5.0")
+    release(out, "relEdhm", "1.5.0", 1794000500, _synthetic_graphics_dll(), include_edhm=True)
     # A release of a schema newer than the launcher reads: signed, with every asset present, so a
     # download would show in the rig; the launcher must refuse it before it fetches anything.
-    release(out, "relSchema3", "1.4.0", 1794000400, b"graphics five", launcher_version="0.4.0", schema=3)
+    release(out, "relSchema4", "1.4.0", 1794000400, b"graphics five", launcher_version="0.4.0", schema=4)
 
 
 MARKER = ".launcher-fixtures"
@@ -591,7 +700,7 @@ def self_test():
         # Shape cases: both verdicts are present, each file is signed, and the
         # recorded verdict is the Python validator's.
         shapes = [line.split("\t") for line in (out / "shapes.txt").read_text().splitlines()]
-        assert len(shapes) == 280, len(shapes)
+        assert len(shapes) == 288, len(shapes)
         verdicts = {v for _, v in shapes}
         assert verdicts == {"accept", "refuse"}, verdicts
         by_name = dict(shapes)
@@ -605,13 +714,16 @@ def self_test():
         for label, verdict in shapes:
             names_by_verdict.setdefault(label.split("-", 1)[1], verdict)
         # Every existing value and every when key is accepted, and the packager's own table too.
-        for name in ("existing-replace", "existing-owned", "existing-chain", "existing-runtime", "existing-settings",
-                     "when-profile-vr", "when-profile-flat", "when-profile-both", "when-adapter",
-                     "when-both-keys", "valid-package-table", "constraint-chain-name-case-ok",
+        for name in ("schema-2", "existing-replace", "existing-owned", "existing-chain", "existing-runtime",
+                     "existing-settings", "existing-opt-in", "when-profile-vr", "when-profile-flat",
+                     "when-profile-both", "when-adapter", "when-both-keys", "when-option-edhm",
+                     "valid-package-table", "constraint-chain-name-case-ok",
                      "constraint-runtime-name-case-ok", "reserved-game-openvr-sibling-ok", "reserved-chain-lookalike-ok",
                      "reserved-descriptor-nested-ok"):
             assert names_by_verdict[name] == "accept", name
-        for name in ("schema-1", "schema-3", "schema-missing", "target-path-nul", "target-path-con-txt",
+        for name in ("schema-1", "schema-4", "schema-missing", "when-v2-rejects-option", "existing-v2-rejects-opt-in",
+                     "constraint-opt-in-no-option", "constraint-opt-in-wrong-target", "constraint-second-opt-in",
+                     "target-path-nul", "target-path-con-txt",
                      "target-path-ads", "target-path-trailing-dot", "target-path-dotdot", "target-path-absolute",
                      "target-path-drive", "id-duplicate", "overlap-same-path", "min-launcher-present",
                      "constraint-chain-other-name", "constraint-chain-in-openvr-root", "constraint-runtime-other-name",
@@ -639,17 +751,17 @@ def self_test():
         # Releases: every manifest validates and verifies, every asset and member matches,
         # relA and relB share the DLSS zip, the others differ as the rig expects.
         folders = {p.name: p for p in (out / "releases").iterdir()}
-        assert set(folders) == {"relA", "relB", "relOld", "relC", "relD", "relSchema3"}
+        assert set(folders) == {"relA", "relB", "relOld", "relC", "relD", "relEdhm", "relSchema4"}
         for name, folder in folders.items():
-            if name == "relSchema3":
+            if name == "relSchema4":
                 continue  # a schema the launcher cannot read: the Python verdict is a refusal, as it should be
             lines = []
             assert sm.verify_directory(folder, keys=[public], out=lines.append, bridge=False), (name, lines)
-        s3 = (folders["relSchema3"] / sm.MANIFEST_NAME).read_bytes()
-        assert json.loads(s3)["schema"] == 3 and sm.load_manifest(s3)[1] == ["manifest schema 3, launcher reads 2"]
-        assert sm.p256_verify(public, s3, bytes.fromhex((folders["relSchema3"] / sm.SIGNATURE_NAME).read_text().strip()))
-        assert all((folders["relSchema3"] / n).is_file() for n in
-                   (a["name"] for a in json.loads(s3)["assets"])), "the schema-3 release keeps its assets, so a download would show"
+        s4 = (folders["relSchema4"] / sm.MANIFEST_NAME).read_bytes()
+        assert json.loads(s4)["schema"] == 4 and sm.load_manifest(s4)[1] == ["manifest schema 4, launcher reads 3"]
+        assert sm.p256_verify(public, s4, bytes.fromhex((folders["relSchema4"] / sm.SIGNATURE_NAME).read_text().strip()))
+        assert all((folders["relSchema4"] / n).is_file() for n in
+                   (a["name"] for a in json.loads(s4)["assets"])), "the schema-4 release keeps its assets, so a download would show"
         dlss = lambda f: sorted(p.name for p in f.glob("ed-up-dlss-*.zip"))
         assert dlss(folders["relA"]) == dlss(folders["relB"]) and len(dlss(folders["relA"])) == 1
         a = json.loads((folders["relA"] / sm.MANIFEST_NAME).read_text())

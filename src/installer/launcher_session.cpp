@@ -244,6 +244,7 @@ LauncherSession::LauncherSession(SessionEnv env) : env_(std::move(env)) {
         closeAfterStart_ = state.closeAfterStart();
         steamFrontierLogin_ = state.steamFrontierLogin();
         vrStereoMode_ = state.vrStereoMode();
+        edhm2dMigoto_ = state.edhm2dMigoto();
     }
 }
 
@@ -301,6 +302,28 @@ void LauncherSession::setCloseAfterStart(bool on) {
         createDirectories(env_.roots.launcherDir());
         state.save(&error);
     }
+    changed();
+}
+
+bool LauncherSession::setEdhm2dMigoto(bool on, const std::function<bool()>& confirm) {
+    if (on == edhm2dMigoto_) return edhm2dMigoto_;
+    if (on && (!confirm || !confirm())) return edhm2dMigoto_;
+    edhm2dMigoto_ = on;
+    if (on) edhmWarning_.clear();
+    LauncherState state;
+    std::string error;
+    if (state.load(launcherIniPath(env_.roots), &error)) {
+        state.setEdhm2dMigoto(on);
+        createDirectories(env_.roots.launcherDir());
+        state.save(&error);
+    }
+    changed();
+    return edhm2dMigoto_;
+}
+
+void LauncherSession::setEdhmWarning(const std::string& warning) {
+    if (edhmWarning_ == warning) return;
+    edhmWarning_ = warning;
     changed();
 }
 

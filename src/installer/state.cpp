@@ -420,7 +420,7 @@ bool recordTargetIsSafe(const FileRecord& record, std::string* why) {
     bool known = false;
     ExistingMode mode = ExistingMode::Replace;
     for (const ExistingMode candidate : {ExistingMode::Replace, ExistingMode::Owned, ExistingMode::Chain, ExistingMode::Runtime,
-                                         ExistingMode::Settings}) {
+                                         ExistingMode::Settings, ExistingMode::OptIn}) {
         if (record.existing == existingName(candidate)) { mode = candidate; known = true; }
     }
     if (!known) {
@@ -446,7 +446,7 @@ bool validRecordId(const std::string& id) {
 
 bool knownExisting(const std::string& name) {
     for (const ExistingMode mode : {ExistingMode::Replace, ExistingMode::Owned, ExistingMode::Chain, ExistingMode::Runtime,
-                                    ExistingMode::Settings})
+                                    ExistingMode::Settings, ExistingMode::OptIn})
         if (name == existingName(mode)) return true;
     return false;
 }

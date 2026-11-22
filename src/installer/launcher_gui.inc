@@ -69,6 +69,7 @@ struct LauncherGui {
     int updateTextRight = 460;       // right edge (design units) for the painted update status line
     bool restoreViaPlan = false;     // the user agreed to a settings restore the elevated copy does
     bool noPayloadShown = false;
+    bool edhmRecovering = false;     // guard against re-entrant AV-interference recovery
     std::wstring developerNote;      // set per Install, read by confirmText
     // Cached route, remembered mode, and layout signature (#198).
     std::wstring cachedRouteSource;
@@ -110,6 +111,9 @@ bool launcherFolderHasEdup() {
     return g.haveSurvey && (g.survey.d3d11.kind == DllKind::Edvr || g.survey.openvrCurrent.kind == DllKind::Edvr ||
                             g.survey.state.present);
 }
+
+void launcherUpdateSettingsToggle();
+void launcherCheckEdhmInterference();
 
 const wchar_t* launcherNoPayloadText() {
     if (g.haveSurvey && g.survey.state.present) {
@@ -396,6 +400,7 @@ void updateLauncherControls() {
         if (SendMessageW(lg.vrMode, CB_GETCURSEL, 0, 0) != match)
             SendMessageW(lg.vrMode, CB_SETCURSEL, static_cast<WPARAM>(match), 0);
     }
+    launcherUpdateSettingsToggle();
 }
 
 void launcherRefresh() {
@@ -697,6 +702,7 @@ void launcherAfterScan() {
     if (!g.args.autorun && g.args.action == AppArgs::Act::None && launcherFolderHasEdup()) {
         showScreen(Screen::Play);
     }
+    launcherCheckEdhmInterference();
 }
 
 void launcherShutdown() {
@@ -807,6 +813,7 @@ bool launcherCommand(int id, int code) {
         case kIdPlayVr:
         case kIdPlayFlat: {
             if (!g.haveSurvey) return true;
+            launcherCheckEdhmInterference();
             const bool vr = id != kIdPlayFlat;
             if (vr && !isElevatedForPlay() && lg.vrMode && IsWindowVisible(lg.vrMode)) {
                 // Seed from an existing 3..6 value in Settings.xml before treating the user as
@@ -885,6 +892,7 @@ void launcherApplyElevated(const AppArgs& args, const Plan& plan) {
     file.keepSettings = args.keepSettings;
     file.removeSettings = args.removeSettings;
     file.purge = args.purge;
+    file.edhm2dMigoto = args.edhm2dMigoto;
     file.restoreMirror = lg.restoreViaPlan;
     // The copy finds the manifest, the cache and the mirror under the data root the plan file sits in.
     if (payload.kind == PayloadKind::Manifest) file.manifestSha = manifestShaOf(payload.manifestPath);
@@ -904,4 +912,319 @@ void launcherApplyElevated(const AppArgs& args, const Plan& plan) {
         loadSettings(g.settingsEdition);
         showSurvey();
     });
+}
+
+const DllInfo* launcherEdhmDllOnDisk() {
+    if (!g.haveSurvey) return nullptr;
+    for (const DllInfo& d : g.survey.otherD3d11) {
+        if (_wcsicmp(leafOf(d.path).c_str(), L"d3d11_edhm.dll") == 0) return &d;
+    }
+    return nullptr;
+}
+
+bool launcherEdhm2dMigotoActiveOnDisk() {
+    if (!g.haveSurvey) return false;
+    const FileRecord* rec = g.survey.state.file("edhm_2dmigoto");
+    if (!rec || rec->existing != existingName(ExistingMode::OptIn) || rec->sha256.empty()) return false;
+    const DllInfo* disk = launcherEdhmDllOnDisk();
+    return disk && disk->kind != DllKind::Absent && disk->kind != DllKind::Unreadable &&
+           _stricmp(disk->sha256.c_str(), rec->sha256.c_str()) == 0;
+}
+
+bool launcherEdhmPresentOnDisk() {
+    if (!g.haveSurvey) return false;
+    const DllInfo* disk = launcherEdhmDllOnDisk();
+    if (disk && disk->kind != DllKind::Absent) return true;
+    if (g.survey.edhmConfigPresent) return true;
+    if (_wcsicmp(g.survey.state.chainTarget.c_str(), L"d3d11_edhm.dll") == 0) return true;
+    if (g.survey.d3d11.kind != DllKind::Absent && g.survey.d3d11.kind != DllKind::Edvr &&
+        modNameOf(g.survey.d3d11) == L"EDHM")
+        return true;
+    return false;
+}
+
+void launcherApplyEdhmPlan(bool wantOn, bool isFallbackRestore);
+
+void launcherTriggerEdhmInterferenceFallback() {
+    if (!lg.session || lg.edhmRecovering) return;
+    lg.edhmRecovering = true;
+    lg.session->setEdhm2dMigoto(false, nullptr);
+    lg.session->setEdhmWarning(kEdhmInterferenceWarning);
+    launcherApplyEdhmPlan(false, true);
+}
+
+void launcherVerifyEdhmAfterEnable() {
+    if (!g.haveSurvey || !lg.session) return;
+    g.survey = surveyTarget(g.survey.game, mirrorDirOfGame(g.survey.game));
+    const FileRecord* rec = g.survey.state.file("edhm_2dmigoto");
+    if (!rec || rec->existing != existingName(ExistingMode::OptIn)) return;
+    const DllInfo* disk = launcherEdhmDllOnDisk();
+    const bool ok = disk && disk->kind != DllKind::Absent && disk->kind != DllKind::Unreadable &&
+                    _stricmp(disk->sha256.c_str(), rec->sha256.c_str()) == 0;
+    if (!ok) launcherTriggerEdhmInterferenceFallback();
+}
+
+void launcherCheckEdhmInterference() {
+    if (!lg.session || !lg.session->edhm2dMigoto() || !g.haveSurvey || g.survey.gameRunningHere || launcherBusy() ||
+        lg.edhmRecovering)
+        return;
+    const FileRecord* rec = g.survey.state.file("edhm_2dmigoto");
+    if (!rec || rec->existing != existingName(ExistingMode::OptIn)) return;
+    const DllInfo* disk = launcherEdhmDllOnDisk();
+    if (!disk || disk->kind == DllKind::Absent) {
+        launcherTriggerEdhmInterferenceFallback();
+    }
+}
+
+void launcherApplyEdhmPlan(bool wantOn, bool isFallbackRestore) {
+    if (!lg.session || !g.haveSurvey) {
+        lg.edhmRecovering = false;
+        launcherUpdateSettingsToggle();
+        return;
+    }
+    const std::wstring mirrorDir = mirrorDirOfGame(g.survey.game);
+    g.survey = surveyTarget(g.survey.game, mirrorDir);
+
+    if (wantOn) {
+        if (!launcherPayloadReady()) {
+            lg.edhmRecovering = false;
+            launcherUpdateSettingsToggle();
+            return;
+        }
+        const PayloadFileEntry* entry = payloadInfo().find("edhm_2dmigoto");
+        if (!entry) {
+            lg.edhmRecovering = false;
+            launcherUpdateSettingsToggle();
+            return;
+        }
+        // Check that antivirus has not removed the cached payload file before placement.
+        if (lg.session->payload().kind == PayloadKind::Manifest) {
+            const PayloadCache cache(launcherRootsFor(g.args).cacheDir());
+            const std::wstring cached = cache.pathFor(entry->sha);
+            if (!fileExists(cached) || _stricmp(sha256File(cached).c_str(), entry->sha.c_str()) != 0) {
+                launcherTriggerEdhmInterferenceFallback();
+                return;
+            }
+        }
+    } else if (!launcherPayloadReady()) {
+        // Offline opt-out or antivirus-interference fallback: restore the backed-up standard DLL directly
+        // without needing a remote release package (when the folder does not need UAC elevation).
+        if (launcherNeedsElevatedCopy()) {
+            lg.edhmRecovering = false;
+            launcherUpdateSettingsToggle();
+            return;
+        }
+        Options options;
+        options.backupStamp = timestampName();
+        options.nowUtc = utcNow();
+        options.settingsDir = mirrorDir;
+        const Plan plan = planEdhmRestore(g.survey, options);
+        if (plan.blocked || plan.nothingToDo) {
+            lg.edhmRecovering = false;
+            if (plan.blocked) setReport(planReport(plan) + "\r\n----\r\n" + planSummary(plan) + "\r\n");
+            showSurvey();
+            return;
+        }
+        const ApplyResult result = applyPlan(plan, nullptr);
+        std::string report;
+        for (const std::string& line : result.done) report += "  " + line + "\r\n";
+        if (!result.ok) report += "\r\n" + result.error + "\r\n";
+        setReport(report);
+        lg.edhmRecovering = false;
+        showSurvey();
+        return;
+    }
+
+    AppArgs args = g.args;
+    args.action = AppArgs::Act::Install;
+    args.dir = g.survey.game.dir;
+    const std::wstring& selectedSource = g.survey.game.source;
+    args.store = selectedSource == L"Epic" || selectedSource == L"Steam" || selectedSource == L"Frontier launcher"
+                     ? selectedSource
+                     : std::wstring();
+    args.keepSettings = true;
+    args.scope = installedScope(g.survey);
+    args.edhm2dMigoto = wantOn;
+
+    Options options = optionsFor(args, false);
+    options.settingsDir = mirrorDir;
+    const Plan plan = planInstall(g.survey, options, payloadInfo());
+    if (plan.blocked) {
+        lg.edhmRecovering = false;
+        if (wantOn) lg.session->setEdhm2dMigoto(false, nullptr);
+        setReport(planReport(plan) + "\r\n----\r\n" + planSummary(plan) + "\r\n");
+        if (!isFallbackRestore && !plan.problems.empty()) {
+            std::wstring text;
+            for (const std::string& p : plan.problems) text += fromUtf8(p) + L"\n\n";
+            MessageBoxW(g.window, text.c_str(), kAppTitle, MB_OK | MB_ICONWARNING);
+        }
+        showSurvey();
+        return;
+    }
+    if (plan.nothingToDo) {
+        lg.edhmRecovering = false;
+        showSurvey();
+        return;
+    }
+
+    if (launcherNeedsElevatedCopy()) {
+        const PayloadLoad& payload = lg.session->payload();
+        if (payload.kind != PayloadKind::Manifest) {
+            lg.edhmRecovering = false;
+            if (wantOn) lg.session->setEdhm2dMigoto(false, nullptr);
+            if (!isFallbackRestore) {
+                MessageBoxW(g.window,
+                            L"This game folder needs administrator rights, and the elevated helper installs only from a signed release download.",
+                            kAppTitle, MB_OK | MB_ICONWARNING);
+            }
+            showSurvey();
+            return;
+        }
+        const wchar_t* prompt =
+            isFallbackRestore
+                ? L"d3d11_edhm.dll went missing (possibly removed by antivirus). Windows will ask for administrator permission to restore your backed-up standard d3d11_edhm.dll.\n\nContinue?"
+                : L"This game folder can only be written to by an administrator (it is usually under Program Files).\n\nWindows will ask for permission, and a short-lived copy of the launcher with administrator rights will update d3d11_edhm.dll.\n\nContinue?";
+        if (MessageBoxW(g.window, prompt, kAppTitle, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
+            lg.edhmRecovering = false;
+            if (wantOn) lg.session->setEdhm2dMigoto(false, nullptr);
+            showSurvey();
+            return;
+        }
+        PlanFile file;
+        file.action = "install";
+        file.dir = g.survey.game.dir;
+        file.source = g.survey.game.source;
+        file.scope = args.scope;
+        file.keepSettings = true;
+        file.edhm2dMigoto = wantOn;
+        file.manifestSha = manifestShaOf(payload.manifestPath);
+        const std::string shown = planReport(plan);
+        setReport(shown + "\r\n----\r\nWaiting for Windows' permission prompt...\r\n");
+        lg.session->beginElevatedApply(file, runWithUac, [shown, wantOn](const ElevatedResult& result) {
+            lg.edhmRecovering = false;
+            if (result.declined) {
+                setReport(shown + "\r\n----\r\nThe permission prompt was declined, so nothing was changed.\r\n");
+                if (wantOn && lg.session) lg.session->setEdhm2dMigoto(false, nullptr);
+            } else if (!result.error.empty() && result.outcome.lines.empty()) {
+                setReport(shown + "\r\n----\r\n" + result.error + "\r\n");
+                if (wantOn && lg.session) lg.session->setEdhm2dMigoto(false, nullptr);
+            } else {
+                setReport(shown + "\r\n----\r\n" + outcomeReport(result.outcome));
+                const bool applied = result.outcome.status == ApplyOutcome::Status::Done ||
+                                     result.outcome.status == ApplyOutcome::Status::NothingToDo;
+                if (!applied && wantOn && lg.session) {
+                    lg.session->setEdhm2dMigoto(false, nullptr);
+                } else if (applied && wantOn) {
+                    launcherVerifyEdhmAfterEnable();
+                }
+            }
+            g.survey = surveyTarget(g.survey.game, mirrorDirOfGame(g.survey.game));
+            loadSettings(g.settingsEdition);
+            showSurvey();
+        });
+        return;
+    }
+
+    const ApplyResult result = applyPlan(plan, payloadItem);
+    lg.edhmRecovering = false;
+    if (!result.ok) {
+        setReport(planReport(plan) + "\r\n----\r\n" + result.error + "\r\n");
+        if (wantOn) {
+            lg.session->setEdhm2dMigoto(false, nullptr);
+            lg.session->setEdhmWarning(kEdhmInterferenceWarning);
+        }
+        g.survey = surveyTarget(g.survey.game, mirrorDir);
+        showSurvey();
+        return;
+    }
+    updateMirror(g.survey.game.dir, plan.backupDir, mirrorDir);
+    if (wantOn) {
+        launcherVerifyEdhmAfterEnable();
+    }
+    g.survey = surveyTarget(g.survey.game, mirrorDir);
+    loadSettings(g.settingsEdition);
+    showSurvey();
+}
+
+void launcherUpdateSettingsToggle() {
+    if (!g.settingsList) return;
+    LauncherToggleRow row;
+    if (!lg.session) {
+        settingsListSetLauncherToggle(g.settingsList, row);
+        return;
+    }
+    row.visible = true;
+    row.group = tr(L"EDHM compatibility");
+    row.label = tr(L"(Experimental) Use tailored 2DMigoto dll for EDHM compatibility improvements.");
+    row.description =
+        tr(L"Backs up your standard d3d11_edhm.dll and installs the signed 2DMigoto compatibility build from this ED-UP release. Turning off restores your original.");
+    row.searchTerms = L"edhm 2dmigoto 3dmigoto d3d11_edhm experimental hud compatibility";
+    row.on = lg.session->edhm2dMigoto();
+    row.busy = launcherBusy();
+    row.warning = trLine(lg.session->edhmWarning());
+
+    const bool active2d = launcherEdhm2dMigotoActiveOnDisk();
+    const bool edhmPresent = launcherEdhmPresentOnDisk();
+    const DllInfo* diskDll = launcherEdhmDllOnDisk();
+    const bool hasEdhmDll = diskDll && diskDll->kind != DllKind::Absent;
+    const bool payloadReady = launcherPayloadReady();
+    const bool hasPayloadAsset = payloadReady && payloadInfo().find("edhm_2dmigoto") != nullptr;
+
+    if (!g.haveSurvey) {
+        row.statusText = tr(L"No install selected");
+        row.statusTone = LauncherRowTone::Muted;
+    } else if (row.busy) {
+        row.statusText = tr(L"Applying...");
+        row.statusTone = LauncherRowTone::Accent;
+    } else if (active2d && row.on) {
+        row.statusText = tr(L"2DMigoto active");
+        row.statusTone = LauncherRowTone::Good;
+    } else if (active2d && !row.on) {
+        row.statusText = tr(L"2DMigoto still on disk");
+        row.statusTone = LauncherRowTone::Warn;
+        if (payloadReady) row.actionLink = tr(L"Restore standard");
+    } else if (row.on && !payloadReady) {
+        row.statusText = tr(L"Download a release first");
+        row.statusTone = LauncherRowTone::Warn;
+    } else if (row.on && !hasPayloadAsset) {
+        row.statusText = tr(L"Not in this release");
+        row.statusTone = LauncherRowTone::Warn;
+    } else if (row.on && !edhmPresent) {
+        row.statusText = tr(L"EDHM not detected");
+        row.statusTone = LauncherRowTone::Muted;
+    } else if (row.on) {
+        row.statusText = tr(L"Pending install");
+        row.statusTone = LauncherRowTone::Accent;
+        row.actionLink = tr(L"Apply now");
+    } else if (hasEdhmDll) {
+        row.statusText = tr(L"Standard EDHM");
+        row.statusTone = LauncherRowTone::Muted;
+    } else {
+        row.statusText = tr(L"Off");
+        row.statusTone = LauncherRowTone::Muted;
+    }
+
+    row.onToggle = [](bool want) {
+        if (!lg.session) return;
+        if (want) {
+            const bool accepted = lg.session->setEdhm2dMigoto(true, []() {
+                return MessageBoxW(g.window, fromUtf8(kEdhm2dMigotoQuestion).c_str(), kAppTitle,
+                                   MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES;
+            });
+            if (!accepted) {
+                launcherUpdateSettingsToggle();
+                return;
+            }
+            launcherApplyEdhmPlan(true, false);
+        } else {
+            lg.session->setEdhmWarning(std::string());
+            lg.session->setEdhm2dMigoto(false, nullptr);
+            launcherApplyEdhmPlan(false, false);
+        }
+    };
+    row.onAction = []() {
+        if (!lg.session) return;
+        launcherApplyEdhmPlan(lg.session->edhm2dMigoto(), false);
+    };
+    settingsListSetLauncherToggle(g.settingsList, row);
 }

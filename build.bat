@@ -247,6 +247,7 @@ REM -- it reads only src\.
 python tools\run_jobs.py ^
     --gate "tools\fetch_openxr_loader.py --self-test" ^
     --gate "tools\fetch_xess.py --self-test" ^
+    --gate "tools\fetch_edhm_2dmigoto.py --self-test" ^
     --gate "tools\fetch_fsr4.py --self-test" ^
     --gate "tools\gen_installer_rc.py --self-test" ^
     --gate "tools\package_native.py --self-test" ^
@@ -581,6 +582,29 @@ if defined XESS (
     if exist "%BUILD%\INTEL-XESS-LICENSE.txt" del /q "%BUILD%\INTEL-XESS-LICENSE.txt"
     if exist "%BUILD%\INTEL-XESS-THIRD-PARTY.txt" del /q "%BUILD%\INTEL-XESS-THIRD-PARTY.txt"
     echo [edvr] NO XeSS SDK. Flat XeSS-SR will refuse at runtime. Fetch with tools\fetch_xess.py.
+)
+
+REM Optional tailored 2DMigoto runtime for EDHM (tools\fetch_edhm_2dmigoto.py).
+REM Staged into %BUILD% when present so package_native.py can ship it as an
+REM opt-in signed release asset with its GPLv3 and third-party notices.
+set EDHM2DM=
+if defined EDVR_EDHM_2DMIGOTO set EDHM2DM=%EDVR_EDHM_2DMIGOTO%
+if not defined EDHM2DM if exist "%ROOT%\third_party\edhm_2dmigoto\bin\d3d11_edhm.dll" set EDHM2DM=%ROOT%\third_party\edhm_2dmigoto
+if not defined EDHM2DM if exist "%LOCALAPPDATA%\EDVR\edhm-2dmigoto\bin\d3d11_edhm.dll" set EDHM2DM=%LOCALAPPDATA%\EDVR\edhm-2dmigoto
+if defined EDHM2DM (
+    python "tools\fetch_edhm_2dmigoto.py" --verify "%EDHM2DM%" || (
+        echo [edvr] ERROR: the EDHM_2DMigoto runtime at %EDHM2DM% is not the pinned one. Run python tools\fetch_edhm_2dmigoto.py to fetch the pinned release again.
+        exit /b 1
+    )
+    copy /Y "%EDHM2DM%\bin\d3d11_edhm.dll" "%BUILD%\d3d11_edhm.dll" >nul || exit /b 1
+    copy /Y "%EDHM2DM%\LICENSE.GPL.txt" "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt" >nul || exit /b 1
+    copy /Y "%EDHM2DM%\EDHM-2DMIGOTO-THIRD-PARTY.txt" "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt" >nul || exit /b 1
+    echo [edvr] EDHM_2DMigoto runtime: %EDHM2DM%
+) else (
+    if exist "%BUILD%\d3d11_edhm.dll" del /q "%BUILD%\d3d11_edhm.dll"
+    if exist "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt" del /q "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt"
+    if exist "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt" del /q "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt"
+    echo [edvr] NO EDHM_2DMigoto runtime staged. Optional EDHM 2DMigoto asset will be omitted. Fetch with tools\fetch_edhm_2dmigoto.py.
 )
 
 REM AMD FSR 4.1 (FidelityFX SDK v2.4.0, tools\fetch_fsr4.py) for the flat profile and VR: AMD's own signed D3D12

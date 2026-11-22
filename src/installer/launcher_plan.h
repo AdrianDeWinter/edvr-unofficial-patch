@@ -40,6 +40,7 @@ struct PlanFile {
     bool         removeSettings = false;
     bool         purge = false;
     bool         restoreMirror = false;  // restore settings from the mirror first, as the user agreed
+    bool         edhm2dMigoto = false;   // opt-in tailored 2DMigoto d3d11_edhm.dll placement / restore
     std::string  manifestSha;            // the adopted manifest, 64 lower-case hex; empty only to uninstall
 };
 

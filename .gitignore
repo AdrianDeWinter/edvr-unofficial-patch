@@ -32,6 +32,11 @@ third_party/ffx-dx11/
 # are verified at build time and packaged with their notices.
 third_party/xess/
 
+# Tailored 2DMigoto runtime for EDHM fetched by tools/fetch_edhm_2dmigoto.py;
+# pinned DLL and GPLv3/third-party notices are verified at build time and
+# packaged as an optional release asset.
+third_party/edhm_2dmigoto/
+
 # AMD FidelityFX (FSR 4.1) SDK subset fetched by tools/fetch_fsr4.py: the ffx-api
 # headers and AMD's signed D3D12 runtime DLLs, verified at build time. Dev
 # install only for now; nothing here is packaged or shipped.

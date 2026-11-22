@@ -28,13 +28,15 @@ const int kChoiceId = 9002;
 const int kPad = 18;
 const int kHeaderHeight = 38;
 const int kRowHeight = 68;
+const int kLauncherRowHeight = 88;
+const int kLauncherRowWithWarningHeight = 128;
 const int kControlWidth = 240;
 // Kept back from each end of a segment. The corners are rounded, and DrawText
 // ellipsises a little inside the rect, so a label wider than what remains
 // would read with a "..." on the button.
 const int kSegmentTextInset = 12;
 
-enum class ItemKind { Header, Setting };
+enum class ItemKind { Header, Setting, LauncherToggle };
 
 struct Item {
     ItemKind    kind = ItemKind::Setting;
@@ -49,6 +51,7 @@ struct List {
     HWND           edit = nullptr;
     SettingsModel* model = nullptr;
     std::wstring   mirrorDir;  // where each write is echoed; see mirror.h
+    LauncherToggleRow launcherRow;
     UINT           dpi = 96;
     int            scroll = 0;      // pixels
     int            contentHeight = 0;
@@ -111,14 +114,46 @@ std::wstring headingFor(const SettingDef& def) {
     return fromUtf8(section);
 }
 
+bool matchesLauncherRow(const LauncherToggleRow& row, const std::wstring& needle) {
+    if (!row.visible) return false;
+    if (needle.empty()) return true;
+    const std::wstring hay =
+        lower(row.group + L" " + row.label + L" " + row.description + L" " + row.warning + L" " + row.searchTerms);
+    return hay.find(needle) != std::wstring::npos;
+}
+
 void rebuildItems(List* list) {
     list->items.clear();
-    if (!list->model) return;
 
     const std::wstring needle = lower(list->filter);
     std::wstring heading;
     bool haveHeading = false;
     int y = kPad;
+
+    if (matchesLauncherRow(list->launcherRow, needle)) {
+        if (!list->launcherRow.group.empty()) {
+            heading = list->launcherRow.group;
+            haveHeading = true;
+            Item header;
+            header.kind = ItemKind::Header;
+            header.title = heading;
+            header.y = y;
+            header.height = kHeaderHeight;
+            list->items.push_back(header);
+            y += kHeaderHeight;
+        }
+        Item item;
+        item.kind = ItemKind::LauncherToggle;
+        item.y = y;
+        item.height = list->launcherRow.warning.empty() ? kLauncherRowHeight : kLauncherRowWithWarningHeight;
+        list->items.push_back(item);
+        y += item.height;
+    }
+
+    if (!list->model) {
+        list->contentHeight = y + kPad;
+        return;
+    }
 
     const std::vector<SettingRow>& rows = list->model->rows();
 
@@ -492,6 +527,109 @@ void paintRow(const List* list, HDC dc, const RECT& rowRect, const SettingRow& r
     }
 }
 
+struct LauncherRowGeo {
+    RECT rail;
+    RECT label;
+    RECT description;
+    RECT toggle;
+    RECT status;
+    RECT action;
+    RECT warningBox;
+    RECT warningText;
+};
+
+LauncherRowGeo launcherGeometryFor(const List* list, const RECT& row, bool hasWarning) {
+    LauncherRowGeo g{};
+    const int pad = dp(list, kPad);
+    const int rightCol = dp(list, 198);
+    const int bodyBottom = hasWarning ? (row.top + dp(list, 82)) : (row.bottom - dp(list, 8));
+    g.rail = {row.left + dp(list, 8), row.top + dp(list, 10), row.left + dp(list, 10), row.bottom - dp(list, 12)};
+    g.label = {row.left + pad, row.top + dp(list, 8), row.right - rightCol - pad, row.top + dp(list, 44)};
+    g.description = {row.left + pad, row.top + dp(list, 46), row.right - rightCol - pad, bodyBottom};
+    const int tw = dp(list, 46);
+    const int th = dp(list, 24);
+    g.toggle = {row.right - pad - tw, row.top + dp(list, 12), row.right - pad, row.top + dp(list, 12) + th};
+    g.status = {row.right - rightCol, row.top + dp(list, 44), row.right - pad, row.top + dp(list, 62)};
+    g.action = {row.right - rightCol, row.top + dp(list, 64), row.right - pad, row.top + dp(list, 80)};
+    if (hasWarning) {
+        g.warningBox = {row.left + pad, row.top + dp(list, 86), row.right - pad, row.bottom - dp(list, 10)};
+        g.warningText = {g.warningBox.left + dp(list, 10), g.warningBox.top + dp(list, 4),
+                         g.warningBox.right - dp(list, 10), g.warningBox.bottom - dp(list, 4)};
+    }
+    return g;
+}
+
+RECT launcherActionRect(const List* list, HDC dc, const LauncherRowGeo& geo, const std::wstring& link) {
+    RECT r{0, 0, 0, 0};
+    if (link.empty()) return r;
+    r = geo.action;
+    r.left = r.right - ui::textWidth(dc, link, ui::fonts().caption) - dp(list, 4);
+    return r;
+}
+
+COLORREF toneColor(LauncherRowTone tone) {
+    const ui::Theme& t = ui::theme();
+    switch (tone) {
+        case LauncherRowTone::Good: return t.good;
+        case LauncherRowTone::Accent: return t.accent;
+        case LauncherRowTone::Warn: return t.warn;
+        case LauncherRowTone::Bad: return t.bad;
+        default: return t.muted;
+    }
+}
+
+void paintLauncherToggleRow(const List* list, HDC dc, const RECT& rowRect, const LauncherToggleRow& row) {
+    const ui::Theme& t = ui::theme();
+    const ui::Fonts& f = ui::fonts();
+    const bool hasWarning = !row.warning.empty();
+    const LauncherRowGeo geo = launcherGeometryFor(list, rowRect, hasWarning);
+
+    // Thin left rail echoes the Play hero card and marks this as a launcher-managed runtime option.
+    const COLORREF railColor = hasWarning ? t.warn : (row.on ? t.accent : mix(t.cardBg, t.warn, 55));
+    ui::fillRounded(dc, geo.rail, dp(list, 1), railColor);
+
+    RECT labelRect = geo.label;
+    ui::drawText(dc, row.label, labelRect, f.bodyBold, t.text, DT_LEFT | DT_WORDBREAK);
+
+    RECT descRect = geo.description;
+    ui::drawText(dc, row.description, descRect, f.caption, t.subtext, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS);
+
+    ui::paintToggle(dc, geo.toggle, row.on, list->dpi);
+
+    if (!row.statusText.empty()) {
+        RECT stRect = geo.status;
+        const COLORREF textCol =
+            row.statusTone == LauncherRowTone::Bad
+                ? t.bad
+                : (row.statusTone == LauncherRowTone::Warn
+                       ? t.warn
+                       : (row.statusTone == LauncherRowTone::Accent
+                              ? t.accent
+                              : (row.statusTone == LauncherRowTone::Good ? t.subtext : t.muted)));
+        ui::drawText(dc, row.statusText, stRect, f.caption, textCol, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (row.statusTone != LauncherRowTone::Muted) {
+            const int tw = ui::textWidth(dc, row.statusText, f.caption);
+            const int dotX = stRect.right - tw - dp(list, 9);
+            const int dotY = (stRect.top + stRect.bottom) / 2;
+            if (dotX > stRect.left + dp(list, 4)) {
+                ui::fillCircle(dc, dotX, dotY, dp(list, 3), toneColor(row.statusTone));
+            }
+        }
+    }
+
+    if (!row.actionLink.empty()) {
+        RECT actRect = geo.action;
+        ui::drawText(dc, row.actionLink, actRect, f.caption, t.accent, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    if (hasWarning) {
+        ui::fillRounded(dc, geo.warningBox, dp(list, 5), mix(t.cardBg, t.warn, 14));
+        ui::strokeRounded(dc, geo.warningBox, dp(list, 5), mix(t.cardBg, t.warn, 42));
+        RECT warnRect = geo.warningText;
+        ui::drawText(dc, row.warning, warnRect, f.caption, t.warn, DT_LEFT | DT_VCENTER | DT_WORDBREAK);
+    }
+}
+
 void paint(List* list) {
     PAINTSTRUCT ps;
     HDC screen = BeginPaint(list->hwnd, &ps);
@@ -506,13 +644,13 @@ void paint(List* list) {
     const ui::Fonts& f = ui::fonts();
     ui::fillRect(dc, client, t.cardBg);
 
-    if (!list->model || list->items.empty()) {
+    if ((!list->model && !list->launcherRow.visible) || list->items.empty()) {
         RECT empty = client;
         empty.left += dp(list, kPad);
         empty.top += dp(list, kPad);
         ui::drawText(dc,
-                     list->model ? L"Nothing matches that."
-                                 : L"Pick an install on the Setup tab first.",
+                     (list->model || list->launcherRow.visible) ? L"Nothing matches that."
+                                                                : L"Pick an install on the Setup tab first.",
                      empty, f.body, t.subtext, DT_LEFT | DT_WORDBREAK);
     }
 
@@ -526,6 +664,11 @@ void paint(List* list) {
             text.left += dp(list, kPad);
             text.top += dp(list, 12);
             ui::drawText(dc, item.title, text, f.heading, t.subtext, DT_LEFT | DT_SINGLELINE);
+        } else if (item.kind == ItemKind::LauncherToggle) {
+            paintLauncherToggleRow(list, dc, rect, list->launcherRow);
+            RECT line{rect.left + dp(list, kPad), rect.bottom - 1, rect.right - dp(list, kPad),
+                      rect.bottom};
+            ui::fillRect(dc, line, t.cardBorder);
         } else {
             paintRow(list, dc, rect, list->model->rows()[item.row]);
             RECT line{rect.left + dp(list, kPad), rect.bottom - 1, rect.right - dp(list, kPad),
@@ -805,6 +948,25 @@ bool dropdownAt(List* list, int x, int y, size_t* rowIndex, RECT* box) {
 // The row whose link is under the pointer, if any. The click and the cursor
 // both ask this one question, so what is clickable can never drift from what
 // was drawn -- and the quiet text beside the link is no longer part of it.
+bool launcherLinkHit(List* list, int x, int y) {
+    if (!list->launcherRow.visible || list->launcherRow.actionLink.empty()) return false;
+    RECT client{};
+    GetClientRect(list->hwnd, &client);
+    for (const Item& item : list->items) {
+        if (item.kind != ItemKind::LauncherToggle) continue;
+        RECT rect{client.left, dp(list, item.y) - list->scroll, client.right,
+                  dp(list, item.y + item.height) - list->scroll};
+        if (y < rect.top || y >= rect.bottom) continue;
+        HDC dc = GetDC(list->hwnd);
+        const RECT box = launcherActionRect(
+            list, dc, launcherGeometryFor(list, rect, !list->launcherRow.warning.empty()), list->launcherRow.actionLink);
+        ReleaseDC(list->hwnd, dc);
+        const POINT point{x, y};
+        return PtInRect(&box, point) != 0;
+    }
+    return false;
+}
+
 bool linkHit(List* list, int x, int y, size_t* rowIndex) {
     if (!list->model) return false;
     RECT client{};
@@ -833,7 +995,11 @@ void onClick(List* list, int x, int y) {
     list->choicePress = false;
     commitEdit(list);
     hideEdit(list);
-    if (!list->model) return;
+
+    if (launcherLinkHit(list, x, y)) {
+        if (list->launcherRow.onAction) list->launcherRow.onAction();
+        return;
+    }
 
     size_t linkRow = 0;
     if (linkHit(list, x, y, &linkRow)) {
@@ -856,6 +1022,16 @@ void onClick(List* list, int x, int y) {
         RECT rect{client.left, dp(list, item.y) - list->scroll, client.right,
                   dp(list, item.y + item.height) - list->scroll};
         if (y < rect.top || y >= rect.bottom) continue;
+
+        if (item.kind == ItemKind::LauncherToggle) {
+            const LauncherRowGeo geo = launcherGeometryFor(list, rect, !list->launcherRow.warning.empty());
+            const POINT point{x, y};
+            if (!list->launcherRow.busy && PtInRect(&geo.toggle, point) && list->launcherRow.onToggle) {
+                list->launcherRow.onToggle(!list->launcherRow.on);
+            }
+            return;
+        }
+        if (!list->model) return;
 
         const SettingRow& row = list->model->rows()[item.row];
         const RowGeometry geo = geometryFor(list, rect);
@@ -1028,7 +1204,7 @@ LRESULT CALLBACK listProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
                 POINT point{};
                 GetCursorPos(&point);
                 ScreenToClient(hwnd, &point);
-                if (linkHit(list, point.x, point.y, nullptr)) {
+                if (launcherLinkHit(list, point.x, point.y) || linkHit(list, point.x, point.y, nullptr)) {
                     SetCursor(LoadCursorW(nullptr, IDC_HAND));
                     return TRUE;
                 }
@@ -1094,6 +1270,20 @@ void settingsListSetModel(HWND hwnd, SettingsModel* model, const std::wstring& m
     list->scroll = 0;
     rebuildItems(list);
     updateScrollbar(list);
+    InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+void settingsListSetLauncherToggle(HWND hwnd, const LauncherToggleRow& row) {
+    List* list = listOf(hwnd);
+    if (!list) return;
+    const bool geometryChanged = list->launcherRow.visible != row.visible ||
+                                 list->launcherRow.group != row.group ||
+                                 list->launcherRow.warning.empty() != row.warning.empty();
+    list->launcherRow = row;
+    if (geometryChanged) {
+        rebuildItems(list);
+        updateScrollbar(list);
+    }
     InvalidateRect(hwnd, nullptr, TRUE);
 }
 
