@@ -1,11 +1,14 @@
 #pragma once
-// Read-only diagnostic probes on Cobra's streaming pipeline (build 334925 only):
-//   1. StreamLoad (exe+0x9E86A0): per-category memory budgets, priority-list backlog,
-//      loading/loaded counts, eviction ticks, and texture upload in-flight bytes.
-//   2. fRes completion pump (exe+0x7F6EB0, owner +0xF0): per-frame {maxTimeUs, maxIterations}
-//      budget, elapsed microseconds, exit reason (drained / hitTime / hitIter), and
-//      fResStreamPool ([fResMgr+0x18]) slot concurrency vs pending queue depth.
-// Zero writes to game memory; stands down cleanly if build identity or prologue pin fails.
+// TEMPORARY build-334925 streaming diagnostic probe + 3-part acceleration experiment:
+//   1. StreamLoad (exe+0x9E86A0): raises concurrency cap at exe+0x9E8935 (cmp rsi, 0x1e -> 0x7f: 30 -> 127)
+//      with 16-byte pin and clean restore on shutdown; logs per-category budgets & backlog every 5 s.
+//   2. fResStreamPool: raises max concurrent stream reader slots from 16 -> 32 once via Elite's own
+//      fResService::SetMaxConcurrentStreams (exe+0x6FBDF0, 28-byte pin) under the scheduler lock when
+//      all 16 slots are free (poolFree == poolAlloc && activeCount == 0).
+//   3. fRes completion pump (exe+0x7F6EB0, owner +0xF0): while wantLoad > 64 (or pending > 8), passes a
+//      stack-local {max(orig, 4000 us), max(orig, 256 iter)} budget to forward(); stands down immediately
+//      to Elite's exact {1000 us, 64} once the scene backlog drains.
+// Stands down cleanly on any build other than 334925 or on any byte-pin mismatch.
 
 #include "../common/code_hook.h"
 #include "../common/game_build.h"
@@ -23,20 +26,46 @@ namespace stream_load_probe_detail {
 
 // Build 334925 targets (hook_signatures.py AUDIT_EXACT_ONLY; installs only when gameBuildKnown()).
 constexpr uint32_t kStreamLoadRva = 0x9E86A0u;
+constexpr uint32_t kStreamLoadCapPinRva = 0x9E892Cu;
+constexpr size_t kStreamLoadCapImmOffset = 12u;  // 0x9E8938: imm8 of `cmp rsi, 0x1e` (48 83 FE 1E)
+constexpr uint8_t kStreamLoadCapOrig = 0x1Eu;    // 30
+constexpr uint8_t kStreamLoadCapBoost = 0x7Fu;   // 127
+
 constexpr uint32_t kTexUploadInFlightRva = 0x5F2D1B8u;
 constexpr uint32_t kFresPumpRva = 0x7F6EB0u;
 constexpr uint32_t kFresServiceGlobalRva = 0x5F2C3A8u;
+constexpr uint32_t kFresSetMaxStreamsRva = 0x6FBDF0u;
+
+constexpr uint64_t kTargetPoolCap = 32u;
+constexpr uint32_t kBoostWantLoadThreshold = 64u;
+constexpr uint32_t kBoostPendingThreshold = 8u;
+constexpr uint32_t kBoostTimeUs = 4000u;
+constexpr uint32_t kBoostMaxIter = 256u;
 
 constexpr size_t kPrologueBytes = 16;
+constexpr size_t kSetMaxStreamsPinBytes = 28;
 // StreamLoad (0x9E86A0): push rbp; push r12; push r13; push r14; push r15; sub rsp, 0x110
 constexpr uint8_t kStreamLoadPrologue[kPrologueBytes] = {
     0x40, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
     0x41, 0x57, 0x48, 0x81, 0xEC, 0x10, 0x01, 0x00,
 };
+// StreamLoad cap site (0x9E892C..0x9E893B):
+//   mov eax, ebx; shr eax, 0x1f; or al, cl; xor ecx, ecx; cmp rsi, 0x1e; movzx eax, al
+constexpr uint8_t kStreamLoadCapPin[kPrologueBytes] = {
+    0x8B, 0xC3, 0xC1, 0xE8, 0x1F, 0x0A, 0xC1, 0x33,
+    0xC9, 0x48, 0x83, 0xFE, 0x1E, 0x0F, 0xB6, 0xC0,
+};
 // fRes pump (0x7F6EB0): mov [rsp+8], rbx; mov [rsp+0x10], rbp; mov [rsp+0x18], rsi; push rdi
 constexpr uint8_t kFresPumpPrologue[kPrologueBytes] = {
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C,
     0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57,
+};
+// fResService::SetMaxConcurrentStreams (0x6FBDF0..0x6FBE0B)
+constexpr uint8_t kSetMaxStreamsPin[kSetMaxStreamsPinBytes] = {
+    0x48, 0x8B, 0x49, 0x10, 0x48, 0x8B, 0xC2, 0xBA,
+    0x01, 0x00, 0x00, 0x00, 0x48, 0x3B, 0xC2, 0x48,
+    0x8B, 0x49, 0x18, 0x48, 0x0F, 0x43, 0xD0, 0xE9,
+    0x14, 0x00, 0x00, 0x00,
 };
 
 // StreamCategory and related read-only offsets (build 334925).
@@ -58,7 +87,8 @@ constexpr size_t kOffExtMemPtr = 0xF8u;
 constexpr size_t kOffExtCpuBytes = 0x10u;
 constexpr size_t kOffExtGpuBytes = 0x18u;
 
-// fResService / fResManager read-only offsets (build 334925).
+// fResService / fResManager offsets (build 334925).
+constexpr size_t kOffFresServiceSched = 0x08u;
 constexpr size_t kOffFresServiceMgr = 0x10u;
 constexpr size_t kOffFresMgrPool = 0x18u;
 constexpr size_t kOffFresMgrActive = 0x20u;
@@ -85,6 +115,8 @@ constexpr size_t kOriginalLiteral = 36;
 
 using StreamLoadFn = void(__fastcall*)(uintptr_t category, uintptr_t jobSys);
 using FresPumpFn = void(__fastcall*)(uintptr_t owner, const uint32_t* budgetPair);
+using SetMaxStreamsFn = void(__fastcall*)(uintptr_t service, uint64_t count);
+using SchedLockFn = void(__fastcall*)(uintptr_t sched);
 
 struct HookSlot {
     alignas(8) std::atomic<uintptr_t> gate{0};
@@ -157,6 +189,8 @@ struct CategoryBucket {
 
 struct FresState {
     bool valid;
+    uintptr_t service;
+    uintptr_t sched;
     uint8_t workFlags;
     uint64_t poolAlloc;
     uint64_t poolFree;
@@ -170,6 +204,7 @@ struct FresState {
 struct FresPumpWindow {
     uint64_t calls = 0;
     uint64_t busyCalls = 0;
+    uint64_t boostedCalls = 0;
     uint32_t budgetUsMin = 0xFFFFFFFFu;
     uint32_t budgetUsMax = 0;
     uint32_t maxIterMin = 0xFFFFFFFFu;
@@ -198,6 +233,12 @@ inline HookSlot g_streamSlot{};
 inline HookSlot g_fresSlot{};
 inline std::atomic<uintptr_t> g_exeBase{0};
 inline std::atomic<bool> g_attempted{false};
+inline std::atomic<bool> g_capPatched{false};
+inline std::atomic<uintptr_t> g_capPatchAddr{0};
+inline std::atomic<bool> g_setMaxStreamsPinned{false};
+inline std::atomic<bool> g_poolBoostDone{false};
+inline std::atomic<bool> g_poolBoostLogged{false};
+inline std::atomic<uint32_t> g_latestWantLoad{0};
 
 inline std::atomic_flag g_bucketsLock = ATOMIC_FLAG_INIT;
 inline CategoryBucket g_buckets[kMaxCategories]{};
@@ -260,7 +301,6 @@ inline uint8_t* allocateRelay(uintptr_t target) noexcept {
 }
 
 inline void buildRelay(uint8_t* code, const void* gate, void* callback) noexcept {
-    // mov rax, &gate; cmp qword ptr [rax], 0; je original; jmp [callback]; original: jmp [trampoline].
     const uint8_t body[kRelayBytes] = {
         0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,
         0x48, 0x83, 0x38, 0,
@@ -289,11 +329,48 @@ inline bool prepareRelay(void* trampoline, void* ctx) noexcept {
     return true;
 }
 
-// --- SEH-isolated plain-POD readers (no C++ unwindable objects in scope) ---
+// --- SEH-isolated plain-POD readers/writers (no C++ unwindable objects in scope) ---
 
-__declspec(noinline) inline bool readPrologueBytes(uintptr_t addr, uint8_t out[kPrologueBytes]) noexcept {
+__declspec(noinline) inline bool readBytesGuarded(uintptr_t addr, uint8_t* out, size_t n) noexcept {
     __try {
-        std::memcpy(out, reinterpret_cast<const void*>(addr), kPrologueBytes);
+        std::memcpy(out, reinterpret_cast<const void*>(addr), n);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+inline bool patchSingleByte(uintptr_t addr, uint8_t expected, uint8_t replacement) noexcept {
+    uint8_t cur = 0;
+    if (!readBytesGuarded(addr, &cur, 1) || cur != expected) return false;
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(reinterpret_cast<void*>(addr), 1, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        return false;
+    }
+    *reinterpret_cast<uint8_t*>(addr) = replacement;
+    DWORD dummy = 0;
+    VirtualProtect(reinterpret_cast<void*>(addr), 1, oldProtect, &dummy);
+    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<const void*>(addr), 1);
+    return true;
+}
+
+__declspec(noinline) inline bool callSetMaxStreamsLocked(uintptr_t exeBase, uintptr_t service, uintptr_t sched, uint64_t newCap) noexcept {
+    if (exeBase < kMinValidPtr || service < kMinValidPtr) return false;
+    __try {
+        SchedLockFn lockFn = nullptr;
+        SchedLockFn unlockFn = nullptr;
+        if (sched >= kMinValidPtr) {
+            uintptr_t vtbl = 0;
+            std::memcpy(&vtbl, reinterpret_cast<const void*>(sched), sizeof(vtbl));
+            if (vtbl >= kMinValidPtr) {
+                std::memcpy(&lockFn, reinterpret_cast<const void*>(vtbl), sizeof(lockFn));
+                std::memcpy(&unlockFn, reinterpret_cast<const void*>(vtbl + 8u), sizeof(unlockFn));
+            }
+        }
+        const auto setFn = reinterpret_cast<SetMaxStreamsFn>(exeBase + kFresSetMaxStreamsRva);
+        if (lockFn && unlockFn) lockFn(sched);
+        setFn(service, newCap);
+        if (lockFn && unlockFn) unlockFn(sched);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -412,6 +489,11 @@ __declspec(noinline) inline bool readFresState(uintptr_t exeBase, FresState* out
         uintptr_t service = 0;
         std::memcpy(&service, reinterpret_cast<const void*>(exeBase + kFresServiceGlobalRva), sizeof(service));
         if (service < kMinValidPtr) return false;
+        out->service = service;
+
+        uintptr_t sched = 0;
+        std::memcpy(&sched, reinterpret_cast<const uint8_t*>(service) + kOffFresServiceSched, sizeof(sched));
+        out->sched = sched;
 
         uintptr_t mgr = 0;
         std::memcpy(&mgr, reinterpret_cast<const uint8_t*>(service) + kOffFresServiceMgr, sizeof(mgr));
@@ -506,7 +588,7 @@ __declspec(noinline) inline void __fastcall streamLoadDetour(uintptr_t category,
             if (hdr.texUploadInFlightBytes > b->texUploadMaxBytes) {
                 b->texUploadMaxBytes = hdr.texUploadInFlightBytes;
             }
-            if ((b->calls % 16u) == 1u) {
+            if ((b->calls % 8u) == 1u) {
                 needScan = true;
             }
         }
@@ -517,6 +599,7 @@ __declspec(noinline) inline void __fastcall streamLoadDetour(uintptr_t category,
 
     PrioScan scan{};
     if (!readPrioScan(hdr.prioListPtr, hdr.prioCount, hdr.entriesPtr, &scan)) return;
+    g_latestWantLoad.store(scan.wantLoad, std::memory_order_relaxed);
 
     if (!g_bucketsLock.test_and_set(std::memory_order_acquire)) {
         if (CategoryBucket* b = findBucket(category)) {
@@ -541,16 +624,49 @@ __declspec(noinline) inline void __fastcall fresPumpDetour(uintptr_t owner, cons
         return;
     }
 
-    uint32_t maxTimeUs = 0;
-    uint32_t maxIter = 0;
-    const bool gotBudget = readBudgetPair(budgetPair, &maxTimeUs, &maxIter);
+    uint32_t origTimeUs = 0;
+    uint32_t origMaxIter = 0;
+    const bool gotBudget = readBudgetPair(budgetPair, &origTimeUs, &origMaxIter);
 
     const uintptr_t exeBase = g_exeBase.load(std::memory_order_relaxed);
     FresState before{};
     readFresState(exeBase, &before);
 
+    // Part 2: raise fResStreamPool 16 -> 32 once, strictly when 0 stream slots are checked out
+    // (poolFree == poolAlloc && activeCount == 0), under the fRes scheduler lock.
+    if (before.valid &&
+        !g_poolBoostDone.load(std::memory_order_relaxed) &&
+        g_setMaxStreamsPinned.load(std::memory_order_acquire) &&
+        before.poolCap >= 16u &&
+        before.poolCap < kTargetPoolCap &&
+        before.poolAlloc == before.poolCap &&
+        before.poolFree == before.poolAlloc &&
+        before.activeCount == 0u) {
+        if (callSetMaxStreamsLocked(exeBase, before.service, before.sched, kTargetPoolCap)) {
+            g_poolBoostDone.store(true, std::memory_order_release);
+            readFresState(exeBase, &before);
+        }
+    }
+
+    // Part 3: while streaming backlog is active, relax clamped gameplay budget to {4000 us, 256}.
+    uint32_t usedPair[2] = {origTimeUs, origMaxIter};
+    const uint32_t* callPair = budgetPair;
+    bool boosted = false;
+    if (gotBudget) {
+        const uint32_t wantLoad = g_latestWantLoad.load(std::memory_order_relaxed);
+        const bool hasBacklog = (wantLoad > kBoostWantLoadThreshold) ||
+                                (before.valid && before.pendingCount > kBoostPendingThreshold);
+        if (hasBacklog && (origTimeUs < kBoostTimeUs || origMaxIter < kBoostMaxIter)) {
+            usedPair[0] = origTimeUs < kBoostTimeUs ? kBoostTimeUs : origTimeUs;
+            usedPair[1] = origMaxIter < kBoostMaxIter ? kBoostMaxIter : origMaxIter;
+            callPair = usedPair;
+            boosted = true;
+        }
+    }
+    const uint32_t activeTimeUs = boosted ? usedPair[0] : origTimeUs;
+
     const int64_t t0 = qpcNow();
-    forward(owner, budgetPair);
+    forward(owner, callPair);
     const int64_t t1 = qpcNow();
 
     FresState after{};
@@ -561,11 +677,12 @@ __declspec(noinline) inline void __fastcall fresPumpDetour(uintptr_t owner, cons
     if (!g_fresLock.test_and_set(std::memory_order_acquire)) {
         FresPumpWindow& w = g_fresWindow;
         w.calls += 1u;
+        if (boosted) w.boostedCalls += 1u;
         if (gotBudget) {
-            if (maxTimeUs < w.budgetUsMin) w.budgetUsMin = maxTimeUs;
-            if (maxTimeUs > w.budgetUsMax) w.budgetUsMax = maxTimeUs;
-            if (maxIter < w.maxIterMin) w.maxIterMin = maxIter;
-            if (maxIter > w.maxIterMax) w.maxIterMax = maxIter;
+            if (origTimeUs < w.budgetUsMin) w.budgetUsMin = origTimeUs;
+            if (origTimeUs > w.budgetUsMax) w.budgetUsMax = origTimeUs;
+            if (origMaxIter < w.maxIterMin) w.maxIterMin = origMaxIter;
+            if (origMaxIter > w.maxIterMax) w.maxIterMax = origMaxIter;
         }
         w.elapsedUsSum += elapsedUs;
         if (elapsedUs > w.elapsedUsMax) w.elapsedUsMax = elapsedUs;
@@ -582,7 +699,7 @@ __declspec(noinline) inline void __fastcall fresPumpDetour(uintptr_t owner, cons
             if (before.workFlags != 0u && after.workFlags == 0u) {
                 w.drained += 1u;
             } else if (after.workFlags != 0u) {
-                if (gotBudget && elapsedUs >= static_cast<double>(maxTimeUs)) {
+                if (gotBudget && elapsedUs >= static_cast<double>(activeTimeUs)) {
                     w.hitTime += 1u;
                 } else {
                     w.hitIter += 1u;
@@ -614,7 +731,7 @@ __declspec(noinline) inline void __fastcall fresPumpDetour(uintptr_t owner, cons
 inline bool armSlot(HookSlot& slot, uintptr_t target, const uint8_t expected[kPrologueBytes],
                     void* detourFn, const char* hookTag, const char* label) noexcept {
     uint8_t got[kPrologueBytes] = {};
-    if (!readPrologueBytes(target, got)) {
+    if (!readBytesGuarded(target, got, kPrologueBytes)) {
         Log::get().note("%s: inert (%s)", label, "prologue unreadable");
         return false;
     }
@@ -669,13 +786,40 @@ inline void streamLoadProbeInstall() {
     }
     d::g_exeBase.store(exeBase, std::memory_order_release);
 
+    // Part 1: verify 16-byte pin at StreamLoad cap site and patch 0x1E (30) -> 0x7F (127).
+    uint8_t capGot[d::kPrologueBytes] = {};
+    const uintptr_t capPinAddr = exeBase + d::kStreamLoadCapPinRva;
+    if (d::readBytesGuarded(capPinAddr, capGot, d::kPrologueBytes) &&
+        std::memcmp(capGot, d::kStreamLoadCapPin, d::kPrologueBytes) == 0) {
+        const uintptr_t immAddr = capPinAddr + d::kStreamLoadCapImmOffset;
+        if (d::patchSingleByte(immAddr, d::kStreamLoadCapOrig, d::kStreamLoadCapBoost)) {
+            d::g_capPatchAddr.store(immAddr, std::memory_order_release);
+            d::g_capPatched.store(true, std::memory_order_release);
+            Log::get().note("stream boost: StreamLoad cap patched at exe+0x9E8938 (30 -> 127)");
+        } else {
+            Log::get().note("stream boost: StreamLoad cap patch failed (%s)", "VirtualProtect/write failed");
+        }
+    } else {
+        Log::get().note("stream boost: StreamLoad cap not patched (%s)", "16-byte pin mismatch at exe+0x9E892C");
+    }
+
+    // Verify 28-byte pin on fResService::SetMaxConcurrentStreams (0x6FBDF0) for Part 2.
+    uint8_t setGot[d::kSetMaxStreamsPinBytes] = {};
+    if (d::readBytesGuarded(exeBase + d::kFresSetMaxStreamsRva, setGot, d::kSetMaxStreamsPinBytes) &&
+        std::memcmp(setGot, d::kSetMaxStreamsPin, d::kSetMaxStreamsPinBytes) == 0) {
+        d::g_setMaxStreamsPinned.store(true, std::memory_order_release);
+        Log::get().note("stream boost: SetMaxConcurrentStreams pinned at exe+0x6FBDF0 (armed for 16 -> 32 on idle pool)");
+    } else {
+        Log::get().note("stream boost: SetMaxConcurrentStreams pin mismatch at exe+0x6FBDF0; pool stays at 16");
+    }
+
     if (d::armSlot(d::g_streamSlot, exeBase + d::kStreamLoadRva, d::kStreamLoadPrologue,
                    reinterpret_cast<void*>(&d::streamLoadDetour), "stream-load-probe", "stream load probe")) {
-        Log::get().note("stream load probe: armed at exe+0x9E86A0 (build 334925 verified, read-only)");
+        Log::get().note("stream load probe: armed at exe+0x9E86A0 (build 334925 verified)");
     }
     if (d::armSlot(d::g_fresSlot, exeBase + d::kFresPumpRva, d::kFresPumpPrologue,
                    reinterpret_cast<void*>(&d::fresPumpDetour), "fres-pump-probe", "fres pump probe")) {
-        Log::get().note("fres pump probe: armed at exe+0x7F6EB0 (build 334925 verified, read-only)");
+        Log::get().note("fres pump probe: armed at exe+0x7F6EB0 (backlog boost 4000us/256 when wantLoad>64)");
     }
 }
 
@@ -685,6 +829,12 @@ inline void streamLoadProbePoll(uint64_t nowMs = 0) {
     const bool fresLive = d::g_fresSlot.installed.load(std::memory_order_acquire);
     if (!streamLive && !fresLive) return;
     if (nowMs == 0) nowMs = GetTickCount64();
+
+    if (d::g_poolBoostDone.load(std::memory_order_acquire) &&
+        !d::g_poolBoostLogged.exchange(true, std::memory_order_acq_rel)) {
+        Log::get().note("stream boost: fResStreamPool raised 16 -> 32 via SetMaxConcurrentStreams");
+    }
+
     if (!d::g_pollStarted) {
         d::g_pollStarted = true;
         d::g_windowStartMs = nowMs;
@@ -751,12 +901,13 @@ inline void streamLoadProbePoll(uint64_t nowMs = 0) {
             const unsigned budgetLo = fw.budgetUsMin == 0xFFFFFFFFu ? 0u : fw.budgetUsMin;
             const unsigned iterLo = fw.maxIterMin == 0xFFFFFFFFu ? 0u : fw.maxIterMin;
             const unsigned long long freeMin = fw.poolFreeMin == 0xFFFFFFFFFFFFFFFFull ? 0ull : fw.poolFreeMin;
-            Log::get().note("fres pump probe 5s: calls=%llu busy=%llu budgetUs=%u..%u maxIter=%u..%u "
+            Log::get().note("fres pump probe 5s: calls=%llu busy=%llu boosted=%llu origBudgetUs=%u..%u origMaxIter=%u..%u "
                             "elapsedAvg=%.0fus busyAvg=%.0fus max=%.0fus drained=%llu hitTime=%llu hitIter=%llu "
                             "slotBlocked=%llu/%llu poolCap=%llu alloc=%llu freeMin=%llu activeMax=%llu "
                             "pendingMax=%u readyMax=%u incomingMax=%u",
                 static_cast<unsigned long long>(fw.calls),
                 static_cast<unsigned long long>(fw.busyCalls),
+                static_cast<unsigned long long>(fw.boostedCalls),
                 budgetLo,
                 static_cast<unsigned>(fw.budgetUsMax),
                 iterLo,
@@ -786,6 +937,12 @@ inline void streamLoadProbeShutdown() {
     namespace d = stream_load_probe_detail;
     d::disarmSlot(d::g_fresSlot);
     d::disarmSlot(d::g_streamSlot);
+    if (d::g_capPatched.exchange(false, std::memory_order_acq_rel)) {
+        const uintptr_t addr = d::g_capPatchAddr.load(std::memory_order_acquire);
+        if (addr >= d::kMinValidPtr) {
+            d::patchSingleByte(addr, d::kStreamLoadCapBoost, d::kStreamLoadCapOrig);
+        }
+    }
 }
 
 }  // namespace edvr
