@@ -1372,7 +1372,7 @@ void recomputeGateLocked() noexcept {
                     hasRigVeto;
     evalGate.store(open?uintptr_t(1):uintptr_t(0),std::memory_order_release);
     evalObsGate.store((hasObs || hasGateProbe)?uintptr_t(1):uintptr_t(0),std::memory_order_release);
-    rigEvalGate.store((hasObs || hasRigVeto || hasDirectVeto)?uintptr_t(1):uintptr_t(0),std::memory_order_release);
+    rigEvalGate.store((hasObs || hasRigVeto)?uintptr_t(1):uintptr_t(0),std::memory_order_release);
     primaryGate.store(emitWanted.load(std::memory_order_acquire) &&
         g_primaryEntry.ready.load(std::memory_order_acquire) &&
         g_poolCopyEntry.ready.load(std::memory_order_acquire) &&

@@ -43,7 +43,10 @@ void forwardRevoke(State& s,uint64_t resource,forward_light::Reason reason) {
     }
 }
 void forwardMutation(State& s,uint64_t resource,bool forgetSources=true) {
-    if(forgetSources)certObserveMemo().valid=false;
+    if(forgetSources) {
+        auto& memo=certObserveMemo();
+        if(memo.valid&&(!resource||resource==reinterpret_cast<uintptr_t>(memo.depth)))memo.valid=false;
+    }
     s.forwardLight.ledger.mutation(resource,forgetSources);
     forwardRevoke(s,resource,forward_light::Reason::MutatedProducer);
 }
@@ -54,7 +57,7 @@ void forwardReset(State& s,uint64_t frame=0,bool captureLifecycle=true) {
     f.dsvDescription.clear();f.depthDescription.clear();f.blendDescription.clear();f.omDepthCache.clear();f.omOutputCache.clear();f.omCb1Cache.clear();
     for(auto& observed:f.phaseObservedDonor)observed={};
     for(auto& a:f.authority)a={};for(auto& h:f.authorityHdr)h.Reset();
-    f.liveAuthorities=0;
+    f.liveAuthorities=0;f.lastDrawScannedRtvs=false;
     for(auto& h:f.domainHolds)h={};for(auto& h:f.publicationHolds)h={};
 }
 void forwardFrame(State& s) {
@@ -251,9 +254,18 @@ void forwardBoundCb1(State& s,lightaudit::Cb& cb,uint64_t& payloadHash) {
         flatIssueEpochPublishCb1(cb.buffer);
     }
 }
-forward_light::Issue forwardObserveDomain(State& s,const FlatRuntimeDraw& d) {
+forward_light::Issue forwardObserveDomain(State& s,const FlatRuntimeDraw& d,int depthSceneExtent=-1) {
     using namespace forward_light;Issue issue;auto& f=s.forwardLight;const auto& k=d.key;
-    if(!k.depth||flatContractKind(false,k.depth,k.depth,k.depthWidth,k.depthHeight,26,s.prefix.width,s.prefix.height,false)!=kFlatContractScreen)return issue;
+    if(!k.depth)return issue;
+    bool depthOk=false;
+    if(depthSceneExtent>=0)depthOk=depthSceneExtent!=0;
+    else if(d.poolFamilyVs)depthOk=true;
+    else if(k.color&&k.depthWidth==k.width&&k.depthHeight==k.height&&k.kind==kFlatContractScreen)depthOk=true;
+    else if(k.color&&k.depthWidth==k.width&&k.depthHeight==k.height&&k.kind==kFlatContractNone&&
+            (k.format==23||k.format==26||k.format==27||k.format==60))depthOk=false;
+    else depthOk=flatContractKind(false,k.depth,k.depth,k.depthWidth,k.depthHeight,26,s.prefix.width,s.prefix.height,false)==kFlatContractScreen;
+    if(!depthOk)return issue;
+    const Role earlyRole=d.supported?Role::Origin:typedRole(k.vs,k.ps);
     if(d.supported||d.poolFamilyVs) {
         auto& memo=certObserveMemo();
         const auto& cert=geometryCert();
@@ -267,7 +279,7 @@ forward_light::Issue forwardObserveDomain(State& s,const FlatRuntimeDraw& d) {
            d.cameraHashTrusted&&flatRuntimeCameraCurrent(d,q,s.prefix.frame)&&
            k.writeSeq>cert.constants.writeQ&&!f.ledger.overflow&&memo.domainIdx<f.ledger.used&&
            f.ledger.domains[memo.domainIdx].failure==Reason::None&&
-           (d.supported?Role::Origin:typedRole(k.vs,k.ps))==memo.role) {
+           earlyRole==memo.role) {
             if(cert.depthWrite&&memo.certRawWatched) {
                 forwardMutation(s,cert.raw.resource,false);
                 memo.certRawWatched=false;
@@ -285,6 +297,15 @@ forward_light::Issue forwardObserveDomain(State& s,const FlatRuntimeDraw& d) {
             flatIssueEpochCountObserveReuse();
             return issue;
         }
+    } else if(earlyRole==Role::Unknown) {
+        const uint64_t omDepthEpoch=flatOmDepthEpochLoad();
+        const auto& omDsv=f.omDepthCache;
+        if(omDsv.valid&&omDsv.epoch==omDepthEpoch&&!flatIssueEpochFrozen()&&
+           !foreignWork.load(std::memory_order_acquire)&&!s.prefix.uncertain&&
+           omDsv.dsv.Get()==k.dsv) {
+            const bool cachedWrites=omDsv.proof.depthEnabled&&omDsv.proof.writeAll&&!omDsv.proof.readOnlyDepth;
+            if(!cachedWrites)return issue;
+        }
     }
     flatcpu::Scope domainCost(flatcpu::kCopyDomain);
     // Pool and supported producers skip the shader Gets. Reuse their depth and
@@ -292,17 +313,19 @@ forward_light::Issue forwardObserveDomain(State& s,const FlatRuntimeDraw& d) {
     if((d.supported||d.poolFamilyVs)&&forwardObserveFromCert(s,d,issue)){flatIssueEpochCountObserveReuse();return issue;}
     flatIssueEpochCountObserveFresh();
     FlatComputeInternalScope internal;Surface raw;Ptr<ID3D11DepthStencilView> dsv;Ptr<ID3D11Resource> resource;bool writes=false;
-    if(!forwardDsv(s,k,raw,dsv,resource,writes)){f.ledger.overflow=true;certObserveMemo().valid=false;forwardRevoke(s,0,Reason::Lineage);return issue;}
+    if(!forwardDsv(s,k,raw,dsv,resource,writes)) {
+        if(writes||earlyRole!=Role::Unknown){f.ledger.overflow=true;certObserveMemo().valid=false;forwardRevoke(s,0,Reason::Lineage);}
+        return issue;
+    }
     if(writes&&(f.ledger.livePublications||f.liveAuthorities))forwardMutation(s,raw.resource,false); // depth draw invalidates old conversion, not coherent earlier geometry
-    Role role=d.supported?Role::Origin:typedRole(k.vs,k.ps);
-    if(role==Role::Unknown){f.ledger.observe(raw,role,writes,false,{},nullptr,s.prefix.sequence+1);if(writes){certObserveMemo().valid=false;forwardRevoke(s,raw.resource,Reason::UnknownWriter);}return issue;}
+    if(earlyRole==Role::Unknown){if(writes){f.ledger.observe(raw,earlyRole,writes,false,{},nullptr,s.prefix.sequence+1);certObserveMemo().valid=false;forwardRevoke(s,raw.resource,Reason::UnknownWriter);}return issue;}
     if(!d.supported&&!d.poolFamilyVs&&!engineVelocityFlatSourceShaders(s.context.Get(),k.vs,k.ps)){f.ledger.observe(raw,Role::Unknown,true,false,{},nullptr,s.prefix.sequence+1);certObserveMemo().valid=false;forwardRevoke(s,raw.resource,Reason::UnknownWriter);return issue;}
     lightaudit::Cb cb;uint64_t cbHash=0;forwardBoundCb1(s,cb,cbHash);
     const bool current=flatRuntimeCameraCurrent(d,s.prefix.sequence+1,s.prefix.frame)&&cb.buffer==reinterpret_cast<uintptr_t>(k.b1)&&
         cb.status==lightaudit::Full&&cb.fresh==lightaudit::Current&&cb.before.writeQ<k.writeSeq&&
         !std::memcmp(cb.payload,d.camera,96);
     Source source{cb.buffer,cb.before.generation,cb.before.bank,cb.before.writeGeneration,k.writeEpoch,k.writeSeq,cb.first,cb.count};
-    f.ledger.observe(raw,role,writes,current,source,current?d.camera:nullptr,s.prefix.sequence+1);
+    f.ledger.observe(raw,earlyRole,writes,current,source,current?d.camera:nullptr,s.prefix.sequence+1);
     if(auto* domain=f.ledger.domain(raw)){const auto index=static_cast<unsigned>(domain-f.ledger.domains);
         f.domainHolds[index].raw=resource;f.domainHolds[index].view=dsv;
         if(k.b1)f.domainHolds[index].buffer=static_cast<ID3D11Buffer*>(const_cast<void*>(k.b1));
@@ -320,6 +343,7 @@ forward_light::Issue forwardObserveDomain(State& s,const FlatRuntimeDraw& d) {
 // Every actual bound target can mutate a retained raw/linear identity, not
 // just RT0. The existing dispatch and explicit-write seams cover other writes.
 void forwardDrawWrites(State& s,ID3D11DeviceContext* actualDrawContext) {
+    s.forwardLight.lastDrawScannedRtvs=false;
     flatcpu::CopyCounter counts;counts.add(flatcpu::kCopyWatch);
     auto& ledger=s.forwardLight.ledger;
     const bool known=owner()&&actualDrawContext&&actualDrawContext==s.context.Get()&&
@@ -359,6 +383,7 @@ void forwardDrawWrites(State& s,ID3D11DeviceContext* actualDrawContext) {
     if(known&&omOut.valid&&omOut.epoch==omOutEpoch&&!flatIssueEpochFrozen()) {
         for(unsigned i=0;i<omOut.rtvCount;++i)forwardMutation(s,omOut.rtvs[i],false);
         for(unsigned i=0;i<omOut.uavCount;++i)forwardMutation(s,omOut.uavs[i]);
+        s.forwardLight.lastDrawScannedRtvs=true;
         return;
     }
     FlatComputeInternalScope internal;
@@ -401,6 +426,7 @@ void forwardDrawWrites(State& s,ID3D11DeviceContext* actualDrawContext) {
     } else {
         omOut.clear();
     }
+    s.forwardLight.lastDrawScannedRtvs=true;
 }
 bool forwardConverterState(State& s,unsigned width,unsigned height) {
     forward_light::ConverterRaster raster;raster.width=width;raster.height=height;
@@ -427,7 +453,7 @@ forward_light::Issue forwardBefore(State& s,ID3D11DeviceContext* actualDrawConte
     using namespace forward_light;forwardFrame(s);Issue issue;auto& f=s.forwardLight;const auto& k=d.key;
     if(!f.upstream)return issue;
     forwardDrawWrites(s,actualDrawContext);
-    if(k.color&&(f.ledger.livePublications||f.liveAuthorities))forwardMutation(s,reinterpret_cast<uintptr_t>(k.color),false);
+    if(k.color&&!f.lastDrawScannedRtvs&&(f.ledger.livePublications||f.liveAuthorities))forwardMutation(s,reinterpret_cast<uintptr_t>(k.color),false);
     issue=forwardObserveDomain(s,d);
     if(k.vs!=kDepthVs||k.ps!=kDepthPs)return issue;
     flatcpu::Scope converterCost(flatcpu::kCopyConverter);

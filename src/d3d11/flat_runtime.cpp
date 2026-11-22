@@ -236,8 +236,12 @@ void drawIngressIdentity(ID3D11DeviceContext* context, const char* reason, DWORD
 // the table's own operations, each of which invalidates that kept answer: nothing below assigns to one.
 using CameraTable = FlatCameraTable<Ptr<ID3D11Buffer>>;
 using Camera = CameraTable::Entry;
-struct View {
-    void* identity = nullptr; uint32_t generation = 0; ResourceInfo info{};
+struct ViewCache {
+    void* identity = nullptr; uint32_t generation = 0; uint32_t ringGen = 0; uint8_t ringIdx = 0xFFu;
+    ResourceInfo info{};
+};
+struct ViewRingEntry {
+    void* identity = nullptr; uint32_t ringGen = 0; ResourceInfo info{};
     Ptr<IUnknown> held;
 };
 struct LightAuditState {
@@ -291,7 +295,7 @@ struct ForwardRuntime {
     forward_light::Authority authority[forward_light::kPublications];
     Ptr<ID3D11Resource> authorityHdr[forward_light::kPublications];
     uint32_t liveAuthorities=0;
-    bool ownerKnown=false,upstream=false;
+    bool ownerKnown=false,upstream=false,lastDrawScannedRtvs=false;
     struct DomainHold {Ptr<ID3D11Resource> raw;Ptr<ID3D11DepthStencilView> view;Ptr<ID3D11Buffer> buffer;};
     DomainHold domainHolds[forward_light::kDomains];
     struct PublicationHold {Ptr<ID3D11Resource> raw,linear;Ptr<ID3D11ShaderResourceView> input;Ptr<ID3D11RenderTargetView> target;};
@@ -305,6 +309,7 @@ struct ForwardRuntime {
 struct ProducerContinuation {
     bool armed = false;
     bool supported = false;
+    bool depthSceneExtent = false;
     uint64_t frame = 0;
     char kind = 0;
     uint32_t count = 0, start = 0, instances = 0, startInstance = 0;
@@ -427,7 +432,56 @@ struct State {
         FlatDomainShaderProof proof;uint64_t attemptedFrame=0;
         bool bytesHit=false;const uint8_t* vsData=nullptr;const uint8_t* psData=nullptr;size_t vsLen=0,psLen=0;
     };
-    std::map<std::pair<uint64_t,uint64_t>,DomainProofEntry> foregroundProofs;
+    struct ForegroundProofTable {
+        static constexpr uint32_t kMaxEntries = 1024;
+        static constexpr uint32_t kBuckets = 2048;
+        static constexpr uint32_t kMask = kBuckets - 1;
+        struct Slot { uint64_t vs = 0, ps = 0; DomainProofEntry entry{}; };
+        uint16_t buckets[kBuckets]{}; // 0 = empty, index + 1 otherwise
+        std::unique_ptr<Slot[]> slots;
+        uint32_t used = 0;
+        static uint32_t hashPair(uint64_t vs, uint64_t ps) noexcept {
+            uint64_t h = vs ^ (ps * 0x9E3779B97F4A7C15ull);
+            h ^= h >> 33;
+            h *= 0xFF51AFD7ED558CCDull;
+            h ^= h >> 33;
+            return static_cast<uint32_t>(h) & kMask;
+        }
+        DomainProofEntry* find(uint64_t vs, uint64_t ps) noexcept {
+            if (!used || !slots) return nullptr;
+            uint32_t b = hashPair(vs, ps);
+            for (uint32_t n = 0; n < kBuckets; ++n) {
+                const uint16_t v = buckets[b];
+                if (!v) return nullptr;
+                Slot& s = slots[v - 1];
+                if (s.vs == vs && s.ps == ps) return &s.entry;
+                b = (b + 1) & kMask;
+            }
+            return nullptr;
+        }
+        DomainProofEntry* insert(uint64_t vs, uint64_t ps) {
+            if (!slots) slots.reset(new Slot[kMaxEntries]);
+            uint32_t b = hashPair(vs, ps);
+            for (uint32_t n = 0; n < kBuckets; ++n) {
+                const uint16_t v = buckets[b];
+                if (!v) {
+                    if (used == kMaxEntries) return nullptr;
+                    const uint32_t idx = used++;
+                    Slot& s = slots[idx];
+                    s.vs = vs; s.ps = ps; s.entry = {};
+                    buckets[b] = static_cast<uint16_t>(idx + 1);
+                    return &s.entry;
+                }
+                Slot& s = slots[v - 1];
+                if (s.vs == vs && s.ps == ps) return &s.entry;
+                b = (b + 1) & kMask;
+            }
+            return nullptr;
+        }
+        void clear() noexcept {
+            if (used) { std::memset(buckets, 0, sizeof(buckets)); used = 0; }
+        }
+    } foregroundProofs;
     struct DomainCounts {
         uint64_t foreignSeen=0,captured=0,worldMarkers=0,nullMarkers=0,markerRefused=0;
         uint64_t hAttempts=0,hQualified=0;
@@ -467,6 +521,7 @@ struct State {
     FlatUntrustedObservedCamera unclassifiedPool[64]{};
     FlatUntrustedObservedCamera unclassifiedOverflowFirst{};
     uint32_t unclassifiedPoolUsed = 0;
+    uint32_t unclassifiedPoolLast = 0;
     bool unclassifiedPoolOverflow = false;
     struct UntrustedNomineeDiagnostic {
         uint64_t vs = 0, ps = 0;
@@ -496,10 +551,11 @@ struct State {
     Ptr<ID3D11Texture2D> output, sceneDepth; Ptr<ID3D11ShaderResourceView> depthView;
     FlatRuntimePrefix prefix{}; CameraTable cameras;
     // 0 Rtv0, 1 Dsv0, then pixel-shader t0..t3: the tone and copy draws read t0 and t1, the HDR route's trigger detector all four.
-    View views[6]{}; D3D11_VIEWPORT viewport{}; UINT viewportCount = 0;
+    ViewCache views[6]{}; D3D11_VIEWPORT viewport{}; UINT viewportCount = 0;
     static constexpr uint32_t kViewRingSlots = 16;
-    View viewRing[kViewRingSlots]{};
+    ViewRingEntry viewRing[kViewRingSlots]{};
     uint32_t viewRingNext = 0;
+    uint32_t viewRingGen = 1;
     Ptr<ID3D11Resource> colors[128], depths[128], previousColor;
     Ptr<ID3D11Resource> uavs[8];
     const void* namedDepth = nullptr, *namedConstants = nullptr;
@@ -1322,22 +1378,27 @@ static void reportForegroundDomain(State& s) {
 // g_state, which is never freed, so they outlive the memo (cleared at resize-or-stop). A miss is never cached as a result: the caller looks up again.
 static const FlatDomainShaderProof& domainShaderProofEntry(State& s,uint64_t vs,uint64_t ps,const State::DomainProofEntry** entryOut) {
     if(entryOut)*entryOut=nullptr;
-    const auto key=std::make_pair(vs,ps);auto found=s.foregroundProofs.find(key);
-    if(found!=s.foregroundProofs.end() && (found->second.proof.present || found->second.attemptedFrame==s.prefix.frame)) {
-        if(entryOut)*entryOut=&found->second;
-        return found->second.proof;
+    auto* found=s.foregroundProofs.find(vs,ps);
+    if(found && (found->proof.present || found->attemptedFrame==s.prefix.frame)) {
+        if(entryOut)*entryOut=found;
+        return found->proof;
     }
-    if(found==s.foregroundProofs.end() && s.foregroundProofs.size()==1024) {
+    if(!found && s.foregroundProofs.used==State::ForegroundProofTable::kMaxEntries) {
         static const auto capped=[](){FlatDomainShaderProof p;p.refusal="foreground-shader-proof-cap";return p;}();
         return capped;
     }
     const uint8_t *v=nullptr,*p=nullptr;size_t vn=0,pn=0;
     const bool vHit=flatProbeShaderLookup('v',vs,&v,&vn);bool pHit=true;if(ps)pHit=flatProbeShaderLookup('p',ps,&p,&pn);
-    auto& entry=s.foregroundProofs[key];entry.proof=flatDomainShaderProof(vs,ps,v,vn,p,pn);entry.attemptedFrame=s.prefix.frame;
-    entry.bytesHit=vHit&&pHit;
-    if(entry.bytesHit){entry.vsData=v;entry.vsLen=vn;entry.psData=p;entry.psLen=pn;}
-    if(entryOut)*entryOut=&entry;
-    return entry.proof;
+    auto* entry=found ? found : s.foregroundProofs.insert(vs,ps);
+    if(!entry) {
+        static const auto capped=[](){FlatDomainShaderProof p;p.refusal="foreground-shader-proof-cap";return p;}();
+        return capped;
+    }
+    entry->proof=flatDomainShaderProof(vs,ps,v,vn,p,pn);entry->attemptedFrame=s.prefix.frame;
+    entry->bytesHit=vHit&&pHit;
+    if(entry->bytesHit){entry->vsData=v;entry->vsLen=vn;entry->psData=p;entry->psLen=pn;}
+    if(entryOut)*entryOut=entry;
+    return entry->proof;
 }
 static const FlatDomainShaderProof& domainShaderProof(State& s,uint64_t vs,uint64_t ps) {
     return domainShaderProofEntry(s,vs,ps,nullptr);
@@ -3237,27 +3298,34 @@ ResourceInfo view(BindSlot slot, uint32_t cache) {
     auto& s = state();
     auto& v = s.views[cache]; const auto generation = bindingGeneration(slot);
     void* identity = bindingGet(slot);
-    if (v.identity != identity || v.generation != generation) {
-        v.identity = identity; v.generation = generation;
-        if (!identity) {
-            v.held.Reset(); v.info = {};
+    if (v.identity == identity && v.generation == generation) {
+        if (!identity) return v.info;
+        if (v.ringIdx < State::kViewRingSlots &&
+            s.viewRing[v.ringIdx].ringGen == v.ringGen &&
+            s.viewRing[v.ringIdx].identity == identity)
+            return v.info;
+    }
+    v.identity = identity; v.generation = generation;
+    if (!identity) {
+        v.ringIdx = 0xFFu; v.ringGen = 0; v.info = {};
+        return v.info;
+    }
+    // A live COM ref in viewRing guarantees the view's address cannot have been recycled,
+    // and a D3D11 view's underlying resource, dimensions, and format are immutable.
+    for (uint32_t i = 0; i < State::kViewRingSlots; ++i) {
+        auto& r = s.viewRing[i];
+        if (r.identity == identity && r.held) {
+            v.ringIdx = static_cast<uint8_t>(i); v.ringGen = r.ringGen; v.info = r.info;
             return v.info;
         }
-        // A live COM ref in viewRing guarantees the view's address cannot have been recycled,
-        // and a D3D11 view's underlying resource, dimensions, and format are immutable.
-        for (uint32_t i = 0; i < State::kViewRingSlots; ++i) {
-            auto& r = s.viewRing[i];
-            if (r.identity == identity && r.held) {
-                v.held = r.held; v.info = r.info;
-                return v.info;
-            }
-        }
-        v.held.Reset(); v.info = {};
-        if (bindingResolve(identity, &v.info)) {
-            v.held = static_cast<IUnknown*>(identity);
-            auto& dst = s.viewRing[s.viewRingNext++ % State::kViewRingSlots];
-            dst.identity = identity; dst.generation = generation; dst.held = v.held; dst.info = v.info;
-        }
+    }
+    v.ringIdx = 0xFFu; v.ringGen = 0; v.info = {};
+    if (bindingResolve(identity, &v.info)) {
+        const uint32_t idx = s.viewRingNext++ % State::kViewRingSlots;
+        const uint32_t gen = ++s.viewRingGen ? s.viewRingGen : ++s.viewRingGen;
+        auto& dst = s.viewRing[idx];
+        dst.identity = identity; dst.ringGen = gen; dst.held = static_cast<IUnknown*>(identity); dst.info = v.info;
+        v.ringIdx = static_cast<uint8_t>(idx); v.ringGen = gen;
     }
     return v.info;
 }
@@ -3850,7 +3918,7 @@ void flatRuntimeResize() {
     s.untrustedSupportedAlternate=false;
     s.untrustedQualification={};s.untrustedQualificationCalled=false;
     s.untrustedQualificationFailed=false;
-    s.unclassifiedPoolUsed=0;s.unclassifiedPoolOverflow=false;
+    s.unclassifiedPoolUsed=0;s.unclassifiedPoolLast=0;s.unclassifiedPoolOverflow=false;
     foregroundProbeActive.store(false,std::memory_order_release);
     foregroundDomainActive.store(false,std::memory_order_release);
     untrustedCoverageActive.store(false,std::memory_order_release);
@@ -3879,8 +3947,8 @@ void flatRuntimeResize() {
     // A counted reference to the back buffer makes the game's ResizeBuffers fail with DXGI_ERROR_INVALID_CALL,
     // and the game retries it every frame (the 2026-10-09 resize loop).
     s.drawPacketOutput.Reset(); s.drawPacketContext.Reset();
-    for (auto& v : s.views) v = View{};
-    for (auto& v : s.viewRing) v = View{};
+    for (auto& v : s.views) v = ViewCache{};
+    for (auto& v : s.viewRing) v = ViewRingEntry{};
     s.viewRingNext = 0;
     for (auto& r : s.colors) r.Reset(); for (auto& r : s.depths) r.Reset();
     for (auto& r : s.uavs) r.Reset();
@@ -5182,7 +5250,7 @@ void flatRuntimePresent(IDXGISwapChain* swap, uint64_t frame, HRESULT hr, UINT f
     s.untrustedSupportedAlternate=false;
     s.untrustedQualification={};s.untrustedQualificationCalled=false;
     s.untrustedQualificationFailed=false;
-    s.unclassifiedPoolUsed=0;s.unclassifiedPoolOverflow=false;
+    s.unclassifiedPoolUsed=0;s.unclassifiedPoolLast=0;s.unclassifiedPoolOverflow=false;
     untrustedCoverageActive.store(false,std::memory_order_release);
     overlaySuffixActive.store(false,std::memory_order_release);
     s.overlayFailureNoted = false;
@@ -5231,7 +5299,7 @@ void flatRuntimePresent(IDXGISwapChain* swap, uint64_t frame, HRESULT hr, UINT f
     s.namedDepth = s.namedConstants = nullptr;s.namedWorldQ=0; s.treated = false;s.frameSourceFree=false;s.frameFirstPersonUnnamed=false;
     for (auto& pr : s.producerRuns) pr.armed = false;
     s.producerRunNext = 0; s.producerRunLast = 0;
-    for (auto& vr : s.viewRing) vr = View{};
+    for (auto& vr : s.viewRing) vr = ViewRingEntry{};
     s.viewRingNext = 0;
     flatHdrBeginFrame(s.hdr, d.Width, d.Height); if (flatOriginCaptureEnabled()) s.passiveScene.reset(); s.hdrTreated = false;
     s.observingQualifiedHandoff = false;
@@ -6075,22 +6143,24 @@ void flatRuntimeMap(ID3D11Resource* res, D3D11_MAP type, void* bytes) {
     if (!owner() || type == D3D11_MAP_READ || state().work == FlatWork::Paused) return;
     flatcpu::Scope lookup(flatcpu::kResource);
     auto& s = state();
-    const bool observeProjection = s.projection && !s.projection->writeRejected(res);
-    const bool trackedProjection = observeProjection && s.projection->containsTracked(res);
+    const int trackedSlot = s.projection ? s.projection->findTrackedSlot(res) : -1;
+    const bool trackedProjection = trackedSlot >= 0;
+    const bool observeProjection = trackedProjection || (s.projection && !s.projection->writeRejected(res));
     const Camera* c = nullptr;
     resourceWritten(state(), res,"flatRuntimeMap",FlatOverlayMutationOp::Written,
                     historyWholeWrite(HistoryWriteEntry::Map),false,true,&c,trackedProjection);
     if (c) state().cameras.setMapped(*c, bytes);
     if (observeProjection) {
-        flatcpu::Scope shadows(flatcpu::kShadows); s.projection->observeMap(res,type,bytes);
+        flatcpu::Scope shadows(flatcpu::kShadows); s.projection->observeMapSlot(trackedSlot,res,type,bytes);
     }
 }
 void flatRuntimeUnmap(ID3D11Resource* res) {
     if (!owner() || state().work == FlatWork::Paused) return;
     flatcpu::Scope lookup(flatcpu::kResource);
-    if (state().projection)
-        state().projection->observeUnmapIfTracked(res,state().prefix.frame,state().prefix.sequence);
-    if (state().cameras.mappedCount()) {
+    auto& s = state();
+    if (s.projection && !s.projection->writeRejected(res))
+        s.projection->observeUnmapIfTracked(res,s.prefix.frame,s.prefix.sequence);
+    if (s.cameras.mappedCount()) {
         if (auto* c = camera(res, false)) {
             if (c->mapped) { capture(*c, c->mapped); if (state().work == FlatWork::Full) cameraWitness(res); }
             state().cameras.setMapped(*c, nullptr);
@@ -6101,8 +6171,9 @@ void flatRuntimeUpdate(ID3D11Resource* res, const void* bytes, const D3D11_BOX* 
     if (!owner() || state().work == FlatWork::Paused) return;
     flatcpu::Scope lookup(flatcpu::kResource);
     auto& s = state();
-    const bool observeProjection = s.projection && !s.projection->writeRejected(res);
-    const bool trackedProjection = observeProjection && s.projection->containsTracked(res);
+    const int trackedSlot = s.projection ? s.projection->findTrackedSlot(res) : -1;
+    const bool trackedProjection = trackedSlot >= 0;
+    const bool observeProjection = trackedProjection || (s.projection && !s.projection->writeRejected(res));
     const Camera* c = nullptr;
     resourceWritten(state(), res,"flatRuntimeUpdate",FlatOverlayMutationOp::Written,
                     flatRuntimeUpdateExtent(0,box),false,true,&c,trackedProjection);
@@ -6110,7 +6181,7 @@ void flatRuntimeUpdate(ID3D11Resource* res, const void* bytes, const D3D11_BOX* 
         if (!box || (box->left == 0 && box->right == c->width)) { capture(*c, bytes); if (state().work == FlatWork::Full) cameraWitness(res); }
     }
     if (observeProjection) { flatcpu::Scope shadows(flatcpu::kShadows);
-        s.projection->observeUpdate(res,bytes,box,s.prefix.frame,s.prefix.sequence); }
+        s.projection->observeUpdateSlot(trackedSlot,res,bytes,box,s.prefix.frame,s.prefix.sequence); }
 }
 
 // The coverage classification's two questions to the context, asked of the binding shadow and of the context only on the
@@ -6519,6 +6590,9 @@ void flatProducerRunRemember(State& s, const FlatRuntimeDraw& d, char kind, uint
     auto& held = s.producerRuns[idx];
     held.armed = true;
     held.supported = d.supported;
+    held.depthSceneExtent = d.key.depth &&
+        (d.poolFamilyVs ||
+         flatContractKind(false, d.key.depth, d.key.depth, d.key.depthWidth, d.key.depthHeight, 26, s.prefix.width, s.prefix.height, false) == kFlatContractScreen);
     held.frame = s.prefix.frame;
     held.kind = kind;
     held.count = count;
@@ -6540,7 +6614,8 @@ void flatProducerRunRemember(State& s, const FlatRuntimeDraw& d, char kind, uint
 void flatProducerServe(State& s, ID3D11DeviceContext* context, FlatRuntimeDraw& d, FlatReduceMemo& reduceMemo,
                        const FlatPairFacts& pair, const FlatOffscreenArgs& offscreenArgs, bool auditing,
                        uint32_t offscreenTargetsBefore, bool offscreenUncertainBefore, char kind, uint32_t count,
-                       uint32_t instances, bool& producer, bool& gameHadTarget6, forward_light::Issue& forwardIssue) {
+                       uint32_t instances, bool& producer, bool& gameHadTarget6, forward_light::Issue& forwardIssue,
+                       int depthSceneExtent = -1) {
     d.knownNotTone = (pair.toneSlot == ~0u);
     d.knownNotB1Unread = !pair.b1Unread;
     const auto& k = d.key;
@@ -6548,9 +6623,9 @@ void flatProducerServe(State& s, ID3D11DeviceContext* context, FlatRuntimeDraw& 
     s.drawPs = k.ps;
     forwardFrame(s);
     forwardDrawWrites(s, context);
-    if (k.color && (s.forwardLight.ledger.livePublications || s.forwardLight.liveAuthorities))
+    if (k.color && !s.forwardLight.lastDrawScannedRtvs && (s.forwardLight.ledger.livePublications || s.forwardLight.liveAuthorities))
         forwardMutation(s, reinterpret_cast<uintptr_t>(k.color), false);
-    forwardIssue = forwardObserveDomain(s, d);
+    forwardIssue = forwardObserveDomain(s, d, depthSceneExtent);
     {
         flatcpu::Scope reduce(flatcpu::kReduce);
         if (!flatRuntimeObserveFast(s.prefix, d, reduceMemo)) {
@@ -6625,7 +6700,8 @@ bool flatProducerContinueEarly(State& s, ID3D11DeviceContext* context, const Fla
         outSupported = held.supported;
         const FlatPairFacts& pair = s.pairFacts.get(a.vs, a.ps, runtimeFlatProfile());
         flatProducerServe(s, context, d, held.reduceMemo, pair, offscreenArgs, auditing, offscreenTargetsBefore,
-                          offscreenUncertainBefore, kind, count, instances, producer, gameHadTarget6, forwardIssue);
+                          offscreenUncertainBefore, kind, count, instances, producer, gameHadTarget6, forwardIssue,
+                          held.depthSceneExtent ? 1 : 0);
         return true;
     }
     return false;
@@ -6644,7 +6720,8 @@ bool flatProducerContinue(State& s, ID3D11DeviceContext* context, FlatRuntimeDra
     if (d.key.camera) d.key.camera = d.camera;   // the saved pointer addressed the previous draw's stack array
     outSupported = held.supported;
     flatProducerServe(s, context, d, held.reduceMemo, pair, offscreenArgs, auditing, offscreenTargetsBefore,
-                      offscreenUncertainBefore, kind, count, instances, producer, gameHadTarget6, forwardIssue);
+                      offscreenUncertainBefore, kind, count, instances, producer, gameHadTarget6, forwardIssue,
+                      held.depthSceneExtent ? 1 : 0);
     return true;
 }
 }  // namespace
@@ -6823,7 +6900,6 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     s.drawVs = k.vs; s.drawPs = k.ps;
     k.b1 = bindingGet(BindSlot::VsCb1); k.viewportCount = s.viewportCount;
     static_assert(sizeof(k.viewport) == sizeof(D3D11_VIEWPORT), "viewport layout"); std::memcpy(k.viewport, &s.viewport, sizeof(k.viewport));
-    bool cameraKept = false;
     {
         // The camera rows the buffer bound at b1 holds for this frame. The table keeps its last answer and serves
         // it to every draw until the binding, the frame or the table changes (flat_camera_table.h: on foot about
@@ -6835,7 +6911,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
         if (!kept) {
             flatcpu::Scope rows(flatcpu::kCameraRows);   // camera table lookup, rows copy and hash: a fresh lookup
             kept = &s.cameras.refresh(k.b1, b1Binding, s.prefix.frame);
-        } else cameraKept = true;
+        }
         if (kept->have) { std::memcpy(d.camera, kept->rows, sizeof(d.camera)); k.camera = d.camera; k.cameraHash = kept->hash; d.cameraHashTrusted = true; k.writeEpoch = kept->epoch; k.writeSeq = kept->sequence; }
     }
     if(s.drawPackets.armed()) {
@@ -6869,10 +6945,12 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
     // Motion-keyed draws defer the flush until continuesRun/motionOnlyRun is decided so NPC/suit/hair/weapon draws
     // stay inside the lazy substitution run instead of flushing and rebinding MRT6+blend+PS on every draw.
     if (!d.supported && !pairFact.motionKeyed) flatRuntimeSubstitution(context, FlatSubstEvent::kOtherDraw);
-    k.kind = flatContractKind(d.supported, k.color, k.depth, k.width, k.height, k.format, s.prefix.width, s.prefix.height, k.color == s.prefix.output);
     // FP16 image intermediates use the same scene-size predicate; their
     // producer admission remains separate from the format-23/26 motion source.
     const bool sceneExtent = flatContractKind(false, k.color, k.depth, k.width, k.height, k.format==9?26:k.format, s.prefix.width, s.prefix.height, false) == kFlatContractScreen;
+    k.kind = (k.color && k.color == s.prefix.output) ? kFlatContractOutput :
+             (d.supported && k.color && k.depth) ? kFlatContractPool :
+             (sceneExtent && k.format != 9) ? kFlatContractScreen : kFlatContractNone;
     const bool tone = pairFact.toneSlot != ~0u;
     const bool copy = pairFact.copyPair && k.color == s.prefix.output;
     if(!copy && s.drawCapture.active()) {
@@ -6898,7 +6976,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
         flatRuntimeMarkUncertain(s.prefix,FlatRuntimeUncertainCause::ForeignWork,k.color,k.depth,k.vs,k.ps);
         if(overlayOpen(s)) overlayFail(s,"overlay-foreign-work");
     }
-    if (cameraKept && flatProducerContinue(s, context, d, pairFact, offscreenArgs, auditing, offscreenTargetsBefore,
+    if (k.camera && flatProducerContinue(s, context, d, pairFact, offscreenArgs, auditing, offscreenTargetsBefore,
                                      offscreenUncertainBefore, kind, count, instances,
                                      producer, gameHadTarget6, forwardIssue, continuedSupported)) {
         splitContinued = continuedSupported;
@@ -7300,7 +7378,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
        k.color && k.depth) {
         bool inserted=false;
         auto* observed=flatUntrustedObserveCamera(s.unclassifiedPool,64,
-            s.unclassifiedPoolUsed,k.depth,k.camera,&inserted);
+            s.unclassifiedPoolUsed,k.depth,k.camera,&inserted,k.cameraHash,&s.unclassifiedPoolLast);
         if(!observed) {
             if(!s.unclassifiedPoolOverflow) {
                 auto& entry=s.unclassifiedOverflowFirst;
@@ -7744,11 +7822,18 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
             flatStarGlowNoteNoBloom();   // the trigger is not the bloom chain's first level: the game's Bloom is off, or the chain is another
         }
     }
+    uint32_t sceneRw = 0, sceneRh = 0, sceneOw = 0, sceneOh = 0;
+    bool haveSceneSizes = false;
+    const auto ensureSceneSizes = [&] {
+        if (!haveSceneSizes) {
+            flatRuntimeSceneSizes(&sceneRw, &sceneRh, &sceneOw, &sceneOh);
+            haveSceneSizes = true;
+        }
+    };
     // A map's canvas composite into the HDR target: the on-foot maps' only sign (Status.json has no GuiFocus there). Noted whatever
     // the UI layer does with the draw, and with fix.ui_quality off, since the temporal AA answer does not depend on the layer.
     if (flatUiMapCanvasPair(k.vs, k.ps) && !copy) {
-        uint32_t sceneRw = 0, sceneRh = 0, sceneOw = 0, sceneOh = 0;
-        flatRuntimeSceneSizes(&sceneRw, &sceneRh, &sceneOw, &sceneOh);
+        ensureSceneSizes();
         if (flatUiTargetClass(k.color && k.color == s.prefix.output, k.width, k.height, k.format,
                               s.prefix.width, s.prefix.height, sceneRw, sceneRh) == FlatUiTarget::kHdr)
             flatRuntimeNoteMapCanvasDraw(s.prefix.frame);
@@ -7767,12 +7852,11 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
         if (copy) {
             uiComposite = true;
         } else {
-            uint32_t sceneRw = 0, sceneRh = 0, sceneOw = 0, sceneOh = 0;
-            flatRuntimeSceneSizes(&sceneRw, &sceneRh, &sceneOw, &sceneOh);
             // A pair the family rule cannot name for any (map open, HDR target) is never asked: flatUiLayerDecide would return kNotAsked at its
             // family test, before any counter or log (flat_pair_facts.h; pinned by the wiring scan), so its inputs are not gathered for it.
             // The legacy canopy is the one runtime-gated name: the memo holds the pair, the legacy look is live or not (visual.cockpit_glass), so with `odyssey` the draw never reaches the layer.
             if (pairFact.uiMayAsk || (pairFact.legacyGlassPair && cockpitGlassLegacyLive())) {
+            ensureSceneSizes();
             FlatUiLayerDraw ui;
             ui.frame = s.prefix.frame; ui.vs = k.vs; ui.ps = k.ps; ui.color = k.color; ui.width = k.width; ui.height = k.height;
             ui.format = k.format;
@@ -7803,6 +7887,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
             // The registry's tone pass, the map or scanner tonemap, or the physically verified E894 and EDHM 0D43 LDR-source writers.
             // The E894 and 0D43 pairs remain UI-only: they do not enter the global tone registry or mono HDR selector.
             else if (tone || pairFact.mapToneSlot != ~0u || pairFact.sourceTone) {
+                ensureSceneSizes();
                 const char* route = routeSoFar();
                 if (pairFact.sourceTone) {
                     if (trailDraw) flatUiTrailNoteBranch(s.prefix.frame, FlatUiTrailBranch::kNamed);
@@ -7833,6 +7918,7 @@ FlatRuntimeDrawScope::FlatRuntimeDrawScope(ID3D11DeviceContext* context, uint32_
             // that passes the full physical shape grants proof as a named pair does (Sean, 2026-10-15: a new EDHM version or settings
             // tier must not need a named pair). Anything else is the probe's near miss and VR's structural admission, as before.
             else if (count == 3 && instances == 1 && (kind == 'D' || kind == 'N')) {
+                ensureSceneSizes();
                 bool shapeAdmitted = false;
                 if (flatUiLayerShapeToneCandidate(ctx, s.prefix.frame, sceneRw, sceneRh, k.vs, k.ps, k.color, k.width, k.height,
                                                   startInstance, routeSoFar(), shapeAdmitted)) {

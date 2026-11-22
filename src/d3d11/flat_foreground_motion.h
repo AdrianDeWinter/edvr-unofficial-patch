@@ -321,20 +321,27 @@ public:
         if(d.capture.priorRecords>d.capture.candidateCount)++stats_.windowed;
         ctx->RSGetState(&d.raster);UINT n=1;ctx->RSGetViewports(&n,&d.viewport);
         d.scissorCount=16;ctx->RSGetScissorRects(&d.scissorCount,d.scissors.data());
-        for(const auto& old:previous_) {
-            if(!d.identityKnown || !old.identityKnown || !samePool(d.capture,old.capture) ||
-               d.inputs.camera[3][2]!=old.inputs.camera[3][2] ||
-               (inputs.gpuIdentity && !old.inputs.gpuIdentity))continue;
-            if(!inputs.gpuIdentity && !sameIdentity(d.inputs.identity,old.inputs.identity))continue;
-            for(unsigned i=0;i<d.capture.candidateCount;++i)if(d.capture.previousPositions[i].Get()==old.capture.currentPositions.Get()) {
-                if(inputs.gpuIdentity) {
-                    if(d.priorCount<d.priors.size()) {
-                        auto& prior=d.priors[d.priorCount++];prior.positions=d.capture.previousPositions[i];
-                        prior.identity=d.capture.previousIdentity[i];
-                        prior.phaseX=old.inputs.phaseX;prior.phaseY=old.inputs.phaseY;
-                    }
-                } else if(!d.oldPositions){d.oldPositions=d.capture.previousPositions[i];d.oldIdentity=d.capture.previousIdentity[i];d.oldInputs=old.inputs;}
-                else if(!equivalent(d.oldInputs,old.inputs)){d.ambiguous=true;fail("foreground-ambiguous-prior-inputs");}
+        if(d.identityKnown && d.capture.candidateCount) {
+            for(const auto& old:previous_) {
+                if(!old.identityKnown || d.inputs.camera[3][2]!=old.inputs.camera[3][2] ||
+                   (inputs.gpuIdentity && !old.inputs.gpuIdentity))continue;
+                unsigned matchIdx=~0u;
+                for(unsigned i=0;i<d.capture.candidateCount;++i) {
+                    if(d.capture.previousPositions[i].Get()==old.capture.currentPositions.Get()){matchIdx=i;break;}
+                }
+                if(matchIdx==~0u)continue;
+                if(!samePool(d.capture,old.capture))continue;
+                if(!inputs.gpuIdentity && !sameIdentity(d.inputs.identity,old.inputs.identity))continue;
+                for(unsigned i=matchIdx;i<d.capture.candidateCount;++i)if(d.capture.previousPositions[i].Get()==old.capture.currentPositions.Get()) {
+                    if(inputs.gpuIdentity) {
+                        if(d.priorCount<d.priors.size()) {
+                            auto& prior=d.priors[d.priorCount++];prior.positions=d.capture.previousPositions[i];
+                            prior.identity=d.capture.previousIdentity[i];
+                            prior.phaseX=old.inputs.phaseX;prior.phaseY=old.inputs.phaseY;
+                        }
+                    } else if(!d.oldPositions){d.oldPositions=d.capture.previousPositions[i];d.oldIdentity=d.capture.previousIdentity[i];d.oldInputs=old.inputs;}
+                    else if(!equivalent(d.oldInputs,old.inputs)){d.ambiguous=true;fail("foreground-ambiguous-prior-inputs");}
+                }
             }
         }
         tally(d);
@@ -493,6 +500,7 @@ private:
         return a.slot==b.slot && a.skeleton==b.skeleton && a.allocation==b.allocation;
     }
     static bool samePool(const AnimatedVertexHistory::Capture& a,const AnimatedVertexHistory::Capture& b) {
+        if(a.pool && a.pool.Get()==b.pool.Get())return true;
         Ptr<ID3D11Resource> x,y;a.pool->GetResource(&x);b.pool->GetResource(&y);return x==y;
     }
     // Files a submitted draw under what its history found (CaptureStats). A draw whose candidates reached no prior is filed by the first test

@@ -109,7 +109,7 @@ bool FlatProjectionRuntime::refuse(FlatProjectionRuntimeRefusal reason) {
                 failure_.mapped = entry->mapped; failure_.pending = entry->pending;
                 failure_.promoted = entry->promoted; failure_.privateReady = entry->privateReady;
                 FlatProjectionShadowView view{};
-                failure_.shadowPresent = shadows_.lookup(r.original, entry->generation, view);
+                failure_.shadowPresent = shadows_.lookup(r.original, entry->generation, view, entry->shadowSlot);
                 if (failure_.shadowPresent) {
                     failure_.shadowWriteGeneration = view.writeGeneration;
                     failure_.shadowBankEpoch = view.bankEpoch;
@@ -161,10 +161,11 @@ void FlatProjectionRuntime::reset() {
         entry.buffer.Reset(); entry.generation = 0; entry.width = 0;
         entry.mapped = entry.promoted = entry.privateReady = entry.pending = false;
         entry.planRefs = 0;
+        entry.lastUseSerial = 0; entry.shadowSlot = -1;
         entry.mutationSerial = 1; entry.mutationOverflow = false;
         entry.mapBytes = nullptr;
     }
-    shadows_.reset(); context_.Reset(); owner_ = 0; nextGeneration_ = 1;
+    shadows_.reset(); context_.Reset(); owner_ = 0; nextGeneration_ = 1; nextTrackedUse_ = 1;
     std::memset(findIndex_, kFindEmpty, sizeof(findIndex_));
     findIndexReady_ = true;
     rejectGen_.fetch_add(1, std::memory_order_relaxed);
@@ -260,7 +261,7 @@ void FlatProjectionRuntime::pollColdReadbacks() {
             ++status_.coldFailed; clearCold(item); continue;
         }
         const bool captured = shadows_.captureFullWrite(entry->buffer.Get(), entry->generation,
-                                                          mapped.pData, item.width);
+                                                          mapped.pData, item.width, entry->shadowSlot);
         context_->Unmap(item.staging.Get(), 0);
         if (captured) ++status_.coldCompleted;
         else ++status_.coldFailed;
@@ -286,40 +287,57 @@ void FlatProjectionRuntime::rebuildFindIndex() noexcept {
         if (tracked_[s].buffer) insertFindIndex(s);
     }
 }
-FlatProjectionRuntime::Tracked* FlatProjectionRuntime::find(ID3D11Resource* resource) {
-    if (!resource) return nullptr;
+int FlatProjectionRuntime::findTrackedSlot(ID3D11Resource* resource) noexcept {
+    if (!resource) return -1;
     if (!findIndexReady_) rebuildFindIndex();
     uint32_t i = rejectIndex(resource) & (kFindSlots - 1);
     for (uint32_t n = 0; n < kFindSlots; ++n) {
         const uint8_t slot = findIndex_[i];
-        if (slot == kFindEmpty) return nullptr;
-        if (tracked_[slot].buffer.Get() == resource) return &tracked_[slot];
+        if (slot == kFindEmpty) return -1;
+        if (tracked_[slot].buffer.Get() == resource) return static_cast<int>(slot);
         i = (i + 1) & (kFindSlots - 1);
     }
-    return nullptr;
+    return -1;
+}
+FlatProjectionRuntime::Tracked* FlatProjectionRuntime::find(ID3D11Resource* resource) {
+    const int slot = findTrackedSlot(resource);
+    return slot >= 0 ? &tracked_[slot] : nullptr;
 }
 void FlatProjectionRuntime::discard(Tracked& entry) {
-    if (entry.buffer) shadows_.releaseBuffer(entry.buffer.Get(), entry.generation);
+    if (entry.buffer) shadows_.releaseBuffer(entry.buffer.Get(), entry.generation, entry.shadowSlot);
     entry.privateBuffer.initialize(nullptr, nullptr, 0);
     entry.buffer.Reset(); entry.generation = 0; entry.width = 0; entry.dynamicWrite = false;
     entry.mapped = entry.promoted = entry.privateReady = entry.pending = false;
+    entry.lastUseSerial = 0; entry.shadowSlot = -1;
     entry.mutationSerial = 1; entry.mutationOverflow = false;
     entry.mapBytes = nullptr;
     rebuildFindIndex();
 }
 FlatProjectionRuntime::Tracked* FlatProjectionRuntime::track(ID3D11Resource* resource) {
-    if (Tracked* known = find(resource)) return known;
+    if (Tracked* known = find(resource)) {
+        known->lastUseSerial = nextTrackedUse_++;
+        return known;
+    }
     if (!resource || !shadows_.ready()) return nullptr;
     Microsoft::WRL::ComPtr<ID3D11Buffer> buffer;
     if (FAILED(resource->QueryInterface(IID_PPV_ARGS(buffer.GetAddressOf())))) return nullptr;
     D3D11_BUFFER_DESC desc{}; buffer->GetDesc(&desc);
     if (desc.BindFlags != D3D11_BIND_CONSTANT_BUFFER || desc.ByteWidth < 16 ||
         desc.ByteWidth > 65536 || desc.ByteWidth % 16) return nullptr;
+    auto pickEvict = [&]() -> Tracked* {
+        Tracked* victim = nullptr;
+        for (auto& entry : tracked_) {
+            if (!entry.promoted && !entry.mapped && !entry.pending) {
+                if (!victim || entry.lastUseSerial < victim->lastUseSerial) victim = &entry;
+            }
+        }
+        return victim;
+    };
     Tracked* free = nullptr;
     for (auto& entry : tracked_) if (!entry.buffer) { free = &entry; break; }
     // Never evict a named/preflighted buffer or one in a Map transaction.
-    if (!free) for (auto& entry : tracked_) if (!entry.promoted && !entry.mapped && !entry.pending) {
-        free = &entry; discard(entry); break;
+    if (!free) {
+        if (Tracked* victim = pickEvict()) { free = victim; discard(*victim); }
     }
     // Buffer pressure (gate-2 review, inherited finding 2): retire plans
     // before refusing capacity, so an available initial write is never lost
@@ -329,22 +347,25 @@ FlatProjectionRuntime::Tracked* FlatProjectionRuntime::track(ID3D11Resource* res
     // bounded by the plan bank size.
     for (uint32_t attempts = 0; !free && attempts < kPlans && retirePlan(); ++attempts) {
         for (auto& entry : tracked_) if (!entry.buffer) { free = &entry; break; }
-        if (!free) for (auto& entry : tracked_) if (!entry.promoted && !entry.mapped && !entry.pending) {
-            free = &entry; discard(entry); break;
+        if (!free) {
+            if (Tracked* victim = pickEvict()) { free = victim; discard(*victim); }
         }
     }
     if (!free || nextGeneration_ == UINT64_MAX) {
         refuse(FlatProjectionRuntimeRefusal::NoCapacity); return nullptr;
     }
     free->generation = nextGeneration_++;
-    if (!shadows_.registerBuffer(buffer.Get(), free->generation, desc.ByteWidth)) {
+    int shadowSlot = -1;
+    if (!shadows_.registerBuffer(buffer.Get(), free->generation, desc.ByteWidth, &shadowSlot)) {
         free->generation = 0; refuse(FlatProjectionRuntimeRefusal::NoCapacity); return nullptr;
     }
+    free->shadowSlot = static_cast<int16_t>(shadowSlot);
     free->buffer = buffer; free->width = desc.ByteWidth;
     free->dynamicWrite = desc.Usage == D3D11_USAGE_DYNAMIC &&
         (desc.CPUAccessFlags & D3D11_CPU_ACCESS_WRITE) != 0;
     if (bounceRegistered_) bounceRegistered_(desc);
     free->mutationSerial = 1; free->mutationOverflow = false;
+    free->lastUseSerial = nextTrackedUse_++;
     insertFindIndex(static_cast<uint32_t>(free - tracked_));
     return free;
 }
@@ -355,10 +376,10 @@ bool FlatProjectionRuntime::observeCreateBuffer(ID3D11Buffer* buffer, const void
     mutate(*entry);
     entry->privateBuffer.invalidate();
     if (!initialData) {
-        shadows_.invalidate(buffer, entry->generation); ++status_.invalidations;
+        shadows_.invalidate(buffer, entry->generation, entry->shadowSlot); ++status_.invalidations;
         return false;
     }
-    if (!shadows_.captureFullWrite(buffer, entry->generation, initialData, entry->width))
+    if (!shadows_.captureFullWrite(buffer, entry->generation, initialData, entry->width, entry->shadowSlot))
         return refuse(FlatProjectionRuntimeRefusal::MissingFullWrite);
     ++status_.initialWrites; ++status_.fullWrites;
     return true;
@@ -416,10 +437,7 @@ void FlatProjectionRuntime::rememberReject(ID3D11Resource* resource) noexcept {
         i = (i + 1) & (kRejectSlots - 1);
     }
 }
-FlatProjectionRuntime::Tracked* FlatProjectionRuntime::trackOrReject(ID3D11Resource* resource) {
-    if (!resource) return nullptr;
-    if (Tracked* known = find(resource)) return known;
-    if (writeRejected(resource)) return nullptr;
+FlatProjectionRuntime::Tracked* FlatProjectionRuntime::trackOrRejectMiss(ID3D11Resource* resource) {
     const uint64_t capacityBefore = status_.refusals[static_cast<uint32_t>(FlatProjectionRuntimeRefusal::NoCapacity)];
     Tracked* entry = track(resource);
     if (!entry && shadows_.ready() &&
@@ -427,39 +445,60 @@ FlatProjectionRuntime::Tracked* FlatProjectionRuntime::trackOrReject(ID3D11Resou
         rememberReject(resource);
     return entry;
 }
+FlatProjectionRuntime::Tracked* FlatProjectionRuntime::trackOrReject(ID3D11Resource* resource) {
+    if (!resource) return nullptr;
+    if (Tracked* known = find(resource)) return known;
+    if (writeRejected(resource)) return nullptr;
+    return trackOrRejectMiss(resource);
+}
+void FlatProjectionRuntime::observeMapEntry(Tracked& entry, D3D11_MAP type, const void* bytes) {
+    entry.lastUseSerial = nextTrackedUse_++;
+    if (bounceMapped_) bounceMapped_(type);
+    mutate(entry);
+    entry.privateBuffer.invalidate();
+    if (!bytes || !shadows_.beginMap(entry.buffer.Get(), entry.generation, entry.shadowSlot)) {
+        shadows_.invalidate(entry.buffer.Get(), entry.generation, entry.shadowSlot);
+        ++status_.invalidations; entry.mapped = false; entry.mapBytes = nullptr;
+        return;
+    }
+    entry.mapped = true; entry.mapBytes = bytes;
+}
 void FlatProjectionRuntime::observeMap(ID3D11Resource* resource, D3D11_MAP type, const void* bytes) {
     if (!owner() || type == D3D11_MAP_READ) return;
     Tracked* entry = trackOrReject(resource);
     if (!entry) return;
-    if (bounceMapped_) bounceMapped_(type);
-    mutate(*entry);
-    entry->privateBuffer.invalidate();
-    if (!bytes || !shadows_.beginMap(entry->buffer.Get(), entry->generation)) {
-        shadows_.invalidate(entry->buffer.Get(), entry->generation);
-        ++status_.invalidations; entry->mapped = false; entry->mapBytes = nullptr;
-        return;
-    }
-    entry->mapped = true; entry->mapBytes = bytes;
+    observeMapEntry(*entry, type, bytes);
+}
+void FlatProjectionRuntime::observeMapSlot(int slot, ID3D11Resource* resource, D3D11_MAP type, const void* bytes) {
+    if (!owner() || type == D3D11_MAP_READ) return;
+    Tracked* entry = (slot >= 0 && static_cast<uint32_t>(slot) < kBuffers &&
+                      tracked_[slot].buffer.Get() == resource)
+        ? &tracked_[slot]
+        : (resource ? trackOrRejectMiss(resource) : nullptr);
+    if (!entry) return;
+    observeMapEntry(*entry, type, bytes);
 }
 FlatProjectionBounceSource FlatProjectionRuntime::bounceSource(ID3D11Resource* resource) {
     FlatProjectionBounceSource result{};
     if (!owner()) return result;
     Tracked* entry = trackOrReject(resource);
     if (!entry || !entry->dynamicWrite) return result;
+    entry->lastUseSerial = nextTrackedUse_++;
     result.width = entry->width;
     result.eligible = true;
     FlatProjectionShadowView view{};
-    result.seedValid = shadows_.lookup(entry->buffer.Get(), entry->generation, view);
+    result.seedValid = shadows_.lookup(entry->buffer.Get(), entry->generation, view, entry->shadowSlot);
     if (result.seedValid) result.seed = view.bytes;
     return result;
 }
 void FlatProjectionRuntime::observeUnmapEntry(Tracked& entry, uint64_t frame, uint32_t sequence) {
+    entry.lastUseSerial = nextTrackedUse_++;
     if (!entry.mapped) return;
     const bool sample = bounceSampleWants_ && bounceSampleWants_(entry.width);
     LARGE_INTEGER before{}, after{};
     if (sample) QueryPerformanceCounter(&before);
     const bool complete = shadows_.finishMapFull(entry.buffer.Get(), entry.generation,
-                                                   entry.mapBytes, entry.width);
+                                                   entry.mapBytes, entry.width, entry.shadowSlot);
     if (sample && complete) {
         QueryPerformanceCounter(&after);
         bounceSampleRecord_(entry.width,
@@ -487,23 +526,38 @@ bool FlatProjectionRuntime::observeUnmapIfTracked(ID3D11Resource* resource, uint
     observeUnmapEntry(*entry, frame, sequence);
     return true;
 }
+void FlatProjectionRuntime::observeUpdateEntry(Tracked& entry, const void* bytes,
+                                               const D3D11_BOX* box, uint64_t frame, uint32_t sequence) {
+    entry.lastUseSerial = nextTrackedUse_++;
+    mutate(entry);
+    entry.privateBuffer.invalidate();
+    if (!bytes || box || entry.mapped) {
+        shadows_.invalidate(entry.buffer.Get(), entry.generation, entry.shadowSlot);
+        entry.mapped = false; entry.mapBytes = nullptr;
+        ++status_.invalidations;
+        return;
+    }
+    if (shadows_.captureFullWrite(entry.buffer.Get(), entry.generation, bytes, entry.width, entry.shadowSlot)) {
+        ++status_.fullWrites;entry.writeFrame=frame;entry.writeSequence=sequence;
+    }
+    else refuse(FlatProjectionRuntimeRefusal::MissingFullWrite);
+}
 void FlatProjectionRuntime::observeUpdate(ID3D11Resource* resource, const void* bytes,
                                           const D3D11_BOX* box, uint64_t frame, uint32_t sequence) {
     if (!owner()) return;
     Tracked* entry = trackOrReject(resource);
     if (!entry) return;
-    mutate(*entry);
-    entry->privateBuffer.invalidate();
-    if (!bytes || box || entry->mapped) {
-        shadows_.invalidate(entry->buffer.Get(), entry->generation);
-        entry->mapped = false; entry->mapBytes = nullptr;
-        ++status_.invalidations;
-        return;
-    }
-    if (shadows_.captureFullWrite(entry->buffer.Get(), entry->generation, bytes, entry->width)) {
-        ++status_.fullWrites;entry->writeFrame=frame;entry->writeSequence=sequence;
-    }
-    else refuse(FlatProjectionRuntimeRefusal::MissingFullWrite);
+    observeUpdateEntry(*entry, bytes, box, frame, sequence);
+}
+void FlatProjectionRuntime::observeUpdateSlot(int slot, ID3D11Resource* resource, const void* bytes,
+                                              const D3D11_BOX* box, uint64_t frame, uint32_t sequence) {
+    if (!owner()) return;
+    Tracked* entry = (slot >= 0 && static_cast<uint32_t>(slot) < kBuffers &&
+                      tracked_[slot].buffer.Get() == resource)
+        ? &tracked_[slot]
+        : (resource ? trackOrRejectMiss(resource) : nullptr);
+    if (!entry) return;
+    observeUpdateEntry(*entry, bytes, box, frame, sequence);
 }
 void FlatProjectionRuntime::invalidate(ID3D11Resource* resource) {
     if (!owner()) return;
@@ -511,7 +565,7 @@ void FlatProjectionRuntime::invalidate(ID3D11Resource* resource) {
     if (!entry) return;
     mutate(*entry);
     entry->privateBuffer.invalidate();
-    shadows_.invalidate(entry->buffer.Get(), entry->generation);
+    shadows_.invalidate(entry->buffer.Get(), entry->generation, entry->shadowSlot);
     entry->mapped = false; entry->mapBytes = nullptr;
     ++status_.invalidations;
 }
@@ -520,7 +574,7 @@ void FlatProjectionRuntime::invalidateAll() {
     for (auto& entry : tracked_) if (entry.buffer) {
         mutate(entry);
         entry.privateBuffer.invalidate();
-        shadows_.invalidate(entry.buffer.Get(), entry.generation);
+        shadows_.invalidate(entry.buffer.Get(), entry.generation, entry.shadowSlot);
         entry.mapped = false; entry.mapBytes = nullptr;
         ++status_.invalidations;
     }
@@ -562,8 +616,9 @@ bool FlatProjectionRuntime::copyConstants(ID3D11Buffer* buffer, uint32_t offset,
         }
         return fail(FlatProjectionCopyFailureKind::UntrackedNoPrivateCopy);
     }
+    entry->lastUseSerial = nextTrackedUse_++;
     FlatProjectionShadowView view{};
-    if (!shadows_.lookup(buffer, entry->generation, view))
+    if (!shadows_.lookup(buffer, entry->generation, view, entry->shadowSlot))
         return fail(failure?flatProjectionCopyShadowFailure(shadows_.lookupState(buffer, entry->generation)):
             FlatProjectionCopyFailureKind::ShadowInvalid, entry);
     if (offset > view.width || count > view.width - offset)
@@ -574,14 +629,15 @@ bool FlatProjectionRuntime::copyConstants(ID3D11Buffer* buffer, uint32_t offset,
 FlatProjectionShadowMetadata FlatProjectionRuntime::constantsMetadata(ID3D11Buffer* buffer) {
     FlatProjectionShadowMetadata result{};
     if (!owner()) return result;
-    const Tracked* entry = find(buffer);
+    Tracked* entry = find(buffer);
     if (!entry) return result;
+    entry->lastUseSerial = nextTrackedUse_++;
     result.tracked = true; result.mapped = entry->mapped; result.pending = entry->pending;
     result.width = entry->width; result.generation = entry->generation;
     result.mutationSerial = entry->mutationSerial;
     result.writeFrame = entry->writeFrame; result.writeSequence = entry->writeSequence;
     FlatProjectionShadowView view{};
-    result.shadowPresent = shadows_.lookup(buffer, entry->generation, view);
+    result.shadowPresent = shadows_.lookup(buffer, entry->generation, view, entry->shadowSlot);
     if (result.shadowPresent) {
         result.writeGeneration = view.writeGeneration; result.bankEpoch = view.bankEpoch;
     }
@@ -591,15 +647,16 @@ FlatProjectionTrackedSnapshot FlatProjectionRuntime::snapshotTrackedConstants(
     ID3D11Buffer* buffer, uint32_t offset, uint32_t count, void* out, bool eligible) {
     FlatProjectionTrackedSnapshot result{};
     if (!owner()) return result;
-    const Tracked* entry = find(buffer);
+    Tracked* entry = find(buffer);
     if (!entry) return result;
+    entry->lastUseSerial = nextTrackedUse_++;
     auto& metadata = result.metadata;
     metadata.tracked = true; metadata.mapped = entry->mapped; metadata.pending = entry->pending;
     metadata.width = entry->width; metadata.generation = entry->generation;
     metadata.mutationSerial = entry->mutationSerial;
     metadata.writeFrame = entry->writeFrame; metadata.writeSequence = entry->writeSequence;
     FlatProjectionShadowView view{};
-    metadata.shadowPresent = shadows_.lookup(buffer, entry->generation, view);
+    metadata.shadowPresent = shadows_.lookup(buffer, entry->generation, view, entry->shadowSlot);
     if (metadata.shadowPresent) {
         metadata.writeGeneration = view.writeGeneration; metadata.bankEpoch = view.bankEpoch;
     }
@@ -645,7 +702,7 @@ bool FlatProjectionRuntime::planStale(const CachedPlan& slot) {
         const Tracked* entry = find(slot.requests[i].original);
         if (!entry || entry->generation != slot.generations[i]) return true;
         FlatProjectionShadowView view{};
-        if (!shadows_.lookup(slot.requests[i].original, entry->generation, view)) return true;
+        if (!shadows_.lookup(slot.requests[i].original, entry->generation, view, entry->shadowSlot)) return true;
     }
     return false;
 }
@@ -791,10 +848,11 @@ bool FlatProjectionRuntime::preflight(const FlatProjectionRuntimeRequest* reques
             if (!entry && failure_.valid) return false;
         }
         if (!entry) return refuseAt(FlatProjectionRuntimeRefusal::UnknownBuffer, "untracked-live-buffer", i);
+        entry->lastUseSerial = nextTrackedUse_++;
         if(r.wholeBuffer && (entry->width%16 || r.constantCount!=entry->width/16))
             return refuseAt(FlatProjectionRuntimeRefusal::UnsupportedRange,"whole-buffer-size",i);
         FlatProjectionShadowView view{};
-        if (!shadows_.lookup(r.original, entry->generation, view)) {
+        if (!shadows_.lookup(r.original, entry->generation, view, entry->shadowSlot)) {
             if (allowAllocation) queueCold(*entry);
             return refuseAt(FlatProjectionRuntimeRefusal::MissingFullWrite, "shadow-missing-full-write", i);
         }
@@ -876,8 +934,9 @@ const FlatProjectionBindingPlan* FlatProjectionRuntime::prepare(
         const auto& r = requests[i];
         Tracked* entry = find(r.original);
         if (!entry) return fail(FlatProjectionRuntimeRefusal::UnknownBuffer, "prepare-untracked-buffer", i);
+        entry->lastUseSerial = nextTrackedUse_++;
         FlatProjectionShadowView view{};
-        if (!shadows_.lookup(r.original, entry->generation, view)) {
+        if (!shadows_.lookup(r.original, entry->generation, view, entry->shadowSlot)) {
             return fail(FlatProjectionRuntimeRefusal::MissingFullWrite, "prepare-shadow-missing-full-write", i);
         }
         if (!lightingMatchesShadow(r, view)) {
