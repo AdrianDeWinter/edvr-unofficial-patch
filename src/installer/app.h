@@ -34,14 +34,14 @@ struct AppArgs {
     bool         help = false;
     bool         badArg = false;
     std::wstring badArgText;
+    std::wstring userDataRoot;     // --user-data-root <dir>: the unelevated user's %LOCALAPPDATA%\EDUP, passed to the elevated copy
 
 #ifdef EDUP_LAUNCHER
     // The launcher's own flags (docs\design-launcher-2026-11-07.md). The installer's target does not
     // define EDUP_LAUNCHER, so it neither has these fields nor accepts these flags.
     std::wstring payloadDir;       // --payload <dir>: install from an unpacked ed-up-<ver>.zip
     std::wstring dataRoot;         // --data-root <dir>: every launcher folder under here, nothing registered
-    std::wstring userDataRoot;     // --user-data-root <dir>: the unelevated user's %LOCALAPPDATA%\EDUP, passed to the elevated copy
-    std::wstring planFile;         // --apply-plan <file>: the elevated copy's whole job
+    std::wstring planFile;        // --apply-plan <file>: the elevated copy's whole job
     std::string  channel;          // --channel stable|rc, for this run
     bool         checkUpdate = false;  // --check-update
     bool         update = false;       // --update

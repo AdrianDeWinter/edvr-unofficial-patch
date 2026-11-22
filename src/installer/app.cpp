@@ -183,13 +183,13 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             if (a.action == AppArgs::Act::None) a.action = AppArgs::Act::Uninstall;
         } else if (arg == L"--autorun")
             a.autorun = true;
+        else if (arg == L"--user-data-root")   // the installer's elevated relaunch passes it (relaunchElevated)
+            next(&a.userDataRoot);
 #ifdef EDUP_LAUNCHER
         else if (arg == L"--payload")
             next(&a.payloadDir);
         else if (arg == L"--data-root")
             next(&a.dataRoot);
-        else if (arg == L"--user-data-root")
-            next(&a.userDataRoot);
         else if (arg == L"--apply-plan")
             next(&a.planFile);
         else if (arg == L"--channel") {
