@@ -22,12 +22,17 @@ namespace {
 
 const wchar_t* kClassName = L"EdvrSettingsList";
 const int kEditId = 9001;
+const int kChoiceId = 9002;
 
 // Everything below is in 96-dpi units.
 const int kPad = 18;
 const int kHeaderHeight = 38;
 const int kRowHeight = 68;
 const int kControlWidth = 240;
+// Kept back from each end of a segment. The corners are rounded, and DrawText
+// ellipsises a little inside the rect, so a label wider than what remains
+// would read with a "..." on the button.
+const int kSegmentTextInset = 12;
 
 enum class ItemKind { Header, Setting };
 
@@ -53,6 +58,17 @@ struct List {
     std::string    error;
     bool           dragThumb = false;   // the slim scrollbar's drag state
     int            dragOffset = 0;      // grab point within the thumb
+    // One dropdown, created on the first choice that needs one and shown over
+    // that row. choicePress is the mouse-down on its closed control: the list
+    // opens on mouse-up, so the button-up does not land on the popup and
+    // dismiss it in the same click.
+    HWND           choice = nullptr;
+    size_t         choiceRow = SIZE_MAX;
+    std::string    choiceOriginal;
+    bool           choiceClosing = false;
+    bool           choiceFilling = false;
+    bool           choiceCancel = false;
+    bool           choicePress = false;
 };
 
 List* listOf(HWND hwnd) {
@@ -154,6 +170,7 @@ void updateScrollbar(List* list) {
 }
 
 void commitEdit(List* list);
+void closeChoice(List* list, bool apply);
 
 void hideEdit(List* list) {
     if (list->edit) ShowWindow(list->edit, SW_HIDE);
@@ -161,6 +178,7 @@ void hideEdit(List* list) {
 }
 
 void scrollTo(List* list, int position) {
+    closeChoice(list, true);
     commitEdit(list);
     hideEdit(list);
     RECT client{};
@@ -202,6 +220,8 @@ RowGeometry geometryFor(const List* list, const RECT& row) {
 }
 
 // Segment rectangles for a choice row, right-aligned inside the control area.
+// choiceUsesDropdown paints a dropdown in this same rect when the segments
+// would cut a label off, and whenever there are more than three of them.
 std::vector<RECT> segmentsFor(const List* list, const RowGeometry& geo, size_t count) {
     std::vector<RECT> out;
     if (count == 0) return out;
@@ -215,6 +235,52 @@ std::vector<RECT> segmentsFor(const List* list, const RowGeometry& geo, size_t c
         x += width + gap;
     }
     return out;
+}
+
+// More than three choices, or any row whose labels do not fit the segments
+// above, is a dropdown. The closed control names the current choice; the
+// list names every one in full.
+bool choiceUsesDropdown(const List* list, HDC dc, const RowGeometry& geo, const SettingRow& row) {
+    if (row.choices.size() > 3) return true;
+    if (row.choices.empty()) return false;
+    const std::vector<RECT> segments = segmentsFor(list, geo, row.choices.size());
+    if (segments.empty()) return true;
+    int narrowest = segments[0].right - segments[0].left;
+    for (const RECT& segment : segments) {
+        const int width = segment.right - segment.left;
+        if (width < narrowest) narrowest = width;
+    }
+    const int room = narrowest - dp(list, kSegmentTextInset);
+    if (room <= 0) return true;
+    const HFONT font = ui::fonts().caption;
+    for (const Choice& choice : row.choices) {
+        if (ui::textWidth(dc, fromUtf8(choice.label), font) > room) return true;
+    }
+    return false;
+}
+
+std::wstring currentChoiceLabel(const SettingRow& row) {
+    for (const Choice& choice : row.choices) {
+        if (choice.value == row.value) return fromUtf8(choice.label);
+    }
+    return fromUtf8(row.value);
+}
+
+void paintChoiceDropdown(const List* list, HDC dc, const RowGeometry& geo, const SettingRow& row) {
+    const ui::Theme& t = ui::theme();
+    const ui::Fonts& f = ui::fonts();
+    const RECT box = geo.control;
+    ui::fillRounded(dc, box, dp(list, 5), t.control);
+    ui::strokeRounded(dc, box, dp(list, 5), t.controlBorder);
+    RECT text = box;
+    text.left += dp(list, 10);
+    text.right -= dp(list, 22);
+    ui::drawText(dc, currentChoiceLabel(row), text, f.body, t.text,
+                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    RECT chevron = box;
+    chevron.left = chevron.right - dp(list, 22);
+    ui::drawText(dc, L"\u25BE", chevron, f.caption, t.subtext,
+                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 RECT toggleRect(const List* list, const RowGeometry& geo) {
@@ -373,6 +439,10 @@ void paintRow(const List* list, HDC dc, const RECT& rowRect, const SettingRow& r
             std::string onValue;
             if (twoChoiceToggle(row, &onValue, nullptr)) {
                 ui::paintToggle(dc, toggleRect(list, geo), row.value == onValue, list->dpi);
+                break;
+            }
+            if (choiceUsesDropdown(list, dc, geo, row)) {
+                paintChoiceDropdown(list, dc, geo, row);
                 break;
             }
             const std::vector<RECT> segments = segmentsFor(list, geo, row.choices.size());
@@ -585,6 +655,153 @@ void beginEdit(List* list, size_t rowIndex, const RECT& box) {
     list->editingRow = rowIndex;
 }
 
+// While the dropdown list is closed the combo has nothing to scroll, and it
+// would swallow the wheel the way the text box used to. The open list keeps it.
+LRESULT CALLBACK choiceProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
+                            DWORD_PTR ref) {
+    List* list = reinterpret_cast<List*>(ref);
+    if (message == WM_MOUSEWHEEL && list && list->hwnd) {
+        COMBOBOXINFO info{};
+        info.cbSize = sizeof(info);
+        const bool dropped =
+            GetComboBoxInfo(hwnd, &info) && info.hwndList && IsWindowVisible(info.hwndList);
+        if (!dropped) return SendMessageW(list->hwnd, message, wparam, lparam);
+    }
+    return DefSubclassProc(hwnd, message, wparam, lparam);
+}
+
+void ensureChoice(List* list) {
+    if (list->choice) return;
+    list->choice = CreateWindowExW(
+        0, L"COMBOBOX", L"",
+        WS_CHILD | WS_VSCROLL | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS,
+        0, 0, 10, 10, list->hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kChoiceId)),
+        nullptr, nullptr);
+    if (!list->choice) return;
+    SetWindowSubclass(list->choice, choiceProc, 1, reinterpret_cast<DWORD_PTR>(list));
+    if (ui::theme().dark) SetWindowTheme(list->choice, L"DarkMode_CFD", nullptr);
+}
+
+// The closed field is the row's control. The window height of a comctl v6
+// combo is that field; the list itself is a popup.
+void fitChoiceField(List* list, const RECT& box) {
+    const int field = box.bottom - box.top;
+    const int width = box.right - box.left;
+    MoveWindow(list->choice, box.left, box.top, width, field, FALSE);
+    SendMessageW(list->choice, CB_SETITEMHEIGHT, 0, dp(list, 24));
+    SendMessageW(list->choice, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), dp(list, 22));
+    RECT rc{};
+    GetWindowRect(list->choice, &rc);
+    const int selection = static_cast<int>(
+        SendMessageW(list->choice, CB_GETITEMHEIGHT, static_cast<WPARAM>(-1), 0));
+    const int frame = (rc.bottom - rc.top) - selection;
+    const int item = field - (frame > 0 ? frame : 0);
+    if (item > 0) {
+        SendMessageW(list->choice, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), item);
+    }
+    MoveWindow(list->choice, box.left, box.top, width, field, TRUE);
+}
+
+std::string selectedChoiceValue(const List* list) {
+    if (!list->choice || list->choiceRow == SIZE_MAX || !list->model) return std::string();
+    if (list->choiceRow >= list->model->rows().size()) return std::string();
+    const LRESULT sel = SendMessageW(list->choice, CB_GETCURSEL, 0, 0);
+    if (sel < 0) return std::string();
+    const LRESULT data = SendMessageW(list->choice, CB_GETITEMDATA, static_cast<WPARAM>(sel), 0);
+    if (data == CB_ERR) return std::string();
+    const std::vector<Choice>& choices = list->model->rows()[list->choiceRow].choices;
+    if (data < 0 || static_cast<size_t>(data) >= choices.size()) return std::string();
+    return choices[static_cast<size_t>(data)].value;
+}
+
+void closeChoice(List* list, bool apply) {
+    if (list->choiceClosing) return;
+    if (!list->choice || list->choiceRow == SIZE_MAX) return;
+    list->choiceClosing = true;
+    const size_t row = list->choiceRow;
+    const std::string original = list->choiceOriginal;
+    const bool cancel = list->choiceCancel;
+    const std::string selected = apply && !cancel ? selectedChoiceValue(list) : std::string();
+    list->choiceRow = SIZE_MAX;
+    list->choiceOriginal.clear();
+    list->choiceCancel = false;
+    if (GetFocus() == list->choice) SetFocus(list->hwnd);
+    ShowWindow(list->choice, SW_HIDE);
+    list->choiceClosing = false;
+    InvalidateRect(list->hwnd, nullptr, TRUE);
+    if (apply && !cancel && !selected.empty() && selected != original) applyValue(list, row, selected);
+}
+
+void openChoice(List* list, size_t rowIndex, const RECT& box) {
+    if (!list->model || rowIndex >= list->model->rows().size()) return;
+    const SettingRow& row = list->model->rows()[rowIndex];
+    ensureChoice(list);
+    if (!list->choice) return;
+    SendMessageW(list->choice, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().body), TRUE);
+    list->choiceFilling = true;
+    list->choiceCancel = false;
+    SendMessageW(list->choice, CB_RESETCONTENT, 0, 0);
+    int selected = -1;
+    for (size_t i = 0; i < row.choices.size(); ++i) {
+        const std::wstring label = fromUtf8(row.choices[i].label);
+        const LRESULT index =
+            SendMessageW(list->choice, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+        if (index < 0) continue;
+        SendMessageW(list->choice, CB_SETITEMDATA, static_cast<WPARAM>(index),
+                     static_cast<LPARAM>(i));
+        if (row.choices[i].value == row.value) selected = static_cast<int>(index);
+    }
+    if (selected >= 0) SendMessageW(list->choice, CB_SETCURSEL, selected, 0);
+    list->choiceOriginal = row.value;
+    list->choiceRow = rowIndex;
+    list->choiceFilling = false;
+
+    int dropped = box.right - box.left;
+    HDC dc = GetDC(list->choice);
+    for (const Choice& choice : row.choices) {
+        const int width = ui::textWidth(dc, fromUtf8(choice.label), ui::fonts().body) + dp(list, 40);
+        if (width > dropped) dropped = width;
+    }
+    ReleaseDC(list->choice, dc);
+    SendMessageW(list->choice, CB_SETDROPPEDWIDTH, dropped, 0);
+
+    // Placed while hidden, then shown, then measured. A hidden combo has not
+    // built its frame, and showing it at 0,0 first would flash in the corner.
+    MoveWindow(list->choice, box.left, box.top, box.right - box.left, box.bottom - box.top, FALSE);
+    ShowWindow(list->choice, SW_SHOWNA);
+    fitChoiceField(list, box);
+    SetFocus(list->choice);
+    SendMessageW(list->choice, CB_SHOWDROPDOWN, TRUE, 0);
+}
+
+// The choice control under the pointer, when that row is a dropdown.
+bool dropdownAt(List* list, int x, int y, size_t* rowIndex, RECT* box) {
+    if (!list->model) return false;
+    RECT client{};
+    GetClientRect(list->hwnd, &client);
+    HDC dc = GetDC(list->hwnd);
+    bool found = false;
+    for (const Item& item : list->items) {
+        if (item.kind != ItemKind::Setting) continue;
+        RECT rect{client.left, dp(list, item.y) - list->scroll, client.right,
+                  dp(list, item.y + item.height) - list->scroll};
+        if (y < rect.top || y >= rect.bottom) continue;
+        const SettingRow& row = list->model->rows()[item.row];
+        if (!row.def || row.def->kind != SettingKind::Choice) break;
+        if (twoChoiceToggle(row, nullptr, nullptr)) break;
+        const RowGeometry geo = geometryFor(list, rect);
+        if (!choiceUsesDropdown(list, dc, geo, row)) break;
+        const POINT point{x, y};
+        if (!PtInRect(&geo.control, point)) break;
+        if (rowIndex) *rowIndex = item.row;
+        if (box) *box = geo.control;
+        found = true;
+        break;
+    }
+    ReleaseDC(list->hwnd, dc);
+    return found;
+}
+
 // The row whose link is under the pointer, if any. The click and the cursor
 // both ask this one question, so what is clickable can never drift from what
 // was drawn -- and the quiet text beside the link is no longer part of it.
@@ -612,6 +829,8 @@ bool linkHit(List* list, int x, int y, size_t* rowIndex) {
 }
 
 void onClick(List* list, int x, int y) {
+    closeChoice(list, true);
+    list->choicePress = false;
     commitEdit(list);
     hideEdit(list);
     if (!list->model) return;
@@ -619,6 +838,13 @@ void onClick(List* list, int x, int y) {
     size_t linkRow = 0;
     if (linkHit(list, x, y, &linkRow)) {
         applyValue(list, linkRow, list->model->rows()[linkRow].def->recommended);
+        return;
+    }
+
+    size_t dropRow = 0;
+    RECT dropBox{};
+    if (dropdownAt(list, x, y, &dropRow, &dropBox)) {
+        list->choicePress = true;
         return;
     }
 
@@ -651,6 +877,10 @@ void onClick(List* list, int x, int y) {
                     }
                     return;
                 }
+                HDC dc = GetDC(list->hwnd);
+                const bool dropdown = choiceUsesDropdown(list, dc, geo, row);
+                ReleaseDC(list->hwnd, dc);
+                if (dropdown) return;
                 const std::vector<RECT> segments = segmentsFor(list, geo, row.choices.size());
                 for (size_t i = 0; i < segments.size(); ++i) {
                     if (PtInRect(&segments[i], point)) {
@@ -709,6 +939,7 @@ LRESULT CALLBACK listProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
                 // there is one: on the thumb starts a drag, on the track
                 // jumps the thumb to the pointer.
                 if (thumb.right > thumb.left && x >= client.right - dp(list, 12)) {
+                    list->choicePress = false;
                     if (y >= thumb.top && y < thumb.bottom) {
                         list->dragThumb = true;
                         list->dragOffset = y - thumb.top;
@@ -724,6 +955,7 @@ LRESULT CALLBACK listProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
                     return 0;
                 }
                 onClick(list, x, y);
+                if (list->choicePress) SetCapture(hwnd);
             }
             return 0;
         case WM_MOUSEMOVE:
@@ -737,13 +969,57 @@ LRESULT CALLBACK listProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
             }
             return 0;
         case WM_LBUTTONUP:
-        case WM_CAPTURECHANGED:
+            if (list && list->choicePress) {
+                list->choicePress = false;
+                const int x = GET_X_LPARAM(lparam);
+                const int y = GET_Y_LPARAM(lparam);
+                if (GetCapture() == hwnd) ReleaseCapture();
+                size_t row = 0;
+                RECT box{};
+                if (dropdownAt(list, x, y, &row, &box)) openChoice(list, row, box);
+                return 0;
+            }
             if (list && list->dragThumb) {
                 list->dragThumb = false;
-                if (message == WM_LBUTTONUP) ReleaseCapture();
+                ReleaseCapture();
                 InvalidateRect(hwnd, nullptr, TRUE);
             }
             return 0;
+        case WM_CAPTURECHANGED:
+            if (list && list->choicePress) list->choicePress = false;
+            if (list && list->dragThumb) {
+                list->dragThumb = false;
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+            return 0;
+        case WM_COMMAND:
+            if (!list || LOWORD(wparam) != kChoiceId) break;
+            if (list->choiceFilling || list->choiceClosing) return 0;
+            if (HIWORD(wparam) == CBN_SELENDCANCEL) list->choiceCancel = true;
+            if (HIWORD(wparam) == CBN_CLOSEUP) closeChoice(list, true);
+            return 0;
+        case WM_DRAWITEM: {
+            const DRAWITEMSTRUCT* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+            if (list && item->CtlID == kChoiceId) {
+                ui::drawComboItem(item, list->dpi);
+                return TRUE;
+            }
+            break;
+        }
+        case WM_MEASUREITEM: {
+            MEASUREITEMSTRUCT* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
+            if (list && measure->CtlID == kChoiceId) {
+                measure->itemHeight = static_cast<UINT>(dp(list, 24));
+                return TRUE;
+            }
+            break;
+        }
+        case WM_SHOWWINDOW:
+            if (list && wparam == FALSE) {
+                closeChoice(list, true);
+                list->choicePress = false;
+            }
+            break;
         case WM_SETCURSOR:
             // The hand over a row's link. Colour alone did not say "click me":
             // the field read one as a label, and reasonably -- it sat under a
@@ -798,7 +1074,7 @@ HWND createSettingsList(HWND parent, int id, UINT dpi) {
         RegisterClassExW(&cls);
         registered = true;
     }
-    HWND hwnd = CreateWindowExW(0, kClassName, L"", WS_CHILD | WS_TABSTOP, 0, 0, 10,
+    HWND hwnd = CreateWindowExW(0, kClassName, L"", WS_CHILD | WS_TABSTOP | WS_CLIPCHILDREN, 0, 0, 10,
                                 10, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
                                 nullptr, nullptr);
     if (hwnd) {
@@ -811,6 +1087,8 @@ HWND createSettingsList(HWND parent, int id, UINT dpi) {
 void settingsListSetModel(HWND hwnd, SettingsModel* model, const std::wstring& mirrorDir) {
     List* list = listOf(hwnd);
     if (!list) return;
+    closeChoice(list, true);
+    list->choicePress = false;
     list->model = model;
     list->mirrorDir = mirrorDir;
     list->scroll = 0;
@@ -822,6 +1100,8 @@ void settingsListSetModel(HWND hwnd, SettingsModel* model, const std::wstring& m
 void settingsListSetFilter(HWND hwnd, const std::wstring& needle) {
     List* list = listOf(hwnd);
     if (!list) return;
+    closeChoice(list, true);
+    list->choicePress = false;
     commitEdit(list);
     hideEdit(list);
     list->filter = needle;
@@ -834,6 +1114,8 @@ void settingsListSetFilter(HWND hwnd, const std::wstring& needle) {
 void settingsListRescale(HWND hwnd, UINT dpi) {
     List* list = listOf(hwnd);
     if (!list) return;
+    closeChoice(list, true);
+    list->choicePress = false;
     list->dpi = dpi;
     rebuildItems(list);
     updateScrollbar(list);

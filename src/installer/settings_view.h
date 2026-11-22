@@ -5,7 +5,9 @@
 // and one link back to the recommended value when it is not there already.
 // Custom-drawn for the same reason the rest of the window is --
 // nothing to install, and a hundred real child controls to build, move and
-// theme is more machinery than one paint function.
+// theme is more machinery than one paint function. A number is typed into
+// one shared text box. A choice with more than three options, or one whose
+// labels would be cut off as buttons, uses one shared dropdown the same way.
 //
 // Editing writes straight into edvr.ini. There is no Apply button because there
 // is nothing to apply to: EDVR re-reads that file about once a second, so the
