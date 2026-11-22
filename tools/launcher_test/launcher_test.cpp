@@ -69,6 +69,7 @@
 #include "../../src/installer/app.h"
 #include "../../src/installer/detect.h"
 #include "../../src/installer/direct_launch.h"
+#include "../../src/installer/edhm_d3dx.h"
 #include "../../src/installer/game_language.h"
 #include "../../src/installer/frontier_api.h"
 #include "../../src/installer/frontier_login.h"
@@ -6573,6 +6574,10 @@ void testEdhm2dMigoto() {
         stdEdhm[0x98 + 108] = 16;  // NumberOfRvaAndSizes
         stdEdhm += "STD-EDHM-ORIGINAL-BYTES";
         writeAll(P(game, L"d3d11_edhm.dll"), stdEdhm);
+        writeAll(P(game, L"d3dx.ini"),
+                 "[Logging]\r\nshow_reload_message = 1\r\nshow_warnings = 1\r\n\r\n"
+                 "[System]\r\nload_library_redirect = 2\r\nallow_platform_update = 0\r\n\r\n"
+                 "[Device]\r\nupscaling = 1\r\n");
         const std::wstring planPath = P(roots.launcherDir(), L"plan-99-1.txt");
         const std::wstring resultPath = P(roots.launcherDir(), L"result-99-1.txt");
 
@@ -6603,8 +6608,61 @@ void testEdhm2dMigoto() {
               "elevated applyPlanFile placed signed 2DMigoto d3d11_edhm.dll");
         check(exists(P(game, L"EDHM-2DMIGOTO-LICENSE.txt")) && exists(P(game, L"EDHM-2DMIGOTO-THIRD-PARTY.txt")),
               "elevated applyPlanFile placed both 2DMigoto notices");
+        {
+            const std::string ini = readAll(P(game, L"d3dx.ini"));
+            check(readD3dxKey(ini, "System", "load_library_redirect").value == "0" &&
+                      readD3dxKey(ini, "System", "allow_platform_update").value == "1" &&
+                      readD3dxKey(ini, "Device", "upscaling").value == "0",
+                  "elevated applyPlanFile backed up and patched d3dx.ini compatibility keys to 0/1/0");
+        }
 
-        // Opt-out via elevated applyPlanFile restores exact original standard d3d11_edhm.dll.
+        // Elevated edhm_logging action toggles [Logging] show_reload_message & show_warnings cleanly.
+        auto runLogging = [&](const char* keyName, bool hideFlag, ApplyOutcome* outPtr) {
+            PlanFile pf;
+            pf.action = "edhm_logging";
+            pf.dir = game;
+            pf.source = L"Folder you chose";
+            pf.d3dxLoggingKey = keyName;
+            pf.d3dxHideFlag = hideFlag;
+            const std::wstring pfPath = P(roots.launcherDir(), L"plan-9000-2.txt");
+            const std::wstring resPath = P(roots.launcherDir(), L"result-9000-2.txt");
+            DeleteFileW(resPath.c_str());
+            std::string werr;
+            writePlanFile(pfPath, pf, &werr);
+            const int code = applyPlanFile(pfPath, g_testKeys);
+            std::string rerr;
+            const bool okRes = readResultFile(resPath, outPtr, &rerr);
+            DeleteFileW(pfPath.c_str());
+            DeleteFileW(resPath.c_str());
+            return std::make_pair(code, okRes);
+        };
+        {
+            ApplyOutcome lo;
+            auto lr = runLogging("show_reload_message", true, &lo);
+            check(lr.second && lr.first == 0 && lo.status == ApplyOutcome::Status::Done &&
+                      readEdhmHideReloadMessages(readAll(P(game, L"d3dx.ini"))),
+                  "elevated edhm_logging sets show_reload_message = 0");
+            lr = runLogging("show_warnings", true, &lo);
+            check(lr.second && lr.first == 0 && lo.status == ApplyOutcome::Status::Done &&
+                      readEdhmHideWarnings(readAll(P(game, L"d3dx.ini"))),
+                  "elevated edhm_logging sets show_warnings = 0");
+            // Unknown logging key is refused by readPlanFile.
+            PlanFile bad;
+            bad.action = "edhm_logging";
+            bad.dir = game;
+            bad.source = L"Steam";
+            bad.d3dxLoggingKey = "arbitrary_key";
+            bad.d3dxHideFlag = true;
+            const std::wstring badPath = P(roots.launcherDir(), L"plan-9000-3.txt");
+            std::string berr;
+            writePlanFile(badPath, bad, &berr);
+            PlanFile parsedBad;
+            check(!readPlanFile(badPath, &parsedBad, &berr),
+                  "readPlanFile refuses unknown d3dx_logging_key");
+            DeleteFileW(badPath.c_str());
+        }
+
+        // Opt-out via elevated applyPlanFile restores exact original standard d3d11_edhm.dll and d3dx.ini compat keys.
         r = runElev(false, &out);
         check(r.second && r.first == 0 && out.status == ApplyOutcome::Status::Done,
               "elevated applyPlanFile opt-out succeeds");
@@ -6612,6 +6670,14 @@ void testEdhm2dMigoto() {
               "elevated applyPlanFile opt-out restored exact original standard d3d11_edhm.dll");
         check(!exists(P(game, L"EDHM-2DMIGOTO-LICENSE.txt")) && !exists(P(game, L"EDHM-2DMIGOTO-THIRD-PARTY.txt")),
               "elevated applyPlanFile opt-out removed 2DMigoto notices");
+        {
+            const std::string ini = readAll(P(game, L"d3dx.ini"));
+            check(readD3dxKey(ini, "System", "load_library_redirect").value == "2" &&
+                      readD3dxKey(ini, "System", "allow_platform_update").value == "0" &&
+                      readD3dxKey(ini, "Device", "upscaling").value == "1" &&
+                      readEdhmHideReloadMessages(ini) && readEdhmHideWarnings(ini),
+                  "elevated opt-out restored original d3dx.ini compat keys while preserving [Logging] toggles");
+        }
 
         // Re-enable, simulate AV deleting d3d11_edhm.dll, then opt-out via applyPlanFile restores original!
         r = runElev(true, &out);

@@ -1146,22 +1146,94 @@ void launcherApplyEdhmPlan(bool wantOn, bool isFallbackRestore) {
     showSurvey();
 }
 
-void launcherUpdateSettingsToggle() {
-    if (!g.settingsList) return;
-    LauncherToggleRow row;
-    if (!lg.session) {
-        settingsListSetLauncherToggle(g.settingsList, row);
+void launcherSetEdhmLoggingFlag(const std::string& key, bool wantHide) {
+    if (!lg.session || !g.haveSurvey || launcherBusy()) {
+        launcherUpdateSettingsToggle();
         return;
     }
-    row.visible = true;
-    row.group = tr(L"EDHM compatibility");
-    row.label = tr(L"(Experimental) Use tailored 2DMigoto dll for EDHM compatibility improvements.");
-    row.description =
-        tr(L"Backs up your standard d3d11_edhm.dll and installs the signed 2DMigoto compatibility build from this ED-UP release. Turning off restores your original.");
-    row.searchTerms = L"edhm 2dmigoto 3dmigoto d3d11_edhm experimental hud compatibility";
-    row.on = lg.session->edhm2dMigoto();
-    row.busy = launcherBusy();
-    row.warning = trLine(lg.session->edhmWarning());
+    const std::wstring mirrorDir = mirrorDirOfGame(g.survey.game);
+    g.survey = surveyTarget(g.survey.game, mirrorDir);
+    if (!g.survey.d3dxIniPresent || g.survey.d3dxIniUnreadable) {
+        launcherUpdateSettingsToggle();
+        return;
+    }
+
+    if (launcherNeedsElevatedCopy()) {
+        const wchar_t* prompt =
+            L"This game folder can only be written to by an administrator (it is usually under Program Files).\n\n"
+            L"Windows will ask for permission, and a short-lived copy of the launcher with administrator rights will update d3dx.ini.\n\n"
+            L"Continue?";
+        if (MessageBoxW(g.window, prompt, kAppTitle, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
+            launcherUpdateSettingsToggle();
+            return;
+        }
+        PlanFile file;
+        file.action = "edhm_logging";
+        file.dir = g.survey.game.dir;
+        file.source = g.survey.game.source;
+        file.d3dxLoggingKey = key;
+        file.d3dxHideFlag = wantHide;
+        setReport("Updating d3dx.ini...\r\n----\r\nWaiting for Windows' permission prompt...\r\n");
+        lg.session->beginElevatedApply(file, runWithUac, [](const ElevatedResult& result) {
+            if (result.declined) {
+                setReport("The permission prompt was declined, so d3dx.ini was not changed.\r\n");
+            } else if (!result.error.empty() && result.outcome.lines.empty()) {
+                setReport(result.error + "\r\n");
+            } else {
+                setReport(outcomeReport(result.outcome));
+            }
+            g.survey = surveyTarget(g.survey.game, mirrorDirOfGame(g.survey.game));
+            showSurvey();
+        });
+        return;
+    }
+
+    const std::wstring d3dxPath = joinPath(g.survey.game.dir, L"d3dx.ini");
+    std::string current;
+    if (!readFileBytes(d3dxPath, &current)) {
+        MessageBoxW(g.window, L"d3dx.ini could not be read. Close anything holding it open and try again.",
+                    kAppTitle, MB_OK | MB_ICONWARNING);
+        g.survey = surveyTarget(g.survey.game, mirrorDir);
+        launcherUpdateSettingsToggle();
+        return;
+    }
+    const std::string updated = key == "show_warnings"
+                                    ? setEdhmHideWarnings(current, wantHide)
+                                    : setEdhmHideReloadMessages(current, wantHide);
+    if (updated != current) {
+        std::wstring writeErr;
+        if (!writeFileAtomic(d3dxPath, updated, &writeErr)) {
+            std::wstring msg = L"Could not update d3dx.ini.";
+            if (!writeErr.empty()) msg += L"\n\n" + writeErr;
+            MessageBoxW(g.window, msg.c_str(), kAppTitle, MB_OK | MB_ICONWARNING);
+        }
+    }
+    g.survey = surveyTarget(g.survey.game, mirrorDir);
+    launcherUpdateSettingsToggle();
+}
+
+void launcherUpdateSettingsToggle() {
+    if (!g.settingsList) return;
+    if (!lg.session) {
+        settingsListSetLauncherToggles(g.settingsList, {});
+        return;
+    }
+    std::vector<LauncherToggleRow> rows;
+    const std::wstring edhmGroup = tr(L"EDHM compatibility");
+    const bool busy = launcherBusy();
+
+    LauncherToggleRow migotoRow;
+    migotoRow.visible = true;
+    migotoRow.control = LauncherControlKind::Toggle;
+    migotoRow.enabled = true;
+    migotoRow.group = edhmGroup;
+    migotoRow.label = tr(L"(Experimental) Use tailored 2DMigoto dll for EDHM compatibility improvements.");
+    migotoRow.description =
+        tr(L"Backs up your standard d3d11_edhm.dll and d3dx.ini settings, installs the signed 2DMigoto build, and applies ED-UP compatibility settings. Turning off restores them.");
+    migotoRow.searchTerms = L"edhm 2dmigoto 3dmigoto d3d11_edhm d3dx.ini experimental hud compatibility load_library_redirect allow_platform_update upscaling";
+    migotoRow.on = lg.session->edhm2dMigoto();
+    migotoRow.busy = busy;
+    migotoRow.warning = trLine(lg.session->edhmWarning());
 
     const bool active2d = launcherEdhm2dMigotoActiveOnDisk();
     const bool edhmPresent = launcherEdhmPresentOnDisk();
@@ -1171,40 +1243,40 @@ void launcherUpdateSettingsToggle() {
     const bool hasPayloadAsset = payloadReady && payloadInfo().find("edhm_2dmigoto") != nullptr;
 
     if (!g.haveSurvey) {
-        row.statusText = tr(L"No install selected");
-        row.statusTone = LauncherRowTone::Muted;
-    } else if (row.busy) {
-        row.statusText = tr(L"Applying...");
-        row.statusTone = LauncherRowTone::Accent;
-    } else if (active2d && row.on) {
-        row.statusText = tr(L"2DMigoto active");
-        row.statusTone = LauncherRowTone::Good;
-    } else if (active2d && !row.on) {
-        row.statusText = tr(L"2DMigoto still on disk");
-        row.statusTone = LauncherRowTone::Warn;
-        if (payloadReady) row.actionLink = tr(L"Restore standard");
-    } else if (row.on && !payloadReady) {
-        row.statusText = tr(L"Download a release first");
-        row.statusTone = LauncherRowTone::Warn;
-    } else if (row.on && !hasPayloadAsset) {
-        row.statusText = tr(L"Not in this release");
-        row.statusTone = LauncherRowTone::Warn;
-    } else if (row.on && !edhmPresent) {
-        row.statusText = tr(L"EDHM not detected");
-        row.statusTone = LauncherRowTone::Muted;
-    } else if (row.on) {
-        row.statusText = tr(L"Pending install");
-        row.statusTone = LauncherRowTone::Accent;
-        row.actionLink = tr(L"Apply now");
+        migotoRow.statusText = tr(L"No install selected");
+        migotoRow.statusTone = LauncherRowTone::Muted;
+    } else if (migotoRow.busy) {
+        migotoRow.statusText = tr(L"Applying...");
+        migotoRow.statusTone = LauncherRowTone::Accent;
+    } else if (active2d && migotoRow.on) {
+        migotoRow.statusText = tr(L"2DMigoto active");
+        migotoRow.statusTone = LauncherRowTone::Good;
+    } else if (active2d && !migotoRow.on) {
+        migotoRow.statusText = tr(L"2DMigoto still on disk");
+        migotoRow.statusTone = LauncherRowTone::Warn;
+        if (payloadReady) migotoRow.actionLink = tr(L"Restore standard");
+    } else if (migotoRow.on && !payloadReady) {
+        migotoRow.statusText = tr(L"Download a release first");
+        migotoRow.statusTone = LauncherRowTone::Warn;
+    } else if (migotoRow.on && !hasPayloadAsset) {
+        migotoRow.statusText = tr(L"Not in this release");
+        migotoRow.statusTone = LauncherRowTone::Warn;
+    } else if (migotoRow.on && !edhmPresent) {
+        migotoRow.statusText = tr(L"EDHM not detected");
+        migotoRow.statusTone = LauncherRowTone::Muted;
+    } else if (migotoRow.on) {
+        migotoRow.statusText = tr(L"Pending install");
+        migotoRow.statusTone = LauncherRowTone::Accent;
+        migotoRow.actionLink = tr(L"Apply now");
     } else if (hasEdhmDll) {
-        row.statusText = tr(L"Standard EDHM");
-        row.statusTone = LauncherRowTone::Muted;
+        migotoRow.statusText = tr(L"Standard EDHM");
+        migotoRow.statusTone = LauncherRowTone::Muted;
     } else {
-        row.statusText = tr(L"Off");
-        row.statusTone = LauncherRowTone::Muted;
+        migotoRow.statusText = tr(L"Off");
+        migotoRow.statusTone = LauncherRowTone::Muted;
     }
 
-    row.onToggle = [](bool want) {
+    migotoRow.onToggle = [](bool want) {
         if (!lg.session) return;
         if (want) {
             const bool accepted = lg.session->setEdhm2dMigoto(true, []() {
@@ -1222,9 +1294,62 @@ void launcherUpdateSettingsToggle() {
             launcherApplyEdhmPlan(false, false);
         }
     };
-    row.onAction = []() {
+    migotoRow.onAction = []() {
         if (!lg.session) return;
         launcherApplyEdhmPlan(lg.session->edhm2dMigoto(), false);
     };
-    settingsListSetLauncherToggle(g.settingsList, row);
+    rows.push_back(std::move(migotoRow));
+
+    const bool d3dxUsable = g.haveSurvey && g.survey.d3dxIniPresent && !g.survey.d3dxIniUnreadable;
+    auto buildLoggingRow = [&](std::wstring labelText, std::wstring descText, const wchar_t* search,
+                               const char* keyName, bool hiddenNow) {
+        LauncherToggleRow r;
+        r.visible = true;
+        r.control = LauncherControlKind::Checkbox;
+        r.enabled = d3dxUsable;
+        r.group = edhmGroup;
+        r.label = std::move(labelText);
+        r.description = std::move(descText);
+        r.searchTerms = search;
+        r.on = d3dxUsable && hiddenNow;
+        r.busy = busy;
+        if (!g.haveSurvey) {
+            r.statusText = tr(L"No install selected");
+            r.statusTone = LauncherRowTone::Muted;
+        } else if (!g.survey.d3dxIniPresent) {
+            r.statusText = tr(L"d3dx.ini not found");
+            r.statusTone = LauncherRowTone::Muted;
+        } else if (g.survey.d3dxIniUnreadable) {
+            r.statusText = tr(L"d3dx.ini unreadable");
+            r.statusTone = LauncherRowTone::Warn;
+        } else if (busy) {
+            r.statusText = tr(L"Applying...");
+            r.statusTone = LauncherRowTone::Accent;
+        } else if (r.on) {
+            r.statusText = tr(L"Hidden");
+            r.statusTone = LauncherRowTone::Good;
+        } else {
+            r.statusText = tr(L"Shown");
+            r.statusTone = LauncherRowTone::Muted;
+        }
+        const std::string keyCopy(keyName);
+        r.onToggle = [keyCopy](bool wantHide) { launcherSetEdhmLoggingFlag(keyCopy, wantHide); };
+        return r;
+    };
+
+    rows.push_back(buildLoggingRow(
+        tr(L"Hide Refresh/Reload messages from EDHM"),
+        tr(L"Sets [Logging] show_reload_message in d3dx.ini (checked = 0, unchecked = 1) to hide EDHM refresh and reload banners."),
+        L"edhm d3dx.ini logging show_reload_message refresh reload messages banners hide",
+        "show_reload_message",
+        d3dxUsable && readEdhmHideReloadMessages(g.survey.d3dxIniText)));
+
+    rows.push_back(buildLoggingRow(
+        tr(L"Hide Warnings from EDHM"),
+        tr(L"Sets [Logging] show_warnings in d3dx.ini (checked = 0, unchecked = 1) to hide EDHM warning banners."),
+        L"edhm d3dx.ini logging show_warnings warnings banners hide",
+        "show_warnings",
+        d3dxUsable && readEdhmHideWarnings(g.survey.d3dxIniText)));
+
+    settingsListSetLauncherToggles(g.settingsList, std::move(rows));
 }

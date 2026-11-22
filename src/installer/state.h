@@ -38,6 +38,27 @@ struct FileRecord {
 // (nothing that leaves its root: no "..", drive, colon or backslash). A hand-edited state.ini that fails this is refused, not followed.
 bool recordTargetIsSafe(const FileRecord& record, std::string* why = nullptr);
 
+struct EdhmD3dxKeyBackup {
+    bool        present = false;
+    std::string value;
+    bool operator==(const EdhmD3dxKeyBackup& o) const {
+        return present == o.present && value == o.value;
+    }
+};
+
+// Backed-up d3dx.ini keys modified when the experimental EDHM 2DMigoto option is enabled,
+// so disabling it (or uninstalling) restores only those keys without clobbering other d3dx.ini edits.
+struct EdhmD3dxBackup {
+    bool              saved = false;
+    EdhmD3dxKeyBackup loadLibraryRedirect;  // [System] load_library_redirect
+    EdhmD3dxKeyBackup allowPlatformUpdate;  // [System] allow_platform_update
+    EdhmD3dxKeyBackup upscaling;            // [Device] upscaling
+    bool operator==(const EdhmD3dxBackup& o) const {
+        return saved == o.saved && loadLibraryRedirect == o.loadLibraryRedirect &&
+               allowPlatformUpdate == o.allowPlatformUpdate && upscaling == o.upscaling;
+    }
+};
+
 struct InstallState {
     bool present = false;  // a record was found and parsed
 
@@ -101,6 +122,8 @@ struct InstallState {
     std::string nativeConfigSha;   // edvr_openxr.ini: a fixed step, not a payload file, so it has no file record
     std::wstring nativeOriginalName;
     std::string nativeOriginalSha;
+
+    EdhmD3dxBackup edhmD3dxBackup;
 };
 
 std::wstring stateDirPath(const std::wstring& gameDir);

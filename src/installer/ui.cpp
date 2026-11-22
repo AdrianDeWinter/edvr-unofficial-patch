@@ -733,31 +733,18 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
              ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
-void drawCheckbox(const DRAWITEMSTRUCT* item, UINT dpi) {
-    Owned* owned = find(item->hwndItem);
-    if (!owned) return;
+void paintCheckbox(HDC dc, RECT box, bool checked, bool disabled, bool hot, UINT dpi) {
     const Theme& t = theme();
-    const bool disabled = (item->itemState & ODS_DISABLED) != 0;
-    HDC dc = item->hDC;
+    const int side = box.right - box.left;
+    const int height = box.bottom - box.top;
+    if (side <= 2 || height <= 2) return;
 
-    wchar_t label[512]{};
-    GetWindowTextW(item->hwndItem, label, 512);
-
-    fillRect(dc, item->rcItem, t.cardBg);
-
-    const int side = dp(18, dpi);
-    RECT box{item->rcItem.left, 0, 0, 0};
-    box.top = item->rcItem.top + ((item->rcItem.bottom - item->rcItem.top) - side) / 2;
-    box.right = box.left + side;
-    box.bottom = box.top + side;
-
-    const COLORREF face = owned->checked ? (disabled ? mix(t.accent, t.cardBg, 55) : t.accent)
-                                         : (owned->hot ? t.controlHover : t.cardBg);
-    const COLORREF border = owned->checked ? face : t.controlBorder;
-    const bool isChecked = owned->checked;
+    const COLORREF face = checked ? (disabled ? mix(t.accent, t.cardBg, 55) : t.accent)
+                                  : (disabled ? t.cardBg : (hot ? t.controlHover : t.cardBg));
+    const COLORREF border = checked ? face : (disabled ? t.cardBorder : t.controlBorder);
     const float halfSide = static_cast<float>(side) * 0.5f;
     const float cx = static_cast<float>(box.left) + halfSide;
-    const float cy = static_cast<float>(box.top) + halfSide;
+    const float cy = static_cast<float>(box.top) + static_cast<float>(height) * 0.5f;
     const float boxR = clampf(static_cast<float>(dp(4, dpi)), 0.0f, halfSide);
     const float s = static_cast<float>(side);
     const float bx = static_cast<float>(box.left);
@@ -777,14 +764,14 @@ void drawCheckbox(const DRAWITEMSTRUCT* item, UINT dpi) {
     const float tg = static_cast<float>(GetGValue(t.accentText));
     const float tb = static_cast<float>(GetBValue(t.accentText));
 
-    blendTile(dc, box.left, box.top, side, side, [=](float px, float py) -> uint32_t {
-        const float sd = sdRoundedBox(px, py, cx, cy, halfSide, halfSide, boxR);
+    blendTile(dc, box.left, box.top, side, height, [=](float px, float py) -> uint32_t {
+        const float sd = sdRoundedBox(px, py, cx, cy, halfSide, static_cast<float>(height) * 0.5f, boxR);
         const float outerCov = clampf(0.5f - sd, 0.0f, 1.0f);
         if (outerCov <= 0.0f) return 0u;
         float rr = fr;
         float gg = fg;
         float bb = fb;
-        if (!isChecked) {
+        if (!checked) {
             const float innerCov = clampf(0.5f - (sd + 1.0f), 0.0f, 1.0f);
             rr = sr + (fr - sr) * innerCov;
             gg = sg + (fg - sg) * innerCov;
@@ -804,6 +791,27 @@ void drawCheckbox(const DRAWITEMSTRUCT* item, UINT dpi) {
         }
         return packPremul(rr, gg, bb, outerCov);
     });
+}
+
+void drawCheckbox(const DRAWITEMSTRUCT* item, UINT dpi) {
+    Owned* owned = find(item->hwndItem);
+    if (!owned) return;
+    const Theme& t = theme();
+    const bool disabled = (item->itemState & ODS_DISABLED) != 0;
+    HDC dc = item->hDC;
+
+    wchar_t label[512]{};
+    GetWindowTextW(item->hwndItem, label, 512);
+
+    fillRect(dc, item->rcItem, t.cardBg);
+
+    const int side = dp(18, dpi);
+    RECT box{item->rcItem.left, 0, 0, 0};
+    box.top = item->rcItem.top + ((item->rcItem.bottom - item->rcItem.top) - side) / 2;
+    box.right = box.left + side;
+    box.bottom = box.top + side;
+
+    paintCheckbox(dc, box, owned->checked, disabled, owned->hot, dpi);
 
     RECT textRect = item->rcItem;
     textRect.left = box.right + dp(10, dpi);

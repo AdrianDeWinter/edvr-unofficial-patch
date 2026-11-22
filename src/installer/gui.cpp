@@ -23,6 +23,7 @@
 
 #include "app.h"
 #include "apply.h"
+#include "edhm_d3dx.h"
 #include "logbundle.h"
 #include "mirror.h"
 #include "payload.h"

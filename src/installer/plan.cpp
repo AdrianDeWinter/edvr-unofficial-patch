@@ -10,6 +10,7 @@
 #include "../common/install_scope.h"
 #include "../common/mirror_location.h"
 #include "../common/real_dll_choice.h"
+#include "edhm_d3dx.h"
 #include "mirror.h"
 
 namespace edvr::installer {
@@ -846,7 +847,14 @@ Survey surveyTarget(const GameInstall& game, const std::wstring& settingsDir) {
     s.xess = notice(kXess);
     s.xessLicense = notice(kXessLicense);
     s.xessThirdParty = notice(kXessThirdParty);
-    s.edhmConfigPresent = fileExists(joinPath(game.dir, L"d3dx.ini")) || dirExists(joinPath(game.dir, L"EDHM-ini"));
+    const std::wstring d3dxPath = joinPath(game.dir, L"d3dx.ini");
+    if (fileExists(d3dxPath)) {
+        s.d3dxIniPresent = true;
+        if (!readFileBytes(d3dxPath, &s.d3dxIniText)) {
+            s.d3dxIniUnreadable = true;
+        }
+    }
+    s.edhmConfigPresent = s.d3dxIniPresent || dirExists(joinPath(game.dir, L"EDHM-ini"));
     s.nvidiaAdapter = nvidiaAdapterPresent(&s.nvidiaAdapterName);
 
     if (!s.game.openvrDir.empty()) {
@@ -1512,6 +1520,57 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         }
     }
 
+    // ---- EDHM d3dx.ini compatibility keys (load_library_redirect, allow_platform_update, upscaling) ----
+    // When experimental 2DMigoto is enabled and active for this folder, back up the original values
+    // (preserving any already-saved backup across updates/repairs) and apply ED-UP's compatibility values.
+    // When turned off, surgically restore those three keys while leaving all other d3dx.ini edits intact.
+    if (o.edhm2dMigoto && next.file("edhm_2dmigoto") != nullptr) {
+        if (s.d3dxIniPresent) {
+            if (s.d3dxIniUnreadable) {
+                plan.blocked = true;
+                plan.problems.push_back(
+                    "d3dx.ini cannot be read -- close anything holding it open before changing EDHM compatibility settings.");
+                return plan;
+            }
+            if (!next.edhmD3dxBackup.saved) {
+                next.edhmD3dxBackup = snapshotEdhmD3dxCompat(s.d3dxIniText);
+            }
+            const std::string patched = applyEdhmD3dxCompat(s.d3dxIniText);
+            if (patched != s.d3dxIniText) {
+                const std::wstring d3dxPath = joinPath(s.game.dir, L"d3dx.ini");
+                backup(d3dxPath, "your d3dx.ini before updating EDHM compatibility settings");
+                writeText(patched, d3dxPath,
+                          "sets d3dx.ini EDHM compatibility values (load_library_redirect=0, allow_platform_update=1, upscaling=0)");
+                plan.notes.push_back(
+                    "Backing up d3dx.ini compatibility keys and setting [System] load_library_redirect = 0, "
+                    "allow_platform_update = 1 and [Device] upscaling = 0.");
+            } else if (!s.state.edhmD3dxBackup.saved) {
+                plan.notes.push_back(
+                    "d3dx.ini already has EDHM compatibility values (load_library_redirect = 0, "
+                    "allow_platform_update = 1, upscaling = 0); recorded backup state.");
+            }
+        }
+    } else if (!o.edhm2dMigoto && s.state.edhmD3dxBackup.saved) {
+        if (s.d3dxIniPresent) {
+            if (s.d3dxIniUnreadable) {
+                plan.blocked = true;
+                plan.problems.push_back(
+                    "d3dx.ini cannot be read -- close anything holding it open before restoring EDHM settings.");
+                return plan;
+            }
+            const std::string restored = restoreEdhmD3dxCompat(s.d3dxIniText, s.state.edhmD3dxBackup);
+            if (restored != s.d3dxIniText) {
+                const std::wstring d3dxPath = joinPath(s.game.dir, L"d3dx.ini");
+                backup(d3dxPath, "your d3dx.ini before restoring backed-up EDHM compatibility settings");
+                writeText(restored, d3dxPath,
+                          "restores backed-up d3dx.ini settings (load_library_redirect, allow_platform_update, upscaling)");
+                plan.notes.push_back(
+                    "Restoring your backed-up d3dx.ini settings (load_library_redirect, allow_platform_update, upscaling).");
+            }
+        }
+        next.edhmD3dxBackup = EdhmD3dxBackup{};
+    }
+
     // A chain target that has gone away leaves advanced.real_dll pointing at
     // nothing: EDVR then writes a fatal note beside the game on every launch
     // and falls back to the system DLL. Whether the mod we were passing calls
@@ -1984,12 +2043,14 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         if (isOwnedOrOptIn(r.existing) && r.sha256 != s.state.shaOf(r.id)) ownershipChanged = true;
     for (const FileRecord& r : s.state.files)
         if (isOwnedOrOptIn(r.existing) && r.sha256 != next.shaOf(r.id)) ownershipChanged = true;
+    const bool edhmD3dxChanged = !(next.edhmD3dxBackup == s.state.edhmD3dxBackup);
     const bool sourceChanged = next.storeSource != s.state.storeSource;
-    const bool stateOnly = !changed && body.empty() && (ownershipChanged || sourceChanged) && !o.repair;
+    const bool stateOnly = !changed && body.empty() && (ownershipChanged || edhmD3dxChanged || sourceChanged) && !o.repair;
     if (stateOnly)
         plan.notes.push_back(sourceChanged ? "The store source changed; only the install record will be updated."
-                                           : "Optional runtime ownership changed; only the install record will be updated.");
-    if (!changed && !ownershipChanged && !sourceChanged && !o.repair) {
+                                           : (edhmD3dxChanged ? "EDHM d3dx.ini backup state changed; only the install record will be updated."
+                                                              : "Optional runtime ownership changed; only the install record will be updated."));
+    if (!changed && !ownershipChanged && !edhmD3dxChanged && !sourceChanged && !o.repair) {
         plan.nothingToDo = true;
         plan.notes.push_back("Everything is already in place. Nothing to do.");
     }
@@ -2300,6 +2361,28 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         }
     }
 
+    // Restore any backed-up EDHM d3dx.ini compatibility settings on uninstall.
+    if (s.state.edhmD3dxBackup.saved) {
+        if (s.d3dxIniPresent && !s.d3dxIniUnreadable) {
+            const std::string restored = restoreEdhmD3dxCompat(s.d3dxIniText, s.state.edhmD3dxBackup);
+            if (restored != s.d3dxIniText) {
+                const std::wstring d3dxPath = joinPath(s.game.dir, L"d3dx.ini");
+                backup(d3dxPath, "your d3dx.ini before restoring backed-up EDHM compatibility settings");
+                Step st;
+                st.action = Action::WriteText;
+                st.to = d3dxPath;
+                st.text = restored;
+                st.why = "restores backed-up d3dx.ini settings (load_library_redirect, allow_platform_update, upscaling)";
+                body.push_back(st);
+                changed = true;
+                plan.notes.push_back(
+                    "Restoring your backed-up d3dx.ini settings (load_library_redirect, allow_platform_update, upscaling).");
+            }
+        } else if (s.d3dxIniPresent && s.d3dxIniUnreadable) {
+            plan.problems.push_back("d3dx.ini could not be read, so backed-up EDHM compatibility settings were left untouched.");
+        }
+    }
+
     // ---- the runtime --------------------------------------------------
     if (s.haveOpenvrDir) {
         const std::wstring dst = recordedPath(runtimeRecord, joinPath(s.game.openvrDir, kOpenvr));
@@ -2507,76 +2590,100 @@ Plan planEdhmRestore(const Survey& s, const Options& o) {
         return plan;
     }
     const FileRecord* earlier = s.state.file("edhm_2dmigoto");
-    if (!earlier || earlier->existing != existingName(ExistingMode::OptIn)) {
+    const bool hasEdhmDll = earlier && earlier->existing == existingName(ExistingMode::OptIn);
+    if (!hasEdhmDll && !s.state.edhmD3dxBackup.saved) {
         plan.nothingToDo = true;
         return plan;
     }
-    std::wstring dst;
-    if (!recordPathOf(s, *earlier, &dst)) {
-        plan.blocked = true;
-        plan.problems.push_back("The install record names an unsafe path for edhm_2dmigoto; it was not touched.");
-        return plan;
-    }
-    std::vector<DllInfo> probed;
-    const DllInfo cur = targetInfoOf(s, dst, &probed);
-    if (cur.kind == DllKind::Unreadable) {
-        plan.blocked = true;
-        plan.problems.push_back("d3d11_edhm.dll cannot be read -- close anything holding it open before restoring standard EDHM.");
-        return plan;
-    }
     InstallState next = s.state;
-    const bool missing = cur.kind == DllKind::Absent;
-    const bool stillOurs = !missing && sameSha(cur.sha256, earlier->sha256);
-    if (missing || stillOurs) {
-        if (!earlier->backup.empty() && !earlier->beforeSha256.empty()) {
-            std::wstring backupPath;
-            if (verifiedRecordedBackup(s, *earlier, &backupPath)) {
-                Step rest;
-                rest.action = Action::Backup;
-                rest.from = backupPath;
-                rest.to = dst;
-                rest.expectSha = earlier->beforeSha256;
-                rest.required = true;
-                rest.why = "restores your backed-up standard d3d11_edhm.dll";
-                plan.steps.push_back(rest);
-                plan.notes.push_back("Restoring your original standard d3d11_edhm.dll from backup.");
-            } else if (missing) {
-                plan.problems.push_back("d3d11_edhm.dll is missing and its recorded standard backup (" +
-                                        say(earlier->backup) + ") could not be verified. Reinstall EDHM to restore d3d11_edhm.dll.");
-            } else {
-                plan.blocked = true;
-                plan.problems.push_back(
-                    "Cannot restore your original standard d3d11_edhm.dll: the recorded backup (" +
-                    say(earlier->backup) + ") is missing or no longer matches its recorded hash.");
-                return plan;
-            }
-        } else if (stillOurs) {
-            Step del;
-            del.action = Action::Delete;
-            del.from = dst;
-            del.expectSha = cur.sha256;
-            del.required = true;
-            del.why = "removes the tailored 2DMigoto d3d11_edhm.dll ED-UP placed";
-            plan.steps.push_back(del);
-            plan.notes.push_back("Removing the tailored 2DMigoto d3d11_edhm.dll ED-UP placed (no previous standard d3d11_edhm.dll was present).");
+    if (hasEdhmDll) {
+        std::wstring dst;
+        if (!recordPathOf(s, *earlier, &dst)) {
+            plan.blocked = true;
+            plan.problems.push_back("The install record names an unsafe path for edhm_2dmigoto; it was not touched.");
+            return plan;
         }
-    } else {
-        plan.notes.push_back("d3d11_edhm.dll is no longer the 2DMigoto copy ED-UP placed; leaving your copy in place.");
-    }
-    next.drop(earlier->id);
-    for (const char* nid : {"edhm_2dmigoto_license", "edhm_2dmigoto_third_party"}) {
-        if (const FileRecord* nr = s.state.file(nid)) {
-            std::wstring np;
-            if (recordPathOf(s, *nr, &np) && fileExists(np) && sameSha(sha256File(np), nr->sha256)) {
+        std::vector<DllInfo> probed;
+        const DllInfo cur = targetInfoOf(s, dst, &probed);
+        if (cur.kind == DllKind::Unreadable) {
+            plan.blocked = true;
+            plan.problems.push_back("d3d11_edhm.dll cannot be read -- close anything holding it open before restoring standard EDHM.");
+            return plan;
+        }
+        const bool missing = cur.kind == DllKind::Absent;
+        const bool stillOurs = !missing && sameSha(cur.sha256, earlier->sha256);
+        if (missing || stillOurs) {
+            if (!earlier->backup.empty() && !earlier->beforeSha256.empty()) {
+                std::wstring backupPath;
+                if (verifiedRecordedBackup(s, *earlier, &backupPath)) {
+                    Step rest;
+                    rest.action = Action::Backup;
+                    rest.from = backupPath;
+                    rest.to = dst;
+                    rest.expectSha = earlier->beforeSha256;
+                    rest.required = true;
+                    rest.why = "restores your backed-up standard d3d11_edhm.dll";
+                    plan.steps.push_back(rest);
+                    plan.notes.push_back("Restoring your original standard d3d11_edhm.dll from backup.");
+                } else if (missing) {
+                    plan.problems.push_back("d3d11_edhm.dll is missing and its recorded standard backup (" +
+                                            say(earlier->backup) + ") could not be verified. Reinstall EDHM to restore d3d11_edhm.dll.");
+                } else {
+                    plan.blocked = true;
+                    plan.problems.push_back(
+                        "Cannot restore your original standard d3d11_edhm.dll: the recorded backup (" +
+                        say(earlier->backup) + ") is missing or no longer matches its recorded hash.");
+                    return plan;
+                }
+            } else if (stillOurs) {
                 Step del;
                 del.action = Action::Delete;
-                del.from = np;
-                del.expectSha = nr->sha256;
-                del.why = "removes 2DMigoto notice file";
+                del.from = dst;
+                del.expectSha = cur.sha256;
+                del.required = true;
+                del.why = "removes the tailored 2DMigoto d3d11_edhm.dll ED-UP placed";
                 plan.steps.push_back(del);
+                plan.notes.push_back("Removing the tailored 2DMigoto d3d11_edhm.dll ED-UP placed (no previous standard d3d11_edhm.dll was present).");
             }
-            next.drop(nid);
+        } else {
+            plan.notes.push_back("d3d11_edhm.dll is no longer the 2DMigoto copy ED-UP placed; leaving your copy in place.");
         }
+        next.drop(earlier->id);
+        for (const char* nid : {"edhm_2dmigoto_license", "edhm_2dmigoto_third_party"}) {
+            if (const FileRecord* nr = s.state.file(nid)) {
+                std::wstring np;
+                if (recordPathOf(s, *nr, &np) && fileExists(np) && sameSha(sha256File(np), nr->sha256)) {
+                    Step del;
+                    del.action = Action::Delete;
+                    del.from = np;
+                    del.expectSha = nr->sha256;
+                    del.why = "removes 2DMigoto notice file";
+                    plan.steps.push_back(del);
+                }
+                next.drop(nid);
+            }
+        }
+    }
+    if (s.state.edhmD3dxBackup.saved) {
+        if (s.d3dxIniPresent) {
+            if (s.d3dxIniUnreadable) {
+                plan.blocked = true;
+                plan.problems.push_back("d3dx.ini cannot be read -- close anything holding it open before restoring EDHM settings.");
+                return plan;
+            }
+            const std::string restored = restoreEdhmD3dxCompat(s.d3dxIniText, s.state.edhmD3dxBackup);
+            if (restored != s.d3dxIniText) {
+                Step wd;
+                wd.action = Action::WriteText;
+                wd.to = joinPath(s.game.dir, L"d3dx.ini");
+                wd.text = restored;
+                wd.why = "restores backed-up d3dx.ini settings (load_library_redirect, allow_platform_update, upscaling)";
+                plan.steps.push_back(wd);
+                plan.notes.push_back(
+                    "Restoring your backed-up d3dx.ini settings (load_library_redirect, allow_platform_update, upscaling).");
+            }
+        }
+        next.edhmD3dxBackup = EdhmD3dxBackup{};
     }
     if (!o.nowUtc.empty()) next.installedUtc = o.nowUtc;
     Step mk;

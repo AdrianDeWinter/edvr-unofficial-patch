@@ -29,6 +29,7 @@ const int kPad = 18;
 const int kHeaderHeight = 38;
 const int kRowHeight = 68;
 const int kLauncherRowHeight = 88;
+const int kLauncherCompactRowHeight = 70;
 const int kLauncherRowWithWarningHeight = 128;
 const int kControlWidth = 240;
 // Kept back from each end of a segment. The corners are rounded, and DrawText
@@ -41,7 +42,7 @@ enum class ItemKind { Header, Setting, LauncherToggle };
 struct Item {
     ItemKind    kind = ItemKind::Setting;
     std::wstring title;   // headers
-    size_t      row = 0;  // settings: index into the model
+    size_t      row = 0;  // settings or launcherRows: index into the corresponding vector
     int         y = 0;    // laid out, in 96-dpi units
     int         height = 0;
 };
@@ -51,7 +52,7 @@ struct List {
     HWND           edit = nullptr;
     SettingsModel* model = nullptr;
     std::wstring   mirrorDir;  // where each write is echoed; see mirror.h
-    LauncherToggleRow launcherRow;
+    std::vector<LauncherToggleRow> launcherRows;
     UINT           dpi = 96;
     int            scroll = 0;      // pixels
     int            contentHeight = 0;
@@ -130,9 +131,11 @@ void rebuildItems(List* list) {
     bool haveHeading = false;
     int y = kPad;
 
-    if (matchesLauncherRow(list->launcherRow, needle)) {
-        if (!list->launcherRow.group.empty()) {
-            heading = list->launcherRow.group;
+    for (size_t i = 0; i < list->launcherRows.size(); ++i) {
+        const LauncherToggleRow& row = list->launcherRows[i];
+        if (!matchesLauncherRow(row, needle)) continue;
+        if (!row.group.empty() && (!haveHeading || row.group != heading)) {
+            heading = row.group;
             haveHeading = true;
             Item header;
             header.kind = ItemKind::Header;
@@ -144,8 +147,12 @@ void rebuildItems(List* list) {
         }
         Item item;
         item.kind = ItemKind::LauncherToggle;
+        item.row = i;
         item.y = y;
-        item.height = list->launcherRow.warning.empty() ? kLauncherRowHeight : kLauncherRowWithWarningHeight;
+        item.height = !row.warning.empty()
+                          ? kLauncherRowWithWarningHeight
+                          : (row.control == LauncherControlKind::Checkbox ? kLauncherCompactRowHeight
+                                                                          : kLauncherRowHeight);
         list->items.push_back(item);
         y += item.height;
     }
@@ -531,28 +538,53 @@ struct LauncherRowGeo {
     RECT rail;
     RECT label;
     RECT description;
-    RECT toggle;
+    RECT controlVisual;
+    RECT controlHit;
     RECT status;
     RECT action;
     RECT warningBox;
     RECT warningText;
 };
 
-LauncherRowGeo launcherGeometryFor(const List* list, const RECT& row, bool hasWarning) {
+LauncherRowGeo launcherGeometryFor(const List* list, const RECT& rowRect, const LauncherToggleRow& row) {
     LauncherRowGeo g{};
+    const bool hasWarning = !row.warning.empty();
+    const bool isCheckbox = row.control == LauncherControlKind::Checkbox;
     const int pad = dp(list, kPad);
     const int rightCol = dp(list, 198);
-    const int bodyBottom = hasWarning ? (row.top + dp(list, 82)) : (row.bottom - dp(list, 8));
-    g.rail = {row.left + dp(list, 8), row.top + dp(list, 10), row.left + dp(list, 10), row.bottom - dp(list, 12)};
-    g.label = {row.left + pad, row.top + dp(list, 8), row.right - rightCol - pad, row.top + dp(list, 44)};
-    g.description = {row.left + pad, row.top + dp(list, 46), row.right - rightCol - pad, bodyBottom};
-    const int tw = dp(list, 46);
-    const int th = dp(list, 24);
-    g.toggle = {row.right - pad - tw, row.top + dp(list, 12), row.right - pad, row.top + dp(list, 12) + th};
-    g.status = {row.right - rightCol, row.top + dp(list, 44), row.right - pad, row.top + dp(list, 62)};
-    g.action = {row.right - rightCol, row.top + dp(list, 64), row.right - pad, row.top + dp(list, 80)};
+    const int bodyBottom = hasWarning ? (rowRect.top + dp(list, 82)) : (rowRect.bottom - dp(list, 8));
+    g.rail = {rowRect.left + dp(list, 8), rowRect.top + dp(list, 10), rowRect.left + dp(list, 10),
+              rowRect.bottom - dp(list, 12)};
+    if (isCheckbox) {
+        g.label = {rowRect.left + pad, rowRect.top + dp(list, 10), rowRect.right - rightCol - pad,
+                   rowRect.top + dp(list, 30)};
+        g.description = {rowRect.left + pad, rowRect.top + dp(list, 32), rowRect.right - rightCol - pad, bodyBottom};
+        const int side = dp(list, 18);
+        g.controlVisual = {rowRect.right - pad - side, rowRect.top + dp(list, 12), rowRect.right - pad,
+                           rowRect.top + dp(list, 12) + side};
+        g.controlHit = {g.controlVisual.left - dp(list, 8), g.controlVisual.top - dp(list, 6),
+                        g.controlVisual.right + dp(list, 6), g.controlVisual.bottom + dp(list, 6)};
+        g.status = {rowRect.right - rightCol, rowRect.top + dp(list, 36), rowRect.right - pad,
+                    rowRect.top + dp(list, 54)};
+        g.action = {rowRect.right - rightCol, rowRect.top + dp(list, 54), rowRect.right - pad,
+                    rowRect.top + dp(list, 68)};
+    } else {
+        g.label = {rowRect.left + pad, rowRect.top + dp(list, 8), rowRect.right - rightCol - pad,
+                   rowRect.top + dp(list, 44)};
+        g.description = {rowRect.left + pad, rowRect.top + dp(list, 46), rowRect.right - rightCol - pad, bodyBottom};
+        const int tw = dp(list, 46);
+        const int th = dp(list, 24);
+        g.controlVisual = {rowRect.right - pad - tw, rowRect.top + dp(list, 12), rowRect.right - pad,
+                           rowRect.top + dp(list, 12) + th};
+        g.controlHit = g.controlVisual;
+        g.status = {rowRect.right - rightCol, rowRect.top + dp(list, 44), rowRect.right - pad,
+                    rowRect.top + dp(list, 62)};
+        g.action = {rowRect.right - rightCol, rowRect.top + dp(list, 64), rowRect.right - pad,
+                    rowRect.top + dp(list, 80)};
+    }
     if (hasWarning) {
-        g.warningBox = {row.left + pad, row.top + dp(list, 86), row.right - pad, row.bottom - dp(list, 10)};
+        g.warningBox = {rowRect.left + pad, rowRect.top + dp(list, 86), rowRect.right - pad,
+                        rowRect.bottom - dp(list, 10)};
         g.warningText = {g.warningBox.left + dp(list, 10), g.warningBox.top + dp(list, 4),
                          g.warningBox.right - dp(list, 10), g.warningBox.bottom - dp(list, 4)};
     }
@@ -582,19 +614,31 @@ void paintLauncherToggleRow(const List* list, HDC dc, const RECT& rowRect, const
     const ui::Theme& t = ui::theme();
     const ui::Fonts& f = ui::fonts();
     const bool hasWarning = !row.warning.empty();
-    const LauncherRowGeo geo = launcherGeometryFor(list, rowRect, hasWarning);
+    const bool disabled = !row.enabled || row.busy;
+    const LauncherRowGeo geo = launcherGeometryFor(list, rowRect, row);
 
     // Thin left rail echoes the Play hero card and marks this as a launcher-managed runtime option.
-    const COLORREF railColor = hasWarning ? t.warn : (row.on ? t.accent : mix(t.cardBg, t.warn, 55));
+    const COLORREF railColor =
+        hasWarning ? t.warn
+                   : (!row.enabled ? t.cardBorder
+                                   : (row.on ? t.accent
+                                             : (row.control == LauncherControlKind::Checkbox
+                                                    ? t.controlBorder
+                                                    : mix(t.cardBg, t.warn, 55))));
     ui::fillRounded(dc, geo.rail, dp(list, 1), railColor);
 
     RECT labelRect = geo.label;
-    ui::drawText(dc, row.label, labelRect, f.bodyBold, t.text, DT_LEFT | DT_WORDBREAK);
+    ui::drawText(dc, row.label, labelRect, f.bodyBold, row.enabled ? t.text : t.muted, DT_LEFT | DT_WORDBREAK);
 
     RECT descRect = geo.description;
-    ui::drawText(dc, row.description, descRect, f.caption, t.subtext, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS);
+    ui::drawText(dc, row.description, descRect, f.caption, row.enabled ? t.subtext : t.muted,
+                 DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS);
 
-    ui::paintToggle(dc, geo.toggle, row.on, list->dpi);
+    if (row.control == LauncherControlKind::Checkbox) {
+        ui::paintCheckbox(dc, geo.controlVisual, row.on, disabled, false, list->dpi);
+    } else {
+        ui::paintToggle(dc, geo.controlVisual, row.on, list->dpi);
+    }
 
     if (!row.statusText.empty()) {
         RECT stRect = geo.status;
@@ -644,13 +688,17 @@ void paint(List* list) {
     const ui::Fonts& f = ui::fonts();
     ui::fillRect(dc, client, t.cardBg);
 
-    if ((!list->model && !list->launcherRow.visible) || list->items.empty()) {
+    bool anyLauncherVisible = false;
+    for (const LauncherToggleRow& r : list->launcherRows) {
+        if (r.visible) { anyLauncherVisible = true; break; }
+    }
+    if ((!list->model && !anyLauncherVisible) || list->items.empty()) {
         RECT empty = client;
         empty.left += dp(list, kPad);
         empty.top += dp(list, kPad);
         ui::drawText(dc,
-                     (list->model || list->launcherRow.visible) ? L"Nothing matches that."
-                                                                : L"Pick an install on the Setup tab first.",
+                     (list->model || anyLauncherVisible) ? L"Nothing matches that."
+                                                         : L"Pick an install on the Setup tab first.",
                      empty, f.body, t.subtext, DT_LEFT | DT_WORDBREAK);
     }
 
@@ -665,7 +713,7 @@ void paint(List* list) {
             text.top += dp(list, 12);
             ui::drawText(dc, item.title, text, f.heading, t.subtext, DT_LEFT | DT_SINGLELINE);
         } else if (item.kind == ItemKind::LauncherToggle) {
-            paintLauncherToggleRow(list, dc, rect, list->launcherRow);
+            paintLauncherToggleRow(list, dc, rect, list->launcherRows[item.row]);
             RECT line{rect.left + dp(list, kPad), rect.bottom - 1, rect.right - dp(list, kPad),
                       rect.bottom};
             ui::fillRect(dc, line, t.cardBorder);
@@ -948,21 +996,41 @@ bool dropdownAt(List* list, int x, int y, size_t* rowIndex, RECT* box) {
 // The row whose link is under the pointer, if any. The click and the cursor
 // both ask this one question, so what is clickable can never drift from what
 // was drawn -- and the quiet text beside the link is no longer part of it.
-bool launcherLinkHit(List* list, int x, int y) {
-    if (!list->launcherRow.visible || list->launcherRow.actionLink.empty()) return false;
+bool launcherLinkHit(List* list, int x, int y, size_t* rowIndex = nullptr) {
     RECT client{};
     GetClientRect(list->hwnd, &client);
     for (const Item& item : list->items) {
         if (item.kind != ItemKind::LauncherToggle) continue;
+        const LauncherToggleRow& row = list->launcherRows[item.row];
+        if (!row.visible || row.actionLink.empty()) continue;
         RECT rect{client.left, dp(list, item.y) - list->scroll, client.right,
                   dp(list, item.y + item.height) - list->scroll};
         if (y < rect.top || y >= rect.bottom) continue;
         HDC dc = GetDC(list->hwnd);
-        const RECT box = launcherActionRect(
-            list, dc, launcherGeometryFor(list, rect, !list->launcherRow.warning.empty()), list->launcherRow.actionLink);
+        const RECT box = launcherActionRect(list, dc, launcherGeometryFor(list, rect, row), row.actionLink);
         ReleaseDC(list->hwnd, dc);
         const POINT point{x, y};
-        return PtInRect(&box, point) != 0;
+        if (PtInRect(&box, point) != 0) {
+            if (rowIndex) *rowIndex = item.row;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool launcherControlHit(List* list, int x, int y) {
+    RECT client{};
+    GetClientRect(list->hwnd, &client);
+    const POINT point{x, y};
+    for (const Item& item : list->items) {
+        if (item.kind != ItemKind::LauncherToggle) continue;
+        const LauncherToggleRow& row = list->launcherRows[item.row];
+        if (!row.visible || !row.enabled || row.busy) continue;
+        RECT rect{client.left, dp(list, item.y) - list->scroll, client.right,
+                  dp(list, item.y + item.height) - list->scroll};
+        if (y < rect.top || y >= rect.bottom) continue;
+        const LauncherRowGeo geo = launcherGeometryFor(list, rect, row);
+        if (PtInRect(&geo.controlHit, point) != 0) return true;
     }
     return false;
 }
@@ -996,8 +1064,9 @@ void onClick(List* list, int x, int y) {
     commitEdit(list);
     hideEdit(list);
 
-    if (launcherLinkHit(list, x, y)) {
-        if (list->launcherRow.onAction) list->launcherRow.onAction();
+    size_t launcherLinkRow = 0;
+    if (launcherLinkHit(list, x, y, &launcherLinkRow)) {
+        if (list->launcherRows[launcherLinkRow].onAction) list->launcherRows[launcherLinkRow].onAction();
         return;
     }
 
@@ -1024,10 +1093,11 @@ void onClick(List* list, int x, int y) {
         if (y < rect.top || y >= rect.bottom) continue;
 
         if (item.kind == ItemKind::LauncherToggle) {
-            const LauncherRowGeo geo = launcherGeometryFor(list, rect, !list->launcherRow.warning.empty());
+            const LauncherToggleRow& row = list->launcherRows[item.row];
+            const LauncherRowGeo geo = launcherGeometryFor(list, rect, row);
             const POINT point{x, y};
-            if (!list->launcherRow.busy && PtInRect(&geo.toggle, point) && list->launcherRow.onToggle) {
-                list->launcherRow.onToggle(!list->launcherRow.on);
+            if (row.enabled && !row.busy && PtInRect(&geo.controlHit, point) && row.onToggle) {
+                row.onToggle(!row.on);
             }
             return;
         }
@@ -1204,7 +1274,8 @@ LRESULT CALLBACK listProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
                 POINT point{};
                 GetCursorPos(&point);
                 ScreenToClient(hwnd, &point);
-                if (launcherLinkHit(list, point.x, point.y) || linkHit(list, point.x, point.y, nullptr)) {
+                if (launcherLinkHit(list, point.x, point.y) || launcherControlHit(list, point.x, point.y) ||
+                    linkHit(list, point.x, point.y, nullptr)) {
                     SetCursor(LoadCursorW(nullptr, IDC_HAND));
                     return TRUE;
                 }
@@ -1273,18 +1344,33 @@ void settingsListSetModel(HWND hwnd, SettingsModel* model, const std::wstring& m
     InvalidateRect(hwnd, nullptr, TRUE);
 }
 
-void settingsListSetLauncherToggle(HWND hwnd, const LauncherToggleRow& row) {
+void settingsListSetLauncherToggles(HWND hwnd, std::vector<LauncherToggleRow> rows) {
     List* list = listOf(hwnd);
     if (!list) return;
-    const bool geometryChanged = list->launcherRow.visible != row.visible ||
-                                 list->launcherRow.group != row.group ||
-                                 list->launcherRow.warning.empty() != row.warning.empty();
-    list->launcherRow = row;
+    bool geometryChanged = list->launcherRows.size() != rows.size();
+    if (!geometryChanged) {
+        for (size_t i = 0; i < rows.size(); ++i) {
+            const LauncherToggleRow& a = list->launcherRows[i];
+            const LauncherToggleRow& b = rows[i];
+            if (a.visible != b.visible || a.group != b.group || a.control != b.control ||
+                a.warning.empty() != b.warning.empty()) {
+                geometryChanged = true;
+                break;
+            }
+        }
+    }
+    list->launcherRows = std::move(rows);
     if (geometryChanged) {
         rebuildItems(list);
         updateScrollbar(list);
     }
     InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+void settingsListSetLauncherToggle(HWND hwnd, const LauncherToggleRow& row) {
+    std::vector<LauncherToggleRow> rows;
+    if (row.visible) rows.push_back(row);
+    settingsListSetLauncherToggles(hwnd, std::move(rows));
 }
 
 void settingsListSetFilter(HWND hwnd, const std::wstring& needle) {

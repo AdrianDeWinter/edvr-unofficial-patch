@@ -552,6 +552,16 @@ InstallState parseState(const std::string& text) {
     s.nativeOriginalName = fromUtf8(get("native", "original_name"));
     s.nativeOriginalSha = get("native", "original_sha256");
 
+    if (get("edhm_d3dx_backup", "saved") == "1") {
+        s.edhmD3dxBackup.saved = true;
+        s.edhmD3dxBackup.loadLibraryRedirect.present = get("edhm_d3dx_backup", "load_library_redirect_present") == "1";
+        s.edhmD3dxBackup.loadLibraryRedirect.value = get("edhm_d3dx_backup", "load_library_redirect");
+        s.edhmD3dxBackup.allowPlatformUpdate.present = get("edhm_d3dx_backup", "allow_platform_update_present") == "1";
+        s.edhmD3dxBackup.allowPlatformUpdate.value = get("edhm_d3dx_backup", "allow_platform_update");
+        s.edhmD3dxBackup.upscaling.present = get("edhm_d3dx_backup", "upscaling_present") == "1";
+        s.edhmD3dxBackup.upscaling.value = get("edhm_d3dx_backup", "upscaling");
+    }
+
     // The per-file records. A record written by this installer has [file.<id>] sections and they are all that is read. One written
     // before them (installer 0.22, launcher 0.1.0) has none, and is read into records from its component fields.
     bool haveRecordSections = false;
@@ -655,6 +665,24 @@ std::string serializeState(const InstallState& state) {
     out += "config_sha256 = " + state.nativeConfigSha + "\r\n";
     out += "original_name = " + toUtf8(state.nativeOriginalName) + "\r\n";
     out += "original_sha256 = " + state.nativeOriginalSha + "\r\n";
+    if (state.edhmD3dxBackup.saved) {
+        auto clean = [](const std::string& v) {
+            std::string r;
+            for (char c : v) if (c != '\r' && c != '\n') r.push_back(c);
+            return r;
+        };
+        out += "\r\n[edhm_d3dx_backup]\r\n";
+        out += "saved = 1\r\n";
+        out += std::string("load_library_redirect_present = ") + (state.edhmD3dxBackup.loadLibraryRedirect.present ? "1" : "0") + "\r\n";
+        if (state.edhmD3dxBackup.loadLibraryRedirect.present)
+            out += "load_library_redirect = " + clean(state.edhmD3dxBackup.loadLibraryRedirect.value) + "\r\n";
+        out += std::string("allow_platform_update_present = ") + (state.edhmD3dxBackup.allowPlatformUpdate.present ? "1" : "0") + "\r\n";
+        if (state.edhmD3dxBackup.allowPlatformUpdate.present)
+            out += "allow_platform_update = " + clean(state.edhmD3dxBackup.allowPlatformUpdate.value) + "\r\n";
+        out += std::string("upscaling_present = ") + (state.edhmD3dxBackup.upscaling.present ? "1" : "0") + "\r\n";
+        if (state.edhmD3dxBackup.upscaling.present)
+            out += "upscaling = " + clean(state.edhmD3dxBackup.upscaling.value) + "\r\n";
+    }
     return out;
 }
 

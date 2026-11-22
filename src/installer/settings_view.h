@@ -18,18 +18,22 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "settings.h"
 
 namespace edvr::installer {
 
 enum class LauncherRowTone { Muted, Accent, Good, Warn, Bad };
+enum class LauncherControlKind { Toggle, Checkbox };
 
-// A launcher-managed toggle rendered cleanly inside the Settings options list
+// A launcher-managed option rendered cleanly inside the Settings options list
 // (outside edup.ini), with wrapped label, inline status, optional action link,
 // and an optional warning strip below the row (e.g. antivirus interference).
 struct LauncherToggleRow {
     bool visible = false;
+    LauncherControlKind control = LauncherControlKind::Toggle;
+    bool enabled = true;
     std::wstring group;
     std::wstring label;
     std::wstring description;
@@ -51,6 +55,7 @@ HWND createSettingsList(HWND parent, int id, UINT dpi);
 // which a write simply skips.
 void settingsListSetModel(HWND list, SettingsModel* model, const std::wstring& mirrorDir);
 void settingsListSetLauncherToggle(HWND list, const LauncherToggleRow& row);
+void settingsListSetLauncherToggles(HWND list, std::vector<LauncherToggleRow> rows);
 void settingsListSetFilter(HWND list, const std::wstring& needle);
 void settingsListRescale(HWND list, UINT dpi);
 

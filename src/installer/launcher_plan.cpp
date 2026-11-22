@@ -10,6 +10,7 @@
 #include "../common/mirror_location.h"
 #include "app.h"
 #include "apply.h"
+#include "edhm_d3dx.h"
 #include "launch_route.h"
 #include "mirror.h"
 #include "payload.h"
@@ -113,7 +114,8 @@ bool missingOrLink(const std::wstring& path) {
 // path comes from `paths`, which planPathsFor worked out from where the file is.
 ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* const* keys,
                      const std::vector<GameInstall>* installs) {
-    if (file.action != "install" && file.action != "repair" && file.action != "uninstall")
+    if (file.action != "install" && file.action != "repair" && file.action != "uninstall" &&
+        file.action != "edhm_logging")
         return failed("the plan names an action this launcher does not know");
     if (file.dir.empty()) return failed("the plan names no game folder");
 
@@ -130,7 +132,7 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
         if (!updater.loadManifestFile(joinPath(paths.manifestsDir, widenUtf8(file.manifestSha)) + L".json", &manifest, &files, &error) ||
             !usePayloadFiles(manifest, files, &error))
             return failed("the downloaded files cannot be used: " + error);
-    } else if (file.action != "uninstall") {
+    } else if (file.action != "uninstall" && file.action != "edhm_logging") {
         return failed("the plan names no payload to install from");
     }
 
@@ -151,6 +153,37 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
                              : describeDir(file.dir, fallback, &game);
     if (!described)
         return failed("there is no EliteDangerous64.exe in the game folder the plan names");
+
+    if (file.action == "edhm_logging") {
+        if (file.d3dxLoggingKey != "show_reload_message" && file.d3dxLoggingKey != "show_warnings")
+            return failed("the plan names an unknown d3dx.ini logging key");
+        const std::wstring d3dxPath = joinPath(game.dir, L"d3dx.ini");
+        const DWORD attrs = GetFileAttributesW(d3dxPath.c_str());
+        if (attrs == INVALID_FILE_ATTRIBUTES)
+            return failed("d3dx.ini was not found in the selected game folder");
+        if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0 || (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0)
+            return failed("d3dx.ini is a link or folder; the installer will not write through it");
+        std::string current;
+        if (!edvr::readFileBytes(d3dxPath, &current))
+            return failed("d3dx.ini could not be read");
+        const std::string updated = file.d3dxLoggingKey == "show_warnings"
+                                        ? setEdhmHideWarnings(current, file.d3dxHideFlag)
+                                        : setEdhmHideReloadMessages(current, file.d3dxHideFlag);
+        const char* valStr = file.d3dxHideFlag ? "0" : "1";
+        ApplyOutcome outcome;
+        if (updated == current) {
+            outcome.status = ApplyOutcome::Status::NothingToDo;
+            outcome.lines.push_back("d3dx.ini already has " + file.d3dxLoggingKey + " = " + valStr + ".");
+            return outcome;
+        }
+        std::wstring writeErr;
+        if (!edvr::writeFileAtomic(d3dxPath, updated, &writeErr))
+            return failed("d3dx.ini could not be updated" +
+                          (writeErr.empty() ? std::string() : (": " + narrowUtf8(writeErr))));
+        outcome.status = ApplyOutcome::Status::Done;
+        outcome.lines.push_back("Updated d3dx.ini [Logging] " + file.d3dxLoggingKey + " = " + valStr + ".");
+        return outcome;
+    }
     const std::wstring mirrorDir = mirrorDirFor(game, paths.dataRoot);
     // This copy is elevated and writes, restores and removes the live settings in this per-install folder, which the
     // user owns: a link there would send those writes somewhere else, as planPathsFor refuses for the folders above it.
@@ -249,6 +282,11 @@ bool writePlanFile(const std::wstring& path, const PlanFile& p, std::string* err
     text += "remove_settings=" + yesNo(p.removeSettings) + "\n";
     if (p.purge) text += "purge=1\n";
     if (p.edhm2dMigoto) text += "edhm_2dmigoto=1\n";
+    if (p.action == "edhm_logging") {
+        if (hasBreak(p.d3dxLoggingKey)) return setError(error, "a value in the plan has a line break in it");
+        text += "d3dx_logging_key=" + p.d3dxLoggingKey + "\n";
+        text += "d3dx_hide=" + yesNo(p.d3dxHideFlag) + "\n";
+    }
     text += "restore_mirror=" + yesNo(p.restoreMirror) + "\n";
     text += "manifest=" + p.manifestSha + "\n";
     std::wstring why;
@@ -261,8 +299,10 @@ bool readPlanFile(const std::wstring& path, PlanFile* plan, std::string* error) 
     if (!readFileBytes(path, &text, 1u << 16, error)) return false;
     std::map<std::string, std::string> m;
     if (!parseLines(text, &m, error)) return false;
-    static const std::set<std::string> known = {"version",        "action",          "dir",            "source",        "scope",
-                                                "keep_settings",  "remove_settings", "purge",          "edhm_2dmigoto", "restore_mirror", "manifest"};
+    static const std::set<std::string> known = {"version",          "action",          "dir",            "source",
+                                                "scope",            "keep_settings",   "remove_settings", "purge",
+                                                "edhm_2dmigoto",    "d3dx_logging_key", "d3dx_hide",
+                                                "restore_mirror",   "manifest"};
     for (const auto& entry : m) {
         if (!known.count(entry.first)) return setError(error, "the plan has a key this launcher does not know: " + entry.first);
     }
@@ -278,6 +318,11 @@ bool readPlanFile(const std::wstring& path, PlanFile* plan, std::string* error) 
         return false;
     if (m.count("purge") && !boolOf(m, "purge", &p.purge, error)) return false;
     if (m.count("edhm_2dmigoto") && !boolOf(m, "edhm_2dmigoto", &p.edhm2dMigoto, error)) return false;
+    if (m.count("d3dx_logging_key")) p.d3dxLoggingKey = textOf(m, "d3dx_logging_key");
+    if (m.count("d3dx_hide") && !boolOf(m, "d3dx_hide", &p.d3dxHideFlag, error)) return false;
+    if (p.action == "edhm_logging" &&
+        p.d3dxLoggingKey != "show_reload_message" && p.d3dxLoggingKey != "show_warnings")
+        return setError(error, "the plan names an unknown d3dx.ini logging key");
     if (p.action.empty() || p.dir.empty()) return setError(error, "the plan lacks an action or a folder");
     if (!p.manifestSha.empty() && !isLowerHex(p.manifestSha, 64)) return setError(error, "the plan's manifest is not a 64-character hash");
     if (!p.scope.empty() && p.scope != "both" && p.scope != "vr" && p.scope != "flat") return setError(error, "the plan names an unknown scope");

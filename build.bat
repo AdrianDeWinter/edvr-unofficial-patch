@@ -914,7 +914,7 @@ set INSTALLER_SRC="src\installer\main.cpp" "src\installer\gui.cpp" ^
     "src\installer\app.cpp" "src\installer\plan.cpp" ^
     "src\installer\apply.cpp" "src\installer\detect.cpp" ^
     "src\installer\probe.cpp" "src\common\iniedit.cpp" ^
-    "src\installer\state.cpp" "src\installer\mirror.cpp" ^
+    "src\installer\state.cpp" "src\installer\mirror.cpp" "src\installer\edhm_d3dx.cpp" ^
     "src\installer\payload.cpp" "src\installer\install_manifest.cpp" ^
     "src\installer\update_json.cpp" "src\installer\update_util.cpp"
 set INSTALLER_LIBS=user32.lib gdi32.lib gdiplus.lib dwmapi.lib uxtheme.lib ^
@@ -3587,7 +3587,7 @@ if not exist "%OBJ%\insttest" mkdir "%OBJ%\insttest"
     "tools\installer_test\installer_test.cpp" ^
     "src\installer\plan.cpp" "src\installer\apply.cpp" ^
     "src\installer\detect.cpp" "src\installer\probe.cpp" ^
-    "src\common\iniedit.cpp" "src\installer\state.cpp" ^
+    "src\common\iniedit.cpp" "src\installer\state.cpp" "src\installer\edhm_d3dx.cpp" ^
     "src\installer\mirror.cpp" ^
     "src\installer\settings.cpp" "src\common\hotkey_text.cpp" "src\installer\logbundle.cpp" ^
     "src\installer\app.cpp" "src\installer\payload.cpp" ^
@@ -3655,7 +3655,7 @@ if errorlevel 1 ( echo [edvr] ERROR: the fake steam_api64.dll build failed & exi
     /Fo"%OBJ%\launchertest"\ /Fe"%BUILD%\launcher_test.exe" ^
     "tools\launcher_test\launcher_test.cpp" ^
     "src\installer\plan.cpp" "src\installer\apply.cpp" "src\installer\detect.cpp" ^
-    "src\installer\probe.cpp" "src\common\iniedit.cpp" "src\installer\state.cpp" ^
+    "src\installer\probe.cpp" "src\common\iniedit.cpp" "src\installer\state.cpp" "src\installer\edhm_d3dx.cpp" ^
     "src\installer\mirror.cpp" "src\installer\settings.cpp" "src\common\hotkey_text.cpp" ^
     "src\installer\logbundle.cpp" "src\installer\app.cpp" "src\installer\payload.cpp" ^
     "src\installer\install_manifest.cpp" "src\installer\update_json.cpp" "src\installer\update_util.cpp" ^

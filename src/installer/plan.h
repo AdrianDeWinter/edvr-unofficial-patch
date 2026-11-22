@@ -95,6 +95,9 @@ struct Survey {
     DllInfo              openxrLicense; // Khronos notice
     std::vector<DllInfo> otherD3d11;  // d3d11_*.dll beside it: chain targets, ours or theirs
     bool                 edhmConfigPresent = false;  // d3dx.ini or EDHM-ini\ beside the game
+    bool                 d3dxIniPresent = false;     // <game>\d3dx.ini exists
+    bool                 d3dxIniUnreadable = false;  // <game>\d3dx.ini exists but could not be read
+    std::string          d3dxIniText;                // contents of <game>\d3dx.ini when present & readable
     bool                 iniPresent = false;
     bool                 descriptorPresent = false;
     std::string          descriptorSha;
