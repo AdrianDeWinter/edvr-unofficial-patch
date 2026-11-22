@@ -20,6 +20,15 @@ unsigned checks=0;
 // line starting FAIL. The control (0) and the unmutated run keep "FAIL:", and the exit code (1) is the same either way.
 void check(bool b,const char* label){++checks;if(!b){const char* mut=std::getenv("EDVR_SCREEN_MUTANT");std::printf((mut&&std::atoi(mut)>0)?"expected-fail: %s\n":"FAIL: %s\n",label);std::exit(1);}}
 void hr(HRESULT h){check(SUCCEEDED(h),"D3D operation");}
+// Waits until the GPU has finished everything submitted so far: an event query after it, flushed, polled until it signals (bounded, so a
+// broken device fails the check that follows instead of hanging the rig).
+void waitForGpu(ID3D11Device* dev,ID3D11DeviceContext* ctx){
+    D3D11_QUERY_DESC qd{};qd.Query=D3D11_QUERY_EVENT;ComPtr<ID3D11Query> done;
+    if(FAILED(dev->CreateQuery(&qd,&done))){ctx->Flush();return;}
+    ctx->End(done.Get());ctx->Flush();
+    const ULONGLONG until=GetTickCount64()+10000;BOOL signalled=FALSE;
+    while(ctx->GetData(done.Get(),&signalled,sizeof(signalled),0)!=S_OK && GetTickCount64()<until) Sleep(1);
+}
 ComPtr<ID3DBlob> compile(const char* s,const char* profile,const char* entry="main"){
     ComPtr<ID3DBlob> c,e;HRESULT h=D3DCompile(s,strlen(s),nullptr,nullptr,nullptr,entry,profile,D3DCOMPILE_ENABLE_STRICTNESS,0,&c,&e);
     if(FAILED(h)&&e)std::puts(static_cast<const char*>(e->GetBufferPointer()));hr(h);return c;
@@ -232,7 +241,11 @@ int main(int argc,char** argv){
         check(d.collecting&&d.sourceFrames>0,"screen GPU diagnostics scope follows accepted source frames");
         check(d.uiClearCalls>0&&d.uiDrawCalls>0&&d.eyeClearCalls>0&&d.projectionCalls>0,"screen GPU diagnostics count each eligible command class");
         check(d.uiClearSubmitted<=d.uiClearSelected&&d.uiDrawSubmitted<=d.uiDrawSelected&&d.eyeClearSubmitted<=d.eyeClearSelected&&d.projectionSubmitted<=d.projectionSelected,"screen GPU diagnostics distinguish selected and submitted samples");
-        ctx->Flush();for(int i=0;i<4;++i){g_gpu.uiClear.timer.poll(ctx.Get());g_gpu.uiDraw.timer.poll(ctx.Get());g_gpu.eyeClear.timer.poll(ctx.Get());g_gpu.projection.timer.poll(ctx.Get());}
+        // The diagnostics' own polls never wait. The rig waits for the GPU first (an event query after the sampled work),
+        // so the polls below have finished samples to retire however loaded the machine is: four immediate polls after a
+        // Flush raced the GPU on a busy CI runner (2026-11-22).
+        waitForGpu(dev.Get(),ctx.Get());
+        for(int i=0;i<4;++i){g_gpu.uiClear.timer.poll(ctx.Get());g_gpu.uiDraw.timer.poll(ctx.Get());g_gpu.eyeClear.timer.poll(ctx.Get());g_gpu.projection.timer.poll(ctx.Get());}
         d=screenMotionGpuDiagnostics();
         check(d.uiClearReady+d.uiClearInvalid<=d.uiClearSubmitted&&d.uiDrawReady+d.uiDrawInvalid<=d.uiDrawSubmitted&&d.eyeClearReady+d.eyeClearInvalid<=d.eyeClearSubmitted&&d.projectionReady+d.projectionInvalid<=d.projectionSubmitted,"screen GPU diagnostics retire only submitted samples");
         check(d.uiClearReady+d.uiDrawReady+d.eyeClearReady+d.projectionReady>0,"screen GPU diagnostics retire WARP timestamp samples without waiting");

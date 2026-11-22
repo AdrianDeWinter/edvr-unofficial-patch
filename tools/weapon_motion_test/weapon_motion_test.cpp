@@ -18,6 +18,16 @@ unsigned checks=0;
 unsigned shadowShaderCreations=0;
 void check(bool b,const char* s){++checks;if(!b){std::printf("FAIL: %s\n",s);std::exit(1);}}
 void hr(HRESULT h){if(FAILED(h))std::printf("HRESULT %08X\n",unsigned(h));check(SUCCEEDED(h),"D3D operation");}
+// Waits until the GPU has finished everything submitted so far: an event query after it, flushed, polled until it signals (bounded, so a
+// broken device fails the check that follows instead of hanging the rig). The diagnostics' own polls never wait.
+void waitForGpu(ID3D11DeviceContext* ctx){
+    ComPtr<ID3D11Device> dev;ctx->GetDevice(&dev);
+    D3D11_QUERY_DESC qd{};qd.Query=D3D11_QUERY_EVENT;ComPtr<ID3D11Query> done;
+    if(!dev||FAILED(dev->CreateQuery(&qd,&done))){ctx->Flush();return;}
+    ctx->End(done.Get());ctx->Flush();
+    const ULONGLONG until=GetTickCount64()+10000;BOOL signalled=FALSE;
+    while(ctx->GetData(done.Get(),&signalled,sizeof(signalled),0)!=S_OK && GetTickCount64()<until) Sleep(1);
+}
 ComPtr<ID3DBlob> compile(const char* s,const char* profile){ComPtr<ID3DBlob> c,e;auto h=D3DCompile(s,strlen(s),nullptr,nullptr,nullptr,"main",profile,D3DCOMPILE_ENABLE_STRICTNESS,0,&c,&e);if(FAILED(h)&&e)std::puts(static_cast<const char*>(e->GetBufferPointer()));hr(h);return c;}
 namespace edvr {
 ID3D11VertexShader* shaderSwapCreateVs(ID3D11DeviceContext* ctx,const void* bytes,size_t size,const char*,const char*) {
@@ -156,7 +166,7 @@ int main(int argc,char** argv){
  ctx->ClearState();bind(old);motion();first=read();covered=0;
  for(UINT i=0;i<W*H;++i)if(first[i*4+3]==1)++covered;
  check(covered>2000,"ClearState and rebind preserve original-vertex history");
- {auto d=weaponMotionGpuDiagnostics();check(d.collecting&&d.sourceFrames>0&&d.calls>=4&&d.selected>0,"weapon GPU diagnostics scope and rotating selection are active");check(d.submitted<=d.selected,"weapon GPU diagnostics distinguish selected and submitted calls");ctx->Flush();for(int i=0;i<8;++i)weaponMotionFrameBoundary(ctx.Get());d=weaponMotionGpuDiagnostics();check(d.identifyReady+d.identifyInvalid<=d.submitted&&d.captureReady+d.captureInvalid<=d.selected&&d.rasterReady+d.rasterInvalid<=d.selected,"weapon GPU diagnostics retire only selected samples");check(d.identifyReady+d.captureReady+d.rasterReady>0,"weapon GPU diagnostics retire WARP timestamp samples without waiting");}
+ {auto d=weaponMotionGpuDiagnostics();check(d.collecting&&d.sourceFrames>0&&d.calls>=4&&d.selected>0,"weapon GPU diagnostics scope and rotating selection are active");check(d.submitted<=d.selected,"weapon GPU diagnostics distinguish selected and submitted calls");waitForGpu(ctx.Get());for(int i=0;i<8;++i)weaponMotionFrameBoundary(ctx.Get());d=weaponMotionGpuDiagnostics();check(d.identifyReady+d.identifyInvalid<=d.submitted&&d.captureReady+d.captureInvalid<=d.selected&&d.rasterReady+d.rasterInvalid<=d.selected,"weapon GPU diagnostics retire only selected samples");check(d.identifyReady+d.captureReady+d.rasterReady>0,"weapon GPU diagnostics retire WARP timestamp samples without waiting");}
  // World arms and viewmodel share topology, with distinct captured clip Z.
  // Reorder both occurrences, then remove one: match by projection on GPU,
  // never by volatile instance number or the occurrence's CPU slot.
