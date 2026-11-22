@@ -3078,6 +3078,13 @@ void testRoute() {
         std::string err;
         check(installEdLaunchShim(self, product, &err) && writeEdLaunchMode(product, false) && readAll(ed) == "our-binary",
               "the stand-in is installed for the store-update case: " + err);
+        // A live file that cannot be read is not taken for a store update: the saved original stays.
+        HANDLE sealed = CreateFileW(ed.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        check(sealed != INVALID_HANDLE_VALUE && !removeEdLaunchShim(product, &err),
+              "remove refuses while EDLaunch.exe cannot be read: " + err);
+        if (sealed != INVALID_HANDLE_VALUE) CloseHandle(sealed);
+        check(readAll(ed) == "our-binary" && readAll(orig) == "frontier-old" && fileExists(P(root, L"edvr_edlaunch.txt")),
+              "an unreadable EDLaunch.exe leaves the stand-in, the saved original and the marker in place");
         writeAll(ed, "frontier-new");
         check(removeEdLaunchShim(product, &err) && readAll(ed) == "frontier-new" && !fileExists(orig) &&
                   !fileExists(P(root, L"edvr_edlaunch.txt")) && !fileExists(P(root, L"edvr_launch_mode.txt")),
