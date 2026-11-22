@@ -6548,20 +6548,56 @@ void testEdhm2dMigoto() {
     }
 
     // 6. End-to-end elevated applyPlanFile with signed schema-3 release carrying edhm_2dmigoto:
+    //    opted-out adoption skips ed-up-edhm-*.zip completely; opting in fetches it on demand;
     //    opt-in backs up standard d3d11_edhm.dll & installs 2DMigoto + notices;
     //    opt-out restores original standard d3d11_edhm.dll; AV-missing fallback restores it too.
     {
         const Rel rel = loadRel("relEdhm");
         const std::wstring base = fresh("edhm-elev-e2e");
+        const LauncherRoots roots = launcherRoots(base);
         ScriptedHttp http;
         http.replies[latestUrl()] = ok(releaseJson(rel), "\"etag-edhm\"");
         serveRelease(&http, rel);
         Updater up(http, settingsFor(base));
         std::string err;
-        const UpdateCheck c = up.check();
-        check(c.outcome == UpdateOutcome::Available && adopt(&up, c, &err),
-              "signed schema-3 release with edhm_2dmigoto adopts cleanly: " + err);
-        const LauncherRoots roots = launcherRoots(base);
+
+        // With edhm_2dmigoto off (default), adoption skips the opt-in ed-up-edhm zip completely.
+        {
+            const UpdateCheck cOff = up.check();
+            check(cOff.outcome == UpdateOutcome::Available && adopt(&up, cOff, &err),
+                  "opted-out adoption of schema-3 release succeeds without opt-in EDHM zip: " + err);
+            bool fetchedEdhmZip = false;
+            for (const HttpRequest& req : http.requests) {
+                if (contains(req.url, "ed-up-edhm")) fetchedEdhmZip = true;
+            }
+            check(!fetchedEdhmZip, "opted-out adoption never downloads ed-up-edhm-*.zip");
+            Manifest mOff;
+            std::vector<PayloadFile> filesOff;
+            check(up.loadCurrentManifest(&mOff, &filesOff, &err),
+                  "opted-out loadCurrentManifest succeeds with core files only: " + err);
+            bool loadedEdhm = false;
+            for (const PayloadFile& pf : filesOff) if (pf.id == "edhm_2dmigoto") loadedEdhm = true;
+            check(!loadedEdhm, "opted-out payload does not contain edhm_2dmigoto");
+            const UpdateCheck cUpToDate = up.check();
+            check(cUpToDate.outcome == UpdateOutcome::UpToDate,
+                  "opted-out user stays UpToDate without downloading opt-in EDHM asset");
+        }
+
+        // Turning edhm_2dmigoto on makes the updater offer the release and fetch ed-up-edhm-*.zip on demand.
+        {
+            LauncherState st;
+            st.load(P(roots.launcherDir(), L"launcher.ini"), nullptr);
+            st.setEdhm2dMigoto(true);
+            check(st.save(&err), "saves edhm_2dmigoto=on before opting in: " + err);
+            const UpdateCheck cOn = up.check();
+            check(cOn.outcome == UpdateOutcome::Available && adopt(&up, cOn, &err),
+                  "opting in fetches ed-up-edhm-*.zip on demand: " + err);
+            bool fetchedEdhmZip = false;
+            for (const HttpRequest& req : http.requests) {
+                if (contains(req.url, "ed-up-edhm")) fetchedEdhmZip = true;
+            }
+            check(fetchedEdhmZip, "opted-in adoption downloads ed-up-edhm-*.zip");
+        }
         const std::wstring game = fakeGameFolder("edhm-elev-game");
         // Valid minimal x64 PE (no EDVR exports -> probeDll classifies it as Foreign).
         std::string stdEdhm(512, '\0');
@@ -6727,12 +6763,20 @@ void testEdhm2dMigoto() {
         // are not memory-mapped by this test process's earlier usePayloadFiles call.
         {
             const std::wstring base9 = fresh("edhm-cache-loss");
+            const LauncherRoots roots9 = launcherRoots(base9);
+            std::string err9;
+            {
+                CreateDirectoryW(roots9.launcherDir().c_str(), nullptr);
+                LauncherState st9;
+                st9.load(P(roots9.launcherDir(), L"launcher.ini"), nullptr);
+                st9.setEdhm2dMigoto(true);
+                check(st9.save(&err9), "saves edhm_2dmigoto=on for cache-loss test: " + err9);
+            }
             ScriptedHttp http9;
             http9.replies[latestUrl()] = ok(releaseJson(rel), "\"etag-edhm-9\"");
             serveRelease(&http9, rel);
             Updater up9(http9, settingsFor(base9));
             const UpdateCheck c9 = up9.check();
-            std::string err9;
             check(c9.outcome == UpdateOutcome::Available && adopt(&up9, c9, &err9),
                   "fresh schema-3 release adopts cleanly for cache-loss test: " + err9);
             Manifest m;
@@ -6754,6 +6798,16 @@ void testEdhm2dMigoto() {
             const UpdateCheck repairCheck = up9.check();
             check(repairCheck.outcome == UpdateOutcome::Available,
                   "updater.check() offers release to repair missing opt-in cache file instead of UpToDate");
+            // Turning edhm_2dmigoto off stops asking to re-download the missing opt-in blob.
+            {
+                LauncherState st9off;
+                st9off.load(P(roots9.launcherDir(), L"launcher.ini"), nullptr);
+                st9off.setEdhm2dMigoto(false);
+                check(st9off.save(&err9), "saves edhm_2dmigoto=off after cache loss: " + err9);
+            }
+            const UpdateCheck offCheck = up9.check();
+            check(offCheck.outcome == UpdateOutcome::UpToDate,
+                  "updater.check() reports UpToDate once opted out even when opt-in cache file is absent");
         }
     }
 }

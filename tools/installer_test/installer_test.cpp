@@ -8584,7 +8584,10 @@ int wmain(int argc, wchar_t** argv) {
             {
                 opt.edhm2dMigoto = true;
                 opt.backupStamp = L"t12g1";
-                check(applyPlan(planInstall(surveyEdhm(), opt, p2), providerFor(p2)).ok,
+                Survey sFresh7 = surveyEdhm();
+                sFresh7.d3d11.kind = DllKind::Foreign;
+                sFresh7.d3d11.product = L"3Dmigoto";
+                check(applyPlan(planInstall(sFresh7, opt, p2), providerFor(p2)).ok,
                       "install before external EDHM update test applies");
                 const std::string stdEdhmV3 = syntheticPe({"D3D11CreateDevice"}) + "STD-EDHM-V3-PLAYER";
                 writeAll(joinPath(gameDir, L"d3d11_edhm.dll"), stdEdhmV3);
@@ -8623,6 +8626,51 @@ int wmain(int argc, wchar_t** argv) {
                       "uninstall restored chained ReShade to d3d11.dll");
                 check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) != migotoV2,
                       "uninstall also restored standard d3d11_edhm.dll even when chained to another mod");
+            }
+            // Sean #9: only d3dx.ini present while ED-UP is chained to another mod (ReShade) must NOT
+            // drop an unchained d3d11_edhm.dll that ED-UP will never load.
+            {
+                DeleteFileW(joinPath(gameDir, L"d3d11_edhm.dll").c_str());
+                // d3d11.dll is currently ReShade from the uninstall above; install ED-UP with opt-in ON.
+                Options rsOpt;
+                rsOpt.edhm2dMigoto = true;
+                rsOpt.backupStamp = L"t12rs2";
+                const ApplyResult rsIns = applyPlan(planInstall(surveyEdhm(), rsOpt, p2), providerFor(p2));
+                check(rsIns.ok, "install with ReShade + stray d3dx.ini succeeds", rsIns.error);
+                check(!fileExists(joinPath(gameDir, L"d3d11_edhm.dll")),
+                      "planInstall does not place unchained d3d11_edhm.dll when chained to ReShade");
+                Options rsTog;
+                rsTog.edhm2dMigoto = true;
+                rsTog.backupStamp = L"t12rs3";
+                const Plan togPlan = planEdhmToggle(surveyEdhm(), rsTog, p2);
+                check(togPlan.nothingToDo && !fileExists(joinPath(gameDir, L"d3d11_edhm.dll")),
+                      "planEdhmToggle does not place unchained d3d11_edhm.dll when chained to ReShade");
+            }
+            // Sean #6b: uninstall in !handledEdhmUnchain path warns explicitly when recorded EDHM backup fails verification.
+            {
+                writeAll(joinPath(gameDir, L"d3d11_edhm.dll"), migotoV2);
+                const std::wstring badBak = joinPath(gameDir, L"d3d11_edhm.dll.edup-backup-badsha");
+                writeAll(badBak, "CORRUPT-BACKUP");
+                InstallState st = readState(gameDir);
+                FileRecord rec;
+                rec.id = "edhm_2dmigoto";
+                rec.root = "game";
+                rec.path = "d3d11_edhm.dll";
+                rec.sha256 = sha256Bytes(migotoV2.data(), migotoV2.size());
+                rec.existing = existingName(ExistingMode::OptIn);
+                rec.backup = L"d3d11_edhm.dll.edup-backup-badsha";
+                rec.beforeSha256 = std::string(64, 'a');
+                st.files.push_back(rec);
+                writeAll(statePath(gameDir), serializeState(st));
+                Options uopt;
+                uopt.backupStamp = L"t12badbak";
+                const Plan uplan = planUninstall(surveyEdhm(), uopt, p2);
+                bool sawWarning = false;
+                for (const std::string& p : uplan.problems) {
+                    if (p.find("d3d11_edhm.dll") != std::string::npos && p.find("backup") != std::string::npos)
+                        sawWarning = true;
+                }
+                check(sawWarning, "planUninstall emits problem note when EDHM backup fails verification under non-EDHM chain");
             }
         }
 

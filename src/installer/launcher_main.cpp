@@ -188,9 +188,11 @@ int runUpdateCommand(const AppArgs& args, Output& out) {
 
 // The third-party licence texts embedded by gen_installer_rc.py:
 //   120: min-ed-launcher (MIT, direct launch)
-//   121: EDHM_2DMigoto / 3Dmigoto / XXMI (GPLv3), PCRE2 (BSD), DirectXTK (MIT), EDHM notice
+//   121: EDHM_2DMigoto / 3Dmigoto / XXMI / PCRE2 / DirectXTK / EDHM summary & source offer
+//   122: GNU General Public License v3.0 full text (for optional EDHM_2DMigoto runtime)
 constexpr int kLicenseResource = 120;
 constexpr int kEdhmLicenseResource = 121;
+constexpr int kEdhmGplResource = 122;
 
 bool loadRcText(int id, std::string* out) {
     HRSRC found = FindResourceW(nullptr, MAKEINTRESOURCEW(id), RT_RCDATA);
@@ -214,6 +216,12 @@ int runLicensesCommand(Output& out) {
         if (!minEd.empty() && minEd.back() != '\n') out.raw("\n");
         out.raw("\n------------------------------------------------------------------------\n\n");
         out.raw(edhm);
+    }
+    std::string gpl;
+    if (loadRcText(kEdhmGplResource, &gpl)) {
+        if (!edhm.empty() && edhm.back() != '\n') out.raw("\n");
+        out.raw("\n------------------------------------------------------------------------\n\n");
+        out.raw(gpl);
     }
     return 0;
 }

@@ -8,7 +8,7 @@ license text (EDHM-2DMIGOTO-LICENSE.txt) and bundled third-party notices
 (EDHM-2DMIGOTO-THIRD-PARTY.txt) beside the game, and backs up your
 existing standard d3d11_edhm.dll for restoration when turned off.
 
-Project lineage & source offer:
+Project lineage:
   - EDHM_2DMigoto: https://github.com/Fenris159/EDHM_2DMigoto (GNU GPLv3)
   - XXMI-Libs-Package: https://github.com/SpectrumQT/XXMI-Libs-Package (GNU GPLv3)
   - 3Dmigoto: https://github.com/bo3b/3Dmigoto (GNU GPLv3)
@@ -27,9 +27,17 @@ EDHM (Elite Dangerous HUD Mod):
     replaces the 3Dmigoto d3d11_edhm.dll loader in an existing EDHM install
     when opted in.
 
-Full source code for the pinned EDHM_2DMigoto release is available at
-https://github.com/Fenris159/EDHM_2DMigoto/releases (pinned by tag and
-SHA-256 in tools/fetch_edhm_2dmigoto.py). The full text of GNU GPLv3,
-COPYING.txt, AUTHORS.txt, PCRE2's BSD license, and DirectXTK's MIT license
-are shipped in EDHM-2DMIGOTO-LICENSE.txt and EDHM-2DMIGOTO-THIRD-PARTY.txt
-whenever the optional runtime is packaged or installed.
+Corresponding Source offer (GNU GPLv3 Section 6):
+  - Pinned release: v0.1.8 (commit 2cbeaa381c57f4848144d3a1510ed34f8f41f0e5)
+  - Source tree:    https://github.com/Fenris159/EDHM_2DMigoto/tree/2cbeaa381c57f4848144d3a1510ed34f8f41f0e5
+  - Source archive: https://github.com/Fenris159/EDHM_2DMigoto/archive/2cbeaa381c57f4848144d3a1510ed34f8f41f0e5.tar.gz
+  - Archive SHA256: 17bfffe33ff43439a72e003c87c530dfcf07aa4c19950fa3e8d027a57a4e1401
+  - Binary SHA256:  3480813a4ecffce90c7b29e57b62788ea0b1a6aff5be06120cdf237fea054eb4
+  - Build steps:    Extract the pinned source archive on Windows with Visual Studio 2022
+                    (Desktop development with C++, Windows 10/11 SDK) and build the x64
+                    Release configuration via MSBuild as documented in docs/building.md
+                    inside the pinned commit.
+
+The complete text of GNU General Public License v3.0 follows below (and is
+also shipped beside the game as EDHM-2DMIGOTO-LICENSE.txt together with
+EDHM-2DMIGOTO-THIRD-PARTY.txt whenever the optional runtime is installed).

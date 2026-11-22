@@ -103,6 +103,9 @@ PayloadLoad loadLauncherPayload(const LauncherRoots& roots, const std::wstring& 
         }
         load.kind = PayloadKind::Folder;
         load.version = folderManifest.build;
+        for (const ManifestFile& f : folderManifest.files) {
+            if (f.id == "edhm_2dmigoto") { load.hasOptInEdhmAsset = true; break; }
+        }
         if (!usePayloadFiles(folderManifest, files, &error)) {
             load.note = error;
             return load;
@@ -138,6 +141,9 @@ PayloadLoad loadLauncherPayload(const LauncherRoots& roots, const std::wstring& 
     load.kind = PayloadKind::Manifest;
     load.manifestPath = joinPath(joinPath(roots.launcherDir(), L"manifests"), widenUtf8(state.currentManifest())) + L".json";
     load.version = manifest.build;
+    for (const ManifestFile& f : manifest.files) {
+        if (f.id == "edhm_2dmigoto") { load.hasOptInEdhmAsset = true; break; }
+    }
     if (!usePayloadFiles(manifest, files, &error)) {
         load.note = error;
         return load;

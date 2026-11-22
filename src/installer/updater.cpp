@@ -238,7 +238,9 @@ UpdateCheck Updater::check() {
         Manifest curManifest;
         if (!loadVerifiedManifest(mBytes, sText, keys(), &curManifest, nullptr)) return false;
         PayloadCache cache(settings_.cacheDir);
+        const bool wantOptIn = state.edhm2dMigoto();
         for (const ManifestFile& f : curManifest.files) {
+            if (!wantOptIn && !f.when.option.empty()) continue;
             if (!cache.hasSized(f.sha256, f.size)) return false;
         }
         return true;
@@ -355,7 +357,9 @@ bool Updater::downloadUpdate(const UpdateCheck& check, const std::atomic<bool>* 
         }
         return true;
     };
-    return cache.ensureFiles(check.manifest, fetcher, error, nullptr, verifiedOut);
+    LauncherState state;
+    const bool wantOptIn = state.load(statePath(), nullptr) && state.edhm2dMigoto();
+    return cache.ensureFiles(check.manifest, fetcher, error, nullptr, verifiedOut, wantOptIn);
 }
 
 bool Updater::commitManifest(const UpdateCheck& check, std::string* error,
@@ -370,8 +374,13 @@ bool Updater::commitManifest(const UpdateCheck& check, std::string* error,
     Manifest verified;
     if (!loadVerifiedManifest(check.manifestBytes, check.signatureText, keys(), &verified, error)) return false;
 
+    LauncherState state;
+    if (!state.load(statePath(), error)) return false;
+    const bool wantOptIn = state.edhm2dMigoto();
+
     PayloadCache cache(settings_.cacheDir);
-    if (!cache.hasAll(verified, preVerified)) return fail("the payload cache does not hold every file of this release yet");
+    if (!cache.hasAll(verified, preVerified, wantOptIn))
+        return fail("the payload cache does not hold every file of this release yet");
 
     const std::wstring dir = joinPath(settings_.launcherDir, L"manifests");
     if (!createDirectories(dir)) return fail("the manifests folder cannot be created");
@@ -379,8 +388,6 @@ bool Updater::commitManifest(const UpdateCheck& check, std::string* error,
     if (!writeFile(base + L".sig", check.signatureText) || !writeFile(base + L".json", check.manifestBytes))
         return fail("the manifest could not be stored");
 
-    LauncherState state;
-    if (!state.load(statePath(), error)) return false;
     state.setCurrentManifest(sha);
     state.raiseHighestIssued(verified.issued);
     if (!state.save(error)) return false;
@@ -454,7 +461,7 @@ bool Updater::loadManifestFile(const std::wstring& jsonPath, Manifest* manifest,
         if (!cache.hasSized(f.sha256, f.size)) {
             // Optional opt-in files (such as EDHM 2DMigoto) missing from cache must not disable
             // core ED-UP Install/Repair; callers see the file as absent until re-downloaded.
-            if (f.when.option == "edhm_2dmigoto") continue;
+            if (!f.when.option.empty()) continue;
             return fail("the payload cache lacks " + f.path + "; connect and update to repair it");
         }
         PayloadFile p;

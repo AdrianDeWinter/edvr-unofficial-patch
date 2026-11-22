@@ -57,6 +57,7 @@ struct PayloadLoad {
     std::string version;       // the build stamp the install record will carry
     std::string note;          // what to do, or what went wrong, in a sentence for the window
     std::wstring manifestPath; // the stored manifest, when kind is Manifest
+    bool hasOptInEdhmAsset = false;  // manifest lists optional edhm_2dmigoto (even if not yet downloaded)
 };
 
 // The files of an unpacked ed-up-<ver>.zip, listed by the schema-2 manifest <dir>\ed-up-manifest-v2.json

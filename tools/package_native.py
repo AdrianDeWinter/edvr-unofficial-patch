@@ -65,9 +65,12 @@ LAUNCHER_VERSION_HEADER = ("src", "installer", "launcher_version.h")
 LAUNCHER_LICENSE_FILE = ("third_party", "min_ed_launcher", "LICENSE")
 LAUNCHER_LICENSE_NAME = "MIN-ED-LAUNCHER-LICENSE.txt"
 LAUNCHER_LICENSE_RESOURCE = 120
-# The EDHM_2DMigoto / 3Dmigoto / XXMI / PCRE2 / DirectXTK / EDHM notice carried as RCDATA 121 by the launcher.
+# The EDHM_2DMigoto / 3Dmigoto / XXMI / PCRE2 / DirectXTK / EDHM notice (RCDATA 121)
+# and full GNU GPLv3 text (RCDATA 122) carried by the launcher.
 EDHM_LICENSE_FILE = ("third_party", "edhm_2dmigoto_notice", "NOTICE.txt")
 EDHM_LICENSE_RESOURCE = 121
+EDHM_GPL_FILE = ("third_party", "edhm_2dmigoto_notice", "LICENSE.GPL.txt")
+EDHM_GPL_RESOURCE = 122
 KEYS_HEADER = ("src", "installer", "update_keys.h")
 
 
@@ -463,7 +466,7 @@ def _validate_launcher(root):
         if stamp.get(key) != version:
             problems.append("%s %s is %s, but launcher_version.h says %s" % (LAUNCHER_ASSET, key, stamp.get(key), version))
     for resource_id in range(IDR_MANIFEST, IDR_FILE_BASE + len(FILES) + 1):
-        if resource_id in (LAUNCHER_LICENSE_RESOURCE, EDHM_LICENSE_RESOURCE):
+        if resource_id in (LAUNCHER_LICENSE_RESOURCE, EDHM_LICENSE_RESOURCE, EDHM_GPL_RESOURCE):
             continue
         if _embedded_resource(launcher, resource_id, required=False) is not None:
             problems.append("%s carries resource %d: the launcher has no embedded payload" % (LAUNCHER_ASSET, resource_id))
@@ -479,6 +482,12 @@ def _validate_launcher(root):
         problems.append("%s does not carry resource %d, the EDHM_2DMigoto licence notice" % (LAUNCHER_ASSET, EDHM_LICENSE_RESOURCE))
     elif not edhm_licence_file.is_file() or edhm_licence != edhm_licence_file.read_bytes():
         problems.append("%s resource %d differs from %s" % (LAUNCHER_ASSET, EDHM_LICENSE_RESOURCE, "/".join(EDHM_LICENSE_FILE)))
+    edhm_gpl = _embedded_resource(launcher, EDHM_GPL_RESOURCE, required=False)
+    edhm_gpl_file = root.joinpath(*EDHM_GPL_FILE)
+    if edhm_gpl is None:
+        problems.append("%s does not carry resource %d, the EDHM_2DMigoto GPLv3 text" % (LAUNCHER_ASSET, EDHM_GPL_RESOURCE))
+    elif not edhm_gpl_file.is_file() or edhm_gpl != edhm_gpl_file.read_bytes():
+        problems.append("%s resource %d differs from %s" % (LAUNCHER_ASSET, EDHM_GPL_RESOURCE, "/".join(EDHM_GPL_FILE)))
     keys = sign_manifest.header_keys(root.joinpath(*KEYS_HEADER))
     if len(keys) != 2:
         problems.append("update_keys.h lists %d keys; a release needs the main key and the recovery key" % len(keys))
@@ -805,9 +814,13 @@ def self_test():
         edhm_notice_file = root.joinpath(*EDHM_LICENSE_FILE)
         edhm_notice_file.parent.mkdir(parents=True, exist_ok=True)
         edhm_notice_file.write_bytes(b"EDHM_2DMigoto GPLv3 third-party notice")
+        edhm_gpl_file = root.joinpath(*EDHM_GPL_FILE)
+        edhm_gpl_file.parent.mkdir(parents=True, exist_ok=True)
+        edhm_gpl_file.write_bytes(b"GNU GENERAL PUBLIC LICENSE Version 3")
         launcher_resources = {
             LAUNCHER_LICENSE_RESOURCE: root.joinpath(*LAUNCHER_LICENSE_FILE).read_bytes(),
             EDHM_LICENSE_RESOURCE: edhm_notice_file.read_bytes(),
+            EDHM_GPL_RESOURCE: edhm_gpl_file.read_bytes(),
         }
 
         def fake_resource(executable, resource_id, required=True):
@@ -1197,10 +1210,30 @@ def self_test():
             assert v3_by_id["edhm_2dmigoto"]["existing"] == "opt_in"
             assert v3_by_id["edhm_2dmigoto"]["when"] == {"option": "edhm_2dmigoto"}
             assert v3_by_id["edhm_2dmigoto"]["target"] == {"root": "game", "path": "d3d11_edhm.dll"}
-            assert all(e["id"] not in ("edhm_2dmigoto", "edhm_2dmigoto_license", "edhm_2dmigoto_third_party")
-                       for e in v2_parsed["files"])
-            assert all("option" not in (e.get("when") or {}) and e["existing"] != "opt_in"
-                       for e in v2_parsed["files"])
+            # Golden schema-2 structural pin matching main's v0.22.x manifest contract:
+            # exact top-level keys, per-file schema-2 descriptors (id, target, when, existing),
+            # and strictly non-EDHM assets so v0.22.x launchers cannot break over time.
+            assert set(v2_parsed.keys()) == {"schema", "version", "tag", "build", "issued", "launcher", "assets", "files"}
+            golden_v2_descriptors = [
+                ("graphics", {"root": "game", "path": "d3d11.dll"}, {"profile": ["vr", "flat"]}, "chain"),
+                ("runtime", {"root": "openvr", "path": "openvr_api.dll"}, {"profile": ["vr"]}, "runtime"),
+                ("openxr_loader", {"root": "openvr", "path": "openxr_loader.dll"}, {"profile": ["vr"]}, "replace"),
+                ("openxr_license", {"root": "openvr", "path": "OPENXR-LOADER-LICENSE.txt"}, {"profile": ["vr"]}, "replace"),
+                ("settings_vr", {"root": "game", "path": "edvr.ini"}, {"profile": ["vr"]}, "settings"),
+                ("settings_flat", {"root": "game", "path": "edvr-flat.ini"}, {"profile": ["flat"]}, "settings"),
+                ("dittosr_license", {"root": "game", "path": "DITTOSR-LICENSE.txt"}, {"profile": ["vr", "flat"]}, "owned"),
+                ("dittosr_gsr_license", {"root": "game", "path": "DITTOSR-GSR-LICENSE.txt"}, {"profile": ["vr", "flat"]}, "owned"),
+                ("dlss", {"root": "game", "path": "nvngx_dlss.dll"}, {"adapter": "nvidia"}, "owned"),
+                ("xess", {"root": "game", "path": "libxess.dll"}, None, "owned"),
+                ("xess_license", {"root": "game", "path": "INTEL-XESS-LICENSE.txt"}, None, "owned"),
+                ("xess_third_party", {"root": "game", "path": "INTEL-XESS-THIRD-PARTY.txt"}, None, "owned"),
+                ("xess_fg", {"root": "game", "path": "libxess_fg.dll"}, {"profile": ["flat"]}, "owned"),
+                ("xess_ll", {"root": "game", "path": "libxell.dll"}, {"profile": ["flat"]}, "owned"),
+                ("fsr4_loader", {"root": "game", "path": "amd_fidelityfx_loader_dx12.dll"}, None, "owned"),
+                ("fsr4_upscaler", {"root": "game", "path": "amd_fidelityfx_upscaler_dx12.dll"}, None, "owned"),
+                ("fsr4_license", {"root": "game", "path": "AMD-FIDELITYFX-LICENSE.txt"}, None, "owned"),
+            ]
+            assert [(e["id"], e["target"], e.get("when"), e["existing"]) for e in v2_parsed["files"]] == golden_v2_descriptors
             assert all("edhm" not in a["name"] for a in v2_parsed["assets"])
             assert sign_manifest.verify_directory(dist, allow_unsigned=True, out=lambda line: None)
             for name in ("d3d11_edhm.dll", "EDHM-2DMIGOTO-LICENSE.txt", "EDHM-2DMIGOTO-THIRD-PARTY.txt"):
@@ -1376,6 +1409,11 @@ def self_test():
             launcher_resources[EDHM_LICENSE_RESOURCE] = good_edhm + b" "
             refused_launcher("launcher with wrong EDHM notice", "resource 121 differs from third_party/edhm_2dmigoto_notice/NOTICE.txt")
             launcher_resources[EDHM_LICENSE_RESOURCE] = good_edhm
+            good_gpl = launcher_resources.pop(EDHM_GPL_RESOURCE)
+            refused_launcher("launcher without EDHM GPLv3", "does not carry resource 122")
+            launcher_resources[EDHM_GPL_RESOURCE] = good_gpl + b" "
+            refused_launcher("launcher with wrong EDHM GPLv3", "resource 122 differs from third_party/edhm_2dmigoto_notice/LICENSE.GPL.txt")
+            launcher_resources[EDHM_GPL_RESOURCE] = good_gpl
             rfc = sign_manifest.RFC_PUBLIC.lower()
             real_pair = [k for k in re.findall(r'"([0-9a-f]{128})"', real_keys_text)]
             assert len(real_pair) == 2 and real_pair[0] != rfc and real_pair[1] != rfc, "the repository's own keys"

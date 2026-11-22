@@ -27,6 +27,9 @@ REPO = "Fenris159/EDHM_2DMigoto"
 VERSION = "0.1.8"
 TAG = "v" + VERSION
 COMMIT = "2cbeaa381c57f4848144d3a1510ed34f8f41f0e5"
+SOURCE_TREE_URL = "https://github.com/%s/tree/%s" % (REPO, COMMIT)
+SOURCE_ARCHIVE_URL = "https://github.com/%s/archive/%s.tar.gz" % (REPO, COMMIT)
+SOURCE_ARCHIVE_SHA256 = "17bfffe33ff43439a72e003c87c530dfcf07aa4c19950fa3e8d027a57a4e1401"
 RELEASE_URL = "https://github.com/%s/releases/download/%s" % (REPO, TAG)
 RAW_URL = "https://raw.githubusercontent.com/%s/%s" % (REPO, COMMIT)
 
@@ -98,14 +101,17 @@ def build_combined_notice(parts):
     """Assemble the deterministic third-party notice shipped beside d3d11_edhm.dll."""
     chunks = [
         "EDHM_2DMigoto (tailored 2DMigoto runtime for EDHM)\n"
-        "Release: %s (commit %s)\n"
-        "Source:  https://github.com/%s/tree/%s\n"
-        "License: GNU General Public License v3.0 (see EDHM-2DMIGOTO-LICENSE.txt)\n"
+        "Release:        %s (commit %s)\n"
+        "Source tree:    %s\n"
+        "Source archive: %s\n"
+        "Archive SHA256: %s\n"
+        "Build from src: Visual Studio 2022 / MSBuild x64 Release (see docs/building.md at the pinned commit)\n"
+        "License:        GNU General Public License v3.0 (see EDHM-2DMIGOTO-LICENSE.txt)\n"
         "\n"
         "EDHM (Elite Dangerous HUD Mod) is a separate community project\n"
         "(https://github.com/psychicEgg/EDHM). This optional runtime is a tailored\n"
         "3Dmigoto / XXMI compatibility build for EDHM users running ED-UP.\n"
-        % (TAG, COMMIT, REPO, TAG)
+        % (TAG, COMMIT, SOURCE_TREE_URL, SOURCE_ARCHIVE_URL, SOURCE_ARCHIVE_SHA256)
     ]
     for name in NOTICE_PARTS:
         text = parts[name].decode("utf-8", errors="replace").replace("\r\n", "\n").rstrip("\n")

@@ -444,6 +444,12 @@ bool validRecordId(const std::string& id) {
     return true;
 }
 
+// Note on forward/backward compatibility: older launchers (v0.22.x) do not recognise
+// `existing = opt_in` and drop such [file.*] sections into `refusedRecords` (losing
+// `before_sha256` and `backup` if they overwrite state.ini). Because schema-2 releases
+// (ed-up-manifest-v2.json) self-update v0.22.x launchers to the schema-3 launcher before
+// any opt_in file can be installed, an older planner is not expected to see an active
+// opt_in record unless someone deliberately downgrades the launcher binary.
 bool knownExisting(const std::string& name) {
     for (const ExistingMode mode : {ExistingMode::Replace, ExistingMode::Owned, ExistingMode::Chain, ExistingMode::Runtime,
                                     ExistingMode::Settings, ExistingMode::OptIn})

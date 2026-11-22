@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Sign and verify the release manifests, ed-up-manifest-v2.json and ed-up-manifest.json.
+"""Sign and verify the release manifests: ed-up-manifest-v3.json, ed-up-manifest-v2.json,
+and ed-up-manifest.json (the schema-1 bridge).
 
-A release carries two manifests. ed-up-manifest-v2.json is the schema-2 manifest that
-launcher 0.2.0 and later read. ed-up-manifest.json is a schema-1 bridge, the one name and
-schema launcher 0.1.0 (v0.22.0) knows: it tells that launcher to replace itself with the
-current one, and lists the same files truthfully.
+A release carries three manifests. ed-up-manifest-v3.json is the schema-3 manifest that
+current launchers read (supporting opt-in files such as the optional EDHM 2DMigoto runtime).
+ed-up-manifest-v2.json is the strict schema-2 subset that v0.22.x launchers read, kept free of
+schema-3 keys so those launchers keep updating. ed-up-manifest.json is the schema-1 bridge,
+the one name and schema launcher 0.1.0 (v0.22.0) knows: it tells that launcher to replace
+itself with the current one, and lists the same files truthfully.
 
 A manifest is ASCII JSON and is signed as its exact bytes: P-256 ECDSA over
 the SHA-256 of the file, with a deterministic nonce (RFC 6979), written to
@@ -15,13 +18,13 @@ Only the Python standard library is used.
 
   generate            make one key and print its private scalar and public key
                       once. Writes no file.
-  sign MANIFEST       sign either manifest (by its schema), after checking the manifest and that the
-                      key's public half is in update_keys.h. The key comes from
-                      a hidden prompt, or from one line on stdin with --key-stdin
+  sign MANIFEST       sign any of the three manifests (by its schema), after checking the
+                      manifest and that the key's public half is in update_keys.h. The key
+                      comes from a hidden prompt, or from one line on stdin with --key-stdin
                       so a password manager's command line can supply it.
                       --dry-run does everything except write the .sig.
-  verify DIR          check both signatures, both manifests' schemas, that the bridge
-                      agrees with the schema-2 manifest, and the size and
+  verify DIR          check all three signatures (when v3 is present), all manifests' schemas,
+                      that the v2 and schema-1 manifests agree with v3, and the size and
                       hash of every asset, the launcher if listed, and every file
                       inside every zip. --allow-unsigned skips only the signatures.
 

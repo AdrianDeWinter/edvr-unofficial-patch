@@ -78,8 +78,10 @@ bool PayloadCache::hasSized(const std::string& sha256, unsigned long long size) 
     return fileSizeOf(path, &actual) && actual == size;
 }
 
-bool PayloadCache::hasAll(const Manifest& manifest, const std::set<std::string>* preVerified) const {
+bool PayloadCache::hasAll(const Manifest& manifest, const std::set<std::string>* preVerified,
+                          bool includeOptIn) const {
     for (const ManifestFile& f : manifest.files) {
+        if (!includeOptIn && !f.when.option.empty()) continue;
         if (preVerified && preVerified->find(f.sha256) != preVerified->end()) {
             if (!hasSized(f.sha256, f.size)) return false;
         } else if (!hasVerified(f.sha256, f.size)) {
@@ -101,7 +103,8 @@ void PayloadCache::removeTemporaries() const {
 
 bool PayloadCache::ensureFiles(const Manifest& manifest, const AssetFetcher& fetcher, std::string* error,
                                std::vector<std::string>* fetchedAssets,
-                               std::set<std::string>* verifiedOut) {
+                               std::set<std::string>* verifiedOut,
+                               bool includeOptIn) {
     if (!createDirectories(root_)) return setError(error, "the payload folder cannot be created");
     removeTemporaries();
     if (fetchedAssets) fetchedAssets->clear();
@@ -114,6 +117,7 @@ bool PayloadCache::ensureFiles(const Manifest& manifest, const AssetFetcher& fet
         std::vector<const ManifestFile*> missing;
         for (const ManifestFile& f : manifest.files) {
             if (f.asset != asset.name) continue;
+            if (!includeOptIn && !f.when.option.empty()) continue;
             if (verified.find(f.sha256) != verified.end()) continue;
             if (hasVerified(f.sha256, f.size)) {
                 verified.insert(f.sha256);

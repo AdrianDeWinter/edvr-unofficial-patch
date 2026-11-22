@@ -171,6 +171,8 @@ IDR_MIN_ED_LAUNCHER_LICENSE = 120
 LAUNCHER_LICENSE_FILE = ('third_party', 'min_ed_launcher', 'LICENSE')
 IDR_EDHM_2DMIGOTO_LICENSE = 121
 EDHM_LICENSE_FILE = ('third_party', 'edhm_2dmigoto_notice', 'NOTICE.txt')
+IDR_EDHM_2DMIGOTO_GPL = 122
+EDHM_GPL_FILE = ('third_party', 'edhm_2dmigoto_notice', 'LICENSE.GPL.txt')
 LAUNCHER_COMMENTS = 'Source and releases: https://github.com/characterecho-sean/ed-unofficial-patch'
 
 
@@ -195,6 +197,7 @@ def write_launcher_rc(root, out, dry_run):
     manifest = os.path.join(root, 'src', 'installer', 'installer.manifest')
     license_path = os.path.join(root, *LAUNCHER_LICENSE_FILE)
     edhm_license_path = os.path.join(root, *EDHM_LICENSE_FILE)
+    edhm_gpl_path = os.path.join(root, *EDHM_GPL_FILE)
     try:
         version = launcher_version(root)
     except (OSError, ValueError) as exc:
@@ -205,6 +208,9 @@ def write_launcher_rc(root, out, dry_run):
         return 1
     if not os.path.isfile(edhm_license_path):
         print('gen_installer_rc: ERROR: %s is missing: the launcher carries it' % edhm_license_path)
+        return 1
+    if not os.path.isfile(edhm_gpl_path):
+        print('gen_installer_rc: ERROR: %s is missing: the launcher carries it' % edhm_gpl_path)
         return 1
     try:
         import xml.etree.ElementTree as ElementTree
@@ -226,6 +232,7 @@ def write_launcher_rc(root, out, dry_run):
         '1 ICON "%s"' % rc_path(icon_path),
         '%d RCDATA "%s"' % (IDR_MIN_ED_LAUNCHER_LICENSE, rc_path(license_path)),
         '%d RCDATA "%s"' % (IDR_EDHM_2DMIGOTO_LICENSE, rc_path(edhm_license_path)),
+        '%d RCDATA "%s"' % (IDR_EDHM_2DMIGOTO_GPL, rc_path(edhm_gpl_path)),
         '',
     ] + versioninfo_lines(
         version,
@@ -653,6 +660,8 @@ def self_test():
         os.makedirs(os.path.join(lroot, 'third_party', 'edhm_2dmigoto_notice'))
         with open(os.path.join(lroot, 'third_party', 'edhm_2dmigoto_notice', 'NOTICE.txt'), 'w') as stream:
             stream.write('EDHM_2DMigoto GPLv3 Notice\n')
+        with open(os.path.join(lroot, 'third_party', 'edhm_2dmigoto_notice', 'LICENSE.GPL.txt'), 'w') as stream:
+            stream.write('GNU GENERAL PUBLIC LICENSE Version 3\n')
         assert main(['--launcher-rc', '--root', lroot, '--out', lout, '--dry-run']) == 0 and not os.path.exists(lout)
         assert main(['--launcher-rc', '--root', lroot, '--out', lout, '--version', 'v9.9.9-5-gabc-dirty']) == 0
         with open(os.path.join(lout, 'launcher.rc'), encoding='utf-8') as stream:
@@ -661,8 +670,8 @@ def self_test():
         assert 'FileDescription", "ED-UP Launcher"' in launcher_text
         assert 'FileVersion", "0.1.0"' in launcher_text and 'ProductVersion", "0.1.0"' in launcher_text
         assert 'FILEVERSION 0,1,0,0' in launcher_text
-        # No payload, only the two licence notices as 120 and 121, and not the build's describe.
-        assert launcher_text.count('RCDATA') == 2 and '120 RCDATA "' in launcher_text and '121 RCDATA "' in launcher_text
+        # No payload, only the three licence resources as 120, 121 and 122, and not the build's describe.
+        assert launcher_text.count('RCDATA') == 3 and '120 RCDATA "' in launcher_text and '121 RCDATA "' in launcher_text and '122 RCDATA "' in launcher_text
         assert '9.9.9' not in launcher_text
         assert '24 "' in launcher_text and 'ICON' in launcher_text
         with open(os.path.join(lout, 'launcher.rc'), 'rb') as stream:

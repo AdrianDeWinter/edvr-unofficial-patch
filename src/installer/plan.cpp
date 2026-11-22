@@ -1358,12 +1358,23 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         const std::wstring& dst = f.dst;
         const DllInfo& cur = f.cur;
         const FileRecord* earlier = s.state.file(id);
+        const bool chainedOtherMod =
+            (!next.chainTarget.empty() && _wcsicmp(next.chainTarget.c_str(), L"d3d11_edhm.dll") != 0) ||
+            (next.chainTarget.empty() && !s.state.chainTarget.empty() &&
+             _wcsicmp(s.state.chainTarget.c_str(), L"d3d11_edhm.dll") != 0);
         const bool edhmPresent =
             chainedToEdhmThisPlan || cur.kind != DllKind::Absent ||
             _wcsicmp(s.state.chainTarget.c_str(), L"d3d11_edhm.dll") == 0 ||
             _wcsicmp(next.chainTarget.c_str(), L"d3d11_edhm.dll") == 0 || s.edhmConfigPresent;
         if (!edhmPresent) {
             plan.notes.push_back("EDHM was not detected in this folder, so the tailored 2DMigoto d3d11_edhm.dll was not installed.");
+            next.drop(id);
+            return;
+        }
+        if (!chainedToEdhmThisPlan && cur.kind == DllKind::Absent && chainedOtherMod) {
+            const std::wstring& other = !next.chainTarget.empty() ? next.chainTarget : s.state.chainTarget;
+            plan.notes.push_back("ED-UP is chained to " + say(other) +
+                                 " rather than d3d11_edhm.dll, so the tailored 2DMigoto d3d11_edhm.dll was not installed.");
             next.drop(id);
             return;
         }
@@ -2392,6 +2403,16 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                         body.push_back(rest);
                         changed = true;
                         plan.notes.push_back("Restoring your backed-up standard d3d11_edhm.dll.");
+                    } else if (targetIsOur2d && !edhmRecord->backup.empty() && !edhmRecord->beforeSha256.empty()) {
+                        plan.problems.push_back(
+                            "The recorded backup of your standard d3d11_edhm.dll (" + say(edhmRecord->backup) +
+                            ") could not be verified, so the current d3d11_edhm.dll was left untouched. "
+                            "Reinstall EDHM to restore d3d11_edhm.dll.");
+                    } else if (edhmInfo.kind == DllKind::Absent && !edhmRecord->backup.empty() &&
+                               !edhmRecord->beforeSha256.empty()) {
+                        plan.problems.push_back(
+                            "d3d11_edhm.dll is missing and its recorded standard backup (" + say(edhmRecord->backup) +
+                            ") could not be verified. Reinstall EDHM to restore d3d11_edhm.dll.");
                     } else if (targetIsOur2d && edhmRecord->beforeSha256.empty()) {
                         backup(edhmPath, "the tailored 2DMigoto d3d11_edhm.dll being removed");
                         remove(edhmPath, "removes ED-UP's tailored 2DMigoto d3d11_edhm.dll", edhmInfo.sha256);
@@ -2808,12 +2829,20 @@ Plan planEdhmToggle(const Survey& s, const Options& o, const PayloadInfo& p) {
     }
     std::vector<DllInfo> probed;
     const DllInfo cur = targetInfoOf(s, dst, &probed);
+    const bool chainedOtherMod =
+        !s.state.chainTarget.empty() && _wcsicmp(s.state.chainTarget.c_str(), L"d3d11_edhm.dll") != 0;
     const bool edhmPresent = cur.kind != DllKind::Absent ||
                              _wcsicmp(s.state.chainTarget.c_str(), L"d3d11_edhm.dll") == 0 ||
                              s.edhmConfigPresent;
     if (!edhmPresent) {
         plan.nothingToDo = true;
         plan.notes.push_back("EDHM was not detected in this folder, so the tailored 2DMigoto d3d11_edhm.dll was not installed.");
+        return plan;
+    }
+    if (cur.kind == DllKind::Absent && chainedOtherMod) {
+        plan.nothingToDo = true;
+        plan.notes.push_back("ED-UP is chained to " + say(s.state.chainTarget) +
+                             " rather than d3d11_edhm.dll, so the tailored 2DMigoto d3d11_edhm.dll was not installed.");
         return plan;
     }
     if (cur.kind == DllKind::Unreadable) {

@@ -62,12 +62,13 @@ The sign-in comes from [min-ed-launcher](https://github.com/rfvgyhn/min-ed-launc
 
 Under **Settings** (available in both the VR and Flat views), **EDHM compatibility** offers an opt-in toggle: **(Experimental) Use tailored 2DMigoto dll for EDHM compatibility improvements.**
 
-- It is off by default and asks for confirmation before turning on.
-- The tailored `d3d11_edhm.dll` comes strictly from ED-UP's own signed release (pinned at build time from [Fenris159/EDHM_2DMigoto](https://github.com/Fenris159/EDHM_2DMigoto)) and is installed and removed through the normal installer plan, with no separate download or unsigned cache.
-- When enabled in an install where EDHM is present, ED-UP backs up your current standard `d3d11_edhm.dll` into `edup_backup\` and installs the signed 2DMigoto build together with its licence notices (`EDHM-2DMIGOTO-LICENSE.txt` and `EDHM-2DMIGOTO-THIRD-PARTY.txt`).
-- Turning the option off (or uninstalling ED-UP) restores your backed-up original standard `d3d11_edhm.dll` and removes the 2DMigoto notices. If antivirus or external interference removes `d3d11_edhm.dll` while the option is enabled, the launcher unchecks the option, restores your original `d3d11_edhm.dll`, and displays a warning below the setting.
-- If you update EDHM yourself while the option is enabled, ED-UP leaves your newer standard `d3d11_edhm.dll` in place instead of silently overwriting it.
-- Licences: `EDHM_2DMigoto` (derived from `3Dmigoto` and `XXMI-Libs-Package`) is licensed under GNU GPLv3, with bundled PCRE2 (BSD 3-clause) and DirectXTK (MIT) notices. EDHM itself is a separate community project (`psychicEgg/EDHM`). Run `ed-up-launcher.exe --licenses` for the full disclosure.
+- It is off by default and asks for confirmation before turning on. Opted-out users never download or cache the optional 2DMigoto asset.
+- The tailored `d3d11_edhm.dll` comes strictly from ED-UP's own signed release (pinned at build time from [Fenris159/EDHM_2DMigoto](https://github.com/Fenris159/EDHM_2DMigoto/tree/2cbeaa381c57f4848144d3a1510ed34f8f41f0e5)) and is installed and removed through the EDHM-only installer plan, with no separate download or unsigned cache.
+- When enabled in an install where EDHM is present, ED-UP backs up your current standard `d3d11_edhm.dll` into `edup_backup\` and installs the signed 2DMigoto build together with its licence notices (`EDHM-2DMIGOTO-LICENSE.txt` and `EDHM-2DMIGOTO-THIRD-PARTY.txt`). If `d3dx.ini` is present, ED-UP also backs up `[System] load_library_redirect`, `[System] allow_platform_update`, and `[Device] upscaling` and sets them to `0`, `1`, and `0` for ED-UP compatibility.
+- Turning the option off (or uninstalling ED-UP) restores your backed-up original standard `d3d11_edhm.dll` and `d3dx.ini` settings and removes the 2DMigoto notices. If `d3d11_edhm.dll` goes missing while the option is enabled, the launcher asks before restoring your backup so an intentional EDHM uninstall is not undone.
+- Below the experimental toggle, two checkboxes read and toggle `[Logging] show_reload_message` (**Hide Refresh/Reload messages from EDHM**) and `[Logging] show_warnings` (**Hide Warnings from EDHM**) in `d3dx.ini` (`checked = 0`, `unchecked = 1`), greyed out when `d3dx.ini` is not present.
+- If you update EDHM yourself while the option is enabled, ED-UP records that newer DLL and leaves it in place across subsequent ED-UP updates and repairs until you explicitly reapply 2DMigoto.
+- Licences & source offer: `EDHM_2DMigoto` (derived from `3Dmigoto` and `XXMI-Libs-Package`) is licensed under GNU GPLv3, with bundled PCRE2 (BSD 3-clause) and DirectXTK (MIT) notices. EDHM itself is a separate community project (`psychicEgg/EDHM`). Run `ed-up-launcher.exe --licenses` for the complete third-party notice, pinned commit/source archive offer, build instructions, and full GNU GPLv3 text.
 
 ## Frontier's own store
 

@@ -317,6 +317,12 @@ bool LauncherSession::setEdhm2dMigoto(bool on, const std::function<bool()>& conf
         createDirectories(env_.roots.launcherDir());
         state.save(&error);
     }
+    if (on && payload_.ok && payload_.kind == PayloadKind::Manifest && payload_.hasOptInEdhmAsset &&
+        payloadInfo().find("edhm_2dmigoto") == nullptr && !updating_ && checkState_ != CheckState::Checking) {
+        // The adopted schema-3 release carries edhm_2dmigoto, which was skipped while opted out;
+        // re-check so Update can fetch only the opt-in asset on demand.
+        beginCheck();
+    }
     changed();
     return edhm2dMigoto_;
 }
@@ -378,7 +384,7 @@ bool LauncherSession::standInForEdLaunch(const std::wstring& gameDir, bool on, b
 
 void LauncherSession::beginPlay(const std::wstring& source, const std::wstring& gameDir, bool vr, bool elevated,
                                 const RouteOps& ops, const WatchNames& names, const WatchTiming& timing) {
-    if (playing_) return;
+    if (playing_ || applying_) return;
     if (directLaunch() && goesDirect(source)) {
         // Refused before anything is contacted, as the routes are.
         if (elevated) {
