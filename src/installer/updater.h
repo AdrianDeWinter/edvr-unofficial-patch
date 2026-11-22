@@ -117,7 +117,7 @@ public:
     // be the SHA-256 of its bytes. This is what the elevated copy uses: it is handed a
     // path, trusts nothing about it, and checks the signature itself.
     bool loadManifestFile(const std::wstring& jsonPath, Manifest* manifest, std::vector<PayloadFile>* files,
-                          std::string* error);
+                          std::string* error, const bool* includeOptInOverride = nullptr);
 
 private:
     std::wstring statePath() const;

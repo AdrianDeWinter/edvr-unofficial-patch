@@ -240,7 +240,11 @@ UpdateCheck Updater::check() {
         PayloadCache cache(settings_.cacheDir);
         const bool wantOptIn = state.edhm2dMigoto();
         for (const ManifestFile& f : curManifest.files) {
-            if (!wantOptIn && !f.when.option.empty()) continue;
+            if (!f.when.option.empty()) {
+                if (!wantOptIn) continue;
+                if (!cache.hasVerified(f.sha256, f.size)) return false;
+                continue;
+            }
             if (!cache.hasSized(f.sha256, f.size)) return false;
         }
         return true;
@@ -436,7 +440,7 @@ bool Updater::loadCurrentManifest(Manifest* manifest, std::vector<PayloadFile>* 
 }
 
 bool Updater::loadManifestFile(const std::wstring& jsonPath, Manifest* manifest, std::vector<PayloadFile>* files,
-                               std::string* error) {
+                               std::string* error, const bool* includeOptInOverride) {
     auto fail = [&](const std::string& text) {
         if (error) *error = text;
         return false;
@@ -455,13 +459,23 @@ bool Updater::loadManifestFile(const std::wstring& jsonPath, Manifest* manifest,
     Manifest loaded;
     if (!loadVerifiedManifest(bytes, signatureText, keys(), &loaded, error)) return false;
 
+    bool wantOptIn = false;
+    if (includeOptInOverride) {
+        wantOptIn = *includeOptInOverride;
+    } else if (!settings_.launcherDir.empty()) {
+        LauncherState state;
+        wantOptIn = state.load(statePath(), nullptr) && state.edhm2dMigoto();
+    }
+
     PayloadCache cache(settings_.cacheDir);
     std::vector<PayloadFile> list;
     for (const ManifestFile& f : loaded.files) {
-        if (!cache.hasSized(f.sha256, f.size)) {
-            // Optional opt-in files (such as EDHM 2DMigoto) missing from cache must not disable
-            // core ED-UP Install/Repair; callers see the file as absent until re-downloaded.
-            if (!f.when.option.empty()) continue;
+        if (!f.when.option.empty()) {
+            // Opt-in files (such as EDHM 2DMigoto) are skipped when opted out; when opted in, a
+            // missing or corrupt cached blob is omitted so core ED-UP Install/Repair stays usable.
+            if (!wantOptIn) continue;
+            if (!cache.hasVerified(f.sha256, f.size)) continue;
+        } else if (!cache.hasSized(f.sha256, f.size)) {
             return fail("the payload cache lacks " + f.path + "; connect and update to repair it");
         }
         PayloadFile p;

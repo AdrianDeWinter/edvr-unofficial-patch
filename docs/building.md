@@ -272,6 +272,9 @@ not offered to the launcher as an update:
 python tools/release_credits.py --from vPREVIOUS --to "v$version" --thanks --out thanks.md
 if ($LASTEXITCODE -ne 0) { throw 'Review release credits before continuing' }
 # Edit release-notes.md and include the reviewed ## Thanks section from thanks.md.
+# When ed-up-edhm-*.zip is attached, also include the pinned EDHM_2DMigoto GPLv3
+# Corresponding Source link and SHA-256 from third_party/edhm_2dmigoto_notice/NOTICE.txt
+# (or attach the pinned source archive) right alongside the binary download per GPLv3 §6(d).
 $folder = "edvr-artifacts/$runId"
 $assets = @(
     "$folder/ed-up-$version.zip"

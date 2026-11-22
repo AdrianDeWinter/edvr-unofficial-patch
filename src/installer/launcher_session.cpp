@@ -130,6 +130,13 @@ void LauncherSession::checkDone(const UpdateCheck& result) {
             break;
     }
     changed();
+    if (recheckNeeded_ && !updating_) {
+        recheckNeeded_ = false;
+        if (checkState_ != CheckState::Available) {
+            beginCheck();
+            return;
+        }
+    }
     // Started by a self-update: the user already pressed Download, so carry on.
     if (env_.updatedFlag && !autoResumed_ && checkState_ == CheckState::Available) {
         autoResumed_ = true;
@@ -214,6 +221,13 @@ void LauncherSession::beginUpdate() {
             updateLine_ = "ED-UP " + check_.manifest.version + " is ready to install.";
             checkState_ = CheckState::UpToDate;
             changed();
+            if (recheckNeeded_) {
+                recheckNeeded_ = false;
+                if (edhm2dMigoto_ && payload_.ok && payload_.kind == PayloadKind::Manifest &&
+                    payload_.hasOptInEdhmAsset && payloadInfo().find("edhm_2dmigoto") == nullptr) {
+                    beginCheck();
+                }
+            }
             if (env_.payloadSwitched) env_.payloadSwitched();
         });
     });
@@ -318,10 +332,17 @@ bool LauncherSession::setEdhm2dMigoto(bool on, const std::function<bool()>& conf
         state.save(&error);
     }
     if (on && payload_.ok && payload_.kind == PayloadKind::Manifest && payload_.hasOptInEdhmAsset &&
-        payloadInfo().find("edhm_2dmigoto") == nullptr && !updating_ && checkState_ != CheckState::Checking) {
+        payloadInfo().find("edhm_2dmigoto") == nullptr) {
         // The adopted schema-3 release carries edhm_2dmigoto, which was skipped while opted out;
-        // re-check so Update can fetch only the opt-in asset on demand.
-        beginCheck();
+        // re-check (or queue one if a check/update is already in flight) so Update can fetch only
+        // the opt-in asset on demand.
+        if (updating_ || checkState_ == CheckState::Checking) {
+            recheckNeeded_ = true;
+        } else {
+            beginCheck();
+        }
+    } else if (!on) {
+        recheckNeeded_ = false;
     }
     changed();
     return edhm2dMigoto_;

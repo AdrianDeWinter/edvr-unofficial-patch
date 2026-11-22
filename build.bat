@@ -3540,17 +3540,17 @@ REM Does it START? --help reads nothing and writes nothing, and does not copy, r
     echo        configuration problem, the manifest is the suspect.
     exit /b 1
 )
-REM --licenses prints the licence it carries as RCDATA 120, byte for byte. Contacts nothing.
+REM --licenses prints RCDATA 120 (min-ed-launcher MIT), 121 (EDHM_2DMigoto notice), and 122 (GPLv3). Contacts nothing.
 "%BUILD%\ed-up-launcher.exe" --licenses > "%BUILD%\launcher_licenses.txt" || (
     echo [edvr] ERROR: the launcher would not print its licence
     exit /b 1
 )
-fc /b "%BUILD%\launcher_licenses.txt" "third_party\min_ed_launcher\LICENSE" >nul
+python -c "import pathlib, sys; a, b, c, out = [pathlib.Path(p).read_bytes() for p in sys.argv[1:]]; sep = b'\n' + b'-'*72 + b'\n\n'; exp = a + (b'' if a.endswith(b'\n') else b'\n') + sep + b + (b'' if b.endswith(b'\n') else b'\n') + sep + c; sys.exit(0 if out == exp else 1)" "third_party\min_ed_launcher\LICENSE" "third_party\edhm_2dmigoto_notice\NOTICE.txt" "third_party\edhm_2dmigoto_notice\LICENSE.GPL.txt" "%BUILD%\launcher_licenses.txt"
 if errorlevel 1 (
-    echo [edvr] ERROR: the licence the launcher prints is not third_party\min_ed_launcher\LICENSE
+    echo [edvr] ERROR: the licence text the launcher prints does not match min_ed_launcher LICENSE + EDHM_2DMigoto NOTICE.txt + LICENSE.GPL.txt
     exit /b 1
 )
-echo [edvr] launcher --licenses prints third_party\min_ed_launcher\LICENSE
+echo [edvr] launcher --licenses prints min_ed_launcher LICENSE + EDHM_2DMigoto NOTICE.txt + LICENSE.GPL.txt
 exit /b 0
 
 REM One compile of the launcher into %~1 (the exe's folder). %~2 is its obj folder, %~3 the folder

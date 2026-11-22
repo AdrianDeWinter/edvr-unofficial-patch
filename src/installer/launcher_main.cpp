@@ -171,8 +171,10 @@ int runUpdateCommand(const AppArgs& args, Output& out) {
         out.line("The download did not finish: " + error);
         return 1;
     }
+    const bool wantOptIn = state.edhm2dMigoto();
     PayloadCache cache(roots.cacheDir());
     for (const ManifestFile& f : check.manifest.files) {
+        if (!wantOptIn && !f.when.option.empty()) continue;
         const bool ok = verified.find(f.sha256) != verified.end() ? cache.hasSized(f.sha256, f.size)
                                                                   : cache.hasVerified(f.sha256, f.size);
         out.line(std::string(ok ? "  verified " : "  NOT VERIFIED ") + f.path + "  " + f.sha256);

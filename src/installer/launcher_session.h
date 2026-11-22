@@ -263,6 +263,7 @@ private:
     std::string updateLine_;
     std::string channel_ = "stable";
     bool updating_ = false;
+    bool recheckNeeded_ = false;  // queued re-check when opt-in state changes during an in-flight check/update
     bool autoResumed_ = false;  // the update that followed a self-update's restart was started
     bool playing_ = false;
     bool directLaunch_ = false;

@@ -105,7 +105,7 @@ def build_combined_notice(parts):
         "Source tree:    %s\n"
         "Source archive: %s\n"
         "Archive SHA256: %s\n"
-        "Build from src: Visual Studio 2022 / MSBuild x64 Release (see docs/building.md at the pinned commit)\n"
+        "Build from src: Visual Studio 2022 / MSBuild Zip Release | x64 (see .github/workflows/release.yml at the pinned commit)\n"
         "License:        GNU General Public License v3.0 (see EDHM-2DMIGOTO-LICENSE.txt)\n"
         "\n"
         "EDHM (Elite Dangerous HUD Mod) is a separate community project\n"

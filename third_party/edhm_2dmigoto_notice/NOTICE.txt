@@ -34,9 +34,9 @@ Corresponding Source offer (GNU GPLv3 Section 6):
   - Archive SHA256: 17bfffe33ff43439a72e003c87c530dfcf07aa4c19950fa3e8d027a57a4e1401
   - Binary SHA256:  3480813a4ecffce90c7b29e57b62788ea0b1a6aff5be06120cdf237fea054eb4
   - Build steps:    Extract the pinned source archive on Windows with Visual Studio 2022
-                    (Desktop development with C++, Windows 10/11 SDK) and build the x64
-                    Release configuration via MSBuild as documented in docs/building.md
-                    inside the pinned commit.
+                    (Desktop development with C++, Windows 10/11 SDK) and build the
+                    "Zip Release | x64" configuration via MSBuild as documented in
+                    .github/workflows/release.yml inside the pinned commit.
 
 The complete text of GNU General Public License v3.0 follows below (and is
 also shipped beside the game as EDHM-2DMIGOTO-LICENSE.txt together with

@@ -8645,10 +8645,24 @@ int wmain(int argc, wchar_t** argv) {
                 const Plan togPlan = planEdhmToggle(surveyEdhm(), rsTog, p2);
                 check(togPlan.nothingToDo && !fileExists(joinPath(gameDir, L"d3d11_edhm.dll")),
                       "planEdhmToggle does not place unchained d3d11_edhm.dll when chained to ReShade");
+                // Even if an old d3d11_edhm.dll is parked beside ReShade, neither planInstall nor
+                // planEdhmToggle modifies it or patches d3dx.ini.
+                writeAll(joinPath(gameDir, L"d3d11_edhm.dll"), stdEdhmV2);
+                const std::string preIni = readAll(joinPath(gameDir, L"d3dx.ini"));
+                rsOpt.backupStamp = L"t12rs4";
+                check(applyPlan(planInstall(surveyEdhm(), rsOpt, p2), providerFor(p2)).ok,
+                      "install with ReShade + parked d3d11_edhm.dll succeeds");
+                check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV2 &&
+                          readAll(joinPath(gameDir, L"d3dx.ini")) == preIni,
+                      "planInstall leaves parked d3d11_edhm.dll and d3dx.ini untouched while chained to ReShade");
+                check(planEdhmToggle(surveyEdhm(), rsTog, p2).nothingToDo,
+                      "planEdhmToggle refuses to modify parked d3d11_edhm.dll while chained to ReShade");
             }
-            // Sean #6b: uninstall in !handledEdhmUnchain path warns explicitly when recorded EDHM backup fails verification.
+            // Sean #6b + Kilo #8: uninstall warns AND keeps 2DMigoto notices whenever unverified backup leaves 2DMigoto in place.
             {
                 writeAll(joinPath(gameDir, L"d3d11_edhm.dll"), migotoV2);
+                writeAll(joinPath(gameDir, L"EDHM-2DMIGOTO-LICENSE.txt"), gplText);
+                writeAll(joinPath(gameDir, L"EDHM-2DMIGOTO-THIRD-PARTY.txt"), thirdPartyText);
                 const std::wstring badBak = joinPath(gameDir, L"d3d11_edhm.dll.edup-backup-badsha");
                 writeAll(badBak, "CORRUPT-BACKUP");
                 InstallState st = readState(gameDir);
@@ -8660,8 +8674,28 @@ int wmain(int argc, wchar_t** argv) {
                 rec.existing = existingName(ExistingMode::OptIn);
                 rec.backup = L"d3d11_edhm.dll.edup-backup-badsha";
                 rec.beforeSha256 = std::string(64, 'a');
-                st.files.push_back(rec);
+                st.put(rec);
+                for (const auto& pair : std::vector<std::pair<const char*, std::pair<const char*, std::string>>>{
+                         {"edhm_2dmigoto_license", {"EDHM-2DMIGOTO-LICENSE.txt", gplText}},
+                         {"edhm_2dmigoto_third_party", {"EDHM-2DMIGOTO-THIRD-PARTY.txt", thirdPartyText}}}) {
+                    FileRecord nr;
+                    nr.id = pair.first;
+                    nr.root = "game";
+                    nr.path = pair.second.first;
+                    nr.existing = existingName(ExistingMode::Owned);
+                    nr.sha256 = sha256Bytes(pair.second.second.data(), pair.second.second.size());
+                    st.put(nr);
+                }
                 writeAll(statePath(gameDir), serializeState(st));
+                // Also verify Repair under ReShade chain preserves existing edhm_2dmigoto recovery record!
+                Options rsRep;
+                rsRep.edhm2dMigoto = true;
+                rsRep.repair = true;
+                rsRep.backupStamp = L"t12rs5";
+                check(applyPlan(planInstall(surveyEdhm(), rsRep, p2), providerFor(p2)).ok,
+                      "repair under ReShade chain succeeds");
+                check(readState(gameDir).file("edhm_2dmigoto") != nullptr,
+                      "repair under ReShade chain preserves existing edhm_2dmigoto recovery record");
                 Options uopt;
                 uopt.backupStamp = L"t12badbak";
                 const Plan uplan = planUninstall(surveyEdhm(), uopt, p2);
@@ -8671,6 +8705,46 @@ int wmain(int argc, wchar_t** argv) {
                         sawWarning = true;
                 }
                 check(sawWarning, "planUninstall emits problem note when EDHM backup fails verification under non-EDHM chain");
+                const ApplyResult ures = applyPlan(uplan, providerFor(p2));
+                check(ures.ok && fileExists(joinPath(gameDir, L"EDHM-2DMIGOTO-LICENSE.txt")) &&
+                          fileExists(joinPath(gameDir, L"EDHM-2DMIGOTO-THIRD-PARTY.txt")),
+                      "planUninstall keeps 2DMigoto license notices when tailored DLL is retained");
+            }
+            // Kilo #3: planEdhmDismiss persists declining restore when d3d11_edhm.dll is missing,
+            // so later Install/Repair/Uninstall never recreate the deleted DLL.
+            {
+                DeleteFileW(joinPath(gameDir, L"d3d11_edhm.dll").c_str());
+                writeAll(joinPath(gameDir, L"d3d11.dll"), stdEdhmV2);
+                Survey sD = surveyEdhm();
+                sD.d3d11.kind = DllKind::Foreign;
+                sD.d3d11.product = L"3Dmigoto";
+                Options dOpt;
+                dOpt.edhm2dMigoto = true;
+                dOpt.backupStamp = L"t12dis1";
+                check(applyPlan(planInstall(sD, dOpt, p2), providerFor(p2)).ok,
+                      "setup EDHM 2DMigoto before dismiss test");
+                DeleteFileW(joinPath(gameDir, L"d3d11_edhm.dll").c_str());
+                Options disOpt;
+                disOpt.nowUtc = "2026-11-22T12:00:00Z";
+                const Plan disPlan = planEdhmDismiss(surveyEdhm(), disOpt);
+                check(!disPlan.blocked && !disPlan.nothingToDo, "planEdhmDismiss produces work");
+                check(applyPlan(disPlan, PayloadProvider{}).ok, "planEdhmDismiss applies cleanly");
+                check(!fileExists(joinPath(gameDir, L"d3d11_edhm.dll")) &&
+                          readState(gameDir).file("edhm_2dmigoto") == nullptr,
+                      "planEdhmDismiss clears edhm_2dmigoto state without recreating d3d11_edhm.dll");
+                Options afterOpt;
+                afterOpt.edhm2dMigoto = false;
+                afterOpt.repair = true;
+                afterOpt.backupStamp = L"t12dis2";
+                check(applyPlan(planInstall(surveyEdhm(), afterOpt, p2), providerFor(p2)).ok &&
+                          !fileExists(joinPath(gameDir, L"d3d11_edhm.dll")),
+                      "subsequent repair after dismiss does not recreate deleted d3d11_edhm.dll");
+                Options afterUn;
+                afterUn.backupStamp = L"t12dis3";
+                check(applyPlan(planUninstall(surveyEdhm(), afterUn, p2), providerFor(p2)).ok &&
+                          !fileExists(joinPath(gameDir, L"d3d11.dll")) &&
+                          !fileExists(joinPath(gameDir, L"d3d11_edhm.dll")),
+                      "subsequent uninstall after dismiss does not restore deleted EDHM DLL");
             }
         }
 

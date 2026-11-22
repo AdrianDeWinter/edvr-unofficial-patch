@@ -6808,6 +6808,36 @@ void testEdhm2dMigoto() {
             const UpdateCheck offCheck = up9.check();
             check(offCheck.outcome == UpdateOutcome::UpToDate,
                   "updater.check() reports UpToDate once opted out even when opt-in cache file is absent");
+            // Kilo #5: same-length corrupt opt-in cache file does not poison core payload when opted in OR opted out,
+            // and when opted in updater.check() offers Available to repair it instead of reporting UpToDate.
+            {
+                std::string origBytes;
+                for (const ManifestFile& mf : m.files) {
+                    if (mf.id == "edhm_2dmigoto") { origBytes.assign(static_cast<size_t>(mf.size), 'X'); break; }
+                }
+                writeAll(cachedEdhm, origBytes);
+                Manifest mOffCorrupt;
+                std::vector<PayloadFile> fOffCorrupt;
+                check(up9.loadCurrentManifest(&mOffCorrupt, &fOffCorrupt, &err9),
+                      "opted-out loadCurrentManifest ignores same-length corrupt opt-in cache file: " + err9);
+                bool hasEdhmOff = false;
+                for (const PayloadFile& pf : fOffCorrupt) if (pf.id == "edhm_2dmigoto") hasEdhmOff = true;
+                check(!hasEdhmOff, "opted-out loadCurrentManifest skips corrupt opt-in file");
+                LauncherState st9on;
+                st9on.load(P(roots9.launcherDir(), L"launcher.ini"), nullptr);
+                st9on.setEdhm2dMigoto(true);
+                check(st9on.save(&err9), "re-enables edhm_2dmigoto=on for corrupt-cache test");
+                Manifest mOnCorrupt;
+                std::vector<PayloadFile> fOnCorrupt;
+                check(up9.loadCurrentManifest(&mOnCorrupt, &fOnCorrupt, &err9),
+                      "opted-in loadCurrentManifest still loads core files when opt-in cache file is corrupt: " + err9);
+                bool hasEdhmOn = false;
+                for (const PayloadFile& pf : fOnCorrupt) if (pf.id == "edhm_2dmigoto") hasEdhmOn = true;
+                check(!hasEdhmOn, "opted-in loadCurrentManifest omits corrupt opt-in cache file instead of breaking core");
+                const UpdateCheck corruptCheck = up9.check();
+                check(corruptCheck.outcome == UpdateOutcome::Available,
+                      "updater.check() offers Available when opted-in cache file is same-length corrupt");
+            }
         }
     }
 }

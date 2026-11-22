@@ -108,6 +108,8 @@ bool launcherPayloadReady() { return lg.session && lg.session->payloadState() ==
 
 bool launcherBusy() { return lg.session && (lg.session->updating() || lg.session->applying()); }
 
+bool launcherEdhmBusy() { return launcherBusy() || (lg.session && lg.session->playing()); }
+
 bool launcherFolderHasEdup() {
     return g.haveSurvey && (g.survey.d3d11.kind == DllKind::Edvr || g.survey.openvrCurrent.kind == DllKind::Edvr ||
                             g.survey.state.present);
@@ -952,8 +954,52 @@ bool launcherEdhmPresentOnDisk() {
 
 void launcherApplyEdhmPlan(bool wantOn, bool isFallbackRestore);
 
+bool launcherDismissMissingEdhm() {
+    if (!lg.session || !g.haveSurvey || launcherEdhmBusy()) return false;
+    const std::wstring mirrorDir = mirrorDirOfGame(g.survey.game);
+    g.survey = surveyTarget(g.survey.game, mirrorDir);
+    Options options;
+    options.nowUtc = utcNow();
+    options.settingsDir = mirrorDir;
+    const Plan plan = planEdhmDismiss(g.survey, options);
+    if (plan.blocked || plan.nothingToDo) {
+        showSurvey();
+        return false;
+    }
+    if (launcherNeedsElevatedCopy()) {
+        const wchar_t* prompt =
+            L"This game folder can only be written to by an administrator. Windows will ask for permission "
+            L"to clear the saved EDHM recovery record so later updates do not put d3d11_edhm.dll back.\n\nContinue?";
+        if (MessageBoxW(g.window, prompt, kAppTitle, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
+            showSurvey();
+            return false;
+        }
+        PlanFile file;
+        file.action = "edhm_dismiss";
+        file.dir = g.survey.game.dir;
+        file.source = g.survey.game.source;
+        setReport("Clearing EDHM recovery state...\r\n----\r\nWaiting for Windows' permission prompt...\r\n");
+        lg.session->beginElevatedApply(file, runWithUac, [](const ElevatedResult& result) {
+            if (result.declined) {
+                setReport("The permission prompt was declined, so the EDHM recovery record was not changed.\r\n");
+            } else if (!result.error.empty() && result.outcome.lines.empty()) {
+                setReport(result.error + "\r\n");
+            } else {
+                setReport(outcomeReport(result.outcome));
+            }
+            g.survey = surveyTarget(g.survey.game, mirrorDirOfGame(g.survey.game));
+            showSurvey();
+        });
+        return true;
+    }
+    applyPlan(plan, PayloadProvider{});
+    g.survey = surveyTarget(g.survey.game, mirrorDir);
+    showSurvey();
+    return false;
+}
+
 bool launcherTriggerEdhmInterferenceFallback(bool askFirst = false) {
-    if (!lg.session || lg.edhmRecovering) return false;
+    if (!lg.session || lg.edhmRecovering || launcherEdhmBusy()) return false;
     if (askFirst) {
         if (g.haveSurvey && _wcsicmp(lg.edhmInterferenceAskedDir.c_str(), g.survey.game.dir.c_str()) == 0) {
             return false;
@@ -971,8 +1017,7 @@ bool launcherTriggerEdhmInterferenceFallback(bool askFirst = false) {
         if (answer != IDYES) {
             lg.session->setEdhm2dMigoto(false, nullptr);
             lg.session->setEdhmWarning(std::string());
-            launcherUpdateSettingsToggle();
-            return false;
+            return launcherDismissMissingEdhm();
         }
     }
     lg.edhmRecovering = true;
@@ -994,8 +1039,8 @@ void launcherVerifyEdhmAfterEnable() {
 }
 
 bool launcherCheckEdhmInterference(bool refreshDisk) {
-    if (!lg.session || !lg.session->edhm2dMigoto() || !g.haveSurvey || g.survey.gameRunningHere || launcherBusy() ||
-        lg.edhmRecovering)
+    if (!lg.session || !lg.session->edhm2dMigoto() || !g.haveSurvey || g.survey.gameRunningHere ||
+        launcherEdhmBusy() || lg.edhmRecovering)
         return false;
     const FileRecord* rec = g.survey.state.file("edhm_2dmigoto");
     if (!rec || rec->existing != existingName(ExistingMode::OptIn)) return false;
@@ -1014,7 +1059,7 @@ bool launcherCheckEdhmInterference(bool refreshDisk) {
 }
 
 void launcherApplyEdhmPlan(bool wantOn, bool isFallbackRestore) {
-    if (!lg.session || !g.haveSurvey) {
+    if (!lg.session || !g.haveSurvey || launcherEdhmBusy()) {
         lg.edhmRecovering = false;
         launcherUpdateSettingsToggle();
         return;
@@ -1154,7 +1199,7 @@ void launcherApplyEdhmPlan(bool wantOn, bool isFallbackRestore) {
 }
 
 void launcherSetEdhmLoggingFlag(std::string key, bool wantHide) {
-    if (!lg.session || !g.haveSurvey || launcherBusy()) {
+    if (!lg.session || !g.haveSurvey || launcherEdhmBusy()) {
         launcherUpdateSettingsToggle();
         return;
     }
@@ -1227,7 +1272,7 @@ void launcherUpdateSettingsToggle() {
     }
     std::vector<LauncherToggleRow> rows;
     const std::wstring edhmGroup = tr(L"EDHM compatibility");
-    const bool busy = launcherBusy();
+    const bool busy = launcherEdhmBusy();
 
     LauncherToggleRow migotoRow;
     migotoRow.visible = true;
@@ -1304,7 +1349,7 @@ void launcherUpdateSettingsToggle() {
     }
 
     migotoRow.onToggle = [](bool want) {
-        if (!lg.session) return;
+        if (!lg.session || launcherEdhmBusy()) return;
         if (want) {
             const bool accepted = lg.session->setEdhm2dMigoto(true, []() {
                 return MessageBoxW(g.window, fromUtf8(kEdhm2dMigotoQuestion).c_str(), kAppTitle,
@@ -1323,7 +1368,7 @@ void launcherUpdateSettingsToggle() {
         }
     };
     migotoRow.onAction = []() {
-        if (!lg.session) return;
+        if (!lg.session || launcherEdhmBusy()) return;
         if (lg.session->edhm2dMigoto() && launcherPayloadReady() &&
             payloadInfo().find("edhm_2dmigoto") == nullptr &&
             lg.session->payload().hasOptInEdhmAsset) {

@@ -115,7 +115,8 @@ bool missingOrLink(const std::wstring& path) {
 ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* const* keys,
                      const std::vector<GameInstall>* installs) {
     if (file.action != "install" && file.action != "repair" && file.action != "uninstall" &&
-        file.action != "edhm_apply" && file.action != "edhm_restore" && file.action != "edhm_logging")
+        file.action != "edhm_apply" && file.action != "edhm_restore" && file.action != "edhm_dismiss" &&
+        file.action != "edhm_logging")
         return failed("the plan names an action this launcher does not know");
     if (file.dir.empty()) return failed("the plan names no game folder");
 
@@ -129,10 +130,13 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
         Updater updater(offline, settings);
         Manifest manifest;
         std::vector<PayloadFile> files;
-        if (!updater.loadManifestFile(joinPath(paths.manifestsDir, widenUtf8(file.manifestSha)) + L".json", &manifest, &files, &error) ||
+        const bool wantOptIn = file.edhm2dMigoto || file.action == "edhm_apply";
+        if (!updater.loadManifestFile(joinPath(paths.manifestsDir, widenUtf8(file.manifestSha)) + L".json",
+                                      &manifest, &files, &error, &wantOptIn) ||
             !usePayloadFiles(manifest, files, &error))
             return failed("the downloaded files cannot be used: " + error);
-    } else if (file.action != "uninstall" && file.action != "edhm_restore" && file.action != "edhm_logging") {
+    } else if (file.action != "uninstall" && file.action != "edhm_restore" && file.action != "edhm_dismiss" &&
+               file.action != "edhm_logging") {
         return failed("the plan names no payload to install from");
     }
 
@@ -191,15 +195,17 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
         return failed("the settings folder for this game is a link; the installer will not write through it");
 
     Survey survey = surveyTarget(game, mirrorDir);
-    if (file.action == "edhm_apply" || file.action == "edhm_restore") {
+    if (file.action == "edhm_apply" || file.action == "edhm_restore" || file.action == "edhm_dismiss") {
         Options edhmOpts;
         edhmOpts.edhm2dMigoto = file.action == "edhm_apply";
         edhmOpts.backupStamp = timestampName();
         edhmOpts.nowUtc = utcNow();
         edhmOpts.settingsDir = mirrorDir;
-        const Plan plan = file.action == "edhm_restore"
-                              ? planEdhmRestore(survey, edhmOpts)
-                              : planEdhmToggle(survey, edhmOpts, payloadInfo());
+        const Plan plan = file.action == "edhm_dismiss"
+                              ? planEdhmDismiss(survey, edhmOpts)
+                              : file.action == "edhm_restore"
+                                    ? planEdhmRestore(survey, edhmOpts)
+                                    : planEdhmToggle(survey, edhmOpts, payloadInfo());
         if (plan.blocked) {
             ApplyOutcome blocked;
             blocked.status = ApplyOutcome::Status::Blocked;
@@ -214,7 +220,7 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
             return nothing;
         }
         const ApplyResult result =
-            applyPlan(plan, file.action == "edhm_restore" ? PayloadProvider{} : PayloadProvider{payloadItem});
+            applyPlan(plan, file.action == "edhm_apply" ? PayloadProvider{payloadItem} : PayloadProvider{});
         ApplyOutcome outcome;
         for (const std::string& line : result.done) outcome.lines.push_back(line);
         if (!result.ok) {

@@ -269,6 +269,10 @@ Plan planInstall(const Survey& survey, const Options& options, const PayloadInfo
 Plan planUninstall(const Survey& survey, const Options& options, const PayloadInfo& payload = PayloadInfo());
 // Payload-free restore of the player's backed-up standard d3d11_edhm.dll and d3dx.ini keys (for offline opt-out or antivirus-interference recovery).
 Plan planEdhmRestore(const Survey& survey, const Options& options);
+// Payload-free dismissal when d3d11_edhm.dll is missing and the player chose not to restore it
+// (e.g. they uninstalled EDHM themselves): clears EDHM recovery metadata so later Install/Repair/Uninstall
+// do not put the deleted DLL back.
+Plan planEdhmDismiss(const Survey& survey, const Options& options);
 // EDHM-only toggle plan (installs/updates 2DMigoto + d3dx.ini compat keys when options.edhm2dMigoto is true,
 // or delegates to planEdhmRestore when false) without modifying core ED-UP DLLs or edup*.ini settings.
 Plan planEdhmToggle(const Survey& survey, const Options& options, const PayloadInfo& payload);
