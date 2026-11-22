@@ -2,7 +2,7 @@
 // flat tick and the VR tick use. The design and its open questions (Q1 to Q6): docs\design-vr-scope-magnification-2026-10-28.md, section 6.
 //
 // S0 changes nothing the player sees and writes four tagged lines (scope zoom (S0) flat, scope zoom (S0) vr, scope lens geometry (S0), scope lens census (S0)); each has a
-// --health rule in tools\edvr_log.py, rendered in its self-test from the format literals below. What is here:
+// --health rule in tools\edup_log.py, rendered in its self-test from the format literals below. What is here:
 //   1. clipZoom: the projection scale and principal offset of an eye's scene rows (cb1 270..273), so a zoom is read from the very rows the draws use.
 //   2. PressTracker: the hip value, the settled value and the ramp of one scalar (a FOV, a p11) across one press of the sights.
 //   3. CameraTable: the vertical FOV and aspect of the cameras that reach the game's view-constant refresh, noted by the hook on any thread, read by the frame thread.

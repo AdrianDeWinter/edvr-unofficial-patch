@@ -265,7 +265,7 @@ struct VrWorldWindow {
     float phaseX = 0.0f, phaseY = 0.0f, rowsX = 0.0f, rowsY = 0.0f;
     uint64_t foldMode[3] = {};    // frames whose resolve ran the weapon fold-in with mode 0, 1, 2 (FlatMonoResolveFrame::firstPersonPhaseMode)
     // The steady-detail token of the 5 s line. The depth-checked steady detail is always on in this build (its key is retired), so the
-    // route never sets this and every line it prints says "on". The token stays because tools\edvr_log.py parses "on" and "off" and has
+    // route never sets this and every line it prints says "on". The token stays because tools\edup_log.py parses "on" and "off" and has
     // to keep reading the logs of builds that had the key; only a rig that models such a log sets "off".
     const char* steady = "on";
     // The screen's curve at the boundary that printed the line (vrWorldFormatCurve: "off", "pending", "stood-down" or "C/S/G") and
@@ -481,7 +481,7 @@ inline bool vrWorldInjectedWrongKind(const VrWorldInjectFrame& f) {
 
 // The second line of a 5 s window (the route line is near the log's 1200-character limit): the injector's counters and the
 // rows-pair evidence. inj-kinds lists the INJECTED calls by kind: "3:<n>" for kind 3, "other:<n>" for everything else, or
-// "none". The reader (edvr_log.py --camera-census) parses this text.
+// "none". The reader (edup_log.py --camera-census) parses this text.
 inline int vrWorldFormatInjectWindow(char* out, size_t size, const VrWorldInjectWindow& w) {
     char kinds[96] = "none";
     uint64_t other = 0;
@@ -595,7 +595,7 @@ inline int vrWorldFormatRowsMismatch(char* out, size_t size, uint64_t frame, flo
 // (flat_mono_refusal.h FlatMonoRefusalCensus). The stale pixels are two numbers: `stale-refused` (refused: the ones last frame's depth
 // did not confirm; in the log of a build that had the key set off, all of them) and `stale-kept` (not refused: the camera term,
 // confirmed). `depth-check` is ran/skipped: the resolves whose prep ran the depth check, and those that could not (no last-frame depth).
-// The `steady-detail=` token says "on" in every line this build writes (the rule has no key now). The reader (edvr_log.py
+// The `steady-detail=` token says "on" in every line this build writes (the rule has no key now). The reader (edup_log.py
 // --camera-census) parses it, "on" and "off", so it still reads the logs of builds that had the key, and the flight-3 spellings
 // `stale=` and `forgiven=`.
 struct VrWorldRefusalWindow {

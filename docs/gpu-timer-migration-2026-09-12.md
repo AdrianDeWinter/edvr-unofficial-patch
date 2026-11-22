@@ -126,12 +126,12 @@ backups. No game was launched by this work.
 This flight's expected build is `cc3d882`, even if branch HEAD has advanced:
 
 ```powershell
-python tools/edvr_log.py --target frontier --tag gfx --expect-build cc3d882 --version
-python tools/edvr_log.py --target frontier --tag vr --expect-build cc3d882 --version
-python tools/edvr_log.py --target frontier --tag gfx --expect-build cc3d882 --grep 'GPU timing:|door GPU|GPU price|vScreen totals|unavailable|sentinel|exception'
+python tools/edup_log.py --target frontier --tag gfx --expect-build cc3d882 --version
+python tools/edup_log.py --target frontier --tag vr --expect-build cc3d882 --version
+python tools/edup_log.py --target frontier --tag gfx --expect-build cc3d882 --grep 'GPU timing:|door GPU|GPU price|vScreen totals|unavailable|sentinel|exception'
 ```
 
-Install both proxies from the clean checkpoint with `tools/install_edvr.py
+Install both proxies from the clean checkpoint with `tools/install_edup.py
 --target frontier --dll --openvr`, then use `--verify-only`. Preserve the live
 INI and record the installed commit and hashes. Steam is not this test's
 target.
@@ -142,7 +142,7 @@ closed for several seconds and reopen it to exercise an inactive timer
 producer. Keep the existing AA settings. Exit normally and report any crash,
 hang, new stutter or visual change.
 
-After the flight, check both logs with `tools/edvr_log.py --expect-build` using
+After the flight, check both logs with `tools/edup_log.py --expect-build` using
 the installed commit. Require the new `GPU timing: shared disjoint clock bound`
 and `GPU timing: first shared-clock interval ready` lines, compatible
 owner/census identities, active LiveCopy hooks and normal existing feature

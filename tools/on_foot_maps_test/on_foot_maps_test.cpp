@@ -264,7 +264,7 @@ void caseR9() {
 }
 
 // ---- the reader's fixture ---------------------------------------------------------------------------------------------------
-// tools\maps_sharp_fixture.log is the synthetic flight the reader's self-test (tools\edvr_log.py --maps-sharp) parses: every
+// tools\maps_sharp_fixture.log is the synthetic flight the reader's self-test (tools\edup_log.py --maps-sharp) parses: every
 // "on foot maps sharp" line in it is the formatters' own output for the numbers below (the rig compares the file to this text, byte
 // for byte, so a formatter that changes fails HERE and the fixture is regenerated: on_foot_maps_test --emit-fixture >
 // tools\maps_sharp_fixture.log); the lines of other modules are literal. The story: the world for 2:30, a map opened for 17.8 s (the VR

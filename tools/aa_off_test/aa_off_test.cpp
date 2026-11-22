@@ -373,7 +373,7 @@ void testOverlayLine() {
     char tiny[8];
     edvr::overlayLineText(tiny, sizeof(tiny), 90.0, c, "cpu", true, 1.0);
     check(std::strlen(tiny) < sizeof(tiny), "overlay: a short line buffer is truncated, not overrun");
-    // The census field the log parser reads (tools\edvr_log.py --gpu-work-span): its exact text.
+    // The census field the log parser reads (tools\edup_log.py --gpu-work-span): its exact text.
     char field[160];
     edvr::formatFrameWorkSpanField(field, sizeof(field), 0, 0, 0, 0.0);
     check(std::strcmp(field, "frame work span: completed 0, skipped 0, invalid 0, last - ms") == 0, "census field: nothing completed prints 'last -'");

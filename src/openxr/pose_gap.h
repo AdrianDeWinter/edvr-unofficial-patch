@@ -13,7 +13,7 @@
 // stays: a caller that appears after a game update, or a fix that stops acting, shows here.
 //
 // Pure: the clock and the sink are passed in, so tools\openxr_pose_test drives every case and holds tools\pose_gap_fixture.log to exactly
-// what this writes (tools\edvr_log.py --tally pose reads it).
+// what this writes (tools\edup_log.py --tally pose reads it).
 #include <algorithm>
 #include <cmath>
 #include <cstdint>

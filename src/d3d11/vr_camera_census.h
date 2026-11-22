@@ -30,7 +30,7 @@
 // and the temporal pass's chosen rows matched to the calls' view axes. The 5 s line is unchanged; three companion lines follow it in each window: the
 // episodes' counters (taken, triggers, skipped and state, zeros included), the on-foot naming runs and the observer halves' own CPU. Every part runs with
 // the key on only: with it off nothing is installed, allocated, timed or logged, and the per-draw hook below is never set.
-// `python tools\edvr_log.py --camera-census` reads the log back, does the join and judges the injection (the stage 2 verdict), and reports each episode.
+// `python tools\edup_log.py --camera-census` reads the log back, does the join and judges the injection (the stage 2 verdict), and reports each episode.
 #pragma once
 #include <cstdint>
 

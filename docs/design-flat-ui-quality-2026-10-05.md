@@ -230,8 +230,8 @@ Proposed evidence and discriminating signatures:
 Verify the log before interpreting any counter, using the sanctioned tool:
 
 ```text
-python tools\edvr_log.py --target epic --expect-build HEAD --version
-python tools\edvr_log.py --target epic --expect-build HEAD
+python tools\edup_log.py --target epic --expect-build HEAD --version
+python tools\edup_log.py --target epic --expect-build HEAD
 ```
 
 Record `ruled out: X, because Y` here after a flight refutes a cause. Record
@@ -253,7 +253,7 @@ Check alpha/additive/multiply, downsampling, depth, tone/exposure, query/UAV
 refusal, no-draw frames, rollback, resize and state restoration.
 
 Run the absolute-path full `build.bat` and require its receipt. Install and
-verify with `tools\install_edvr.py` before an exact-build flat run.
+verify with `tools\install_edup.py` before an exact-build flat run.
 
 Use one qualification route through main menu/loading, cockpit/station
 services, panels/HUD/holograms, maps and on-foot UI with a moving background

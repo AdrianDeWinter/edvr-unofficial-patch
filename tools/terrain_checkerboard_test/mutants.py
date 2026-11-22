@@ -10,7 +10,7 @@ passes proves little until it is seen to FAIL on a source that breaks the rule i
           repo; the rig is built against the edited copies (-DTCB_NOTICE_HEADER, -DTCB_READER_HEADER, -DTCB_BLOOM_HEADER, -DTCB_MUTANT, which
           leaves the worker out) and run on the rule's case;
   worker  one textual edit of the worker's source (terrain_checkerboard.cpp), the rig built with it and the real Config, Log and fault guard, and run
-          on T5 (the thread, the real log and tools\\edvr_log.py);
+          on T5 (the thread, the real log and tools\\edup_log.py);
   pin     one textual edit of a COPY of a source file the rig's pins read (menu.cpp, the worker, the headers, the flat runtime, the proxy, the device
           hook), and the rig (built once, from the real sources) run on T6 with --root.
 

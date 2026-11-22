@@ -374,7 +374,7 @@ and if the pipeline is off the critical path no offline work is worth doing.
   mover identity by +0x170 delta; the pool written from inside job-0.
 - Captures (local, gitignored): `edvr_logs\pool\` run 055252 (depth dumps,
   pool/inst/ledger), run 184120 (v2 ledger), flight 173802 (jobs[] baseline).
-- Instruments in-tree: draw census + `edvr_log.py --tally vh`, v2 draw
+- Instruments in-tree: draw census + `edup_log.py --tally vh`, v2 draw
   ledger (PS/RT), `EyeDrawSnapshot` (EDVRDRW1), `eye_depth_capture`
   (EDVRDEPT, asynchronous), MeshCoverage ownership
   (`tools/object_classification.py`), per-draw occlusion queries

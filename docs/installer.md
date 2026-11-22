@@ -48,7 +48,7 @@ This file is why the engine does what it does. Using it is the player guide:
   removed with `edvr-installer.exe` and restored for the launcher on
   2026-11-16, and has not been run on Linux hardware. Play is a Steam action,
   so the game starts from the original Epic manager.
-- **Installs by `tools\install_edvr.py` (2026-10-14):** the game's original
+- **Installs by `tools\install_edup.py` (2026-10-14):** the game's original
   runtime is recovered from the newest receipt that still holds it, so an
   update, a switch to flat-only and an uninstall work after two tool installs
   (see "Receipts from the tool"). `installer_test` pins it over real files.
@@ -175,7 +175,7 @@ gets renamed to (`d3d11_edhm.dll`). An unrecognised one becomes
 
 ### Receipts from the tool
 
-`tools/install_edvr.py` leaves a receipt beside the game for each install:
+`tools/install_edup.py` leaves a receipt beside the game for each install:
 `edvr_native_receipt.json` the first time, then a `.pre-<tag>-<stamp>.bak`
 sibling for each later one. The newest receipt is the evidence of who owns the
 files now, and it is the only one the installer reads for that.
@@ -244,7 +244,7 @@ is made new (absent, or replaced by `--replace-settings`); an `edvr.ini` whose
 chain was emptied by hand stays emptied. A flat-only install does not manage
 `edvr.ini`, but writes this one key into it (a new file holding only the key
 if there is none), because that is where the flat profile reads it from.
-`tools/install_edvr.py` does the same move on a run that leaves the settings
+`tools/install_edup.py` does the same move on a run that leaves the settings
 alone; `--ini` replaces both files with their templates and says so.
 
 **Consequence for VR.** Once the value is set, EDHM (or whatever is chained)
@@ -340,7 +340,7 @@ follows the same split for every operation:
   fresh flat install over a VR one) starts `edvr-flat.ini` from it through the
   same merge, so the settings the flat runtime was reading carry over; the
   chain value stays in `edvr.ini` alone, which is left exactly as it is.
-  `--replace-settings` gives fresh defaults instead. `tools/install_edvr.py`
+  `--replace-settings` gives fresh defaults instead. `tools/install_edup.py`
   seeds the file too, by copying `edvr.ini` as it stands.
 - **The kept defaults** are two files, `edvr_install\edvr.ini.base` and
   `edvr_install\edvr-flat.ini.base`. Each is the shipped default of the version
@@ -600,7 +600,7 @@ the installer placed, keyed by the manifest's file id: `root` (`game` or
 `openvr`), `path` (under the root), `existing` (the behaviour), `sha256` (what
 was written) and, when a file was displaced, `before_sha256` and `backup`. It is
 what ownership means: a file is ED-UP's to remove while its bytes on disk are
-still the recorded hash (a tool receipt from `install_edvr.py` is a second source
+still the recorded hash (a tool receipt from `install_edup.py` is a second source
 of provenance). Uninstall works from the records and the receipts alone and
 needs no payload; an edited copy is kept and the plan says so. An update removes
 a recorded id the new install no longer places (dropped from the manifest, or
@@ -608,7 +608,7 @@ outside the scope) under the same rule. A record whose path leaves its root is
 refused, not followed. A `state.ini` from installer 0.22 or launcher 0.1.0 has
 no file sections and is read into records from its component fields; the
 compatibility sections are still written beside the records, for a downgrade and
-for `install_edvr.py`'s flat-receipt check. When a lost record leaves a folder
+for `install_edup.py`'s flat-receipt check. When a lost record leaves a folder
 with files only the payload can vouch for, a caller that has a payload still
 passes it, and it adds candidates for those files.
 
@@ -717,7 +717,7 @@ here, and so does the launcher itself on Linux: it has not been flown there.
 ### Linux Epic: the launcher under the Epic copy's runner
 
 The wrapper uses `epic_library.py` for one read-only inventory, shared with
-`install_edvr.py --target epic`. It confirms `EliteDangerous64.exe` beneath
+`install_edup.py --target epic`. It confirms `EliteDangerous64.exe` beneath
 the manager's recorded install root and associates the existing prefix;
 journal directories alone do not identify a game install. Local records may
 name custom drives and Unicode paths.

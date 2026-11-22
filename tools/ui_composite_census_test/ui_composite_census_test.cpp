@@ -454,7 +454,7 @@ void caseR9() {
 }
 
 // ---- the reader's fixture ---------------------------------------------------------------------------------------------------------
-// tools\ui_composites_fixture.log is the synthetic flight the reader's self-test (tools\edvr_log.py --ui-composites) parses: every
+// tools\ui_composites_fixture.log is the synthetic flight the reader's self-test (tools\edup_log.py --ui-composites) parses: every
 // "composites left in the scene" line in it is the formatter's own output for the numbers below (the rig compares the file to this text,
 // byte for byte, so a formatter that changes fails HERE and the fixture is regenerated: ui_composite_census_test --emit-fixture >
 // tools\ui_composites_fixture.log); the other lines are literal. It is a CATALOGUE of the shapes the line takes, one window of 30 s each,

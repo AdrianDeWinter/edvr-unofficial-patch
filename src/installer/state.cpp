@@ -247,7 +247,7 @@ bool backupTail(const std::wstring& tail, std::wstring* stamp, unsigned long* co
     return true;
 }
 
-// Every receipt path of one family, newest first, as install_edvr.py orders them: the backup-named siblings by stamp, then counter, and
+// Every receipt path of one family, newest first, as install_edup.py orders them: the backup-named siblings by stamp, then counter, and
 // the plain receipt last (it is the oldest: each later install writes a backup-named one beside it). The first is the current receipt.
 std::vector<std::wstring> receiptPathsNewestFirst(const std::wstring& gameDir, const std::wstring& family) {
     struct Entry { std::wstring path, stamp; unsigned long counter; };
@@ -455,7 +455,7 @@ bool knownExisting(const std::string& name) {
 // where the file went or how it was treated, because the installer knew those by name. The table is that knowledge, written down once:
 // the file ids of schema 2's first manifest, the place and behaviour the planner always gave them, and the one or two fields that held
 // the hash (the older field first, then the [native] copy a later version added). state.cpp's serializeState writes the same fields
-// from the records, so a downgrade and tools\install_edvr.py's flat-receipt check still find them.
+// from the records, so a downgrade and tools\install_edup.py's flat-receipt check still find them.
 struct LegacyKey { const char* section; const char* key; };
 struct LegacySlot {
     const char* id;
@@ -624,7 +624,7 @@ std::string serializeState(const InstallState& state) {
         if (!f.backup.empty()) out += "backup = " + toUtf8(f.backup) + "\r\n";
     }
 
-    // The component sections an installer 0.22 and tools\install_edvr.py's flat-receipt check read, written from the records
+    // The component sections an installer 0.22 and tools\install_edup.py's flat-receipt check read, written from the records
     // (kLegacySlots is the same mapping). A reader that knows the records ignores them.
     const std::string graphicsSha = state.shaOf("graphics");
     const std::string runtimeSha = state.shaOf("runtime");

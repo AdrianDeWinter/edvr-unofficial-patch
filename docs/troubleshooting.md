@@ -191,7 +191,7 @@ causing Elite to report `VRInitError_Init_Internal`.
 from the single downloaded release. If building from source, run:
 
 ```powershell
-python tools\install_edvr.py --target steam --verify-only
+python tools\install_edup.py --target steam --verify-only
 ```
 
 ### Everything except the exposure fix stopped working
@@ -222,17 +222,17 @@ Developers and technical pilots can inspect logs using repository tools in
 
 ```powershell
 # Verify installed DLL integrity against current source build
-python tools\install_edvr.py --target steam --verify-only
+python tools\install_edup.py --target steam --verify-only
 
 # Check whether a log matches the current git HEAD commit
-python tools\edvr_log.py --target steam --expect-build HEAD --version
+python tools\edup_log.py --target steam --expect-build HEAD --version
 
 # Filter log for errors, crashes, and sentinel trip lines
-python tools\edvr_log.py --target steam --grep "fatal|error|sentinel|refused|reset"
+python tools\edup_log.py --target steam --grep "fatal|error|sentinel|refused|reset"
 
 # View the last 50 lines of the latest graphics log
-python tools\edvr_log.py --target steam --tag gfx --tail 50
+python tools\edup_log.py --target steam --tag gfx --tail 50
 
 # Audit eye-texture draw call tallies (census verification)
-python tools\edvr_log.py --target steam --tally vh
+python tools\edup_log.py --target steam --tally vh
 ```

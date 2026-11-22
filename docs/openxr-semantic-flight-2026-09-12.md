@@ -4,7 +4,7 @@
 
 The user reported that the Frontier run seemed normal on the established
 Pimax-through-SteamVR test setup. Both logs were independently checked with
-`tools/edvr_log.py --expect-build f3c205e`, then their full contents retrieved
+`tools/edup_log.py --expect-build f3c205e`, then their full contents retrieved
 through the same tool. They identify `v0.15.1-61-gf3c205e`. Raw logs and the
 local parsing artifacts remain outside the committed documentation.
 

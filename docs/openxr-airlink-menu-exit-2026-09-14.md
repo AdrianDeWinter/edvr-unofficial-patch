@@ -25,7 +25,7 @@ game's eye buffers. Preserve the live INI during subsequent installations.
 ## Evidence retained
 
 Private artifacts are under `build/airlink-blank-menu-20260914`. Flight logs
-were read and archived through `edvr_log.read_text`:
+were read and archived through `edup_log.read_text`:
 `edvr_gfx_20260914_101035.log` and `edvr_openxr_20260914_101036_329_25644.log`.
 Local time is UTC minus six hours.
 
@@ -195,7 +195,7 @@ exercise real frame boundaries across two resumes, retain optics while
 invalidating poses, preserve sequence ordering, and expose terminal Quit once.
 
 The verified pair `v0.16.2-95-g12152c5-dirty` was installed into Frontier
-through `tools/install_edvr.py`, after its dry-run preview. Runtime SHA-256 is
+through `tools/install_edup.py`, after its dry-run preview. Runtime SHA-256 is
 `f8c70eca4d7a320a76dacf5342d5c13e9284c007573843d074ef84582c5dde5b`; graphics
 SHA-256 is `bef1c2be178d21cbb9f0322a4a7fe0338a853b1ac5be2b3f3455fccc74a845a3`.
 Hash verification passed. The live `edvr.ini`, including the saved 180% scale,

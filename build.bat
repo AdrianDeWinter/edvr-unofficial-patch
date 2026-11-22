@@ -590,7 +590,7 @@ REM path with the literal value "none" (proving fix.temporal_aa=fsr4's runtime r
 REM already has the SDK staged); else the checkout's own third_party\fsr4; else the machine's copy under
 REM %LOCALAPPDATA%\EDVR\fsr4-sdk. The copy is VERIFIED first, and a mismatch fails the build. Without any SDK
 REM the build still succeeds: fsr4_engine.cpp compiles as a refusing stub. The two DLLs and the licence land in
-REM %BUILD% for tools\install_edvr.py --fsr4 and the rig; they are NOT in the self-contained installer and NOT
+REM %BUILD% for tools\install_edup.py --fsr4 and the rig; they are NOT in the self-contained installer and NOT
 REM in the release packages (docs\fsr-upscaler-design-2026-09-16.md, decision D8), and tools\package_native.py
 REM and tools\gen_installer_rc.py name the files they carry, so these three are never picked up by accident.
 set FSR4=
@@ -915,7 +915,7 @@ set LAUNCHER_SRC="src\installer\launcher_core.cpp" "src\installer\launcher_regis
 if defined EDVR_DLL_ONLY goto dll_only_finish
 
 REM The two release files nothing else makes, build\edup-flat.ini and build\edup_profile_vr.ini, which
-REM package_native.py packs and tools\install_edvr.py installs. The same step checks that the native pair,
+REM package_native.py packs and tools\install_edup.py installs. The same step checks that the native pair,
 REM the loader and its notice, and any XeSS notices are in the build, so a missing one fails here and not
 REM at packaging.
 python "tools\gen_installer_rc.py" --release-files --build "%BUILD%" || (
@@ -1018,7 +1018,7 @@ if exist "%BUILD%\nvngx_dlss.dll" (
 )
 if exist "%BUILD%\amd_fidelityfx_upscaler_dx12.dll" (
     echo [edvr] FSR 4 runtime: staged in build\amd_fidelityfx_*.dll for a dev install only ^(decision D8^);
-    echo        it is NOT in the installer or the packages. python tools\install_edvr.py --fsr4 places it.
+    echo        it is NOT in the installer or the packages. python tools\install_edup.py --fsr4 places it.
 ) else (
     echo [edvr] FSR 4 runtime: NOT STAGED -- no FSR 4 SDK was found, so fix.temporal_aa=fsr4 refuses.
 )
@@ -1042,13 +1042,13 @@ python tools\build_phases.py --mark "%PHASES%" "final checks and receipt"
 python tools\build_phases.py --report "%PHASES%"
 echo [edvr] Native OpenXR build and all gates passed.
 echo [edvr] Install both native DLLs and the bundled loader for a test flight:
-echo        python tools\install_edvr.py --target frontier --dry-run
-echo        python tools\install_edvr.py --target frontier
+echo        python tools\install_edup.py --target frontier --dry-run
+echo        python tools\install_edup.py --target frontier
 echo        --target takes steam, frontier or a path. Settings are preserved
 echo        unless --ini is specified. Windows selects the OpenXR runtime.
 echo.
 echo [edvr] After the flight:
-echo        python tools\edvr_log.py --target steam^|frontier^|^<game dir^> --expect-build HEAD
+echo        python tools\edup_log.py --target steam^|frontier^|^<game dir^> --expect-build HEAD
 exit /b 0
 
 REM ===========================================================================
@@ -2018,7 +2018,7 @@ echo [edvr] === vr_camera_census_test.exe ===
 REM The VR camera census (design doc section 82): the pure half the DLL compiles, run against the derive model, plus the
 REM source scans that hold "key off = nothing" and "the detour never writes a camera" (they read src\d3d11 from the repo
 REM root), plus tools\camera_census_fixture.log held to exactly what the formatters write -- the file that
-REM edvr_log.py --camera-census's own self-test reads.
+REM edup_log.py --camera-census's own self-test reads.
 if not exist "%OBJ%\vrcamcensus" mkdir "%OBJ%\vrcamcensus"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\vrcamcensus\\" ^
@@ -2034,7 +2034,7 @@ REM The census's glue (src\d3d11\vr_camera_census.cpp) compiled for real with th
 REM calls (the injector, the world route's draw progress, the journal, EDVR's advertised eye geometry): the observer's two
 REM halves against cameras built by the game-camera derive model (no allocation, not one byte written), the boundary's
 REM order, the eye draw's staging readback on a WARP device, the key-off path, the bounded log -- and then
-REM tools\edvr_log.py --camera-census over the log the glue wrote, which must find the two eye cameras by the content
+REM tools\edup_log.py --camera-census over the log the glue wrote, which must find the two eye cameras by the content
 REM join. Needs python on PATH; runs from the repo root; takes about six seconds (one 5 s window is waited out).
 if not exist "%OBJ%\vrcamcensusglue" mkdir "%OBJ%\vrcamcensusglue"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
@@ -2094,7 +2094,7 @@ if "%EDVR_RIG_STEP%"=="build" exit /b 0
 )
 REM The sessions the exe wrote with log.max_mb = 1 (head, tail segments, kept lines), read back by the reader every tool uses and checked from the
 REM Python side: sizes, segment count, deleted ranges, kept lines once each, order, whole lines, the newest line (tools\log_session.py).
-python "tools\edvr_log.py" --check-rotation-dir "%BUILD%\cfgscratch\logrot" || (
+python "tools\edup_log.py" --check-rotation-dir "%BUILD%\cfgscratch\logrot" || (
     echo [edvr] ERROR: the log's head, tail segments or kept lines are not as the log promises
     exit /b 1
 )
@@ -3047,7 +3047,7 @@ echo [edvr] === terrain_checkerboard_test.exe ===
 REM Elite's terrain checkerboard rendering in VR, said in the headset (design doc section 84, the VR hint): the words and the pure picks
 REM (src\common\terrain_checkerboard_notice.h), the reader on fixture folders and the monitor's rule for a half-written file
 REM (src\d3d11\terrain_checkerboard_reader.h), the worker thread on a real log (src\d3d11\terrain_checkerboard.cpp, linked with the real
-REM Log, Config and fault guard, and then tools\edvr_log.py --terrain-checkerboard over the log it wrote: needs python on PATH) and the
+REM Log, Config and fault guard, and then tools\edup_log.py --terrain-checkerboard over the log it wrote: needs python on PATH) and the
 REM wiring in menu.cpp as source pins (they read src\ from the repo root, which the rig takes as its argument). The fixtures are written
 REM to a temp directory and removed. tools\terrain_checkerboard_test\mutants.py --self-test holds the rig's mutation list to the sources as
 REM they are; the list itself (--run, on demand, about a minute) proves the rig fails when each rule of the headers, the worker or the
@@ -3070,7 +3070,7 @@ REM The footprint instrument's glue (src\d3d11\vscreen_footprint.cpp; design doc
 REM real with the real Config, Log and fault guard, and stubs for what it calls (the runtime's published eye size, the hooks' bypass
 REM flag): the four sources a composite draw binds (the model rows, the clip rows at their real offsets, the quad, the SIZE record) on a
 REM WARP device read back through the staging copy and the DO_NOT_WAIT map, the 30 s line, the stored median, the sources that are not
-REM what the measurement assumes, the fault budget -- and then tools\edvr_log.py --vscreen-fit over the log the glue wrote. Needs python
+REM what the measurement assumes, the fault budget -- and then tools\edup_log.py --vscreen-fit over the log the glue wrote. Needs python
 REM on PATH; runs from the repo root; takes about a second. Its exe sits under obj\ and it takes System32's device through
 REM src\common\system_d3d11.h, so it links without d3d11.lib.
 if not exist "%OBJ%\vscreenfpglue" mkdir "%OBJ%\vscreenfpglue"
@@ -3693,14 +3693,14 @@ exit /b 0
 REM The independent Python checks run at once through tools\run_jobs.py --gate (four at a time; each one's output whole under a header with its
 REM seconds, failures printed LAST, nonzero if any failed), where they used to run one after another in 134 s. Each writes only to a temp
 REM folder of its own (checked 2026-10-14: openxr_pe, elite_oculus, run_openxr_frontier, cpu_profile, fetch_ffx_dx11, eye_run_ledger, the flat_*
-REM readers, install_edvr, edvr_log, reflow_notes and the desk scripts all build their fixtures under tempfile), and reads only the checkout and
+REM readers, install_edup, edup_log, reflow_notes and the desk scripts all build their fixtures under tempfile), and reads only the checkout and
 REM build\edvr_openxr_runtime.dll / edvr_openxr_graphics.dll, which the main flow finished before any rig started. Cwd is the repo root, so the
 REM paths are relative. What stays outside the group, in order below: the profiling-only analyzer build, the two source checks whose failure
 REM message says what the rule is, and the one C++ compile.
 REM Notes: the census readers (diff_draw_census, crisp_ui_gates, stencil_census, draw_identity) assert the PARSE of the DC line format, so a
 REM column added to the emitter that swallowed a neighbour fails here, not in the ten minutes after a flight; eye_run_ledger's row layout must
-REM match LedgerDraw in src\d3d11\object_probe.cpp byte for byte; install_edvr's --dry-run must write NOTHING (not a copy, not a backup, not a
-REM directory) and its backup naming is one string in one place; edvr_log's version regex must match the line Log::note() really writes,
+REM match LedgerDraw in src\d3d11\object_probe.cpp byte for byte; install_edup's --dry-run must write NOTHING (not a copy, not a backup, not a
+REM directory) and its backup naming is one string in one place; edup_log's version regex must match the line Log::note() really writes,
 REM timestamp prefix and all; reflow_notes must leave fenced code, tables and long URLs alone, be idempotent and write UTF-8 with no BOM; the
 REM desk scripts (compile_variants .. eye_run_spin) need no build products, only numpy and Pillow.
 REM --jobs 4, not every core: this group runs beside up to fifteen other rigs. At every core (2026-10-14) its gates summed 546 s
@@ -3727,8 +3727,8 @@ python tools\run_jobs.py --jobs 4 ^
     --gate "tools\flat_packet_replay.py --self-test" ^
     --gate "tools\flat_resolve_inputs.py --self-test" ^
     --gate "tools\flat_weapon_pixels.py --self-test" ^
-    --gate "tools\install_edvr.py --self-test" ^
-    --gate "tools\edvr_log.py --self-test" ^
+    --gate "tools\install_edup.py --self-test" ^
+    --gate "tools\edup_log.py --self-test" ^
     --gate "tools\reflow_notes.py --self-test" ^
     --gate "tools\compile_variants.py --self-test" ^
     --gate "tools\dxbc_disasm.py --self-test" ^

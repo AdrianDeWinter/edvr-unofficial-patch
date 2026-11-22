@@ -271,7 +271,7 @@ static bool wiredAccessors(const std::string& journal, const std::string& tempor
 }
 
 // The first scope's state note (srv_turret.h srvTurretHudCountIssue): the issues are counted at the game's own issue and at the re-issues, and each family's first scope says its state at every issue
-// it makes; the line is the one tools/edvr_log.py --health reads.
+// it makes; the line is the one tools/edup_log.py --health reads.
 static bool wiredStateNote(const std::string& vscreen, const std::string& t) {
     const size_t reissue = vscreen.find("void pureDrawReissue(ReissueCaller who, ID3D11DeviceContext* self, char kind, UINT count,");
     const size_t reissueCount = found(reissue) ? vscreen.find("srvTurretHudCountIssue(self);", reissue) : std::string::npos;

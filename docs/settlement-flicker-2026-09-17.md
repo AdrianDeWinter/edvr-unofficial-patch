@@ -371,7 +371,7 @@ rotating-station approach with traffic, then the slot/docked view. Take an eye
 run at the settlement and station. Include a short stop/start and an occluded
 ship emerging into view. Use the same settings as the baseline where practical;
 do not count the explicit capture stall as steady-state frame time. Start log
-analysis with `tools/edvr_log.py --target frontier --expect-build HEAD
+analysis with `tools/edup_log.py --target frontier --expect-build HEAD
 --version` against this checkout.
 
 Acceptance for a later optimization is lower steady-state CPU/GPU cost with
@@ -385,7 +385,7 @@ would still exceed the 11.1 ms refresh budget.
 
 The gfx log `edvr_gfx_20260917_191929.log` and native log
 `edvr_openxr_20260917_191930_687_7888.log` both match `v0.17.0-1-gc7c4737`,
-verified with `tools/edvr_log.py --target frontier --expect-build c7c4737` (and
+verified with `tools/edup_log.py --target frontier --expect-build c7c4737` (and
 `--tag openxr`). The user reported three runs with three captures each; this
 matching session contains three completed paired eye runs and three fallback
 markers, not nine. The user confirmed 192128 is on foot. Overview images
@@ -480,7 +480,7 @@ and probe self-test, all 61 pool jobs plus three quiet gates, and the 249-key
 config contract. The optional FSR3 engine test skips because that SDK is
 absent; this is a DLSS test build. Validation output:
 `build/mesh-metadata-verified.log`. Rebuild the clean commit before delivery
-through `tools/install_edvr.py --target frontier`, with its dry-run and
+through `tools/install_edup.py --target frontier`, with its dry-run and
 verify-only checks; preserve the live INI.
 
 Next flight: the same Quest 3 / VirtualDesktopXR / DLSS settings, on foot, ship
@@ -495,7 +495,7 @@ improvement before the flight.
 ### 2026-09-17 -- reverse route exposes the oversized-stream batching limit
 
 Verified graphics log `edvr_gfx_20260917_195056.log` identifies
-`v0.17.0-2-g81eeedb`; use `tools/edvr_log.py --target frontier --expect-build
+`v0.17.0-2-g81eeedb`; use `tools/edup_log.py --target frontier --expect-build
 81eeedb`. The user's reverse route maps to 195254 station (scene frame 12423),
 195609 settlement from the ship (28930), and 195653 on foot (31463). Each is a
 completed paired eye run. Native environment/sizing and benchmark context are
@@ -591,7 +591,7 @@ this change addresses the confirmed batching defect.
 
 The user reported worse performance. Both logs match `v0.17.0-3-g9446f4d`:
 `edvr_gfx_20260917_203704.log` and `edvr_openxr_20260917_203705_531_9344.log`,
-read through `tools/edvr_log.py`. Capture 204142 is scene frame 20347.
+read through `tools/edup_log.py`. Capture 204142 is scene frame 20347.
 Environment remains Quest 3, VirtualDesktopXR, 90 Hz, DLSS K, untrimmed
 2481x2121 input and active XR output 3072x3264. Offline evidence and analysis
 are under `build/flight-20260917-batching-check/`.
@@ -1053,7 +1053,7 @@ the weapon remained holstered. Both `edvr_gfx_20260918_070724.log` and
 The selected graphics interval is 07:10:48.160-07:14:18.160 local; the native
 log aligns in UTC at 13:10:48.136-13:14:18.136. Reader evidence and reductions
 are saved under `build/flight-89b9055-final/` (`report.md`, `evidence.txt`, and
-`screen-weapon-gpu.md`). All flight reads used `tools/edvr_log.py`.
+`screen-weapon-gpu.md`). All flight reads used `tools/edup_log.py`.
 
 Pacing changes to runtime just before the cutoff, at 07:10:47.617. Stable
 landed native windows are 9-11. Turbo begins at 07:12:31.317; stable on-foot
@@ -1545,7 +1545,7 @@ contract. The diagnostic preserves the installed AA/render settings.
 
 Verified Frontier `edvr_gfx_20260918_090413.log` as exactly
 `v0.17.0-10-g89b9055`, build `6AAD36B4`. The sandbox initially hid the Frontier
-Products directory; the sanctioned `edvr_log.py` locator succeeded outside the
+Products directory; the sanctioned `edup_log.py` locator succeeded outside the
 sandbox. The stale Steam log/dump was rejected as a build mismatch.
 
 The final 17.64-second AA-off benchmark window records CPU p50/p95/p99
@@ -2027,7 +2027,7 @@ against the final committed build before flying.
 ### 2026-09-18 -- landed cycle locates the missing 4 ms after stereo Submit
 
 The user ran the diagnostic. Both Frontier logs match 7cfb5a6, version
-`v0.17.0-20-g7cfb5a6`, checked with `tools/edvr_log.py --expect-build 7cfb5a6`:
+`v0.17.0-20-g7cfb5a6`, checked with `tools/edup_log.py --expect-build 7cfb5a6`:
 `edvr_gfx_20260918_112719.log` and `edvr_openxr_20260918_112720_574_6064.log`.
 The native log uses UTC, six hours ahead of the graphics log's local time.
 Native enabled and first-complete markers are present. The route is direct on
@@ -2233,7 +2233,7 @@ configuration contract, including 672 native-runtime checks and 620
 original-draw checks. Validation log:
 `build/controlled-baseline-build-validated.log`. The committed package is
 rebuilt for an unambiguous flight version, then installed and verified with
-`tools/install_edvr.py --target frontier`, preserving the live INI. The next
+`tools/install_edup.py --target frontier`, preserving the live INI. The next
 flight should hold the same landed AA-off cockpit view for two minutes without
 an eye capture.
 
@@ -2250,7 +2250,7 @@ script defect is bypassed here, not changed in this diagnostic.
 ### 2026-09-18 -- probe-off flight: small gain, remaining delay outside Present
 
 The user reports FPS sometimes in the low 70s. Both Frontier logs verify
-`v0.17.0-23-g72501fe` using `tools/edvr_log.py --expect-build 72501fe`:
+`v0.17.0-23-g72501fe` using `tools/edup_log.py --expect-build 72501fe`:
 `edvr_gfx_20260918_121326.log` and `edvr_openxr_20260918_121328_077_3424.log`.
 The graphics log explicitly confirms `Original draw diagnostic: controlled
 baseline OFF; coarse application GPU timing on.` No original-draw diagnostic
@@ -2389,7 +2389,7 @@ PostPresentHandoff. Nested intervals are unioned by the analyzer rather than
 added twice. These markers add no GPU work and change no rendering or pacing
 policy.
 
-`tools/cpu_profile/edvr_cpu.wprp` selects CPU sampling, context switches,
+`tools/cpu_profile/edup_cpu.wprp` selects CPU sampling, context switches,
 ReadyThread, process/thread lifetime and module-load events, with stacks for
 the three CPU event classes. Memory mode bounds the kernel ring to 512 MiB and
 the marker ring to 4 MiB. Actual retained history depends on event rate; the
@@ -2457,7 +2457,7 @@ below.
 
 Post-commit validation: the symbol-enabled build of 2d98775 passes the same
 complete build gates (`build/cpu-profile-build-2d98775.log`). Frontier now has
-`v0.17.0-25-g2d98775`, installed and hash-verified through `install_edvr.py`
+`v0.17.0-25-g2d98775`, installed and hash-verified through `install_edup.py`
 without changing its INI. The collector also accepts the installer's verified
 receipt siblings after a reinstall; a regression covers a stale primary receipt
 and a valid replacement sibling. Python tests now pass 50 checks.
@@ -2871,7 +2871,7 @@ speedup is claimed before that measurement.
 ### 2026-09-18 -- verified 5efb139 DLSS cache flight
 
 The user ran the installed build. Both graphics and native logs identify
-v0.17.0-32-g5efb139, checked with tools/edvr_log.py --expect-build 5efb139.
+v0.17.0-32-g5efb139, checked with tools/edup_log.py --expect-build 5efb139.
 Graphics log is edvr_gfx_20260918_142925.log; native log is
 edvr_openxr_20260918_142927_012_16980.log. The collector completed normally on
 game exit at 20:32:43 UTC. Capture, report and matching archived DLLs/PDBs are
@@ -3053,7 +3053,7 @@ checks under build/blend-state-rejected-4b5db2b. The corrected benchmark
 fixture was compiled after the full build; production DLLs were unchanged. All
 experimental source changes were removed. Restored the verified archived
 5efb139 DLLs/PDBs to the ordinary build outputs and moved the experimental
-installer into the archive. tools/install_edvr.py --target frontier
+installer into the archive. tools/install_edup.py --target frontier
 --verify-only confirms the installed native pair, loader and config. No game
 files or settings were changed, no new collector was armed, and no flight is
 requested for this candidate.
@@ -3269,7 +3269,7 @@ encoding and line endings. The staged source and original are under
 files match the already installed diagnostic. The repository default INI was
 not used to replace the tuned live configuration.
 
-Applied through `tools/install_edvr.py --target frontier --root <stage> --ini
+Applied through `tools/install_edup.py --target frontier --root <stage> --ini
 --tag settlement-ships-off`, after dry-run and a check that the live INI still
 matched the staged original. The installer created transactional backups and
 receipt `edvr_native_receipt.json.pre-settlement-ships-off-20260918-162942.bak`
@@ -3464,7 +3464,7 @@ Validation and deployment: the absolute `build.bat` with `EDVR_JOBS=2` passes
 the full native build and all gates, including 90 depth-pair checks, temporal
 history preservation and shader classification checks. Independent source
 review found no remaining correctness defects. Installed in Frontier through
-`tools/install_edvr.py` after dry-run; `--verify-only` confirms the native
+`tools/install_edup.py` after dry-run; `--verify-only` confirms the native
 pair, loader and config. Live INI hash is unchanged at
 `7802f3347940559ba5899df574e742ac50a957cb0e2bfcc3dc2cedc544c9debe`, including
 the temporary ship fallback zero. Receipt is
@@ -3780,7 +3780,7 @@ temporary-register allocation, not added execution cost. The report and
 reproduction harness are in build/temporal_reflection_audit.
 
 Installed v0.17.0-42-gc8add89-dirty in Frontier after dry-run and live-config
-hash comparison. Independent install_edvr.py --verify-only verified the pair,
+hash comparison. Independent install_edup.py --verify-only verified the pair,
 loader and config. The only INI delta is the new switch set on. Archive
 build/static-surfaces-frontier-c8add89 holds the exact DLLs/PDBs, original and
 test INIs, manifest, build-validation log and VS transform audit. Graphics
@@ -3979,7 +3979,7 @@ ledger census, every input's hash, parser provenance and synthetic checks;
 build/static-exclusion-coverage-190309/report.md, mesh-probe-report.json and
 distribution.json contain the admitted-record analysis. Its
 admission-extract.txt preserves the version-verified current-flight timing
-lines read through tools/edvr_log.py. No production source changed.
+lines read through tools/edup_log.py. No production source changed.
 
 ### 2026-09-19 -- repeated eligibility checks: hypothesis and gates
 
@@ -4085,7 +4085,7 @@ exact ownership, so label confidence and unknowns must be explicit.
 Rotating-station controls, parent motion and animation remain required before
 generalizing beyond settlements.
 
-Installed and verified in Frontier through tools/install_edvr.py: dry-run,
+Installed and verified in Frontier through tools/install_edup.py: dry-run,
 apply, then verify-only. Version v0.17.0-45-gfedd340-dirty, graphics stamp
 6AAE7FD3 (2026-09-19 12:28:03 UTC). The native pair and loader match the
 archive build/mesh-eligibility-frontier-fedd340. Graphics SHA-256 begins
@@ -4294,7 +4294,7 @@ build/object-classification-frontier-60a5d38. The live INI was preserved byte
 for byte (SHA-256
 1abd3fea466356c1348154193e6d088f1bc8bbda6b773d887a23d41a47ee91dd); DLSS, static
 surfaces off and manual Insert capture remain set. Validate this flight with
-`tools/edvr_log.py --target frontier --expect-build 60a5d38 --version` and
+`tools/edup_log.py --target frontier --expect-build 60a5d38 --version` and
 check the 6AAE9DB8 stamp; an earlier same-version trial linked at 14:31:44 UTC
 was replaced before handoff.
 
@@ -4630,7 +4630,7 @@ static surfaces off were verified before installation.
 Next flight: use the same landed cockpit settlement view, let it settle, press
 Insert once, and remain in game for at least 30 seconds before exiting
 normally. No Pause press or flicker reproduction is required for this ownership
-capture. Check it with tools/edvr_log.py --target frontier --expect-build
+capture. Check it with tools/edup_log.py --target frontier --expect-build
 104763d --version and the 6AAEB01E graphics stamp; the earlier failed-launch
 build carried the same version but is not the installed payload. Require the
 new CPU source-owner completion line and v2 report. An empty, failed or partial
@@ -5705,7 +5705,7 @@ original_draw_probe_test binary source-contract check failed at clean
 HEAD; set core.eol=lf + core.autocrlf=false repo-local and re-checked
 out the tree (744 LF / 20 CRLF, matching .gitattributes), gate passes,
 621 checks. After the flight:
-python tools\edvr_log.py --target frontier --expect-build HEAD
+python tools\edup_log.py --target frontier --expect-build HEAD
 
 ### 2026-09-19 20:31 flight: instrument failed, no eval evidence
 
@@ -5951,7 +5951,7 @@ What was added (kinematic_eval_probe/hook):
   pass.
 
 Flight protocol: unchanged (eye dump, 30 s per the previous protocol).
-After: python tools\edvr_log.py --target frontier --expect-build
+After: python tools\edup_log.py --target frontier --expect-build
 v0.17.0-82-gba373645-dirty, then read kinematicEval.ownership and
 kinematicEval.summary epoch_* / owner_* counters.
 ### 2026-09-20 05:05 — flight 043344: owner==rig REFUTED, epoch pair dead as captured
@@ -6071,7 +6071,7 @@ What was added (kinematic_eval_probe/hook):
   added — job-cost attribution untouched.
 
 Flight protocol: unchanged (eye dump, 30 s). After: python
-tools\edvr_log.py --target frontier --expect-build
+tools\edup_log.py --target frontier --expect-build
 v0.17.0-89-gbbfcded7-dirty, then read kinematicEval.riglinks and the
 riglink_* counters.
 
@@ -6151,7 +6151,7 @@ What was added (kinematic_eval_probe only; no new hook):
   Probe-JSON validation still has no build-gate self-test.
 
 Flight protocol: unchanged (eye dump, 30 s). After: python
-tools\edvr_log.py --target frontier --expect-build
+tools\edup_log.py --target frontier --expect-build
 v0.17.0-93-gd6ed264f-dirty, then read kinematicEval.summary.xf_* and
 records[].xf_*.
 
@@ -6612,7 +6612,7 @@ firing (zero real events -- correct silence, see above).
   zero eval" means the hook refused or is not feeding; "ten seconds,
   N tracked records, zero pose changes" means the feed is healthy and
   nothing is moving. Absence of the tracker-live line = the tracker
-  never ran. install_edvr.py does not touch the live ini --
+  never ran. install_edup.py does not touch the live ini --
   engine_motion = on must be set in the game-dir edvr.ini by hand
   before flying.
 ### 2026-09-20 12:45 -- review fixes: nine findings, six under build-gate reproduction

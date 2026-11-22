@@ -71,7 +71,7 @@ binaries are archived under `build/openxr-stopped-present-20260913/`;
 `qualification.json` records their hashes and the tested precommit version
 `v0.16.2-71-g921b6a2-dirty`.
 
-`tools/install_edvr.py --verify-only`, using a staged copy of the archived
+`tools/install_edup.py --verify-only`, using a staged copy of the archived
 Frontier baseline, confirms that the installed proxies still match `2f051db`.
 The live INI and original OpenVR runtime are byte-unchanged. No installation or
 headset launch was performed. The archive contains the baseline verification

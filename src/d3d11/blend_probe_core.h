@@ -437,7 +437,7 @@ inline int formatGridSummary(char* out, size_t cap, uint32_t slot, const GridSum
 
 // ---- the install line ---------------------------------------------------------------------------------------------------------------
 // One line at launch, saying whether the key is bound, so an unbound probe shows then and not after a flight (the 2026-10-14 flight had
-// no key in the live ini, which install_edvr.py leaves alone). The wording is pinned by the rig.
+// no key in the live ini, which install_edup.py leaves alone). The wording is pinned by the rig.
 // iniName is Config::iniName() (a message spells the settings file through it, never as a literal; config_test pins that).
 inline int formatInstallLine(char* out, size_t cap, bool flatProfile, bool bound, const char* key, const char* iniName) noexcept {
     if (flatProfile) return std::snprintf(out, cap, "blend probe: off; VR only, hotkey.blend_probe does nothing in the flat profile");

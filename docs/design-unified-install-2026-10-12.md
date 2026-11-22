@@ -176,7 +176,7 @@
   - It also logs the game's command line once.
   - If the new code never ran, a schema-2 descriptor logs `invalid`, so
     failure cannot pass for success.
-  - `edvr_log.py --version` reports the line.
+  - `edup_log.py --version` reports the line.
 
 ### 3.2 Seeing a switch
 
@@ -278,7 +278,7 @@ files.
   up and the live flag stays true (H4).
   - The Supersampling hold therefore keys on the active profile being Vr, not
     on the flag alone. Otherwise a VR-to-flat switch leaves flat Supersampling
-    held at 1.0. `edvr_log.py:5222` records that as "not chased, by design";
+    held at 1.0. `edup_log.py:5222` records that as "not chased, by design";
     it must be chased now.
 - **3D on after a flat launch.** Whether Elite delay-loads `openvr_api.dll`
   and calls VR_Init at that moment is H1. The runtime needs no profile logic
@@ -338,17 +338,17 @@ files.
 
 ## 5. Developer tools
 
-- **`install_edvr.py`.**
+- **`install_edup.py`.**
   - `--profile` becomes `--scope both|vr|flat`, default `both`, writing the
     schema-2 descriptor.
-  - The flat path's refusal of VR leftovers (`install_edvr.py:1190-1198`)
+  - The flat path's refusal of VR leftovers (`install_edup.py:1190-1198`)
     retires.
   - `--ini` writes the scope's settings files, backing up each.
   - `--dry-run` still writes nothing, and the self-test asserts it.
   - Flights pick a mode in the game's menu, not with a pin (Q4).
 - **`package_native.py --check-installer`.** One installer embedding both inis
   and the schema-2 descriptor, and no flat artifacts.
-- **`edvr_log.py`.**
+- **`edup_log.py`.**
   - It parses the profile line, the switch lines and the watch's event lines,
     with self-test fixtures.
   - A `--switches` view lists each switch with its hints and timings.
@@ -384,7 +384,7 @@ files.
 ## 7. Flights
 
 Environment: Steam, EDVR's OpenXR runtime via `openvr_api.dll`, Sean's
-headset, per-eye size and DLSS version. Run `edvr_log.py --expect-build HEAD`
+headset, per-eye size and DLSS version. Run `edup_log.py --expect-build HEAD`
 on every log. The phase-1 instrument flight is one session with three
 launches. The phase-1 build switches to Passthrough rather than live.
 
@@ -464,7 +464,7 @@ launches. The phase-1 build switches to Passthrough rather than live.
    - `Passthrough` on a mid-session switch: the atomic profile, flipped once
      at the commit point after `flatRuntimeResize`.
    - The watch in log-only form, with its hints.
-   - `install_edvr.py --scope`, the `edvr_log.py` parsers, and the three
+   - `install_edup.py --scope`, the `edup_log.py` parsers, and the three
      rigs.
    - Then the instrument flight: launches A to C, and the H8 A/B.
 2. **Live switch.** Built on what the flight measured:
@@ -580,7 +580,7 @@ Units, one at a time behind the full build (Haiku implementers, reviewed):
 - P3-4 mirror, bundler, uninstall: restore offered when the scope's files are absent; editionOf reports the scope; log.dir read from
   both inis and both folders swept; --remove-settings removes both inis and both bases.
 - P3-5 docs: README.md download section, docs\installer.md (adds a Status block), docs\manual-install.md, docs\troubleshooting.md,
-  release\README.txt, AGENTS.md's edvr-flat.ini bullet and install_edvr's --scope.- H8, cost flight (build 9b671f0d, edvr_gfx_20261013_124833, Steam, 4508x4508 per eye, DLSS): what each profile pays for the other
+  release\README.txt, AGENTS.md's edvr-flat.ini bullet and install_edup's --scope.- H8, cost flight (build 9b671f0d, edvr_gfx_20261013_124833, Steam, 4508x4508 per eye, DLSS): what each profile pays for the other
   in a `both` install, from the cross-profile cost lines (465d74d9). VR for flat's hooks: PSSetConstantBuffers about 270 calls a frame,
   0.6-7.3 us a frame in total (an upper bound: the timing reads dominate), ResizeBuffers 0; flat's creation captures 600 in 20.6 ms
   over the session, at load. Flat for VR's hooks: mode watch 0.08-0.09 us a frame; cull cover, window and settings-copy hooks 0 calls.
@@ -624,7 +624,7 @@ before the rise, polling every 250 ms while the wait is open. A file post (a con
 launch runs Vr from the start (a rise is nothing) and a `/novr` launch stays flat until a submit, which `/novr` never makes. Log:
 `mode watch: live session without eye submits -- staying flat until the game submits` once per rise; when submits begin,
 `mode watch: eye submits began after the live session; the game is a VR game` then the unchanged `live-rise t=N -> posted vr` line
-(edvr_log.py parses that one). Cost: Epic's Launch in VR flips up to about 1.25 s later (one-second sample plus the poll).
+(edup_log.py parses that one). Cost: Epic's Launch in VR flips up to about 1.25 s later (one-second sample plus the poll).
 
 Tests: tools\mode_watch_test: live with zero submits stays Flat (and the file's 0 reads same, not stale); live then submits flips to Vr;
 submits with no rise do nothing; `/vr` and `/novr` launches unchanged; the older live-rise cases drive rise then submits.

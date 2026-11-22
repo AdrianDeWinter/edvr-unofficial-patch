@@ -20,7 +20,7 @@ namespace {
 const char* const kChainKey = "advanced.real_dll";
 
 // The descriptors EDVR writes, by their exact bytes (CRLF, as every writer produces them). Schema 1 is what the installer and the
-// flat edition wrote before the unified install; schema 2 is what install_edvr.py and the unified installer write. A file is EDVR's
+// flat edition wrote before the unified install; schema 2 is what install_edup.py and the unified installer write. A file is EDVR's
 // only as one of these bytes: a modified or unknown descriptor matches none of them, whatever it says.
 const char* const kDescriptorTexts[] = {
     "[install]\r\nschema = 1\r\nprofile = vr\r\n",

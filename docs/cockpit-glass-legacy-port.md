@@ -375,7 +375,7 @@ alpha 0.2; at k = 0.075 colour 8.281 (wanted 8.289), alpha 0.015; smudge glare r
 
 **What the flight must check** (flat first, Steam; then the headset):
 
-- `python tools\edvr_log.py --target steam --expect-build HEAD --version`: the right build.
+- `python tools\edup_log.py --target steam --expect-build HEAD --version`: the right build.
 - With the key `legacy`: `cockpit glass: legacy on`, then once `cockpit glass: replacement pixel shader ready`
   (and the shader-swap line `cockpit glass: precompiled pixel shader cockpit_glass_legacy_ps created`), then every
   30 s `cockpit glass: window 30 s legacy binds=N canopy-seen=M replacement=ready` with N equal to M and both

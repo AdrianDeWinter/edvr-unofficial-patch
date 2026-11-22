@@ -66,7 +66,7 @@ inline void overlayLineText(char* buf, size_t len, double fps, const GpuTimeChoi
     std::snprintf(buf, len, "%.0f fps   gpu %s ms   %s %s ms", fps, gpuValue, cpuLabel ? cpuLabel : "cpu", cpuValue);
 }
 
-// The census window line's frame work span field (gpu_census.cpp; tools\edvr_log.py --gpu-work-span parses exactly this text).
+// The census window line's frame work span field (gpu_census.cpp; tools\edup_log.py --gpu-work-span parses exactly this text).
 // All-time counts of the span pair: completed = pairs read back, skipped = pairs not begun, invalid = pairs the GPU or the
 // disjoint scope voided. "last" is "-" until one has completed.
 inline void formatFrameWorkSpanField(char* buf, size_t len, unsigned long long completed, unsigned long long skipped,

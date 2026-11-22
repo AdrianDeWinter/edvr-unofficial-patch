@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          # edvr_log.py's self-test resolves real commits from the history.
+          # edup_log.py's self-test resolves real commits from the history.
           fetch-depth: 0
 
       # The same Python and requirements as the Windows build.
@@ -48,9 +48,9 @@ jobs:
           TOOLS: |
             install_proton.py
             epic_library.py
-            install_edvr.py
+            install_edup.py
             steam_library.py
-            edvr_log.py
+            edup_log.py
             onfoot_check.py
             linux_toolchain.py
             compile_only.py

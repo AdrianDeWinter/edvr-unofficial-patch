@@ -431,7 +431,7 @@ Log: in the `map pointer` 30 s line, `the System Map's held and answered unchang
 
 ## Flight card, System Map and Anti-aliasing off
 
-Environment: Frontier, native OpenXR, whichever headset; DLSS on unless the step says otherwise. First check the build: `python tools\edvr_log.py --dir <Frontier>\edvr_logs --expect-build HEAD`.
+Environment: Frontier, native OpenXR, whichever headset; DLSS on unless the step says otherwise. First check the build: `python tools\edup_log.py --dir <Frontier>\edvr_logs --expect-build HEAD`.
 
 1. System Map, AA on. Put the arrow on a planet, off the panels. Expect: the arrow reads at the planet's level in stereo, with one arrow and not two; the planet under the tip is the one hovered and selected; moving the head does not change which. Run onto a panel and off: one jump in depth at the edge. Log: `map pointer: a map opened (the System Map)`, and in the 30 s line the projector call about once a frame, replaced, and `arrow 4EF6DD` counted. A `0 replaced` means the System Map's call was not reached.
 2. Galaxy Map, AA off (F7, or the F8 menu). Expect: the cursor selects stars as with AA on, and the arrow is at panel depth on panels and star depth off them. Log: `galaxy map: the UI layer is not taking the panels`, and in the 30 s line panel draws issued into the mask and probes made and answered, all above zero. All zero means the path never ran.
@@ -454,7 +454,7 @@ The same review read the merged draw hooks, fast paths, tracked bindings and out
 
 ## Flight card, merged main (flown 18:35)
 
-Right build first: `python tools\edvr_log.py --target <odyssey path> --expect-build HEAD --version`.
+Right build first: `python tools\edup_log.py --target <odyssey path> --expect-build HEAD --version`.
 
 1. Open the map. Expect 90 fps, and lines and text crisp while the map moves. Smear here means the sprites have left the layer.
 2. Check the rest still holds: icons and text do not rotate, near icons cover far ones, hover and selection, the panels and the gaps between them.
@@ -464,7 +464,7 @@ Log gates: the `map pointer:` 30 s line with render target binds about 2 a frame
 
 ## Flight card, sixth build (flown 16:38)
 
-Right build first: `python tools\edvr_log.py --target <odyssey path> --expect-build HEAD --version`. `advanced.app_gpu_timing` is on in the Frontier ini for this flight.
+Right build first: `python tools\edup_log.py --target <odyssey path> --expect-build HEAD --version`. `advanced.app_gpu_timing` is on in the Frontier ini for this flight.
 
 1. Open the map, read the fps. Expect 90, as the third build held and main mostly holds. Press F4 once on the map for the GPU pass profile.
 2. Pan left and right, then orbit, then turn the head. Expect: icons and text do not rotate. Look at the bottom of the view: nothing flattens.
@@ -478,7 +478,7 @@ Log gates: `xr_end_frame` p50 under 1 ms (0.21 on the third build, 5.09 on the f
 
 ## Flight card, fifth build (flown 14:13)
 
-Right build first: `python tools\edvr_log.py --target <odyssey path> --expect-build HEAD --version`.
+Right build first: `python tools\edup_log.py --target <odyssey path> --expect-build HEAD --version`.
 
 1. Open the map, read the fps. Expect 90 as on the third build. Pan and orbit.
 2. Hold still and move the head slowly near a close star (zoom in till one is about 4 units off). Expect: its icon, label, ring and stem steady together. Insert dump.
@@ -488,7 +488,7 @@ Log: `galaxy map: the stencil write-backs ... are off`; `galaxy map: the two eye
 
 ## Flight card, fourth build (flown 13:21)
 
-Right build first: `python tools\edvr_log.py --target <odyssey path> --expect-build HEAD --version`.
+Right build first: `python tools\edup_log.py --target <odyssey path> --expect-build HEAD --version`.
 
 1. Pan the map sideways and look around. Expect: triangles, orange icons and rings' arcs line up with the stems and point at the grid wherever they are in the view; labels stay level. Look down toward the grid under you: no spinning. Insert dump.
 2. Hover several stars with the mouse held still. Expect: the arrow holds its depth, with no jump. Then run onto a panel and off: one jump at the edge, as before.
@@ -498,7 +498,7 @@ Log: `galaxy map: left eye's sprite depth created`; the 30 s `map pointer:` line
 
 ## Flight card, third build (flown 12:35)
 
-Right build first: `python tools\edvr_log.py --target <odyssey path> --expect-build HEAD --version`.
+Right build first: `python tools\edup_log.py --target <odyssey path> --expect-build HEAD --version`.
 
 1. Turn and tilt the head with the mouse still, looking at icons, labels, triangles and the rings' arcs. Expect: none of them moves in the world, and each is square-on when looked at. Insert dump. The dump's icon edges should now follow the head's roll (world level), not read 0.00.
 2. Run the mouse slowly down the left rail, and across from the rail to the Trade Routes panel. Expect: the arrow stays at panel depth across the gaps, then just off the rail's outer edge it drops to star depth.
@@ -518,7 +518,7 @@ Cost: a D16 target at the layer's size, 20 MB an eye at 4508x4510, let go when t
 
 ## Flight card, second build (flown 11:00)
 
-Right build first: `python tools\edvr_log.py --target <odyssey path> --expect-build HEAD --version`.
+Right build first: `python tools\edup_log.py --target <odyssey path> --expect-build HEAD --version`.
 
 1. Yaw and pitch the head with the mouse still. Expect: orange icons and labels stay upright and undistorted across the view. The "10 : 88 : -100" labels and discs stay flat on the plane. Insert dump.
 2. Move the arrow from the map onto a panel and back, slowly. Expect: the panels sit at their original depth with no clipping through the map; the arrow on a panel at the panel's depth, and off it over the map's icons, with one jump in depth at the edge.
@@ -528,7 +528,7 @@ Log: `galaxy map: the arrow's tip is on/off a panel` at each edge; the 30 s `map
 
 ## Flight card, first build (flown 09:50)
 
-Right build first: `python tools\edvr_log.py --target <odyssey path> --expect-build HEAD --version`.
+Right build first: `python tools\edup_log.py --target <odyssey path> --expect-build HEAD --version`.
 
 1. Rest, then yaw the head side to side with the mouse still. Expect: triangles stay upright; the arrow stays on its star; the same system stays selected. Insert dump.
 2. Pan, orbit and zoom, fast then slowly to a stop. Expect: labels, icons, rings and stems crisp with no trail. Stars may soften while moving.

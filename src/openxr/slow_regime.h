@@ -101,7 +101,7 @@ inline const char* slowEventKey(SlowEvent e) {
 
 // What kind of frames the window held, which the owner alone does not say: a "game" regime is a different thing when the
 // runtime was making its own loading frames (a load) than when the game was submitting scenes (a GPU- or CPU-bound stretch).
-// The reader (tools\edvr_log.py --freezes) sets SLOW only for a vendor or EDVR owner and reports a game-owned regime as a load
+// The reader (tools\edup_log.py --freezes) sets SLOW only for a vendor or EDVR owner and reports a game-owned regime as a load
 // (INFO) or a slow stretch of the game's scenes (WARN).
 //   scene      at least half of the frames were the game's own, with layers for the vendor
 //   loading    at least half were frames the runtime made itself while the game was loading (FrameBoundary::background)

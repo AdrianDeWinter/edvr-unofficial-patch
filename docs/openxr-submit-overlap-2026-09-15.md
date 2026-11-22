@@ -202,7 +202,7 @@ Revisit a landable body to confirm LOD still updates, and exit normally. Repeat
 the same scene/settings on another runtime when convenient; runtime-specific
 performance cannot be inferred from the desktop fixture.
 
-Read the matching native and graphics logs through `tools/edvr_log.py`,
+Read the matching native and graphics logs through `tools/edup_log.py`,
 checking the build first. Confirm a completed recurring window, valid GPU
 timings, treatment activity and clean shutdown. A correct flight qualifies
 integration; a speedup requires a controlled comparison against the baseline at

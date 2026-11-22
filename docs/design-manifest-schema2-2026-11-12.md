@@ -25,7 +25,7 @@
     `state.h`): root, path, existing, sha256, and before_sha256 and backup
     when a file was displaced. `serializeState` still writes the old per-file
     sections, derived from the records, for a downgrade and for
-    `install_edvr.py`'s flat-receipt check.
+    `install_edup.py`'s flat-receipt check.
   - Migration: a `state.ini` with no file sections is read into records by
     `kLegacySlots` (`state.cpp`). Not recoverable: the foreign file a record
     displaced (except the runtime's original), and the second settings

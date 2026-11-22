@@ -226,7 +226,7 @@ its name is to be agreed under the rule that values name functionality.
 supercruise drop at a station, an orbital glide entry, dock and undock, and the
 galaxy map opened and closed. Press Pause after any visible flash. First
 command after landing:
-`python tools\edvr_log.py --target <store> --expect-build HEAD`.
+`python tools\edup_log.py --target <store> --expect-build HEAD`.
 
 **Pass criteria, before any fix acts:**
 

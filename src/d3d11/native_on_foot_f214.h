@@ -204,7 +204,7 @@ struct Stats {
     void clear() noexcept { *this = Stats{}; }
 };
 
-// The window's line. A reader tells the key off (key off, nothing followed), nothing eligible (key on, moving calls, all held) and running (followed) apart. tools\edvr_log.py reads it.
+// The window's line. A reader tells the key off (key off, nothing followed), nothing eligible (key on, moving calls, all held) and running (followed) apart. tools\edup_log.py reads it.
 inline int formatLine(char* buf, size_t n, uint32_t seconds, const Stats& s) noexcept {
     char pub[96];
     if (s.published) std::snprintf(pub, sizeof(pub), "mean %+.1f cm (min %+.1f, max %+.1f) over %u calls", s.pubSum / s.published * 100.0, s.pubMin * 100.0, s.pubMax * 100.0, s.published);

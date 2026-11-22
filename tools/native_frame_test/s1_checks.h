@@ -3,7 +3,7 @@
 // A1 (src\d3d11\scope_zoom_s1.h): the pure parts of the lens. The table holds the game's ADS FOV per (item, scope) and M is tan(h / 2) / tan(ads / 2) against the reference FOV; the gate
 // says when there is a lens and under which reason a frame has none; the ease takes M from 1 to its value over 0.25 s; the rays march from c over the depth for the hole of the scope's
 // frame (the shader's text mirrors the reference march step for step, tools\scope_zoom_test runs the two against each other); the open-sight rule, r(theta), the mask, the source
-// of a magnified pixel, the window and the box are the passes' arithmetic; the accumulators and the two lines are the DLL's own, which tools\edvr_log.py renders its --health
+// of a magnified pixel, the window and the box are the passes' arithmetic; the accumulators and the two lines are the DLL's own, which tools\edup_log.py renders its --health
 // fixtures from.
 #pragma once
 

@@ -762,7 +762,7 @@ void alteredLineCases() {
               g_lastLog.find("timer floor 50.0 us/pair") != std::string::npos && g_lastLog.find("spans timed 2,") != std::string::npos,
           "altered line: a class is corrected by its own null pair ((0.4/2 - 0.1/2) x 0.1 = 0.015), and its spans count in the census's totals");
     // The overlay's work span pair is accounted on a census line of its own (2026-10-14): without it a span that never ran and one that ran
-    // and failed read the same, and the tile's and the overlay's "--" could not be told apart from a flight log. tools\edvr_log.py --gpu-work-span
+    // and failed read the same, and the tile's and the overlay's "--" could not be told apart from a flight log. tools\edup_log.py --gpu-work-span
     // parses this text.
     line = lineWith("EDVR GPU census, the overlay's GPU time: ");
     check(line && line->find("frame work span: completed ") != std::string::npos && line->find(", skipped ") != std::string::npos &&

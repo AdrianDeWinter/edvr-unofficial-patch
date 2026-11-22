@@ -53,7 +53,7 @@ Ruled out: per-draw route timestamp pairs as a GPU cost, because a 5090 microben
 around each; a stencil-less D32 layer target for mask-00 seeds, because the draw costs the same (0.0676 vs 0.0666); thread-group shapes for
 composite/RCAS/UI resolve (ui-layer-2026-09-23.md, already taken or ruled out).
 
-Flight check (edvr_log.py --expect-build HEAD first; compare to the 07:39:41 line: seed 0.291 (2.00/frame), UI resolve 0.292, in-frame 0.665, EDVR 5.073):
+Flight check (edup_log.py --expect-build HEAD first; compare to the 07:39:41 line: seed 0.291 (2.00/frame), UI resolve 0.292, in-frame 0.665, EDVR 5.073):
 - gfx log: once "ui quality: layer: the depth-stencil seed reads the game's own 2016x2016 D32_FLOAT_S8X24_UINT texture in place". If the log says
   "refused shader views" instead, cut 1 is inert on that rig and the copy still runs.
 - the target-creation line says "reading the game's own in place, no copy of it".

@@ -282,7 +282,7 @@ frame) plus 32 timed copies once.
   (section 1 (c)).
 - Time install and flush inside the flatcpu kShadows scopes (no new family:
   flat_cpu_tests.h and the log parsers stay valid). Add `--map-bounce` (PASS/WARN/STOP,
-  self-test fixture) to tools\edvr_log.py.
+  self-test fixture) to tools\edup_log.py.
 
 | Run | cb shadows per entry | discovery | new line |
 |---|---|---|---|

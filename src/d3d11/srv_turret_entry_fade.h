@@ -258,7 +258,7 @@ private:
 };
 
 // ---- the lines --------------------------------------------------------------------------------------------------------------------------------------------------
-// Every line starts "srv turret entry fade:". They avoid the phrases tools/edvr_log.py's turret rule reads ("srv turret view", "srv turret camera", ...), so that rule never meets them.
+// Every line starts "srv turret entry fade:". They avoid the phrases tools/edup_log.py's turret rule reads ("srv turret view", "srv turret camera", ...), so that rule never meets them.
 
 inline const char* settleName(Settle s) {
     switch (s) {

@@ -294,7 +294,7 @@ between sets.
 2. F8 AA = Off (live: the mode is read every frame). Scoped three times, bare three
    times, the same, with the same notes.
 
-Read: `python tools\edvr_log.py --target steam --expect-build HEAD --version`, then
+Read: `python tools\edup_log.py --target steam --expect-build HEAD --version`, then
 `--grep "ads frame trace \(S0\)"` and `--health`.
 
 | What the flight shows | Verdict |
@@ -315,7 +315,7 @@ ADS three times, about 3 s each with a slow pan, about 3 s apart so the trace wi
 do not overlap. Then the bare one three times. Note whether it stuttered at entry and
 at release.
 
-Read: `python tools\edvr_log.py --target steam --expect-build HEAD --version`, then
+Read: `python tools\edup_log.py --target steam --expect-build HEAD --version`, then
 `--grep "ads frame trace \(S0\)"` (two lines a press: the summary and the slow
 frames).
 
@@ -373,7 +373,7 @@ Flight card 2 again: Steam, flat, F8 AA = DLSS, F8 > Debug > CPU timing in the l
 on. Scoped Executioner: ADS three times, about 3 s each with a slow pan, about 3 s
 apart. Then the bare one three times. Note where it stuttered.
 
-Read: `python tools\edvr_log.py --target steam --expect-build HEAD --version`, then
+Read: `python tools\edup_log.py --target steam --expect-build HEAD --version`, then
 `--grep "ads frame trace \(S0\)"` (three lines a press). On the scoped presses'
 `none` burst frames:
 

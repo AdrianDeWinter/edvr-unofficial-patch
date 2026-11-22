@@ -990,7 +990,7 @@ void freezeTestTick() {
 // call's timed region, and forty seconds later the request is withdrawn. From outside that is a vendor runtime that
 // stalls in xrEndFrame: the runtime's log shows native_end_frame_episode lines (the first call of the stall, then the
 // episode's end) and the slow regime's SLOW, still_slow and end lines naming the vendor's xrEndFrame as the owner
-// (slow_regime.h), and `edvr_log.py --freezes` reads them. It slows the game on purpose; it is not a feature, and a
+// (slow_regime.h), and `edup_log.py --freezes` reads them. It slows the game on purpose; it is not a feature, and a
 // value above 0 is logged when it is read. The schedule is slow_test.h's; the runtime half only obeys the request.
 void slowTestTick() {
     State& s = g_s;

@@ -48,7 +48,7 @@ hook returns before the exposure code runs. Flat is unchanged.
 - ruled out: a live toggle, because bringing the second chain back mid-session
   means re-seeding history; the toggle and then the setting were dropped instead.
 
-**Next flight.** None needed. `edvr_log.py --grep "share exposure"` shows the
+**Next flight.** None needed. `edup_log.py --grep "share exposure"` shows the
 `engaged` line and the 30 s lines (`fallbacks` stays 0), or one line naming a reason.
 
 A write-up of what causes the per-eye brightness difference in VR, how it was

@@ -1,7 +1,7 @@
 // The re-issue counter's names and window line (GLOSSARY: Re-issue; perf_monitor.cpp prints the line every 1800 frames beside "draw hook CPU:", vscreen.cpp's
 // reissue helper feeds it). Every re-issue of a game draw goes through one helper that names its caller, so the draw path's time that is not EDVR's own code gets an
 // owner. Written every window, zero re-issues included (0 re-issues, "none"), so a window with nothing in it can be told from a build without the counter.
-// tools\edvr_log.py --tally reissue parses the line; its self-test holds the fragments below to this file.
+// tools\edup_log.py --tally reissue parses the line; its self-test holds the fragments below to this file.
 #pragma once
 #include <cstddef>
 #include <cstdint>

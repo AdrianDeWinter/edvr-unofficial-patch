@@ -1,7 +1,7 @@
 // EDVR's own GPU timing queries, counted at the End call and named by owner (perf_monitor.cpp prints the window line beside "draw hook CPU:"). The
 // 2026-11-02 profile put hookedEnd (every ID3D11DeviceContext::End, EDVR's timers' included) at +0.19 ms with DLAA; this says whose queries they are
 // before anyone changes one. An owner tags the timing calls it makes with GpuQueryOwnerScope (GpuIntervals does it from its template argument); a query with no
-// tag counts under "other". Written every window, zeros included. tools\edvr_log.py --perf-windows parses it; its self-test holds the fragments to this file.
+// tag counts under "other". Written every window, zeros included. tools\edup_log.py --perf-windows parses it; its self-test holds the fragments to this file.
 #pragma once
 #include <atomic>
 #include <cstddef>

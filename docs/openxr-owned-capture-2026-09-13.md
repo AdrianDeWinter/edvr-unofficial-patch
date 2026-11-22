@@ -177,7 +177,7 @@ install with EDHM installed; the Steam install, without EDHM, works on the
 same build.
 
 **Evidence.** `edvr_openxr_20260915_175851_097_23448.log`, build
-`v0.17.0-rc.1-1-ga44ae48` (checked with `edvr_log.py --expect-build`):
+`v0.17.0-rc.1-1-ga44ae48` (checked with `edup_log.py --expect-build`):
 `module_configuration,source=local` -> `runtime,Pimax OpenXR` ->
 `system,...,name=Pimax Crystal Super` -> `size,0,4068,4016` ->
 `error,D3D11Device,80070005` -> `module_startup,...,result=124` -> shutdown,

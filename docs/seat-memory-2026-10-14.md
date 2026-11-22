@@ -201,7 +201,7 @@ in `%LOCALAPPDATA%\EDVR\<leaf>-<store>\seat.txt` (`src\openxr\seat_store.h`; for
 
 ## Flight checklist
 
-Read each log with `python tools\edvr_log.py --target <target> --expect-build HEAD --version` first (right build), then grep `seat_`.
+Read each log with `python tools\edup_log.py --target <target> --expect-build HEAD --version` first (right build), then grep `seat_`.
 Pimax OpenXR first; SteamVR/OpenXR as a second launch if time allows (the key differs, so each has its own seat).
 
 0. Install, check the build line. The first `seat_` line must be `seat_memory,init=1`; if there is none the code did not run.

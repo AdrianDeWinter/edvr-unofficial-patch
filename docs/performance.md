@@ -1728,7 +1728,7 @@ round-robin by the census (one section per frame, K-capped) and have no turn
 until called, so a probe section's `n timed` can be small in a short scene.
 
 **Flight plan** (one version-verified baseline per runtime; check
-`python tools\edvr_log.py --target <t> --expect-build HEAD --version`, then read
+`python tools\edup_log.py --target <t> --expect-build HEAD --version`, then read
 the last two windows of each scene; discard the window an eye run or a loading
 screen fell in):
 

@@ -1,7 +1,7 @@
 // cross_profile_test -- src\d3d11\cross_profile_cost.h: the 1-in-64 scaling, the per-frame division, the sampling of timed calls, the
 // capture scope, and the report's windows and session totals with the profile gate. Built from the repo root by build.bat's
 // :rig_cross_profile_test. Windows API only through the header (QueryPerformanceCounter). --dry-run writes nothing; --self-test runs the
-// checks and prints the two sample lines the edvr_log.py fixture copies.
+// checks and prints the two sample lines the edup_log.py fixture copies.
 #include "../../src/d3d11/cross_profile_cost.h"
 
 #include <cmath>

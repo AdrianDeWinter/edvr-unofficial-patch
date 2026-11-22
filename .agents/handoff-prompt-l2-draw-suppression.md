@@ -163,9 +163,9 @@ CPU critical path or recoverable. Keep the matched baseline in the plan.
   read its output and all gates. Extend native fixtures, JSON serialization
   checks and tool self-tests with any new instrument. Do not freeze test counts
   from an older handoff as the expected current count.
-- Install test builds only through `tools/install_edvr.py --target frontier`,
+- Install test builds only through `tools/install_edup.py --target frontier`,
   then `--verify-only`; preserve the live INI unless its change is requested.
-  Read flight logs only through `tools/edvr_log.py`, checking expected build
+  Read flight logs only through `tools/edup_log.py`, checking expected build
   identity first. Resolve pre-commit label mismatches against exact build and
   installed hashes before treating a flight as evidence.
 - At review, the last documented Frontier d3d11 hash prefix was

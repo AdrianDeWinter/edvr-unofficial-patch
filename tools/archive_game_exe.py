@@ -9,7 +9,7 @@ A game update replaces EliteDangerous64.exe in place. Mapping EDVR's bound
 addresses onto the new build (tools\\build_diff.py map) needs the old build
 next to the new one, and once Steam has finished there is no old build left
 on disk: the 332841 -> 334473 map only worked because an old copy happened
-to be in analysis\\. install_edvr.py calls archive() on every real install, so
+to be in analysis\\. install_edup.py calls archive() on every real install, so
 the build EDVR was last installed against is kept without anyone remembering
 to run this; run it by hand before letting Steam update a game EDVR has not
 been installed into since.
@@ -30,7 +30,7 @@ other's copy.
   * --dry-run says which of these would happen and writes nothing at all:
     no directory, no temp file.
 
---target takes install_edvr.py's spellings: steam, frontier, or the directory
+--target takes install_edup.py's spellings: steam, frontier, or the directory
 holding the exe; its resolver (and steam_library.py's search behind it) is
 the one install search. Nothing is launched or modified; only the archive
 file is written.
@@ -260,7 +260,7 @@ def self_test():
 def main(argv=None):
     p = argparse.ArgumentParser(description="Copy the game exe to analysis\\ before an update replaces it.")
     p.add_argument("--target", default="steam",
-                   help="steam, frontier, or the directory holding the game exe (install_edvr.py's spellings)")
+                   help="steam, frontier, or the directory holding the game exe (install_edup.py's spellings)")
     p.add_argument("--dest", help="archive folder (default: analysis\\ in the main checkout)")
     p.add_argument("--build", help="build number when VersionInfo.txt is missing")
     p.add_argument("--dry-run", action="store_true", help="say what would be archived; write nothing")
@@ -269,9 +269,9 @@ def main(argv=None):
     if args.self_test:
         return self_test()
     try:
-        from tools.install_edvr import resolve_target
+        from tools.install_edup import resolve_target
     except ImportError:
-        from install_edvr import resolve_target
+        from install_edup import resolve_target
     exe = os.path.join(resolve_target(args.target), GAME_EXE)
     return archive(exe, os.path.abspath(args.dest or default_dest()), args.build, args.dry_run)
 

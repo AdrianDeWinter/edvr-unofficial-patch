@@ -80,7 +80,7 @@ to be measured. They are not an explanation proven for the earlier 9.5 ms
 versus 11.1 ms comparison.
 
 The newest Frontier OpenXR and graphics logs available during this review
-identify `v0.16.2-97-g83dda1b-dirty`; `tools/edvr_log.py --expect-build HEAD
+identify `v0.16.2-97-g83dda1b-dirty`; `tools/edup_log.py --expect-build HEAD
 --version` rejected them against `v0.16.2-123-gb00edcb`. No current-build
 flight baseline or new GPU benchmark was obtained. The calculations below
 describe logical texture traffic, not observed DRAM bandwidth or promised
@@ -890,7 +890,7 @@ the config poll), then the runtime's render callback.
 The same runtime log's own post-submit windows (`native_post_submit_phase`,
 12 windows of 30 s, 30,737 cycles, every one a single valid Present) already
 bound EDVR's share from above. Window maxima in ms, read with
-`tools\edvr_log.py --grep`; each column is that phase's own maximum, so the
+`tools\edup_log.py --grep`; each column is that phase's own maximum, so the
 rows of one window need not be one cycle:
 
 | window (local, end) | post-submit gap | Submit to Present, outside the hook | Present to next Wait, outside the hook | EDVR hook, after the real Present |
@@ -1236,7 +1236,7 @@ those draws is what shows when the same scene is flown with AA off and the
 figure drops.
 
 **Flight procedure.** Install the build on Frontier and check the log names it
-(`python tools\edvr_log.py --target frontier --expect-build HEAD --version`,
+(`python tools\edup_log.py --target frontier --expect-build HEAD --version`,
 exit 0). Same settings as flights 094126 and 094331 (HMD Image Quality 0.5,
 DLSS on). Fly to the busy fleet carrier with many ships about and stay steady
 for at least two minutes: four full 30 s windows, of which the first carries
@@ -1246,7 +1246,7 @@ every engine-motion part must read "-" (the relays are closed; a job bracket or
 the evaluator can still run for another consumer of the eval gate, the static
 prop gate or the LOD governor), and the gap and the altered draws give the
 baseline. Read with
-`python tools\edvr_log.py --target frontier --grep "engine motion CPU|EDVR GPU census|LONG FRAME"`.
+`python tools\edup_log.py --target frontier --grep "engine motion CPU|EDVR GPU census|LONG FRAME"`.
 
 **Reading H-GPU against H-CPU.** The thresholds are rules of thumb from the
 numbers above (a 11.1 ms period, about 1 ms the compositor and transfers can

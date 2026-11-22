@@ -11,7 +11,7 @@
 //   (E) the camera's tangents against the eye frusta EDVR itself advertises,
 //   (F) the view (the pass object the refresh is handed with the camera: its second argument).
 // One flight with advanced.vr_camera_census = on records enough to decide: this header is what it records and how each
-// record is written. `python tools\edvr_log.py --camera-census` reads it back and does the join offline.
+// record is written. `python tools\edup_log.py --camera-census` reads it back and does the join offline.
 //
 // FLIGHT 1 ANSWERED IT (4.63 million calls): the eye cameras are kind 5 and the world's on-foot camera is kind 3, read from
 // the KIND OF EACH CALL, never from the camera object (one object was the left eye camera in the cockpit and the world
@@ -1010,7 +1010,7 @@ struct VrCensusCpu {
 
 // ---- the text of every line -----------------------------------------------------------------------------------
 // Each returns snprintf's length and is handed at most kVrCensusLineBytes + 1 bytes. No field ever holds a space inside
-// a (..) or [..] value, so edvr_log.py can split a line into key=value tokens.
+// a (..) or [..] value, so edup_log.py can split a line into key=value tokens.
 namespace vrcensus_detail {
 struct Out {
     char* p; size_t size; size_t n = 0;
@@ -1212,7 +1212,7 @@ inline int vrCensusFormatEye(char* out, size_t size, uint32_t eye, uint64_t fram
 // What EDVR advertised for the eye this sequence, and the leak: the measured shift of the eye's rows minus the shift the
 // advertised frustum and shift should give. Nothing but the eye shift moves an eye camera, so the leak reads zero (within
 // float rounding: 1e-8 in flight 1) unless the world route's phase reaches an eye camera, which would read about 1e-4 (half
-// a pixel at 5040 wide is 2e-4). With the route jittering this is stage 2's leak detector, and edvr_log.py's verdict judges it
+// a pixel at 5040 wide is 2e-4). With the route jittering this is stage 2's leak detector, and edup_log.py's verdict judges it
 // against the eye line's phase= (PASS below 1e-6, STOP above 1e-5).
 inline int vrCensusFormatEyeGeometry(char* out, size_t size, uint32_t eye, uint64_t frame, bool known, uint64_t sequence,
                                      const float frustum[4], const float shift[2], bool measured, double measX,

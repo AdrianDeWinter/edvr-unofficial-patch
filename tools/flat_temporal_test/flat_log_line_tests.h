@@ -628,7 +628,7 @@ inline const std::vector<Row>& rows() {
         {"engine motion: on foot (2/3):", 220, kPart, "part 2 of the on-foot split; the one %s is the declined list (5 names, checked against the source)"},
         {"engine motion: on foot, another camera:", 768, kPart, "the on-foot line printed only when another camera moved the rows; the one %s is the `other` buffer (768 bytes)"},
         {"engine motion: on foot (3/3):", 720, kPart, "part 3 of the on-foot split; the one %s is the panel's pixel counts, the `pixels` buffer (720 bytes)"},
-        {"flat map bounce 5s:", 8, kCut12, "left whole: tools\\edvr_log.py --map-bounce parses it. At 20 digits it is out of reach (a 5 s window of maps and bytes is not 10^19); at 12 it is held to the cut, not the budget"},
+        {"flat map bounce 5s:", 8, kCut12, "left whole: tools\\edup_log.py --map-bounce parses it. At 20 digits it is out of reach (a 5 s window of maps and bytes is not 10^19); at 12 it is held to the cut, not the budget"},
         {"flat foreground ownership: frame=", 40, kWhole20, "left whole on the cut: a one-time diagnostic, not periodic (flat_foreground_probe.h reports at most kLimit = 2 times, then releases its GPU resources); the %s are a status, measured/unavailable, a failure reason"},
         {"flat overlay admission refused:", 24, kWhole20, "left whole on the cut: a capped diagnostic, not periodic (flat_runtime.cpp prints at most 6 of them a session, 10 s apart); the %s is a route name"},
         {"flat runtime conflict: frame=", 32, kWhole20, "left whole: a sample with a rate limit; the %s is a cause name"},

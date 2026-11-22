@@ -151,9 +151,9 @@ carried by the exit frame.
 Next flight, Frontier install:
 
 ```bash
-python tools\install_edvr.py --target frontier --verify-only
-python tools\edvr_log.py --target frontier --expect-build HEAD --version
-python tools\edvr_log.py --target frontier --grep "registration, the rest|camera parked at"
+python tools\install_edup.py --target frontier --verify-only
+python tools\edup_log.py --target frontier --expect-build HEAD --version
+python tools\edup_log.py --target frontier --grep "registration, the rest|camera parked at"
 ```
 
 - Pass: in `eye_<stamp>_motion.csv`, no frame that follows a `rowsOk 0`

@@ -131,6 +131,27 @@ def newest_stamp(logs):
     return names[-1][len('eye_'):-len('_decisions.json')]
 
 
+def dump_dir_for(log_dirs, stamp=None):
+    """The log folder holding the eye run to measure: with a stamp, the first folder that has that run; without one,
+    the folder whose newest paired run is the newest of all (edup_logs and the pre-rename edvr_logs both sit beside
+    the game). The first folder when none has a run, so the error names it."""
+    best = None
+    for logs in log_dirs:
+        eyes = os.path.join(logs, 'eyes')
+        if stamp:
+            if os.path.isfile(os.path.join(eyes, 'eye_%s_decisions.json' % stamp)):
+                return logs
+            continue
+        try:
+            newest = newest_stamp(logs)
+        except DumpError:
+            continue
+        when = os.path.getmtime(os.path.join(eyes, 'eye_%s_decisions.json' % newest))
+        if best is None or when > best[1]:
+            best = (logs, when)
+    return best[0] if best else log_dirs[0]
+
+
 def owner_regions(logs, stamp, crop, draw_vs, draw_count):
     """(skin mask, draw mask) over the decision crop from the depth writer map, or (None, None) when the run wrote none."""
     import numpy as np
@@ -403,6 +424,20 @@ def self_test():
         return abs(a - b) <= tol
 
     with tempfile.TemporaryDirectory() as tmp:
+        # Both log folders beside the game (edup_logs, and the pre-rename edvr_logs): the newest paired run wins, and a stamp
+        # finds its own folder.
+        new_logs, old_logs = os.path.join(tmp, 'g', 'edup_logs'), os.path.join(tmp, 'g', 'edvr_logs')
+        for logs, stamp, when in ((old_logs, 'old000000001', 1000000000), (new_logs, 'new000000001', 1000000500)):
+            os.makedirs(os.path.join(logs, 'eyes'))
+            path = os.path.join(logs, 'eyes', 'eye_%s_decisions.json' % stamp)
+            with open(path, 'w') as stream:
+                stream.write('{}')
+            os.utime(path, (when, when))
+        expect(dump_dir_for([new_logs, old_logs]) == new_logs and dump_dir_for([old_logs, new_logs]) == new_logs,
+               'the folder with the newest paired eye run is measured, whichever folder is listed first')
+        expect(dump_dir_for([new_logs, old_logs], 'old000000001') == old_logs, 'a stamp finds the folder that holds its run')
+        expect(dump_dir_for([os.path.join(tmp, 'none')]) == os.path.join(tmp, 'none'), 'no run anywhere: the first folder, for the error')
+
         # Before the helmet fix: the face exact, one frame's face wrong by a planted error, the helmet missing the head's own motion.
         root = os.path.join(tmp, 'before')
         _Fixture(root, planted={7: (2.0, -1.0)}, step_frame=9)
@@ -503,7 +538,7 @@ def self_test():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--target', default=None, help='steam, frontier or a game directory; the logs folder is found the way edvr_log.py finds it')
+    ap.add_argument('--target', default=None, help='steam, frontier or a game directory; the logs folder is found the way edup_log.py finds it')
     ap.add_argument('--logs', default=None, help='an edvr_logs folder, instead of --target')
     ap.add_argument('--stamp', default=None, help='the eye run; the newest when not given')
     ap.add_argument('--draw', default=DEFAULT_DRAW, help='vs hash prefix, then optionally :index count (default %(default)s, the helmet and headset)')
@@ -518,8 +553,8 @@ def main(argv=None):
         ap.error('--first must be at least 1: frame n is measured against frame n-1')
     logs = args.logs
     if not logs:
-        import edvr_log
-        logs = edvr_log.log_dir_for(edvr_log.resolve_target(args.target or 'steam'))
+        import edup_log
+        logs = dump_dir_for(edup_log.log_dirs_for(edup_log.resolve_target(args.target or 'steam'), 'gfx'), args.stamp)
     try:
         stamp = args.stamp or newest_stamp(logs)
         return report(measure(logs, stamp, args.first, args.draw.upper()), args.face_limit, args.draw_limit)

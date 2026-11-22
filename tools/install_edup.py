@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Put a freshly built EDVR next to the game, and prove it landed.
 
-    python tools/install_edvr.py --target steam --dry-run
-    python tools/install_edvr.py --target steam
-    python tools/install_edvr.py --target frontier --openvr --tag stepped
-    python tools/install_edvr.py --target steam --verify-only
-    python tools/install_edvr.py --target steam --scope flat --dry-run
-    python tools/install_edvr.py --target steam --scope both --ini
-    python tools/install_edvr.py --target steam --scope both --xess --dry-run
-    python tools/install_edvr.py --target steam --scope flat --fsr4 --dry-run
-    python tools/install_edvr.py --target frontier --native-openxr --dll \
+    python tools/install_edup.py --target steam --dry-run
+    python tools/install_edup.py --target steam
+    python tools/install_edup.py --target frontier --openvr --tag stepped
+    python tools/install_edup.py --target steam --verify-only
+    python tools/install_edup.py --target steam --scope flat --dry-run
+    python tools/install_edup.py --target steam --scope both --ini
+    python tools/install_edup.py --target steam --scope both --xess --dry-run
+    python tools/install_edup.py --target steam --scope flat --fsr4 --dry-run
+    python tools/install_edup.py --target frontier --native-openxr --dll \
         --native-receipt C:\\temp\\edvr-native.json
-    python tools/install_edvr.py --restore-native C:\\temp\\edvr-native.json
+    python tools/install_edup.py --restore-native C:\\temp\\edvr-native.json
 
 This is the sanctioned replacement for the copy-and-hope one-liner. That
 one-liner is why both game directories on this rig carry dozens of backups
@@ -1230,7 +1230,7 @@ def compile_only_build(root, require_current=True, out=print):
     except (OSError, subprocess.SubprocessError):
         dirty = ""
     if dirty:
-        out("[edvr] WARNING: the tree is dirty, so these DLLs report a -dirty version and edvr_log.py "
+        out("[edvr] WARNING: the tree is dirty, so these DLLs report a -dirty version and edup_log.py "
             "--expect-build HEAD will not match them; commit, then compile, before a build that will be flown")
     return bdir
 
@@ -1416,7 +1416,7 @@ def _products_under(root):
 
 
 def steam_dirs():
-    # One resolver for this tool and edvr_log.py: the Windows registry and
+    # One resolver for this tool and edup_log.py: the Windows registry and
     # every library its libraryfolders.vdf names, or on Linux (Steam Deck,
     # Proton) ~/.local/share/Steam and ~/.steam/steam.
     return steam_library.steam_dirs(GAME_EXE)
@@ -4636,13 +4636,13 @@ def _epic_import_self_test():
         root = Path(temporary)
         tools = root / "tools"
         tools.mkdir()
-        for name in ("install_edvr", "epic_library", "steam_library", "gen_installer_rc",
+        for name in ("install_edup", "epic_library", "steam_library", "gen_installer_rc",
                      "compile_only", "archive_game_exe", "build_receipt"):
             shutil.copyfile(Path(__file__).resolve().parent / (name + ".py"), tools / (name + ".py"))
         script = ("import runpy, sys; sys.path.insert(0, sys.argv[2]); sys.dont_write_bytecode = False; "
                   "runpy.run_path(sys.argv[1], run_name='edvr_import_fixture'); "
                   "assert sys.dont_write_bytecode is False")
-        result = subprocess.run([sys.executable, "-I", "-c", script, str(tools / "install_edvr.py"), str(tools)],
+        result = subprocess.run([sys.executable, "-I", "-c", script, str(tools / "install_edup.py"), str(tools)],
                                 cwd=str(root), capture_output=True, text=True)
         if result.returncode != 0 or list(tools.glob("__pycache__/epic_library*.pyc")):
             print("Epic import self-test: new discovery import wrote bytecode or failed")

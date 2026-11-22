@@ -769,7 +769,7 @@ found` and only the footer fix helps them -- the
 Elite's `Key_` names are DirectInput scan-code names while
 `virtualKeyFromName` maps letters by VK, so on AZERTY/Dvorak the adopted
 `W` could be a different physical key from the one Elite acts on (the
-camera keys carry the same belief). The log's arc: `edvr_log.py --grep
+camera keys carry the same belief). The log's arc: `edup_log.py --grep
 "menu keys:"`; exactly one outcome line per session, from an
 unconditional call after the camera keys' adoption, so a log with none
 means the call never ran.

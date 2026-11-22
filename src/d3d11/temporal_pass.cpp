@@ -570,7 +570,7 @@ uint32_t  g_lastWindowDropped = 0;
 
 // Sorts v[0..n) in place and reads off one percentile by linear
 // interpolation between the two bracketing order statistics -- the usual
-// definition, and the one tools\edvr_log.py's own reader (if it ever
+// definition, and the one tools\edup_log.py's own reader (if it ever
 // checks these figures) would reproduce with numpy.
 double windowPercentile(double* v, int n, double frac) {
     if (n <= 0) return 0.0;

@@ -44,7 +44,7 @@ census design. This doc records what EDVR's review made of it and what was built
   - **Untested:** a cold-driver compile of the new shaders in VR. The flat first launch showed a
     possible +10-35 ms on one or two frames, once.
 - **Still to check on a later flight:**
-  - **Build identity:** `edvr_log.py --expect-build HEAD`.
+  - **Build identity:** `edup_log.py --expect-build HEAD`.
   - **CPU-06:** the 30 s "ui quality: depth view memo" line, in VR and in flat. Expect hits to
     dominate.
   - **G09 counts:** the ZS/ZUI presence totals line, which gives how many dispatches skip each load.
@@ -355,7 +355,7 @@ built green at 4c30ab13. Not flown.
   - f9ProbeTick compares the raw HRC fields before building its formatted key.
   - The flat foreground block takes the vs/ps bytes from the domain proof memo, instead of two
   mutex-guarded map finds per draw.
-- **Flight checks** (`edvr_log.py --expect-build <commit>` first):
+- **Flight checks** (`edup_log.py --expect-build <commit>` first):
   - both "armed ... after N ms" lines in single digits;
   - "periodic work: frame_cycle_report" and "ui_layer_totals" lower than before (the runtime span is
     now the whole report);

@@ -137,7 +137,7 @@ std::wstring   settingsPathFor(const std::wstring& dir, const std::string& profi
 const wchar_t* legacySettingsLeafFor(const std::string& profile);
 std::wstring   legacySettingsPathFor(const std::wstring& dir, const std::string& profile);
 
-// The tool's receipts (tools\install_edvr.py) for this folder. The tool keeps its own record beside the game: each file it placed, what
+// The tool's receipts (tools\install_edup.py) for this folder. The tool keeps its own record beside the game: each file it placed, what
 // it replaced, and the hashes of both. The installer reads them for provenance only; its own record stays the authority for what it did.
 struct ToolReceiptFile {
     std::string  key;           // runtime, loader, notice, config, xess, ... (a version 1 receipt: native, graphics)
@@ -152,7 +152,7 @@ struct ToolReceipt {
     std::vector<ToolReceiptFile> files;
 };
 
-// The newest receipt of each kind in the game folder, picked as install_edvr.py picks its current receipts: the newest backup-named
+// The newest receipt of each kind in the game folder, picked as install_edup.py picks its current receipts: the newest backup-named
 // sibling of the receipt when there is one, else the receipt itself. A receipt is read only when its target is this folder and it
 // its state is "installed". Anything that does not parse as one is absent.
 std::vector<ToolReceipt> readToolReceipts(const std::wstring& gameDir);

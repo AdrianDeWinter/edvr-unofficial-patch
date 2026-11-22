@@ -961,7 +961,7 @@ passes.
 
 ### 2026-09-29 08:49 flight: the stub fix flown clean (Epic, flat)
 
-Build v0.18.0-rc.3-110-g8879596a (edvr_log.py --expect-build matched),
+Build v0.18.0-rc.3-110-g8879596a (edup_log.py --expect-build matched),
 edvr_gfx_20260929_084913.log, 08:49:13 to 08:50:16; flat profile with
 fix.temporal_aa_camera = on and the trace key off, at the main menu. The
 refresh hook installed at +0x592200 with the fixed stubs, and the 5 s ticks
@@ -1194,8 +1194,8 @@ with injected=0 means the refresh does not run on the Present thread.
 Procedure (path P = the Epic install; only the sanctioned tools; the ini
 changes only by the Edit tool with a diff, never through --ini): build_lock
 --wait and the absolute-path build.bat, green tail and receipt, commit;
-`python tools\install_edvr.py --target P --profile flat --dry-run`, the real
-install, `--verify-only`; confirm the build with `edvr_log.py --expect-build`.
+`python tools\install_edup.py --target P --profile flat --dry-run`, the real
+install, `--verify-only`; confirm the build with `edup_log.py --expect-build`.
 Flight A key off, 3 min in the cockpit, one F10 audit at a fixed spot (expect
 no injector lines). Flight B key on, trace off: menu 30 s; hangar stationary
 20 s; undock and fly 60 s; supercruise 30 s; F8 off 10 s then back (expect
@@ -1522,7 +1522,7 @@ refused on-foot frames, and whether the first rejection falls at the disembark o
 
 ## 2026-11-03 (flight edvr_gfx_20261103_044624): the on-foot refusal is the query tracker, and it follows a live VR-to-flat switch (DIAGNOSED, no change)
 
-Frontier, build 7cc31c5a (`v0.22.0-rc.5-38-g7cc31c5a`, PE `6AE9C874`, `edvr_log.py --expect-build 7cc31c5a` matched). Launched in VR (3D mode 4), live switch
+Frontier, build 7cc31c5a (`v0.22.0-rc.5-38-g7cc31c5a`, PE `6AE9C874`, `edup_log.py --expect-build 7cc31c5a` matched). Launched in VR (3D mode 4), live switch
 to flat at 04:51:05.672, DLSS, SS 1.0 (3840x2160 render and output), UI quality 100. Sean's first NumLock (05:03:44, on foot in the hangar, ship in view)
 and the second (05:04:15, seated, sealed) are the two draw censuses; the log records a NumLock only as `flat draw census: armed by NumLock`.
 

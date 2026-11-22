@@ -126,7 +126,7 @@ struct Stats {
     void clear() noexcept { *this = Stats{}; }
 };
 
-// The window's line. tools\edvr_log.py reads it.
+// The window's line. tools\edup_log.py reads it.
 inline int formatLine(char* buf, size_t n, uint32_t seconds, const Stats& s) noexcept {
     return std::snprintf(buf, n, "native on foot elbow step (F219) %u s: left solves %u limited %u largest cut %.1f deg; right solves %u limited %u largest cut %.1f deg", seconds, s.solves[0], s.limited[0],
                          s.cutMaxDeg[0], s.solves[1], s.limited[1], s.cutMaxDeg[1]);

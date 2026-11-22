@@ -166,7 +166,7 @@ branch, which sits beside the light grid's view-row refresh.
 
 ## Re-deriving after a patch
 
-1. **Archived executable:** `install_edvr.py` archives the installed exe on
+1. **Archived executable:** `install_edup.py` archives the installed exe on
    every real install; `python tools\archive_game_exe.py --target steam`
    does it by hand. Without the old build there is nothing to map from.
 2. **Retarget:** follow `docs\build-334925.md`, "For the next retarget": the

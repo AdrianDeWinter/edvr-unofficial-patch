@@ -6,7 +6,7 @@
 // and Log, replaces what it calls -- the injector, the world route's draw progress, the journal, EDVR's advertised eye
 // geometry -- with stubs a script drives, puts a WARP device behind the eye readback, feeds the observer cameras built by
 // the game-camera derive model (in memory, so the glue's guarded reads are real reads and "the body" between the observer's
-// halves is the model's own derive), and finally runs the REAL reader (python tools\edvr_log.py --camera-census) over the
+// halves is the model's own derive), and finally runs the REAL reader (python tools\edup_log.py --camera-census) over the
 // log the glue wrote. What the reader says is the verdict: the two eye cameras found by the content join -- the composed
 // rows the census logged for a camera equal, within 1e-5, the rows read back from the GPU at the eye's draw -- and told
 // from the world's.
@@ -41,7 +41,7 @@
 //                       failed readbacks the log holds on purpose, PASS on all six lines once those are taken out.
 //
 // --self-test runs it and prints "vr camera census glue: PASS" only when every check holds. Run from the repo root (the
-// reader is tools\edvr_log.py). --dry-run prints a line and does nothing.
+// reader is tools\edup_log.py). --dry-run prints a line and does nothing.
 #include <windows.h>
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -487,9 +487,9 @@ std::string narrow(const std::wstring& w) {
     if (n > 0) WideCharToMultiByte(CP_ACP, 0, w.c_str(), static_cast<int>(w.size()), &out[0], n, nullptr, nullptr);
     return out;
 }
-// tools\edvr_log.py over one log; the exit status goes to *rc.
+// tools\edup_log.py over one log; the exit status goes to *rc.
 std::string runReader(const std::wstring& log, int* rc) {
-    const std::string cmd = "python tools\\edvr_log.py --file \"" + narrow(log) + "\" --camera-census 2>&1";
+    const std::string cmd = "python tools\\edup_log.py --file \"" + narrow(log) + "\" --camera-census 2>&1";
     std::string out;
     *rc = -1;
     if (FILE* p = _popen(cmd.c_str(), "r")) {
@@ -770,7 +770,7 @@ int runEpisodes(Gpu& gpu) {
     int rc = -1;
     const std::string report = runReader(epPath, &rc);
     check(rc == 0 && report.find("== episodes (2 printed; the last `episodes` line: 4 taken of 10, 7 trigger(s), 3 skipped) ==") != std::string::npos,
-          "tools\\edvr_log.py --camera-census over the episodes' log: two episodes printed, four taken, seven triggers, three skipped");
+          "tools\\edup_log.py --camera-census over the episodes' log: two episodes printed, four taken, seven triggers, three skipped");
     {
         const size_t at = report.find("== episodes (");
         const std::string eps = at == std::string::npos ? std::string() : report.substr(at);
@@ -805,8 +805,8 @@ int run() {
     GetTempPathW(MAX_PATH, temp);
     g_dir = std::wstring(temp) + L"edvr_census_glue_" + std::to_wstring(GetCurrentProcessId());
     CreateDirectoryW(g_dir.c_str(), nullptr);
-    if (GetFileAttributesA("tools\\edvr_log.py") == INVALID_FILE_ATTRIBUTES) {
-        std::printf("  FAIL  tools\\edvr_log.py is not here: run this from the repo root\n");
+    if (GetFileAttributesA("tools\\edup_log.py") == INVALID_FILE_ATTRIBUTES) {
+        std::printf("  FAIL  tools\\edup_log.py is not here: run this from the repo root\n");
         return 1;
     }
     g_runtimeProfile = RuntimeProfile::Vr;
@@ -1154,7 +1154,7 @@ int run() {
     std::printf("the reader\n");
     int rc = -1;
     const std::string report = runReader(logPath, &rc);
-    check(rc == 0 && report.find("camera census:") != std::string::npos, "tools\\edvr_log.py --camera-census ran over the glue's log and exited 0");
+    check(rc == 0 && report.find("camera census:") != std::string::npos, "tools\\edup_log.py --camera-census ran over the glue's log and exited 0");
     {
         const std::string eyes = lineWith(report, "eye camera(s): ");
         check(has(eyes, hexOf(g_eyeL.ptr(), true)) && has(eyes, hexOf(g_eyeR.ptr(), true)) && has(eyes, "world camera: " + hexOf(g_world.ptr(), true)) &&

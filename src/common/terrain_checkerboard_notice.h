@@ -122,7 +122,7 @@ inline int formatStatusHint(char* out, size_t size) {
 // The log line for a read: the state, what it rests on, and (On) the sentence. One line (the log's buffer is 1200 bytes). `preset`,
 // `source` (the file the answer came from: Custom.4.4.fxcfg, or OptionDefaults\VRHigh.fxcfg), `value` (the tag's text as written)
 // and `reason` (an Unknown's cause) come from the reader. No parenthesis in a reason or the sentence: the reader of the log
-// (tools\edvr_log.py --terrain-checkerboard) takes the last one as the end of the detail.
+// (tools\edup_log.py --terrain-checkerboard) takes the last one as the end of the detail.
 inline int formatLog(char* out, size_t size, State state, const char* preset, const char* source, const char* value, const char* reason) {
     if (state == State::Unknown)
         return std::snprintf(out, size, "vr terrain checkerboard: unknown (%s): no notice.", reason ? reason : "no reason");

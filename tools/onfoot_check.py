@@ -2569,9 +2569,9 @@ def dump(S, name, fields, since, until, out):
 def resolve_folder(args):
     if args.dir:
         return args.dir
-    import edvr_log
-    game = edvr_log.resolve_target(args.target)
-    cands = [os.path.join(edvr_log.log_dir_for(game), 'onfoot'), os.path.join(game, 'edup_logs', 'onfoot'), os.path.join(game, 'edvr_logs', 'onfoot')]
+    import edup_log
+    game = edup_log.resolve_target(args.target)
+    cands = [os.path.join(edup_log.log_dir_for(game), 'onfoot'), os.path.join(game, 'edup_logs', 'onfoot'), os.path.join(game, 'edvr_logs', 'onfoot')]
     for c in cands:
         if os.path.isdir(c):
             return c
@@ -2634,10 +2634,10 @@ def main(argv=None):
         print('[onfoot] %s' % e)
         return 1
     if args.expect_build:
-        import edvr_log
-        root = os.path.abspath(args.root) if args.root else edvr_log.repo_root()
-        want = edvr_log.expected_version(args.expect_build, root)
-        if edvr_log.version_matches(S.build, want, root):
+        import edup_log
+        root = os.path.abspath(args.root) if args.root else edup_log.repo_root()
+        want = edup_log.expected_version(args.expect_build, root)
+        if edup_log.version_matches(S.build, want, root):
             print('[onfoot] build matches: %s' % want)
         else:
             print('[onfoot] BUILD MISMATCH\n         recording says %s\n         expected       %s\n         This recording is not evidence about that build.' % (S.build or '(nothing)', want))

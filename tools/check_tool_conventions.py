@@ -134,7 +134,7 @@ def violations(tools_dir, build_bat_path):
             continue
         if name not in STEAM_OWNERS and _names_steam_key(tree):
             found.append("tools\\%s: names the Steam registry key; resolve installs through %s "
-                         "(install_edvr.resolve_target)" % (name, STEAM_OWNER))
+                         "(install_edup.resolve_target)" % (name, STEAM_OWNER))
         if not _has_main_guard(tree):
             continue
         if not _declares_self_test(tree):

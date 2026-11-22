@@ -6,7 +6,7 @@
 // vscreen_footprint.cpp with the real Config and Log, replaces what it calls (the runtime's published eye size, the hooks' bypass
 // flag) with stubs, puts a WARP device behind it with the four sources a composite draw binds (the model rows in cb0, the clip rows
 // in cb1 at their real offsets, the quad's four vertices, the per-instance SIZE), and finally runs the REAL reader
-// (python tools\edvr_log.py --vscreen-fit) over the log the glue wrote.
+// (python tools\edup_log.py --vscreen-fit) over the log the glue wrote.
 //
 // What it proves that nothing else does:
 //   NOT ARMED         an explicit fix.vscreen_res_width arms nothing and says so once; the flat profile arms nothing and writes no line
@@ -32,7 +32,7 @@
 //   THE READER        the log the glue wrote is read by the real reader: the arming line, the window lines and the verdict.
 //
 // --self-test runs it and prints "vscreen footprint glue: PASS" only when every check holds. Run from the repo root (the reader is
-// tools\edvr_log.py). --dry-run prints a line and does nothing.
+// tools\edup_log.py). --dry-run prints a line and does nothing.
 #include <windows.h>
 #include <d3d11_1.h>
 #include <wrl/client.h>
@@ -129,7 +129,7 @@ void writeIni(const std::string& body) {
     CloseHandle(f);
 }
 std::string runReader(const std::wstring& log, int* rc) {
-    const std::string cmd = "python tools\\edvr_log.py --file \"" + narrow(log) + "\" --vscreen-fit 2>&1";
+    const std::string cmd = "python tools\\edup_log.py --file \"" + narrow(log) + "\" --vscreen-fit 2>&1";
     std::string out;
     *rc = -1;
     if (FILE* p = _popen(cmd.c_str(), "r")) {
@@ -265,8 +265,8 @@ int run() {
         std::printf("  FAIL  the fixture Settings.xml could not be written\n");
         return 1;
     }
-    if (GetFileAttributesA("tools\\edvr_log.py") == INVALID_FILE_ATTRIBUTES) {
-        std::printf("  FAIL  tools\\edvr_log.py is not here: run this from the repo root\n");
+    if (GetFileAttributesA("tools\\edup_log.py") == INVALID_FILE_ATTRIBUTES) {
+        std::printf("  FAIL  tools\\edup_log.py is not here: run this from the repo root\n");
         return 1;
     }
     using edvr::Config;

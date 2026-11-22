@@ -2,7 +2,7 @@
 
 ## Evidence identity
 
-Both logs were located and build-checked with `tools/edvr_log.py --target
+Both logs were located and build-checked with `tools/edup_log.py --target
 frontier --expect-build 070e49d`, separately for `--tag gfx` and `--tag vr`.
 
 - Build: `v0.15.1-20-g070e49d`.
@@ -110,7 +110,7 @@ instrument or OpenXR backend is enabled by this follow-up.
 
 ## Repeat flight: build 2a56da3, 20:05 local
 
-Both logs were retrieved with `tools/edvr_log.py --target frontier`, separately
+Both logs were retrieved with `tools/edup_log.py --target frontier`, separately
 for each tag, and passed `--expect-build 2a56da3`. Their version is
 `v0.15.1-21-g2a56da3`: graphics `edvr_gfx_20260911_200520.log`, linked build
 `6AA4A9B2`, and VR `edvr_vr_20260911_200539.log`, linked build `6AA4A9B9`. The

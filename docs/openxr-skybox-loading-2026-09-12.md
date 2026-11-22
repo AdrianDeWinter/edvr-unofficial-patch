@@ -8,7 +8,7 @@ frame ownership to the standalone diagnostic. Frontier's installed pair remains
 ## Evidence and supported form
 
 The matching Frontier log `edvr_vr_20260912_101849.log`, read through
-`edvr_log.py --expect-build f3c205e`, contains three successful game-origin
+`edup_log.py --expect-build f3c205e`, contains three successful game-origin
 `IVRCompositor_014::SetSkyboxOverride` calls. Each supplied six textures. Only
 the first face's DirectX/Auto/non-null metadata was recorded. Dimensions and
 all six resource descriptors remain unmeasured. The earlier 1x1 observation
