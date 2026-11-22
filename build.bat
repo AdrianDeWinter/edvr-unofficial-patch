@@ -771,7 +771,7 @@ python tools\compile_cache.py --prune --keep thunks.obj --keep weapon_ui_getter_
     "src\d3d11\fss_res.cpp" ^
     "src\d3d11\fss_panel.cpp" ^
     "src\d3d11\fss_reveal.cpp" ^
-    "src\d3d11\vertex_resync_hook.cpp" "src\d3d11\light_grid_cache_hook.cpp" "src\d3d11\vehicle_rig.cpp" ^
+    "src\d3d11\vertex_resync_hook.cpp" "src\d3d11\light_grid_cache_hook.cpp" "src\d3d11\stream_boost.cpp" "src\d3d11\vehicle_rig.cpp" ^
     "src\d3d11\xinput_watch.cpp" ^
     "src\d3d11\fss_panel_rect.cpp" ^
     "src\d3d11\panel_curve.cpp" "src\d3d11\screen_motion.cpp" "src\d3d11\weapon_motion.cpp" ^
@@ -2848,6 +2848,21 @@ if not exist "%OBJ%\lightgridcache" mkdir "%OBJ%\lightgridcache"
     /link /INCREMENTAL:NO kernel32.lib
 if errorlevel 1 ( echo [edvr] ERROR: light grid cache test build failed & exit /b 1 )
 "%BUILD%\light_grid_cache_test.exe" --self-test || exit /b 1
+exit /b 0
+
+:rig_stream_boost_test
+echo [edvr] === stream_boost_test.exe ===
+REM Pure hardware-scaling and pump-budget unit tests for src\d3d11\stream_boost_core.h:
+REM storage classification (HDD stand-down, NVMe, SATA, flash, TRIM fallback, unknown),
+REM CPU/RAM/storage ceilings, flat vs VR pump budgets, tight-frame throttling, VRAM eviction brake.
+if not exist "%OBJ%\streamboost" mkdir "%OBJ%\streamboost"
+%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
+    /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\streamboost\\" ^
+    /Fe"%BUILD%\stream_boost_test.exe" "tools\stream_boost_test\stream_boost_test.cpp" ^
+    /link /INCREMENTAL:NO kernel32.lib
+if errorlevel 1 ( echo [edvr] ERROR: stream boost test build failed & exit /b 1 )
+"%BUILD%\stream_boost_test.exe" --dry-run || exit /b 1
+"%BUILD%\stream_boost_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_vehicle_rig_test

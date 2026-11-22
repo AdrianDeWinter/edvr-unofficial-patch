@@ -103,6 +103,7 @@ binds it (see the next section).
 |---|---|---|---|
 | kFlushIaRva | FlushIA (input-assembler flush) | d3d11\vertex_resync_core.h | scanner-body |
 | pad-state readers | four docking-state readers | d3d11\pad_state_core.h | optimized-station-2026-10-12 |
+| kStreamLoadRva, kStreamLoadCapPinRva, kFresPumpRva, kFresServiceGlobalRva, kFresSetMaxStreamsRva | StreamLoad entry + `cmp rsi, 0x1e` cap site; fRes completion pump, service global, `SetMaxConcurrentStreams` | d3d11\stream_boost.cpp | — |
 | present | no game address: EDVR hooks the D3D11 swap chain | d3d11\device_hook.cpp | architecture |
 
 ## Doc-only addresses

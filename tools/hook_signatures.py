@@ -1995,7 +1995,7 @@ AUDIT_EXACT_ONLY = (
     ("d3d11/net_keepalive.cpp", "loading connection reuse: curl_multi_init, curl_multi_cleanup and the HTTP pump's two calls, pinned to build 334925's bytes and installed only when gameBuildKnown(); an unknown build stands down. Making them self-locating needs the signature table regenerated"),
     ("d3d11/srv_radar_anchor.cpp", "the SRV radar anchor's exact-build hooks: the placement setter, the slot camera"),
     ("d3d11/terrain_cull_cover*", "terrain cull cover, which finds its site by its own scan on an unknown build"),
-    ("d3d11/stream_load_probe.h", "TEMPORARY read-only StreamLoad + fRes pump diagnostic probes (build 334925 only): install only when gameBuildKnown() and each 16-byte prologue matches; an unknown build stands down"),
+    ("d3d11/stream_boost.cpp", "system-adaptive asset streaming boost (build 334925): StreamLoad cap, fResService::SetMaxConcurrentStreams, and fRes completion pump pinned to build 334925 bytes and installed only when gameBuildKnown(); an unknown build stands down"),
 )
 # Literals in the image's range that are not game addresses: (path glob, values or None for all, why).
 AUDIT_NOT_ADDRESSES = (
