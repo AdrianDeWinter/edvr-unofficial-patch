@@ -246,7 +246,7 @@ inline DXGI_FORMAT fsr4TypedFormat(Fsr4Role role, DXGI_FORMAT source) {
 
 // ---- flags ----
 
-// AMD's FidelityFX SDK v2.3.0 ffx_upscale.h bits that are not in hdr_backend_flags.h (which holds the FSR 3.1 DX11 port's). The
+// AMD's FidelityFX SDK v2.4.0 ffx_upscale.h bits that are not in hdr_backend_flags.h (which holds the FSR 3.1 DX11 port's). The
 // engine static_asserts each against the real enum, as it does the shared ones.
 constexpr uint32_t kFsr4FlagNonLinearColourspace = 1u << 8;   // FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE
 constexpr uint32_t kFsr4DispatchNonLinearSrgb = 1u << 1;      // FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB
