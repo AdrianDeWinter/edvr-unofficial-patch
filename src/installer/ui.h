@@ -51,9 +51,13 @@ struct Fonts {
     HFONT caption = nullptr;
 };
 
-// Follows the system light/dark setting; call refreshTheme() on
-// WM_SETTINGCHANGE.
+enum class ThemeMode { System, Light, Dark };
+
+// Follows the system light/dark setting by default; setThemeMode() overrides it
+// and refreshTheme() rebuilds the palette (also called on WM_SETTINGCHANGE).
 const Theme& theme();
+void         setThemeMode(ThemeMode mode);
+ThemeMode    themeMode();
 void         refreshTheme();
 
 const Fonts& fonts();
@@ -115,7 +119,7 @@ void paintAccentCard(HDC dc, RECT rect, UINT dpi);
 int  paintStatusPill(HDC dc, int left, int top, int height, COLORREF toneColour,
                      const std::wstring& text, HFONT font, UINT dpi);
 
-enum class ButtonStyle { Primary, Secondary, Tab, TabActive, Segment, SegmentActive, Link };
+enum class ButtonStyle { Primary, Secondary, Tab, TabActive, Segment, SegmentActive, Link, ThemeToggle };
 
 // Owner-drawn button. `style` is remembered per control, and the pointer is
 // tracked so it can light up under the mouse.

@@ -87,6 +87,10 @@ public:
     std::string language() const;
     void setLanguage(const std::string& code);
 
+    // "dark", "light", or empty (follow Windows).
+    std::string theme() const;
+    void setTheme(const std::string& mode);
+
     // Preferred VR headset mode, or VrHeadsetMode::NotSet when unset/unknown.
     edvr::VrHeadsetMode vrStereoMode() const;
     void setVrStereoMode(edvr::VrHeadsetMode mode);

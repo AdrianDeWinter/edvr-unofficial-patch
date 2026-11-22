@@ -10,9 +10,10 @@
 namespace edvr::installer::ui {
 namespace {
 
-Theme g_theme;
-Fonts g_fonts;
-bool  g_themeRead = false;
+Theme     g_theme;
+Fonts     g_fonts;
+ThemeMode g_themeMode = ThemeMode::System;
+bool      g_themeRead = false;
 bool  g_keyboardFocus = false;
 bool  g_mousePressing = false;
 
@@ -380,8 +381,17 @@ void shutdown() {
 
 int dp(int value96, UINT dpi) { return MulDiv(value96, static_cast<int>(dpi), 96); }
 
+void setThemeMode(ThemeMode mode) {
+    g_themeMode = mode;
+    refreshTheme();
+}
+
+ThemeMode themeMode() { return g_themeMode; }
+
 void refreshTheme() {
-    const bool dark = systemPrefersDark();
+    const bool dark = g_themeMode == ThemeMode::Dark  ? true
+                      : g_themeMode == ThemeMode::Light ? false
+                                                        : systemPrefersDark();
     Theme t;
     t.dark = dark;
     if (dark) {
@@ -683,6 +693,91 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
     COLORREF border = t.controlBorder;
     COLORREF ink = t.text;
 
+    if (owned->style == ButtonStyle::ThemeToggle) {
+        fillRect(dc, rect, t.windowBg);
+        const int w = rect.right - rect.left;
+        const int h = rect.bottom - rect.top;
+        if (w < 20 || h < 12) return;
+
+        const COLORREF trackFill = owned->hot ? t.controlHover : t.cardBg;
+        const COLORREF trackBorder = owned->hot ? t.controlBorder : t.cardBorder;
+        fillAndStrokeRounded(dc, rect, h / 2, trackFill, trackBorder, true, true);
+        if (showFocus) strokeRounded(dc, rect, h / 2, t.accent, dp(1, dpi));
+
+        const int pad = dp(3, dpi) > 2 ? dp(3, dpi) : 2;
+        const int knobD = h - pad * 2;
+        const float knobR = static_cast<float>(knobD) * 0.5f;
+        const float sunCx = static_cast<float>(rect.left + pad) + knobR;
+        const float moonCx = static_cast<float>(rect.right - pad) - knobR;
+        const float cy = static_cast<float>(rect.top) + static_cast<float>(h) * 0.5f;
+        const float activeCx = t.dark ? moonCx : sunCx;
+
+        const COLORREF knobFill = mix(t.cardBg, t.accent, t.dark ? 34 : 18);
+        const COLORREF knobBorder = mix(t.cardBorder, t.accent, t.dark ? 58 : 48);
+        const COLORREF sunCol = t.dark ? t.muted : RGB(196, 120, 0);
+        const COLORREF moonCol = t.dark ? RGB(230, 236, 248) : t.muted;
+        const float scale = static_cast<float>(dpi) / 96.0f;
+
+        blendTile(dc, rect.left, rect.top, w, h, [=](float px, float py) -> uint32_t {
+            // Active circular thumb.
+            const float kd = std::hypot(px - activeCx, py - cy) - knobR;
+            const float kOuter = clampf(0.5f - kd, 0.0f, 1.0f);
+            float outR = 0.0f, outG = 0.0f, outB = 0.0f, outA = 0.0f;
+            if (kOuter > 0.0f) {
+                const float kInner = clampf(0.5f - (kd + 1.0f), 0.0f, 1.0f);
+                outR = static_cast<float>(GetRValue(knobBorder)) +
+                       (static_cast<float>(GetRValue(knobFill)) - static_cast<float>(GetRValue(knobBorder))) * kInner;
+                outG = static_cast<float>(GetGValue(knobBorder)) +
+                       (static_cast<float>(GetGValue(knobFill)) - static_cast<float>(GetGValue(knobBorder))) * kInner;
+                outB = static_cast<float>(GetBValue(knobBorder)) +
+                       (static_cast<float>(GetBValue(knobFill)) - static_cast<float>(GetBValue(knobBorder))) * kInner;
+                outA = kOuter;
+            }
+
+            // Sun icon on the left: centre disc + 8 short radial rays.
+            float sunSd = std::hypot(px - sunCx, py - cy) - 2.35f * scale;
+            const float rIn = 3.75f * scale;
+            const float rOut = 5.05f * scale;
+            const float rayHalf = 0.58f * scale;
+            constexpr float kCos45 = 0.70710678f;
+            const float dirs[8][2] = {
+                {1.0f, 0.0f},   {-1.0f, 0.0f},  {0.0f, 1.0f},    {0.0f, -1.0f},
+                {kCos45, kCos45}, {-kCos45, kCos45}, {kCos45, -kCos45}, {-kCos45, -kCos45},
+            };
+            for (int i = 0; i < 8; ++i) {
+                const float d = sdSegment(px, py, sunCx + dirs[i][0] * rIn, cy + dirs[i][1] * rIn,
+                                          sunCx + dirs[i][0] * rOut, cy + dirs[i][1] * rOut) -
+                                rayHalf;
+                if (d < sunSd) sunSd = d;
+            }
+            const float sunCov = clampf(0.5f - sunSd, 0.0f, 1.0f);
+
+            // Crescent moon icon on the right: outer disc minus shifted cutout disc.
+            const float mOuter = std::hypot(px - moonCx, py - cy) - 4.35f * scale;
+            const float mCut = std::hypot(px - (moonCx + 2.05f * scale), py - (cy - 1.55f * scale)) - 3.65f * scale;
+            const float moonSd = mOuter > -mCut ? mOuter : -mCut;
+            const float moonCov = clampf(0.5f - moonSd, 0.0f, 1.0f);
+
+            auto over = [&](COLORREF col, float cov) {
+                if (cov <= 0.0f) return;
+                const float r = static_cast<float>(GetRValue(col));
+                const float g = static_cast<float>(GetGValue(col));
+                const float b = static_cast<float>(GetBValue(col));
+                const float newA = cov + outA * (1.0f - cov);
+                if (newA > 0.0f) {
+                    outR = (r * cov + outR * outA * (1.0f - cov)) / newA;
+                    outG = (g * cov + outG * outA * (1.0f - cov)) / newA;
+                    outB = (b * cov + outB * outA * (1.0f - cov)) / newA;
+                    outA = newA;
+                }
+            };
+            over(sunCol, sunCov);
+            over(moonCol, moonCov);
+            return outA > 0.0f ? packPremul(outR, outG, outB, outA) : 0u;
+        });
+        return;
+    }
+
     switch (owned->style) {
         case ButtonStyle::Primary:
             face = owned->hot ? t.accentHover : t.accent;
@@ -718,6 +813,8 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
             face = t.windowBg;
             border = face;
             ink = owned->hot ? t.text : t.accent;
+            break;
+        case ButtonStyle::ThemeToggle:
             break;
     }
     if (disabled) {

@@ -22,6 +22,7 @@ enum : int {
     kIdSteamFrontier = 1087,
     kIdVrMode = 1088,
     kIdVrRefresh = 1089,
+    kIdThemeToggle = 1090,
 };
 
 constexpr UINT_PTR kTimerVrProbe = 2001;
@@ -66,6 +67,7 @@ struct LauncherGui {
     HWND steamFrontier = nullptr;    // "Use Frontier account login", for Steam direct launch
     HWND vrMode = nullptr;           // preferred VR headset mode (NotSet or HMD modes) for Settings.xml routes
     HWND vrRefresh = nullptr;        // manual Refresh button in the VR headset readout card
+    HWND themeToggle = nullptr;      // bottom-left sun/moon light/dark theme toggle pill
     RECT vrModeLabelPx{};            // painted "VR 3D mode" label beside vrMode
     std::unique_ptr<LauncherSession> session;
     VrHeadsetReport vrReport;
@@ -449,6 +451,10 @@ void updateLauncherControls() {
             MoveWindow(lg.vrRefresh, dp(innerRight - btnW), dp(vrTop + 9), dp(btnW), dp(24), TRUE);
         }
 
+        if (lg.themeToggle) {
+            MoveWindow(lg.themeToggle, dp(kMargin), dp(kTipTop - 2), dp(48), dp(22), TRUE);
+        }
+
         ReleaseDC(g.window, dc);
     }
 
@@ -514,6 +520,9 @@ void layoutLauncherControls() {
         if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().body), TRUE);
     if (lg.vrRefresh)
         SendMessageW(lg.vrRefresh, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().caption), TRUE);
+    if (lg.themeToggle) {
+        MoveWindow(lg.themeToggle, dp(kMargin), dp(kTipTop - 2), dp(48), dp(22), TRUE);
+    }
     lg.layoutDirty = true;
     updateLauncherControls();
 }
@@ -849,6 +858,30 @@ void fillLanguageCombo() {
     }
 }
 
+void applyNativeControlThemes() {
+    const bool dark = ui::theme().dark;
+    const wchar_t* cfd = dark ? L"DarkMode_CFD" : L"";
+    const wchar_t* exp = dark ? L"DarkMode_Explorer" : L"";
+    if (g.combo) SetWindowTheme(g.combo, cfd, nullptr);
+    if (g.scopeCombo) SetWindowTheme(g.scopeCombo, cfd, nullptr);
+    if (g.languageCombo) SetWindowTheme(g.languageCombo, cfd, nullptr);
+    if (lg.vrMode) SetWindowTheme(lg.vrMode, cfd, nullptr);
+    if (g.search) SetWindowTheme(g.search, cfd, nullptr);
+    if (g.report) SetWindowTheme(g.report, exp, nullptr);
+    if (g.settingsList) SetWindowTheme(g.settingsList, exp, nullptr);
+}
+
+void applyLauncherTheme(const std::string& mode) {
+    if (mode == "dark") ui::setThemeMode(ui::ThemeMode::Dark);
+    else if (mode == "light") ui::setThemeMode(ui::ThemeMode::Light);
+    else ui::setThemeMode(ui::ThemeMode::System);
+    if (g.window) {
+        ui::applyWindowChrome(g.window);
+        applyNativeControlThemes();
+        RedrawWindow(g.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_UPDATENOW);
+    }
+}
+
 void createLauncherControls(HWND window) {
     const ui::Fonts& f = ui::fonts();
     lg.update = ui::makeButton(window, L"Download & install", kIdUpdate, ui::ButtonStyle::Primary, f.body);
@@ -867,6 +900,7 @@ void createLauncherControls(HWND window) {
     if (ui::theme().dark) SetWindowTheme(lg.vrMode, L"DarkMode_CFD", nullptr);
     refillVrModeChoices();
     lg.vrRefresh = ui::makeButton(window, L"Refresh", kIdVrRefresh, ui::ButtonStyle::Secondary, f.caption);
+    lg.themeToggle = ui::makeButton(window, L"", kIdThemeToggle, ui::ButtonStyle::ThemeToggle, f.caption);
     for (HWND control :
          {lg.update, lg.rc, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter, lg.steamFrontier, lg.vrMode, lg.vrRefresh})
         ShowWindow(control, SW_HIDE);
@@ -1000,6 +1034,20 @@ void runLauncherJob(LPARAM param) {
 
 // WM_COMMAND for the launcher's own controls. True when it was one of them.
 bool launcherCommand(int id, int code) {
+    if (id == kIdThemeToggle && code == BN_CLICKED) {
+        const std::string next = ui::theme().dark ? "light" : "dark";
+        if (lg.session) {
+            lg.session->setTheme(next);
+        } else {
+            LauncherState state;
+            const std::wstring path = joinPath(launcherRootsFor(g.args).launcherDir(), L"launcher.ini");
+            state.load(path, nullptr);
+            state.setTheme(next);
+            state.save(nullptr);
+        }
+        applyLauncherTheme(next);
+        return true;
+    }
     if (!lg.session) return false;
     if (id == kIdVrMode && code == CBN_SELCHANGE) {
         const LRESULT index = SendMessageW(lg.vrMode, CB_GETCURSEL, 0, 0);

@@ -6549,6 +6549,16 @@ void testVrHeadsetDetection() {
         check(r.status == VrStatusKind::NotConfigured && r.activeRuntimeMissingFile,
               "missing OpenXR runtime JSON resolves to NotConfigured with activeRuntimeMissingFile");
     }
+
+    // 6. Theme mode state round-trip (system / dark / light).
+    {
+        ui::setThemeMode(ui::ThemeMode::Dark);
+        check(ui::theme().dark && ui::themeMode() == ui::ThemeMode::Dark, "ThemeMode::Dark forces dark palette");
+        ui::setThemeMode(ui::ThemeMode::Light);
+        check(!ui::theme().dark && ui::themeMode() == ui::ThemeMode::Light, "ThemeMode::Light forces light palette");
+        ui::setThemeMode(ui::ThemeMode::System);
+        check(ui::themeMode() == ui::ThemeMode::System, "ThemeMode::System restores system-following mode");
+    }
 }
 
 }  // namespace

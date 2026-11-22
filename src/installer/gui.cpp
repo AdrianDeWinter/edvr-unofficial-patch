@@ -1686,6 +1686,7 @@ void createControls(HWND window) {
     {
         LauncherState state;
         state.load(joinPath(launcherRootsFor(g.args).launcherDir(), L"launcher.ini"), nullptr);
+        if (!state.theme().empty()) applyLauncherTheme(state.theme());
         applyLauncherLanguage(state.language());
     }
 #endif
@@ -1923,7 +1924,10 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             if (lparam && wcscmp(reinterpret_cast<const wchar_t*>(lparam), L"ImmersiveColorSet") == 0) {
                 ui::refreshTheme();
                 ui::applyWindowChrome(window);
-                InvalidateRect(window, nullptr, TRUE);
+#ifdef EDUP_LAUNCHER
+                applyNativeControlThemes();
+#endif
+                RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_UPDATENOW);
             }
             return 0;
 

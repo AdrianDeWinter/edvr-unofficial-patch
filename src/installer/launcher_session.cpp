@@ -63,6 +63,7 @@ void LauncherSession::start() {
     if (state.load(launcherIniPath(env_.roots), nullptr)) {
         channel_ = state.channel();
         language_ = state.language();
+        theme_ = state.theme();
     }
     if (!env_.channelOverride.empty()) channel_ = env_.channelOverride;
 
@@ -287,6 +288,15 @@ void LauncherSession::setLanguage(const std::string& code) {
     LauncherState state;
     if (!state.load(launcherIniPath(env_.roots), nullptr)) return;
     state.setLanguage(code);
+    createDirectories(env_.roots.launcherDir());
+    state.save(nullptr);
+}
+
+void LauncherSession::setTheme(const std::string& mode) {
+    theme_ = (mode == "dark" || mode == "light") ? mode : std::string();
+    LauncherState state;
+    if (!state.load(launcherIniPath(env_.roots), nullptr)) return;
+    state.setTheme(theme_);
     createDirectories(env_.roots.launcherDir());
     state.save(nullptr);
 }

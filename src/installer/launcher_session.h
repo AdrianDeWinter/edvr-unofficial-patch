@@ -197,6 +197,9 @@ public:
     // The saved language code, or empty when the file names none (the window then uses Windows).
     const std::string& language() const { return language_; }
     void setLanguage(const std::string& code);
+    // The saved theme ("dark", "light", or empty for system default).
+    const std::string& theme() const { return theme_; }
+    void setTheme(const std::string& mode);
     // Preferred VR headset mode, or VrHeadsetMode::NotSet when unset.
     edvr::VrHeadsetMode vrStereoMode() const { return vrStereoMode_; }
     void setVrStereoMode(edvr::VrHeadsetMode mode);
@@ -273,6 +276,7 @@ private:
     bool gameStarted_ = false;
     edvr::VrHeadsetMode vrStereoMode_ = edvr::VrHeadsetMode::NotSet;
     std::string language_;
+    std::string theme_;
     bool applying_ = false;
     std::string playLine_;
 };
