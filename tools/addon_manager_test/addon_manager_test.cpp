@@ -82,7 +82,7 @@ std::wstring getFixtureDllPath(const wchar_t* variant = L"") {
     return (p.parent_path() / (name + L".dll")).wstring();
 }
 
-// A fresh sandbox with an empty plugins directory and a bare edvr.ini.
+// A fresh sandbox with an empty plugins directory and a bare edup.ini.
 std::filesystem::path makeSandbox(const wchar_t* tag) {
     wchar_t tempPath[MAX_PATH]{};
     GetTempPathW(MAX_PATH, tempPath);
@@ -91,7 +91,7 @@ std::filesystem::path makeSandbox(const wchar_t* tag) {
     std::error_code ec;
     std::filesystem::remove_all(sb, ec);
     std::filesystem::create_directories(sb / L"plugins");
-    std::ofstream iniOut(sb / L"edvr.ini");
+    std::ofstream iniOut(sb / L"edup.ini");
     iniOut << "[general]\nmode = vr\n";
     return sb;
 }
@@ -180,7 +180,7 @@ int main(int argc, char** argv) {
 
     // Initial config without [addons] entry
     {
-        std::ofstream iniOut(sandbox / L"edvr.ini");
+        std::ofstream iniOut(sandbox / L"edup.ini");
         iniOut << "[general]\nmode = vr\n";
     }
 
@@ -435,7 +435,7 @@ int main(int argc, char** argv) {
     {
         auto sb = makeSandbox(L"float");
         {
-            std::ofstream iniOut(sb / L"edvr.ini");
+            std::ofstream iniOut(sb / L"edup.ini");
             iniOut << "[addon.float_owner.float_header]\nsaved = 0.75\n";
         }
         edvr::Config::get().init(sb.wstring());
@@ -556,7 +556,7 @@ int main(int argc, char** argv) {
         dropFixture(sb, L"settings", L"dormant.dll");
         const std::string dsha = edvr::plugins::PluginManager::calculateSha256((sb / L"plugins" / L"dormant.dll").wstring());
         {
-            std::ofstream iniOut(sb / L"edvr.ini");
+            std::ofstream iniOut(sb / L"edup.ini");
             iniOut << "[general]\nmode = vr\n[addons]\ndormant = " << dsha << "\n";
         }
         edvr::Config::get().init(sb.wstring());
@@ -714,7 +714,7 @@ int main(int argc, char** argv) {
         // Persisted values do not cross owners either.
         auto sb = makeSandbox(L"identity");
         {
-            std::ofstream iniOut(sb / L"edvr.ini");
+            std::ofstream iniOut(sb / L"edup.ini");
             iniOut << "[addon.tool_a.tools]" << std::endl << "enabled = on" << std::endl;
         }
         edvr::Config::get().init(sb.wstring());
@@ -776,7 +776,7 @@ int main(int argc, char** argv) {
         dropFixture(sb, L"settings", L"pass.dll");
         const std::string psha = edvr::plugins::PluginManager::calculateSha256((sb / L"plugins" / L"pass.dll").wstring());
         {
-            std::ofstream iniOut(sb / L"edvr.ini");
+            std::ofstream iniOut(sb / L"edup.ini");
             iniOut << "[general]\nmode = vr\n[addons]\npass = " << psha << "\n";
         }
         edvr::Config::get().init(sb.wstring());
@@ -829,7 +829,7 @@ int main(int argc, char** argv) {
         check(std::string(def.key) == "Enabled", "keycase: the addon's own key string is untouched");
         const size_t lastDot = dotted.find_last_of('.');
         {
-            std::ofstream iniOut(sb / L"edvr.ini");   // what the menu's write leaves: the section and key of the dotted name
+            std::ofstream iniOut(sb / L"edup.ini");   // what the menu's write leaves: the section and key of the dotted name
             iniOut << "[general]\nmode = vr\n[" << dotted.substr(0, lastDot) << "]\n" << dotted.substr(lastDot + 1) << " = on\n";
         }
         edvr::Config::get().init(sb.wstring());   // the next initialisation parses the saved file
@@ -850,7 +850,7 @@ int main(int argc, char** argv) {
         dropFixture(sb, L"", L"foo\\plugin.dll");
         const std::string fsha = edvr::plugins::PluginManager::calculateSha256((sb / L"plugins" / L"foo.dll").wstring());
         {
-            std::ofstream iniOut(sb / L"edvr.ini");
+            std::ofstream iniOut(sb / L"edup.ini");
             iniOut << "[general]\nmode = vr\n[addons]\nfoo = " << fsha << "\n";
         }
         edvr::Config::get().init(sb.wstring());
@@ -895,7 +895,7 @@ int main(int argc, char** argv) {
         auto sb3 = makeSandbox(L"dupone");
         dropFixture(sb3, L"", L"foo.dll");
         {
-            std::ofstream iniOut(sb3 / L"edvr.ini");
+            std::ofstream iniOut(sb3 / L"edup.ini");
             iniOut << "[general]\nmode = vr\n[addons]\nfoo = " << fsha << "\n";
         }
         edvr::Config::get().init(sb3.wstring());

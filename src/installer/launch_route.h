@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 
+#include "../common/stereo_mode.h"
+
 namespace edvr::installer {
 
 enum class RouteKind { None, Steam, Epic, Frontier };
@@ -96,6 +98,8 @@ struct RouteOps {
     std::function<bool(const std::wstring& uri)> openUri;
     std::function<bool(const std::wstring& exe, const std::wstring& args, const std::wstring& workDir)> spawn;
     bool underWine = false;  // Steam's URI must reach the native client, not Proton's restart event.
+    // True when openUri spawns a wrapped executable (e.g. Steam %command%) that already receives /vr or /novr.
+    bool wrappedCarriesMode = false;
 };
 RouteOps realRouteOps();
 
@@ -105,6 +109,38 @@ const char* elevatedRefusal();
 // Starts the route. Refuses when `elevated` is true: the game must never start from an
 // elevated process. `error` says why on false.
 bool startRoute(const LaunchRoute& route, const RouteOps& ops, bool elevated, std::string* error);
+
+// Default path to Elite's Settings.xml. On Wine/Linux, derives Elite's Proton compatdata prefix
+// from `gameDir` when it sits under a Steam library (so a launcher running in another prefix still
+// targets Elite's own Settings.xml), falling back to %LOCALAPPDATA%.
+std::wstring defaultEliteSettingsXmlPath(const std::wstring& gameDir = std::wstring());
+
+// Reads Elite's Settings.xml and returns its VR headset mode (3..6) when already set, else NotSet.
+// Used to seed vr_3d_mode once for existing VR players while keeping NotSet for new VR users.
+edvr::VrHeadsetMode detectVrHeadsetModeFromSettingsXml(const std::wstring& settingsXmlPath);
+
+struct SettingsXmlSnapshot {
+    bool modified = false;
+    bool wasReadOnly = false;
+    std::wstring path;
+    std::wstring backupPath;
+};
+
+// Restores Settings.xml from a snapshot written by prepareSettingsXmlForLaunch (e.g. when opening
+// the store URI fails after Settings.xml was already modified), preserving read-only state.
+bool restoreSettingsXmlFromSnapshot(const SettingsXmlSnapshot& snapshot, std::string* error = nullptr);
+
+// Prepares Elite's Settings.xml for a launch (`vr` = true for VR, false for flat) before starting the
+// store client. Refuses if `gameExeName` (when non-empty) is already running. Keeps a one-time
+// Settings.xml.ed-up-original (the untouched original before ED-UP first writes) plus a rolling
+// Settings.xml.bak in `backupDir`. If Settings.xml is read-only, temporarily clears read-only for
+// the write and restores it afterward (failing with the file path if read-only cannot be cleared).
+// For flat, leaves <= 1 untouched, rewrites >= 2 to 0, or inserts 0 before </GraphicsOptions>.
+// For VR, requires `preferredVrMode` != NotSet (refuses without modifying the file when NotSet).
+bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std::wstring& backupDir, bool vr,
+                                 edvr::VrHeadsetMode preferredVrMode, std::string* error,
+                                 const std::wstring& gameExeName = L"EliteDangerous64.exe",
+                                 SettingsXmlSnapshot* snapshot = nullptr);
 
 // The names the watcher looks for, so that a rig can use programs of its own.
 struct WatchNames {

@@ -24,11 +24,27 @@
 
 namespace edvr::installer {
 
-// %LOCALAPPDATA%\EDVR. Empty if even the environment variable fallback fails,
+// %LOCALAPPDATA%\EDUP. Empty if even the environment variable fallback fails,
 // which callers treat as "no mirror today" rather than an error -- a settings
 // edit or an install must never fail because its safety net could not be
 // found.
 std::wstring defaultMirrorRoot();
+// The data root an elevated copy uses for the user's settings: `asked` (--user-data-root, from the unelevated parent) when it
+// names a folder <drive>:\...\AppData\Local\EDUP with no link along the path, else this process's own defaultMirrorRoot().
+// The check keeps a crafted argument from pointing the elevated writes anywhere else.
+std::wstring userDataRootOf(const std::wstring& asked);
+bool acceptableUserDataRoot(const std::wstring& root);
+
+// Legacy %LOCALAPPDATA%\EDVR root corresponding to `root` (when `root` ends in EDUP), else empty.
+std::wstring legacyMirrorRootFor(const std::wstring& root);
+
+// Legacy %LOCALAPPDATA%\EDVR\<install> folder corresponding to `mirrorDir`, else empty.
+std::wstring legacyMirrorDirFor(const std::wstring& mirrorDir);
+
+// Non-destructively copies launcher state, cached payloads, seat memory, and install metadata
+// from a legacy %LOCALAPPDATA%\EDVR tree into `newRoot` when absent. Never overwrites existing
+// files in `newRoot` and leaves legacy edvr*.ini files intact for timestamp-aware migration.
+bool migrateLegacyDataRoot(const std::wstring& newRoot);
 
 // <root>\<leaf of game.dir>-<store>, e.g.
 // ...\EDVR\elite-dangerous-odyssey-64-steam
@@ -106,22 +122,12 @@ MirrorResult updateMirror(const std::wstring& gameDir, const std::wstring& backu
 // generation per toggle would push the copy worth keeping out in three.
 MirrorResult updateMirrorIni(const std::wstring& gameDir, const std::wstring& mirrorDir);
 
-// Copies the mirror back into a game folder that has lost its settings: the
-// newest copy of each settings file settingsToRestore names for `scope` -- never
-// a file the folder already has -- to the folder's root; edvr.ini.base,
-// edvr-flat.ini.base and state.ini into edvr_install\ where the folder lacks them
-// (so the next install still merges as an update instead of starting from
-// scratch; a present record or base is the current install's and is kept); and the backup pair into
-// a fresh edvr_backup\restored-<stamp>\ -- exactly where the installer's own scan
-// for a genuine original openvr_api.dll already looks.
-//
-// Returns false when there is nothing to restore (nothing was attempted), and
-// when ANY settings file it set out to copy could not be copied back -- the
-// others may have been, and `notes` says which is which, so a caller never
-// reports a restore that put back the shared edvr.ini and lost the flat
-// profile's file. A failure to restore the record or the backup pair is a note,
-// not a failure: the settings are what somebody would miss.
+// Copies the mirror back into a game folder (or `targetSettingsDir` when supplied) that has lost
+// its settings: the newest copy of each settings file settingsToRestore names for `scope` -- never
+// a file the destination already has; edup.ini.base, edup-flat.ini.base and state.ini into
+// edup_install\ where the folder lacks them; and the backup pair into edup_backup\restored-<stamp>\.
 bool restoreFromMirror(const std::wstring& gameDir, const MirrorInfo& info, const std::string& scope,
-                       std::vector<std::string>* notes);
+                       std::vector<std::string>* notes,
+                       const std::wstring& targetSettingsDir = std::wstring());
 
 }  // namespace edvr::installer

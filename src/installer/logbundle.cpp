@@ -16,6 +16,7 @@
 #include "../common/elite_graphics_folder.h"
 #include "../common/iniedit.h"
 #include "../common/install_scope.h"
+#include "../common/mirror_location.h"
 #include "state.h"
 
 namespace edvr::installer {
@@ -30,7 +31,8 @@ const long long kSessionWindowSeconds = 180;
 // a canonical descriptor first, so a record an older install left cannot outvote the files; then the record; then the descriptor's own
 // text (schema 1 `profile = flat`). Everything else is VR.
 std::string scopeOf(const std::wstring& gameDir) {
-    const std::string descriptor = readTextFile(joinPath(gameDir, L"edvr_profile.ini"));
+    std::string descriptor = readTextFile(joinPath(gameDir, L"edup_profile.ini"));
+    if (descriptor.empty()) descriptor = readTextFile(joinPath(gameDir, L"edvr_profile.ini"));
     const std::string canonical = canonicalDescriptorScope(descriptor);
     if (!canonical.empty()) return canonical;
     const InstallState state = readState(gameDir);
@@ -39,11 +41,36 @@ std::string scopeOf(const std::wstring& gameDir) {
     return parsed == edvr::InstallScope::Invalid ? std::string("vr") : std::string(edvr::scopeName(parsed));
 }
 
-// The log folder one settings file names: its log.dir, or edvr_logs beside the game when the file is absent or names none. The runtime
-// resolves it the same way.
+// The log folder one settings file names: its log.dir, or edup_logs beside the game when the file is absent or names none.
 std::wstring logDirOf(const std::wstring& gameDir, const std::wstring& iniPath) {
     const std::string configured = iniValue(readTextFile(iniPath), "log.dir");
-    return configured.empty() ? joinPath(gameDir, L"edvr_logs") : fromUtf8(configured);
+    return configured.empty() ? joinPath(gameDir, L"edup_logs") : fromUtf8(configured);
+}
+
+std::wstring localAppDataDirForLogs() {
+    PWSTR known = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &known)) && known) {
+        std::wstring out = known;
+        CoTaskMemFree(known);
+        return out;
+    }
+    wchar_t env[MAX_PATH]{};
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", env, MAX_PATH);
+    return n && n < MAX_PATH ? std::wstring(env, n) : std::wstring();
+}
+
+std::wstring resolveBundleIniPath(const std::wstring& gameDir, const std::wstring& userDir,
+                                  const char* profile) {
+    const std::wstring candidates[] = {
+        userDir.empty() ? std::wstring() : settingsPathFor(userDir, profile),
+        settingsPathFor(gameDir, profile),
+        legacySettingsPathFor(gameDir, profile),
+        userDir.empty() ? std::wstring() : legacySettingsPathFor(userDir, profile),
+    };
+    for (const std::wstring& p : candidates) {
+        if (!p.empty() && fileExists(p)) return p;
+    }
+    return userDir.empty() ? settingsPathFor(gameDir, profile) : settingsPathFor(userDir, profile);
 }
 
 // The zip prefix for a file from log folder `folder` (0-based) whose plain name the zip already holds: two folders can each hold a file
@@ -733,17 +760,23 @@ LogBundle collectLogs(const std::wstring& gameDir, const std::wstring& outDir,
         return bundle;
     }
 
-    // Where the logs are is a setting, and each settings file names its own: edvr.ini
-    // and edvr-flat.ini may point at different folders, so both are read and each
-    // distinct folder is swept (the same folder twice is swept once).
-    const std::wstring sharedIniPath = joinPath(gameDir, L"edvr.ini");
-    const std::wstring flatIniPath = joinPath(gameDir, L"edvr-flat.ini");
+    // Where the logs are is a setting, and each settings file names its own: edup.ini
+    // and edup-flat.ini (in %LOCALAPPDATA%\EDUP\<install> or legacy gameDir) may point at
+    // different folders, so both are read and each distinct folder is swept (plus legacy edvr_logs\).
+    const std::wstring userSettingsDir = edvr::runtimeMirrorDirFor(localAppDataDirForLogs(), gameDir, false);
+    const std::wstring sharedIniPath = resolveBundleIniPath(gameDir, userSettingsDir, "vr");
+    const std::wstring flatIniPath = resolveBundleIniPath(gameDir, userSettingsDir, "flat");
     std::vector<std::wstring> logDirs;
-    for (const std::wstring& dir : {logDirOf(gameDir, sharedIniPath), logDirOf(gameDir, flatIniPath)}) {
+    auto addLogDir = [&](const std::wstring& dir) {
+        if (dir.empty()) return;
         const bool seen = std::any_of(logDirs.begin(), logDirs.end(),
                                       [&](const std::wstring& d) { return _wcsicmp(d.c_str(), dir.c_str()) == 0; });
         if (!seen) logDirs.push_back(dir);
-    }
+    };
+    addLogDir(logDirOf(gameDir, sharedIniPath));
+    addLogDir(logDirOf(gameDir, flatIniPath));
+    const std::wstring legacyLogs = joinPath(gameDir, L"edvr_logs");
+    if (dirExists(legacyLogs)) addLogDir(legacyLogs);
 
     // The scope is the one thing the summary of a bundle states: which settings file is this install's own.
     const std::string scope = scopeOf(gameDir);
@@ -834,21 +867,30 @@ LogBundle collectLogs(const std::wstring& gameDir, const std::wstring& outDir,
     std::wstring nativeIniPath;
     if (scope != "flat") {  // the runtime is installed for both and vr scopes
         const std::wstring openvrDir = findOpenvrDir(gameDir);
-        nativeIniPath = joinPath(openvrDir.empty() ? joinPath(gameDir, L"Openvr\\win64") : openvrDir,
-                                 L"edvr_openxr.ini");
+        const std::wstring ovrBase = openvrDir.empty() ? joinPath(gameDir, L"Openvr\\win64") : openvrDir;
+        nativeIniPath = joinPath(ovrBase, L"edup_openxr.ini");
+        if (!fileExists(nativeIniPath)) {
+            const std::wstring legacyNative = joinPath(ovrBase, L"edvr_openxr.ini");
+            if (fileExists(legacyNative)) nativeIniPath = legacyNative;
+        }
     }
+    const std::wstring crumbsPath = fileExists(joinPath(gameDir, L"edup_breadcrumbs.txt"))
+                                        ? joinPath(gameDir, L"edup_breadcrumbs.txt")
+                                        : joinPath(gameDir, L"edvr_breadcrumbs.txt");
+    const std::wstring fatalPath = fileExists(joinPath(gameDir, L"edup_FATAL.txt"))
+                                       ? joinPath(gameDir, L"edup_FATAL.txt")
+                                       : joinPath(gameDir, L"edvr_FATAL.txt");
+    const std::wstring installStatePath =
+        fileExists(statePath(gameDir)) ? statePath(gameDir) : legacyStatePath(gameDir);
     const Extra extras[] = {
-        {joinPath(gameDir, L"edvr_breadcrumbs.txt"), L"edvr_breadcrumbs.txt", nullptr},
-        {joinPath(gameDir, L"edvr_FATAL.txt"), L"edvr_FATAL.txt", nullptr},
-        // Each settings file is the one to miss when the scope installs it. A flat
-        // scope's runtime falls back to edvr.ini while it has no edvr-flat.ini, so
-        // there a missing edvr-flat.ini is only missed without an edvr.ini either.
-        {sharedIniPath, L"edvr.ini", scopeHasVrIni(scope) ? "edvr.ini is not there" : nullptr},
-        {flatIniPath, L"edvr-flat.ini",
-         scopeHasFlatIni(scope) && (scope != "flat" || !fileExists(sharedIniPath)) ? "edvr-flat.ini is not there"
+        {crumbsPath, leafOf(crumbsPath), nullptr},
+        {fatalPath, leafOf(fatalPath), nullptr},
+        {sharedIniPath, L"edup.ini", scopeHasVrIni(scope) ? "edup.ini is not there" : nullptr},
+        {flatIniPath, L"edup-flat.ini",
+         scopeHasFlatIni(scope) && (scope != "flat" || !fileExists(sharedIniPath)) ? "edup-flat.ini is not there"
                                                                                     : nullptr},
-        {statePath(gameDir), L"edvr_install_state.ini", nullptr},
-        {nativeIniPath, L"edvr_openxr.ini", nullptr},
+        {installStatePath, L"edup_install_state.ini", nullptr},
+        {nativeIniPath, nativeIniPath.empty() ? std::wstring(L"edup_openxr.ini") : leafOf(nativeIniPath), nullptr},
     };
     for (const Extra& extra : extras) {
         if (fileExists(extra.path)) {
@@ -1135,8 +1177,10 @@ LogBundle collectLogs(const std::wstring& gameDir, const std::wstring& outDir,
     if (haveNewestLog) {
         FILETIME end = sessionEnd;
         WIN32_FILE_ATTRIBUTE_DATA crumbs{};
-        if (GetFileAttributesExW(joinPath(gameDir, L"edvr_breadcrumbs.txt").c_str(),
-                                 GetFileExInfoStandard, &crumbs) &&
+        if ((GetFileAttributesExW(joinPath(gameDir, L"edup_breadcrumbs.txt").c_str(),
+                                  GetFileExInfoStandard, &crumbs) ||
+             GetFileAttributesExW(joinPath(gameDir, L"edvr_breadcrumbs.txt").c_str(),
+                                  GetFileExInfoStandard, &crumbs)) &&
             CompareFileTime(&crumbs.ftLastWriteTime, &end) > 0) {
             end = crumbs.ftLastWriteTime;
         }

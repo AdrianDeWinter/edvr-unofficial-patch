@@ -16,6 +16,9 @@
 //   language           Elite's language, as min-ed-launcher stores it: en, or a
 //                      language folder name (de, es, fr, pt-BR, ru). Missing means
 //                      the Windows language.
+//   vr_3d_mode         the VR headset mode written to Elite's Settings.xml for Play VR when the
+//                      store route does not pass /vr: hmd_headphones, hmd_speakers,
+//                      hmd_cinema_headphones, hmd_cinema_speakers, or not_set (default).
 //
 // A line this code does not know (another version's key, a comment) is kept as
 // it was, in place, so a newer launcher's file survives an older one. Saving is
@@ -24,6 +27,8 @@
 
 #include <string>
 #include <vector>
+
+#include "../common/stereo_mode.h"
 
 namespace edvr::installer {
 
@@ -61,6 +66,11 @@ public:
     bool closeAfterStart() const;
     void setCloseAfterStart(bool on);
 
+    // True only when the file says "on". When on, direct launch on a Steam install signs in with
+    // Frontier email/password instead of Steam's auth ticket (for non-Steam Frontier accounts).
+    bool steamFrontierLogin() const;
+    void setSteamFrontierLogin(bool on);
+
     static std::string modeKey(const std::wstring& installFolder);
     std::string mode(const std::wstring& installFolder) const;
     void setMode(const std::wstring& installFolder, const std::string& mode);
@@ -72,6 +82,10 @@ public:
     // Empty when the file does not name one. Not checked against the known codes.
     std::string language() const;
     void setLanguage(const std::string& code);
+
+    // Preferred VR headset mode, or VrHeadsetMode::NotSet when unset/unknown.
+    edvr::VrHeadsetMode vrStereoMode() const;
+    void setVrStereoMode(edvr::VrHeadsetMode mode);
 
     // The same folder by modeKey's rules: case, slash direction and a trailing separator do not count.
     static bool sameInstall(const std::wstring& a, const std::wstring& b);

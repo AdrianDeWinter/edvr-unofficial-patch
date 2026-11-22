@@ -366,30 +366,13 @@ void paintRow(const List* list, HDC dc, const RECT& rowRect, const SettingRow& r
 
     switch (row.def->kind) {
         case SettingKind::Toggle: {
-            const RECT box = toggleRect(list, geo);
-            const bool on = isOn(row.value);
-            const int height = box.bottom - box.top;
-            ui::fillRounded(dc, box, height / 2, on ? t.accent : t.control);
-            if (!on) ui::strokeRounded(dc, box, height / 2, t.controlBorder);
-            const int knob = height / 2 - dp(list, 3);
-            const int cx = on ? box.right - knob - dp(list, 4) : box.left + knob + dp(list, 4);
-            ui::fillCircle(dc, cx, (box.top + box.bottom) / 2, knob,
-                           on ? t.accentText : t.subtext);
+            ui::paintToggle(dc, toggleRect(list, geo), isOn(row.value), list->dpi);
             break;
         }
         case SettingKind::Choice: {
             std::string onValue;
             if (twoChoiceToggle(row, &onValue, nullptr)) {
-                const RECT box = toggleRect(list, geo);
-                const bool on = row.value == onValue;
-                const int height = box.bottom - box.top;
-                ui::fillRounded(dc, box, height / 2, on ? t.accent : t.control);
-                if (!on) ui::strokeRounded(dc, box, height / 2, t.controlBorder);
-                const int knob = height / 2 - dp(list, 3);
-                const int cx =
-                    on ? box.right - knob - dp(list, 4) : box.left + knob + dp(list, 4);
-                ui::fillCircle(dc, cx, (box.top + box.bottom) / 2, knob,
-                               on ? t.accentText : t.subtext);
+                ui::paintToggle(dc, toggleRect(list, geo), row.value == onValue, list->dpi);
                 break;
             }
             const std::vector<RECT> segments = segmentsFor(list, geo, row.choices.size());

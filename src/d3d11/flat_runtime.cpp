@@ -3997,12 +3997,12 @@ static void hdrReadKey(State& s, uint64_t frame) {
     const FlatHdrKey key = FlatHdrKey::Auto;
     s.hdrKey = key; s.hdrKeyRead = true;
     Log::get().note("flat late overlay blend diagnostic: event=armed ready=1 sample-limit=1-per-5s-window; actual bindings and GetDesc only on dual-source-blend refusal; acceptance unchanged");
-    // The crash-safe trail's first line (flat_hdr_crumbs.h): proof, in edvr_breadcrumbs.txt itself, that this build has the
+    // The crash-safe trail's first line (flat_hdr_crumbs.h): proof, in edup_breadcrumbs.txt itself, that this build has the
     // crumbs and that the route is on, so a trail without an "admitted" after it is a session that ended before the route
     // took a frame, and a file without it came from a build that has none or from a device that is not DXMT's (the gate: this
     // writes nothing, and the log says nothing, off DXMT). The log says so too, for whoever reads it first.
     if (hdrCrumbArmed(flatHdrKeyName(key)))
-        Log::get().note("flat hdr route: crash-safe trail on: edvr_breadcrumbs.txt gets a line before and after every step of the first "
+        Log::get().note("flat hdr route: crash-safe trail on: edup_breadcrumbs.txt gets a line before and after every step of the first "
                         "%u frames that reach the resolver, at most %u lines a session; if the process ends inside the treatment, the last "
                         "'gfx: hdr-treat' line there names the step",
             static_cast<unsigned>(kHdrCrumbFrames), static_cast<unsigned>(kHdrCrumbCap));
@@ -8303,7 +8303,7 @@ bool FlatRuntimeDrawScope::treatNoScene(bool stoodDown) {
 void FlatRuntimeDrawScope::treatHdr(const FlatMonoFrame& selected, uint32_t srvSlot) {
     auto& s = state();
     const FlatMonoResolveMode effectiveMode=s.engine;
-    // Crash-safe breadcrumbs (flat_hdr_crumbs.h, edvr_breadcrumbs.txt): the route took this frame. The first frames that
+    // Crash-safe breadcrumbs (flat_hdr_crumbs.h, edup_breadcrumbs.txt): the route took this frame. The first frames that
     // reach the resolver write a crumb before and after every step from here to the frame's Present, so a session that
     // ends inside the treatment names the step; after the third, this is one compare. They change nothing the route does.
     hdrCrumbAdmit(s.prefix.frame, flatMonoResolveModeName(effectiveMode));

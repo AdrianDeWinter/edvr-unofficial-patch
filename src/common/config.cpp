@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "log.h"
+#include "mirror_location.h"
 #include "runtime_profile.h"
 
 namespace edvr {
@@ -115,7 +116,7 @@ std::wstring environmentValue(const wchar_t* name) {
     return n && n < MAX_PATH ? std::wstring(buf, n) : std::wstring();
 }
 
-// Where logs go when the ini does not say: <exe dir>\edvr_logs, unless the
+// Where logs go when the ini does not say: <exe dir>\edup_logs, unless the
 // environment moves it. EDVR_LOG_DIR names the directory; EDVR_LOG_DIR_FOR,
 // when set, limits the move to processes whose exe sits in that directory.
 // build.bat's test runner sets both, so every proxy a rig loads from build\
@@ -125,39 +126,91 @@ std::wstring environmentValue(const wchar_t* name) {
 std::wstring defaultLogDirectory() {
     const std::wstring exeDir = executableDirectory();
     const std::wstring moved = environmentValue(L"EDVR_LOG_DIR");
-    if (moved.empty()) return exeDir + L"\\edvr_logs";
+    if (moved.empty()) return exeDir + L"\\edup_logs";
     const std::wstring only = environmentValue(L"EDVR_LOG_DIR_FOR");
-    if (!only.empty() && _wcsicmp(only.c_str(), exeDir.c_str()) != 0) return exeDir + L"\\edvr_logs";
+    if (!only.empty() && _wcsicmp(only.c_str(), exeDir.c_str()) != 0) return exeDir + L"\\edup_logs";
     return moved;
+}
+
+bool existingFile(const std::wstring& path) {
+    if (path.empty()) return false;
+    const DWORD attrs = GetFileAttributesW(path.c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+void resolveUserSettingsDirs(const std::wstring& moduleDir, const std::wstring& exeDir,
+                             std::wstring* edupDir, std::wstring* legacyEdvrDir) {
+    const std::wstring local = environmentValue(L"LOCALAPPDATA");
+    if (local.empty()) return;
+    const std::wstring edupRoot = local + L"\\" + kAppDataDirNameW;
+    *edupDir = runtimeMirrorDirForRoot(edupRoot, moduleDir, false);
+    if (edupDir->empty() && _wcsicmp(moduleDir.c_str(), exeDir.c_str()) != 0) {
+        *edupDir = runtimeMirrorDirForRoot(edupRoot, exeDir, false);
+    }
+    *legacyEdvrDir = runtimeLegacyMirrorDirFor(local, moduleDir);
+    if (legacyEdvrDir->empty() && _wcsicmp(moduleDir.c_str(), exeDir.c_str()) != 0) {
+        *legacyEdvrDir = runtimeLegacyMirrorDirFor(local, exeDir);
+    }
 }
 }  // namespace
 
 // The flat profile keeps its settings in a file of its own, so a flat install over a VR one
-// (or back) never clobbers the other profile's tuning. A flat install without edvr-flat.ini yet
-// falls back to edvr.ini, which is how existing flat installs keep their settings until the
-// installer seeds the separate file. init() and switchProfile() both pick through here.
+// (or back) never clobbers the other profile's tuning. Live settings live in the per-user
+// folder (%LOCALAPPDATA%\EDUP\<install>\edup*.ini) so unelevated runs never need write access
+// under Program Files; module/exe-beside files and legacy edvr*.ini names remain read fallbacks
+// until an install migrates. init() and switchProfile() both pick through here.
 std::wstring Config::chooseSettingsPath() const {
-    std::wstring candidates[4];
-    size_t count = 0;
+    const std::wstring exeDir = executableDirectory();
+    std::wstring edupDir, legacyDir;
+    resolveUserSettingsDirs(m_moduleDir, exeDir, &edupDir, &legacyDir);
+
+    std::vector<std::wstring> candidates;
+    auto push = [&](const std::wstring& dir, const wchar_t* leaf) {
+        if (!dir.empty()) candidates.push_back(dir + L"\\" + leaf);
+    };
+    const bool edupHasVr = !edupDir.empty() && existingFile(edupDir + L"\\" + kIniNameVrW);
     if (runtimeFlatProfile()) {
-        candidates[count++] = m_moduleDir + L"\\" + kIniNameFlatW;
-        candidates[count++] = executableDirectory() + L"\\" + kIniNameFlatW;
+        push(edupDir, kIniNameFlatW);
+        push(m_moduleDir, kIniNameFlatW);
+        push(exeDir, kIniNameFlatW);
+        push(m_moduleDir, kLegacyIniNameFlatW);
+        push(exeDir, kLegacyIniNameFlatW);
+        if (!edupHasVr) push(legacyDir, kLegacyIniNameFlatW);
     }
-    candidates[count++] = m_moduleDir + L"\\" + kIniNameVrW;
-    candidates[count++] = executableDirectory() + L"\\" + kIniNameVrW;
-    for (size_t i = 0; i < count; ++i) {
-        if (GetFileAttributesW(candidates[i].c_str()) != INVALID_FILE_ATTRIBUTES) return candidates[i];
+    push(edupDir, kIniNameVrW);
+    push(m_moduleDir, kIniNameVrW);
+    push(exeDir, kIniNameVrW);
+    push(m_moduleDir, kLegacyIniNameVrW);
+    push(exeDir, kLegacyIniNameVrW);
+    push(legacyDir, kLegacyIniNameVrW);
+
+    for (const std::wstring& candidate : candidates) {
+        if (existingFile(candidate)) return candidate;
     }
-    return candidates[0];
+    const wchar_t* preferred = runtimeFlatProfile() ? kIniNameFlatW : kIniNameVrW;
+    return (!edupDir.empty() ? edupDir : m_moduleDir) + L"\\" + preferred;
 }
 
 std::wstring Config::vrSettingsPath() const {
-    const std::wstring candidates[2] = {m_moduleDir + L"\\" + kIniNameVrW,
-                                        executableDirectory() + L"\\" + kIniNameVrW};
+    const std::wstring exeDir = executableDirectory();
+    std::wstring edupDir, legacyDir;
+    resolveUserSettingsDirs(m_moduleDir, exeDir, &edupDir, &legacyDir);
+
+    std::vector<std::wstring> candidates;
+    auto push = [&](const std::wstring& dir, const wchar_t* leaf) {
+        if (!dir.empty()) candidates.push_back(dir + L"\\" + leaf);
+    };
+    push(edupDir, kIniNameVrW);
+    push(m_moduleDir, kIniNameVrW);
+    push(exeDir, kIniNameVrW);
+    push(m_moduleDir, kLegacyIniNameVrW);
+    push(exeDir, kLegacyIniNameVrW);
+    push(legacyDir, kLegacyIniNameVrW);
+
     for (const std::wstring& candidate : candidates) {
-        if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) return candidate;
+        if (existingFile(candidate)) return candidate;
     }
-    return candidates[0];
+    return (!edupDir.empty() ? edupDir : m_moduleDir) + L"\\" + kIniNameVrW;
 }
 
 bool Config::switchProfile() {

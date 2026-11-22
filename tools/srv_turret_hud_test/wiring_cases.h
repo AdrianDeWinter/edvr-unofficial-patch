@@ -17,7 +17,7 @@
 //     beginFrame, after the previous frame's boundary tick), once for each new sequence.
 //   * journal_watch.cpp, native_temporal.cpp: the accessors; the Scorpion latch is fed the tail's new bytes once (not the stitched head the scan reads twice), reset with the
 //     file, published to its accessor, and each change said once with its event.
-//   * edvr.ini: all ten keys live in [experimental] (demoted from [fix] on 2026-11-01) with their ui: lines, no menu token, and the flown defaults; the flat profile's allow-list names none (VR only).
+//   * edup.ini: all ten keys live in [experimental] (demoted from [fix] on 2026-11-01) with their ui: lines, no menu token, and the flown defaults; the flat profile's allow-list names none (VR only).
 //   * the radar anchor (experimental.srv_turret_radar_anchor, srv_radar_anchor.cpp): the ninth key, its publish, the billboards it leaves to the game, the setter hook's pins, its compile-list entry and its
 //     exact-build audit entry (wiredAnchor); camera mode's slot hook and the radar picture's writers (wiredSlotCamera, wiredWriters); the camera rows the Unmap tee hands the module (wiredAnchorCpuRows).
 //   * the first scope's state note: the issues counted at the game's issue and the re-issues, each family's first scope saying its state (wiredStateNote).
@@ -294,7 +294,7 @@ static bool wiredStateNote(const std::string& vscreen, const std::string& t) {
            found(t.find("| raster: scissor=%d rects=%u first=[%ld,%ld,%ld,%ld] \"")) && found(t.find("\"depth_clip=%d cull=%d front_ccw=%d | viewport: x=%.0f y=%.0f w=%.0f h=%.0f\""));
 }
 
-// edvr.ini and the flat allow-list.
+// edup.ini and the flat allow-list.
 static bool wiredKeys(const std::string& ini, const std::string& flatKeys) {
     // [experimental] since 2026-11-01 (demoted from [fix]): the last section of the file, so a key is in it when it lies after the header and before any later one. The generator refuses a
     // `menu` token on an [experimental] key, and each ui: line below is matched through its newline so that one cannot hide after `live`.
@@ -348,7 +348,7 @@ static bool wiredTables(const std::string& shaderBuild, const std::string& varia
 // tick publishes the offset made from `on` (and from false in flat); a 5559BD94 draw the game's anchor carries is the game's own BEFORE it is counted; the draw path's switch needs the hook armed, the mode on or
 // reversed and the placement holding our offset; the shutdown shuts the gates. The setter hook: build 334925's identity, its prologue and the vtables; its callback ADDS the offset through the pure rule
 // (srv_turret_math.h radarPlacementMove) and hands the original the sum, and no code writes the placement fields itself (the first build's replace dropped the radar 1.96 m).
-// edvr.ini ships the key in [experimental] with its ui: line (no menu token), default camera; build.bat compiles the file; the address audit lists it as exact-build only.
+// edup.ini ships the key in [experimental] with its ui: line (no menu token), default camera; build.bat compiles the file; the address audit lists it as exact-build only.
 static bool wiredAnchor(const std::string& module, const std::string& hook, const std::string& ini, const std::string& build, const std::string& audit) {
     const size_t npos = std::string::npos;
     const size_t key = module.find("cfg.getString(\"experimental.srv_turret_radar_anchor\", \"off\")");
@@ -492,7 +492,7 @@ static bool wiredBuild(const std::string& t) {
 static void wiringCases() {
     const std::string vscreen = readText("src/d3d11/vscreen.cpp"), onFoot = readText("src/d3d11/native_on_foot.cpp"), module = readText("src/d3d11/srv_turret.cpp"),
                       journal = readText("src/d3d11/journal_watch.cpp"), journalH = readText("src/d3d11/journal_watch.h"), temporal = readText("src/d3d11/native_temporal.cpp"),
-                      ini = readText("edvr.ini"), flatKeys = readText("src/common/flat_profile_keys.h"), build = readText("build.bat"),
+                      ini = readText("edup.ini"), flatKeys = readText("src/common/flat_profile_keys.h"), build = readText("build.bat"),
                       shaderBuild = readText("tools/temporal_shader_build/temporal_shader_build.cpp"), variants = readText("tools/temporal_shader_build/fixed_srv_turret_variants.h"),
                       anchorHook = readText("src/d3d11/srv_radar_anchor.cpp"), audit = readText("tools/hook_signatures.py");
     const std::string mathText = readText("src/d3d11/srv_turret_math.h");
@@ -626,7 +626,7 @@ static void wiringCases() {
           "control: a frame sequence published before the shift is copied (a reader would see a half-built frame) trips the pin");
     check(!wiredAccessors(journal, replaced(temporal, "g_recommended.store(0,std::memory_order_release);g_frameSequence.store(0,std::memory_order_release);", "g_recommended.store(0,std::memory_order_release);"), journalH),
           "control: a frame sequence that survives an invalidate trips the pin");
-    check(wiredKeys(ini, flatKeys), "edvr.ini: the ten keys in [experimental] with their ui: lines (no menu token) and the flown defaults; the flat profile's allow-list names none");
+    check(wiredKeys(ini, flatKeys), "edup.ini: the ten keys in [experimental] with their ui: lines (no menu token) and the flown defaults; the flat profile's allow-list names none");
     check(!wiredKeys(replaced(ini, "\nsrv_turret_hud_gap = 0\n", "\nsrv_turret_hud_gap = 96\n"), flatKeys), "control: a drifted shipped default of the gap trips the pin");
     check(!wiredKeys(replaced(ini, "\nsrv_turret_panels_back = 0\n", "\nsrv_turret_panels_back = 100\n"), flatKeys), "control: a drifted shipped default of the panels' push trips the pin");
     check(!wiredKeys(replaced(ini, "\nsrv_turret_hud_forward = 0\n", "\nsrv_turret_hud_forward = 60\n"), flatKeys), "control: a drifted shipped default of the HUD-forward key trips the pin");
@@ -636,10 +636,10 @@ static void wiringCases() {
     check(!wiredKeys(replaced(ini, "\nsrv_turret_hud_up = 10\n", "\nsrv_turret_hud_up = 20\n"), flatKeys), "control: a drifted shipped default of the weapon-panel height key trips the pin");
     check(!wiredKeys(replaced(ini, "\nsrv_turret_gunner_up = 35\n", "\nsrv_turret_gunner_up = 20\n"), flatKeys), "control: a drifted shipped default of the gunner-panel height key trips the pin");
     check(!wiredKeys(replaced(ini, "\nsrv_turret_cards_up = 0\n", "\nsrv_turret_cards_up = 20\n"), flatKeys), "control: a drifted shipped default of the cards-up key trips the pin");
-    check(!wiredKeys(replaced(ini, "\nsrv_turret_cards_up = 0\n", "\nsrv_turret_cards_up = 0\nsrv_turret_bracket_cut = 3\n"), flatKeys), "control: the removed bracket cut key back in edvr.ini trips the pin");
-    check(!wiredKeys(replaced(ini, "\nsrv_turret_cards_up = 0\n", "\nsrv_turret_cards_up = 0\nsrv_turret_" "target_card_shift = 7\n"), flatKeys), "control: the removed target-card shift key back in edvr.ini trips the pin");
-    check(!wiredKeys(replaced(ini, "\nsrv_turret_cards_up = 0\n", "\nsrv_turret_cards_up = 0\nsrv_turret_" "systems_card_shift = 3\n"), flatKeys), "control: the removed systems-card shift key back in edvr.ini trips the pin");
-    check(!wiredKeys(replaced(ini, "\nsrv_turret_cards_up = 0\n", "\nsrv_turret_cards_up = 0\nsrv_turret_" "systems_card_up = 5\n"), flatKeys), "control: the removed systems-card raise key back in edvr.ini trips the pin");
+    check(!wiredKeys(replaced(ini, "\nsrv_turret_cards_up = 0\n", "\nsrv_turret_cards_up = 0\nsrv_turret_bracket_cut = 3\n"), flatKeys), "control: the removed bracket cut key back in edup.ini trips the pin");
+    check(!wiredKeys(replaced(ini, "\nsrv_turret_cards_up = 0\n", "\nsrv_turret_cards_up = 0\nsrv_turret_" "target_card_shift = 7\n"), flatKeys), "control: the removed target-card shift key back in edup.ini trips the pin");
+    check(!wiredKeys(replaced(ini, "\nsrv_turret_cards_up = 0\n", "\nsrv_turret_cards_up = 0\nsrv_turret_" "systems_card_shift = 3\n"), flatKeys), "control: the removed systems-card shift key back in edup.ini trips the pin");
+    check(!wiredKeys(replaced(ini, "\nsrv_turret_cards_up = 0\n", "\nsrv_turret_cards_up = 0\nsrv_turret_" "systems_card_up = 5\n"), flatKeys), "control: the removed systems-card raise key back in edup.ini trips the pin");
     check(!wiredKeys(replaced(ini, "\nsrv_turret_hud_depth = game\n", "\nsrv_turret_hud_depth = front\n"), flatKeys), "control: a drifted shipped default of the depth key trips the pin");
     check(!wiredKeys(replaced(ini, "# ui: SRV turret HUD depth | choices front, game, real | recommended game", "# ui: SRV turret HUD depth | choices front, game, real | recommended front"), flatKeys), "control: a drifted recommendation of the depth key trips the pin");
     check(!wiredKeys(replaced(ini, "recommended 80 | live\n", "recommended 80 | live | menu\n"), flatKeys), "control: a menu token on an [experimental] key (the generator refuses it) trips the pin");

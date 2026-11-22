@@ -67,6 +67,7 @@ struct SessionEnv {
     std::wstring payloadDir;       // --payload, or empty
     std::string  channelOverride;  // --channel for this run, or empty to read launcher.ini
     bool         closeAfterStartArg = false;  // --close-after-start for this run; the saved setting is read too
+    bool         frontierLoginArg = false;    // --frontier-login for this run; uses Frontier account on Steam direct launch
     bool         updatedFlag = false;  // started by a self-update: carry on into the update
     std::wstring selfExe;          // the running exe: hashed for the check, replaced by self-update
     const char* const* keys = nullptr;  // null means the release keys
@@ -104,6 +105,15 @@ struct SessionEnv {
     // Frontier-store install cannot ask, so direct launch stops where it would have.
     std::function<bool(const std::string& note, LoginForm* form)> askLogin;
     std::function<bool(const std::string& email, const std::string& note, std::string* code)> askCode;
+
+    // Optional pre-launch Settings.xml helpers for store routes that do not pass /vr or /novr
+    // (Steam and Epic non-direct):
+    // - detectVrMode: reads an existing 3..6 VR mode from Settings.xml to seed vr_3d_mode once.
+    // - prepareLaunchMode: writes Settings.xml before startRoute; returning false stops Play.
+    // - restoreLaunchMode: rolls Settings.xml back from its snapshot if startRoute fails.
+    std::function<edvr::VrHeadsetMode(const std::wstring& gameDir)> detectVrMode;
+    std::function<bool(bool vr, edvr::VrHeadsetMode preferredVrMode, std::string* error)> prepareLaunchMode;
+    std::function<void()> restoreLaunchMode;
 };
 
 class LauncherSession {
@@ -159,9 +169,21 @@ public:
     bool closeAfterStart() const { return closeAfterStart_ || env_.closeAfterStartArg; }
     // The saved setting alone, which is what the window's checkbox shows.
     bool closeAfterStartSetting() const { return closeAfterStart_; }
+    // Whether direct launch on a Steam install signs in with a Frontier account instead of Steam.
+    bool steamFrontierLogin() const { return steamFrontierLogin_ || env_.frontierLoginArg; }
+    bool steamFrontierLoginSetting() const { return steamFrontierLogin_; }
+    // `clearSavedLogin`: delete the shared frontier-login.dat when transitioning on -> off.
+    // Pass false when a Frontier-store install also exists so its saved login is preserved.
+    void setSteamFrontierLogin(bool on, bool clearSavedLogin = false);
     // The saved language code, or empty when the file names none (the window then uses Windows).
     const std::string& language() const { return language_; }
     void setLanguage(const std::string& code);
+    // Preferred VR headset mode, or VrHeadsetMode::NotSet when unset.
+    edvr::VrHeadsetMode vrStereoMode() const { return vrStereoMode_; }
+    void setVrStereoMode(edvr::VrHeadsetMode mode);
+    // If vrStereoMode() is NotSet and env_.detectVrMode finds an existing 3..6 mode in
+    // Settings.xml, persists that mode to launcher.ini as the new saved default.
+    edvr::VrHeadsetMode seedVrStereoModeFromSettings(const std::wstring& gameDir);
     // Saves the setting to launcher.ini. The window's checkbox; --close-after-start does not write it.
     void setCloseAfterStart(bool on);
     // True once the game has been seen running (or the direct start gave a process), for the run's exit code.
@@ -191,9 +213,11 @@ private:
     void gameIsRunning();
     // `direct` is the skip-the-launcher checkbox. Only an Epic install uses it here: Steam and
     // the Frontier store sign in themselves before this is called.
+    // `allowUnsetVrMode` is true on a direct-launch fallback: the VR 3D mode selector is hidden
+    // while direct launch is on, so an unset mode skips the Settings.xml write rather than failing.
     void startRouteAndWatch(const std::wstring& source, const std::wstring& gameDir, bool vr, bool elevated,
                             const RouteOps& ops, const WatchNames& names, const WatchTiming& timing,
-                            const std::string& startLine, bool direct = false);
+                            const std::string& startLine, bool direct = false, bool allowUnsetVrMode = false);
     void beginDirectPlay(const std::wstring& source, const std::wstring& gameDir, bool vr, const RouteOps& ops,
                          const WatchNames& names, const WatchTiming& timing);
     // Posts `ask` to the window's thread and waits for it from the worker. False when it was cancelled or
@@ -216,7 +240,9 @@ private:
     bool playing_ = false;
     bool directLaunch_ = false;
     bool closeAfterStart_ = false;
+    bool steamFrontierLogin_ = false;
     bool gameStarted_ = false;
+    edvr::VrHeadsetMode vrStereoMode_ = edvr::VrHeadsetMode::NotSet;
     std::string language_;
     bool applying_ = false;
     std::string playLine_;

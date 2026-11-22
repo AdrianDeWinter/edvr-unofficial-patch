@@ -90,13 +90,12 @@ const std::vector<SettingDef>& settingDefs();
 // written back to it.
 class SettingsModel {
 public:
-    // Reads the edition's settings file in <gameDir>: edvr.ini for "vr",
-    // edvr-flat.ini for "flat" (state.h, settingsLeafFor). Absent is not an
-    // error: every setting then reads at its shipped value, and the first change
-    // writes the file. The flat runtime reads edvr.ini while it has no
-    // edvr-flat.ini, so until then that is what a flat model shows -- and the
-    // first change starts edvr-flat.ini from it, leaving edvr.ini as it is.
-    bool load(const std::wstring& gameDir, const std::string& profile = "vr");
+    // Reads the edition's settings file in `settingsDir` (or `gameDir` when empty): edup.ini for
+    // "vr", edup-flat.ini for "flat" (state.h, settingsLeafFor), falling back on read to legacy
+    // edvr.ini / edvr-flat.ini in `gameDir` or %LOCALAPPDATA%\EDVR until migrated. Writes always
+    // target `settingsDir` (per-user %LOCALAPPDATA%\EDUP\<install>\).
+    bool load(const std::wstring& gameDir, const std::string& profile = "vr",
+              const std::wstring& settingsDir = std::wstring());
 
     bool loaded() const { return m_loaded; }
     const std::wstring& gameDir() const { return m_gameDir; }
@@ -120,8 +119,9 @@ private:
     bool                   m_backedUp = false;  // one copy per session, before the first change
     std::string            m_profile;           // "vr" or "flat": which file, and which rows (flat shows the keys flat reads)
     std::wstring           m_gameDir;
+    std::wstring           m_settingsDir; // where live edup*.ini files live (%LOCALAPPDATA%\EDUP\<install> or gameDir)
     std::wstring           m_iniPath;     // the edition's own file: where every write goes
-    std::wstring           m_sharedPath;  // flat only: the edvr.ini it falls back to; else empty
+    std::wstring           m_sharedPath;  // flat only: the edup.ini it falls back to; else empty
     std::string            m_text;   // the file as it stands
     std::vector<SettingRow> m_rows;
     std::string            m_error;

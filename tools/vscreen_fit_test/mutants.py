@@ -69,7 +69,7 @@ PIN_FILES = [
     "src/d3d11/vscreen_footprint.cpp",
     "src/d3d11/flat_runtime.cpp",
     "src/common/vscreen_auto_state.cpp",
-    "edvr.ini",
+    "edup.ini",
 ]
 
 
@@ -250,16 +250,16 @@ MUTANTS = [
     M("pin-quality-default-drifts", "R12c", [('cfg.getString("fix.ui_quality", "100")', 'cfg.getString("fix.ui_quality", "125")')], "the resolver's fix.ui_quality default is not the layer's", "src/d3d11/vscreen_res.cpp"),
     M("pin-route-default-drifts", "R12b", [("f.keyAuto = true;", "f.keyAuto = false;")], "the resolver no longer states the on-foot world route as on", "src/d3d11/vscreen_res.cpp"),
     M("pin-layer-reason-dropped", "R12c", [("uiLayerNotLiveReasonFor(target, temporal, jitterAsShipped, /*stoodDown=*/false)", "nullptr")], "the resolver does not ask why the layer is not live", "src/d3d11/vscreen_res.cpp"),
-    M("pin-ini-forgets-the-rule", "R12o", [("#   fitted   when the VR on-foot world route will run (it needs", "#   fitted   when the VR on-foot route will run (it needs")], "the ini's text no longer names the world route", "edvr.ini"),
-    M("pin-ini-forgets-the-restart", "R12o", [("# while it runs (never any file on disk). Needs a game restart; typing the", "# while it runs (never any file on disk). Takes effect later; typing the")], "the ini's text no longer says a restart is needed", "edvr.ini"),
-    M("pin-ini-curve-stops-it", "R12o", [("fix.panel_curvature, does not stop it)", "fix.panel_curvature at 0)")], "the ini's text says a curved screen holds the route off again", "edvr.ini"),
+    M("pin-ini-forgets-the-rule", "R12o", [("#   fitted   when the VR on-foot world route will run (it needs", "#   fitted   when the VR on-foot route will run (it needs")], "the ini's text no longer names the world route", "edup.ini"),
+    M("pin-ini-forgets-the-restart", "R12o", [("# while it runs (never any file on disk). Needs a game restart; typing the", "# while it runs (never any file on disk). Takes effect later; typing the")], "the ini's text no longer says a restart is needed", "edup.ini"),
+    M("pin-ini-curve-stops-it", "R12o", [("fix.panel_curvature, does not stop it)", "fix.panel_curvature at 0)")], "the ini's text says a curved screen holds the route off again", "edup.ini"),
     M("pin-ini-curve-at-zero-added", "R12o", [("#            layer on, and ED-UP's own OpenXR runtime; a curved screen,", "#            layer on, fix.panel_curvature at 0, and ED-UP's own OpenXR runtime; a curved screen,")],
-      "the ini's text lists the old condition beside the new sentence", "edvr.ini"),
+      "the ini's text lists the old condition beside the new sentence", "edup.ini"),
     M("pin-ini-says-it-is-the-width", "R12o", [("does not stop it): about 70% of the\n#            width the screen has in your eyes head-on", "does not stop it): the width the screen has in your eyes head-on")],
-      "the ini's text says the fitted width is the screen's width, not about 70% of it", "edvr.ini"),
-    M("pin-ini-forgets-the-floor", "R12o", [("remembers its head-on floor", "remembers its median")], "the ini's text says a median is remembered, not the head-on floor", "edvr.ini"),
+      "the ini's text says the fitted width is the screen's width, not about 70% of it", "edup.ini"),
+    M("pin-ini-forgets-the-floor", "R12o", [("remembers its head-on floor", "remembers its median")], "the ini's text says a median is remembered, not the head-on floor", "edup.ini"),
     M("pin-ini-calibration-forgotten", "R12o", [("# starts from a calibration (3504 wide at panel_distance 0.7 on a 4032 wide\n# eye, where", "# starts from a calibration (3200 wide at panel_distance 0.7 on a 4032 wide\n# eye, where")],
-      "the ini's text quotes another calibration width", "edvr.ini"),
+      "the ini's text quotes another calibration width", "edup.ini"),
     # ---- a save that fails (R11 runs the writer on disk against obstacles: a state mutation links an edited copy of vscreen_auto_state.cpp) ----------
     M("state-failure-reported-as-success", "R11g", [("        return refused(error);\n    }\n    return true;\n}", "        refused(error);\n        return true;\n    }\n    return true;\n}")],
       "the writer says true although the record did not reach the file", STATE_SRC),

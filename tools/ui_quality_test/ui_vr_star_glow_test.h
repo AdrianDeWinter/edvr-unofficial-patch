@@ -676,7 +676,7 @@ std::vector<Pin> wiringPins(const Sources& src) {
                         "flat profile only, a star input alone still makes H', no input makes none, and the HUD-less uiLayerStarFeed it replaced is gone"});
     }
     pins.push_back({"visual-page", has(src.ini, "| live | menu visual\nstar_glow = 100") && !has(src.ini, "| live | menu flat_visual\nstar_glow = 100"),
-                    "the Star glow row is `menu visual` in the shipped edvr.ini: VR's Visual page lists it (and the hint beside it) and the flat tab still does (kFlatVisualRows)"});
+                    "the Star glow row is `menu visual` in the shipped edup.ini: VR's Visual page lists it (and the hint beside it) and the flat tab still does (kFlatVisualRows)"});
     pins.push_back({"bloom-reading", has(menu, "sgb::BloommenuStarGlowBloom(){returng_s.starGlowBloom.state();}"),
                     "the Bloom reading the glow pauses on is the menu's own Watch (the hint's reader), not a second parser"});
     return pins;
@@ -690,11 +690,11 @@ void testWiring() {
     src.modH = readText("src/d3d11/vr_star_glow.h");
     src.uiLayer = readText("src/d3d11/ui_layer.cpp");
     src.buildBat = readText("build.bat");
-    src.ini = readText("edvr.ini");
+    src.ini = readText("edup.ini");
     src.menu = readText("src/d3d11/menu.cpp");
     check(!src.vscreen.empty() && !src.deviceHook.empty() && !src.mod.empty() && !src.modH.empty() && !src.uiLayer.empty() && !src.buildBat.empty() && !src.ini.empty() &&
               !src.menu.empty(),
-          "vr star glow wiring: vscreen.cpp, device_hook.cpp, vr_star_glow.cpp and .h, ui_layer.cpp, menu.cpp, edvr.ini and build.bat are readable from the working directory");
+          "vr star glow wiring: vscreen.cpp, device_hook.cpp, vr_star_glow.cpp and .h, ui_layer.cpp, menu.cpp, edup.ini and build.bat are readable from the working directory");
     for (const Pin& p : wiringPins(src)) {
         char msg[480];
         std::snprintf(msg, sizeof(msg), "vr star glow wiring [%s]: %s", p.id, p.what);
@@ -703,7 +703,7 @@ void testWiring() {
     // Controls: each edit puts a likely slip back and must trip the pin it names.
     struct Control {
         const char* id;
-        int file;   // 0 vscreen.cpp, 1 device_hook.cpp, 2 vr_star_glow.cpp, 3 vr_star_glow.h, 4 ui_layer.cpp, 5 build.bat, 6 edvr.ini, 7 menu.cpp
+        int file;   // 0 vscreen.cpp, 1 device_hook.cpp, 2 vr_star_glow.cpp, 3 vr_star_glow.h, 4 ui_layer.cpp, 5 build.bat, 6 edup.ini, 7 menu.cpp
         const char* from;
         const char* to;
     };

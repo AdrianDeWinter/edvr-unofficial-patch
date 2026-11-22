@@ -2,11 +2,15 @@
 
 #include <windows.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <tlhelp32.h>
 
 #include <algorithm>
 #include <cwctype>
 
+#include "../common/elite_graphics_folder.h"
+#include "../common/iniedit.h"
+#include "../common/stereo_mode.h"
 #include "detect.h"
 #include "direct_launch.h"
 #include "logbundle.h"
@@ -138,7 +142,7 @@ RouteOps realRouteOps() {
 }
 
 const char* elevatedRefusal() {
-    return "This launcher is running with administrator rights, and Elite must not be started from one. Close it and open it again normally.";
+    return "This launcher is running with administrator rights, and Elite must not be started from an elevated launcher. Close it and open it again normally (without Run as administrator), or start Elite from Steam, Epic, or Frontier's launcher.";
 }
 
 bool startRoute(const LaunchRoute& route, const RouteOps& ops, bool elevated, std::string* error) {
@@ -430,6 +434,161 @@ bool pidsNamed(const std::wstring& exeName, std::vector<unsigned long>* pids) {
     }
     CloseHandle(snapshot);
     return ok;
+}
+
+std::wstring protonSteamLocalAppDataFor(const std::wstring& gameDir) {
+    if (gameDir.empty()) return std::wstring();
+    std::wstring lowered = gameDir;
+    for (wchar_t& c : lowered) c = c == L'/' ? L'\\' : static_cast<wchar_t>(towlower(c));
+    const size_t pos = lowered.find(L"\\steamapps\\");
+    if (pos == std::wstring::npos) return std::wstring();
+    const std::wstring steamapps = gameDir.substr(0, pos) + L"\\steamapps";
+    const std::wstring pfxLocal =
+        steamapps + L"\\compatdata\\" + kSteamAppId + L"\\pfx\\drive_c\\users\\steamuser\\AppData\\Local";
+    return dirExists(pfxLocal) ? pfxLocal : std::wstring();
+}
+
+std::wstring defaultEliteSettingsXmlPath(const std::wstring& gameDir) {
+    // Under Wine/Proton, a launcher started outside Elite's own compatdata prefix would otherwise
+    // resolve %LOCALAPPDATA% to its own Wine prefix instead of Elite's Proton prefix.
+    if (runningUnderWine()) {
+        const std::wstring pfxLocal = protonSteamLocalAppDataFor(gameDir);
+        if (!pfxLocal.empty()) {
+            const std::wstring folder = edvr::eliteGraphicsFolderUnder(pfxLocal);
+            if (!folder.empty()) return joinPath(folder, L"Settings.xml");
+        }
+    }
+    PWSTR path = nullptr;
+    std::wstring base;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &path)) && path) {
+        base = path;
+        CoTaskMemFree(path);
+    } else {
+        wchar_t env[MAX_PATH]{};
+        if (GetEnvironmentVariableW(L"LOCALAPPDATA", env, MAX_PATH)) base = env;
+    }
+    const std::wstring folder = edvr::eliteGraphicsFolderUnder(base);
+    return folder.empty() ? std::wstring() : joinPath(folder, L"Settings.xml");
+}
+
+edvr::VrHeadsetMode detectVrHeadsetModeFromSettingsXml(const std::wstring& settingsXmlPath) {
+    if (settingsXmlPath.empty() || !fileExists(settingsXmlPath)) return edvr::VrHeadsetMode::NotSet;
+    std::string xml;
+    if (!readFileBytes(settingsXmlPath, &xml, 4ull << 20, nullptr)) return edvr::VrHeadsetMode::NotSet;
+    int existing = 0;
+    if (!edvr::readStereoscopicMode(xml, &existing) || !edvr::isVrStereoscopicMode(existing))
+        return edvr::VrHeadsetMode::NotSet;
+    return edvr::vrHeadsetModeFromInt(existing);
+}
+
+bool restoreSettingsXmlFromSnapshot(const SettingsXmlSnapshot& snapshot, std::string* error) {
+    if (!snapshot.modified || snapshot.path.empty() || snapshot.backupPath.empty() ||
+        !fileExists(snapshot.backupPath)) {
+        return true;
+    }
+    std::string bytes;
+    if (!readFileBytes(snapshot.backupPath, &bytes, 4ull << 20, error)) return false;
+    const DWORD attrs = GetFileAttributesW(snapshot.path.c_str());
+    const bool currentlyReadOnly =
+        attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY) != 0;
+    if (currentlyReadOnly) SetFileAttributesW(snapshot.path.c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
+    const bool ok = writeFileAtomic(snapshot.path, bytes);
+    if (snapshot.wasReadOnly) {
+        const DWORD restoredAttrs = GetFileAttributesW(snapshot.path.c_str());
+        if (restoredAttrs != INVALID_FILE_ATTRIBUTES)
+            SetFileAttributesW(snapshot.path.c_str(), restoredAttrs | FILE_ATTRIBUTE_READONLY);
+    }
+    if (!ok && error) *error = "Could not restore Elite's Settings.xml at " + narrowUtf8(snapshot.path) + ".";
+    return ok;
+}
+
+bool prepareSettingsXmlForLaunch(const std::wstring& settingsXmlPath, const std::wstring& backupDir, bool vr,
+                                 edvr::VrHeadsetMode preferredVrMode, std::string* error,
+                                 const std::wstring& gameExeName, SettingsXmlSnapshot* snapshot) {
+    if (snapshot) *snapshot = SettingsXmlSnapshot();
+    auto fail = [&](const std::string& text) {
+        if (error) *error = text;
+        return false;
+    };
+    // Intentionally require an explicit headset mode when vr_3d_mode is NotSet: for a new VR user
+    // who has never chosen one in Settings.xml, we cannot assume the right audio/cinema mode.
+    // Existing VR users whose Settings.xml already holds 3..6 are seeded into launcher.ini before
+    // this check so their detected choice survives across sessions.
+    if (vr && preferredVrMode == edvr::VrHeadsetMode::NotSet) {
+        return fail("No VR 3D mode is set. Choose your preferred VR 3D mode in the launcher before launching in VR, or use Play flat.");
+    }
+    if (!gameExeName.empty()) {
+        std::vector<unsigned long> running;
+        if (!pidsNamed(gameExeName, &running))
+            return fail("Windows would not list the running programs, so Settings.xml was not changed.");
+        if (!running.empty())
+            return fail("Elite is already running, so Settings.xml was not changed.");
+    }
+    if (settingsXmlPath.empty() || !fileExists(settingsXmlPath)) {
+        if (vr) {
+            return fail("Elite's Settings.xml was not found. Launch Elite once to create Settings.xml, or use Play flat.");
+        }
+        // A brand-new install with no Settings.xml yet starts flat by default in Elite.
+        return true;
+    }
+    std::string xml;
+    std::string readErr;
+    if (!readFileBytes(settingsXmlPath, &xml, 4ull << 20, &readErr))
+        return fail("Elite's Settings.xml could not be read at " + narrowUtf8(settingsXmlPath) +
+                    ", so nothing was changed.");
+
+    std::string updated;
+    const edvr::StereoWriteStatus status =
+        edvr::rewriteStereoscopicMode(xml, vr, preferredVrMode, &updated);
+    switch (status) {
+        case edvr::StereoWriteStatus::Unchanged:
+            return true;
+        case edvr::StereoWriteStatus::TagAbsent:
+            return fail("Elite's Settings.xml at " + narrowUtf8(settingsXmlPath) +
+                        " could not be updated because <StereoscopicMode> and </GraphicsOptions> were not found.");
+        case edvr::StereoWriteStatus::NoHeadsetMode:
+            return fail("No VR 3D mode is set. Choose your preferred VR 3D mode in the launcher before launching in VR, or use Play flat.");
+        case edvr::StereoWriteStatus::ParseFailed:
+            return fail("Elite's Settings.xml at " + narrowUtf8(settingsXmlPath) +
+                        " could not be parsed, so nothing was changed.");
+        case edvr::StereoWriteStatus::Updated:
+            break;
+    }
+
+    if (backupDir.empty() || !createDirectories(backupDir))
+        return fail("Could not create the launcher backup folder for Settings.xml; nothing was changed.");
+    // A read-only Settings.xml is a decision the player made (to stop Elite resetting their graphics): it is never
+    // unlocked behind their back, the rule writeFileAtomic keeps for every file (iniedit.h). Nothing is backed up or
+    // changed; the message says what to do.
+    {
+        const DWORD attrs = GetFileAttributesW(settingsXmlPath.c_str());
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY) != 0)
+            return fail("Elite's Settings.xml is read-only, so its 3D mode was not changed. Clear read-only on " +
+                        narrowUtf8(settingsXmlPath) + ", or set the 3D mode in Elite's own options.");
+    }
+    const std::wstring originalBackup = joinPath(backupDir, L"Settings.xml.ed-up-original");
+    if (!fileExists(originalBackup)) {
+        if (!CopyFileW(settingsXmlPath.c_str(), originalBackup.c_str(), TRUE) && !fileExists(originalBackup))
+            return fail("Could not save the original Settings.xml backup before changing it; nothing was changed.");
+    }
+    const std::wstring backupPath = joinPath(backupDir, L"Settings.xml.bak");
+    if (fileExists(backupPath)) SetFileAttributesW(backupPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+    if (!CopyFileW(settingsXmlPath.c_str(), backupPath.c_str(), FALSE))
+        return fail("Could not back up Settings.xml before changing it; nothing was changed.");
+
+    const bool wasReadOnly = false;   // refused above
+    const bool wrote = writeFileAtomic(settingsXmlPath, updated);
+    if (!wrote) {
+        return fail("Could not write Elite's Settings.xml at " + narrowUtf8(settingsXmlPath) +
+                    ". Check that the file is writable.");
+    }
+    if (snapshot) {
+        snapshot->modified = true;
+        snapshot->wasReadOnly = wasReadOnly;
+        snapshot->path = settingsXmlPath;
+        snapshot->backupPath = backupPath;
+    }
+    return true;
 }
 
 WatchOutcome watchLaunch(const WatchNames& names, const WatchTiming& timing, const std::atomic<bool>* cancel,

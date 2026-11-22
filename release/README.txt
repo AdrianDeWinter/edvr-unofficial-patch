@@ -27,8 +27,8 @@ With Elite's 3D mode off, ED-UP runs its flat fixes from an install whose scope
 includes flat: "VR and flat" (the default) or "Flat only". The flat fixes are
 experimental; their visual quality is not yet qualified.
 
-- Its settings live in edvr-flat.ini. Installing never writes the VR
-  profile's edvr.ini for them. The settings screen's Flat selection edits that
+- Its settings live in edup-flat.ini. Installing never writes the VR
+  profile's edup.ini for them. The settings screen's Flat selection edits that
   file.
 - Press F8 for the AA menu. Up/Down selects a row; Left/Right changes it.
 - Choose Off, TAA, DLSS, FSR3 or XeSS-SR and the DLSS model preset; settings save live.
@@ -40,7 +40,7 @@ experimental; their visual quality is not yet qualified.
 - [visual] intro_video = skip leaves out the launch movie (the F8 menu's Visual
   tab, Intro movie row, does the same; it applies at the next launch). The
   default, screen, plays it as the game makes it. It was [fix] intro_video
-  before; an existing edvr-flat.ini keeps its choice.
+  before; an existing edup-flat.ini keeps its choice.
 - Press F7 to turn ED-UP's anti-aliasing off for a side-by-side look, and again
   to put your setting back. It writes nothing; [hotkey] compare_aa changes the
   key and empty turns it off. The same key works in VR.
@@ -51,7 +51,7 @@ MANUAL INSTALL
 
 1. Close Elite Dangerous.
 2. Copy d3d11.dll beside EliteDangerous64.exe.
-   Copy edvr.ini only if you do not already have one; keep existing settings.
+   Copy edup.ini only if you do not already have one; keep existing settings.
 3. In Openvr\win64, rename the game's openvr_api.dll to
    openvr_api_orig.dll. Do not overwrite an existing original with an ED-UP DLL.
 4. Copy openvr\openvr_api.dll, openvr\openxr_loader.dll and
@@ -60,9 +60,9 @@ MANUAL INSTALL
 
 If EDHM or another mod owns d3d11.dll, use the launcher to preserve and chain
 it automatically. For manual chaining, rename that mod's DLL to d3d11_edhm.dll
-and set advanced.real_dll = d3d11_edhm.dll in edvr.ini before placing ED-UP. It
-is set once: edvr.ini applies to both the VR and the flat profile. The flat
-profile's edvr-flat.ini can override it with another name, or say none to run
+and set advanced.real_dll = d3d11_edhm.dll in edup.ini before placing ED-UP. It
+is set once: edup.ini applies to both the VR and the flat profile. The flat
+profile's edup-flat.ini can override it with another name, or say none to run
 flat without the chain.
 
 DLSS

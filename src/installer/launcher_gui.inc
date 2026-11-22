@@ -10,48 +10,115 @@
 void applyLayout();
 void showSurvey();
 void runAction(AppArgs::Act action);
+const wchar_t* installButtonLabel();
 
 enum : int {
     kIdUpdate = 1080,
     kIdRc = 1081,
-    kIdPlay = 1082,
     kIdPlayVr = 1083,
     kIdPlayFlat = 1084,
     kIdDirect = 1085,
     kIdCloseAfter = 1086,
+    kIdSteamFrontier = 1087,
+    kIdVrMode = 1088,
+};
+
+struct VrModeChoice {
+    edvr::VrHeadsetMode mode;
+    const wchar_t* label;
+};
+// Elite Dangerous's in-game Options > Graphics > 3D headset modes, in dropdown order.
+const VrModeChoice kVrModeChoices[] = {
+    {edvr::VrHeadsetMode::NotSet, L"Not Set"},
+    {edvr::VrHeadsetMode::HmdHeadphones, L"HMD (Headphones)"},
+    {edvr::VrHeadsetMode::HmdSpeakers, L"HMD (Speakers)"},
+    {edvr::VrHeadsetMode::HmdCinemaHeadphones, L"HMD Cinema (Headphones)"},
+    {edvr::VrHeadsetMode::HmdCinemaSpeakers, L"HMD Cinema (Speakers)"},
 };
 
 // Posted by the session's worker threads: lParam is a heap std::function<void()> to run here.
 const UINT kMsgLauncherJob = WM_APP + 2;
 
-// The band sits between the report card (ends at 650) and the bottom of the window. Its third row, under
-// the Play row, holds the close-after-start checkbox.
-const RECT kBandCard{kMargin, 658, kClientWidth - kMargin, 776};
+// Launch hero card geometry (96-dpi units) on Screen::Play.
+constexpr int kLaunchTop = kContentTop;
+constexpr int kLaunchBtnY = kLaunchTop + 38;
+constexpr int kLaunchBtnH = 38;
+constexpr int kLaunchDividerY = kLaunchBtnY + kLaunchBtnH + 12;
+constexpr int kLaunchDirectY = kLaunchDividerY + 10;
+constexpr int kLaunchOptWithDirectY = kLaunchDirectY + 30;
+constexpr int kLaunchOptNoDirectY = kLaunchDividerY + 12;
+constexpr int kLaunchBottomWithDirect = kLaunchOptWithDirectY + 42;
+constexpr int kLaunchBottomNoDirect = kLaunchOptNoDirectY + 42;
+constexpr int kPlayBannerH = 46;
 
 struct LauncherGui {
     HWND update = nullptr;
     HWND rc = nullptr;
-    HWND play = nullptr;
     HWND playVr = nullptr;
     HWND playFlat = nullptr;
-    HWND direct = nullptr;           // "Start Elite directly", for a Steam install
+    HWND direct = nullptr;           // "Start Elite directly", for Steam / Frontier / Epic installs
     HWND closeAfter = nullptr;       // "Close the launcher once Elite has started", saved in launcher.ini
+    HWND steamFrontier = nullptr;    // "Use Frontier account login", for Steam direct launch
+    HWND vrMode = nullptr;           // preferred VR headset mode (NotSet or HMD modes) for Settings.xml routes
+    RECT vrModeLabelPx{};            // painted "VR 3D mode" label beside vrMode
     std::unique_ptr<LauncherSession> session;
-    std::wstring playCaption;        // beside or under the Play buttons, for the folder shown
-    int directLeft = 0;              // where the "Start Elite directly" checkbox starts, in design units
+    std::wstring playCaption;        // beside the Play buttons on Screen::Play
+    int playCaptionLeft = 320;       // right of visible Play buttons, in design units
+    int launchBottom = kLaunchBottomWithDirect;
+    bool playBannerShown = false;    // update available strip under Launch on Screen::Play
+    int updateTextRight = 460;       // right edge (design units) for the painted update status line
     bool restoreViaPlan = false;     // the user agreed to a settings restore the elevated copy does
     bool noPayloadShown = false;
     std::wstring developerNote;      // set per Install, read by confirmText
+    // Cached route, remembered mode, and layout signature (#198).
+    std::wstring cachedRouteSource;
+    std::wstring cachedRouteDir;
+    LaunchRoute  cachedRoute;
+    bool         haveCachedRoute = false;
+    std::wstring cachedModeDir;
+    std::string  cachedMode;
+    bool         haveCachedMode = false;
+    bool         layoutDirty = true;
+    Screen       lastLayoutScreen = Screen::Install;
+    UINT         lastLayoutDpi = 0;
+    bool         lastAvailable = false;
+    bool         lastPlayBanner = false;
+    bool         lastShowVr = false;
+    bool         lastShowFlat = false;
+    bool         lastShowDirect = false;
+    std::wstring lastUpdateLabel;
+    std::wstring lastInstallLabel;
+    std::wstring lastDirectLabel;
 };
 LauncherGui lg;
+
+void invalidateLauncherCache() {
+    lg.haveCachedRoute = false;
+    lg.haveCachedMode = false;
+    lg.layoutDirty = true;
+}
+
+int launcherStatusTop() {
+    return lg.playBannerShown ? (lg.launchBottom + 10 + kPlayBannerH + 10) : (lg.launchBottom + 12);
+}
 
 bool launcherPayloadReady() { return lg.session && lg.session->payloadState() == PayloadState::Ready; }
 
 bool launcherBusy() { return lg.session && (lg.session->updating() || lg.session->applying()); }
 
+bool launcherFolderHasEdup() {
+    return g.haveSurvey && (g.survey.d3d11.kind == DllKind::Edvr || g.survey.openvrCurrent.kind == DllKind::Edvr ||
+                            g.survey.state.present);
+}
+
 const wchar_t* launcherNoPayloadText() {
+    if (g.haveSurvey && g.survey.state.present) {
+        return tr(L"ED-UP is installed in this folder, but this launcher has no local release package yet.\r\n\r\n"
+                  L"Press Download when Updates shows a release to enable repair and updates, or start the launcher with "
+                  L"--payload and the folder of an unpacked ed-up zip.");
+    }
     return tr(L"There is nothing to install from yet.\r\n\r\n"
-              L"Press Download when the line below says an update is available, or start the launcher with "
+              L"Press Download when Updates shows a release, or start the launcher with "
               L"--payload and the folder of an unpacked ed-up zip.");
 }
 
@@ -61,6 +128,9 @@ std::wstring launcherSubtitle() {
         head = tr(L"loading");
     } else if (lg.session->payloadState() == PayloadState::Ready) {
         head = fromUtf8(lg.session->payload().version);
+    } else if (g.haveSurvey && g.survey.state.present && !g.survey.state.edvrVersion.empty() &&
+               !installRecordStale(g.survey)) {
+        head = fromUtf8(g.survey.state.edvrVersion) + L" (" + tr(L"no local package") + L")";
     } else {
         head = tr(L"no release downloaded yet");
     }
@@ -68,12 +138,27 @@ std::wstring launcherSubtitle() {
            L"  \x00b7  " + tr(L"unofficial patch for Elite Dangerous in VR and flat");
 }
 
+const LaunchRoute& launcherRouteFor(const std::wstring& source, const std::wstring& dir) {
+    if (!lg.haveCachedRoute || lg.cachedRouteSource != source || lg.cachedRouteDir != dir) {
+        lg.cachedRoute = routeFor(source, dir, true);
+        lg.cachedRouteSource = source;
+        lg.cachedRouteDir = dir;
+        lg.haveCachedRoute = true;
+    }
+    return lg.cachedRoute;
+}
+
 // The remembered mode of the folder on screen, "vr" or "flat", else "vr".
 std::string launcherRememberedMode() {
     if (!g.haveSurvey) return "vr";
-    LauncherState state;
-    state.load(joinPath(launcherRootsFor(g.args).launcherDir(), L"launcher.ini"), nullptr);
-    return state.mode(g.survey.game.dir) == "flat" ? "flat" : "vr";
+    if (!lg.haveCachedMode || lg.cachedModeDir != g.survey.game.dir) {
+        LauncherState state;
+        state.load(joinPath(launcherRootsFor(g.args).launcherDir(), L"launcher.ini"), nullptr);
+        lg.cachedMode = state.mode(g.survey.game.dir) == "flat" ? "flat" : "vr";
+        lg.cachedModeDir = g.survey.game.dir;
+        lg.haveCachedMode = true;
+    }
+    return lg.cachedMode;
 }
 
 // The install Play was last pressed for, as an index into g.installs, else g.installs.size(). A folder
@@ -95,7 +180,8 @@ size_t launcherRememberedInstall() {
 // Shows, hides and enables everything the launcher owns, from the session and the survey.
 void updateLauncherControls() {
     if (!lg.session) return;
-    const bool onScreen = g.screen == Screen::Install;
+    const bool onPlay = g.screen == Screen::Play;
+    const bool onSetup = g.screen == Screen::Install;
     const bool payloadOk = launcherPayloadReady();
     const bool payloadLoading = lg.session->payloadState() == PayloadState::Loading;
     const bool busy = launcherBusy();
@@ -103,34 +189,40 @@ void updateLauncherControls() {
 
     // Install and Repair need the payload; Uninstall works without one (the planner then only keeps more).
     const bool survey = g.haveSurvey;
+    const wchar_t* installLabel = installButtonLabel();
+    if (g.install && lg.lastInstallLabel != installLabel) {
+        lg.lastInstallLabel = installLabel;
+        SetWindowTextW(g.install, installLabel);
+    }
     EnableWindow(g.install, survey && payloadOk && !busy && !gameHere);
     EnableWindow(g.repair, survey && payloadOk && !busy && !gameHere);
     EnableWindow(g.uninstall, survey && !payloadLoading && !busy && !gameHere);
 
     const bool available = lg.session->checkState() == CheckState::Available && !lg.session->updating();
-    ShowWindow(lg.update, onScreen && available ? SW_SHOW : SW_HIDE);
-    EnableWindow(lg.update, !lg.session->applying());
-    ShowWindow(lg.rc, onScreen ? SW_SHOW : SW_HIDE);
+    const wchar_t* updateLabel = launcherFolderHasEdup() ? tr(L"Download & update") : tr(L"Download & install");
+    lg.playBannerShown = onPlay && (available || lg.session->updating());
 
-    // Play. Only a route that carries VR or flat gets two buttons: Frontier's, Steam's once the
-    // launcher starts Elite itself, and Epic's once the skip-the-launcher checkbox is on. The
-    // checkbox is offered for Steam, for Frontier's own store, and for Epic.
+    // Play route and options (shown on Screen::Play).
     lg.playCaption.clear();
-    bool showPlay = false, showPair = false, showDirect = false, playEnabled = false;
+    bool showPair = false, showDirect = false, showSteamFrontier = false, showVrMode = false,
+         playEnabled = false;
     bool showVrButton = false, showFlatButton = false;  // within the pair: only the modes this folder has installed
+    const wchar_t* directLabel = tr(L"Start Elite directly (no Frontier launcher)");
     if (survey) {
-        const LaunchRoute route = routeFor(g.survey.game.source, g.survey.game.dir, true);
+        const LaunchRoute& route = launcherRouteFor(g.survey.game.source, g.survey.game.dir);
         const bool anyGame = g.survey.gameRunningHere || g.survey.gameRunningElsewhere;
         playEnabled = !lg.session->playing() && !busy && !anyGame && !g.survey.gameRunStateUnknown;
         const bool frontierStore = route.kind == RouteKind::Frontier && _wcsicmp(g.survey.game.source.c_str(), L"Frontier launcher") == 0;
         const bool epic = route.kind == RouteKind::Epic;
         showDirect = (route.kind == RouteKind::Steam || frontierStore || epic) && lg.session->directLaunchOffered();
         const bool directOn = showDirect && lg.session->directLaunch();
-        if (lg.direct)
-            SetWindowTextW(lg.direct, epic ? tr(L"Skip the Epic launcher") : tr(L"Start Elite directly (no Frontier launcher)"));
-        if (route.kind == RouteKind::Frontier || directOn) {
+        showSteamFrontier = route.kind == RouteKind::Steam && directOn;
+        directLabel = epic ? tr(L"Skip the Epic launcher") : tr(L"Start Elite directly (no Frontier launcher)");
+        if (route.kind != RouteKind::None) {
             // A button only for a mode this folder has installed: a VR-only install gets no flat button, and the reverse.
             // An empty scope (no install the survey can name) keeps both, as before.
+            // Every valid route (Frontier, Steam, Epic, direct or store) offers Play VR / Play flat;
+            // non-direct Steam/Epic write StereoscopicMode in Settings.xml before opening the store URI.
             const std::string scope = installedScope(g.survey);
             const bool hasVr = scope.empty() || scope == "both" || scope == "vr";
             const bool hasFlat = scope.empty() || scope == "both" || scope == "flat";
@@ -138,49 +230,172 @@ void updateLauncherControls() {
             showPair = true;
             showVrButton = hasVr;
             showFlatButton = hasFlat;
-            lg.playCaption = directOn ? (epic ? tr(L"Signs in to Epic and Frontier, starts Elite itself, and exits once Elite is running.")
-                                          : frontierStore ? tr(L"Signs in itself. If that fails, it starts EDLaunch.")
-                                                          : tr(L"Signs in itself. If that fails, it starts through Steam."))
-                             : bothModes ? tr(L"Starts EDLaunch with the mode you pick, then closes it when Elite exits.")
-                             : hasVr ? tr(L"Starts EDLaunch in VR, then closes it when Elite exits.")
-                                     : tr(L"Starts EDLaunch in flat, then closes it when Elite exits.");
+            showVrMode = !directOn && route.kind != RouteKind::Frontier && hasVr;
+            const bool steamFrontierOn = showSteamFrontier && lg.session->steamFrontierLogin();
+            if (route.kind == RouteKind::Frontier || directOn) {
+                lg.playCaption = directOn ? (epic ? tr(L"Signs in to Epic and Frontier, starts Elite itself, and exits once Elite is running.")
+                                              : frontierStore ? tr(L"Signs in itself. If that fails, it starts EDLaunch.")
+                                              : steamFrontierOn ? tr(L"Signs in with your Frontier account. If that fails, it starts through Steam.")
+                                                                : tr(L"Signs in itself. If that fails, it starts through Steam."))
+                                 : bothModes ? tr(L"Starts EDLaunch with the mode you pick, then closes it when Elite exits.")
+                                 : hasVr ? tr(L"Starts EDLaunch in VR, then closes it when Elite exits.")
+                                         : tr(L"Starts EDLaunch in flat, then closes it when Elite exits.");
+            } else {
+                lg.playCaption = route.kind == RouteKind::Steam
+                                     ? tr(L"Sets Elite's 3D mode in Settings.xml, then starts Elite through Steam.")
+                                     : tr(L"Sets Elite's 3D mode in Settings.xml, then starts Elite through Epic.");
+            }
             // With a choice, the remembered mode is the primary button; a lone button is the primary one.
             const bool flat = launcherRememberedMode() == "flat";
             ui::setButtonStyle(lg.playVr, (bothModes ? !flat : hasVr) ? ui::ButtonStyle::Primary : ui::ButtonStyle::Secondary);
             ui::setButtonStyle(lg.playFlat, (bothModes ? flat : hasFlat) ? ui::ButtonStyle::Primary : ui::ButtonStyle::Secondary);
-        } else if (route.kind != RouteKind::None) {
-            showPlay = true;
-            const wchar_t* store = route.kind == RouteKind::Steam ? L"Steam" : L"Epic";
-            std::wstring mode = tr(L"Elite's 3D mode is unknown.");
-            if (g.mode.known)
-                mode = g.mode.mode == edvr::GameMode::Flat ? tr(L"Elite is set to flat (3D off).") : tr(L"Elite is set to VR (3D on).");
-            lg.playCaption = std::wstring(tr(L"Starts Elite through ")) + store + tr(L", which uses the mode Elite is set to. ") + mode;
         } else {
             lg.playCaption = fromUtf8(route.why);
         }
         if (gameHere || g.survey.gameRunningElsewhere) lg.playCaption = tr(L"Elite is already running.");
     }
     if (lg.session->playing() || !lg.session->playLine().empty()) lg.playCaption = fromUtf8(lg.session->playLine());
-    ShowWindow(lg.play, onScreen && showPlay ? SW_SHOW : SW_HIDE);
-    ShowWindow(lg.playVr, onScreen && showPair && showVrButton ? SW_SHOW : SW_HIDE);
-    ShowWindow(lg.playFlat, onScreen && showPair && showFlatButton ? SW_SHOW : SW_HIDE);
-    // Left to right: Play VR, then Play flat. A lone pair button takes the first slot.
-    MoveWindow(lg.playVr, dp(kMargin + kCardPad), dp(700), dp(118), dp(34), TRUE);
-    MoveWindow(lg.playFlat, dp(kMargin + kCardPad + (showVrButton ? 126 : 0)), dp(700), dp(118), dp(34), TRUE);
-    for (HWND button : {lg.play, lg.playVr, lg.playFlat}) EnableWindow(button, playEnabled);
 
-    // The checkbox is on the second row, right of whichever Play buttons are showing, and what is under
-    // it is the caption. It follows the saved setting, which is the session's to say.
-    ShowWindow(lg.direct, onScreen && showDirect ? SW_SHOW : SW_HIDE);
+    if (lg.direct && lg.lastDirectLabel != directLabel) {
+        lg.lastDirectLabel = directLabel;
+        SetWindowTextW(lg.direct, directLabel);
+    }
+
+    lg.launchBottom = showDirect ? kLaunchBottomWithDirect : kLaunchBottomNoDirect;
+
+    // Re-measure and move controls only when screen, scale, labels or button visibility actually changed,
+    // avoiding repeated GetDC/textWidth/MoveWindow work on every download progress tick (#198).
+    const bool needRelayout = lg.layoutDirty || lg.lastLayoutScreen != g.screen || lg.lastLayoutDpi != g.dpi ||
+                              lg.lastAvailable != available || lg.lastPlayBanner != lg.playBannerShown ||
+                              lg.lastShowVr != (showPair && showVrButton) ||
+                              lg.lastShowFlat != (showPair && showFlatButton) || lg.lastShowDirect != showDirect ||
+                              lg.lastUpdateLabel != updateLabel;
+    if (needRelayout) {
+        lg.layoutDirty = false;
+        lg.lastLayoutScreen = g.screen;
+        lg.lastLayoutDpi = g.dpi;
+        lg.lastAvailable = available;
+        lg.lastPlayBanner = lg.playBannerShown;
+        lg.lastShowVr = showPair && showVrButton;
+        lg.lastShowFlat = showPair && showFlatButton;
+        lg.lastShowDirect = showDirect;
+        lg.lastUpdateLabel = updateLabel;
+
+        const int innerLeft = kMargin + kCardPad;
+        const int innerRight = kClientWidth - kMargin - kCardPad;
+        HDC dc = GetDC(g.window);
+        const HFONT font = ui::fonts().body;
+
+        // Update button (shared HWND: sits in Play's update banner or Setup's Updates card).
+        if (lg.update) {
+            SetWindowTextW(lg.update, updateLabel);
+            const int labelPx = ui::textWidth(dc, updateLabel, font) + dp(28);
+            int btnW = g.dpi > 0 ? MulDiv(labelPx, 96, static_cast<int>(g.dpi)) : 140;
+            if (btnW < 126) btnW = 126;
+            if (btnW > 210) btnW = 210;
+            const int btnLeft = innerRight - btnW;
+            const int btnY = onPlay ? (lg.launchBottom + 10 + (kPlayBannerH - 28) / 2) : (kUpdatesTop + 34);
+            lg.updateTextRight = available ? (btnLeft - 12) : innerRight;
+            MoveWindow(lg.update, dp(btnLeft), dp(btnY), dp(btnW), dp(28), TRUE);
+        }
+        if (lg.rc) {
+            const int rcW = 248;
+            MoveWindow(lg.rc, dp(innerRight - rcW), dp(kUpdatesTop + 8), dp(rcW), dp(22), TRUE);
+        }
+
+        // Play VR / Play flat buttons sized to localized text so German/Russian labels never clip.
+        int vrW = 126, flatW = 126;
+        if (lg.playVr) {
+            wchar_t lbl[128]{};
+            GetWindowTextW(lg.playVr, lbl, 128);
+            const int px = ui::textWidth(dc, lbl, font) + dp(34);
+            vrW = g.dpi > 0 ? MulDiv(px, 96, static_cast<int>(g.dpi)) : 126;
+            if (vrW < 122) vrW = 122;
+            if (vrW > 180) vrW = 180;
+        }
+        if (lg.playFlat) {
+            wchar_t lbl[128]{};
+            GetWindowTextW(lg.playFlat, lbl, 128);
+            const int px = ui::textWidth(dc, lbl, font) + dp(34);
+            flatW = g.dpi > 0 ? MulDiv(px, 96, static_cast<int>(g.dpi)) : 126;
+            if (flatW < 122) flatW = 122;
+            if (flatW > 190) flatW = 190;
+        }
+        int curX = innerLeft;
+        if (showPair && showVrButton) {
+            MoveWindow(lg.playVr, dp(curX), dp(kLaunchBtnY), dp(vrW), dp(kLaunchBtnH), TRUE);
+            curX += vrW + 10;
+        }
+        if (showPair && showFlatButton) {
+            MoveWindow(lg.playFlat, dp(curX), dp(kLaunchBtnY), dp(flatW), dp(kLaunchBtnH), TRUE);
+            curX += flatW + 10;
+        }
+        lg.playCaptionLeft = (showPair && (showVrButton || showFlatButton)) ? (curX + 6) : innerLeft;
+
+        // Direct launch checkbox gets the full interior width on its own clean row.
+        if (lg.direct)
+            MoveWindow(lg.direct, dp(innerLeft), dp(kLaunchDirectY), dp(innerRight - innerLeft), dp(22), TRUE);
+
+        // Bottom options row inside Launch card.
+        const int optY = showDirect ? kLaunchOptWithDirectY : kLaunchOptNoDirectY;
+        if (lg.closeAfter) MoveWindow(lg.closeAfter, dp(innerLeft), dp(optY + 3), dp(340), dp(22), TRUE);
+        if (lg.steamFrontier)
+            MoveWindow(lg.steamFrontier, dp(innerLeft + 352), dp(optY + 3), dp(innerRight - (innerLeft + 352)), dp(22), TRUE);
+        if (lg.vrMode) {
+            const int comboW = dp(212);
+            const int comboRight = dp(innerRight);
+            const int comboLeft = comboRight - comboW;
+            const int comboTop = dp(optY);
+            MoveWindow(lg.vrMode, comboLeft, comboTop, comboW, dp(28), TRUE);
+            SendMessageW(lg.vrMode, CB_SETITEMHEIGHT, 0, dp(24));
+            SendMessageW(lg.vrMode, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), dp(20));
+            RECT rc{};
+            GetWindowRect(lg.vrMode, &rc);
+            const int frame = (rc.bottom - rc.top) - dp(20);
+            const int fieldItem = dp(28) - frame;
+            if (fieldItem > 0) SendMessageW(lg.vrMode, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), fieldItem);
+            lg.vrModeLabelPx = RECT{dp(innerLeft + 344), comboTop, comboLeft - dp(8), comboTop + dp(28)};
+        }
+
+        ReleaseDC(g.window, dc);
+    }
+
+    ShowWindow(lg.update, (onPlay || onSetup) && available ? SW_SHOW : SW_HIDE);
+    EnableWindow(lg.update, !lg.session->applying());
+    ShowWindow(lg.rc, onSetup ? SW_SHOW : SW_HIDE);
+
+    ShowWindow(lg.playVr, onPlay && showPair && showVrButton ? SW_SHOW : SW_HIDE);
+    ShowWindow(lg.playFlat, onPlay && showPair && showFlatButton ? SW_SHOW : SW_HIDE);
+    for (HWND button : {lg.playVr, lg.playFlat}) EnableWindow(button, playEnabled);
+
+    ShowWindow(lg.direct, onPlay && showDirect ? SW_SHOW : SW_HIDE);
     EnableWindow(lg.direct, !lg.session->playing() && !busy);
     if (ui::checkboxChecked(lg.direct) != lg.session->directLaunch()) ui::toggleCheckbox(lg.direct);
-    lg.directLeft = kMargin + kCardPad + (showPair ? 262 : 134);
-    MoveWindow(lg.direct, dp(lg.directLeft), dp(696), dp(kClientWidth - kMargin - kCardPad - lg.directLeft), dp(22), TRUE);
 
-    // Close-after-start: its own row, under the Play row, always offered on the install screen.
-    ShowWindow(lg.closeAfter, onScreen ? SW_SHOW : SW_HIDE);
+    ShowWindow(lg.closeAfter, onPlay ? SW_SHOW : SW_HIDE);
     EnableWindow(lg.closeAfter, !busy);
     if (ui::checkboxChecked(lg.closeAfter) != lg.session->closeAfterStartSetting()) ui::toggleCheckbox(lg.closeAfter);
+
+    ShowWindow(lg.steamFrontier, onPlay && showSteamFrontier ? SW_SHOW : SW_HIDE);
+    EnableWindow(lg.steamFrontier, !lg.session->playing() && !busy);
+    if (lg.steamFrontier && ui::checkboxChecked(lg.steamFrontier) != lg.session->steamFrontierLoginSetting())
+        ui::toggleCheckbox(lg.steamFrontier);
+
+    if (lg.vrMode) {
+        ShowWindow(lg.vrMode, onPlay && showVrMode ? SW_SHOW : SW_HIDE);
+        EnableWindow(lg.vrMode, !lg.session->playing() && !busy);
+        const int wantMode = edvr::vrHeadsetModeToken(lg.session->vrStereoMode());
+        LRESULT match = 0;
+        const LRESULT count = SendMessageW(lg.vrMode, CB_GETCOUNT, 0, 0);
+        for (LRESULT i = 0; i < count; ++i) {
+            if (static_cast<int>(SendMessageW(lg.vrMode, CB_GETITEMDATA, static_cast<WPARAM>(i), 0)) == wantMode) {
+                match = i;
+                break;
+            }
+        }
+        if (SendMessageW(lg.vrMode, CB_GETCURSEL, 0, 0) != match)
+            SendMessageW(lg.vrMode, CB_SETCURSEL, static_cast<WPARAM>(match), 0);
+    }
 }
 
 void launcherRefresh() {
@@ -192,44 +407,107 @@ void launcherRefresh() {
     InvalidateRect(g.window, nullptr, FALSE);
 }
 
-// Positions the controls the band owns. Called from applyLayout, after its own loop, because their
+// Positions the controls the launcher cards own. Called from applyLayout, after its own loop, because their
 // visibility is the session's call and not the screen's alone.
 void layoutLauncherControls() {
     if (!lg.update) return;
     // These are not in `places`, so a change of scale does not reach their font on its own.
-    for (HWND control : {lg.update, lg.rc, lg.play, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter})
-        SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().body), TRUE);
-    MoveWindow(lg.update, dp(574), dp(666), dp(102), dp(26), TRUE);
-    MoveWindow(lg.rc, dp(336), dp(666), dp(226), dp(26), TRUE);
-    MoveWindow(lg.playVr, dp(kMargin + kCardPad), dp(700), dp(118), dp(34), TRUE);
-    MoveWindow(lg.playFlat, dp(kMargin + kCardPad + 126), dp(700), dp(118), dp(34), TRUE);
-    MoveWindow(lg.play, dp(kMargin + kCardPad), dp(700), dp(124), dp(34), TRUE);
-    // Stops short of the Discord link, which sits at the right of the same rows (kTipTop).
-    MoveWindow(lg.closeAfter, dp(kMargin + kCardPad), dp(752), dp(538), dp(22), TRUE);
+    for (HWND control :
+         {lg.update, lg.rc, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter, lg.steamFrontier, lg.vrMode})
+        if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().body), TRUE);
+    lg.layoutDirty = true;
     updateLauncherControls();
 }
 
-void paintLauncherBand(HDC dc) {
+std::wstring launcherFormattedUpdateLine(COLORREF* colourOut) {
     const ui::Theme& t = ui::theme();
-    const ui::Fonts& f = ui::fonts();
-    const RECT card{dp(kBandCard.left), dp(kBandCard.top), dp(kBandCard.right), dp(kBandCard.bottom)};
-    ui::paintCard(dc, card, g.dpi);
-    if (!lg.session) return;
-
     COLORREF colour = t.text;
     if (lg.session->checkState() == CheckState::Refused) colour = t.warn;
     else if (lg.session->checkState() == CheckState::Skipped) colour = t.subtext;
-    RECT line{dp(kMargin + kCardPad), dp(666), dp(330), dp(692)};
-    ui::drawText(dc, trLine(lg.session->updateLine()), line, f.body, colour, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (colourOut) *colourOut = colour;
+    std::string statusLine = lg.session->updateLine();
+    if (lg.session->checkState() == CheckState::Available && g.haveSurvey && g.survey.state.present &&
+        !g.survey.state.edvrVersion.empty() && !installRecordStale(g.survey) &&
+        statusLine == ("ED-UP " + g.survey.state.edvrVersion + " is available.")) {
+        statusLine = "ED-UP " + g.survey.state.edvrVersion + " package available for repair and updates.";
+    }
+    return trLine(statusLine);
+}
 
-    // Under the "Start Elite directly" checkbox when that is showing, which is a line shorter than the
-    // card's second row; otherwise beside the pair of buttons, or beside the single one.
-    const bool pair = lg.playVr && IsWindowVisible(lg.playVr);
-    const bool single = lg.play && IsWindowVisible(lg.play);
-    const bool underCheckbox = lg.direct && IsWindowVisible(lg.direct);
-    const int captionLeft = underCheckbox ? lg.directLeft : pair ? kMargin + kCardPad + 252 : single ? kMargin + kCardPad + 134 : kMargin + kCardPad;
-    RECT caption{dp(captionLeft), dp(underCheckbox ? 719 : 698), dp(kClientWidth - kMargin - kCardPad), dp(underCheckbox ? 749 : 742)};
+// Paints the Launch hero card and optional inline update notification strip on Screen::Play.
+void paintLauncherPlay(HDC dc) {
+    const ui::Theme& t = ui::theme();
+    const ui::Fonts& f = ui::fonts();
+
+    const RECT hero{dp(kMargin), dp(kLaunchTop), dp(kClientWidth - kMargin), dp(lg.launchBottom)};
+    ui::paintAccentCard(dc, hero, g.dpi);
+
+    RECT launchHead{dp(kMargin + kCardPad), dp(kLaunchTop + 10), dp(kClientWidth - kMargin - kCardPad),
+                    dp(kLaunchTop + 28)};
+    ui::drawText(dc, tr(L"Launch"), launchHead, f.heading, t.text, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    RECT divider{dp(kMargin + kCardPad), dp(kLaunchDividerY), dp(kClientWidth - kMargin - kCardPad),
+                 dp(kLaunchDividerY) + 1};
+    ui::fillRect(dc, divider, t.cardBorder);
+
+    if (!lg.session) return;
+
+    RECT caption{dp(lg.playCaptionLeft), dp(kLaunchBtnY - 2), dp(kClientWidth - kMargin - kCardPad),
+                 dp(kLaunchBtnY + kLaunchBtnH + 2)};
     ui::drawText(dc, lg.playCaption, caption, f.caption, t.subtext, DT_LEFT | DT_VCENTER | DT_WORDBREAK | DT_END_ELLIPSIS);
+
+    if (lg.vrMode && IsWindowVisible(lg.vrMode)) {
+        ui::drawText(dc, tr(L"VR 3D mode"), lg.vrModeLabelPx, f.caption, t.subtext,
+                     DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+
+    if (lg.playBannerShown) {
+        const int bannerTop = lg.launchBottom + 10;
+        const RECT banner{dp(kMargin), dp(bannerTop), dp(kClientWidth - kMargin), dp(bannerTop + kPlayBannerH)};
+        ui::fillRounded(dc, banner, dp(8), t.cardBg);
+        ui::strokeRounded(dc, banner, dp(8), t.accent);
+        COLORREF colour = t.text;
+        const std::wstring text = launcherFormattedUpdateLine(&colour);
+        RECT line{dp(kMargin + kCardPad), dp(bannerTop + 8), dp(lg.updateTextRight), dp(bannerTop + kPlayBannerH - 8)};
+        ui::drawText(dc, text, line, f.body, colour, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+}
+
+// Paints the Updates card at the top of Screen::Install (Setup tab).
+void paintLauncherUpdatesCard(HDC dc) {
+    const ui::Theme& t = ui::theme();
+    const ui::Fonts& f = ui::fonts();
+
+    const RECT updatesCard{dp(kMargin), dp(kUpdatesTop), dp(kClientWidth - kMargin), dp(kUpdatesBottom)};
+    ui::paintCard(dc, updatesCard, g.dpi);
+    RECT updatesHead{dp(kMargin + kCardPad), dp(kUpdatesTop + 8), dp(kMargin + kCardPad + 200),
+                     dp(kUpdatesTop + 26)};
+    ui::drawText(dc, tr(L"Updates"), updatesHead, f.heading, t.text, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (!lg.session) return;
+
+    COLORREF colour = t.text;
+    const std::wstring text = launcherFormattedUpdateLine(&colour);
+    RECT line{dp(kMargin + kCardPad), dp(kUpdatesTop + 34), dp(lg.updateTextRight), dp(kUpdatesTop + 62)};
+    ui::drawText(dc, text, line, f.body, colour, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+void refillVrModeChoices() {
+    if (!lg.vrMode) return;
+    int selectedMode = lg.session ? edvr::vrHeadsetModeToken(lg.session->vrStereoMode()) : 0;
+    const LRESULT cur = SendMessageW(lg.vrMode, CB_GETCURSEL, 0, 0);
+    if (cur != CB_ERR)
+        selectedMode = static_cast<int>(SendMessageW(lg.vrMode, CB_GETITEMDATA, static_cast<WPARAM>(cur), 0));
+    SendMessageW(lg.vrMode, CB_RESETCONTENT, 0, 0);
+    LRESULT match = 0;
+    for (const VrModeChoice& choice : kVrModeChoices) {
+        const LRESULT idx = SendMessageW(lg.vrMode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(tr(choice.label)));
+        if (idx >= 0) {
+            const int token = edvr::vrHeadsetModeToken(choice.mode);
+            SendMessageW(lg.vrMode, CB_SETITEMDATA, static_cast<WPARAM>(idx), static_cast<LPARAM>(token));
+            if (token == selectedMode) match = idx;
+        }
+    }
+    SendMessageW(lg.vrMode, CB_SETCURSEL, static_cast<WPARAM>(match), 0);
 }
 
 void refillScopeChoices() {
@@ -249,32 +527,33 @@ void setControlText(int id, const wchar_t* english) {
 // The words on the window, in the language `code` names. Does not write launcher.ini.
 void applyLauncherLanguage(const std::string& code) {
     l10nSet(code.empty() ? systemGameLanguageCode() : canonicalGameLanguage(code));
+    invalidateLauncherCache();
+    setControlText(kIdTabPlay, L"Play");
     setControlText(kIdTabInstall, L"Setup");
     setControlText(kIdTabSettings, L"Settings");
     setControlText(kIdBrowse, L"Browse...");
     setControlText(kIdChkKeep, L"Keep the settings I have changed");
+    setControlText(kIdChkPurge, L"Clean purge on uninstall");
     setControlText(kIdInstall, L"Install");
-    if (g.haveSurvey && g.install) {
-        const bool installed = g.survey.d3d11.kind == DllKind::Edvr || g.survey.openvrCurrent.kind == DllKind::Edvr || g.survey.state.present;
-        SetWindowTextW(g.install, installed ? tr(L"Update") : tr(L"Install"));
-    }
+    if (g.haveSurvey && g.install) SetWindowTextW(g.install, installButtonLabel());
     setControlText(kIdRepair, L"Repair");
     setControlText(kIdUninstall, L"Uninstall");
     setControlText(kIdCollectLogs, L"Save logs");
     setControlText(kIdSettingsVr, L"VR");
     setControlText(kIdSettingsFlat, L"Flat");
-    setControlText(kIdUpdate, L"Download");
+    setControlText(kIdUpdate, L"Download & install");
     setControlText(kIdRc, L"Include release candidates");
-    setControlText(kIdPlay, L"Play");
     setControlText(kIdPlayVr, L"Play VR");
     setControlText(kIdPlayFlat, L"Play flat");
     setControlText(kIdDirect, L"Start Elite directly (no Frontier launcher)");
     setControlText(kIdCloseAfter, L"Close the launcher once Elite has started");
+    setControlText(kIdSteamFrontier, L"Use Frontier account login");
     setControlText(kIdDiscord, L"Ask on Discord");
     setControlText(kIdCopyPath, L"Copy path");
     setControlText(kIdShowFolder, L"Show folder");
     if (g.search) SendMessageW(g.search, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(tr(L"Search settings")));
     refillScopeChoices();
+    refillVrModeChoices();
     if (g.languageCombo) {
         const LRESULT count = SendMessageW(g.languageCombo, CB_GETCOUNT, 0, 0);
         for (LRESULT i = 0; i < count; ++i) {
@@ -304,15 +583,24 @@ void fillLanguageCombo() {
 
 void createLauncherControls(HWND window) {
     const ui::Fonts& f = ui::fonts();
-    // Not "Update": that is what the Setup card's button says, and it installs into this folder.
-    lg.update = ui::makeButton(window, L"Download", kIdUpdate, ui::ButtonStyle::Primary, f.body);
+    lg.update = ui::makeButton(window, L"Download & install", kIdUpdate, ui::ButtonStyle::Primary, f.body);
     lg.rc = ui::makeCheckbox(window, L"Include release candidates", kIdRc, false, f.body);
-    lg.play = ui::makeButton(window, L"Play", kIdPlay, ui::ButtonStyle::Primary, f.body);
     lg.playVr = ui::makeButton(window, L"Play VR", kIdPlayVr, ui::ButtonStyle::Primary, f.body);
     lg.playFlat = ui::makeButton(window, L"Play flat", kIdPlayFlat, ui::ButtonStyle::Secondary, f.body);
     lg.direct = ui::makeCheckbox(window, L"Start Elite directly (no Frontier launcher)", kIdDirect, false, f.body);
     lg.closeAfter = ui::makeCheckbox(window, L"Close the launcher once Elite has started", kIdCloseAfter, false, f.body);
-    for (HWND control : {lg.update, lg.rc, lg.play, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter}) ShowWindow(control, SW_HIDE);
+    lg.steamFrontier = ui::makeCheckbox(window, L"Use Frontier account login", kIdSteamFrontier, false, f.body);
+    lg.vrMode = CreateWindowExW(0, L"COMBOBOX", L"",
+                                WS_CHILD | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST |
+                                    CBS_OWNERDRAWFIXED | CBS_HASSTRINGS,
+                                0, 0, 10, 10, window,
+                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdVrMode)), nullptr, nullptr);
+    SendMessageW(lg.vrMode, WM_SETFONT, reinterpret_cast<WPARAM>(f.body), TRUE);
+    if (ui::theme().dark) SetWindowTheme(lg.vrMode, L"DarkMode_CFD", nullptr);
+    refillVrModeChoices();
+    for (HWND control :
+         {lg.update, lg.rc, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter, lg.steamFrontier, lg.vrMode})
+        ShowWindow(control, SW_HIDE);
 }
 
 // The window is up: load the payload, ask GitHub, and say what start-up had to say.
@@ -322,6 +610,7 @@ void launcherBegin() {
     env.payloadDir = g.args.payloadDir;
     env.channelOverride = g.args.channel;
     env.closeAfterStartArg = g.args.closeAfterStart;
+    env.frontierLoginArg = g.args.frontierLogin;
     env.updatedFlag = g.args.updated;
     wchar_t self[MAX_PATH * 2]{};
     const DWORD n = GetModuleFileNameW(nullptr, self, static_cast<DWORD>(sizeof(self) / sizeof(self[0])));
@@ -335,7 +624,7 @@ void launcherBegin() {
     env.payloadSwitched = []() {
         // Switched: look at the folder again, then the ordinary install, with its plan and its confirmation.
         if (!g.haveSurvey) return;
-        g.survey = surveyTarget(g.survey.game);
+        g.survey = surveyTarget(g.survey.game, mirrorDirOfGame(g.survey.game));
         showSurvey();
         runAction(AppArgs::Act::Install);
     };
@@ -373,6 +662,22 @@ void launcherBegin() {
         if (!started) takeInstanceMutex(0);
         return started;
     };
+    const std::wstring settingsBackupDir = joinPath(env.roots.launcherDir(), L"backups");
+    auto lastSettingsSnapshot = std::make_shared<SettingsXmlSnapshot>();
+    env.detectVrMode = [](const std::wstring& gameDir) {
+        return detectVrHeadsetModeFromSettingsXml(defaultEliteSettingsXmlPath(gameDir));
+    };
+    env.prepareLaunchMode = [settingsBackupDir, lastSettingsSnapshot](
+                                bool vr, edvr::VrHeadsetMode preferredVrMode, std::string* error) {
+        const std::wstring gameDir = g.haveSurvey ? g.survey.game.dir : std::wstring();
+        return prepareSettingsXmlForLaunch(defaultEliteSettingsXmlPath(gameDir), settingsBackupDir, vr,
+                                             preferredVrMode, error, L"EliteDangerous64.exe",
+                                             lastSettingsSnapshot.get());
+    };
+    env.restoreLaunchMode = [lastSettingsSnapshot]() {
+        restoreSettingsXmlFromSnapshot(*lastSettingsSnapshot);
+        *lastSettingsSnapshot = SettingsXmlSnapshot();
+    };
     lg.session.reset(new LauncherSession(env));
     lg.session->start();
     if (lg.session->includeReleaseCandidates()) ui::toggleCheckbox(lg.rc);
@@ -380,8 +685,18 @@ void launcherBegin() {
 }
 
 void launcherAfterScan() {
+    if (lg.session && g.haveSurvey) {
+        if (lg.session->seedVrStereoModeFromSettings(g.survey.game.dir) != edvr::VrHeadsetMode::NotSet) {
+            updateLauncherControls();
+        }
+    }
     const std::string& note = launcherStartupNote();
     if (!note.empty() && g.haveSurvey) setReport(note);
+    // Open on Play when ED-UP is already installed (the everyday workflow); stay on Setup
+    // for first-run installs or explicit --autorun actions so Updates, Install and Log are up front.
+    if (!g.args.autorun && g.args.action == AppArgs::Act::None && launcherFolderHasEdup()) {
+        showScreen(Screen::Play);
+    }
 }
 
 void launcherShutdown() {
@@ -408,7 +723,16 @@ void runLauncherJob(LPARAM param) {
 
 // WM_COMMAND for the launcher's own controls. True when it was one of them.
 bool launcherCommand(int id, int code) {
-    if (code != BN_CLICKED || !lg.session) return false;
+    if (!lg.session) return false;
+    if (id == kIdVrMode && code == CBN_SELCHANGE) {
+        const LRESULT index = SendMessageW(lg.vrMode, CB_GETCURSEL, 0, 0);
+        if (index != CB_ERR) {
+            const int token = static_cast<int>(SendMessageW(lg.vrMode, CB_GETITEMDATA, static_cast<WPARAM>(index), 0));
+            lg.session->setVrStereoMode(edvr::vrHeadsetModeFromInt(token));
+        }
+        return true;
+    }
+    if (code != BN_CLICKED) return false;
     switch (id) {
         case kIdUpdate:
             lg.session->beginUpdate();
@@ -417,6 +741,21 @@ bool launcherCommand(int id, int code) {
             ui::toggleCheckbox(lg.closeAfter);
             lg.session->setCloseAfterStart(ui::checkboxChecked(lg.closeAfter));
             return true;
+        case kIdSteamFrontier: {
+            ui::toggleCheckbox(lg.steamFrontier);
+            const bool isSteam = g.haveSurvey && _wcsicmp(g.survey.game.source.c_str(), L"Steam") == 0;
+            bool hasFrontierInstall = false;
+            for (const GameInstall& inst : g.installs) {
+                if (_wcsicmp(inst.source.c_str(), L"Frontier launcher") == 0) {
+                    hasFrontierInstall = true;
+                    break;
+                }
+            }
+            lg.session->setSteamFrontierLogin(ui::checkboxChecked(lg.steamFrontier), isSteam && !hasFrontierInstall);
+            updateLauncherControls();
+            InvalidateRect(g.window, nullptr, FALSE);
+            return true;
+        }
         case kIdRc:
             ui::toggleCheckbox(lg.rc);
             lg.session->setIncludeReleaseCandidates(ui::checkboxChecked(lg.rc));
@@ -461,16 +800,32 @@ bool launcherCommand(int id, int code) {
                     MessageBoxW(g.window, fromUtf8(error).c_str(), kAppTitle, MB_OK | MB_ICONWARNING);
                 }
             }
+            invalidateLauncherCache();
             updateLauncherControls();
             return true;
         }
-        case kIdPlay:
         case kIdPlayVr:
         case kIdPlayFlat: {
             if (!g.haveSurvey) return true;
             const bool vr = id != kIdPlayFlat;
-            lg.session->beginPlay(g.survey.game.source, g.survey.game.dir, vr, isElevated(), realRouteOps(), WatchNames(),
+            if (vr && !isElevatedForPlay() && lg.vrMode && IsWindowVisible(lg.vrMode)) {
+                // Seed from an existing 3..6 value in Settings.xml before treating the user as
+                // unset; NotSet is reserved for a new VR user who has never chosen one yet.
+                lg.session->seedVrStereoModeFromSettings(g.survey.game.dir);
+                if (lg.session->vrStereoMode() == edvr::VrHeadsetMode::NotSet) {
+                    MessageBoxW(g.window, tr(L"Choose your preferred VR 3D mode before launching in VR."), kAppTitle,
+                                MB_OK | MB_ICONINFORMATION);
+                    SetFocus(lg.vrMode);
+                    SendMessageW(lg.vrMode, CB_SHOWDROPDOWN, TRUE, 0);
+                    return true;
+                }
+            }
+            invalidateLauncherCache();
+            lg.session->beginPlay(g.survey.game.source, g.survey.game.dir, vr, isElevatedForPlay(), realRouteOps(), WatchNames(),
                                   WatchTiming());
+            g.mode = eliteGameMode();
+            rebuildStatus();
+            InvalidateRect(g.window, nullptr, FALSE);
             return true;
         }
         default:
@@ -529,6 +884,7 @@ void launcherApplyElevated(const AppArgs& args, const Plan& plan) {
     file.scope = args.scope;
     file.keepSettings = args.keepSettings;
     file.removeSettings = args.removeSettings;
+    file.purge = args.purge;
     file.restoreMirror = lg.restoreViaPlan;
     // The copy finds the manifest, the cache and the mirror under the data root the plan file sits in.
     if (payload.kind == PayloadKind::Manifest) file.manifestSha = manifestShaOf(payload.manifestPath);
@@ -544,7 +900,8 @@ void launcherApplyElevated(const AppArgs& args, const Plan& plan) {
         } else {
             setReport(shown + "\r\n----\r\n" + outcomeReport(result.outcome));
         }
-        g.survey = surveyTarget(g.survey.game);
+        g.survey = surveyTarget(g.survey.game, mirrorDirOfGame(g.survey.game));
+        loadSettings(g.settingsEdition);
         showSurvey();
     });
 }

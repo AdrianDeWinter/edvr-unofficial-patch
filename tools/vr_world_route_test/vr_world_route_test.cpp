@@ -1389,9 +1389,9 @@ void sourcePins() {
                   math.find("vrWorldSteadyKey") == std::string::npos && math.find("vrWorldFormatSteadyChanged") == std::string::npos &&
                   math.find("experimental.temporal_aa_on_foot_world_") == std::string::npos,
               "jitter and steady detail: the pure half holds no key, parser, key-change line or decision row for either (the jitter decision has no KeyOff)");
-        const std::string cfgSource = readFile("edvr.ini");
+        const std::string cfgSource = readFile("edup.ini");
         check(!cfgSource.empty() && cfgSource.find("temporal_aa_on_foot_world_") == std::string::npos,
-              "jitter and steady detail: the shipped edvr.ini has no key that starts with the route key's name and goes on: there is nothing to flip");
+              "jitter and steady detail: the shipped edup.ini has no key that starts with the route key's name and goes on: there is nothing to flip");
     }
 }
 

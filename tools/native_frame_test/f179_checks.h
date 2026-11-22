@@ -422,8 +422,8 @@ inline void run179(Check&& check) {
 
     // ---- the source sites -----------------------------------------------------------------------------------------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini"), logpin = slurp("src/d3d11/native_on_foot_logpin.h");
-        check(!cpp.empty() && !ini.empty() && !logpin.empty(), "F179: the source pins read src/d3d11/native_on_foot.cpp, edvr.ini and native_on_foot_logpin.h (run the rig from the repository root)");
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini"), logpin = slurp("src/d3d11/native_on_foot_logpin.h");
+        check(!cpp.empty() && !ini.empty() && !logpin.empty(), "F179: the source pins read src/d3d11/native_on_foot.cpp, edup.ini and native_on_foot_logpin.h (run the rig from the repository root)");
         const auto has = [&](const std::string& needle) { return cpp.find(needle) != std::string::npos; };
         const auto at = [&](const std::string& needle) { return cpp.find(needle); };
         // F179a: the body's neck target (T), right after F97a's, and the rest path's; the eye alignment raise is not touched by it
@@ -458,7 +458,7 @@ inline void run179(Check&& check) {
               "F179a: the F97a line's bins are the stance and whether in the sights (the detach weight from 0.05), a standing call in the sights is told from a hip call by its bin's name, and the sights' bins say the standing share and its raise");
         // no new keys
         check(ini.find("f179") == std::string::npos && ini.find("F179") == std::string::npos && ini.find("stand_ads_raise") == std::string::npos ,
-              "F179: both are behaviour: edvr.ini has no new key");
+              "F179: both are behaviour: edup.ini has no new key");
     }
 }
 

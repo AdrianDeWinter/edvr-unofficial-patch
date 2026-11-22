@@ -881,8 +881,8 @@ footer a:hover { color: var(--accent-hi); }
         <article class="card">
           <span class="n">03</span>
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.5v15l12-7.5z"/></svg></div>
-          <h3>One Play button</h3>
-          <p>Play starts Elite through Steam, Epic or Frontier's launcher. ED-UP's launcher then waits on the taskbar while you play and comes back when the game exits.</p>
+          <h3>Optional Play button</h3>
+          <p>Play starts Elite through Steam, Epic or Frontier's launcher, or directly without Frontier's launcher. Using Play is optional: once ED-UP is installed, you can keep starting Elite from Steam, Epic, Frontier, or min-ed-launcher.</p>
         </article>
       </div>
     </section>
@@ -890,7 +890,7 @@ footer a:hover { color: var(--accent-hi); }
     <section class="block" aria-labelledby="first">
       <h2 class="label" id="first">First run</h2>
       <ol class="steps">
-        <li><strong>Windows may warn that the launcher is unrecognised.</strong> The launcher is signed by CharacterEcho LLC, and the warning names that publisher. Windows still warns about a publisher it has little history for, and warns less as that history grows. It is separate from the signature the launcher checks on each update. Choose More info, then Run anyway. To check the file first, compare its SHA-256 with the release's <code>SHA256SUMS</code>.</li>
+        <li><strong>On Windows, download only <code>ed-up-launcher.exe</code>.</strong> You do not need the <code>.zip</code>, <code>.json</code>, or <code>.sig</code> files on the GitHub release; the launcher downloads and verifies the patch package itself. Windows may warn that the launcher is unrecognised: it is signed by CharacterEcho LLC, and the warning names that publisher. Choose More info, then Run anyway. To check the file first, compare its SHA-256 with the release's <code>SHA256SUMS</code>.</li>
         <li><strong>The launcher installs itself first.</strong> The first run copies it to <code>%LOCALAPPDATA%\EDVR\launcher\</code> and adds a Start menu shortcut. Uninstalling it from Windows' installed apps removes only the launcher and its shortcut; ED-UP stays installed in the game folder, with your settings.</li>
         <li><strong>Pick VR and flat, VR only or flat only.</strong> Check the list of changes, say yes, and press Play.</li>
       </ol>

@@ -10,7 +10,7 @@ body:
 
         **Try launching once more.** ED-UP notices when a run died in its first seconds and switches every fix in `d3d11.dll` off for the next launch by itself, so the second attempt usually gets you in. The log says `SENTINEL TRIPPED` when that has happened. If you would rather it stayed off, **delete `d3d11.dll`** from the game folder and the game is immediately back to stock; if you also installed `openvr_api.dll`, delete that and rename `openvr_api_orig.dll` back.
 
-        **Then get me the zip.** Run `ed-up-launcher.exe` and press **Save logs**. It writes one zip to your Desktop with the breadcrumb file, the last session's logs, your `edvr.ini`, the install record and your graphics settings — the right files, from the right session, in one attachment. (`ed-up-launcher.exe --collect-logs` does the same from a command line.)
+        **Then get me the zip.** Run `ed-up-launcher.exe` and press **Save logs**. It writes one zip to your Desktop with the breadcrumb file, the last session's logs, your `edup.ini`, the install record and your graphics settings — the right files, from the right session, in one attachment. (`ed-up-launcher.exe --collect-logs` does the same from a command line.)
 
         Everything else below is a question the zip cannot answer for me.
 
@@ -21,7 +21,7 @@ body:
       description: |
         Drag it in. It is the whole report — the fields under it are the parts no file knows.
 
-        **If you installed by hand and have no launcher**, attach these instead: `edvr_breadcrumbs.txt` and `edvr_FATAL.txt` (if there is one) from next to `EliteDangerous64.exe`, and everything in `edvr_logs\` — or at least `edvr_gfx_*.log` and `edvr_vr_*.log` with matching timestamps from the run that crashed. The two halves of ED-UP are separate DLLs and each logs things the other cannot see. `edvr_breadcrumbs.txt` matters most: the logs are buffered and a crash eats their last lines, and the breadcrumb file is written one line at a time so it survives.
+        **If you installed by hand and have no launcher**, attach these instead: `edup_breadcrumbs.txt` and `edup_FATAL.txt` (if there is one) from next to `EliteDangerous64.exe`, and everything in `edup_logs\` — or at least `edvr_gfx_*.log` and `edvr_vr_*.log` with matching timestamps from the run that crashed. The two halves of ED-UP are separate DLLs and each logs things the other cannot see. `edup_breadcrumbs.txt` matters most: the logs are buffered and a crash eats their last lines, and the breadcrumb file is written one line at a time so it survives.
 
         **What is in it:** ED-UP's own logs and settings, and your Elite graphics settings. The logs contain your game folder path, and if ED-UP read your Elite key bindings they name your `.binds` file, which may include your commander name. Worth a glance if that matters to you.
       placeholder: Drag the zip here.

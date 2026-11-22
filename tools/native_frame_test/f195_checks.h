@@ -95,7 +95,7 @@ void run195(Check&& check) {
     }
     // ---- 4. the sites, the line, the retired key ---------------------------------------------------------------------------------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini"), h = slurp("src/d3d11/native_on_foot_f195.h");
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini"), h = slurp("src/d3d11/native_on_foot_f195.h");
         const auto has = [&](const std::string& needle) { return cpp.find(needle) != std::string::npos; };
         const auto at = [&](const std::string& needle) { return cpp.find(needle); };
         check(!cpp.empty() && !ini.empty() && !h.empty(), "F195: the sources the pins read are readable from the repo root");
@@ -111,7 +111,7 @@ void run195(Check&& check) {
         // F195b: the key is retired. The needles are stems, cut short on purpose, so that the tree holds no spelling of the retired name outside the docs.
         check(cpp.find("look_to_aim_keeps") == std::string::npos && cpp.find("g_ltaKeep") == std::string::npos && ini.find("look_to_aim_keeps") == std::string::npos && ini.find("keep the aim's pitch") == std::string::npos &&
                   ini.find("(F195, A/B)") == std::string::npos && h.find("keyOn") == std::string::npos && h.find("RETIRED on 2026-10-31") != std::string::npos,
-              "F195b: the keep-the-aim's-pitch key is retired: nothing reads it, no flag holds it, keptPitch has no key argument, edvr.ini has neither its entry nor its menu row");
+              "F195b: the keep-the-aim's-pitch key is retired: nothing reads it, no flag holds it, keptPitch has no key argument, edup.ini has neither its entry nor its menu row");
     }
     // ---- 5. F197: the keep applies only after a settled mouse aim ----------------------------------------------------------------------------------------------------------------------------------------------
     {

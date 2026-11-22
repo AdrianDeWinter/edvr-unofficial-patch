@@ -11,6 +11,7 @@
 #include <windows.h>
 
 #include <string>
+#include <vector>
 
 #include "../common/install_scope.h"
 #include "plan.h"
@@ -26,6 +27,7 @@ struct AppArgs {
     std::string  scope;                  // --scope both|vr|flat; empty means the folder's own, else both
     bool         keepSettings = true;    // --replace-settings
     bool         removeSettings = false; // --remove-settings (uninstall)
+    bool         purge = false;          // --purge (clean uninstall: removes both INIs, logs, backups, install dir and mirror)
     bool         dryRun = false;         // --dry-run
     bool         convertProfile = false; // --convert-profile: accepted, and no longer needed
     bool         autorun = false;        // set on the elevated relaunch: already confirmed
@@ -38,6 +40,7 @@ struct AppArgs {
     // define EDUP_LAUNCHER, so it neither has these fields nor accepts these flags.
     std::wstring payloadDir;       // --payload <dir>: install from an unpacked ed-up-<ver>.zip
     std::wstring dataRoot;         // --data-root <dir>: every launcher folder under here, nothing registered
+    std::wstring userDataRoot;     // --user-data-root <dir>: the unelevated user's %LOCALAPPDATA%\EDUP, passed to the elevated copy
     std::wstring planFile;         // --apply-plan <file>: the elevated copy's whole job
     std::string  channel;          // --channel stable|rc, for this run
     bool         checkUpdate = false;  // --check-update
@@ -49,7 +52,9 @@ struct AppArgs {
     bool         novr = false;         // --novr, for --direct-dry-run
     bool         licenses = false;     // --licenses: print the third-party licence the launcher carries
     bool         closeAfterStart = false;  // --close-after-start: close once Elite has started, for this run
-    bool         headless = false;     // --headless: start Elite from --dir with no window (needs --vr or --novr)
+    bool         headless = false;     // --headless: start Elite from --dir with no window
+    bool         frontierLogin = false; // --frontier-login: use Frontier account login on Steam direct launch
+    std::vector<std::wstring> wrappedArgs; // trailing command args (e.g. Steam %command%) passed after --headless
 #endif
 };
 
@@ -87,6 +92,24 @@ bool needsElevationFor(const Survey& survey);
 bool relaunchElevated(const AppArgs& args);
 
 bool isElevated();
+// True only when running with a UAC split elevated token (TokenElevationTypeFull), so closing and
+// reopening normally will run unelevated. False when UAC is disabled ("Never notify",
+// TokenElevationTypeDefault) because every desktop process shares the same elevated token.
+bool elevationBlocksPlay(bool tokenElevated, unsigned long elevationType);
+bool isElevatedForPlay();
+
+// Returns true when `mirrorDir` is also the mirror location for another discovered install in
+// `knownInstalls`, so clean purge will not delete a shared mirror belonging to two folders.
+bool mirrorSharedWithAnotherInstall(const GameInstall& target, const std::wstring& mirrorDir,
+                                    const std::wstring& mirrorRoot,
+                                    const std::vector<GameInstall>& knownInstalls);
+
+// Cleans up artifacts outside the game directory after a --purge uninstall
+// (any EDLaunch stand-in shim and, when `removeMirror` is true, the settings mirror folder),
+// appending notes for what was removed. Shared by console, GUI, and elevated plan apply.
+// Returns true if anything was removed.
+bool purgeAfterUninstall(const std::wstring& gameDir, const std::wstring& mirrorDir,
+                         std::vector<std::string>* notes, bool removeMirror = true);
 
 int runConsole(const AppArgs& args);
 int runGui(HINSTANCE instance, const AppArgs& args);

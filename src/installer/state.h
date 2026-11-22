@@ -105,28 +105,37 @@ struct InstallState {
 
 std::wstring stateDirPath(const std::wstring& gameDir);
 std::wstring statePath(const std::wstring& gameDir);
-// The shipped default of each settings file, kept as the base of its next merge: edvr.ini.base for edvr.ini, edvr-flat.ini.base for
-// edvr-flat.ini. Each is written from its own payload file by the install that manages that file.
+// The shipped default of each settings file, kept as the base of its next merge: edup.ini.base for edup.ini, edup-flat.ini.base for
+// edup-flat.ini. Each is written from its own payload file by the install that manages that file.
 std::wstring baseIniPath(const std::wstring& gameDir);
 std::wstring flatBaseIniPath(const std::wstring& gameDir);
 std::wstring backupRootPath(const std::wstring& gameDir);
+
+// Legacy pre-rebrand locations read during migration and cleanup.
+std::wstring legacyStateDirPath(const std::wstring& gameDir);
+std::wstring legacyStatePath(const std::wstring& gameDir);
+std::wstring legacyBaseIniPath(const std::wstring& gameDir);
+std::wstring legacyFlatBaseIniPath(const std::wstring& gameDir);
+std::wstring legacyBackupRootPath(const std::wstring& gameDir);
 
 // The scope a record names: its scope when it has one; a record from before scopes reads its profile (vr -> both, flat -> flat).
 // Empty when neither says anything a scope can be read from.
 std::string recordedScope(const InstallState& state);
 
-// The settings files a scope ("both", "vr" or "flat") installs: edvr.ini for vr and both, edvr-flat.ini for flat and both.
+// The settings files a scope ("both", "vr" or "flat") installs: edup.ini for vr and both, edup-flat.ini for flat and both.
 bool scopeHasVrIni(const std::string& scope);
 bool scopeHasFlatIni(const std::string& scope);
 
-// The settings file an edition owns: edvr.ini for "vr", edvr-flat.ini for "flat".
-// The flat runtime reads edvr-flat.ini first and falls back to edvr.ini only
-// while there is none (config.cpp), so a flat operation that touched edvr.ini
-// would land on the VR profile's tuning, and one that touched only edvr.ini
+// The settings file an edition owns: edup.ini for "vr", edup-flat.ini for "flat".
+// The flat runtime reads edup-flat.ini first and falls back to edup.ini only
+// while there is none (config.cpp), so a flat operation that touched edup.ini
+// would land on the VR profile's tuning, and one that touched only edup.ini
 // would change nothing the flat runtime reads. Anything else is the VR file: a
 // record from before the profiles existed says nothing and means VR.
 const wchar_t* settingsLeafFor(const std::string& profile);
-std::wstring   settingsPathFor(const std::wstring& gameDir, const std::string& profile);
+std::wstring   settingsPathFor(const std::wstring& dir, const std::string& profile);
+const wchar_t* legacySettingsLeafFor(const std::string& profile);
+std::wstring   legacySettingsPathFor(const std::wstring& dir, const std::string& profile);
 
 // The tool's receipts (tools\install_edvr.py) for this folder. The tool keeps its own record beside the game: each file it placed, what
 // it replaced, and the hashes of both. The installer reads them for provenance only; its own record stays the authority for what it did.

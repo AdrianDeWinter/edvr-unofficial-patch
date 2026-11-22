@@ -1,7 +1,7 @@
 #pragma once
 // corpus_identity: does the patched pixel shader write the game's own
 // G-buffer targets bit-identically to the stock one? Run on WARP against the
-// REAL game bytecode (a local edvr_logs dump; the game's shaders are not in
+// REAL game bytecode (a local edup_logs dump; the game's shaders are not in
 // the repository).
 //
 // For one (stock PS, patched PS) pair:

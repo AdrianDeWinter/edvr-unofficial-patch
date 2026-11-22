@@ -227,7 +227,7 @@ void glue(EdvrNativeTemporalTable& t,ID3D11Texture2D* source,uint64_t gen,uint64
   std::memset(g_glueCbHead,0,sizeof(g_glueCbHead));std::memset(g_glueCbWorld,0,sizeof(g_glueCbWorld));
   g_glueCbHead[1100]=0.05f;g_glueCbHead[1101]=-0.016f;g_glueCbHead[1102]=0.016f;      // the bad frame's row 275 (flight 060955)
   g_glueCbWorld[1100]=6.119f;g_glueCbWorld[1101]=-3.432f;g_glueCbWorld[1102]=11.511f; // an ordinary eye origin
-  // A stale "off" line from an older edvr.ini, kept in the config the whole case: the setting is gone, so every hold
+  // A stale "off" line from an older edup.ini, kept in the config the whole case: the setting is gone, so every hold
   // below runs with it present and must not care. (The install path's own no-key check is the last block.)
   edvr::Config::get().set("fix.transition_flash","0");
   edvr::installGlitchFrameFix();

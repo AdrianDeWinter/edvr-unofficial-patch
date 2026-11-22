@@ -1,6 +1,6 @@
 # When something goes wrong
 
-If you are going to ask someone, collect the log first. [Ask for help](Ask-for-help.md) is one button. The cases below have a known next step. Past them, the [technical notes](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/troubleshooting.md) list the edits that need `edvr.ini`.
+If you are going to ask someone, collect the log first. [Ask for help](Ask-for-help.md) is one button. The cases below have a known next step. Past them, the [technical notes](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/troubleshooting.md) list the edits that need `edup.ini`.
 
 ## Windows blocked the program
 
@@ -16,7 +16,7 @@ An Odyssey build this release was not made for still installs, with a warning. T
 
 ## The game closes a second or two after launch
 
-Update ED-UP. Current releases handle the crash that did this on older builds, with no edit to `edvr.ini`. If it still closes after that update, send the log zip. The longer trials are in the [technical notes](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/troubleshooting.md#if-the-game-dies-a-second-or-two-after-launch).
+Update ED-UP. Current releases handle the crash that did this on older builds, with no edit to `edup.ini`. If it still closes after that update, send the log zip. The longer trials are in the [technical notes](https://github.com/characterecho-sean/ed-unofficial-patch/blob/main/docs/troubleshooting.md#if-the-game-dies-a-second-or-two-after-launch).
 
 ## VR fails just after an ED-UP update
 

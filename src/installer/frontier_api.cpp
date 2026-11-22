@@ -9,6 +9,7 @@
 #include <cstdlib>
 
 #include "update_json.h"
+#include "update_util.h"
 
 namespace edvr::installer {
 namespace {
@@ -113,15 +114,7 @@ FrontierApi::FrontierApi(HttpClient& http, std::string baseUrl, const std::atomi
 }
 
 std::string hexOfBytes(const std::string& text) {
-    static const char digits[] = "0123456789ABCDEF";
-    std::string out;
-    out.reserve(text.size() * 2);
-    for (const char raw : text) {
-        const unsigned char c = static_cast<unsigned char>(raw);
-        out.push_back(digits[c >> 4]);
-        out.push_back(digits[c & 15]);
-    }
-    return out;
+    return hexUpper(reinterpret_cast<const unsigned char*>(text.data()), text.size());
 }
 
 HttpResponse FrontierApi::send(const std::string& path, const std::vector<std::pair<std::string, std::string>>& query,

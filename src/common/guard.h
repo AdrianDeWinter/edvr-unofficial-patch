@@ -159,6 +159,8 @@ public:
 
 private:
     wchar_t m_path[520]{};
+    // The same sentinel in the edvr_logs folder beside a default edup_logs, armed by a session from before the rename.
+    wchar_t m_legacyPath[520]{};
     bool    m_tripped = false;
     bool    m_armed = false;
 };

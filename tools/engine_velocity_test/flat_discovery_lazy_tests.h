@@ -32,7 +32,7 @@ inline LogicalWitness logicalWitness(Game& g) {
     w.b1=edvr::bindingGet(BindSlot::VsCb1);w.vs=edvr::bindingShaderHash(BindSlot::Vs);w.ps=edvr::bindingShaderHash(BindSlot::Ps);
     w.epoch=19;w.writeQ=1;w.drawQ=2;
     // Exercise the production camera slice, CB exemplar and contract writer on
-    // logical bindings while the real context alternates game/EDVR state. This
+    // logical bindings while the real context alternates game/EDUP state. This
     // is a witness-slice fixture, not execution of flatTemporalDraw's assembly.
     const auto* bytes=reinterpret_cast<const unsigned char*>(g.rows[0].data());const auto width=uint32_t(g.rows[0].size()*sizeof(float));
     const bool camera=edvr::flatCaptureCameraRows(w.camera,bytes,width);w.hash=edvr::flatCameraHash(w.camera);

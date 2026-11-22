@@ -96,7 +96,7 @@ struct Buffer {
 
 bool writeIni(const std::wstring& dir, const char* body) {
     CreateDirectoryW(dir.c_str(), nullptr);
-    const std::wstring path = dir + L"\\edvr.ini";
+    const std::wstring path = dir + L"\\edup.ini";
     HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) return false;

@@ -924,12 +924,42 @@ def build_plan(args, *, script=Path(__file__), home=Path.home(), environ=None):
     return command, env, (game, compatdata, proton, runtime)
 
 
+def hybrid_gpu_hint(environ, *, pci_root=Path("/sys/bus/pci/devices")):
+    """Return a concise PRIME offload tip when a Linux system has both an NVIDIA
+    and a non-NVIDIA GPU and no offload/filter env var is set, else None."""
+    if environ.get("__NV_PRIME_RENDER_OFFLOAD") or environ.get("DXVK_FILTER_DEVICE_NAME"):
+        return None
+    if not pci_root.is_dir():
+        return None
+    vendors = set()
+    try:
+        for dev in pci_root.iterdir():
+            cls = (dev / "class")
+            vendor = (dev / "vendor")
+            if not cls.is_file() or not vendor.is_file():
+                continue
+            class_text = cls.read_text(encoding="ascii", errors="ignore").strip().lower()
+            # PCI base class 0x03 = Display controller (VGA 0x0300, 3D 0x0302).
+            if not class_text.startswith("0x03"):
+                continue
+            vendors.add(vendor.read_text(encoding="ascii", errors="ignore").strip().lower())
+    except OSError:
+        return None
+    if "0x10de" in vendors and len(vendors) > 1:
+        return ("Hybrid GPU detected (NVIDIA + integrated GPU). If Elite or ED-UP selects the "
+                "integrated GPU under Proton, launch with: "
+                "__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia")
+    return None
+
+
 def run(args, *, script=Path(__file__), home=Path.home(), environ=None,
         launch=subprocess.run, platform=sys.platform, geteuid=getattr(os, "geteuid", lambda: 1)):
     if platform != "linux" and not args.dry_run:
         raise ValueError("run this wrapper on Linux; use ed-up-launcher.exe on Windows")
     command, env, (game, compatdata, proton, runtime) = build_plan(
         args, script=script, home=home, environ=environ)
+    env_check = os.environ if environ is None else environ
+    gpu_tip = hybrid_gpu_hint(env_check) if platform == "linux" else None
     if args.dry_run:
         print("EDVR resolved launch plan (nothing executed or written):")
         print("  program: launcher")
@@ -949,7 +979,11 @@ def run(args, *, script=Path(__file__), home=Path.home(), environ=None,
             if key in display_env:
                 print("  %s=%s" % (key, shlex.quote(display_env[key])))
         print("  command: %s" % shlex.join(command))
+        if gpu_tip:
+            print("  note: %s" % gpu_tip)
         return 0
+    if gpu_tip:
+        print("EDVR: %s" % gpu_tip, file=sys.stderr)
     if geteuid() == 0:
         raise ValueError("run as the game owner without sudo")
     try:
@@ -2435,6 +2469,20 @@ def self_test():
     epic_self_test()
     preview_self_test()
     steam_context_self_test()
+    # Hybrid-GPU hint self-test (use portable directory names so Windows self-tests work too).
+    with TemporaryDirectory() as tmp:
+        pci = Path(tmp)
+        (pci / "gpu0").mkdir()
+        (pci / "gpu0/class").write_text("0x030000\n", encoding="ascii")
+        (pci / "gpu0/vendor").write_text("0x8086\n", encoding="ascii")
+        assert hybrid_gpu_hint({}, pci_root=pci) is None
+        (pci / "gpu1").mkdir()
+        (pci / "gpu1/class").write_text("0x030200\n", encoding="ascii")
+        (pci / "gpu1/vendor").write_text("0x10de\n", encoding="ascii")
+        tip = hybrid_gpu_hint({}, pci_root=pci)
+        assert tip and "__NV_PRIME_RENDER_OFFLOAD=1" in tip
+        assert hybrid_gpu_hint({"__NV_PRIME_RENDER_OFFLOAD": "1"}, pci_root=pci) is None
+        assert hybrid_gpu_hint({"DXVK_FILTER_DEVICE_NAME": "NVIDIA"}, pci_root=pci) is None
     print("install_proton: self-test passed")
 
 

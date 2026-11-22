@@ -180,15 +180,23 @@ bool underWine() {
     return ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr;
 }
 
-// %LOCALAPPDATA%\EDVR\game_vram.txt, with its folder made. False when LOCALAPPDATA is unset.
+// %LOCALAPPDATA%\EDUP\game_vram.txt, with its folder made (and legacy %LOCALAPPDATA%\EDVR fallback
+// on read). False when LOCALAPPDATA is unset.
 bool storePath(std::wstring& path) {
     wchar_t local[1024] = {};
     const DWORD got = GetEnvironmentVariableW(L"LOCALAPPDATA", local, 1024);
     if (got == 0 || got >= 1024) return false;
-    const std::wstring folder = std::wstring(local) + L"\\EDVR";
+    const std::wstring folder = std::wstring(local) + L"\\EDUP";
     CreateDirectoryW(folder.c_str(), nullptr);   // an existing folder is fine
     path = folder + L"\\game_vram.txt";
     return true;
+}
+
+std::wstring legacyStorePath() {
+    wchar_t local[1024] = {};
+    const DWORD got = GetEnvironmentVariableW(L"LOCALAPPDATA", local, 1024);
+    if (got == 0 || got >= 1024) return std::wstring();
+    return std::wstring(local) + L"\\EDVR\\game_vram.txt";
 }
 
 
@@ -204,7 +212,15 @@ gamevram::StoreRead loadStore(const std::wstring& path, std::vector<gamevram::Re
     }
     if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
         const DWORD error = GetLastError();
-        if (gamevram::classifyStoreOpen(error) == gamevram::StoreRead::Missing) return gamevram::StoreRead::Missing;
+        if (gamevram::classifyStoreOpen(error) == gamevram::StoreRead::Missing) {
+            const std::wstring legacy = legacyStorePath();
+            if (!legacy.empty() && _wcsicmp(legacy.c_str(), path.c_str()) != 0 &&
+                readFileBytes(legacy, &text, kMaxStoreBytes)) {
+                records = gamevram::parseStore(text);
+                return gamevram::StoreRead::Ok;
+            }
+            return gamevram::StoreRead::Missing;
+        }
     }
     return gamevram::StoreRead::Error;
 }

@@ -339,6 +339,23 @@ ApplyResult applyPlan(const Plan& plan, const PayloadProvider& payload) {
                 }
                 break;
             }
+            case Action::RemoveDir: {
+                if (!dirExists(step.from)) break;
+                DWORD dirErr = ERROR_SUCCESS;
+                if (!removeDirectoryTree(step.from, &dirErr)) {
+                    const DWORD code = dirErr != ERROR_SUCCESS ? dirErr : GetLastError();
+                    if (step.bestEffort) {
+                        // A purge folder: everything that can roll back has already run, so say what is left and go on.
+                        result.done.push_back("could not remove all of " + toUtf8(step.from) + "\\ (" + errorText(code) +
+                                              "); delete what is left by hand");
+                    } else {
+                        fail(step.from, code);
+                    }
+                } else {
+                    result.done.push_back("removed " + toUtf8(leafOf(step.from)) + "\\");
+                }
+                break;
+            }
         }
         if (failed) break;
     }
@@ -390,6 +407,54 @@ ApplyResult applyPlan(const Plan& plan, const PayloadProvider& payload) {
     result.rolledBack = rollbackOk;
     result.overwrote = overwrote;
     return result;
+}
+
+bool removeDirectoryTree(const std::wstring& dir, unsigned long* firstError) {
+    auto recordErr = [&](DWORD e) {
+        if (firstError && *firstError == ERROR_SUCCESS && e != ERROR_SUCCESS) *firstError = e;
+    };
+    const DWORD attrs = GetFileAttributesW(dir.c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES) return true;
+    if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+        clearReadOnly(dir);
+        if (!DeleteFileW(dir.c_str())) {
+            recordErr(GetLastError());
+            return false;
+        }
+        return true;
+    }
+    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) {
+        if (!RemoveDirectoryW(dir.c_str())) {
+            recordErr(GetLastError());
+            return false;
+        }
+        return true;
+    }
+    WIN32_FIND_DATAW fd{};
+    HANDLE h = FindFirstFileW(joinPath(dir, L"*").c_str(), &fd);
+    bool ok = true;
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+            const std::wstring child = joinPath(dir, fd.cFileName);
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                if (!removeDirectoryTree(child, firstError)) ok = false;
+            } else {
+                clearReadOnly(child);
+                if (!DeleteFileW(child.c_str())) {
+                    recordErr(GetLastError());
+                    ok = false;
+                }
+            }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    clearReadOnly(dir);
+    if (!RemoveDirectoryW(dir.c_str())) {
+        recordErr(GetLastError());
+        ok = false;
+    }
+    return ok;
 }
 
 }  // namespace edvr::installer

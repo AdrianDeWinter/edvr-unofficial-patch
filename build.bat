@@ -197,7 +197,7 @@ set "PHASES=%BUILD%\phase_times.json"
 python tools\build_phases.py --start "%PHASES%"
 
 REM A rig (or a child it stages) that ever creates its own per-instance
-REM directory straight under %BUILD% -- own copy of d3d11.dll, own edvr.ini --
+REM directory straight under %BUILD% -- own copy of d3d11.dll, own edup.ini --
 REM outlives the build that made it: nothing else ever deletes it, so a rig
 REM removed from this file after making one leaves it forever. Found on
 REM 2026-09-17 as 204 such directories (three families, all from rigs long
@@ -238,8 +238,8 @@ REM console, no keyboard-focus move) and its self-test starts it on real
 REM processes; check_status_blocks (plain) checks the docs' Status blocks;
 REM check_tool_conventions (plain) holds every tools\*.py to its --self-test and
 REM to this gate, and steam_library.py to being the one Steam search;
-REM check_config_contract (plain) holds the keys the code reads, edvr.ini and the
-REM log text to one another -- it reads only src\ and edvr.ini; hook_signatures
+REM check_config_contract (plain) holds the keys the code reads, edup.ini and the
+REM log text to one another -- it reads only src\ and edup.ini; hook_signatures
 REM audit (issue 124) fails the build when a hook outside the exact-only files
 REM uses a game address raw instead of through gameRva/gamePinMatches, keys on
 REM the PE identity itself, or names an address the signature table cannot place
@@ -426,11 +426,11 @@ REM build if either DLL imports the compiler again.
 python tools\build_phases.py --mark "%PHASES%" "shader generation"
 echo [edvr] === d3d11.dll ===
 REM The settings schema -- the launcher's window AND the in-headset menu's
-REM row table (docs\settings-menu.md) -- generated from edvr.ini and the
+REM row table (docs\settings-menu.md) -- generated from edup.ini and the
 REM accessor calls in src\, with the gate that keeps it complete. Here,
 REM before the d3d11 compile, because menu.cpp includes menu_schema.inc.
 REM
-REM A setting that is uncommented in edvr.ini is one this build ships ON. If it
+REM A setting that is uncommented in edup.ini is one this build ships ON. If it
 REM is not also reachable from the settings window, it is invisible to everybody
 REM who does not edit ini files, and nothing else in the build would notice: the
 REM game reads it, the log names it, and the window that is supposed to expose
@@ -718,7 +718,7 @@ python tools\compile_cache.py --prune --keep thunks.obj --keep weapon_ui_getter_
     "src\common\log.cpp" "src\common\config.cpp" ^
     "src\common\config_audit.cpp" ^
     "src\common\guard.cpp" "src\common\vtable_hook.cpp" "src\common\code_hook.cpp" ^
-    "src\common\hotkey.cpp" "src\common\proxy.cpp" ^
+    "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" "src\common\proxy.cpp" ^
     "src\common\frame_flag.cpp" "src\common\game_build.cpp" ^
     "src\common\iat_hook.cpp" "src\common\iniedit.cpp" ^
     "src\common\dump_file.cpp" "src\common\dump_file_log.cpp" "src\common\miniz_impl.cpp" ^
@@ -884,7 +884,7 @@ python tools\build_phases.py --mark "%PHASES%" "runtime dll"
 REM The install engine's sources, shared by the launcher and the installer_test rigs below. install_manifest.cpp is the schema-2 parser both halves link;
 REM it needs update_json.cpp and update_util.cpp, so those sit here rather than in LAUNCHER_SRC.
 set INSTALLER_SRC="src\installer\main.cpp" "src\installer\gui.cpp" ^
-    "src\installer\ui.cpp" "src\installer\settings.cpp" ^
+    "src\installer\ui.cpp" "src\installer\settings.cpp" "src\common\hotkey_text.cpp" ^
     "src\installer\settings_view.cpp" "src\installer\logbundle.cpp" ^
     "src\installer\app.cpp" "src\installer\plan.cpp" ^
     "src\installer\apply.cpp" "src\installer\detect.cpp" ^
@@ -914,7 +914,7 @@ set LAUNCHER_SRC="src\installer\launcher_core.cpp" "src\installer\launcher_regis
 
 if defined EDVR_DLL_ONLY goto dll_only_finish
 
-REM The two release files nothing else makes, build\edvr-flat.ini and build\edvr_profile_vr.ini, which
+REM The two release files nothing else makes, build\edup-flat.ini and build\edup_profile_vr.ini, which
 REM package_native.py packs and tools\install_edvr.py installs. The same step checks that the native pair,
 REM the loader and its notice, and any XeSS notices are in the build, so a missing one fails here and not
 REM at packaging.
@@ -934,12 +934,12 @@ REM build\rig_times.json remembers each rig's duration so the longest start
 REM first next time; delete it freely.
 REM
 REM Every process a rig runs -- its test exes, and the proxy DLLs some of them
-REM load out of build\ on purpose -- logs under build\edvr_logs\<label>, a
+REM load out of build\ on purpose -- logs under build\edup_logs\<label>, a
 REM directory of the rig's own: --exe-dir has the runner hand each child
 REM EDVR_LOG_DIR (src\common\config.cpp), and a proxy keeps its crash
 REM sentinels (<hook>.armed, created at hook install and deleted once the hook
 REM has proven itself) in its log directory. Before that every proxy a rig
-REM loaded logged to build\edvr_logs, a proxy that found another rig's
+REM loaded logged to build\edup_logs, a proxy that found another rig's
 REM sentinel still armed took it for its own crash and stood down, and the
 REM proxy-loading rigs had to run one at a time (run_jobs.py --serial, kept
 REM for a rig whose processes share state --exe-dir cannot separate; none
@@ -998,7 +998,7 @@ if defined EDVR_SIGN (
     "%BUILD%\ed-up-launcher.exe" --help >nul || exit /b 1
 )
 
-REM The config contract check (tools\check_config_contract.py) runs with the gates at the top: it reads only src\ and edvr.ini.
+REM The config contract check (tools\check_config_contract.py) runs with the gates at the top: it reads only src\ and edup.ini.
 
 REM The native OpenXR build is the only build; nothing above ran a legacy path.
 REM --forbid-import: neither DLL may import the HLSL compiler at load time. The runtime did (four D3DCompile calls, moved to build time 2026-10-01: its link line
@@ -1192,7 +1192,7 @@ if not exist "%OBJ%\native_menu" mkdir "%OBJ%\native_menu"
     "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     "src\d3d11\menu_keys.cpp" "src\d3d11\shader_swap.cpp" ^
     "src\common\iat_hook.cpp" "src\common\iniedit.cpp" ^
-    "src\common\vtable_hook.cpp" "src\common\code_hook.cpp" "src\common\hotkey.cpp" ^
+    "src\common\vtable_hook.cpp" "src\common\code_hook.cpp" "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" ^
     "src\common\guard.cpp" "src\common\frame_flag.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib gdi32.lib version.lib dxgi.lib d3dcompiler.lib
@@ -1582,7 +1582,7 @@ REM Build gate for the video memory size Elite is told (src\common\game_vram.h, 
 REM advanced.game_vram key; docs\memory-growth-2026-10-22.md, "Elite's streaming budget"): the setting's parse (off, auto, a
 REM number of MB from 256, everything else read as off and named), the size reported for each (auto: 85% of it fits the
 REM OS budget less EDVR's share and a margin, never under 4096 MB, never over the card), the call line's exact text, and
-REM by source text that the key is in edvr.ini off the menu, that both device-creation exports install the hook, that
+REM by source text that the key is in edup.ini off the menu, that both device-creation exports install the hook, that
 REM the hook tells the game's calls from everyone else's and stands down in passthrough and outside the game, and that
 REM learning stops at a profile change and never writes over a store it could not read. It links nothing of the DLLs.
 if not exist "%OBJ%\gamevram" mkdir "%OBJ%\gamevram"
@@ -2068,12 +2068,12 @@ exit /b 0
 :rig_config_test
 if "%EDVR_RIG_STEP%"=="run" goto config_test_run
 echo [edvr] === config_test.exe ===
-REM The real parser over the real shipped edvr.ini. The file's own layout
+REM The real parser over the real shipped edup.ini. The file's own layout
 REM depends on two parser properties -- repeated section headers, last value
 REM wins -- that were originally read out of config.cpp rather than observed,
 REM and every symptom of either being false shows up in the game rather than
 REM in a build. It also registers the generated config_contract_gen.h tables
-REM (the moved-from map parsed from the real edvr.ini), so a moved key's read-
+REM (the moved-from map parsed from the real edup.ini), so a moved key's read-
 REM through is proven against what actually shipped, not a fixture.
 REM Its share-delete probe has to land a thread inside a reload that holds the file for
 REM tens of microseconds, so it needs cores the rest of the pool is not using (run
@@ -2089,7 +2089,7 @@ if errorlevel 1 ( echo [edvr] ERROR: config_test build failed & exit /b 1 )
 if "%EDVR_RIG_STEP%"=="build" exit /b 0
 :config_test_run
 "%BUILD%\config_test.exe" "%ROOT%" "%BUILD%\cfgscratch" || (
-    echo [edvr] ERROR: the shipped edvr.ini does not parse as documented
+    echo [edvr] ERROR: the shipped edup.ini does not parse as documented
     exit /b 1
 )
 REM The sessions the exe wrote with log.max_mb = 1 (head, tail segments, kept lines), read back by the reader every tool uses and checked from the
@@ -2109,7 +2109,7 @@ if not exist "%OBJ%\inputgatetest" mkdir "%OBJ%\inputgatetest"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\inputgatetest"\ ^
     /Fe"%BUILD%\input_gate_test.exe" "tools\input_gate_test\input_gate_test.cpp" ^
     "src\d3d11\joy_watch.cpp" "src\d3d11\desktop_window_cursor.cpp" "src\common\iat_hook.cpp" "src\common\vtable_hook.cpp" ^
-    "src\common\hotkey.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
+    "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
     "src\common\guard.cpp" "src\common\frame_flag.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib dinput8.lib xinput9_1_0.lib
 if errorlevel 1 ( echo [edvr] ERROR: input_gate_test build failed & exit /b 1 )
@@ -2122,7 +2122,7 @@ exit /b 0
 :rig_hotkey_capture_test
 echo [edvr] === hotkey_capture_test.exe ===
 REM The F8 menu's Hotkeys page below the menu: the three hotkey value formats and their round trip
-REM through edvr.ini, the pad and joystick edge, the joystick table against synthetic DIJOYSTATE2
+REM through edup.ini, the pad and joystick edge, the joystick table against synthetic DIJOYSTATE2
 REM buffers on a read-only page, the capture state machine, the checks on a captured binding
 REM (duplicate, reserved, Elite clash), Elite's bindings read for keyboard,
 REM pad and joystick, and which generated rows are on the page in which tier. Nothing is opened:
@@ -2131,7 +2131,7 @@ if not exist "%OBJ%\hotkeycapturetest" mkdir "%OBJ%\hotkeycapturetest"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /I"%GEN%" /Fo"%OBJ%\hotkeycapturetest"\ ^
     /Fe"%BUILD%\hotkey_capture_test.exe" "tools\hotkey_capture_test\hotkey_capture_test.cpp" ^
-    "src\common\hotkey.cpp" "src\d3d11\joy_watch.cpp" "src\d3d11\hotkey_capture.cpp" ^
+    "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" "src\d3d11\joy_watch.cpp" "src\d3d11\hotkey_capture.cpp" ^
     "src\d3d11\elite_binds.cpp" "src\common\iniedit.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
 if errorlevel 1 ( echo [edvr] ERROR: hotkey_capture_test build failed & exit /b 1 )
@@ -2220,7 +2220,7 @@ REM loads a copy of the real build\d3d11.dll on WARP and presents synthetic fram
 REM at a real frame boundary. It pins the state each switch leaves, the log lines, the 50-cycle count and memory, the settings-file
 REM fallback, and a control in a second process that skips the teardown and must be detected. It cannot reach the flat runtime or the VR
 REM UI layers under real draws (they key on Elite's shaders); that is a flight's job. The exe sits in obj, not build: a build\ exe would
-REM read build\edvr-flat.ini as the settings file's fallback.
+REM read build\edup-flat.ini as the settings file's fallback.
 if not exist "%OBJ%\profileswitch" mkdir "%OBJ%\profileswitch"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\profileswitch\\" /Fe"%OBJ%\profileswitch\profile_switch_test.exe" ^
@@ -3026,7 +3026,7 @@ echo [edvr] === vscreen_fit_test.exe ===
 REM fix.vscreen_res_width = auto, fitted to what each eye shows (design doc section 82, the "vscreen auto-fit" entry): the pure half
 REM (src\common\vscreen_fit.h) run by the very code the DLL runs -- the rule, the route's conditions, the footprint geometry, the stored
 REM record, the log's text -- plus the state files on disk (src\common\vscreen_auto_state.cpp) and the source pins that hold the resolver,
-REM the instrument's hook and its D3D calls to what the pure half assumes (they read src\ and edvr.ini from the repo root, which the rig
+REM the instrument's hook and its D3D calls to what the pure half assumes (they read src\ and edup.ini from the repo root, which the rig
 REM takes as its argument). tools\vscreen_fit_test\mutants.py --self-test holds the rig's mutation list to the sources as they are; the
 REM list itself (--run, on demand, about a minute) proves the rig fails when each rule of the header or each wiring pin is flipped.
 if not exist "%OBJ%\vscreenfit" mkdir "%OBJ%\vscreenfit"
@@ -3404,7 +3404,7 @@ REM button, and what nothing here can watch (the mouse, an axis); the active pre
 if not exist "%OBJ%\seat_press_test" mkdir "%OBJ%\seat_press_test"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\seat_press_test\\" /Fe"%BUILD%\seat_press_test.exe" "tools\seat_press_test\seat_press_test.cpp" ^
-    "src\common\hotkey.cpp" "src\d3d11\elite_binds.cpp" "src\common\iniedit.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
+    "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" "src\d3d11\elite_binds.cpp" "src\common\iniedit.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
 if errorlevel 1 ( echo [edvr] ERROR: seat press test build failed & exit /b 1 )
 "%BUILD%\seat_press_test.exe" --dry-run || exit /b 1
@@ -3538,7 +3538,7 @@ echo [edvr] === installer_test.exe ===
 REM The planner over folders that are hard to arrange on a real machine: EDHM
 REM already in the d3d11.dll slot, another mod's installer having overwritten
 REM ours, a game update that put the stock openvr_api.dll back, an original
-REM runtime lost to a double rename -- and the edvr.ini merge, which is the one
+REM runtime lost to a double rename -- and the edup.ini merge, which is the one
 REM piece whose failure silently discards settings somebody tuned in a headset.
 if not exist "%OBJ%\insttest" mkdir "%OBJ%\insttest"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /GR- /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
@@ -3549,7 +3549,7 @@ if not exist "%OBJ%\insttest" mkdir "%OBJ%\insttest"
     "src\installer\detect.cpp" "src\installer\probe.cpp" ^
     "src\common\iniedit.cpp" "src\installer\state.cpp" ^
     "src\installer\mirror.cpp" ^
-    "src\installer\settings.cpp" "src\installer\logbundle.cpp" ^
+    "src\installer\settings.cpp" "src\common\hotkey_text.cpp" "src\installer\logbundle.cpp" ^
     "src\installer\app.cpp" "src\installer\payload.cpp" ^
     "src\installer\install_manifest.cpp" "src\installer\update_json.cpp" "src\installer\update_util.cpp" ^
     /link /INCREMENTAL:NO %INSTALLER_LIBS%
@@ -3616,7 +3616,7 @@ if errorlevel 1 ( echo [edvr] ERROR: the fake steam_api64.dll build failed & exi
     "tools\launcher_test\launcher_test.cpp" ^
     "src\installer\plan.cpp" "src\installer\apply.cpp" "src\installer\detect.cpp" ^
     "src\installer\probe.cpp" "src\common\iniedit.cpp" "src\installer\state.cpp" ^
-    "src\installer\mirror.cpp" "src\installer\settings.cpp" ^
+    "src\installer\mirror.cpp" "src\installer\settings.cpp" "src\common\hotkey_text.cpp" ^
     "src\installer\logbundle.cpp" "src\installer\app.cpp" "src\installer\payload.cpp" ^
     "src\installer\install_manifest.cpp" "src\installer\update_json.cpp" "src\installer\update_util.cpp" ^
     "src\installer\ui.cpp" %LAUNCHER_SRC% ^
@@ -3747,7 +3747,7 @@ if "%EDVR_PROFILE_SYMBOLS%"=="1" (
     python tools\cpu_profile.py --build-analyzer || exit /b 1
 )
 
-REM Do the code, edvr.ini and the log messages agree about setting names?
+REM Do the code, edup.ini and the log messages agree about setting names?
 REM
 REM Three settings were read from the wrong section for the whole of 0.5.x and
 REM nothing anywhere said so, because a key that does not match is simply not
@@ -4791,7 +4791,7 @@ exit /b 0
 :rig_shield_ripple_test
 echo [edvr] === shield_ripple_test.exe ===
 REM advanced.shield_ripple (docs\dlss-blur-elements-2026-10-14.md, "Built, 2026-10-16: the shield refraction after the upscale"): the pair's family rule, the modes, the
-REM first-draw checks' arithmetic; on WARP with the debug layer, the game's own ps_6EAA (tools\shield_ripple_test\fixtures, from edvr_logs\shaders) drawn on the UV ramp
+REM first-draw checks' arithmetic; on WARP with the debug layer, the game's own ps_6EAA (tools\shield_ripple_test\fixtures, from edup_logs\shaders) drawn on the UV ramp
 REM against the analytic uv + d within 1e-6; the whole route with the production remap, jitter cancel and door pass (the build's bytecode) against the stock path
 REM within 2/255, with seven mutants caught; the coverage instrument's method with the production marking pass; and the source scans of the wiring, each with a control.
 REM Built outside build\ so its device is System32's; runs at the repo root (the scans read sources).

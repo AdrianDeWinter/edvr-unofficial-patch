@@ -368,11 +368,11 @@ def shape_cases():
         copy.deepcopy(m["files"][2]), id="other", target={"root": "game", "path": "other.ini"})))
     mutate("constraint-settings-per-profile-ok", lambda m: m["files"].append(dict(
         copy.deepcopy(m["files"][2]), id="settings_flat", when={"profile": ["flat"]},
-        target={"root": "game", "path": "edvr-flat.ini"})))
+        target={"root": "game", "path": "edup-flat.ini"})))
 
-    # a settings file is the profile's own ini: [vr] is edvr.ini and [flat] is edvr-flat.ini, in the game root
+    # a settings file is the profile's own ini: [vr] is edup.ini and [flat] is edup-flat.ini, in the game root
     mutate("constraint-settings-vr-other-name", lambda m: m["files"][2]["target"].update(path="other.ini"))
-    mutate("constraint-settings-vr-flat-name", lambda m: m["files"][2]["target"].update(path="edvr-flat.ini"))
+    mutate("constraint-settings-vr-flat-name", lambda m: m["files"][2]["target"].update(path="edup-flat.ini"))
     mutate("constraint-settings-flat-vr-name", lambda m: m["files"][2].update(when={"profile": ["flat"]}))
     mutate("constraint-settings-in-openvr-root", lambda m: m["files"][2]["target"].update(root="openvr"))
     mutate("constraint-settings-name-case-ok", lambda m: m["files"][2]["target"].update(path="EDVR.INI"))
@@ -398,17 +398,17 @@ def shape_cases():
             ("game-under-openvr-upper", "game", "OPENVR/x.dll", False), ("game-openvr-sibling-ok", "game", "openvr-extra/x.dll", True),
             ("game-openvr-prefix-ok", "game", "openvrx.dll", True), ("game-openvr-leaf-ok", "game", "openvr", True),
             ("openvr-root-openvr-folder-ok", "openvr", "openvr/x.dll", True),
-            ("profile-descriptor", "game", "edvr_profile.ini", False), ("profile-descriptor-case", "game", "EDVR_Profile.INI", False),
-            ("startup-config", "game", "edvr_openxr.ini", False), ("startup-config-openvr", "openvr", "edvr_openxr.ini", False),
-            ("base-copy", "game", "edvr.ini.base", False), ("base-copy-nested-case", "game", "sub/y.BASE", False),
+            ("profile-descriptor", "game", "edup_profile.ini", False), ("profile-descriptor-case", "game", "EDVR_Profile.INI", False),
+            ("startup-config", "game", "edup_openxr.ini", False), ("startup-config-openvr", "openvr", "edup_openxr.ini", False),
+            ("base-copy", "game", "edup.ini.base", False), ("base-copy-nested-case", "game", "sub/y.BASE", False),
             ("openvr-original", "openvr", "openvr_api_orig.dll", False), ("openvr-original-game", "game", "openvr_api_orig.dll", False),
             ("chain-name", "game", "d3d11_edhm.dll", False), ("chain-name-case", "game", "D3D11_Other.DLL", False),
             ("chain-name-empty-star", "game", "d3d11_.dll", False),
             ("record-folder", "game", "edvr_install/x.ini", False), ("record-folder-case", "game", "Edvr_Install/x.ini", False),
             ("backup-folder", "game", "edvr_backup/a/b.dll", False), ("backup-folder-openvr-root", "openvr", "edvr_backup/b.dll", False),
             ("chain-lookalike-ok", "game", "d3d11x.dll", True), ("chain-lookalike-ext-ok", "game", "d3d11_x.dll.bak", True),
-            ("chain-name-nested-ok", "game", "sub/d3d11_x.dll", True), ("descriptor-nested-ok", "game", "sub/edvr_profile.ini", True),
-            ("descriptor-lookalike-ok", "game", "edvr_profile.ini2", True), ("base-lookalike-ok", "game", "x.basement", True),
+            ("chain-name-nested-ok", "game", "sub/d3d11_x.dll", True), ("descriptor-nested-ok", "game", "sub/edup_profile.ini", True),
+            ("descriptor-lookalike-ok", "game", "edup_profile.ini2", True), ("base-lookalike-ok", "game", "x.basement", True),
             ("folder-lookalike-ok", "game", "edvr_installer/x", True), ("folder-name-only-ok", "game", "edvr_install", True)):
         assert ok == name.endswith("-ok"), name
         mutate("reserved-" + name, with_target(root, path))
@@ -485,7 +485,7 @@ def release(out, name, version, issued, graphics, launcher_version=None, schema=
     dlss = deterministic_zip({"nvngx_dlss.dll": rng.randbytes(60000)})
     dlss_name = "ed-up-dlss-%s.zip" % hashlib.sha256(dlss).hexdigest()[:12]
     core_members = {"d3d11.dll": graphics, "Openvr/win64/openvr_api.dll": b"runtime " + version.encode(),
-                    "edvr.ini": b"[fix]\nversion=" + version.encode() + b"\n"}
+                    "edup.ini": b"[fix]\nversion=" + version.encode() + b"\n"}
     core = deterministic_zip(core_members)
     core_name = "ed-up-core-%s.zip" % version
     by_id = {f.id: f for f in pn.FILES}
@@ -493,7 +493,7 @@ def release(out, name, version, issued, graphics, launcher_version=None, schema=
     files = [
         pn.manifest_file_entry(by_id["graphics"], core_name, graphics),
         pn.manifest_file_entry(runtime, core_name, core_members["Openvr/win64/openvr_api.dll"]),
-        pn.manifest_file_entry(by_id["settings_vr"], core_name, core_members["edvr.ini"]),
+        pn.manifest_file_entry(by_id["settings_vr"], core_name, core_members["edup.ini"]),
     ]
     nvngx = zipfile.ZipFile(io.BytesIO(dlss)).read("nvngx_dlss.dll")
     files.append(pn.manifest_file_entry(by_id["dlss"], dlss_name, nvngx))

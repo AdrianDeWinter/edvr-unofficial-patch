@@ -165,11 +165,11 @@ inline void run181(Check&& check) {
 
     // ---- 4. F181b: the pilot's values as the defaults ------------------------------------------------------------------------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini");
-        check(!cpp.empty() && !ini.empty(), "F181: the default pins read edvr.ini and src/d3d11/native_on_foot.cpp (run the rig from the repository root)");
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini");
+        check(!cpp.empty() && !ini.empty(), "F181: the default pins read edup.ini and src/d3d11/native_on_foot.cpp (run the rig from the repository root)");
         const auto has = [&](const std::string& needle) { return cpp.find(needle) != std::string::npos; };
         struct Row { const char* key; const char* atomic; const char* fallbackNeedle; double value; };
-        // the pilot's live Frontier edvr.ini after the F180 flight: each default is the atomic's initial value, the cfg fallback and the shipped line
+        // the pilot's live Frontier edup.ini after the F180 flight: each default is the atomic's initial value, the cfg fallback and the shipped line
         const Row rows[] = {
             {"native_on_foot_crouch_ads_body_forward_cm", "std::atomic<float> g_crouchAdsBodyCm{1.0f};", "cfg.getFloat(\"experimental.native_on_foot_crouch_ads_body_forward_cm\", 1.0f)", 1.0},
             {"native_on_foot_crouch_ads_body_left_cm", "std::atomic<float> g_crouchAdsBodyLeftCm{23.0f};", "cfg.getFloat(\"experimental.native_on_foot_crouch_ads_body_left_cm\", 23.0f)", 23.0},
@@ -194,15 +194,15 @@ inline void run181(Check&& check) {
         check(nf::f179::kNeckGuardDefaultCm == 2.0 && nf::f179::clampGuardCm(std::nan("")) == 2.0 && !has("std::atomic<float> g_neckGuardCm{static_cast<float>(nofoot::f179::kNeckGuardAheadCm)}") &&
                   !has("static_cast<float>(nofoot::f179::kNeckGuardAheadCm)"),
               "F181b: the neck guard's default is one constant (2 cm) the atomic, the fallback and the clamp's not-a-number read share; F179's own 10 cm remains only as the pure functions' default argument, which the pin never uses");
-        // a live edvr.ini that holds a value keeps it: the config read is the key's value, and the default is only the fallback of a missing key (the install keeps an existing ini)
+        // a live edup.ini that holds a value keeps it: the config read is the key's value, and the default is only the fallback of a missing key (the install keeps an existing ini)
         check(has("const double cm = nofoot::f168::clampDialCm(static_cast<double>(cfg.getFloat(\"experimental.native_on_foot_crouch_ads_body_forward_cm\", 1.0f)));"),
               "F181b: the dial is read from the config with the default only as the fallback of a missing key: a live ini that holds a value keeps it");
     }
 
     // ---- 5. the source sites -------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini"), logpin = slurp("src/d3d11/native_on_foot_logpin.h");
-        check(!cpp.empty() && !ini.empty() && !logpin.empty(), "F181: the source pins read the sources and edvr.ini (run the rig from the repository root)");
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini"), logpin = slurp("src/d3d11/native_on_foot_logpin.h");
+        check(!cpp.empty() && !ini.empty() && !logpin.empty(), "F181: the source pins read the sources and edup.ini (run the rig from the repository root)");
         const auto has = [&](const std::string& needle) { return cpp.find(needle) != std::string::npos; };
         const auto at = [&](const std::string& needle) { return cpp.find(needle); };
         check(has("std::atomic<float> g_hipElbowSwivelMaxDeg{static_cast<float>(nofoot::f181::kCapDefaultDeg)};") &&
@@ -233,7 +233,7 @@ inline void run181(Check&& check) {
         const size_t guardKey = ini.find("\nnative_on_foot_neck_guard_cm = "), capKey = ini.find("\nnative_on_foot_hip_elbow_swivel_max_deg = 25.0\n"), squareKey = ini.find("\nnative_on_foot_crouch_ads_square = ");
         check(guardKey != std::string::npos && capKey != std::string::npos && squareKey != std::string::npos && guardKey < capKey && capKey < squareKey && ini.find("# TEMPORARY (F181): Hip elbow swivel max") != std::string::npos &&
                   ini.find("# ui: Hip elbow swivel max | range 0..90 | step 1 | unit deg | live\n") != std::string::npos,
-              "F181a: edvr.ini has the key at 25.0, TEMPORARY, with its ui: row (0..90 deg, step 1, live), after the neck guard distance and before the torso square");
+              "F181a: edup.ini has the key at 25.0, TEMPORARY, with its ui: row (0..90 deg, step 1, live), after the neck guard distance and before the torso square");
     }
 }
 

@@ -2,7 +2,7 @@
 
 // skin_clone_tests: the second skin (src/d3d11/dxbc_skin_clone.h), driven on WARP
 // through a REAL skinned vertex shader and its real pixel shader (the game's
-// bytecode from a local edvr_logs dump; not in the repository) or through a
+// bytecode from a local edup_logs dump; not in the repository) or through a
 // vertex shader compiled from HLSL here that has the same instruction chain
 // (the build gate's stand-in).
 //

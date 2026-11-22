@@ -38,7 +38,7 @@ class NativeTrace final {
     if (swprintf_s(leaf, L"edvr_openxr_%04u%02u%02u_%02u%02u%02u_%03u_%lu.log",
         time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond,
         time.wMilliseconds, pid) < 0) return false;
-    out = path.substr(0, slash + 1) + L"edvr_logs\\" + leaf;
+    out = path.substr(0, slash + 1) + L"edup_logs\\" + leaf;
     return true;
   }
   bool begin(const void* moduleAddress) {

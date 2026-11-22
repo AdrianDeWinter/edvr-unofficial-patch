@@ -66,13 +66,7 @@ std::wstring newGuidText() {
 std::string makeMachineId(const std::string& machineGuid, const std::string& frontierGuid) {
     std::vector<unsigned char> digest;
     if (!sha1Of(trimmed(machineGuid) + trimmed(frontierGuid), &digest)) return std::string();
-    static const char hex[] = "0123456789abcdef";
-    std::string id;
-    for (size_t i = 0; i < 8; ++i) {  // 8 bytes: the first 16 hex characters
-        id.push_back(hex[digest[i] >> 4]);
-        id.push_back(hex[digest[i] & 15]);
-    }
-    return id;
+    return hexLower(digest.data(), 8);  // 8 bytes: the first 16 hex characters
 }
 
 bool readMachineId(const MachineIdKeys& keys, std::string* id, std::string* error) {

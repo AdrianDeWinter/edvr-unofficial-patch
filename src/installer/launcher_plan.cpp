@@ -10,6 +10,7 @@
 #include "../common/mirror_location.h"
 #include "app.h"
 #include "apply.h"
+#include "launch_route.h"
 #include "mirror.h"
 #include "payload.h"
 #include "plan.h"
@@ -151,32 +152,36 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
     if (!described)
         return failed("there is no EliteDangerous64.exe in the game folder the plan names");
     const std::wstring mirrorDir = mirrorDirFor(game, paths.dataRoot);
+    // This copy is elevated and writes, restores and removes the live settings in this per-install folder, which the
+    // user owns: a link there would send those writes somewhere else, as planPathsFor refuses for the folders above it.
+    if (!mirrorDir.empty() && GetFileAttributesW(mirrorDir.c_str()) != INVALID_FILE_ATTRIBUTES && missingOrLink(mirrorDir))
+        return failed("the settings folder for this game is a link; the installer will not write through it");
 
-    Survey survey = surveyTarget(game);
+    Survey survey = surveyTarget(game, mirrorDir);
     const bool uninstall = file.action == "uninstall";
     ApplyOutcome outcome;
 
-    // The restore the user agreed to in the window; it writes into the game folder, so it
-    // is done here, with the rights the rest of the work has.
     if (file.restoreMirror && file.keepSettings && !uninstall) {
         const MirrorInfo mirror = readMirror(mirrorDir);
         const std::string scope = file.scope.empty() ? defaultScope(survey) : file.scope;
-        if (!settingsToRestore(survey.game.dir, mirror, scope).empty()) {
+        if (!settingsToRestore(mirrorDir, mirror, scope).empty() && !survey.iniPresent && !survey.flatIniPresent) {
             std::vector<std::string> notes;
-            const bool restored = restoreFromMirror(survey.game.dir, mirror, scope, &notes);
+            const bool restored = restoreFromMirror(survey.game.dir, mirror, scope, &notes, mirrorDir);
             for (const std::string& n : notes) outcome.lines.push_back(n);
-            if (!restored) outcome.lines.push_back("Not all of the saved settings could be restored; carrying on with what is in the folder.");
-            survey = surveyTarget(game);
+            if (!restored) outcome.lines.push_back("Not all of the saved settings could be restored; carrying on with what is there.");
+            survey = surveyTarget(game, mirrorDir);
         }
     }
 
     Options options;
     options.scope = file.scope;
     options.keepSettings = file.keepSettings;
-    options.removeSettings = file.removeSettings;
+    options.removeSettings = file.removeSettings || file.purge;
+    options.purge = file.purge;
     options.repair = file.action == "repair";
     options.backupStamp = timestampName();
     options.nowUtc = utcNow();
+    options.settingsDir = mirrorDir;
     const Plan plan = uninstall ? planUninstall(survey, options, payloadInfo()) : planInstall(survey, options, payloadInfo());
 
     if (plan.blocked) {
@@ -187,7 +192,16 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
         return blocked;
     }
     if (plan.nothingToDo) {
-        if (!uninstall) updateMirror(survey.game.dir, plan.backupDir, mirrorDir);
+        if (!uninstall) {
+            updateMirror(survey.game.dir, plan.backupDir, mirrorDir);
+        } else if (file.purge) {
+            const std::vector<GameInstall> known = installs ? *installs : findInstalls();
+            const bool shared = mirrorSharedWithAnotherInstall(survey.game, mirrorDir, paths.dataRoot, known);
+            if (purgeAfterUninstall(survey.game.dir, mirrorDir, &outcome.lines, !shared)) {
+                outcome.status = ApplyOutcome::Status::Done;
+                return outcome;
+            }
+        }
         outcome.status = ApplyOutcome::Status::NothingToDo;
         outcome.lines.push_back(planSummary(plan));
         return outcome;
@@ -208,6 +222,10 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
             for (size_t i = 0; i < m.saved.size(); ++i) saved += (i ? ", " : "") + m.saved[i];
             outcome.lines.push_back("Mirrored " + saved + " to " + narrowUtf8(mirrorDir) + ".");
         }
+    } else if (file.purge) {
+        const std::vector<GameInstall> known = installs ? *installs : findInstalls();
+        const bool shared = mirrorSharedWithAnotherInstall(survey.game, mirrorDir, paths.dataRoot, known);
+        purgeAfterUninstall(survey.game.dir, mirrorDir, &outcome.lines, !shared);
     }
     outcome.status = ApplyOutcome::Status::Done;
     return outcome;
@@ -228,6 +246,7 @@ bool writePlanFile(const std::wstring& path, const PlanFile& p, std::string* err
     text += "scope=" + p.scope + "\n";
     text += "keep_settings=" + yesNo(p.keepSettings) + "\n";
     text += "remove_settings=" + yesNo(p.removeSettings) + "\n";
+    if (p.purge) text += "purge=1\n";
     text += "restore_mirror=" + yesNo(p.restoreMirror) + "\n";
     text += "manifest=" + p.manifestSha + "\n";
     std::wstring why;
@@ -241,7 +260,7 @@ bool readPlanFile(const std::wstring& path, PlanFile* plan, std::string* error) 
     std::map<std::string, std::string> m;
     if (!parseLines(text, &m, error)) return false;
     static const std::set<std::string> known = {"version",        "action",          "dir",            "source", "scope",
-                                                "keep_settings",  "remove_settings", "restore_mirror", "manifest"};
+                                                "keep_settings",  "remove_settings", "purge",          "restore_mirror", "manifest"};
     for (const auto& entry : m) {
         if (!known.count(entry.first)) return setError(error, "the plan has a key this launcher does not know: " + entry.first);
     }
@@ -255,6 +274,7 @@ bool readPlanFile(const std::wstring& path, PlanFile* plan, std::string* error) 
     if (!boolOf(m, "keep_settings", &p.keepSettings, error) || !boolOf(m, "remove_settings", &p.removeSettings, error) ||
         !boolOf(m, "restore_mirror", &p.restoreMirror, error))
         return false;
+    if (m.count("purge") && !boolOf(m, "purge", &p.purge, error)) return false;
     if (p.action.empty() || p.dir.empty()) return setError(error, "the plan lacks an action or a folder");
     if (!p.manifestSha.empty() && !isLowerHex(p.manifestSha, 64)) return setError(error, "the plan's manifest is not a 64-character hash");
     if (!p.scope.empty() && p.scope != "both" && p.scope != "vr" && p.scope != "flat") return setError(error, "the plan names an unknown scope");

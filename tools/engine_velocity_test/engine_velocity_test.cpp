@@ -5,7 +5,7 @@
 //   --self-test   every check below, on WARP; writes nothing
 //   --dry-run     the same run (the rig never writes a file), for the gate's
 //                 --dry-run convention
-//   --corpus DIR  also the REAL pool-family shaders from an edvr_logs dump
+//   --corpus DIR  also the REAL pool-family shaders from an edup_logs dump
 //                 (DIR\shaders\*.dxbc): each pair derives, patches, reflects
 //                 and creates on WARP, and draws SV_Target0..3 and depth
 //                 bit-identically to the stock pair (corpus_identity.h). Local
@@ -109,7 +109,7 @@ void softCheck(bool value, const char* why) {
     if (!value && g_softWhy.empty()) g_softWhy = why && *why ? why : "(no reason given)";
 }
 // --partial: the dump under test may lack some of the required pairs (each
-// install's edvr_logs\shaders holds what that install drew, and the pairs below
+// install's edup_logs\shaders holds what that install drew, and the pairs below
 // were measured across several). Strict stays the default: without the flag a
 // missing file fails the run. With it, an absent pair is listed and skipped, and
 // every pair the dump does hold must still pass whole -- so a candidate can be
@@ -328,12 +328,12 @@ int wmain(int argc, wchar_t** argv) {
         // (EDHM's ps_CAD1F585 and its 1D strip at t120, 2026-11-16). The comparison stays stock against patched on one device.
         else if (a == L"--hardware") g_hardware = true;
         else {
-            std::fprintf(stderr, "usage: engine_velocity_test --self-test | --dry-run [--corpus <edvr_logs dir> [--partial]] [--real-link <edvr_logs dir>] [--hardware]\n");
+            std::fprintf(stderr, "usage: engine_velocity_test --self-test | --dry-run [--corpus <edup_logs dir> [--partial]] [--real-link <edup_logs dir>] [--hardware]\n");
             return 2;
         }
     }
     if (!bench && !claimOnly && !selfTest && corpusRoot.empty() && realLinkRoot.empty()) {
-        std::fprintf(stderr, "usage: engine_velocity_test --self-test | --dry-run [--corpus <edvr_logs dir> [--partial]] [--real-link <edvr_logs dir>]\n");
+        std::fprintf(stderr, "usage: engine_velocity_test --self-test | --dry-run [--corpus <edup_logs dir> [--partial]] [--real-link <edup_logs dir>]\n");
         return 2;
     }
     ComPtr<ID3D11Device> device;

@@ -736,7 +736,7 @@ inline void hdrRouteGpuTests(ID3D11Device* device, ID3D11DeviceContext* context)
     }
 
     // ---- 9. the crash-safe breadcrumbs around every step (src\d3d11\flat_hdr_crumbs.h) ---------------------------------------
-    // What the route writes to edvr_breadcrumbs.txt so that a session that ends inside the treatment names the step, read back
+    // What the route writes to edup_breadcrumbs.txt so that a session that ends inside the treatment names the step, read back
     // from the rig's breadcrumb() while the real resolver runs on WARP. The runtime's own calls (the admission, the reach, the
     // Present's end) are driven by hand, in the order the runtime makes them; what no rig can run (treatHdr, the real Present,
     // the two SDKs) is pinned as source by flat_temporal_test. Pinned here: every begin has its end on a normal frame, the

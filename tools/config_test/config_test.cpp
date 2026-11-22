@@ -1,7 +1,7 @@
-// config_test -- runs the real parser over the real shipped edvr.ini.
+// config_test -- runs the real parser over the real shipped edup.ini.
 //
 // The file users edit is the one asserted here. Two properties of the parser
-// that edvr.ini's own layout depends on are proven rather than assumed:
+// that edup.ini's own layout depends on are proven rather than assumed:
 //
 //   1. a section header may REPEAT -- a settings file may return to [fix] or
 //      [hotkey] further down (an installer merge or a hand edit leaves one
@@ -29,12 +29,12 @@
 //     often it is read -- it was said on every read, 90 to 180 lines a second
 //     for a key read each frame;
 //   - getFloat takes the whole value and only a finite one;
-//   - a reload leaves edvr.ini open to being replaced, renamed or deleted (the
+//   - a reload leaves edup.ini open to being replaced, renamed or deleted (the
 //     read shares DELETE): the menu saves by renaming a temp file over it with
 //     POSIX semantics, and a read that did not share DELETE held that off while
 //     the reload had the file open.
 //
-// Usage: config_test.exe <dir containing edvr.ini> [scratch dir]
+// Usage: config_test.exe <dir containing edup.ini> [scratch dir]
 //        config_test.exe --ininame-cases <scratch dir>   (its own child; see iniNameFixturesIsolated)
 #include <windows.h>
 
@@ -58,7 +58,7 @@
 #include "../../src/common/temporal_mode.h"
 #include "../../src/common/log.h"
 #include "../../src/d3d11/native_on_foot_f162.h"   // F162: the ADS sight eye key's text (a header with no dependencies)
-#include "config_contract_gen.h"   // build\gen: the tables the DLLs register, from the real edvr.ini
+#include "config_contract_gen.h"   // build\gen: the tables the DLLs register, from the real edup.ini
 
 using namespace edvr;
 
@@ -122,7 +122,7 @@ static std::wstring widen(const char* p) {
 // A scratch ini written from a literal, for the cases the real file cannot
 // contain without being wrong.
 static bool writeIni(const std::wstring& dir, const char* body,
-                     const wchar_t* leaf = L"edvr.ini") {
+                     const wchar_t* leaf = L"edup.ini") {
     CreateDirectoryW(dir.c_str(), nullptr);
     const std::wstring path = dir + L"\\" + leaf;
     HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
@@ -182,7 +182,7 @@ static std::string codeFallbackOf(const std::string& source, const char* key) {
 // would be testing almost nothing. Each call stamps a time one second on from
 // the last, so every reload that follows is a parse.
 static bool rewriteIni(const std::wstring& dir, const std::string& body,
-                       const wchar_t* leaf = L"edvr.ini") {
+                       const wchar_t* leaf = L"edup.ini") {
     if (!writeIni(dir, body.c_str(), leaf)) return false;
     static ULONGLONG stamp = 0;
     if (!stamp) {
@@ -530,11 +530,11 @@ static void raceCase(const std::wstring& scratch) {
 
 // --- a reload leaves the file open to being replaced (2026-09-29) --------------
 //
-// Config's read of edvr.ini opened it with FILE_SHARE_READ | FILE_SHARE_WRITE --
+// Config's read of edup.ini opened it with FILE_SHARE_READ | FILE_SHARE_WRITE --
 // no FILE_SHARE_DELETE -- so for as long as a reload held the file (tens of
 // microseconds) nothing could delete it, rename it or replace it with POSIX
 // rename semantics, and the in-headset menu, which saves by renaming a temp file
-// over edvr.ini and asks for a reload straight after, could meet that hold on its
+// over edup.ini and asks for a reload straight after, could meet that hold on its
 // very next save.
 //
 // What this proves is the share mode; the replace itself is installer_test's
@@ -596,7 +596,7 @@ static void shareDeleteCase(const std::wstring& scratch) {
         return;
     }
     Config::get().init(scratch);
-    const std::wstring path = scratch + L"\\edvr.ini";
+    const std::wstring path = scratch + L"\\edup.ini";
 
     ProbeState st;
     std::thread probe(probeMain, &path, &st);
@@ -645,7 +645,7 @@ static void shareDeleteCase(const std::wstring& scratch) {
                  " attempts to open the ini for delete were refused while a reload had it open: "
                  "Config's read does not share DELETE");
     } else {
-        ok("a reload leaves edvr.ini open to being replaced (FILE_SHARE_DELETE)");
+        ok("a reload leaves edup.ini open to being replaced (FILE_SHARE_DELETE)");
     }
     printf("  info  %ld probes inside %d reloads, %ld refused, %ld failed another way\n", inside,
            reloads, refused, st.other.load());
@@ -653,10 +653,10 @@ static void shareDeleteCase(const std::wstring& scratch) {
 
 // --- the settings file's name, in every message that carries it (2026-09-30) -------------
 //
-// Flight 052916, on an install that read edvr-flat.ini: the F8 panel said "written to
-// edvr.ini", the config audit said "edvr.ini: 1 line(s) name settings this build does not
-// read" about a line that was in edvr-flat.ini, and a chained mod stayed loaded because the
-// line that turned it off had been commented out in edvr.ini while edvr-flat.ini still had it
+// Flight 052916, on an install that read edup-flat.ini: the F8 panel said "written to
+// edup.ini", the config audit said "edup.ini: 1 line(s) name settings this build does not
+// read" about a line that was in edup-flat.ini, and a chained mod stayed loaded because the
+// line that turned it off had been commented out in edup.ini while edup-flat.ini still had it
 // active. Config::iniName() says which file the process opened; ini_name.h says why nothing
 // else may spell the name. Held here three ways: the resolver against the four situations a
 // process can be in (real Config, real files, real log), the messages that come out of them,
@@ -676,13 +676,15 @@ static std::string narrow(const std::wstring& w) {
 // The pure resolver, for a path a caller already holds.
 static void iniNamePathCases() {
     static const struct { const wchar_t* path; const char* want; const char* what; } kPaths[] = {
-        {L"C:\\Games\\Elite\\edvr-flat.ini", "edvr-flat.ini", "a path to edvr-flat.ini names it"},
-        {L"C:\\Games\\Elite\\edvr.ini", "edvr.ini", "a path to edvr.ini names it"},
-        {L"C:/Games/Elite/EDVR-FLAT.INI", "edvr-flat.ini", "the name is compared without case, and either slash"},
-        {L"edvr-flat.ini", "edvr-flat.ini", "a bare file name is a path too"},
-        {L"C:\\Games\\edvr-flat.ini.bak", "edvr.ini", "a backup's name is not the file"},
-        {L"C:\\Games\\my-edvr-flat.ini", "edvr.ini", "nor is a longer name that ends the same way"},
-        {L"", "edvr.ini", "no path at all falls back to the VR file's name"},
+        {L"C:\\Games\\Elite\\edup-flat.ini", "edup-flat.ini", "a path to edup-flat.ini names it"},
+        {L"C:\\Games\\Elite\\edup.ini", "edup.ini", "a path to edup.ini names it"},
+        {L"C:/Games/Elite/EDUP-FLAT.INI", "edup-flat.ini", "the name is compared without case, and either slash"},
+        {L"C:/Games/Elite/EDVR-FLAT.INI", "edvr-flat.ini", "legacy edvr-flat.ini name is recognised without case"},
+        {L"C:/Games/Elite/EDVR.INI", "edvr.ini", "legacy edvr.ini name is recognised without case"},
+        {L"edup-flat.ini", "edup-flat.ini", "a bare file name is a path too"},
+        {L"C:\\Games\\edup-flat.ini.bak", "edup.ini", "a backup's name is not the file"},
+        {L"C:\\Games\\my-edup-flat.ini", "edup.ini", "nor is a longer name that ends the same way"},
+        {L"", "edup.ini", "no path at all falls back to the VR file's name"},
     };
     for (const auto& p : kPaths) {
         const char* got = iniNameOfPath(p.path);
@@ -705,10 +707,10 @@ static std::wstring exeDirectory() {
 // shows in the text as well as in the name.
 //
 // Run only by iniNameFixturesIsolated(), in a process whose exe directory holds no ini: Config::init
-// looks in the exe's directory too (a flat process reads <exe dir>\edvr-flat.ini when its module
+// looks in the exe's directory too (a flat process reads <exe dir>\edup-flat.ini when its module
 // directory has none), and in the build that is build\, where the flat edition's staged
-// edvr-flat.ini sits. The first version of these fixtures ran in this process, asked for "flat,
-// no edvr-flat.ini yet" and was handed build\'s file: the flat-fallback fixture failed in the
+// edup-flat.ini sits. The first version of these fixtures ran in this process, asked for "flat,
+// no edup-flat.ini yet" and was handed build\'s file: the flat-fallback fixture failed in the
 // build and passed from a scratch directory, which is how it got past the author.
 static void iniNameFixtures(const std::wstring& scratch) {
     const RuntimeProfile savedProfile = g_runtimeProfile;
@@ -717,7 +719,7 @@ static void iniNameFixtures(const std::wstring& scratch) {
     // The premise, asserted rather than assumed: nothing beside this exe for the loader to find.
     {
         const std::wstring exeDir = exeDirectory();
-        static const wchar_t* kBeside[] = {L"edvr.ini", L"edvr-flat.ini", L"edvr_profile.ini"};
+        static const wchar_t* kBeside[] = {L"edup.ini", L"edup-flat.ini", L"edup_profile.ini"};
         std::string found;
         for (const wchar_t* leaf : kBeside) {
             if (GetFileAttributesW((exeDir + L"\\" + leaf).c_str()) != INVALID_FILE_ATTRIBUTES)
@@ -746,22 +748,22 @@ static void iniNameFixtures(const std::wstring& scratch) {
         const char* what;
     };
     static const Fixture kFixtures[] = {
-        {L"_ininame_vr", L"ininamevr", "[install]\r\nschema = 1\r\nprofile = vr\r\n", true, true, 1, "edvr.ini",
-         "edvr-flat.ini", "VR profile, with an edvr-flat.ini lying beside it"},
+        {L"_ininame_vr", L"ininamevr", "[install]\r\nschema = 1\r\nprofile = vr\r\n", true, true, 1, "edup.ini",
+         "edup-flat.ini", "VR profile, with an edup-flat.ini lying beside it"},
         {L"_ininame_flat", L"ininameflat", "[install]\r\nschema = 1\r\nprofile = flat\r\n", true, true, 2,
-         "edvr-flat.ini", "edvr.ini", "flat profile, both files present (the flight's install)"},
+         "edup-flat.ini", "edup.ini", "flat profile, both files present (the flight's install)"},
         {L"_ininame_fallback", L"ininamefall", "[install]\r\nschema = 1\r\nprofile = flat\r\n", true, false, 3,
-         "edvr.ini", "edvr-flat.ini", "flat profile, no edvr-flat.ini yet: it reads edvr.ini whole"},
+         "edup.ini", "edup-flat.ini", "flat profile, no edup-flat.ini yet: it reads edup.ini whole"},
         {L"_ininame_none", L"ininamenone", "[install]\r\nschema = 1\r\nprofile = flat\r\n", false, false, 0,
-         "edvr-flat.ini", "edvr.ini", "flat profile, neither file: the one it would create"},
+         "edup-flat.ini", "edup.ini", "flat profile, neither file: the one it would create"},
     };
 
     Log::get().close();
     for (const Fixture& f : kFixtures) {
         const std::wstring dir = scratch + f.suffix;
         CreateDirectoryW(dir.c_str(), nullptr);
-        removeIniFile(dir, L"edvr.ini");
-        removeIniFile(dir, L"edvr-flat.ini");
+        removeIniFile(dir, L"edup.ini");
+        removeIniFile(dir, L"edup-flat.ini");
         deleteLogs(dir, f.tag);
         // The read file carries: a dead line, a moved key still on its old name, a malformed
         // yes/no. The other file carries a dead line and a moved key of its own (never reported).
@@ -769,10 +771,10 @@ static void iniNameFixtures(const std::wstring& scratch) {
                                  std::to_string(f.index) + " = on\r\nold_name_" + std::to_string(f.index) +
                                  " = 3\r\n";
         const std::string other = "[fix]\r\nnot_the_file_read = on\r\nold_name_9 = 4\r\n";
-        const bool flatRead = std::strcmp(f.wantName, "edvr-flat.ini") == 0;
-        bool wrote = writeIni(dir, f.descriptor, L"edvr_profile.ini");
-        if (f.writeVr) wrote = wrote && writeIni(dir, (flatRead ? other : mine).c_str(), L"edvr.ini");
-        if (f.writeFlat) wrote = wrote && writeIni(dir, (flatRead ? mine : other).c_str(), L"edvr-flat.ini");
+        const bool flatRead = std::strcmp(f.wantName, "edup-flat.ini") == 0;
+        bool wrote = writeIni(dir, f.descriptor, L"edup_profile.ini");
+        if (f.writeVr) wrote = wrote && writeIni(dir, (flatRead ? other : mine).c_str(), L"edup.ini");
+        if (f.writeFlat) wrote = wrote && writeIni(dir, (flatRead ? mine : other).c_str(), L"edup-flat.ini");
         if (!wrote) {
             fail(f.what, "could not write the fixture");
             continue;
@@ -815,7 +817,7 @@ static void iniNameFixtures(const std::wstring& scratch) {
         }
         // Never the other file: not at the front of a message, and nothing said about its own lines.
         // A log line starts "[hh:mm:ss.mmm] " and then the message, so look for the other name right
-        // after that (edvr-flat.ini never matches "edvr.ini: ", the names differ before the dot).
+        // after that (edup-flat.ini never matches "edup.ini: ", the names differ before the dot).
         const std::string otherPrefix = std::string(f.otherName) + ": ";
         bool otherFirst = false;
         for (size_t at = body.find(otherPrefix); at != std::string::npos; at = body.find(otherPrefix, at + 1)) {
@@ -942,7 +944,7 @@ static std::vector<std::string> namedLiterals(const std::string& text) {
     auto lower = [](std::string s) { for (char& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c))); return s; };
     auto check = [&](const std::string& literal, size_t atLine) {
         const std::string l = lower(literal);
-        if (l.find("edvr.ini") != std::string::npos || l.find("edvr-flat.ini") != std::string::npos)
+        if (l.find("edup.ini") != std::string::npos || l.find("edup-flat.ini") != std::string::npos)
             hits.push_back("line " + std::to_string(atLine) + ": \"" + literal.substr(0, 70) + "\"");
     };
     for (size_t i = 0; i < n;) {
@@ -1043,29 +1045,29 @@ static void realDllChoiceCases(const std::wstring& root) {
     };
     const Row rows[] = {
         {"flat: the flat file names a mod, the shared file too: the flat override", true, "d3d11_reshade.dll", "d3d11_edhm.dll",
-         RealDllSource::FlatOverride, "d3d11_reshade.dll", "real dll: d3d11_reshade.dll (from edvr-flat.ini, the flat override)"},
+         RealDllSource::FlatOverride, "d3d11_reshade.dll", "real dll: d3d11_reshade.dll (from edup-flat.ini, the flat override)"},
         {"flat: the flat file names a mod, the shared one nothing: the old layout, honoured", true, "d3d11_edhm.dll", "",
          RealDllSource::FlatLegacy, "d3d11_edhm.dll",
-         "real dll: d3d11_edhm.dll (from edvr-flat.ini; the installer will move it to edvr.ini)"},
+         "real dll: d3d11_edhm.dll (from edup-flat.ini; the installer will move it to edup.ini)"},
         {"flat: the flat file says none: no chain for flat, the shared value or not", true, "none", "d3d11_edhm.dll",
-         RealDllSource::DisabledByFlat, "", "real dll: none: chain disabled for the flat profile by edvr-flat.ini"},
+         RealDllSource::DisabledByFlat, "", "real dll: none: chain disabled for the flat profile by edup-flat.ini"},
         {"flat: none in any case, with blanks around it", true, "  NoNe ", "d3d11_edhm.dll", RealDllSource::DisabledByFlat, "",
-         "real dll: none: chain disabled for the flat profile by edvr-flat.ini"},
+         "real dll: none: chain disabled for the flat profile by edup-flat.ini"},
         {"flat: the flat file empty: the shared value applies", true, "", "d3d11_edhm.dll", RealDllSource::Shared, "d3d11_edhm.dll",
-         "real dll: d3d11_edhm.dll (from edvr.ini, shared)"},
+         "real dll: d3d11_edhm.dll (from edup.ini, shared)"},
         {"flat: neither names a mod: nothing to chain, nothing to say", true, "", "", RealDllSource::NoneSet, "", ""},
         {"flat: the shared file says none, the flat file nothing: no chain", true, "", "none", RealDllSource::DisabledByShared, "",
-         "real dll: none: chain disabled for the flat profile by edvr.ini"},
+         "real dll: none: chain disabled for the flat profile by edup.ini"},
         {"flat: the shared file says none, the flat file names a mod: that override applies", true, "d3d11_edhm.dll", "none",
-         RealDllSource::FlatOverride, "d3d11_edhm.dll", "real dll: d3d11_edhm.dll (from edvr-flat.ini, the flat override)"},
+         RealDllSource::FlatOverride, "d3d11_edhm.dll", "real dll: d3d11_edhm.dll (from edup-flat.ini, the flat override)"},
         {"VR: the shared value applies", false, "", "d3d11_edhm.dll", RealDllSource::Shared, "d3d11_edhm.dll",
-         "real dll: d3d11_edhm.dll (from edvr.ini, shared)"},
+         "real dll: d3d11_edhm.dll (from edup.ini, shared)"},
         {"VR: a value only in the flat file is not VR's: no chain (the installer moves it)", false, "d3d11_edhm.dll", "",
          RealDllSource::NoneSet, "", ""},
         {"VR: the flat file's none or override changes nothing for VR", false, "none", "d3d11_edhm.dll", RealDllSource::Shared,
-         "d3d11_edhm.dll", "real dll: d3d11_edhm.dll (from edvr.ini, shared)"},
+         "d3d11_edhm.dll", "real dll: d3d11_edhm.dll (from edup.ini, shared)"},
         {"VR: the shared file says none", false, "", "none", RealDllSource::DisabledByShared, "",
-         "real dll: none: chain disabled for the VR profile by edvr.ini"},
+         "real dll: none: chain disabled for the VR profile by edup.ini"},
         {"VR: neither names a mod", false, "", "", RealDllSource::NoneSet, "", ""},
     };
     int bad = 0;
@@ -1080,31 +1082,31 @@ static void realDllChoiceCases(const std::wstring& root) {
     }
     if (!bad) ok("advanced.real_dll resolves from the flat file's own value, else the shared file's, and logs the file that supplied it");
 
-    // The shipped edvr.ini says what the rule is, in the comment above the key: both profiles, and the flat override.
-    // Without \r: edvr.ini is text=auto, so a Windows clone (core.autocrlf=true) has it CRLF on disk and "\n\n" never matches.
-    std::string ini = readRepoFile(root, L"edvr.ini");
+    // The shipped edup.ini says what the rule is, in the comment above the key: both profiles, and the flat override.
+    // Without \r: edup.ini is text=auto, so a Windows clone (core.autocrlf=true) has it CRLF on disk and "\n\n" never matches.
+    std::string ini = readRepoFile(root, L"edup.ini");
     ini.erase(std::remove(ini.begin(), ini.end(), '\r'), ini.end());
     const size_t key = ini.find("\nreal_dll =");
     const size_t above = key == std::string::npos ? std::string::npos : ini.rfind("\n\n", key - 1);
     const std::string comment = above == std::string::npos ? std::string() : ini.substr(above, key - above);
-    if (comment.find("both") != std::string::npos && comment.find("edvr-flat.ini") != std::string::npos &&
+    if (comment.find("both") != std::string::npos && comment.find("edup-flat.ini") != std::string::npos &&
         comment.find("none") != std::string::npos)
-        ok("the shipped edvr.ini's real_dll comment says it applies to both profiles and what edvr-flat.ini can do with it");
+        ok("the shipped edup.ini's real_dll comment says it applies to both profiles and what edup-flat.ini can do with it");
     else
-        fail("the shipped edvr.ini's real_dll comment", "it must say both profiles, edvr-flat.ini and none; got: " + comment);
+        fail("the shipped edup.ini's real_dll comment", "it must say both profiles, edup-flat.ini and none; got: " + comment);
 }
 
 static void iniNameScan(const std::wstring& root) {
     // The scanner itself first: it must find what it is for, and only that.
     const std::string violating =
         "void f() {\n"
-        "    Log::get().note(\"edvr.ini: advanced.x is bad\");\n"      // a message: the fault
-        "    // \"edvr.ini\" in a comment is fine\n"
-        "    /* and \"edvr-flat.ini\" in a block comment */\n"
-        "    const char q = '\"'; const char* s = \"a quote \\\" and edvr-flat.ini\";\n"   // the literal ends at its own quote
-        "    const wchar_t* w = L\"\\\\EDVR.INI\";\n"                   // wide, and without case
-        "    const char* r = R\"(raw edvr.ini text)\";\n"
-        "    const char* clean = \"edvr_profile.ini and edvr_openxr.ini are other files\";\n"
+        "    Log::get().note(\"edup.ini: advanced.x is bad\");\n"      // a message: the fault
+        "    // \"edup.ini\" in a comment is fine\n"
+        "    /* and \"edup-flat.ini\" in a block comment */\n"
+        "    const char q = '\"'; const char* s = \"a quote \\\" and edup-flat.ini\";\n"   // the literal ends at its own quote
+        "    const wchar_t* w = L\"\\\\EDUP.INI\";\n"                   // wide, and without case
+        "    const char* r = R\"(raw edup.ini text)\";\n"
+        "    const char* clean = \"edup_profile.ini and edup_openxr.ini are other files\";\n"
         "}\n";
     const std::vector<std::string> control = namedLiterals(violating);
     if (control.size() == 4 && control[0].rfind("line 2:", 0) == 0 && control[1].rfind("line 5:", 0) == 0 &&
@@ -1133,7 +1135,7 @@ static void iniNameScan(const std::wstring& root) {
     }
     if (!bad) {
         ok(("no string literal in " + std::to_string(scanned) +
-            " sources under src (the installer aside) spells edvr.ini or edvr-flat.ini; ini_name.h is the one place")
+            " sources under src (the installer aside) spells edup.ini or edup-flat.ini; ini_name.h is the one place")
                .c_str());
     }
 }
@@ -1338,13 +1340,13 @@ static void retiredKeyScan(const std::wstring& root) {
     }
 
     // The shipped file: no template, no comment, no mention.
-    const std::string ini = readRepoFile(root, L"edvr.ini");
+    const std::string ini = readRepoFile(root, L"edup.ini");
     if (ini.empty()) {
-        fail("edvr.ini is readable from the repo root (retired keys)", "could not read it");
+        fail("edup.ini is readable from the repo root (retired keys)", "could not read it");
     } else if (const char* name = spellsRetiredKey(ini)) {
-        fail("the shipped edvr.ini names none of the retired keys", std::string("it spells ") + name);
+        fail("the shipped edup.ini names none of the retired keys", std::string("it spells ") + name);
     } else {
-        ok("the shipped edvr.ini defines, documents and mentions none of the retired keys");
+        ok("the shipped edup.ini defines, documents and mentions none of the retired keys");
     }
 
     // Every production source, the installer's included: no reader, no allow-list entry, no log line.
@@ -1409,9 +1411,9 @@ static bool isRetiredNotedMarker(const std::string& line) {
 
 static void retiredNotedKeyScan(const std::wstring& root) {
     // The shipped file: each key's bare name is spelled on exactly one line, that line is the key in its own section, and the line above it is the marker.
-    const std::string ini = readRepoFile(root, L"edvr.ini");
+    const std::string ini = readRepoFile(root, L"edup.ini");
     if (ini.empty()) {
-        fail("edvr.ini is readable from the repo root (F98 retired keys)", "could not read it");
+        fail("edup.ini is readable from the repo root (F98 retired keys)", "could not read it");
         return;
     }
     std::vector<std::string> lines;
@@ -1449,13 +1451,13 @@ static void retiredNotedKeyScan(const std::wstring& root) {
     }
     const int count = static_cast<int>(sizeof(kRetiredNotedKeys) / sizeof(kRetiredNotedKeys[0]));
     if (good == count)
-        ok("the shipped edvr.ini spells each of the twenty-seven retired keys (Explorer Cam's eight and the weapon eye's up from F98, the training connect probe's from "
+        ok("the shipped edup.ini spells each of the twenty-seven retired keys (Explorer Cam's eight and the weapon eye's up from F98, the training connect probe's from "
            "F100, the ADS left eye close from F106, the old look to aim's three test keys from F109, the weapon eye's right from F112, the two panel cursor test "
            "keys from F122, the aim reticle's placement from F127, the visor-axis test key from F128, the panel mouse key and the panel cursor test key from the "
            "panel cursor's F155, the ADS sight switch and trims and the full outfit switch from F146, the ADS eye distance from F152, the body-draw test dial from F157) "
            "once, as its own hidden retired line, and nowhere else");
     else
-        fail("the shipped edvr.ini keeps each F98 retired key on one hidden retired line and nowhere else", why);
+        fail("the shipped edup.ini keeps each F98 retired key on one hidden retired line and nowhere else", why);
 
     // The sources: only native_on_foot.cpp, and only inside retiredKeysNote.
     std::vector<std::wstring> files;
@@ -1507,8 +1509,8 @@ static void switchProfileCases(const std::wstring& scratch) {
     auto freshDir = [&](const wchar_t* tag) {
         const std::wstring dir = scratch + tag;
         CreateDirectoryW(dir.c_str(), nullptr);
-        removeIniFile(dir, L"edvr.ini");
-        removeIniFile(dir, L"edvr-flat.ini");
+        removeIniFile(dir, L"edup.ini");
+        removeIniFile(dir, L"edup-flat.ini");
         return dir;
     };
     // init() takes its profile from the launch decision, not from g_runtimeProfile, and picks the file under that profile. So each
@@ -1521,8 +1523,8 @@ static void switchProfileCases(const std::wstring& scratch) {
     // flat present (A), then VR (B): each switch lands on its own file, and a switch bumps the generation once.
     {
         const std::wstring dir = freshDir(L"_switch_flat_then_vr");
-        if (!writeIni(dir, "[fix]\r\nrender_sharpness = 0.3\r\n", L"edvr-flat.ini") ||
-            !writeIni(dir, "[fix]\r\nrender_sharpness = 0.7\r\n", L"edvr.ini")) {
+        if (!writeIni(dir, "[fix]\r\nrender_sharpness = 0.3\r\n", L"edup-flat.ini") ||
+            !writeIni(dir, "[fix]\r\nrender_sharpness = 0.7\r\n", L"edup.ini")) {
             fail("switch: the flat and VR fixtures", "could not write them");
         } else {
             cfg.init(dir);
@@ -1530,25 +1532,25 @@ static void switchProfileCases(const std::wstring& scratch) {
             runtimeProfileSet(RuntimeProfile::Flat);
             const bool toFlat = cfg.switchProfile();
             const std::string flatValue = cfg.getString(kKey, "unset");
-            switchCheck(toFlat && flatValue == "0.3" && std::string(cfg.iniName()) == "edvr-flat.ini",
-                        "switch to flat reads edvr-flat.ini (0.3)",
+            switchCheck(toFlat && flatValue == "0.3" && std::string(cfg.iniName()) == "edup-flat.ini",
+                        "switch to flat reads edup-flat.ini (0.3)",
                         "changed=" + std::to_string(toFlat) + " value=" + flatValue + " file=" + cfg.iniName());
             runtimeProfileSet(RuntimeProfile::Vr);
             const uint32_t gen0 = cfg.generation();
             const bool toVr = cfg.switchProfile();
             const std::string vrValue = cfg.getString(kKey, "unset");
-            switchCheck(toVr && vrValue == "0.7" && std::string(cfg.iniName()) == "edvr.ini",
-                        "switch to VR reads edvr.ini (0.7)",
+            switchCheck(toVr && vrValue == "0.7" && std::string(cfg.iniName()) == "edup.ini",
+                        "switch to VR reads edup.ini (0.7)",
                         "changed=" + std::to_string(toVr) + " value=" + vrValue + " file=" + cfg.iniName());
             switchCheck(cfg.generation() == gen0 + 1, "a switch bumps the generation once",
                         "generation moved by " + std::to_string(cfg.generation() - gen0));
         }
     }
 
-    // VR, then flat with no edvr-flat.ini: the flat profile falls back to edvr.ini, the same file, so nothing changes.
+    // VR, then flat with no edup-flat.ini: the flat profile falls back to edup.ini, the same file, so nothing changes.
     {
         const std::wstring dir = freshDir(L"_switch_vr_then_flat");
-        if (!writeIni(dir, "[fix]\r\nrender_sharpness = 0.7\r\n", L"edvr.ini")) {
+        if (!writeIni(dir, "[fix]\r\nrender_sharpness = 0.7\r\n", L"edup.ini")) {
             fail("switch: the VR-only fixture", "could not write it");
         } else {
             cfg.init(dir);
@@ -1556,16 +1558,16 @@ static void switchProfileCases(const std::wstring& scratch) {
             runtimeProfileSet(RuntimeProfile::Flat);
             const bool changed = cfg.switchProfile();
             const std::string value = cfg.getString(kKey, "unset");
-            switchCheck(!changed && value == "0.7" && std::string(cfg.iniName()) == "edvr.ini",
-                        "flat without edvr-flat.ini falls back to edvr.ini (0.7)",
+            switchCheck(!changed && value == "0.7" && std::string(cfg.iniName()) == "edup.ini",
+                        "flat without edup-flat.ini falls back to edup.ini (0.7)",
                         "changed=" + std::to_string(changed) + " value=" + value + " file=" + cfg.iniName());
         }
     }
 
-    // Flat values only, then VR with no edvr.ini: the switch to VR reads defaults, so the flat values do not carry over.
+    // Flat values only, then VR with no edup.ini: the switch to VR reads defaults, so the flat values do not carry over.
     {
         const std::wstring dir = freshDir(L"_switch_flat_only");
-        if (!writeIni(dir, "[fix]\r\nrender_sharpness = 0.3\r\n", L"edvr-flat.ini")) {
+        if (!writeIni(dir, "[fix]\r\nrender_sharpness = 0.3\r\n", L"edup-flat.ini")) {
             fail("switch: the flat-only fixture", "could not write it");
         } else {
             cfg.init(dir);
@@ -1573,12 +1575,12 @@ static void switchProfileCases(const std::wstring& scratch) {
             runtimeProfileSet(RuntimeProfile::Flat);
             const bool toFlat = cfg.switchProfile();
             if (!toFlat || cfg.getString(kKey, "unset") != "0.3")
-                fail("switch: flat-only fixture reads edvr-flat.ini", "the flat switch did not read 0.3");
+                fail("switch: flat-only fixture reads edup-flat.ini", "the flat switch did not read 0.3");
             runtimeProfileSet(RuntimeProfile::Vr);
             const bool toVr = cfg.switchProfile();
             const std::string value = cfg.getString(kKey, "unset");
-            switchCheck(toVr && value == "unset" && std::string(cfg.iniName()) == "edvr.ini",
-                        "switch to VR with no edvr.ini reads defaults, not the flat values",
+            switchCheck(toVr && value == "unset" && std::string(cfg.iniName()) == "edup.ini",
+                        "switch to VR with no edup.ini reads defaults, not the flat values",
                         "changed=" + std::to_string(toVr) + " value=" + value + " file=" + cfg.iniName());
         }
     }
@@ -1586,13 +1588,13 @@ static void switchProfileCases(const std::wstring& scratch) {
     // A switch to the same file is not a change, and still re-reads it: the edit made in place is picked up.
     {
         const std::wstring dir = freshDir(L"_switch_same");
-        if (!writeIni(dir, "[fix]\r\nrender_sharpness = 0.7\r\n", L"edvr.ini")) {
+        if (!writeIni(dir, "[fix]\r\nrender_sharpness = 0.7\r\n", L"edup.ini")) {
             fail("switch: the same-file fixture", "could not write it");
         } else {
             cfg.init(dir);
             toProfile(RuntimeProfile::Vr);
-            if (!rewriteIni(dir, "[fix]\r\nrender_sharpness = 0.9\r\n", L"edvr.ini")) {
-                fail("switch: the same-file edit", "could not rewrite edvr.ini");
+            if (!rewriteIni(dir, "[fix]\r\nrender_sharpness = 0.9\r\n", L"edup.ini")) {
+                fail("switch: the same-file edit", "could not rewrite edup.ini");
             } else {
                 const bool changed = cfg.switchProfile();
                 const std::string value = cfg.getString(kKey, "unset");
@@ -1606,8 +1608,8 @@ static void switchProfileCases(const std::wstring& scratch) {
     // After a switch, reloadIfChanged watches the NEW file: an edit to it reloads, an edit to the old file does not.
     {
         const std::wstring dir = freshDir(L"_switch_reload");
-        if (!writeIni(dir, "[fix]\r\nrender_sharpness = 0.3\r\n", L"edvr-flat.ini") ||
-            !writeIni(dir, "[fix]\r\nrender_sharpness = 0.7\r\n", L"edvr.ini")) {
+        if (!writeIni(dir, "[fix]\r\nrender_sharpness = 0.3\r\n", L"edup-flat.ini") ||
+            !writeIni(dir, "[fix]\r\nrender_sharpness = 0.7\r\n", L"edup.ini")) {
             fail("switch: the reload fixtures", "could not write them");
         } else {
             cfg.init(dir);
@@ -1615,23 +1617,23 @@ static void switchProfileCases(const std::wstring& scratch) {
             runtimeProfileSet(RuntimeProfile::Flat);
             cfg.switchProfile();
             toProfile(RuntimeProfile::Vr);
-            if (!rewriteIni(dir, "[fix]\r\nrender_sharpness = 0.8\r\n", L"edvr.ini") || !cfg.reloadIfChanged())
-                fail("reload after a switch picks up the new file", "an edit to edvr.ini did not reload");
+            if (!rewriteIni(dir, "[fix]\r\nrender_sharpness = 0.8\r\n", L"edup.ini") || !cfg.reloadIfChanged())
+                fail("reload after a switch picks up the new file", "an edit to edup.ini did not reload");
             else switchCheck(cfg.getString(kKey, "unset") == "0.8", "reload after a switch picks up an edit to the new file (0.8)",
                              "value=" + cfg.getString(kKey, "unset"));
-            if (!rewriteIni(dir, "[fix]\r\nrender_sharpness = 0.2\r\n", L"edvr-flat.ini"))
-                fail("reload after a switch ignores the old file", "could not rewrite edvr-flat.ini");
+            if (!rewriteIni(dir, "[fix]\r\nrender_sharpness = 0.2\r\n", L"edup-flat.ini"))
+                fail("reload after a switch ignores the old file", "could not rewrite edup-flat.ini");
             else switchCheck(!cfg.reloadIfChanged() && cfg.getString(kKey, "unset") == "0.8",
                              "reload after a switch ignores an edit to the old file",
                              "the old file reloaded, or the value moved");
         }
     }
 
-    // Passthrough runs no fix and reads edvr.ini, whatever file was open before.
+    // Passthrough runs no fix and reads edup.ini, whatever file was open before.
     {
         const std::wstring dir = freshDir(L"_switch_passthrough");
-        if (!writeIni(dir, "[fix]\r\nrender_sharpness = 0.3\r\n", L"edvr-flat.ini") ||
-            !writeIni(dir, "[fix]\r\nrender_sharpness = 0.7\r\n", L"edvr.ini")) {
+        if (!writeIni(dir, "[fix]\r\nrender_sharpness = 0.3\r\n", L"edup-flat.ini") ||
+            !writeIni(dir, "[fix]\r\nrender_sharpness = 0.7\r\n", L"edup.ini")) {
             fail("switch: the passthrough fixtures", "could not write them");
         } else {
             cfg.init(dir);
@@ -1640,8 +1642,8 @@ static void switchProfileCases(const std::wstring& scratch) {
             cfg.switchProfile();
             runtimeProfileSet(RuntimeProfile::Passthrough);
             const bool changed = cfg.switchProfile();
-            switchCheck(changed && std::string(cfg.iniName()) == "edvr.ini",
-                        "passthrough switches from edvr-flat.ini to edvr.ini",
+            switchCheck(changed && std::string(cfg.iniName()) == "edup.ini",
+                        "passthrough switches from edup-flat.ini to edup.ini",
                         std::string("changed=") + std::to_string(changed) + " file=" + cfg.iniName());
         }
     }
@@ -2159,16 +2161,16 @@ int main(int argc, char** argv) {
     }
 
     if (argc < 2) {
-        printf("usage: config_test.exe <dir containing edvr.ini> [scratch dir]\n");
+        printf("usage: config_test.exe <dir containing edup.ini> [scratch dir]\n");
         return 2;
     }
     const std::wstring dir = widen(argv[1]);
 
-    // The shipped edvr.ini is read as a VR install (mode 4), whatever the machine's own Settings.xml says.
+    // The shipped edup.ini is read as a VR install (mode 4), whatever the machine's own Settings.xml says.
     if (argc >= 3) pinGraphicsMode(widen(argv[2]) + L"_localappdata", 4);
     Config::get().init(dir);
     if (Config::get().path().empty()) {
-        printf("  FAIL  no edvr.ini found under %s\n", argv[1]);
+        printf("  FAIL  no edup.ini found under %s\n", argv[1]);
         return 1;
     }
     printf("  read  %S\n", Config::get().path().c_str());
@@ -2278,11 +2280,11 @@ int main(int argc, char** argv) {
             for (const char* section : {"advanced.", "experimental."}) {
                 if (Config::get().getString((std::string(section) + name).c_str(), "<unset>") != "<unset>") {
                     ++present;
-                    fail("a removed key is absent from the shipped edvr.ini", (std::string(section) + name).c_str());
+                    fail("a removed key is absent from the shipped edup.ini", (std::string(section) + name).c_str());
                 }
             }
         }
-        if (!present) ok("none of the 2026-10 cull's removed keys is defined in the shipped edvr.ini");
+        if (!present) ok("none of the 2026-10 cull's removed keys is defined in the shipped edup.ini");
     }
     // The particle facing measurement (dead since 2026-08-23) retired 2026-09-23.
     expectStr("advanced.particle_face_emitter", "<unset>", "the retired particle facing key is absent");
@@ -2374,7 +2376,7 @@ int main(int argc, char** argv) {
     // The VR camera census (design doc section 82, advanced.vr_camera_census) installs a game hook when it is on, so it
     // is OFF by default in both places that can say so: the shipped file and the code's fallback for an ini that predates
     // the key. The same pair of checks as the world route's, with the same control.
-    expectStr("advanced.vr_camera_census", "off", "the shipped edvr.ini ships the VR camera census off");
+    expectStr("advanced.vr_camera_census", "off", "the shipped edup.ini ships the VR camera census off");
     {
         const std::string shippedCensus = Config::get().getString("advanced.vr_camera_census", "<unset>");
         const std::string censusSource = readRepoFile(dir, L"src\\d3d11\\vr_camera_census.cpp");
@@ -2540,11 +2542,11 @@ int main(int argc, char** argv) {
         // --- the demoted field-of-view trims, over the SHIPPED tables --------
         //
         // 2026-09-29: fix.fov_trim_vertical / _outer / _nasal moved to
-        // [experimental] (edvr.ini: `# moved-from: fix.fov_trim_*`). Somebody who
-        // set them has them under [fix] in an old-layout edvr.ini, and the DLLs
+        // [experimental] (edup.ini: `# moved-from: fix.fov_trim_*`). Somebody who
+        // set them has them under [fix] in an old-layout edup.ini, and the DLLs
         // meet that file whenever they are copied in by hand. The fixture tables
         // above prove the mechanics; these are the tables the DLLs register --
-        // config_contract_gen.h, generated from the real edvr.ini -- so what is
+        // config_contract_gen.h, generated from the real edup.ini -- so what is
         // proven is that the keys which actually moved read through, and that it
         // is the shipped annotation that carries them.
         {
@@ -2578,7 +2580,7 @@ int main(int argc, char** argv) {
             }
             if (trimMoves == 3) ok("the shipped moved-from map carries fix.fov_trim_* to experimental.fov_trim_*");
             else fail("the shipped moved-from map carries the three trims",
-                      std::to_string(trimMoves) + " of 3 moves found in edvr.ini's annotations");
+                      std::to_string(trimMoves) + " of 3 moves found in edup.ini's annotations");
             int retiredStillKnown = 0;
             for (size_t i = 0; i < kKnownCount; ++i) {
                 if (strncmp(kKnownKeys[i], "fix.fov_trim_", 13) == 0) ++retiredStillKnown;
@@ -2642,7 +2644,7 @@ int main(int argc, char** argv) {
             }
 
             // CONTROL: the same old-layout file, over the same tables minus the
-            // three moves (what edvr.ini without its annotations would generate).
+            // three moves (what edup.ini without its annotations would generate).
             // The values are stranded under [fix] and the new names read nothing,
             // which is exactly what the assertions above would report if the
             // annotations were lost.
@@ -2667,7 +2669,7 @@ int main(int argc, char** argv) {
 
         // --- fix.intro_video moved to visual.intro_video (2026-10-22), over the SHIPPED tables ----
         //
-        // The same proof as the trims: the tables the DLLs register come from the real edvr.ini, so what is shown is that an old-layout
+        // The same proof as the trims: the tables the DLLs register come from the real edup.ini, so what is shown is that an old-layout
         // [fix] line is read as the new key, that the retired default is not a choice, and that it is the shipped annotation doing it.
         {
             using contractgen::kKnownKeys;
@@ -2848,7 +2850,7 @@ int main(int argc, char** argv) {
         // itself, so each case sets both and the originals are put back.
         {
             const std::wstring exeDir = executableDirectory();
-            const std::wstring exeDefault = exeDir + L"\\edvr_logs";
+            const std::wstring exeDefault = exeDir + L"\\edup_logs";
             const std::wstring moved = scratch + L"\\moved_logs";
             wchar_t savedDir[MAX_PATH]{}, savedFor[MAX_PATH]{};
             const bool hadDir = GetEnvironmentVariableW(L"EDVR_LOG_DIR", savedDir, MAX_PATH) != 0;
@@ -2899,7 +2901,7 @@ int main(int argc, char** argv) {
     // twice before it came to the logger.
     //
     // So the property under test is not "the buffer is big enough" -- that is
-    // a number in edvr.ini -- but "a log that lost lines is not silent about
+    // a number in edup.ini -- but "a log that lost lines is not silent about
     // it". Driven at buffer_mb = 1, the floor, so the test stays fast.
     if (argc >= 3) {
         const std::wstring scratch = widen(argv[2]);
@@ -2989,20 +2991,20 @@ int main(int argc, char** argv) {
 
     // --- log.max_mb: the default is 16 (2026-10-01; it was 4), and the cap does what it says --------------------------------------
     //
-    // The shipped edvr.ini documents the default commented out ("#max_mb = 16"), so for every install that has not written the line the
+    // The shipped edup.ini documents the default commented out ("#max_mb = 16"), so for every install that has not written the line the
     // CODE's fallback is the cap; tools\check_config_contract.py holds a commented default to the code's in the build. This pins the
     // number itself and then what the log does with it, at sizes that keep the test fast (logcases::run above): the default keeps a
     // 1.3 MB session in one file, an explicit max_mb = 1 gives it a head and rotating tail segments, 0 is one unbounded file, and an
     // explicit max_mb = 4 keeps 4 (by the bound in force, with no writing). The flat profile reads this key the same way (the "log."
     // keys are allowed in both profiles, and the fallback is one line of one class).
     {
-        const std::string iniText = readRepoFile(dir, L"edvr.ini");
+        const std::string iniText = readRepoFile(dir, L"edup.ini");
         const std::string logSource = readRepoFile(dir, L"src\\common\\log.cpp");
         if (iniText.empty() || logSource.empty()) {
-            fail("log.max_mb pins", "could not read edvr.ini or src\\common\\log.cpp from the repo root");
+            fail("log.max_mb pins", "could not read edup.ini or src\\common\\log.cpp from the repo root");
         } else {
             check(iniText.find("\n#max_mb = 16") != std::string::npos && iniText.find("\n#max_mb = 4") == std::string::npos,
-                  "the shipped edvr.ini documents log.max_mb at 16, commented out (the code's fallback is the default)");
+                  "the shipped edup.ini documents log.max_mb at 16, commented out (the code's fallback is the default)");
             check(logSource.find("getInt(\"log.max_mb\", onFootDetail ? 64 : 16)") != std::string::npos &&
                       logSource.find("getInt(\"log.max_mb\", 4)") == std::string::npos,
                   "the log's fallback for log.max_mb is 16 (64 with log.on_foot_detail on, F125)");
@@ -3010,22 +3012,22 @@ int main(int argc, char** argv) {
     }
     // --- log.on_foot_detail (F125): the detailed on-foot log, off by default, live -------------------------------------------------------------------
     //
-    // Off, each on-foot measurement writes a 10 s summary; on, every line as before, about 4 MB a minute on foot. The shipped edvr.ini documents the key
+    // Off, each on-foot measurement writes a 10 s summary; on, every line as before, about 4 MB a minute on foot. The shipped edup.ini documents the key
     // commented out at off, and both readers fall back to off: the log (for the cap it opens with, below) and the on-foot code's readKey (for the lines,
     // re-read on each configuration change). Two readers with two defaults would make the cap and the lines disagree about one setting.
     {
-        const std::string iniText = readRepoFile(dir, L"edvr.ini");
+        const std::string iniText = readRepoFile(dir, L"edup.ini");
         const std::string logSource = readRepoFile(dir, L"src\\common\\log.cpp");
         const std::string onFootSource = readRepoFile(dir, L"src\\d3d11\\native_on_foot.cpp");
         if (iniText.empty() || logSource.empty() || onFootSource.empty()) {
-            fail("log.on_foot_detail pins", "could not read edvr.ini, src\\common\\log.cpp or src\\d3d11\\native_on_foot.cpp from the repo root");
+            fail("log.on_foot_detail pins", "could not read edup.ini, src\\common\\log.cpp or src\\d3d11\\native_on_foot.cpp from the repo root");
         } else {
             const size_t logSection = iniText.find("\n[log]");
             const size_t keyLine = iniText.find("\n#on_foot_detail = off");
             const size_t nextSection = logSection == std::string::npos ? std::string::npos : iniText.find("\n[", logSection + 1);
             check(logSection != std::string::npos && keyLine > logSection && (nextSection == std::string::npos || keyLine < nextSection) &&
                       iniText.find("\non_foot_detail = on") == std::string::npos,
-                  "the shipped edvr.ini documents log.on_foot_detail in [log], commented out at off");
+                  "the shipped edup.ini documents log.on_foot_detail in [log], commented out at off");
             check(logSource.find("getBool(\"log.on_foot_detail\", false)") != std::string::npos,
                   "the log reads log.on_foot_detail with the default off");
             check(onFootSource.find("getBool(\"log.on_foot_detail\", false)") != std::string::npos &&
@@ -3107,7 +3109,7 @@ int main(int argc, char** argv) {
                 ok("flat input_gate uses true default when absent");
             else fail("flat input_gate default", "missing key was not true");
             // The interface quality (2026-10-09): a flat panel row, 100 by default. Refused, the default would read off and an
-            // edvr-flat.ini with no line (every one written before the row) would get today's interface with nothing said.
+            // edup-flat.ini with no line (every one written before the row) would get today's interface with nothing said.
             if (Config::get().getString("fix.ui_quality", "100") == "100")
                 ok("flat ui_quality uses the 100 default when absent");
             else fail("flat ui_quality default", "missing key was not 100");
@@ -3225,17 +3227,17 @@ int main(int argc, char** argv) {
     g_runtimeProfile = RuntimeProfile::Vr;
     expectFloat("fix.render_sharpness", 0.3f, "VR profile still reads the sharpening setting");
 
-    // The flat panel writes the Sharpening row into edvr-flat.ini and asks for a
+    // The flat panel writes the Sharpening row into edup-flat.ini and asks for a
     // reload; the flat sharpening reads the key every frame. Live means that file,
     // read first (config.cpp), moves the value on the next reload -- not the
-    // edvr.ini beside it, which a flat install falls back to and a VR one owns.
+    // edup.ini beside it, which a flat install falls back to and a VR one owns.
     if (argc >= 3) {
         const std::wstring flatDir = widen(argv[2]) + L"_flatsharp";
         g_runtimeProfile = RuntimeProfile::Flat;
-        const wchar_t* flatLeaf = L"edvr-flat.ini";
+        const wchar_t* flatLeaf = L"edup-flat.ini";
         // The descriptor beside the inis is what makes init() pick the flat file:
-        // without it the profile reads as the legacy VR one and edvr.ini wins.
-        if (!writeIni(flatDir, descriptor, L"edvr_profile.ini") ||
+        // without it the profile reads as the legacy VR one and edup.ini wins.
+        if (!writeIni(flatDir, descriptor, L"edup_profile.ini") ||
             !rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0.9\r\n") ||
             !rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0.4\r\n[diag]\r\nflat_origin_capture = on\r\n", flatLeaf)) {
             fail("flat sharpening reload", "could not write the scratch inis");
@@ -3245,7 +3247,7 @@ int main(int argc, char** argv) {
             if (!runtimeFlatProfile()) fail("flat sharpening reload", "the descriptor did not select flat");
             expectBool("diag.flat_origin_capture", true, "flat profile permits explicit F1 diagnostic opt-in");
             expectFloat("fix.render_sharpness", 0.4f,
-                        "the flat file is read first: its 0.4, not edvr.ini's 0.9");
+                        "the flat file is read first: its 0.4, not edup.ini's 0.9");
             if (!rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0\r\n", flatLeaf) ||
                 !Config::get().reloadIfChanged())
                 fail("flat sharpening reload", "a panel write of 0 did not reload");
@@ -3254,6 +3256,56 @@ int main(int argc, char** argv) {
                 !Config::get().reloadIfChanged())
                 fail("flat sharpening reload", "a panel write of 0.65 did not reload");
             else expectFloat("fix.render_sharpness", 0.65f, "a panel write of 0.65 is live");
+        }
+
+        // Per-user %LOCALAPPDATA%\EDUP settings take priority over game-dir files, while
+        // un-migrated installs fall back cleanly to legacy edvr.ini / edvr_profile.ini.
+        {
+            const std::wstring migRoot = widen(argv[2]) + L"_edup_mig";
+            const std::wstring fakeLocal = migRoot + L"\\localappdata";
+            const std::wstring gameDir = migRoot + L"\\elite-dangerous-odyssey-64";
+            const std::wstring edupInstallDir = fakeLocal + L"\\EDUP\\elite-dangerous-odyssey-64-steam";
+            CreateDirectoryW(migRoot.c_str(), nullptr);
+            CreateDirectoryW(fakeLocal.c_str(), nullptr);
+            CreateDirectoryW(gameDir.c_str(), nullptr);
+            CreateDirectoryW((gameDir + L"\\edup_install").c_str(), nullptr);
+            writeIni(gameDir + L"\\edup_install", "[edvr]\r\nstore_source = Steam\r\n", L"state.ini");
+
+            wchar_t prevLocal[MAX_PATH]{};
+            const DWORD prevLen = GetEnvironmentVariableW(L"LOCALAPPDATA", prevLocal, MAX_PATH);
+            SetEnvironmentVariableW(L"LOCALAPPDATA", fakeLocal.c_str());
+
+            // 1. Un-migrated legacy install: reads gameDir\edvr.ini and gameDir\edvr_profile.ini.
+            DeleteFileW((edupInstallDir + L"\\edup.ini").c_str());
+            DeleteFileW((edupInstallDir + L"\\edup-flat.ini").c_str());
+            DeleteFileW((gameDir + L"\\edup.ini").c_str());
+            DeleteFileW((gameDir + L"\\edup_profile.ini").c_str());
+            writeIni(gameDir, "[install]\r\nschema = 2\r\nscope = both\r\n", L"edvr_profile.ini");
+            writeIni(gameDir, "[fix]\r\nrender_sharpness = 0.42\r\n", L"edvr.ini");
+            g_runtimeProfile = RuntimeProfile::Vr;
+            Config::get().init(gameDir);
+            if (std::string(Config::get().iniName()) == "edvr.ini")
+                ok("un-migrated install falls back to legacy edvr.ini and reports its name");
+            else
+                fail("legacy edvr.ini fallback", std::string("got iniName=") + Config::get().iniName());
+            expectFloat("fix.render_sharpness", 0.42f, "un-migrated install reads legacy edvr.ini values");
+            if (readInstallDescriptor(gameDir).scope == InstallScope::Both)
+                ok("readInstallDescriptor falls back to legacy edvr_profile.ini");
+            else
+                fail("legacy edvr_profile.ini fallback", "scope was not Both");
+
+            // 2. Migrated install: %LOCALAPPDATA%\EDUP\<install>\edup.ini wins over game-dir files.
+            CreateDirectoryW((fakeLocal + L"\\EDUP").c_str(), nullptr);
+            CreateDirectoryW(edupInstallDir.c_str(), nullptr);
+            writeIni(edupInstallDir, "[fix]\r\nrender_sharpness = 0.88\r\n", L"edup.ini");
+            Config::get().init(gameDir);
+            if (std::string(Config::get().iniName()) == "edup.ini")
+                ok("migrated install resolves %LOCALAPPDATA%\\EDUP\\<install>\\edup.ini first");
+            else
+                fail("EDUP user settings priority", std::string("got iniName=") + Config::get().iniName());
+            expectFloat("fix.render_sharpness", 0.88f, "per-user %LOCALAPPDATA%\\EDUP\\<install>\\edup.ini overrides legacy game-dir file");
+
+            SetEnvironmentVariableW(L"LOCALAPPDATA", prevLen > 0 ? prevLocal : nullptr);
         }
     }
     g_runtimeProfile = savedProfile;

@@ -217,6 +217,11 @@ inline LaunchDecision decideLaunch(const ScopeRead& scope, const ModeRead& mode,
     } else if (cmd == VrSwitch::Vr && applyVr) {
         d.effective = GameMode::Vr;
         d.cmdApplied = true;
+    } else if (scope.scope == InstallScope::Flat && !mode.known) {
+        // Issue #223: Elite omits <StereoscopicMode> from Settings.xml until the player changes 3D
+        // settings. An explicit Flat-only install should run Flat rather than standing down when no
+        // VR mode is recorded; Both and Vr installs keep design Q2 (unknown -> Vr).
+        d.effective = GameMode::Flat;
     }
     d.active = activeProfileFor(scope.scope, d.effective);
     return d;
@@ -225,7 +230,7 @@ inline LaunchDecision decideLaunch(const ScopeRead& scope, const ModeRead& mode,
 // The launch's one log line, without a trailing newline.
 inline std::string formatProfileLine(const LaunchDecision& d, const char* activeName, const std::string& settingsPath) {
     if (d.scope.scope == InstallScope::Invalid)
-        return "profile: invalid (edvr_profile.ini malformed; fixes disabled, proxy chaining retained; repair the installation)";
+        return "profile: invalid (edup_profile.ini malformed; fixes disabled, proxy chaining retained; repair the installation)";
     std::string out = "profile: ";
     out += activeName;
     out += " (scope ";

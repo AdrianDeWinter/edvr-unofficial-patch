@@ -164,7 +164,7 @@ inline void doorTests() {
 
 inline void wiringTests() {
     const std::string vscreen = readFile("src/d3d11/vscreen.cpp"), layer = readFile("src/d3d11/ui_layer.cpp"), native = readFile("src/d3d11/native_on_foot.cpp"),
-                      temporal = readFile("src/d3d11/temporal_pass.cpp"), census = readFile("src/d3d11/draw_census.cpp"), ini = readFile("edvr.ini");
+                      temporal = readFile("src/d3d11/temporal_pass.cpp"), census = readFile("src/d3d11/draw_census.cpp"), ini = readFile("edup.ini");
     check(!vscreen.empty() && !layer.empty() && !native.empty() && !temporal.empty() && !census.empty() && !ini.empty(), "C1 wiring: the sources the scans read are readable");
 
     // C1a: the family's arming, the frame thread, the composite

@@ -25,17 +25,30 @@
 
 namespace edvr {
 
-inline constexpr const char* kIniNameVr = "edvr.ini";         // the VR profile's file, and the flat profile's fallback
-inline constexpr const char* kIniNameFlat = "edvr-flat.ini";  // the flat profile's own file
-inline constexpr const wchar_t* kIniNameVrW = L"edvr.ini";
-inline constexpr const wchar_t* kIniNameFlatW = L"edvr-flat.ini";
+inline constexpr const char* kIniNameVr = "edup.ini";               // the VR profile's file, and the flat profile's fallback
+inline constexpr const char* kIniNameFlat = "edup-flat.ini";        // the flat profile's own file
+inline constexpr const wchar_t* kIniNameVrW = L"edup.ini";
+inline constexpr const wchar_t* kIniNameFlatW = L"edup-flat.ini";
+
+// Legacy settings file names read before an older install is migrated to edup.ini / edup-flat.ini.
+inline constexpr const char* kLegacyIniNameVr = "edvr.ini";
+inline constexpr const char* kLegacyIniNameFlat = "edvr-flat.ini";
+inline constexpr const wchar_t* kLegacyIniNameVrW = L"edvr.ini";
+inline constexpr const wchar_t* kLegacyIniNameFlatW = L"edvr-flat.ini";
+
+inline bool isFlatIniName(const char* name) {
+    return name && (_stricmp(name, kIniNameFlat) == 0 || _stricmp(name, kLegacyIniNameFlat) == 0);
+}
 
 // The name of the settings file at `path`: its last component, compared without regard to case.
-// edvr-flat.ini for that file, edvr.ini for anything else (the only other file the loader opens).
+// Recognises both the current edup*.ini names and un-migrated legacy edvr*.ini names.
 inline const char* iniNameOfPath(const std::wstring& path) {
     const size_t slash = path.find_last_of(L"\\/");
     const wchar_t* leaf = path.c_str() + (slash == std::wstring::npos ? 0 : slash + 1);
-    return _wcsicmp(leaf, kIniNameFlatW) == 0 ? kIniNameFlat : kIniNameVr;
+    if (_wcsicmp(leaf, kIniNameFlatW) == 0) return kIniNameFlat;
+    if (_wcsicmp(leaf, kLegacyIniNameFlatW) == 0) return kLegacyIniNameFlat;
+    if (_wcsicmp(leaf, kLegacyIniNameVrW) == 0) return kLegacyIniNameVr;
+    return kIniNameVr;
 }
 
 }  // namespace edvr

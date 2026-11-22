@@ -40,33 +40,33 @@ Three things it does that a `copy` does not:
     receipt names is never deleted, and if that receipt cannot be read nothing
     is. --dry-run lists what would go and deletes nothing.
 
-edvr.ini is NOT copied unless --ini says so. It is the one file in the
+edup.ini is NOT copied unless --ini says so. It is the one file in the
 payload that carries the settings of whoever flew last, a reinstall does
 not undo an edit to it, and clobbering it has cost a session. --ini backs
 it up first and says loudly what it did. The one exception is a settings
-file that is not there: a game update wipes the directory, edvr.ini with it,
+file that is not there: a game update wipes the directory, edup.ini with it,
 and without the file the F8 menu cannot save anything. An install then restores
 the file from the newest copy ed-up-launcher.exe mirrored under
-%LOCALAPPDATA%\\EDVR\\<leaf>-<store>\\ when there is one, and writes the shipped
+%LOCALAPPDATA%\\EDUP\\<leaf>-<store>\\ when there is one, and writes the shipped
 default only when there is not (a new file either way, so no backup, not
 journaled): a default written first would make the installer's own restore skip
 and its next mirror update replace the saved copy with the default. A copy found
 only under another store's folder is not guessed at; no default is written, and
 the install says to run ed-up-launcher.exe. --verify-only warns about a missing
 file and names where it would come from. The flat half's settings live in
-edvr-flat.ini instead. --ini writes the settings files of the chosen scope:
-both writes edvr.ini and edvr-flat.ini, vr writes edvr.ini, flat writes
-edvr-flat.ini. A scope that includes flat seeds a missing edvr-flat.ini from
-the existing edvr.ini, so the two halves stop sharing one file's settings.
-A --compile-only build carries no edvr-flat.ini (its recipe stops before the
+edup-flat.ini instead. --ini writes the settings files of the chosen scope:
+both writes edup.ini and edup-flat.ini, vr writes edup.ini, flat writes
+edup-flat.ini. A scope that includes flat seeds a missing edup-flat.ini from
+the existing edup.ini, so the two halves stop sharing one file's settings.
+A --compile-only build carries no edup-flat.ini (its recipe stops before the
 generator step that writes one), so --ini derives the flat template in memory
 from gen_installer_rc.flat_ini_bytes(), the function that writes it for a full
 build. The build directory is never written, and the plan says so.
 
 --scope both|vr|flat (default both) is what the install is for. Every scope
 except flat installs the VR payload (runtime, graphics, loader, notice,
-edvr_openxr.ini); flat installs the flat graphics alone. The descriptor
-edvr_profile.ini is always written in schema 2 with the scope in it, which
+edup_openxr.ini); flat installs the flat graphics alone. The descriptor
+edup_profile.ini is always written in schema 2 with the scope in it, which
 is what the DLL reads to choose its profile. --profile vr|flat is the old
 spelling of --scope and still works, with a deprecation line.
 
@@ -142,7 +142,7 @@ NATIVE_RECEIPT_VERSION = 1
 NATIVE_KIND = "edvr-native-openxr"
 LEGACY_GRAPHICS_SOURCE = "build/d3d11.dll"
 FLAT_KIND = "edvr-flat"
-PROFILE_FILE = "edvr_profile.ini"
+PROFILE_FILE = "edup_profile.ini"
 
 # AMD's FSR 4.1 runtime, staged into the build by build.bat from tools/fetch_fsr4.py: the loader the engine
 # calls, the upscaler provider beside it, and AMD's licence. (receipt key, file name), in install order. A
@@ -196,7 +196,7 @@ def native_paths(root, target):
         "native_target": os.path.join(target, "Openvr", "win64", "openvr_api.dll"),
         "graphics_target": os.path.join(target, "d3d11.dll"),
         "original": os.path.join(target, "Openvr", "win64", "openvr_api_orig.dll"),
-        "ini": os.path.join(target, "edvr.ini"),
+        "ini": os.path.join(target, "edup.ini"),
     }
 
 
@@ -969,12 +969,12 @@ def restore_native(receipt_path, dry_run=False):
 def _rc3_flat_ini_target(target):
     """The file an RC3 flat receipt recorded as its `ini` entry.
 
-    RC3's `--profile flat --ini` wrote the shared edvr.ini and journaled that
+    RC3's `--profile flat --ini` wrote the shared edup.ini and journaled that
     exact path in a version-2 flat receipt; the flat profile now keeps its
-    settings in edvr-flat.ini (_ini_target). Both are version 2, so the
+    settings in edup-flat.ini (_ini_target). Both are version 2, so the
     receipt cannot say which it is except by the path it names, and an RC3
     install must still be restorable with `--restore-native`."""
-    return os.path.join(target, "edvr.ini")
+    return os.path.join(target, "edup.ini")
 
 
 def _validate_v2_receipt(r):
@@ -1004,7 +1004,7 @@ def _validate_v2_receipt_in(r):
     ini_target = _ini_target(target, "flat" if r["kind"] == FLAT_KIND else "vr")
     if r["kind"] == FLAT_KIND:
         # The one legacy shape accepted: a flat `ini` entry whose recorded
-        # target is EXACTLY <target>\edvr.ini. Every other check below still
+        # target is EXACTLY <target>\edup.ini. Every other check below still
         # runs on it, and any other path, for any kind, is refused as before.
         legacy = _rc3_flat_ini_target(target)
         if any(e["key"] == "ini" and e.get("target") == os.path.abspath(legacy) for e in files):
@@ -1511,7 +1511,7 @@ def native_direct(root, target, loader, runtime, dry_run=False):
         elif not known: print("[edvr] direct native dry run: process state unavailable%s" % probe_reason())
         if not dry_run: return 1
     print("[edvr] direct native plan%s" % (" (DRY RUN)" if dry_run else ""))
-    config_path = os.path.join(target, "Openvr", "win64", "edvr_openxr.ini")
+    config_path = os.path.join(target, "Openvr", "win64", "edup_openxr.ini")
     print("       %s -> %s" % (paths["native_source"], paths["native_target"]))
     print("       %s -> %s" % (paths["graphics_source"], paths["graphics_target"]))
     print("       local startup config -> %s" % config_path)
@@ -1533,7 +1533,7 @@ def native_direct(root, target, loader, runtime, dry_run=False):
 
 def native_direct_verify(root, target, loader, runtime):
     paths, config, _ = _native_direct_plan(root, target, loader, runtime)
-    config_path = os.path.join(target, "Openvr", "win64", "edvr_openxr.ini")
+    config_path = os.path.join(target, "Openvr", "win64", "edup_openxr.ini")
     if not os.path.isfile(config_path): print("[edvr] direct native config mismatch"); return 1
     with open(config_path, "rb") as f: current_config = f.read()
     if current_config != config: print("[edvr] direct native config mismatch"); return 1
@@ -1551,7 +1551,7 @@ def _standard_native_paths(root, target):
             "graphics_target": os.path.join(target, "d3d11.dll"),
             "loader_target": os.path.join(xr, "openxr_loader.dll"),
             "notice_target": os.path.join(xr, "OPENXR-LOADER-LICENSE.txt"),
-            "config": os.path.join(xr, "edvr_openxr.ini"),
+            "config": os.path.join(xr, "edup_openxr.ini"),
             "game": os.path.join(target, GAME_EXE)}
 
 
@@ -1563,8 +1563,8 @@ def _flat_paths(root, target):
 
 def _ini_source(root, half):
     """The template for a settings file: `vr` or `flat`, one per half."""
-    return os.path.join(root, "edvr.ini") if half == "vr" else \
-        os.path.join(build_dir(root), "edvr-flat.ini")
+    return os.path.join(root, "edup.ini") if half == "vr" else \
+        os.path.join(build_dir(root), "edup-flat.ini")
 
 
 # A receipt's `source` for a template that was derived in memory and has no file.
@@ -1575,12 +1575,12 @@ def _ini_template(root, half):
     """(source, bytes) for a half's settings template; bytes is None when there is none.
 
     `source` is the template file's path, or INI_GENERATED. A compile-only
-    build has no edvr-flat.ini: its recipe stops before build.bat's
+    build has no edup-flat.ini: its recipe stops before build.bat's
     gen_installer_rc.py step, which is what writes that file. When the
     compile-only output lacks it, the flat template is the generator's own
     flat_ini_bytes(), derived here in memory. Nothing is written to the build
     directory, and a dry run stays a dry run. A full build never derives: a
-    build/ without its edvr-flat.ini is a broken build, and still says so."""
+    build/ without its edup-flat.ini is a broken build, and still says so."""
     path = _ini_source(root, half)
     if os.path.isfile(path):
         with open(path, "rb") as stream:
@@ -1593,7 +1593,50 @@ def _ini_template(root, half):
 def _ini_target(target, half):
     """The flat half keeps its settings in a file of its own, so one half's
     install never clobbers the other half's tuning."""
-    return os.path.join(target, "edvr.ini" if half == "vr" else "edvr-flat.ini")
+    return os.path.join(target, "edup.ini" if half == "vr" else "edup-flat.ini")
+
+
+def _legacy_ini_name(half):
+    return "edvr.ini" if half == "vr" else "edvr-flat.ini"
+
+
+def _live_ini_path(target, half):
+    """This user's live settings file, %LOCALAPPDATA%\\EDUP\\<leaf>-<store>\\edup[-flat].ini (config.cpp's first
+    candidate), or None where there is no LOCALAPPDATA."""
+    root = mirror_root()
+    if not root:
+        return None
+    return os.path.join(_mirror_dir(root, target, _mirror_source_for(target)), os.path.basename(_ini_target(target, half)))
+
+
+def _ini_candidates(target, half):
+    """The files the runtime reads one half's settings from, in its order (src/common/config.cpp chooseSettingsPath):
+    the live per-user file, the game folder's edup file, then its legacy edvr file. The legacy mirror comes last and is
+    the restore plan's business (_mirror_ini_plan), not a settings file of the install."""
+    paths = [_live_ini_path(target, half), _ini_target(target, half), os.path.join(target, _legacy_ini_name(half))]
+    return [path for path in paths if path]
+
+
+def _settings_present(target, half):
+    """Whether the runtime finds a settings file for this half without the mirror."""
+    return any(os.path.isfile(path) for path in _ini_candidates(target, half))
+
+
+def _effective_ini(target, half):
+    """The file the runtime reads for this half, or None; the flat half falls back to the VR half's files."""
+    for path in _ini_candidates(target, half):
+        if os.path.isfile(path):
+            return path
+    if half == "flat":
+        return _effective_ini(target, "vr")
+    return None
+
+
+def _ini_write_target(target, half):
+    """Where --ini writes this half: the live per-user file when there is one (the runtime reads it first, so a file
+    written beside the game would be ignored), else the game folder's file."""
+    live = _live_ini_path(target, half)
+    return live if live and os.path.isfile(live) else _ini_target(target, half)
 
 
 def _ini_pairs(root, target, scope):
@@ -1604,10 +1647,10 @@ def _ini_pairs(root, target, scope):
     pairs = []
     if scope in ("both", "vr"):
         source, data = _ini_template(root, "vr")
-        pairs.append((source, _ini_target(target, "vr"), "ini", data))
+        pairs.append((source, _ini_write_target(target, "vr"), "ini", data))
     if scope in ("both", "flat"):
         source, data = _ini_template(root, "flat")
-        pairs.append((source, _ini_target(target, "flat"),
+        pairs.append((source, _ini_write_target(target, "flat"),
                       "ini" if scope == "flat" else "ini_flat", data))
     return pairs
 
@@ -1615,19 +1658,21 @@ def _ini_pairs(root, target, scope):
 def _missing_ini_defaults(root, target, scope, handled=()):
     """(half, source, target, bytes) for each settings file the scope reads that the
     game directory lacks, with the shipped default (see _ini_template). The flat half
-    is left out while edvr.ini exists: it is seeded from it instead, so it inherits
+    is left out while edup.ini exists: it is seeded from it instead, so it inherits
     the settings of whoever flew last. `handled` names the halves whose missing file
     the mirror plan already took (restored from the mirror, or refused because a
-    mirror copy exists); they get no default, and a flat half whose edvr.ini is one
+    mirror copy exists); they get no default, and a flat half whose edup.ini is one
     of them is seeded from the restored file rather than defaulted. Nothing here
     reads or writes the target."""
     halves = {"both": ("vr", "flat"), "vr": ("vr",), "flat": ("flat",)}[scope]
     missing = []
     for half in halves:
         dst = _ini_target(target, half)
-        if os.path.isfile(dst) or half in handled:
+        # Present anywhere the runtime reads (the live per-user file, the game folder's edup or legacy edvr file):
+        # a default beside the game would then either be ignored or, worse, outrank the tuned legacy file.
+        if _settings_present(target, half) or half in handled:
             continue
-        if half == "flat" and (os.path.isfile(_ini_target(target, "vr")) or "vr" in handled):
+        if half == "flat" and (_settings_present(target, "vr") or "vr" in handled):
             continue
         source, data = _ini_template(root, half)
         missing.append((half, source, dst, data))
@@ -1637,7 +1682,7 @@ def _missing_ini_defaults(root, target, scope, handled=()):
 # ---------------------------------------------------------------------------
 # The settings mirror (src/installer/mirror.cpp, src/common/iniedit.cpp)
 #
-# ed-up-launcher.exe keeps the newest copies of edvr.ini and edvr-flat.ini under
+# ed-up-launcher.exe keeps the newest copies of edup.ini and edup-flat.ini under
 # %LOCALAPPDATA%\EDVR\<leaf>-<store>\ and restores them when the game directory has
 # none, which is what a game update leaves behind. A default written first would
 # make that restore skip, and the installer's next mirror update would replace the
@@ -1669,7 +1714,13 @@ def _mirror_slug(source):
 
 
 def mirror_root():
-    """%LOCALAPPDATA%\\EDVR, or None where there is no LOCALAPPDATA (Linux)."""
+    """%LOCALAPPDATA%\\EDUP, or None where there is no LOCALAPPDATA (Linux)."""
+    base = os.environ.get("LOCALAPPDATA", "")
+    return os.path.join(base, "EDUP") if base else None
+
+
+def legacy_mirror_root():
+    """%LOCALAPPDATA%\\EDVR, where the launcher kept its copies before the move to EDUP; None without LOCALAPPDATA."""
     base = os.environ.get("LOCALAPPDATA", "")
     return os.path.join(base, "EDVR") if base else None
 
@@ -1718,12 +1769,16 @@ def _mirror_ini_plan(target, scope):
     halves = {"both": ("vr", "flat"), "vr": ("vr",), "flat": ("flat",)}[scope]
     source = _mirror_source_for(target)
     restores, blocked = [], []
+    legacy_root = legacy_mirror_root()
     for half in halves:
         dst = _ini_target(target, half)
-        if os.path.isfile(dst):
+        if _settings_present(target, half):
             continue
         name = os.path.basename(dst)
         found = _mirror_newest(_mirror_dir(root, target, source), name)
+        if not found and legacy_root:
+            # The mirror ed-up-launcher.exe kept before the move to EDUP, under the old names.
+            found = _mirror_newest(_mirror_dir(legacy_root, target, source), _legacy_ini_name(half))
         if found:
             try:
                 with open(found, "rb") as stream:
@@ -1733,6 +1788,9 @@ def _mirror_ini_plan(target, scope):
             continue
         others = [path for path in (_mirror_newest(_mirror_dir(root, target, s), name)
                                     for s in MIRROR_SOURCES if s != source) if path]
+        if legacy_root:
+            others += [path for path in (_mirror_newest(_mirror_dir(legacy_root, target, s), _legacy_ini_name(half))
+                                         for s in MIRROR_SOURCES if s != source) if path]
         if others:
             blocked.append((half, dst, others,
                             "it is kept under another store's folder than the %s this path suggests" %
@@ -1742,7 +1800,7 @@ def _mirror_ini_plan(target, scope):
 
 def _selects_xess(target, scope):
     """Whether the settings a scope's game reads select XeSS-SR. The flat half
-    reads edvr-flat.ini and falls back to edvr.ini; the VR half reads edvr.ini."""
+    reads edup-flat.ini and falls back to edup.ini; the VR half reads edup.ini."""
     halves = {"both": ("vr", "flat"), "vr": ("vr",), "flat": ("flat",)}[scope]
     return any(_ini_selects_xess(target, half) for half in halves)
 
@@ -1771,10 +1829,8 @@ def _selects_fsr4(target, scope):
 
 def _ini_temporal_mode(target, half):
     """Read one half's effective temporal mode, including the flat half's ini fallback."""
-    ini = _ini_target(target, half)
-    if half == "flat" and not os.path.isfile(ini):
-        ini = os.path.join(target, "edvr.ini")
-    if not os.path.isfile(ini):
+    ini = _effective_ini(target, half)
+    if not ini or not os.path.isfile(ini):
         return "off"
     section = ""
     mode = "off"
@@ -1794,13 +1850,13 @@ def _ini_temporal_mode(target, half):
 
 
 # ---------------------------------------------------------------------------
-# advanced.real_dll: one value, in the shared edvr.ini (src/common/real_dll_choice.h)
+# advanced.real_dll: one value, in the shared edup.ini (src/common/real_dll_choice.h)
 #
 # The chained mod (EDHM, ReShade) is one decision for the install. The game reads it
-# from edvr.ini for BOTH profiles; edvr-flat.ini holds it only to override it or to
-# say `none`. An install that predates the rule can hold it in edvr-flat.ini alone,
+# from edup.ini for BOTH profiles; edup-flat.ini holds it only to override it or to
+# say `none`. An install that predates the rule can hold it in edup-flat.ini alone,
 # so the VR profile never chained it. A run that leaves the settings alone moves it:
-# both files are backed up, edvr.ini gets the value, edvr-flat.ini is emptied of it.
+# both files are backed up, edup.ini gets the value, edup-flat.ini is emptied of it.
 # --ini replaces both files with their templates and so replaces this too.
 # ---------------------------------------------------------------------------
 def _ini_read(path):
@@ -1883,10 +1939,10 @@ def ini_set_real_dll(text, value):
 
 
 def real_dll_migration(target):
-    """The move to plan, or None. Only when edvr-flat.ini names a mod and edvr.ini
+    """The move to plan, or None. Only when edup-flat.ini names a mod and edup.ini
     (present or not) names none; `none` in either file is the user's and is left."""
-    shared = os.path.join(target, "edvr.ini")
-    flat = os.path.join(target, "edvr-flat.ini")
+    shared = os.path.join(target, "edup.ini")
+    flat = os.path.join(target, "edup-flat.ini")
     if not os.path.isfile(flat):
         return None
     flat_text, flat_bom = _ini_read(flat)
@@ -1901,12 +1957,12 @@ def real_dll_migration(target):
 
 
 REAL_DLL_NEW_SHARED = ("# ED-UP settings shared by the VR and flat profiles. advanced.real_dll names the mod ED-UP chains through;\r\n"
-                       "# edvr-flat.ini can override it for the flat profile, or say real_dll = none to run flat without it.\r\n"
+                       "# edup-flat.ini can override it for the flat profile, or say real_dll = none to run flat without it.\r\n"
                        "[advanced]\r\nreal_dll = %s\r\n")
 
 
 def apply_real_dll_migration(m, tag, stamp):
-    """Do the move: back up both files, write edvr.ini, then empty edvr-flat.ini of it."""
+    """Do the move: back up both files, write edup.ini, then empty edup-flat.ini of it."""
     backups = []
     for path in (m["shared"], m["flat"]):
         if os.path.isfile(path):
@@ -1927,7 +1983,7 @@ def apply_real_dll_migration(m, tag, stamp):
 def _flat_vr_leftovers(target):
     """Recognized EDVR VR state needs the GUI's original-file recovery."""
     xr = os.path.join(target, "Openvr", "win64")
-    candidates = (os.path.join(xr, "edvr_openxr.ini"),
+    candidates = (os.path.join(xr, "edup_openxr.ini"),
                   os.path.join(xr, "openvr_api_orig.dll"),
                   os.path.join(xr, "openxr_loader.dll"),
                   os.path.join(target, "edvr_native_receipt.json"))
@@ -1942,7 +1998,7 @@ def retire_stale_native_receipt(target, tag, dry_run=False):
     try:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", tag):
             raise ValueError("unsafe backup tag")
-        state_path = os.path.join(target, "edvr_install", "state.ini")
+        state_path = os.path.join(target, "edup_install", "state.ini")
         if not _under(state_path, target) or not _under(receipt, target):
             raise ValueError("install evidence escapes the game directory")
         state_hash = sha256(state_path)
@@ -1984,7 +2040,7 @@ def retire_stale_native_receipt(target, tag, dry_run=False):
         paths = _standard_native_paths(recorded_root, target)
         allowed = {key: paths[key + "_target"] for key in ("runtime", "graphics", "loader", "notice")}
         allowed.update(config=paths["config"], profile=descriptor,
-                       ini=os.path.join(target, "edvr.ini"), ini_flat=os.path.join(target, "edvr-flat.ini"),
+                       ini=os.path.join(target, "edup.ini"), ini_flat=os.path.join(target, "edup-flat.ini"),
                        dlss=os.path.join(target, "nvngx_dlss.dll"), xess=os.path.join(target, "libxess.dll"),
                        xess_fg=os.path.join(target, "libxess_fg.dll"),
                        xess_ll=os.path.join(target, "libxell.dll"),
@@ -2104,10 +2160,10 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
         if data is None:
             errors.append("missing %s INI source %s" % (scope, source))
     # A settings file the scope reads that is not there -- a game update wipes the
-    # directory, edvr.ini with it -- is installed from the shipped default, with or
-    # without --ini. Without it nothing can be saved: the F8 menu logs "edvr.ini
+    # directory, edup.ini with it -- is installed from the shipped default, with or
+    # without --ini. Without it nothing can be saved: the F8 menu logs "edup.ini
     # could not be read" for every edit. A flat half that can inherit the settings
-    # of edvr.ini does (seed_ini, below) and gets no default.
+    # of edup.ini does (seed_ini, below) and gets no default.
     # A default whose template is not there is a warning, not a refusal: the payload is what the install is for.
     # The mirror ed-up-launcher.exe keeps is asked first (see _mirror_ini_plan): a file it holds is restored, not
     # defaulted, and a copy this tool cannot place with confidence stops the default rather than being overwritten.
@@ -2319,24 +2375,24 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
                     "backup": _native_backup_name(descriptor, tag, stamp) if os.path.isfile(descriptor) else None,
                     "before_sha256": sha256(descriptor) if os.path.isfile(descriptor) else None,
                     "installed_sha256": hashlib.sha256(descriptor_bytes).hexdigest().upper()})
-    # A scope that includes the flat half, with no edvr-flat.ini yet, inherits
-    # the settings of whoever flew last by seeding the new file from edvr.ini.
+    # A scope that includes the flat half, with no edup-flat.ini yet, inherits
+    # the settings of whoever flew last by seeding the new file from edup.ini.
     # Not journaled: the seed is a brand-new file no prior state needs
     # restoring into, and keeping it out of the receipt means a later edit of
-    # edvr-flat.ini is not "the installed file changed" to repair/restore.
-    # A flat file the mirror holds (or whose copy is the installer's to restore) is not seeded over. An edvr.ini the
+    # edup-flat.ini is not "the installed file changed" to repair/restore.
+    # A flat file the mirror holds (or whose copy is the installer's to restore) is not seeded over. An edup.ini the
     # mirror restores in this run counts as there: the seed is copied after the restore.
     seed_ini = (scope in ("both", "flat") and not include_ini and
                 not os.path.isfile(_ini_target(target, "flat")) and "flat" not in mirror_halves and
-                (os.path.isfile(os.path.join(target, "edvr.ini")) or
+                (os.path.isfile(os.path.join(target, "edup.ini")) or
                  any(half == "vr" for half, _, _, _ in mirror_restore)))
-    # advanced.real_dll lives once, in edvr.ini. An edvr-flat.ini that holds it alone is moved, unless
+    # advanced.real_dll lives once, in edup.ini. An edup-flat.ini that holds it alone is moved, unless
     # --ini is about to replace both files with their templates (which then replaces the value too).
     migration = None if include_ini else real_dll_migration(target)
     if include_ini:
         for _, ini_target, _, _ in ini_pairs:
             if os.path.isfile(ini_target) and ini_real_dll(_ini_read(ini_target)[0]):
-                print("[edvr] NOTE: --ini replaces %s, including its advanced.real_dll; set it again in edvr.ini "
+                print("[edvr] NOTE: --ini replaces %s, including its advanced.real_dll; set it again in edup.ini "
                       "(one value for both profiles)" % ini_target)
     print("[edvr] %s plan%s: %s" % (scope, " (DRY RUN -- nothing will be written)" if dry_run else "", target))
     for e in entries: print("       %-7s %s" % (e["key"], e["target"]))
@@ -2359,7 +2415,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
     for e in entries:
         if e["key"] in generated_ini:
             print("       derive   %s from gen_installer_rc.flat_ini_bytes() (this compile-only build has no "
-                  "edvr-flat.ini; nothing is written to %s)" % (e["target"], build_dir(root)))
+                  "edup-flat.ini; nothing is written to %s)" % (e["target"], build_dir(root)))
     for half, dst, source, data in mirror_restore:
         print("       restore  %s (missing; the newest copy of it kept outside the game folder, %s; a new file, so no "
               "backup)" % (dst, source))
@@ -2367,7 +2423,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
         print("       WARNING  %s is missing and a mirror copy exists (%s) but %s, so no default is written: run "
               "ed-up-launcher.exe to restore it" % (dst, ", ".join(paths), why))
     if seed_ini:
-        print("       seed     %s (from edvr.ini; a new file, so no backup)" % _ini_target(target, "flat"))
+        print("       seed     %s (from edup.ini; a new file, so no backup)" % _ini_target(target, "flat"))
     for half, source, dst, data in default_ini:
         if data is None:
             print("       WARNING  %s is missing and its default template %s is not there, so nothing is written" %
@@ -2376,7 +2432,7 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
             print("       default  %s (missing; the shipped %s defaults from %s; a new file, so no backup)" %
                   (dst, half, "gen_installer_rc.flat_ini_bytes()" if source == INI_GENERATED else source))
     if migration:
-        print("       migrate  advanced.real_dll = %s: edvr-flat.ini -> edvr.ini, so it is set once and applies to the "
+        print("       migrate  advanced.real_dll = %s: edup-flat.ini -> edup.ini, so it is set once and applies to the "
               "VR and flat profiles (both files are backed up first)" % migration["value"])
     print("       receipt  %s" % receipt)
     if dry_run:
@@ -2450,16 +2506,16 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
               "restore it" % (dst, ", ".join(paths), why))
     if seed_ini:
         try:
-            shutil.copy2(os.path.join(target, "edvr.ini"), _ini_target(target, "flat"))
+            shutil.copy2(os.path.join(target, "edup.ini"), _ini_target(target, "flat"))
             seeded, seeded_bom = _ini_read(_ini_target(target, "flat"))
             carried = ini_real_dll(seeded)
             if carried and carried.lower() != "none":
-                # The chain lives in edvr.ini; the seeded copy keeps none, so it is set once.
+                # The chain lives in edup.ini; the seeded copy keeps none, so it is set once.
                 _ini_write(_ini_target(target, "flat"), ini_set_real_dll(seeded, ""), seeded_bom)
-            print("[edvr] flat settings seeded: %s (copied from edvr.ini; the flat profile no longer reads edvr.ini, "
+            print("[edvr] flat settings seeded: %s (copied from edup.ini; the flat profile no longer reads edup.ini, "
                   "except for advanced.real_dll, which both profiles share)" % _ini_target(target, "flat"))
         except OSError as exc:
-            print("[edvr] WARNING: flat settings seed failed (%s); copy edvr.ini to edvr-flat.ini by hand to keep your settings" % exc)
+            print("[edvr] WARNING: flat settings seed failed (%s); copy edup.ini to edup-flat.ini by hand to keep your settings" % exc)
     for half, _, dst, data in default_ini:
         if data is None:
             continue
@@ -2476,16 +2532,16 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
             print("[edvr] WARNING: could not write the default %s (%s); the F8 menu cannot save until it exists" %
                   (dst, exc))
     if migration and migration["shared_text"] is None and os.path.isfile(migration["shared"]):
-        # The default edvr.ini was just written: the chain is added to it, not written as a lone new file.
+        # The default edup.ini was just written: the chain is added to it, not written as a lone new file.
         migration["shared_text"], migration["shared_bom"] = _ini_read(migration["shared"])
     if migration:
         try:
             for backup in apply_real_dll_migration(migration, tag, stamp):
                 print("[edvr] backed up %s" % backup)
-            print("[edvr] advanced.real_dll = %s moved from edvr-flat.ini to edvr.ini: one value for both profiles" %
+            print("[edvr] advanced.real_dll = %s moved from edup-flat.ini to edup.ini: one value for both profiles" %
                   migration["value"])
         except (OSError, ValueError) as exc:
-            print("[edvr] WARNING: moving advanced.real_dll to edvr.ini failed (%s); set it in edvr.ini by hand" % exc)
+            print("[edvr] WARNING: moving advanced.real_dll to edup.ini failed (%s); set it in edup.ini by hand" % exc)
     print("[edvr] %s package installed and verified; receipt: %s" % (scope, receipt))
     _prune_quietly(target, keep_backups, receipts=(receipt,))
     return 0
@@ -2557,7 +2613,7 @@ def _suspend_self_test():
         game = os.path.join(tmp, "game"); os.makedirs(game)
         Path(game, GAME_EXE).write_bytes(b"GAME")
         live = Path(game, "d3d11.dll"); parked = Path(game, "d3d11.dll" + SUSPENDED_SUFFIX)
-        live.write_bytes(b"EDVR-GRAPHICS"); Path(game, "edvr-flat.ini").write_bytes(b"[x]\n")
+        live.write_bytes(b"EDVR-GRAPHICS"); Path(game, "edup-flat.ini").write_bytes(b"[x]\n")
         globals()["_is_edvr_graphics"] = lambda p: Path(p).read_bytes().startswith(b"EDVR")
         globals()["strict_game_running"] = lambda *a: (True, False)
 
@@ -2572,7 +2628,7 @@ def _suspend_self_test():
         check(main(["--target", game, "--resume"]) == 1, "resume with nothing parked succeeded")
         check(main(["--target", game, "--suspend"]) == 0, "suspend failed")
         check(not live.exists() and parked.read_bytes() == b"EDVR-GRAPHICS", "suspend left the wrong files")
-        check(Path(game, "edvr-flat.ini").read_bytes() == b"[x]\n", "suspend touched the ini")
+        check(Path(game, "edup-flat.ini").read_bytes() == b"[x]\n", "suspend touched the ini")
         check(main(["--target", game, "--suspend"]) == 1, "second suspend succeeded")
         live.write_bytes(b"EDVR-OTHER")
         check(main(["--target", game, "--resume"]) == 1, "resume overwrote a live d3d11.dll")
@@ -2634,8 +2690,8 @@ def _scope_self_test():
                           ("build/OPENXR-LOADER-LICENSE.txt", b"LICENSE"),
                           ("build/d3d11.dll", b"FLAT-GRAPHICS"),
                           ("build/nvngx_dlss.dll", b"DLSS"),
-                          ("build/edvr-flat.ini", b"[fix]\r\ntemporal_aa = off\r\n"),
-                          ("edvr.ini", b"[fix]\nvr_template = 1\n")):
+                          ("build/edup-flat.ini", b"[fix]\r\ntemporal_aa = off\r\n"),
+                          ("edup.ini", b"[fix]\nvr_template = 1\n")):
             Path(root, rel.replace("/", os.sep)).write_bytes(data)
         _scope_loader.verify = lambda path: None
         _scope_pe.validate_native_pair = lambda *args: None
@@ -2651,7 +2707,7 @@ def _scope_self_test():
             os.makedirs(os.path.join(g, "Openvr", "win64"))
             Path(g, GAME_EXE).write_bytes(b"GAME")
             if user_ini is not None:
-                Path(g, "edvr.ini").write_bytes(user_ini)
+                Path(g, "edup.ini").write_bytes(user_ini)
             return g
 
         def tree(g):
@@ -2671,7 +2727,7 @@ def _scope_self_test():
 
         # --scope both --ini: two settings files, each backed up, the VR payload.
         g = game("both", user_ini=b"[user]\nkeep=1\n")
-        Path(g, "edvr-flat.ini").write_bytes(b"[user]\nflat=1\n")
+        Path(g, "edup-flat.ini").write_bytes(b"[user]\nflat=1\n")
         before = tree(g)
         code, _ = run(args_for(g, "--scope", "both", "--ini", "--dry-run", tag="both"))
         check(code == 0 and tree(g) == before, "--scope both --ini --dry-run wrote files or directories")
@@ -2679,19 +2735,19 @@ def _scope_self_test():
         check(code == 0, "--scope both --ini failed: %r" % text)
         check(Path(g, PROFILE_FILE).read_bytes() == b"[install]\r\nschema = 2\r\nscope = both\r\n",
               "scope both wrote the wrong descriptor")
-        check(Path(g, "edvr.ini").read_bytes() == b"[fix]\nvr_template = 1\n",
-              "scope both did not write edvr.ini from the repo root")
-        check(Path(g, "edvr-flat.ini").read_bytes() == b"[fix]\r\ntemporal_aa = off\r\n",
-              "scope both did not write edvr-flat.ini from build/")
-        ini_backup = list(Path(g).glob("edvr.ini.pre-both-*.bak"))
-        flat_backup = list(Path(g).glob("edvr-flat.ini.pre-both-*.bak"))
+        check(Path(g, "edup.ini").read_bytes() == b"[fix]\nvr_template = 1\n",
+              "scope both did not write edup.ini from the repo root")
+        check(Path(g, "edup-flat.ini").read_bytes() == b"[fix]\r\ntemporal_aa = off\r\n",
+              "scope both did not write edup-flat.ini from build/")
+        ini_backup = list(Path(g).glob("edup.ini.pre-both-*.bak"))
+        flat_backup = list(Path(g).glob("edup-flat.ini.pre-both-*.bak"))
         check(len(ini_backup) == 1 and ini_backup[0].read_bytes() == b"[user]\nkeep=1\n",
-              "scope both did not back up edvr.ini")
+              "scope both did not back up edup.ini")
         check(len(flat_backup) == 1 and flat_backup[0].read_bytes() == b"[user]\nflat=1\n",
-              "scope both did not back up edvr-flat.ini")
+              "scope both did not back up edup-flat.ini")
         check(Path(g, "Openvr", "win64", "openvr_api.dll").read_bytes() == b"RUNTIME"
               and Path(g, "d3d11.dll").read_bytes() == b"NATIVE-GRAPHICS"
-              and Path(g, "Openvr", "win64", "edvr_openxr.ini").is_file(),
+              and Path(g, "Openvr", "win64", "edup_openxr.ini").is_file(),
               "scope both did not install the VR payload")
         receipt = os.path.join(g, "edvr_native_receipt.json")
         keys = {e["key"] for e in json.loads(Path(receipt).read_text(encoding="utf-8"))["files"]}
@@ -2704,40 +2760,40 @@ def _scope_self_test():
         code, _ = run(args_for(g, "--scope", "both", "--ini", "--verify-only"))
         check(code == 1, "--verify-only passed with a scope vr descriptor")
         Path(g, PROFILE_FILE).write_bytes(profile_bytes("both"))
-        Path(g, "edvr-flat.ini").write_bytes(b"[fix]\ntemporal_aa=dlss\n")
+        Path(g, "edup-flat.ini").write_bytes(b"[fix]\ntemporal_aa=dlss\n")
         code, _ = run(args_for(g, "--scope", "both", "--ini", "--verify-only"))
-        check(code == 1, "--verify-only passed with an edited edvr-flat.ini")
+        check(code == 1, "--verify-only passed with an edited edup-flat.ini")
 
         # Restoring a both install puts back both settings files the user had.
         g = game("both-restore", user_ini=b"[user]\nkeep=6\n")
-        Path(g, "edvr-flat.ini").write_bytes(b"[user]\nflat=6\n")
+        Path(g, "edup-flat.ini").write_bytes(b"[user]\nflat=6\n")
         code, _ = run(args_for(g, "--scope", "both", "--ini", tag="bothrestore"))
         check(code == 0, "--scope both --ini failed before the restore case")
         restored, _ = run(["--restore-native", os.path.join(g, "edvr_native_receipt.json")])
         check(restored == 0, "restoring a scope both install failed")
-        check(Path(g, "edvr.ini").read_bytes() == b"[user]\nkeep=6\n"
-              and Path(g, "edvr-flat.ini").read_bytes() == b"[user]\nflat=6\n"
+        check(Path(g, "edup.ini").read_bytes() == b"[user]\nkeep=6\n"
+              and Path(g, "edup-flat.ini").read_bytes() == b"[user]\nflat=6\n"
               and not Path(g, "d3d11.dll").exists(),
               "restoring a scope both install did not put back both settings files")
 
-        # --scope vr --ini writes edvr.ini only; a missing edvr-flat.ini is not seeded.
+        # --scope vr --ini writes edup.ini only; a missing edup-flat.ini is not seeded.
         g = game("vr", user_ini=b"[user]\nkeep=2\n")
-        Path(g, "edvr-flat.ini").write_bytes(b"[user]\nflat=2\n")
+        Path(g, "edup-flat.ini").write_bytes(b"[user]\nflat=2\n")
         code, _ = run(args_for(g, "--scope", "vr", "--ini", tag="vr"))
         check(code == 0, "--scope vr --ini failed")
-        check(Path(g, "edvr-flat.ini").read_bytes() == b"[user]\nflat=2\n",
-              "--scope vr touched edvr-flat.ini")
-        check(Path(g, "edvr.ini").read_bytes() == b"[fix]\nvr_template = 1\n",
-              "--scope vr --ini did not write edvr.ini")
+        check(Path(g, "edup-flat.ini").read_bytes() == b"[user]\nflat=2\n",
+              "--scope vr touched edup-flat.ini")
+        check(Path(g, "edup.ini").read_bytes() == b"[fix]\nvr_template = 1\n",
+              "--scope vr --ini did not write edup.ini")
         check(Path(g, PROFILE_FILE).read_bytes() == profile_bytes("vr"),
               "--scope vr wrote the wrong descriptor")
         g = game("vr-noseed", user_ini=b"[user]\nkeep=3\n")
         code, _ = run(args_for(g, "--scope", "vr", tag="vrnoseed"))
-        check(code == 0 and not Path(g, "edvr-flat.ini").exists(),
-              "--scope vr seeded edvr-flat.ini")
+        check(code == 0 and not Path(g, "edup-flat.ini").exists(),
+              "--scope vr seeded edup-flat.ini")
 
         # --scope flat: the flat graphics alone, no VR payload, and --ini writes
-        # only edvr-flat.ini.
+        # only edup-flat.ini.
         g = game("flat", user_ini=b"[user]\nkeep=4\n")
         code, _ = run(args_for(g, "--scope", "flat", "--ini", tag="flat"))
         check(code == 0, "--scope flat --ini failed")
@@ -2746,8 +2802,8 @@ def _scope_self_test():
         check(Path(g, "d3d11.dll").read_bytes() == b"FLAT-GRAPHICS"
               and not Path(g, "Openvr", "win64", "openvr_api.dll").exists(),
               "--scope flat installed VR files")
-        check(Path(g, "edvr.ini").read_bytes() == b"[user]\nkeep=4\n"
-              and Path(g, "edvr-flat.ini").read_bytes() == b"[fix]\r\ntemporal_aa = off\r\n",
+        check(Path(g, "edup.ini").read_bytes() == b"[user]\nkeep=4\n"
+              and Path(g, "edup-flat.ini").read_bytes() == b"[fix]\r\ntemporal_aa = off\r\n",
               "--scope flat --ini touched the wrong settings file")
 
         # A settings file that is not there -- a game update wipes the directory -- is installed
@@ -2759,45 +2815,45 @@ def _scope_self_test():
         check("default  " in text and text.count("default  ") == 2, "the dry-run plan did not name both defaults: %r" % text)
         code, text = run(args_for(g, "--scope", "both", tag="dnone"))
         check(code == 0, "--scope both with no settings files failed: %r" % text)
-        check(Path(g, "edvr.ini").read_bytes() == b"[fix]\nvr_template = 1\n",
-              "a missing edvr.ini was not installed from the template")
-        check(Path(g, "edvr-flat.ini").read_bytes() == b"[fix]\r\ntemporal_aa = off\r\n",
-              "a missing edvr-flat.ini was not installed from the flat template, not seeded from the new edvr.ini")
+        check(Path(g, "edup.ini").read_bytes() == b"[fix]\nvr_template = 1\n",
+              "a missing edup.ini was not installed from the template")
+        check(Path(g, "edup-flat.ini").read_bytes() == b"[fix]\r\ntemporal_aa = off\r\n",
+              "a missing edup-flat.ini was not installed from the flat template, not seeded from the new edup.ini")
         check(not list(Path(g).glob("edvr*.ini.pre-*.bak")), "a new default settings file was backed up")
         receipt = os.path.join(g, "edvr_native_receipt.json")
         keys = {e["key"] for e in json.loads(Path(receipt).read_text(encoding="utf-8"))["files"]}
         check(not ({"ini", "ini_flat"} & keys), "a default settings file was journaled in the receipt: %r" % keys)
-        Path(g, "edvr.ini").write_bytes(b"[user]\nsaved-from-f8=1\n")
+        Path(g, "edup.ini").write_bytes(b"[user]\nsaved-from-f8=1\n")
         code, text = run(args_for(g, "--scope", "both", "--verify-only", tag="dnone"))
         check(code == 0 and "WARNING" not in text, "an edited default settings file failed --verify-only: %r" % text)
         code, text = run(args_for(g, "--scope", "both", tag="dnone2"))
-        check(code == 0 and Path(g, "edvr.ini").read_bytes() == b"[user]\nsaved-from-f8=1\n"
+        check(code == 0 and Path(g, "edup.ini").read_bytes() == b"[user]\nsaved-from-f8=1\n"
               and "settings were missing" not in text, "a reinstall rewrote an existing settings file with a default")
-        os.remove(os.path.join(g, "edvr.ini"))
+        os.remove(os.path.join(g, "edup.ini"))
         code, text = run(args_for(g, "--scope", "both", "--verify-only", tag="dnone"))
-        check(code == 0 and "edvr.ini is missing" in text and not Path(g, "edvr.ini").exists(),
-              "--verify-only did not warn about a missing edvr.ini, or wrote it: %r" % text)
-        # vr: edvr.ini only. flat: edvr-flat.ini only. A flat half with an edvr.ini to inherit gets no default.
+        check(code == 0 and "edup.ini is missing" in text and not Path(g, "edup.ini").exists(),
+              "--verify-only did not warn about a missing edup.ini, or wrote it: %r" % text)
+        # vr: edup.ini only. flat: edup-flat.ini only. A flat half with an edup.ini to inherit gets no default.
         g = game("default-vr")
         code, _ = run(args_for(g, "--scope", "vr", tag="dvr"))
-        check(code == 0 and Path(g, "edvr.ini").is_file() and not Path(g, "edvr-flat.ini").exists(),
+        check(code == 0 and Path(g, "edup.ini").is_file() and not Path(g, "edup-flat.ini").exists(),
               "--scope vr with no settings files wrote the wrong ones")
         g = game("default-flat")
         code, _ = run(args_for(g, "--scope", "flat", tag="dflat"))
-        check(code == 0 and Path(g, "edvr-flat.ini").read_bytes() == b"[fix]\r\ntemporal_aa = off\r\n"
-              and not Path(g, "edvr.ini").exists(), "--scope flat with no settings files wrote the wrong ones")
+        check(code == 0 and Path(g, "edup-flat.ini").read_bytes() == b"[fix]\r\ntemporal_aa = off\r\n"
+              and not Path(g, "edup.ini").exists(), "--scope flat with no settings files wrote the wrong ones")
         g = game("default-inherit", user_ini=b"[user]\nkeep=9\n")
         code, text = run(args_for(g, "--scope", "both", tag="dinherit"))
-        check(code == 0 and Path(g, "edvr.ini").read_bytes() == b"[user]\nkeep=9\n"
-              and Path(g, "edvr-flat.ini").read_bytes() == b"[user]\nkeep=9\n" and "default  " not in text,
-              "a flat half with an edvr.ini to inherit got a default")
-        # An edvr-flat.ini that names a mod, with no edvr.ini: the default edvr.ini receives the chain.
+        check(code == 0 and Path(g, "edup.ini").read_bytes() == b"[user]\nkeep=9\n"
+              and Path(g, "edup-flat.ini").read_bytes() == b"[user]\nkeep=9\n" and "default  " not in text,
+              "a flat half with an edup.ini to inherit got a default")
+        # An edup-flat.ini that names a mod, with no edup.ini: the default edup.ini receives the chain.
         g = game("default-chain")
-        Path(g, "edvr-flat.ini").write_bytes(b"[advanced]\nreal_dll = d3d11_mod.dll\n")
+        Path(g, "edup-flat.ini").write_bytes(b"[advanced]\nreal_dll = d3d11_mod.dll\n")
         code, _ = run(args_for(g, "--scope", "both", tag="dchain"))
-        shared = Path(g, "edvr.ini").read_text(encoding="utf-8") if Path(g, "edvr.ini").is_file() else ""
+        shared = Path(g, "edup.ini").read_text(encoding="utf-8") if Path(g, "edup.ini").is_file() else ""
         check(code == 0 and "vr_template = 1" in shared and "real_dll = d3d11_mod.dll" in shared,
-              "the migrated chain did not land in the default edvr.ini: %r" % shared)
+              "the migrated chain did not land in the default edup.ini: %r" % shared)
 
         # The settings mirror (%LOCALAPPDATA%\EDVR\<leaf>-<store>\): a missing settings file comes back from the
         # newest copy ed-up-launcher.exe kept, not from the shipped default, because a default written first makes
@@ -2826,8 +2882,8 @@ def _scope_self_test():
         check(code == 1 and tree(g) == before, "--verify-only wrote files, or passed with no payload installed")
         code, text = run(args_for(g, "--scope", "both", tag="mira"))
         check(code == 0, "--scope both with a mirror and no settings files failed: %r" % text)
-        check(Path(g, "edvr.ini").read_bytes() == b"[user]\nmirror=newest\n"
-              and Path(g, "edvr-flat.ini").read_bytes() == b"[user]\nflat-mirror=1\n",
+        check(Path(g, "edup.ini").read_bytes() == b"[user]\nmirror=newest\n"
+              and Path(g, "edup-flat.ini").read_bytes() == b"[user]\nflat-mirror=1\n",
               "a missing settings file did not come back from the mirror's newest copy")
         check("default  " not in text and "settings were missing: restored" in text and tree(m) == mirror_before
               and not list(Path(g).glob("edvr*.ini.pre-*.bak")),
@@ -2837,11 +2893,11 @@ def _scope_self_test():
         code, text = run(args_for(g, "--scope", "both", "--verify-only", tag="mira"))
         check(code == 0 and "WARNING" not in text, "--verify-only warned about restored settings: %r" % text)
         # --verify-only on a directory that lost its settings names the copy an install would restore from.
-        os.remove(os.path.join(g, "edvr.ini"))
+        os.remove(os.path.join(g, "edup.ini"))
         before = tree(g)
         code, text = run(args_for(g, "--scope", "both", "--verify-only", tag="mira"))
         check(code == 0 and tree(g) == before and "restores it from the mirror copy %s" % os.path.join(m, "edvr.ini") in text,
-              "--verify-only did not name the mirror copy a missing edvr.ini would come back from: %r" % text)
+              "--verify-only did not name the mirror copy a missing edup.ini would come back from: %r" % text)
         # A newest generation that is empty is passed over for the one behind it; one that exists is never overwritten.
         g = game("mirror-b", user_ini=b"[user]\nkeep=existing\n")
         m = mirror_of(g)
@@ -2849,29 +2905,29 @@ def _scope_self_test():
         Path(m, "edvr.ini.1").write_bytes(b"[user]\nmirror=gen1\n")
         Path(m, "edvr-flat.ini").write_bytes(b"[user]\nflat-mirror=2\n")
         code, text = run(args_for(g, "--scope", "both", tag="mirb"))
-        check(code == 0 and Path(g, "edvr.ini").read_bytes() == b"[user]\nkeep=existing\n"
-              and Path(g, "edvr-flat.ini").read_bytes() == b"[user]\nflat-mirror=2\n" and "seed     " not in text,
-              "an existing edvr.ini was overwritten from the mirror, or the flat file was seeded over its mirror copy: %r" % text)
+        check(code == 0 and Path(g, "edup.ini").read_bytes() == b"[user]\nkeep=existing\n"
+              and Path(g, "edup-flat.ini").read_bytes() == b"[user]\nflat-mirror=2\n" and "seed     " not in text,
+              "an existing edup.ini was overwritten from the mirror, or the flat file was seeded over its mirror copy: %r" % text)
         g = game("mirror-c")
         m = mirror_of(g)
         Path(m, "edvr.ini").write_bytes(b"")
         Path(m, "edvr.ini.1").write_bytes(b"[user]\nmirror=gen1\n")
         code, text = run(args_for(g, "--scope", "both", tag="mirc"))
-        check(code == 0 and Path(g, "edvr.ini").read_bytes() == b"[user]\nmirror=gen1\n"
-              and Path(g, "edvr-flat.ini").read_bytes() == b"[user]\nmirror=gen1\n" and "default  " not in text,
-              "an empty newest generation was not skipped, or the flat half was not seeded from the restored edvr.ini: %r" % text)
+        check(code == 0 and Path(g, "edup.ini").read_bytes() == b"[user]\nmirror=gen1\n"
+              and Path(g, "edup-flat.ini").read_bytes() == b"[user]\nmirror=gen1\n" and "default  " not in text,
+              "an empty newest generation was not skipped, or the flat half was not seeded from the restored edup.ini: %r" % text)
         # No mirror copy of the file: the shipped default, as before.
         g = game("mirror-d")
         mirror_of(g)
         code, text = run(args_for(g, "--scope", "both", tag="mird"))
-        check(code == 0 and Path(g, "edvr.ini").read_bytes() == b"[fix]\nvr_template = 1\n" and text.count("default  ") == 2,
+        check(code == 0 and Path(g, "edup.ini").read_bytes() == b"[fix]\nvr_template = 1\n" and text.count("default  ") == 2,
               "a mirror folder with no copy did not leave the shipped default: %r" % text)
         # The store is read from where the directory is: a Steam library path looks in the -steam folder.
         g = game(os.path.join("steamapps", "common", "Elite Dangerous", "Products", "mirror-steam"))
         check(_mirror_source_for(g) == "Steam", "a path under steamapps is not read as Steam")
         Path(mirror_of(g, "steam"), "edvr.ini").write_bytes(b"[user]\nsteam-mirror=1\n")
         code, text = run(args_for(g, "--scope", "vr", tag="mirsteam"))
-        check(code == 0 and Path(g, "edvr.ini").read_bytes() == b"[user]\nsteam-mirror=1\n",
+        check(code == 0 and Path(g, "edup.ini").read_bytes() == b"[user]\nsteam-mirror=1\n",
               "a Steam path did not restore from the -steam mirror folder: %r" % text)
         # A copy kept only under another store's folder is the installer's to restore: no default over it, and the
         # install says so; --dry-run and --verify-only write nothing.
@@ -2882,24 +2938,42 @@ def _scope_self_test():
         check(code == 0 and tree(g) == before and "no default is written" in text and "ed-up-launcher.exe" in text,
               "the dry-run plan did not refuse a default over another store's mirror copy: %r" % text)
         code, text = run(args_for(g, "--scope", "both", tag="mire"))
-        check(code == 0 and not Path(g, "edvr.ini").exists() and not Path(g, "edvr-flat.ini").exists()
+        check(code == 0 and not Path(g, "edup.ini").exists() and not Path(g, "edup-flat.ini").exists()
               and "ed-up-launcher.exe" in text,
               "a default was written over another store's mirror copy, or the install did not say why not: %r" % text)
+        # A live per-user file (%LOCALAPPDATA%\EDUP\<leaf>-<store>\edup.ini, what the runtime reads first) is the
+        # settings: nothing is restored beside the game and no default is written there to outrank anything.
+        g = game("mirror-live")
+        live = os.path.join(local_app_data, "EDUP", os.path.basename(g) + "-folder-you-chose")
+        os.makedirs(live, exist_ok=True)
+        Path(live, "edup.ini").write_bytes(b"[user]\nlive=1\n")
+        Path(live, "edup-flat.ini").write_bytes(b"[user]\nlive-flat=1\n")
+        code, text = run(args_for(g, "--scope", "both", tag="mirlive"))
+        check(code == 0 and not Path(g, "edup.ini").exists() and not Path(g, "edup-flat.ini").exists()
+              and "default  " not in text and "restore  " not in text
+              and Path(live, "edup.ini").read_bytes() == b"[user]\nlive=1\n",
+              "a live per-user settings file was shadowed by a default or restore beside the game: %r" % text)
+        # A tuned legacy edvr.ini beside the game is the settings too: no edup.ini default is written over it.
+        g = game("legacy-beside")
+        Path(g, "edvr.ini").write_bytes(b"[user]\nlegacy=1\n")
+        code, text = run(args_for(g, "--scope", "vr", tag="legbeside"))
+        check(code == 0 and not Path(g, "edup.ini").exists() and Path(g, "edvr.ini").read_bytes() == b"[user]\nlegacy=1\n",
+              "a default edup.ini was written beside a tuned legacy edvr.ini, which it would outrank: %r" % text)
         # No LOCALAPPDATA (a Linux host): there is no mirror, and the default is written as before.
         os.environ.pop("LOCALAPPDATA")
         try:
             g = game("mirror-f")
             code, text = run(args_for(g, "--scope", "vr", tag="mirf"))
-            check(code == 0 and Path(g, "edvr.ini").read_bytes() == b"[fix]\nvr_template = 1\n",
+            check(code == 0 and Path(g, "edup.ini").read_bytes() == b"[fix]\nvr_template = 1\n",
                   "a host with no LOCALAPPDATA did not fall back to the default: %r" % text)
         finally:
             os.environ["LOCALAPPDATA"] = local_app_data
 
-        # Without --ini a flat install seeds edvr-flat.ini from edvr.ini once.
+        # Without --ini a flat install seeds edup-flat.ini from edup.ini once.
         g = game("flat-seed", user_ini=b"[user]\nkeep=5\n")
         code, _ = run(args_for(g, "--scope", "flat", tag="flatseed"))
-        check(code == 0 and Path(g, "edvr-flat.ini").read_bytes() == b"[user]\nkeep=5\n",
-              "--scope flat did not seed edvr-flat.ini")
+        check(code == 0 and Path(g, "edup-flat.ini").read_bytes() == b"[user]\nkeep=5\n",
+              "--scope flat did not seed edup-flat.ini")
         # A schema-2 flat descriptor is not VR state: the reinstall goes through.
         code, _ = run(args_for(g, "--scope", "flat", tag="flatagain"))
         check(code == 0, "a schema-2 flat descriptor was refused as state")
@@ -2919,60 +2993,60 @@ def _scope_self_test():
             check(code == "refused" and tree(g) == before,
                   "--scope flat accepted a %s descriptor" % name)
 
-        # advanced.real_dll is one value, in edvr.ini. A value only in edvr-flat.ini is moved by a run that
+        # advanced.real_dll is one value, in edup.ini. A value only in edup-flat.ini is moved by a run that
         # leaves the settings alone; a dry run says so and writes nothing; both files are backed up; nothing
         # else in either file changes.
         shared_text = b"[fix]\r\nx = 1\r\n\r\n[advanced]\r\nreal_dll =\r\nexposure_shader =\r\n"
         flat_text = b"[fix]\r\ntemporal_aa = fsr\r\n\r\n[advanced]\r\nreal_dll = d3d11_edhm.dll ; EDHM\r\n"
         g = game("chain-move", user_ini=shared_text)
-        Path(g, "edvr-flat.ini").write_bytes(flat_text)
+        Path(g, "edup-flat.ini").write_bytes(flat_text)
         before = tree(g)
         code, text = run(args_for(g, "--scope", "both", "--dry-run", tag="chain"))
         check(code == 0 and tree(g) == before, "a dry run that would move advanced.real_dll wrote files")
-        check("migrate  advanced.real_dll = d3d11_edhm.dll: edvr-flat.ini -> edvr.ini" in text,
+        check("migrate  advanced.real_dll = d3d11_edhm.dll: edup-flat.ini -> edup.ini" in text,
               "the dry run did not name the advanced.real_dll move: %r" % text)
         code, text = run(args_for(g, "--scope", "both", tag="chain"))
         check(code == 0, "the install that moves advanced.real_dll failed: %r" % text)
-        check(Path(g, "edvr.ini").read_bytes() ==
+        check(Path(g, "edup.ini").read_bytes() ==
               b"[fix]\r\nx = 1\r\n\r\n[advanced]\r\nreal_dll = d3d11_edhm.dll\r\nexposure_shader =\r\n",
-              "edvr.ini did not receive advanced.real_dll alone")
-        check(Path(g, "edvr-flat.ini").read_bytes() ==
+              "edup.ini did not receive advanced.real_dll alone")
+        check(Path(g, "edup-flat.ini").read_bytes() ==
               b"[fix]\r\ntemporal_aa = fsr\r\n\r\n[advanced]\r\nreal_dll =\r\n",
-              "edvr-flat.ini was not emptied of advanced.real_dll alone")
-        check([p.read_bytes() for p in Path(g).glob("edvr.ini.pre-chain-*.bak")] == [shared_text] and
-              [p.read_bytes() for p in Path(g).glob("edvr-flat.ini.pre-chain-*.bak")] == [flat_text],
+              "edup-flat.ini was not emptied of advanced.real_dll alone")
+        check([p.read_bytes() for p in Path(g).glob("edup.ini.pre-chain-*.bak")] == [shared_text] and
+              [p.read_bytes() for p in Path(g).glob("edup-flat.ini.pre-chain-*.bak")] == [flat_text],
               "the move did not back up both settings files")
         code, text = run(args_for(g, "--scope", "both", tag="chain2"))
         check(code == 0 and "migrate" not in text, "a second run moved advanced.real_dll again")
-        # Where edvr.ini already names one, `none` is the user's, or edvr.ini is absent, nothing or a new file results.
+        # Where edup.ini already names one, `none` is the user's, or edup.ini is absent, nothing or a new file results.
         g = game("chain-both-set", user_ini=b"[advanced]\nreal_dll = d3d11_reshade.dll\n")
-        Path(g, "edvr-flat.ini").write_bytes(flat_text)
+        Path(g, "edup-flat.ini").write_bytes(flat_text)
         code, _ = run(args_for(g, "--scope", "both", tag="chain3"))
-        check(code == 0 and Path(g, "edvr-flat.ini").read_bytes() == flat_text and
-              Path(g, "edvr.ini").read_bytes() == b"[advanced]\nreal_dll = d3d11_reshade.dll\n",
-              "an edvr.ini that already names a mod was changed, or the flat override was taken away")
+        check(code == 0 and Path(g, "edup-flat.ini").read_bytes() == flat_text and
+              Path(g, "edup.ini").read_bytes() == b"[advanced]\nreal_dll = d3d11_reshade.dll\n",
+              "an edup.ini that already names a mod was changed, or the flat override was taken away")
         g = game("chain-none", user_ini=shared_text)
-        Path(g, "edvr-flat.ini").write_bytes(b"[advanced]\nreal_dll = NONE\n")
+        Path(g, "edup-flat.ini").write_bytes(b"[advanced]\nreal_dll = NONE\n")
         code, _ = run(args_for(g, "--scope", "both", tag="chain4"))
-        check(code == 0 and Path(g, "edvr-flat.ini").read_bytes() == b"[advanced]\nreal_dll = NONE\n" and
-              Path(g, "edvr.ini").read_bytes() == shared_text, "a `none` in edvr-flat.ini was moved")
+        check(code == 0 and Path(g, "edup-flat.ini").read_bytes() == b"[advanced]\nreal_dll = NONE\n" and
+              Path(g, "edup.ini").read_bytes() == shared_text, "a `none` in edup-flat.ini was moved")
         g = game("chain-no-shared")
-        Path(g, "edvr-flat.ini").write_bytes(flat_text)
+        Path(g, "edup-flat.ini").write_bytes(flat_text)
         code, _ = run(args_for(g, "--scope", "flat", tag="chain5"))
-        check(code == 0 and ini_real_dll(Path(g, "edvr.ini").read_text(encoding="utf-8")) == "d3d11_edhm.dll" and
-              ini_real_dll(Path(g, "edvr-flat.ini").read_text(encoding="utf-8")) == "",
-              "a flat install with no edvr.ini did not create one holding the chain")
+        check(code == 0 and ini_real_dll(Path(g, "edup.ini").read_text(encoding="utf-8")) == "d3d11_edhm.dll" and
+              ini_real_dll(Path(g, "edup-flat.ini").read_text(encoding="utf-8")) == "",
+              "a flat install with no edup.ini did not create one holding the chain")
         # --ini replaces the files with their templates, so it moves nothing and says what it replaced.
         g = game("chain-ini", user_ini=shared_text)
-        Path(g, "edvr-flat.ini").write_bytes(flat_text)
+        Path(g, "edup-flat.ini").write_bytes(flat_text)
         code, text = run(args_for(g, "--scope", "both", "--ini", tag="chain6"))
         check(code == 0 and "migrate" not in text and "--ini replaces" in text,
               "--ini planned a move, or said nothing of the chain it replaced")
-        # A seeded edvr-flat.ini keeps no copy of the shared value.
+        # A seeded edup-flat.ini keeps no copy of the shared value.
         g = game("chain-seed", user_ini=b"[advanced]\nreal_dll = d3d11_edhm.dll\n")
         code, _ = run(args_for(g, "--scope", "flat", tag="chain7"))
-        check(code == 0 and Path(g, "edvr-flat.ini").read_bytes() == b"[advanced]\nreal_dll =\n",
-              "the seeded edvr-flat.ini kept a second copy of the shared chain value")
+        check(code == 0 and Path(g, "edup-flat.ini").read_bytes() == b"[advanced]\nreal_dll =\n",
+              "the seeded edup-flat.ini kept a second copy of the shared chain value")
         # The two helpers on their own: the reader's rules, and an edit that changes one line.
         for text, want in ((b"[advanced]\nreal_dll = a.dll ; x\n", "a.dll"),
                            (b"[advanced]\n#real_dll = a.dll\n", ""),
@@ -3028,7 +3102,7 @@ def _scope_self_test():
               Path(g, "INTEL-XESS-LICENSE.txt").read_bytes() == b"XESS-LICENSE" and
               Path(g, "INTEL-XESS-THIRD-PARTY.txt").read_bytes() == b"XESS-NOTICES",
               "--scope vr --xess did not install the five XeSS files")
-        Path(g, "edvr.ini").write_bytes(b"[fix]\ntemporal_aa = xess\n")
+        Path(g, "edup.ini").write_bytes(b"[fix]\ntemporal_aa = xess\n")
         code, _ = run(args_for(g, "--scope", "vr", "--verify-only", tag="vrxess"))
         check(code == 0, "--scope vr verify rejected a selected XeSS with its files verified")
         Path(g, "libxess.dll").unlink()
@@ -3092,7 +3166,7 @@ def _scope_self_test():
             g = game("dlss-" + mode)
             code, text = run(args_for(g, "--scope", "vr", tag="dl" + mode))
             check(code == 0 and Path(g, "nvngx_dlss.dll").read_bytes() == b"DLSS", "the DLSS fixture install failed: %r" % text)
-            Path(g, "edvr.ini").write_bytes(("[fix]\ntemporal_aa = %s ; chosen in the F8 menu\n" % mode.upper()).encode("utf-8"))
+            Path(g, "edup.ini").write_bytes(("[fix]\ntemporal_aa = %s ; chosen in the F8 menu\n" % mode.upper()).encode("utf-8"))
             code, text = run(args_for(g, "--scope", "vr", "--verify-only", tag="dl" + mode))
             check(code == 0 and "WARNING" not in text, "%s selected with the runtime present failed --verify-only: %r" % (mode, text))
             Path(g, "nvngx_dlss.dll").unlink()
@@ -3114,10 +3188,10 @@ def _scope_self_test():
             finally:
                 os.rename(dlss_build + ".away", dlss_build)
         # Not selected: the missing runtime stays a warning, exit 0. Only the settings the scope reads count: a
-        # flat scope with no edvr-flat.ini reads edvr.ini.
+        # flat scope with no edup-flat.ini reads edup.ini.
         g = game("dlss-off")
         code, text = run(args_for(g, "--scope", "vr", tag="dloff"))
-        Path(g, "edvr.ini").write_bytes(b"[fix]\ntemporal_aa = fsr\n")
+        Path(g, "edup.ini").write_bytes(b"[fix]\ntemporal_aa = fsr\n")
         Path(g, "nvngx_dlss.dll").unlink()
         code, text = run(args_for(g, "--scope", "vr", "--verify-only", tag="dloff"))
         check(code == 0 and "nvngx_dlss.dll is missing, so DLSS cannot run" in text,
@@ -3141,15 +3215,15 @@ def _scope_self_test():
             Path(g, "d3d11.dll").write_bytes(b"OLDER-GRAPHICS")
             code, text = run(args_for(g, "--scope", "both", tag="old"))
             check(code == 0, "retirement fixture install failed: " + text)
-            for rel in ("openvr_api.dll", "edvr_openxr.ini", "openxr_loader.dll", "OPENXR-LOADER-LICENSE.txt"):
+            for rel in ("openvr_api.dll", "edup_openxr.ini", "openxr_loader.dll", "OPENXR-LOADER-LICENSE.txt"):
                 Path(g, "Openvr", "win64", rel).unlink()
             Path(g, "d3d11.dll").write_bytes(b"GUI-FLAT-GRAPHICS")
             Path(g, PROFILE_FILE).write_bytes(profile_bytes("flat"))
-            Path(g, "edvr_install").mkdir()
+            Path(g, "edup_install").mkdir()
             state = ("[edvr]\nversion=rc3\nscope=flat\nprofile=flat\ndescriptor_sha256=%s\n"
                      "[d3d11]\nsha256=%s\n[native]\ngraphics_sha256=%s\n" %
                      (sha256(Path(g, PROFILE_FILE)), sha256(Path(g, "d3d11.dll")), sha256(Path(g, "d3d11.dll"))))
-            Path(g, "edvr_install", "state.ini").write_text(state, encoding="utf-8")
+            Path(g, "edup_install", "state.ini").write_text(state, encoding="utf-8")
             return g
 
         def retire(g, *extra):
@@ -3184,7 +3258,7 @@ def _scope_self_test():
               "flat verification after receipt retirement failed")
         for name in ("foreign", "malformed", "nonflat", "descriptor", "graphics", "native-owned", "vr-leftover", "vr-runtime", "current", "running"):
             g = stale_native(name)
-            record = Path(g, "edvr_install", "state.ini")
+            record = Path(g, "edup_install", "state.ini")
             legacy = Path(g, "edvr_native_receipt.json")
             if name == "foreign":
                 value = json.loads(legacy.read_text(encoding="utf-8")); value["target"] = root
@@ -3194,7 +3268,7 @@ def _scope_self_test():
             elif name == "descriptor": Path(g, PROFILE_FILE).write_bytes(profile_bytes("both"))
             elif name == "graphics": Path(g, "d3d11.dll").write_bytes(b"CHANGED")
             elif name == "native-owned": record.write_text(record.read_text(encoding="utf-8") + "runtime_sha256=" + "A" * 64 + "\n", encoding="utf-8")
-            elif name == "vr-leftover": Path(g, "Openvr", "win64", "edvr_openxr.ini").write_bytes(b"VR")
+            elif name == "vr-leftover": Path(g, "Openvr", "win64", "edup_openxr.ini").write_bytes(b"VR")
             elif name == "vr-runtime": Path(g, "Openvr", "win64", "openvr_api.dll").write_bytes(b"RUNTIME")
             elif name == "current":
                 value = json.loads(legacy.read_text(encoding="utf-8"))
@@ -3257,10 +3331,10 @@ def _main(argv=None):
                     help="also install AMD's FSR 4.1 runtime (the two signed D3D12 DLLs) and its licence "
                          "(either scope; a developer install, no installer carries them)")
     ap.add_argument("--ini", action="store_true",
-                    help="also overwrite the scope's settings files (edvr.ini "
-                         "for both and vr, edvr-flat.ini for both and flat) "
+                    help="also overwrite the scope's settings files (edup.ini "
+                         "for both and vr, edup-flat.ini for both and flat) "
                          "with their templates -- this discards tuned settings. "
-                         "A --compile-only build has no edvr-flat.ini, so that "
+                         "A --compile-only build has no edup-flat.ini, so that "
                          "template is derived in memory")
     ap.add_argument("--all", action="store_true",
                     help="selected scope plus available DLSS, XeSS and FSR 4 (never ini)")
@@ -3500,7 +3574,7 @@ def _prune_self_test():
         game, xr = new_game()
         gfx = backups(game, "d3d11.dll", 8)
         runtime = backups(xr, "openvr_api.dll", 3)
-        lone = backups(game, "edvr.ini", 1, day="20010101")
+        lone = backups(game, "edup.ini", 1, day="20010101")
         decoys = [touch(game, name) for name in (
             "d3d11.dll", "d3d11.dll.bak", "d3d11.dll.bak-skip", "d3d11.dll.pre-taa-20260903",
             "d3d11.dll.pre-x-2026-01-01.bak", "d3d11.dll.pre-x-20261399-000000.bak",
@@ -3529,7 +3603,7 @@ def _prune_self_test():
         game, xr = new_game()
         gfx = backups(game, "d3d11.dll", 8)
         runtime = backups(xr, "openvr_api.dll", 3)
-        lone = backups(game, "edvr.ini", 1)
+        lone = backups(game, "edup.ini", 1)
         for keep, want in ((2, 7), (1, 9), (0, 9)):        # 0 counts as 1: the newest is never pruned
             removed, _ = quiet(prune_backups, game, keep, True)
             check(len(removed) == want, "keep=%d would prune %d, not %d" % (keep, want, len(removed)))
@@ -3540,14 +3614,14 @@ def _prune_self_test():
 
         # --- same-second collisions and letter case are ordered and grouped -------------
         game, xr = new_game()
-        touch(game, "edvr.ini.pre-t-20260101-000001.bak")
-        touch(game, "edvr.ini.pre-t-20260101-000001.bak.1")
-        touch(game, "edvr.ini.pre-t-20260101-000001.bak.2")
+        touch(game, "edup.ini.pre-t-20260101-000001.bak")
+        touch(game, "edup.ini.pre-t-20260101-000001.bak.1")
+        touch(game, "edup.ini.pre-t-20260101-000001.bak.2")
         for second in (2, 3, 4, 5):
-            touch(game, "edvr.ini.pre-t-20260101-00000%d.bak" % second)
+            touch(game, "edup.ini.pre-t-20260101-00000%d.bak" % second)
         removed, _ = quiet(prune_backups, game, 5)
         check(sorted(os.path.basename(path) for path in removed) ==
-              ["edvr.ini.pre-t-20260101-000001.bak", "edvr.ini.pre-t-20260101-000001.bak.1"],
+              ["edup.ini.pre-t-20260101-000001.bak", "edup.ini.pre-t-20260101-000001.bak.1"],
               "a collision suffix orders after its base name and the oldest go first: %r" % removed)
         game, xr = new_game()
         spellings = ("D3D11.dll", "d3d11.DLL")
@@ -3611,9 +3685,9 @@ def _prune_self_test():
         egame, exr = new_game()
         touch(egame, GAME_EXE, b"GAME")
         touch(exr, "openvr_api.dll", b"OLD-RUNTIME")
-        touch(exr, "edvr_openxr.ini", b"OLD-CONFIG")
+        touch(exr, "edup_openxr.ini", b"OLD-CONFIG")
         old_runtime = backups(exr, "openvr_api.dll", 7, tag="old", day="20250101")
-        old_config = backups(exr, "edvr_openxr.ini", 6, tag="old", day="20250101")
+        old_config = backups(exr, "edup_openxr.ini", 6, tag="old", day="20250101")
         saved = (_prune_loader.verify, _prune_pe.validate_native_pair, globals()["validate_elite_game"],
                  globals()["strict_game_running"])
         _prune_loader.verify = lambda path: None
@@ -3638,7 +3712,7 @@ def _prune_self_test():
                   and pruned(text) == dry_pruned,
                   "a good install ends by pruning what its dry run named: %d %r" % (code, text[-500:]))
             runtime_family = sorted(name for name in os.listdir(exr) if name.startswith("openvr_api.dll.pre-"))
-            config_family = sorted(name for name in os.listdir(exr) if name.startswith("edvr_openxr.ini.pre-"))
+            config_family = sorted(name for name in os.listdir(exr) if name.startswith("edup_openxr.ini.pre-"))
             check(len(runtime_family) == 5 and len(config_family) == 5
                   and all(os.path.isfile(path) for path in old_runtime[3:] + old_config[2:])
                   and not any(os.path.exists(path) for path in old_runtime[:3] + old_config[:2])
@@ -3649,7 +3723,7 @@ def _prune_self_test():
                   "the receipt of the install that pruned still verifies")
             restored, _ = quiet(restore_native, receipt)
             check(restored == 0 and Path(exr, "openvr_api.dll").read_bytes() == b"OLD-RUNTIME"
-                  and Path(exr, "edvr_openxr.ini").read_bytes() == b"OLD-CONFIG",
+                  and Path(exr, "edup_openxr.ini").read_bytes() == b"OLD-CONFIG",
                   "and restores from the backups it names, which the prune left in place")
         finally:
             (_prune_loader.verify, _prune_pe.validate_native_pair, globals()["validate_elite_game"],
@@ -3732,10 +3806,10 @@ def _xess_opt_in_self_test():
             "plain verify-only started requiring XeSS"
         assert main(args + ["--xess", "--verify-only"]) == 1, \
             "explicit XeSS verify accepted the foreign DLL"
-        (game / "edvr-flat.ini").write_bytes(b"[fix]\ntemporal_aa = xess ; selected\n")
+        (game / "edup-flat.ini").write_bytes(b"[fix]\ntemporal_aa = xess ; selected\n")
         assert main(args + ["--verify-only"]) == 1, \
             "plain verify accepted selected XeSS with a foreign DLL"
-        (game / "edvr-flat.ini").unlink()
+        (game / "edup-flat.ini").unlink()
         assert restore_native(str(game / "edvr_flat_receipt.json")) == 0
         assert (game / "libxess.dll").read_bytes() == b"FOREIGN-XESS"
         before = snapshot()
@@ -3747,7 +3821,7 @@ def _xess_opt_in_self_test():
                    for p in game.glob("libxess.dll.pre-*.bak")), \
             "explicit XeSS install did not back up the foreign DLL"
         assert main(args + ["--xess", "--verify-only"]) == 0
-        (game / "edvr-flat.ini").write_bytes(b"[fix]\ntemporal_aa = xess\n")
+        (game / "edup-flat.ini").write_bytes(b"[fix]\ntemporal_aa = xess\n")
         assert main(args + ["--verify-only"]) == 0, \
             "plain verify rejected selected XeSS with a verified runtime"
         (game / "libxess.dll").write_bytes(b"STALE-XESS")
@@ -3823,13 +3897,13 @@ def _fsr4_opt_in_self_test():
         assert run(args + ["--verify-only"])[0] == 0, "plain verify-only started requiring FSR 4"
         code, text = run(args + ["--fsr4", "--verify-only"])
         assert code == 1, "explicit FSR 4 verify accepted a foreign loader"
-        (game / "edvr-flat.ini").write_bytes(b"[fix]\ntemporal_aa = fsr4 ; selected\n")
+        (game / "edup-flat.ini").write_bytes(b"[fix]\ntemporal_aa = fsr4 ; selected\n")
         code, text = run(args + ["--verify-only"])
         assert code == 1 and "the ini selects FSR 4" in text and loader in text, \
             "plain verify accepted a selected fsr4 beside a foreign loader: %r" % text
-        (game / "edvr-flat.ini").write_bytes(b"[fix]\ntemporal_aa = fsr\n")
+        (game / "edup-flat.ini").write_bytes(b"[fix]\ntemporal_aa = fsr\n")
         assert run(args + ["--verify-only"])[0] == 0, "plain verify wanted AMD's DLLs for the D3D11 fsr port"
-        (game / "edvr-flat.ini").unlink()
+        (game / "edup-flat.ini").unlink()
         assert restore_native(str(game / "edvr_flat_receipt.json")) == 0
         assert (game / loader).read_bytes() == b"FOREIGN-AMD-LOADER" and not (game / upscaler).exists() and \
             not (game / licence).exists(), "restore did not remove the added files and leave the foreign one"
@@ -3842,7 +3916,7 @@ def _fsr4_opt_in_self_test():
         assert any(p.read_bytes() == b"FOREIGN-AMD-LOADER" for p in game.glob(loader + ".pre-*.bak")), \
             "explicit FSR 4 install did not back up the foreign loader"
         assert run(args + ["--fsr4", "--verify-only"])[0] == 0
-        (game / "edvr-flat.ini").write_bytes(b"[fix]\ntemporal_aa = fsr4\n")
+        (game / "edup-flat.ini").write_bytes(b"[fix]\ntemporal_aa = fsr4\n")
         assert run(args + ["--verify-only"])[0] == 0, "plain verify rejected a selected fsr4 with its DLLs verified"
         (game / upscaler).write_bytes(b"STALE-AMD-UPSCALER")
         assert run(args + ["--verify-only"])[0] == 1, "plain verify accepted a selected fsr4 after a DLL went stale"
@@ -3850,10 +3924,10 @@ def _fsr4_opt_in_self_test():
         code, text = run(args + ["--verify-only"])
         assert code == 1 and "the ini selects FSR 4" in text and "install with --fsr4" in text, \
             "plain verify did not fail, naming --fsr4, for a selected fsr4 with a DLL missing: %r" % text
-        # edvr.ini alone selects it for the flat half when there is no edvr-flat.ini.
-        (game / "edvr-flat.ini").unlink()
-        (game / "edvr.ini").write_bytes(b"[fix]\ntemporal_aa = FSR4\n")
-        assert run(args + ["--verify-only"])[0] == 1, "an edvr.ini selecting fsr4 was not read for the flat half"
+        # edup.ini alone selects it for the flat half when there is no edup-flat.ini.
+        (game / "edup-flat.ini").unlink()
+        (game / "edup.ini").write_bytes(b"[fix]\ntemporal_aa = FSR4\n")
+        assert run(args + ["--verify-only"])[0] == 1, "an edup.ini selecting fsr4 was not read for the flat half"
 
         # ---- the VR scope and the native receipt.
         saved_pe = (openxr_pe.validate_native_pair, fetch_openxr_loader.verify)
@@ -3878,7 +3952,7 @@ def _fsr4_opt_in_self_test():
             keys = {e["key"] for e in json.loads(Path(receipt).read_text(encoding="utf-8"))["files"]}
             assert set(names) <= keys and verify_native_receipt(receipt, str(vr))["version"] == 2, \
                 "the FSR 4 files are not in a verifying native receipt: %r" % keys
-            (vr / "edvr.ini").write_bytes(b"[fix]\ntemporal_aa = fsr4\n")
+            (vr / "edup.ini").write_bytes(b"[fix]\ntemporal_aa = fsr4\n")
             assert run(vr_args + ["--verify-only"])[0] == 0, "VR verify rejected a selected fsr4 with its DLLs verified"
             (vr / loader).unlink()
             code, text = run(vr_args + ["--verify-only"])
@@ -3900,7 +3974,7 @@ def _fsr4_opt_in_self_test():
             os.rename(src, dst)
         try:
             unbuilt = new_game("unbuilt")
-            (unbuilt / "edvr-flat.ini").write_bytes(b"[fix]\ntemporal_aa = fsr4\n")
+            (unbuilt / "edup-flat.ini").write_bytes(b"[fix]\ntemporal_aa = fsr4\n")
             code, text = run(["--root", str(root), "--target", str(unbuilt), "--scope", "flat", "--dry-run"])
             assert code == 0 and "this build has none to install" in text, \
                 "the plan did not say a selected fsr4 has no runtime in this build: %r" % text
@@ -4030,7 +4104,7 @@ def _compile_only_self_test():
             print("compile-only install did not mark its receipt: %r" % installed.get("build")); ok = False
         if run(args + ["--verify-only"])[0] != 0:
             print("compile-only --verify-only rejected its own install"); ok = False
-        # --ini: the compile-only output holds no edvr-flat.ini, so the template is derived, in a
+        # --ini: the compile-only output holds no edup-flat.ini, so the template is derived, in a
         # game directory of its own so the case below still restores game/ to what it began as.
         game2 = Path(tmp, "game2")
         game2.mkdir()
@@ -4045,7 +4119,7 @@ def _compile_only_self_test():
             print("compile-only --ini --dry-run wrote files or did not plan the derived template: %r %r" % (code, text)); ok = False
         code, text = run(args2)
         if code != 0 or outputs() != outputs_before or \
-                (game2 / "edvr-flat.ini").read_bytes() != gen_installer_rc.flat_ini_bytes():
+                (game2 / "edup-flat.ini").read_bytes() != gen_installer_rc.flat_ini_bytes():
             print("compile-only --ini did not install the generator's flat template: %r %r" % (code, text)); ok = False
         if run(args2 + ["--verify-only"])[0] != 0:
             print("compile-only --ini --verify-only rejected its own install"); ok = False
@@ -4097,12 +4171,12 @@ def _compile_only_self_test():
 
 
 def _compile_only_ini_self_test():
-    """--compile-only --ini: the compile-only output has no edvr-flat.ini, so
+    """--compile-only --ini: the compile-only output has no edup-flat.ini, so
     --scope flat and --scope both derive it from the generator's own
     flat_ini_bytes() -- in a dry run and a real run, never writing into the
     build directory, with the backup and receipt a full build's template gets,
-    and the installed bytes the ones a full build's edvr-flat.ini would give.
-    A full build that lacks its edvr-flat.ini still refuses."""
+    and the installed bytes the ones a full build's edup-flat.ini would give.
+    A full build that lacks its edup-flat.ini still refuses."""
     import contextlib
     import io
     import openxr_pe as _pe
@@ -4130,12 +4204,12 @@ def _compile_only_ini_self_test():
         payload = {"d3d11.dll": b"FLAT-GRAPHICS", "edvr_openxr_graphics.dll": b"NATIVE-GRAPHICS",
                    "edvr_openxr_runtime.dll": b"RUNTIME", "openxr_loader.dll": b"LOADER",
                    "OPENXR-LOADER-LICENSE.txt": b"LICENSE"}
-        Path(root, "edvr.ini").write_bytes(root_ini)
+        Path(root, "edup.ini").write_bytes(root_ini)
         for name, data in payload.items():
             Path(cbuild, name).write_bytes(data)
             Path(build, name).write_bytes(data)
         # A full build's template sits in build/. A compile-only install must never read it.
-        Path(build, "edvr-flat.ini").write_bytes(b"NOT-THE-COMPILE-ONLY-TEMPLATE")
+        Path(build, "edup-flat.ini").write_bytes(b"NOT-THE-COMPILE-ONLY-TEMPLATE")
 
         globals()["compile_only_build"] = lambda root_, require_current=True, out=print: cbuild
         _loader.verify = lambda path: None
@@ -4149,8 +4223,8 @@ def _compile_only_ini_self_test():
             g = os.path.join(tmp, name)
             os.makedirs(os.path.join(g, "Openvr", "win64"))
             Path(g, GAME_EXE).write_bytes(b"GAME")
-            if user_ini is not None: Path(g, "edvr.ini").write_bytes(user_ini)
-            if user_flat_ini is not None: Path(g, "edvr-flat.ini").write_bytes(user_flat_ini)
+            if user_ini is not None: Path(g, "edup.ini").write_bytes(user_ini)
+            if user_flat_ini is not None: Path(g, "edup-flat.ini").write_bytes(user_flat_ini)
             return g
 
         def tree(g):
@@ -4184,32 +4258,32 @@ def _compile_only_ini_self_test():
             check(code == 0, "%s --dry-run failed: %r %r" % (scope, code, text))
             check(tree(g) == game_before, "%s --dry-run wrote into the game directory" % scope)
             check(tree(build) == build_before, "%s --dry-run wrote into the build directory" % scope)
-            check("derive" in text and "flat_ini_bytes" in text and "edvr-flat.ini" in text,
+            check("derive" in text and "flat_ini_bytes" in text and "edup-flat.ini" in text,
                   "%s --dry-run did not report the derived template: %r" % (scope, text))
 
             code, text = run(args_for(g, scope))
             check(code == 0, "%s --ini failed on a compile-only build: %r %r" % (scope, code, text))
-            check(tree(build) == build_before and not Path(cbuild, "edvr-flat.ini").exists(),
+            check(tree(build) == build_before and not Path(cbuild, "edup-flat.ini").exists(),
                   "%s --ini wrote into the build directory" % scope)
-            check(Path(g, "edvr-flat.ini").read_bytes() == generated,
+            check(Path(g, "edup-flat.ini").read_bytes() == generated,
                   "%s --ini did not install the generator's flat template" % scope)
-            kept = backups(g, "edvr-flat.ini")
+            kept = backups(g, "edup-flat.ini")
             check(len(kept) == 1 and kept[0].read_bytes() == user_flat,
-                  "%s --ini did not back up the existing edvr-flat.ini" % scope)
+                  "%s --ini did not back up the existing edup-flat.ini" % scope)
             if scope == "flat":
-                check(Path(g, "edvr.ini").read_bytes() == user_vr and not backups(g, "edvr.ini"),
-                      "--scope flat --ini touched edvr.ini")
+                check(Path(g, "edup.ini").read_bytes() == user_vr and not backups(g, "edup.ini"),
+                      "--scope flat --ini touched edup.ini")
             else:
-                check(Path(g, "edvr.ini").read_bytes() == root_ini,
-                      "--scope both --ini did not write edvr.ini from the repo root")
-                vr_kept = backups(g, "edvr.ini")
+                check(Path(g, "edup.ini").read_bytes() == root_ini,
+                      "--scope both --ini did not write edup.ini from the repo root")
+                vr_kept = backups(g, "edup.ini")
                 check(len(vr_kept) == 1 and vr_kept[0].read_bytes() == user_vr,
-                      "--scope both --ini did not back up edvr.ini")
+                      "--scope both --ini did not back up edup.ini")
             receipt, record = receipt_of(g, scope)
             entry = next((e for e in record["files"] if e["key"] == flat_key[scope]), None)
             check(record.get("build") == COMPILE_ONLY_MARK, "%s receipt is not marked compile-only" % scope)
             check(entry is not None and entry["source"] == INI_GENERATED and
-                  entry["target"] == os.path.abspath(os.path.join(g, "edvr-flat.ini")) and
+                  entry["target"] == os.path.abspath(os.path.join(g, "edup-flat.ini")) and
                   entry["installed_sha256"] == hashlib.sha256(generated).hexdigest().upper() and
                   entry["backup"] and Path(entry["backup"]).read_bytes() == user_flat and
                   entry["before_sha256"] == hashlib.sha256(user_flat).hexdigest().upper(),
@@ -4220,61 +4294,61 @@ def _compile_only_ini_self_test():
                 check(False, "%s receipt does not verify: %s" % (scope, exc))
             code, _ = run(args_for(g, scope, "--verify-only"))
             check(code == 0, "%s --ini --verify-only failed after the install" % scope)
-            Path(g, "edvr-flat.ini").write_bytes(b"[fix]\ntemporal_aa=dlss\n")
+            Path(g, "edup-flat.ini").write_bytes(b"[fix]\ntemporal_aa=dlss\n")
             code, _ = run(args_for(g, scope, "--verify-only"))
-            check(code == 1, "%s --ini --verify-only passed with an edited edvr-flat.ini" % scope)
-            Path(g, "edvr-flat.ini").write_bytes(generated)
+            check(code == 1, "%s --ini --verify-only passed with an edited edup-flat.ini" % scope)
+            Path(g, "edup-flat.ini").write_bytes(generated)
             code, _ = run(["--restore-native", receipt])
-            check(code == 0 and Path(g, "edvr-flat.ini").read_bytes() == user_flat and
-                  (scope == "flat" or Path(g, "edvr.ini").read_bytes() == user_vr),
+            check(code == 0 and Path(g, "edup-flat.ini").read_bytes() == user_flat and
+                  (scope == "flat" or Path(g, "edup.ini").read_bytes() == user_vr),
                   "%s restore did not put the settings files back: %r" % (scope, code))
 
         # No settings file in the game yet: written new, nothing to back up.
         g = game("co-fresh")
         code, text = run(args_for(g, "flat"))
         _, record = receipt_of(g, "flat") if code == 0 else (None, {"files": []})
-        check(code == 0 and Path(g, "edvr-flat.ini").read_bytes() == generated and
-              not backups(g, "edvr-flat.ini") and
+        check(code == 0 and Path(g, "edup-flat.ini").read_bytes() == generated and
+              not backups(g, "edup-flat.ini") and
               all(e["backup"] is None for e in record["files"] if e["key"] == "ini"),
-              "--scope flat --ini into a game with no edvr-flat.ini: %r %r" % (code, text))
+              "--scope flat --ini into a game with no edup-flat.ini: %r %r" % (code, text))
 
-        # A compile-only output that does carry its own edvr-flat.ini uses it, as a full build does.
+        # A compile-only output that does carry its own edup-flat.ini uses it, as a full build does.
         own = b"[fix]\ntemporal_aa = dlss\n"
-        Path(cbuild, "edvr-flat.ini").write_bytes(own)
+        Path(cbuild, "edup-flat.ini").write_bytes(own)
         g = game("co-own")
         code, text = run(args_for(g, "flat"))
         _, record = receipt_of(g, "flat") if code == 0 else (None, {"files": []})
-        check(code == 0 and Path(g, "edvr-flat.ini").read_bytes() == own and
-              any(e["key"] == "ini" and e["source"] == os.path.abspath(os.path.join(cbuild, "edvr-flat.ini"))
+        check(code == 0 and Path(g, "edup-flat.ini").read_bytes() == own and
+              any(e["key"] == "ini" and e["source"] == os.path.abspath(os.path.join(cbuild, "edup-flat.ini"))
                   for e in record["files"]),
-              "a compile-only edvr-flat.ini was not preferred to the derived one: %r %r" % (code, text))
-        Path(cbuild, "edvr-flat.ini").unlink()
+              "a compile-only edup-flat.ini was not preferred to the derived one: %r %r" % (code, text))
+        Path(cbuild, "edup-flat.ini").unlink()
 
         # A full build's template is the generator's bytes, installed the same way; so a full-build
-        # install and a compile-only install leave the same edvr-flat.ini, whatever the scope.
-        Path(build, "edvr-flat.ini").write_bytes(generated)
+        # install and a compile-only install leave the same edup-flat.ini, whatever the scope.
+        Path(build, "edup-flat.ini").write_bytes(generated)
         for scope in ("flat", "both"):
             g = game("full-" + scope, user_ini=user_vr, user_flat_ini=user_flat)
             code, text = run(args_for(g, scope, tag="full", compile_only=False))
             _, full_record = receipt_of(g, scope) if code == 0 else (None, {"files": []})
             full_entry = next((e for e in full_record["files"] if e["key"] == flat_key[scope]), {})
-            check(code == 0 and Path(g, "edvr-flat.ini").read_bytes() == generated and
-                  full_entry.get("source") == os.path.abspath(os.path.join(build, "edvr-flat.ini")) and
+            check(code == 0 and Path(g, "edup-flat.ini").read_bytes() == generated and
+                  full_entry.get("source") == os.path.abspath(os.path.join(build, "edup-flat.ini")) and
                   full_entry.get("installed_sha256") == hashlib.sha256(generated).hexdigest().upper(),
                   "%s full-build install of the generator's template: %r %r" % (scope, code, text))
 
-        # A full build that lacks its edvr-flat.ini is a broken build, not a reason to derive one.
-        Path(build, "edvr-flat.ini").unlink()
+        # A full build that lacks its edup-flat.ini is a broken build, not a reason to derive one.
+        Path(build, "edup-flat.ini").unlink()
         for scope in ("flat", "both"):
             g = game("full-missing-" + scope, user_ini=user_vr, user_flat_ini=user_flat)
             before = tree(g)
             code, _ = run(args_for(g, scope, "--dry-run", tag="miss", compile_only=False))
             check("missing %s INI source" % scope in str(code) and tree(g) == before,
-                  "%s without --compile-only derived or accepted a missing build/edvr-flat.ini: %r" % (scope, code))
+                  "%s without --compile-only derived or accepted a missing build/edup-flat.ini: %r" % (scope, code))
         # --scope vr --ini never needed the flat template.
         g = game("co-vr", user_ini=user_vr)
         code, text = run(args_for(g, "vr"))
-        check(code == 0 and Path(g, "edvr.ini").read_bytes() == root_ini and not Path(g, "edvr-flat.ini").exists(),
+        check(code == 0 and Path(g, "edup.ini").read_bytes() == root_ini and not Path(g, "edup-flat.ini").exists(),
               "--scope vr --ini on a compile-only build: %r %r" % (code, text))
         check(_BUILD_OVERRIDE is None, "the build override was left set")
         return ok
@@ -4696,7 +4770,7 @@ def self_test():
                           ("build/nvngx_dlss.dll", b"DLSS")):
             with open(os.path.join(sroot, rel.replace("/", os.sep)), "wb") as f: f.write(data)
         with open(os.path.join(sgame, GAME_EXE), "wb") as f: f.write(b"GAME")
-        with open(os.path.join(sgame, "edvr.ini"), "wb") as f: f.write(b"[user]\nkeep=1\n")
+        with open(os.path.join(sgame, "edup.ini"), "wb") as f: f.write(b"[user]\nkeep=1\n")
         import openxr_pe as _standard_pe
         import fetch_openxr_loader as _standard_loader
         old_loader_verify = _standard_loader.verify
@@ -4752,7 +4826,7 @@ def self_test():
             # Receipt recovery continues to compare the installed config's
             # exact bytes, so restore the CLI serialization for that path.
             Path(sp["config"]).write_bytes(expected_standard_config)
-            if open(os.path.join(sgame, "edvr.ini"), "rb").read() != b"[user]\nkeep=1\n":
+            if open(os.path.join(sgame, "edup.ini"), "rb").read() != b"[user]\nkeep=1\n":
                 print("standard install changed user INI"); ok = False
             if not os.path.isfile(os.path.join(sgame, "nvngx_dlss.dll")): print("--all omitted DLSS"); ok = False
             receipt_path = os.path.join(sgame, "edvr_native_receipt.json")
@@ -4771,7 +4845,7 @@ def self_test():
             assert restore_native(receipt_path) == 0
             assert all(not os.path.exists(sp[key+"_target"]) for key in ("runtime","graphics","loader","notice"))
             assert not os.path.exists(sp["config"])
-            assert Path(sgame,"edvr.ini").read_bytes() == b"[user]\nkeep=1\n"
+            assert Path(sgame,"edup.ini").read_bytes() == b"[user]\nkeep=1\n"
             # Reinstall with existing runtime/config exercises all backup paths.
             Path(sp["runtime_target"]).write_bytes(b"OLD-RUNTIME")
             Path(sp["config"]).write_bytes(b"OLD-CONFIG")
@@ -4854,9 +4928,9 @@ def self_test():
         Path(froot, "build", "INTEL-XESS-THIRD-PARTY.txt").write_bytes(b"INTEL-THIRD-PARTY")
         for _key, _name in FSR4_FILES:
             Path(froot, "build", _name).write_bytes(b"FLAT-" + _name.encode("ascii"))
-        Path(froot, "edvr.ini").write_bytes(b"[fix]\ntemporal_aa=dlss\n")
+        Path(froot, "edup.ini").write_bytes(b"[fix]\ntemporal_aa=dlss\n")
         Path(fgame, GAME_EXE).write_bytes(b"GAME")
-        Path(fgame, "edvr.ini").write_bytes(b"[user]\nkeep=1\n")
+        Path(fgame, "edup.ini").write_bytes(b"[user]\nkeep=1\n")
         Path(fxr, "openvr_api.dll").write_bytes(b"STOCK-OPENVR")
         old_profile_validate = globals()["validate_elite_game"]
         old_probe = globals()["strict_game_running"]
@@ -4883,10 +4957,10 @@ def self_test():
             assert Path(fgame, "INTEL-XESS-THIRD-PARTY.txt").read_bytes() == b"INTEL-THIRD-PARTY"
             for _key, _name in FSR4_FILES:
                 assert Path(fgame, _name).read_bytes() == b"FLAT-" + _name.encode("ascii"), "--all missed " + _name
-            assert Path(fgame, "edvr.ini").read_bytes() == b"[user]\nkeep=1\n"
-            # First flat install with no edvr-flat.ini yet seeds it from the
-            # existing edvr.ini; after that the two profiles' settings part.
-            assert Path(fgame, "edvr-flat.ini").read_bytes() == b"[user]\nkeep=1\n"
+            assert Path(fgame, "edup.ini").read_bytes() == b"[user]\nkeep=1\n"
+            # First flat install with no edup-flat.ini yet seeds it from the
+            # existing edup.ini; after that the two profiles' settings part.
+            assert Path(fgame, "edup-flat.ini").read_bytes() == b"[user]\nkeep=1\n"
             descriptor_path = Path(fgame, PROFILE_FILE)
             assert descriptor_path.read_bytes() == profile_bytes("flat")
             receipt_path = Path(fgame, "edvr_flat_receipt.json")
@@ -4895,7 +4969,7 @@ def self_test():
             descriptor_path.write_bytes(profile_bytes("vr"))
             assert main(args + ["--verify-only"]) == 1
             descriptor_path.write_bytes(profile_bytes("flat"))
-            leftover = Path(fxr, "edvr_openxr.ini")
+            leftover = Path(fxr, "edup_openxr.ini")
             leftover.write_bytes(b"VR-LEFTOVER")
             before = snapshot()
             try:
@@ -4921,24 +4995,24 @@ def self_test():
                 raise AssertionError("flat --ini accepted a missing flat template")
             except SystemExit: pass
             assert snapshot() == before, "missing flat template dry run wrote files"
-            flat_template = Path(froot, "build", "edvr-flat.ini")
+            flat_template = Path(froot, "build", "edup-flat.ini")
             flat_template.write_bytes(b"[fix]\r\ntemporal_aa = off\r\n")
             assert main(ini_args + ["--dry-run"]) == 0
             assert snapshot() == before, "flat --ini dry run wrote files"
             assert main(ini_args) == 0
-            # --ini flat writes the flat file only; edvr.ini is the VR
+            # --ini flat writes the flat file only; edup.ini is the VR
             # profile's and stays exactly as the user left it.
-            assert Path(fgame, "edvr-flat.ini").read_bytes() == flat_template.read_bytes()
-            assert Path(fgame, "edvr.ini").read_bytes() == b"[user]\nkeep=1\n"
+            assert Path(fgame, "edup-flat.ini").read_bytes() == flat_template.read_bytes()
+            assert Path(fgame, "edup.ini").read_bytes() == b"[user]\nkeep=1\n"
             ini_receipt = next(Path(fgame).glob("edvr_flat_receipt.json.pre-flatini-*.bak"))
             ini_entry = next(e for e in verify_native_receipt(str(ini_receipt), fgame)["files"]
                              if e["key"] == "ini")
             assert ini_entry["source"] == str(flat_template)
-            assert ini_entry["target"] == str(Path(fgame, "edvr-flat.ini"))
+            assert ini_entry["target"] == str(Path(fgame, "edup-flat.ini"))
             assert Path(ini_entry["backup"]).read_bytes() == b"[user]\nkeep=1\n"
             receipt_bytes = ini_receipt.read_bytes()
             changed_receipt = json.loads(receipt_bytes)
-            next(e for e in changed_receipt["files"] if e["key"] == "ini")["source"] = str(Path(froot, "edvr.ini"))
+            next(e for e in changed_receipt["files"] if e["key"] == "ini")["source"] = str(Path(froot, "edup.ini"))
             ini_receipt.write_text(json.dumps(changed_receipt), encoding="utf-8")
             try:
                 verify_native_receipt(str(ini_receipt), fgame)
@@ -4946,15 +5020,15 @@ def self_test():
             except ValueError: pass
             ini_receipt.write_bytes(receipt_bytes)
             assert main(ini_args + ["--verify-only"]) == 0
-            Path(fgame, "edvr-flat.ini").write_bytes(b"[fix]\ntemporal_aa=dlss\n")
+            Path(fgame, "edup-flat.ini").write_bytes(b"[fix]\ntemporal_aa=dlss\n")
             assert main(ini_args + ["--verify-only"]) == 1
-            Path(fgame, "edvr-flat.ini").write_bytes(flat_template.read_bytes())
+            Path(fgame, "edup-flat.ini").write_bytes(flat_template.read_bytes())
             assert restore_native(str(ini_receipt)) == 0
-            assert Path(fgame, "edvr-flat.ini").read_bytes() == b"[user]\nkeep=1\n"
-            assert Path(fgame, "edvr.ini").read_bytes() == b"[user]\nkeep=1\n"
+            assert Path(fgame, "edup-flat.ini").read_bytes() == b"[user]\nkeep=1\n"
+            assert Path(fgame, "edup.ini").read_bytes() == b"[user]\nkeep=1\n"
             assert xr_snapshot() == before_xr, "flat --ini changed Openvr"
 
-            # An RC3 flat install made with --ini journaled the shared edvr.ini
+            # An RC3 flat install made with --ini journaled the shared edup.ini
             # as its `ini` entry (the flat profile had no file of its own
             # then). --restore-native must still take such an install back --
             # and only that shape: every other ini path stays refused.
@@ -4968,7 +5042,7 @@ def self_test():
                         "ini": (Path(game, ini_relative), installed)}
                 sources = {"graphics": os.path.abspath(os.path.join(froot, "build", "d3d11.dll")),
                            "profile": "generated",
-                           "ini": os.path.abspath(os.path.join(froot, "build", "edvr-flat.ini"))}
+                           "ini": os.path.abspath(os.path.join(froot, "build", "edup-flat.ini"))}
                 entries = []
                 for key, (path, data) in live.items():
                     path.parent.mkdir(parents=True, exist_ok=True)
@@ -4988,9 +5062,9 @@ def self_test():
                     encoding="utf-8")
                 return game, receipt
 
-            rc3_game, rc3_receipt = rc3_flat_install("rc3game", "edvr.ini")
+            rc3_game, rc3_receipt = rc3_flat_install("rc3game", "edup.ini")
             assert verify_native_receipt(rc3_receipt, rc3_game)["kind"] == FLAT_KIND, \
-                "an RC3 flat receipt naming edvr.ini is refused"
+                "an RC3 flat receipt naming edup.ini is refused"
             rc3_before = sorted((str(p.relative_to(rc3_game)), p.read_bytes())
                                 for p in Path(rc3_game).rglob("*") if p.is_file())
             assert restore_native(rc3_receipt, True) == 0
@@ -4998,12 +5072,12 @@ def self_test():
                                         for p in Path(rc3_game).rglob("*") if p.is_file()), \
                 "the RC3 restore dry run wrote files"
             assert restore_native(rc3_receipt) == 0, "an RC3 flat install cannot be restored"
-            assert Path(rc3_game, "edvr.ini").read_bytes() == b"[user]\nkeep=rc3\n", \
-                "the RC3 restore did not put the user's edvr.ini back"
+            assert Path(rc3_game, "edup.ini").read_bytes() == b"[user]\nkeep=rc3\n", \
+                "the RC3 restore did not put the user's edup.ini back"
             assert not Path(rc3_game, "d3d11.dll").exists() and not Path(rc3_game, PROFILE_FILE).exists()
-            assert not Path(rc3_game, "edvr-flat.ini").exists(), "restoring RC3 created edvr-flat.ini"
+            assert not Path(rc3_game, "edup-flat.ini").exists(), "restoring RC3 created edup-flat.ini"
             for name, ini_relative in (("rc3-sibling", "edvr-other.ini"),
-                                       ("rc3-nested", os.path.join("Openvr", "win64", "edvr.ini")),
+                                       ("rc3-nested", os.path.join("Openvr", "win64", "edup.ini")),
                                        ("rc3-case", "EDVR.INI")):
                 bad_game, bad_receipt = rc3_flat_install(name, ini_relative)
                 try:
@@ -5016,24 +5090,24 @@ def self_test():
                     "a refused receipt still changed files"
 
             # The legacy shape is accepted on its PATH only: every other check
-            # still runs on it. A live edvr.ini that is no longer what the
+            # still runs on it. A live edup.ini that is no longer what the
             # receipt installed, and a backup that is the live file itself, are
             # refused as they are for any other target.
-            tamper_game, tamper_receipt = rc3_flat_install("rc3-changed", "edvr.ini")
-            Path(tamper_game, "edvr.ini").write_bytes(b"[user]\nedited=after-the-install\n")
+            tamper_game, tamper_receipt = rc3_flat_install("rc3-changed", "edup.ini")
+            Path(tamper_game, "edup.ini").write_bytes(b"[user]\nedited=after-the-install\n")
             try:
                 verify_native_receipt(tamper_receipt, tamper_game)
-                raise AssertionError("an RC3 receipt whose edvr.ini changed was accepted")
+                raise AssertionError("an RC3 receipt whose edup.ini changed was accepted")
             except ValueError:
                 pass
-            alias_game, alias_receipt = rc3_flat_install("rc3-alias", "edvr.ini")
+            alias_game, alias_receipt = rc3_flat_install("rc3-alias", "edup.ini")
             alias = json.loads(Path(alias_receipt).read_text(encoding="utf-8"))
             next(e for e in alias["files"] if e["key"] == "ini")["backup"] = \
-                os.path.abspath(os.path.join(alias_game, "edvr.ini"))
+                os.path.abspath(os.path.join(alias_game, "edup.ini"))
             Path(alias_receipt).write_text(json.dumps(alias), encoding="utf-8")
             try:
                 verify_native_receipt(alias_receipt, alias_game)
-                raise AssertionError("an RC3 receipt whose backup is the live edvr.ini was accepted")
+                raise AssertionError("an RC3 receipt whose backup is the live edup.ini was accepted")
             except ValueError:
                 pass
 
@@ -5063,7 +5137,7 @@ def self_test():
         for rel, data in ((GAME_EXE, b"GAME"), ("d3d11.dll", b"OLDG"),
                           ("Openvr/win64/openvr_api.dll", b"OLDN"),
                           ("Openvr/win64/openvr_api_orig.dll", b"ORIGINAL"),
-                          ("edvr.ini", b"[user]\nkeep=1\n")):
+                          ("edup.ini", b"[user]\nkeep=1\n")):
             p=os.path.join(dgame,rel.replace("/",os.sep)); os.makedirs(os.path.dirname(p),exist_ok=True)
             with open(p,"wb") as f:f.write(data)
         loader=os.path.join(direct_tmp,"loader.dll"); lib=os.path.join(direct_tmp,"runtime.dll"); manifest=os.path.join(direct_tmp,"runtime.json")
@@ -5077,7 +5151,7 @@ def self_test():
         _pe.validate_native_pair=fake_validate
         globals()["validate_elite_game"] = lambda game: None
         globals()["strict_game_running"]=lambda *a:(True,False)
-        before_ini=open(os.path.join(dgame,"edvr.ini"),"rb").read(); before_orig=open(os.path.join(dgame,"Openvr","win64","openvr_api_orig.dll"),"rb").read()
+        before_ini=open(os.path.join(dgame,"edup.ini"),"rb").read(); before_orig=open(os.path.join(dgame,"Openvr","win64","openvr_api_orig.dll"),"rb").read()
         if native_direct(droot,dgame,loader,manifest,False)!=0 or calls[0]!=1: ok=False
         paths=native_paths(droot,dgame)
         if native_direct_verify(droot,dgame,loader,manifest)!=0: ok=False
@@ -5088,7 +5162,7 @@ def self_test():
         with open(paths["graphics_target"],"wb") as f:f.write(b"STALE")
         if native_direct_verify(droot,dgame,loader,manifest)==0: ok=False
         with open(paths["graphics_target"],"wb") as f:f.write(b"GRAPHICS")
-        with open(os.path.join(dgame,"Openvr","win64","edvr_openxr.ini"),"wb") as f:f.write(b"stale")
+        with open(os.path.join(dgame,"Openvr","win64","edup_openxr.ini"),"wb") as f:f.write(b"stale")
         if native_direct_verify(droot,dgame,loader,manifest)==0: ok=False
         try: native_direct(droot,dgame,"relative-loader",manifest,True); ok=False
         except ValueError: pass
@@ -5143,7 +5217,7 @@ def self_test():
             globals()["strict_game_running"]=lambda *a:state
             if native_direct(droot,dgame,loader,manifest,False)==0: ok=False
             if direct_snapshot()!=before: ok=False
-        if open(os.path.join(dgame,"edvr.ini"),"rb").read()!=before_ini or open(os.path.join(dgame,"Openvr","win64","openvr_api_orig.dll"),"rb").read()!=before_orig: ok=False
+        if open(os.path.join(dgame,"edup.ini"),"rb").read()!=before_ini or open(os.path.join(dgame,"Openvr","win64","openvr_api_orig.dll"),"rb").read()!=before_orig: ok=False
         try: main(["--native-openxr","--dll","--no-backup","--native-loader",loader,"--native-runtime",manifest,"--openvr"]); ok=False
         except SystemExit: pass
         os.remove(lib) if os.path.exists(lib) else None
@@ -5160,7 +5234,7 @@ def self_test():
         print("backup_name -> %s, want %s" % (got, want))
         ok = False
 
-    tmp = tempfile.mkdtemp(prefix="edvr_install_test_")
+    tmp = tempfile.mkdtemp(prefix="edup_install_test_")
     try:
         # A fake repo and a fake game directory.
         root = os.path.join(tmp, "repo")
@@ -5168,7 +5242,7 @@ def self_test():
         for rel, body in (("build/d3d11.dll", b"NEW-DLL"),
                           ("build/edvr_openxr_graphics.dll", b"NATIVE-GRAPHICS"),
                           ("build/edvr_openxr_runtime.dll", b"NATIVE-NEW"),
-                          ("edvr.ini", b"[fix]\n")):
+                          ("edup.ini", b"[fix]\n")):
             with open(os.path.join(root, rel.replace("/", os.sep)), "wb") as f:
                 f.write(body)
         game = os.path.join(tmp, "game")
@@ -5478,7 +5552,7 @@ def self_test():
                 for label, mutate in (
                         ("bad-type", lambda r: r.update({"files": "bad"})),
                         ("bad-backup", lambda r: r["files"][0].update(
-                            {"backup": os.path.join(game, "edvr.ini")})),
+                            {"backup": os.path.join(game, "edup.ini")})),
                         ("bad-traversal", lambda r: r.update(
                             {"target": os.path.join(game, "..", "outside")}))):
                     bad_path = os.path.join(tmp, "native-%s.json" % label)
@@ -5492,7 +5566,7 @@ def self_test():
                         ok = False
                     except (OSError, ValueError, TypeError):
                         pass
-            with open(os.path.join(game, "edvr.ini"), "wb") as f:
+            with open(os.path.join(game, "edup.ini"), "wb") as f:
                 f.write(b"[user-edit]\nkeep=1\n")
             with open(graphics_target, "wb") as f:
                 f.write(b"EXTERNAL-CHANGE")
@@ -5550,7 +5624,7 @@ def self_test():
                 ok = False
             if open(native_target, "rb").read() != old_native or \
                open(graphics_target, "rb").read() != old_graphics or \
-               open(os.path.join(game, "edvr.ini"), "rb").read() != \
+               open(os.path.join(game, "edup.ini"), "rb").read() != \
                b"[user-edit]\nkeep=1\n":
                 print("native restore changed the wrong files")
                 ok = False

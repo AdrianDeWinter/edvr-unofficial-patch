@@ -205,8 +205,8 @@ bool expectRefused(void* result, const char* label) {
     return true;
 }
 
-// --fixes-off-device runs against its own copy of the proxy with its own edvr.ini beside it, because the proxy reads the ini
-// from its module directory first. Nothing the caller left in build\ (an edvr.ini, a flat profile marker) can then decide
+// --fixes-off-device runs against its own copy of the proxy with its own edup.ini beside it, because the proxy reads the ini
+// from its module directory first. Nothing the caller left in build\ (an edup.ini, a flat profile marker) can then decide
 // whether this mode tests anything. The copy lives beside smoke.exe and is overwritten each run.
 bool stageFixesOffProxy(const char* proxy, char* staged, size_t stagedSize) {
     char dir[MAX_PATH];
@@ -218,7 +218,7 @@ bool stageFixesOffProxy(const char* proxy, char* staged, size_t stagedSize) {
     CreateDirectoryA(dir, nullptr);
     char ini[MAX_PATH];
     strcpy_s(ini, dir);
-    strncat_s(ini, "\\edvr.ini", _TRUNCATE);
+    strncat_s(ini, "\\edup.ini", _TRUNCATE);
     HANDLE f = CreateFileA(ini, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) return false;
     const char text[] = "[advanced]\r\nd3d11_fixes = 0\r\n";
@@ -340,7 +340,7 @@ int main(int argc, char** argv) {
                 strncat_s(moved, "\\d3d11_hooks.armed", _TRUNCATE);
                 strcpy_s(armed, moved);
             } else {
-                strncat_s(armed, "\\edvr_logs\\d3d11_hooks.armed", _TRUNCATE);
+                strncat_s(armed, "\\edup_logs\\d3d11_hooks.armed", _TRUNCATE);
             }
             DeleteFileA(armed);
             if (recoveryCheck) {
@@ -982,7 +982,7 @@ int main(int argc, char** argv) {
         printf("\nSMOKE TEST FAILED: THE VIEW-RECYCLING CHECK COULD NOT RUN\n");
         printf("        The first eye-sized clear did not come back black, so the\n");
         printf("        black void fix is not acting. Either this DLL is not an EDVR\n");
-        printf("        build, or black_void = 0 in an edvr.ini beside it.\n");
+        printf("        build, or black_void = 0 in an edup.ini beside it.\n");
         return 1;
     }
     printf("\nSMOKE TEST PASSED\n");

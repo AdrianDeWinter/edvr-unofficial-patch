@@ -48,4 +48,9 @@ void replacePatienceForTest(int retries, unsigned backoffMs);
 // rather than discovered halfway through a rename.
 bool canWriteInto(const std::wstring& dir);
 
+// Recursively deletes an EDVR-owned directory without following reparse points
+// (junctions or symlinks). Clears read-only attributes on files inside.
+// If `firstError` is non-null, receives the first Win32 error code on failure.
+bool removeDirectoryTree(const std::wstring& dir, unsigned long* firstError = nullptr);
+
 }  // namespace edvr::installer

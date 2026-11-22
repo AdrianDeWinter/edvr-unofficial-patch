@@ -116,6 +116,10 @@ bool LauncherState::closeAfterStart() const { return get("close_after_start") ==
 
 void LauncherState::setCloseAfterStart(bool on) { set("close_after_start", on ? "on" : "off"); }
 
+bool LauncherState::steamFrontierLogin() const { return get("steam_frontier_login") == "on"; }
+
+void LauncherState::setSteamFrontierLogin(bool on) { set("steam_frontier_login", on ? "on" : "off"); }
+
 std::string LauncherState::modeKey(const std::wstring& installFolder) {
     std::wstring folder = installFolder;
     for (wchar_t& c : folder) {
@@ -140,6 +144,14 @@ void LauncherState::setLastInstall(const std::wstring& installFolder) { set("las
 std::string LauncherState::language() const { return get("language"); }
 
 void LauncherState::setLanguage(const std::string& code) { set("language", code); }
+
+edvr::VrHeadsetMode LauncherState::vrStereoMode() const {
+    return edvr::vrHeadsetModeFromConfig(get("vr_3d_mode"));
+}
+
+void LauncherState::setVrStereoMode(edvr::VrHeadsetMode mode) {
+    set("vr_3d_mode", edvr::vrHeadsetModeConfigValue(mode));
+}
 
 bool LauncherState::sameInstall(const std::wstring& a, const std::wstring& b) {
     return !a.empty() && !b.empty() && modeKey(a) == modeKey(b);

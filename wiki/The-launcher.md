@@ -4,7 +4,7 @@ The launcher installs ED-UP, keeps it up to date, and has a Play button. You can
 
 ## What it talks to
 
-It asks GitHub whether a newer release exists, and it downloads a release only after you press Download. Each request carries the launcher's name and version. A release is offered only when its signature matches a public key built into the launcher. A changed or substituted release is refused. If GitHub cannot be reached, the launcher says so in one line and carries on.
+It asks GitHub whether a newer release exists, and it downloads a release only after you press Download & install. Each request carries the launcher's name and version. A release is offered only when its signature matches a public key built into the launcher. A changed or substituted release is refused. If GitHub cannot be reached, the launcher says so in one line and carries on.
 
 With direct launch turned on, described below, it also signs in to Frontier at `api.zaonce.net`. That is the whole list.
 
@@ -14,15 +14,45 @@ Play starts Elite through Steam, Epic, or Frontier's launcher, and waits until t
 
 It reopens on the install you last pressed Play for.
 
-From a script, `--headless` starts Elite the way Play does, with no launcher window, and waits until Elite exits. Add `--close-after-start` to return as soon as the game is running.
+From a script, Steam Launch Options, or another launcher such as `min-ed-launcher`, `--headless` starts Elite the way Play does with no launcher window, and waits until Elite exits.
 
-Frontier's launcher is the one that takes a headset or monitor choice from ED-UP. Through Steam or Epic, the game starts in the mode it is already set to. Steam's own VR and non-VR options still apply. See [Playing](Playing.md).
+- Pass `--vr` / `/vr` or `--novr` / `/novr` to pick the mode, or omit them to use the installed scope, the last mode used for that folder, or Elite's `Settings.xml`.
+- Add `--close-after-start` to exit as soon as Elite is running.
+- Add `--update` to check for and download a signed release before launching (non-blocking if offline).
+- Add `--frontier-login` on a Steam install to sign in with a Frontier email/password instead of Steam's session ticket.
+- In Steam's **Launch Options**, wrap `%command%` using the full path to `ed-up-launcher.exe` (Steam does not expand `%LOCALAPPDATA%` in Launch Options; replace `<your-name>` with your Windows user name) so ED-UP runs its pre-launch steps and then starts Steam's wrapped `EDLaunch.exe` directly with `/vr` or `/novr` instead of re-entering `steam://rungameid`:
+
+```text
+"C:\Users\<your-name>\AppData\Local\EDVR\launcher\ed-up-launcher.exe" --headless %command%
+```
+
+- As a pre-launch update hook in `min-ed-launcher` (without launching the game through ED-UP):
+
+```text
+"%LOCALAPPDATA%\EDUP\launcher\ed-up-launcher.exe" --update --install --dir "C:\Path\To\Products\elite-dangerous-odyssey-64"
+```
+
+Every store offers **Play VR** and **Play flat** (filtered to the modes installed in that folder). Frontier's launcher takes `/vr` or `/novr` on its command line. For Steam and Epic without direct launch, the launcher updates `<StereoscopicMode>` in Elite's `Settings.xml` before opening Steam or Epic, keeping a one-time original backup at `backups\Settings.xml.ed-up-original` and a rolling backup of the previous state at `backups\Settings.xml.bak` (rolling `Settings.xml` back if opening the store client fails):
+
+- **Play flat** leaves `0` (Off) and `1` (Anaglyph) untouched, rewrites `2`..`6` to `0` (or inserts `0` if absent), and never changes your saved VR preference.
+- **Play VR** writes your chosen **VR 3D mode** from the Launch panel (saved as `vr_3d_mode` in `launcher.ini`):
+  - **Not Set** (`not_set`, default): if `Settings.xml` already holds a VR mode (`3`..`6`), the launcher seeds and saves that mode automatically; otherwise it stops before launching in VR and prompts you to choose your preferred 3D mode first.
+  - **HMD (Headphones)** (`hmd_headphones`)
+  - **HMD (Speakers)** (`hmd_speakers`)
+  - **HMD Cinema (Headphones)** (`hmd_cinema_headphones`)
+  - **HMD Cinema (Speakers)** (`hmd_cinema_speakers`)
+
+See [Playing](Playing.md).
 
 An Epic copy is handed to the Epic launcher. Play does not ask for a Frontier password for that install.
 
 ## Starting through Steam, past the Steam window
 
 On Windows, a checkbox can start the game directly and let you pick headset or monitor. The launcher then signs in to Frontier with your Steam login. It sends what Frontier's own launcher sends: a sign-in ticket from Steam, and an ID for this PC. It stores no password and no token. The checkbox stays off until you turn it on. Frontier has not approved this sign-in.
+
+If your Steam-installed copy uses a separate Frontier email/password account, tick **Use Frontier account login** under Launch (or pass `--frontier-login`).
+
+Because direct launch starts `EliteDangerous64.exe` directly outside Steam, leave direct launch unchecked if you want Steam itself to launch Elite.
 
 If any part of the sign-in fails, the launcher says why and starts the game through Steam instead.
 
@@ -34,7 +64,7 @@ The same checkbox exists for a game bought from Frontier. The launcher asks for 
 
 The first time on a PC, Frontier emails a code. The launcher asks for it and sends it back. Frontier answers with a token for this PC.
 
-The launcher keeps `frontier-login.dat` in `%LOCALAPPDATA%\EDVR\launcher\`:
+The launcher keeps `frontier-login.dat` in `%LOCALAPPDATA%\EDUP\launcher\`:
 
 - your email, stored in the clear
 - that token, locked to your Windows user

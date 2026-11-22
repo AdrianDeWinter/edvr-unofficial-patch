@@ -195,7 +195,9 @@ void LauncherSession::beginUpdate() {
             return;
         }
         Updater updater(*http, settings);
-        if (!updater.downloadUpdate(check, &cancel_, progress, &error) || !updater.commitManifest(check, &error)) {
+        std::set<std::string> verified;
+        if (!updater.downloadUpdate(check, &cancel_, progress, &error, &verified) ||
+            !updater.commitManifest(check, &error, &verified)) {
             post([this, error]() { updateFailed("the update did not finish: " + error); });
             return;
         }
@@ -240,7 +242,23 @@ LauncherSession::LauncherSession(SessionEnv env) : env_(std::move(env)) {
     if (state.load(launcherIniPath(env_.roots), nullptr)) {
         directLaunch_ = state.directLaunch();
         closeAfterStart_ = state.closeAfterStart();
+        steamFrontierLogin_ = state.steamFrontierLogin();
+        vrStereoMode_ = state.vrStereoMode();
     }
+}
+
+void LauncherSession::setSteamFrontierLogin(bool on, bool clearSavedLogin) {
+    if (on == steamFrontierLogin_) return;
+    if (!on && clearSavedLogin) deleteFrontierLogin(frontierLoginPath(env_.roots));
+    steamFrontierLogin_ = on;
+    LauncherState state;
+    std::string error;
+    if (state.load(launcherIniPath(env_.roots), &error)) {
+        state.setSteamFrontierLogin(on);
+        createDirectories(env_.roots.launcherDir());
+        state.save(&error);
+    }
+    changed();
 }
 
 void LauncherSession::setLanguage(const std::string& code) {
@@ -250,6 +268,27 @@ void LauncherSession::setLanguage(const std::string& code) {
     state.setLanguage(code);
     createDirectories(env_.roots.launcherDir());
     state.save(nullptr);
+}
+
+void LauncherSession::setVrStereoMode(edvr::VrHeadsetMode mode) {
+    const edvr::VrHeadsetMode normalized = edvr::vrHeadsetModeFromInt(edvr::vrHeadsetModeToken(mode));
+    if (normalized == vrStereoMode_) return;
+    vrStereoMode_ = normalized;
+    LauncherState state;
+    std::string error;
+    if (state.load(launcherIniPath(env_.roots), &error)) {
+        state.setVrStereoMode(normalized);
+        createDirectories(env_.roots.launcherDir());
+        state.save(&error);
+    }
+    changed();
+}
+
+edvr::VrHeadsetMode LauncherSession::seedVrStereoModeFromSettings(const std::wstring& gameDir) {
+    if (vrStereoMode_ != edvr::VrHeadsetMode::NotSet || !env_.detectVrMode) return vrStereoMode_;
+    const edvr::VrHeadsetMode detected = env_.detectVrMode(gameDir);
+    if (detected != edvr::VrHeadsetMode::NotSet) setVrStereoMode(detected);
+    return vrStereoMode_;
 }
 
 void LauncherSession::setCloseAfterStart(bool on) {
@@ -341,20 +380,49 @@ void LauncherSession::beginPlay(const std::wstring& source, const std::wstring& 
 
 void LauncherSession::startRouteAndWatch(const std::wstring& source, const std::wstring& gameDir, bool vr, bool elevated,
                                          const RouteOps& ops, const WatchNames& names, const WatchTiming& timing,
-                                         const std::string& startLine, bool direct) {
+                                         const std::string& startLine, bool direct, bool allowUnsetVrMode) {
     const LaunchRoute route = routeFor(source, gameDir, vr, nullptr, direct);
     std::string error;
+    if (elevated) {
+        playLine_ = elevatedRefusal();
+        changed();
+        return;
+    }
+    if (route.kind == RouteKind::None) {
+        playLine_ = route.why.empty() ? "No launch route for this install." : route.why;
+        changed();
+        return;
+    }
+    const bool routeCarriesMode = route.carriesMode || ops.wrappedCarriesMode;
+    // If an existing VR player already has mode 3..6 in Settings.xml and vr_3d_mode is still
+    // NotSet, seed and persist that choice so it survives between sessions; NotSet stays
+    // reserved for a new VR user who has never chosen a headset mode in Settings.xml.
+    if (!routeCarriesMode && vr && vrStereoMode_ == edvr::VrHeadsetMode::NotSet) {
+        seedVrStereoModeFromSettings(gameDir);
+    }
+    const bool skipUnsetVr = allowUnsetVrMode && vr && vrStereoMode_ == edvr::VrHeadsetMode::NotSet;
+    bool preparedMode = false;
+    if (!routeCarriesMode && env_.prepareLaunchMode && !skipUnsetVr) {
+        if (!env_.prepareLaunchMode(vr, vrStereoMode_, &error)) {
+            playLine_ = error.empty() ? "Elite's Settings.xml could not be updated for this launch." : error;
+            changed();
+            return;
+        }
+        preparedMode = true;
+    }
     if (!startRoute(route, ops, elevated, &error)) {
+        if (preparedMode && env_.restoreLaunchMode) env_.restoreLaunchMode();
         playLine_ = error;
         changed();
         return;
     }
-    // Every start remembers its install. The Frontier route is the only one that carried a choice of
-    // mode, so only its mode is remembered.
-    rememberPlay(gameDir, route.carriesMode ? (vr ? "vr" : "flat") : nullptr);
+    // Every start remembers its install. Mode is remembered whenever the route carries a mode flag
+    // or Settings.xml was updated for the chosen mode.
+    const bool modeApplied = routeCarriesMode || (static_cast<bool>(env_.prepareLaunchMode) && !skipUnsetVr);
+    rememberPlay(gameDir, modeApplied ? (vr ? "vr" : "flat") : nullptr);
     playing_ = true;
     gameStarted_ = false;
-    playLine_ = startLine;
+    playLine_ = skipUnsetVr ? (startLine + " Starting in Elite's current 3D mode.") : startLine;
     changed();
     spawn([this, names, timing]() {
         const WatchOutcome outcome = watchLaunch(names, timing, &cancel_, [this](WatchEvent e) {
@@ -433,7 +501,7 @@ void LauncherSession::beginDirectPlay(const std::wstring& source, const std::wst
     playLine_ = "Signing in to Frontier...";
     changed();
     const std::string base = env_.frontierBase.empty() ? std::string(kFrontierApiBase) : env_.frontierBase;
-    const bool frontierStore = _wcsicmp(source.c_str(), L"Steam") != 0;
+    const bool frontierStore = _wcsicmp(source.c_str(), L"Steam") != 0 || steamFrontierLogin();
     spawn([this, source, gameDir, vr, ops, names, timing, base, frontierStore]() {
         std::unique_ptr<HttpClient> http = makeHttp();
         DirectEnv direct;
@@ -489,7 +557,8 @@ void LauncherSession::beginDirectPlay(const std::wstring& source, const std::wst
         auto fallBack = [this, source, gameDir, vr, ops, names, timing, frontierStore](const std::string& reason) {
             post([this, source, gameDir, vr, ops, names, timing, reason, frontierStore]() {
                 playing_ = false;
-                startRouteAndWatch(source, gameDir, vr, false, ops, names, timing, fallbackLine(reason, frontierStore));
+                startRouteAndWatch(source, gameDir, vr, false, ops, names, timing,
+                                   fallbackLine(reason, frontierStore), false, true);
             });
         };
         if (!plan.start && plan.stopped) {

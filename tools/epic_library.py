@@ -158,8 +158,65 @@ def _installed(path, home):
             yield app, root, product
 
 
+def _heroic_default_fallback(config, flatpak_id, home, environ, found_products):
+    """Fallback for Heroic installs when Legendary's installed.json is absent or lacks the entry
+    but Heroic's default game folder and prefix are present (#224)."""
+    default_roots = (home / "Games/Heroic/EliteDangerous", home / "Games/Heroic/Elite Dangerous")
+    default_prefixes = (home / "Games/Heroic/Prefixes/default/Elite Dangerous",
+                        home / "Games/Heroic/Prefixes/default/EliteDangerous")
+    matched_prefix = None
+    matched_compat = None
+    for candidate in default_prefixes:
+        prefix, compatdata = _prefix(str(candidate), home)
+        if prefix is not None:
+            matched_prefix, matched_compat = prefix, compatdata
+            break
+    if matched_prefix is None:
+        return
+    # Prefer runner metadata from Heroic's GamesConfig if any entry targets this prefix.
+    runner, kind, runtime_env, game_config = None, "unknown", {}, None
+    for cfg_file in _children(config / "GamesConfig"):
+        if cfg_file.suffix.lower() != ".json":
+            continue
+        data = _json(cfg_file)
+        app = cfg_file.stem
+        cfg = data.get(app)
+        if not isinstance(cfg, dict):
+            continue
+        cfg_prefix, _ = _prefix(cfg.get("winePrefix"), home)
+        if cfg_prefix != matched_prefix:
+            continue
+        version = cfg.get("wineVersion", {})
+        version = version if isinstance(version, dict) else {}
+        runner = _runner(version.get("bin"), home, flatpak_id)
+        kind = version.get("type") if version.get("type") in ("wine", "proton") else "unknown"
+        options = cfg.get("enviromentOptions", [])
+        runtime_env = _safe_env({item["key"]: item.get("value") for item in options
+                                 if isinstance(item, dict) and isinstance(item.get("key"), str)}) if isinstance(options, list) else {}
+        if kind == "proton" and cfg.get("disableUMU", False) is False:
+            if runner:
+                runtime_env["PROTONPATH"] = str(runner.parent)
+            runner = _on_path("umu-run", home, environ) if flatpak_id is None else None
+            if runner is None:
+                runner = _runner(str(config / "tools/runtimes/umu/umu_run.py"), home)
+            kind = "umu"
+        if kind in ("proton", "umu") and matched_compat is None:
+            matched_compat = _path(cfg.get("winePrefix"), home)
+        game_config = cfg_file
+        break
+    for root in default_roots:
+        resolved = _path(str(root), home)
+        for product in _products(resolved):
+            if product in found_products:
+                continue
+            found_products.add(product)
+            yield EpicInstall(product, resolved, matched_prefix, matched_compat, runner, kind,
+                              "heroic", "", flatpak_id, None, runtime_env, resolved, game_config)
+
+
 def _heroic(config, flatpak_id, home, environ):
     installed = config / "legendaryConfig/legendary/installed.json"
+    found_products = set()
     for app, root, product in _installed(installed, home):
         game_config = config / "GamesConfig" / (app + ".json")
         cfg = _json(game_config).get(app)
@@ -185,9 +242,12 @@ def _heroic(config, flatpak_id, home, environ):
         if kind in ("proton", "umu") and compatdata is None:
             # UMU also uses raw Wine prefixes (pfx may be a self symlink).
             compatdata = _path(cfg.get("winePrefix"), home)
+        found_products.add(product)
         yield EpicInstall(product, root, prefix, compatdata, runner, kind, "heroic", app,
                           flatpak_id, "heroic://launch?appName=" + quote(app, safe="") + "&runner=legendary",
                           runtime_env, installed, game_config)
+    if config.is_dir():
+        yield from _heroic_default_fallback(config, flatpak_id, home, environ, found_products)
 
 
 def _legendary(config, home, environ):
@@ -902,6 +962,44 @@ def self_test():
         fake_root = home / "Elite Dangerous is only a title"
         fake_root.mkdir()
         assert _products(fake_root) == []
+
+        # Heroic default install + prefix fallback (#224) when installed.json is absent.
+        hdef_root = home / "Games/Heroic/EliteDangerous"
+        hdef_leaf = hdef_root / "Products/elite-dangerous-odyssey-64"
+        hdef_leaf.mkdir(parents=True)
+        (hdef_leaf / GAME_EXE).write_bytes(b"heroic default")
+        hdef_pfx, _ = prefix("Games/Heroic/Prefixes/default/Elite Dangerous")
+        hdef_cfg = config / "heroic-fallback"
+        (hdef_cfg / "GamesConfig").mkdir(parents=True)
+        hdef_found = list(_heroic(hdef_cfg, None, home, legenv))
+        assert len(hdef_found) == 1 and hdef_found[0].game_dir == hdef_leaf.resolve()
+        assert hdef_found[0].prefix == hdef_pfx and hdef_found[0].manager == "heroic"
+        assert hdef_found[0].runner is None and hdef_found[0].runner_kind == "unknown"
+
+        # Heroic fallback matched-runner branch via GamesConfig targeting the default prefix.
+        hdef_wine = executable("runners/heroic-wine/bin/wine")
+        hdef_gc = hdef_cfg / "GamesConfig/9c203b6ed35846e8a4a9ff1e314f6593.json"
+        hdef_gc.write_text(json.dumps({
+            "9c203b6ed35846e8a4a9ff1e314f6593": {
+                "winePrefix": str(hdef_pfx),
+                "wineVersion": {"bin": str(hdef_wine), "type": "wine"},
+                "enviromentOptions": [{"key": "DXVK_HUD", "value": "fps"}, {"key": "UNSAFE_VAR", "value": "1"}],
+            }
+        }), encoding="utf-8")
+        hdef_runner = list(_heroic(hdef_cfg, None, home, legenv))
+        assert len(hdef_runner) == 1
+        assert hdef_runner[0].runner == hdef_wine and hdef_runner[0].runner_kind == "wine"
+        assert hdef_runner[0].config_source == hdef_gc and hdef_runner[0].env == {"DXVK_HUD": "fps"}
+
+        # Heroic fallback deduplicates against installed.json when both point at the default install.
+        hdef_inst = hdef_cfg / "legendaryConfig/legendary/installed.json"
+        hdef_inst.parent.mkdir(parents=True, exist_ok=True)
+        hdef_inst.write_text(json.dumps({
+            "9c203b6ed35846e8a4a9ff1e314f6593": {"install_path": str(hdef_root)}
+        }), encoding="utf-8")
+        hdef_dedup = list(_heroic(hdef_cfg, None, home, legenv))
+        assert len(hdef_dedup) == 1 and hdef_dedup[0].app_name == "9c203b6ed35846e8a4a9ff1e314f6593"
+        assert hdef_dedup[0].source == hdef_inst
 
         # Discovery leaves even absent configured directories absent.
         def snapshot():

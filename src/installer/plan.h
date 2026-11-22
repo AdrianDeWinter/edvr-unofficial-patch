@@ -97,18 +97,24 @@ struct Survey {
     bool                 iniPresent = false;
     bool                 descriptorPresent = false;
     std::string          descriptorSha;
-    // <game>\edvr.ini: the VR profile's settings, and -- only until edvr-flat.ini
-    // exists -- what the flat runtime reads as well.
-    std::string iniText;
-    // <game>\edvr-flat.ini: the flat profile's own settings. Two files, so a flat
-    // operation and a VR one never touch each other's tuning.
-    bool        flatIniPresent = false;
-    std::string flatIniText;
-    // The shipped defaults each settings file was last merged against: edvr.ini.base
-    // and edvr-flat.ini.base (state.h). Each is only as good as the install that
-    // wrote it; the planner decides whether it describes the file (planInstall).
-    std::string baseIniText;
-    std::string flatBaseIniText;
+    std::wstring         legacyDescriptorPath;  // legacy <game>\edvr_profile.ini to migrate away
+    std::wstring         legacyNativeConfigPath; // legacy <openvr>\edvr_openxr.ini to migrate away
+    // Live per-user settings folder (%LOCALAPPDATA%\EDUP\<install>). Empty in synthetic tests
+    // that place settings directly beside the game folder.
+    std::wstring         settingsDir;
+    // Live VR/shared settings (edup.ini in settingsDir, or migrated from legacy edvr.ini).
+    std::string          iniText;
+    bool                 iniFromLegacy = false;
+    std::vector<std::wstring> legacyIniPaths;   // legacy game-dir edvr.ini / edup.ini to back up & remove
+    // Live flat settings (edup-flat.ini in settingsDir, or migrated from legacy edvr-flat.ini).
+    bool                 flatIniPresent = false;
+    std::string          flatIniText;
+    bool                 flatIniFromLegacy = false;
+    std::vector<std::wstring> legacyFlatIniPaths; // legacy game-dir edvr-flat.ini / edup-flat.ini to back up & remove
+    // The shipped defaults each settings file was last merged against: edup.ini.base
+    // and edup-flat.ini.base (state.h), falling back to legacy edvr*.ini.base on upgrade.
+    std::string          baseIniText;
+    std::string          flatBaseIniText;
 
     // NVIDIA's DLSS runtime beside the game, and whether this machine has a
     // card for it: an NVIDIA adapter by DXGI's vendor id. A machine with an
@@ -153,7 +159,7 @@ struct Survey {
     std::wstring eliteFileVersion;  // as the exe's version resource reports it
 };
 
-Survey surveyTarget(const GameInstall& game);
+Survey surveyTarget(const GameInstall& game, const std::wstring& settingsDir = std::wstring());
 
 // The state record is optional; a canonical descriptor (schema 1 or 2, by its exact
 // bytes) still identifies the installed edition after a tool install or a lost
@@ -191,8 +197,12 @@ struct Options {
     bool keepSettings = true;   // merge each settings file the scope installs rather than replace it
     bool repair = false;        // rewrite our files even when they look right
     bool removeSettings = false;  // uninstall: delete the installed edition's settings file too
-    std::wstring backupStamp;   // folder name under edvr_backup\; caller supplies the clock
+    bool purge = false;           // uninstall: clean purge — also remove both INIs, logs, backups, install dir and mirror
+    std::wstring backupStamp;   // folder name under edup_backup\; caller supplies the clock
     std::string  nowUtc;        // stamped into the install record
+    // Per-user settings folder (%LOCALAPPDATA%\EDUP\<install>). When empty, falls back to
+    // survey.settingsDir (or survey.game.dir for synthetic unit tests).
+    std::wstring settingsDir;
 };
 
 enum class Action {
@@ -202,6 +212,7 @@ enum class Action {
     WritePayload,  // write the payload file with id `item` to `to`
     WriteText,     // write `text` to `to`
     Delete,        // remove `from`
+    RemoveDir,     // recursively remove EDVR-owned directory `from` (clean purge only)
 };
 
 struct Step {
@@ -225,6 +236,10 @@ struct Step {
     // `from` must exist. Without this a source that has gone is skipped in
     // silence, and a run that restored nothing reports success.
     bool         required = false;
+    // A clean purge's folder removal: it runs after every other step, cannot be undone, and a failure is reported and
+    // passed over instead of rolling back an uninstall that has already finished (the folders it removes hold the
+    // rollback's own snapshots).
+    bool         bestEffort = false;
 };
 
 struct Plan {

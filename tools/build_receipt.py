@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 
 SCHEMA = 1
 EXCLUDED_ROOTS = {".git", ".claude", ".codex", ".vs", "build", "build - Copy",
-                  "dist", "analysis", "edvr_logs", "docs"}
+                  "dist", "analysis", "edup_logs", "edvr_logs", "docs"}
 EXCLUDED_PARTS = {"__pycache__", ".pytest_cache"}
 # Git-ignored folders that are compiled inputs and so stay in the fingerprint
 # (see THE INPUT RULE above).  Relative to the repository root, forward slashes.

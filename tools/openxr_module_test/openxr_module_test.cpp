@@ -432,7 +432,7 @@ int localConfigTest() {
   wchar_t tempRoot[MAX_PATH]{},tempName[MAX_PATH]{};GetTempPathW(_countof(tempRoot),tempRoot);
   if(!GetTempFileNameW(tempRoot,L"edv",0,tempName))return 1;
   DeleteFileW(tempName);CreateDirectoryW(tempName,nullptr);const std::wstring directory=tempName;
-  const std::wstring copy=directory+L"\\edvr_openxr_runtime.dll",config=directory+L"\\edvr_openxr.ini";
+  const std::wstring copy=directory+L"\\edvr_openxr_runtime.dll",config=directory+L"\\edup_openxr.ini";
   const auto graphics=(executableDirectory()/L"d3d11.dll").wstring();
   check(CopyFileW(source.c_str(),copy.c_str(),TRUE)!=FALSE,"copy native module for local bootstrap test");
   const std::string text="[openxr]\nversion=1\nloader="+std::string(graphics.begin(),graphics.end())+
@@ -478,7 +478,7 @@ int packagedDefaultTest() {
   check(CopyFileW(source.c_str(),module.c_str(),TRUE)!=FALSE,"copy fresh native module into packaged layout");
   check(CopyFileW(sourceLoader.c_str(),loader.c_str(),TRUE)!=FALSE,"copy bundled loader beside native module");
   check(CopyFileW(sourceGraphics.c_str(),graphics.c_str(),TRUE)!=FALSE,"copy graphics proxy to game root");
-  const auto config=win64/L"edvr_openxr.ini"; DeleteFileW(config.c_str());
+  const auto config=win64/L"edup_openxr.ini"; DeleteFileW(config.c_str());
   environment.set(nullptr,nullptr); SetEnvironmentVariableW(L"XR_RUNTIME_JSON",L"inherited-diagnostic.json");
   Exports api; check(api.load(module.wstring()),"load native module without local config");
   if(api.module) {

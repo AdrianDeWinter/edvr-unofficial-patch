@@ -664,7 +664,7 @@ int selfTest(const std::wstring& supplied, HookExpectation expectation=HookExpec
 // device_hook.cpp's own frame ticks through the real proxy in the MINIMAL configuration (review 2026-10-08, finding 3, first written for Explorer Cam's tick). With fix.black_void off, fix.panel_distance 1,
 // the camera-buffer tap off (the test-only variable EDVR_TEST_NO_CAMERA_TAP=1, set by tools\test_openxr_transport.py), app_gpu_timing off and panel_hooks_always off vScreen installs transport-only: it has no State and vScreenFrameBoundary never runs, so a tick
 // carried by it never ran (Explorer Cam's F5 did nothing, until its tick moved). This presents ordinary frames and leaves the DLL's own log to the driver
-// (tools\test_openxr_transport.py), which asks for the ticks' lines (native on foot's first boundary, the AA comparison key's binding). With a replacement ini, edvr.ini beside the proxy is
+// (tools\test_openxr_transport.py), which asks for the ticks' lines (native on foot's first boundary, the AA comparison key's binding). With a replacement ini, edup.ini beside the proxy is
 // rewritten with a fresh timestamp after the first phase: hotkey.compare_aa starting EMPTY and bound while the game runs.
 int tickLive(const std::wstring& proxyPath,const std::wstring& replacement) {
   Watchdog watchdog;
@@ -679,11 +679,11 @@ int tickLive(const std::wstring& proxyPath,const std::wstring& replacement) {
   if (!replacement.empty()) {
     char text[4096]{}; DWORD got=0;
     HANDLE in=CreateFileW(replacement.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
-    check(in!=INVALID_HANDLE_VALUE&&ReadFile(in,text,sizeof(text)-1,&got,nullptr)&&got>0,"read the replacement edvr.ini");
+    check(in!=INVALID_HANDLE_VALUE&&ReadFile(in,text,sizeof(text)-1,&got,nullptr)&&got>0,"read the replacement edup.ini");
     if (in!=INVALID_HANDLE_VALUE) CloseHandle(in);
-    const std::wstring target=proxyPath.substr(0,proxyPath.find_last_of(L"\\/")+1)+L"edvr.ini";
+    const std::wstring target=proxyPath.substr(0,proxyPath.find_last_of(L"\\/")+1)+L"edup.ini";
     HANDLE out=CreateFileW(target.c_str(),GENERIC_WRITE,0,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
-    DWORD put=0; check(out!=INVALID_HANDLE_VALUE&&WriteFile(out,text,got,&put,nullptr)&&put==got,"rewrite edvr.ini while presenting");
+    DWORD put=0; check(out!=INVALID_HANDLE_VALUE&&WriteFile(out,text,got,&put,nullptr)&&put==got,"rewrite edup.ini while presenting");
     if (out!=INVALID_HANDLE_VALUE) CloseHandle(out);
   }
   frames(3000);  // three seconds: the config poll (one second) sees the rewrite and the tick acts on it

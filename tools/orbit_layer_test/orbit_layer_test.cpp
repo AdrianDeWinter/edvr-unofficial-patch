@@ -4,7 +4,7 @@
 // (ui_layer_math.h, ui_sizing_math.h), on WARP, over one draw of a field dump and the crop of the eye's own SceneZ beneath it:
 //
 //   tools/orbit_layer_test/fixtures/orbit_050020_29722_312.bin  (EDVROL01, made by tools/layer_fixtures.py orbit from the Frontier install's
-//   edvr_logs/pool/drawstate_050020.bin and aux_050020_29722.bin, frame 29722 ordinal 312, and eyes/eye_050020_SceneZ.bin): the draw's VS b1
+//   edup_logs/pool/drawstate_050020.bin and aux_050020_29722.bin, frame 29722 ordinal 312, and eyes/eye_050020_SceneZ.bin): the draw's VS b1
 //   (333 rows), vertex buffer 0 (8194 strip vertices), vertex buffer 1 (6 instances: the orange orbit w 2.0, five cyan rings w 1.5) and the
 //   826 x 630 crop at (1190, 700) of the 2016 x 1949 eye's depth and stencil: 94% sky (depth 0, stencil 5), the cockpit and the planet's near
 //   edge (stencil 0x10, 0x90, 0x95, depth 0.008..0.015), a far body (0x15, depth ~1e-7) and 6659 stencil-5 pixels with depth 0.003..0.006 at

@@ -61,6 +61,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -2189,8 +2190,8 @@ std::wstring copyOfSystemDll(const std::wstring& dest) {
 void testCore() {
     section("core");
     const LauncherRoots real = launcherRoots(L"");
-    check(real.canonical && !real.dataRoot.empty() && real.dataRoot.size() > 4 && real.dataRoot.substr(real.dataRoot.size() - 4) == L"EDVR",
-          "with no --data-root the root is %LOCALAPPDATA%\\EDVR and the run is canonical");
+    check(real.canonical && !real.dataRoot.empty() && real.dataRoot.size() > 4 && real.dataRoot.substr(real.dataRoot.size() - 4) == L"EDUP",
+          "with no --data-root the root is %LOCALAPPDATA%\\EDUP and the run is canonical");
     const LauncherRoots trial = launcherRoots(L"C:\\scratch\\root");
     check(!trial.canonical && trial.dataRoot == L"C:\\scratch\\root" && trial.launcherDir() == L"C:\\scratch\\root\\launcher" &&
               trial.cacheDir() == L"C:\\scratch\\root\\payload" && trial.exePath() == L"C:\\scratch\\root\\launcher\\ed-up-launcher.exe",
@@ -2224,7 +2225,7 @@ void testCore() {
         };
         const std::wstring dir = fresh("core-folder");
         copyOfSystemDll(P(dir, L"d3d11.dll"));
-        writeAll(P(dir, L"edvr.ini"), "[fix]\nx=1\n");
+        writeAll(P(dir, L"edup.ini"), "[fix]\nx=1\n");
         writeAll(P(dir, L"Openvr\\openvr_api.dll"), "runtime");
         writeAll(P(dir, L"unrelated.txt"), "ignored");
         // The manifest carries each present file's real hash: listPayloadFolder hands it on and usePayloadFiles checks the folder against it.
@@ -2232,7 +2233,7 @@ void testCore() {
         const std::string iniSha = sha("[fix]\nx=1\n");
         const std::string runtimeSha = sha("runtime");
         const std::string table = fileEntry("graphics", "d3d11.dll", "game", "d3d11.dll", "{\"profile\": [\"vr\", \"flat\"]}", "chain", graphicsSha) + "," +
-                                  fileEntry("settings_vr", "edvr.ini", "game", "edvr.ini", "{\"profile\": [\"vr\"]}", "settings", iniSha) + "," +
+                                  fileEntry("settings_vr", "edup.ini", "game", "edup.ini", "{\"profile\": [\"vr\"]}", "settings", iniSha) + "," +
                                   fileEntry("runtime", "Openvr/openvr_api.dll", "openvr", "openvr_api.dll", "{\"profile\": [\"vr\"]}", "runtime", runtimeSha) + "," +
                                   fileEntry("dlss", "nvngx_dlss.dll", "game", "nvngx_dlss.dll", "{\"adapter\": \"nvidia\"}", "owned");
         writeAll(P(dir, L"ed-up-manifest-v2.json"), manifestText("2", table));
@@ -2256,7 +2257,7 @@ void testCore() {
         check(load.ok && load.kind == PayloadKind::Folder && load.version == version, "loadLauncherPayload takes the folder: " + load.note);
         const void* data = nullptr;
         size_t size = 0;
-        check(payloadItem("settings_vr", &data, &size) && std::string(static_cast<const char*>(data), size) == "[fix]\nx=1\n", "payloadItem now serves the folder's edvr.ini");
+        check(payloadItem("settings_vr", &data, &size) && std::string(static_cast<const char*>(data), size) == "[fix]\nx=1\n", "payloadItem now serves the folder's edup.ini");
         check(payloadPresent(payloadInfo()) && payloadInfo().version == version, "payloadPresent says there is a payload, with its version");
         resetPayloadFiles();
         check(!payloadPresent(payloadInfo()), "reset: a build with no embedded resources has no payload (the state the launcher starts in)");
@@ -2270,7 +2271,7 @@ void testCore() {
         // (A fresh folder: the files of the first one stay mapped for the pointers payloadItem handed out.)
         const std::wstring tamperedDir = fresh("core-folder-tampered");
         copyOfSystemDll(P(tamperedDir, L"d3d11.dll"));
-        writeAll(P(tamperedDir, L"edvr.ini"), "[fix]\nx=2\n");
+        writeAll(P(tamperedDir, L"edup.ini"), "[fix]\nx=2\n");
         writeAll(P(tamperedDir, L"Openvr\\openvr_api.dll"), "runtime");
         writeAll(P(tamperedDir, L"ed-up-manifest-v2.json"), manifestText("2", table));
         const PayloadLoad tampered = loadLauncherPayload(roots, tamperedDir, g_testKeys);
@@ -2336,7 +2337,7 @@ void testCore() {
     {
         const std::wstring game = fresh("core-dev");
         check(!isDeveloperInstall(game), "a folder with no receipt and no record is not a developer's");
-        writeAll(P(game, L"edvr_install\\state.ini"), "version=1\n");
+        writeAll(P(game, L"edup_install\\state.ini"), "version=1\n");
         check(!isDeveloperInstall(game), "a record alone is not either");
         auto stamp = [](const std::wstring& path, int secondsFromNow) {
             HANDLE f = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -2350,7 +2351,7 @@ void testCore() {
             SetFileTime(f, nullptr, nullptr, &ft);
             CloseHandle(f);
         };
-        stamp(P(game, L"edvr_install\\state.ini"), -1000);
+        stamp(P(game, L"edup_install\\state.ini"), -1000);
         writeAll(P(game, L"edvr_native_receipt.json"), "{}");
         stamp(P(game, L"edvr_native_receipt.json"), -2000);
         check(!isDeveloperInstall(game), "a receipt older than the record is the launcher's own past, not a developer's");
@@ -2425,7 +2426,7 @@ void testRegister() {
     writeAll(P(t.launcherDir, L"launcher.ini"), "channel=rc\n");
     writeAll(P(P(t.launcherDir, L"manifests"), L"x.json"), "{}");
     writeAll(P(t.payloadDir, L"abc"), "cached");
-    writeAll(P(root, L"mirror-folder\\edvr.ini"), "settings");   // beside the launcher folder, as the real mirror is
+    writeAll(P(root, L"mirror-folder\\edup.ini"), "settings");   // beside the launcher folder, as the real mirror is
 
     // An earlier build's ED-UP.lnk that starts this launcher is replaced by the new shortcut.
     CreateDirectoryW(t.startMenuDir.c_str(), nullptr);
@@ -2469,7 +2470,7 @@ void testRegister() {
     check(exists(P(wrong.launcherDir, L"precious.txt")) && exists(link), "and nothing was removed");
     wrong = t;
     wrong.payloadDir = P(root, L"mirror-folder");
-    check(!unregisterLauncher(wrong, std::wstring(), &result, &err) && contains(err, "payload") && exists(P(root, L"mirror-folder\\edvr.ini")), "a cache folder not named payload is refused: " + err);
+    check(!unregisterLauncher(wrong, std::wstring(), &result, &err) && contains(err, "payload") && exists(P(root, L"mirror-folder\\edup.ini")), "a cache folder not named payload is refused: " + err);
 
     // The running exe cannot be deleted: it is held open here without delete sharing, as Windows holds a running image.
     check(makeShortcut(P(t.startMenuDir, L"ED-UP.lnk"), t.exePath), "an earlier build's shortcut can be made for the unregister check");
@@ -2481,7 +2482,7 @@ void testRegister() {
     check(!exists(t.payloadDir), "the downloaded files are gone");
     check(!exists(P(t.launcherDir, L"launcher.ini")) && !exists(P(t.launcherDir, L"manifests")), "the launcher folder's other contents are gone");
     check(result.exeRemains && exists(t.exePath), "the exe that is running stays, and the result says so");
-    check(exists(P(root, L"mirror-folder\\edvr.ini")), "the settings copy beside the launcher folder is untouched");
+    check(exists(P(root, L"mirror-folder\\edup.ini")), "the settings copy beside the launcher folder is untouched");
     std::string said;
     for (const std::string& n : result.notes) said += n + "\n";
     check(contains(said, "game folders") && contains(said, "settings"), "the report says the game folders and the settings copy were left alone: " + said);
@@ -2755,7 +2756,7 @@ void testElevatedApply() {
         const auto r = run(plan, other, &out);
         check(r.second && r.first == 1 && out.status == ApplyOutcome::Status::Failed && !out.lines.empty() && contains(out.lines[0], "downloaded files cannot be used"),
               "a manifest the copy's keys do not verify is refused: " + (out.lines.empty() ? std::string("(no line)") : out.lines[0]));
-        check(!exists(P(game, L"d3d11.dll")) && !exists(P(game, L"edvr_install")), "and the game folder was not touched");
+        check(!exists(P(game, L"d3d11.dll")) && !exists(P(game, L"edup_install")), "and the game folder was not touched");
     }
     // A cached file that no longer matches its hash is refused where it is read.
     {
@@ -2793,7 +2794,7 @@ void testElevatedApply() {
         ApplyOutcome out;
         const auto r = run(plan, g_testKeys, &out);
         check(r.second && r.first == 1 && out.status == ApplyOutcome::Status::Blocked && !out.lines.empty(), "a verified payload gets as far as the planner, which blocks a folder whose exe is not Elite");
-        check(!exists(P(game, L"d3d11.dll")) && !exists(P(game, L"edvr_install")) && !exists(mirrorDir), "and the folder holds nothing new");
+        check(!exists(P(game, L"d3d11.dll")) && !exists(P(game, L"edup_install")) && !exists(mirrorDir), "and the folder holds nothing new");
         std::string said;
         for (const std::string& l : out.lines) said += l + " | ";
         check(contains(outcomeReport(out), "blocked"), "the report says the plan is blocked: " + said);
@@ -2807,7 +2808,7 @@ void testElevatedApply() {
         const std::wstring stray = P(base, L"plan-7-8.txt");
         std::string e;
         writePlanFile(stray, plan, &e);
-        check(applyPlanFile(stray, g_testKeys) == 2 && !exists(P(base, L"result-7-8.txt")) && !exists(resultPath) && !exists(P(game, L"edvr_install")),
+        check(applyPlanFile(stray, g_testKeys) == 2 && !exists(P(base, L"result-7-8.txt")) && !exists(resultPath) && !exists(P(game, L"edup_install")),
               "a plan outside a launcher folder exits 2, writes no result and touches no game folder");
     }
     // The cases above leave their own plan in the launcher folder; applyElevated's leftover check below starts clean.
@@ -2897,24 +2898,27 @@ void testElevatedStoreIdentity() {
         const std::wstring steamMirror = P(base, L"elev-epic-product-steam");
         const std::string epicSettings = "[fix]\nshare_exposure = 1\n";
         const std::string steamSettings = "[fix]\nshare_exposure = 0\n";
-        writeAll(P(epicMirror, L"edvr.ini"), epicSettings);
-        writeAll(P(steamMirror, L"edvr.ini"), steamSettings);
+        // Seed checkpoint generation .1 so restoreFromMirror restores edup.ini into the selected
+        // per-user mirror folder (never into the game folder).
+        writeAll(P(epicMirror, L"edup.ini.1"), epicSettings);
+        writeAll(P(steamMirror, L"edup.ini.1"), steamSettings);
         check(writePlanFile(planPath, epic, &err), "the Epic-selected plan is written for elevated dispatch: " + err);
         DeleteFileW(resultPath.c_str());
         const int code = applyPlanFile(planPath, g_testKeys, &inventory);
         ApplyOutcome out;
         check(code == 1 && readResultFile(resultPath, &out, &err) && out.status == ApplyOutcome::Status::Blocked,
               "the elevated Epic plan verifies its signed payload and reaches the planner refusal");
-        check(readAll(P(epic.dir, L"edvr.ini")) == epicSettings &&
-                  readAll(P(steamMirror, L"edvr.ini")) == steamSettings && !exists(P(epic.dir, L"d3d11.dll")),
+        check(readAll(P(epicMirror, L"edup.ini")) == epicSettings &&
+                  !exists(P(epic.dir, L"edup.ini")) && !exists(P(steamMirror, L"edup.ini")) &&
+                  !exists(P(epic.dir, L"d3d11.dll")),
               "elevated restore uses the selected Epic mirror despite conflicting Steam inventory");
         for (const wchar_t* source : {L"", L"Older store"}) {
             epic.source = source;
-            DeleteFileW(P(epic.dir, L"edvr.ini").c_str());
+            DeleteFileW(P(steamMirror, L"edup.ini").c_str());
             check(writePlanFile(planPath, epic, &err), "the older plan source is readable: " + err);
             const int olderCode = applyPlanFile(planPath, g_testKeys, &inventory);
             check(olderCode == 1 && readResultFile(resultPath, &out, &err) && out.status == ApplyOutcome::Status::Blocked &&
-                      readAll(P(epic.dir, L"edvr.ini")) == steamSettings,
+                      readAll(P(steamMirror, L"edup.ini")) == steamSettings && !exists(P(epic.dir, L"edup.ini")),
                   "an empty or unrecognised older source retains the detected store's restore behavior");
         }
         epic.source = L"Epic";
@@ -5486,16 +5490,16 @@ void testLoginDialog() {
 void testBundleLeavesLoginOut() {
     section("log bundle and the login");
     const std::wstring base = fresh("bundle-login");
-    const std::wstring launcher = P(base, L"EDVR\\launcher");
+    const std::wstring launcher = P(base, L"EDUP\\launcher");
     const std::wstring game = P(base, L"Game");
     saveLogin(P(launcher, L"frontier-login.dat"), kPassword, kMachineToken);
     writeAll(P(launcher, L"ed-up-launcher.log"), std::string("a launcher log that names ") + kEmail + " and " + kAuthToken + "\n");
     writeAll(P(game, L"EliteDangerous64.exe"), "x");
-    writeAll(P(game, L"edvr_logs\\edvr_vr_20260827_140003.log"), "SENTINEL-CONTROL-IN-A-REAL-LOG\n");
+    writeAll(P(game, L"edup_logs\\edvr_vr_20260827_140003.log"), "SENTINEL-CONTROL-IN-A-REAL-LOG\n");
     // The login and the launcher log in the places a bundle looks: the game folder and its log folder.
     const std::string loginBytes = readAll(P(launcher, L"frontier-login.dat")), logBytes = readAll(P(launcher, L"ed-up-launcher.log"));
-    for (const wchar_t* where : {L"frontier-login.dat", L"edvr_logs\\frontier-login.dat"}) writeAll(P(game, where), loginBytes);
-    for (const wchar_t* where : {L"ed-up-launcher.log", L"edvr_logs\\ed-up-launcher.log"}) writeAll(P(game, where), logBytes);
+    for (const wchar_t* where : {L"frontier-login.dat", L"edup_logs\\frontier-login.dat"}) writeAll(P(game, where), loginBytes);
+    for (const wchar_t* where : {L"ed-up-launcher.log", L"edup_logs\\ed-up-launcher.log"}) writeAll(P(game, where), logBytes);
     const DumpSearch noDumps{P(base, L"nodumps_local"), P(base, L"nodumps_temp")};
     const std::wstring out = P(base, L"out");
     createDirectories(out);
@@ -5511,7 +5515,7 @@ void testBundleLeavesLoginOut() {
     // The settings can send logs to any folder, the launcher's own included.
     const std::wstring game2 = P(base, L"Game2");
     writeAll(P(game2, L"EliteDangerous64.exe"), "x");
-    writeAll(P(game2, L"edvr.ini"), "[log]\r\ndir = " + narrowUtf8(launcher) + "\r\n");
+    writeAll(P(game2, L"edup.ini"), "[log]\r\ndir = " + narrowUtf8(launcher) + "\r\n");
     writeAll(P(launcher, L"edvr_vr_20260827_140003.log"), "SENTINEL-CONTROL-IN-THE-LAUNCHER-FOLDER\n");
     const LogBundle second = collectLogs(game2, out, &noDumps);
     std::string names2;
@@ -5868,6 +5872,488 @@ void testLauncherTranslations() {
     check(uiStrings >= 40, "the scan saw the launcher's buttons and labels: " + std::to_string(uiStrings));
 }
 
+void testLauncherFixes() {
+    section("launcher fixes (elevation, purge, frontier login, headless args, utils, pre-verified cache)");
+
+    // UAC-disabled ("Never notify") reports TokenElevationTypeDefault with TokenIsElevated=1;
+    // Play should only be blocked by explicit Run-as-administrator (TokenElevationTypeFull).
+    check(elevationBlocksPlay(true, TokenElevationTypeFull), "Run as administrator (TokenElevationTypeFull) blocks Play");
+    check(!elevationBlocksPlay(true, TokenElevationTypeDefault), "UAC-disabled admin (TokenElevationTypeDefault) does not block Play");
+    check(!elevationBlocksPlay(false, TokenElevationTypeLimited), "standard split-token user does not block Play");
+    check(!elevationBlocksPlay(false, TokenElevationTypeFull), "non-elevated token never blocks Play");
+
+    // update_util shared hex and path helpers.
+    const unsigned char sampleBytes[3] = {0x0a, 0xbc, 0xf0};
+    check(hexLower(sampleBytes, 3) == "0abcf0", "hexLower encodes lower-case hex");
+    check(hexUpper(sampleBytes, 3) == "0ABCF0", "hexUpper encodes upper-case hex");
+    std::vector<unsigned char> decoded;
+    check(decodeHex("0AbCf0", &decoded) && decoded.size() == 3 && decoded[0] == 0x0a && decoded[1] == 0xbc && decoded[2] == 0xf0,
+          "decodeHex decodes mixed-case hex");
+    check(!decodeHex("0AbCf0", &decoded, true), "decodeHex(lowerOnly=true) rejects upper case");
+    check(decodeHex("0abcf0", &decoded, true) && decoded.size() == 3, "decodeHex(lowerOnly=true) accepts lower case");
+    check(!decodeHex("abc", &decoded) && !decodeHex("", &decoded) && !decodeHex("zzzz", &decoded),
+          "decodeHex rejects odd, empty and non-hex strings");
+    check(samePath(L"C:\\Games\\Elite", L"c:\\games\\elite") && !samePath(L"", L"") && !samePath(L"C:\\a", L"C:\\b"),
+          "samePath compares non-empty paths case-insensitively");
+
+    // LauncherState::steamFrontierLogin persistence.
+    const std::wstring base = fresh("fixes");
+    {
+        const std::wstring iniPath = P(base, L"launcher.ini");
+        LauncherState st;
+        std::string err;
+        check(st.load(iniPath, &err) && !st.steamFrontierLogin(), "steam_frontier_login defaults to off");
+        st.setSteamFrontierLogin(true);
+        check(st.save(&err), "steam_frontier_login=on saves: " + err);
+        LauncherState reloaded;
+        check(reloaded.load(iniPath, &err) && reloaded.steamFrontierLogin(), "steam_frontier_login=on round-trips");
+        reloaded.setSteamFrontierLogin(false);
+        check(reloaded.save(&err), "steam_frontier_login=off saves");
+        LauncherState reloadedOff;
+        check(reloadedOff.load(iniPath, &err) && !reloadedOff.steamFrontierLogin(), "steam_frontier_login=off round-trips");
+    }
+
+    // PlanFile purge round-trip and backwards compatibility.
+    {
+        const std::wstring planPath = P(base, L"purge-plan.txt");
+        PlanFile out;
+        out.action = "uninstall";
+        out.dir = L"D:\\Elite\\Products\\elite-dangerous-odyssey-64";
+        out.source = L"Steam";
+        out.purge = true;
+        out.removeSettings = true;
+        std::string err;
+        check(writePlanFile(planPath, out, &err), "purge PlanFile writes: " + err);
+        check(contains(readAll(planPath), "purge=1"), "purge=1 is serialized");
+        PlanFile in;
+        check(readPlanFile(planPath, &in, &err) && in.purge && in.removeSettings, "purge PlanFile reads back: " + err);
+
+        // Older plan file without purge= still parses with purge=false.
+        PlanFile plain;
+        plain.action = "uninstall";
+        plain.dir = out.dir;
+        plain.source = out.source;
+        check(writePlanFile(planPath, plain, &err) && !contains(readAll(planPath), "purge="),
+              "non-purge PlanFile omits purge=");
+        PlanFile plainIn;
+        check(readPlanFile(planPath, &plainIn, &err) && !plainIn.purge, "plan without purge= defaults purge=false");
+    }
+
+    // CLI args: --purge, --frontier-login, /vr, /novr, --headless with Steam %command% args and --.
+    {
+        const AppArgs purgeArgs = parse({L"--uninstall", L"--purge"});
+        check(!purgeArgs.badArg && purgeArgs.action == AppArgs::Act::Uninstall && purgeArgs.purge && purgeArgs.removeSettings,
+              "--purge sets purge and removeSettings");
+        const AppArgs fl = parse({L"--headless", L"/novr", L"--frontier-login", L"--close-after-start"});
+        check(!fl.badArg && fl.headless && fl.novr && !fl.vr && fl.frontierLogin && fl.closeAfterStart && !launcherHasCommand(fl),
+              "--headless accepts /novr, --frontier-login and --close-after-start");
+        const AppArgs upInst = parse({L"--update", L"--install"});
+        check(!upInst.badArg && upInst.update && upInst.action == AppArgs::Act::Install && launcherHasCommand(upInst),
+              "--update --install parses cleanly and chains update before install");
+        const AppArgs steamCmd = parse({L"--headless", L"C:\\Steam\\Elite Dangerous\\EDLaunch.exe", L"/VR", L"/autorun"});
+        check(!steamCmd.badArg && steamCmd.headless && steamCmd.vr && !steamCmd.novr &&
+              steamCmd.wrappedArgs.size() == 3 && steamCmd.wrappedArgs[0] == L"C:\\Steam\\Elite Dangerous\\EDLaunch.exe",
+              "--headless accepts Steam %command% trailing executable and /VR switch");
+        const AppArgs dashDash = parse({L"--headless", L"--", L"C:\\Steam\\EDLaunch.exe", L"/novr"});
+        check(!dashDash.badArg && dashDash.headless && dashDash.novr && dashDash.wrappedArgs.size() == 2,
+              "--headless accepts -- separator before wrapped command");
+        const AppArgs typo = parse({L"--headless", L"--vr", L"--dri", L"C:\\Game"});
+        check(typo.badArg, "--headless rejects unknown flag typos instead of swallowing them as wrappedArgs");
+        const std::string usage = usageText();
+        check(contains(usage, "--purge") && contains(usage, "--frontier-login") && contains(usage, "%command%"),
+              "usageText documents --purge, --frontier-login and Steam %command%");
+    }
+
+    // Pre-verified set skips redundant re-hashing in commitManifest.
+    {
+        const Rel a = loadRel("relA");
+        const std::wstring upBase = fresh("fixes-preverified");
+        ScriptedHttp http;
+        http.replies[latestUrl()] = ok(releaseJson(a), "\"etag-pv\"");
+        serveRelease(&http, a);
+        Updater up(http, settingsFor(upBase));
+        const UpdateCheck c = up.check();
+        std::set<std::string> verified;
+        std::string err;
+        check(c.outcome == UpdateOutcome::Available && up.downloadUpdate(c, nullptr, nullptr, &err, &verified),
+              "downloadUpdate populates verifiedOut: " + err);
+        check(verified.size() == a.manifest.files.size(), "verifiedOut contains every manifest file hash");
+        check(up.commitManifest(c, &err, &verified), "commitManifest succeeds with preVerified hashes: " + err);
+    }
+}
+
+void testSettingsXmlLaunchMode() {
+    section("Settings.xml pre-launch 3D mode write");
+    const std::wstring base = fresh("settings-xml-mode");
+    const std::wstring xmlPath = P(base, L"Settings.xml");
+    const std::wstring backupDir = P(base, L"backups");
+    const std::string kPrefix = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\r\n<GraphicsOptions>\r\n\t<Version>1</Version>\r\n\t<PresetName>Custom</PresetName>\r\n\t<StereoscopicMode>";
+    const std::string kSuffix = "</StereoscopicMode>\r\n\t<RefreshRateNumerator>60</RefreshRateNumerator>\r\n</GraphicsOptions>\r\n";
+
+    // In-game 3D mode attribution and LauncherState vr_3d_mode persistence.
+    {
+        check(std::string(edvr::stereoscopicModeName(0)) == "Off", "mode 0 maps to Off");
+        check(std::string(edvr::stereoscopicModeName(1)) == "Anaglyph", "mode 1 maps to Anaglyph");
+        check(std::string(edvr::stereoscopicModeName(2)) == "Side by Side", "mode 2 maps to Side by Side");
+        check(std::string(edvr::stereoscopicModeName(3)) == "HMD (Headphones)", "mode 3 maps to HMD (Headphones)");
+        check(std::string(edvr::stereoscopicModeName(4)) == "HMD (Speakers)", "mode 4 maps to HMD (Speakers)");
+        check(std::string(edvr::stereoscopicModeName(5)) == "HMD Cinema (Headphones)",
+              "mode 5 maps to HMD Cinema (Headphones)");
+        check(std::string(edvr::stereoscopicModeName(6)) == "HMD Cinema (Speakers)",
+              "mode 6 maps to HMD Cinema (Speakers)");
+
+        const std::wstring iniPath = P(base, L"vr_mode_state.ini");
+        LauncherState st;
+        std::string err;
+        check(st.load(iniPath, &err) && st.vrStereoMode() == edvr::VrHeadsetMode::NotSet,
+              "default vr_3d_mode reads as NotSet");
+        st.setVrStereoMode(edvr::VrHeadsetMode::HmdSpeakers);
+        check(st.save(&err), "vr_3d_mode=hmd_speakers saves cleanly");
+        LauncherState reload;
+        check(reload.load(iniPath, &err) && reload.vrStereoMode() == edvr::VrHeadsetMode::HmdSpeakers &&
+                  reload.get("vr_3d_mode") == "hmd_speakers",
+              "vr_3d_mode=hmd_speakers round-trips through launcher.ini");
+        reload.set("vr_3d_mode", "2");
+        check(reload.vrStereoMode() == edvr::VrHeadsetMode::NotSet,
+              "retired numeric vr_3d_mode=2 reads as NotSet");
+        reload.setVrStereoMode(edvr::VrHeadsetMode::NotSet);
+        check(reload.save(&err) && reload.get("vr_3d_mode") == "not_set" &&
+                  reload.vrStereoMode() == edvr::VrHeadsetMode::NotSet,
+              "clearing vr_3d_mode writes not_set and reads as NotSet");
+    }
+
+    // Mode 3 -> flat launch writes 0, saves both one-time original and rolling .bak,
+    // and leaves surrounding XML byte-for-byte identical.
+    const std::string veryFirstXml = kPrefix + "3" + kSuffix;
+    {
+        writeAll(xmlPath, veryFirstXml);
+        std::string err;
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, false, edvr::VrHeadsetMode::NotSet, &err, L""),
+              "flat launch rewrites mode 3 to 0: " + err);
+        check(readAll(xmlPath) == kPrefix + "0" + kSuffix,
+              "only <StereoscopicMode> changed from 3 to 0; surrounding XML is byte-for-byte unchanged");
+        check(readAll(P(backupDir, L"Settings.xml.ed-up-original")) == veryFirstXml,
+              "one-time original Settings.xml backup was saved before first edit");
+        check(readAll(P(backupDir, L"Settings.xml.bak")) == veryFirstXml,
+              "rolling Settings.xml.bak matches previous state");
+    }
+
+    // Not Set: VR launch ALWAYS stops and prompts, even if Settings.xml already holds 3 or 0, leaving file untouched.
+    {
+        const std::string mode3 = kPrefix + "3" + kSuffix;
+        writeAll(xmlPath, mode3);
+        std::string err;
+        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, true, edvr::VrHeadsetMode::NotSet, &err, L"") &&
+                  contains(err, "No VR 3D mode"),
+              "VR launch when Not Set stops and prompts even if Settings.xml has mode 3: " + err);
+        check(readAll(xmlPath) == mode3, "Settings.xml is untouched when VR launch is refused for Not Set");
+
+        const std::string mode0 = kPrefix + "0" + kSuffix;
+        writeAll(xmlPath, mode0);
+        err.clear();
+        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, true, edvr::VrHeadsetMode::NotSet, &err, L"") &&
+                  contains(err, "No VR 3D mode"),
+              "VR launch when Not Set stops and prompts when Settings.xml is mode 0: " + err);
+        check(readAll(xmlPath) == mode0, "mode 0 fixture is untouched when VR launch is refused for Not Set");
+    }
+
+    // Preferred VR mode: switches mode 0 -> 4, mode 3 -> 4, keeps matching mode unchanged,
+    // and preserves the one-time original backup across subsequent writes.
+    {
+        const std::string mode0 = kPrefix + "0" + kSuffix;
+        writeAll(xmlPath, mode0);
+        std::string err;
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, edvr::VrHeadsetMode::HmdSpeakers, &err, L""),
+              "VR launch with HmdSpeakers rewrites mode 0 to 4: " + err);
+        check(readAll(xmlPath) == kPrefix + "4" + kSuffix,
+              "only <StereoscopicMode> changed from 0 to 4; surrounding XML is byte-for-byte unchanged");
+        check(readAll(P(backupDir, L"Settings.xml.bak")) == mode0,
+              "rolling backup holds immediately preceding mode 0 XML");
+        check(readAll(P(backupDir, L"Settings.xml.ed-up-original")) == veryFirstXml,
+              "one-time original backup stays intact across later writes");
+
+        const std::string mode3 = kPrefix + "3" + kSuffix;
+        writeAll(xmlPath, mode3);
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, edvr::VrHeadsetMode::HmdSpeakers, &err, L""),
+              "VR launch with HmdSpeakers updates mode 3 to 4: " + err);
+        check(readAll(xmlPath) == kPrefix + "4" + kSuffix,
+              "HmdSpeakers overrides existing mode 3 cleanly");
+
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, edvr::VrHeadsetMode::HmdSpeakers, &err, L""),
+              "VR launch with HmdSpeakers keeps matching mode 4 unchanged: " + err);
+        check(readAll(xmlPath) == kPrefix + "4" + kSuffix, "mode 4 stays 4");
+    }
+
+    // Absent tag: Not Set VR fails untouched; flat inserts 0; explicit preferred VR mode inserts tag.
+    {
+        const std::string noTag = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\r\n<GraphicsOptions>\r\n\t<Version>1</Version>\r\n</GraphicsOptions>\r\n";
+        writeAll(xmlPath, noTag);
+        std::string err;
+        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, true, edvr::VrHeadsetMode::NotSet, &err, L"") && !err.empty(),
+              "VR launch (Not Set) with absent <StereoscopicMode> fails with a clear message: " + err);
+        check(readAll(xmlPath) == noTag, "absent-tag fixture is not modified on Not Set VR launch");
+        // Flat launch with absent tag inserts <StereoscopicMode>0</StereoscopicMode>.
+        err.clear();
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, false, edvr::VrHeadsetMode::NotSet, &err, L""),
+              "flat launch with absent <StereoscopicMode> inserts mode 0: " + err);
+        int parsed = -1;
+        check(edvr::parseStereoscopicMode(readAll(xmlPath).c_str(), &parsed) && parsed == 0,
+              "inserted flat <StereoscopicMode> parses back as 0");
+        // VR launch with an explicitly chosen preferred mode inserts <StereoscopicMode>3</StereoscopicMode>.
+        writeAll(xmlPath, noTag);
+        err.clear();
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, true, edvr::VrHeadsetMode::HmdHeadphones, &err, L""),
+              "VR launch with HmdHeadphones inserts <StereoscopicMode>3</StereoscopicMode>: " + err);
+        parsed = -1;
+        check(edvr::parseStereoscopicMode(readAll(xmlPath).c_str(), &parsed) && parsed == 3,
+              "inserted <StereoscopicMode> parses back as 3");
+    }
+
+    // Flat leaves <= 1 (0 Off and 1 Anaglyph) untouched; rewrites >= 2 to 0; a read-only Settings.xml is the player's
+    // decision and is refused, not unlocked: the file, its attribute and the backups stay as they were. Snapshot rollback
+    // restores the previous file after a failed launch.
+    {
+        const std::string mode1 = kPrefix + "1" + kSuffix;
+        writeAll(xmlPath, mode1);
+        std::string err;
+        SettingsXmlSnapshot snap;
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, false, edvr::VrHeadsetMode::NotSet, &err, L"", &snap) &&
+                  !snap.modified && readAll(xmlPath) == mode1,
+              "flat launch leaves mode 1 (Anaglyph) untouched: " + err);
+
+        const std::string mode4 = kPrefix + "4" + kSuffix;
+        writeAll(xmlPath, mode4);
+        SetFileAttributesW(xmlPath.c_str(), FILE_ATTRIBUTE_READONLY);
+        snap = SettingsXmlSnapshot();
+        err.clear();
+        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, false, edvr::VrHeadsetMode::NotSet, &err, L"", &snap) &&
+                  !snap.modified && readAll(xmlPath) == mode4 && contains(err, "read-only"),
+              "flat launch refuses to change a read-only Settings.xml and says why: " + err);
+        const DWORD afterRefuseAttrs = GetFileAttributesW(xmlPath.c_str());
+        check(afterRefuseAttrs != INVALID_FILE_ATTRIBUTES && (afterRefuseAttrs & FILE_ATTRIBUTE_READONLY) != 0,
+              "the refused Settings.xml keeps its read-only attribute");
+        SetFileAttributesW(xmlPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+
+        snap = SettingsXmlSnapshot();
+        check(prepareSettingsXmlForLaunch(xmlPath, backupDir, false, edvr::VrHeadsetMode::NotSet, &err, L"", &snap) &&
+                  snap.modified && readAll(xmlPath) == kPrefix + "0" + kSuffix,
+              "flat launch updates a writable Settings.xml from 4 to 0: " + err);
+        check(restoreSettingsXmlFromSnapshot(snap, &err) && readAll(xmlPath) == mode4,
+              "snapshot restore puts back mode 4 after failed launch: " + err);
+    }
+
+    // Parse failure (truncated closing tag) writes nothing, even with a preferred VR mode.
+    {
+        const std::string broken = kPrefix + "3</Stereo";
+        writeAll(xmlPath, broken);
+        std::string err;
+        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, false, edvr::VrHeadsetMode::NotSet, &err, L"") &&
+                  readAll(xmlPath) == broken,
+              "parse failure writes nothing on flat launch: " + err);
+        check(!prepareSettingsXmlForLaunch(xmlPath, backupDir, true, edvr::VrHeadsetMode::HmdHeadphones, &err, L"") &&
+                  readAll(xmlPath) == broken,
+              "parse failure writes nothing on VR launch even with preferred mode: " + err);
+    }
+
+    // Live game process refuses to modify Settings.xml.
+    {
+        const std::string mode3 = kPrefix + "3" + kSuffix;
+        writeAll(xmlPath, mode3);
+        HANDLE fakeGame = startProgram(P(g_fakes, kFakeGame), L"--run-ms 5000");
+        std::string err;
+        const bool ok = prepareSettingsXmlForLaunch(xmlPath, backupDir, false, edvr::VrHeadsetMode::NotSet, &err, kFakeGame);
+        endProgram(fakeGame);
+        check(!ok && contains(err, "already running") && readAll(xmlPath) == mode3,
+              "running game refuses Settings.xml write and leaves file untouched: " + err);
+    }
+
+    // LauncherSession Epic non-direct workflow + wrappedCarriesMode + setSteamFrontierLogin preservation:
+    //   1. Default is Not Set: Play VR stops and prompts without touching Settings.xml or opening Epic URI.
+    //   2. Play flat while Not Set writes 0 to Settings.xml and leaves vr_3d_mode Not Set.
+    //   3. User selects HMD (Headphones) -> saved in launcher.ini; Play VR writes 3 before opening Epic URI.
+    //   4. Alternating back to Play flat writes 0; next Play VR restores 3 from launcher.ini.
+    //   5. Switching preference to HMD (Speakers) writes 4 on Play VR.
+    //   6. wrappedCarriesMode (Steam %command%) skips prepareLaunchMode so VR works even while Not Set.
+    //   7. setSteamFrontierLogin(false, false) preserves an existing Frontier login file.
+    {
+        const std::wstring sessBase = fresh("settings-xml-epic-session");
+        const std::wstring sessXml = P(sessBase, L"Settings.xml");
+        const std::wstring sessBackup = P(sessBase, L"backups");
+        const std::wstring epicGame = P(sessBase, L"EpicGame");
+        createDirectories(epicGame);
+        ScriptedHttp http;
+        Reply down;
+        down.transportOk = false;
+        http.replies[latestUrl()] = down;
+        std::vector<std::string> order;
+        RouteOps ops;
+        std::vector<std::wstring> openedUris;
+        ops.openUri = [&](const std::wstring& uri) {
+            order.push_back("uri");
+            openedUris.push_back(uri);
+            return true;
+        };
+        WatchNames names;
+        names.game = kFakeGame;
+        names.edlaunch = kFakeEd;
+        WatchTiming timing;
+        timing.pollMs = 40;
+        timing.startupWaitMs = 120;
+        timing.closeWaitMs = 100;
+
+        auto makePrepare = [&]() {
+            return [&](bool vr, edvr::VrHeadsetMode preferredVrMode, std::string* error) {
+                order.push_back(vr ? ("xml:vr:" + std::string(edvr::vrHeadsetModeConfigValue(preferredVrMode))) : "xml:flat");
+                return prepareSettingsXmlForLaunch(sessXml, sessBackup, vr, preferredVrMode, error, L"");
+            };
+        };
+
+        // 1. Default Not Set: Play VR refuses and never opens Epic URI.
+        writeAll(sessXml, kPrefix + "3" + kSuffix);
+        Ui ui0;
+        SessionEnv env0 = envFor(&ui0, &http, sessBase, false, P(sessBase, L"self.exe"));
+        env0.prepareLaunchMode = makePrepare();
+        LauncherSession session0(std::move(env0));
+        check(session0.vrStereoMode() == edvr::VrHeadsetMode::NotSet, "new session starts with vr_3d_mode NotSet");
+        session0.beginPlay(L"Epic", epicGame, true, false, ops, names, timing);
+        check(!session0.playing() && openedUris.empty() && order == std::vector<std::string>{"xml:vr:not_set"} &&
+                  contains(session0.playLine(), "No VR 3D mode"),
+              "Epic Play VR stops and prompts when VR 3D mode is Not Set: " + session0.playLine());
+        check(readAll(sessXml) == kPrefix + "3" + kSuffix, "refused VR launch leaves Settings.xml untouched");
+
+        // 2. Play flat while Not Set writes 0 before opening Epic URI, leaving vr_3d_mode Not Set.
+        order.clear();
+        openedUris.clear();
+        Ui ui1;
+        SessionEnv env1 = envFor(&ui1, &http, sessBase, false, P(sessBase, L"self.exe"));
+        env1.prepareLaunchMode = makePrepare();
+        LauncherSession session1(std::move(env1));
+        session1.beginPlay(L"Epic", epicGame, false, false, ops, names, timing);
+        session1.shutdown();
+        check(order == std::vector<std::string>{"xml:flat", "uri"},
+              "Epic Play flat writes Settings.xml before opening the Epic protocol address");
+        check(openedUris.size() == 1 && contains(narrowUtf8(openedUris[0]), "com.epicgames.launcher://apps/"),
+              "Epic protocol address was opened");
+        check(readAll(sessXml) == kPrefix + "0" + kSuffix,
+              "Epic Play flat updated Settings.xml to mode 0");
+        check(session1.vrStereoMode() == edvr::VrHeadsetMode::NotSet, "Play flat keeps vr_3d_mode NotSet");
+
+        // 3. User selects HMD (Headphones) -> saved in launcher.ini; Play VR writes 3.
+        order.clear();
+        openedUris.clear();
+        Ui ui2;
+        SessionEnv env2 = envFor(&ui2, &http, sessBase, false, P(sessBase, L"self.exe"));
+        env2.prepareLaunchMode = makePrepare();
+        LauncherSession session2(std::move(env2));
+        session2.setVrStereoMode(edvr::VrHeadsetMode::HmdHeadphones);
+        session2.beginPlay(L"Epic", epicGame, true, false, ops, names, timing);
+        session2.shutdown();
+        check(order == std::vector<std::string>{"xml:vr:hmd_headphones", "uri"},
+              "Epic Play VR writes chosen HmdHeadphones before opening Epic URI");
+        check(readAll(sessXml) == kPrefix + "3" + kSuffix, "Epic Play VR updated Settings.xml from 0 to 3");
+        LauncherState st;
+        st.load(P(settingsFor(sessBase).launcherDir, L"launcher.ini"), nullptr);
+        check(st.vrStereoMode() == edvr::VrHeadsetMode::HmdHeadphones && st.get("vr_3d_mode") == "hmd_headphones",
+              "launcher.ini remembered vr_3d_mode=hmd_headphones");
+
+        // 4. Alternate back to Play flat (3 -> 0), then new session loads HmdHeadphones and Play VR restores 3.
+        order.clear();
+        openedUris.clear();
+        Ui ui3;
+        SessionEnv env3 = envFor(&ui3, &http, sessBase, false, P(sessBase, L"self.exe"));
+        env3.prepareLaunchMode = makePrepare();
+        LauncherSession session3(std::move(env3));
+        check(session3.vrStereoMode() == edvr::VrHeadsetMode::HmdHeadphones,
+              "new session reloads remembered hmd_headphones from launcher.ini");
+        session3.beginPlay(L"Epic", epicGame, false, false, ops, names, timing);
+        session3.shutdown();
+        check(readAll(sessXml) == kPrefix + "0" + kSuffix, "alternating VR -> Flat wrote 0");
+
+        order.clear();
+        openedUris.clear();
+        Ui ui4;
+        SessionEnv env4 = envFor(&ui4, &http, sessBase, false, P(sessBase, L"self.exe"));
+        env4.prepareLaunchMode = makePrepare();
+        LauncherSession session4(std::move(env4));
+        session4.beginPlay(L"Epic", epicGame, true, false, ops, names, timing);
+        session4.shutdown();
+        check(readAll(sessXml) == kPrefix + "3" + kSuffix, "alternating Flat -> VR restored remembered mode 3");
+
+        // 5. Switch preferred VR mode to HmdSpeakers -> Play VR writes 4.
+        order.clear();
+        openedUris.clear();
+        Ui ui5;
+        SessionEnv env5 = envFor(&ui5, &http, sessBase, false, P(sessBase, L"self.exe"));
+        env5.prepareLaunchMode = makePrepare();
+        LauncherSession session5(std::move(env5));
+        session5.setVrStereoMode(edvr::VrHeadsetMode::HmdSpeakers);
+        session5.beginPlay(L"Epic", epicGame, true, false, ops, names, timing);
+        session5.shutdown();
+        check(order == std::vector<std::string>{"xml:vr:hmd_speakers", "uri"},
+              "Epic Play VR with HmdSpeakers writes mode 4 before opening the Epic URI");
+        check(readAll(sessXml) == kPrefix + "4" + kSuffix, "Epic Play VR updated Settings.xml from 3 to 4");
+
+        // 6. Wrapped %command% carries /vr so VR succeeds even when vr_3d_mode is NotSet.
+        const std::wstring wrapBase = fresh("settings-xml-wrapped");
+        order.clear();
+        openedUris.clear();
+        RouteOps wrappedOps = ops;
+        wrappedOps.wrappedCarriesMode = true;
+        Ui ui6;
+        SessionEnv env6 = envFor(&ui6, &http, wrapBase, false, P(wrapBase, L"self.exe"));
+        env6.prepareLaunchMode = makePrepare();
+        LauncherSession session6(std::move(env6));
+        session6.beginPlay(L"Steam", epicGame, true, false, wrappedOps, names, timing);
+        session6.shutdown();
+        check(order == std::vector<std::string>{"uri"},
+              "wrapped Steam %command% skips Settings.xml prepareLaunchMode when carrying /vr");
+
+        // 7. Seeding vr_3d_mode from existing 3..6 in Settings.xml persists into launcher.ini,
+        //    and failed openUri rolls Settings.xml back from its snapshot.
+        {
+            const std::wstring seedBase = fresh("settings-xml-seed-and-rollback");
+            const std::wstring seedXml = P(seedBase, L"Settings.xml");
+            const std::wstring seedBackup = P(seedBase, L"backups");
+            writeAll(seedXml, kPrefix + "4" + kSuffix);
+            auto snap = std::make_shared<SettingsXmlSnapshot>();
+            Ui uiSeed;
+            SessionEnv envSeed = envFor(&uiSeed, &http, seedBase, false, P(seedBase, L"self.exe"));
+            envSeed.detectVrMode = [&](const std::wstring&) { return detectVrHeadsetModeFromSettingsXml(seedXml); };
+            envSeed.prepareLaunchMode = [&](bool vr, edvr::VrHeadsetMode mode, std::string* err) {
+                return prepareSettingsXmlForLaunch(seedXml, seedBackup, vr, mode, err, L"", snap.get());
+            };
+            envSeed.restoreLaunchMode = [&]() {
+                restoreSettingsXmlFromSnapshot(*snap);
+                *snap = SettingsXmlSnapshot();
+            };
+            LauncherSession sessSeed(std::move(envSeed));
+            check(sessSeed.seedVrStereoModeFromSettings(epicGame) == edvr::VrHeadsetMode::HmdSpeakers,
+                  "existing mode 4 in Settings.xml seeds vr_3d_mode to HmdSpeakers");
+            LauncherState seededState;
+            seededState.load(P(settingsFor(seedBase).launcherDir, L"launcher.ini"), nullptr);
+            check(seededState.vrStereoMode() == edvr::VrHeadsetMode::HmdSpeakers,
+                  "seeded vr_3d_mode survives in launcher.ini");
+            RouteOps failOps;
+            failOps.openUri = [](const std::wstring&) { return false; };
+            sessSeed.beginPlay(L"Epic", epicGame, false, false, failOps, names, timing);
+            sessSeed.shutdown();
+            check(readAll(seedXml) == kPrefix + "4" + kSuffix,
+                  "failed store URI launch rolls Settings.xml back to mode 4");
+        }
+
+        // 8. setSteamFrontierLogin(false, false) keeps a shared Frontier login file intact.
+        const std::wstring loginPath = P(settingsFor(wrapBase).launcherDir, kFrontierLoginFile);
+        createDirectories(settingsFor(wrapBase).launcherDir);
+        writeAll(loginPath, "saved-frontier-login");
+        session6.setSteamFrontierLogin(true, false);
+        session6.setSteamFrontierLogin(false, false);
+        check(exists(loginPath), "unticking Steam Frontier login with clearSavedLogin=false preserves frontier-login.dat");
+        session6.setSteamFrontierLogin(true, false);
+        session6.setSteamFrontierLogin(false, true);
+        check(!exists(loginPath), "unticking Steam Frontier login with clearSavedLogin=true removes frontier-login.dat");
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -5939,6 +6425,8 @@ int main(int argc, char** argv) {
     testBundleLeavesLoginOut();
     testStoreDryRun();
     testArgs();
+    testLauncherFixes();
+    testSettingsXmlLaunchMode();
     endFakes();
     SetEnvironmentVariableW(L"EDUP_FAKE_STEAM_LOG", nullptr);
 

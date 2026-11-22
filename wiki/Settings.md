@@ -8,8 +8,8 @@ Press **F8** in the game. That opens ED-UP's menu, in the headset or on a monito
 
 | File | When Elite reads it |
 | --- | --- |
-| `edvr.ini` | Headset sessions. A missing file means the defaults. |
-| `edvr-flat.ini` | Monitor sessions. While this file is missing, the monitor reads `edvr.ini`. |
+| `edup.ini` | Headset sessions. A missing file means the defaults. |
+| `edup-flat.ini` | Monitor sessions. While this file is missing, the monitor reads `edup.ini`. |
 
 Both sit next to `EliteDangerous64.exe`. Most changes apply within about a second. A row that waits for the next launch says so on the menu. The menu writes the file for you.
 
@@ -33,7 +33,7 @@ The pages are Performance, Fixes, Visual, Mirror window, Native on foot, Hotkeys
 
 ## The choices most people touch
 
-Leave the rest until a picture bothers you. The names here are the menu rows. The linked page gives the `edvr.ini` key and the default.
+Leave the rest until a picture bothers you. The names here are the menu rows. The linked page gives the `edup.ini` key and the default.
 
 ### Anti-aliasing
 

@@ -25,14 +25,16 @@ It accepts Odyssey. It stops when it finds the older Horizons client.
 
 | Where you play | Download | Steps |
 | --- | --- | --- |
-| Windows: Steam, Epic, or Frontier | The [launcher](https://characterecho-sean.github.io/ed-unofficial-patch/), or `ed-up-launcher.exe` on the [release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest) | [Install on Windows](wiki/Install-on-Windows.md) |
+| Windows: Steam, Epic, or Frontier | **Only** `ed-up-launcher.exe` from the [download page](https://characterecho-sean.github.io/ed-unofficial-patch/) or [latest release](https://github.com/characterecho-sean/ed-unofficial-patch/releases/latest) (ignore the `.zip`, `.json`, and `.sig` assets) | [Install on Windows](wiki/Install-on-Windows.md) |
 | Linux or Steam Deck, through Steam | `ed-up-launcher-linux-<version>.zip` | [Install on Linux](wiki/Install-on-Linux.md) |
 | Linux, through Epic, Heroic, Legendary, or Lutris | `ed-up-launcher-linux-<version>.zip`, with `--store epic` | [Epic on Linux](wiki/Install-on-Linux.md#epic-on-linux) |
 
-On Windows the launcher finds Steam, Epic, and Frontier. On Linux it finds
-Steam, and Epic copies installed through Epic's own launcher, Heroic,
-Legendary, Lutris, or Wine. The Linux launcher is new and untested on Linux
-hardware.
+On Windows, `ed-up-launcher.exe` downloads and verifies the release files for
+you; launching Elite through it is optional (you can keep starting Elite from
+Steam, Epic, Frontier, or `min-ed-launcher` after installing). On Windows the
+launcher finds Steam, Epic, and Frontier. On Linux it finds Steam, and Epic
+copies installed through Epic's own launcher, Heroic, Legendary, Lutris, or
+Wine. The Linux launcher is new and untested on Linux hardware.
 
 Press F8 in the game to change settings.
 [Settings](wiki/Settings.md) is the tour, and

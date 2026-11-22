@@ -187,9 +187,12 @@ std::string reservedTargetReason(const ManifestTarget& target) {
     const bool topLevel = slash == std::string::npos;
     if (target.root == TargetRoot::Game && startsWithFolded(path, "openvr/"))
         return "is under the openvr folder, which the openvr root names";
-    if (startsWithFolded(path, "edvr_install/") || startsWithFolded(path, "edvr_backup/"))
+    if (startsWithFolded(path, "edup_install/") || startsWithFolded(path, "edup_backup/") ||
+        startsWithFolded(path, "edvr_install/") || startsWithFolded(path, "edvr_backup/"))
         return "is inside a folder the installer keeps its record and backups in";
-    if (topLevel && (path == "edvr_profile.ini" || path == "edvr_openxr.ini" || path == "openvr_api_orig.dll"))
+    if (topLevel && (path == "edup_profile.ini" || path == "edup_openxr.ini" ||
+                     path == "edvr_profile.ini" || path == "edvr_openxr.ini" ||
+                     path == "openvr_api_orig.dll"))
         return "is a file the installer writes itself";
     if (leaf.size() >= 5 && leaf.compare(leaf.size() - 5, 5, ".base") == 0)
         return "is a .base copy the installer keeps";
@@ -217,8 +220,10 @@ std::string targetProblem(const ManifestTarget& target, ExistingMode mode) {
                 return "is a runtime file and must target openvr openvr_api.dll";
             break;
         case ExistingMode::Settings:
-            if (target.root != TargetRoot::Game || (path != "edvr.ini" && path != "edvr-flat.ini"))
-                return "is a settings file and must target game edvr.ini or edvr-flat.ini";
+            if (target.root != TargetRoot::Game ||
+                (path != "edup.ini" && path != "edup-flat.ini" &&
+                 path != "edvr.ini" && path != "edvr-flat.ini"))
+                return "is a settings file and must target game edup.ini or edup-flat.ini";
             break;
         default:
             break;
@@ -248,9 +253,12 @@ bool checkFiles(const std::vector<ManifestFile>& files, std::string* error) {
                 if (f.when.profiles != kProfileVr && f.when.profiles != kProfileFlat)
                     return failWith(error, "file " + f.id + " is a settings file and needs when.profile exactly [vr] or [flat]");
                 const bool vr = f.when.profiles == kProfileVr;
-                if (foldAscii(f.target.path) != (vr ? "edvr.ini" : "edvr-flat.ini"))
+                const std::string foldedTarget = foldAscii(f.target.path);
+                const bool targetOk = vr ? (foldedTarget == "edup.ini" || foldedTarget == "edvr.ini")
+                                         : (foldedTarget == "edup-flat.ini" || foldedTarget == "edvr-flat.ini");
+                if (!targetOk)
                     return failWith(error, "file " + f.id + " is a settings file and must target game " +
-                                           (vr ? "edvr.ini" : "edvr-flat.ini") + " for its profile");
+                                           (vr ? "edup.ini" : "edup-flat.ini") + " for its profile");
                 const ManifestFile*& slot = settings[vr ? 0 : 1];
                 if (slot) return failWith(error, "file " + f.id + " is a second settings file for its profile (after " + slot->id + ")");
                 slot = &f;

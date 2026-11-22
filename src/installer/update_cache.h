@@ -9,6 +9,7 @@
 #pragma once
 
 #include <functional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -37,8 +38,10 @@ public:
     // that goes on to read the whole file anyway (usePayloadFiles) checks it there, once.
     bool hasSized(const std::string& sha256, unsigned long long size) const;
 
-    // True when every file of the manifest is cached and verified.
-    bool hasAll(const Manifest& manifest) const;
+    // True when every file of the manifest is cached and verified. Hashes listed
+    // in `preVerified` (returned by an immediately preceding ensureFiles call in
+    // the same run) are checked by size instead of re-reading and re-hashing.
+    bool hasAll(const Manifest& manifest, const std::set<std::string>* preVerified = nullptr) const;
 
     // Makes every file of the manifest present, fetching only the assets that
     // hold a file the cache lacks. Each fetched asset is checked for size and
@@ -46,9 +49,11 @@ public:
     // nothing is moved into place unverified. Temporary files left by an
     // earlier run are removed first. On failure no partial file remains; files
     // that were completed stay, being whole and verified. `fetchedAssets` (may
-    // be null) receives the names of the assets that were fetched.
+    // be null) receives the names of the assets that were fetched. `verifiedOut`
+    // (may be null) receives the sha256 hashes verified during this call.
     bool ensureFiles(const Manifest& manifest, const AssetFetcher& fetcher, std::string* error,
-                     std::vector<std::string>* fetchedAssets = nullptr);
+                     std::vector<std::string>* fetchedAssets = nullptr,
+                     std::set<std::string>* verifiedOut = nullptr);
 
     // Removes every cached file no manifest in `keep` lists, and any leftover
     // temporary file. Files whose names are not hashes are left alone.

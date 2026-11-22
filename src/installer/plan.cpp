@@ -10,6 +10,7 @@
 #include "../common/install_scope.h"
 #include "../common/mirror_location.h"
 #include "../common/real_dll_choice.h"
+#include "mirror.h"
 
 namespace edvr::installer {
 namespace {
@@ -63,7 +64,10 @@ std::string descriptorTextFor(const std::string& scope) {
 std::string editionFor(const std::string& scope) { return scope == "flat" ? "flat" : "vr"; }
 
 const wchar_t* kD3d11 = L"d3d11.dll";
-const wchar_t* kProfile = L"edvr_profile.ini";
+const wchar_t* kProfile = L"edup_profile.ini";
+const wchar_t* kLegacyProfile = L"edvr_profile.ini";
+const wchar_t* kOpenxrConfig = L"edup_openxr.ini";
+const wchar_t* kLegacyOpenxrConfig = L"edvr_openxr.ini";
 const wchar_t* kOpenvr = L"openvr_api.dll";
 const wchar_t* kOpenvrOrig = L"openvr_api_orig.dll";
 const wchar_t* kNgx = L"nvngx_dlss.dll";   // NVIDIA's DLSS runtime, beside the game's executable
@@ -652,9 +656,54 @@ bool hasSettingsFor(const Survey& s, const std::string& profile) {
     return s.iniPresent;
 }
 
-Survey surveyTarget(const GameInstall& game) {
+bool fileWriteTime(const std::wstring& path, FILETIME* out) {
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data) ||
+        (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        return false;
+    *out = data.ftLastWriteTime;
+    return true;
+}
+
+// Picks the newest non-empty legacy candidate (ties favor earlier items, so gameDir beats an older
+// mirror when timestamps match).
+std::wstring newestLegacyCandidate(const std::vector<std::wstring>& candidates) {
+    std::wstring best;
+    FILETIME bestTime{};
+    bool haveBest = false;
+    for (const std::wstring& path : candidates) {
+        if (path.empty()) continue;
+        FILETIME ft{};
+        if (!fileWriteTime(path, &ft)) continue;
+        const std::string text = readTextFile(path);
+        if (text.empty()) continue;
+        if (!haveBest || CompareFileTime(&ft, &bestTime) > 0) {
+            best = path;
+            bestTime = ft;
+            haveBest = true;
+        }
+    }
+    return best;
+}
+
+void pushUniquePath(std::vector<std::wstring>* list, const std::wstring& path) {
+    if (path.empty()) return;
+    for (const std::wstring& existing : *list) {
+        if (_wcsicmp(existing.c_str(), path.c_str()) == 0) return;
+    }
+    list->push_back(path);
+}
+
+std::wstring liveSettingsDirOf(const Survey& s, const Options& o) {
+    if (!o.settingsDir.empty()) return o.settingsDir;
+    if (!s.settingsDir.empty()) return s.settingsDir;
+    return s.game.dir;
+}
+
+Survey surveyTarget(const GameInstall& game, const std::wstring& settingsDir) {
     Survey s;
     s.game = game;
+    s.settingsDir = settingsDir;
     s.eliteKind = classifyEliteExecutable(joinPath(game.dir, L"EliteDangerous64.exe"),
                                           &s.eliteFileVersion);
     if (s.game.openvrDir.empty()) s.game.openvrDir = findOpenvrDir(game.dir);
@@ -672,23 +721,90 @@ Survey surveyTarget(const GameInstall& game) {
         s.otherD3d11.push_back(probeDll(joinPath(game.dir, name)));
     }
 
-    // Both settings files, each as itself: which one an operation works on is the
-    // planner's decision, made from the edition it is for.
-    const std::wstring iniPath = settingsPathFor(game.dir, "vr");
-    s.iniPresent = fileExists(iniPath);
-    if (s.iniPresent) s.iniText = readTextFile(iniPath);
-    const std::wstring flatIniPath = settingsPathFor(game.dir, "flat");
-    s.flatIniPresent = fileExists(flatIniPath);
-    if (s.flatIniPresent) s.flatIniText = readTextFile(flatIniPath);
+    // Live settings live in `liveDir` (%LOCALAPPDATA%\EDUP\<install>, or game.dir in synthetic
+    // tests without a settingsDir). When absent there, safely pick the newest legacy copy across
+    // the game folder and any legacy %LOCALAPPDATA%\EDVR mirror so user edits are never lost.
+    const std::wstring liveDir = settingsDir.empty() ? game.dir : settingsDir;
+    const bool separateSettingsDir =
+        !settingsDir.empty() && _wcsicmp(settingsDir.c_str(), game.dir.c_str()) != 0;
+    const std::wstring legacyMirror =
+        settingsDir.empty() ? std::wstring() : legacyMirrorDirFor(settingsDir);
+
+    auto surveySettingsFile = [&](const char* profile, bool* present, std::string* text,
+                                  bool* fromLegacy, std::vector<std::wstring>* legacyPaths) {
+        const std::wstring livePath = settingsPathFor(liveDir, profile);
+        const std::wstring gameNewPath = settingsPathFor(game.dir, profile);
+        const std::wstring gameLegacyPath = legacySettingsPathFor(game.dir, profile);
+        const std::wstring liveLegacyPath = legacySettingsPathFor(liveDir, profile);
+
+        if (separateSettingsDir && fileExists(gameNewPath)) pushUniquePath(legacyPaths, gameNewPath);
+        if (fileExists(gameLegacyPath)) pushUniquePath(legacyPaths, gameLegacyPath);
+
+        if (fileExists(livePath)) {
+            // A game-folder copy written after the live file wins: an older DLL, or a launcher that has not
+            // moved the settings yet, keeps editing the game folder's file, and those edits are the newest.
+            // The live file is backed up before it is overwritten (manageSettings).
+            if (separateSettingsDir) {
+                FILETIME liveTime{};
+                if (fileWriteTime(livePath, &liveTime)) {
+                    std::vector<std::wstring> newer;
+                    for (const std::wstring& gamePath : {gameNewPath, gameLegacyPath}) {
+                        FILETIME ft{};
+                        if (fileWriteTime(gamePath, &ft) && CompareFileTime(&ft, &liveTime) > 0) newer.push_back(gamePath);
+                    }
+                    const std::wstring chosen = newestLegacyCandidate(newer);
+                    if (!chosen.empty()) {
+                        *present = true;
+                        *text = readTextFile(chosen);
+                        *fromLegacy = true;
+                        return;
+                    }
+                }
+            }
+            *present = true;
+            *text = readTextFile(livePath);
+            *fromLegacy = false;
+            return;
+        }
+        std::vector<std::wstring> candidates;
+        if (separateSettingsDir) candidates.push_back(gameNewPath);
+        candidates.push_back(gameLegacyPath);
+        if (separateSettingsDir) candidates.push_back(liveLegacyPath);
+        if (!legacyMirror.empty()) {
+            const std::wstring mirroredNew = newestGeneration(legacyMirror, settingsLeafFor(profile));
+            if (!mirroredNew.empty()) candidates.push_back(mirroredNew);
+            const std::wstring mirroredOld = newestGeneration(legacyMirror, legacySettingsLeafFor(profile));
+            if (!mirroredOld.empty()) candidates.push_back(mirroredOld);
+        }
+        const std::wstring chosen = newestLegacyCandidate(candidates);
+        if (!chosen.empty()) {
+            *present = true;
+            *text = readTextFile(chosen);
+            *fromLegacy = true;
+        }
+    };
+    surveySettingsFile("vr", &s.iniPresent, &s.iniText, &s.iniFromLegacy, &s.legacyIniPaths);
+    surveySettingsFile("flat", &s.flatIniPresent, &s.flatIniText, &s.flatIniFromLegacy, &s.legacyFlatIniPaths);
+
     s.baseIniText = readTextFile(baseIniPath(game.dir));
+    if (s.baseIniText.empty()) s.baseIniText = readTextFile(legacyBaseIniPath(game.dir));
     s.flatBaseIniText = readTextFile(flatBaseIniPath(game.dir));
+    if (s.flatBaseIniText.empty()) s.flatBaseIniText = readTextFile(legacyFlatBaseIniPath(game.dir));
     s.state = readState(game.dir);
     if (!game.dir.empty()) {
         s.toolReceipts = readToolReceipts(game.dir);
         s.toolReceiptHistory = readNativeReceiptHistory(game.dir);
     }
-    s.descriptorPresent = fileExists(joinPath(game.dir, kProfile));
-    if (s.descriptorPresent) s.descriptorSha = sha256File(joinPath(game.dir, kProfile));
+    const std::wstring primaryDesc = joinPath(game.dir, kProfile);
+    const std::wstring legacyDesc = joinPath(game.dir, kLegacyProfile);
+    if (fileExists(legacyDesc)) s.legacyDescriptorPath = legacyDesc;
+    if (fileExists(primaryDesc)) {
+        s.descriptorPresent = true;
+        s.descriptorSha = sha256File(primaryDesc);
+    } else if (!s.legacyDescriptorPath.empty()) {
+        s.descriptorPresent = true;
+        s.descriptorSha = sha256File(s.legacyDescriptorPath);
+    }
     s.ngx = probeDll(joinPath(game.dir, kNgx));
     auto notice = [&](const wchar_t* leaf) {
         DllInfo info; info.path = joinPath(game.dir, leaf);
@@ -716,7 +832,10 @@ Survey surveyTarget(const GameInstall& game) {
             }
             return info;
         };
-        s.nativeConfig=surveyText(L"edvr_openxr.ini");
+        const DllInfo primaryCfg = surveyText(kOpenxrConfig);
+        const DllInfo legacyCfg = surveyText(kLegacyOpenxrConfig);
+        if (legacyCfg.kind != DllKind::Absent) s.legacyNativeConfigPath = legacyCfg.path;
+        s.nativeConfig = primaryCfg.kind != DllKind::Absent ? primaryCfg : legacyCfg;
         if(s.nativeConfig.kind!=DllKind::Absent && s.nativeConfig.kind!=DllKind::Unreadable)
             s.nativeConfigText=readTextFile(s.nativeConfig.path);
         s.openxrLicense=surveyText(L"OPENXR-LOADER-LICENSE.txt");
@@ -731,17 +850,14 @@ Survey surveyTarget(const GameInstall& game) {
         s.openvrOrig = probeDll(joinPath(s.game.openvrDir, s.openvrOrigName));
     }
 
-    // Backups this installer made, newest first. The only thing looked for is
-    // a genuine OpenVR runtime: it is what makes "the game's original was
-    // overwritten" a recoverable mistake instead of a trip through the
-    // launcher's file verification.
-    const std::wstring backups = backupRootPath(game.dir);
-    if (dirExists(backups)) {
+    // Backups this installer made, newest first (both edup_backup\ and legacy edvr_backup\).
+    // The only thing looked for is a genuine OpenVR runtime: it is what makes "the game's original
+    // was overwritten" a recoverable mistake instead of a trip through file verification.
+    for (const std::wstring& backups : {backupRootPath(game.dir), legacyBackupRootPath(game.dir)}) {
+        if (!dirExists(backups)) continue;
         std::vector<std::wstring> stamps = subdirsOf(backups);
         std::sort(stamps.rbegin(), stamps.rend());
         for (const std::wstring& stamp : stamps) {
-            // Where a backup puts the runtime: beside the stamp's other files, or under openvr\ when the plan had another file of
-            // that name to keep apart (backupNameFor). Both are read.
             for (const wchar_t* sub : {L"", L"openvr"}) {
                 const std::wstring candidate = joinPath(sub[0] ? joinPath(joinPath(backups, stamp), sub) : joinPath(backups, stamp), kOpenvr);
                 if (!fileExists(candidate)) continue;
@@ -830,7 +946,7 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     const bool recordAgrees = s.state.descriptorSha.empty() ? s.descriptorSha == descriptorSha
                                                             : s.descriptorSha == s.state.descriptorSha;
     if (s.descriptorPresent && (s.descriptorSha.empty() || (!recordAgrees && !ownEdition))) {
-        plan.blocked = true; plan.problems.push_back("edvr_profile.ini differs from the recorded file; it was left untouched."); return plan;
+        plan.blocked = true; plan.problems.push_back("edup_profile.ini differs from the recorded file; it was left untouched."); return plan;
     }
     // The files this install no longer places, found from the records (removalCandidates): on a flat conversion the OpenXR files beside
     // the VR runtime, on any update an id the manifest dropped. Each is removed only when it is still EDVR's, by its recorded hash.
@@ -959,6 +1075,8 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         changed = true;
     };
     auto writeText = [&](const std::string& text, const std::wstring& to, const std::string& why) {
+        const size_t slash = to.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) targetDirs.push_back(to.substr(0, slash));
         Step st;
         st.action = Action::WriteText;
         st.text = text;
@@ -994,6 +1112,7 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     std::vector<Placed> placed;
     std::vector<std::string> keepRecordIds;  // payload files this plan leaves alone (a target the containment check refused, a notice
                                              // whose runtime is not carried): not placed, and the record they have stays
+    const std::wstring liveSettingsDir = liveSettingsDirOf(s, o);
     {
         std::vector<DllInfo> probed;
         const unsigned profiles = profilesOfScope(scope);
@@ -1001,7 +1120,10 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             if (!whenHolds(e.file.when, profiles, true)) continue;  // another profile's file
             Placed f;
             f.entry = &e;
-            if (!containedTargetPath(s, e.file.target, &f.dst)) {
+            if (e.file.existing == ExistingMode::Settings) {
+                f.dst = settingsPathFor(liveSettingsDir,
+                                        e.file.when.profiles == kProfileFlat ? "flat" : "vr");
+            } else if (!containedTargetPath(s, e.file.target, &f.dst)) {
                 plan.problems.push_back("The target of " + say(leafOf(f.dst)) + " (" + e.file.target.path +
                                         ") leaves its folder, through a junction or a link; it was not placed.");
                 keepRecordIds.push_back(e.file.id);
@@ -1313,14 +1435,20 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             toUtf8(targetPathOf(s, loaderFile->file.target)) + "\r\ngraphics=" +
             toUtf8(targetPathOf(s, graphicsFile->file.target)) + "\r\nruntime=system\r\nseparate_device=1\r\n";
         next.nativeConfigSha = sha256Bytes(config.data(), config.size());
-        if (s.nativeConfig.sha256 != next.nativeConfigSha || o.repair) {
-            const auto destination = joinPath(nativeDir, L"edvr_openxr.ini");
+        const auto destination = joinPath(nativeDir, kOpenxrConfig);
+        const bool migratingLegacyCfg =
+            !s.legacyNativeConfigPath.empty() &&
+            _wcsicmp(s.legacyNativeConfigPath.c_str(), destination.c_str()) != 0;
+        if (s.nativeConfig.sha256 != next.nativeConfigSha || o.repair ||
+            (migratingLegacyCfg && _wcsicmp(s.nativeConfig.path.c_str(), destination.c_str()) != 0)) {
             if (s.nativeConfig.kind != DllKind::Absent) {
-                backup(destination, "the previous OpenXR startup configuration");
+                backup(s.nativeConfig.path, "the previous OpenXR startup configuration");
                 body.back().required = true; body.back().expectSha = s.nativeConfig.sha256;
             }
             writeText(config, destination, "selects the Windows OpenXR runtime"); changed = true;
         }
+        // A legacy edvr_openxr.ini is kept, not deleted: an older runtime (a release installed with --payload or from the cache)
+        // reads only that name.
     } else {
         // Flat owns no VR runtime. What a VR install left in Openvr\win64 is retired only by its proofs: the runtime when it is EDVR's
         // build (proved above), and each OpenXR file by its hash or its content, whether or not this folder's record lists it.
@@ -1399,48 +1527,39 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
 
     // The descriptor is the scope's canonical text, not the payload's: a scope change rewrites it.
     const std::wstring descriptorPath = joinPath(s.game.dir, kProfile);
-    if (!s.descriptorPresent || s.descriptorSha != descriptorSha || o.repair) {
-        if (s.descriptorPresent) {
+    const bool migratingLegacyDesc = !s.legacyDescriptorPath.empty();
+    const bool primaryDescMissing = !fileExists(descriptorPath);
+    if (!s.descriptorPresent || s.descriptorSha != descriptorSha || o.repair ||
+        (migratingLegacyDesc && primaryDescMissing)) {
+        if (s.descriptorPresent && !primaryDescMissing) {
             backup(descriptorPath, "the previous ED-UP profile descriptor");
             body.back().required = true; body.back().expectSha = s.descriptorSha;
         }
         writeText(descriptor, descriptorPath, "declares the installed ED-UP scope");
         changed = true;
     }
+    // A legacy edvr_profile.ini is kept and kept in step, not deleted: an older DLL (a release installed with --payload or from
+    // the cache) reads only that name, and a stale scope there would start the wrong profile.
+    if (migratingLegacyDesc && readTextFile(s.legacyDescriptorPath) != descriptor) {
+        backup(s.legacyDescriptorPath, "the legacy edvr_profile.ini descriptor");
+        writeText(descriptor, s.legacyDescriptorPath, "keeps the legacy edvr_profile.ini on the installed ED-UP scope");
+        changed = true;
+    }
 
     // ------------------------------------------------------------------
-    // The settings files the scope installs: edvr.ini for vr and both, edvr-flat.ini for flat and both. Last, because the chain
-    // decision above forces a value into them.
-    //
-    // A file the scope does not install is neither merged from nor written. The flat
-    // runtime reads edvr-flat.ini and only falls back to edvr.ini while there is
-    // none (config.cpp), so a flat install that merged into edvr.ini reported
-    // success while the game went on reading the old flat file -- and, where
-    // there was no flat file, changed the VR profile's tuning instead. A scope
-    // change leaves the file it stops managing exactly where it is.
+    // The settings files the scope installs: edup.ini for vr and both, edup-flat.ini for flat and both.
+    // Live settings are written into `liveSettingsDir` (%LOCALAPPDATA%\EDUP\<install>) so unelevated
+    // runs always have write permission without loosening Program Files ACLs. Any legacy edvr*.ini
+    // files beside the game are backed up into edup_backup\ and removed after the new file is written.
     // ------------------------------------------------------------------
-    // Each settings file the scope installs is merged on its own, against its own base. The flat file is done first, so the VR
-    // file's merge report (plan.merge) is the one left when both are installed.
-    plan.settingsFile = wantsVrIni ? "edvr.ini" : "edvr-flat.ini";
-    // The base is the shipped text of the version that last wrote the file: edvr.ini.base for edvr.ini, edvr-flat.ini.base for
-    // edvr-flat.ini. Which version wrote edvr.ini.base is the RECORD's question, not the descriptor's: the descriptor says what this
-    // run installs, and an older flat record left its flat defaults in that base. So the base vouches for the VR file only under a
-    // VR-scope record (vr or both); a flat record, or none, vouches for nothing. Where a base does not describe the file, the merge
-    // is two-way.
+    plan.settingsFile = wantsVrIni ? "edup.ini" : "edup-flat.ini";
     const std::string baseWriter = s.state.present ? recordedScope(s.state) : std::string();
     const bool vrBaseDescribes = baseWriter == "vr" || baseWriter == "both";
     const std::string* vrBase = (vrBaseDescribes && !s.baseIniText.empty()) ? &s.baseIniText : nullptr;
     const std::string* flatBase = s.flatBaseIniText.empty() ? nullptr : &s.flatBaseIniText;
     std::string vrSha, flatSha;
 
-    // ---- advanced.real_dll: set once, in the shared edvr.ini ----
-    // Both profiles read it from there (real_dll_choice.h); edvr-flat.ini may hold `none` to run flat without the chain, or a name to
-    // override it. The chain decision above (`forced`) is routed here instead of being written into every file:
-    //   a chain found in the d3d11.dll slot      -> edvr.ini; a name left in edvr-flat.ini is cleared, the new chain supersedes it
-    //   a chain whose target has gone            -> cleared in edvr.ini, and a name in edvr-flat.ini
-    //   a name only in edvr-flat.ini (the layout before this rule) -> moved: copied to edvr.ini, cleared in edvr-flat.ini
-    //   a kept chain and a new edvr.ini          -> edvr.ini (see "Keeping the chain" above for why only a new one)
-    // `none` in either file is a decision of the user's and is never touched.
+    // ---- advanced.real_dll: set once, in the shared edup.ini ----
     bool setShared = false, setFlat = false;
     std::string sharedSet;
     {
@@ -1458,8 +1577,8 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             setShared = true; sharedSet = decision;
             setFlat = flatNames && wantsFlatIni;
             if (setFlat)
-                plan.notes.push_back("advanced.real_dll in edvr-flat.ini (" + flatNow + ") is cleared: the chain to " + decision +
-                                     " is kept once, in edvr.ini, and applies to both profiles.");
+                plan.notes.push_back("advanced.real_dll in edup-flat.ini (" + flatNow + ") is cleared: the chain to " + decision +
+                                     " is kept once, in edup.ini, and applies to both profiles.");
         } else if (decided) {
             setShared = sharedNames;
             setFlat = flatNames && wantsFlatIni;
@@ -1467,15 +1586,15 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             setShared = true; sharedSet = flatNow;
             setFlat = wantsFlatIni;
             plan.notes.push_back(
-                "Moving advanced.real_dll (" + flatNow + ") from edvr-flat.ini to edvr.ini, so it is set once and applies to both the VR and "
+                "Moving advanced.real_dll (" + flatNow + ") from edup-flat.ini to edup.ini, so it is set once and applies to both the VR and "
                 "flat profiles." +
-                (wantsFlatIni ? std::string(" Both files are backed up first; edvr-flat.ini keeps no value for it (write real_dll = none "
+                (wantsFlatIni ? std::string(" Both files are backed up first; edup-flat.ini keeps no value for it (write real_dll = none "
                                             "there to run flat without the chain).")
-                              : std::string(" edvr-flat.ini is outside this install and is left as it is.")));
+                              : std::string(" edup-flat.ini is outside this install and is left as it is.")));
         } else if (keptChain && sharedNow.empty() && (!s.iniPresent || !o.keepSettings)) {
             setShared = true; sharedSet = say(next.chainTarget);
             plan.notes.push_back("Writing advanced.real_dll = " + sharedSet + " to " +
-                                 (s.iniPresent ? "the new edvr.ini" : "edvr.ini") +
+                                 (s.iniPresent ? "the new edup.ini" : "edup.ini") +
                                  ": the kept chain applies to both the VR and flat profiles.");
         }
     }
@@ -1483,6 +1602,20 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     IniPairs vrForced = forced, flatForced = forced;
     if (setShared) vrForced.emplace_back(kChainKey, sharedSet);
     if (setFlat) flatForced.emplace_back(kChainKey, "");
+
+    // The game folder's settings files are copied into the live file, never deleted: an older DLL (a release
+    // installed with --payload or from the cache, or this one before its first save) reads only the game
+    // folder, and other Windows users on this install read it until they first save their own copy.
+    auto retireLegacySettings = [&](const std::vector<std::wstring>& legacyPaths,
+                                    const std::wstring& liveIniPath,
+                                    const std::string& iniName) {
+        for (const std::wstring& legacyPath : legacyPaths) {
+            if (_wcsicmp(legacyPath.c_str(), liveIniPath.c_str()) == 0) continue;
+            plan.notes.push_back("Your settings are copied to " + iniName + " in your user folder. The game folder's " +
+                                 say(leafOf(legacyPath)) + " is kept for other Windows users and older versions.");
+            break;   // one note: the game folder's files are all kept
+        }
+    };
 
     // ---- existing = settings: the shipped text merged into the file already there, three-way against its .base copy. ----
     auto manageSettings = [&](const Placed& file) {
@@ -1492,17 +1625,12 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         const std::string payloadText = file.entry->text();
         const std::wstring iniPath = file.dst;
         const bool ownPresent = isFlat ? s.flatIniPresent : s.iniPresent;
+        const bool fromLegacy = isFlat ? s.flatIniFromLegacy : s.iniFromLegacy;
+        const std::vector<std::wstring>& legacyPaths = isFlat ? s.legacyFlatIniPaths : s.legacyIniPaths;
         const std::string& ownText = isFlat ? s.flatIniText : s.iniText;
 
-        // A flat install that finds only the shared edvr.ini starts its own file
-        // from it, so the settings the flat runtime has been reading carry over
-        // (install_edvr.py seeds the same way); edvr.ini itself is not touched.
-        // Somebody who asked for fresh defaults gets them instead.
         const bool seed = isFlat && !ownPresent && s.iniPresent && o.keepSettings;
-        // A seed is edvr.ini's text, so it merges against edvr.ini's base. The file's own base is the one
-        // edvr-flat.ini.base the flat install that wrote it kept.
         const std::string* base = (isFlat && !seed) ? flatBase : vrBase;
-        // A seed is edvr.ini's text, so it carries the shared chain value; the flat file keeps none (it is the shared file's to hold).
         IniPairs useForced = isFlat ? flatForced : vrForced;
         if (seed) {
             const std::string carried = realDllTrimmed(iniValue(s.iniText, kChainKey));
@@ -1513,23 +1641,21 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         if (seed) {
             merged = mergeIni(payloadText, s.iniText, base, useForced, &plan.merge);
             plan.notes.push_back(
-                "Creating " + iniName + " from your edvr.ini: the flat edition keeps its own "
-                "settings now, and edvr.ini is left exactly as it is.");
+                "Creating " + iniName + " from your edup.ini: the flat edition keeps its own "
+                "settings now, and edup.ini is left exactly as it is.");
         } else if (!ownPresent) {
             merged = mergeIni(payloadText, std::string(), nullptr, useForced, &plan.merge);
             plan.notes.push_back("Writing " + iniName + " (every setting at its default).");
         } else if (!o.keepSettings) {
             merged = mergeIni(payloadText, std::string(), nullptr, useForced, &plan.merge);
-            backup(iniPath, "your " + iniName + ", before it is replaced");
+            if (fileExists(iniPath)) backup(iniPath, "your " + iniName + ", before it is replaced");
             plan.notes.push_back(
                 "Replacing " + iniName + " with the shipped defaults. Your old file is in the "
                 "backup folder.");
         } else {
-            // The user's text is this edition's own file, so a setting this version dropped is
-            // "carried over from your" that file: edvr-flat.ini for the flat edition.
             merged = mergeIni(payloadText, ownText, base, useForced, &plan.merge, iniName.c_str());
             if (merged != ownText) {
-                backup(iniPath, "your " + iniName + ", before it is updated");
+                if (fileExists(iniPath)) backup(iniPath, "your " + iniName + ", before it is updated");
 
                 char line[256];
                 sprintf_s(
@@ -1546,14 +1672,13 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                 }
             }
         }
-        if (merged != ownText) {
+        if (merged != ownText || fromLegacy) {
             writeText(merged, iniPath, "writes " + iniName);
             changed = true;
-        } else {
-            // Said once, and only here: an "updating" note followed by "left
-            // alone" is two lines contradicting each other about the same file.
+        } else if (legacyPaths.empty()) {
             plan.notes.push_back(iniName + " already says what it should -- left alone.");
         }
+        if (fromLegacy) retireLegacySettings(legacyPaths, iniPath, iniName);
         (isFlat ? flatSha : vrSha) = sha256Bytes(merged.data(), merged.size());
         recordFile(file, isFlat ? flatSha : vrSha);
     };
@@ -1565,25 +1690,24 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                 manageSettings(file);
         }
     }
-    // A flat-only install does not manage edvr.ini, but the chain lives there: the one value both profiles read. Only that key is
-    // written, into the file as it is (everything else in it stays byte for byte), or into a new file that holds nothing else. A copy
-    // goes to the backup folder first, as for any file this installer changes.
+    // A flat-only install does not manage edup.ini, but the chain lives there: the one value both profiles read.
     if (!wantsVrIni && setShared && (s.iniPresent || !sharedSet.empty())) {
-        const std::wstring sharedPath = settingsPathFor(s.game.dir, "vr");
+        const std::wstring sharedPath = settingsPathFor(liveSettingsDir, "vr");
         std::string text;
         if (s.iniPresent) {
             text = mergeIni(s.iniText, s.iniText, &s.iniText, IniPairs{{kChainKey, sharedSet}}, nullptr);
         } else {
             text = "# ED-UP settings shared by the VR and flat profiles. advanced.real_dll names the mod ED-UP chains through;\r\n"
-                   "# edvr-flat.ini can override it for the flat profile, or say real_dll = none to run flat without it.\r\n"
+                   "# edup-flat.ini can override it for the flat profile, or say real_dll = none to run flat without it.\r\n"
                    "[advanced]\r\nreal_dll = " + sharedSet + "\r\n";
         }
-        if (text != s.iniText) {
-            if (s.iniPresent) backup(sharedPath, "your edvr.ini, before the chain is written to it");
-            writeText(text, sharedPath, "writes advanced.real_dll to edvr.ini");
+        if (text != s.iniText || s.iniFromLegacy) {
+            if (fileExists(sharedPath)) backup(sharedPath, "your edup.ini, before the chain is written to it");
+            writeText(text, sharedPath, "writes advanced.real_dll to edup.ini");
             changed = true;
             plan.notes.push_back(std::string(s.iniPresent ? "Updating" : "Creating") +
-                                 " edvr.ini: advanced.real_dll = " + sharedSet + ", the one place both profiles read it from.");
+                                 " edup.ini: advanced.real_dll = " + sharedSet + ", the one place both profiles read it from.");
+            if (s.iniFromLegacy) retireLegacySettings(s.legacyIniPaths, sharedPath, "edup.ini");
         }
     }
     // The record's settings digest is the VR file's when the scope has one (the file the older records named), else the flat file's.
@@ -1651,7 +1775,7 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                 baseStep.action = Action::WriteText;
                 baseStep.text = vrSettings->text();
                 baseStep.to = baseIniPath(s.game.dir);
-                baseStep.why = "keeps this version's default edvr.ini, so the next update can tell your changes from a changed default";
+                baseStep.why = "keeps this version's default edup.ini, so the next update can tell your changes from a changed default";
                 plan.steps.push_back(baseStep);
             }
             if (wantsFlatIni) {
@@ -1659,7 +1783,7 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                 baseStep.action = Action::WriteText;
                 baseStep.text = flatSettings->text();
                 baseStep.to = flatBaseIniPath(s.game.dir);
-                baseStep.why = "keeps this version's default edvr-flat.ini, so the next update can tell your changes from a changed default";
+                baseStep.why = "keeps this version's default edup-flat.ini, so the next update can tell your changes from a changed default";
                 plan.steps.push_back(baseStep);
             }
         }
@@ -1670,6 +1794,8 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         rec.to = statePath(s.game.dir);
         rec.why = "records what was installed";
         plan.steps.push_back(rec);
+        // A legacy edvr_install\ is left in place: removing it is the one step here with no undo, and an older launcher or
+        // installer still reads its record from there. A clean purge removes it.
     }
 
     plan.nextState = next;
@@ -1705,8 +1831,9 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     const std::string installed = installedScope(s);
     const std::string scope = installed.empty() ? std::string("vr") : installed;
     const bool flatEdition = scope == "flat";
-    // The file the chain was read from, for the report: edvr.ini unless the flat file supplied it.
-    std::string runtimeIniName = "edvr.ini";
+    // The file the chain was read from, for the report: edup.ini unless the flat file supplied it.
+    std::string runtimeIniName = "edup.ini";
+    const std::wstring liveSettingsDir = liveSettingsDirOf(s, o);
 
     std::vector<Step> body;
     bool wantBackupDir = false;
@@ -1714,6 +1841,7 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
 
     std::vector<std::pair<std::wstring, std::wstring>> backupNames;  // file name -> the path that took it (backupNameFor)
     auto backup = [&](const std::wstring& path, const std::string& why) {
+        if (o.purge) return;  // clean purge removes edvr_backup\ rather than creating a new backup
         Step st;
         st.action = Action::Backup;
         st.from = path;
@@ -1721,6 +1849,16 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         st.why = why;
         body.push_back(st);
         wantBackupDir = true;
+    };
+    std::vector<Step> purgeDirs;   // a clean purge's folder removals: after every other step, best effort (Step::bestEffort)
+    auto removeDir = [&](const std::wstring& path, const std::string& why) {
+        Step st;
+        st.action = Action::RemoveDir;
+        st.from = path;
+        st.why = why;
+        st.bestEffort = true;
+        purgeDirs.push_back(st);
+        changed = true;
     };
     auto remove = [&](const std::wstring& path, const std::string& why,
                       const std::string& expectSha = std::string()) {
@@ -1799,7 +1937,7 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             if (name.empty() && !realDllIsNone(sharedValue)) name = realDllTrimmed(sharedValue);
             if (name.empty() && !realDllIsNone(flatValue)) name = realDllTrimmed(flatValue);
             if (!name.empty()) chain = safeSiblingName(fromUtf8(name), kD3d11);
-            if (name == realDllTrimmed(flatValue) && name != realDllTrimmed(sharedValue)) runtimeIniName = "edvr-flat.ini";
+            if (name == realDllTrimmed(flatValue) && name != realDllTrimmed(sharedValue)) runtimeIniName = "edup-flat.ini";
         }
         const DllInfo* target = chain.empty() ? nullptr : siblingNamed(s.otherD3d11, chain);
         if (target && target->kind != DllKind::Absent) {
@@ -1900,50 +2038,91 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
 
     // ---- settings and record ------------------------------------------
     // The settings files of the scope being removed, and only those: the flat
-    // profile's edvr-flat.ini and the VR profile's edvr.ini are separate people's
+    // profile's edup-flat.ini and the VR profile's edup.ini are separate people's
     // tuning, and an uninstall that took a file outside its scope destroyed
-    // settings it had no business touching. edvr.ini for vr and both, edvr-flat.ini for flat and both.
-    plan.settingsFile = flatEdition ? "edvr-flat.ini" : "edvr.ini";
+    // settings it had no business touching. edup.ini for vr and both, edup-flat.ini for flat and both.
+    plan.settingsFile = flatEdition ? "edup-flat.ini" : "edup.ini";
     for (const bool flatFile : {false, true}) {
         if (flatFile ? scope == "vr" : scope == "flat") continue;
         const char* profile = flatFile ? "flat" : "vr";
-        const std::wstring iniPath = settingsPathFor(s.game.dir, profile);
+        const std::wstring iniPath = settingsPathFor(liveSettingsDir, profile);
         const std::string iniName = toUtf8(settingsLeafFor(profile));
         const bool ownPresent = flatFile ? s.flatIniPresent : s.iniPresent;
+        const bool fromLegacy = flatFile ? s.flatIniFromLegacy : s.iniFromLegacy;
+        const std::vector<std::wstring>& legacyPaths = flatFile ? s.legacyFlatIniPaths : s.legacyIniPaths;
         if (ownPresent) {
-            if (o.removeSettings) {
-                backup(iniPath, "your " + iniName);
-                remove(iniPath, "removes " + iniName);
+            if (o.purge) {
+                if (!fromLegacy) remove(iniPath, "removes " + iniName + " (clean purge)");
+                for (const std::wstring& leg : legacyPaths) {
+                    if (_wcsicmp(leg.c_str(), iniPath.c_str()) != 0 || fromLegacy)
+                        remove(leg, "removes " + say(leafOf(leg)) + " (clean purge)");
+                }
+                plan.notes.push_back("Removing " + iniName + " (clean purge).");
+            } else if (o.removeSettings) {
+                if (!fromLegacy) {
+                    backup(iniPath, "your " + iniName);
+                    remove(iniPath, "removes " + iniName);
+                }
+                for (const std::wstring& leg : legacyPaths) {
+                    if (_wcsicmp(leg.c_str(), iniPath.c_str()) != 0 || fromLegacy) {
+                        backup(leg, "your " + say(leafOf(leg)));
+                        remove(leg, "removes " + say(leafOf(leg)));
+                    }
+                }
                 plan.notes.push_back("Removing " + iniName + " (a copy is kept in the backup folder).");
             } else {
                 plan.notes.push_back(
                     "Leaving " + iniName + " in place, so a reinstall finds your settings again.");
             }
-        } else if (flatFile && flatEdition && s.iniPresent) {
-            // A flat install that never got a file of its own -- one made before
-            // edvr-flat.ini existed -- has been reading the shared edvr.ini, which the
-            // VR profile uses too. It is not the flat edition's to remove.
+        } else if (!o.purge && flatFile && flatEdition && s.iniPresent) {
             plan.notes.push_back(
                 o.removeSettings
-                    ? "This flat install has no edvr-flat.ini of its own: it was reading edvr.ini, "
-                      "which the VR profile uses too, so edvr.ini was left in place."
-                    : "Leaving edvr.ini in place, so a reinstall finds your settings again.");
+                    ? "This flat install has no edup-flat.ini of its own: it was reading edup.ini, "
+                      "which the VR profile uses too, so edup.ini was left in place."
+                    : "Leaving edup.ini in place, so a reinstall finds your settings again.");
         }
     }
     if (fileExists(statePath(s.game.dir))) remove(statePath(s.game.dir), "removes the install record");
+    if (fileExists(legacyStatePath(s.game.dir))) remove(legacyStatePath(s.game.dir), "removes the legacy install record");
     const std::wstring descriptorPath = joinPath(s.game.dir, kProfile);
-    // Its bytes are one of EDVR's descriptor texts, or its hash is the one the record kept: a leftover from an install whose record is gone
-    // says `scope = both` in exactly EDVR's bytes, and is EDVR's whatever the record says.
     if (s.descriptorPresent && ((!s.state.descriptorSha.empty() && s.descriptorSha == s.state.descriptorSha) ||
                                 isCanonicalDescriptor(s.descriptorSha))) {
-        remove(descriptorPath, "removes ED-UP's profile descriptor", s.descriptorSha);
+        if (s.legacyDescriptorPath.empty() || fileExists(descriptorPath))
+            remove(descriptorPath, "removes ED-UP's profile descriptor", s.descriptorSha);
+        if (!s.legacyDescriptorPath.empty())
+            remove(s.legacyDescriptorPath, "removes legacy ED-UP profile descriptor");
     } else if (s.descriptorPresent) {
-        plan.notes.push_back("Keeping an unverified edvr_profile.ini; its ownership could not be proved.");
+        plan.notes.push_back("Keeping an unverified edup_profile.ini; its ownership could not be proved.");
     }
     if (fileExists(baseIniPath(s.game.dir)))
-        remove(baseIniPath(s.game.dir), "removes the kept default edvr.ini");
+        remove(baseIniPath(s.game.dir), "removes the kept default edup.ini");
     if (fileExists(flatBaseIniPath(s.game.dir)))
-        remove(flatBaseIniPath(s.game.dir), "removes the kept default edvr-flat.ini");
+        remove(flatBaseIniPath(s.game.dir), "removes the kept default edup-flat.ini");
+    if (fileExists(legacyBaseIniPath(s.game.dir)))
+        remove(legacyBaseIniPath(s.game.dir), "removes the kept legacy default edvr.ini");
+    if (fileExists(legacyFlatBaseIniPath(s.game.dir)))
+        remove(legacyFlatBaseIniPath(s.game.dir), "removes the kept legacy default edvr-flat.ini");
+
+    if (o.purge) {
+        for (const wchar_t* extra : {L"edup_breadcrumbs.txt", L"edup_FATAL.txt",
+                                     L"edvr_breadcrumbs.txt", L"edvr_FATAL.txt"}) {
+            const std::wstring extraPath = joinPath(s.game.dir, extra);
+            if (fileExists(extraPath)) remove(extraPath, "removes ED-UP crash artifact (clean purge)");
+        }
+        const std::wstring logsDir = joinPath(s.game.dir, L"edup_logs");
+        const std::wstring legacyLogsDir = joinPath(s.game.dir, L"edvr_logs");
+        const std::wstring backupsDir = backupRootPath(s.game.dir);
+        const std::wstring legacyBackupsDir = legacyBackupRootPath(s.game.dir);
+        const std::wstring installDir = stateDirPath(s.game.dir);
+        const std::wstring legacyInstallDir = legacyStateDirPath(s.game.dir);
+        if (dirExists(logsDir)) removeDir(logsDir, "removes edup_logs\\ (clean purge)");
+        if (dirExists(legacyLogsDir)) removeDir(legacyLogsDir, "removes edvr_logs\\ (clean purge)");
+        if (dirExists(installDir)) removeDir(installDir, "removes edup_install\\ (clean purge)");
+        if (dirExists(legacyInstallDir)) removeDir(legacyInstallDir, "removes edvr_install\\ (clean purge)");
+        // Remove backup dirs last so rollback snapshots remain intact if any prior removal fails.
+        if (dirExists(backupsDir)) removeDir(backupsDir, "removes edup_backup\\ (clean purge)");
+        if (dirExists(legacyBackupsDir)) removeDir(legacyBackupsDir, "removes edvr_backup\\ (clean purge)");
+    }
 
     if (!changed) {
         plan.nothingToDo = true;
@@ -1957,9 +2136,18 @@ Plan planUninstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             plan.steps.push_back(mk);
         }
         plan.steps.insert(plan.steps.end(), body.begin(), body.end());
-        plan.notes.push_back(
-            "Logs in edvr_logs\\ and the backups in edvr_backup\\ are left where they are; delete "
-            "them by hand if you want them gone.");
+        // Last: every file step above has run (and can still roll back) before a folder holding the snapshots goes.
+        plan.steps.insert(plan.steps.end(), purgeDirs.begin(), purgeDirs.end());
+        if (o.purge) {
+            plan.notes.push_back(
+                "Clean purge: logs in edup_logs\\ and edvr_logs\\, edup_install\\, the user settings folder, and "
+                "everything in edup_backup\\ and edvr_backup\\ (including any saved copies of other mods' files "
+                "or earlier settings files) will be removed permanently.");
+        } else {
+            plan.notes.push_back(
+                "Logs in edup_logs\\ and the backups in edup_backup\\ are left where they are; delete "
+                "them by hand if you want them gone.");
+        }
     }
     return plan;
 }

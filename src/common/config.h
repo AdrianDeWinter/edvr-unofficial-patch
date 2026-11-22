@@ -119,6 +119,17 @@ public:
         ReleaseSRWLockShared(&m_lock);
         return p;
     }
+    // Points the settings at `next`, a copy the caller has just written with the same content (the menu's copy on write into
+    // this user's %LOCALAPPDATA%\EDUP\<install>). Overrides and values are kept; the cleared stamp makes the next
+    // reloadIfChanged read the new file. Inline, so a rig that stubs some of Config's members and compiles the menu still links.
+    void adoptSettingsPath(const std::wstring& next) {
+        AcquireSRWLockExclusive(&m_lock);
+        if (next != m_path) {
+            m_path = next;
+            m_lastWrite = FILETIME{};
+        }
+        ReleaseSRWLockExclusive(&m_lock);
+    }
     const std::wstring& logDir() const { return m_logDir; }
 
     // The VR profile's settings file, whichever profile is active: the first of the one beside the module and the one beside the

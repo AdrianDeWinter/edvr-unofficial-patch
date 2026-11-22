@@ -78,9 +78,13 @@ bool PayloadCache::hasSized(const std::string& sha256, unsigned long long size) 
     return fileSizeOf(path, &actual) && actual == size;
 }
 
-bool PayloadCache::hasAll(const Manifest& manifest) const {
+bool PayloadCache::hasAll(const Manifest& manifest, const std::set<std::string>* preVerified) const {
     for (const ManifestFile& f : manifest.files) {
-        if (!hasVerified(f.sha256, f.size)) return false;
+        if (preVerified && preVerified->find(f.sha256) != preVerified->end()) {
+            if (!hasSized(f.sha256, f.size)) return false;
+        } else if (!hasVerified(f.sha256, f.size)) {
+            return false;
+        }
     }
     return true;
 }
@@ -96,17 +100,26 @@ void PayloadCache::removeTemporaries() const {
 }
 
 bool PayloadCache::ensureFiles(const Manifest& manifest, const AssetFetcher& fetcher, std::string* error,
-                               std::vector<std::string>* fetchedAssets) {
+                               std::vector<std::string>* fetchedAssets,
+                               std::set<std::string>* verifiedOut) {
     if (!createDirectories(root_)) return setError(error, "the payload folder cannot be created");
     removeTemporaries();
     if (fetchedAssets) fetchedAssets->clear();
+    if (verifiedOut) verifiedOut->clear();
 
+    std::set<std::string> verified;
     int index = 0;
     for (const ManifestAsset& asset : manifest.assets) {
         ++index;
         std::vector<const ManifestFile*> missing;
         for (const ManifestFile& f : manifest.files) {
-            if (f.asset == asset.name && !hasVerified(f.sha256, f.size)) missing.push_back(&f);
+            if (f.asset != asset.name) continue;
+            if (verified.find(f.sha256) != verified.end()) continue;
+            if (hasVerified(f.sha256, f.size)) {
+                verified.insert(f.sha256);
+            } else {
+                missing.push_back(&f);
+            }
         }
         if (missing.empty()) continue;
 
@@ -138,7 +151,7 @@ bool PayloadCache::ensureFiles(const Manifest& manifest, const AssetFetcher& fet
                 problem = asset.name + ": " + zipError;
             } else {
                 for (const ManifestFile* f : missing) {
-                    if (hasVerified(f->sha256, f->size)) continue;  // an earlier entry had the same bytes
+                    if (verified.find(f->sha256) != verified.end()) continue;  // an earlier entry had the same bytes
                     std::vector<unsigned char> bytes;
                     if (!zip.extract(f->path, f->size, &bytes, &zipError)) {
                         problem = asset.name + ": " + f->path + ": " + zipError;
@@ -153,12 +166,14 @@ bool PayloadCache::ensureFiles(const Manifest& manifest, const AssetFetcher& fet
                         problem = asset.name + ": " + f->path + " could not be written to the cache";
                         break;
                     }
+                    verified.insert(f->sha256);
                 }
             }
         }
         discard();
         if (!problem.empty()) return setError(error, problem);
     }
+    if (verifiedOut) *verifiedOut = std::move(verified);
     return true;
 }
 

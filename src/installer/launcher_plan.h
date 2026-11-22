@@ -38,6 +38,7 @@ struct PlanFile {
     std::string  scope;                  // both | vr | flat, or empty for the folder's own
     bool         keepSettings = true;
     bool         removeSettings = false;
+    bool         purge = false;
     bool         restoreMirror = false;  // restore settings from the mirror first, as the user agreed
     std::string  manifestSha;            // the adopted manifest, 64 lower-case hex; empty only to uninstall
 };

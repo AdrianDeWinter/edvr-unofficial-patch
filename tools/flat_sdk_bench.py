@@ -438,7 +438,7 @@ def execute_plan(root, plan, evidence, timeout):
         stage = pathlib.Path(run["stage"])
         staged_proxy = pathlib.Path(run["staged_proxy"])
         staged_dlss = pathlib.Path(run["staged_dlss"]) if run["staged_dlss"] else None
-        outputs = [stage, staged_proxy, stage / DLSS_RUNTIME, stage / "edvr_profile.ini", stage / "edvr-flat.ini"]
+        outputs = [stage, staged_proxy, stage / DLSS_RUNTIME, stage / "edup_profile.ini", stage / "edup-flat.ini"]
         checked(all(p.resolve().is_relative_to((root / "build").resolve()) for p in outputs),
                 "staging output escapes build/")
         stage.mkdir(parents=True, exist_ok=True)
@@ -449,8 +449,8 @@ def execute_plan(root, plan, evidence, timeout):
         else:
             # Absent by plan: a copy an earlier matrix left here must not be a hidden input of this run.
             unstage(stage / DLSS_RUNTIME)
-        (stage / "edvr_profile.ini").write_text("[install]\nschema = 1\nprofile = flat\n", encoding="utf-8")
-        (stage / "edvr-flat.ini").write_text(
+        (stage / "edup_profile.ini").write_text("[install]\nschema = 1\nprofile = flat\n", encoding="utf-8")
+        (stage / "edup-flat.ini").write_text(
             f"[fix]\ntemporal_aa = {config_mode(run['mode'])}\n[log]\nenabled = on\n", encoding="utf-8")
         p = None
         try:
@@ -876,7 +876,7 @@ def self_test():
             observed_at_run[(case, mode)] = {
                 "proxy": staged.is_file() and staged.read_bytes() == payload[staged.name],
                 "dlss": (where / DLSS_RUNTIME).is_file(),
-                "ini": (where / "edvr-flat.ini").is_file() and (where / "edvr_profile.ini").is_file()}
+                "ini": (where / "edup-flat.ini").is_file() and (where / "edup_profile.ini").is_file()}
             failing = (case, mode) == ("scene", "fsr")
             result = {"schema": "edvr-flat-sdk-bench", "version": 1, "case": case, "mode": mode,
                       "purpose": CASE_PURPOSES[case], "verdict": "FAIL" if failing else "PASS",
@@ -901,7 +901,7 @@ def self_test():
             where = stages / mode / case
             names = sorted(p.name for p in where.iterdir())
             if r["verdict"] == "PASS":   # no DLL name left, the settings stay, and the sources are untouched
-                assert names == ["edvr-flat.ini", "edvr_profile.ini"] and r["staging"]["removed"] is True
+                assert names == ["edup-flat.ini", "edup_profile.ini"] and r["staging"]["removed"] is True
             else:                         # a failing scenario keeps what its process ran
                 assert r["staging"]["removed"] is False
                 assert "flat_sdk_bench_proxy.dll" in names and DLSS_RUNTIME not in names
@@ -913,7 +913,7 @@ def self_test():
             results, summary = run_plan(["scene"], ["dlaa"])
         assert summary["verdict"] == "PASS" and results[("scene", "dlaa")]["staging"] == {
             "proxy": "copy", "dlss": "copy", "removed": True}
-        assert sorted(p.name for p in (stages / "dlaa/scene").iterdir()) == ["edvr-flat.ini", "edvr_profile.ini"]
+        assert sorted(p.name for p in (stages / "dlaa/scene").iterdir()) == ["edup-flat.ini", "edup_profile.ini"]
         # The real-size case on WARP starts no process and stages nothing (UNSUPPORTED, with its cause); on hardware it runs, with a
         # timeout of its own that no shorter --timeout can undercut.
         started = []

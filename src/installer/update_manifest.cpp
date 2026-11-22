@@ -12,20 +12,10 @@ namespace {
 
 // ---- the signature -----------------------------------------------------------
 
-int hexDigit(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
-bool decodeHex(const char* text, size_t digits, unsigned char* out) {
-    for (size_t i = 0; i + 1 < digits; i += 2) {
-        const int hi = hexDigit(text[i]);
-        const int lo = hexDigit(text[i + 1]);
-        if (hi < 0 || lo < 0) return false;
-        out[i / 2] = static_cast<unsigned char>(hi * 16 + lo);
-    }
+bool decodeHexFixed(const std::string& text, size_t expectedBytes, unsigned char* out, bool lowerOnly) {
+    std::vector<unsigned char> decoded;
+    if (!decodeHex(text, &decoded, lowerOnly) || decoded.size() != expectedBytes) return false;
+    std::memcpy(out, decoded.data(), expectedBytes);
     return true;
 }
 
@@ -36,11 +26,7 @@ bool parseSignatureText(const std::string& text, unsigned char sig[64]) {
     if (length == 129 && text[128] == '\n') length = 128;
     else if (length == 130 && text[128] == '\r' && text[129] == '\n') length = 128;
     if (length != 128) return false;
-    for (size_t i = 0; i < 128; ++i) {
-        const char c = text[i];
-        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
-    }
-    return decodeHex(text.data(), 128, sig);
+    return decodeHexFixed(text.substr(0, 128), 64, sig, true);
 }
 
 bool sha256Raw(const std::string& bytes, unsigned char digest[32]) {
@@ -62,7 +48,7 @@ bool verifyWithKey(const char* keyHex, const unsigned char digest[32], const uns
     } blob = {};
     blob.header.dwMagic = BCRYPT_ECDSA_PUBLIC_P256_MAGIC;
     blob.header.cbKey = 32;
-    if (!decodeHex(keyHex, 128, blob.xy)) return false;
+    if (!decodeHexFixed(std::string(keyHex, 128), 64, blob.xy, false)) return false;
 
     BCRYPT_ALG_HANDLE alg = nullptr;
     if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_ECDSA_P256_ALGORITHM, nullptr, 0) != 0) return false;

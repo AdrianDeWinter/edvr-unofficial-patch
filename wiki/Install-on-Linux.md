@@ -17,7 +17,7 @@ This section is for a Steam copy. That includes Flatpak Steam, when Steam's file
 ./ed-up-launcher.sh
 ```
 
-Run it as your normal user, without sudo. The launcher window opens on your Odyssey folder. Install, Update, Repair and Uninstall are buttons in that window. The launcher installs from a release it has downloaded: press **Download** when it says an update is available.
+Run it as your normal user, without sudo. The launcher window opens on your Odyssey folder. Install, Update, Repair and Uninstall are buttons in that window. The launcher installs from a release it has downloaded: press **Download & install** when it says an update is available.
 
 To see what would run first:
 
@@ -41,7 +41,7 @@ When the prefix record is missing or stale, point the script at the Proton you u
 
 `--steam-dir`, or the variable `STEAM_DIR`, selects a Steam folder in a nonstandard place. `--game-dir` selects one product folder when several are installed.
 
-Headset software under Proton is your own setup. This package places ED-UP's files and leaves Elite's launch options as they are.
+Headset software under Proton is your own setup. This package places ED-UP's files and leaves Elite's launch options as they are. On hybrid-GPU laptops (integrated GPU + NVIDIA discrete GPU), if Elite or ED-UP picks the integrated GPU under Proton, launch with `__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia` (or set `DXVK_FILTER_DEVICE_NAME`).
 
 ## Repair, uninstall, and logs
 
@@ -58,7 +58,7 @@ The script can find:
 | The game was installed with | What the script reads |
 | --- | --- |
 | Epic's native Linux launcher (the Preview) | Epic's install journal, and the matching Proton prefix |
-| Heroic, normally or as a Flatpak | Heroic's Legendary records |
+| Heroic, normally or as a Flatpak | Heroic's Legendary records, or default `~/Games/Heroic/EliteDangerous` and prefix |
 | Legendary on its own | Legendary's install list |
 | Lutris, normally or as a Flatpak | Lutris's game and runner settings |
 | The Windows Epic launcher in an existing Wine prefix | Epic's records inside that prefix |

@@ -340,9 +340,10 @@ def _reserved_target_problem(target):
     top_level = "/" not in path
     if target["root"] == "game" and path.startswith("openvr/"):
         return "is under the openvr folder, which the openvr root names"
-    if path.startswith(("edvr_install/", "edvr_backup/")):
+    if path.startswith(("edup_install/", "edup_backup/", "edvr_install/", "edvr_backup/")):
         return "is inside a folder the installer keeps its record and backups in"
-    if top_level and path in ("edvr_profile.ini", "edvr_openxr.ini", "openvr_api_orig.dll"):
+    if top_level and path in ("edup_profile.ini", "edup_openxr.ini",
+                              "edvr_profile.ini", "edvr_openxr.ini", "openvr_api_orig.dll"):
         return "is a file the installer writes itself"
     if leaf.endswith(".base"):
         return "is a .base copy the installer keeps"
@@ -376,10 +377,10 @@ def _cross_file_problems(files):
             if profile not in (["vr"], ["flat"]):
                 problems.append("file %s is a settings file and needs when.profile exactly [vr] or [flat]"
                                 % entry["id"])
-            elif (entry["target"]["root"] != "game" or entry["target"]["path"].lower() !=
-                  ("edvr.ini" if profile == ["vr"] else "edvr-flat.ini")):
+            elif (entry["target"]["root"] != "game" or entry["target"]["path"].lower() not in
+                  (("edup.ini", "edvr.ini") if profile == ["vr"] else ("edup-flat.ini", "edvr-flat.ini"))):
                 problems.append("file %s is a settings file and must target game %s"
-                                % (entry["id"], "edvr.ini" if profile == ["vr"] else "edvr-flat.ini"))
+                                % (entry["id"], "edup.ini" if profile == ["vr"] else "edup-flat.ini"))
             elif profile[0] in settings:
                 problems.append("file %s is a second settings file for its profile (after %s)"
                                 % (entry["id"], settings[profile[0]]))

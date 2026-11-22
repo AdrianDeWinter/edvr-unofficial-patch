@@ -763,7 +763,7 @@ void testSourcePins(const std::string& root) {
     const std::string ex = slurp(root, "src/d3d11/exposure_fix.cpp");
     const std::string exh = slurp(root, "src/d3d11/exposure_fix.h");
     const std::string dh = slurp(root, "src/d3d11/device_hook.cpp");
-    const std::string ini = slurp(root, "edvr.ini");
+    const std::string ini = slurp(root, "edup.ini");
     check(!ex.empty() && !exh.empty() && !dh.empty() && !ini.empty(), "the sources are readable");
 
     const size_t hd = find(ex, "void STDMETHODCALLTYPE hookedDispatch(");

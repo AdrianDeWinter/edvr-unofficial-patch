@@ -16,10 +16,6 @@ namespace {
 constexpr const wchar_t* kAppName = L"ED-UP Launcher";
 constexpr const wchar_t* kPublisher = L"ED-UP (unofficial)";
 
-bool sameFile(const std::wstring& a, const std::wstring& b) {
-    return !a.empty() && !b.empty() && _wcsicmp(a.c_str(), b.c_str()) == 0;
-}
-
 // Deletes everything under `dir`, then `dir`, but leaves `keep` (a file path) alone. A link
 // to a folder is unlinked, never followed. False when something was left behind.
 bool removeTree(const std::wstring& dir, const std::wstring& keep) {
@@ -39,7 +35,7 @@ bool removeTree(const std::wstring& dir, const std::wstring& keep) {
                 }
                 continue;
             }
-            if (sameFile(path, keep)) {
+            if (samePath(path, keep)) {
                 clean = false;
                 continue;
             }
@@ -179,7 +175,7 @@ bool unregisterLauncher(const RegisterTargets& t, const std::wstring& runningExe
         const bool clean = removeTree(t.launcherDir, runningExe);
         if (clean) {
             out.notes.push_back("Removed the launcher folder.");
-        } else if (sameFile(joinPath(t.launcherDir, leafOf(runningExe)), runningExe) && fileExists(runningExe)) {
+        } else if (samePath(joinPath(t.launcherDir, leafOf(runningExe)), runningExe) && fileExists(runningExe)) {
             out.exeRemains = true;
             out.notes.push_back("The launcher's own file is deleted when this window closes.");
         } else {

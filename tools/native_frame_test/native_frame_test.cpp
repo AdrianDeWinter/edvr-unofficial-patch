@@ -241,7 +241,7 @@ int wmain(int argc, wchar_t** argv) {
     check(edvrQueryNativeRenderSettings(EDVR_NATIVE_RENDER_SETTINGS_VERSION_2,
                                         sizeof(renderSettings), &renderSettings) == TRUE,
           "the render settings query publishes this headset's labels");
-    // The keys live in [experimental] since 2026-09-29 (edvr.ini's
+    // The keys live in [experimental] since 2026-09-29 (edup.ini's
     // `# moved-from: fix.fov_trim_*`; tools/config_test proves an old line is
     // read as the new name and tools/installer_test that the merge carries it).
     edvr::Config::get().set("experimental.fov_trim_outer", "oculus/meta-quest-3:7");

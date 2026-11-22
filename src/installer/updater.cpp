@@ -233,7 +233,8 @@ UpdateCheck Updater::check() {
     // is replaced, as a re-cut does, GitHub's download cache serves the old bytes for some minutes
     // while the API already lists the new ones (seen on the 2026-11-07 test release). Nothing is
     // offered, and the next check looks again; only the signature can refuse a release.
-    if (!manifestAsset.digest.empty() && sha256Bytes(manifestBytes.data(), manifestBytes.size()) != manifestAsset.digest)
+    const std::string manifestSha = sha256Bytes(manifestBytes.data(), manifestBytes.size());
+    if (!manifestAsset.digest.empty() && manifestSha != manifestAsset.digest)
         return outcomeOnly(UpdateOutcome::Skipped, "GitHub is still serving an older copy of the manifest, so the update check was skipped");
     if (!signatureAsset.digest.empty() && sha256Bytes(signatureText.data(), signatureText.size()) != signatureAsset.digest)
         return outcomeOnly(UpdateOutcome::Skipped, "GitHub is still serving an older copy of the signature, so the update check was skipped");
@@ -254,7 +255,7 @@ UpdateCheck Updater::check() {
     if (manifest.tag != tag)
         return outcomeOnly(UpdateOutcome::Refused, "the release " + tag + " was refused: its manifest is for another tag");
     // A re-offered release whose digest GitHub did not report is caught here.
-    if (sha256Bytes(manifestBytes.data(), manifestBytes.size()) == state.currentManifest())
+    if (manifestSha == state.currentManifest())
         return outcomeOnly(UpdateOutcome::UpToDate, "ED-UP is up to date");
     if (manifest.issued < state.highestIssued())
         return outcomeOnly(UpdateOutcome::UpToDate, "the release " + tag + " is older than one already accepted and was ignored");
@@ -265,7 +266,7 @@ UpdateCheck Updater::check() {
     result.outcome = UpdateOutcome::Available;
     result.message = "ED-UP " + manifest.version + " is available";
     result.tag = tag;
-    result.manifestSha256 = sha256Bytes(manifestBytes.data(), manifestBytes.size());
+    result.manifestSha256 = manifestSha;
     result.manifestBytes = std::move(manifestBytes);
     result.signatureText = std::move(signatureText);
     result.signatureVerified = true;
@@ -277,7 +278,8 @@ UpdateCheck Updater::check() {
 }
 
 bool Updater::downloadUpdate(const UpdateCheck& check, const std::atomic<bool>* cancel,
-                             const DownloadProgress& progress, std::string* error) {
+                             const DownloadProgress& progress, std::string* error,
+                             std::set<std::string>* verifiedOut) {
     if (check.outcome != UpdateOutcome::Available) {
         if (error) *error = "there is no update to download";
         return false;
@@ -311,10 +313,11 @@ bool Updater::downloadUpdate(const UpdateCheck& check, const std::atomic<bool>* 
         }
         return true;
     };
-    return cache.ensureFiles(check.manifest, fetcher, error);
+    return cache.ensureFiles(check.manifest, fetcher, error, nullptr, verifiedOut);
 }
 
-bool Updater::commitManifest(const UpdateCheck& check, std::string* error) {
+bool Updater::commitManifest(const UpdateCheck& check, std::string* error,
+                             const std::set<std::string>* preVerified) {
     auto fail = [&](const char* text) {
         if (error) *error = text;
         return false;
@@ -326,7 +329,7 @@ bool Updater::commitManifest(const UpdateCheck& check, std::string* error) {
     if (!loadVerifiedManifest(check.manifestBytes, check.signatureText, keys(), &verified, error)) return false;
 
     PayloadCache cache(settings_.cacheDir);
-    if (!cache.hasAll(verified)) return fail("the payload cache does not hold every file of this release yet");
+    if (!cache.hasAll(verified, preVerified)) return fail("the payload cache does not hold every file of this release yet");
 
     const std::wstring dir = joinPath(settings_.launcherDir, L"manifests");
     if (!createDirectories(dir)) return fail("the manifests folder cannot be created");

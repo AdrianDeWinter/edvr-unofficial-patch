@@ -741,7 +741,7 @@ int main(int argc, char** argv) {
         const std::string hook = slurp(root + "\\src\\d3d11\\terrain_cull_cover_hook.cpp");
         const std::string core = slurp(root + "\\src\\d3d11\\terrain_cull_cover_core.h");
         const std::string build = slurp(root + "\\build.bat");
-        const std::string ini = slurp(root + "\\edvr.ini");
+        const std::string ini = slurp(root + "\\edup.ini");
         check(occurrencesLive(device, "terrainCullCoverInstall(!runtimeScopeIncludesVr());") == 1 && precedes(device, "vertexResyncInstall();", "terrainCullCoverInstall(!runtimeScopeIncludesVr());"),
               "C7.a device_hook.cpp installs the cover once, with the install scope, in the startup block");
         check(occurrencesLive(device, "terrainCullCoverPoll(stampMs());") == 1 && precedes(device, "vScreenRefreshConfig();", "terrainCullCoverPoll(stampMs());"), "C7.b ...and polls it once a second after the config reload");
@@ -755,7 +755,7 @@ int main(int argc, char** argv) {
         check(occurrences(hook, "return forward(a, b, c, d, r.vfov, r.aspect);") == 1 && occurrences(hook, "BuilderFn = uintptr_t (__fastcall*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, float, float);") == 1,
               "C7.d the detour forwards the four register arguments untouched and only the two floats it computed");
         check(!has(hook, "Config::") && !has(hook, "getBool(") && !has(hook, "getString(") && !has(core, "terrain_cull_cover =") && !has(ini, "terrain_cull_cover"),
-              "C7.e there is no key: the hook reads no config and edvr.ini documents none");
+              "C7.e there is no key: the hook reads no config and edup.ini documents none");
         check(occurrences(build, "\"src\\d3d11\\terrain_cull_cover_hook.cpp\"") >= 1 && occurrences(build, ":rig_terrain_cover_test") == 1, "C7.f build.bat compiles the hook into the DLL and has this rig");
     }
     std::printf("terrain_cover_test: %u checks, 0 failures\n", checks);

@@ -207,7 +207,7 @@ inline void run185(Check&& check) {
 
     // ---- 6. the key and the source sites ---------------------------------------------------------------------------------------------------------------------------------------------------------
     {
-        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edvr.ini"), logpin = slurp("src/d3d11/native_on_foot_logpin.h");
+        const std::string cpp = slurp("src/d3d11/native_on_foot.cpp"), ini = slurp("edup.ini"), logpin = slurp("src/d3d11/native_on_foot_logpin.h");
         const auto has = [&](const std::string& needle) { return cpp.find(needle) != std::string::npos; };
         const auto at = [&](const std::string& needle) { return cpp.find(needle); };
         const size_t keyAt = ini.find("\nnative_on_foot_ads_left_reach = 0.92\n"), uiAt = ini.find("# ui: ADS left arm reach | range 0.8..1 | step 0.01 | live\n"), hipAt = ini.find("\nnative_on_foot_hip_elbow_swivel_max_deg = "),
@@ -217,7 +217,7 @@ inline void run185(Check&& check) {
                   has("if (first || reach != g_adsLeftReachLast)") && has("native on foot ADS left arm reach dial (F185, TEMPORARY): experimental.native_on_foot_ads_left_reach = %.2f") &&
                   has("g_adsLeftReach.store(static_cast<float>(reach), std::memory_order_relaxed);") && countOf(ini, "native_on_foot_ads_left_reach =") == 1 && keyAt != std::string::npos && uiAt != std::string::npos &&
                   uiAt < keyAt && hipAt < uiAt && keyAt < squareAt && ini.find("# TEMPORARY (F185): ADS left arm reach:") != std::string::npos,
-              "F185: the key is read from [experimental] (default 0.92, held to 0.80..1.00), logged at the first read and at each change, stored for the pin and the arm solve, and shipped in edvr.ini with its ui row after the hip elbow row");
+              "F185: the key is read from [experimental] (default 0.92, held to 0.80..1.00), logged at the first read and at each change, stored for the pin and the arm solve, and shipped in edup.ini with its ui row after the hip elbow row");
         // the pin's reach rule
         check(has("const double f185Dial = static_cast<double>(g_adsLeftReach.load(std::memory_order_relaxed));\n            pc.f185Gate = physicalPoleActive && (stableSupportPolicy || rifleStableAuthority);") &&
                   has("if (side == 0 && pc.f185Gate && !nofoot::f185::off(f185Dial)) {") && has("const double rn = nofoot::f185::reachRadiusM(R[0], armLen[0], clavLen[0], f185Dial, pc.detachW);") &&

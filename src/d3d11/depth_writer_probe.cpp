@@ -349,7 +349,7 @@ void closeProbedFrame(ID3D11DeviceContext* ctx) {
         if (g_rows[i].finalPixels) owners.push_back({static_cast<uint32_t>(i + 1), g_rows[i].finalPixels});
     std::sort(owners.begin(), owners.end(), [](const Owner& a, const Owner& b) { return a.pixels > b.pixels; });
     Log::get().note("depth writer probe: run %ls frame %u done -- %u depth-writing draws followed (eye 0 %u, eye 1 %u), %u not into an eye's depth, "
-                    "%u declined (format or size), %u dropped past the cap; %u map(s) and the draw table written to edvr_logs\\pool\\depthwriter_%ls*.",
+                    "%u declined (format or size), %u dropped past the cap; %u map(s) and the draw table written to edup_logs\\pool\\depthwriter_%ls*.",
                     g_stamp, g_targetFrame, static_cast<unsigned>(g_rows.size()), g_eye[0].followed, g_eye[1].followed, g_skipped, g_declined, g_dropped,
                     written, g_stamp);
     for (size_t i = 0; i < owners.size() && i < kMaxLoggedOwners; ++i) {
