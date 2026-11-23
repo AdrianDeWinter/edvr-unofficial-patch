@@ -1595,6 +1595,9 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                             }
                         } else {
                             next.drop(earlier->id);
+                            // Standing down with the option still on: the file is the player's own EDHM update,
+                            // so remember it, or the next install would back it up and overwrite it.
+                            if (o.edhm2dMigoto) next.edhmExternalSha = cur.sha256;
                             plan.notes.push_back("d3d11_edhm.dll is no longer the 2DMigoto copy ED-UP placed; leaving your copy in place.");
                         }
                     }

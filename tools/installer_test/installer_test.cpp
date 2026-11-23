@@ -8979,6 +8979,31 @@ int wmain(int argc, wchar_t** argv) {
                               readAll(d3dxPath) == sampleD3dx,
                           "planInstall with incompatible read-only d3dx.ini stands down existing 2DMigoto and restores standard DLL");
                 }
+                // A player's own EDHM update found while standing down for d3dx.ini stays theirs: once
+                // d3dx.ini is fixed, the next install must not back it up and overwrite it with 2DMigoto.
+                {
+                    const std::string stdEdhmV5 = syntheticPe({"D3D11CreateDevice"}) + "STD-EDHM-V5-UPDATE-DURING-STAND-DOWN";
+                    SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+                    check(applyPlan(planEdhmToggle(surveyEdhm(), roTog, p2), providerFor(p2)).ok,
+                          "re-enable 2DMigoto before the stand-down external update test");
+                    writeAll(joinPath(gameDir, L"d3d11_edhm.dll"), stdEdhmV5);
+                    writeAll(d3dxPath, sampleD3dx);
+                    SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_READONLY);
+                    Options extOpt;
+                    extOpt.edhm2dMigoto = true;
+                    extOpt.backupStamp = L"t12rox1";
+                    const Plan extPlan = planInstall(surveyEdhm(), extOpt, p2);
+                    check(!extPlan.blocked && applyPlan(extPlan, providerFor(p2)).ok &&
+                              readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV5 &&
+                              !readState(gameDir).edhmExternalSha.empty(),
+                          "stand-down over a player's EDHM update keeps their DLL and records it as external");
+                    SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+                    extOpt.backupStamp = L"t12rox2";
+                    check(applyPlan(planInstall(surveyEdhm(), extOpt, p2), providerFor(p2)).ok &&
+                              readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV5,
+                          "install after d3dx.ini is fixed keeps the player's EDHM update from the stand-down");
+                    writeAll(joinPath(gameDir, L"d3d11_edhm.dll"), stdEdhmV2);
+                }
                 // Re-enable cleanly so we can test pending restore, missing-d3dx clear, and read-only uninstall wording.
                 SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_NORMAL);
                 check(applyPlan(planEdhmToggle(surveyEdhm(), roTog, p2), providerFor(p2)).ok &&
