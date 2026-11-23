@@ -1368,18 +1368,21 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         if (s.d3dxIniUnreadable) {
             edhmD3dxStandDownProblem =
                 "d3dx.ini cannot be read; standing down the optional 2DMigoto runtime while core ED-UP "
-                "proceeds. Close anything holding d3dx.ini open and re-apply 2DMigoto.";
+                "proceeds. Close anything holding d3dx.ini open: while the option stays on, the next install "
+                "or repair puts 2DMigoto back by itself.";
         } else if (s.d3dxIniUtf16) {
             edhmD3dxStandDownProblem =
                 "d3dx.ini is UTF-16 encoded; ED-UP only edits UTF-8/ASCII d3dx.ini files, so the optional "
-                "2DMigoto runtime is standing down while core ED-UP proceeds. Convert d3dx.ini to UTF-8 "
-                "and re-apply 2DMigoto, or turn off the experimental 2DMigoto option.";
+                "2DMigoto runtime is standing down while core ED-UP proceeds. Convert d3dx.ini to UTF-8: "
+                "while the option stays on, the next install or repair then puts 2DMigoto back by itself. "
+                "Or turn off the experimental 2DMigoto option.";
         } else {
             edhmD3dxStandDownProblem =
                 "d3dx.ini is read-only and has incompatible EDHM settings ([System] allow_platform_update "
                 "must be absent or truthy, [Device] upscaling must be absent or 0); standing down the "
                 "optional 2DMigoto runtime while core ED-UP proceeds. Clear read-only or adjust those "
-                "keys yourself, then re-apply 2DMigoto.";
+                "keys yourself: while the option stays on, the next install or repair then puts 2DMigoto "
+                "back by itself.";
         }
     }
     bool edhmStandDownTriggered = false;
