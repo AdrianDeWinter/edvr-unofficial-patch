@@ -13,6 +13,7 @@
 #include "../common/config.h"
 #include "../common/log.h"
 #include "../common/runtime_profile.h"
+#include "flat_cpu_trace.h"   // the flat profile's XeSS-FG and XeLL spans (0x201-0x207)
 #include "xess_fg_presented.h"
 
 #ifndef EDVR_HAVE_XESS
@@ -731,7 +732,11 @@ void sampleFrameStatistics(Bridge& b) {
 
 // The plain swap chain's Present, counted: after a fall back every Present puts one frame on the screen, and DXGI's own count says so.
 HRESULT plainPresentCounted(Bridge& b, IDXGISwapChain* hidden, UINT syncInterval, UINT flags) {
-    const HRESULT hr = plainPresent(b, hidden, syncInterval, flags);
+    HRESULT hr = S_OK;
+    {
+        openxr::NativeCpuTraceSpan span(EdvrCpuFgPlainPresent, flatCpuTraceOn());
+        hr = span.finish(plainPresent(b, hidden, syncInterval, flags));
+    }
     notePresentFailure(b, "the plain swap chain's", hr);
     if (SUCCEEDED(hr) && b.plain) {
         sampleFrameStatistics(b);
@@ -766,7 +771,10 @@ void refreshFullscreen(Bridge& b) {
 }
 
 void llMarker(Bridge& b, uint32_t id, xell_latency_marker_type_t marker) {
-    if (b.llContext) b.ll.marker(b.llContext, id, marker);
+    if (!b.llContext) return;
+    openxr::NativeCpuTraceSpan span(EdvrCpuXellMarker, flatCpuTraceOn());
+    b.ll.marker(b.llContext, id, marker);
+    span.finishVoid(static_cast<int64_t>(marker));
 }
 
 // XeLL wants, per frame id: sleep, then the simulation, render submit and present markers in order. Elite's
@@ -774,7 +782,10 @@ void llMarker(Bridge& b, uint32_t id, xell_latency_marker_type_t marker) {
 void startFrame(Bridge& b) {
     if (!b.llContext || b.startedId == b.frameId) return;
     b.startedId = b.frameId;
-    b.ll.sleep(b.llContext, b.frameId);
+    {
+        openxr::NativeCpuTraceSpan span(EdvrCpuXellSleep, flatCpuTraceOn());
+        span.finish(b.ll.sleep(b.llContext, b.frameId));
+    }
     llMarker(b, b.frameId, XELL_SIMULATION_START);
     llMarker(b, b.frameId, XELL_SIMULATION_END);
     llMarker(b, b.frameId, XELL_RENDERSUBMIT_START);
@@ -1268,10 +1279,16 @@ HRESULT xessFgPresent(IDXGISwapChain* hidden, UINT syncInterval, UINT flags) {
     bool copied = false;
     if (sourceBuffer(hidden, back, &source)) {
         syncProxy(*b, source.Width, source.Height, source.Format);
+        openxr::NativeCpuTraceSpan span(EdvrCpuFgCopyIn, flatCpuTraceOn());
         copied = !b->failed && copyIn(*b, back.Get(), &skipReason);
+        span.finishVoid(copied ? 1 : 0);
     }
     back.Reset();
-    if (copied) submitToProxy(*b);
+    if (copied) {
+        openxr::NativeCpuTraceSpan span(EdvrCpuFgSubmitToProxy, flatCpuTraceOn());
+        submitToProxy(*b);
+        span.finishVoid(0);
+    }
     // A frame that cannot be copied is dropped (below), but one that never can again would freeze the window on the
     // last good image while the game runs on: past kMaxDroppedRun in a row, the plain swap chain takes over.
     b->droppedRun = copied || b->failed ? 0 : b->droppedRun + 1;
@@ -1326,14 +1343,21 @@ HRESULT xessFgPresent(IDXGISwapChain* hidden, UINT syncInterval, UINT flags) {
     const UINT presentFlags = presentFlagsFor(*b, syncInterval, flags);
     llMarker(*b, id, XELL_PRESENT_START);
     b->fg.setPresentId(b->fgContext, id);
-    const HRESULT hr = b->proxy->Present(syncInterval, presentFlags);
+    HRESULT hr = S_OK;
+    {
+        openxr::NativeCpuTraceSpan span(EdvrCpuFgProxyPresent, flatCpuTraceOn());
+        hr = span.finish(b->proxy->Present(syncInterval, presentFlags));
+    }
     notePresentFailure(*b, "the proxy's", hr);
     llMarker(*b, id, XELL_PRESENT_END);
 
     xefg_swapchain_present_status_t status{};
-    const xefg_swapchain_result_t st = b->fg.lastStatus(b->fgContext, &status);
+    xefg_swapchain_result_t st{};
     // Frames that reached the screen: XeSS-FG's own count for this Present, else DXGI's frame statistics (xess_fg_presented.h).
     {
+        openxr::NativeCpuTraceSpan span(EdvrCpuFgPresentStatus, flatCpuTraceOn());
+        st = b->fg.lastStatus(b->fgContext, &status);
+        span.finishVoid(static_cast<int64_t>(st));
         LARGE_INTEGER presentedAt;
         QueryPerformanceCounter(&presentedAt);
         b->tally.onStatus(st >= 0, st >= 0 ? status.framesPresented : 0u, presentedAt.QuadPart);

@@ -116,6 +116,17 @@ internal static class Program
         return Directory.Exists(symbols) ? symbols : null;
     }
 
+    /// VR frame markers (event 3) decide a VR report even when present markers (event 5)
+    /// are also there; present markers alone decide a flat report.
+    internal static string ModeFor(Collected data)
+    {
+        if (data.Frames.Count > 0) return "vr";
+        if (data.PresentFrames.Count > 0) return "flat";
+        throw new InvalidDataException($"trace has no EDVR frame markers (clocks={data.Clocks.Count}): " +
+                                       "the provider was not enabled in the game, or the installed DLLs " +
+                                       "predate flat markers; check the 'cpu trace:' line in the graphics log");
+    }
+
     private static Dictionary<string, object?> Analyze(Options options, Action<string>? progress)
     {
         var runtimeLog = options.RuntimeLog is null ? null : RuntimeLog.Parse(options.RuntimeLog, options.Pid);
@@ -137,6 +148,12 @@ internal static class Program
                 progress?.Invoke($"symbols: {options.Symbols} enabled={symbols.Enabled} " +
                                  $"matched={symbols.Modules.Count(module => module.Matched)}" +
                                  $"/{symbols.Modules.Count}");
+            if (ModeFor(data) == "flat")
+            {
+                if (options.EdvrExport is not null)
+                    progress?.Invoke("--edvr-export is VR-only; ignored for a flat trace");
+                return FlatReport.Build(options.Input, options.Pid, data, options.Frames, symbols, progress);
+            }
             return Report.Build(options.Input, options.Pid, data, options.Frames, runtimeLog, symbols, progress,
                                 options.EdvrExport, options.EdvrExportWindow, options.EdvrExportRegion);
         }

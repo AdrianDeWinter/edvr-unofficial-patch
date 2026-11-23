@@ -58,6 +58,12 @@ class NativeCpuTrace final {
     const bool written=active&&(maybeClockLocked(),writeLocked(descriptor(EdvrNativeGpuCompletionEvent),payload));
     ReleaseSRWLockShared(&lock_);return written;
   }
+  bool emitPresentFrame(const EdvrNativePresentFramePayload& payload) noexcept {
+    if(!enabled())return false;
+    AcquireSRWLockShared(&lock_);const bool active=handle_&&enabled();
+    const bool written=active&&(maybeClockLocked(),writeLocked(presentFrameDescriptor(),payload));
+    ReleaseSRWLockShared(&lock_);return written;
+  }
   Counters counters() const noexcept {
     return {emitted_.load(std::memory_order_relaxed),failures_.load(std::memory_order_relaxed),
       lastError_.load(std::memory_order_relaxed)};
@@ -83,6 +89,9 @@ class NativeCpuTrace final {
   static const EVENT_DESCRIPTOR& frameDescriptor() noexcept{return descriptor(EdvrNativeCpuCompletedFrameEvent);}
   static const EVENT_DESCRIPTOR& frameDescriptorV2() noexcept {
     static const EVENT_DESCRIPTOR value={EdvrNativeCpuCompletedFrameEvent,2,0,4,0,0,1};return value;
+  }
+  static const EVENT_DESCRIPTOR& presentFrameDescriptor() noexcept {
+    static const EVENT_DESCRIPTOR value={EdvrNativePresentFrameEvent,1,0,4,0,0,1};return value;
   }
   static VOID NTAPI enableCallback(LPCGUID,ULONG enabled,UCHAR level,ULONGLONG any,
       ULONGLONG,PEVENT_FILTER_DESCRIPTOR,PVOID context) noexcept {
@@ -134,6 +143,8 @@ class NativeCpuTrace final {
 class NativeCpuTraceSpan final {
  public:
   explicit NativeCpuTraceSpan(uint16_t operation) noexcept:active_(NativeCpuTrace::get().beginSpan(operation,payload_,generation_)){}
+  // want=false (the flat gate is shut): no begin, no end, nothing read beyond the argument.
+  NativeCpuTraceSpan(uint16_t operation,bool want) noexcept:active_(want&&NativeCpuTrace::get().beginSpan(operation,payload_,generation_)){}
   ~NativeCpuTraceSpan(){if(active_)NativeCpuTrace::get().endSpan(payload_,generation_);}
   NativeCpuTraceSpan(const NativeCpuTraceSpan&)=delete;
   NativeCpuTraceSpan& operator=(const NativeCpuTraceSpan&)=delete;

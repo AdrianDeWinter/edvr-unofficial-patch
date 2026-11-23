@@ -25,6 +25,7 @@ logged, not an error -- the game may be running an older build.
 import sys
 sys.dont_write_bytecode = True
 import argparse
+import contextlib
 import csv
 import ctypes
 import hashlib
@@ -33,6 +34,7 @@ import io
 import json
 import math
 import os
+import re
 from pathlib import Path, PureWindowsPath
 import shutil
 import struct
@@ -504,9 +506,46 @@ def native_log_time(line):
     return value.replace(tzinfo=timezone.utc).timestamp()
 
 
+GFX_LOG_SLACK_SECONDS = 2.0
+
+
+def gfx_flight(path, pid, expected, process_created):
+    """The flight a graphics log records, or None when the log is not this process's.
+
+    A graphics log is named edvr_gfx_YYYYMMDD_HHMMSS.log, stamped with the local time it was opened, and a
+    second log opened in the same second carries _mmm_pid. It is accepted only when the name's pid suffix,
+    if any, equals pid; it was opened no earlier than the process was created (less the slack for the
+    stamp's whole-second truncation) and not in the future; and its head states the flat profile
+    (`profile: flat`). A graphics log never names its own pid, so the head is not scanned for one. A VR
+    flight's graphics log says another profile and is refused here, so in VR only the OpenXR log verifies
+    the build."""
+    import edup_log
+    named = edup_log.log_name_time(path)   # (local time the name says it opened, tag, has ms)
+    if named is None or named[1] != "gfx":
+        return None
+    m = edup_log.LOG_RE.match(Path(path).name)   # the pid group is the only field log_name_time does not return
+    if m.group("pid") is not None and int(m.group("pid")) != pid:
+        return None
+    opened = named[0].timestamp()   # local time, as named
+    if opened < process_created - GFX_LOG_SLACK_SECONDS or opened > time.time() + GFX_LOG_SLACK_SECONDS:
+        return None
+    with open(path, "rb") as handle:
+        text = handle.read(64 * 1024).decode("utf-8", errors="replace")
+    head = text.splitlines()[:60]
+    if not any(re.search(r"\] profile: flat\b", line) for line in head):
+        return None   # not a flat flight's log (a VR flight's graphics log says another profile)
+    line, actual, _ = edup_log.version_line(text)
+    if actual is None:
+        return None   # the version note is the log's first lines; none yet means not ready, so keep waiting
+    if not edup_log.version_matches(actual, expected):
+        raise ValueError("Captured flight build %r does not match %r" % (actual, expected))
+    return dict(log=path, version=actual, kind="gfx")
+
+
 def flight_version(target, pid, expected, process_created):
     # Keep all flight-log discovery/reading in the sanctioned log module.
     import edup_log
+    # The OpenXR runtime's log is preferred. It exists only in VR: a flat profile never loads that runtime.
     for directory in edup_log.log_dirs_for(str(target), "openxr"):
         for _, _, path in edup_log.find_logs(directory, "openxr"):
             if Path(path).name.endswith("_%d.log" % pid):
@@ -518,8 +557,17 @@ def flight_version(target, pid, expected, process_created):
                     continue
                 if not edup_log.version_matches(actual, expected):
                     raise ValueError("Captured flight build %r does not match %r" % (actual, expected))
-                return dict(log=path, version=actual)
-    raise FileNotFoundError("No fresh native flight log found for captured PID %d" % pid)
+                return dict(log=path, version=actual, kind="openxr")
+    # The flat profile writes only the graphics log, and its head states `profile: flat`; a VR flight's graphics
+    # log is refused by gfx_flight, so in VR only the OpenXR log above can verify the build.
+    graphics = []
+    for directory in edup_log.log_dirs_for(str(target), "gfx"):
+        graphics += edup_log.find_logs(directory, "gfx")
+    for _, _, path in sorted(graphics, reverse=True):
+        found = gfx_flight(path, pid, expected, process_created)
+        if found is not None:
+            return found
+    raise FileNotFoundError("No fresh EDVR flight log found for captured PID %d" % pid)
 
 
 def wait_for_flight_version(target, process, expected, timeout=30, finder=flight_version,
@@ -531,13 +579,14 @@ def wait_for_flight_version(target, process, expected, timeout=30, finder=flight
             verified = finder(target, process.pid, expected, created)
         except FileNotFoundError:
             if process.exited():
-                raise RuntimeError("Elite exited before its native EDVR log appeared")
+                raise RuntimeError("Elite exited before its EDVR flight log appeared")
             if clock() >= end:
-                raise TimeoutError("No fresh native EDVR log appeared within %d seconds" % timeout)
+                raise TimeoutError("No fresh EDVR flight log appeared within %d seconds (the OpenXR runtime's "
+                                   "log in VR, the graphics log in flat)" % timeout)
             sleep(min(0.25, max(0.0, end - clock())))
             continue
         if process.exited():
-            raise RuntimeError("Elite exited during native EDVR build verification")
+            raise RuntimeError("Elite exited during EDVR build verification")
         return verified
 
 
@@ -814,9 +863,12 @@ def plan(args):
     expected = edup_log.expected_version(args.expect_build, str(ROOT))
     dotnet = shutil.which("dotnet")
     wpr = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "wpr.exe"
+    remedies = {ANALYZER: "build it once per checkout with tools\\cpu_profile.py --build-analyzer",
+                SMOKE: "run the full build.bat, which builds it"}
     for path in (PROFILE, ANALYZER, wpr, *([SMOKE] if args.smoke_first else [])):
         if not path.is_file():
-            raise ValueError("Required tool is missing: " + str(path))
+            remedy = remedies.get(path)
+            raise ValueError("Required tool is missing: " + str(path) + ("; " + remedy if remedy else ""))
     if not dotnet:
         raise ValueError("dotnet runtime is required for CPU trace analysis")
     validate_analyzer()
@@ -847,12 +899,40 @@ def plan(args):
     return result
 
 
-def smoke_test_capture(p, directory):
-    trace = directory / "smoke.etl"
+def validate_flat_smoke_report(report):
+    """Validate the flat fixture: 60 frames, 1-30 busy in F2, 31-60 asleep in F6 under XellSleep."""
+    if report.get("mode") != "flat" or not report.get("coverageComplete") or report.get("analyzedFrameCount") != 60:
+        raise ValueError("Flat synthetic trace is not a complete 60-frame flat report")
+    if report.get("eventsLost") != 0:
+        raise ValueError("Flat synthetic trace lost events")
+    frames = report.get("frames", [])
+    if sorted(frame["sequence"] for frame in frames) != list(range(1, 61)):
+        raise ValueError("Flat synthetic trace did not preserve the complete frame sequence")
+    if not all(frame.get("firstCommandKnown") is True for frame in frames):
+        raise ValueError("Flat synthetic trace has frames without a known first command")
+    span_counts = report.get("spanCounts", {})
+    if span_counts.get("FgProxyPresent") != 60 or span_counts.get("XellSleep") != 30:
+        raise ValueError("Flat synthetic trace span counts differ from the fixture "
+                         "(FgProxyPresent 60, XellSleep 30)")
+    busy = [frame for frame in frames if frame["sequence"] <= 30]
+    sleeping = [frame for frame in frames if frame["sequence"] > 30]
+    busy_running = sum(frame["regions"]["F2"]["runningUs"] for frame in busy)
+    busy_wall = sum(frame["regions"]["F2"]["ms"] * 1000 for frame in busy)
+    sleep_waiting = sum(frame["regions"]["F6"]["waitingUs"] for frame in sleeping)
+    sleep_wall = sum(frame["regions"]["F6"]["ms"] * 1000 for frame in sleeping)
+    if busy_running < busy_wall * 0.5 or sleep_waiting < sleep_wall * 0.5:
+        raise ValueError("Flat synthetic decoder did not distinguish busy game render from the XeLL sleep")
+    return dict(flat_busy_running_ms=round(busy_running / 1000, 2),
+                flat_sleep_waiting_ms=round(sleep_waiting / 1000, 2))
+
+
+def run_smoke_fixture(p, directory, fixture_argument, name, instance, gpu):
+    """Record one synthetic fixture and analyze it. Returns (pid, report path, decoded report)."""
+    trace = directory / (name + ".etl")
     smoke_result = {}
 
     def workload():
-        process = subprocess.Popen([str(SMOKE), "--cpu-trace-smoke"], stdout=subprocess.PIPE,
+        process = subprocess.Popen([str(SMOKE), fixture_argument], stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, text=True,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         smoke_result["pid"] = process.pid
@@ -862,19 +942,30 @@ def smoke_test_capture(p, directory):
             process.kill()
             process.communicate()
             raise
-        (directory / "smoke-output.txt").write_text(stdout + stderr, encoding="utf-8")
+        (directory / (name + "-output.txt")).write_text(stdout + stderr, encoding="utf-8")
         if process.returncode:
             raise RuntimeError("C++ marker smoke fixture failed: " + stdout[-4000:] + stderr[-1000:])
 
-    record(p["wpr"], p["profile"], trace, p["instance"] + "_smoke", workload,
-          filemode=(p["logging_mode"] == "file"), recordtempto=directory, gpu=("gpu" in p))
-    report = directory / "smoke-report.json"
-    print(analyze(p["dotnet"], p["analyzer"], trace, smoke_result["pid"], report, gpu=("gpu" in p)), flush=True)
-    decoded = json.loads(report.read_text(encoding="utf-8"))
+    record(p["wpr"], p["profile"], trace, instance, workload,
+          filemode=(p["logging_mode"] == "file"), recordtempto=directory, gpu=gpu)
+    report = directory / (name + "-report.json")
+    print(analyze(p["dotnet"], p["analyzer"], trace, smoke_result["pid"], report, gpu=gpu), flush=True)
+    return smoke_result["pid"], report, json.loads(report.read_text(encoding="utf-8"))
+
+
+def smoke_test_capture(p, directory):
+    # The VR fixture runs first, with its GPU validation when a GPU flight is planned; the flat
+    # fixture then checks the event 5 path on its own trace.
+    pid, report, decoded = run_smoke_fixture(p, directory, "--cpu-trace-smoke", "smoke",
+                                             p["instance"] + "_smoke", "gpu" in p)
     validated = validate_smoke_report(decoded)
     if "gpu" in p:
         validated.update(validate_gpu_smoke_report(decoded))
-    return dict(pid=smoke_result["pid"], report=str(report), **validated)
+    flat_pid, flat_report, flat_decoded = run_smoke_fixture(p, directory, "--cpu-trace-smoke-flat",
+                                                            "smoke-flat", p["instance"] + "_smoke_flat", False)
+    flat = validate_flat_smoke_report(flat_decoded)
+    return dict(pid=pid, report=str(report), flat=dict(pid=flat_pid, report=str(flat_report), **flat),
+                **validated)
 
 
 def capture_symbols(p, directory):
@@ -896,9 +987,18 @@ def capture_symbols(p, directory):
     symbols_dir = directory / "symbols"
     copied = []
     for entry in matches:
-        label = "matched" if entry["matched"] else "unmatched (game may be running an older build)"
-        print("[edvr] cpu profile: symbols %s: %s guid=%s age=%s" %
-             (label, entry["key"], entry["guid"], entry["age"]), flush=True)
+        if entry["matched"]:
+            print("[edvr] cpu profile: symbols matched: %s guid=%s age=%s" %
+                  (entry["key"], entry["guid"], entry["age"]), flush=True)
+        elif entry["guid"] is None:
+            # No CodeView record at all: the DLL was built without symbols, so no capture can
+            # be symbolized until it is rebuilt with EDVR_PROFILE_SYMBOLS=1.
+            print("[edvr] cpu profile: symbols unavailable: %s: %s has no CodeView record (built without "
+                  "symbols); run set EDVR_PROFILE_SYMBOLS=1 before build.bat, reinstall, capture again" %
+                  (entry["key"], Path(entry["dll"]).name), flush=True)
+        else:
+            print("[edvr] cpu profile: symbols unmatched (game may be running an older build): %s guid=%s age=%s" %
+                  (entry["key"], entry["guid"], entry["age"]), flush=True)
         if entry["matched"]:
             try:
                 symbols_dir.mkdir(parents=True, exist_ok=True)
@@ -1106,20 +1206,35 @@ def self_test():
                        logging_mode="file", gpu={"enabled": True}, output=str(smoke_dir / "capture"), smoke_first=True)
         smoke_process = mock.Mock(pid=789, returncode=0)
         smoke_process.communicate.return_value = ("fixture", "")
+        flat_fixture_report = {"mode": "flat"}
         def smoke_record(*arguments, **keywords):
-            check(keywords["gpu"] and keywords["filemode"])
-            check(arguments[3] == "private_smoke_smoke")
+            if arguments[3] == "private_smoke_smoke":
+                check(keywords["gpu"] and keywords["filemode"])
+            else:
+                # The flat fixture is its own recording: no GPU flight, its own trace and instance.
+                check(arguments[3] == "private_smoke_smoke_flat" and not keywords["gpu"] and keywords["filemode"])
+                check(arguments[2].name == "smoke-flat.etl")
             return arguments[4]()
         def smoke_analyze(*arguments, **keywords):
-            check(keywords["gpu"])
-            check(arguments[2].name == "smoke.etl" and arguments[3] == 789)
-            arguments[4].write_text(json.dumps(gpu_smoke), encoding="utf-8")
+            check(arguments[3] == 789)
+            if arguments[2].name == "smoke.etl":
+                check(keywords["gpu"])
+                arguments[4].write_text(json.dumps(gpu_smoke), encoding="utf-8")
+            else:
+                check(arguments[2].name == "smoke-flat.etl" and not keywords["gpu"])
+                arguments[4].write_text(json.dumps(flat_fixture_report), encoding="utf-8")
             return "fixture analyzed"
         with mock.patch(__name__ + ".record", side_effect=smoke_record), \
                 mock.patch(__name__ + ".analyze", side_effect=smoke_analyze), \
-                mock.patch(__name__ + ".subprocess.Popen", return_value=smoke_process), \
-                mock.patch(__name__ + ".validate_smoke_report", return_value={"cpu": "validated"}):
-            check(smoke_test_capture(p_smoke, smoke_dir)["gpu_provider_coverage"]["gpuBusyTimeAnalyzed"] is False)
+                mock.patch(__name__ + ".subprocess.Popen", return_value=smoke_process) as popen, \
+                mock.patch(__name__ + ".validate_smoke_report", return_value={"cpu": "validated"}), \
+                mock.patch(__name__ + ".validate_flat_smoke_report", return_value={"flat_busy_running_ms": 1.0}) as flat_validate:
+            smoke_outcome = smoke_test_capture(p_smoke, smoke_dir)
+            check(smoke_outcome["gpu_provider_coverage"]["gpuBusyTimeAnalyzed"] is False)
+            check([call.args[0][1] for call in popen.call_args_list] == ["--cpu-trace-smoke", "--cpu-trace-smoke-flat"])
+            check(smoke_outcome["flat"]["pid"] == 789 and smoke_outcome["flat"]["flat_busy_running_ms"] == 1.0)
+            check(smoke_outcome["flat"]["report"].endswith("smoke-flat-report.json"))
+            check(flat_validate.call_args.args[0] == flat_fixture_report)
             gpu_smoke = {"eventsLost": 0}  # CPU-only report must abort before waiting for Elite.
             with mock.patch(__name__ + ".plan", return_value=p_smoke), \
                     mock.patch(__name__ + ".ctypes.windll.shell32.IsUserAnAdmin", return_value=True), \
@@ -1449,6 +1564,56 @@ def self_test():
             with mock.patch.object(edup_log, "find_logs", return_value=[
                     ("", "openxr", str(fresh_good)), ("", "openxr", str(stale))]):
                 check(flight_version(directory, 321, "fixture", process_created)["log"] == str(fresh_good))
+
+        # The flat profile has no OpenXR log: its graphics log is the flight record, checked against the same pid
+        # and the process's creation time, and the OpenXR log wins whenever both exist. Real log folders, no mocks.
+        created = time.time()
+        now_stamp = datetime.fromtimestamp(created).strftime("%Y%m%d_%H%M%S")
+        old_stamp = datetime.fromtimestamp(created - 3600).strftime("%Y%m%d_%H%M%S")
+        gfx_text = "[00:00:00.000] profile: flat (scope both)\n[00:00:00.000] version %s (build 1A2B)\n"
+        vr_text = "[00:00:00.000] profile: vr (scope both)\n[00:00:00.000] version fixture (build 1A2B)\n"
+        native_text = ("%s UTC pid=4242 tid=1 module_init,version=fixture,durable_log=1\n"
+                       % datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:23])
+
+        def flat_game(label, logs):
+            game = directory / label
+            (game / "edup_logs").mkdir(parents=True)
+            for name, text in logs:
+                (game / "edup_logs" / name).write_text(text, encoding="utf-8")
+            return game
+
+        fresh_flat = flat_game("flat_fresh", [("edvr_gfx_%s.log" % now_stamp, gfx_text % "fixture")])
+        flight = flight_version(fresh_flat, 4242, "fixture", created)
+        check(flight["kind"] == "gfx" and flight["version"] == "fixture"
+              and Path(flight["log"]).name == "edvr_gfx_%s.log" % now_stamp)
+        try:
+            flight_version(flat_game("flat_old", [("edvr_gfx_%s.log" % old_stamp, gfx_text % "fixture")]),
+                           4242, "fixture", created)
+            check(False)   # a graphics log from before this process was created was accepted
+        except FileNotFoundError:
+            check(True)
+        try:
+            flight_version(flat_game("vr_profile", [("edvr_gfx_%s.log" % now_stamp, vr_text)]),
+                           4242, "fixture", created)
+            check(False)   # a graphics log whose head says another profile was accepted
+        except FileNotFoundError:
+            check(True)
+        try:
+            flight_version(flat_game("flat_bad", [("edvr_gfx_%s.log" % now_stamp, gfx_text % "wrong")]),
+                           4242, "fixture", created)
+            check(False)
+        except ValueError:
+            check(True)
+        try:
+            flight_version(flat_game("flat_other_pid", [("edvr_gfx_%s_500_9999.log" % now_stamp,
+                                                         gfx_text % "fixture")]), 4242, "fixture", created)
+            check(False)   # a graphics log named for another pid was accepted
+        except FileNotFoundError:
+            check(True)
+        both = flat_game("both", [("edvr_gfx_%s.log" % now_stamp, gfx_text % "fixture"),
+                                  ("edvr_openxr_%s_500_4242.log" % now_stamp, native_text)])
+        flight = flight_version(both, 4242, "fixture", created)
+        check(flight["kind"] == "openxr" and Path(flight["log"]).name.startswith("edvr_openxr_"))
 
         target = directory / "game"
         target.mkdir()
@@ -1876,6 +2041,62 @@ def self_test():
         check(False)
     except ValueError:
         check(True)
+    # The symbols line names the cause. No CodeView record at all means the DLL was built
+    # without symbols; a record that matches no PDB means an older build is running.
+    with tempfile.TemporaryDirectory() as symbol_tmp:
+        symbol_dir = Path(symbol_tmp)
+        dll = str(symbol_dir / "edvr_openxr_graphics.dll")
+        no_record = dict(key="graphics", dll=dll, pdb_name=None, guid=None, age=None, matched=False, pdb=None)
+        mismatched = dict(key="graphics", dll=dll, pdb_name="d3d11.pdb", guid="ABCDEF", age=7, matched=False, pdb=None)
+        for entries, needle in (([no_record], "built without symbols"), ([mismatched], "older build")):
+            buffer = io.StringIO()
+            with mock.patch(__name__ + ".match_symbols", return_value=entries), contextlib.redirect_stdout(buffer):
+                capture_symbols(dict(installed_files=[]), symbol_dir)
+            check(needle in buffer.getvalue())
+        buffer = io.StringIO()
+        with mock.patch(__name__ + ".match_symbols", return_value=[no_record]), contextlib.redirect_stdout(buffer):
+            capture_symbols(dict(installed_files=[]), symbol_dir)
+        check("set EDVR_PROFILE_SYMBOLS=1" in buffer.getvalue() and "older build" not in buffer.getvalue())
+        buffer = io.StringIO()
+        with mock.patch(__name__ + ".match_symbols", return_value=[mismatched]), contextlib.redirect_stdout(buffer):
+            capture_symbols(dict(installed_files=[]), symbol_dir)
+        check("EDVR_PROFILE_SYMBOLS" not in buffer.getvalue())
+
+    # validate_flat_smoke_report: the real validator on a fixture of 60 flat frames.
+    def flat_report():
+        frames = []
+        for sequence in range(1, 61):
+            busy = sequence <= 30
+            frames.append(dict(sequence=sequence, firstCommandKnown=True, regions=dict(
+                F2=dict(ms=100.0 if busy else 0.1, runningUs=100000 if busy else 0),
+                F6=dict(ms=0.1 if busy else 100.0, waitingUs=0 if busy else 100000))))
+        return dict(mode="flat", coverageComplete=True, analyzedFrameCount=60, eventsLost=0,
+                    spanCounts=dict(FgProxyPresent=60, XellSleep=30), frames=frames)
+
+    def flat_refused(mutate):
+        broken = flat_report()
+        mutate(broken)
+        try:
+            validate_flat_smoke_report(broken)
+        except ValueError:
+            return True
+        return False
+
+    check(validate_flat_smoke_report(flat_report())["flat_busy_running_ms"] == 3000.0)
+    check(validate_flat_smoke_report(flat_report())["flat_sleep_waiting_ms"] == 3000.0)
+    for mutate in (
+            lambda r: r.update(mode="vr"),
+            lambda r: r.update(coverageComplete=False),
+            lambda r: r.update(analyzedFrameCount=59),
+            lambda r: r.update(eventsLost=1),
+            lambda r: r["frames"][0].update(sequence=2),
+            lambda r: r["frames"][3].update(firstCommandKnown=False),
+            lambda r: r["spanCounts"].update(XellSleep=29),
+            lambda r: r["spanCounts"].update(FgProxyPresent=59),
+            lambda r: [frame["regions"]["F2"].update(runningUs=0) for frame in r["frames"][:30]],
+            lambda r: [frame["regions"]["F6"].update(waitingUs=0) for frame in r["frames"][30:]]):
+        check(flat_refused(mutate))
+
     print("[edvr] CPU profile self-test: %d checks passed" % checks)
     return 0
 

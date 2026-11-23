@@ -12,7 +12,8 @@ constexpr uint8_t EDVR_NATIVE_CPU_TRACE_GUID_DATA4[8]={0xaf,0x88,0x63,0xb2,0x01,
 
 enum EdvrNativeCpuTraceEventId : uint16_t {
   EdvrNativeCpuClockEvent=1, EdvrNativeCpuSpanEvent=2,
-  EdvrNativeCpuCompletedFrameEvent=3, EdvrNativeGpuCompletionEvent=4
+  EdvrNativeCpuCompletedFrameEvent=3, EdvrNativeGpuCompletionEvent=4,
+  EdvrNativePresentFrameEvent=5
 };
 enum EdvrNativeCpuOperation : uint16_t {
   EdvrCpuWaitGetPoses=1, EdvrCpuSubmit=2, EdvrCpuPostPresentHandoff=3,
@@ -20,11 +21,20 @@ enum EdvrNativeCpuOperation : uint16_t {
   EdvrCpuGetFrameTiming=6, EdvrCpuGetFrameTimeRemaining=7,
   EdvrCpuCanRenderScene=8, EdvrCpuGetTimeSinceLastVsync=9,
   EdvrCpuGetDeviceToAbsoluteTrackingPose=10,
-  EdvrCpuFixtureCycle=0x100, EdvrCpuFixtureBusy=0x101, EdvrCpuFixtureWait=0x102
+  EdvrCpuFixtureCycle=0x100, EdvrCpuFixtureBusy=0x101, EdvrCpuFixtureWait=0x102,
+  // Flat-profile spans (event 2 v1). Emitted by d3d11.dll only while runtimeFlatProfile() is true.
+  EdvrCpuFlatFrameBoundary=0x200, EdvrCpuFgCopyIn=0x201, EdvrCpuFgSubmitToProxy=0x202,
+  EdvrCpuFgProxyPresent=0x203, EdvrCpuFgPresentStatus=0x204, EdvrCpuFgPlainPresent=0x205,
+  EdvrCpuXellSleep=0x206, EdvrCpuXellMarker=0x207
 };
 enum EdvrNativeCpuSpanFlags : uint16_t { EdvrNativeCpuResultValid=1u };
 enum EdvrNativeCpuFrameFlags : uint16_t {
   EdvrNativeCpuPostValid=1u, EdvrNativeCpuSinglePresent=2u
+};
+// Event 5 v1 flags (EdvrNativePresentFramePayload::flags).
+enum EdvrNativePresentFrameFlags : uint16_t {
+  EdvrPresentPrevValid=1, EdvrPresentFirstCommandValid=2,
+  EdvrPresentBridged=4 /* xessFgOwns(self) */, EdvrPresentTest=8 /* DXGI_PRESENT_TEST */
 };
 enum EdvrNativeCpuFrameStatus : uint16_t {
   EdvrCpuPostAvailable=0, EdvrCpuProviderMissing=1, EdvrCpuBadProviderVersion=2,
@@ -90,6 +100,26 @@ struct EdvrNativeGpuCompletionPayload {
   uint16_t version;
   uint16_t size;
 };
+// Event 5 v1, one per owned Present on the flat profile. All times are QPC microseconds (edvrNativeTraceUs).
+// Frame = [prevHookReturnUs, hookReturnUs] on `thread`; the regions between them are the analyzer's.
+struct EdvrNativePresentFramePayload {
+  uint64_t timestampUs;        // emission time, == hookReturnUs
+  uint64_t sequence;           // g_state->frameCounter read at hook entry
+  uint64_t prevHookReturnUs;   // previous owned Present on this thread; 0 = unknown
+  uint64_t firstCommandUs;     // first owner-context command after prevHookReturn; 0 = not seen
+  uint64_t hookEnterUs;
+  uint64_t presentBeginUs;
+  uint64_t presentEndUs;
+  uint64_t callbackEndUs;
+  uint64_t hookReturnUs;
+  uint32_t thread;
+  int32_t result;              // Present HRESULT
+  uint32_t syncInterval;       // the value passed down to the real Present
+  uint32_t presentFlags;       // the flags Elite passed
+  uint16_t flags;              // EdvrNativePresentFrameFlags
+  uint16_t generatedFrames;    // xessFgActiveGeneratedFrames() (0 = not generating)
+  uint32_t reserved;           // 0
+};
 #pragma pack(pop)
 
 static_assert(sizeof(EdvrNativeCpuClockPayload)==32,"native CPU clock ETW ABI");
@@ -103,3 +133,9 @@ static_assert(sizeof(EdvrNativeGpuCompletionPayload)==56,"native GPU completion 
 static_assert(offsetof(EdvrNativeGpuCompletionPayload,sequence)==16,"native GPU sequence offset");
 static_assert(offsetof(EdvrNativeGpuCompletionPayload,outerMs)==40,"native GPU result offset");
 static_assert(offsetof(EdvrNativeGpuCompletionPayload,version)==52,"native GPU version offset");
+static_assert(sizeof(EdvrNativePresentFramePayload)==96,"native flat present frame ETW ABI");
+static_assert(offsetof(EdvrNativePresentFramePayload,prevHookReturnUs)==16,"native flat present prev offset");
+static_assert(offsetof(EdvrNativePresentFramePayload,firstCommandUs)==24,"native flat present first command offset");
+static_assert(offsetof(EdvrNativePresentFramePayload,hookReturnUs)==64,"native flat present return offset");
+static_assert(offsetof(EdvrNativePresentFramePayload,thread)==72,"native flat present thread offset");
+static_assert(offsetof(EdvrNativePresentFramePayload,flags)==88,"native flat present flags offset");

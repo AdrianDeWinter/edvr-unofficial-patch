@@ -3,6 +3,7 @@
 #include "ui_layer.h"
 #include "gpu_timing.h"
 #include "gpu_frame_timing.h"
+#include "flat_cpu_trace.h"   // the flat profile's CPU markers: event 5 per owned Present, spans 0x200-0x207
 #include "gpu_census.h"   // gpuCensusFrameWorkOpen/End: the frame's GPU work span's door end (2026-10-14)
 #include "native_timing.h"
 #include "../common/native_present_trace.h"
@@ -1895,6 +1896,20 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
     // (nativeTimingPresentBegin / NotePresent, renderBoundaryNoteOwnedPresent / Present, vramAdapterOf) are null-safe
     // and are not skipped. v0.17.0 .. v0.19.1 dereferenced it unguarded here: first Present, 0xC0000005.
     ID3D11Device* const dev = g_state->device;
+    // The flat CPU markers (flat_cpu_trace.h). Started once here, so a session that begins before vScreen binds still
+    // gets the provider; the start is idempotent. The sequence and the first command are read now, before the boundary.
+    static bool cpuTraceStarted = false;
+    if (!cpuTraceStarted) {
+        cpuTraceStarted = true;
+        const bool registered = openxr::NativeCpuTrace::get().start();
+        Log::get().note("cpu trace: provider D3885FA1 registered=%u externally_enabled=%u error=%lu",
+                        registered ? 1u : 0u, openxr::NativeCpuTrace::get().enabled() ? 1u : 0u,
+                        static_cast<unsigned long>(openxr::NativeCpuTrace::get().counters().lastError));
+    }
+    const bool flatTrace = flatCpuTraceOn();
+    const uint64_t flatSequence = g_state->frameCounter;
+    const uint64_t flatFirstCommandUs = flatTrace ? flatTraceTakeFirstCommandUs() : 0;
+    if (!flatTrace) g_flatCpuTraceFrame.prevHookReturnUs = 0;
     vrSsaaGateNotePresent();  // log only: the first Present's place in the order of the Supersampling lines
     // The frame-tick chain starts here (frame_ticks.h): what follows, to this
     // hook's return, is EDVR's or the driver's; what came before it is the game's.
@@ -1923,6 +1938,7 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
     // the game's own context. Before this call, so the pair is still inside the census scope that the boundary after the Present closes.
     ID3D11DeviceContext* workContext = nullptr;
     if (dev) dev->GetImmediateContext(&workContext);
+    ID3D11DeviceContext* const flatContext = workContext;   // identity only: the first-command stamp is armed with it after the Present
     if (workContext && gpuCensusFrameWorkOpen()) {
         gpuCensusFrameWorkEnd(workContext);
     }
@@ -2010,7 +2026,11 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
     g_frameTicks.markAt("present_post", boundaryT0);
     g_frameTicks.boundary(true);
     // Each tick runs under a budget of its own (boundary_tick.h).
-    presentFrameBoundary();
+    {
+        openxr::NativeCpuTraceSpan span(EdvrCpuFlatFrameBoundary, flatTrace);
+        presentFrameBoundary();
+        span.finishVoid(0);
+    }
     const int64_t boundaryT1 = qpcNow();
     // Whatever the boundary did after its last tick (all of it, when
     // graphicsRuntimeDisabled cut it short), and the end of the boundary's ticks.
@@ -2032,7 +2052,39 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
     nativeTimingNotePresent(dev, traceToken, trace);
     frameTick("timing_note");
     // XeLL's frame start for the bridged swap chain: its latency sleep, the last thing before Elite starts the next frame.
-    if (xessFgOwns(self)) xessFgFrameStart();
+    const bool bridged = xessFgOwns(self);
+    if (bridged) xessFgFrameStart();
+    // The flat CPU markers' one event per owned Present. The hook's return is read after XeLL's frame start, the last thing here.
+    if (flatTrace) {
+        const uint64_t hookReturnUs = edvrNativeTraceNowUs();
+        const DWORD threadId = GetCurrentThreadId();
+        const bool prevValid = g_flatCpuTraceFrame.prevHookReturnUs != 0 && g_flatCpuTraceFrame.prevThread == threadId;
+        const uint64_t firstCommandUs = prevValid ? flatFirstCommandUs : 0;
+        EdvrNativePresentFramePayload payload{};
+        payload.timestampUs = hookReturnUs;
+        payload.sequence = flatSequence;
+        payload.prevHookReturnUs = prevValid ? g_flatCpuTraceFrame.prevHookReturnUs : 0;
+        payload.firstCommandUs = firstCommandUs;
+        payload.hookEnterUs = trace.beginUs;
+        payload.presentBeginUs = trace.realBeginUs;
+        payload.presentEndUs = trace.realEndUs;
+        payload.callbackEndUs = trace.endUs;
+        payload.hookReturnUs = hookReturnUs;
+        payload.thread = static_cast<uint32_t>(threadId);
+        payload.result = static_cast<int32_t>(hr);
+        payload.syncInterval = presentSync;
+        payload.presentFlags = flags;
+        payload.flags = static_cast<uint16_t>(
+            (prevValid ? EdvrPresentPrevValid : 0) |
+            (firstCommandUs != 0 ? EdvrPresentFirstCommandValid : 0) |
+            (bridged ? EdvrPresentBridged : 0) |
+            ((flags & DXGI_PRESENT_TEST) != 0 ? EdvrPresentTest : 0));
+        payload.generatedFrames = static_cast<uint16_t>(xessFgActiveGeneratedFrames());
+        openxr::NativeCpuTrace::get().emitPresentFrame(payload);
+        g_flatCpuTraceFrame.prevHookReturnUs = hookReturnUs;
+        g_flatCpuTraceFrame.prevThread = threadId;
+        if (flatContext) flatTraceArmFirstCommand(flatContext);
+    }
     return hr;
 }
 

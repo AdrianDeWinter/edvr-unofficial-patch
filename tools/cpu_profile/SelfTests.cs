@@ -59,6 +59,12 @@ internal static class SelfTests
         GameBuildMismatchReport();
         SymbolAnnotation();
         ReportShape();
+        FlatMarkerSchema();
+        FlatAdmission();
+        FlatRegions();
+        FlatSpikes();
+        FlatDispatch();
+        FlatReportShape();
         Console.WriteLine($"EdupCpuProfile self-test: {_checks} checks");
     }
 
@@ -1252,6 +1258,310 @@ internal static class SelfTests
         var offRow = new Dictionary<string, object?> { ["rva"] = "0x3000" };
         unmatched.Annotate(offRow, 1, "0x3000");
         Check(!offRow.ContainsKey("name"), "a disabled table annotates nothing");
+    }
+
+    // ---- flat profile (event 5) -------------------------------------------------
+    // Regions F1..F6 in µs, in order. The default flags are PrevValid | FirstCommandValid | Bridged.
+    private const ushort FlatDefaultFlags = 7;
+    private static readonly ulong[] FlatNormal = [1000, 9000, 200, 5000, 300, 1200];
+
+    private static PresentFrameMarker FlatCycle(ulong sequence, ulong prev, ulong[] lengths,
+                                                ushort flags = FlatDefaultFlags)
+    {
+        var first = prev + lengths[0];
+        var hookEnter = first + lengths[1];
+        var presentBegin = hookEnter + lengths[2];
+        var presentEnd = presentBegin + lengths[3];
+        var callbackEnd = presentEnd + lengths[4];
+        var hookReturn = callbackEnd + lengths[5];
+        return new PresentFrameMarker(hookReturn, sequence, prev, first, hookEnter, presentBegin, presentEnd,
+                                      callbackEnd, hookReturn, (uint)Caller, 0, 1, 0, flags, 3);
+    }
+
+    /// A trace with a caller thread the scheduler timed, and no frames yet.
+    private static Collected FlatBase()
+    {
+        var data = new Collected { HasCallStacks = true };
+        var epoch = new DateTime(2026, 9, 22, 14, 23, 50, DateTimeKind.Utc);
+        data.Clocks.Add(new ClockMarker(500, 500, 1_000_000, (ulong)epoch.ToFileTimeUtc(), 500));
+        data.SampleIntervalUs = 1000;
+        data.SampleIntervalSource = "self-test";
+        data.CallerThreads.Add(Caller);
+        data.KernelFirstQpc = 500;
+        data.KernelLastQpc = 500_000;
+        data.CpuSwitchRanges[0] = new CpuSwitchRange { FirstQpc = 500, LastQpc = 500_000, Count = 8 };
+        data.SwitchOut = 2;
+        data.SwitchIn = 2;
+        data.Timeline(Caller).Add(500, CpuState.Running);
+        data.Stacks = new StackStore(@"c:\game");
+        return data;
+    }
+
+    /// Twenty-two contiguous frames of 16.7 ms. Frame 21 has a 10 ms wait in F6 under an
+    /// XellSleep span; frame 22 has a 10 ms wait in F1 with no switch-out stack behind it.
+    private static Collected FlatFixture()
+    {
+        var data = FlatBase();
+        var exe = data.Stacks.AddModuleForTest(@"c:\game\elitedangerous64.exe", "elitedangerous64.exe", GameBase);
+        var wait = data.Stacks.AddForTest(new StackInfo
+        {
+            ModuleIds = [exe],
+            Addresses = [GameBase + 0x5D6E7F],
+            ClassIds = [ClassId("scheduler_range")],
+            Label = StackLabel.Scheduler,
+            Scheduler = true,
+            GameTops = new GameTop(0x5D6E7F, 0, 0, 1),
+            Depth = 1,
+            TopModuleId = exe,
+        });
+        var timeline = data.Timeline(Caller);
+        ulong prev = 1000;
+        for (ulong sequence = 1; sequence <= 22; sequence++)
+        {
+            var lengths = (ulong[])FlatNormal.Clone();
+            if (sequence == 21) lengths[5] = 11200;
+            if (sequence == 22) lengths[0] = 11000;
+            var marker = FlatCycle(sequence, prev, lengths);
+            data.PresentFrames.Add(marker);
+            if (sequence == 21 || sequence == 22)
+            {
+                var waitStart = sequence == 21 ? marker.CallbackEndUs + 100 : marker.PrevHookReturnUs + 100;
+                var readyAt = waitStart + 10_000;
+                timeline.Add((long)waitStart, CpuState.Waiting);
+                timeline.Add((long)readyAt, CpuState.Ready);
+                timeline.Add((long)readyAt + 100, CpuState.Running);
+                Collected.Append(data.ReadiesByThread, Caller, new ReadyObs((long)readyAt, Worker, Pid, -1));
+                if (sequence == 21)
+                {
+                    Collected.Append(data.SwitchOutStacksByThread, Caller, new StackObs((long)waitStart, wait));
+                    data.Spans.Add(new SpanMarker(readyAt + 100, sequence, waitStart, 0, (uint)Caller,
+                                                  0x206, 0));
+                }
+            }
+            prev = marker.HookReturnUs;
+        }
+        return data;
+    }
+
+    private static void FlatMarkerSchema()
+    {
+        var bytes = new byte[96];
+        ulong[] unsignedFields = [11, 12, 13, 14, 15, 16, 17, 18, 19];
+        for (var i = 0; i < unsignedFields.Length; i++)
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(8 * i), unsignedFields[i]);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(72), 7);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(76), -5);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(80), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(84), 0x20);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(88), 7);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(90), 3);
+        var parsed = new Collected();
+        Markers.ParsePresentFrame(1, bytes, parsed);
+        Check(parsed.PresentFrames.Count == 1 && parsed.MalformedMarkers == 0, "a 96-byte present is admitted");
+        var p = parsed.PresentFrames[0];
+        Check(p.TimestampUs == 11 && p.Sequence == 12 && p.PrevHookReturnUs == 13 && p.FirstCommandUs == 14 &&
+              p.HookEnterUs == 15 && p.PresentBeginUs == 16 && p.PresentEndUs == 17 && p.CallbackEndUs == 18 &&
+              p.HookReturnUs == 19, "event 5 timestamp offsets 0-64");
+        Check(p.Thread == 7 && p.Result == -5 && p.SyncInterval == 1 && p.PresentFlags == 0x20 &&
+              p.Flags == 7 && p.GeneratedFrames == 3, "event 5 offsets 72-90");
+        var tooShort = new Collected();
+        Markers.ParsePresentFrame(1, new byte[95], tooShort);
+        Check(tooShort.MalformedMarkers == 1 && tooShort.PresentFrames.Count == 0, "a 95-byte present is malformed");
+        var v2 = new Collected();
+        Markers.ParsePresentFrame(2, bytes, v2);
+        Check(v2.UnsupportedMarkers == 1 && v2.PresentFrames.Count == 0, "event 5 version 2 is unsupported");
+        Check(Markers.OperationName(0x200) == "FlatFrameBoundary" && Markers.OperationName(0x203) == "FgProxyPresent" &&
+              Markers.OperationName(0x206) == "XellSleep", "flat span names carry no EdvrCpu prefix");
+    }
+
+    private static void FlatAdmission()
+    {
+        var good = FlatCycle(1, 1000, FlatNormal);
+        Check(Markers.FlatInvalidReason(good) is null, "a complete flat frame is admitted");
+        Check(Markers.FlatInvalidReason(good with { Flags = (ushort)(good.Flags | Markers.FlatTest) }) == "present_test",
+              "a test present is refused first");
+        Check(Markers.FlatInvalidReason(good with { Sequence = 0 }) == "zero_identity", "zero sequence");
+        Check(Markers.FlatInvalidReason(good with { Flags = (ushort)(good.Flags & ~Markers.FlatPrevValid) }) ==
+              "no_previous_present", "a frame with no previous present");
+        Check(Markers.FlatInvalidReason(good with { TimestampUs = good.HookReturnUs + 1 }) == "emission_timestamp",
+              "emission must equal hookReturn");
+        Check(Markers.FlatInvalidReason(good with { HookEnterUs = 0 }) == "zero_timestamp", "zero hookEnter");
+        Check(Markers.FlatInvalidReason(good with { PresentEndUs = good.PresentBeginUs - 1 }) == "timestamp_order",
+              "presentEnd before presentBegin");
+        Check(Markers.FlatInvalidReason(good with { FirstCommandUs = good.HookEnterUs + 1 }) == "timestamp_order",
+              "firstCommand after hookEnter");
+        Check(Markers.FlatInvalidReason(good with { Flags = (ushort)(good.Flags & ~Markers.FlatFirstCommandValid),
+                                                    FirstCommandUs = 0 }) is null,
+              "a frame without a first command is still admitted");
+    }
+
+    private static void FlatRegions()
+    {
+        var input = WriteTemp("flat.etl", "not a real trace, only its size is read");
+        var output = Path.Combine(Path.GetTempPath(), $"edvr-cpu-selftest-{Guid.NewGuid():N}");
+        try
+        {
+            var data = FlatBase();
+            data.PresentFrames.Add(FlatCycle(1, 1000, FlatNormal));
+            var report = FlatReport.Build(input, Pid, data, Path.Combine(output, "regions.jsonl"), null);
+            var frame = ((List<Dictionary<string, object?>>)report["frames"]!)[0];
+            var regions = (Dictionary<string, object?>)frame["regions"]!;
+            double total = 0;
+            foreach (var name in FlatReport.RegionNames)
+                total += Convert.ToDouble(((Dictionary<string, object?>)regions[name]!)["ms"]);
+            Near(total, 16.7, "the six regions sum to the cycle", 0.001);
+            Near(Convert.ToDouble(frame["cycleMs"]), 16.7, "the cycle is hook return minus previous hook return", 0.001);
+            var f1 = (Dictionary<string, object?>)regions["F1"]!;
+            Near(Convert.ToDouble(f1["runningUs"]), 1000, "F1 runs for its whole length");
+            var f4 = (Dictionary<string, object?>)regions["F4"]!;
+            Near(Convert.ToDouble(f4["ms"]), 5.0, "F4 is the present call");
+
+            // A frame without FirstCommandValid: F1 is empty and F2 starts at the previous hook return.
+            var unknownFirst = FlatBase();
+            unknownFirst.PresentFrames.Add(FlatCycle(1, 1000, FlatNormal, 5));
+            var noFirst = FlatReport.Build(input, Pid, unknownFirst, Path.Combine(output, "nofirst.jsonl"), null);
+            var noFirstRegions = (Dictionary<string, object?>)((List<Dictionary<string, object?>>)noFirst["frames"]!)[0]["regions"]!;
+            Near(Convert.ToDouble(((Dictionary<string, object?>)noFirstRegions["F1"]!)["ms"]), 0,
+                 "F1 is zero without FirstCommandValid");
+            Near(Convert.ToDouble(((Dictionary<string, object?>)noFirstRegions["F2"]!)["ms"]), 10.0,
+                 "F2 starts at the previous hook return");
+
+            // The timeline's waits show up in the state sums of the region they fall in.
+            var fixture = FlatReport.Build(input, Pid, FlatFixture(), Path.Combine(output, "states.jsonl"), null);
+            var sample = ((List<Dictionary<string, object?>>)fixture["frames"]!)[20];
+            Check(Convert.ToUInt64(sample["sequence"]) == 21, "frame 21 is the F6 spike");
+            var f6 = (Dictionary<string, object?>)((Dictionary<string, object?>)sample["regions"]!)["F6"]!;
+            Near(Convert.ToDouble(f6["waitingUs"]), 10000, "F6 carries the 10 ms wait");
+            Near(Convert.ToDouble(f6["readyUs"]), 100, "the wake-up is ready time");
+            Near(Convert.ToDouble(f6["runningUs"]), 1100, "F6 running excludes the wait");
+            Near(Convert.ToDouble(f6["ms"]), 11.2, "F6 length");
+        }
+        finally
+        {
+            File.Delete(input);
+            if (Directory.Exists(output)) Directory.Delete(output, true);
+        }
+    }
+
+    private static void FlatSpikes()
+    {
+        var input = WriteTemp("flat.etl", "not a real trace, only its size is read");
+        var output = Path.Combine(Path.GetTempPath(), $"edvr-cpu-selftest-{Guid.NewGuid():N}");
+        try
+        {
+            var report = FlatReport.Build(input, Pid, FlatFixture(), Path.Combine(output, "frames.jsonl"), null);
+            Check((string)report["mode"]! == "flat", "the flat report names its mode");
+            Check(Convert.ToInt32(report["analyzedFrameCount"]) == 22, "every fixture frame is covered");
+            Check((bool)report["coverageComplete"]!, "a clean flat fixture is coverage complete");
+            Near(Convert.ToDouble(((Dictionary<string, object?>)report["spikeRule"]!)["medianCycleMs"]), 16.7,
+                 "the median cycle is the normal frame", 0.001);
+
+            var spikes = (Dictionary<string, object?>)report["spikes"]!;
+            Check(Convert.ToInt32(spikes["count"]) == 2, "two spikes: the F6 and the F1 frame");
+            var counts = (Dictionary<string, long>)spikes["dominantRegionCounts"]!;
+            Check(counts["F6"] == 1 && counts["F1"] == 1 && counts["F2"] == 0, "each spike has its own dominant region");
+            var means = (Dictionary<string, object?>)spikes["spanMeanMs"]!;
+            var xell = (Dictionary<string, object?>)means["XellSleep"]!;
+            Near(Convert.ToDouble(xell["spike"]), 10.1, "the XellSleep span is listed for the spike", 0.001);
+            Check(xell["normal"] is null, "no normal frame has an XellSleep span");
+
+            var spikeFrames = (List<Dictionary<string, object?>>)report["spikeFrames"]!;
+            var f6 = spikeFrames.Single(row => Convert.ToUInt64(row["sequence"]) == 21);
+            Check((string)f6["dominantRegion"]! == "F6", "the F6 spike is dominated by F6");
+            var f6Waits = ((List<object?>)f6["waits"]!).Cast<Dictionary<string, object?>>().ToList();
+            Check(f6Waits.Count == 1 && (string)f6Waits[0]["region"]! == "F6", "the wait is named by the region it starts in");
+            Near(Convert.ToDouble(f6Waits[0]["ms"]), 10.0, "the wait is 10 ms", 0.001);
+            Check(Convert.ToInt32(f6Waits[0]["wakerThread"]) == Worker && Convert.ToInt32(f6Waits[0]["wakerProcess"]) == Pid,
+                  "the wait is ended by the first ready event inside it");
+            Check(Convert.ToInt32(f6Waits[0]["blockingStackId"]) >= 0, "the wait keeps its switch-out stack id");
+            var f1 = spikeFrames.Single(row => Convert.ToUInt64(row["sequence"]) == 22);
+            Check((string)f1["dominantRegion"]! == "F1", "the F1 spike is dominated by F1");
+            var f1Waits = ((List<object?>)f1["waits"]!).Cast<Dictionary<string, object?>>().ToList();
+            Check(f1Waits.Count == 1 && f1Waits[0]["blockingStackId"] is null, "a wait with no switch-out stack has no blocking stack");
+
+            var blocking = (Dictionary<string, object?>[])report["topBlockingStacksInSpikes"]!;
+            Check(blocking.Length == 1 && (string)blocking[0]["kind"]! == "F6_wait" &&
+                  Convert.ToInt64(blocking[0]["count"]) == 1, "the blocking stack is counted under its region");
+
+            var frame21 = ((List<Dictionary<string, object?>>)report["frames"]!)[20];
+            Near(Convert.ToDouble(frame21["cycleMs"]), 26.7, "frame 21 cycle", 0.001);
+            var spans = (List<object?>)frame21["spans"]!;
+            Check(spans.Count == 1 && (string)((Dictionary<string, object?>)spans[0]!)["op"]! == "XellSleep",
+                  "the frame lists its span");
+            Check(Convert.ToInt32(report["cycleCoveredFrameCount"]) == 22 && Convert.ToInt32(report["cycleDerivedFrameCount"]) == 22,
+                  "the keys the progress line reads are present");
+            var lines = File.ReadAllLines(Path.Combine(output, "frames.jsonl"));
+            Check(lines.Length == 22 && lines[20].Contains("\"spike\":true"), "frames.jsonl carries one object per frame");
+        }
+        finally
+        {
+            File.Delete(input);
+            if (Directory.Exists(output)) Directory.Delete(output, true);
+        }
+    }
+
+    private static void FlatDispatch()
+    {
+        Check(Program.ModeFor(FlatFixture()) == "flat", "present markers alone select the flat report");
+        Check(Program.ModeFor(Fixture()) == "vr", "frame markers select the VR report");
+        var both = Fixture();
+        both.PresentFrames.Add(FlatCycle(1, 1000, FlatNormal));
+        Check(Program.ModeFor(both) == "vr", "VR frame markers win over present markers beside them");
+        var input = WriteTemp("dispatch.etl", "not a real trace, only its size is read");
+        var output = Path.Combine(Path.GetTempPath(), $"edvr-cpu-selftest-{Guid.NewGuid():N}");
+        try
+        {
+            var vr = Report.Build(input, Pid, both, Path.Combine(output, "dispatch.jsonl"), null);
+            Check((string)vr["mode"]! == "vr" && Convert.ToInt32(vr["presentFrameCount"]) == 1,
+                  "the VR report names its mode and the present count");
+            Check(((string[])vr["warnings"]!).Any(text => text.Contains("event 5")),
+                  "a VR report with flat markers beside it says so");
+        }
+        finally
+        {
+            File.Delete(input);
+            if (Directory.Exists(output)) Directory.Delete(output, true);
+        }
+        var empty = new Collected();
+        empty.Clocks.Add(new ClockMarker(500, 500, 1_000_000, 0, 500));
+        try
+        {
+            Program.ModeFor(empty);
+            Check(false, "a trace with neither marker kind is refused");
+        }
+        catch (InvalidDataException exception)
+        {
+            Check(exception.Message == "trace has no EDVR frame markers (clocks=1): the provider was not enabled " +
+                  "in the game, or the installed DLLs predate flat markers; check the 'cpu trace:' line in the graphics log",
+                  "the no-frame-marker error names the cause");
+        }
+    }
+
+    private static void FlatReportShape()
+    {
+        var input = WriteTemp("shape.etl", "not a real trace, only its size is read");
+        var output = Path.Combine(Path.GetTempPath(), $"edvr-cpu-selftest-{Guid.NewGuid():N}");
+        try
+        {
+            var report = FlatReport.Build(input, Pid, FlatFixture(), Path.Combine(output, "shape.jsonl"), null);
+            foreach (var key in new[] { "schemaVersion", "mode", "warnings", "eventsLost", "coverageComplete", "frameCount",
+                                        "presentFrameCount", "validFrameCount", "analyzedFrameCount", "invalidFrameReasons",
+                                        "sequenceGaps", "sequenceDuplicates", "firstCommandKnownCount", "spanCounts",
+                                        "callerThreads", "regionNames", "regions", "cycleMs", "monitorCpuMs", "spikeRule",
+                                        "spikes", "spikeFrames", "topBlockingStacksInSpikes", "frames", "framesPath",
+                                        "cycleDerivedFrameCount", "cycleCoveredFrameCount", "symbols" })
+                Check(report.ContainsKey(key), $"flat report key {key}");
+            Check(Convert.ToInt64(report["sequenceGaps"]) == 0 && Convert.ToInt64(report["sequenceDuplicates"]) == 0,
+                  "the fixture's sequences are contiguous");
+            Check(((Dictionary<string, long>)report["spanCounts"]!)["XellSleep"] == 1, "span counts by name");
+            Check(Convert.ToInt32(report["firstCommandKnownCount"]) == 22, "every fixture frame knows its first command");
+            Check(JsonSerializer.Serialize(report).Length > 0, "the flat report serializes");
+        }
+        finally
+        {
+            File.Delete(input);
+            if (Directory.Exists(output)) Directory.Delete(output, true);
+        }
     }
 
     private static void ReportShape()

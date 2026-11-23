@@ -1,5 +1,6 @@
 #pragma once
 #include "../common/gpu_span_state.h"
+#include "../common/native_present_trace.h"   // edvrNativeTraceNowUs: the flat first-command stamp
 #include <atomic>
 
 struct ID3D11Device;
@@ -60,10 +61,38 @@ extern std::atomic<bool> g_frameWorkArmed;
 }  // namespace detail
 void frameWorkFirstCommand(ID3D11DeviceContext*) noexcept;
 
+// The flat CPU markers' first-command stamp (flat_cpu_trace.h, device_hook.cpp). Armed at the end of an owned Present;
+// the first command thunk on that context and thread after it stores the QPC time, once. Disarmed, the thunk pays one relaxed load.
+namespace detail {
+inline std::atomic<bool> g_flatTraceFirstCommandArmed{false};
+inline std::atomic<ID3D11DeviceContext*> g_flatTraceContext{nullptr};
+inline std::atomic<unsigned long> g_flatTraceThread{0};
+inline std::atomic<uint64_t> g_flatTraceFirstCommandUs{0};
+}  // namespace detail
+inline void flatTraceArmFirstCommand(ID3D11DeviceContext* ctx) noexcept {
+    detail::g_flatTraceContext.store(ctx, std::memory_order_relaxed);
+    detail::g_flatTraceThread.store(static_cast<unsigned long>(GetCurrentThreadId()), std::memory_order_relaxed);
+    detail::g_flatTraceFirstCommandUs.store(0, std::memory_order_relaxed);
+    detail::g_flatTraceFirstCommandArmed.store(true, std::memory_order_release);
+}
+// Disarms, and returns the stamped time (0 = no command was seen since the arm).
+inline uint64_t flatTraceTakeFirstCommandUs() noexcept {
+    detail::g_flatTraceFirstCommandArmed.store(false, std::memory_order_release);
+    return detail::g_flatTraceFirstCommandUs.exchange(0, std::memory_order_acq_rel);
+}
+__declspec(noinline) inline void flatTraceFirstCommandSlow(ID3D11DeviceContext* ctx) noexcept {
+    if (!detail::g_flatTraceFirstCommandArmed.load(std::memory_order_acquire)) return;
+    if (ctx != detail::g_flatTraceContext.load(std::memory_order_relaxed)) return;
+    if (static_cast<unsigned long>(GetCurrentThreadId()) != detail::g_flatTraceThread.load(std::memory_order_relaxed)) return;
+    detail::g_flatTraceFirstCommandUs.store(edvrNativeTraceNowUs(), std::memory_order_relaxed);
+    detail::g_flatTraceFirstCommandArmed.store(false, std::memory_order_release);
+}
+
 // __forceinline: it was `inline` and still an out-of-line call at the draw thunk (build 3 profile).
 __forceinline void gpuFrameCommandIfLive(ID3D11DeviceContext* ctx) noexcept {
     if (gpuFrameCommandMightAct()) gpuFrameCommand(ctx);
     if (detail::g_frameWorkArmed.load(std::memory_order_relaxed)) frameWorkFirstCommand(ctx);
+    if (detail::g_flatTraceFirstCommandArmed.load(std::memory_order_relaxed)) flatTraceFirstCommandSlow(ctx);
 }
 
 struct GpuFrameSnapshot {

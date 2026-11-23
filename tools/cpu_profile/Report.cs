@@ -142,13 +142,20 @@ internal static class Report
             data.Frames.Count, frameReports.Count, data.SwitchOut, data.SwitchIn,
             data.HasCallStacks, frameReports.Select(f => Convert.ToDouble(f["unexpectedUnknownUs"])));
         var inputInfo = new FileInfo(input);
+        var warnings = new List<string>();
+        // A trace with no game executable at all (the pre-flight smoke) has nothing
+        // to mismatch, so it carries no warning; gameBuild says why nothing is named.
+        if (data.Stacks.Identity.Warning.Length > 0)
+            warnings.Add("game build mismatch: " + data.Stacks.Identity.Warning);
+        // Flat-profile markers beside VR frame markers are ignored here, and the report says so.
+        if (data.PresentFrames.Count > 0)
+            warnings.Add($"trace carries {data.PresentFrames.Count} flat-profile present markers (event 5) " +
+                         "beside the VR frame markers; this is a VR report and ignores them");
         var report = new Dictionary<string, object?>
         {
             ["schemaVersion"] = 1,
-            // A trace with no game executable at all (the pre-flight smoke) has nothing
-            // to mismatch, so it carries no warning; gameBuild says why nothing is named.
-            ["warnings"] = data.Stacks.Identity.Warning.Length == 0
-                ? Array.Empty<string>() : new[] { "game build mismatch: " + data.Stacks.Identity.Warning },
+            ["mode"] = "vr",
+            ["warnings"] = warnings.ToArray(),
             ["gameBuild"] = new Dictionary<string, object?>
             {
                 ["expectedBuild"] = RvaTable.ExpectedBuild,
@@ -179,6 +186,7 @@ internal static class Report
             ["hasCallStacks"] = data.HasCallStacks,
             ["coverageComplete"] = coverageComplete,
             ["frameCount"] = data.Frames.Count,
+            ["presentFrameCount"] = data.PresentFrames.Count,
             ["availableFrameCount"] = orderedFrames.Count(frame => frame.Status == 0),
             ["validFrameCount"] = validFrames.Count,
             ["analyzedFrameCount"] = frameReports.Count,
@@ -1017,10 +1025,10 @@ internal static class Report
         return found;
     }
 
-    private static void Bump(Dictionary<(string Kind, int StackId), long> groups, (string, int) key) =>
+    internal static void Bump(Dictionary<(string Kind, int StackId), long> groups, (string, int) key) =>
         groups[key] = groups.GetValueOrDefault(key) + 1;
 
-    private static object TopStacks(Dictionary<(string Kind, int StackId), long> groups, StackStore stacks,
+    internal static object TopStacks(Dictionary<(string Kind, int StackId), long> groups, StackStore stacks,
                                     int take) =>
         groups.OrderByDescending(pair => pair.Value).Take(take)
             .Select(pair => new Dictionary<string, object?>
@@ -1040,7 +1048,7 @@ internal static class Report
                     ["frames"] = stacks.Format(stacks[pair.Key.StackId]),
                 }).ToArray());
 
-    private static long CommonSchedulerStart(Dictionary<int, CpuSwitchRange> ranges)
+    internal static long CommonSchedulerStart(Dictionary<int, CpuSwitchRange> ranges)
     {
         if (ranges.Count == 0) throw new InvalidDataException("trace has no per-CPU context-switch ranges");
         return ranges.Values.Max(range => range.FirstQpc);
