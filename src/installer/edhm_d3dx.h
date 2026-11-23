@@ -51,10 +51,10 @@ std::string setD3dxKey(const std::string& iniText, const char* section, const ch
 std::string removeD3dxKey(const std::string& iniText, const char* section, const char* key);
 
 // Captures the original values of the three ED-UP compatibility keys
-// (verified against pinned Fenris159/EDHM_2DMigoto@2cbeaa38):
-//   [System] allow_platform_update  (required: IniHandler.cpp:5051 defaults false; HackerDevice.cpp:1698 & HackerContext.cpp:1374 return E_NOINTERFACE for Device1/Context1, breaking flat_mono_resolve.cpp:604-619)
-//   [System] load_library_redirect  (defensive: at 2, D3D11Wrapper.cpp:1032-1089 ReplaceOnMatch redirects full System32 d3d11.dll paths and original_d3d11.dll; ED-UP already handles System32 via system_d3d11.h, so 0 avoids redundant redirection in the proxy chain)
-//   [Device] upscaling              (guard on default 0: IniHandler.cpp:5131 & HackerDXGI.cpp legacy swapchain upscaler)
+// (verified against pinned Fenris159/EDHM_2DMigoto@716157b8, v0.1.9):
+//   [System] allow_platform_update  (required guard: v0.1.9 IniHandler.cpp:5051 defaults true, but an explicit 0 in d3dx.ini makes HackerDevice.cpp:1704 & HackerContext.cpp:1374 return E_NOINTERFACE for Device1/Context1, breaking flat_mono_resolve.cpp:604-619)
+//   [System] load_library_redirect  (defensive: v0.1.9 IniHandler.cpp:5070-5075 & D3D11Wrapper.cpp:1228 also force 0 when loaded as chained d3d11_edhm.dll; ED-UP handles System32 via system_d3d11.h)
+//   [Device] upscaling              (guard on default 0: IniHandler.cpp:5141 & HackerDXGI.cpp legacy swapchain upscaler)
 EdhmD3dxBackup snapshotEdhmD3dxCompat(const std::string& iniText);
 
 // Applies ED-UP compatibility values to d3dx.ini:
