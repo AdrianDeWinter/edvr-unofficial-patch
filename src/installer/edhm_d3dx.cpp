@@ -159,18 +159,24 @@ D3dxKeyRead readD3dxKey(const std::string& iniText, const char* section, const c
     std::string defaultEol;
     const std::vector<RawLine> lines = splitLines(iniText, &hasBom, &defaultEol);
 
-    std::string curSection;
+    bool inFirstSection = false;
+    bool foundSection = false;
     for (const RawLine& line : lines) {
         std::string sec;
         if (parseSectionHeader(line.body, &sec)) {
-            curSection = sec;
+            if (inFirstSection) break;
+            if (!foundSection && asciiEq(sec, section)) {
+                inFirstSection = true;
+                foundSection = true;
+            }
             continue;
         }
-        if (!asciiEq(curSection, section)) continue;
+        if (!inFirstSection) continue;
         const ParsedKeyLine parsed = parseKeyLine(line.body);
         if (parsed.isKey && !parsed.commented && asciiEq(parsed.key, key)) {
             result.present = true;
             result.value = parsed.value;
+            return result;
         }
     }
     return result;
@@ -183,51 +189,58 @@ std::string setD3dxKey(const std::string& iniText, const char* section, const ch
     std::string defaultEol;
     std::vector<RawLine> lines = splitLines(iniText, &hasBom, &defaultEol);
 
-    std::string curSection;
-    size_t lastActiveMatch = static_cast<size_t>(-1);
-    ParsedKeyLine lastActiveParsed;
-    size_t lastCommentedMatch = static_cast<size_t>(-1);
-    size_t lastSectionEnd = static_cast<size_t>(-1);
-    bool inTargetSection = false;
+    size_t firstActiveMatch = static_cast<size_t>(-1);
+    ParsedKeyLine firstActiveParsed;
+    size_t firstCommentedMatch = static_cast<size_t>(-1);
+    size_t firstSectionEnd = static_cast<size_t>(-1);
+    bool inFirstSection = false;
+    bool foundSection = false;
 
     for (size_t i = 0; i < lines.size(); ++i) {
         std::string sec;
         if (parseSectionHeader(lines[i].body, &sec)) {
-            if (inTargetSection) lastSectionEnd = i;
-            curSection = sec;
-            inTargetSection = asciiEq(curSection, section);
+            if (inFirstSection) {
+                firstSectionEnd = i;
+                break;
+            }
+            if (!foundSection && asciiEq(sec, section)) {
+                inFirstSection = true;
+                foundSection = true;
+            }
             continue;
         }
-        if (!inTargetSection) continue;
+        if (!inFirstSection) continue;
         const ParsedKeyLine parsed = parseKeyLine(lines[i].body);
         if (parsed.isKey && asciiEq(parsed.key, key)) {
             if (!parsed.commented) {
-                lastActiveMatch = i;
-                lastActiveParsed = parsed;
-            } else {
-                lastCommentedMatch = i;
+                if (firstActiveMatch == static_cast<size_t>(-1)) {
+                    firstActiveMatch = i;
+                    firstActiveParsed = parsed;
+                }
+            } else if (firstCommentedMatch == static_cast<size_t>(-1)) {
+                firstCommentedMatch = i;
             }
         }
     }
-    if (inTargetSection) lastSectionEnd = lines.size();
+    if (inFirstSection && firstSectionEnd == static_cast<size_t>(-1)) firstSectionEnd = lines.size();
 
-    if (lastActiveMatch != static_cast<size_t>(-1)) {
-        lines[lastActiveMatch].body = lastActiveParsed.prefix + value + lastActiveParsed.inlineComment;
+    if (firstActiveMatch != static_cast<size_t>(-1)) {
+        lines[firstActiveMatch].body = firstActiveParsed.prefix + value + firstActiveParsed.inlineComment;
         return joinLines(lines, hasBom);
     }
 
     const std::string newBody = std::string(key) + " = " + value;
-    if (lastCommentedMatch != static_cast<size_t>(-1)) {
-        if (lines[lastCommentedMatch].eol.empty()) lines[lastCommentedMatch].eol = defaultEol;
+    if (firstCommentedMatch != static_cast<size_t>(-1)) {
+        if (lines[firstCommentedMatch].eol.empty()) lines[firstCommentedMatch].eol = defaultEol;
         RawLine ins;
         ins.body = newBody;
         ins.eol = defaultEol;
-        lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(lastCommentedMatch + 1), std::move(ins));
+        lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(firstCommentedMatch + 1), std::move(ins));
         return joinLines(lines, hasBom);
     }
 
-    if (lastSectionEnd != static_cast<size_t>(-1)) {
-        size_t insertAt = lastSectionEnd;
+    if (firstSectionEnd != static_cast<size_t>(-1)) {
+        size_t insertAt = firstSectionEnd;
         while (insertAt > 0 && trim(lines[insertAt - 1].body).empty()) --insertAt;
         if (insertAt > 0 && lines[insertAt - 1].eol.empty()) lines[insertAt - 1].eol = defaultEol;
         RawLine ins;
@@ -264,22 +277,28 @@ std::string removeD3dxKey(const std::string& iniText, const char* section, const
     std::string defaultEol;
     std::vector<RawLine> lines = splitLines(iniText, &hasBom, &defaultEol);
 
-    std::string curSection;
-    size_t lastActiveMatch = static_cast<size_t>(-1);
+    bool inFirstSection = false;
+    bool foundSection = false;
+    size_t firstActiveMatch = static_cast<size_t>(-1);
     for (size_t i = 0; i < lines.size(); ++i) {
         std::string sec;
         if (parseSectionHeader(lines[i].body, &sec)) {
-            curSection = sec;
+            if (inFirstSection) break;
+            if (!foundSection && asciiEq(sec, section)) {
+                inFirstSection = true;
+                foundSection = true;
+            }
             continue;
         }
-        if (!asciiEq(curSection, section)) continue;
+        if (!inFirstSection) continue;
         const ParsedKeyLine parsed = parseKeyLine(lines[i].body);
         if (parsed.isKey && !parsed.commented && asciiEq(parsed.key, key)) {
-            lastActiveMatch = i;
+            firstActiveMatch = i;
+            break;
         }
     }
-    if (lastActiveMatch == static_cast<size_t>(-1)) return iniText;
-    lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(lastActiveMatch));
+    if (firstActiveMatch == static_cast<size_t>(-1)) return iniText;
+    lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(firstActiveMatch));
     return joinLines(lines, hasBom);
 }
 

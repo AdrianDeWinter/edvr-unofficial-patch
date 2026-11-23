@@ -236,10 +236,14 @@ def main(argv=None):
     ap.add_argument("--dest", default=None, help="destination (default: %%LOCALAPPDATA%%\\EDVR\\edhm-2dmigoto)")
     ap.add_argument("--verify", default=None, metavar="DIR", help="verify an existing staged copy and exit")
     ap.add_argument("--dry-run", action="store_true", help="show the pinned files without network or writes")
+    ap.add_argument("--print-source-archive", action="store_true", help="print the pinned GPL source archive filename and exit")
     ap.add_argument("--self-test", action="store_true", help="run offline fixture checks and exit")
     args = ap.parse_args(argv)
     if args.self_test:
         return self_test()
+    if args.print_source_archive:
+        print(SOURCE_ARCHIVE_NAME)
+        return 0
     if args.verify:
         problems = verify(args.verify)
         for problem in problems:
@@ -329,6 +333,11 @@ def self_test():
                       downloader=lambda _url: (_ for _ in ()).throw(AssertionError("network")))
             expect("dry-run", not os.path.exists(dry_parent) and "no network" in output.getvalue(),
                    "dry-run touched filesystem/network")
+            src_out = io.StringIO()
+            with contextlib.redirect_stdout(src_out):
+                rc_print = main(["--print-source-archive"])
+            expect("print-source-archive", rc_print == 0 and src_out.getvalue().strip() == SOURCE_ARCHIVE_NAME,
+                   "unexpected --print-source-archive output: " + repr(src_out.getvalue()))
         finally:
             FILES.clear()
             FILES.update(saved_files)

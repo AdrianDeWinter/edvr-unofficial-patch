@@ -196,6 +196,7 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
             applyPlan(plan, file.action == "edhm_apply" ? PayloadProvider{payloadItem} : PayloadProvider{});
         ApplyOutcome outcome;
         for (const std::string& line : result.done) outcome.lines.push_back(line);
+        for (const std::string& p : plan.problems) outcome.lines.push_back(p);
         if (!result.ok) {
             outcome.status = ApplyOutcome::Status::Failed;
             outcome.lines.push_back(result.error);

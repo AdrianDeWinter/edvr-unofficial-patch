@@ -6894,6 +6894,21 @@ void testEdhm2dMigoto() {
             }
             check(hasCore6 && !hasEdhm6,
                   "adopted release has core files ready and omits unavailable opt-in EDHM file");
+            // Follow-up smaller #3: routine check() does NOT loop re-offering the same release
+            // whose opt-in asset just failed, until a newer release arrives or the user retries.
+            const UpdateCheck afterFailCheck = up6.check();
+            check(afterFailCheck.outcome == UpdateOutcome::UpToDate,
+                  "updater.check() reports UpToDate instead of looping after opt-in failure on adopted release");
+            {
+                LauncherState st6retry;
+                st6retry.load(P(roots6.launcherDir(), L"launcher.ini"), nullptr);
+                check(!st6retry.edhmOptInFailedManifest().empty(),
+                      "launcher.ini records edhm_optin_failed_manifest for the failed opt-in release");
+                st6retry.setEdhmOptInFailedManifest(std::string());
+                check(st6retry.save(&err6), "clears edhm_optin_failed_manifest for explicit retry");
+            }
+            check(up6.check().outcome == UpdateOutcome::Available,
+                  "clearing edhm_optin_failed_manifest allows explicit retry to fetch the opt-in asset");
         }
     }
 }

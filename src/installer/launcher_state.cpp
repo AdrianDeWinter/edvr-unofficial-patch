@@ -157,6 +157,15 @@ bool LauncherState::edhm2dMigoto() const { return get("edhm_2dmigoto") == "on"; 
 
 void LauncherState::setEdhm2dMigoto(bool on) { set("edhm_2dmigoto", on ? "on" : "off"); }
 
+std::string LauncherState::edhmOptInFailedManifest() const {
+    const std::string value = get("edhm_optin_failed_manifest");
+    return isLowerHex(value, 64) ? value : std::string();
+}
+
+void LauncherState::setEdhmOptInFailedManifest(const std::string& sha256) {
+    set("edhm_optin_failed_manifest", sha256);
+}
+
 bool LauncherState::sameInstall(const std::wstring& a, const std::wstring& b) {
     return !a.empty() && !b.empty() && modeKey(a) == modeKey(b);
 }

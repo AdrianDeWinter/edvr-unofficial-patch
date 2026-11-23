@@ -1190,6 +1190,12 @@ void launcherApplyEdhmPlan(bool wantOn, bool isFallbackRestore) {
         showSurvey();
         return;
     }
+    setReport(planReport(plan) + "\r\n----\r\nDone.\r\n");
+    if (!plan.problems.empty() && !isFallbackRestore) {
+        std::wstring text;
+        for (const std::string& p : plan.problems) text += fromUtf8(p) + L"\n\n";
+        MessageBoxW(g.window, text.c_str(), kAppTitle, MB_OK | MB_ICONWARNING);
+    }
     if (wantOn) {
         launcherVerifyEdhmAfterEnable();
     }
@@ -1290,10 +1296,9 @@ void launcherUpdateSettingsToggle() {
     const bool edhmPresent = launcherEdhmPresentOnDisk();
     const DllInfo* diskDll = launcherEdhmDllOnDisk();
     const bool hasEdhmDll = diskDll && diskDll->kind != DllKind::Absent;
-    const bool hasPendingRestore =
-        g.haveSurvey && (active2d || (hasEdhmDll && g.survey.state.file("edhm_2dmigoto") != nullptr) ||
-                         (g.survey.d3dxIniPresent && !g.survey.d3dxIniReadOnly && !g.survey.d3dxIniUtf16 &&
-                          g.survey.state.edhmD3dxBackup.anySaved()));
+    const bool hasPendingDllRestore = active2d || (hasEdhmDll && g.survey.state.file("edhm_2dmigoto") != nullptr);
+    const bool hasPendingIniRestore = g.survey.state.edhmD3dxBackup.anySaved();
+    const bool hasPendingRestore = g.haveSurvey && (hasPendingDllRestore || hasPendingIniRestore);
     const bool externalEdhmKept =
         hasEdhmDll && !active2d && !g.survey.state.edhmExternalSha.empty();
     const bool payloadReady = launcherPayloadReady();
@@ -1310,7 +1315,7 @@ void launcherUpdateSettingsToggle() {
         migotoRow.statusText = tr(L"2DMigoto active");
         migotoRow.statusTone = LauncherRowTone::Good;
     } else if (hasPendingRestore && !migotoRow.on) {
-        migotoRow.statusText = tr(L"2DMigoto still on disk");
+        migotoRow.statusText = hasPendingDllRestore ? tr(L"2DMigoto still on disk") : tr(L"d3dx.ini restore pending");
         migotoRow.statusTone = LauncherRowTone::Warn;
         migotoRow.actionLink = tr(L"Restore standard");
     } else if (migotoRow.on && externalEdhmKept) {

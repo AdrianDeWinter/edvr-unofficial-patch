@@ -1436,17 +1436,19 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
         }
         const bool present = cur.kind != DllKind::Absent;
         const bool wasOurs = earlier && present && sameSha(earlier->sha256, cur.sha256);
-        const bool stoodDownExternal = present && !s.state.edhmExternalSha.empty();
+        const bool stoodDownExternal = !s.state.edhmExternalSha.empty();
         if (present && sameSha(cur.sha256, sha) && !o.repair) {
             plan.notes.push_back("d3d11_edhm.dll is already this tailored 2DMigoto build -- left alone.");
             recordFile(f, sha);
             next.edhmExternalSha.clear();
             edhmPlacedOrRestored = true;
         } else if ((earlier && present && !wasOurs && !sameSha(cur.sha256, sha)) ||
-                   (stoodDownExternal && !sameSha(cur.sha256, sha))) {
-            plan.notes.push_back("EDHM's d3d11_edhm.dll was updated outside ED-UP; keeping your newer file in place instead of overwriting it with 2DMigoto.");
+                   (stoodDownExternal && (!present || !sameSha(cur.sha256, sha)))) {
+            plan.notes.push_back(present
+                ? "EDHM's d3d11_edhm.dll was updated outside ED-UP; keeping your newer file in place instead of overwriting it with 2DMigoto."
+                : "ED-UP previously stood down after an external EDHM update; leaving d3d11_edhm.dll unmanaged until you re-apply 2DMigoto.");
             next.drop(id);
-            next.edhmExternalSha = cur.sha256;
+            next.edhmExternalSha = present ? cur.sha256 : s.state.edhmExternalSha;
         } else {
             if (present) {
                 backup(dst, wasOurs ? "the earlier 2DMigoto d3d11_edhm.dll being replaced"
@@ -1590,11 +1592,26 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
                 return plan;
             }
             if (s.d3dxIniUtf16) {
+                plan.blocked = true;
                 plan.problems.push_back(
-                    "d3dx.ini is UTF-16 encoded; ED-UP only edits UTF-8/ASCII d3dx.ini files and left it unchanged.");
-            } else if (s.d3dxIniReadOnly) {
-                plan.problems.push_back(
-                    "d3dx.ini is read-only; ED-UP will not unlock it, so EDHM compatibility settings were left unchanged.");
+                    "d3dx.ini is UTF-16 encoded; ED-UP only edits UTF-8/ASCII d3dx.ini files and will not install "
+                    "2DMigoto without applying its required compatibility settings (allow_platform_update = 1). "
+                    "Convert d3dx.ini to UTF-8 or turn off the experimental 2DMigoto option.");
+                return plan;
+            }
+            if (s.d3dxIniReadOnly) {
+                const std::string patched = applyEdhmD3dxCompat(s.d3dxIniText);
+                if (patched != s.d3dxIniText) {
+                    plan.blocked = true;
+                    plan.problems.push_back(
+                        "d3dx.ini is read-only and does not have ED-UP's required compatibility settings "
+                        "([System] allow_platform_update = 1, load_library_redirect = 0, [Device] upscaling = 0). "
+                        "ED-UP will not unlock d3dx.ini or install 2DMigoto without those settings. "
+                        "Clear read-only, apply them yourself, or turn off the experimental 2DMigoto option.");
+                    return plan;
+                }
+                plan.notes.push_back(
+                    "d3dx.ini is read-only and already has ED-UP's compatibility values; left unchanged.");
             } else {
                 if (!next.edhmD3dxBackup.saved) {
                     const EdhmD3dxBackup snap = snapshotEdhmD3dxCompat(s.d3dxIniText);
@@ -1627,39 +1644,42 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             }
         }
     } else if (edhmStoppedManaging && s.state.edhmD3dxBackup.anySaved()) {
-        if (s.d3dxIniPresent) {
-            if (s.d3dxIniUnreadable) {
-                plan.blocked = true;
-                plan.problems.push_back(
-                    "d3dx.ini cannot be read -- close anything holding it open before restoring EDHM settings.");
-                return plan;
+        bool clearedBackup = false;
+        if (!s.d3dxIniPresent) {
+            plan.problems.push_back(
+                "d3dx.ini is missing; keeping the backed-up EDHM settings record until d3dx.ini is present again.");
+        } else if (s.d3dxIniUnreadable) {
+            plan.blocked = true;
+            plan.problems.push_back(
+                "d3dx.ini cannot be read -- close anything holding it open before restoring EDHM settings.");
+            return plan;
+        } else if (s.d3dxIniUtf16) {
+            plan.problems.push_back(
+                "d3dx.ini is UTF-16 encoded; leaving it unchanged and keeping the backed-up EDHM settings record.");
+        } else if (s.d3dxIniReadOnly) {
+            plan.problems.push_back(
+                "d3dx.ini is read-only; leaving it unchanged and keeping the backed-up EDHM settings record. "
+                "Clear read-only and click Restore standard to restore your original settings.");
+        } else {
+            const std::string restored = restoreEdhmD3dxCompat(s.d3dxIniText, s.state.edhmD3dxBackup);
+            if (restored != s.d3dxIniText) {
+                const std::wstring d3dxPath = joinPath(s.game.dir, L"d3dx.ini");
+                backup(d3dxPath, "your d3dx.ini before restoring backed-up EDHM compatibility settings");
+                body.back().required = true;
+                body.back().expectSha = s.d3dxIniSha;
+                writeText(restored, d3dxPath,
+                          "restores backed-up d3dx.ini settings");
+                body.back().from = d3dxPath;
+                body.back().expectSha = s.d3dxIniSha;
+                body.back().required = true;
+                body.back().refuseReadOnly = true;
+                changed = true;
+                plan.notes.push_back(
+                    "Restoring your backed-up d3dx.ini settings where ED-UP's values are still in place.");
             }
-            if (s.d3dxIniUtf16) {
-                plan.problems.push_back(
-                    "d3dx.ini is UTF-16 encoded; leaving it unchanged instead of restoring backed-up EDHM settings.");
-            } else if (s.d3dxIniReadOnly) {
-                plan.problems.push_back(
-                    "d3dx.ini is read-only; leaving it unchanged instead of restoring backed-up EDHM settings.");
-            } else {
-                const std::string restored = restoreEdhmD3dxCompat(s.d3dxIniText, s.state.edhmD3dxBackup);
-                if (restored != s.d3dxIniText) {
-                    const std::wstring d3dxPath = joinPath(s.game.dir, L"d3dx.ini");
-                    backup(d3dxPath, "your d3dx.ini before restoring backed-up EDHM compatibility settings");
-                    body.back().required = true;
-                    body.back().expectSha = s.d3dxIniSha;
-                    writeText(restored, d3dxPath,
-                              "restores backed-up d3dx.ini settings");
-                    body.back().from = d3dxPath;
-                    body.back().expectSha = s.d3dxIniSha;
-                    body.back().required = true;
-                    body.back().refuseReadOnly = true;
-                    changed = true;
-                    plan.notes.push_back(
-                        "Restoring your backed-up d3dx.ini settings where ED-UP's values are still in place.");
-                }
-            }
+            clearedBackup = true;
         }
-        next.edhmD3dxBackup = EdhmD3dxBackup{};
+        if (clearedBackup) next.edhmD3dxBackup = EdhmD3dxBackup{};
     }
 
     // A chain target that has gone away leaves advanced.real_dll pointing at
@@ -2807,38 +2827,53 @@ Plan planEdhmRestore(const Survey& s, const Options& o) {
         }
     }
     if (s.state.edhmD3dxBackup.anySaved()) {
-        if (s.d3dxIniPresent) {
-            if (s.d3dxIniUnreadable) {
+        bool clearedBackup = false;
+        if (!s.d3dxIniPresent) {
+            plan.problems.push_back(
+                "d3dx.ini is missing; keeping the backed-up EDHM settings record until d3dx.ini is present again.");
+            if (!hasEdhmDll) {
                 plan.blocked = true;
-                plan.problems.push_back("d3dx.ini cannot be read -- close anything holding it open before restoring EDHM settings.");
                 return plan;
             }
-            if (s.d3dxIniUtf16) {
-                plan.problems.push_back(
-                    "d3dx.ini is UTF-16 encoded; leaving it unchanged instead of restoring backed-up EDHM settings.");
-            } else if (s.d3dxIniReadOnly) {
-                plan.problems.push_back(
-                    "d3dx.ini is read-only; leaving it unchanged instead of restoring backed-up EDHM settings.");
-            } else {
-                const std::string restored = restoreEdhmD3dxCompat(s.d3dxIniText, s.state.edhmD3dxBackup);
-                if (restored != s.d3dxIniText) {
-                    const std::wstring d3dxPath = joinPath(s.game.dir, L"d3dx.ini");
-                    Step wd;
-                    wd.action = Action::WriteText;
-                    wd.from = d3dxPath;
-                    wd.to = d3dxPath;
-                    wd.text = restored;
-                    wd.expectSha = s.d3dxIniSha;
-                    wd.required = true;
-                    wd.refuseReadOnly = true;
-                    wd.why = "restores backed-up d3dx.ini settings";
-                    plan.steps.push_back(wd);
-                    plan.notes.push_back(
-                        "Restoring your backed-up d3dx.ini settings where ED-UP's values are still in place.");
-                }
+        } else if (s.d3dxIniUnreadable) {
+            plan.blocked = true;
+            plan.problems.push_back("d3dx.ini cannot be read -- close anything holding it open before restoring EDHM settings.");
+            return plan;
+        } else if (s.d3dxIniUtf16) {
+            plan.problems.push_back(
+                "d3dx.ini is UTF-16 encoded; leaving it unchanged and keeping the backed-up EDHM settings record.");
+            if (!hasEdhmDll) {
+                plan.blocked = true;
+                return plan;
             }
+        } else if (s.d3dxIniReadOnly) {
+            plan.problems.push_back(
+                "d3dx.ini is read-only; leaving it unchanged and keeping the backed-up EDHM settings record. "
+                "Clear read-only and click Restore standard to restore your original settings.");
+            if (!hasEdhmDll) {
+                plan.blocked = true;
+                return plan;
+            }
+        } else {
+            const std::string restored = restoreEdhmD3dxCompat(s.d3dxIniText, s.state.edhmD3dxBackup);
+            if (restored != s.d3dxIniText) {
+                const std::wstring d3dxPath = joinPath(s.game.dir, L"d3dx.ini");
+                Step wd;
+                wd.action = Action::WriteText;
+                wd.from = d3dxPath;
+                wd.to = d3dxPath;
+                wd.text = restored;
+                wd.expectSha = s.d3dxIniSha;
+                wd.required = true;
+                wd.refuseReadOnly = true;
+                wd.why = "restores backed-up d3dx.ini settings";
+                plan.steps.push_back(wd);
+                plan.notes.push_back(
+                    "Restoring your backed-up d3dx.ini settings where ED-UP's values are still in place.");
+            }
+            clearedBackup = true;
         }
-        next.edhmD3dxBackup = EdhmD3dxBackup{};
+        if (clearedBackup) next.edhmD3dxBackup = EdhmD3dxBackup{};
     }
     next.edhmExternalSha.clear();
     if (!o.nowUtc.empty()) next.installedUtc = o.nowUtc;
@@ -3113,11 +3148,26 @@ Plan planEdhmToggle(const Survey& s, const Options& o, const PayloadInfo& p) {
             return plan;
         }
         if (s.d3dxIniUtf16) {
+            plan.blocked = true;
             plan.problems.push_back(
-                "d3dx.ini is UTF-16 encoded; ED-UP only edits UTF-8/ASCII d3dx.ini files and left it unchanged.");
-        } else if (s.d3dxIniReadOnly) {
-            plan.problems.push_back(
-                "d3dx.ini is read-only; ED-UP will not unlock it, so EDHM compatibility settings were left unchanged.");
+                "d3dx.ini is UTF-16 encoded; ED-UP only edits UTF-8/ASCII d3dx.ini files and will not install "
+                "2DMigoto without applying its required compatibility settings (allow_platform_update = 1). "
+                "Convert d3dx.ini to UTF-8 or turn off the experimental 2DMigoto option.");
+            return plan;
+        }
+        if (s.d3dxIniReadOnly) {
+            const std::string patched = applyEdhmD3dxCompat(s.d3dxIniText);
+            if (patched != s.d3dxIniText) {
+                plan.blocked = true;
+                plan.problems.push_back(
+                    "d3dx.ini is read-only and does not have ED-UP's required compatibility settings "
+                    "([System] allow_platform_update = 1, load_library_redirect = 0, [Device] upscaling = 0). "
+                    "ED-UP will not unlock d3dx.ini or install 2DMigoto without those settings. "
+                    "Clear read-only, apply them yourself, or turn off the experimental 2DMigoto option.");
+                return plan;
+            }
+            plan.notes.push_back(
+                "d3dx.ini is read-only and already has ED-UP's compatibility values; left unchanged.");
         } else {
             if (!next.edhmD3dxBackup.saved) {
                 const EdhmD3dxBackup snap = snapshotEdhmD3dxCompat(s.d3dxIniText);

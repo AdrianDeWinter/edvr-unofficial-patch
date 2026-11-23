@@ -591,6 +591,12 @@ set EDHM2DM=
 if defined EDVR_EDHM_2DMIGOTO set EDHM2DM=%EDVR_EDHM_2DMIGOTO%
 if not defined EDHM2DM if exist "%ROOT%\third_party\edhm_2dmigoto\bin\d3d11_edhm.dll" set EDHM2DM=%ROOT%\third_party\edhm_2dmigoto
 if not defined EDHM2DM if exist "%LOCALAPPDATA%\EDVR\edhm-2dmigoto\bin\d3d11_edhm.dll" set EDHM2DM=%LOCALAPPDATA%\EDVR\edhm-2dmigoto
+set EDHM_SOURCE_ARCHIVE=
+for /f "usebackq delims=" %%A in (`python "tools\fetch_edhm_2dmigoto.py" --print-source-archive`) do set EDHM_SOURCE_ARCHIVE=%%A
+if not defined EDHM_SOURCE_ARCHIVE (
+    echo [edvr] ERROR: tools\fetch_edhm_2dmigoto.py did not report a source archive name.
+    exit /b 1
+)
 if defined EDHM2DM (
     python "tools\fetch_edhm_2dmigoto.py" --verify "%EDHM2DM%" || (
         echo [edvr] ERROR: the EDHM_2DMigoto runtime at %EDHM2DM% is not the pinned one. Run python tools\fetch_edhm_2dmigoto.py to fetch the pinned release again.
@@ -599,13 +605,14 @@ if defined EDHM2DM (
     copy /Y "%EDHM2DM%\bin\d3d11_edhm.dll" "%BUILD%\d3d11_edhm.dll" >nul || exit /b 1
     copy /Y "%EDHM2DM%\LICENSE.GPL.txt" "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt" >nul || exit /b 1
     copy /Y "%EDHM2DM%\EDHM-2DMIGOTO-THIRD-PARTY.txt" "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt" >nul || exit /b 1
-    copy /Y "%EDHM2DM%\ed-up-edhm-source-0.1.8.tar.gz" "%BUILD%\ed-up-edhm-source-0.1.8.tar.gz" >nul || exit /b 1
+    if exist "%BUILD%\ed-up-edhm-source-*.tar.gz" del /q "%BUILD%\ed-up-edhm-source-*.tar.gz"
+    copy /Y "%EDHM2DM%\%EDHM_SOURCE_ARCHIVE%" "%BUILD%\%EDHM_SOURCE_ARCHIVE%" >nul || exit /b 1
     echo [edvr] EDHM_2DMigoto runtime: %EDHM2DM%
 ) else (
     if exist "%BUILD%\d3d11_edhm.dll" del /q "%BUILD%\d3d11_edhm.dll"
     if exist "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt" del /q "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt"
     if exist "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt" del /q "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt"
-    if exist "%BUILD%\ed-up-edhm-source-0.1.8.tar.gz" del /q "%BUILD%\ed-up-edhm-source-0.1.8.tar.gz"
+    if exist "%BUILD%\ed-up-edhm-source-*.tar.gz" del /q "%BUILD%\ed-up-edhm-source-*.tar.gz"
     echo [edvr] NO EDHM_2DMigoto runtime staged. Optional EDHM 2DMigoto asset will be omitted. Fetch with tools\fetch_edhm_2dmigoto.py.
 )
 

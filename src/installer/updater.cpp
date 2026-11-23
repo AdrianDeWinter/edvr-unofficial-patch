@@ -239,9 +239,12 @@ UpdateCheck Updater::check() {
         if (!loadVerifiedManifest(mBytes, sText, keys(), &curManifest, nullptr)) return false;
         PayloadCache cache(settings_.cacheDir);
         const bool wantOptIn = state.edhm2dMigoto();
+        const bool skipFailedOptIn =
+            !state.edhmOptInFailedManifest().empty() &&
+            state.edhmOptInFailedManifest() == state.currentManifest();
         for (const ManifestFile& f : curManifest.files) {
             if (!f.when.option.empty()) {
-                if (!wantOptIn) continue;
+                if (!wantOptIn || skipFailedOptIn) continue;
                 if (!cache.hasVerified(f.sha256, f.size)) return false;
                 continue;
             }
@@ -396,6 +399,11 @@ bool Updater::commitManifest(const UpdateCheck& check, std::string* error,
 
     state.setCurrentManifest(sha);
     state.raiseHighestIssued(verified.issued);
+    if (state.edhm2dMigoto() && !cache.hasAll(verified, preVerified, true)) {
+        state.setEdhmOptInFailedManifest(sha);
+    } else {
+        state.setEdhmOptInFailedManifest(std::string());
+    }
     if (!state.save(error)) return false;
 
     // Keep the current manifest and the newest others, up to three; the files of

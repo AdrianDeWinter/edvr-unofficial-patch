@@ -8619,6 +8619,14 @@ int wmain(int argc, wchar_t** argv) {
                       "install after 2nd player EDHM update applies");
                 check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV4,
                       "install keeps 2nd player EDHM update without overwriting it");
+                // Even if the player's DLL is temporarily absent while stood down, planInstall must not re-arm 2DMigoto.
+                DeleteFileW(joinPath(gameDir, L"d3d11_edhm.dll").c_str());
+                opt.backupStamp = L"t12g3c";
+                check(applyPlan(planInstall(surveyEdhm(), opt, p2), providerFor(p2)).ok &&
+                          !fileExists(joinPath(gameDir, L"d3d11_edhm.dll")) &&
+                          !readState(gameDir).edhmExternalSha.empty(),
+                      "install stays stood down when external EDHM DLL goes absent instead of silently re-arming");
+                writeAll(joinPath(gameDir, L"d3d11_edhm.dll"), stdEdhmV4);
                 Options topt;
                 topt.edhm2dMigoto = true;
                 topt.backupStamp = L"t12g4";
@@ -8762,35 +8770,43 @@ int wmain(int argc, wchar_t** argv) {
                           !fileExists(joinPath(gameDir, L"d3d11_edhm.dll")),
                       "subsequent uninstall after dismiss does not restore deleted EDHM DLL");
             }
-            // Sean #5: conditional restore preserves later user edits, and duplicate keys/sections only touch last active.
+            // Sean #5 + follow-up #1: conditional restore preserves later user edits, and duplicate keys/sections
+            // read/set/remove ONLY the first active key in the first section (matching 2DMigoto's IniHandler.cpp).
             {
                 const std::string dupIni =
                     "[System]\r\n"
                     "load_library_redirect = 2\r\n"
+                    "load_library_redirect = 7\r\n"
                     "[Device]\r\n"
-                    "upscaling = 9\r\n"
+                    "upscaling = 1\r\n"
                     "[Device]\r\n"
-                    "upscaling = 1\r\n";
+                    "upscaling = 9\r\n";
+                check(readD3dxKey(dupIni, "System", "load_library_redirect").value == "2" &&
+                          readD3dxKey(dupIni, "Device", "upscaling").value == "1",
+                      "readD3dxKey reads the first active key in the first matching section");
                 const EdhmD3dxBackup dupSnap = snapshotEdhmD3dxCompat(dupIni);
                 const std::string dupPatched = applyEdhmD3dxCompat(dupIni);
-                check(dupPatched.find("upscaling = 9") != std::string::npos &&
+                check(dupPatched.find("load_library_redirect = 7") != std::string::npos &&
+                          dupPatched.find("upscaling = 9") != std::string::npos &&
+                          readD3dxKey(dupPatched, "System", "load_library_redirect").value == "0" &&
                           readD3dxKey(dupPatched, "Device", "upscaling").value == "0",
-                      "setD3dxKey updates only the last active duplicate key without collapsing earlier section");
-                // Player edits upscaling from 0 -> 2 while ED-UP is active; restore must keep 2, restore untouched keys.
+                      "setD3dxKey updates only the first active key in the first matching section without touching duplicates");
+                // Player edits upscaling from 0 -> 2 in the first [Device]; restore must keep 2, restore untouched keys.
                 const std::string playerEdited = setD3dxKey(dupPatched, "Device", "upscaling", "2");
                 const std::string condRestored = restoreEdhmD3dxCompat(playerEdited, dupSnap);
                 check(readD3dxKey(condRestored, "System", "load_library_redirect").value == "2" &&
                           !readD3dxKey(condRestored, "System", "allow_platform_update").present &&
                           readD3dxKey(condRestored, "Device", "upscaling").value == "2" &&
+                          condRestored.find("load_library_redirect = 7") != std::string::npos &&
                           condRestored.find("upscaling = 9") != std::string::npos,
-                      "conditional restore keeps later user edit to upscaling while restoring untouched keys");
-                // Without player edit, restore puts back 1 on the last occurrence and keeps earlier upscaling = 9.
+                      "conditional restore keeps later user edit to upscaling while restoring untouched first-section keys");
+                // Without player edit, restore puts back 1 in the first [Device] and keeps second [Device] upscaling = 9.
                 const std::string cleanRestored = restoreEdhmD3dxCompat(dupPatched, dupSnap);
                 check(readD3dxKey(cleanRestored, "Device", "upscaling").value == "1" &&
                           cleanRestored.find("upscaling = 9") != std::string::npos,
-                      "restore on duplicate sections restores only the last occurrence");
+                      "restore on duplicate sections restores only the first section's first occurrence");
             }
-            // Sean #8: UTF-16 d3dx.ini is detected and refused without mutating bytes.
+            // Sean #8 + follow-up #3: UTF-16 d3dx.ini blocks installing 2DMigoto and never mutates bytes.
             {
                 const std::string utf16Le = std::string("\xFF\xFE[\0S\0y\0s\0t\0e\0m\0]\0\r\0\n\0", 22);
                 const std::string utf16Be = std::string("\xFE\xFF\0[\0S\0y\0s\0t\0e\0m\0]", 18);
@@ -8810,10 +8826,20 @@ int wmain(int argc, wchar_t** argv) {
                 u16Opt.edhm2dMigoto = true;
                 u16Opt.backupStamp = L"t12u16";
                 const Plan u16Plan = planInstall(sU16, u16Opt, p2);
-                check(!u16Plan.blocked && !u16Plan.problems.empty() &&
-                          applyPlan(u16Plan, providerFor(p2)).ok &&
+                check(u16Plan.blocked && !u16Plan.problems.empty() &&
                           readAll(joinPath(gameDir, L"d3dx.ini")) == utf16Le,
-                      "planInstall leaves UTF-16 d3dx.ini untouched and reports problem note");
+                      "planInstall blocks placing 2DMigoto when d3dx.ini is UTF-16");
+                // Install core ED-UP with 2DMigoto off, then verify planEdhmToggle(true) also blocks on UTF-16.
+                u16Opt.edhm2dMigoto = false;
+                check(applyPlan(planInstall(sU16, u16Opt, p2), providerFor(p2)).ok,
+                      "core install with 2DMigoto off succeeds beside UTF-16 d3dx.ini");
+                Options togU16;
+                togU16.edhm2dMigoto = true;
+                togU16.backupStamp = L"t12u16t";
+                check(planEdhmToggle(surveyEdhm(), togU16, p2).blocked &&
+                          readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV2 &&
+                          readAll(joinPath(gameDir, L"d3dx.ini")) == utf16Le,
+                      "planEdhmToggle blocks placing 2DMigoto when d3dx.ini is UTF-16");
                 Options logOpt;
                 logOpt.nowUtc = "2026-11-22T12:10:00Z";
                 check(planEdhmLogging(surveyEdhm(), logOpt, "show_reload_message", true).blocked,
@@ -8824,7 +8850,8 @@ int wmain(int argc, wchar_t** argv) {
                           readAll(joinPath(gameDir, L"d3dx.ini")) == utf16Le,
                       "planUninstall leaves UTF-16 d3dx.ini untouched");
             }
-            // Sean #1: read-only d3dx.ini is never unlocked or edited by planner or applyPlan.
+            // Sean #1 + follow-up #2 & #3: read-only d3dx.ini is never unlocked, blocks placing 2DMigoto
+            // when compat values are missing, and preserves edhmD3dxBackup when a restore is skipped.
             {
                 const std::wstring d3dxPath = joinPath(gameDir, L"d3dx.ini");
                 writeAll(joinPath(gameDir, L"d3d11.dll"), stdEdhmV2);
@@ -8838,13 +8865,22 @@ int wmain(int argc, wchar_t** argv) {
                 roOpt.edhm2dMigoto = true;
                 roOpt.backupStamp = L"t12ro1";
                 const Plan roPlan = planInstall(sRo, roOpt, p2);
-                check(!roPlan.blocked && !roPlan.problems.empty() &&
-                          applyPlan(roPlan, providerFor(p2)).ok,
-                      "planInstall succeeds while skipping read-only d3dx.ini");
+                check(roPlan.blocked && !roPlan.problems.empty(),
+                      "planInstall blocks placing 2DMigoto when read-only d3dx.ini lacks compat settings");
                 const DWORD attrsAfter = GetFileAttributesW(d3dxPath.c_str());
                 check(attrsAfter != INVALID_FILE_ATTRIBUTES && (attrsAfter & FILE_ATTRIBUTE_READONLY) != 0 &&
                           readAll(d3dxPath) == sampleD3dx,
-                      "read-only d3dx.ini stayed read-only and byte-identical after opt-in install");
+                      "read-only d3dx.ini stayed read-only and byte-identical after blocked opt-in install");
+                // Install core ED-UP with 2DMigoto off, then verify planEdhmToggle(true) also blocks.
+                roOpt.edhm2dMigoto = false;
+                check(applyPlan(planInstall(sRo, roOpt, p2), providerFor(p2)).ok,
+                      "core install with 2DMigoto off succeeds beside read-only d3dx.ini");
+                Options roTog;
+                roTog.edhm2dMigoto = true;
+                roTog.backupStamp = L"t12ro1t";
+                check(planEdhmToggle(surveyEdhm(), roTog, p2).blocked &&
+                          readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV2,
+                      "planEdhmToggle blocks placing 2DMigoto when read-only d3dx.ini lacks compat settings");
                 Options logOpt;
                 logOpt.nowUtc = "2026-11-22T12:20:00Z";
                 check(planEdhmLogging(surveyEdhm(), logOpt, "show_reload_message", true).blocked,
@@ -8866,10 +8902,49 @@ int wmain(int argc, wchar_t** argv) {
                               readAll(d3dxPath) == sampleD3dx,
                           "applyPlan refuses to unlock or overwrite a read-only file when refuseReadOnly is set");
                 }
+                // Unlock -> enable 2DMigoto -> re-lock read-only -> opt out: DLL restores, d3dx.ini stays untouched
+                // AND edhmD3dxBackup is KEPT until unlocked and restored!
+                SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+                check(applyPlan(planEdhmToggle(surveyEdhm(), roTog, p2), providerFor(p2)).ok &&
+                          readState(gameDir).edhmD3dxBackup.saved,
+                      "planEdhmToggle succeeds once d3dx.ini is writable and records backup");
+                const std::string patchedBytes = readAll(d3dxPath);
+                SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_READONLY);
+                {
+                    Options roRestOpt;
+                    roRestOpt.nowUtc = "2026-11-22T12:22:00Z";
+                    const Plan roRest = planEdhmRestore(surveyEdhm(), roRestOpt);
+                    check(!roRest.blocked && !roRest.problems.empty() &&
+                              applyPlan(roRest, PayloadProvider{}).ok,
+                          "planEdhmRestore restores standard DLL while skipping read-only d3dx.ini");
+                    check(readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV2 &&
+                              readAll(d3dxPath) == patchedBytes &&
+                              (GetFileAttributesW(d3dxPath.c_str()) & FILE_ATTRIBUTE_READONLY) != 0 &&
+                              readState(gameDir).edhmD3dxBackup.saved,
+                          "refused d3dx.ini restore keeps edhmD3dxBackup record in state.ini");
+                    // Calling planEdhmRestore again while only d3dx.ini restore remains and file is still read-only blocks.
+                    check(planEdhmRestore(surveyEdhm(), roRestOpt).blocked,
+                          "planEdhmRestore blocks when only read-only d3dx.ini restore remains");
+                    // Unlocking d3dx.ini lets planEdhmRestore finish restoring originals and clear the backup record.
+                    SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+                    check(applyPlan(planEdhmRestore(surveyEdhm(), roRestOpt), PayloadProvider{}).ok &&
+                              readD3dxKey(readAll(d3dxPath), "System", "load_library_redirect").value == "2" &&
+                              !readD3dxKey(readAll(d3dxPath), "System", "allow_platform_update").present &&
+                              readD3dxKey(readAll(d3dxPath), "Device", "upscaling").value == "1" &&
+                              !readState(gameDir).edhmD3dxBackup.anySaved(),
+                          "unlocking d3dx.ini lets pending planEdhmRestore restore originals and clear backup");
+                }
+                // Read-only d3dx.ini that ALREADY has compat values (0/1/0) allows installing 2DMigoto without writing.
+                writeAll(d3dxPath, applyEdhmD3dxCompat(sampleD3dx));
+                SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_READONLY);
+                check(applyPlan(planEdhmToggle(surveyEdhm(), roTog, p2), providerFor(p2)).ok &&
+                          readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == migotoV2 &&
+                          !readState(gameDir).edhmD3dxBackup.saved &&
+                          (GetFileAttributesW(d3dxPath.c_str()) & FILE_ATTRIBUTE_READONLY) != 0,
+                      "read-only d3dx.ini already holding compat values allows 2DMigoto without editing or recording backup");
                 Options unRo;
                 unRo.backupStamp = L"t12ro2";
                 check(applyPlan(planUninstall(surveyEdhm(), unRo, p2), providerFor(p2)).ok &&
-                          readAll(d3dxPath) == sampleD3dx &&
                           (GetFileAttributesW(d3dxPath.c_str()) & FILE_ATTRIBUTE_READONLY) != 0,
                       "planUninstall leaves read-only d3dx.ini untouched and still read-only");
                 SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_NORMAL);

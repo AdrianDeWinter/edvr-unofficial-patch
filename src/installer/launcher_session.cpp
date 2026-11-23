@@ -219,8 +219,9 @@ void LauncherSession::beginUpdate() {
                 changed();
                 return;
             }
-            if (!optInWarning.empty() ||
-                (edhm2dMigoto_ && load.hasOptInEdhmAsset && payloadInfo().find("edhm_2dmigoto") == nullptr)) {
+            if (!optInWarning.empty()) {
+                edhmWarning_ = optInWarning;
+            } else if (edhm2dMigoto_ && load.hasOptInEdhmAsset && payloadInfo().find("edhm_2dmigoto") == nullptr) {
                 edhmWarning_ = kEdhmInterferenceWarning;
             }
             updateLine_ = "ED-UP " + check_.manifest.version + " is ready to install.";
@@ -333,6 +334,7 @@ bool LauncherSession::setEdhm2dMigoto(bool on, const std::function<bool()>& conf
     std::string error;
     if (state.load(launcherIniPath(env_.roots), &error)) {
         state.setEdhm2dMigoto(on);
+        state.setEdhmOptInFailedManifest(std::string());
         createDirectories(env_.roots.launcherDir());
         state.save(&error);
     }

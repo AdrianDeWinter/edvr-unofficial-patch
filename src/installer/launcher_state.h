@@ -94,6 +94,12 @@ public:
     bool edhm2dMigoto() const;
     void setEdhm2dMigoto(bool on);
 
+    // Manifest SHA-256 whose optional EDHM opt-in asset failed or was quarantined on the last update,
+    // so routine update checks do not loop re-downloading the same release until a newer manifest
+    // publishes or the user toggles the option again. Empty when none.
+    std::string edhmOptInFailedManifest() const;
+    void setEdhmOptInFailedManifest(const std::string& sha256);
+
     // The same folder by modeKey's rules: case, slash direction and a trailing separator do not count.
     static bool sameInstall(const std::wstring& a, const std::wstring& b);
 

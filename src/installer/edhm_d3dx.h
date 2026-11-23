@@ -23,34 +23,38 @@ struct D3dxKeyRead {
 // rather than appending ASCII bytes onto a UTF-16 file.
 bool isUtf16D3dx(const std::string& bytes);
 
-// Reads the last active (uncommented) occurrence of `key` under `[section]`.
-// Section and key matching are ASCII case-insensitive. Lines whose first
-// non-whitespace character is ';' are comments; inline ';' comments are
-// stripped from the returned value.
+// Reads the first active (uncommented) occurrence of `key` in the first
+// `[section]` of that name, matching 2DMigoto's IniHandler.cpp (first section
+// wins, first key wins via emplace). Section and key matching are ASCII
+// case-insensitive. Lines whose first non-whitespace character is ';' are
+// comments; inline ';' comments are stripped from the returned value.
 D3dxKeyRead readD3dxKey(const std::string& iniText, const char* section, const char* key);
 
-// Sets `key` under `[section]` to `value`, preserving comments, unrelated keys,
-// inline comments, indentation, UTF-8 BOM, and line-ending style (CRLF or LF).
-// - Only the last active occurrence in `[section]` (the effective last-wins
-//   entry read by readD3dxKey) is updated in place, so duplicate keys across
-//   repeated sections are not collapsed.
-// - Otherwise, if a commented `; key = ...` line exists in `[section]`,
-//   `key = value` is inserted immediately after the last commented occurrence
-//   so the template comment stays intact.
+// Sets `key` in the first `[section]` of that name to `value`, preserving
+// comments, unrelated keys, inline comments, indentation, UTF-8 BOM, and
+// line-ending style (CRLF or LF).
+// - Only the first active occurrence in the first `[section]` (the effective
+//   first-wins entry read by 2DMigoto and readD3dxKey) is updated in place,
+//   so duplicate keys or repeated sections are not collapsed.
+// - Otherwise, if a commented `; key = ...` line exists in that first
+//   `[section]`, `key = value` is inserted immediately after the first
+//   commented occurrence so the template comment stays intact.
 // - Otherwise, if `[section]` exists, `key = value` is appended at the end of
-//   that section.
+//   the first `[section]`.
 // - Otherwise, `[section]` and `key = value` are appended at the end of the file.
 std::string setD3dxKey(const std::string& iniText, const char* section, const char* key,
                        const std::string& value);
 
-// Removes the last active (uncommented) occurrence of `key` under `[section]`
-// while keeping commented lines and any earlier duplicate lines intact.
+// Removes the first active (uncommented) occurrence of `key` in the first
+// `[section]` of that name while keeping commented lines and any later
+// duplicate keys or sections intact.
 std::string removeD3dxKey(const std::string& iniText, const char* section, const char* key);
 
-// Captures the original values of the three ED-UP compatibility keys:
-//   [System] load_library_redirect  (EDHM_2DMigoto DirectX11/D3D11Wrapper.cpp: >1 redirects LoadLibrary("d3d11.dll") to outer ED-UP)
-//   [System] allow_platform_update  (EDHM_2DMigoto DirectX11/HackerDevice.cpp & HackerContext.cpp: 0 returns E_NOINTERFACE for Device1/Context1)
-//   [Device] upscaling              (EDHM_2DMigoto DirectX11/HackerDXGI.cpp: legacy swapchain/backbuffer upscaler)
+// Captures the original values of the three ED-UP compatibility keys
+// (verified against pinned Fenris159/EDHM_2DMigoto@2cbeaa38):
+//   [System] allow_platform_update  (required: IniHandler.cpp:5051 defaults false; HackerDevice.cpp:1698 & HackerContext.cpp:1374 return E_NOINTERFACE for Device1/Context1, breaking flat_mono_resolve.cpp:604-619)
+//   [System] load_library_redirect  (defensive: at 2, D3D11Wrapper.cpp:1032-1089 ReplaceOnMatch redirects full System32 d3d11.dll paths and original_d3d11.dll; ED-UP already handles System32 via system_d3d11.h, so 0 avoids redundant redirection in the proxy chain)
+//   [Device] upscaling              (guard on default 0: IniHandler.cpp:5131 & HackerDXGI.cpp legacy swapchain upscaler)
 EdhmD3dxBackup snapshotEdhmD3dxCompat(const std::string& iniText);
 
 // Applies ED-UP compatibility values to d3dx.ini:
