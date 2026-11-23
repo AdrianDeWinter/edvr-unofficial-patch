@@ -415,7 +415,7 @@ bool build(ID3D11DeviceContext* ctx, const Source& src, Slot& slot) {
         g_notedBuilt = true;
         Log::get().note(
             "menu backdrop: SMOOTH. The %ux%u BC1 still behind the menu was "
-            "debanded once into an EDVR texture (%d passes, threshold %.1f/255, "
+            "debanded once into an ED-UP texture (%d passes, threshold %.1f/255, "
             "dither %.1f/255) and that draw now samples ours. The game's shader "
             "is untouched, and one texture feeds both eyes. The draw's target "
             "is %ux%u%s",

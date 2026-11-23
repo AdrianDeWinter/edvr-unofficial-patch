@@ -17,8 +17,8 @@ shader record holds one DXBC blob and a 16-byte id (at +12 in the legacy
 version-2 records, +16 in Odyssey's version-5 ones). An effect record starts
 with its parameter, texture and sampler names, then its own name, then tables
 that name each pass's shaders by that 16-byte id. The game strips RDEF, so the
-bytecode carries no names: this is how a shader EDVR hashes at creation is put
-to an effect name without running the game. Hashes are the ones EDVR logs and
+bytecode carries no names: this is how a shader ED-UP hashes at creation is put
+to an effect name without running the game. Hashes are the ones ED-UP logs and
 dumps shaders by: fnv1a64 in src\\common\\log.cpp over the whole blob, whose
 offset basis is 1469598103934665603, not the standard FNV-1a-64 basis
 14695981039346656037 (game_build_core.h's). An archive blob is byte for byte
@@ -359,7 +359,7 @@ def main(argv=None):
         s = sub.add_parser(name)
         s.add_argument("--arc", action="append", required=True, help="an Effects*.arc; repeat for both")
         if name == "find":
-            s.add_argument("--hash", required=True, help="FNV-1a-64 of the shader, as EDVR logs it")
+            s.add_argument("--hash", required=True, help="FNV-1a-64 of the shader, as ED-UP logs it")
         if name == "extract":
             s.add_argument("--effect", required=True)
             s.add_argument("--out", required=True)

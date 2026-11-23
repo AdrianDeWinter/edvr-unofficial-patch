@@ -515,9 +515,9 @@ void frameShareText() {
     char text[512];
     size_t n = formatEdvrShare(text, sizeof(text), 26.4, s, 0.10, true);
     check(std::string(text) ==
-          "EDVR in this frame: 0.45 ms in the Present hook (frame boundary 0.40 ms), 0.05 ms in the real Present, "
+          "ED-UP in this frame: 0.45 ms in the Present hook (frame boundary 0.40 ms), 0.05 ms in the real Present, "
           "draw hooks ~0.10 ms (sampled this frame), 25.90 ms outside the hook; "
-          "slowest EDVR ticks: journal_watch=0.20 ms, menu_tick=0.19 ms, gpu_frame_present=0.02 ms;" &&
+          "slowest ED-UP ticks: journal_watch=0.20 ms, menu_tick=0.19 ms, gpu_frame_present=0.02 ms;" &&
           n == std::strlen(text),
           "LONG FRAME share: the hook's ms, the boundary's, the real Present's, the draw hooks', the rest, and three named ticks");
     formatEdvrShare(text, sizeof(text), 26.4, s, 0.10, false);
@@ -551,7 +551,7 @@ void frameShareText() {
     check(std::string(text) == plain, "LONG FRAME share: an unmeasured frame (the priming one) has no engine motion clause");
     FrameTickSummary none;
     formatEdvrShare(text, sizeof(text), 12.0, none, 0.0, false);
-    check(std::strstr(text, "slowest EDVR ticks: none recorded;") != nullptr &&
+    check(std::strstr(text, "slowest ED-UP ticks: none recorded;") != nullptr &&
           std::strstr(text, "12.00 ms outside the hook") != nullptr,
           "LONG FRAME share: a frame the chain never ran in says so instead of naming nothing");
     FrameTickSummary over;
@@ -610,7 +610,7 @@ void nativeLongFrameFits() {
     plain.frameMs = 26.2;
     plain.reference = "runtime predicted period 11.1 ms";
     plain.textures = 1; plain.buffers = 22; plain.shaders = 0; plain.creationMb = 64.6;
-    plain.share = "EDVR in this frame: X;";
+    plain.share = "ED-UP in this frame: X;";
     plain.events = "none";
     plain.stamp = " This is frame 34811; the flip timeline is not armed.";
     plain.sequence = 31151;
@@ -619,9 +619,9 @@ void nativeLongFrameFits() {
     check(std::string(text) ==
           "monitor: LONG FRAME -- 26.2 ms between Presents (runtime predicted period 11.1 ms), no WaitGetPoses, CPU busy, "
           "compositor, reprojection, or door samples; game creations: 1 textures, 22 buffers, 0 shaders (64.6 MB); "
-          "EDVR in this frame: X; EDVR events: none. This is frame 34811; the flip timeline is not armed. "
+          "ED-UP in this frame: X; ED-UP events: none. This is frame 34811; the flip timeline is not armed. "
           "runtime sequence 31151, game work 6.58 ms.",
-          "LONG FRAME line: the old text intact, EDVR's share between the creations and the events");
+          "LONG FRAME line: the old text intact, ED-UP's share between the creations and the events");
 }
 
 // What one mark costs on this machine, said out loud so a slow clock is visible in the build log. Not an

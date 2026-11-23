@@ -85,9 +85,9 @@ BootstrapResult collectBootstrapPaths(BootstrapPaths& output, Reader& reader) no
   std::wstring loader;
   std::wstring graphics;
   std::wstring separate;
-  const auto loaderResult = readBootstrapEnvironment(reader, L"EDVR_OPENXR_LOADER", loader);
-  const auto graphicsResult = readBootstrapEnvironment(reader, L"EDVR_OPENXR_GRAPHICS", graphics);
-  const auto separateResult = readBootstrapEnvironment(reader, L"EDVR_OPENXR_SEPARATE_DEVICE", separate);
+  const auto loaderResult = readBootstrapEnvironment(reader, L"EDUP_OPENXR_LOADER", loader);
+  const auto graphicsResult = readBootstrapEnvironment(reader, L"EDUP_OPENXR_GRAPHICS", graphics);
+  const auto separateResult = readBootstrapEnvironment(reader, L"EDUP_OPENXR_SEPARATE_DEVICE", separate);
 
   if (loaderResult == BootstrapEnvironmentResult::Missing &&
       graphicsResult == BootstrapEnvironmentResult::Missing &&

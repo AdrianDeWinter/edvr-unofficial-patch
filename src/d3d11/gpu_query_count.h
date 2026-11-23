@@ -50,7 +50,7 @@ inline GpuQueryCounts gpuQueryCountsNow() {
 inline void formatGpuQueryWindow(char* out, size_t cap, unsigned frame, unsigned frames, const GpuQueryCounts& window) {
     uint64_t total = 0;
     for (size_t o = 0; o < kGpuQueryOwners; ++o) total += window.ends[o];
-    int n = std::snprintf(out, cap, "gpu timing queries: 1800-frame window ending %u; %.3f EDVR timing-query Ends a frame over %u frames (%llu in all); by owner a frame: ", frame,
+    int n = std::snprintf(out, cap, "gpu timing queries: 1800-frame window ending %u; %.3f ED-UP timing-query Ends a frame over %u frames (%llu in all); by owner a frame: ", frame,
                           frames ? double(total) / frames : 0.0, frames, static_cast<unsigned long long>(total));
     if (n < 0 || static_cast<size_t>(n) >= cap) return;
     size_t at = static_cast<size_t>(n);

@@ -191,7 +191,7 @@ int main(int argc, char** argv) {
         GetTempPathA(MAX_PATH, tmp);
         g_shutdownMark = std::string(tmp) + "edvr_addon_shutdown_mark_" + std::to_string(GetCurrentProcessId()) + ".txt";
         DeleteFileA(g_shutdownMark.c_str());
-        SetEnvironmentVariableA("EDVR_FIXTURE_SHUTDOWN_MARK", g_shutdownMark.c_str());
+        SetEnvironmentVariableA("EDUP_FIXTURE_SHUTDOWN_MARK", g_shutdownMark.c_str());
         atexit(&checkNoShutdownAtExit);
     }
     auto& pm = edvr::plugins::PluginManager::instance();

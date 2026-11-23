@@ -205,7 +205,7 @@ void vrSsaaGateNoteSetterAfter(uintptr_t ctx, float passed, float after, float l
     const double chosen = uiPanelScaleChosenSupersampling(&source);
     Log::get().note("vr ssaa gate: SS setter call %u%s: passed %.4f; ctx 0x%llX (loader object 0x%llX) ctx+0x3564 before "
                     "%.4f after %.4f (range %.2f to %.2f); HMD Quality %.3f; panel factor %.4f; chosen Supersampling %.4f "
-                    "from %s; frame %u; qpc=%.3f s; sizing record not read by EDVR",
+                    "from %s; frame %u; qpc=%.3f s; sizing record not read by ED-UP",
                     seq, seq == 1 ? " (first)" : "", static_cast<double>(passed),
                     static_cast<unsigned long long>(ctx), vrSsaaHoldLoaderObject(),
                     static_cast<double>(floatOf(kBefore)), static_cast<double>(after), static_cast<double>(lo),

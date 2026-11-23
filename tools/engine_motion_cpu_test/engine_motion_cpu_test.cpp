@@ -1051,7 +1051,7 @@ void gameForward() {
     check(ticksOf(s, kGameCopy) == 30 && callsOf(s, kGameCopy) == 1,
           "game copy: the forward's 50 ticks less the nested relay's 20, one call");
     check(ticksOf(s, kCopier) == 25 && ticksOf(s, kClear) == 20,
-          "game copy: the copier part stays EDVR's own 10 + 15, the nested relay its own 20");
+          "game copy: the copier part stays ED-UP's own 10 + 15, the nested relay its own 20");
 
     // A scope the gate did not clock: no reading, no copy.
     resetForTest();
@@ -1120,9 +1120,9 @@ void gameForward() {
     }
     const PartWindow& g = report.gameCopy;
     check(report.valid && report.frames == 30 && frames == 30, "game copy: the window closes at its 30th frame of 1 s");
-    check(figuresClean == frames, "game copy: no frame's EDVR figures (the LONG FRAME clause) hold the copy, on either class of thread");
+    check(figuresClean == frames, "game copy: no frame's ED-UP figures (the LONG FRAME clause) hold the copy, on either class of thread");
     check(nearly(report.totalMax, 0.001) && nearly(report.part[kCopier].renderMs, 0.030),
-          "game copy: the render thread's EDVR total and copier part are its 10 ticks a frame, nothing of the copy");
+          "game copy: the render thread's ED-UP total and copier part are its 10 ticks a frame, nothing of the copy");
     check(g.renderCalls == 30 && nearly(g.renderMs, 29 * 0.2 + 0.9) && nearly(g.renderP50, 0.2) && nearly(g.renderMax, 0.9) &&
               nearly(g.renderCallMaxMs, 0.9),
           "game copy: the render thread's copy, every frame: 6.7 ms in 30 calls, p50 0.2, max and longest call 0.9");
@@ -1133,8 +1133,8 @@ void gameForward() {
     char line[1400];
     formatGameCopy(line, sizeof(line), report);
     const std::string text = line;
-    check(text.find("Elite's work, not EDVR's, in no figure above") != std::string::npos,
-          "game copy text: the line says the copy is the game's work and in no EDVR figure");
+    check(text.find("Elite's work, not ED-UP's, in no figure above") != std::string::npos,
+          "game copy text: the line says the copy is the game's work and in no ED-UP figure");
     check(text.find("render thread, every call: mean 0.223 ms per frame, p50/p95/max 0.20/0.20/0.90 (1.0 calls per frame; "
                     "longest call 0.900 ms)") != std::string::npos,
           "game copy text: the render thread's mean, p50/p95/max, calls and longest call");

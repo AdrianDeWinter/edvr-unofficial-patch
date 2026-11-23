@@ -113,7 +113,7 @@ inline void run177(Check&& check) {
         check(d.verdict == ap::Verdict::NotShown && d.reason && std::strstr(d.reason, "fix.native_on_foot") != nullptr, "F177: native on foot off: not shown, and the reason names the key");
         t = ok;
         t.menuOpen = true;
-        check(ap::decide(t).verdict == ap::Verdict::Wait, "F177: with the EDVR menu already open it waits, and opens when it closes");
+        check(ap::decide(t).verdict == ap::Verdict::Wait, "F177: with the ED-UP menu already open it waits, and opens when it closes");
         t = ok;
         t.focused = false;
         check(ap::decide(t).verdict == ap::Verdict::Wait, "F177: with the game's window not focused it waits");

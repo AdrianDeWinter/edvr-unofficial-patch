@@ -4,7 +4,7 @@
 EDVR's DLLs are built with MSVC.  On Linux (the Steam Deck, Proton) this tool
 keeps a device-local copy of VS 2022's build tools and the Windows SDK, a
 Windows Python and a Wine prefix under <main checkout>/.toolchains/windows/
-(git-ignored; EDVR_TOOLCHAIN_HOME overrides it), and runs
+(git-ignored; EDUP_TOOLCHAIN_HOME overrides it), and runs
 `build.bat --compile-only` inside that prefix.  The result is a compile-only
 build (tools/compile_only.py): the production DLLs in
 <root>/build/compile-build, NOT Windows validated, for a test flight.  CI's
@@ -57,6 +57,7 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import compile_only  # noqa: E402
+import edup_env  # noqa: E402
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -94,10 +95,10 @@ WINE_OVERRIDES = "mscoree,mshtml=;winemenubuilder.exe=d;d3dcompiler_47=n"
 # tools/ lacks the fetch tool does not use that SDK, and skips it.  No flag:
 # the SDK is built, under Wine (setup's fetch_ffx).
 DEPS = (
-    ("ngx", "fetch_ngx.py", "--into", "EDVR_NGX_SDK", "include/nvsdk_ngx.h"),
-    ("xess", "fetch_xess.py", "--dest", "EDVR_XESS_SDK", "include/xess/xess.h"),
-    ("fsr4", "fetch_fsr4.py", "--dest", "EDVR_FSR4_SDK", "include/FidelityFX/upscalers/include/ffx_upscale.h"),
-    ("ffx-dx11", "fetch_ffx_dx11.py", None, "EDVR_FFX_DX11", "include/FidelityFX/host/ffx_fsr3upscaler.h"),
+    ("ngx", "fetch_ngx.py", "--into", "EDUP_NGX_SDK", "include/nvsdk_ngx.h"),
+    ("xess", "fetch_xess.py", "--dest", "EDUP_XESS_SDK", "include/xess/xess.h"),
+    ("fsr4", "fetch_fsr4.py", "--dest", "EDUP_FSR4_SDK", "include/FidelityFX/upscalers/include/ffx_upscale.h"),
+    ("ffx-dx11", "fetch_ffx_dx11.py", None, "EDUP_FFX_DX11", "include/FidelityFX/host/ffx_fsr3upscaler.h"),
 )
 
 
@@ -122,7 +123,7 @@ class Layout:
 
 def toolchain_home(root=REPO):
     """The main checkout's .toolchains/windows: one toolchain serves every worktree."""
-    env = os.environ.get("EDVR_TOOLCHAIN_HOME")
+    env = edup_env.get("EDUP_TOOLCHAIN_HOME")
     if env:
         return Path(env)
     main = Path(root)
@@ -383,13 +384,17 @@ def wine_env(layout, describe, deps, base=None):
     The host's PYTHON* variables are dropped: Windows Python would read them."""
     env = {k: v for k, v in (os.environ if base is None else base).items() if not k.startswith("PYTHON")}
     env = _prefix_env(layout, env)
+    for var in ("EDUP_NGX_SDK", "EDUP_XESS_SDK", "EDUP_FSR4_SDK", "EDUP_FFX_DX11"):
+        value = edup_env.get(var, environ=env)  # a caller may still set the EDVR_ spelling
+        if value is not None:
+            env[var] = value
     msvc, kits = to_wine(layout.msvc_tools), to_wine(layout.kits)
     sdk = "%s\\%%s\\%s" % (kits, SDK_VERSION)
     env["INCLUDE"] = ";".join([msvc + "\\include"] + [sdk % "Include" + "\\" + part
                                                       for part in ("ucrt", "um", "shared", "winrt", "cppwinrt")])
     env["LIB"] = ";".join([msvc + "\\lib\\x64", sdk % "Lib" + "\\ucrt\\x64", sdk % "Lib" + "\\um\\x64"])
     env["WINEPATH"] = ";".join([msvc + "\\bin\\HostX64\\x64", sdk % "bin" + "\\x64", to_wine(layout.python)])
-    env["EDVR_GIT_DESCRIBE"] = describe
+    env["EDUP_GIT_DESCRIBE"] = describe
     for name, _tool, _flag, var, _probe in DEPS:
         if name in deps and var not in env:
             env[var] = to_wine(layout.deps / name)
@@ -483,7 +488,7 @@ def self_test():
 
         layout = Layout("/t/tc")
         env = wine_env(layout, "v1.2.3-4-gabc", ["ngx", "xess"],
-                       base={"PYTHONHOME": "/usr", "PYTHONPATH": "/x", "EDVR_XESS_SDK": "none", "HOME": "/home/u"})
+                       base={"PYTHONHOME": "/usr", "PYTHONPATH": "/x", "EDUP_XESS_SDK": "none", "HOME": "/home/u"})
         msvc = "Z:\\t\\tc\\msvc\\VC\\Tools\\MSVC\\" + MSVC_VERSION
         kits = "Z:\\t\\tc\\msvc\\Windows Kits\\10"
         expect(env["INCLUDE"].split(";") == [msvc + "\\include"] + ["%s\\Include\\%s\\%s" % (kits, SDK_VERSION, part)
@@ -493,12 +498,12 @@ def self_test():
         expect(env["WINEPATH"].split(";") == [msvc + "\\bin\\HostX64\\x64", "%s\\bin\\%s\\x64" % (kits, SDK_VERSION),
                                               "Z:\\t\\tc\\python"], "WINEPATH is wrong: %s" % env["WINEPATH"])
         expect("PYTHONHOME" not in env and "PYTHONPATH" not in env, "the host's PYTHON* variables leak into Wine")
-        expect(env["EDVR_XESS_SDK"] == "none", "a caller's SDK choice was overridden")
-        expect(env["EDVR_NGX_SDK"] == "Z:\\t\\tc\\deps\\ngx" and "EDVR_FSR4_SDK" not in env and
-               "EDVR_FFX_DX11" not in env, "the SDK variables do not follow the fetched SDKs")
-        expect(wine_env(layout, "", ["ffx-dx11"], base={})["EDVR_FFX_DX11"] == "Z:\\t\\tc\\deps\\ffx-dx11",
+        expect(env["EDUP_XESS_SDK"] == "none", "a caller's SDK choice was overridden")
+        expect(env["EDUP_NGX_SDK"] == "Z:\\t\\tc\\deps\\ngx" and "EDUP_FSR4_SDK" not in env and
+               "EDUP_FFX_DX11" not in env, "the SDK variables do not follow the fetched SDKs")
+        expect(wine_env(layout, "", ["ffx-dx11"], base={})["EDUP_FFX_DX11"] == "Z:\\t\\tc\\deps\\ffx-dx11",
                "the built FSR 3 port is not handed to build.bat")
-        expect(env["EDVR_GIT_DESCRIBE"] == "v1.2.3-4-gabc" and env["WINEPREFIX"] == "/t/tc/wineprefix" and
+        expect(env["EDUP_GIT_DESCRIBE"] == "v1.2.3-4-gabc" and env["WINEPREFIX"] == "/t/tc/wineprefix" and
                "d3dcompiler_47=n" in env["WINEDLLOVERRIDES"] and env["HOME"] == "/home/u",
                "the prefix, describe or overrides are wrong")
 
@@ -538,7 +543,7 @@ def self_test():
 
         def compiler(rc=0, edit=False):
             def run(layout, root_, env, clean):
-                expect(env["EDVR_GIT_DESCRIBE"] == compile_only.describe(root), "build.bat was not given the describe")
+                expect(env["EDUP_GIT_DESCRIBE"] == compile_only.describe(root), "build.bat was not given the describe")
                 bdir.mkdir(parents=True, exist_ok=True)
                 (bdir / "d3d11.dll").write_bytes(b"GRAPHICS")
                 (bdir / "openvr_api.dll").write_bytes(b"RUNTIME")

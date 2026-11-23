@@ -2,7 +2,7 @@
 """Residual simulator for the transition-flash render-time patch.
 
     python tools\\flash_patch_residual.py --file <eyebase_dump.txt>
-    python tools\\flash_patch_residual.py --dir <edvr_logs\\flash> [--pattern eyebase_1002*.txt]
+    python tools\\flash_patch_residual.py --dir <edup_logs\\flash> [--pattern eyebase_1002*.txt]
     python tools\\flash_patch_residual.py --self-test
 
 Elite composes the VR eye as (camera base 4x4) x (head pose). The base lives

@@ -309,7 +309,7 @@ def self_test(path):
 def read_scenez(path):
     b = dump_io.read_bytes(path)
     if b[:8] != b"EDVRTEX1":
-        raise ValueError("%s is not an EDVR texture dump" % path)
+        raise ValueError("%s is not an ED-UP texture dump" % path)
     ver, w, h, fmt, row, scene, eye = struct.unpack_from("<7I", b, 8)
     if (w, h) != EYE or row != w * 8:
         raise ValueError("%s: expected a %dx%d depth/stencil dump" % (path, EYE[0], EYE[1]))
@@ -320,7 +320,7 @@ def read_scenez(path):
 def read_decisions(path):
     b = dump_io.read_bytes(path)
     if b[:8] != b"EDVRTEX1":
-        raise ValueError("%s is not an EDVR texture dump" % path)
+        raise ValueError("%s is not an ED-UP texture dump" % path)
     ver, w, h, fmt, row, scene, eye = struct.unpack_from("<7I", b, 8)
     if (w, h) != (CROP[2], CROP[3]) or row != w * 16:
         raise ValueError("%s: expected the %dx%d decision crop" % (path, CROP[2], CROP[3]))

@@ -36,9 +36,9 @@ struct EnvironmentReader {
 
   DWORD operator()(const wchar_t* name, wchar_t* buffer, DWORD capacity) noexcept {
     EnvironmentSpec* spec = nullptr;
-    if (!std::wcscmp(name, L"EDVR_OPENXR_LOADER")) spec = &loader;
-    if (!std::wcscmp(name, L"EDVR_OPENXR_GRAPHICS")) spec = &graphics;
-    if (!std::wcscmp(name, L"EDVR_OPENXR_SEPARATE_DEVICE")) spec = &separate;
+    if (!std::wcscmp(name, L"EDUP_OPENXR_LOADER")) spec = &loader;
+    if (!std::wcscmp(name, L"EDUP_OPENXR_GRAPHICS")) spec = &graphics;
+    if (!std::wcscmp(name, L"EDUP_OPENXR_SEPARATE_DEVICE")) spec = &separate;
     if (!spec) {
       SetLastError(ERROR_ENVVAR_NOT_FOUND);
       return 0;

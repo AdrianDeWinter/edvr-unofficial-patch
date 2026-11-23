@@ -1,4 +1,4 @@
-"""EDVR's one-build-at-a-time guard (AGENTS.md "One build at a time").
+"""ED-UP's one-build-at-a-time guard (AGENTS.md "One build at a time").
 
 build.bat wraps its own top-level invocation in --acquire/--release so two
 full builds never contend for the same CPU cores on this machine -- the
@@ -262,7 +262,7 @@ def _resolve_owner(owner, say=True):
         return owner
     owner, why_not = find_owner()
     if owner is None and say:
-        print("[edvr] NOTE: the build lock cannot track its owner here (%s); a killed "
+        print("[edup] NOTE: the build lock cannot track its owner here (%s); a killed "
               "build will hold it for up to %d min." % (why_not, STALE_SECONDS // 60),
               file=sys.stderr)
     return owner
@@ -471,7 +471,7 @@ def _refuse(path, lock, why):
     info = lock.info or {}
     note = info.get("note") if isinstance(info.get("note"), str) and info.get("note") else "no note"
     print(
-        "[edvr] ERROR: another build is already running (%s, started %d min ago; %s). "
+        "[edup] ERROR: another build is already running (%s, started %d min ago; %s). "
         "Wait for it to finish, then run build.bat again -- two builds at once "
         "contend for the same cores, which is how the vtable_test timing gate has "
         "flaked before. Run build.bat --wait-lock (by absolute path) to block until "
@@ -499,14 +499,14 @@ def acquire(path, note, owner=_AUTO, dry_run=False, alive=None, quiet=False):
         if not dry_run and _create(path, record):
             if took_over:
                 lock, why = took_over
-                print("[edvr] took over a stale build lock (%s; %s, started %d min ago)." %
+                print("[edup] took over a stale build lock (%s; %s, started %d min ago)." %
                       (why, (lock.info or {}).get("note") or "no note", _minutes(lock.info)))
             _sweep_tombstones(path)
             return 0
         lock = _read(path)
         if lock is None:
             if dry_run:
-                print("[edvr] dry run: the build lock is free; --acquire would take it.")
+                print("[edup] dry run: the build lock is free; --acquire would take it.")
                 return 0
             continue              # released between our create and our read
         verdict, why = assess(lock, caller=owner, alive=alive)
@@ -515,13 +515,13 @@ def acquire(path, note, owner=_AUTO, dry_run=False, alive=None, quiet=False):
                 _refuse(path, lock, why)
             return HELD_RC
         if dry_run:
-            print("[edvr] dry run: the build lock is stale (%s); --acquire would take it over." % why)
+            print("[edup] dry run: the build lock is stale (%s); --acquire would take it over." % why)
             return 0
         if _take_down(path, lock):
             took_over = (lock, why)
         else:
             time.sleep(min(0.01 * (attempt + 1), 0.1))
-    print("[edvr] ERROR: could not settle the build lock %s after %d tries; run again." %
+    print("[edup] ERROR: could not settle the build lock %s after %d tries; run again." %
           (path, MAX_ATTEMPTS), file=sys.stderr)
     return UNSETTLED_RC
 
@@ -546,7 +546,7 @@ def acquire_when_free(path, note, timeout, owner=_AUTO, alive=None, clock=time.t
         if deadline is not None:
             remaining = deadline - clock()
             if remaining <= 0:
-                print("[edvr] ERROR: still locked after %ds; giving up." % timeout,
+                print("[edup] ERROR: still locked after %ds; giving up." % timeout,
                       file=sys.stderr)
                 return acquire(path, note, owner=owner, alive=alive)
             pause = min(poll, remaining)
@@ -563,19 +563,19 @@ def release(path, owner=_AUTO, dry_run=False):
         return 0
     if _owner_of(lock.info) != owner:
         info = lock.info or {}
-        print("[edvr] WARNING: not releasing the build lock %s: it belongs to another build "
+        print("[edup] WARNING: not releasing the build lock %s: it belongs to another build "
               "(%s, started %d min ago), not to this one; leaving it." %
               (path, info.get("note") or "no note", _minutes(info)), file=sys.stderr)
         return 0
     if dry_run:
-        print("[edvr] dry run: --release would remove the build lock.")
+        print("[edup] dry run: --release would remove the build lock.")
         return 0
     try:
         _retry(lambda: os.unlink(str(path)))
     except FileNotFoundError:
         pass
     except PermissionError as error:
-        print("[edvr] WARNING: could not remove the build lock %s: %s" % (path, error),
+        print("[edup] WARNING: could not remove the build lock %s: %s" % (path, error),
               file=sys.stderr)
     return 0
 
@@ -596,7 +596,7 @@ def wait(path, timeout, poll=None, owner=_AUTO, alive=None, clock=time.time, sle
         if deadline is not None:
             remaining = deadline - clock()
             if remaining <= 0:
-                print("[edvr] ERROR: still locked after %ds; giving up." % timeout,
+                print("[edup] ERROR: still locked after %ds; giving up." % timeout,
                       file=sys.stderr)
                 return 1
             pause = min(poll, remaining)
@@ -1022,7 +1022,7 @@ def self_test():
                   and "would take it over" in out and "this shell" in out,
                   "a dry run over this shell's own lock writes and removes nothing: %r" % out)
             rc, out, err = quiet(acquire, path, "the next build", owner=me)
-            check(rc == 0 and err == "" and out.count("\n") == 1 and out.startswith("[edvr] took over")
+            check(rc == 0 and err == "" and out.count("\n") == 1 and out.startswith("[edup] took over")
                   and "the previous build in this shell must have been interrupted" in out
                   and "interrupted build" in out and len(tombstones(path)) == 1
                   and json.loads(path.read_text(encoding="utf-8"))["note"] == "the next build",

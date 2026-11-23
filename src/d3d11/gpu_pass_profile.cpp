@@ -700,7 +700,7 @@ void emitBatch() {
         Log::get().note("gpu pass profile: no frame was read, so there are no means (the frame lines above say why)");
         return;
     }
-    Log::get().note("gpu pass profile: means over %u frames: frame %.3f ms = elite %.3f ms + edvr %.3f ms "
+    Log::get().note("gpu pass profile: means over %u frames: frame %.3f ms = elite %.3f ms + ed-up %.3f ms "
                     "(unattributed %.3f ms)",
                     s.frames, s.frameMs, s.eliteMs, s.edvrMs, s.frameMs - s.eliteMs - s.edvrMs);
     // v5 (delay): the summary the flight reads. Medians over the delayed frames; the reference frame's own line below.

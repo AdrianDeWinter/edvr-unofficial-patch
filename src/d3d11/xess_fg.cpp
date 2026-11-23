@@ -275,24 +275,24 @@ HMODULE loadBeside(const wchar_t* name, char* why, size_t whySize) {
     HMODULE self = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                             reinterpret_cast<LPCWSTR>(&xessFgBridged), &self) || !self) {
-        std::snprintf(why, whySize, "EDVR module could not be located (Win32=%lu)", GetLastError());
+        std::snprintf(why, whySize, "ED-UP module could not be located (Win32=%lu)", GetLastError());
         return nullptr;
     }
     wchar_t path[MAX_PATH]{};
     const DWORD length = GetModuleFileNameW(self, path, MAX_PATH);
     wchar_t* const slash = length && length < MAX_PATH ? wcsrchr(path, L'\\') : nullptr;
     if (!slash || size_t(slash + 1 - path) + wcslen(name) + 1 > MAX_PATH) {
-        std::snprintf(why, whySize, "EDVR module path could not be read");
+        std::snprintf(why, whySize, "ED-UP module path could not be read");
         return nullptr;
     }
     wcscpy_s(slash + 1, MAX_PATH - size_t(slash + 1 - path), name);
     if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
-        std::snprintf(why, whySize, "%ls is missing beside EDVR", name);
+        std::snprintf(why, whySize, "%ls is missing beside ED-UP", name);
         return nullptr;
     }
     HMODULE module = LoadLibraryExW(path, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (!module) {
-        std::snprintf(why, whySize, "%ls beside EDVR failed to load (Win32=%lu)", name, GetLastError());
+        std::snprintf(why, whySize, "%ls beside ED-UP failed to load (Win32=%lu)", name, GetLastError());
         return nullptr;
     }
     wchar_t loaded[MAX_PATH]{};
@@ -530,7 +530,7 @@ HWND makeHiddenWindow() {
         if (!atom) return nullptr;
     }
     // Never shown: Elite's D3D11 swap chain lives on it and is never presented.
-    return CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, MAKEINTATOM(atom), L"EDVR XeSS-FG", WS_POPUP,
+    return CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, MAKEINTATOM(atom), L"ED-UP XeSS-FG", WS_POPUP,
                            0, 0, 8, 8, nullptr, nullptr, instance, nullptr);
 }
 

@@ -236,7 +236,7 @@ void testSummary() {
     check(s.frames == 2, "only the frames that were read are counted");
     check(s.frameMs == 15.0, "the frame mean is over the read frames");
     check(s.eliteMs == 12.0, "elite is the mean of the non-EDVR rows per frame");
-    check(s.edvrMs == 3.0, "edvr is the mean of the EDVR rows per frame");
+    check(s.edvrMs == 3.0, "edvr is the mean of the ED-UP rows per frame");
     check(s.cls[static_cast<size_t>(PassClass::Shadow)].ms == 8.0, "a class mean is per frame");
     check(s.cls[static_cast<size_t>(PassClass::Shadow)].passes == 1.0, "a class pass count is per frame");
     check(!s.top.empty() && s.top[0].cls == PassClass::Shadow && s.top[0].ms == 8.0,

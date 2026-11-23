@@ -16,9 +16,9 @@
 #include <fstream>
 using Microsoft::WRL::ComPtr;
 unsigned checks=0;
-// A mutant child (EDVR_SCREEN_MUTANT >= 1) is SUPPOSED to fail a check; its line is prefixed "expected-fail:" so a green build log holds no
+// A mutant child (EDUP_SCREEN_MUTANT >= 1) is SUPPOSED to fail a check; its line is prefixed "expected-fail:" so a green build log holds no
 // line starting FAIL. The control (0) and the unmutated run keep "FAIL:", and the exit code (1) is the same either way.
-void check(bool b,const char* label){++checks;if(!b){const char* mut=std::getenv("EDVR_SCREEN_MUTANT");std::printf((mut&&std::atoi(mut)>0)?"expected-fail: %s\n":"FAIL: %s\n",label);std::exit(1);}}
+void check(bool b,const char* label){++checks;if(!b){const char* mut=std::getenv("EDUP_SCREEN_MUTANT");std::printf((mut&&std::atoi(mut)>0)?"expected-fail: %s\n":"FAIL: %s\n",label);std::exit(1);}}
 void hr(HRESULT h){check(SUCCEEDED(h),"D3D operation");}
 // Waits until the GPU has finished everything submitted so far: an event query after it, flushed, polled until it signals (bounded, so a
 // broken device fails the check that follows instead of hanging the rig).
@@ -34,7 +34,7 @@ ComPtr<ID3DBlob> compile(const char* s,const char* profile,const char* entry="ma
     if(FAILED(h)&&e)std::puts(static_cast<const char*>(e->GetBufferPointer()));hr(h);return c;
 }
 namespace edvr {
-// The character rule's mutation checks (the main's tail runs this exe again once per mutant with EDVR_SCREEN_MUTANT set): the production
+// The character rule's mutation checks (the main's tail runs this exe again once per mutant with EDUP_SCREEN_MUTANT set): the production
 // screen shader's bytes are replaced by the same source compiled here with one rule flipped, and the whole rig must FAIL. Mutant 0 is the
 // control, the unmutated source compiled here, which must pass: without it a failing mutant could be this harness and not the rule.
 struct ScreenMutant{const char* name;const char* from;const char* to;};
@@ -49,7 +49,7 @@ const ScreenMutant kScreenMutants[]={
     {"every texel counts as uncovered (coverage ignored)","WeaponMotion.Load(int3(texel,0)).w==0","true"},
 };
 constexpr int kScreenMutantCount=int(sizeof(kScreenMutants)/sizeof(kScreenMutants[0]));
-int screenMutantIndex(){const char* e=std::getenv("EDVR_SCREEN_MUTANT");return e?std::atoi(e):-1;}
+int screenMutantIndex(){const char* e=std::getenv("EDUP_SCREEN_MUTANT");return e?std::atoi(e):-1;}
 ID3D11PixelShader* shaderSwapCreatePs(ID3D11DeviceContext* ctx,const void* bytes,size_t size,const char*,const char*) {
     ComPtr<ID3D11Device> dev;ctx->GetDevice(&dev);ID3D11PixelShader* shader=nullptr;
     const int mutant=screenMutantIndex();
@@ -529,14 +529,14 @@ int main(int argc,char** argv){
     testScreenConsumers(dev.Get(),ctx.Get());
     if(queue)for(UINT64 i=0;i<queue->GetNumStoredMessages();++i){SIZE_T messageBytes=0;queue->GetMessage(i,nullptr,&messageBytes);std::vector<unsigned char> b(messageBytes);auto* m=reinterpret_cast<D3D11_MESSAGE*>(b.data());queue->GetMessage(i,m,&messageBytes);if(m->Severity<=D3D11_MESSAGE_SEVERITY_WARNING){std::puts(m->pDescription);check(false,"D3D debug layer clean");}}
     if(screenMutantIndex()<0) {
-        // The character rule's mutation checks: this exe again, once per mutant, with EDVR_SCREEN_MUTANT naming it. The control must pass
+        // The character rule's mutation checks: this exe again, once per mutant, with EDUP_SCREEN_MUTANT naming it. The control must pass
         // (exit 0); every mutant must fail a check (exit 1); anything else (2: an anchor that moved or a source that no longer compiles)
         // is the harness, not the rule.
         char self[MAX_PATH]{};GetModuleFileNameA(nullptr,self,MAX_PATH);
         for(int i=0;i<kScreenMutantCount;++i){
-            _putenv_s("EDVR_SCREEN_MUTANT",std::to_string(i).c_str());
+            _putenv_s("EDUP_SCREEN_MUTANT",std::to_string(i).c_str());
             const intptr_t code=_spawnl(_P_WAIT,self,self,"--self-test",nullptr);
-            _putenv_s("EDVR_SCREEN_MUTANT","");
+            _putenv_s("EDUP_SCREEN_MUTANT","");
             std::printf("screen motion character-rule mutation %d \"%s\": exit %d (%s)\n",i,kScreenMutants[i].name,int(code),i==0?"the control must pass":"the rig must fail it");
             check(i==0?code==0:code==1,i==0?"character-rule mutations: the control (the shipped source compiled here) passes the whole rig":"character-rule mutations: the mutant is caught by the rig");
         }

@@ -130,7 +130,7 @@ inline void run119(Check&& check) {
         w.add(total2, none, none, none, 0.12, -0.03);
         check(w.n == 2 && std::fabs(w.hMax - 0.05) < 1e-12 && std::fabs(w.upMin - 0.15) < 1e-12 && std::fabs(w.upMax - 0.17) < 1e-12 && std::fabs(w.lockH - std::sqrt(0.0005)) < 1e-12 &&
                   std::fabs(w.weaponH - 0.10) < 1e-12 && std::fabs(w.viewH - 0.02) < 1e-12 && w.neckUp == 0.16 && w.holdUp == -0.03,
-              "F119: EDVR's own offsets: horizontal max 5 cm, up 15..17 cm, ADS lock 2.2 cm, weapon eye 10 cm, view 2 cm horizontal, the neck raise +16 and the hold -3 (largest magnitude)");
+              "F119: ED-UP's own offsets: horizontal max 5 cm, up 15..17 cm, ADS lock 2.2 cm, weapon eye 10 cm, view 2 cm horizontal, the neck raise +16 and the hold -3 (largest magnitude)");
     }
     {   // the depth grid: a wall 15 cm away over the lower left quarter, the player's weapon at 18 cm (stencil bit set) over the lower right quarter, the rest sky
         constexpr uint32_t W = 160, H = 128;

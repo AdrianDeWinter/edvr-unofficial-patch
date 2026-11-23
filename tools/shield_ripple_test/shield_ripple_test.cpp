@@ -811,9 +811,9 @@ static void routeTests(Fx& f) {
         Route nr;
         nr.notOwned = true;
         const Result n = runRoute(f, nr);
-        std::printf("route, a picture that is not EDVR's own (the flat profile's): max |rippled - stock| %d/255 over the bubble and the rest, %d/255 on the overlay, %u bytes of the "
+        std::printf("route, a picture that is not ED-UP's own (the flat profile's): max |rippled - stock| %d/255 over the bubble and the rest, %d/255 on the overlay, %u bytes of the "
                     "original changed\n", n.worstBubble, n.worstOverlay, n.origChanged);
-        check(n.worstBubble <= 2 && n.worstOverlay == 0, "a picture that is not EDVR's own: EDVR's rewritten copy agrees with the stock path as the in-place route does");
+        check(n.worstBubble <= 2 && n.worstOverlay == 0, "a picture that is not ED-UP's own: EDVR's rewritten copy agrees with the stock path as the in-place route does");
         check(n.origChanged == 0, "...and the game's own picture is not touched");
         Route nb = nr;
         nb.noBaseCopy = true;

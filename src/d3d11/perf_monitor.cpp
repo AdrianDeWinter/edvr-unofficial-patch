@@ -708,7 +708,7 @@ void dropLine(const Frame& f, float budgetMs, double gapMs, bool limited) {
         "monitor: LONG FRAME -- %.1f ms between Presents (budget %.1f), of which the thread waited "
         "%.1f in Present (busy %.1f); the game's creations in it: %u "
         "textures, %u buffers (%.1f MB together), %u shaders; %s "
-        "EDVR events: %s.%s At most "
+        "ED-UP events: %s.%s At most "
         "one of these lines every %u s, %u a session, except every frame over %.0f ms.",
         gapMs,
         static_cast<double>(budgetMs), static_cast<double>(f.presentWaitMs),
@@ -830,7 +830,7 @@ void samplerFor(int64_t qpc, double gapMs, char* state, size_t stateSize, char* 
     if (began > 0 && stallWatchEpisodeAround(began, 100.0, &ep)) {
         snprintf(state, stateSize, "took %u sample%s, the last in %s", ep.samples, ep.samples == 1 ? "" : "s", ep.owner);
         snprintf(note, noteSize, "stalled in %s (%u sample%s, longest at %u ms%s)", ep.owner, ep.samples,
-                 ep.samples == 1 ? "" : "s", ep.maxAgeMs, ep.edvrOnStack ? ", EDVR code on the stack" : "");
+                 ep.samples == 1 ? "" : "s", ep.maxAgeMs, ep.edvrOnStack ? ", ED-UP code on the stack" : "");
     } else {
         snprintf(state, stateSize, "took no sample (the rate limit, a failed suspend, or the stall began before the sampler was armed)");
     }
@@ -1230,7 +1230,7 @@ void hookTickNote(const FrameTickSummary& t, uint64_t nowMs) {
         std::sort(v.begin(), v.end());
         const size_t n = v.size();
         const size_t i95 = std::min(n - 1, n * 95 / 100);
-        Log::get().note("Present hook ticks: 30 s, %u frame(s) with a measured chain; EDVR's tick sum per frame p50 %.3f ms, "
+        Log::get().note("Present hook ticks: 30 s, %u frame(s) with a measured chain; ED-UP's tick sum per frame p50 %.3f ms, "
                         "p95 %.3f ms, max %.3f ms (the real Present excluded; the draw hooks are the separate line).",
                         static_cast<unsigned>(n), static_cast<double>(v[n / 2]), static_cast<double>(v[i95]),
                         static_cast<double>(v.back()));
@@ -1408,7 +1408,7 @@ void perfMonitorFrame(ID3D11Device* dev) {
     if (s.frameNo % 1800 == 0) {
         // The AA mode (2026-10-13: the AA-off fast path's switch) and the eye draws counted at this edge. The eye count is
         // taken after the subscriber gate (beginPanelOverride), so it is exact while a subscriber is on and reads 0 on the fast path.
-        Log::get().note("draw hook CPU: 1800-frame window ending %u; %.3f ms/sampled frame mean, %.3f ms max, %u sampled frames (one in %u); excludes forwarded game draw time, includes EDVR reissues; zero samples means unavailable. Each sampled frame's figure is estimated from every %uth draw, scaled by %u. Temporal AA %s; eye draws counted this frame %u (counted only while a draw subscriber is on).",
+        Log::get().note("draw hook CPU: 1800-frame window ending %u; %.3f ms/sampled frame mean, %.3f ms max, %u sampled frames (one in %u); excludes forwarded game draw time, includes ED-UP reissues; zero samples means unavailable. Each sampled frame's figure is estimated from every %uth draw, scaled by %u. Temporal AA %s; eye draws counted this frame %u (counted only while a draw subscriber is on).",
             s.frameNo, s.drawWindowSamples ? s.drawWindowMs / s.drawWindowSamples : 0.0,
             double(s.drawWindowMaxMs), s.drawWindowSamples, unsigned(kDrawSampleEvery),
             unsigned(kPerfMonitorDrawTimeStride), unsigned(kPerfMonitorDrawTimeStride),

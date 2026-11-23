@@ -635,19 +635,35 @@ inline void percentiles(float* a, unsigned n, double* p50, double* p95) noexcept
 // settlement frame 7-10 ms (a hitch at a random frame in every block of kRenderPeriod, p95 present about 22 ms against a p50
 // of 13) and about 0.27 ms a frame on average, and under Proton an on-foot frame makes about 200,000 scopes and costs 21 ms
 // (2026-10-02). The key is advanced.flat_cpu_timing (F8 > Debug > CPU timing in the log), read live once a Present;
-// EDVR_FLAT_CPU_CLOCKS=1 forces it on and =0 forces it off whatever the key says (the environment wins, as it always did).
+// EDUP_FLAT_CPU_CLOCKS=1 forces it on and =0 forces it off whatever the key says (the environment wins, as it always did).
 // With the clocks off the line still prints the present and GPU figures, and says the timing is off and how to turn it on.
 inline bool clocksPolicy(bool configOn, const char* env) noexcept {
     if (env && env[0] == '1') return true;
     if (env && env[0] == '0') return false;
     return configOn;
 }
-// EDVR_FLAT_CPU_CLOCKS as the process started (null when unset): one read.
-inline const char* clocksEnv() noexcept {
-    static char v[4] = {};
-    static const bool set = GetEnvironmentVariableA("EDVR_FLAT_CPU_CLOCKS", v, sizeof v) > 0;
-    return set ? v : nullptr;
+// EDUP_FLAT_CPU_CLOCKS as the process started (null when unset): one read. The deprecated EDVR_FLAT_CPU_CLOCKS is read
+// when the EDUP_ one is unset; clocksEnvLegacy() says that it was the one read.
+struct ClocksEnvRead {
+    char v[4];
+    bool set;
+    bool legacy;
+};
+inline const ClocksEnvRead& clocksEnvRead() noexcept {
+    static const ClocksEnvRead r = [] {
+        ClocksEnvRead x{};
+        x.set = GetEnvironmentVariableA("EDUP_FLAT_CPU_CLOCKS", x.v, sizeof x.v) > 0;
+        if (!x.set) x.legacy = GetEnvironmentVariableA("EDVR_FLAT_CPU_CLOCKS", x.v, sizeof x.v) > 0;
+        x.set = x.set || x.legacy;
+        return x;
+    }();
+    return r;
 }
+inline const char* clocksEnv() noexcept {
+    const ClocksEnvRead& r = clocksEnvRead();
+    return r.set ? r.v : nullptr;
+}
+inline bool clocksEnvLegacy() noexcept { return clocksEnvRead().legacy; }
 
 class Census {
 public:
@@ -1057,7 +1073,7 @@ inline void formatWindow(const WindowReport& r, Lines* out) {
                r.frames, r.pausedFrames, r.standingDown ? ", stood down now" : "", r.presentP50Ms, r.presentP95Ms);
     else
         tk.add("", "flat cpu 5s: frames=%u (stood down %u%s) present p50 %.2f ms (p95 %.2f); render thread clocked on %u of %u frames, "
-                   "one in %u (its figures are per clocked frame); EDVR per frame total %s",
+                   "one in %u (its figures are per clocked frame); ED-UP per frame total %s",
                r.frames, r.pausedFrames, r.standingDown ? ", stood down now" : "", r.presentP50Ms, r.presentP95Ms,
                r.renderClockedFrames, r.frames, r.renderPeriod, total);
     if (anyClocked) {
@@ -1071,7 +1087,7 @@ inline void formatWindow(const WindowReport& r, Lines* out) {
         tk.add(" + ", "engine motion hooks %.3f ms (calls %s)", emRenderMs / clocked, calls);
     } else {
         if (r.clocksOff)
-            tk.add(" = ", "render thread: CPU timing is off, no thread clocked (EDVR_FLAT_CPU_CLOCKS=1 also turns it on)");
+            tk.add(" = ", "render thread: CPU timing is off, no thread clocked (EDUP_FLAT_CPU_CLOCKS=1 also turns it on)");
         else
             tk.add(" = ", "render thread: not clocked in this window (one frame in %u is, and none was)", r.renderPeriod);
     }

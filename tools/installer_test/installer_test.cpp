@@ -1692,7 +1692,7 @@ static void testPlanner() {
         const Plan plan = planInstall(s, options, payload);
         check(hasStep(plan, Action::Rename, L"d3d11.dll", L"d3d11_reshade.dll"),
               "the intruder is kept, under its own name");
-        check(hasStep(plan, Action::WritePayload, nullptr, L"d3d11.dll"), "and EDVR goes back");
+        check(hasStep(plan, Action::WritePayload, nullptr, L"d3d11.dll"), "and ED-UP goes back");
         expectEq(iniValue(plannedIni(plan), "advanced.real_dll"), "d3d11_reshade.dll",
                  "with the chain pointed at it");
         check(notesMention(plan, "replaced ED-UP"), "the report says what happened");
@@ -1855,7 +1855,7 @@ static void testPlanner() {
         check(!hasStep(plan, Action::Backup, L"openvr_api.dll", L"openvr_api_orig.dll"),
               "native startup does not copy a legacy runtime back into use");
         check(hasStep(plan, Action::WritePayload, nullptr, L"openvr_api.dll"),
-              "and EDVR is reinstalled in front of it");
+              "and ED-UP is reinstalled in front of it");
     }
 
     {   // No Openvr folder: create it and install the complete native package.
@@ -2420,7 +2420,7 @@ static void testUnifiedDescriptor() {
         after.nativeConfig = fakeDll(DllKind::Edvr, joinPath(after.game.openvrDir, L"edup_openxr.ini"), update.nextState.nativeConfigSha);
         const Plan conversion = planInstall(after, convert, flat);
         check(!conversion.blocked, "a recorded both install converts to flat through the runtime proofs", unifiedProblems(conversion));
-        check(hasStep(conversion, Action::Delete, L"openvr_api.dll", nullptr), "the conversion retires EDVR's runtime");
+        check(hasStep(conversion, Action::Delete, L"openvr_api.dll", nullptr), "the conversion retires ED-UP's runtime");
         check(hasStep(conversion, Action::Backup, L"openvr_api_stock.dll", L"openvr_api.dll"),
               "the conversion restores the game's original runtime");
         check(conversion.nextState.profile == "flat", "the conversion records the flat edition");
@@ -2765,7 +2765,7 @@ static void testContentOwnership(const std::wstring& scratch) {
               "a startup config naming another loader is kept, with a note");
         check(!hasStep(plan, Action::Delete, L"edup_profile.ini", nullptr) &&
               notesMention(plan, "Keeping an unverified edup_profile.ini"),
-              "a descriptor that is not one of EDVR's texts is kept, with a note");
+              "a descriptor that is not one of ED-UP's texts is kept, with a note");
     }
     {   // Planning writes nothing: the cases above are planned over real files, and the folder is listed before and after.
         const std::wstring cdir = joinPath(scratch, L"content-ownership");
@@ -2804,7 +2804,7 @@ static void testSharedFilesKept() {
         check(!hasStep(plan, Action::Delete, L"openxr_loader.dll", nullptr) &&
               !hasStep(plan, Action::Backup, L"openxr_loader.dll", nullptr),
               "the matching loader is neither backed up nor removed");
-        check(notesMention(plan, kept), "and the report says nothing shows EDVR placed it");
+        check(notesMention(plan, kept), "and the report says nothing shows ED-UP placed it");
     }
     {   // The same bytes with the record listing them: the file is EDVR's, and goes.
         Survey s = baseSurvey(dir);
@@ -7285,7 +7285,7 @@ static void testSchemaReviewFixes(const std::wstring& scratch) {
         check(hasStep(un, Action::Delete, L"amd_fidelityfx_loader_dx12.dll", nullptr) &&
               hasStep(un, Action::Delete, L"amd_fidelityfx_upscaler_dx12.dll", nullptr) &&
               hasStep(un, Action::Delete, L"AMD-FIDELITYFX-LICENSE.txt", nullptr),
-              "an uninstall removes the FSR 4 files EDVR placed, by the hash rule");
+              "an uninstall removes the FSR 4 files ED-UP placed, by the hash rule");
         PayloadInfo noNotice = p;
         tdrop(noNotice, "fsr4_license");
         const Plan refused = planInstall(s, testOptions(), noNotice);

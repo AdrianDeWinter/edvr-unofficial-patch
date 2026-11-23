@@ -2,7 +2,7 @@
 """The eye run's ledger, read: which records each draw took from the pool, how far each turned
 between consecutive crops, and how the bones moved (object_probe.h, "THE EYE RUN'S LEDGER").
 
-python eye_run_ledger.py <edvr_logs\\pool> <capture-stamp> [--hub-radius 500] [--ring-radius 800]
+python eye_run_ledger.py <edup_logs\\pool> <capture-stamp> [--hub-radius 500] [--ring-radius 800]
 
 Reads draws_<stamp>.bin (a 160-byte header: magic, version, frames, frame0, the instance
 stream's stride, the palette's stride, the pool's bytes, then 32 crop-to-frame entries; then per

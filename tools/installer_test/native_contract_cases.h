@@ -41,7 +41,7 @@ inline void nativeBuiltContractCases(Check check, const std::wstring& root) {
     check(validateNativePayloadBytes(graphics.data(),graphics.size(),NativeImageKind::Graphics),"built native graphics marker/providers accepted");
     check(validateNativePayloadBytes(runtime.data(),runtime.size(),NativeImageKind::Runtime),"built native runtime exact export contract accepted");
     check(validateNativePayloadBytes(loader.data(),loader.size(),NativeImageKind::Loader),"bundled x64 Khronos loader accepted");
-    check(probeDll(root+L"\\build\\edvr_openxr_runtime.dll").kind==DllKind::Edvr,"native runtime is identified as EDVR, never as an original to preserve");
+    check(probeDll(root+L"\\build\\edvr_openxr_runtime.dll").kind==DllKind::Edvr,"native runtime is identified as ED-UP, never as an original to preserve");
     if(graphics.empty())return;
     // Mutate the actual built PE using the export ordinal table, so a marker
     // with a high/nonalphabetic ordinal is exercised too. Never execute it.

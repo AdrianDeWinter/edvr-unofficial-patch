@@ -834,32 +834,32 @@ bool xessAvailable(ID3D11Device* device, const char** why) {
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                                 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                             reinterpret_cast<LPCWSTR>(&xessBuiltIn), &self) || !self)
-        return fail(why, "EDVR module for libxess.dll could not be located (Win32=%lu)", GetLastError());
+        return fail(why, "ED-UP module for libxess.dll could not be located (Win32=%lu)", GetLastError());
     wchar_t xessDll[MAX_PATH]{};
     const DWORD selfLength = GetModuleFileNameW(self, xessDll, MAX_PATH);
     if (!selfLength || selfLength >= MAX_PATH)
-        return fail(why, "EDVR module path for libxess.dll could not be read (Win32=%lu)", GetLastError());
+        return fail(why, "ED-UP module path for libxess.dll could not be read (Win32=%lu)", GetLastError());
     wchar_t* const slash = wcsrchr(xessDll, L'\\');
     constexpr wchar_t kXessDllName[] = L"libxess.dll";
     if (!slash || size_t(slash + 1 - xessDll) + (sizeof(kXessDllName) / sizeof(wchar_t)) > MAX_PATH)
-        return fail(why, "EDVR module directory path is too long for libxess.dll");
+        return fail(why, "ED-UP module directory path is too long for libxess.dll");
     wcscpy_s(slash + 1, MAX_PATH - size_t(slash + 1 - xessDll), kXessDllName);
     const DWORD attributes = GetFileAttributesW(xessDll);
     if (attributes == INVALID_FILE_ATTRIBUTES) {
         const DWORD code = GetLastError();
         if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND)
-            return fail(why, "libxess.dll is missing beside EDVR");
-        return fail(why, "libxess.dll beside EDVR cannot be inspected (Win32=%lu)", code);
+            return fail(why, "libxess.dll is missing beside ED-UP");
+        return fail(why, "libxess.dll beside ED-UP cannot be inspected (Win32=%lu)", code);
     }
     if (attributes & FILE_ATTRIBUTE_DIRECTORY)
-        return fail(why, "libxess.dll beside EDVR is a directory");
+        return fail(why, "libxess.dll beside ED-UP is a directory");
     state->xessModule = LoadLibraryExW(xessDll, nullptr,
                                        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (!state->xessModule) {
         const DWORD code = GetLastError();
         if (code == ERROR_MOD_NOT_FOUND)
-            return fail(why, "libxess.dll exists beside EDVR but a dependency could not be loaded (Win32=126; check the VC++ 2015+ runtime)");
-        return fail(why, "libxess.dll beside EDVR failed to load (Win32=%lu)", code);
+            return fail(why, "libxess.dll exists beside ED-UP but a dependency could not be loaded (Win32=126; check the VC++ 2015+ runtime)");
+        return fail(why, "libxess.dll beside ED-UP failed to load (Win32=%lu)", code);
     }
     wchar_t loadedXessDll[MAX_PATH]{};
     const DWORD loadedLength = GetModuleFileNameW(state->xessModule, loadedXessDll, MAX_PATH);

@@ -494,9 +494,9 @@ void CodeHook::uninstall() {
         }
     } else {
         Log::get().note(
-            "CodeHook: the function at %p was hooked again after EDVR, so its "
+            "CodeHook: the function at %p was hooked again after ED-UP, so its "
             "first bytes belong to that tool now and are being left alone. "
-            "EDVR's trampoline is deliberately leaked rather than freed -- "
+            "ED-UP's trampoline is deliberately leaked rather than freed -- "
             "their hook still runs through it, and freeing it would dangle.",
             m_target);
     }

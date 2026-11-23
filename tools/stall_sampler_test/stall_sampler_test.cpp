@@ -363,17 +363,17 @@ void lineCases() {
     check(std::string(line) ==
               "stall: the render thread stalled 163 ms in ntdll.dll+0x9d5c4; owner nvwgf2umx.dll+0x1a2b3c4; stack "
               "ntdll.dll+0x9d5c4 < KERNELBASE.dll+0x4f2 < nvwgf2umx.dll+0x1a2b3c4 < EliteDangerous64.exe+0x99c0f4; "
-              "sample 1 of 3, last Present returned in frame 47210, thread 12345, suspended 14 us; EDVR code on the stack: no." &&
+              "sample 1 of 3, last Present returned in frame 47210, thread 12345, suspended 14 us; ED-UP code on the stack: no." &&
               n == std::strlen(line),
-          "S2.line: the stall line: age, top frame, owner, stack innermost first, sample k of 3, frame, thread, how long the thread was stopped, EDVR");
+          "S2.line: the stall line: age, top frame, owner, stack innermost first, sample k of 3, frame, thread, how long the thread was stopped, ED-UP");
     r.at[3] = mk("d3d11.dll", 0x1c4a3, false, true);
     r.edvrFrames = 1;
     r.edvrInnermost = 3;
     r.sampleIndex = 2;
     n = formatStallLine(line, sizeof(line), r);
     check(std::string(line).find("sample 3 of 3,") != std::string::npos &&
-              std::string(line).find("; EDVR code on the stack: yes (1 frame, innermost d3d11.dll+0x1c4a3).") != std::string::npos,
-          "S2.edvr: EDVR's own code on the stack is said, with its innermost frame and the plural right");
+              std::string(line).find("; ED-UP code on the stack: yes (1 frame, innermost d3d11.dll+0x1c4a3).") != std::string::npos,
+          "S2.edvr: ED-UP's own code on the stack is said, with its innermost frame and the plural right");
     r.edvrFrames = 2;
     formatStallLine(line, sizeof(line), r);
     check(std::string(line).find("yes (2 frames, innermost") != std::string::npos, "S2.edvr: two frames read 'frames'");
@@ -388,7 +388,7 @@ void lineCases() {
     r.edvrFrames = 0;
     r.edvrInnermost = -1;
     formatStallLine(line, sizeof(line), r);
-    check(std::string(line).find("suspended 14 us (the stack pointer was outside the thread's stack: one frame only); EDVR code on the stack: no.") !=
+    check(std::string(line).find("suspended 14 us (the stack pointer was outside the thread's stack: one frame only); ED-UP code on the stack: no.") !=
               std::string::npos,
           "S2.range: a stack pointer outside the stack is said, not left to read as a short stack");
     Report f;
@@ -466,7 +466,7 @@ void captureCases(const std::string& exe, HMODULE dll) {
         const int at = findFrame(rep, exe, inSleep);
         check(at >= 0 && rep.owner == at, "S3.sleep: the owner is the function the thread sleeps in, in this executable, not ntdll");
         check(findFrame(rep, exe, inMain) > at && at >= 0, "S3.sleep: and its caller, the thread's own start routine, is further out on the stack");
-        check(rep.at[rep.owner].edvr, "S3.sleep: the owner is in the sampler's own module, said as EDVR (the rig stands for the DLL)");
+        check(rep.at[rep.owner].edvr, "S3.sleep: the owner is in the sampler's own module, said as ED-UP (the rig stands for the DLL)");
         check(resumed(cap, t.thread), "S4.sleep: the thread is running again, nobody has it stopped");
         check(ticksToMs(cap.stoppedTicks) < 50.0, "S4.sleep: it was stopped for less than 50 ms");
         stopTarget(t);
@@ -515,7 +515,7 @@ void captureCases(const std::string& exe, HMODULE dll) {
         captureThread(t.thread, t.lo, t.hi, cap);
         nameCapture(cap, rep);
         check(inDll.ok && frameIn(rep.at[0], "stall_target.dll", inDll) && rep.owner == 0 && !rep.at[0].edvr && !rep.at[0].system,
-              "S3.dll: a busy loop in another DLL is named by that DLL's own name, with its RVA, and is not EDVR's");
+              "S3.dll: a busy loop in another DLL is named by that DLL's own name, with its RVA, and is not ED-UP's");
         check(rep.frames >= 2 && frameIn(rep.at[1], exe, inSpinDll), "S3.dll: its caller in this executable is the next frame");
         check(resumed(cap, t.thread), "S4.dll: the thread in the DLL is running again");
         stopTarget(t);

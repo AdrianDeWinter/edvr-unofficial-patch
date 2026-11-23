@@ -19,9 +19,9 @@ output survives it.
   python tools\\run_jobs.py --self-test
 
 --exe-dir is the directory the rigs' test exes are built into. Every process
-a rig starts from there is told, through EDVR_LOG_DIR and EDVR_LOG_DIR_FOR
-(src\\common\\config.cpp), to log under <exe-dir>\\edvr_logs\\<label> instead
-of <exe-dir>\\edvr_logs: the proxy DLLs a test loads keep their logs and
+a rig starts from there is told, through EDUP_LOG_DIR and EDUP_LOG_DIR_FOR
+(src\\common\\config.cpp), to log under <exe-dir>\\edup_logs\\<label> instead
+of <exe-dir>\\edup_logs: the proxy DLLs a test loads keep their logs and
 crash sentinels there, so two rigs' proxies never read each other's sentinels
 and stand down. A child a rig stages in a private directory keeps its own
 default, which the rigs that read such a child's log rely on. The rig's own
@@ -81,23 +81,23 @@ A --serial or --quiet rig usually compiles for far longer than it runs, and
 only its runs need holding back. Such a rig may split itself in two steps:
 
   :rig_x
-  if "%EDVR_RIG_STEP%"=="run" goto x_run
+  if "%EDUP_RIG_STEP%"=="run" goto x_run
   cl.exe ... /Fe"%BUILD%\\x.exe" ...
-  if errorlevel 1 ( echo [edvr] ERROR: x build failed & exit /b 1 )
-  if "%EDVR_RIG_STEP%"=="build" exit /b 0
+  if errorlevel 1 ( echo [edup] ERROR: x build failed & exit /b 1 )
+  if "%EDUP_RIG_STEP%"=="build" exit /b 0
   :x_run
   "%BUILD%\\x.exe" --self-test || exit /b 1
   exit /b 0
 
-The runner recognises the exact line `if "%EDVR_RIG_STEP%"=="build" exit /b 0`,
-runs the rig once with EDVR_RIG_STEP=build among all the others and once with
-EDVR_RIG_STEP=run under its group's rule, and reports the two as "x (build)"
+The runner recognises the exact line `if "%EDUP_RIG_STEP%"=="build" exit /b 0`,
+runs the rig once with EDUP_RIG_STEP=build among all the others and once with
+EDUP_RIG_STEP=run under its group's rule, and reports the two as "x (build)"
 and "x (run)". A rig without that line runs whole under the rule. Run by hand,
 with the variable unset, the rig runs whole.
 
 A rig may not link d3d11.lib into an output directly in %BUILD%. build\\d3d11.dll
-is EDVR's own proxy, and an exe beside it binds a d3d11.dll import to that proxy
-before System32's, so the rig would run under EDVR's hooks by accident. The plan
+is ED-UP's own proxy, and an exe beside it binds a d3d11.dll import to that proxy
+before System32's, so the rig would run under ED-UP's hooks by accident. The plan
 refuses such a rig, naming its line and its output, before anything compiles
 (architecture review 2026-09-29, I-8); a rig that needs a device takes System32's
 through src\\common\\system_d3d11.h, or builds its output outside %BUILD%.
@@ -122,8 +122,8 @@ of a killed rig ends with a diagnosis: STALLED (blocked: a deadlock or a wait
 with no timeout), BUSY (half a core or more: a spin) or SLOW (starved), with the
 process tree's CPU time, its last 60 s of it, and how long ago the log last grew.
 --timeout SECONDS is exact and never stretched.
---timeout-scale (environment: EDVR_RIG_TIMEOUT_SCALE) multiplies every timeout,
-for a slow or heavily loaded machine; --timeout SECONDS (EDVR_RIG_TIMEOUT)
+--timeout-scale (environment: EDUP_RIG_TIMEOUT_SCALE) multiplies every timeout,
+for a slow or heavily loaded machine; --timeout SECONDS (EDUP_RIG_TIMEOUT)
 replaces the rule with that one figure for every rig, and 0 turns timeouts off.
 
 The runner puts itself in a Windows job object that kills its members when the
@@ -165,13 +165,15 @@ import sys
 import tempfile
 import threading
 import time
+
+import edup_env
 from pathlib import Path
 
 # cmd treats everything after the label's first whitespace as a comment, so
 # ":rig_x anything" is still the label rig_x and must still be run.
 LABEL = re.compile(r"^:rig_([A-Za-z0-9_]+)(?:\s.*)?$")
 SOURCE = re.compile(r'\.cpp"')
-BUILD_GUARD = 'if "%EDVR_RIG_STEP%"=="build" exit /b 0'
+BUILD_GUARD = 'if "%EDUP_RIG_STEP%"=="build" exit /b 0'
 
 # What d3d11_in_build looks for in a rig's compiler commands: a cl command that
 # links (no /c) d3d11.lib -- after /link, or as a plain input, which cl hands to
@@ -210,7 +212,7 @@ RECORD_GROWTH = 2.0        # a rig's recorded time may rise at most this many ti
 TIMEOUT_EXIT = 124         # the exit code a killed rig is recorded with (timeout(1)'s)
 TIMEOUT_TAIL_LINES = 40    # how much of a hung rig's output its report prints
 KILL_WAIT = 30             # seconds granted to taskkill, and to the tree to be gone
-LOG_FILE = "runner_output" # <exe-dir>\edvr_logs\<label>\runner_output[_<step>].txt
+LOG_FILE = "runner_output" # <exe-dir>\edup_logs\<label>\runner_output[_<step>].txt
 
 # Job object limit flags and information class (winnt.h) for contain_children.
 JOB_KILL_ON_CLOSE = 0x2000      # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
@@ -237,7 +239,7 @@ STALE_EXE_DIR = re.compile(r"^.+[-_]\d+[-_]\d+$")
 # check and the directories-only, top-level-only rule in stale_exe_dirs.
 PROTECTED_EXE_DIR_ENTRIES = {
     "d3d11.dll", "openvr_api.dll", "ed-up-launcher.exe", "gen", "obj",
-    "edvr_logs",
+    "edup_logs", "edvr_logs",   # the rigs' logs, and where they went before the rename
 }
 
 
@@ -286,9 +288,9 @@ class Job:
 def d3d11_in_build(body, first_line):
     """(line, output) for every compiler command in `body` -- a rig's lines,
     the first of them line `first_line` of the script -- that links d3d11.lib
-    into an output sitting directly in %BUILD%. build\\d3d11.dll is EDVR's own
+    into an output sitting directly in %BUILD%. build\\d3d11.dll is ED-UP's own
     proxy, and a d3d11.dll import of an exe (or a DLL an exe loads) beside it
-    resolves to that proxy before System32's: the rig then runs under EDVR's
+    resolves to that proxy before System32's: the rig then runs under ED-UP's
     hooks by accident (architecture review 2026-09-29, I-8). Such a rig takes
     Windows' own d3d11 through src\\common\\system_d3d11.h and links without
     d3d11.lib, or builds its output elsewhere (%OBJ%\\<name>\\). Commands
@@ -349,14 +351,14 @@ def check_no_fall_through(rigs):
 
 def check_system_d3d11(rigs):
     """Raise ValueError naming every rig whose link binds build\\d3d11.dll (see
-    d3d11_in_build), so a rig that would run under EDVR's hooks by accident
+    d3d11_in_build), so a rig that would run under ED-UP's hooks by accident
     stops the build at the plan, before anything compiles."""
     bound = [(rig, line, output) for rig in rigs for line, output in rig.d3d11_in_build]
     if not bound:
         return
     raise ValueError(
         "%d rig link(s) put d3d11.lib into an output in %%BUILD%%, where the d3d11.dll import binds "
-        "build\\d3d11.dll (EDVR's own proxy) instead of System32's and the rig runs under EDVR's hooks "
+        "build\\d3d11.dll (ED-UP's own proxy) instead of System32's and the rig runs under ED-UP's hooks "
         "by accident. Create the device through src\\common\\system_d3d11.h and link without d3d11.lib, "
         "or build the output outside %%BUILD%%:\n%s"
         % (len(bound), "\n".join("  :rig_%s, line %d: %s" % (rig.label, line, output)
@@ -365,7 +367,7 @@ def check_system_d3d11(rigs):
 
 def parse_rigs(text):
     """Every :rig_<label> in the script, in order, with the number of sources
-    its subroutine compiles, whether it honours EDVR_RIG_STEP, and the links
+    its subroutine compiles, whether it honours EDUP_RIG_STEP, and the links
     that would bind build\\d3d11.dll (the text up to the next label)."""
     lines = text.splitlines()
     rigs, seen = [], {}
@@ -529,7 +531,7 @@ def child_command(script, label):
 def log_dir(exe_dir, job):
     """Where the processes a rig starts from exe_dir log: a directory of the
     rig's own, so no two rigs' proxies share crash sentinels."""
-    return os.path.join(exe_dir, "edvr_logs", job.rig.label)
+    return os.path.join(exe_dir, "edup_logs", job.rig.label)
 
 
 # The Settings.xml every rig child reads: 3D mode 4, which is VR, the profile every rig was written against.
@@ -559,10 +561,10 @@ def child_env(env, job, exe_dir=None, localappdata=None):
     localappdata (rig_localappdata) the LOCALAPPDATA every rig child runs under."""
     child = dict(env)
     if job.step is not None:
-        child["EDVR_RIG_STEP"] = job.step
+        child["EDUP_RIG_STEP"] = job.step
     if exe_dir is not None:
-        child["EDVR_LOG_DIR"] = log_dir(exe_dir, job)
-        child["EDVR_LOG_DIR_FOR"] = exe_dir
+        child["EDUP_LOG_DIR"] = log_dir(exe_dir, job)
+        child["EDUP_LOG_DIR_FOR"] = exe_dir
     if localappdata is not None:
         child["LOCALAPPDATA"] = localappdata
     return child
@@ -894,8 +896,8 @@ def diagnose(progress, elapsed, window, log_age, last_line):
         seen = "no console log to date"
     else:
         seen = ("last console output %.0f s ago%s" % (log_age, ": " + last_line if last_line else ""))
-    return ["[edvr] TIMEOUT diagnosis: %s" % verdict,
-            "[edvr] TIMEOUT diagnosis: %s; %s (an exe that buffers its output shows none until it "
+    return ["[edup] TIMEOUT diagnosis: %s" % verdict,
+            "[edup] TIMEOUT diagnosis: %s; %s (an exe that buffers its output shows none until it "
             "exits, so judge a quiet log by the CPU figure)" % (figures, seen)]
 
 
@@ -994,7 +996,7 @@ def run_rig(title, command, cwd, env, log_path, limit, hard_limit=None, window=N
         with open(log_path, "rb") as log:
             output = log.read()
         if extensions:
-            notes.append("[edvr] NOTE: %s ran past its %d s limit with its process tree still moving "
+            notes.append("[edup] NOTE: %s ran past its %d s limit with its process tree still moving "
                          "(%s) and was given more time%s\n"
                          % (title, limit, "; ".join("at %.0f s: %s" % item for item in extensions),
                             "; the runner killed it at the hard limit" if limit_hit is not None
@@ -1003,7 +1005,7 @@ def run_rig(title, command, cwd, env, log_path, limit, hard_limit=None, window=N
             lines = [line for line in output.decode("utf-8", "replace").splitlines() if line.strip()]
             last_line = lines[-1].strip()[:120] if lines else ""
             output += b"\n" if output and not output.endswith(b"\n") else b""
-            output += ("[edvr] TIMEOUT: %s was still running after %d s; the runner killed its "
+            output += ("[edup] TIMEOUT: %s was still running after %d s; the runner killed its "
                        "process tree.%s\n" % (title, limit_hit,
                                               "" if scratch else " Its whole log: %s" % log_path)
                        ).encode("utf-8", "replace")
@@ -1145,19 +1147,19 @@ def start_focus_guard(focus, out):
     except ImportError:
         raise
     except Exception as error:
-        emit(out, "[edvr] NOTE: focus guard: this build is NOT being watched (%s: %s)\n"
+        emit(out, "[edup] NOTE: focus guard: this build is NOT being watched (%s: %s)\n"
              % (type(error).__name__, error))
         return None
 
 
 def finish_focus_guard(watch, out):
-    """Stop the watch and print what it saw, one [edvr] line at a time. Its
+    """Stop the watch and print what it saw, one [edup] line at a time. Its
     findings; [] when there was no watch."""
     if watch is None:
         return []
     findings, text = watch.finish()
     for line in text.splitlines():
-        emit(out, "[edvr] %s\n" % line)
+        emit(out, "[edup] %s\n" % line)
     return findings
 
 
@@ -1165,7 +1167,7 @@ def focus_error(findings):
     """The line that ends a build the guard failed: who, and what to read."""
     exes = sorted({finding.culprit[1] for finding in findings})
     jobs = sorted({finding.job or "(main flow)" for finding in findings})
-    return ("[edvr] ERROR: focus guard: %d finding(s) by %s, in %s: a job of this build put a window on the "
+    return ("[edup] ERROR: focus guard: %d finding(s) by %s, in %s: a job of this build put a window on the "
             "desktop or took the focus from whoever is typing. The list above says which and how; "
             "tools\\focus_watch.py finds them again.\n" % (len(findings), ", ".join(exes), ", ".join(jobs)))
 
@@ -1265,10 +1267,10 @@ def sweep_exe_dir(exe_dir, dry_run, out):
     that would be)."""
     stale = stale_exe_dirs(exe_dir)
     if not stale:
-        emit(out, "[edvr] no stale exe directories under %s\n" % exe_dir)
+        emit(out, "[edup] no stale exe directories under %s\n" % exe_dir)
         return 0
     if dry_run:
-        emit(out, "[edvr] dry run: would remove %d stale exe director%s under %s:\n"
+        emit(out, "[edup] dry run: would remove %d stale exe director%s under %s:\n"
              % (len(stale), "y" if len(stale) == 1 else "ies", exe_dir))
         for path in stale:
             emit(out, "    %s\n" % path)
@@ -1279,8 +1281,8 @@ def sweep_exe_dir(exe_dir, dry_run, out):
             shutil.rmtree(path)
             removed += 1
         except OSError as error:
-            emit(out, "[edvr] NOTE: could not remove %s: %s\n" % (path, error))
-    emit(out, "[edvr] removed %d stale exe director%s under %s\n"
+            emit(out, "[edup] NOTE: could not remove %s: %s\n" % (path, error))
+    emit(out, "[edup] removed %d stale exe director%s under %s\n"
          % (removed, "y" if removed == 1 else "ies", exe_dir))
     return removed
 
@@ -1310,11 +1312,11 @@ def report(out, job, code, seconds, output, kept=(), timeout=None, cpu=None):
         extra += "" if code == 0 else ", exit code %d" % code
     if kept:
         extra += ", kept " + ", ".join(kept)
-    emit(out, "[edvr] --- %s: %.1f s%s ---\n" % (job.title, seconds, extra))
+    emit(out, "[edup] --- %s: %.1f s%s ---\n" % (job.title, seconds, extra))
     if timeout is not None:
         output, left_out = tail_lines(output, TIMEOUT_TAIL_LINES)
         if left_out:
-            emit(out, "[edvr] (%d earlier lines of its output not shown)\n" % left_out)
+            emit(out, "[edup] (%d earlier lines of its output not shown)\n" % left_out)
     out.write(output)
     if output and not output.endswith(b"\n"):
         out.write(b"\n")
@@ -1363,7 +1365,7 @@ def run_group(order, jobs, spawn, out, clock=time.monotonic, exe_dir=None, label
             code, output, *rest = spawn(job)
         except Exception as error:
             code, rest = 1, []
-            output = ("[edvr] ERROR: could not run %s: %s: %s\n"
+            output = ("[edup] ERROR: could not run %s: %s: %s\n"
                       % (job.title, type(error).__name__, error)).encode("utf-8", "replace")
         timeout = rest[0] if rest else None
         cpu = rest[1] if len(rest) > 1 else None
@@ -1400,7 +1402,7 @@ def run_group(order, jobs, spawn, out, clock=time.monotonic, exe_dir=None, label
             note = "" if not kept else " (kept %s)" % ", ".join(kept)
             what = ("TIMED OUT after %d s" % timeout if timeout is not None
                     else "failed (exit code %d)" % code)
-            emit(out, "[edvr] %s %s%s; no more rigs start, %d still running\n"
+            emit(out, "[edup] %s %s%s; no more rigs start, %d still running\n"
                  % (job.title, what, note, running))
             out.flush()
     for entry in failures:
@@ -1473,15 +1475,15 @@ def describe(pool, quiet, times, serial=(), after=None):
     def name(label):
         return label + ("(run)" if label in split else "")
 
-    text = "[edvr] parallel, longest expected first:\n"
+    text = "[edup] parallel, longest expected first:\n"
     text += wrap("%s~%.0fs" % (job.title.replace(" ", ""), estimate(job, times))
                  for job in pool) + "\n"
     for group in serial:
-        text += "[edvr] one at a time among themselves: " + " ".join(name(label) for label in group) + "\n"
+        text += "[edup] one at a time among themselves: " + " ".join(name(label) for label in group) + "\n"
     for consumer, producers in (after or {}).items():
-        text += "[edvr] %s waits for: %s\n" % (name(consumer), " ".join(name(label) for label in producers))
+        text += "[edup] %s waits for: %s\n" % (name(consumer), " ".join(name(label) for label in producers))
     if quiet:
-        text += "[edvr] quiet, one at a time afterwards: " + " ".join(name(job.rig.label) for job in quiet) + "\n"
+        text += "[edup] quiet, one at a time afterwards: " + " ".join(name(job.rig.label) for job in quiet) + "\n"
     return text
 
 
@@ -1506,17 +1508,17 @@ def run(script, jobs, mp, quiet, times_path, dry_run, out, spawn=None, clock=tim
     times = load_times(times_path)
     pool, later = plan(rigs, quiet, times, serial, after)
     mp_flag = "/MP%d" % mp if mp else "/MP"
-    emit(out, "[edvr] %d rigs from %s: %d jobs in the pool, %d at a time (CL=%s), %d quiet\n"
+    emit(out, "[edup] %d rigs from %s: %d jobs in the pool, %d at a time (CL=%s), %d quiet\n"
          % (len(rigs), script.name, len(pool), jobs, mp_flag, len(later)))
     emit(out, describe(pool, later, times, serial, after))
-    emit(out, "[edvr] %s\n" % describe_timeouts(timeout_scale, timeout_override))
+    emit(out, "[edup] %s\n" % describe_timeouts(timeout_scale, timeout_override))
     if exe_dir is not None:
-        emit(out, "[edvr] each rig's processes log under %s\n" % os.path.join(exe_dir, "edvr_logs", "<rig>"))
-        emit(out, "[edvr] each rig's console output streams to %s\n"
-             % os.path.join(exe_dir, "edvr_logs", "<rig>", LOG_FILE + ".txt"))
+        emit(out, "[edup] each rig's processes log under %s\n" % os.path.join(exe_dir, "edup_logs", "<rig>"))
+        emit(out, "[edup] each rig's console output streams to %s\n"
+             % os.path.join(exe_dir, "edup_logs", "<rig>", LOG_FILE + ".txt"))
     out.flush()
     if dry_run:
-        emit(out, "[edvr] dry run: wrote nothing.\n")
+        emit(out, "[edup] dry run: wrote nothing.\n")
         out.flush()
         return 0
     quiet_spawn = spawn
@@ -1559,28 +1561,28 @@ def run(script, jobs, mp, quiet, times_path, dry_run, out, spawn=None, clock=tim
         try:
             save_times(times_path, times, results)
         except OSError as error:
-            emit(out, "[edvr] NOTE: could not record rig times in %s: %s\n" % (times_path, error))
+            emit(out, "[edup] NOTE: could not record rig times in %s: %s\n" % (times_path, error))
         try:
             save_cpu(cpu_path(times_path), results)
         except OSError as error:
-            emit(out, "[edvr] NOTE: could not record rig CPU in %s: %s\n" % (cpu_path(times_path), error))
+            emit(out, "[edup] NOTE: could not record rig CPU in %s: %s\n" % (cpu_path(times_path), error))
     if failures:
         job, code, timeout = failures[0][0], failures[0][1], failures[0][5]
         what = ("TIMED OUT after %d s" % timeout if timeout is not None
                 else "failed with exit code %d" % code)
-        emit(out, "[edvr] ERROR: %s %s (%d of %d jobs ran)\n"
+        emit(out, "[edup] ERROR: %s %s (%d of %d jobs ran)\n"
              % (job.title, what, len(results), len(pool) + len(later)))
         out.flush()
         return 1
-    emit(out, "[edvr] the pool of %d jobs took %.1f s (%.1f s summed, %d at a time); "
+    emit(out, "[edup] the pool of %d jobs took %.1f s (%.1f s summed, %d at a time); "
               "%d quiet took %.1f s\n" % (len(pool), pool_seconds, summed, jobs, len(later), quiet_seconds))
     longest = sorted(results, key=lambda entry: -entry[2])[:5]
-    emit(out, "[edvr] longest: " + ", ".join("%s %.1f s" % (job.title, seconds)
+    emit(out, "[edup] longest: " + ", ".join("%s %.1f s" % (job.title, seconds)
                                              for job, _, seconds, *_ in longest) + "\n")
     measured = [entry for entry in results if entry[6] is not None]
     if measured:
         busiest = sorted(measured, key=lambda entry: -entry[6])[:10]
-        emit(out, "[edvr] most CPU (%.1f s in all): " % sum(entry[6] for entry in measured)
+        emit(out, "[edup] most CPU (%.1f s in all): " % sum(entry[6] for entry in measured)
              + ", ".join("%s %.1f s" % (entry[0].title, entry[6]) for entry in busiest) + "\n")
     if findings:
         emit(out, focus_error(findings))
@@ -1596,7 +1598,7 @@ echo main flow
 exit /b 0
 
 :run_rig
-call :rig_%EDVR_RIG%
+call :rig_%EDUP_RIG%
 exit /b 0
 
 :rig_alpha
@@ -1605,9 +1607,9 @@ cl.exe /Fe"x.exe" "tools\\alpha\\alpha.cpp" "src\\common\\log.cpp"
 exit /b 0
 
 :rig_beta
-if "%EDVR_RIG_STEP%"=="run" goto beta_run
+if "%EDUP_RIG_STEP%"=="run" goto beta_run
 cl.exe /Fe"y.exe" "tools\\beta\\beta.cpp"
-if "%EDVR_RIG_STEP%"=="build" exit /b 0
+if "%EDUP_RIG_STEP%"=="build" exit /b 0
 :beta_run
 "y.exe" || exit /b 1
 exit /b 0
@@ -1651,9 +1653,9 @@ def self_test():
             pass
 
     # A rig that links d3d11.lib into an output directly in %BUILD% binds
-    # build\d3d11.dll, EDVR's own proxy, and is refused at the plan (I-8).
+    # build\d3d11.dll, ED-UP's own proxy, and is refused at the plan (I-8).
     def script_of(*body):
-        return "\n".join(["@echo off", "exit /b 0", ":run_rig", "call :rig_%EDVR_RIG%", "exit /b 0", ""]
+        return "\n".join(["@echo off", "exit /b 0", ":run_rig", "call :rig_%EDUP_RIG%", "exit /b 0", ""]
                          + list(body)) + "\n"
 
     def refusal(*body):
@@ -1726,7 +1728,7 @@ def self_test():
           "comments and blank lines after the last command do not end the rig")
     check(refusal(":rig_a", "echo x", "exit /b 0", "REM about b", "", ":rig_b", "goto b_end", ":b_end", "exit /b 0") is None,
           "a rig ending in exit /b, and one ending in a label after its exit, plan as before")
-    check(refusal(":rig_t", 'if "%EDVR_RIG_STEP%"=="run" goto t_run', 'cl.exe /Fe"%OBJ%\\t.exe" "t.cpp"', BUILD_GUARD,
+    check(refusal(":rig_t", 'if "%EDUP_RIG_STEP%"=="run" goto t_run', 'cl.exe /Fe"%OBJ%\\t.exe" "t.cpp"', BUILD_GUARD,
                   ":t_run", '"%OBJ%\\t.exe" --self-test || exit /b 1', "exit /b 0") is None,
           "the two-step rig's build guard line is not mistaken for its last command")
     check(refusal(":rig_last", "echo the last rig in the script", "echo and no exit") is not None,
@@ -1738,7 +1740,7 @@ def self_test():
         with contextlib.redirect_stdout(out):
             code = main(["--script", str(script), "--dry-run"])
         printed = out.buffer.getvalue().decode("utf-8")
-        check(code == 1 and printed.startswith("[edvr] ERROR: 1 rig link(s) put d3d11.lib") and ":rig_one" in printed,
+        check(code == 1 and printed.startswith("[edup] ERROR: 1 rig link(s) put d3d11.lib") and ":rig_one" in printed,
               "the runner refuses the script even for a dry run, exit 1: %r %r" % (code, printed))
 
     pool, later = plan(rigs, ["timing"], {})
@@ -1834,19 +1836,19 @@ def self_test():
     check(child_process_kwargs() == expected_process_kwargs,
           "rig command shells use CREATE_NO_WINDOW on Windows: %r" % child_process_kwargs())
     env = {"CL": "/MP4"}
-    check(child_env(env, Job(alpha)) == env and "EDVR_RIG_STEP" not in child_env(env, Job(alpha)),
+    check(child_env(env, Job(alpha)) == env and "EDUP_RIG_STEP" not in child_env(env, Job(alpha)),
           "a whole rig's child gets the runner's environment as it is")
-    check(child_env(env, Job(beta, "run")) == {"CL": "/MP4", "EDVR_RIG_STEP": "run"}
-          and child_env(env, Job(beta, "build"))["EDVR_RIG_STEP"] == "build",
+    check(child_env(env, Job(beta, "run")) == {"CL": "/MP4", "EDUP_RIG_STEP": "run"}
+          and child_env(env, Job(beta, "build"))["EDUP_RIG_STEP"] == "build",
           "a step's child is told which step it is")
     exe_dir = os.path.join("C:" + os.sep, "repo", "build")
     with_logs = child_env(env, Job(beta, "run"), exe_dir)
-    check(with_logs["EDVR_LOG_DIR"] == os.path.join(exe_dir, "edvr_logs", "beta")
-          and with_logs["EDVR_LOG_DIR_FOR"] == exe_dir and with_logs["EDVR_RIG_STEP"] == "run"
-          and "EDVR_LOG_DIR" not in child_env(env, Job(beta, "run")),
+    check(with_logs["EDUP_LOG_DIR"] == os.path.join(exe_dir, "edup_logs", "beta")
+          and with_logs["EDUP_LOG_DIR_FOR"] == exe_dir and with_logs["EDUP_RIG_STEP"] == "run"
+          and "EDUP_LOG_DIR" not in child_env(env, Job(beta, "run")),
           "given --exe-dir, a child's processes there get the rig's own log directory: %r" % with_logs)
-    check(child_env(env, Job(alpha), exe_dir)["EDVR_LOG_DIR"] == os.path.join(exe_dir, "edvr_logs", "alpha")
-          and "EDVR_RIG_STEP" not in child_env(env, Job(alpha), exe_dir),
+    check(child_env(env, Job(alpha), exe_dir)["EDUP_LOG_DIR"] == os.path.join(exe_dir, "edup_logs", "alpha")
+          and "EDUP_RIG_STEP" not in child_env(env, Job(alpha), exe_dir),
           "a whole rig's child gets the log directory too, and still no step")
     fixture = os.path.join(exe_dir, "rig_localappdata")
     check(child_env(env, Job(alpha), exe_dir, fixture)["LOCALAPPDATA"] == fixture
@@ -1900,7 +1902,7 @@ def self_test():
     check(starts == ["beta", "gamma", "timing"], "rigs start in plan order: %r" % starts)
     check(peak[0] == 2, "never more than --jobs rigs at once: %d" % peak[0])
     text = out.getvalue().decode()
-    check(text.count("[edvr] --- ") == 3 and "beta ok\n" in text and "gamma ok\n" in text,
+    check(text.count("[edup] --- ") == 3 and "beta ok\n" in text and "gamma ok\n" in text,
           "each rig prints one banner and its whole output: %r" % text)
 
     starts.clear()
@@ -2009,14 +2011,14 @@ def self_test():
         check(b"gamma~5s alpha~3s beta~3s" in out.getvalue(), "dry run prints the plan: %r" % out.getvalue())
         out = io.BytesIO()
         code = run(script, 3, 2, ["timing"], times, True, out, exe_dir=scratch)
-        check(code == 0 and not os.path.exists(os.path.join(scratch, "edvr_logs"))
-              and os.path.join(scratch, "edvr_logs", "<rig>").encode() in out.getvalue(),
+        check(code == 0 and not os.path.exists(os.path.join(scratch, "edup_logs"))
+              and os.path.join(scratch, "edup_logs", "<rig>").encode() in out.getvalue(),
               "a dry run names the rigs' log directories and makes none: %r" % out.getvalue())
         check(not os.path.exists(os.path.join(scratch, "rig_localappdata")),
               "a dry run makes no rig LOCALAPPDATA fixture either")
         if os.name == "nt":
             spawner(script, script.parent, dict(os.environ), scratch)(Job(timing))
-            check(os.path.isdir(os.path.join(scratch, "edvr_logs", "timing")),
+            check(os.path.isdir(os.path.join(scratch, "edup_logs", "timing")),
                   "a spawn makes the rig's log directory, both levels of it")
         out = io.BytesIO()
         code = run(script, 3, 2, ["timing"], times, True, out, serial=[["beta", "gamma"]])
@@ -2037,7 +2039,7 @@ def self_test():
         recorded = load_times(times)
         check(set(recorded) == {"alpha", "beta", "gamma", "timing"} and all(v >= 0 for v in recorded.values()),
               "every rig's seconds are recorded: %r" % recorded)
-        check(b"[edvr] longest:" in out.getvalue() and b"1 quiet took" in out.getvalue(),
+        check(b"[edup] longest:" in out.getvalue() and b"1 quiet took" in out.getvalue(),
               "the summary names the longest rigs and the quiet group: %r" % out.getvalue())
         out = io.BytesIO()
         steps = []
@@ -2103,8 +2105,8 @@ def self_test():
         out = io.BytesIO()
         code = run(script, 3, 2, [], times, False, out, spawn=all_ok, focus=lambda: calm)
         text = out.getvalue().decode()
-        check(code == 0 and calm.finished == 1 and "[edvr] focus_watch: no window was shown" in text
-              and text.index("focus_watch: no window") < text.index("[edvr] the pool of"),
+        check(code == 0 and calm.finished == 1 and "[edup] focus_watch: no window was shown" in text
+              and text.index("focus_watch: no window") < text.index("[edup] the pool of"),
               "a watch that saw nothing passes the run, is stopped once, and its line is in the build log: %r" % text)
         out = io.BytesIO()
         code = run(script, 3, 2, [], times, False, out, spawn=all_ok)
@@ -2119,7 +2121,7 @@ def self_test():
         text = out.getvalue().decode()
         check(code == 1 and taken.finished == 1 and "2 finding(s) in 2 group(s)" in text
               and "in job alpha" in text and "in job beta" in text
-              and text.rstrip().splitlines()[-1].startswith("[edvr] ERROR: focus guard: 2 finding(s) by "
+              and text.rstrip().splitlines()[-1].startswith("[edup] ERROR: focus guard: 2 finding(s) by "
                                                             "openxr_module_test.exe, openxr_present_test.exe, in alpha, beta"),
               "a job that took the focus fails a run in which every rig passed, and the last line says who: %r"
               % text[-900:])
@@ -2132,7 +2134,7 @@ def self_test():
                    spawn=lambda job: (0, b"") if job.rig.label != "beta" else (5, b"beta broke"))
         text = out.getvalue().decode()
         lines = text.rstrip().splitlines()
-        check(code == 1 and "1 finding(s) in 1 group(s)" in text and lines[-1].startswith("[edvr] ERROR: beta failed")
+        check(code == 1 and "1 finding(s) in 1 group(s)" in text and lines[-1].startswith("[edup] ERROR: beta failed")
               and text.index("1 finding(s) in 1 group(s)") < text.index("ERROR: beta failed"),
               "when a rig fails as well, the guard's list is in the log and the failed rig is still the last line: %r"
               % text[-700:])
@@ -2229,7 +2231,7 @@ def self_test():
         stale_names = ["census-bridge-ready-6172-97754453", "vrtest_census_8916_151180000"]
         for name in stale_names:
             os.makedirs(os.path.join(build_dir, name))
-        for name in ("edvr_logs", "obj", "gen", "vrtest_probe_matrix", "vrtest2"):
+        for name in ("edup_logs", "edvr_logs", "obj", "gen", "vrtest_probe_matrix", "vrtest2"):
             os.makedirs(os.path.join(build_dir, name))
         Path(build_dir, "d3d11.dll").write_text("x", encoding="utf-8")
         # Same shape as the stale directories, but a file: never a candidate.
@@ -2535,23 +2537,23 @@ def self_test_timeouts(check):
             else:
                 os.environ[name] = old
 
-    check(env_of("EDVR_RIG_TIMEOUT", None, env_number, "EDVR_RIG_TIMEOUT") is None
-          and env_of("EDVR_RIG_TIMEOUT", "  ", env_number, "EDVR_RIG_TIMEOUT", 1.0) == 1.0
-          and env_of("EDVR_RIG_TIMEOUT", " 2.5 ", env_number, "EDVR_RIG_TIMEOUT") == 2.5
-          and env_of("EDVR_RIG_TIMEOUT", "0", env_number, "EDVR_RIG_TIMEOUT") == 0.0,
+    check(env_of("EDUP_RIG_TIMEOUT", None, env_number, "EDUP_RIG_TIMEOUT") is None
+          and env_of("EDUP_RIG_TIMEOUT", "  ", env_number, "EDUP_RIG_TIMEOUT", 1.0) == 1.0
+          and env_of("EDUP_RIG_TIMEOUT", " 2.5 ", env_number, "EDUP_RIG_TIMEOUT") == 2.5
+          and env_of("EDUP_RIG_TIMEOUT", "0", env_number, "EDUP_RIG_TIMEOUT") == 0.0,
           "the environment supplies the timeout figures")
     for bad in ("soon", "-1", "inf", "nan"):
-        got = env_of("EDVR_RIG_TIMEOUT", bad, env_number, "EDVR_RIG_TIMEOUT")
-        check(isinstance(got, ValueError) and "EDVR_RIG_TIMEOUT" in str(got),
+        got = env_of("EDUP_RIG_TIMEOUT", bad, env_number, "EDUP_RIG_TIMEOUT")
+        check(isinstance(got, ValueError) and "EDUP_RIG_TIMEOUT" in str(got),
               "%r is rejected, naming the variable: %r" % (bad, got))
     check(rig_log_path(None, Job(beta)) is None
-          and rig_log_path(r"C:\b", Job(beta)) == os.path.join(r"C:\b", "edvr_logs", "beta", "runner_output.txt")
+          and rig_log_path(r"C:\b", Job(beta)) == os.path.join(r"C:\b", "edup_logs", "beta", "runner_output.txt")
           and rig_log_path(r"C:\b", Job(beta, "build")).endswith("runner_output_build.txt")
           and rig_log_path(r"C:\b", Job(beta, "run")).endswith("runner_output_run.txt"),
           "a rig's console log sits in its log directory, one file per step")
 
     # --- what a timeout looks like in the report, without processes ----------
-    many = b"".join(b"line %d\n" % n for n in range(100)) + b"[edvr] TIMEOUT: alpha was still running\n"
+    many = b"".join(b"line %d\n" % n for n in range(100)) + b"[edup] TIMEOUT: alpha was still running\n"
 
     def hung_alpha(job):
         return (TIMEOUT_EXIT, many, 5.0) if job.rig.label == "alpha" else (0, b"beta ok")
@@ -2684,7 +2686,7 @@ def self_test_timeouts(check):
                    timeout_override=120.0, focus=counting_guard)
         text = out.getvalue().decode("utf-8", "replace")
         check(code == 1 and "window by python.exe" in text and "in job showy" in text and "in job calm" not in text
-              and text.rstrip().splitlines()[-1].startswith("[edvr] ERROR: focus guard: 1 finding(s) by python.exe, in showy"),
+              and text.rstrip().splitlines()[-1].startswith("[edup] ERROR: focus guard: 1 finding(s) by python.exe, in showy"),
               "a rig whose process shows a window fails the run, and the guard names the exe and the rig: %r"
               % text[-900:])
         real = focus_guard()
@@ -2697,7 +2699,7 @@ def self_test_timeouts(check):
         code = run(guard_script("calm.bat", "calm"), 2, 2, [], None, False, out,
                    timeout_override=120.0, focus=focus_guard)
         text = out.getvalue().decode("utf-8", "replace")
-        check(code == 0 and "[edvr] focus_watch: no window was shown" in text and "ERROR" not in text,
+        check(code == 0 and "[edup] focus_watch: no window was shown" in text and "ERROR" not in text,
               "a rig that leaves the desktop alone passes, and the log says the guard looked: %r" % text[-600:])
 
         # A job inherits the runner's error mode, which is how a crash opens no dialog.
@@ -2939,7 +2941,7 @@ def run_gate(command):
         done = subprocess.run(gate_argv(command), stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
     except (OSError, ValueError) as error:
-        return 1, ("[edvr] ERROR: could not run %s: %s: %s\n"
+        return 1, ("[edup] ERROR: could not run %s: %s: %s\n"
                    % (command, type(error).__name__, error)).encode("utf-8", "replace")
     return done.returncode, done.stdout
 
@@ -2959,9 +2961,9 @@ def run_gates(commands, jobs, out, dry_run=False, runner=run_gate, clock=time.mo
     them. Ends with one summary line. Returns 0, or 1 if any gate failed or
     crashed. --dry-run prints the plan and starts nothing."""
     if dry_run:
-        emit(out, "[edvr] gates (dry run, would run up to %d at once):\n" % jobs)
+        emit(out, "[edup] gates (dry run, would run up to %d at once):\n" % jobs)
         for command in commands:
-            emit(out, "[edvr]   %s\n" % command)
+            emit(out, "[edup]   %s\n" % command)
         out.flush()
         return 0
     started = clock()
@@ -2980,7 +2982,7 @@ def run_gates(commands, jobs, out, dry_run=False, runner=run_gate, clock=time.mo
                 code, output = runner(command)
             except Exception as error:
                 code = 1
-                output = ("[edvr] ERROR: could not run %s: %s: %s\n"
+                output = ("[edup] ERROR: could not run %s: %s: %s\n"
                           % (command, type(error).__name__, error)).encode("utf-8", "replace")
             outcomes.put((command, code, clock() - begun, output))
 
@@ -2990,7 +2992,7 @@ def run_gates(commands, jobs, out, dry_run=False, runner=run_gate, clock=time.mo
 
     def show(command, code, seconds, output):
         extra = "" if code == 0 else ", " + gate_exit_text(code)
-        emit(out, "[edvr] --- gate %s: %.1f s%s ---\n" % (command, seconds, extra))
+        emit(out, "[edup] --- gate %s: %.1f s%s ---\n" % (command, seconds, extra))
         out.write(output)
         if output and not output.endswith(b"\n"):
             out.write(b"\n")
@@ -3005,10 +3007,10 @@ def run_gates(commands, jobs, out, dry_run=False, runner=run_gate, clock=time.mo
             failures.append(entry)
     for entry in failures:
         show(*entry)
-    emit(out, "[edvr] gates: %d passed in %.1f s (serial sum %.1f s)\n"
+    emit(out, "[edup] gates: %d passed in %.1f s (serial sum %.1f s)\n"
          % (len(commands) - len(failures), clock() - started, serial_sum))
     if failures:
-        emit(out, "[edvr] gates FAILED: %d of %d: %s\n"
+        emit(out, "[edup] gates FAILED: %d of %d: %s\n"
              % (len(failures), len(commands), "; ".join(entry[0] for entry in failures)))
     out.flush()
     return 1 if failures else 0
@@ -3045,7 +3047,7 @@ def self_test_gates(check):
     spawned = []
     out = io.BytesIO()
     code = run_gates([ok, bad], 2, out, dry_run=True, runner=lambda c: spawned.append(c) or (0, b""))
-    check(code == 0 and not spawned and out.getvalue().count(b"[edvr]   ") == 2,
+    check(code == 0 and not spawned and out.getvalue().count(b"[edup]   ") == 2,
           "--dry-run lists the gates and spawns none: %r" % out.getvalue())
 
     argv = gate_argv('tools\\x.py --flag "a b"')
@@ -3059,7 +3061,7 @@ def self_test_gates(check):
 def env_number(name, default=None):
     """The non-negative number in environment variable `name`, `default` when
     it is unset or empty; ValueError, naming it, when it is anything else."""
-    text = os.environ.get(name, "").strip()
+    text = (edup_env.get(name) or "").strip()
     if not text:
         return default
     try:
@@ -3083,8 +3085,8 @@ def main(argv=None):
                              "--jobs is 1). A --quiet rig runs alone and always gets every core.")
     parser.add_argument("--exe-dir", type=Path, default=None, metavar="DIR",
                         help="the directory the test exes are built into; each rig's processes "
-                             "from there log under DIR\\edvr_logs\\<rig> (EDVR_LOG_DIR and "
-                             "EDVR_LOG_DIR_FOR, read by src\\common\\config.cpp)")
+                             "from there log under DIR\\edup_logs\\<rig> (EDUP_LOG_DIR and "
+                             "EDUP_LOG_DIR_FOR, read by src\\common\\config.cpp)")
     parser.add_argument("--serial", action="append", default=[], metavar="LABELS",
                         help="comma-separated rigs that never run at the same time as one "
                              "another (repeat for another such group)")
@@ -3097,10 +3099,10 @@ def main(argv=None):
     parser.add_argument("--timeout", type=float, default=None, metavar="SECONDS",
                         help="kill any rig still running after this long, replacing the "
                              "default rule (max(180 s, 3x its recorded time), 900 s with no "
-                             "record); 0 turns timeouts off (environment: EDVR_RIG_TIMEOUT)")
+                             "record); 0 turns timeouts off (environment: EDUP_RIG_TIMEOUT)")
     parser.add_argument("--timeout-scale", type=float, default=None, metavar="FACTOR",
                         help="multiply every rig's timeout by this, for a slow or heavily "
-                             "loaded machine (environment: EDVR_RIG_TIMEOUT_SCALE)")
+                             "loaded machine (environment: EDUP_RIG_TIMEOUT_SCALE)")
     parser.add_argument("--dry-run", action="store_true", help="print the plan, write nothing "
                                                                 "(or, with --sweep-exe-dir, remove nothing)")
     parser.add_argument("--sweep-exe-dir", type=Path, default=None, metavar="DIR",
@@ -3152,9 +3154,9 @@ def main(argv=None):
         # were started by, and a junction resolved away would never match.
         exe_dir = os.path.abspath(str(args.exe_dir))
     try:
-        override = args.timeout if args.timeout is not None else env_number("EDVR_RIG_TIMEOUT")
+        override = args.timeout if args.timeout is not None else env_number("EDUP_RIG_TIMEOUT")
         scale = (args.timeout_scale if args.timeout_scale is not None
-                 else env_number("EDVR_RIG_TIMEOUT_SCALE", 1.0))
+                 else env_number("EDUP_RIG_TIMEOUT_SCALE", 1.0))
     except ValueError as error:
         parser.error(str(error))
     if override is not None and override < 0:
@@ -3165,12 +3167,12 @@ def main(argv=None):
         try:
             contain_children()
         except OSError as error:
-            emit(sys.stdout.buffer, "[edvr] NOTE: the runner could not join a job object (%s); if it "
+            emit(sys.stdout.buffer, "[edup] NOTE: the runner could not join a job object (%s); if it "
                                     "is killed, the rigs it started will not be.\n" % error)
             sys.stdout.buffer.flush()
         if os.name == "nt":
             quiet_faults()
-            emit(sys.stdout.buffer, "[edvr] the jobs run with crash, assert and missing-DLL dialogs off "
+            emit(sys.stdout.buffer, "[edup] the jobs run with crash, assert and missing-DLL dialogs off "
                                     "(error mode 0x%X, inherited)\n" % get_error_mode())
             sys.stdout.buffer.flush()
     try:
@@ -3178,7 +3180,7 @@ def main(argv=None):
                    sys.stdout.buffer, serial=serial, exe_dir=exe_dir, after=after,
                    timeout_scale=scale, timeout_override=override, focus=focus_guard)
     except ValueError as error:
-        print("[edvr] ERROR: %s" % error)
+        print("[edup] ERROR: %s" % error)
         return 1
 
 

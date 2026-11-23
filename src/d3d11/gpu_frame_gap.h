@@ -214,7 +214,7 @@ inline size_t formatGapDetail(char* buf, size_t cap, const GpuFrameGap::Report& 
         if (n < 0) return;
         len = static_cast<size_t>(n) < cap - len ? len + static_cast<size_t>(n) : cap - 1;
     };
-    add("EDVR GPU census, frame gap: the time on the GPU clock from the end of one frame's last EDVR-timed span on "
+    add("ED-UP GPU census, frame gap: the time on the GPU clock from the end of one frame's last ED-UP-timed span on "
         "the game's device (after the door work) to the start of the next frame's first, ");
     if (r.any) {
         add("p50 %.2f ms, p95 %.2f ms, max %.2f ms over %u pairs of %u valid frames", r.p50Ms, r.p95Ms, r.maxMs, r.pairs,

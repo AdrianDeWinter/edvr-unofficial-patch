@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded WPR CPU capture for an installed EDVR game; never edits the game.
+"""Bounded WPR CPU capture for an installed ED-UP game; never edits the game.
 
 Run --self-test without elevation. Capture requires an administrator token.
 --dry-run validates and prints the plan without creating files or sessions.
@@ -16,7 +16,7 @@ the queue events for GPU analysis. --gpu cannot be combined with --memory-ring.
 --status-json samples Status.json at 4 Hz while recording (on by default when
 the Frontier Saved Games copy exists) into <output>\\status_samples.jsonl.
 
-Once recording starts, each installed EDVR DLL's embedded CodeView record is
+Once recording starts, each installed ED-UP DLL's embedded CodeView record is
 matched, by PDB name and GUID+age, against build\\ and the install receipt's
 own source directory; a match is copied into <output>\\symbols\\ so a later
 rebuild of build\\ can never orphan an already-captured trace. Unmatched is
@@ -36,6 +36,8 @@ import math
 import os
 import re
 from pathlib import Path, PureWindowsPath
+
+import edup_env
 import shutil
 import struct
 import subprocess
@@ -79,7 +81,7 @@ def build_analyzer(args):
     dotnet = shutil.which("dotnet")
     if not dotnet:
         raise ValueError("The optional profiling analyzer requires the .NET 8 SDK")
-    selected = args.trace_event_directory or os.environ.get("EDVR_TRACE_EVENT_DIR")
+    selected = args.trace_event_directory or edup_env.get("EDUP_TRACE_EVENT_DIR")
     if selected:
         candidates = [Path(selected)]
     else:
@@ -98,7 +100,7 @@ def build_analyzer(args):
                "-p:MSBuildProjectExtensionsPath=" + intermediate]
     if args.dry_run:
         print(json.dumps(dict(command=command, self_test=[dotnet, str(ANALYZER), "--self-test"]), indent=2))
-        print("[edvr] dry run: wrote nothing; no compiler or analyzer was started.")
+        print("[edup] dry run: wrote nothing; no compiler or analyzer was started.")
         return 0
     print(invoke(command, timeout=180), flush=True)
     print(invoke([dotnet, str(ANALYZER), "--self-test"]), flush=True)
@@ -164,7 +166,7 @@ def invoke(command, timeout=120, preserve_on_interrupt=False, on_progress=None):
             def defer_interrupt():
                 nonlocal interrupted
                 interrupted += 1
-                print("[edvr] Ctrl+C deferred while saving; keep this window open. "
+                print("[edup] Ctrl+C deferred while saving; keep this window open. "
                       "The same WPR stop continues within its original timeout; closing the window cannot be protected.",
                       flush=True)
             def progress(phase):
@@ -174,7 +176,7 @@ def invoke(command, timeout=120, preserve_on_interrupt=False, on_progress=None):
                     except KeyboardInterrupt:
                         defer_interrupt()
                     except Exception as exc:
-                        print("[edvr] save progress unavailable: " + type(exc).__name__, flush=True)
+                        print("[edup] save progress unavailable: " + type(exc).__name__, flush=True)
             progress("started")
             while True:
                 try:
@@ -210,7 +212,7 @@ def write_status(directory, state, **values):
     temporary = directory / "status.pending"
     temporary.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
-    print("[edvr] cpu profile: " + state, flush=True)
+    print("[edup] cpu profile: " + state, flush=True)
 
 
 def session_command(wpr, operation, *arguments, instance):
@@ -256,7 +258,7 @@ def record(wpr, profile, output, instance, workload, runner=invoke, filemode=Fal
     except BaseException as exc:
         failure = exc
     try:
-        print("[edvr] saving trace (up to 180 seconds); keep this window open. "
+        print("[edup] saving trace (up to 180 seconds); keep this window open. "
               "Ctrl+C is deferred during saving; closing the window cannot be protected.", flush=True)
         runner(stop, timeout=180, preserve_on_interrupt=True, on_progress=on_save_progress)
     except KeyboardInterrupt:
@@ -567,7 +569,7 @@ def flight_version(target, pid, expected, process_created):
         found = gfx_flight(path, pid, expected, process_created)
         if found is not None:
             return found
-    raise FileNotFoundError("No fresh EDVR flight log found for captured PID %d" % pid)
+    raise FileNotFoundError("No fresh ED-UP flight log found for captured PID %d" % pid)
 
 
 def wait_for_flight_version(target, process, expected, timeout=30, finder=flight_version,
@@ -579,14 +581,14 @@ def wait_for_flight_version(target, process, expected, timeout=30, finder=flight
             verified = finder(target, process.pid, expected, created)
         except FileNotFoundError:
             if process.exited():
-                raise RuntimeError("Elite exited before its EDVR flight log appeared")
+                raise RuntimeError("Elite exited before its ED-UP flight log appeared")
             if clock() >= end:
-                raise TimeoutError("No fresh EDVR flight log appeared within %d seconds (the OpenXR runtime's "
+                raise TimeoutError("No fresh ED-UP flight log appeared within %d seconds (the OpenXR runtime's "
                                    "log in VR, the graphics log in flat)" % timeout)
             sleep(min(0.25, max(0.0, end - clock())))
             continue
         if process.exited():
-            raise RuntimeError("Elite exited during EDVR build verification")
+            raise RuntimeError("Elite exited during ED-UP build verification")
         return verified
 
 
@@ -605,7 +607,7 @@ def gpu_profile_details(wpr, profile, runner=None):
     details = runner(command)
     required = ("EDVRCPU.Verbose.File", "GPU.Verbose.File", "Microsoft-Windows-DxgKrnl")
     if not all(value in details for value in required):
-        raise ValueError("Combined EDVR CPU + built-in GPU file profile is unavailable")
+        raise ValueError("Combined ED-UP CPU + built-in GPU file profile is unavailable")
     return dict(enabled=True, profile="GPU", preflight_command=command, profile_details=details,
                 qualification="Provider event counts are coverage only, not GPU busy time; "
                               "GPU queues/preemption require ETL analysis.")
@@ -981,23 +983,23 @@ def capture_symbols(p, directory):
     try:
         matches = match_symbols(p["installed_files"], [ROOT / "build"])
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        print("[edvr] cpu profile: symbols: match failed: %s" % exc, flush=True)
+        print("[edup] cpu profile: symbols: match failed: %s" % exc, flush=True)
         write_status(directory, "recording", symbols=dict(error=str(exc)))
         return []
     symbols_dir = directory / "symbols"
     copied = []
     for entry in matches:
         if entry["matched"]:
-            print("[edvr] cpu profile: symbols matched: %s guid=%s age=%s" %
+            print("[edup] cpu profile: symbols matched: %s guid=%s age=%s" %
                   (entry["key"], entry["guid"], entry["age"]), flush=True)
         elif entry["guid"] is None:
             # No CodeView record at all: the DLL was built without symbols, so no capture can
-            # be symbolized until it is rebuilt with EDVR_PROFILE_SYMBOLS=1.
-            print("[edvr] cpu profile: symbols unavailable: %s: %s has no CodeView record (built without "
-                  "symbols); run set EDVR_PROFILE_SYMBOLS=1 before build.bat, reinstall, capture again" %
+            # be symbolized until it is rebuilt with EDUP_PROFILE_SYMBOLS=1.
+            print("[edup] cpu profile: symbols unavailable: %s: %s has no CodeView record (built without "
+                  "symbols); run set EDUP_PROFILE_SYMBOLS=1 before build.bat, reinstall, capture again" %
                   (entry["key"], Path(entry["dll"]).name), flush=True)
         else:
-            print("[edvr] cpu profile: symbols unmatched (game may be running an older build): %s guid=%s age=%s" %
+            print("[edup] cpu profile: symbols unmatched (game may be running an older build): %s guid=%s age=%s" %
                   (entry["key"], entry["guid"], entry["age"]), flush=True)
         if entry["matched"]:
             try:
@@ -1006,7 +1008,7 @@ def capture_symbols(p, directory):
                 shutil.copy2(entry["pdb"], destination)
                 copied.append(str(destination))
             except OSError as exc:
-                print("[edvr] cpu profile: symbols: copy failed for %s: %s" % (entry["key"], exc), flush=True)
+                print("[edup] cpu profile: symbols: copy failed for %s: %s" % (entry["key"], exc), flush=True)
     write_status(directory, "recording", symbols=dict(matches=matches, copied=copied))
     return copied
 
@@ -1015,7 +1017,7 @@ def capture(args, key_reader=key_is_down):
     p = plan(args)
     if args.dry_run:
         print(json.dumps(p, indent=2))
-        print("[edvr] dry run: wrote nothing; started no workload or trace session.")
+        print("[edup] dry run: wrote nothing; started no workload or trace session.")
         return 0
     if os.name != "nt" or not ctypes.windll.shell32.IsUserAnAdmin():
         raise PermissionError("CPU scheduling capture requires a Windows administrator process (UAC approval).")
@@ -1037,14 +1039,14 @@ def capture(args, key_reader=key_is_down):
         write_status(directory, "starting", flight=verified)
 
         if p["start_vk"] is not None or p["start_after_seconds"] is not None:
-            print("[edvr] cpu profile: armed at " + utc_now_iso_ms(), flush=True)
+            print("[edup] cpu profile: armed at " + utc_now_iso_ms(), flush=True)
             write_status(directory, "armed")
             wait_for_start_trigger(p["start_vk"], p["start_after_seconds"], key_reader)
 
         def on_started():
             nonlocal sampler_thread
             now = utc_now_iso_ms()
-            print("[edvr] cpu profile: recording started at " + now, flush=True)
+            print("[edup] cpu profile: recording started at " + now, flush=True)
             journal_path = newest_journal(Path(p["status_json"]).parent) if p["status_json"] else None
             write_status(directory, "recording", recording_started_utc=now, journal_path=journal_path)
             if p["status_json"]:
@@ -1057,7 +1059,7 @@ def capture(args, key_reader=key_is_down):
 
         def on_stopped():
             now = utc_now_iso_ms()
-            print("[edvr] cpu profile: recording stopped at " + now, flush=True)
+            print("[edup] cpu profile: recording stopped at " + now, flush=True)
             write_status(directory, "saving", recording_stopped_utc=now)
 
         def workload():
@@ -2056,11 +2058,11 @@ def self_test():
         buffer = io.StringIO()
         with mock.patch(__name__ + ".match_symbols", return_value=[no_record]), contextlib.redirect_stdout(buffer):
             capture_symbols(dict(installed_files=[]), symbol_dir)
-        check("set EDVR_PROFILE_SYMBOLS=1" in buffer.getvalue() and "older build" not in buffer.getvalue())
+        check("set EDUP_PROFILE_SYMBOLS=1" in buffer.getvalue() and "older build" not in buffer.getvalue())
         buffer = io.StringIO()
         with mock.patch(__name__ + ".match_symbols", return_value=[mismatched]), contextlib.redirect_stdout(buffer):
             capture_symbols(dict(installed_files=[]), symbol_dir)
-        check("EDVR_PROFILE_SYMBOLS" not in buffer.getvalue())
+        check("EDUP_PROFILE_SYMBOLS" not in buffer.getvalue())
 
     # validate_flat_smoke_report: the real validator on a fixture of 60 flat frames.
     def flat_report():
@@ -2097,7 +2099,7 @@ def self_test():
             lambda r: [frame["regions"]["F6"].update(waitingUs=0) for frame in r["frames"][30:]]):
         check(flat_refused(mutate))
 
-    print("[edvr] CPU profile self-test: %d checks passed" % checks)
+    print("[edup] CPU profile self-test: %d checks passed" % checks)
     return 0
 
 
@@ -2132,7 +2134,7 @@ def main(argv=None):
         try:
             return build_analyzer(args)
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
-            print("[edvr] ERROR: " + str(exc), file=sys.stderr)
+            print("[edup] ERROR: " + str(exc), file=sys.stderr)
             return 1
     if not args.capture:
         parser.error("choose --capture, --build-analyzer or --self-test")
@@ -2143,7 +2145,7 @@ def main(argv=None):
     try:
         return capture(args)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
-        print("[edvr] ERROR: " + str(exc), file=sys.stderr)
+        print("[edup] ERROR: " + str(exc), file=sys.stderr)
         return 1
 
 

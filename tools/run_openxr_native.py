@@ -72,17 +72,17 @@ def child_environment(inherited: dict[str, str], loader: Path,
                       bootstrap: bool, separate_device: bool = False) -> dict[str, str]:
     if bootstrap and graphics_proxy is None:
         raise ValueError("bootstrap requires an explicit graphics proxy")
-    names = {"EDVR_OPENXR_LOADER", "EDVR_OPENXR_GRAPHICS", "EDVR_OPENXR_SEPARATE_DEVICE"}
+    names = {"EDUP_OPENXR_LOADER", "EDUP_OPENXR_GRAPHICS", "EDUP_OPENXR_SEPARATE_DEVICE"}
     if runtime:
         names.add("XR_RUNTIME_JSON")
     result = {key: value for key, value in inherited.items() if key.upper() not in names}
     if runtime:
         result["XR_RUNTIME_JSON"] = str(runtime)
     if bootstrap:
-        result["EDVR_OPENXR_LOADER"] = str(loader)
-        result["EDVR_OPENXR_GRAPHICS"] = str(graphics_proxy)
+        result["EDUP_OPENXR_LOADER"] = str(loader)
+        result["EDUP_OPENXR_GRAPHICS"] = str(graphics_proxy)
         if separate_device:
-            result["EDVR_OPENXR_SEPARATE_DEVICE"] = "1"
+            result["EDUP_OPENXR_SEPARATE_DEVICE"] = "1"
     return result
 
 
@@ -156,9 +156,9 @@ def run_child(command: list[str], output: Path, environment: dict[str, str],
         receipt["elapsed_seconds"] = round(time.monotonic() - start, 3)
         receipt["finished_utc"] = datetime.now(timezone.utc).isoformat()
         (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
-    print(f"[edvr] native diagnostic {'completed' if code == 0 else 'failed or incomplete'}: {output}")
+    print(f"[edup] native diagnostic {'completed' if code == 0 else 'failed or incomplete'}: {output}")
     if code != 0:
-        print(f"[edvr] inspect output.log and receipt.json (child exit {receipt['exit_code']})")
+        print(f"[edup] inspect output.log and receipt.json (child exit {receipt['exit_code']})")
     return code
 
 
@@ -233,14 +233,14 @@ def self_test() -> int:
                 check(False)
             except ValueError:
                 check(True)
-        inherited = {"EDVR_OPENXR_LOADER": "stale", "edvr_openxr_graphics": "stale", "xr_runtime_json": "stale", "KEEP": "same"}
+        inherited = {"EDUP_OPENXR_LOADER": "stale", "edup_openxr_graphics": "stale", "xr_runtime_json": "stale", "KEEP": "same"}
         boot_env = child_environment(inherited, root / "loader.dll", proxy, root / "runtime.json", True)
         check(boot_env == {"KEEP": "same", "XR_RUNTIME_JSON": str(root / "runtime.json"),
-                           "EDVR_OPENXR_LOADER": str(root / "loader.dll"), "EDVR_OPENXR_GRAPHICS": str(proxy)})
+                           "EDUP_OPENXR_LOADER": str(root / "loader.dll"), "EDUP_OPENXR_GRAPHICS": str(proxy)})
         check(child_environment(inherited, root / "loader.dll", proxy, None, False) == {"xr_runtime_json": "stale", "KEEP": "same"})
-        boot_separate_env = child_environment({**inherited, "edvr_openxr_separate_device": "stale"}, root / "loader.dll", proxy, root / "runtime.json", True, True)
-        check(boot_separate_env["EDVR_OPENXR_SEPARATE_DEVICE"] == "1" and "edvr_openxr_separate_device" not in boot_separate_env)
-        check(inherited == {"EDVR_OPENXR_LOADER": "stale", "edvr_openxr_graphics": "stale", "xr_runtime_json": "stale", "KEEP": "same"})
+        boot_separate_env = child_environment({**inherited, "edup_openxr_separate_device": "stale"}, root / "loader.dll", proxy, root / "runtime.json", True, True)
+        check(boot_separate_env["EDUP_OPENXR_SEPARATE_DEVICE"] == "1" and "edup_openxr_separate_device" not in boot_separate_env)
+        check(inherited == {"EDUP_OPENXR_LOADER": "stale", "edup_openxr_graphics": "stale", "xr_runtime_json": "stale", "KEEP": "same"})
         check(run_child(bootstrap_command, root / "dry-bootstrap", boot_env, 10, {}, dry_run=True) == 0)
         check(not (root / "dry-bootstrap").exists())
         try:
@@ -253,7 +253,7 @@ def self_test() -> int:
             check(False)
         except ValueError:
             check(True)
-        bootstrap_reader = [sys.executable, "-c", "import os; print(os.environ['EDVR_OPENXR_LOADER']); print(os.environ['EDVR_OPENXR_GRAPHICS'])"]
+        bootstrap_reader = [sys.executable, "-c", "import os; print(os.environ['EDUP_OPENXR_LOADER']); print(os.environ['EDUP_OPENXR_GRAPHICS'])"]
         # On top of the real environment, as the production call in main() is
         # (child_environment(dict(os.environ), ...)): a python.exe started with
         # boot_env alone has no SystemRoot, and on some Windows setups it then
@@ -343,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
         command = build_command(executable, loader, args.seconds, graphics_proxy, args.present_boundary, runtime_module, args.bootstrap, args.separate_device)
         return run_child(command, output, environment, args.seconds + 40, metadata, dry_run=args.dry_run)
     except (OSError, ValueError) as error:
-        print(f"[edvr] {error}", file=sys.stderr)
+        print(f"[edup] {error}", file=sys.stderr)
         return 2
 
 

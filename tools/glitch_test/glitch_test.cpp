@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
     // --- 1. Nomination: nothing until Armed, the scene buffer after -----------
     //
     // The ini states no fix.transition_flash line at all: the fix has no key.
-    SetEnvironmentVariableA("EDVR_TEST_NO_CAMERA_TAP", nullptr);
+    SetEnvironmentVariableA("EDUP_TEST_NO_CAMERA_TAP", nullptr);
     reinstall(scratch, "[log]\r\nenabled = 0\r\n");
     check("the tap wants vScreen's hooks with the shipped geometry", glitchFrameWantsHooks());
     // The sun-glare fix and the temporal pass read the same block through vScreen's
@@ -207,7 +207,7 @@ int main(int argc, char** argv) {
     // The geometry is fixed (5376 bytes, float 1100) and has no ini key: the two
     // advanced keys that carried it were removed 2026-10-14. A stale line in an old
     // file, whatever it says, is a line this build does not read, and the tap is the
-    // same. The test rigs' switch (EDVR_TEST_NO_CAMERA_TAP=1) is the only way off.
+    // same. The test rigs' switch (EDUP_TEST_NO_CAMERA_TAP=1) is the only way off.
     {
         struct Case { const char* name; const char* ini; const char* env; bool tap; bool hooks; };
         const Case cases[] = {
@@ -223,9 +223,9 @@ int main(int argc, char** argv) {
             {"the test switch set to an empty string", "[log]\r\nenabled = 0\r\n", "", true, true},
         };
         for (const Case& c : cases) {
-            SetEnvironmentVariableA("EDVR_TEST_NO_CAMERA_TAP", c.env);
+            SetEnvironmentVariableA("EDUP_TEST_NO_CAMERA_TAP", c.env);
             reinstall(scratch, c.ini);
-            SetEnvironmentVariableA("EDVR_TEST_NO_CAMERA_TAP", nullptr);
+            SetEnvironmentVariableA("EDUP_TEST_NO_CAMERA_TAP", nullptr);
             char why[256] = "";
             const bool tap = glitchFrameEngineTapAvailable(why, sizeof(why));
             check((std::string("tap availability: ") + c.name).c_str(), tap == c.tap,

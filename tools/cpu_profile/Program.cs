@@ -37,7 +37,7 @@ internal static class Program
             var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(options.Output))!);
             File.WriteAllText(options.Output, JsonSerializer.Serialize(report, jsonOptions));
-            Console.WriteLine($"EDVR CPU report: {options.Output}");
+            Console.WriteLine($"ED-UP CPU report: {options.Output}");
             foreach (var warning in (string[])report["warnings"]!) Console.WriteLine($"WARNING: {warning}");
             Console.WriteLine($"frames={report["frameCount"]} analyzed={report["analyzedFrameCount"]} " +
                               $"eventsLost={report["eventsLost"]} coverageComplete={report["coverageComplete"]}");
@@ -122,7 +122,7 @@ internal static class Program
     {
         if (data.Frames.Count > 0) return "vr";
         if (data.PresentFrames.Count > 0) return "flat";
-        throw new InvalidDataException($"trace has no EDVR frame markers (clocks={data.Clocks.Count}): " +
+        throw new InvalidDataException($"trace has no ED-UP frame markers (clocks={data.Clocks.Count}): " +
                                        "the provider was not enabled in the game, or the installed DLLs " +
                                        "predate flat markers; check the 'cpu trace:' line in the graphics log");
     }

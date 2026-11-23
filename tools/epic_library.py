@@ -1022,7 +1022,7 @@ def main(argv=None):
     try:
         installs = discover()
     except InventoryLimitError as exc:
-        print("EDVR: " + str(exc), file=sys.stderr)
+        print("ED-UP: " + str(exc), file=sys.stderr)
         return 2
     for install in installs:
         print("%s [%s]" % (install.game_dir, install.manager))

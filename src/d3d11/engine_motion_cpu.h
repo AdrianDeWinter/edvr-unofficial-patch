@@ -933,7 +933,7 @@ inline size_t formatSummary(char* buf, size_t cap, const WindowReport& r) noexce
     }
     const double frames = r.frames ? static_cast<double>(r.frames) : 1.0;
     const double seconds = r.seconds > 0.0 ? r.seconds : 1.0;
-    appendf(buf, cap, len, "engine motion CPU: %.0f s, %u frames; EDVR's own work in its hooks on the game's code, the game's "
+    appendf(buf, cap, len, "engine motion CPU: %.0f s, %u frames; ED-UP's own work in its hooks on the game's code, the game's "
                            "forwarded code excluded. ", r.seconds, r.frames);
     appendf(buf, cap, len, "Render thread %u: every call clocked on every frame, total p50 %.2f / p95 %.2f / max %.2f ms per "
                            "frame over %.1f calls per frame. ",
@@ -1082,7 +1082,7 @@ inline size_t formatGameCopy(char* buf, size_t cap, const WindowReport& r) noexc
     const double sampled = r.sampledFrames ? static_cast<double>(r.sampledFrames) : 1.0;
     appendf(buf, cap, len,
             "engine motion CPU, the game's own pool copy (FUN_144C846A0's body inside the copier relay's forward; Elite's "
-            "work, not EDVR's, in no figure above), \"-\" = no copy on that class of thread: ");
+            "work, not ED-UP's, in no figure above), \"-\" = no copy on that class of thread: ");
     if (!g.renderCalls) {
         appendf(buf, cap, len, "render thread -");
     } else {

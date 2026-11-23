@@ -54,7 +54,7 @@ Options (before the compiler):
                  from the list must not link back in.
   --keep NAME    with --prune, leave NAME alone (e.g. an ml64-made thunks.obj).
   --dry-run      print hit/miss decisions; write nothing, run no compiler.
-  --off          pass straight through (also env EDVR_NO_COMPILE_CACHE=1).
+  --off          pass straight through (also env EDUP_NO_COMPILE_CACHE=1).
                  With --prune this still deletes every *.obj in the /Fo dir
                  except the --keep names, which is what `del /q obj\\x\\*.obj`
                  did minus the assembler output the compiler cannot recreate.
@@ -72,6 +72,8 @@ import subprocess
 import sys
 import tempfile
 import time
+
+import edup_env
 
 SCHEMA = 1
 SOURCE_EXTENSIONS = (".c", ".cc", ".cpp", ".cxx", ".c++")
@@ -450,10 +452,10 @@ def run_compile_only(ctx, p, prune, keep):
     if ctx.dry_run:
         for s in p.sources:
             ok, why, _ = decisions[s]
-            ctx.out("[edvr] compile_cache: dry-run: %s: %s" % (rel(s), "hit" if ok else "MISS (%s)" % why))
+            ctx.out("[edup] compile_cache: dry-run: %s: %s" % (rel(s), "hit" if ok else "MISS (%s)" % why))
         return 0
     if not missed:
-        ctx.out("[edvr] compile_cache: %s: 0 compiled, %d reused (%.1f s)" % (name, hits, time.time() - started))
+        ctx.out("[edup] compile_cache: %s: 0 compiled, %d reused (%.1f s)" % (name, hits, time.time() - started))
         return 0
     for s in missed:
         remove_quiet(objs[s] + ".ccm")
@@ -484,12 +486,12 @@ def run_compile_only(ctx, p, prune, keep):
                 stored += 1
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-    ctx.out("[edvr] compile_cache: %s: %d compiled, %d reused (%.1f s)%s" % (
+    ctx.out("[edup] compile_cache: %s: %d compiled, %d reused (%.1f s)%s" % (
         name, len(missed), hits, time.time() - started, "" if rc == 0 else "  [cl exit %d]" % rc))
     for s in missed[:3]:
-        ctx.out("[edvr] compile_cache:   miss %s: %s" % (rel(s), decisions[s][1]))
+        ctx.out("[edup] compile_cache:   miss %s: %s" % (rel(s), decisions[s][1]))
     if len(missed) > 3:
-        ctx.out("[edvr] compile_cache:   ... and %d more" % (len(missed) - 3))
+        ctx.out("[edup] compile_cache:   ... and %d more" % (len(missed) - 3))
     return rc
 
 
@@ -508,11 +510,11 @@ def prune_directory(ctx, p, listed, keep, everything):
         removed.append(entry)
     for entry in removed:
         if ctx.dry_run:
-            ctx.out("[edvr] compile_cache: dry-run: would prune %s" % rel(os.path.join(p.fo, entry)))
+            ctx.out("[edup] compile_cache: dry-run: would prune %s" % rel(os.path.join(p.fo, entry)))
         else:
             remove_quiet(os.path.join(p.fo, entry))
     if removed and not ctx.dry_run:
-        ctx.out("[edvr] compile_cache: pruned %d stale object file(s) from %s" % (len(removed), rel(p.fo)))
+        ctx.out("[edup] compile_cache: pruned %d stale object file(s) from %s" % (len(removed), rel(p.fo)))
 
 
 def link_input_files(p):
@@ -569,10 +571,10 @@ def run_link(ctx, p):
             if why is None:
                 why = check_outputs(data.get("outputs", {}))
     if ctx.dry_run:
-        ctx.out("[edvr] compile_cache: dry-run: %s: %s" % (name, "hit" if why is None else "MISS (%s)" % why))
+        ctx.out("[edup] compile_cache: dry-run: %s: %s" % (name, "hit" if why is None else "MISS (%s)" % why))
         return 0
     if why is None:
-        ctx.out("[edvr] compile_cache: %s: reused (%.1f s)" % (name, time.time() - started))
+        ctx.out("[edup] compile_cache: %s: reused (%.1f s)" % (name, time.time() - started))
         return 0
     remove_quiet(manifest)
     tmpdir = tempfile.mkdtemp(prefix="edvr-cc-")
@@ -616,9 +618,9 @@ def run_link(ctx, p):
                     "outputs": recorded, "hashes": output_hashes(recorded)})
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-    ctx.out("[edvr] compile_cache: %s: built (%.1f s)%s" % (name, time.time() - started,
+    ctx.out("[edup] compile_cache: %s: built (%.1f s)%s" % (name, time.time() - started,
                                                             "" if rc == 0 else "  [cl exit %d]" % rc))
-    ctx.out("[edvr] compile_cache:   miss: %s" % why)
+    ctx.out("[edup] compile_cache:   miss: %s" % why)
     return rc
 
 
@@ -628,13 +630,13 @@ def execute(argv, environ, runner, out=say, dry_run=False, off=False, prune=Fals
         raise SystemExit("compile_cache: no compiler given")
     p = parse(argv[0], argv[1:])
     ctx = Context(environ, runner, dry_run, out)
-    if off or environ.get("EDVR_NO_COMPILE_CACHE") == "1" or p.uncacheable:
+    if off or edup_env.get("EDUP_NO_COMPILE_CACHE", environ=environ) == "1" or p.uncacheable:
         if p.uncacheable and not off:
-            out("[edvr] compile_cache: passthrough, uncached: %s" % p.uncacheable)
+            out("[edup] compile_cache: passthrough, uncached: %s" % p.uncacheable)
         if prune and p.compile_only:
             prune_directory(ctx, p, set(), keep, everything=True)
         if dry_run:
-            out("[edvr] compile_cache: dry-run: passthrough, nothing run")
+            out("[edup] compile_cache: dry-run: passthrough, nothing run")
             return 0
         return signed(runner([p.compiler] + p.args, environ))
     if p.compile_only:
@@ -748,7 +750,7 @@ def pack_store(root, store, extras=(), dry_run=False, out=say):
             carried += 1
             if not dry_run:
                 place_file(os.path.join(root, extra), os.path.join(store, STORE_EXTRA, extra), link=True)
-    out("[edvr] compile_cache: %s%d entries (%d files, %.1f MB) from %s into %s%s%s" % (
+    out("[edup] compile_cache: %s%d entries (%d files, %.1f MB) from %s into %s%s%s" % (
         "dry run, would pack " if dry_run else "packed ", packed, files, size / 1e6, rel_or_abs(root), rel_or_abs(store),
         (", %d extra file(s)" % carried) if extras else "",
         ("; skipped " + tidy_reasons(skipped)) if skipped else ""))
@@ -824,7 +826,7 @@ def unpack_store(root, store, extras=(), dry_run=False, out=say):
             carried += 1
             if not dry_run:
                 place_file(held, dest)
-    out("[edvr] compile_cache: %s%d entries (%d files, %.1f MB) from %s under %s%s%s" % (
+    out("[edup] compile_cache: %s%d entries (%d files, %.1f MB) from %s under %s%s%s" % (
         "dry run, would restore " if dry_run else "restored ", restored, files, size / 1e6, rel_or_abs(store), rel_or_abs(root),
         (", %d extra file(s)" % carried) if extras else "",
         ("; left out " + tidy_reasons(rejected)) if rejected else ""))
@@ -833,9 +835,9 @@ def unpack_store(root, store, extras=(), dry_run=False, out=say):
 
 # ---------------------------------------------------------------- reading a build log back
 
-SUMMARY_GROUP = re.compile(r"^\[edvr\] compile_cache: (\S+): (\d+) compiled, (\d+) reused \(([\d.]+) s\)")
-SUMMARY_LINK = re.compile(r"^\[edvr\] compile_cache: (\S+): (built|reused) \(([\d.]+) s\)")
-SUMMARY_MISS = re.compile(r"^\[edvr\] compile_cache:\s+miss(?: \S+)?: (.*)$")
+SUMMARY_GROUP = re.compile(r"^\[(?:edup|edvr)\] compile_cache: (\S+): (\d+) compiled, (\d+) reused \(([\d.]+) s\)")
+SUMMARY_LINK = re.compile(r"^\[(?:edup|edvr)\] compile_cache: (\S+): (built|reused) \(([\d.]+) s\)")
+SUMMARY_MISS = re.compile(r"^\[(?:edup|edvr)\] compile_cache:\s+miss(?: \S+)?: (.*)$")
 
 
 def summarize_log(text):
@@ -1224,7 +1226,8 @@ def _self_test_body():
     run([], env=inc2)
 
     # --off and the env escape hatch pass straight through
-    for kwargs, env in (({"off": True}, inc2), ({}, dict(inc2, EDVR_NO_COMPILE_CACHE="1"))):
+    for kwargs, env in (({"off": True}, inc2), ({}, dict(inc2, EDUP_NO_COMPILE_CACHE="1")),
+                        ({}, dict(inc2, EDVR_NO_COMPILE_CACHE="1"))):
         rc, compiled, calls = run([], env=env, **kwargs)
         expect(compiled == ["a.cpp", "b.cpp", "c.cpp"] and calls == 1, "off compiles everything in one call")
         expect("/sourceDependencies" not in " ".join(fake.calls[-1]), "off passes the arguments through unchanged")
@@ -1238,7 +1241,7 @@ def _self_test_body():
     # compiler cannot recreate it, so the link failed with unresolved thunk exports.
     for label, extra, kwargs, env in (
             ("--off", [], {"off": True}, inc2),
-            ("EDVR_NO_COMPILE_CACHE", [], {}, dict(inc2, EDVR_NO_COMPILE_CACHE="1")),
+            ("EDUP_NO_COMPILE_CACHE", [], {}, dict(inc2, EDUP_NO_COMPILE_CACHE="1")),
             ("an uncacheable line", ["/Zi"], {}, inc2)):
         _write("obj/thunks.obj", "ml64")
         _write("obj/stale3.obj", "old")
@@ -1474,13 +1477,13 @@ def _store_self_test_body():
 
     # The log reader.
     log = "\n".join([
-        "[edvr] compile_cache: d3d11: 141 compiled, 0 reused (123.6 s)",
-        "[edvr] compile_cache:   miss src\\common\\log.cpp: no manifest",
-        "[edvr] compile_cache:   miss src\\common\\config.cpp: header build\\gen\\edvr_version.h changed",
-        "[edvr] compile_cache: a_test.exe: built (12.5 s)",
-        "[edvr] compile_cache:   miss: input rig\\x.lib changed",
-        "[edvr] compile_cache: b_test.exe: reused (0.4 s)",
-        "[edvr] compile_cache: c: 3 compiled, 40 reused (2.0 s)",
+        "[edup] compile_cache: d3d11: 141 compiled, 0 reused (123.6 s)",
+        "[edup] compile_cache:   miss src\\common\\log.cpp: no manifest",
+        "[edup] compile_cache:   miss src\\common\\config.cpp: header build\\gen\\edvr_version.h changed",
+        "[edup] compile_cache: a_test.exe: built (12.5 s)",
+        "[edup] compile_cache:   miss: input rig\\x.lib changed",
+        "[edup] compile_cache: b_test.exe: reused (0.4 s)",
+        "[edup] compile_cache: c: 3 compiled, 40 reused (2.0 s)",
         "unrelated line"])
     totals = summarize_log(log)
     expect(totals["sources_compiled"] == 144 and totals["sources_reused"] == 40 and totals["links_built"] == 1

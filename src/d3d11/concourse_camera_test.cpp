@@ -345,7 +345,7 @@ bool concourseCameraTestInstall(const char** why) noexcept {
         for(int i=0;i<kIdxCount;++i) {
             const uintptr_t at=base+g_ctEntries[i].rva;
             if(ctAlreadyPatched(at)) {
-                Log::get().note("concourse camera test: %s: 0x%llX is already patched by another EDVR module; skipped", g_ctEntries[i].name,static_cast<unsigned long long>(g_ctEntries[i].rva));
+                Log::get().note("concourse camera test: %s: 0x%llX is already patched by another ED-UP module; skipped", g_ctEntries[i].name,static_cast<unsigned long long>(g_ctEntries[i].rva));
                 continue;
             }
             if(!ctPinOk(i,at)) {

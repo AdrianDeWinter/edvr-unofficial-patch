@@ -528,8 +528,8 @@ static void dominantOtherModuleCells() {
           "a name came back for a table wholly in the excluded module");
     fill(0, 0, 96);
     hits = vtableDominantOtherModule(table, 96, nullptr, name, sizeof(name));
-    check(hits == 0 && name[0] == '\0', "every entry in this image (EDVR's own hook): none",
-          "EDVR's own module was named as a wrapper");
+    check(hits == 0 && name[0] == '\0', "every entry in this image (ED-UP's own hook): none",
+          "ED-UP's own module was named as a wrapper");
     void* generated = VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (generated) {
         fill(5, 0, 0);
@@ -2200,7 +2200,7 @@ int main() {
 
             g_ownerHits = 0;
             g_bHits = 0;
-            check(w->one() == 3101, "two EDVR hooks stack on one slot",
+            check(w->one() == 3101, "two ED-UP hooks stack on one slot",
                   "the stacked chain does not run both");
 
             // Vouched on purpose in every call below: the shared-slot refusal
@@ -2884,7 +2884,7 @@ int main() {
     // Deriving the stale watch from the REQUESTED mode then arms it over a
     // shared-table hook whose forward is the entry we replaced, and the first
     // draw prints "STALE FORWARD ... the private-copy mode's failure case ...
-    // has never been observed before" against EDVR's own thunk. There is no
+    // has never been observed before" against ED-UP's own thunk. There is no
     // louder false report in this codebase.
     {
         RealThing obj;
@@ -3061,7 +3061,7 @@ int main() {
                       "re-claiming is off for the whole session -- the registry "
                       "overflowed on a session's ordinary hooks");
                 check(readTableSlot(devTable, devSlots[0]) == reinterpret_cast<void*>(&thunkOne),
-                      "...and the slot is EDVR's again",
+                      "...and the slot is ED-UP's again",
                       "the slot still holds the intruder");
 
                 const size_t quietLate[] = {kLateVScreenSlot};

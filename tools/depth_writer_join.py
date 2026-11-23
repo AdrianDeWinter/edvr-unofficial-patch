@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Name the draw that disowns a pool record's slot: join an eye run's depth writer map to its stale-slot pixels.
 
-    python tools\\depth_writer_join.py --stamp 180433299003 [--logs <edvr_logs>] [--eye 0] [--top 12]
+    python tools\\depth_writer_join.py --stamp 180433299003 [--logs <edup_logs>] [--eye 0] [--top 12]
     python tools\\depth_writer_join.py --self-test
 
 A run armed with advanced.pixel_probe set (src/d3d11/depth_writer_probe.h) writes, beside the object ledger,
-edvr_logs\\pool\\depthwriter_<stamp>_e<eye>.bin (EDVRTEX1, DXGI 42 R32_UINT: for every pixel the id of the LAST draw that changed
+edup_logs\\pool\\depthwriter_<stamp>_e<eye>.bin (EDVRTEX1, DXGI 42 R32_UINT: for every pixel the id of the LAST draw that changed
 the eye's scene depth, 0 = none did) and depthwriter_<stamp>.json (one row per id: vs, ps, counts, the depth, stencil, blend and
 rasteriser state the draw ran under, and the pixels it owns at the end).
 
 The engine motion compose calls a pixel STALE (kind 4) when a pool record's slot is there but the slot's recorded depth is not the
 scene's bit for bit; such a pixel keeps no history. This tool takes the same run's EngineSlots (slot code, slot depth) and Z (the
-scene depth) from edvr_logs\\eyes, finds those pixels (marked, and the two depths differ in a bit), and counts the writer ids
+scene depth) from edup_logs\\eyes, finds those pixels (marked, and the two depths differ in a bit), and counts the writer ids
 over them, grouped by the writer's shader pair and state. The pairs at the top of that table are the draws to look at.
 
 The writer map is of the run's probed frame and EngineSlots/Z are the run's first captured frame; they are the same frame when the
@@ -196,7 +196,12 @@ def main(argv=None):
         return 0
     if not a.stamp:
         ap.error('--stamp is required')
-    logs = a.logs or os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Frontier_Developments', 'Products', 'elite-dangerous-odyssey-64', 'edvr_logs')
+    if a.logs:
+        logs = a.logs
+    else:
+        import edup_log   # edup_logs, or edvr_logs from before the rename, or the ini's log.dir
+        logs = edup_log.log_dir_for(os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Frontier_Developments', 'Products',
+                                                 'elite-dangerous-odyssey-64'))
     report(logs, a.stamp, a.eye, a.top)
     return 0
 

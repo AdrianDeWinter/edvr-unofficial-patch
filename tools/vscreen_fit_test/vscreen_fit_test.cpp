@@ -208,9 +208,9 @@ void caseR2() {
     {
         fit::RouteFacts f = goodRoute();
         f.runtime = fit::RuntimeKind::EdvrOpenXr;
-        check(fit::routeVerdict(f).runs, "R2c: EDVR's own OpenXR (the module list says so) runs the route");
+        check(fit::routeVerdict(f).runs, "R2c: ED-UP's own OpenXR (the module list says so) runs the route");
         f.runtime = fit::RuntimeKind::NotLoadedYet;
-        check(fit::routeVerdict(f).runs, "R2c: a runtime not loaded yet at launch is undecided, not a failure (the eye width on record came from EDVR's OpenXR)");
+        check(fit::routeVerdict(f).runs, "R2c: a runtime not loaded yet at launch is undecided, not a failure (the eye width on record came from ED-UP's OpenXR)");
     }
     struct One { const char* label; void (*apply)(fit::RouteFacts&); const char* phrase; };
     const One singles[] = {
@@ -218,7 +218,7 @@ void caseR2() {
         {"R2b: the key not auto: no route", [](fit::RouteFacts& f) { f.keyAuto = false; }, "the on-foot world route is off"},
         {"R2b: the UI layer not live: no route", [](fit::RouteFacts& f) { f.layerWhy = "fix.ui_quality is off"; }, "fix.ui_quality is off"},
         {"R2b: Elite's native Oculus back end: no route", [](fit::RouteFacts& f) { f.runtime = fit::RuntimeKind::OculusNative; }, "native Oculus"},
-        {"R2b: a foreign openvr_api.dll: no route", [](fit::RouteFacts& f) { f.runtime = fit::RuntimeKind::ForeignOpenvr; }, "not EDVR's"},
+        {"R2b: a foreign openvr_api.dll: no route", [](fit::RouteFacts& f) { f.runtime = fit::RuntimeKind::ForeignOpenvr; }, "not ED-UP's"},
     };
     for (const One& one : singles) {
         fit::RouteFacts f = goodRoute();
@@ -1230,8 +1230,8 @@ void caseR13() {
         vrss::formatToast(toast, sizeof(toast));
         vrss::formatStatusHint(hint, sizeof(hint));
         const std::string l = log;
-        check(std::strncmp(log, "vr supersampling: Elite draws the 3D world at 2112x2304, 75% of the 2816x3072 eye texture, and scales it up before EDVR sees it:", 128) == 0 &&
-                  has(l, "Elite's Supersampling is below 1") && has(l, "HMD Image Quality") && has(l, "EDVR's DLSS upscales from that") &&
+        check(std::strncmp(log, "vr supersampling: Elite draws the 3D world at 2112x2304, 75% of the 2816x3072 eye texture, and scales it up before ED-UP sees it:", 129) == 0 &&
+                  has(l, "Elite's Supersampling is below 1") && has(l, "HMD Image Quality") && has(l, "ED-UP's DLSS upscales from that") &&
                   has(l, "Measured from the render sizes, not read from Elite's settings file") && l.size() < 1000,
               "R13c: the log line names the measurement, the cause, what it does to DLSS and the holograms, what to set, and that it is measured");
         check(has(l, "holograms") && has(l, "already upscaled") && has(l, "Supersampling to 1"), "R13c: ...and says why it hurts and what Supersampling should be");

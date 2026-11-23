@@ -778,7 +778,7 @@ bool eliteBindsLookupDir(const wchar_t* dirC, const char* element, char* out,
             if (present) {
                 Log::get().note(
                     "bindings: %s in %s is not on a keyboard key, so there "
-                    "is nothing for EDVR to watch for it.",
+                    "is nothing for ED-UP to watch for it.",
                     wanted, c.utf8);
                 return false;
             }

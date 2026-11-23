@@ -489,7 +489,7 @@ inline int formatLine(char* out, size_t cap, const LineIn& in) noexcept {
         }
         n = std::snprintf(out, cap,
                           "native on foot head containment (F119) 1 s: frames %u (no pose %u, over limit %u); rest point: generation %u, %.1f s old, recentres %u; "
-                          "head offset cm: %s; EDVR eye offsets cm: h max %.1f, up %+.1f..%+.1f [ADS lock+sight %.1f, weapon eye %.1f, view %.1f "
+                          "head offset cm: %s; ED-UP eye offsets cm: h max %.1f, up %+.1f..%+.1f [ADS lock+sight %.1f, weapon eye %.1f, view %.1f "
                           "horizontal; neck %+.1f, hold %+.1f up]; depth cm (cells of 64 within 5/10/20 cm and 3 cm of the near plane, max): %s; "
                           "skipped %s; contact at the near plane, smallest head offset: 1 cell %s, 8 cells %s, 32 cells %s; contact frames (32 cells or more) %u, weakest %u cells, "
                           "far (over 1 m) up to %u cells; at head offset under 3 cm: frames %u, cells within 20 cm max %u (body %u); cost %.0f us a frame",
@@ -510,7 +510,7 @@ inline int formatSession(char* out, size_t cap, double radiusM = kCollisionRadiu
     else std::snprintf(radius, sizeof(radius), "not read");
     return std::snprintf(out, cap,
                          "native on foot head containment (F119): measure only, nothing drawn changes; the commander's collision radius: %s; the head offset is the physical head's "
-                         "from the rest point (the seated origin) with EDVR's own eye offsets taken out, in the seated space the runtime keeps on the body's heading (right +x, "
+                         "from the rest point (the seated origin) with ED-UP's own eye offsets taken out, in the seated space the runtime keeps on the body's heading (right +x, "
                          "up +y, forward -z); the depth grid is %u x %u cells of %u x %u taps over each eye's scene depth, and stencil bit 0x%02X marks the body (the player's "
                          "weapon and arms, the game's characters) apart from the world",
                          radius, static_cast<unsigned>(kGrid), static_cast<unsigned>(kGrid), static_cast<unsigned>(kTaps), static_cast<unsigned>(kTaps),

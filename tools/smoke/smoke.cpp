@@ -329,11 +329,11 @@ int main(int argc, char** argv) {
         if (!GetModuleFileNameA(nullptr, armed, MAX_PATH)) return fail("executable path");
         if (char* slash = strrchr(armed, '\\')) {
             *slash = '\0';
-            // build.bat's rig runner moves every process's log directory (EDVR_LOG_DIR, limited to this exe's directory by
-            // EDVR_LOG_DIR_FOR; src\common\config.cpp), and the proxy arms its sentinel there.
+            // build.bat's rig runner moves every process's log directory (EDUP_LOG_DIR, limited to this exe's directory by
+            // EDUP_LOG_DIR_FOR; src\common\config.cpp), and the proxy arms its sentinel there.
             char moved[MAX_PATH], only[MAX_PATH];
-            const DWORD movedLen = GetEnvironmentVariableA("EDVR_LOG_DIR", moved, MAX_PATH);
-            const DWORD onlyLen = GetEnvironmentVariableA("EDVR_LOG_DIR_FOR", only, MAX_PATH);
+            const DWORD movedLen = GetEnvironmentVariableA("EDUP_LOG_DIR", moved, MAX_PATH);
+            const DWORD onlyLen = GetEnvironmentVariableA("EDUP_LOG_DIR_FOR", only, MAX_PATH);
             const bool useMoved = movedLen && movedLen < MAX_PATH &&
                                   (!onlyLen || (onlyLen < MAX_PATH && _stricmp(only, armed) == 0));
             if (useMoved) {

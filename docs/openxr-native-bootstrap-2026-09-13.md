@@ -16,8 +16,8 @@ complete Frontier replacement.
 
 ## Configuration contract
 
-Before the first Scene Init, the launcher supplies `EDVR_OPENXR_LOADER` and
-`EDVR_OPENXR_GRAPHICS` in the child process environment. Both are trusted
+Before the first Scene Init, the launcher supplies `EDUP_OPENXR_LOADER` and
+`EDUP_OPENXR_GRAPHICS` in the child process environment. Both are trusted
 drive-absolute paths. The graphics proxy must already be loaded, have published
 the application's device and committed the required context hooks, and continue
 delivering real Present callbacks while Init and Shutdown progress.

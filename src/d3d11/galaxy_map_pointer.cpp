@@ -393,7 +393,7 @@ void mapPointerFrame() noexcept {
         if (stockNow != mapui::g_stock.load(std::memory_order_relaxed)) {
             mapui::g_stock.store(stockNow, std::memory_order_relaxed);
             Log::get().note("map pointer: fix.vr_maps = %s: %s", stockNow ? "off" : "on",
-                            stockNow ? "the Galaxy Map and the System Map keep the game's cursor, arrow, panels, icons and markers" : "the maps' pointer, arrow, panel mask, icons and markers are EDVR's again");
+                            stockNow ? "the Galaxy Map and the System Map keep the game's cursor, arrow, panels, icons and markers" : "the maps' pointer, arrow, panel mask, icons and markers are ED-UP's again");
         }
     }
     const bool stock = mapui::g_stock.load(std::memory_order_relaxed);

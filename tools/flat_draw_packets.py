@@ -2,7 +2,7 @@
 """Read and validate manually armed flat draw packets without modifying captures.
 
 Packed resource files concatenate logical rows, not driver mapping padding.
-Shader hashes use EDVR's raw-byte FNV seed (1469598103934665603).
+Shader hashes use ED-UP's raw-byte FNV seed (1469598103934665603).
 Exit 0: valid (possibly intentionally partial); 1: corrupt; 2: incomplete
 when --require-complete is requested. Payloads are streamed in 1 MiB blocks.
 """

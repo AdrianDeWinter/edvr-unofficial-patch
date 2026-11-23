@@ -823,7 +823,7 @@ void lensTests(Fx& f) {
         in.inPlace = false;
         const Run r = runDoor(f, ring, orig, in);
         const Verdict v = compare(r.image, orig, expectedLens(ring, orig, in.m, cx, cy, 1.0, 0.0), 1);
-        check(r.gotCopy && v.insideBad == 0 && v.outsideBad == 0 && v.insideChanged * 10 > v.inside * 9, "a frame that is not EDVR's to rewrite comes back as the lens's copy, magnified as in place");
+        check(r.gotCopy && v.insideBad == 0 && v.outsideBad == 0 && v.insideChanged * 10 > v.inside * 9, "a frame that is not ED-UP's to rewrite comes back as the lens's copy, magnified as in place");
         check(sameImage(r.original, orig), "and the original frame is not written");
     }
 

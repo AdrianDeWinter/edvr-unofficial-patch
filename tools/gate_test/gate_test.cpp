@@ -898,7 +898,7 @@ int boundarySourceChecks(const std::string& root) {
 
     // NATIVE ON FOOT'S AVATAR HOOKS TICK IN THE DEVICE HOOK'S OWN TICK, NOT vSCREEN'S (review 2026-10-08, finding 3, first written for Explorer Cam's tick, removed in
     // F98). vScreenFrameBoundary only exists when vScreen installs a State; with fix.black_void off, fix.panel_distance 1, the camera-buffer tap off (the test-only variable
-    // EDVR_TEST_NO_CAMERA_TAP=1), advanced.app_gpu_timing off and advanced.panel_hooks_always off vScreen installs transport-only and that function never runs.
+    // EDUP_TEST_NO_CAMERA_TAP=1), advanced.app_gpu_timing off and advanced.panel_hooks_always off vScreen installs transport-only and that function never runs.
     // (tools\test_openxr_transport.py drives the same minimal config through the real d3d11.dll and asks for native on foot's first line: the behaviour, not just this text.)
     // The hooks' boundary runs FIRST in native on foot's tick: it acts on the want and the body nativeOnFootFrameBoundary published the frame before, so a change
     // acts at the next boundary and the hooks are in place from the first frame the native key is on (native_on_foot_hooks.h).

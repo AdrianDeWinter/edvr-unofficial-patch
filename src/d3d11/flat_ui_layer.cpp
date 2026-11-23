@@ -791,7 +791,7 @@ void flatUiLayerAtCopy(ID3D11DeviceContext* ctx, uint64_t frame, bool treated, u
             Log::get().note("flat ui layer: first composite -- frame %llu, the cockpit HUD layer in place over the %ux%u picture the "
                             "game's output copy reads (display %ux%u, %s), kept at the copy's t0 in view format %d.",
                             static_cast<unsigned long long>(frame), td.Width, td.Height, outW, outH,
-                            treated ? "resolved by EDVR" : "the game's own, the resolve refused", static_cast<int>(vd.Format));
+                            treated ? "resolved by ED-UP" : "the game's own, the resolve refused", static_cast<int>(vd.Format));
         }
         return;
     }
@@ -830,7 +830,7 @@ void flatUiLayerAtCopy(ID3D11DeviceContext* ctx, uint64_t frame, bool treated, u
         Log::get().note("flat ui layer: first composite -- frame %llu, the cockpit HUD layer over the %ux%u picture the "
                         "game's output copy reads (display %ux%u, %s), bound at the copy's t0 in view format %d.",
                         static_cast<unsigned long long>(frame), td.Width, td.Height, outW, outH,
-                        treated ? "resolved by EDVR" : "the game's own, the resolve refused", static_cast<int>(vd.Format));
+                        treated ? "resolved by ED-UP" : "the game's own, the resolve refused", static_cast<int>(vd.Format));
     }
 }
 
@@ -870,7 +870,7 @@ void flatUiLayerRelease() {
     FlatComputeInternalScope internal;
     if (uiLayerFlatRelease())
         Log::get().note("flat ui layer: the swap chain is resizing -- every layer, depth target and composite output "
-                        "released; the next frame EDVR resolves arms a fresh door.");
+                        "released; the next frame ED-UP resolves arms a fresh door.");
 }
 
 void flatUiLayerMapAaFrame(bool engaged, bool jitterWanted) {

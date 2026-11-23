@@ -775,7 +775,7 @@ void panelCurveConfigure(Config& cfg) {
                 "panel curvature: off (0), but the segment count is %d rather than "
                 "the default, so the FLAT strip is substituted anyway. That is the "
                 "identity test: the screen must look exactly as it does without "
-                "EDVR. Set the segment count back to %d to stop substituting.",
+                "ED-UP. Set the segment count back to %d to stop substituting.",
                 detail::g_panelCurveSegments, kDefaultSegments);
         } else {
             Log::get().note("panel curvature: off; the game's own quad is drawn.");

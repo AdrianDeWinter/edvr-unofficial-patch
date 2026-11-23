@@ -31,7 +31,7 @@ CASES = (("shared", "off"), ("private", "off"), ("live", "off"),
 # The DLL's test-only switch for the camera-buffer tap (src/d3d11/glitch_frame.cpp):
 # "1" installs vScreen transport-only. An environment variable, so no ini file a
 # user could edit or carry over holds it.
-TAP_OFF_VARIABLE = "EDVR_TEST_NO_CAMERA_TAP"
+TAP_OFF_VARIABLE = "EDUP_TEST_NO_CAMERA_TAP"
 
 
 def tap_off_environment() -> dict[str, str]:
@@ -99,28 +99,28 @@ def run_ticks(executable: Path, proxy: Path) -> int:
                 replacement = directory / "edvr-rebind.ini"
                 replacement.write_text(configuration("shared", "off", directory, log=True, hotkey=then), encoding="utf-8")
                 command.append(str(replacement))
-            print(f"[edvr] tick fixture: {name}", flush=True)
+            print(f"[edup] tick fixture: {name}", flush=True)
             try:
                 completed = subprocess.run(command, cwd=directory, creationflags=flags,
                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                            timeout=45, check=False, env=tap_off_environment())
             except subprocess.TimeoutExpired:
-                print("[edvr] tick fixture timed out; its child was terminated")
+                print("[edup] tick fixture timed out; its child was terminated")
                 return 1
             output = completed.stdout.decode("utf-8", errors="replace")
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
             if completed.returncode != 0 or "tick_live: PASS" not in output:
-                print(f"[edvr] tick fixture failed (exit {completed.returncode})")
+                print(f"[edup] tick fixture failed (exit {completed.returncode})")
                 return 1
             logs = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in sorted((directory / "logs").glob("*.log")))
             problem = tick_log_problem(logs, expected)
             if problem:
-                print(f"[edvr] tick fixture '{name}': the DLL's log does not show the frame tick running ({problem})")
-                print("[edvr] (vScreen is transport-only in this configuration: the tick must be device_hook.cpp's own; "
+                print(f"[edup] tick fixture '{name}': the DLL's log does not show the frame tick running ({problem})")
+                print("[edup] (vScreen is transport-only in this configuration: the tick must be device_hook.cpp's own; "
                       f"the log read was {len(logs)} bytes, {len(logs.splitlines())} lines)")
                 print("\n".join(line for line in logs.splitlines() if "native on foot" in line or "hotkey:" in line)[:2000])
                 return 1
-    print(f"[edvr] ticks: {len(TICK_CASES)} cases showed device_hook.cpp's ticks running with vScreen transport-only")
+    print(f"[edup] ticks: {len(TICK_CASES)} cases showed device_hook.cpp's ticks running with vScreen transport-only")
     return 0
 
 
@@ -142,23 +142,23 @@ def run_matrix(executable: Path, proxy: Path, *, dry_run: bool = False) -> int:
             (directory / "edup.ini").write_text(configuration(mode, probe, directory), encoding="utf-8")
             expectation = "--transport-only" if probe == "off" else "--unavailable"
             command = [str(executable), "--graphics-proxy", str(staged), expectation]
-            print(f"[edvr] transport fixture: mode={mode}, probe={probe}", flush=True)
+            print(f"[edup] transport fixture: mode={mode}, probe={probe}", flush=True)
             try:
                 completed = subprocess.run(command, cwd=directory, creationflags=flags,
                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                            timeout=45, check=False, env=tap_off_environment())
             except subprocess.TimeoutExpired:
-                print("[edvr] transport fixture timed out; its child was terminated")
+                print("[edup] transport fixture timed out; its child was terminated")
                 return 1
             output = completed.stdout.decode("utf-8", errors="replace")
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
             if completed.returncode != 0:
-                print(f"[edvr] transport fixture failed with exit {completed.returncode}")
+                print(f"[edup] transport fixture failed with exit {completed.returncode}")
                 return 1
             if probe == "off" and "transport_only: PASS" not in output:
-                print("[edvr] transport fixture did not confirm the minimal hook route")
+                print("[edup] transport fixture did not confirm the minimal hook route")
                 return 1
-    print(f"[edvr] transport matrix: {len(CASES)} cases passed (no OpenXR runtime)")
+    print(f"[edup] transport matrix: {len(CASES)} cases passed (no OpenXR runtime)")
     return run_ticks(executable, proxy)
 
 

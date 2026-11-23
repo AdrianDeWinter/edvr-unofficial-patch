@@ -478,7 +478,7 @@ inline size_t formatJitterLine(char* out, size_t cap, const Stats& s, uint64_t s
 inline size_t formatSampleLine(char* out, size_t cap, const Sample& m) noexcept {
     const int n = std::snprintf(
         out, cap,
-        "light grid cache: jitter sample: delta row 0 [%.6g %.6g %.6g %.6g] row 2 [%.6g %.6g %.6g %.6g]; rows 1 and 3 %s; EDVR jitter %s: frame %llu, pixels (%.4f, %.4f), "
+        "light grid cache: jitter sample: delta row 0 [%.6g %.6g %.6g %.6g] row 2 [%.6g %.6g %.6g %.6g]; rows 1 and 3 %s; ED-UP jitter %s: frame %llu, pixels (%.4f, %.4f), "
         "tangent shift eye 0 (%.6g, %.6g) eye 1 (%.6g, %.6g).",
         m.delta[0], m.delta[1], m.delta[2], m.delta[3], m.delta[8], m.delta[9], m.delta[10], m.delta[11], m.rows13Equal ? "equal" : "differ too",
         m.jitter.known ? "published" : "not published (no VR temporal pass)", static_cast<unsigned long long>(m.jitter.frame), m.jitter.jx, m.jitter.jy, m.jitter.shift[0][0],

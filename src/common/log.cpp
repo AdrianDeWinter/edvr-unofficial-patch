@@ -436,7 +436,7 @@ void Log::writeBuffer(int index) {
         // "250 ms" would drift the day kFlushIntervalMs changes.
         const int n = _snprintf_s(
             msg, sizeof(msg), _TRUNCATE,
-            "[edvr] %llu log line(s) were DROPPED here -- more text arrived "
+            "[edup] %llu log line(s) were DROPPED here -- more text arrived "
             "between two writes to disk (at least %u ms apart) than the %zu MB "
             "buffer holds, so what follows is not continuous. %llu lost this "
             "session. Raise log.buffer_mb if this is a capture you need "
@@ -509,7 +509,7 @@ void Log::beginTail() {
     char marker[768];
     size_t off = 0;
     appendf(marker, sizeof(marker), off,
-            "[edvr] log head ends here at %llu KB (a quarter of log.max_mb = %llu MB); the log continues in %s, only the newest 4 tail "
+            "[edup] log head ends here at %llu KB (a quarter of log.max_mb = %llu MB); the log continues in %s, only the newest 4 tail "
             "segments are kept, and what follows below is the first line of each kind written after this point and the memory watch's "
             "lines, up to %llu KB.\r\n",
             static_cast<unsigned long long>(I.plan.head / 1024), static_cast<unsigned long long>(m_maxBytes / (1024ull * 1024ull)),
@@ -545,7 +545,7 @@ bool Log::openSegment() {
             I.tailErrorNoted = true;
             char msg[200];
             const int n = _snprintf_s(msg, sizeof(msg), _TRUNCATE,
-                                      "[edvr] could not open tail segment %u (error %lu); log lines are discarded until it can be opened.\r\n", no, GetLastError());
+                                      "[edup] could not open tail segment %u (error %lu); log lines are discarded until it can be opened.\r\n", no, GetLastError());
             if (n > 0) writeHead(msg, static_cast<size_t>(n));
         }
         return false;
@@ -561,7 +561,7 @@ bool Log::openSegment() {
 
     char marker[1536];
     size_t off = 0;
-    appendf(marker, sizeof(marker), off, "[edvr] tail segment %u of %s.", no, I.headLeaf.c_str());
+    appendf(marker, sizeof(marker), off, "[edup] tail segment %u of %s.", no, I.headLeaf.c_str());
     if (!I.deleted.empty()) {
         appendf(marker, sizeof(marker), off, " Deleted so far:");
         const size_t shown = I.deleted.size() < 6 ? I.deleted.size() : 6;
@@ -635,7 +635,7 @@ void Log::writeKept(int index, size_t headEnd) {
         if (verdict == ReserveVerdict::Spent) {
             if (!I.keptSpentNoted) {
                 I.keptSpentNoted = true;
-                const char msg[] = "[edvr] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no longer fit here); "
+                const char msg[] = "[edup] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no longer fit here); "
                                    "later ones are only in the tail segments still on disk.\r\n";
                 writeHead(msg, sizeof(msg) - 1);
             }
@@ -644,7 +644,7 @@ void Log::writeKept(int index, size_t headEnd) {
         const uint32_t segment = segmentAt(span.offset);
         if (segment != I.keptSeg) {
             char marker[96];
-            const int n = _snprintf_s(marker, sizeof(marker), _TRUNCATE, "[edvr] kept lines from tail segment %u\r\n", segment);
+            const int n = _snprintf_s(marker, sizeof(marker), _TRUNCATE, "[edup] kept lines from tail segment %u\r\n", segment);
             if (n > 0) writeHead(marker, static_cast<size_t>(n));
             I.keptSeg = segment;
         }
@@ -812,7 +812,7 @@ void Log::detachDuringProcessExit() {
             char msg[200];
             const int n = _snprintf_s(
                 msg, sizeof(msg), _TRUNCATE,
-                "[edvr] %llu log line(s) were DROPPED before this point and "
+                "[edup] %llu log line(s) were DROPPED before this point and "
                 "the process is exiting; the tail above is not continuous.\r\n",
                 static_cast<unsigned long long>(lost));
             if (n > 0) {

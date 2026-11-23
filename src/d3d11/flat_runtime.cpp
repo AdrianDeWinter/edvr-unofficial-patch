@@ -875,7 +875,7 @@ struct State {
     // the whole frame, first game draw to Present, and the resolver's dispatches plus
     // backend call. A timer is owned until its sample is read; with none free the
     // frame is skipped and counted.
-    flatcpu::Census census{flatcpu::kRenderPeriod, false};   // off until advanced.flat_cpu_timing (or EDVR_FLAT_CPU_CLOCKS=1) says otherwise
+    flatcpu::Census census{flatcpu::kRenderPeriod, false};   // off until advanced.flat_cpu_timing (or EDUP_FLAT_CPU_CLOCKS=1) says otherwise
     FlatPairFactsMemo pairFacts;                  // what a draw's shader pair alone says (flat_pair_facts.h), owner thread
     FlatOffscreenMemo offscreen;                  // the previous verified class-4 draw of the frame (flat_offscreen_fast.h), owner thread
     FlatOffscreenCounts offscreenCounts;          // what the fast path did since the last Present drained it, owner thread
@@ -3391,7 +3391,7 @@ const char* witnessModuleBrief(void* p, char* buf, size_t bufLen) {
                            reinterpret_cast<LPCSTR>(&witnessModuleBrief), &self);
     }
     _snprintf_s(buf, bufLen, _TRUNCATE, "%s%s+0x%llX",
-                (self && mbi.AllocationBase == self) ? "EDVR's own " : "", leaf,
+                (self && mbi.AllocationBase == self) ? "ED-UP's own " : "", leaf,
                 static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(p) -
                                                 reinterpret_cast<uintptr_t>(mbi.AllocationBase)));
     return buf;
@@ -3407,7 +3407,7 @@ bool witnessWalk(const void* buffer) {
         if (!isExecutableAddress(frames[i])) continue;
         char briefBuf[96];
         const char* brief = witnessModuleBrief(frames[i], briefBuf, sizeof(briefBuf));
-        if (std::strncmp(brief, "EDVR's own ", 11) == 0) continue;
+        if (std::strncmp(brief, "ED-UP's own ", 12) == 0) continue;
         site = frames[i]; break;
     }
     if (!site) { ++w.dedupHits; return false; }
@@ -4920,7 +4920,14 @@ void flatRuntimePresent(IDXGISwapChain* swap, uint64_t frame, HRESULT hr, UINT f
             if (timingChanged || !s.cpuTimingRead) {
                 s.cpuTimingRead = true;
                 Log::get().note("flat runtime: CPU timing in the log %s (advanced.flat_cpu_timing = %s%s)", timingWanted ? "on" : "off",
-                                timingKey ? "on" : "off", timingEnv ? "; EDVR_FLAT_CPU_CLOCKS decides it" : "");
+                                timingKey ? "on" : "off", timingEnv ? "; EDUP_FLAT_CPU_CLOCKS decides it" : "");
+                if (flatcpu::clocksEnvLegacy()) {
+                    static bool saidLegacy = false;   // this block runs on the render thread only
+                    if (!saidLegacy) {
+                        saidLegacy = true;
+                        Log::get().note("[edup] WARNING: EDVR_FLAT_CPU_CLOCKS is deprecated; set EDUP_FLAT_CPU_CLOCKS instead");
+                    }
+                }
             }
         }
         const bool censusWasRunning = s.census.running();

@@ -4,7 +4,7 @@ advanced.cull_gate_capture) beside its eye run's depth, pool and ledger, and
 print the inputs the occlusion-culling recall measurement needs
 (docs/design-occlusion-culling-2026-09-22.md, section 9).
 
-    python tools/cull_gate_probe.py <edvr_logs\\pool> <stamp> [<stamp> ...]
+    python tools/cull_gate_probe.py <edup_logs\\pool> <stamp> [<stamp> ...]
            [--frame F] [--radius 1.0] [--occluder-range 120] [--records 40]
            [--parts 40] [--parts-csv FILE] [--lod-bias K[,K...]]
            [--settlement-ms 6.3,8.5] [--tables 10]

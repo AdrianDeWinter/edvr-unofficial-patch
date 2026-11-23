@@ -193,7 +193,7 @@ world witness stand down as before. In both older builds the store moved
 - **(c)** On every fixture exe, every target's address, via and reason
   equal Python's.
 - **(b)** When the archived exes are at the main checkout's `analysis\` (found
-  from the git common directory, or `EDVR_ANALYSIS_DIR`), the rig maps each
+  from the git common directory, or `EDUP_ANALYSIS_DIR`), the rig maps each
   one and resolves it with the committed table. It checks the result against
   `tools\game_build_test\expect_<build>.txt` (ground truth plus Python's
   answer): 0 WRONG, Python's EQUAL count and the same answer per target. It

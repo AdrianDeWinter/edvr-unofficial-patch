@@ -75,7 +75,7 @@ def read_bmp(path, extent):
     offset = struct.unpack_from('<I', data, 10)[0]
     dib, w, h, planes, bits, compression = struct.unpack_from('<IiiHHI', data, 14)
     if dib != 40 or planes != 1 or bits != 24 or compression != 0:
-        raise ValueError('expected EDVR 24-bit uncompressed BMP')
+        raise ValueError('expected ED-UP 24-bit uncompressed BMP')
     if [w, abs(h)] != list(extent) or w <= 0 or h == 0 or offset < 54:
         raise ValueError('BMP crop mismatch')
     row = (w * 3 + 3) & ~3

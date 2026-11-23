@@ -2,11 +2,11 @@
 """How wrong is a skinned character's motion in one eye dump?
 
     python tools\\character_motion_check.py --target frontier [--stamp 125144765001]
-    python tools\\character_motion_check.py --logs <edvr_logs> --stamp 125144765001 [--draw 01DA82F8:16122] [--first 4]
+    python tools\\character_motion_check.py --logs <edup_logs> --stamp 125144765001 [--draw 01DA82F8:16122] [--first 4]
     python tools\\character_motion_check.py --self-test
 
 The newest dump is taken when no --stamp is given. It needs a paired eye run (a manual eye dump is one): the raw input (C), the motion handed
-to the upscaler (D) and motion.csv. The depth writer map in edvr_logs\\pool, when the run wrote one, separates the regions.
+to the upscaler (D) and motion.csv. The depth writer map in edup_logs\\pool, when the run wrote one, separates the regions.
 
 For each frame from --first (default 4: the capture's own hitch fills the frames before it) and each region, it warps the previous raw input
 through the frame's own motion, takes out the jitter difference from motion.csv, and finds the extra offset that best matches this input.
@@ -539,7 +539,7 @@ def self_test():
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--target', default=None, help='steam, frontier or a game directory; the logs folder is found the way edup_log.py finds it')
-    ap.add_argument('--logs', default=None, help='an edvr_logs folder, instead of --target')
+    ap.add_argument('--logs', default=None, help='an edup_logs folder, instead of --target')
     ap.add_argument('--stamp', default=None, help='the eye run; the newest when not given')
     ap.add_argument('--draw', default=DEFAULT_DRAW, help='vs hash prefix, then optionally :index count (default %(default)s, the helmet and headset)')
     ap.add_argument('--first', type=int, default=4, help='the first frame to measure (default %(default)s)')
@@ -559,7 +559,7 @@ def main(argv=None):
         stamp = args.stamp or newest_stamp(logs)
         return report(measure(logs, stamp, args.first, args.draw.upper()), args.face_limit, args.draw_limit)
     except DumpError as e:
-        print('[edvr] %s' % e)
+        print('[edup] %s' % e)
         return 2
 
 

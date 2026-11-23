@@ -2154,7 +2154,7 @@ void hudFrameText(uintptr_t address, char* out, size_t cap) {
     const wchar_t* leaf = std::wcsrchr(path, L'\\');
     leaf = leaf ? leaf + 1 : path;
     if (_wcsnicmp(leaf, L"d3d11", 5) == 0) std::snprintf(out, cap, "d3d11+0x%llX", static_cast<unsigned long long>(rva));
-    else if (_wcsnicmp(leaf, L"openvr_api", 10) == 0) std::snprintf(out, cap, "edvr+0x%llX", static_cast<unsigned long long>(rva));
+    else if (_wcsnicmp(leaf, L"openvr_api", 10) == 0) std::snprintf(out, cap, "ed-up+0x%llX", static_cast<unsigned long long>(rva));
     else std::snprintf(out, cap, "?");
 }
 
@@ -26374,7 +26374,7 @@ void f138Line(uint64_t now) noexcept {
                     nameItem();
                     item = itemName;
                 }
-                Log::get().note("native on foot pitched view (F138) 10 s bins (per 10 deg of aim pitch: calls, the camera's sink, EDVR carried up, forward, the head's own height "
+                Log::get().note("native on foot pitched view (F138) 10 s bins (per 10 deg of aim pitch: calls, the camera's sink, ED-UP carried up, forward, the head's own height "
                                 "since the stance; cm): %s, item %s: %s", m ? "look to aim" : "mouse look", item, body);
                 bins[m][i] = f138::Group{};
             }
@@ -28453,7 +28453,7 @@ void f144FpCensusLog(const nofoot::f144::FpCensus& fc) noexcept {
     if (!s.haveLast) std::snprintf(what, sizeof(what), "first read");
     else if (changed[0]) std::snprintf(what, sizeof(what), "changed: %s%s", changed, listChanged ? ", the zeroed set" : "");
     else std::snprintf(what, sizeof(what), "changed: %s", listChanged ? "the zeroed set" : "none");
-    Log::get().note("native on foot first-person census (F144): change %u of the local first-person AMC 0x%llX: %u of %u parts have instances, EDVR's list covers %u of them and the zero "
+    Log::get().note("native on foot first-person census (F144): change %u of the local first-person AMC 0x%llX: %u of %u parts have instances, ED-UP's list covers %u of them and the zero "
                     "changed %u (a mask bit was set); %s; %s",
                     s.changes, static_cast<unsigned long long>(c.amc), c.n, avh::kPartCount, inList, zeroed, what,
                     full ? "every part with an instance follows" : "only the parts that changed follow");
@@ -28468,10 +28468,10 @@ void f144FpCensusLog(const nofoot::f144::FpCensus& fc) noexcept {
         for (uint32_t k = 0; k < avh::kPartVariants; ++k)
             if (r.inst & (1u << k)) iat += static_cast<size_t>(std::snprintf(inst + iat, sizeof(inst) - iat, "%s%u", iat ? "," : "", k));
         const bool listed = ((fc.listMask >> r.idx) & 1ull) != 0, zeroedHere = ((fc.zeroedMask >> r.idx) & 1ull) != 0;
-        Log::get().note("native on foot first-person part (F144): %s instances %s state %d (%s) flags 0x%02X masks before EDVR's zero 0x%llX,0x%llX,0x%llX,0x%llX; %s%s", f142PartName(r.idx),
+        Log::get().note("native on foot first-person part (F144): %s instances %s state %d (%s) flags 0x%02X masks before ED-UP's zero 0x%llX,0x%llX,0x%llX,0x%llX; %s%s", f142PartName(r.idx),
                         inst, r.state, f142::classText(r.state), r.flags, static_cast<unsigned long long>(r.masks[0]), static_cast<unsigned long long>(r.masks[1]),
                         static_cast<unsigned long long>(r.masks[2]), static_cast<unsigned long long>(r.masks[3]),
-                        listed ? (zeroedHere ? "in EDVR's list, zeroed (a mask bit was set)" : "in EDVR's list, mask already 0") : "not in EDVR's list: left as the game draws it",
+                        listed ? (zeroedHere ? "in ED-UP's list, zeroed (a mask bit was set)" : "in ED-UP's list, mask already 0") : "not in ED-UP's list: left as the game draws it",
                         s.haveLast && isChanged ? " [changed]" : "");
     }
     s.last = fc;

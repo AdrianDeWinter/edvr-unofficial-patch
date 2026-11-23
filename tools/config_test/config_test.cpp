@@ -1210,7 +1210,7 @@ static const char* const kRetiredKeys[] = {
     // The scanned-body lend, 2026-10-09: fix.scanner_body is gone with the lend. The cause is fixed at the game's own flush (vertex_resync_hook.cpp, which has no key).
     "scanner_body",
     // The camera-buffer geometry, 2026-10-14: the game's 5376-byte scene buffer with the camera origin at float 1100 are constants in glitch_frame.cpp now; a wrong
-    // pair could only switch the transition-flash hold off. The test rigs' switch for the tap is an environment variable (EDVR_TEST_NO_CAMERA_TAP), not a key.
+    // pair could only switch the transition-flash hold off. The test rigs' switch for the tap is an environment variable (EDUP_TEST_NO_CAMERA_TAP), not a key.
     "camera_buffer_bytes", "camera_buffer_offset",
 };
 static const int kRetiredKeyCount = int(sizeof(kRetiredKeys) / sizeof(kRetiredKeys[0]));
@@ -1755,13 +1755,13 @@ bool openSession(const std::wstring& dir, const wchar_t* tag, const char* iniLin
 
 // The head's end notice, exact, for max_mb = 1.
 std::string headMarker(const std::string& firstSegment) {
-    return "[edvr] log head ends here at 256 KB (a quarter of log.max_mb = 1 MB); the log continues in " + firstSegment +
+    return "[edup] log head ends here at 256 KB (a quarter of log.max_mb = 1 MB); the log continues in " + firstSegment +
            ", only the newest 4 tail segments are kept, and what follows below is the first line of each kind written after this point and the "
            "memory watch's lines, up to 128 KB.\r\n";
 }
 
 const char* const kSpentText =
-    "[edvr] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no longer fit here); later ones are only in the "
+    "[edup] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no longer fit here); later ones are only in the "
     "tail segments still on disk.\r\n";
 
 // The head up to its end notice, the notice's line and what follows it (the kept lines).
@@ -1774,13 +1774,13 @@ struct Head {
 Head readHead(const std::wstring& dir, const std::wstring& head) {
     Head h;
     h.text = slurp(dir + L"\\" + head);
-    h.markerAt = h.text.find("[edvr] log head ends here at ");
+    h.markerAt = h.text.find("[edup] log head ends here at ");
     return h;
 }
 
 // The kept-lines marker's segment number in force at `pos` of the head (0: none before it).
 unsigned keptSegmentAt(const std::string& text, size_t pos) {
-    const char* const mark = "[edvr] kept lines from tail segment ";
+    const char* const mark = "[edup] kept lines from tail segment ";
     const size_t at = text.rfind(mark, pos);
     return at == std::string::npos ? 0u : static_cast<unsigned>(std::strtoul(text.c_str() + at + std::strlen(mark), nullptr, 10));
 }
@@ -1841,7 +1841,7 @@ void run(const std::wstring& scratch) {
             const Head h = readHead(dir, head);
             const std::vector<unsigned> tails = tailsOnDisk(dir, head);
             check(Log::get().maxBytes() == 1 * kMiB, "an explicit max_mb = 1 is a 1 MB bound", std::to_string(Log::get().maxBytes()) + " bytes");
-            check(h.markerAt != std::string::npos && h.markerAt <= kHead && count(h.text, "[edvr] log head ends here at ") == 1,
+            check(h.markerAt != std::string::npos && h.markerAt <= kHead && count(h.text, "[edup] log head ends here at ") == 1,
                   "a session past the head's share ends its head once, within that share", std::to_string(h.markerAt) + " bytes in");
             check(h.markerAt != std::string::npos && h.text.find(headMarker(narrow(tailName(head, 1)))) == h.markerAt,
                   "...with the exact notice: where the head ends, which file the log continues in, the four segments kept, what follows");
@@ -1855,7 +1855,7 @@ void run(const std::wstring& scratch) {
                 const std::string body = slurp(dir + L"\\" + tailName(head, n));
                 total += body.size();
                 char want[300];
-                _snprintf_s(want, _TRUNCATE, "[edvr] tail segment %u of %s.", n, narrow(head).c_str());
+                _snprintf_s(want, _TRUNCATE, "[edup] tail segment %u of %s.", n, narrow(head).c_str());
                 opens = opens && body.compare(0, std::strlen(want), want) == 0;
                 small = small && body.size() <= kSegment + 4096;
                 wholeLines = wholeLines && body.size() >= 2 && body.compare(body.size() - 2, 2, "\r\n") == 0;
@@ -1997,7 +1997,7 @@ void run(const std::wstring& scratch) {
                       newestTop.find("segment 2 (") != std::string::npos && newestTop.find("segment 3 (") != std::string::npos,
                   "rotA: the newest segment's notice lists segments 1, 2 and 3 as deleted");
             check(count(h.text, kSpentText) == 0, "rotA: a session that keeps few lines does not say its kept-lines budget is spent");
-            check(count(h.text, "[edvr] log head ends here at ") == 1, "rotA: the head ends once");
+            check(count(h.text, "[edup] log head ends here at ") == 1, "rotA: the head ends once");
             expectLine("rotA", "max_bytes", std::to_string(kMiB));
             expectLine("rotA", "newest", "rotA newest line");
             expectLine("rotA", "min_segments", "8");
@@ -2073,7 +2073,7 @@ void run(const std::wstring& scratch) {
             check(!tails.empty() && h.markerAt != std::string::npos && h.text.find(headMarker(narrow(tailName(head, 1)))) == h.markerAt,
                   "rotC: its end notice names its first segment with the _mmm_pid form", narrow(head));
             check(!tails.empty() &&
-                      slurp(dir + L"\\" + tailName(head, tails.back())).find("[edvr] tail segment " + std::to_string(tails.back()) + " of " + narrow(head) + ".") == 0,
+                      slurp(dir + L"\\" + tailName(head, tails.back())).find("[edup] tail segment " + std::to_string(tails.back()) + " of " + narrow(head) + ".") == 0,
                   "rotC: and so does each segment's notice");
             expectLine("rotC", "max_bytes", std::to_string(kMiB));
             expectLine("rotC", "pidform", "1");
@@ -2842,7 +2842,7 @@ int main(int argc, char** argv) {
         // --- the log directory, and the environment's say over it ----------
         //
         // build.bat's test runner gives each rig's proxies their own log
-        // directory through EDVR_LOG_DIR, scoped by EDVR_LOG_DIR_FOR to the
+        // directory through EDUP_LOG_DIR, scoped by EDUP_LOG_DIR_FOR to the
         // exes in build\, so two rigs' proxies never share crash sentinels.
         // The scope matters: rigs that stage children in private directories
         // read those children's exe-relative logs, and the runner's variables
@@ -2853,12 +2853,15 @@ int main(int argc, char** argv) {
             const std::wstring exeDefault = exeDir + L"\\edup_logs";
             const std::wstring moved = scratch + L"\\moved_logs";
             wchar_t savedDir[MAX_PATH]{}, savedFor[MAX_PATH]{};
-            const bool hadDir = GetEnvironmentVariableW(L"EDVR_LOG_DIR", savedDir, MAX_PATH) != 0;
-            const bool hadFor = GetEnvironmentVariableW(L"EDVR_LOG_DIR_FOR", savedFor, MAX_PATH) != 0;
+            const bool hadDir = GetEnvironmentVariableW(L"EDUP_LOG_DIR", savedDir, MAX_PATH) != 0;
+            const bool hadFor = GetEnvironmentVariableW(L"EDUP_LOG_DIR_FOR", savedFor, MAX_PATH) != 0;
+            wchar_t savedOldDir[MAX_PATH]{}, savedOldFor[MAX_PATH]{};
+            const bool hadOldDir = GetEnvironmentVariableW(L"EDVR_LOG_DIR", savedOldDir, MAX_PATH) != 0;
+            const bool hadOldFor = GetEnvironmentVariableW(L"EDVR_LOG_DIR_FOR", savedOldFor, MAX_PATH) != 0;
             auto expectLogDir = [&](const wchar_t* dir, const wchar_t* onlyFor,
                                     const std::wstring& want, const char* what) {
-                SetEnvironmentVariableW(L"EDVR_LOG_DIR", dir);
-                SetEnvironmentVariableW(L"EDVR_LOG_DIR_FOR", onlyFor);
+                SetEnvironmentVariableW(L"EDUP_LOG_DIR", dir);
+                SetEnvironmentVariableW(L"EDUP_LOG_DIR_FOR", onlyFor);
                 Config::get().init(scratch);
                 const std::wstring& got = Config::get().logDir();
                 if (_wcsicmp(got.c_str(), want.c_str()) == 0) { ok(what); return; }
@@ -2866,18 +2869,52 @@ int main(int argc, char** argv) {
                 for (wchar_t c : got) detail.push_back(static_cast<char>(c));
                 fail(what, detail);
             };
+            // The deprecated EDVR_ spelling is read while the EDUP_ one is unset, and the EDUP_ one wins when both are set.
+            auto expectLegacyLogDir = [&](const wchar_t* newDir, const wchar_t* oldDir,
+                                          const std::wstring& want, const char* what) {
+                SetEnvironmentVariableW(L"EDUP_LOG_DIR", newDir);
+                SetEnvironmentVariableW(L"EDUP_LOG_DIR_FOR", nullptr);
+                SetEnvironmentVariableW(L"EDVR_LOG_DIR", oldDir);
+                SetEnvironmentVariableW(L"EDVR_LOG_DIR_FOR", nullptr);
+                Config::get().init(scratch);
+                const std::wstring& got = Config::get().logDir();
+                if (_wcsicmp(got.c_str(), want.c_str()) == 0) { ok(what); return; }
+                fail(what, std::string("log dir differs from the one expected"));
+            };
             std::wstring upperExeDir = exeDir;
             for (wchar_t& c : upperExeDir) c = static_cast<wchar_t>(towupper(c));
             if (!writeIni(scratch, "[fix]\r\nblack_void = 1\r\n")) {
                 fail("log dir scratch ini", "could not write it");
             } else {
                 expectLogDir(nullptr, nullptr, exeDefault, "without log.dir the log goes beside the exe");
-                expectLogDir(moved.c_str(), nullptr, moved, "EDVR_LOG_DIR alone moves the default anywhere");
+                expectLogDir(moved.c_str(), nullptr, moved, "EDUP_LOG_DIR alone moves the default anywhere");
                 expectLogDir(moved.c_str(), scratch.c_str(), exeDefault,
-                             "EDVR_LOG_DIR_FOR naming another directory leaves this exe's default alone");
+                             "EDUP_LOG_DIR_FOR naming another directory leaves this exe's default alone");
                 expectLogDir(moved.c_str(), upperExeDir.c_str(), moved,
-                             "EDVR_LOG_DIR_FOR naming the exe's directory, any case, moves it");
-                expectLogDir(L"", upperExeDir.c_str(), exeDefault, "an empty EDVR_LOG_DIR moves nothing");
+                             "EDUP_LOG_DIR_FOR naming the exe's directory, any case, moves it");
+                expectLogDir(L"", upperExeDir.c_str(), exeDefault, "an empty EDUP_LOG_DIR moves nothing");
+                expectLegacyLogDir(nullptr, moved.c_str(), moved, "EDVR_LOG_DIR alone still moves the log (deprecated name)");
+                expectLegacyLogDir(moved.c_str(), scratch.c_str(), moved, "EDUP_LOG_DIR wins over EDVR_LOG_DIR when both are set");
+                // The warnings name exactly the deprecated variables that were read.
+                auto expectWarnings = [&](const wchar_t* newDir, const wchar_t* oldDir, const wchar_t* newFor,
+                                          const wchar_t* oldFor, const std::string& want, const char* what) {
+                    SetEnvironmentVariableW(L"EDUP_LOG_DIR", newDir);
+                    SetEnvironmentVariableW(L"EDVR_LOG_DIR", oldDir);
+                    SetEnvironmentVariableW(L"EDUP_LOG_DIR_FOR", newFor);
+                    SetEnvironmentVariableW(L"EDVR_LOG_DIR_FOR", oldFor);
+                    std::string got;
+                    for (const char* warning : deprecatedEnvironmentWarnings()) got += std::string(warning) + "\n";
+                    if (got == want) { ok(what); return; }
+                    fail(what, got);
+                };
+                const std::string dirWarning = "[edup] WARNING: EDVR_LOG_DIR is deprecated; set EDUP_LOG_DIR instead\n";
+                const std::string forWarning = "[edup] WARNING: EDVR_LOG_DIR_FOR is deprecated; set EDUP_LOG_DIR_FOR instead\n";
+                const wchar_t* dirValue = moved.c_str();
+                const wchar_t* forValue = scratch.c_str();
+                expectWarnings(nullptr, nullptr, nullptr, forValue, "", "EDVR_LOG_DIR_FOR without a LOG_DIR is not read, so no warning");
+                expectWarnings(nullptr, dirValue, nullptr, forValue, dirWarning + forWarning, "both old names read: both warned about");
+                expectWarnings(dirValue, nullptr, nullptr, forValue, forWarning, "EDVR_LOG_DIR_FOR limiting EDUP_LOG_DIR is warned about");
+                expectWarnings(dirValue, dirValue, forValue, forValue, "", "the new names win: no warning");
             }
             if (!writeIni(scratch, "[log]\r\ndir = C:\\elsewhere\\logs\r\n")) {
                 fail("log.dir scratch ini", "could not write it");
@@ -2885,8 +2922,10 @@ int main(int argc, char** argv) {
                 expectLogDir(moved.c_str(), nullptr, L"C:\\elsewhere\\logs",
                              "an explicit log.dir wins over the environment");
             }
-            SetEnvironmentVariableW(L"EDVR_LOG_DIR", hadDir ? savedDir : nullptr);
-            SetEnvironmentVariableW(L"EDVR_LOG_DIR_FOR", hadFor ? savedFor : nullptr);
+            SetEnvironmentVariableW(L"EDUP_LOG_DIR", hadDir ? savedDir : nullptr);
+            SetEnvironmentVariableW(L"EDUP_LOG_DIR_FOR", hadFor ? savedFor : nullptr);
+            SetEnvironmentVariableW(L"EDVR_LOG_DIR", hadOldDir ? savedOldDir : nullptr);
+            SetEnvironmentVariableW(L"EDVR_LOG_DIR_FOR", hadOldFor ? savedOldFor : nullptr);
         }
     }
 

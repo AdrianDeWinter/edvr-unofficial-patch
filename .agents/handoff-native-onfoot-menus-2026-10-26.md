@@ -277,7 +277,7 @@ Installed code validation:
 - `build/rc1-followups/flight5/promote-native.log`: clean promotion, 41.1 s.
 
 Follow AGENTS for full validation, commit, merge/push and clean DLL promotion.
-Set `EDVR_XESS_SDK` to the main checkout's `third_party\xess`. The machine-wide
+Set `EDUP_XESS_SDK` to the main checkout's `third_party\xess`. The machine-wide
 build lock is shared with other worktrees; do not bypass it. Install Frontier
 with `--scope both --dlss --xess`, dry-run then actual then `--verify-only`,
 without `--ini`. No new RC tag or release is requested.

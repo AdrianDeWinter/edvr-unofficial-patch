@@ -1038,7 +1038,7 @@ bool queryOffered(State& state, std::vector<std::string>& names, std::vector<uin
     ffxReturnCode_t rc = state.api.query(nullptr, &query.header);
     if (rc != FFX_API_RETURN_OK)
         return failProbe(why, "AMD's ffxQuery for the upscaler versions returned %u (%s)%s", unsigned(rc), ffxReturnName(rc),
-                         rc == FFX_API_RETURN_NO_PROVIDER ? "; no provider answered (is amd_fidelityfx_upscaler_dx12.dll loadable beside EDVR?)" : "");
+                         rc == FFX_API_RETURN_NO_PROVIDER ? "; no provider answered (is amd_fidelityfx_upscaler_dx12.dll loadable beside ED-UP?)" : "");
     if (count > kMaxOffered) count = kMaxOffered;
     if (count == 0) return true;   // offered nothing: the caller refuses
     std::vector<uint64_t> versionIds(static_cast<size_t>(count), 0);
@@ -1066,13 +1066,13 @@ bool probeRuntime(State& state, const char** why) {
     HMODULE self = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                             reinterpret_cast<LPCWSTR>(&fsr4BuiltIn), &self) || !self)
-        return failProbe(why, "EDVR module for AMD's FSR 4 DLLs could not be located (Win32=%lu)", GetLastError());
+        return failProbe(why, "ED-UP module for AMD's FSR 4 DLLs could not be located (Win32=%lu)", GetLastError());
     wchar_t directory[MAX_PATH]{};
     const DWORD selfLength = GetModuleFileNameW(self, directory, MAX_PATH);
     if (!selfLength || selfLength >= MAX_PATH)
-        return failProbe(why, "EDVR module path for AMD's FSR 4 DLLs could not be read (Win32=%lu)", GetLastError());
+        return failProbe(why, "ED-UP module path for AMD's FSR 4 DLLs could not be read (Win32=%lu)", GetLastError());
     wchar_t* const slash = wcsrchr(directory, L'\\');
-    if (!slash) return failProbe(why, "EDVR module path has no directory for AMD's FSR 4 DLLs");
+    if (!slash) return failProbe(why, "ED-UP module path has no directory for AMD's FSR 4 DLLs");
     slash[1] = L'\0';   // directory now ends in a backslash
     const size_t directoryLength = wcslen(directory);
 
@@ -1089,25 +1089,25 @@ bool probeRuntime(State& state, const char** why) {
     for (Beside& file : files) {
         const size_t nameLength = wcslen(file.wideName);
         if (directoryLength + nameLength >= MAX_PATH)
-            return failProbe(why, "EDVR module directory path is too long for %s", file.name);
+            return failProbe(why, "ED-UP module directory path is too long for %s", file.name);
         wcscpy_s(file.path, MAX_PATH, directory);
         wcscat_s(file.path, MAX_PATH, file.wideName);
         const DWORD attributes = GetFileAttributesW(file.path);
         if (attributes == INVALID_FILE_ATTRIBUTES) {
             const DWORD code = GetLastError();
             if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND)
-                return failProbe(why, "%s is missing beside EDVR (%s)", file.name, file.because);
-            return failProbe(why, "%s beside EDVR cannot be inspected (Win32=%lu)", file.name, code);
+                return failProbe(why, "%s is missing beside ED-UP (%s)", file.name, file.because);
+            return failProbe(why, "%s beside ED-UP cannot be inspected (Win32=%lu)", file.name, code);
         }
-        if (attributes & FILE_ATTRIBUTE_DIRECTORY) return failProbe(why, "%s beside EDVR is a directory", file.name);
+        if (attributes & FILE_ATTRIBUTE_DIRECTORY) return failProbe(why, "%s beside ED-UP is a directory", file.name);
     }
     const wchar_t* const loaderPath = files[0].path;
     state.loaderModule = LoadLibraryExW(loaderPath, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (!state.loaderModule) {
         const DWORD code = GetLastError();
         if (code == ERROR_MOD_NOT_FOUND)
-            return failProbe(why, "amd_fidelityfx_loader_dx12.dll exists beside EDVR but a dependency could not be loaded (Win32=126; check the VC++ 2015+ runtime)");
-        return failProbe(why, "amd_fidelityfx_loader_dx12.dll beside EDVR failed to load (Win32=%lu)", code);
+            return failProbe(why, "amd_fidelityfx_loader_dx12.dll exists beside ED-UP but a dependency could not be loaded (Win32=126; check the VC++ 2015+ runtime)");
+        return failProbe(why, "amd_fidelityfx_loader_dx12.dll beside ED-UP failed to load (Win32=%lu)", code);
     }
     wchar_t loadedPath[MAX_PATH]{};
     const DWORD loadedLength = GetModuleFileNameW(state.loaderModule, loadedPath, MAX_PATH);

@@ -20,7 +20,7 @@ inline const char* moduleBrief(void* p, char* buf, size_t bufLen) {
                            reinterpret_cast<LPCSTR>(&moduleBrief), &self);
     }
     _snprintf_s(buf, bufLen, _TRUNCATE, "%s%s+0x%llX",
-                (self && mbi.AllocationBase == self) ? "EDVR's own " : "", leaf,
+                (self && mbi.AllocationBase == self) ? "ED-UP's own " : "", leaf,
                 static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(p) -
                                                 reinterpret_cast<uintptr_t>(mbi.AllocationBase)));
     return buf;

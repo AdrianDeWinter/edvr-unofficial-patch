@@ -227,7 +227,7 @@ inline int flatNoSceneSpatialTests() {
         const FlatMonoFrame latched = verdictOf(b, policy(true, FlatMonoResolveMode::Dlss, true), &diag);
         expect(latched.reason == FlatMonoReason::NoScene, "...and with the route latched off");
         const FlatMonoFrame taa = verdictOf(b, policy(true, FlatMonoResolveMode::Taa), &diag);
-        expect(taa.reason == FlatMonoReason::NoScene, "...and for EDVR's TAA");
+        expect(taa.reason == FlatMonoReason::NoScene, "...and for ED-UP's TAA");
     }
     {
         // A selected scene with a world is never touched: the maps' frames and every frame the whitelist selects with a source.

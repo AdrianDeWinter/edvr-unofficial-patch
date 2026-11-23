@@ -492,11 +492,11 @@ inline size_t formatStallLine(char* buf, size_t cap, const Report& r) noexcept {
     if (r.status == CaptureStatus::StackOutsideRange)
         appendText(buf, cap, len, " (the stack pointer was outside the thread's stack: one frame only)");
     if (r.edvrFrames) {
-        appendText(buf, cap, len, "; EDVR code on the stack: yes (%u frame%s, innermost ", r.edvrFrames, r.edvrFrames == 1 ? "" : "s");
+        appendText(buf, cap, len, "; ED-UP code on the stack: yes (%u frame%s, innermost ", r.edvrFrames, r.edvrFrames == 1 ? "" : "s");
         appendFrame(buf, cap, len, r.at[r.edvrInnermost]);
         appendText(buf, cap, len, ").");
     } else {
-        appendText(buf, cap, len, "; EDVR code on the stack: no.");
+        appendText(buf, cap, len, "; ED-UP code on the stack: no.");
     }
     return len;
 }

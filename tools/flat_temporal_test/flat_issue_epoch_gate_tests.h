@@ -292,7 +292,7 @@ inline int run() {
            "the four owner-context revokes in vscreen.cpp (discard view, swap state, ClearState, command list) are unconditional");
     expect(count(vscreen, "flatIssueEpochBumpStage();") >= 8 && count(vscreen, "flatIssueEpochBumpRt") >= 3 &&
                count(vscreen, "flatIssueEpochBumpCb();") >= 2 && count(vscreen, "flatIssueEpochBumpDepth();") >= 1,
-           "the setter hooks and EDVR's own Raw setters still reach the gated bumps");
+           "the setter hooks and ED-UP's own Raw setters still reach the gated bumps");
 
     // Every Map note is behind the VR test; the leases and the install are not; only the report reads the counters.
     const std::string gate = "if(!runtimeVrProfile())";

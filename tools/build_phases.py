@@ -39,12 +39,12 @@ def _load(path):
 def start(path, dry_run=False, now=None):
     t = time.time() if now is None else now
     if dry_run:
-        print("[edvr] build_phases: dry-run, would start %s" % path)
+        print("[edup] build_phases: dry-run, would start %s" % path)
         return 0
     try:
         _write(path, {"t0": t, "marks": []})
     except OSError as e:
-        print("[edvr] build_phases: cannot write %s (%s)" % (path, e))
+        print("[edup] build_phases: cannot write %s (%s)" % (path, e))
     return 0
 
 
@@ -52,16 +52,16 @@ def mark(path, name, dry_run=False, now=None):
     t = time.time() if now is None else now
     data = _load(path)
     if data is None:
-        print("[edvr] build_phases: no clock at %s, mark '%s' skipped" % (path, name))
+        print("[edup] build_phases: no clock at %s, mark '%s' skipped" % (path, name))
         return 0
     if dry_run:
-        print("[edvr] build_phases: dry-run, would mark '%s'" % name)
+        print("[edup] build_phases: dry-run, would mark '%s'" % name)
         return 0
     data["marks"].append({"name": name, "t": t})
     try:
         _write(path, data)
     except OSError as e:
-        print("[edvr] build_phases: cannot write %s (%s)" % (path, e))
+        print("[edup] build_phases: cannot write %s (%s)" % (path, e))
     return 0
 
 
@@ -78,15 +78,15 @@ def phases(data):
 def report(path, out=print):
     data = _load(path)
     if data is None:
-        out("[edvr] build_phases: no usable clock at %s, no report" % path)
+        out("[edup] build_phases: no usable clock at %s, no report" % path)
         return 0
     rows, total = phases(data)
-    out("[edvr] build phases:")
+    out("[edup] build phases:")
     width = max([len(n) for n, _ in rows] + [5])
     for name, d in rows:
         share = (100.0 * d / total) if total > 0 else 0.0
-        out("[edvr]   %-*s %8.1f s %5.1f%%" % (width, name, d, share))
-    out("[edvr]   %-*s %8.1f s" % (width, "total", total))
+        out("[edup]   %-*s %8.1f s %5.1f%%" % (width, name, d, share))
+    out("[edup]   %-*s %8.1f s" % (width, "total", total))
     return 0
 
 
@@ -106,7 +106,7 @@ def self_test():
         lines = []
         report(f, out=lines.append)
         text = "\n".join(lines)
-        assert all(l.startswith("[edvr] ") for l in lines), text
+        assert all(l.startswith(("[edup] ", "[edvr] ")) for l in lines), text
         assert "2.5 s" in text and " 25.0%" in text and " 75.0%" in text, text
         assert "total" in text and "10.0 s" in text, text
         # Missing and corrupt files never fail.

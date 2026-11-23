@@ -469,7 +469,7 @@ void breadcrumbHeartbeatClose() {
 }
 
 void writeFatalNote(const std::wstring& dir, const wchar_t* text) {
-    OutputDebugStringW(L"[edvr] ");
+    OutputDebugStringW(L"[edup] ");
     OutputDebugStringW(text);
     OutputDebugStringW(L"\n");
 
@@ -541,7 +541,7 @@ HMODULE loadRealModule(const std::wstring& moduleDir, const std::string& configu
             //
             // The d3d11 chain loader refuses this for itself; doing it here
             // covers both proxies through the shared helper.
-            Log::get().note("real %S: the configured path %S is edvr itself; refusing, "
+            Log::get().note("real %S: the configured path %S is ed-up itself; refusing, "
                             "because loading it would make every export jump to itself",
                             what, p.c_str());
             FreeLibrary(m);
@@ -579,7 +579,7 @@ HMODULE loadRealModule(const std::wstring& moduleDir, const std::string& configu
     wchar_t msg[512];
     _snwprintf_s(msg, _TRUNCATE,
                  L"FATAL: no real %s could be loaded. The game will not work "
-                 L"correctly. Remove the edvr proxy from the game directory.",
+                 L"correctly. Remove the ed-up proxy from the game directory.",
                  what);
     writeFatalNote(moduleDir, msg);
     return nullptr;

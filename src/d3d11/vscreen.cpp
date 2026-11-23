@@ -2977,7 +2977,7 @@ inline void noteStaleForward(size_t slot, const void* frozen, const char* what) 
                 "this context, so there is no lower hook to ask. That table is "
                 "the context's own only while nothing moved the object's vptr "
                 "before vScreen attached; if something did, this check is "
-                "comparing EDVR's own buffer against itself and cannot fire. "
+                "comparing ED-UP's own buffer against itself and cannot fire. "
                 "Said once.");
         }
     }
@@ -3009,7 +3009,7 @@ __declspec(noinline) void noteStaleForwardOnce(State* s, size_t slot, const void
         char modBuf[MAX_PATH];
         Log::get().note(
             "vScreen: STALE FORWARD. %s (slot %zu) is about to be called "
-            "through EDVR's frozen copy, which holds %p -- but the context's "
+            "through ED-UP's frozen copy, which holds %p -- but the context's "
             "own table now holds %p (%s). The two have diverged, so the game is "
             "calling an implementation the runtime has moved on from. THIS is "
             "the private-copy mode's failure case and it has never been "
@@ -7263,8 +7263,8 @@ void vScreenFrameBoundary() {
                 "The recogniser was never even ASKED -- with fixes enabled "
                 "that ask on every draw, that means the draw and bind hooks "
                 "themselves are not running: another tool has re-pointed the "
-                "vtable entries EDVR patched (OpenXR Toolkit under "
-                "OpenComposite is a known one). EDVR checks once a second and "
+                "vtable entries ED-UP patched (OpenXR Toolkit under "
+                "OpenComposite is a known one). ED-UP checks once a second and "
                 "re-patches -- look for VTableHook lines near this one saying "
                 "so. If there are none, report this log.";
         } else if (!s->eyeW) {
@@ -7453,7 +7453,7 @@ void vScreenFrameBoundary() {
                         "The busiest of them is %ux%u, with %u draws in one frame, so that "
                         "is probably where the world is drawn -- but it is not your eye "
                         "textures' shape at any render scale, so it was not adopted. A "
-                        "layout EDVR should learn to name.",
+                        "layout ED-UP should learn to name.",
                         s->cands[anyIdx].w, s->cands[anyIdx].h, anyBest);
         } else if (haveShaped) {
             _snprintf_s(why, sizeof(why), _TRUNCATE,
@@ -7553,7 +7553,7 @@ void vScreenFrameBoundary() {
         if (s->staleForwards) {
             Log::get().note(
                 "vScreen: %llu draw(s) so far have been forwarded through an "
-                "entry EDVR's frozen copy holds and the context's own table no "
+                "entry ED-UP's frozen copy holds and the context's own table no "
                 "longer does. See the STALE FORWARD line above for the first "
                 "one; this is the running total.",
                 static_cast<unsigned long long>(s->staleForwards));
@@ -7562,13 +7562,13 @@ void vScreenFrameBoundary() {
             const unsigned held =
                 static_cast<unsigned>((s->hookFramesHeld * 100ull) / s->hookFrames);
             Log::get().note(
-                "vScreen hooks: EDVR's draw and bind hooks were in the context's "
+                "vScreen hooks: ED-UP's draw and bind hooks were in the context's "
                 "table on %u%% of %u checked frames this window, and %u slot(s) "
                 "are conceded for good. On the frames they were not, something "
-                "had re-pointed slots EDVR patched and the fixes reading those "
+                "had re-pointed slots ED-UP patched and the fixes reading those "
                 "calls did nothing for part of the frame -- which looks like "
                 "flicker rather than like a fix that is off. The VTableHook "
-                "lines name who. A tool that CHAINS through EDVR counts here "
+                "lines name who. A tool that CHAINS through ED-UP counts here "
                 "too and is harmless, so read this with them, not alone.",
                 held, s->hookFrames, s->hookConceded);
         }
@@ -7707,7 +7707,7 @@ void vScreenFrameBoundary() {
             }
             Log::get().note(
                 "vScreen declined: %llu draw(s) on %u context(s) that are not the one "
-                "the fixes installed on -- %s. EDVR hooks the FIRST D3D11 device only, "
+                "the fixes installed on -- %s. ED-UP hooks the FIRST D3D11 device only, "
                 "so a busy IMMEDIATE context here is a second device or a second "
                 "renderer, and every fix in this file is blind to it. A deferred one is "
                 "ordinary: its work is seen when the command list is replayed.",
@@ -8073,20 +8073,20 @@ void installVScreenFixes(ID3D11Device* device, HookMode mode) {
                     // contextHookModeFor already prints it, twice when forced.
                     s.hook.mode() == HookMode::CopyVptr
                         ? "by private vtable copy (this object dispatches through "
-                          "a table of EDVR's own, so a tool writing the shared "
+                          "a table of ED-UP's own, so a tool writing the shared "
                           "one cannot bypass the fixes -- but one that writes "
                           "through the OBJECT still reaches the copy, and the "
                           "copy does not follow the table it was taken from)"
                     : s.hook.mode() == HookMode::LiveCopy
                         ? "by LIVE private vtable (this object dispatches through "
-                          "a table of EDVR's own in which every entry is a stub "
+                          "a table of ED-UP's own in which every entry is a stub "
                           "that reads the context's own slot at the moment of the "
                           "call, so a tool writing the shared table cannot bypass "
                           "the fixes AND nothing is ever frozen -- the runtime may "
                           "re-select its variants as often as it likes and the "
                           "next call follows it)"
                         : "in place (the shared table is patched, so anything else "
-                          "that writes those slots composes with EDVR; reclaim "
+                          "that writes those slots composes with ED-UP; reclaim "
                           "watches for our entries being re-pointed)");
     // The write watch, if somebody has asked for it. AFTER commit, so what it
     // catches is whoever puts the ORIGINAL back rather than EDVR putting its

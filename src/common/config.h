@@ -16,11 +16,18 @@
 
 #include <atomic>
 #include <string>
+#include <vector>
 
 #include "ini_name.h"
 #include "runtime_profile.h"
 
 namespace edvr {
+
+// One warning for each deprecated EDVR_ environment name read in place of its EDUP_ one (the log-directory pair).
+std::vector<const char*> deprecatedEnvironmentWarnings();
+
+// Says them in the log, once per session. Call once the log is open.
+void reportDeprecatedEnvironment();
 
 class Config {
 public:
@@ -30,9 +37,9 @@ public:
     // .exe: edvr-flat.ini first under the flat profile, then edvr.ini (the VR
     // profile's file, and the flat profile's whole fallback while edvr-flat.ini
     // does not exist yet). One file is read, never a mix of the two.
-    // logDir() is the ini's log.dir, else <exe dir>\edvr_logs, which the
-    // environment may move: EDVR_LOG_DIR names another directory, and
-    // EDVR_LOG_DIR_FOR, when set, applies it only to exes in that directory
+    // logDir() is the ini's log.dir, else <exe dir>\edup_logs, which the
+    // environment may move: EDUP_LOG_DIR names another directory, and
+    // EDUP_LOG_DIR_FOR, when set, applies it only to exes in that directory
     // (the test runner's way of giving each rig's proxies their own logs).
     void init(const std::wstring& moduleDir);
 

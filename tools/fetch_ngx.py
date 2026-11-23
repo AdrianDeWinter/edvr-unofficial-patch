@@ -14,7 +14,7 @@ is a deliberate commit that changes COMMIT and DLL_SHA256 together, with the
 flight that verified the new runtime.
 
 Where it goes: %LOCALAPPDATA%\\EDVR\\ngx-sdk by default -- one copy per machine,
-which every checkout and worktree finds (build.bat looks at EDVR_NGX_SDK,
+which every checkout and worktree finds (build.bat looks at EDUP_NGX_SDK,
 then the checkout's own third_party\\ngx, then here) -- or --into somewhere
 else, third_party\\ngx for a checkout that must be self-contained. The SDK's
 licence keeps it out of this tree: it may ship inside an application (the

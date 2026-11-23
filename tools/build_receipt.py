@@ -3,7 +3,7 @@
 The full build is allowed to run on a dirty tree so the test suite can check
 an uncommitted change.  After that change is committed, the DLL-only
 promotion build uses this receipt to prove that the compiled inputs are the
-same while allowing the git commit metadata, and therefore EDVR's displayed
+same while allowing the git commit metadata, and therefore ED-UP's displayed
 version, to change.
 
 Documentation under docs/ is not a compiled input: the receipt's only
@@ -200,7 +200,7 @@ def write_receipt(path, root, context):
         if temporary.exists():
             temporary.unlink()
         raise
-    print("[edvr] full-build receipt: %s (%s)" % (path, receipt["inputs_sha256"]))
+    print("[edup] full-build receipt: %s (%s)" % (path, receipt["inputs_sha256"]))
     return 0
 
 
@@ -231,10 +231,10 @@ def verify_receipt(path, root, context, clean, tree_only=False):
         require_clean(root)
     state = git_state(root)
     if tree_only:
-        print("[edvr] full-build receipt matches the tree: %s" % path)
+        print("[edup] full-build receipt matches the tree: %s" % path)
     else:
-        print("[edvr] full-build receipt verified: %s" % path)
-    print("[edvr] validated inputs from %s; promotion version is %s" %
+        print("[edup] full-build receipt verified: %s" % path)
+    print("[edup] validated inputs from %s; promotion version is %s" %
           (receipt.get("describe", "unknown"), state["describe"]))
     return 0
 

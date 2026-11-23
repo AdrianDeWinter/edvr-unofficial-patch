@@ -357,7 +357,7 @@ void chainThroughOtherProxy(edvr::Config& cfg) {
     if (GetFullPathNameW(path.c_str(), MAX_PATH, want, nullptr) &&
         _wcsicmp(self, want) == 0) {
         edvr::Log::get().note(
-            "advanced.real_dll points at edvr itself (%S). Ignored -- chaining to "
+            "advanced.real_dll points at ed-up itself (%S). Ignored -- chaining to "
             "ourselves would recurse forever. Point it at the OTHER mod's renamed dll.",
             want);
         return;
@@ -372,7 +372,7 @@ void chainThroughOtherProxy(edvr::Config& cfg) {
     if (!chained) {
         edvr::Log::get().note(
             "advanced.real_dll = %s could not be loaded from %S (error %lu). Still "
-            "forwarding to the system d3d11.dll, so edvr works and the other mod does "
+            "forwarding to the system d3d11.dll, so ed-up works and the other mod does "
             "not. Check the name and that the file is really there.",
             configured.c_str(), path.c_str(), GetLastError());
         return;
@@ -439,7 +439,8 @@ BOOL CALLBACK initOnceCallback(PINIT_ONCE, PVOID, PVOID*) {
     edvr::Config& cfg = edvr::Config::get();
     cfg.init(*g_moduleDir);
     edvr::Log::get().open(cfg.logDir(), L"gfx");
-    edvr::Log::get().note("edvr d3d11 proxy attached; module dir %S",
+    edvr::reportDeprecatedEnvironment();
+    edvr::Log::get().note("ed-up d3d11 proxy attached; module dir %S",
                           g_moduleDir->c_str());
     // THIS DLL IS PINNED HERE, once, before anything can start that outlives a
     // call: the journal worker starts at the first Present tick and fix.ui_quality's
@@ -570,7 +571,7 @@ void shutdown() {
     // Before the module goes: a filter pointing into an unmapped image would
     // take the game's own crash reporting down with it.
     edvr::breadcrumbRemoveCrashHandler();
-    edvr::Log::get().note("edvr d3d11 proxy detaching");
+    edvr::Log::get().note("ed-up d3d11 proxy detaching");
     edvr::Log::get().close();
 }
 
@@ -604,8 +605,8 @@ void reportLoopOnce() {
     // no buffering, so they survive whatever happens next.
     edvr::breadcrumb("gfx: chained proxy called us back, routing it to the system dll");
     edvr::Log::get().note(
-        "the chained proxy asked for d3d11.dll and got edvr, because that is the name "
-        "edvr is loaded under. Sending it to the system d3d11.dll instead, which is what "
+        "the chained proxy asked for d3d11.dll and got ed-up, because that is the name "
+        "ed-up is loaded under. Sending it to the system d3d11.dll instead, which is what "
         "it actually wanted. Both mods still work; without this the two would call each "
         "other until the stack ran out.");
 }
@@ -681,7 +682,7 @@ static HMODULE probeSystemModule() {
             "is the known way (3Dmigoto and EDHM with load_library_redirect = 2). The context probe and slot "
             "reclaim use the System32 module found mapped instead (%p, by %s). Counted against the handle "
             "at startup, a context whose methods are all Windows' own reads as a wrapper's, and reclaim "
-            "adopts none of Windows' own re-points of EDVR's hooks.",
+            "adopts none of Windows' own re-points of ED-UP's hooks.",
             held, wanted, static_cast<void*>(choice.module), choice.route);
         // The DllMain load held a reference for the process lifetime; this one is found, not loaded, so it takes its
         // own. FROM_ADDRESS with the base address, which lies inside the module.
@@ -797,7 +798,7 @@ HookMode contextHookModeFor(ID3D11DeviceContext* ctx) {
         "context hook mode: %s -- %zu of %zu sampled vtable entries are inside "
         "Windows' d3d11.dll, and the vtable array itself is %s it. The live "
         "private table is chosen when the runtime's own code backs the methods: "
-        "the object then dispatches through a table of EDVR's own in which every "
+        "the object then dispatches through a table of ED-UP's own in which every "
         "entry forwards to the runtime's current method for that slot, read at "
         "the call, so the runtime re-laying its own table every frame -- the "
         "#20/#21 hang -- cannot desync it. InPlace when a wrapper owns them "
@@ -830,7 +831,7 @@ HookMode contextHookModeFor(ID3D11DeviceContext* ctx) {
             }
             Log::get().note(
                 "context hook mode: %s backs %zu of the %zu sampled methods of the immediate context in place of "
-                "Windows' d3d11.dll. That is a graphics wrapper (ReShade and its kind): every call EDVR makes on the "
+                "Windows' d3d11.dll. That is a graphics wrapper (ReShade and its kind): every call ED-UP makes on the "
                 "context goes through it first, and a temporal mode makes thousands of calls a frame. The F8 panel says "
                 "so while a temporal mode is selected.",
                 file, owned, kSample);

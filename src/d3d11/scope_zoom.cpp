@@ -827,11 +827,11 @@ void scopeZoomDoor(const ScopeZoomDoorArgs& a, Ptr<ID3D11Texture2D>* copy) {
     if (a.gameOwn && !g_firstOwnNoted) {   // F202: the first time the lens applies to the game's own picture (Anti-aliasing off): its own line, whatever an earlier DLSS press said
         g_firstOwnNoted = true;
         Log::get().note("scope lens: the right eye's picture (%ux%u, the game's own, Anti-aliasing off, DXGI format %d) is magnified %s, M %.2f about c (%.1f, %.1f) px, the depth from the depth probe (%ux%u) read for the hole.",
-                        fd.Width, fd.Height, static_cast<int>(fd.Format), inPlace ? "in place" : "in EDVR's copy of it", static_cast<double>(f.m), cx, cy, depth.w, depth.h);
+                        fd.Width, fd.Height, static_cast<int>(fd.Format), inPlace ? "in place" : "in ED-UP's copy of it", static_cast<double>(f.m), cx, cy, depth.w, depth.h);
     } else if (!a.gameOwn && !g_firstNoted) {
         g_firstNoted = true;
         Log::get().note("scope lens: the right eye's picture (%ux%u, DXGI format %d) is magnified %s, M %.2f about c (%.1f, %.1f) px, the depth the upscaler used (%ux%u) read for the hole.",
-                        fd.Width, fd.Height, static_cast<int>(fd.Format), inPlace ? "in place" : "in EDVR's copy of it", static_cast<double>(f.m), cx, cy, depth.w, depth.h);
+                        fd.Width, fd.Height, static_cast<int>(fd.Format), inPlace ? "in place" : "in ED-UP's copy of it", static_cast<double>(f.m), cx, cy, depth.w, depth.h);
     }
     if (!g_b3Noted && b3src == sz::B3Source::kZoomed) {
         g_b3Noted = true;

@@ -236,7 +236,7 @@ inline void taaScenario(steadygpu::Rig& r, UINT D) {
         check(seen.ok && readOutput(r, out, outputs[view]) && outputs[view].size() == size_t(D) * D * 4,
               msg("copy-route view (TAA, output %u): the TAA output is read back, view %s", D, view ? "on" : "off"));
         check(!flatMonoResolveTestRefusalResources(),
-              msg("copy-route view (TAA, output %u), view %s: EDVR's own TAA has no finish to paint in, so the view asks for no class texture, counting pass or counter buffer", D, view ? "on" : "off"));
+              msg("copy-route view (TAA, output %u), view %s: ED-UP's own TAA has no finish to paint in, so the view asks for no class texture, counting pass or counter buffer", D, view ? "on" : "off"));
     }
     check(!outputs[0].empty() && outputs[0] == outputs[1],
           msg("copy-route view (TAA, output %u): the output with the view on is bit for bit the output with it off: nothing is painted", D));

@@ -47,7 +47,7 @@ internal static class FlatReport
     public static Dictionary<string, object?> Build(string input, int pid, Collected data, string framesPath,
                                                     SymbolTable? symbols = null, Action<string>? progress = null)
     {
-        if (data.Clocks.Count == 0) throw new InvalidDataException("trace has no valid EDVR Clock marker");
+        if (data.Clocks.Count == 0) throw new InvalidDataException("trace has no valid ED-UP Clock marker");
         if (data.KernelFirstQpc == long.MaxValue || data.KernelLastQpc == long.MinValue)
             throw new InvalidDataException("trace has no kernel scheduler events");
         var frequencies = data.Clocks.Select(c => c.QpcFrequency).Where(f => f > 0).Distinct().ToArray();

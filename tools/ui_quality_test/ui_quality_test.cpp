@@ -1067,7 +1067,7 @@ void testChains() {
                                         0x4554296, 0x45733A2, 0x456D870, 0x10},
                                        true);
     check(initColour.n == 10 && initColour.frame[0] == 0x51AF0B && initColour.frame[5] == 0x455471D,
-          "a chain keeps the game's frames, innermost first, and skips EDVR's and the runtime's");
+          "a chain keeps the game's frames, innermost first, and skips ED-UP's and the runtime's");
     // Build 334925: the DLL's gameRva of each key is the key itself.
     const uint32_t* known = kUiChainKeys;
     UiChainVerdict v = uiChainVerdict(initColour, known);

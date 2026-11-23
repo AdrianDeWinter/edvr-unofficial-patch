@@ -261,7 +261,7 @@ void viewingPhaseTests() {
 // Only used inside this isolated desktop test process. Restore inherited values
 // after all workers join; never write user or machine environment settings.
 struct TestEnvironment {
-  const wchar_t* names[3]={L"EDVR_OPENXR_LOADER",L"EDVR_OPENXR_GRAPHICS",L"EDVR_OPENXR_SEPARATE_DEVICE"};
+  const wchar_t* names[3]={L"EDUP_OPENXR_LOADER",L"EDUP_OPENXR_GRAPHICS",L"EDUP_OPENXR_SEPARATE_DEVICE"};
   std::wstring saved[3]; bool existed[3]{};
   TestEnvironment() {
     for(unsigned i=0;i<3;++i) {

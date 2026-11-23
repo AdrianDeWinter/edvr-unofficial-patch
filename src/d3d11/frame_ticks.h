@@ -213,9 +213,9 @@ inline size_t formatEdvrShare(char* buf, size_t cap, double frameMs, const Frame
     double outside = frameMs - static_cast<double>(t.hookMs) - static_cast<double>(t.realMs);
     if (outside < 0.0) outside = 0.0;
     frameTickAppend(buf, cap, len,
-                    "EDVR in this frame: %.2f ms in the Present hook (frame boundary %.2f ms), "
+                    "ED-UP in this frame: %.2f ms in the Present hook (frame boundary %.2f ms), "
                     "%.2f ms in the real Present, draw hooks ~%.2f ms (%s), %.2f ms outside the hook; "
-                    "slowest EDVR ticks: ",
+                    "slowest ED-UP ticks: ",
                     static_cast<double>(t.hookMs), static_cast<double>(t.boundaryMs),
                     static_cast<double>(t.realMs), drawsMs,
                     drawsFresh ? "sampled this frame" : "held over", outside);
@@ -258,7 +258,7 @@ inline size_t formatNativeLongFrame(char* buf, size_t cap, const NativeLongFrame
     frameTickAppend(buf, cap, len,
                     "monitor: LONG FRAME -- %.1f ms between Presents (%s), no WaitGetPoses, CPU busy, "
                     "compositor, reprojection, or door samples; game creations: %u textures, %u buffers, "
-                    "%u shaders (%.1f MB); %s EDVR events: %s.%s runtime sequence %llu, game work %s.",
+                    "%u shaders (%.1f MB); %s ED-UP events: %s.%s runtime sequence %llu, game work %s.",
                     l.frameMs, l.reference, l.textures, l.buffers, l.shaders, l.creationMb, l.share,
                     l.events, l.stamp, l.sequence, l.gameWork);
     return len;

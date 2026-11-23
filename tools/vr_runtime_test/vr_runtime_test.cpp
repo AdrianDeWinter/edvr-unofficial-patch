@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
     const bool wantNative = strcmp(argv[2], "native") == 0;
     const std::wstring dll = widen(argv[3]);
 
-    printf("\n[edvr] vr runtime test -- %s\n", argv[2]);
+    printf("\n[edup] vr runtime test -- %s\n", argv[2]);
 
     // A clean scratch each run, so the newest-log search cannot find a stale
     // one and pass on yesterday's evidence.
@@ -182,7 +182,7 @@ int main(int argc, char** argv) {
     const VrRuntime want = wantNative ? VrRuntime::NativeOpenXR : VrRuntime::ForeignOpenvr;
     expectVerdict(edvr::vrRuntime(), want, "after the DLL is loaded");
     expectMentions(edvr::vrRuntimeShortWhy(),
-                   wantNative ? "native OpenXR" : "not EDVR's",
+                   wantNative ? "native OpenXR" : "not ED-UP's",
                    wantNative ? "native is recognised by its export pair, not its path"
                               : "a foreign openvr_api.dll is not claimed as native");
 
@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
            "the native paragraph says it is the one actually running the session");
     } else {
         ok(text.find("openvr_api_orig.dll") != std::string::npos,
-           "the foreign paragraph says how to install EDVR's own file");
+           "the foreign paragraph says how to install ED-UP's own file");
     }
     // And it must never again tell somebody their installed file is missing.
     ok(text.find("is NOT installed") == std::string::npos &&

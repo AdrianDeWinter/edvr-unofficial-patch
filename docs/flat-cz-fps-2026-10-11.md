@@ -295,11 +295,11 @@ skip the new-snapshot flush, restore without the generation test.
 about 7 ms at 10.5k draws, hitching one frame in 16, and more with this round's scopes). Where it is gated: the flat runtime's State owns
 `flatcpu::Census census{flatcpu::kRenderPeriod, flatcpu::clocksWanted()}` (flat_runtime.cpp, the member in the census section);
 it runs only while a temporal mode is selected (`s.census.idle()`, called when none is, closes both gates, and then a scope costs
-a load and a compare), and `clocksWanted()` is on under Windows and off under Wine unless `EDVR_FLAT_CPU_CLOCKS` says otherwise
+a load and a compare), and `clocksWanted()` is on under Windows and off under Wine unless `EDUP_FLAT_CPU_CLOCKS` says otherwise
 (flat_cpu.h, `clocksPolicy`). So every flat user with DLSS, FSR, XeSS or TAA pays it. Options, none built:
  A. An adaptive period: kRenderPeriod 16 while draws a frame are under about 3000, backing off to 64 above it (the price is per
     clocked frame and grows with draws; a settlement frame is where it hurts and where the figure is least needed once calibrated).
- B. Off by default outside a diagnostic: clocksWanted() default false, on for `EDVR_FLAT_CPU_CLOCKS=1` or an F8 diagnostics toggle;
+ B. Off by default outside a diagnostic: clocksWanted() default false, on for `EDUP_FLAT_CPU_CLOCKS=1` or an F8 diagnostics toggle;
     a user report then needs the toggle, and `edup_log.py` and the reports' tooling would have to say "census off" (the line already
     prints `clocks off, no thread clocked` with present p50/p95 and the GPU spans, so the log stays parseable). This needs a quoted
     key or env decision from Sean (Scope control) and a release-note line.
@@ -573,12 +573,12 @@ about 0.27 ms a frame on average; so it is off unless a user turns it on, and a 
   flat runtime reads it once a Present (flat_runtime.cpp, before `s.census.onFrame`) and calls `Census::setClocks(on, now)` (flat_cpu.h). A change
   starts a fresh window; off closes the gates at once, on opens them with the next frame and calibrates the clock floors at the close of its first
   window. One log line when the session starts and one per change: `flat runtime: CPU timing in the log on|off (advanced.flat_cpu_timing = on|off[;
-  EDVR_FLAT_CPU_CLOCKS decides it])`. The environment variable stays: `=1` forces the timing on, `=0` off, whatever the key says (`clocksPolicy`).
+  EDUP_FLAT_CPU_CLOCKS decides it])`. The environment variable stays: `=1` forces the timing on, `=0` off, whatever the key says (`clocksPolicy`).
   The Wine-only default is gone (off everywhere).
 - **Off is the existing `clocksOff` mode.** No thread is clocked on any frame, so no scope reads the clock (engine motion's too: the census drives its
   gate) and no floor is calibrated; the rig counts the reads on the render thread across 320 frames of scopes and the window close: zero. The
   `flat cpu 5s` line is still written every window: `flat cpu 5s: frames=N (...) present p50 X ms (p95 Y); CPU timing is off; turn it on in F8 > Debug >
-  CPU timing in the log = render thread: CPU timing is off, no thread clocked (EDVR_FLAT_CPU_CLOCKS=1 also turns it on); other threads: CPU timing is off;
+  CPU timing in the log = render thread: CPU timing is off, no thread clocked (EDUP_FLAT_CPU_CLOCKS=1 also turns it on); other threads: CPU timing is off;
   ...` followed by the parts that cost nothing: the camera witness count, the wrapper's D3D calls over substituted draws, the query shortcuts, the GPU
   spans and the instrument-cost token (zeros). The Present figures and GPU spans keep the log readable for frame time without the timing.
 - **The tabs.** The flat panel (menu.cpp `buildPages`, rows in menu_flat_rows.h) had one page, "Flat graphics". It is now **Performance** (renamed, the

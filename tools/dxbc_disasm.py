@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 r"""Disassemble a DXBC shader from the shader dump: python tools/dxbc_disasm.py file.dxbc [out.txt] [--dry-run]
 
-The flat shader capture (edvr_logs\shaders) writes each shader the game
-creates as edvr_logs\shaders\{vs,ps}_HASH.dxbc. This calls d3dcompiler_47's
+The flat shader capture (edup_logs\shaders) writes each shader the game
+creates as edup_logs\shaders\{vs,ps}_HASH.dxbc. This calls d3dcompiler_47's
 D3DDisassemble on one and prints the listing, which is how a family's input
 layout, samplers and alpha are read before a coverage shader is written for
 it (ui_depth.cpp's kHudDepthHlsl was written from ps 8DEF46452FA459F5's).

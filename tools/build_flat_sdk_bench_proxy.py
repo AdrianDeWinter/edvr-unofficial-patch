@@ -66,7 +66,7 @@ def plan(root: Path, env: dict[str, str]) -> tuple[list[str], Path]:
                           env.get("NGXLIB", ""), env.get("FSRLIB", "")))
     link = (
         'link.exe /nologo /DLL /MACHINE:X64 /INCREMENTAL:NO '
-        f'{env.get("EDVR_CPU_LINK", "")} /PDB:"{build / "flat_sdk_bench_proxy.pdb"}" '
+        f'{env.get("EDUP_CPU_LINK", "")} /PDB:"{build / "flat_sdk_bench_proxy.pdb"}" '
         f'/DEF:"{generated / "edvr_d3d11.def"}" /OUT:"{output}" '
         f'{object_args} {resources} {libraries}'
     )
@@ -134,7 +134,7 @@ def main() -> int:
         done = subprocess.run(command, cwd=ROOT, shell=True, check=False)
         if done.returncode:
             return done.returncode
-    print(f"[edvr] offline-only flat SDK proxy: {output}")
+    print(f"[edup] offline-only flat SDK proxy: {output}")
     return 0
 
 

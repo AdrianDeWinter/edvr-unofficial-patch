@@ -815,7 +815,7 @@ launcher before it does: its version stamp, no embedded payload resources, the
 min-ed-launcher licence, and the update keys.
 
 The launcher is one of the test rigs (`:rig_launcher`). It is built twice, under
-two different `EDVR_VER` values, and the two exes must be the same bytes. The
+two different `EDUP_VER` values, and the two exes must be the same bytes. The
 linker's own manifest is turned off with `/MANIFEST:NO` — two `RT_MANIFEST`
 resources in one image is a program Windows refuses to start. Two guards exist
 because the failure they catch is invisible: the resource generator refuses a

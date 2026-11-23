@@ -66,7 +66,7 @@ constexpr size_t kSeedSection = static_cast<size_t>(GpuCensusSection::FrameUiLay
 constexpr size_t kAlteredClassSections = static_cast<size_t>(GpuCensusSection::AlteredFixFirst) - kAlteredFirst;
 constexpr size_t kAlteredFixFirst = static_cast<size_t>(GpuCensusSection::AlteredFixFirst);
 constexpr const char* kAlteredNames[3] = {
-    "pool-family draws (EDVR's slot target and shaders)", "UI draws (redirected to EDVR's layer)",
+    "pool-family draws (ED-UP's slot target and shaders)", "UI draws (redirected to ED-UP's layer)",
     "HUD draws moved into the HDR HUD layer (the game's shading at the layer size)"
 };
 constexpr const char* kAlteredFixSumName = "other fix-wrapped draws";
@@ -315,7 +315,7 @@ void formatSeedDetail(char* out, size_t n, const Snapshot& s, uint64_t notes, bo
         std::snprintf(target, sizeof(target), "the target changed inside this window, so the figure mixes them: first %s; then %s", a, b);
     }
     std::snprintf(out, n,
-                  "EDVR GPU census, the HDR HUD depth-stencil seed above (the passes that write the game's depth-stencil, read "
+                  "ED-UP GPU census, the HDR HUD depth-stencil seed above (the passes that write the game's depth-stencil, read "
                   "where it lies, into the HUD layer's own; a copy of it first only when the game's texture refuses a shader view): "
                   "%.2f seeds a frame, %s; %s.",
                   s.perFrame, cost, target);
@@ -327,7 +327,7 @@ void formatSkinDetail(char* out, size_t n, const Snapshot (&items)[kSkinSections
     std::string list;
     for (size_t i = 0; i < kSkinSections; ++i) appendItem(list, kSkinNames[i], items[i]);
     std::snprintf(out, n,
-                  "EDVR GPU census, the second skin's GPU work (F2); each item is already inside the engine velocity figure above, so none of it is added to EDVR ~%.3f: "
+                  "ED-UP GPU census, the second skin's GPU work (F2); each item is already inside the engine velocity figure above, so none of it is added to ED-UP ~%.3f: "
                   "%s; the clear pass is issued right before the join dispatch and is not part of it (before F17 the join's first phase was the clear: 0.015 of its 0.030 ms); "
                   "\"-\" means that work did not run this window.",
                   edvrTotal, list.c_str());
@@ -489,7 +489,7 @@ void logAndResetWindow(uint64_t now) {
         formatFrameWorkSpanField(workSpanField, sizeof(workSpanField), wsDone, wsSkipped, wsInvalid, wsLast);
     }
     Log::get().note(
-        "EDVR GPU census: %.0f s, %llu frames; EDVR ~%.3f ms/frame = door %.3f "
+        "ED-UP GPU census: %.0f s, %llu frames; ED-UP ~%.3f ms/frame = door %.3f "
         "(%s) + in-frame %.3f (%s); application render p50 %s; %s; "
         "timer floor %s; spans timed %llu, failed %llu.%s",
         seconds, static_cast<unsigned long long>(frames), doorTotal + frameTotal, doorTotal,
@@ -507,7 +507,7 @@ void logAndResetWindow(uint64_t now) {
     if (onFootDepth.occurred) {
         std::string item;
         appendItem(item, "on-foot depth", onFootDepth);
-        Log::get().note("EDVR GPU census, native on foot's depth readers (F85c's reticle depth march and F119's head-containment grid, the GPU work behind F123's wall contact), included in the "
+        Log::get().note("ED-UP GPU census, native on foot's depth readers (F85c's reticle depth march and F119's head-containment grid, the GPU work behind F123's wall contact), included in the "
                         "in-frame figure above although not listed in it: %s.", item.c_str());
     }
     // The hologram resolve's three parts (2026-10-13): their own line, because the main line's door items are at the log's length. They
@@ -517,7 +517,7 @@ void logAndResetWindow(uint64_t now) {
         appendItem(parts, "depth copy", holo[0]);
         appendItem(parts, "near-light", holo[1]);
         appendItem(parts, "resolve draw", holo[2]);
-        Log::get().note("EDVR GPU census, the hologram resolve's parts (inside the door's \"hologram resolve\" figure above, not added to "
+        Log::get().note("ED-UP GPU census, the hologram resolve's parts (inside the door's \"hologram resolve\" figure above, not added to "
                         "any total): %s; \"-\" means that part did not run this window.", parts.c_str());
     }
     // The second skin's own line, only when some of that work ran this window (a window with no skinned character prints nothing of it, as before F16).
@@ -551,14 +551,14 @@ void logAndResetWindow(uint64_t now) {
         }
     }
     Log::get().note(
-        "EDVR GPU census, Elite's own draws that EDVR alters (each is the game's draw timed whole, so a figure "
-        "includes the game's own work in it, not only what EDVR adds, and none of it is in EDVR ~%.3f above): "
+        "ED-UP GPU census, Elite's own draws that ED-UP alters (each is the game's draw timed whole, so a figure "
+        "includes the game's own work in it, not only what ED-UP adds, and none of it is in ED-UP ~%.3f above): "
         "%s; together %.3f ms/frame; \"-\" means no such draw ran this window. Also timed on their own and NOT added to together: %s -- in VR these are also inside \"UI draws\" "
         "(the same draw, timed on its own turn); flat does not time \"UI draws\".%s",
         doorTotal + frameTotal, alteredItems.c_str(), alteredTotal, glassItem.c_str(), eyeNote);
     // The "other fix-wrapped draws" above, one fix at a time: which code wraps the draws that cost.
     Log::get().note(
-        "EDVR GPU census, the other fix-wrapped draws above by the fix that wraps each (the same draws, the game's own "
+        "ED-UP GPU census, the other fix-wrapped draws above by the fix that wraps each (the same draws, the game's own "
         "work in each figure as above): %s; \"-\" means no draw of that fix ran this window.",
         fixItems.c_str());
     char gapDetail[1100];   // the stalls clause (gpu_frame_gap.h) made 900 too small by about a hundred characters
@@ -571,7 +571,7 @@ void logAndResetWindow(uint64_t now) {
     char wsMeanBuf[48];
     if (wsWinN) std::snprintf(wsMeanBuf, sizeof(wsMeanBuf), " 30s mean %.3f ms (n=%u).", wsMean, wsWinN);
     else std::snprintf(wsMeanBuf, sizeof(wsMeanBuf), " 30s mean - (n=0).");
-    Log::get().note("EDVR GPU census, the overlay's GPU time: %s. All-time counts.%s With the application clock off, completed 0 means the pair never ran; "
+    Log::get().note("ED-UP GPU census, the overlay's GPU time: %s. All-time counts.%s With the application clock off, completed 0 means the pair never ran; "
                     "skipped or invalid climbing with completed flat means it ran and was voided.", workSpanField, wsMeanBuf);
 
     for (auto& st : g_section) {

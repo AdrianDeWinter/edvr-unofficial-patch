@@ -12,7 +12,7 @@ per-object-motion design turns on:
      tag's write mask must miss every bit the game reads. So per depth
      target: the union of bits any draw READS, the union any draw or clear
      WRITES, and what is left.
-  2. WHETHER THE STENCIL SURVIVES TO SUBMIT. The tag is resolved in EDVR's
+  2. WHETHER THE STENCIL SURVIVES TO SUBMIT. The tag is resolved in ED-UP's
      own motion-vector dispatch. If something clears or rewrites the plane
      between the target's last draw and that dispatch, the tag has to be
      rescued at the last unbind instead. So per depth target: everything
@@ -21,7 +21,7 @@ per-object-motion design turns on:
 Both answers are per DEPTH TARGET, grouped by the underlying RESOURCE rather
 than the view token -- one resource can be bound through several views, and
 the review of 2026-09-06 had to match on res= for exactly this reason. The
-target EDVR's motion-vector dispatch reads is marked, because that one is
+target ED-UP's motion-vector dispatch reads is marked, because that one is
 the scene depth and the others are not the design's business.
 
 WHAT AN OLD LOG CANNOT ANSWER. The masks and ops arrived in the census on
@@ -516,11 +516,11 @@ def report(census, w, listing):
           '  inventory below is what the flight will be checked against.\n')
     mv_deadline, mv_seen = mv_reads(census)
     if mv_seen:
-        w('  EDVR motion-vector dispatch %s, first of each frame at q=%s\n' % (
+        w('  ED-UP motion-vector dispatch %s, first of each frame at q=%s\n' % (
             MV_HASH, ', '.join('f%d:%d' % (f, q)
                                for f, q in sorted(mv_seen.items()))))
     else:
-        w('  EDVR motion-vector dispatch %s: NOT PRESENT in this census.\n'
+        w('  ED-UP motion-vector dispatch %s: NOT PRESENT in this census.\n'
           % MV_HASH)
         cand = mvCandidates(census)
         if cand:
@@ -710,7 +710,7 @@ def report(census, w, listing):
             if not after:
                 why = ('The stencil the draws left is the stencil the '
                        'dispatch reads.' if end else
-                       'No EDVR dispatch reads this target, so it is not the '
+                       'No ED-UP dispatch reads this target, so it is not the '
                        'scene depth and question 2 does not apply to it.')
                 w('        frame %d: %s -- NOTHING touches it.\n'
                   '          %s\n' % (frame, span, why))

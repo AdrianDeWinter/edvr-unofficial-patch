@@ -116,7 +116,7 @@ inline void taaScenario(steadygpu::Rig& r, UINT D) {
     r.f.foregroundRequired = true; r.f.foregroundMotion = nullptr; r.f.foregroundQualified = false; r.f.foregroundFrame = 0;
     const int calls = backendCalls;
     r.run(msg("copy-route foreground (TAA, output %u): a frame whose contract fields name a required map nobody made is not refused: TAA never asks", D), true);
-    check(backendCalls == calls, msg("copy-route foreground (TAA, output %u): EDVR's own TAA calls no SDK", D));
+    check(backendCalls == calls, msg("copy-route foreground (TAA, output %u): ED-UP's own TAA calls no SDK", D));
     flatMonoResolveReset();
 }
 }  // namespace copyfg

@@ -479,7 +479,7 @@ internal static class SelfTests
         var path = Path.Combine(AppContext.BaseDirectory, "msdia140.dll");
         if (!File.Exists(path))
         {
-            Console.WriteLine("self-test SKIP: no msdia140.dll beside the analyzer (no Visual Studio copy found at build); EDVR frames will not symbolize");
+            Console.WriteLine("self-test SKIP: no msdia140.dll beside the analyzer (no Visual Studio copy found at build); ED-UP frames will not symbolize");
             return;
         }
         var bytes = File.ReadAllBytes(path);
@@ -773,7 +773,7 @@ internal static class SelfTests
         var nvidia = stacks.AddModuleForTest(@"c:\windows\system32\driverstore\nvwgf2umx.dll",
                                              "nvwgf2umx.dll", 0x7FF200000000);
         stacks.AddModuleForTest(@"c:\windows\system32\ntdll.dll", "ntdll.dll", 0x7FF300000000);
-        Check(stacks.DisplayName(edvrD3d11) == "d3d11.dll [edvr]", "EDVR's d3d11 is named apart");
+        Check(stacks.DisplayName(edvrD3d11) == "d3d11.dll [edup]", "EDVR's d3d11 is named apart");
         Check(stacks.DisplayName(systemD3d11) == "d3d11.dll [system32]", "System32's d3d11 is named apart");
         Check(stacks.DisplayName(nvidia) == "nvwgf2umx.dll", "the display driver is named");
         Check(stacks.DisplayName(-1) == "unresolved", "an unresolved frame is named as such");
@@ -839,7 +839,7 @@ internal static class SelfTests
         });
         Check(stacks.Signature(stacks[pipeline]) == "0x42e25c0 < 0x431de7f", "a game stack signs as its RVAs");
         Check(stacks.Signature(stacks[submit]) ==
-              "nvwgf2umx.dll < unresolved < d3d11.dll [system32] < d3d11.dll [edvr] < 0x42b7120",
+              "nvwgf2umx.dll < unresolved < d3d11.dll [system32] < d3d11.dll [edup] < 0x42b7120",
               "a mixed stack signs as modules and RVAs");
         Check(stacks.Signature(new StackInfo
         {
@@ -1114,7 +1114,7 @@ internal static class SelfTests
                                           Convert.ToInt64(item["count"])),
                   "a chain's count splits into own and below, and the two sum to the count");
             var mixedTop = ((Dictionary<string, object?>[])mixedRegion["byTopModule"]!)
-                .Where(module => (string)module["module"]! == "d3d11.dll [edvr]")
+                .Where(module => (string)module["module"]! == "d3d11.dll [edup]")
                 .Sum(module => Convert.ToInt64(module["samples"]));
             Check(Convert.ToInt64(mixedRegion["edvrOwnTotal"]) == 2 && Convert.ToInt64(mixedRegion["edvrOwnTotal"]) == mixedTop &&
                   Convert.ToInt64(mixedRegion["edvrBelowTotal"]) == 1 &&
@@ -1243,7 +1243,7 @@ internal static class SelfTests
         var unmatched = SymbolTable.Disabled(@"c:\symbols");
         unmatched.Modules.Add(new ModuleSymbolStatus
         {
-            Module = "d3d11.dll [edvr]",
+            Module = "d3d11.dll [edup]",
             PdbName = @"C:\build\d3d11.pdb",
             PdbSignature = Guid.Empty.ToString(),
             Matched = false,
@@ -1531,7 +1531,7 @@ internal static class SelfTests
         }
         catch (InvalidDataException exception)
         {
-            Check(exception.Message == "trace has no EDVR frame markers (clocks=1): the provider was not enabled " +
+            Check(exception.Message == "trace has no ED-UP frame markers (clocks=1): the provider was not enabled " +
                   "in the game, or the installed DLLs predate flat markers; check the 'cpu trace:' line in the graphics log",
                   "the no-frame-marker error names the cause");
         }
@@ -1674,7 +1674,7 @@ internal static class SelfTests
             Check((string)chainSymbols[0]["name"]! == "EdvrPresentHook", "the chain is symbolized beside it");
             var symbolizedStacks = (Dictionary<string, object?>[])submitRegion["topStacks"]!;
             Check(symbolizedStacks.Any(stack =>
-                      ((string)stack["stack"]!).Contains("d3d11.dll [edvr]!EdvrPresentHook")),
+                      ((string)stack["stack"]!).Contains("d3d11.dll [edup]!EdvrPresentHook")),
                   "a resolved EDVR frame is rendered as module!function in the collapsed stack");
             // The uncapped export must equal its own totals, which is what makes
             // it safe to sum where report.json's capped copy is not.

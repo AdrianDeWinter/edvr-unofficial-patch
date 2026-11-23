@@ -99,7 +99,7 @@ def origin_url_https():
     """The origin remote as an https://github.com/... link with no trailing
     .git, for a Comments string that gives someone skeptical of an unsigned
     binary somewhere to check it. `git remote get-url origin` rather than a
-    hand-typed constant for the same reason EDVR_VER is `git describe`: a
+    hand-typed constant for the same reason EDUP_VER is `git describe`: a
     repo that moves keeps a hand-typed URL that is quietly wrong. No git, no
     repo, or no `origin` remote falls back to the project's known home rather
     than failing a build over a Comments string.

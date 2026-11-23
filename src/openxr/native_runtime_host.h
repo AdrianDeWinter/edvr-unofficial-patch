@@ -1563,7 +1563,7 @@ class NativeRuntimeHost : public SystemSource, public FrameSink, public Composit
       if(!frameFlagMismatchTraced) {
         if(const uint32_t theirs=frameFlagPeerMismatch()) {
           frameFlagMismatchTraced=true;
-          nativeTracePrintf("frame_flag_mismatch,ours=%u,theirs=%u,channel=refused,reason=d3d11 half from another EDVR build\n",
+          nativeTracePrintf("frame_flag_mismatch,ours=%u,theirs=%u,channel=refused,reason=d3d11 half from another ED-UP build\n",
             kFrameFlagVersion,theirs);
         }
       }

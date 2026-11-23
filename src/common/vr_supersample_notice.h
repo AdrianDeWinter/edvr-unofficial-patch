@@ -62,10 +62,10 @@ inline bool unpack(uint64_t packed, uint32_t* renderW, uint32_t* renderH, uint32
 // and the holograms, and what to set instead.
 inline int formatLog(char* out, size_t size, uint32_t renderW, uint32_t renderH, uint32_t eyeW, uint32_t eyeH) {
     return std::snprintf(out, size,
-        "vr supersampling: Elite draws the 3D world at %ux%u, %u%% of the %ux%u eye texture, and scales it up before EDVR "
-        "sees it: Elite's Supersampling is below 1 (an upscaler in the chain reads the same). EDVR's DLSS then upscales an "
+        "vr supersampling: Elite draws the 3D world at %ux%u, %u%% of the %ux%u eye texture, and scales it up before ED-UP "
+        "sees it: Elite's Supersampling is below 1 (an upscaler in the chain reads the same). ED-UP's DLSS then upscales an "
         "image that is already upscaled, which softens the world and the holograms. Set Elite's Supersampling to 1 and "
-        "raise HMD Image Quality instead: EDVR's DLSS upscales from that. Measured from the render sizes, not read from "
+        "raise HMD Image Quality instead: ED-UP's DLSS upscales from that. Measured from the render sizes, not read from "
         "Elite's settings file.",
         renderW, renderH, percentOfEye(renderW, eyeW), eyeW, eyeH);
 }
