@@ -1,0 +1,22 @@
+# Keeps the pinned build inputs current by pull request, so a bump is reviewed
+# and gated by CI instead of drifting or going stale.
+version: 2
+updates:
+  # The SHA-pinned actions in .github/workflows (the version is in the trailing comment).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ['*']
+
+  # tools/requirements.txt, the hash-pinned lock compiled from tools/requirements.in.
+  - package-ecosystem: pip
+    directory: /tools
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

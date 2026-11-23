@@ -40,7 +40,7 @@ jobs:
           cache-dependency-path: tools/requirements.txt
 
       - name: Install tool requirements
-        run: python -m pip install -r tools/requirements.txt
+        run: python -m pip install --require-hashes --only-binary :all: -r tools/requirements.txt
 
       - name: Tool self-tests
         shell: bash

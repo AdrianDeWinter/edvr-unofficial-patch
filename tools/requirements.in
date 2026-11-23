@@ -1,0 +1,15 @@
+# The Python packages beyond the standard library that the build's gate and
+# analysis tools import. This is the human-edited input; tools\requirements.txt
+# is the hash-pinned lock compiled from it, and is what CI and developers install.
+#
+# Install:     python -m pip install --require-hashes --only-binary :all: -r tools\requirements.txt
+#   --require-hashes refuses any file whose SHA-256 is not in the lock; --only-binary
+#   refuses source distributions, which run arbitrary code (setup.py) at install time.
+# Regenerate:  python -m piptools compile --generate-hashes --strip-extras tools\requirements.in -o tools\requirements.txt
+#   Run from the repository root. Review the diff when bumping a version. Hashes come
+#   from PyPI at the moment of regeneration, so read the new release's notes and PyPI
+#   release history first. See docs\building.md, "Python requirements".
+numpy
+Pillow
+# capstone: tools\hook_signatures.py (generate and its self-test decode x86-64).
+capstone
