@@ -11,12 +11,28 @@ namespace edvr {
 namespace stream_boost {
 
 // Stock Elite Dangerous (build 334925) streaming parameters.
-constexpr uint8_t kStockStreamLoadCap = 30u;     // cmp rsi, 0x1e at StreamLoad (exe+0x9E8938)
-constexpr uint8_t kMaxStreamLoadCap = 127u;      // max signed imm8 for `cmp rsi, imm8`
+constexpr uint32_t kStockStreamLoadCap = 30u;    // cmp rsi, 0x1e at StreamLoad (exe+0x9E8935)
+constexpr uint32_t kMaxStreamLoadCap = 512u;     // via 7-byte `cmp rsi, imm32` replacing `cmp rsi, 0x1e; movzx eax, al`
 constexpr uint32_t kStockPoolCap = 16u;          // SetMaxConcurrentStreams(16) at startup
-constexpr uint32_t kMaxPoolCap = 32u;
+constexpr uint32_t kMaxPoolCap = 63u;            // matches fFileSystemDevice SSD MaxConcurrentIO (0x3F at 0x56EDE7)
 constexpr uint32_t kStockPumpTimeUs = 1000u;     // active gameplay clamp on fRes pump (exe+0x7F6EB0)
 constexpr uint32_t kStockPumpMaxIter = 64u;
+
+// Original 7 bytes at exe+0x9E8935..0x9E893B:
+//   48 83 FE 1E  cmp rsi, 0x1e
+//   0F B6 C0     movzx eax, al  (redundant: preceded by `shr eax, 0x1f; or al, cl` with cl in {0,1})
+constexpr uint8_t kStreamLoadCapOrig7[7] = {0x48, 0x83, 0xFE, 0x1E, 0x0F, 0xB6, 0xC0};
+
+// Encodes `cmp rsi, imm32` (48 81 FE <imm32>) in the exact 7 bytes of kStreamLoadCapOrig7.
+inline void encodeCmpRsiImm32(uint32_t cap, uint8_t out[7]) noexcept {
+    out[0] = 0x48u;
+    out[1] = 0x81u;
+    out[2] = 0xFEu;
+    out[3] = static_cast<uint8_t>(cap & 0xFFu);
+    out[4] = static_cast<uint8_t>((cap >> 8u) & 0xFFu);
+    out[5] = static_cast<uint8_t>((cap >> 16u) & 0xFFu);
+    out[6] = static_cast<uint8_t>((cap >> 24u) & 0xFFu);
+}
 
 // Backlog thresholds to engage the render-thread completion pump boost.
 constexpr uint32_t kBoostWantLoadThreshold = 64u;
@@ -97,7 +113,7 @@ struct SystemProfile {
 struct StreamBoostPlan {
     bool active = false;
     const char* standDownReason = nullptr;
-    uint8_t streamLoadCap = kStockStreamLoadCap;
+    uint32_t streamLoadCap = kStockStreamLoadCap;
     uint32_t poolCap = kStockPoolCap;
     uint32_t flatPumpTimeUs = kStockPumpTimeUs;
     uint32_t flatPumpMaxIter = kStockPumpMaxIter;
@@ -118,7 +134,7 @@ inline StreamBoostPlan computeStreamBoostPlan(const SystemProfile& sys) noexcept
     }
 
     // 1. Storage concurrency ceiling.
-    uint8_t sCap = 64u;
+    uint32_t sCap = 128u;
     uint32_t sPool = 20u;
     switch (sys.storage) {
         case StorageClass::NvmeSsd:
@@ -126,19 +142,19 @@ inline StreamBoostPlan computeStreamBoostPlan(const SystemProfile& sys) noexcept
             sPool = kMaxPoolCap;
             break;
         case StorageClass::SataSsd:
-            sCap = 96u;
-            sPool = 20u;
+            sCap = 192u;
+            sPool = 24u;
             break;
         case StorageClass::FlashSsd:
-            sCap = 64u;
+            sCap = 96u;
             sPool = kStockPoolCap;
             break;
         case StorageClass::Unknown:
             if (sys.underWine) {
-                sCap = 96u;
-                sPool = 24u;
+                sCap = 192u;
+                sPool = 32u;
             } else {
-                sCap = 64u;
+                sCap = 128u;
                 sPool = 20u;
             }
             break;
@@ -147,31 +163,31 @@ inline StreamBoostPlan computeStreamBoostPlan(const SystemProfile& sys) noexcept
     }
 
     // 2. CPU logical-core concurrency ceiling.
-    uint8_t cCap = 48u;
+    uint32_t cCap = 64u;
     uint32_t cPool = kStockPoolCap;
     if (sys.logicalCpus >= 16u) {
         cCap = kMaxStreamLoadCap;
         cPool = kMaxPoolCap;
     } else if (sys.logicalCpus >= 10u) {
-        cCap = 112u;
-        cPool = 24u;
+        cCap = 256u;
+        cPool = 32u;
     } else if (sys.logicalCpus >= 6u) {
-        cCap = 96u;
-        cPool = 20u;
+        cCap = 192u;
+        cPool = 24u;
     }
 
     // 3. System RAM concurrency ceiling (guards staging memory against paging).
-    uint8_t rCap = 48u;
+    uint32_t rCap = 64u;
     uint32_t rPool = kStockPoolCap;
     if (sys.totalRamBytes >= kRamHighMinBytes) {
         rCap = kMaxStreamLoadCap;
         rPool = kMaxPoolCap;
     } else if (sys.totalRamBytes >= kRamMidMinBytes) {
-        rCap = 96u;
+        rCap = 192u;
         rPool = 24u;
     }
 
-    const uint8_t chosenCap = std::min(sCap, std::min(cCap, rCap));
+    const uint32_t chosenCap = std::min(sCap, std::min(cCap, rCap));
     const uint32_t chosenPool = std::min(sPool, std::min(cPool, rPool));
 
     plan.streamLoadCap = std::max(kStockStreamLoadCap, std::min(kMaxStreamLoadCap, chosenCap));

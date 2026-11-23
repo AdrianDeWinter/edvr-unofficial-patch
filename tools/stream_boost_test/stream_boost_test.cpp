@@ -78,8 +78,8 @@ void testSystemPlans() {
         const StreamBoostPlan p = computeStreamBoostPlan(hi);
         CHECK(p.active);
         CHECK(p.standDownReason == nullptr);
-        CHECK(p.streamLoadCap == 127u);
-        CHECK(p.poolCap == 32u);
+        CHECK(p.streamLoadCap == 512u);
+        CHECK(p.poolCap == 63u);
         CHECK(p.flatPumpTimeUs == 4000u);
         CHECK(p.flatPumpMaxIter == 256u);
         CHECK(p.flatTightTimeUs == 2000u);
@@ -96,8 +96,8 @@ void testSystemPlans() {
         deck.totalRamBytes = 15ull * kGiB;
         const StreamBoostPlan p = computeStreamBoostPlan(deck);
         CHECK(p.active);
-        CHECK(p.streamLoadCap == 96u);
-        CHECK(p.poolCap == 20u);
+        CHECK(p.streamLoadCap == 192u);
+        CHECK(p.poolCap == 24u);
         CHECK(p.flatPumpTimeUs == 3000u);
         CHECK(p.flatPumpMaxIter == 192u);
         CHECK(p.vrPumpTimeUs == 2000u);
@@ -111,8 +111,8 @@ void testSystemPlans() {
         mid.totalRamBytes = 16ull * kGiB;
         const StreamBoostPlan p = computeStreamBoostPlan(mid);
         CHECK(p.active);
-        CHECK(p.streamLoadCap == 96u);
-        CHECK(p.poolCap == 20u);
+        CHECK(p.streamLoadCap == 192u);
+        CHECK(p.poolCap == 24u);
         CHECK(p.flatPumpTimeUs == 3500u);
     }
 
@@ -124,7 +124,7 @@ void testSystemPlans() {
         usb.totalRamBytes = 32ull * kGiB;
         const StreamBoostPlan p = computeStreamBoostPlan(usb);
         CHECK(p.active);
-        CHECK(p.streamLoadCap == 64u);
+        CHECK(p.streamLoadCap == 96u);
         CHECK(p.poolCap == 16u);
         CHECK(p.flatPumpTimeUs == 2500u);
     }
@@ -137,7 +137,7 @@ void testSystemPlans() {
         lowRam.totalRamBytes = 8ull * kGiB;
         const StreamBoostPlan p = computeStreamBoostPlan(lowRam);
         CHECK(p.active);
-        CHECK(p.streamLoadCap == 48u);
+        CHECK(p.streamLoadCap == 64u);
         CHECK(p.poolCap == 16u);
     }
 
@@ -149,7 +149,7 @@ void testSystemPlans() {
         quad.totalRamBytes = 32ull * kGiB;
         const StreamBoostPlan p = computeStreamBoostPlan(quad);
         CHECK(p.active);
-        CHECK(p.streamLoadCap == 48u);
+        CHECK(p.streamLoadCap == 64u);
         CHECK(p.poolCap == 16u);
         CHECK(p.flatPumpTimeUs == 2000u);
         CHECK(p.flatPumpMaxIter == 128u);
@@ -160,7 +160,7 @@ void testSystemPlans() {
         SystemProfile unk{};
         const StreamBoostPlan p = computeStreamBoostPlan(unk);
         CHECK(p.active);
-        CHECK(p.streamLoadCap == 48u);
+        CHECK(p.streamLoadCap == 64u);
         CHECK(p.poolCap == 16u);
     }
 }
@@ -308,6 +308,17 @@ void testEntryWantLoadFlags() {
     CHECK(!isEntryWantLoad(1.0f, kFlagLoadableBit | (7u << 24u)));
 }
 
+void testEncodeCmpRsiImm32() {
+    uint8_t b[7] = {};
+    encodeCmpRsiImm32(512u, b);
+    const uint8_t want512[7] = {0x48u, 0x81u, 0xFEu, 0x00u, 0x02u, 0x00u, 0x00u};
+    CHECK(std::memcmp(b, want512, 7u) == 0);
+
+    encodeCmpRsiImm32(192u, b);
+    const uint8_t want192[7] = {0x48u, 0x81u, 0xFEu, 0xC0u, 0x00u, 0x00u, 0x00u};
+    CHECK(std::memcmp(b, want192, 7u) == 0);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -322,6 +333,7 @@ int main(int argc, char** argv) {
     testPumpBudgetSelection();
     testFrameMsEma();
     testEntryWantLoadFlags();
+    testEncodeCmpRsiImm32();
     std::printf("stream_boost_test: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed == 0 ? 0 : 1;
 }

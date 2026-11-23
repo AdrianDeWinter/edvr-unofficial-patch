@@ -27,7 +27,8 @@ using namespace stream_boost;
 // Build 334925 targets (hook_signatures.py AUDIT_EXACT_ONLY; installs only when gameBuildKnown()).
 constexpr uint32_t kStreamLoadRva = 0x9E86A0u;
 constexpr uint32_t kStreamLoadCapPinRva = 0x9E892Cu;
-constexpr size_t kStreamLoadCapImmOffset = 12u;  // 0x9E8938: imm8 of `cmp rsi, 0x1e` (48 83 FE 1E)
+constexpr size_t kStreamLoadCapPatchOffset = 9u;  // 0x9E8935..0x9E893B: `cmp rsi, 0x1e; movzx eax, al` (7 bytes)
+constexpr size_t kStreamLoadCapPatchLen = 7u;
 
 constexpr uint32_t kFresPumpRva = 0x7F6EB0u;
 constexpr uint32_t kFresServiceGlobalRva = 0x5F2C3A8u;
@@ -127,6 +128,7 @@ struct BurstStats {
     uint32_t maxWantLoad = 0u;
     double elapsedUsSum = 0.0;
     double elapsedUsMax = 0.0;
+    uint64_t firstBoostTickMs = 0u;
     uint64_t lastBoostTickMs = 0u;
     bool lastFlat = true;
 
@@ -156,7 +158,7 @@ std::atomic<uintptr_t> g_exeBase{0};
 std::atomic<bool> g_attempted{false};
 std::atomic<bool> g_capPatched{false};
 std::atomic<uintptr_t> g_capPatchAddr{0};
-std::atomic<uint8_t> g_capPatchedValue{kStockStreamLoadCap};
+std::atomic<uint32_t> g_capPatchedValue{kStockStreamLoadCap};
 std::atomic<bool> g_setMaxStreamsPinned{false};
 std::atomic<bool> g_poolBoostDone{false};
 std::atomic<bool> g_poolBoostLogged{false};
@@ -367,17 +369,18 @@ __declspec(noinline) bool readBytesGuarded(uintptr_t addr, uint8_t* out, size_t 
     }
 }
 
-bool patchSingleByte(uintptr_t addr, uint8_t expected, uint8_t replacement) noexcept {
-    uint8_t cur = 0;
-    if (!readBytesGuarded(addr, &cur, 1u) || cur != expected) return false;
+bool patchBytes(uintptr_t addr, const uint8_t* expected, const uint8_t* replacement, size_t n) noexcept {
+    if (!expected || !replacement || n == 0u || n > 16u) return false;
+    uint8_t cur[16] = {};
+    if (!readBytesGuarded(addr, cur, n) || std::memcmp(cur, expected, n) != 0) return false;
     DWORD oldProtect = 0;
-    if (!VirtualProtect(reinterpret_cast<void*>(addr), 1u, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+    if (!VirtualProtect(reinterpret_cast<void*>(addr), n, PAGE_EXECUTE_READWRITE, &oldProtect)) {
         return false;
     }
-    *reinterpret_cast<uint8_t*>(addr) = replacement;
+    std::memcpy(reinterpret_cast<void*>(addr), replacement, n);
     DWORD dummy = 0;
-    VirtualProtect(reinterpret_cast<void*>(addr), 1u, oldProtect, &dummy);
-    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<const void*>(addr), 1u);
+    VirtualProtect(reinterpret_cast<void*>(addr), n, oldProtect, &dummy);
+    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<const void*>(addr), n);
     return true;
 }
 
@@ -663,12 +666,14 @@ __declspec(noinline) void __fastcall fresPumpDetour(uintptr_t owner, const uint3
 
     const double elapsedUs = (t1 > t0) ? (static_cast<double>(t1 - t0) * qpcUsPerTick()) : 0.0;
     if (!g_burstLock.test_and_set(std::memory_order_acquire)) {
+        const uint64_t tickMs = GetTickCount64();
+        if (g_burst.firstBoostTickMs == 0u) g_burst.firstBoostTickMs = tickMs;
         g_burst.boostedCalls += 1u;
         if (chosen.tightThrottled) g_burst.tightThrottles += 1u;
         if (wantLoad > g_burst.maxWantLoad) g_burst.maxWantLoad = wantLoad;
         g_burst.elapsedUsSum += elapsedUs;
         if (elapsedUs > g_burst.elapsedUsMax) g_burst.elapsedUsMax = elapsedUs;
-        g_burst.lastBoostTickMs = GetTickCount64();
+        g_burst.lastBoostTickMs = tickMs;
         g_burst.lastFlat = in.flatProfile;
         g_burstLock.clear(std::memory_order_release);
     }
@@ -722,8 +727,12 @@ void flushBurstReportIfReady(uint64_t nowMs, bool force) noexcept {
         ? (snap.elapsedUsSum / static_cast<double>(snap.boostedCalls)) / 1000.0
         : 0.0;
     const double maxMs = snap.elapsedUsMax / 1000.0;
+    const double durSec = (snap.firstBoostTickMs > 0u && snap.lastBoostTickMs >= snap.firstBoostTickMs)
+        ? static_cast<double>(snap.lastBoostTickMs - snap.firstBoostTickMs) / 1000.0
+        : 0.0;
     Log::get().note(
-        "stream_boost: load burst finished (boostedCalls=%llu maxWant=%u avg=%.2fms max=%.2fms tight=%llu evictBrake=%llu profile=%s)",
+        "stream_boost: load burst finished (dur=%.1fs boostedCalls=%llu maxWant=%u avg=%.2fms max=%.2fms tight=%llu evictBrake=%llu profile=%s)",
+        durSec,
         static_cast<unsigned long long>(snap.boostedCalls),
         static_cast<unsigned>(snap.maxWantLoad),
         avgMs,
@@ -776,15 +785,18 @@ void streamBoostInstall() noexcept {
         return;
     }
 
-    // 1. Raise StreamLoad per-tick concurrency cap (30 -> plan.streamLoadCap) with 16-byte pin.
+    // 1. Raise StreamLoad per-tick concurrency cap (30 -> plan.streamLoadCap) with 16-byte pin
+    //    and 7-byte `cmp rsi, imm32` replacement over `cmp rsi, 0x1e; movzx eax, al`.
     bool capPatchedNow = false;
     if (plan.streamLoadCap > kStockStreamLoadCap) {
         uint8_t capBytes[kPrologueBytes] = {};
         if (readBytesGuarded(base + kStreamLoadCapPinRva, capBytes, kPrologueBytes) &&
             std::memcmp(capBytes, kStreamLoadCapPin, kPrologueBytes) == 0) {
-            const uintptr_t immAddr = base + kStreamLoadCapPinRva + kStreamLoadCapImmOffset;
-            if (patchSingleByte(immAddr, kStockStreamLoadCap, plan.streamLoadCap)) {
-                g_capPatchAddr.store(immAddr, std::memory_order_release);
+            uint8_t repl[kStreamLoadCapPatchLen] = {};
+            encodeCmpRsiImm32(plan.streamLoadCap, repl);
+            const uintptr_t patchAddr = base + kStreamLoadCapPinRva + kStreamLoadCapPatchOffset;
+            if (patchBytes(patchAddr, kStreamLoadCapOrig7, repl, kStreamLoadCapPatchLen)) {
+                g_capPatchAddr.store(patchAddr, std::memory_order_release);
                 g_capPatchedValue.store(plan.streamLoadCap, std::memory_order_release);
                 g_capPatched.store(true, std::memory_order_release);
                 capPatchedNow = true;
@@ -862,9 +874,11 @@ void streamBoostShutdown() noexcept {
 
     if (g_capPatched.exchange(false, std::memory_order_acq_rel)) {
         const uintptr_t addr = g_capPatchAddr.load(std::memory_order_acquire);
-        const uint8_t patchedVal = g_capPatchedValue.load(std::memory_order_acquire);
+        const uint32_t patchedVal = g_capPatchedValue.load(std::memory_order_acquire);
         if (addr >= kMinValidPtr) {
-            patchSingleByte(addr, patchedVal, kStockStreamLoadCap);
+            uint8_t expected[kStreamLoadCapPatchLen] = {};
+            encodeCmpRsiImm32(patchedVal, expected);
+            patchBytes(addr, expected, kStreamLoadCapOrig7, kStreamLoadCapPatchLen);
         }
     }
 
