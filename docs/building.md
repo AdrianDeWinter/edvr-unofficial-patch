@@ -7,8 +7,30 @@ Building needs Visual Studio 2022 with the C++ workload, and Python with the
 numpy and Pillow packages, which several of the tools the build runs import:
 
 ```
-pip install -r tools\requirements.txt
+python -m pip install --require-hashes --only-binary :all: -r tools\requirements.txt
 ```
+
+### Python requirements
+
+`tools\requirements.txt` is a hash-pinned lock compiled from
+`tools\requirements.in`; edit the `.in` and regenerate, never the lock by hand.
+`--require-hashes` refuses any downloaded file whose SHA-256 is not in the
+lock, and `--only-binary :all:` refuses source distributions, which run
+arbitrary code at install time. CI installs the same way, so a package that
+PyPI republishes or a compromised release cannot reach the build that makes
+release assets.
+
+To bump a version, run from the repository root:
+
+```
+python -m piptools compile --generate-hashes --strip-extras tools\requirements.in -o tools\requirements.txt
+```
+
+Read the new release's notes and PyPI release history first, since the hashes
+are taken from PyPI at that moment, then review the diff and run the build.
+Use a clean virtual environment, with only this lock installed, for
+`tools\sign_manifest.py` and `tools\artifact_signing.py`: they hold the signing
+keys and need nothing beyond the standard library.
 
 For a release-capable build, fetch the pinned dependencies. The fetch tools
 verify their sources and staged files; the build verifies them again:

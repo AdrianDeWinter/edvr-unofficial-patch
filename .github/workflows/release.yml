@@ -124,7 +124,9 @@ jobs:
 
       - name: Install build tool requirements
         run: |
-          python -m pip install -r tools\requirements.txt
+          # Hash-pinned, binary-only: a tampered or newly published package cannot enter the
+          # build that produces release assets, and no sdist can run setup.py here.
+          python -m pip install --require-hashes --only-binary :all: -r tools\requirements.txt
           if ($LASTEXITCODE -ne 0) { throw 'Python requirements install failed' }
 
       - name: Name the runner image for cache keys
