@@ -633,6 +633,7 @@ def write_releases(out):
     release(out, "relC", "1.2.0", 1794000200, b"graphics three")
     release(out, "relD", "1.3.0", 1794000300, b"graphics four", launcher_version="0.5.0")
     release(out, "relEdhm", "1.5.0", 1794000500, _synthetic_graphics_dll(), include_edhm=True)
+    release(out, "relEdhmNext", "1.6.0", 1794000600, _synthetic_graphics_dll(), include_edhm=True)
     # A release of a schema newer than the launcher reads: signed, with every asset present, so a
     # download would show in the rig; the launcher must refuse it before it fetches anything.
     release(out, "relSchema4", "1.4.0", 1794000400, b"graphics five", launcher_version="0.4.0", schema=4)
@@ -751,7 +752,7 @@ def self_test():
         # Releases: every manifest validates and verifies, every asset and member matches,
         # relA and relB share the DLSS zip, the others differ as the rig expects.
         folders = {p.name: p for p in (out / "releases").iterdir()}
-        assert set(folders) == {"relA", "relB", "relOld", "relC", "relD", "relEdhm", "relSchema4"}
+        assert set(folders) == {"relA", "relB", "relOld", "relC", "relD", "relEdhm", "relEdhmNext", "relSchema4"}
         for name, folder in folders.items():
             if name == "relSchema4":
                 continue  # a schema the launcher cannot read: the Python verdict is a refusal, as it should be

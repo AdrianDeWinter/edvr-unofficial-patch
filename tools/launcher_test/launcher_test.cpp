@@ -6581,6 +6581,8 @@ void testEdhm2dMigoto() {
             const UpdateCheck cUpToDate = up.check();
             check(cUpToDate.outcome == UpdateOutcome::UpToDate,
                   "opted-out user stays UpToDate without downloading opt-in EDHM asset");
+            check(readAll(P(roots.launcherDir(), L"launcher.ini")).find("edhm_optin_failed_manifest") == std::string::npos,
+                  "opted-out adoption does not write an empty edhm_optin_failed_manifest line into launcher.ini");
         }
 
         // Turning edhm_2dmigoto on makes the updater offer the release and fetch ed-up-edhm-*.zip on demand.
@@ -6646,10 +6648,10 @@ void testEdhm2dMigoto() {
               "elevated applyPlanFile placed both 2DMigoto notices");
         {
             const std::string ini = readAll(P(game, L"d3dx.ini"));
-            check(readD3dxKey(ini, "System", "load_library_redirect").value == "0" &&
+            check(readD3dxKey(ini, "System", "load_library_redirect").value == "2" &&
                       readD3dxKey(ini, "System", "allow_platform_update").value == "1" &&
                       readD3dxKey(ini, "Device", "upscaling").value == "0",
-                  "elevated applyPlanFile backed up and patched d3dx.ini compatibility keys to 0/1/0");
+                  "elevated applyPlanFile leaves load_library_redirect=2 untouched and patches allow_platform_update=1, upscaling=0");
         }
 
         // Elevated edhm_logging action toggles [Logging] show_reload_message & show_warnings cleanly.
@@ -6739,8 +6741,10 @@ void testEdhm2dMigoto() {
             ApplyOutcome aout;
             check(acode == 0 && readResultFile(raPath, &aout, &aerr) && aout.status == ApplyOutcome::Status::Done &&
                       contains(readAll(P(game, L"d3d11_edhm.dll")), "2DMIGOTO-SIGNED-DLL-1.5.0") &&
-                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "System", "load_library_redirect").value == "0",
-                  "elevated edhm_apply placed 2DMigoto and patched d3dx.ini");
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "System", "load_library_redirect").value == "2" &&
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "System", "allow_platform_update").value == "1" &&
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "Device", "upscaling").value == "0",
+                  "elevated edhm_apply placed 2DMigoto and patched incompatible d3dx.ini keys");
             DeleteFileW(paPath.c_str());
             DeleteFileW(raPath.c_str());
 
@@ -6758,7 +6762,9 @@ void testEdhm2dMigoto() {
             ApplyOutcome rout;
             check(rcode == 0 && readResultFile(rrPath, &rout, &aerr) && rout.status == ApplyOutcome::Status::Done &&
                       readAll(P(game, L"d3d11_edhm.dll")) == stdEdhm &&
-                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "System", "load_library_redirect").value == "2",
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "System", "load_library_redirect").value == "2" &&
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "System", "allow_platform_update").value == "0" &&
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "Device", "upscaling").value == "1",
                   "payload-free elevated edhm_restore restored standard DLL and backed-up d3dx.ini keys");
             DeleteFileW(prPath.c_str());
             DeleteFileW(rrPath.c_str());
@@ -6786,6 +6792,8 @@ void testEdhm2dMigoto() {
             const UpdateCheck c9 = up9.check();
             check(c9.outcome == UpdateOutcome::Available && adopt(&up9, c9, &err9),
                   "fresh schema-3 release adopts cleanly for cache-loss test: " + err9);
+            check(readAll(P(roots9.launcherDir(), L"launcher.ini")).find("edhm_optin_failed_manifest") == std::string::npos,
+                  "clean opted-in adoption does not write an empty edhm_optin_failed_manifest line into launcher.ini");
             Manifest m;
             std::vector<PayloadFile> files;
             check(up9.loadCurrentManifest(&m, &files, &err9), "manifest loads before deleting cached EDHM file");
@@ -6894,11 +6902,36 @@ void testEdhm2dMigoto() {
             }
             check(hasCore6 && !hasEdhm6,
                   "adopted release has core files ready and omits unavailable opt-in EDHM file");
-            // Follow-up smaller #3: routine check() does NOT loop re-offering the same release
-            // whose opt-in asset just failed, until a newer release arrives or the user retries.
+            // Follow-up smaller #3 + final smaller #2/#3: routine check() does NOT loop re-offering the same
+            // release whose opt-in asset just failed, while a missing core cache file OR a newer manifest still
+            // reports UpdateOutcome::Available, and clearing edhm_optin_failed_manifest removes the key cleanly.
             const UpdateCheck afterFailCheck = up6.check();
             check(afterFailCheck.outcome == UpdateOutcome::UpToDate,
                   "updater.check() reports UpToDate instead of looping after opt-in failure on adopted release");
+            // Missing core file still reports Available while edhm_optin_failed_manifest is set.
+            {
+                std::wstring coreBlob;
+                for (const PayloadFile& pf : f6) {
+                    if (pf.id == "graphics") { coreBlob = pf.path; break; }
+                }
+                const std::string savedCore = readAll(coreBlob);
+                check(!coreBlob.empty() && DeleteFileW(coreBlob.c_str()) != 0,
+                      "temporarily removed core graphics blob while edhm_optin_failed_manifest is set");
+                check(up6.check().outcome == UpdateOutcome::Available,
+                      "missing core cache file still returns UpdateOutcome::Available while edhm_optin_failed_manifest is set");
+                writeAll(coreBlob, savedCore);
+                check(up6.check().outcome == UpdateOutcome::UpToDate,
+                      "restoring core graphics blob returns to UpToDate while edhm_optin_failed_manifest is set");
+            }
+            // A newer manifest (relEdhmNext, v1.6.0) still reports Available while edhm_optin_failed_manifest is set.
+            {
+                const Rel newerRel = loadRel("relEdhmNext");
+                http6.replies[latestUrl()] = ok(releaseJson(newerRel), "\"etag-edhm-6-newer\"");
+                serveRelease(&http6, newerRel);
+                check(up6.check().outcome == UpdateOutcome::Available,
+                      "newer manifest still returns UpdateOutcome::Available while edhm_optin_failed_manifest is set");
+                http6.replies[latestUrl()] = ok(releaseJson(rel), "\"etag-edhm-6\"");
+            }
             {
                 LauncherState st6retry;
                 st6retry.load(P(roots6.launcherDir(), L"launcher.ini"), nullptr);
@@ -6906,6 +6939,8 @@ void testEdhm2dMigoto() {
                       "launcher.ini records edhm_optin_failed_manifest for the failed opt-in release");
                 st6retry.setEdhmOptInFailedManifest(std::string());
                 check(st6retry.save(&err6), "clears edhm_optin_failed_manifest for explicit retry");
+                check(readAll(P(roots6.launcherDir(), L"launcher.ini")).find("edhm_optin_failed_manifest") == std::string::npos,
+                      "clearing edhm_optin_failed_manifest removes the key from launcher.ini instead of leaving it empty");
             }
             check(up6.check().outcome == UpdateOutcome::Available,
                   "clearing edhm_optin_failed_manifest allows explicit retry to fetch the opt-in asset");

@@ -84,6 +84,15 @@ void LauncherState::set(const std::string& key, const std::string& value) {
     lines_.push_back(line);
 }
 
+void LauncherState::remove(const std::string& key) {
+    std::vector<std::string> kept;
+    kept.reserve(lines_.size());
+    for (std::string& existing : lines_) {
+        if (!lineHasKey(existing, key)) kept.push_back(std::move(existing));
+    }
+    lines_ = std::move(kept);
+}
+
 std::string LauncherState::channel() const { return get("channel") == "rc" ? "rc" : "stable"; }
 
 void LauncherState::setChannel(const std::string& channel) { set("channel", channel == "rc" ? "rc" : "stable"); }
@@ -163,7 +172,8 @@ std::string LauncherState::edhmOptInFailedManifest() const {
 }
 
 void LauncherState::setEdhmOptInFailedManifest(const std::string& sha256) {
-    set("edhm_optin_failed_manifest", sha256);
+    if (sha256.empty()) remove("edhm_optin_failed_manifest");
+    else set("edhm_optin_failed_manifest", sha256);
 }
 
 bool LauncherState::sameInstall(const std::wstring& a, const std::wstring& b) {

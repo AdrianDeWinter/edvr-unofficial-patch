@@ -1,6 +1,8 @@
 #include "edhm_d3dx.h"
 
 #include <cctype>
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -302,27 +304,86 @@ std::string removeD3dxKey(const std::string& iniText, const char* section, const
     return joinLines(lines, hasBom);
 }
 
+namespace {
+
+// Matches EDHM_2DMigoto DirectX11/IniHandler.cpp ParseBoolValue (line 1425).
+bool isD3dxBoolTrue(const std::string& raw) {
+    const std::string t = trim(raw);
+    return asciiEq(t, "1") || asciiEq(t, "true") || asciiEq(t, "yes") || asciiEq(t, "on");
+}
+
+// Returns true when `raw` parses as integer 0 (matching IniHandler.cpp GetIniInt default 0).
+bool isD3dxIntZero(const std::string& raw) {
+    const std::string t = trim(raw);
+    if (t.empty()) return false;
+    errno = 0;
+    char* end = nullptr;
+    const long v = std::strtol(t.c_str(), &end, 10);
+    return errno == 0 && end == t.c_str() + t.size() && v == 0;
+}
+
+bool allowPlatformUpdateOk(const std::string& iniText) {
+    const D3dxKeyRead r = readD3dxKey(iniText, "System", "allow_platform_update");
+    return !r.present || isD3dxBoolTrue(r.value);
+}
+
+bool upscalingOk(const std::string& iniText) {
+    const D3dxKeyRead r = readD3dxKey(iniText, "Device", "upscaling");
+    return !r.present || isD3dxIntZero(r.value);
+}
+
+}  // namespace
+
+bool edhmD3dxCompatSatisfied(const std::string& iniText) {
+    if (isUtf16D3dx(iniText)) return false;
+    return allowPlatformUpdateOk(iniText) && upscalingOk(iniText);
+}
+
 EdhmD3dxBackup snapshotEdhmD3dxCompat(const std::string& iniText) {
     EdhmD3dxBackup b;
-    b.saved = true;
-    const D3dxKeyRead llr = readD3dxKey(iniText, "System", "load_library_redirect");
-    b.loadLibraryRedirect.present = llr.present;
-    b.loadLibraryRedirect.value = llr.value;
-
+    if (isUtf16D3dx(iniText)) return b;
     const D3dxKeyRead apu = readD3dxKey(iniText, "System", "allow_platform_update");
-    b.allowPlatformUpdate.present = apu.present;
-    b.allowPlatformUpdate.value = apu.value;
-
+    if (apu.present && !isD3dxBoolTrue(apu.value)) {
+        b.allowPlatformUpdateSaved = true;
+        b.allowPlatformUpdate.present = true;
+        b.allowPlatformUpdate.value = apu.value;
+    }
     const D3dxKeyRead ups = readD3dxKey(iniText, "Device", "upscaling");
-    b.upscaling.present = ups.present;
-    b.upscaling.value = ups.value;
+    if (ups.present && !isD3dxIntZero(ups.value)) {
+        b.upscalingSaved = true;
+        b.upscaling.present = true;
+        b.upscaling.value = ups.value;
+    }
     return b;
 }
 
 std::string applyEdhmD3dxCompat(const std::string& iniText) {
-    std::string out = setD3dxKey(iniText, "System", "load_library_redirect", "0");
-    out = setD3dxKey(out, "System", "allow_platform_update", "1");
-    out = setD3dxKey(out, "Device", "upscaling", "0");
+    if (isUtf16D3dx(iniText)) return iniText;
+    std::string out = iniText;
+    if (!allowPlatformUpdateOk(out)) {
+        out = setD3dxKey(out, "System", "allow_platform_update", "1");
+    }
+    if (!upscalingOk(out)) {
+        out = setD3dxKey(out, "Device", "upscaling", "0");
+    }
+    return out;
+}
+
+std::string describeEdhmD3dxBackup(const EdhmD3dxBackup& backup) {
+    std::string out;
+    auto add = [&](const char* section, const char* key, const EdhmD3dxKeyBackup& saved) {
+        if (!out.empty()) out += ", ";
+        out += std::string("[") + section + "] " + key;
+        if (saved.present) {
+            out += " = " + saved.value;
+        } else {
+            out += " (originally absent)";
+        }
+    };
+    if (backup.allowPlatformUpdateSaved) add("System", "allow_platform_update", backup.allowPlatformUpdate);
+    if (backup.upscalingSaved) add("Device", "upscaling", backup.upscaling);
+    if (backup.loggingReloadSaved) add("Logging", "show_reload_message", backup.showReloadMessage);
+    if (backup.loggingWarningsSaved) add("Logging", "show_warnings", backup.showWarnings);
     return out;
 }
 
@@ -336,9 +397,10 @@ std::string restoreEdhmD3dxCompat(const std::string& iniText, const EdhmD3dxBack
                              : removeD3dxKey(text, section, key);
     };
     std::string out = iniText;
-    if (backup.saved) {
-        out = restoreIfStillOurs(out, "System", "load_library_redirect", backup.loadLibraryRedirect, "0");
+    if (backup.allowPlatformUpdateSaved) {
         out = restoreIfStillOurs(out, "System", "allow_platform_update", backup.allowPlatformUpdate, "1");
+    }
+    if (backup.upscalingSaved) {
         out = restoreIfStillOurs(out, "Device", "upscaling", backup.upscaling, "0");
     }
     if (backup.loggingReloadSaved) {

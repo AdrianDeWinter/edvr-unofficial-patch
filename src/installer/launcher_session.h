@@ -67,9 +67,8 @@ inline constexpr const char* kEdhm2dMigotoQuestion =
     "signed tailored 2DMigoto compatibility build from Fenris159/EDHM_2DMigoto (derived from "
     "3Dmigoto / XXMI, licensed under GNU GPLv3, with PCRE2 BSD and DirectXTK MIT notices "
     "shipped beside the game and listed under --licenses).\n\n"
-    "If d3dx.ini is present, ED-UP also backs up your current [System] load_library_redirect, "
-    "[System] allow_platform_update, and [Device] upscaling values and sets them to 0, 1, and 0 "
-    "for better compatibility with ED-UP.\n\n"
+    "If d3dx.ini is present and disables [System] allow_platform_update or enables [Device] "
+    "upscaling, ED-UP backs up those original values and sets them to 1 and 0 for compatibility.\n\n"
     "Turning this off restores your backed-up original d3d11_edhm.dll and d3dx.ini settings. "
     "If you later update EDHM yourself, ED-UP will not silently overwrite your newer DLL.\n\n"
     "Turn it on?";

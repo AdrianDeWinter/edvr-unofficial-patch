@@ -50,18 +50,20 @@ struct EdhmD3dxKeyBackup {
 // so disabling it, standing down, or uninstalling restores only keys ED-UP changed without
 // clobbering later user/EDHM-UI edits.
 struct EdhmD3dxBackup {
-    bool              saved = false;               // compat keys (load_library_redirect, allow_platform_update, upscaling)
-    EdhmD3dxKeyBackup loadLibraryRedirect;         // [System] load_library_redirect
-    EdhmD3dxKeyBackup allowPlatformUpdate;         // [System] allow_platform_update
-    EdhmD3dxKeyBackup upscaling;                   // [Device] upscaling
-    bool              loggingReloadSaved = false;  // [Logging] show_reload_message
+    bool              allowPlatformUpdateSaved = false;  // [System] allow_platform_update
+    EdhmD3dxKeyBackup allowPlatformUpdate;
+    bool              upscalingSaved = false;            // [Device] upscaling
+    EdhmD3dxKeyBackup upscaling;
+    bool              loggingReloadSaved = false;        // [Logging] show_reload_message
     EdhmD3dxKeyBackup showReloadMessage;
-    bool              loggingWarningsSaved = false; // [Logging] show_warnings
+    bool              loggingWarningsSaved = false;      // [Logging] show_warnings
     EdhmD3dxKeyBackup showWarnings;
-    bool anySaved() const { return saved || loggingReloadSaved || loggingWarningsSaved; }
+    bool compatSaved() const { return allowPlatformUpdateSaved || upscalingSaved; }
+    bool anySaved() const { return compatSaved() || loggingReloadSaved || loggingWarningsSaved; }
     bool operator==(const EdhmD3dxBackup& o) const {
-        return saved == o.saved && loadLibraryRedirect == o.loadLibraryRedirect &&
-               allowPlatformUpdate == o.allowPlatformUpdate && upscaling == o.upscaling &&
+        return allowPlatformUpdateSaved == o.allowPlatformUpdateSaved &&
+               allowPlatformUpdate == o.allowPlatformUpdate &&
+               upscalingSaved == o.upscalingSaved && upscaling == o.upscaling &&
                loggingReloadSaved == o.loggingReloadSaved && showReloadMessage == o.showReloadMessage &&
                loggingWarningsSaved == o.loggingWarningsSaved && showWarnings == o.showWarnings;
     }

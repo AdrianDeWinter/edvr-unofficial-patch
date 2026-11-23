@@ -50,18 +50,35 @@ std::string setD3dxKey(const std::string& iniText, const char* section, const ch
 // duplicate keys or sections intact.
 std::string removeD3dxKey(const std::string& iniText, const char* section, const char* key);
 
-// Captures the original values of the three ED-UP compatibility keys
-// (verified against pinned Fenris159/EDHM_2DMigoto@716157b8, v0.1.9):
-//   [System] allow_platform_update  (required guard: v0.1.9 IniHandler.cpp:5051 defaults true, but an explicit 0 in d3dx.ini makes HackerDevice.cpp:1704 & HackerContext.cpp:1374 return E_NOINTERFACE for Device1/Context1, breaking flat_mono_resolve.cpp:604-619)
-//   [System] load_library_redirect  (defensive: v0.1.9 IniHandler.cpp:5070-5075 & D3D11Wrapper.cpp:1228 also force 0 when loaded as chained d3d11_edhm.dll; ED-UP handles System32 via system_d3d11.h)
-//   [Device] upscaling              (guard on default 0: IniHandler.cpp:5141 & HackerDXGI.cpp legacy swapchain upscaler)
+// Returns true when d3dx.ini is UTF-8/ASCII and its effective compatibility
+// values already satisfy ED-UP + EDHM_2DMigoto v0.1.9 (commit 716157b8):
+//   [System] allow_platform_update  absent or truthy (1/true/yes/on); v0.1.9
+//                                   IniHandler.cpp:5051 defaults true, while an
+//                                   explicit false causes HackerDevice.cpp:1704
+//                                   and HackerContext.cpp:1374 to return
+//                                   E_NOINTERFACE for Device1/Context1, breaking
+//                                   flat_mono_resolve.cpp:604-619.
+//   [Device] upscaling              absent or 0 (IniHandler.cpp:5141 &
+//                                   HackerDXGI.cpp legacy swapchain upscaler).
+// (v0.1.9 forces load_library_redirect = 0 automatically when loaded as
+// d3d11_edhm.dll at IniHandler.cpp:5070-5075 & D3D11Wrapper.cpp:1228, so
+// ED-UP does not touch load_library_redirect.)
+bool edhmD3dxCompatSatisfied(const std::string& iniText);
+
+// Captures the original values of ONLY the compatibility keys that currently
+// fail edhmD3dxCompatSatisfied (and will therefore be changed by
+// applyEdhmD3dxCompat).
 EdhmD3dxBackup snapshotEdhmD3dxCompat(const std::string& iniText);
 
-// Applies ED-UP compatibility values to d3dx.ini:
-//   [System] load_library_redirect = 0
-//   [System] allow_platform_update = 1
-//   [Device] upscaling = 0
+// Fixes only incompatible values in d3dx.ini:
+//   [System] allow_platform_update -> 1 (only when explicitly present and non-truthy)
+//   [Device] upscaling -> 0 (only when explicitly present and non-zero)
+// Leaves already-compatible d3dx.ini text byte-identical.
 std::string applyEdhmD3dxCompat(const std::string& iniText);
+
+// Formats the backed-up keys and their original values for manual restoration
+// notices (e.g. when uninstall cannot edit a read-only or UTF-16 d3dx.ini).
+std::string describeEdhmD3dxBackup(const EdhmD3dxBackup& backup);
 
 // Restores any backed-up ED-UP compatibility keys (and backed-up [Logging]
 // keys, if recorded) ONLY while each key still holds ED-UP's applied value,

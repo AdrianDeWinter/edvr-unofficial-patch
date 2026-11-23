@@ -48,6 +48,7 @@ public:
 
     std::string get(const std::string& key) const;
     void set(const std::string& key, const std::string& value);
+    void remove(const std::string& key);
 
     // "stable" unless the file says "rc".
     std::string channel() const;

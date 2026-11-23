@@ -1287,7 +1287,7 @@ void launcherUpdateSettingsToggle() {
     migotoRow.label = tr(L"(Experimental) Use tailored 2DMigoto dll for EDHM compatibility improvements.");
     migotoRow.description =
         tr(L"Backs up your standard d3d11_edhm.dll and d3dx.ini settings, installs the signed 2DMigoto build, and applies ED-UP compatibility settings. Turning off restores them.");
-    migotoRow.searchTerms = L"edhm 2dmigoto 3dmigoto d3d11_edhm d3dx.ini experimental hud compatibility load_library_redirect allow_platform_update upscaling";
+    migotoRow.searchTerms = L"edhm 2dmigoto 3dmigoto d3d11_edhm d3dx.ini experimental hud compatibility allow_platform_update upscaling";
     migotoRow.on = lg.session->edhm2dMigoto();
     migotoRow.busy = busy;
     migotoRow.warning = trLine(lg.session->edhmWarning());
