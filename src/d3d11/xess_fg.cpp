@@ -568,15 +568,16 @@ bool sourceBuffer(IDXGISwapChain* hidden, ComPtr<ID3D11Texture2D>& back, D3D11_T
 }
 
 // The proxy and the shared texture follow Elite's back buffer: after each resize, and at Present if a resize was
-// missed. A format XeSS-FG cannot present is a fault (the plain swap chain takes FP16).
-void syncProxy(Bridge& b, UINT width, UINT height, UINT sourceFormat) {
+// missed, or at an unchanged size when `force` (syncPresenter). A format XeSS-FG cannot present is a fault (the plain swap
+// chain takes FP16).
+void syncProxy(Bridge& b, UINT width, UINT height, UINT sourceFormat, bool force = false) {
     if (b.failed || !b.proxy) return;
     const DXGI_FORMAT format = proxyFormatFor(sourceFormat);
     if (format == DXGI_FORMAT_UNKNOWN) {
         fault(b, "Elite's back buffer is now format %u, which XeSS-FG does not present (RGBA8, BGRA8, RGB10A2)", sourceFormat);
         return;
     }
-    if (width == b.width && height == b.height && format == b.format && b.shared11) return;
+    if (!force && width == b.width && height == b.height && format == b.format && b.shared11) return;
     char why[240] = "";
     // The proxy's back buffers are referenced by submitted copies; XeSS-FG asks for those to finish first.
     if (!drainQueue(b, why, sizeof(why))) {
@@ -601,17 +602,46 @@ void syncProxy(Bridge& b, UINT width, UINT height, UINT sourceFormat) {
 }
 
 // The plain swap chain follows Elite's back buffer the same way.
-bool syncPlain(Bridge& b, UINT width, UINT height, UINT sourceFormat) {
+bool syncPlain(Bridge& b, UINT width, UINT height, UINT sourceFormat, bool force = false) {
     if (!b.plain) return false;
     const DXGI_FORMAT format = plainFormatFor(sourceFormat);
     DXGI_SWAP_CHAIN_DESC1 desc{};
-    if (FAILED(b.plain->GetDesc1(&desc)) || format == DXGI_FORMAT_UNKNOWN) return false;
-    if (desc.Width == width && desc.Height == height && desc.Format == format) return true;
+    if (FAILED(b.plain->GetDesc1(&desc)) || format == DXGI_FORMAT_UNKNOWN) {
+        if (force)
+            Log::get().note("xess-fg: plain swap chain not resized after the fullscreen switch: its description is unreadable, or "
+                            "Elite's back buffer format %u has no flip-model format", sourceFormat);
+        return false;
+    }
+    if (!force && desc.Width == width && desc.Height == height && desc.Format == format) return true;
     const HRESULT hr = b.plain->ResizeBuffers(0, width, height, format, desc.Flags);
     static unsigned lines = 0;
-    if (lines++ < 8)
+    if (force || lines++ < 8)   // a fullscreen switch's resize always, since its absence is the black screen
         Log::get().note("xess-fg: plain swap chain resized to %ux%u format=%u (0x%08X)", width, height, unsigned(format), unsigned(hr));
     return SUCCEEDED(hr);
+}
+
+// The presenting swap chain follows Elite's back buffer. `force` resizes it at an unchanged size too, as each switch
+// between exclusive fullscreen and windowed needs: a flip-model swap chain's next Present fails with
+// DXGI_ERROR_INVALID_CALL until ResizeBuffers follows the switch (IDXGISwapChain::ResizeBuffers, remarks).
+void syncPresenter(Bridge& b, bool force) {
+    ComPtr<ID3D11Texture2D> back;
+    D3D11_TEXTURE2D_DESC source{};
+    if (!sourceBuffer(b.hiddenSwap, back, &source)) {
+        if (force) Log::get().note("xess-fg: not resized after the fullscreen switch: Elite's back buffer is unreadable");
+        return;
+    }
+    back.Reset();
+    if (b.fellBack) syncPlain(b, source.Width, source.Height, source.Format, force);
+    else syncProxy(b, source.Width, source.Height, source.Format, force);
+}
+
+// The first 8 failed Presents, of either swap chain.
+void notePresentFailure(const Bridge& b, const char* which, HRESULT hr) {
+    static unsigned lines = 0;
+    if (SUCCEEDED(hr) || lines >= 8) return;
+    ++lines;
+    Log::get().note("xess-fg: %s Present failed 0x%08X (exclusive fullscreen %s)", which, unsigned(hr),
+                    b.presenterFullscreen ? "on" : "off");
 }
 
 // After a fault: frame generation, XeLL and the proxy go; a plain D3D11 flip swap chain on the real window takes
@@ -702,6 +732,7 @@ void sampleFrameStatistics(Bridge& b) {
 // The plain swap chain's Present, counted: after a fall back every Present puts one frame on the screen, and DXGI's own count says so.
 HRESULT plainPresentCounted(Bridge& b, IDXGISwapChain* hidden, UINT syncInterval, UINT flags) {
     const HRESULT hr = plainPresent(b, hidden, syncInterval, flags);
+    notePresentFailure(b, "the plain swap chain's", hr);
     if (SUCCEEDED(hr) && b.plain) {
         sampleFrameStatistics(b);
         publishPresented(b);
@@ -731,6 +762,7 @@ void refreshFullscreen(Bridge& b) {
     b.enabledState = -1;
     Log::get().note("xess-fg: exclusive fullscreen is now %s without a call from Elite (DXGI's Alt+Enter?)",
                     fullscreen ? "on" : "off");
+    syncPresenter(b, true);
 }
 
 void llMarker(Bridge& b, uint32_t id, xell_latency_marker_type_t marker) {
@@ -1217,6 +1249,7 @@ HRESULT xessFgPresent(IDXGISwapChain* hidden, UINT syncInterval, UINT flags) {
     threadCheck(*b, "Present");
     if (b->failed) fallBack(*b);
     refreshFullscreen(*b);
+    if (b->failed) fallBack(*b);   // the resize after a fullscreen switch DXGI made alone can fault
     if (flags & DXGI_PRESENT_TEST) {
         IDXGISwapChain* shown = presenter(*b);
         return shown ? shown->Present(syncInterval, presentFlagsFor(*b, syncInterval, flags)) : S_OK;
@@ -1294,6 +1327,7 @@ HRESULT xessFgPresent(IDXGISwapChain* hidden, UINT syncInterval, UINT flags) {
     llMarker(*b, id, XELL_PRESENT_START);
     b->fg.setPresentId(b->fgContext, id);
     const HRESULT hr = b->proxy->Present(syncInterval, presentFlags);
+    notePresentFailure(*b, "the proxy's", hr);
     llMarker(*b, id, XELL_PRESENT_END);
 
     xefg_swapchain_present_status_t status{};
@@ -1327,13 +1361,7 @@ void xessFgBeforeResize(UINT* width, UINT* height) {
 HRESULT xessFgAfterResize(HRESULT hiddenResult) {
     Bridge* b = g_bridge;
     if (!b) return hiddenResult;
-    ComPtr<ID3D11Texture2D> back;
-    D3D11_TEXTURE2D_DESC source{};
-    if (sourceBuffer(b->hiddenSwap, back, &source)) {
-        back.Reset();
-        if (b->fellBack) syncPlain(*b, source.Width, source.Height, source.Format);
-        else syncProxy(*b, source.Width, source.Height, source.Format);
-    }
+    syncPresenter(*b, false);
     return hiddenResult;
 }
 
@@ -1345,13 +1373,16 @@ HRESULT xessFgSetFullscreenState(BOOL fullscreen, IDXGIOutput* target) {
     if (!shown) return DXGI_ERROR_INVALID_CALL;
     threadCheck(*b, "SetFullscreenState");
     const HRESULT hr = shown->SetFullscreenState(fullscreen, target);
-    if (SUCCEEDED(hr)) {
+    // DXGI_STATUS_MODE_CHANGE_IN_PROGRESS is a success code for a call that switched nothing; the next Present reads
+    // the state back (refreshFullscreen) either way.
+    if (SUCCEEDED(hr) && hr != DXGI_STATUS_MODE_CHANGE_IN_PROGRESS) {
         b->presenterFullscreen = fullscreen != FALSE;
         g_exclusiveFullscreen.store(b->presenterFullscreen, std::memory_order_relaxed);
+        syncPresenter(*b, true);
     }
     b->enabledState = -1;   // XeSS-FG needs enabling again after exclusive fullscreen
     Log::get().note("xess-fg: exclusive fullscreen %s (0x%08X)%s", fullscreen ? "on" : "off", unsigned(hr),
-                    fullscreen && !b->fellBack ? "; XeSS-FG presents without generating frames in exclusive fullscreen" : "");
+                    fullscreen && !b->fellBack && !b->failed ? "; XeSS-FG presents without generating frames in exclusive fullscreen" : "");
     return hr;
 }
 
