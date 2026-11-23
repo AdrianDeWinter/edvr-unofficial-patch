@@ -572,18 +572,34 @@ def validate_gpu_smoke_report(report):
 
 
 def installed_receipt(target):
+    """The receipt that verifies the files installed in `target` now, and its path.
+
+    install_edup.py's receipts of either kind (a VR or both install writes the native one, a flat install the flat one),
+    as receipt_paths_newest_first lists them, tried newest write first: a rename keeps a receipt's write time, so that
+    is install_edup's own order within a kind and decides between the kinds. The launcher's record
+    (edup_install\\state.ini) names no build or source tree, so it cannot place the symbols and is not read."""
     import install_edup
-    primary = target / "edvr_native_receipt.json"
-    # Reinstalls preserve earlier receipts and write a new uniquely named sibling.
-    candidates = [primary, *target.glob("edvr_native_receipt.json.pre-*.bak*")]
-    candidates.sort(key=lambda path: path.stat().st_mtime_ns if path.is_file() else -1, reverse=True)
+    # Each kind's two spellings (edup_ and the pre-rename edvr_) are one family in receipt_paths_newest_first, which
+    # lists each kind newest first. The kinds compete by the write time of their newest receipt: whichever install came
+    # last is the one in place. A kind with no receipt goes last.
+    kinds = [install_edup.receipt_paths_newest_first(str(target), name) for name in install_edup.RECEIPT_NAMES]
+
+    def newest_write(paths):
+        return os.stat(paths[0]).st_mtime_ns if paths and os.path.isfile(paths[0]) else -1
+
+    kinds.sort(key=newest_write, reverse=True)
+    candidates = [path for paths in kinds for path in paths]
     errors = []
     for path in candidates:
         try:
-            return install_edup.verify_native_receipt(str(path), str(target)), str(path)
+            return install_edup.verify_native_receipt(path, str(target)), path
         except (OSError, ValueError) as exc:
-            errors.append(str(exc))
-    raise ValueError("No receipt verifies the active native install: " + (errors[0] if errors else str(target)))
+            errors.append("%s: %s" % (os.path.basename(path), exc))
+    if not candidates:
+        raise ValueError("No install_edup.py receipt in %s: install this build with tools\\install_edup.py first "
+                         "(the profiler reads the receipt to find the build's symbols)" % target)
+    raise ValueError("No receipt verifies the installed files in %s; newest first: %s. Reinstall this build with "
+                     "tools\\install_edup.py" % (target, "; ".join(errors[:3])))
 
 
 IMAGE_DEBUG_TYPE_CODEVIEW = 2
@@ -1468,6 +1484,22 @@ def self_test():
         with mock.patch.object(install_edup, "verify_native_receipt", side_effect=lambda path, _: {"files": []}
                                if path == str(sibling_receipt) else (_ for _ in ()).throw(ValueError("stale"))):
             check(installed_receipt(target)[1] == str(sibling_receipt))
+        # A flat install's receipt is read too, and the newest write decides between the kinds.
+        flat_receipt = target / "edvr_flat_receipt.json"
+        flat_receipt.write_text("{}", encoding="utf-8")
+        os.utime(sibling_receipt, (1, 1))
+        with mock.patch.object(install_edup, "verify_native_receipt", side_effect=lambda path, _: {"files": []}):
+            check(installed_receipt(target)[1] == str(flat_receipt))
+        flat_receipt.unlink()
+        # With no receipt at all the message says what to do, not only that verification failed.
+        empty = directory / "no-receipts"
+        empty.mkdir()
+        try:
+            installed_receipt(empty)
+            check(False)   # a folder with no receipt was accepted
+        except ValueError as exc:
+            check("No install_edup.py receipt" in str(exc))
+        empty.rmdir()
         before = snapshot()
         with mock.patch.object(install_edup, "resolve_target", return_value=str(target)):
             with mock.patch.object(install_edup, "verify_native_receipt", return_value={"files": []}):

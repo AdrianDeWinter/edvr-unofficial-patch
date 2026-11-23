@@ -2375,6 +2375,19 @@ void testCore() {
         const std::wstring bare = fresh("core-dev-bare");
         writeAll(P(bare, L"edvr_flat_receipt.json"), "{}");
         check(isDeveloperInstall(bare), "a receipt with no install record at all counts");
+        // The current (edup_) receipt names count the same way: newer than the record, or with no record at all.
+        const std::wstring edupBare = fresh("core-dev-edup-bare");
+        writeAll(P(edupBare, L"edup_native_receipt.json"), "{}");
+        check(isDeveloperInstall(edupBare), "an edup_ receipt with no install record at all counts");
+        const std::wstring edupGame = fresh("core-dev-edup");
+        writeAll(P(edupGame, L"edup_install\\state.ini"), "version=1\n");
+        stamp(P(edupGame, L"edup_install\\state.ini"), -1000);
+        writeAll(P(edupGame, L"edup_flat_receipt.json"), "{}");
+        stamp(P(edupGame, L"edup_flat_receipt.json"), -2000);
+        check(!isDeveloperInstall(edupGame), "an edup_ receipt older than the record is not a developer's");
+        writeAll(P(edupGame, L"edup_native_receipt.json.pre-20260101-000000.bak"), "{}");
+        stamp(P(edupGame, L"edup_native_receipt.json.pre-20260101-000000.bak"), -500);
+        check(isDeveloperInstall(edupGame), "an edup_ backup-named receipt newer than the record counts");
     }
 }
 

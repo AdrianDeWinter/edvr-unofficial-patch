@@ -247,34 +247,74 @@ bool backupTail(const std::wstring& tail, std::wstring* stamp, unsigned long* co
     return true;
 }
 
-// Every receipt path of one family, newest first, as install_edup.py orders them: the backup-named siblings by stamp, then counter, and
-// the plain receipt last (it is the oldest: each later install writes a backup-named one beside it). The first is the current receipt.
-std::vector<std::wstring> receiptPathsNewestFirst(const std::wstring& gameDir, const std::wstring& family) {
-    struct Entry { std::wstring path, stamp; unsigned long counter; };
+// A file's last write as the local YYYYMMDD-HHMMSS stamp install_edup.py puts in a backup name (Python's local time for the file's own
+// date, so SystemTimeToTzSpecificLocalTime rather than the current bias). Empty when it cannot be read.
+std::wstring localWriteStamp(const std::wstring& path) {
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) return std::wstring();
+    SYSTEMTIME utc{}, local{};
+    if (!FileTimeToSystemTime(&data.ftLastWriteTime, &utc) || !SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local))
+        return std::wstring();
+    wchar_t text[32];
+    swprintf_s(text, L"%04u%02u%02u-%02u%02u%02u", local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute, local.wSecond);
+    return text;
+}
+
+// The two spellings of one receipt kind: the current (edup_) file name and the legacy (edvr_) one from before the rename.
+struct ReceiptNames {
+    const wchar_t* current;
+    const wchar_t* legacy;
+};
+const ReceiptNames kNativeReceipt{L"edup_native_receipt.json", L"edvr_native_receipt.json"};
+const ReceiptNames kFlatReceipt{L"edup_flat_receipt.json", L"edvr_flat_receipt.json"};
+
+// Every receipt path of one kind, newest first, as install_edup.py orders them (receipt_paths_newest_first). Both spellings are one
+// family. The first is the current receipt. An install writes its receipt under the plain name and rotates the one there to a backup
+// name stamped with that receipt's own last write; installs before the rotation left the plain name on the first receipt and stamped
+// each later one with its install time. Ranking the plain receipt by its last write against the siblings' stamps finds the current one
+// under both. A tie goes to the plain receipt, then to the current spelling, then to the sibling with the higher counter; a plain
+// receipt whose time cannot be read goes last.
+std::vector<std::wstring> receiptPathsNewestFirst(const std::wstring& gameDir, const ReceiptNames& family) {
+    struct Entry { std::wstring path, stamp; unsigned long counter; bool plain; bool current; };
     std::vector<Entry> siblings;
-    const std::wstring prefix = family + L".pre-";
+    const std::wstring current = family.current;
+    const std::wstring legacy = family.legacy;
+    const std::wstring currentPrefix = current + L".pre-";
+    const std::wstring legacyPrefix = legacy + L".pre-";
     WIN32_FIND_DATAW fd{};
     HANDLE h = FindFirstFileW(joinPath(gameDir, L"*").c_str(), &fd);
     if (h != INVALID_HANDLE_VALUE) {
         do {
             if (fd.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) continue;
             const std::wstring name = fd.cFileName;
-            if (name.size() <= prefix.size() || _wcsnicmp(name.c_str(), prefix.c_str(), prefix.size()) != 0) continue;
-            Entry e;
-            e.counter = 0;
-            if (!backupTail(name.substr(prefix.size()), &e.stamp, &e.counter)) continue;
-            e.path = joinPath(gameDir, name);
-            siblings.push_back(e);
+            for (const std::wstring* spelling : {&current, &legacy}) {
+                const std::wstring& prefix = spelling == &current ? currentPrefix : legacyPrefix;
+                if (name.size() <= prefix.size() || _wcsnicmp(name.c_str(), prefix.c_str(), prefix.size()) != 0) continue;
+                Entry e;
+                e.counter = 0;
+                e.plain = false;
+                e.current = spelling == &current;
+                if (backupTail(name.substr(prefix.size()), &e.stamp, &e.counter)) {
+                    e.path = joinPath(gameDir, name);
+                    siblings.push_back(e);
+                }
+                break;
+            }
         } while (FindNextFileW(h, &fd));
         FindClose(h);
     }
+    for (const std::wstring* spelling : {&current, &legacy}) {
+        const std::wstring base = joinPath(gameDir, *spelling);
+        if (fileExists(base)) siblings.push_back(Entry{base, localWriteStamp(base), 0, true, spelling == &current});   // an empty stamp sorts last
+    }
     std::sort(siblings.begin(), siblings.end(), [](const Entry& a, const Entry& b) {
-        return a.stamp != b.stamp ? a.stamp > b.stamp : a.counter > b.counter;
+        if (a.stamp != b.stamp) return a.stamp > b.stamp;
+        if (a.plain != b.plain) return a.plain;
+        if (a.current != b.current) return a.current;
+        return a.counter > b.counter;
     });
     std::vector<std::wstring> out;
     for (const Entry& e : siblings) out.push_back(e.path);
-    const std::wstring base = joinPath(gameDir, family);
-    if (fileExists(base)) out.push_back(base);
     return out;
 }
 
@@ -318,8 +358,8 @@ bool readOneReceipt(const std::wstring& gameDir, const std::wstring& path, ToolR
 
 std::vector<ToolReceipt> readToolReceipts(const std::wstring& gameDir) {
     std::vector<ToolReceipt> out;
-    for (const wchar_t* family : {L"edvr_native_receipt.json", L"edvr_flat_receipt.json"}) {
-        const std::vector<std::wstring> paths = receiptPathsNewestFirst(gameDir, family);
+    for (const ReceiptNames* family : {&kNativeReceipt, &kFlatReceipt}) {
+        const std::vector<std::wstring> paths = receiptPathsNewestFirst(gameDir, *family);
         ToolReceipt receipt;
         if (!paths.empty() && readOneReceipt(gameDir, paths.front(), &receipt)) out.push_back(receipt);
     }
@@ -328,7 +368,7 @@ std::vector<ToolReceipt> readToolReceipts(const std::wstring& gameDir) {
 
 std::vector<ToolReceipt> readNativeReceiptHistory(const std::wstring& gameDir) {
     std::vector<ToolReceipt> out;
-    const std::vector<std::wstring> paths = receiptPathsNewestFirst(gameDir, L"edvr_native_receipt.json");
+    const std::vector<std::wstring> paths = receiptPathsNewestFirst(gameDir, kNativeReceipt);
     for (size_t i = 1; i < paths.size(); ++i) {
         ToolReceipt receipt;
         if (readOneReceipt(gameDir, paths[i], &receipt)) out.push_back(receipt);

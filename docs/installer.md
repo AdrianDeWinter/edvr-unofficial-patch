@@ -176,9 +176,17 @@ gets renamed to (`d3d11_edhm.dll`). An unrecognised one becomes
 ### Receipts from the tool
 
 `tools/install_edup.py` leaves a receipt beside the game for each install:
-`edvr_native_receipt.json` the first time, then a `.pre-<tag>-<stamp>.bak`
-sibling for each later one. The newest receipt is the evidence of who owns the
-files now, and it is the only one the installer reads for that.
+`edup_native_receipt.json` (and `edup_flat_receipt.json` for the flat profile).
+Folders installed before the ED-UP rename hold `edvr_*` names instead, and those
+are still read. An install rotates the receipt at the plain name to
+`<name>.pre-<tag>-<its own last write>.bak`, then writes the new one under the
+plain name, so the plain name is the newest after an install. One case leaves it
+empty: a failed install that puts the files back but cannot rename the previous
+receipt back. That receipt stays under its backup name and is the current one.
+Readers rank the receipts by that stamp, then by the plain name, then by the edup
+spelling, then by the collision counter (`receipt_paths_newest_first`). The
+newest receipt is the evidence of who owns the files now, and it is the only one
+the installer reads for that.
 
 Its backup of the runtime is the runtime the tool replaced. After one tool
 install that is the game's own `openvr_api.dll`. After two it is the first ED-UP

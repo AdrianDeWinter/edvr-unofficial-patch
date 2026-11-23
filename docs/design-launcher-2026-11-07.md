@@ -365,8 +365,11 @@ SHA-256. The check runs that plan and applies it if anything needs changing.
   asked about once. An unreadable one is reported and nothing is touched, as today.
 - **Developer installs are left alone.** `install_edup.py` puts branch builds in
   the same folders, and a hash-based repair would overwrite a build about to be
-  flown. A folder whose `edvr_native_receipt.json` or `edvr_flat_receipt.json` is
-  newer than the install record belongs to the developer.
+  flown. A folder whose `edup_native_receipt.json` or `edup_flat_receipt.json` (or
+  its `edvr_*` spelling) is newer than the install record belongs to the developer.
+  An install rotates the plain receipt to a `.pre-<tag>-<stamp>.bak` name and
+  writes the new one under the plain name, so the plain receipt is the newest one
+  (`installer.md`, "Receipts from the tool", has the one exception).
 - An uninstall clears the install record, so nothing puts EDVR back afterwards.
 - The launcher only sees launches that go through it. Play in Epic's launcher skips
   the check, and so does Play in Steam without `--wrap`.

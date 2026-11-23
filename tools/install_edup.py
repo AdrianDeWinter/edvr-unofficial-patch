@@ -151,12 +151,28 @@ FSR4_FILES = (("fsr4_loader", "amd_fidelityfx_loader_dx12.dll"),
               ("fsr4_upscaler", "amd_fidelityfx_upscaler_dx12.dll"),
               ("fsr4_license", "AMD-FIDELITYFX-LICENSE.txt"))
 
-# Backup pruning (see prune_backups, below backup_name): the newest KEEP_BACKUPS
-# of each file stay after a good install. BACKUP_FILE is exactly backup_name's
+# Backup pruning (see prune_backups, below backup_name): after a good install the newest KEEP_BACKUPS of each
+# file (both spellings counted together) stay, and always at least the newest backup of each spelling. BACKUP_FILE is exactly backup_name's
 # scheme, with the ".N" a same-second collision gets (_native_backup_name).
 KEEP_BACKUPS = 5
 BACKUP_FILE = re.compile(r"^(?P<file>.+?)\.pre-(?P<tag>[^\\/]+)-(?P<stamp>\d{8}-\d{6})\.bak(?:\.(?P<n>\d+))?$")
-RECEIPT_NAMES = ("edvr_native_receipt.json", "edvr_flat_receipt.json")
+RECEIPT_NAMES = ("edup_native_receipt.json", "edup_flat_receipt.json")
+# The receipt names before the EDVR -> ED-UP rename. A game folder installed under them still holds them, so every reader
+# treats each kind's two spellings as one family (receipt_paths_newest_first), and an install rotates a legacy plain one.
+RECEIPT_LEGACY_NAMES = {"edup_native_receipt.json": "edvr_native_receipt.json",
+                        "edup_flat_receipt.json": "edvr_flat_receipt.json"}
+# Backup families (see _backup_families): a backup of a legacy name counts with its current name, so one count of
+# KEEP_BACKUPS covers both spellings. Each current name is what the code writes today: ini_name.h (kIniNameVr,
+# kIniNameFlat), plan.cpp (kOpenxrConfig), install_scope / runtime_profile.h (edup_profile.ini), and this file's
+# PROFILE_FILE and the openxr config paths. The newest KEEP_BACKUPS of a family count both spellings together, and
+# prune_backups keeps the newest backup of each spelling too: an edvr.ini backup stays for an older version even when
+# five newer edup.ini backups exist (#248).
+BACKUP_FAMILY_ALIASES = {"edvr_native_receipt.json": "edup_native_receipt.json",
+                         "edvr_flat_receipt.json": "edup_flat_receipt.json",
+                         "edvr.ini": "edup.ini",
+                         "edvr-flat.ini": "edup-flat.ini",
+                         "edvr_openxr.ini": "edup_openxr.ini",
+                         "edvr_profile.ini": "edup_profile.ini"}
 
 
 SCOPES = ("both", "vr", "flat")
@@ -596,6 +612,62 @@ def _reserve_backup(path):
         flags |= os.O_BINARY
     fd = os.open(path, flags, 0o600)
     os.close(fd)
+
+
+def _file_identity(path):
+    """(sha256, size, st_mtime_ns) of the file at `path`, or None when there is no file there. An install records it at
+    plan time; after it moves a receipt it hashes the moved file and compares it with the planned sha256."""
+    if not os.path.isfile(path):
+        return None
+    stat = os.stat(path)
+    return (sha256(path), stat.st_size, stat.st_mtime_ns)
+
+
+def _file_stat_identity(path):
+    """(st_size, st_mtime_ns) of the file at `path`, or None when there is no file there. The cheap check an install makes
+    just before it moves a receipt; the hash in _file_identity is taken at plan time and checked after the move."""
+    if not os.path.isfile(path):
+        return None
+    stat = os.stat(path)
+    return (stat.st_size, stat.st_mtime_ns)
+
+
+def _copy_exclusive(src, dst):
+    """Copy src's bytes into a new dst (exclusive create, fsync), then its metadata. A failed copy removes what it made."""
+    with open(src, "rb") as source:
+        stream = open(dst, "xb")          # FileExistsError propagates; dst is not touched
+        try:
+            with stream:
+                shutil.copyfileobj(source, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            shutil.copystat(src, dst)
+        except BaseException:
+            try: os.remove(dst)
+            except OSError: pass
+            raise
+
+
+def _rename_no_replace(src, dst):
+    """Move src to dst and never replace an existing dst (FileExistsError). A hard link then an unlink does it; where the
+    filesystem has no hard links (FAT, exFAT) or the move crosses a volume, the bytes are copied into an exclusively created
+    dst and src is removed after that.
+
+    Known gap: between the link (or copy) and the unlink, another install may unlink src and write its own file there. This
+    unlink then removes that file, and the caller's hash check still passes, because dst holds the old one. The window is
+    microseconds (longer on the copy fallback); only a lock across installs closes it."""
+    try:
+        os.link(src, dst)
+    except FileExistsError:
+        raise
+    except OSError:
+        _copy_exclusive(src, dst)
+    try:
+        os.unlink(src)
+    except OSError:
+        try: os.remove(dst)         # undo the link or the copy: src must stay the only name
+        except OSError: pass        # the failure to report is the unlink's
+        raise
 
 
 def _replace_receipt(path, receipt):
@@ -1254,10 +1326,16 @@ def _backup_dirs(target):
     return [target, os.path.join(target, "Openvr", "win64")]
 
 
+def _family_key(file_name):
+    """The backup family a live file name belongs to: lowercased, and a legacy (pre-rename) name mapped to its current one."""
+    key = file_name.lower()
+    return BACKUP_FAMILY_ALIASES.get(key, key)
+
+
 def _backup_families(directory, planned=()):
-    """{live file name, lowercased: [(stamp, n, path), ...]} for the files in
+    """{live file name, lowercased, legacy names mapped to current: [(stamp, n, path, spelling), ...]} for the files in
     `directory` whose names are exactly the backup scheme -- not directories,
-    not links, not a name whose stamp is no real date."""
+    not links, not a name whose stamp is no real date. `spelling` is the backup's own file name, lowercased."""
     families = {}
     try:
         entries = list(os.scandir(directory))
@@ -1273,33 +1351,65 @@ def _backup_families(directory, planned=()):
             stamp = datetime.datetime.strptime(match.group("stamp"), "%Y%m%d-%H%M%S")
         except (OSError, ValueError):
             continue
-        families.setdefault(match.group("file").lower(), []).append(
-            (stamp, int(match.group("n") or 0), entry.path))
+        families.setdefault(_family_key(match.group("file")), []).append(
+            (stamp, int(match.group("n") or 0), entry.path, match.group("file").lower()))
     for path in planned:
         # A backup an install is about to write counts as already written.
         match = BACKUP_FILE.match(os.path.basename(path))
         if match is None or _real_path(os.path.dirname(path)) != _real_path(directory):
             continue
         stamp = datetime.datetime.strptime(match.group("stamp"), "%Y%m%d-%H%M%S")
-        families.setdefault(match.group("file").lower(), []).append(
-            (stamp, int(match.group("n") or 0), path))
+        families.setdefault(_family_key(match.group("file")), []).append(
+            (stamp, int(match.group("n") or 0), path, match.group("file").lower()))
     return families
+
+
+def _receipt_write_time(path):
+    """A receipt's last write, local and to the second: the stamp its name gets when an install rotates it. None when unreadable."""
+    try:
+        return datetime.datetime.fromtimestamp(os.stat(path).st_mtime).replace(microsecond=0)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _receipt_spellings(name):
+    """(current, legacy) file names of the receipt kind that `name` is either spelling of."""
+    for current, legacy in RECEIPT_LEGACY_NAMES.items():
+        if name.lower() in (current, legacy):
+            return current, legacy
+    raise ValueError("not a receipt name: %s" % name)
+
+
+def receipt_paths_newest_first(target, name, planned=()):
+    """Every receipt of one kind (`name` is either spelling in RECEIPT_NAMES / RECEIPT_LEGACY_NAMES) in `target`, newest
+    first; the first is the current one. Both spellings of the kind are one family.
+
+    An install writes its receipt under the plain name and rotates the one there to the backup scheme's name, stamped with
+    that receipt's own last write. Installs before the rotation left the plain name on the FIRST receipt and wrote each later
+    one under a backup name stamped with its install time. Ranking the plain file by its last write against the siblings'
+    stamps finds the current receipt under both: a tie goes to the plain file, then the current (edup) spelling, then the
+    sibling with the higher counter.
+    src/installer/state.cpp (receiptPathsNewestFirst) orders them the same way."""
+    current, legacy = _receipt_spellings(name)
+    ranked = []
+    for stamp, n, path, _ in _backup_families(target, planned).get(_family_key(current), ()):
+        is_current = os.path.basename(path).lower().startswith(current.lower() + ".pre-")
+        ranked.append(((stamp, 0, int(is_current), n), path))
+    for spelling in (current, legacy):
+        base = os.path.join(target, spelling)
+        if os.path.isfile(base):
+            ranked.append(((_receipt_write_time(base) or datetime.datetime.min, 1, int(spelling == current), 0), base))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [path for _, path in ranked]
 
 
 def _current_receipts(target, extra=(), planned=()):
     """The receipt files that are current: the newest of each kind in
-    `target` (a second install writes its receipt under the backup scheme's
-    name, so the newest of `edvr_native_receipt.json` and its `.pre-` siblings
-    is the latest install's), plus any receipt path the caller names."""
+    `target` (receipt_paths_newest_first), plus any receipt path the caller names."""
     current = [os.path.abspath(path) for path in extra if path]
-    families = _backup_families(target, planned)
     for name in RECEIPT_NAMES:
-        newest = sorted(families.get(name, ()), reverse=True)[:1]
-        base = os.path.join(target, name)
-        if newest:
-            current.append(newest[0][2])
-        elif os.path.isfile(base):
-            current.append(base)
+        newest = receipt_paths_newest_first(target, name, planned)[:1]
+        current.extend(newest)
     return current
 
 
@@ -1331,18 +1441,24 @@ def _protected_by_receipts(receipts, plan=None):
     return protected, True
 
 
-def prune_backups(target, keep=KEEP_BACKUPS, dry_run=False, receipts=(), plan=None):
+def prune_backups(target, keep=KEEP_BACKUPS, dry_run=False, receipts=(), plan=None, protect=()):
     """Remove all but the newest `keep` backups of each file in the game
-    directory and Openvr\\win64 (never fewer than one is kept; a file with
-    only one backup keeps it). A backup the current receipt names is kept
-    whatever its age, and when a current receipt cannot be read nothing is
-    pruned. Says what it removed (with dry_run, what it would remove, and
-    removes nothing) and returns those paths.
+    directory and Openvr\\win64. Both spellings of a file (a legacy name and
+    its current one, BACKUP_FAMILY_ALIASES) count as one family, so `keep`
+    is the newest KEEP_BACKUPS across both. Always kept, whatever their age:
+    the newest backup of each spelling (edvr.ini stays live for older
+    versions since #248), and any backup the current receipt names. When a
+    current receipt cannot be read nothing is pruned. Says what it removed
+    (with dry_run, what it would remove, and removes nothing) and returns
+    those paths.
 
     `plan` is what an install is about to write: {"receipt": path or None,
     "backups": [paths]}. A dry run passes it, because the real run prunes
     after writing those files, so the plan must count them as already there.
-    Without it a dry run would see one backup fewer per file and name nothing."""
+    Without it a dry run would see one backup fewer per file and name nothing.
+    `protect` names existing backups to keep without counting them (the
+    receipt an install just rotated): the real run passes them so it prunes
+    what its dry run would prune."""
     keep = max(1, int(keep))
     plan = plan or {}
     planned_receipt = plan.get("receipt")
@@ -1352,12 +1468,19 @@ def prune_backups(target, keep=KEEP_BACKUPS, dry_run=False, receipts=(), plan=No
     if not readable:
         print("[edvr] NOTE: a current receipt could not be read, so no old backups were pruned.")
         return []
+    protected |= {_real_path(path) for path in protect}
     doomed = []
     for directory in _backup_dirs(target):
         for _, items in sorted(_backup_families(directory, planned).items()):
-            items.sort(reverse=True)          # newest first: stamp, then collision counter
-            doomed += [path for _, _, path in items[keep:]
-                       if _real_path(path) not in protected]
+            # newest first: stamp, then collision counter; the path only breaks a tie, as it always did
+            items.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+            seen = set()                      # spellings with a kept backup so far
+            for index, (_, _, path, spelling) in enumerate(items):
+                if index < keep or spelling not in seen:
+                    seen.add(spelling)        # within keep, or the newest of its spelling
+                    continue
+                if _real_path(path) not in protected:
+                    doomed.append(path)
     if not doomed:
         return []
     removed = []
@@ -1377,11 +1500,11 @@ def prune_backups(target, keep=KEEP_BACKUPS, dry_run=False, receipts=(), plan=No
     return removed
 
 
-def _prune_quietly(target, keep, dry_run=False, receipts=(), plan=None):
+def _prune_quietly(target, keep, dry_run=False, receipts=(), plan=None, protect=()):
     """prune_backups for the end of an install: a failure to prune is said
     and never fails an install that has already landed."""
     try:
-        prune_backups(target, keep, dry_run, receipts, plan)
+        prune_backups(target, keep, dry_run, receipts, plan, protect)
     except (OSError, ValueError) as exc:
         print("[edvr] NOTE: old backups were not pruned: %s" % exc)
 
@@ -1683,7 +1806,8 @@ def _missing_ini_defaults(root, target, scope, handled=()):
 # The settings mirror (src/installer/mirror.cpp, src/common/iniedit.cpp)
 #
 # ed-up-launcher.exe keeps the newest copies of edup.ini and edup-flat.ini under
-# %LOCALAPPDATA%\EDVR\<leaf>-<store>\ and restores them when the game directory has
+# %LOCALAPPDATA%\EDUP\<leaf>-<store>\ (%LOCALAPPDATA%\EDVR\ before the rename, still read
+# when there is no EDUP copy) and restores them when the game directory has
 # none, which is what a game update leaves behind. A default written first would
 # make that restore skip, and the installer's next mirror update would replace the
 # user's newest copy with the default. So a missing settings file is restored from
@@ -1986,7 +2110,7 @@ def _flat_vr_leftovers(target):
     candidates = (os.path.join(xr, "edup_openxr.ini"),
                   os.path.join(xr, "openvr_api_orig.dll"),
                   os.path.join(xr, "openxr_loader.dll"),
-                  os.path.join(target, "edvr_native_receipt.json"))
+                  *(os.path.join(target, name) for name in _receipt_spellings(RECEIPT_NAMES[0])))
     return [path for path in candidates if os.path.exists(path)]
 
 
@@ -1994,10 +2118,16 @@ def retire_stale_native_receipt(target, tag, dry_run=False):
     """Archive only a native receipt superseded by a hash-proven GUI flat install."""
     import configparser
     target = os.path.abspath(target)
-    receipt = os.path.join(target, "edvr_native_receipt.json")
     try:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", tag):
             raise ValueError("unsafe backup tag")
+        # The current native receipt, under either spelling; it is archived under its own spelling's backup name.
+        current_receipts = receipt_paths_newest_first(target, RECEIPT_NAMES[0])
+        # Only a receipt at a plain name is archived: a second run finds the newest one already a backup and refuses.
+        plain_names = {name.lower() for name in _receipt_spellings(RECEIPT_NAMES[0])}
+        if not current_receipts or os.path.basename(current_receipts[0]).lower() not in plain_names:
+            raise ValueError("no native receipt at the plain name: nothing stale to retire")
+        receipt = current_receipts[0]
         state_path = os.path.join(target, "edup_install", "state.ini")
         if not _under(state_path, target) or not _under(receipt, target):
             raise ValueError("install evidence escapes the game directory")
@@ -2025,7 +2155,8 @@ def retire_stale_native_receipt(target, tag, dry_run=False):
                 ("native", ("runtime_sha256", "loader_sha256", "license_sha256", "config_sha256",
                             "original_name", "original_sha256"))) for key in keys):
             raise ValueError("GUI record still owns VR components")
-        leftovers = [p for p in _flat_vr_leftovers(target) if p != receipt]
+        native_receipts = {os.path.join(target, name) for name in _receipt_spellings(RECEIPT_NAMES[0])}
+        leftovers = [p for p in _flat_vr_leftovers(target) if p not in native_receipts]
         if leftovers:
             raise ValueError("VR components remain: " + ", ".join(leftovers))
         with open(receipt, encoding="utf-8") as stream:
@@ -2093,7 +2224,7 @@ def retire_stale_native_receipt(target, tag, dry_run=False):
         if sha256(state_path) != state_hash or sha256(graphics) != live_hash or \
                 sha256(descriptor) != get("edvr", "descriptor_sha256").upper():
             raise ValueError("GUI flat-install evidence changed during preflight")
-        os.rename(receipt, archive)
+        _rename_no_replace(receipt, archive)
         if sha256(archive) != before_hash or os.path.exists(receipt):
             raise ValueError("receipt archive verification failed")
         print("[edvr] stale native receipt archived and verified; its backup references are preserved.")
@@ -2330,8 +2461,20 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
         print("[edvr] ERROR: native staging requires a proven stopped game%s" % probe_reason())
         return 1
     stamp = datetime.datetime.now()
-    receipt = os.path.join(target, "edvr_native_receipt.json" if native else "edvr_flat_receipt.json")
-    if os.path.exists(receipt): receipt = _native_backup_name(receipt, tag, stamp)
+    receipt_name = RECEIPT_NAMES[0 if native else 1]
+    receipt = os.path.join(target, receipt_name)
+    legacy_receipt = os.path.join(target, _receipt_spellings(receipt_name)[1])
+    # The newest receipt always has the plain name, so the file that looks current is current and the backup-named ones are
+    # history that may be cleared. The receipt there now is rotated to a backup name stamped with its own last write, so the
+    # names sort by age (receipt_paths_newest_first). A plain receipt under the legacy (pre-rename) name is rotated the same
+    # way, so after the install the only plain receipt of this kind is the new one.
+    rotations = [(path, _native_backup_name(path, tag, _receipt_write_time(path) or stamp))
+                 for path in (receipt, legacy_receipt) if os.path.isfile(path)]
+    # What each plain receipt was at plan time. Another install may write one between the plan and the rotation, so the
+    # rotation re-checks the size and mtime (cheap) and refuses to move a receipt it did not plan to move; after the move
+    # the hash of what was moved must still be the planned one.
+    planned_identity = {path: _file_identity(path) for path in (receipt, legacy_receipt)}
+    planned_stat = {path: _file_stat_identity(path) for path in (receipt, legacy_receipt)}
     entries = []
     for key in payload:
         dst = p[key + "_target"]
@@ -2434,17 +2577,37 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
     if migration:
         print("       migrate  advanced.real_dll = %s: edup-flat.ini -> edup.ini, so it is set once and applies to the "
               "VR and flat profiles (both files are backed up first)" % migration["value"])
+    for path, previous in rotations:
+        if path == legacy_receipt:
+            print("       rotate   %s -> %s (the previous receipt, under its pre-rename name)" % (path, previous))
+        else:
+            print("       rotate   %s -> %s (the previous receipt)" % (path, previous))
     print("       receipt  %s" % receipt)
     if dry_run:
         _prune_quietly(target, keep_backups, dry_run=True,
-                       plan={"receipt": receipt, "backups": [e["backup"] for e in entries if e["backup"]]})
+                       plan={"receipt": receipt,
+                             "backups": [e["backup"] for e in entries if e["backup"]] +
+                                        [previous for _, previous in rotations]})
         print("[edvr] dry run: wrote nothing."); return 0
     journal = {"version": 2, "kind": NATIVE_KIND if native else FLAT_KIND, "target": os.path.abspath(target),
                "root": os.path.abspath(root), "state": "staging", "files": entries, **({"build": COMPILE_ONLY_MARK} if _BUILD_OVERRIDE else {})}
     made, changed = [], []
     receipt_owned = False
+    done_rotations = []       # (backup name, plain name) of each rotation that happened: the only ones an undo reverses
     try:
+        for path in (receipt, legacy_receipt):
+            if _file_stat_identity(path) != planned_stat[path]:
+                raise ValueError("another install changed %s since this plan; nothing was written" % path)
         if native: os.makedirs(os.path.dirname(p["config"]), exist_ok=True)
+        for path, previous in rotations:
+            # _rename_no_replace never overwrites: _native_backup_name picked a name no file holds.
+            _rename_no_replace(path, previous)
+            done_rotations.append((previous, path))
+            if sha256(previous) != planned_identity[path][0]:
+                # Someone wrote the plain receipt after the check: put it back and refuse.
+                _rename_no_replace(previous, path)
+                done_rotations.pop()
+                raise ValueError("the receipt moved by another install during the rotation")
         _write_new_receipt(receipt, journal)
         receipt_owned = True
         for e in entries:
@@ -2469,6 +2632,13 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
         if not receipt_owned:
             # A concurrent installer may have won exclusive creation. Its
             # receipt belongs to that transaction, and we changed no files.
+            # The receipt this run rotated goes back to the plain name, unless
+            # the winner's receipt has it now (then it stays as history).
+            for previous, prior in done_rotations:
+                try: _rename_no_replace(previous, prior)
+                except FileExistsError: print("[edvr] the previous receipt stays at %s as history: another install wrote %s" % (previous, prior))
+                except OSError as undo:
+                    print("[edvr] WARNING: the previous receipt stays at %s (%s)" % (previous, undo))
             return 1
         for e in reversed(changed):
             try:
@@ -2481,8 +2651,20 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
             for e in made:
                 try: os.remove(e["backup"])
                 except OSError: rollback_ok = False
+        if rollback_ok:
             try: os.remove(receipt)
             except OSError: rollback_ok = False
+        if rollback_ok:
+            # The files are back. The previous receipt goes back to its plain name; if that fails it stays a backup,
+            # the plain name is empty, and the backup is the newest of its family, so it is still the current receipt.
+            stuck = []
+            for previous, prior in done_rotations:
+                try: _rename_no_replace(previous, prior)
+                except OSError as undo: stuck.append((previous, undo))
+            for previous, undo in stuck:
+                print("[edvr] WARNING: the previous receipt stays at %s and is still the current one (%s)" % (previous, undo))
+            if stuck:
+                return 1
         if not rollback_ok:
             journal["state"] = "rollback_failed"; journal["error"] = str(exc)
             try: _replace_receipt(receipt, journal)
@@ -2543,7 +2725,8 @@ def standard_native_install(root, target, tag, dry_run=False, verify_only=False,
         except (OSError, ValueError) as exc:
             print("[edvr] WARNING: moving advanced.real_dll to edup.ini failed (%s); set it in edup.ini by hand" % exc)
     print("[edvr] %s package installed and verified; receipt: %s" % (scope, receipt))
-    _prune_quietly(target, keep_backups, receipts=(receipt,))
+    # The dry run counted the rotated receipts as planned backups; protect them here so this run prunes the same set.
+    _prune_quietly(target, keep_backups, receipts=(receipt,), protect=[previous for previous, _ in done_rotations])
     return 0
 
 
@@ -2749,7 +2932,7 @@ def _scope_self_test():
               and Path(g, "d3d11.dll").read_bytes() == b"NATIVE-GRAPHICS"
               and Path(g, "Openvr", "win64", "edup_openxr.ini").is_file(),
               "scope both did not install the VR payload")
-        receipt = os.path.join(g, "edvr_native_receipt.json")
+        receipt = os.path.join(g, "edup_native_receipt.json")
         keys = {e["key"] for e in json.loads(Path(receipt).read_text(encoding="utf-8"))["files"]}
         check({"ini", "ini_flat"} <= keys, "scope both receipt lacks the two ini entries: %r" % keys)
         check(verify_native_receipt(receipt, g)["version"] == 2,
@@ -2769,7 +2952,7 @@ def _scope_self_test():
         Path(g, "edup-flat.ini").write_bytes(b"[user]\nflat=6\n")
         code, _ = run(args_for(g, "--scope", "both", "--ini", tag="bothrestore"))
         check(code == 0, "--scope both --ini failed before the restore case")
-        restored, _ = run(["--restore-native", os.path.join(g, "edvr_native_receipt.json")])
+        restored, _ = run(["--restore-native", os.path.join(g, "edup_native_receipt.json")])
         check(restored == 0, "restoring a scope both install failed")
         check(Path(g, "edup.ini").read_bytes() == b"[user]\nkeep=6\n"
               and Path(g, "edup-flat.ini").read_bytes() == b"[user]\nflat=6\n"
@@ -2820,7 +3003,7 @@ def _scope_self_test():
         check(Path(g, "edup-flat.ini").read_bytes() == b"[fix]\r\ntemporal_aa = off\r\n",
               "a missing edup-flat.ini was not installed from the flat template, not seeded from the new edup.ini")
         check(not list(Path(g).glob("edvr*.ini.pre-*.bak")), "a new default settings file was backed up")
-        receipt = os.path.join(g, "edvr_native_receipt.json")
+        receipt = os.path.join(g, "edup_native_receipt.json")
         keys = {e["key"] for e in json.loads(Path(receipt).read_text(encoding="utf-8"))["files"]}
         check(not ({"ini", "ini_flat"} & keys), "a default settings file was journaled in the receipt: %r" % keys)
         Path(g, "edup.ini").write_bytes(b"[user]\nsaved-from-f8=1\n")
@@ -2888,7 +3071,7 @@ def _scope_self_test():
         check("default  " not in text and "settings were missing: restored" in text and tree(m) == mirror_before
               and not list(Path(g).glob("edvr*.ini.pre-*.bak")),
               "the mirror restore wrote a default, backed up a new file, or touched the mirror: %r" % text)
-        keys = {e["key"] for e in json.loads(Path(g, "edvr_native_receipt.json").read_text(encoding="utf-8"))["files"]}
+        keys = {e["key"] for e in json.loads(Path(g, "edup_native_receipt.json").read_text(encoding="utf-8"))["files"]}
         check(not ({"ini", "ini_flat"} & keys), "a mirror-restored settings file was journaled in the receipt: %r" % keys)
         code, text = run(args_for(g, "--scope", "both", "--verify-only", tag="mira"))
         check(code == 0 and "WARNING" not in text, "--verify-only warned about restored settings: %r" % text)
@@ -3128,7 +3311,7 @@ def _scope_self_test():
               and Path(g, "INTEL-XESS-LICENSE.txt").read_bytes() == b"XESS-LICENSE"
               and Path(g, "INTEL-XESS-THIRD-PARTY.txt").read_bytes() == b"XESS-NOTICES",
               "a plain install did not add the missing DLSS and XeSS runtimes")
-        receipt = os.path.join(g, "edvr_native_receipt.json")
+        receipt = os.path.join(g, "edup_native_receipt.json")
         keys = {e["key"] for e in json.loads(Path(receipt).read_text(encoding="utf-8"))["files"]}
         check({"dlss", "xess", "xess_fg", "xess_ll", "xess_license", "xess_third_party"} | {key for key, _ in FSR4_FILES} <= keys
               and verify_native_receipt(receipt, g)["version"] == 2,
@@ -3232,19 +3415,21 @@ def _scope_self_test():
         g = stale_native("valid")
         # Renaming keeps the old receipt's mtime. Family selection must use
         # the new archive name even when another sibling has a newer mtime.
-        os.utime(Path(g, "edvr_native_receipt.json"), (946684800, 946684800))
-        earlier = datetime.datetime.now() - datetime.timedelta(minutes=1)
-        sibling = Path(_native_backup_name(os.path.join(g, "edvr_native_receipt.json"), "newer-mtime", earlier))
+        os.utime(Path(g, "edup_native_receipt.json"), (946684800, 946684800))
+        # The sibling's name stamp is older than the plain receipt's mtime, so the plain receipt is the current one; the
+        # sibling's own (new) mtime does not count.
+        earlier = datetime.datetime(1999, 1, 1, 0, 0, 0)
+        sibling = Path(_native_backup_name(os.path.join(g, "edup_native_receipt.json"), "newer-mtime", earlier))
         sibling.write_text('{"files": []}', encoding="utf-8")
         before = tree(g)
         check(retire(g, "--dry-run")[0] == 0 and tree(g) == before,
               "receipt retirement dry run changed the tree")
-        receipt_bytes = Path(g, "edvr_native_receipt.json").read_bytes()
+        receipt_bytes = Path(g, "edup_native_receipt.json").read_bytes()
         check(retire(g)[0] == 0, "hash-proven superseded receipt was not retired")
-        archives = list(Path(g).glob("edvr_native_receipt.json.pre-retired-*.bak"))
+        archives = list(Path(g).glob("edup_native_receipt.json.pre-retired-*.bak"))
         check(len(archives) == 1 and archives[0].read_bytes() == receipt_bytes and
-              not Path(g, "edvr_native_receipt.json").exists(), "retirement did not preserve receipt bytes")
-        expected = dict(before); expected.pop("edvr_native_receipt.json")
+              not Path(g, "edup_native_receipt.json").exists(), "retirement did not preserve receipt bytes")
+        expected = dict(before); expected.pop("edup_native_receipt.json")
         expected[str(archives[0].relative_to(g))] = receipt_bytes
         check(dict(tree(g)) == expected, "retirement changed files besides the receipt")
         protected, readable = _protected_by_receipts(_current_receipts(g))
@@ -3256,10 +3441,19 @@ def _scope_self_test():
         check(code == 0, "flat install after receipt retirement failed: " + text)
         check(run(args_for(g, "--scope", "flat", "--verify-only"))[0] == 0,
               "flat verification after receipt retirement failed")
+        # A stale receipt under the legacy (pre-rename) name is found, and archived under that same spelling.
+        g = stale_native("legacy-name")
+        os.replace(Path(g, "edup_native_receipt.json"), Path(g, "edvr_native_receipt.json"))
+        legacy_bytes = Path(g, "edvr_native_receipt.json").read_bytes()
+        check(retire(g)[0] == 0, "a superseded receipt under the legacy name was not retired")
+        legacy_archives = list(Path(g).glob("edvr_native_receipt.json.pre-retired-*.bak"))
+        check(len(legacy_archives) == 1 and legacy_archives[0].read_bytes() == legacy_bytes and
+              not Path(g, "edvr_native_receipt.json").exists() and not Path(g, "edup_native_receipt.json").exists(),
+              "a legacy-named receipt was not archived under its own name")
         for name in ("foreign", "malformed", "nonflat", "descriptor", "graphics", "native-owned", "vr-leftover", "vr-runtime", "current", "running"):
             g = stale_native(name)
             record = Path(g, "edup_install", "state.ini")
-            legacy = Path(g, "edvr_native_receipt.json")
+            legacy = Path(g, "edup_native_receipt.json")
             if name == "foreign":
                 value = json.loads(legacy.read_text(encoding="utf-8")); value["target"] = root
                 legacy.write_text(json.dumps(value), encoding="utf-8")
@@ -3632,21 +3826,68 @@ def _prune_self_test():
         # --- receipts: what the current one names stays; an unreadable one stops the run ---
         game, xr = new_game()
         gfx = backups(game, "d3d11.dll", 7)
-        touch(game, "edvr_native_receipt.json", named(gfx[0]))
+        # Named before the rotation: the plain receipt was the FIRST install's, each later one a stamped sibling.
+        first = touch(game, "edvr_native_receipt.json", named(gfx[0]))
+        old_time = datetime.datetime(2026, 1, 1, 12, 0, 0).timestamp()
+        os.utime(first, (old_time, old_time))
         current = touch(game, "edvr_native_receipt.json.pre-r-20260102-000000.bak", named(gfx[1]))
         removed, _ = quiet(prune_backups, game, 5)
         check(removed == [gfx[0]] and os.path.isfile(gfx[1]) and os.path.isfile(current),
               "the backup the CURRENT receipt names stays though it is among the oldest; the superseded "
               "receipt's does not: %r" % removed)
+        # Named by the rotation: the plain receipt is the newest, the stamped sibling its predecessor.
         game, xr = new_game()
-        chain = [touch(game, "edvr_flat_receipt.json.pre-r-20260101-00000%d.bak" % second, named())
+        gfx = backups(game, "d3d11.dll", 7)
+        current = touch(game, "edup_native_receipt.json", named(gfx[1]))
+        rotated_old = touch(game, "edup_native_receipt.json.pre-r-20260101-120000.bak", named(gfx[0]))
+        check(receipt_paths_newest_first(game, "edup_native_receipt.json") == [current, rotated_old],
+              "the plain receipt written after its rotated predecessor is the current one")
+        removed, _ = quiet(prune_backups, game, 5)
+        check(removed == [gfx[0]] and os.path.isfile(gfx[1]) and os.path.isfile(current),
+              "after a rotation the plain receipt's backups stay and the rotated one's do not: %r" % removed)
+        game, xr = new_game()
+        chain = [touch(game, "edup_flat_receipt.json.pre-r-20260101-00000%d.bak" % second, named())
                  for second in range(1, 8)]
         removed, _ = quiet(prune_backups, game, 5)
         check(sorted(removed) == sorted(chain[:2]) and os.path.isfile(chain[-1]),
               "receipts follow the same count and the newest is never pruned: %r" % removed)
+        # Legacy (edvr_*) and current (edup_*) spellings are one family: the count is shared, so the newer edup backups
+        # push the oldest edvr ones out, for ini files and receipts alike.
+        game, xr = new_game()
+        older_edvr = backups(game, "edvr.ini", 6, tag="t", day="20250101")
+        newer_edup = backups(game, "edup.ini", 2, tag="t", day="20260101")
+        removed, _ = quiet(prune_backups, game, 5)
+        check(sorted(removed) == sorted(older_edvr[:3]) and all(os.path.isfile(p) for p in older_edvr[3:] + newer_edup),
+              "edvr.ini and edup.ini backups share one count of 5, the oldest go first: %r" % removed)
+        game, xr = new_game()
+        older_chain = [touch(game, "edvr_flat_receipt.json.pre-r-20250101-00000%d.bak" % second, named())
+                       for second in range(1, 7)]
+        newer_chain = [touch(game, "edup_flat_receipt.json.pre-r-20260101-00000%d.bak" % second, named())
+                       for second in range(1, 3)]
+        removed, _ = quiet(prune_backups, game, 5)
+        check(sorted(removed) == sorted(older_chain[:3]) and all(os.path.isfile(p) for p in older_chain[3:] + newer_chain),
+              "edvr and edup receipt backups share one count of 5, the oldest go first: %r" % removed)
+        # Ranking across spellings: a legacy plain receipt oldest by mtime loses to its newer legacy siblings; an edup
+        # plain receipt beats an older legacy sibling; a newer legacy sibling beats an older edup plain receipt.
+        game, xr = new_game()
+        plain_legacy = touch(game, "edvr_native_receipt.json", named())
+        os.utime(plain_legacy, (old_time, old_time))
+        sib_new = touch(game, "edvr_native_receipt.json.pre-r-20260103-000000.bak", named())
+        sib_old = touch(game, "edvr_native_receipt.json.pre-r-20260102-000000.bak", named())
+        check(receipt_paths_newest_first(game, "edup_native_receipt.json") == [sib_new, sib_old, plain_legacy],
+              "a folder of legacy receipts: the newest legacy sibling is current, the old plain file last")
+        game, xr = new_game()
+        sib_legacy = touch(game, "edvr_native_receipt.json.pre-r-20260102-000000.bak", named())
+        plain_edup = touch(game, "edup_native_receipt.json", named())
+        os.utime(plain_edup, (datetime.datetime(2026, 1, 1, 12, 0, 0).timestamp(),) * 2)
+        check(receipt_paths_newest_first(game, "edvr_native_receipt.json") == [sib_legacy, plain_edup],
+              "a legacy sibling newer than the edup plain receipt is current")
+        os.utime(plain_edup, (datetime.datetime(2026, 1, 3, 12, 0, 0).timestamp(),) * 2)
+        check(receipt_paths_newest_first(game, "edup_native_receipt.json")[0] == plain_edup,
+              "an edup plain receipt newer than the legacy siblings is current")
         game, xr = new_game()
         gfx = backups(game, "d3d11.dll", 7)
-        outside = touch(tmp, "elsewhere-receipt.json", named(gfx[0]))
+        outside =touch(tmp, "elsewhere-receipt.json", named(gfx[0]))
         removed, _ = quiet(prune_backups, game, 5, False, (outside,))
         check(removed == [gfx[1]] and os.path.isfile(gfx[0]),
               "a receipt the caller names (--native-receipt) protects what it names: %r" % removed)
@@ -3654,7 +3895,7 @@ def _prune_self_test():
                                ("no files", b"{}"), ("not an object", b"[1, 2]")):
             game, xr = new_game()
             backups(game, "d3d11.dll", 7)
-            touch(game, "edvr_native_receipt.json", content)
+            touch(game, "edup_native_receipt.json", content)
             before = tree(game)
             removed, text = quiet(prune_backups, game, 5)
             check(removed == [] and tree(game) == before and "no old backups were pruned" in text,
@@ -3718,7 +3959,7 @@ def _prune_self_test():
                   and not any(os.path.exists(path) for path in old_runtime[:3] + old_config[:2])
                   and any("-e2e-" in name for name in runtime_family),
                   "five of each remain, the new backup and the newest old ones: %r %r" % (runtime_family, config_family))
-            receipt = os.path.join(egame, "edvr_native_receipt.json")
+            receipt = os.path.join(egame, "edup_native_receipt.json")
             check(verify_native_receipt(receipt, egame)["state"] == "installed",
                   "the receipt of the install that pruned still verifies")
             restored, _ = quiet(restore_native, receipt)
@@ -3737,8 +3978,8 @@ def _prune_self_test():
         touch(fgame, GAME_EXE, b"GAME")
         touch(fgame, "d3d11.dll", b"OLD-GRAPHICS")
         touch(fgame, PROFILE_FILE, profile_bytes("flat"))
-        touch(fgame, "edvr_flat_receipt.json", b"OLD-RECEIPT")
-        flat_files = ("d3d11.dll", PROFILE_FILE, "edvr_flat_receipt.json")
+        touch(fgame, "edup_flat_receipt.json", b"OLD-RECEIPT")
+        flat_files = ("d3d11.dll", PROFILE_FILE, "edup_flat_receipt.json")
         for live in flat_files:
             backups(fgame, live, 5, tag="old", day="20250101")
         flat_saved = (_prune_pe.Image, _prune_pe._exports, globals()["validate_elite_game"],
@@ -3810,7 +4051,7 @@ def _xess_opt_in_self_test():
         assert main(args + ["--verify-only"]) == 1, \
             "plain verify accepted selected XeSS with a foreign DLL"
         (game / "edup-flat.ini").unlink()
-        assert restore_native(str(game / "edvr_flat_receipt.json")) == 0
+        assert restore_native(str(game / "edup_flat_receipt.json")) == 0
         assert (game / "libxess.dll").read_bytes() == b"FOREIGN-XESS"
         before = snapshot()
         assert main(args + ["--xess", "--dry-run"]) == 0
@@ -3904,7 +4145,7 @@ def _fsr4_opt_in_self_test():
         (game / "edup-flat.ini").write_bytes(b"[fix]\ntemporal_aa = fsr\n")
         assert run(args + ["--verify-only"])[0] == 0, "plain verify wanted AMD's DLLs for the D3D11 fsr port"
         (game / "edup-flat.ini").unlink()
-        assert restore_native(str(game / "edvr_flat_receipt.json")) == 0
+        assert restore_native(str(game / "edup_flat_receipt.json")) == 0
         assert (game / loader).read_bytes() == b"FOREIGN-AMD-LOADER" and not (game / upscaler).exists() and \
             not (game / licence).exists(), "restore did not remove the added files and leave the foreign one"
         before = snapshot(game)
@@ -3948,7 +4189,7 @@ def _fsr4_opt_in_self_test():
             for name, data in ((loader, b"PINNED-AMD-LOADER"), (upscaler, b"PINNED-AMD-UPSCALER"),
                                (licence, b"AMD-LICENSE")):
                 assert (vr / name).read_bytes() == data, "--scope vr --fsr4 did not install " + name
-            receipt = str(vr / "edvr_native_receipt.json")
+            receipt = str(vr / "edup_native_receipt.json")
             keys = {e["key"] for e in json.loads(Path(receipt).read_text(encoding="utf-8"))["files"]}
             assert set(names) <= keys and verify_native_receipt(receipt, str(vr))["version"] == 2, \
                 "the FSR 4 files are not in a verifying native receipt: %r" % keys
@@ -3992,7 +4233,7 @@ def _fsr4_opt_in_self_test():
             for src, dst in hidden:
                 os.rename(dst, src)
         # The options that cannot take part in a restore or a suspend refuse --fsr4 too.
-        for combo in (["--restore-native", str(game / "edvr_flat_receipt.json")], ["--suspend"]):
+        for combo in (["--restore-native", str(game / "edup_flat_receipt.json")], ["--suspend"]):
             assert run(["--target", str(game), "--fsr4"] + combo)[0] == 2, "%s accepted --fsr4" % combo[0]
         return True
     except (AssertionError, OSError, ValueError, ImportError, SystemExit) as exc:
@@ -4094,7 +4335,7 @@ def _compile_only_self_test():
                 or "d3d11.dll" not in text or "libxess.dll" not in text or "amd_fidelityfx_loader_dx12.dll" not in text:
             print("compile-only --dry-run: wrote files or planned the wrong thing: %r %r" % (code, text)); ok = False
         code, text = run(args)
-        receipt_file = game / "edvr_flat_receipt.json"
+        receipt_file = game / "edup_flat_receipt.json"
         installed = json.loads(receipt_file.read_text()) if receipt_file.is_file() else {}
         if code != 0 or (game / "d3d11.dll").read_bytes() != products["d3d11.dll"] \
                 or (game / "libxess.dll").read_bytes() != products["libxess.dll"] \
@@ -4247,7 +4488,7 @@ def _compile_only_ini_self_test():
             return sorted(Path(g).glob(name + ".pre-*.bak"))
 
         def receipt_of(g, scope):
-            path = os.path.join(g, "edvr_flat_receipt.json" if scope == "flat" else "edvr_native_receipt.json")
+            path = os.path.join(g, "edup_flat_receipt.json" if scope == "flat" else "edup_native_receipt.json")
             return path, json.loads(Path(path).read_text(encoding="utf-8"))
 
         flat_key = {"flat": "ini", "both": "ini_flat"}
@@ -4716,6 +4957,319 @@ def _epic_discovery_self_test():
         os.environ.update(saved_env)
 
 
+def _receipt_rotation_self_test():
+    """The receipt rotation of native_install_package and its undo. A rollback or a lost exclusive create puts the previous
+    receipt back under its plain name (or leaves it as history when a winner holds the name); a receipt another install
+    changed after the plan is not moved; a failed rename-back leaves the previous receipt the current one; a dry run prunes
+    what the real run prunes; and _rename_no_replace never overwrites, with or without hard links."""
+    import contextlib
+    import errno
+    import io
+    import openxr_pe as rot_pe
+    import fetch_openxr_loader as rot_loader
+    problems = []
+
+    def check(condition, what):
+        if not condition:
+            problems.append(what)
+            print("receipt rotation self-test: %s" % what)
+
+    def run(*args):
+        """(exit code, printed text) of one main() call; a SystemExit refusal counts as 2."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                code = main(list(args))
+            except SystemExit:
+                code = 2
+        return code, out.getvalue()
+
+    def pruned_names(text):
+        """The names a prune printed under its header, sorted; none without a header."""
+        lines = text.splitlines()
+        header = [i for i, line in enumerate(lines) if "old backup(s)" in line]
+        names = []
+        for line in (lines[header[0] + 1:] if header else []):
+            if not line.startswith("       "):
+                break
+            names.append(line.strip())
+        return sorted(names)
+
+    def named(directory, pattern):
+        return sorted(p for p in Path(directory).glob(pattern))
+
+    tmp = tempfile.mkdtemp(prefix="edvr_rotation_test_")
+    real_loader_verify, real_pair = rot_loader.verify, rot_pe.validate_native_pair
+    real_image, real_exports = rot_pe.Image, rot_pe._exports
+    real_elite = globals()["validate_elite_game"]
+    real_probe = globals()["strict_game_running"]
+    real_write = globals()["_write_new_receipt"]
+    real_rename = globals()["_rename_no_replace"]
+    real_backup = globals()["_native_backup_name"]
+    real_copy2, real_link = shutil.copy2, os.link
+    counter = [0]
+
+    def fixture():
+        counter[0] += 1
+        root = os.path.join(tmp, "repo%d" % counter[0])
+        game = os.path.join(tmp, "game%d" % counter[0])
+        os.makedirs(os.path.join(root, "build"))
+        os.makedirs(os.path.join(game, "Openvr", "win64"))
+        for rel, data in (("edvr_openxr_runtime.dll", b"RUNTIME"), ("edvr_openxr_graphics.dll", b"GRAPHICS"),
+                          ("openxr_loader.dll", b"LOADER"), ("OPENXR-LOADER-LICENSE.txt", b"LICENSE"),
+                          ("nvngx_dlss.dll", b"DLSS")):
+            Path(root, "build", rel).write_bytes(data)
+        Path(game, GAME_EXE).write_bytes(b"GAME")
+        Path(game, "edup.ini").write_bytes(b"[user]\nkeep=1\n")
+        return root, game, _standard_native_paths(root, game)
+
+    def install(root, game, tag, *extra):
+        return run("--root", root, "--target", game, "--all", "--tag", tag, *extra)
+
+    def failing_runtime_copy(sp):
+        """shutil.copy2 that leaves the installed runtime with wrong bytes; the rollback's restore copies pass through."""
+        def copy(source, destination, *args, **kwargs):
+            if str(source) == sp["runtime"] and str(destination) == sp["runtime_target"]:
+                Path(destination).write_bytes(b"BAD-RUNTIME")
+                return destination
+            return real_copy2(source, destination, *args, **kwargs)
+        return copy
+
+    try:
+        rot_loader.verify = lambda path: None
+        rot_pe.validate_native_pair = lambda *args: None
+        # The fixture's graphics DLL is not a PE: an existing d3d11.dll must read as an ED-UP build, or a second install refuses.
+        rot_pe.Image = lambda data: data
+        rot_pe._exports = lambda data: ({0: "edvr_graphics"}, None)
+        globals()["validate_elite_game"] = lambda path: None
+        globals()["strict_game_running"] = lambda *a: (True, False)
+
+        # A. A failed install rolls back: the previous receipt is back under the plain name it came from.
+        for legacy in (False, True):
+            root, game, sp = fixture()
+            check(install(root, game, "first")[0] == 0, "the first install failed (legacy=%s)" % legacy)
+            plain_name = RECEIPT_LEGACY_NAMES[RECEIPT_NAMES[0]] if legacy else RECEIPT_NAMES[0]
+            if legacy:
+                os.replace(os.path.join(game, RECEIPT_NAMES[0]), os.path.join(game, plain_name))
+            plain = os.path.join(game, plain_name)
+            prior = Path(plain).read_bytes()
+            shutil.copy2 = failing_runtime_copy(sp)
+            try: code, text = install(root, game, "fail")
+            finally: shutil.copy2 = real_copy2
+            check(code == 1, "a failed install did not refuse (legacy=%s): %s" % (legacy, text))
+            check(Path(plain).is_file() and Path(plain).read_bytes() == prior,
+                  "the rollback did not put the previous receipt back at %s" % plain_name)
+            check(not named(game, "*.pre-fail-*"), "the rollback left a rotated receipt behind (legacy=%s)" % legacy)
+            check(sha256(sp["runtime_target"]) == sha256(sp["runtime"]), "the runtime was not restored (legacy=%s)" % legacy)
+            check(receipt_paths_newest_first(game, RECEIPT_NAMES[0])[:1] == [plain],
+                  "the restored receipt is not the current one (legacy=%s)" % legacy)
+
+        # B. The exclusive create is lost: the previous receipt goes back when no winner holds the plain name, and stays
+        # as history when one does.
+        for winner in (False, True):
+            root, game, sp = fixture()
+            check(install(root, game, "first")[0] == 0, "the first install failed (winner=%s)" % winner)
+            plain = os.path.join(game, RECEIPT_NAMES[0])
+            prior = Path(plain).read_bytes()
+
+            def lost(path, journal, winner=winner):
+                if winner:
+                    Path(path).write_bytes(b"WINNER-RECEIPT")
+                raise FileExistsError("simulated receipt creation race")
+            globals()["_write_new_receipt"] = lost
+            try: code, text = install(root, game, "lost")
+            finally: globals()["_write_new_receipt"] = real_write
+            check(code == 1, "a lost receipt create did not refuse (winner=%s)" % winner)
+            if winner:
+                check(Path(plain).read_bytes() == b"WINNER-RECEIPT", "the winner's receipt was overwritten")
+                check(any(p.read_bytes() == prior for p in named(game, "*.pre-lost-*")),
+                      "the previous receipt was not kept as history under a winner")
+            else:
+                check(Path(plain).read_bytes() == prior, "the previous receipt was not restored with no winner")
+                check(not named(game, "*.pre-lost-*"), "a backup was left behind with no winner")
+
+        # C. A receipt another install writes between the plan and the rotation is not moved; nothing is written.
+        root, game, sp = fixture()
+        check(install(root, game, "first")[0] == 0, "the first install failed (changed plan)")
+        plain = os.path.join(game, RECEIPT_NAMES[0])
+        mutated = []
+
+        def mutate_after_plan(dst, tag, stamp):
+            if tag == "moved" and not mutated and os.path.basename(dst) == "d3d11.dll":
+                Path(plain).write_bytes(b"THIRD-RECEIPT")
+                mutated.append(dst)
+            return real_backup(dst, tag, stamp)
+        globals()["_native_backup_name"] = mutate_after_plan
+        try: code, text = install(root, game, "moved")
+        finally: globals()["_native_backup_name"] = real_backup
+        check(bool(mutated), "the test did not reach the plan's backup names")
+        check(code == 1 and "another install changed" in text, "a receipt changed after the plan did not refuse: %s" % text)
+        check(Path(plain).read_bytes() == b"THIRD-RECEIPT", "a receipt changed after the plan was moved")
+        check(not named(game, "*.pre-moved-*"), "a receipt was rotated after the plan changed")
+        check(sha256(sp["runtime_target"]) == sha256(sp["runtime"]), "a refused install wrote the runtime")
+
+        # C2. A receipt another install writes after that check, with the same size and mtime so only the hash differs, is
+        # moved back and the install refuses.
+        root, game, sp = fixture()
+        check(install(root, game, "first")[0] == 0, "the first install failed (changed during the rotation)")
+        plain = os.path.join(game, RECEIPT_NAMES[0])
+        before = os.stat(plain)
+        other = b"X" * before.st_size
+        swapped = []
+
+        def swap_then_rename(src, dst):
+            if not swapped:
+                Path(src).write_bytes(other)
+                os.utime(src, ns=(before.st_atime_ns, before.st_mtime_ns))
+                swapped.append(dst)
+            return real_rename(src, dst)
+        globals()["_rename_no_replace"] = swap_then_rename
+        try: code, text = install(root, game, "swapped")
+        finally: globals()["_rename_no_replace"] = real_rename
+        check(bool(swapped), "the test did not reach the rotation")
+        check(code == 1 and "moved by another install during the rotation" in text,
+              "a receipt changed during the rotation did not refuse: %s" % text)
+        check(Path(plain).read_bytes() == other, "a receipt changed during the rotation was not put back")
+        check(not named(game, "*.pre-swapped-*"), "a receipt changed during the rotation left a backup")
+        check(sha256(sp["runtime_target"]) == sha256(sp["runtime"]), "an install refused during the rotation wrote the runtime")
+
+        # D. The rollback's rename-back fails: the files are back, the plain name is empty, and the previous receipt, now a
+        # backup, is the current one. No rollback_failed journal is written.
+        root, game, sp = fixture()
+        check(install(root, game, "first")[0] == 0, "the first install failed (rename-back)")
+        plain = os.path.join(game, RECEIPT_NAMES[0])
+        prior = Path(plain).read_bytes()
+
+        def stuck_rename_back(src, dst):
+            if os.path.basename(dst).lower() == RECEIPT_NAMES[0] and ".pre-" in os.path.basename(src):
+                raise OSError("injected rename-back failure")
+            return real_rename(src, dst)
+        globals()["_rename_no_replace"] = stuck_rename_back
+        shutil.copy2 = failing_runtime_copy(sp)
+        try: code, text = install(root, game, "stuck")
+        finally:
+            shutil.copy2 = real_copy2
+            globals()["_rename_no_replace"] = real_rename
+        check(code == 1, "the stuck rollback did not refuse")
+        check(not os.path.exists(plain), "the plain name holds a receipt after a failed rename-back")
+        ranked = receipt_paths_newest_first(game, RECEIPT_NAMES[0])
+        check(bool(ranked) and os.path.basename(ranked[0]).startswith(RECEIPT_NAMES[0] + ".pre-stuck-")
+              and Path(ranked[0]).read_bytes() == prior, "the previous receipt is not the current one: %r" % ranked)
+        check("still the current one" in text, "no warning that the previous receipt stays current")
+
+        # E. A dry run names the same backups to prune as the real run, on a legacy migration whose rotated receipt is older
+        # than every sibling. Only protect= keeps that receipt: by age it is the first to go.
+        root, game, sp = fixture()
+        check(install(root, game, "first")[0] == 0, "the first install failed (migration)")
+        legacy_plain = os.path.join(game, RECEIPT_LEGACY_NAMES[RECEIPT_NAMES[0]])
+        os.replace(os.path.join(game, RECEIPT_NAMES[0]), legacy_plain)
+        for second in range(1, 7):
+            shutil.copyfile(legacy_plain, os.path.join(game, "edvr_native_receipt.json.pre-old-20250101-%06d.bak" % second))
+        older = datetime.datetime(2024, 1, 1).timestamp()
+        os.utime(legacy_plain, (older, older))
+        dry_code, dry_text = install(root, game, "mig", "--dry-run")
+        dry = pruned_names(dry_text)
+        check(dry_code == 0 and dry == ["edvr_native_receipt.json.pre-old-20250101-000001.bak"],
+              "the migration dry run did not name the one sibling past the newest five: %r" % dry)
+        real_code, real_text = install(root, game, "mig")
+        check(real_code == 0 and pruned_names(real_text) == dry,
+              "the real run pruned %r, its dry run named %r" % (pruned_names(real_text), dry))
+        rotated = named(game, "edvr_native_receipt.json.pre-mig-*.bak")
+        check(len(rotated) == 1 and rotated[0].name not in dry, "the rotated first receipt was pruned")
+        check(Path(game, RECEIPT_NAMES[0]).is_file(), "the new receipt is not at the plain name after the migration")
+
+        # F. _rename_no_replace never overwrites, and its copy fallback works and never overwrites either.
+        ren = os.path.join(tmp, "ren")
+        os.makedirs(ren)
+        src, dst = os.path.join(ren, "a.bin"), os.path.join(ren, "b.bin")
+        Path(src).write_bytes(b"AAA")
+        Path(dst).write_bytes(b"BBB")
+        try:
+            real_rename(src, dst)
+            check(False, "an existing destination was replaced")
+        except FileExistsError:
+            pass
+        check(Path(src).read_bytes() == b"AAA" and Path(dst).read_bytes() == b"BBB", "a refused rename changed a file")
+
+        def no_link(*args):
+            raise OSError(errno.EXDEV, "injected cross-device link")
+        os.link = no_link
+        try:
+            real_rename(src, os.path.join(ren, "c.bin"))
+            try:
+                real_rename(os.path.join(ren, "c.bin"), dst)
+                check(False, "the copy fallback replaced an existing destination")
+            except FileExistsError:
+                pass
+        finally:
+            os.link = real_link
+        # A copy whose metadata fails leaves no dst behind, and a failed undo does not hide the unlink's error.
+        def no_stat(*args, **kwargs):
+            raise OSError(errno.EACCES, "injected copystat failure")
+        real_copystat, shutil.copystat = shutil.copystat, no_stat
+        try:
+            _copy_exclusive(dst, os.path.join(ren, "d.bin"))
+            check(False, "a failed copystat was not raised")
+        except OSError as exc:
+            check("injected copystat" in str(exc), "a failed copystat raised something else: %s" % exc)
+        finally:
+            shutil.copystat = real_copystat
+        check(not os.path.exists(os.path.join(ren, "d.bin")), "a failed copystat left its copy behind")
+
+        def stuck(*args):
+            raise OSError(errno.EACCES, "injected unlink failure")
+
+        def stuck_undo(*args):
+            raise OSError(errno.EACCES, "injected undo failure")
+        real_unlink, real_remove = os.unlink, os.remove
+        os.unlink, os.remove = stuck, stuck_undo
+        try:
+            real_rename(dst, os.path.join(ren, "e.bin"))
+            check(False, "a failed unlink was not raised")
+        except OSError as exc:
+            check("injected unlink" in str(exc), "a failed undo hid the unlink's error: %s" % exc)
+        finally:
+            os.unlink, os.remove = real_unlink, real_remove
+        check(not os.path.exists(src) and Path(ren, "c.bin").read_bytes() == b"AAA",
+              "the copy fallback did not move the file")
+        check(Path(dst).read_bytes() == b"BBB", "the copy fallback overwrote a destination")
+
+        # G. The newest edvr.ini backup survives five newer edup.ini backups (#248: older versions read edvr.ini).
+        gdir = os.path.join(tmp, "prune_ini")
+        os.makedirs(os.path.join(gdir, "Openvr", "win64"))
+        old_ini = Path(gdir, "edvr.ini.pre-t-20250101-000001.bak")
+        old_ini.write_bytes(b"OLD")
+        for second in range(1, 6):
+            Path(gdir, "edup.ini.pre-t-20260101-%06d.bak" % second).write_bytes(b"NEW")
+        quiet_prune = io.StringIO()
+        with contextlib.redirect_stdout(quiet_prune):
+            prune_backups(gdir, KEEP_BACKUPS)
+        check(old_ini.is_file() and len(named(gdir, "edup.ini.pre-*")) == KEEP_BACKUPS,
+              "the newest edvr.ini backup was pruned under five newer edup.ini backups")
+
+        # H. Retiring a stale receipt refuses when only backup-named native receipts exist.
+        rdir = os.path.join(tmp, "retire")
+        os.makedirs(rdir)
+        backup_only = Path(rdir, "edup_native_receipt.json.pre-x-20250101-000001.bak")
+        backup_only.write_bytes(b"{}")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            retire_code = retire_stale_native_receipt(rdir, "retire")
+        check(retire_code == 1 and "nothing stale to retire" in out.getvalue() and backup_only.is_file(),
+              "retire did not refuse with only backup-named receipts: %r" % out.getvalue())
+    finally:
+        rot_loader.verify, rot_pe.validate_native_pair = real_loader_verify, real_pair
+        rot_pe.Image, rot_pe._exports = real_image, real_exports
+        globals()["validate_elite_game"] = real_elite
+        globals()["strict_game_running"] = real_probe
+        globals()["_write_new_receipt"] = real_write
+        globals()["_rename_no_replace"] = real_rename
+        globals()["_native_backup_name"] = real_backup
+        shutil.copy2, os.link = real_copy2, real_link
+        shutil.rmtree(tmp, ignore_errors=True)
+    return not problems
+
+
 def self_test():
     ok = True
     if not _epic_import_self_test(): ok = False
@@ -4726,6 +5280,7 @@ def self_test():
     if not _fsr4_opt_in_self_test(): ok = False
     if not _compile_only_self_test(): ok = False
     if not _compile_only_ini_self_test(): ok = False
+    if not _receipt_rotation_self_test(): ok = False
 
     # The path-aware game probe: only a game running from the install target
     # blocks staging; an unresolvable image path fails closed.
@@ -4829,7 +5384,7 @@ def self_test():
             if open(os.path.join(sgame, "edup.ini"), "rb").read() != b"[user]\nkeep=1\n":
                 print("standard install changed user INI"); ok = False
             if not os.path.isfile(os.path.join(sgame, "nvngx_dlss.dll")): print("--all omitted DLSS"); ok = False
-            receipt_path = os.path.join(sgame, "edvr_native_receipt.json")
+            receipt_path = os.path.join(sgame, "edup_native_receipt.json")
             assert verify_native_receipt(receipt_path, sgame)["version"] == 2
             before_restore = sorted((os.path.relpath(os.path.join(b,n),sgame),Path(b,n).read_bytes()) for b,_,ns in os.walk(sgame) for n in ns)
             assert restore_native(receipt_path, True) == 0
@@ -4849,8 +5404,23 @@ def self_test():
             # Reinstall with existing runtime/config exercises all backup paths.
             Path(sp["runtime_target"]).write_bytes(b"OLD-RUNTIME")
             Path(sp["config"]).write_bytes(b"OLD-CONFIG")
+            first_receipt = os.path.join(sgame, "edup_native_receipt.json")
+            first_bytes = Path(first_receipt).read_bytes()
+            first_written = _receipt_write_time(first_receipt)
+            # The first install's receipt is the plain receipt of a folder installed before the rename: it is under the
+            # legacy name. The second install rotates it under that name and writes the edup plain receipt.
+            legacy_receipt = os.path.join(sgame, "edvr_native_receipt.json")
+            os.replace(first_receipt, legacy_receipt)
             assert main(["--root",sroot,"--target",sgame,"--tag","second"]) == 0
-            receipt_path = next(str(path) for path in Path(sgame).glob("edvr_native_receipt.json.pre-second-*.bak"))
+            # The new receipt takes the plain name; the previous one is rotated to a backup name stamped with its own
+            # last write, so the names sort by age and the current receipt is the one that looks current.
+            receipt_path = first_receipt
+            assert not os.path.exists(legacy_receipt), "the legacy plain receipt was not rotated"
+            rotated_receipts = list(Path(sgame).glob("edvr_native_receipt.json.pre-second-*.bak"))
+            assert len(rotated_receipts) == 1 and rotated_receipts[0].read_bytes() == first_bytes, rotated_receipts
+            assert rotated_receipts[0].name.endswith(first_written.strftime("-%Y%m%d-%H%M%S.bak")), rotated_receipts
+            assert receipt_paths_newest_first(sgame, "edup_native_receipt.json")[:2] == \
+                [receipt_path, str(rotated_receipts[0])]
             verify_native_receipt(receipt_path)
             assert restore_native(receipt_path) == 0
             assert Path(sp["runtime_target"]).read_bytes() == b"OLD-RUNTIME"
@@ -4863,11 +5433,15 @@ def self_test():
                 Path(path).write_bytes(b"OTHER-INSTALLER-RECEIPT")
                 raced.append(path)
                 raise FileExistsError("simulated receipt creation race")
+            race_prior = Path(receipt_path).read_bytes()      # the previous receipt, at the plain name before the race
             globals()["_write_new_receipt"] = collide_receipt
             try:
                 assert main(["--root",sroot,"--target",sgame,"--tag","race"]) == 1
                 assert Path(raced[0]).read_bytes() == b"OTHER-INSTALLER-RECEIPT"
                 assert Path(sp["runtime_target"]).read_bytes() == b"OLD-RUNTIME"
+                # The winner holds the plain name, so the previous receipt is kept as history under a backup name.
+                assert any(p.read_bytes() == race_prior for p in Path(sgame).glob("edup_native_receipt.json.pre-race-*.bak")), \
+                    "the previous receipt did not survive the lost creation race"
             finally: globals()["_write_new_receipt"] = create_saved
             # A partially failed copy followed by a corrupt rollback retains
             # the verified old bytes and its journal instead of claiming success.
@@ -4882,7 +5456,7 @@ def self_test():
             try:
                 assert main(["--root",sroot,"--target",sgame,"--tag","corrupt"]) == 1
             finally: shutil.copy2 = copy_saved
-            failure_path = next(Path(sgame).glob("edvr_native_receipt.json.pre-corrupt-*.bak"))
+            failure_path = Path(sgame, "edup_native_receipt.json")   # a failed rollback keeps its journal at the plain name
             failure = json.loads(failure_path.read_text())
             assert failure["state"] == "rollback_failed"
             runtime_backup = next(e["backup"] for e in failure["files"] if e["key"] == "runtime")
@@ -4963,7 +5537,7 @@ def self_test():
             assert Path(fgame, "edup-flat.ini").read_bytes() == b"[user]\nkeep=1\n"
             descriptor_path = Path(fgame, PROFILE_FILE)
             assert descriptor_path.read_bytes() == profile_bytes("flat")
-            receipt_path = Path(fgame, "edvr_flat_receipt.json")
+            receipt_path = Path(fgame, "edup_flat_receipt.json")
             assert verify_native_receipt(str(receipt_path), fgame)["kind"] == FLAT_KIND
             assert main(args + ["--verify-only"]) == 0
             descriptor_path.write_bytes(profile_bytes("vr"))
@@ -5004,7 +5578,8 @@ def self_test():
             # profile's and stays exactly as the user left it.
             assert Path(fgame, "edup-flat.ini").read_bytes() == flat_template.read_bytes()
             assert Path(fgame, "edup.ini").read_bytes() == b"[user]\nkeep=1\n"
-            ini_receipt = next(Path(fgame).glob("edvr_flat_receipt.json.pre-flatini-*.bak"))
+            ini_receipt = Path(fgame, "edup_flat_receipt.json")
+            assert len(list(Path(fgame).glob("edup_flat_receipt.json.pre-flatini-*.bak"))) == 1, "the previous flat receipt was not rotated"
             ini_entry = next(e for e in verify_native_receipt(str(ini_receipt), fgame)["files"]
                              if e["key"] == "ini")
             assert ini_entry["source"] == str(flat_template)
@@ -5055,7 +5630,7 @@ def self_test():
                         entry["backup"] = os.path.abspath(str(backup))
                         entry["before_sha256"] = sha256(str(backup))
                     entries.append(entry)
-                receipt = os.path.join(game, "edvr_flat_receipt.json")
+                receipt = os.path.join(game, "edup_flat_receipt.json")
                 Path(receipt).write_text(json.dumps({
                     "version": 2, "kind": FLAT_KIND, "target": os.path.abspath(game),
                     "root": os.path.abspath(froot), "state": "installed", "files": entries}),
