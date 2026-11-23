@@ -78,7 +78,7 @@ void testSystemPlans() {
         const StreamBoostPlan p = computeStreamBoostPlan(hi);
         CHECK(p.active);
         CHECK(p.standDownReason == nullptr);
-        CHECK(p.streamLoadCap == 512u);
+        CHECK(p.streamLoadCap == 256u);
         CHECK(p.poolCap == 63u);
         CHECK(p.flatPumpTimeUs == 4000u);
         CHECK(p.flatPumpMaxIter == 256u);
@@ -96,7 +96,7 @@ void testSystemPlans() {
         deck.totalRamBytes = 15ull * kGiB;
         const StreamBoostPlan p = computeStreamBoostPlan(deck);
         CHECK(p.active);
-        CHECK(p.streamLoadCap == 192u);
+        CHECK(p.streamLoadCap == 160u);
         CHECK(p.poolCap == 24u);
         CHECK(p.flatPumpTimeUs == 3000u);
         CHECK(p.flatPumpMaxIter == 192u);
@@ -310,13 +310,13 @@ void testEntryWantLoadFlags() {
 
 void testEncodeCmpRsiImm32() {
     uint8_t b[7] = {};
-    encodeCmpRsiImm32(512u, b);
-    const uint8_t want512[7] = {0x48u, 0x81u, 0xFEu, 0x00u, 0x02u, 0x00u, 0x00u};
-    CHECK(std::memcmp(b, want512, 7u) == 0);
+    encodeCmpRsiImm32(256u, b);
+    const uint8_t want256[7] = {0x48u, 0x81u, 0xFEu, 0x00u, 0x01u, 0x00u, 0x00u};
+    CHECK(std::memcmp(b, want256, 7u) == 0);
 
-    encodeCmpRsiImm32(192u, b);
-    const uint8_t want192[7] = {0x48u, 0x81u, 0xFEu, 0xC0u, 0x00u, 0x00u, 0x00u};
-    CHECK(std::memcmp(b, want192, 7u) == 0);
+    encodeCmpRsiImm32(160u, b);
+    const uint8_t want160[7] = {0x48u, 0x81u, 0xFEu, 0xA0u, 0x00u, 0x00u, 0x00u};
+    CHECK(std::memcmp(b, want160, 7u) == 0);
 }
 
 }  // namespace

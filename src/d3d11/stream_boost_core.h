@@ -12,7 +12,7 @@ namespace stream_boost {
 
 // Stock Elite Dangerous (build 334925) streaming parameters.
 constexpr uint32_t kStockStreamLoadCap = 30u;    // cmp rsi, 0x1e at StreamLoad (exe+0x9E8935)
-constexpr uint32_t kMaxStreamLoadCap = 512u;     // via 7-byte `cmp rsi, imm32` replacing `cmp rsi, 0x1e; movzx eax, al`
+constexpr uint32_t kMaxStreamLoadCap = 256u;     // via 7-byte `cmp rsi, imm32` replacing `cmp rsi, 0x1e; movzx eax, al` (bounded below 512 to avoid O(N^2) TickActive overhead)
 constexpr uint32_t kStockPoolCap = 16u;          // SetMaxConcurrentStreams(16) at startup
 constexpr uint32_t kMaxPoolCap = 63u;            // matches fFileSystemDevice SSD MaxConcurrentIO (0x3F at 0x56EDE7)
 constexpr uint32_t kStockPumpTimeUs = 1000u;     // active gameplay clamp on fRes pump (exe+0x7F6EB0)
@@ -169,10 +169,10 @@ inline StreamBoostPlan computeStreamBoostPlan(const SystemProfile& sys) noexcept
         cCap = kMaxStreamLoadCap;
         cPool = kMaxPoolCap;
     } else if (sys.logicalCpus >= 10u) {
-        cCap = 256u;
+        cCap = 192u;
         cPool = 32u;
     } else if (sys.logicalCpus >= 6u) {
-        cCap = 192u;
+        cCap = 160u;
         cPool = 24u;
     }
 
