@@ -407,6 +407,7 @@ std::wstring modNameOf(const DllInfo& info) {
     for (const std::wstring& s : fields) {
         if (containsNoCase(s, L"reshade")) return L"ReShade";
         if (containsNoCase(s, L"3dmigoto")) return L"EDHM";  // EDHM ships 3Dmigoto's d3d11.dll
+        if (containsNoCase(s, L"2dmigoto")) return L"EDHM";  // Tailored 2DMigoto runtime for EDHM
         if (containsNoCase(s, L"edhm")) return L"EDHM";
         if (containsNoCase(s, L"dxvk")) return L"DXVK";
         if (containsNoCase(s, L"opencomposite")) return L"OpenComposite";

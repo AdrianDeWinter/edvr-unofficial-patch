@@ -274,6 +274,8 @@ the bridge's agreement with the schema-2 manifest, and the size and hash of
 every asset and every file inside the zips all pass:
 
 ```powershell
+python tools/sign_manifest.py sign "edvr-artifacts/$runId/ed-up-manifest-v3.json"
+if ($LASTEXITCODE -ne 0) { throw 'Signing the schema-3 manifest failed' }
 python tools/sign_manifest.py sign "edvr-artifacts/$runId/ed-up-manifest-v2.json"
 if ($LASTEXITCODE -ne 0) { throw 'Signing the schema-2 manifest failed' }
 python tools/sign_manifest.py sign "edvr-artifacts/$runId/ed-up-manifest.json"
@@ -284,25 +286,29 @@ if ($LASTEXITCODE -ne 0) { throw 'The signed release folder did not verify' }
 
 Then attach the two verified ZIPs (`ed-up-<version>.zip`, the files for a manual install,
 and `ed-up-launcher-linux-<version>.zip`, a convenience package outside the signed
-manifest), the split assets, both manifests with
-their `.sig` files, and `SHA256SUMS` to a draft release. A release missing either `.sig` is simply
+manifest), the split assets, all manifests with
+their `.sig` files, and `SHA256SUMS` to a draft release. A release missing a `.sig` is simply
 not offered to the launcher as an update:
 
 ```powershell
 python tools/release_credits.py --from vPREVIOUS --to "v$version" --thanks --out thanks.md
 if ($LASTEXITCODE -ne 0) { throw 'Review release credits before continuing' }
 # Edit release-notes.md and include the reviewed ## Thanks section from thanks.md.
+# When ed-up-edhm-*.zip is present, ed-up-edhm-source-*.tar.gz (verified in SHA256SUMS)
+# is attached beside it as the GPLv3 Corresponding Source archive.
 $folder = "edvr-artifacts/$runId"
 $assets = @(
     "$folder/ed-up-$version.zip"
     "$folder/ed-up-launcher-linux-$version.zip"
+    "$folder/ed-up-manifest-v3.json"
+    "$folder/ed-up-manifest-v3.json.sig"
     "$folder/ed-up-manifest-v2.json"
     "$folder/ed-up-manifest-v2.json.sig"
     "$folder/ed-up-manifest.json"
     "$folder/ed-up-manifest.json.sig"
     "$folder/SHA256SUMS"
 )
-$assets += Get-ChildItem "$folder/ed-up-core-$version.zip", "$folder/ed-up-dlss-*.zip", "$folder/ed-up-xess-*.zip", "$folder/ed-up-fsr4-*.zip", "$folder/ed-up-launcher.exe" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+$assets += Get-ChildItem "$folder/ed-up-core-$version.zip", "$folder/ed-up-dlss-*.zip", "$folder/ed-up-xess-*.zip", "$folder/ed-up-fsr4-*.zip", "$folder/ed-up-edhm-*.zip", "$folder/ed-up-edhm-source-*.tar.gz", "$folder/ed-up-launcher.exe" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
 gh release create "v$version" @assets --draft --verify-tag --title "ED Unofficial Patch $version" --notes-file release-notes.md
 if ($LASTEXITCODE -ne 0) { throw 'Draft release creation failed' }
 ```
@@ -314,7 +320,8 @@ Actions, the same assets land in `dist\`, `SHA256SUMS` included:
 `package_native.py` writes it, and the workflow only checks that it lists the
 files above with their hashes. `package.bat` prints the signing command when
 it finishes. Run `python tools\sign_manifest.py sign
-dist\ed-up-manifest-v2.json` and `... sign dist\ed-up-manifest.json`, then `python tools\sign_manifest.py verify dist`,
+dist\ed-up-manifest-v3.json`, `... sign dist\ed-up-manifest-v2.json`, and
+`... sign dist\ed-up-manifest.json`, then `python tools\sign_manifest.py verify dist`,
 and attach the files from `dist\` the same way. `package_native.py` writes the
 split zips with fixed timestamps and file order, so packaging twice gives the
 same bytes, and it removes older `ed-up-dlss-*.zip`, `ed-up-xess-*.zip` and `ed-up-fsr4-*.zip` from

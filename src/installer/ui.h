@@ -78,6 +78,8 @@ void fillCircle(HDC dc, int centreX, int centreY, int radius, COLORREF fill);
 void fillRect(HDC dc, RECT rect, COLORREF fill);
 // A pill toggle switch with a subpixel-centred circular knob.
 void paintToggle(HDC dc, RECT box, bool on, UINT dpi);
+// An analytically antialiased rounded checkbox with tick.
+void paintCheckbox(HDC dc, RECT box, bool checked, bool disabled, bool hot, UINT dpi);
 
 // The slim overlay scrollbar every scrolling pane shares: no track chrome,
 // one rounded thumb hugging the pane's right edge, in the card language.

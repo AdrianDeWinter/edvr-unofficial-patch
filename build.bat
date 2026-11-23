@@ -247,6 +247,7 @@ REM -- it reads only src\.
 python tools\run_jobs.py ^
     --gate "tools\fetch_openxr_loader.py --self-test" ^
     --gate "tools\fetch_xess.py --self-test" ^
+    --gate "tools\fetch_edhm_2dmigoto.py --self-test" ^
     --gate "tools\fetch_fsr4.py --self-test" ^
     --gate "tools\gen_installer_rc.py --self-test" ^
     --gate "tools\package_native.py --self-test" ^
@@ -583,6 +584,38 @@ if defined XESS (
     echo [edvr] NO XeSS SDK. Flat XeSS-SR will refuse at runtime. Fetch with tools\fetch_xess.py.
 )
 
+REM Optional tailored 2DMigoto runtime for EDHM (tools\fetch_edhm_2dmigoto.py).
+REM Staged into %BUILD% when present so package_native.py can ship it as an
+REM opt-in signed release asset with its GPLv3 and third-party notices.
+set EDHM2DM=
+if defined EDVR_EDHM_2DMIGOTO set EDHM2DM=%EDVR_EDHM_2DMIGOTO%
+if not defined EDHM2DM if exist "%ROOT%\third_party\edhm_2dmigoto\bin\d3d11_edhm.dll" set EDHM2DM=%ROOT%\third_party\edhm_2dmigoto
+if not defined EDHM2DM if exist "%LOCALAPPDATA%\EDVR\edhm-2dmigoto\bin\d3d11_edhm.dll" set EDHM2DM=%LOCALAPPDATA%\EDVR\edhm-2dmigoto
+set EDHM_SOURCE_ARCHIVE=
+for /f "usebackq delims=" %%A in (`python "tools\fetch_edhm_2dmigoto.py" --print-source-archive`) do set EDHM_SOURCE_ARCHIVE=%%A
+if not defined EDHM_SOURCE_ARCHIVE (
+    echo [edvr] ERROR: tools\fetch_edhm_2dmigoto.py did not report a source archive name.
+    exit /b 1
+)
+if defined EDHM2DM (
+    python "tools\fetch_edhm_2dmigoto.py" --verify "%EDHM2DM%" || (
+        echo [edvr] ERROR: the EDHM_2DMigoto runtime at %EDHM2DM% is not the pinned one. Run python tools\fetch_edhm_2dmigoto.py to fetch the pinned release again.
+        exit /b 1
+    )
+    copy /Y "%EDHM2DM%\bin\d3d11_edhm.dll" "%BUILD%\d3d11_edhm.dll" >nul || exit /b 1
+    copy /Y "%EDHM2DM%\LICENSE.GPL.txt" "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt" >nul || exit /b 1
+    copy /Y "%EDHM2DM%\EDHM-2DMIGOTO-THIRD-PARTY.txt" "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt" >nul || exit /b 1
+    if exist "%BUILD%\ed-up-edhm-source-*.tar.gz" del /q "%BUILD%\ed-up-edhm-source-*.tar.gz"
+    copy /Y "%EDHM2DM%\%EDHM_SOURCE_ARCHIVE%" "%BUILD%\%EDHM_SOURCE_ARCHIVE%" >nul || exit /b 1
+    echo [edvr] EDHM_2DMigoto runtime: %EDHM2DM%
+) else (
+    if exist "%BUILD%\d3d11_edhm.dll" del /q "%BUILD%\d3d11_edhm.dll"
+    if exist "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt" del /q "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt"
+    if exist "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt" del /q "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt"
+    if exist "%BUILD%\ed-up-edhm-source-*.tar.gz" del /q "%BUILD%\ed-up-edhm-source-*.tar.gz"
+    echo [edvr] NO EDHM_2DMigoto runtime staged. Optional EDHM 2DMigoto asset will be omitted. Fetch with tools\fetch_edhm_2dmigoto.py.
+)
+
 REM AMD FSR 4.1 (FidelityFX SDK v2.4.0, tools\fetch_fsr4.py) for the flat profile and VR: AMD's own signed D3D12
 REM DLLs, loaded at run time over the D3D11/D3D12 bridge in src\d3d11\fsr4_engine.cpp, as XeSS's is. Nothing is
 REM linked; the headers are the only compile input. EDVR_FSR4_SDK names a copy explicitly, or forces the no-SDK
@@ -890,7 +923,7 @@ set INSTALLER_SRC="src\installer\main.cpp" "src\installer\gui.cpp" ^
     "src\installer\app.cpp" "src\installer\plan.cpp" ^
     "src\installer\apply.cpp" "src\installer\detect.cpp" ^
     "src\installer\probe.cpp" "src\common\iniedit.cpp" ^
-    "src\installer\state.cpp" "src\installer\mirror.cpp" ^
+    "src\installer\state.cpp" "src\installer\mirror.cpp" "src\installer\edhm_d3dx.cpp" ^
     "src\installer\payload.cpp" "src\installer\install_manifest.cpp" ^
     "src\installer\update_json.cpp" "src\installer\update_util.cpp"
 set INSTALLER_LIBS=user32.lib gdi32.lib gdiplus.lib dwmapi.lib uxtheme.lib ^
@@ -3516,17 +3549,17 @@ REM Does it START? --help reads nothing and writes nothing, and does not copy, r
     echo        configuration problem, the manifest is the suspect.
     exit /b 1
 )
-REM --licenses prints the licence it carries as RCDATA 120, byte for byte. Contacts nothing.
+REM --licenses prints RCDATA 120 (min-ed-launcher MIT), 121 (EDHM_2DMigoto notice), and 122 (GPLv3). Contacts nothing.
 "%BUILD%\ed-up-launcher.exe" --licenses > "%BUILD%\launcher_licenses.txt" || (
     echo [edvr] ERROR: the launcher would not print its licence
     exit /b 1
 )
-fc /b "%BUILD%\launcher_licenses.txt" "third_party\min_ed_launcher\LICENSE" >nul
+python -c "import pathlib, sys; a, b, c, out = [pathlib.Path(p).read_bytes() for p in sys.argv[1:]]; sep = b'\n' + b'-'*72 + b'\n\n'; exp = a + (b'' if a.endswith(b'\n') else b'\n') + sep + b + (b'' if b.endswith(b'\n') else b'\n') + sep + c; sys.exit(0 if out == exp else 1)" "third_party\min_ed_launcher\LICENSE" "third_party\edhm_2dmigoto_notice\NOTICE.txt" "third_party\edhm_2dmigoto_notice\LICENSE.GPL.txt" "%BUILD%\launcher_licenses.txt"
 if errorlevel 1 (
-    echo [edvr] ERROR: the licence the launcher prints is not third_party\min_ed_launcher\LICENSE
+    echo [edvr] ERROR: the licence text the launcher prints does not match min_ed_launcher LICENSE + EDHM_2DMigoto NOTICE.txt + LICENSE.GPL.txt
     exit /b 1
 )
-echo [edvr] launcher --licenses prints third_party\min_ed_launcher\LICENSE
+echo [edvr] launcher --licenses prints min_ed_launcher LICENSE + EDHM_2DMigoto NOTICE.txt + LICENSE.GPL.txt
 exit /b 0
 
 REM One compile of the launcher into %~1 (the exe's folder). %~2 is its obj folder, %~3 the folder
@@ -3563,7 +3596,7 @@ if not exist "%OBJ%\insttest" mkdir "%OBJ%\insttest"
     "tools\installer_test\installer_test.cpp" ^
     "src\installer\plan.cpp" "src\installer\apply.cpp" ^
     "src\installer\detect.cpp" "src\installer\probe.cpp" ^
-    "src\common\iniedit.cpp" "src\installer\state.cpp" ^
+    "src\common\iniedit.cpp" "src\installer\state.cpp" "src\installer\edhm_d3dx.cpp" ^
     "src\installer\mirror.cpp" ^
     "src\installer\settings.cpp" "src\common\hotkey_text.cpp" "src\installer\logbundle.cpp" ^
     "src\installer\app.cpp" "src\installer\payload.cpp" ^
@@ -3631,7 +3664,7 @@ if errorlevel 1 ( echo [edvr] ERROR: the fake steam_api64.dll build failed & exi
     /Fo"%OBJ%\launchertest"\ /Fe"%BUILD%\launcher_test.exe" ^
     "tools\launcher_test\launcher_test.cpp" ^
     "src\installer\plan.cpp" "src\installer\apply.cpp" "src\installer\detect.cpp" ^
-    "src\installer\probe.cpp" "src\common\iniedit.cpp" "src\installer\state.cpp" ^
+    "src\installer\probe.cpp" "src\common\iniedit.cpp" "src\installer\state.cpp" "src\installer\edhm_d3dx.cpp" ^
     "src\installer\mirror.cpp" "src\installer\settings.cpp" "src\common\hotkey_text.cpp" ^
     "src\installer\logbundle.cpp" "src\installer\app.cpp" "src\installer\payload.cpp" ^
     "src\installer\install_manifest.cpp" "src\installer\update_json.cpp" "src\installer\update_util.cpp" ^

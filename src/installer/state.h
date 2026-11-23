@@ -38,6 +38,37 @@ struct FileRecord {
 // (nothing that leaves its root: no "..", drive, colon or backslash). A hand-edited state.ini that fails this is refused, not followed.
 bool recordTargetIsSafe(const FileRecord& record, std::string* why = nullptr);
 
+struct EdhmD3dxKeyBackup {
+    bool        present = false;
+    std::string value;
+    bool operator==(const EdhmD3dxKeyBackup& o) const {
+        return present == o.present && value == o.value;
+    }
+};
+
+// Backed-up d3dx.ini keys modified while the experimental EDHM 2DMigoto option is managed,
+// so disabling it, standing down, or uninstalling restores only keys ED-UP changed without
+// clobbering later user/EDHM-UI edits.
+struct EdhmD3dxBackup {
+    bool              allowPlatformUpdateSaved = false;  // [System] allow_platform_update
+    EdhmD3dxKeyBackup allowPlatformUpdate;
+    bool              upscalingSaved = false;            // [Device] upscaling
+    EdhmD3dxKeyBackup upscaling;
+    bool              loggingReloadSaved = false;        // [Logging] show_reload_message
+    EdhmD3dxKeyBackup showReloadMessage;
+    bool              loggingWarningsSaved = false;      // [Logging] show_warnings
+    EdhmD3dxKeyBackup showWarnings;
+    bool compatSaved() const { return allowPlatformUpdateSaved || upscalingSaved; }
+    bool anySaved() const { return compatSaved() || loggingReloadSaved || loggingWarningsSaved; }
+    bool operator==(const EdhmD3dxBackup& o) const {
+        return allowPlatformUpdateSaved == o.allowPlatformUpdateSaved &&
+               allowPlatformUpdate == o.allowPlatformUpdate &&
+               upscalingSaved == o.upscalingSaved && upscaling == o.upscaling &&
+               loggingReloadSaved == o.loggingReloadSaved && showReloadMessage == o.showReloadMessage &&
+               loggingWarningsSaved == o.loggingWarningsSaved && showWarnings == o.showWarnings;
+    }
+};
+
 struct InstallState {
     bool present = false;  // a record was found and parsed
 
@@ -101,6 +132,11 @@ struct InstallState {
     std::string nativeConfigSha;   // edvr_openxr.ini: a fixed step, not a payload file, so it has no file record
     std::wstring nativeOriginalName;
     std::string nativeOriginalSha;
+
+    EdhmD3dxBackup edhmD3dxBackup;
+    // Hash of a player-installed d3d11_edhm.dll kept after an external EDHM update so later
+    // ED-UP installs/repairs continue respecting it until the player explicitly reapplies 2DMigoto.
+    std::string    edhmExternalSha;
 };
 
 std::wstring stateDirPath(const std::wstring& gameDir);

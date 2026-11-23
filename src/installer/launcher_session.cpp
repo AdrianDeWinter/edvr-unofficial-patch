@@ -130,6 +130,13 @@ void LauncherSession::checkDone(const UpdateCheck& result) {
             break;
     }
     changed();
+    if (recheckNeeded_ && !updating_) {
+        recheckNeeded_ = false;
+        if (checkState_ != CheckState::Available) {
+            beginCheck();
+            return;
+        }
+    }
     // Started by a self-update: the user already pressed Download, so carry on.
     if (env_.updatedFlag && !autoResumed_ && checkState_ == CheckState::Available) {
         autoResumed_ = true;
@@ -196,14 +203,15 @@ void LauncherSession::beginUpdate() {
         }
         Updater updater(*http, settings);
         std::set<std::string> verified;
-        if (!updater.downloadUpdate(check, &cancel_, progress, &error, &verified) ||
+        std::string optInWarning;
+        if (!updater.downloadUpdate(check, &cancel_, progress, &error, &verified, &optInWarning) ||
             !updater.commitManifest(check, &error, &verified)) {
             post([this, error]() { updateFailed("the update did not finish: " + error); });
             return;
         }
         // The payload the window installs from is now the adopted manifest, not a --payload folder.
         const PayloadLoad load = loadLauncherPayload(roots, std::wstring(), settings.keys);
-        post([this, load]() {
+        post([this, load, optInWarning]() {
             updating_ = false;
             payloadLoaded(load);
             if (!load.ok) {
@@ -211,9 +219,21 @@ void LauncherSession::beginUpdate() {
                 changed();
                 return;
             }
+            if (!optInWarning.empty()) {
+                edhmWarning_ = optInWarning;
+            } else if (edhm2dMigoto_ && load.hasOptInEdhmAsset && payloadInfo().find("edhm_2dmigoto") == nullptr) {
+                edhmWarning_ = kEdhmInterferenceWarning;
+            }
             updateLine_ = "ED-UP " + check_.manifest.version + " is ready to install.";
             checkState_ = CheckState::UpToDate;
             changed();
+            if (recheckNeeded_) {
+                recheckNeeded_ = false;
+                if (edhm2dMigoto_ && payload_.ok && payload_.kind == PayloadKind::Manifest &&
+                    payload_.hasOptInEdhmAsset && payloadInfo().find("edhm_2dmigoto") == nullptr) {
+                    beginCheck();
+                }
+            }
             if (env_.payloadSwitched) env_.payloadSwitched();
         });
     });
@@ -244,6 +264,7 @@ LauncherSession::LauncherSession(SessionEnv env) : env_(std::move(env)) {
         closeAfterStart_ = state.closeAfterStart();
         steamFrontierLogin_ = state.steamFrontierLogin();
         vrStereoMode_ = state.vrStereoMode();
+        edhm2dMigoto_ = state.edhm2dMigoto();
     }
 }
 
@@ -304,6 +325,42 @@ void LauncherSession::setCloseAfterStart(bool on) {
     changed();
 }
 
+bool LauncherSession::setEdhm2dMigoto(bool on, const std::function<bool()>& confirm) {
+    if (on == edhm2dMigoto_) return edhm2dMigoto_;
+    if (on && (!confirm || !confirm())) return edhm2dMigoto_;
+    edhm2dMigoto_ = on;
+    if (on) edhmWarning_.clear();
+    LauncherState state;
+    std::string error;
+    if (state.load(launcherIniPath(env_.roots), &error)) {
+        state.setEdhm2dMigoto(on);
+        state.setEdhmOptInFailedManifest(std::string());
+        createDirectories(env_.roots.launcherDir());
+        state.save(&error);
+    }
+    if (on && payload_.ok && payload_.kind == PayloadKind::Manifest && payload_.hasOptInEdhmAsset &&
+        payloadInfo().find("edhm_2dmigoto") == nullptr) {
+        // The adopted schema-3 release carries edhm_2dmigoto, which was skipped while opted out;
+        // re-check (or queue one if a check/update is already in flight) so Update can fetch only
+        // the opt-in asset on demand.
+        if (updating_ || checkState_ == CheckState::Checking) {
+            recheckNeeded_ = true;
+        } else {
+            beginCheck();
+        }
+    } else if (!on) {
+        recheckNeeded_ = false;
+    }
+    changed();
+    return edhm2dMigoto_;
+}
+
+void LauncherSession::setEdhmWarning(const std::string& warning) {
+    if (edhmWarning_ == warning) return;
+    edhmWarning_ = warning;
+    changed();
+}
+
 void LauncherSession::gameIsRunning() {
     gameStarted_ = true;
     // Close-after-start leaves the game to run on its own, so the window goes; otherwise it steps aside.
@@ -355,7 +412,7 @@ bool LauncherSession::standInForEdLaunch(const std::wstring& gameDir, bool on, b
 
 void LauncherSession::beginPlay(const std::wstring& source, const std::wstring& gameDir, bool vr, bool elevated,
                                 const RouteOps& ops, const WatchNames& names, const WatchTiming& timing) {
-    if (playing_) return;
+    if (playing_ || applying_) return;
     if (directLaunch() && goesDirect(source)) {
         // Refused before anything is contacted, as the routes are.
         if (elevated) {

@@ -28,6 +28,7 @@ struct AppArgs {
     bool         keepSettings = true;    // --replace-settings
     bool         removeSettings = false; // --remove-settings (uninstall)
     bool         purge = false;          // --purge (clean uninstall: removes both INIs, logs, backups, install dir and mirror)
+    bool         edhm2dMigoto = false;   // opt-in tailored 2DMigoto d3d11_edhm.dll placement
     bool         dryRun = false;         // --dry-run
     bool         convertProfile = false; // --convert-profile: accepted, and no longer needed
     bool         autorun = false;        // set on the elevated relaunch: already confirmed

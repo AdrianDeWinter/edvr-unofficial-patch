@@ -195,9 +195,10 @@ jobs:
             third_party/ngx
             third_party/ffx-dx11
             third_party/xess
+            third_party/edhm_2dmigoto
             third_party/fsr4
             third_party/openxr/loader
-          key: edvr-deps-${{ steps.image.outputs.key }}-${{ hashFiles('tools/fetch_ngx.py', 'tools/fetch_ffx_dx11.py', 'tools/fetch_xess.py', 'tools/fetch_fsr4.py', 'tools/fetch_openxr_loader.py') }}
+          key: edvr-deps-${{ steps.image.outputs.key }}-${{ hashFiles('tools/fetch_ngx.py', 'tools/fetch_ffx_dx11.py', 'tools/fetch_xess.py', 'tools/fetch_edhm_2dmigoto.py', 'tools/fetch_fsr4.py', 'tools/fetch_openxr_loader.py') }}
 
       - name: Fetch pinned public dependencies
         if: steps.deps.outputs.cache-hit != 'true'
@@ -208,6 +209,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'FidelityFX DX11 fetch/build failed' }
           python tools\fetch_xess.py --dest third_party\xess
           if ($LASTEXITCODE -ne 0) { throw 'Intel XeSS SDK fetch failed' }
+          python tools\fetch_edhm_2dmigoto.py --dest third_party\edhm_2dmigoto
+          if ($LASTEXITCODE -ne 0) { throw 'EDHM_2DMigoto runtime fetch failed' }
           python tools\fetch_fsr4.py --dest third_party\fsr4
           if ($LASTEXITCODE -ne 0) { throw 'AMD FSR 4 SDK fetch failed' }
           python tools\fetch_openxr_loader.py
@@ -221,6 +224,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'FidelityFX DX11 verification failed' }
           python tools\fetch_xess.py --verify third_party\xess
           if ($LASTEXITCODE -ne 0) { throw 'Intel XeSS SDK verification failed' }
+          python tools\fetch_edhm_2dmigoto.py --verify third_party\edhm_2dmigoto
+          if ($LASTEXITCODE -ne 0) { throw 'EDHM_2DMigoto runtime verification failed' }
           python tools\fetch_fsr4.py --verify third_party\fsr4
           if ($LASTEXITCODE -ne 0) { throw 'AMD FSR 4 SDK verification failed' }
           python tools\fetch_openxr_loader.py --verify
@@ -234,6 +239,7 @@ jobs:
             third_party/ngx
             third_party/ffx-dx11
             third_party/xess
+            third_party/edhm_2dmigoto
             third_party/fsr4
             third_party/openxr/loader
           key: ${{ steps.deps.outputs.cache-primary-key }}
@@ -317,17 +323,25 @@ jobs:
             "ed-up-$env:PACKAGE_VERSION.zip",
             "ed-up-launcher-linux-$env:PACKAGE_VERSION.zip"
           )
-          # The split assets: whatever the unsigned schema-2 manifest names. A release carries
-          # two manifests, that one and the schema-1 bridge for launcher 0.1.0. The workflow never
-          # signs; the maintainer signs both locally and uploads the two .sig files.
-          $manifestPath = Join-Path 'dist' 'ed-up-manifest-v2.json'
+          # The split assets: whatever the unsigned schema-3 manifest names. A release carries
+          # three manifests: schema 3, schema 2 for v0.22.x launchers, and the schema-1 bridge
+          # for launcher 0.1.0. The workflow never signs; the maintainer signs locally and
+          # uploads the .sig files.
+          $manifestPath = Join-Path 'dist' 'ed-up-manifest-v3.json'
           if (-not (Test-Path -LiteralPath $manifestPath)) { throw "Missing $manifestPath" }
           $manifest = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $manifestPath).Path) | ConvertFrom-Json
+          $names += 'ed-up-manifest-v3.json'
+          if (-not (Test-Path -LiteralPath (Join-Path 'dist' 'ed-up-manifest-v2.json'))) { throw "Missing the schema-2 manifest dist/ed-up-manifest-v2.json" }
           $names += 'ed-up-manifest-v2.json'
           if (-not (Test-Path -LiteralPath (Join-Path 'dist' 'ed-up-manifest.json'))) { throw "Missing the schema-1 bridge dist/ed-up-manifest.json" }
           $names += 'ed-up-manifest.json'
           $names += @($manifest.assets | ForEach-Object { $_.name })
           if ($manifest.launcher) { $names += $manifest.launcher.asset }
+          if (@($manifest.assets | Where-Object { $_.name -like 'ed-up-edhm-*.zip' }).Count -gt 0) {
+            $edhmSrc = @(Get-ChildItem 'dist\ed-up-edhm-source-*.tar.gz' -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+            if ($edhmSrc.Count -ne 1) { throw "Expected one dist/ed-up-edhm-source-*.tar.gz archive beside ed-up-edhm-*.zip, found $($edhmSrc.Count)" }
+            $names += $edhmSrc
+          }
           # package_native.py writes SHA256SUMS. Check it lists exactly these names,
           # each with its file's hash, so the packager and this list cannot drift apart.
           $sumsPath = Join-Path 'dist' 'SHA256SUMS'
@@ -391,6 +405,8 @@ jobs:
           if-no-files-found: error
           path: |
             dist/ed-up-*.zip
+            dist/ed-up-edhm-source-*.tar.gz
+            dist/ed-up-manifest-v3.json
             dist/ed-up-manifest-v2.json
             dist/ed-up-manifest.json
             dist/ed-up-launcher.exe

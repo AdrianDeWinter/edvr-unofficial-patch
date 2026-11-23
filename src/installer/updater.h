@@ -33,8 +33,10 @@ namespace edvr::installer {
 // The one place the project's address lives.
 inline constexpr const char* kGitHubApiBase =
     "https://api.github.com/repos/characterecho-sean/ed-unofficial-patch";
-inline constexpr const char* kManifestAssetName = "ed-up-manifest-v2.json";
-inline constexpr const char* kSignatureAssetName = "ed-up-manifest-v2.json.sig";
+inline constexpr const char* kManifestAssetName = "ed-up-manifest-v3.json";
+inline constexpr const char* kSignatureAssetName = "ed-up-manifest-v3.json.sig";
+inline constexpr const char* kManifestV2AssetName = "ed-up-manifest-v2.json";
+inline constexpr const char* kSignatureV2AssetName = "ed-up-manifest-v2.json.sig";
 
 // What the window and --check say when a release's manifest is of a newer schema than this
 // launcher reads. The detail ("manifest schema N, launcher reads 2") goes in UpdateCheck::detail.
@@ -94,7 +96,8 @@ public:
     // receives the sha256 hashes verified during this call so commitManifest can
     // skip a second full-file hash pass immediately after.
     bool downloadUpdate(const UpdateCheck& check, const std::atomic<bool>* cancel, const DownloadProgress& progress,
-                        std::string* error, std::set<std::string>* verifiedOut = nullptr);
+                        std::string* error, std::set<std::string>* verifiedOut = nullptr,
+                        std::string* optInWarningOut = nullptr);
 
     // Adopts a checked manifest whose files are all in the cache: saves it as
     // manifests\<sha>.json and .sig, makes it current, raises highest_issued, keeps
@@ -115,7 +118,7 @@ public:
     // be the SHA-256 of its bytes. This is what the elevated copy uses: it is handed a
     // path, trusts nothing about it, and checks the signature itself.
     bool loadManifestFile(const std::wstring& jsonPath, Manifest* manifest, std::vector<PayloadFile>* files,
-                          std::string* error);
+                          std::string* error, const bool* includeOptInOverride = nullptr);
 
 private:
     std::wstring statePath() const;

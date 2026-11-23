@@ -4,7 +4,7 @@ The launcher installs ED-UP, keeps it up to date, and has a Play button. You can
 
 ## What it talks to
 
-It asks GitHub whether a newer release exists, and it downloads a release only after you press Download & install. Each request carries the launcher's name and version. A release is offered only when its signature matches a public key built into the launcher. A changed or substituted release is refused. If GitHub cannot be reached, the launcher says so in one line and carries on.
+It asks GitHub whether a newer release exists, and it downloads a release only after you press Download & install. Each request carries the launcher's name and version. A release — including its core files and any optional signed runtime assets (DLSS, XeSS, and the optional tailored 2DMigoto runtime for EDHM) — is offered only when its manifest signature matches a public key built into the launcher. A changed or substituted release is refused. If GitHub cannot be reached, the launcher says so in one line and carries on.
 
 With direct launch turned on, described below, it also signs in to Frontier at `api.zaonce.net`. That is the whole list.
 
@@ -56,7 +56,19 @@ Because direct launch starts `EliteDangerous64.exe` directly outside Steam, leav
 
 If any part of the sign-in fails, the launcher says why and starts the game through Steam instead.
 
-The sign-in comes from [min-ed-launcher](https://github.com/rfvgyhn/min-ed-launcher) (MIT). `ed-up-launcher.exe --licenses` prints that licence.
+The sign-in comes from [min-ed-launcher](https://github.com/rfvgyhn/min-ed-launcher) (MIT). `ed-up-launcher.exe --licenses` prints that licence and the optional EDHM 2DMigoto third-party notices.
+
+## Experimental EDHM 2DMigoto runtime
+
+Under **Settings** (available in both the VR and Flat views), **EDHM compatibility** offers an opt-in toggle: **(Experimental) Use tailored 2DMigoto dll for EDHM compatibility improvements.**
+
+- It is off by default and asks for confirmation before turning on. Opted-out users never download or cache the optional 2DMigoto asset.
+- The tailored `d3d11_edhm.dll` comes strictly from ED-UP's own signed release (pinned at build time from [Fenris159/EDHM_2DMigoto](https://github.com/Fenris159/EDHM_2DMigoto/tree/716157b88f7895b46e08f3b376e8a9902d2d94fa)) and is installed and removed through the EDHM-only installer plan, with no separate download or unsigned cache.
+- When enabled in an install where EDHM is present, ED-UP backs up your current standard `d3d11_edhm.dll` into `edup_backup\` and installs the signed 2DMigoto build together with its licence notices (`EDHM-2DMIGOTO-LICENSE.txt` and `EDHM-2DMIGOTO-THIRD-PARTY.txt`). If `d3dx.ini` is present and explicitly disables `[System] allow_platform_update` or enables `[Device] upscaling`, ED-UP backs up those keys and sets them to `1` and `0` (already-compatible files, including stock `d3dx.ini`, are left untouched). Read-only or UTF-16 `d3dx.ini` files are never unlocked or edited: if incompatible settings cannot be updated, the Settings toggle refuses to enable 2DMigoto and core ED-UP installs/updates stand 2DMigoto down with a warning so core updates still succeed. While the option stays on, the next install or repair puts 2DMigoto back by itself once `d3dx.ini` can be read and edited again (unless you updated EDHM yourself in the meantime, below).
+- Turning the option off, standing down after an external EDHM update, or uninstalling ED-UP restores your backed-up original standard `d3d11_edhm.dll`, restores any backed-up `d3dx.ini` settings that still hold ED-UP's values (leaving later player or EDHM-UI edits intact), and removes the 2DMigoto notices. If `d3d11_edhm.dll` goes missing while the option is enabled, the launcher asks before restoring your backup so an intentional EDHM uninstall is not undone.
+- Below the experimental toggle, two checkboxes read and toggle `[Logging] show_reload_message` (**Hide Refresh/Reload messages from EDHM**) and `[Logging] show_warnings` (**Hide Warnings from EDHM**) in `d3dx.ini` while 2DMigoto is active and Elite is closed. Original values are backed up in `state.ini` and restored on uncheck, opt-out, stand-down, or uninstall; the checkboxes are greyed out when 2DMigoto is inactive, Elite is running, or `d3dx.ini` is missing, read-only, unreadable, or UTF-16.
+- If you update EDHM yourself while the option is enabled, ED-UP stands down, restores backed-up `d3dx.ini` settings, and leaves your own EDHM DLL in place across subsequent EDHM updates, ED-UP updates, and repairs until you explicitly reapply 2DMigoto.
+- Licences & source offer: `EDHM_2DMigoto` (derived from `3Dmigoto` and `XXMI-Libs-Package`) is licensed under GNU GPLv3, with bundled PCRE2 (BSD 3-clause) and DirectXTK (MIT) notices. EDHM itself is a separate community project (`psychicEgg/EDHM`). Every ED-UP release carrying `ed-up-edhm-*.zip` also attaches the verified pinned source archive (`ed-up-edhm-source-*.tar.gz`, listed in `SHA256SUMS`), and `ed-up-launcher.exe --licenses` prints the complete third-party notice, pinned commit/source archive offer, build instructions, and full GNU GPLv3 text.
 
 ## Frontier's own store
 

@@ -23,6 +23,7 @@
 
 #include "app.h"
 #include "apply.h"
+#include "edhm_d3dx.h"
 #include "logbundle.h"
 #include "mirror.h"
 #include "payload.h"
@@ -1039,10 +1040,18 @@ void showSurvey() {
 // is nothing to load; the choice is kept for when there is.
 void loadSettings(const std::string& edition) {
     g.settingsEdition = edition;
-    if (!g.haveSurvey) return;
+    if (!g.haveSurvey) {
+#ifdef EDUP_LAUNCHER
+        launcherUpdateSettingsToggle();
+#endif
+        return;
+    }
     const std::wstring mirrorDir = mirrorDirOfGame(g.survey.game);
     g.settings.load(g.survey.game.dir, edition, mirrorDir);
     settingsListSetModel(g.settingsList, &g.settings, mirrorDir);
+#ifdef EDUP_LAUNCHER
+    launcherUpdateSettingsToggle();
+#endif
 }
 
 void selectInstall(size_t index) {
@@ -1061,6 +1070,9 @@ void selectInstall(size_t index) {
     g.mode = eliteGameMode();
     loadSettings(editionFor(scopeChoice()));
     showSurvey();
+#ifdef EDUP_LAUNCHER
+    launcherCheckEdhmInterference();
+#endif
 }
 
 // The scope prompt changed. A settings screen on a file the new scope does not install moves to
@@ -1270,6 +1282,9 @@ void runAction(AppArgs::Act action) {
     args.purge = (action == AppArgs::Act::Uninstall) && ui::checkboxChecked(g.chkPurge);
     args.removeSettings = args.purge;
     args.scope = scopeChoice();
+#ifdef EDUP_LAUNCHER
+    args.edhm2dMigoto = lg.session && lg.session->edhm2dMigoto();
+#endif
 
     const bool canMirror = action != AppArgs::Act::Uninstall;
 

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Sign and verify the release manifests, ed-up-manifest-v2.json and ed-up-manifest.json.
+"""Sign and verify the release manifests: ed-up-manifest-v3.json, ed-up-manifest-v2.json,
+and ed-up-manifest.json (the schema-1 bridge).
 
-A release carries two manifests. ed-up-manifest-v2.json is the schema-2 manifest that
-launcher 0.2.0 and later read. ed-up-manifest.json is a schema-1 bridge, the one name and
-schema launcher 0.1.0 (v0.22.0) knows: it tells that launcher to replace itself with the
-current one, and lists the same files truthfully.
+A release carries three manifests. ed-up-manifest-v3.json is the schema-3 manifest that
+current launchers read (supporting opt-in files such as the optional EDHM 2DMigoto runtime).
+ed-up-manifest-v2.json is the strict schema-2 subset that v0.22.x launchers read, kept free of
+schema-3 keys so those launchers keep updating. ed-up-manifest.json is the schema-1 bridge,
+the one name and schema launcher 0.1.0 (v0.22.0) knows: it tells that launcher to replace
+itself with the current one, and lists the same files truthfully.
 
 A manifest is ASCII JSON and is signed as its exact bytes: P-256 ECDSA over
 the SHA-256 of the file, with a deterministic nonce (RFC 6979), written to
@@ -15,13 +18,13 @@ Only the Python standard library is used.
 
   generate            make one key and print its private scalar and public key
                       once. Writes no file.
-  sign MANIFEST       sign either manifest (by its schema), after checking the manifest and that the
-                      key's public half is in update_keys.h. The key comes from
-                      a hidden prompt, or from one line on stdin with --key-stdin
+  sign MANIFEST       sign any of the three manifests (by its schema), after checking the
+                      manifest and that the key's public half is in update_keys.h. The key
+                      comes from a hidden prompt, or from one line on stdin with --key-stdin
                       so a password manager's command line can supply it.
                       --dry-run does everything except write the .sig.
-  verify DIR          check both signatures, both manifests' schemas, that the bridge
-                      agrees with the schema-2 manifest, and the size and
+  verify DIR          check all three signatures (when v3 is present), all manifests' schemas,
+                      that the v2 and schema-1 manifests agree with v3, and the size and
                       hash of every asset, the launcher if listed, and every file
                       inside every zip. --allow-unsigned skips only the signatures.
 
@@ -51,15 +54,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HEADER = ROOT / "src" / "installer" / "update_keys.h"
-MANIFEST_NAME = "ed-up-manifest-v2.json"
+MANIFEST_NAME = "ed-up-manifest-v3.json"
 SIGNATURE_NAME = MANIFEST_NAME + ".sig"
+# Schema 2, under the name v0.22.x launchers download (unchanged for backward compatibility).
+V2_NAME = "ed-up-manifest-v2.json"
+V2_SIGNATURE_NAME = V2_NAME + ".sig"
 # The schema-1 bridge, under the name launcher 0.1.0 downloads.
 BRIDGE_NAME = "ed-up-manifest.json"
 BRIDGE_SIGNATURE_NAME = BRIDGE_NAME + ".sig"
 
-# The one schema the launcher reads: kManifestSchema in src\installer\install_manifest.h, which
-# the self-test reads as text and compares with this number.
-MANIFEST_SCHEMA = 2
+# The highest schema the launcher reads: kManifestSchema in src\installer\install_manifest.h, which
+# the self-test reads as text and compares with this number. Schema 2 is still read for older releases.
+MANIFEST_SCHEMA = 3
+V2_SCHEMA = 2
 SCHEMA_HEADER = ROOT / "src" / "installer" / "install_manifest.h"
 
 # Schema 1, as launcher 0.1.0 (v0.22.0) reads it. Its names for the files the installer knew.
@@ -87,7 +94,9 @@ ASSET_NAME = re.compile(r"[A-Za-z0-9._-]+")
 FILE_ID = re.compile(r"[a-z0-9_]{1,32}")
 PROFILES = ("vr", "flat")
 ROOTS = ("game", "openvr")
-EXISTING = ("replace", "owned", "chain", "runtime", "settings")
+EXISTING_V2 = ("replace", "owned", "chain", "runtime", "settings")
+EXISTING = ("replace", "owned", "chain", "runtime", "settings", "opt_in")
+OPTIONS = ("edhm_2dmigoto",)
 # The device names Windows reserves as a path segment's stem, any case.
 RESERVED_NAMES = frozenset(["con", "prn", "aux", "nul"] + ["com%d" % n for n in range(10)] +
                            ["lpt%d" % n for n in range(10)])
@@ -275,8 +284,9 @@ def when_can_overlap(first, second):
     return a is None or b is None or bool(set(a) & set(b))
 
 
-def _when_problems(where, when):
-    problems = _shape(where, when, (), ("profile", "adapter"))
+def _when_problems(where, when, schema=MANIFEST_SCHEMA):
+    allowed = ("profile", "adapter", "option") if schema >= 3 else ("profile", "adapter")
+    problems = _shape(where, when, (), allowed)
     if problems:
         return problems
     if not when:
@@ -291,10 +301,12 @@ def _when_problems(where, when):
             problems.append("%s.profile repeats a value" % where)
     if "adapter" in when and when["adapter"] != "nvidia":
         problems.append("%s.adapter must be nvidia" % where)
+    if "option" in when and (not isinstance(when["option"], str) or when["option"] not in OPTIONS):
+        problems.append("%s.option must be edhm_2dmigoto" % where)
     return problems
 
 
-def _file_problems(index, entry, asset_names):
+def _file_problems(index, entry, asset_names, schema=MANIFEST_SCHEMA):
     """Problems with one files[] entry; the entry's id is in each message once known."""
     where = "files[%d]" % index
     sub = _shape(where, entry, ("id", "asset", "path", "sha256", "size", "target", "existing"), ("when",))
@@ -324,13 +336,16 @@ def _file_problems(index, entry, asset_names):
         if problem:
             problems.append(problem)
     if "when" in entry:
-        problems += _when_problems(label + " when", entry["when"])
-    if not isinstance(entry["existing"], str) or entry["existing"] not in EXISTING:
-        problems.append("%s existing must be replace, owned, chain, runtime or settings" % label)
+        problems += _when_problems(label + " when", entry["when"], schema)
+    allowed_existing = EXISTING if schema >= 3 else EXISTING_V2
+    if not isinstance(entry["existing"], str) or entry["existing"] not in allowed_existing:
+        problems.append("%s existing must be %s" % (
+            label, "replace, owned, chain, runtime, settings or opt_in" if schema >= 3
+            else "replace, owned, chain, runtime or settings"))
     return problems
 
 
-def _reserved_target_problem(target):
+def _reserved_target_problem(target, existing="replace"):
     """Why a target may not be a payload file, or None: a name or folder the installer itself writes
     (the fixed steps), or, under the game root, a path into the default Openvr folder, where it would
     alias the openvr root. Case-folded, as Windows compares names. install_manifest.cpp's
@@ -348,6 +363,8 @@ def _reserved_target_problem(target):
     if leaf.endswith(".base"):
         return "is a .base copy the installer keeps"
     if top_level and len(path) >= 10 and path.startswith("d3d11_") and path.endswith(".dll"):
+        if existing == "opt_in" and target["root"] == "game" and path == "d3d11_edhm.dll":
+            return None
         return "is a name a chained graphics DLL is parked under"
     return None
 
@@ -356,7 +373,7 @@ def _cross_file_problems(files):
     """The behaviour constraints and the overlap check, over files that each passed
     _file_problems and have distinct ids."""
     problems = []
-    chain = runtime = None
+    chain = runtime = opt_in = None
     settings = {}
     for entry in files:
         existing = entry["existing"]
@@ -372,6 +389,15 @@ def _cross_file_problems(files):
             runtime = runtime or entry["id"]
             if entry["target"]["root"] != "openvr" or entry["target"]["path"].lower() != "openvr_api.dll":
                 problems.append("file %s is a runtime file and must target openvr openvr_api.dll" % entry["id"])
+        elif existing == "opt_in":
+            option = (entry.get("when") or {}).get("option")
+            if option != "edhm_2dmigoto":
+                problems.append("file %s is an opt_in file and needs when.option edhm_2dmigoto" % entry["id"])
+            if opt_in is not None:
+                problems.append("file %s is a second opt_in file (after %s)" % (entry["id"], opt_in))
+            opt_in = opt_in or entry["id"]
+            if entry["target"]["root"] != "game" or entry["target"]["path"].lower() != "d3d11_edhm.dll":
+                problems.append("file %s is an opt_in file and must target game d3d11_edhm.dll" % entry["id"])
         elif existing == "settings":
             profile = (entry.get("when") or {}).get("profile")
             if profile not in (["vr"], ["flat"]):
@@ -387,7 +413,7 @@ def _cross_file_problems(files):
             else:
                 settings[profile[0]] = entry["id"]
     for entry in files:
-        reason = _reserved_target_problem(entry["target"])
+        reason = _reserved_target_problem(entry["target"], entry["existing"])
         if reason:
             problems.append("file %s target %s" % (entry["id"], reason))
     for i, first in enumerate(files):
@@ -399,20 +425,16 @@ def _cross_file_problems(files):
     return problems
 
 
-def validate_manifest(obj):
-    """Why `obj` (a parsed manifest) breaks schema 2 (docs\\design-manifest-schema2-2026-11-12.md),
-    as a list of strings; empty when it is sound. install_manifest.cpp's parseManifest gives the
-    same verdict. A schema above MANIFEST_SCHEMA is one problem and nothing else is checked, as
-    the launcher reads `schema` alone first."""
+def _validate_manifest_schema(obj, min_schema, max_schema):
     if not isinstance(obj, dict):
         return ["manifest must be an object"]
     schema = obj.get("schema")
     if not _is_int(schema):
         return ["schema must be a whole number"]
-    if schema > MANIFEST_SCHEMA:
-        return ["manifest schema %d, launcher reads %d" % (schema, MANIFEST_SCHEMA)]
-    if schema != MANIFEST_SCHEMA:
-        return ["schema %d is no longer read; this launcher reads %d" % (schema, MANIFEST_SCHEMA)]
+    if schema > max_schema:
+        return ["manifest schema %d, launcher reads %d" % (schema, max_schema)]
+    if schema < min_schema:
+        return ["schema %d is no longer read; this launcher reads %d" % (schema, max_schema)]
     problems = _shape("manifest", obj, ("schema", "version", "build", "tag", "issued", "assets", "files"),
                       ("launcher",))
     for key in ("version", "build", "tag"):
@@ -462,7 +484,7 @@ def validate_manifest(obj):
         else:
             seen, sound = set(), []
             for index, entry in enumerate(files):
-                found = _file_problems(index, entry, asset_names)
+                found = _file_problems(index, entry, asset_names, schema)
                 problems += found
                 if not found:
                     if entry["id"] in seen:
@@ -472,6 +494,56 @@ def validate_manifest(obj):
                         sound.append(entry)
             if not problems:
                 problems += _cross_file_problems(sound)
+    return problems
+
+
+def validate_manifest(obj):
+    """Why `obj` (a parsed manifest) breaks schema 2 or 3, as a list of strings; empty when
+    sound. install_manifest.cpp's parseManifest gives the same verdict. A schema above
+    MANIFEST_SCHEMA is one problem and nothing else is checked."""
+    return _validate_manifest_schema(obj, V2_SCHEMA, MANIFEST_SCHEMA)
+
+
+def validate_manifest_v2(obj):
+    """Strict schema-2 validation, as v0.22.x launchers read ed-up-manifest-v2.json."""
+    return _validate_manifest_schema(obj, V2_SCHEMA, V2_SCHEMA)
+
+
+def _is_v2_file(entry):
+    if entry.get("existing") not in EXISTING_V2:
+        return False
+    when = entry.get("when")
+    if isinstance(when, dict) and "option" in when:
+        return False
+    return True
+
+
+def make_v2_manifest(v3):
+    """The schema-2 manifest for v0.22.x launchers derived from schema-3 `v3`: drops schema-3-only
+    files (when.option / existing=opt_in) and any asset referenced only by them."""
+    v2_files = [json.loads(json.dumps(entry)) for entry in v3["files"] if _is_v2_file(entry)]
+    used_assets = {entry["asset"] for entry in v2_files}
+    v2_assets = [dict(asset) for asset in v3["assets"] if asset["name"] in used_assets]
+    out = {"schema": V2_SCHEMA, "version": v3["version"], "build": v3["build"], "tag": v3["tag"],
+           "issued": v3["issued"]}
+    if "launcher" in v3:
+        out["launcher"] = dict(v3["launcher"])
+    out["assets"] = v2_assets
+    out["files"] = v2_files
+    return out
+
+
+def v2_agreement(v2, v3):
+    """Why schema-2 `v2` does not state the same release as schema-3 `v3` (both already valid)."""
+    problems = ["%s differs: %r in the schema-2 manifest, %r in the schema-3 manifest" % (key, v2[key], v3[key])
+                for key in ("version", "build", "tag", "issued") if v2[key] != v3[key]]
+    if v2.get("launcher") != v3.get("launcher"):
+        problems.append("the launcher block differs from the schema-3 manifest's")
+    expected = make_v2_manifest(v3)
+    if v2["assets"] != expected["assets"]:
+        problems.append("schema-2 assets do not match the schema-2 subset of the schema-3 manifest")
+    if v2["files"] != expected["files"]:
+        problems.append("schema-2 files do not match the schema-2 subset of the schema-3 manifest")
     return problems
 
 
@@ -642,6 +714,12 @@ def load_manifest(data):
     return (obj, problems) if problems else (obj, validate_manifest(obj))
 
 
+def load_manifest_v2(data):
+    """(object, problems) for a strict schema-2 manifest's bytes."""
+    obj, problems = _parse(data)
+    return (obj, problems) if problems else (obj, validate_manifest_v2(obj))
+
+
 def load_bridge(data):
     """(object, problems) for the schema-1 bridge's bytes: _parse, then validate_bridge."""
     obj, problems = _parse(data)
@@ -649,12 +727,14 @@ def load_bridge(data):
 
 
 def load_either(data):
-    """load_bridge for a schema-1 file, load_manifest for anything else: what `sign` checks."""
+    """load_bridge for schema 1, validate_manifest_v2 for schema 2, validate_manifest for schema 3."""
     obj, problems = _parse(data)
     if problems:
         return obj, problems
     if isinstance(obj, dict) and _is_int(obj.get("schema")) and obj["schema"] == BRIDGE_SCHEMA:
         return obj, validate_bridge(obj)
+    if isinstance(obj, dict) and _is_int(obj.get("schema")) and obj["schema"] == V2_SCHEMA:
+        return obj, validate_manifest_v2(obj)
     return obj, validate_manifest(obj)
 
 # ---- verifying a release folder ----------------------------------------------
@@ -724,6 +804,22 @@ def verify_directory(directory, allow_unsigned=False, keys=None, out=print, brid
         return False
     report(True, "schema of %s" % MANIFEST_NAME)
     if bridge:
+        v2_obj = None
+        try:
+            v2_data = (directory / V2_NAME).read_bytes()
+        except OSError:
+            report(False, "%s, the schema-2 manifest for v0.22.x launchers, is missing from %s" % (V2_NAME, directory))
+        else:
+            check_signature(v2_data, V2_NAME, V2_SIGNATURE_NAME)
+            v2_obj, v2_problems = load_manifest_v2(v2_data)
+            if not v2_problems:
+                v2_problems = v2_agreement(v2_obj, obj)
+            if v2_problems:
+                for problem in v2_problems:
+                    report(False, "v2: " + problem)
+                v2_obj = None
+            else:
+                report(True, "schema of %s, and it agrees with %s" % (V2_NAME, MANIFEST_NAME))
         try:
             bridge_data = (directory / BRIDGE_NAME).read_bytes()
         except OSError:
@@ -731,15 +827,16 @@ def verify_directory(directory, allow_unsigned=False, keys=None, out=print, brid
         else:
             check_signature(bridge_data, BRIDGE_NAME, BRIDGE_SIGNATURE_NAME)
             bridge_obj, bridge_problems = load_bridge(bridge_data)
-            if not bridge_problems and "launcher" not in obj:
+            target_v2 = v2_obj if v2_obj is not None else make_v2_manifest(obj)
+            if not bridge_problems and "launcher" not in target_v2:
                 bridge_problems = ["%s has no launcher block for the bridge to name" % MANIFEST_NAME]
             if not bridge_problems:
-                bridge_problems = bridge_agreement(bridge_obj, obj)
+                bridge_problems = bridge_agreement(bridge_obj, target_v2)
             if bridge_problems:
                 for problem in bridge_problems:
                     report(False, "bridge: " + problem)
             else:
-                report(True, "schema of %s, and it agrees with %s" % (BRIDGE_NAME, MANIFEST_NAME))
+                report(True, "schema of %s, and it agrees with %s" % (BRIDGE_NAME, V2_NAME))
     def check_file(label, name, sha256, size):
         path = directory / name
         if not path.is_file():
@@ -924,13 +1021,15 @@ def _write_release(directory, manifest, zip_bytes, zip_name="ed-up-core-1.0.0.zi
     (directory / MANIFEST_NAME).write_bytes(_dump(manifest))
 
 
-def _write_full_release(directory, v2, zip_bytes, zip_name="ed-up-core-1.0.0.zip"):
-    """A folder with the schema-2 manifest (given a launcher block), its zip and launcher exe, and
-    the unsigned bridge for it."""
-    v2 = dict(v2, launcher={"version": "0.2.0", "asset": "ed-up-launcher.exe",
+def _write_full_release(directory, v3, zip_bytes, zip_name="ed-up-core-1.0.0.zip"):
+    """A folder with the schema-3 manifest (given a launcher block), its zip and launcher exe,
+    the schema-2 manifest for v0.22.x launchers, and the unsigned schema-1 bridge."""
+    v3 = dict(v3, launcher={"version": "0.3.0", "asset": "ed-up-launcher.exe",
                             "sha256": hashlib.sha256(b"exe").hexdigest(), "size": 3})
-    _write_release(directory, v2, zip_bytes, zip_name)
+    _write_release(directory, v3, zip_bytes, zip_name)
     (directory / "ed-up-launcher.exe").write_bytes(b"exe")
+    v2 = make_v2_manifest(v3)
+    (directory / V2_NAME).write_bytes(_dump(v2))
     (directory / BRIDGE_NAME).write_bytes(_dump(make_bridge(v2)))
 
 def _header_text(keys):
@@ -984,14 +1083,15 @@ def self_test():
     def rejects(label, change):
         assert mutated(change), label
 
-    # schema is read alone first: 1, 3, missing, a bool and a float are all refused, and a schema
-    # above ours is the one verdict that names the number.
-    assert MANIFEST_SCHEMA == 2
-    for bad in (1, 0, 3, True, 2.0, "2"):
+    # schema is read alone first: 1, 0, 4, missing, a bool and a float are all refused, schema 2
+    # is accepted under strict v2 rules, and a schema above ours names the number.
+    assert MANIFEST_SCHEMA == 3
+    for bad in (1, 0, 4, True, 3.0, "3"):
         rejects("schema %r" % (bad,), lambda m, bad=bad: m.update(schema=bad))
     rejects("schema missing", lambda m: m.pop("schema"))
-    assert mutated(lambda m: m.update(schema=3)) == ["manifest schema 3, launcher reads 2"]
-    assert mutated(lambda m: (m.update(schema=3), m.update(extra=1))) == ["manifest schema 3, launcher reads 2"]
+    assert not mutated(lambda m: m.update(schema=2)), "schema 2 should remain readable"
+    assert mutated(lambda m: m.update(schema=4)) == ["manifest schema 4, launcher reads 3"]
+    assert mutated(lambda m: (m.update(schema=4), m.update(extra=1))) == ["manifest schema 4, launcher reads 3"]
     rejects("min_launcher is gone", lambda m: m.update(min_launcher="0.1.0"))
     for key in ("version", "build", "tag"):
         rejects(key + " number", lambda m, key=key: m.update({key: 3}))
@@ -1064,6 +1164,21 @@ def self_test():
     assert not mutated(lambda m: m["files"][0].update(when={"adapter": "nvidia"}))
     assert not mutated(lambda m: m["files"][0].update(when={"profile": ["flat"], "adapter": "nvidia"}))
     assert not mutated(lambda m: m["files"][0].update(when={"profile": ["flat", "vr"]}))
+    assert not mutated(lambda m: m["files"][0].update(when={"option": "edhm_2dmigoto"}))
+    assert not mutated(lambda m: m["files"].append(dict(
+        m["files"][0], id="edhm_2dmigoto", existing="opt_in", when={"option": "edhm_2dmigoto"},
+        target={"root": "game", "path": "d3d11_edhm.dll"})))
+    # Schema 2 strictly rejects schema-3-only when.option and existing=opt_in.
+    rejects("v2 rejects when.option", lambda m: (m.update(schema=2), m["files"][0].update(when={"option": "edhm_2dmigoto"})))
+    rejects("v2 rejects opt_in", lambda m: (m.update(schema=2), m["files"].append(dict(
+        m["files"][0], id="edhm_2dmigoto", existing="opt_in",
+        target={"root": "game", "path": "d3d11_edhm.dll"}))))
+    rejects("opt_in needs when.option", lambda m: m["files"].append(dict(
+        m["files"][0], id="edhm_2dmigoto", existing="opt_in", when={"profile": ["vr"]},
+        target={"root": "game", "path": "d3d11_edhm.dll"})))
+    rejects("opt_in must target d3d11_edhm.dll", lambda m: m["files"].append(dict(
+        m["files"][0], id="edhm_2dmigoto", existing="opt_in", when={"option": "edhm_2dmigoto"},
+        target={"root": "game", "path": "d3d11_other.dll"})))
     for bad in ({}, [], None, "vr", {"route": "x"}, {"profile": []}, {"profile": "vr"}, {"profile": ["both"]},
                 {"profile": ["vr", "vr"]}, {"profile": ["VR"]}, {"profile": [1]}, {"adapter": "amd"},
                 {"adapter": True}, {"adapter": ["nvidia"]}, {"profile": ["vr"], "option": "x"}):
@@ -1287,12 +1402,14 @@ def self_test():
             change(doc)
             assert bridge_agreement(doc, full), label
 
-        # sign_file takes either manifest, by its own schema, and refuses an invalid one.
+        # sign_file takes any of the three manifests, by its own schema, and refuses an invalid one.
         both = temp / "both"
         both.mkdir()
         _write_full_release(both, manifest, zip_bytes)
         assert sign_file(both / BRIDGE_NAME, TEST_KEY, [key_a], False)[0] == 0
         assert (both / BRIDGE_SIGNATURE_NAME).is_file() and not (both / SIGNATURE_NAME).exists()
+        assert sign_file(both / V2_NAME, TEST_KEY, [key_a], False)[0] == 0
+        assert (both / V2_SIGNATURE_NAME).is_file() and not (both / SIGNATURE_NAME).exists()
         loose = copy.deepcopy(bridge_doc)
         loose["min_launcher"] = "0.1.0"
         (both / "loose.json").write_bytes(_dump(loose))
@@ -1301,7 +1418,7 @@ def self_test():
         assert sign_file(both / MANIFEST_NAME, TEST_KEY, [key_a], False)[0] == 0
         assert verify_directory(both, keys=[key_a], out=lambda line: None)
 
-        # verify requires and verifies both pairs.
+        # verify requires and verifies all three pairs (v3, v2, schema-1 bridge).
         def both_tampered(label, change):
             folder = temp / ("b-" + label)
             folder.mkdir()
@@ -1312,13 +1429,17 @@ def self_test():
 
         assert both_tampered("none", lambda f: None)
         assert not both_tampered("no-bridge", lambda f: (f / BRIDGE_NAME).unlink())
+        assert not both_tampered("no-v2", lambda f: (f / V2_NAME).unlink())
         assert not both_tampered("no-bridge-sig", lambda f: (f / BRIDGE_SIGNATURE_NAME).unlink())
-        assert not both_tampered("no-v2-sig", lambda f: (f / SIGNATURE_NAME).unlink())
+        assert not both_tampered("no-v2-sig", lambda f: (f / V2_SIGNATURE_NAME).unlink())
+        assert not both_tampered("no-v3-sig", lambda f: (f / SIGNATURE_NAME).unlink())
         assert not both_tampered("bad-bridge-sig", lambda f: (f / BRIDGE_SIGNATURE_NAME).write_text("0" * 128 + "\n"))
-        assert not both_tampered("v2-sig-on-bridge", lambda f: (f / BRIDGE_SIGNATURE_NAME).write_bytes(
+        assert not both_tampered("v3-sig-on-bridge", lambda f: (f / BRIDGE_SIGNATURE_NAME).write_bytes(
             (f / SIGNATURE_NAME).read_bytes()))
         assert not both_tampered("bridge-edited", lambda f: (f / BRIDGE_NAME).write_bytes(
             (f / BRIDGE_NAME).read_bytes().replace(b"1794000000", b"1794000001")))
+        assert not both_tampered("v2-edited", lambda f: (f / V2_NAME).write_bytes(
+            (f / V2_NAME).read_bytes().replace(b"1794000000", b"1794000001")))
         folder = temp / "b-unsigned-no-bridge"
         folder.mkdir()
         for entry in both.iterdir():
@@ -1348,7 +1469,10 @@ def self_test():
             sys.stdin = io.StringIO("\ufeff  " + TEST_KEY + "  \r\n")
             with contextlib.redirect_stdout(io.StringIO()):
                 assert main(["sign", str(main_dir / MANIFEST_NAME), "--key-stdin"]) == 0
-            assert not verify_directory(main_dir, keys=[key_a], out=lambda line: None), "the bridge is unsigned"
+            assert not verify_directory(main_dir, keys=[key_a], out=lambda line: None), "v2 and bridge are unsigned"
+            sys.stdin = io.StringIO(TEST_KEY + "\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                assert main(["sign", str(main_dir / V2_NAME), "--key-stdin"]) == 0
             sys.stdin = io.StringIO(TEST_KEY + "\n")
             with contextlib.redirect_stdout(io.StringIO()):
                 assert main(["sign", str(main_dir / BRIDGE_NAME), "--key-stdin"]) == 0

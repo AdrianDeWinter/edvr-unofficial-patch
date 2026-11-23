@@ -69,6 +69,7 @@
 #include "../../src/installer/app.h"
 #include "../../src/installer/detect.h"
 #include "../../src/installer/direct_launch.h"
+#include "../../src/installer/edhm_d3dx.h"
 #include "../../src/installer/game_language.h"
 #include "../../src/installer/frontier_api.h"
 #include "../../src/installer/frontier_login.h"
@@ -378,7 +379,7 @@ void testSigning() {
 void testShapes() {
     section("shapes");
     const auto rows = lines(readAll(P(g_fixtures, L"shapes.txt")));
-    check(rows.size() == 280, "the shape fixture lists its cases");
+    check(rows.size() == 288, "the shape fixture lists its cases");
     std::map<std::string, std::string> verdictByName;
     int accepted = 0, refused = 0, mismatched = 0, tooNew = 0;
     for (const std::string& row : rows) {
@@ -397,19 +398,21 @@ void testShapes() {
         verdictByName[name] = ok ? "accept" : "refuse";
         // A schema above ours is the one refusal that is told apart from a malformed manifest, by the
         // number, and nothing else in the file was looked at.
-        const bool newer = name.compare(0, 8, "schema-3") == 0 || name.compare(0, 8, "schema-4") == 0;
+        const bool newer = name.compare(0, 8, "schema-4") == 0 || name.compare(0, 8, "schema-5") == 0;
         check(failure.schemaTooNew == newer, "shape " + f[0] + (newer ? " is recognised as a newer schema" : " is not a newer schema"));
         if (newer) {
             ++tooNew;
-            const long long expected = name[7] == '3' ? 3 : 4;
-            check(!ok && failure.schema == expected && err == "manifest schema " + std::to_string(expected) + ", launcher reads 2",
+            const long long expected = name[7] == '4' ? 4 : 5;
+            check(!ok && failure.schema == expected && err == "manifest schema " + std::to_string(expected) + ", launcher reads 3",
                   "shape " + f[0] + " says which schema it is: " + err);
         }
     }
     check(mismatched == 0, "the C++ and Python validators agree on every shape");
-    check(accepted == 52 && refused == 228, "the shapes include both accepted and refused manifests");
+    check(accepted == 55 && refused == 233, "the shapes include both accepted and refused manifests");
     check(tooNew == 4, "four shapes are of a newer schema");
     for (const char* name : {"schema-1", "schema-0", "schema-missing", "schema-true", "schema-float", "schema-text", "schema-null",
+                             "when-v2-rejects-option", "existing-v2-rejects-opt-in",
+                             "constraint-opt-in-no-option", "constraint-opt-in-wrong-target", "constraint-second-opt-in",
                              "min-launcher-present", "id-missing", "id-old-item-key", "id-upper", "id-too-long", "id-duplicate",
                              "target-missing", "target-extra-key", "target-root-settings", "target-path-dotdot", "target-path-absolute",
                              "target-path-drive", "target-path-nul", "target-path-con-txt", "target-path-ads", "target-path-trailing-dot",
@@ -424,6 +427,7 @@ void testShapes() {
         check(verdictByName.count(name) && verdictByName[name] == "refuse", std::string("the launcher refuses ") + name);
     }
     for (const char* name : {"valid", "valid-launcher", "valid-escaped-version", "valid-escaped-path", "valid-minus-zero-size",
+                             "schema-2", "when-option-edhm", "existing-opt-in",
                              "valid-package-table", "path-nested-ok", "existing-replace", "existing-owned", "existing-chain",
                              "existing-runtime", "existing-settings", "when-absent", "when-profile-vr", "when-profile-flat",
                              "when-profile-both", "when-adapter", "when-both-keys", "id-longest-ok", "target-path-ok-nested",
@@ -447,12 +451,21 @@ void testShapes() {
     }
     const std::wstring tableBase = P(P(g_fixtures, L"shapes"), widenUtf8(tableLabel));
     Manifest table;
-    check(loadVerifiedManifest(readAll(tableBase + L".json"), readAll(tableBase + L".sig"), g_testKeys, &table, &err) && table.files.size() == 17,
+    check(loadVerifiedManifest(readAll(tableBase + L".json"), readAll(tableBase + L".sig"), g_testKeys, &table, &err) && table.files.size() == 20,
           "the packager's file table is read whole: " + err);
     auto byId = [&](const char* id) -> const ManifestFile* {
         for (const ManifestFile& f : table.files) if (f.id == id) return &f;
         return nullptr;
     };
+    const ManifestFile* edhmDll = byId("edhm_2dmigoto");
+    check(edhmDll && edhmDll->when.option == "edhm_2dmigoto" && edhmDll->existing == ExistingMode::OptIn &&
+              edhmDll->target.root == TargetRoot::Game && edhmDll->target.path == "d3d11_edhm.dll",
+          "edhm_2dmigoto is opt_in for the edhm_2dmigoto option at game/d3d11_edhm.dll");
+    for (const char* id : {"edhm_2dmigoto_license", "edhm_2dmigoto_third_party"}) {
+        const ManifestFile* f = byId(id);
+        check(f && f->when.option == "edhm_2dmigoto" && f->existing == ExistingMode::Owned && f->target.root == TargetRoot::Game,
+              std::string(id) + " is placed with edhm_2dmigoto and owned");
+    }
     const ManifestFile* dlss = byId("dlss");
     const ManifestFile* flat = byId("settings_flat");
     const ManifestFile* xess = byId("xess");
@@ -719,13 +732,13 @@ struct Rel {
     std::string name;
 };
 
-// `parse` false for a release the launcher cannot read (the schema-3 one): only its files are read.
+// `parse` false for a release the launcher cannot read (the schema-4 one): only its files are read.
 Rel loadRel(const char* name, bool parse = true) {
     Rel r;
     r.name = name;
     r.dir = P(P(g_fixtures, L"releases"), name);
-    r.manifestBytes = readAll(P(r.dir, L"ed-up-manifest-v2.json"));
-    r.sigText = readAll(P(r.dir, L"ed-up-manifest-v2.json.sig"));
+    r.manifestBytes = readAll(P(r.dir, L"ed-up-manifest-v3.json"));
+    r.sigText = readAll(P(r.dir, L"ed-up-manifest-v3.json.sig"));
     std::string err;
     if (parse && !loadVerifiedManifest(r.manifestBytes, r.sigText, g_testKeys, &r.manifest, &err)) {
         check(false, std::string("release fixture ") + name + " loads: " + err);
@@ -1123,8 +1136,8 @@ std::string releaseJson(const Rel& r, const ApiOptions& o = ApiOptions()) {
         else if (o.digests) assets += ",\"digest\":null";
         assets += "}";
     };
-    add("ed-up-manifest-v2.json", r.manifestBytes, true);
-    if (o.includeSig) add("ed-up-manifest-v2.json.sig", r.sigText, true);
+    add("ed-up-manifest-v3.json", r.manifestBytes, true);
+    if (o.includeSig) add("ed-up-manifest-v3.json.sig", r.sigText, true);
     if (!o.onlyManifestAssets) {
         for (const ManifestAsset& a : r.manifest.assets) add(a.name, readAll(P(r.dir, a.name)), false);
         if (r.manifest.hasLauncher) add("ed-up-launcher.exe", readAll(P(r.dir, L"ed-up-launcher.exe")), false);
@@ -1181,7 +1194,7 @@ bool adopt(Updater* u, const UpdateCheck& c, std::string* err) {
 void testUpdater() {
     section("updater");
     const Rel a = loadRel("relA"), b = loadRel("relB"), old = loadRel("relOld"), relC = loadRel("relC"), relD = loadRel("relD"),
-              schema3 = loadRel("relSchema3", false);
+              schema4 = loadRel("relSchema4", false);
     std::string err;
 
     // A first check, a download, an adoption, and an up-to-date answer that costs one request.
@@ -1229,12 +1242,12 @@ void testUpdater() {
         serveRelease(&bare, a);
         Updater up2(bare, settingsFor(base));
         const UpdateCheck noDigest = up2.check();
-        check(noDigest.outcome == UpdateOutcome::UpToDate && bare.count("ed-up-manifest-v2.json") == 2, "with no digest listed the manifest is downloaded and found to be the adopted one: " + noDigest.message);
+        check(noDigest.outcome == UpdateOutcome::UpToDate && bare.count("ed-up-manifest-v3.json") == 2, "with no digest listed the manifest is downloaded and found to be the adopted one: " + noDigest.message);
         ScriptedHttp odd;
         odd.replies[latestUrl()] = ok(releaseJson(a, [] { ApiOptions o; o.odd = "md5:00ff"; return o; }()));
         serveRelease(&odd, a);
         Updater up3(odd, settingsFor(base));
-        check(up3.check().outcome == UpdateOutcome::UpToDate && odd.count("ed-up-manifest-v2.json") == 2, "an odd digest means download anyway");
+        check(up3.check().outcome == UpdateOutcome::UpToDate && odd.count("ed-up-manifest-v3.json") == 2, "an odd digest means download anyway");
     }
     // 304 with a pending update, and 304 with nothing stored.
     {
@@ -1300,10 +1313,10 @@ void testUpdater() {
         ScriptedHttp gone;
         gone.replies[latestUrl()] = ok(releaseJson(a));
         serveRelease(&gone, a);
-        gone.replies[std::string(kDownloads) + "relA/ed-up-manifest-v2.json.sig"] = failing(404);
+        gone.replies[std::string(kDownloads) + "relA/ed-up-manifest-v3.json.sig"] = failing(404);
         Updater up3(gone, settingsFor(fresh("up5c")));
         check(up3.check().outcome == UpdateOutcome::Refused, "a .sig that is listed but cannot be fetched is refused");
-        gone.replies[std::string(kDownloads) + "relA/ed-up-manifest-v2.json.sig"] = failing(503);
+        gone.replies[std::string(kDownloads) + "relA/ed-up-manifest-v3.json.sig"] = failing(503);
         check(up3.check().outcome == UpdateOutcome::Skipped, "a .sig that fails with a server error is skipped");
 
         // The manifest of A with the signature of B, and no digest to tell them apart, so the
@@ -1311,7 +1324,7 @@ void testUpdater() {
         ScriptedHttp badSig;
         badSig.replies[latestUrl()] = ok(releaseJson(a, [] { ApiOptions o; o.digests = false; return o; }()));
         serveRelease(&badSig, a);
-        badSig.replies[std::string(kDownloads) + "relA/ed-up-manifest-v2.json.sig"] = ok(b.sigText);
+        badSig.replies[std::string(kDownloads) + "relA/ed-up-manifest-v3.json.sig"] = ok(b.sigText);
         Updater up4(badSig, settingsFor(fresh("up5d")));
         const UpdateCheck c4 = up4.check();
         check(c4.outcome == UpdateOutcome::Refused, "a signature of another manifest is refused: " + c4.message);
@@ -1321,14 +1334,14 @@ void testUpdater() {
         ScriptedHttp staleSig;
         staleSig.replies[latestUrl()] = ok(releaseJson(a));
         serveRelease(&staleSig, a);
-        staleSig.replies[std::string(kDownloads) + "relA/ed-up-manifest-v2.json.sig"] = ok(b.sigText);
+        staleSig.replies[std::string(kDownloads) + "relA/ed-up-manifest-v3.json.sig"] = ok(b.sigText);
         Updater upStaleSig(staleSig, settingsFor(fresh("up5s")));
         const UpdateCheck cStaleSig = upStaleSig.check();
         check(cStaleSig.outcome == UpdateOutcome::Skipped && contains(cStaleSig.message, "older copy of the signature"), "a stale signature skips the check: " + cStaleSig.message);
         ScriptedHttp swapped;
         swapped.replies[latestUrl()] = ok(releaseJson(a));
         serveRelease(&swapped, a);
-        swapped.replies[std::string(kDownloads) + "relA/ed-up-manifest-v2.json"] = ok(b.manifestBytes);
+        swapped.replies[std::string(kDownloads) + "relA/ed-up-manifest-v3.json"] = ok(b.manifestBytes);
         Updater up5(swapped, settingsFor(fresh("up5e")));
         const UpdateCheck c5 = up5.check();
         check(c5.outcome == UpdateOutcome::Skipped && contains(c5.message, "older copy of the manifest"), "a manifest that is not the one GitHub lists skips the check: " + c5.message);
@@ -1338,7 +1351,7 @@ void testUpdater() {
         ScriptedHttp flippedHttp;
         flippedHttp.replies[latestUrl()] = ok(releaseJson(a, [] { ApiOptions o; o.digests = false; return o; }()));
         serveRelease(&flippedHttp, a);
-        flippedHttp.replies[std::string(kDownloads) + "relA/ed-up-manifest-v2.json"] = ok(flipped);
+        flippedHttp.replies[std::string(kDownloads) + "relA/ed-up-manifest-v3.json"] = ok(flipped);
         Updater up6(flippedHttp, settingsFor(fresh("up5f")));
         const UpdateCheck c6 = up6.check();
         check(c6.outcome == UpdateOutcome::Refused && contains(c6.message, "signature"), "a flipped manifest byte is refused on the signature: " + c6.message);
@@ -1421,14 +1434,14 @@ void testUpdater() {
     // A release of a newer schema is refused before any download, whatever launcher is running.
     {
         ScriptedHttp http;
-        serveRelease(&http, schema3);
-        http.replies[latestUrl()] = ok(releaseJson(schema3));
+        serveRelease(&http, schema4);
+        http.replies[latestUrl()] = ok(releaseJson(schema4));
         const UpdaterSettings settings = settingsFor(fresh("up9"));
         Updater up(http, settings);
         const UpdateCheck refused = up.check();
         check(refused.outcome == UpdateOutcome::Refused && refused.message == "This update needs a newer ED-UP launcher. Download the latest launcher from the releases page.",
-              "a schema-3 release is refused with the update-the-launcher line: " + refused.message);
-        check(refused.detail == "manifest schema 3, launcher reads 2", "and the detail names both schemas: " + refused.detail);
+              "a schema-4 release is refused with the update-the-launcher line: " + refused.message);
+        check(refused.detail == "manifest schema 4, launcher reads 3", "and the detail names both schemas: " + refused.detail);
         check(http.count("ed-up-core") == 0 && http.count("ed-up-dlss") == 0 && http.count("ed-up-launcher.exe") == 0, "nothing was downloaded");
         check(!exists(settings.cacheDir) && !exists(P(settings.launcherDir, L"manifests")), "and nothing was written but the reply cache");
         std::string stateError;
@@ -2280,7 +2293,7 @@ void testCore() {
         check(!payloadPresent(payloadInfo()), "and a refused folder leaves the process with no payload");
         // A folder's manifest is held to the same schema: a newer one and a bad target are refused.
         const std::wstring newer = fresh("core-folder-newer");
-        writeAll(P(newer, L"ed-up-manifest-v2.json"), manifestText("3", table));
+        writeAll(P(newer, L"ed-up-manifest-v3.json"), manifestText("4", table));
         check(!listPayloadFolder(newer, &folder, &files, &err) && err == kSchemaTooNewMessage, "a folder whose manifest is of a newer schema says to update the launcher: " + err);
         const std::wstring escaping = fresh("core-folder-escape");
         writeAll(P(escaping, L"ed-up-manifest-v2.json"), manifestText("2", fileEntry("graphics", "d3d11.dll", "game", "../d3d11.dll", "", "replace")));
@@ -3349,7 +3362,7 @@ SessionEnv envFor(Ui* ui, ScriptedHttp* http, const std::wstring& base, bool can
 
 void testSession() {
     section("session");
-    const Rel a = loadRel("relA"), b = loadRel("relB"), schema3 = loadRel("relSchema3", false);
+    const Rel a = loadRel("relA"), b = loadRel("relB"), schema3 = loadRel("relSchema4", false);
 
     // A first start with a release out: the payload is none, the check offers A, and nothing downloads until Update.
     {
@@ -6393,6 +6406,548 @@ void testSettingsXmlLaunchMode() {
 
 }  // namespace
 
+void testEdhm2dMigoto() {
+    section("edhm 2dmigoto");
+    // 1. LauncherState persistence: default off, round-trips on/off.
+    {
+        const std::wstring base = fresh("edhm-state");
+        const std::wstring ini = P(P(base, L"launcher"), L"launcher.ini");
+        createDirectories(P(base, L"launcher"));
+        LauncherState st;
+        std::string err;
+        check(st.load(ini, &err) && !st.edhm2dMigoto(), "edhm_2dmigoto defaults to off");
+        st.setEdhm2dMigoto(true);
+        check(st.save(&err), "saves edhm_2dmigoto=on: " + err);
+        LauncherState again;
+        check(again.load(ini, &err) && again.edhm2dMigoto(), "reloads edhm_2dmigoto=on");
+        again.setEdhm2dMigoto(false);
+        check(again.save(&err), "saves edhm_2dmigoto=off");
+        LauncherState off;
+        check(off.load(ini, &err) && !off.edhm2dMigoto(), "reloads edhm_2dmigoto=off");
+    }
+
+    // 2. LauncherSession confirmation gate, persistence, and warning state.
+    {
+        const std::wstring base = fresh("edhm-session");
+        ScriptedHttp http;
+        Ui ui;
+        const std::wstring self = P(base, L"self.exe");
+        writeAll(self, "the running launcher");
+        LauncherSession session(envFor(&ui, &http, base, true, self));
+        check(!session.edhm2dMigoto(), "session starts with edhm2dMigoto off");
+        int prompts = 0;
+        check(!session.setEdhm2dMigoto(true, [&]() { ++prompts; return false; }),
+              "declining confirmation leaves edhm2dMigoto off");
+        check(prompts == 1 && !session.edhm2dMigoto(), "prompt ran once and setting stayed off");
+        check(!session.setEdhm2dMigoto(true, nullptr), "null confirmation cannot turn edhm2dMigoto on");
+        session.setEdhmWarning(kEdhmInterferenceWarning);
+        check(session.edhmWarning() == kEdhmInterferenceWarning, "antivirus warning is stored");
+        check(session.setEdhm2dMigoto(true, [&]() { ++prompts; return true; }),
+              "accepting confirmation turns edhm2dMigoto on");
+        check(prompts == 2 && session.edhm2dMigoto() && session.edhmWarning().empty(),
+              "turning on persists and clears any stale warning");
+        // Reload in a fresh session to confirm persistence.
+        LauncherSession reloaded(envFor(&ui, &http, base, true, self));
+        check(reloaded.edhm2dMigoto(), "reloaded session remembers edhm2dMigoto=on");
+        check(!reloaded.setEdhm2dMigoto(false, nullptr) && !reloaded.edhm2dMigoto(),
+              "turning off needs no confirmation and persists off");
+    }
+
+    // 3. PlanFile carries edhm_2dmigoto cleanly (omitted when false, 1 when true, invalid rejected).
+    {
+        const std::wstring base = fresh("edhm-planfile");
+        createDirectories(base);
+        PlanFile p;
+        p.action = "install";
+        p.dir = L"C:\\Games\\Elite";
+        p.source = L"Steam";
+        p.scope = "both";
+        p.manifestSha = std::string(64, 'a');
+        p.edhm2dMigoto = true;
+        std::string err;
+        const std::wstring path = P(base, L"plan.txt");
+        check(writePlanFile(path, p, &err), "writePlanFile with edhm_2dmigoto=1: " + err);
+        PlanFile loaded;
+        check(readPlanFile(path, &loaded, &err) && loaded.edhm2dMigoto, "readPlanFile reads edhm_2dmigoto=1: " + err);
+        p.edhm2dMigoto = false;
+        check(writePlanFile(path, p, &err) && readPlanFile(path, &loaded, &err) && !loaded.edhm2dMigoto,
+              "edhm_2dmigoto=0 round-trips cleanly");
+        writeAll(path, readAll(path) + "edhm_2dmigoto=maybe\n");
+        check(!readPlanFile(path, &loaded, &err), "bad edhm_2dmigoto value in plan file is refused");
+    }
+
+    // 4. Schema-3 --payload folder carrying opt_in d3d11_edhm.dll + notices parses and loads.
+    {
+        const std::wstring dir = fresh("edhm-payload");
+        writeAll(P(dir, L"d3d11.dll"), "gfx");
+        writeAll(P(dir, L"edup.ini"), "[fix]\n");
+        writeAll(P(dir, L"edhm_2dmigoto\\d3d11_edhm.dll"), "2dmigoto-dll");
+        writeAll(P(dir, L"edhm_2dmigoto\\EDHM-2DMIGOTO-LICENSE.txt"), "GPLv3");
+        writeAll(P(dir, L"edhm_2dmigoto\\EDHM-2DMIGOTO-THIRD-PARTY.txt"), "PCRE2+DirectXTK");
+        auto fileJson = [&](const std::string& id, const std::string& path, const std::string& targetPath,
+                            const std::string& when, const std::string& existing, const std::string& bytes) {
+            return std::string("{\"id\":\"") + id + "\",\"asset\":\"core.zip\",\"path\":\"" + path +
+                   "\",\"sha256\":\"" + sha(bytes) + "\",\"size\":" + std::to_string(bytes.size()) +
+                   ",\"target\":{\"root\":\"game\",\"path\":\"" + targetPath + "\"},\"when\":" + when +
+                   ",\"existing\":\"" + existing + "\"}";
+        };
+        const std::string m =
+            std::string("{\"schema\":3,\"version\":\"1.0.0\",\"build\":\"v1.0.0\",\"tag\":\"v1.0.0\",\"issued\":1794000000,") +
+            "\"assets\":[{\"name\":\"core.zip\",\"sha256\":\"" + std::string(64, '0') + "\",\"size\":1}]," +
+            "\"files\":[" +
+            fileJson("graphics", "d3d11.dll", "d3d11.dll", "{\"profile\":[\"vr\",\"flat\"]}", "chain", "gfx") + "," +
+            fileJson("settings_vr", "edup.ini", "edvr.ini", "{\"profile\":[\"vr\"]}", "settings", "[fix]\n") + "," +
+            fileJson("edhm_2dmigoto", "edhm_2dmigoto/d3d11_edhm.dll", "d3d11_edhm.dll",
+                     "{\"option\":\"edhm_2dmigoto\"}", "opt_in", "2dmigoto-dll") + "," +
+            fileJson("edhm_2dmigoto_license", "edhm_2dmigoto/EDHM-2DMIGOTO-LICENSE.txt", "EDHM-2DMIGOTO-LICENSE.txt",
+                     "{\"option\":\"edhm_2dmigoto\"}", "owned", "GPLv3") + "," +
+            fileJson("edhm_2dmigoto_third_party", "edhm_2dmigoto/EDHM-2DMIGOTO-THIRD-PARTY.txt",
+                     "EDHM-2DMIGOTO-THIRD-PARTY.txt", "{\"option\":\"edhm_2dmigoto\"}", "owned", "PCRE2+DirectXTK") +
+            "]}";
+        writeAll(P(dir, L"ed-up-manifest-v3.json"), m);
+        Manifest mf;
+        std::vector<PayloadFile> files;
+        std::string err;
+        check(listPayloadFolder(dir, &mf, &files, &err) && files.size() == 5,
+              "schema-3 payload folder with edhm_2dmigoto opt_in parses and lists all 5 files: " + err);
+    }
+
+    // 5. Updater fallback: a release offering only ed-up-manifest-v2.json (schema 2) is still accepted.
+    {
+        const Rel a = loadRel("relA");
+        // Verify loadVerifiedManifest accepts a signed schema-2 release via v2 asset fallback by
+        // reading a schema-2 shape fixture signed by the test key.
+        std::string v2Json, v2Sig;
+        WIN32_FIND_DATAW fd{};
+        HANDLE h = FindFirstFileW(P(P(g_fixtures, L"shapes"), L"*-schema-2.json").c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            const std::wstring stem = std::wstring(fd.cFileName).substr(0, std::wcslen(fd.cFileName) - 5);
+            v2Json = readAll(P(P(g_fixtures, L"shapes"), stem + L".json"));
+            v2Sig = readAll(P(P(g_fixtures, L"shapes"), stem + L".sig"));
+            FindClose(h);
+        }
+        check(!v2Json.empty() && !v2Sig.empty(), "found signed schema-2 fixture");
+        if (!v2Json.empty()) {
+            ScriptedHttp http;
+            const std::string relJson =
+                std::string("{\"url\":\"https://api.example.invalid/x\",\"tag_name\":\"v1.0.0\",\"draft\":false,\"prerelease\":false,\"assets\":[") +
+                "{\"name\":\"ed-up-manifest-v2.json\",\"browser_download_url\":\"https://dl.example.invalid/v2/ed-up-manifest-v2.json\",\"size\":" +
+                std::to_string(v2Json.size()) + ",\"digest\":\"sha256:" + sha(v2Json) + "\"}," +
+                "{\"name\":\"ed-up-manifest-v2.json.sig\",\"browser_download_url\":\"https://dl.example.invalid/v2/ed-up-manifest-v2.json.sig\",\"size\":" +
+                std::to_string(v2Sig.size()) + ",\"digest\":\"sha256:" + sha(v2Sig) + "\"}" +
+                "]}";
+            http.replies[latestUrl()] = ok(relJson);
+            http.replies["https://dl.example.invalid/v2/ed-up-manifest-v2.json"] = ok(v2Json);
+            http.replies["https://dl.example.invalid/v2/ed-up-manifest-v2.json.sig"] = ok(v2Sig);
+            Updater up(http, settingsFor(fresh("up-v2-fallback")));
+            const UpdateCheck c = up.check();
+            check(c.outcome == UpdateOutcome::Available && c.signatureVerified && c.tag == "v1.0.0",
+                  "updater falls back to signed ed-up-manifest-v2.json for pre-v3 releases: " + c.message);
+        }
+        (void)a;
+    }
+
+    // 6. End-to-end elevated applyPlanFile with signed schema-3 release carrying edhm_2dmigoto:
+    //    opted-out adoption skips ed-up-edhm-*.zip completely; opting in fetches it on demand;
+    //    opt-in backs up standard d3d11_edhm.dll & installs 2DMigoto + notices;
+    //    opt-out restores original standard d3d11_edhm.dll; AV-missing fallback restores it too.
+    {
+        const Rel rel = loadRel("relEdhm");
+        const std::wstring base = fresh("edhm-elev-e2e");
+        const LauncherRoots roots = launcherRoots(base);
+        ScriptedHttp http;
+        http.replies[latestUrl()] = ok(releaseJson(rel), "\"etag-edhm\"");
+        serveRelease(&http, rel);
+        Updater up(http, settingsFor(base));
+        std::string err;
+
+        // With edhm_2dmigoto off (default), adoption skips the opt-in ed-up-edhm zip completely.
+        {
+            const UpdateCheck cOff = up.check();
+            check(cOff.outcome == UpdateOutcome::Available && adopt(&up, cOff, &err),
+                  "opted-out adoption of schema-3 release succeeds without opt-in EDHM zip: " + err);
+            bool fetchedEdhmZip = false;
+            for (const HttpRequest& req : http.requests) {
+                if (contains(req.url, "ed-up-edhm")) fetchedEdhmZip = true;
+            }
+            check(!fetchedEdhmZip, "opted-out adoption never downloads ed-up-edhm-*.zip");
+            Manifest mOff;
+            std::vector<PayloadFile> filesOff;
+            check(up.loadCurrentManifest(&mOff, &filesOff, &err),
+                  "opted-out loadCurrentManifest succeeds with core files only: " + err);
+            bool loadedEdhm = false;
+            for (const PayloadFile& pf : filesOff) if (pf.id == "edhm_2dmigoto") loadedEdhm = true;
+            check(!loadedEdhm, "opted-out payload does not contain edhm_2dmigoto");
+            const UpdateCheck cUpToDate = up.check();
+            check(cUpToDate.outcome == UpdateOutcome::UpToDate,
+                  "opted-out user stays UpToDate without downloading opt-in EDHM asset");
+            check(readAll(P(roots.launcherDir(), L"launcher.ini")).find("edhm_optin_failed_manifest") == std::string::npos,
+                  "opted-out adoption does not write an empty edhm_optin_failed_manifest line into launcher.ini");
+        }
+
+        // Turning edhm_2dmigoto on makes the updater offer the release and fetch ed-up-edhm-*.zip on demand.
+        {
+            LauncherState st;
+            st.load(P(roots.launcherDir(), L"launcher.ini"), nullptr);
+            st.setEdhm2dMigoto(true);
+            check(st.save(&err), "saves edhm_2dmigoto=on before opting in: " + err);
+            const UpdateCheck cOn = up.check();
+            check(cOn.outcome == UpdateOutcome::Available && adopt(&up, cOn, &err),
+                  "opting in fetches ed-up-edhm-*.zip on demand: " + err);
+            bool fetchedEdhmZip = false;
+            for (const HttpRequest& req : http.requests) {
+                if (contains(req.url, "ed-up-edhm")) fetchedEdhmZip = true;
+            }
+            check(fetchedEdhmZip, "opted-in adoption downloads ed-up-edhm-*.zip");
+        }
+        const std::wstring game = fakeGameFolder("edhm-elev-game");
+        // Valid minimal x64 PE (no EDVR exports -> probeDll classifies it as Foreign).
+        std::string stdEdhm(512, '\0');
+        stdEdhm[0] = 'M'; stdEdhm[1] = 'Z';
+        stdEdhm[0x3C] = '\x80';
+        stdEdhm[0x80] = 'P'; stdEdhm[0x81] = 'E';
+        stdEdhm[0x84] = '\x64'; stdEdhm[0x85] = '\x86';
+        stdEdhm[0x94] = '\xF0';  // SizeOfOptionalHeader
+        stdEdhm[0x98] = '\x0B'; stdEdhm[0x99] = '\x02';  // PE32+ magic
+        stdEdhm[0x98 + 108] = 16;  // NumberOfRvaAndSizes
+        stdEdhm += "STD-EDHM-ORIGINAL-BYTES";
+        writeAll(P(game, L"d3d11_edhm.dll"), stdEdhm);
+        writeAll(P(game, L"d3dx.ini"),
+                 "[Logging]\r\nshow_reload_message = 1\r\nshow_warnings = 1\r\n\r\n"
+                 "[System]\r\nload_library_redirect = 2\r\nallow_platform_update = 0\r\n\r\n"
+                 "[Device]\r\nupscaling = 1\r\n");
+        const std::wstring planPath = P(roots.launcherDir(), L"plan-99-1.txt");
+        const std::wstring resultPath = P(roots.launcherDir(), L"result-99-1.txt");
+
+        auto runElev = [&](bool enable2dm, ApplyOutcome* out) {
+            DeleteFileW(resultPath.c_str());
+            PlanFile pf;
+            pf.action = "install";
+            pf.dir = game;
+            pf.source = L"Folder you chose";
+            pf.scope = "flat";
+            pf.manifestSha = sha(rel.manifestBytes);
+            pf.edhm2dMigoto = enable2dm;
+            std::string e;
+            writePlanFile(planPath, pf, &e);
+            const int code = applyPlanFile(planPath, g_testKeys);
+            std::string rerr;
+            const bool have = readResultFile(resultPath, out, &rerr);
+            return std::make_pair(code, have);
+        };
+
+        ApplyOutcome out;
+        auto r = runElev(true, &out);
+        std::string detail1;
+        for (const std::string& l : out.lines) detail1 += l + " | ";
+        check(r.second && r.first == 0 && out.status == ApplyOutcome::Status::Done,
+              "elevated applyPlanFile installs signed 2DMigoto with edhm2dMigoto=true: code=" + std::to_string(r.first) + " " + detail1);
+        check(contains(readAll(P(game, L"d3d11_edhm.dll")), "2DMIGOTO-SIGNED-DLL-1.5.0"),
+              "elevated applyPlanFile placed signed 2DMigoto d3d11_edhm.dll");
+        check(exists(P(game, L"EDHM-2DMIGOTO-LICENSE.txt")) && exists(P(game, L"EDHM-2DMIGOTO-THIRD-PARTY.txt")),
+              "elevated applyPlanFile placed both 2DMigoto notices");
+        {
+            const std::string ini = readAll(P(game, L"d3dx.ini"));
+            check(readD3dxKey(ini, "System", "load_library_redirect").value == "2" &&
+                      readD3dxKey(ini, "System", "allow_platform_update").value == "1" &&
+                      readD3dxKey(ini, "Device", "upscaling").value == "0",
+                  "elevated applyPlanFile leaves load_library_redirect=2 untouched and patches allow_platform_update=1, upscaling=0");
+        }
+
+        // Elevated edhm_logging action toggles [Logging] show_reload_message & show_warnings cleanly.
+        auto runLogging = [&](const char* keyName, bool hideFlag, ApplyOutcome* outPtr) {
+            PlanFile pf;
+            pf.action = "edhm_logging";
+            pf.dir = game;
+            pf.source = L"Folder you chose";
+            pf.d3dxLoggingKey = keyName;
+            pf.d3dxHideFlag = hideFlag;
+            const std::wstring pfPath = P(roots.launcherDir(), L"plan-9000-2.txt");
+            const std::wstring resPath = P(roots.launcherDir(), L"result-9000-2.txt");
+            DeleteFileW(resPath.c_str());
+            std::string werr;
+            writePlanFile(pfPath, pf, &werr);
+            const int code = applyPlanFile(pfPath, g_testKeys);
+            std::string rerr;
+            const bool okRes = readResultFile(resPath, outPtr, &rerr);
+            DeleteFileW(pfPath.c_str());
+            DeleteFileW(resPath.c_str());
+            return std::make_pair(code, okRes);
+        };
+        {
+            ApplyOutcome lo;
+            auto lr = runLogging("show_reload_message", true, &lo);
+            check(lr.second && lr.first == 0 && lo.status == ApplyOutcome::Status::Done &&
+                      readEdhmHideReloadMessages(readAll(P(game, L"d3dx.ini"))),
+                  "elevated edhm_logging sets show_reload_message = 0");
+            lr = runLogging("show_warnings", true, &lo);
+            check(lr.second && lr.first == 0 && lo.status == ApplyOutcome::Status::Done &&
+                      readEdhmHideWarnings(readAll(P(game, L"d3dx.ini"))),
+                  "elevated edhm_logging sets show_warnings = 0");
+            // Unknown logging key is refused by readPlanFile.
+            PlanFile bad;
+            bad.action = "edhm_logging";
+            bad.dir = game;
+            bad.source = L"Steam";
+            bad.d3dxLoggingKey = "arbitrary_key";
+            bad.d3dxHideFlag = true;
+            const std::wstring badPath = P(roots.launcherDir(), L"plan-9000-3.txt");
+            std::string berr;
+            writePlanFile(badPath, bad, &berr);
+            PlanFile parsedBad;
+            check(!readPlanFile(badPath, &parsedBad, &berr),
+                  "readPlanFile refuses unknown d3dx_logging_key");
+            DeleteFileW(badPath.c_str());
+        }
+
+        // Opt-out via elevated applyPlanFile restores exact original standard d3d11_edhm.dll and d3dx.ini compat keys.
+        r = runElev(false, &out);
+        check(r.second && r.first == 0 && out.status == ApplyOutcome::Status::Done,
+              "elevated applyPlanFile opt-out succeeds");
+        check(readAll(P(game, L"d3d11_edhm.dll")) == stdEdhm,
+              "elevated applyPlanFile opt-out restored exact original standard d3d11_edhm.dll");
+        check(!exists(P(game, L"EDHM-2DMIGOTO-LICENSE.txt")) && !exists(P(game, L"EDHM-2DMIGOTO-THIRD-PARTY.txt")),
+              "elevated applyPlanFile opt-out removed 2DMigoto notices");
+        {
+            const std::string ini = readAll(P(game, L"d3dx.ini"));
+            check(readD3dxKey(ini, "System", "load_library_redirect").value == "2" &&
+                      readD3dxKey(ini, "System", "allow_platform_update").value == "0" &&
+                      readD3dxKey(ini, "Device", "upscaling").value == "1" &&
+                      !readEdhmHideReloadMessages(ini) && !readEdhmHideWarnings(ini) &&
+                      readD3dxKey(ini, "Logging", "show_warnings").value == "1",
+                  "elevated opt-out restored original d3dx.ini compat and backed-up [Logging] keys");
+        }
+        {
+            ApplyOutcome blockedLog;
+            auto lr = runLogging("show_reload_message", true, &blockedLog);
+            check(lr.second && lr.first == 1 && blockedLog.status == ApplyOutcome::Status::Blocked,
+                  "elevated edhm_logging blocks when 2DMigoto is not active");
+        }
+
+        // Re-enable via elevated edhm_apply, simulate AV deleting d3d11_edhm.dll, then payload-free elevated edhm_restore restores both DLL & d3dx.ini!
+        {
+            PlanFile pfApply;
+            pfApply.action = "edhm_apply";
+            pfApply.dir = game;
+            pfApply.source = L"Folder you chose";
+            pfApply.manifestSha = sha(rel.manifestBytes);
+            pfApply.edhm2dMigoto = true;
+            const std::wstring paPath = P(roots.launcherDir(), L"plan-9000-4.txt");
+            const std::wstring raPath = P(roots.launcherDir(), L"result-9000-4.txt");
+            DeleteFileW(raPath.c_str());
+            std::string aerr;
+            writePlanFile(paPath, pfApply, &aerr);
+            const int acode = applyPlanFile(paPath, g_testKeys);
+            ApplyOutcome aout;
+            check(acode == 0 && readResultFile(raPath, &aout, &aerr) && aout.status == ApplyOutcome::Status::Done &&
+                      contains(readAll(P(game, L"d3d11_edhm.dll")), "2DMIGOTO-SIGNED-DLL-1.5.0") &&
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "System", "load_library_redirect").value == "2" &&
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "System", "allow_platform_update").value == "1" &&
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "Device", "upscaling").value == "0",
+                  "elevated edhm_apply placed 2DMigoto and patched incompatible d3dx.ini keys");
+            DeleteFileW(paPath.c_str());
+            DeleteFileW(raPath.c_str());
+
+            DeleteFileW(P(game, L"d3d11_edhm.dll").c_str());
+            // Finding #10: payload-free elevated edhm_restore (no manifestSha!) restores DLL and d3dx.ini.
+            PlanFile pfRest;
+            pfRest.action = "edhm_restore";
+            pfRest.dir = game;
+            pfRest.source = L"Folder you chose";
+            const std::wstring prPath = P(roots.launcherDir(), L"plan-9000-5.txt");
+            const std::wstring rrPath = P(roots.launcherDir(), L"result-9000-5.txt");
+            DeleteFileW(rrPath.c_str());
+            writePlanFile(prPath, pfRest, &aerr);
+            const int rcode = applyPlanFile(prPath, g_testKeys);
+            ApplyOutcome rout;
+            check(rcode == 0 && readResultFile(rrPath, &rout, &aerr) && rout.status == ApplyOutcome::Status::Done &&
+                      readAll(P(game, L"d3d11_edhm.dll")) == stdEdhm &&
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "System", "load_library_redirect").value == "2" &&
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "System", "allow_platform_update").value == "0" &&
+                      readD3dxKey(readAll(P(game, L"d3dx.ini")), "Device", "upscaling").value == "1",
+                  "payload-free elevated edhm_restore restored standard DLL and backed-up d3dx.ini keys");
+            DeleteFileW(prPath.c_str());
+            DeleteFileW(rrPath.c_str());
+        }
+
+        // Finding #9: losing ONLY the cached opt-in EDHM file (e.g. AV quarantine before restart)
+        // does not break core loadCurrentManifest, and updater.check() offers the release for
+        // cache repair rather than reporting UpToDate. Uses a fresh data root whose cache files
+        // are not memory-mapped by this test process's earlier usePayloadFiles call.
+        {
+            const std::wstring base9 = fresh("edhm-cache-loss");
+            const LauncherRoots roots9 = launcherRoots(base9);
+            std::string err9;
+            {
+                CreateDirectoryW(roots9.launcherDir().c_str(), nullptr);
+                LauncherState st9;
+                st9.load(P(roots9.launcherDir(), L"launcher.ini"), nullptr);
+                st9.setEdhm2dMigoto(true);
+                check(st9.save(&err9), "saves edhm_2dmigoto=on for cache-loss test: " + err9);
+            }
+            ScriptedHttp http9;
+            http9.replies[latestUrl()] = ok(releaseJson(rel), "\"etag-edhm-9\"");
+            serveRelease(&http9, rel);
+            Updater up9(http9, settingsFor(base9));
+            const UpdateCheck c9 = up9.check();
+            check(c9.outcome == UpdateOutcome::Available && adopt(&up9, c9, &err9),
+                  "fresh schema-3 release adopts cleanly for cache-loss test: " + err9);
+            check(readAll(P(roots9.launcherDir(), L"launcher.ini")).find("edhm_optin_failed_manifest") == std::string::npos,
+                  "clean opted-in adoption does not write an empty edhm_optin_failed_manifest line into launcher.ini");
+            Manifest m;
+            std::vector<PayloadFile> files;
+            check(up9.loadCurrentManifest(&m, &files, &err9), "manifest loads before deleting cached EDHM file");
+            std::wstring cachedEdhm;
+            for (const PayloadFile& pf : files) {
+                if (pf.id == "edhm_2dmigoto") { cachedEdhm = pf.path; break; }
+            }
+            check(!cachedEdhm.empty() && DeleteFileW(cachedEdhm.c_str()) != 0,
+                  "deleted only cached edhm_2dmigoto blob to simulate AV quarantine");
+            Manifest m2;
+            std::vector<PayloadFile> files2;
+            check(up9.loadCurrentManifest(&m2, &files2, &err9),
+                  "loadCurrentManifest still succeeds for core files when opt-in EDHM cache file is missing: " + err9);
+            bool foundEdhm = false;
+            for (const PayloadFile& pf : files2) if (pf.id == "edhm_2dmigoto") foundEdhm = true;
+            check(!foundEdhm, "missing opt-in EDHM cache file is omitted from loaded payload list");
+            const UpdateCheck repairCheck = up9.check();
+            check(repairCheck.outcome == UpdateOutcome::Available,
+                  "updater.check() offers release to repair missing opt-in cache file instead of UpToDate");
+            // Turning edhm_2dmigoto off stops asking to re-download the missing opt-in blob.
+            {
+                LauncherState st9off;
+                st9off.load(P(roots9.launcherDir(), L"launcher.ini"), nullptr);
+                st9off.setEdhm2dMigoto(false);
+                check(st9off.save(&err9), "saves edhm_2dmigoto=off after cache loss: " + err9);
+            }
+            const UpdateCheck offCheck = up9.check();
+            check(offCheck.outcome == UpdateOutcome::UpToDate,
+                  "updater.check() reports UpToDate once opted out even when opt-in cache file is absent");
+            // Kilo #5: same-length corrupt opt-in cache file does not poison core payload when opted in OR opted out,
+            // and when opted in updater.check() offers Available to repair it instead of reporting UpToDate.
+            {
+                std::string origBytes;
+                for (const ManifestFile& mf : m.files) {
+                    if (mf.id == "edhm_2dmigoto") { origBytes.assign(static_cast<size_t>(mf.size), 'X'); break; }
+                }
+                writeAll(cachedEdhm, origBytes);
+                Manifest mOffCorrupt;
+                std::vector<PayloadFile> fOffCorrupt;
+                check(up9.loadCurrentManifest(&mOffCorrupt, &fOffCorrupt, &err9),
+                      "opted-out loadCurrentManifest ignores same-length corrupt opt-in cache file: " + err9);
+                bool hasEdhmOff = false;
+                for (const PayloadFile& pf : fOffCorrupt) if (pf.id == "edhm_2dmigoto") hasEdhmOff = true;
+                check(!hasEdhmOff, "opted-out loadCurrentManifest skips corrupt opt-in file");
+                LauncherState st9on;
+                st9on.load(P(roots9.launcherDir(), L"launcher.ini"), nullptr);
+                st9on.setEdhm2dMigoto(true);
+                check(st9on.save(&err9), "re-enables edhm_2dmigoto=on for corrupt-cache test");
+                Manifest mOnCorrupt;
+                std::vector<PayloadFile> fOnCorrupt;
+                check(up9.loadCurrentManifest(&mOnCorrupt, &fOnCorrupt, &err9),
+                      "opted-in loadCurrentManifest still loads core files when opt-in cache file is corrupt: " + err9);
+                bool hasEdhmOn = false;
+                for (const PayloadFile& pf : fOnCorrupt) if (pf.id == "edhm_2dmigoto") hasEdhmOn = true;
+                check(!hasEdhmOn, "opted-in loadCurrentManifest omits corrupt opt-in cache file instead of breaking core");
+                const UpdateCheck corruptCheck = up9.check();
+                check(corruptCheck.outcome == UpdateOutcome::Available,
+                      "updater.check() offers Available when opted-in cache file is same-length corrupt");
+            }
+        }
+
+        // Sean #6: opted-in user whose optional EDHM zip download/verification fails (e.g. AV quarantine)
+        // STILL downloads and adopts the core ED-UP update cleanly, surfacing a non-fatal warning.
+        {
+            const std::wstring base6 = fresh("edhm-optin-nonfatal-update");
+            const LauncherRoots roots6 = launcherRoots(base6);
+            std::string err6;
+            {
+                CreateDirectoryW(roots6.launcherDir().c_str(), nullptr);
+                LauncherState st6;
+                st6.load(P(roots6.launcherDir(), L"launcher.ini"), nullptr);
+                st6.setEdhm2dMigoto(true);
+                check(st6.save(&err6), "saves edhm_2dmigoto=on for non-fatal opt-in update test: " + err6);
+            }
+            ScriptedHttp http6;
+            http6.replies[latestUrl()] = ok(releaseJson(rel), "\"etag-edhm-6\"");
+            serveRelease(&http6, rel);
+            // Break ONLY the optional EDHM asset download (simulating AV/network failure on that zip).
+            std::string edhmAssetName;
+            for (const ManifestAsset& a : rel.manifest.assets) {
+                if (a.name.rfind("ed-up-edhm-", 0) == 0) { edhmAssetName = a.name; break; }
+            }
+            check(!edhmAssetName.empty(), "schema-3 fixture has ed-up-edhm-* asset");
+            Reply brokenOptIn;
+            brokenOptIn.status = 500;
+            http6.replies[kDownloads + rel.name + "/" + edhmAssetName] = brokenOptIn;
+            Updater up6(http6, settingsFor(base6));
+            const UpdateCheck c6 = up6.check();
+            check(c6.outcome == UpdateOutcome::Available, "check sees schema-3 release with broken EDHM asset");
+            std::string optInWarn6;
+            check(up6.downloadUpdate(c6, nullptr, {}, &err6, nullptr, &optInWarn6),
+                  "downloadUpdate still succeeds for core files when opt-in EDHM asset fails: " + err6);
+            check(!optInWarn6.empty(),
+                  "downloadUpdate reports non-fatal opt-in warning when EDHM asset fails");
+            check(up6.commitManifest(c6, &err6),
+                  "commitManifest adopts core ED-UP release even when opt-in EDHM blob is missing: " + err6);
+            Manifest m6;
+            std::vector<PayloadFile> f6;
+            check(up6.loadCurrentManifest(&m6, &f6, &err6),
+                  "loadCurrentManifest succeeds for core files after non-fatal opt-in failure: " + err6);
+            bool hasCore6 = false;
+            bool hasEdhm6 = false;
+            for (const PayloadFile& pf : f6) {
+                if (pf.id == "graphics") hasCore6 = true;
+                if (pf.id == "edhm_2dmigoto") hasEdhm6 = true;
+            }
+            check(hasCore6 && !hasEdhm6,
+                  "adopted release has core files ready and omits unavailable opt-in EDHM file");
+            // Follow-up smaller #3 + final smaller #2/#3: routine check() does NOT loop re-offering the same
+            // release whose opt-in asset just failed, while a missing core cache file OR a newer manifest still
+            // reports UpdateOutcome::Available, and clearing edhm_optin_failed_manifest removes the key cleanly.
+            const UpdateCheck afterFailCheck = up6.check();
+            check(afterFailCheck.outcome == UpdateOutcome::UpToDate,
+                  "updater.check() reports UpToDate instead of looping after opt-in failure on adopted release");
+            // Missing core file still reports Available while edhm_optin_failed_manifest is set.
+            {
+                std::wstring coreBlob;
+                for (const PayloadFile& pf : f6) {
+                    if (pf.id == "graphics") { coreBlob = pf.path; break; }
+                }
+                const std::string savedCore = readAll(coreBlob);
+                check(!coreBlob.empty() && DeleteFileW(coreBlob.c_str()) != 0,
+                      "temporarily removed core graphics blob while edhm_optin_failed_manifest is set");
+                check(up6.check().outcome == UpdateOutcome::Available,
+                      "missing core cache file still returns UpdateOutcome::Available while edhm_optin_failed_manifest is set");
+                writeAll(coreBlob, savedCore);
+                check(up6.check().outcome == UpdateOutcome::UpToDate,
+                      "restoring core graphics blob returns to UpToDate while edhm_optin_failed_manifest is set");
+            }
+            // A newer manifest (relEdhmNext, v1.6.0) still reports Available while edhm_optin_failed_manifest is set.
+            {
+                const Rel newerRel = loadRel("relEdhmNext");
+                http6.replies[latestUrl()] = ok(releaseJson(newerRel), "\"etag-edhm-6-newer\"");
+                serveRelease(&http6, newerRel);
+                check(up6.check().outcome == UpdateOutcome::Available,
+                      "newer manifest still returns UpdateOutcome::Available while edhm_optin_failed_manifest is set");
+                http6.replies[latestUrl()] = ok(releaseJson(rel), "\"etag-edhm-6\"");
+            }
+            {
+                LauncherState st6retry;
+                st6retry.load(P(roots6.launcherDir(), L"launcher.ini"), nullptr);
+                check(!st6retry.edhmOptInFailedManifest().empty(),
+                      "launcher.ini records edhm_optin_failed_manifest for the failed opt-in release");
+                st6retry.setEdhmOptInFailedManifest(std::string());
+                check(st6retry.save(&err6), "clears edhm_optin_failed_manifest for explicit retry");
+                check(readAll(P(roots6.launcherDir(), L"launcher.ini")).find("edhm_optin_failed_manifest") == std::string::npos,
+                      "clearing edhm_optin_failed_manifest removes the key from launcher.ini instead of leaving it empty");
+            }
+            check(up6.check().outcome == UpdateOutcome::Available,
+                  "clearing edhm_optin_failed_manifest allows explicit retry to fetch the opt-in asset");
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     // The stand-in for the elevated copy: applyElevated starts this program with --apply-plan.
     if (argc == 5 && std::strcmp(argv[1], "--apply-plan") == 0 && std::strcmp(argv[3], "--key") == 0) {
@@ -6464,6 +7019,7 @@ int main(int argc, char** argv) {
     testArgs();
     testLauncherFixes();
     testSettingsXmlLaunchMode();
+    testEdhm2dMigoto();
     endFakes();
     SetEnvironmentVariableW(L"EDUP_FAKE_STEAM_LOG", nullptr);
 

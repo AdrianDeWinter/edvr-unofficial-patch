@@ -15,15 +15,17 @@
 
 namespace edvr::installer {
 
-// The one schema this build reads. tools\sign_manifest.py's MANIFEST_SCHEMA is
-// this number; its self-test reads this line as text and compares.
-inline constexpr int kManifestSchema = 2;
+// The one schema this build writes, and the lowest schema it still reads (schema 2 for
+// releases published before schema 3). tools\sign_manifest.py's MANIFEST_SCHEMA is
+// kManifestSchema; its self-test reads this line as text and compares.
+inline constexpr int kManifestSchema = 3;
+inline constexpr int kMinManifestSchema = 2;
 
 // The two roots a file's target path is under.
 enum class TargetRoot { Game, Openvr };
 
 // How a file already at the target is treated.
-enum class ExistingMode { Replace, Owned, Chain, Runtime, Settings };
+enum class ExistingMode { Replace, Owned, Chain, Runtime, Settings, OptIn };
 
 // The profiles an install covers, as bits: a `when.profile` list is their union.
 inline constexpr unsigned kProfileVr = 1;
@@ -33,6 +35,7 @@ inline constexpr unsigned kProfileAll = kProfileVr | kProfileFlat;
 struct ManifestWhen {
     unsigned profiles = 0;       // 0: no profile condition; otherwise kProfileVr and/or kProfileFlat
     bool adapterNvidia = false;  // the survey must have found an NVIDIA adapter
+    std::string option;          // schema 3: opt-in option name (currently "edhm_2dmigoto"), or empty
     bool present = false;        // the manifest carried a `when` object at all
 };
 
@@ -106,8 +109,10 @@ bool isTargetPath(const std::string& path, std::string* why);
 bool targetAllowed(const ManifestTarget& target, ExistingMode mode, std::string* why);
 
 // Whether a `when` holds for an install covering `installedProfiles` (kProfile*
-// bits) on a machine where `nvidiaAdapter` says whether the survey found one.
-bool whenHolds(const ManifestWhen& when, unsigned installedProfiles, bool nvidiaAdapter);
+// bits) on a machine where `nvidiaAdapter` says whether the survey found one
+// and `edhm2dMigoto` says whether the tailored 2DMigoto EDHM option is on.
+bool whenHolds(const ManifestWhen& when, unsigned installedProfiles, bool nvidiaAdapter,
+               bool edhm2dMigoto = false);
 
 // Whether two `when` conditions can both hold on some install. A missing profile
 // condition holds for every profile; two profile lists must share a value. The

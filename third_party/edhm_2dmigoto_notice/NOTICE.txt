@@ -1,0 +1,43 @@
+EDHM_2DMigoto (optional tailored 2DMigoto runtime for EDHM)
+===========================================================
+
+ED-UP optionally ships a pinned, signed copy of d3d11_edhm.dll from
+EDHM_2DMigoto (https://github.com/Fenris159/EDHM_2DMigoto), opt-in only.
+When enabled, ED-UP places d3d11_edhm.dll together with the full GPLv3
+license text (EDHM-2DMIGOTO-LICENSE.txt) and bundled third-party notices
+(EDHM-2DMIGOTO-THIRD-PARTY.txt) beside the game, and backs up your
+existing standard d3d11_edhm.dll for restoration when turned off.
+
+Project lineage:
+  - EDHM_2DMigoto: https://github.com/Fenris159/EDHM_2DMigoto (GNU GPLv3)
+  - XXMI-Libs-Package: https://github.com/SpectrumQT/XXMI-Libs-Package (GNU GPLv3)
+  - 3Dmigoto: https://github.com/bo3b/3Dmigoto (GNU GPLv3)
+  - Deviare-InProcess / Nektra: https://github.com/nektra (GNU GPLv3)
+
+Bundled third-party components inside d3d11_edhm.dll:
+  - PCRE2 10.30 (BSD 3-clause license with binary exemption;
+    https://github.com/PCRE2Project/pcre2/releases/tag/pcre2-10.30)
+  - DirectXTK (MIT License; Copyright (c) Microsoft Corporation;
+    https://github.com/microsoft/DirectXTK)
+  - crc32c-hw 1.0.5 (zlib-style license)
+
+EDHM (Elite Dangerous HUD Mod):
+  - EDHM is a separate community project (https://github.com/psychicEgg/EDHM).
+    ED-UP does not bundle EDHM themes or shaders; this optional runtime only
+    replaces the 3Dmigoto d3d11_edhm.dll loader in an existing EDHM install
+    when opted in.
+
+Corresponding Source offer (GNU GPLv3 Section 6):
+  - Pinned release: v0.1.9 (commit 716157b88f7895b46e08f3b376e8a9902d2d94fa)
+  - Source tree:    https://github.com/Fenris159/EDHM_2DMigoto/tree/716157b88f7895b46e08f3b376e8a9902d2d94fa
+  - Source archive: https://github.com/Fenris159/EDHM_2DMigoto/releases/download/v0.1.9/EDHM_2DMigoto-v0.1.9-source.tar.gz
+  - Archive SHA256: 73104ca8f7a43763c9433a7983ccff688bf9b72cf9646ab7b48b039e3175adb5
+  - Binary SHA256:  e5dcdf58e381a3ec2cc4be716baf7c8079418d34ef6e01269332624a0025c100
+  - Build steps:    Extract the pinned source archive on Windows with Visual Studio 2022
+                    (Desktop development with C++, Windows 10/11 SDK) and build the
+                    "Zip Release | x64" configuration via MSBuild as documented in
+                    .github/workflows/release.yml inside the pinned commit.
+
+The complete text of GNU General Public License v3.0 follows below (and is
+also shipped beside the game as EDHM-2DMIGOTO-LICENSE.txt together with
+EDHM-2DMIGOTO-THIRD-PARTY.txt whenever the optional runtime is installed).

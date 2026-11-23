@@ -59,6 +59,25 @@ inline constexpr const char* kDirectLaunchQuestionFrontier =
     "is yours. Untick this at any time to go back to Frontier's launcher; unticking also deletes the stored login.\n\n"
     "Turn it on?";
 
+// Asked the first time the user turns on the optional tailored 2DMigoto runtime for EDHM.
+// No is the default button, and a No leaves it off.
+inline constexpr const char* kEdhm2dMigotoQuestion =
+    "Use the experimental tailored 2DMigoto d3d11_edhm.dll for EDHM?\n\n"
+    "When turned on, ED-UP backs up your current standard d3d11_edhm.dll and installs the "
+    "signed tailored 2DMigoto compatibility build from Fenris159/EDHM_2DMigoto (derived from "
+    "3Dmigoto / XXMI, licensed under GNU GPLv3, with PCRE2 BSD and DirectXTK MIT notices "
+    "shipped beside the game and listed under --licenses).\n\n"
+    "If d3dx.ini is present and disables [System] allow_platform_update or enables [Device] "
+    "upscaling, ED-UP backs up those original values and sets them to 1 and 0 for compatibility.\n\n"
+    "Turning this off restores your backed-up original d3d11_edhm.dll and d3dx.ini settings. "
+    "If you later update EDHM yourself, ED-UP will not silently overwrite your newer DLL.\n\n"
+    "Turn it on?";
+
+// Shown below the Settings option when the tailored 2DMigoto DLL goes missing (e.g. antivirus
+// quarantine) and the launcher automatically unchecks the option and restores the original.
+inline constexpr const char* kEdhmInterferenceWarning =
+    "Something has interfered with the download, please check your antivirus and try again.";
+
 enum class PayloadState { Loading, Ready, None };
 enum class CheckState { NotYet, Checking, UpToDate, Available, Refused, Skipped };
 
@@ -186,6 +205,13 @@ public:
     edvr::VrHeadsetMode seedVrStereoModeFromSettings(const std::wstring& gameDir);
     // Saves the setting to launcher.ini. The window's checkbox; --close-after-start does not write it.
     void setCloseAfterStart(bool on);
+    // Optional tailored 2DMigoto runtime for EDHM (launcher.ini edhm_2dmigoto).
+    // Turning it on calls `confirm` first; a false leaves it off. Turning it off never asks.
+    bool edhm2dMigoto() const { return edhm2dMigoto_; }
+    bool setEdhm2dMigoto(bool on, const std::function<bool()>& confirm);
+    // Transient warning displayed under the EDHM 2DMigoto setting (e.g. antivirus interference).
+    const std::string& edhmWarning() const { return edhmWarning_; }
+    void setEdhmWarning(const std::string& warning);
     // True once the game has been seen running (or the direct start gave a process), for the run's exit code.
     bool gameStarted() const { return gameStarted_; }
 
@@ -236,11 +262,14 @@ private:
     std::string updateLine_;
     std::string channel_ = "stable";
     bool updating_ = false;
+    bool recheckNeeded_ = false;  // queued re-check when opt-in state changes during an in-flight check/update
     bool autoResumed_ = false;  // the update that followed a self-update's restart was started
     bool playing_ = false;
     bool directLaunch_ = false;
     bool closeAfterStart_ = false;
     bool steamFrontierLogin_ = false;
+    bool edhm2dMigoto_ = false;
+    std::string edhmWarning_;
     bool gameStarted_ = false;
     edvr::VrHeadsetMode vrStereoMode_ = edvr::VrHeadsetMode::NotSet;
     std::string language_;

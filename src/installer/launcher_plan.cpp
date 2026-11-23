@@ -10,6 +10,7 @@
 #include "../common/mirror_location.h"
 #include "app.h"
 #include "apply.h"
+#include "edhm_d3dx.h"
 #include "launch_route.h"
 #include "mirror.h"
 #include "payload.h"
@@ -113,7 +114,9 @@ bool missingOrLink(const std::wstring& path) {
 // path comes from `paths`, which planPathsFor worked out from where the file is.
 ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* const* keys,
                      const std::vector<GameInstall>* installs) {
-    if (file.action != "install" && file.action != "repair" && file.action != "uninstall")
+    if (file.action != "install" && file.action != "repair" && file.action != "uninstall" &&
+        file.action != "edhm_apply" && file.action != "edhm_restore" && file.action != "edhm_dismiss" &&
+        file.action != "edhm_logging")
         return failed("the plan names an action this launcher does not know");
     if (file.dir.empty()) return failed("the plan names no game folder");
 
@@ -127,10 +130,13 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
         Updater updater(offline, settings);
         Manifest manifest;
         std::vector<PayloadFile> files;
-        if (!updater.loadManifestFile(joinPath(paths.manifestsDir, widenUtf8(file.manifestSha)) + L".json", &manifest, &files, &error) ||
+        const bool wantOptIn = file.edhm2dMigoto || file.action == "edhm_apply";
+        if (!updater.loadManifestFile(joinPath(paths.manifestsDir, widenUtf8(file.manifestSha)) + L".json",
+                                      &manifest, &files, &error, &wantOptIn) ||
             !usePayloadFiles(manifest, files, &error))
             return failed("the downloaded files cannot be used: " + error);
-    } else if (file.action != "uninstall") {
+    } else if (file.action != "uninstall" && file.action != "edhm_restore" && file.action != "edhm_dismiss" &&
+               file.action != "edhm_logging") {
         return failed("the plan names no payload to install from");
     }
 
@@ -151,6 +157,7 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
                              : describeDir(file.dir, fallback, &game);
     if (!described)
         return failed("there is no EliteDangerous64.exe in the game folder the plan names");
+
     const std::wstring mirrorDir = mirrorDirFor(game, paths.dataRoot);
     // This copy is elevated and writes, restores and removes the live settings in this per-install folder, which the
     // user owns: a link there would send those writes somewhere else, as planPathsFor refuses for the folders above it.
@@ -158,6 +165,48 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
         return failed("the settings folder for this game is a link; the installer will not write through it");
 
     Survey survey = surveyTarget(game, mirrorDir);
+    if (file.action == "edhm_apply" || file.action == "edhm_restore" || file.action == "edhm_dismiss" ||
+        file.action == "edhm_logging") {
+        Options edhmOpts;
+        edhmOpts.edhm2dMigoto = file.action == "edhm_apply";
+        edhmOpts.backupStamp = timestampName();
+        edhmOpts.nowUtc = utcNow();
+        edhmOpts.settingsDir = mirrorDir;
+        const Plan plan = file.action == "edhm_logging"
+                              ? planEdhmLogging(survey, edhmOpts, file.d3dxLoggingKey, file.d3dxHideFlag)
+                              : file.action == "edhm_dismiss"
+                                    ? planEdhmDismiss(survey, edhmOpts)
+                                    : file.action == "edhm_restore"
+                                          ? planEdhmRestore(survey, edhmOpts)
+                                          : planEdhmToggle(survey, edhmOpts, payloadInfo());
+        if (plan.blocked) {
+            ApplyOutcome blocked;
+            blocked.status = ApplyOutcome::Status::Blocked;
+            for (const std::string& p : plan.problems) blocked.lines.push_back(p);
+            if (blocked.lines.empty()) blocked.lines.push_back(planSummary(plan));
+            return blocked;
+        }
+        if (plan.nothingToDo) {
+            ApplyOutcome nothing;
+            nothing.status = ApplyOutcome::Status::NothingToDo;
+            nothing.lines.push_back(planSummary(plan));
+            return nothing;
+        }
+        const ApplyResult result =
+            applyPlan(plan, file.action == "edhm_apply" ? PayloadProvider{payloadItem} : PayloadProvider{});
+        ApplyOutcome outcome;
+        for (const std::string& line : result.done) outcome.lines.push_back(line);
+        for (const std::string& p : plan.problems) outcome.lines.push_back(p);
+        if (!result.ok) {
+            outcome.status = ApplyOutcome::Status::Failed;
+            outcome.lines.push_back(result.error);
+            if (result.rolledBack)
+                outcome.lines.push_back("Installed files and metadata were restored; recovery backups were kept.");
+            return outcome;
+        }
+        outcome.status = ApplyOutcome::Status::Done;
+        return outcome;
+    }
     const bool uninstall = file.action == "uninstall";
     ApplyOutcome outcome;
 
@@ -178,6 +227,7 @@ ApplyOutcome runPlan(const PlanFile& file, const PlanPaths& paths, const char* c
     options.keepSettings = file.keepSettings;
     options.removeSettings = file.removeSettings || file.purge;
     options.purge = file.purge;
+    options.edhm2dMigoto = file.edhm2dMigoto;
     options.repair = file.action == "repair";
     options.backupStamp = timestampName();
     options.nowUtc = utcNow();
@@ -247,6 +297,12 @@ bool writePlanFile(const std::wstring& path, const PlanFile& p, std::string* err
     text += "keep_settings=" + yesNo(p.keepSettings) + "\n";
     text += "remove_settings=" + yesNo(p.removeSettings) + "\n";
     if (p.purge) text += "purge=1\n";
+    if (p.edhm2dMigoto) text += "edhm_2dmigoto=1\n";
+    if (p.action == "edhm_logging") {
+        if (hasBreak(p.d3dxLoggingKey)) return setError(error, "a value in the plan has a line break in it");
+        text += "d3dx_logging_key=" + p.d3dxLoggingKey + "\n";
+        text += "d3dx_hide=" + yesNo(p.d3dxHideFlag) + "\n";
+    }
     text += "restore_mirror=" + yesNo(p.restoreMirror) + "\n";
     text += "manifest=" + p.manifestSha + "\n";
     std::wstring why;
@@ -259,8 +315,10 @@ bool readPlanFile(const std::wstring& path, PlanFile* plan, std::string* error) 
     if (!readFileBytes(path, &text, 1u << 16, error)) return false;
     std::map<std::string, std::string> m;
     if (!parseLines(text, &m, error)) return false;
-    static const std::set<std::string> known = {"version",        "action",          "dir",            "source", "scope",
-                                                "keep_settings",  "remove_settings", "purge",          "restore_mirror", "manifest"};
+    static const std::set<std::string> known = {"version",          "action",          "dir",            "source",
+                                                "scope",            "keep_settings",   "remove_settings", "purge",
+                                                "edhm_2dmigoto",    "d3dx_logging_key", "d3dx_hide",
+                                                "restore_mirror",   "manifest"};
     for (const auto& entry : m) {
         if (!known.count(entry.first)) return setError(error, "the plan has a key this launcher does not know: " + entry.first);
     }
@@ -275,6 +333,12 @@ bool readPlanFile(const std::wstring& path, PlanFile* plan, std::string* error) 
         !boolOf(m, "restore_mirror", &p.restoreMirror, error))
         return false;
     if (m.count("purge") && !boolOf(m, "purge", &p.purge, error)) return false;
+    if (m.count("edhm_2dmigoto") && !boolOf(m, "edhm_2dmigoto", &p.edhm2dMigoto, error)) return false;
+    if (m.count("d3dx_logging_key")) p.d3dxLoggingKey = textOf(m, "d3dx_logging_key");
+    if (m.count("d3dx_hide") && !boolOf(m, "d3dx_hide", &p.d3dxHideFlag, error)) return false;
+    if (p.action == "edhm_logging" &&
+        p.d3dxLoggingKey != "show_reload_message" && p.d3dxLoggingKey != "show_warnings")
+        return setError(error, "the plan names an unknown d3dx.ini logging key");
     if (p.action.empty() || p.dir.empty()) return setError(error, "the plan lacks an action or a folder");
     if (!p.manifestSha.empty() && !isLowerHex(p.manifestSha, 64)) return setError(error, "the plan's manifest is not a 64-character hash");
     if (!p.scope.empty() && p.scope != "both" && p.scope != "vr" && p.scope != "flat") return setError(error, "the plan names an unknown scope");

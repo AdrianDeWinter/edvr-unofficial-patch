@@ -167,14 +167,24 @@ int runUpdateCommand(const AppArgs& args, Output& out) {
         out.line("Downloading " + name);
     };
     std::set<std::string> verified;
-    if (!updater.downloadUpdate(check, nullptr, progress, &error, &verified)) {
+    std::string optInWarning;
+    if (!updater.downloadUpdate(check, nullptr, progress, &error, &verified, &optInWarning)) {
         out.line("The download did not finish: " + error);
         return 1;
     }
+    if (!optInWarning.empty()) {
+        out.line("Warning: optional EDHM 2DMigoto asset was skipped (" + optInWarning + "); continuing with core ED-UP.");
+    }
+    const bool wantOptIn = state.edhm2dMigoto();
     PayloadCache cache(roots.cacheDir());
     for (const ManifestFile& f : check.manifest.files) {
+        if (!wantOptIn && !f.when.option.empty()) continue;
         const bool ok = verified.find(f.sha256) != verified.end() ? cache.hasSized(f.sha256, f.size)
                                                                   : cache.hasVerified(f.sha256, f.size);
+        if (!ok && !f.when.option.empty()) {
+            out.line("  WARNING (opt-in unavailable) " + f.path + "  " + f.sha256);
+            continue;
+        }
         out.line(std::string(ok ? "  verified " : "  NOT VERIFIED ") + f.path + "  " + f.sha256);
         if (!ok) return 1;
     }
@@ -186,19 +196,43 @@ int runUpdateCommand(const AppArgs& args, Output& out) {
     return 0;
 }
 
-// The text of min-ed-launcher's licence, which gen_installer_rc.py embeds as RCDATA 120.
+// The third-party licence texts embedded by gen_installer_rc.py:
+//   120: min-ed-launcher (MIT, direct launch)
+//   121: EDHM_2DMigoto / 3Dmigoto / XXMI / PCRE2 / DirectXTK / EDHM summary & source offer
+//   122: GNU General Public License v3.0 full text (for optional EDHM_2DMigoto runtime)
 constexpr int kLicenseResource = 120;
+constexpr int kEdhmLicenseResource = 121;
+constexpr int kEdhmGplResource = 122;
 
-int runLicensesCommand(Output& out) {
-    HRSRC found = FindResourceW(nullptr, MAKEINTRESOURCEW(kLicenseResource), RT_RCDATA);
+bool loadRcText(int id, std::string* out) {
+    HRSRC found = FindResourceW(nullptr, MAKEINTRESOURCEW(id), RT_RCDATA);
     HGLOBAL loaded = found ? LoadResource(nullptr, found) : nullptr;
     const void* data = loaded ? LockResource(loaded) : nullptr;
     const DWORD size = found ? SizeofResource(nullptr, found) : 0;
-    if (!data || size == 0) {
+    if (!data || size == 0) return false;
+    out->assign(static_cast<const char*>(data), size);
+    return true;
+}
+
+int runLicensesCommand(Output& out) {
+    std::string minEd;
+    if (!loadRcText(kLicenseResource, &minEd)) {
         out.line("This launcher carries no licence text. That is a build fault: please report it.");
         return 1;
     }
-    out.raw(std::string(static_cast<const char*>(data), size));
+    out.raw(minEd);
+    std::string edhm;
+    if (loadRcText(kEdhmLicenseResource, &edhm)) {
+        if (!minEd.empty() && minEd.back() != '\n') out.raw("\n");
+        out.raw("\n------------------------------------------------------------------------\n\n");
+        out.raw(edhm);
+    }
+    std::string gpl;
+    if (loadRcText(kEdhmGplResource, &gpl)) {
+        if (!edhm.empty() && edhm.back() != '\n') out.raw("\n");
+        out.raw("\n------------------------------------------------------------------------\n\n");
+        out.raw(gpl);
+    }
     return 0;
 }
 

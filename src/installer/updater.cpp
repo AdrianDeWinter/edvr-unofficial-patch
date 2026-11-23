@@ -82,8 +82,27 @@ const ReleaseAsset* findAsset(const std::vector<ReleaseAsset>& assets, const std
     return nullptr;
 }
 
+bool findSignedManifest(const std::vector<ReleaseAsset>& assets, const ReleaseAsset** manifestOut,
+                        const ReleaseAsset** sigOut) {
+    if (const ReleaseAsset* m3 = findAsset(assets, kManifestAssetName)) {
+        if (const ReleaseAsset* s3 = findAsset(assets, kSignatureAssetName)) {
+            if (manifestOut) *manifestOut = m3;
+            if (sigOut) *sigOut = s3;
+            return true;
+        }
+    }
+    if (const ReleaseAsset* m2 = findAsset(assets, kManifestV2AssetName)) {
+        if (const ReleaseAsset* s2 = findAsset(assets, kSignatureV2AssetName)) {
+            if (manifestOut) *manifestOut = m2;
+            if (sigOut) *sigOut = s2;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool holdsSignedManifest(const std::vector<ReleaseAsset>& assets) {
-    return findAsset(assets, kManifestAssetName) && findAsset(assets, kSignatureAssetName);
+    return findSignedManifest(assets, nullptr, nullptr);
 }
 
 std::vector<std::pair<std::string, std::string>> githubHeaders(const std::string& etag) {
@@ -200,11 +219,43 @@ UpdateCheck Updater::check() {
     if (!tagName || !tagName->isString() || tagName->text.empty())
         return outcomeOnly(UpdateOutcome::Skipped, "a release has no tag, so the update check was skipped");
     const std::string tag = tagName->text;
-    const ReleaseAsset& manifestAsset = *findAsset(assets, kManifestAssetName);
-    const ReleaseAsset& signatureAsset = *findAsset(assets, kSignatureAssetName);
+    const ReleaseAsset* manifestAssetPtr = nullptr;
+    const ReleaseAsset* signatureAssetPtr = nullptr;
+    if (!findSignedManifest(assets, &manifestAssetPtr, &signatureAssetPtr))
+        return outcomeOnly(UpdateOutcome::UpToDate, "the latest release carries no signed update");
+    const ReleaseAsset& manifestAsset = *manifestAssetPtr;
+    const ReleaseAsset& signatureAsset = *signatureAssetPtr;
 
-    // Same manifest as the one already adopted: nothing to download.
-    if (!manifestAsset.digest.empty() && manifestAsset.digest == state.currentManifest())
+    auto currentManifestCacheComplete = [&]() -> bool {
+        if (state.currentManifest().empty()) return true;
+        const std::wstring base =
+            joinPath(joinPath(settings_.launcherDir, L"manifests"), widenUtf8(state.currentManifest()));
+        std::string mBytes, sText;
+        if (!readFileBytes(base + L".json", &mBytes, kMaxManifestBytes, nullptr) ||
+            !readFileBytes(base + L".sig", &sText, 1024, nullptr))
+            return false;
+        if (sha256Bytes(mBytes.data(), mBytes.size()) != state.currentManifest()) return false;
+        Manifest curManifest;
+        if (!loadVerifiedManifest(mBytes, sText, keys(), &curManifest, nullptr)) return false;
+        PayloadCache cache(settings_.cacheDir);
+        const bool wantOptIn = state.edhm2dMigoto();
+        const bool skipFailedOptIn =
+            !state.edhmOptInFailedManifest().empty() &&
+            state.edhmOptInFailedManifest() == state.currentManifest();
+        for (const ManifestFile& f : curManifest.files) {
+            if (!f.when.option.empty()) {
+                if (!wantOptIn || skipFailedOptIn) continue;
+                if (!cache.hasVerified(f.sha256, f.size)) return false;
+                continue;
+            }
+            if (!cache.hasSized(f.sha256, f.size)) return false;
+        }
+        return true;
+    };
+    const bool cacheComplete = currentManifestCacheComplete();
+
+    // Same manifest as the one already adopted: nothing to download (unless cached payload files are missing).
+    if (!manifestAsset.digest.empty() && manifestAsset.digest == state.currentManifest() && cacheComplete)
         return outcomeOnly(UpdateOutcome::UpToDate, "ED-UP is up to date");
 
     auto fetchSmall = [&](const ReleaseAsset& asset, std::string* bytes, UpdateCheck* failure) {
@@ -255,7 +306,7 @@ UpdateCheck Updater::check() {
     if (manifest.tag != tag)
         return outcomeOnly(UpdateOutcome::Refused, "the release " + tag + " was refused: its manifest is for another tag");
     // A re-offered release whose digest GitHub did not report is caught here.
-    if (manifestSha == state.currentManifest())
+    if (manifestSha == state.currentManifest() && cacheComplete)
         return outcomeOnly(UpdateOutcome::UpToDate, "ED-UP is up to date");
     if (manifest.issued < state.highestIssued())
         return outcomeOnly(UpdateOutcome::UpToDate, "the release " + tag + " is older than one already accepted and was ignored");
@@ -279,7 +330,8 @@ UpdateCheck Updater::check() {
 
 bool Updater::downloadUpdate(const UpdateCheck& check, const std::atomic<bool>* cancel,
                              const DownloadProgress& progress, std::string* error,
-                             std::set<std::string>* verifiedOut) {
+                             std::set<std::string>* verifiedOut,
+                             std::string* optInWarningOut) {
     if (check.outcome != UpdateOutcome::Available) {
         if (error) *error = "there is no update to download";
         return false;
@@ -313,7 +365,9 @@ bool Updater::downloadUpdate(const UpdateCheck& check, const std::atomic<bool>* 
         }
         return true;
     };
-    return cache.ensureFiles(check.manifest, fetcher, error, nullptr, verifiedOut);
+    LauncherState state;
+    const bool wantOptIn = state.load(statePath(), nullptr) && state.edhm2dMigoto();
+    return cache.ensureFiles(check.manifest, fetcher, error, nullptr, verifiedOut, wantOptIn, optInWarningOut);
 }
 
 bool Updater::commitManifest(const UpdateCheck& check, std::string* error,
@@ -328,8 +382,14 @@ bool Updater::commitManifest(const UpdateCheck& check, std::string* error,
     Manifest verified;
     if (!loadVerifiedManifest(check.manifestBytes, check.signatureText, keys(), &verified, error)) return false;
 
+    LauncherState state;
+    if (!state.load(statePath(), error)) return false;
+
+    // Require every core file in the cache, but never block adopting a core ED-UP update
+    // when an optional opt-in file (such as EDHM 2DMigoto) is missing or quarantined.
     PayloadCache cache(settings_.cacheDir);
-    if (!cache.hasAll(verified, preVerified)) return fail("the payload cache does not hold every file of this release yet");
+    if (!cache.hasAll(verified, preVerified, false))
+        return fail("the payload cache does not hold every file of this release yet");
 
     const std::wstring dir = joinPath(settings_.launcherDir, L"manifests");
     if (!createDirectories(dir)) return fail("the manifests folder cannot be created");
@@ -337,10 +397,13 @@ bool Updater::commitManifest(const UpdateCheck& check, std::string* error,
     if (!writeFile(base + L".sig", check.signatureText) || !writeFile(base + L".json", check.manifestBytes))
         return fail("the manifest could not be stored");
 
-    LauncherState state;
-    if (!state.load(statePath(), error)) return false;
     state.setCurrentManifest(sha);
     state.raiseHighestIssued(verified.issued);
+    if (state.edhm2dMigoto() && !cache.hasAll(verified, preVerified, true)) {
+        state.setEdhmOptInFailedManifest(sha);
+    } else {
+        state.setEdhmOptInFailedManifest(std::string());
+    }
     if (!state.save(error)) return false;
 
     // Keep the current manifest and the newest others, up to three; the files of
@@ -387,7 +450,7 @@ bool Updater::loadCurrentManifest(Manifest* manifest, std::vector<PayloadFile>* 
 }
 
 bool Updater::loadManifestFile(const std::wstring& jsonPath, Manifest* manifest, std::vector<PayloadFile>* files,
-                               std::string* error) {
+                               std::string* error, const bool* includeOptInOverride) {
     auto fail = [&](const std::string& text) {
         if (error) *error = text;
         return false;
@@ -406,10 +469,25 @@ bool Updater::loadManifestFile(const std::wstring& jsonPath, Manifest* manifest,
     Manifest loaded;
     if (!loadVerifiedManifest(bytes, signatureText, keys(), &loaded, error)) return false;
 
+    bool wantOptIn = false;
+    if (includeOptInOverride) {
+        wantOptIn = *includeOptInOverride;
+    } else if (!settings_.launcherDir.empty()) {
+        LauncherState state;
+        wantOptIn = state.load(statePath(), nullptr) && state.edhm2dMigoto();
+    }
+
     PayloadCache cache(settings_.cacheDir);
     std::vector<PayloadFile> list;
     for (const ManifestFile& f : loaded.files) {
-        if (!cache.hasSized(f.sha256, f.size)) return fail("the payload cache lacks " + f.path + "; connect and update to repair it");
+        if (!f.when.option.empty()) {
+            // Opt-in files (such as EDHM 2DMigoto) are skipped when opted out; when opted in, a
+            // missing or corrupt cached blob is omitted so core ED-UP Install/Repair stays usable.
+            if (!wantOptIn) continue;
+            if (!cache.hasVerified(f.sha256, f.size)) continue;
+        } else if (!cache.hasSized(f.sha256, f.size)) {
+            return fail("the payload cache lacks " + f.path + "; connect and update to repair it");
+        }
         PayloadFile p;
         p.id = f.id;
         p.path = cache.pathFor(f.sha256);
