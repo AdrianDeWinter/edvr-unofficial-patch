@@ -27,12 +27,13 @@ REPO = "Fenris159/EDHM_2DMigoto"
 VERSION = "0.1.8"
 TAG = "v" + VERSION
 COMMIT = "2cbeaa381c57f4848144d3a1510ed34f8f41f0e5"
-SOURCE_TREE_URL = "https://github.com/%s/tree/%s" % (REPO, COMMIT)
-SOURCE_ARCHIVE_URL = "https://github.com/%s/archive/%s.tar.gz" % (REPO, COMMIT)
-SOURCE_ARCHIVE_SHA256 = "17bfffe33ff43439a72e003c87c530dfcf07aa4c19950fa3e8d027a57a4e1401"
-SOURCE_ARCHIVE_NAME = "ed-up-edhm-source-%s.tar.gz" % VERSION
 RELEASE_URL = "https://github.com/%s/releases/download/%s" % (REPO, TAG)
 RAW_URL = "https://raw.githubusercontent.com/%s/%s" % (REPO, COMMIT)
+SOURCE_TREE_URL = "https://github.com/%s/tree/%s" % (REPO, COMMIT)
+SOURCE_ARCHIVE_ASSET = "EDHM_2DMigoto-%s-source.tar.gz" % TAG
+SOURCE_ARCHIVE_URL = RELEASE_URL + "/" + SOURCE_ARCHIVE_ASSET
+SOURCE_ARCHIVE_SHA256 = "17bfffe33ff43439a72e003c87c530dfcf07aa4c19950fa3e8d027a57a4e1401"
+SOURCE_ARCHIVE_NAME = "ed-up-edhm-source-%s.tar.gz" % VERSION
 
 # relative staged path -> (download url, pinned lowercase SHA-256)
 FILES = {
