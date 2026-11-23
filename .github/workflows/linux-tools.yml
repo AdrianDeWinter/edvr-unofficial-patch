@@ -40,7 +40,9 @@ jobs:
           cache-dependency-path: tools/requirements.txt
 
       - name: Install tool requirements
-        run: python -m pip install --require-hashes --only-binary :all: -r tools/requirements.txt
+        # A block scalar: "--only-binary :all:" holds a colon and space, which a plain YAML value cannot.
+        run: |
+          python -m pip install --require-hashes --only-binary :all: -r tools/requirements.txt
 
       - name: Tool self-tests
         shell: bash
