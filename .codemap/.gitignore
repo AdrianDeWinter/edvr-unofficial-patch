@@ -1,4 +1,0 @@
-# Written by codemap. Only config.json is tracked; skills stay under .agents/ and machine state stays out of git.
-*
-!.gitignore
-!config.json

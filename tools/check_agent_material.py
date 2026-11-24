@@ -2,15 +2,11 @@
 """Check that agent material stays where a clone can strip it, and that no
 tracked text hides characters a reader cannot see.
 
-AGENTS.md "Agent material": agent tool instruction files, .codemap\\ config,
-and everything under .agents\\ (guides, handoff prompts, plans) must be
-export-ignore in .gitattributes, so `git archive` and GitHub's source zips
-leave them out. The checker recognizes conventional instruction and prompt
-names; the placement rule also applies to agent-only material with other names.
-docs\\ is written for people. When .codemap\\config.json is present, the
-checker also rejects tracked/new files under .codemap\\skills\\ (agent skills
-stay under .agents\\) and verifies every path listed under
-routing.subsystems[].docs exists inside the repository.
+AGENTS.md "Agent material": agent tool instruction files and everything under
+.agents\\ (handoff prompts, plans) must be export-ignore in .gitattributes,
+so `git archive` and GitHub's source zips leave them out. The checker
+recognizes conventional instruction and prompt names; the placement rule also
+applies to agent-only material with other names. docs\\ is written for people.
 
 Every tracked or new (untracked, not ignored) text file is also scanned for
 characters that render as nothing: zero-width characters, bidirectional
@@ -25,7 +21,6 @@ Exit 0 when clean, 1 on any finding, 2 on usage or git errors. Prints paths,
 line numbers and code points, never file content. Read-only: this tool writes
 nothing (the self-test writes only to a temporary directory).
 """
-import json
 import os
 import re
 import shutil
@@ -37,11 +32,8 @@ from unittest import mock
 
 # Directories whose whole content is agent material, matched case-insensitively
 # on any path component: on Windows .Codex and .codex are one folder.
-AGENT_DIRS = {".agents", ".codemap", ".claude", ".codex", ".cursor", ".continue",
-              ".gemini", ".windsurf", ".clinerules"}
-# Agent directories that hold tracked project-level agent config/material;
-# everything else in AGENT_DIRS holds tool-local session state and worktrees.
-TRACKED_AGENT_DIRS = {".agents", ".codemap"}
+AGENT_DIRS = {".agents", ".claude", ".codex", ".cursor", ".continue", ".gemini",
+              ".windsurf", ".clinerules"}
 # Instruction files agent tools read, by file name, anywhere in the tree.
 AGENT_FILES = {"agents.md", "claude.md", "claude.local.md", "gemini.md",
                ".cursorrules", ".windsurfrules", "copilot-instructions.md"}
@@ -103,7 +95,7 @@ def repo_files(root):
 
 
 def in_local_agent_dir(rel):
-    return any(p.lower() in AGENT_DIRS - TRACKED_AGENT_DIRS for p in rel.split("/")[:-1])
+    return any(p.lower() in AGENT_DIRS - {".agents"} for p in rel.split("/")[:-1])
 
 
 def is_agent_material(rel):
@@ -138,62 +130,6 @@ def hidden_chars(text):
     return found
 
 
-def check_codemap_config(root, rel):
-    """Validate .codemap/config.json parses as JSON and every routing doc path
-    resolves to an existing regular file inside root."""
-    path = os.path.join(root, *rel.split("/"))
-    if os.path.islink(path) or not os.path.isfile(path):
-        return []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, UnicodeDecodeError, ValueError) as e:
-        return ["%s: invalid JSON (%s)" % (rel, e)]
-    if not isinstance(data, dict):
-        return ["%s: top-level JSON value must be an object" % rel]
-    routing = data.get("routing")
-    if routing is None:
-        return []
-    if not isinstance(routing, dict):
-        return ["%s: routing must be an object" % rel]
-    subsystems = routing.get("subsystems")
-    if subsystems is None:
-        return []
-    if not isinstance(subsystems, list):
-        return ["%s: routing.subsystems must be a list" % rel]
-    real_root = os.path.realpath(root)
-    findings = []
-    for idx, sub in enumerate(subsystems):
-        if not isinstance(sub, dict):
-            findings.append("%s: routing.subsystems[%d] must be an object" % (rel, idx))
-            continue
-        docs = sub.get("docs")
-        if docs is None:
-            continue
-        if not isinstance(docs, list):
-            findings.append("%s: routing.subsystems[%d].docs must be a list" % (rel, idx))
-            continue
-        for doc in docs:
-            if not isinstance(doc, str) or not doc or doc.startswith(("/", "\\")) or ":" in doc.split("/")[0]:
-                findings.append("%s: invalid routing doc path %r" % (rel, doc))
-                continue
-            parts = doc.replace("\\", "/").split("/")
-            if ".." in parts:
-                findings.append("%s: routing doc path escapes repository: %s" % (rel, doc))
-                continue
-            target = os.path.join(root, *parts)
-            real_target = os.path.realpath(target)
-            try:
-                inside = os.path.commonpath([real_root, real_target]) == real_root
-            except ValueError:
-                inside = False
-            if not inside:
-                findings.append("%s: routing doc path escapes repository: %s" % (rel, doc))
-            elif not os.path.isfile(target):
-                findings.append("%s: routing doc does not exist: %s" % (rel, doc))
-    return findings
-
-
 def check(root):
     """(agent paths with their export-ignore state, findings, text files scanned)."""
     tracked, new = repo_files(root)
@@ -206,12 +142,6 @@ def check(root):
                 else ("%s: untracked agent file: export-ignore it in .gitattributes,"
                       " or .gitignore it if it is local" % p)
                 for p in agent if not ignored.get(p)]
-    for p in agent:
-        lower = p.lower()
-        if lower.startswith(".codemap/skills/"):
-            findings.append("%s: agent skills belong under .agents/, not .codemap/skills/" % p)
-        elif lower == ".codemap/config.json":
-            findings.extend(check_codemap_config(root, p))
     scanned = 0
     for rel in files:
         path = os.path.join(root, rel)
@@ -249,7 +179,6 @@ def self_test():
             sys.exit(1)
 
     for rel in ("AGENTS.md", "CLAUDE.md", "docs/AGENTS.md", ".agents/handoff.md",
-                ".codemap/config.json",
                 "handoff-prompt-l2-draw-suppression.md",
                 ".Codex/worktrees/x/a.cpp", ".claude/settings.json",
                 ".github/copilot-instructions.md", ".aider.conf.yml",
@@ -286,7 +215,6 @@ def self_test():
         write(".gitattributes", "AGENTS.md export-ignore\n")
         write("AGENTS.md", "notes\n")
         write(".agents/handoff.md", "next\n")
-        write(".codemap/config.json", "{}\n")
         write(".claude/settings.local.json", "{}\n")      # ignored: not listed
         write("docs/design.md", BOM + "# Design\n")     # leading BOM: allowed
         write("src/a.cpp", "int a;\n\nint b; // \U000e0041\n")
@@ -300,13 +228,11 @@ def self_test():
         git(os.path.join(root, ".agents", "nested"), "init", "-q")  # a nested repository: ".agents/nested/"
 
         agent, findings, scanned = check(root)
-        expect([p for p, _ in agent] == [".agents/handoff.md", ".codemap/config.json", "AGENTS.md", "CLAUDE.md"],
+        expect([p for p, _ in agent] == [".agents/handoff.md", "AGENTS.md", "CLAUDE.md"],
                "agent material listed, ignored paths left out: %r" % agent)
-        expect(dict(agent) == {".agents/handoff.md": False, ".codemap/config.json": False,
-                               "AGENTS.md": True, "CLAUDE.md": False},
+        expect(dict(agent) == {".agents/handoff.md": False, "AGENTS.md": True, "CLAUDE.md": False},
                "export-ignore state read from .gitattributes: %r" % agent)
         expect(any(f.startswith(".agents/handoff.md: ") for f in findings), "missing export-ignore reported")
-        expect(any(f.startswith(".codemap/config.json: ") for f in findings), "missing .codemap export-ignore reported")
         expect(any(f.startswith("CLAUDE.md: untracked agent file") for f in findings),
                "a new agent file is reported before git add")
         expect(any(f.startswith("src/a.cpp:3: 1 invisible character (U+E0041)") for f in findings),
@@ -314,40 +240,19 @@ def self_test():
         expect(not any(f.startswith(("docs/", "tools/", "AGENTS.md", ".Codex/", ".agents/nested")) for f in findings),
                "no finding for a leading BOM, a binary file, an export-ignored agent file,"
                " a tool's local folder or a nested repository: %r" % findings)
-        expect(len(findings) == 4, "exactly four findings: %r" % findings)
+        expect(len(findings) == 3, "exactly three findings: %r" % findings)
         expect(work_tree(root), "the repository root is a work tree")
         expect(not work_tree(os.path.join(root, "docs")), "a folder inside it is not its top")
         plain = os.path.join(temporary, "plain")
         os.makedirs(plain)
         expect(not work_tree(plain), "a tree without .git (a source zip) is skipped")
 
-        write(".gitattributes", "AGENTS.md export-ignore\nCLAUDE.md export-ignore\n.agents/** export-ignore\n.codemap/** export-ignore\n")
+        write(".gitattributes", "AGENTS.md export-ignore\nCLAUDE.md export-ignore\n.agents/** export-ignore\n")
         write("src/a.cpp", "int a;\n")
-        write(".codemap/config.json", '{"routing":{"subsystems":[{"id":"d","docs":["docs/design.md"]}]}}\n')
         agent, findings, scanned = check(root)
         expect(findings == [], "clean once fixed: %r" % findings)
-        expect(all(state for _, state in agent) and len(agent) == 4, "all four export-ignore")
-        expect(scanned == 8, "eight text files scanned, the binary skipped: %d" % scanned)
-
-        # .codemap/skills/ is rejected even when export-ignore is set.
-        write(".codemap/skills/local.md", "# skill\n")
-        expect(any(f.startswith(".codemap/skills/local.md: agent skills belong under .agents/")
-                   for f in check(root)[1]),
-               "skills under .codemap/skills/ rejected")
-        os.remove(os.path.join(root, ".codemap", "skills", "local.md"))
-
-        # .codemap/config.json routing docs must exist inside the repository, and JSON must parse.
-        write(".codemap/config.json", '{"routing":{"subsystems":[{"id":"d","docs":["docs/missing.md","../escape.md"]}]}}\n')
-        codemap_findings = check(root)[1]
-        expect(any("docs/missing.md" in f for f in codemap_findings),
-               "missing codemap routing doc reported: %r" % codemap_findings)
-        expect(any("../escape.md" in f for f in codemap_findings),
-               "escaping codemap routing doc reported: %r" % codemap_findings)
-        write(".codemap/config.json", "{not json\n")
-        expect(any(f.startswith(".codemap/config.json: invalid JSON") for f in check(root)[1]),
-               "malformed codemap config reported")
-        write(".codemap/config.json", '{"routing":{"subsystems":[{"id":"d","docs":["docs/design.md"]}]}}\n')
-        expect(check(root)[1] == [], "valid codemap config clean again")
+        expect(all(state for _, state in agent) and len(agent) == 3, "all three export-ignore")
+        expect(scanned == 7, "seven text files scanned, the binary skipped: %d" % scanned)
 
         # A tracked symlink stores a target path, not its target's text. Mock
         # the file type so this assertion works on Windows without symlink
