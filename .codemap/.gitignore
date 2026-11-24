@@ -1,0 +1,6 @@
+# Written by codemap. Machine state stays out of git; config and skills can be committed.
+*
+!.gitignore
+!config.json
+!skills/
+!skills/**

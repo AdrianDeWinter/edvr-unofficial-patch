@@ -49,3 +49,5 @@ AGENTS.md export-ignore
 CLAUDE.md export-ignore
 .agents export-ignore
 .agents/** export-ignore
+.codemap export-ignore
+.codemap/** export-ignore

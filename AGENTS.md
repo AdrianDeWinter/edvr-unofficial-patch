@@ -24,6 +24,7 @@ Read the matching guide before acting on its branch:
 | Building from source, SDK fetchers, CI artifacts | [docs/building.md](docs/building.md) — prerequisites, `fetch_*.py`, local build, Actions downloads |
 | `tools\`, builds, installs, logs, worktrees, Linux/CI | [.agents/build-and-tools.md](.agents/build-and-tools.md) — sanctioned `tools\` table, `--compile-only` Proton flights, `build.bat --wait-lock`, compile cache, `--dll-only`, Actions validation |
 | Bugs, rendering, `src\`, `.ini` configs, `docs\` | [.agents/diagnosis-and-config.md](.agents/diagnosis-and-config.md) — flight diagnosis, `## Status` docs, `edup.ini`/`edup-flat.ini`, C++ gotchas (`near`/`far`, instruments), issue tracking |
+| Codebase map, hubs, blast radius | [.agents/codemap.md](.agents/codemap.md) — subsystem map and top hubs; run `codemap .` / `codemap --importers <file>` when `codemap` is installed (`.codemap/config.json`) |
 | Maintainer workstation, releases, `analysis\` | [.agents/maintainer.md](.agents/maintainer.md) — Sean's PowerShell 5.1 shell, solo `--no-ff` Git, release signing & `## Thanks` credits, private `analysis\` handover |
 
 ## Universal rules
@@ -59,12 +60,13 @@ Read the matching guide before acting on its branch:
 ## Agent material
 
 Text addressed to agents rather than people stays where a clone can strip it
-without reading it: `AGENTS.md` and `CLAUDE.md` at the root, and all other
-agent-only material (guides, handoff prompts, plans, task lists) under
-`.agents\`. All of it is `export-ignore` in `.gitattributes`, so `git archive`
-and GitHub's source zips leave it out. `tools\check_agent_material.py` enforces
-`export-ignore` on recognized agent paths and rejects zero-width, bidi, and
-Unicode tag characters across repository text.
+without reading it: `AGENTS.md` and `CLAUDE.md` at the root, `.codemap\` for
+Codemap configuration, and all other agent-only material (guides, handoff
+prompts, plans, task lists) under `.agents\`. All of it is `export-ignore` in
+`.gitattributes`, so `git archive` and GitHub's source zips leave it out.
+`tools\check_agent_material.py` enforces `export-ignore` on recognized agent
+paths and rejects zero-width, bidi, and Unicode tag characters across
+repository text.
 
 - `docs\` is written for people and is not agent material, even when an agent
   drafted it.

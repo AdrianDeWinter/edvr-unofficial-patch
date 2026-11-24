@@ -1,0 +1,220 @@
+{
+  "only": [
+    "h",
+    "cpp",
+    "inl",
+    "inc",
+    "c",
+    "hlsl",
+    "py",
+    "cs",
+    "bat",
+    "sh"
+  ],
+  "exclude": [
+    "/third_party/",
+    "src/d3d11/smaa/",
+    "/site/",
+    "/release/",
+    "/wiki/",
+    "/.agents/",
+    "docs/assets/",
+    "docs/shaders/"
+  ],
+  "depth": 2,
+  "mode": "auto",
+  "guidance": {
+    "missing_extension_hints": true,
+    "ignored_extensions": [
+      "dxbc",
+      "bin",
+      "png",
+      "jpg",
+      "log",
+      "asm",
+      "txt",
+      "json",
+      "md"
+    ]
+  },
+  "budgets": {
+    "session_start_bytes": 30000,
+    "diff_bytes": 15000,
+    "max_hubs": 10
+  },
+  "routing": {
+    "retrieval": {
+      "strategy": "keyword",
+      "top_k": 3
+    },
+    "subsystems": [
+      {
+        "id": "d3d11-graphics",
+        "paths": [
+          "src/d3d11/**",
+          "include/**"
+        ],
+        "keywords": [
+          "d3d11",
+          "shader",
+          "hlsl",
+          "temporal",
+          "dlss",
+          "fsr",
+          "xess",
+          "dittosr",
+          "vscreen",
+          "onfoot",
+          "camera",
+          "motion",
+          "census",
+          "draw",
+          "ui",
+          "hud",
+          "holo",
+          "smaa"
+        ],
+        "docs": [
+          "docs/architecture.md",
+          "docs/engine-render-pipeline.md",
+          "docs/anti-aliasing.md",
+          "docs/camera-struct.md",
+          "docs/game-binary-map.md",
+          "docs/fixes.md",
+          "GLOSSARY.md"
+        ]
+      },
+      {
+        "id": "openxr-runtime",
+        "paths": [
+          "src/openxr/**",
+          "src/openvr/**"
+        ],
+        "keywords": [
+          "openxr",
+          "openvr",
+          "vr",
+          "headset",
+          "stereo",
+          "compositor",
+          "foveation",
+          "eye",
+          "canted",
+          "swapchain",
+          "oculus"
+        ],
+        "docs": [
+          "docs/openxr-port.md",
+          "docs/openxr-implementation-status.md",
+          "docs/canted-projection.md",
+          "docs/eye-tracking.md"
+        ]
+      },
+      {
+        "id": "installer-launcher",
+        "paths": [
+          "src/installer/**",
+          "ed-up-launcher.sh"
+        ],
+        "keywords": [
+          "installer",
+          "launcher",
+          "update",
+          "manifest",
+          "edhm",
+          "2dmigoto",
+          "d3dx",
+          "settings",
+          "payload",
+          "install",
+          "uninstall",
+          "backup",
+          "steam",
+          "epic",
+          "proton"
+        ],
+        "docs": [
+          "docs/installer.md",
+          "docs/manual-install.md",
+          "docs/settings-menu.md",
+          "docs/epic-linux-preview.md"
+        ]
+      },
+      {
+        "id": "common-core",
+        "paths": [
+          "src/common/**"
+        ],
+        "keywords": [
+          "config",
+          "ini",
+          "edup",
+          "log",
+          "sentinel",
+          "guard",
+          "hook",
+          "vtable",
+          "profile",
+          "flat",
+          "mirror",
+          "hotkey",
+          "vram"
+        ],
+        "docs": [
+          "docs/fixes.md",
+          "docs/settings-menu.md",
+          "docs/troubleshooting.md",
+          "GLOSSARY.md"
+        ]
+      },
+      {
+        "id": "tools-and-build",
+        "paths": [
+          "tools/**",
+          "build.bat",
+          "package.bat"
+        ],
+        "keywords": [
+          "build",
+          "test",
+          "rig",
+          "gate",
+          "fetch",
+          "package",
+          "sign",
+          "worktree",
+          "receipt",
+          "cache",
+          "linux",
+          "wine",
+          "ci",
+          "selftest",
+          "profile"
+        ],
+        "docs": [
+          "docs/building.md",
+          "CODING_STANDARDS.md",
+          "CONTRIBUTING.md"
+        ]
+      },
+      {
+        "id": "plugins",
+        "paths": [
+          "src/plugins/**",
+          "include/edvr_plugin_api.h"
+        ],
+        "keywords": [
+          "plugin",
+          "abi",
+          "sdk"
+        ],
+        "docs": [
+          "docs/architecture.md"
+        ]
+      }
+    ]
+  },
+  "drift": {
+    "enabled": false
+  }
+}
