@@ -468,6 +468,10 @@ void applyWindowChrome(HWND window) {
     DwmSetWindowAttribute(window, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
     const DWORD round = 2 /* DWMWCP_ROUND */;
     DwmSetWindowAttribute(window, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &round, sizeof(round));
+    // Trigger a non-client frame refresh so Windows 10 repaints the titlebar when toggling dark mode
+    // on an already-visible window (WM_NCACTIVATE / DWM frame cache).
+    SetWindowPos(window, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
 void fillRounded(HDC dc, RECT rect, int radius, COLORREF fill) {

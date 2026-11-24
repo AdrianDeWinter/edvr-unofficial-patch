@@ -240,11 +240,13 @@ std::vector<std::string> snapshotRunningProcesses(bool underWine, bool* snapshot
     std::vector<std::string> out;
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap != INVALID_HANDLE_VALUE) {
-        if (snapshotOk) *snapshotOk = true;
         PROCESSENTRY32W entry{};
         entry.dwSize = sizeof(entry);
+        // Mirror detect.cpp runStateOfSnapshot: only mark the snapshot trustworthy if enumeration
+        // started cleanly and reached ERROR_NO_MORE_FILES (fail closed on partial/truncated scans).
+        SetLastError(ERROR_SUCCESS);
         if (Process32FirstW(snap, &entry)) {
-            do {
+            for (;;) {
                 std::string narrow;
                 for (const wchar_t* p = entry.szExeFile; *p; ++p) {
                     const wchar_t ch = *p;
@@ -254,7 +256,12 @@ std::vector<std::string> snapshotRunningProcesses(bool underWine, bool* snapshot
                 if (!narrow.empty() && std::find(out.begin(), out.end(), narrow) == out.end()) {
                     out.push_back(std::move(narrow));
                 }
-            } while (Process32NextW(snap, &entry));
+                SetLastError(ERROR_SUCCESS);
+                if (!Process32NextW(snap, &entry)) {
+                    if (GetLastError() == ERROR_NO_MORE_FILES && snapshotOk) *snapshotOk = true;
+                    break;
+                }
+            }
         }
         CloseHandle(snap);
     }
@@ -471,59 +478,6 @@ std::string sanitizeSingleLine(std::string s) {
         if (c == '\r' || c == '\n' || c == '\0') c = ' ';
     }
     return trimA(std::move(s));
-}
-
-// Builds a Windows Unicode environment block (NUL-separated entries, double-NUL terminated)
-// derived from the current process environment with XR_RUNTIME_JSON cleared or overridden.
-std::vector<wchar_t> buildChildEnvironment(ChildXrEnvAction action, const std::wstring& runtimePath, bool* okOut) {
-    if (okOut) *okOut = true;
-    if (action == ChildXrEnvAction::Inherit) return {};
-    LPWCH raw = GetEnvironmentStringsW();
-    if (!raw) {
-        if (okOut) *okOut = false;
-        return {};
-    }
-
-    std::vector<std::wstring> entries;
-    for (const wchar_t* p = raw; *p != L'\0';) {
-        const std::wstring entry(p);
-        p += entry.size() + 1;
-        const size_t eq = entry.find(L'=');
-        // Preserve Windows drive-current-directory entries like "=C:=C:\..." (eq == 0).
-        if (eq != std::wstring::npos && eq > 0) {
-            const std::wstring key = entry.substr(0, eq);
-            if (_wcsicmp(key.c_str(), L"XR_RUNTIME_JSON") == 0) continue;
-        }
-        entries.push_back(entry);
-    }
-    FreeEnvironmentStringsW(raw);
-
-    if (action == ChildXrEnvAction::SetXrRuntimeJson && !runtimePath.empty()) {
-        entries.push_back(L"XR_RUNTIME_JSON=" + runtimePath);
-    }
-
-    // CreateProcessW requires entries sorted by variable name only, case-insensitive Unicode ordinal
-    // order (sorting the full "NAME=VALUE" string misorders "ProgramFiles(x86)=" before "ProgramFiles=").
-    auto envNameSlice = [](const std::wstring& e) -> std::pair<const wchar_t*, int> {
-        if (e.empty()) return {L"", 0};
-        const size_t eq = e.find(L'=', e[0] == L'=' ? 1 : 0);
-        const size_t len = (eq == std::wstring::npos) ? e.size() : eq;
-        return {e.c_str(), static_cast<int>(len)};
-    };
-    std::sort(entries.begin(), entries.end(), [&](const std::wstring& a, const std::wstring& b) {
-        const auto na = envNameSlice(a);
-        const auto nb = envNameSlice(b);
-        return CompareStringOrdinal(na.first, na.second, nb.first, nb.second, TRUE) == CSTR_LESS_THAN;
-    });
-
-    std::vector<wchar_t> block;
-    for (const std::wstring& e : entries) {
-        block.insert(block.end(), e.begin(), e.end());
-        block.push_back(L'\0');
-    }
-    if (block.empty()) block.push_back(L'\0');
-    block.push_back(L'\0');
-    return block;
 }
 
 std::wstring cleanHeadsetDisplayName(const std::wstring& raw) {
@@ -770,10 +724,13 @@ EffectiveRuntimeSelection resolveEffectiveOpenXrRuntime(edvr::openxr::LocalConfi
         return sel;
     }
     // Both explicit runtime=system and an absent edup_openxr.ini use EDVR's packaged default
-    // (native_module.cpp:381-389): system mode clears XR_RUNTIME_JSON so Windows' active
-    // registry runtime is used. Under Wine/Proton, when ActiveRuntime points to wineopenxr
-    // and XR_RUNTIME_JSON is a Linux POSIX path, wineopenxr forwards to the host loader via
-    // that variable, so the probe child must inherit it instead of stripping it.
+    // (native_module.cpp:381-389, native_local_config.h:100-107): system mode clears Win32
+    // XR_RUNTIME_JSON so Windows' active registry runtime is used. Under Wine/Proton, when
+    // ActiveRuntime points to wineopenxr and XR_RUNTIME_JSON is a Linux POSIX path, the child
+    // inherits the Unix environment so wineopenxr.so still sees it, while runOpenXrProbeHelper
+    // clears the Win32 PEB copy in-process just like ScopedRuntimeManifest::apply(L"system").
+    // If regRuntime is empty in system mode, Elite has no usable Windows OpenXR runtime even if
+    // a Linux POSIX XR_RUNTIME_JSON is set (#261).
     const bool systemMode = localResult == edvr::openxr::LocalConfigResult::Absent ||
                             edvr::openxr::localConfigUsesSystemRuntime(localConfig.runtime);
     if (systemMode) {
@@ -789,10 +746,6 @@ EffectiveRuntimeSelection resolveEffectiveOpenXrRuntime(edvr::openxr::LocalConfi
                 }
                 sel.childEnvAction = ChildXrEnvAction::ClearXrRuntimeJson;
             }
-        } else if (underWine && !envRuntime.empty()) {
-            sel.source = EffectiveRuntimeSource::EnvVar;
-            sel.activeRuntimePath = envRuntime;
-            sel.activeRuntimeFromEnv = true;
         }
         return sel;
     }
@@ -1062,10 +1015,67 @@ OpenXrLiveProbe parseOpenXrProbeOutput(const std::string& stdoutUtf8) {
     return out;
 }
 
+// Builds a Windows Unicode environment block (NUL-separated entries, double-NUL terminated)
+// derived from the current process environment with XR_RUNTIME_JSON cleared or overridden.
+std::vector<wchar_t> buildChildEnvironment(ChildXrEnvAction action, const std::wstring& runtimePath, bool* okOut) {
+    if (okOut) *okOut = true;
+    if (action == ChildXrEnvAction::Inherit) return {};
+    LPWCH raw = GetEnvironmentStringsW();
+    if (!raw) {
+        if (okOut) *okOut = false;
+        return {};
+    }
+
+    std::vector<std::wstring> entries;
+    for (const wchar_t* p = raw; *p != L'\0';) {
+        const std::wstring entry(p);
+        p += entry.size() + 1;
+        const size_t eq = entry.find(L'=');
+        // Preserve Windows drive-current-directory entries like "=C:=C:\..." (eq == 0).
+        if (eq != std::wstring::npos && eq > 0) {
+            const std::wstring key = entry.substr(0, eq);
+            if (_wcsicmp(key.c_str(), L"XR_RUNTIME_JSON") == 0) continue;
+        }
+        entries.push_back(entry);
+    }
+    FreeEnvironmentStringsW(raw);
+
+    if (action == ChildXrEnvAction::SetXrRuntimeJson && !runtimePath.empty()) {
+        entries.push_back(L"XR_RUNTIME_JSON=" + runtimePath);
+    }
+
+    // Microsoft Learn (CreateProcessW, lpEnvironment): "All strings in the environment block must be
+    // sorted alphabetically by name. The sort is case-insensitive, Unicode order, without regard to
+    // locale." Sorting the full "NAME=VALUE" string misorders "ProgramFiles(x86)=" before "ProgramFiles=".
+    auto envNameSlice = [](const std::wstring& e) -> std::pair<const wchar_t*, int> {
+        if (e.empty()) return {L"", 0};
+        const size_t eq = e.find(L'=', e[0] == L'=' ? 1 : 0);
+        const size_t len = (eq == std::wstring::npos) ? e.size() : eq;
+        return {e.c_str(), static_cast<int>(len)};
+    };
+    std::sort(entries.begin(), entries.end(), [&](const std::wstring& a, const std::wstring& b) {
+        const auto na = envNameSlice(a);
+        const auto nb = envNameSlice(b);
+        return CompareStringOrdinal(na.first, na.second, nb.first, nb.second, TRUE) == CSTR_LESS_THAN;
+    });
+
+    std::vector<wchar_t> block;
+    for (const std::wstring& e : entries) {
+        block.insert(block.end(), e.begin(), e.end());
+        block.push_back(L'\0');
+    }
+    if (block.empty()) block.push_back(L'\0');
+    block.push_back(L'\0');
+    return block;
+}
+
 OpenXrLiveProbe runOpenXrProbeSubprocess(const std::wstring& exePath, const std::wstring& commandLine,
                                          ChildXrEnvAction envAction, const std::wstring& envRuntimePath,
                                          unsigned int timeoutMs, HANDLE cancelEvent) {
     OpenXrLiveProbe result;
+    if (cancelEvent && WaitForSingleObject(cancelEvent, 0) == WAIT_OBJECT_0) {
+        return result;
+    }
     result.attempted = true;
     result.loaderFound = false;
     if (exePath.empty() || commandLine.empty()) {
@@ -1208,6 +1218,9 @@ OpenXrLiveProbe runOpenXrProbeSubprocess(const std::wstring& exePath, const std:
     CloseHandle(pipeRead);
 
     if (exitCode != 0 && collected.find("edup_openxr_probe=1") == std::string::npos) {
+        // The probe child spawned and terminated abnormally before printing its marker (e.g. a
+        // runtime crash inside openxr_loader/xrCreateInstance): report as a live Error (-999).
+        result.loaderFound = true;
         result.resultCode = -999;
         return result;
     }
@@ -1250,6 +1263,16 @@ bool resolveSignedOpenXrLoader(const LauncherRoots& roots, const std::wstring& g
     }
     if (!isLowerHex(expectedSha, 64)) return false;
 
+    // Prefer the user-private payload cache over the game directory to minimize exposure on
+    // shared/writable game installs, falling back to the game directory if the cache is absent.
+    const PayloadCache cache(roots.cacheDir());
+    const std::wstring cached = cache.pathFor(expectedSha);
+    if (verifySignedLoaderOnDisk(cached, expectedSha, expectedSize)) {
+        if (pathOut) *pathOut = cached;
+        if (shaOut) *shaOut = expectedSha;
+        return true;
+    }
+
     if (!gameDir.empty()) {
         const std::wstring gameLoader = joinPath(resolveOpenvrDirForGame(gameDir), L"openxr_loader.dll");
         if (verifySignedLoaderOnDisk(gameLoader, expectedSha, expectedSize)) {
@@ -1257,14 +1280,6 @@ bool resolveSignedOpenXrLoader(const LauncherRoots& roots, const std::wstring& g
             if (shaOut) *shaOut = expectedSha;
             return true;
         }
-    }
-
-    const PayloadCache cache(roots.cacheDir());
-    const std::wstring cached = cache.pathFor(expectedSha);
-    if (verifySignedLoaderOnDisk(cached, expectedSha, expectedSize)) {
-        if (pathOut) *pathOut = cached;
-        if (shaOut) *shaOut = expectedSha;
-        return true;
     }
     return false;
 }
@@ -1289,6 +1304,21 @@ int runOpenXrProbeHelper(const LauncherRoots& roots, const std::wstring& gameDir
     std::wstring loaderPath;
     std::string loaderSha;
     if (!elevated && resolveSignedOpenXrLoader(roots, gameDir, keys, &loaderPath, &loaderSha)) {
+        // Under Wine/Proton, a Linux POSIX XR_RUNTIME_JSON (starting with '/') inherited for
+        // wineopenxr.so would otherwise be read from the Win32 PEB by Windows openxr_loader.dll
+        // before HKLM\...\ActiveRuntime and fail to open as a Windows path. Clearing it in-process
+        // (matching ScopedRuntimeManifest::apply(L"system") in src/openxr/native_local_config.h)
+        // clears only the Win32 PEB while leaving Unix environ intact for wineopenxr.so.
+        if (runningUnderWine()) {
+            const DWORD need = GetEnvironmentVariableW(L"XR_RUNTIME_JSON", nullptr, 0);
+            if (need > 1) {
+                std::wstring xrVal(need, L'\0');
+                const DWORD got = GetEnvironmentVariableW(L"XR_RUNTIME_JSON", &xrVal[0], need);
+                if (got > 0 && got < need && xrVal[0] == L'/') {
+                    SetEnvironmentVariableW(L"XR_RUNTIME_JSON", nullptr);
+                }
+            }
+        }
         // Payload cache files are named by their 64-hex SHA-256 with no extension.
         // Win32 LoadLibraryExW appends ".dll" when the leaf filename has no '.', unless
         // a trailing '.' is present (which Win32 strips when opening the file).
@@ -1402,15 +1432,19 @@ VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in) {
     if (!hasActivePath) {
         report.status = VrStatusKind::NotConfigured;
         report.activePlatform = VrPlatform::Unknown;
-        if (!in.linuxHostRuntimeHint.empty() || !in.linuxHostRuntimePath.empty()) {
+        if (!in.linuxHostRuntimeHint.empty() || !in.linuxHostRuntimePath.empty() ||
+            !in.linuxHostRuntimeName.empty()) {
             // Host Linux XDG runtime is informational only when Windows has no registered runtime
-            // (Elite's Windows openxr_loader.dll requires Proton's wineopenxr registry entry or
-            // XR_RUNTIME_JSON to reach it), so status stays NotConfigured and preflight stays NoRuntime.
+            // (Elite's Windows openxr_loader.dll requires Proton's wineopenxr registry entry to
+            // reach it), so status stays NotConfigured and preflight stays NoRuntime.
             report.linuxHostRuntimePath = in.linuxHostRuntimePath;
-            const std::wstring hint = !in.linuxHostRuntimeHint.empty() ? in.linuxHostRuntimeHint : in.linuxHostRuntimePath;
+            const std::wstring hint = !in.linuxHostRuntimeHint.empty()
+                                          ? in.linuxHostRuntimeHint
+                                          : (!in.linuxHostRuntimeName.empty() ? in.linuxHostRuntimeName
+                                                                              : in.linuxHostRuntimePath);
             const VrPlatform hostPlat = classifyVrPlatform(hint);
             const std::wstring fallbackHost =
-                !in.linuxHostRuntimePath.empty() ? stemOfPath(in.linuxHostRuntimePath) : L"OpenXR";
+                !in.linuxHostRuntimeName.empty() ? in.linuxHostRuntimeName : L"OpenXR";
             report.linuxHostRuntimeName = vrPlatformDisplayName(hostPlat, fallbackHost);
         }
         if (!in.usbHeadset.name.empty()) {
@@ -1557,8 +1591,9 @@ VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in) {
 
 VrHeadsetReport mergeStaticRefreshWithLive(const VrHeadsetReport& freshStatic, const VrHeadsetReport& previous) {
     if (freshStatic.hasLiveResult || !previous.hasLiveResult) return freshStatic;
-    if (freshStatic.status == VrStatusKind::NotConfigured || freshStatic.localConfigInvalid ||
-        freshStatic.activeRuntimeMissingFile || freshStatic.activeLibraryMissingFile) {
+    if (freshStatic.status == VrStatusKind::NotConfigured || freshStatic.status == VrStatusKind::Error ||
+        freshStatic.localConfigInvalid || freshStatic.activeRuntimeMissingFile ||
+        freshStatic.activeLibraryMissingFile) {
         return freshStatic;
     }
     if (!pathsMatchCaseInsensitive(freshStatic.activeRuntimePath, previous.activeRuntimePath)) {
@@ -1622,17 +1657,6 @@ std::wstring redactUserPath(const std::wstring& path) {
     std::wstring out = path;
     auto isSep = [](wchar_t c) { return c == L'\\' || c == L'/'; };
 
-    // Anchor profile directories to the path root (X:\, \\?\X:\, or leading /) so unrelated
-    // subdirectories such as D:\Games\Home\Elite are not redacted, while handling mixed or
-    // doubled separators and immutable-Linux /var/home/<user> paths.
-    size_t pos = 0;
-    if (out.size() >= 6 && isSep(out[0]) && isSep(out[1]) && (out[2] == L'?' || out[2] == L'.') && isSep(out[3]) &&
-        std::iswalpha(out[4]) && out[5] == L':') {
-        pos = 6;
-    } else if (out.size() >= 2 && std::iswalpha(out[0]) && out[1] == L':') {
-        pos = 2;
-    }
-
     auto readComp = [&](size_t& p, std::wstring* compOut) -> bool {
         const size_t sepStart = p;
         while (p < out.size() && isSep(out[p])) ++p;
@@ -1643,21 +1667,93 @@ std::wstring redactUserPath(const std::wstring& path) {
         return true;
     };
 
-    std::wstring first;
-    if (!readComp(pos, &first)) return out;
-    bool atUserParent = (first == L"users" || first == L"home");
-    if (!atUserParent && first == L"var") {
-        std::wstring second;
-        if (readComp(pos, &second) && second == L"home") atUserParent = true;
-    }
-    if (!atUserParent) return out;
+    auto redactNextSegment = [&](size_t p) -> size_t {
+        const size_t sepStart = p;
+        while (p < out.size() && isSep(out[p])) ++p;
+        if (p == sepStart || p >= out.size()) return p;
+        const size_t userStart = p;
+        while (p < out.size() && !isSep(out[p])) ++p;
+        if (p > userStart) {
+            out.replace(userStart, p - userStart, L"<user>");
+            return userStart + 6;
+        }
+        return p;
+    };
 
-    const size_t sepStart = pos;
-    while (pos < out.size() && isSep(out[pos])) ++pos;
-    if (pos == sepStart || pos >= out.size()) return out;
-    const size_t userStart = pos;
-    while (pos < out.size() && !isSep(out[pos])) ++pos;
-    if (pos > userStart) out.replace(userStart, pos - userStart, L"<user>");
+    // 1. Anchor profile directories to path roots (X:\, \\?\X:\, \??\X:\, leading /, UNC \\host\,
+    //    \\?\UNC\host\, and WSL \\wsl.localhost\<distro>\) so unrelated subdirectories such as
+    //    D:\Games\Home\Elite are not redacted, while handling mixed/doubled separators and
+    //    immutable-Linux /var/home/<user> paths.
+    size_t pos = 0;
+    bool unc = false;
+    const bool hasDevicePrefix =
+        out.size() >= 4 && isSep(out[0]) &&
+        ((isSep(out[1]) && (out[2] == L'?' || out[2] == L'.')) || (out[1] == L'?' && out[2] == L'?')) &&
+        isSep(out[3]);
+    if (hasDevicePrefix && out.size() >= 8 && toLowerW(out.substr(4, 3)) == L"unc" && isSep(out[7])) {
+        pos = 7;
+        unc = true;
+    } else if (hasDevicePrefix && out.size() >= 6 && std::iswalpha(out[4]) && out[5] == L':') {
+        pos = 6;
+    } else if (out.size() >= 2 && std::iswalpha(out[0]) && out[1] == L':') {
+        pos = 2;
+    } else if (out.size() >= 2 && isSep(out[0]) && isSep(out[1])) {
+        pos = 0;
+        unc = true;
+    }
+
+    auto redactRootUser = [&](size_t startPos) {
+        std::wstring first;
+        if (!readComp(startPos, &first)) return;
+        bool atUserParent = (first == L"users" || first == L"home");
+        if (!atUserParent && first == L"var") {
+            std::wstring second;
+            if (readComp(startPos, &second) && second == L"home") atUserParent = true;
+        }
+        if (atUserParent) redactNextSegment(startPos);
+    };
+
+    if (unc) {
+        std::wstring host;
+        if (readComp(pos, &host)) {
+            if (host == L"wsl.localhost" || host == L"wsl$") {
+                std::wstring distro;
+                if (readComp(pos, &distro)) redactRootUser(pos);
+            } else {
+                std::wstring share;
+                if (readComp(pos, &share)) {
+                    if (share == L"users") {
+                        redactNextSegment(pos);
+                    } else {
+                        std::wstring next;
+                        if (readComp(pos, &next) && next == L"users") redactNextSegment(pos);
+                    }
+                }
+            }
+        }
+    } else {
+        redactRootUser(pos);
+    }
+
+    // 2. Also redact Wine/Proton prefix profile paths (...\drive_c\users\<user>\...) anywhere in
+    //    the path so prefixes outside /home and multi-occurrence paths do not leak usernames.
+    size_t scan = 0;
+    while (scan < out.size()) {
+        const size_t sep = out.find_first_of(L"\\/", scan);
+        if (sep == std::wstring::npos) break;
+        size_t p = sep;
+        std::wstring comp;
+        if (!readComp(p, &comp)) break;
+        if (comp == L"drive_c") {
+            size_t afterDriveC = p;
+            std::wstring next;
+            if (readComp(afterDriveC, &next) && next == L"users") {
+                scan = redactNextSegment(afterDriveC);
+                continue;
+            }
+        }
+        scan = p;
+    }
     return out;
 }
 
@@ -1838,6 +1934,7 @@ VrHeadsetReport probeVrHeadset(const VrProbeOptions& options) {
         if (findLinuxHostManifest(&hostPath, &hostJson)) {
             const OpenXrManifestInfo hostInfo = parseOpenXrRuntimeJson(hostJson, hostPath);
             in.linuxHostRuntimePath = hostPath;
+            in.linuxHostRuntimeName = hostInfo.runtimeName;
             in.linuxHostRuntimeHint = hostPath + L" " + hostInfo.runtimeName + L" " + hostInfo.libraryPath;
             if (!hostInfo.valid && !hostJson.empty()) {
                 const size_t cap = hostJson.size() < 1024 ? hostJson.size() : 1024;

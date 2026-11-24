@@ -109,6 +109,7 @@ struct VrProbeInputs {
     EffectiveRuntimeSource runtimeSource = EffectiveRuntimeSource::None;
     std::wstring activeRuntimePath;
     std::wstring linuxHostRuntimePath;        // host Linux active_runtime.json path (informational / wineopenxr hint)
+    std::wstring linuxHostRuntimeName;        // parsed runtime.name from host Linux active_runtime.json, if any
     std::wstring linuxHostRuntimeHint;        // host Linux active_runtime.json text hint behind Proton wineopenxr
     bool activeRuntimeFromEnv = false;
     bool localConfigInvalid = false;
@@ -226,6 +227,9 @@ bool resolveSignedOpenXrLoader(const LauncherRoots& roots, const std::wstring& g
                                const char* const* keys, std::wstring* pathOut, std::string* shaOut);
 // `parseOpenXrProbeOutput` parses the key=value stdout produced by `runOpenXrProbeHelper`.
 OpenXrLiveProbe parseOpenXrProbeOutput(const std::string& stdoutUtf8);
+// Builds a sorted Windows Unicode environment block (double-NUL terminated) for the probe child.
+std::vector<wchar_t> buildChildEnvironment(ChildXrEnvAction action, const std::wstring& runtimePath,
+                                           bool* okOut = nullptr);
 OpenXrLiveProbe runOpenXrProbeSubprocess(const std::wstring& exePath, const std::wstring& commandLine,
                                          ChildXrEnvAction envAction, const std::wstring& envRuntimePath,
                                          unsigned int timeoutMs, HANDLE cancelEvent = nullptr);

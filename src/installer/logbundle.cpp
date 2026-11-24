@@ -1209,23 +1209,32 @@ LogBundle collectLogs(const std::wstring& gameDir, const std::wstring& outDir,
         files.push_back(found.path);
         names.push_back(name);
     }
+    // Deduplicate in-memory extra entries once (case-insensitively against disk names and each
+    // other) so writeZip and bundle.included stay in exact agreement.
+    std::vector<MemoryBundleEntry> uniqueExtras;
+    if (extraEntries) {
+        for (const MemoryBundleEntry& extra : *extraEntries) {
+            if (extra.name.empty()) continue;
+            const bool dupDisk = std::any_of(names.begin(), names.end(), [&](const std::wstring& n) {
+                return _wcsicmp(n.c_str(), extra.name.c_str()) == 0;
+            });
+            const bool dupExtra = std::any_of(uniqueExtras.begin(), uniqueExtras.end(),
+                                              [&](const MemoryBundleEntry& e) {
+                                                  return _wcsicmp(e.name.c_str(), extra.name.c_str()) == 0;
+                                              });
+            if (!dupDisk && !dupExtra) uniqueExtras.push_back(extra);
+        }
+    }
     std::string error;
     std::vector<std::wstring> skipped;
-    if (!writeZip(bundle.zipPath, files, names, &error, &skipped, extraEntries)) {
+    if (!writeZip(bundle.zipPath, files, names, &error, &skipped, uniqueExtras.empty() ? nullptr : &uniqueExtras)) {
         bundle.error = "Could not write " + toUtf8(bundle.zipPath) + ": " + error;
         return bundle;
     }
     for(const auto& name:names)
         if(std::find(skipped.begin(),skipped.end(),name)==skipped.end()) bundle.included.push_back(name);
-    if (extraEntries) {
-        for (const MemoryBundleEntry& extra : *extraEntries) {
-            if (extra.name.empty()) continue;
-            const bool dup = std::any_of(bundle.included.begin(), bundle.included.end(),
-                                         [&](const std::wstring& existing) {
-                                             return _wcsicmp(existing.c_str(), extra.name.c_str()) == 0;
-                                         });
-            if (!dup) bundle.included.push_back(extra.name);
-        }
+    for (const MemoryBundleEntry& extra : uniqueExtras) {
+        bundle.included.push_back(extra.name);
     }
     for (const std::wstring& name : skipped) {
         bundle.notes.push_back(toUtf8(name) +

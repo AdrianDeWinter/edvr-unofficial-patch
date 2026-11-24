@@ -82,6 +82,7 @@ struct LauncherGui {
     std::unique_ptr<LauncherSession> session;
     VrHeadsetReport vrReport;
     std::wstring vrReportGameDir;    // install folder `vrReport` belongs to
+    std::wstring vrActiveProbeGameDir;  // install folder currently being probed on `vrProbeThread`
     std::shared_ptr<VrProbeController> vrProbeCtrl;
     std::thread vrProbeThread;
     bool vrProbing = false;
@@ -140,7 +141,21 @@ int launcherStatusTop() {
 }
 
 bool sameInstallDir(const std::wstring& a, const std::wstring& b) {
-    return (a.empty() && b.empty()) || samePath(a, b);
+    return (a.empty() && b.empty()) || LauncherState::sameInstall(a, b);
+}
+
+bool launcherHasSignedOpenXrLoader() {
+    return lg.session && lg.session->payloadState() == PayloadState::Ready &&
+           lg.session->payload().kind == PayloadKind::Manifest &&
+           payloadInfo().find("openxr_loader") != nullptr;
+}
+
+void setVrRefreshBusy(bool busy) {
+    lg.vrProbingBusyUi = busy;
+    if (lg.vrRefresh) {
+        SetWindowTextW(lg.vrRefresh, busy ? tr(L"Checking...") : tr(L"Refresh"));
+        EnableWindow(lg.vrRefresh, busy ? FALSE : TRUE);
+    }
 }
 
 int vrTriggerPriority(VrProbeTrigger trigger) {
@@ -158,7 +173,9 @@ void startVrHeadsetProbe(VrProbeTrigger trigger, bool bypassThrottle = false) {
     if (lg.vrProbeCtrl && lg.vrProbeCtrl->shuttingDown.load()) return;
 
     const std::wstring gameDir = g.haveSurvey ? g.survey.game.dir : std::wstring();
-    const bool installChanged = lg.vrHaveReport && !sameInstallDir(lg.vrReportGameDir, gameDir);
+    const bool reportDirChanged = lg.vrHaveReport && !sameInstallDir(lg.vrReportGameDir, gameDir);
+    const bool activeProbeDirChanged = lg.vrProbing && !sameInstallDir(lg.vrActiveProbeGameDir, gameDir);
+    const bool installChanged = reportDirChanged || activeProbeDirChanged;
     if (installChanged) {
         ++lg.vrProbeGen;  // discard any in-flight probe started for the previous install
         lg.vrHaveReport = false;
@@ -187,11 +204,7 @@ void startVrHeadsetProbe(VrProbeTrigger trigger, bool bypassThrottle = false) {
             }
             lg.vrProbePending = true;
             if (trigger != VrProbeTrigger::PeriodicTimer && !lg.vrProbingBusyUi) {
-                lg.vrProbingBusyUi = true;
-                if (lg.vrRefresh) {
-                    SetWindowTextW(lg.vrRefresh, tr(L"Checking..."));
-                    EnableWindow(lg.vrRefresh, FALSE);
-                }
+                setVrRefreshBusy(true);
             }
         }
         return;
@@ -212,25 +225,24 @@ void startVrHeadsetProbe(VrProbeTrigger trigger, bool bypassThrottle = false) {
     }
 
     lg.vrProbing = true;
-    lg.vrProbingBusyUi = (trigger != VrProbeTrigger::PeriodicTimer);
+    lg.vrActiveProbeGameDir = gameDir;
     lg.vrProbePending = false;
     const uint64_t gen = ++lg.vrProbeGen;
     if (!lg.vrHaveReport) {
         lg.vrReport = VrHeadsetReport{};
         lg.vrReport.status = VrStatusKind::Checking;
     }
-    if (lg.vrProbingBusyUi && lg.vrRefresh) {
-        SetWindowTextW(lg.vrRefresh, tr(L"Checking..."));
-        EnableWindow(lg.vrRefresh, FALSE);
+    if (trigger != VrProbeTrigger::PeriodicTimer) {
+        setVrRefreshBusy(true);
+    } else {
+        lg.vrProbingBusyUi = false;
     }
     InvalidateRect(g.window, nullptr, FALSE);
 
     VrProbeOptions opts;
     opts.gameDir = gameDir;
     opts.dataRoot = g.args.dataRoot;
-    opts.hasSignedLoader = lg.session && lg.session->payloadState() == PayloadState::Ready &&
-                           lg.session->payload().kind == PayloadKind::Manifest &&
-                           payloadInfo().find("openxr_loader") != nullptr;
+    opts.hasSignedLoader = launcherHasSignedOpenXrLoader();
     opts.allowLiveProbe = decision.allowLiveProbe;
     opts.isElevated = elevated;
     opts.liveProbeTimeoutMs = 2500;
@@ -246,7 +258,7 @@ void startVrHeadsetProbe(VrProbeTrigger trigger, bool bypassThrottle = false) {
                                                                 probedDir = opts.gameDir, gen]() {
             if (ctrl->shuttingDown.load()) return;
             lg.vrProbing = false;
-            lg.vrProbingBusyUi = false;
+            lg.vrActiveProbeGameDir.clear();
             if (gen == lg.vrProbeGen) {
                 const bool sameDir = lg.vrHaveReport && sameInstallDir(lg.vrReportGameDir, probedDir);
                 const VrHeadsetReport merged =
@@ -257,10 +269,7 @@ void startVrHeadsetProbe(VrProbeTrigger trigger, bool bypassThrottle = false) {
                 if (merged.liveProbeTimedOut) lg.vrLiveProbeTimedOut = true;
                 lg.vrReport = merged;
             }
-            if (lg.vrRefresh) {
-                SetWindowTextW(lg.vrRefresh, tr(L"Refresh"));
-                EnableWindow(lg.vrRefresh, TRUE);
-            }
+            setVrRefreshBusy(false);
             InvalidateRect(g.window, nullptr, FALSE);
             if (lg.vrProbePending) {
                 const VrProbeTrigger nextTrigger = lg.vrPendingTrigger;
@@ -607,9 +616,7 @@ void launcherRefresh() {
         lg.noPayloadShown = true;
         setReport(toUtf8(launcherNoPayloadText()));
     }
-    const bool hasSignedLoader = lg.session && lg.session->payloadState() == PayloadState::Ready &&
-                                 lg.session->payload().kind == PayloadKind::Manifest &&
-                                 payloadInfo().find("openxr_loader") != nullptr;
+    const bool hasSignedLoader = launcherHasSignedOpenXrLoader();
     const bool loaderJustReady = hasSignedLoader && !lg.vrSawSignedPayload;
     lg.vrSawSignedPayload = hasSignedLoader;
     if (loaderJustReady && g.screen == Screen::Play && (!lg.vrHaveReport || !lg.vrReport.hasLiveResult)) {
@@ -628,6 +635,10 @@ void layoutLauncherControls() {
         if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().body), TRUE);
     for (HWND control : {lg.vrRefresh, lg.themeToggle})
         if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().caption), TRUE);
+    // Position themeToggle immediately (before kMsgFirstScan creates lg.session) so there is no pop-in.
+    if (lg.themeToggle) {
+        MoveWindow(lg.themeToggle, dp(kMargin), dp(kTipTop - 2), dp(70), dp(22), TRUE);
+    }
     lg.layoutDirty = true;
     updateLauncherControls();
 }
@@ -1022,8 +1033,6 @@ void applyLauncherTheme(const std::string& mode) {
     if (g.window) {
         ui::applyWindowChrome(g.window);
         applyNativeControlThemes();
-        SetWindowPos(g.window, nullptr, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         RedrawWindow(g.window, nullptr, nullptr,
                      RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
     }

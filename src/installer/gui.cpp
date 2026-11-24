@@ -1490,7 +1490,7 @@ void saveLogs() {
         opts.gameDir = g.survey.game.dir;
         opts.allowLiveProbe = false;
         VrHeadsetReport vr = probeVrHeadset(opts);
-        if (lg.vrHaveReport && samePath(lg.vrReportGameDir, g.survey.game.dir)) {
+        if (lg.vrHaveReport && LauncherState::sameInstall(lg.vrReportGameDir, g.survey.game.dir)) {
             vr = mergeStaticRefreshWithLive(vr, lg.vrReport);
         }
         extraEntries.push_back({L"vr-environment.txt", formatVrEnvironmentSnapshot(vr)});
@@ -1954,8 +1954,6 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                 applyNativeControlThemes();
                 syncThemeToggleLabel();
 #endif
-                SetWindowPos(window, nullptr, 0, 0, 0, 0,
-                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
                 RedrawWindow(window, nullptr, nullptr,
                              RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
             }
