@@ -15,6 +15,7 @@
 #include "launch_route.h"
 #include "launcher_main.h"
 #include "launcher_state.h"
+#include "vr_headset.h"
 #endif
 
 namespace edvr::installer {
@@ -546,7 +547,18 @@ int runConsole(const AppArgs& args) {
                      ". Nothing was written.\r\n");
             return 0;
         }
+#ifdef EDUP_LAUNCHER
+        std::vector<MemoryBundleEntry> extraEntries;
+        {
+            VrProbeOptions opts;
+            opts.gameDir = survey.game.dir;
+            opts.allowLiveProbe = false;
+            extraEntries.push_back({L"vr-environment.txt", formatVrEnvironmentSnapshot(probeVrHeadset(opts))});
+        }
+        const LogBundle bundle = collectLogs(survey.game.dir, saveFolder, nullptr, &extraEntries);
+#else
         const LogBundle bundle = collectLogs(survey.game.dir, saveFolder);
+#endif
         for (const std::string& note : bundle.notes) writeOut("  " + note + "\r\n");
         if (!bundle.ok) {
             writeOut(bundle.error + "\r\n");

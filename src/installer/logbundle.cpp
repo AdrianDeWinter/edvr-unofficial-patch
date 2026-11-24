@@ -588,6 +588,14 @@ bool writeZip(const std::wstring& zipPath, const std::vector<std::wstring>& file
             if (extra.name.empty()) continue;
             Entry entry;
             entry.name = toUtf8(extra.name);
+            bool duplicate = false;
+            for (const Entry& existing : entries) {
+                if (_stricmp(existing.name.c_str(), entry.name.c_str()) == 0) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
             if (entry.name.size() > 65535 || entries.size() >= 65535 ||
                 static_cast<unsigned long long>(extra.bytes.size()) > kZipLimit ||
                 position + 30ull + entry.name.size() + static_cast<unsigned long long>(extra.bytes.size()) +
@@ -1171,7 +1179,16 @@ LogBundle collectLogs(const std::wstring& gameDir, const std::wstring& outDir,
         }
     }
 
-    if (take.empty()) {
+    bool hasExtraEntries = false;
+    if (extraEntries) {
+        for (const MemoryBundleEntry& extra : *extraEntries) {
+            if (!extra.name.empty()) {
+                hasExtraEntries = true;
+                break;
+            }
+        }
+    }
+    if (take.empty() && !hasExtraEntries) {
         bundle.error = "Found nothing to collect: no logs, no breadcrumbs, no settings file.";
         return bundle;
     }
@@ -1202,7 +1219,12 @@ LogBundle collectLogs(const std::wstring& gameDir, const std::wstring& outDir,
         if(std::find(skipped.begin(),skipped.end(),name)==skipped.end()) bundle.included.push_back(name);
     if (extraEntries) {
         for (const MemoryBundleEntry& extra : *extraEntries) {
-            if (!extra.name.empty()) bundle.included.push_back(extra.name);
+            if (extra.name.empty()) continue;
+            const bool dup = std::any_of(bundle.included.begin(), bundle.included.end(),
+                                         [&](const std::wstring& existing) {
+                                             return _wcsicmp(existing.c_str(), extra.name.c_str()) == 0;
+                                         });
+            if (!dup) bundle.included.push_back(extra.name);
         }
     }
     for (const std::wstring& name : skipped) {

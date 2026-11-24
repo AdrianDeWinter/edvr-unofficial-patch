@@ -863,7 +863,10 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
         return;
     }
     const bool boldTab = owned->style == ButtonStyle::TabActive || owned->style == ButtonStyle::SegmentActive;
-    drawText(dc, label, textRect, boldTab ? fonts().bodyBold : fonts().body,
+    HFONT controlFont = reinterpret_cast<HFONT>(SendMessageW(item->hwndItem, WM_GETFONT, 0, 0));
+    HFONT textFont = boldTab ? fonts().bodyBold
+                             : (controlFont == fonts().caption ? fonts().caption : fonts().body);
+    drawText(dc, label, textRect, textFont,
              ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 

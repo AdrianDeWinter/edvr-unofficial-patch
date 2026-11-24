@@ -55,7 +55,7 @@ constexpr int kLaunchOptNoDirectY = kLaunchDividerY + 12;
 constexpr int kLaunchBottomWithDirect = kLaunchOptWithDirectY + 42;
 constexpr int kLaunchBottomNoDirect = kLaunchOptNoDirectY + 42;
 constexpr int kPlayBannerH = 46;
-constexpr int kVrCardH = 92;
+constexpr int kVrCardH = 96;
 
 struct VrProbeController {
     std::mutex mu;
@@ -85,9 +85,11 @@ struct LauncherGui {
     std::shared_ptr<VrProbeController> vrProbeCtrl;
     std::thread vrProbeThread;
     bool vrProbing = false;
+    bool vrProbingBusyUi = false;    // true only for explicit probes; 5 s timer refreshes never flash the button
     bool vrProbePending = false;
     VrProbeTrigger vrPendingTrigger = VrProbeTrigger::ManualRefresh;
     bool vrHaveReport = false;
+    bool vrSawSignedPayload = false; // tracks async payload load so startup upgrades to a live OpenXR check
     bool vrLiveProbeTimedOut = false;  // stops spawning live probes for this session after one timeout
     uint64_t vrProbeGen = 0;
     ULONGLONG vrLastProbeMs = 0;
@@ -137,39 +139,70 @@ int launcherStatusTop() {
     return launcherVrTop() + kVrCardH + (lg.playBannerShown ? 10 : 12);
 }
 
-void startVrHeadsetProbe(VrProbeTrigger trigger) {
+bool sameInstallDir(const std::wstring& a, const std::wstring& b) {
+    return (a.empty() && b.empty()) || samePath(a, b);
+}
+
+int vrTriggerPriority(VrProbeTrigger trigger) {
+    switch (trigger) {
+        case VrProbeTrigger::ManualRefresh: return 3;
+        case VrProbeTrigger::InstallSelected: return 2;
+        case VrProbeTrigger::PlayTabOpened: return 1;
+        case VrProbeTrigger::PeriodicTimer:
+        default: return 0;
+    }
+}
+
+void startVrHeadsetProbe(VrProbeTrigger trigger, bool bypassThrottle = false) {
     if (!g.window) return;
     if (lg.vrProbeCtrl && lg.vrProbeCtrl->shuttingDown.load()) return;
 
     const std::wstring gameDir = g.haveSurvey ? g.survey.game.dir : std::wstring();
-    const bool installChanged =
-        lg.vrHaveReport && _wcsicmp(lg.vrReportGameDir.c_str(), gameDir.c_str()) != 0;
+    const bool installChanged = lg.vrHaveReport && !sameInstallDir(lg.vrReportGameDir, gameDir);
     if (installChanged) {
+        ++lg.vrProbeGen;  // discard any in-flight probe started for the previous install
         lg.vrHaveReport = false;
         lg.vrReportGameDir.clear();
         lg.vrReport = VrHeadsetReport{};
         lg.vrReport.status = VrStatusKind::Checking;
+        InvalidateRect(g.window, nullptr, FALSE);
     }
 
     const bool onPlay = g.screen == Screen::Play;
     const bool minimized = IsIconic(g.window) != FALSE;
     const bool playing = lg.session && lg.session->playing();
-    const bool gameRunning = g.haveSurvey && (g.survey.gameRunningHere || g.survey.gameRunningElsewhere);
     const bool elevated = isElevatedForPlay();
+    // Do not feed stale g.survey.gameRunning* into decideVrProbe: probeVrHeadset takes a live
+    // process snapshot and blocks OpenXR whenever EliteDangerous64.exe is running anywhere, while
+    // letting Refresh and the 5 s timer recover immediately once an external Elite session closes.
     const VrProbeDecision decision =
-        decideVrProbe(trigger, onPlay, minimized, playing, gameRunning, elevated, lg.vrLiveProbeTimedOut);
+        decideVrProbe(trigger, onPlay, minimized, playing, false, elevated, lg.vrLiveProbeTimedOut);
     if (!decision.shouldRun) return;
 
     const bool forced = trigger == VrProbeTrigger::ManualRefresh || trigger == VrProbeTrigger::InstallSelected;
     if (lg.vrProbing) {
         if (forced || installChanged || trigger == VrProbeTrigger::PlayTabOpened) {
+            if (!lg.vrProbePending || vrTriggerPriority(trigger) >= vrTriggerPriority(lg.vrPendingTrigger)) {
+                lg.vrPendingTrigger = trigger;
+            }
             lg.vrProbePending = true;
-            lg.vrPendingTrigger = trigger;
+            if (trigger != VrProbeTrigger::PeriodicTimer && !lg.vrProbingBusyUi) {
+                lg.vrProbingBusyUi = true;
+                if (lg.vrRefresh) {
+                    SetWindowTextW(lg.vrRefresh, tr(L"Checking..."));
+                    EnableWindow(lg.vrRefresh, FALSE);
+                }
+            }
         }
         return;
     }
     const ULONGLONG now = GetTickCount64();
-    if (!forced && !installChanged && lg.vrHaveReport && now - lg.vrLastProbeMs < 3000) return;
+    const bool liveUpgradeNeeded =
+        trigger == VrProbeTrigger::PlayTabOpened && decision.allowLiveProbe && !lg.vrReport.hasLiveResult;
+    if (!forced && !installChanged && !bypassThrottle && !liveUpgradeNeeded && lg.vrHaveReport &&
+        now - lg.vrLastProbeMs < 3000) {
+        return;
+    }
 
     if (lg.vrProbeThread.joinable()) lg.vrProbeThread.join();
     if (!lg.vrProbeCtrl) {
@@ -179,13 +212,14 @@ void startVrHeadsetProbe(VrProbeTrigger trigger) {
     }
 
     lg.vrProbing = true;
+    lg.vrProbingBusyUi = (trigger != VrProbeTrigger::PeriodicTimer);
     lg.vrProbePending = false;
     const uint64_t gen = ++lg.vrProbeGen;
     if (!lg.vrHaveReport) {
         lg.vrReport = VrHeadsetReport{};
         lg.vrReport.status = VrStatusKind::Checking;
     }
-    if (lg.vrRefresh) {
+    if (lg.vrProbingBusyUi && lg.vrRefresh) {
         SetWindowTextW(lg.vrRefresh, tr(L"Checking..."));
         EnableWindow(lg.vrRefresh, FALSE);
     }
@@ -210,17 +244,19 @@ void startVrHeadsetProbe(VrProbeTrigger trigger) {
         if (ctrl->shuttingDown.load() || !ctrl->window) return;
         std::function<void()>* job = new std::function<void()>([ctrl, report = std::move(report),
                                                                 probedDir = opts.gameDir, gen]() {
-            if (ctrl->shuttingDown.load() || gen != lg.vrProbeGen) return;
+            if (ctrl->shuttingDown.load()) return;
             lg.vrProbing = false;
-            const bool sameDir =
-                lg.vrHaveReport && _wcsicmp(lg.vrReportGameDir.c_str(), probedDir.c_str()) == 0;
-            const VrHeadsetReport merged =
-                sameDir ? mergeStaticRefreshWithLive(report, lg.vrReport) : report;
-            lg.vrHaveReport = true;
-            lg.vrReportGameDir = probedDir;
-            lg.vrLastProbeMs = GetTickCount64();
-            if (merged.liveProbeTimedOut) lg.vrLiveProbeTimedOut = true;
-            lg.vrReport = merged;
+            lg.vrProbingBusyUi = false;
+            if (gen == lg.vrProbeGen) {
+                const bool sameDir = lg.vrHaveReport && sameInstallDir(lg.vrReportGameDir, probedDir);
+                const VrHeadsetReport merged =
+                    sameDir ? mergeStaticRefreshWithLive(report, lg.vrReport) : report;
+                lg.vrHaveReport = true;
+                lg.vrReportGameDir = probedDir;
+                lg.vrLastProbeMs = GetTickCount64();
+                if (merged.liveProbeTimedOut) lg.vrLiveProbeTimedOut = true;
+                lg.vrReport = merged;
+            }
             if (lg.vrRefresh) {
                 SetWindowTextW(lg.vrRefresh, tr(L"Refresh"));
                 EnableWindow(lg.vrRefresh, TRUE);
@@ -229,7 +265,7 @@ void startVrHeadsetProbe(VrProbeTrigger trigger) {
             if (lg.vrProbePending) {
                 const VrProbeTrigger nextTrigger = lg.vrPendingTrigger;
                 lg.vrProbePending = false;
-                startVrHeadsetProbe(nextTrigger);
+                startVrHeadsetProbe(nextTrigger, /*bypassThrottle=*/true);
             }
         });
         if (!PostMessageW(ctrl->window, kMsgLauncherJob, 0, reinterpret_cast<LPARAM>(job))) delete job;
@@ -527,7 +563,7 @@ void updateLauncherControls() {
     ShowWindow(lg.rc, onSetup ? SW_SHOW : SW_HIDE);
     if (lg.vrRefresh) {
         ShowWindow(lg.vrRefresh, onPlay ? SW_SHOW : SW_HIDE);
-        EnableWindow(lg.vrRefresh, !lg.vrProbing);
+        EnableWindow(lg.vrRefresh, !lg.vrProbingBusyUi);
     }
 
     ShowWindow(lg.playVr, onPlay && showPair && showVrButton ? SW_SHOW : SW_HIDE);
@@ -571,6 +607,14 @@ void launcherRefresh() {
         lg.noPayloadShown = true;
         setReport(toUtf8(launcherNoPayloadText()));
     }
+    const bool hasSignedLoader = lg.session && lg.session->payloadState() == PayloadState::Ready &&
+                                 lg.session->payload().kind == PayloadKind::Manifest &&
+                                 payloadInfo().find("openxr_loader") != nullptr;
+    const bool loaderJustReady = hasSignedLoader && !lg.vrSawSignedPayload;
+    lg.vrSawSignedPayload = hasSignedLoader;
+    if (loaderJustReady && g.screen == Screen::Play && (!lg.vrHaveReport || !lg.vrReport.hasLiveResult)) {
+        startVrHeadsetProbe(VrProbeTrigger::PlayTabOpened, /*bypassThrottle=*/true);
+    }
     InvalidateRect(g.window, nullptr, FALSE);
 }
 
@@ -582,11 +626,8 @@ void layoutLauncherControls() {
     for (HWND control :
          {lg.update, lg.rc, lg.playVr, lg.playFlat, lg.direct, lg.closeAfter, lg.steamFrontier, lg.vrMode})
         if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().body), TRUE);
-    if (lg.vrRefresh)
-        SendMessageW(lg.vrRefresh, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().caption), TRUE);
-    if (lg.themeToggle) {
-        MoveWindow(lg.themeToggle, dp(kMargin), dp(kTipTop - 2), dp(70), dp(22), TRUE);
-    }
+    for (HWND control : {lg.vrRefresh, lg.themeToggle})
+        if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().caption), TRUE);
     lg.layoutDirty = true;
     updateLauncherControls();
 }
@@ -748,6 +789,11 @@ void paintLauncherVrCard(HDC dc) {
         case VrStatusKind::NotConfigured:
             if (vr.activeRuntimeMissingFile) {
                 detailLine = tr(L"Active OpenXR runtime file is missing. Open SteamVR, Meta Horizon Link, Virtual Desktop, or Pimax Play to restore it.");
+                detailColour = t.warn;
+            } else if (!vr.linuxHostRuntimeName.empty()) {
+                detailLine = fillVrPlaceholders(
+                    tr(L"%s was found on Linux, but no Windows OpenXR runtime is registered in this Wine/Proton prefix."),
+                    vr.linuxHostRuntimeName);
                 detailColour = t.warn;
             } else if (vr.headsetFromUsb) {
                 detailLine = tr(L"Detected over USB, but no active OpenXR runtime is registered yet.");
@@ -920,7 +966,7 @@ void applyLauncherLanguage(const std::string& code) {
     setControlText(kIdDiscord, L"Ask on Discord");
     setControlText(kIdCopyPath, L"Copy path");
     setControlText(kIdShowFolder, L"Show folder");
-    if (lg.vrRefresh) SetWindowTextW(lg.vrRefresh, lg.vrProbing ? tr(L"Checking...") : tr(L"Refresh"));
+    if (lg.vrRefresh) SetWindowTextW(lg.vrRefresh, lg.vrProbingBusyUi ? tr(L"Checking...") : tr(L"Refresh"));
     syncThemeToggleLabel();
     if (g.search) SendMessageW(g.search, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(tr(L"Search settings")));
     refillScopeChoices();
@@ -976,7 +1022,10 @@ void applyLauncherTheme(const std::string& mode) {
     if (g.window) {
         ui::applyWindowChrome(g.window);
         applyNativeControlThemes();
-        RedrawWindow(g.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_UPDATENOW);
+        SetWindowPos(g.window, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        RedrawWindow(g.window, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
     }
 }
 
@@ -1149,11 +1198,14 @@ bool launcherCommand(int id, int code) {
         if (lg.session) {
             lg.session->setTheme(next);
         } else {
-            LauncherState state;
-            const std::wstring path = joinPath(launcherRootsFor(g.args).launcherDir(), L"launcher.ini");
-            state.load(path, nullptr);
-            state.setTheme(next);
-            state.save(nullptr);
+            const std::wstring dir = launcherRootsFor(g.args).launcherDir();
+            if (createDirectories(dir)) {
+                LauncherState state;
+                if (state.load(joinPath(dir, L"launcher.ini"), nullptr)) {
+                    state.setTheme(next);
+                    state.save(nullptr);
+                }
+            }
         }
         applyLauncherTheme(next);
         return true;
@@ -1263,8 +1315,7 @@ bool launcherCommand(int id, int code) {
                 }
             }
             std::function<bool()> confirmVr;
-            if (vr && lg.vrHaveReport &&
-                _wcsicmp(lg.vrReportGameDir.c_str(), g.survey.game.dir.c_str()) == 0) {
+            if (vr && lg.vrHaveReport && sameInstallDir(lg.vrReportGameDir, g.survey.game.dir)) {
                 const VrPreflightWarning warn = evaluateVrLaunchPreflight(lg.vrReport);
                 if (warn != VrPreflightWarning::None) {
                     std::wstring prompt;

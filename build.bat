@@ -3666,7 +3666,7 @@ if errorlevel 1 ( echo [edvr] ERROR: the fake EDLaunch build failed & exit /b 1 
     /link /INCREMENTAL:NO /SUBSYSTEM:WINDOWS user32.lib shell32.lib
 if errorlevel 1 ( echo [edvr] ERROR: the fake game build failed & exit /b 1 )
 REM A stand-in for Steam's library, with the exports the launcher binds and a canned ticket, so the real
-REM loader and export binding run in the rig and the real Steam is never touched. It is the one DLL here.
+REM loader and export binding run in the rig and the real Steam is never touched.
 if not exist "%OBJ%\launchertest\fakesteam" mkdir "%OBJ%\launchertest\fakesteam"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /GR- /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /LD ^

@@ -43,7 +43,7 @@
 #include "launcher_main.h"
 #include "launcher_session.h"
 #include "layout_dpi.h"
-#include "update_cache.h"
+#include "update_util.h"
 #include "vr_headset.h"
 #endif
 
@@ -95,7 +95,7 @@ constexpr int kContentTop = 184;
 // Launcher layout (96-dpi units): three workflow screens (Play, Setup, Settings).
 // Play holds Launch hero + optional Update banner + VR headset readout + Status card.
 // Setup holds Updates -> Install & repair (with scope selector) -> tall Log.
-constexpr int kContentBottom = 724;
+constexpr int kContentBottom = 748;
 constexpr int kUpdatesTop = 184;
 constexpr int kUpdatesBottom = 256;
 constexpr int kActionsTop = 268;
@@ -105,10 +105,10 @@ constexpr int kActionsChkY = 318;
 constexpr int kActionsBtnY = 350;
 constexpr int kActionsNoteY = 398;
 constexpr int kReportTop = 446;
-constexpr int kReportBottom = 724;
+constexpr int kReportBottom = 748;
 constexpr int kReportEditY = 484;
-constexpr int kReportEditH = 230;
-constexpr int kTipTop = 734;
+constexpr int kReportEditH = 254;
+constexpr int kTipTop = 758;
 #else
 constexpr int kContentBottom = 650;
 constexpr int kStatusTop = 184;
@@ -130,7 +130,7 @@ constexpr int kTipTop = 658;  // the tip line's top: the painted sentence and bo
 // once at layout time.
 const int kClientWidth = 740;
 #ifdef EDUP_LAUNCHER
-const int kClientHeight = 760;
+const int kClientHeight = 784;
 #else
 const int kClientHeight = 688;
 #endif
@@ -1484,16 +1484,14 @@ void saveLogs() {
     std::vector<MemoryBundleEntry> extraEntries;
     {
         // Never run a blocking live OpenXR DLL probe on the UI thread while saving logs:
-        // reuse the background report for this install when available, otherwise run a
-        // fast static-only snapshot (registry, local config, VR services, USB).
-        VrHeadsetReport vr;
-        if (lg.vrHaveReport && _wcsicmp(lg.vrReportGameDir.c_str(), g.survey.game.dir.c_str()) == 0) {
-            vr = lg.vrReport;
-        } else {
-            VrProbeOptions opts;
-            opts.gameDir = g.survey.game.dir;
-            opts.allowLiveProbe = false;
-            vr = probeVrHeadset(opts);
+        // always take a fast fresh static snapshot (registry, local config, VR services, USB)
+        // and carry forward cached live fields when the active runtime matches this install.
+        VrProbeOptions opts;
+        opts.gameDir = g.survey.game.dir;
+        opts.allowLiveProbe = false;
+        VrHeadsetReport vr = probeVrHeadset(opts);
+        if (lg.vrHaveReport && samePath(lg.vrReportGameDir, g.survey.game.dir)) {
+            vr = mergeStaticRefreshWithLive(vr, lg.vrReport);
         }
         extraEntries.push_back({L"vr-environment.txt", formatVrEnvironmentSnapshot(vr)});
     }
@@ -1956,7 +1954,10 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                 applyNativeControlThemes();
                 syncThemeToggleLabel();
 #endif
-                RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_UPDATENOW);
+                SetWindowPos(window, nullptr, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                RedrawWindow(window, nullptr, nullptr,
+                             RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
             }
             return 0;
 
