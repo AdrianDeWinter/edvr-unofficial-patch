@@ -66,11 +66,9 @@ run the launcher again.
 ## Build
 
 Building needs Visual Studio 2022 with the C++ workload, and Python.
-[docs/building.md](docs/building.md) has the steps. For a code change, open a
-pull request from your fork and say which checks you ran. C++ changes need a
-full native Windows validation build. For a rendering change, name the headset
-and VR runtime you flew, or say that a headset flight is still needed. The
-maintainer handles merging and releases.
+[docs/building.md](docs/building.md) has the steps, and
+[CONTRIBUTING.md](CONTRIBUTING.md) covers opening a pull request and the
+validation checks to run.
 
 Some antivirus tools flag a graphics add-on that sits beside a game. The
 source in this repository is how you can read it and build it yourself.
