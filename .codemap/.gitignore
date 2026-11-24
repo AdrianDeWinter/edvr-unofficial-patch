@@ -1,6 +1,4 @@
-# Written by codemap. Machine state stays out of git; config and skills can be committed.
+# Written by codemap. Only config.json is tracked; skills stay under .agents/ and machine state stays out of git.
 *
 !.gitignore
 !config.json
-!skills/
-!skills/**

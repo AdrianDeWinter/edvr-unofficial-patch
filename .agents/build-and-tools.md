@@ -56,7 +56,8 @@ python tools\edup_log.py --target steam --expect-build HEAD --version
 
 - **Launch `build.bat --wait-lock` by absolute path** before committing C++
   changes. A `cmd` invocation that fails to start the batch still exits 0 and
-  can look like a green build.
+  can look like a green build. The GitHub workflow is optional there for
+  ordinary commits.
 - **One build at a time on a machine.** `build.bat --wait-lock` waits for any
   active build and takes the lock atomically; a bare `build.bat` exits 1 if
   another build holds the lock. Run it as one command rather than
@@ -116,11 +117,13 @@ intact).
   `setup --accept-license` only after the user accepts the VS 2022 Build Tools
   licence. Binaries, the Wine prefix, and SDKs live in the git-ignored `<main
   checkout>/.toolchains/windows/` and are never shared; `doctor` verifies them.
-- **Test flight sequence (Steam Deck / Proton).** Commit to the branch first —
-  a dirty tree builds as `vX.Y.Z-dirty`, which `edup_log.py --expect-build
-  HEAD` rejects. Close Elite, then run under host `python3` (use host `python3`
-  rather than Wine Python, which cannot see Proton's `EliteDangerous6*`
-  processes in `/proc` and passes the running-game check vacuously):
+- **Test flight sequence (Steam Deck / Proton).** For a build Sean will fly, CI
+  first is not required; CI is for a merge or release. Commit to the branch
+  first — a dirty tree builds as `vX.Y.Z-dirty`, which `edup_log.py
+  --expect-build HEAD` rejects. Close Elite, then run under host `python3` (use
+  host `python3` rather than Wine Python, which cannot see Proton's
+  `EliteDangerous6*` processes in `/proc` and passes the running-game check
+  vacuously):
 
 ```bash
 python3 tools/linux_toolchain.py build-dlls

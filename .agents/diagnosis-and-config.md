@@ -48,18 +48,17 @@ editing `src\`.
 
 ## Config and INI files
 
-- **Edit live INIs directly and diff.** Read `edup.ini` or `edup-flat.ini`,
-  apply a targeted edit, and diff before and after — never rewrite a live INI
-  with a regex or PowerShell anchor (a bad anchor previously corrupted Sean's
-  working config).
+- **Never edit a live `edup.ini` or `edup-flat.ini` with a regex or PowerShell
+  anchor.** Read it, edit it with the Edit tool, diff before and after (a bad
+  anchor previously corrupted Sean's working config).
 - **Respect profile and mirror ownership** (`src\common\ini_name.h`,
   `src\common\mirror_location.h`, `tools\install_edup.py`):
-  - `edup.ini` in the game directory holds whoever flew last; `install_edup.py`
-    leaves an existing one untouched unless `--ini` is passed (and backs it up
-    before writing). If missing, it restores from the newest copy in
-    `%LOCALAPPDATA%\EDUP\<leaf>-<store>\` (falling back read-only to legacy
-    `%LOCALAPPDATA%\EDVR\` on un-migrated installs), or writes the shipped
-    default.
+  - `edup.ini` in the game directory holds whoever flew last. A reinstall does
+    not undo an edit to it; `install_edup.py` leaves an existing one untouched
+    unless `--ini` is passed (and backs it up before writing). If missing, it
+    restores from the newest copy in `%LOCALAPPDATA%\EDUP\<leaf>-<store>\`
+    (falling back read-only to legacy `%LOCALAPPDATA%\EDVR\` on un-migrated
+    installs), or writes the shipped default.
   - `edup-flat.ini` is the flat profile's own file: while the flat profile is
     active, ED-UP reads `edup-flat.ini` first and falls back to `edup.ini`
     (with legacy `edvr.ini` / `edvr-flat.ini` read fallback before migration).

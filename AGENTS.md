@@ -24,8 +24,8 @@ Read the matching guide before acting on its branch:
 | Building from source, SDK fetchers, CI artifacts | [docs/building.md](docs/building.md) — prerequisites, `fetch_*.py`, local build, Actions downloads |
 | `tools\`, builds, installs, logs, worktrees, Linux/CI | [.agents/build-and-tools.md](.agents/build-and-tools.md) — sanctioned `tools\` table, `--compile-only` Proton flights, `build.bat --wait-lock`, compile cache, `--dll-only`, Actions validation |
 | Bugs, rendering, `src\`, `.ini` configs, `docs\` | [.agents/diagnosis-and-config.md](.agents/diagnosis-and-config.md) — flight diagnosis, `## Status` docs, `edup.ini`/`edup-flat.ini`, C++ gotchas (`near`/`far`, instruments), issue tracking |
-| Codebase map, hubs, blast radius | [.agents/codemap.md](.agents/codemap.md) — subsystem map and top hubs; run `codemap .` / `codemap --importers <file>` when `codemap` is installed (`.codemap/config.json`) |
-| Maintainer workstation, releases, `analysis\` | [.agents/maintainer.md](.agents/maintainer.md) — Sean's PowerShell 5.1 shell, solo `--no-ff` Git, release signing & `## Thanks` credits, private `analysis\` handover |
+| Codebase structure / hubs (optional, only if already installed) | [.codemap/config.json](.codemap/config.json) — tuned filters and subsystem routing for [JordanCoin/codemap](https://github.com/JordanCoin/codemap); optional local tool, never install it automatically |
+| Any session on Sean's Windows machine (shell, Git, releases, `analysis\`) | [.agents/maintainer.md](.agents/maintainer.md) — Windows PowerShell 5.1 shell, solo `--no-ff` Git, release signing & `## Thanks` credits, private `analysis\` handover |
 
 ## Universal rules
 
