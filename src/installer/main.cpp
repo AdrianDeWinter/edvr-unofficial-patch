@@ -54,7 +54,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     // The elevated copy has one job and shows nothing; the out-of-process OpenXR probe helper
     // writes a single key=value block to stdout and exits without taking the single-instance mutex.
     if (!args.badArg && !args.planFile.empty()) return runApplyPlanFile(args);
-    if (!args.badArg && !args.probeOpenXrLoader.empty()) return runOpenXrProbeCommand(args);
+    if (!args.badArg && args.probeOpenXr) return runOpenXrProbeCommand(args);
     // --headless never opens the GUI window, even when no console is attached (e.g. Steam %command%).
     if (args.headless && !args.help) {
         if (args.badArg) {

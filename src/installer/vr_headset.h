@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "../openxr/native_local_config.h"
+#include "launcher_core.h"
 
 namespace edvr::installer {
 
@@ -58,6 +59,7 @@ enum class EffectiveRuntimeSource {
     None,
     Registry,
     EnvVar,
+    LinuxXdg,
     LocalExplicit,
     LocalConfigInvalid,
 };
@@ -108,12 +110,13 @@ struct VrProbeInputs {
     bool underWine = false;
     EffectiveRuntimeSource runtimeSource = EffectiveRuntimeSource::None;
     std::wstring activeRuntimePath;
+    std::wstring linuxHostRuntimeHint;        // host Linux active_runtime.json hint behind Proton wineopenxr
     bool activeRuntimeFromEnv = false;
     bool localConfigInvalid = false;
     bool openVrShimIsOpenComposite = false;  // selected install's active openvr_api.dll is OpenComposite
     OpenXrManifestInfo activeManifest;
     std::vector<std::wstring> availableRuntimePaths;
-    std::vector<std::string> runningProcesses;   // lowercase exe/comm names
+    std::vector<std::string> runningProcesses;   // lowercase exe/comm/ipc names
     std::vector<std::wstring> openVrDrivers;     // external_drivers paths from openvrpaths.vrpath
     bool steamVrInstalled = false;
     UsbHeadsetMatch usbHeadset;
@@ -132,6 +135,7 @@ struct VrHeadsetReport {
     bool headsetFromUsb = false;
     bool activeRuntimeMissingFile = false;
     bool activeLibraryMissingFile = false;
+    bool hasLiveResult = false;
     bool liveProbeTimedOut = false;
     bool underWine = false;
     bool activeRuntimeFromEnv = false;
@@ -149,13 +153,14 @@ struct VrHeadsetReport {
 };
 
 // Pre-flight confirmation warnings shown before launching Elite in VR.
-// Only genuine missing-runtime / missing-file conditions warn; runtime
-// mismatches, OpenComposite, and live probe errors are informational in the card.
+// Only genuine missing-runtime / missing-file / invalid local config conditions warn;
+// runtime mismatches, OpenComposite, and live probe errors are informational in the card.
 enum class VrPreflightWarning {
     None,
     NoRuntime,
     MissingRuntimeFile,
     MissingRuntimeLibrary,
+    InvalidLocalConfig,
 };
 
 enum class VrProbeTrigger {
@@ -172,12 +177,11 @@ struct VrProbeDecision {
 
 struct VrProbeOptions {
     std::wstring gameDir;
-    // Controlled, cryptographically verified openxr_loader.dll path and its
-    // expected lowercase hex SHA-256 from the signed release manifest. Live
-    // OpenXR probing only spawns a child process when unelevated, both fields
-    // are non-empty, and the on-disk DLL matches.
-    std::wstring verifiedLoaderPath;
-    std::string verifiedLoaderSha256;
+    // Optional --data-root passed to the launcher; empty means the canonical %LOCALAPPDATA%\EDVR root.
+    // The out-of-process probe helper resolves openxr_loader.dll itself from the signed manifest under
+    // this root and verifies it against the release signing keys before loading it.
+    std::wstring dataRoot;
+    bool hasSignedLoader = false;
     bool allowLiveProbe = false;
     bool isElevated = false;
     unsigned int liveProbeTimeoutMs = 2500;
@@ -188,31 +192,46 @@ struct VrProbeOptions {
 // Pure helpers (unit-tested directly in launcher_test).
 VrPlatform classifyVrPlatform(const std::wstring& pathOrName, const std::wstring& libraryPath = L"");
 std::wstring vrPlatformDisplayName(VrPlatform platform, const std::wstring& customName = L"");
+bool isWineOpenXrBridgePath(const std::wstring& pathOrName, const std::wstring& libraryPath = L"");
+bool isPosixSharedLibraryPath(const std::wstring& path);
+std::vector<std::wstring> linuxOpenXrManifestCandidates(const std::wstring& xdgConfigHome,
+                                                        const std::wstring& homeDir,
+                                                        const std::wstring& xdgConfigDirs);
+std::vector<std::wstring> linuxCompositorSocketPaths(const std::wstring& xdgRuntimeDir, VrPlatform platform);
 EffectiveRuntimeSelection resolveEffectiveOpenXrRuntime(edvr::openxr::LocalConfigResult localResult,
                                                         const edvr::openxr::LocalConfig& localConfig,
                                                         const std::wstring& envRuntime,
                                                         const std::wstring& regRuntime, bool underWine);
 VrProbeDecision decideVrProbe(VrProbeTrigger trigger, bool onPlayTab, bool minimized, bool playing,
-                              bool gameRunningHere, bool elevated, bool liveProbeTimedOut);
+                              bool gameRunning, bool elevated, bool liveProbeTimedOut);
 OpenXrManifestInfo parseOpenXrRuntimeJson(const std::string& jsonUtf8, const std::wstring& jsonPath);
 std::vector<std::wstring> parseOpenVrExternalDrivers(const std::string& vrpathUtf8);
 UsbHeadsetMatch identifyUsbVrHeadset(const std::wstring& instanceId, const std::wstring& description);
+bool isEliteRunning(const std::vector<std::string>& lowerProcesses);
 bool isPlatformServiceRunning(VrPlatform platform, const std::vector<std::string>& lowerProcesses);
 bool shouldRunLiveOpenXrProbe(VrPlatform activePlatform, const std::vector<std::string>& lowerProcesses,
                               bool underWine, bool activeFromEnv);
 VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in);
+VrHeadsetReport mergeStaticRefreshWithLive(const VrHeadsetReport& freshStatic, const VrHeadsetReport& previous);
 VrPreflightWarning evaluateVrLaunchPreflight(const VrHeadsetReport& report);
 std::wstring redactUserPath(const std::wstring& path);
 std::string formatVrEnvironmentSnapshot(const VrHeadsetReport& report);
 
-// Out-of-process probe runner and child entrypoint.
+// Signed loader lookup and out-of-process probe runner / child entrypoint.
+// Resolves openxr_loader.dll from the signed manifest under `roots` (checking `<gameDir>\Openvr\win64`
+// first, then the payload cache) and verifies its SHA-256 and 64-bit OpenXR export.
+// `keys` nullptr uses the release signing keys (kUpdatePublicKeys).
+bool resolveSignedOpenXrLoader(const LauncherRoots& roots, const std::wstring& gameDir,
+                               const char* const* keys, std::wstring* pathOut, std::string* shaOut);
 // `parseOpenXrProbeOutput` parses the key=value stdout produced by `runOpenXrProbeHelper`.
 OpenXrLiveProbe parseOpenXrProbeOutput(const std::string& stdoutUtf8);
 OpenXrLiveProbe runOpenXrProbeSubprocess(const std::wstring& exePath, const std::wstring& commandLine,
                                          ChildXrEnvAction envAction, const std::wstring& envRuntimePath,
                                          unsigned int timeoutMs, HANDLE cancelEvent = nullptr);
-// Runs inside the short-lived `--probe-openxr` child process; prints key=value lines to stdout and returns 0.
-int runOpenXrProbeHelper(const std::wstring& loaderPath, const std::string& loaderSha256);
+// Runs inside the short-lived `--probe-openxr` child process; resolves and verifies openxr_loader.dll
+// from the signed manifest under `roots`, prints key=value lines to stdout, and returns 0.
+int runOpenXrProbeHelper(const LauncherRoots& roots, const std::wstring& gameDir,
+                         const char* const* keys = nullptr);
 
 // System probe. With allowLiveProbe=false, completes using registry, EDVR's
 // native_local_config.h parser, process snapshot, and USB scan without spawning

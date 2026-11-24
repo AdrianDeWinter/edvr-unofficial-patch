@@ -3561,6 +3561,13 @@ if errorlevel 1 (
     exit /b 1
 )
 echo [edvr] launcher --licenses prints min_ed_launcher LICENSE + EDHM_2DMigoto NOTICE.txt + LICENSE.GPL.txt
+REM Verify main.cpp dispatches --probe-openxr cleanly without entering runGui or touching real %LOCALAPPDATA%\EDUP.
+python -c "import pathlib, shutil, subprocess, sys; exe, tmp = sys.argv[1], pathlib.Path(sys.argv[2]); shutil.rmtree(tmp, ignore_errors=True); tmp.mkdir(parents=True, exist_ok=True); r = subprocess.run([exe, '--probe-openxr', '--data-root', str(tmp)], capture_output=True, text=True, timeout=10); leftover = list(tmp.iterdir()); shutil.rmtree(tmp, ignore_errors=True); ok = r.returncode == 0 and 'edup_openxr_probe=1' in r.stdout and 'loader_loaded=0' in r.stdout and not leftover; sys.exit(0 if ok else 1)" "%BUILD%\ed-up-launcher.exe" "%BUILD%\launcher_probe_check"
+if errorlevel 1 (
+    echo [edvr] ERROR: launcher --probe-openxr did not dispatch before launcherStartup
+    exit /b 1
+)
+echo [edvr] launcher --probe-openxr dispatches before launcherStartup
 exit /b 0
 
 REM One compile of the launcher into %~1 (the exe's folder). %~2 is its obj folder, %~3 the folder
@@ -3637,7 +3644,14 @@ if not exist "%OBJ%\launchertest\fakee" mkdir "%OBJ%\launchertest\fakee"
 REM The fakes' folder is named for this rig: run_jobs removes the "<label>_" folders of a rig that passes, and a
 REM folder called launcher_fakes was the "launcher" rig's, deleted under this one whenever that job finished first.
 if not exist "%BUILD%\launcher_test_fakes" mkdir "%BUILD%\launcher_test_fakes"
-python tools\launcher_fixtures.py --out "%BUILD%\launcher_test_fixtures"
+if not exist "%OBJ%\launchertest\fakeoxr" mkdir "%OBJ%\launchertest\fakeoxr"
+%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /GR- /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
+    /D_CRT_SECURE_NO_WARNINGS /LD ^
+    /Fo"%OBJ%\launchertest\fakeoxr"\ /Fe"%BUILD%\launcher_test_fakes\openxr_loader.dll" ^
+    "tools\launcher_test\fake_openxr_loader.cpp" ^
+    /link /INCREMENTAL:NO kernel32.lib
+if errorlevel 1 ( echo [edvr] ERROR: the fake openxr_loader.dll build failed & exit /b 1 )
+python tools\launcher_fixtures.py --out "%BUILD%\launcher_test_fixtures" --openxr-loader "%BUILD%\launcher_test_fakes\openxr_loader.dll"
 if errorlevel 1 ( echo [edvr] ERROR: launcher fixtures failed & exit /b 1 )
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /GR- /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /DFAKE_EDLAUNCH ^

@@ -194,11 +194,7 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
         else if (arg == L"--apply-plan")
             next(&a.planFile);
         else if (arg == L"--probe-openxr")
-            next(&a.probeOpenXrLoader);
-        else if (arg == L"--probe-openxr-sha") {
-            std::wstring value;
-            if (next(&value)) a.probeOpenXrSha = toUtf8(value);
-        }
+            a.probeOpenXr = true;
         else if (arg == L"--channel") {
             std::wstring value;
             if (next(&value)) {

@@ -556,11 +556,51 @@ def _synthetic_graphics_dll():
     return bytes(img)
 
 
-def release(out, name, version, issued, graphics, launcher_version=None, schema=None, include_edhm=False):
+def _synthetic_openxr_loader_dll():
+    """Minimal 64-bit PE image exporting xrGetInstanceProcAddr in an executable section."""
+    import struct
+    name = b"xrGetInstanceProcAddr"
+    text_rva, text_off, text_sz = 0x1000, 0x200, 0x200
+    rdata_rva, rdata_off, rdata_sz = 0x2000, 0x400, 0x200
+    rdata = bytearray(rdata_sz)
+    exp_pos = 0x0
+    fn_pos = exp_pos + 40
+    name_pos = fn_pos + 4
+    ord_pos = name_pos + 4
+    str_pos = ord_pos + 2
+    rdata[str_pos:str_pos + len(name) + 1] = name + b"\x00"
+    struct.pack_into("<I", rdata, fn_pos, text_rva)
+    struct.pack_into("<I", rdata, name_pos, rdata_rva + str_pos)
+    struct.pack_into("<H", rdata, ord_pos, 0)
+    struct.pack_into(
+        "<10I", rdata, exp_pos,
+        0, 0, 0, rdata_rva + str_pos, 1, 1, 1,
+        rdata_rva + fn_pos, rdata_rva + name_pos, rdata_rva + ord_pos,
+    )
+    exp_size = str_pos + len(name) + 1
+    img = bytearray(rdata_off + rdata_sz)
+    img[0:2] = b"MZ"
+    struct.pack_into("<I", img, 0x3C, 0x80)
+    img[0x80:0x84] = b"PE\x00\x00"
+    struct.pack_into("<HHIIIHH", img, 0x84, 0x8664, 2, 0, 0, 0, 0xF0, 0x2022)
+    opt = 0x98
+    struct.pack_into("<H", img, opt, 0x20B)
+    struct.pack_into("<I", img, opt + 56, 0x3000)
+    struct.pack_into("<I", img, opt + 60, 0x200)
+    struct.pack_into("<I", img, opt + 108, 16)
+    struct.pack_into("<II", img, opt + 112, rdata_rva + exp_pos, exp_size)
+    sec = opt + 0xF0
+    struct.pack_into("<8sIIIIIIHHI", img, sec, b".text\x00\x00\x00", text_sz, text_rva, text_sz, text_off, 0, 0, 0, 0, 0x60000020)
+    struct.pack_into("<8sIIIIIIHHI", img, sec + 40, b".rdata\x00\x00", rdata_sz, rdata_rva, rdata_sz, rdata_off, 0, 0, 0, 0, 0x40000040)
+    img[rdata_off:rdata_off + rdata_sz] = rdata
+    return bytes(img)
+
+
+def release(out, name, version, issued, graphics, launcher_version=None, schema=None, include_edhm=False, openxr_loader=None):
     """One release folder: a core zip, a DLSS zip (identical across releases), a
-    signed manifest and, if asked, a launcher entry or optional EDHM 2DMigoto zip.
-    `schema` overrides the manifest's schema after validation, for a release the
-    launcher cannot read. Returns the folder."""
+    signed manifest and, if asked, a launcher entry, optional EDHM 2DMigoto zip,
+    or openxr_loader.dll. `schema` overrides the manifest's schema after validation,
+    for a release the launcher cannot read. Returns the folder."""
     folder = out / "releases" / name
     rng = random.Random(5)
     dlss = deterministic_zip({"nvngx_dlss.dll": rng.randbytes(60000)})
@@ -569,6 +609,8 @@ def release(out, name, version, issued, graphics, launcher_version=None, schema=
                     "edup.ini": b"[fix]\nversion=" + version.encode() + b"\n"}
     if include_edhm:
         core_members["edup-flat.ini"] = b"[fix]\nversion=" + version.encode() + b"\n"
+    if openxr_loader is not None:
+        core_members["openvr/openxr_loader.dll"] = openxr_loader
     core = deterministic_zip(core_members)
     core_name = "ed-up-core-%s.zip" % version
     by_id = {f.id: f for f in pn.FILES}
@@ -580,6 +622,8 @@ def release(out, name, version, issued, graphics, launcher_version=None, schema=
     ]
     if include_edhm:
         files.append(pn.manifest_file_entry(by_id["settings_flat"], core_name, core_members["edup-flat.ini"]))
+    if openxr_loader is not None:
+        files.append(pn.manifest_file_entry(by_id["openxr_loader"], core_name, openxr_loader))
     nvngx = zipfile.ZipFile(io.BytesIO(dlss)).read("nvngx_dlss.dll")
     files.append(pn.manifest_file_entry(by_id["dlss"], dlss_name, nvngx))
     assets = [{"name": core_name, "sha256": hashlib.sha256(core).hexdigest(), "size": len(core)},
@@ -626,7 +670,7 @@ def release(out, name, version, issued, graphics, launcher_version=None, schema=
     return folder
 
 
-def write_releases(out):
+def write_releases(out, openxr_loader_path=None):
     release(out, "relA", "1.0.0", 1794000000, b"graphics one")
     release(out, "relB", "1.1.0", 1794000100, b"graphics two", launcher_version="0.4.0")
     release(out, "relOld", "0.9.0", 1790000000, b"graphics old")
@@ -634,6 +678,8 @@ def write_releases(out):
     release(out, "relD", "1.3.0", 1794000300, b"graphics four", launcher_version="0.5.0")
     release(out, "relEdhm", "1.5.0", 1794000500, _synthetic_graphics_dll(), include_edhm=True)
     release(out, "relEdhmNext", "1.6.0", 1794000600, _synthetic_graphics_dll(), include_edhm=True)
+    loader_bytes = Path(openxr_loader_path).read_bytes() if openxr_loader_path else _synthetic_openxr_loader_dll()
+    release(out, "relOpenXr", "1.7.0", 1794000700, _synthetic_graphics_dll(), openxr_loader=loader_bytes)
     # A release of a schema newer than the launcher reads: signed, with every asset present, so a
     # download would show in the rig; the launcher must refuse it before it fetches anything.
     release(out, "relSchema4", "1.4.0", 1794000400, b"graphics five", launcher_version="0.4.0", schema=4)
@@ -660,7 +706,7 @@ def out_problem(out):
     return None
 
 
-def generate(out):
+def generate(out, openxr_loader_path=None):
     out = Path(out)
     problem = out_problem(out)
     if problem:
@@ -674,7 +720,7 @@ def generate(out):
     write_signing(out)
     write_shapes(out)
     write_inflate(out)
-    write_releases(out)
+    write_releases(out, openxr_loader_path=openxr_loader_path)
 
 
 # ---- self-test -----------------------------------------------------------------
@@ -752,12 +798,21 @@ def self_test():
         # Releases: every manifest validates and verifies, every asset and member matches,
         # relA and relB share the DLSS zip, the others differ as the rig expects.
         folders = {p.name: p for p in (out / "releases").iterdir()}
-        assert set(folders) == {"relA", "relB", "relOld", "relC", "relD", "relEdhm", "relEdhmNext", "relSchema4"}
+        assert set(folders) == {"relA", "relB", "relOld", "relC", "relD", "relEdhm", "relEdhmNext", "relOpenXr", "relSchema4"}
         for name, folder in folders.items():
             if name == "relSchema4":
                 continue  # a schema the launcher cannot read: the Python verdict is a refusal, as it should be
             lines = []
             assert sm.verify_directory(folder, keys=[public], out=lines.append, bridge=False), (name, lines)
+        oxr_manifest = json.loads((folders["relOpenXr"] / sm.MANIFEST_NAME).read_text())
+        assert any(f["id"] == "openxr_loader" for f in oxr_manifest["files"])
+        custom_loader = Path(temp) / "custom_loader.dll"
+        custom_loader.write_bytes(b"custom-openxr-loader-bytes")
+        custom_out = Path(temp) / "custom_fx"
+        assert main(["--out", str(custom_out), "--openxr-loader", str(custom_loader)]) == 0
+        custom_manifest = json.loads((custom_out / "releases" / "relOpenXr" / sm.MANIFEST_NAME).read_text())
+        custom_entry = [f for f in custom_manifest["files"] if f["id"] == "openxr_loader"][0]
+        assert custom_entry["sha256"] == hashlib.sha256(b"custom-openxr-loader-bytes").hexdigest()
         s4 = (folders["relSchema4"] / sm.MANIFEST_NAME).read_bytes()
         assert json.loads(s4)["schema"] == 4 and sm.load_manifest(s4)[1] == ["manifest schema 4, launcher reads 3"]
         assert sm.p256_verify(public, s4, bytes.fromhex((folders["relSchema4"] / sm.SIGNATURE_NAME).read_text().strip()))
@@ -807,6 +862,7 @@ def self_test():
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", type=Path, help="folder to write the fixtures into (emptied first, if it is the tool's own)")
+    parser.add_argument("--openxr-loader", type=Path, help="optional openxr_loader.dll bytes to embed and sign in releases/relOpenXr")
     parser.add_argument("--dry-run", action="store_true", help="say what would be emptied and written; write and delete nothing")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
@@ -823,7 +879,7 @@ def main(argv=None):
         print("launcher_fixtures: dry run: would %s %s and write the fixtures into it; nothing was written"
               % ("empty" if args.out.exists() else "create", args.out))
         return 0
-    generate(args.out)
+    generate(args.out, openxr_loader_path=args.openxr_loader)
     print("launcher_fixtures: wrote %s" % args.out)
     return 0
 

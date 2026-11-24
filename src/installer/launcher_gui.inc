@@ -137,38 +137,6 @@ int launcherStatusTop() {
     return launcherVrTop() + kVrCardH + (lg.playBannerShown ? 10 : 12);
 }
 
-// Resolves a cryptographically verified openxr_loader.dll from the signed
-// release manifest (matching either the installed copy or the signed cache).
-// Never returns an unverified DLL path.
-void resolveVerifiedOpenXrLoader(const std::wstring& gameDir, std::wstring* pathOut, std::string* shaOut) {
-    if (pathOut) pathOut->clear();
-    if (shaOut) shaOut->clear();
-    if (!lg.session || lg.session->payloadState() != PayloadState::Ready ||
-        lg.session->payload().kind != PayloadKind::Manifest) {
-        return;
-    }
-    const PayloadFileEntry* loader = payloadInfo().find("openxr_loader");
-    if (!loader || !loader->valid || loader->sha.size() != 64) return;
-
-    if (!gameDir.empty()) {
-        const std::wstring gameLoader = joinPath(gameDir, L"Openvr\\win64\\openxr_loader.dll");
-        if (fileExists(gameLoader)) {
-            const DllInfo info = probeDll(gameLoader);
-            if (info.is64 && info.hasXrGetInstanceProcAddr && info.sha256 == loader->sha) {
-                if (pathOut) *pathOut = gameLoader;
-                if (shaOut) *shaOut = loader->sha;
-                return;
-            }
-        }
-    }
-    const PayloadCache cache(launcherRootsFor(g.args).cacheDir());
-    const std::wstring cached = cache.pathFor(loader->sha);
-    if (!cached.empty() && fileExists(cached)) {
-        if (pathOut) *pathOut = cached;
-        if (shaOut) *shaOut = loader->sha;
-    }
-}
-
 void startVrHeadsetProbe(VrProbeTrigger trigger) {
     if (!g.window) return;
     if (lg.vrProbeCtrl && lg.vrProbeCtrl->shuttingDown.load()) return;
@@ -186,10 +154,10 @@ void startVrHeadsetProbe(VrProbeTrigger trigger) {
     const bool onPlay = g.screen == Screen::Play;
     const bool minimized = IsIconic(g.window) != FALSE;
     const bool playing = lg.session && lg.session->playing();
-    const bool gameRunningHere = g.haveSurvey && g.survey.gameRunningHere;
+    const bool gameRunning = g.haveSurvey && (g.survey.gameRunningHere || g.survey.gameRunningElsewhere);
     const bool elevated = isElevated();
     const VrProbeDecision decision =
-        decideVrProbe(trigger, onPlay, minimized, playing, gameRunningHere, elevated, lg.vrLiveProbeTimedOut);
+        decideVrProbe(trigger, onPlay, minimized, playing, gameRunning, elevated, lg.vrLiveProbeTimedOut);
     if (!decision.shouldRun) return;
 
     const bool forced = trigger == VrProbeTrigger::ManualRefresh || trigger == VrProbeTrigger::InstallSelected;
@@ -225,13 +193,14 @@ void startVrHeadsetProbe(VrProbeTrigger trigger) {
 
     VrProbeOptions opts;
     opts.gameDir = gameDir;
+    opts.dataRoot = g.args.dataRoot;
+    opts.hasSignedLoader = lg.session && lg.session->payloadState() == PayloadState::Ready &&
+                           lg.session->payload().kind == PayloadKind::Manifest &&
+                           payloadInfo().find("openxr_loader") != nullptr;
     opts.allowLiveProbe = decision.allowLiveProbe;
     opts.isElevated = elevated;
     opts.liveProbeTimeoutMs = 2500;
     opts.cancelEvent = lg.vrProbeCtrl->cancelEvent;
-    if (opts.allowLiveProbe) {
-        resolveVerifiedOpenXrLoader(gameDir, &opts.verifiedLoaderPath, &opts.verifiedLoaderSha256);
-    }
     std::shared_ptr<VrProbeController> ctrl = lg.vrProbeCtrl;
 
     lg.vrProbeThread = std::thread([ctrl, opts, gen]() {
@@ -243,11 +212,15 @@ void startVrHeadsetProbe(VrProbeTrigger trigger) {
                                                                 probedDir = opts.gameDir, gen]() {
             if (ctrl->shuttingDown.load() || gen != lg.vrProbeGen) return;
             lg.vrProbing = false;
+            const bool sameDir =
+                lg.vrHaveReport && _wcsicmp(lg.vrReportGameDir.c_str(), probedDir.c_str()) == 0;
+            const VrHeadsetReport merged =
+                sameDir ? mergeStaticRefreshWithLive(report, lg.vrReport) : report;
             lg.vrHaveReport = true;
             lg.vrReportGameDir = probedDir;
             lg.vrLastProbeMs = GetTickCount64();
-            if (report.liveProbeTimedOut) lg.vrLiveProbeTimedOut = true;
-            lg.vrReport = report;
+            if (merged.liveProbeTimedOut) lg.vrLiveProbeTimedOut = true;
+            lg.vrReport = merged;
             if (lg.vrRefresh) {
                 SetWindowTextW(lg.vrRefresh, tr(L"Refresh"));
                 EnableWindow(lg.vrRefresh, TRUE);
@@ -790,7 +763,7 @@ void paintLauncherVrCard(HDC dc) {
                 detailLine = tr(L"Active OpenXR runtime library is missing. Open SteamVR, Meta Horizon Link, Virtual Desktop, or Pimax Play to restore it.");
             } else if (vr.liveProbeTimedOut) {
                 detailLine = fillVrPlaceholders(
-                    tr(L"%s did not respond in time. Restart it and press Refresh."), rtName);
+                    tr(L"%s did not respond in time. Live checks are paused until you restart the launcher."), rtName);
             } else {
                 detailLine = fillVrPlaceholders(
                     tr(L"The active OpenXR runtime could not be queried. Restart %s and refresh."), rtName);
@@ -1304,6 +1277,9 @@ bool launcherCommand(int id, int code) {
                             break;
                         case VrPreflightWarning::MissingRuntimeLibrary:
                             prompt = tr(L"Your active OpenXR runtime library is missing. Open SteamVR, Meta Horizon Link, Virtual Desktop, or Pimax Play to restore it.\n\nLaunch in VR anyway?");
+                            break;
+                        case VrPreflightWarning::InvalidLocalConfig:
+                            prompt = tr(L"edup_openxr.ini could not be read by ED-UP, so Elite will not start in VR. Repair ED-UP or fix the file.\n\nLaunch in VR anyway?");
                             break;
                         case VrPreflightWarning::None:
                         default:
