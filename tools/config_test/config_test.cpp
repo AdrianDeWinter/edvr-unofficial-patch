@@ -2915,6 +2915,10 @@ int main(int argc, char** argv) {
                 expectWarnings(nullptr, dirValue, nullptr, forValue, dirWarning + forWarning, "both old names read: both warned about");
                 expectWarnings(dirValue, nullptr, nullptr, forValue, forWarning, "EDVR_LOG_DIR_FOR limiting EDUP_LOG_DIR is warned about");
                 expectWarnings(dirValue, dirValue, forValue, forValue, "", "the new names win: no warning");
+                // Clear the old pair: a leftover EDVR_LOG_DIR_FOR would scope the environment's move away from this exe, and
+                // the log.dir case below would then only beat the default, not an active move.
+                SetEnvironmentVariableW(L"EDVR_LOG_DIR", nullptr);
+                SetEnvironmentVariableW(L"EDVR_LOG_DIR_FOR", nullptr);
             }
             if (!writeIni(scratch, "[log]\r\ndir = C:\\elsewhere\\logs\r\n")) {
                 fail("log.dir scratch ini", "could not write it");
