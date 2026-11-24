@@ -728,6 +728,30 @@ std::wstring liveSettingsDirOf(const Survey& s, const Options& o) {
     return s.game.dir;
 }
 
+namespace {
+
+EdhmD3dxEffectiveCompat effectiveD3dxCompatOf(const Survey& s) {
+    if (s.d3dxCompatChecked) return s.d3dxCompat;
+    if (s.d3dxIniPresent && (s.d3dxIniUnreadable || s.d3dxIniUtf16)) {
+        EdhmD3dxEffectiveCompat bad;
+        bad.satisfied = false;
+        bad.allowPlatformUpdateOk = false;
+        bad.upscalingOk = false;
+        return bad;
+    }
+    if (!s.game.dir.empty()) {
+        if (s.d3dxIniPresent) return evaluateEdhmD3dxCompat(s.game.dir, s.d3dxIniText);
+        if (fileExists(joinPath(s.game.dir, L"d3dx_user.ini"))) {
+            return evaluateEdhmD3dxCompat(s.game.dir, std::string());
+        }
+        return EdhmD3dxEffectiveCompat{};
+    }
+    if (s.d3dxIniPresent) return evaluateEdhmD3dxCompat(std::wstring(), s.d3dxIniText);
+    return EdhmD3dxEffectiveCompat{};
+}
+
+}  // namespace
+
 Survey surveyTarget(const GameInstall& game, const std::wstring& settingsDir) {
     Survey s;
     s.game = game;
@@ -916,7 +940,32 @@ Survey surveyTarget(const GameInstall& game, const std::wstring& settingsDir) {
     }
     // The tool's backup of the original is adopted last and placed first: its receipt names exactly which runtime it replaced.
     if (s.haveOpenvrDir) adoptToolOriginal(s);
+    // Evaluate effective d3dx.ini compatibility (including [Include] files and d3dx_user.ini)
+    // once when EDHM config is present or 2DMigoto is recorded on disk, keeping repeated surveys
+    // for non-EDHM folders free of directory crawls.
+    if (s.d3dxIniPresent || s.edhmConfigPresent || s.state.file("edhm_2dmigoto") != nullptr ||
+        fileExists(joinPath(game.dir, L"d3dx_user.ini"))) {
+        s.d3dxCompat = effectiveD3dxCompatOf(s);
+        s.d3dxCompatChecked = true;
+    } else {
+        s.d3dxCompatChecked = true;
+    }
     return s;
+}
+
+bool edhm2dMigotoDllActive(const Survey& s) {
+    if (!s.state.chainTarget.empty() &&
+        _wcsicmp(s.state.chainTarget.c_str(), L"d3d11_edhm.dll") != 0)
+        return false;
+    const FileRecord* rec = s.state.file("edhm_2dmigoto");
+    if (!rec || rec->existing != existingName(ExistingMode::OptIn) || rec->sha256.empty()) return false;
+    const DllInfo* disk = siblingNamed(s.otherD3d11, L"d3d11_edhm.dll");
+    return disk && disk->kind != DllKind::Absent && disk->kind != DllKind::Unreadable &&
+           sameSha(disk->sha256, rec->sha256);
+}
+
+bool edhm2dMigotoActive(const Survey& s) {
+    return edhm2dMigotoDllActive(s) && effectiveD3dxCompatOf(s).satisfied;
 }
 
 Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
@@ -1359,23 +1408,33 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
     bool edhmPlacedOrRestored = false;
     bool edhmRemoved = false;
     bool optInBlocked = false;
+    const EdhmD3dxEffectiveCompat d3dxCompat = effectiveD3dxCompatOf(s);
     const bool edhmD3dxBlocksOptIn =
-        o.edhm2dMigoto && s.d3dxIniPresent &&
-        (s.d3dxIniUnreadable || s.d3dxIniUtf16 ||
-         (s.d3dxIniReadOnly && !edhmD3dxCompatSatisfied(s.d3dxIniText)));
+        o.edhm2dMigoto &&
+        ((s.d3dxIniPresent && (s.d3dxIniUnreadable || s.d3dxIniUtf16 ||
+                               (s.d3dxIniReadOnly && !d3dxCompat.satisfied))) ||
+         d3dxCompat.hasExternalOverrideFailure());
     std::string edhmD3dxStandDownProblem;
     if (edhmD3dxBlocksOptIn) {
-        if (s.d3dxIniUnreadable) {
+        if (s.d3dxIniPresent && s.d3dxIniUnreadable) {
             edhmD3dxStandDownProblem =
                 "d3dx.ini cannot be read; standing down the optional 2DMigoto runtime while core ED-UP "
                 "proceeds. Close anything holding d3dx.ini open: while the option stays on, the next install "
                 "or repair puts 2DMigoto back by itself.";
-        } else if (s.d3dxIniUtf16) {
+        } else if (s.d3dxIniPresent && s.d3dxIniUtf16) {
             edhmD3dxStandDownProblem =
                 "d3dx.ini is UTF-16 encoded; ED-UP only edits UTF-8/ASCII d3dx.ini files, so the optional "
                 "2DMigoto runtime is standing down while core ED-UP proceeds. Convert d3dx.ini to UTF-8: "
                 "while the option stays on, the next install or repair then puts 2DMigoto back by itself. "
                 "Or turn off the experimental 2DMigoto option.";
+        } else if (d3dxCompat.hasExternalOverrideFailure()) {
+            edhmD3dxStandDownProblem =
+                "An included EDHM config file overrides a required compatibility setting (" +
+                describeEdhmD3dxOverrideFailure(d3dxCompat) +
+                "); standing down the optional 2DMigoto runtime while core ED-UP proceeds. "
+                "Adjust or remove that override ([System] allow_platform_update must be absent or truthy, "
+                "[Device] upscaling must be absent or 0): while the option stays on, the next install or "
+                "repair then puts 2DMigoto back by itself.";
         } else {
             edhmD3dxStandDownProblem =
                 "d3dx.ini is read-only and has incompatible EDHM settings ([System] allow_platform_update "
@@ -1644,23 +1703,23 @@ Plan planInstall(const Survey& s, const Options& o, const PayloadInfo& p) {
             if (s.d3dxIniReadOnly) {
                 plan.notes.push_back(
                     "d3dx.ini is read-only and its EDHM compatibility settings are already satisfied; left unchanged.");
-            } else if (edhmD3dxCompatSatisfied(s.d3dxIniText)) {
+            } else if (d3dxCompat.satisfied) {
                 if (!s.state.edhmD3dxBackup.compatSaved()) {
                     plan.notes.push_back(
                         "d3dx.ini compatibility settings are already satisfied; left unchanged.");
                 }
             } else {
-                const EdhmD3dxBackup snap = snapshotEdhmD3dxCompat(s.d3dxIniText);
-                if (snap.allowPlatformUpdateSaved && !next.edhmD3dxBackup.allowPlatformUpdateSaved) {
-                    next.edhmD3dxBackup.allowPlatformUpdateSaved = true;
-                    next.edhmD3dxBackup.allowPlatformUpdate = snap.allowPlatformUpdate;
-                }
-                if (snap.upscalingSaved && !next.edhmD3dxBackup.upscalingSaved) {
-                    next.edhmD3dxBackup.upscalingSaved = true;
-                    next.edhmD3dxBackup.upscaling = snap.upscaling;
-                }
-                const std::string patched = applyEdhmD3dxCompat(s.d3dxIniText);
+                const std::string patched = applyEdhmD3dxCompat(s.d3dxIniText, d3dxCompat);
                 if (patched != s.d3dxIniText) {
+                    const EdhmD3dxBackup snap = snapshotEdhmD3dxCompat(s.d3dxIniText, d3dxCompat);
+                    if (snap.allowPlatformUpdateSaved && !next.edhmD3dxBackup.allowPlatformUpdateSaved) {
+                        next.edhmD3dxBackup.allowPlatformUpdateSaved = true;
+                        next.edhmD3dxBackup.allowPlatformUpdate = snap.allowPlatformUpdate;
+                    }
+                    if (snap.upscalingSaved && !next.edhmD3dxBackup.upscalingSaved) {
+                        next.edhmD3dxBackup.upscalingSaved = true;
+                        next.edhmD3dxBackup.upscaling = snap.upscaling;
+                    }
                     const std::wstring d3dxPath = joinPath(s.game.dir, L"d3dx.ini");
                     backup(d3dxPath, "your d3dx.ini before updating EDHM compatibility settings");
                     body.back().required = true;
@@ -3181,23 +3240,34 @@ Plan planEdhmToggle(const Survey& s, const Options& o, const PayloadInfo& p) {
     }
 
     // Back up and apply incompatible d3dx.ini compatibility values.
+    const EdhmD3dxEffectiveCompat d3dxCompat = effectiveD3dxCompatOf(s);
+    if (s.d3dxIniPresent && s.d3dxIniUnreadable) {
+        plan.blocked = true;
+        plan.problems.push_back(
+            "d3dx.ini cannot be read -- close anything holding it open before changing EDHM compatibility settings.");
+        return plan;
+    }
+    if (s.d3dxIniPresent && s.d3dxIniUtf16) {
+        plan.blocked = true;
+        plan.problems.push_back(
+            "d3dx.ini is UTF-16 encoded; ED-UP only edits UTF-8/ASCII d3dx.ini files and cannot check or adjust "
+            "its EDHM compatibility settings ([System] allow_platform_update, [Device] upscaling). "
+            "Convert d3dx.ini to UTF-8 or turn off the experimental 2DMigoto option.");
+        return plan;
+    }
+    if (d3dxCompat.hasExternalOverrideFailure()) {
+        plan.blocked = true;
+        plan.problems.push_back(
+            "An included EDHM config file overrides a required compatibility setting (" +
+            describeEdhmD3dxOverrideFailure(d3dxCompat) +
+            "). ED-UP will not edit included files or d3dx_user.ini, and will not install 2DMigoto with "
+            "incompatible settings. Adjust or remove that override ([System] allow_platform_update must be "
+            "absent or truthy, [Device] upscaling must be absent or 0) or turn off the experimental 2DMigoto option.");
+        return plan;
+    }
     if (s.d3dxIniPresent) {
-        if (s.d3dxIniUnreadable) {
-            plan.blocked = true;
-            plan.problems.push_back(
-                "d3dx.ini cannot be read -- close anything holding it open before changing EDHM compatibility settings.");
-            return plan;
-        }
-        if (s.d3dxIniUtf16) {
-            plan.blocked = true;
-            plan.problems.push_back(
-                "d3dx.ini is UTF-16 encoded; ED-UP only edits UTF-8/ASCII d3dx.ini files and cannot check or adjust "
-                "its EDHM compatibility settings ([System] allow_platform_update, [Device] upscaling). "
-                "Convert d3dx.ini to UTF-8 or turn off the experimental 2DMigoto option.");
-            return plan;
-        }
         if (s.d3dxIniReadOnly) {
-            if (!edhmD3dxCompatSatisfied(s.d3dxIniText)) {
+            if (!d3dxCompat.satisfied) {
                 plan.blocked = true;
                 plan.problems.push_back(
                     "d3dx.ini is read-only and has incompatible EDHM settings ([System] allow_platform_update "
@@ -3208,18 +3278,18 @@ Plan planEdhmToggle(const Survey& s, const Options& o, const PayloadInfo& p) {
             }
             plan.notes.push_back(
                 "d3dx.ini is read-only and its EDHM compatibility settings are already satisfied; left unchanged.");
-        } else if (!edhmD3dxCompatSatisfied(s.d3dxIniText)) {
-            const EdhmD3dxBackup snap = snapshotEdhmD3dxCompat(s.d3dxIniText);
-            if (snap.allowPlatformUpdateSaved && !next.edhmD3dxBackup.allowPlatformUpdateSaved) {
-                next.edhmD3dxBackup.allowPlatformUpdateSaved = true;
-                next.edhmD3dxBackup.allowPlatformUpdate = snap.allowPlatformUpdate;
-            }
-            if (snap.upscalingSaved && !next.edhmD3dxBackup.upscalingSaved) {
-                next.edhmD3dxBackup.upscalingSaved = true;
-                next.edhmD3dxBackup.upscaling = snap.upscaling;
-            }
-            const std::string patched = applyEdhmD3dxCompat(s.d3dxIniText);
+        } else if (!d3dxCompat.satisfied) {
+            const std::string patched = applyEdhmD3dxCompat(s.d3dxIniText, d3dxCompat);
             if (patched != s.d3dxIniText) {
+                const EdhmD3dxBackup snap = snapshotEdhmD3dxCompat(s.d3dxIniText, d3dxCompat);
+                if (snap.allowPlatformUpdateSaved && !next.edhmD3dxBackup.allowPlatformUpdateSaved) {
+                    next.edhmD3dxBackup.allowPlatformUpdateSaved = true;
+                    next.edhmD3dxBackup.allowPlatformUpdate = snap.allowPlatformUpdate;
+                }
+                if (snap.upscalingSaved && !next.edhmD3dxBackup.upscalingSaved) {
+                    next.edhmD3dxBackup.upscalingSaved = true;
+                    next.edhmD3dxBackup.upscaling = snap.upscaling;
+                }
                 const std::wstring d3dxPath = joinPath(s.game.dir, L"d3dx.ini");
                 backup(d3dxPath, "your d3dx.ini before updating EDHM compatibility settings");
                 body.back().required = true;
@@ -3301,19 +3371,7 @@ Plan planEdhmLogging(const Survey& s, const Options& o, const std::string& key, 
         plan.problems.push_back("Unknown d3dx.ini logging setting.");
         return plan;
     }
-    const bool chainedOtherMod =
-        !s.state.chainTarget.empty() && _wcsicmp(s.state.chainTarget.c_str(), L"d3d11_edhm.dll") != 0;
-    const FileRecord* edhmRec = s.state.file("edhm_2dmigoto");
-    std::wstring edhmDllPath;
-    bool managed2d = false;
-    if (!chainedOtherMod && edhmRec && edhmRec->existing == existingName(ExistingMode::OptIn) &&
-        !edhmRec->sha256.empty() && recordPathOf(s, *edhmRec, &edhmDllPath)) {
-        std::vector<DllInfo> probed;
-        const DllInfo cur = targetInfoOf(s, edhmDllPath, &probed);
-        managed2d = cur.kind != DllKind::Absent && cur.kind != DllKind::Unreadable &&
-                    sameSha(cur.sha256, edhmRec->sha256);
-    }
-    if (!managed2d) {
+    if (!edhm2dMigotoDllActive(s)) {
         plan.blocked = true;
         plan.problems.push_back(
             "Enable and apply the tailored 2DMigoto runtime before changing EDHM banner settings.");
@@ -3337,6 +3395,21 @@ Plan planEdhmLogging(const Survey& s, const Options& o, const std::string& key, 
     if (s.d3dxIniReadOnly) {
         plan.blocked = true;
         plan.problems.push_back("d3dx.ini is read-only; remove the read-only attribute to change this setting.");
+        return plan;
+    }
+    const EdhmD3dxEffectiveCompat d3dxCompat = effectiveD3dxCompatOf(s);
+    if (!d3dxCompat.satisfied) {
+        plan.blocked = true;
+        if (d3dxCompat.hasExternalOverrideFailure()) {
+            plan.problems.push_back(
+                "EDHM compatibility settings are currently overridden incompatibly (" +
+                describeEdhmD3dxOverrideFailure(d3dxCompat) +
+                "); resolve that override before changing EDHM banner settings.");
+        } else {
+            plan.problems.push_back(
+                "d3dx.ini currently has incompatible EDHM settings; re-apply 2DMigoto compatibility "
+                "settings before changing EDHM banner settings.");
+        }
         return plan;
     }
 

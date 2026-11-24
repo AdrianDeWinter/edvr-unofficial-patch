@@ -25,6 +25,11 @@ from pathlib import Path
 
 REPO = "Fenris159/EDHM_2DMigoto"
 VERSION = "0.1.9"
+# src/installer/edhm_d3dx.cpp treats an absent [System] allow_platform_update as
+# compatible because EDHM_2DMigoto v0.1.9 changed its default to true
+# (DirectX11/IniHandler.cpp:5051). Lowering VERSION below this floor requires
+# updating edhm_d3dx.cpp first.
+MIN_ALLOW_PLATFORM_UPDATE_DEFAULT_TRUE_VERSION = (0, 1, 9)
 TAG = "v" + VERSION
 COMMIT = "716157b88f7895b46e08f3b376e8a9902d2d94fa"
 RELEASE_URL = "https://github.com/%s/releases/download/%s" % (REPO, TAG)
@@ -125,8 +130,38 @@ def build_combined_notice(parts):
     return "".join(chunks).encode("utf-8")
 
 
+def parse_version_tuple(version_text):
+    text = version_text.strip()
+    if text[:1] in ("v", "V"):
+        text = text[1:]
+    parts = text.split(".")
+    if not parts or any(not part or any(ch < "0" or ch > "9" for ch in part) for part in parts):
+        raise ValueError("unrecognised EDHM_2DMigoto version: %r" % (version_text,))
+    return tuple(int(part) for part in parts)
+
+
+def version_pin_problem(version_text=None):
+    text = VERSION if version_text is None else version_text
+    try:
+        parsed = parse_version_tuple(text)
+    except ValueError as err:
+        return str(err)
+    if parsed < MIN_ALLOW_PLATFORM_UPDATE_DEFAULT_TRUE_VERSION:
+        min_text = ".".join(str(p) for p in MIN_ALLOW_PLATFORM_UPDATE_DEFAULT_TRUE_VERSION)
+        return (
+            "pinned EDHM_2DMigoto VERSION %s is older than %s; "
+            "src/installer/edhm_d3dx.cpp assumes absent [System] allow_platform_update "
+            "defaults to true (introduced in v%s) and must be updated before downgrading"
+            % (text, min_text, min_text)
+        )
+    return None
+
+
 def verify(dest, quiet=False):
     problems = []
+    pin_problem = version_pin_problem()
+    if pin_problem:
+        problems.append(pin_problem)
     root = Path(dest)
     loaded = {}
     for rel, (_url, expected) in FILES.items():
@@ -165,6 +200,9 @@ def download_url(url, timeout=120):
 
 
 def fetch(dest, dry_run=False, downloader=download_url):
+    pin_problem = version_pin_problem()
+    if pin_problem:
+        raise ValueError(pin_problem)
     if dry_run:
         print("Would fetch EDHM_2DMigoto %s (commit %s) from %s" % (TAG, COMMIT, REPO))
         for rel, (url, digest) in FILES.items():
@@ -243,6 +281,10 @@ def main(argv=None):
     if args.self_test:
         return self_test()
     if args.print_source_archive:
+        pin_problem = version_pin_problem()
+        if pin_problem:
+            print("fetch_edhm_2dmigoto: " + pin_problem, file=sys.stderr)
+            return 2
         print(SOURCE_ARCHIVE_NAME)
         return 0
     if args.verify:
@@ -339,6 +381,37 @@ def self_test():
                 rc_print = main(["--print-source-archive"])
             expect("print-source-archive", rc_print == 0 and src_out.getvalue().strip() == SOURCE_ARCHIVE_NAME,
                    "unexpected --print-source-archive output: " + repr(src_out.getvalue()))
+            # Guard: edhm_d3dx.cpp assumes absent allow_platform_update defaults to true (>= v0.1.9).
+            expect("pin-floor-current", version_pin_problem(VERSION) is None,
+                   "current VERSION fails pin floor: " + str(version_pin_problem(VERSION)))
+            for older in ("0.1.8", "0.1.8.9", "0.0.9", "0.1", "", "bad", "vv0.1.9", "0.1.\u00b2", "0.1.9-rc1"):
+                expect("pin-floor-reject-" + (older or "empty"), version_pin_problem(older) is not None,
+                       "older/invalid version accepted: " + repr(older))
+            for newer in ("0.1.9", "v0.1.9", "0.1.10", "0.2.0", "1.0.0"):
+                expect("pin-floor-accept-" + newer, version_pin_problem(newer) is None,
+                       "valid version rejected: " + repr(newer))
+            old_dest = os.path.join(base, "old-pin-dest")
+            with mock.patch.object(sys.modules[__name__], "VERSION", "0.1.8"):
+                expect("verify-rejects-old-pin", bool(verify(dest, quiet=True)),
+                       "verify() accepted VERSION below 0.1.9")
+                old_out, old_err = io.StringIO(), io.StringIO()
+                with contextlib.ExitStack() as guards:
+                    for name in ("os.mkdir", "os.makedirs", "os.replace", "os.rename",
+                                 "os.remove", "os.unlink", "os.rmdir",
+                                 "tempfile.mkdtemp", "tempfile.mkstemp",
+                                 "shutil.copyfile", "shutil.copytree", "shutil.rmtree",
+                                 "pathlib.Path.write_bytes", "pathlib.Path.write_text",
+                                 "urllib.request.urlopen"):
+                        guards.enter_context(mock.patch(name, side_effect=AssertionError("old-pin side effect: " + name)))
+                    guards.enter_context(contextlib.redirect_stdout(old_out))
+                    guards.enter_context(contextlib.redirect_stderr(old_err))
+                    rc_v = main(["--verify", dest])
+                    rc_dry = main(["--dry-run", "--dest", old_dest])
+                    rc_fetch = main(["--dest", old_dest])
+                    rc_src = main(["--print-source-archive"])
+                expect("cli-routes-reject-old-pin",
+                       rc_v == 2 and rc_dry == 2 and rc_fetch == 2 and rc_src == 2 and not os.path.exists(old_dest),
+                       "old VERSION passed a CLI route: verify=%s dry=%s fetch=%s src=%s" % (rc_v, rc_dry, rc_fetch, rc_src))
         finally:
             FILES.clear()
             FILES.update(saved_files)

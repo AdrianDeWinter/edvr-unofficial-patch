@@ -8382,7 +8382,8 @@ int wmain(int argc, wchar_t** argv) {
                 "\r\n"
                 "[System]\r\n"
                 "load_library_redirect = 2 ; standard default\r\n"
-                "allow_platform_update = 0 ; disabled in sample\r\n"
+                "; disabled in sample\r\n"
+                "allow_platform_update = 0\r\n"
                 "\r\n"
                 "[Device]\r\n"
                 "upscaling = 1\r\n"
@@ -9194,6 +9195,302 @@ int wmain(int argc, wchar_t** argv) {
                 check(applyPlan(planUninstall(surveyEdhm(), unLog, p2), providerFor(p2)).ok &&
                           readD3dxKey(readAll(d3dxPath), "Logging", "show_warnings").value == "1",
                       "planUninstall restored backed-up [Logging] key to original value");
+            }
+            // Issue #258 follow-ups:
+            // 1) Legacy [edhm_d3dx_backup] saved = 1 migration (with load_library_redirect).
+            {
+                const std::string legacyStateText =
+                    "[edvr]\r\nversion = v0.25.0\r\n"
+                    "[edhm_d3dx_backup]\r\n"
+                    "saved = 1\r\n"
+                    "load_library_redirect_present = 1\r\n"
+                    "load_library_redirect = 2\r\n"
+                    "allow_platform_update_present = 1\r\n"
+                    "allow_platform_update = 0\r\n"
+                    "upscaling_present = 1\r\n"
+                    "upscaling = 1\r\n";
+                const InstallState parsed = parseState(legacyStateText);
+                check(parsed.edhmD3dxBackup.compatSaved() &&
+                          parsed.edhmD3dxBackup.allowPlatformUpdateSaved &&
+                          parsed.edhmD3dxBackup.allowPlatformUpdate.present &&
+                          parsed.edhmD3dxBackup.allowPlatformUpdate.value == "0" &&
+                          parsed.edhmD3dxBackup.upscalingSaved &&
+                          parsed.edhmD3dxBackup.upscaling.present &&
+                          parsed.edhmD3dxBackup.upscaling.value == "1",
+                      "issue258-1: parseState migrates legacy [edhm_d3dx_backup] saved = 1 records");
+                const std::string patchedLegacy =
+                    "[System]\r\nload_library_redirect = 0\r\nallow_platform_update = 1\r\n"
+                    "[Device]\r\nupscaling = 0\r\n";
+                const std::string restoredLegacy = restoreEdhmD3dxCompat(patchedLegacy, parsed.edhmD3dxBackup);
+                check(readD3dxKey(restoredLegacy, "System", "load_library_redirect").value == "2" &&
+                          readD3dxKey(restoredLegacy, "System", "allow_platform_update").value == "0" &&
+                          readD3dxKey(restoredLegacy, "Device", "upscaling").value == "1",
+                      "issue258-1: restoreEdhmD3dxCompat restores migrated legacy load_library_redirect, allow_platform_update, and upscaling");
+                // Re-serializing and re-parsing preserves the migrated backup across intermediate installs.
+                const InstallState roundTripped = parseState(serializeState(parsed));
+                const std::string restoredRt = restoreEdhmD3dxCompat(patchedLegacy, roundTripped.edhmD3dxBackup);
+                check(readD3dxKey(restoredRt, "System", "load_library_redirect").value == "2" &&
+                          readD3dxKey(restoredRt, "System", "allow_platform_update").value == "0" &&
+                          readD3dxKey(restoredRt, "Device", "upscaling").value == "1",
+                      "issue258-1: migrated legacy backup survives serializeState/parseState round-trip");
+                // Legacy backup where load_library_redirect was originally absent removes it only while still "0".
+                const InstallState parsedAbsent = parseState(
+                    "[edvr]\r\nversion = v0.25.0\r\n"
+                    "[edhm_d3dx_backup]\r\nsaved = 1\r\n"
+                    "load_library_redirect_present = 0\r\n"
+                    "allow_platform_update_present = 1\r\nallow_platform_update = 0\r\n"
+                    "upscaling_present = 1\r\nupscaling = 1\r\n");
+                const std::string restoredAbsent = restoreEdhmD3dxCompat(patchedLegacy, parsedAbsent.edhmD3dxBackup);
+                check(!readD3dxKey(restoredAbsent, "System", "load_library_redirect").present,
+                      "issue258-1: legacy load_library_redirect_present = 0 removes load_library_redirect = 0 on restore");
+                const std::string userChangedLlr = setD3dxKey(patchedLegacy, "System", "load_library_redirect", "1");
+                const std::string restoredKeepUser = restoreEdhmD3dxCompat(userChangedLlr, parsed.edhmD3dxBackup);
+                check(readD3dxKey(restoredKeepUser, "System", "load_library_redirect").value == "1",
+                      "issue258-1: legacy restore preserves later user edit to load_library_redirect");
+            }
+            // 2) Effective check matches 2DMigoto IniHandler.cpp (empty values, 2, 0x0, mid-line ';').
+            {
+                const std::string emptyVals =
+                    "[System]\r\nallow_platform_update =\r\n[Device]\r\nupscaling =\r\n";
+                check(edhmD3dxCompatSatisfied(emptyVals) && applyEdhmD3dxCompat(emptyVals) == emptyVals,
+                      "issue258-2: empty allow_platform_update and upscaling fall back to 2DMigoto defaults (satisfied)");
+                const std::string emptyThenFalse =
+                    "[System]\r\nallow_platform_update =\r\nallow_platform_update = 0\r\n";
+                check(!edhmD3dxCompatSatisfied(emptyThenFalse),
+                      "issue258-2: empty allow_platform_update line is skipped by 2DMigoto so later 0 takes effect");
+                const std::string boolTwoHexZero =
+                    "[System]\r\nallow_platform_update = 2\r\n[Device]\r\nupscaling = 0x0\r\n";
+                check(edhmD3dxCompatSatisfied(boolTwoHexZero) && applyEdhmD3dxCompat(boolTwoHexZero) == boolTwoHexZero,
+                      "issue258-2: allow_platform_update = 2 and upscaling = 0x0 are accepted by 2DMigoto");
+                const std::string midlineSemicolon =
+                    "[System]\r\nallow_platform_update = 0 ; comment\r\n[Device]\r\nupscaling = 1 ; comment\r\n";
+                check(edhmD3dxCompatSatisfied(midlineSemicolon) &&
+                          applyEdhmD3dxCompat(midlineSemicolon) == midlineSemicolon,
+                      "issue258-2: mid-line semicolon fails 2DMigoto parse and falls back to defaults (true / 0)");
+                const std::string hexFalseAndHexOne =
+                    "[System]\r\nallow_platform_update = 0x0\r\n[Device]\r\nupscaling = 0x1\r\n";
+                check(!edhmD3dxCompatSatisfied(hexFalseAndHexOne),
+                      "issue258-2: allow_platform_update = 0x0 and upscaling = 0x1 are rejected as incompatible");
+                // Underflow (1e-50 -> 0.0f) vs overflow (1e50 -> +inf) matching IniHandler.cpp:1337.
+                check(!edhmD3dxCompatSatisfied("[System]\r\nallow_platform_update = 1e-50\r\n") &&
+                          edhmD3dxCompatSatisfied("[Device]\r\nupscaling = 1e-50\r\n") &&
+                          edhmD3dxCompatSatisfied("[System]\r\nallow_platform_update = 1e50\r\n") &&
+                          !edhmD3dxCompatSatisfied("[Device]\r\nupscaling = 1e50\r\n"),
+                      "issue258-2: float underflow (1e-50 -> 0) and overflow (1e50 -> +inf) match 2DMigoto");
+                // Static expression operators (<<, >>, **) and UB-guarded bitwise/div-by-zero ops.
+                check(!edhmD3dxCompatSatisfied("[Device]\r\nupscaling = 1 << 0\r\n") &&
+                          !edhmD3dxCompatSatisfied("[System]\r\nallow_platform_update = 0 << 1\r\n") &&
+                          !edhmD3dxCompatSatisfied("[Device]\r\nupscaling = 2 ** 0\r\n") &&
+                          edhmD3dxCompatSatisfied("[System]\r\nallow_platform_update = ~nan\r\n[Device]\r\nupscaling = 0 / 0\r\n") &&
+                          !edhmD3dxCompatSatisfied("[Device]\r\nupscaling = (1 / 0) & 1\r\n"),
+                      "issue258-2: shift/exponent/bitwise/div-by-zero static expressions evaluate cleanly without UB");
+                // Section header with trailing text & mid-line ';' on restored compat key stay consistent across read/apply/restore.
+                {
+                    const std::string trailingHdr =
+                        "[System] # global settings\r\nallow_platform_update = 0\r\n";
+                    const EdhmD3dxBackup thSnap = snapshotEdhmD3dxCompat(trailingHdr);
+                    const std::string thPatched = applyEdhmD3dxCompat(trailingHdr);
+                    check(!edhmD3dxCompatSatisfied(trailingHdr) && edhmD3dxCompatSatisfied(thPatched) &&
+                              thPatched.find("[System] # global settings") != std::string::npos &&
+                              thPatched.find("\r\n[System]\r\n") == std::string::npos,
+                          "issue258-2: applyEdhmD3dxCompat edits [System] with trailing text in place instead of appending a duplicate section");
+                    const std::string userAnnotated =
+                        "[System] # global settings\r\nallow_platform_update = 1 ; user note\r\n";
+                    check(restoreEdhmD3dxCompat(userAnnotated, thSnap) == userAnnotated,
+                          "issue258-2: restoreEdhmD3dxCompat does not clobber a compat key after the user adds a mid-line semicolon");
+                    check(restoreEdhmD3dxCompat(thPatched, thSnap) == trailingHdr,
+                          "issue258-2: restoreEdhmD3dxCompat cleanly restores [System] with trailing text");
+                }
+                // Read-only d3dx.ini with these 2DMigoto-accepted values must NOT cause stand-down.
+                const std::wstring d3dxPath = joinPath(gameDir, L"d3dx.ini");
+                const std::string roAccepted =
+                    "[System]\r\nallow_platform_update = 2\r\n[Device]\r\nupscaling = 0x0\r\n";
+                writeAll(joinPath(gameDir, L"d3d11.dll"), stdEdhmV2);
+                writeAll(d3dxPath, roAccepted);
+                SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_READONLY);
+                Survey sAcc = surveyEdhm();
+                sAcc.d3d11.kind = DllKind::Foreign;
+                sAcc.d3d11.product = L"3Dmigoto";
+                Options accOpt;
+                accOpt.edhm2dMigoto = true;
+                accOpt.backupStamp = L"t258ro";
+                const Plan accPlan = planInstall(sAcc, accOpt, p2);
+                check(!accPlan.blocked && accPlan.problems.empty() &&
+                          applyPlan(accPlan, providerFor(p2)).ok &&
+                          readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == migotoV2 &&
+                          readAll(d3dxPath) == roAccepted,
+                      "issue258-2: read-only d3dx.ini with allow_platform_update=2 and upscaling=0x0 installs 2DMigoto without stand-down");
+                SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+                Options unAcc;
+                unAcc.backupStamp = L"t258rou";
+                applyPlan(planUninstall(surveyEdhm(), unAcc, p2), providerFor(p2));
+            }
+            // 3) Included files ([Include] include / include_recursive / exclude_recursive) and d3dx_user.ini.
+            {
+                const std::wstring d3dxPath = joinPath(gameDir, L"d3dx.ini");
+                const std::wstring userIniPath = joinPath(gameDir, L"d3dx_user.ini");
+                const std::wstring incDir = joinPath(gameDir, L"EDHM-ini");
+                const std::wstring incSub = joinPath(incDir, L"sub");
+                makeTree(incSub);
+                writeAll(joinPath(gameDir, L"d3d11.dll"), stdEdhmV2);
+                writeAll(d3dxPath,
+                         "[Include]\r\n"
+                         "include_recursive = EDHM-ini\r\n"
+                         "exclude_recursive = disabled*\r\n"
+                         "[System]\r\nallow_platform_update = 1\r\n"
+                         "[Device]\r\nupscaling = 0\r\n");
+                writeAll(userIniPath, "[System]\r\nallow_platform_update = 0\r\n");
+                Survey sUser = surveyEdhm();
+                sUser.d3d11.kind = DllKind::Foreign;
+                sUser.d3d11.product = L"3Dmigoto";
+                Options incOpt;
+                incOpt.edhm2dMigoto = true;
+                incOpt.backupStamp = L"t258inc1";
+                const Plan pUser = planInstall(sUser, incOpt, p2);
+                bool mentionsUserIni = false;
+                for (const std::string& prob : pUser.problems) {
+                    if (prob.find("d3dx_user.ini") != std::string::npos) mentionsUserIni = true;
+                }
+                check(!pUser.blocked && mentionsUserIni &&
+                          applyPlan(pUser, providerFor(p2)).ok &&
+                          readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == stdEdhmV2,
+                      "issue258-3: d3dx_user.ini overriding allow_platform_update = 0 stands down 2DMigoto in planInstall");
+                check(planEdhmToggle(surveyEdhm(), incOpt, p2).blocked,
+                      "issue258-3: d3dx_user.ini overriding allow_platform_update = 0 blocks planEdhmToggle");
+                // Removing d3dx_user.ini and placing an incompatible recursive include triggers stand-down/block too.
+                DeleteFileW(userIniPath.c_str());
+                writeAll(joinPath(incDir, L"disabled_bad.ini"), "[System]\r\nallow_platform_update = 0\r\n");
+                check(!planEdhmToggle(surveyEdhm(), incOpt, p2).blocked,
+                      "issue258-3: exclude_recursive = disabled* skips disabled_bad.ini");
+                writeAll(joinPath(incSub, L"override.ini"), "[Device]\r\nupscaling = 1\r\n");
+                const Plan pRec = planEdhmToggle(surveyEdhm(), incOpt, p2);
+                bool mentionsSub = false;
+                for (const std::string& prob : pRec.problems) {
+                    if (prob.find("override.ini") != std::string::npos) mentionsSub = true;
+                }
+                check(pRec.blocked && mentionsSub,
+                      "issue258-3: recursive include overriding upscaling = 1 blocks planEdhmToggle and names file");
+                // d3dx_user.ini overriding upscaling back to 0 wins (loaded last) and satisfies compat!
+                writeAll(userIniPath, "[Device]\r\nupscaling = 0\r\n");
+                check(!planEdhmToggle(surveyEdhm(), incOpt, p2).blocked,
+                      "issue258-3: d3dx_user.ini loaded last overrides incompatible include back to compatible");
+                // Preamble `condition = 0` skips an incompatible included file; direct `include = ...` is followed.
+                DeleteFileW(userIniPath.c_str());
+                DeleteFileW(joinPath(incSub, L"override.ini").c_str());
+                writeAll(joinPath(incDir, L"cond_off.ini"),
+                         "condition = 0\r\n[System]\r\nallow_platform_update = 0\r\n");
+                check(!planEdhmToggle(surveyEdhm(), incOpt, p2).blocked,
+                      "issue258-3: preamble condition = 0 skips incompatible included file");
+                writeAll(d3dxPath,
+                         "[Include]\r\n"
+                         "include = EDHM-ini\\direct.ini\r\n"
+                         "[System]\r\nallow_platform_update = 1\r\n");
+                writeAll(joinPath(incDir, L"direct.ini"), "[System]\r\nallow_platform_update = false\r\n");
+                check(planEdhmToggle(surveyEdhm(), incOpt, p2).blocked,
+                      "issue258-3: direct [Include] include = ... override blocks planEdhmToggle");
+                // Path traversal, trailing space/dot segments, and DOS device names are refused.
+                const std::wstring outsideIni = joinPath(edhmRoot, L"outside_bad.ini");
+                writeAll(outsideIni, "[System]\r\nallow_platform_update = 0\r\n");
+                writeAll(d3dxPath,
+                         "[Include]\r\n"
+                         "include = ..\\outside_bad.ini\r\n"
+                         "include = CON\r\n"
+                         "include = EDHM-ini\\CON.ini\r\n"
+                         "include_recursive = .. /\r\n"
+                         "user_config = ..\\outside_bad.ini\r\n"
+                         "[System]\r\nallow_platform_update = 1\r\n");
+                check(!planEdhmToggle(surveyEdhm(), incOpt, p2).blocked,
+                      "issue258-3: path traversal, trailing-space '..', and DOS device names in [Include] are ignored");
+                DeleteFileW(outsideIni.c_str());
+                // include_recursive = . scans gameDir itself (without re-parsing d3dx.ini as an override).
+                {
+                    const std::wstring dotDir = joinPath(edhmRoot, L"dot_inc_test");
+                    makeTree(dotDir);
+                    const std::string dotRootIni =
+                        "[Include]\r\n"
+                        "include_recursive = .\r\n"
+                        "[System]\r\nallow_platform_update = 1\r\n";
+                    writeAll(joinPath(dotDir, L"d3dx.ini"), dotRootIni);
+                    writeAll(joinPath(dotDir, L"root_extra.ini"), "[Device]\r\nupscaling = 1\r\n");
+                    const EdhmD3dxEffectiveCompat dotCompat = evaluateEdhmD3dxCompat(dotDir, dotRootIni);
+                    check(!dotCompat.satisfied && dotCompat.upscalingOverrideFile == "root_extra.ini",
+                          "issue258-3: include_recursive = . detects incompatible sibling ini in gameDir");
+                    removeTree(dotDir);
+                }
+                // Read-only incompatible main d3dx.ini overridden to compatible by d3dx_user.ini installs cleanly!
+                writeAll(d3dxPath, "[System]\r\nallow_platform_update = 0\r\n");
+                writeAll(userIniPath, "[System]\r\nallow_platform_update = 1\r\n");
+                SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_READONLY);
+                check(!planEdhmToggle(surveyEdhm(), incOpt, p2).blocked &&
+                          applyPlan(planEdhmToggle(surveyEdhm(), incOpt, p2), providerFor(p2)).ok &&
+                          readAll(joinPath(gameDir, L"d3d11_edhm.dll")) == migotoV2,
+                      "issue258-3: read-only d3dx.ini made compatible by d3dx_user.ini allows 2DMigoto without editing d3dx.ini");
+                SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+                DeleteFileW(userIniPath.c_str());
+                removeTree(incDir);
+                Options unInc;
+                unInc.backupStamp = L"t258incu";
+                applyPlan(planUninstall(surveyEdhm(), unInc, p2), providerFor(p2));
+            }
+            // 4) Stand-down with unverified backup keeps 2DMigoto DLL on disk, so edhm2dMigotoActive()
+            //    must return false while d3dx.ini (or an included override) is incompatible.
+            {
+                const std::wstring d3dxPath = joinPath(gameDir, L"d3dx.ini");
+                const std::wstring userIniPath = joinPath(gameDir, L"d3dx_user.ini");
+                writeAll(joinPath(gameDir, L"d3d11.dll"), stdEdhmV2);
+                writeAll(d3dxPath, "[System]\r\nallow_platform_update = 1\r\n[Device]\r\nupscaling = 0\r\n");
+                Survey s4 = surveyEdhm();
+                s4.d3d11.kind = DllKind::Foreign;
+                s4.d3d11.product = L"3Dmigoto";
+                Options opt4;
+                opt4.edhm2dMigoto = true;
+                opt4.backupStamp = L"t258s4";
+                check(applyPlan(planInstall(s4, opt4, p2), providerFor(p2)).ok,
+                      "issue258-4: install 2DMigoto cleanly before stand-down backup failure test");
+                {
+                    const Survey okSurvey = surveyEdhm();
+                    check(edhm2dMigotoDllActive(okSurvey) && edhm2dMigotoActive(okSurvey),
+                          "issue258-4: edhm2dMigotoActive is true when 2DMigoto DLL and d3dx.ini are compatible");
+                }
+                // Corrupt the recorded standard backup, then make d3dx.ini incompatible + read-only.
+                const InstallState stBefore = readState(gameDir);
+                const FileRecord* recBefore = stBefore.file("edhm_2dmigoto");
+                check(recBefore && !recBefore->backup.empty(),
+                      "issue258-4: recorded standard backup exists before corruption");
+                if (recBefore && !recBefore->backup.empty()) {
+                    writeAll(joinPath(gameDir, recBefore->backup), "CORRUPTED-BACKUP-BYTES");
+                }
+                writeAll(d3dxPath, "[System]\r\nallow_platform_update = 0\r\n");
+                SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_READONLY);
+                opt4.backupStamp = L"t258s4b";
+                const Plan sdBadBak = planInstall(surveyEdhm(), opt4, p2);
+                check(!sdBadBak.blocked && !sdBadBak.problems.empty() &&
+                          applyPlan(sdBadBak, providerFor(p2)).ok,
+                      "issue258-4: stand-down with corrupt backup succeeds for core ED-UP with problems");
+                {
+                    const Survey afterSd = surveyEdhm();
+                    check(edhm2dMigotoDllActive(afterSd) && !edhm2dMigotoActive(afterSd),
+                          "issue258-4: 2DMigoto DLL stayed on disk after failed backup verification, and edhm2dMigotoActive is false while d3dx.ini is incompatible");
+                }
+                // Also verify an incompatible d3dx_user.ini makes edhm2dMigotoActive false even when d3dx.ini itself is compatible.
+                SetFileAttributesW(d3dxPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+                writeAll(d3dxPath, "[System]\r\nallow_platform_update = 1\r\n");
+                writeAll(userIniPath, "[Device]\r\nupscaling = 1\r\n");
+                {
+                    const Survey withBadUser = surveyEdhm();
+                    check(edhm2dMigotoDllActive(withBadUser) && !edhm2dMigotoActive(withBadUser),
+                          "issue258-4: edhm2dMigotoActive is false when d3dx_user.ini overrides compat incompatibly");
+                    Options logOpt4;
+                    logOpt4.nowUtc = "2026-11-24T00:00:00Z";
+                    check(planEdhmLogging(withBadUser, logOpt4, "show_reload_message", true).blocked,
+                          "issue258-4: planEdhmLogging blocks when d3dx_user.ini overrides compat incompatibly");
+                }
+                DeleteFileW(userIniPath.c_str());
+                check(edhm2dMigotoActive(surveyEdhm()),
+                      "issue258-4: edhm2dMigotoActive returns true once incompatible override is removed");
+                Options un4;
+                un4.backupStamp = L"t258s4u";
+                applyPlan(planUninstall(surveyEdhm(), un4, p2), providerFor(p2));
             }
         }
 

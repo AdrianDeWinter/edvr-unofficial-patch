@@ -552,12 +552,21 @@ InstallState parseState(const std::string& text) {
     s.nativeOriginalName = fromUtf8(get("native", "original_name"));
     s.nativeOriginalSha = get("native", "original_sha256");
 
-    if (get("edhm_d3dx_backup", "allow_platform_update_saved") == "1") {
+    // Earlier #250 branch builds wrote a single `saved = 1` flag covering
+    // load_library_redirect, allow_platform_update, and upscaling. Migrate that
+    // legacy shape into the per-key backup flags so opt-out/uninstall restores it.
+    const bool legacyCompatSaved = get("edhm_d3dx_backup", "saved") == "1";
+    if (legacyCompatSaved || get("edhm_d3dx_backup", "load_library_redirect_saved") == "1") {
+        s.edhmD3dxBackup.loadLibraryRedirectSaved = true;
+        s.edhmD3dxBackup.loadLibraryRedirect.present = get("edhm_d3dx_backup", "load_library_redirect_present") == "1";
+        s.edhmD3dxBackup.loadLibraryRedirect.value = get("edhm_d3dx_backup", "load_library_redirect");
+    }
+    if (legacyCompatSaved || get("edhm_d3dx_backup", "allow_platform_update_saved") == "1") {
         s.edhmD3dxBackup.allowPlatformUpdateSaved = true;
         s.edhmD3dxBackup.allowPlatformUpdate.present = get("edhm_d3dx_backup", "allow_platform_update_present") == "1";
         s.edhmD3dxBackup.allowPlatformUpdate.value = get("edhm_d3dx_backup", "allow_platform_update");
     }
-    if (get("edhm_d3dx_backup", "upscaling_saved") == "1") {
+    if (legacyCompatSaved || get("edhm_d3dx_backup", "upscaling_saved") == "1") {
         s.edhmD3dxBackup.upscalingSaved = true;
         s.edhmD3dxBackup.upscaling.present = get("edhm_d3dx_backup", "upscaling_present") == "1";
         s.edhmD3dxBackup.upscaling.value = get("edhm_d3dx_backup", "upscaling");
@@ -684,6 +693,13 @@ std::string serializeState(const InstallState& state) {
             return r;
         };
         out += "\r\n[edhm_d3dx_backup]\r\n";
+        if (state.edhmD3dxBackup.loadLibraryRedirectSaved) {
+            out += "load_library_redirect_saved = 1\r\n";
+            out += std::string("load_library_redirect_present = ") +
+                   (state.edhmD3dxBackup.loadLibraryRedirect.present ? "1" : "0") + "\r\n";
+            if (state.edhmD3dxBackup.loadLibraryRedirect.present)
+                out += "load_library_redirect = " + clean(state.edhmD3dxBackup.loadLibraryRedirect.value) + "\r\n";
+        }
         if (state.edhmD3dxBackup.allowPlatformUpdateSaved) {
             out += "allow_platform_update_saved = 1\r\n";
             out += std::string("allow_platform_update_present = ") + (state.edhmD3dxBackup.allowPlatformUpdate.present ? "1" : "0") + "\r\n";

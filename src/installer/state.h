@@ -50,6 +50,8 @@ struct EdhmD3dxKeyBackup {
 // so disabling it, standing down, or uninstalling restores only keys ED-UP changed without
 // clobbering later user/EDHM-UI edits.
 struct EdhmD3dxBackup {
+    bool              loadLibraryRedirectSaved = false;  // legacy #250 backup: [System] load_library_redirect
+    EdhmD3dxKeyBackup loadLibraryRedirect;
     bool              allowPlatformUpdateSaved = false;  // [System] allow_platform_update
     EdhmD3dxKeyBackup allowPlatformUpdate;
     bool              upscalingSaved = false;            // [Device] upscaling
@@ -58,10 +60,12 @@ struct EdhmD3dxBackup {
     EdhmD3dxKeyBackup showReloadMessage;
     bool              loggingWarningsSaved = false;      // [Logging] show_warnings
     EdhmD3dxKeyBackup showWarnings;
-    bool compatSaved() const { return allowPlatformUpdateSaved || upscalingSaved; }
+    bool compatSaved() const { return loadLibraryRedirectSaved || allowPlatformUpdateSaved || upscalingSaved; }
     bool anySaved() const { return compatSaved() || loggingReloadSaved || loggingWarningsSaved; }
     bool operator==(const EdhmD3dxBackup& o) const {
-        return allowPlatformUpdateSaved == o.allowPlatformUpdateSaved &&
+        return loadLibraryRedirectSaved == o.loadLibraryRedirectSaved &&
+               loadLibraryRedirect == o.loadLibraryRedirect &&
+               allowPlatformUpdateSaved == o.allowPlatformUpdateSaved &&
                allowPlatformUpdate == o.allowPlatformUpdate &&
                upscalingSaved == o.upscalingSaved && upscaling == o.upscaling &&
                loggingReloadSaved == o.loggingReloadSaved && showReloadMessage == o.showReloadMessage &&
