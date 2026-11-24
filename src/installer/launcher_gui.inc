@@ -155,7 +155,7 @@ void startVrHeadsetProbe(VrProbeTrigger trigger) {
     const bool minimized = IsIconic(g.window) != FALSE;
     const bool playing = lg.session && lg.session->playing();
     const bool gameRunning = g.haveSurvey && (g.survey.gameRunningHere || g.survey.gameRunningElsewhere);
-    const bool elevated = isElevated();
+    const bool elevated = isElevatedForPlay();
     const VrProbeDecision decision =
         decideVrProbe(trigger, onPlay, minimized, playing, gameRunning, elevated, lg.vrLiveProbeTimedOut);
     if (!decision.shouldRun) return;

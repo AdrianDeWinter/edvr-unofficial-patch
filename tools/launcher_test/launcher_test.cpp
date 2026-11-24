@@ -6880,7 +6880,7 @@ void testVrHeadsetDetection() {
                   mergedSwitch.runtimeDisplayName == L"SteamVR",
               "static refresh discards old live fields when active runtime path changes");
 
-        // Latched live probe timeout survives static refreshes (even if service is up or off) until runtime changes.
+        // A latched live probe timeout survives static refreshes while the service stays up.
         VrProbeInputs timeoutIn = liveIn;
         timeoutIn.liveProbe = {true, true, true, false, false, -997, L"", L"", L""};
         const VrHeadsetReport liveTimedOut = resolveVrHeadsetStatus(timeoutIn);
@@ -6889,6 +6889,13 @@ void testVrHeadsetDetection() {
         check(mergedTimeout.status == VrStatusKind::Error && mergedTimeout.liveProbeTimedOut &&
                   mergedTimeout.hasLiveResult && mergedTimeout.openXrResult == -997,
               "static refresh preserves latched live probe timeout instead of reverting to Standby");
+
+        // ...and is dropped once the runtime's service stops.
+        const VrHeadsetReport timeoutClosed =
+            mergeStaticRefreshWithLive(resolveVrHeadsetStatus(staticClosed), liveTimedOut);
+        check(timeoutClosed.status == VrStatusKind::RuntimeInactive && !timeoutClosed.liveProbeTimedOut &&
+                  !timeoutClosed.hasLiveResult,
+              "static refresh drops a live probe timeout once the VR service stops");
     }
 
     // 9. Signed-manifest loader verification + real runOpenXrProbeHelper + out-of-process probe runner.
@@ -6992,6 +6999,12 @@ void testVrHeadsetDetection() {
                       okRes.resultCode == 0 && okRes.runtimeName == L"Monado(XRT) 25.0.0" &&
                       okRes.runtimeVersion == L"2.8.4" && okRes.systemName == L"Oculus Quest 3",
                   "runOpenXrProbeHelper loads signed openxr_loader.dll and queries runtime/system properties");
+
+            // The same signed loader is refused when the launcher is explicitly elevated.
+            const OpenXrLiveProbe elevatedRes = runOpenXrProbeSubprocess(
+                g_self, cmd + L" elevated", ChildXrEnvAction::Inherit, L"", 3000);
+            check(elevatedRes.attempted && !elevatedRes.loaderFound && !elevatedRes.instanceCreated,
+                  "runOpenXrProbeHelper loads nothing in an explicitly elevated launcher");
 
             // Standby (-35) and InstanceLost (-13) through real runOpenXrProbeHelper.
             SetEnvironmentVariableW(L"EDUP_FAKE_OPENXR_MODE", L"standby");
@@ -7773,11 +7786,14 @@ int main(int argc, char** argv) {
         std::fflush(stdout);
         return 0;
     }
-    if (argc == 5 && std::strcmp(argv[1], "--test-probe-helper") == 0) {
+    if ((argc == 5 || argc == 6) && std::strcmp(argv[1], "--test-probe-helper") == 0) {
+        // The elevation is passed in, so the result does not depend on how the runner's token looks
+        // (GitHub's Windows runners are UAC-disabled admins: TokenIsElevated=1).
         const std::wstring root = widenUtf8(argv[2]);
         const std::wstring game = std::strcmp(argv[3], "-") == 0 ? std::wstring() : widenUtf8(argv[3]);
         const char* keys[2] = {argv[4], nullptr};
-        return runOpenXrProbeHelper(launcherRoots(root), game, keys);
+        const bool elevated = argc == 6 && std::strcmp(argv[5], "elevated") == 0;
+        return runOpenXrProbeHelper(launcherRoots(root), game, elevated, keys);
     }
     if (argc < 5) {
         std::printf("usage: launcher_test <repo root> <fixtures dir> <scratch dir> <fakes dir>\n");

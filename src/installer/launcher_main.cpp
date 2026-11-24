@@ -579,7 +579,7 @@ int runLauncherCommand(const AppArgs& args, bool haveConsole) {
 int runApplyPlanFile(const AppArgs& args) { return applyPlanFile(args.planFile, nullptr); }
 
 int runOpenXrProbeCommand(const AppArgs& args) {
-    return runOpenXrProbeHelper(launcherRootsFor(args), args.dir, nullptr);
+    return runOpenXrProbeHelper(launcherRootsFor(args), args.dir, isElevatedForPlay(), nullptr);
 }
 
 const std::string& launcherStartupNote() { return g_startupNote; }

@@ -230,7 +230,8 @@ OpenXrLiveProbe runOpenXrProbeSubprocess(const std::wstring& exePath, const std:
                                          unsigned int timeoutMs, HANDLE cancelEvent = nullptr);
 // Runs inside the short-lived `--probe-openxr` child process; resolves and verifies openxr_loader.dll
 // from the signed manifest under `roots`, prints key=value lines to stdout, and returns 0.
-int runOpenXrProbeHelper(const LauncherRoots& roots, const std::wstring& gameDir,
+// `elevated` is the caller's isElevatedForPlay(): an explicitly elevated launcher loads nothing.
+int runOpenXrProbeHelper(const LauncherRoots& roots, const std::wstring& gameDir, bool elevated,
                          const char* const* keys = nullptr);
 
 // System probe. With allowLiveProbe=false, completes using registry, EDVR's

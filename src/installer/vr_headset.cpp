@@ -1237,7 +1237,8 @@ bool resolveSignedOpenXrLoader(const LauncherRoots& roots, const std::wstring& g
     return false;
 }
 
-int runOpenXrProbeHelper(const LauncherRoots& roots, const std::wstring& gameDir, const char* const* keys) {
+int runOpenXrProbeHelper(const LauncherRoots& roots, const std::wstring& gameDir, bool elevated,
+                         const char* const* keys) {
     HANDLE outHandle = GetStdHandle(STD_OUTPUT_HANDLE);
     auto writeOut = [outHandle](const std::string& text) {
         if (!outHandle || outHandle == INVALID_HANDLE_VALUE || text.empty()) return;
@@ -1255,7 +1256,7 @@ int runOpenXrProbeHelper(const LauncherRoots& roots, const std::wstring& gameDir
 
     std::wstring loaderPath;
     std::string loaderSha;
-    if (!isElevated() && resolveSignedOpenXrLoader(roots, gameDir, keys, &loaderPath, &loaderSha)) {
+    if (!elevated && resolveSignedOpenXrLoader(roots, gameDir, keys, &loaderPath, &loaderSha)) {
         // Payload cache files are named by their 64-hex SHA-256 with no extension.
         // Win32 LoadLibraryExW appends ".dll" when the leaf filename has no '.', unless
         // a trailing '.' is present (which Win32 strips when opening the file).
@@ -1506,6 +1507,12 @@ VrHeadsetReport mergeStaticRefreshWithLive(const VrHeadsetReport& freshStatic, c
         return freshStatic;
     }
 
+    const bool stillActive =
+        freshStatic.status == VrStatusKind::Standby ||
+        (freshStatic.underWine && freshStatic.activeRuntimeFromEnv && freshStatic.activePlatform == VrPlatform::Custom);
+    // Once the runtime's service stops, neither a live Ready nor a live timeout describes it any more.
+    if (!stillActive) return freshStatic;
+
     if (previous.liveProbeTimedOut) {
         VrHeadsetReport out = freshStatic;
         out.hasLiveResult = true;
@@ -1518,11 +1525,6 @@ VrHeadsetReport mergeStaticRefreshWithLive(const VrHeadsetReport& freshStatic, c
         if (!previous.runtimeVersion.empty()) out.runtimeVersion = previous.runtimeVersion;
         return out;
     }
-
-    const bool stillActive =
-        freshStatic.status == VrStatusKind::Standby ||
-        (freshStatic.underWine && freshStatic.activeRuntimeFromEnv && freshStatic.activePlatform == VrPlatform::Custom);
-    if (!stillActive) return freshStatic;
 
     VrHeadsetReport out = freshStatic;
     out.hasLiveResult = true;
@@ -1836,12 +1838,13 @@ VrHeadsetReport probeVrHeadset(const VrProbeOptions& options) {
     }
 
     // Layer 6: Out-of-process live OpenXR query ONLY when safe:
-    // - allowed by caller and never while elevated (defense in depth: also check isElevated())
+    // - allowed by caller and never while explicitly elevated (defense in depth: also check
+    //   isElevatedForPlay(), the rule Play uses; a UAC-disabled admin is not refused)
     // - EliteDangerous64.exe is not running anywhere (checked inside shouldRunLiveOpenXrProbe)
     // - local edup_openxr.ini is valid, runtime manifest & library exist
     // - active runtime service is already running (never auto-boot SteamVR)
     // - signed release manifest is adopted (child re-verifies signature & loader SHA-256 itself)
-    const bool elevated = options.isElevated || isElevated();
+    const bool elevated = options.isElevated || isElevatedForPlay();
     VrPlatform activePlatform =
         in.activeRuntimePath.empty()
             ? VrPlatform::Unknown
