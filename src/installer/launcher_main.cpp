@@ -30,6 +30,7 @@
 #include "update_keys.h"
 #include "update_manifest.h"
 #include "update_util.h"
+#include "vr_headset.h"
 
 namespace edvr::installer {
 namespace {
@@ -576,6 +577,10 @@ int runLauncherCommand(const AppArgs& args, bool haveConsole) {
 }
 
 int runApplyPlanFile(const AppArgs& args) { return applyPlanFile(args.planFile, nullptr); }
+
+int runOpenXrProbeCommand(const AppArgs& args) {
+    return runOpenXrProbeHelper(args.probeOpenXrLoader, args.probeOpenXrSha);
+}
 
 const std::string& launcherStartupNote() { return g_startupNote; }
 

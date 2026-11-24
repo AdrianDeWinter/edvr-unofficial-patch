@@ -697,7 +697,7 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
         fillRect(dc, rect, t.windowBg);
         const int w = rect.right - rect.left;
         const int h = rect.bottom - rect.top;
-        if (w < 20 || h < 12) return;
+        if (w < 30 || h < 12) return;
 
         const COLORREF trackFill = owned->hot ? t.controlHover : t.cardBg;
         const COLORREF trackBorder = owned->hot ? t.controlBorder : t.cardBorder;
@@ -707,19 +707,24 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
         const int pad = dp(3, dpi) > 2 ? dp(3, dpi) : 2;
         const int knobD = h - pad * 2;
         const float knobR = static_cast<float>(knobD) * 0.5f;
-        const float sunCx = static_cast<float>(rect.left + pad) + knobR;
+        const float autoCx = static_cast<float>(rect.left + pad) + knobR;
         const float moonCx = static_cast<float>(rect.right - pad) - knobR;
+        const float sunCx = (autoCx + moonCx) * 0.5f;
         const float cy = static_cast<float>(rect.top) + static_cast<float>(h) * 0.5f;
-        const float activeCx = t.dark ? moonCx : sunCx;
+        const ThemeMode curMode = themeMode();
+        const float activeCx = curMode == ThemeMode::Dark  ? moonCx
+                               : curMode == ThemeMode::Light ? sunCx
+                                                             : autoCx;
 
         const COLORREF knobFill = mix(t.cardBg, t.accent, t.dark ? 34 : 18);
         const COLORREF knobBorder = mix(t.cardBorder, t.accent, t.dark ? 58 : 48);
-        const COLORREF sunCol = t.dark ? t.muted : RGB(196, 120, 0);
-        const COLORREF moonCol = t.dark ? RGB(230, 236, 248) : t.muted;
+        const COLORREF autoCol = curMode == ThemeMode::System ? t.text : t.muted;
+        const COLORREF sunCol = curMode == ThemeMode::Light ? RGB(196, 120, 0) : t.muted;
+        const COLORREF moonCol = curMode == ThemeMode::Dark ? RGB(230, 236, 248) : t.muted;
         const float scale = static_cast<float>(dpi) / 96.0f;
 
         blendTile(dc, rect.left, rect.top, w, h, [=](float px, float py) -> uint32_t {
-            // Active circular thumb.
+            // Active circular thumb behind the selected mode (System / Light / Dark).
             const float kd = std::hypot(px - activeCx, py - cy) - knobR;
             const float kOuter = clampf(0.5f - kd, 0.0f, 1.0f);
             float outR = 0.0f, outG = 0.0f, outB = 0.0f, outA = 0.0f;
@@ -734,7 +739,15 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
                 outA = kOuter;
             }
 
-            // Sun icon on the left: centre disc + 8 short radial rays.
+            // System/Auto icon on the left: contrast circle (ring + filled right half).
+            const float aDist = std::hypot(px - autoCx, py - cy);
+            const float aOuter = aDist - 4.2f * scale;
+            const float aRing = std::fabs(aDist - 3.65f * scale) - 0.55f * scale;
+            const float aHalf = aOuter > (autoCx - px) ? aOuter : (autoCx - px);
+            const float autoSd = aRing < aHalf ? aRing : aHalf;
+            const float autoCov = clampf(0.5f - autoSd, 0.0f, 1.0f);
+
+            // Sun icon in the middle: centre disc + 8 short radial rays.
             float sunSd = std::hypot(px - sunCx, py - cy) - 2.35f * scale;
             const float rIn = 3.75f * scale;
             const float rOut = 5.05f * scale;
@@ -771,6 +784,7 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
                     outA = newA;
                 }
             };
+            over(autoCol, autoCov);
             over(sunCol, sunCov);
             over(moonCol, moonCov);
             return outA > 0.0f ? packPremul(outR, outG, outB, outA) : 0u;

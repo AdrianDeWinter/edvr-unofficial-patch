@@ -19,6 +19,8 @@
 #include <uxtheme.h>
 
 #include <atomic>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1068,7 +1070,7 @@ void selectInstall(size_t index) {
     g.haveSurvey = true;
 #ifdef EDUP_LAUNCHER
     invalidateLauncherCache();
-    startVrHeadsetProbe(true);
+    startVrHeadsetProbe(VrProbeTrigger::InstallSelected);
 #endif
     // The scope this folder gets: the one the run was started with, else the folder's own, else both.
     SendMessageW(g.scopeCombo, CB_SETCURSEL, scopeIndex(g.args.scope.empty() ? defaultScope(g.survey) : g.args.scope), 0);
@@ -1557,7 +1559,7 @@ void showScreen(Screen screen) {
     if (g.tabPlay)
         ui::setButtonStyle(g.tabPlay,
                            screen == Screen::Play ? ui::ButtonStyle::TabActive : ui::ButtonStyle::Tab);
-    if (screen == Screen::Play) startVrHeadsetProbe(false);
+    if (screen == Screen::Play) startVrHeadsetProbe(VrProbeTrigger::PlayTabOpened);
 #endif
     ui::setButtonStyle(g.tabInstall,
                        screen == Screen::Install ? ui::ButtonStyle::TabActive : ui::ButtonStyle::Tab);
@@ -1952,6 +1954,7 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                 ui::applyWindowChrome(window);
 #ifdef EDUP_LAUNCHER
                 applyNativeControlThemes();
+                syncThemeToggleLabel();
 #endif
                 RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_UPDATENOW);
             }

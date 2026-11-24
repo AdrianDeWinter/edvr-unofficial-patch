@@ -172,7 +172,8 @@ public:
     // `on` false puts the original back. The mode file is written only when turning it on.
     bool standInForEdLaunch(const std::wstring& gameDir, bool on, bool vr, std::string* error);
     void beginPlay(const std::wstring& source, const std::wstring& gameDir, bool vr, bool elevated,
-                   const RouteOps& ops, const WatchNames& names, const WatchTiming& timing);
+                   const RouteOps& ops, const WatchNames& names, const WatchTiming& timing,
+                   const std::function<bool()>& confirmPlay = {});
     bool playing() const { return playing_; }
     const std::string& playLine() const { return playLine_; }
 

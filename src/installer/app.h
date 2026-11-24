@@ -43,6 +43,8 @@ struct AppArgs {
     std::wstring payloadDir;       // --payload <dir>: install from an unpacked ed-up-<ver>.zip
     std::wstring dataRoot;         // --data-root <dir>: every launcher folder under here, nothing registered
     std::wstring planFile;        // --apply-plan <file>: the elevated copy's whole job
+    std::wstring probeOpenXrLoader; // --probe-openxr <dll>: internal out-of-process OpenXR query helper
+    std::string  probeOpenXrSha;    // --probe-openxr-sha <64-hex>: expected SHA-256 of loader DLL
     std::string  channel;          // --channel stable|rc, for this run
     bool         checkUpdate = false;  // --check-update
     bool         update = false;       // --update

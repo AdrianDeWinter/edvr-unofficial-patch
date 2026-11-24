@@ -160,7 +160,8 @@ std::string LauncherState::theme() const {
 }
 
 void LauncherState::setTheme(const std::string& mode) {
-    set("theme", (mode == "dark" || mode == "light") ? mode : std::string());
+    if (mode == "dark" || mode == "light") set("theme", mode);
+    else remove("theme");
 }
 
 edvr::VrHeadsetMode LauncherState::vrStereoMode() const {
