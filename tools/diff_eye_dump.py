@@ -2,7 +2,7 @@
 """Compare the eye-dump captures: for each checkpoint, tile both eyes'
 images 16x16 and report where they differ.
 
-Usage: python tools/diff_eye_dump.py <edvr_logs/dumps directory> [gfx log]
+Usage: python tools/diff_eye_dump.py <edup_logs/dumps directory> [gfx log]
        python tools/diff_eye_dump.py --self-test
 
 The dumps are raw rows (fssdump_c<N>_<tag>_eye<E>.bin), 32 bits per pixel.

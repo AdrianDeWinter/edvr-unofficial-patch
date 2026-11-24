@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Build a native-only EDVR release archive from validated build outputs.
+"""Build a native-only ED-UP release archive from validated build outputs.
 
-Before anything is staged, the version stamped into each EDVR binary being
+Before anything is staged, the version stamped into each ED-UP binary being
 packaged (d3d11.dll and openvr_api.dll: the FileVersion and
 ProductVersion strings of their VERSIONINFO, which build.bat sets from `git
 describe --tags --always --dirty`) is compared with the release version asked
@@ -325,7 +325,7 @@ def _check_version_stamps(version, files):
             "these binaries are not release %s:\n  %s\n  build.bat stamps them from `git describe "
             "--tags --always --dirty`: check out the tag v%s with a clean tree, run build.bat, "
             "then package." % (version, "\n  ".join(problems), version))
-    print("[edvr] version stamps: %s all read v%s" % (", ".join(name for name, _ in stamps), version))
+    print("[edup] version stamps: %s all read v%s" % (", ".join(name for name, _ in stamps), version))
 
 
 def _embedded_resource(executable, resource_id, required=True):
@@ -645,10 +645,10 @@ def package(root, version, no_dlss=False, dry_run=False):
         raise ValueError("bundled OpenXR loader validation failed: %s" % exc)
     _validate_release_files(files)
     _validate_launcher(root)
-    print("[edvr] package plan: %s" % archive)
+    print("[edup] package plan: %s" % archive)
     for _, name in files: print("       %s" % name)
     launcher_linux_archive = dist / ("ed-up-launcher-linux-" + version + ".zip")
-    print("[edvr] Linux launcher plan: %s (%s)" % (
+    print("[edup] Linux launcher plan: %s (%s)" % (
         launcher_linux_archive, ", ".join(name for _, name in launcher_linux)))
     split = _split_outputs(root, version, files)
     if (root / "build" / "d3d11_edhm.dll").is_file():
@@ -658,11 +658,11 @@ def package(root, version, no_dlss=False, dry_run=False):
                 "EDHM_2DMigoto runtime is staged without its GPLv3 Corresponding Source archive: %s" % edhm_source)
         split.append((EDHM_SOURCE_ARCHIVE, edhm_source.read_bytes()))
     for name, blob in split:
-        print("[edvr] split asset plan: %s (%d bytes)" % (dist / name, len(blob)))
+        print("[edup] split asset plan: %s (%d bytes)" % (dist / name, len(blob)))
     sums = dist / SUMS_NAME
-    print("[edvr] checksum plan: %s (%d files)" % (sums, 2 + len(split)))
+    print("[edup] checksum plan: %s (%d files)" % (sums, 2 + len(split)))
     if dry_run:
-        print("[edvr] dry run: wrote nothing."); return 0
+        print("[edup] dry run: wrote nothing."); return 0
     dist.mkdir(parents=True, exist_ok=True)
     if stage.exists(): shutil.rmtree(stage)
     temporary_launcher_linux = dist / (".edvr-launcher-linux-" + version + ".zip.tmp")
@@ -736,7 +736,7 @@ def package(root, version, no_dlss=False, dry_run=False):
     for backup in [backup for _, _, backup in archives] + stale_backups:
         if backup.exists(): backup.unlink()
     for written in (archive, launcher_linux_archive, *(dist / name for name, _ in split), sums):
-        print("[edvr] wrote %s (%d bytes)" % (written, written.stat().st_size))
+        print("[edup] wrote %s (%d bytes)" % (written, written.stat().st_size))
     return 0
 
 
@@ -908,12 +908,12 @@ def self_test():
                 fake_bin = root / "fake bin"
                 fake_bin.mkdir()
                 fake_python = fake_bin / "python3"
-                fake_python.write_bytes(b"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$EDVR_ARGS_FILE\"\nexit 37\n")
+                fake_python.write_bytes(b"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$EDUP_ARGS_FILE\"\nexit 37\n")
                 fake_python.chmod(0o755)
                 elsewhere = root / "other cwd"
                 elsewhere.mkdir()
                 args_file = root / "arguments"
-                env = dict(os.environ, PATH=str(fake_bin), EDVR_ARGS_FILE=str(args_file))
+                env = dict(os.environ, PATH=str(fake_bin), EDUP_ARGS_FILE=str(args_file))
                 # The launcher script puts --launcher before the player's own arguments.
                 launcher_script = launcher_extracted / LAUNCHER_LINUX_SH
                 launcher_wrapper = launcher_extracted / LAUNCHER_LINUX_WRAPPER
@@ -1498,4 +1498,4 @@ def main(argv=None):
 if __name__ == "__main__":
     try: raise SystemExit(main())
     except (OSError, ValueError, zipfile.BadZipFile) as exc:
-        print("[edvr] packaging failed: %s" % exc); raise SystemExit(1)
+        print("[edup] packaging failed: %s" % exc); raise SystemExit(1)

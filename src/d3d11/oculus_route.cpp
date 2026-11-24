@@ -365,7 +365,7 @@ void oculusRouteInstallEarly(bool nativeBuild) {
     if (!known || !match.loadLibrarySlot || !match.callerReturnRva) {
         saturatingIncrement(g_installFailures);
         if(g_eliteProcess.load(std::memory_order_acquire)) {
-            OutputDebugStringA("EDVR Oculus route not installed: Elite Oculus profile/IAT hook unavailable\n");
+            OutputDebugStringA("ED-UP Oculus route not installed: Elite Oculus profile/IAT hook unavailable\n");
         }
         setDecision(kDecisionInstallFailure);
         releaseInstall();
@@ -376,7 +376,7 @@ void oculusRouteInstallEarly(bool nativeBuild) {
     if (!current || current == reinterpret_cast<void*>(&oculusRouteLoadLibraryW)) {
         saturatingIncrement(g_installFailures);
         if(g_eliteProcess.load(std::memory_order_acquire)) {
-            OutputDebugStringA("EDVR Oculus route not installed: Elite Oculus IAT target unavailable\n");
+            OutputDebugStringA("ED-UP Oculus route not installed: Elite Oculus IAT target unavailable\n");
         }
         setDecision(kDecisionInstallFailure);
         releaseInstall();
@@ -400,7 +400,7 @@ void oculusRouteInstallEarly(bool nativeBuild) {
     if (!VirtualProtect(match.loadLibrarySlot, sizeof(void*), PAGE_READWRITE, &oldProtect)) {
         saturatingIncrement(g_installFailures);
         if(g_eliteProcess.load(std::memory_order_acquire)) {
-            OutputDebugStringA("EDVR Oculus route not installed: Elite Oculus IAT protection failed\n");
+            OutputDebugStringA("ED-UP Oculus route not installed: Elite Oculus IAT protection failed\n");
         }
         g_routingReady.store(0, std::memory_order_release);
         setDecision(kDecisionInstallFailure);
@@ -422,7 +422,7 @@ void oculusRouteInstallEarly(bool nativeBuild) {
         saturatingIncrement(g_publicationRaces);
         saturatingIncrement(g_installFailures);
         if(g_eliteProcess.load(std::memory_order_acquire)) {
-            OutputDebugStringA("EDVR Oculus route not installed: Elite Oculus IAT publication raced\n");
+            OutputDebugStringA("ED-UP Oculus route not installed: Elite Oculus IAT publication raced\n");
         }
         setDecision(kDecisionInstallFailure);
         releaseInstall();
@@ -570,7 +570,7 @@ void oculusRouteReport() {
         if (first && g_eliteProcess.load(std::memory_order_acquire) && s.nativeBuild &&
             !s.installed && s.lastDecision == kDecisionInstallFailure) {
             const std::string build = gameBuildVersion();
-            Log::get().note("oculus route: not installed on game build %s (profile known=%u, failure stage %u). The game starts normally. With the Oculus PC runtime installed, Elite may open it directly and bypass EDVR's OpenXR runtime until an EDVR update carries a profile for this build; SteamVR, other OpenXR runtimes and the flat profile are unaffected.",
+            Log::get().note("oculus route: not installed on game build %s (profile known=%u, failure stage %u). The game starts normally. With the Oculus PC runtime installed, Elite may open it directly and bypass ED-UP's OpenXR runtime until an ED-UP update carries a profile for this build; SteamVR, other OpenXR runtimes and the flat profile are unaffected.",
                             build.empty() ? "unknown" : build.c_str(), s.profileKnown, s.profileFailureStage);
         }
 #endif

@@ -34,7 +34,7 @@ The nonexecuting dumpbin evidence is archived in
 these entry signatures for that binary, not a supported object interface or
 lifetime contract.
 
-Bootstrap accepts `EDVR_OPENXR_SEPARATE_DEVICE=1` only with both explicit
+Bootstrap accepts `EDUP_OPENXR_SEPARATE_DEVICE=1` only with both explicit
 drive-absolute paths. An absent flag preserves V1 behavior; empty, zero,
 unknown values, failed environment reads and flag-only input are rejected.
 Exact `1` selects V2 separate-device configuration. The diagnostic runner can

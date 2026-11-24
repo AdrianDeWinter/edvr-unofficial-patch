@@ -2744,7 +2744,7 @@ void summaryLocked(uint64_t now, ID3D11DeviceContext* ctx) {
         for (uint64_t n : familyDraws) substituted += n;
         const auto& by = g_draw.flatFlushBy;
         using Cause = EngineVelocityFlushCause;
-        Log::get().note("engine motion: flat draw bracket over %.0f s: %llu substituted draws in %llu runs (%llu found EDVR's state "
+        Log::get().note("engine motion: flat draw bracket over %.0f s: %llu substituted draws in %llu runs (%llu found ED-UP's state "
                         "still bound from the draw before); the game's state put back %llu times, for: a declined draw %llu, "
                         "another draw %llu, a dispatch %llu, a clear %llu, a copy %llu, a resolve %llu, a set keeping the targets %llu, "
                         "a command list %llu, the present %llu, an overlay draw %llu, not lazy %llu; %.1f context calls per substituted draw.",

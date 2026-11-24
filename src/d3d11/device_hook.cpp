@@ -3,6 +3,7 @@
 #include "ui_layer.h"
 #include "gpu_timing.h"
 #include "gpu_frame_timing.h"
+#include "flat_cpu_trace.h"   // the flat profile's CPU markers: event 5 per owned Present, spans 0x200-0x207
 #include "gpu_census.h"   // gpuCensusFrameWorkOpen/End: the frame's GPU work span's door end (2026-10-14)
 #include "native_timing.h"
 #include "../common/native_present_trace.h"
@@ -1415,7 +1416,7 @@ void tickHotkeys() {
         ++g_state->missedDumpNotes;
         Log::get().note(
             "the camera history key was pressed, but another window had "
-            "focus, so nothing was written. EDVR only acts on its hotkeys "
+            "focus, so nothing was written. ED-UP only acts on its hotkeys "
             "while Elite itself is the active window -- otherwise a key "
             "typed in a browser would reach it. Click on the game window "
             "(the flat one on your desktop) and press it again. Said at most "
@@ -1596,7 +1597,7 @@ void tickMtSample() {
                     "multithread protection CHANGED to %s (change #%u, "
                     "frame %llu). Every one of these makes Windows re-lay "
                     "the context's entire function table, which is what "
-                    "removes EDVR's hooks from it. Reported for the first "
+                    "removes ED-UP's hooks from it. Reported for the first "
                     "few and then at doublings.",
                     now ? "ON" : "off", n,
                     static_cast<unsigned long long>(g_state->mtFrames));
@@ -1633,10 +1634,10 @@ void tickFrameFlagPeer() {
                 Log::get().note(
                     "frame_flag: LAYOUT MISMATCH -- this d3d11.dll was built with the "
                     "shared channel's v%u, the VR runtime half beside it with v%u. They "
-                    "come from different EDVR builds, so the channel between them is "
+                    "come from different ED-UP builds, so the channel between them is "
                     "refused: everything that crosses it (the transition-flash hold, "
                     "the on-foot camera, the intro recentre, the "
-                    "settings menu's door) is absent this session. Reinstall EDVR so "
+                    "settings menu's door) is absent this session. Reinstall ED-UP so "
                     "both halves match.",
                     kFrameFlagVersion, theirs);
             }
@@ -1895,6 +1896,20 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
     // (nativeTimingPresentBegin / NotePresent, renderBoundaryNoteOwnedPresent / Present, vramAdapterOf) are null-safe
     // and are not skipped. v0.17.0 .. v0.19.1 dereferenced it unguarded here: first Present, 0xC0000005.
     ID3D11Device* const dev = g_state->device;
+    // The flat CPU markers (flat_cpu_trace.h). Started once here, so a session that begins before vScreen binds still
+    // gets the provider; the start is idempotent. The sequence and the first command are read now, before the boundary.
+    static bool cpuTraceStarted = false;
+    if (!cpuTraceStarted) {
+        cpuTraceStarted = true;
+        const bool registered = openxr::NativeCpuTrace::get().start();
+        Log::get().note("cpu trace: provider D3885FA1 registered=%u externally_enabled=%u error=%lu",
+                        registered ? 1u : 0u, openxr::NativeCpuTrace::get().enabled() ? 1u : 0u,
+                        static_cast<unsigned long>(openxr::NativeCpuTrace::get().counters().lastError));
+    }
+    const bool flatTrace = flatCpuTraceOn();
+    const uint64_t flatSequence = g_state->frameCounter;
+    const uint64_t flatFirstCommandUs = flatTrace ? flatTraceTakeFirstCommandUs() : 0;
+    if (!flatTrace) g_flatCpuTraceFrame.prevHookReturnUs = 0;
     vrSsaaGateNotePresent();  // log only: the first Present's place in the order of the Supersampling lines
     // The frame-tick chain starts here (frame_ticks.h): what follows, to this
     // hook's return, is EDVR's or the driver's; what came before it is the game's.
@@ -1923,6 +1938,7 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
     // the game's own context. Before this call, so the pair is still inside the census scope that the boundary after the Present closes.
     ID3D11DeviceContext* workContext = nullptr;
     if (dev) dev->GetImmediateContext(&workContext);
+    ID3D11DeviceContext* const flatContext = workContext;   // identity only: the first-command stamp is armed with it after the Present
     if (workContext && gpuCensusFrameWorkOpen()) {
         gpuCensusFrameWorkEnd(workContext);
     }
@@ -2010,7 +2026,11 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
     g_frameTicks.markAt("present_post", boundaryT0);
     g_frameTicks.boundary(true);
     // Each tick runs under a budget of its own (boundary_tick.h).
-    presentFrameBoundary();
+    {
+        openxr::NativeCpuTraceSpan span(EdvrCpuFlatFrameBoundary, flatTrace);
+        presentFrameBoundary();
+        span.finishVoid(0);
+    }
     const int64_t boundaryT1 = qpcNow();
     // Whatever the boundary did after its last tick (all of it, when
     // graphicsRuntimeDisabled cut it short), and the end of the boundary's ticks.
@@ -2032,7 +2052,39 @@ HRESULT STDMETHODCALLTYPE hookedPresent(IDXGISwapChain* self, UINT syncInterval,
     nativeTimingNotePresent(dev, traceToken, trace);
     frameTick("timing_note");
     // XeLL's frame start for the bridged swap chain: its latency sleep, the last thing before Elite starts the next frame.
-    if (xessFgOwns(self)) xessFgFrameStart();
+    const bool bridged = xessFgOwns(self);
+    if (bridged) xessFgFrameStart();
+    // The flat CPU markers' one event per owned Present. The hook's return is read after XeLL's frame start, the last thing here.
+    if (flatTrace) {
+        const uint64_t hookReturnUs = edvrNativeTraceNowUs();
+        const DWORD threadId = GetCurrentThreadId();
+        const bool prevValid = g_flatCpuTraceFrame.prevHookReturnUs != 0 && g_flatCpuTraceFrame.prevThread == threadId;
+        const uint64_t firstCommandUs = prevValid ? flatFirstCommandUs : 0;
+        EdvrNativePresentFramePayload payload{};
+        payload.timestampUs = hookReturnUs;
+        payload.sequence = flatSequence;
+        payload.prevHookReturnUs = prevValid ? g_flatCpuTraceFrame.prevHookReturnUs : 0;
+        payload.firstCommandUs = firstCommandUs;
+        payload.hookEnterUs = trace.beginUs;
+        payload.presentBeginUs = trace.realBeginUs;
+        payload.presentEndUs = trace.realEndUs;
+        payload.callbackEndUs = trace.endUs;
+        payload.hookReturnUs = hookReturnUs;
+        payload.thread = static_cast<uint32_t>(threadId);
+        payload.result = static_cast<int32_t>(hr);
+        payload.syncInterval = presentSync;
+        payload.presentFlags = flags;
+        payload.flags = static_cast<uint16_t>(
+            (prevValid ? EdvrPresentPrevValid : 0) |
+            (firstCommandUs != 0 ? EdvrPresentFirstCommandValid : 0) |
+            (bridged ? EdvrPresentBridged : 0) |
+            ((flags & DXGI_PRESENT_TEST) != 0 ? EdvrPresentTest : 0));
+        payload.generatedFrames = static_cast<uint16_t>(xessFgActiveGeneratedFrames());
+        openxr::NativeCpuTrace::get().emitPresentFrame(payload);
+        g_flatCpuTraceFrame.prevHookReturnUs = hookReturnUs;
+        g_flatCpuTraceFrame.prevThread = threadId;
+        if (flatContext) flatTraceArmFirstCommand(flatContext);
+    }
     return hr;
 }
 
@@ -2491,7 +2543,7 @@ void logContextTableVariants(void** table, size_t span, const char* who) {
     Log::get().note(
         "context table at install (%s): slot 12 (DrawIndexed) = %s; slot 50 "
         "(ClearRenderTargetView) = %s. These are the entries the runtime had "
-        "selected when EDVR arrived -- quote them beside any later line about "
+        "selected when ED-UP arrived -- quote them beside any later line about "
         "entries changing, because a changed entry only means something next to "
         "the one it changed FROM.",
         who ? who : "?", vtableOwnerModuleName(drawIndexed, a, sizeof(a)),
@@ -2755,7 +2807,7 @@ void hookDevice(ID3D11Device* device) {
         if (++extra <= 4) {
             D3D_FEATURE_LEVEL fl = device->GetFeatureLevel();
             Log::get().note(
-                "a SECOND D3D11 device (%p, featureLevel=0x%04X) was created; EDVR "
+                "a SECOND D3D11 device (%p, featureLevel=0x%04X) was created; ED-UP "
                 "hooks the first one only (%p) and this one is not hooked. Ordinary "
                 "for a capability probe or another tool. If the game renders through "
                 "it, every fix in d3d11.dll is blind to that rendering -- the "
@@ -2808,7 +2860,7 @@ void hookDevice(ID3D11Device* device) {
                 "all inert, and the game renders as it would without this half "
                 "installed. What is still hooked is the swapchain's Present and "
                 "the DXGI factory, which carry the frame boundary the openvr half "
-                "runs on. Submit-side graphics processing and the EDVR menu are "
+                "runs on. Submit-side graphics processing and the ED-UP menu are "
                 "also disabled. If a crash survives this setting, please report "
                 "both logs. Set it back to 1 and restart to try the fixes again.");
         }
@@ -2835,7 +2887,7 @@ void hookDevice(ID3D11Device* device) {
             "d3d11.dll is off for THIS session only, on every device, and it will try again next "
             "launch: the black void, the panel distance, the exposure share, the "
             "transition flash fix and native on foot. The game "
-            "renders without EDVR's graphics treatments; the EDVR menu is unavailable "
+            "renders without ED-UP's graphics treatments; the ED-UP menu is unavailable "
             "until the next launch. The OpenVR half has its own recovery guard.\n"
             "  If this keeps happening, the hooks really are crashing and the log is "
             "worth reporting. To force them on anyway, set ignore_sentinel = 1 under "
@@ -3009,7 +3061,7 @@ void hookDevice(ID3D11Device* device) {
                     "of two complete sets of context methods this device "
                     "dispatches through -- the protected set takes the "
                     "runtime's lock in every call -- and switching it makes "
-                    "Windows rewrite the context's whole function table. EDVR "
+                    "Windows rewrite the context's whole function table. ED-UP "
                     "only reads it; every change is reported below. If it never "
                     "changes and the table is still being rewritten, the cause "
                     "is something else and that is worth knowing.",
@@ -3080,10 +3132,10 @@ void hookDevice(ID3D11Device* device) {
                 Log::get().note(
                     swapped
                         ? "LIVE-ONLY PROBE: the immediate context now dispatches "
-                          "through a private table of EDVR's in which every entry "
+                          "through a private table of ED-UP's in which every entry "
                           "is a jump stub that reads the context's OWN slot at "
                           "the moment of the call. Nothing is patched, neither "
-                          "context installer ran, and no EDVR code is in the path "
+                          "context installer ran, and no ED-UP code is in the path "
                           "of any context call -- so every d3d11 fix is off this "
                           "session. The only thing not stock is WHERE the vptr "
                           "points. If this dies the way the private-copy mode "
@@ -3102,7 +3154,7 @@ void hookDevice(ID3D11Device* device) {
                         ? "SWAP-ONLY PROBE: the immediate context now dispatches "
                           "through a byte-identical private copy of its table, with "
                           "NOTHING patched in it and neither context installer run. "
-                          "No EDVR code is in the path of any context call. Every "
+                          "No ED-UP code is in the path of any context call. Every "
                           "d3d11 fix is therefore off this session. If this session "
                           "dies the way the normal private-copy mode does, the vptr "
                           "swap is fatal on its own; if it survives, the swap is "

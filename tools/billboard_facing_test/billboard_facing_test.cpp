@@ -426,9 +426,11 @@ static void runCase(Rig& rig, const Case& cs, const std::vector<std::vector<uint
     std::snprintf(name, sizeof name, "%016llX", static_cast<unsigned long long>(fnv1a64(original.data(), original.size())));
     check(std::string(name) == cs.hash, tag + "fixture-content-hashes-to-its-name");
     const auto mine = compile(cs.source);
-    // A desk aid, not a gate: EDVR_FACING_ASM=<hash> prints that transcription's own disassembly.
-    if (const char* want = std::getenv("EDVR_FACING_ASM"))
-        if (std::string(want) == cs.hash) std::printf("%s\n", disassemble(mine.data(), mine.size()).c_str());
+    // A desk aid, not a gate: EDUP_FACING_ASM=<hash> prints that transcription's own disassembly.
+    const char* want = std::getenv("EDUP_FACING_ASM");
+    if (!want && (want = std::getenv("EDVR_FACING_ASM")) != nullptr)
+        std::printf("[edup] WARNING: EDVR_FACING_ASM is deprecated; set EDUP_FACING_ASM instead\n");
+    if (want && std::string(want) == cs.hash) std::printf("%s\n", disassemble(mine.data(), mine.size()).c_str());
     const Sig so = parse(disassemble(original.data(), original.size()));
     Sig sm = parse(disassemble(mine.data(), mine.size()));
     // The one declaration that is ours: b3, the viewer position and world up (pCam, pUp), eight floats. The original has no b3.

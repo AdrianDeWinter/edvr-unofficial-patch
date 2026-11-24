@@ -113,13 +113,13 @@ def main(argv=None):
     text = render(src)
     path = os.path.join(args.out, 'fsr_hlsl_gen.h')
     if args.dry_run:
-        print('[edvr] dry run: would generate %s (%d bytes); wrote nothing'
+        print('[edup] dry run: would generate %s (%d bytes); wrote nothing'
               % (path, len(text)))
         return 0
     os.makedirs(args.out, exist_ok=True)
     with open(path, 'w', encoding='ascii', newline='\n') as fh:
         fh.write(text)
-    print('[edvr] generated %s' % path)
+    print('[edup] generated %s' % path)
     return 0
 
 

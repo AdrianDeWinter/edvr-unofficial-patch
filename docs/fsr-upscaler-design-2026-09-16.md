@@ -534,7 +534,7 @@ class of upscaler): that is route 2's go/no-go.
   treatmentName; both kept; green.
 - 2026-09-16 night, Track C (uncommitted while its rig is finished): the
   engine body under `EDVR_HAVE_FSR3` in `src\d3d11\fsr3_engine.cpp`, the
-  build.bat block (after the NGX block; `EDVR_FFX_DX11=none` builds without
+  build.bat block (after the NGX block; `EDUP_FFX_DX11=none` builds without
   the port on purpose; both builds green), `fetch_ffx_dx11.py --self-test`
   in the python gate, the `kEvFsr` perf event, the perf tile and the panel
   reading `fsr3Totals` under `fsr`, and the WARP rig

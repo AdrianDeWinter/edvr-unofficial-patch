@@ -201,19 +201,19 @@ inline int formatLog(char* out, size_t size, Verdict verdict, const char* system
     switch (verdict) {
         case Verdict::Notice:
             return std::snprintf(out, size,
-                "canted eyes: parallel projection is on: this %s is canted, but %s reports parallel views (%ux%u per eye). EDVR renders "
+                "canted eyes: parallel projection is on: this %s is canted, but %s reports parallel views (%ux%u per eye). ED-UP renders "
                 "canted displays without it; turning \"Enable Parallel Projection\" off in Pimax Play and restarting the game cuts GPU "
                 "time by up to about 30%%.",
                 system, runtime, width, height);
         case Verdict::LogOnly:
             return std::snprintf(out, size,
-                "canted eyes: parallel projection is on: this %s is canted, but %s reports parallel views (%ux%u per eye). EDVR renders "
+                "canted eyes: parallel projection is on: this %s is canted, but %s reports parallel views (%ux%u per eye). ED-UP renders "
                 "canted displays without it; whether this runtime honours Pimax Play's toggle is unverified.",
                 system, runtime, width, height);
         case Verdict::ProjectionOff:
             return std::snprintf(out, size,
                 "canted eyes: parallel projection is off: this %s is canted and %s reports canted views, %.2f degrees apart (%ux%u per "
-                "eye); EDVR renders them natively.",
+                "eye); ED-UP renders them natively.",
                 system, runtime, angleDegrees, width, height);
         case Verdict::NotApplicable:
             break;

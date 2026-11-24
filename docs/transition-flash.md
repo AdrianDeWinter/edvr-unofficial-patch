@@ -29,7 +29,7 @@
   the camera-buffer tap. Now constants in `glitch_frame.cpp` (the engine fix's
   own `kSceneCBBytes`, `kSceneCBOriginFloat`) with a `static_assert` on the
   fit. The rigs switch the tap off with the environment variable
-  `EDVR_TEST_NO_CAMERA_TAP=1`, not a key. Same day, `vscreen.cpp`'s dead
+  `EDUP_TEST_NO_CAMERA_TAP=1`, not a key. Same day, `vscreen.cpp`'s dead
   "counted as the scene" promotion (`sceneW`/`sceneH`) went; last entry.
 - **What the bad frame is:** the HMDCamera (the head camera) is deactivated one
   frame and re-activated after the camera driver's consume, so the mailbox the
@@ -424,14 +424,14 @@ in `docs\design-flat-camera-integration.md`).
   (vScreen takes no Map/Unmap hooks and has no frame boundary, which is how the
   Explorer Cam tick is proven not to ride vScreen) by writing
   `camera_buffer_bytes = 0`. The replacement is the environment variable
-  `EDVR_TEST_NO_CAMERA_TAP=1`, read once in `installGlitchFrameFix` and honoured
+  `EDUP_TEST_NO_CAMERA_TAP=1`, read once in `installGlitchFrameFix` and honoured
   only when it is exactly `1`. Chosen over an ini key because an ini key is
   something a user can set and a stale line can carry; over a test hook
   function because the transport fixture runs the real d3d11.dll in a child
   process, where only the environment crosses. The fixture passes it with
   `subprocess.run(env=...)`; glitch_test sets it in-process and also pins `0`,
   `11` and the empty string as not switching. When honoured the DLL logs
-  `camera-buffer tap off: EDVR_TEST_NO_CAMERA_TAP = 1 (the test rigs' switch)`.
+  `camera-buffer tap off: EDUP_TEST_NO_CAMERA_TAP = 1 (the test rigs' switch)`.
 - **The scene-count promotion (vscreen.cpp), removed.** Proof that nothing read
   it, by symbol (all at `src\d3d11\vscreen.cpp` before the edit): `sceneW`/`sceneH`
   were declared at 857, written at 1095 (`eye_render_size = off` zeroed them),

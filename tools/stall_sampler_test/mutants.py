@@ -79,7 +79,7 @@ SYSTEM_LOOP = "        if (equalsNoCase(name, n)) return true;\n"
 RVA = "r.rva = static_cast<uint32_t>(pc - reinterpret_cast<uintptr_t>(module));"
 EDVR = "r.edvr = module == thisModule();"
 OWNER_TEXT = 'appendText(buf, cap, len, "; owner ");'
-EDVR_NO = 'appendText(buf, cap, len, "; EDVR code on the stack: no.");'
+EDVR_NO = 'appendText(buf, cap, len, "; ED-UP code on the stack: no.");'
 SUSPEND_NAME = 'case CaptureStatus::SuspendFailed: return "suspend_failed";'
 RANGE_NOTE = '        appendText(buf, cap, len, " (the stack pointer was outside the thread\'s stack: one frame only)");\n'
 REGISTER = "        if (tid != registeredTid_.load(std::memory_order_relaxed)) registerThisThread(tid);\n"
@@ -121,7 +121,7 @@ MUTANTS = [
     M("edvr-never-flagged", "S3", "hdr", [(EDVR, "r.edvr = false;")], "EDVR's own code is never named as such"),
     # ---- S2: the line ----------------------------------------------------------------------------------------------------------
     M("line-says-owned", "S2", "hdr", [(OWNER_TEXT, 'appendText(buf, cap, len, "; owned ");')], "the owner clause is worded differently"),
-    M("line-says-edvr-yes", "S2", "hdr", [(EDVR_NO, 'appendText(buf, cap, len, "; EDVR code on the stack: yes.");')], "a stack with no EDVR code says it has some"),
+    M("line-says-edvr-yes", "S2", "hdr", [(EDVR_NO, 'appendText(buf, cap, len, "; ED-UP code on the stack: yes.");')], "a stack with no EDVR code says it has some"),
     M("failed-reason-renamed", "S2", "hdr", [(SUSPEND_NAME, 'case CaptureStatus::SuspendFailed: return "suspend-failed";')], "a failed suspend has another name"),
     M("range-note-dropped", "S2", "hdr", [(RANGE_NOTE, "")], "a stack pointer outside the stack is not said"),
     # ---- S6, S8: the watchdog --------------------------------------------------------------------------------------------------
@@ -410,7 +410,7 @@ def self_test(build_bat=BUILD_BAT):
         check('stall_sampler_test.exe" --dry-run' in text and 'stall_sampler_test.exe" --self-test "%ROOT%"' in text,
               "build.bat runs the rig's --dry-run and --self-test with the repository root (the S7 and S8 pins read the sources from it)")
         check('mutants.py" --self-test' in text, "build.bat runs this tool's self-test")
-        check('if "%EDVR_RIG_STEP%"=="build" exit /b 0' in text and "goto stall_sampler_test_run" in text,
+        check('if "%EDUP_RIG_STEP%"=="build" exit /b 0' in text and "goto stall_sampler_test_run" in text,
               "build.bat splits the rig into a compile step and a run step, so the run can be held for a quiet machine")
     check("stall_sampler_test" in "".join(l for l in bat.replace("\r\n", "\n").split("\n") if "--quiet" in l),
           "build.bat names the rig in run_jobs.py's --quiet list: it holds wall-clock intervals and must run alone")

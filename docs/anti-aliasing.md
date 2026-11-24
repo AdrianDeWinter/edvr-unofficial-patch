@@ -1022,7 +1022,7 @@ and the jitter offset. NVIDIA's history replaces the pass's own; the
 guard's crop, the resolve and the sharpen follow as before. The glue is
 `src/d3d11/dlaa.cpp` behind `EDVR_HAVE_NGX`, which `build.bat` sets when
 the SDK is under `third_party/ngx` (`tools/fetch_ngx.py`, a sparse clone
-of NVIDIA's public repository) or wherever `EDVR_NGX_SDK` points; without
+of NVIDIA's public repository) or wherever `EDUP_NGX_SDK` points; without
 it the mode says so once and the own history runs. The runtime
 `nvngx_dlss.dll` must sit beside the game's executable, where NGX looks;
 its licence permits shipping it with an application, which is the

@@ -3253,7 +3253,7 @@ void buildContent(MenuContent& c) {
                 if (!s.flatWrapperNoteLogged) {
                     s.flatWrapperNoteLogged = true;
                     Log::get().note("flat wrapper note: shown in the panel (mode=%s): %s handles every graphics call, so every "
-                                    "call EDVR makes goes through it first.", flatModeLabel().c_str(), wrapper);
+                                    "call ED-UP makes goes through it first.", flatModeLabel().c_str(), wrapper);
                 }
             }
         }

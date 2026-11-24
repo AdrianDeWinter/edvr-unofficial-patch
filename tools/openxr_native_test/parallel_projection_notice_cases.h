@@ -174,7 +174,7 @@ template<class Check> void runParallelProjectionNoticeCases(Check&& check) {
     char line[1024];
     const char* const xr="PimaxXR (Unofficial)";
     const int n=ppn::formatLog(line,sizeof(line),ppn::Verdict::Notice,"Pimax Vision 8K X",xr,8268,3948,0.0);
-    const std::string expected="canted eyes: parallel projection is on: this Pimax Vision 8K X is canted, but PimaxXR (Unofficial) reports parallel views (8268x3948 per eye). EDVR renders canted "
+    const std::string expected="canted eyes: parallel projection is on: this Pimax Vision 8K X is canted, but PimaxXR (Unofficial) reports parallel views (8268x3948 per eye). ED-UP renders canted "
         "displays without it; turning \"Enable Parallel Projection\" off in Pimax Play and restarting the game cuts GPU time by up to about 30%.";
     check(n==int(expected.size())&&expected==line,"words: the notice's log line names the headset, the runtime and the recommended size, and says what to turn off in Pimax Play");
     ppn::formatLog(line,sizeof(line),ppn::Verdict::LogOnly,"Pimax Vision 8K X","Pimax OpenXR",8268,3948,0.0);

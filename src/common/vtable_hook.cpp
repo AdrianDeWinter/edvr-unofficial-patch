@@ -218,7 +218,7 @@ const char* ownerModuleBrief(void* p, char* buf, size_t bufLen) {
                            reinterpret_cast<LPCSTR>(&ownerModuleBrief), &self);
     }
     _snprintf_s(buf, bufLen, _TRUNCATE, "%s%s+0x%llX",
-                (self && mbi.AllocationBase == self) ? "EDVR's own " : "", leaf,
+                (self && mbi.AllocationBase == self) ? "ED-UP's own " : "", leaf,
                 static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(p) -
                                                 reinterpret_cast<uintptr_t>(
                                                     mbi.AllocationBase)));
@@ -771,7 +771,7 @@ void reportWatchSummary() {
         "pages, %u of them INSIDE the vtable itself, spanning %p to %p; the "
         "vtable occupies %p to %p. The slots written were: %s. The "
         "instruction(s) responsible: %s. If that slot list covers everything "
-        "EDVR patches, one sweep restores the whole table; if it is only part of "
+        "ED-UP patches, one sweep restores the whole table; if it is only part of "
         "it, the rest are being lost some other way and that is a different "
         "question. The pages are back to normal and nothing further is "
         "intercepted.",
@@ -1522,7 +1522,7 @@ bool vtableWatchSlot(void** vtable, size_t slot, size_t slotCount,
             "and eight frames of the writer's stack. The first %u get a line "
             "each and the first %u also go to edup_breadcrumbs.txt, which "
             "survives the process being killed; after %u changes the per-event "
-            "lines stop and the shape table carries on. EDVR'S OWN WRITES ARE "
+            "lines stop and the shape table carries on. ED-UP'S OWN WRITES ARE "
             "NOT HERE: every re-patch this DLL makes goes through a function "
             "that makes the page writable first, so it never faults and the "
             "watch never sees it -- and while that page is open, a write by "
@@ -2664,9 +2664,9 @@ void VTableHook::uninstall() {
             // exits by TerminateProcess) is the right trade. m_copy is left
             // intact and this object is abandoned in place.
             Log::get().note(
-                "VTableHook: a copy-mode object was swapped away from EDVR's "
+                "VTableHook: a copy-mode object was swapped away from ED-UP's "
                 "vtable copy by another tool before uninstall. The vptr is left "
-                "with them and EDVR's copy is intentionally leaked rather than "
+                "with them and ED-UP's copy is intentionally leaked rather than "
                 "freed, because their chain still runs through it -- freeing it "
                 "would dangle. One-time, teardown only.");
             m_committed = false;
@@ -2835,8 +2835,8 @@ void VTableHook::noteCopyDrift(const char* who) {
             m_copyCleanNoted = true;
             Log::get().note(
                 "VTableHook %s: no census from this hook -- it sits on ANOTHER "
-                "EDVR hook's private table (%p, %zu entries), not on the one the "
-                "context itself holds, and nothing outside EDVR can write that. "
+                "ED-UP hook's private table (%p, %zu entries), not on the one the "
+                "context itself holds, and nothing outside ED-UP can write that. "
                 "The hook underneath is the one whose table the runtime writes "
                 "and its census is the measurement; a walk here would report "
                 "\"nothing has changed\" every second for the session and mean "
@@ -2905,11 +2905,11 @@ void VTableHook::noteCopyDrift(const char* who) {
             Log::get().note(
                 live
                     ? "VTableHook %s: the context's own table still holds every "
-                      "entry it held when EDVR attached -- all %zu of them, "
+                      "entry it held when ED-UP attached -- all %zu of them, "
                       "checked once a second from here on. The live private "
                       "table would have followed a change at the next call; so "
                       "far there has been nothing to follow."
-                    : "VTableHook %s: the vtable EDVR copied still matches the "
+                    : "VTableHook %s: the vtable ED-UP copied still matches the "
                       "table it was copied from -- all %zu entries, checked once "
                       "a second from here on. Nothing has drifted, which is what "
                       "the private-copy mode needs to be true and is reported "
@@ -2939,9 +2939,9 @@ void VTableHook::noteCopyDrift(const char* who) {
                 ownerModuleName(firstNow, modBuf, sizeof(modBuf)));
         } else {
             Log::get().note(
-                "VTableHook %s: the vtable EDVR copied has DRIFTED from the table "
+                "VTableHook %s: the vtable ED-UP copied has DRIFTED from the table "
                 "it was copied FROM -- %zu of the first %zu entries (%s) now hold "
-                "something else, and the first of them points into %s. EDVR's "
+                "something else, and the first of them points into %s. ED-UP's "
                 "copy still holds what they held at install, and this object "
                 "dispatches through the copy, so for any of those that is a "
                 "method of this interface, the game is calling the older entry. "
@@ -3031,9 +3031,9 @@ size_t VTableHook::reclaim(const char* name, const size_t* quietSlots,
                     // points there instead of asserting breakage and
                     // manufacturing a false report.
                     Log::get().note(
-                        "VTableHook %s: slot %zu in EDVR's private vtable copy "
+                        "VTableHook %s: slot %zu in ED-UP's private vtable copy "
                         "was overwritten by another tool (now %s). If that tool "
-                        "chained through EDVR the fixes still run and this is "
+                        "chained through ED-UP the fixes still run and this is "
                         "harmless; if it resolved a clean original they are "
                         "bypassed. The totals lines say which -- report this "
                         "log only if the fixes reading this call have actually "
@@ -3186,7 +3186,7 @@ size_t VTableHook::reclaim(const char* name, const size_t* quietSlots,
                 char modBuf[MAX_PATH];
                 Log::get().note(
                     "VTableHook %s: slot %zu was re-pointed by %s (%s), and it "
-                    "is a slot TWO EDVR hooks share -- re-patching it from "
+                    "is a slot TWO ED-UP hooks share -- re-patching it from "
                     "either one would cut the other out of the chain, so it is "
                     "left as it is and whatever reads this call stays bypassed. "
                     "Report this log.",
@@ -3222,11 +3222,11 @@ size_t VTableHook::reclaim(const char* name, const size_t* quietSlots,
                 p.foreignNoted = true;
                 char modBuf[MAX_PATH];
                 Log::get().note(
-                    "VTableHook %s: slot %zu no longer holds EDVR's hook -- it "
-                    "now points into %s. It is NOT being taken back: EDVR only "
+                    "VTableHook %s: slot %zu no longer holds ED-UP's hook -- it "
+                    "now points into %s. It is NOT being taken back: ED-UP only "
                     "re-patches slots whose own calls have measurably gone "
                     "quiet, and this one has no such evidence -- a tool that "
-                    "CHAINS through EDVR still runs us, and re-patching over a "
+                    "CHAINS through ED-UP still runs us, and re-patching over a "
                     "chainer builds a call loop. If the fixes reading this call "
                     "have gone quiet, report this log. Said once.",
                     who, p.slot, ownerModuleName(now, modBuf, sizeof(modBuf)));
@@ -3259,7 +3259,7 @@ size_t VTableHook::reclaim(const char* name, const size_t* quietSlots,
                 Log::get().note(
                     "VTableHook %s: slot %zu holds a value that is not "
                     "executable code, which nothing sane writes into a live "
-                    "vtable. EDVR will not chain to it and leaves the slot "
+                    "vtable. ED-UP will not chain to it and leaves the slot "
                     "alone. Said once.",
                     who, p.slot);
             }
@@ -3308,10 +3308,10 @@ size_t VTableHook::reclaim(const char* name, const size_t* quietSlots,
             char modBuf[MAX_PATH];
             Log::get().note(
                 "VTableHook %s: slot %zu has been fought over %u times -- the "
-                "re-taker is %s. Either it re-checks its hooks the way EDVR "
-                "does, or EDVR's own write into the slot keeps failing; the "
+                "re-taker is %s. Either it re-checks its hooks the way ED-UP "
+                "does, or ED-UP's own write into the slot keeps failing; the "
                 "lines above say which. Trading one slot back and forth serves "
-                "nobody, so EDVR will not contest the NEXT re-point: when it "
+                "nobody, so ED-UP will not contest the NEXT re-point: when it "
                 "comes, whatever reads this call goes quiet for good. Report "
                 "this log.",
                 who, p.slot, p.repatches,
@@ -3346,8 +3346,8 @@ size_t VTableHook::reclaim(const char* name, const size_t* quietSlots,
             const bool allOwner = ownerReclaimed == reclaimed;
             Log::get().note(
                 "VTableHook %s: %zu slot(s) (%s) had been re-pointed by %s -- %s "
-                "-- after EDVR installed, so EDVR's hooks there had stopped "
-                "running. EDVR re-patched on top and now forwards to the new "
+                "-- after ED-UP installed, so ED-UP's hooks there had stopped "
+                "running. ED-UP re-patched on top and now forwards to the new "
                 "entries, so BOTH run. This check repeats every frame and "
                 "reports again at doublings.",
                 who, reclaimed, slots,
@@ -3411,11 +3411,11 @@ size_t VTableHook::reclaim(const char* name, const size_t* quietSlots,
             Log::get().note(
                 "VTableHook %s: %zu of those were re-pointed BY THE MODULE THAT "
                 "IMPLEMENTS THEM (%s), which is that module re-selecting its own "
-                "internal variants and not another tool at all. EDVR was told which "
+                "internal variants and not another tool at all. ED-UP was told which "
                 "image implements this object, and an entry coming FROM it cannot "
-                "be a hook chaining through EDVR -- another tool's hook is that "
+                "be a hook chaining through ED-UP -- another tool's hook is that "
                 "tool's own code -- so "
-                "no quiet-slot evidence is required to take it back, and EDVR will "
+                "no quiet-slot evidence is required to take it back, and ED-UP will "
                 "keep taking it back for as long as it keeps happening. Issue #21: "
                 "on a rig where this happens to EVERY patched slot before the "
                 "first frame, waiting for that evidence meant waiting forever, and "

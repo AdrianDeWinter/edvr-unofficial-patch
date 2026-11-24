@@ -13,7 +13,7 @@
 //
 // This file is the NGX glue and nothing else. It compiles with the calls
 // only when the build has NVIDIA's SDK (EDVR_HAVE_NGX, set by build.bat
-// when EDVR_NGX_SDK names the SDK's directory); without it, every entry
+// when EDUP_NGX_SDK names the SDK's directory); without it, every entry
 // answers "not built in" and the temporal pass runs its own history as
 // before. The runtime DLL (nvngx_dlss.dll) must sit beside the game's
 // executable, where NGX looks for it; its absence is also a plain answer.

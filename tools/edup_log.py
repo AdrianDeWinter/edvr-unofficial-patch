@@ -47,9 +47,10 @@ the d3d11 half and `vr` for the openvr half; a second process opening the
 same tag in the same second gets millisecond and pid fields appended,
 edvr_<tag>_YYYYMMDD_HHMMSS_mmm_pid.log. Native OpenXR logs always carry those
 fields: edvr_openxr_YYYYMMDD_HHMMSS_mmm_pid.log. New native logs always land
-in edvr_logs\\ beside the executable, with local-time names and UTC body
-timestamps. Older native logs beside the DLL have UTC names, and no fields.
-Legacy logs honor log.dir in edvr.ini, and this reads
+in edup_logs\\ beside the executable (edvr_logs\\ before the rename), with
+local-time names and UTC body timestamps. Older native logs beside the DLL
+have UTC names, and no fields. Legacy logs honor log.dir in edup.ini (or
+edvr.ini, and the per-user copies of either), and this reads
 that key rather than assuming the default -- a redirected log directory
 is exactly when you would rather not be told there are no logs.
 
@@ -402,23 +403,29 @@ def read_log_text(path):
 
 
 def _settings_candidates(game_dir):
-    """The settings files the runtime reads for this game, in its order (src/common/config.cpp): this user's live copy
-    under %LOCALAPPDATA%\\EDUP\\<leaf>-<store>\\edup.ini (the newest when the store cannot be told from here), then the
-    game folder's edup.ini and its legacy edvr.ini."""
-    out = []
+    """The settings files the runtime reads for this game, in its order (src/common/config.cpp, vrSettingsPath): this
+    user's live copy under %LOCALAPPDATA%\\EDUP\\<leaf>-<store>\\edup.ini (the newest when the store cannot be told from
+    here), the game folder's edup.ini and its legacy edvr.ini, then the copy from before the rename,
+    %LOCALAPPDATA%\\EDVR\\<leaf>-<store>\\edvr.ini, which an install that has not migrated still runs on."""
     base = os.environ.get("LOCALAPPDATA", "")
     leaf = os.path.basename(os.path.normpath(game_dir))
-    if base and leaf:
-        root = os.path.join(base, "EDUP")
+
+    def mirrored(folder, name):
+        if not (base and leaf):
+            return []
+        root = os.path.join(base, folder)
         try:
-            live = [os.path.join(root, name, "edup.ini") for name in os.listdir(root)
-                    if name.lower().startswith(leaf.lower() + "-")]
+            found = [os.path.join(root, entry, name) for entry in os.listdir(root)
+                     if entry.lower().startswith(leaf.lower() + "-")]
         except OSError:
-            live = []
-        live = [path for path in live if os.path.isfile(path)]
-        live.sort(key=lambda path: os.path.getmtime(path), reverse=True)
-        out.extend(live)
+            return []
+        found = [path for path in found if os.path.isfile(path)]
+        found.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+        return found
+
+    out = mirrored("EDUP", "edup.ini")
     out.extend(os.path.join(game_dir, name) for name in ("edup.ini", "edvr.ini"))
+    out.extend(mirrored("EDVR", "edvr.ini"))
     return out
 
 
@@ -707,7 +714,7 @@ def print_vh_tally(text, frame):
     Returns the process exit code."""
     draws, summaries, cap, dropped = parse_census(text)
     if not draws and not summaries:
-        print("[edvr] no draw-census lines (DC/DCO/DC frame) in this log")
+        print("[edup] no draw-census lines (DC/DCO/DC frame) in this log")
         return 0
 
     detail_frames = sorted({d["frame"] for d in draws})
@@ -715,7 +722,7 @@ def print_vh_tally(text, frame):
     if dropped:
         only_summary = [f for f in summary_frames if f not in detail_frames]
         where = (", ".join(str(f) for f in detail_frames) or "none")
-        print("[edvr] census truncated: %d line(s) dropped past the %s-line "
+        print("[edup] census truncated: %d line(s) dropped past the %s-line "
               "cap; per-draw detail survives for frame(s) %s%s."
               % (dropped, cap or "?", where,
                  (", %s summary-only" % ", ".join(str(f) for f in only_summary))
@@ -726,23 +733,23 @@ def print_vh_tally(text, frame):
         if frame not in detail_frames:
             if scope_summary is not None:
                 s = scope_summary
-                print("[edvr] frame %d has no per-draw lines -- only its "
+                print("[edup] frame %d has no per-draw lines -- only its "
                       "summary survived the census line cap:" % frame)
-                print("[edvr] frame %d summary: draws=%s off=%s copies=%s "
+                print("[edup] frame %d summary: draws=%s off=%s copies=%s "
                       "disp=%s clears=%s unseen=%s"
                       % (frame, s["draws"], s["off"], s["copies"],
                          s["disp"], s["clears"], s["unseen"]))
                 return 0
-            print("[edvr] frame %d appears in no census line or summary"
+            print("[edup] frame %d appears in no census line or summary"
                   % frame)
             return 0
 
     rows, eye_total, off_total = tally_vh(draws, frame)
     label = "frame %d" % frame if frame is not None else "all frames"
-    print("[edvr] tally vh, %s: %d eye-texture DC lines, %d offscreen DCO "
+    print("[edup] tally vh, %s: %d eye-texture DC lines, %d offscreen DCO "
           "lines" % (label, eye_total, off_total))
     if not rows:
-        print("[edvr] no eye-texture DC lines in scope")
+        print("[edup] no eye-texture DC lines in scope")
         return 0
     sub_width = max([len("per r=")] + [
         len("  ".join("%s:%d" % (r, c) for r, c in
@@ -764,7 +771,7 @@ def print_vh_tally(text, frame):
         if frame is not None and f != frame:
             continue
         s = summaries[f]
-        print("[edvr] frame %d summary: draws=%s off=%s copies=%s disp=%s "
+        print("[edup] frame %d summary: draws=%s off=%s copies=%s disp=%s "
               "clears=%s unseen=%s"
               % (f, s["draws"], s["off"], s["copies"], s["disp"],
                  s["clears"], s["unseen"]))
@@ -856,19 +863,19 @@ def print_offscreen_tally(text, frame=None):
     """The --tally offscreen report. Returns the process exit code."""
     censuses = parse_offscreen(text)
     if not censuses or not any(c["draws"] or c["frames"] or c["begin"] is not None for c in censuses):
-        print("[edvr] no draw-census lines (DC begin/DCO/DC frame) in this log")
+        print("[edup] no draw-census lines (DC begin/DCO/DC frame) in this log")
         return 0
     for n, c in enumerate(censuses, 1):
-        print("[edvr] tally offscreen, census %d: %s" % (n, "DC begin " + c["begin"] if c["begin"] is not None else "no DC begin line (a log cut before it)"))
+        print("[edup] tally offscreen, census %d: %s" % (n, "DC begin " + c["begin"] if c["begin"] is not None else "no DC begin line (a log cut before it)"))
         if c["begin"] is not None and "offscreen=no" in c["begin"]:
-            print("[edvr]   offscreen=no: census_offscreen did not load, so no DCO line was written; only the t=i / t=f DC lines below")
+            print("[edup]   offscreen=no: census_offscreen did not load, so no DCO line was written; only the t=i / t=f DC lines below")
         if not c["ids"]:
-            print("[edvr]   no `DC id` table: the census was cut off before it was written (the log cap), so an @N target stays unresolved")
+            print("[edup]   no `DC id` table: the census was cut off before it was written (the log cap), so an @N target stays unresolved")
         frames = sorted({d["frame"] for d in c["draws"]} | set(c["frames"]))
         if frame is not None:
             frames = [f for f in frames if f == frame]
         if not frames:
-            print("[edvr]   no frame in scope")
+            print("[edup]   no frame in scope")
             continue
         for f in frames:
             draws = [d for d in c["draws"] if d["frame"] == f]
@@ -878,19 +885,19 @@ def print_offscreen_tally(text, frame=None):
             dco = counts.get("DCO", 0)
             others = ", ".join("%s %d" % (k, counts[k]) for k in sorted(counts) if k != "DCO")
             rows = offscreen_groups(draws, c["ids"])
-            print("[edvr] census %d frame %d: %d non-eye draw line(s) in %d group(s): DCO %d%s" % (n, f, len(draws), len(rows), dco, ", " + others if others else ""))
+            print("[edup] census %d frame %d: %d non-eye draw line(s) in %d group(s): DCO %d%s" % (n, f, len(draws), len(rows), dco, ", " + others if others else ""))
             s = c["frames"].get(f)
             if s is None:
-                print("[edvr]   no `DC frame %d` line: off= unknown, so DCO truncation cannot be checked" % f)
+                print("[edup]   no `DC frame %d` line: off= unknown, so DCO truncation cannot be checked" % f)
             else:
                 off = int(s["off"])
                 if off == dco:
-                    print("[edvr]   off= %d agrees with the %d DCO line(s): none cut" % (off, dco))
+                    print("[edup]   off= %d agrees with the %d DCO line(s): none cut" % (off, dco))
                 elif dco < off:
-                    print("[edvr]   DCO CUT SHORT: the DC frame line counts off=%d, the log holds %d DCO line(s) (%d missing: the census line cap, which `truncated=` does not count, "
+                    print("[edup]   DCO CUT SHORT: the DC frame line counts off=%d, the log holds %d DCO line(s) (%d missing: the census line cap, which `truncated=` does not count, "
                           "or the log cap)" % (off, dco, off - dco))
                 else:
-                    print("[edvr]   MORE DCO lines (%d) than off=%d: the census frame line and its draws disagree" % (dco, off))
+                    print("[edup]   MORE DCO lines (%d) than off=%d: the census frame line and its draws disagree" % (dco, off))
             if not rows:
                 continue
             print("%5s  %-8s  %-28s  %-28s  %-22s  %s" % ("count", "line", "r=", "d=", "kinds", "top vh"))
@@ -1001,14 +1008,14 @@ def print_pose_tally(text):
     """The --tally pose report. Returns the process exit code."""
     windows, notes = parse_pose_gap(text)
     for note in notes:
-        print("[edvr] pose gap: %s" % note)
+        print("[edup] pose gap: %s" % note)
     if not windows:
-        print("[edvr] no `pose gap:` lines in this log. The diagnostic is always on and writes one per caller every 60 s from the runtime's "
+        print("[edup] no `pose gap:` lines in this log. The diagnostic is always on and writes one per caller every 60 s from the runtime's "
               "WaitGetPoses; they are in the runtime log (--tag openxr), not the graphics log, and need a build with the pose-gap diagnostic.")
         return 1
     rows = tally_pose(windows)
-    print("[edvr] tally pose: %d window line(s) over %d caller row(s)" % (len(windows), len(rows)))
-    print("[edvr] per caller (thread, return address), mean +/- sd over that caller's windows of each window's mean:")
+    print("[edup] tally pose: %d window line(s) over %d caller row(s)" % (len(windows), len(rows)))
+    print("[edup] per caller (thread, return address), mean +/- sd over that caller's windows of each window's mean:")
     print("%7s %-14s %4s %7s %6s  %-20s %-22s %-11s %s"
           % ("tid", "from", "n", "calls", "failed", "gap ms (target-disp)", "angle deg (to drawn)", "head deg/s", "r(angle,head)"))
     for r in rows:
@@ -1017,7 +1024,7 @@ def print_pose_tally(text):
                  ("%.1f" % r["head"][0]) if r["head"][0] is not None else "n/a", ("%+.2f" % r["r"]) if r["r"] is not None else "n/a"))
     for r in rows:
         if r["fallbacks"]:
-            print("[edvr] tid %d: %d call(s) could not be given a target one display period after the display time (no frame yet, a stale frame, no "
+            print("[edup] tid %d: %d call(s) could not be given a target one display period after the display time (no frame yet, a stale frame, no "
                   "period, or a reference-space change in between) and were located at now + prediction." % (r["tid"], r["fallbacks"]))
     for r in rows:
         if r["gap"][0] is None:
@@ -1025,11 +1032,11 @@ def print_pose_tally(text):
         spread = ""
         if r["angle_range"] is not None:
             spread = " (%.3f to %.3f across windows)" % r["angle_range"]
-        print("[edvr] %s, tid %d: its pose is located %+.2f ms from the drawn frame's display time, and is turned %s deg from the drawn pose%s; "
+        print("[edup] %s, tid %d: its pose is located %+.2f ms from the drawn frame's display time, and is turned %s deg from the drawn pose%s; "
               "angle against head speed r = %s over %d window(s)."
               % (r["frm"], r["tid"], r["gap"][0], ("%.3f" % r["angle"][0]) if r["angle"][0] is not None else "n/a", spread,
                  ("%+.2f" % r["r"]) if r["r"] is not None else "n/a", r["n"]))
-    print("[edvr] Elite's own \"now\" request should read a gap of about one display period (+11 ms at 90 Hz, +14 ms at 72 Hz) and an angle to the "
+    print("[edup] Elite's own \"now\" request should read a gap of about one display period (+11 ms at 90 Hz, +14 ms at 72 Hz) and an angle to the "
           "drawn pose of about head speed times that period (r near +1: it is one period ahead by design). A gap near 0 means the answer is not "
           "acting (or is the earlier display-time answer); +40 ms or more is the lag it replaced. A caller with a real prediction, or outside the "
           "game's image, shows the true lag (before the fix Elite's was 41-44 ms and up to 4.1 degrees, r = +0.98).")
@@ -1081,21 +1088,21 @@ def parse_cover(text):
 def print_cover_tally(parsed):
     """The --tally cover report. Returns the process exit code: 1 when the log has no `terrain cull cover:` line."""
     if parsed["live"] is None and parsed["inert"] is None and parsed["first"] is None and not parsed["beats"]:
-        print("[edvr] no `terrain cull cover:` lines in this log: a build without the terrain cull cover (the hook says it is live or inert at startup), or the graphics log of "
+        print("[edup] no `terrain cull cover:` lines in this log: a build without the terrain cull cover (the hook says it is live or inert at startup), or the graphics log of "
               "another run -- this tally reads --tag gfx.")
         return 1
     if parsed["live"] is not None:
-        print("[edvr] terrain cull cover: hook live at exe+0x%s (%s)" % parsed["live"])
+        print("[edup] terrain cull cover: hook live at exe+0x%s (%s)" % parsed["live"])
     if parsed["inert"] is not None:
-        print("[edvr] terrain cull cover: inert: %s" % parsed["inert"])
+        print("[edup] terrain cull cover: inert: %s" % parsed["inert"])
     if parsed["live"] is None and parsed["inert"] is None:
-        print("[edvr] no `hook live` or `inert` line in this log (a log cut at the front?).")
+        print("[edup] no `hook live` or `inert` line in this log (a log cut at the front?).")
     f = parsed["first"]
     if f is not None:
-        print("[edvr] first call with the frusta known: in aspect %.4f vfov %.2f deg -> out aspect %.4f vfov %.2f deg (%s); T=%.4f H=%.4f" % (
+        print("[edup] first call with the frusta known: in aspect %.4f vfov %.2f deg -> out aspect %.4f vfov %.2f deg (%s); T=%.4f H=%.4f" % (
             f["in"][0], f["in"][1], f["out"][0], f["out"][1], "widened" if f["widened"] else "unchanged: the centred cull already covered this headset", f["tanV"], f["tanH"]))
     elif parsed["live"] is not None:
-        print("[edvr] no first-call line: no planet terrain was culled in VR since the hook went in (or no VR frame had said the frusta).")
+        print("[edup] no first-call line: no planet terrain was culled in VR since the hook went in (or no VR frame had said the frusta).")
     beats = parsed["beats"]
     if beats:
         print("%-14s %9s %9s %7s  %s" % ("clock", "widened", "calls", "share", "last call, in -> out"))
@@ -1104,10 +1111,10 @@ def print_cover_tally(parsed):
             last = "no call yet" if b["last"] is None else "aspect %.4f vfov %.2f -> aspect %.4f vfov %.2f" % (b["last"][0], b["last"][1], b["last"][2], b["last"][3])
             print("%-14s %9d %9d %7s  %s" % (clock, b["widened"], b["calls"], ("%.0f%%" % (100.0 * b["widened"] / b["calls"])) if b["calls"] else "n/a", last))
         widened, calls = sum(b["widened"] for b in beats), sum(b["calls"] for b in beats)
-        print("[edvr] %d heartbeat(s), %d of %d calls widened (%d min)." % (len(beats), widened, calls, 10 * len(beats)))
+        print("[edup] %d heartbeat(s), %d of %d calls widened (%d min)." % (len(beats), widened, calls, 10 * len(beats)))
     elif parsed["live"] is not None:
-        print("[edvr] no heartbeat yet: one is written every ten minutes while the hook is live, so a log shorter than that has none.")
-    print("[edvr] How to read it: a heartbeat says the hook was live. On a headset whose eye reaches further out (or down) than the centred frustum the game culls terrain against "
+        print("[edup] no heartbeat yet: one is written every ten minutes while the hook is live, so a log shorter than that has none.")
+    print("[edup] How to read it: a heartbeat says the hook was live. On a headset whose eye reaches further out (or down) than the centred frustum the game culls terrain against "
           "(a Quest 3, a cropped Crystal Super) every call over a planet is widened, and the call count is about 20 a frame; 0 of 0 is a window with no planet in view (loading, a "
           "station, supercruise); 0 of M with M above 0 is a headset the cull already covers. No heartbeat after ten minutes means the hook is not live: see the `hook live` or `inert` line.")
     return 0
@@ -1150,7 +1157,7 @@ def parse_reissue(text):
 # the check reads the whole log.)
 REISSUE_CENSUS_SECTIONS = (("hologram passes", ("ui_depth",)), ("UI depth coverage", ("ui_depth",)), ("planet", ("ui_depth",)), ("weapon motion", ("weapon_motion",)),
                            ("UI layer reissues", ("ui_layer_second",)), ("FSS reveal replay", ("fss_reveal",)))
-REISSUE_CENSUS_RE = re.compile(r"EDVR GPU census: .*?in-frame [\d.]+ \((?P<items>.*?)\); application render")
+REISSUE_CENSUS_RE = re.compile(r"(?:EDVR|ED-UP) GPU census: .*?in-frame [\d.]+ \((?P<items>.*?)\); application render")
 
 
 def reissue_census_gaps(windows, text):
@@ -1173,19 +1180,19 @@ def reissue_census_gaps(windows, text):
 def print_reissue_tally(windows, text=""):
     """The --tally reissue report. Returns the process exit code: 1 when the log has no `draw reissue CPU:` line."""
     if not windows:
-        print("[edvr] no `draw reissue CPU:` lines in this log: a build without the re-issue counter, or a session shorter than one 1800-frame window -- this tally reads --tag gfx.")
+        print("[edup] no `draw reissue CPU:` lines in this log: a build without the re-issue counter, or a session shorter than one 1800-frame window -- this tally reads --tag gfx.")
         return 1
     for w in windows:
         hook = "n/a" if w["hook"] is None else "%.3f ms" % w["hook"]
         who = ", ".join("%s %.3f ms (%d)" % c for c in w["callers"]) if w["callers"] else "no caller"
-        print("[edvr] draw reissue CPU, window ending %d: %.3f ms/sampled frame (draw hook CPU %s); %d re-issues; %s" % (w["frame"], w["mean"], hook, w["total"], who))
-    print("[edvr] %d window(s). How to read it: the ms are the re-issue DRAW CALLS timed whole, the same sampled frames as `draw hook CPU:`; the Begin/End state work around a re-issue "
+        print("[edup] draw reissue CPU, window ending %d: %.3f ms/sampled frame (draw hook CPU %s); %d re-issues; %s" % (w["frame"], w["mean"], hook, w["total"], who))
+    print("[edup] %d window(s). How to read it: the ms are the re-issue DRAW CALLS timed whole, the same sampled frames as `draw hook CPU:`; the Begin/End state work around a re-issue "
           "(binds, copies, clears) is outside them, so a low figure does not rule a pass out. Every caller but flat_ui is inside `draw hook CPU:` (its clock stops "
           "at the game's own draw); flat_ui is outside it (the flat branch has no hook clock), so do not read it as a share of that line. loader_panel never prints: its substitute "
           "ignores the draw it is handed (a decline goes through the observed draw), so it is a name with no count. 0 re-issues with `no caller` is a window where the game was never "
           "drawn twice; no line at all is a build without the counter." % len(windows))
     for section, callers in reissue_census_gaps(windows, text):
-        print("[edvr] CHECK THE WIRING: a GPU census line shows the '%s' section ran, but no window counted %s: a re-issue site may bypass the helper (src/d3d11/vscreen.cpp ReissueClock)."
+        print("[edup] CHECK THE WIRING: a GPU census line shows the '%s' section ran, but no window counted %s: a re-issue site may bypass the helper (src/d3d11/vscreen.cpp ReissueClock)."
               % (section, " or ".join(callers)))
     return 0
 
@@ -3103,22 +3110,22 @@ def print_camera_census(text):
     has census lines, 1 when it has none."""
     c = parse_camera_census(text)
     if not c["lines"]:
-        print("[edvr] camera census: no `vr camera census` line in this log. The key "
+        print("[edup] camera census: no `vr camera census` line in this log. The key "
               "advanced.vr_camera_census was off, this is not a VR-profile log, or the "
               "build predates the census.")
         return 1
     routes = parse_world_route(text)
     events = route_events(text)
     refusals = parse_refusal_windows(text)
-    print("[edvr] camera census: %d census line(s): %d 5 s line(s), %d camera(s), "
+    print("[edup] camera census: %d census line(s): %d 5 s line(s), %d camera(s), "
           "%d call sequence(s), %d eye draw(s), %d other-thread entr%s%s"
           % (c["lines"], len(c["windows"]), len(c["order"]), len(c["sequences"]),
              len(c["eyes"]), len(c["threads"]), "y" if len(c["threads"]) == 1 else "ies",
              ", %d episode(s)" % len(c["episodes"]) if c["episodes"] else ""))
     if c["unparsed"]:
-        print("[edvr]   %d census line(s) could not be parsed (cut short or garbled) and were skipped" % c["unparsed"])
+        print("[edup]   %d census line(s) could not be parsed (cut short or garbled) and were skipped" % c["unparsed"])
     for info in c["info"]:
-        print("[edvr]   note: %s" % info)
+        print("[edup]   note: %s" % info)
 
     print("\n== 5 s lines ==")
     if not c["windows"]:
@@ -3299,7 +3306,7 @@ def print_camera_census(text):
             print("    rows   unavailable (%s)" % (e["why"] or "?"))
         g = c["geometry"].get((e["eye"], e["frame"]))
         if g and g["known"]:
-            print("    EDVR advertised seq %s frustum %s shift %s; expected measure %s, shifted %s; leak %s"
+            print("    ED-UP advertised seq %s frustum %s shift %s; expected measure %s, shifted %s; leak %s"
                   % (g["seq"], _cg(tuple(g["frustum"]) if g["frustum"] else None), _cg(g["shift"]),
                      _cg(g["expect"]), _cg(g["expect_shifted"]), _cg(g["leak"])))
             fit = census_shift_fit(e["meas"], g["frustum"], g["shift"]) if g["frustum"] and g["shift"] else None
@@ -3312,7 +3319,7 @@ def print_camera_census(text):
                 print("    the rows measure as %s (residual %.2e NDC; next best: %s, %.2e)"
                       % (fit[0], fit[1], fit[2], fit[3]))
         else:
-            print("    EDVR advertised geometry: unavailable")
+            print("    ED-UP advertised geometry: unavailable")
     leaks = [max(abs(v) for v in g["leak"]) for g in c["geometry"].values()
              if g["known"] and g["leak"] and all(v == v for v in g["leak"])]
     if leaks:
@@ -3457,11 +3464,11 @@ def print_camera_census(text):
         worst = max(worst, min(diff, diff_flip))
         compared += 1
     if compared:
-        print("(E) tangents: the eye camera's tangents match the frustum EDVR advertised for its eye to within %.2e "
+        print("(E) tangents: the eye camera's tangents match the frustum ED-UP advertised for its eye to within %.2e "
               "(compared on %d draw(s) in the camera's first frame)" % (worst, compared))
     elif all(not (c["cameras"].get(p) or {}).get("tan") for p in roles["eye"]):
         print("(E) tangents: not compared: the eye cameras' lines carry no tangents (tan=-: a kind-5 camera is the game's custom "
-              "matrix, not a frustum); the eye-geometry leak= above is the comparison with what EDVR advertised")
+              "matrix, not a frustum); the eye-geometry leak= above is the comparison with what ED-UP advertised")
     else:
         print("(E) tangents: no eye draw fell in the frame an eye camera's line was printed, so the camera's tangents "
               "and the advertised frustum were not compared (their difference is the eye shift, about 1e-4, per frame)")
@@ -3736,7 +3743,7 @@ def print_maps_sharp(text):
     """--maps-sharp: the on-foot maps gate's flight in one report; exit 0 (PASS or WARN), 1 (STOP), 3 (no line of the feature in the log)."""
     p = parse_maps_sharp(text)
     if not p["events"] and not p["windows"]:
-        print("[edvr] maps-sharp: no 'on foot maps sharp' line in this log. The maps gate is always on in a current build (there is no setting "
+        print("[edup] maps-sharp: no 'on foot maps sharp' line in this log. The maps gate is always on in a current build (there is no setting "
               "for it), so the UI layer was not live, this was not a VR flight, or the build is older than the feature or predates the gate "
               "becoming unconditional (it was a switch in the ini then); with the layer live the feature prints an ON line and "
               "a 5 s line, zeros included.")
@@ -3745,7 +3752,7 @@ def print_maps_sharp(text):
     ws = p["windows"]
     tot = {k: sum(w[k] for w in ws) for k in ("frames", "named", "unnamed", "world", "panel", "holds", "releases", "takes", "recognised",
                                                "only", "notempty", "notlive")}
-    print("[edvr] maps-sharp: %d event line(s), %d five-second window(s), %d panel period(s)" % (len(p["events"]), len(ws), len(eps)))
+    print("[edup] maps-sharp: %d event line(s), %d five-second window(s), %d panel period(s)" % (len(p["events"]), len(ws), len(eps)))
     for ev in p["events"]:
         if ev["kind"] == "on":
             print("  %s  ON   frame %d, the gate starts as %s (the journal: %s)" % (ev["ts"], ev["frame"], ev["start"], ev["journal"]))
@@ -4369,26 +4376,26 @@ def open_runtime_log(gfx_path, gfx_ver, want, runtime_file, native_dirs,
     if runtime_file:
         rt_path = os.path.abspath(runtime_file)
         if not os.path.isfile(rt_path):
-            print("[edvr] no such runtime log: %s" % rt_path)
+            print("[edup] no such runtime log: %s" % rt_path)
             return None, None, 1
     else:
         rt_path, rt_why = pair_runtime_log(gfx_path, native_dirs)
     rt_text = None
     if rt_path:
         rt_text = read_log_text(rt_path)
-        print("[edvr] runtime log: %s  (%d lines, %.1f KB)"
+        print("[edup] runtime log: %s  (%d lines, %.1f KB)"
               % (rt_path, rt_text.count("\n") + 1, len(rt_text) / 1024.0))
         rt_line, rt_ver, _ = version_line(rt_text)
         if rt_line:
-            print("[edvr] %s" % rt_line)
+            print("[edup] %s" % rt_line)
         else:
-            print("[edvr] WARNING: the runtime log has no version line -- it "
-                  "may be truncated, or not an EDVR log.")
+            print("[edup] WARNING: the runtime log has no version line -- it "
+                  "may be truncated, or not an ED-UP log.")
         if want is not None:
             if version_matches(rt_ver, want, root):
-                print("[edvr] runtime build matches: %s" % want)
+                print("[edup] runtime build matches: %s" % want)
             else:
-                print("[edvr] BUILD MISMATCH (runtime log)\n"
+                print("[edup] BUILD MISMATCH (runtime log)\n"
                       "       log says   %s\n"
                       "       expected   %s\n"
                       "       This flight is not evidence about that build. "
@@ -4396,11 +4403,11 @@ def open_runtime_log(gfx_path, gfx_ver, want, runtime_file, native_dirs,
                       % (rt_ver or "(nothing)", want))
                 return rt_path, rt_text, 2
         elif gfx_ver and rt_ver and not version_matches(gfx_ver, rt_ver, root):
-            print("[edvr] WARNING: the runtime log is from build %s and the "
+            print("[edup] WARNING: the runtime log is from build %s and the "
                   "graphics log from %s; they are not one flight of one build."
                   % (rt_ver, gfx_ver))
     else:
-        print("[edvr] runtime log: NONE FOUND -- %s.\n"
+        print("[edup] runtime log: NONE FOUND -- %s.\n"
               "       %s; only the graphics log is read." % (rt_why, lacking))
     return rt_path, rt_text, None
 
@@ -4417,12 +4424,12 @@ def print_periodic_report(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
 
     gscan, rscan, clock = scan_flight(gfx_path, gfx_text, rt_path, rt_text)
     if gscan["stamped"] == 0:
-        print("[edvr] the graphics log has no [HH:MM:SS.mmm] lines; "
+        print("[edup] the graphics log has no [HH:MM:SS.mmm] lines; "
               "--tally periodic reads edvr_gfx_*.log (a runtime log goes to "
               "--runtime-file).")
         return 1
     if rscan is not None and rscan["stamped"] == 0:
-        print("[edvr] WARNING: the runtime log has no 'YYYY-MM-DD HH:MM:SS.mmm "
+        print("[edup] WARNING: the runtime log has no 'YYYY-MM-DD HH:MM:SS.mmm "
               "UTC pid= tid=' lines; it is not used.")
         rscan = None
 
@@ -4435,8 +4442,8 @@ def print_periodic_report(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
         return "%s .. %s (%.1f s)" % (clk(sc["first"]), clk(sc["last"]),
                                       sc["last"] - sc["first"])
 
-    print("[edvr] periodic work vs long frames; window +/-%g ms" % args.window_ms)
-    print("[edvr] clocks (every time below is LOCAL):")
+    print("[edup] periodic work vs long frames; window +/-%g ms" % args.window_ms)
+    print("[edup] clocks (every time below is LOCAL):")
     print("       graphics log  local time of day, [HH:MM:SS.mmm] prefix; no "
           "date, so the date is the file name's and midnight rolls it over")
     if rscan is not None:
@@ -4444,17 +4451,17 @@ def print_periodic_report(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
               % (_fmt_zone(clock["to_local"]), clock["how"]))
     print("       `at` in a `periodic work:` line: local time of day, in both "
           "logs")
-    print("[edvr] graphics log spans %s" % span_text(gscan))
+    print("[edup] graphics log spans %s" % span_text(gscan))
     if rscan is not None:
-        print("[edvr] runtime log spans  %s" % span_text(rscan))
+        print("[edup] runtime log spans  %s" % span_text(rscan))
         if rscan["last"] < gscan["first"] or rscan["first"] > gscan["last"]:
-            print("[edvr] WARNING: the two logs' time spans do not overlap: "
+            print("[edup] WARNING: the two logs' time spans do not overlap: "
                   "the clock conversion is wrong, or these are not one flight.")
 
     scans = [gscan] + ([rscan] if rscan is not None else [])
     for sc, where in ((gscan, "graphics"), (rscan, "runtime")):
         if sc is not None and sc["unparsed"]["count"]:
-            print("[edvr] WARNING: %d line(s) in the %s log open like a "
+            print("[edup] WARNING: %d line(s) in the %s log open like a "
                   "`periodic work:`, LONG FRAME or native_long_cycle line but "
                   "match none of the formats this reads; the C++ wording has "
                   "probably changed, and what follows leaves them out. First: %s"
@@ -4462,20 +4469,20 @@ def print_periodic_report(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
                      " | ".join(sc["unparsed"]["samples"])))
 
     # 1. What the timing saw, per operation.
-    print("[edvr] 1. periodic work, per operation")
+    print("[edup] 1. periodic work, per operation")
     length = gscan["last"] - gscan["first"]
     if not gscan["ops"]:
         if length >= 60.0:
-            print("[edvr] NO `periodic work:` lines in the graphics log (it "
+            print("[edup] NO `periodic work:` lines in the graphics log (it "
                   "spans %.0f s). The timing was never wired into this build, "
                   "or the build is wrong; check the version line above and "
                   "rerun with --expect-build HEAD." % length)
         else:
-            print("[edvr] no `periodic work:` lines in the graphics log, which "
+            print("[edup] no `periodic work:` lines in the graphics log, which "
                   "spans only %.0f s; the first 30 s summary may not be "
                   "written yet." % length)
     if rscan is not None and not rscan["ops"]:
-        print("[edvr] no `periodic work:` lines in the runtime log (its build "
+        print("[edup] no `periodic work:` lines in the runtime log (its build "
               "predates the timing, or it spans under 30 s).")
     order = {op: i for i, op in enumerate(KNOWN_OPS["gfx"] + KNOWN_OPS["rt"])}
     rows = sorted(((op, sc["kind"], st) for sc in scans
@@ -4496,13 +4503,13 @@ def print_periodic_report(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
             continue
         absent = [op for op in KNOWN_OPS[sc["kind"]] if op not in sc["ops"]]
         if absent:
-            print("[edvr] not seen in the %s log: %s (it never ran this flight, "
+            print("[edup] not seen in the %s log: %s (it never ran this flight, "
                   "or this build does not time it; absence does not show it was "
                   "fast)" % (where, ", ".join(absent)))
 
     # 2. The long frames, and which operation each coincides with.
     frames = list(gscan["frames"]) + (list(rscan["frames"]) if rscan else [])
-    print("[edvr] 2. long frames")
+    print("[edup] 2. long frames")
     cap = gscan["frame_cap"]
     if cap and cap[0] >= cap[1]:
         note = (" (the DLL's session cap of %d lines was reached, so later long "
@@ -4536,7 +4543,7 @@ def print_periodic_report(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
                   "sequence with a native_long_cycle line, %+.0f ms apart at "
                   "the median" % (pairs, median))
     if not frames:
-        print("[edvr] no long frames in either log: nothing to lay against the "
+        print("[edup] no long frames in either log: nothing to lay against the "
               "periodic work.")
         return 0
     if args.infer_runs:
@@ -4558,7 +4565,7 @@ def print_periodic_report(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
     res = analyse_periodic([e for sc in scans for e in sc["events"]], frames,
                            window_s, max(spans))
     if not res["events"]:
-        print("[edvr] no periodic events to lay the long frames against.")
+        print("[edup] no periodic events to lay the long frames against.")
         return 0
     have = [s for s in ("gfx", "rt") if res["counts"][s]]
     print("       long frames within +/-%g ms of any periodic event: %s"
@@ -4609,7 +4616,7 @@ def print_periodic_report(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
     # (a 0.01 ms run beside a 190 ms frame is a coincidence, not a cause).
     matches = res["matches"]
     shown = matches[:MATCHED_ROWS]
-    print("[edvr] 3. long frames with a periodic event beside them, largest "
+    print("[edup] 3. long frames with a periodic event beside them, largest "
           "event first (%d of %d long frame(s))" % (len(matches), len(frames)))
     if shown:
         print("       events: operation, SLOW run or window max, its ms, then "
@@ -4630,7 +4637,7 @@ def print_periodic_report(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
     # 4. The ten longest of each, with what was nearest.
     for s in have:
         tops = res["top"][s]
-        print("[edvr] 4. the %d longest %s line(s), with the nearest periodic "
+        print("[edup] 4. the %d longest %s line(s), with the nearest periodic "
               "event" % (len(tops), SRC_LABEL[s]))
         print("       offset = the event's end minus the frame's end (negative: "
               "the event finished first); within = inside the window")
@@ -4677,7 +4684,7 @@ def resolve_target(spec):
             leaves = [] if (os.path.isdir(os.path.join(p, "edup_logs")) or os.path.isdir(os.path.join(p, "edvr_logs"))) \
                 else _products_under(p)
             return leaves[0] if len(leaves) == 1 else p
-        raise SystemExit("[edvr] no such directory: %s" % p)
+        raise SystemExit("[edup] no such directory: %s" % p)
     if spec == "frontier":
         local = os.environ.get("LOCALAPPDATA", "")
         found = _products_under(os.path.join(local, "Frontier_Developments")) \
@@ -4688,10 +4695,10 @@ def resolve_target(spec):
         # ~/.steam/steam on Linux.
         found = steam_library.steam_dirs(GAME_EXE)
     if not found:
-        raise SystemExit("[edvr] no %s install found; pass a path to "
+        raise SystemExit("[edup] no %s install found; pass a path to "
                          "--target." % spec)
     if len(found) > 1:
-        raise SystemExit("[edvr] %d installs found; name one:\n       %s"
+        raise SystemExit("[edup] %d installs found; name one:\n       %s"
                          % (len(found), "\n       ".join(found)))
     return found[0]
 
@@ -5081,9 +5088,9 @@ def print_vscreen_fit(text):
     wins = vscreen_fit_windows(f)
     lines = (1 if f["rule"] else 0) + (1 if f["explicit"] else 0) + (1 if f["no_eye"] else 0) + len(f["armed"]) + len(wins)
     if not lines:
-        print("[edvr] no vscreen auto-fit line in this log (a build that predates the fit, or a session that never reached the panel patch).")
+        print("[edup] no vscreen auto-fit line in this log (a build that predates the fit, or a session that never reached the panel patch).")
         return 1
-    print("[edvr] vscreen fit: %s, %s, %d arming line(s), %d footprint window(s)"
+    print("[edup] vscreen fit: %s, %s, %d arming line(s), %d footprint window(s)"
           % ("the rule line" if f["rule"] else ("an explicit-width line" if f["explicit"] else "no rule line"),
              "an apply line" if f["applied"] else "no apply line", len(f["armed"]), len(wins)))
     if f["rule"]:
@@ -5388,9 +5395,9 @@ def print_flat_upscale(text):
     f = parse_flat_upscale(text)
     wins = flat_upscale_windows(f)
     if not (f["keys"] or wins or f["runtime"] or f["stand"] or f["warns"]):
-        print("[edvr] no flat-profile line in this log (a VR session, or a build that predates the flat runtime).")
+        print("[edup] no flat-profile line in this log (a VR session, or a build that predates the flat runtime).")
         return 1
-    print("[edvr] flat upscale: %d key line(s), %d copy-structure window(s), %d route line(s), %d stand-down line(s), %d warning line(s), %d decline line(s)"
+    print("[edup] flat upscale: %d key line(s), %d copy-structure window(s), %d route line(s), %d stand-down line(s), %d warning line(s), %d decline line(s)"
           % (len(f["keys"]), len(wins), len(f["routes"]), len(f["stand"]), len(f["warns"]), len(f["declines"])))
     for k in f["keys"]:
         print("key %s: %s%s (%s)" % (k["ts"] or "?", "experimental.temporal_aa_before_post=" if k["legacy"] else "flat hdr route ", k["key"], k["when"]))
@@ -5428,7 +5435,7 @@ def print_flat_upscale(text):
 # headset notice was queued. tools\vscreen_fit_test (R13) holds the formatter and the wiring; this reader's self-test builds the lines from
 # the header's own text.
 # ---------------------------------------------------------------------------------------------------------------------------------------
-VRSS_RE = re.compile(FLATU_TS + r"vr supersampling: Elite draws the 3D world at (?P<rw>\d+)x(?P<rh>\d+), (?P<pct>\d+)% of the (?P<ew>\d+)x(?P<eh>\d+) eye texture, and scales it up before EDVR sees it: ")
+VRSS_RE = re.compile(FLATU_TS + r"vr supersampling: Elite draws the 3D world at (?P<rw>\d+)x(?P<rh>\d+), (?P<pct>\d+)% of the (?P<ew>\d+)x(?P<eh>\d+) eye texture, and scales it up before (?:EDVR|ED-UP) sees it: ")
 VRSS_ADOPT_RE = re.compile(FLATU_TS + r"vScreen: the world on this rig is rendered at (?P<rw>\d+)x(?P<rh>\d+) and scaled into the (?P<ew>\d+)x(?P<eh>\d+) the headset is handed -- (?P<pct>\d+)% of the width")
 VRSS_QUEUED_RE = re.compile(FLATU_TS + r"vr supersampling: (?:the headset notice is queued as a toast|menu\.toasts is off, so no toast)")
 VRSS_BELOW_PERCENT = 98    # kBelowPercent in src/common/vr_supersample_notice.h
@@ -5592,7 +5599,7 @@ def print_vr_supersampling(text):
     has_notice = bool(f["notice"] or f["adopt"] or f["queued"])
     has_hold = bool(h["holds"] or h["refused"] or h["installed"] or h["not_held"] or h["modes"] or h["notices"] or h["not_chased"] or h["transitions"])
     if not (has_notice or has_hold):
-        print("[edvr] no `vr supersampling:` or vScreen render-size line in this log (the world may be drawn at the eye's own size, or vScreen's guards held the "
+        print("[edup] no `vr supersampling:` or vScreen render-size line in this log (the world may be drawn at the eye's own size, or vScreen's guards held the "
               "adoption back, or this is a build that predates section 83: Supersampling below 1 cannot be ruled out from it).")
         return 1
     for ts, d, w in h["transitions"]:
@@ -5623,8 +5630,8 @@ def print_vr_supersampling(text):
 # `EDVR GPU census, the overlay's GPU time: frame work span: completed N, skipped S, invalid I, last X ms. ...` (all-time counts; `last -` until one completed). The three counts
 # tell apart what the overlay's "--" cannot: a pair that never ran (all zero), one that ran and was voided (skipped/invalid climb, completed
 # does not) and one that works (completed climbs). The clock state comes from the `Render-to-submit GPU: enabled|disabled` line.
-GPUWS_CENSUS_RE = re.compile(r"^\[(?P<ts>[0-9:.]+)\] EDVR GPU census: ")
-GPUWS_LINE_RE = re.compile(r"^\[(?P<ts>[0-9:.]+)\] EDVR GPU census, the overlay's GPU time: ")
+GPUWS_CENSUS_RE = re.compile(r"^\[(?P<ts>[0-9:.]+)\] (?:EDVR|ED-UP) GPU census: ")
+GPUWS_LINE_RE = re.compile(r"^\[(?P<ts>[0-9:.]+)\] (?:EDVR|ED-UP) GPU census, the overlay's GPU time: ")
 GPUWS_FIELD_RE = re.compile(r"frame work span: completed (?P<c>\d+), skipped (?P<s>\d+), invalid (?P<i>\d+), last (?P<last>-|[0-9.]+) ms")
 GPUWS_CLOCK_RE = re.compile(r"Render-to-submit GPU: (?P<state>enabled|disabled) \(advanced\.app_gpu_timing\)")
 
@@ -5657,7 +5664,7 @@ def gpu_work_span_verdict(p):
     NEVER RAN / FAILING / WORKING."""
     ws = p["windows"]
     if not p["census_lines"]:
-        return "NO CENSUS", "the log has no EDVR GPU census window line"
+        return "NO CENSUS", "the log has no ED-UP GPU census window line"
     if not ws:
         return "NO FIELD", "census lines carry no `frame work span:` field: a build before it, so this log cannot say whether the pair ran"
     if p["clock"] == "on":
@@ -5698,9 +5705,9 @@ def self_test_gpu_work_span():
 
     def census(ts, c, s, i, last):
         field = "frame work span: completed %d, skipped %d, invalid %d, last %s ms" % (c, s, i, last)
-        return ("[%s] EDVR GPU census: 30 s, 2581 frames; EDVR ~3.195 ms/frame = door 2.0 (x) + in-frame 1.1 (y); application render p50 -; "
+        return ("[%s] ED-UP GPU census: 30 s, 2581 frames; ED-UP ~3.195 ms/frame = door 2.0 (x) + in-frame 1.1 (y); application render p50 -; "
                 "frame gap - (no pairs); timer floor 0.0 us/pair; spans timed 5422, failed 0.\n"
-                "[%s] EDVR GPU census, the overlay's GPU time: %s. All-time counts." % (ts, ts, field))
+                "[%s] ED-UP GPU census, the overlay's GPU time: %s. All-time counts." % (ts, ts, field))
 
     off = "[07:34:40.591] Render-to-submit GPU: disabled (advanced.app_gpu_timing).\n"
     on = "[07:34:40.591] Render-to-submit GPU: enabled (advanced.app_gpu_timing); independent of compositor timing.\n"
@@ -6096,7 +6103,7 @@ def print_terrain_checkerboard(text):
     """The --terrain-checkerboard report. Returns 0 when the log has any of the lines, 1 when it has none; the verdict never changes the exit code."""
     f = parse_terrain_checkerboard(text)
     if not (f["start"] or f["failed"] or f["reads"] or f["limit"] or f["fault"] or f["queued"]):
-        print("[edvr] no `vr terrain checkerboard:` line in this log: the reader never started (a flat session, a build from before section 84, or a VR frame "
+        print("[edup] no `vr terrain checkerboard:` line in this log: the reader never started (a flat session, a build from before section 84, or a VR frame "
               "boundary that never reached the menu's tick), so Elite's terrain checkerboard rendering cannot be ruled in or out from it. A read that found the "
               "option off, or found nothing, writes a line too: no line is not \"read, off\".")
         return 1
@@ -6671,12 +6678,12 @@ def print_route_curve(text, path=None):
     p = parse_route_curve(text)
     ws = p["windows"]
     if not (ws or p["owns"] or p["layer"] or p["layer_unknown"]):
-        print("[edvr] route-curve: no `vr world route` line in this log. The route is always requested in a current build (there is no setting "
+        print("[edup] route-curve: no `vr world route` line in this log. The route is always requested in a current build (there is no setting "
               "for it), so the UI layer was not live (the route stays off then), this is not a VR flight, or the build predates the route "
               "becoming unconditional (it followed an ini switch then); with the layer live the route prints a 5 s line every window, zeros included.")
         return 3
     ver = version_line(text)[1]
-    print("[edvr] route-curve: %sbuild %s; %d route window(s), %d owned; %d OWNS line(s), %d `panel curvature:` note(s), %d layer refusal line(s)"
+    print("[edup] route-curve: %sbuild %s; %d route window(s), %d owned; %d OWNS line(s), %d `panel curvature:` note(s), %d layer refusal line(s)"
           % (os.path.basename(path) + ", " if path else "", ver or "(no version line)", len(ws), sum(1 for w in ws if w["owned"]), len(p["owns"]),
              len(p["notes"]), len(p["layer"])))
     runs = _rc_runs(ws)
@@ -6779,12 +6786,12 @@ def print_map_bounce(text, path=None):
     p = parse_map_bounce(text)
     windows, decisions = p["summaries"], p["decisions"]
     if not windows and not p["malformed"] and not decisions and not p["pending"]:
-        print("[edvr] map-bounce: NEVER RAN; no `flat map bounce 5s:` summary or decision line in this log. Enable the instrument and fly a full summary window.")
+        print("[edup] map-bounce: NEVER RAN; no `flat map bounce 5s:` summary or decision line in this log. Enable the instrument and fly a full summary window.")
         print("map-bounce verdict: NEVER RAN")
         return 3
 
     latest = windows[-1] if windows else None
-    print("[edvr] map-bounce: %sbuild %s; %d summary window(s), %d decision line(s), %d malformed summary line(s)" %
+    print("[edup] map-bounce: %sbuild %s; %d summary window(s), %d decision line(s), %d malformed summary line(s)" %
           (os.path.basename(path) + ", " if path else "",
            version_line(text)[1] or "(no version line)", len(windows),
            len(decisions), len(p["malformed"])))
@@ -7009,9 +7016,9 @@ def self_test_route_curve():
          "curve-reissues equals eye-takes (to within 4 eyes) in all 10 owned window(s)", "PASS  OWNS", "PASS  STALE BUILD", "PASS  STOOD DOWN",
          "PASS  READY", "OWNS lines (1): 10:00:00.050 frame %d (curve=%s)" % (owns_frame, strip),
          "layer refusal lines (1): none lists a refusal by the route's own checks", absent=no_stop_warn)
-    case("a log with no version line says so in the header", healthy, 0, "PASS", "[edvr] route-curve: build (no version line); 11 route window(s), 11 owned")
+    case("a log with no version line says so in the header", healthy, 0, "PASS", "[edup] route-curve: build (no version line); 11 route window(s), 11 owned")
     rc, out = run("[10:00:00.000] version 0.14.1-93-gf78eba4 (build 68C0A1F2)\n" + healthy, os.path.join("somewhere", "edvr_gfx_20260101_000000.log"))
-    if rc != 0 or "[edvr] route-curve: edvr_gfx_20260101_000000.log, build 0.14.1-93-gf78eba4; 11 route window(s), 11 owned" not in out:
+    if rc != 0 or "[edup] route-curve: edvr_gfx_20260101_000000.log, build 0.14.1-93-gf78eba4; 11 route window(s), 11 owned" not in out:
         fail("the header should name the log's file and the build:\n%s" % out)
     case("the census fixture as it is (a curve of off and no OWNS line)", census, 0, "PASS", "curve=off in 1 of 1 owned windows", "no curve was configured")
     case("the same run with CRLF line ends", healthy.replace("\n", "\r\n"), 0, "PASS", "in 11 of 11 owned windows")
@@ -7180,7 +7187,7 @@ def self_test_route_curve():
                 fail("--route-curve through main() on the %s log with %s returned %d (wanted %d, with %r and without %r):\n%s"
                      % (name, extra or "no --expect-build", rc, want_rc, want_in, want_not, out))
         rc, out = cli("ok")
-        if "[edvr] route-curve: ok.log, build 0.14.1-93-gf78eba4; 11 route window(s), 11 owned" not in out:
+        if "[edup] route-curve: ok.log, build 0.14.1-93-gf78eba4; 11 route window(s), 11 owned" not in out:
             fail("--route-curve through main() should name the log's file and the build in its header:\n%s" % out)
         rc, out = cli("ok", "--version")
         if rc != 0 or "route-curve verdict" in out:
@@ -7250,11 +7257,11 @@ FZ_STALL_RE = re.compile(
     r"stall: the render thread stalled (?P<age>[0-9.]+) ms in (?P<top>[^;]+?); owner (?P<owner>[^;]+?); stack (?P<stack>[^;]*?); "
     r"sample (?P<k>\d+) of (?P<of>\d+), last Present returned in frame (?P<frame>\d+), thread (?P<tid>\d+)")
 FZ_STALL_SUSPEND_RE = re.compile(r"\bsuspended (?P<us>\d+) us\b")
-FZ_STALL_EDVR_RE = re.compile(r"EDVR code on the stack: (?P<yes>yes|no)\b(?: \((?P<frames>\d+) frames?, innermost (?P<where>[^)]+)\))?")
+FZ_STALL_EDVR_RE = re.compile(r"(?:EDVR|ED-UP) code on the stack: (?P<yes>yes|no)\b(?: \((?P<frames>\d+) frames?, innermost (?P<where>[^)]+)\))?")
 FZ_STALL_FAIL_RE = re.compile(
     r"stall: sample (?P<k>\d+) of (?P<of>\d+) at (?P<at>[0-9.]+) ms failed: (?P<why>[^;]+?); last Present returned in frame (?P<frame>\d+), "
     r"thread (?P<tid>\d+)")
-FZ_GPU_HEAD = "EDVR GPU census, frame gap:"
+FZ_GPU_HEADS = ("ED-UP GPU census, frame gap:", "EDVR GPU census, frame gap:")
 FZ_GPU_STALL_RE = re.compile(
     r"(?P<n>\d+) pairs? over 1 s KEPT as stalls \([^)]*?longest (?P<longest>[0-9.]+) ms[^)]*\):(?P<pairs>.*)$")
 FZ_GPU_PAIR_RE = re.compile(r"\bsequence (?P<seq>\d+) (?P<ms>[0-9.]+) ms")
@@ -7398,7 +7405,7 @@ def _fz_gfx_line(fz, msg, t):
         fz["stall_fails"].append({
             "kind": "fail", "t": t, "k": int(m.group("k")), "of": int(m.group("of")), "at_ms": float(m.group("at")), "why": m.group("why").strip(),
             "frame": int(m.group("frame")), "tid": int(m.group("tid"))})
-    elif msg.startswith(FZ_GPU_HEAD) and " KEPT as stalls" in msg:
+    elif msg.startswith(FZ_GPU_HEADS) and " KEPT as stalls" in msg:
         m = FZ_GPU_STALL_RE.search(msg)
         if not m:
             _fz_unparsed(fz, msg)
@@ -7474,8 +7481,8 @@ FZ_OWNER_TEXT = {               # slow_regime.h slowOwnerText, key for key
     "vendor_end_frame": "the vendor runtime's xrEndFrame",
     "vendor_wait_frame": "the vendor runtime's xrWaitFrame and xrBeginFrame (the pose wait)",
     "vendor_swapchain": "the vendor runtime's swapchain calls (xrAcquire, xrWait, xrReleaseSwapchainImage)",
-    "edvr_copy": "EDVR's copy of the eyes",
-    "edvr_work": "EDVR's own work in the runtime",
+    "edvr_copy": "ED-UP's copy of the eyes",
+    "edvr_work": "ED-UP's own work in the runtime",
     "game": "the game's own frame",
     "no_frames": "nothing: no frame reached xrEndFrame",
     "none": "no single owner",
@@ -7870,7 +7877,7 @@ def _fz_print_freezes(rows, rt_read, clk):
             print("      runtime cycle: - (no runtime log was read)")
         for s in row["stalls"]:
             if s["kind"] == "stall":
-                print("      stall sample %d of %d at %s: stalled %g ms in %s, owner %s, suspended %d us, EDVR code on the stack: %s%s"
+                print("      stall sample %d of %d at %s: stalled %g ms in %s, owner %s, suspended %d us, ED-UP code on the stack: %s%s"
                       % (s["k"], s["of"], clk(s["t"]), s["age_ms"], s["top"], s["owner"], s["us"], _fz_edvr_text(s),
                          "; the stack pointer was outside the thread's stack: one frame only" if s["outside"] else ""))
             else:
@@ -7967,9 +7974,9 @@ def _fz_print_sampler(fz, rows, loose, clk):
         known = [s for s in samples if s["edvr"] is not None]
         mine = [s for s in samples if s["edvr"]]
         if not known:
-            print("  EDVR code on the stack: - (no sample line says)")
+            print("  ED-UP code on the stack: - (no sample line says)")
         else:
-            print("  EDVR code on the stack: %d of %d sample(s)%s" % (len(mine), len(known), "; EDVR's own code was in the freeze:" if mine else ""))
+            print("  ED-UP code on the stack: %d of %d sample(s)%s" % (len(mine), len(known), "; ED-UP's own code was in the freeze:" if mine else ""))
             for s in mine:
                 print("    sample %d of %d at %s: %s" % (s["k"], s["of"], clk(s["t"]), _fz_edvr_text(s)))
     if fails:
@@ -8081,7 +8088,7 @@ def _fz_legacy_owner(fz, begin, stop, seq_range, frame_ms, period_ms, rt_read, c
     where = "native_submit_phases window %s: sequences %s-%s, ended %s%s" % (
         w["window"], w["first"] if w["first"] is not None else "?", w["last"] if w["last"] is not None else "?", clk(w["t"]),
         "; %d of its %d frames are inside the run" % (inside, total) if inside is not None else "")
-    detail = ["a frame went (p50 of each phase in %s): xrEndFrame %.1f ms%s, pose wait %.1f, swapchain calls %.1f, EDVR copy %.1f, the game %.1f (the rest)"
+    detail = ["a frame went (p50 of each phase in %s): xrEndFrame %.1f ms%s, pose wait %.1f, swapchain calls %.1f, ED-UP copy %.1f, the game %.1f (the rest)"
               % (where, shares["vendor_end_frame"], periods, shares["vendor_wait_frame"], shares["vendor_swapchain"], shares["edvr_copy"], shares["game"])]
     return {"key": owner, "share": share, "held": held, "detail": detail}
 
@@ -8095,7 +8102,7 @@ def _fz_legacy_gpu(fz, begin, stop, clk):
     w = max(inside, key=lambda x: x["copy"][1])
     before = [x for x in fz["producer_gpu"] if x["t"] < begin]
     base = "; p95 %.2f ms in window %s, before it" % (before[-1]["copy"][1], before[-1]["window"]) if before else ""
-    return ("GPU clock: native_producer_gpu window %s (ended %s): EDVR's copy of the eyes took p95 %.1f ms, max %.1f ms on the GPU%s"
+    return ("GPU clock: native_producer_gpu window %s (ended %s): ED-UP's copy of the eyes took p95 %.1f ms, max %.1f ms on the GPU%s"
             % (w["window"], clk(w["t"]), w["copy"][1], w["copy"][3], base))
 
 
@@ -8139,7 +8146,7 @@ def _fz_slow_regimes_native(fz, clk):
                   ("context: %s (%s loading frame(s) and %s end(s) with no layers of %d frames)"
                    % (last["context"], "?" if last["loading_frames"] is None else last["loading_frames"], "?" if last["empty_frames"] is None else last["empty_frames"],
                       last["frames"])) if last["context"] else "context: the line has none (a build from before it)",
-                  "a frame went (mean ms over %s): xrEndFrame %s (longest %s), pose wait %s, swapchain calls %s, EDVR copy %s, EDVR work %s, the game %s"
+                  "a frame went (mean ms over %s): xrEndFrame %s (longest %s), pose wait %s, swapchain calls %s, ED-UP copy %s, ED-UP work %s, the game %s"
                   % ("the whole regime" if end else "its last window", f.get("vendor_end_frame_ms", "-"), f.get("end_frame_max_ms", "-"),
                      f.get("vendor_wait_frame_ms", "-"), f.get("vendor_swapchain_ms", "-"), f.get("edvr_copy_ms", "-"), f.get("edvr_work_ms", "-"),
                      f.get("game_ms", "-"))]
@@ -8291,7 +8298,7 @@ def _fz_print_slow(fz, regimes, clk):
     if not regimes:
         return
     print("SLOW REGIME%s (%d found: the frame rate under %.0f%% of the display's for %.0f s or more; a state the session was in, not one frame; SLOW is set only by a "
-          "regime the vendor runtime or EDVR holds, a load the game's frame holds is INFO, a slow stretch of its scenes or no named owner a WARN):"
+          "regime the vendor runtime or ED-UP holds, a load the game's frame holds is INFO, a slow stretch of its scenes or no named owner a WARN):"
           % ("S" if len(regimes) > 1 else "", len(regimes), 100.0 * FZ_SLOW_FRACTION, FZ_SLOW_MIN_S))
     for g in regimes:
         status, words = g["class"]
@@ -8699,7 +8706,7 @@ def freezes_judge(fz, rows, pairs, rt_read, clk):
                 if armed and not got:
                     missing.append("a stall sample with an owner")
                 elif armed and not any(s["edvr"] for s in got):
-                    missing.append("EDVR code on the stack in any sample (the sleep is inside EDVR's own DLL)")
+                    missing.append("ED-UP code on the stack in any sample (the sleep is inside ED-UP's own DLL)")
                 head = "the deliberate %d ms sleep at %s is FREEZE #%d (frame %d, %.1f ms between Presents)" % (
                     sl["ms"], clk(sl["t"]), holder["i"], holder["f"]["frame"], holder["f"]["ms"])
                 if missing:
@@ -8709,7 +8716,7 @@ def freezes_judge(fz, rows, pairs, rt_read, clk):
                     if holder["cycle"] is not None:
                         have.append("a runtime cycle of %.1f ms" % holder["cycle"]["ms"])
                     if armed:
-                        have.append("%d stall sample(s) naming %s, EDVR code on the stack in %d of them"
+                        have.append("%d stall sample(s) naming %s, ED-UP code on the stack in %d of them"
                                     % (len(got), ", ".join(sorted({s["owner"] for s in got})), sum(1 for s in got if s["edvr"])))
                     else:
                         have.append("no stall samples (the sampler is not armed, so none were due)")
@@ -8741,14 +8748,14 @@ def print_freezes(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
     fz = parse_freezes(gfx_path, gfx_text, rt_path, rt_text)
     gscan, rscan, clock = fz["gscan"], fz["rscan"], fz["clock"]
     if gscan["stamped"] == 0:
-        print("[edvr] freezes: the graphics log has no [HH:MM:SS.mmm] lines; --freezes reads edvr_gfx_*.log (a runtime log goes to --runtime-file).")
+        print("[edup] freezes: the graphics log has no [HH:MM:SS.mmm] lines; --freezes reads edvr_gfx_*.log (a runtime log goes to --runtime-file).")
         return 3
     if rscan is not None and rscan["stamped"] == 0:
-        print("[edvr] WARNING: the runtime log has no 'YYYY-MM-DD HH:MM:SS.mmm UTC pid= tid=' lines; it is not used.")
+        print("[edup] WARNING: the runtime log has no 'YYYY-MM-DD HH:MM:SS.mmm UTC pid= tid=' lines; it is not used.")
         rscan = None
     # A log from before the freeze logging can still hold a slow regime in its older lines: that is read, and is a finding, not an old build.
     if not _fz_has_lines(fz) and not _fz_slow_regimes(fz, rscan is not None):
-        print("[edvr] freezes: none of the freeze-diagnostics lines is in this log (no FREEZE, long frame counts, worst long frame, stall sampler, "
+        print("[edup] freezes: none of the freeze-diagnostics lines is in this log (no FREEZE, long frame counts, worst long frame, stall sampler, "
               "native_long_cycle_worst or native_long_cycle_counts line), so it is from a build before the freeze logging.")
         return 3
     rt_read = rscan is not None
@@ -8759,22 +8766,22 @@ def print_freezes(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
     def clk(t):
         return "-" if t is None else fmt_clock(t, day0)
 
-    print("[edvr] freezes: %s, runtime log %s; build %s; %d FREEZE line(s), %d runtime cycle(s) of 250 ms or more"
+    print("[edup] freezes: %s, runtime log %s; build %s; %d FREEZE line(s), %d runtime cycle(s) of 250 ms or more"
           % (os.path.basename(gfx_path), os.path.basename(rt_path) if rt_read else "none", gfx_ver or "(no version line)", len(rows), len(pairs)))
     if rt_read:
-        print("[edvr] clocks: every time below is LOCAL; the runtime log's UTC prefix is converted at %s (%s)"
+        print("[edup] clocks: every time below is LOCAL; the runtime log's UTC prefix is converted at %s (%s)"
               % (_fmt_zone(clock["to_local"]), clock["how"]))
         if rscan["last"] < gscan["first"] or rscan["first"] > gscan["last"]:
-            print("[edvr] WARNING: the two logs' time spans do not overlap: the clock conversion is wrong, or these are not one flight.")
+            print("[edup] WARNING: the two logs' time spans do not overlap: the clock conversion is wrong, or these are not one flight.")
         shared, median = clock_check(gscan["frames"] + rscan["frames"])
         if median is not None and abs(median) > 300000.0:
-            print("[edvr] WARNING: %d LONG FRAME line(s) share a runtime sequence with a native_long_cycle line, %.0f s apart at the median: the UTC offset "
+            print("[edup] WARNING: %d LONG FRAME line(s) share a runtime sequence with a native_long_cycle line, %.0f s apart at the median: the UTC offset "
                   "is wrong, and a join across the two logs by time cannot be trusted" % (shared, median / 1000.0))
         elif median is not None:
-            print("[edvr] clock check: %d LONG FRAME line(s) share a runtime sequence with a native_long_cycle line, %+.0f ms apart at the median"
+            print("[edup] clock check: %d LONG FRAME line(s) share a runtime sequence with a native_long_cycle line, %+.0f ms apart at the median"
                   % (shared, median))
     else:
-        print("[edvr] clocks: every time below is LOCAL, the graphics log's own [HH:MM:SS.mmm] prefix")
+        print("[edup] clocks: every time below is LOCAL, the graphics log's own [HH:MM:SS.mmm] prefix")
     regimes = _fz_slow_regimes(fz, rt_read)
     _fz_print_slow(fz, regimes, clk)
     if rows:
@@ -8808,7 +8815,7 @@ def print_freezes(gfx_path, gfx_text, gfx_ver, want, args, native_dirs):
           "did not write, or a sample that held the render thread over %d us. WARN: the counts missing, a FREEZE line without its LONG FRAME line, an armed "
           "sampler that named no owner, a sample over %d us, a slow stretch the game's scenes or no named owner held, or a line this reader could not read.%s"
           % (word, stops, warns, ", %d SLOW" % slows if slows else "", held, FREEZE_SUSPEND_STOP_US, FREEZE_SUSPEND_WARN_US,
-             " SLOW: the frame rate stayed under %.0f%% of the display's for %.0f s or more, and the vendor runtime, EDVR's copy or EDVR's own work held most of each frame."
+             " SLOW: the frame rate stayed under %.0f%% of the display's for %.0f s or more, and the vendor runtime, ED-UP's copy or ED-UP's own work held most of each frame."
              % (100.0 * FZ_SLOW_FRACTION, FZ_SLOW_MIN_S) if slows else ""))
     return 1 if stops else 4 if slows else 0
 
@@ -8846,7 +8853,7 @@ def self_test_freezes():
                 '"stall: the render thread stalled %u ms in "', '"; owner "', '"; stack "',
                 '"; sample %u of %u, last Present returned in frame %llu, thread %lu, suspended %u us"',
                 '" (the stack pointer was outside the thread\'s stack: one frame only)"',
-                '"; EDVR code on the stack: yes (%u frame%s, innermost "', '"; EDVR code on the stack: no."',
+                '"; ED-UP code on the stack: yes (%u frame%s, innermost "', '"; ED-UP code on the stack: no."',
                 '"stall: sample %u of %u at %u ms failed: %s; last Present returned in frame %llu, thread %lu."')),
             (("src", "d3d11", "stall_watch.cpp"), (
                 "stall sampler: off (advanced.freeze_location = off).", "stall sampler: armed. The render thread (thread %lu)",
@@ -8855,7 +8862,7 @@ def self_test_freezes():
                                                       '"%s,reason=%s,count=%llu,logged=%llu,threshold=2x_period,%s"')),
             (("src", "common", "freeze_book.h"), ('add("over_250ms_unwritten"', '"long_%s"', '"blip_%s"', '"unwritten_%s"', 'return "lt50";', 'return "50_100";',
                                                   'return "100_250";', 'return "250_1000";', 'return "ge1000";')),
-            (("src", "d3d11", "gpu_frame_gap.h"), ("EDVR GPU census, frame gap:", "pair%s over 1 s KEPT as stalls (not in the percentiles or the max; longest %.1f ms; each is the gap",
+            (("src", "d3d11", "gpu_frame_gap.h"), ("ED-UP GPU census, frame gap:", "pair%s over 1 s KEPT as stalls (not in the percentiles or the max; longest %.1f ms; each is the gap",
                                                     '"%s sequence %llu %.1f ms"'))):
         try:
             body = read_text(os.path.join(root, *rel))
@@ -8896,7 +8903,7 @@ def self_test_freezes():
     # ---- the graphics log's lines, as the C++ formats them ----
     def long_frame(ms, seq, frame=47211):
         return ("monitor: LONG FRAME -- %.1f ms between Presents (runtime predicted period 11.1 ms), no WaitGetPoses, CPU busy, compositor, reprojection, "
-                "or door samples; game creations: 0 textures, 0 buffers, 0 shaders (0.0 MB); EDVR events: none. This is frame %d; the flip timeline is not "
+                "or door samples; game creations: 0 textures, 0 buffers, 0 shaders (0.0 MB); ED-UP events: none. This is frame %d; the flip timeline is not "
                 "armed, so there are no table changes to order against it. %sgame work 4.92 ms."
                 % (ms, frame, "runtime sequence %d, " % seq if seq else ""))
 
@@ -8931,11 +8938,11 @@ def self_test_freezes():
                 "250 ms or more is written whatever the limit says, and over_250ms_unwritten counts any that was not."
                 % (reason, " ".join("%s=%d" % kv for kv in counts_pairs(**kw))))
 
-    def gworst(rank, of, ms, ended, frame, seq, note="; stalled in nvwgf2umx.dll+0x1a2b3c4 (3 samples, longest at 1003 ms, EDVR code on the stack)", cycle=None):
+    def gworst(rank, of, ms, ended, frame, seq, note="; stalled in nvwgf2umx.dll+0x1a2b3c4 (3 samples, longest at 1003 ms, ED-UP code on the stack)", cycle=None):
         return ("monitor: worst long frame %d of %d: %.1f ms between Presents, ended %s (frame %d, runtime sequence %d, runtime cycle %s)%s"
                 % (rank, of, ms, ended, frame, seq, "%.1f ms" % ms if cycle is None else cycle, note))
 
-    def stall(age, k, us=14, owner="nvwgf2umx.dll+0x1a2b3c4", tail="; EDVR code on the stack: no"):
+    def stall(age, k, us=14, owner="nvwgf2umx.dll+0x1a2b3c4", tail="; ED-UP code on the stack: no"):
         """(age in ms into the freeze, the line): one stall sampler sample."""
         return (age, "stall: the render thread stalled %d ms in ntdll.dll+0x9d5c4; owner %s; stack ntdll.dll+0x9d5c4 < KERNELBASE.dll+0x4f2 < %s < dxgi.dll+0x1234 "
                      "< EliteDangerous64.exe+0x99c0f4; sample %d of 3, last Present returned in frame 47210, thread 12345, suspended %d us%s."
@@ -8952,7 +8959,7 @@ def self_test_freezes():
     def gpu_stall(pairs, more=0):
         listed = "".join("%s sequence %d %.1f ms" % ("," if i else "", s, ms) for i, (s, ms) in enumerate(pairs))
         n = len(pairs) + more
-        return ("EDVR GPU census, frame gap: the time on the GPU clock from the end of one frame's last EDVR-timed span on the game's device (after the door "
+        return ("ED-UP GPU census, frame gap: the time on the GPU clock from the end of one frame's last ED-UP-timed span on the game's device (after the door "
                 "work) to the start of the next frame's first, p50 0.42 ms, p95 1.10 ms, max 3.30 ms over 2699 pairs of 2700 valid frames, %d pair%s over 1 s "
                 "KEPT as stalls (not in the percentiles or the max; longest %.1f ms; each is the gap before that runtime sequence):%s%s. This is an upper "
                 "bound on GPU idle, not idle: SteamVR's compositor (another process on the same GPU), the runtime's transfers and the Present copy run in it "
@@ -9152,23 +9159,23 @@ def self_test_freezes():
         # ---- the healthy flight: one freeze, every line there, PASS ----
         healthy = run(gfx_flight(), rt_flight(), "--expect-build", VERSION)
         case("a healthy flight with a 1858 ms freeze", healthy, 0, "PASS",
-             "[edvr] freezes: %s, runtime log %s; build %s; 1 FREEZE line(s), 1 runtime cycle(s) of 250 ms or more" % (GFX_NAME, RT_NAME, VERSION),
+             "[edup] freezes: %s, runtime log %s; build %s; 1 FREEZE line(s), 1 runtime cycle(s) of 250 ms or more" % (GFX_NAME, RT_NAME, VERSION),
              "runtime log's UTC prefix is converted at UTC+08:00",
-             "[edvr] clock check: 1 LONG FRAME line(s) share a runtime sequence with a native_long_cycle line, +0 ms apart at the median",
+             "[edup] clock check: 1 LONG FRAME line(s) share a runtime sequence with a native_long_cycle line, +0 ms apart at the median",
              "FREEZES (1 FREEZE line(s)", "RUNTIME CYCLES of 250 ms or more (1,", "COUNTS (", "WORST (graphics log", "WORST (runtime log", "STALL SAMPLER: armed",
              "GPU CLOCK (",
              rx(r"^  1 +23:24:19\.790 +1858\.0 +47211 +44415 +1858\.0$"),
              "the graphics half's view: 1850.7 ms from the pose wait's return to this Present, the previous cycle 11.2 ms",
              "LONG FRAME line: 23:24:19.790, 1858.0 ms, runtime sequence 44415",
              "runtime cycle: native_long_cycle sequence 44415, 1858.0 ms, ended 23:24:19.790, main phase real_Present 1850.4 ms",
-             "stall sample 1 of 3 at 23:24:18.095: stalled 163 ms in ntdll.dll+0x9d5c4, owner nvwgf2umx.dll+0x1a2b3c4, suspended 14 us, EDVR code on the stack: no",
+             "stall sample 1 of 3 at 23:24:18.095: stalled 163 ms in ntdll.dll+0x9d5c4, owner nvwgf2umx.dll+0x1a2b3c4, suspended 14 us, ED-UP code on the stack: no",
              "GPU clock: the GPU census kept the gap before sequence 44415, 1851.2 ms, as a stall",
              "the FREEZE line's stall sampler clause: took 3 samples, the last in nvwgf2umx.dll+0x1a2b3c4",
              "samples by owner module (3 sample line(s), 3 inside a freeze, 0 outside any): nvwgf2umx.dll 3",
              "sequence 44415  1851.2 ms  FREEZE #1 (frame 47211, 1858.0 ms between Presents)",
              rx(r"^  23:24:19\.790 +44415 +1858\.0 +real_Present 1850\.4 ms +#1 \(frame 47211\)$"),
              rx(r"^  1 of 1 +1858\.0 ms +ended 23:24:19\.790 +frame 47211 +sequence 44415 +runtime cycle 1858\.0 ms +"
-                r"stalled in nvwgf2umx\.dll\+0x1a2b3c4 \(3 samples, longest at 1003 ms, EDVR code on the stack\)$"),
+                r"stalled in nvwgf2umx\.dll\+0x1a2b3c4 \(3 samples, longest at 1003 ms, (?:EDVR|ED-UP) code on the stack\)$"),
              rx(r"^  1 of 1 +1858\.0 ms +ended 23:24:19\.790 +sequence 44415 +main phase real_Present 1850\.4 ms +\(utc=2026-10-01T15:24:19\.790Z\)$"),
              rx(r"^  under 50 ms +40 +330 +1 +40 +0$"), rx(r"^  250-1000 ms +0 +0 +- +0 +-$"), rx(r"^  1 s and over +1 +0 +- +1 +-$"),
              rx(r"^  total +60 +351 +2 +45 +0$"),
@@ -9181,7 +9188,7 @@ def self_test_freezes():
              "  PASS  FREEZE LINES: each of the 1 FREEZE line(s) has its LONG FRAME line, and each of the 1 runtime cycle(s) of 250 ms or more has its FREEZE line",
              "  PASS  SAMPLER: the stall sampler named an owner for 1 of 1 freeze(s): nvwgf2umx.dll+0x1a2b3c4 (3 sample(s))",
              "  PASS  SUSPENSION: the longest a stall sample held the render thread stopped was 41 us", "freezes verdict: PASS (0 STOP, 0 WARN)",
-             "[edvr] build matches: %s" % VERSION, "[edvr] runtime build matches: %s" % VERSION,
+             "[edup] build matches: %s" % VERSION, "[edup] runtime build matches: %s" % VERSION,
              absent=no_stop_warn + ("NO FREEZE", "runtime only", "NO LONG FRAME LINE", "do not add up"))
         case("the same flight with CRLF line ends", run(gfx_flight(), rt_flight(), crlf=True), 0, "PASS", "  PASS  SAMPLER:", "  PASS  FREEZE LINES:",
              absent=no_stop_warn)
@@ -9189,9 +9196,9 @@ def self_test_freezes():
         # ---- a log from before the freeze logging ----
         old = run(old_gfx, old_rt)
         case("an old-build log with none of the new lines", old, 3, None,
-             "[edvr] freezes: none of the freeze-diagnostics lines is in this log", "so it is from a build before the freeze logging.",
+             "[edup] freezes: none of the freeze-diagnostics lines is in this log", "so it is from a build before the freeze logging.",
              absent=("freezes verdict", "FREEZES (", "  PASS  ", "  STOP  "))
-        sentence = [l for l in old[1].splitlines() if l.startswith("[edvr] freezes:")]
+        sentence = [l for l in old[1].splitlines() if l.startswith("[edup] freezes:")]
         if len(sentence) != 1 or ". " in sentence[0] or not sentence[0].endswith("."):
             fail("the old-build message should be one line and one sentence: %r" % sentence)
         case("an old-build graphics log alone", run(old_gfx), 3, None, "none of the freeze-diagnostics lines", "runtime log: NONE FOUND")
@@ -9218,7 +9225,7 @@ def self_test_freezes():
              if "native_long_cycle_counts" not in l]), 0, "WARN", "  note  UNWRITTEN FREEZES: no counts line carries over_250ms_unwritten, so there is nothing to judge",
              absent=("  PASS  UNWRITTEN FREEZES", "  STOP  "))
         case("no runtime log: INSTRUMENT warns, the graphics half still reads", run(gfx_flight(), None), 0, "WARN",
-             "runtime log: NONE FOUND", "[edvr] freezes: %s, runtime log none; build %s" % (GFX_NAME, VERSION),
+             "runtime log: NONE FOUND", "[edup] freezes: %s, runtime log none; build %s" % (GFX_NAME, VERSION),
              "  WARN  INSTRUMENT: no runtime log was read", "runtime cycle: - (no runtime log was read)", "  PASS  INSTRUMENT:", "  PASS  FREEZE LINES:",
              absent=("RUNTIME CYCLES",))
         case("a runtime log with no summary and no counts line",
@@ -9257,7 +9264,7 @@ def self_test_freezes():
              "runtime cycle: none with sequence 44415 or within one of it")
         case("a runtime log whose cycle times are two hours off the graphics log's: the clock check says so, the sequence still joins",
              run(gfx_flight(), rt_flight(cycles=[(END + 7200.0, 44415, 1858.0, {})])), 0, "PASS",
-             "[edvr] WARNING: 1 LONG FRAME line(s) share a runtime sequence with a native_long_cycle line, -7200 s apart at the median: the UTC offset is wrong",
+             "[edup] WARNING: 1 LONG FRAME line(s) share a runtime sequence with a native_long_cycle line, -7200 s apart at the median: the UTC offset is wrong",
              "runtime cycle: native_long_cycle sequence 44415", "#1 (frame 47211)")
         case("a runtime log of the day before does not overlap the graphics log",
              run(gfx_flight(), ["2026-09-30 04:00:00.300 UTC pid=4242 tid=1 module_init,version=%s,durable_log=1" % VERSION],
@@ -9313,22 +9320,22 @@ def self_test_freezes():
                  absent=("  SAMPLER:", "  WARN  ", "  STOP  ", "  PASS  SAMPLER", "  PASS  SUSPENSION"))
         case("no sampler lines at all (a build between the two commits): no STALL SAMPLER section, no SAMPLER verdict",
              run(gfx_flight(items=[], sampler="", fkw=dict(sampler=None), scounts=False), rt_flight()), 0, "PASS", absent=("STALL SAMPLER", "SAMPLER:", "SUSPENSION"))
-        case("EDVR code on the stack is reported with its innermost frame",
-             run(gfx_flight(items=[stall(163, 1), stall(512, 2, tail="; EDVR code on the stack: yes (2 frames, innermost d3d11.dll+0x1c4a3)"),
-                                   stall(1003, 3, tail="; EDVR code on the stack: yes (1 frame, innermost openvr_api.dll+0x77)")]), rt_flight()), 0, "PASS",
-             "EDVR code on the stack: yes (2 frames, innermost d3d11.dll+0x1c4a3)", "EDVR code on the stack: yes (1 frame, innermost openvr_api.dll+0x77)",
-             "  EDVR code on the stack: 2 of 3 sample(s); EDVR's own code was in the freeze:", "    sample 2 of 3 at 23:24:18.444: yes (2 frames, innermost d3d11.dll+0x1c4a3)",
+        case("ED-UP code on the stack is reported with its innermost frame",
+             run(gfx_flight(items=[stall(163, 1), stall(512, 2, tail="; ED-UP code on the stack: yes (2 frames, innermost d3d11.dll+0x1c4a3)"),
+                                   stall(1003, 3, tail="; ED-UP code on the stack: yes (1 frame, innermost openvr_api.dll+0x77)")]), rt_flight()), 0, "PASS",
+             "ED-UP code on the stack: yes (2 frames, innermost d3d11.dll+0x1c4a3)", "ED-UP code on the stack: yes (1 frame, innermost openvr_api.dll+0x77)",
+             "  ED-UP code on the stack: 2 of 3 sample(s); ED-UP's own code was in the freeze:", "    sample 2 of 3 at 23:24:18.444: yes (2 frames, innermost d3d11.dll+0x1c4a3)",
              "    sample 3 of 3 at 23:24:18.935: yes (1 frame, innermost openvr_api.dll+0x77)")
         case("a sample taken with the stack pointer outside the thread's stack",
              run(gfx_flight(items=[stall(163, 1, tail=" (the stack pointer was outside the thread's stack: one frame only); EDVR code on the stack: no"),
-                                   stall(512, 2, tail=" (the stack pointer was outside the thread's stack: one frame only); EDVR code on the stack: yes (1 frame, innermost "
+                                   stall(512, 2, tail=" (the stack pointer was outside the thread's stack: one frame only); ED-UP code on the stack: yes (1 frame, innermost "
                                                       "d3d11.dll+0x1c4a3)")]), rt_flight()), 0, "PASS", "samples by owner module (2 sample line(s), 2 inside a freeze",
-             "suspended 14 us, EDVR code on the stack: no; the stack pointer was outside the thread's stack: one frame only",
-             "suspended 14 us, EDVR code on the stack: yes (1 frame, innermost d3d11.dll+0x1c4a3); the stack pointer was outside the thread's stack: one frame only",
+             "suspended 14 us, ED-UP code on the stack: no; the stack pointer was outside the thread's stack: one frame only",
+             "suspended 14 us, ED-UP code on the stack: yes (1 frame, innermost d3d11.dll+0x1c4a3); the stack pointer was outside the thread's stack: one frame only",
              "  samples taken with the stack pointer outside the thread's stack (one frame only): 2 of 2",
-             "  EDVR code on the stack: 1 of 2 sample(s); EDVR's own code was in the freeze:", absent=("do not add up", "UNPARSED", "  WARN  PARSE"))
-        case("a sample line of the older form (no EDVR clause) says `-`", run(gfx_flight(items=[stall(163, 1, tail=""), stall(512, 2, tail="")]), rt_flight()), 0, "PASS",
-             "suspended 14 us, EDVR code on the stack: -", "  EDVR code on the stack: - (no sample line says)")
+             "  ED-UP code on the stack: 1 of 2 sample(s); ED-UP's own code was in the freeze:", absent=("do not add up", "UNPARSED", "  WARN  PARSE"))
+        case("a sample line of the older form (no ED-UP clause) says `-`", run(gfx_flight(items=[stall(163, 1, tail=""), stall(512, 2, tail="")]), rt_flight()), 0, "PASS",
+             "suspended 14 us, ED-UP code on the stack: -", "  ED-UP code on the stack: - (no sample line says)")
         def suspend(us):
             return run(gfx_flight(items=[stall(163, 1, us=us)]), rt_flight())
         case("suspended 60000 us is a STOP", suspend(60000), 1, "STOP", "  STOP  SUSPENSION: a stall sample held the render thread stopped for 60000 us (sample 1 of 3 at 23:24:18.095)")
@@ -9403,7 +9410,7 @@ def self_test_freezes():
         test_armed = "freeze test: advanced.freeze_test_ms = %d. Sixty seconds from now the render thread sleeps %d ms, once, to test the freeze lines and the " \
                      "stall sampler. Set it back to 0."
         test_sleep = "freeze test: the render thread sleeps %d ms now."
-        edvr_yes = "; EDVR code on the stack: yes (3 frames, innermost d3d11.dll+0x52a1)"
+        edvr_yes = "; ED-UP code on the stack: yes (3 frames, innermost d3d11.dll+0x52a1)"
         own = "d3d11.dll+0x52a1"
 
         def test_items(tail=edvr_yes, ms=1200):
@@ -9415,12 +9422,12 @@ def self_test_freezes():
         case("the test trigger's sleep is a FREEZE with its whole chain", run(gfx_flight(items=test_items(), ms=1200.0, gpu=((44415, 1190.4),)),
                                                                               rt_flight(cycles=t_cycles)), 0, "PASS",
              "freeze test: this freeze holds the deliberate sleep of 1200 ms (advanced.freeze_test_ms), logged at 23:24:18.594",
-             "  PASS  FREEZE TEST: %s, with its LONG FRAME line, a runtime cycle of 1200.0 ms, 3 stall sample(s) naming %s, EDVR code on the stack in 3 of them" % (t_head, own),
-             "samples by owner module (3 sample line(s), 3 inside a freeze, 0 outside any): d3d11.dll 3", "EDVR code on the stack: 3 of 3 sample(s); EDVR's own code was in the freeze:",
+             "  PASS  FREEZE TEST: %s, with its LONG FRAME line, a runtime cycle of 1200.0 ms, 3 stall sample(s) naming %s, ED-UP code on the stack in 3 of them" % (t_head, own),
+             "samples by owner module (3 sample line(s), 3 inside a freeze, 0 outside any): d3d11.dll 3", "ED-UP code on the stack: 3 of 3 sample(s); ED-UP's own code was in the freeze:",
              absent=no_stop_warn + ("UNPARSED",))
-        case("a test sleep whose samples show no EDVR code on the stack is a WARN", run(gfx_flight(items=test_items(tail="; EDVR code on the stack: no"), ms=1200.0),
+        case("a test sleep whose samples show no ED-UP code on the stack is a WARN", run(gfx_flight(items=test_items(tail="; ED-UP code on the stack: no"), ms=1200.0),
                                                                                          rt_flight(cycles=t_cycles)), 0, "WARN",
-             "  WARN  FREEZE TEST: %s, but the chain lacks EDVR code on the stack in any sample (the sleep is inside EDVR's own DLL)" % t_head)
+             "  WARN  FREEZE TEST: %s, but the chain lacks ED-UP code on the stack in any sample (the sleep is inside ED-UP's own DLL)" % t_head)
         case("a test sleep with no runtime cycle of its length is a WARN", run(gfx_flight(items=test_items(), ms=1200.0), rt_flight(cycles=[(END, 44415, 800.0, {})])), 0, "WARN",
              "  WARN  FREEZE TEST: %s, but the chain lacks a runtime cycle of about that length" % t_head)
         case("a test sleep whose freeze has no LONG FRAME line and no stall samples lacks both", run(gfx_flight(items=test_items()[:2], ms=1200.0, long=False),
@@ -9604,7 +9611,7 @@ def self_test_slow_regime():
 
     def long_frame(ms, seq, frame, period=13.9):
         return ("monitor: LONG FRAME -- %.1f ms between Presents (runtime predicted period %.1f ms), no WaitGetPoses, CPU busy, compositor, reprojection, or door samples; "
-                "game creations: 0 textures, 0 buffers, 0 shaders (0.0 MB); EDVR events: none. This is frame %d; the flip timeline is not armed, so there are no table "
+                "game creations: 0 textures, 0 buffers, 0 shaders (0.0 MB); ED-UP events: none. This is frame %d; the flip timeline is not armed, so there are no table "
                 "changes to order against it. runtime sequence %d, game work 4.92 ms." % (ms, period, frame, seq))
 
     def freeze(ms, frame, seq, n):
@@ -9702,7 +9709,7 @@ def self_test_slow_regime():
         if summary is None:
             summary = {"vendor_end_frame": "held by the vendor runtime's xrEndFrame: %.1f ms of every %.1f ms frame (%.0f%%)" % (end_ms, frame_ms, 100 * share),
                        "game": "held by the game's own frame: %.1f ms of every %.1f ms frame (%.0f%%)" % (game_ms, frame_ms, 100 * share),
-                       "edvr_copy": "held by EDVR's copy of the eyes: %.1f ms of every %.1f ms frame (%.0f%%)" % (copy_ms, frame_ms, 100 * share),
+                       "edvr_copy": "held by ED-UP's copy of the eyes: %.1f ms of every %.1f ms frame (%.0f%%)" % (copy_ms, frame_ms, 100 * share),
                        "none": "no single owner; the largest is the game's own frame at 31%% of a %.1f ms frame" % frame_ms,
                        "no_frames": "held by nothing: no frame reached xrEndFrame in this window"}[owner]
         ctx = "context=%s,loading_frames=%d,empty_frames=%d," % (context, loading, empty) if with_context else ""
@@ -9911,12 +9918,12 @@ def self_test_slow_regime():
         n1 = run(native_flight(), "--expect-build", VERSION)
         case("a new-build flight with a regime held by the vendor's xrEndFrame", n1, 4, "SLOW",
              "SLOW REGIME (1 found: the frame rate under 40% of the display's for 5 s or more; a state the session was in, not one frame; SLOW is set only by a regime "
-             "the vendor runtime or EDVR holds, a load the game's frame holds is INFO, a slow stretch of its scenes or no named owner a WARN):",
+             "the vendor runtime or ED-UP holds, a load the game's frame holds is INFO, a slow stretch of its scenes or no named owner a WARN):",
              "  #1  11:14:38.100 to 11:15:35.200 local  (57.1 s, ended: recovered)  [SLOW] the build's own detector",
              "rate: 9.97 fps against the display's 72.00 Hz (13.8% of it; a regime is under 40%), frames of 100.3 ms",
              "owner: held by the vendor runtime's xrEndFrame: 83.1 ms of every 100.3 ms frame (83%)",
              "context: scene (0 loading frame(s) and 0 end(s) with no layers of 567 frames)",
-             "a frame went (mean ms over the whole regime): xrEndFrame 83.10 (longest 84.74), pose wait 0.00, swapchain calls 0.04, EDVR copy 0.40, EDVR work 0.30, the game 16.16",
+             "a frame went (mean ms over the whole regime): xrEndFrame 83.10 (longest 84.74), pose wait 0.00, swapchain calls 0.04, ED-UP copy 0.40, ED-UP work 0.30, the game 16.16",
              "graphics memory at the SLOW line (11:14:43.100): local 7421 of 10863 MB (68.3%), non-local 316 of 16311 MB (1.9%)",
              "lines: SLOW 11:14:43.100; still_slow 11:15:13.100; end 11:15:37.200",
              "vendor events within 10 s of it (1): 11:14:39.100 session_state_changed FOCUSED -> VISIBLE (read 1.250 ms after the runtime stamped it)",
@@ -9944,10 +9951,10 @@ def self_test_slow_regime():
              absent=never_pass + ("ended: recovered",))
         case("no still_slow line: the regime's own end line carries the whole of it", run(native_flight(still=False)), 4, "SLOW", "lines: SLOW 11:14:43.100; end 11:15:37.200")
         # ---- who holds it decides whether it is a SLOW: the vendor runtime and EDVR set it, the game's own frame and no named owner do not ----
-        for owner, sentence in (("edvr_copy", "held by EDVR's copy of the eyes"),
-                                ("edvr_work", "held by EDVR's own work in the runtime"), ("vendor_wait_frame", "held by the vendor runtime's xrWaitFrame and xrBeginFrame (the pose wait)"),
+        for owner, sentence in (("edvr_copy", "held by ED-UP's copy of the eyes"),
+                                ("edvr_work", "held by ED-UP's own work in the runtime"), ("vendor_wait_frame", "held by the vendor runtime's xrWaitFrame and xrBeginFrame (the pose wait)"),
                                 ("vendor_swapchain", "held by the vendor runtime's swapchain calls (xrAcquire, xrWait, xrReleaseSwapchainImage)")):
-            case("a regime EDVR's or the vendor's own calls hold is a SLOW: %s" % owner,
+            case("a regime ED-UP's or the vendor's own calls hold is a SLOW: %s" % owner,
                  run(native_flight(owner=owner, share=0.60, episodes=False, summary="%s: 60.0 ms of every 100.3 ms frame (60%%)" % sentence)), 4, "SLOW",
                  "  #1  11:14:38.100 to 11:15:35.200 local  (57.1 s, ended: recovered)  [SLOW] the build's own detector", "  SLOW  SLOW REGIME: 11:14:38.100 to 11:15:35.200 local (57.1 s)",
                  "%s: 60.0 ms of every 100.3 ms frame (60%%)" % sentence, absent=never_pass + ("not a SLOW",))
@@ -10112,7 +10119,7 @@ def self_test_slow_regime():
              rx(r"^      owner: held by the vendor runtime's xrEndFrame: 82\.7 ms of every 100\.[0-9] ms frame \(82%\)$"),
              "(p50 of each phase in native_submit_phases window 50: sequences 96730-96985, ended 11:15:16.800; 256 of its 256 frames are inside the run): xrEndFrame 82.7 ms = 6.0 display "
              "periods of 13.889 ms",
-             "GPU clock: native_producer_gpu window 50 (ended 11:15:20.100): EDVR's copy of the eyes took p95 75.6 ms, max 79.4 ms on the GPU; p95 0.04 ms in window 48, before it",
+             "GPU clock: native_producer_gpu window 50 (ended 11:15:20.100): ED-UP's copy of the eyes took p95 75.6 ms, max 79.4 ms on the GPU; p95 0.04 ms in window 48, before it",
              "evidence: 12 LONG FRAME line(s)", "native_long_cycle line(s)", "1 FREEZE line(s)", "3 vScreen totals window(s) under 40% of the display's rate (26, 10, 10 fps)",
              rx(r"^      frame rate from: runtime sequence 96600 to 97167 over 57\.1 s = 9\.9[0-9] fps; graphics frames 102432 to 102999 over 57\.1 s = 9\.9[0-9] fps$"),
              "  SLOW  SLOW REGIME: 11:14:38.100 to 11:15:35.238 local (57.1 s), 9.9", "(reconstructed from the older lines)",
@@ -10347,14 +10354,14 @@ def print_switches(text):
     such line (a build from before the profile lines, or a log that never reached its launch)."""
     rows = switch_rows(switch_events(text))
     if not rows:
-        print("[edvr] no launch, mode watch or profile switch line in this log: a build from before the profile lines, or a log that "
+        print("[edup] no launch, mode watch or profile switch line in this log: a build from before the profile lines, or a log that "
               "never reached the launch.")
         return 3
 
     def ms(value):
         return "-" if value is None else "%d" % value
 
-    print("[edvr] switches: %d line(s), in log order; t= is the watch's own clock in ms" % len(rows))
+    print("[edup] switches: %d line(s), in log order; t= is the watch's own clock in ms" % len(rows))
     print("       %-12s %-10s %9s %9s  %s" % ("clock", "t=", "+prev ms", "+hint ms", "event"))
     for row in rows:
         print("       %-12s %-10s %9s %9s  %s" % (row["clock"] or "-", "-" if row["t"] is None else "t=%d" % row["t"],
@@ -10365,7 +10372,7 @@ def print_switches(text):
     writes = [r for r in rows if r["kind"] == "write"]
     posts = [i for i, r in enumerate(rows) if r["kind"] in ("read", "live") and r.get("post")]
     switches = [r for r in rows if r["kind"] == "switch"]
-    print("[edvr] summary:")
+    print("[edup] summary:")
     print("       hints: %d (%s)" % (len(hints), ", ".join("%s %d" % kv for kv in kinds)))
     print("       writes: %d" % len(writes))
     print("       posts: %d" % len(posts))
@@ -10551,12 +10558,12 @@ def print_phase_failure(text):
     try:
         result = parse_phase_failure(text)
     except (ValueError, KeyError, IndexError) as exc:
-        print("[edvr] phase failure receipt INCOMPLETE: %s" % exc);return 1
+        print("[edup] phase failure receipt INCOMPLETE: %s" % exc);return 1
     if result["state"] == "absent":
-        print("[edvr] phase failure receipt absent (never called, not armed, or awaiting failure):")
+        print("[edup] phase failure receipt absent (never called, not armed, or awaiting failure):")
         for line in result["status"]:print(line)
         return 3
-    print("[edvr] phase failure receipt VERIFIED: transport-complete=1 cohort-pair=%d result=%s; no GPU execution or unique phase-cause claim" % (result["matched"], result["complete"]["result"]))
+    print("[edup] phase failure receipt VERIFIED: transport-complete=1 cohort-pair=%d result=%s; no GPU execution or unique phase-cause claim" % (result["matched"], result["complete"]["result"]))
     import struct
     for role, sample in result["samples"].items():
         for kind in ("sample", "phase", "fit", "lineage"):
@@ -11422,7 +11429,7 @@ def _hj_f119_containment(rows, ctx):
         "%.1f cm at %s" % (min(c1s)[0], _hclock(min(c1s)[1])) if c1s else "none", "%.1f cm at %s" % (min(c8s)[0], _hclock(min(c8s)[1])) if c8s else "none",
         "%.1f cm at %s" % (min(c32s)[0], _hclock(min(c32s)[1])) if c32s else "none", cframes, "-" if cweakest is None else str(cweakest), cfar)
     text = ("%d s on foot, %d head samples; head offset by class (cm, horizontal): %s; normal play (%s): p95 <= %s cm, p99.5 <= %s cm; the rest point moved %d time(s) on foot; "
-            "EDVR's own eye offsets (kept out of the head offset): horizontal max %.1f cm, up %+.1f..%+.1f cm; %s; baseline (head offset under 3 cm, %d frames): cells within 20 "
+            "ED-UP's own eye offsets (kept out of the head offset): horizontal max %.1f cm, up %+.1f..%+.1f cm; %s; baseline (head offset under 3 cm, %d frames): cells within 20 "
             "cm max %d (with the body %d); %s; the commander's collision radius: %s%s" % (
                 _hsecs(sec), sampled, "; ".join(cls_text[:8]) + ("; +%d more classes" % (len(cls_text) - 8) if len(cls_text) > 8 else ""), basis,
                 "%.0f" % p95 if p95 is not None else "-", "%.0f" % p995 if p995 is not None else "-", moves, hmax, upmin, upmax, depth_text, base_frames, base_max, base_body,
@@ -14196,9 +14203,9 @@ def _hj_f142_outfit(rows, ctx):
         lastfp = collections.OrderedDict()
         for x in fppart:
             lastfp[x["name"]] = x
-        zero = [n for n, x in lastfp.items() if x["list"].startswith("in EDVR's list, zeroed")]
-        open_ = [n for n, x in lastfp.items() if x["list"].startswith("not in EDVR's list") and any(int(x["m%d" % k], 16) for k in range(4))]
-        ctext += ("; " if ctext else "") + "first-person census: %d change(s) written (%s); at the last read EDVR zeroed %s; parts with an instance and a mask bit set that EDVR leaves: %s" % (
+        zero = [n for n, x in lastfp.items() if x["list"].startswith(("in ED-UP's list, zeroed", "in EDVR's list, zeroed"))]
+        open_ = [n for n, x in lastfp.items() if x["list"].startswith(("not in ED-UP's list", "not in EDVR's list")) and any(int(x["m%d" % k], 16) for k in range(4))]
+        ctext += ("; " if ctext else "") + "first-person census: %d change(s) written (%s); at the last read ED-UP zeroed %s; parts with an instance and a mask bit set that ED-UP leaves: %s" % (
             len(fpcensus), "; ".join(x["what"] for x in fpcensus[:3]) or "none", ", ".join(zero) or "none", ", ".join(open_) or "none")
     if not sec:
         return ("IDLE", "no window line (native on foot never ran the full outfit, or the window was not written)" + ("; " + ctext if ctext else ""))
@@ -15325,7 +15332,7 @@ def _hj_f175_view_roll(rows, ctx):
         if secs >= H175_FLAG_SECONDS and rms > H175_FLAG_RMS:
             where = ("with the head still" if srms > H175_FLAG_RMS and trms <= H175_FLAG_RMS else "with the head turning" if trms > H175_FLAG_RMS and srms <= H175_FLAG_RMS else
                      "with the head still and turning" if srms > H175_FLAG_RMS and trms > H175_FLAG_RMS else "in the frames between still and turning")
-            hint = ("the slope %+.2f against aim pitch x yaw lead is near +-1: EDVR's cancel adds the roll" % slope if abs(slope) >= 0.5 and pairs >= 30 else
+            hint = ("the slope %+.2f against aim pitch x yaw lead is near +-1: ED-UP's cancel adds the roll" % slope if abs(slope) >= 0.5 and pairs >= 30 else
                     "the head was still: the game's own camera rolls" if srms > H175_FLAG_RMS and sn >= 30 else "the slope does not follow aim pitch x yaw lead")
             flags.append("the view rolls against the headset in %s: roll error rms %.2f deg over %d s of frames, %s (%s)" % (mode, rms, secs, where, hint))
     if not parts:
@@ -17686,7 +17693,7 @@ HEALTH_RULES = (
                    r"depth cm: (?P<depth>.*?); skipped (?P<skipped>.*?); contact cm 1/8/32 (?P<c1>[\d.]+|none)/(?P<c8>[\d.]+|none)/(?P<c32>[\d.]+|none) frames/weakest/far (?P<cf>\d+)/(?P<cw>\d+)/(?P<cfar>\d+); "
                    r"baseline frames/world/body (?P<bframes>\d+)/(?P<bcells>\d+)/(?P<bbody>\d+); cost [\d.]+ us/frame; depth s L/R/any (?P<dl>\d+)/(?P<dr>\d+)/(?P<da>\d+) of \d+; class s (?P<cs>\d+); window (?P<wid>\d+); epoch (?P<epoch>\d+); (?P<context>steady|mixed rest)$"),
         ("sec", r"head containment \(F119\) 1 s: frames (?P<frames>\d+) \(no pose (?P<nopose>\d+), over limit (?P<over>\d+)\); rest point: generation (?P<gen>\d+), "
-                r"(?P<age>[\d.]+) s old, recentres (?P<rec>\d+); head offset cm: (?P<offs>.*?); EDVR eye offsets cm: h max (?P<hmax>[\d.]+), "
+                r"(?P<age>[\d.]+) s old, recentres (?P<rec>\d+); head offset cm: (?P<offs>.*?); (?:EDVR|ED-UP) eye offsets cm: h max (?P<hmax>[\d.]+), "
                 r"up (?P<upmin>[+-][\d.]+)\.\.(?P<upmax>[+-][\d.]+) \[ADS lock\+sight (?P<lock>[\d.]+), weapon eye (?P<weapon>[\d.]+), view (?P<view>[\d.]+) horizontal; "
                 r"neck (?P<neck>[+-][\d.]+), hold (?P<hold>[+-][\d.]+) up\]; depth cm \([^)]*\): (?P<depth>.*?); skipped (?P<skipped>.*?); contact at the near plane, "
                 r"smallest head offset: 1 cell (?P<c1>[\d.]+|none), 8 cells (?P<c8>[\d.]+|none), 32 cells (?P<c32>[\d.]+|none); contact frames \(32 cells or more\) (?P<cf>\d+), "
@@ -18114,10 +18121,10 @@ HEALTH_RULES = (
                 r"settled (?P<rsettled>\d+), running (?P<rrunning>\d+), none (?P<rnone>\d+))?"
                 r"(?:; reference detail \(F171; the calls that had one (?P<rdn>\d+)\): last source (?P<rsrc>\w+), age (?P<rage>%s) s, target (?P<rtgt>%s) cm, G (?P<rg>%s) cm, "
                 r"G now (?P<rgn>%s) cm; target published (?P<rpub>%s) cm in (?P<rpubn>\d+) calls)?"
-                r"; EDVR carried up (?P<up>%s) forward (?P<fwd>%s) cm "
+                r"; (?:EDVR|ED-UP) carried up (?P<up>%s) forward (?P<fwd>%s) cm "
                 r"\(the raise, F137\); the view over the neck (?P<view>%s) cm; INSIDE (?P<inside>\d+) of (?P<insideof>\d+); the settle refused for the aim's pitch "
                 r"(?P<refused>\d+) calls(?: \(look to aim's gate (?P<lta>\d+)\))?; returned to the stance's raise (?P<returned>\d+) times \(refused (?P<retrefused>\d+), not needed (?P<notneeded>\d+)\)" % ((_HN,) * 17)),
-        ("bins", r"native on foot pitched view \(F138\) 10 s bins \(per 10 deg of aim pitch: calls, the camera's sink, EDVR carried up, forward, the head's own height since "
+        ("bins", r"native on foot pitched view \(F138\) 10 s bins \(per 10 deg of aim pitch: calls, the camera's sink, (?:EDVR|ED-UP) carried up, forward, the head's own height since "
                  r"the stance; cm\): (?P<mode>mouse look|look to aim), item (?P<item>.+?): (?=\[)(?P<body>.+)$"),
     ), _hj_f138_pitched),
     _hrule("ADS sight offset (F139)", ("F139",), ("ADS sight offset (F139)", "ADS sight height (F139", "ADS sight right (F139"), (
@@ -18187,11 +18194,11 @@ HEALTH_RULES = (
                                                            "native on foot full outfit (F144)", "native on foot first-person census (F144)", "native on foot first-person part (F144)"), (
         ("gear", r"native on foot full outfit \(F144\): (?P<what>Gear_Back .+)$"),
         ("fpcensus", r"native on foot first-person census \(F144\): change (?P<n>\d+) of the local first-person AMC 0x(?P<amc>[0-9A-Fa-f]+): (?P<parts>\d+) of (?P<of>\d+) parts have "
-                     r"instances, EDVR's list covers (?P<inlist>\d+) of them and the zero changed (?P<zeroed>\d+) \(a mask bit was set\); (?P<what>first read|changed: .+?); "
+                     r"instances, (?:EDVR|ED-UP)'s list covers (?P<inlist>\d+) of them and the zero changed (?P<zeroed>\d+) \(a mask bit was set\); (?P<what>first read|changed: .+?); "
                      r"(?P<list>every part with an instance follows|only the parts that changed follow)$"),
         ("fppart", r"native on foot first-person part \(F144\): (?P<name>\w+) instances (?P<inst>[0-3,]+) state (?P<state>-?\d+) \((?P<cls>[^)]*)\) flags 0x(?P<flags>[0-9A-F]{2}) masks "
-                   r"before EDVR's zero 0x(?P<m0>[0-9A-F]+),0x(?P<m1>[0-9A-F]+),0x(?P<m2>[0-9A-F]+),0x(?P<m3>[0-9A-F]+); (?P<list>in EDVR's list, zeroed \(a mask bit was set\)|in "
-                   r"EDVR's list, mask already 0|not in EDVR's list: left as the game draws it)(?P<chg> \[changed\])?$"),
+                   r"before (?:EDVR|ED-UP)'s zero 0x(?P<m0>[0-9A-F]+),0x(?P<m1>[0-9A-F]+),0x(?P<m2>[0-9A-F]+),0x(?P<m3>[0-9A-F]+); (?P<list>in (?:EDVR|ED-UP)'s list, zeroed \(a mask bit was set\)|in "
+                   r"(?:EDVR|ED-UP)'s list, mask already 0|not in (?:EDVR|ED-UP)'s list: left as the game draws it)(?P<chg> \[changed\])?$"),
         ("_", r"native on foot first-person census \(F144\): later changes are counted, not written"),
         # F146: the switch's own line is gone; a log from before has it (read and ignored)
         ("_", r"native on foot full outfit \(F142, TEMPORARY\): fix\.native_on_foot_body_full_outfit is (?:on|off) -- "),
@@ -18826,7 +18833,7 @@ def health_runtime_text(gfx_path, native_dirs, runtime_file):
     if runtime_file:
         rt_path = os.path.abspath(runtime_file)
         if not os.path.isfile(rt_path):
-            print("[edvr] no such runtime log: %s" % rt_path)
+            print("[edup] no such runtime log: %s" % rt_path)
             return None, 1
     else:
         rt_path, _ = pair_runtime_log(gfx_path, native_dirs)
@@ -18863,7 +18870,7 @@ def health_report(scan, window="", rules=None):
     """(lines, exit code) of the --health report for a health_scan result. rules: as health_verdicts'."""
     verdicts, absent, unjudged = health_verdicts(scan, rules)
     census = scan["census"]
-    lines = ["[edvr] health%s: %d build-tagged lines, %d tags, %s to %s" % (window, scan["tagged"], len(census), scan["first"] or "-", scan["last"] or "-")]
+    lines = ["[edup] health%s: %d build-tagged lines, %d tags, %s to %s" % (window, scan["tagged"], len(census), scan["first"] or "-", scan["last"] or "-")]
     for rule, status, detail in verdicts:
         lines.append("  %-13s  %-26s %s" % (status, rule.name, detail))
     if absent:
@@ -18886,7 +18893,7 @@ def health_report(scan, window="", rules=None):
     bad = [rule.name for rule, status, _ in verdicts if status == "NEVER APPLIED"]
     drift = [rule.name for rule, status, _ in verdicts if status == "UNPARSED"]
     counts = collections.Counter(status for _, status, _ in verdicts)
-    lines.append("[edvr] health: %s%s%s; exit %d" % (
+    lines.append("[edup] health: %s%s%s; exit %d" % (
         ", ".join("%d %s" % (counts[s], s) for s in ("OK", "PARTIAL", "NEVER APPLIED", "OPEN SIGHT", "IDLE", "UNPARSED") if counts[s]) or "no rule had a line",
         "; %d not present" % len(absent) if absent else "", "; %d not judged (detail log off)" % len(unjudged) if unjudged else "",
         3 if bad else 4 if drift else 0))
@@ -18899,7 +18906,7 @@ def print_health(text, args, runtime_text=None):
         since = parse_health_time(args.since) if args.since else None
         until = parse_health_time(args.until, end=True) if args.until else None
     except ValueError as e:
-        print("[edvr] bad --since/--until time %s (use HH:MM or HH:MM:SS)" % e)
+        print("[edup] bad --since/--until time %s (use HH:MM or HH:MM:SS)" % e)
         return 1
     scan = health_scan(text, since, until)
     if runtime_text:
@@ -18940,7 +18947,7 @@ def _perf_window_of(line):
 #   marker fix (F87c) eye E: ...; Unmap copy C copies, B bytes, M ms; ...        native_on_foot.cpp, per eye per window (build 2; build 3 writes "requested B bytes" and no ms)
 #   marker fix (F87c) Unmap copy: U Unmaps, requested R bytes, copied C bytes in N ranges (J windows joined), whole stream W bytes, faults F, M ms; over S s        build 3
 PERF_MASK_RE = re.compile(r"draw mask: \d+-frame window ending (?P<end>\d+); (?P<draws>\d+) draws through the full path; calls skipped by the vertex shader's may-want byte: (?P<rest>.*)\.$")
-PERF_QUERY_RE = re.compile(r"gpu timing queries: \d+-frame window ending (?P<end>\d+); (?P<per>[\d.]+) EDVR timing-query Ends a frame over \d+ frames \((?P<all>\d+) in all\); by owner a frame: (?P<rest>.*)\.$")
+PERF_QUERY_RE = re.compile(r"gpu timing queries: \d+-frame window ending (?P<end>\d+); (?P<per>[\d.]+) (?:EDVR|ED-UP) timing-query Ends a frame over \d+ frames \((?P<all>\d+) in all\); by owner a frame: (?P<rest>.*)\.$")
 PERF_GATE_RE = re.compile(r"draw gate holders: (?P<n>\d+) of (?P<of>\d+) terms hold the gate open: (?P<names>.*)\.$")
 PERF_COPY_RE = re.compile(r"marker fix \(F87c\) eye (?P<eye>\d): .*?Unmap copy (?P<copies>\d+) copies, (?P<bytes>\d+) bytes, (?P<ms>[\d.]+) ms")
 PERF_MERGED_RE = re.compile(r"marker fix \(F87c\) Unmap copy: (?P<unmaps>\d+) Unmaps, requested (?P<req>\d+) bytes, copied (?P<copied>\d+) bytes in (?P<ranges>\d+) ranges "
@@ -19036,7 +19043,7 @@ def print_perf_windows(text, gfx_path=None, rt_text=None, rt_path=None, since=No
 
     gscan, _, _ = scan_flight(gfx_path, text, rt_path, rt_text, gfx_on_line=on_gfx, rt_on_line=on_rt if rt_text is not None else None)
     if not wins:
-        print("[edvr] no `draw hook CPU:` window in this log: a log shorter than 1800 frames, a build without the line, or not the graphics log (this reads --tag gfx).")
+        print("[edup] no `draw hook CPU:` window in this log: a log shorter than 1800 frames, a build without the line, or not the graphics log (this reads --tag gfx).")
         return 1
     prev = gscan["first"]
     for w in wins:   # a window runs from the previous one's closing stamp (the first, from the log's first stamped line) to its own
@@ -19056,7 +19063,7 @@ def print_perf_windows(text, gfx_path=None, rt_text=None, rt_path=None, since=No
 
     shown = [w for w in wins if keep(w)]
     if not shown:
-        print("[edvr] no `draw hook CPU:` window between %s and %s in this log (%d window(s) outside)." % (
+        print("[edup] no `draw hook CPU:` window between %s and %s in this log (%d window(s) outside)." % (
             "%02d:%02d:%02d" % (since // 3600, since % 3600 // 60, since % 60) if since is not None else "start",
             "%02d:%02d:%02d" % (until // 3600, until % 3600 // 60, until % 60) if until is not None else "end", len(wins)))
         return 1
@@ -19108,13 +19115,13 @@ def print_perf_windows(text, gfx_path=None, rt_text=None, rt_path=None, since=No
     else:
         q = " (%d with runtime data)" % len(r1s)
         tail = "%s; %s" % (_perf_stat("R1", r1s, "%.2f", q), _perf_stat("cycle", cycles, "%.2f", q))
-    print("[edvr] %d window(s). %s; %s" % (len(shown), _perf_stat("hook", hooks, "%.3f"), tail))
+    print("[edup] %d window(s). %s; %s" % (len(shown), _perf_stat("hook", hooks, "%.3f"), tail))
     return 0
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="Locate and read EDVR flight logs.")
+        description="Locate and read ED-UP flight logs.")
     ap.add_argument("--target", default="steam",
                     help="steam, frontier, or a path to the game directory")
     ap.add_argument("--dir", default=None,
@@ -19242,13 +19249,13 @@ def main(argv=None):
                          "LONG FRAME, native_long_cycle, FREEZE and vScreen totals lines), "
                          "END-FRAME EPISODES, VENDOR EVENTS, VRAM and SLOW TEST "
                          "(advanced.slow_test_ms). A log that holds a slow regime the vendor "
-                         "runtime, EDVR's copy or EDVR's own work holds gets a SLOW verdict, never "
+                         "runtime, ED-UP's copy or ED-UP's own work holds gets a SLOW verdict, never "
                          "PASS or WARN; one the game's own frame holds is INFO (a load) or WARN "
                          "(its scenes) and never sets SLOW. Pairs the runtime log like --tally "
                          "periodic (--runtime-file names one). Exit 0 for PASS or WARN, 1 for "
                          "STOP, 2 for a wrong build, 3 when the log holds none of the freeze "
                          "lines (a build from before the freeze logging), 4 for a slow regime "
-                         "the vendor runtime or EDVR holds (and no STOP)")
+                         "the vendor runtime or ED-UP holds (and no STOP)")
     ap.add_argument("--switches", action="store_true",
                     help="report the launch's profile decision, the 3D-mode watch "
                          "(hints, writes, reads, posts, openvr_api.dll loads) and the "
@@ -19305,32 +19312,32 @@ def main(argv=None):
 
     if args.tally == "periodic":
         if not args.file and args.tag.lower() != "gfx":
-            print("[edvr] --tally periodic reads the graphics log (--tag gfx) "
+            print("[edup] --tally periodic reads the graphics log (--tag gfx) "
                   "and pairs its runtime log itself; drop --tag %s." % args.tag)
             return 1
         if args.window_ms < 0:
-            print("[edvr] --window-ms cannot be negative.")
+            print("[edup] --window-ms cannot be negative.")
             return 1
         if args.frame is not None:
-            print("[edvr] --frame belongs to --tally vh; ignored here.")
+            print("[edup] --frame belongs to --tally vh; ignored here.")
 
     if args.freezes and not args.file and args.tag.lower() != "gfx":
-        print("[edvr] --freezes reads the graphics log (--tag gfx) and pairs "
+        print("[edup] --freezes reads the graphics log (--tag gfx) and pairs "
               "its runtime log itself; drop --tag %s." % args.tag)
         return 1
 
     if (args.since or args.until) and not (args.health or args.perf_windows):
-        print("[edvr] --since and --until belong to --health and --perf-windows.")
+        print("[edup] --since and --until belong to --health and --perf-windows.")
         return 1
     if args.health_all and not args.health:
-        print("[edvr] --health-all belongs to --health.")
+        print("[edup] --health-all belongs to --health.")
         return 1
 
     native_dirs = None
     if args.file:
         path = os.path.abspath(args.file)
         if not os.path.isfile(path):
-            print("[edvr] no such log: %s" % path)
+            print("[edup] no such log: %s" % path)
             return 1
         logs = [("", "", path)]
         native_dirs = [os.path.dirname(path)]
@@ -19347,39 +19354,39 @@ def main(argv=None):
             logs.extend(find_logs(directory, None if args.tag == "all" else args.tag))
         logs.sort(reverse=True)
         if not logs:
-            print("[edvr] no edvr_%s_*.log in %s"
+            print("[edup] no edvr_%s_*.log in %s"
                   % (args.tag, ", ".join(directories)))
             return 1
         if args.list:
-            print("[edvr] %d log(s) in %s:" % (len(logs), ", ".join(directories)))
+            print("[edup] %d log(s) in %s:" % (len(logs), ", ".join(directories)))
             for stamp, tag, p in logs:
                 tail = log_session.describe(p)
                 print("       %-4s %s  %s%s"
                       % (tag, stamp, os.path.basename(p), ("  [" + tail + "]") if tail else ""))
             return 0
         if args.nth >= len(logs):
-            print("[edvr] only %d log(s); --nth %d is past the end"
+            print("[edup] only %d log(s); --nth %d is past the end"
                   % (len(logs), args.nth))
             return 1
         logs = [logs[args.nth]]
 
     path = logs[0][2]
     text = read_log_text(path)
-    print("[edvr] %s  (%d lines, %.1f KB)"
+    print("[edup] %s  (%d lines, %.1f KB)"
           % (path, text.count("\n") + 1, len(text) / 1024.0))
     tail_note = log_session.describe(path) if LOG_RE.match(os.path.basename(path)) else ""
     if tail_note:
-        print("[edvr] read as one session with its tail: %s" % tail_note)
+        print("[edup] read as one session with its tail: %s" % tail_note)
 
     line, ver, stamp = version_line(text)
     if line:
-        print("[edvr] %s" % line)
+        print("[edup] %s" % line)
     else:
-        print("[edvr] WARNING: this log has no version line -- it may be "
-              "truncated, or not an EDVR log.")
+        print("[edup] WARNING: this log has no version line -- it may be "
+              "truncated, or not an ED-UP log.")
     if args.version:
         for launch in launch_lines(text):
-            print("[edvr] %s" % launch)
+            print("[edup] %s" % launch)
 
     want = None
     if args.expect_build:
@@ -19387,9 +19394,9 @@ def main(argv=None):
                                 os.path.abspath(args.root) if args.root
                                 else repo_root())
         if version_matches(ver, want, args.root):
-            print("[edvr] build matches: %s" % want)
+            print("[edup] build matches: %s" % want)
         else:
-            print("[edvr] BUILD MISMATCH\n"
+            print("[edup] BUILD MISMATCH\n"
                   "       log says   %s\n"
                   "       expected   %s\n"
                   "       This flight is not evidence about that build. "
@@ -19424,18 +19431,18 @@ def main(argv=None):
             since = parse_health_time(args.since) if args.since else None
             until = parse_health_time(args.until, end=True) if args.until else None
         except ValueError as e:
-            print("[edvr] bad --since/--until time %s (use HH:MM or HH:MM:SS)" % e)
+            print("[edup] bad --since/--until time %s (use HH:MM or HH:MM:SS)" % e)
             return 1
         rt_why = None
         if args.runtime_file:
             rt_path = os.path.abspath(args.runtime_file)
             if not os.path.isfile(rt_path):
-                print("[edvr] no such runtime log: %s" % rt_path)
+                print("[edup] no such runtime log: %s" % rt_path)
                 return 1
         else:
             rt_path, rt_why = pair_runtime_log(path, native_dirs)
         rt_text = read_log_text(rt_path) if rt_path else None
-        print("[edvr] runtime log: %s" % (rt_path if rt_path else "NONE FOUND (%s); only the draw hook figure is reported" % rt_why))
+        print("[edup] runtime log: %s" % (rt_path if rt_path else "NONE FOUND (%s); only the draw hook figure is reported" % rt_why))
         return print_perf_windows(text, path, rt_text, rt_path, since, until)
     if args.maps_sharp:
         return print_maps_sharp(text)
@@ -19467,10 +19474,10 @@ def main(argv=None):
         try:
             rx = re.compile(args.grep)
         except re.error as e:
-            print("[edvr] bad --grep pattern: %s" % e)
+            print("[edup] bad --grep pattern: %s" % e)
             return 1
         lines = [l for l in lines if rx.search(l)]
-        print("[edvr] %d line(s) match %s" % (len(lines), args.grep))
+        print("[edup] %d line(s) match %s" % (len(lines), args.grep))
     if args.tail is not None:
         lines = lines[-args.tail:]
     if args.grep or args.tail is not None:
@@ -22319,9 +22326,9 @@ def self_test_health():
               [vr175(roll=(0.5, 2.4, 5.0, 40), still=(60, 0.5, 2.5, 5.0), turning=(20, 0.5, 1.0, 2.0)), vr175(roll=(0.5, 2.4, 5.0, 40), still=(60, 0.5, 2.5, 5.0), turning=(20, 0.5, 1.0, 2.0)),
                vr175(roll=(0.5, 2.4, 5.0, 40), still=(60, 0.5, 2.5, 5.0), turning=(20, 0.5, 1.0, 2.0))], 0, [("PARTIAL", V175)],
               has=["the view rolls against the headset in look to aim: roll error rms 2.40 deg over 3 s of frames, with the head still", "the head was still: the game's own camera rolls"], lacks=["UNPARSED"])
-        check("F175 view roll: the roll grows with aim pitch x yaw lead (slope +1.0 over 90 pairs) while the head turns: flagged as EDVR's cancel adding the roll",
+        check("F175 view roll: the roll grows with aim pitch x yaw lead (slope +1.0 over 90 pairs) while the head turns: flagged as ED-UP's cancel adding the roll",
               [vr175(roll=(1.0, 2.0, 6.0, 50), still=(10, 0.1, 0.4, 0.8), turning=(70, 1.1, 2.2, 6.0), slope=(1.0, 90, 0.05)), vr175(roll=(1.0, 2.0, 6.0, 50), still=(10, 0.1, 0.4, 0.8), turning=(70, 1.1, 2.2, 6.0), slope=(1.0, 90, 0.05))], 0,
-              [("PARTIAL", V175)], has=["in look to aim: roll error rms 2.00 deg over 2 s of frames, with the head turning", "the slope +1.00 against aim pitch x yaw lead is near +-1: EDVR's cancel adds the roll"], lacks=["UNPARSED"])
+              [("PARTIAL", V175)], has=["in look to aim: roll error rms 2.00 deg over 2 s of frames, with the head turning", "the slope +1.00 against aim pitch x yaw lead is near +-1: ED-UP's cancel adds the roll"], lacks=["UNPARSED"])
         check("F175 view roll: one second of error is too little to flag", [vr175(roll=(1.0, 3.0, 8.0, 60))], 0, [("OK", V175)], lacks=["UNPARSED", "the view rolls against the headset"])
         check("F175 view roll: mouse look is its own mode, with its own expected pitch, beside look to aim",
               [vr175(), vr175(mode="mouse look", item="unarmed", roll=(0.0, 0.3, 0.9, 0), pitch=(90, 1.0, 2.0, 5.0))], 0, [("OK", V175)],
@@ -23715,20 +23722,20 @@ def self_test_health():
         def fpc144(n=1, amc=0x28A831A0DD8, parts=14, of=54, inlist=6, zeroed=5, what="first read", lst="every part with an instance follows"):
             return R("native on foot first-person census (F144): change %u", n, amc, parts, of, inlist, zeroed, what, lst)
 
-        def fpp144(name="EVASuit_Gear_Arms", inst="0", state=1, cls="every view", flags=5, masks=(0xF, 0, 0, 0), lst="in EDVR's list, zeroed (a mask bit was set)", chg=""):
+        def fpp144(name="EVASuit_Gear_Arms", inst="0", state=1, cls="every view", flags=5, masks=(0xF, 0, 0, 0), lst="in ED-UP's list, zeroed (a mask bit was set)", chg=""):
             return R("native on foot first-person part (F144): %s instances", name, inst, state, cls, flags, *masks, lst, chg)
 
         check("F144 full outfit: Gear_Back promoted for the coat", [fo_sec(), gear144()], 0, [("OK", FO142)], has=["Gear_Back promoted: outer garment (1 decision line(s))"], lacks=["UNPARSED"])
         check("F144 full outfit: Gear_Back kept for the other suit's backpack", [fo_sec(), gear144("Gear_Back kept shadows only: suit arms present"), gear144()], 0, [("OK", FO142)],
               has=["Gear_Back promoted: outer garment (2 decision line(s))"], lacks=["UNPARSED"])
-        check("F144 full outfit: the first-person census lists what EDVR zeroes and what it leaves",
-              [fpc144(), fpp144(), fpp144(name="EVASuit_Gear_UpperArmL", lst="in EDVR's list, mask already 0", masks=(0, 0, 0, 0)),
+        check("F144 full outfit: the first-person census lists what ED-UP zeroes and what it leaves",
+              [fpc144(), fpp144(), fpp144(name="EVASuit_Gear_UpperArmL", lst="in ED-UP's list, mask already 0", masks=(0, 0, 0, 0)),
                fpp144(name="EVASuit_Legs", masks=(0x3, 0, 0, 0), lst="not in EDVR's list: left as the game draws it")], 0, [("IDLE", FO142)],
-              has=["first-person census: 1 change(s) written (first read); at the last read EDVR zeroed EVASuit_Gear_Arms; parts with an instance and a mask bit set that EDVR leaves: EVASuit_Legs"],
+              has=["first-person census: 1 change(s) written (first read); at the last read ED-UP zeroed EVASuit_Gear_Arms; parts with an instance and a mask bit set that ED-UP leaves: EVASuit_Legs"],
               lacks=["UNPARSED"])
         check("F144 full outfit: a first-person change", [fpc144(), fpp144(), fpc144(n=2, what="changed: EVASuit_Gear_Arms, the zeroed set", lst="only the parts that changed follow"),
-                                                          fpp144(chg=" [changed]", masks=(0, 0, 0, 0), lst="in EDVR's list, mask already 0")], 0, [("IDLE", FO142)],
-              has=["first-person census: 2 change(s) written (first read; changed: EVASuit_Gear_Arms, the zeroed set); at the last read EDVR zeroed none"], lacks=["UNPARSED"])
+                                                          fpp144(chg=" [changed]", masks=(0, 0, 0, 0), lst="in ED-UP's list, mask already 0")], 0, [("IDLE", FO142)],
+              has=["first-person census: 2 change(s) written (first read; changed: EVASuit_Gear_Arms, the zeroed set); at the last read ED-UP zeroed none"], lacks=["UNPARSED"])
         check("F144 full outfit: a drifted first-person line is unparsed", ["native on foot first-person census (F144): something else"], 4, [("UNPARSED", FO142)])
         check("F144 full outfit: a drifted decision line is unparsed", ["native on foot full outfit (F144): something else"], 4, [("UNPARSED", FO142)])
 
@@ -24258,7 +24265,7 @@ def self_test_health():
         # F127 retired the setting and the DLL no longer prints the line, so these cases carry it as a frozen line of a build before F127 (R() renders a line
         # from the DLL's own format and would refuse): an old log still parses.
         def oldGame(n):
-            return ("reticle depth (F85c): the reticle is the game's (reticle follow = game, EDVR writes nothing to key 10): "
+            return ("reticle depth (F85c): the reticle is the game's (reticle follow = game, ED-UP writes nothing to key 10): "
                     "key 10 draws %d left as the game placed them (no hit depth, no correction)" % n)
         game = oldGame(94)
         check("F85c: reticle follow game, a weapon drawn", [game, game, eyeoff()], 0, [("IDLE", F85C)],
@@ -26375,8 +26382,41 @@ def self_test_build_identity():
     return ok
 
 
+def self_test_both_spellings():
+    """The runtime's product word is EDVR in logs written before the rename and ED-UP after it. Every regex and prefix that reads a
+    renamed line must take both, so an old flight log still parses. Returns ok."""
+    ok = True
+    W = "@W@"
+    pairs = [
+        ("REISSUE_CENSUS_RE", REISSUE_CENSUS_RE.search,
+         "[10:10:00.500] @W@ GPU census: 30 s, 1800 frames; in-frame 1.000 (hologram passes -); application render p50 -"),
+        ("GPUWS_CENSUS_RE", GPUWS_CENSUS_RE.match, "[10:10:00.500] @W@ GPU census: 30 s, 1800 frames"),
+        ("GPUWS_LINE_RE", GPUWS_LINE_RE.match, "[10:10:00.500] @W@ GPU census, the overlay's GPU time: frame work span: completed 1"),
+        ("PERF_QUERY_RE", PERF_QUERY_RE.search,
+         "gpu timing queries: 1800-frame window ending 1800; 6.500 @W@ timing-query Ends a frame over 1800 frames (11700 in all); by owner a frame: "
+         "other 0.500, screen_motion 2.000, weapon_motion 0.000, gpu_census 4.000, particle_copy 0.000, ui_depth 0.000, ui_content 0.000, ui_route 0.000."),
+        ("VRSS_RE", VRSS_RE.match,
+         "[09:30:12.100] vr supersampling: Elite draws the 3D world at 2112x2304, 75% of the 2816x3072 eye texture, and scales it up before @W@ sees it: "),
+        ("FZ_STALL_EDVR_RE", FZ_STALL_EDVR_RE.search, "; @W@ code on the stack: yes (2 frames, innermost d3d11.dll+0x1c4a3)"),
+    ]
+    for name, fn, sample in pairs:
+        for word in ("EDVR", "ED-UP"):
+            if fn(sample.replace(W, word)) is None:
+                print(name + " does not read the " + word + " spelling of a log line")
+                ok = False
+    for word in ("EDVR", "ED-UP"):
+        if not (word + " GPU census, frame gap: the time").startswith(FZ_GPU_HEADS):
+            print("FZ_GPU_HEADS does not start a frame-gap message spelled " + word)
+            ok = False
+    if FZ_STALL_EDVR_RE.search("; ED-UP code on the stack: no").group("yes") != "no":
+        print("FZ_STALL_EDVR_RE does not read the ED-UP spelling as no")
+        ok = False
+    return ok
+
+
 def self_test():
-    ok = self_test_phase_failure()
+    ok = self_test_both_spellings()
+    ok = self_test_phase_failure() and ok
     ok = self_test_build_identity() and ok
 
     for name, want in (("edvr_gfx_20260910_042313.log", "gfx"),
@@ -26504,6 +26544,21 @@ def self_test():
                 print("log_dir_for did not read log.dir from the live per-user settings copy: %r" % log_dir_for(game))
                 ok = False
             os.remove(os.path.join(game, "edvr.ini"))
+            # An install not yet migrated runs on the copy from before the rename, %LOCALAPPDATA%\EDVR\<leaf>-<store>\
+            # edvr.ini, which the runtime reads last; it is never read over the EDUP copy.
+            legacy_live = os.path.join(tmp, "local", "EDVR", os.path.basename(game) + "-steam")
+            os.makedirs(legacy_live)
+            legacy_target = os.path.join(tmp, "legacy-elsewhere")
+            with open(os.path.join(legacy_live, "edvr.ini"), "wb") as f:
+                f.write(("[log]\ndir = %s\n" % legacy_target).encode("utf-8"))
+            if log_dir_for(game) != other:
+                print("log_dir_for read the pre-rename settings copy over the EDUP one: %r" % log_dir_for(game))
+                ok = False
+            os.remove(os.path.join(live, "edup.ini"))
+            if log_dir_for(game) != legacy_target:
+                print("log_dir_for did not read log.dir from the pre-rename settings copy: %r" % log_dir_for(game))
+                ok = False
+            os.remove(os.path.join(legacy_live, "edvr.ini"))
         finally:
             if saved_local is None:
                 os.environ.pop("LOCALAPPDATA", None)
@@ -26931,10 +26986,10 @@ def self_test_log_session():
         ok = False
     # Marker texts, pinned a second time here where the CLI is (config_test pins the C++ side).
     pins = {
-        "HEAD_CUT": (log_session.HEAD_CUT, "[edvr] log head ends here at "),
-        "SEGMENT_TOP": (log_session.SEGMENT_TOP, "[edvr] tail segment "),
-        "KEPT_FROM": (log_session.KEPT_FROM, "[edvr] kept lines from tail segment "),
-        "KEPT_SPENT": (log_session.KEPT_SPENT, "[edvr] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no "
+        "HEAD_CUT": (log_session.HEAD_CUT, "[edup] log head ends here at "),
+        "SEGMENT_TOP": (log_session.SEGMENT_TOP, "[edup] tail segment "),
+        "KEPT_FROM": (log_session.KEPT_FROM, "[edup] kept lines from tail segment "),
+        "KEPT_SPENT": (log_session.KEPT_SPENT, "[edup] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no "
                                                "longer fit here); later ones are only in the tail segments still on disk."),
         "GAP": (log_session.GAP_FORMAT % 3, "[edup_log] GAP: tail segment 3 was deleted; the first line of each kind kept from it follows"),
     }
@@ -26962,17 +27017,17 @@ def self_test_log_session():
                 f.write(text.encode("utf-8"))
 
         def seg_top(stem, n, deleted=""):
-            return "[edvr] tail segment %d of %s.log.%s\r\n" % (n, stem, deleted)
+            return "[edup] tail segment %d of %s.log.%s\r\n" % (n, stem, deleted)
 
-        cut = ("[edvr] log head ends here at 256 KB (a quarter of log.max_mb = 1 MB); the log continues in %s.tail-001.log, only the newest 4 tail "
+        cut = ("[edup] log head ends here at 256 KB (a quarter of log.max_mb = 1 MB); the log continues in %s.tail-001.log, only the newest 4 tail "
                "segments are kept, and what follows below is the first line of each kind written after this point and the memory watch's lines, up "
                "to 128 KB.\r\n")
         version = "[06:05:03.100] version 0.22.0-5-gabcdef0 (build 01234567)\r\n"
         # A session whose segments 1 and 2 were deleted (3..6 are on disk), the plain name, and one in the _mmm_pid form with 4 missing.
         for stem, present in (("edvr_gfx_20261110_060503", (3, 4, 5, 6)), ("edvr_gfx_20261110_070000_321_9876", (3, 5, 6))):
             put(stem + ".log", version + "[06:05:03.200] head line\r\n" + cut % stem +
-                "[edvr] kept lines from tail segment 1\r\n[06:06:00.000] alpha #0\r\n[edvr] kept lines from tail segment 2\r\n[06:07:00.000] beta #0\r\n" +
-                "[edvr] kept lines from tail segment 4\r\n[06:09:00.000] delta #0\r\n")
+                "[edup] kept lines from tail segment 1\r\n[06:06:00.000] alpha #0\r\n[edup] kept lines from tail segment 2\r\n[06:07:00.000] beta #0\r\n" +
+                "[edup] kept lines from tail segment 4\r\n[06:09:00.000] delta #0\r\n")
             for n in present:
                 put("%s.tail-%03d.log" % (stem, n), seg_top(stem, n, "" if n < 5 else " Deleted so far: segment 1 (163840 bytes, 06:06:00.000 to 06:06:30.000).") +
                     "[06:%02d:00.000] segment %d line\r\n" % (n + 4, n))
@@ -26986,7 +27041,7 @@ def self_test_log_session():
         rc, out = run(["--dir", tmp, "--tag", "gfx", "--nth", "1", "--grep", r"alpha|beta|GAP|segment \d line"])
         want = ["[edup_log] GAP: tail segment 1 was deleted", "alpha #0", "[edup_log] GAP: tail segment 2 was deleted", "beta #0", "segment 3 line", "segment 4 line",
                 "segment 5 line", "segment 6 line"]
-        got = [l for l in out.splitlines() if not l.startswith("[edvr] ") or "[edup_log]" in l]
+        got = [l for l in out.splitlines() if not l.startswith("[edup] ") or "[edup_log]" in l]
         if rc != 0 or len(got) != len(want) or any(w not in g for w, g in zip(want, got)):
             fail("--grep on a stitched session: %r" % out)
         rc, out = run(["--dir", tmp, "--tag", "gfx", "--nth", "0", "--tail", "40"])
@@ -27176,7 +27231,7 @@ def self_test_pose():
 
         def reads(label, argv, name, gap, other_name, other_gap):
             rc, out = run_tag(argv)
-            read_line = [l for l in out.splitlines() if l.startswith("[edvr] ") and ".log" in l and "lines" in l]
+            read_line = [l for l in out.splitlines() if l.startswith("[edup] ") and ".log" in l and "lines" in l]
             if (rc != 0 or len(read_line) != 1 or name not in read_line[0] or other_name in out
                     or ("is located %+.2f ms from the drawn frame's display time" % gap) not in out
                     or ("is located %+.2f ms" % other_gap) in out):
@@ -27216,7 +27271,7 @@ def self_test_perf_windows():
     import contextlib
     import io
     win = ("[10:00:02.000] draw hook CPU: 1800-frame window ending %d; %s ms/sampled frame mean, 0.900 ms max, 30 sampled frames (one in 60); excludes forwarded game draw time, "
-           "includes EDVR reissues; zero samples means unavailable. Each sampled frame's figure is estimated from every 4th draw, scaled by 4. Temporal AA off; eye draws counted this frame 0 "
+           "includes ED-UP reissues; zero samples means unavailable. Each sampled frame's figure is estimated from every 4th draw, scaled by 4. Temporal AA off; eye draws counted this frame 0 "
            "(counted only while a draw subscriber is on).\n")
     text = win % (1800, "0.500") + win % (3600, "0.700") + win % (5400, "0.600")
     got = [(w["end"], w["start"], w["mean"], w["max"], w["samples"]) for w in perf_windows(text)]
@@ -27228,7 +27283,7 @@ def self_test_perf_windows():
     with contextlib.redirect_stdout(buf):
         rc = print_perf_windows(text)
     out = buf.getvalue()
-    for want in ("window ending 1800: 0.500 ms mean", "window ending 3600: 0.700 ms mean", "window ending 5400: 0.600 ms mean", "[edvr] 3 window(s)."):
+    for want in ("window ending 1800: 0.500 ms mean", "window ending 3600: 0.700 ms mean", "window ending 5400: 0.600 ms mean", "[edup] 3 window(s)."):
         if want not in out:
             fail("--perf-windows output lacks %r:\n%s" % (want, out))
     if rc != 0:
@@ -27240,7 +27295,7 @@ def self_test_perf_windows():
         fail("a log with no window -> rc %d:\n%s" % (rc, buf.getvalue()))
     # The frame, not just the hook clock: the runtime log's R1 (game_before_first_submit) and cycle joined by time, hook ms per eye draw, --since/--until, the summary.
     def gwin(clock, end, mean, eyes):
-        return ("[%s] draw hook CPU: 1800-frame window ending %d; %s ms/sampled frame mean, 0.900 ms max, 30 sampled frames (one in 60); excludes forwarded game draw time, includes EDVR "
+        return ("[%s] draw hook CPU: 1800-frame window ending %d; %s ms/sampled frame mean, 0.900 ms max, 30 sampled frames (one in 60); excludes forwarded game draw time, includes ED-UP "
                 "reissues; zero samples means unavailable. Each sampled frame's figure is estimated from every 4th draw, scaled by 4. Temporal AA off; eye draws counted this frame %d "
                 "(counted only while a draw subscriber is on).\n" % (clock, end, mean, eyes))
     gtext = ("[10:00:00.000] version v0.0.0 (build 00000000)\n" + gwin("10:00:02.000", 1800, "0.500", 4) + gwin("10:01:02.000", 3600, "0.700", 0) + gwin("10:02:02.000", 5400, "0.600", 0))
@@ -27267,14 +27322,14 @@ def self_test_perf_windows():
     for want in ("window ending 1800: 0.500 ms mean", "hook 0.1250 ms per eye draw (4 counted on the closing frame)", "R1 20.00 ms, cycle 30.00 ms",
                  "window ending 3600: 0.700 ms mean", "no eye-draw count", "R1 25.17 ms, cycle 35.17 ms",
                  "window ending 5400: 0.600 ms mean", "NO RUNTIME DATA",
-                 "[edvr] 3 window(s). hook ms: mean 0.600, trimmed mean 0.600; R1 ms (2 with runtime data): mean 22.59, trimmed mean n/a (fewer than 3); "
+                 "[edup] 3 window(s). hook ms: mean 0.600, trimmed mean 0.600; R1 ms (2 with runtime data): mean 22.59, trimmed mean n/a (fewer than 3); "
                  "cycle ms (2 with runtime data): mean 32.59, trimmed mean n/a (fewer than 3)"):
         if want not in out:
             fail("--perf-windows with a runtime log lacks %r:\n%s" % (want, out))
     if rc != 0:
         fail("--perf-windows with a runtime log exited %d" % rc)
     rc, out = run(since=parse_health_time("10:01:00"), until=parse_health_time("10:03:00", end=True))
-    if "window ending 1800" in out or "window ending 3600" not in out or "[edvr] 2 window(s). hook ms: mean 0.650" not in out:
+    if "window ending 1800" in out or "window ending 3600" not in out or "[edup] 2 window(s). hook ms: mean 0.650" not in out:
         fail("--since 10:01:00 should keep the last two windows:\n%s" % out)
     rc, out = run(since=parse_health_time("11:00:00"))
     if rc != 1 or "no `draw hook CPU:` window between" not in out:
@@ -27290,7 +27345,7 @@ def self_test_perf_windows():
         fail("a window with none of the build-2 lines should say each is absent:\n%s" % bare)
     mask = ("draw mask: 1800-frame window ending 1800; 14000 draws through the full path; calls skipped by the vertex shader's may-want byte: "
             "ui_family 0, screen_motion_ui 7, screen_motion 0, weapon_motion 3.")
-    qry = ("gpu timing queries: 1800-frame window ending 1800; 6.500 EDVR timing-query Ends a frame over 1800 frames (11700 in all); by owner a frame: "
+    qry = ("gpu timing queries: 1800-frame window ending 1800; 6.500 ED-UP timing-query Ends a frame over 1800 frames (11700 in all); by owner a frame: "
            "other 0.500, screen_motion 2.000, weapon_motion 0.000, gpu_census 4.000, particle_copy 0.000, ui_depth 0.000, ui_content 0.000, ui_route 0.000.")
     gate = "draw gate holders: 2 of 28 terms hold the gate open: ui_depth, footprint."
     cp0 = ("marker fix (F87c) eye 0: windows 2 (F85 1, history 1, escalated 0), named 40, outside 2 (nearest 12); Unmap copy 600 copies, 4800000 bytes, 120.500 ms; "
@@ -27338,7 +27393,7 @@ def self_test_perf_windows():
     # The formatters' own text: the fragments the parser reads are held to the sources, so a formatter that drifts fails here.
     srcdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "d3d11")
     for name, frags in (("draw_mask_line.h", ("draw mask: 1800-frame window ending %u; %u draws through the full path; calls skipped by the vertex shader's may-want byte: ",)),
-                        ("gpu_query_count.h", ("gpu timing queries: 1800-frame window ending %u; %.3f EDVR timing-query Ends a frame over %u frames (%llu in all); by owner a frame: ",
+                        ("gpu_query_count.h", ("gpu timing queries: 1800-frame window ending %u; %.3f ED-UP timing-query Ends a frame over %u frames (%llu in all); by owner a frame: ",
                                              '"ui_depth", "ui_content", "ui_route"};')),
                         ("draw_gate_holders.h", ("draw gate holders: %u of %u terms hold the gate open: ",)),
                         ("native_on_foot.cpp", ("Unmap copy %llu copies, requested %llu bytes; eye-%d first/last ring %s; over %u s",
@@ -27411,14 +27466,14 @@ def self_test_cover():
         with open(name, "wb") as f:
             f.write((head + text).encode("utf-8"))
         rc, out = run(["--dir", logs, "--tally", "cover"])
-        for want in ("[edvr] terrain cull cover: hook live at exe+0x44414E0 (PE stamp 1792704584 and image size 104906752 are build 334925's; the callee's head and the call site at exe+0x4458CBD verified)",
-                     "[edvr] first call with the frusta known: in aspect 1.0344 vfov 91.65 deg -> out aspect 1.2186 vfov 91.65 deg (widened); T=1.0293 H=1.2543",
+        for want in ("[edup] terrain cull cover: hook live at exe+0x44414E0 (PE stamp 1792704584 and image size 104906752 are build 334925's; the callee's head and the call site at exe+0x4458CBD verified)",
+                     "[edup] first call with the frusta known: in aspect 1.0344 vfov 91.65 deg -> out aspect 1.2186 vfov 91.65 deg (widened); T=1.0293 H=1.2543",
                      "clock            widened     calls   share  last call, in -> out",
                      "10:10:03           60000     60001    100%  aspect 1.0344 vfov 91.65 -> aspect 1.2186 vfov 91.65",
                      "10:20:03               0         0     n/a  aspect 1.0344 vfov 91.65 -> aspect 1.2186 vfov 91.65",
                      "10:30:03               0     60000      0%  aspect 1.0344 vfov 91.65 -> aspect 1.0344 vfov 91.65",
-                     "[edvr] 3 heartbeat(s), 60000 of 120001 calls widened (30 min).",
-                     "[edvr] How to read it: a heartbeat says the hook was live."):
+                     "[edup] 3 heartbeat(s), 60000 of 120001 calls widened (30 min).",
+                     "[edup] How to read it: a heartbeat says the hook was live."):
             if want not in out:
                 fail("--tally cover output lacks %r:\n%s" % (want, out))
         if rc != 0:
@@ -27433,7 +27488,7 @@ def self_test_cover():
         with open(name, "wb") as f:
             f.write((head + "[10:00:00.100] terrain cull cover: inert: the PE stamp 5 is not build 334925's and the signature scan of the 99 KB code section found no call site\n").encode("utf-8"))
         rc, out = run(["--dir", logs, "--tally", "cover"])
-        if rc != 0 or "[edvr] terrain cull cover: inert: the PE stamp 5 is not build 334925's and the signature scan of the 99 KB code section found no call site" not in out \
+        if rc != 0 or "[edup] terrain cull cover: inert: the PE stamp 5 is not build 334925's and the signature scan of the 99 KB code section found no call site" not in out \
                 or "no heartbeat yet" in out:
             fail("an inert log -> rc %d:\n%s" % (rc, out))
         # A covered first call is said so.
@@ -27471,7 +27526,7 @@ def self_test_reissue():
     import io
     import shutil
     hook1 = ("[10:10:03.000] draw hook CPU: 1800-frame window ending 1800; 5.900 ms/sampled frame mean, 7.000 ms max, 112 sampled frames (one in 16); excludes forwarded game draw "
-             "time, includes EDVR reissues; zero samples means unavailable. Each sampled frame's figure is estimated from every 64th draw, scaled by 64. Temporal AA on; eye draws counted "
+             "time, includes ED-UP reissues; zero samples means unavailable. Each sampled frame's figure is estimated from every 64th draw, scaled by 64. Temporal AA on; eye draws counted "
              "this frame 0 (counted only while a draw subscriber is on).")
     rei1 = ("[10:10:03.001] draw reissue CPU: 1800-frame window ending 1800; 1.250 ms/sampled frame mean, 2.000 ms max, 112 sampled frames (one in 16); 5400 re-issues in the window, "
             "380 of them on sampled frames; every re-issue of a sampled frame is timed, so nothing is scaled; excludes the forwarded game draw, inside the draw hook CPU figure. "
@@ -27519,9 +27574,9 @@ def self_test_reissue():
         with open(name, "wb") as f:
             f.write((head + text).encode("utf-8"))
         rc, out = run(["--dir", logs, "--tally", "reissue"])
-        for want in ("[edvr] draw reissue CPU, window ending 1800: 1.250 ms/sampled frame (draw hook CPU 5.900 ms); 5400 re-issues; screen_motion 0.600 ms (150), panel_curve 0.400 ms (100), crisp_hud 0.250 ms (130)",
-                     "[edvr] draw reissue CPU, window ending 3600: 0.000 ms/sampled frame (draw hook CPU 3.000 ms); 0 re-issues; no caller",
-                     "[edvr] 2 window(s)"):
+        for want in ("[edup] draw reissue CPU, window ending 1800: 1.250 ms/sampled frame (draw hook CPU 5.900 ms); 5400 re-issues; screen_motion 0.600 ms (150), panel_curve 0.400 ms (100), crisp_hud 0.250 ms (130)",
+                     "[edup] draw reissue CPU, window ending 3600: 0.000 ms/sampled frame (draw hook CPU 3.000 ms); 0 re-issues; no caller",
+                     "[edup] 2 window(s)"):
             if want not in out:
                 fail("--tally reissue output lacks %r:\n%s" % (want, out))
         if rc != 0:
@@ -27532,7 +27587,7 @@ def self_test_reissue():
         if rc != 1 or "no `draw reissue CPU:` lines in this log" not in out:
             fail("a log with no re-issue line -> rc %d:\n%s" % (rc, out))
         # The cross-check: a GPU census line that shows a re-issue section ran, against re-issue windows that count none of its callers.
-        census = ("[10:10:00.500] EDVR GPU census: 30 s, 1800 frames; EDVR ~1.000 ms/frame = door 0.000 (x) + in-frame 1.000 (hologram passes -, UI depth coverage 0.400 (1.00/frame), "
+        census = ("[10:10:00.500] ED-UP GPU census: 30 s, 1800 frames; ED-UP ~1.000 ms/frame = door 0.000 (x) + in-frame 1.000 (hologram passes -, UI depth coverage 0.400 (1.00/frame), "
                   "planet -, screen motion -, weapon motion -, engine velocity -, UI layer reissues -, world layer -, FSS reveal replay -); application render p50 -; timer floor -; spans timed 9, failed 0.\n")
         census_idle = census.replace("UI depth coverage 0.400 (1.00/frame)", "UI depth coverage -")
         for label, body, wantflag in (("census ran a ui_depth section, no ui_depth caller", head + census + hook1 + "\n" + rei1 + "\n", True),
@@ -27642,7 +27697,7 @@ def self_test_flat_upscale():
     rc, out = report(base)
     flat = re.sub(r"[ ]+", " ", out)
     for want in (
-            "[edvr] flat upscale: 1 key line(s), 5 copy-structure window(s), 1 route line(s), 2 stand-down line(s), 0 warning line(s), 0 decline line(s)",
+            "[edup] flat upscale: 1 key line(s), 5 copy-structure window(s), 1 route line(s), 2 stand-down line(s), 0 warning line(s), 0 decline line(s)",
             "key 15:12:02.151: flat hdr route auto (read at startup)",
             "route 15:12:18.913: trained-upscale R=2880x1620 E=3840x2160 D=3840x2160",
             "first admission 15:12:18.914 at frame 1919: a 2880x1620 image, scene 2880x1620 on a 3840x2160 output, route trained-upscale; the whitelist said no-known-tone-pass",
@@ -27755,7 +27810,7 @@ def self_test_flat_upscale():
     # ---- --vr-supersampling, from the header's own text ----
     header = os.path.join(os.path.dirname(here), "src", "common", "vr_supersample_notice.h")
     vscreen = os.path.join(os.path.dirname(here), "src", "d3d11", "vscreen.cpp")
-    notice_prefix = "vr supersampling: Elite draws the 3D world at %ux%u, %u%% of the %ux%u eye texture, and scales it up before EDVR sees it: "
+    notice_prefix = "vr supersampling: Elite draws the 3D world at %ux%u, %u%% of the %ux%u eye texture, and scales it up before ED-UP sees it: "
     adopt_prefix = "vScreen: the world on this rig is rendered at %ux%u and scaled into the %ux%u the headset is handed -- %u%% of the width"
     if os.path.isfile(header):
         if notice_prefix.replace("\\", "") not in read_text(header).replace("\"\n        \"", ""):
@@ -27770,8 +27825,8 @@ def self_test_flat_upscale():
     if os.path.isfile(vscreen):
         if adopt_prefix.replace("%ux%u", "%ux%u") not in read_text(vscreen).replace("\"\n                \"", ""):
             fail("src\\d3d11\\vscreen.cpp's adoption line is not the text this reader parses")
-    notice = ("[09:30:12.100] " + (notice_prefix % (2112, 2304, 75, 2816, 3072)) + "Elite's Supersampling is below 1 (an upscaler in the chain reads the same). EDVR's DLSS then upscales an "
-              "image that is already upscaled, which softens the world and the holograms. Set Elite's Supersampling to 1 and raise HMD Image Quality instead: EDVR's DLSS upscales from that. "
+    notice = ("[09:30:12.100] " + (notice_prefix % (2112, 2304, 75, 2816, 3072)) + "Elite's Supersampling is below 1 (an upscaler in the chain reads the same). ED-UP's DLSS then upscales an "
+              "image that is already upscaled, which softens the world and the holograms. Set Elite's Supersampling to 1 and raise HMD Image Quality instead: ED-UP's DLSS upscales from that. "
               "Measured from the render sizes, not read from Elite's settings file.\n")
     adopt = ("[09:30:12.098] " + (adopt_prefix % (2112, 2304, 2816, 3072, 75)) + ", which is what supersampling away from 1.0 and every upscaler in the chain do (FSR and NIS at their \"ultra quality\" are exactly this).\n")
     queued = "[09:30:12.300] vr supersampling: the headset notice is queued as a toast (\"Elite Supersampling is below 1: use HMD Image Quality\"); the Status page shows the advice as its hint while the menu is open.\n"
@@ -29824,7 +29879,7 @@ def self_test_periodic():
         return ("[%s] monitor: LONG FRAME -- %.1f ms between Presents (runtime "
                 "predicted period 11.1 ms), no WaitGetPoses, CPU busy, "
                 "compositor, reprojection, or door samples; game creations: 0 "
-                "textures, 0 buffers, 0 shaders (0.0 MB); EDVR events: none. "
+                "textures, 0 buffers, 0 shaders (0.0 MB); ED-UP events: none. "
                 "This is frame 812; the flip timeline is not armed, so there "
                 "are no table changes to order against it. runtime sequence "
                 "%d, game work 5.20 ms.\r\n" % (stamp, ms, seq))
@@ -30219,7 +30274,7 @@ def self_test_periodic():
             "[00:00:00.010] monitor: LONG FRAME -- 40.0 ms between Presents "
             "(budget 11.1), of which the thread waited 3.0 in Present (busy "
             "37.0); the game's creations in it: 0 textures, 0 buffers (0.0 MB "
-            "together), 0 shaders; EDVR this frame: boundary 0.10 ms.\r\n"
+            "together), 0 shaders; ED-UP this frame: boundary 0.10 ms.\r\n"
             "[00:00:00.100] periodic work: journal_status n=10 total=1.000 "
             "max=0.400 at 23:59:59.800 slow=0\r\n"
             "[00:00:05.000] a line after midnight\r\n" % version)

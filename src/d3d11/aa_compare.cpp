@@ -75,7 +75,7 @@ void rebindIfChanged(Config& cfg) {
     if (g_key.bound()) {
         char text[64] = "";
         hotkeyFormatBinding(g_key.binding(), text, sizeof(text));
-        Log::get().note("hotkey: AA comparison key %s: %s (vk 0x%02X, mods 0x%X). It turns EDVR's temporal AA off and back on for "
+        Log::get().note("hotkey: AA comparison key %s: %s (vk 0x%02X, mods 0x%X). It turns ED-UP's temporal AA off and back on for "
                         "a side-by-side look, at runtime only; no ini is written.",
                         first ? "bound" : "changed", text, g_key.key(), g_key.mods());
         checkAgainstEliteBindings(text);
@@ -152,7 +152,7 @@ void aaCompareTick() {
     if (g_key.pressed()) onPress(cfg);
     if (g_missedNotes < kMissedNotesMax && g_key.takeMissedWhileUnfocused()) {
         ++g_missedNotes;
-        Log::get().note("aa compare: %s was pressed, but another window had focus, so nothing changed. EDVR only acts on its hotkeys "
+        Log::get().note("aa compare: %s was pressed, but another window had focus, so nothing changed. ED-UP only acts on its hotkeys "
                         "while Elite is the active window.", g_keyText.c_str());
     }
 }

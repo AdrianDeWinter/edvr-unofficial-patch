@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate an EDVR F83 stride-two SkinE/MV/EngineSlots point lattice."""
+"""Validate an ED-UP F83 stride-two SkinE/MV/EngineSlots point lattice."""
 import argparse
 import json
 import math

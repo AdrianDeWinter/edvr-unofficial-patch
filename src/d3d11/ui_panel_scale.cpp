@@ -625,20 +625,20 @@ void apply() {
     g_patch.store(kApplied, std::memory_order_release);
     if (gameBuildKnown())
         Log::get().note("ui quality: panels: the panel formula's four divisions (init 0x%X and 0x%X, view "
-                        "change 0x%X and 0x%X) now read EDVR's floats at %p -- 1080 and 1920, the game's own, "
+                        "change 0x%X and 0x%X) now read ED-UP's floats at %p -- 1080 and 1920, the game's own, "
                         "until the factor's inputs are known. Build 334925 checked: the stamp, both sites, "
-                        "the prologues and the constants. The original operands are put back when EDVR "
+                        "the prologues and the constants. The original operands are put back when ED-UP "
                         "unloads.",
                         g_site[0] + kUiPanel1080Disp, g_site[0] + kUiPanel1920Disp,
                         g_site[1] + kUiPanel1080Disp, g_site[1] + kUiPanel1920Disp,
                         static_cast<void*>(page));
     else
         Log::get().note("ui quality: panels: the panel formula's four divisions (init 0x%X and 0x%X, view "
-                        "change 0x%X and 0x%X) now read EDVR's floats at %p -- 1080 and 1920, the game's own, "
+                        "change 0x%X and 0x%X) now read ED-UP's floats at %p -- 1080 and 1920, the game's own, "
                         "until the factor's inputs are known. The sites (0x%X and 0x%X in build 334925), their "
                         "functions and the constants were found by signature on %s; both sites match outside the "
                         "masked fields, their operands read the constants found, and the prologues and the "
-                        "constants' values are build 334925's. The original operands are put back when EDVR "
+                        "constants' values are build 334925's. The original operands are put back when ED-UP "
                         "unloads.",
                         g_site[0] + kUiPanel1080Disp, g_site[0] + kUiPanel1920Disp,
                         g_site[1] + kUiPanel1080Disp, g_site[1] + kUiPanel1920Disp,
@@ -649,19 +649,19 @@ void apply() {
     if (g_hookState == kHookInstalled && gameBuildKnown())
         Log::get().note("ui quality: panels: the game's Supersampling setter (virtual slot 0x%X, function 0x%X) and "
                         "its getter of the scale the last configure used (slot 0x%X, function 0x%X) now run through "
-                        "EDVR's thunks, which forward untouched and remember the render context they were called on; "
+                        "ED-UP's thunks, which forward untouched and remember the render context they were called on; "
                         "the setter's also moves the panel factor to the new value before the game's own setter "
                         "runs. Until one of them is called the Supersampling comes from the .fxcfg. Both slots are "
-                        "put back when EDVR unloads.",
+                        "put back when ED-UP unloads.",
                         kUiSsSetterSlotRva, kUiSsSetterRva, kUiSsGetterSlotRva, kUiSsGetterRva);
     else if (g_hookState == kHookInstalled)
         Log::get().note("ui quality: panels: the game's Supersampling setter (virtual slot 0x%X, function 0x%X in build 334925) "
                         "and its getter of the scale the last configure used (slot 0x%X, function 0x%X in build 334925), "
                         "found by signature on %s at slot 0x%llX, function 0x%llX and slot 0x%llX, function 0x%llX, now "
-                        "run through EDVR's thunks, which forward untouched and remember the render context they were "
+                        "run through ED-UP's thunks, which forward untouched and remember the render context they were "
                         "called on; the setter's also moves the panel factor to the new value before the game's own "
                         "setter runs. Until one of them is called the Supersampling comes from the .fxcfg. Both slots "
-                        "are put back when EDVR unloads.",
+                        "are put back when ED-UP unloads.",
                         kUiSsSetterSlotRva, kUiSsSetterRva, kUiSsGetterSlotRva, kUiSsGetterRva, gameBuildText(),
                         static_cast<unsigned long long>(gameRva(kUiSsSetterSlotRva)),
                         static_cast<unsigned long long>(gameRva(kUiSsSetterRva)),
@@ -924,7 +924,7 @@ void uiPanelScaleFrameBoundary() {
             "already %.2fx wider than HMD Quality makes them: f %.4f "
             "(x%.4f) without that term, f %.4f (x%.4f) with it%s. The widest panel the formula could ask for "
             "is %.0f px at the written f %.4f (%.0f px at f %.4f), from a %.0f px base (%s), against "
-            "D3D11's %.0f px limit and EDVR's %.0f px budget.",
+            "D3D11's %.0f px limit and ED-UP's %.0f px budget.",
             plan.ss,
             pick.source == UiSsSource::kLive ? "live, the game's render context" : "the .fxcfg's SSAAMultiplier",
             plan.ss, plan.beforeF, 1.0 / plan.beforeF, plan.lineF, 1.0 / plan.lineF, budgetText,
@@ -1021,7 +1021,7 @@ void flatFrameBoundary(float target) {
         "ui quality: panels (flat): the engine now sizes every render-to-texture panel x%.4f (the four operands at "
         "0x%X/0x%X and 0x%X/0x%X read 1080 -> %.2f, 1920 -> %.2f): f %.4f = render %ux%u / display %ux%u on the %s "
         "axis / target %.0f%%%s. A panel the game made WxH at the game's own divisors is now made about %.2fW x %.2fH; "
-        "the widest the formula can ask for is %.0f px (D3D11's limit %.0f, EDVR's budget %.0f). From the next panel "
+        "the widest the formula can ask for is %.0f px (D3D11's limit %.0f, ED-UP's budget %.0f). From the next panel "
         "init or view change.",
         1.0 / plan.f, g_site[0] + kUiPanel1080Disp, g_site[0] + kUiPanel1920Disp,
         g_site[1] + kUiPanel1080Disp, g_site[1] + kUiPanel1920Disp, static_cast<double>(d1080),
@@ -1138,7 +1138,7 @@ void uiPanelScaleLog() {
     char net[160];
     netText(net, sizeof(net));
     if (state == kStoodDown) {
-        Log::get().note("ui quality: panels: standing down -- %s. %s.", g_why[0] ? g_why : "EDVR is unloading", net);
+        Log::get().note("ui quality: panels: standing down -- %s. %s.", g_why[0] ? g_why : "ED-UP is unloading", net);
         return;
     }
     char live[400];

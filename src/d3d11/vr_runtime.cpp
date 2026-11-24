@@ -96,7 +96,7 @@ void buildWhy(State& s) {
         case VrRuntime::OculusNative:
             snprintf(s.whyBuf, sizeof(s.whyBuf),
                      "This session is on Elite's NATIVE OCULUS back end -- %s is loaded in this "
-                     "process and no openvr_api.dll is loaded at all. EDVR's native build normally "
+                     "process and no openvr_api.dll is loaded at all. ED-UP's native build normally "
                      "routes Elite away from that back end at startup; look for the \"oculus "
                      "route:\" line in this log to see why it did not here (an unknown game "
                      "revision, or the route refused). Reinstalling will not change it. See "
@@ -105,16 +105,16 @@ void buildWhy(State& s) {
             break;
         case VrRuntime::ForeignOpenvr:
             snprintf(s.whyBuf, sizeof(s.whyBuf),
-                     "The openvr_api.dll this process loaded is NOT EDVR's -- it is %s, which does "
-                     "not carry EDVR's native-runtime exports. So EDVR's runtime is genuinely not "
+                     "The openvr_api.dll this process loaded is NOT ED-UP's -- it is %s, which does "
+                     "not carry ED-UP's native-runtime exports. So ED-UP's runtime is genuinely not "
                      "installed in the folder the game loads from, or something has replaced it (a "
                      "game update puts the stock file back). Reinstall: the installer renames the "
-                     "game's own openvr_api.dll to openvr_api_orig.dll and puts EDVR's in its place.",
+                     "game's own openvr_api.dll to openvr_api_orig.dll and puts ED-UP's in its place.",
                      s.foreignPath[0] ? s.foreignPath : "another copy");
             break;
         case VrRuntime::NativeOpenXR:
             snprintf(s.whyBuf, sizeof(s.whyBuf),
-                     "EDVR's native OpenXR runtime is loaded and is driving this session.");
+                     "ED-UP's native OpenXR runtime is loaded and is driving this session.");
             break;
         case VrRuntime::NoneLoaded:
         default:
@@ -204,9 +204,9 @@ void refresh(State& s) {
 const char* shortWhyOf(VrRuntime v) {
     switch (v) {
         case VrRuntime::NativeOpenXR:
-            return "EDVR's native OpenXR runtime is loaded";
+            return "ED-UP's native OpenXR runtime is loaded";
         case VrRuntime::ForeignOpenvr:
-            return "the openvr_api.dll loaded here is not EDVR's";
+            return "the openvr_api.dll loaded here is not ED-UP's";
         case VrRuntime::OculusNative:
             return "this session is on Elite's native Oculus back end, which never loads "
                    "openvr_api.dll";
@@ -218,8 +218,8 @@ const char* shortWhyOf(VrRuntime v) {
 
 const char* nameOf(VrRuntime v) {
     switch (v) {
-        case VrRuntime::NativeOpenXR:  return "EDVR's native OpenXR runtime";
-        case VrRuntime::ForeignOpenvr: return "OpenVR, through an openvr_api.dll that is not EDVR's";
+        case VrRuntime::NativeOpenXR:  return "ED-UP's native OpenXR runtime";
+        case VrRuntime::ForeignOpenvr: return "OpenVR, through an openvr_api.dll that is not ED-UP's";
         case VrRuntime::OculusNative:  return "Elite's native Oculus back end";
         case VrRuntime::NoneLoaded:
         default:                       return "none loaded";
@@ -303,7 +303,7 @@ void vrRuntimeTick() {
             "opened.%s%s",
             nameOf(v),
             v == VrRuntime::OculusNative
-                ? " EDVR's openvr half cannot run on this back end, so the fixes that live in it "
+                ? " ED-UP's openvr half cannot run on this back end, so the fixes that live in it "
                   "are inert this session; see \"Headsets\" in the player guide."
                 : "",
             both ? " (An Oculus runtime module is loaded as well.)" : "");

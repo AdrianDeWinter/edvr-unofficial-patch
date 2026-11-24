@@ -18,16 +18,28 @@ import re
 import sys
 import tempfile
 
-# The texts Log writes (src\common\log.cpp). No timestamp, and each starts "[edvr] " like the other notices.
-HEAD_CUT = "[edvr] log head ends here at "
-SEGMENT_TOP = "[edvr] tail segment "
-KEPT_FROM = "[edvr] kept lines from tail segment "
-KEPT_SPENT = ("[edvr] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no longer fit here); "
+# The texts Log writes (src\common\log.cpp). No timestamp, and each starts "[edup] " like the other notices.
+# Logs written before the rename start "[edvr] " instead (same length); the parsers accept both through marker_line().
+OLD_MARKER = "[edvr] "
+NEW_MARKER = "[edup] "
+HEAD_CUT = "[edup] log head ends here at "
+SEGMENT_TOP = "[edup] tail segment "
+KEPT_FROM = "[edup] kept lines from tail segment "
+KEPT_SPENT = ("[edup] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no longer fit here); "
               "later ones are only in the tail segments still on disk.")
-HEAD_CUT_RE = re.compile(r"^\[edvr\] log head ends here at (?P<head>\d+) KB \(a quarter of log\.max_mb = (?P<mb>\d+) MB\); "
+
+
+def marker_line(line):
+    """The line with an old-spelling marker read as the current one (the two spellings are the same length, so offsets hold)."""
+    return NEW_MARKER + line[len(OLD_MARKER):] if line.startswith(OLD_MARKER) else line
+
+
+# The end marker at the start of a line, in either spelling: is this text a cut head?
+HEAD_CUT_START_RE = re.compile(r"^\[(?:edup|edvr)\] log head ends here at ", re.MULTILINE)
+HEAD_CUT_RE = re.compile(r"^\[(?:edup|edvr)\] log head ends here at (?P<head>\d+) KB \(a quarter of log\.max_mb = (?P<mb>\d+) MB\); "
                          r"the log continues in (?P<first>\S+), only the newest 4 tail segments are kept, and what follows below is the "
                          r"first line of each kind written after this point and the memory watch's lines, up to (?P<kept>\d+) KB\.$")
-SEGMENT_TOP_RE = re.compile(r"^\[edvr\] tail segment (?P<n>\d+) of (?P<head>\S+)\.(?: Deleted so far:(?P<deleted>.*)\.)?$")
+SEGMENT_TOP_RE = re.compile(r"^\[(?:edup|edvr)\] tail segment (?P<n>\d+) of (?P<head>\S+)\.(?: Deleted so far:(?P<deleted>.*)\.)?$")
 GAP_FORMAT = "[edup_log] GAP: tail segment %d was deleted; the first line of each kind kept from it follows"
 VOLUME_RE = re.compile(r"^\[\d\d:\d\d:\d\d\.\d\d\d\] log volume \(last (?P<n>\d+) (?P<unit>minutes|ms)\): (?P<mb>\d+\.\d\d) MB in (?P<lines>\d+) lines\. "
                        r"Top kinds by size: \"(?P<kind>.*?)\" (?P<kmb>\d+\.\d\d) MB (?P<klines>\d+) lines")
@@ -70,7 +82,7 @@ def split_head(text):
     lines = text.splitlines(True)
     at = None
     for i, line in enumerate(lines):
-        if line.startswith(HEAD_CUT):
+        if marker_line(line).startswith(HEAD_CUT):
             at = i
             break
     if at is None:
@@ -79,7 +91,7 @@ def split_head(text):
     current = None
     spent = False
     for line in lines[at + 1:]:
-        s = line.rstrip("\r\n")
+        s = marker_line(line.rstrip("\r\n"))
         if s.startswith(KEPT_FROM):
             try:
                 current = int(s[len(KEPT_FROM):])
@@ -87,7 +99,7 @@ def split_head(text):
                 current = None
         elif s == KEPT_SPENT:
             spent = True
-        elif s.startswith("[edvr] "):
+        elif s.startswith("[edup] "):
             continue
         elif current is not None:
             kept.setdefault(current, []).append(line)
@@ -124,7 +136,7 @@ def read_log_text(path):
     text = _read(path)
     if re.search(r"\.tail-\d{3,}\.log$", path, re.IGNORECASE):
         return text
-    if text.find("\n" + HEAD_CUT) < 0 and not text.startswith(HEAD_CUT) and not segment_files(path):
+    if not HEAD_CUT_START_RE.search(text) and not segment_files(path):
         return text
     return stitch(path, text)[0]
 
@@ -235,7 +247,7 @@ def check_dir(directory, head_re, expect_path):
             body = _read(path)
             check(tag, body.endswith("\r\n"), "%s does not end at a line" % os.path.basename(path))
             for i, line in enumerate(body.splitlines()):
-                if not (STAMP_RE.match(line) or line.startswith("[edvr] ")):
+                if not (STAMP_RE.match(line) or marker_line(line).startswith(NEW_MARKER)):
                     check(tag, False, "%s line %d is not a whole line: %r" % (os.path.basename(path), i + 1, line[:60]))
                     break
 
@@ -265,7 +277,7 @@ def check_dir(directory, head_re, expect_path):
                 elif key == "newest":
                     check(tag, bool(lines) and lines[-1].endswith(value), "the stitched session does not end with %r: %r" % (value, lines[-1:] ))
                 elif key == "dropped":
-                    check(tag, any(l.startswith("[edvr] ") and " log line(s) were DROPPED here" in l for l in lines), "no DROPPED notice")
+                    check(tag, any(marker_line(l).startswith(NEW_MARKER) and " log line(s) were DROPPED here" in l for l in lines), "no DROPPED notice")
                 elif key == "volume":
                     check(tag, any(VOLUME_RE.match(l) for l in lines), "no log volume line")
                 elif key == "spent":
@@ -306,18 +318,18 @@ def _session(directory, stem, head_lines, segments, kept_by_segment, last, spent
     """Write a head, the segments in `segments` ({n: [lines]}) and the head's kept lines (`kept_by_segment` {n: [lines]}), as Log would."""
     leaf = stem + ".log"
     head = "".join(head_lines)
-    head += ("[edvr] log head ends here at 256 KB (a quarter of log.max_mb = 1 MB); the log continues in %s.tail-001.log, only the newest 4 tail "
+    head += ("[edup] log head ends here at 256 KB (a quarter of log.max_mb = 1 MB); the log continues in %s.tail-001.log, only the newest 4 tail "
              "segments are kept, and what follows below is the first line of each kind written after this point and the memory watch's lines, up "
              "to 128 KB.\r\n" % stem)
     for k in sorted(kept_by_segment):
-        head += "[edvr] kept lines from tail segment %d\r\n" % k
+        head += "[edup] kept lines from tail segment %d\r\n" % k
         head += "".join(kept_by_segment[k])
     if spent:
         head += KEPT_SPENT + "\r\n"
     _write(os.path.join(directory, leaf), head)
     for n, lines in segments.items():
         deleted = "" if n <= 4 else " Deleted so far: segment 1 (163840 bytes, 10:00:00.000 to 10:00:09.000)."
-        _write(os.path.join(directory, "%s.tail-%03d.log" % (stem, n)), "[edvr] tail segment %d of %s.%s\r\n" % (n, leaf, deleted) + "".join(lines))
+        _write(os.path.join(directory, "%s.tail-%03d.log" % (stem, n)), "[edup] tail segment %d of %s.%s\r\n" % (n, leaf, deleted) + "".join(lines))
 
 
 def self_test():
@@ -329,20 +341,22 @@ def self_test():
         ok = False
 
     # The marker texts, typed out again here, are the ones src\common\log.cpp writes and tools\config_test pins.
-    cut = ("[edvr] log head ends here at 256 KB (a quarter of log.max_mb = 1 MB); the log continues in edvr_gfx_20261110_060503.tail-001.log, only the "
+    cut = ("[edup] log head ends here at 256 KB (a quarter of log.max_mb = 1 MB); the log continues in edvr_gfx_20261110_060503.tail-001.log, only the "
            "newest 4 tail segments are kept, and what follows below is the first line of each kind written after this point and the memory watch's "
            "lines, up to 128 KB.")
     if not HEAD_CUT_RE.match(cut) or not cut.startswith(HEAD_CUT):
         fail("the head's end marker is not recognized")
-    top = "[edvr] tail segment 6 of edvr_gfx_20261110_060503.log. Deleted so far: segment 1 (163840 bytes, 06:05:03.100 to 06:05:41.900); segment 2 (163840 bytes, 06:05:41.900 to 06:06:10.000)."
+    top = "[edup] tail segment 6 of edvr_gfx_20261110_060503.log. Deleted so far: segment 1 (163840 bytes, 06:05:03.100 to 06:05:41.900); segment 2 (163840 bytes, 06:05:41.900 to 06:06:10.000)."
     m = SEGMENT_TOP_RE.match(top)
     if not m or m.group("n") != "6" or "segment 2 (" not in m.group("deleted"):
         fail("a segment's top marker is not recognized")
-    if not SEGMENT_TOP_RE.match("[edvr] tail segment 1 of edvr_gfx_20261110_060503.log."):
+    if not SEGMENT_TOP_RE.match("[edup] tail segment 1 of edvr_gfx_20261110_060503.log."):
         fail("segment 1's top marker (nothing deleted) is not recognized")
-    if KEPT_FROM + "3" != "[edvr] kept lines from tail segment 3":
+    if not SEGMENT_TOP_RE.match("[edvr] tail segment 1 of edvr_gfx_20261110_060503.log.") or marker_line("[edvr] kept lines from tail segment 3") != KEPT_FROM + "3":
+        fail("a log written before the rename (the [edvr] marker) is not recognized")
+    if KEPT_FROM + "3" != "[edup] kept lines from tail segment 3":
         fail("the kept-lines marker text changed")
-    if KEPT_SPENT != ("[edvr] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no longer fit here); later ones "
+    if KEPT_SPENT != ("[edup] the kept-lines budget is spent (the first lines of new kinds, or the memory watch's lines, no longer fit here); later ones "
                       "are only in the tail segments still on disk."):
         fail("the budget-spent marker text changed")
     if GAP_FORMAT % 2 != "[edup_log] GAP: tail segment 2 was deleted; the first line of each kind kept from it follows":
@@ -374,8 +388,8 @@ def self_test():
         got = [l for l in text.splitlines()]
         if got[:3] != want or text.count("alpha #0") != 1 or text.count("beta #0") != 1 or "GAP" in text:
             fail("a cut session is not stitched in order, once: %r" % got)
-        if [l for l in got if l.startswith("[edvr] tail segment")] != ["[edvr] tail segment 1 of %s.log." % stem, "[edvr] tail segment 2 of %s.log." % stem,
-                                                                      "[edvr] tail segment 3 of %s.log." % stem]:
+        if [l for l in got if l.startswith("[edup] tail segment")] != ["[edup] tail segment 1 of %s.log." % stem, "[edup] tail segment 2 of %s.log." % stem,
+                                                                      "[edup] tail segment 3 of %s.log." % stem]:
             fail("the segments' own markers are not kept: %r" % got)
         if info["last"] != 3 or info["deleted"] != [] or describe(os.path.join(d, stem + ".log")) != "3 tail segment(s) on disk (1-3)":
             fail("describe/info of a whole session: %r %r" % (info, describe(os.path.join(d, stem + ".log"))))
@@ -391,13 +405,30 @@ def self_test():
                  {3: [_line(30, "c")], 4: [_line(40, "d")], 5: [_line(50, "e")], 6: [_line(60, "f")]},
                  {1: [_line(10, "alpha #0"), _line(11, "gamma #0")], 3: [_line(30, "c")], 5: [_line(50, "e")], 6: [_line(60, "f")]}, 6)
         text, info = stitch(os.path.join(d, stem + ".log"))
-        order = [l for l in text.splitlines() if not l.startswith("[edvr] tail") and not l.startswith("[edvr] log head")]
+        order = [l for l in text.splitlines() if not l.startswith("[edup] tail") and not l.startswith("[edup] log head")]
         want_order = [_line(1, "version 1").rstrip(), GAP_FORMAT % 1, _line(10, "alpha #0").rstrip(), _line(11, "gamma #0").rstrip(), GAP_FORMAT % 2,
                       _line(30, "c").rstrip(), _line(40, "d").rstrip(), _line(50, "e").rstrip(), _line(60, "f").rstrip()]
         if order != want_order:
             fail("deleted segments are not stitched as a GAP and their kept lines: %r" % order)
         if info["deleted"] != [1, 2] or describe(os.path.join(d, stem + ".log")) != "4 tail segment(s) on disk (3-6), deleted 1-2":
             fail("describe of a session with deleted segments: %r" % describe(os.path.join(d, stem + ".log")))
+
+        # A head alone, its segments gone (a bundle with only the head), is stitched in either marker spelling: a log from before the rename
+        # says [edvr]. A line that only quotes the marker is not a cut.
+        for marker in (NEW_MARKER, OLD_MARKER):
+            d = os.path.join(tmp, "head_only_" + marker[1:5])
+            os.mkdir(d)
+            lone = os.path.join(d, stem + ".log")
+            _session(d, stem, [_line(1, "version 1")], {}, {1: [_line(10, "alpha #0")], 2: [_line(20, "beta #0")]}, 2)
+            raw = _read(lone).replace(NEW_MARKER, marker)
+            _write(lone, raw)
+            text = read_log_text(lone)
+            if text != stitch(lone)[0] or text == raw or GAP_FORMAT % 2 not in text or "kept lines from tail segment" in text:
+                fail("a head alone with the %smarker is not stitched: %r" % (marker, text))
+        quoted = os.path.join(tmp, "quoted.log")
+        _write(quoted, _line(1, "version 1") + _line(2, HEAD_CUT + "5 KB"))
+        if read_log_text(quoted) != _read(quoted):
+            fail("a line that only quotes the end marker is taken for a cut")
 
         # A segment missing in the middle (4 of 3..6), and the _mmm_pid form of the name.
         d = os.path.join(tmp, "middle")
@@ -438,7 +469,7 @@ def self_test():
         if bad != 0:
             fail("check_dir fails a good session:\n" + buf.getvalue())
         # Broken: a fifth segment on disk, a line split in a segment, a token twice, the wrong newest.
-        _write(os.path.join(d, stem + ".tail-007.log"), "[edvr] tail segment 7 of %s.log.\r\n" % stem + _line(70, "newest 7"))
+        _write(os.path.join(d, stem + ".tail-007.log"), "[edup] tail segment 7 of %s.log.\r\n" % stem + _line(70, "newest 7"))
         os.rename(os.path.join(d, stem + ".tail-003.log"), os.path.join(d, stem + ".tail-003.keep"))
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -463,7 +494,7 @@ def self_test():
 
 
 def cut_line(stem):
-    return ("[edvr] log head ends here at 256 KB (a quarter of log.max_mb = 1 MB); the log continues in %s.tail-001.log, only the newest 4 tail "
+    return ("[edup] log head ends here at 256 KB (a quarter of log.max_mb = 1 MB); the log continues in %s.tail-001.log, only the newest 4 tail "
             "segments are kept, and what follows below is the first line of each kind written after this point and the memory watch's lines, up "
             "to 128 KB." % stem)
 

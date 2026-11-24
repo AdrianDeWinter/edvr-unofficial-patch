@@ -157,7 +157,8 @@ bool payloadPresent(const PayloadInfo& info) { return !info.files.empty(); }
 bool isDeveloperInstall(const std::wstring& gameDir) {
     FILETIME record{};
     const bool haveRecord = lastWrite(statePath(gameDir), &record);
-    for (const wchar_t* pattern : {L"edvr_native_receipt.json*", L"edvr_flat_receipt.json*"}) {
+    for (const wchar_t* pattern : {L"edup_native_receipt.json*", L"edup_flat_receipt.json*",
+                                   L"edvr_native_receipt.json*", L"edvr_flat_receipt.json*"}) {
         WIN32_FIND_DATAW find;
         HANDLE h = FindFirstFileW(joinPath(gameDir, pattern).c_str(), &find);
         if (h == INVALID_HANDLE_VALUE) continue;

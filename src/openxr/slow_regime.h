@@ -81,8 +81,8 @@ inline const char* slowOwnerText(SlowOwner o) {
     case SlowOwner::VendorEndFrame: return "the vendor runtime's xrEndFrame";
     case SlowOwner::VendorWaitFrame: return "the vendor runtime's xrWaitFrame and xrBeginFrame (the pose wait)";
     case SlowOwner::VendorSwapchain: return "the vendor runtime's swapchain calls (xrAcquire, xrWait, xrReleaseSwapchainImage)";
-    case SlowOwner::EdvrCopy: return "EDVR's copy of the eyes";
-    case SlowOwner::EdvrWork: return "EDVR's own work in the runtime";
+    case SlowOwner::EdvrCopy: return "ED-UP's copy of the eyes";
+    case SlowOwner::EdvrWork: return "ED-UP's own work in the runtime";
     case SlowOwner::Game: return "the game's own frame";
     case SlowOwner::None: break;
   }

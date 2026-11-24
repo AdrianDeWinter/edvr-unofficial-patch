@@ -726,7 +726,7 @@ static void bindingCases(ID3D11GeometryShader* gs, Fails& f, bool leakChecks) {
         {
             ComPtr<ID3D11GeometryShader> stuck;
             g_ctx->GSGetShader(&stuck, nullptr, nullptr);
-            f.expect(stuck.Get() == gs, "...and EDVR's shader is still bound until it is settled (the slot and the state, whose setters worked, are the game's again)");
+            f.expect(stuck.Get() == gs, "...and ED-UP's shader is still bound until it is settled (the slot and the state, whose setters worked, are the game's again)");
         }
         f.expect(b.begin(g_ctx.Get(), gs, constants.Get(), pick) == sb::Binding::Begin::kRefused, "no new draw begins while one is owed");
         f.expect(!b.settle(g_ctx.Get(), failingSetGs) && b.needsRestore(), "a settle whose setter faults changes nothing and is still owed");

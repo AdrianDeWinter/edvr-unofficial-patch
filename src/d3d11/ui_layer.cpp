@@ -294,7 +294,7 @@ void standDown(const char* why) {
         Log::get().note("ui quality: layer stood down -- %s. Original hologram shader/b13 state remains "
                         "untrusted after two restoration attempts; the game's draws and replay on the owner "
                         "context are suppressed for the rest of this frame, and the frame boundary then puts "
-                        "back whichever of the two is still EDVR's (the saved original references are retained "
+                        "back whichever of the two is still ED-UP's (the saved original references are retained "
                         "until then) and lifts the suppression. The layer itself stays stood down for the "
                         "session.", why ? why : "a restoration fault");
         g_flatBackOffUntilMs = 0;  // untrusted shader state: the flat profile does not re-arm from this one either
@@ -3889,7 +3889,7 @@ ID3D11Texture2D* compositeInner(Eye& e, uint32_t eye, ID3D11Texture2D* frame,
         Log::get().note(
             "ui quality: layer: first composite -- the %s eye's %ux%u layer over a %ux%u %s frame "
             "(layer rectangle u %.3f..%.3f, v %.3f..%.3f), after the upscale and RCAS, before "
-            "EDVR's menu%s. The one order that differs from the game's own: whatever the game "
+            "ED-UP's menu%s. The one order that differs from the game's own: whatever the game "
             "drew into an eye AFTER a redirected draw is under the UI now (counted on the gates "
             "line as 'after the UI').",
             eye == 0 ? "left" : "right", e.w, e.h, rw, rh, viewName(view),
@@ -4885,7 +4885,7 @@ void uiLayerConfigure(Config& cfg) {
                     "pass's door."
         : "the game's post-tonemap UI (the 2D screen, the menus, the loading screen) is drawn "
               "by its own shaders into a per-eye layer at that size times the door's output, "
-              "unjittered, and composited after the upscale and RCAS, before EDVR's menu -- "
+              "unjittered, and composited after the upscale and RCAS, before ED-UP's menu -- "
               "except the 2D screen while it shows the world -- on foot, or a 3D map -- where it "
               "stays in the picture for the temporal pass (the game's Status.json says on foot, a "
               "second or so late; the screen's own depth, busy with the world, says so within "
@@ -6420,7 +6420,7 @@ void rippleDoor(Eye& e, uint32_t eye, uint64_t sequence, ID3D11Texture2D* frame,
         noted[eye & 1] = true;
         Log::get().note("shield ripple: the %s eye's picture (%ux%u) was rewritten over the bubble's coverage -- a copy of the %s read at D minus the jitter "
                         "(%.6f, %.6f of the render), before the weapons/HUD composite.",
-                        eye == 0 ? "left" : "right", rw, rh, ownedFrame ? "RCAS output, in place" : "picture, in EDVR's own copy of it (a frame that is not EDVR's to rewrite)",
+                        eye == 0 ? "left" : "right", rw, rh, ownedFrame ? "RCAS output, in place" : "picture, in ED-UP's own copy of it (a frame that is not ED-UP's to rewrite)",
                         static_cast<double>(p.jitterUv[0]), static_cast<double>(p.jitterUv[1]));
     }
 }

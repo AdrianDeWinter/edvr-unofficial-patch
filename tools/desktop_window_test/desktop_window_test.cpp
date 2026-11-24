@@ -697,7 +697,7 @@ static void hideRules() {
     count.hide(fake);
     check(fake.calls == 1 && count.offset() == -1, "the count is known to be below 0: nothing more is called");
     int seen = count.afterGameCall(fake(true), true, fake);   // the game calls ShowCursor(TRUE): the real count goes to 0
-    check(seen == 1 && fake.real == -1 && count.offset() == -2 && count.takePushed() == 1, "a game show: it sees 1, as it would without EDVR, and the real count is pushed below 0 again");
+    check(seen == 1 && fake.real == -1 && count.offset() == -2 && count.takePushed() == 1, "a game show: it sees 1, as it would without ED-UP, and the real count is pushed below 0 again");
     seen = count.afterGameCall(fake(false), true, fake);      // the game hides: the real count goes to -2
     check(seen == 0 && fake.real == -2 && count.offset() == -2 && count.takePushed() == 0, "a game hide: it sees 0, and nothing is pushed");
     bool flashed = false;

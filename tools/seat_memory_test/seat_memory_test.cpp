@@ -452,7 +452,7 @@ void files() {
     // the mirror folder, resolved the installer's way, against a scratch LOCALAPPDATA
     const std::wstring exeSteam = L"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Elite Dangerous\\Products\\elite-dangerous-odyssey-64";
     check(seatMirrorDirFor(root, exeSteam, false).empty(), "no mirror folder and no create: nothing, and nothing made");
-    check(GetFileAttributesW((root + L"\\EDUP").c_str()) == INVALID_FILE_ATTRIBUTES, "...not even the EDVR folder");
+    check(GetFileAttributesW((root + L"\\EDUP").c_str()) == INVALID_FILE_ATTRIBUTES, "...not even the ED-UP folder");
     const std::wstring made = seatMirrorDirFor(root, exeSteam, true);
     check(made == root + L"\\EDUP\\elite-dangerous-odyssey-64-steam" && seatDirExists(made), "create makes <leaf>-steam for a Steam install");
     check(seatMirrorDirFor(root, exeSteam, false) == made, "...and finds it again without create");

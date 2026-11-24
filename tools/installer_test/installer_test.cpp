@@ -1692,7 +1692,7 @@ static void testPlanner() {
         const Plan plan = planInstall(s, options, payload);
         check(hasStep(plan, Action::Rename, L"d3d11.dll", L"d3d11_reshade.dll"),
               "the intruder is kept, under its own name");
-        check(hasStep(plan, Action::WritePayload, nullptr, L"d3d11.dll"), "and EDVR goes back");
+        check(hasStep(plan, Action::WritePayload, nullptr, L"d3d11.dll"), "and ED-UP goes back");
         expectEq(iniValue(plannedIni(plan), "advanced.real_dll"), "d3d11_reshade.dll",
                  "with the chain pointed at it");
         check(notesMention(plan, "replaced ED-UP"), "the report says what happened");
@@ -1855,7 +1855,7 @@ static void testPlanner() {
         check(!hasStep(plan, Action::Backup, L"openvr_api.dll", L"openvr_api_orig.dll"),
               "native startup does not copy a legacy runtime back into use");
         check(hasStep(plan, Action::WritePayload, nullptr, L"openvr_api.dll"),
-              "and EDVR is reinstalled in front of it");
+              "and ED-UP is reinstalled in front of it");
     }
 
     {   // No Openvr folder: create it and install the complete native package.
@@ -2420,7 +2420,7 @@ static void testUnifiedDescriptor() {
         after.nativeConfig = fakeDll(DllKind::Edvr, joinPath(after.game.openvrDir, L"edup_openxr.ini"), update.nextState.nativeConfigSha);
         const Plan conversion = planInstall(after, convert, flat);
         check(!conversion.blocked, "a recorded both install converts to flat through the runtime proofs", unifiedProblems(conversion));
-        check(hasStep(conversion, Action::Delete, L"openvr_api.dll", nullptr), "the conversion retires EDVR's runtime");
+        check(hasStep(conversion, Action::Delete, L"openvr_api.dll", nullptr), "the conversion retires ED-UP's runtime");
         check(hasStep(conversion, Action::Backup, L"openvr_api_stock.dll", L"openvr_api.dll"),
               "the conversion restores the game's original runtime");
         check(conversion.nextState.profile == "flat", "the conversion records the flat edition");
@@ -2765,7 +2765,7 @@ static void testContentOwnership(const std::wstring& scratch) {
               "a startup config naming another loader is kept, with a note");
         check(!hasStep(plan, Action::Delete, L"edup_profile.ini", nullptr) &&
               notesMention(plan, "Keeping an unverified edup_profile.ini"),
-              "a descriptor that is not one of EDVR's texts is kept, with a note");
+              "a descriptor that is not one of ED-UP's texts is kept, with a note");
     }
     {   // Planning writes nothing: the cases above are planned over real files, and the folder is listed before and after.
         const std::wstring cdir = joinPath(scratch, L"content-ownership");
@@ -2804,7 +2804,7 @@ static void testSharedFilesKept() {
         check(!hasStep(plan, Action::Delete, L"openxr_loader.dll", nullptr) &&
               !hasStep(plan, Action::Backup, L"openxr_loader.dll", nullptr),
               "the matching loader is neither backed up nor removed");
-        check(notesMention(plan, kept), "and the report says nothing shows EDVR placed it");
+        check(notesMention(plan, kept), "and the report says nothing shows ED-UP placed it");
     }
     {   // The same bytes with the record listing them: the file is EDVR's, and goes.
         Survey s = baseSurvey(dir);
@@ -2868,6 +2868,19 @@ static std::string receiptText(const std::wstring& target, const char* state, co
            ", \"backup\": null, \"before_sha256\": null, \"installed_sha256\": \"" + loaderSha + "\"}]}";
 }
 
+// A plain receipt's last write, as a local time: install_edup.py ranks the plain receipt by its last write against the stamps in its
+// siblings' names (local), and stamps a rotated receipt with that write.
+static void receiptWrittenAt(const std::wstring& path, WORD year, WORD month, WORD day, WORD hour) {
+    SYSTEMTIME local{}, utc{};
+    local.wYear = year; local.wMonth = month; local.wDay = day; local.wHour = hour;
+    FILETIME ft{};
+    HANDLE h = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    const bool ok = h != INVALID_HANDLE_VALUE && TzSpecificLocalTimeToSystemTime(nullptr, &local, &utc) &&
+                    SystemTimeToFileTime(&utc, &ft) && SetFileTime(h, nullptr, nullptr, &ft);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    check(ok, "the receipt fixture's write time is set");
+}
+
 static void testToolReceipts(const std::wstring& scratch) {
     printf("\nthe tool's receipts: which one is read, and what it proves\n");
     const std::wstring root = joinPath(scratch, L"tool-receipts");
@@ -2885,15 +2898,31 @@ static void testToolReceipts(const std::wstring& scratch) {
               got[0].files[0].installedSha == "now" && got[0].files[0].backup.empty(),
               "the installed native receipt is read, its \\u-escaped key decoded");
     }
-    {   // Of the backup-named siblings the newest stamp wins, then the highest counter, as install_edup.py picks its current receipt.
+    const auto writtenAt = receiptWrittenAt;
+    {   // Named before the rotation: the plain receipt is the FIRST install's and the oldest. Of the backup-named siblings the newest
+        // stamp wins, then the highest counter, as install_edup.py picks its current receipt.
         const std::wstring dir = fresh(L"siblings");
         writeAll(joinPath(dir, L"edvr_native_receipt.json"), receiptText(dir, "installed", "base"));
+        writtenAt(joinPath(dir, L"edvr_native_receipt.json"), 2026, 10, 1, 8);
         writeAll(joinPath(dir, L"edvr_native_receipt.json.pre-a-20261012-090000.bak"), receiptText(dir, "installed", "older"));
         writeAll(joinPath(dir, L"edvr_native_receipt.json.pre-a-20261013-120000.bak"), receiptText(dir, "installed", "same-stamp-0"));
         writeAll(joinPath(dir, L"edvr_native_receipt.json.pre-a-20261013-120000.bak.2"), receiptText(dir, "installed", "newest"));
         const std::vector<ToolReceipt> got = readToolReceipts(dir);
         check(got.size() == 1 && got[0].files.size() == 1 && got[0].files[0].installedSha == "newest",
               "the newest backup-named sibling is the current receipt, the highest counter breaking the tie");
+    }
+    {   // Named by the rotation: the plain receipt is the newest, its predecessors carry stamps of their own last writes.
+        const std::wstring dir = fresh(L"rotated");
+        writeAll(joinPath(dir, L"edvr_native_receipt.json.pre-b-20261012-090000.bak"), receiptText(dir, "installed", "older"));
+        writeAll(joinPath(dir, L"edvr_native_receipt.json.pre-b-20261013-120000.bak"), receiptText(dir, "installed", "previous"));
+        writeAll(joinPath(dir, L"edvr_native_receipt.json"), receiptText(dir, "installed", "plain"));
+        writtenAt(joinPath(dir, L"edvr_native_receipt.json"), 2026, 10, 14, 9);
+        const std::vector<ToolReceipt> got = readToolReceipts(dir);
+        check(got.size() == 1 && got[0].files.size() == 1 && got[0].files[0].installedSha == "plain",
+              "a plain receipt written after its rotated predecessors is the current receipt");
+        const std::vector<ToolReceipt> history = readNativeReceiptHistory(dir);
+        check(history.size() == 2 && history[0].files[0].installedSha == "previous" && history[1].files[0].installedSha == "older",
+              "the rotated receipts are the history, newest first");
     }
     {   // A receipt for another folder, one still staging, and one that does not parse prove nothing and are not read.
         const std::wstring dir = fresh(L"refused");
@@ -2915,6 +2944,42 @@ static void testToolReceipts(const std::wstring& scratch) {
         const std::vector<ToolReceipt> got = readToolReceipts(dir);
         check(got.size() == 2 && got[0].native && !got[1].native && got[1].files[0].key == "graphics",
               "the native and the flat receipt are both read");
+    }
+    {   // The current (edup_) plain receipt, written after the legacy backup-named siblings, is the current receipt; they are history.
+        const std::wstring dir = fresh(L"edup-plain");
+        writeAll(joinPath(dir, L"edvr_native_receipt.json.pre-c-20261012-090000.bak"), receiptText(dir, "installed", "legacy-older"));
+        writeAll(joinPath(dir, L"edvr_native_receipt.json.pre-c-20261013-120000.bak"), receiptText(dir, "installed", "legacy-previous"));
+        writeAll(joinPath(dir, L"edup_native_receipt.json"), receiptText(dir, "installed", "edup-plain"));
+        receiptWrittenAt(joinPath(dir, L"edup_native_receipt.json"), 2026, 10, 14, 9);
+        const std::vector<ToolReceipt> got = readToolReceipts(dir);
+        check(got.size() == 1 && got[0].files.size() == 1 && got[0].files[0].installedSha == "edup-plain",
+              "an edup plain receipt written after its legacy siblings is the current receipt");
+        const std::vector<ToolReceipt> history = readNativeReceiptHistory(dir);
+        check(history.size() == 2 && history[0].files[0].installedSha == "legacy-previous" && history[1].files[0].installedSha == "legacy-older",
+              "the legacy receipts are the history, newest first");
+    }
+    {   // A folder mixing the spellings: a legacy sibling newer than the edup plain receipt is the current one; with equal stamps
+        // the edup spelling wins the tie.
+        const std::wstring dir = fresh(L"mixed");
+        writeAll(joinPath(dir, L"edup_native_receipt.json"), receiptText(dir, "installed", "edup-plain"));
+        receiptWrittenAt(joinPath(dir, L"edup_native_receipt.json"), 2026, 10, 1, 8);
+        writeAll(joinPath(dir, L"edvr_native_receipt.json.pre-d-20261013-120000.bak"), receiptText(dir, "installed", "legacy-sibling"));
+        const std::vector<ToolReceipt> got = readToolReceipts(dir);
+        check(got.size() == 1 && got[0].files[0].installedSha == "legacy-sibling",
+              "a legacy sibling newer than the edup plain receipt is the current receipt");
+        writeAll(joinPath(dir, L"edup_native_receipt.json.pre-d-20261013-120000.bak"), receiptText(dir, "installed", "edup-sibling"));
+        const std::vector<ToolReceipt> tied = readToolReceipts(dir);
+        check(tied.size() == 1 && tied[0].files[0].installedSha == "edup-sibling",
+              "with equal stamps the edup spelling wins the tie over the legacy one");
+    }
+    {   // Only legacy names, the plain one oldest by its write time: the newest legacy sibling is read.
+        const std::wstring dir = fresh(L"legacy-only");
+        writeAll(joinPath(dir, L"edvr_native_receipt.json"), receiptText(dir, "installed", "plain-old"));
+        receiptWrittenAt(joinPath(dir, L"edvr_native_receipt.json"), 2026, 10, 1, 8);
+        writeAll(joinPath(dir, L"edvr_native_receipt.json.pre-e-20261013-120000.bak"), receiptText(dir, "installed", "newest-sibling"));
+        const std::vector<ToolReceipt> got = readToolReceipts(dir);
+        check(got.size() == 1 && got[0].files[0].installedSha == "newest-sibling",
+              "a folder with only legacy receipts still reads its newest sibling");
     }
 }
 
@@ -3088,8 +3153,9 @@ static void testToolAdoption(const std::wstring& scratch) {
         check(planUninstall(s, testOptions(), vr).blocked, "and uninstall is still blocked");
     }
 
-    // Two tool installs, as install_edup.py leaves them: the first receipt (plain name) backs up the game's runtime, the second (a
-    // backup-named sibling, the current one) backs up the first EDVR runtime. The stock runtime is in the older receipt's backup only.
+    // Two tool installs, as install_edup.py left them before it rotated receipts: the first receipt (plain name, written at the first
+    // install) backs up the game's runtime, the second (a backup-named sibling, the current one) backs up the first EDVR runtime. The
+    // stock runtime is in the older receipt's backup only.
     const std::wstring firstBackup = joinPath(openvr, L"openvr_api.dll.pre-first-20261012-101500.bak");
     const std::wstring secondBackup = joinPath(openvr, L"openvr_api.dll.pre-second-20261013-101500.bak");
     const std::string firstEdvr = syntheticPe({"VR_InitInternal", "edvrFirstVersion"});
@@ -3107,6 +3173,7 @@ static void testToolAdoption(const std::wstring& scratch) {
                    ", \"before_sha256\": \"" + before + "\", \"installed_sha256\": \"" + installed + "\"}]}";
         };
         writeAll(joinPath(gameDir, L"edvr_native_receipt.json"), receipt(firstBackup, olderBeforeSha, shaOfText(firstEdvr)));
+        receiptWrittenAt(joinPath(gameDir, L"edvr_native_receipt.json"), 2026, 10, 12, 10);
         writeAll(joinPath(gameDir, L"edvr_native_receipt.json.pre-second-20261013-101500.bak"),
                  receipt(secondBackup, shaOfText(firstEdvr), shaOfText(edvr)));
     };
@@ -3119,6 +3186,18 @@ static void testToolAdoption(const std::wstring& scratch) {
               s.toolOriginal.path == firstBackup,
               "the original is recovered from the older receipt's backup, not the current one's");
         check(s.toolReceiptHistory.size() == 1, "and the older receipt is kept apart as history, not as ownership evidence");
+    }
+    {   // After the rename the plain receipt has the edup name. Written after the rotated legacy sibling, it is the current receipt.
+        layTwo(shaOfText(stock));
+        check(MoveFileExW(joinPath(gameDir, L"edvr_native_receipt.json").c_str(), joinPath(gameDir, L"edup_native_receipt.json").c_str(), 0) != 0,
+              "the legacy plain receipt is renamed to the edup name for the fixture");
+        receiptWrittenAt(joinPath(gameDir, L"edup_native_receipt.json"), 2026, 10, 14, 9);
+        const Survey s = survey();
+        check(s.toolReceipts.size() == 1 && s.toolReceipts[0].path == joinPath(gameDir, L"edup_native_receipt.json"),
+              "an edup plain receipt written after its legacy sibling is the current receipt");
+        check(s.toolReceiptHistory.size() == 1 && s.toolReceiptHistory[0].path.find(L"edvr_native_receipt.json.pre-second-") != std::wstring::npos,
+              "the legacy sibling is kept as history");
+        layTwo(shaOfText(stock));
     }
     update();
     {
@@ -7206,7 +7285,7 @@ static void testSchemaReviewFixes(const std::wstring& scratch) {
         check(hasStep(un, Action::Delete, L"amd_fidelityfx_loader_dx12.dll", nullptr) &&
               hasStep(un, Action::Delete, L"amd_fidelityfx_upscaler_dx12.dll", nullptr) &&
               hasStep(un, Action::Delete, L"AMD-FIDELITYFX-LICENSE.txt", nullptr),
-              "an uninstall removes the FSR 4 files EDVR placed, by the hash rule");
+              "an uninstall removes the FSR 4 files ED-UP placed, by the hash rule");
         PayloadInfo noNotice = p;
         tdrop(noNotice, "fsr4_license");
         const Plan refused = planInstall(s, testOptions(), noNotice);

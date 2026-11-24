@@ -39,7 +39,7 @@ static_assert(static_cast<uint64_t>(kPosOffset) * 4u + 12u <= kBufferBytes,
 // advanced ini key "camera buffer size = 0", which a user could set and a stale
 // line could carry; an environment variable is something no ini file holds. The
 // value "1" switches it; anything else, or unset, leaves the tap on.
-constexpr const char* kTestNoTapVariable = "EDVR_TEST_NO_CAMERA_TAP";
+constexpr const char* kTestNoTapVariable = "EDUP_TEST_NO_CAMERA_TAP";
 
 bool testSwitchesTapOff() {
     char value[4] = {};

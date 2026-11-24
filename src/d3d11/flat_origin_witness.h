@@ -330,7 +330,7 @@ inline void print(const FlatOriginWitnessReport& r) noexcept {
         r.cameraDelta[0],r.cameraDelta[1],r.cameraDelta[2],r.worldEdgeValid?1u:0u,r.medianDelta[0],r.medianDelta[1],r.medianDelta[2],
         r.cameraMinusWorldValid?1u:0u,r.cameraMinusMedian[0],r.cameraMinusMedian[1],r.cameraMinusMedian[2],r.preStable,r.matchedAt,r.coherent,r.owners,r.farRecords,r.farOwners,
         r.movingOutliers,r.missingAt,r.changedQuat,r.sameFrameChanges);
-    Log::get().note("flat origin witness edges: resolver-frame=%llu offsets=-3>-2,-2>-1,-1>0,0>+1,+1>+2 present=%u%u%u%u%u%u count=%u,%u,%u,%u,%u coherent=%u,%u,%u,%u,%u median=(%.9g,%.9g,%.9g)/(%.9g,%.9g,%.9g)/(%.9g,%.9g,%.9g)/(%.9g,%.9g,%.9g)/(%.9g,%.9g,%.9g) observed=%u,%u,%u,%u,%u,%u occupied=%u,%u,%u,%u,%u,%u collisions=%u,%u,%u,%u,%u,%u skipped-lock=%u; EDVR previous pose is synthesized, not an origin witness",
+    Log::get().note("flat origin witness edges: resolver-frame=%llu offsets=-3>-2,-2>-1,-1>0,0>+1,+1>+2 present=%u%u%u%u%u%u count=%u,%u,%u,%u,%u coherent=%u,%u,%u,%u,%u median=(%.9g,%.9g,%.9g)/(%.9g,%.9g,%.9g)/(%.9g,%.9g,%.9g)/(%.9g,%.9g,%.9g)/(%.9g,%.9g,%.9g) observed=%u,%u,%u,%u,%u,%u occupied=%u,%u,%u,%u,%u,%u collisions=%u,%u,%u,%u,%u,%u skipped-lock=%u; ED-UP previous pose is synthesized, not an origin witness",
         static_cast<unsigned long long>(r.resolverFrame),r.hadFrame[0]?1u:0u,r.hadFrame[1]?1u:0u,r.hadFrame[2]?1u:0u,
         r.hadFrame[3]?1u:0u,r.hadFrame[4]?1u:0u,r.hadFrame[5]?1u:0u,
         r.edgeCount[0],r.edgeCount[1],r.edgeCount[2],r.edgeCount[3],r.edgeCount[4],

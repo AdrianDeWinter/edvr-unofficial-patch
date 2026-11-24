@@ -2,14 +2,14 @@
 """Offline checker for EDVR's on-foot flight recorder (F213): which stage moved first?
 
     python tools\\onfoot_check.py --target <game dir> --expect-build HEAD [--mark N]
-    python tools\\onfoot_check.py --dir <edvr_logs\\onfoot> [--stamp 20261105_140000] [--list]
+    python tools\\onfoot_check.py --dir <edup_logs\\onfoot> [--stamp 20261105_140000] [--list]
     python tools\\onfoot_check.py --target <game dir> --mark 2 --window-s 3 1
     python tools\\onfoot_check.py --target <game dir> --dump pin --fields e,stance,settle_why [--since 14:03:00 --until 14:04:00]
     python tools\\onfoot_check.py --self-test
     python tools\\onfoot_check.py --verify-fixture <folder the recorder rig wrote>
 
 The recording needs log.on_foot_detail on; F9 (hotkey.on_foot_mark) drops a numbered mark at the moment the pilot saw something wrong. A session
-is every onfoot_<stamp>_<nnn>.rec of one stamp in <game>\\edvr_logs\\onfoot; the newest stamp is read unless --stamp names one. The files describe
+is every onfoot_<stamp>_<nnn>.rec of one stamp in <game>\\edup_logs\\onfoot; the newest stamp is read unless --stamp names one. The files describe
 themselves (a JSON header carries every record's fields), so this reader is driven by the header and never by hard-coded offsets. A rule whose
 field the file lacks prints "cannot evaluate: <record>.<field> missing" and the rest still run.
 
@@ -905,7 +905,7 @@ class Analysis:
         # game camera
         tmax = max(abs(v) for k, v in eff.items())
         if abs(move) > 0 and abs(dl['game']) >= GAME_SHARE * abs(move) and tmax < TERM_FLAT_M:
-            return 'game_camera', 'the game holds %.0f%% of the move, EDVR terms flat%s' % (100 * abs(dl['game']) / abs(move), uncorrected), dl
+            return 'game_camera', 'the game holds %.0f%% of the move, ED-UP terms flat%s' % (100 * abs(dl['game']) / abs(move), uncorrected), dl
         pool = {'term:' + k: v for k, v in eff.items()}
         pool.update(extra)
         same = {k: v for k, v in pool.items() if v * move > 0}

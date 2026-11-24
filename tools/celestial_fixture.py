@@ -22,7 +22,7 @@ moon, radius 679444.9, and the far body of radius 835951.4 at 6.4e8 m):
             (each face matched to last frame's by its static rows; the doc's D references are these);
   p1, p1m   the nearest patch's centre in head axes, and its jitter-free true motion;
   p2, p2m   the body centre (cb2[12].xyz, back in head axes by A^T), and its jitter-free true motion.
-TRUE MOTION is the game's own chain, no EDVR arithmetic in it: a point's world-aligned camera-relative position in
+TRUE MOTION is the game's own chain, no ED-UP arithmetic in it: a point's world-aligned camera-relative position in
 each frame (the patch's A c and its last-frame counterpart's; the centre from cb2[12] of each frame) goes through that
 frame's cb1 columns to a pixel; previous minus current is the motion with both frames' jitter in it, and the pass's
 jitter step (jitter of the previous frame minus this frame's, motion.csv) comes off.

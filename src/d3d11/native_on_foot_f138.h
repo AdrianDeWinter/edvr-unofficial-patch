@@ -522,7 +522,7 @@ inline int formatPitched(char* buf, size_t n, const Window& w, const char* item)
     return std::snprintf(buf, n,
                          "native on foot pitched view (F138) 1 s: mode %s, item %s, aim pitch %+.1f deg (min %+.1f max %+.1f), head pitch %+.1f deg; the camera's sink against the "
                          "stance %+.1f cm (max %+.1f), the head's own height since the stance %+.1f cm; w %.2f/%.2f; added %+.1f cm (max %+.1f) in %u of %u pitched calls | "
-                         "measured only: an item drawn %u calls | not applied: %s; reference used (F170; the calls that chose one): %s; %s; EDVR carried up %+.1f forward %+.1f cm (the raise, F137); "
+                         "measured only: an item drawn %u calls | not applied: %s; reference used (F170; the calls that chose one): %s; %s; ED-UP carried up %+.1f forward %+.1f cm (the raise, F137); "
                          "the view over the neck %+.1f cm; INSIDE %u of %u; the settle refused for the aim's pitch %u calls; returned to the stance's raise %u times "
                          "(refused %u, not needed %u)",
                          mode, item ? item : "none", mean(w.aimSum, w.calls), w.calls ? w.aimMin : 0.0, w.calls ? w.aimMax : 0.0, mean(w.headSum, w.headN), mean(w.sinkSum, w.sinkN),

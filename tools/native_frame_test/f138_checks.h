@@ -608,7 +608,7 @@ inline void run138(Check&& check) {
         char msg[300];
         std::snprintf(msg, sizeof(msg), "F171: the 1 s line is inside the log's 1166 bytes (1200 less its stamp and truncation marker) with every figure at its worst (%d bytes; a typical second %d)", len, typicalLen);
         check(len > 0 && len < 1166 && typicalLen > 0 && typicalLen < 1000 && std::strstr(typical, "not applied: running reference, measured only 6; reference used (F170; the calls that chose one): settled 0, running 6, none 0; reference detail (F171;") != nullptr &&
-                  std::strstr(typical, "; EDVR carried up ") != nullptr,
+                  std::strstr(typical, "; ED-UP carried up ") != nullptr,
               msg);
     }
 

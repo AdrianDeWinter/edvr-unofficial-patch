@@ -233,7 +233,7 @@ int guardFilter(unsigned long code, const char* site) {
     // operation was abandoned and the process carried on; the PR's own body
     // drew that line correctly and the log line now matches it.
     Log::get().note("FAULT ABSORBED exception=0x%08lX site=%s%s. THIS DID NOT CRASH "
-                    "THE GAME. EDVR touched an address that was not there, its own "
+                    "THE GAME. ED-UP touched an address that was not there, its own "
                     "handler caught it, and the process carried on -- what the fault "
                     "cost is that one operation, abandoned. %sWhat would be worth "
                     "reporting is a total below that keeps doubling, or a "
@@ -305,7 +305,7 @@ bool Sentinel::arm() {
         breadcrumb("guard: sentinel could NOT be armed; crash protection is off");
         return false;
     }
-    const char msg[] = "edvr: a hook was armed and never confirmed. "
+    const char msg[] = "ed-up: a hook was armed and never confirmed. "
                        "Delete this file to re-enable it.\r\n";
     DWORD written = 0;
     WriteFile(f, msg, sizeof(msg) - 1, &written, nullptr);

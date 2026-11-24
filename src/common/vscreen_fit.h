@@ -201,9 +201,9 @@ inline RouteVerdict routeVerdict(const RouteFacts& f) {
     if (!f.keyAuto) addWhy(v, "the on-foot world route is off");
     if (f.layerWhy && f.layerWhy[0]) addWhy(v, f.layerWhy);
     if (f.runtime == RuntimeKind::OculusNative)
-        addWhy(v, "this session is on Elite's native Oculus back end (EDVR's OpenXR runtime is not driving it)");
+        addWhy(v, "this session is on Elite's native Oculus back end (ED-UP's OpenXR runtime is not driving it)");
     else if (f.runtime == RuntimeKind::ForeignOpenvr)
-        addWhy(v, "the openvr_api.dll loaded is not EDVR's");
+        addWhy(v, "the openvr_api.dll loaded is not ED-UP's");
     v.runs = v.why[0] == 0;
     return v;
 }

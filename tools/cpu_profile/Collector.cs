@@ -31,6 +31,8 @@ internal sealed class Collected
     public readonly List<ClockMarker> Clocks = [];
     public readonly List<SpanMarker> Spans = [];
     public readonly List<FrameMarker> Frames = [];
+    // Flat-profile present markers (event 5). A trace with these and no VR frames is a flat report.
+    public readonly List<PresentFrameMarker> PresentFrames = [];
     public readonly List<GpuCompletionMarker> GpuCompletions = [];
     public int GpuMarkerSchemaErrors;
     public readonly Dictionary<int, ThreadTimeline> Timelines = [];
@@ -108,8 +110,13 @@ internal static class Collector
             if (frame.CallerThread != 0) result.CallerThreads.Add(checked((int)frame.CallerThread));
             if (frame.NextWaitThread != 0) result.CallerThreads.Add(checked((int)frame.NextWaitThread));
         }
+        // A flat frame's thread is the render thread that owns the Present, so its switch-out
+        // stacks and ready details are kept the same way.
+        foreach (var present in result.PresentFrames)
+            if (present.Thread != 0) result.CallerThreads.Add(checked((int)present.Thread));
         progress?.Invoke($"markers: clocks={result.Clocks.Count} spans={result.Spans.Count} " +
-                         $"frames={result.Frames.Count} callerThreads={result.CallerThreads.Count}");
+                         $"frames={result.Frames.Count} presentFrames={result.PresentFrames.Count} " +
+                         $"callerThreads={result.CallerThreads.Count}");
 
         result.Stacks = new StackStore(log, pid);
         result.SampleIntervalFromLogUs = log.SampleProfileInterval.TotalMilliseconds * 1000.0;

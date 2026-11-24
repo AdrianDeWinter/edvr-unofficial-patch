@@ -26,7 +26,7 @@ REM  tools\linux_toolchain.py: the same production DLLs, into
 REM  build\compile-build, with no Python gates, no receipt check, no rigs and
 REM  no launcher. It is never validation and never a release asset.
 REM
-REM  Set EDVR_SIGN=1 (any value) to sign the shipped binaries as they are made, with
+REM  Set EDUP_SIGN=1 (any value) to sign the shipped binaries as they are made, with
 REM  Azure Artifact Signing: d3d11.dll and edvr_openxr_runtime.dll before anything
 REM  copies them, then ed-up-launcher.exe, so package.bat zips and hashes the signed
 REM  bytes. It needs python tools\artifact_signing.py check to pass and an az login.
@@ -52,7 +52,7 @@ set "OBJ=%BUILD%\obj"
 REM The literal ")" in "Program Files (x86)" would close a parenthesised block.
 set "PROGFILES86=%ProgramFiles(x86)%"
 
-set "EDVR_RIG="
+set "EDUP_RIG="
 :parse_args
 if "%~1"=="" goto args_done
 if /I "%~1"=="--clean" goto arg_clean
@@ -61,10 +61,10 @@ if /I "%~1"=="--dll-only" goto arg_dll_only
 if /I "%~1"=="--compile-only" goto arg_compile_only
 if /I "%~1"=="--rig" goto arg_rig
 if /I "%~1"=="--wait-lock" goto arg_wait_lock
-echo [edvr] unknown argument: %~1
+echo [edup] unknown argument: %~1
 exit /b 1
 :arg_wait_lock
-set "EDVR_WAIT_LOCK=1"
+set "EDUP_WAIT_LOCK=1"
 shift
 goto parse_args
 :arg_clean
@@ -72,30 +72,30 @@ set "DO_CLEAN=1"
 shift
 goto parse_args
 :arg_jobs
-set "EDVR_JOBS=%~2"
+set "EDUP_JOBS=%~2"
 shift
 shift
 goto parse_args
 :arg_dll_only
-set "EDVR_DLL_ONLY=1"
+set "EDUP_DLL_ONLY=1"
 shift
 goto parse_args
 :arg_compile_only
-set "EDVR_COMPILE_ONLY=1"
+set "EDUP_COMPILE_ONLY=1"
 shift
 goto parse_args
 :arg_rig
-set "EDVR_RIG=%~2"
+set "EDUP_RIG=%~2"
 shift
 shift
 goto parse_args
 :args_done
-if defined EDVR_DLL_ONLY if defined DO_CLEAN (
-    echo [edvr] ERROR: --dll-only cannot be combined with --clean
+if defined EDUP_DLL_ONLY if defined DO_CLEAN (
+    echo [edup] ERROR: --dll-only cannot be combined with --clean
     exit /b 1
 )
-if defined EDVR_COMPILE_ONLY if defined EDVR_DLL_ONLY (
-    echo [edvr] ERROR: --compile-only cannot be combined with --dll-only
+if defined EDUP_COMPILE_ONLY if defined EDUP_DLL_ONLY (
+    echo [edup] ERROR: --compile-only cannot be combined with --dll-only
     exit /b 1
 )
 REM A compile-only build takes the DLL-only path below without its receipt
@@ -103,28 +103,33 @@ REM check, in a directory of its own, so it can neither be mistaken for a
 REM validated build nor overwrite one. --clean then removes only that directory.
 REM tools\linux_toolchain.py holds its own lock on the host for the whole
 REM compile: under Wine, build_lock.py cannot name its owner (os.getppid fails).
-if defined EDVR_COMPILE_ONLY (
-    set "EDVR_DLL_ONLY=1"
-    set "EDVR_BUILD_GUARDED=1"
+if defined EDUP_COMPILE_ONLY (
+    set "EDUP_DLL_ONLY=1"
+    set "EDUP_BUILD_GUARDED=1"
     set "BUILD=%ROOT%\build\compile-build"
     set "GEN=%ROOT%\build\compile-build\gen"
     set "OBJ=%ROOT%\build\compile-build\obj"
 )
-if defined EDVR_RIG goto run_rig
+REM Deprecated names: the inputs a user sets were EDVR_ before the rename to EDUP_. An EDVR_X
+REM still works when EDUP_X is not set, with one warning; tools\edup_env.py does the same for
+REM the Python tools, and the C++ names are read the same way in src\common\config.cpp.
+for %%V in (SIGN NO_COMPILE_CACHE PROFILE_SYMBOLS NGX_SDK XESS_SDK FSR4_SDK FFX_DX11 EDHM_2DMIGOTO JOBS RIG_TIMEOUT RIG_TIMEOUT_SCALE TRACE_EVENT_DIR ANALYSIS_DIR) do call :edup_legacy_env %%V
+for %%V in (SIGNTOOL SIGN_ENDPOINT SIGN_ACCOUNT SIGN_PROFILE SIGN_SUBJECT) do call :edup_legacy_env %%V
+if defined EDUP_RIG goto run_rig
 
 where python.exe >nul 2>&1
-if errorlevel 1 ( echo [edvr] ERROR: python is required to generate export thunks. & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: python is required to generate export thunks. & exit /b 1 )
 
 REM ===========================================================================
 REM  One build at a time (see header). A second top-level invocation re-enters
-REM  itself once, guarded by EDVR_BUILD_GUARDED, so the lock releases exactly
+REM  itself once, guarded by EDUP_BUILD_GUARDED, so the lock releases exactly
 REM  once however the guarded run below finishes -- every existing "exit /b"
 REM  in this file already does the right thing without any further changes.
 REM ===========================================================================
-if not defined EDVR_BUILD_GUARDED (
+if not defined EDUP_BUILD_GUARDED (
     REM SHIFT in parse_args changes %%0; ROOT retains the original script path.
     REM --wait-lock: the lock is taken in the same step that finds it free.
-    if defined EDVR_WAIT_LOCK (
+    if defined EDUP_WAIT_LOCK (
         python "%ROOT%\tools\build_lock.py" --acquire --wait --note "build.bat %*"
     ) else (
         python "%ROOT%\tools\build_lock.py" --acquire --note "build.bat %*"
@@ -132,15 +137,15 @@ if not defined EDVR_BUILD_GUARDED (
     REM A refusal must leave through :lock_refused. A literal "exit /b 1" inside
     REM this block stops the batch but exits 0 under cmd /c (tested 2026-10-14).
     if errorlevel 1 goto lock_refused
-    set "EDVR_BUILD_GUARDED=1"
+    set "EDUP_BUILD_GUARDED=1"
     call "%ROOT%\build.bat" %*
-    set "EDVR_BUILD_RC=!errorlevel!"
+    set "EDUP_BUILD_RC=!errorlevel!"
     python "%ROOT%\tools\build_lock.py" --release
-    exit /b !EDVR_BUILD_RC!
+    exit /b !EDUP_BUILD_RC!
 )
 
 if defined DO_CLEAN (
-    echo [edvr] cleaning
+    echo [edup] cleaning
     if exist "%BUILD%" rmdir /s /q "%BUILD%"
 )
 
@@ -163,21 +168,29 @@ set "VSPATH="
 set /p VSPATH=<"%TEMP%\edvr_vspath.txt"
 del "%TEMP%\edvr_vspath.txt" >nul 2>&1
 if not defined VSPATH goto no_vs
-echo [edvr] using %VSPATH%
+echo [edup] using %VSPATH%
 REM vcvars64 -> VsDevCmd runs a bare "vswhere.exe" and prints "'vswhere.exe' is not
 REM recognized" on every build when the Installer directory is not on PATH. It is
 REM harmless to the build but reads as a failure, so put the directory on PATH
 REM (already known to exist: %VSWHERE% was just run) before calling it.
 set "PATH=%PROGFILES86%\Microsoft Visual Studio\Installer;%PATH%"
 call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" >nul
-if errorlevel 1 ( echo [edvr] ERROR: vcvars64 failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vcvars64 failed & exit /b 1 )
 exit /b 0
 
 :no_vs
-echo [edvr] ERROR: no Visual Studio install with the x64 C++ toolset was found.
+echo [edup] ERROR: no Visual Studio install with the x64 C++ toolset was found.
 echo        Install the "Desktop development with C++" workload, or run this
 echo        script from a "x64 Native Tools Command Prompt for VS".
 exit /b 1
+
+REM One deprecated EDVR_%1 input: read when its EDUP_%1 is unset, with one warning (see above). Called once per name.
+:edup_legacy_env
+if not defined EDUP_%1 if defined EDVR_%1 (
+    echo [edup] WARNING: EDVR_%1 is deprecated; set EDUP_%1 instead
+    call set "EDUP_%1=%%EDVR_%1%%"
+)
+goto :eof
 
 :toolchain_ok
 
@@ -216,7 +229,7 @@ copy /y "%ROOT%\third_party\openxr\loader\openxr_loader.dll" "%BUILD%\openxr_loa
 copy /y "%ROOT%\third_party\openxr\loader\OPENXR-LOADER-LICENSE.txt" "%BUILD%\OPENXR-LOADER-LICENSE.txt" >nul || exit /b 1
 REM A compile-only build is not validation and skips the Python gates; the
 REM full build runs every one of them.
-if defined EDVR_COMPILE_ONLY goto python_gates_done
+if defined EDUP_COMPILE_ONLY goto python_gates_done
 REM The runner is proven before it is trusted with the gates below (and the rigs,
 REM much later, use the same file).
 python tools\run_jobs.py --self-test || exit /b 1
@@ -254,6 +267,7 @@ python tools\run_jobs.py ^
     --gate "tools\gen_dittosr_shaders.py --self-test" ^
     --gate "tools\sign_manifest.py --self-test" ^
     --gate "tools\artifact_signing.py --self-test" ^
+    --gate "tools\edup_env.py --self-test" ^
     --gate "tools\launcher_fixtures.py --self-test" ^
     --gate "tools\install_proton.py --self-test" ^
     --gate "tools\build_diff.py --self-test" ^
@@ -298,7 +312,7 @@ python tools\run_jobs.py ^
 REM DittoSR's committed bytecode has to match a fresh D3DCompile of the HLSL.
 REM --self-test only checks the container shape, so a shader edit that was not
 REM regenerated would pass it. Compile-only builds skip the Python gates.
-if not defined EDVR_COMPILE_ONLY (
+if not defined EDUP_COMPILE_ONLY (
     python tools\gen_dittosr_shaders.py --check-bytes || exit /b 1
 )
 
@@ -313,12 +327,12 @@ REM itself v0.7.3-2-g650d8a9 and uncommitted changes append -dirty, so a log
 REM from a build that was never a release SAYS so instead of impersonating one.
 REM No git or no repo (a source-zip build) falls back to "unknown" and the
 REM build carries on -- versioning must never be the reason a build fails.
-set "EDVR_VER=unknown"
-for /f "delims=" %%v in ('git -C "%ROOT%" describe --tags --always --dirty 2^>nul') do set "EDVR_VER=%%v"
+set "EDUP_VER=unknown"
+for /f "delims=" %%v in ('git -C "%ROOT%" describe --tags --always --dirty 2^>nul') do set "EDUP_VER=%%v"
 REM Wine has no git: tools\linux_toolchain.py passes the host's describe of
 REM the same tree, and only a compile-only build reads it.
-if defined EDVR_COMPILE_ONLY if defined EDVR_GIT_DESCRIBE set "EDVR_VER=%EDVR_GIT_DESCRIBE%"
-echo [edvr] version %EDVR_VER%
+if defined EDUP_COMPILE_ONLY if defined EDUP_GIT_DESCRIBE set "EDUP_VER=%EDUP_GIT_DESCRIBE%"
+echo [edup] version %EDUP_VER%
 
 REM A -dirty build is fine to make and dangerous to SEND, so say so loudly.
 REM
@@ -334,10 +348,10 @@ REM Not an error: building a dirty tree is the normal inner loop, and
 REM refusing it would make the guard the thing people work around. It is a
 REM line you cannot miss in the output when you are about to hand the file
 REM to somebody.
-echo %EDVR_VER% | findstr /C:"-dirty" >nul && (
-    echo [edvr] NOTE: this build is stamped %EDVR_VER% -- from a tree with
-    echo [edvr]       uncommitted changes. Committing does NOT relabel it;
-    echo [edvr]       commit first, then build, before sending it anywhere.
+echo %EDUP_VER% | findstr /C:"-dirty" >nul && (
+    echo [edup] NOTE: this build is stamped %EDUP_VER% -- from a tree with
+    echo [edup]       uncommitted changes. Committing does NOT relabel it;
+    echo [edup]       commit first, then build, before sending it anywhere.
 )
 
 REM Every cl.exe call below compiles its sources across all cores. cl.exe
@@ -365,20 +379,20 @@ REM compile, not just fsr3_engine.cpp; the cost is unwind tables around
 REM extern "C" calls.
 REM Optional local symbols for CPU profiling. Keep release optimization: DEBUG
 REM otherwise changes the linker's REF/ICF defaults. PDBs stay in build/.
-set "EDVR_CPU_COMPILE="
-set "EDVR_CPU_LINK="
-if "%EDVR_PROFILE_SYMBOLS%"=="1" (
-    set "EDVR_CPU_COMPILE=/Z7"
-    set "EDVR_CPU_LINK=/DEBUG:FULL /OPT:REF /OPT:ICF"
+set "EDUP_CPU_COMPILE="
+set "EDUP_CPU_LINK="
+if "%EDUP_PROFILE_SYMBOLS%"=="1" (
+    set "EDUP_CPU_COMPILE=/Z7"
+    set "EDUP_CPU_LINK=/DEBUG:FULL /OPT:REF /OPT:ICF"
 )
-set CFLAGS=/nologo /c /O2 /MT /std:c++17 /EHs /W4 /GR- %EDVR_CPU_COMPILE% ^
+set CFLAGS=/nologo /c /O2 /MT /std:c++17 /EHs /W4 /GR- %EDUP_CPU_COMPILE% ^
  /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE ^
  /DEDVR_HAVE_VERSION_HEADER=1 ^
  /I"%GEN%"
 REM Every compile below goes through tools\compile_cache.py, which skips a
 REM compile whose sources, project headers, flags, toolchain and INCLUDE are
 REM unchanged and otherwise runs cl.exe exactly as written. CC is inherited by
-REM the --rig children like CFLAGS. EDVR_NO_COMPILE_CACHE=1 turns it off.
+REM the --rig children like CFLAGS. EDUP_NO_COMPILE_CACHE=1 turns it off.
 set "CC=python tools\compile_cache.py cl.exe"
 
 echo.
@@ -386,15 +400,15 @@ REM The version used to be a /D flag, which changed every TU's flags on every
 REM commit or dirty flip. It is now edvr_version.h, rewritten only when the
 REM version changes; the flag is constant, so rigs that compile these files
 REM without it keep their #ifndef fallbacks.
-python "tools\gen_installer_rc.py" --version-header --version "%EDVR_VER%" --out "%GEN%"
-if errorlevel 1 ( echo [edvr] ERROR: version header generation failed & exit /b 1 )
+python "tools\gen_installer_rc.py" --version-header --version "%EDUP_VER%" --out "%GEN%"
+if errorlevel 1 ( echo [edup] ERROR: version header generation failed & exit /b 1 )
 REM The runtime config audit data: known keys + the moved-from map,
 REM generated from the same sources the late contract check verifies.
 python "tools\check_config_contract.py" --quiet --emit "%GEN%\config_contract_gen.h"
-if errorlevel 1 ( echo [edvr] ERROR: contract header generation failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: contract header generation failed & exit /b 1 )
 
 python tools\build_phases.py --mark "%PHASES%" "python gates and setup"
-echo [edvr] === precompiled temporal shaders ===
+echo [edup] === precompiled temporal shaders ===
 REM Fixed HLSL belongs in the build: compiling it in the first Present delayed
 REM the intro by 18 seconds. The header carries a key over the HLSL, the
 REM variant table and the compiler DLL, and is regenerated whenever that key
@@ -404,10 +418,10 @@ REM every build (measured 2026-09-15). The generator tests never initialize a GP
 REM AMD FSR 1.0 as embeddable HLSL. Generated rather than committed so the
 REM vendored headers stay byte-identical to upstream (src\d3d11\fsr\).
 python "tools\gen_fsr_hlsl.py" --root "%ROOT%" --out "%GEN%"
-if errorlevel 1 ( echo [edvr] ERROR: FSR shader embedding failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: FSR shader embedding failed & exit /b 1 )
 REM SMAA 1x (MIT, src\d3d11\smaa\, pinned to upstream commit 71c806a8) as embeddable HLSL, the same way: the map temporal-off frames below native.
 python "tools\gen_smaa_hlsl.py" --root "%ROOT%" --out "%GEN%"
-if errorlevel 1 ( echo [edvr] ERROR: SMAA shader embedding failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: SMAA shader embedding failed & exit /b 1 )
 
 if not exist "%OBJ%\temporalshader" mkdir "%OBJ%\temporalshader"
 %CC% /I"%GEN%" /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
@@ -415,7 +429,7 @@ if not exist "%OBJ%\temporalshader" mkdir "%OBJ%\temporalshader"
     /Fo"%OBJ%\temporalshader\\" /Fe"%OBJ%\temporalshader\temporal_shader_build.exe" ^
     "tools\temporal_shader_build\temporal_shader_build.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: temporal shader compiler build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: temporal shader compiler build failed & exit /b 1 )
 REM The native runtime's stereo-renderer shaders (src\openxr\stereo_shader_source.h; five from F106) are compiled here too, into a header of their own
 REM (--stereo-output), so edvr_openxr_runtime.dll creates them from bytes and carries no HLSL compiler: it imported d3dcompiler_47.dll until 2026-10-01
 REM for four D3DCompile calls. The runtime and the two rigs that compile d3d11_stereo.cpp find the header through /I"%GEN%"; the PE gate below fails the
@@ -425,7 +439,7 @@ REM build if either DLL imports the compiler again.
 "%OBJ%\temporalshader\temporal_shader_build.exe" --output "%GEN%\temporal_shader_bytecode.h" --stereo-output "%GEN%\openxr_stereo_shader_bytecode.h" || exit /b 1
 
 python tools\build_phases.py --mark "%PHASES%" "shader generation"
-echo [edvr] === d3d11.dll ===
+echo [edup] === d3d11.dll ===
 REM The settings schema -- the launcher's window AND the in-headset menu's
 REM row table (docs\settings-menu.md) -- generated from edup.ini and the
 REM accessor calls in src\, with the gate that keeps it complete. Here,
@@ -445,7 +459,7 @@ REM Sharpening row as text, and a text row that shows percentages wrote a
 REM typed 20 as 2000% (issue 35). That rule fails here now, not in the window.
 python "tools\gen_settings_schema.py" --root "%ROOT%" --out "%GEN%"
 if errorlevel 1 (
-    echo [edvr] ERROR: the settings schema is incomplete ^(see above^)
+    echo [edup] ERROR: the settings schema is incomplete ^(see above^)
     exit /b 1
 )
 
@@ -491,7 +505,7 @@ python "tools\gen_exports.py" --source "%SystemRoot%\System32\d3d11.dll" ^
     --extra-export edvrNoteNativeViewCircle ^
     --extra-export edvrNoteNativeScopeZoom ^
     --extra-export edvrOnFootRecordPush
-if errorlevel 1 ( echo [edvr] ERROR: export generation failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: export generation failed & exit /b 1 )
 
 REM Both halves link "%OBJ%\<half>\*.obj" -- a wildcard -- and every build
 REM compiles every listed source, so an object left behind by a source that
@@ -506,7 +520,7 @@ REM object set exactly the source list; --keep protects the ml64 thunks.obj.
 REM The cleanup happens after DLL-only promotion has verified its receipt, so a
 REM rejected promotion does not disturb the previous build.
 
-REM NVIDIA's DLSS SDK. EDVR_NGX_SDK names a copy explicitly; else the
+REM NVIDIA's DLSS SDK. EDUP_NGX_SDK names a copy explicitly; else the
 REM checkout's own third_party\ngx; else the machine's copy under
 REM %LOCALAPPDATA%\EDVR\ngx-sdk, which is where tools\fetch_ngx.py puts it
 REM (one copy every checkout and worktree finds). The d3d11 half is then
@@ -521,37 +535,37 @@ REM either way, but says so loudly: that build has no DLAA and no
 REM runtime to package, which is not a release (package.bat
 REM refuses it unless told --no-dlss).
 set NGX=
-if defined EDVR_NGX_SDK set NGX=%EDVR_NGX_SDK%
+if defined EDUP_NGX_SDK set NGX=%EDUP_NGX_SDK%
 if not defined NGX if exist "%ROOT%\third_party\ngx\include\nvsdk_ngx.h" set NGX=%ROOT%\third_party\ngx
 if not defined NGX if exist "%LOCALAPPDATA%\EDVR\ngx-sdk\include\nvsdk_ngx.h" set NGX=%LOCALAPPDATA%\EDVR\ngx-sdk
 set NGXFLAGS=
 set NGXLIB=
 if defined NGX (
     python "tools\fetch_ngx.py" --verify "%NGX%" || (
-        echo [edvr] ERROR: the DLSS SDK at %NGX% is not the pinned one. tools\fetch_ngx.py
+        echo [edup] ERROR: the DLSS SDK at %NGX% is not the pinned one. tools\fetch_ngx.py
         echo        names the commit and the runtime's hash; fetch it again, or update the
         echo        pin on purpose.
         exit /b 1
     )
     set NGXFLAGS=/DEDVR_HAVE_NGX=1 /I"%NGX%\include"
     set NGXLIB="%NGX%\lib\Windows_x86_64\x64\nvsdk_ngx_s.lib" advapi32.lib
-    echo [edvr] DLSS SDK: %NGX%
+    echo [edup] DLSS SDK: %NGX%
     copy /Y "%NGX%\lib\Windows_x86_64\rel\nvngx_dlss.dll" "%BUILD%\" >nul
     copy /Y "%NGX%\LICENSE.txt" "%BUILD%\NVIDIA-DLSS-LICENSE.txt" >nul
 ) else (
-    echo [edvr] ==================================================================
-    echo [edvr] NO DLSS SDK. This build has no DLAA, and there is no
-    echo [edvr] nvngx_dlss.dll to package. Fine for development; NOT a release. Looked for
-    echo [edvr] include\nvsdk_ngx.h in these three places, in this order:
-    if defined EDVR_NGX_SDK (
-        echo [edvr]   EDVR_NGX_SDK   = %EDVR_NGX_SDK%
+    echo [edup] ==================================================================
+    echo [edup] NO DLSS SDK. This build has no DLAA, and there is no
+    echo [edup] nvngx_dlss.dll to package. Fine for development; NOT a release. Looked for
+    echo [edup] include\nvsdk_ngx.h in these three places, in this order:
+    if defined EDUP_NGX_SDK (
+        echo [edup]   EDUP_NGX_SDK   = %EDUP_NGX_SDK%
     ) else (
-        echo [edvr]   EDVR_NGX_SDK   = ^(not set^)
+        echo [edup]   EDUP_NGX_SDK   = ^(not set^)
     )
-    echo [edvr]   the checkout    = %ROOT%\third_party\ngx
-    echo [edvr]   this machine    = %LOCALAPPDATA%\EDVR\ngx-sdk
-    echo [edvr] To fetch the pinned SDK once for this machine:  python tools\fetch_ngx.py
-    echo [edvr] ==================================================================
+    echo [edup]   the checkout    = %ROOT%\third_party\ngx
+    echo [edup]   this machine    = %LOCALAPPDATA%\EDVR\ngx-sdk
+    echo [edup] To fetch the pinned SDK once for this machine:  python tools\fetch_ngx.py
+    echo [edup] ==================================================================
     if exist "%BUILD%\nvngx_dlss.dll" del /q "%BUILD%\nvngx_dlss.dll"
     if exist "%BUILD%\NVIDIA-DLSS-LICENSE.txt" del /q "%BUILD%\NVIDIA-DLSS-LICENSE.txt"
 )
@@ -559,13 +573,13 @@ if defined NGX (
 REM Intel XeSS-SR SDK for the flat profile. The D3D11 proxy bridges to D3D12
 REM at runtime; it imports no XeSS library. A missing SDK builds a refusal stub.
 set XESS=
-if defined EDVR_XESS_SDK set XESS=%EDVR_XESS_SDK%
+if defined EDUP_XESS_SDK set XESS=%EDUP_XESS_SDK%
 if not defined XESS if exist "%ROOT%\third_party\xess\include\xess\xess.h" set XESS=%ROOT%\third_party\xess
 if not defined XESS if exist "%LOCALAPPDATA%\EDVR\xess-sdk\include\xess\xess.h" set XESS=%LOCALAPPDATA%\EDVR\xess-sdk
 set XESSFLAGS=/DEDVR_HAVE_XESS=0
 if defined XESS (
     python "tools\fetch_xess.py" --verify "%XESS%" || (
-        echo [edvr] ERROR: the XeSS SDK at %XESS% is not the pinned one. An SDK fetched before XeSS Frame Generation lacks libxess_fg.dll, libxell.dll and their headers: run python tools\fetch_xess.py to fetch the pinned SDK again.
+        echo [edup] ERROR: the XeSS SDK at %XESS% is not the pinned one. An SDK fetched before XeSS Frame Generation lacks libxess_fg.dll, libxell.dll and their headers: run python tools\fetch_xess.py to fetch the pinned SDK again.
         exit /b 1
     )
     set XESSFLAGS=/DEDVR_HAVE_XESS=1 /I"%XESS%\include"
@@ -574,32 +588,32 @@ if defined XESS (
     copy /Y "%XESS%\bin\libxell.dll" "%BUILD%\libxell.dll" >nul || exit /b 1
     copy /Y "%XESS%\LICENSE.txt" "%BUILD%\INTEL-XESS-LICENSE.txt" >nul || exit /b 1
     copy /Y "%XESS%\third-party-programs.txt" "%BUILD%\INTEL-XESS-THIRD-PARTY.txt" >nul || exit /b 1
-    echo [edvr] XeSS-SR SDK: %XESS%
+    echo [edup] XeSS-SR SDK: %XESS%
 ) else (
     if exist "%BUILD%\libxess.dll" del /q "%BUILD%\libxess.dll"
     if exist "%BUILD%\libxess_fg.dll" del /q "%BUILD%\libxess_fg.dll"
     if exist "%BUILD%\libxell.dll" del /q "%BUILD%\libxell.dll"
     if exist "%BUILD%\INTEL-XESS-LICENSE.txt" del /q "%BUILD%\INTEL-XESS-LICENSE.txt"
     if exist "%BUILD%\INTEL-XESS-THIRD-PARTY.txt" del /q "%BUILD%\INTEL-XESS-THIRD-PARTY.txt"
-    echo [edvr] NO XeSS SDK. Flat XeSS-SR will refuse at runtime. Fetch with tools\fetch_xess.py.
+    echo [edup] NO XeSS SDK. Flat XeSS-SR will refuse at runtime. Fetch with tools\fetch_xess.py.
 )
 
 REM Optional tailored 2DMigoto runtime for EDHM (tools\fetch_edhm_2dmigoto.py).
 REM Staged into %BUILD% when present so package_native.py can ship it as an
 REM opt-in signed release asset with its GPLv3 and third-party notices.
 set EDHM2DM=
-if defined EDVR_EDHM_2DMIGOTO set EDHM2DM=%EDVR_EDHM_2DMIGOTO%
+if defined EDUP_EDHM_2DMIGOTO set EDHM2DM=%EDUP_EDHM_2DMIGOTO%
 if not defined EDHM2DM if exist "%ROOT%\third_party\edhm_2dmigoto\bin\d3d11_edhm.dll" set EDHM2DM=%ROOT%\third_party\edhm_2dmigoto
 if not defined EDHM2DM if exist "%LOCALAPPDATA%\EDVR\edhm-2dmigoto\bin\d3d11_edhm.dll" set EDHM2DM=%LOCALAPPDATA%\EDVR\edhm-2dmigoto
 set EDHM_SOURCE_ARCHIVE=
 for /f "usebackq delims=" %%A in (`python "tools\fetch_edhm_2dmigoto.py" --print-source-archive`) do set EDHM_SOURCE_ARCHIVE=%%A
 if not defined EDHM_SOURCE_ARCHIVE (
-    echo [edvr] ERROR: tools\fetch_edhm_2dmigoto.py did not report a source archive name.
+    echo [edup] ERROR: tools\fetch_edhm_2dmigoto.py did not report a source archive name.
     exit /b 1
 )
 if defined EDHM2DM (
     python "tools\fetch_edhm_2dmigoto.py" --verify "%EDHM2DM%" || (
-        echo [edvr] ERROR: the EDHM_2DMigoto runtime at %EDHM2DM% is not the pinned one. Run python tools\fetch_edhm_2dmigoto.py to fetch the pinned release again.
+        echo [edup] ERROR: the EDHM_2DMigoto runtime at %EDHM2DM% is not the pinned one. Run python tools\fetch_edhm_2dmigoto.py to fetch the pinned release again.
         exit /b 1
     )
     copy /Y "%EDHM2DM%\bin\d3d11_edhm.dll" "%BUILD%\d3d11_edhm.dll" >nul || exit /b 1
@@ -607,18 +621,18 @@ if defined EDHM2DM (
     copy /Y "%EDHM2DM%\EDHM-2DMIGOTO-THIRD-PARTY.txt" "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt" >nul || exit /b 1
     if exist "%BUILD%\ed-up-edhm-source-*.tar.gz" del /q "%BUILD%\ed-up-edhm-source-*.tar.gz"
     copy /Y "%EDHM2DM%\%EDHM_SOURCE_ARCHIVE%" "%BUILD%\%EDHM_SOURCE_ARCHIVE%" >nul || exit /b 1
-    echo [edvr] EDHM_2DMigoto runtime: %EDHM2DM%
+    echo [edup] EDHM_2DMigoto runtime: %EDHM2DM%
 ) else (
     if exist "%BUILD%\d3d11_edhm.dll" del /q "%BUILD%\d3d11_edhm.dll"
     if exist "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt" del /q "%BUILD%\EDHM-2DMIGOTO-LICENSE.txt"
     if exist "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt" del /q "%BUILD%\EDHM-2DMIGOTO-THIRD-PARTY.txt"
     if exist "%BUILD%\ed-up-edhm-source-*.tar.gz" del /q "%BUILD%\ed-up-edhm-source-*.tar.gz"
-    echo [edvr] NO EDHM_2DMigoto runtime staged. Optional EDHM 2DMigoto asset will be omitted. Fetch with tools\fetch_edhm_2dmigoto.py.
+    echo [edup] NO EDHM_2DMigoto runtime staged. Optional EDHM 2DMigoto asset will be omitted. Fetch with tools\fetch_edhm_2dmigoto.py.
 )
 
 REM AMD FSR 4.1 (FidelityFX SDK v2.4.0, tools\fetch_fsr4.py) for the flat profile and VR: AMD's own signed D3D12
 REM DLLs, loaded at run time over the D3D11/D3D12 bridge in src\d3d11\fsr4_engine.cpp, as XeSS's is. Nothing is
-REM linked; the headers are the only compile input. EDVR_FSR4_SDK names a copy explicitly, or forces the no-SDK
+REM linked; the headers are the only compile input. EDUP_FSR4_SDK names a copy explicitly, or forces the no-SDK
 REM path with the literal value "none" (proving fix.temporal_aa=fsr4's runtime refusal even on a machine that
 REM already has the SDK staged); else the checkout's own third_party\fsr4; else the machine's copy under
 REM %LOCALAPPDATA%\EDVR\fsr4-sdk. The copy is VERIFIED first, and a mismatch fails the build. Without any SDK
@@ -629,14 +643,14 @@ REM nothing in this file signs them (the maintainer's 2026-11-21 reversal of dec
 REM docs\fsr-upscaler-design-2026-09-16.md).
 set FSR4=
 set FSR4_NONE=
-if /i "%EDVR_FSR4_SDK%"=="none" set FSR4_NONE=1
-if not defined FSR4_NONE if defined EDVR_FSR4_SDK set FSR4=%EDVR_FSR4_SDK%
+if /i "%EDUP_FSR4_SDK%"=="none" set FSR4_NONE=1
+if not defined FSR4_NONE if defined EDUP_FSR4_SDK set FSR4=%EDUP_FSR4_SDK%
 if not defined FSR4_NONE if not defined FSR4 if exist "%ROOT%\third_party\fsr4\include\FidelityFX\upscalers\include\ffx_upscale.h" set FSR4=%ROOT%\third_party\fsr4
 if not defined FSR4_NONE if not defined FSR4 if exist "%LOCALAPPDATA%\EDVR\fsr4-sdk\include\FidelityFX\upscalers\include\ffx_upscale.h" set FSR4=%LOCALAPPDATA%\EDVR\fsr4-sdk
 set FSR4FLAGS=/DEDVR_HAVE_FSR4=0
 if defined FSR4 (
     python "tools\fetch_fsr4.py" --verify "%FSR4%" || (
-        echo [edvr] ERROR: the FSR 4 SDK at %FSR4% is not the pinned one. tools\fetch_fsr4.py
+        echo [edup] ERROR: the FSR 4 SDK at %FSR4% is not the pinned one. tools\fetch_fsr4.py
         echo        names the commit; fetch it again, or update the pin on purpose.
         exit /b 1
     )
@@ -644,22 +658,22 @@ if defined FSR4 (
     copy /Y "%FSR4%\bin\amd_fidelityfx_loader_dx12.dll" "%BUILD%\amd_fidelityfx_loader_dx12.dll" >nul || exit /b 1
     copy /Y "%FSR4%\bin\amd_fidelityfx_upscaler_dx12.dll" "%BUILD%\amd_fidelityfx_upscaler_dx12.dll" >nul || exit /b 1
     copy /Y "%FSR4%\LICENSE.txt" "%BUILD%\AMD-FIDELITYFX-LICENSE.txt" >nul || exit /b 1
-    echo [edvr] FSR 4 SDK: %FSR4%
+    echo [edup] FSR 4 SDK: %FSR4%
 ) else (
     if exist "%BUILD%\amd_fidelityfx_loader_dx12.dll" del /q "%BUILD%\amd_fidelityfx_loader_dx12.dll"
     if exist "%BUILD%\amd_fidelityfx_upscaler_dx12.dll" del /q "%BUILD%\amd_fidelityfx_upscaler_dx12.dll"
     if exist "%BUILD%\AMD-FIDELITYFX-LICENSE.txt" del /q "%BUILD%\AMD-FIDELITYFX-LICENSE.txt"
     if defined FSR4_NONE (
-        echo [edvr] EDVR_FSR4_SDK=none: building without FSR 4 on purpose, to prove the no-SDK path.
-        echo [edvr] fix.temporal_aa=fsr4 will refuse at runtime.
+        echo [edup] EDUP_FSR4_SDK=none: building without FSR 4 on purpose, to prove the no-SDK path.
+        echo [edup] fix.temporal_aa=fsr4 will refuse at runtime.
     ) else (
-        echo [edvr] NO FSR 4 SDK. fix.temporal_aa=fsr4 will refuse at runtime. Fetch with tools\fetch_fsr4.py.
+        echo [edup] NO FSR 4 SDK. fix.temporal_aa=fsr4 will refuse at runtime. Fetch with tools\fetch_fsr4.py.
     )
 )
 
 REM AMD's FSR 3.1 upscaler, the community Direct3D 11 port (the optiscaler
 REM FidelityFX-SDK-DX11 fork; tools\fetch_ffx_dx11.py; design doc section
-REM 3.2). EDVR_FFX_DX11 names a copy explicitly, or forces the no-SDK path
+REM 3.2). EDUP_FFX_DX11 names a copy explicitly, or forces the no-SDK path
 REM with the literal value "none" -- proving fix.temporal_aa=fsr's runtime
 REM refusal even on a machine that already has the SDK staged; else the
 REM checkout's own third_party\ffx-dx11; else the machine's copy under
@@ -674,21 +688,21 @@ REM = fsr then refuses at runtime with "this build was made without AMD's
 REM upscaler" (no DLL is shipped either way -- FFX links in statically).
 set FFX=
 set FSR_NONE=
-if /i "%EDVR_FFX_DX11%"=="none" set FSR_NONE=1
-if not defined FSR_NONE if defined EDVR_FFX_DX11 set FFX=%EDVR_FFX_DX11%
+if /i "%EDUP_FFX_DX11%"=="none" set FSR_NONE=1
+if not defined FSR_NONE if defined EDUP_FFX_DX11 set FFX=%EDUP_FFX_DX11%
 if not defined FSR_NONE if not defined FFX if exist "%ROOT%\third_party\ffx-dx11\include\FidelityFX\host\ffx_fsr3upscaler.h" set FFX=%ROOT%\third_party\ffx-dx11
 if not defined FSR_NONE if not defined FFX if exist "%LOCALAPPDATA%\EDVR\ffx-dx11\include\FidelityFX\host\ffx_fsr3upscaler.h" set FFX=%LOCALAPPDATA%\EDVR\ffx-dx11
 set FSRFLAGS=
 set FSRLIB=
 if defined FFX (
     python "tools\fetch_ffx_dx11.py" --verify "%FFX%" || (
-        echo [edvr] ERROR: the FSR3 D3D11 port at %FFX% is not the pinned one. tools\fetch_ffx_dx11.py
+        echo [edup] ERROR: the FSR3 D3D11 port at %FFX% is not the pinned one. tools\fetch_ffx_dx11.py
         echo        names the commit; fetch it again, or update the pin on purpose.
         exit /b 1
     )
     set FSRFLAGS=/DEDVR_HAVE_FSR3=1 /I"%FFX%\include"
     set FSRLIB="%FFX%\lib\ffx_fsr3upscaler_x64.lib" "%FFX%\lib\ffx_backend_dx11_x64.lib"
-    echo [edvr] FSR3 D3D11 port: %FFX%
+    echo [edup] FSR3 D3D11 port: %FFX%
     REM The port's MIT notice, exactly as NGX's licence is handled above. It
     REM ships because the port is COMPILED INTO the d3d11.dll we distribute --
     REM it has no DLL of its own -- so MIT's notice requirement applies to the
@@ -698,44 +712,44 @@ if defined FFX (
 ) else (
     if exist "%BUILD%\FIDELITYFX-SDK-DX11-LICENSE.txt" del /q "%BUILD%\FIDELITYFX-SDK-DX11-LICENSE.txt"
     if defined FSR_NONE (
-        echo [edvr] EDVR_FFX_DX11=none: building without AMD's FSR upscaler on purpose,
-        echo [edvr] to prove the no-SDK path. fix.temporal_aa=fsr will refuse at runtime.
+        echo [edup] EDUP_FFX_DX11=none: building without AMD's FSR upscaler on purpose,
+        echo [edup] to prove the no-SDK path. fix.temporal_aa=fsr will refuse at runtime.
     ) else (
-        echo [edvr] ==================================================================
-        echo [edvr] NO FSR3 SDK. This build has no AMD upscaler; fix.temporal_aa=fsr
-        echo [edvr] refuses at runtime. Fine for development; NOT a release. Looked for
-        echo [edvr] include\FidelityFX\host\ffx_fsr3upscaler.h in these three places,
-        echo [edvr] in this order:
-        if defined EDVR_FFX_DX11 (
-            echo [edvr]   EDVR_FFX_DX11  = %EDVR_FFX_DX11%
+        echo [edup] ==================================================================
+        echo [edup] NO FSR3 SDK. This build has no AMD upscaler; fix.temporal_aa=fsr
+        echo [edup] refuses at runtime. Fine for development; NOT a release. Looked for
+        echo [edup] include\FidelityFX\host\ffx_fsr3upscaler.h in these three places,
+        echo [edup] in this order:
+        if defined EDUP_FFX_DX11 (
+            echo [edup]   EDUP_FFX_DX11  = %EDUP_FFX_DX11%
         ) else (
-            echo [edvr]   EDVR_FFX_DX11  = ^(not set^)
+            echo [edup]   EDUP_FFX_DX11  = ^(not set^)
         )
-        echo [edvr]   the checkout    = %ROOT%\third_party\ffx-dx11
-        echo [edvr]   this machine    = %LOCALAPPDATA%\EDVR\ffx-dx11
-        echo [edvr] To fetch the pinned SDK once for this machine:  python tools\fetch_ffx_dx11.py
-        echo [edvr] ==================================================================
+        echo [edup]   the checkout    = %ROOT%\third_party\ffx-dx11
+        echo [edup]   this machine    = %LOCALAPPDATA%\EDVR\ffx-dx11
+        echo [edup] To fetch the pinned SDK once for this machine:  python tools\fetch_ffx_dx11.py
+        echo [edup] ==================================================================
     )
 )
 
-if defined EDVR_DLL_ONLY if not defined EDVR_COMPILE_ONLY (
-    echo [edvr] === DLL-only promotion ===
+if defined EDUP_DLL_ONLY if not defined EDUP_COMPILE_ONLY (
+    echo [edup] === DLL-only promotion ===
     python tools\build_receipt.py --verify "%BUILD%\full_build_receipt.json" ^
         --root "%ROOT%" --require-clean ^
         --context "cl=%CL%" ^
-        --context "profile_symbols=%EDVR_PROFILE_SYMBOLS%" ^
-        --context "cpu_compile=%EDVR_CPU_COMPILE%" ^
-        --context "cpu_link=%EDVR_CPU_LINK%" ^
-        --context "ngx_request=%EDVR_NGX_SDK%" ^
+        --context "profile_symbols=%EDUP_PROFILE_SYMBOLS%" ^
+        --context "cpu_compile=%EDUP_CPU_COMPILE%" ^
+        --context "cpu_link=%EDUP_CPU_LINK%" ^
+        --context "ngx_request=%EDUP_NGX_SDK%" ^
         --context "ngx=%NGX%" ^
-        --context "xess_request=%EDVR_XESS_SDK%" ^
+        --context "xess_request=%EDUP_XESS_SDK%" ^
         --context "xess=%XESS%" ^
-        --context "fsr4_request=%EDVR_FSR4_SDK%" ^
+        --context "fsr4_request=%EDUP_FSR4_SDK%" ^
         --context "fsr4=%FSR4%" ^
-        --context "ffx_request=%EDVR_FFX_DX11%" ^
+        --context "ffx_request=%EDUP_FFX_DX11%" ^
         --context "ffx=%FFX%" ^
         --context "fsr_none=%FSR_NONE%" || (
-            echo [edvr] ERROR: DLL-only promotion is not allowed without the
+            echo [edup] ERROR: DLL-only promotion is not allowed without the
             echo        matching green full build receipt.
             exit /b 1
         )
@@ -743,9 +757,9 @@ if defined EDVR_DLL_ONLY if not defined EDVR_COMPILE_ONLY (
 
 if not exist "%OBJ%\d3d11" mkdir "%OBJ%\d3d11"
 ml64.exe /nologo /c /Fo"%OBJ%\d3d11\thunks.obj" "%GEN%\edvr_thunks_d3d11.asm" >nul
-if errorlevel 1 ( echo [edvr] ERROR: ml64 failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: ml64 failed & exit /b 1 )
 ml64.exe /nologo /c /Fo"%OBJ%\d3d11\weapon_ui_getter_probe.obj" "src\d3d11\weapon_ui_getter_probe.asm" >nul
-if errorlevel 1 ( echo [edvr] ERROR: ml64 failed on weapon UI getter probe & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: ml64 failed on weapon UI getter probe & exit /b 1 )
 
 python tools\compile_cache.py --prune --keep thunks.obj --keep weapon_ui_getter_probe.obj cl.exe %CFLAGS% %NGXFLAGS% %FSRFLAGS% %XESSFLAGS% %FSR4FLAGS% /Fo"%OBJ%\d3d11"\ ^
 
@@ -838,14 +852,14 @@ python tools\compile_cache.py --prune --keep thunks.obj --keep weapon_ui_getter_
     "src\d3d11\billboard_fix.cpp" ^
     "src\d3d11\particle_fix.cpp" "src\d3d11\shader_swap.cpp" "src\d3d11\sunglare_fix.cpp" ^
     "src\plugins\plugin_manager.cpp"
-if errorlevel 1 ( echo [edvr] ERROR: compile failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: compile failed & exit /b 1 )
 
 REM gdi32.lib: the settings menu's panel is rasterised with GDI (the game
 REM already imports GDI32, so the DLL adds no module to the process).
 rc.exe /nologo /fo "%OBJ%\d3d11\dxbc_notice.res" "third_party\dxbc_hash\notice.rc"
-if errorlevel 1 ( echo [edvr] ERROR: DXBC notice resource failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: DXBC notice resource failed & exit /b 1 )
 rc.exe /nologo /fo "%OBJ%\d3d11\miniz_notice.res" "third_party\miniz\notice.rc"
-if errorlevel 1 ( echo [edvr] ERROR: miniz notice resource failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: miniz notice resource failed & exit /b 1 )
 
 REM Version resources for both shipped DLLs. An unsigned DLL with no
 REM FileVersion, CompanyName or FileDescription looks less like a real build
@@ -855,29 +869,29 @@ REM block, so the version string stays git describe's and nothing here
 REM hand-maintains it.
 if not exist "%OBJ%\d3d11" mkdir "%OBJ%\d3d11"
 if not exist "%OBJ%\openxr_module" mkdir "%OBJ%\openxr_module"
-python "tools\gen_installer_rc.py" --version-rc graphics --version "%EDVR_VER%" --out "%GEN%"
-if errorlevel 1 ( echo [edvr] ERROR: graphics version resource generation failed & exit /b 1 )
-python "tools\gen_installer_rc.py" --version-rc runtime --version "%EDVR_VER%" --out "%GEN%"
-if errorlevel 1 ( echo [edvr] ERROR: runtime version resource generation failed & exit /b 1 )
+python "tools\gen_installer_rc.py" --version-rc graphics --version "%EDUP_VER%" --out "%GEN%"
+if errorlevel 1 ( echo [edup] ERROR: graphics version resource generation failed & exit /b 1 )
+python "tools\gen_installer_rc.py" --version-rc runtime --version "%EDUP_VER%" --out "%GEN%"
+if errorlevel 1 ( echo [edup] ERROR: runtime version resource generation failed & exit /b 1 )
 rc.exe /nologo /fo "%OBJ%\d3d11\version.res" "%GEN%\version_graphics.rc"
-if errorlevel 1 ( echo [edvr] ERROR: rc.exe failed on the graphics version resource & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: rc.exe failed on the graphics version resource & exit /b 1 )
 rc.exe /nologo /fo "%OBJ%\openxr_module\version.res" "%GEN%\version_runtime.rc"
-if errorlevel 1 ( echo [edvr] ERROR: rc.exe failed on the runtime version resource & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: rc.exe failed on the runtime version resource & exit /b 1 )
 
-link.exe /nologo /DLL /MACHINE:X64 /INCREMENTAL:NO %EDVR_CPU_LINK% /PDB:"%BUILD%\d3d11.pdb" ^
+link.exe /nologo /DLL /MACHINE:X64 /INCREMENTAL:NO %EDUP_CPU_LINK% /PDB:"%BUILD%\d3d11.pdb" ^
     /DEF:"%GEN%\edvr_d3d11.def" /OUT:"%BUILD%\d3d11.dll" ^
     "%OBJ%\d3d11\*.obj" "%OBJ%\d3d11\dxbc_notice.res" "%OBJ%\d3d11\miniz_notice.res" "%OBJ%\d3d11\version.res" kernel32.lib user32.lib gdi32.lib version.lib d3dcompiler.lib bcrypt.lib %NGXLIB% %FSRLIB%
-if errorlevel 1 ( echo [edvr] ERROR: link failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: link failed & exit /b 1 )
 
-echo [edvr] built %BUILD%\d3d11.dll
+echo [edup] built %BUILD%\d3d11.dll
 python tools\build_phases.py --mark "%PHASES%" "d3d11.dll"
-REM Release signing, EDVR_SIGN: signed here, before the copy below, so d3d11.dll and the
+REM Release signing, EDUP_SIGN: signed here, before the copy below, so d3d11.dll and the
 REM edvr_openxr_graphics.dll the release packs are the same signed bytes.
-if defined EDVR_SIGN (
+if defined EDUP_SIGN (
     python tools\artifact_signing.py sign "%BUILD%\d3d11.dll" || exit /b 1
 )
 copy /y "%BUILD%\d3d11.dll" "%BUILD%\edvr_openxr_graphics.dll" >nul || exit /b 1
-echo [edvr] built %BUILD%\edvr_openxr_graphics.dll
+echo [edup] built %BUILD%\edvr_openxr_graphics.dll
 
 REM The offline-only bench proxy (build\flat_sdk_bench_proxy.dll) is built by :rig_flat_sdk_bench_proxy among the test rigs below: it only reads
 REM the production objects in %OBJ%\d3d11, and nothing in this build loads it.
@@ -892,11 +906,11 @@ REM parenthesised blocks, where it expands once at parse time. `||` keys off the
 REM command's own exit code and is immune to both.
 
 echo.
-echo [edvr] === edvr_openxr_runtime.dll ===
+echo [edup] === edvr_openxr_runtime.dll ===
 REM Native runtime DLL: the only supported release and installation backend.
 REM Its application fixture calls the game-imported ABI without linking the host.
 if not exist "%OBJ%\openxr_module" mkdir "%OBJ%\openxr_module"
-%CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT /LD /D_CRT_SECURE_NO_WARNINGS %EDVR_CPU_COMPILE% ^
+%CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT /LD /D_CRT_SECURE_NO_WARNINGS %EDUP_CPU_COMPILE% ^
     /I"third_party\openxr\include" /I"%GEN%" /Fo"%OBJ%\openxr_module\\" ^
     /DEDVR_HAVE_VERSION_HEADER=1 ^
     /Fe"%BUILD%\edvr_openxr_runtime.dll" "src\openxr\native_module.cpp" ^
@@ -906,11 +920,11 @@ if not exist "%OBJ%\openxr_module" mkdir "%OBJ%\openxr_module"
     "src\openxr\device_gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     "src\openxr\openvr_compositor.cpp" "src\openxr\openvr_auxiliary.cpp" ^
     "src\common\frame_flag.cpp" ^
-    /link /INCREMENTAL:NO %EDVR_CPU_LINK% /PDB:"%BUILD%\edvr_openxr_runtime.pdb" /DEF:"src\openxr\native_module.def" "%OBJ%\openxr_module\version.res" d3d11.lib dxgi.lib user32.lib gdi32.lib
-if errorlevel 1 ( echo [edvr] ERROR: native runtime module build failed & exit /b 1 )
-REM Release signing, EDVR_SIGN: before any rig starts and before the openvr_api.dll copy, so the
+    /link /INCREMENTAL:NO %EDUP_CPU_LINK% /PDB:"%BUILD%\edvr_openxr_runtime.pdb" /DEF:"src\openxr\native_module.def" "%OBJ%\openxr_module\version.res" d3d11.lib dxgi.lib user32.lib gdi32.lib
+if errorlevel 1 ( echo [edup] ERROR: native runtime module build failed & exit /b 1 )
+REM Release signing, EDUP_SIGN: before any rig starts and before the openvr_api.dll copy, so the
 REM release ships the signed runtime.
-if defined EDVR_SIGN (
+if defined EDUP_SIGN (
     python tools\artifact_signing.py sign "%BUILD%\edvr_openxr_runtime.dll" || exit /b 1
 )
 python tools\build_phases.py --mark "%PHASES%" "runtime dll"
@@ -947,19 +961,19 @@ set LAUNCHER_SRC="src\installer\launcher_core.cpp" "src\installer\launcher_regis
     "src\installer\game_language.cpp" "src\installer\launcher_l10n.cpp" ^
     "src\installer\vr_headset.cpp"
 
-if defined EDVR_DLL_ONLY goto dll_only_finish
+if defined EDUP_DLL_ONLY goto dll_only_finish
 
 REM The two release files nothing else makes, build\edup-flat.ini and build\edup_profile_vr.ini, which
 REM package_native.py packs and tools\install_edup.py installs. The same step checks that the native pair,
 REM the loader and its notice, and any XeSS notices are in the build, so a missing one fails here and not
 REM at packaging.
 python "tools\gen_installer_rc.py" --release-files --build "%BUILD%" || (
-    echo [edvr] ERROR: the release settings files could not be written
+    echo [edup] ERROR: the release settings files could not be written
     exit /b 1
 )
 
 echo.
-echo [edvr] === test rigs ===
+echo [edup] === test rigs ===
 REM Every :rig_<label> subroutine at the end of this file, run by
 REM tools\run_jobs.py as concurrent "build.bat --rig <label>" children of this
 REM process. Each rig owns its obj directory.
@@ -971,7 +985,7 @@ REM
 REM Every process a rig runs -- its test exes, and the proxy DLLs some of them
 REM load out of build\ on purpose -- logs under build\edup_logs\<label>, a
 REM directory of the rig's own: --exe-dir has the runner hand each child
-REM EDVR_LOG_DIR (src\common\config.cpp), and a proxy keeps its crash
+REM EDUP_LOG_DIR (src\common\config.cpp), and a proxy keeps its crash
 REM sentinels (<hook>.armed, created at hook install and deleted once the hook
 REM has proven itself) in its log directory. Before that every proxy a rig
 REM loaded logged to build\edup_logs, a proxy that found another rig's
@@ -1009,7 +1023,7 @@ REM it is a top-level window on the desktop (src\d3d11\focus_target.h), and a ri
 REM that needs a window for one uses tools\openxr_native_test\present_device.h,
 REM whose window is a child of a message-only one.
 set "RUN_JOBS_ARGS="
-if defined EDVR_JOBS set "RUN_JOBS_ARGS=--jobs %EDVR_JOBS%"
+if defined EDUP_JOBS set "RUN_JOBS_ARGS=--jobs %EDUP_JOBS%"
 python tools\run_jobs.py --script "%ROOT%\build.bat" --times "%BUILD%\rig_times.json" ^
     --exe-dir "%BUILD%" --quiet native_timing_test,gpu_timing_test,gpu_census_test,gpu_pass_profile_test,vtable_test,stall_sampler_test,config_test,srv_turret_hud_test ^
     --after openxr_module_test=openxr_exports_test ^
@@ -1021,14 +1035,14 @@ python tools\run_jobs.py --script "%ROOT%\build.bat" --times "%BUILD%\rig_times.
     %RUN_JOBS_ARGS% || exit /b 1
 python tools\build_phases.py --mark "%PHASES%" "test rigs"
 
-REM Release signing, EDVR_SIGN, the rest: the launcher is built inside a rig, which runs hidden under
+REM Release signing, EDUP_SIGN, the rest: the launcher is built inside a rig, which runs hidden under
 REM the focus guard, and the signing client reads its credential from the Azure CLI, which opens a
 REM console window each time; the guard rightly refuses that (measured 2026-11-16). So it is signed
 REM here, once the pool is done, after the launcher's determinism comparison, which a signature would
 REM fail. The start check runs again on the signed bytes. The two DLLs were signed before the pool
 REM started. Each signing adds a timestamp: a signed launcher differs from release to release though
 REM its code did not.
-if defined EDVR_SIGN (
+if defined EDUP_SIGN (
     python tools\artifact_signing.py sign "%BUILD%\ed-up-launcher.exe" || exit /b 1
     "%BUILD%\ed-up-launcher.exe" --help >nul || exit /b 1
 )
@@ -1045,65 +1059,65 @@ echo.
 REM The one line a release engineer has to see, after thousands of compiler
 REM lines: whether the build has NVIDIA's runtime for package.bat to put in the release.
 if exist "%BUILD%\nvngx_dlss.dll" (
-    echo [edvr] DLSS runtime: FOUND -- package.bat puts build\nvngx_dlss.dll in the manual-install
+    echo [edup] DLSS runtime: FOUND -- package.bat puts build\nvngx_dlss.dll in the manual-install
     echo        zip and in the DLSS zip the launcher installs from.
 ) else (
-    echo [edvr] DLSS runtime: NOT FOUND -- no DLSS SDK was found ^(the boxed notice
+    echo [edup] DLSS runtime: NOT FOUND -- no DLSS SDK was found ^(the boxed notice
     echo        above says where it looked^). Not a release build.
 )
 if exist "%BUILD%\amd_fidelityfx_upscaler_dx12.dll" (
-    echo [edvr] FSR 4 runtime: staged in build\amd_fidelityfx_*.dll for a dev install only ^(decision D8^);
+    echo [edup] FSR 4 runtime: staged in build\amd_fidelityfx_*.dll for a dev install only ^(decision D8^);
     echo        it is NOT in the installer or the packages. python tools\install_edup.py --fsr4 places it.
 ) else (
-    echo [edvr] FSR 4 runtime: NOT STAGED -- no FSR 4 SDK was found, so fix.temporal_aa=fsr4 refuses.
+    echo [edup] FSR 4 runtime: NOT STAGED -- no FSR 4 SDK was found, so fix.temporal_aa=fsr4 refuses.
 )
 echo.
 python tools\build_receipt.py --write "%BUILD%\full_build_receipt.json" ^
     --root "%ROOT%" ^
     --context "cl=%CL%" ^
-    --context "profile_symbols=%EDVR_PROFILE_SYMBOLS%" ^
-    --context "cpu_compile=%EDVR_CPU_COMPILE%" ^
-    --context "cpu_link=%EDVR_CPU_LINK%" ^
-    --context "ngx_request=%EDVR_NGX_SDK%" ^
+    --context "profile_symbols=%EDUP_PROFILE_SYMBOLS%" ^
+    --context "cpu_compile=%EDUP_CPU_COMPILE%" ^
+    --context "cpu_link=%EDUP_CPU_LINK%" ^
+    --context "ngx_request=%EDUP_NGX_SDK%" ^
     --context "ngx=%NGX%" ^
-    --context "xess_request=%EDVR_XESS_SDK%" ^
+    --context "xess_request=%EDUP_XESS_SDK%" ^
     --context "xess=%XESS%" ^
-    --context "fsr4_request=%EDVR_FSR4_SDK%" ^
+    --context "fsr4_request=%EDUP_FSR4_SDK%" ^
     --context "fsr4=%FSR4%" ^
-    --context "ffx_request=%EDVR_FFX_DX11%" ^
+    --context "ffx_request=%EDUP_FFX_DX11%" ^
     --context "ffx=%FFX%" ^
     --context "fsr_none=%FSR_NONE%" || exit /b 1
 python tools\build_phases.py --mark "%PHASES%" "final checks and receipt"
 python tools\build_phases.py --report "%PHASES%"
-echo [edvr] Native OpenXR build and all gates passed.
-echo [edvr] Install both native DLLs and the bundled loader for a test flight:
+echo [edup] Native OpenXR build and all gates passed.
+echo [edup] Install both native DLLs and the bundled loader for a test flight:
 echo        python tools\install_edup.py --target frontier --dry-run
 echo        python tools\install_edup.py --target frontier
 echo        --target takes steam, frontier or a path. Settings are preserved
 echo        unless --ini is specified. Windows selects the OpenXR runtime.
 echo.
-echo [edvr] After the flight:
+echo [edup] After the flight:
 echo        python tools\edup_log.py --target steam^|frontier^|^<game dir^> --expect-build HEAD
 exit /b 0
 
 REM ===========================================================================
 :dll_only_finish
 echo.
-echo [edvr] === DLL-only promotion outputs ===
+echo [edup] === DLL-only promotion outputs ===
 copy /y "%BUILD%\edvr_openxr_runtime.dll" "%BUILD%\openvr_api.dll" >nul || exit /b 1
 python tools\openxr_pe.py --native "%BUILD%\openvr_api.dll" --forbid-import d3dcompiler_47.dll || exit /b 1
 python tools\openxr_pe.py --graphics "%BUILD%\d3d11.dll" --forbid-import d3dcompiler_47.dll || exit /b 1
 python tools\build_phases.py --mark "%PHASES%" "dll-only outputs"
 python tools\build_phases.py --report "%PHASES%"
-if defined EDVR_COMPILE_ONLY goto compile_only_finish
-echo [edvr] DLL-only build passed: production DLLs and loader are ready to install.
-echo [edvr] Test rigs and the launcher build were skipped; use a full build
+if defined EDUP_COMPILE_ONLY goto compile_only_finish
+echo [edup] DLL-only build passed: production DLLs and loader are ready to install.
+echo [edup] Test rigs and the launcher build were skipped; use a full build
 echo        before packaging a release or accepting new source changes.
 exit /b 0
 
 :compile_only_finish
-echo [edvr] COMPILE-ONLY build finished in %BUILD%
-echo [edvr] NOT Windows validated and NOT a release asset: no Python gates, rigs or
+echo [edup] COMPILE-ONLY build finished in %BUILD%
+echo [edup] NOT Windows validated and NOT a release asset: no Python gates, rigs or
 echo        launcher build ran. tools\linux_toolchain.py writes its receipt next.
 exit /b 0
 
@@ -1111,7 +1125,7 @@ REM ===========================================================================
 REM  Test rigs. Each is a subroutine that tools\run_jobs.py runs in its own
 REM  "build.bat --rig <label>" child, several at a time, once the DLLs above
 REM  are built. A child jumps here from :args_done with the parent's
-REM  environment: ROOT, BUILD, OBJ, GEN, CFLAGS, EDVR_VER, the
+REM  environment: ROOT, BUILD, OBJ, GEN, CFLAGS, EDUP_VER, the
 REM  INSTALLER_* lists and the compiler on PATH. Rigs run in any order and at the
 REM  same time as one another, so a rig must not depend on another rig's
 REM  output, must not share an obj directory, and must not write a file
@@ -1129,72 +1143,72 @@ REM
 REM  A rig named in --quiet (or --serial, see tools\run_jobs.py) is written
 REM  in two steps so that only its test runs are held back:
 REM      :rig_<label>
-REM      if "%EDVR_RIG_STEP%"=="run" goto <label>_run
+REM      if "%EDUP_RIG_STEP%"=="run" goto <label>_run
 REM      ... compiles ...
-REM      if "%EDVR_RIG_STEP%"=="build" exit /b 0
+REM      if "%EDUP_RIG_STEP%"=="build" exit /b 0
 REM      :<label>_run
 REM      ... runs ...
 REM      exit /b 0
 REM  The runner recognises the exact "build" guard line, runs the rig once
-REM  with EDVR_RIG_STEP=build beside everything else and once more with
-REM  EDVR_RIG_STEP=run under the group's rule. Without the guard the whole rig
+REM  with EDUP_RIG_STEP=build beside everything else and once more with
+REM  EDUP_RIG_STEP=run under the group's rule. Without the guard the whole rig
 REM  runs under the rule. The run label must not start with rig_.
 REM ===========================================================================
 :run_rig
 if not defined CFLAGS (
-    echo [edvr] ERROR: --rig is tools\run_jobs.py's entry point; run build.bat without it
+    echo [edup] ERROR: --rig is tools\run_jobs.py's entry point; run build.bat without it
     exit /b 1
 )
 if not defined CC (
-    echo [edvr] ERROR: --rig is tools\run_jobs.py's entry point; CC is not set
+    echo [edup] ERROR: --rig is tools\run_jobs.py's entry point; CC is not set
     exit /b 1
 )
 pushd "%ROOT%"
-call :rig_%EDVR_RIG%
+call :rig_%EDUP_RIG%
 if errorlevel 1 exit /b 1
 exit /b 0
 
 :rig_smoke
-echo [edvr] === smoke.exe ===
+echo [edup] === smoke.exe ===
 if not exist "%OBJ%\smoke" mkdir "%OBJ%\smoke"
 %CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT /DNDEBUG ^
     /Fo"%OBJ%\smoke\\" /Fe"%BUILD%\smoke.exe" ^
     "tools\smoke\smoke.cpp" /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: smoke build failed & exit /b 1 )
-echo [edvr] built %BUILD%\smoke.exe
+if errorlevel 1 ( echo [edup] ERROR: smoke build failed & exit /b 1 )
+echo [edup] built %BUILD%\smoke.exe
 REM The focused modes run here; until 2026-10-16 this rig only compiled smoke.exe and nothing ran any mode, which is how
 REM advanced.d3d11_fixes = 0 crashed on the first Present for three releases with every gate green. --fixes-off-device presents
 REM frames through a swap chain with the fixes off. All three load build\d3d11.dll, so they run one after another in this
-REM rig (each clears the sentinel it uses first), under this rig's own EDVR_LOG_DIR.
+REM rig (each clears the sentinel it uses first), under this rig's own EDUP_LOG_DIR.
 "%BUILD%\smoke.exe" "%BUILD%\d3d11.dll" --fixes-off-device || (
-    echo [edvr] ERROR: smoke --fixes-off-device failed: with the fixes off the proxy must still survive a Present
+    echo [edup] ERROR: smoke --fixes-off-device failed: with the fixes off the proxy must still survive a Present
     exit /b 1
 )
 "%BUILD%\smoke.exe" "%BUILD%\d3d11.dll" --recovery-device || (
-    echo [edvr] ERROR: smoke --recovery-device failed
+    echo [edup] ERROR: smoke --recovery-device failed
     exit /b 1
 )
 "%BUILD%\smoke.exe" "%BUILD%\d3d11.dll" --foreign-device || (
-    echo [edvr] ERROR: smoke --foreign-device failed
+    echo [edup] ERROR: smoke --foreign-device failed
     exit /b 1
 )
 exit /b 0
 
 :rig_fakechain
-echo [edvr] === fakechain.dll ===
+echo [edup] === fakechain.dll ===
 if not exist "%OBJ%\fakechain" mkdir "%OBJ%\fakechain"
 %CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT /DNDEBUG /LD ^
     /Fo"%OBJ%\fakechain\\" /Fe"%BUILD%\fakechain.dll" ^
     "tools\fakechain\fakechain.cpp" /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: fakechain build failed & exit /b 1 )
-echo [edvr] built %BUILD%\fakechain.dll
+if errorlevel 1 ( echo [edup] ERROR: fakechain build failed & exit /b 1 )
+echo [edup] built %BUILD%\fakechain.dll
 
 echo.
 exit /b 0
 
 :rig_vtable_test
-if "%EDVR_RIG_STEP%"=="run" goto vtable_test_run
-echo [edvr] === vtable_test.exe ===
+if "%EDUP_RIG_STEP%"=="run" goto vtable_test_run
+echo [edup] === vtable_test.exe ===
 REM The object-wrapping collision (issue #6), without needing ReShade. These
 REM cells were written against the copy-and-swap-vptr mechanism and FAILED on
 REM it, which is the only reason to believe them now.
@@ -1206,17 +1220,17 @@ if not exist "%OBJ%\vtabletest" mkdir "%OBJ%\vtabletest"
     "src\common\log.cpp" "src\common\config.cpp" ^
     "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: vtable_test build failed & exit /b 1 )
-if "%EDVR_RIG_STEP%"=="build" exit /b 0
+if errorlevel 1 ( echo [edup] ERROR: vtable_test build failed & exit /b 1 )
+if "%EDUP_RIG_STEP%"=="build" exit /b 0
 :vtable_test_run
 "%BUILD%\vtable_test.exe" || (
-    echo [edvr] ERROR: vtable hooking does not compose with object wrappers
+    echo [edup] ERROR: vtable hooking does not compose with object wrappers
     exit /b 1
 )
 exit /b 0
 
 :rig_native_menu_test
-echo [edvr] === native_menu_test.exe ===
+echo [edup] === native_menu_test.exe ===
 if not exist "%OBJ%\native_menu" mkdir "%OBJ%\native_menu"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /DEDVR_MENU_TEST /I"%GEN%" /I"third_party\openxr\include" ^
@@ -1231,19 +1245,19 @@ if not exist "%OBJ%\native_menu" mkdir "%OBJ%\native_menu"
     "src\common\config.cpp" "src\common\log.cpp" ^
     "src\common\guard.cpp" "src\common\frame_flag.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib gdi32.lib version.lib dxgi.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: native menu test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native menu test build failed & exit /b 1 )
 "%BUILD%\native_menu_test.exe" --dry-run || exit /b 1
 "%BUILD%\native_menu_test.exe" --layout || exit /b 1
 "%BUILD%\native_menu_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_native_frame_test
-echo [edvr] === native_frame_test.exe ===
+echo [edup] === native_frame_test.exe ===
 if not exist "%OBJ%\native_frame" mkdir "%OBJ%\native_frame"
 call :assemble_if_changed "src\d3d11\weapon_ui_getter_probe.asm" "%OBJ%\native_frame\weapon_ui_getter_probe.obj"
-if errorlevel 1 ( echo [edvr] ERROR: weapon UI getter probe assembly build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: weapon UI getter probe assembly build failed & exit /b 1 )
 call :assemble_if_changed "tools\native_frame_test\weapon_ui_getter_probe_test.asm" "%OBJ%\native_frame\weapon_ui_getter_probe_test.obj"
-if errorlevel 1 ( echo [edvr] ERROR: weapon UI getter probe fixture assembly build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: weapon UI getter probe fixture assembly build failed & exit /b 1 )
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE ^
     /Fo"%OBJ%\native_frame\\" /Fe"%BUILD%\native_frame_test.exe" ^
@@ -1252,13 +1266,13 @@ if errorlevel 1 ( echo [edvr] ERROR: weapon UI getter probe fixture assembly bui
     "src\d3d11\native_render_settings.cpp" "src\common\vscreen_auto_state.cpp" "src\common\iniedit.cpp" ^
     "src\common\config.cpp" "src\common\frame_flag.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: native frame provider test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native frame provider test build failed & exit /b 1 )
 "%BUILD%\native_frame_test.exe" --dry-run || exit /b 1
 "%BUILD%\native_frame_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_fss_reveal_test
-echo [edvr] === fss_reveal_test.exe ===
+echo [edup] === fss_reveal_test.exe ===
 REM The FSS reveal fix (src\d3d11\fss_reveal_core.h, fss_reveal_replay.h, fss_reveal.cpp): the pure decisions (a hash-only match on another target is declined, no replay without a recorded downsample,
 REM flat never replays, only the first composite of a frame decides), the real state capture and replay on a WARP device with the debug layer (the state after equals the state before, the constants are
 REM read from a private copy), and source pins on the hook. No DLL, no game, no window.
@@ -1267,29 +1281,29 @@ if not exist "%OBJ%\fssreveal" mkdir "%OBJ%\fssreveal"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\fssreveal\\" ^
     /Fe"%BUILD%\fss_reveal_test.exe" "tools\fss_reveal_test\fss_reveal_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: fss reveal test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: fss reveal test build failed & exit /b 1 )
 "%BUILD%\fss_reveal_test.exe" --dry-run || exit /b 1
 "%BUILD%\fss_reveal_test.exe" --self-test "%ROOT%" || exit /b 1
 exit /b 0
 
 :rig_native_trim_test
-echo [edvr] === native_trim_test.exe ===
+echo [edup] === native_trim_test.exe ===
 if not exist "%OBJ%\native_trim" mkdir "%OBJ%\native_trim"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\native_trim\\" /Fe"%BUILD%\native_trim_test.exe" ^
     "tools\native_trim_test\native_trim_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: native FOV trim policy test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native FOV trim policy test build failed & exit /b 1 )
 "%BUILD%\native_trim_test.exe" --dry-run || exit /b 1
 "%BUILD%\native_trim_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_dlaa_mode_test
-echo [edvr] === dlaa_mode_test.exe ===
+echo [edup] === dlaa_mode_test.exe ===
 if not exist "%OBJ%\dlaa_mode" mkdir "%OBJ%\dlaa_mode"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\dlaa_mode\\" /Fe"%BUILD%\dlaa_mode_test.exe" ^
     "tools\dlaa_mode_test\dlaa_mode_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: dlaa_mode_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: dlaa_mode_test build failed & exit /b 1 )
 "%BUILD%\dlaa_mode_test.exe" --dry-run || exit /b 1
 "%BUILD%\dlaa_mode_test.exe" --self-test || exit /b 1
 REM tools\dlaa_mode_test\mutants.py --self-test holds the mutation list to the sources as they are; --run builds the rig against each edit.
@@ -1311,7 +1325,7 @@ if not exist "%OBJ%\formatsupport" mkdir "%OBJ%\formatsupport"
     "src\d3d11\format_support_log.cpp" "src\common\vtable_hook.cpp" "src\common\guard.cpp" ^
     "src\common\log.cpp" "src\common\config.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: format_support_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: format_support_test build failed & exit /b 1 )
 "%OBJ%\formatsupport\format_support_test.exe" --dry-run || exit /b 1
 "%OBJ%\formatsupport\format_support_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -1327,12 +1341,12 @@ if not exist "%OBJ%\system_module" mkdir "%OBJ%\system_module"
     /Fe"%OBJ%\system_module\system_module_test.exe" ^
     "tools\system_module_test\system_module_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: system_module_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: system_module_test build failed & exit /b 1 )
 "%OBJ%\system_module\system_module_test.exe" --dry-run || exit /b 1
 "%OBJ%\system_module\system_module_test.exe" --self-test || exit /b 1
 exit /b 0
 :rig_native_temporal_test
-echo [edvr] === native_temporal_test.exe ===
+echo [edup] === native_temporal_test.exe ===
 if not exist "%OBJ%\native_temporal" mkdir "%OBJ%\native_temporal"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /I"third_party\openxr\include" ^
@@ -1342,7 +1356,7 @@ if not exist "%OBJ%\native_temporal" mkdir "%OBJ%\native_temporal"
     "src\common\code_hook.cpp" "src\common\guard.cpp" ^
     "src\common\config.cpp" "src\common\frame_flag.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: native temporal test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native temporal test build failed & exit /b 1 )
 "%BUILD%\native_temporal_test.exe" --dry-run || exit /b 1
 "%BUILD%\native_temporal_test.exe" --self-test || exit /b 1
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
@@ -1350,12 +1364,12 @@ if errorlevel 1 ( echo [edvr] ERROR: native temporal test build failed & exit /b
     /Fo"%OBJ%\native_temporal\\" /Fe"%BUILD%\native_temporal_gpu_test.exe" ^
     "tools\native_temporal_test\native_temporal_gpu_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: native temporal GPU test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native temporal GPU test build failed & exit /b 1 )
 "%BUILD%\native_temporal_gpu_test.exe" --dry-run || exit /b 1
 exit /b 0
 
 :rig_native_sharpen_test
-echo [edvr] === native_sharpen_test.exe ===
+echo [edup] === native_sharpen_test.exe ===
 if not exist "%OBJ%\native_sharpen_test" mkdir "%OBJ%\native_sharpen_test"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE ^
@@ -1363,7 +1377,7 @@ if not exist "%OBJ%\native_sharpen_test" mkdir "%OBJ%\native_sharpen_test"
     "tools\native_sharpen_test\native_sharpen_test.cpp" "src\d3d11\native_sharpen.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: native sharpen contract test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native sharpen contract test build failed & exit /b 1 )
 "%BUILD%\native_sharpen_test.exe" --dry-run || exit /b 1
 "%BUILD%\native_sharpen_test.exe" --self-test || exit /b 1
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
@@ -1371,12 +1385,12 @@ if errorlevel 1 ( echo [edvr] ERROR: native sharpen contract test build failed &
     /Fo"%OBJ%\native_sharpen_test\\" /Fe"%BUILD%\native_sharpen_gpu_test.exe" ^
     "tools\native_sharpen_test\native_sharpen_gpu_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: native sharpen GPU test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native sharpen GPU test build failed & exit /b 1 )
 "%BUILD%\native_sharpen_gpu_test.exe" --dry-run || exit /b 1
 exit /b 0
 
 :rig_flat_sharpen_test
-echo [edvr] === flat_sharpen_test.exe, flat_sharpen_pass_test.exe ===
+echo [edup] === flat_sharpen_test.exe, flat_sharpen_pass_test.exe ===
 REM The flat profile's sharpening (docs\anti-aliasing.md, "Flat sharpening"), in two
 REM rigs. flat_sharpen_test: the wrapper against a stubbed pass, and the flat panel's
 REM row table against the flat profile's key gate -- a row whose key the gate refuses
@@ -1391,10 +1405,10 @@ if not exist "%OBJ%\flat_sharpen_test" mkdir "%OBJ%\flat_sharpen_test"
     "tools\flat_sharpen_test\flat_sharpen_test.cpp" "src\d3d11\flat_sharpen.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: flat sharpen contract test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat sharpen contract test build failed & exit /b 1 )
 "%BUILD%\flat_sharpen_test.exe" --dry-run || exit /b 1
 "%BUILD%\flat_sharpen_test.exe" --self-test "%ROOT%" "%GEN%" || (
-    echo [edvr] ERROR: the flat profile's sharpening or its panel row is wrong
+    echo [edup] ERROR: the flat profile's sharpening or its panel row is wrong
     exit /b 1
 )
 if not exist "%OBJ%\flat_sharpen_pass_test" mkdir "%OBJ%\flat_sharpen_pass_test"
@@ -1406,33 +1420,33 @@ if not exist "%OBJ%\flat_sharpen_pass_test" mkdir "%OBJ%\flat_sharpen_pass_test"
     "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: flat sharpen pass test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat sharpen pass test build failed & exit /b 1 )
 "%BUILD%\flat_sharpen_pass_test.exe" --dry-run || exit /b 1
 "%BUILD%\flat_sharpen_pass_test.exe" --self-test || (
-    echo [edvr] ERROR: the sharpening pass disagrees with AMD's RCAS, or a broken twin passed
+    echo [edup] ERROR: the sharpening pass disagrees with AMD's RCAS, or a broken twin passed
     exit /b 1
 )
 "%BUILD%\flat_sharpen_pass_test.exe" --self-test-working || (
-    echo [edvr] ERROR: a flat session that sharpens its frames said the never-ran note
+    echo [edup] ERROR: a flat session that sharpens its frames said the never-ran note
     exit /b 1
 )
 exit /b 0
 
 :rig_openxr_trace_test
-echo [edvr] === openxr_trace_test.exe ===
+echo [edup] === openxr_trace_test.exe ===
 if not exist "%OBJ%\openxr_trace" mkdir "%OBJ%\openxr_trace"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /utf-8 ^
     /Fo"%OBJ%\openxr_trace\\" /Fe"%BUILD%\openxr_trace_test.exe" ^
     "tools\openxr_trace_test\openxr_trace_test.cpp" /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: native trace test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native trace test build failed & exit /b 1 )
 "%BUILD%\openxr_trace_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_trace_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_native_timing_test
-if "%EDVR_RIG_STEP%"=="run" goto native_timing_test_run
-echo [edvr] === native_timing_test.exe ===
+if "%EDUP_RIG_STEP%"=="run" goto native_timing_test_run
+echo [edup] === native_timing_test.exe ===
 if not exist "%OBJ%\native_timing" mkdir "%OBJ%\native_timing"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE ^
@@ -1440,12 +1454,12 @@ if not exist "%OBJ%\native_timing" mkdir "%OBJ%\native_timing"
     "tools\native_timing_test\native_timing_test.cpp" "src\d3d11\native_timing.cpp" "src\d3d11\map_wait.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: native timing contract test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native timing contract test build failed & exit /b 1 )
 
 %CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /Fo"%OBJ%\native_timing\\" /Fe"%BUILD%\native_perf_history_test.exe" ^
     "tools\native_perf_history_test\native_perf_history_test.cpp" "src\d3d11\native_perf_history.cpp" "src\d3d11\native_benchmark_collector.cpp"
-if errorlevel 1 ( echo [edvr] ERROR: native perf history test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native perf history test build failed & exit /b 1 )
 
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /I"third_party\openxr\include" ^
@@ -1454,7 +1468,7 @@ if errorlevel 1 ( echo [edvr] ERROR: native perf history test build failed & exi
     "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_frame_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     "src\common\log.cpp" "src\common\config.cpp" "src\common\proxy.cpp" "src\common\guard.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: native timing GPU test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native timing GPU test build failed & exit /b 1 )
 
 REM Separate XR-device queries; real WARP work and injected query failures.
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
@@ -1463,8 +1477,8 @@ REM Separate XR-device queries; real WARP work and injected query failures.
     "tools\native_device_gpu_test\native_device_gpu_test.cpp" ^
     "src\openxr\device_gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: native device GPU test build failed & exit /b 1 )
-if "%EDVR_RIG_STEP%"=="build" exit /b 0
+if errorlevel 1 ( echo [edup] ERROR: native device GPU test build failed & exit /b 1 )
+if "%EDUP_RIG_STEP%"=="build" exit /b 0
 :native_timing_test_run
 "%BUILD%\native_timing_test.exe" --dry-run || exit /b 1
 "%BUILD%\native_timing_test.exe" --self-test || exit /b 1
@@ -1477,18 +1491,18 @@ if "%EDVR_RIG_STEP%"=="build" exit /b 0
 exit /b 0
 
 :rig_crash_context_test
-echo [edvr] === crash_context_test.exe ===
+echo [edup] === crash_context_test.exe ===
 if not exist "%OBJ%\crashcontext" mkdir "%OBJ%\crashcontext"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /I"%ROOT%" /Fo"%OBJ%\crashcontext\crash_context_test.obj" ^
     /Fe"%BUILD%\crash_context_test.exe" "tools\crash_context_test\crash_context_test.cpp" ^
     /link /OUT:"%BUILD%\crash_context_test.exe" /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: crash_context_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: crash_context_test build failed & exit /b 1 )
 "%BUILD%\crash_context_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_freeze_log_test
-echo [edvr] === freeze_log_test.exe ===
+echo [edup] === freeze_log_test.exe ===
 REM Build gate for the freeze logging (src\common\freeze_book.h, src\openxr\long_cycle_line.h,
 REM docs\freeze-diagnostics-2026-10-01.md, issue 63): the size buckets, the judge that tells a one-frame
 REM Present-gap blip from a stall by the runtime's cycle, the write rule (a frame of 250 ms or more always
@@ -1502,14 +1516,14 @@ if not exist "%OBJ%\freezelog" mkdir "%OBJ%\freezelog"
     /Fo"%OBJ%\freezelog"\ /Fe"%OBJ%\freezelog\freeze_log_test.exe" ^
     "tools\freeze_log_test\freeze_log_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: freeze_log_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: freeze_log_test build failed & exit /b 1 )
 "%OBJ%\freezelog\freeze_log_test.exe" --dry-run || exit /b 1
 "%OBJ%\freezelog\freeze_log_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\freeze_log_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_heartbeat_writer_test
-echo [edvr] === heartbeat_writer_test.exe ===
+echo [edup] === heartbeat_writer_test.exe ===
 REM Build gate for the breadcrumb heartbeat's writer thread (src\common\heartbeat_writer.h, src\common\proxy.cpp,
 REM docs\freeze-diagnostics-2026-10-01.md, issue 63): the heartbeat's file write is off the render thread, and the
 REM file still MEANS what it meant. The sink never runs on the posting thread and a sink stuck for 600 ms does not
@@ -1528,15 +1542,15 @@ if not exist "%OBJ%\heartbeat" mkdir "%OBJ%\heartbeat"
     "tools\heartbeat_writer_test\heartbeat_writer_test.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: heartbeat_writer_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: heartbeat_writer_test build failed & exit /b 1 )
 "%OBJ%\heartbeat\heartbeat_writer_test.exe" --dry-run || exit /b 1
 "%OBJ%\heartbeat\heartbeat_writer_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\heartbeat_writer_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_stall_sampler_test
-if "%EDVR_RIG_STEP%"=="run" goto stall_sampler_test_run
-echo [edvr] === stall_sampler_test.exe ===
+if "%EDUP_RIG_STEP%"=="run" goto stall_sampler_test_run
+echo [edup] === stall_sampler_test.exe ===
 REM Build gate for the stall sampler (src\common\stall_sampler.h, src\d3d11\stall_watch.cpp,
 REM docs\freeze-diagnostics-2026-10-01.md, issue 63): the REAL capture, walk and naming code against threads the rig
 REM blocks in places it knows -- a Sleep, a wait, a busy loop in this exe, a busy loop in stall_target.dll (so a
@@ -1554,14 +1568,14 @@ if not exist "%OBJ%\stallsampler" mkdir "%OBJ%\stallsampler"
     /Fo"%OBJ%\stallsampler"\ /Fe"%OBJ%\stallsampler\stall_target.dll" ^
     "tools\stall_sampler_test\stall_target_dll.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: stall_target.dll build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: stall_target.dll build failed & exit /b 1 )
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /I"src\common" ^
     /Fo"%OBJ%\stallsampler"\ /Fe"%OBJ%\stallsampler\stall_sampler_test.exe" ^
     "tools\stall_sampler_test\stall_sampler_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: stall_sampler_test build failed & exit /b 1 )
-if "%EDVR_RIG_STEP%"=="build" exit /b 0
+if errorlevel 1 ( echo [edup] ERROR: stall_sampler_test build failed & exit /b 1 )
+if "%EDUP_RIG_STEP%"=="build" exit /b 0
 :stall_sampler_test_run
 "%OBJ%\stallsampler\stall_sampler_test.exe" --dry-run || exit /b 1
 "%OBJ%\stallsampler\stall_sampler_test.exe" --self-test "%ROOT%" || exit /b 1
@@ -1569,7 +1583,7 @@ python "tools\stall_sampler_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_vram_watch_test
-echo [edvr] === vram_watch_test.exe ===
+echo [edup] === vram_watch_test.exe ===
 REM Build gate for the graphics memory watch (src\common\vram_watch.h, src\common\vram_query.h, src\d3d11\vram_tick.cpp,
 REM docs\headset-lock-vdxr-2026-10-02.md, instrument 1): the policy (a line every 30 s, every 5 s from 90% of the OS's
 REM budget for the process, one at each crossing of the budget, a cap on the two cadences that a crossing is exempt from),
@@ -1585,14 +1599,14 @@ if not exist "%OBJ%\vramwatch" mkdir "%OBJ%\vramwatch"
     /Fo"%OBJ%\vramwatch"\ /Fe"%OBJ%\vramwatch\vram_watch_test.exe" ^
     "tools\vram_watch_test\vram_watch_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: vram_watch_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vram_watch_test build failed & exit /b 1 )
 "%OBJ%\vramwatch\vram_watch_test.exe" --dry-run || exit /b 1
 "%OBJ%\vramwatch\vram_watch_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\vram_watch_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_mem_watch_test
-echo [edvr] === mem_watch_test.exe ===
+echo [edup] === mem_watch_test.exe ===
 REM Build gate for the process memory watch (src\common\mem_watch.h, src\common\log_reserve.h, src\d3d11\mem_tick.cpp,
 REM docs\memory-growth-2026-10-22.md): the cadence (a line every 60 s, every 5 s while the machine's commit is at or over 90% of
 REM its limit, the armed line first whatever the figures), the lines' text (whole MB rounded, a group that cannot be read left out
@@ -1606,13 +1620,13 @@ if not exist "%OBJ%\memwatch" mkdir "%OBJ%\memwatch"
     /Fo"%OBJ%\memwatch"\ /Fe"%OBJ%\memwatch\mem_watch_test.exe" ^
     "tools\mem_watch_test\mem_watch_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: mem_watch_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: mem_watch_test build failed & exit /b 1 )
 "%OBJ%\memwatch\mem_watch_test.exe" --dry-run || exit /b 1
 "%OBJ%\memwatch\mem_watch_test.exe" --self-test "%ROOT%" || exit /b 1
 exit /b 0
 
 :rig_game_vram_test
-echo [edvr] === game_vram_test.exe ===
+echo [edup] === game_vram_test.exe ===
 REM Build gate for the video memory size Elite is told (src\common\game_vram.h, src\d3d11\game_vram_hook.cpp, the
 REM advanced.game_vram key; docs\memory-growth-2026-10-22.md, "Elite's streaming budget"): the setting's parse (off, auto, a
 REM number of MB from 256, everything else read as off and named), the size reported for each (auto: 85% of it fits the
@@ -1626,13 +1640,13 @@ if not exist "%OBJ%\gamevram" mkdir "%OBJ%\gamevram"
     /Fo"%OBJ%\gamevram"\ /Fe"%OBJ%\gamevram\game_vram_test.exe" ^
     "tools\game_vram_test\game_vram_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: game_vram_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: game_vram_test build failed & exit /b 1 )
 "%OBJ%\gamevram\game_vram_test.exe" --dry-run || exit /b 1
 "%OBJ%\gamevram\game_vram_test.exe" --self-test "%ROOT%" || exit /b 1
 exit /b 0
 
 :rig_skin_ledger_test
-echo [edvr] === skin_ledger_test.exe ===
+echo [edup] === skin_ledger_test.exe ===
 REM Build gate for the skin ledger (src\d3d11\skin_ledger.h, the F2 settling instrument that rides an armed eye run;
 REM docs\kinematic-motion-injection-2026-09-19.md, "F2 study"): the rules (unarmed is silent and stateless, the 20-frame window and its
 REM edges, the copy plan, the numbers, a whole run, a run of fewer frames than the window, never-ran told from broken, a run the process
@@ -1649,7 +1663,7 @@ if not exist "%OBJ%\skinledger" mkdir "%OBJ%\skinledger"
     "tools\skin_ledger_test\skin_ledger_test.cpp" ^
     "src\common\dump_file.cpp" "src\common\miniz_impl.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: skin_ledger_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: skin_ledger_test build failed & exit /b 1 )
 "%OBJ%\skinledger\skin_ledger_test.exe" --dry-run || exit /b 1
 "%OBJ%\skinledger\skin_ledger_test.exe" --self-test "%ROOT%" || exit /b 1
 if not exist "%OBJ%\skinledger\fixture" mkdir "%OBJ%\skinledger\fixture"
@@ -1660,7 +1674,7 @@ python "tools\skin_ledger_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_skin_join_test
-echo [edvr] === skin_join_test.exe ===
+echo [edup] === skin_join_test.exe ===
 REM Build gate for the second skin's join (src\d3d11\skin_join.h, skin_entity_walk.h; docs\kinematic-motion-injection-2026-09-19.md, "F2 built"): the
 REM CPU half of the identity of a skinned character from one frame to the next. The hook's reading of the game's entry list over a fake heap with
 REM faults in it (J11), the job table's prefix join and the hook's entity join against a scripted world (spawn, despawn, reorder, a character that
@@ -1673,14 +1687,14 @@ if not exist "%OBJ%\skinjoin" mkdir "%OBJ%\skinjoin"
     /Fo"%OBJ%\skinjoin"\ /Fe"%OBJ%\skinjoin\skin_join_test.exe" ^
     "tools\skin_join_test\skin_join_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: skin_join_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: skin_join_test build failed & exit /b 1 )
 "%OBJ%\skinjoin\skin_join_test.exe" --dry-run || exit /b 1
 "%OBJ%\skinjoin\skin_join_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\skin_join_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_skin_join_gpu_test
-echo [edvr] === skin_join_gpu_test.exe ===
+echo [edup] === skin_join_gpu_test.exe ===
 REM Build gate for the second skin's GPU join (src\d3d11\skin_join_shader.h: JoinCS and the pose table's clear, scatter and verify passes) on WARP.
 REM The shipped HLSL is compiled and run beside the CPU model (skin_join.h) on scripted and random worlds and must agree with it word for word:
 REM the join and info tables, the pose table, the hook cross-check bits, the statistics. The fxc trap that cost a build once is pinned (atomics
@@ -1691,14 +1705,14 @@ if not exist "%OBJ%\skinjoingpu" mkdir "%OBJ%\skinjoingpu"
     /Fo"%OBJ%\skinjoingpu"\ /Fe"%OBJ%\skinjoingpu\skin_join_gpu_test.exe" ^
     "tools\skin_join_gpu_test\skin_join_gpu_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: skin_join_gpu_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: skin_join_gpu_test build failed & exit /b 1 )
 "%OBJ%\skinjoingpu\skin_join_gpu_test.exe" --dry-run || exit /b 1
 "%OBJ%\skinjoingpu\skin_join_gpu_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\skin_join_gpu_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_skin_clone_test
-echo [edvr] === skin_clone_test.exe ===
+echo [edup] === skin_clone_test.exe ===
 REM Build gate for the second skin's vertex shader patch (src\d3d11\dxbc_skin_clone.h, through dxbc_engine_velocity.h; docs\kinematic-motion-injection-
 REM 2026-09-19.md, "F2 built"): the token-level clone that computes last frame's position from last frame's palette and pose. Tokens and structure
 REM (the new resources, the temp renaming, the single export), every refusal (displacement before the anchor, no pose, a square root in the chain,
@@ -1711,14 +1725,14 @@ if not exist "%OBJ%\skinclone" mkdir "%OBJ%\skinclone"
     /Fo"%OBJ%\skinclone"\ /Fe"%OBJ%\skinclone\skin_clone_test.exe" ^
     "tools\skin_clone_test\skin_clone_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: skin_clone_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: skin_clone_test build failed & exit /b 1 )
 "%OBJ%\skinclone\skin_clone_test.exe" --dry-run || exit /b 1
 "%OBJ%\skinclone\skin_clone_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\skin_clone_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_skin_engine_test
-echo [edvr] === skin_engine_test.exe ===
+echo [edup] === skin_engine_test.exe ===
 REM Build gate for the second skin's engine side (docs\kinematic-motion-injection-2026-09-19.md, "F2 built"), on WARP. The compose: the shipped HLSL's
 REM skinned reprojection against a double reference (previous position = world + camera term + E), the production mv pass on real ES/EP/scene-depth/target-7
 REM resources (a valid E takes its exact motion, E = 0 is the camera term, no valid E keeps no history, rigid records never read target 7, the counters and
@@ -1737,14 +1751,14 @@ if not exist "%OBJ%\skinengine" mkdir "%OBJ%\skinengine"
     "tools\skin_engine_test\skin_engine_test.cpp" "src\d3d11\engine_velocity.cpp" "src\d3d11\skin_join_gpu.cpp" ^
     "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: skin_engine_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: skin_engine_test build failed & exit /b 1 )
 "%OBJ%\skinengine\skin_engine_test.exe" --dry-run || exit /b 1
 "%OBJ%\skinengine\skin_engine_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\skin_engine_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_skin_entity_hook_test
-echo [edvr] === skin_entity_hook_test.exe ===
+echo [edup] === skin_entity_hook_test.exe ===
 REM Build gate for the read-only hook on the game's skinning-job assembly (src\d3d11\skin_entity_hook.cpp, EDVR_SKIN_HOOK_TEST; docs\kinematic-motion-
 REM injection-2026-09-19.md, "F2 built"). The production source carries its own test: the real CodeHook patches a synthetic function that begins with the
 REM real 28-byte prologue, the real relay runs, the real guarded reads walk a heap laid out as the decompile says the list is. The original runs first,
@@ -1757,14 +1771,14 @@ if not exist "%OBJ%\skinentityhook" mkdir "%OBJ%\skinentityhook"
     "tools\skin_entity_hook_test\skin_entity_hook_test.cpp" "src\d3d11\skin_entity_hook.cpp" ^
     "src\common\code_hook.cpp" "src\common\guard.cpp" "src\common\log.cpp" "src\common\config.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: skin_entity_hook_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: skin_entity_hook_test build failed & exit /b 1 )
 "%OBJ%\skinentityhook\skin_entity_hook_test.exe" --dry-run || exit /b 1
 "%OBJ%\skinentityhook\skin_entity_hook_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\skin_entity_hook_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_slow_regime_test
-echo [edvr] === slow_regime_test.exe ===
+echo [edup] === slow_regime_test.exe ===
 REM Build gate for the runtime's vendor instruments (src\openxr\vendor_events.h, end_frame_episodes.h, slow_regime.h,
 REM src\common\slow_test.h, docs\headset-lock-vdxr-2026-10-02.md, instruments 2 to 4 and the test trigger): the vendor's events
 REM decoded, one line each, bounded (200 lines, undecoded types named once, the last session state kept past the cap), and
@@ -1783,25 +1797,25 @@ if not exist "%OBJ%\slowregime" mkdir "%OBJ%\slowregime"
     /Fo"%OBJ%\slowregime"\ /Fe"%OBJ%\slowregime\slow_regime_test.exe" ^
     "tools\slow_regime_test\slow_regime_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: slow_regime_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: slow_regime_test build failed & exit /b 1 )
 "%OBJ%\slowregime\slow_regime_test.exe" --dry-run || exit /b 1
 "%OBJ%\slowregime\slow_regime_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\slow_regime_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_flat_temporal_test
-echo [edvr] === flat_temporal_test.exe ===
+echo [edup] === flat_temporal_test.exe ===
 if not exist "%OBJ%\flattemporaltest" mkdir "%OBJ%\flattemporaltest"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\flattemporaltest"\ ^
     /Fe"%BUILD%\flat_temporal_test.exe" "tools\flat_temporal_test\flat_temporal_test.cpp" ^
     "third_party\dxbc_hash\DxilHash.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: flat temporal test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat temporal test build failed & exit /b 1 )
 REM --write-fixture regenerates tools\flat_upscale_fixture.log (design doc section 83); anything that writes a file takes --dry-run,
 REM and --dry-run writes nothing at all.
 "%BUILD%\flat_temporal_test.exe" --write-fixture "%OBJ%\flattemporaltest\never_written.log" --dry-run || exit /b 1
-if exist "%OBJ%\flattemporaltest\never_written.log" ( echo [edvr] ERROR: flat_temporal_test --write-fixture --dry-run wrote a file & exit /b 1 )
+if exist "%OBJ%\flattemporaltest\never_written.log" ( echo [edup] ERROR: flat_temporal_test --write-fixture --dry-run wrote a file & exit /b 1 )
 "%BUILD%\flat_temporal_test.exe" --self-test || exit /b 1
 REM The offscreen fast path's mutation list (src\d3d11\flat_offscreen_fast.h, flat_offscreen_counts.h) is held to the headers as they are; --run builds the standalone
 REM driver (tools\flat_temporal_test\flat_offscreen_test.cpp) against each edit and requires the case that owns the rule to fail.
@@ -1809,7 +1823,7 @@ python "tools\flat_temporal_test\offscreen_mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_vr_world_route_test
-echo [edvr] === vr_world_route_test.exe ===
+echo [edup] === vr_world_route_test.exe ===
 REM The VR on-foot world route (design doc section 82): the pure half, the detector's glue on the census retake's chain, the
 REM key-off contract and the hook pins. Pure C++ and source scans: no D3D.
 REM The curved route's pins (a curved screen does not hold the route off; the curve is named in the 5 s line and the OWNS line) hold
@@ -1822,13 +1836,13 @@ if not exist "%OBJ%\vrworldroutetest" mkdir "%OBJ%\vrworldroutetest"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\vrworldroutetest"\ ^
     /Fe"%BUILD%\vr_world_route_test.exe" "tools\vr_world_route_test\vr_world_route_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: vr world route test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vr world route test build failed & exit /b 1 )
 "%BUILD%\vr_world_route_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\vr_world_route_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_vr_world_route_gpu_test
-echo [edvr] === vr_world_route_gpu_test.exe ===
+echo [edup] === vr_world_route_gpu_test.exe ===
 REM The VR world route's runtime (vr_world_route.cpp, linked as shipped) on WARP: the real binding shadow, the real Config and
 REM the real flat resolver with its backends stubbed, a synthetic copy of the census retake's chain drawn through the same
 REM per-draw entry the hooks call. Key off, the happy path, every refusal, the internal flags, the latch, scene resets,
@@ -1842,7 +1856,7 @@ if not exist "%OBJ%\vrworldroutegpu" mkdir "%OBJ%\vrworldroutegpu"
     "src\d3d11\flat_projection_scope.cpp" "src\d3d11\flat_projection_runtime.cpp" ^
     "src\common\config.cpp" "src\common\proxy.cpp" "src\common\guard.cpp" "src\common\iniedit.cpp" ^
     /link /INCREMENTAL:NO dxgi.lib d3dcompiler.lib user32.lib gdi32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: vr world route GPU test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vr world route GPU test build failed & exit /b 1 )
 "%BUILD%\vr_world_route_gpu_test.exe" --dry-run || exit /b 1
 "%BUILD%\vr_world_route_gpu_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -1852,26 +1866,26 @@ REM existing rig guard and an inert emit fixture. Never copied into an installer
 REM %OBJ%\d3d11 (finished before any rig starts) and writes build\flat_sdk_bench_proxy.* and %OBJ%\flat_sdk_bench_proxy. Nothing in this build
 REM loads it (flat_sdk_bench.py's self-test and the integration exe's use a synthetic path), so no rig is --after it.
 :rig_flat_sdk_bench_proxy
-echo [edvr] === flat_sdk_bench_proxy.dll ===
+echo [edup] === flat_sdk_bench_proxy.dll ===
 python "tools\build_flat_sdk_bench_proxy.py" --dry-run || exit /b 1
 python "tools\build_flat_sdk_bench_proxy.py" || exit /b 1
 exit /b 0
 
 :rig_flat_sdk_integration_test
-echo [edvr] === flat_sdk_integration_test.exe ===
+echo [edup] === flat_sdk_integration_test.exe ===
 if not exist "%OBJ%\flat_sdk_integration_test" mkdir "%OBJ%\flat_sdk_integration_test"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /Fo"%OBJ%\flat_sdk_integration_test\\" /Fe"%BUILD%\flat_sdk_integration_test.exe" ^
     "tools\flat_sdk_integration_test\flat_sdk_integration_test.cpp" ^
     /link /INCREMENTAL:NO dxgi.lib d3dcompiler.lib user32.lib gdi32.lib
-if errorlevel 1 ( echo [edvr] ERROR: flat SDK integration bench compile failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat SDK integration bench compile failed & exit /b 1 )
 "%BUILD%\flat_sdk_integration_test.exe" --dry-run || exit /b 1
 "%BUILD%\flat_sdk_integration_test.exe" --self-test || exit /b 1
 python "tools\flat_sdk_bench.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_flat_mono_resolve_test
-echo [edvr] === flat_mono_resolve_test.exe ===
+echo [edup] === flat_mono_resolve_test.exe ===
 REM The compile and the cheap checks only. The suites run in :rig_flat_mono_resolve_shard1..5 (each --after this rig), because one process took
 REM 276 s: `flat_mono_resolve_test.exe --self-test --shard I/5` runs a fifth of them (the unit table is kUnits in the test's .cpp; plain
 REM --self-test still runs all of them, for hand use). --list-shards 5 fails the build unless the five shards between them run every unit
@@ -1883,7 +1897,7 @@ if not exist "%OBJ%\flat_mono_resolve_test" mkdir "%OBJ%\flat_mono_resolve_test"
     "src\d3d11\flat_mono_resolve.cpp" "src\d3d11\map_easu.cpp" "src\d3d11\map_smaa.cpp" "src\d3d11\flat_projection_scope.cpp" "src\d3d11\flat_projection_runtime.cpp" ^
     "src\common\iniedit.cpp" ^
     "third_party\dxbc_hash\DxilHash.cpp" /link /INCREMENTAL:NO dxgi.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: flat mono resolve test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat mono resolve test build failed & exit /b 1 )
 "%BUILD%\flat_mono_resolve_test.exe" --dry-run || exit /b 1
 "%BUILD%\flat_mono_resolve_test.exe" --list-shards 5 || exit /b 1
 exit /b 0
@@ -1894,12 +1908,12 @@ REM the rig passes and keeps, naming it, when the rig fails. The rig's cwd stays
 REM path; the draw-packet suite writes build\supporter-0182, in shard 2 only). The Python fixture checks run in the shard that wrote the fixture:
 REM shard 2 (pixel capture, draw capture, weapon footprint) and shard 3 (resolve inputs).
 :rig_flat_mono_resolve_shard1
-echo [edvr] === flat_mono_resolve_test.exe --shard 1/5 ===
+echo [edup] === flat_mono_resolve_test.exe --shard 1/5 ===
 call :flat_mono_resolve_shard 1 5 || exit /b 1
 exit /b 0
 
 :rig_flat_mono_resolve_shard2
-echo [edvr] === flat_mono_resolve_test.exe --shard 2/5 ===
+echo [edup] === flat_mono_resolve_test.exe --shard 2/5 ===
 call :flat_mono_resolve_shard 2 5 || exit /b 1
 python "tools\flat_pixels.py" "%SHARD_DIR%\flat-pixel-fixture" --verify-fixture || exit /b 1
 python "tools\flat_draw_pixels.py" "%SHARD_DIR%\flat-pixel-fixture" --verify-fixture || exit /b 1
@@ -1914,18 +1928,18 @@ python "tools\flat_weapon_pixels.py" "%SHARD_DIR%\flat-weapon-wide-query_timeout
 exit /b 0
 
 :rig_flat_mono_resolve_shard3
-echo [edvr] === flat_mono_resolve_test.exe --shard 3/5 ===
+echo [edup] === flat_mono_resolve_test.exe --shard 3/5 ===
 call :flat_mono_resolve_shard 3 5 || exit /b 1
 python "tools\flat_resolve_inputs.py" --verify-fixture "%SHARD_DIR%\flat-pixel-fixture" || exit /b 1
 exit /b 0
 
 :rig_flat_mono_resolve_shard4
-echo [edvr] === flat_mono_resolve_test.exe --shard 4/5 ===
+echo [edup] === flat_mono_resolve_test.exe --shard 4/5 ===
 call :flat_mono_resolve_shard 4 5 || exit /b 1
 exit /b 0
 
 :rig_flat_mono_resolve_shard5
-echo [edvr] === flat_mono_resolve_test.exe --shard 5/5 ===
+echo [edup] === flat_mono_resolve_test.exe --shard 5/5 ===
 call :flat_mono_resolve_shard 5 5 || exit /b 1
 exit /b 0
 
@@ -1934,9 +1948,9 @@ REM %1 = this shard, %2 = the shard count. Leaves SHARD_DIR set for the caller's
 set "SHARD_DIR=%BUILD%\flat_mono_resolve_shard%1_run"
 if exist "%SHARD_DIR%" rmdir /s /q "%SHARD_DIR%"
 mkdir "%SHARD_DIR%"
-if errorlevel 1 ( echo [edvr] ERROR: cannot make %SHARD_DIR% & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: cannot make %SHARD_DIR% & exit /b 1 )
 copy /y "%BUILD%\flat_mono_resolve_test.exe" "%SHARD_DIR%\flat_mono_resolve_test.exe" >nul
-if errorlevel 1 ( echo [edvr] ERROR: cannot copy flat_mono_resolve_test.exe into %SHARD_DIR% & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: cannot copy flat_mono_resolve_test.exe into %SHARD_DIR% & exit /b 1 )
 "%SHARD_DIR%\flat_mono_resolve_test.exe" --self-test --shard %1/%2 || exit /b 1
 exit /b 0
 
@@ -1945,13 +1959,13 @@ REM .obj reassembled from the same source never matches the compile cache's reco
 REM takes it compiled the whole rig again on every build (native_frame_test: 51 s, 2026-11-13). The source is assembled only
 REM when the .obj is missing or the source differs from the copy kept beside it (<.obj>.src). The source includes nothing.
 REM As compile_cache.py keys on cl.exe, the assembler is part of the key: ml64's path, size and time go in <.obj>.tool, and
-REM another ml64 reassembles. EDVR_NO_COMPILE_CACHE=1 reassembles always, as it recompiles always. No parenthesised blocks:
+REM another ml64 reassembles. EDUP_NO_COMPILE_CACHE=1 reassembles always, as it recompiles always. No parenthesised blocks:
 REM the assembler's path can hold "(x86)".
 :assemble_if_changed
 set "ASM_TOOL="
 for %%I in (ml64.exe) do set "ASM_TOOL=%%~$PATH:I"
 if defined ASM_TOOL for %%F in ("%ASM_TOOL%") do set "ASM_TOOL=%%~fF %%~zF %%~tF"
-if "%EDVR_NO_COMPILE_CACHE%"=="1" goto assemble_now
+if "%EDUP_NO_COMPILE_CACHE%"=="1" goto assemble_now
 if not defined ASM_TOOL goto assemble_now
 if not exist "%~2" goto assemble_now
 if not exist "%~2.src" goto assemble_now
@@ -1973,83 +1987,83 @@ if not defined ASM_TOOL exit /b 0
 exit /b 0
 
 :rig_c2_derive_test
-echo [edvr] === c2_derive_test.exe ===
+echo [edup] === c2_derive_test.exe ===
 if not exist "%OBJ%\c2derive" mkdir "%OBJ%\c2derive"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\c2derive\\" ^
     /Fe"%BUILD%\c2_derive_test.exe" "tools\c2_derive_test\c2_derive_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: c2 derive test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: c2 derive test build failed & exit /b 1 )
 "%BUILD%\c2_derive_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_c2_warp_test
-echo [edvr] === c2_warp_test.exe ===
+echo [edup] === c2_warp_test.exe ===
 if not exist "%OBJ%\c2warp" mkdir "%OBJ%\c2warp"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\c2warp\\" ^
     /Fe"%BUILD%\c2_warp_test.exe" "tools\c2_warp_test\c2_warp_test.cpp" ^
     /link /INCREMENTAL:NO dxgi.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: c2 warp test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: c2 warp test build failed & exit /b 1 )
 "%BUILD%\c2_warp_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_flat_camera_stub_test
-echo [edvr] === flat_camera_stub_test.exe ===
+echo [edup] === flat_camera_stub_test.exe ===
 if not exist "%OBJ%\flatcamerastub" mkdir "%OBJ%\flatcamerastub"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /I"%ROOT%" /Fo"%OBJ%\flatcamerastub\\" ^
     /Fe"%BUILD%\flat_camera_stub_test.exe" "tools\flat_camera_stub_test\flat_camera_stub_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: flat camera stub test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat camera stub test build failed & exit /b 1 )
 "%BUILD%\flat_camera_stub_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_flat_stationary_camera_test
-echo [edvr] === flat_stationary_camera_test.exe ===
+echo [edup] === flat_stationary_camera_test.exe ===
 if not exist "%OBJ%\flatstationarycamera" mkdir "%OBJ%\flatstationarycamera"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /I"%ROOT%" /Fo"%OBJ%\flatstationarycamera\\" ^
     /Fe"%BUILD%\flat_stationary_camera_test.exe" "tools\flat_stationary_camera_test\flat_stationary_camera_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: flat stationary camera test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat stationary camera test build failed & exit /b 1 )
 "%BUILD%\flat_stationary_camera_test.exe" --self-test || exit /b 1
 REM Exercise the actual passive camera writer with synthetic callbacks, without a game or hook install.
 %CC% /nologo /O2 /Gy /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /Fo"%OBJ%\flatstationarycamera\\" ^
     /Fe"%BUILD%\eye_camera_writer_test.exe" "tools\flat_stationary_camera_test\eye_camera_writer_test.cpp" ^
     /link /INCREMENTAL:NO /OPT:REF kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: eye camera writer test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: eye camera writer test build failed & exit /b 1 )
 "%BUILD%\eye_camera_writer_test.exe" --self-test || exit /b 1
 REM Native preview correction: exact production wrappers and owned synthetic CameraState memory.
 %CC% /nologo /O2 /Gy /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /Fo"%OBJ%\flatstationarycamera\\" ^
     /Fe"%BUILD%\native_preview_camera_test.exe" "tools\flat_stationary_camera_test\native_preview_camera_test.cpp" ^
     /link /INCREMENTAL:NO /OPT:REF kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: native preview camera test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native preview camera test build failed & exit /b 1 )
 "%BUILD%\native_preview_camera_test.exe" --self-test || exit /b 1
 REM Actual installer boundary: far executable entries, real CodeHook, all four relay forwards and partial refusal.
 %CC% /nologo /O2 /Gy /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /Fo"%OBJ%\flatstationarycamera\\" ^
     /Fe"%BUILD%\native_preview_install_test.exe" "tools\flat_stationary_camera_test\native_preview_install_test.cpp" ^
     "src\common\code_hook.cpp" /link /INCREMENTAL:NO /OPT:REF kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: native preview installer test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native preview installer test build failed & exit /b 1 )
 "%BUILD%\native_preview_install_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_c2_coexist_test
-echo [edvr] === c2_coexist_test.exe ===
+echo [edup] === c2_coexist_test.exe ===
 if not exist "%OBJ%\c2coexist" mkdir "%OBJ%\c2coexist"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\c2coexist\\" ^
     /Fe"%BUILD%\c2_coexist_test.exe" "tools\c2_coexist_test\c2_coexist_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: c2 coexist test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: c2 coexist test build failed & exit /b 1 )
 "%BUILD%\c2_coexist_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_vr_camera_census_test
-echo [edvr] === vr_camera_census_test.exe ===
+echo [edup] === vr_camera_census_test.exe ===
 REM The VR camera census (design doc section 82): the pure half the DLL compiles, run against the derive model, plus the
 REM source scans that hold "key off = nothing" and "the detour never writes a camera" (they read src\d3d11 from the repo
 REM root), plus tools\camera_census_fixture.log held to exactly what the formatters write -- the file that
@@ -2059,12 +2073,12 @@ if not exist "%OBJ%\vrcamcensus" mkdir "%OBJ%\vrcamcensus"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\vrcamcensus\\" ^
     /Fe"%BUILD%\vr_camera_census_test.exe" "tools\vr_camera_census_test\vr_camera_census_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: vr camera census test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vr camera census test build failed & exit /b 1 )
 "%BUILD%\vr_camera_census_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_vr_camera_census_glue_test
-echo [edvr] === vr_camera_census_glue_test.exe ===
+echo [edup] === vr_camera_census_glue_test.exe ===
 REM The census's glue (src\d3d11\vr_camera_census.cpp) compiled for real with the real Config and Log, and stubs for what it
 REM calls (the injector, the world route's draw progress, the journal, EDVR's advertised eye geometry): the observer's two
 REM halves against cameras built by the game-camera derive model (no allocation, not one byte written), the boundary's
@@ -2077,12 +2091,12 @@ if not exist "%OBJ%\vrcamcensusglue" mkdir "%OBJ%\vrcamcensusglue"
     /Fe"%BUILD%\vr_camera_census_glue_test.exe" "tools\vr_camera_census_glue_test\vr_camera_census_glue_test.cpp" ^
     "src\d3d11\vr_camera_census.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: vr camera census glue test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vr camera census glue test build failed & exit /b 1 )
 "%BUILD%\vr_camera_census_glue_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_flat_camera_vr_test
-echo [edvr] === flat_camera_vr_test.exe ===
+echo [edup] === flat_camera_vr_test.exe ===
 REM The VR world route's camera injection mode (design doc section 82, stage 2): the pure half the detour runs
 REM (src\d3d11\flat_camera_vr.h: the role of a kind-3 camera, the admission, the flush, the counters, the mode word) run
 REM exhaustively and through scripted call sequences -- the camera-object reuse scenario among them -- plus the source pins
@@ -2095,14 +2109,14 @@ if not exist "%OBJ%\flatcameravr" mkdir "%OBJ%\flatcameravr"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\flatcameravr\\" ^
     /Fe"%BUILD%\flat_camera_vr_test.exe" "tools\flat_camera_vr_test\flat_camera_vr_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: flat camera vr test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat camera vr test build failed & exit /b 1 )
 "%BUILD%\flat_camera_vr_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\flat_camera_vr_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_config_test
-if "%EDVR_RIG_STEP%"=="run" goto config_test_run
-echo [edvr] === config_test.exe ===
+if "%EDUP_RIG_STEP%"=="run" goto config_test_run
+echo [edup] === config_test.exe ===
 REM The real parser over the real shipped edup.ini. The file's own layout
 REM depends on two parser properties -- repeated section headers, last value
 REM wins -- that were originally read out of config.cpp rather than observed,
@@ -2120,23 +2134,23 @@ if not exist "%OBJ%\cfgtest" mkdir "%OBJ%\cfgtest"
     /Fe"%BUILD%\config_test.exe" "tools\config_test\config_test.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: config_test build failed & exit /b 1 )
-if "%EDVR_RIG_STEP%"=="build" exit /b 0
+if errorlevel 1 ( echo [edup] ERROR: config_test build failed & exit /b 1 )
+if "%EDUP_RIG_STEP%"=="build" exit /b 0
 :config_test_run
 "%BUILD%\config_test.exe" "%ROOT%" "%BUILD%\cfgscratch" || (
-    echo [edvr] ERROR: the shipped edup.ini does not parse as documented
+    echo [edup] ERROR: the shipped edup.ini does not parse as documented
     exit /b 1
 )
 REM The sessions the exe wrote with log.max_mb = 1 (head, tail segments, kept lines), read back by the reader every tool uses and checked from the
 REM Python side: sizes, segment count, deleted ranges, kept lines once each, order, whole lines, the newest line (tools\log_session.py).
 python "tools\edup_log.py" --check-rotation-dir "%BUILD%\cfgscratch\logrot" || (
-    echo [edvr] ERROR: the log's head, tail segments or kept lines are not as the log promises
+    echo [edup] ERROR: the log's head, tail segments or kept lines are not as the log promises
     exit /b 1
 )
 exit /b 0
 
 :rig_input_gate_test
-echo [edvr] === input_gate_test.exe ===
+echo [edup] === input_gate_test.exe ===
 REM Actual private DirectInput tables, buffered keys, close/release behavior,
 REM and real A/W factories through the executable's early import hook.
 if not exist "%OBJ%\inputgatetest" mkdir "%OBJ%\inputgatetest"
@@ -2147,15 +2161,15 @@ if not exist "%OBJ%\inputgatetest" mkdir "%OBJ%\inputgatetest"
     "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
     "src\common\guard.cpp" "src\common\frame_flag.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib dinput8.lib xinput9_1_0.lib
-if errorlevel 1 ( echo [edvr] ERROR: input_gate_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: input_gate_test build failed & exit /b 1 )
 "%BUILD%\input_gate_test.exe" || (
-    echo [edvr] ERROR: the menu keyboard gate failed its device or release checks
+    echo [edup] ERROR: the menu keyboard gate failed its device or release checks
     exit /b 1
 )
 exit /b 0
 
 :rig_hotkey_capture_test
-echo [edvr] === hotkey_capture_test.exe ===
+echo [edup] === hotkey_capture_test.exe ===
 REM The F8 menu's Hotkeys page below the menu: the three hotkey value formats and their round trip
 REM through edup.ini, the pad and joystick edge, the joystick table against synthetic DIJOYSTATE2
 REM buffers on a read-only page, the capture state machine, the checks on a captured binding
@@ -2169,15 +2183,15 @@ if not exist "%OBJ%\hotkeycapturetest" mkdir "%OBJ%\hotkeycapturetest"
     "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" "src\d3d11\joy_watch.cpp" "src\d3d11\hotkey_capture.cpp" ^
     "src\d3d11\elite_binds.cpp" "src\common\iniedit.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: hotkey_capture_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: hotkey_capture_test build failed & exit /b 1 )
 "%BUILD%\hotkey_capture_test.exe" "%ROOT%" || (
-    echo [edvr] ERROR: the Hotkeys page failed its format, capture, joystick or row checks
+    echo [edup] ERROR: the Hotkeys page failed its format, capture, joystick or row checks
     exit /b 1
 )
 exit /b 0
 
 :rig_net_keepalive_test
-echo [edvr] === net_keepalive_test.exe ===
+echo [edup] === net_keepalive_test.exe ===
 REM The loading-connection table: one libcurl multi handle per pump thread, the
 REM 50 s refresh, a full table, the return-address gate. No device and no game.
 if not exist "%OBJ%\netkeepalive" mkdir "%OBJ%\netkeepalive"
@@ -2185,15 +2199,15 @@ if not exist "%OBJ%\netkeepalive" mkdir "%OBJ%\netkeepalive"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\netkeepalive"\ /Fe"%BUILD%\net_keepalive_test.exe" ^
     "tools\net_keepalive_test\net_keepalive_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: net_keepalive_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: net_keepalive_test build failed & exit /b 1 )
 "%BUILD%\net_keepalive_test.exe" || (
-    echo [edvr] ERROR: loading connection reuse failed its table checks
+    echo [edup] ERROR: loading connection reuse failed its table checks
     exit /b 1
 )
 exit /b 0
 
 :rig_gate_test
-echo [edvr] === gate_test.exe ===
+echo [edup] === gate_test.exe ===
 if not exist "%OBJ%\gatetest" mkdir "%OBJ%\gatetest"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\gatetest"\ /Fe"%BUILD%\gate_test.exe" ^
@@ -2203,15 +2217,15 @@ if not exist "%OBJ%\gatetest" mkdir "%OBJ%\gatetest"
     "src\common\guard.cpp" ^
     "src\common\proxy.cpp" "src\d3d11\journal_watch.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: gate_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: gate_test build failed & exit /b 1 )
 "%BUILD%\gate_test.exe" "%ROOT%" || (
-    echo [edvr] ERROR: gate_test failed: the journal watcher, timing, periodic work or logged-note checks
+    echo [edup] ERROR: gate_test failed: the journal watcher, timing, periodic work or logged-note checks
     exit /b 1
 )
 exit /b 0
 
 :rig_journal_unload_test
-echo [edvr] === journal_unload_test.exe ===
+echo [edup] === journal_unload_test.exe ===
 REM The graphics DLL's pin against a real FreeLibrary (RC4 review 2026-09-29, F1).
 REM d3d11.dll runs its code on threads nobody waits for -- the journal watcher's
 REM worker, and with fix.ui_quality on a fire-and-forget thread-pool callback -- and
@@ -2236,20 +2250,20 @@ if not exist "%OBJ%\junload\host" mkdir "%OBJ%\junload\host"
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" ^
     "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: journal_unload_dll build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: journal_unload_dll build failed & exit /b 1 )
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\junload\host"\ /Fe"%BUILD%\journal_unload_test.exe" ^
     "tools\journal_unload_test\journal_unload_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: journal_unload_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: journal_unload_test build failed & exit /b 1 )
 "%BUILD%\journal_unload_test.exe" "%BUILD%\d3d11.dll" || (
-    echo [edvr] ERROR: the graphics DLL's pin does not keep its code mapped under a running worker
+    echo [edup] ERROR: the graphics DLL's pin does not keep its code mapped under a running worker
     exit /b 1
 )
 exit /b 0
 
 :rig_profile_switch_test
-echo [edvr] === profile_switch_test.exe ===
+echo [edup] === profile_switch_test.exe ===
 REM The live profile switch's mechanics (src\d3d11\mode_watch.cpp commitPosted; docs\design-unified-install-2026-10-12.md section 6). The rig
 REM loads a copy of the real build\d3d11.dll on WARP and presents synthetic frames through its real Present hook, so each flip is committed
 REM at a real frame boundary. It pins the state each switch leaves, the log lines, the 50-cycle count and memory, the settings-file
@@ -2261,15 +2275,15 @@ if not exist "%OBJ%\profileswitch" mkdir "%OBJ%\profileswitch"
     /Fo"%OBJ%\profileswitch\\" /Fe"%OBJ%\profileswitch\profile_switch_test.exe" ^
     "tools\profile_switch_test\profile_switch_test.cpp" ^
     /link /INCREMENTAL:NO user32.lib psapi.lib
-if errorlevel 1 ( echo [edvr] ERROR: profile_switch_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: profile_switch_test build failed & exit /b 1 )
 "%OBJ%\profileswitch\profile_switch_test.exe" "%BUILD%\d3d11.dll" || (
-    echo [edvr] ERROR: the live profile switch's mechanics failed their test
+    echo [edup] ERROR: the live profile switch's mechanics failed their test
     exit /b 1
 )
 exit /b 0
 
 :rig_glitch_test
-echo [edvr] === glitch_test.exe ===
+echo [edup] === glitch_test.exe ===
 REM The transition-flash engine fix's camera-buffer tap (glitch_frame.cpp),
 REM driven without the game: nomination until Armed, the event window gating the
 REM hand-over, the frame counter, the geometry checks (and that a stale
@@ -2282,15 +2296,15 @@ if not exist "%OBJ%\glitchtest" mkdir "%OBJ%\glitchtest"
     "src\common\config.cpp" ^
     "src\common\frame_flag.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: glitch_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: glitch_test build failed & exit /b 1 )
 "%BUILD%\glitch_test.exe" "%BUILD%\glitchscratch" || (
-    echo [edvr] ERROR: the transition flash camera tap failed its own test
+    echo [edup] ERROR: the transition flash camera tap failed its own test
     exit /b 1
 )
 exit /b 0
 
 :rig_supersample_test
-echo [edvr] === supersample_test.exe ===
+echo [edup] === supersample_test.exe ===
 REM The eye-region rule (src\common\supersample_math.h): which pixels are one
 REM eye's, from the Submit bounds (double-wide and flipped) -- table-tested,
 REM header-only, linking nothing from src\ at all. Every pass at the door
@@ -2301,15 +2315,15 @@ if not exist "%OBJ%\sstest" mkdir "%OBJ%\sstest"
     /Fe"%BUILD%\supersample_test.exe" ^
     "tools\supersample_test\supersample_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: supersample_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: supersample_test build failed & exit /b 1 )
 "%BUILD%\supersample_test.exe" || (
-    echo [edvr] ERROR: the eye-region rule is wrong
+    echo [edup] ERROR: the eye-region rule is wrong
     exit /b 1
 )
 exit /b 0
 
 :rig_temporal_test
-echo [edvr] === temporal_test.exe ===
+echo [edup] === temporal_test.exe ===
 REM The temporal pass's arithmetic (src\common\temporal_math.h): the jitter
 REM sequence and the SIGN of its tangent shift, the pixel-to-direction
 REM mapping on a real headset's lopsided frustum, the rotation deltas from
@@ -2324,23 +2338,23 @@ if not exist "%OBJ%\taatest" mkdir "%OBJ%\taatest"
     /Fe"%BUILD%\temporal_test.exe" ^
     "tools\temporal_test\temporal_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: temporal_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: temporal_test build failed & exit /b 1 )
 "%BUILD%\temporal_test.exe" || (
-    echo [edvr] ERROR: the temporal pass's arithmetic is wrong
+    echo [edup] ERROR: the temporal pass's arithmetic is wrong
     exit /b 1
 )
-echo [edvr] === dittosr_gpu_test.exe ===
+echo [edup] === dittosr_gpu_test.exe ===
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\taatest"\ /Fe"%BUILD%\dittosr_gpu_test.exe" ^
     "tools\temporal_test\dittosr_gpu_test.cpp" "src\d3d11\dittosr_engine.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: dittosr_gpu_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: dittosr_gpu_test build failed & exit /b 1 )
 "%BUILD%\dittosr_gpu_test.exe" --dry-run || exit /b 1
 "%BUILD%\dittosr_gpu_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_sky_flicker_test
-echo [edvr] === sky_flicker_test.exe ===
+echo [edup] === sky_flicker_test.exe ===
 REM The sky-flicker diagnostic build (docs\sky-flicker-2026-10-13.md, TEMPORARY): the camera-row event detector on synthetic rows built from the
 REM review's numbers, the pick rules and the eye-target filter on the probe-face sequence, the burst offset, the P3 mini-render record and its join,
 REM the sky ring's entry layout and ring arithmetic, the flat scene picker's candidate log -- and the sky ring's shipped HLSL run on WARP against its
@@ -2351,13 +2365,13 @@ if not exist "%OBJ%\skyflickertest" mkdir "%OBJ%\skyflickertest"
     /Fo"%OBJ%\skyflickertest"\ /Fe"%OBJ%\skyflickertest\sky_flicker_test.exe" ^
     "tools\sky_flicker_test\sky_flicker_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: sky_flicker_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: sky_flicker_test build failed & exit /b 1 )
 "%OBJ%\skyflickertest\sky_flicker_test.exe" --dry-run || exit /b 1
 "%OBJ%\skyflickertest\sky_flicker_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_ui_depth
-echo [edvr] === private UI depth regression ===
+echo [edup] === private UI depth regression ===
 REM Keep the executable away from build\d3d11.dll: these tests use system
 REM D3D11 WARP and include the production coverage pass directly.
 if not exist "%OBJ%\uidepthtest" mkdir "%OBJ%\uidepthtest"
@@ -2368,15 +2382,15 @@ if not exist "%OBJ%\uidepthtest" mkdir "%OBJ%\uidepthtest"
     "src\common\dump_file.cpp" "src\common\miniz_impl.cpp" ^
     "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO /OPT:REF d3d11.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: ui_depth_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: ui_depth_test build failed & exit /b 1 )
 "%OBJ%\uidepthtest\ui_depth_test.exe" || (
-    echo [edvr] ERROR: private UI depth regression
+    echo [edup] ERROR: private UI depth regression
     exit /b 1
 )
 exit /b 0
 
 :rig_ui_holo_pass_test
-echo [edvr] === UI and hologram pass output-identity rig ===
+echo [edup] === UI and hologram pass output-identity rig ===
 REM WARP, the production UI resolve bytecode from %GEN%, away from build\d3d11.dll
 REM (the rig links d3d11.lib). Goldens were recorded from the unmodified shaders.
 if not exist "%OBJ%\uiholopass" mkdir "%OBJ%\uiholopass"
@@ -2385,16 +2399,16 @@ if not exist "%OBJ%\uiholopass" mkdir "%OBJ%\uiholopass"
     /Fo"%OBJ%\uiholopass\\" /Fe"%OBJ%\uiholopass\ui_holo_pass_test.exe" ^
     "tools\ui_holo_pass_test\ui_holo_pass_test.cpp" ^
     /link /INCREMENTAL:NO /OPT:REF d3d11.lib d3dcompiler.lib dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: ui_holo_pass_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: ui_holo_pass_test build failed & exit /b 1 )
 "%OBJ%\uiholopass\ui_holo_pass_test.exe" --dry-run || exit /b 1
 "%OBJ%\uiholopass\ui_holo_pass_test.exe" --self-test || (
-    echo [edvr] ERROR: the UI and hologram passes no longer match their recorded output
+    echo [edup] ERROR: the UI and hologram passes no longer match their recorded output
     exit /b 1
 )
 exit /b 0
 
 :rig_terrain_cover_test
-echo [edvr] === terrain cull cover: the rule, the signature scan, the module gate, the hook on a synthetic builder ===
+echo [edup] === terrain cull cover: the rule, the signature scan, the module gate, the hook on a synthetic builder ===
 REM Build gate for the terrain cull cover (src\d3d11\terrain_cull_cover_core.h and terrain_cull_cover_hook.cpp, EDVR_TERRAIN_COVER_TEST; docs\terrain-culling.md): the game builds its
 REM terrain cull planes from a CENTRED frustum (vFOV/2 vertically, atan(aspect * tan) horizontally), so an eye with an asymmetric frustum is under-covered on its wide sides. The rule
 REM widens arguments 5 and 6 of that builder to the largest tangents handed to the game (the three rigs' predicted values, a symmetric headset, an input already wider, bad input).
@@ -2408,26 +2422,26 @@ if not exist "%OBJ%\terraincover" mkdir "%OBJ%\terraincover"
     "tools\terrain_cover_test\terrain_cover_test.cpp" "src\d3d11\terrain_cull_cover_hook.cpp" ^
     "src\common\code_hook.cpp" "src\common\guard.cpp" "src\common\log.cpp" "src\common\config.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: terrain_cover_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: terrain_cover_test build failed & exit /b 1 )
 "%OBJ%\terraincover\terrain_cover_test.exe" --dry-run || exit /b 1
 "%OBJ%\terraincover\terrain_cover_test.exe" --self-test "%ROOT%" || exit /b 1
 exit /b 0
 
 :rig_luma_probe_test
-echo [edvr] === compact luminance diagnostic regression ===
+echo [edup] === compact luminance diagnostic regression ===
 if not exist "%OBJ%\lumaprobetest" mkdir "%OBJ%\lumaprobetest"
 %CC% /nologo /O2 /Gy /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\lumaprobetest\\" /Fe"%OBJ%\lumaprobetest\luma_probe_test.exe" ^
     "tools\luma_probe_test\luma_probe_test.cpp" ^
     /link /INCREMENTAL:NO /OPT:REF d3d11.lib dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: luma_probe_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: luma_probe_test build failed & exit /b 1 )
 "%OBJ%\lumaprobetest\luma_probe_test.exe" --dry-run || exit /b 1
 "%OBJ%\lumaprobetest\luma_probe_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_hologram_depth_test
-echo [edvr] === generic hologram/icon depth regression ===
+echo [edup] === generic hologram/icon depth regression ===
 REM Same shape as :rig_ui_depth: WARP, the production coverage pass
 REM included directly, away from build\d3d11.dll.
 if not exist "%OBJ%\holodepthtest" mkdir "%OBJ%\holodepthtest"
@@ -2438,28 +2452,28 @@ if not exist "%OBJ%\holodepthtest" mkdir "%OBJ%\holodepthtest"
     "src\common\dump_file.cpp" "src\common\miniz_impl.cpp" ^
     "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO /OPT:REF d3d11.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: hologram_depth_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: hologram_depth_test build failed & exit /b 1 )
 "%OBJ%\holodepthtest\hologram_depth_test.exe" || (
-    echo [edvr] ERROR: generic hologram/icon depth regression
+    echo [edup] ERROR: generic hologram/icon depth regression
     exit /b 1
 )
 exit /b 0
 
 REM Five rigs (were one, :rig_native_motion_rigs, five independent exes run one after another); each keeps its own obj directory.
 :rig_holo_motion
-echo [edvr] === holo_motion_test ===
+echo [edup] === holo_motion_test ===
 if not exist "%OBJ%\holomotion" mkdir "%OBJ%\holomotion"
 %CC% /I"%GEN%" /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\holomotion\\" /Fe"%OBJ%\holomotion\holo_motion_test.exe" ^
     "tools\holo_motion_test\holo_motion_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: hologram motion test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: hologram motion test build failed & exit /b 1 )
 "%OBJ%\holomotion\holo_motion_test.exe" || exit /b 1
 exit /b 0
 
 :rig_screen_motion
-echo [edvr] === screen_motion_test ===
+echo [edup] === screen_motion_test ===
 if not exist "%OBJ%\screenmotion" mkdir "%OBJ%\screenmotion"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /I"%GEN%" ^
@@ -2470,7 +2484,7 @@ if not exist "%OBJ%\screenmotion" mkdir "%OBJ%\screenmotion"
 exit /b 0
 
 :rig_weapon_motion
-echo [edvr] === weapon_motion_test ===
+echo [edup] === weapon_motion_test ===
 if not exist "%OBJ%\weaponmotion" mkdir "%OBJ%\weaponmotion"
 %CC% /I"%GEN%" /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\weaponmotion\\" /Fe"%OBJ%\weaponmotion\weapon_motion_test.exe" ^
@@ -2480,7 +2494,7 @@ if not exist "%OBJ%\weaponmotion" mkdir "%OBJ%\weaponmotion"
 exit /b 0
 
 :rig_identity_fusion
-echo [edvr] === identity_fusion_test ===
+echo [edup] === identity_fusion_test ===
 if not exist "%OBJ%\identityfusion" mkdir "%OBJ%\identityfusion"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\identityfusion\\" /Fe"%OBJ%\identityfusion\identity_fusion_test.exe" ^
@@ -2491,7 +2505,7 @@ python "tools\identity_fusion_capture.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_desktop_window_test
-echo [edvr] === desktop_window_test (visual.desktop_window) ===
+echo [edup] === desktop_window_test (visual.desktop_window) ===
 REM The pure rules (the setting's words, the picture's shape, where it goes in the buffer under each scaling, the window's plan, the formats, the log lines) and the source
 REM pins that wire the feature (the key, the export, the draw skip, the Present call, the host's handoff). No device and no window.
 if not exist "%OBJ%\desktopwindow" mkdir "%OBJ%\desktopwindow"
@@ -2504,7 +2518,7 @@ if not exist "%OBJ%\desktopwindow" mkdir "%OBJ%\desktopwindow"
 exit /b 0
 
 :rig_night_vision
-echo [edvr] === night_vision_test ===
+echo [edup] === night_vision_test ===
 if not exist "%OBJ%\nightvision" mkdir "%OBJ%\nightvision"
 %CC% /I"%GEN%" /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\nightvision\\" /Fe"%OBJ%\nightvision\night_vision_test.exe" ^
@@ -2514,7 +2528,7 @@ if not exist "%OBJ%\nightvision" mkdir "%OBJ%\nightvision"
 exit /b 0
 
 :rig_intro_skip
-echo [edvr] === DirectShow intro skip regression ===
+echo [edup] === DirectShow intro skip regression ===
 if not exist "%OBJ%\introskip" mkdir "%OBJ%\introskip"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
@@ -2526,7 +2540,7 @@ python "tools\holo_motion.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_aa_compare_test
-echo [edvr] === AA comparison key (hotkey.compare_aa) ===
+echo [edup] === AA comparison key (hotkey.compare_aa) ===
 REM The toggle's state machine and notice words, the key-clash rule, Config's runtime override (set, survives a reload, never
 REM writes the ini, dropped by a profile switch, honoured by the flat gate's mode read), and the source pins that wire the key.
 if not exist "%OBJ%\aacompare" mkdir "%OBJ%\aacompare"
@@ -2539,7 +2553,7 @@ cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
 exit /b 0
 
 :rig_stellar_motion
-echo [edvr] === stellar motion regression ===
+echo [edup] === stellar motion regression ===
 if not exist "%OBJ%\stellarmotion" mkdir "%OBJ%\stellarmotion"
 %CC% /I"%GEN%" /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
@@ -2548,12 +2562,12 @@ if not exist "%OBJ%\stellarmotion" mkdir "%OBJ%\stellarmotion"
     "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     "src\common\log.cpp" "src\common\config.cpp" "src\common\proxy.cpp" "src\common\guard.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: stellar motion test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: stellar motion test build failed & exit /b 1 )
 "%OBJ%\stellarmotion\stellar_motion_test.exe" || exit /b 1
 exit /b 0
 
 :rig_terrain_retired_test
-echo [edvr] === terrain retirement A/B ===
+echo [edup] === terrain retirement A/B ===
 REM The proof of the 2026-10-01 retirement of advanced.terrain_motion (docs\terrain-motion-dispatch-cost-2026-09-17.md): the
 REM temporal compute shader before the cut, rebuilt from the current text and the removed fragments, and after it, run on WARP over
 REM scenes that carry terrain-like pixels, give byte-identical outputs for both entries with probe.w bit 8 clear -- every player
@@ -2566,13 +2580,13 @@ if not exist "%OBJ%\terrainretired" mkdir "%OBJ%\terrainretired"
     /Fo"%OBJ%\terrainretired\\" /Fe"%OBJ%\terrainretired\terrain_retired_test.exe" ^
     "tools\terrain_retired_test\terrain_retired_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: terrain retirement test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: terrain retirement test build failed & exit /b 1 )
 "%OBJ%\terrainretired\terrain_retired_test.exe" --dry-run || exit /b 1
 "%OBJ%\terrainretired\terrain_retired_test.exe" || exit /b 1
 exit /b 0
 
 :rig_celestial_motion_test
-echo [edvr] === planet patch motion (celestial) ===
+echo [edup] === planet patch motion (celestial) ===
 REM The planet patch motion (docs\terrain-motion-dispatch-cost-2026-09-17.md, 2026-10-06): src\common\celestial_math.h run on the REAL patch
 REM constants of eye dump 180540 (tools\celestial_motion_test\fixture_180540.bin, extracted by tools\celestial_fixture.py, which re-derives
 REM every reference in its own --self-test below), the motion shader's celestial path on WARP (a pixel inside a body's volume takes path 12 with
@@ -2584,24 +2598,24 @@ if not exist "%OBJ%\celestialmotion" mkdir "%OBJ%\celestialmotion"
     /Fo"%OBJ%\celestialmotion\\" /Fe"%OBJ%\celestialmotion\celestial_motion_test.exe" ^
     "tools\celestial_motion_test\celestial_motion_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: celestial motion test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: celestial motion test build failed & exit /b 1 )
 "%OBJ%\celestialmotion\celestial_motion_test.exe" || exit /b 1
 exit /b 0
 
 :rig_cockpit_glass_probe_test
-echo [edvr] === cockpit glass probe (TEMPORARY) ===
+echo [edup] === cockpit glass probe (TEMPORARY) ===
 REM The canopy table, register list and log formatting of src\d3d11\cockpit_glass_probe_core.h (docs\cockpit-glass-legacy-port.md
 REM section 5). Pure; no device. Goes with the probe.
 if not exist "%OBJ%\glassprobe" mkdir "%OBJ%\glassprobe"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /WX /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\glassprobe\\" /Fe"%OBJ%\glassprobe\cockpit_glass_probe_test.exe" ^
     "tools\cockpit_glass_probe_test\cockpit_glass_probe_test.cpp"
-if errorlevel 1 ( echo [edvr] ERROR: cockpit glass probe test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: cockpit glass probe test build failed & exit /b 1 )
 "%OBJ%\glassprobe\cockpit_glass_probe_test.exe" || exit /b 1
 exit /b 0
 
 :rig_cockpit_glass_test
-echo [edvr] === cockpit glass test ===
+echo [edup] === cockpit glass test ===
 REM visual.cockpit_glass = legacy (docs\cockpit-glass-legacy-port.md section 8): src\d3d11\cockpit_glass_core.h (the key, which bound shader is replaced, the log lines) and the build's
 REM bytecode kCockpitGlassLegacyPsBytecode (src\d3d11\cockpit_glass_shader.h) on a WARP device with the D3D debug layer, drawn with a vertex shader that carries the game's canopy vertex shader's
 REM outputs: no coverage, dirt under the sun, a cascade's shadow, a hangar lit by the probe alone. Compiled /W4 /WX. Output under obj\ and System32's d3d11.
@@ -2610,12 +2624,12 @@ if not exist "%OBJ%\cockpitglass" mkdir "%OBJ%\cockpitglass"
     /Fo"%OBJ%\cockpitglass\\" /Fe"%OBJ%\cockpitglass\cockpit_glass_test.exe" ^
     "tools\cockpit_glass_test\cockpit_glass_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: cockpit glass test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: cockpit glass test build failed & exit /b 1 )
 "%OBJ%\cockpitglass\cockpit_glass_test.exe" || exit /b 1
 exit /b 0
 
 :rig_on_foot_split_test
-echo [edvr] === on_foot_split_test.exe ===
+echo [edup] === on_foot_split_test.exe ===
 REM The ship split on foot (docs\per-object-motion.md, 2026-10-07; src\common\temporal_mode.h): Explorer Cam's ground within ten metres smeared
 REM because the temporal pass sent every pixel nearer than advanced.temporal_aa_ship_metres down the HEAD path, and on foot the ground is the
 REM world. While Status.json says the commander is on foot and not seated, the split the shader reads is a millimetre; the shader is not
@@ -2634,21 +2648,21 @@ if not exist "%OBJ%\onfootsplit" mkdir "%OBJ%\onfootsplit"
     /I"src\common" /I"src\d3d11" /Fo"%OBJ%\onfootsplit\\" /Fe"%OBJ%\onfootsplit\on_foot_split_test.exe" ^
     "tools\on_foot_split_test\on_foot_split_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: on foot split test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: on foot split test build failed & exit /b 1 )
 "%OBJ%\onfootsplit\on_foot_split_test.exe" --dry-run || exit /b 1
 "%OBJ%\onfootsplit\on_foot_split_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\on_foot_split_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_depth_scene_pick_test
-echo [edvr] === scene depth selection cache regression ===
+echo [edup] === scene depth selection cache regression ===
 if not exist "%OBJ%\depthscenepick" mkdir "%OBJ%\depthscenepick"
 %CC% /I"%GEN%" /nologo /O2 /Gy /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\depthscenepick\\" /Fe"%OBJ%\depthscenepick\depth_scene_pick_test.exe" ^
     "tools\depth_scene_pick_test\depth_scene_pick_test.cpp" ^
     /link /INCREMENTAL:NO /OPT:REF
-if errorlevel 1 ( echo [edvr] ERROR: scene depth selection test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: scene depth selection test build failed & exit /b 1 )
 "%OBJ%\depthscenepick\depth_scene_pick_test.exe" --dry-run || exit /b 1
 "%OBJ%\depthscenepick\depth_scene_pick_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -2656,14 +2670,14 @@ exit /b 0
 REM F198: the eye source S (src\d3d11\submitted_eye.h) and targetEye's order: the stability rule over the submitted textures, the previous-frame timing, a recreate, an edge and a size
 REM change, and that S is never asked while the temporal path runs. The header alone; no D3D11.
 :rig_submitted_eye_test
-echo [edvr] === submitted eye source (F198) ===
+echo [edup] === submitted eye source (F198) ===
 if not exist "%OBJ%\submittedeye" mkdir "%OBJ%\submittedeye"
 %CC% /I"%GEN%" /nologo /O2 /Gy /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\submittedeye\\" /Fe"%OBJ%\submittedeye\submitted_eye_test.exe" ^
     "tools\submitted_eye_test\submitted_eye_test.cpp" ^
     /link /INCREMENTAL:NO /OPT:REF
-if errorlevel 1 ( echo [edvr] ERROR: submitted eye test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: submitted eye test build failed & exit /b 1 )
 "%OBJ%\submittedeye\submitted_eye_test.exe" --dry-run || exit /b 1
 "%OBJ%\submittedeye\submitted_eye_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -2672,20 +2686,20 @@ REM F85c: the reticle depth pass (src\d3d11\reticle_depth_shader.h). The product
 REM against nofoot::f85::marchCpu and the analytic answer: planes, a slanted wall, sky, a surface under the minimum, a line that never meets the screen. The device
 REM comes from System32 through src\common\system_d3d11.h; the exe is built outside %BUILD% like the other rigs that bind a device.
 :rig_reticle_depth
-echo [edvr] === reticle depth march (F85c) ===
+echo [edup] === reticle depth march (F85c) ===
 if not exist "%OBJ%\reticledepth" mkdir "%OBJ%\reticledepth"
 %CC% /I"%GEN%" /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\reticledepth\\" /Fe"%OBJ%\reticledepth\reticle_depth_test.exe" ^
     "tools\reticle_depth_test\reticle_depth_test.cpp" ^
     /link /INCREMENTAL:NO /OPT:REF kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: reticle depth test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: reticle depth test build failed & exit /b 1 )
 "%OBJ%\reticledepth\reticle_depth_test.exe" --dry-run || exit /b 1
 "%OBJ%\reticledepth\reticle_depth_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_scrim_metadata_test
-echo [edvr] === scrim metadata cache regression ===
+echo [edup] === scrim metadata cache regression ===
 if not exist "%OBJ%\scrimmetadata" mkdir "%OBJ%\scrimmetadata"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /DEDVR_SCRIM_METADATA_TEST ^
@@ -2696,15 +2710,15 @@ if not exist "%OBJ%\scrimmetadata" mkdir "%OBJ%\scrimmetadata"
     "src\common\log.cpp" "src\common\config.cpp" "src\common\proxy.cpp" ^
     "src\common\guard.cpp" ^
     /link /INCREMENTAL:NO user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: scrim metadata test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: scrim metadata test build failed & exit /b 1 )
 "%OBJ%\scrimmetadata\scrim_metadata_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_object_classification
-echo [edvr] === object classification provenance regression ===
+echo [edup] === object classification provenance regression ===
 if not exist "%OBJ%\classification" mkdir "%OBJ%\classification"
 call :assemble_if_changed "tools\object_classification_test\unwind_stubs.asm" "%OBJ%\classification\unwind_stubs.obj"
-if errorlevel 1 ( echo [edvr] ERROR: unwind fixture build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: unwind fixture build failed & exit /b 1 )
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /DEDVR_RECORD_WRITER_TEST ^
     /Fo"%OBJ%\classification\\" /Fe"%OBJ%\classification\object_classification_test.exe" ^
@@ -2717,14 +2731,14 @@ if errorlevel 1 ( echo [edvr] ERROR: unwind fixture build failed & exit /b 1 )
     "src\common\dump_file.cpp" "src\common\miniz_impl.cpp" ^
     "%OBJ%\classification\unwind_stubs.obj" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: object classification test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: object classification test build failed & exit /b 1 )
 "%OBJ%\classification\object_classification_test.exe" "%OBJ%\classification" || exit /b 1
 python "tools\object_classification.py" --self-test || exit /b 1
 python "tools\object_classification.py" "%OBJ%\classification\classification_fixture.json" || exit /b 1
 exit /b 0
 
 :rig_eye_draw_snapshot
-echo [edvr] === eye draw snapshot regression ===
+echo [edup] === eye draw snapshot regression ===
 if not exist "%OBJ%\drawsnapshot" mkdir "%OBJ%\drawsnapshot"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
@@ -2732,7 +2746,7 @@ if not exist "%OBJ%\drawsnapshot" mkdir "%OBJ%\drawsnapshot"
     "tools\eye_draw_snapshot_test\eye_draw_snapshot_test.cpp" ^
     "src\common\dump_file.cpp" "src\common\miniz_impl.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: eye draw snapshot test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: eye draw snapshot test build failed & exit /b 1 )
 "%OBJ%\drawsnapshot\eye_draw_snapshot_test.exe" "%OBJ%\drawsnapshot\fixture.bin" || exit /b 1
 python "tools\eye_draw_snapshot.py" --self-test || exit /b 1
 python "tools\eye_draw_snapshot.py" "%OBJ%\drawsnapshot\fixture.bin" --verify-fixture || exit /b 1
@@ -2750,7 +2764,7 @@ REM The UI point sampler's d3dcompiler_47.dll lifetime (the eye-dump crash of 20
 REM Its own process, and d3d11.lib only: :rig_eye_draw_snapshot links d3dcompiler.lib and calls D3DCompile, which pins the DLL for the whole
 REM process, so it cannot see this. The exe asserts the DLL is absent before the sampler's first call.
 :rig_eye_draw_snapshot_unload
-echo [edvr] === eye draw snapshot compiler-unload regression ===
+echo [edup] === eye draw snapshot compiler-unload regression ===
 if not exist "%OBJ%\drawsnapshotunload" mkdir "%OBJ%\drawsnapshotunload"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
@@ -2758,7 +2772,7 @@ if not exist "%OBJ%\drawsnapshotunload" mkdir "%OBJ%\drawsnapshotunload"
     "tools\eye_draw_snapshot_unload_test\eye_draw_snapshot_unload_test.cpp" ^
     "src\common\dump_file.cpp" "src\common\miniz_impl.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib
-if errorlevel 1 ( echo [edvr] ERROR: eye draw snapshot unload test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: eye draw snapshot unload test build failed & exit /b 1 )
 "%OBJ%\drawsnapshotunload\eye_draw_snapshot_unload_test.exe" || exit /b 1
 exit /b 0
 
@@ -2766,21 +2780,21 @@ REM The eye dump's compressed container (src\common\dump_file.cpp): the producti
 REM independent miniz-inflate reader inside the exe, and then by tools\dump_io.py, the reader every tool uses, from the .expect
 REM files the exe leaves beside them. Covers the data-never-lost path (a chunk made to fail leaves a plain file) and the deltas.
 :rig_dump_file
-echo [edvr] === dump file container, C++ writer to Python reader ===
+echo [edup] === dump file container, C++ writer to Python reader ===
 if not exist "%OBJ%\dumpfile" mkdir "%OBJ%\dumpfile"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\dumpfile\\" /Fe"%OBJ%\dumpfile\dump_file_test.exe" ^
     "tools\dump_file_test\dump_file_test.cpp" "src\common\dump_file.cpp" "src\common\miniz_impl.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: dump file test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: dump file test build failed & exit /b 1 )
 if exist "%OBJ%\dumpfile\out" rmdir /s /q "%OBJ%\dumpfile\out"
 "%OBJ%\dumpfile\dump_file_test.exe" "%OBJ%\dumpfile\out" || exit /b 1
 python "tools\dump_io.py" --check-dir "%OBJ%\dumpfile\out" || exit /b 1
 exit /b 0
 
 :rig_eye_tonemap_snapshot
-echo [edvr] === eye tone-map snapshot regression ===
+echo [edup] === eye tone-map snapshot regression ===
 if not exist "%OBJ%\tonemapsnapshot" mkdir "%OBJ%\tonemapsnapshot"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
@@ -2788,14 +2802,14 @@ if not exist "%OBJ%\tonemapsnapshot" mkdir "%OBJ%\tonemapsnapshot"
     "tools\eye_tonemap_snapshot_test\eye_tonemap_snapshot_test.cpp" ^
     "src\common\dump_file.cpp" "src\common\miniz_impl.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: tone-map snapshot test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: tone-map snapshot test build failed & exit /b 1 )
 "%OBJ%\tonemapsnapshot\eye_tonemap_snapshot_test.exe" "%OBJ%\tonemapsnapshot\fixture.bin" || exit /b 1
 python "tools\eye_tonemap_snapshot.py" --self-test || exit /b 1
 python "tools\eye_tonemap_snapshot.py" "%OBJ%\tonemapsnapshot\fixture.bin" --verify-fixture || exit /b 1
 exit /b 0
 
 :rig_eye_panel_snapshot
-echo [edvr] === eye panel snapshot regression ===
+echo [edup] === eye panel snapshot regression ===
 if not exist "%OBJ%\panelsnapshot" mkdir "%OBJ%\panelsnapshot"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
@@ -2803,7 +2817,7 @@ if not exist "%OBJ%\panelsnapshot" mkdir "%OBJ%\panelsnapshot"
     "tools\eye_panel_snapshot_test\eye_panel_snapshot_test.cpp" ^
     "src\common\dump_file.cpp" "src\common\miniz_impl.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: panel snapshot test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: panel snapshot test build failed & exit /b 1 )
 "%OBJ%\panelsnapshot\eye_panel_snapshot_test.exe" "%OBJ%\panelsnapshot\fixture.bin" || exit /b 1
 python "tools\eye_panel_snapshot.py" --self-test || exit /b 1
 python "tools\eye_panel_snapshot.py" "%OBJ%\panelsnapshot\fixture.bin" --verify-fixture || exit /b 1
@@ -2818,12 +2832,12 @@ if not exist "%OBJ%\gpuspanstate" mkdir "%OBJ%\gpuspanstate"
 %CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT ^
     /Fo"%OBJ%\gpuspanstate\\" /Fe"%BUILD%\gpu_span_state_test.exe" ^
     "tools\gpu_span_state_test\gpu_span_state_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: GPU span state test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: GPU span state test build failed & exit /b 1 )
 "%BUILD%\gpu_span_state_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_optimized_station_test
-echo [edvr] === optimized_station_test.exe ===
+echo [edup] === optimized_station_test.exe ===
 REM The optimized station's pure half (src\d3d11\optimized_station_core.h): the seal trigger, the release rules, the pad-local frame, the
 REM per-size floors, the own-ship rules and the bay volume. No DLL and no game.
 if not exist "%OBJ%\optimizedstation" mkdir "%OBJ%\optimizedstation"
@@ -2832,16 +2846,16 @@ if not exist "%OBJ%\optimizedstation" mkdir "%OBJ%\optimizedstation"
     /Fe"%BUILD%\optimized_station_test.exe" "tools\optimized_station_test\optimized_station_test.cpp" ^
     "third_party\dxbc_hash\DxilHash.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: optimized station test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: optimized station test build failed & exit /b 1 )
 "%BUILD%\optimized_station_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_game_build_test
-echo [edvr] === game_build_test.exe ===
+echo [edup] === game_build_test.exe ===
 REM The runtime signature resolver (src\common\game_build_core.h, issue 124) against its reference, tools\hook_signatures.py. Always: the
 REM self-test's synthetic exes (hook_signatures.py fixture writes them, their table as C++ and Python's answers) mapped as the loader maps
 REM an image, every target's answer equal to Python's, the named cases, the masked pin compare and an unreadable page. When the archived
-REM executables are at the main checkout's analysis\ (or EDVR_ANALYSIS_DIR): each mapped and resolved with the committed table against
+REM executables are at the main checkout's analysis\ (or EDUP_ANALYSIS_DIR): each mapped and resolved with the committed table against
 REM tools\game_build_test\expect_*.txt, 0 WRONG and Python's answer per target, and the known build resolving to itself; without them
 REM it prints "skipped: no archived exes" and passes. No DLL and no game.
 if not exist "%OBJ%\gamebuild" mkdir "%OBJ%\gamebuild"
@@ -2850,12 +2864,12 @@ python tools\hook_signatures.py fixture --out-dir "%OBJ%\gamebuild" >nul || exit
     /D_CRT_SECURE_NO_WARNINGS /I"%OBJ%\gamebuild" /Fo"%OBJ%\gamebuild\\" ^
     /Fe"%BUILD%\game_build_test.exe" "tools\game_build_test\game_build_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: game build test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: game build test build failed & exit /b 1 )
 "%BUILD%\game_build_test.exe" --self-test "%OBJ%\gamebuild" "%ROOT%" || exit /b 1
 exit /b 0
 
 :rig_exposure_chain_test
-echo [edvr] === exposure_chain_test.exe ===
+echo [edup] === exposure_chain_test.exe ===
 REM The exposure engine path (src\d3d11\exposure_chain.h, the always-on exposure sharing): the pure decision (learning, the second-eye skip, every decline,
 REM fallback and latch), three pipelines of stand-in chain shaders on a WARP device with the debug layer (stock, the old share copy, the engine
 REM path: eye 0 and eye 1 must come out bit-identical frame by frame through engaging, a lost confirmation and a stand-down), and source pins on
@@ -2865,13 +2879,13 @@ if not exist "%OBJ%\exposurechain" mkdir "%OBJ%\exposurechain"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\exposurechain\\" ^
     /Fe"%BUILD%\exposure_chain_test.exe" "tools\exposure_chain_test\exposure_chain_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: exposure chain test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: exposure chain test build failed & exit /b 1 )
 "%BUILD%\exposure_chain_test.exe" --dry-run || exit /b 1
 "%BUILD%\exposure_chain_test.exe" --self-test "%ROOT%" || exit /b 1
 exit /b 0
 
 :rig_light_grid_cache_test
-echo [edvr] === light_grid_cache_test.exe ===
+echo [edup] === light_grid_cache_test.exe ===
 REM The light grid cache's pure half (src\d3d11\light_grid_cache_core.h): the identity and pin decision, the key built as the game builds its own, the state regions, the
 REM bit-exact compare and the LRU, whole-state swaps against a fake builder that owns tracked allocations (an ownership audit after every frame), the forward reasons, the
 REM verify-and-disable path, faults in the memory policy, the thread rule, the jitter probe and the exact line texts. No DLL and no game.
@@ -2880,12 +2894,12 @@ if not exist "%OBJ%\lightgridcache" mkdir "%OBJ%\lightgridcache"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\lightgridcache\\" ^
     /Fe"%BUILD%\light_grid_cache_test.exe" "tools\light_grid_cache_test\light_grid_cache_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: light grid cache test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: light grid cache test build failed & exit /b 1 )
 "%BUILD%\light_grid_cache_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_stream_boost_test
-echo [edvr] === stream_boost_test.exe ===
+echo [edup] === stream_boost_test.exe ===
 REM Pure hardware-scaling and pump-budget unit tests for src\d3d11\stream_boost_core.h:
 REM storage classification (HDD stand-down, NVMe, SATA, flash, TRIM fallback, unknown),
 REM CPU/RAM/storage ceilings, flat vs VR pump budgets, tight-frame throttling, VRAM eviction brake.
@@ -2894,13 +2908,13 @@ if not exist "%OBJ%\streamboost" mkdir "%OBJ%\streamboost"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\streamboost\\" ^
     /Fe"%BUILD%\stream_boost_test.exe" "tools\stream_boost_test\stream_boost_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: stream boost test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: stream boost test build failed & exit /b 1 )
 "%BUILD%\stream_boost_test.exe" --dry-run || exit /b 1
 "%BUILD%\stream_boost_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_vehicle_rig_test
-echo [edvr] === vehicle_rig_test.exe ===
+echo [edup] === vehicle_rig_test.exe ===
 REM The vehicle rig's pure half (src\d3d11\vehicle_rig_core.h, issue 186): a rig with a zero count, a rig torn down between frames, a vtable mismatch, a fault in a guarded read,
 REM an absurd count, the name and root sphere, the two largest record radii, the pose math against tools\flat_pixels_engine.py's, and the corrected reads
 REM (R = *(I+0x2F0)). No DLL and no game.
@@ -2909,11 +2923,11 @@ if not exist "%OBJ%\vehiclerig" mkdir "%OBJ%\vehiclerig"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\vehiclerig\\" ^
     /Fe"%BUILD%\vehicle_rig_test.exe" "tools\vehicle_rig_test\vehicle_rig_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: vehicle rig test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vehicle rig test build failed & exit /b 1 )
 "%BUILD%\vehicle_rig_test.exe" --self-test || exit /b 1
 exit /b 0
 :rig_pad_state_test
-echo [edvr] === pad_state_test.exe ===
+echo [edup] === pad_state_test.exe ===
 REM The pad-state probe's pure half (src\d3d11\pad_state_core.h): the identity and prologue decision, change detection, the exact line texts, the
 REM bounded object table and its full-table fallback, and the line cap. Temporary, log only. No DLL and no game.
 if not exist "%OBJ%\padstate" mkdir "%OBJ%\padstate"
@@ -2921,7 +2935,7 @@ if not exist "%OBJ%\padstate" mkdir "%OBJ%\padstate"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\padstate\\" ^
     /Fe"%BUILD%\pad_state_test.exe" "tools\pad_state_test\pad_state_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: pad state test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: pad state test build failed & exit /b 1 )
 "%BUILD%\pad_state_test.exe" --self-test || exit /b 1
 exit /b 0
 
@@ -2932,7 +2946,7 @@ if not exist "%OBJ%\gpuclock" mkdir "%OBJ%\gpuclock"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /Fo"%OBJ%\gpuclock\\" /Fe"%OBJ%\gpuclock\gpu_disjoint_clock_test.exe" ^
     "tools\gpu_disjoint_clock_test\gpu_disjoint_clock_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: shared GPU clock test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: shared GPU clock test build failed & exit /b 1 )
 "%OBJ%\gpuclock\gpu_disjoint_clock_test.exe" --dry-run || exit /b 1
 "%OBJ%\gpuclock\gpu_disjoint_clock_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -2943,7 +2957,7 @@ if not exist "%OBJ%\gpuspand3d11" mkdir "%OBJ%\gpuspand3d11"
     /Fo"%OBJ%\gpuspand3d11\\" /Fe"%OBJ%\gpuspand3d11\gpu_span_d3d11_test.exe" ^
     "tools\gpu_span_d3d11_test\gpu_span_d3d11_test.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: D3D11 GPU span test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: D3D11 GPU span test build failed & exit /b 1 )
 "%OBJ%\gpuspand3d11\gpu_span_d3d11_test.exe" --dry-run || exit /b 1
 "%OBJ%\gpuspand3d11\gpu_span_d3d11_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -2955,7 +2969,7 @@ if not exist "%OBJ%\producergputiming" mkdir "%OBJ%\producergputiming"
     "tools\producer_gpu_timing_test\producer_gpu_timing_test.cpp" ^
     "src\openxr\producer_gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: producer GPU timing test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: producer GPU timing test build failed & exit /b 1 )
 "%OBJ%\producergputiming\producer_gpu_timing_test.exe" --dry-run || exit /b 1
 "%OBJ%\producergputiming\producer_gpu_timing_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -2971,13 +2985,13 @@ if not exist "%OBJ%\gpulivehook" mkdir "%OBJ%\gpulivehook"
     "src\common\vtable_hook.cpp" "src\common\guard.cpp" "src\common\log.cpp" ^
     "src\common\config.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: LiveCopy GPU query test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: LiveCopy GPU query test build failed & exit /b 1 )
 "%OBJ%\gpulivehook\gpu_live_hook_test.exe" --dry-run || exit /b 1
 "%OBJ%\gpulivehook\gpu_live_hook_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_gpu_timing_test
-if "%EDVR_RIG_STEP%"=="run" goto gpu_timing_test_run
+if "%EDUP_RIG_STEP%"=="run" goto gpu_timing_test_run
 REM Migrated timers must share one disjoint scope, preserve pending readbacks,
 REM survive transient pressure, and issue no context commands during unload.
 if not exist "%OBJ%\gputiming" mkdir "%OBJ%\gputiming"
@@ -2987,8 +3001,8 @@ if not exist "%OBJ%\gputiming" mkdir "%OBJ%\gputiming"
     "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_frame_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     "src\common\log.cpp" "src\common\config.cpp" "src\common\proxy.cpp" "src\common\guard.cpp" ^
     /link /INCREMENTAL:NO user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: shared GPU timing test build failed & exit /b 1 )
-if "%EDVR_RIG_STEP%"=="build" exit /b 0
+if errorlevel 1 ( echo [edup] ERROR: shared GPU timing test build failed & exit /b 1 )
+if "%EDUP_RIG_STEP%"=="build" exit /b 0
 :gpu_timing_test_run
 "%OBJ%\gputiming\gpu_timing_test.exe" --dry-run || exit /b 1
 "%OBJ%\gputiming\gpu_timing_test.exe" --self-test || exit /b 1
@@ -3009,7 +3023,7 @@ if not exist "%OBJ%\gpucensus" mkdir "%OBJ%\gpucensus"
     "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_frame_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     "src\common\config.cpp" "src\common\proxy.cpp" "src\common\guard.cpp" ^
     /link /INCREMENTAL:NO user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: GPU census test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: GPU census test build failed & exit /b 1 )
 "%OBJ%\gpucensus\gpu_census_test.exe" --dry-run || exit /b 1
 "%OBJ%\gpucensus\gpu_census_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3022,7 +3036,7 @@ if not exist "%OBJ%\gpupassprofile" mkdir "%OBJ%\gpupassprofile"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\gpupassprofile\\" ^
     /Fe"%OBJ%\gpupassprofile\gpu_pass_profile_test.exe" "tools\gpu_pass_profile_test\gpu_pass_profile_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: GPU pass profile test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: GPU pass profile test build failed & exit /b 1 )
 "%OBJ%\gpupassprofile\gpu_pass_profile_test.exe" --self-test || exit /b 1
 exit /b 0
 
@@ -3034,7 +3048,7 @@ if not exist "%OBJ%\blendprobe" mkdir "%OBJ%\blendprobe"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\blendprobe\\" ^
     /Fe"%OBJ%\blendprobe\blend_probe_test.exe" "tools\blend_probe_test\blend_probe_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: blend probe test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: blend probe test build failed & exit /b 1 )
 "%OBJ%\blendprobe\blend_probe_test.exe" --self-test || exit /b 1
 exit /b 0
 
@@ -3047,7 +3061,7 @@ if not exist "%OBJ%\onfootrec" mkdir "%OBJ%\onfootrec"
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\onfootrec\\" ^
     /Fe"%OBJ%\onfootrec\onfoot_recorder_test.exe" "tools\onfoot_recorder_test\onfoot_recorder_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: on-foot recorder test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: on-foot recorder test build failed & exit /b 1 )
 "%OBJ%\onfootrec\onfoot_recorder_test.exe" "%OBJ%\onfootrec\fixture" || exit /b 1
 REM F213: the Python checker reads the fixture the exe just wrote and pins the field names its rules use to this schema, the way :rig_eye_draw_snapshot runs eye_draw_snapshot.py.
 REM The checker's --self-test runs once, in the Python self-test gate with the other tools.
@@ -3065,14 +3079,14 @@ if not exist "%OBJ%\vrworldmips" mkdir "%OBJ%\vrworldmips"
     /Fo"%OBJ%\vrworldmips\\" /Fe"%OBJ%\vrworldmips\vr_world_mips_test.exe" ^
     "tools\vr_world_mips_test\vr_world_mips_test.cpp" "src\d3d11\vr_world_mips.cpp" ^
     /link /INCREMENTAL:NO d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: vr_world_mips_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vr_world_mips_test build failed & exit /b 1 )
 "%OBJ%\vrworldmips\vr_world_mips_test.exe" --dry-run || exit /b 1
 "%OBJ%\vrworldmips\vr_world_mips_test.exe" --self-test || exit /b 1
 python "tools\vr_world_mips_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_vscreen_fit_test
-echo [edvr] === vscreen_fit_test.exe ===
+echo [edup] === vscreen_fit_test.exe ===
 REM fix.vscreen_res_width = auto, fitted to what each eye shows (design doc section 82, the "vscreen auto-fit" entry): the pure half
 REM (src\common\vscreen_fit.h) run by the very code the DLL runs -- the rule, the route's conditions, the footprint geometry, the stored
 REM record, the log's text -- plus the state files on disk (src\common\vscreen_auto_state.cpp) and the source pins that hold the resolver,
@@ -3084,16 +3098,16 @@ if not exist "%OBJ%\vscreenfit" mkdir "%OBJ%\vscreenfit"
     /Fo"%OBJ%\vscreenfit\\" /Fe"%OBJ%\vscreenfit\vscreen_fit_test.exe" ^
     "tools\vscreen_fit_test\vscreen_fit_test.cpp" "src\common\vscreen_auto_state.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: vscreen_fit_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vscreen_fit_test build failed & exit /b 1 )
 "%OBJ%\vscreenfit\vscreen_fit_test.exe" --dry-run || exit /b 1
 "%OBJ%\vscreenfit\vscreen_fit_test.exe" --dry-run --write-fixture "%OBJ%\vscreenfit\never_written.log" || exit /b 1
-if exist "%OBJ%\vscreenfit\never_written.log" ( echo [edvr] ERROR: vscreen_fit_test --dry-run --write-fixture wrote a file & exit /b 1 )
+if exist "%OBJ%\vscreenfit\never_written.log" ( echo [edup] ERROR: vscreen_fit_test --dry-run --write-fixture wrote a file & exit /b 1 )
 "%OBJ%\vscreenfit\vscreen_fit_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\vscreen_fit_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_terrain_checkerboard_test
-echo [edvr] === terrain_checkerboard_test.exe ===
+echo [edup] === terrain_checkerboard_test.exe ===
 REM Elite's terrain checkerboard rendering in VR, said in the headset (design doc section 84, the VR hint): the words and the pure picks
 REM (src\common\terrain_checkerboard_notice.h), the reader on fixture folders and the monitor's rule for a half-written file
 REM (src\d3d11\terrain_checkerboard_reader.h), the worker thread on a real log (src\d3d11\terrain_checkerboard.cpp, linked with the real
@@ -3108,14 +3122,14 @@ if not exist "%OBJ%\terraincheckerboard" mkdir "%OBJ%\terraincheckerboard"
     "tools\terrain_checkerboard_test\terrain_checkerboard_test.cpp" "src\d3d11\terrain_checkerboard.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: terrain_checkerboard_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: terrain_checkerboard_test build failed & exit /b 1 )
 "%OBJ%\terraincheckerboard\terrain_checkerboard_test.exe" --dry-run || exit /b 1
 "%OBJ%\terraincheckerboard\terrain_checkerboard_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\terrain_checkerboard_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_vscreen_footprint_glue_test
-echo [edvr] === vscreen_footprint_glue_test.exe ===
+echo [edup] === vscreen_footprint_glue_test.exe ===
 REM The footprint instrument's glue (src\d3d11\vscreen_footprint.cpp; design doc section 82, the "vscreen auto-fit" entry) compiled for
 REM real with the real Config, Log and fault guard, and stubs for what it calls (the runtime's published eye size, the hooks' bypass
 REM flag): the four sources a composite draw binds (the model rows, the clip rows at their real offsets, the quad, the SIZE record) on a
@@ -3129,7 +3143,7 @@ if not exist "%OBJ%\vscreenfpglue" mkdir "%OBJ%\vscreenfpglue"
     "tools\vscreen_footprint_glue_test\vscreen_footprint_glue_test.cpp" "src\d3d11\vscreen_footprint.cpp" "src\common\vscreen_auto_state.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: vscreen_footprint_glue_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vscreen_footprint_glue_test build failed & exit /b 1 )
 "%OBJ%\vscreenfpglue\vscreen_footprint_glue_test.exe" --dry-run || exit /b 1
 "%OBJ%\vscreenfpglue\vscreen_footprint_glue_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3139,7 +3153,7 @@ if not exist "%OBJ%\openvr_abi" mkdir "%OBJ%\openvr_abi"
 %CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT ^
     /Fo"%OBJ%\openvr_abi\\" /Fe"%BUILD%\openvr_abi_test.exe" ^
     "tools\openvr_abi_test\openvr_abi_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: OpenVR ABI test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: OpenVR ABI test build failed & exit /b 1 )
 "%BUILD%\openvr_abi_test.exe" --self-test || exit /b 1
 exit /b 0
 
@@ -3151,7 +3165,7 @@ if not exist "%OBJ%\openxr_probe" mkdir "%OBJ%\openxr_probe"
     /I"third_party\openxr\include" /Fo"%OBJ%\openxr_probe\\" ^
     /Fe"%BUILD%\openxr_probe.exe" "tools\openxr_probe\openxr_probe.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: OpenXR probe build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: OpenXR probe build failed & exit /b 1 )
 "%BUILD%\openxr_probe.exe" --self-test || exit /b 1
 exit /b 0
 
@@ -3163,7 +3177,7 @@ for %%T in (session projection geometry head gate frame pose origin reference sp
     %CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT /I"third_party\openxr\include" ^
         /Fo"%OBJ%\openxr_core\\" /Fe"%BUILD%\openxr_%%T_test.exe" ^
         "tools\openxr_%%T_test\openxr_%%T_test.cpp" /link /INCREMENTAL:NO
-    if errorlevel 1 ( echo [edvr] ERROR: OpenXR %%T test build failed & exit /b 1 )
+    if errorlevel 1 ( echo [edup] ERROR: OpenXR %%T test build failed & exit /b 1 )
     "%BUILD%\openxr_%%T_test.exe" --dry-run || exit /b 1
     "%BUILD%\openxr_%%T_test.exe" --self-test || exit /b 1
 )
@@ -3186,7 +3200,7 @@ for %%T in (native stereo) do (
         "src\openxr\openvr_auxiliary.cpp" "src\openxr\runtime_exports.cpp" ^
         "src\common\frame_flag.cpp" ^
         /link /INCREMENTAL:NO dxgi.lib d3dcompiler.lib user32.lib gdi32.lib
-    if errorlevel 1 ( echo [edvr] ERROR: OpenXR %%T test build failed & exit /b 1 )
+    if errorlevel 1 ( echo [edup] ERROR: OpenXR %%T test build failed & exit /b 1 )
 )
 for %%T in (native stereo) do (
     "%BUILD%\openxr_%%T_test.exe" --dry-run || exit /b 1
@@ -3204,7 +3218,7 @@ if not exist "%OBJ%\openxr_capture_test" mkdir "%OBJ%\openxr_capture_test"
     "tools\openxr_capture_test\openxr_capture_test.cpp" "src\openxr\eye_capture.cpp" ^
     "src\openxr\shared_texture_transfer.cpp" "src\openxr\producer_gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: OpenXR capture test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: OpenXR capture test build failed & exit /b 1 )
 "%BUILD%\openxr_capture_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_capture_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3216,7 +3230,7 @@ if not exist "%OBJ%\openxr_skybox_test" mkdir "%OBJ%\openxr_skybox_test"
     "tools\openxr_skybox_test\openxr_skybox_test.cpp" "src\openxr\skybox_capture.cpp" ^
     "src\openxr\shared_texture_transfer.cpp" "src\openxr\producer_gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: OpenXR skybox capture test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: OpenXR skybox capture test build failed & exit /b 1 )
 "%BUILD%\openxr_skybox_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_skybox_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3226,7 +3240,7 @@ if not exist "%OBJ%\native_device_test" mkdir "%OBJ%\native_device_test"
 %CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT ^
     /Fo"%OBJ%\native_device_test\\" /Fe"%BUILD%\native_device_test.exe" ^
     "tools\openxr_native_test\native_device_test.cpp" /link /INCREMENTAL:NO dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: native device test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native device test build failed & exit /b 1 )
 "%BUILD%\native_device_test.exe" --dry-run || exit /b 1
 "%BUILD%\native_device_test.exe" --self-test || exit /b 1
 python tools\run_openxr_native.py --self-test || exit /b 1
@@ -3239,7 +3253,7 @@ if not exist "%OBJ%\openxr_binding_test" mkdir "%OBJ%\openxr_binding_test"
     "tools\openxr_binding_test\openxr_binding_test.cpp" "src\openxr\session_binding.cpp" ^
     "src\openxr\published_session.cpp" "src\common\frame_flag.cpp" ^
     /link /INCREMENTAL:NO dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: OpenXR binding test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: OpenXR binding test build failed & exit /b 1 )
 "%BUILD%\openxr_binding_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_binding_test.exe" --self-test || exit /b 1
 "%BUILD%\openxr_binding_test.exe" --published-proxy "%BUILD%\edvr_openxr_graphics.dll" || exit /b 1
@@ -3252,7 +3266,7 @@ if not exist "%OBJ%\native_startup" mkdir "%OBJ%\native_startup"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /Fo"%OBJ%\native_startup\\" /Fe"%BUILD%\native_startup_test.exe" ^
     "tools\native_startup_test\native_startup_test.cpp" /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: native startup test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native startup test build failed & exit /b 1 )
 "%BUILD%\native_startup_test.exe" --dry-run || exit /b 1
 "%BUILD%\native_startup_test.exe" --self-test "%BUILD%\edvr_openxr_graphics.dll" native || exit /b 1
 exit /b 0
@@ -3266,7 +3280,7 @@ if not exist "%OBJ%\oculus_route" mkdir "%OBJ%\oculus_route"
     "tools\oculus_route_test\oculus_route_test.cpp" "src\d3d11\oculus_route.cpp" ^
     "src\common\log.cpp" "src\common\config.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: Oculus route test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: Oculus route test build failed & exit /b 1 )
 "%BUILD%\oculus_route_test.exe" --dry-run || exit /b 1
 "%BUILD%\oculus_route_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3276,7 +3290,7 @@ if not exist "%OBJ%\elite_oculus" mkdir "%OBJ%\elite_oculus"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /Fo"%OBJ%\elite_oculus\\" /Fe"%BUILD%\elite_oculus_test.exe" ^
     "tools\elite_oculus_test\elite_oculus_test.cpp" /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: Elite Oculus profile test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: Elite Oculus profile test build failed & exit /b 1 )
 "%BUILD%\elite_oculus_test.exe" --dry-run || exit /b 1
 "%BUILD%\elite_oculus_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3289,7 +3303,7 @@ if not exist "%OBJ%\openxr_proxy_state_test" mkdir "%OBJ%\openxr_proxy_state_tes
     "src\openxr\d3d11_stereo.cpp" "src\openxr\eye_capture.cpp" "src\openxr\skybox_capture.cpp" ^
     "src\openxr\shared_texture_transfer.cpp" "src\openxr\producer_gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO dxgi.lib d3dcompiler.lib user32.lib gdi32.lib
-if errorlevel 1 ( echo [edvr] ERROR: OpenXR proxy state test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: OpenXR proxy state test build failed & exit /b 1 )
 "%BUILD%\openxr_proxy_state_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_proxy_state_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3301,7 +3315,7 @@ REM Actual owned-swapchain Present hook, foreign Init caller and private work.
     /Fo"%OBJ%\openxr_present_test\\" /Fe"%BUILD%\openxr_present_test.exe" ^
     "tools\openxr_present_test\openxr_present_test.cpp" ^
     /link /INCREMENTAL:NO dxgi.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: OpenXR Present test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: OpenXR Present test build failed & exit /b 1 )
 "%BUILD%\openxr_present_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_present_test.exe" --self-test || exit /b 1
 python "tools\test_openxr_transport.py" --self-test || exit /b 1
@@ -3316,7 +3330,7 @@ REM Stopped application Present: real graphics callback and native stop coordina
     /Fo"%OBJ%\openxr_shutdown_test\\" /Fe"%BUILD%\openxr_shutdown_test.exe" ^
     "tools\openxr_shutdown_test\openxr_shutdown_test.cpp" ^
     /link /INCREMENTAL:NO dxgi.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: OpenXR stopped-Present shutdown test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: OpenXR stopped-Present shutdown test build failed & exit /b 1 )
 "%BUILD%\openxr_shutdown_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_shutdown_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3330,7 +3344,7 @@ REM Cross-device texture handoff and consumer-only retirement after producer sto
     "src\openxr\shared_texture_transfer.cpp" "src\openxr\eye_capture.cpp" "src\openxr\skybox_capture.cpp" ^
     "src\openxr\producer_gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: OpenXR shared texture test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: OpenXR shared texture test build failed & exit /b 1 )
 "%BUILD%\openxr_shared_texture_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_shared_texture_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3339,7 +3353,7 @@ exit /b 0
 REM XeSS bridge contracts and hardware readback. GPU-less or unsupported
 REM adapters skip explicitly; a supported adapter must pass the bridge.
 if not defined XESS (
-    echo [edvr] xess_engine_test: no XeSS SDK in this build -- skipping.
+    echo [edup] xess_engine_test: no XeSS SDK in this build -- skipping.
     exit /b 0
 )
 if not exist "%OBJ%\xess_engine_test" mkdir "%OBJ%\xess_engine_test"
@@ -3350,9 +3364,9 @@ REM build would accidentally load EDVR's proxy instead of the system DLL.
     /Fo"%OBJ%\xess_engine_test\\" /Fe"%OBJ%\xess_engine_test\xess_engine_test.exe" ^
     "tools\xess_engine_test\xess_engine_test.cpp" "src\d3d11\xess_engine.cpp" "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: XeSS engine test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: XeSS engine test build failed & exit /b 1 )
 copy /y "%BUILD%\libxess.dll" "%OBJ%\xess_engine_test\libxess.dll" >nul
-if errorlevel 1 ( echo [edvr] ERROR: XeSS engine test runtime staging failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: XeSS engine test runtime staging failed & exit /b 1 )
 "%OBJ%\xess_engine_test\xess_engine_test.exe" --dry-run || exit /b 1
 "%OBJ%\xess_engine_test\xess_engine_test.exe" --self-test || exit /b 1
 "%OBJ%\xess_engine_test\xess_engine_test.exe" --gpu-test-if-available || exit /b 1
@@ -3365,7 +3379,7 @@ REM must pass the bridge. Skips cleanly, still green, when this build has no FSR
 REM to test, as with the FSR3 and NGX stubs. AMD's two DLLs are staged beside the exe, where the engine looks for
 REM them (beside the module that holds it).
 if not defined FSR4 (
-    echo [edvr] fsr4_engine_test: no FSR 4 SDK in this build -- skipping.
+    echo [edup] fsr4_engine_test: no FSR 4 SDK in this build -- skipping.
     exit /b 0
 )
 if not exist "%OBJ%\fsr4_engine_test" mkdir "%OBJ%\fsr4_engine_test"
@@ -3376,11 +3390,11 @@ REM build would accidentally load EDVR's proxy instead of the system DLL.
     /Fo"%OBJ%\fsr4_engine_test\\" /Fe"%OBJ%\fsr4_engine_test\fsr4_engine_test.exe" ^
     "tools\fsr4_engine_test\fsr4_engine_test.cpp" "src\d3d11\fsr4_engine.cpp" "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib dxgi.lib
-if errorlevel 1 ( echo [edvr] ERROR: FSR 4 engine test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: FSR 4 engine test build failed & exit /b 1 )
 copy /y "%BUILD%\amd_fidelityfx_loader_dx12.dll" "%OBJ%\fsr4_engine_test\amd_fidelityfx_loader_dx12.dll" >nul
-if errorlevel 1 ( echo [edvr] ERROR: FSR 4 engine test loader staging failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: FSR 4 engine test loader staging failed & exit /b 1 )
 copy /y "%BUILD%\amd_fidelityfx_upscaler_dx12.dll" "%OBJ%\fsr4_engine_test\amd_fidelityfx_upscaler_dx12.dll" >nul
-if errorlevel 1 ( echo [edvr] ERROR: FSR 4 engine test upscaler staging failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: FSR 4 engine test upscaler staging failed & exit /b 1 )
 "%OBJ%\fsr4_engine_test\fsr4_engine_test.exe" --dry-run || exit /b 1
 "%OBJ%\fsr4_engine_test\fsr4_engine_test.exe" --self-test || exit /b 1
 "%OBJ%\fsr4_engine_test\fsr4_engine_test.exe" --gpu-test-if-available || exit /b 1
@@ -3395,7 +3409,7 @@ REM modeled on :rig_openxr_shared_texture_test above. Skips cleanly (still
 REM green) when this build has no FSR3 SDK: there is no engine body to
 REM test, the same reason nothing tests NGX's stub half either.
 if not defined FSRFLAGS (
-    echo [edvr] fsr3_engine_test: no FSR3 SDK in this build ^(EDVR_FFX_DX11^) -- skipping.
+    echo [edup] fsr3_engine_test: no FSR3 SDK in this build ^(EDUP_FFX_DX11^) -- skipping.
     exit /b 0
 )
 if not exist "%OBJ%\fsr3_engine_test" mkdir "%OBJ%\fsr3_engine_test"
@@ -3410,7 +3424,7 @@ REM /EHsc that case would fail-fast instead of failing.
     "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_frame_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     "src\common\log.cpp" "src\common\config.cpp" "src\common\proxy.cpp" "src\common\guard.cpp" ^
     /link /INCREMENTAL:NO %FSRLIB% dxgi.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: FSR3 engine test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: FSR3 engine test build failed & exit /b 1 )
 "%BUILD%\fsr3_engine_test.exe" --dry-run || exit /b 1
 "%BUILD%\fsr3_engine_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3421,7 +3435,7 @@ if not exist "%OBJ%\openxr_system_test" mkdir "%OBJ%\openxr_system_test"
     /Fo"%OBJ%\openxr_system_test\\" /Fe"%BUILD%\openxr_system_test.exe" ^
     "tools\openxr_system_test\openxr_system_test.cpp" "tools\openxr_system_test\abi_caller.cpp" ^
     "src\openxr\openvr_system.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: owned OpenVR system test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: owned OpenVR system test build failed & exit /b 1 )
 "%BUILD%\openxr_system_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_system_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3431,7 +3445,7 @@ if not exist "%OBJ%\openxr_launch_centre_test" mkdir "%OBJ%\openxr_launch_centre
 %CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT /I"third_party\openxr\include" ^
     /Fo"%OBJ%\openxr_launch_centre_test\\" /Fe"%BUILD%\openxr_launch_centre_test.exe" ^
     "tools\openxr_launch_centre_test\openxr_launch_centre_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: OpenXR launch centering test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: OpenXR launch centering test build failed & exit /b 1 )
 "%BUILD%\openxr_launch_centre_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_launch_centre_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3443,7 +3457,7 @@ if not exist "%OBJ%\seat_memory_test" mkdir "%OBJ%\seat_memory_test"
 %CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\seat_memory_test\\" /Fe"%BUILD%\seat_memory_test.exe" ^
     "tools\seat_memory_test\seat_memory_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: seat memory test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: seat memory test build failed & exit /b 1 )
 "%BUILD%\seat_memory_test.exe" --dry-run || exit /b 1
 "%BUILD%\seat_memory_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3456,7 +3470,7 @@ if not exist "%OBJ%\seat_press_test" mkdir "%OBJ%\seat_press_test"
     /Fo"%OBJ%\seat_press_test\\" /Fe"%BUILD%\seat_press_test.exe" "tools\seat_press_test\seat_press_test.cpp" ^
     "src\common\hotkey.cpp" "src\common\hotkey_text.cpp" "src\d3d11\elite_binds.cpp" "src\common\iniedit.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: seat press test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: seat press test build failed & exit /b 1 )
 "%BUILD%\seat_press_test.exe" --dry-run || exit /b 1
 "%BUILD%\seat_press_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3467,7 +3481,7 @@ if not exist "%OBJ%\openxr_compositor_test" mkdir "%OBJ%\openxr_compositor_test"
     /Fo"%OBJ%\openxr_compositor_test\\" /Fe"%BUILD%\openxr_compositor_test.exe" ^
     "tools\openxr_compositor_test\openxr_compositor_test.cpp" "tools\openxr_compositor_test\abi_caller.cpp" ^
     "src\openxr\openvr_compositor.cpp" "src\common\frame_flag.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: owned OpenVR compositor test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: owned OpenVR compositor test build failed & exit /b 1 )
 "%BUILD%\openxr_compositor_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_compositor_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3478,7 +3492,7 @@ if not exist "%OBJ%\openxr_auxiliary_test" mkdir "%OBJ%\openxr_auxiliary_test"
     /Fo"%OBJ%\openxr_auxiliary_test\\" /Fe"%BUILD%\openxr_auxiliary_test.exe" ^
     "tools\openxr_auxiliary_test\openxr_auxiliary_test.cpp" "tools\openxr_auxiliary_test\abi_caller.cpp" ^
     "src\openxr\openvr_auxiliary.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: auxiliary interface test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: auxiliary interface test build failed & exit /b 1 )
 "%BUILD%\openxr_auxiliary_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_auxiliary_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3492,11 +3506,11 @@ REM Only a headset-free export ABI fixture; never installed or named openvr_api.
     "src\openxr\openvr_system.cpp" "src\openxr\openvr_compositor.cpp" "src\openxr\openvr_auxiliary.cpp" ^
     "src\common\frame_flag.cpp" ^
     /link /INCREMENTAL:NO /DEF:"tools\openxr_exports_test\fixture.def"
-if errorlevel 1 ( echo [edvr] ERROR: OpenXR export fixture build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: OpenXR export fixture build failed & exit /b 1 )
 %CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT ^
     /Fo"%OBJ%\openxr_exports_test\\" /Fe"%BUILD%\openxr_exports_test.exe" ^
     "tools\openxr_exports_test\openxr_exports_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: OpenXR export test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: OpenXR export test build failed & exit /b 1 )
 "%BUILD%\openxr_exports_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_exports_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -3507,7 +3521,7 @@ if not exist "%OBJ%\openxr_module_test" mkdir "%OBJ%\openxr_module_test"
     /Fo"%OBJ%\openxr_module_test\\" /Fe"%BUILD%\openxr_module_test.exe" ^
     "tools\openxr_module_test\openxr_module_test.cpp" ^
     /link /INCREMENTAL:NO dxgi.lib d3dcompiler.lib user32.lib gdi32.lib
-if errorlevel 1 ( echo [edvr] ERROR: native runtime module test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native runtime module test build failed & exit /b 1 )
 "%BUILD%\openxr_module_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_module_test.exe" --self-test || exit /b 1
 "%BUILD%\openxr_module_test.exe" --self-test-bootstrap || exit /b 1
@@ -3517,81 +3531,81 @@ if errorlevel 1 ( echo [edvr] ERROR: native runtime module test build failed & e
 exit /b 0
 
 :rig_launcher
-echo [edvr] === ed-up-launcher.exe ===
+echo [edup] === ed-up-launcher.exe ===
 REM The launcher: the install engine and its window with the update core, built with
 REM /DEDUP_LAUNCHER, carrying NO payload (package_native.py refuses an exe that does) and with its
 REM VERSIONINFO taken from src\installer\launcher_version.h, not from `git describe`.
 REM
-REM It is built twice, under two different EDVR_VER values and into two folders, and the two exes
+REM It is built twice, under two different EDUP_VER values and into two folders, and the two exes
 REM must be the same bytes. A release that did not change the launcher then ships the same exe, and
 REM the digest the updater compares stays put. Nothing the build knows about the commit may reach it:
 REM /Brepro on the compile and the link fixes the timestamps, and there is no PDB to name a path.
 REM Both compiles are real ones: a compile cache hit on the second would hand it the first's objects.
-set "EDVR_NO_COMPILE_CACHE=1"
-set "LAUNCHER_VER_FIRST=%EDVR_VER%"
+set "EDUP_NO_COMPILE_CACHE=1"
+set "LAUNCHER_VER_FIRST=%EDUP_VER%"
 call :launcher_compile "%BUILD%" "%OBJ%\launcher" "%GEN%\launcher" || exit /b 1
-set "EDVR_VER=determinism-check-with-another-version"
+set "EDUP_VER=determinism-check-with-another-version"
 call :launcher_compile "%BUILD%\launcher_det" "%OBJ%\launcher_det" "%GEN%\launcher_det" || exit /b 1
-set "EDVR_VER=%LAUNCHER_VER_FIRST%"
+set "EDUP_VER=%LAUNCHER_VER_FIRST%"
 fc /b "%BUILD%\ed-up-launcher.exe" "%BUILD%\launcher_det\ed-up-launcher.exe" >nul
 if errorlevel 1 (
-    echo [edvr] ERROR: two builds of the launcher under different EDVR_VER values differ: it is not deterministic
+    echo [edup] ERROR: two builds of the launcher under different EDUP_VER values differ: it is not deterministic
     exit /b 1
 )
-echo [edvr] launcher determinism: two builds under different EDVR_VER values are identical
+echo [edup] launcher determinism: two builds under different EDUP_VER values are identical
 REM Not signed here either: the byte-for-byte comparison above would fail on a signature, and signing
 REM inside a rig is refused by the focus guard. See "Release signing" after the rig pool.
 certutil -hashfile "%BUILD%\ed-up-launcher.exe" SHA256 | findstr /v "hash CertUtil"
-echo [edvr] built %BUILD%\ed-up-launcher.exe
+echo [edup] built %BUILD%\ed-up-launcher.exe
 
 REM Does it START? --help reads nothing and writes nothing, and does not copy, register or contact anything.
 "%BUILD%\ed-up-launcher.exe" --help >nul || (
-    echo [edvr] ERROR: the launcher will not run. If Windows called it a side-by-side
+    echo [edup] ERROR: the launcher will not run. If Windows called it a side-by-side
     echo        configuration problem, the manifest is the suspect.
     exit /b 1
 )
 REM --licenses prints RCDATA 120 (min-ed-launcher MIT), 121 (EDHM_2DMigoto notice), and 122 (GPLv3). Contacts nothing.
 "%BUILD%\ed-up-launcher.exe" --licenses > "%BUILD%\launcher_licenses.txt" || (
-    echo [edvr] ERROR: the launcher would not print its licence
+    echo [edup] ERROR: the launcher would not print its licence
     exit /b 1
 )
 python -c "import pathlib, sys; a, b, c, out = [pathlib.Path(p).read_bytes() for p in sys.argv[1:]]; sep = b'\n' + b'-'*72 + b'\n\n'; exp = a + (b'' if a.endswith(b'\n') else b'\n') + sep + b + (b'' if b.endswith(b'\n') else b'\n') + sep + c; sys.exit(0 if out == exp else 1)" "third_party\min_ed_launcher\LICENSE" "third_party\edhm_2dmigoto_notice\NOTICE.txt" "third_party\edhm_2dmigoto_notice\LICENSE.GPL.txt" "%BUILD%\launcher_licenses.txt"
 if errorlevel 1 (
-    echo [edvr] ERROR: the licence text the launcher prints does not match min_ed_launcher LICENSE + EDHM_2DMigoto NOTICE.txt + LICENSE.GPL.txt
+    echo [edup] ERROR: the licence text the launcher prints does not match min_ed_launcher LICENSE + EDHM_2DMigoto NOTICE.txt + LICENSE.GPL.txt
     exit /b 1
 )
-echo [edvr] launcher --licenses prints min_ed_launcher LICENSE + EDHM_2DMigoto NOTICE.txt + LICENSE.GPL.txt
+echo [edup] launcher --licenses prints min_ed_launcher LICENSE + EDHM_2DMigoto NOTICE.txt + LICENSE.GPL.txt
 REM Verify main.cpp dispatches --probe-openxr cleanly without entering runGui or touching real %LOCALAPPDATA%\EDUP.
 python -c "import pathlib, shutil, subprocess, sys; exe, tmp = sys.argv[1], pathlib.Path(sys.argv[2]); shutil.rmtree(tmp, ignore_errors=True); tmp.mkdir(parents=True, exist_ok=True); r = subprocess.run([exe, '--probe-openxr', '--data-root', str(tmp)], capture_output=True, text=True, timeout=10); leftover = list(tmp.iterdir()); shutil.rmtree(tmp, ignore_errors=True); ok = r.returncode == 0 and 'edup_openxr_probe=1' in r.stdout and 'loader_loaded=0' in r.stdout and not leftover; sys.exit(0 if ok else 1)" "%BUILD%\ed-up-launcher.exe" "%BUILD%\launcher_probe_check"
 if errorlevel 1 (
-    echo [edvr] ERROR: launcher --probe-openxr did not dispatch before launcherStartup
+    echo [edup] ERROR: launcher --probe-openxr did not dispatch before launcherStartup
     exit /b 1
 )
-echo [edvr] launcher --probe-openxr dispatches before launcherStartup
+echo [edup] launcher --probe-openxr dispatches before launcherStartup
 exit /b 0
 
 REM One compile of the launcher into %~1 (the exe's folder). %~2 is its obj folder, %~3 the folder
-REM its resource script goes in. Reads EDVR_VER only to hand it to gen_installer_rc.py, which must
+REM its resource script goes in. Reads EDUP_VER only to hand it to gen_installer_rc.py, which must
 REM ignore it (--launcher-rc takes the version from launcher_version.h).
 :launcher_compile
 if not exist "%~1" mkdir "%~1"
 if not exist "%~2" mkdir "%~2"
 if not exist "%~3" mkdir "%~3"
-python "tools\gen_installer_rc.py" --launcher-rc --root "%ROOT%" --out "%~3" --version "%EDVR_VER%"
-if errorlevel 1 ( echo [edvr] ERROR: launcher resource generation failed & exit /b 1 )
+python "tools\gen_installer_rc.py" --launcher-rc --root "%ROOT%" --out "%~3" --version "%EDUP_VER%"
+if errorlevel 1 ( echo [edup] ERROR: launcher resource generation failed & exit /b 1 )
 rc.exe /nologo /fo "%~2\launcher.res" "%~3\launcher.rc"
-if errorlevel 1 ( echo [edvr] ERROR: rc.exe failed on the launcher resources & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: rc.exe failed on the launcher resources & exit /b 1 )
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /GR- /Brepro /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /I"%GEN%" ^
     /DEDUP_LAUNCHER /DEDVR_VERSION_STRING=\"none\" ^
     /Fo"%~2"\ /Fe"%~1\ed-up-launcher.exe" ^
     %INSTALLER_SRC% %LAUNCHER_SRC% "%~2\launcher.res" ^
     /link /INCREMENTAL:NO /Brepro /SUBSYSTEM:WINDOWS /MANIFEST:NO %INSTALLER_LIBS% winhttp.lib
-if errorlevel 1 ( echo [edvr] ERROR: launcher build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: launcher build failed & exit /b 1 )
 exit /b 0
 
 :rig_installer_test
-echo [edvr] === installer_test.exe ===
+echo [edup] === installer_test.exe ===
 REM The planner over folders that are hard to arrange on a real machine: EDHM
 REM already in the d3d11.dll slot, another mod's installer having overwritten
 REM ours, a game update that put the stock openvr_api.dll back, an original
@@ -3610,15 +3624,15 @@ if not exist "%OBJ%\insttest" mkdir "%OBJ%\insttest"
     "src\installer\app.cpp" "src\installer\payload.cpp" ^
     "src\installer\install_manifest.cpp" "src\installer\update_json.cpp" "src\installer\update_util.cpp" ^
     /link /INCREMENTAL:NO %INSTALLER_LIBS%
-if errorlevel 1 ( echo [edvr] ERROR: installer_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: installer_test build failed & exit /b 1 )
 "%BUILD%\installer_test.exe" "%ROOT%" "%BUILD%\insttest_scratch" || (
-    echo [edvr] ERROR: the installer failed its own tests
+    echo [edup] ERROR: the installer failed its own tests
     exit /b 1
 )
 exit /b 0
 
 :rig_launcher_test
-echo [edvr] === launcher_test.exe ===
+echo [edup] === launcher_test.exe ===
 REM The launcher's update core, with no window: the strict JSON parser, manifest
 REM signatures checked through BCrypt against ones Python signed, the schema rules
 REM held to sign_manifest.py's, our own inflate and zip reader, the payload cache,
@@ -3650,21 +3664,21 @@ if not exist "%OBJ%\launchertest\fakeoxr" mkdir "%OBJ%\launchertest\fakeoxr"
     /Fo"%OBJ%\launchertest\fakeoxr"\ /Fe"%BUILD%\launcher_test_fakes\openxr_loader.dll" ^
     "tools\launcher_test\fake_openxr_loader.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: the fake openxr_loader.dll build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: the fake openxr_loader.dll build failed & exit /b 1 )
 python tools\launcher_fixtures.py --out "%BUILD%\launcher_test_fixtures" --openxr-loader "%BUILD%\launcher_test_fakes\openxr_loader.dll"
-if errorlevel 1 ( echo [edvr] ERROR: launcher fixtures failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: launcher fixtures failed & exit /b 1 )
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /GR- /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /DFAKE_EDLAUNCH ^
     /Fo"%OBJ%\launchertest\fakee"\ /Fe"%BUILD%\launcher_test_fakes\ed_up_fake_edlaunch.exe" ^
     "tools\launcher_test\fake_proc.cpp" ^
     /link /INCREMENTAL:NO /SUBSYSTEM:WINDOWS user32.lib shell32.lib
-if errorlevel 1 ( echo [edvr] ERROR: the fake EDLaunch build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: the fake EDLaunch build failed & exit /b 1 )
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /GR- /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE ^
     /Fo"%OBJ%\launchertest\fakeg"\ /Fe"%BUILD%\launcher_test_fakes\ed_up_fake_game.exe" ^
     "tools\launcher_test\fake_proc.cpp" ^
     /link /INCREMENTAL:NO /SUBSYSTEM:WINDOWS user32.lib shell32.lib
-if errorlevel 1 ( echo [edvr] ERROR: the fake game build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: the fake game build failed & exit /b 1 )
 REM A stand-in for Steam's library, with the exports the launcher binds and a canned ticket, so the real
 REM loader and export binding run in the rig and the real Steam is never touched. It is the one DLL here.
 if not exist "%OBJ%\launchertest\fakesteam" mkdir "%OBJ%\launchertest\fakesteam"
@@ -3673,7 +3687,7 @@ if not exist "%OBJ%\launchertest\fakesteam" mkdir "%OBJ%\launchertest\fakesteam"
     /Fo"%OBJ%\launchertest\fakesteam"\ /Fe"%BUILD%\launcher_test_fakes\steam_api64.dll" ^
     "tools\launcher_test\fake_steam_api.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: the fake steam_api64.dll build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: the fake steam_api64.dll build failed & exit /b 1 )
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /GR- /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /DEDUP_LAUNCHER /I"%GEN%" ^
     /Fo"%OBJ%\launchertest"\ /Fe"%BUILD%\launcher_test.exe" ^
@@ -3686,9 +3700,9 @@ if errorlevel 1 ( echo [edvr] ERROR: the fake steam_api64.dll build failed & exi
     "src\installer\ui.cpp" %LAUNCHER_SRC% ^
     /link /INCREMENTAL:NO %INSTALLER_LIBS% winhttp.lib ws2_32.lib ^
     /MANIFEST:EMBED /MANIFESTINPUT:"%ROOT%\tools\launcher_test\launcher_test.manifest"
-if errorlevel 1 ( echo [edvr] ERROR: launcher_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: launcher_test build failed & exit /b 1 )
 "%BUILD%\launcher_test.exe" "%ROOT%" "%BUILD%\launcher_test_fixtures" "%BUILD%\launcher_test_scratch" "%BUILD%\launcher_test_fakes" || (
-    echo [edvr] ERROR: the launcher update core failed its own tests
+    echo [edup] ERROR: the launcher update core failed its own tests
     exit /b 1
 )
 exit /b 0
@@ -3703,13 +3717,13 @@ REM dimensions and the tightest runtime/D3D maximum is shared by both eyes.
     "src\d3d11\native_render_settings.cpp" "src\common\vscreen_auto_state.cpp" "src\common\iniedit.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: native render settings test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native render settings test build failed & exit /b 1 )
 "%BUILD%\native_render_settings_test.exe" --dry-run || exit /b 1
 "%BUILD%\native_render_settings_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_vr_runtime_test
-echo [edvr] === vr_runtime_test.exe ===
+echo [edup] === vr_runtime_test.exe ===
 REM Which VR back end the process is REALLY on, checked against the real DLL
 REM this build just made. Guards the failure that made the module exist: a
 REM perfect install the game never opened, and eight log lines telling its
@@ -3721,14 +3735,14 @@ if not exist "%OBJ%\vrruntimetest" mkdir "%OBJ%\vrruntimetest"
     "src\d3d11\vr_runtime.cpp" "src\common\log.cpp" ^
     "src\common\config.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: vr_runtime_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vr_runtime_test build failed & exit /b 1 )
 if not exist "%BUILD%\vrscratch_native" mkdir "%BUILD%\vrscratch_native"
 REM The native runtime DLL under the name openvr_api.dll IS what the game
 REM loads; the module-list check keys on that exact base name.
 if not exist "%BUILD%\vrnative" mkdir "%BUILD%\vrnative"
 copy /Y "%BUILD%\edvr_openxr_runtime.dll" "%BUILD%\vrnative\openvr_api.dll" >nul
 "%BUILD%\vr_runtime_test.exe" "%BUILD%\vrscratch_native" native "%BUILD%\vrnative\openvr_api.dll" || (
-    echo [edvr] ERROR: the VR runtime verdict is wrong for EDVR's own openvr_api.dll
+    echo [edup] ERROR: the VR runtime verdict is wrong for ED-UP's own openvr_api.dll
     exit /b 1
 )
 
@@ -3743,12 +3757,12 @@ if not exist "%OBJ%\vrruntimetest_fakechain" mkdir "%OBJ%\vrruntimetest_fakechai
 %CC% /nologo /W4 /O2 /EHsc /std:c++17 /MT /DNDEBUG /LD ^
     /Fo"%OBJ%\vrruntimetest_fakechain\\" /Fe"%OBJ%\vrruntimetest_fakechain\fakechain.dll" ^
     "tools\fakechain\fakechain.cpp" /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: vr_runtime_test's own fakechain build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vr_runtime_test's own fakechain build failed & exit /b 1 )
 if not exist "%BUILD%\vrscratch_foreign" mkdir "%BUILD%\vrscratch_foreign"
 if not exist "%BUILD%\vrforeign" mkdir "%BUILD%\vrforeign"
 copy /Y "%OBJ%\vrruntimetest_fakechain\fakechain.dll" "%BUILD%\vrforeign\openvr_api.dll" >nul
 "%BUILD%\vr_runtime_test.exe" "%BUILD%\vrscratch_foreign" foreign "%BUILD%\vrforeign\openvr_api.dll" || (
-    echo [edvr] ERROR: the VR runtime verdict is wrong for a foreign openvr_api.dll
+    echo [edup] ERROR: the VR runtime verdict is wrong for a foreign openvr_api.dll
     exit /b 1
 )
 exit /b 0
@@ -3807,7 +3821,7 @@ python tools\run_jobs.py --jobs 4 ^
 
 REM Only profiling builds require the optional local .NET/TraceEvent analyzer.
 REM Its parser tests must pass before this build can be flown for CPU capture.
-if "%EDVR_PROFILE_SYMBOLS%"=="1" (
+if "%EDUP_PROFILE_SYMBOLS%"=="1" (
     python tools\cpu_profile.py --build-analyzer || exit /b 1
 )
 
@@ -3818,25 +3832,25 @@ REM nothing anywhere said so, because a key that does not match is simply not
 REM there and a missing key falls back to its default. Only run when python is
 REM available; a missing interpreter must not stop a build.
 echo.
-echo [edvr] === install-read check ===
+echo [edup] === install-read check ===
 python "tools\check_install_reads.py"
-if errorlevel 1 ( echo [edvr] ERROR: a config reader runs only on the reload path & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: a config reader runs only on the reload path & exit /b 1 )
 
-echo [edvr] === exit-path check ===
+echo [edup] === exit-path check ===
 python "tools\check_exit_paths.py"
-if errorlevel 1 ( echo [edvr] ERROR: cleanup that matters runs only on FreeLibrary & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: cleanup that matters runs only on FreeLibrary & exit /b 1 )
 
-echo [edvr] === offline flat packet replay ===
+echo [edup] === offline flat packet replay ===
 if not exist "%OBJ%\flat_packet_replay" mkdir "%OBJ%\flat_packet_replay"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /Fo"%OBJ%\flat_packet_replay\replay.obj" /Fe"%BUILD%\flat_packet_replay.exe" ^
     "tools\flat_packet_replay\flat_packet_replay.cpp" /link /INCREMENTAL:NO d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: offline flat packet replay compile failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: offline flat packet replay compile failed & exit /b 1 )
 "%BUILD%\flat_packet_replay.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_kinematic_json_test
-echo [edvr] === kinematic_json_test.exe ===
+echo [edup] === kinematic_json_test.exe ===
 REM Build gate for the production KinematicEvalProbe JSON writer: three
 REM serialization failures reached the flight journal before this rig
 REM existed, and compilation cannot catch a dropped quote. The exe
@@ -3848,14 +3862,14 @@ if not exist "%OBJ%\kinematicjson" mkdir "%OBJ%\kinematicjson"
     /Fo"%OBJ%\kinematicjson\\" /Fe"%BUILD%\kinematic_json_test.exe" ^
     "tools\kinematic_json_test\kinematic_json_test.cpp" "src\d3d11\kinematic_eval_probe.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: kinematic JSON writer test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: kinematic JSON writer test build failed & exit /b 1 )
 "%BUILD%\kinematic_json_test.exe" --dry-run || exit /b 1
 "%BUILD%\kinematic_json_test.exe" --self-test || exit /b 1
 python "tools\kinematic_json_selftest.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_engine_velocity_test
-echo [edvr] === engine_velocity_test.exe ===
+echo [edup] === engine_velocity_test.exe ===
 REM Build gate for engine-record velocity (part of fix.temporal_aa, phase 1;
 REM docs\kinematic-motion-injection-2026-09-19.md, 2026-09-23): the DXBC
 REM patcher end to end on WARP (patched pool-family shaders disassemble,
@@ -3880,14 +3894,14 @@ if not exist "%OBJ%\enginevelocity" mkdir "%OBJ%\enginevelocity"
     "tools\engine_velocity_test\engine_velocity_test.cpp" "src\d3d11\engine_velocity.cpp" "src\d3d11\skin_join_gpu.cpp" ^
     "src\d3d11\gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: engine velocity test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: engine velocity test build failed & exit /b 1 )
 "%OBJ%\enginevelocity\engine_velocity_test.exe" --dry-run || exit /b 1
 "%OBJ%\enginevelocity\engine_velocity_test.exe" --self-test || exit /b 1
 python "tools\engine_velocity_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_flat_origin_witness_test
-echo [edvr] === flat_origin_witness_test.exe ===
+echo [edup] === flat_origin_witness_test.exe ===
 REM CPU-only six-frame raw-pose witness: event alignment, coherent/unchanged
 REM patterns, identity gaps, owner diversity, pending completion and budgets.
 if not exist "%OBJ%\flatoriginwitness" mkdir "%OBJ%\flatoriginwitness"
@@ -3895,13 +3909,13 @@ if not exist "%OBJ%\flatoriginwitness" mkdir "%OBJ%\flatoriginwitness"
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /utf-8 ^
     /Fo"%OBJ%\flatoriginwitness\\" /Fe"%OBJ%\flatoriginwitness\flat_origin_witness_test.exe" ^
     "tools\flat_origin_witness_test\flat_origin_witness_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: flat origin witness test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat origin witness test build failed & exit /b 1 )
 "%OBJ%\flatoriginwitness\flat_origin_witness_test.exe" --dry-run || exit /b 1
 "%OBJ%\flatoriginwitness\flat_origin_witness_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_flat_world_witness_test
-echo [edvr] === flat_world_witness_test.exe ===
+echo [edup] === flat_world_witness_test.exe ===
 REM Passive admission-store world records: bounded reads, source provenance,
 REM six-frame identity/clock coverage and independent event quotas.
 if not exist "%OBJ%\flatworldwitness" mkdir "%OBJ%\flatworldwitness"
@@ -3909,13 +3923,13 @@ if not exist "%OBJ%\flatworldwitness" mkdir "%OBJ%\flatworldwitness"
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /utf-8 ^
     /Fo"%OBJ%\flatworldwitness\\" /Fe"%OBJ%\flatworldwitness\flat_world_witness_test.exe" ^
     "tools\flat_world_witness_test\flat_world_witness_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: flat world witness test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat world witness test build failed & exit /b 1 )
 "%OBJ%\flatworldwitness\flat_world_witness_test.exe" --dry-run || exit /b 1
 "%OBJ%\flatworldwitness\flat_world_witness_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_flat_world_store_test
-echo [edvr] === flat_world_store_test.exe ===
+echo [edup] === flat_world_store_test.exe ===
 REM The shipped guarded reader and post-forward dispatch: unreadable fields,
 REM source alternatives and flat-only observation never invoke station writes.
 if not exist "%OBJ%\flatworldstore" mkdir "%OBJ%\flatworldstore"
@@ -3923,13 +3937,13 @@ if not exist "%OBJ%\flatworldstore" mkdir "%OBJ%\flatworldstore"
     /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /utf-8 ^
     /Fo"%OBJ%\flatworldstore\\" /Fe"%OBJ%\flatworldstore\flat_world_store_test.exe" ^
     "tools\flat_world_store_test\flat_world_store_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: flat world store test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat world store test build failed & exit /b 1 )
 "%OBJ%\flatworldstore\flat_world_store_test.exe" --dry-run || exit /b 1
 "%OBJ%\flatworldstore\flat_world_store_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_engine_motion_cpu_test
-echo [edvr] === engine_motion_cpu_test.exe ===
+echo [edup] === engine_motion_cpu_test.exe ===
 REM Build gate for engine motion's CPU instrument (src\d3d11\engine_motion_cpu.h,
 REM docs\openxr-performance-review-2026-09-14.md, the 2026-09-29 carrier entry):
 REM the header-only accumulator and its fold, driven with a fake clock so every
@@ -3945,13 +3959,13 @@ if not exist "%OBJ%\enginemotioncpu" mkdir "%OBJ%\enginemotioncpu"
     /Fo"%OBJ%\enginemotioncpu\\" /Fe"%OBJ%\enginemotioncpu\engine_motion_cpu_test.exe" ^
     "tools\engine_motion_cpu_test\engine_motion_cpu_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: engine motion CPU test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: engine motion CPU test build failed & exit /b 1 )
 "%OBJ%\enginemotioncpu\engine_motion_cpu_test.exe" --dry-run || exit /b 1
 "%OBJ%\enginemotioncpu\engine_motion_cpu_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_kinematic_probe_test
-echo [edvr] === kinematic_probe_test.exe ===
+echo [edup] === kinematic_probe_test.exe ===
 REM Build gate for the KinematicEvalProbe's observe/clock logic: the
 REM 2026-09-20 review's four probe-side findings (fabricated zero baselines
 REM from faulted reads, identity-crossing motion, the artificial seed frame,
@@ -3964,13 +3978,13 @@ if not exist "%OBJ%\kinematicprobe" mkdir "%OBJ%\kinematicprobe"
     /Fo"%OBJ%\kinematicprobe\\" /Fe"%BUILD%\kinematic_probe_test.exe" ^
     "tools\kinematic_probe_test\kinematic_probe_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: kinematic probe test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: kinematic probe test build failed & exit /b 1 )
 "%BUILD%\kinematic_probe_test.exe" --dry-run || exit /b 1
 "%BUILD%\kinematic_probe_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_transition_flash_prevent_test
-echo [edvr] === transition_flash_prevent_test.exe ===
+echo [edup] === transition_flash_prevent_test.exe ===
 REM Build gate for transition_flash_prevent_core.h (docs\design-transition-
 REM flash-engine-fix-2026-09-23.md): the pose classifier (and that it truly
 REM ignores the padding lanes [3],[7],[11],[15], not merely documents that
@@ -3986,13 +4000,13 @@ if not exist "%OBJ%\transitionflashprevent" mkdir "%OBJ%\transitionflashprevent"
     /Fo"%OBJ%\transitionflashprevent\\" /Fe"%BUILD%\transition_flash_prevent_test.exe" ^
     "tools\transition_flash_prevent_test\transition_flash_prevent_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: transition flash prevent test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: transition flash prevent test build failed & exit /b 1 )
 "%BUILD%\transition_flash_prevent_test.exe" --dry-run || exit /b 1
 "%BUILD%\transition_flash_prevent_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_native_on_foot_hooks_test
-echo [edvr] === native_on_foot_hooks_test.exe ===
+echo [edup] === native_on_foot_hooks_test.exe ===
 REM Build gate for native on foot's avatar hooks (src\d3d11\native_on_foot_hooks.cpp; docs\design-native-onfoot-vr-2026-10-13.md). Part A drives the
 REM pure half the DLL compiles (src\d3d11\avatar_hooks_core.h, avatar_skeleton_core.h): the build-334925 identity and CodeHook's reading of the three
 REM prologues, the avatar fade guard, the ring, the callback relay's machine code, the head-hiding tables, the local-AMC test, the capture filter and
@@ -4008,12 +4022,12 @@ if not exist "%OBJ%\nofoothooks" mkdir "%OBJ%\nofoothooks"
     "tools\native_on_foot_hooks_test\native_on_foot_hooks_test.cpp" "src\d3d11\native_on_foot_hooks.cpp" ^
     "src\common\code_hook.cpp" "src\common\guard.cpp" "src\common\log.cpp" "src\common\config.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: native on foot hooks test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: native on foot hooks test build failed & exit /b 1 )
 "%BUILD%\native_on_foot_hooks_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_menu_edit_hold_test
-echo [edvr] === menu_edit_hold_test.exe ===
+echo [edup] === menu_edit_hold_test.exe ===
 REM Build gate for the F8 menu's held numeric edits (src\d3d11\menu_edit_hold.h) and the config refresh window line (config_refresh_line.h). Holding a Number row steps
 REM it every 83 ms; each step is shown at once, and a burst of steps is one write and so one config refresh on the frame thread (F16 priced the hold at 100 refreshes in
 REM five seconds). The rig drives the coalescer with a frame clock and the tracker's repeat: a tap writes once on release, a long hold a bounded few, a row or page
@@ -4026,14 +4040,14 @@ if not exist "%OBJ%\menueditHold" mkdir "%OBJ%\menueditHold"
     /Fo"%OBJ%\menueditHold"\ /Fe"%OBJ%\menueditHold\menu_edit_hold_test.exe" ^
     "tools\menu_edit_hold_test\menu_edit_hold_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: menu_edit_hold_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: menu_edit_hold_test build failed & exit /b 1 )
 "%OBJ%\menueditHold\menu_edit_hold_test.exe" --dry-run || exit /b 1
 "%OBJ%\menueditHold\menu_edit_hold_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\menu_edit_hold_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_vertex_resync_test
-echo [edvr] === vertex_resync_test.exe ===
+echo [edup] === vertex_resync_test.exe ===
 REM Build gate for the vertex-buffer resync (src\d3d11\vertex_resync_core.h and vertex_resync_hook.cpp, EDVR_VERTEX_RESYNC_TEST; docs\scanner-body.md, "The root cause:
 REM Frontier's f3d state cache"): the game's applied vertex-buffer cache goes stale when a buffer it binds again equals its DESIRED state (SetVertexBuffer compares only that)
 REM after zero-slot draws zeroed the applied copy, and the second eye's lighting resolve runs with slot 0 empty. The pure repair runs on a fake command list laid out at the real
@@ -4050,14 +4064,14 @@ if not exist "%OBJ%\vertexresync" mkdir "%OBJ%\vertexresync"
     "tools\vertex_resync_test\vertex_resync_test.cpp" "src\d3d11\vertex_resync_hook.cpp" ^
     "src\common\code_hook.cpp" "src\common\guard.cpp" "src\common\log.cpp" "src\common\config.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: vertex_resync_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vertex_resync_test build failed & exit /b 1 )
 "%OBJ%\vertexresync\vertex_resync_test.exe" --dry-run || exit /b 1
 "%OBJ%\vertexresync\vertex_resync_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\vertex_resync_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_scheduler_stack_json_test
-echo [edvr] === scheduler_stack_json_test.exe ===
+echo [edup] === scheduler_stack_json_test.exe ===
 REM Build gate for the production SchedulerStackProbe JSON writer: the
 REM kinematic writer shipped three serialization failures before its gate
 REM existed, and compilation cannot catch a dropped quote. The exe
@@ -4070,14 +4084,14 @@ if not exist "%OBJ%\schedjson" mkdir "%OBJ%\schedjson"
     "tools\scheduler_stack_json_test\scheduler_stack_json_test.cpp" ^
     "src\d3d11\scheduler_stack_probe.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: scheduler stack JSON writer test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: scheduler stack JSON writer test build failed & exit /b 1 )
 "%BUILD%\scheduler_stack_json_test.exe" --dry-run || exit /b 1
 "%BUILD%\scheduler_stack_json_test.exe" --self-test || exit /b 1
 python "tools\scheduler_stack_json_selftest.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_scheduler_stack_probe_test
-echo [edvr] === scheduler_stack_probe_test.exe ===
+echo [edup] === scheduler_stack_probe_test.exe ===
 REM Build gate for the SchedulerStackProbe's capture/table logic: the
 REM stride-tolerant stack scan (range filter, gap budget, cap, fault
 REM handling), the FNV-1a-64 signature, and the bounded per-target
@@ -4091,13 +4105,13 @@ if not exist "%OBJ%\schedprobe" mkdir "%OBJ%\schedprobe"
     /Fo"%OBJ%\schedprobe\\" /Fe"%BUILD%\scheduler_stack_probe_test.exe" ^
     "tools\scheduler_stack_probe_test\scheduler_stack_probe_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: scheduler stack probe test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: scheduler stack probe test build failed & exit /b 1 )
 "%BUILD%\scheduler_stack_probe_test.exe" --dry-run || exit /b 1
 "%BUILD%\scheduler_stack_probe_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_cull_gate_probe_test
-echo [edvr] === cull_gate_probe_test.exe ===
+echo [edup] === cull_gate_probe_test.exe ===
 REM Build gate for the cull gate probe (advanced.cull_gate_capture): the
 REM production observers driven with synthetic engine memory laid out as the
 REM decompiles read it (render context and views, record, pose context with
@@ -4115,7 +4129,7 @@ if not exist "%OBJ%\cullgate" mkdir "%OBJ%\cullgate"
     "tools\cull_gate_probe_test\cull_gate_probe_test.cpp" ^
     "src\d3d11\cull_gate_probe.cpp" "src\common\dump_file.cpp" "src\common\miniz_impl.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: cull gate probe test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: cull gate probe test build failed & exit /b 1 )
 "%BUILD%\cull_gate_probe_test.exe" --dry-run || exit /b 1
 "%BUILD%\cull_gate_probe_test.exe" "%OBJ%\cullgate\gate_fixture.bin" || exit /b 1
 python "tools\cull_gate_probe.py" --self-test || exit /b 1
@@ -4124,7 +4138,7 @@ python "tools\cull_gate_probe.py" --tables-only "%OBJ%\cullgate\gate_fixture.bin
 exit /b 0
 
 :rig_ui_layer_coverage_test
-echo [edvr] === ui_layer_coverage_test.exe ===
+echo [edup] === ui_layer_coverage_test.exe ===
 REM Exercise the production coverage command cache and shaders on WARP.
 REM Keep the executable outside build so D3D11 comes from System32.
 if not exist "%OBJ%\uicoverage" mkdir "%OBJ%\uicoverage"
@@ -4133,13 +4147,13 @@ if not exist "%OBJ%\uicoverage" mkdir "%OBJ%\uicoverage"
     /Fo"%OBJ%\uicoverage\\" /Fe"%OBJ%\uicoverage\coverage_test.exe" ^
     "tools\ui_layer_coverage_test\coverage_test.cpp" ^
     /link /INCREMENTAL:NO /OPT:REF d3d11.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: UI layer coverage test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: UI layer coverage test build failed & exit /b 1 )
 "%OBJ%\uicoverage\coverage_test.exe" --dry-run || exit /b 1
 "%OBJ%\uicoverage\coverage_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_ui_quality_test
-echo [edvr] === ui_quality_test.exe ===
+echo [edup] === ui_quality_test.exe ===
 REM Build gate for fix.ui_quality (docs/ui-layer-2026-09-23.md), both halves,
 REM from the same headers the DLL compiles. The PANELS (ui_quality_math.h,
 REM ui_sizing_math.h): the internal resolution from the runtime's
@@ -4175,7 +4189,7 @@ if not exist "%OBJ%\uiqualitytest" mkdir "%OBJ%\uiqualitytest"
     /Fo"%OBJ%\uiqualitytest\\" /Fe"%BUILD%\ui_quality_test.exe" ^
     "tools\ui_quality_test\ui_quality_test.cpp" ^
     /link /INCREMENTAL:NO d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: ui quality test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: ui quality test build failed & exit /b 1 )
 "%BUILD%\ui_quality_test.exe" --dry-run || exit /b 1
 "%BUILD%\ui_quality_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -4184,20 +4198,20 @@ REM The AA-off draw path (draw_fast_path.h), the Map timer's sampler and its exa
 REM map_wait_sample.h), and the GPU timing guard that keeps off-state draw thunks from calling it (gpu_frame_timing.h),
 REM 2026-10-13. The Map timer is linked from its own source; the GPU call is a counting stub.
 :rig_aa_off_test
-echo [edvr] === aa_off_test.exe ===
+echo [edup] === aa_off_test.exe ===
 if not exist "%OBJ%\aaofftest" mkdir "%OBJ%\aaofftest"
 %CC% /I"%GEN%" /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS ^
     /Fo"%OBJ%\aaofftest\\" /Fe"%BUILD%\aa_off_test.exe" ^
     "tools\aa_off_test\aa_off_test.cpp" "src\d3d11\map_wait.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: aa_off test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: aa_off test build failed & exit /b 1 )
 "%BUILD%\aa_off_test.exe" --dry-run || exit /b 1
 "%BUILD%\aa_off_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_ui_layer_seed_test
-echo [edvr] === seed_test.exe ===
+echo [edup] === seed_test.exe ===
 REM The layer's depth-stencil seed on its own (ui_layer_seed.h): the three
 REM depth formats, every stencil value class, a scale, a jitter and a reused
 REM seeder, read back texel for texel. Built outside build\ so its imported
@@ -4208,12 +4222,12 @@ if not exist "%OBJ%\uilayerseed" mkdir "%OBJ%\uilayerseed"
     /Fo"%OBJ%\uilayerseed\\" /Fe"%OBJ%\uilayerseed\seed_test.exe" ^
     "tools\ui_layer_seed_test\seed_test.cpp" ^
     /link /INCREMENTAL:NO /OPT:REF d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: ui layer seed test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: ui layer seed test build failed & exit /b 1 )
 "%OBJ%\uilayerseed\seed_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_ui_layer_world_test
-echo [edvr] === ui_layer_world_test.exe ===
+echo [edup] === ui_layer_world_test.exe ===
 REM The VR on-foot world route's layer half (docs\design-flat-temporal-aa-2026-09-23.md, section 82) with
 REM src\d3d11\ui_layer.cpp linked WHOLE, on WARP: its neighbours (the binding shadow, the route, the mips module,
 REM the raw OM/RS entries, the journal) are stubs in the rig, the layer's own machinery is the production code. The
@@ -4232,13 +4246,13 @@ if not exist "%OBJ%\uilayerworld" mkdir "%OBJ%\uilayerworld"
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" ^
     "third_party\dxbc_hash\DxilHash.cpp" ^
     /link /INCREMENTAL:NO d3dcompiler.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: ui layer world test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: ui layer world test build failed & exit /b 1 )
 "%OBJ%\uilayerworld\ui_layer_world_test.exe" --dry-run || exit /b 1
 "%OBJ%\uilayerworld\ui_layer_world_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_ui_layer_device_test
-echo [edvr] === ui_layer_device_test.exe ===
+echo [edup] === ui_layer_device_test.exe ===
 REM The shared UI layer across a D3D11 device change (review 2026-10-09, P2): src\d3d11\ui_layer.cpp compiled WHOLE (through
 REM tools\ui_layer_device_test\ui_layer_device_bridge.cpp, which only exposes which device each retained cache belongs to) with the
 REM world rig's neighbour stubs, on two WARP devices. A frame on device A (door, the crisp take's dependencies, a HUD frame through
@@ -4255,13 +4269,13 @@ if not exist "%OBJ%\uilayerdevice" mkdir "%OBJ%\uilayerdevice"
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" ^
     "third_party\dxbc_hash\DxilHash.cpp" ^
     /link /INCREMENTAL:NO d3dcompiler.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: ui layer device test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: ui layer device test build failed & exit /b 1 )
 "%OBJ%\uilayerdevice\ui_layer_device_test.exe" --dry-run || exit /b 1
 "%OBJ%\uilayerdevice\ui_layer_device_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_on_foot_maps_test
-echo [edvr] === on_foot_maps_test.exe ===
+echo [edup] === on_foot_maps_test.exe ===
 REM The on-foot maps gate (experimental.on_foot_maps_sharp; docs\design-world-camera-motion-2026-09-30.md, Phase 1): the pure
 REM half, src\d3d11\ui_maps_math.h, compiled alone -- the key, the step (2 named frames hold the panel as the world, 3 unnamed
 REM release it), flight 1's runs replayed (13,044 named, 1,597 unnamed, 98, 929: a hold and four flips), the gate's combine with
@@ -4275,14 +4289,14 @@ if not exist "%OBJ%\onfootmaps" mkdir "%OBJ%\onfootmaps"
     /D_CRT_SECURE_NO_WARNINGS /I"src\d3d11" /Fo"%OBJ%\onfootmaps"\ ^
     /Fe"%BUILD%\on_foot_maps_test.exe" "tools\on_foot_maps_test\on_foot_maps_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: on foot maps test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: on foot maps test build failed & exit /b 1 )
 "%BUILD%\on_foot_maps_test.exe" --dry-run || exit /b 1
 "%BUILD%\on_foot_maps_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\on_foot_maps_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_ui_composite_census_test
-echo [edvr] === ui_composite_census_test.exe ===
+echo [edup] === ui_composite_census_test.exe ===
 REM The cockpit holo panels' second shader pair and the census of the interface composites the layer leaves in the scene (docs\ui-layer-2026-09-23.md,
 REM "2026-10-01: Disable GUI effects"): the pure halves, src\d3d11\ui_layer_math.h's family rule (the vertex shader Elite switches in with Disable GUI
 REM effects on names the cockpit holo panels, on the lit HDR target and on the post-tonemap one, exactly as the stock one does) and
@@ -4296,27 +4310,27 @@ if not exist "%OBJ%\uicompositecensus" mkdir "%OBJ%\uicompositecensus"
     /D_CRT_SECURE_NO_WARNINGS /I"src\d3d11" /Fo"%OBJ%\uicompositecensus"\ ^
     /Fe"%BUILD%\ui_composite_census_test.exe" "tools\ui_composite_census_test\ui_composite_census_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: ui composite census test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: ui composite census test build failed & exit /b 1 )
 "%BUILD%\ui_composite_census_test.exe" --dry-run || exit /b 1
 "%BUILD%\ui_composite_census_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\ui_composite_census_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_flat_map_bounce_test
- echo [edvr] === flat_map_bounce_test.exe ===
+ echo [edup] === flat_map_bounce_test.exe ===
  REM Pure cached-map core and fake driver: seeded programs, C1-C8, no D3D device.
  if not exist "%OBJ%\flatmapbounce" mkdir "%OBJ%\flatmapbounce"
  %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /I"src\d3d11" ^
      /Fo"%OBJ%\flatmapbounce\\" /Fe"%OBJ%\flatmapbounce\flat_map_bounce_test.exe" ^
      "tools\flat_map_bounce_test\flat_map_bounce_test.cpp" /link /INCREMENTAL:NO
- if errorlevel 1 ( echo [edvr] ERROR: flat map bounce test build failed & exit /b 1 )
+ if errorlevel 1 ( echo [edup] ERROR: flat map bounce test build failed & exit /b 1 )
  "%OBJ%\flatmapbounce\flat_map_bounce_test.exe" --dry-run || exit /b 1
  "%OBJ%\flatmapbounce\flat_map_bounce_test.exe" --self-test "%ROOT%" || exit /b 1
  python "tools\flat_map_bounce_test\mutants.py" --self-test || exit /b 1
  exit /b 0
 
 :rig_particle_capture_test
-echo [edvr] === particle_capture_test.exe ===
+echo [edup] === particle_capture_test.exe ===
 REM The particle billboards' constants capture and the Unmap readers probe (docs\particle-billboards.md, 2026-10-16), pure halves compiled alone:
 REM src\d3d11\particle_capture_core.h (the shadow keeps rows 270..279 of the mapped scene block, 160 bytes, not 5376; the target's retirement
 REM after 300 frames without a plume or flare, and its re-arm) and src\d3d11\unmap_read_probe.h (calls, bytes, sampled microseconds, "not
@@ -4328,13 +4342,13 @@ if not exist "%OBJ%\particlecapture" mkdir "%OBJ%\particlecapture"
     /D_CRT_SECURE_NO_WARNINGS /I"src\d3d11" /Fo"%OBJ%\particlecapture"\ ^
     /Fe"%OBJ%\particlecapture\particle_capture_test.exe" "tools\particle_capture_test\particle_capture_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: particle capture test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: particle capture test build failed & exit /b 1 )
 "%OBJ%\particlecapture\particle_capture_test.exe" --dry-run || exit /b 1
 "%OBJ%\particlecapture\particle_capture_test.exe" --self-test "%ROOT%" || exit /b 1
 exit /b 0
 
 :rig_billboard_rollfree_test
-echo [edvr] === billboard_rollfree_test.exe ===
+echo [edup] === billboard_rollfree_test.exe ===
 REM The roll-free scene block for the camera-facing billboards (src\d3d11\billboard_rollfree.h; docs\billboard-root-cause-2026-10-16.md) on a WARP
 REM device with the D3D debug layer: the basis for any roll (levelled right, the game's lengths and handedness, refused near straight up), the copy
 REM route (CopyResource, a 32-byte UpdateSubresource of a patch buffer, a partial CopySubresourceRegion into the constant-buffer copy) clean under
@@ -4346,13 +4360,13 @@ if not exist "%OBJ%\billboardrollfree" mkdir "%OBJ%\billboardrollfree"
     /Fo"%OBJ%\billboardrollfree\\" /Fe"%OBJ%\billboardrollfree\billboard_rollfree_test.exe" ^
     "tools\billboard_rollfree_test\billboard_rollfree_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: billboard rollfree test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: billboard rollfree test build failed & exit /b 1 )
 "%OBJ%\billboardrollfree\billboard_rollfree_test.exe" --dry-run || exit /b 1
 "%OBJ%\billboardrollfree\billboard_rollfree_test.exe" --self-test "%ROOT%" || exit /b 1
 exit /b 0
 
 :rig_billboard_facing_test
-echo [edvr] === billboard_facing_test.exe ===
+echo [edup] === billboard_facing_test.exe ===
 REM The explosion billboards' facing transcriptions (src\d3d11\billboard_facing_vs.h; docs\particle-billboards.md, 2026-10-16 "facing") against the game's own
 REM bytecode (tools\billboard_facing_test\fixtures, held to their hash names) on a WARP device with the D3D debug layer: signature blocks and every dcl line
 REM equal column for column (ours the one added b3), then the original and the transcription run on the same vertices through stream output and every
@@ -4363,13 +4377,13 @@ if not exist "%OBJ%\billboardfacing" mkdir "%OBJ%\billboardfacing"
     /Fo"%OBJ%\billboardfacing\\" /Fe"%OBJ%\billboardfacing\billboard_facing_test.exe" ^
     "tools\billboard_facing_test\billboard_facing_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: billboard facing test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: billboard facing test build failed & exit /b 1 )
 "%OBJ%\billboardfacing\billboard_facing_test.exe" --dry-run || exit /b 1
 "%OBJ%\billboardfacing\billboard_facing_test.exe" --self-test "%ROOT%" || exit /b 1
 exit /b 0
 
 :rig_galaxy_map_vs_test
-echo [edvr] === galaxy_map_vs_test.exe ===
+echo [edup] === galaxy_map_vs_test.exe ===
 REM The VR Galaxy Map's replacement shaders (src\d3d11\galaxy_map_vs.h; docs\galaxy-map-vr-2026-11-03.md Fix 3) on a WARP device with the D3D debug layer, through
 REM stream output: the icons' two transcriptions against the formula on every class of record (the UI frame's, the galactic plane, the identity quaternion, the map's
 REM facing records, both position encodings, a bone-indexed record), the faces case against the game's own maths with the eye equal to the map camera, the arrow
@@ -4380,13 +4394,13 @@ if not exist "%OBJ%\galaxymapvs" mkdir "%OBJ%\galaxymapvs"
     /Fo"%OBJ%\galaxymapvs\\" /Fe"%OBJ%\galaxymapvs\galaxy_map_vs_test.exe" ^
     "tools\galaxy_map_vs_test\galaxy_map_vs_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: galaxy map vs test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: galaxy map vs test build failed & exit /b 1 )
 "%OBJ%\galaxymapvs\galaxy_map_vs_test.exe" --dry-run || exit /b 1
 "%OBJ%\galaxymapvs\galaxy_map_vs_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_map_run_test
-echo [edvr] === map_run_test.exe ===
+echo [edup] === map_run_test.exe ===
 REM The VR Galaxy Map's run of sprites (src\d3d11\map_run_core.h; docs\galaxy-map-vr-2026-11-03.md "After the fifth flight"): the state machine's binds (one begin and one end for a run of
 REM sprites, the test fails above two), the game's own sets of the same or other targets, the draws and calls that end a run, and a WARP run with the sprites' real depth-stencil states that
 REM leaves the game's targets bound again after the end (OMGetRenderTargets).
@@ -4395,13 +4409,13 @@ if not exist "%OBJ%\maprun" mkdir "%OBJ%\maprun"
     /Fo"%OBJ%\maprun\\" /Fe"%OBJ%\maprun\map_run_test.exe" ^
     "tools\map_run_test\map_run_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: map run test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: map run test build failed & exit /b 1 )
 "%OBJ%\maprun\map_run_test.exe" --dry-run || exit /b 1
 "%OBJ%\maprun\map_run_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_visor_axis_test
-echo [edvr] === visor_axis_test.exe ===
+echo [edup] === visor_axis_test.exe ===
 REM F121: the on-foot helmet visor's axis-centred vertex shader (src\d3d11\visor_axis_vs.h, the build's bytecode kVisorAxisVsBytecode; src\d3d11\visor_axis_math.h) against the game's own
 REM bytecode (tools\visor_axis_test\fixtures, held to its hash name) on a WARP device with the D3D debug layer: signature blocks and every dcl line equal column for
 REM column (ours the one added b3), then both run through stream output on random constants: identical at shift zero (the uv and the position bit for bit), and at
@@ -4415,13 +4429,13 @@ if not exist "%OBJ%\visoraxis" mkdir "%OBJ%\visoraxis"
     /Fo"%OBJ%\visoraxis\\" /Fe"%OBJ%\visoraxis\visor_axis_test.exe" ^
     "tools\visor_axis_test\visor_axis_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
-if errorlevel 1 ( echo [edvr] ERROR: visor axis test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: visor axis test build failed & exit /b 1 )
 "%OBJ%\visoraxis\visor_axis_test.exe" --dry-run || exit /b 1
 "%OBJ%\visoraxis\visor_axis_test.exe" --self-test "%ROOT%" || exit /b 1
 exit /b 0
 
 :rig_panel_curve_test
-echo [edvr] === panel_curve_test.exe ===
+echo [edup] === panel_curve_test.exe ===
 REM The curved screen's strip (src\d3d11\panel_curve.cpp; fix.panel_curvature) compiled for real with the real Config, Log and fault
 REM guard, and stubs for what it calls (the binding shadow's resolver, the screen's motion pass): on a WARP device with the game's
 REM state bound (the canonical quad and its index pattern at their offsets, the SIZE record, the placement constants, a sampler,
@@ -4439,14 +4453,14 @@ if not exist "%OBJ%\panelcurve" mkdir "%OBJ%\panelcurve"
     "tools\panel_curve_test\panel_curve_test.cpp" "src\d3d11\panel_curve.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: panel_curve_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: panel_curve_test build failed & exit /b 1 )
 "%OBJ%\panelcurve\panel_curve_test.exe" --dry-run || exit /b 1
 "%OBJ%\panelcurve\panel_curve_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\panel_curve_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_intro_curve_test
-echo [edvr] === intro_curve_test.exe ===
+echo [edup] === intro_curve_test.exe ===
 REM src\d3d11\intro_panel.cpp for real (movie world lock, splash refusal, screen-space test, config, retirement) on WARP, goldens bit for bit;
 REM one process per scenario because the module's latches cannot be reset. tools\intro_curve_test\mutants.py --self-test holds the mutation list to the module.
 if not exist "%OBJ%\introcurve" mkdir "%OBJ%\introcurve"
@@ -4455,14 +4469,14 @@ if not exist "%OBJ%\introcurve" mkdir "%OBJ%\introcurve"
     "tools\intro_curve_test\intro_curve_test.cpp" "src\d3d11\intro_panel.cpp" "src\d3d11\panel_curve.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: intro_curve_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: intro_curve_test build failed & exit /b 1 )
 "%OBJ%\introcurve\intro_curve_test.exe" --dry-run || exit /b 1
 "%OBJ%\introcurve\intro_curve_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\intro_curve_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_intro_curve_math_test
-echo [edvr] === intro_curve_math_test.exe ===
+echo [edup] === intro_curve_math_test.exe ===
 REM The intro composite's constants read as a world-space panel (src\d3d11\intro_curve_math.h; docs\shaders\intro-composite-vs.asm): the
 REM pure half of the intro movie and the splash following fix.panel_curvature, compiled alone. Today's screen-space rule
 REM (introCbLooksScreenSpace) against a verbatim copy of intro_panel.cpp's looksScreenSpace over every boundary and the float either
@@ -4477,14 +4491,14 @@ if not exist "%OBJ%\introcurvemath" mkdir "%OBJ%\introcurvemath"
     /D_CRT_SECURE_NO_WARNINGS /I"src\d3d11" /Fo"%OBJ%\introcurvemath"\ ^
     /Fe"%BUILD%\intro_curve_math_test.exe" "tools\intro_curve_math_test\intro_curve_math_test.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
-if errorlevel 1 ( echo [edvr] ERROR: intro curve math test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: intro curve math test build failed & exit /b 1 )
 "%BUILD%\intro_curve_math_test.exe" --dry-run || exit /b 1
 "%BUILD%\intro_curve_math_test.exe" --self-test || exit /b 1
 python "tools\intro_curve_math_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_intro_curve_module_test
-echo [edvr] === intro_curve_module_test.exe ===
+echo [edup] === intro_curve_module_test.exe ===
 REM The splash's recogniser (src\d3d11\intro_curve.cpp; fix.panel_curvature, the game-placed composite the movie's vertex shader draws)
 REM compiled for real with the real Config, Log, fault guard and the real strip (panel_curve.cpp's surface API, drawing through a
 REM recording draw function), on a WARP device with the game's state bound: 80-byte constant buffers at VS slot 2 holding the game's
@@ -4506,14 +4520,14 @@ if not exist "%OBJ%\introcurvemodule" mkdir "%OBJ%\introcurvemodule"
     "tools\intro_curve_module_test\intro_curve_module_test.cpp" "src\d3d11\intro_curve.cpp" "src\d3d11\panel_curve.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: intro_curve_module_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: intro_curve_module_test build failed & exit /b 1 )
 "%OBJ%\introcurvemodule\intro_curve_module_test.exe" --dry-run || exit /b 1
 "%OBJ%\introcurvemodule\intro_curve_module_test.exe" --self-test || exit /b 1
 python "tools\intro_curve_module_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_surface_strip_render_test
-echo [edvr] === surface_strip_render_test.exe ===
+echo [edup] === surface_strip_render_test.exe ===
 REM Which way the curved intro picture faces, looked at in pixels (the surface strip of src\d3d11\panel_curve.cpp; fix.panel_curvature). The
 REM production strip, the movie's wiring (intro_panel.cpp) and the splash's (intro_curve.cpp) are compiled for real with the real Config, Log
 REM and fault guard and drawn on a WARP device through a vertex shader that is the intro composite's own (docs\shaders\intro-composite-vs.asm,
@@ -4530,14 +4544,14 @@ if not exist "%OBJ%\surfacestrip" mkdir "%OBJ%\surfacestrip"
     "tools\surface_strip_render_test\surface_strip_render_test.cpp" "src\d3d11\intro_panel.cpp" "src\d3d11\intro_curve.cpp" "src\d3d11\panel_curve.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO user32.lib version.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: surface_strip_render_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: surface_strip_render_test build failed & exit /b 1 )
 "%OBJ%\surfacestrip\surface_strip_render_test.exe" --dry-run || exit /b 1
 "%OBJ%\surfacestrip\surface_strip_render_test.exe" --self-test "%ROOT%" || exit /b 1
 python "tools\surface_strip_render_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_pixel_probe_test
-echo [edvr] === pixel_probe_test.exe ===
+echo [edup] === pixel_probe_test.exe ===
 REM Build gate for advanced.pixel_probe (src/d3d11/pixel_probe.*), the "who
 REM drew this pixel" instrument: a WARP device, a 256x256 eye-sized target
 REM and a scissor-clipped solid-colour draw drive the module directly, no
@@ -4554,13 +4568,13 @@ if not exist "%OBJ%\pixelprobe" mkdir "%OBJ%\pixelprobe"
     /Fo"%OBJ%\pixelprobe\\" /Fe"%OBJ%\pixelprobe\pixel_probe_test.exe" ^
     "tools\pixel_probe_test\pixel_probe_test.cpp" "src\d3d11\pixel_probe.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: pixel probe test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: pixel probe test build failed & exit /b 1 )
 "%OBJ%\pixelprobe\pixel_probe_test.exe" --dry-run || exit /b 1
 "%OBJ%\pixelprobe\pixel_probe_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_depth_writer_probe_test
-echo [edvr] === depth_writer_probe_test.exe ===
+echo [edup] === depth_writer_probe_test.exe ===
 REM Build gate for the depth writer probe (src\d3d11\depth_writer_probe.*), the "who wrote this pixel's depth" instrument that rides
 REM advanced.pixel_probe: a WARP device, a 256x256 R32G8X24 depth and scissor-clipped depth-only draws drive the module directly. Asserts
 REM the map names the LAST draw that changed each pixel (an earlier owner is replaced, a repeat of the same depth changes nothing), a
@@ -4573,13 +4587,13 @@ if not exist "%OBJ%\depthwriter" mkdir "%OBJ%\depthwriter"
     /Fo"%OBJ%\depthwriter\\" /Fe"%OBJ%\depthwriter\depth_writer_probe_test.exe" ^
     "tools\depth_writer_probe_test\depth_writer_probe_test.cpp" "src\d3d11\depth_writer_probe.cpp" "src\common\dump_file.cpp" "src\common\miniz_impl.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: depth writer probe test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: depth writer probe test build failed & exit /b 1 )
 "%OBJ%\depthwriter\depth_writer_probe_test.exe" --dry-run || exit /b 1
 "%OBJ%\depthwriter\depth_writer_probe_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_ui_holo_test
-echo [edvr] === ui_holo_test.exe ===
+echo [edup] === ui_holo_test.exe ===
 REM Actual game DXBC coordinate remap, production cache/binding faults and stock stencil replay.
 if not exist "%OBJ%\uiholo" mkdir "%OBJ%\uiholo"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
@@ -4588,13 +4602,13 @@ if not exist "%OBJ%\uiholo" mkdir "%OBJ%\uiholo"
     "tools\ui_holo_test\ui_holo_test.cpp" "src\common\guard.cpp" ^
     "third_party\dxbc_hash\DxilHash.cpp" ^
     /link /INCREMENTAL:NO d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: UI hologram test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: UI hologram test build failed & exit /b 1 )
 "%OBJ%\uiholo\ui_holo_test.exe" --dry-run || exit /b 1
 "%OBJ%\uiholo\ui_holo_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_vr_ssaa_hold_test
-echo [edvr] === vr_ssaa_hold_test.exe ===
+echo [edup] === vr_ssaa_hold_test.exe ===
 REM The VR Supersampling hold's pure decision (src\d3d11\vr_ssaa_hold_math.h, docs\vr-supersampling-gate-2026-10-10.md): the Settings.xml
 REM mode parse, the held value by profile and mode, the toast, and the game's mode-request window rewrite by profile (the production
 REM requestReplacement and installOne, vr_window_trampolines.cpp included whole; the DLL state is stubbed, nothing is hooked).
@@ -4604,13 +4618,13 @@ if not exist "%OBJ%\vrssaahold" mkdir "%OBJ%\vrssaahold"
     "tools\vr_ssaa_hold_test\vr_ssaa_hold_test.cpp" ^
     "src\common\log.cpp" "src\common\config.cpp" "src\common\proxy.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib
-if errorlevel 1 ( echo [edvr] ERROR: vr_ssaa_hold_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: vr_ssaa_hold_test build failed & exit /b 1 )
 "%OBJ%\vrssaahold\vr_ssaa_hold_test.exe" --dry-run || exit /b 1
 "%OBJ%\vrssaahold\vr_ssaa_hold_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_runtime_profile_test
-echo [edvr] === runtime_profile_test.exe ===
+echo [edup] === runtime_profile_test.exe ===
 REM The launch decision's pure rules (src\common\install_scope.h, docs\design-unified-install-2026-10-12.md section 3.1): the descriptor
 REM parse for schema 1 and 2, the frozen v1 parser an older DLL runs, Settings.xml's 3D mode, the command line's switch, the profile by
 REM scope and mode, and the launch's log line. No Windows API: the rig includes only the two pure headers.
@@ -4619,13 +4633,13 @@ if not exist "%OBJ%\runtimeprofile" mkdir "%OBJ%\runtimeprofile"
     /Fo"%OBJ%\runtimeprofile\\" /Fe"%OBJ%\runtimeprofile\runtime_profile_test.exe" ^
     "tools\runtime_profile_test\runtime_profile_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: runtime_profile_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: runtime_profile_test build failed & exit /b 1 )
 "%OBJ%\runtimeprofile\runtime_profile_test.exe" --dry-run || exit /b 1
 "%OBJ%\runtimeprofile\runtime_profile_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_mode_watch_test
-echo [edvr] === mode_watch_test.exe ===
+echo [edup] === mode_watch_test.exe ===
 REM The mode watch's decisions (src\d3d11\mode_watch_logic.h, docs\design-unified-install-2026-10-12.md section 3.2): the 250 ms
 REM confirm, half-written reads ignored, a flip-flop dropped, the live rise, the toggles in order and the unknown launch. No Windows
 REM API: the rig includes only the pure headers.
@@ -4634,13 +4648,13 @@ if not exist "%OBJ%\modewatch" mkdir "%OBJ%\modewatch"
     /Fo"%OBJ%\modewatch\\" /Fe"%OBJ%\modewatch\mode_watch_test.exe" ^
     "tools\mode_watch_test\mode_watch_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: mode_watch_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: mode_watch_test build failed & exit /b 1 )
 "%OBJ%\modewatch\mode_watch_test.exe" --dry-run || exit /b 1
 "%OBJ%\modewatch\mode_watch_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_cross_profile_test
-echo [edvr] === cross_profile_test.exe ===
+echo [edup] === cross_profile_test.exe ===
 REM The cross-profile cost instrument's arithmetic and sampling (src\d3d11\cross_profile_cost.h, docs\design-unified-install-2026-10-12.md section
 REM 3.3): the 1-in-64 scaling, the per-frame division, the capture scope, and the report's 30 s windows and 5-minute session totals with the
 REM profile gate. Pure: the header's only Windows call is QueryPerformanceCounter.
@@ -4649,13 +4663,13 @@ if not exist "%OBJ%\crossprofile" mkdir "%OBJ%\crossprofile"
     /Fo"%OBJ%\crossprofile\\" /Fe"%OBJ%\crossprofile\cross_profile_test.exe" ^
     "tools\cross_profile_test\cross_profile_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: cross_profile_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: cross_profile_test build failed & exit /b 1 )
 "%OBJ%\crossprofile\cross_profile_test.exe" --dry-run || exit /b 1
 "%OBJ%\crossprofile\cross_profile_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_gpu_engine_load_test
-echo [edvr] === gpu_engine_load_test.exe ===
+echo [edup] === gpu_engine_load_test.exe ===
 REM The Monitor GPU tile (src\d3d11\gpu_engine_load.h): Windows GPU Engine instance names, per-process shares of one engine
 REM added, distinct engines not added, the game adapter's LUID only, and the tile taking NVIDIA's figure only when it reads
 REM higher. Pure. The source check pins perf_monitor.cpp to that formatter.
@@ -4664,13 +4678,13 @@ if not exist "%OBJ%\gpuengineload" mkdir "%OBJ%\gpuengineload"
     /Fo"%OBJ%\gpuengineload\\" /Fe"%OBJ%\gpuengineload\gpu_engine_load_test.exe" ^
     "tools\gpu_engine_load_test\gpu_engine_load_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: gpu_engine_load_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: gpu_engine_load_test build failed & exit /b 1 )
 "%OBJ%\gpuengineload\gpu_engine_load_test.exe" --dry-run || exit /b 1
 "%OBJ%\gpuengineload\gpu_engine_load_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_flat_clear_test
-echo [edvr] === flat_clear_test.exe ===
+echo [edup] === flat_clear_test.exe ===
 REM The headset while flat's policy (src\openxr\flat_clear_state.h, docs\design-unified-install-2026-10-12.md section 12): the 250 ms quiet
 REM window at its edges, the four gates, the start and stop transitions with their reasons, and the word the graphics half writes that
 REM reads as VR when nobody has written it. No Windows API: the rig includes only the pure headers.
@@ -4679,13 +4693,13 @@ if not exist "%OBJ%\flatclear" mkdir "%OBJ%\flatclear"
     /Fo"%OBJ%\flatclear\\" /Fe"%OBJ%\flatclear\flat_clear_test.exe" ^
     "tools\flat_clear_test\flat_clear_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: flat_clear_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat_clear_test build failed & exit /b 1 )
 "%OBJ%\flatclear\flat_clear_test.exe" --dry-run || exit /b 1
 "%OBJ%\flatclear\flat_clear_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_orbital_width_test
-echo [edvr] === orbital_width_test.exe ===
+echo [edup] === orbital_width_test.exe ===
 REM fix.ui_quality's orbit lines (src\d3d11\orbital_width*.h; docs\ui-layer-2026-09-23.md, "2026-10-06: the orbit lines"): the game's own
 REM vertex shader (vs C7FA0C0F5DD49180, a fixture) and the production patched copy run on WARP over a captured draw's constants and
 REM vertex streams -- byte-identical at f = 1, every strip 2 x w x f pixels wide at 0.5, 0.4, 0.7 and 0.25 -- with the coverage twin,
@@ -4700,13 +4714,13 @@ if not exist "%OBJ%\orbitalwidth" mkdir "%OBJ%\orbitalwidth"
     "tools\orbital_width_test\orbital_width_test.cpp" "src\common\guard.cpp" ^
     "third_party\dxbc_hash\DxilHash.cpp" ^
     /link /INCREMENTAL:NO d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: orbital width test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: orbital width test build failed & exit /b 1 )
 "%OBJ%\orbitalwidth\orbital_width_test.exe" --dry-run || exit /b 1
 "%OBJ%\orbitalwidth\orbital_width_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_supercruise_bars_test
-echo [edvr] === supercruise_bars_test.exe ===
+echo [edup] === supercruise_bars_test.exe ===
 REM fix.ui_quality's supercruise bars in the HDR layer (src\d3d11\supercruise_bars*.h, supercruise_bars.cpp; docs\ui-layer-2026-09-23.md, "2026-10-07"):
 REM the build's own bytecode of the strip geometry shader (kSupercruiseBarsGsBytecode, compiled from supercruise_bars_shader.h's HLSL by
 REM tools\temporal_shader_build and checked here to be that text's compile), the production binding, constants and rasterizer states, run on WARP in
@@ -4724,7 +4738,7 @@ if not exist "%OBJ%\supercruisebars" mkdir "%OBJ%\supercruisebars"
     /Fo"%OBJ%\supercruisebars\\" /Fe"%OBJ%\supercruisebars\supercruise_bars_test.exe" ^
     "tools\supercruise_bars_test\supercruise_bars_test.cpp" "src\common\guard.cpp" ^
     /link /INCREMENTAL:NO d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: supercruise bars test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: supercruise bars test build failed & exit /b 1 )
 "%OBJ%\supercruisebars\supercruise_bars_test.exe" --dry-run || exit /b 1
 "%OBJ%\supercruisebars\supercruise_bars_test.exe" --self-test || exit /b 1
 exit /b 0
@@ -4740,20 +4754,20 @@ REM in-and-out with the game's geometry stage and constant slot exactly back, th
 REM in every split; twenty-five shader mutants and the winding mutant in each of eight signatures, five more in the Scorpion hologram's and one binding mutant, each caught. --wiring scans the
 REM sources that connect it to the game. Built outside build\ and without d3d11.lib, like the supercruise bars' rig: its device is System32's.
 :rig_srv_turret_hud_test
-echo [edvr] === srv_turret_hud_test.exe ===
+echo [edup] === srv_turret_hud_test.exe ===
 if not exist "%OBJ%\srvturrethud" mkdir "%OBJ%\srvturrethud"
 %CC% /I"%GEN%" /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /utf-8 ^
     /Fo"%OBJ%\srvturrethud\\" /Fe"%OBJ%\srvturrethud\srv_turret_hud_test.exe" ^
     "tools\srv_turret_hud_test\srv_turret_hud_test.cpp" "src\common\guard.cpp" ^
     /link /INCREMENTAL:NO d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: srv turret hud test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: srv turret hud test build failed & exit /b 1 )
 "%OBJ%\srvturrethud\srv_turret_hud_test.exe" --dry-run || exit /b 1
 "%OBJ%\srvturrethud\srv_turret_hud_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_srv_turret_entry_fade_test
-echo [edvr] === srv_turret_entry_fade_test.exe ===
+echo [edup] === srv_turret_entry_fade_test.exe ===
 REM Rig: the SRV turret view's entry fade (src\d3d11\srv_turret_entry_fade.h, srv_turret_entry_fade.cpp; issue 140): the hold to black from the turret-view-on edge until the camera has settled, then
 REM a short fade back in. No device. The state machine run frame by frame as the module runs it (the edge, the move published in its frame, the applied-serial signal and its margin, a runtime that
 REM reports nothing, a signal that never comes and the cap, the view going off, no move key, a missing publish, a new edge in the fade-in, a retargeted move, no re-trigger while the view stays on, the level
@@ -4765,13 +4779,13 @@ if not exist "%OBJ%\srvturretentryfade" mkdir "%OBJ%\srvturretentryfade"
     /Fo"%OBJ%\srvturretentryfade\\" /Fe"%OBJ%\srvturretentryfade\srv_turret_entry_fade_test.exe" ^
     "tools\srv_turret_entry_fade_test\srv_turret_entry_fade_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: srv turret entry fade test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: srv turret entry fade test build failed & exit /b 1 )
 "%OBJ%\srvturretentryfade\srv_turret_entry_fade_test.exe" --dry-run || exit /b 1
 "%OBJ%\srvturretentryfade\srv_turret_entry_fade_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_orbit_layer_test
-echo [edvr] === orbit_layer_test.exe ===
+echo [edup] === orbit_layer_test.exe ===
 REM fix.ui_quality's orbit lines in the HDR layer on the real dump (docs\ui-layer-2026-09-23.md, "2026-10-07"): the game's own vertex shader through the
 REM production patched copy, cache, constants and binding (src\d3d11\orbital_width_patch.h), the production depth-stencil seed (ui_layer_seed.h) and the
 REM production map and sizes (ui_layer_math.h, ui_sizing_math.h), on WARP, over one captured draw and the crop of the eye's own depth and stencil
@@ -4789,13 +4803,13 @@ if not exist "%OBJ%\orbitlayer" mkdir "%OBJ%\orbitlayer"
     "tools\orbit_layer_test\orbit_layer_test.cpp" "src\common\guard.cpp" ^
     "third_party\dxbc_hash\DxilHash.cpp" ^
     /link /INCREMENTAL:NO d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: orbit layer test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: orbit layer test build failed & exit /b 1 )
 "%OBJ%\orbitlayer\orbit_layer_test.exe" --dry-run || exit /b 1
 "%OBJ%\orbitlayer\orbit_layer_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_supercruise_census_test
-echo [edvr] === supercruise_census_test.exe ===
+echo [edup] === supercruise_census_test.exe ===
 REM The supercruise draws in the HDR layer on the real census and the real dump (docs\ui-layer-2026-09-23.md, "2026-10-07"), pure C++ on
 REM src\d3d11\ui_layer_math.h: frame 1 of the 2026-10-07 05:48:01 census (tools\supercruise_census_test\fixtures\census_054801_f1.txt, 244 draw rows)
 REM turned into the facts the DLL gathers -- the space dust's rows named and redirected, one-token mutants refused (the flat route's pixel shader, blend MIN,
@@ -4809,13 +4823,13 @@ if not exist "%OBJ%\supercruisecensus" mkdir "%OBJ%\supercruisecensus"
     /Fo"%OBJ%\supercruisecensus\\" /Fe"%OBJ%\supercruisecensus\supercruise_census_test.exe" ^
     "tools\supercruise_census_test\supercruise_census_test.cpp" ^
     /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: supercruise census test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: supercruise census test build failed & exit /b 1 )
 "%OBJ%\supercruisecensus\supercruise_census_test.exe" --dry-run || exit /b 1
 "%OBJ%\supercruisecensus\supercruise_census_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_sharp_weapons_test
-echo [edvr] === sharp_weapons_test.exe ===
+echo [edup] === sharp_weapons_test.exe ===
 REM The weapons fire (docs\dlss-blur-elements-2026-10-14.md, "Built, 2026-10-16"; its setting was retired 2026-10-28): the weapons-fire family rule and its one-token mutants, the jitter-cancel table,
 REM the two halves' independence over the four combinations (the family gate, the decisions, the layer's two halves), the tonemap re-issue plan with its mutants,
 REM three recorded census frames of the 2026-10-16 flight (tools\sharp_weapons_test\fixtures: exactly the weapon rows change decision), the source scans of the
@@ -4828,13 +4842,13 @@ if not exist "%OBJ%\sharpweapons" mkdir "%OBJ%\sharpweapons"
     /Fo"%OBJ%\sharpweapons\\" /Fe"%OBJ%\sharpweapons\sharp_weapons_test.exe" ^
     "tools\sharp_weapons_test\sharp_weapons_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: sharp weapons test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: sharp weapons test build failed & exit /b 1 )
 "%OBJ%\sharpweapons\sharp_weapons_test.exe" --dry-run || exit /b 1
 "%OBJ%\sharpweapons\sharp_weapons_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_flat_weapon_admission_test
-echo [edvr] === flat_weapon_admission_test.exe ===
+echo [edup] === flat_weapon_admission_test.exe ===
 REM The complete flat adapter and UI layer on WARP: frame N proves the tone target, frame N+1 takes an actual weapon draw,
 REM the named tone route re-issues its on/plain plan, and the flat output copy binds a nonempty published composite.
 REM Includes HUD-quality-off and HUD-free quality-on cases plus stale/alien target refusals. Its System32 D3D11 device
@@ -4847,13 +4861,13 @@ if not exist "%OBJ%\flatweaponadmit" mkdir "%OBJ%\flatweaponadmit"
     "src\d3d11\flat_ui_layer.cpp" "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" ^
     "third_party\dxbc_hash\DxilHash.cpp" ^
     /link /INCREMENTAL:NO d3dcompiler.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: flat weapon admission test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: flat weapon admission test build failed & exit /b 1 )
 "%OBJ%\flatweaponadmit\flat_weapon_admission_test.exe" --dry-run || exit /b 1
 "%OBJ%\flatweaponadmit\flat_weapon_admission_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_shield_ripple_test
-echo [edvr] === shield_ripple_test.exe ===
+echo [edup] === shield_ripple_test.exe ===
 REM advanced.shield_ripple (docs\dlss-blur-elements-2026-10-14.md, "Built, 2026-10-16: the shield refraction after the upscale"): the pair's family rule, the modes, the
 REM first-draw checks' arithmetic; on WARP with the debug layer, the game's own ps_6EAA (tools\shield_ripple_test\fixtures, from edup_logs\shaders) drawn on the UV ramp
 REM against the analytic uv + d within 1e-6; the whole route with the production remap, jitter cancel and door pass (the build's bytecode) against the stock path
@@ -4865,13 +4879,13 @@ if not exist "%OBJ%\shieldripple" mkdir "%OBJ%\shieldripple"
     /Fo"%OBJ%\shieldripple\\" /Fe"%OBJ%\shieldripple\shield_ripple_test.exe" ^
     "tools\shield_ripple_test\shield_ripple_test.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib
-if errorlevel 1 ( echo [edvr] ERROR: shield ripple test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: shield ripple test build failed & exit /b 1 )
 "%OBJ%\shieldripple\shield_ripple_test.exe" --dry-run || exit /b 1
 "%OBJ%\shieldripple\shield_ripple_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_scope_zoom_test
-echo [edvr] === scope_zoom_test.exe ===
+echo [edup] === scope_zoom_test.exe ===
 REM The scope lens (docs\design-vr-scope-magnification-2026-10-28.md, section 8): the production door (src\d3d11\scope_zoom.cpp linked as shipped, the build's two compute passes, the
 REM production parameter blocks) on WARP with the debug layer, over a synthetic frame whose depth is a near hexagonal ring about c: inside the ring the frame is sampled at c + d / M
 REM within one code of the reference built from scope_zoom_s1.h's own functions, the ring and everything outside are untouched byte for byte, the mask ends on the ring's inner edge,
@@ -4885,53 +4899,53 @@ if not exist "%OBJ%\scopezoom" mkdir "%OBJ%\scopezoom"
     "tools\scope_zoom_test\scope_zoom_test.cpp" "src\d3d11\scope_zoom.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib user32.lib
-if errorlevel 1 ( echo [edvr] ERROR: scope zoom test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: scope zoom test build failed & exit /b 1 )
 "%OBJ%\scopezoom\scope_zoom_test.exe" --dry-run || exit /b 1
 "%OBJ%\scopezoom\scope_zoom_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_menu_pad_test
-echo [edvr] === menu_pad_test.exe ===
+echo [edup] === menu_pad_test.exe ===
 if not exist "%OBJ%\menupad" mkdir "%OBJ%\menupad"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
 /Fo"%OBJ%\menupad"\ /Fe"%BUILD%\menu_pad_test.exe" ^
 "tools\menu_pad_test\menu_pad_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: menu_pad_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: menu_pad_test build failed & exit /b 1 )
 "%BUILD%\menu_pad_test.exe" --dry-run || exit /b 1
 "%BUILD%\menu_pad_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_menu_policy_test
-echo [edvr] === menu_policy_test.exe ===
+echo [edup] === menu_policy_test.exe ===
 if not exist "%OBJ%\menupolicy" mkdir "%OBJ%\menupolicy"
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
 /Fo"%OBJ%\menupolicy"\ /Fe"%BUILD%\menu_policy_test.exe" ^
 "tools\menu_policy_test\menu_policy_test.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: menu_policy_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: menu_policy_test build failed & exit /b 1 )
 "%BUILD%\menu_policy_test.exe" --dry-run || exit /b 1
 "%BUILD%\menu_policy_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_addon_manager_test
-echo [edvr] === addon_manager_test.exe ===
+echo [edup] === addon_manager_test.exe ===
 if not exist "%OBJ%\addon_manager_test" mkdir "%OBJ%\addon_manager_test"
 %CC% /nologo /O2 /MT /LD /std:c++17 /EHsc /W4 /D_CRT_SECURE_NO_WARNINGS ^
     /I"include" /Fo"%OBJ%\addon_manager_test\\" /Fe"%BUILD%\test_addon_fixture.dll" ^
     "tools\addon_manager_test\fixture.cpp" /link /INCREMENTAL:NO
-if errorlevel 1 ( echo [edvr] ERROR: addon fixture build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: addon fixture build failed & exit /b 1 )
 REM The fixture's variants are the same source with one define each; every one is a DLL of its own.
 for %%V in (b regfault initfail initfault settings renderfault threadreg markshutdown) do (
     %CC% /nologo /O2 /MT /LD /std:c++17 /EHsc /W4 /D_CRT_SECURE_NO_WARNINGS /DFIXTURE_VARIANT_%%V ^
         /I"include" /Fo"%OBJ%\addon_manager_test\fixture_%%V.obj" /Fe"%BUILD%\test_addon_fixture_%%V.dll" ^
         "tools\addon_manager_test\fixture.cpp" /link /INCREMENTAL:NO
-    if errorlevel 1 ( echo [edvr] ERROR: addon fixture variant %%V build failed & exit /b 1 )
+    if errorlevel 1 ( echo [edup] ERROR: addon fixture variant %%V build failed & exit /b 1 )
 )
 %CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
     /I"include" /I"%GEN%" /Fo"%OBJ%\addon_manager_test\\" /Fe"%BUILD%\addon_manager_test.exe" ^
     "tools\addon_manager_test\addon_manager_test.cpp" "src\plugins\plugin_manager.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" "src\common\guard.cpp" "src\common\frame_flag.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib version.lib bcrypt.lib
-if errorlevel 1 ( echo [edvr] ERROR: addon_manager_test build failed & exit /b 1 )
+if errorlevel 1 ( echo [edup] ERROR: addon_manager_test build failed & exit /b 1 )
 "%BUILD%\addon_manager_test.exe" --dry-run || exit /b 1
 "%BUILD%\addon_manager_test.exe" --self-test || exit /b 1
 exit /b 0

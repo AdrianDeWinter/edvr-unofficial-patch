@@ -267,7 +267,7 @@ int virtualKeyFromName(const char* name, uint32_t* mods) {
     // is a choice and returns 0 above, without comment; getting here means
     // somebody asked for something specific and did not get it.
     if (!t_quietKeyNames)
-        hotkeyNote("hotkey \"%s\" is not a key name EDVR knows, so nothing is "
+        hotkeyNote("hotkey \"%s\" is not a key name ED-UP knows, so nothing is "
                         "bound. Try F1-F24, SCROLLLOCK, PAUSE, NUMLOCK, CAPSLOCK, "
                         "PRINTSCREEN, INSERT, HOME, END, DELETE, PAGEUP, PAGEDOWN, "
                         "LEFT, RIGHT, UP, DOWN, SPACE, TAB, ENTER, ESCAPE, "
@@ -385,7 +385,7 @@ bool hotkeyParseBinding(const char* text, HotkeyBinding* out, bool quiet) {
         } else {
             ok = false;
             if (!quiet)
-                hotkeyNote("hotkey \"%s\" is not a gamepad button EDVR knows, so nothing is "
+                hotkeyNote("hotkey \"%s\" is not a gamepad button ED-UP knows, so nothing is "
                                 "bound. Try GamePad_FaceDown, _FaceRight, _FaceLeft, _FaceUp, "
                                 "_DPadUp, _DPadDown, _DPadLeft, _DPadRight, _Back, _Start, "
                                 "_LBumper, _RBumper, _LThumb, _RThumb, _LTrigger or _RTrigger.",
@@ -405,7 +405,7 @@ bool hotkeyParseBinding(const char* text, HotkeyBinding* out, bool quiet) {
         } else {
             ok = false;
             if (!quiet)
-                hotkeyNote("hotkey \"%s\" is not a joystick button EDVR knows, so nothing is "
+                hotkeyNote("hotkey \"%s\" is not a joystick button ED-UP knows, so nothing is "
                                 "bound. It is the device Elite writes in your bindings (eight hex "
                                 "digits: vendor then product) and a button, 231D0200:Joy_12, or a "
                                 "hat, 231D0200:Joy_POV1Up (Right, Down, Left).",

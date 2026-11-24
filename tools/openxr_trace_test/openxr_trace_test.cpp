@@ -73,12 +73,67 @@ int cpuTraceSmoke() {
   return success?0:5;
 }
 
+// The flat-profile fixture (flat-cpu-markers plan): 60 owned Presents shaped like the flat frame model. Frames 1-30 are
+// game-render bound (a 100 ms spin before the hook); frames 31-60 wait in XeLL's sleep after the callback.
+int cpuTraceSmokeFlat() {
+  constexpr unsigned frames=60,slowFrames=30;
+  auto& trace=NativeCpuTrace::get();
+  if(!trace.start()) {
+    const auto c=trace.counters();
+    std::printf("openxr_trace_test: cpu trace registration failed error=%lu\n",(unsigned long)c.lastError);return 3;
+  }
+  for(unsigned i=0;i<100&&!trace.enabled();++i)Sleep(10);
+  if(!trace.enabled()) {
+    std::printf("openxr_trace_test: CPU provider not externally enabled pid=%lu guid={D3885FA1-0B70-44F1-AF88-63B2012B111E}\n",
+      (unsigned long)GetCurrentProcessId());trace.stop();return 4;
+  }
+  const auto before=trace.counters();bool wrote=true;uint64_t prevHookReturn=edvrNativeTraceNowUs();
+  std::printf("openxr_trace_test: cpu trace smoke flat pid=%lu frames=%u slow_frames=%u spin_ms=100 or 2 xell_sleep_ms=100\n",
+    (unsigned long)GetCurrentProcessId(),frames,slowFrames);
+  for(unsigned i=0;i<frames;++i) {
+    Sleep(1);
+    const uint64_t firstCommand=edvrNativeTraceNowUs();
+    const bool slow=i<slowFrames;
+    const uint64_t spinUntil=firstCommand+uint64_t(slow?100:2)*1000;
+    while(edvrNativeTraceNowUs()<spinUntil) {}
+    const uint64_t hookEnter=edvrNativeTraceNowUs();
+    {
+      NativeCpuTraceSpan proxy(EdvrCpuFgProxyPresent,true);Sleep(1);proxy.finishVoid(0);
+    }
+    const uint64_t presentEnd=edvrNativeTraceNowUs();
+    const uint64_t callbackEnd=presentEnd;
+    if(!slow) {   // frames 31-60: short render, then the XeLL sleep in F6 (frames 1-30 are busy in F2 instead)
+      NativeCpuTraceSpan xell(EdvrCpuXellSleep,true);Sleep(100);xell.finishVoid(0);
+    }
+    const uint64_t hookReturn=edvrNativeTraceNowUs();
+    EdvrNativePresentFramePayload payload{};
+    payload.timestampUs=hookReturn;payload.sequence=i+1;payload.prevHookReturnUs=prevHookReturn;
+    payload.firstCommandUs=firstCommand;payload.hookEnterUs=hookEnter;payload.presentBeginUs=hookEnter;
+    payload.presentEndUs=presentEnd;payload.callbackEndUs=callbackEnd;payload.hookReturnUs=hookReturn;
+    payload.thread=GetCurrentThreadId();payload.result=0;payload.syncInterval=1;payload.presentFlags=0;
+    payload.flags=static_cast<uint16_t>(EdvrPresentPrevValid|EdvrPresentFirstCommandValid|EdvrPresentBridged);
+    payload.generatedFrames=3;
+    wrote=trace.emitPresentFrame(payload)&&wrote;
+    prevHookReturn=hookReturn;
+  }
+  trace.stop();const auto after=trace.counters();
+  // Data events per frame: one event 5, one proxy span; one XeLL sleep span on each slow frame.
+  const uint64_t expected=uint64_t(frames)*2+slowFrames;
+  const uint64_t emitted=after.emitted-before.emitted;
+  const bool success=wrote&&after.failures==before.failures&&emitted>=expected;
+  std::printf("openxr_trace_test: cpu trace smoke flat emitted=%llu expected_data=%llu failures=%llu last_error=%lu frames=%u result=%s\n",
+    (unsigned long long)emitted,(unsigned long long)expected,(unsigned long long)(after.failures-before.failures),
+    (unsigned long)after.lastError,frames,success?"ok":"failed");
+  return success?0:5;
+}
+
 int wmain(int argc, wchar_t** argv) {
   SetErrorMode(3);
   if (argc == 2 && !wcscmp(argv[1], L"--dry-run")) {
     std::puts("openxr_trace_test: dry-run (no files)"); return 0;
   }
   if (argc == 2 && !wcscmp(argv[1], L"--cpu-trace-smoke")) return cpuTraceSmoke();
+  if (argc == 2 && !wcscmp(argv[1], L"--cpu-trace-smoke-flat")) return cpuTraceSmokeFlat();
   if (argc != 2 || wcscmp(argv[1], L"--self-test")) return 2;
   Checks c;
   {
@@ -90,6 +145,10 @@ int wmain(int argc, wchar_t** argv) {
     c.check(!cpu.emitFrame(linked)&&cpu.counters().emitted==before.emitted,"disabled linked CPU provider emits nothing");
     EdvrNativeGpuCompletionPayload gpu{};gpu.sequence=1;
     c.check(!cpu.emitGpu(gpu)&&cpu.counters().emitted==before.emitted,"disabled GPU completion emits nothing");
+    EdvrNativePresentFramePayload present{};present.timestampUs=1;
+    c.check(!cpu.emitPresentFrame(present)&&cpu.counters().emitted==before.emitted,"disabled flat present frame emits nothing");
+    {NativeCpuTraceSpan gated(EdvrCpuFgProxyPresent,false);gated.finishVoid(1);}
+    c.check(cpu.counters().emitted==before.emitted,"flat span gated off emits nothing");
     c.check(cpu.start(),"CPU provider registration succeeds");cpu.stop();
   }
   SYSTEMTIME t{}; t.wYear=2026; t.wMonth=9; t.wDay=14;

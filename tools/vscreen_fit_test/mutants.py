@@ -302,7 +302,7 @@ MUTANTS = [
     M("ss-percent-truncates", "R13a", [("(static_cast<uint64_t>(renderW) * 100u + eyeW / 2u) / eyeW", "(static_cast<uint64_t>(renderW) * 100u) / eyeW")], "the percentage is cut, not rounded", HEADER2),
     M("ss-pack-ignores-the-judgement", "R13b", [("    if (!below(renderW, renderH, eyeW, eyeH) || renderW > 0xFFFFu", "    if (renderW > 0xFFFFu")], "a size that is not below 1 is published as a notice", HEADER2),
     M("ss-unpack-shift", "R13b", [("*eyeW = static_cast<uint32_t>(packed >> 32 & 0xFFFFu);", "*eyeW = static_cast<uint32_t>(packed >> 16 & 0xFFFFu);")], "the eye's width is read from the render height's bits", HEADER2),
-    M("ss-log-forgets-hmd-quality", "R13c", [("\"raise HMD Image Quality instead: EDVR's DLSS upscales from that. Measured from the render sizes, not read from \"", "\"raise the quality elsewhere: EDVR's DLSS upscales from that. Measured from the render sizes, not read from \"")],
+    M("ss-log-forgets-hmd-quality", "R13c", [("\"raise HMD Image Quality instead: ED-UP's DLSS upscales from that. Measured from the render sizes, not read from \"", "\"raise the quality elsewhere: ED-UP's DLSS upscales from that. Measured from the render sizes, not read from \"")],
       "the log line does not name HMD Image Quality", HEADER2),
     M("ss-toast-reworded", "R13c", [('"Elite Supersampling is below 1: use HMD Image Quality"', '"Elite Supersampling is low"')], "the toast no longer says what to use instead", HEADER2),
     M("ss-hint-reworded", "R13c", [('"Elite Supersampling is below 1: set it to 1 and use HMD Image Quality."', '"Elite Supersampling is low."')], "the Status hint no longer says what to set and use", HEADER2),

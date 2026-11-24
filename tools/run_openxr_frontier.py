@@ -125,9 +125,9 @@ def preflight(args):
         raise ValueError('output must be new with an existing parent: ' + str(out))
     return dict(version=1, root=str(root), target=str(target), launcher=str(launcher),
                 cwd=str(launcher.parent), output=str(out), hashes=hashes,
-                bootstrap={'EDVR_OPENXR_LOADER': str(loader),
-                           'EDVR_OPENXR_GRAPHICS': str(graphics),
-                           'EDVR_OPENXR_SEPARATE_DEVICE': '1',
+                bootstrap={'EDUP_OPENXR_LOADER': str(loader),
+                           'EDUP_OPENXR_GRAPHICS': str(graphics),
+                           'EDUP_OPENXR_SEPARATE_DEVICE': '1',
                            'XR_RUNTIME_JSON': str(manifest)},
                 imports=imports, pending_install=receipt is None), env
 
@@ -239,7 +239,7 @@ def self_test():
                 check(run(args) == 0 and spawn.call_count == 1)
                 call = spawn.call_args
                 check(call.kwargs['cwd'] == str(launcher.parent))
-                check(call.kwargs['env']['EDVR_OPENXR_GRAPHICS'] == paths['graphics_target'])
+                check(call.kwargs['env']['EDUP_OPENXR_GRAPHICS'] == paths['graphics_target'])
                 check(json.loads((Path(args.output) / 'launch-receipt.json').read_text())['pid'] == 42)
 
         for invalid in ('', 'garbage', '"EliteDangerous64.exe","abc","Console","1","1 K"'):
@@ -251,12 +251,12 @@ def self_test():
             refused(lambda: runtime_library(manifest))
         refused(lambda: existing_file('relative.dll', 'loader'))
         inherited = dict(os.environ)
-        inherited.update(edvr_openxr_loader='stale', xr_runtime_json='stale')
+        inherited.update(edup_openxr_loader='stale', xr_runtime_json='stale')
         before = inherited.copy()
         env = child_environment(inherited, loader, Path(paths['graphics_target']), manifest, True, True)
-        check(inherited == before and 'edvr_openxr_loader' not in env and 'xr_runtime_json' not in env)
+        check(inherited == before and 'edup_openxr_loader' not in env and 'xr_runtime_json' not in env)
         result = subprocess.run([sys.executable, '-c',
-                                 'import os; print(os.environ["EDVR_OPENXR_SEPARATE_DEVICE"]); '
+                                 'import os; print(os.environ["EDUP_OPENXR_SEPARATE_DEVICE"]); '
                                  'print(os.environ["XR_RUNTIME_JSON"])'],
                                 env=env, capture_output=True, text=True, timeout=10, creationflags=HIDDEN)
         check(result.returncode == 0 and result.stdout.splitlines() == ['1', str(manifest)])

@@ -3,7 +3,7 @@
 (src/d3d11/eye_depth_capture.h).
 
 Each file is ONE eye pass's completed depth for ONE frame, paired with the
-armed eye run's other captures in edvr_logs\\pool\\:
+armed eye run's other captures in edup_logs\\pool\\:
 
     magic   'EDVRDEPT' (8 bytes)
     u32     version          -- 2 (1 for files written before 2026-09-22)

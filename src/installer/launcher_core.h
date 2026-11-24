@@ -79,7 +79,8 @@ PayloadLoad loadLauncherPayload(const LauncherRoots& roots, const std::wstring& 
 bool payloadPresent(const PayloadInfo& info);
 
 // install_edup.py puts branch builds in the same folders. A folder whose
-// edvr_native_receipt.json or edvr_flat_receipt.json (or a backup-named sibling of either) was
+// edup_native_receipt.json or edup_flat_receipt.json, or the pre-rename edvr_native_receipt.json
+// or edvr_flat_receipt.json (or a backup-named sibling of any of them) was
 // written after the install record, or that has a receipt and no record at all, belongs to
 // whoever is developing here: a hash-based repair would overwrite a build about to be flown.
 // Only the confirmation warns; nothing is ever done to such a folder on its own.

@@ -1182,7 +1182,7 @@ void testJitterProbe() {
     int others = 0;
     for (int e = 0; e < 16; ++e) others += (e != 3 && e != 11 && s.jDiffers[e] != 0) ? 1 : 0;
     check(others == 0, "no other element is counted");
-    check(s.samples[0].jitter.frame == 99 && s.samples[0].jitter.jx == 0.25f, "the sample carries EDVR's jitter");
+    check(s.samples[0].jitter.frame == 99 && s.samples[0].jitter.jx == 0.25f, "the sample carries ED-UP's jitter");
     // rows 1 or 3 differing too is its own count
     lg::buildKey(mk(0, 0), other);
     float r1;
@@ -1269,7 +1269,7 @@ void testLines() {
     m.jitter.jy = -0.125f;
     m.jitter.shift[0][0] = 0.0005f;
     lg::formatSampleLine(line, sizeof(line), m);
-    check(std::string(line) == "light grid cache: jitter sample: delta row 0 [0 0 0 0.001] row 2 [0 0 0 0.003]; rows 1 and 3 equal; EDVR jitter published: frame 12, pixels (0.2500, -0.1250), "
+    check(std::string(line) == "light grid cache: jitter sample: delta row 0 [0 0 0 0.001] row 2 [0 0 0 0.003]; rows 1 and 3 equal; ED-UP jitter published: frame 12, pixels (0.2500, -0.1250), "
                                "tangent shift eye 0 (0.0005, 0) eye 1 (0, 0).",
           "the sample line has exactly this text");
     m.jitter.known = false;

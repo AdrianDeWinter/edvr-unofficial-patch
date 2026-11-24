@@ -468,7 +468,7 @@ static void bindingCases(const std::vector<BYTE>& game, ID3D11VertexShader* orig
         check(result.retried && !result.restored && b.needsRestore(), "a restore that failed twice is retried once and still owed");
         ComPtr<ID3D11VertexShader> stuck;
         g_ctx->VSGetShader(&stuck, nullptr, nullptr);
-        check(stuck.Get() == patched, "...and EDVR's shader is still bound until it is settled (the buffer slot, whose setter worked, is the game's again)");
+        check(stuck.Get() == patched, "...and ED-UP's shader is still bound until it is settled (the buffer slot, whose setter worked, is the game's again)");
         stuck.Reset();  // a reference of the test's own would read as a leak below
         check(!b.begin(g_ctx.Get(), patched, constants.Get(), acceptAll), "no new draw begins while one is owed");
         check(!b.settle(g_ctx.Get(), failingSetVs) && b.needsRestore(), "a settle whose setter faults changes nothing and is still owed");

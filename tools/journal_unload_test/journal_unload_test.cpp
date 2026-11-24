@@ -550,10 +550,10 @@ void observeUnpinnedLog(const std::wstring& dll, const std::wstring& saved, cons
 
 void realProxy(const std::wstring& proxy, const std::wstring& logs) {
     // The proxy's log goes where this says, whatever the runner has set for the
-    // rig: EDVR_LOG_DIR moves it, and EDVR_LOG_DIR_FOR would limit the move to a
+    // rig: EDUP_LOG_DIR moves it, and EDUP_LOG_DIR_FOR would limit the move to a
     // directory this exe is not necessarily in.
-    SetEnvironmentVariableW(L"EDVR_LOG_DIR", logs.c_str());
-    SetEnvironmentVariableW(L"EDVR_LOG_DIR_FOR", nullptr);
+    SetEnvironmentVariableW(L"EDUP_LOG_DIR", logs.c_str());
+    SetEnvironmentVariableW(L"EDUP_LOG_DIR_FOR", nullptr);
     HMODULE module = LoadLibraryExW(proxy.c_str(), nullptr,
                                     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     check(module != nullptr, "the real graphics proxy loads");

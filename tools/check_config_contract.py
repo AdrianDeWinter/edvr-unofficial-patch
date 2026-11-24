@@ -254,7 +254,7 @@ def main(argv=None):
         if not dry_run:
             emit_header(emit, read, doc, moved)
         if not quiet:
-            print('[edvr] config contract header: %d known keys, %d moves -> %s%s'
+            print('[edup] config contract header: %d known keys, %d moves -> %s%s'
                   % (len(set(read) | set(doc)), len(moved), emit,
                      ' (dry run: not written)' if dry_run else ''))
         return 0
@@ -316,16 +316,16 @@ def main(argv=None):
                 % (key, ', '.join(mentioned[key][:3])))
 
     if problems:
-        print('[edvr] config contract FAILED\n')
+        print('[edup] config contract FAILED\n')
         for p in problems:
             print('  ' + p.replace('\n', '\n  ') + '\n')
-        print('[edvr] %d problem(s). Every one of these is invisible at runtime:' % len(problems))
+        print('[edup] %d problem(s). Every one of these is invisible at runtime:' % len(problems))
         print('       an unknown key is ignored and a missing one falls back to its')
         print('       default, which looks exactly like a fix that does not work.')
         return 1
 
     if not quiet:
-        print('[edvr] config contract ok: %d keys read, %d documented, all agree'
+        print('[edup] config contract ok: %d keys read, %d documented, all agree'
               % (len(read), len(doc)))
     return 0
 

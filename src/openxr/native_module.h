@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 // Explicit embedding API for the staged DLL. Alternatively, the first Scene
-// VR_InitInternal reads EDVR_OPENXR_LOADER and EDVR_OPENXR_GRAPHICS from this
+// VR_InitInternal reads EDUP_OPENXR_LOADER and EDUP_OPENXR_GRAPHICS from this
 // process environment. Both must be trusted drive-absolute paths. This is not
 // installer configuration or the full legacy OpenVR replacement surface.
 #define EDVR_NATIVE_MODULE_VERSION_1 1u

@@ -115,6 +115,6 @@ template<class Check> void runWorldScaleCases(Check&& check) {
   for(const auto& name:got)if(std::find(want.begin(),want.end(),name)==want.end())extra+=" "+name;
   for(const auto& name:want)if(std::find(got.begin(),got.end(),name)==got.end())extra+=" (gone: "+name+")";
   if(!extra.empty())std::printf("world scale: the files that name eyeToHead changed:%s\n",extra.c_str());
-  check(extra.empty(),"world scale: the files that name eyeToHead are the classified readers (a new one must be classified: it sees the scaled pair if it checks Elite's camera, the located eyes if it draws EDVR's own)");
+  check(extra.empty(),"world scale: the files that name eyeToHead are the classified readers (a new one must be classified: it sees the scaled pair if it checks Elite's camera, the located eyes if it draws ED-UP's own)");
 }
 } // namespace edvr::openxr::test

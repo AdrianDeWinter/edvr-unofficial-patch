@@ -3339,7 +3339,7 @@ bool uiDepthReissueBegin(ID3D11DeviceContext* ctx) {
             if (!g_smokeDepthNoted) {
                 g_smokeDepthNoted = true;
                 Log::get().note("ui depth: the smoke's coverage writes its depth into a %ux%u target "
-                                "of EDVR's for eye %d, which the temporal pass folds into the scene's "
+                                "of ED-UP's for eye %d, which the temporal pass folds into the scene's "
                                 "as it reads; the game's depth is no longer written under the trail "
                                 "(the review of 2026-09-10).",
                                 sdp->w, sdp->h, detail::g_uiDepthDraw.drawEye);
@@ -4488,7 +4488,7 @@ void uiDepthFrameBoundary(ID3D11DeviceContext* ctx) {
                 s.samples?double(s.ticks)*1e6/double(qpcFrequency())/s.samples:0.0);
             const auto& gpu=g_stellarGpu[i].totals;
             if(s.calls || gpu.samples || gpu.invalid || gpu.skipped)
-                Log::get().note("stellar coverage GPU: %s completed=%u skipped=%u invalid=%u, %.3f us/call; estimated %.3f ms/frame from %u calls/%u frames. Separate from EDVR-at-door GPU; sampled every 16th frame, no wait or flush.",
+                Log::get().note("stellar coverage GPU: %s completed=%u skipped=%u invalid=%u, %.3f us/call; estimated %.3f ms/frame from %u calls/%u frames. Separate from ED-UP-at-door GPU; sampled every 16th frame, no wait or flush.",
                     i==0?"ring":"orbital",gpu.samples,gpu.skipped,gpu.invalid,
                     gpu.samples?gpu.ms*1000.0/gpu.samples:0.0,
                     gpu.samples?gpu.ms/gpu.samples*double(s.calls)/g_wFrames:0.0,s.calls,g_wFrames);

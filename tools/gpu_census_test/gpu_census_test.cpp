@@ -37,7 +37,7 @@ namespace edvr {
 // Captures the formatted lines instead of writing them anywhere, so the
 // format checks below can inspect the actual text -- hologram_depth_test's
 // own convention, not tools\ui_depth_test's no-op stub. g_lastLog is the
-// census's MAIN line ("EDVR GPU census: ..."), which the older checks read;
+// census's MAIN line ("ED-UP GPU census: ..."), which the older checks read;
 // g_lines is every line, in order, for the lines that follow it (the frame
 // gap's, the altered draws').
 std::string g_lastLog;
@@ -51,7 +51,7 @@ void Log::note(const char* fmt, ...) {
     std::vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
     g_lines.push_back(buf);
-    if (std::strncmp(buf, "EDVR GPU census:", 16) == 0) g_lastLog = buf;
+    if (std::strncmp(buf, "ED-UP GPU census:", 17) == 0) g_lastLog = buf;
     std::fputs(buf, stdout);
     std::fputc('\n', stdout);
 }
@@ -108,7 +108,7 @@ namespace {
 // both, since only the layer's follows the key.
 const GpuCensusSeedTarget kSeedAt125 = {5040, 4870, 8, 3024, 2922, "D32_FLOAT_S8X24_UINT"};
 const GpuCensusSeedTarget kSeedAt100 = {4032, 3896, 8, 3024, 2922, "D32_FLOAT_S8X24_UINT"};
-constexpr const char* kSeedDetailPrefix = "EDVR GPU census, the HDR HUD depth-stencil seed above";
+constexpr const char* kSeedDetailPrefix = "ED-UP GPU census, the HDR HUD depth-stencil seed above";
 
 // ---- 1: the estimator math, as a pure function -------------------------
 void estimatorMathCases() {
@@ -406,7 +406,7 @@ void logFormatCase() {
     g_lastLog.clear();
     logAndResetWindow(start + 30000);
 
-    check(g_lastLog.rfind("EDVR GPU census:", 0) == 0, "log line: starts with the fixed preamble");
+    check(g_lastLog.rfind("ED-UP GPU census:", 0) == 0, "log line: starts with the fixed preamble");
     check(g_lastLog.find("30 s, 200 frames") != std::string::npos, "log line: the window length and frame count");
     check(g_lastLog.find("sharpen 0.200 (0.10/frame)") != std::string::npos,
           "log line: a timed section reports ms/frame with its occurrences/frame");
@@ -437,7 +437,7 @@ void logFormatCase() {
     g_lastLog.clear();
     logAndResetWindow(start + 30000);
     check(g_lastLog.find("application render p50 11.000 ms/frame (game ~10.800)") != std::string::npos,
-          "log line: application render reports its median and the game's share (median less EDVR)");
+          "log line: application render reports its median and the game's share (median less ED-UP)");
     check(g_lastLog.find("(census over the frame total)") == std::string::npos,
           "log line: the over-total note is absent when EDVR's corrected total does not exceed R");
 
@@ -514,7 +514,7 @@ void gapCases() {
     logAndResetWindow(start + 30000);
     check(g_lastLog.find("frame gap p50 0.05 / p95 0.05 ms over 99 pairs;") != std::string::npos,
           "gap: a saturated GPU (0.05 ms between frames) reads p50 0.05 / p95 0.05 over 99 pairs, on the census line");
-    const std::string* detail = lineWith("EDVR GPU census, frame gap:");
+    const std::string* detail = lineWith("ED-UP GPU census, frame gap:");
     check(detail && detail->find("p50 0.05 ms, p95 0.05 ms, max 2.00 ms over 99 pairs of 100 valid frames") != std::string::npos,
           "gap: the detail line adds the max (the two 2 ms gaps) and the pair and frame counts");
     check(g_lastLog.find("application render p50 10.000 ms/frame") != std::string::npos,
@@ -532,7 +532,7 @@ void gapCases() {
     freshWindow(start);
     feedFrames(60, 1, [](unsigned) -> uint64_t { return 11000; });
     logAndResetWindow(start + 30000);
-    detail = lineWith("EDVR GPU census, frame gap:");
+    detail = lineWith("ED-UP GPU census, frame gap:");
     check(g_lastLog.find("frame gap p50 1.10 / p95 1.10 ms over 59 pairs;") != std::string::npos &&
               detail && detail->find("a gap of about 1 ms is not proof of idleness") != std::string::npos &&
               detail->find("SteamVR's compositor (another process on the same GPU)") != std::string::npos,
@@ -550,7 +550,7 @@ void gapCases() {
         }
     }
     logAndResetWindow(start + 30000);
-    detail = lineWith("EDVR GPU census, frame gap:");
+    detail = lineWith("ED-UP GPU census, frame gap:");
     check(g_lastLog.find("over 2 pairs;") != std::string::npos &&
               detail && detail->find("over 2 pairs of 4 valid frames") != std::string::npos,
           "gap: a frame that never completes leaves its two pairs unmade, said as fewer pairs than frames");
@@ -564,7 +564,7 @@ void gapCases() {
         for (unsigned i : {0u, 1u, 3u, 4u, 2u}) noteApplicationCompletion(fakeSpan(1 + i, t[i], t[i] + kSpanTicks));
     }
     logAndResetWindow(start + 30000);
-    detail = lineWith("EDVR GPU census, frame gap:");
+    detail = lineWith("ED-UP GPU census, frame gap:");
     check(detail && detail->find("over 4 pairs of 5 valid frames") != std::string::npos,
           "gap: the late frame completes both its pairs, once each, whatever order the results settle in");
     // A completion repeated is not a second frame.
@@ -573,14 +573,14 @@ void gapCases() {
     noteApplicationCompletion(fakeSpan(7, 5000000, 5100000));
     noteApplicationCompletion(fakeSpan(8, 5101000, 5201000));
     logAndResetWindow(start + 30000);
-    detail = lineWith("EDVR GPU census, frame gap:");
+    detail = lineWith("ED-UP GPU census, frame gap:");
     check(detail && detail->find("over 1 pairs of 2 valid frames") != std::string::npos,
           "gap: a duplicated completion is one frame, not two");
 
     // Nothing paired: absent on the census line, never 0.00.
     freshWindow(start);
     logAndResetWindow(start + 30000);
-    detail = lineWith("EDVR GPU census, frame gap:");
+    detail = lineWith("ED-UP GPU census, frame gap:");
     check(g_lastLog.find("frame gap - (no pairs);") != std::string::npos && g_lastLog.find("frame gap p50") == std::string::npos &&
               detail && detail->find("no valid frames this window (Application-render GPU timing is off") != std::string::npos,
           "gap: a window with no spans reads '-', not 0.00, on both lines");
@@ -603,7 +603,7 @@ void gapCases() {
     legacy.source = GpuSpanSource::RenderToSubmit;
     noteApplicationCompletion(legacy);   // the other span: not fed
     logAndResetWindow(start + 30000);
-    detail = lineWith("EDVR GPU census, frame gap:");
+    detail = lineWith("ED-UP GPU census, frame gap:");
     check(g_lastLog.find("frame gap - (no pairs), 1 over 1 s;") != std::string::npos && detail &&
               detail->find("no pairs this window (4 valid frames") != std::string::npos &&
               detail->find("2 pairs rejected as not comparable (overlapping, or another clock)") != std::string::npos &&
@@ -624,7 +624,7 @@ void gapCases() {
         }
     }
     logAndResetWindow(start + 30000);
-    detail = lineWith("EDVR GPU census, frame gap:");
+    detail = lineWith("ED-UP GPU census, frame gap:");
     check(g_lastLog.find("frame gap p50 0.50 / p95 0.50 ms over 18 pairs, 1 over 1 s;") != std::string::npos,
           "gap: with a stall in the window, 18 of 19 pairs are statistics, p50 and p95 are untouched, the brief line adds ', 1 over 1 s'");
     check(detail && detail->find("max 0.50 ms over 18 pairs of 20 valid frames") != std::string::npos &&
@@ -638,7 +638,7 @@ void gapCases() {
     noteApplicationCompletion(fakeSpan(2, 5100000 + 10000000, 5200000 + 10000000));   // gap = exactly 1.000 s
     noteApplicationCompletion(fakeSpan(3, 5200000 + 20000100, 5300000 + 20000100));   // gap = 1.00001 s
     logAndResetWindow(start + 30000);
-    detail = lineWith("EDVR GPU census, frame gap:");
+    detail = lineWith("ED-UP GPU census, frame gap:");
     check(g_lastLog.find("frame gap p50 1000.00 / p95 1000.00 ms over 1 pairs, 1 over 1 s;") != std::string::npos,
           "gap: a gap of exactly 1000 ms is a pair; one of 1000.01 ms is a stall");
     // Many stalls: the largest three are named, the rest counted, and the longest is the longest of all.
@@ -652,7 +652,7 @@ void gapCases() {
         }
     }
     logAndResetWindow(start + 30000);
-    detail = lineWith("EDVR GPU census, frame gap:");
+    detail = lineWith("ED-UP GPU census, frame gap:");
     check(g_lastLog.find("frame gap - (no pairs), 6 over 1 s;") != std::string::npos &&
               detail && detail->find("6 pairs over 1 s KEPT as stalls") != std::string::npos &&
               detail->find("longest 5000.0 ms") != std::string::npos &&
@@ -662,7 +662,7 @@ void gapCases() {
     freshWindow(start);
     noteApplicationCompletion(fakeSpan(1, 0, 0, 0));
     logAndResetWindow(start + 30000);
-    detail = lineWith("EDVR GPU census, frame gap:");
+    detail = lineWith("ED-UP GPU census, frame gap:");
     check(detail && detail->find("1 spans unusable") != std::string::npos && g_lastLog.find("frame gap - (no pairs);") != std::string::npos,
           "gap: a valid span carrying no ticks or frequency is counted unusable, never paired");
 }
@@ -673,7 +673,7 @@ void alteredClassCases() {
     //                      owner, verdictNone, poolSubstituted, uiLayered
     check(classifyAlteredDraw(true, true, false, false) == C::None, "class: a plain draw EDVR did not touch is not altered");
     check(classifyAlteredDraw(true, true, true, false) == C::PoolFamily,
-          "class: a verdict-free draw with EDVR's slot target and shaders bound is a pool-family draw");
+          "class: a verdict-free draw with ED-UP's slot target and shaders bound is a pool-family draw");
     check(classifyAlteredDraw(true, false, true, false) == C::Verdict,
           "class: the pool flag is stale under a verdict (engineVelocityBeforeDraw did not run): the verdict's wrapper, not a pool-family draw");
     check(classifyAlteredDraw(true, true, false, true) == C::UiLayer, "class: a draw redirected into the UI layer");
@@ -705,22 +705,22 @@ void alteredLineCases() {
     ui.sampler.totals.ms = 0.2;
     ui.sampler.totals.samples = 2;
     logAndResetWindow(start + 30000);
-    const std::string* line = lineWith("EDVR GPU census, Elite's own draws that EDVR alters");
+    const std::string* line = lineWith("ED-UP GPU census, Elite's own draws that ED-UP alters");
     check(line != nullptr, "altered line: a line of its own follows the main census line");
     if (line) {
-        check(line->find("pool-family draws (EDVR's slot target and shaders) 2.000 (10.00/frame)") != std::string::npos,
+        check(line->find("pool-family draws (ED-UP's slot target and shaders) 2.000 (10.00/frame)") != std::string::npos,
               "altered line: pool-family draws: ms/frame with their count a frame");
-        check(line->find("UI draws (redirected to EDVR's layer) 0.020 (0.20/frame)") != std::string::npos,
+        check(line->find("UI draws (redirected to ED-UP's layer) 0.020 (0.20/frame)") != std::string::npos,
               "altered line: UI-layer draws report too");
         check(line->find("other fix-wrapped draws -") != std::string::npos,
               "altered line: a class that never ran prints '-', never 0.000");
         check(line->find("together 2.020 ms/frame") != std::string::npos, "altered line: the classes are disjoint draws, so together is their sum");
-        check(line->find("includes the game's own work in it, not only what EDVR adds") != std::string::npos &&
+        check(line->find("includes the game's own work in it, not only what ED-UP adds") != std::string::npos &&
                   line->find("the game's draw timed whole") != std::string::npos,
               "altered line: it says the figures include the game's own work in those draws");
     }
-    check(g_lastLog.find("EDVR ~0.000 ms/frame") != std::string::npos && g_lastLog.find("pool-family") == std::string::npos,
-          "altered line: the altered draws are not in EDVR's total and not on the main line");
+    check(g_lastLog.find("ED-UP ~0.000 ms/frame") != std::string::npos && g_lastLog.find("pool-family") == std::string::npos,
+          "altered line: the altered draws are not in ED-UP's total and not on the main line");
     check(g_section[static_cast<size_t>(GpuCensusSection::AlteredPoolFamily)].occurrences == 0,
           "altered line: the window resets the altered sections' occurrences");
 
@@ -734,17 +734,17 @@ void alteredLineCases() {
     pool.sampler.totals.ms = 0.8;
     pool.sampler.totals.samples = 4;
     logAndResetWindow(start + 30000);
-    line = lineWith("EDVR GPU census, Elite's own draws that EDVR alters");
-    check(line && line->find("pool-family draws (EDVR's slot target and shaders) 0.600 (10.00 draws in 3.00 runs/frame)") != std::string::npos,
+    line = lineWith("ED-UP GPU census, Elite's own draws that ED-UP alters");
+    check(line && line->find("pool-family draws (ED-UP's slot target and shaders) 0.600 (10.00 draws in 3.00 runs/frame)") != std::string::npos,
           "altered line: a run section prints its figure as the mean run span times the runs a frame, with the draws and the runs a frame");
     check(pool.occurrences == 0 && pool.issued == 0, "altered line: and the window resets its runs and its draws");
 
     // Nothing ran: all three '-', together 0.000 (a sum, not a measurement), and the wording still says what '-' means.
     freshWindow(start);
     logAndResetWindow(start + 30000);
-    line = lineWith("EDVR GPU census, Elite's own draws that EDVR alters");
-    check(line && line->find("pool-family draws (EDVR's slot target and shaders) -, "
-                             "UI draws (redirected to EDVR's layer) -, HUD draws moved into the HDR HUD layer "
+    line = lineWith("ED-UP GPU census, Elite's own draws that ED-UP alters");
+    check(line && line->find("pool-family draws (ED-UP's slot target and shaders) -, "
+                             "UI draws (redirected to ED-UP's layer) -, HUD draws moved into the HDR HUD layer "
                              "(the game's shading at the layer size) -, other fix-wrapped draws -;") != std::string::npos &&
               line->find("\"-\" means no such draw ran this window") != std::string::npos,
           "altered line: a window with no altered draw prints '-' for all three and says what that means");
@@ -757,21 +757,21 @@ void alteredLineCases() {
     uiClass.nullSampler.totals.ms = 0.1;
     uiClass.nullSampler.totals.samples = 2;
     logAndResetWindow(start + 30000);
-    line = lineWith("EDVR GPU census, Elite's own draws that EDVR alters");
-    check(line && line->find("UI draws (redirected to EDVR's layer) 0.015 (0.10/frame)") != std::string::npos &&
+    line = lineWith("ED-UP GPU census, Elite's own draws that ED-UP alters");
+    check(line && line->find("UI draws (redirected to ED-UP's layer) 0.015 (0.10/frame)") != std::string::npos &&
               g_lastLog.find("timer floor 50.0 us/pair") != std::string::npos && g_lastLog.find("spans timed 2,") != std::string::npos,
           "altered line: a class is corrected by its own null pair ((0.4/2 - 0.1/2) x 0.1 = 0.015), and its spans count in the census's totals");
     // The overlay's work span pair is accounted on a census line of its own (2026-10-14): without it a span that never ran and one that ran
     // and failed read the same, and the tile's and the overlay's "--" could not be told apart from a flight log. tools\edup_log.py --gpu-work-span
     // parses this text.
-    line = lineWith("EDVR GPU census, the overlay's GPU time: ");
+    line = lineWith("ED-UP GPU census, the overlay's GPU time: ");
     check(line && line->find("frame work span: completed ") != std::string::npos && line->find(", skipped ") != std::string::npos &&
               line->find(", invalid ") != std::string::npos && line->find(", last ") != std::string::npos && line->find(" ms.") != std::string::npos,
           "work span line: the census prints the frame work span field (completed, skipped, invalid, last)");
 }
 
 // ---- 7: the draws another fix wraps, named fix by fix ---------------------------------------------------------
-constexpr const char* kFixLinePrefix = "EDVR GPU census, the other fix-wrapped draws above by the fix that wraps each";
+constexpr const char* kFixLinePrefix = "ED-UP GPU census, the other fix-wrapped draws above by the fix that wraps each";
 void alteredFixCases() {
     constexpr int kFixes = kAlteredFixCount;
     // The names: one for each fix, fixed strings, all different, in the enum's order.
@@ -905,7 +905,7 @@ void alteredFixCases() {
     owner2.nullSampler.totals.ms = 0.2;
     owner2.nullSampler.totals.samples = 2;
     logAndResetWindow(start + 30000);
-    const std::string* classes = lineWith("EDVR GPU census, Elite's own draws that EDVR alters");
+    const std::string* classes = lineWith("ED-UP GPU census, Elite's own draws that ED-UP alters");
     const std::string* byFix = lineWith(kFixLinePrefix);
     check(classes != nullptr && byFix != nullptr, "fix line: the classes' line and, after it, a line naming each fix");
     if (classes && byFix) {
@@ -928,14 +928,14 @@ void alteredFixCases() {
     }
     check(g_lastLog.find("timer floor 100.0 us/pair") != std::string::npos && g_lastLog.find("spans timed 5,") != std::string::npos,
           "fix line: the empty pairs kept by the first fix count in the census's timer floor and spans");
-    check(g_lastLog.find("EDVR ~0.000 ms/frame") != std::string::npos && g_lastLog.find("sun glare") == std::string::npos,
-          "fix line: the fixes' draws are the game's, timed whole: not in EDVR's total and not on the main line");
+    check(g_lastLog.find("ED-UP ~0.000 ms/frame") != std::string::npos && g_lastLog.find("sun glare") == std::string::npos,
+          "fix line: the fixes' draws are the game's, timed whole: not in ED-UP's total and not on the main line");
     check(glare2.occurrences == 0 && owner2.occurrences == 0, "fix line: the window resets the fix sections' occurrences");
 
     // Nothing ran: every fix '-', and the sum item on the classes' line reads '-' too.
     freshWindow(start);
     logAndResetWindow(start + 30000);
-    classes = lineWith("EDVR GPU census, Elite's own draws that EDVR alters");
+    classes = lineWith("ED-UP GPU census, Elite's own draws that ED-UP alters");
     byFix = lineWith(kFixLinePrefix);
     std::string allAbsent;
     for (int i = 0; i < kFixes; ++i) allAbsent += std::string(i ? ", " : "") + kAlteredFixNames[i] + " -";
@@ -1009,9 +1009,9 @@ void seedLineCases() {
     logAndResetWindow(start + 30000);
     check(g_lastLog.find("UI layer reissues -, HDR HUD depth-stencil seed 0.700 (3.50/frame)") != std::string::npos,
           "seed line: the seed is the last in-frame item, (0.25 - 0.05) ms x 3.50 a frame = 0.700, with its seeds a frame");
-    check(g_lastLog.find("in-frame 0.900 (") != std::string::npos && g_lastLog.find("EDVR ~0.900 ms/frame = door 0.000 (") != std::string::npos,
-          "seed line: the seed is IN EDVR's in-frame total and in EDVR's total (0.700 + the planet's 0.200), not beside them");
-    const int mainAt = indexOfLine("EDVR GPU census:");
+    check(g_lastLog.find("in-frame 0.900 (") != std::string::npos && g_lastLog.find("ED-UP ~0.900 ms/frame = door 0.000 (") != std::string::npos,
+          "seed line: the seed is IN ED-UP's in-frame total and in ED-UP's total (0.700 + the planet's 0.200), not beside them");
+    const int mainAt = indexOfLine("ED-UP GPU census:");
     check(mainAt >= 0 && indexOfLine(kSeedDetailPrefix) == mainAt + 1,
           "seed line: its detail line follows the main line at once, before the altered draws' lines");
     const std::string* detail = lineWith(kSeedDetailPrefix);
@@ -1228,7 +1228,7 @@ void seedWiringCases() {
 
 
 // ---- 9: the second skin's GPU work (F16): five nested items, their line, their turns and their call sites ----
-constexpr const char* kSkinLinePrefix = "EDVR GPU census, the second skin's GPU work";
+constexpr const char* kSkinLinePrefix = "ED-UP GPU census, the second skin's GPU work";
 SectionState& skinSection(size_t i) { return g_section[kSkinFirst + i]; }
 // One item as a window would leave it: `occurrences` calls, `samples` of them timed for `ms` in all.
 void skinRan(size_t i, unsigned occurrences, double ms, unsigned samples) {
@@ -1277,9 +1277,9 @@ void skinLineCases() {
     skinRan(4, 200, 0.4, 8);
     logAndResetWindow(start + 30000);
     check(g_lastLog.find("engine velocity 5.000 (5.00/frame)") != std::string::npos && g_lastLog.find("in-frame 5.000 (") != std::string::npos &&
-              g_lastLog.find("EDVR ~5.000 ms/frame = door 0.000 (") != std::string::npos,
+              g_lastLog.find("ED-UP ~5.000 ms/frame = door 0.000 (") != std::string::npos,
           "second skin line: the main line is as it was: engine velocity 5.000 is the whole in-frame total, the nested items add nothing to it");
-    const int mainAt = indexOfLine("EDVR GPU census:");
+    const int mainAt = indexOfLine("ED-UP GPU census:");
     check(mainAt >= 0 && indexOfLine(kSkinLinePrefix) == mainAt + 1, "second skin line: it follows the main line at once, before the altered draws' lines");
     const std::string* line = lineWith(kSkinLinePrefix);
     check(line != nullptr, "second skin line: written when some of that work ran");
@@ -1290,7 +1290,7 @@ void skinLineCases() {
                   line->find("join dispatch (clear pass not included) 0.100 (1.00/frame)") != std::string::npos &&
                   line->find("pose table 0.050 (1.00/frame)") != std::string::npos,
               "second skin line: each item its own figure and per-frame count: (mean ms a call) x (calls a frame), 0.050, 0.010, 0.025, 0.100 and 0.050");
-        check(line->find("none of it is added to EDVR ~5.000") != std::string::npos && line->find("clear pass is issued right before the join dispatch and is not part of it") != std::string::npos &&
+        check(line->find("none of it is added to ED-UP ~5.000") != std::string::npos && line->find("clear pass is issued right before the join dispatch and is not part of it") != std::string::npos &&
                   line->find("probe") == std::string::npos,
               "second skin line: it says the items are inside the engine velocity figure and that the clear pass is not part of the join dispatch; no probe is mentioned");
     }
@@ -1306,7 +1306,7 @@ void skinLineCases() {
     // NEGATIVE CONTROL: none of it ran. No line at all, the main line as before, and nothing left over from the window before.
     freshWindow(start);
     logAndResetWindow(start + 30000);
-    check(lineWith(kSkinLinePrefix) == nullptr && g_lastLog.find("EDVR GPU census:") == 0,
+    check(lineWith(kSkinLinePrefix) == nullptr && g_lastLog.find("ED-UP GPU census:") == 0,
           "second skin line (nothing ran): no line, so a window with no skinned character reads exactly as before");
     freshWindow(start);
     skinRan(3, 200, 1.6, 8);
@@ -1331,8 +1331,8 @@ void skinLineCases() {
     skinRan(0, 200, 4.0, 8);
     skinRan(3, 200, 16.0, 8);
     logAndResetWindow(start + 30000);
-    check(g_lastLog.find("EDVR ~0.000 ms/frame = door 0.000 (") != std::string::npos && g_lastLog.find("in-frame 0.000 (") != std::string::npos,
-          "second skin line: the nested items are in no total (EDVR ~0.000 with only they running)");
+    check(g_lastLog.find("ED-UP ~0.000 ms/frame = door 0.000 (") != std::string::npos && g_lastLog.find("in-frame 0.000 (") != std::string::npos,
+          "second skin line: the nested items are in no total (ED-UP ~0.000 with only they running)");
 }
 
 // The rotation: a second-skin section has no turn until it has been called this window; once called it takes one.
@@ -1492,9 +1492,10 @@ void lineLengths() {
     size_t longest = 0;
     for (const auto& l : g_lines) longest = std::max(longest, l.size());
     std::printf("gpu_census_test: the longest census line at its worst is %zu characters (the log keeps about 1166)\n", longest);
-    check(longest < 1150, "lines: every census line at its worst fits the log's line, not cut");
+    // 1155: the main line names ED-UP twice, two characters longer than EDVR; still 11 under what the log keeps.
+    check(longest < 1155, "lines: every census line at its worst fits the log's line, not cut");
     const std::string* byFix = lineWith(kFixLinePrefix);
-    const std::string* classes = lineWith("EDVR GPU census, Elite's own draws that EDVR alters");
+    const std::string* classes = lineWith("ED-UP GPU census, Elite's own draws that ED-UP alters");
     check(byFix && classes, "lines: both altered-draw lines were written at the worst case");
     if (byFix && classes) {
         std::printf("gpu_census_test: at their worst the classes' line is %zu characters and the fixes' line %zu\n", classes->size(), byFix->size());
@@ -1793,8 +1794,8 @@ void fssRevealCases() {
     g_section[kFssFirst].sampler.totals.samples = 8;
     logAndResetWindow(start + 30000);
     check(g_lastLog.find("FSS reveal replay 0.100 (2.00/frame)") != std::string::npos && g_lastLog.find("in-frame 0.100 (") != std::string::npos &&
-              g_lastLog.find("EDVR ~0.100 ms/frame = door 0.000 (") != std::string::npos,
-          "FSS reveal line: the section appears in the per-feature report under its FSS name, 0.100 ms a frame, and is part of EDVR's in-frame total");
+              g_lastLog.find("ED-UP ~0.100 ms/frame = door 0.000 (") != std::string::npos,
+          "FSS reveal line: the section appears in the per-feature report under its FSS name, 0.100 ms a frame, and is part of ED-UP's in-frame total");
     // a window with no replay and no copy: the item is '-', never 0.000
     freshWindow(start);
     logAndResetWindow(start + 30000);
@@ -1856,15 +1857,15 @@ void onFootDepthCases() {
     g_section[kOnFootDepthFirst].sampler.totals.ms = 0.4;
     g_section[kOnFootDepthFirst].sampler.totals.samples = 8;
     logAndResetWindow(start + 30000);
-    const std::string* own = lineWith("EDVR GPU census, native on foot's depth readers");
+    const std::string* own = lineWith("ED-UP GPU census, native on foot's depth readers");
     check(own && own->find("on-foot depth 0.100 (2.00/frame)") != std::string::npos && own->find("included in the in-frame figure above") != std::string::npos &&
-              g_lastLog.find("in-frame 0.100 (") != std::string::npos && g_lastLog.find("EDVR ~0.100 ms/frame = door 0.000 (") != std::string::npos &&
+              g_lastLog.find("in-frame 0.100 (") != std::string::npos && g_lastLog.find("ED-UP ~0.100 ms/frame = door 0.000 (") != std::string::npos &&
               g_lastLog.find("on-foot depth") == std::string::npos,
-          "on-foot depth line: 0.100 ms a frame on a line of its own, counted in EDVR's in-frame total and not listed in the main line's items");
+          "on-foot depth line: 0.100 ms a frame on a line of its own, counted in ED-UP's in-frame total and not listed in the main line's items");
     // a window with no depth reader: no line, and the total has nothing of it
     freshWindow(start);
     logAndResetWindow(start + 30000);
-    check(lineWith("EDVR GPU census, native on foot's depth readers") == nullptr && g_lastLog.find("in-frame 0.000 (") != std::string::npos,
+    check(lineWith("ED-UP GPU census, native on foot's depth readers") == nullptr && g_lastLog.find("in-frame 0.000 (") != std::string::npos,
           "on-foot depth line: a window with no depth reader dispatched prints no such line, and the in-frame figure is 0.000");
     for (auto& s : g_section) s = SectionState{};
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 r"""The offline checker for the skin ledger (src\d3d11\skin_ledger.h; docs/kinematic-motion-injection-2026-09-19.md, "F2 study").
 
-An armed eye run writes, beside its crops, in edvr_logs\pool:
+An armed eye run writes, beside its crops, in edup_logs\pool:
   skin_<stamp>.bin                 the palette chain's dispatches (job tables, joint matrices, bind poses) for the run's 20 frames
   bones<p>_<stamp>_<frame>.bin     every learned palette buffer, whole copy at the frame's first pool draw, the first 3 MiB kept
   pool_<stamp>_<frame>.bin         the t33 pool of each frame (the ledger's own)
@@ -23,7 +23,7 @@ This reads them and answers the F2 questions with numbers, no judgement in the m
             stepping 0.3-0.6 m in one frame pair.
   views     The views the compute ran through (FirstElement of t0 t1 t2 u0), and whether u0 is the buffer bound at t38.
 
-  python tools\skin_palette_check.py <dir> [stamp]       dir is edvr_logs\pool; the newest skin_*.bin when no stamp
+  python tools\skin_palette_check.py <dir> [stamp]       dir is edup_logs\pool; the newest skin_*.bin when no stamp
   python tools\skin_palette_check.py --self-test         builds synthetic runs in a temp directory and requires the verdicts
   python tools\skin_palette_check.py --verify-fixture <dir>   reads the skin ledger rig's fixture (C++ writer) and requires them
   --strict                                               exit 1 when a hard check fails (a finding, not a tool error)

@@ -47,7 +47,7 @@ internal static class Report
                                                     Action<string>? progress = null, string? edvrExportPath = null,
                                                     int edvrExportWindow = 0, string edvrExportRegion = "R1")
     {
-        if (data.Clocks.Count == 0) throw new InvalidDataException("trace has no valid EDVR Clock marker");
+        if (data.Clocks.Count == 0) throw new InvalidDataException("trace has no valid ED-UP Clock marker");
         if (data.KernelFirstQpc == long.MaxValue || data.KernelLastQpc == long.MinValue)
             throw new InvalidDataException("trace has no kernel scheduler events");
         var frequencies = data.Clocks.Select(c => c.QpcFrequency).Where(f => f > 0).Distinct().ToArray();
@@ -142,13 +142,20 @@ internal static class Report
             data.Frames.Count, frameReports.Count, data.SwitchOut, data.SwitchIn,
             data.HasCallStacks, frameReports.Select(f => Convert.ToDouble(f["unexpectedUnknownUs"])));
         var inputInfo = new FileInfo(input);
+        var warnings = new List<string>();
+        // A trace with no game executable at all (the pre-flight smoke) has nothing
+        // to mismatch, so it carries no warning; gameBuild says why nothing is named.
+        if (data.Stacks.Identity.Warning.Length > 0)
+            warnings.Add("game build mismatch: " + data.Stacks.Identity.Warning);
+        // Flat-profile markers beside VR frame markers are ignored here, and the report says so.
+        if (data.PresentFrames.Count > 0)
+            warnings.Add($"trace carries {data.PresentFrames.Count} flat-profile present markers (event 5) " +
+                         "beside the VR frame markers; this is a VR report and ignores them");
         var report = new Dictionary<string, object?>
         {
             ["schemaVersion"] = 1,
-            // A trace with no game executable at all (the pre-flight smoke) has nothing
-            // to mismatch, so it carries no warning; gameBuild says why nothing is named.
-            ["warnings"] = data.Stacks.Identity.Warning.Length == 0
-                ? Array.Empty<string>() : new[] { "game build mismatch: " + data.Stacks.Identity.Warning },
+            ["mode"] = "vr",
+            ["warnings"] = warnings.ToArray(),
             ["gameBuild"] = new Dictionary<string, object?>
             {
                 ["expectedBuild"] = RvaTable.ExpectedBuild,
@@ -179,6 +186,7 @@ internal static class Report
             ["hasCallStacks"] = data.HasCallStacks,
             ["coverageComplete"] = coverageComplete,
             ["frameCount"] = data.Frames.Count,
+            ["presentFrameCount"] = data.PresentFrames.Count,
             ["availableFrameCount"] = orderedFrames.Count(frame => frame.Status == 0),
             ["validFrameCount"] = validFrames.Count,
             ["analyzedFrameCount"] = frameReports.Count,
@@ -714,7 +722,7 @@ internal static class Report
                 ["edvrChainTotal"] = edvrChains.Values.Sum(),
                 ["distinctChainCount"] = edvrChains.Count,
                 // EDVR's own code against the calls below it, over the same samples. edvrOwnTotal counts every sample whose top frame is in EDVR,
-                // so it equals the byTopModule count for "d3d11.dll [edvr]" and the export's callerSamplesTopFrameInEdvr.
+                // so it equals the byTopModule count for "d3d11.dll [edup]" and the export's callerSamplesTopFrameInEdvr.
                 ["edvrOwnTotal"] = edvrOwn,
                 ["edvrBelowTotal"] = edvrInnermost.Values.Sum() - edvrInnermostOwn.Values.Sum(),
                 ["edvrInnermostRvas"] = edvrInnermost.OrderByDescending(pair => pair.Value).Take(rvaCap)
@@ -771,7 +779,7 @@ internal static class Report
         var innermost = row is null ? [] : (Dictionary<string, object?>[])row["edvrInnermostRvas"]!;
         var chains = row is null ? [] : (Dictionary<string, object?>[])row["edvrChains"]!;
         var topModule = row is null ? 0L : ((Dictionary<string, object?>[])row["byTopModule"]!)
-            .Where(module => (string)module["module"]! == "d3d11.dll [edvr]")
+            .Where(module => (string)module["module"]! == "d3d11.dll [edup]")
             .Select(module => Convert.ToInt64(module["samples"])).FirstOrDefault();
         var export = new Dictionary<string, object?>
         {
@@ -780,8 +788,8 @@ internal static class Report
             ["window"] = window,
             ["region"] = region,
             ["frames"] = covered.Count,
-            ["module"] = "d3d11.dll in the game directory (EDVR)",
-            ["note"] = "RVAs are address minus that module's image base; chains run innermost outward; own is the samples whose top frame is EDVR's, below the rest of the row's count",
+            ["module"] = "d3d11.dll in the game directory (ED-UP)",
+            ["note"] = "RVAs are address minus that module's image base; chains run innermost outward; own is the samples whose top frame is ED-UP's, below the rest of the row's count",
             ["callerSamplesTopFrameInEdvr"] = topModule,
             ["callerSamplesAnyEdvrFrame"] = row?["anyFrameIn"] is Dictionary<string, object?> any
                 ? any["edvrD3d11"] : 0L,
@@ -1017,10 +1025,10 @@ internal static class Report
         return found;
     }
 
-    private static void Bump(Dictionary<(string Kind, int StackId), long> groups, (string, int) key) =>
+    internal static void Bump(Dictionary<(string Kind, int StackId), long> groups, (string, int) key) =>
         groups[key] = groups.GetValueOrDefault(key) + 1;
 
-    private static object TopStacks(Dictionary<(string Kind, int StackId), long> groups, StackStore stacks,
+    internal static object TopStacks(Dictionary<(string Kind, int StackId), long> groups, StackStore stacks,
                                     int take) =>
         groups.OrderByDescending(pair => pair.Value).Take(take)
             .Select(pair => new Dictionary<string, object?>
@@ -1040,7 +1048,7 @@ internal static class Report
                     ["frames"] = stacks.Format(stacks[pair.Key.StackId]),
                 }).ToArray());
 
-    private static long CommonSchedulerStart(Dictionary<int, CpuSwitchRange> ranges)
+    internal static long CommonSchedulerStart(Dictionary<int, CpuSwitchRange> ranges)
     {
         if (ranges.Count == 0) throw new InvalidDataException("trace has no per-CPU context-switch ranges");
         return ranges.Values.Max(range => range.FirstQpc);

@@ -162,7 +162,7 @@ internal sealed class ModuleInfo(int id, string path, string name, ulong imageBa
     /// the report has to keep them apart wherever a module is named.
     public string Display => Class switch
     {
-        ModuleClass.EdvrD3d11 => "d3d11.dll [edvr]",
+        ModuleClass.EdvrD3d11 => "d3d11.dll [edup]",
         ModuleClass.SystemD3d11 => "d3d11.dll [system32]",
         _ => Name.Length > 0 ? Name.ToLowerInvariant() : "unknown",
     };
@@ -496,7 +496,7 @@ internal sealed class StackStore
                         info.Addresses[i] >= _modules[moduleId].ImageBase
                 ? $"0x{info.Addresses[i] - _modules[moduleId].ImageBase:x}"
                 : DisplayName(moduleId);
-            // An EDVR frame becomes "d3d11.dll [edvr]!Function" once its own
+            // An EDVR frame becomes "d3d11.dll [edup]!Function" once its own
             // PDB has been matched; everything else keeps the module name.
             if (symbols is { Enabled: true } && moduleId >= 0 &&
                 _modules[moduleId].Class is ModuleClass.EdvrD3d11 or ModuleClass.EdvrOpenvrApi &&

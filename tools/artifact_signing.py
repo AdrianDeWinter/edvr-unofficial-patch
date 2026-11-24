@@ -6,7 +6,7 @@ r"""Sign and verify the release binaries with Azure Artifact Signing.
     python tools\artifact_signing.py verify FILE...
     python tools\artifact_signing.py --self-test
 
-build.bat calls `sign` on every shipped binary when EDVR_SIGN is set (d3d11.dll before it
+build.bat calls `sign` on every shipped binary when EDUP_SIGN is set (d3d11.dll before it
 is copied to edvr_openxr_graphics.dll, edvr_openxr_runtime.dll before it becomes
 openvr_api.dll, then ed-up-launcher.exe), so package.bat zips and hashes the signed bytes.
 Unset, nothing here runs and a build is what it always was.
@@ -41,6 +41,8 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
+
+import edup_env
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -78,7 +80,7 @@ class SigningError(Exception):
 
 
 def setting(name, default, env=None):
-    value = (os.environ if env is None else env).get('EDVR_SIGN_' + name)
+    value = edup_env.get('EDUP_SIGN_' + name, environ=env)
     return value if value else default
 
 
@@ -163,12 +165,12 @@ def sdk_version(name):
 
 
 def find_signtool(kits=None, env=None):
-    """EDVR_SIGNTOOL, else the newest x64 signtool.exe of a Windows SDK >= MIN_SDK."""
+    """EDUP_SIGNTOOL, else the newest x64 signtool.exe of a Windows SDK >= MIN_SDK."""
     environment = os.environ if env is None else env
-    override = environment.get('EDVR_SIGNTOOL')
+    override = edup_env.get('EDUP_SIGNTOOL', environ=environment)
     if override:
         if not Path(override).is_file():
-            raise SigningError('EDVR_SIGNTOOL names no file: ' + override)
+            raise SigningError('EDUP_SIGNTOOL names no file: ' + override)
         return Path(override)
     if kits is None:
         base = environment.get('ProgramFiles(x86)') or r'C:\Program Files (x86)'
@@ -183,7 +185,7 @@ def find_signtool(kits=None, env=None):
                 found.append((version, candidate))
     if not found:
         raise SigningError('no signtool.exe from a Windows SDK 10.0.22621 or newer under %s; install the Windows '
-                           'SDK, or point EDVR_SIGNTOOL at one' % kits)
+                           'SDK, or point EDUP_SIGNTOOL at one' % kits)
     return max(found)[1]
 
 
@@ -295,7 +297,7 @@ def sign(files, dlib=None, signtool=None, dry_run=False, runner=default_runner, 
     return 0
 
 
-SIGNATURE_QUERY = ("$s = Get-AuthenticodeSignature -LiteralPath $env:EDVR_SIGN_FILE; "
+SIGNATURE_QUERY = ("$s = Get-AuthenticodeSignature -LiteralPath $env:EDUP_SIGN_FILE; "
                    "[pscustomobject]@{ Status = [string]$s.Status; "
                    "Subject = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { '' }; "
                    "Timestamped = [bool]$s.TimeStamperCertificate } | ConvertTo-Json -Compress")
@@ -303,7 +305,7 @@ SIGNATURE_QUERY = ("$s = Get-AuthenticodeSignature -LiteralPath $env:EDVR_SIGN_F
 
 def signature_facts(file, runner, env=None):
     environment = dict(os.environ if env is None else env)
-    environment['EDVR_SIGN_FILE'] = str(file)
+    environment['EDUP_SIGN_FILE'] = str(file)
     done = runner(['powershell', '-NoProfile', '-NonInteractive', '-Command', SIGNATURE_QUERY], env=environment)
     if done.returncode != 0:
         raise SigningError('could not read the signature of %s: %s' % (file, tail((done.stdout or '') + (done.stderr or ''))))
@@ -464,12 +466,12 @@ def self_test():
             checks += 1
         explicit = scratch / 'mine.exe'
         explicit.write_bytes(b'MZ')
-        assert find_signtool(kits, {'EDVR_SIGNTOOL': str(explicit)}) == explicit
+        assert find_signtool(kits, {'EDUP_SIGNTOOL': str(explicit)}) == explicit
         checks += 1
 
         # The settings and the command line.
         assert metadata({}) == {'Endpoint': ENDPOINT, 'CodeSigningAccountName': ACCOUNT, 'CertificateProfileName': PROFILE}
-        assert metadata({'EDVR_SIGN_PROFILE': 'other'})['CertificateProfileName'] == 'other'
+        assert metadata({'EDUP_SIGN_PROFILE': 'other'})['CertificateProfileName'] == 'other'
         checks += 1
         command = sign_command('signtool.exe', 'dlib.dll', 'meta.json', ['a.dll', 'b.exe'])
         assert command[1] == 'sign' and command[-2:] == ['a.dll', 'b.exe']

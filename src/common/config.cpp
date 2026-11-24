@@ -116,8 +116,16 @@ std::wstring environmentValue(const wchar_t* name) {
     return n && n < MAX_PATH ? std::wstring(buf, n) : std::wstring();
 }
 
+// The log-directory variables: the EDUP_ names, and the deprecated EDVR_ spellings read while the EDUP_ ones are unset.
+// reportDeprecatedEnvironment() says so once the log is open.
+std::wstring edupEnvironmentValue(const wchar_t* suffix) {
+    std::wstring value = environmentValue((L"EDUP_" + std::wstring(suffix)).c_str());
+    if (!value.empty()) return value;
+    return environmentValue((L"EDVR_" + std::wstring(suffix)).c_str());
+}
+
 // Where logs go when the ini does not say: <exe dir>\edup_logs, unless the
-// environment moves it. EDVR_LOG_DIR names the directory; EDVR_LOG_DIR_FOR,
+// environment moves it. EDUP_LOG_DIR names the directory; EDUP_LOG_DIR_FOR,
 // when set, limits the move to processes whose exe sits in that directory.
 // build.bat's test runner sets both, so every proxy a rig loads from build\
 // logs -- and arms its crash sentinels -- in a directory of the rig's own,
@@ -125,9 +133,9 @@ std::wstring environmentValue(const wchar_t* name) {
 // logs of, keep their exe-relative default.
 std::wstring defaultLogDirectory() {
     const std::wstring exeDir = executableDirectory();
-    const std::wstring moved = environmentValue(L"EDVR_LOG_DIR");
+    const std::wstring moved = edupEnvironmentValue(L"LOG_DIR");
     if (moved.empty()) return exeDir + L"\\edup_logs";
-    const std::wstring only = environmentValue(L"EDVR_LOG_DIR_FOR");
+    const std::wstring only = edupEnvironmentValue(L"LOG_DIR_FOR");
     if (!only.empty() && _wcsicmp(only.c_str(), exeDir.c_str()) != 0) return exeDir + L"\\edup_logs";
     return moved;
 }
@@ -258,7 +266,7 @@ void Config::init(const std::wstring& moduleDir) {
     }
     parse();
 
-    // Defaults to <exe dir>\edvr_logs; the shader dump lands in a subdirectory.
+    // Defaults to <exe dir>\edup_logs; the shader dump lands in a subdirectory.
     std::string dirUtf8 = getString("log.dir", "");
     if (dirUtf8.empty()) {
         m_logDir = defaultLogDirectory();
@@ -270,6 +278,33 @@ void Config::init(const std::wstring& moduleDir) {
     }
     // Not created here. Log::open() makes it when it actually opens a file, so
     // logging turned off leaves no empty directory behind.
+}
+
+std::vector<const char*> deprecatedEnvironmentWarnings() {
+    std::vector<const char*> out;
+    // LOG_DIR_FOR limits LOG_DIR and is read only when that is set (defaultLogDirectory), in either spelling.
+    if (edupEnvironmentValue(L"LOG_DIR").empty()) return out;
+    struct Deprecated {
+        const wchar_t* suffix;
+        const char* warning;
+    };
+    static const Deprecated kDeprecated[] = {
+        {L"LOG_DIR", "[edup] WARNING: EDVR_LOG_DIR is deprecated; set EDUP_LOG_DIR instead"},
+        {L"LOG_DIR_FOR", "[edup] WARNING: EDVR_LOG_DIR_FOR is deprecated; set EDUP_LOG_DIR_FOR instead"},
+    };
+    for (const Deprecated& d : kDeprecated) {
+        if (!environmentValue((L"EDUP_" + std::wstring(d.suffix)).c_str()).empty()) continue;
+        if (environmentValue((L"EDVR_" + std::wstring(d.suffix)).c_str()).empty()) continue;
+        out.push_back(d.warning);
+    }
+    return out;
+}
+
+void reportDeprecatedEnvironment() {
+    // Said once per session, however often it is called.
+    static std::atomic<bool> said{false};
+    if (said.exchange(true)) return;
+    for (const char* warning : deprecatedEnvironmentWarnings()) Log::get().note("%s", warning);
 }
 
 void Config::parse(bool fromDefaults) {

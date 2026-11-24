@@ -1013,7 +1013,7 @@ inline int flatCopyStructureTests() {
         // The panel's inputs: published bits, the sizes, and the stand-down lines that carry them.
         expect(count(runtime, "(s.hdrKey == FlatHdrKey::Auto ? 4u : 0u) | (taaAbove ? 8u : 0u)") == 1 &&
                    count(runtime, "const bool taaAbove = known && s.engine == FlatMonoResolveMode::Taa && rw > ow && rh > oh;") == 1,
-               "the refusal word carries the key (bit 2) and EDVR's TAA above the output (bit 3)");
+               "the refusal word carries the key (bit 2) and ED-UP's TAA above the output (bit 3)");
         expect(count(runtime, "flatStandDownFormatEntered(text, sizeof(text), frame, s.standDown, renderSize);") == 1 &&
                    count(runtime, "flatStandDownFormatStill(text, sizeof(text), frame, s.standDown, now, renderSize);") == 1 &&
                    count(runtime, "flatRenderSizeWords(sizes, sizeof(sizes), rw, rh, ow, oh);") == 1,

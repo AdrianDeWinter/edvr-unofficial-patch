@@ -6,7 +6,7 @@
 //       changed struct offset, clones told apart by a caller, by fingerprints (callee, read-only constant, fall-through) or not at
 //       all, data by reference, pointer cell and string, the refusals -- the masked pin compare, and an unreadable page.
 //   (c) On every fixture exe, every target's answer (address, how, why not) equals Python's.
-//   (b) When the archived executables are at the main checkout's analysis\ (or EDVR_ANALYSIS_DIR), each is mapped the same way and
+//   (b) When the archived executables are at the main checkout's analysis\ (or EDUP_ANALYSIS_DIR), each is mapped the same way and
 //       resolved with the committed table (src\common\game_signatures.inc) against tools\game_build_test\expect_<build>.txt (the
 //       ground truth and Python's answers): 0 WRONG, Python's EQUAL count, the same answer per target; the known build resolves to
 //       itself. Without them it prints "skipped: no archived exes" and passes.
@@ -547,11 +547,15 @@ std::string fullPath(const std::string& p) {
     return n && n < sizeof(out) ? std::string(out) : p;
 }
 
-// The main checkout's analysis\: EDVR_ANALYSIS_DIR, or beside the git common directory of root (a worktree's .git file names its
+// The main checkout's analysis\: EDUP_ANALYSIS_DIR, or beside the git common directory of root (a worktree's .git file names its
 // gitdir, whose commondir names the main .git).
 std::string analysisDir(const std::string& root) {
     char env[MAX_PATH * 2];
-    const DWORD n = GetEnvironmentVariableA("EDVR_ANALYSIS_DIR", env, sizeof(env));
+    DWORD n = GetEnvironmentVariableA("EDUP_ANALYSIS_DIR", env, sizeof(env));
+    if (!n) {
+        n = GetEnvironmentVariableA("EDVR_ANALYSIS_DIR", env, sizeof(env));
+        if (n) std::printf("[edup] WARNING: EDVR_ANALYSIS_DIR is deprecated; set EDUP_ANALYSIS_DIR instead\n");
+    }
     if (n && n < sizeof(env)) return env;
     const std::string dotGit = root + "\\.git";
     const DWORD attr = GetFileAttributesA(dotGit.c_str());

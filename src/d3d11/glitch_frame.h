@@ -30,7 +30,7 @@ namespace edvr {
 // Sets the tap up on the game's 5376-byte scene buffer (the camera origin at
 // float 1100, both constants in this module, the fit checked at compile time) and
 // says so. Reads no ini key. The test rigs switch the tap off with the
-// environment variable EDVR_TEST_NO_CAMERA_TAP=1 (a transport-only install).
+// environment variable EDUP_TEST_NO_CAMERA_TAP=1 (a transport-only install).
 void installGlitchFrameFix();
 
 // Does vScreen need its Map and Unmap hooks for this tap? True when the camera

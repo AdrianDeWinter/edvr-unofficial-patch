@@ -332,7 +332,7 @@ def describe(sig):
     if vh is not None:
         # The vertex shader's content hash: the one key two draws running
         # different code cannot share, and the blob's file name under
-        # edvr_logs\shaders when a shader dump was on.
+        # edup_logs\shaders when a shader dump was on.
         parts.append('vshader=%s' % vh)
     return '  '.join(parts)
 
@@ -751,7 +751,7 @@ def self_test():
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('logs', nargs='*', help='edvr gfx log file(s)')
+    ap.add_argument('logs', nargs='*', help='ED-UP gfx log file(s)')
     ap.add_argument('--a', type=int, help='baseline census, 1-based position '
                     'in the collected list')
     ap.add_argument('--b', type=int, help='effect census, same numbering')

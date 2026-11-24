@@ -211,7 +211,7 @@ inline bool holdsGame(const Actual& a, const GameState& g, std::string* why) {
 // EDVR's substitution, for a producer draw: its own pixel shader, MRT6 bound, a derived blend state, and the game's
 // other targets kept. The guard's private t3 is its own case (guard).
 inline bool holdsEdvr(const Actual& a, const GameState& g, bool guard, std::string* why) {
-    if (!a.ps || a.ps.Get() == g.ps) { *why = "the pixel shader is not EDVR's patched one"; return false; }
+    if (!a.ps || a.ps.Get() == g.ps) { *why = "the pixel shader is not ED-UP's patched one"; return false; }
     if (!a.rtv[6]) { *why = "MRT6 is not bound"; return false; }
     for (unsigned i = 0; i < 8; ++i)
         if (i != 6 && a.rtv[i].Get() != g.rtv[i]) { *why = "render target " + std::to_string(i) + " is not the game's"; return false; }
@@ -537,7 +537,7 @@ bool mixedScene(const Harness& h, std::string* why) {
     e.producer("a third");
     e.gameGetPixelShader("a game Get between producer draws", true);
     e.gameSetPs(g.ps2.Get(), lifecycle_tests::kPsHash2);
-    e.producer("the game set another pixel shader: EDVR patches that one");
+    e.producer("the game set another pixel shader: ED-UP patches that one");
     e.gameSetPs(g.ps.Get(), lifecycle_tests::kPsHash);
     e.producer("and set the first back");
     e.gameSetBlend(e.additive.Get());
@@ -579,7 +579,7 @@ bool mixedScene(const Harness& h, std::string* why) {
     e.producer("a run again");
     e.bumpTargetGenerations();
     e.gameSetPs(g.unkeyed.Get(), lifecycle_tests::kUnkeyedPs);
-    e.declinedProducer("the generations moved and the pixel shader is not one EDVR patches: declined, with MRT6 still on");
+    e.declinedProducer("the generations moved and the pixel shader is not one ED-UP patches: declined, with MRT6 still on");
     e.gameSetPs(g.ps.Get(), lifecycle_tests::kPsHash);
     e.producer("a run again, with a shader it patches");
     e.bumpTargetGenerations();
@@ -1206,7 +1206,7 @@ inline void run(const Harness& h) {
     h.check(shipped, "flat lazy: the mixed scene holds: every game call sees the game's state, every producer draw EDVR's");
     struct Fault { bool (*scene)(const Harness&, std::string*); const char* what; };
     const Fault faults[] = {
-        {&mixedScene<FaultKeepOnOtherDraw>, "a draw that is not a producer keeps EDVR's state"},
+        {&mixedScene<FaultKeepOnOtherDraw>, "a draw that is not a producer keeps ED-UP's state"},
         {&mixedScene<FaultKeepOnDispatch>, "a dispatch keeps it"},
         {&mixedScene<FaultKeepOnClear>, "a clear keeps it"},
         {&mixedScene<FaultKeepOnCopy>, "a copy keeps it"},
@@ -1413,7 +1413,7 @@ inline void run(const Harness& h) {
         if (line.empty() || lifecycle_tests::number(line, "put back ") != 3) std::printf("  flat lazy: the census line is: %s\n", line.c_str());
         h.check(lifecycle_tests::number(line, " s: ") == 10 && lifecycle_tests::number(line, "draws in ") == 3 &&
                     lifecycle_tests::number(line, "runs (") == 7,
-                "flat lazy: it counts 10 substituted draws in 3 runs, 7 of them found EDVR's state still bound");
+                "flat lazy: it counts 10 substituted draws in 3 runs, 7 of them found ED-UP's state still bound");
         h.check(lifecycle_tests::number(line, "put back ") == 3 && lifecycle_tests::number(line, "another draw ") == 1 &&
                     lifecycle_tests::number(line, "a set keeping the targets ") == 1 && lifecycle_tests::number(line, "the present ") == 1,
                 "flat lazy: and that the game's state went back three times: another draw, a targets-keeping set, the present");

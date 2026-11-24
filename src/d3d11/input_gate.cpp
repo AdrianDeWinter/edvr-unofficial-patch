@@ -1555,7 +1555,7 @@ void installDiDoor(PFN_DirectInput8Create create, HINSTANCE inst, const GUID& ii
     Log::get().note(
         "keyboard gate: the DirectInput door is installed on %s (GetDeviceState pointed "
         "into %s, GetDeviceData into %s before the patch -- dinput8.dll is the runtime's "
-        "own, anything else is a tool ahead of EDVR in the chain, chained through). The "
+        "own, anything else is a tool ahead of ED-UP in the chain, chained through). The "
         "table itself lives in %s (dinput8.dll's own image is the shared one; anywhere "
         "else is a copy made for our device alone). The game's own keyboard device "
         "reaches the door only if the table is shared; the probe line says whether it "
@@ -1591,7 +1591,7 @@ void installUserDoors() {
     Log::get().note(
         "keyboard gate: the executable's import table -- GetAsyncKeyState %s, GetKeyState "
         "%s, GetKeyboardState %s, PeekMessageA %s (the first pointed into %s before the "
-        "patch). EDVR's own modules import these through their own tables and keep "
+        "patch). ED-UP's own modules import these through their own tables and keep "
         "reading the real keyboard.",
         g_user.asyncKey.applied ? "patched" : "NOT FOUND",
         g_user.keyState.applied ? "patched" : "NOT FOUND",

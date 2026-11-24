@@ -963,7 +963,7 @@ void ownerCases() {
   check(holder(0, 60, 0, 0, 0).owner == SlowOwner::VendorWaitFrame, "S6.wait: the pose wait at 60 ms of 100");
   check(holder(0, 0, 70, 0, 0).owner == SlowOwner::VendorSwapchain, "S6.swapchain: the swapchain calls at 70 ms of 100");
   check(holder(0, 0, 0, 80, 0).owner == SlowOwner::EdvrCopy, "S6.copy: EDVR's copy at 80 ms of 100");
-  check(holder(0, 0, 0, 0, 90).owner == SlowOwner::EdvrWork, "S6.edvr: EDVR's own work at 90 ms of 100");
+  check(holder(0, 0, 0, 0, 90).owner == SlowOwner::EdvrWork, "S6.edvr: ED-UP's own work at 90 ms of 100");
   const SlowReport game = holder(5, 1, 0, 1, 1);
   check(game.owner == SlowOwner::Game && closeTo(game.gameMs, 92.0, 1e-9) && closeTo(game.ownerShare, 0.92, 1e-9), "S6.game: what no owner accounts for is the game's frame");
   const SlowReport none = holder(30, 30, 0, 30, 0);

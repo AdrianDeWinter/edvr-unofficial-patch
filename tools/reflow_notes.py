@@ -193,7 +193,7 @@ def process(path, width, in_place, dry_run, check, out=sys.stdout):
         with open(path, "rb") as f:
             data = f.read()
     except OSError as e:
-        print("[edvr] cannot read %s: %s" % (path, e), file=out)
+        print("[edup] cannot read %s: %s" % (path, e), file=out)
         return 1, False
 
     text, had_bom = decode(data)
@@ -205,7 +205,7 @@ def process(path, width, in_place, dry_run, check, out=sys.stdout):
 
     if check:
         if changed:
-            print("[edvr] would change: %s%s"
+            print("[edup] would change: %s%s"
                   % (path, " (has a UTF-8 BOM)" if had_bom else ""), file=out)
         return 0, changed
 
@@ -217,19 +217,19 @@ def process(path, width, in_place, dry_run, check, out=sys.stdout):
 
     if dry_run:
         if changed:
-            print("[edvr] %s would change:" % path, file=out)
+            print("[edup] %s would change:" % path, file=out)
             for d in difflib.unified_diff(
                     old_norm.splitlines(), new.splitlines(),
                     fromfile=path + " (now)", tofile=path + " (reflowed)",
                     lineterm=""):
                 print(d, file=out)
         else:
-            print("[edvr] %s is already reflowed." % path, file=out)
-        print("[edvr] dry run: wrote nothing.", file=out)
+            print("[edup] %s is already reflowed." % path, file=out)
+        print("[edup] dry run: wrote nothing.", file=out)
         return 0, changed
 
     if not changed:
-        print("[edvr] %s unchanged." % path, file=out)
+        print("[edup] %s unchanged." % path, file=out)
         return 0, False
 
     body = new.replace("\n", nl)
@@ -237,7 +237,7 @@ def process(path, width, in_place, dry_run, check, out=sys.stdout):
         body += nl
     with open(path, "wb") as f:
         f.write(body.encode("utf-8"))       # no BOM, on purpose
-    print("[edvr] reflowed %s%s"
+    print("[edup] reflowed %s%s"
           % (path, " (dropped a UTF-8 BOM)" if had_bom else ""), file=out)
     return 0, True
 

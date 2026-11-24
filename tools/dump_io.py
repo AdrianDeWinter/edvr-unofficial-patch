@@ -2,7 +2,7 @@
 """Read the eye dump's files, plain or compressed.
 
 One press of the VR eye dump key writes gigabytes. Every .bin it writes into
-edvr_logs\\eyes and edvr_logs\\pool is stored as NAME.z, two BMP pairs are
+edup_logs\\eyes and edup_logs\\pool is stored as NAME.z, two BMP pairs are
 stored as an XOR delta against their twin, and this module is the one reader
 every tool goes through. src\\common\\dump_file.h is the writer and holds the
 container's layout (EDVRZ1: a header, then 4 MiB chunks, each its own zlib

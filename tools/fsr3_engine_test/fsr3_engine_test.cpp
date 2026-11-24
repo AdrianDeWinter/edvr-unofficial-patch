@@ -940,11 +940,11 @@ void testRegistrationTable(ID3D11Device* dev, ID3D11DeviceContext* ctx) {
         check(yawOk, "(d1) both yaw-scene dispatches succeeded");
         if (yawOk) {
             std::printf(
-                "info: (d1) EDVR's own reprojected field under the settled signs: error %.2f, "
+                "info: (d1) ED-UP's own reprojected field under the settled signs: error %.2f, "
                 "with the motion flipped %.2f\n",
                 yawSettled, yawFlipped);
             check(yawSettled < yawFlipped,
-                  "(d1) the settled signs beat their motion-flipped twin on EDVR's own "
+                  "(d1) the settled signs beat their motion-flipped twin on ED-UP's own "
                   "reprojected motion field");
         }
     }

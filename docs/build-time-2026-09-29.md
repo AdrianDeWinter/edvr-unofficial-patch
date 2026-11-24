@@ -68,7 +68,7 @@ below; start CPU-light independent rigs at t=0 (item 4).
 ## How it was measured
 
 A wrapper read build.bat's output line by line and stamped each with the
-seconds since the start; phases are the `[edvr]` markers: `using` (start),
+seconds since the start; phases are the `[edvr]` markers (`[edup]` since the rename): `using` (start),
 `=== d3d11.dll ===` (end of the head), `=== test rigs ===` (end of the DLL
 compile), run_jobs' own `the pool of` line, and the last line. The rig split
 of terrain_motion is the same cl command and run lines as `:rig_terrain_motion`

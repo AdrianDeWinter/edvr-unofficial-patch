@@ -258,7 +258,7 @@ inline int flatCpuTests() {
         const std::string text = joined(lines);
         const std::string promised =
             "flat cpu 5s: frames=300 (stood down 0) present p50 16.67 ms (p95 16.67); render thread clocked on " +
-            std::to_string(K) + " of 300 frames, one in 16 (its figures are per clocked frame); EDVR per frame total 0.150 ms = "
+            std::to_string(K) + " of 300 frames, one in 16 (its figures are per clocked frame); ED-UP per frame total 0.150 ms = "
             "other 0.060 ms (calls 1.0) + contract reduction 0.040 ms (calls 1.0) + copy checks 0.000 ms (calls 0.0) + "
             "camera rows 0.000 ms (calls 0.0) + trace ring 0.020 ms (calls 1.0) + resource lookup 0.000 ms (calls 0.0) + "
             "coverage 0.000 ms (calls 0.0) + projection readiness 0.000 ms (calls 0.0) + cb shadows 0.000 ms (calls 0.0) + "
@@ -329,7 +329,7 @@ inline int flatCpuTests() {
         for (unsigned fam = 0; fam < flatcpu::kFamilies; ++fam)
             all = all && has(text, std::string(flatcpu::kInfo[fam].name) + " 0.000 ms (calls 0.0)");
         expect(all, "every family is on the line of an empty window, as zeros");
-        expect(has(text, "EDVR per frame total 0.000 ms"), "and the total is zero");
+        expect(has(text, "ED-UP per frame total 0.000 ms"), "and the total is zero");
         expect(has(text, "GPU frame - (") && has(text, "GPU resolve - ("), "a GPU span nobody timed prints a dash, not 0.00");
         expect(!has(text, "GPU frame p50") && !has(text, "GPU resolve p50"), "and no percentile");
         expect(has(text, "engine motion wrapper D3D calls 0/frame over 0.0 substituted draws/frame"),
@@ -392,7 +392,7 @@ inline int flatCpuTests() {
         none.renderClockedFrames = 0;
         flatcpu::formatWindow(none, &lines);
         const std::string noneText = joined(lines);
-        expect(has(noneText, "render thread clocked on 0 of 5 frames, one in 16") && has(noneText, "EDVR per frame total -"),
+        expect(has(noneText, "render thread clocked on 0 of 5 frames, one in 16") && has(noneText, "ED-UP per frame total -"),
                "no clocked frame: the total is a dash");
         expect(has(noneText, "render thread: not clocked in this window (one frame in 16 is, and none was)"),
                "and the render thread's line says it was not clocked");
@@ -443,7 +443,7 @@ inline int flatCpuTests() {
         const std::string text = joined(lines);
         expect(has(text, "engine motion hooks 0.020 ms (calls 1.0)"),
                "the render thread's engine motion hooks are the tees alone: the draw side, apply and patch are not counted twice");
-        expect(has(text, "EDVR per frame total 0.020 ms"), "and the total is the same 0.020 ms, no draw side in it");
+        expect(has(text, "ED-UP per frame total 0.020 ms"), "and the total is the same 0.020 ms, no draw side in it");
         expect(has(text, "engine motion hooks by part (render thread, per clocked frame): emit 0.000 ms (calls 0.0)") && has(text, "tees 0.020 ms (calls 1.0)"),
                "the render thread's hooks are also printed a part at a time: the tees hold the 0.020 ms, the first token names the list");
         {   // The by-part tokens cover exactly the parts the hooks total folds, so they add up to it.
@@ -968,7 +968,7 @@ inline int flatCpuTests() {
         expect(r.renderCalls[flatcpu::kInject] == 0 && r.otherCalls[flatcpu::kInject] == 0, "and no call is counted");
         flatcpu::Lines lines;
         flatcpu::formatWindow(r, &lines);
-        expect(has(joined(lines), "render thread: CPU timing is off, no thread clocked (EDVR_FLAT_CPU_CLOCKS=1 also turns it on)"), "the line says the timing is off");
+        expect(has(joined(lines), "render thread: CPU timing is off, no thread clocked (EDUP_FLAT_CPU_CLOCKS=1 also turns it on)"), "the line says the timing is off");
         expect(has(joined(lines), "CPU timing is off; turn it on in F8 > Debug > CPU timing in the log"),
                "and how to turn it on: the first line leads with it, after the present figures that stay");
         expect(has(joined(lines), "present p50 ") && has(joined(lines), "GPU frame ") && has(joined(lines), "engine motion wrapper D3D calls") &&
@@ -980,7 +980,7 @@ inline int flatCpuTests() {
         expect(has(joined(lines), "other threads: CPU timing is off"), "the other threads' part says so too");
         // The policy: the key decides (off by default), the variable decides it either way.
         expect(!flatcpu::clocksPolicy(false, nullptr) && flatcpu::clocksPolicy(true, nullptr), "off unless advanced.flat_cpu_timing is on");
-        expect(flatcpu::clocksPolicy(false, "1") && !flatcpu::clocksPolicy(true, "0"), "EDVR_FLAT_CPU_CLOCKS=1/0 overrides the key either way");
+        expect(flatcpu::clocksPolicy(false, "1") && !flatcpu::clocksPolicy(true, "0"), "EDUP_FLAT_CPU_CLOCKS=1/0 overrides the key either way");
         expect(!flatcpu::clocksPolicy(false, "x") && flatcpu::clocksPolicy(true, "x"), "any other value leaves the key's say");
     }
 

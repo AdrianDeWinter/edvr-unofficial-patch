@@ -3005,7 +3005,7 @@ void nativeFadeTick(bool body, const char* reason, const avh::Sink& sink) {
     } else if (st.ev == avh::FadeEvent::Foreign) {
         say(sink, "native on foot body: the avatar fade mode reads %d, not -1 (auto), so it is someone else's and is left alone", st.seen);
     } else if (st.ev == avh::FadeEvent::ChangedUnderUs) {
-        say(sink, "native on foot body: the avatar fade mode changed while EDVR held it (now %d); it is not put back", st.seen);
+        say(sink, "native on foot body: the avatar fade mode changed while ED-UP held it (now %d); it is not put back", st.seen);
     } else if (st.ev == avh::FadeEvent::Unreadable) {
         say(sink, "native on foot body: the avatar fade mode could not be read; the body is left as the game draws it");
     }

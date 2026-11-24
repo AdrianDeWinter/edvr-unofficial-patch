@@ -45,7 +45,7 @@ python tools\fetch_openxr_loader.py
 
 `fetch_fsr4.py` stages AMD's FidelityFX (FSR 4.1) headers and its two signed
 D3D12 DLLs (about 29 MB) into `%LOCALAPPDATA%\EDVR\fsr4-sdk`; `third_party\fsr4`
-or `EDVR_FSR4_SDK` name another copy, and `EDVR_FSR4_SDK=none` forces the build
+or `EDUP_FSR4_SDK` name another copy, and `EDUP_FSR4_SDK=none` forces the build
 without it. A build with no copy still succeeds, and `fix.temporal_aa = fsr4`
 then refuses at run time. The DLLs land in `build\` and
 `python tools\install_edup.py --fsr4` places them beside the game. A release
@@ -119,7 +119,7 @@ Python and the pinned SDKs. The Build Tools are under Microsoft's licence:
 using them needs a valid Visual Studio licence, and they must never be shared,
 published or committed. `--accept-license` says you have read and accept those
 terms; without it `setup` stops before downloading. Everything lives in the
-Git-ignored `.toolchains/windows/` of the main checkout (`EDVR_TOOLCHAIN_HOME`
+Git-ignored `.toolchains/windows/` of the main checkout (`EDUP_TOOLCHAIN_HOME`
 moves it) and serves every worktree. A tree's output, a worktree's included, is
 `build/compile-build` in that tree, with a `compile_only_receipt.json` that
 `install_edup.py --compile-only` checks (`tools/compile_only.py`).
@@ -328,7 +328,7 @@ same bytes, and it removes older `ed-up-dlss-*.zip`, `ed-up-xess-*.zip` and `ed-
 `dist\` when a runtime's contents change.
 
 To sign the binaries (Authenticode, through Azure Artifact Signing), set
-`EDVR_SIGN=1` for the full `build.bat`. It signs `d3d11.dll` and
+`EDUP_SIGN=1` for the full `build.bat`. It signs `d3d11.dll` and
 `edvr_openxr_runtime.dll` before anything copies them, then
 `ed-up-launcher.exe`, so `package.bat` zips and hashes the signed bytes. Once per machine, run `python
 tools\artifact_signing.py fetch` (Microsoft's signing client, pinned by hash,
@@ -360,7 +360,7 @@ python tools\fetch_ngx.py
 
 fetches one pinned commit of NVIDIA's public SDK repository into
 `%LOCALAPPDATA%\ED-UP\ngx-sdk` and checks the runtime's hash against the pin in
-the script. `EDVR_NGX_SDK` points the build at a copy somewhere else.
+the script. `EDUP_NGX_SDK` points the build at a copy somewhere else.
 
 Writing the release's settings files (`tools\gen_installer_rc.py
 --release-files`, a step of the full build) needs the native pair and the

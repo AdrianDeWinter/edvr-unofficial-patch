@@ -231,7 +231,7 @@ def check_assertions(T, text, lines_out):
 BLOCK_RE = re.compile(r'var (\w+) = stacks\.AddForTest\(new StackInfo\s*\{(.*?)\}\);', re.S)
 MOD_NAMES = {"exe": "GAME", "edvrD3d11": "EDVR", "systemD3d11": "SYS", "nvidia": "NV"}
 DISPLAY = {"NV": "nvwgf2umx.dll", "UNRESOLVED": "unresolved", "SYS": "d3d11.dll [system32]",
-           "EDVR": "d3d11.dll [edvr]"}
+           "EDVR": "d3d11.dll [edup]"}
 
 
 def top_level_items(s):

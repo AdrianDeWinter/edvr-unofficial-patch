@@ -500,7 +500,7 @@ bool ensureFeature(ID3D11DeviceContext* ctx, int eye, uint32_t w, uint32_t h,
 bool dlaaAvailable(ID3D11Device* dev, const char** reason) {
 #ifndef EDVR_HAVE_NGX
     (void)dev;
-    g_reason = "this build has no DLSS SDK in it (build with EDVR_NGX_SDK set)";
+    g_reason = "this build has no DLSS SDK in it (build with EDUP_NGX_SDK set)";
     if (reason) *reason = g_reason;
     return false;
 #else
@@ -708,7 +708,7 @@ bool dlaaEvaluate(ID3D11DeviceContext* ctx, int eye, ID3D11Texture2D* colour,
     if (reactive && !g_maskNoted) {
         g_maskNoted = true;
         Log::get().note("dlaa: a bias-current-colour mask is being handed to NVIDIA. "
-                        "Only preset F supports this input; modern presets use EDVR's separate UI resolve.");
+                        "Only preset F supports this input; modern presets use ED-UP's separate UI resolve.");
     }
     ep.InJitterOffsetX = jx;
     ep.InJitterOffsetY = jy;

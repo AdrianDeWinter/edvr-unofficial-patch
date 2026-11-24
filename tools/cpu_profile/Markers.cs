@@ -23,6 +23,14 @@ internal sealed record FrameMarker(ulong TimestampUs, ulong Sequence, ulong Gene
                                    ushort Status, ushort Flags, uint SceneReady,
                                    ulong GpuSequence = 0, ushort SchemaVersion = 1);
 
+// Event 5, PresentFrame v1 (flat profile): one owned Present per record. Times are QPC µs,
+// the same clock as the frame markers, so they compare with scheduler timelines directly.
+internal sealed record PresentFrameMarker(ulong TimestampUs, ulong Sequence, ulong PrevHookReturnUs,
+                                          ulong FirstCommandUs, ulong HookEnterUs, ulong PresentBeginUs,
+                                          ulong PresentEndUs, ulong CallbackEndUs, ulong HookReturnUs,
+                                          uint Thread, int Result, uint SyncInterval, uint PresentFlags,
+                                          ushort Flags, ushort GeneratedFrames);
+
 internal static class Markers
 {
     public const ushort Version = 1;
@@ -30,6 +38,14 @@ internal static class Markers
     public const ushort SinglePresent = 1 << 1;
     public const ushort SubmitOperation = 2;
     public const ushort WaitOperation = 1;
+
+    public const ushort PresentFrameId = 5;
+    public const ushort PresentFrameVersion = 1;
+    public const int PresentFramePayloadLength = 96;
+    public const ushort FlatPrevValid = 1 << 0;
+    public const ushort FlatFirstCommandValid = 1 << 1;
+    public const ushort FlatBridged = 1 << 2;
+    public const ushort FlatTest = 1 << 3;
 
     public static void Parse(TraceEvent data, Collected result)
     {
@@ -41,6 +57,11 @@ internal static class Markers
         if ((int)data.ID == 3)
         {
             ParseFrame(data.Version, data.EventData(), result);
+            return;
+        }
+        if ((int)data.ID == PresentFrameId)
+        {
+            ParsePresentFrame(data.Version, data.EventData(), result);
             return;
         }
         if (data.Version != Version)
@@ -100,6 +121,28 @@ internal static class Markers
             U16(bytes, 90), U32(bytes, 92), version == 2 ? U64(bytes, 96) : 0, (ushort)version));
     }
 
+    public static void ParsePresentFrame(int version, byte[] bytes, Collected result)
+    {
+        if (version != PresentFrameVersion)
+        {
+            result.UnsupportedMarkers++;
+            AddError(result, $"event {PresentFrameId}: unsupported version {version}");
+            return;
+        }
+        if (bytes.Length != PresentFramePayloadLength)
+        {
+            result.MalformedMarkers++;
+            AddError(result, $"event {PresentFrameId}: payload length {bytes.Length}");
+            return;
+        }
+        // Offsets are the packed struct's in src\common\native_cpu_trace_events.h; the reserved
+        // u32 at 92 is not read.
+        result.PresentFrames.Add(new PresentFrameMarker(
+            U64(bytes, 0), U64(bytes, 8), U64(bytes, 16), U64(bytes, 24), U64(bytes, 32), U64(bytes, 40),
+            U64(bytes, 48), U64(bytes, 56), U64(bytes, 64), U32(bytes, 72), I32(bytes, 76), U32(bytes, 80),
+            U32(bytes, 84), U16(bytes, 88), U16(bytes, 90)));
+    }
+
     public static void AddError(Collected result, string error)
     {
         if (result.MarkerErrors.Count < 20) result.MarkerErrors.Add(error);
@@ -109,6 +152,34 @@ internal static class Markers
     public static long I64(byte[] b, int o) => BinaryPrimitives.ReadInt64LittleEndian(b.AsSpan(o, 8));
     public static uint U32(byte[] b, int o) => BinaryPrimitives.ReadUInt32LittleEndian(b.AsSpan(o, 4));
     public static ushort U16(byte[] b, int o) => BinaryPrimitives.ReadUInt16LittleEndian(b.AsSpan(o, 2));
+    public static int I32(byte[] b, int o) => BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(o, 4));
+
+    /// The flat frame admission rules, in the order the plan (Flat frame model) gives them.
+    /// A frame that fails one is counted under its reason and never reaches the regions.
+    public static string? FlatInvalidReason(PresentFrameMarker frame)
+    {
+        if ((frame.Flags & FlatTest) != 0) return "present_test";
+        if (frame.Sequence == 0 || frame.Thread == 0) return "zero_identity";
+        if ((frame.Flags & FlatPrevValid) == 0) return "no_previous_present";
+        if (frame.TimestampUs != frame.HookReturnUs) return "emission_timestamp";
+        if (frame.PrevHookReturnUs == 0 || frame.HookEnterUs == 0 || frame.PresentBeginUs == 0 ||
+            frame.PresentEndUs == 0 || frame.CallbackEndUs == 0 || frame.HookReturnUs == 0)
+            return "zero_timestamp";
+        var previous = frame.PrevHookReturnUs;
+        if ((frame.Flags & FlatFirstCommandValid) != 0)
+        {
+            if (frame.FirstCommandUs == 0) return "zero_timestamp";
+            if (frame.FirstCommandUs < previous) return "timestamp_order";
+            previous = frame.FirstCommandUs;
+        }
+        foreach (var time in new[] { frame.HookEnterUs, frame.PresentBeginUs, frame.PresentEndUs,
+                                     frame.CallbackEndUs, frame.HookReturnUs })
+        {
+            if (time < previous) return "timestamp_order";
+            previous = time;
+        }
+        return null;
+    }
 
     public static string? FrameInvalidReason(FrameMarker frame)
     {
@@ -152,6 +223,15 @@ internal static class Markers
         0x100 => "SyntheticCycle",
         0x101 => "SyntheticBusy",
         0x102 => "SyntheticWait",
+        // Flat-profile spans (event 2), named without the EdvrCpu prefix.
+        0x200 => "FlatFrameBoundary",
+        0x201 => "FgCopyIn",
+        0x202 => "FgSubmitToProxy",
+        0x203 => "FgProxyPresent",
+        0x204 => "FgPresentStatus",
+        0x205 => "FgPlainPresent",
+        0x206 => "XellSleep",
+        0x207 => "XellMarker",
         _ => $"Unknown{operation}",
     };
 

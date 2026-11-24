@@ -217,8 +217,8 @@ int finish() {
 
 int runControl(const std::wstring& root) {
     g_control = true;
-    SetEnvironmentVariableW(L"EDVR_LOG_DIR", (root + L"\\logs").c_str());
-    SetEnvironmentVariableW(L"EDVR_LOG_DIR_FOR", nullptr);
+    SetEnvironmentVariableW(L"EDUP_LOG_DIR", (root + L"\\logs").c_str());
+    SetEnvironmentVariableW(L"EDUP_LOG_DIR_FOR", nullptr);
     Proxy p;
     if (!p.load(root + L"\\d3d11.dll")) {
         std::printf("  FAIL  control: the proxy copy does not load with its test exports\n");
@@ -261,9 +261,9 @@ int runMain(const std::wstring& dllArg) {
         std::printf("  FAIL  could not prepare the scratch directories under %S\n", base.c_str());
         return 1;
     }
-    // The proxy's log goes to this run's own directory, whatever the runner set: EDVR_LOG_DIR moves it for every exe (the journal rig does the same).
-    SetEnvironmentVariableW(L"EDVR_LOG_DIR", (mainRoot + L"\\logs").c_str());
-    SetEnvironmentVariableW(L"EDVR_LOG_DIR_FOR", nullptr);
+    // The proxy's log goes to this run's own directory, whatever the runner set: EDUP_LOG_DIR moves it for every exe (the journal rig does the same).
+    SetEnvironmentVariableW(L"EDUP_LOG_DIR", (mainRoot + L"\\logs").c_str());
+    SetEnvironmentVariableW(L"EDUP_LOG_DIR_FOR", nullptr);
     std::printf("profile switch test -- the live switch's mechanics on WARP; the flat runtime and VR UI layers do not engage here\n");
 
     Proxy p;
