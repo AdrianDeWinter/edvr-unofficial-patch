@@ -154,6 +154,16 @@ std::string LauncherState::language() const { return get("language"); }
 
 void LauncherState::setLanguage(const std::string& code) { set("language", code); }
 
+std::string LauncherState::theme() const {
+    const std::string value = get("theme");
+    return (value == "dark" || value == "light") ? value : std::string();
+}
+
+void LauncherState::setTheme(const std::string& mode) {
+    if (mode == "dark" || mode == "light") set("theme", mode);
+    else remove("theme");
+}
+
 edvr::VrHeadsetMode LauncherState::vrStereoMode() const {
     return edvr::vrHeadsetModeFromConfig(get("vr_3d_mode"));
 }

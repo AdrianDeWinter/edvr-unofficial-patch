@@ -98,6 +98,7 @@
 #include "../../src/installer/update_util.h"
 #include "../../src/installer/update_zip.h"
 #include "../../src/installer/updater.h"
+#include "../../src/installer/vr_headset.h"
 
 using namespace edvr::installer;
 
@@ -5715,6 +5716,18 @@ void testArgs() {
     check(!licences.badArg && licences.licenses && launcherHasCommand(licences) && !parse({}).licenses && !parse({}).directDryRun, "--licenses is a command with no window");
     check(parse({L"--channel", L"nightly"}).badArg && parse({L"--payload"}).badArg && parse({L"--data-root"}).badArg, "a bad channel and flags missing their value are refused");
     check(parse({L"--channel", L"stable"}).channel == "stable", "stable is accepted");
+    {
+        const AppArgs prb = parse({L"--probe-openxr", L"--dir", L"D:\\Elite", L"--data-root", L"E:\\root"});
+        check(!prb.badArg && prb.probeOpenXr && prb.dir == L"D:\\Elite" && prb.dataRoot == L"E:\\root",
+              "--probe-openxr takes no DLL path or hash argument and pairs with --dir / --data-root");
+        check(parse({L"--probe-openxr-sha", L"deadbeef"}).badArg,
+              "--probe-openxr-sha is no longer accepted on the command line");
+        const std::string mainSrc = readAll(P(g_repo, L"src\\installer\\main.cpp"));
+        const size_t probeDispatch = mainSrc.find("runOpenXrProbeCommand(args)");
+        const size_t startupCall = mainSrc.find("launcherStartup(args");
+        check(probeDispatch != std::string::npos && startupCall != std::string::npos && probeDispatch < startupCall,
+              "main.cpp dispatches --probe-openxr before launcherStartup");
+    }
     const std::string usage = usageText();
     for (const char* flag : {"--check-update", "--update", "--channel", "--payload", "--data-root", "--unregister", "--direct-dry-run", "--licenses", "<masked>", "ed-up-launcher.exe"})
         check(contains(usage, flag), std::string("the help names ") + flag);
@@ -6404,6 +6417,811 @@ void testSettingsXmlLaunchMode() {
     }
 }
 
+void testVrHeadsetDetection() {
+    section("vr headset detection");
+
+    // 1. Multi-platform OpenXR classification across Windows & Linux ecosystems.
+    check(classifyVrPlatform(L"C:\\Program Files (x86)\\Steam\\steamapps\\common\\SteamVR\\steamxr_win64.json") ==
+              VrPlatform::SteamVr,
+          "SteamVR OpenXR JSON classifies as SteamVr");
+    check(classifyVrPlatform(L"C:\\Program Files\\Virtual Desktop Streamer\\OpenXR\\vdxr_win64.json") ==
+              VrPlatform::VirtualDesktopVdxr,
+          "Virtual Desktop VDXR JSON classifies as VirtualDesktopVdxr");
+    check(classifyVrPlatform(L"C:\\Program Files\\Oculus\\Support\\oculus-runtime\\oculus_openxr_64.json") ==
+              VrPlatform::MetaLink,
+          "Oculus OpenXR JSON classifies as MetaLink");
+    check(classifyVrPlatform(L"C:\\Program Files\\Pimax\\Runtime\\pimax-openxr.json") == VrPlatform::Pimax,
+          "Pimax OpenXR JSON classifies as Pimax");
+    check(classifyVrPlatform(L"C:\\Windows\\System32\\MixedRealityRuntime.json") == VrPlatform::WindowsMixedReality,
+          "WMR OpenXR JSON classifies as WindowsMixedReality");
+    check(classifyVrPlatform(L"C:\\Program Files\\Varjo\\varjo-openxr\\VarjoOpenXR.json") == VrPlatform::Varjo,
+          "Varjo OpenXR JSON classifies as Varjo");
+    check(classifyVrPlatform(L"C:\\Program Files\\VIVE\\Updater\\App\\ViveRuntime\\ViveOpenXR.json") == VrPlatform::Vive,
+          "Vive OpenXR JSON classifies as Vive");
+    check(classifyVrPlatform(L"/usr/share/openxr/1/openxr_wivrn.json") == VrPlatform::Wivrn,
+          "Linux WiVRn JSON classifies as Wivrn");
+    check(classifyVrPlatform(L"/usr/share/openxr/1/openxr_monado.json") == VrPlatform::Monado,
+          "Linux Monado JSON classifies as Monado");
+    check(classifyVrPlatform(L"C:\\Apps\\CustomXR\\my_xr.json") == VrPlatform::Custom,
+          "unknown valid OpenXR JSON classifies as Custom");
+
+    // 2. OpenXR runtime JSON parsing & relative library_path resolution.
+    {
+        const std::string json =
+            R"({"file_format_version":"1.0.0","runtime":{"name":"Virtual Desktop XR","library_path":"./vdxr_64.dll"}})";
+        const OpenXrManifestInfo m =
+            parseOpenXrRuntimeJson(json, L"C:\\Program Files\\Virtual Desktop Streamer\\OpenXR\\vdxr_win64.json");
+        check(m.valid && m.runtimeName == L"Virtual Desktop XR" &&
+                  m.libraryPath == L"C:\\Program Files\\Virtual Desktop Streamer\\OpenXR\\./vdxr_64.dll",
+              "parseOpenXrRuntimeJson resolves relative library_path and runtime.name");
+    }
+    {
+        const std::string vrpath =
+            R"({"external_drivers":["C:\\Program Files\\ALVR\\alvr_driver"],"runtime":["C:\\SteamVR"]})";
+        const std::vector<std::wstring> drivers = parseOpenVrExternalDrivers(vrpath);
+        check(drivers.size() == 1 && drivers[0].find(L"ALVR") != std::wstring::npos,
+              "parseOpenVrExternalDrivers extracts external SteamVR drivers");
+    }
+
+    // 3. USB VID/PID hardware identification (including negative checks for non-VR Valve hardware).
+    check(identifyUsbVrHeadset(L"USB\\VID_28DE&PID_2300\\12345", L"Valve Index HMD").name == L"Valve Index",
+          "Valve Index HMD VID/PID identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_28DE&PID_1205\\12345", L"Steam Deck Controller").name.empty(),
+          "Steam Deck controller is never misidentified as a VR headset");
+    check(identifyUsbVrHeadset(L"USB\\VID_2833&PID_018C\\12345", L"Quest 3").name == L"Meta Quest 3",
+          "Meta Quest 3 USB identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_2833&PID_0186\\12345", L"Quest 2").name == L"Meta Quest 2",
+          "Meta Quest 2 USB identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_35BD&PID_0101\\12345", L"Bigscreen Beyond").name == L"Bigscreen Beyond",
+          "Bigscreen Beyond USB identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_054C&PID_0CDE\\12345", L"PS VR2").name == L"PlayStation VR2",
+          "PlayStation VR2 PC adapter USB identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_03F0&PID_0580\\12345", L"HP Reverb Virtual Reality Headset G2").name ==
+              L"HP Reverb G2",
+          "HP Reverb G2 USB identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_34A4&PID_0012\\12345", L"Pimax Crystal Light").name ==
+              L"Pimax Crystal Light",
+          "Pimax Crystal Light USB identified");
+    check(identifyUsbVrHeadset(L"USB\\VID_0BB4&PID_032B\\12345", L"VIVE Pro 2").name == L"HTC Vive Pro 2",
+          "HTC Vive Pro 2 USB identified");
+
+    // 4. Safety guards: never auto-launch SteamVR, never live-probe while Elite is running anywhere.
+    check(!shouldRunLiveOpenXrProbe(VrPlatform::SteamVr, {}, false, false),
+          "SteamVR is never live-probed when vrserver is not running");
+    check(shouldRunLiveOpenXrProbe(VrPlatform::SteamVr, {"vrserver.exe"}, false, false),
+          "SteamVR is live-probed once vrserver.exe is already running");
+    check(!shouldRunLiveOpenXrProbe(VrPlatform::SteamVr, {"vrserver.exe", "elitedangerous64.exe"}, false, false),
+          "live probe is skipped whenever EliteDangerous64.exe is running anywhere");
+    check(shouldRunLiveOpenXrProbe(VrPlatform::Wivrn, {}, true, true),
+          "Linux/Proton WiVRn with XR_RUNTIME_JSON is safe to probe");
+    check(!shouldRunLiveOpenXrProbe(VrPlatform::Wivrn, {"wivrn-server", "elitedangerous6"}, true, true),
+          "Linux/Proton live probe is skipped when truncated /proc comm elitedangerous6 is running");
+    check(!shouldRunLiveOpenXrProbe(VrPlatform::SteamVr, {}, true, true),
+          "even under Wine with XR_RUNTIME_JSON, SteamVR is never probed without vrserver");
+    check(isPlatformServiceRunning(VrPlatform::Wivrn, {"wivrn-ipc"}) &&
+              shouldRunLiveOpenXrProbe(VrPlatform::Wivrn, {"wivrn-ipc"}, true, false),
+          "WiVRn IPC socket liveness enables live probe even when /proc is PID-namespaced");
+    check(isPlatformServiceRunning(VrPlatform::Monado, {"monado-ipc"}) &&
+              shouldRunLiveOpenXrProbe(VrPlatform::Monado, {"monado-ipc"}, true, false),
+          "Monado IPC socket liveness enables live probe even when /proc is PID-namespaced");
+    check(isEliteRunning({"vrserver.exe", "elitedangerous64.exe"}) && isEliteRunning({"elitedangerous6"}) &&
+              !isEliteRunning({"vrserver.exe", "wivrn-server"}),
+          "isEliteRunning recognizes both Windows exe name and 15-char Linux comm name");
+
+    // 4b. Linux WiVRn / Monado helpers: XDG manifest search order, IPC sockets, wineopenxr bridge, POSIX .so check.
+    {
+        const auto c1 = linuxOpenXrManifestCandidates(L"/home/pilot/.xdg", L"/home/pilot", L"/etc/custom:/opt/xdg");
+        check(c1.size() == 3 &&
+                  c1[0] == L"Z:\\home\\pilot\\.xdg\\openxr\\1\\active_runtime.json" &&
+                  c1[1] == L"Z:\\etc\\custom\\openxr\\1\\active_runtime.json" &&
+                  c1[2] == L"Z:\\opt\\xdg\\openxr\\1\\active_runtime.json",
+              "linuxOpenXrManifestCandidates follows XDG_CONFIG_HOME and colon-separated XDG_CONFIG_DIRS");
+        const auto c2 = linuxOpenXrManifestCandidates(L"", L"/home/pilot", L":::");
+        check(c2.size() == 2 &&
+                  c2[0] == L"Z:\\home\\pilot\\.config\\openxr\\1\\active_runtime.json" &&
+                  c2[1] == L"Z:\\etc\\xdg\\openxr\\1\\active_runtime.json",
+              "linuxOpenXrManifestCandidates falls back to HOME/.config and /etc/xdg when XDG vars are empty/colons");
+        const auto ws = linuxCompositorSocketPaths(L"/run/user/1000", VrPlatform::Wivrn);
+        check(ws.size() == 2 &&
+                  ws[0] == L"Z:\\run\\user\\1000\\wivrn\\comp_ipc" &&
+                  ws[1] == L"Z:\\run\\user\\1000\\wivrn_comp_ipc",
+              "linuxCompositorSocketPaths lists both WiVRn IPC socket paths under Z:");
+        const auto ms = linuxCompositorSocketPaths(L"/run/user/1000", VrPlatform::Monado);
+        check(ms.size() == 1 && ms[0] == L"Z:\\run\\user\\1000\\monado_comp_ipc",
+              "linuxCompositorSocketPaths lists Monado IPC socket path under Z:");
+        check(isWineOpenXrBridgePath(L"C:\\windows\\system32\\wineopenxr64.json") &&
+                  !isWineOpenXrBridgePath(L"C:\\SteamVR\\steamxr_win64.json"),
+              "isWineOpenXrBridgePath recognizes Proton/Wine wineopenxr bridge manifests");
+        check(isPosixSharedLibraryPath(L"/usr/lib/libopenxr_wivrn.so") &&
+                  isPosixSharedLibraryPath(L"/app/lib/libopenxr_monado.so.1") &&
+                  !isPosixSharedLibraryPath(L"C:\\SteamVR\\steamxr.dll"),
+              "isPosixSharedLibraryPath recognizes .so and versioned .so.N paths");
+    }
+
+    // 5. End-to-end status resolution across platforms and states.
+    {
+        VrProbeInputs in;
+        in.activeRuntimePath = L"C:\\VirtualDesktop\\vdxr_win64.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"Virtual Desktop XR", L"C:\\VirtualDesktop\\vdxr.dll",
+                             true, true};
+        in.runningProcesses = {"virtualdesktop.streamer.exe"};
+        in.liveProbe = {true, true, false, true, true, 0, L"Virtual Desktop XR", L"1.0.29", L"Oculus Quest 3"};
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::Ready && r.headsetName == L"Meta Quest 3" &&
+                  r.runtimeDisplayName == L"Virtual Desktop (VDXR)" && r.runtimeVersion == L"1.0.29",
+              "VDXR + Quest 3 live probe resolves to Ready with cleaned Meta Quest 3 name");
+    }
+    {
+        VrProbeInputs in;
+        in.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll", true, true};
+        in.runningProcesses = {"vrserver.exe", "alvr_dashboard.exe"};
+        in.liveProbe = {true, true, false, true, true, 0, L"SteamVR/OpenXR", L"2.8.4", L"Oculus Quest 3"};
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::Ready && r.runtimeDisplayName == L"SteamVR" && r.transportName == L"ALVR",
+              "SteamVR + ALVR bridge resolves to Ready with ALVR transport note");
+    }
+    {
+        VrProbeInputs in;
+        in.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll", true, true};
+        in.runningProcesses = {"vrserver.exe"};
+        in.liveProbe = {true, true, false, true, false, -35, L"SteamVR/OpenXR", L"2.8.4", L""};
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::Standby && r.headsetName.empty(),
+              "SteamVR running with XR_ERROR_FORM_FACTOR_UNAVAILABLE resolves to Standby");
+    }
+    {
+        VrProbeInputs in;
+        in.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll", true, true};
+        in.usbHeadset = {L"Bigscreen Beyond", VrPlatform::SteamVr};
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::RuntimeInactive && r.headsetName == L"Bigscreen Beyond" && r.headsetFromUsb,
+              "USB-connected headset with inactive SteamVR resolves to RuntimeInactive with hardware name");
+    }
+    {
+        VrProbeInputs in;
+        in.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll", true, true};
+        in.runningProcesses = {"ovrserver_x64.exe"};
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::RuntimeInactive && r.runtimeMismatch &&
+                  r.mismatchRuntimeName == L"Meta Horizon Link",
+              "Meta Horizon Link running while SteamVR is active OpenXR flags runtime mismatch");
+    }
+    {
+        VrProbeInputs in;
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::NotConfigured && r.runtimeDisplayName.empty(),
+              "no OpenXR runtime resolves to NotConfigured");
+    }
+    {
+        VrProbeInputs in;
+        in.activeRuntimePath = L"C:\\Missing\\steamxr_win64.json";
+        in.activeManifest.jsonExists = false;
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::NotConfigured && r.activeRuntimeMissingFile,
+              "missing OpenXR runtime JSON resolves to NotConfigured with activeRuntimeMissingFile");
+    }
+    // WiVRn reporting "Monado(XRT)" from xrGetInstanceProperties stays WiVRn with no false mismatch.
+    {
+        VrProbeInputs in;
+        in.underWine = true;
+        in.runtimeSource = EffectiveRuntimeSource::LinuxXdg;
+        in.activeRuntimePath = L"Z:\\home\\pilot\\.config\\openxr\\1\\active_runtime.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"WiVRn", L"/usr/lib/libopenxr_wivrn.so", true, true};
+        in.runningProcesses = {"wivrn-server"};
+        in.liveProbe = {true, true, false, true, true, 0, L"Monado(XRT) 25.0.0", L"25.0.0", L"WiVRn Quest 3"};
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::Ready && r.activePlatform == VrPlatform::Wivrn &&
+                  r.runtimeDisplayName == L"WiVRn" && !r.runtimeMismatch && r.hasLiveResult,
+              "WiVRn reporting Monado(XRT) keeps Wivrn identity and raises no false runtimeMismatch");
+    }
+    // Proton wineopenxr64.json backed by Linux host WiVRn manifest classifies as WiVRn.
+    {
+        VrProbeInputs in;
+        in.underWine = true;
+        in.runtimeSource = EffectiveRuntimeSource::Registry;
+        in.activeRuntimePath = L"C:\\windows\\system32\\wineopenxr64.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"", L"C:\\windows\\system32\\wineopenxr.dll", true, true};
+        in.linuxHostRuntimeHint = L"Z:\\home\\pilot\\.config\\openxr\\1\\active_runtime.json WiVRn /usr/lib/libopenxr_wivrn.so";
+        in.runningProcesses = {"wivrn-ipc"};
+        const VrHeadsetReport r = resolveVrHeadsetStatus(in);
+        check(r.status == VrStatusKind::Standby && r.activePlatform == VrPlatform::Wivrn &&
+                  r.runtimeDisplayName == L"WiVRn" && !r.runtimeMismatch,
+              "Proton wineopenxr64.json with Linux host WiVRn hint classifies as WiVRn with wivrn-ipc active");
+    }
+    // XR_ERROR_INSTANCE_LOST (-13) on xrCreateInstance resolves to Standby when service is up, RuntimeInactive when off.
+    {
+        VrProbeInputs in;
+        in.underWine = true;
+        in.activeRuntimePath = L"/usr/share/openxr/1/openxr_wivrn.json";
+        in.activeManifest = {true, in.activeRuntimePath, L"WiVRn", L"/usr/lib/libopenxr_wivrn.so", true, true};
+        in.runningProcesses = {"wivrn-ipc"};
+        in.liveProbe = {true, true, false, false, false, -13, L"", L"", L""};
+        const VrHeadsetReport up = resolveVrHeadsetStatus(in);
+        check(up.status == VrStatusKind::Standby && up.openXrResult == -13,
+              "XR_ERROR_INSTANCE_LOST while WiVRn service is active resolves to Standby");
+        in.runningProcesses.clear();
+        const VrHeadsetReport down = resolveVrHeadsetStatus(in);
+        check(down.status == VrStatusKind::RuntimeInactive && down.openXrResult == -13,
+              "XR_ERROR_INSTANCE_LOST when WiVRn service is inactive resolves to RuntimeInactive");
+    }
+
+    // 6. Theme mode state round-trip (system / dark / light) and launcher.ini persistence.
+    {
+        ui::setThemeMode(ui::ThemeMode::Dark);
+        check(ui::theme().dark && ui::themeMode() == ui::ThemeMode::Dark, "ThemeMode::Dark forces dark palette");
+        ui::setThemeMode(ui::ThemeMode::Light);
+        check(!ui::theme().dark && ui::themeMode() == ui::ThemeMode::Light, "ThemeMode::Light forces light palette");
+        ui::setThemeMode(ui::ThemeMode::System);
+        check(ui::themeMode() == ui::ThemeMode::System, "ThemeMode::System restores system-following mode");
+
+        const std::wstring themeBase = fresh("vr-theme-persist");
+        const std::wstring iniPath = P(themeBase, L"launcher.ini");
+        std::string terr;
+        {
+            LauncherState st;
+            st.load(iniPath, nullptr);
+            check(st.theme().empty(), "fresh launcher.ini defaults to follow Windows (empty theme)");
+            st.setTheme("dark");
+            check(st.save(&terr), "saves theme=dark: " + terr);
+        }
+        {
+            LauncherState st;
+            st.load(iniPath, nullptr);
+            check(st.theme() == "dark", "theme=dark persists across reload");
+            st.setTheme("light");
+            check(st.save(&terr), "saves theme=light: " + terr);
+        }
+        {
+            LauncherState st;
+            st.load(iniPath, nullptr);
+            check(st.theme() == "light", "theme=light persists across reload");
+            st.setTheme(std::string());
+            check(st.save(&terr), "clears theme back to follow Windows: " + terr);
+            check(readAll(iniPath).find("theme") == std::string::npos,
+                  "returning to follow Windows removes theme= instead of writing an empty line");
+        }
+        {
+            writeAll(iniPath, "theme = neon\r\n");
+            LauncherState st;
+            st.load(iniPath, nullptr);
+            check(st.theme().empty(), "unknown theme value in launcher.ini falls back to follow Windows");
+        }
+    }
+
+    // 7. Runtime selection via EDVR's own native_local_config.h parser:
+    //    system mode, explicit path, invalid file rejected by EDVR, and XR_RUNTIME_JSON disagreeing.
+    {
+        const std::wstring cfgBase = fresh("vr-local-openxr-cfg");
+        const std::wstring sysPath = P(cfgBase, L"sys.ini");
+        const std::wstring expPath = P(cfgBase, L"explicit.ini");
+        const std::wstring badPath = P(cfgBase, L"invalid.ini");
+        writeAll(sysPath,
+                 "[openxr]\r\n"
+                 "version=1\r\n"
+                 "loader=C:\\Game\\Openvr\\win64\\openxr_loader.dll\r\n"
+                 "graphics=C:\\Game\\d3d11.dll\r\n"
+                 "runtime=system\r\n"
+                 "separate_device=1\r\n");
+        writeAll(expPath,
+                 "[openxr]\r\n"
+                 "version=1\r\n"
+                 "loader=C:\\Game\\Openvr\\win64\\openxr_loader.dll\r\n"
+                 "graphics=C:\\Game\\d3d11.dll\r\n"
+                 "runtime=C:\\XR\\vdxr_win64.json\r\n"
+                 "separate_device=1\r\n");
+        // Stray unknown key: native_local_config.h rejects the whole file.
+        writeAll(badPath,
+                 "[openxr]\r\n"
+                 "version=1\r\n"
+                 "loader=C:\\Game\\Openvr\\win64\\openxr_loader.dll\r\n"
+                 "graphics=C:\\Game\\d3d11.dll\r\n"
+                 "runtime=system\r\n"
+                 "separate_device=1\r\n"
+                 "stray_key=1\r\n");
+
+        edvr::openxr::LocalConfig sysCfg;
+        const auto sysRes = edvr::openxr::readLocalConfig(sysPath, sysCfg);
+        check(sysRes == edvr::openxr::LocalConfigResult::Ready &&
+                  edvr::openxr::localConfigUsesSystemRuntime(sysCfg.runtime),
+              "native_local_config.h parses runtime=system as Ready");
+        const EffectiveRuntimeSelection selSys = resolveEffectiveOpenXrRuntime(
+            sysRes, sysCfg, L"", L"C:\\SteamVR\\steamxr_win64.json", false);
+        check(selSys.source == EffectiveRuntimeSource::Registry &&
+                  selSys.activeRuntimePath == L"C:\\SteamVR\\steamxr_win64.json" &&
+                  selSys.childEnvAction == ChildXrEnvAction::Inherit && !selSys.envDisagreesWithLocal,
+              "system mode without env selects registry ActiveRuntime");
+        // System mode WITH a disagreeing XR_RUNTIME_JSON: Elite clears XR_RUNTIME_JSON, so child must clear it too!
+        const EffectiveRuntimeSelection selSysEnv = resolveEffectiveOpenXrRuntime(
+            sysRes, sysCfg, L"C:\\Other\\vdxr.json", L"C:\\SteamVR\\steamxr_win64.json", false);
+        check(selSysEnv.source == EffectiveRuntimeSource::Registry &&
+                  selSysEnv.activeRuntimePath == L"C:\\SteamVR\\steamxr_win64.json" &&
+                  selSysEnv.envDisagreesWithLocal &&
+                  selSysEnv.childEnvAction == ChildXrEnvAction::ClearXrRuntimeJson,
+              "system mode with disagreeing XR_RUNTIME_JSON uses registry and clears XR_RUNTIME_JSON for probe child");
+
+        edvr::openxr::LocalConfig expCfg;
+        const auto expRes = edvr::openxr::readLocalConfig(expPath, expCfg);
+        check(expRes == edvr::openxr::LocalConfigResult::Ready &&
+                  expCfg.runtime == L"C:\\XR\\vdxr_win64.json",
+              "native_local_config.h parses explicit runtime path as Ready");
+        // Explicit path without XR_RUNTIME_JSON: passes XR_RUNTIME_JSON=<explicit> to child probe!
+        const EffectiveRuntimeSelection selExp = resolveEffectiveOpenXrRuntime(
+            expRes, expCfg, L"", L"C:\\SteamVR\\steamxr_win64.json", false);
+        check(selExp.source == EffectiveRuntimeSource::LocalExplicit &&
+                  selExp.activeRuntimePath == L"C:\\XR\\vdxr_win64.json" &&
+                  selExp.childEnvAction == ChildXrEnvAction::SetXrRuntimeJson &&
+                  selExp.childEnvRuntimePath == L"C:\\XR\\vdxr_win64.json",
+              "explicit path mode without env selects explicit manifest and sets XR_RUNTIME_JSON for probe child");
+        // Explicit path WITH a disagreeing XR_RUNTIME_JSON: ScopedRuntimeManifest keeps env var.
+        const EffectiveRuntimeSelection selExpEnv = resolveEffectiveOpenXrRuntime(
+            expRes, expCfg, L"C:\\Env\\oculus.json", L"C:\\SteamVR\\steamxr_win64.json", false);
+        check(selExpEnv.source == EffectiveRuntimeSource::EnvVar &&
+                  selExpEnv.activeRuntimePath == L"C:\\Env\\oculus.json" &&
+                  selExpEnv.activeRuntimeFromEnv && selExpEnv.envDisagreesWithLocal &&
+                  selExpEnv.childEnvAction == ChildXrEnvAction::Inherit,
+              "explicit path mode with disagreeing XR_RUNTIME_JSON follows env override matching ScopedRuntimeManifest");
+
+        // Absent edup_openxr.ini uses EDVR's packaged default (system mode, native_module.cpp:381-389):
+        // prefers Windows registry ActiveRuntime and clears any disagreeing XR_RUNTIME_JSON.
+        edvr::openxr::LocalConfig emptyCfg;
+        const EffectiveRuntimeSelection selAbsent = resolveEffectiveOpenXrRuntime(
+            edvr::openxr::LocalConfigResult::Absent, emptyCfg, L"C:\\Other\\vdxr.json",
+            L"C:\\SteamVR\\steamxr_win64.json", false);
+        check(selAbsent.source == EffectiveRuntimeSource::Registry &&
+                  selAbsent.activeRuntimePath == L"C:\\SteamVR\\steamxr_win64.json" &&
+                  selAbsent.envDisagreesWithLocal &&
+                  selAbsent.childEnvAction == ChildXrEnvAction::ClearXrRuntimeJson,
+              "absent edup_openxr.ini matches packaged system default (registry wins, clears XR_RUNTIME_JSON)");
+
+        // Stray key rejected by EDVR's native_local_config.h must NOT report Ready, and DOES trigger preflight warning.
+        edvr::openxr::LocalConfig badCfg;
+        const auto badRes = edvr::openxr::readLocalConfig(badPath, badCfg);
+        check(badRes == edvr::openxr::LocalConfigResult::Invalid,
+              "native_local_config.h rejects edup_openxr.ini with stray key");
+        const EffectiveRuntimeSelection selBad = resolveEffectiveOpenXrRuntime(
+            badRes, badCfg, L"", L"C:\\SteamVR\\steamxr_win64.json", false);
+        check(selBad.localConfigInvalid && selBad.source == EffectiveRuntimeSource::LocalConfigInvalid,
+              "invalid edup_openxr.ini flags localConfigInvalid instead of falling back to registry");
+        VrProbeInputs badIn;
+        badIn.localConfigInvalid = true;
+        badIn.runtimeSource = EffectiveRuntimeSource::LocalConfigInvalid;
+        const VrHeadsetReport badRep = resolveVrHeadsetStatus(badIn);
+        check(badRep.status == VrStatusKind::Error && badRep.localConfigInvalid &&
+                  evaluateVrLaunchPreflight(badRep) == VrPreflightWarning::InvalidLocalConfig &&
+                  formatVrEnvironmentSnapshot(badRep).find("preflight_warning: invalid_local_config") !=
+                      std::string::npos,
+              "invalid edup_openxr.ini resolves to Error in card and triggers InvalidLocalConfig preflight warning");
+    }
+
+    // 8. Probe scheduling policy: never live while playing/gameRunning/elevated/after timeout;
+    //    explicit triggers still run static-only while Elite runs so install switching never sticks on Checking.
+    {
+        const VrProbeDecision playOpen =
+            decideVrProbe(VrProbeTrigger::PlayTabOpened, true, false, true, false, false, false);
+        const VrProbeDecision playSwitch =
+            decideVrProbe(VrProbeTrigger::InstallSelected, true, false, true, false, false, false);
+        const VrProbeDecision playRefresh =
+            decideVrProbe(VrProbeTrigger::ManualRefresh, true, false, true, false, false, false);
+        check(playOpen.shouldRun && !playOpen.allowLiveProbe &&
+                  playSwitch.shouldRun && !playSwitch.allowLiveProbe &&
+                  playRefresh.shouldRun && !playRefresh.allowLiveProbe,
+              "explicit triggers run static-only while Elite is playing so switching installs never sticks on Checking");
+        check(!decideVrProbe(VrProbeTrigger::PeriodicTimer, true, false, true, false, false, false).shouldRun &&
+                  !decideVrProbe(VrProbeTrigger::PeriodicTimer, true, false, false, true, false, false).shouldRun,
+              "periodic 5 s timer does not run while Elite is playing or running");
+        const VrProbeDecision runningSwitch =
+            decideVrProbe(VrProbeTrigger::InstallSelected, true, false, false, true, false, false);
+        check(runningSwitch.shouldRun && !runningSwitch.allowLiveProbe,
+              "InstallSelected while gameRunning is true runs static-only without live OpenXR probe");
+        const VrProbeDecision timerDec =
+            decideVrProbe(VrProbeTrigger::PeriodicTimer, true, false, false, false, false, false);
+        check(timerDec.shouldRun && !timerDec.allowLiveProbe,
+              "periodic 5 s timer runs static-only and never invokes live OpenXR probe");
+        check(!decideVrProbe(VrProbeTrigger::PeriodicTimer, true, true, false, false, false, false).shouldRun &&
+                  !decideVrProbe(VrProbeTrigger::PeriodicTimer, false, false, false, false, false, false).shouldRun,
+              "periodic timer skips when minimized or off Play tab");
+        const VrProbeDecision openDec =
+            decideVrProbe(VrProbeTrigger::PlayTabOpened, true, false, false, false, false, false);
+        check(openDec.shouldRun && openDec.allowLiveProbe,
+              "PlayTabOpened runs live probe when unelevated, idle, and not timed out");
+        const VrProbeDecision elevDec =
+            decideVrProbe(VrProbeTrigger::ManualRefresh, true, false, false, false, true, false);
+        check(elevDec.shouldRun && !elevDec.allowLiveProbe,
+              "elevated launcher never runs live OpenXR probe even on Refresh");
+        const VrProbeDecision afterTimeoutDec =
+            decideVrProbe(VrProbeTrigger::ManualRefresh, true, false, false, false, false, true);
+        check(afterTimeoutDec.shouldRun && !afterTimeoutDec.allowLiveProbe,
+              "after one live probe timeout, further live probes are disabled for the session");
+    }
+
+    // 8b. Carrying live probe fields forward across static refreshes (5 s timer must not wipe Ready or timeout).
+    {
+        VrProbeInputs liveIn;
+        liveIn.runtimeSource = EffectiveRuntimeSource::Registry;
+        liveIn.activeRuntimePath = L"C:\\VirtualDesktop\\vdxr_win64.json";
+        liveIn.activeManifest = {true, liveIn.activeRuntimePath, L"Virtual Desktop XR", L"C:\\VirtualDesktop\\vdxr.dll",
+                                 true, true};
+        liveIn.runningProcesses = {"virtualdesktop.streamer.exe"};
+        liveIn.liveProbe = {true, true, false, true, true, 0, L"Virtual Desktop XR", L"1.0.29", L"Oculus Quest 3"};
+        const VrHeadsetReport liveReady = resolveVrHeadsetStatus(liveIn);
+
+        // Static refresh while service is still running preserves Ready, headset name, and runtime version.
+        VrProbeInputs staticStillUp = liveIn;
+        staticStillUp.liveProbe = {};
+        const VrHeadsetReport mergedUp =
+            mergeStaticRefreshWithLive(resolveVrHeadsetStatus(staticStillUp), liveReady);
+        check(mergedUp.status == VrStatusKind::Ready && mergedUp.hasLiveResult &&
+                  mergedUp.headsetName == L"Meta Quest 3" && !mergedUp.headsetFromUsb &&
+                  mergedUp.runtimeDisplayName == L"Virtual Desktop (VDXR)" && mergedUp.runtimeVersion == L"1.0.29",
+              "static refresh while service stays up preserves Ready, headset name, and runtime version");
+
+        // Static refresh after user closes VR runtime drops cleanly to RuntimeInactive.
+        VrProbeInputs staticClosed = staticStillUp;
+        staticClosed.runningProcesses.clear();
+        const VrHeadsetReport mergedDown =
+            mergeStaticRefreshWithLive(resolveVrHeadsetStatus(staticClosed), liveReady);
+        check(mergedDown.status == VrStatusKind::RuntimeInactive && !mergedDown.hasLiveResult &&
+                  mergedDown.headsetName.empty(),
+              "static refresh after VR service stops drops Ready to RuntimeInactive");
+
+        // Static refresh after active OpenXR runtime switches resets old live fields.
+        VrProbeInputs staticSwitched = staticStillUp;
+        staticSwitched.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        staticSwitched.activeManifest = {true, staticSwitched.activeRuntimePath, L"SteamVR/OpenXR",
+                                         L"C:\\SteamVR\\steamxr.dll", true, true};
+        staticSwitched.runningProcesses = {"vrserver.exe"};
+        const VrHeadsetReport mergedSwitch =
+            mergeStaticRefreshWithLive(resolveVrHeadsetStatus(staticSwitched), liveReady);
+        check(mergedSwitch.status == VrStatusKind::Standby && !mergedSwitch.hasLiveResult &&
+                  mergedSwitch.runtimeDisplayName == L"SteamVR",
+              "static refresh discards old live fields when active runtime path changes");
+
+        // A latched live probe timeout survives static refreshes while the service stays up.
+        VrProbeInputs timeoutIn = liveIn;
+        timeoutIn.liveProbe = {true, true, true, false, false, -997, L"", L"", L""};
+        const VrHeadsetReport liveTimedOut = resolveVrHeadsetStatus(timeoutIn);
+        const VrHeadsetReport mergedTimeout =
+            mergeStaticRefreshWithLive(resolveVrHeadsetStatus(staticStillUp), liveTimedOut);
+        check(mergedTimeout.status == VrStatusKind::Error && mergedTimeout.liveProbeTimedOut &&
+                  mergedTimeout.hasLiveResult && mergedTimeout.openXrResult == -997,
+              "static refresh preserves latched live probe timeout instead of reverting to Standby");
+
+        // ...and is dropped once the runtime's service stops.
+        const VrHeadsetReport timeoutClosed =
+            mergeStaticRefreshWithLive(resolveVrHeadsetStatus(staticClosed), liveTimedOut);
+        check(timeoutClosed.status == VrStatusKind::RuntimeInactive && !timeoutClosed.liveProbeTimedOut &&
+                  !timeoutClosed.hasLiveResult,
+              "static refresh drops a live probe timeout once the VR service stops");
+    }
+
+    // 9. Signed-manifest loader verification + real runOpenXrProbeHelper + out-of-process probe runner.
+    {
+        // 9a. Timeout kill, stdout parsing, and child XR_RUNTIME_JSON env override/clear.
+        const ULONGLONG t0 = GetTickCount64();
+        const OpenXrLiveProbe slowRes = runOpenXrProbeSubprocess(
+            g_self, L"\"" + g_self + L"\" --test-slow-probe", ChildXrEnvAction::Inherit, L"", 150);
+        const ULONGLONG elapsed = GetTickCount64() - t0;
+        check(slowRes.attempted && slowRes.timedOut && slowRes.resultCode == -997 && elapsed < 3000,
+              "out-of-process live probe kills stalled child on timeout and sets timedOut=true");
+
+        SetEnvironmentVariableW(L"XR_RUNTIME_JSON", L"C:\\Parent\\stale.json");
+        const OpenXrLiveProbe setEnvRes = runOpenXrProbeSubprocess(
+            g_self, L"\"" + g_self + L"\" --test-ok-probe", ChildXrEnvAction::SetXrRuntimeJson,
+            L"C:\\Explicit\\vdxr.json", 3000);
+        check(setEnvRes.attempted && setEnvRes.loaderFound && setEnvRes.instanceCreated &&
+                  setEnvRes.headsetPresent && setEnvRes.runtimeName == L"SteamVR/OpenXR" &&
+                  setEnvRes.runtimeVersion == L"2.8.4" &&
+                  setEnvRes.systemName == L"C:\\Explicit\\vdxr.json",
+              "out-of-process probe parses stdout and passes SetXrRuntimeJson override to child");
+
+        const OpenXrLiveProbe clearEnvRes = runOpenXrProbeSubprocess(
+            g_self, L"\"" + g_self + L"\" --test-ok-probe", ChildXrEnvAction::ClearXrRuntimeJson, L"", 3000);
+        SetEnvironmentVariableW(L"XR_RUNTIME_JSON", nullptr);
+        check(clearEnvRes.attempted && clearEnvRes.instanceCreated && clearEnvRes.systemName == L"(unset)",
+              "out-of-process probe clears inherited XR_RUNTIME_JSON in system mode");
+
+        // 9b. Real runOpenXrProbeHelper + resolveSignedOpenXrLoader against signed relOpenXr + fake openxr_loader.dll.
+        const std::wstring oxrBase = fresh("vr-signed-probe-helper");
+        const LauncherRoots oxrRoots = launcherRoots(oxrBase);
+        const std::wstring oxrGame = P(oxrBase, L"Game");
+        createDirectories(oxrRoots.launcherDir());
+        createDirectories(oxrRoots.cacheDir());
+        createDirectories(P(oxrRoots.launcherDir(), L"manifests"));
+        createDirectories(P(oxrGame, L"Openvr\\win64"));
+
+        // Empty root (no adopted manifest): helper refuses to load anything.
+        {
+            const std::wstring cmd = L"\"" + g_self + L"\" --test-probe-helper \"" + oxrBase + L"\" \"" +
+                                     oxrGame + L"\" " + widenUtf8(g_testKey);
+            const OpenXrLiveProbe noMan =
+                runOpenXrProbeSubprocess(g_self, cmd, ChildXrEnvAction::Inherit, L"", 3000);
+            check(noMan.attempted && !noMan.loaderFound && !noMan.instanceCreated,
+                  "runOpenXrProbeHelper loads nothing when no signed manifest is adopted");
+        }
+
+        // Adopt signed relOpenXr manifest + copy fake openxr_loader.dll into game dir.
+        const Rel relOxr = loadRel("relOpenXr");
+        const std::string manifestSha = sha256Bytes(relOxr.manifestBytes.data(), relOxr.manifestBytes.size());
+        writeAll(P(P(oxrRoots.launcherDir(), L"manifests"), widenUtf8(manifestSha) + L".json"), relOxr.manifestBytes);
+        writeAll(P(P(oxrRoots.launcherDir(), L"manifests"), widenUtf8(manifestSha) + L".sig"), relOxr.sigText);
+        {
+            LauncherState st;
+            st.load(P(oxrRoots.launcherDir(), L"launcher.ini"), nullptr);
+            st.setCurrentManifest(manifestSha);
+            st.save(nullptr);
+        }
+
+        std::string loaderSha;
+        for (const ManifestFile& f : relOxr.manifest.files) {
+            if (f.id == "openxr_loader") loaderSha = f.sha256;
+        }
+        const std::wstring fakeLoaderSrc = P(g_fakes, L"openxr_loader.dll");
+        const std::wstring gameLoaderDst = P(oxrGame, L"Openvr\\win64\\openxr_loader.dll");
+        check(!loaderSha.empty() && exists(fakeLoaderSrc), "relOpenXr fixture provides signed fake openxr_loader.dll");
+
+        // Tampered DLL in gameDir with empty cache is refused.
+        writeAll(gameLoaderDst, "tampered-not-signed");
+        {
+            std::wstring gotPath;
+            std::string gotSha;
+            check(!resolveSignedOpenXrLoader(oxrRoots, oxrGame, g_testKeys, &gotPath, &gotSha),
+                  "resolveSignedOpenXrLoader refuses tampered openxr_loader.dll in game dir");
+        }
+
+        // Put genuine signed fake loader into gameDir; wrong signing key still refuses it.
+        const std::string fakeLoaderBytes = readAll(fakeLoaderSrc);
+        writeAll(gameLoaderDst, fakeLoaderBytes);
+        {
+            const char* wrongKeys[2] = {g_otherKey.c_str(), nullptr};
+            std::wstring gotPath;
+            std::string gotSha;
+            check(!resolveSignedOpenXrLoader(oxrRoots, oxrGame, wrongKeys, &gotPath, &gotSha),
+                  "resolveSignedOpenXrLoader refuses manifest signed by an untrusted key");
+            check(resolveSignedOpenXrLoader(oxrRoots, oxrGame, g_testKeys, &gotPath, &gotSha) &&
+                      gotPath == gameLoaderDst && gotSha == loaderSha,
+                  "resolveSignedOpenXrLoader accepts verified openxr_loader.dll in game dir");
+        }
+
+        // Drive runOpenXrProbeHelper end-to-end via subprocess with the real signed fake loader!
+        {
+            const std::wstring cmd = L"\"" + g_self + L"\" --test-probe-helper \"" + oxrBase + L"\" \"" +
+                                     oxrGame + L"\" " + widenUtf8(g_testKey);
+            SetEnvironmentVariableW(L"EDUP_FAKE_OPENXR_MODE", L"ready");
+            SetEnvironmentVariableW(L"EDUP_FAKE_OPENXR_RUNTIME", L"Monado(XRT) 25.0.0");
+            SetEnvironmentVariableW(L"EDUP_FAKE_OPENXR_SYSTEM", L"Oculus Quest 3");
+            const OpenXrLiveProbe okRes = runOpenXrProbeSubprocess(
+                g_self, cmd, ChildXrEnvAction::SetXrRuntimeJson, L"C:\\Test\\wivrn.json", 3000);
+            check(okRes.attempted && okRes.loaderFound && okRes.instanceCreated && okRes.headsetPresent &&
+                      okRes.resultCode == 0 && okRes.runtimeName == L"Monado(XRT) 25.0.0" &&
+                      okRes.runtimeVersion == L"2.8.4" && okRes.systemName == L"Oculus Quest 3",
+                  "runOpenXrProbeHelper loads signed openxr_loader.dll and queries runtime/system properties");
+
+            // The same signed loader is refused when the launcher is explicitly elevated.
+            const OpenXrLiveProbe elevatedRes = runOpenXrProbeSubprocess(
+                g_self, cmd + L" elevated", ChildXrEnvAction::Inherit, L"", 3000);
+            check(elevatedRes.attempted && !elevatedRes.loaderFound && !elevatedRes.instanceCreated,
+                  "runOpenXrProbeHelper loads nothing in an explicitly elevated launcher");
+
+            // Standby (-35) and InstanceLost (-13) through real runOpenXrProbeHelper.
+            SetEnvironmentVariableW(L"EDUP_FAKE_OPENXR_MODE", L"standby");
+            const OpenXrLiveProbe standbyRes =
+                runOpenXrProbeSubprocess(g_self, cmd, ChildXrEnvAction::Inherit, L"", 3000);
+            check(standbyRes.loaderFound && standbyRes.instanceCreated && !standbyRes.headsetPresent &&
+                      standbyRes.resultCode == -35,
+                  "runOpenXrProbeHelper reports XR_ERROR_FORM_FACTOR_UNAVAILABLE (-35) as standby");
+
+            SetEnvironmentVariableW(L"EDUP_FAKE_OPENXR_MODE", L"instance_lost");
+            const OpenXrLiveProbe lostRes =
+                runOpenXrProbeSubprocess(g_self, cmd, ChildXrEnvAction::Inherit, L"", 3000);
+            check(lostRes.loaderFound && !lostRes.instanceCreated && !lostRes.headsetPresent &&
+                      lostRes.resultCode == -13,
+                  "runOpenXrProbeHelper reports XR_ERROR_INSTANCE_LOST (-13)");
+
+            // Cache fallback: tamper gameDir copy, populate payload cache -> helper falls back to verified cache copy.
+            writeAll(gameLoaderDst, "tampered-copy");
+            const PayloadCache oxrCache(oxrRoots.cacheDir());
+            writeAll(oxrCache.pathFor(loaderSha), fakeLoaderBytes);
+            SetEnvironmentVariableW(L"EDUP_FAKE_OPENXR_MODE", L"ready");
+            SetEnvironmentVariableW(L"EDUP_FAKE_OPENXR_RUNTIME", L"SteamVR/OpenXR");
+            SetEnvironmentVariableW(L"EDUP_FAKE_OPENXR_SYSTEM", L"");
+            const OpenXrLiveProbe cacheRes = runOpenXrProbeSubprocess(
+                g_self, cmd, ChildXrEnvAction::SetXrRuntimeJson, L"C:\\Explicit\\rt.json", 3000);
+            check(cacheRes.loaderFound && cacheRes.instanceCreated && cacheRes.headsetPresent &&
+                      cacheRes.systemName == L"C:\\Explicit\\rt.json",
+                  "runOpenXrProbeHelper falls back to signed payload cache when gameDir loader is tampered");
+
+            // Wrong signing key through subprocess refuses to load DLL.
+            const std::wstring badCmd = L"\"" + g_self + L"\" --test-probe-helper \"" + oxrBase + L"\" \"" +
+                                        oxrGame + L"\" " + widenUtf8(g_otherKey);
+            const OpenXrLiveProbe badKeyRes =
+                runOpenXrProbeSubprocess(g_self, badCmd, ChildXrEnvAction::Inherit, L"", 3000);
+            check(badKeyRes.attempted && !badKeyRes.loaderFound && !badKeyRes.instanceCreated,
+                  "runOpenXrProbeHelper refuses to load DLL when manifest signature fails verification");
+
+            SetEnvironmentVariableW(L"EDUP_FAKE_OPENXR_MODE", nullptr);
+            SetEnvironmentVariableW(L"EDUP_FAKE_OPENXR_RUNTIME", nullptr);
+            SetEnvironmentVariableW(L"EDUP_FAKE_OPENXR_SYSTEM", nullptr);
+        }
+    }
+
+    // 10. Play VR pre-flight guard (warns ONLY on NoRuntime, MissingRuntimeFile, MissingRuntimeLibrary),
+    //     OpenComposite non-warning info, post-guard ordering, and log bundle in-memory zip entry.
+    {
+        VrProbeInputs readyIn;
+        readyIn.runtimeSource = EffectiveRuntimeSource::Registry;
+        readyIn.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        readyIn.activeManifest = {true, readyIn.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll",
+                                  true, true};
+        readyIn.runningProcesses = {"vrserver.exe", "notepad.exe", "secret_app.exe"};
+        readyIn.liveProbe = {true, true, false, true, true, 0, L"SteamVR/OpenXR", L"2.8.4", L"IndexHMD"};
+        const VrHeadsetReport ready = resolveVrHeadsetStatus(readyIn);
+        check(evaluateVrLaunchPreflight(ready) == VrPreflightWarning::None,
+              "Ready state triggers no Play VR pre-flight warning");
+        const std::string snap = formatVrEnvironmentSnapshot(ready);
+        check(snap.find("status: ready") != std::string::npos &&
+                  snap.find("headset: Valve Index") != std::string::npos &&
+                  snap.find("running_vr_services: vrserver.exe") != std::string::npos &&
+                  snap.find("secret_app.exe") == std::string::npos &&
+                  snap.find("notepad.exe") == std::string::npos,
+              "VR environment snapshot captures VR services only and never leaks arbitrary processes");
+
+        VrProbeInputs offIn;
+        offIn.runtimeSource = EffectiveRuntimeSource::Registry;
+        offIn.activeRuntimePath = L"C:\\SteamVR\\steamxr_win64.json";
+        offIn.activeManifest = {true, offIn.activeRuntimePath, L"SteamVR/OpenXR", L"C:\\SteamVR\\steamxr.dll",
+                                true, true};
+        check(evaluateVrLaunchPreflight(resolveVrHeadsetStatus(offIn)) == VrPreflightWarning::None,
+              "normal RuntimeInactive (SteamVR not started yet) does not block or warn Play VR");
+
+        // Runtime mismatch is shown in the card but does NOT trigger a Play VR pre-flight popup.
+        VrProbeInputs mismatchIn = offIn;
+        mismatchIn.runningProcesses = {"ovrserver_x64.exe"};
+        const VrHeadsetReport mismatch = resolveVrHeadsetStatus(mismatchIn);
+        check(mismatch.runtimeMismatch && evaluateVrLaunchPreflight(mismatch) == VrPreflightWarning::None,
+              "runtime mismatch shows in card without triggering Play VR pre-flight warning");
+
+        // OpenComposite path as OpenXR JSON is NOT treated as an OpenComposite OpenXR runtime.
+        check(classifyVrPlatform(L"C:\\OpenComposite\\opencomposite.json") == VrPlatform::Custom,
+              "OpenComposite/XRizer paths are not misclassified as an OpenXR active runtime");
+
+        // OpenComposite openvr_api.dll in Elite's folder is informational only (no pre-flight warning).
+        VrProbeInputs ocShimIn = readyIn;
+        ocShimIn.openVrShimIsOpenComposite = true;
+        const VrHeadsetReport ocShim = resolveVrHeadsetStatus(ocShimIn);
+        check(ocShim.openCompositeInstalled && evaluateVrLaunchPreflight(ocShim) == VrPreflightWarning::None,
+              "OpenComposite openvr_api.dll is recorded in report without triggering Play VR pre-flight warning");
+
+        // The 3 allowed pre-flight warnings: NoRuntime, MissingRuntimeFile, MissingRuntimeLibrary.
+        VrProbeInputs noneIn;
+        check(evaluateVrLaunchPreflight(resolveVrHeadsetStatus(noneIn)) == VrPreflightWarning::NoRuntime,
+              "missing OpenXR runtime triggers NoRuntime pre-flight warning");
+
+        VrProbeInputs missingFileIn;
+        missingFileIn.activeRuntimePath = L"C:\\Gone\\vdxr.json";
+        missingFileIn.activeManifest.jsonExists = false;
+        check(evaluateVrLaunchPreflight(resolveVrHeadsetStatus(missingFileIn)) == VrPreflightWarning::MissingRuntimeFile,
+              "missing OpenXR runtime JSON triggers MissingRuntimeFile pre-flight warning");
+
+        VrProbeInputs missingLibIn = offIn;
+        missingLibIn.activeManifest.libraryExists = false;
+        const VrHeadsetReport missingLib = resolveVrHeadsetStatus(missingLibIn);
+        check(missingLib.status == VrStatusKind::Error && missingLib.activeLibraryMissingFile &&
+                  evaluateVrLaunchPreflight(missingLib) == VrPreflightWarning::MissingRuntimeLibrary,
+              "missing OpenXR runtime library triggers MissingRuntimeLibrary pre-flight warning");
+
+        // Live probe errors and timeouts resolve to Error in card, but do NOT trigger Play VR pre-flight popup.
+        VrProbeInputs errIn = readyIn;
+        errIn.liveProbe = {true, true, false, true, false, -2, L"SteamVR/OpenXR", L"2.8.4", L""};
+        const VrHeadsetReport errRep = resolveVrHeadsetStatus(errIn);
+        check(errRep.status == VrStatusKind::Error && evaluateVrLaunchPreflight(errRep) == VrPreflightWarning::None,
+              "xrGetSystem XR_ERROR_INITIALIZATION_FAILED resolves to Error in card without Play VR pre-flight popup");
+
+        VrProbeInputs toIn = readyIn;
+        toIn.liveProbe = {true, true, true, false, false, -997, L"", L"", L""};
+        const VrHeadsetReport timedOut = resolveVrHeadsetStatus(toIn);
+        check(timedOut.status == VrStatusKind::Error && timedOut.liveProbeTimedOut &&
+                  evaluateVrLaunchPreflight(timedOut) == VrPreflightWarning::None &&
+                  formatVrEnvironmentSnapshot(timedOut).find("live_probe_timeout: yes") != std::string::npos,
+              "timed-out OpenXR probe resolves to Error with live_probe_timeout in snapshot and no pre-flight popup");
+
+        // Pre-flight callback in LauncherSession::beginPlay:
+        //  (a) runs AFTER elevation guard;
+        //  (b) returning false (user answered No) stops a valid non-elevated launch;
+        //  (c) returning true (user answered Yes) proceeds with the launch.
+        {
+            const std::wstring baseP = fresh("vr-preflight-order");
+            SessionEnv envP;
+            envP.roots = launcherRoots(baseP);
+            envP.post = [](std::function<void()> fn) { fn(); };
+            LauncherSession sess(envP);
+            int confirmCalls = 0;
+            RouteOps noopOps;
+            sess.beginPlay(L"Steam", P(baseP, L"Game"), true, /*elevated=*/true, noopOps, WatchNames(),
+                           WatchTiming(), [&]() {
+                               ++confirmCalls;
+                               return false;
+                           });
+            check(confirmCalls == 0 && !sess.playing() && !sess.playLine().empty(),
+                  "beginPlay elevation guard refuses before invoking VR pre-flight confirmation");
+
+            DirectRig noRig("vr-preflight-no", std::string());
+            WatchNames names;
+            names.game = kFakeGame;
+            names.edlaunch = kFakeEd;
+            WatchTiming timing;
+            timing.pollMs = 40;
+            timing.startupWaitMs = 200;
+            timing.closeWaitMs = 100;
+            int noCalls = 0;
+            noRig.session->beginPlay(L"Steam", noRig.game.product, true, /*elevated=*/false, noRig.rec.ops(),
+                                     names, timing, [&]() {
+                                         ++noCalls;
+                                         return false;
+                                     });
+            check(noCalls == 1 && !noRig.session->playing() && noRig.rec.uris.empty() && noRig.rec.spawns.empty() &&
+                      noRig.started.empty() && noRig.http.requests.empty(),
+                  "answering No in VR pre-flight prompt stops beginPlay before opening Steam or starting Elite");
+
+            int yesCalls = 0;
+            noRig.session->beginPlay(L"Steam", noRig.game.product, true, /*elevated=*/false, noRig.rec.ops(),
+                                     names, timing, [&]() {
+                                         ++yesCalls;
+                                         return true;
+                                     });
+            check(noRig.ui.pump([&]() { return !noRig.session->playing(); }) && yesCalls == 1 &&
+                      noRig.rec.uris.size() == 1,
+                  "answering Yes in VR pre-flight prompt proceeds with launch");
+        }
+
+        // Log bundle zip with in-memory vr-environment.txt entry: verify archive integrity, entry presence, and exact bytes.
+        {
+            const std::wstring zBase = fresh("vr-zip-memory-entry");
+            const std::wstring zGame = P(zBase, L"Game");
+            const std::wstring zOut = P(zBase, L"out");
+            createDirectories(zGame);
+            createDirectories(zOut);
+            writeAll(P(zGame, L"EliteDangerous64.exe"), "x");
+            writeAll(P(zGame, L"edup_logs\\edvr_vr_20261123_120000.log"), "LOG-LINE\n");
+            const DumpSearch noDumps{P(zBase, L"nd1"), P(zBase, L"nd2")};
+            std::vector<MemoryBundleEntry> extras;
+            extras.push_back({L"vr-environment.txt", snap});
+            const LogBundle bundle = collectLogs(zGame, zOut, &noDumps, &extras);
+            check(bundle.ok && exists(bundle.zipPath),
+                  "collectLogs with in-memory vr-environment.txt writes zip: " + bundle.error);
+            ZipReader zr;
+            std::string zerr;
+            std::vector<unsigned char> extracted;
+            check(zr.openFile(bundle.zipPath, &zerr) && zr.has("vr-environment.txt") &&
+                      zr.extract("vr-environment.txt", snap.size(), &extracted, &zerr) &&
+                      std::string(extracted.begin(), extracted.end()) == snap,
+                  "collectLogs zip contains valid CRC-verified vr-environment.txt matching snapshot bytes: " + zerr);
+        }
+
+        // User path redaction for public support ZIP.
+        check(redactUserPath(L"C:\\Users\\Alice\\AppData\\Local\\vdxr.json") ==
+                  L"C:\\Users\\<user>\\AppData\\Local\\vdxr.json",
+              "Windows user profile path segment is redacted");
+        check(redactUserPath(L"/home/bob/.config/openxr/1/active_runtime.json") ==
+                  L"/home/<user>/.config/openxr/1/active_runtime.json",
+              "Linux home path segment is redacted");
+        check(redactUserPath(L"Z:\\home\\bob\\.config\\openxr\\1\\active_runtime.json") ==
+                  L"Z:\\home\\<user>\\.config\\openxr\\1\\active_runtime.json",
+              "Wine Z:\\home\\<user> path segment is redacted");
+        VrProbeInputs piiIn = readyIn;
+        piiIn.activeRuntimePath = L"C:\\Users\\Alice\\AppData\\Local\\OpenXR\\vdxr.json";
+        piiIn.activeManifest.libraryPath = L"C:\\Users\\Alice\\AppData\\Local\\OpenXR\\vdxr.dll";
+        piiIn.availableRuntimePaths = {L"/home/bob/.local/share/openxr/wivrn.json"};
+        const std::string redactedSnap = formatVrEnvironmentSnapshot(resolveVrHeadsetStatus(piiIn));
+        check(redactedSnap.find("Alice") == std::string::npos && redactedSnap.find("bob") == std::string::npos &&
+                  redactedSnap.find("<user>") != std::string::npos,
+              "VR environment snapshot redacts usernames from all runtime paths");
+    }
+}
+
 }  // namespace
 
 void testEdhm2dMigoto() {
@@ -6954,6 +7772,29 @@ int main(int argc, char** argv) {
         const char* keys[2] = {argv[4], nullptr};
         return applyPlanFile(widenUtf8(argv[2]), keys);
     }
+    if (argc == 2 && std::strcmp(argv[1], "--test-slow-probe") == 0) {
+        Sleep(10000);
+        return 0;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--test-ok-probe") == 0) {
+        wchar_t envBuf[1024]{};
+        const DWORD n = GetEnvironmentVariableW(L"XR_RUNTIME_JSON", envBuf, 1024);
+        const std::string xrEnv = (n > 0 && n < 1024) ? narrowUtf8(std::wstring(envBuf, n)) : "(unset)";
+        std::printf("edup_openxr_probe=1\nloader_loaded=1\ninstance_created=1\nheadset_present=1\n"
+                    "result_code=0\nruntime_name=SteamVR/OpenXR\nruntime_version=2.8.4\nsystem_name=%s\n",
+                    xrEnv.c_str());
+        std::fflush(stdout);
+        return 0;
+    }
+    if ((argc == 5 || argc == 6) && std::strcmp(argv[1], "--test-probe-helper") == 0) {
+        // The elevation is passed in, so the result does not depend on how the runner's token looks
+        // (GitHub's Windows runners are UAC-disabled admins: TokenIsElevated=1).
+        const std::wstring root = widenUtf8(argv[2]);
+        const std::wstring game = std::strcmp(argv[3], "-") == 0 ? std::wstring() : widenUtf8(argv[3]);
+        const char* keys[2] = {argv[4], nullptr};
+        const bool elevated = argc == 6 && std::strcmp(argv[5], "elevated") == 0;
+        return runOpenXrProbeHelper(launcherRoots(root), game, elevated, keys);
+    }
     if (argc < 5) {
         std::printf("usage: launcher_test <repo root> <fixtures dir> <scratch dir> <fakes dir>\n");
         return 2;
@@ -7020,6 +7861,7 @@ int main(int argc, char** argv) {
     testLauncherFixes();
     testSettingsXmlLaunchMode();
     testEdhm2dMigoto();
+    testVrHeadsetDetection();
     endFakes();
     SetEnvironmentVariableW(L"EDUP_FAKE_STEAM_LOG", nullptr);
 

@@ -63,6 +63,7 @@ void LauncherSession::start() {
     if (state.load(launcherIniPath(env_.roots), nullptr)) {
         channel_ = state.channel();
         language_ = state.language();
+        theme_ = state.theme();
     }
     if (!env_.channelOverride.empty()) channel_ = env_.channelOverride;
 
@@ -291,6 +292,15 @@ void LauncherSession::setLanguage(const std::string& code) {
     state.save(nullptr);
 }
 
+void LauncherSession::setTheme(const std::string& mode) {
+    theme_ = (mode == "dark" || mode == "light") ? mode : std::string();
+    LauncherState state;
+    if (!state.load(launcherIniPath(env_.roots), nullptr)) return;
+    state.setTheme(theme_);
+    createDirectories(env_.roots.launcherDir());
+    state.save(nullptr);
+}
+
 void LauncherSession::setVrStereoMode(edvr::VrHeadsetMode mode) {
     const edvr::VrHeadsetMode normalized = edvr::vrHeadsetModeFromInt(edvr::vrHeadsetModeToken(mode));
     if (normalized == vrStereoMode_) return;
@@ -411,19 +421,29 @@ bool LauncherSession::standInForEdLaunch(const std::wstring& gameDir, bool on, b
 }
 
 void LauncherSession::beginPlay(const std::wstring& source, const std::wstring& gameDir, bool vr, bool elevated,
-                                const RouteOps& ops, const WatchNames& names, const WatchTiming& timing) {
+                                const RouteOps& ops, const WatchNames& names, const WatchTiming& timing,
+                                const std::function<bool()>& confirmPlay) {
     if (playing_ || applying_) return;
-    if (directLaunch() && goesDirect(source)) {
-        // Refused before anything is contacted, as the routes are.
-        if (elevated) {
-            playLine_ = elevatedRefusal();
+    if (elevated) {
+        playLine_ = elevatedRefusal();
+        changed();
+        return;
+    }
+    const bool direct = directLaunch() && goesDirect(source);
+    const bool epicDirect = directLaunch() && _wcsicmp(source.c_str(), L"Epic") == 0;
+    if (!direct) {
+        const LaunchRoute route = routeFor(source, gameDir, vr, nullptr, epicDirect);
+        if (route.kind == RouteKind::None) {
+            playLine_ = route.why.empty() ? "No launch route for this install." : route.why;
             changed();
             return;
         }
+    }
+    if (confirmPlay && !confirmPlay()) return;
+    if (direct) {
         beginDirectPlay(source, gameDir, vr, ops, names, timing);
         return;
     }
-    const bool epicDirect = directLaunch() && _wcsicmp(source.c_str(), L"Epic") == 0;
     if (epicDirect) {
         std::string error;
         if (!installEdLaunchShim(env_.selfExe, gameDir, &error) || !writeEdLaunchMode(gameDir, vr)) {

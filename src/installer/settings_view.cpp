@@ -1401,6 +1401,21 @@ void settingsListRescale(HWND hwnd, UINT dpi) {
     InvalidateRect(hwnd, nullptr, TRUE);
 }
 
+void settingsListRefreshTheme(HWND hwnd) {
+    List* list = listOf(hwnd);
+    if (!list) return;
+    const wchar_t* cfd = ui::theme().dark ? L"DarkMode_CFD" : nullptr;
+    if (list->choice) {
+        SetWindowTheme(list->choice, cfd, nullptr);
+        InvalidateRect(list->choice, nullptr, TRUE);
+    }
+    if (list->edit) {
+        SetWindowTheme(list->edit, cfd, nullptr);
+        InvalidateRect(list->edit, nullptr, TRUE);
+    }
+    InvalidateRect(hwnd, nullptr, TRUE);
+}
+
 const std::string& settingsListLastError(HWND hwnd) {
     static const std::string none;
     List* list = listOf(hwnd);

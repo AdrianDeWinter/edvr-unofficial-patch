@@ -50,6 +50,10 @@ int directDryRunLines(const AppArgs& args, DirectEnv env, std::vector<std::strin
 // --apply-plan: the elevated copy. No window, no console; returns the exit code.
 int runApplyPlanFile(const AppArgs& args);
 
+// --probe-openxr: short-lived child process that queries OpenXR using a verified loader
+// DLL and writes key=value lines to stdout so the launcher never loads VR runtimes in-process.
+int runOpenXrProbeCommand(const AppArgs& args);
+
 // Before any window: remove the leftovers of a self-update, keep to one window per user, and
 // when running from somewhere other than %LOCALAPPDATA%\EDVR\launcher, copy there, register and
 // start that copy. False means this process is done and `exitCode` is what to return.

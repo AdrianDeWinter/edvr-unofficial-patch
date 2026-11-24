@@ -172,7 +172,8 @@ public:
     // `on` false puts the original back. The mode file is written only when turning it on.
     bool standInForEdLaunch(const std::wstring& gameDir, bool on, bool vr, std::string* error);
     void beginPlay(const std::wstring& source, const std::wstring& gameDir, bool vr, bool elevated,
-                   const RouteOps& ops, const WatchNames& names, const WatchTiming& timing);
+                   const RouteOps& ops, const WatchNames& names, const WatchTiming& timing,
+                   const std::function<bool()>& confirmPlay = {});
     bool playing() const { return playing_; }
     const std::string& playLine() const { return playLine_; }
 
@@ -197,6 +198,9 @@ public:
     // The saved language code, or empty when the file names none (the window then uses Windows).
     const std::string& language() const { return language_; }
     void setLanguage(const std::string& code);
+    // The saved theme ("dark", "light", or empty for system default).
+    const std::string& theme() const { return theme_; }
+    void setTheme(const std::string& mode);
     // Preferred VR headset mode, or VrHeadsetMode::NotSet when unset.
     edvr::VrHeadsetMode vrStereoMode() const { return vrStereoMode_; }
     void setVrStereoMode(edvr::VrHeadsetMode mode);
@@ -273,6 +277,7 @@ private:
     bool gameStarted_ = false;
     edvr::VrHeadsetMode vrStereoMode_ = edvr::VrHeadsetMode::NotSet;
     std::string language_;
+    std::string theme_;
     bool applying_ = false;
     std::string playLine_;
 };

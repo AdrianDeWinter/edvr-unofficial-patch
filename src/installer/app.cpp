@@ -193,6 +193,8 @@ AppArgs parseArgs(int argc, wchar_t** argv) {
             next(&a.dataRoot);
         else if (arg == L"--apply-plan")
             next(&a.planFile);
+        else if (arg == L"--probe-openxr")
+            a.probeOpenXr = true;
         else if (arg == L"--channel") {
             std::wstring value;
             if (next(&value)) {

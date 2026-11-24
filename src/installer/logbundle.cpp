@@ -434,7 +434,8 @@ bool showFolderOnHost(const std::wstring& folder) {
 
 bool writeZip(const std::wstring& zipPath, const std::vector<std::wstring>& files,
               const std::vector<std::wstring>& names, std::string* error,
-              std::vector<std::wstring>* skippedOut) {
+              std::vector<std::wstring>* skippedOut,
+              const std::vector<MemoryBundleEntry>* extraEntries) {
     if (files.size() != names.size()) {
         if (error) *error = "internal: zip file list and name list differ in length";
         return false;
@@ -578,6 +579,47 @@ bool writeZip(const std::wstring& zipPath, const std::vector<std::wstring>& file
         }
         directoryBytes += 46ull + entry.name.size();
         entries.push_back(entry);
+    }
+
+    if (extraEntries) {
+        FILETIME nowFt{};
+        GetSystemTimeAsFileTime(&nowFt);
+        for (const MemoryBundleEntry& extra : *extraEntries) {
+            if (extra.name.empty()) continue;
+            Entry entry;
+            entry.name = toUtf8(extra.name);
+            if (entry.name.size() > 65535 || entries.size() >= 65535 ||
+                static_cast<unsigned long long>(extra.bytes.size()) > kZipLimit ||
+                position + 30ull + entry.name.size() + static_cast<unsigned long long>(extra.bytes.size()) +
+                    directoryBytes + 46ull + entry.name.size() + 22ull > kZipLimit) {
+                return fail("these logs are too large to package (ZIP32 limit)");
+            }
+            entry.size = static_cast<unsigned long>(extra.bytes.size());
+            entry.offset = static_cast<unsigned long>(position);
+            dosStamp(nowFt, &entry.dosTime, &entry.dosDate);
+            bool asciiName = true;
+            for (char c : entry.name) {
+                if (static_cast<unsigned char>(c) > 0x7F) asciiName = false;
+            }
+            entry.flags = asciiName ? 0u : 0x0800u;
+            if (!extra.bytes.empty()) {
+                entry.crc = crc32Of(reinterpret_cast<const unsigned char*>(extra.bytes.data()),
+                                    extra.bytes.size(), 0);
+            }
+            std::vector<unsigned char> header;
+            put32(header, 0x04034b50); put16(header, 20); put16(header, entry.flags);
+            put16(header, 0); put16(header, entry.dosTime); put16(header, entry.dosDate);
+            put32(header, entry.crc); put32(header, entry.size); put32(header, entry.size);
+            put16(header, static_cast<unsigned>(entry.name.size())); put16(header, 0);
+            header.insert(header.end(), entry.name.begin(), entry.name.end());
+            if (!write(header.data(), header.size())) return fail("could not write the zip file");
+            if (!extra.bytes.empty() &&
+                !write(reinterpret_cast<const unsigned char*>(extra.bytes.data()), extra.bytes.size())) {
+                return fail("could not write the zip file");
+            }
+            directoryBytes += 46ull + entry.name.size();
+            entries.push_back(entry);
+        }
     }
 
     if (skippedOut) *skippedOut = skipped;
@@ -753,7 +795,8 @@ bool writeDumpZip(const std::wstring& zipPath, const std::vector<std::wstring>& 
 }
 
 LogBundle collectLogs(const std::wstring& gameDir, const std::wstring& outDir,
-                      const DumpSearch* dumpSearch) try {
+                      const DumpSearch* dumpSearch,
+                      const std::vector<MemoryBundleEntry>* extraEntries) try {
     LogBundle bundle;
     if (gameDir.empty()) {
         bundle.error = "No game folder chosen.";
@@ -1151,12 +1194,17 @@ LogBundle collectLogs(const std::wstring& gameDir, const std::wstring& outDir,
     }
     std::string error;
     std::vector<std::wstring> skipped;
-    if (!writeZip(bundle.zipPath, files, names, &error, &skipped)) {
+    if (!writeZip(bundle.zipPath, files, names, &error, &skipped, extraEntries)) {
         bundle.error = "Could not write " + toUtf8(bundle.zipPath) + ": " + error;
         return bundle;
     }
     for(const auto& name:names)
         if(std::find(skipped.begin(),skipped.end(),name)==skipped.end()) bundle.included.push_back(name);
+    if (extraEntries) {
+        for (const MemoryBundleEntry& extra : *extraEntries) {
+            if (!extra.name.empty()) bundle.included.push_back(extra.name);
+        }
+    }
     for (const std::wstring& name : skipped) {
         bundle.notes.push_back(toUtf8(name) +
                                " could not be read consistently (unreadable or changed during collection) and is not in the zip -- it is probably still "

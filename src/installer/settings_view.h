@@ -58,6 +58,7 @@ void settingsListSetLauncherToggle(HWND list, const LauncherToggleRow& row);
 void settingsListSetLauncherToggles(HWND list, std::vector<LauncherToggleRow> rows);
 void settingsListSetFilter(HWND list, const std::wstring& needle);
 void settingsListRescale(HWND list, UINT dpi);
+void settingsListRefreshTheme(HWND list);
 
 // Set when a write fails, so the screen above can say so.
 const std::string& settingsListLastError(HWND list);
