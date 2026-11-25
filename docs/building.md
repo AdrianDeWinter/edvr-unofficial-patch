@@ -43,8 +43,16 @@ python tools\fetch_fsr4.py
 python tools\fetch_openxr_loader.py
 ```
 
+Each tool except the OpenXR loader's writes to its own folder under
+`%LOCALAPPDATA%\EDUP`, one copy per machine that every checkout uses. The build
+takes the first copy it finds, in this order: the SDK's environment variable,
+the checkout's `third_party\`, `%LOCALAPPDATA%\EDUP`, `%LOCALAPPDATA%\EDVR`. The
+last one is where the tools wrote before the rename to ED-UP. The build still
+reads it, and nothing writes, moves or deletes it. `python tools\sdk_paths.py`
+lists the copies on a machine.
+
 `fetch_fsr4.py` stages AMD's FidelityFX (FSR 4.1) headers and its two signed
-D3D12 DLLs (about 29 MB) into `%LOCALAPPDATA%\EDVR\fsr4-sdk`; `third_party\fsr4`
+D3D12 DLLs (about 29 MB) into `%LOCALAPPDATA%\EDUP\fsr4-sdk`; `third_party\fsr4`
 or `EDUP_FSR4_SDK` name another copy, and `EDUP_FSR4_SDK=none` forces the build
 without it. A build with no copy still succeeds, and `fix.temporal_aa = fsr4`
 then refuses at run time. The DLLs land in `build\` and
@@ -359,7 +367,7 @@ python tools\fetch_ngx.py
 ```
 
 fetches one pinned commit of NVIDIA's public SDK repository into
-`%LOCALAPPDATA%\ED-UP\ngx-sdk` and checks the runtime's hash against the pin in
+`%LOCALAPPDATA%\EDUP\ngx-sdk` and checks the runtime's hash against the pin in
 the script. `EDUP_NGX_SDK` points the build at a copy somewhere else.
 
 Writing the release's settings files (`tools\gen_installer_rc.py

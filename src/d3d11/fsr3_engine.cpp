@@ -26,7 +26,7 @@
 #if EDVR_HAVE_FSR3
 // AMD's FidelityFX Super Resolution 3.1, the community Direct3D 11 port
 // (metarutaiga, hardened by OptiScaler; MIT; design doc section 2), fetched
-// into third_party\ffx-dx11\ (or %LOCALAPPDATA%\EDVR\ffx-dx11\) by
+// into third_party\ffx-dx11\ (or %LOCALAPPDATA%\EDUP\ffx-dx11\) by
 // tools\fetch_ffx_dx11.py and linked only when build.bat's own
 // EDVR_HAVE_FSR3 block found it. Upscaler-only entry points: this header
 // alone (it pulls in ffx_interface.h/ffx_types.h/ffx_error.h itself), not

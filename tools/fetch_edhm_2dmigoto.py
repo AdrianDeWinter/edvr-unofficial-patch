@@ -9,9 +9,11 @@ and DirectXTK licence/notice files from Fenris159/EDHM_2DMigoto at one pinned
 release tag and commit. Every file is checked against its pinned SHA-256 and
 the DLL is checked as an x64 PE image before anything is moved into place.
 
-Default destination is %LOCALAPPDATA%\\EDVR\\edhm-2dmigoto, shared by
+Default destination is %LOCALAPPDATA%\\EDUP\\edhm-2dmigoto, shared by
 checkouts; pass --dest third_party\\edhm_2dmigoto for a self-contained
-checkout. --dry-run is strictly read-only.
+checkout. If neither has a copy, build.bat reads one from the folder from
+before the rename, %LOCALAPPDATA%\\EDVR\\edhm-2dmigoto. --dry-run is strictly
+read-only.
 """
 import argparse
 import hashlib
@@ -22,6 +24,9 @@ import sys
 import tempfile
 import urllib.request
 from pathlib import Path
+
+sys.dont_write_bytecode = True    # a dry run must not write an import cache for the helper
+import sdk_paths  # noqa: E402
 
 REPO = "Fenris159/EDHM_2DMigoto"
 VERSION = "0.1.9"
@@ -95,8 +100,7 @@ def pe_problem(rel, data):
 
 
 def default_dest():
-    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
-    return os.path.join(base, "EDVR", "edhm-2dmigoto")
+    return sdk_paths.default_dest("edhm-2dmigoto")
 
 
 def sha256_bytes(data):
@@ -234,7 +238,7 @@ def fetch(dest, dry_run=False, downloader=download_url):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--dest", default=None, help="destination (default: %%LOCALAPPDATA%%\\EDVR\\edhm-2dmigoto)")
+    ap.add_argument("--dest", default=None, help="destination (default: %%LOCALAPPDATA%%\\EDUP\\edhm-2dmigoto)")
     ap.add_argument("--verify", default=None, metavar="DIR", help="verify an existing staged copy and exit")
     ap.add_argument("--dry-run", action="store_true", help="show the pinned files without network or writes")
     ap.add_argument("--print-source-archive", action="store_true", help="print the pinned GPL source archive filename and exit")
@@ -319,6 +323,7 @@ def self_test():
                          for p in Path(dest).rglob("*") if p.is_file()}
                 expect("failed-replacement", before == after, "failed fetch changed existing destination")
             Path(dest, "bin/d3d11_edhm.dll").write_bytes(fixtures["bin/d3d11_edhm.dll"])
+            sdk_paths.check_fetch_default(default_dest, "edhm-2dmigoto", expect, main)
             dry_parent = os.path.join(base, "dry-parent")
             dry_dest = os.path.join(dry_parent, "dry")
             output = io.StringIO()

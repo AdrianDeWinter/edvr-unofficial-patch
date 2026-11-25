@@ -13,10 +13,11 @@ shipping a different DLL than the one the flights verified. Updating the SDK
 is a deliberate commit that changes COMMIT and DLL_SHA256 together, with the
 flight that verified the new runtime.
 
-Where it goes: %LOCALAPPDATA%\\EDVR\\ngx-sdk by default -- one copy per machine,
+Where it goes: %LOCALAPPDATA%\\EDUP\\ngx-sdk by default -- one copy per machine,
 which every checkout and worktree finds (build.bat looks at EDUP_NGX_SDK,
-then the checkout's own third_party\\ngx, then here) -- or --into somewhere
-else, third_party\\ngx for a checkout that must be self-contained. The SDK's
+then the checkout's own third_party\\ngx, then here, then the folder from before
+the rename, %LOCALAPPDATA%\\EDVR\\ngx-sdk) -- or --into somewhere else,
+third_party\\ngx for a checkout that must be self-contained. The SDK's
 licence keeps it out of this tree: it may ship inside an application (the
 installer carries the runtime) and not on its own, and not under an open
 source licence, which a copy in this repository would be.
@@ -37,6 +38,9 @@ import os
 import subprocess
 import sys
 
+sys.dont_write_bytecode = True    # a dry run must not write an import cache for the helper
+import sdk_paths  # noqa: E402
+
 URL = "https://github.com/NVIDIA/DLSS"
 # The pinned SDK: the commit and the runtime it carries. Both change together.
 COMMIT = "374959484e79a640feaba44c93ac8cfb0a03f5b5"   # "DLSS 310.9.1 SDK", 2026-09-21
@@ -51,10 +55,7 @@ LICENCE = "LICENSE.txt"
 
 
 def default_dest():
-    base = os.environ.get("LOCALAPPDATA")
-    if not base:
-        base = os.path.join(os.path.expanduser("~"), "AppData", "Local")
-    return os.path.join(base, "EDVR", "ngx-sdk")
+    return sdk_paths.default_dest("ngx-sdk")
 
 
 def run(*args, dry_run=False):
@@ -134,7 +135,7 @@ def fetch(dest, dry_run=False):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--into", default=None, help="where to put the SDK (default: %%LOCALAPPDATA%%\\EDVR\\ngx-sdk)")
+    ap.add_argument("--into", default=None, help="where to put the SDK (default: %%LOCALAPPDATA%%\\EDUP\\ngx-sdk)")
     ap.add_argument("--verify", default=None, metavar="DIR", help="check an existing copy and exit")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the git commands a fetch would run and run none of them")
@@ -227,17 +228,7 @@ def self_test():
     socket.getaddrinfo = no_network
     try:
         # Where it goes when --into does not say.
-        name = "default-dest"
-        env = dict(os.environ)
-        try:
-            os.environ["LOCALAPPDATA"] = os.path.join(base, "local")
-            expect(name, default_dest() == os.path.join(base, "local", "EDVR", "ngx-sdk"), default_dest())
-            del os.environ["LOCALAPPDATA"]
-            expect(name, default_dest().endswith(os.path.join("AppData", "Local", "EDVR", "ngx-sdk")),
-                   default_dest())
-        finally:
-            os.environ.clear()
-            os.environ.update(env)
+        sdk_paths.check_fetch_default(default_dest, "ngx-sdk", expect, main)
 
         # The hash reads a file that is longer than one chunk, exactly.
         name = "sha256"
