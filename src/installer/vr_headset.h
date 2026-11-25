@@ -59,7 +59,6 @@ enum class EffectiveRuntimeSource {
     None,
     Registry,
     EnvVar,
-    LinuxXdg,
     LocalExplicit,
     LocalConfigInvalid,
 };
@@ -91,7 +90,6 @@ struct OpenXrManifestInfo {
 
 struct UsbHeadsetMatch {
     std::wstring name;
-    VrPlatform preferredPlatform = VrPlatform::Unknown;
 };
 
 struct OpenXrLiveProbe {
@@ -110,15 +108,17 @@ struct VrProbeInputs {
     bool underWine = false;
     EffectiveRuntimeSource runtimeSource = EffectiveRuntimeSource::None;
     std::wstring activeRuntimePath;
-    std::wstring linuxHostRuntimeHint;        // host Linux active_runtime.json hint behind Proton wineopenxr
+    std::wstring linuxHostRuntimePath;        // host Linux active_runtime.json path (informational / wineopenxr hint)
+    std::wstring linuxHostRuntimeName;        // parsed runtime.name from host Linux active_runtime.json, if any
+    std::wstring linuxHostRuntimeHint;        // host Linux active_runtime.json text hint behind Proton wineopenxr
     bool activeRuntimeFromEnv = false;
     bool localConfigInvalid = false;
+    bool envDisagreesWithLocal = false;
     bool openVrShimIsOpenComposite = false;  // selected install's active openvr_api.dll is OpenComposite
     OpenXrManifestInfo activeManifest;
     std::vector<std::wstring> availableRuntimePaths;
     std::vector<std::string> runningProcesses;   // lowercase exe/comm/ipc names
     std::vector<std::wstring> openVrDrivers;     // external_drivers paths from openvrpaths.vrpath
-    bool steamVrInstalled = false;
     UsbHeadsetMatch usbHeadset;
     OpenXrLiveProbe liveProbe;
 };
@@ -128,10 +128,10 @@ struct VrHeadsetReport {
     EffectiveRuntimeSource runtimeSource = EffectiveRuntimeSource::None;
     VrPlatform activePlatform = VrPlatform::Unknown;
     VrPlatform runningBridge = VrPlatform::Unknown;
-    VrPlatform mismatchPlatform = VrPlatform::Unknown;
     bool runtimeMismatch = false;
     bool openCompositeInstalled = false;
     bool localConfigInvalid = false;
+    bool envDisagreesWithLocal = false;
     bool headsetFromUsb = false;
     bool activeRuntimeMissingFile = false;
     bool activeLibraryMissingFile = false;
@@ -148,6 +148,8 @@ struct VrHeadsetReport {
     std::wstring mismatchRuntimeName;  // other running runtime when runtimeMismatch is true
     std::wstring activeRuntimePath;
     std::wstring activeLibraryPath;
+    std::wstring linuxHostRuntimeName;  // host Linux OpenXR runtime detected via XDG when Wine has no active runtime
+    std::wstring linuxHostRuntimePath;  // redacted when written to vr-environment.txt
     std::vector<std::wstring> availableRuntimes;
     std::vector<std::string> runningVrServices;  // matched VR services only (never arbitrary user processes)
 };
@@ -225,6 +227,9 @@ bool resolveSignedOpenXrLoader(const LauncherRoots& roots, const std::wstring& g
                                const char* const* keys, std::wstring* pathOut, std::string* shaOut);
 // `parseOpenXrProbeOutput` parses the key=value stdout produced by `runOpenXrProbeHelper`.
 OpenXrLiveProbe parseOpenXrProbeOutput(const std::string& stdoutUtf8);
+// Builds a sorted Windows Unicode environment block (double-NUL terminated) for the probe child.
+std::vector<wchar_t> buildChildEnvironment(ChildXrEnvAction action, const std::wstring& runtimePath,
+                                           bool* okOut = nullptr);
 OpenXrLiveProbe runOpenXrProbeSubprocess(const std::wstring& exePath, const std::wstring& commandLine,
                                          ChildXrEnvAction envAction, const std::wstring& envRuntimePath,
                                          unsigned int timeoutMs, HANDLE cancelEvent = nullptr);

@@ -468,6 +468,10 @@ void applyWindowChrome(HWND window) {
     DwmSetWindowAttribute(window, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
     const DWORD round = 2 /* DWMWCP_ROUND */;
     DwmSetWindowAttribute(window, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &round, sizeof(round));
+    // Trigger a non-client frame refresh so Windows 10 repaints the titlebar when toggling dark mode
+    // on an already-visible window (WM_NCACTIVATE / DWM frame cache).
+    SetWindowPos(window, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
 void fillRounded(HDC dc, RECT rect, int radius, COLORREF fill) {
@@ -863,7 +867,10 @@ void drawButton(const DRAWITEMSTRUCT* item, UINT dpi) {
         return;
     }
     const bool boldTab = owned->style == ButtonStyle::TabActive || owned->style == ButtonStyle::SegmentActive;
-    drawText(dc, label, textRect, boldTab ? fonts().bodyBold : fonts().body,
+    HFONT controlFont = reinterpret_cast<HFONT>(SendMessageW(item->hwndItem, WM_GETFONT, 0, 0));
+    HFONT textFont = boldTab ? fonts().bodyBold
+                             : (controlFont == fonts().caption ? fonts().caption : fonts().body);
+    drawText(dc, label, textRect, textFont,
              ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 

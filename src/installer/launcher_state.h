@@ -16,6 +16,7 @@
 //   language           Elite's language, as min-ed-launcher stores it: en, or a
 //                      language folder name (de, es, fr, pt-BR, ru). Missing means
 //                      the Windows language.
+//   theme              dark or light. Missing means follow Windows' light/dark setting.
 //   vr_3d_mode         the VR headset mode written to Elite's Settings.xml for Play VR when the
 //                      store route does not pass /vr: hmd_headphones, hmd_speakers,
 //                      hmd_cinema_headphones, hmd_cinema_speakers, or not_set (default).

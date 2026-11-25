@@ -827,6 +827,7 @@ void beginEdit(List* list, size_t rowIndex, const RECT& box) {
                                      list->hwnd,
                                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEditId)),
                                      nullptr, nullptr);
+        if (ui::theme().dark) SetWindowTheme(list->edit, L"DarkMode_CFD", nullptr);
         SetWindowSubclass(list->edit, editProc, 1, reinterpret_cast<DWORD_PTR>(list));
     }
     SendMessageW(list->edit, WM_SETFONT, reinterpret_cast<WPARAM>(ui::fonts().body), TRUE);

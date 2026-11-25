@@ -809,6 +809,11 @@ def self_test():
         custom_loader = Path(temp) / "custom_loader.dll"
         custom_loader.write_bytes(b"custom-openxr-loader-bytes")
         custom_out = Path(temp) / "custom_fx"
+        assert main(["--out", str(custom_out), "--openxr-loader", str(custom_loader), "--dry-run"]) == 0
+        assert not custom_out.exists()
+        assert main(["--out", str(custom_out), "--openxr-loader", str(Path(temp) / "missing.dll"), "--dry-run"]) == 2
+        assert main(["--out", str(custom_out), "--openxr-loader", str(Path(temp) / "missing.dll")]) == 2
+        assert not custom_out.exists()
         assert main(["--out", str(custom_out), "--openxr-loader", str(custom_loader)]) == 0
         custom_manifest = json.loads((custom_out / "releases" / "relOpenXr" / sm.MANIFEST_NAME).read_text())
         custom_entry = [f for f in custom_manifest["files"] if f["id"] == "openxr_loader"][0]
@@ -870,6 +875,9 @@ def main(argv=None):
         return self_test()
     if not args.out:
         parser.print_help()
+        return 2
+    if args.openxr_loader is not None and not args.openxr_loader.is_file():
+        print("launcher_fixtures: refused: --openxr-loader does not exist or is not a file: %s" % args.openxr_loader)
         return 2
     problem = out_problem(args.out)
     if problem:

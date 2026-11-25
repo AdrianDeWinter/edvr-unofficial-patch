@@ -1,6 +1,7 @@
 #include "vr_headset.h"
 
 #include <windows.h>
+#include <shlobj.h>
 #include <tlhelp32.h>
 
 #include <algorithm>
@@ -8,9 +9,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cwctype>
+#include <utility>
 
 #include "app.h"
+#include "detect.h"
 #include "launcher_state.h"
+#include "logbundle.h"
 #include "probe.h"
 #include "update_cache.h"
 #include "update_json.h"
@@ -38,10 +42,13 @@ bool containsW(const std::wstring& haystack, const wchar_t* needle) {
 }
 
 bool isKnownVrServiceProcess(const std::string& lowerProc) {
+    // VirtualDesktop.Service.exe runs automatically at boot whenever Virtual Desktop is installed,
+    // even when using a wired SteamVR headset; only VirtualDesktop.Streamer.exe signals an active
+    // Virtual Desktop session.
     static const char* const kKnown[] = {
         "vrserver.exe", "vrmonitor.exe", "vrcompositor.exe", "vrserver", "vrmonitor",
         "ovrserver_x64.exe", "oculusclient.exe", "metaquestlink.exe",
-        "virtualdesktop.streamer.exe", "virtualdesktop.service.exe",
+        "virtualdesktop.streamer.exe",
         "alvr_dashboard.exe", "alvr_launcher.exe", "alvr_dashboard", "alvr_launcher",
         "pi_server.exe", "pimaxclient.exe", "pimaxplay.exe", "piservice.exe", "piservice_launcher.exe",
         "mixedrealityportal.exe", "holoshellapp.exe",
@@ -76,11 +83,6 @@ std::string trimA(const std::string& s) {
     return s.substr(a, b - a);
 }
 
-bool pathExistsW(const std::wstring& path) {
-    if (path.empty()) return false;
-    return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
-}
-
 std::wstring dirOfPath(const std::wstring& path) {
     const size_t slash = path.find_last_of(L"\\/");
     return slash == std::wstring::npos ? std::wstring() : path.substr(0, slash);
@@ -94,17 +96,14 @@ std::wstring stemOfPath(const std::wstring& path) {
     return base;
 }
 
-std::wstring joinW(const std::wstring& base, const std::wstring& leaf) {
-    if (base.empty()) return leaf;
-    if (leaf.empty()) return base;
-    if (base.back() == L'\\' || base.back() == L'/') return base + leaf;
-    return base + L'\\' + leaf;
-}
-
 bool isAbsolutePathW(const std::wstring& p) {
     if (p.size() >= 2 && p[1] == L':') return true;
     if (!p.empty() && (p[0] == L'\\' || p[0] == L'/')) return true;
     return false;
+}
+
+bool hasPathSeparatorW(const std::wstring& p) {
+    return p.find_first_of(L"\\/") != std::wstring::npos;
 }
 
 std::wstring normalizeWinePosixPath(const std::wstring& path, bool underWine) {
@@ -116,27 +115,19 @@ std::wstring normalizeWinePosixPath(const std::wstring& path, bool underWine) {
     return path;
 }
 
-bool readFileUtf8(const std::wstring& path, std::string* out) {
+std::string stripUtf8Bom(std::string s) {
+    if (s.size() >= 3 && static_cast<unsigned char>(s[0]) == 0xEF &&
+        static_cast<unsigned char>(s[1]) == 0xBB && static_cast<unsigned char>(s[2]) == 0xBF) {
+        s.erase(0, 3);
+    }
+    return s;
+}
+
+bool readUtf8TextFile(const std::wstring& path, std::string* out) {
     if (!out || path.empty()) return false;
-    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return false;
-    LARGE_INTEGER sz{};
-    if (!GetFileSizeEx(file, &sz) || sz.QuadPart <= 0 || sz.QuadPart > 4LL * 1024 * 1024) {
-        CloseHandle(file);
-        return false;
-    }
-    std::string buf(static_cast<size_t>(sz.QuadPart), '\0');
-    DWORD got = 0;
-    const BOOL ok = ReadFile(file, &buf[0], static_cast<DWORD>(buf.size()), &got, nullptr);
-    CloseHandle(file);
-    if (!ok) return false;
-    buf.resize(got);
-    if (buf.size() >= 3 && static_cast<unsigned char>(buf[0]) == 0xEF &&
-        static_cast<unsigned char>(buf[1]) == 0xBB && static_cast<unsigned char>(buf[2]) == 0xBF) {
-        buf.erase(0, 3);
-    }
-    *out = std::move(buf);
+    std::string buf;
+    if (!readFileBytes(path, &buf, 4ull << 20, nullptr) || buf.empty()) return false;
+    *out = stripUtf8Bom(std::move(buf));
     return true;
 }
 
@@ -157,36 +148,30 @@ bool readSmallProcText(const std::wstring& path, std::string* out) {
     return true;
 }
 
-bool detectUnderWine() {
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    return ntdll && GetProcAddress(ntdll, "wine_get_version") != nullptr;
-}
-
 std::wstring currentModulePath() {
-    wchar_t buf[MAX_PATH * 2]{};
-    const DWORD n = GetModuleFileNameW(nullptr, buf, static_cast<DWORD>(sizeof(buf) / sizeof(buf[0])));
-    return n > 0 ? std::wstring(buf, n) : std::wstring();
+    wchar_t buf[MAX_PATH * 4]{};
+    const DWORD cap = static_cast<DWORD>(sizeof(buf) / sizeof(buf[0]));
+    const DWORD n = GetModuleFileNameW(nullptr, buf, cap);
+    return (n > 0 && n < cap) ? std::wstring(buf, n) : std::wstring();
 }
 
-std::wstring quoteCommandArg(const std::wstring& arg) {
-    std::wstring out = L"\"";
-    size_t backslashes = 0;
-    for (wchar_t c : arg) {
-        if (c == L'\\') {
-            ++backslashes;
-        } else if (c == L'"') {
-            out.append(backslashes * 2 + 1, L'\\');
-            out.push_back(L'"');
-            backslashes = 0;
-        } else {
-            out.append(backslashes, L'\\');
-            out.push_back(c);
-            backslashes = 0;
-        }
+std::wstring resolveOpenvrDirForGame(const std::wstring& gameDir) {
+    if (gameDir.empty()) return {};
+    std::wstring dir = findOpenvrDir(gameDir);
+    if (!dir.empty()) return dir;
+    return joinPath(gameDir, L"Openvr\\win64");
+}
+
+std::wstring localAppDataDir() {
+    PWSTR known = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &known)) && known) {
+        std::wstring out(known);
+        CoTaskMemFree(known);
+        if (!out.empty()) return out;
     }
-    out.append(backslashes * 2, L'\\');
-    out.push_back(L'"');
-    return out;
+    wchar_t buf[2048]{};
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, static_cast<DWORD>(sizeof(buf) / sizeof(buf[0])));
+    return (n > 0 && n < sizeof(buf) / sizeof(buf[0])) ? trimW(std::wstring(buf, n)) : std::wstring();
 }
 
 std::wstring readRegString(HKEY root, const wchar_t* subkey, const wchar_t* valueName) {
@@ -235,7 +220,9 @@ std::vector<std::wstring> readAvailableOpenXrRuntimes() {
             if (st != ERROR_SUCCESS) continue;
             if (type == REG_DWORD && disabled != 0) continue;  // Khronos spec: non-zero disables entry
             std::wstring path(name, nameLen);
-            if (!path.empty() && std::find(out.begin(), out.end(), path) == out.end()) {
+            const bool dup = std::any_of(out.begin(), out.end(),
+                                         [&](const std::wstring& existing) { return samePath(existing, path); });
+            if (!path.empty() && !dup) {
                 out.push_back(std::move(path));
             }
         }
@@ -248,14 +235,18 @@ bool hasProcess(const std::vector<std::string>& lowerProcs, const char* name) {
     return std::find(lowerProcs.begin(), lowerProcs.end(), name) != lowerProcs.end();
 }
 
-std::vector<std::string> snapshotRunningProcesses(bool underWine) {
+std::vector<std::string> snapshotRunningProcesses(bool underWine, bool* snapshotOk) {
+    if (snapshotOk) *snapshotOk = false;
     std::vector<std::string> out;
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap != INVALID_HANDLE_VALUE) {
         PROCESSENTRY32W entry{};
         entry.dwSize = sizeof(entry);
+        // Mirror detect.cpp runStateOfSnapshot: only mark the snapshot trustworthy if enumeration
+        // started cleanly and reached ERROR_NO_MORE_FILES (fail closed on partial/truncated scans).
+        SetLastError(ERROR_SUCCESS);
         if (Process32FirstW(snap, &entry)) {
-            do {
+            for (;;) {
                 std::string narrow;
                 for (const wchar_t* p = entry.szExeFile; *p; ++p) {
                     const wchar_t ch = *p;
@@ -265,7 +256,12 @@ std::vector<std::string> snapshotRunningProcesses(bool underWine) {
                 if (!narrow.empty() && std::find(out.begin(), out.end(), narrow) == out.end()) {
                     out.push_back(std::move(narrow));
                 }
-            } while (Process32NextW(snap, &entry));
+                SetLastError(ERROR_SUCCESS);
+                if (!Process32NextW(snap, &entry)) {
+                    if (GetLastError() == ERROR_NO_MORE_FILES && snapshotOk) *snapshotOk = true;
+                    break;
+                }
+            }
         }
         CloseHandle(snap);
     }
@@ -347,11 +343,11 @@ UsbHeadsetMatch scanUsbVrHeadsets() {
                 wchar_t propBuf[256]{};
                 DWORD propType = 0;
                 if (fnRegProp(devs, &dev, kSpdrpFriendlyName, &propType, reinterpret_cast<PBYTE>(propBuf),
-                              sizeof(propBuf), nullptr) &&
+                              sizeof(propBuf) - sizeof(wchar_t), nullptr) &&
                     propType == REG_SZ) {
                     desc = propBuf;
                 } else if (fnRegProp(devs, &dev, kSpdrpDeviceDesc, &propType, reinterpret_cast<PBYTE>(propBuf),
-                                     sizeof(propBuf), nullptr) &&
+                                     sizeof(propBuf) - sizeof(wchar_t), nullptr) &&
                            propType == REG_SZ) {
                     desc = propBuf;
                 }
@@ -461,8 +457,17 @@ std::wstring formatXrVersion(XrVersion v) {
     return buf;
 }
 
-bool verifySignedLoaderOnDisk(const std::wstring& path, const std::string& expectedSha256) {
-    if (path.empty() || expectedSha256.size() != 64 || !pathExistsW(path)) return false;
+bool verifySignedLoaderOnDisk(const std::wstring& path, const std::string& expectedSha256,
+                              uint64_t expectedSize = 0) {
+    if (path.empty() || expectedSha256.size() != 64) return false;
+    WIN32_FILE_ATTRIBUTE_DATA attrs{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attrs)) return false;
+    if ((attrs.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) return false;
+    if (expectedSize > 0) {
+        const uint64_t diskSize =
+            (static_cast<uint64_t>(attrs.nFileSizeHigh) << 32) | static_cast<uint64_t>(attrs.nFileSizeLow);
+        if (diskSize != expectedSize) return false;
+    }
     const DllInfo info = probeDll(path);
     if (!info.is64 || !info.hasXrGetInstanceProcAddr) return false;
     return toLowerA(info.sha256) == toLowerA(expectedSha256);
@@ -473,45 +478,6 @@ std::string sanitizeSingleLine(std::string s) {
         if (c == '\r' || c == '\n' || c == '\0') c = ' ';
     }
     return trimA(std::move(s));
-}
-
-// Builds a Windows Unicode environment block (NUL-separated entries, double-NUL terminated)
-// derived from the current process environment with XR_RUNTIME_JSON cleared or overridden.
-std::vector<wchar_t> buildChildEnvironment(ChildXrEnvAction action, const std::wstring& runtimePath) {
-    if (action == ChildXrEnvAction::Inherit) return {};
-    LPWCH raw = GetEnvironmentStringsW();
-    if (!raw) return {};
-
-    std::vector<std::wstring> entries;
-    for (const wchar_t* p = raw; *p != L'\0';) {
-        const std::wstring entry(p);
-        p += entry.size() + 1;
-        const size_t eq = entry.find(L'=');
-        // Preserve Windows drive-current-directory entries like "=C:=C:\..." (eq == 0).
-        if (eq != std::wstring::npos && eq > 0) {
-            const std::wstring key = entry.substr(0, eq);
-            if (_wcsicmp(key.c_str(), L"XR_RUNTIME_JSON") == 0) continue;
-        }
-        entries.push_back(entry);
-    }
-    FreeEnvironmentStringsW(raw);
-
-    if (action == ChildXrEnvAction::SetXrRuntimeJson && !runtimePath.empty()) {
-        entries.push_back(L"XR_RUNTIME_JSON=" + runtimePath);
-    }
-
-    std::sort(entries.begin(), entries.end(), [](const std::wstring& a, const std::wstring& b) {
-        return _wcsicmp(a.c_str(), b.c_str()) < 0;
-    });
-
-    std::vector<wchar_t> block;
-    for (const std::wstring& e : entries) {
-        block.insert(block.end(), e.begin(), e.end());
-        block.push_back(L'\0');
-    }
-    if (block.empty()) block.push_back(L'\0');
-    block.push_back(L'\0');
-    return block;
 }
 
 std::wstring cleanHeadsetDisplayName(const std::wstring& raw) {
@@ -570,8 +536,7 @@ VrPlatform detectStreamingBridge(VrPlatform active, const std::vector<std::strin
     if (containsW(sysLow, L"alvr")) return VrPlatform::Alvr;
 
     if (active == VrPlatform::SteamVr) {
-        if (hasProcess(lowerProcs, "virtualdesktop.streamer.exe") ||
-            hasProcess(lowerProcs, "virtualdesktop.service.exe")) {
+        if (hasProcess(lowerProcs, "virtualdesktop.streamer.exe")) {
             return VrPlatform::VirtualDesktopVdxr;
         }
         if (hasProcess(lowerProcs, "alvr_dashboard.exe") || hasProcess(lowerProcs, "alvr_launcher.exe") ||
@@ -604,13 +569,10 @@ edvr::openxr::LocalConfigResult readInstallLocalOpenXrConfig(const std::wstring&
                                                              edvr::openxr::LocalConfig* out) {
     if (out) *out = {};
     if (gameDir.empty()) return edvr::openxr::LocalConfigResult::Absent;
-    const std::wstring openvrDir = joinW(gameDir, L"Openvr\\win64");
-    const std::wstring primary = joinW(openvrDir, L"edup_openxr.ini");
-    const std::wstring legacy = joinW(openvrDir, L"edvr_openxr.ini");
-    const std::wstring chosen =
-        (GetFileAttributesW(primary.c_str()) != INVALID_FILE_ATTRIBUTES)
-            ? primary
-            : ((GetFileAttributesW(legacy.c_str()) != INVALID_FILE_ATTRIBUTES) ? legacy : primary);
+    const std::wstring openvrDir = resolveOpenvrDirForGame(gameDir);
+    const std::wstring primary = joinPath(openvrDir, L"edup_openxr.ini");
+    const std::wstring legacy = joinPath(openvrDir, L"edvr_openxr.ini");
+    const std::wstring chosen = fileExists(primary) ? primary : (fileExists(legacy) ? legacy : primary);
     edvr::openxr::LocalConfig parsed;
     const edvr::openxr::LocalConfigResult res = edvr::openxr::readLocalConfig(chosen, parsed);
     if (out && res == edvr::openxr::LocalConfigResult::Ready) *out = std::move(parsed);
@@ -619,8 +581,9 @@ edvr::openxr::LocalConfigResult readInstallLocalOpenXrConfig(const std::wstring&
 
 bool detectInstallOpenCompositeActive(const std::wstring& gameDir) {
     if (gameDir.empty()) return false;
-    const std::wstring activeDll = joinW(gameDir, L"Openvr\\win64\\openvr_api.dll");
-    if (!pathExistsW(activeDll)) return false;
+    const std::wstring openvrDir = resolveOpenvrDirForGame(gameDir);
+    const std::wstring activeDll = joinPath(openvrDir, L"openvr_api.dll");
+    if (!fileExists(activeDll)) return false;
     const DllInfo info = probeDll(activeDll);
     if (info.kind == DllKind::Absent || info.kind == DllKind::Edvr) return false;
     return _wcsicmp(modNameOf(info).c_str(), L"OpenComposite") == 0;
@@ -692,22 +655,29 @@ bool isPosixSharedLibraryPath(const std::wstring& path) {
     return low.find(L".so.") != std::wstring::npos;
 }
 
+bool isAbsolutePosixPath(const std::wstring& path) {
+    return !path.empty() && path[0] == L'/';
+}
+
 std::vector<std::wstring> linuxOpenXrManifestCandidates(const std::wstring& xdgConfigHome,
                                                         const std::wstring& homeDir,
                                                         const std::wstring& xdgConfigDirs) {
     std::vector<std::wstring> out;
     auto pushUnique = [&](const std::wstring& dir, const wchar_t* suffix) {
         const std::wstring clean = trimW(dir);
-        if (clean.empty()) return;
-        const std::wstring mapped = joinW(normalizeWinePosixPath(clean, true), suffix);
+        // Per the XDG Base Directory Specification, relative paths in XDG_* variables are invalid
+        // and must be ignored rather than resolved against the current working directory.
+        if (!isAbsolutePosixPath(clean)) return;
+        const std::wstring mapped = joinPath(normalizeWinePosixPath(clean, true), suffix);
         if (std::find(out.begin(), out.end(), mapped) == out.end()) out.push_back(mapped);
     };
 
     const std::wstring cfgHome = trimW(xdgConfigHome);
-    if (!cfgHome.empty()) {
+    const std::wstring home = trimW(homeDir);
+    if (isAbsolutePosixPath(cfgHome)) {
         pushUnique(cfgHome, L"openxr\\1\\active_runtime.json");
-    } else if (!trimW(homeDir).empty()) {
-        pushUnique(homeDir, L".config\\openxr\\1\\active_runtime.json");
+    } else if (isAbsolutePosixPath(home)) {
+        pushUnique(home, L".config\\openxr\\1\\active_runtime.json");
     }
 
     bool yieldedAny = false;
@@ -717,7 +687,7 @@ std::vector<std::wstring> linuxOpenXrManifestCandidates(const std::wstring& xdgC
         if (sep == std::wstring::npos) sep = xdgConfigDirs.size();
         const std::wstring part = trimW(xdgConfigDirs.substr(pos, sep - pos));
         pos = sep < xdgConfigDirs.size() ? sep + 1 : xdgConfigDirs.size();
-        if (!part.empty()) {
+        if (isAbsolutePosixPath(part)) {
             yieldedAny = true;
             pushUnique(part, L"openxr\\1\\active_runtime.json");
         }
@@ -731,13 +701,14 @@ std::vector<std::wstring> linuxOpenXrManifestCandidates(const std::wstring& xdgC
 std::vector<std::wstring> linuxCompositorSocketPaths(const std::wstring& xdgRuntimeDir, VrPlatform platform) {
     std::vector<std::wstring> out;
     const std::wstring base = trimW(xdgRuntimeDir);
-    if (base.empty()) return out;
+    // Per the XDG Base Directory Specification, ignore a relative XDG_RUNTIME_DIR.
+    if (!isAbsolutePosixPath(base)) return out;
     const std::wstring mappedBase = normalizeWinePosixPath(base, true);
     if (platform == VrPlatform::Wivrn) {
-        out.push_back(joinW(mappedBase, L"wivrn\\comp_ipc"));
-        out.push_back(joinW(mappedBase, L"wivrn_comp_ipc"));
+        out.push_back(joinPath(mappedBase, L"wivrn\\comp_ipc"));
+        out.push_back(joinPath(mappedBase, L"wivrn_comp_ipc"));
     } else if (platform == VrPlatform::Monado) {
-        out.push_back(joinW(mappedBase, L"monado_comp_ipc"));
+        out.push_back(joinPath(mappedBase, L"monado_comp_ipc"));
     }
     return out;
 }
@@ -753,8 +724,13 @@ EffectiveRuntimeSelection resolveEffectiveOpenXrRuntime(edvr::openxr::LocalConfi
         return sel;
     }
     // Both explicit runtime=system and an absent edup_openxr.ini use EDVR's packaged default
-    // (native_module.cpp:381-389): system mode clears XR_RUNTIME_JSON so Windows' active
-    // registry runtime is used.
+    // (native_module.cpp:381-389, native_local_config.h:100-107): system mode clears Win32
+    // XR_RUNTIME_JSON so Windows' active registry runtime is used. Under Wine/Proton, when
+    // ActiveRuntime points to wineopenxr and XR_RUNTIME_JSON is a Linux POSIX path, the child
+    // inherits the Unix environment so wineopenxr.so still sees it, while runOpenXrProbeHelper
+    // clears the Win32 PEB copy in-process just like ScopedRuntimeManifest::apply(L"system").
+    // If regRuntime is empty in system mode, Elite has no usable Windows OpenXR runtime even if
+    // a Linux POSIX XR_RUNTIME_JSON is set (#261).
     const bool systemMode = localResult == edvr::openxr::LocalConfigResult::Absent ||
                             edvr::openxr::localConfigUsesSystemRuntime(localConfig.runtime);
     if (systemMode) {
@@ -762,16 +738,14 @@ EffectiveRuntimeSelection resolveEffectiveOpenXrRuntime(edvr::openxr::LocalConfi
             sel.source = EffectiveRuntimeSource::Registry;
             sel.activeRuntimePath = regRuntime;
             sel.activeRuntimeFromEnv = false;
-            if (!envRuntime.empty() && !pathsMatchCaseInsensitive(envRuntime, regRuntime)) {
-                sel.envDisagreesWithLocal = true;
-            }
-            if (!envRuntime.empty()) {
+            const bool wineBridgeWithPosixEnv =
+                underWine && isWineOpenXrBridgePath(regRuntime) && !envRuntime.empty() && envRuntime[0] == L'/';
+            if (!envRuntime.empty() && !wineBridgeWithPosixEnv) {
+                if (!pathsMatchCaseInsensitive(envRuntime, regRuntime)) {
+                    sel.envDisagreesWithLocal = true;
+                }
                 sel.childEnvAction = ChildXrEnvAction::ClearXrRuntimeJson;
             }
-        } else if (underWine && !envRuntime.empty()) {
-            sel.source = EffectiveRuntimeSource::EnvVar;
-            sel.activeRuntimePath = envRuntime;
-            sel.activeRuntimeFromEnv = true;
         }
         return sel;
     }
@@ -821,7 +795,8 @@ OpenXrManifestInfo parseOpenXrRuntimeJson(const std::string& jsonUtf8, const std
     info.jsonPath = jsonPath;
     JsonValue root;
     std::string err;
-    if (!parseJson(jsonUtf8, &root, &err) || !root.isObject()) return info;
+    const std::string cleanJson = stripUtf8Bom(jsonUtf8);
+    if (!parseJson(cleanJson, &root, &err) || !root.isObject()) return info;
     const JsonValue* runtime = root.findNoCase("runtime");
     if (!runtime || !runtime->isObject()) return info;
 
@@ -830,9 +805,11 @@ OpenXrManifestInfo parseOpenXrRuntimeJson(const std::string& jsonUtf8, const std
     }
     if (const JsonValue* lib = runtime->findNoCase("library_path"); lib && lib->isString()) {
         std::wstring libPath = trimW(widenUtf8(lib->text));
-        if (!libPath.empty() && !isAbsolutePathW(libPath)) {
+        // Per the Khronos OpenXR loader spec, a bare library filename without any directory
+        // separator is resolved via OS library search paths, not relative to the manifest dir.
+        if (!libPath.empty() && !isAbsolutePathW(libPath) && hasPathSeparatorW(libPath)) {
             const std::wstring baseDir = dirOfPath(jsonPath);
-            if (!baseDir.empty()) libPath = joinW(baseDir, libPath);
+            if (!baseDir.empty()) libPath = joinPath(baseDir, libPath);
         }
         info.libraryPath = std::move(libPath);
     }
@@ -868,86 +845,86 @@ UsbHeadsetMatch identifyUsbVrHeadset(const std::wstring& instanceId, const std::
     if (vid == 0x28DE) {
         if (pid == 0x2300 || pid == 0x2400 || pid == 0x2613 ||
             (pid == 0x2000 && containsW(desc, L"index"))) {
-            return {L"Valve Index", VrPlatform::SteamVr};
+            return {L"Valve Index"};
         }
         return {};
     }
 
     // Meta / Oculus (0x2833).
     if (vid == 0x2833) {
-        if (pid == 0x0031) return {L"Oculus Rift", VrPlatform::MetaLink};
-        if (pid == 0x0051 || pid == 0x0052) return {L"Oculus Rift S", VrPlatform::MetaLink};
-        if (pid == 0x0183) return {L"Meta Quest", VrPlatform::MetaLink};
-        if (pid == 0x0186) return {L"Meta Quest 2", VrPlatform::MetaLink};
-        if (pid == 0x0187 || pid == 0x0188) return {L"Meta Quest Pro", VrPlatform::MetaLink};
+        if (pid == 0x0031) return {L"Oculus Rift"};
+        if (pid == 0x0051 || pid == 0x0052) return {L"Oculus Rift S"};
+        if (pid == 0x0183) return {L"Meta Quest"};
+        if (pid == 0x0186) return {L"Meta Quest 2"};
+        if (pid == 0x0187 || pid == 0x0188) return {L"Meta Quest Pro"};
         if (pid == 0x0182 || pid == 0x018C || pid == 0x0201 || pid == 0x0202) {
-            if (containsW(desc, L"quest 3s")) return {L"Meta Quest 3S", VrPlatform::MetaLink};
-            return {L"Meta Quest 3", VrPlatform::MetaLink};
+            if (containsW(desc, L"quest 3s")) return {L"Meta Quest 3S"};
+            return {L"Meta Quest 3"};
         }
-        if (containsW(desc, L"quest 3s")) return {L"Meta Quest 3S", VrPlatform::MetaLink};
-        if (containsW(desc, L"quest 3")) return {L"Meta Quest 3", VrPlatform::MetaLink};
-        if (containsW(desc, L"quest pro")) return {L"Meta Quest Pro", VrPlatform::MetaLink};
-        if (containsW(desc, L"quest 2")) return {L"Meta Quest 2", VrPlatform::MetaLink};
-        if (containsW(desc, L"rift s")) return {L"Oculus Rift S", VrPlatform::MetaLink};
-        if (containsW(desc, L"rift")) return {L"Oculus Rift", VrPlatform::MetaLink};
+        if (containsW(desc, L"quest 3s")) return {L"Meta Quest 3S"};
+        if (containsW(desc, L"quest 3")) return {L"Meta Quest 3"};
+        if (containsW(desc, L"quest pro")) return {L"Meta Quest Pro"};
+        if (containsW(desc, L"quest 2")) return {L"Meta Quest 2"};
+        if (containsW(desc, L"rift s")) return {L"Oculus Rift S"};
+        if (containsW(desc, L"rift")) return {L"Oculus Rift"};
         if (containsW(desc, L"quest") || containsW(desc, L"oculus")) {
-            return {L"Meta Quest", VrPlatform::MetaLink};
+            return {L"Meta Quest"};
         }
         return {};
     }
 
     // HTC Vive (0x0BB4).
     if (vid == 0x0BB4) {
-        if (pid == 0x2C87) return {L"HTC Vive", VrPlatform::SteamVr};
-        if (pid == 0x0309 || pid == 0x030A) return {L"HTC Vive Pro", VrPlatform::SteamVr};
-        if (pid == 0x032B || pid == 0x0342) return {L"HTC Vive Pro 2", VrPlatform::Vive};
-        if (pid == 0x0313) return {L"HTC Vive Cosmos", VrPlatform::Vive};
-        if (pid == 0x034E || pid == 0x034F) return {L"HTC Vive XR Elite", VrPlatform::Vive};
-        if (pid == 0x0356) return {L"HTC Vive Focus Vision", VrPlatform::Vive};
+        if (pid == 0x2C87) return {L"HTC Vive"};
+        if (pid == 0x0309 || pid == 0x030A) return {L"HTC Vive Pro"};
+        if (pid == 0x032B || pid == 0x0342) return {L"HTC Vive Pro 2"};
+        if (pid == 0x0313) return {L"HTC Vive Cosmos"};
+        if (pid == 0x034E || pid == 0x034F) return {L"HTC Vive XR Elite"};
+        if (pid == 0x0356) return {L"HTC Vive Focus Vision"};
         return {};
     }
 
-    if (vid == 0x35BD) return {L"Bigscreen Beyond", VrPlatform::SteamVr};
+    if (vid == 0x35BD) return {L"Bigscreen Beyond"};
 
     if (vid == 0x34A4) {
-        if (containsW(desc, L"crystal super")) return {L"Pimax Crystal Super", VrPlatform::Pimax};
-        if (containsW(desc, L"crystal light")) return {L"Pimax Crystal Light", VrPlatform::Pimax};
-        if (containsW(desc, L"crystal")) return {L"Pimax Crystal", VrPlatform::Pimax};
-        if (containsW(desc, L"8kx")) return {L"Pimax 8KX", VrPlatform::Pimax};
-        return {L"Pimax Headset", VrPlatform::Pimax};
+        if (containsW(desc, L"crystal super")) return {L"Pimax Crystal Super"};
+        if (containsW(desc, L"crystal light")) return {L"Pimax Crystal Light"};
+        if (containsW(desc, L"crystal")) return {L"Pimax Crystal"};
+        if (containsW(desc, L"8kx")) return {L"Pimax 8KX"};
+        return {L"Pimax Headset"};
     }
 
     if (vid == 0x054C && (pid == 0x0CDE || pid == 0x0E52)) {
-        return {L"PlayStation VR2", VrPlatform::SteamVr};
+        return {L"PlayStation VR2"};
     }
 
     if (vid == 0x03F0) {
-        if (pid == 0x0580) return {L"HP Reverb G2", VrPlatform::WindowsMixedReality};
-        if (pid == 0x0C6A) return {L"HP Reverb", VrPlatform::WindowsMixedReality};
+        if (pid == 0x0580) return {L"HP Reverb G2"};
+        if (pid == 0x0C6A) return {L"HP Reverb"};
         return {};
     }
 
     if (vid == 0x045E && pid == 0x0659) {
-        if (containsW(desc, L"reverb g2")) return {L"HP Reverb G2", VrPlatform::WindowsMixedReality};
-        if (containsW(desc, L"odyssey")) return {L"Samsung Odyssey", VrPlatform::WindowsMixedReality};
-        return {L"Windows Mixed Reality Headset", VrPlatform::WindowsMixedReality};
+        if (containsW(desc, L"reverb g2")) return {L"HP Reverb G2"};
+        if (containsW(desc, L"odyssey")) return {L"Samsung Odyssey"};
+        return {L"Windows Mixed Reality Headset"};
     }
 
     if (vid == 0x2D40) {
-        if (pid == 0x00B9) return {L"PICO 4 Ultra", VrPlatform::SteamVr};
-        if (pid == 0x00B6 || pid == 0x00B7) return {L"PICO 4", VrPlatform::SteamVr};
-        if (pid == 0x00B0) return {L"PICO Neo 3", VrPlatform::SteamVr};
+        if (pid == 0x00B9) return {L"PICO 4 Ultra"};
+        if (pid == 0x00B6 || pid == 0x00B7) return {L"PICO 4"};
+        if (pid == 0x00B0) return {L"PICO Neo 3"};
         return {};
     }
 
     if (vid == 0x30C1) {
-        if (containsW(desc, L"xr-4")) return {L"Varjo XR-4", VrPlatform::Varjo};
-        if (containsW(desc, L"aero")) return {L"Varjo Aero", VrPlatform::Varjo};
-        return {L"Varjo Headset", VrPlatform::Varjo};
+        if (containsW(desc, L"xr-4")) return {L"Varjo XR-4"};
+        if (containsW(desc, L"aero")) return {L"Varjo Aero"};
+        return {L"Varjo Headset"};
     }
 
-    if (vid == 0x3376) return {L"DPVR E4", VrPlatform::SteamVr};
-    if (vid == 0x3582) return {L"Shiftall MeganeX", VrPlatform::SteamVr};
+    if (vid == 0x3376) return {L"DPVR E4"};
+    if (vid == 0x3582) return {L"Shiftall MeganeX"};
     return {};
 }
 
@@ -969,8 +946,7 @@ bool isPlatformServiceRunning(VrPlatform platform, const std::vector<std::string
             return hasProcess(lowerProcesses, "ovrserver_x64.exe") || hasProcess(lowerProcesses, "oculusclient.exe") ||
                    hasProcess(lowerProcesses, "metaquestlink.exe");
         case VrPlatform::VirtualDesktopVdxr:
-            return hasProcess(lowerProcesses, "virtualdesktop.streamer.exe") ||
-                   hasProcess(lowerProcesses, "virtualdesktop.service.exe");
+            return hasProcess(lowerProcesses, "virtualdesktop.streamer.exe");
         case VrPlatform::Alvr:
             return hasProcess(lowerProcesses, "alvr_dashboard.exe") || hasProcess(lowerProcesses, "alvr_launcher.exe") ||
                    hasProcess(lowerProcesses, "alvr_dashboard") || hasProcess(lowerProcesses, "alvr_launcher");
@@ -1039,13 +1015,77 @@ OpenXrLiveProbe parseOpenXrProbeOutput(const std::string& stdoutUtf8) {
     return out;
 }
 
+// Builds a Windows Unicode environment block (NUL-separated entries, double-NUL terminated)
+// derived from the current process environment with XR_RUNTIME_JSON cleared or overridden.
+std::vector<wchar_t> buildChildEnvironment(ChildXrEnvAction action, const std::wstring& runtimePath, bool* okOut) {
+    if (okOut) *okOut = true;
+    if (action == ChildXrEnvAction::Inherit) return {};
+    LPWCH raw = GetEnvironmentStringsW();
+    if (!raw) {
+        if (okOut) *okOut = false;
+        return {};
+    }
+
+    std::vector<std::wstring> entries;
+    for (const wchar_t* p = raw; *p != L'\0';) {
+        const std::wstring entry(p);
+        p += entry.size() + 1;
+        const size_t eq = entry.find(L'=');
+        // Preserve Windows drive-current-directory entries like "=C:=C:\..." (eq == 0).
+        if (eq != std::wstring::npos && eq > 0) {
+            const std::wstring key = entry.substr(0, eq);
+            if (_wcsicmp(key.c_str(), L"XR_RUNTIME_JSON") == 0) continue;
+        }
+        entries.push_back(entry);
+    }
+    FreeEnvironmentStringsW(raw);
+
+    if (action == ChildXrEnvAction::SetXrRuntimeJson && !runtimePath.empty()) {
+        entries.push_back(L"XR_RUNTIME_JSON=" + runtimePath);
+    }
+
+    // Microsoft Learn (CreateProcessW, lpEnvironment): "All strings in the environment block must be
+    // sorted alphabetically by name. The sort is case-insensitive, Unicode order, without regard to
+    // locale." Sorting the full "NAME=VALUE" string misorders "ProgramFiles(x86)=" before "ProgramFiles=".
+    auto envNameSlice = [](const std::wstring& e) -> std::pair<const wchar_t*, int> {
+        if (e.empty()) return {L"", 0};
+        const size_t eq = e.find(L'=', e[0] == L'=' ? 1 : 0);
+        const size_t len = (eq == std::wstring::npos) ? e.size() : eq;
+        return {e.c_str(), static_cast<int>(len)};
+    };
+    std::sort(entries.begin(), entries.end(), [&](const std::wstring& a, const std::wstring& b) {
+        const auto na = envNameSlice(a);
+        const auto nb = envNameSlice(b);
+        return CompareStringOrdinal(na.first, na.second, nb.first, nb.second, TRUE) == CSTR_LESS_THAN;
+    });
+
+    std::vector<wchar_t> block;
+    for (const std::wstring& e : entries) {
+        block.insert(block.end(), e.begin(), e.end());
+        block.push_back(L'\0');
+    }
+    if (block.empty()) block.push_back(L'\0');
+    block.push_back(L'\0');
+    return block;
+}
+
 OpenXrLiveProbe runOpenXrProbeSubprocess(const std::wstring& exePath, const std::wstring& commandLine,
                                          ChildXrEnvAction envAction, const std::wstring& envRuntimePath,
                                          unsigned int timeoutMs, HANDLE cancelEvent) {
     OpenXrLiveProbe result;
+    if (cancelEvent && WaitForSingleObject(cancelEvent, 0) == WAIT_OBJECT_0) {
+        return result;
+    }
     result.attempted = true;
-    result.loaderFound = true;
+    result.loaderFound = false;
     if (exePath.empty() || commandLine.empty()) {
+        result.resultCode = -998;
+        return result;
+    }
+
+    bool envOk = true;
+    std::vector<wchar_t> envBlock = buildChildEnvironment(envAction, envRuntimePath, &envOk);
+    if (!envOk) {
         result.resultCode = -998;
         return result;
     }
@@ -1099,7 +1139,6 @@ OpenXrLiveProbe runOpenXrProbeSubprocess(const std::wstring& exePath, const std:
 
     std::vector<wchar_t> cmdBuf(commandLine.begin(), commandLine.end());
     cmdBuf.push_back(L'\0');
-    std::vector<wchar_t> envBlock = buildChildEnvironment(envAction, envRuntimePath);
     const DWORD flags = CREATE_NO_WINDOW | (envBlock.empty() ? 0u : CREATE_UNICODE_ENVIRONMENT) |
                         (haveAttrList ? EXTENDED_STARTUPINFO_PRESENT : 0u);
 
@@ -1165,6 +1204,7 @@ OpenXrLiveProbe runOpenXrProbeSubprocess(const std::wstring& exePath, const std:
             result.attempted = false;
             return result;
         }
+        result.loaderFound = true;
         result.timedOut = true;
         result.resultCode = -997;
         return result;
@@ -1178,6 +1218,9 @@ OpenXrLiveProbe runOpenXrProbeSubprocess(const std::wstring& exePath, const std:
     CloseHandle(pipeRead);
 
     if (exitCode != 0 && collected.find("edup_openxr_probe=1") == std::string::npos) {
+        // The probe child spawned and terminated abnormally before printing its marker (e.g. a
+        // runtime crash inside openxr_loader/xrCreateInstance): report as a live Error (-999).
+        result.loaderFound = true;
         result.resultCode = -999;
         return result;
     }
@@ -1210,29 +1253,33 @@ bool resolveSignedOpenXrLoader(const LauncherRoots& roots, const std::wstring& g
     }
 
     std::string expectedSha;
+    uint64_t expectedSize = 0;
     for (const ManifestFile& f : manifest.files) {
         if (f.id == "openxr_loader") {
             expectedSha = f.sha256;
+            expectedSize = f.size;
             break;
         }
     }
     if (!isLowerHex(expectedSha, 64)) return false;
 
+    // Prefer the user-private payload cache over the game directory to minimize exposure on
+    // shared/writable game installs, falling back to the game directory if the cache is absent.
+    const PayloadCache cache(roots.cacheDir());
+    const std::wstring cached = cache.pathFor(expectedSha);
+    if (verifySignedLoaderOnDisk(cached, expectedSha, expectedSize)) {
+        if (pathOut) *pathOut = cached;
+        if (shaOut) *shaOut = expectedSha;
+        return true;
+    }
+
     if (!gameDir.empty()) {
-        const std::wstring gameLoader = joinPath(gameDir, L"Openvr\\win64\\openxr_loader.dll");
-        if (verifySignedLoaderOnDisk(gameLoader, expectedSha)) {
+        const std::wstring gameLoader = joinPath(resolveOpenvrDirForGame(gameDir), L"openxr_loader.dll");
+        if (verifySignedLoaderOnDisk(gameLoader, expectedSha, expectedSize)) {
             if (pathOut) *pathOut = gameLoader;
             if (shaOut) *shaOut = expectedSha;
             return true;
         }
-    }
-
-    const PayloadCache cache(roots.cacheDir());
-    const std::wstring cached = cache.pathFor(expectedSha);
-    if (verifySignedLoaderOnDisk(cached, expectedSha)) {
-        if (pathOut) *pathOut = cached;
-        if (shaOut) *shaOut = expectedSha;
-        return true;
     }
     return false;
 }
@@ -1257,6 +1304,21 @@ int runOpenXrProbeHelper(const LauncherRoots& roots, const std::wstring& gameDir
     std::wstring loaderPath;
     std::string loaderSha;
     if (!elevated && resolveSignedOpenXrLoader(roots, gameDir, keys, &loaderPath, &loaderSha)) {
+        // Under Wine/Proton, a Linux POSIX XR_RUNTIME_JSON (starting with '/') inherited for
+        // wineopenxr.so would otherwise be read from the Win32 PEB by Windows openxr_loader.dll
+        // before HKLM\...\ActiveRuntime and fail to open as a Windows path. Clearing it in-process
+        // (matching ScopedRuntimeManifest::apply(L"system") in src/openxr/native_local_config.h)
+        // clears only the Win32 PEB while leaving Unix environ intact for wineopenxr.so.
+        if (runningUnderWine()) {
+            const DWORD need = GetEnvironmentVariableW(L"XR_RUNTIME_JSON", nullptr, 0);
+            if (need > 1) {
+                std::wstring xrVal(need, L'\0');
+                const DWORD got = GetEnvironmentVariableW(L"XR_RUNTIME_JSON", &xrVal[0], need);
+                if (got > 0 && got < need && xrVal[0] == L'/') {
+                    SetEnvironmentVariableW(L"XR_RUNTIME_JSON", nullptr);
+                }
+            }
+        }
         // Payload cache files are named by their 64-hex SHA-256 with no extension.
         // Win32 LoadLibraryExW appends ".dll" when the leaf filename has no '.', unless
         // a trailing '.' is present (which Win32 strips when opening the file).
@@ -1342,6 +1404,7 @@ VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in) {
     report.underWine = in.underWine;
     report.runtimeSource = in.runtimeSource;
     report.activeRuntimeFromEnv = in.activeRuntimeFromEnv;
+    report.envDisagreesWithLocal = in.envDisagreesWithLocal;
     report.localConfigInvalid = in.localConfigInvalid;
     report.activeRuntimePath = in.activeRuntimePath;
     report.activeLibraryPath = in.activeManifest.libraryPath;
@@ -1369,20 +1432,37 @@ VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in) {
     if (!hasActivePath) {
         report.status = VrStatusKind::NotConfigured;
         report.activePlatform = VrPlatform::Unknown;
+        if (!in.linuxHostRuntimeHint.empty() || !in.linuxHostRuntimePath.empty() ||
+            !in.linuxHostRuntimeName.empty()) {
+            // Host Linux XDG runtime is informational only when Windows has no registered runtime
+            // (Elite's Windows openxr_loader.dll requires Proton's wineopenxr registry entry to
+            // reach it), so status stays NotConfigured and preflight stays NoRuntime.
+            report.linuxHostRuntimePath = in.linuxHostRuntimePath;
+            const std::wstring hint = !in.linuxHostRuntimeHint.empty()
+                                          ? in.linuxHostRuntimeHint
+                                          : (!in.linuxHostRuntimeName.empty() ? in.linuxHostRuntimeName
+                                                                              : in.linuxHostRuntimePath);
+            const VrPlatform hostPlat = classifyVrPlatform(hint);
+            const std::wstring fallbackHost =
+                !in.linuxHostRuntimeName.empty() ? in.linuxHostRuntimeName : L"OpenXR";
+            report.linuxHostRuntimeName = vrPlatformDisplayName(hostPlat, fallbackHost);
+        }
         if (!in.usbHeadset.name.empty()) {
             report.headsetName = in.usbHeadset.name;
             report.headsetFromUsb = true;
         }
         const VrPlatform running = findMismatchedRunningRuntime(VrPlatform::Unknown, in.runningProcesses);
         if (running != VrPlatform::Unknown) {
-            report.mismatchPlatform = running;
             report.mismatchRuntimeName = vrPlatformDisplayName(running);
         }
         return report;
     }
 
     const std::wstring fallbackCustomName =
-        !in.activeManifest.runtimeName.empty() ? in.activeManifest.runtimeName : stemOfPath(in.activeRuntimePath);
+        !in.activeManifest.runtimeName.empty()
+            ? in.activeManifest.runtimeName
+            : ((in.liveProbe.instanceCreated && !in.liveProbe.runtimeName.empty()) ? in.liveProbe.runtimeName
+                                                                                   : stemOfPath(in.activeRuntimePath));
     report.activePlatform = classifyVrPlatform(
         in.activeRuntimePath + L" " + in.activeManifest.runtimeName, in.activeManifest.libraryPath);
     if (in.underWine &&
@@ -1416,7 +1496,15 @@ VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in) {
         }
         return report;
     }
-    if (in.activeManifest.valid && !in.activeManifest.libraryPath.empty() && !in.activeManifest.libraryExists) {
+    if (!in.activeManifest.valid) {
+        report.status = VrStatusKind::Error;
+        if (!in.usbHeadset.name.empty()) {
+            report.headsetName = in.usbHeadset.name;
+            report.headsetFromUsb = true;
+        }
+        return report;
+    }
+    if (!in.activeManifest.libraryPath.empty() && !in.activeManifest.libraryExists) {
         report.status = VrStatusKind::Error;
         report.activeLibraryMissingFile = true;
         if (!in.usbHeadset.name.empty()) {
@@ -1437,7 +1525,6 @@ VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in) {
     const VrPlatform otherRunning = findMismatchedRunningRuntime(report.activePlatform, in.runningProcesses);
     if (otherRunning != VrPlatform::Unknown && !activeServiceUp) {
         report.runtimeMismatch = true;
-        report.mismatchPlatform = otherRunning;
         report.mismatchRuntimeName = vrPlatformDisplayName(otherRunning);
     }
 
@@ -1466,6 +1553,11 @@ VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in) {
         if (in.liveProbe.instanceCreated && !in.liveProbe.headsetPresent) {
             if (in.liveProbe.resultCode == kXrErrorFormFactorUnavailable || in.liveProbe.resultCode == 0) {
                 report.status = VrStatusKind::Standby;
+            } else if (in.liveProbe.resultCode == kXrErrorRuntimeUnavailable ||
+                       (in.underWine && in.liveProbe.resultCode == kXrErrorInstanceLost)) {
+                // Under Wine/Proton, WiVRn and Monado IPC return XR_ERROR_INSTANCE_LOST (-13) while
+                // waiting for a headset; on native Windows, -13 indicates a runtime fault (Error).
+                report.status = activeServiceUp ? VrStatusKind::Standby : VrStatusKind::RuntimeInactive;
             } else {
                 report.status = VrStatusKind::Error;
             }
@@ -1477,7 +1569,7 @@ VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in) {
         }
         if (in.liveProbe.resultCode == kXrErrorRuntimeUnavailable ||
             in.liveProbe.resultCode == kXrErrorFormFactorUnavailable ||
-            in.liveProbe.resultCode == kXrErrorInstanceLost) {
+            (in.underWine && in.liveProbe.resultCode == kXrErrorInstanceLost)) {
             report.status = activeServiceUp ? VrStatusKind::Standby : VrStatusKind::RuntimeInactive;
         } else {
             report.status = VrStatusKind::Error;
@@ -1499,8 +1591,9 @@ VrHeadsetReport resolveVrHeadsetStatus(const VrProbeInputs& in) {
 
 VrHeadsetReport mergeStaticRefreshWithLive(const VrHeadsetReport& freshStatic, const VrHeadsetReport& previous) {
     if (freshStatic.hasLiveResult || !previous.hasLiveResult) return freshStatic;
-    if (freshStatic.status == VrStatusKind::NotConfigured || freshStatic.localConfigInvalid ||
-        freshStatic.activeRuntimeMissingFile || freshStatic.activeLibraryMissingFile) {
+    if (freshStatic.status == VrStatusKind::NotConfigured || freshStatic.status == VrStatusKind::Error ||
+        freshStatic.localConfigInvalid || freshStatic.activeRuntimeMissingFile ||
+        freshStatic.activeLibraryMissingFile) {
         return freshStatic;
     }
     if (!pathsMatchCaseInsensitive(freshStatic.activeRuntimePath, previous.activeRuntimePath)) {
@@ -1509,7 +1602,7 @@ VrHeadsetReport mergeStaticRefreshWithLive(const VrHeadsetReport& freshStatic, c
 
     const bool stillActive =
         freshStatic.status == VrStatusKind::Standby ||
-        (freshStatic.underWine && freshStatic.activeRuntimeFromEnv && freshStatic.activePlatform == VrPlatform::Custom);
+        (freshStatic.underWine && freshStatic.activeRuntimeFromEnv && freshStatic.activePlatform != VrPlatform::SteamVr);
     // Once the runtime's service stops, neither a live Ready nor a live timeout describes it any more.
     if (!stillActive) return freshStatic;
 
@@ -1526,6 +1619,10 @@ VrHeadsetReport mergeStaticRefreshWithLive(const VrHeadsetReport& freshStatic, c
         return out;
     }
 
+    // Do not let an earlier inactive live probe overwrite a fresh Standby once the runtime starts.
+    if (previous.status == VrStatusKind::RuntimeInactive && freshStatic.status == VrStatusKind::Standby) {
+        return freshStatic;
+    }
     VrHeadsetReport out = freshStatic;
     out.hasLiveResult = true;
     out.status = previous.status;
@@ -1558,31 +1655,105 @@ VrPreflightWarning evaluateVrLaunchPreflight(const VrHeadsetReport& report) {
 std::wstring redactUserPath(const std::wstring& path) {
     if (path.empty()) return {};
     std::wstring out = path;
+    auto isSep = [](wchar_t c) { return c == L'\\' || c == L'/'; };
 
-    auto replaceSegmentAfter = [](std::wstring& s, const wchar_t* marker) {
-        const std::wstring mLower = toLowerW(marker);
-        size_t start = 0;
-        while (start < s.size()) {
-            const std::wstring sLower = toLowerW(s);
-            const size_t at = sLower.find(mLower, start);
-            if (at == std::wstring::npos) break;
-            const size_t segStart = at + mLower.size();
-            if (segStart >= s.size()) break;
-            size_t segEnd = s.find_first_of(L"\\/", segStart);
-            if (segEnd == std::wstring::npos) segEnd = s.size();
-            if (segEnd > segStart) {
-                s.replace(segStart, segEnd - segStart, L"<user>");
-                start = segStart + 6;
-            } else {
-                start = segStart + 1;
-            }
-        }
+    auto readComp = [&](size_t& p, std::wstring* compOut) -> bool {
+        const size_t sepStart = p;
+        while (p < out.size() && isSep(out[p])) ++p;
+        if (p == sepStart || p >= out.size()) return false;
+        const size_t start = p;
+        while (p < out.size() && !isSep(out[p])) ++p;
+        *compOut = toLowerW(out.substr(start, p - start));
+        return true;
     };
 
-    replaceSegmentAfter(out, L"\\users\\");
-    replaceSegmentAfter(out, L"/users/");
-    replaceSegmentAfter(out, L"/home/");
-    replaceSegmentAfter(out, L"\\home\\");
+    auto redactNextSegment = [&](size_t p) -> size_t {
+        const size_t sepStart = p;
+        while (p < out.size() && isSep(out[p])) ++p;
+        if (p == sepStart || p >= out.size()) return p;
+        const size_t userStart = p;
+        while (p < out.size() && !isSep(out[p])) ++p;
+        if (p > userStart) {
+            out.replace(userStart, p - userStart, L"<user>");
+            return userStart + 6;
+        }
+        return p;
+    };
+
+    // 1. Anchor profile directories to path roots (X:\, \\?\X:\, \??\X:\, leading /, UNC \\host\,
+    //    \\?\UNC\host\, and WSL \\wsl.localhost\<distro>\) so unrelated subdirectories such as
+    //    D:\Games\Home\Elite are not redacted, while handling mixed/doubled separators and
+    //    immutable-Linux /var/home/<user> paths.
+    size_t pos = 0;
+    bool unc = false;
+    const bool hasDevicePrefix =
+        out.size() >= 4 && isSep(out[0]) &&
+        ((isSep(out[1]) && (out[2] == L'?' || out[2] == L'.')) || (out[1] == L'?' && out[2] == L'?')) &&
+        isSep(out[3]);
+    if (hasDevicePrefix && out.size() >= 8 && toLowerW(out.substr(4, 3)) == L"unc" && isSep(out[7])) {
+        pos = 7;
+        unc = true;
+    } else if (hasDevicePrefix && out.size() >= 6 && std::iswalpha(out[4]) && out[5] == L':') {
+        pos = 6;
+    } else if (out.size() >= 2 && std::iswalpha(out[0]) && out[1] == L':') {
+        pos = 2;
+    } else if (out.size() >= 2 && isSep(out[0]) && isSep(out[1])) {
+        pos = 0;
+        unc = true;
+    }
+
+    auto redactRootUser = [&](size_t startPos) {
+        std::wstring first;
+        if (!readComp(startPos, &first)) return;
+        bool atUserParent = (first == L"users" || first == L"home");
+        if (!atUserParent && first == L"var") {
+            std::wstring second;
+            if (readComp(startPos, &second) && second == L"home") atUserParent = true;
+        }
+        if (atUserParent) redactNextSegment(startPos);
+    };
+
+    if (unc) {
+        std::wstring host;
+        if (readComp(pos, &host)) {
+            if (host == L"wsl.localhost" || host == L"wsl$") {
+                std::wstring distro;
+                if (readComp(pos, &distro)) redactRootUser(pos);
+            } else {
+                std::wstring share;
+                if (readComp(pos, &share)) {
+                    if (share == L"users") {
+                        redactNextSegment(pos);
+                    } else {
+                        std::wstring next;
+                        if (readComp(pos, &next) && next == L"users") redactNextSegment(pos);
+                    }
+                }
+            }
+        }
+    } else {
+        redactRootUser(pos);
+    }
+
+    // 2. Also redact Wine/Proton prefix profile paths (...\drive_c\users\<user>\...) anywhere in
+    //    the path so prefixes outside /home and multi-occurrence paths do not leak usernames.
+    size_t scan = 0;
+    while (scan < out.size()) {
+        const size_t sep = out.find_first_of(L"\\/", scan);
+        if (sep == std::wstring::npos) break;
+        size_t p = sep;
+        std::wstring comp;
+        if (!readComp(p, &comp)) break;
+        if (comp == L"drive_c") {
+            size_t afterDriveC = p;
+            std::wstring next;
+            if (readComp(afterDriveC, &next) && next == L"users") {
+                scan = redactNextSegment(afterDriveC);
+                continue;
+            }
+        }
+        scan = p;
+    }
     return out;
 }
 
@@ -1612,7 +1783,6 @@ std::string formatVrEnvironmentSnapshot(const VrHeadsetReport& report) {
         switch (src) {
             case EffectiveRuntimeSource::Registry: return "registry";
             case EffectiveRuntimeSource::EnvVar: return "XR_RUNTIME_JSON";
-            case EffectiveRuntimeSource::LinuxXdg: return "linux_xdg";
             case EffectiveRuntimeSource::LocalExplicit: return "edup_openxr.ini";
             case EffectiveRuntimeSource::LocalConfigInvalid: return "edup_openxr.ini (invalid)";
             case EffectiveRuntimeSource::None:
@@ -1633,6 +1803,9 @@ std::string formatVrEnvironmentSnapshot(const VrHeadsetReport& report) {
                                                          : " " + narrowUtf8(report.runtimeVersion))) +
            "\r\n";
     out += std::string("runtime_source: ") + sourceName(report.runtimeSource) + "\r\n";
+    if (report.envDisagreesWithLocal) {
+        out += "env_disagrees_with_local: yes\r\n";
+    }
     if (!report.activeRuntimePath.empty()) {
         out += "active_runtime_json: " + narrowUtf8(redactUserPath(report.activeRuntimePath)) +
                (report.activeRuntimeMissingFile ? " [MISSING]" : "") + "\r\n";
@@ -1640,6 +1813,12 @@ std::string formatVrEnvironmentSnapshot(const VrHeadsetReport& report) {
     if (!report.activeLibraryPath.empty()) {
         out += "active_runtime_library: " + narrowUtf8(redactUserPath(report.activeLibraryPath)) +
                (report.activeLibraryMissingFile ? " [MISSING]" : "") + "\r\n";
+    }
+    if (!report.linuxHostRuntimeName.empty()) {
+        out += "linux_host_runtime: " + narrowUtf8(report.linuxHostRuntimeName) + "\r\n";
+    }
+    if (!report.linuxHostRuntimePath.empty()) {
+        out += "linux_host_runtime_json: " + narrowUtf8(redactUserPath(report.linuxHostRuntimePath)) + "\r\n";
     }
     out += "headset: " +
            (report.headsetName.empty() ? std::string("(none)") : narrowUtf8(report.headsetName)) + "\r\n";
@@ -1681,7 +1860,7 @@ std::string formatVrEnvironmentSnapshot(const VrHeadsetReport& report) {
 
 VrHeadsetReport probeVrHeadset(const VrProbeOptions& options) {
     VrProbeInputs in;
-    in.underWine = detectUnderWine();
+    in.underWine = runningUnderWine();
 
     auto readEnvW = [](const wchar_t* name) -> std::wstring {
         wchar_t buf[2048]{};
@@ -1704,11 +1883,14 @@ VrHeadsetReport probeVrHeadset(const VrProbeOptions& options) {
     in.runtimeSource = sel.source;
     in.activeRuntimePath = sel.activeRuntimePath;
     in.activeRuntimeFromEnv = sel.activeRuntimeFromEnv;
+    in.envDisagreesWithLocal = sel.envDisagreesWithLocal;
     in.localConfigInvalid = sel.localConfigInvalid;
     in.availableRuntimePaths = readAvailableOpenXrRuntimes();
 
     // Under Wine/Proton, also inspect the Linux host XDG active_runtime.json chain:
-    //  - when no Windows runtime is configured, use the host Linux manifest;
+    //  - when no Windows runtime is configured, record the host Linux manifest for diagnostics and
+    //    card guidance without hiding NotConfigured / NoRuntime (Elite's Windows openxr_loader.dll
+    //    can only reach a host runtime through Proton's wineopenxr registry entry or XR_RUNTIME_JSON);
     //  - when Windows points at Proton's wineopenxr bridge, read the host manifest as a
     //    platform hint so WiVRn / Monado / SteamVR behind wineopenxr is identified accurately.
     const std::wstring xdgConfigHome = in.underWine ? readEnvW(L"XDG_CONFIG_HOME") : std::wstring();
@@ -1724,9 +1906,9 @@ VrHeadsetReport probeVrHeadset(const VrProbeOptions& options) {
             linuxOpenXrManifestCandidates(xdgConfigHome, unixHome, xdgConfigDirs);
         candidates.insert(candidates.end(), xdgList.begin(), xdgList.end());
         for (const std::wstring& cand : candidates) {
-            if (!pathExistsW(cand)) continue;
+            if (!fileExists(cand)) continue;
             std::string text;
-            readFileUtf8(cand, &text);
+            readUtf8TextFile(cand, &text);
             if (pathOut) *pathOut = cand;
             if (jsonOut) *jsonOut = std::move(text);
             return true;
@@ -1734,61 +1916,63 @@ VrHeadsetReport probeVrHeadset(const VrProbeOptions& options) {
         return false;
     };
 
-    if (!in.localConfigInvalid && in.activeRuntimePath.empty() && in.underWine) {
-        std::wstring xdgPath;
-        std::string xdgJson;
-        if (findLinuxHostManifest(&xdgPath, &xdgJson)) {
-            in.runtimeSource = EffectiveRuntimeSource::LinuxXdg;
-            in.activeRuntimePath = xdgPath;
-            in.activeManifest = parseOpenXrRuntimeJson(xdgJson, xdgPath);
-            in.activeManifest.jsonExists = true;
-            if (!in.activeManifest.libraryPath.empty()) {
-                const std::wstring libFs = normalizeWinePosixPath(in.activeManifest.libraryPath, true);
-                in.activeManifest.libraryExists =
-                    pathExistsW(libFs) || isPosixSharedLibraryPath(in.activeManifest.libraryPath);
+    auto libraryPresentForManifest = [&](const std::wstring& libPath) -> bool {
+        if (libPath.empty()) return true;
+        // A bare library filename with no separator is resolved by the OS dynamic loader search path.
+        if (!hasPathSeparatorW(libPath)) return true;
+        const std::wstring libFs = normalizeWinePosixPath(libPath, in.underWine);
+        // Under Wine/Proton (especially Steam Pressure Vessel / Flatpak containers), Wine's Z:\
+        // filesystem view does not always match the host namespace where a native Linux .so lives.
+        // Treating POSIX .so paths as present fails safe against false MissingRuntimeLibrary
+        // warnings (at the trade-off of not catching a deleted host .so statically).
+        return fileExists(libFs) || (in.underWine && isPosixSharedLibraryPath(libPath));
+    };
+
+    auto recordLinuxHostHint = [&]() {
+        std::wstring hostPath;
+        std::string hostJson;
+        if (findLinuxHostManifest(&hostPath, &hostJson)) {
+            const OpenXrManifestInfo hostInfo = parseOpenXrRuntimeJson(hostJson, hostPath);
+            in.linuxHostRuntimePath = hostPath;
+            in.linuxHostRuntimeName = hostInfo.runtimeName;
+            in.linuxHostRuntimeHint = hostPath + L" " + hostInfo.runtimeName + L" " + hostInfo.libraryPath;
+            if (!hostInfo.valid && !hostJson.empty()) {
+                const size_t cap = hostJson.size() < 1024 ? hostJson.size() : 1024;
+                in.linuxHostRuntimeHint += L" " + widenUtf8(hostJson.substr(0, cap));
             }
         }
+    };
+
+    if (!in.localConfigInvalid && in.activeRuntimePath.empty() && in.underWine) {
+        recordLinuxHostHint();
     } else if (!in.localConfigInvalid && !in.activeRuntimePath.empty()) {
         const std::wstring fsPath = normalizeWinePosixPath(in.activeRuntimePath, in.underWine);
         in.activeManifest.jsonPath = in.activeRuntimePath;
-        in.activeManifest.jsonExists = pathExistsW(fsPath);
+        in.activeManifest.jsonExists = fileExists(fsPath);
         if (in.activeManifest.jsonExists) {
             std::string jsonText;
-            if (readFileUtf8(fsPath, &jsonText)) {
+            if (readUtf8TextFile(fsPath, &jsonText)) {
                 in.activeManifest = parseOpenXrRuntimeJson(jsonText, fsPath);
                 in.activeManifest.jsonExists = true;
-                if (!in.activeManifest.libraryPath.empty()) {
-                    const std::wstring libFs = normalizeWinePosixPath(in.activeManifest.libraryPath, in.underWine);
-                    in.activeManifest.libraryExists =
-                        pathExistsW(libFs) ||
-                        (in.underWine && isPosixSharedLibraryPath(in.activeManifest.libraryPath));
-                }
+                in.activeManifest.libraryExists = libraryPresentForManifest(in.activeManifest.libraryPath);
             }
         }
         if (in.underWine &&
             isWineOpenXrBridgePath(in.activeRuntimePath + L" " + in.activeManifest.runtimeName,
                                    in.activeManifest.libraryPath)) {
-            std::wstring hostPath;
-            std::string hostJson;
-            if (findLinuxHostManifest(&hostPath, &hostJson)) {
-                const OpenXrManifestInfo hostInfo = parseOpenXrRuntimeJson(hostJson, hostPath);
-                in.linuxHostRuntimeHint = hostPath + L" " + hostInfo.runtimeName + L" " + hostInfo.libraryPath;
-                if (!hostInfo.valid && !hostJson.empty()) {
-                    const size_t cap = hostJson.size() < 1024 ? hostJson.size() : 1024;
-                    in.linuxHostRuntimeHint += L" " + widenUtf8(hostJson.substr(0, cap));
-                }
-            }
+            recordLinuxHostHint();
         }
     }
 
     // Layer 2: Running VR runtime & streaming bridge processes (+ Linux compositor IPC sockets under Wine).
-    in.runningProcesses = snapshotRunningProcesses(in.underWine);
+    bool procSnapshotOk = false;
+    in.runningProcesses = snapshotRunningProcesses(in.underWine, &procSnapshotOk);
     if (in.underWine) {
         const std::wstring xdgRuntimeDir = readEnvW(L"XDG_RUNTIME_DIR");
         if (!xdgRuntimeDir.empty()) {
             auto hasAnySocket = [](const std::vector<std::wstring>& paths) {
                 for (const std::wstring& p : paths) {
-                    if (pathExistsW(p)) return true;
+                    if (fileExists(p)) return true;
                 }
                 return false;
             };
@@ -1811,12 +1995,11 @@ VrHeadsetReport probeVrHeadset(const VrProbeOptions& options) {
 
     // Layer 5: SteamVR openvrpaths.vrpath (external drivers like ALVR).
     bool loadedVrPath = false;
-    const std::wstring localAppData = readEnvW(L"LOCALAPPDATA");
+    const std::wstring localAppData = localAppDataDir();
     if (!localAppData.empty()) {
-        const std::wstring vrpathFile = joinW(localAppData, L"openvr\\openvrpaths.vrpath");
+        const std::wstring vrpathFile = joinPath(localAppData, L"openvr\\openvrpaths.vrpath");
         std::string vrpathText;
-        if (readFileUtf8(vrpathFile, &vrpathText)) {
-            in.steamVrInstalled = true;
+        if (readUtf8TextFile(vrpathFile, &vrpathText)) {
             in.openVrDrivers = parseOpenVrExternalDrivers(vrpathText);
             loadedVrPath = true;
         }
@@ -1825,14 +2008,13 @@ VrHeadsetReport probeVrHeadset(const VrProbeOptions& options) {
         std::wstring linuxVrPath = readEnvW(L"VR_PATHREG_OVERRIDE");
         if (!linuxVrPath.empty()) {
             linuxVrPath = normalizeWinePosixPath(linuxVrPath, true);
-        } else if (!xdgConfigHome.empty()) {
-            linuxVrPath = joinW(normalizeWinePosixPath(xdgConfigHome, true), L"openvr\\openvrpaths.vrpath");
-        } else if (!unixHome.empty()) {
-            linuxVrPath = joinW(normalizeWinePosixPath(unixHome, true), L".config\\openvr\\openvrpaths.vrpath");
+        } else if (isAbsolutePosixPath(xdgConfigHome)) {
+            linuxVrPath = joinPath(normalizeWinePosixPath(xdgConfigHome, true), L"openvr\\openvrpaths.vrpath");
+        } else if (isAbsolutePosixPath(unixHome)) {
+            linuxVrPath = joinPath(normalizeWinePosixPath(unixHome, true), L".config\\openvr\\openvrpaths.vrpath");
         }
         std::string vrpathText;
-        if (!linuxVrPath.empty() && readFileUtf8(linuxVrPath, &vrpathText)) {
-            in.steamVrInstalled = true;
+        if (!linuxVrPath.empty() && readUtf8TextFile(linuxVrPath, &vrpathText)) {
             in.openVrDrivers = parseOpenVrExternalDrivers(vrpathText);
         }
     }
@@ -1840,8 +2022,8 @@ VrHeadsetReport probeVrHeadset(const VrProbeOptions& options) {
     // Layer 6: Out-of-process live OpenXR query ONLY when safe:
     // - allowed by caller and never while explicitly elevated (defense in depth: also check
     //   isElevatedForPlay(), the rule Play uses; a UAC-disabled admin is not refused)
-    // - EliteDangerous64.exe is not running anywhere (checked inside shouldRunLiveOpenXrProbe)
-    // - local edup_openxr.ini is valid, runtime manifest & library exist
+    // - process snapshot succeeded and EliteDangerous64.exe is not running anywhere (fail-closed)
+    // - local edup_openxr.ini is valid, runtime manifest is valid & library exists
     // - active runtime service is already running (never auto-boot SteamVR)
     // - signed release manifest is adopted (child re-verifies signature & loader SHA-256 itself)
     const bool elevated = options.isElevated || isElevatedForPlay();
@@ -1859,14 +2041,17 @@ VrHeadsetReport probeVrHeadset(const VrProbeOptions& options) {
             activePlatform = hostPlat;
         }
     }
-    if (options.allowLiveProbe && options.hasSignedLoader && !elevated && !in.localConfigInvalid &&
-        in.activeManifest.jsonExists && (!in.activeManifest.valid || in.activeManifest.libraryExists) &&
+    const bool manifestReadyForLive =
+        in.activeManifest.jsonExists && in.activeManifest.valid &&
+        (in.activeManifest.libraryPath.empty() || in.activeManifest.libraryExists);
+    if (options.allowLiveProbe && options.hasSignedLoader && !elevated && procSnapshotOk &&
+        !in.localConfigInvalid && manifestReadyForLive &&
         shouldRunLiveOpenXrProbe(activePlatform, in.runningProcesses, in.underWine, in.activeRuntimeFromEnv)) {
         const std::wstring selfExe = currentModulePath();
         if (!selfExe.empty()) {
-            std::wstring cmdLine = quoteCommandArg(selfExe) + L" --probe-openxr";
-            if (!options.gameDir.empty()) cmdLine += L" --dir " + quoteCommandArg(options.gameDir);
-            if (!options.dataRoot.empty()) cmdLine += L" --data-root " + quoteCommandArg(options.dataRoot);
+            std::wstring cmdLine = quoteArg(selfExe) + L" --probe-openxr";
+            if (!options.gameDir.empty()) cmdLine += L" --dir " + quoteArg(options.gameDir);
+            if (!options.dataRoot.empty()) cmdLine += L" --data-root " + quoteArg(options.dataRoot);
             in.liveProbe = runOpenXrProbeSubprocess(selfExe, cmdLine, sel.childEnvAction, sel.childEnvRuntimePath,
                                                     options.liveProbeTimeoutMs, options.cancelEvent);
         }
