@@ -304,6 +304,7 @@ python tools\run_jobs.py ^
     --gate "tools\gen_settings_schema.py --self-test" ^
     --gate "tools\gen_exports.py --self-test" ^
     --gate "tools\fetch_ngx.py --self-test" ^
+    --gate "tools\sdk_paths.py --self-test" ^
     --gate "tools\build_flat_sdk_bench_proxy.py --self-test" ^
     --gate "tools\build_phases.py --self-test" ^
     --gate "tools\compile_cache.py --self-test" || exit /b 1
@@ -522,8 +523,10 @@ REM rejected promotion does not disturb the previous build.
 
 REM NVIDIA's DLSS SDK. EDUP_NGX_SDK names a copy explicitly; else the
 REM checkout's own third_party\ngx; else the machine's copy under
-REM %LOCALAPPDATA%\EDVR\ngx-sdk, which is where tools\fetch_ngx.py puts it
-REM (one copy every checkout and worktree finds). The d3d11 half is then
+REM %LOCALAPPDATA%\EDUP\ngx-sdk, which is where tools\fetch_ngx.py puts it
+REM (one copy every checkout and worktree finds); else the copy a fetch from
+REM before the rename left in %LOCALAPPDATA%\EDVR\ngx-sdk. tools\sdk_paths.py
+REM holds all five SDK lookups here to that order. The d3d11 half is then
 REM built with the NGX calls in, the static library linked, and the runtime
 REM and NVIDIA's licence copied into the build for the release zips. The
 REM copy is VERIFIED first -- the files the build reads, and the
@@ -537,6 +540,7 @@ REM refuses it unless told --no-dlss).
 set NGX=
 if defined EDUP_NGX_SDK set NGX=%EDUP_NGX_SDK%
 if not defined NGX if exist "%ROOT%\third_party\ngx\include\nvsdk_ngx.h" set NGX=%ROOT%\third_party\ngx
+if not defined NGX if exist "%LOCALAPPDATA%\EDUP\ngx-sdk\include\nvsdk_ngx.h" set NGX=%LOCALAPPDATA%\EDUP\ngx-sdk
 if not defined NGX if exist "%LOCALAPPDATA%\EDVR\ngx-sdk\include\nvsdk_ngx.h" set NGX=%LOCALAPPDATA%\EDVR\ngx-sdk
 set NGXFLAGS=
 set NGXLIB=
@@ -556,14 +560,15 @@ if defined NGX (
     echo [edup] ==================================================================
     echo [edup] NO DLSS SDK. This build has no DLAA, and there is no
     echo [edup] nvngx_dlss.dll to package. Fine for development; NOT a release. Looked for
-    echo [edup] include\nvsdk_ngx.h in these three places, in this order:
+    echo [edup] include\nvsdk_ngx.h in these four places, in this order:
     if defined EDUP_NGX_SDK (
         echo [edup]   EDUP_NGX_SDK   = %EDUP_NGX_SDK%
     ) else (
         echo [edup]   EDUP_NGX_SDK   = ^(not set^)
     )
     echo [edup]   the checkout    = %ROOT%\third_party\ngx
-    echo [edup]   this machine    = %LOCALAPPDATA%\EDVR\ngx-sdk
+    echo [edup]   this machine    = %LOCALAPPDATA%\EDUP\ngx-sdk
+    echo [edup]   the old folder  = %LOCALAPPDATA%\EDVR\ngx-sdk
     echo [edup] To fetch the pinned SDK once for this machine:  python tools\fetch_ngx.py
     echo [edup] ==================================================================
     if exist "%BUILD%\nvngx_dlss.dll" del /q "%BUILD%\nvngx_dlss.dll"
@@ -572,9 +577,11 @@ if defined NGX (
 
 REM Intel XeSS-SR SDK for the flat profile. The D3D11 proxy bridges to D3D12
 REM at runtime; it imports no XeSS library. A missing SDK builds a refusal stub.
+REM Looked up in the order the DLSS SDK is: EDUP, then the old EDVR folder, last.
 set XESS=
 if defined EDUP_XESS_SDK set XESS=%EDUP_XESS_SDK%
 if not defined XESS if exist "%ROOT%\third_party\xess\include\xess\xess.h" set XESS=%ROOT%\third_party\xess
+if not defined XESS if exist "%LOCALAPPDATA%\EDUP\xess-sdk\include\xess\xess.h" set XESS=%LOCALAPPDATA%\EDUP\xess-sdk
 if not defined XESS if exist "%LOCALAPPDATA%\EDVR\xess-sdk\include\xess\xess.h" set XESS=%LOCALAPPDATA%\EDVR\xess-sdk
 set XESSFLAGS=/DEDVR_HAVE_XESS=0
 if defined XESS (
@@ -601,9 +608,11 @@ if defined XESS (
 REM Optional tailored 2DMigoto runtime for EDHM (tools\fetch_edhm_2dmigoto.py).
 REM Staged into %BUILD% when present so package_native.py can ship it as an
 REM opt-in signed release asset with its GPLv3 and third-party notices.
+REM Looked up in the order the DLSS SDK is: EDUP, then the old EDVR folder, last.
 set EDHM2DM=
 if defined EDUP_EDHM_2DMIGOTO set EDHM2DM=%EDUP_EDHM_2DMIGOTO%
 if not defined EDHM2DM if exist "%ROOT%\third_party\edhm_2dmigoto\bin\d3d11_edhm.dll" set EDHM2DM=%ROOT%\third_party\edhm_2dmigoto
+if not defined EDHM2DM if exist "%LOCALAPPDATA%\EDUP\edhm-2dmigoto\bin\d3d11_edhm.dll" set EDHM2DM=%LOCALAPPDATA%\EDUP\edhm-2dmigoto
 if not defined EDHM2DM if exist "%LOCALAPPDATA%\EDVR\edhm-2dmigoto\bin\d3d11_edhm.dll" set EDHM2DM=%LOCALAPPDATA%\EDVR\edhm-2dmigoto
 set EDHM_SOURCE_ARCHIVE=
 for /f "usebackq delims=" %%A in (`python "tools\fetch_edhm_2dmigoto.py" --print-source-archive`) do set EDHM_SOURCE_ARCHIVE=%%A
@@ -635,8 +644,8 @@ REM DLLs, loaded at run time over the D3D11/D3D12 bridge in src\d3d11\fsr4_engin
 REM linked; the headers are the only compile input. EDUP_FSR4_SDK names a copy explicitly, or forces the no-SDK
 REM path with the literal value "none" (proving fix.temporal_aa=fsr4's runtime refusal even on a machine that
 REM already has the SDK staged); else the checkout's own third_party\fsr4; else the machine's copy under
-REM %LOCALAPPDATA%\EDVR\fsr4-sdk. The copy is VERIFIED first, and a mismatch fails the build. Without any SDK
-REM the build still succeeds: fsr4_engine.cpp compiles as a refusing stub. The two DLLs and the licence land in
+REM %LOCALAPPDATA%\EDUP\fsr4-sdk; else the old %LOCALAPPDATA%\EDVR\fsr4-sdk. The copy is VERIFIED first, and a
+REM mismatch fails the build. Without any SDK the build still succeeds: fsr4_engine.cpp compiles as a refusing stub. The two DLLs and the licence land in
 REM %BUILD% for tools\install_edup.py --fsr4, the rig and the release: tools\package_native.py packs them as it packs
 REM XeSS's and REFUSES a release whose build lacks them, and the launcher installs them. They keep AMD's own signature:
 REM nothing in this file signs them (the maintainer's 2026-11-21 reversal of decision D8 in
@@ -646,6 +655,7 @@ set FSR4_NONE=
 if /i "%EDUP_FSR4_SDK%"=="none" set FSR4_NONE=1
 if not defined FSR4_NONE if defined EDUP_FSR4_SDK set FSR4=%EDUP_FSR4_SDK%
 if not defined FSR4_NONE if not defined FSR4 if exist "%ROOT%\third_party\fsr4\include\FidelityFX\upscalers\include\ffx_upscale.h" set FSR4=%ROOT%\third_party\fsr4
+if not defined FSR4_NONE if not defined FSR4 if exist "%LOCALAPPDATA%\EDUP\fsr4-sdk\include\FidelityFX\upscalers\include\ffx_upscale.h" set FSR4=%LOCALAPPDATA%\EDUP\fsr4-sdk
 if not defined FSR4_NONE if not defined FSR4 if exist "%LOCALAPPDATA%\EDVR\fsr4-sdk\include\FidelityFX\upscalers\include\ffx_upscale.h" set FSR4=%LOCALAPPDATA%\EDVR\fsr4-sdk
 set FSR4FLAGS=/DEDVR_HAVE_FSR4=0
 if defined FSR4 (
@@ -677,10 +687,10 @@ REM 3.2). EDUP_FFX_DX11 names a copy explicitly, or forces the no-SDK path
 REM with the literal value "none" -- proving fix.temporal_aa=fsr's runtime
 REM refusal even on a machine that already has the SDK staged; else the
 REM checkout's own third_party\ffx-dx11; else the machine's copy under
-REM %LOCALAPPDATA%\EDVR\ffx-dx11, which is where tools\fetch_ffx_dx11.py
-REM puts it (one build every checkout and worktree shares). The d3d11 half
-REM is then built with the FSR3 calls in and the two static libraries
-REM linked. The copy is VERIFIED first -- the staged files, and each
+REM %LOCALAPPDATA%\EDUP\ffx-dx11, which is where tools\fetch_ffx_dx11.py
+REM puts it (one build every checkout and worktree shares); else the old
+REM %LOCALAPPDATA%\EDVR\ffx-dx11. The d3d11 half is then built with the FSR3
+REM calls in and the two static libraries linked. The copy is VERIFIED first -- the staged files, and each
 REM library's CRT and imports, against tools\fetch_ffx_dx11.py's own
 REM checks -- and a mismatch fails the build. Without any SDK the build
 REM still succeeds, since the code compiles either way, but fix.temporal_aa
@@ -691,6 +701,7 @@ set FSR_NONE=
 if /i "%EDUP_FFX_DX11%"=="none" set FSR_NONE=1
 if not defined FSR_NONE if defined EDUP_FFX_DX11 set FFX=%EDUP_FFX_DX11%
 if not defined FSR_NONE if not defined FFX if exist "%ROOT%\third_party\ffx-dx11\include\FidelityFX\host\ffx_fsr3upscaler.h" set FFX=%ROOT%\third_party\ffx-dx11
+if not defined FSR_NONE if not defined FFX if exist "%LOCALAPPDATA%\EDUP\ffx-dx11\include\FidelityFX\host\ffx_fsr3upscaler.h" set FFX=%LOCALAPPDATA%\EDUP\ffx-dx11
 if not defined FSR_NONE if not defined FFX if exist "%LOCALAPPDATA%\EDVR\ffx-dx11\include\FidelityFX\host\ffx_fsr3upscaler.h" set FFX=%LOCALAPPDATA%\EDVR\ffx-dx11
 set FSRFLAGS=
 set FSRLIB=
@@ -718,7 +729,7 @@ if defined FFX (
         echo [edup] ==================================================================
         echo [edup] NO FSR3 SDK. This build has no AMD upscaler; fix.temporal_aa=fsr
         echo [edup] refuses at runtime. Fine for development; NOT a release. Looked for
-        echo [edup] include\FidelityFX\host\ffx_fsr3upscaler.h in these three places,
+        echo [edup] include\FidelityFX\host\ffx_fsr3upscaler.h in these four places,
         echo [edup] in this order:
         if defined EDUP_FFX_DX11 (
             echo [edup]   EDUP_FFX_DX11  = %EDUP_FFX_DX11%
@@ -726,7 +737,8 @@ if defined FFX (
             echo [edup]   EDUP_FFX_DX11  = ^(not set^)
         )
         echo [edup]   the checkout    = %ROOT%\third_party\ffx-dx11
-        echo [edup]   this machine    = %LOCALAPPDATA%\EDVR\ffx-dx11
+        echo [edup]   this machine    = %LOCALAPPDATA%\EDUP\ffx-dx11
+        echo [edup]   the old folder  = %LOCALAPPDATA%\EDVR\ffx-dx11
         echo [edup] To fetch the pinned SDK once for this machine:  python tools\fetch_ffx_dx11.py
         echo [edup] ==================================================================
     )

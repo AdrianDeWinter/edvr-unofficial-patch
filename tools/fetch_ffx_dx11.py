@@ -31,9 +31,11 @@ Then staged into a layout EDVR's build.bat can link against directly:
     <dest>\\LICENSE.txt
     <dest>\\VERSION.txt                     commit, FSR version, CRT, toolset
 
-Where it goes: %LOCALAPPDATA%\\EDVR\\ffx-dx11 by default -- one build per machine,
+Where it goes: %LOCALAPPDATA%\\EDUP\\ffx-dx11 by default -- one build per machine,
 shared by every checkout and worktree, matching fetch_ngx.py's ngx-sdk -- or
---dest somewhere else (third_party\\ffx-dx11 for a self-contained checkout).
+--dest somewhere else (third_party\\ffx-dx11 for a self-contained checkout). If
+neither has a build, build.bat reads one from the folder from before the rename,
+%LOCALAPPDATA%\\EDVR\\ffx-dx11.
 
 The static CRT is forced to match EDVR's own /MT, which the fork's CMake does not
 set on its own (CMake's un-forced MSVC default is /MD, which fails EDVR's link
@@ -72,6 +74,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+sys.dont_write_bytecode = True    # a dry run must not write an import cache for the helper
+import sdk_paths  # noqa: E402
 
 URL = "https://github.com/optiscaler/FidelityFX-SDK-DX11"
 COMMIT = "9b04fa49abae5aa341c0007af13c8ba1b4ad9913"  # optiscaler fork HEAD, read 2026-09-16
@@ -181,8 +186,7 @@ FORBIDDEN_IMPORT_PREFIXES = (
 
 
 def default_dest():
-    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
-    return os.path.join(base, "EDVR", "ffx-dx11")
+    return sdk_paths.default_dest("ffx-dx11")
 
 
 def sha256_of(path):
@@ -599,7 +603,7 @@ def verify(dest, run_directives=None, run_symbols=None, quiet=False):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--dest", default=None, help="where to fetch/build/stage (default: %%LOCALAPPDATA%%\\EDVR\\ffx-dx11)")
+    ap.add_argument("--dest", default=None, help="where to fetch/build/stage (default: %%LOCALAPPDATA%%\\EDUP\\ffx-dx11)")
     ap.add_argument("--commit", default=COMMIT, help="override the pinned commit")
     ap.add_argument("--verify", default=None, metavar="DIR", help="verify an existing staged copy and exit")
     ap.add_argument("--generator", default="vs", choices=sorted(GENERATORS),
@@ -752,6 +756,12 @@ def self_test():
         assert not os.path.exists(dest), "dry-run created %s" % dest
         assert ("d" * 12) in buf.getvalue(), "dry-run did not reflect the --commit override"
         checks += 1
+
+    def expect(name, condition, detail=""):
+        assert condition, "%s: %s" % (name, detail)
+
+    sdk_paths.check_fetch_default(default_dest, "ffx-dx11", expect, main)
+    checks += 1
 
     # --generator, --fetch-only and --no-fetch: the default dry-run still names VS2022, the others
     # change only what they should, none writes anything, and the two fetch flags exclude each other.

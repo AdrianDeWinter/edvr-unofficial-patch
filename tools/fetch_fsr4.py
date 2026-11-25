@@ -24,11 +24,12 @@ relative structure under include\\FidelityFX is kept exactly):
     bin\\amd_fidelityfx_loader_dx12.dll, bin\\amd_fidelityfx_upscaler_dx12.dll
     LICENSE.txt                      (the SDK's docs/license.md)
 
-Default destination is %LOCALAPPDATA%\\EDVR\\fsr4-sdk, shared by checkouts;
-pass --dest third_party\\fsr4 for a self-contained checkout. --dry-run is
-strictly read-only. The SDK licence is included in the staged payload; this
-tool does not request or record licence acceptance. The licence opens with a
-binary-only redistribution grant and then lists the signed DLLs under MIT; it
+Default destination is %LOCALAPPDATA%\\EDUP\\fsr4-sdk, shared by checkouts;
+pass --dest third_party\\fsr4 for a self-contained checkout. If neither has a
+copy, build.bat reads one from the folder from before the rename,
+%LOCALAPPDATA%\\EDVR\\fsr4-sdk. --dry-run is strictly read-only. The SDK licence
+is included in the staged payload; this tool does not request or record licence
+acceptance. The licence opens with a binary-only redistribution grant and then lists the signed DLLs under MIT; it
 is ambiguous, so nothing here ships the DLLs in an installer or release
 package (design doc fsr-upscaler-design-2026-09-16.md, decision D8).
 """
@@ -41,6 +42,9 @@ import sys
 import tempfile
 import urllib.request
 from pathlib import Path
+
+sys.dont_write_bytecode = True    # a dry run must not write an import cache for the helper
+import sdk_paths  # noqa: E402
 
 URL = "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
 COMMIT = "7539ae8b6568ad29ed78a753404351daf3b5cca7"  # FidelityFX SDK v2.4.0 (tag v2.4.0, 2026-10-28)
@@ -76,8 +80,7 @@ FILES = {
 
 
 def default_dest():
-    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
-    return os.path.join(base, "EDVR", "fsr4-sdk")
+    return sdk_paths.default_dest("fsr4-sdk")
 
 
 def sha256_bytes(data):
@@ -193,7 +196,7 @@ def fetch(dest, dry_run=False, downloader=download_file):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--dest", default=None, help="SDK destination (default: %%LOCALAPPDATA%%\\EDVR\\fsr4-sdk)")
+    ap.add_argument("--dest", default=None, help="SDK destination (default: %%LOCALAPPDATA%%\\EDUP\\fsr4-sdk)")
     ap.add_argument("--verify", default=None, metavar="DIR", help="verify an existing SDK copy and exit")
     ap.add_argument("--dry-run", action="store_true", help="show the pinned files without network or writes")
     ap.add_argument("--self-test", action="store_true", help="run offline fixture checks and exit")
@@ -314,6 +317,7 @@ def self_test():
             code = fetch(dest, downloader=lambda source: by_source[source])
             expect("replacement", code == 0 and not verify(dest, quiet=True) and
                    not os.path.exists(dest + ".fsr4-old"), "a good replacement did not land cleanly")
+            sdk_paths.check_fetch_default(default_dest, "fsr4-sdk", expect, main)
             dry_parent = os.path.join(base, "dry-parent")
             dry_dest = os.path.join(dry_parent, "dry")
             output = io.StringIO()

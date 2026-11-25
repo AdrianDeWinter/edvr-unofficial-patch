@@ -10,10 +10,12 @@ the official Intel XeSS repository at one pinned commit. Every file is checked
 against its pinned SHA-256 before it is installed. No import library is staged:
 EDVR loads XeSS dynamically.
 
-Default destination is %LOCALAPPDATA%\\EDVR\\xess-sdk, shared by checkouts;
-pass --dest third_party\\xess for a self-contained checkout. --dry-run is
-strictly read-only. The SDK license is included in the staged payload; this
-tool does not request or record license acceptance.
+Default destination is %LOCALAPPDATA%\\EDUP\\xess-sdk, shared by checkouts;
+pass --dest third_party\\xess for a self-contained checkout. If neither has a
+copy, build.bat reads one from the folder from before the rename,
+%LOCALAPPDATA%\\EDVR\\xess-sdk. --dry-run is strictly read-only. The SDK license
+is included in the staged payload; this tool does not request or record license
+acceptance.
 """
 import argparse
 import hashlib
@@ -24,6 +26,9 @@ import sys
 import tempfile
 import urllib.request
 from pathlib import Path
+
+sys.dont_write_bytecode = True    # a dry run must not write an import cache for the helper
+import sdk_paths  # noqa: E402
 
 URL = "https://raw.githubusercontent.com/intel/xess"
 COMMIT = "8fe81bdbbaf00b3c1b733fd0d830c333dc84e6f0"  # XeSS SDK v3.0.2
@@ -62,8 +67,7 @@ def pe_problem(rel, data):
 
 
 def default_dest():
-    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
-    return os.path.join(base, "EDVR", "xess-sdk")
+    return sdk_paths.default_dest("xess-sdk")
 
 
 def sha256_bytes(data):
@@ -168,7 +172,7 @@ def fetch(dest, dry_run=False, downloader=download_file):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--dest", default=None, help="SDK destination (default: %%LOCALAPPDATA%%\\EDVR\\xess-sdk)")
+    ap.add_argument("--dest", default=None, help="SDK destination (default: %%LOCALAPPDATA%%\\EDUP\\xess-sdk)")
     ap.add_argument("--verify", default=None, metavar="DIR", help="verify an existing SDK copy and exit")
     ap.add_argument("--dry-run", action="store_true", help="show the pinned files without network or writes")
     ap.add_argument("--self-test", action="store_true", help="run offline fixture checks and exit")
@@ -243,6 +247,7 @@ def self_test():
                          for p in Path(dest).rglob("*") if p.is_file()}
                 expect("failed-replacement", before == after,
                        "failed fetch changed existing destination")
+            sdk_paths.check_fetch_default(default_dest, "xess-sdk", expect, main)
             dry_parent = os.path.join(base, "dry-parent")
             dry_dest = os.path.join(dry_parent, "dry")
             output = io.StringIO()
