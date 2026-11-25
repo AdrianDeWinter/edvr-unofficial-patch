@@ -10,14 +10,15 @@
 // real size, so the hook acts only when its return address is inside the game
 // executable's image.
 //
-// advanced.game_vram = auto learns its reserve per setup. The safe starting
-// reserve is not the same on every machine: it differs by OS (Windows or
-// Proton), upscaler, card and driver. So each setup's learned reserve is kept
-// in %LOCALAPPDATA%\EDVR\game_vram.txt, keyed by vendor, device, driver,
-// layer, profile and AA mode. Only DXGI's own figures are read to learn it;
-// no game address is used. Learning stops when the AA mode or the profile
-// changes in a session, because Elite sized its budget once, for the mode and
-// the profile it started in.
+// advanced.game_vram = auto learns two figures per setup (game_vram_learn.h):
+// the reserve, EDVR's, the anti-aliasing engine's and the driver's share, and
+// the flight budget, what the OS lowers the process's budget to in flight.
+// Neither is the same on every machine, so each setup's are kept in
+// %LOCALAPPDATA%\EDUP\game_vram.txt, keyed by vendor, device, driver, layer,
+// profile and AA engine. Only DXGI's own figures are read to learn them; no
+// game address is used. Learning stops when the AA engine or the profile
+// changes in a session, because Elite sized its budget once, for the engine
+// and the profile it started in.
 //
 // Nothing is installed in a profile that forwards only (passthrough, or an
 // invalid install), nor in a process that is not the game.
@@ -38,6 +39,7 @@
 #include <vector>
 
 #include "game_vram_hook.h"
+#include "../common/adapter_memory.h"
 #include "../common/game_vram.h"
 #include "../common/game_vram_learn.h"
 #include "../common/config.h"
@@ -57,14 +59,30 @@ using GetDescFn = HRESULT(STDMETHODCALLTYPE*)(IDXGIAdapter*, DXGI_ADAPTER_DESC*)
 void* g_realGetDesc = nullptr;
 gamevram::Setting g_setting;
 std::atomic<uint32_t> g_calls{0};
-// The reserve EDVR leaves free this session: the learned one, or the safe default. Fixed for the session.
+// The reserve EDVR leaves free this session: the learned one, or the engine's start. Fixed for the session.
 uint32_t g_reserveMb = 0;
+// The flight budget this session started from; 0 = none. Fixed for the session, and 0 when the budget is not one to learn from.
+uint32_t g_flightMb = 0;
+// What other processes held of the card when auto was prepared (game_vram.h, startBudgetMb). Fixed for the session.
+bool g_othersKnown = false;
+uint64_t g_othersBytes = 0;
+// The start budget, in bytes, behind the game's first answer about the adapter auto is keyed to: what learning measures a
+// fall against. 0 until that call. Written by the game's thread, read by the render thread.
+std::atomic<uint64_t> g_startBudgetBytes{0};
 // Under Wine, the reported budget was the whole card at install (gamevram::budgetIsWholeCard): auto ignores it for the
-// session, sizes from 95% of the card with the safe default reserve, and learns nothing. Set once, before the hook exists.
+// session, sizes from 95% of the card with the engine's start, and learns nothing. Set once, before the hook exists.
 bool g_budgetIgnored = false;
+// What other programs hold, read on a pool thread from the first prepareAuto on and kept for the session: a device on
+// another card takes its row from the same reading. Null under Wine, or when the pool refused the work.
+AdapterUsageRead* g_othersRead = nullptr;
+bool g_othersStarted = false;
+// finishAuto has run for the adapter prepareAuto keyed. Until then the hook waits for it; prepareAuto clears it.
+std::atomic<bool> g_autoReady{false};
+SRWLOCK g_readyLock = SRWLOCK_INIT;
 
 constexpr uint32_t kLoggedCalls = 32;
-constexpr uint32_t kLearnEverySamples = 60;   // one learning pass per minute of samples, or at the session's first crossing
+constexpr uint32_t kLearnEverySamples = 60;   // one learning pass per minute of samples, and one at the session's first spill
+constexpr DWORD kOthersWaitMs = 10000;        // what other programs hold is waited for until 10 s after the read began; it took 1.3-4.4 s
 constexpr size_t kMaxStoreBytes = 1u << 20;   // the store is a few hundred bytes; anything bigger is not ours
 
 // What auto learns this session, and what it has already written.
@@ -75,34 +93,44 @@ struct AutoLearn {
     bool deviceNoted = false;      // gameVramNoteDevice has run; samples wait so they are not filed under the wrong key
     uint32_t vendorId = 0;
     uint32_t deviceId = 0;
+    LUID luid{};                   // the card itself: two of the same kind share the ids, and what other programs hold differs
+    uint64_t realBytes = 0;        // its DedicatedVideoMemory
+    bool wine = false;             // under Wine: there is no reading of what other programs hold
+    bool adopt = false;            // the store was read: finishAuto takes this setup's record from it
+    std::vector<gamevram::Record> store;   // ...as read by prepareAuto
     std::string key;
-    std::string aaAtInstall;       // requestedTemporalMode() when the budget was sized
+    gamevram::AaSlot aaAtInstall = gamevram::AaSlot::Off;   // the engine when the budget was sized
     RuntimeProfile profileAtInstall = RuntimeProfile::Invalid;   // the profile the key was made for
     const char* profileNameAtInstall = "";                       // its runtimeProfileName() (a static string)
+    gamevram::ReserveBounds bounds{};                            // the limits for that profile and engine
+    gamevram::StartFacts facts;                                  // the budget when the key was made, for an old record
     std::wstring storePath;        // empty when LOCALAPPDATA is unset or the store is unreadable: nothing is learned or saved
     uint32_t lastPassSamples = 0;
-    uint32_t lastCrossings = 0;
-    uint32_t lastSavedReserve = 0; // the last pass handed to the writer; 0 = none yet
-    const char* lastSavedWhy = ""; // its reason (a static string)
+    bool spillPassed = false;      // a pass has run for a spill
+    bool haveHanded = false;       // a result was handed to the writer
+    gamevram::LearnResult handed;  // ...the last one
 };
 AutoLearn g_learn;
 
 // SAVING OFF THE RENDER THREAD. A save reads the store, merges this session's record and replaces the file atomically,
 // with a flush: usually a millisecond, but tens on a slow disk, under a virus scanner or through Wine's file layer, and
-// the first crossing of the budget comes when the frame is already struggling. So the render thread only decides what to
+// the first spill over the budget comes when the frame is already struggling. So the render thread only decides what to
 // save and hands it to a thread-pool callback. One slot: a newer result replaces one not yet written, and one callback
 // at a time drains it, so two saves never read and write the store at once. If the pool will not take the work, the
 // save runs inline, as it did before. key and storePath are fixed before the first save (at install, or when the device's
 // adapter re-keys auto, which a sample waits for), so the callback reads g_learn safely.
 struct SaveJob {
     gamevram::LearnResult learned;
-    uint32_t startedReserveMb = 0; // the reserve this session started from (mergeLearned)
+    uint32_t startedReserveMb = 0; // the reserve and flight budget this session started from (mergeLearned)
+    uint32_t startedFlightMb = 0;
     std::string line;              // the learning line, formatted on the render thread, logged once the save landed
 };
 SRWLOCK g_saveLock = SRWLOCK_INIT;
 SaveJob* g_savePending = nullptr;  // under g_saveLock
 bool g_saveBusy = false;           // under g_saveLock: a drain is queued or running
 std::atomic<bool> g_saveFailureLogged{false};
+// What this session's saves merge onto. Used by runSave only, which never runs twice at once.
+gamevram::SaveBasis g_saveBasis;
 // Set by a save that did not land, read by the render thread: the next pass writes again even if its result is the
 // one already handed over, so a transient failure (a scanner holding the file past the retries) is not final.
 std::atomic<bool> g_saveFailed{false};
@@ -126,16 +154,21 @@ const ExeImage& exeImage() {
     return image;
 }
 
-// Read LOCAL budget from the adapter. 0 on any failure, which compute() reads as unknown.
-uint64_t osLocalBudget(IDXGIAdapter* self) {
+// The adapter's LOCAL segment for this process: valid is false, and the figures 0, on any failure.
+VramSegment localSegment(IDXGIAdapter* self) {
+    VramSegment segment;
     IDXGIAdapter3* a3 = nullptr;
-    if (FAILED(self->QueryInterface(__uuidof(IDXGIAdapter3), reinterpret_cast<void**>(&a3))) || !a3) {
-        return 0;
+    if (SUCCEEDED(self->QueryInterface(__uuidof(IDXGIAdapter3), reinterpret_cast<void**>(&a3))) && a3) {
+        segment = vramReadSegment(a3, DXGI_MEMORY_SEGMENT_GROUP_LOCAL);
+        a3->Release();
     }
-    const uint64_t budget = vramReadSegment(a3, DXGI_MEMORY_SEGMENT_GROUP_LOCAL).budget;
-    a3->Release();
-    return budget;
+    return segment;
 }
+
+// 0 on any failure, which compute() reads as unknown.
+uint64_t osLocalBudget(IDXGIAdapter* self) { return localSegment(self).budget; }
+
+void ensureAutoReady();
 
 HRESULT STDMETHODCALLTYPE hookedGetDesc(IDXGIAdapter* self, DXGI_ADAPTER_DESC* desc) {
     // Taken first, before anything else can move the stack.
@@ -144,13 +177,25 @@ HRESULT STDMETHODCALLTYPE hookedGetDesc(IDXGIAdapter* self, DXGI_ADAPTER_DESC* d
     const ExeImage& exe = exeImage();
     const uintptr_t callerRva = caller - exe.base;
     if (FAILED(hr) || !desc || callerRva >= exe.size) return hr;
+    if (g_setting.mode == gamevram::Mode::Auto) ensureAutoReady();
 
     gamevram::Inputs in;
     in.realDedicatedBytes = static_cast<uint64_t>(desc->DedicatedVideoMemory);
     in.osBudgetBytes = (g_setting.mode == gamevram::Mode::Auto && !g_budgetIgnored) ? osLocalBudget(self) : 0;
     in.reserveMb = g_reserveMb;
+    // Elite also asks about other adapters. What other programs hold, and what the budget falls to, are the keyed one's.
+    const bool keyed = gamevram::sameAdapterIdentity(g_learn.vendorId, g_learn.deviceId, desc->VendorId, desc->DeviceId);
+    if (keyed) {
+        in.othersKnown = g_othersKnown;
+        in.othersBytes = g_othersBytes;
+        in.flightBudgetMb = g_flightMb;
+    }
 
     const gamevram::Result r = gamevram::compute(g_setting, in);
+    if (keyed && r.startBytes != 0) {   // the first answer about it
+        uint64_t none = 0;
+        g_startBudgetBytes.compare_exchange_strong(none, r.startBytes, std::memory_order_acq_rel);
+    }
     if (r.change) {
         desc->DedicatedVideoMemory = static_cast<SIZE_T>(r.reportedBytes);
         // Below 4 GB Elite does not use dedicated memory alone (build 334925): under 1 GB the larger of
@@ -165,7 +210,7 @@ HRESULT STDMETHODCALLTYPE hookedGetDesc(IDXGIAdapter* self, DXGI_ADAPTER_DESC* d
 
     const uint32_t n = ++g_calls;
     if (n <= kLoggedCalls) {
-        char line[256];
+        char line[320];
         gamevram::formatCallLine(line, sizeof line, n, static_cast<uint64_t>(callerRva), g_setting, in, r);
         Log::get().note("%s", line);
     } else if (n == kLoggedCalls + 1) {
@@ -225,80 +270,171 @@ gamevram::StoreRead loadStore(const std::wstring& path, std::vector<gamevram::Re
     return gamevram::StoreRead::Error;
 }
 
-// Auto's starting reserve for this setup: the learned one when the store has one, else the safe default.
-// Sets g_learn.storePath only when there is a store to learn into. Runs again from gameVramNoteDevice when the device's
-// adapter is not the one install keyed, so it starts from a clean slate each time.
-void prepareAuto(IDXGIAdapter* obj, const std::string& aaMode) {
+// What other processes hold of the adapter's own memory: the whole card's figure less this process's, from one sample taken
+// when auto was prepared, so nearly all of it is theirs. Waits for the reading until kOthersWaitMs after it began. Unknown
+// leaves the OS budget to stand alone.
+void readOthers() {
+    const auto unknown = [](const char* why, double ms) {
+        Log::get().note("game vram: what other programs hold of the card could not be read (%s, %.0f ms); the OS budget stands alone.",
+                        why, ms);
+    };
+    if (!g_othersRead) {
+        unknown("no thread to read it on", 0.0);
+        return;
+    }
+    DWORD waited = 0;
+    if (!adapterUsageFinished(g_othersRead, kOthersWaitMs, &waited)) {
+        unknown("the counters did not answer in time", static_cast<double>(kOthersWaitMs));
+        return;
+    }
+    if (!g_othersRead->known) {
+        unknown(g_othersRead->why, g_othersRead->ms);
+        return;
+    }
+    AdapterUsageRow row;
+    if (!findAdapterRow(g_othersRead->rows, static_cast<uint32_t>(g_learn.luid.HighPart),
+                        static_cast<uint32_t>(g_learn.luid.LowPart), &row)) {
+        unknown("no counter for this card", g_othersRead->ms);
+        return;
+    }
+    g_othersKnown = true;
+    g_othersBytes = row.allBytes > row.ownBytes ? row.allBytes - row.ownBytes : 0;
+    Log::get().note("game vram: other programs hold %llu MB of the card's %llu MB (all %llu MB, this process %llu MB; read in %.0f ms, "
+                    "Elite's first question waited %lu ms for it).",
+                    static_cast<unsigned long long>(g_othersBytes >> 20), static_cast<unsigned long long>(g_learn.realBytes >> 20),
+                    static_cast<unsigned long long>(row.allBytes >> 20), static_cast<unsigned long long>(row.ownBytes >> 20),
+                    g_othersRead->ms, static_cast<unsigned long>(waited));
+}
+
+// Auto's key, limits and store for this setup, and the start of the reading of what other programs hold; finishAuto takes
+// the record once that reading is in. Sets g_learn.storePath only when there is a store to learn into. Runs again from
+// gameVramNoteDevice when the device's adapter is not the one install keyed, so it starts from a clean slate each time.
+void prepareAuto(IDXGIAdapter* obj, gamevram::AaSlot aa) {
+    g_autoReady.store(false, std::memory_order_release);
+    g_learn.active = false;
+    g_learn.adopt = false;
+    g_learn.store.clear();
     g_budgetIgnored = false;
+    g_flightMb = 0;
+    g_startBudgetBytes.store(0, std::memory_order_release);
     g_learn.storePath.clear();
     DXGI_ADAPTER_DESC desc{};
     g_learn.haveGpu = SUCCEEDED(obj->GetDesc(&desc));
     if (!g_learn.haveGpu) desc = {};   // a failed read must not key off a partial desc
     g_learn.vendorId = desc.VendorId;
     g_learn.deviceId = desc.DeviceId;
+    g_learn.luid = desc.AdapterLuid;
+    g_learn.realBytes = static_cast<uint64_t>(desc.DedicatedVideoMemory);
     LARGE_INTEGER driver{};
     if (FAILED(obj->CheckInterfaceSupport(__uuidof(IDXGIDevice), &driver))) driver.QuadPart = 0;
 
     const bool vr = runtimeVrProfile();
     const bool wine = underWine();
-    const gamevram::AaClass aa = gamevram::aaClassOf(aaMode);
+    g_learn.wine = wine;
+    const gamevram::ReserveBounds& bounds = gamevram::reserveBounds(vr, aa);
     g_learn.key = gamevram::makeKey(desc.VendorId, desc.DeviceId, static_cast<uint64_t>(driver.QuadPart),
-                                    wine, vr, aaMode);
-    g_learn.aaAtInstall = aaMode;
+                                    wine, vr, aa);
+    g_learn.aaAtInstall = aa;
+    g_learn.bounds = bounds;
+    g_learn.facts = {};
+    g_othersKnown = false;
+    g_othersBytes = 0;
+    // Wine has no such counter. One reading serves every card, so a re-key does not start another.
+    if (!g_othersStarted && !wine) {
+        g_othersStarted = true;
+        g_othersRead = adapterUsageStart();
+    }
+    const uint64_t osBudget = g_learn.haveGpu ? osLocalBudget(obj) : 0;
+    g_learn.facts.osBudgetMb = static_cast<uint32_t>(osBudget >> 20);
     g_learn.profileAtInstall = runtimeProfileValue();
     g_learn.profileNameAtInstall = runtimeProfileName();
-    const char* profile = vr ? "vr" : "flat";
-    const char* aaName = gamevram::aaClassName(aa);
+    g_reserveMb = bounds.startMb;   // unless the store has a record
+    // The key names the profile and the engine.
+    const auto noteStart = [&](const std::string& tail) {
+        Log::get().note("game vram: auto for %s: reserve %u MB (limits %u to %u), the engine's start; %s", g_learn.key.c_str(),
+                        static_cast<unsigned>(g_reserveMb), static_cast<unsigned>(bounds.minMb),
+                        static_cast<unsigned>(bounds.maxMb), tail.c_str());
+    };
 
     if (wine) {
-        const uint64_t budget = osLocalBudget(obj);
-        if (gamevram::budgetIsWholeCard(budget, static_cast<uint64_t>(desc.DedicatedVideoMemory))) {
+        if (gamevram::budgetIsWholeCard(osBudget, static_cast<uint64_t>(desc.DedicatedVideoMemory))) {
             g_budgetIgnored = true;
-            g_reserveMb = gamevram::defaultReserveMb(vr, aa);
-            Log::get().note("game vram: auto for %s: the reported budget (%llu MB) is the whole card (%llu MB), which under Wine "
-                            "means no real budget; sizing from 95%% of the card with reserve %u MB, the safe default for %s with "
-                            "%s, and nothing is learned or saved this session.",
-                            g_learn.key.c_str(), static_cast<unsigned long long>(budget >> 20),
-                            static_cast<unsigned long long>(static_cast<uint64_t>(desc.DedicatedVideoMemory) >> 20),
-                            static_cast<unsigned>(g_reserveMb), profile, aaName);
+            noteStart("the reported budget (" + std::to_string(osBudget >> 20) + " MB) is the whole card (" +
+                      std::to_string(static_cast<uint64_t>(desc.DedicatedVideoMemory) >> 20) +
+                      " MB), which under Wine means no real budget: sizing from 95% of the card, and nothing is learned or saved "
+                      "this session.");
             return;
         }
     }
 
     std::wstring path;
     if (!storePath(path)) {
-        g_reserveMb = gamevram::defaultReserveMb(vr, aa);
-        Log::get().note("game vram: auto for %s: reserve %u MB, the safe default for %s with %s; LOCALAPPDATA is unset, so nothing is learned or saved.",
-                        g_learn.key.c_str(), static_cast<unsigned>(g_reserveMb), profile, aaName);
+        noteStart("LOCALAPPDATA is unset, so nothing is learned or saved.");
         return;
     }
 
-    std::vector<gamevram::Record> store;
-    if (loadStore(path, store) == gamevram::StoreRead::Error) {
-        g_reserveMb = gamevram::defaultReserveMb(vr, aa);
-        Log::get().note("game vram: auto for %s: reserve %u MB, the safe default for %s with %s; %s is there but could not be read, so "
-                        "nothing is learned or saved this session.",
-                        g_learn.key.c_str(), static_cast<unsigned>(g_reserveMb), profile, aaName, runtimeProfileUtf8(path).c_str());
+    if (loadStore(path, g_learn.store) == gamevram::StoreRead::Error) {
+        noteStart(runtimeProfileUtf8(path) + " is there but could not be read, so nothing is learned or saved this session.");
         return;
     }
     g_learn.storePath = path;
+    g_learn.adopt = true;
+}
 
-    const gamevram::Record* found = gamevram::findRecord(store, g_learn.key);
-    if (found) {
-        g_reserveMb = found->reserveMb;
-        if (found->tightened == 0 && found->relaxed == 0) {
-            Log::get().note("game vram: auto for %s: reserve %u MB, kept unchanged by %u earlier session(s).",
-                            g_learn.key.c_str(), static_cast<unsigned>(g_reserveMb), static_cast<unsigned>(found->sessions));
-        } else {
-            Log::get().note("game vram: auto for %s: reserve %u MB, learned over %u earlier session(s) (raised %u, lowered %u times).",
-                            g_learn.key.c_str(), static_cast<unsigned>(g_reserveMb), static_cast<unsigned>(found->sessions),
-                            static_cast<unsigned>(found->tightened), static_cast<unsigned>(found->relaxed));
+// The rest of auto's start, at Elite's first question about an adapter: what other programs hold, the start budget, and
+// this setup's record taken from the store prepareAuto read. Before that question the reading overlaps the device's
+// creation and Elite's own loading.
+void finishAuto() {
+    g_othersKnown = false;
+    g_othersBytes = 0;
+    if (g_learn.haveGpu && !g_learn.wine) readOthers();
+    // The facts are needed under Wine too: an old record is taken over by them.
+    g_learn.facts.startMb = static_cast<uint32_t>(gamevram::startBudgetMb(
+        g_learn.facts.osBudgetMb, g_learn.realBytes >> 20, g_othersKnown, g_othersBytes >> 20));
+    if (!g_learn.adopt) return;
+    const gamevram::ReserveBounds& bounds = g_learn.bounds;
+    std::vector<gamevram::Record>& store = g_learn.store;
+    const auto noteStart = [&](const std::string& tail) {
+        Log::get().note("game vram: auto for %s: reserve %u MB (limits %u to %u), the engine's start; %s", g_learn.key.c_str(),
+                        static_cast<unsigned>(g_reserveMb), static_cast<unsigned>(bounds.minMb),
+                        static_cast<unsigned>(bounds.maxMb), tail.c_str());
+    };
+
+    gamevram::Record found;
+    if (gamevram::adoptRecord(store, g_learn.key, bounds, g_learn.facts, found)) {
+        g_reserveMb = found.reserveMb;
+        const gamevram::Record* stored = gamevram::findRecord(store, g_learn.key);
+        // A record without one (an old one, or an engine that never met the fall) starts like a new engine does.
+        g_flightMb = found.flightBudgetMb != 0 ? found.flightBudgetMb : gamevram::seedFlightBudgetMb(store, g_learn.key);
+        Log::get().note("game vram: auto for %s: reserve %u MB (limits %u to %u), flight budget %u MB (0: no fall seen), from %u earlier session(s) "
+                        "(reserve raised %u, lowered %u times).",
+                        g_learn.key.c_str(), static_cast<unsigned>(g_reserveMb), static_cast<unsigned>(bounds.minMb),
+                        static_cast<unsigned>(bounds.maxMb), static_cast<unsigned>(g_flightMb),
+                        static_cast<unsigned>(found.sessions), static_cast<unsigned>(found.tightened),
+                        static_cast<unsigned>(found.relaxed));
+        if (stored->old) {
+            Log::get().note("game vram: that is an older version's record: its reserve of %u MB was taken over as %u MB, and the "
+                            "flight budget is learned apart from it from now on.",
+                            static_cast<unsigned>(stored->reserveMb), static_cast<unsigned>(g_reserveMb));
         }
     } else {
-        g_reserveMb = gamevram::defaultReserveMb(vr, aa);
-        Log::get().note("game vram: auto for %s: reserve %u MB, the safe default for %s with %s (nothing learned yet).",
-                        g_learn.key.c_str(), static_cast<unsigned>(g_reserveMb), profile, aaName);
+        g_flightMb = gamevram::seedFlightBudgetMb(store, g_learn.key);
+        noteStart("flight budget " + std::to_string(g_flightMb) + " MB" +
+                  (g_flightMb != 0 ? ", from another engine on this machine" : " (no fall seen)") + " (nothing learned yet).");
     }
+    store.clear();
+    g_learn.active = true;
+}
+
+// finishAuto once for each adapter prepareAuto keys, whichever game thread asks first.
+void ensureAutoReady() {
+    if (g_autoReady.load(std::memory_order_acquire)) return;
+    AcquireSRWLockExclusive(&g_readyLock);
+    if (!g_autoReady.load(std::memory_order_relaxed)) {
+        finishAuto();
+        g_autoReady.store(true, std::memory_order_release);
+    }
+    ReleaseSRWLockExclusive(&g_readyLock);
 }
 
 // A save that did not land: the next pass hands it over again, and the first failure of the session is said once.
@@ -319,18 +455,23 @@ void runSave(const SaveJob& job) {
         saveFailed("it is there but could not be read, so it was left as it is");
         return;
     }
-    const gamevram::Record rec = gamevram::mergeLearned(g_learn.key, job.startedReserveMb, job.learned,
-                                                        gamevram::findRecord(store, g_learn.key));
+    // Adopted, as at install: an older version's reserve over the limit is not another session that raised it.
+    gamevram::Record found;
+    const bool any = gamevram::adoptRecord(store, g_learn.key, g_learn.bounds, g_learn.facts, found);
+    const gamevram::Record* basis = g_saveBasis.basisFor(any ? &found : nullptr);
+    const gamevram::Record rec =
+        gamevram::mergeLearned(g_learn.key, job.startedReserveMb, job.startedFlightMb, job.learned, basis);
     gamevram::upsertRecord(store, rec);
     std::wstring error;
     if (!writeFileAtomic(g_learn.storePath, gamevram::serializeStore(store), &error)) {
         saveFailed("error " + runtimeProfileUtf8(error));
         return;
     }
+    g_saveBasis.landed(rec);
     Log::get().note("%s", job.line.c_str());
-    if (rec.reserveMb != job.learned.reserveMb) {
-        Log::get().note("game vram: stored reserve %u MB for %s, kept from another session that raised it.",
-                        static_cast<unsigned>(rec.reserveMb), g_learn.key.c_str());
+    if (rec.reserveMb != job.learned.reserveMb || rec.flightBudgetMb != job.learned.flightBudgetMb) {
+        Log::get().note("game vram: stored reserve %u MB and flight budget %u MB for %s, kept from another session that learned a tighter one.",
+                        static_cast<unsigned>(rec.reserveMb), static_cast<unsigned>(rec.flightBudgetMb), g_learn.key.c_str());
     }
 }
 
@@ -392,7 +533,7 @@ void gameVramInstall(IDXGIAdapter* adapter) {
         return;
     }
 
-    const std::string temporal = Config::get().requestedTemporalMode();
+    const gamevram::AaSlot temporal = gamevram::aaSlotOf(Config::get().requestedTemporalMode());
 
     // The factory and any adapter we enumerate are ours to release. An adapter
     // the game passed in is not: we took no reference on it.
@@ -439,7 +580,6 @@ void gameVramInstall(IDXGIAdapter* adapter) {
         releaseOwned();
         return;
     }
-    g_learn.active = !g_learn.storePath.empty();
 
     char owner[MAX_PATH] = {};
     const char* ownerName = vtableOwnerModuleName(g_realGetDesc, owner, sizeof owner);
@@ -452,7 +592,7 @@ void gameVramInstall(IDXGIAdapter* adapter) {
 
 // The device exists only after D3D11CreateDevice returns. Elite's hardware create passes a null adapter, so install
 // keyed EnumAdapters(0), which a per-app high-performance GPU is not. When the device's adapter is a different GPU, auto
-// is sized and learned for that adapter instead: its own key and record (or the safe default), set here, before Elite's
+// is sized and learned for that adapter instead: its own key and record (or the engine's start), set here, before Elite's
 // first GetDesc, which comes from its budget sizing after create returns. The vtable patch is not touched again: every
 // adapter shares it, and the hook reads the reserve on each call. A device adapter that cannot be read leaves learning
 // stopped, so the session writes nothing under a key it cannot check.
@@ -470,19 +610,20 @@ void gameVramNoteDevice(ID3D11Device* device) {
         // Our own call: the hook answers it with the real desc, the caller is not the game exe.
         DXGI_ADAPTER_DESC desc{};
         if (!adapter || FAILED(adapter->GetDesc(&desc))) {
-            if (g_learn.active) {
-                g_learn.stopped = true;
+            // Learning starts only at Elite's first question, so a store to learn into is what says it would have.
+            if (!g_learn.stopped && !g_learn.storePath.empty())
                 Log::get().note("game vram: the device's adapter could not be read, so this session's samples are not saved.");
-            }
+            g_learn.stopped = true;
         } else if (!g_learn.haveGpu ||
-                   !gamevram::sameAdapterIdentity(g_learn.vendorId, g_learn.deviceId, desc.VendorId, desc.DeviceId)) {
-            Log::get().note("game vram: the device's adapter is v=%04X d=%04X, not v=%04X d=%04X the reserve was read for; "
-                            "auto is sized and learned for the device's adapter instead.",
+                   !gamevram::sameAdapterIdentity(g_learn.vendorId, g_learn.deviceId, desc.VendorId, desc.DeviceId) ||
+                   desc.AdapterLuid.LowPart != g_learn.luid.LowPart || desc.AdapterLuid.HighPart != g_learn.luid.HighPart) {
+            Log::get().note("game vram: the device's adapter is v=%04X d=%04X luid=%08lX, not v=%04X d=%04X luid=%08lX the reserve "
+                            "was read for; auto is sized and learned for the device's adapter instead.",
                             static_cast<unsigned>(desc.VendorId & 0xFFFFu), static_cast<unsigned>(desc.DeviceId & 0xFFFFu),
-                            static_cast<unsigned>(g_learn.vendorId & 0xFFFFu),
-                            static_cast<unsigned>(g_learn.deviceId & 0xFFFFu));
+                            static_cast<unsigned long>(desc.AdapterLuid.LowPart),
+                            static_cast<unsigned>(g_learn.vendorId & 0xFFFFu), static_cast<unsigned>(g_learn.deviceId & 0xFFFFu),
+                            static_cast<unsigned long>(g_learn.luid.LowPart));
             prepareAuto(adapter, g_learn.aaAtInstall);
-            g_learn.active = !g_learn.storePath.empty();
         }
         if (adapter) adapter->Release();
     }
@@ -490,8 +631,12 @@ void gameVramNoteDevice(ID3D11Device* device) {
 }
 
 // The render thread, once a second, from the graphics memory watch (vram_tick.cpp). Feeds the session's figures and,
-// at each minute of samples or a new crossing of the budget, learns the reserve for the next session and saves it.
+// at each minute of samples or a spill over the budget, learns the reserve for the next session and saves it.
 void gameVramObserve(uint64_t nowMs, uint64_t usageBytes, uint64_t budgetBytes) {
+    // Elite has not asked yet, so it was not sized: nothing to measure against. Read first: finishAuto's writes to g_learn
+    // come before this budget is published.
+    const uint64_t startBudget = g_startBudgetBytes.load(std::memory_order_acquire);
+    if (startBudget == 0) return;
     if (!g_learn.active || g_learn.stopped) return;
 
     // A switch between flat and VR (or to passthrough) changes EDVR's own share by gigabytes, and the key names the profile
@@ -504,15 +649,13 @@ void gameVramObserve(uint64_t nowMs, uint64_t usageBytes, uint64_t budgetBytes) 
         return;
     }
 
-    const std::string aa = Config::get().requestedTemporalMode();
-    if (aa != g_learn.aaAtInstall) {
+    if (gamevram::aaSlotOf(Config::get().requestedTemporalMode()) != g_learn.aaAtInstall) {
         g_learn.stopped = true;
         // The new mode is not named: the F8 menu steps through the modes in between, so the first change seen is often
         // not the one the player is choosing.
+        const char* was = gamevram::aaSlotWord(g_learn.aaAtInstall);
         Log::get().note("game vram: the AA mode changed away from %s; Elite's budget was sized for %s, so this session teaches nothing more. "
-                        "The next start sizes it for whichever mode is selected then.",
-                        g_learn.aaAtInstall.empty() ? "off" : g_learn.aaAtInstall.c_str(),
-                        g_learn.aaAtInstall.empty() ? "off" : g_learn.aaAtInstall.c_str());
+                        "The next start sizes it for whichever mode is selected then.", was, was);
         return;
     }
     // The device's adapter is known only after create returns. Until then a sample would teach the install key,
@@ -520,22 +663,33 @@ void gameVramObserve(uint64_t nowMs, uint64_t usageBytes, uint64_t budgetBytes) 
     if (!g_learn.deviceNoted) return;
 
     static gamevram::SessionWatch watch;
-    watch.sample(nowMs, usageBytes, budgetBytes);
+    const uint64_t plannedMb = gamevram::plannedBudgetMb(startBudget >> 20, g_flightMb);
+    watch.sample(nowMs, usageBytes, budgetBytes, plannedMb << 20);
     const uint32_t samples = watch.samples();
-    const uint32_t crossings = watch.crossings();
-    // A pass runs at the first crossing of the budget, and then once a minute of samples.
-    const bool firstCrossing = g_learn.lastCrossings == 0 && crossings > 0;
+    // Said once, so that a log without a result tells a short session from a watch that never ran.
+    static bool noted = false;
+    if (!noted && samples != 0) {
+        noted = true;
+        Log::get().note("game vram: watching %s: Elite was sized from %llu MB of a %llu MB start budget. The first result comes after "
+                        "five minutes, or when the process has been over the budget for two.",
+                        g_learn.key.c_str(), static_cast<unsigned long long>(plannedMb),
+                        static_cast<unsigned long long>(startBudget >> 20));
+    }
+    // A pass runs at the first spill, and then once a minute of samples.
+    const bool firstSpill = !g_learn.spillPassed && watch.spills() > 0;
     const bool everyMinute = samples >= kLearnEverySamples && samples - g_learn.lastPassSamples >= kLearnEverySamples;
-    if (!firstCrossing && !everyMinute) return;
+    if (!firstSpill && !everyMinute) return;
     g_learn.lastPassSamples = samples;
-    g_learn.lastCrossings = crossings;
+    g_learn.spillPassed = watch.spills() > 0;
 
-    // Always from the reserve this session started with, so repeated passes never compound.
-    const gamevram::LearnResult r = gamevram::learn(g_reserveMb, watch);
+    // Always from the reserve and flight budget this session started with, so repeated passes never compound.
+    const gamevram::LearnResult r =
+        gamevram::learn(g_reserveMb, g_flightMb, static_cast<uint32_t>(startBudget >> 20),
+                        g_learn.bounds, watch);
     // A save that failed is not "already written": forget it so this pass hands it over again.
-    if (g_saveFailed.exchange(false, std::memory_order_acq_rel)) g_learn.lastSavedReserve = 0;
-    if (g_learn.lastSavedReserve != 0 && r.reserveMb == g_learn.lastSavedReserve &&
-        std::strcmp(g_learn.lastSavedWhy, r.why) == 0)
+    if (g_saveFailed.exchange(false, std::memory_order_acq_rel)) g_learn.haveHanded = false;
+    if (g_learn.haveHanded && r.reserveMb == g_learn.handed.reserveMb && r.flightBudgetMb == g_learn.handed.flightBudgetMb &&
+        std::strcmp(g_learn.handed.why, r.why) == 0)
         return;
     // A session too short to judge has taught nothing: it must not write a record that later reads as "learned".
     if (r.outcome == gamevram::LearnResult::Outcome::TooShort) return;
@@ -544,11 +698,12 @@ void gameVramObserve(uint64_t nowMs, uint64_t usageBytes, uint64_t budgetBytes) 
     if (!job) return;
     job->learned = r;
     job->startedReserveMb = g_reserveMb;
-    char line[512];
-    gamevram::formatLearnLine(line, sizeof line, g_learn.key, g_reserveMb, watch, r);
+    job->startedFlightMb = g_flightMb;
+    char line[768];
+    gamevram::formatLearnLine(line, sizeof line, g_learn.key, g_reserveMb, g_flightMb, watch, r);
     job->line = line;
-    g_learn.lastSavedReserve = r.reserveMb;
-    g_learn.lastSavedWhy = r.why;
+    g_learn.handed = r;
+    g_learn.haveHanded = true;
     submitSave(job);
 }
 

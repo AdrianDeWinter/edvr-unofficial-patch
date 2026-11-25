@@ -14,7 +14,9 @@
 // The three settings:
 //   off    -- Elite is told the card's real size, as without EDVR.
 //   auto   -- (shipped) Elite is told a size whose 85% fits the OS budget for
-//             the game, less a learned reserve (game_vram_learn.h) and a margin;
+//             the game, or what other programs leave of the card when that is
+//             less, or the budget it was seen to fall to in flight, less a
+//             learned reserve (both game_vram_learn.h) and a margin;
 //             never under 4096 MB, never over the card.
 //   number -- Elite is told that many MB (256 or more), or the card's real size
 //             if that is smaller.
@@ -94,7 +96,10 @@ inline Setting parseSetting(const std::string& text) {
 struct Inputs {
     uint64_t realDedicatedBytes = 0;  // what GetDesc really returned
     uint64_t osBudgetBytes = 0;       // QueryVideoMemoryInfo LOCAL Budget; 0 = unknown
+    bool     othersKnown = false;     // Auto: othersBytes was read
+    uint64_t othersBytes = 0;         // Auto: what other processes held of the card when auto was prepared
     uint32_t reserveMb = 0;           // Auto: EDVR's, the upscaler's and the driver's share to leave free
+    uint32_t flightBudgetMb = 0;      // Auto: what the OS budget was seen to fall to in flight; 0 = no fall seen
 };
 
 struct Result {
@@ -102,6 +107,7 @@ struct Result {
     uint64_t    reportedBytes = 0;  // == realDedicatedBytes when change is false
     uint32_t    targetMb = 0;       // auto only: the streaming budget aimed at; else 0
     uint64_t    budgetBytes = 0;    // auto only: the OS budget used (95% of the card when unknown); else 0
+    uint64_t startBytes = 0;        // auto only: startBudgetMb() of it; else 0
     const char* why = "";           // short reason, static string, no spaces at the ends
 };
 
@@ -111,9 +117,34 @@ struct Result {
 // every settled session down to the floor. A WDDM budget on Windows is below the card, so the caller asks only under Wine.
 // Known false positive: an AMD card on RADV without Resizable BAR has a second, 256 MB CPU-visible device-local heap; DXVK
 // sums both budgets, which can reach the GetDesc size on a quiet desktop although the driver reports a real budget. That
-// setup then keeps the safe default reserve and learns nothing. docs/memory-growth-2026-10-22.md has the reasoning.
+// setup then keeps the engine's starting reserve and learns nothing. docs/memory-growth-2026-10-22.md has the reasoning.
 inline bool budgetIsWholeCard(uint64_t osBudgetBytes, uint64_t realDedicatedBytes) {
     return osBudgetBytes != 0 && realDedicatedBytes != 0 && osBudgetBytes >= realDedicatedBytes;
+}
+
+// The budget to start from. Windows' budget at start leaves out most of what other programs hold: it is generous until the
+// card is in demand, and then falls to about what they leave. On the 12 GB card of the 2026-11-23 and -24 flights it read
+// 11349 MB at start and 8900-9600 MB in flight; other programs held 2747 MB of the 12118 (a browser 2303 of it), which
+// leaves 9371. Never under half the OS budget: programs that large are likely to be pushed out, or gone, by flight.
+inline uint64_t startBudgetMb(uint64_t osBudgetMb, uint64_t realMb, bool othersKnown, uint64_t othersMb) {
+    if (!othersKnown) return osBudgetMb;
+    const uint64_t left = realMb > othersMb ? realMb - othersMb : 0;
+    const uint64_t half = osBudgetMb / 2;
+    const uint64_t start = left < osBudgetMb ? left : osBudgetMb;
+    return start > half ? start : half;
+}
+
+// At most a quarter of the budget at start is given up to a fall: another program large enough for more is not this
+// game's normal company, and one session beside it must not starve the next.
+inline uint64_t flightBudgetFloorMb(uint64_t startBudgetMb) { return startBudgetMb - startBudgetMb / 4; }
+
+// The budget Elite is sized from: the one read at start, or the one it falls to in flight when that is lower. The flight
+// figure is a size, not a difference, so a start that is already low (another program holds the card) is not lowered twice.
+inline uint64_t plannedBudgetMb(uint64_t startBudgetMb, uint32_t flightBudgetMb) {
+    if (flightBudgetMb == 0) return startBudgetMb;
+    const uint64_t floor = flightBudgetFloorMb(startBudgetMb);
+    const uint64_t flight = flightBudgetMb > floor ? flightBudgetMb : floor;
+    return flight < startBudgetMb ? flight : startBudgetMb;
 }
 
 inline Result compute(const Setting& s, const Inputs& in) {
@@ -141,12 +172,14 @@ inline Result compute(const Setting& s, const Inputs& in) {
     // Auto. Without an OS budget, 95% of the card stands in for it.
     const bool osKnown = in.osBudgetBytes != 0;
     const uint64_t budgetBytes = osKnown ? in.osBudgetBytes : ((realMb * 95 / 100) << 20);
-    const uint64_t budgetMb = budgetBytes >> 20;
+    const uint64_t startMb = startBudgetMb(budgetBytes >> 20, realMb, in.othersKnown, in.othersBytes >> 20);
+    const uint64_t budgetMb = plannedBudgetMb(startMb, in.flightBudgetMb);
     const uint64_t reserveAndMargin = static_cast<uint64_t>(in.reserveMb) + kMarginMb;
     uint64_t target = budgetMb > reserveAndMargin ? budgetMb - reserveAndMargin : 0;
     if (target > 0xFFFFFFFFull) target = 0xFFFFFFFFull;
     r.targetMb = static_cast<uint32_t>(target);
     r.budgetBytes = budgetBytes;
+    r.startBytes = startMb << 20;
 
     // Non-negative, so the conversion truncates to the floor.
     uint64_t reportedMb = static_cast<uint64_t>(static_cast<double>(target) / kEliteBudgetFactor);
@@ -223,8 +256,9 @@ inline const char* settingText(const Setting& s, char* buf, size_t len) {
 
 // One line per GetDesc call that came from the game's exe. Exact format:
 // "game vram: call=<n> caller=exe+0x<RVA hex uppercase> real_mb=<R> reported_mb=<P> setting=<settingText> (<why>)"
-// plus, for auto only, " budget_mb=<B> target_mb=<T> reserve_mb=<R>" appended before " (". B is the budget used
-// (the 95% estimate when the OS gave none), R is in.reserveMb.
+// plus, for auto only, " budget_mb=<B> others_mb=<O> target_mb=<T> reserve_mb=<R> planned_mb=<L>" appended before " (". B is the
+// budget read (the 95% estimate when the OS gave none), O what other programs held ("unknown" when not read), R is
+// in.reserveMb, L is plannedBudgetMb().
 // Returns the number of characters written (snprintf semantics, clamped to len-1).
 inline int formatCallLine(char* buf, size_t len, uint32_t callIndex, uint64_t callerRva,
                           const Setting& s, const Inputs& in, const Result& r) {
@@ -245,10 +279,14 @@ inline int formatCallLine(char* buf, size_t len, uint32_t callIndex, uint64_t ca
         static_cast<unsigned long long>(in.realDedicatedBytes >> 20),
         static_cast<unsigned long long>(r.reportedBytes >> 20), setting));
     if (s.mode == Mode::Auto) {
+        char others[24] = "unknown";
+        if (in.othersKnown)
+            std::snprintf(others, sizeof others, "%llu", static_cast<unsigned long long>(in.othersBytes >> 20));
         clampTo(std::snprintf(
-            line + n, sizeof line - n, " budget_mb=%llu target_mb=%u reserve_mb=%u",
-            static_cast<unsigned long long>(r.budgetBytes >> 20), static_cast<unsigned>(r.targetMb),
-            static_cast<unsigned>(in.reserveMb)));
+            line + n, sizeof line - n, " budget_mb=%llu others_mb=%s target_mb=%u reserve_mb=%u planned_mb=%llu",
+            static_cast<unsigned long long>(r.budgetBytes >> 20), others, static_cast<unsigned>(r.targetMb),
+            static_cast<unsigned>(in.reserveMb),
+            static_cast<unsigned long long>(plannedBudgetMb(r.startBytes >> 20, in.flightBudgetMb))));
     }
     clampTo(std::snprintf(line + n, sizeof line - n, " (%s)", r.why));
 

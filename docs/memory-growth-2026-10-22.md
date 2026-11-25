@@ -33,14 +33,17 @@
     `DedicatedVideoMemory` for the game exe's GetDesc calls only, with no game
     address (`src/common/game_vram*.h`, `src/d3d11/game_vram_hook.cpp`).
   - Flown: 8192 levelled Elite at 0.85 x 8192 and it freed in flight, with
-    textures unchanged. `auto` learns its reserve per setup from DXGI alone,
-    starting from safe defaults (flat 1536/2048/3584, VR 3072/3584/4608 MB
-    for off/TAA/upscaler), and keeps it in
-    `%LOCALAPPDATA%\EDVR\game_vram.txt`. A 30 min run held Elite at its
-    target and tightened 3584 -> 3963 MB after a near miss from the other
-    share.
+    textures unchanged. `auto` learns per setup from DXGI's figures and keeps
+    it in `%LOCALAPPDATA%\EDUP\game_vram.txt`.
+  - **2026-11-24** ("Per-engine reserves" at the end): the v0.23.0 reserves
+    starved Elite (a field report, issue #290; Elite held to 3.5-3.9 GB with
+    2.6-3.5 GB free). Each anti-aliasing engine has its own starting reserve and limits.
+    The first cut spilled by 1 GB in its first flight, because the OS budget
+    falls to what other programs leave of the card. It now reads that at
+    start, and one length gate decides what teaches. Flown on flat XeSS: no
+    spill, and the reserve came down as it should. Next: the affected player.
   - Any setup, flown before or not (VR, Wine/Proton, another vendor or
-    card), starts from the default for its profile and AA mode and learns
+    card), starts from the default for its profile and AA engine and learns
     from there. Where the OS reports no budget, `auto` takes 95% of the
     card. The log's `game vram:` lines name the setup, the reserve used and
     each learning step, so a report from a new setup is read from its log.
@@ -706,3 +709,297 @@ shows the "is the whole card" line with a budget only slightly above the card
 size. A fix would compare against the largest heap's own budget, which DXGI
 does not expose. wined3d's figures were not read in source and may slip
 through the test the other way.
+
+### Per-engine reserves (2026-11-24 and -25)
+
+A player on v0.23.0 (VR, anti-aliasing off, an 8 GB NVIDIA laptop card,
+2688x2880 an eye) reports models and textures that never load in. The report is
+not proven to come from `auto`: no log has it off. What the logs show:
+
+- Elite was told 4163-4612 MB of a 7891 MB card, so its streaming target was
+  3539-3921 MB. Elite sat at that target in nearly every session (medians
+  3577-3971 MB), while 2.6-3.5 GB of the 7123 MB budget stayed free.
+- The share beside Elite after loading was 91-612 MB at the median and at most
+  about 1200 MB at the 95th percentile. The reserve and margin held back
+  3202-3584 MB for it.
+- The closest approach that the learning used came from loading, 84-123 s into
+  the session. Usage is then up to 2.0 GB above Elite's own total for about a
+  minute. The reserve settled at 2690-2951 MB and could not go lower.
+
+The second set is eight flat XeSS sessions on the 12 GB Arc B580 (2026-11-23,
+frame generation on, a 3264x1836 render). One reserve had walked from 3963 to
+6073 MB:
+
+- In the two sessions longer than 20 minutes the share beside Elite was
+  2450-2530 MB at the median, and 2659-3315 MB at the 95th percentile.
+- **The OS budget falls with use.** It reads 11,349 MB at start and while the
+  process holds less than about 7 GB, and 8900-9600 MB above that. It goes back
+  and forth all session. The 8 GB card shows the same on a smaller scale (7123
+  MB, and 6400-6750 MB during loading). The likely reason is that the OS hands
+  out a generous figure until the card is in demand; only the fall itself is
+  measured. Auto sizes Elite from the figure at start, so v0.23.0 charged the
+  fall to the reserve.
+- The stored counters overstate: the 01:29 session started from 7 sessions and 4
+  raises, and the next start read 18 and 11. Every save of a session counted as
+  a session, and as a raise.
+
+What changed (`src/common/game_vram_learn.h`):
+
+- **One slot per engine.** Off, TAA, DLSS, DLAA, FSR 3.1, FSR 4.1, DittoSR and
+  XeSS each have a key, a starting reserve, a minimum and a maximum, for flat
+  and for VR. Elite's own render targets are in its own total (`egpu_mb`), so
+  they need no reserve.
+
+  | Engine | Flat start (limits) | VR start (limits) |
+  |---|---|---|
+  | Off | 1152 (256-1536) | 1024 (256-1536) |
+  | TAA | 2112 (256-2560) | 1280 (384-1792) |
+  | DLSS, DLAA | 2048 (512-3584) | 2560 (768-4096) |
+  | FSR 3.1 | 2816 (512-3584) | 2560 (768-4096) |
+  | FSR 4.1 | 2560 (768-4096) | 3072 (768-4608) |
+  | DittoSR | 2816 (384-3072) | 2048 (512-3072) |
+  | XeSS | 3584 (1536-4608) | 3584 (1536-4608) |
+
+  Measured: VR Off, and flat Off, TAA, FSR 3.1, DittoSR and XeSS (the engine
+  runs below). Every other cell is an estimate, and all of them are where a
+  setup starts, not where it stays. The 512 MB margin comes on top.
+- **The start budget counts what other programs hold.** It is the smaller of the
+  OS budget and the card less their use: the `GPU Adapter Memory` counter's
+  `Dedicated Usage` for the card, less this process's own from the
+  `GPU Process Memory` counter in the same sample
+  (`src/common/adapter_memory.h`). The read starts on a pool thread when auto is
+  prepared, inside Elite's first `D3D11CreateDevice`, and Elite's first
+  `GetDesc` waits for it, until 10 s after it started, and then goes on without
+  it. It took 1.3-2.4 s in most flights and 4.4 s once. In flight
+  20261125_111642 the first `GetDesc` came 3.5 s after install, so the wait is
+  mostly hidden behind the device's creation and Elite's own loading. The
+  reading keeps every card's row, so a device on another card needs no second
+  read. Wine has no such counter, and the OS budget then stands alone.
+- **One length gate, for everything.** A level counts when it was held for 120
+  seconds of a 150 s window: use at or above it, or the budget at or under it.
+  There is no notion of loading. In the ten logs (six VR, four flat) the first
+  five minutes stay above the later 95th percentile for up to 152 s, so a load
+  raises what the gate sees by at most about 270 MB. The 30 spare seconds let a
+  trim of the resident memory pass. The highest use that was held decides the
+  reserve. Without a spill, one session raises it by at most 512 MB, and lowers
+  it by half the spare room, the held room less the margin. It lowers nothing
+  when the process was over the budget for 120 s in all, however short each
+  time.
+- **A spill teaches at once.** A window held over the budget lowers the flight
+  budget and raises the reserve by all that was short, however short the session
+  is.
+- **The flight budget is its own figure**, stored beside the reserve: what the
+  OS budget fell to in flight, when that is less than the start budget. Elite is
+  sized from the lower of the two, but from no less than three quarters of the
+  start budget. It is a size and not a difference, so a start that is already
+  low is not lowered a second time. A deeper fall is taken at once. The figure
+  rises 512 MB at a time, after sessions that level off without meeting the
+  fall. An engine with none yet starts from the one another engine learned on
+  the same machine.
+- **v0.23.0's records are taken over.** Their one figure was the reserve and the
+  fall together, and how much was fall depended on what else ran when it was
+  learned. The share lies between the figure less today's fall and the figure
+  itself. The slot's start stands, unless the figure itself is less, or it was
+  raised to above v0.23.0's starting figure and is still more after the fall; at
+  or below that, nothing showed the need (the VR player's 2841 under 3072). What
+  is then over the limit becomes a flight budget. A record that was never raised
+  or lowered, old or new, takes the current start and keeps its flight budget.
+  The store has a sixth field, the flight budget. A five-field line stays as it
+  is until its own setup saves.
+- A session counts once however often it saves.
+
+Flight 20261124_210604 flew the first cut of this, which did not read what other
+programs hold, took a record over at the limit and dropped the rest, and let
+only settled time after the first five minutes teach. Flat, XeSS, frame
+generation on, a 3264x1836 render, one station:
+
+- The record there gave reserve 4096 (the old 5561 was cut to the limit), a
+  budget of 11,349 MB and a target of 6741 MB. v0.23.0 aimed at 5276 MB there.
+- Loading began 180 s in. The budget fell to 9291 MB at 8010 MB of use and to
+  8925-9097 MB later. The process was over it from 236 s to the end at 361 s, by
+  up to 1232 MB, with Elite at 6629 MB and the share beside it at 3530-3640 MB.
+  Free system memory fell from 9.1 to 4.5 GB. DXGI's non-local figure stayed at
+  46-107 MB, so it does not show this demotion.
+- It learned nothing: 56 settled seconds, and the reserve was at its limit.
+- Cause of the fall: with the game closed the same evening, all programs held
+  2747 MB of the card's 12,118 MB (a browser 2303 MB of it). 9371 MB is left.
+  The flights had 8900-9600 MB. The 11,349 MB at start leaves that out.
+
+With the second cut that flight's start is 9371 MB, and reserve 4096 gives a
+target of 4763 MB; the share of 3.6 GB on top is 8.4 GB of about 9.1. A new setup
+with XeSS's 3584 gives 5275 MB. The player's 8 GB card depends on what their
+other programs hold, which no log has; a budget of 6.4-6.7 GB in flight gives
+about 4900-5200 MB, from a new start or from their record, instead of 3770 MB.
+
+Flight 20261124_212859 flew the second cut, 16.6 minutes, the same setup. There
+was no spill and no `pressure` line:
+
+- Other programs held 3022 MB, so the start budget was 9096 MB; reserve 4096
+  gave a target of 4488 MB. Elite held 4206-4463 MB. The OS budget, when it
+  fell, read 9057-9282 MB, within 2% of the prediction.
+- The closest approach was 1332 MB, while loading. The share beside Elite was
+  1900 MB at the median and at most 3484 MB, again while loading, so 4096 was
+  more than it needed.
+- **Nothing was learned**, and no line was written. That cut left out "loading",
+  the two minutes after usage last climbed by 2 GB, from the figures. At
+  transitions the resident figure falls under Elite's own total (3634 MB against
+  4338 at 21:38:44) and comes back, and each return counted as a climb. Replayed
+  from the 30 s lines, 636 of 1005 s were loading; the log does not hold the 1 s
+  samples. The length gate above replaced the rule. The same replay with the
+  gate has 7133 MB held, 1963 MB under the planned budget.
+- Reading what other programs hold took 1332 ms, once, at start.
+
+Flight 20261124_222529 flew the length gate (build 6B05F96E), 23 minutes, the
+same setup. There was no spill and no `pressure` line:
+
+- Other programs held 3478 MB, so the start budget was 8640 MB; reserve 4096
+  gave a target of 4032 MB. Elite held 3986 MB at the median. The OS budget,
+  when it fell, read 9008-9043 MB: the prediction was about 400 MB low, the safe
+  side.
+- The share beside Elite was 2623 MB at the median and 3320 MB at the 95th
+  percentile.
+- At 307 s: held 6778 MB, 1861 MB under the planned budget, reserve held (not
+  15 min yet). At 924 s: plateau, "relaxed: room to spare", 4096 -> 3584 MB, the
+  512 MB a session could give back in that build. Half the spare room would have
+  been 640 MB, and with the same share the next sessions go 3456, 3136, 2944 and
+  stop (rig case). The closest approach was 1594 MB, and the
+  7381 MB peak did not count: it was not held.
+- The store reads `3584 0 26 12 2`: one more session and one more lowering, from
+  two saves.
+
+Flight 20261124_232058 flew the half-spare step (build 6B060C36), 42 minutes, the
+same setup. There was no spill and no `pressure` line:
+
+- Other programs held 3643 MB, so the start budget was 8475 MB; reserve 3584
+  gave a target of 4379 MB. Elite held 4376 MB at the median.
+- At 311 s: held 7199 MB, 1275 MB under the planned budget. At 15 min the store
+  took 3264 MB: half of 1275 - 512 is 381, in whole steps 320. It stayed there
+  for the other 27 minutes. That second line was in a log tail that rotated out;
+  the store reads `3264 0 27 12 3`, written 23:36:27.
+- The budget held 9080 MB when it fell, 605 MB above the start budget. What
+  other programs held (3643 MB) was more than they kept (about 3038): part of
+  their memory gives way. The error is on the safe side and costs Elite that
+  much.
+
+Runs 20261125_001137 (XeSS frame generation on) and 20261125_004044 (off) took
+each engine the Arc card runs in turn, from one place, flat, 3264x1836. The
+share beside Elite (`local_used_mb` less `egpu_mb`), from 45 s after each
+switch, median and range in MB:
+
+| Engine | Frame generation on | off |
+|---|---|---|
+| XeSS, first | 2574 (1857-2781) | 2185 (1120-2380) |
+| Off | 1447 (1168-1584) | 1246 (1103-1262) |
+| TAA | 1902 (1799-2080) | 2393 (2330-2404) |
+| FSR 3.1 | 2142 (1854-2142) | 2438 (1490-2479) |
+| DittoSR | 2596 (2411-2757) | 2217 (2208-2217) |
+| XeSS, last | 2207 (1531-2711) | 2766 (2332-2766) |
+
+- Off is clearly lower. The other four overlap: the same engine differs by
+  300-500 MB between the runs, with 2 to 6 readings in most blocks, so they are
+  not ranked.
+- Frame generation costs XeSS about 400 MB. Off reads 200 MB higher in that run,
+  probably because what it set up at start stays.
+- Flat starts and maxima were first set from this, and XeSS's start at 2816 MB.
+  Parked readings are low (next flight). TAA's maximum of 1792 MB plus the
+  margin was under its 2404 MB reading, so it is 2560.
+- The second run's budget held 9002 MB where 9349 was planned; the learner took
+  a flight budget of 8960 MB. Closest approach 625 MB, while loading; no spill.
+
+Flight 20261125_013401 flew those starts with `game_vram.txt` deleted from
+`%LOCALAPPDATA%\EDUP`, and spilled for four and a half minutes, by up to 1166
+MB:
+
+- It was not a fresh start. The hook reads the older
+  `%LOCALAPPDATA%\EDVR\game_vram.txt` when the newer file is missing, and it
+  held `3963 2 1 0`. Taking today's fall (11,349 less 9160) off it left 1774 MB,
+  so the target was 6874 MB. Elite held 6.7-6.8 GB.
+- The share beside Elite was 3426 MB with Elite at 5919 MB, and 3451-3494 MB
+  with it at 6.7-6.8 GB, against about 2.2-2.8 GB parked. It grows while Elite
+  streams hard. With Elite at 5919 MB the process was at 9345 MB of 9222, so
+  the 2816 MB start would have spilled too (target 5832).
+- The start budget was right: 9160 MB planned, 9140-9390 read.
+- The learner raised 1774 to 2158, 2542 and 3310 MB in the same session. The
+  first pass, at 307 s, was before the spill was held.
+- What changed: the conversion above, XeSS's start back at 3584, and the other
+  flat starts raised as far as their limits allow (Off 1472, TAA 2496, FSR 3.1
+  and DittoSR 2816; Off and TAA have since come down). Not flown.
+
+Flights 20261125_015932 (XeSS), 20261125_020521 (Off) and 20261125_021144 (TAA),
+build 6B063173, a busy station with streaming forced by moving around it, a
+restart between each. No record for any of them before. No crossing in any; five
+to six minutes each, so every result is the first pass ("held: ... under 15
+min") and no reserve was raised or lowered yet:
+
+| | XeSS | Off | TAA |
+|---|---|---|---|
+| Reserve and target | 3584, 5059 | 1472, 7104 | 2496, 6080 |
+| Elite at its highest reading | 4996 | 4772 | 6019 |
+| Share beside Elite, highest | 3601 | 1606 | 2443 |
+| Closest to the budget | 347 | 4903 | 630 |
+
+- XeSS's 3601 MB was at load, then 2739-2879. Its flight budget, 9088 MB, was
+  taken as the start for Off and TAA, as it should be.
+- Off never reached its target, so the limit is not tested at full streaming:
+  its highest use was 6446 MB. Its 1606 MB share fits 1472 plus the margin.
+- TAA reached its target in the last minute. Its highest use was 8608 MB, so a
+  share of about 2590 MB, which fits 2496 plus the margin.
+- Reading what other programs hold took 1757-2411 ms, and 4432 ms once before.
+- The player saw unused VRAM and missing textures and models in Off and TAA. In
+  TAA Elite was at its target and evicting (565 eviction brakes in the streaming
+  boost's line), so a lower reserve gives it more. In Off it was not: 4772 MB of
+  7104 and still rising after five minutes, no eviction brake, so the reserve
+  did not hold it back and the cause is elsewhere (unproven).
+- **These runs are not a clean comparison.** A full build of another worktree
+  ran on the same machine: compiling from 01:56, then its test rigs from about
+  02:05 to 02:12 (1,222 files written), and a second build from 02:16. XeSS flew
+  01:59-02:05, Off 02:05-02:11 and TAA 02:11-02:17. Frames of 250 ms or more: 12
+  in XeSS (8.3 s in all), 41 in Off (37.8 s, 14.4 s of it at start) and 29 in TAA
+  (22.1 s, 8.5 s at start; few after 02:13). XeSS went from 3313 to 4996 MB in a
+  minute; Off from 3186 to 4772 in three. The slow loading in Off, and the early
+  part of TAA, can come from that load, so no cause in the mode is shown.
+- Off's share of 1606 MB was read while Elite was far below its target, so it
+  may understate what a full Off session holds.
+- Off and TAA then start at their highest share (1606 and 2590 MB) less the
+  margin, rounded up: 1152 and 2112 MB, 320 and 384 MB less. Not flown.
+
+Flight 20261124_220159, in between, flew the older DLL by mistake, so it says
+nothing about the gate; its figures (target 3932, share 2585 MB at the median)
+are the same setup's.
+
+Reviewed 2026-11-25: a record below v0.23.0's default no longer raises
+the reserve, sessions with repeated overflow bursts no longer lower it, an old
+record is taken over under Wine as on Windows, the reading is bounded, and what
+other programs hold is applied to the card it was read for only.
+
+Flight 20261125_111642 flew that build: flat XeSS, frame generation on, 13.7
+minutes.
+
+- Other programs held 3103 MB, so the start budget was 9015 MB and the target
+  4919 MB (reported 5787). Windows' budget in flight was 9025-9425 MB. Elite
+  held 4565-4897 MB from the first minute. No crossing; the closest approach was
+  318 MB.
+- Held use 8242 MB, held budget 9245 MB, so nothing was raised. The session was
+  under 15 minutes, so nothing was lowered.
+- The share beside Elite was 2.8-3.8 GB, inside the 4096 MB held back.
+
+What it does not cover:
+
+- The flight budget is an absolute size. Learned beside a large program, it caps
+  later starts without that program until sessions that level off raise it
+  again, 512 MB at a time (Off planned 9088 MB of a 9523 MB start on 2026-11-25).
+- Samples taken while the game is in the background count. Whether Windows
+  lowers its budget then, and so teaches a low flight budget, is unproven.
+
+- Loading can cross the budget on the 8 GB card: its peak was about 2.0-2.3 GB
+  above the target. Minutes 2 and 3 of its six sessions held a share of 550 MB
+  once, 1190-1355 MB three times and 1640-1960 MB twice, against the 1536 MB
+  held back, and then under 1 GB by about minute 4 in five of them. The length
+  gate ignores a crossing unless it lasts two minutes, so one of those can teach.
+  It is not flown.
+- Frame generation, the render size and the headset are not in the key. A change
+  to one of them is learned over the next sessions.
+- A program that takes the card after the game has started is not in the start
+  budget. The flight budget learns it.
+- An engine that truly needs more than its maximum stays over it. The log then
+  says "held: at this engine's limit".
