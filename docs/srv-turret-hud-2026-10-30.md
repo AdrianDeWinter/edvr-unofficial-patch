@@ -2,7 +2,7 @@
 
 ## Status
 
-- **State (2026-11-01, stripped):** the TEMPORARY issue-140 instruments are gone
+- **State (2026-11-26, #181 polling fix; strip unchanged):** the TEMPORARY issue-140 instruments are gone
   from the module, the rig and the log rule (branch `claude/trusting-jang-af02fa`,
   journal "the strip" below). Removed: the GPU instrument and its stream-output
   twins, the holo source, the radar camera V0, the unmoved-draw instrument, the
@@ -627,9 +627,9 @@ writers point at a compute pass, a copy or an indirect draw.
 Moved here from the Status block (to keep it short), the latency note: both
 parts follow Status.json, which the watcher polls every 500 ms and the game
 rewrites about once a second. The on-foot eager poll
-(`journalWatchSetEagerStatusOnFoot`) never shortens the worker's sleep:
-`untilNextDue()` honours `g_eager` only. Left alone; a fix would change on
-foot too.
+(`journalWatchSetEagerStatusOnFoot`) did not shorten the worker's sleep:
+`untilNextDue()` honoured `g_eager` only. Fixed in #181: all three eager
+requests now share the decision for both the read pass and worker sleep.
 
 ### 2026-10-31: the radar's camera is fixed (flight 707c0ab5; no fix built)
 
