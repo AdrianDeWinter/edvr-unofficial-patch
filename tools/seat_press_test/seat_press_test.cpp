@@ -217,9 +217,12 @@ void srvContext() {
     writeFile(opt + L"\\StartPreset.start", "Custom\r\n");
     check(eliteBindsActionSrvDir("ToggleBuggyTurretButton", opt.c_str(), game.c_str(), &b) && std::strcmp(b.file, "Custom.4.2.binds") == 0 && b.slot[0].binding.padButtons == 0x8000,
           "with only the old StartPreset.start the answer is the active preset's file, as before");
-    writeFile(opt + L"\\StartPreset.4.start", "Custom\r\nCustom\r\nConsoleX360\r\n");
+    writeFile(opt + L"\\StartPreset.4.start", "Custom\r\nCustom\r\n");
     check(eliteBindsActionSrvDir("ToggleBuggyTurretButton", opt.c_str(), game.c_str(), &b) && std::strcmp(b.file, "Custom.4.2.binds") == 0,
-          "a three-line preset with trailing CRLF uses the legacy all-lines selection");
+          "two preset lines with trailing CRLF use the all-lines selection");
+    writeFile(opt + L"\\StartPreset.4.start", "Custom\r\nCustom\r\n \t\r\nCustom\r\n");
+    check(eliteBindsActionSrvDir("ToggleBuggyTurretButton", opt.c_str(), game.c_str(), &b) && std::strcmp(b.file, "Custom.4.2.binds") == 0,
+          "a whitespace-only third line uses the all-lines selection");
     // Sean's file
     writeFile(opt + L"\\StartPreset.4.start", "Custom\r\nCustom\r\nConsoleX360\r\nCustom\r\n");
     check(!eliteBindsActionSrvDir("ToggleBuggyTurretButton", opt.c_str(), game.c_str(), &b), "the SRV line names ConsoleX360, which is nowhere yet: not found (the stale Custom file is not used)");
@@ -227,6 +230,23 @@ void srvContext() {
     check(eliteBindsActionSrvDir("ToggleBuggyTurretButton", opt.c_str(), game.c_str(), &b) && b.count == 1 && b.slot[0].observable && b.slot[0].binding.kind == HotkeyKind::Pad &&
               b.slot[0].binding.padButtons == 0x0040 && std::strcmp(b.file, "ControlSchemes\\ConsoleX360.binds") == 0 && std::strcmp(b.slot[0].label, "GamePad:GamePad_LThumb") == 0,
           "Custom with FaceUp beside ConsoleX360 with LThumb in ControlSchemes: the SRV line gives LThumb, and the file name is ControlSchemes\\ConsoleX360.binds");
+    const struct {
+        const char* contents;
+        const char* description;
+    } presets[] = {
+        {"Custom\nCustom\nConsoleX360", "three lines with LF and no final newline give SRV LThumb from line three"},
+        {"Custom\nCustom\nConsoleX360\n", "three lines with a final LF give SRV LThumb from line three"},
+        {"Custom\r\nCustom\r\nConsoleX360", "three lines with CRLF and no final newline give SRV LThumb from line three"},
+        {"Custom\r\nCustom\r\nConsoleX360\r\n", "three lines with a final CRLF give SRV LThumb from line three"},
+        {"Custom\r\nCustom\r\nConsoleX360\r\nCustom", "four lines with no final newline give SRV LThumb from line three"},
+    };
+    for (const auto& preset : presets) {
+        writeFile(opt + L"\\StartPreset.4.start", preset.contents);
+        check(eliteBindsActionSrvDir("ToggleBuggyTurretButton", opt.c_str(), game.c_str(), &b) &&
+                  b.count == 1 && b.slot[0].binding.padButtons == 0x0040 &&
+                  std::strcmp(b.file, "ControlSchemes\\ConsoleX360.binds") == 0,
+              preset.description);
+    }
     check(eliteBindsActionDir("ToggleBuggyTurretButton", opt.c_str(), &b) && b.slot[0].binding.padButtons == 0x8000, "...while the ordinary lookup (HMDReset's and the FSS's way) still answers FaceUp from the Custom file");
     // a maintained copy in Options\Bindings wins over the stock one
     Sleep(30);
@@ -315,6 +335,36 @@ void stockFallbackAcrossPresetLines() {
     check(!eliteBindsHmdResetDir(opt.c_str(), &hmd, root.c_str()) && hmd.filesSeen == 0,
           "a preset line with a path separator cannot select a file outside ControlSchemes");
     DeleteFileW(escape.c_str());
+
+    const char embeddedNul[] = "Pilot\0ignored\r\nPilot\r\n";
+    writeFile(start, std::string(embeddedNul, sizeof(embeddedNul) - 1));
+    check(eliteBindsHmdResetDir(opt.c_str(), &hmd, root.c_str()) && hmd.count == 1 &&
+              hmd.slot[0].binding.vk == VK_F12 && std::strcmp(hmd.file, "ControlSchemes\\Pilot.binds") == 0,
+          "a malformed line with an embedded NUL does not hide a valid later preset");
+
+    const std::wstring namedUser = opt + L"\\Odyssey VR Controls Pilot Profile v4.2.4.2.binds";
+    const std::wstring namedStock = schemes + L"\\Odyssey VR Controls Pilot Profile v4.2.binds";
+    writeFile(namedUser, stockText);
+    writeFile(namedStock, stockText);
+    writeFile(start, "Odyssey VR Controls Pilot Profile v4.2\r\n");
+    check(eliteBindsHmdResetDir(opt.c_str(), &hmd, root.c_str()) && hmd.count == 1 &&
+              hmd.slot[0].binding.vk == VK_F12 && std::strcmp(hmd.file, "Odyssey VR Controls Pilot Profile v4.2.4.2.binds") == 0,
+          "a long, dotted and spaced user preset can select its versioned bindings");
+    DeleteFileW(namedUser.c_str());
+    check(eliteBindsHmdResetDir(opt.c_str(), &hmd, root.c_str()) && hmd.count == 1 &&
+              hmd.slot[0].binding.vk == VK_F12 &&
+              std::strcmp(hmd.file, "ControlSchemes\\Odyssey VR Controls Pilot Profile v4.2.binds") == 0,
+          "a long, dotted and spaced preset can select its exact stock bindings");
+
+    writeFile(user, stockText);
+    writeFile(start, "Pilot*\r\nPilo?\r\nPilot:stream\r\n");
+    check(!eliteBindsHmdResetDir(opt.c_str(), &hmd, root.c_str()) && hmd.filesSeen == 0,
+          "wildcards and stream syntax cannot select bindings");
+    writeFile(start, "NUL\r\n");
+    check(!eliteBindsHmdResetDir(opt.c_str(), &hmd, root.c_str()) && hmd.filesSeen == 0,
+          "a DOS device alias cannot be read as a stock bindings file");
+    DeleteFileW(user.c_str());
+    DeleteFileW(namedStock.c_str());
     DeleteFileW(stock.c_str());
     DeleteFileW(start.c_str());
     RemoveDirectoryW(schemes.c_str());

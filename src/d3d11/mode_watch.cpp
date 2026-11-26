@@ -13,6 +13,7 @@
 #include "menu.h"               // menuProfileSwitch: the menu closes and forgets the outgoing profile's first-time block
 #include "mode_watch_logic.h"
 #include "perf_monitor.h"       // perfMonitorProfileSwitch: the frame interval restarts at a switch
+#include "texture_lod_bias_reader.h"
 #include "ui_layer.h"           // uiLayerProfileSwitch: the VR UI layers, torn down before a commit leaves VR
 #include "xess_engine.h"        // xessReleaseFeatures: XeSS's features, released at every switch
 #include "vr_ssaa_hold.h"       // vrSsaaHoldProfileChanged: the Supersampling hold follows the profile
@@ -53,11 +54,17 @@ constexpr int kMaxRetries = 20;        // per write; then the watch waits for th
 constexpr uint64_t kIgnoredLogMs = 1000;  // an unknown read repeats while the file stays invalid; its log line comes this often at most
 constexpr size_t kMaxSettingsBytes = 1024 * 1024;
 
-// The posted mode, packed so one exchange takes all of it: bit 0 posted, bit 1 Vr (clear is Flat), bit 2 from a live rise (clear is
-// the file), and the time from bit 8 up.
-constexpr uint64_t kPostedBit = 1, kVrBit = 2, kLiveBit = 4;
-constexpr unsigned kTimeShift = 8;
-std::atomic<uint64_t> g_posted{0};
+// A post carries the graphics read for its destination profile. The mutex
+// keeps the mode and preset together when a newer post replaces a pending one.
+struct PostedMode {
+    uint64_t time = 0;
+    GameMode mode = GameMode::Flat;
+    bool live = false;
+    TextureLodBiasPreset preset;
+};
+std::mutex g_postMutex;
+PostedMode g_posted;
+std::atomic<bool> g_postReady{false};
 std::atomic<uint32_t> g_hints{0};
 std::atomic<HANDLE> g_hintEvent{nullptr};
 std::atomic<bool> g_startCalled{false};
@@ -87,8 +94,16 @@ void setNotice(const char* text) {
 }
 
 void postMode(uint64_t t, GameMode mode, bool live) {
-    const uint64_t bits = kPostedBit | (mode == GameMode::Vr ? kVrBit : 0) | (live ? kLiveBit : 0);
-    g_posted.store((t << kTimeShift) | bits, std::memory_order_release);
+    const RuntimeProfile target = activeProfileFor(runtimeInstallScope(), mode);
+    TextureLodBiasPreset preset;
+    if (target == RuntimeProfile::Flat || target == RuntimeProfile::Vr) {
+        // The destination ini is picked and parsed at commit. Have the scale
+        // ready in case that ini asks for auto, without reading it from Present.
+        preset = readTextureLodBiasPreset(target == RuntimeProfile::Flat);
+    }
+    std::lock_guard<std::mutex> lock(g_postMutex);
+    g_posted = {t, mode, live, preset};
+    g_postReady.store(true, std::memory_order_release);
 }
 
 // Settings.xml's last write time, or 0 when the file is absent.
@@ -393,17 +408,14 @@ PatchedTextureLodBias g_inEffectLodBias;
 
 // The effective value of each patched setting under the active profile, with the defaults of the sites that read them
 // (device_hook.cpp's texture sampler, vscreen_res.cpp's width).
-void readPatched(std::string* out, PatchedTextureLodBias* lodOut) {
+PatchedTextureLodBias readPatched(std::string* out, const std::string& biasKey, const TextureLodBiasPreset& preset) {
     const Config& cfg = Config::get();
     const bool flat = runtimeFlatProfile();
     out[0] = cfg.getString(kPatchedKeys[0], "0");
-    float hmdMult = 0.0f, ssaaMult = 0.0f;
-    (void)deviceHookFxcfgMultipliers(&hmdMult, &ssaaMult, nullptr, 0);
-    const PatchedTextureLodBias lod =
-        effectiveTextureLodBias(flat, readTextureLodBiasKey(cfg, flat), hmdMult, ssaaMult);
+    PatchedTextureLodBias lod = effectiveTextureLodBias(flat, biasKey, preset.hmd, preset.ssaa);
     out[1] = lod.label;
-    if (lodOut) *lodOut = lod;
     out[2] = cfg.getString(kPatchedKeys[2], "auto");
+    return lod;
 }
 
 // The rig's view of the switch (tools\profile_switch_test): real switches committed and teardowns run. The skip is the rig's control
@@ -415,12 +427,11 @@ std::atomic<bool> g_skipTeardown{false};
 // The render thread's commit (design section 3.3): the posted mode becomes the profile it selects. The outgoing profile is torn down while
 // its predicates still answer true, the profile flips, the settings file is re-picked, and the configure sweep is forced for later in
 // this same frame boundary.
-void commitPosted(uint64_t packed) {
-    const GameMode mode = (packed & kVrBit) ? GameMode::Vr : GameMode::Flat;
-    const bool live = (packed & kLiveBit) != 0;
-    const unsigned long long t = static_cast<unsigned long long>(packed >> kTimeShift);
+void commitPosted(const PostedMode& posted) {
+    const GameMode mode = posted.mode;
+    const unsigned long long t = static_cast<unsigned long long>(posted.time);
     const char* cls = gameModeName(mode);
-    const char* from = live ? "live-rise" : "file";
+    const char* from = posted.live ? "live-rise" : "file";
     RuntimeProfile cur = runtimeProfileValue();
     if (cur == RuntimeProfile::LegacyVr) cur = RuntimeProfile::Vr;
     RuntimeProfile target = activeProfileFor(runtimeInstallScope(), mode);
@@ -471,8 +482,8 @@ void commitPosted(uint64_t packed) {
     perfMonitorProfileSwitch();        // the monitor's frame interval restarts; the other profile's stretch is no long frame
 
     std::string now[kPatchedCount];
-    PatchedTextureLodBias nowLodBias;
-    readPatched(now, &nowLodBias);
+    const PatchedTextureLodBias nowLodBias =
+        readPatched(now, readTextureLodBiasKey(Config::get(), runtimeFlatProfile()), posted.preset);
     std::string kept;
     for (size_t i = 0; i < kPatchedCount; ++i) {
         const bool same = (i == 1) ? sameEffectiveTextureLodBias(nowLodBias, g_inEffectLodBias)
@@ -507,7 +518,11 @@ void commitPosted(uint64_t packed) {
 void modeWatchStart() {
     if (runtimeProfileValue() == RuntimeProfile::Invalid) return;
     if (g_startCalled.exchange(true)) return;
-    readPatched(g_inEffect, &g_inEffectLodBias);  // the launch's values: what device creation reads, before any switch can change the file's
+    const bool flat = runtimeFlatProfile();
+    const std::string biasKey = readTextureLodBiasKey(Config::get(), flat);
+    const TextureLodBiasPreset preset = isAutomaticTextureLodBias(biasKey)
+        ? readTextureLodBiasPreset(flat) : TextureLodBiasPreset{};
+    g_inEffectLodBias = readPatched(g_inEffect, biasKey, preset);
 
     const ModeRead launch = runtimeLaunchRead();
     if (launch.known) g_lastStereoValue.store(launch.value, std::memory_order_relaxed);   // F190
@@ -550,8 +565,16 @@ void modeWatchHint(ModeHint h) {
 
 void modeWatchFrameBoundary() {
     if (!g_started.load(std::memory_order_acquire)) return;
-    const uint64_t posted = g_posted.exchange(0, std::memory_order_acq_rel);
-    if (posted) commitPosted(posted);
+    if (g_postReady.load(std::memory_order_acquire)) {
+        PostedMode posted;
+        bool ready;
+        {
+            std::lock_guard<std::mutex> lock(g_postMutex);
+            posted = g_posted;
+            ready = g_postReady.exchange(false, std::memory_order_relaxed);
+        }
+        if (ready) commitPosted(posted);
+    }
 
     // The runtime's live flag, sampled once a frame; a rise asks the worker for a re-read (a VR start may write no file).
     static bool lastLive = false;
