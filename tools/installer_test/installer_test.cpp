@@ -9271,19 +9271,16 @@ int wmain(int argc, wchar_t** argv) {
                     "[System]\r\nallow_platform_update = 0x0\r\n[Device]\r\nupscaling = 0x1\r\n";
                 check(!edhmD3dxCompatSatisfied(hexFalseAndHexOne),
                       "issue258-2: allow_platform_update = 0x0 and upscaling = 0x1 are rejected as incompatible");
-                // Underflow (1e-50 -> 0.0f) vs overflow (1e50 -> +inf) matching IniHandler.cpp:1337.
-                check(!edhmD3dxCompatSatisfied("[System]\r\nallow_platform_update = 1e-50\r\n") &&
-                          edhmD3dxCompatSatisfied("[Device]\r\nupscaling = 1e-50\r\n") &&
-                          edhmD3dxCompatSatisfied("[System]\r\nallow_platform_update = 1e50\r\n") &&
-                          !edhmD3dxCompatSatisfied("[Device]\r\nupscaling = 1e50\r\n"),
-                      "issue258-2: float underflow (1e-50 -> 0) and overflow (1e50 -> +inf) match 2DMigoto");
-                // Static expression operators (<<, >>, **) and UB-guarded bitwise/div-by-zero ops.
-                check(!edhmD3dxCompatSatisfied("[Device]\r\nupscaling = 1 << 0\r\n") &&
-                          !edhmD3dxCompatSatisfied("[System]\r\nallow_platform_update = 0 << 1\r\n") &&
-                          !edhmD3dxCompatSatisfied("[Device]\r\nupscaling = 2 ** 0\r\n") &&
-                          edhmD3dxCompatSatisfied("[System]\r\nallow_platform_update = ~nan\r\n[Device]\r\nupscaling = 0 / 0\r\n") &&
-                          !edhmD3dxCompatSatisfied("[Device]\r\nupscaling = (1 / 0) & 1\r\n"),
-                      "issue258-2: shift/exponent/bitwise/div-by-zero static expressions evaluate cleanly without UB");
+                check(edhmD3dxCompatSatisfied("[System]\r\nallow_platform_update = 1e-1\r\n") &&
+                          edhmD3dxCompatSatisfied("[Device]\r\nupscaling = -1e-1\r\n") &&
+                          !edhmD3dxCompatSatisfied("[Device]\r\nupscaling = 1e1\r\n"),
+                      "issue258-2: scientific literals use float truthiness or integer truncation according to the key");
+                const std::string expression = "[System]\r\nallow_platform_update = 1 << 0\r\n";
+                check(!edhmD3dxCompatSatisfied(expression),
+                      "issue258-2: an unresolved compatibility expression cannot validate d3dx.ini");
+                const std::string incompatibleExpression = "[Device]\r\nupscaling = 2 ** 0\r\n";
+                check(applyEdhmD3dxCompat(incompatibleExpression) == incompatibleExpression,
+                      "issue258-2: an unresolved compatibility expression cannot be rewritten");
                 // Section header with trailing text & mid-line ';' on restored compat key stay consistent across read/apply/restore.
                 {
                     const std::string trailingHdr =
@@ -9399,9 +9396,55 @@ int wmain(int argc, wchar_t** argv) {
                          "include_recursive = .. /\r\n"
                          "user_config = ..\\outside_bad.ini\r\n"
                          "[System]\r\nallow_platform_update = 1\r\n");
-                check(!planEdhmToggle(surveyEdhm(), incOpt, p2).blocked,
-                      "issue258-3: path traversal, trailing-space '..', and DOS device names in [Include] are ignored");
+                const Plan unsafeInclude = planEdhmToggle(surveyEdhm(), incOpt, p2);
+                check(unsafeInclude.blocked && problemMentions(unsafeInclude, "..\\outside_bad.ini") &&
+                          problemMentions(unsafeInclude, "unsafe"),
+                      "issue258-3: compatibility checks report the first unsafe include path without following it");
                 DeleteFileW(outsideIni.c_str());
+                const std::string partialRoot = "[Include]\r\ninclude = EDHM-ini\\partial.ini\r\n"
+                                                "[System]\r\nallow_platform_update = 0\r\n";
+                const std::wstring partialPath = joinPath(incDir, L"partial.ini");
+                writeAll(d3dxPath, partialRoot);
+                writeAll(partialPath, std::string("\xff\xfeh\0", 4));
+                Options partialOptions = incOpt;
+                partialOptions.repair = true;
+                const Plan partial = planInstall(surveyEdhm(), partialOptions, p2);
+                check(!partial.blocked && problemMentions(partial, "EDHM-ini\\partial.ini") &&
+                          problemMentions(partial, "UTF-16") &&
+                          !hasStep(partial, Action::WriteText, nullptr, L"d3dx.ini") &&
+                          hasStep(partial, Action::WritePayload, nullptr, L"d3d11.dll") &&
+                          !partial.nextState.file("edhm_2dmigoto"),
+                      "issue258-3: a UTF-16 include stands down 2DMigoto and its INI edits while allowing core ED-UP");
+                writeAll(partialPath, "condition = 0 + 0\r\n[Device]\r\nupscaling = 1\r\n");
+                const Plan condition = planEdhmToggle(surveyEdhm(), incOpt, p2);
+                check(condition.blocked && problemMentions(condition, "partial.ini") && problemMentions(condition, "condition"),
+                      "issue258-3: a preamble expression prevents the toggle and identifies the include");
+                const HANDLE held = CreateFileW(partialPath.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+                                                FILE_ATTRIBUTE_NORMAL, nullptr);
+                check(held != INVALID_HANDLE_VALUE, "issue258-3: the rig locked an included config file");
+                if (held != INVALID_HANDLE_VALUE) {
+                    const Plan locked = planEdhmToggle(surveyEdhm(), incOpt, p2);
+                    check(locked.blocked && problemMentions(locked, "partial.ini") && problemMentions(locked, "read"),
+                          "issue258-3: a locked include prevents the toggle and identifies the unreadable file");
+                    CloseHandle(held);
+                }
+                writeAll(partialPath, std::string(4 * 1024 * 1024 + 1, ';'));
+                const Plan oversized = planEdhmToggle(surveyEdhm(), incOpt, p2);
+                check(oversized.blocked && problemMentions(oversized, "partial.ini") && problemMentions(oversized, "limit"),
+                      "issue258-3: an oversized include prevents the toggle and identifies the limit");
+                DeleteFileW(partialPath.c_str());
+                check(!planEdhmToggle(surveyEdhm(), incOpt, p2).blocked,
+                      "issue258-3: a missing direct include and default d3dx_user.ini contribute no settings");
+                const std::wstring linkedInclude = joinPath(incDir, L"edhm_link");
+                const bool linked = makeJunction(linkedInclude, edhmRoot);
+                check(linked, "issue258-3: the rig made a junction in the recursive include directory");
+                if (linked) {
+                    writeAll(d3dxPath, "[Include]\r\ninclude_recursive = EDHM-ini\r\n");
+                    const Plan junction = planEdhmToggle(surveyEdhm(), incOpt, p2);
+                    check(junction.blocked && problemMentions(junction, "edhm_link") && problemMentions(junction, "reparse"),
+                          "issue258-3: a recursive include containing a junction is reported without following the link");
+                    RemoveDirectoryW(linkedInclude.c_str());
+                }
                 // include_recursive = . scans gameDir itself (without re-parsing d3dx.ini as an override).
                 {
                     const std::wstring dotDir = joinPath(edhmRoot, L"dot_inc_test");
@@ -9416,6 +9459,23 @@ int wmain(int argc, wchar_t** argv) {
                     check(!dotCompat.satisfied && dotCompat.upscalingOverrideFile == "root_extra.ini",
                           "issue258-3: include_recursive = . detects incompatible sibling ini in gameDir");
                     removeTree(dotDir);
+                }
+                {
+                    const std::wstring cappedDir = joinPath(edhmRoot, L"capped_inc_test");
+                    const std::wstring childDir = joinPath(cappedDir, L"configs");
+                    makeTree(childDir);
+                    bool wroteFiles = true;
+                    for (int i = 0; i < 2048; ++i) {
+                        wroteFiles &= writeAll(joinPath(childDir, std::to_wstring(i) + L".ini"), "");
+                    }
+                    const std::string cappedRoot = "[Include]\r\ninclude_recursive = configs\r\n"
+                                                   "include = absent.ini\r\n";
+                    check(wroteFiles && evaluateEdhmD3dxCompat(cappedDir, cappedRoot).satisfied,
+                          "issue258-3: the exact file-count limit succeeds when no further include exists");
+                    const bool wroteExtra = writeAll(joinPath(childDir, L"overflow.ini"), "");
+                    check(wroteExtra && !evaluateEdhmD3dxCompat(cappedDir, cappedRoot).satisfied,
+                          "issue258-3: one more include beyond the file-count limit prevents validation");
+                    removeTree(cappedDir);
                 }
                 // Read-only incompatible main d3dx.ini overridden to compatible by d3dx_user.ini installs cleanly!
                 writeAll(d3dxPath, "[System]\r\nallow_platform_update = 0\r\n");
@@ -9452,6 +9512,12 @@ int wmain(int argc, wchar_t** argv) {
                     check(edhm2dMigotoDllActive(okSurvey) && edhm2dMigotoActive(okSurvey),
                           "issue258-4: edhm2dMigotoActive is true when 2DMigoto DLL and d3dx.ini are compatible");
                 }
+                writeAll(userIniPath, std::string("\xff\xfe[\0", 4));
+                const Plan partialLogging = planEdhmLogging(surveyEdhm(), opt4, "show_reload_message", true);
+                check(partialLogging.blocked && problemMentions(partialLogging, "d3dx_user.ini") &&
+                          problemMentions(partialLogging, "UTF-16") && partialLogging.steps.empty(),
+                      "issue258-4: an unreadable default user config blocks EDHM banner edits");
+                DeleteFileW(userIniPath.c_str());
                 // Corrupt the recorded standard backup, then make d3dx.ini incompatible + read-only.
                 const InstallState stBefore = readState(gameDir);
                 const FileRecord* recBefore = stBefore.file("edhm_2dmigoto");

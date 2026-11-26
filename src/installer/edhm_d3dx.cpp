@@ -5,12 +5,13 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
-#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <limits>
+#include <optional>
 #include <set>
 #include <unordered_set>
 #include <utility>
@@ -83,15 +84,6 @@ std::string trimHoriz(const std::string& s) {
     size_t b = s.size();
     while (b > a && isHorizSpace(s[b - 1])) --b;
     return s.substr(a, b - a);
-}
-
-// Clamped float -> int conversion matching ConvertExpressionToInt (IniHandler.cpp:1359-1372)
-// without undefined behavior on NaN, infinities, or out-of-range floats.
-int safeFloatToInt(float expr) {
-    if (std::isnan(expr)) return 0;
-    if (expr <= static_cast<float>(INT_MIN)) return INT_MIN;
-    if (expr >= static_cast<float>(INT_MAX)) return INT_MAX;
-    return static_cast<int>(expr);
 }
 
 struct RawLine {
@@ -374,406 +366,60 @@ std::string removeD3dxKeyInternal(const std::string& iniText, const char* sectio
     return joinLines(lines, hasBom);
 }
 
-// Constant-expression evaluator mirroring EDHM_2DMigoto's CommandListExpression
-// static evaluation (DirectX11/CommandList.cpp:4067-4097, 4532-4750, 5226-5272)
-// and IniHandler.cpp:1204-1281 (ParseBinaryLiterals, ParseIniExpression).
-// Supports decimal/hex/binary/inf/nan literals, parentheses, unary + - ! ~, and
-// binary arithmetic/exponent/shift/comparison/logical/bitwise operators at
-// CommandListExpression precedence. Any syntax error (such as a mid-line ';') or
-// unknown identifier returns false so callers fall back to default.
-class StaticExprParser {
-public:
-    explicit StaticExprParser(const std::string& input) : s_(asciiLower(input)) {}
-
-    bool parse(float* out) {
-        pos_ = 0;
-        depth_ = 0;
-        float v = 0.0f;
-        if (!parseOr(&v)) return false;
-        skipWs();
-        if (pos_ != s_.size()) return false;
-        *out = v;
-        return true;
+// Recognize only a single scalar token and its optional sign. EDHM_2DMigoto's
+// CommandList.cpp ParseFloatToken treats ERANGE as infinity even on underflow.
+std::optional<float> readScalarLiteral(const std::string& raw) {
+    const std::string value = asciiLower(raw);
+    if (value.empty()) return std::nullopt;
+    const bool negative = value[0] == '-';
+    const char* token = value.c_str() + (negative || value[0] == '+');
+    if (std::strncmp(token, "0b", 2) == 0) {
+        const size_t digits = std::strlen(token + 2);
+        if (digits == 0 || digits > 64) return std::nullopt;
+        uint64_t bits = 0;
+        for (const char* digit = token + 2; *digit; ++digit) {
+            if (*digit != '0' && *digit != '1') return std::nullopt;
+            bits = (bits << 1) | static_cast<uint64_t>(*digit - '0');
+        }
+        const float number = static_cast<float>(bits);
+        return negative ? -number : number;
     }
-
-private:
-    void skipWs() {
-        while (pos_ < s_.size() && isHorizSpace(s_[pos_])) ++pos_;
+    if (!(*token >= '0' && *token <= '9') && *token != '.' && std::strcmp(token, "inf") != 0 &&
+        std::strcmp(token, "infinity") != 0 && std::strcmp(token, "nan") != 0) {
+        return std::nullopt;
     }
-
-    bool match(const char* tok) {
-        skipWs();
-        const size_t n = std::strlen(tok);
-        if (s_.size() - pos_ < n || s_.compare(pos_, n, tok) != 0) return false;
-        pos_ += n;
-        return true;
-    }
-
-    bool peekIs(const char* tok) {
-        skipWs();
-        const size_t n = std::strlen(tok);
-        return s_.size() - pos_ >= n && s_.compare(pos_, n, tok) == 0;
-    }
-
-    static float safeDiv(float a, float b) {
-        if (b == 0.0f) {
-            if (a == 0.0f || std::isnan(a)) return std::numeric_limits<float>::quiet_NaN();
-            const bool neg = std::signbit(a) != std::signbit(b);
-            return neg ? -std::numeric_limits<float>::infinity()
-                       : std::numeric_limits<float>::infinity();
-        }
-        return a / b;
-    }
-
-    bool parseOr(float* out) {
-        if (!parseAnd(out)) return false;
-        while (match("||")) {
-            float rhs = 0.0f;
-            if (!parseAnd(&rhs)) return false;
-            *out = ((*out != 0.0f && !std::isnan(*out)) || (rhs != 0.0f && !std::isnan(rhs))) ? 1.0f : 0.0f;
-        }
-        return true;
-    }
-
-    bool parseAnd(float* out) {
-        if (!parseBitOr(out)) return false;
-        while (match("&&")) {
-            float rhs = 0.0f;
-            if (!parseBitOr(&rhs)) return false;
-            *out = ((*out != 0.0f && !std::isnan(*out)) && (rhs != 0.0f && !std::isnan(rhs))) ? 1.0f : 0.0f;
-        }
-        return true;
-    }
-
-    bool parseBitOr(float* out) {
-        if (!parseBitXor(out)) return false;
-        for (;;) {
-            if (peekIs("||") || !match("|")) break;
-            float rhs = 0.0f;
-            if (!parseBitXor(&rhs)) return false;
-            const uint32_t a = static_cast<uint32_t>(safeFloatToInt(*out));
-            const uint32_t b = static_cast<uint32_t>(safeFloatToInt(rhs));
-            *out = static_cast<float>(static_cast<int32_t>(a | b));
-        }
-        return true;
-    }
-
-    bool parseBitXor(float* out) {
-        if (!parseBitAnd(out)) return false;
-        while (match("^")) {
-            float rhs = 0.0f;
-            if (!parseBitAnd(&rhs)) return false;
-            const uint32_t a = static_cast<uint32_t>(safeFloatToInt(*out));
-            const uint32_t b = static_cast<uint32_t>(safeFloatToInt(rhs));
-            *out = static_cast<float>(static_cast<int32_t>(a ^ b));
-        }
-        return true;
-    }
-
-    bool parseBitAnd(float* out) {
-        if (!parseEq(out)) return false;
-        for (;;) {
-            if (peekIs("&&") || !match("&")) break;
-            float rhs = 0.0f;
-            if (!parseEq(&rhs)) return false;
-            const uint32_t a = static_cast<uint32_t>(safeFloatToInt(*out));
-            const uint32_t b = static_cast<uint32_t>(safeFloatToInt(rhs));
-            *out = static_cast<float>(static_cast<int32_t>(a & b));
-        }
-        return true;
-    }
-
-    bool parseEq(float* out) {
-        if (!parseRel(out)) return false;
-        for (;;) {
-            if (match("===")) {
-                float rhs = 0.0f;
-                if (!parseRel(&rhs)) return false;
-                const bool eq = (std::isnan(*out) && std::isnan(rhs)) ||
-                                (std::memcmp(out, &rhs, sizeof(float)) == 0);
-                *out = eq ? 1.0f : 0.0f;
-            } else if (match("!==")) {
-                float rhs = 0.0f;
-                if (!parseRel(&rhs)) return false;
-                const bool eq = (std::isnan(*out) && std::isnan(rhs)) ||
-                                (std::memcmp(out, &rhs, sizeof(float)) == 0);
-                *out = eq ? 0.0f : 1.0f;
-            } else if (match("==")) {
-                float rhs = 0.0f;
-                if (!parseRel(&rhs)) return false;
-                *out = (*out == rhs) ? 1.0f : 0.0f;
-            } else if (match("!=")) {
-                float rhs = 0.0f;
-                if (!parseRel(&rhs)) return false;
-                *out = (*out != rhs) ? 1.0f : 0.0f;
-            } else {
-                break;
-            }
-        }
-        return true;
-    }
-
-    bool parseRel(float* out) {
-        if (!parseShift(out)) return false;
-        for (;;) {
-            if (match("<=")) {
-                float rhs = 0.0f;
-                if (!parseShift(&rhs)) return false;
-                *out = (*out <= rhs) ? 1.0f : 0.0f;
-            } else if (match(">=")) {
-                float rhs = 0.0f;
-                if (!parseShift(&rhs)) return false;
-                *out = (*out >= rhs) ? 1.0f : 0.0f;
-            } else if (!peekIs("<<") && match("<")) {
-                float rhs = 0.0f;
-                if (!parseShift(&rhs)) return false;
-                *out = (*out < rhs) ? 1.0f : 0.0f;
-            } else if (!peekIs(">>") && match(">")) {
-                float rhs = 0.0f;
-                if (!parseShift(&rhs)) return false;
-                *out = (*out > rhs) ? 1.0f : 0.0f;
-            } else {
-                break;
-            }
-        }
-        return true;
-    }
-
-    bool parseShift(float* out) {
-        if (!parseAdd(out)) return false;
-        for (;;) {
-            if (match("<<")) {
-                float rhs = 0.0f;
-                if (!parseAdd(&rhs)) return false;
-                const int shift = safeFloatToInt(rhs);
-                const uint32_t a = static_cast<uint32_t>(safeFloatToInt(*out));
-                const uint32_t r = (shift >= 0 && shift < 32) ? (a << static_cast<unsigned>(shift)) : 0u;
-                *out = static_cast<float>(static_cast<int32_t>(r));
-            } else if (match(">>")) {
-                float rhs = 0.0f;
-                if (!parseAdd(&rhs)) return false;
-                const int shift = safeFloatToInt(rhs);
-                const int32_t a = static_cast<int32_t>(safeFloatToInt(*out));
-                int32_t r = 0;
-                if (shift >= 0 && shift < 32) {
-                    r = (a >= 0) ? static_cast<int32_t>(static_cast<uint32_t>(a) >> static_cast<unsigned>(shift))
-                                 : ~static_cast<int32_t>(static_cast<uint32_t>(~a) >> static_cast<unsigned>(shift));
-                } else if (shift >= 32 && a < 0) {
-                    r = -1;
-                }
-                *out = static_cast<float>(r);
-            } else {
-                break;
-            }
-        }
-        return true;
-    }
-
-    bool parseAdd(float* out) {
-        if (!parseMul(out)) return false;
-        for (;;) {
-            if (match("+")) {
-                float rhs = 0.0f;
-                if (!parseMul(&rhs)) return false;
-                *out += rhs;
-            } else if (match("-")) {
-                float rhs = 0.0f;
-                if (!parseMul(&rhs)) return false;
-                *out -= rhs;
-            } else {
-                break;
-            }
-        }
-        return true;
-    }
-
-    bool parseMul(float* out) {
-        if (!parsePow(out)) return false;
-        for (;;) {
-            if (!peekIs("**") && match("*")) {
-                float rhs = 0.0f;
-                if (!parsePow(&rhs)) return false;
-                *out *= rhs;
-            } else if (match("//")) {
-                float rhs = 0.0f;
-                if (!parsePow(&rhs)) return false;
-                *out = std::floor(safeDiv(*out, rhs));
-            } else if (match("/")) {
-                float rhs = 0.0f;
-                if (!parsePow(&rhs)) return false;
-                *out = safeDiv(*out, rhs);
-            } else if (match("%")) {
-                float rhs = 0.0f;
-                if (!parsePow(&rhs)) return false;
-                *out = (rhs == 0.0f) ? std::numeric_limits<float>::quiet_NaN() : std::fmod(*out, rhs);
-            } else {
-                break;
-            }
-        }
-        return true;
-    }
-
-    // Right-associative exponentiation (`**`, CommandList.cpp:5237).
-    bool parsePow(float* out) {
-        if (!parseUnary(out)) return false;
-        if (match("**")) {
-            if (++depth_ > 64) return false;
-            struct DepthGuard {
-                int* d;
-                ~DepthGuard() { --(*d); }
-            } guard{&depth_};
-            float rhs = 0.0f;
-            if (!parsePow(&rhs)) return false;
-            *out = std::pow(*out, rhs);
-        }
-        return true;
-    }
-
-    bool parseUnary(float* out) {
-        skipWs();
-        if (++depth_ > 64) return false;
-        struct DepthGuard {
-            int* d;
-            ~DepthGuard() { --(*d); }
-        } guard{&depth_};
-
-        if (match("+")) return parseUnary(out);
-        if (match("-")) {
-            float v = 0.0f;
-            if (!parseUnary(&v)) return false;
-            *out = -v;
-            return true;
-        }
-        if (match("!")) {
-            float v = 0.0f;
-            if (!parseUnary(&v)) return false;
-            *out = (v == 0.0f || std::isnan(v)) ? 1.0f : 0.0f;
-            return true;
-        }
-        if (match("~")) {
-            float v = 0.0f;
-            if (!parseUnary(&v)) return false;
-            const uint32_t bits = ~static_cast<uint32_t>(safeFloatToInt(v));
-            *out = static_cast<float>(static_cast<int32_t>(bits));
-            return true;
-        }
-        return parsePrimary(out);
-    }
-
-    bool parsePrimary(float* out) {
-        skipWs();
-        if (pos_ >= s_.size()) return false;
-        if (s_[pos_] == '(') {
-            ++pos_;
-            if (!parseOr(out)) return false;
-            return match(")");
-        }
-        // Binary literal: 0b[01]+ up to 64 bits (CommandList.cpp:4070-4079, IniHandler.cpp:1204-1231).
-        if (s_.size() - pos_ >= 3 && s_[pos_] == '0' && s_[pos_ + 1] == 'b') {
-            size_t p = pos_ + 2;
-            uint64_t val = 0;
-            size_t bits = 0;
-            while (p < s_.size() && (s_[p] == '0' || s_[p] == '1')) {
-                if (bits >= 64) return false;
-                val = (val << 1) | static_cast<uint64_t>(s_[p] - '0');
-                ++bits;
-                ++p;
-            }
-            if (bits == 0) return false;
-            if (p < s_.size() && (std::isalnum(static_cast<unsigned char>(s_[p])) || s_[p] == '.')) return false;
-            pos_ = p;
-            *out = static_cast<float>(val);
-            return true;
-        }
-        // Hex literal: 0x[0-9a-f]+ (without hex float '.'/'p' suffix handled by strtof below).
-        if (s_.size() - pos_ >= 3 && s_[pos_] == '0' && s_[pos_ + 1] == 'x') {
-            size_t p = pos_ + 2;
-            while (p < s_.size() && std::isxdigit(static_cast<unsigned char>(s_[p]))) ++p;
-            if (p > pos_ + 2 && (p == s_.size() || (s_[p] != '.' && s_[p] != 'p'))) {
-                if (p < s_.size() && std::isalnum(static_cast<unsigned char>(s_[p]))) return false;
-                errno = 0;
-                char* end = nullptr;
-                const unsigned long long v = std::strtoull(s_.c_str() + pos_, &end, 16);
-                if (end != s_.c_str() + p) return false;
-                pos_ = p;
-                *out = (errno == ERANGE) ? std::numeric_limits<float>::infinity() : static_cast<float>(v);
-                return true;
-            }
-        }
-        // Decimal / hex-float / special literals (inf, infinity, nan) matching ParseFloatValue /
-        // ParseFloatToken (IniHandler.cpp:1335-1344, CommandList.cpp:4081-4096).
-        const char c = s_[pos_];
-        const bool startsNum = std::isdigit(static_cast<unsigned char>(c)) || c == '.';
-        const bool startsSpecial =
-            (s_.compare(pos_, 3, "inf") == 0) || (s_.compare(pos_, 3, "nan") == 0);
-        if (!startsNum && !startsSpecial) return false;
-
-        errno = 0;
-        char* end = nullptr;
-        const float v = std::strtof(s_.c_str() + pos_, &end);
-        if (end == s_.c_str() + pos_) return false;
-        pos_ = static_cast<size_t>(end - s_.c_str());
-        // Overflow only (IniHandler.cpp:1337-1342): underflow (e.g. 1e-50) stays 0.0f / subnormal.
-        if (errno == ERANGE && std::isinf(v)) {
-            *out = std::signbit(v) ? -std::numeric_limits<float>::infinity()
-                                   : std::numeric_limits<float>::infinity();
-        } else {
-            *out = v;
-        }
-        return true;
-    }
-
-    std::string s_;
-    size_t pos_ = 0;
-    int depth_ = 0;
-};
-
-bool evalD3dxStaticExpr(const std::string& raw, float* out) {
-    StaticExprParser parser(raw);
-    return parser.parse(out);
+    errno = 0;
+    char* end = nullptr;
+    float number = std::strtof(token, &end);
+    if (end == token || *end != '\0') return std::nullopt;
+    if (errno == ERANGE) number = std::copysign(std::numeric_limits<float>::infinity(), number);
+    return negative ? -number : number;
 }
 
-// Matches EDHM_2DMigoto DirectX11/IniHandler.cpp:1420-1449, 5051
-// (GetIniBool(L"System", L"allow_platform_update", true, nullptr)).
-bool evalAllowPlatformUpdate(const D3dxKeyRead& key) {
-    if (!key.present) return true;
-    const std::string t = trim(key.value);
-    if (t.empty()) return true;
-    if (asciiEq(t, "1") || asciiEq(t, "true") || asciiEq(t, "yes") || asciiEq(t, "on")) return true;
-    if (asciiEq(t, "0") || asciiEq(t, "false") || asciiEq(t, "no") || asciiEq(t, "off")) return false;
-    float expr = 0.0f;
-    if (!evalD3dxStaticExpr(t, &expr)) return true;  // parse failure -> default true
-    return !std::isnan(expr) && expr != 0.0f;
+std::optional<bool> evalAllowPlatformUpdate(const D3dxKeyRead& key) {
+    // A full-line comment never reaches here. A mid-line ';' makes the fork's
+    // value parser fall back to its default (true, or zero for upscaling).
+    if (!key.present || key.value.find(';') != std::string::npos) return true;
+    const std::string& value = key.value;
+    if (asciiEq(value, "1") || asciiEq(value, "true") || asciiEq(value, "yes") || asciiEq(value, "on")) return true;
+    if (asciiEq(value, "0") || asciiEq(value, "false") || asciiEq(value, "no") || asciiEq(value, "off")) return false;
+    const auto number = readScalarLiteral(value);
+    if (!number) return std::nullopt;
+    return !std::isnan(*number) && *number != 0.0f;
 }
 
-// Matches EDHM_2DMigoto DirectX11/IniHandler.cpp:1359-1411, 5141
-// (GetIniInt(L"Device", L"upscaling", 0, nullptr)).
-bool evalUpscalingOk(const D3dxKeyRead& key) {
-    if (!key.present) return true;
-    const std::string t = trim(key.value);
-    if (t.empty()) return true;
-    // Fast path: base-10 integer (IniHandler.cpp:1379-1398).
-    {
-        errno = 0;
-        char* end = nullptr;
-        const long long n = std::strtoll(t.c_str(), &end, 10);
-        if (end != t.c_str() && *end == '\0') {
-            int v = 0;
-            if (errno == ERANGE) {
-                v = (n < 0) ? INT_MIN : INT_MAX;
-            } else if (n < INT_MIN) {
-                v = INT_MIN;
-            } else if (n > INT_MAX) {
-                v = INT_MAX;
-            } else {
-                v = static_cast<int>(n);
-            }
-            return v == 0;
-        }
-    }
-    float expr = 0.0f;
-    if (!evalD3dxStaticExpr(t, &expr)) return true;  // parse failure -> default 0
-    return safeFloatToInt(expr) == 0;
+std::optional<bool> evalUpscalingOk(const D3dxKeyRead& key) {
+    if (!key.present || key.value.find(';') != std::string::npos) return true;
+    // ParseIntValue tries a decimal integer before using a float token. Neither
+    // integer saturation nor float truncation changes whether the result is zero
+    // beyond the checks below (ConvertExpressionToInt maps NaN to zero).
+    const char* token = key.value.c_str();
+    char* end = nullptr;
+    const long long integer = std::strtoll(token, &end, 10);
+    if (end != token && *end == '\0') return integer == 0;
+    const auto number = readScalarLiteral(key.value);
+    if (!number) return std::nullopt;
+    return std::isnan(*number) || (*number > -1.0f && *number < 1.0f);
 }
 
 struct WStringInsensitiveLess {
@@ -825,13 +471,14 @@ bool matchesExcludePatterns(const wchar_t* name, const std::vector<std::wstring>
 
 bool isWindowsReservedDeviceName(const std::wstring& seg) {
     const size_t dot = seg.find(L'.');
-    const std::wstring base = (dot == std::wstring::npos) ? seg : seg.substr(0, dot);
-    if (base.size() < 3 || base.size() > 4) return false;
+    std::wstring base = seg.substr(0, dot);
+    while (!base.empty() && base.back() == L' ') base.pop_back();
     if (_wcsicmp(base.c_str(), L"CON") == 0 || _wcsicmp(base.c_str(), L"PRN") == 0 ||
-        _wcsicmp(base.c_str(), L"AUX") == 0 || _wcsicmp(base.c_str(), L"NUL") == 0) {
+        _wcsicmp(base.c_str(), L"AUX") == 0 || _wcsicmp(base.c_str(), L"NUL") == 0 ||
+        _wcsicmp(base.c_str(), L"CONIN$") == 0 || _wcsicmp(base.c_str(), L"CONOUT$") == 0) {
         return true;
     }
-    if (base.size() == 4 && base[3] >= L'1' && base[3] <= L'9') {
+    if (base.size() == 4 && std::wcschr(L"123456789\u00b9\u00b2\u00b3", base[3])) {
         if (_wcsnicmp(base.c_str(), L"COM", 3) == 0 || _wcsnicmp(base.c_str(), L"LPT", 3) == 0) {
             return true;
         }
@@ -839,16 +486,19 @@ bool isWindowsReservedDeviceName(const std::wstring& seg) {
     return false;
 }
 
+bool missingPath(DWORD error) {
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+}
+
 // Normalizes `rawRel` relative to `gameDir` and verifies strict containment inside `gameDir`:
 // rejects drive letters, UNC/absolute roots, escaping '..', embedded ':' or NUL, trailing space/dot
 // segments (Win32 strips them, which could normalize ".. " to ".."), DOS device names, and reparse
 // points along the relative chain. When `allowRoot` is true (for `include_recursive = .`), a path
 // resolving to `gameDir` itself is accepted with empty `*normRelOut`.
-bool resolveContainedRelativePath(const std::wstring& gameDir, const std::wstring& rawRel, bool allowRoot,
-                                  std::wstring* fullOut, std::wstring* normRelOut) {
-    if (gameDir.empty() || rawRel.empty()) return false;
-    if (rawRel[0] == L'\\' || rawRel[0] == L'/') return false;
-    if (rawRel.size() >= 2 && rawRel[1] == L':') return false;
+const char* resolveContainedRelativePath(const std::wstring& gameDir, const std::wstring& rawRel, bool allowRoot,
+                                         std::wstring* fullOut, std::wstring* normRelOut) {
+    constexpr const char* unsafe = "unsafe include path";
+    if (rawRel.empty() || rawRel[0] == L'\\' || rawRel[0] == L'/') return unsafe;
 
     std::vector<std::wstring> segs;
     size_t pos = 0;
@@ -858,24 +508,21 @@ bool resolveContainedRelativePath(const std::wstring& gameDir, const std::wstrin
         const std::wstring seg = rawRel.substr(pos, end - pos);
         if (!seg.empty() && seg != L".") {
             if (seg == L"..") {
-                if (segs.empty()) return false;
+                if (segs.empty()) return unsafe;
                 segs.pop_back();
             } else {
-                if (seg.find(L':') != std::wstring::npos || seg.find(L'\0') != std::wstring::npos) return false;
-                if (seg.back() == L' ' || seg.back() == L'.') return false;
-                if (isWindowsReservedDeviceName(seg)) return false;
+                if (seg.find_first_of(L":<>\"|?*") != std::wstring::npos ||
+                    std::any_of(seg.begin(), seg.end(), [](wchar_t c) { return c < L' '; }) ||
+                    seg.back() == L' ' || seg.back() == L'.' || isWindowsReservedDeviceName(seg)) {
+                    return unsafe;
+                }
                 segs.push_back(seg);
             }
         }
         if (sep == std::wstring::npos) break;
         pos = sep + 1;
     }
-    if (segs.empty()) {
-        if (!allowRoot) return false;
-        *fullOut = gameDir;
-        normRelOut->clear();
-        return true;
-    }
+    if (segs.empty() && !allowRoot) return unsafe;
 
     std::wstring normRel;
     std::wstring walk = gameDir;
@@ -884,46 +531,55 @@ bool resolveContainedRelativePath(const std::wstring& gameDir, const std::wstrin
         normRel += segs[i];
         walk = joinPath(walk, segs[i]);
         const DWORD attrs = GetFileAttributesW(walk.c_str());
-        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-            return false;
+        if (attrs == INVALID_FILE_ATTRIBUTES) {
+            if (!missingPath(GetLastError())) return "cannot read include path attributes";
+        } else if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+            return "include path contains a reparse point";
         }
     }
     *fullOut = walk;
     *normRelOut = normRel;
-    return true;
+    return nullptr;
 }
 
 // Opens a regular, non-reparse disk file without following a leaf symlink/junction and reads up to
 // `maxBytes` directly from that handle (avoiding leaf TOCTOU and DOS device opens).
-bool readRegularDiskFileBytes(const std::wstring& path, unsigned long long maxBytes, std::string* out) {
+const char* readRegularDiskFileBytes(const std::wstring& path, unsigned long long maxBytes, const char* limit,
+                                     bool fileLimitReached, std::optional<std::string>* out) {
     HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
+    if (h == INVALID_HANDLE_VALUE) {
+        // The fork skips a missing include or user_config. Unexpected open
+        // errors leave the effective settings unknown.
+        return missingPath(GetLastError()) ? nullptr : "cannot open included config for reading";
+    }
     struct HandleGuard {
         HANDLE handle;
         ~HandleGuard() { CloseHandle(handle); }
     } guard{h};
 
-    if (GetFileType(h) != FILE_TYPE_DISK) return false;
+    if (GetFileType(h) != FILE_TYPE_DISK) return "included config is not a regular disk file";
     BY_HANDLE_FILE_INFORMATION info{};
-    if (!GetFileInformationByHandle(h, &info)) return false;
-    if ((info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) return false;
+    if (!GetFileInformationByHandle(h, &info)) return "cannot read included config attributes";
+    if ((info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) return "included config is a reparse point";
+    if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return "included config is a directory";
+    if (fileLimitReached) return "included config file count limit exceeded";
     const unsigned long long fileSize =
         (static_cast<unsigned long long>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
-    if (fileSize > maxBytes) return false;
+    if (fileSize > maxBytes) return limit;
 
     std::string buf;
     buf.reserve(static_cast<size_t>(fileSize));
     char chunk[16384];
     for (;;) {
         DWORD got = 0;
-        if (!ReadFile(h, chunk, sizeof(chunk), &got, nullptr)) return false;
+        if (!ReadFile(h, chunk, sizeof(chunk), &got, nullptr)) return "cannot read included config";
         if (got == 0) break;
-        if (buf.size() + got > maxBytes) return false;
+        if (buf.size() + got > maxBytes) return limit;
         buf.append(chunk, got);
     }
     *out = std::move(buf);
-    return true;
+    return nullptr;
 }
 
 std::wstring parentPrefixOf(const std::wstring& relPath) {
@@ -953,6 +609,12 @@ struct EffectiveState {
     size_t parsedFiles = 0;
     size_t walkedDirs = 0;
     unsigned long long totalIncludedBytes = 0;
+    std::string incompleteReason;
+
+    void reportIncomplete(const std::wstring& path, const char* reason) {
+        if (!incompleteReason.empty()) return;
+        incompleteReason = (path.empty() ? "d3dx.ini" : narrowUtf8(path)) + ": " + reason;
+    }
 };
 
 // Parses one INI file with 2DMigoto's exact line/section/key rules (IniHandler.cpp:454-749):
@@ -963,7 +625,15 @@ struct EffectiveState {
 //   global [System]/[Device] sections allow duplicates and overwrite last-write-wins.
 void parseMigotoIniText(const std::string& text, bool isIncluded, const std::wstring& relPath,
                         EffectiveState* state, std::vector<PendingIncludeSection>* outIncludes) {
-    if (isUtf16D3dx(text)) return;
+    if (isUtf16D3dx(text)) {
+        state->reportIncomplete(relPath, "UTF-16 or embedded NUL bytes");
+        return;
+    }
+    if (!text.empty() && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                                            static_cast<int>(text.size()), nullptr, 0) == 0) {
+        state->reportIncomplete(relPath, "invalid UTF-8 encoding");
+        return;
+    }
     bool hasBom = false;
     std::string defaultEol;
     const std::vector<RawLine> lines = splitLines(text, &hasBom, &defaultEol);
@@ -1028,14 +698,16 @@ void parseMigotoIniText(const std::string& text, bool isIncluded, const std::wst
 
         const size_t eq = line.find('=');
         if (preamble) {
-            if (isIncluded && eq != std::string::npos) {
+            if (eq != std::string::npos) {
                 const std::string pkey = trimHoriz(line.substr(0, eq));
                 const std::string pval = trimHoriz(line.substr(eq + 1));
                 if (asciiEq(pkey, "condition")) {
-                    // Matches check_include_condition (IniHandler.cpp:548-574):
-                    // parse failure or static value 0 skips the entire included file.
-                    float condVal = 0.0f;
-                    if (!evalD3dxStaticExpr(pval, &condVal) || condVal == 0.0f) return;
+                    const auto condition = readScalarLiteral(pval);
+                    if (!condition) {
+                        state->reportIncomplete(relPath, "preamble condition needs expression evaluation");
+                        return;
+                    }
+                    if (*condition == 0.0f) return;
                 } else if (asciiEq(pkey, "namespace") && !pval.empty()) {
                     // Renames section namespace while keeping dirPrefix tied to ini_path
                     // (IniHandler.cpp:526-527, 410-414, 602-607).
@@ -1091,53 +763,73 @@ void parseMigotoIniText(const std::string& text, bool isIncluded, const std::wst
 
 void loadSingleIncludedIni(const std::wstring& gameDir, const std::wstring& rawRel, bool isUserConfig,
                            EffectiveState* state, std::vector<PendingIncludeSection>* nextIncludes) {
-    if (!isUserConfig &&
-        (state->parsedFiles >= kMaxIncludeFiles || state->totalIncludedBytes >= kMaxTotalIncludedBytes)) {
-        return;
-    }
     std::wstring fullPath;
     std::wstring normRel;
-    if (!resolveContainedRelativePath(gameDir, rawRel, false, &fullPath, &normRel)) return;
-    if (!isUserConfig) {
-        if (!state->seenFiles.insert(wideLower(normRel)).second) return;
+    if (const char* error = resolveContainedRelativePath(gameDir, rawRel, false, &fullPath, &normRel)) {
+        state->reportIncomplete(rawRel, error);
+        return;
     }
+    if (!isUserConfig && !state->seenFiles.insert(wideLower(normRel)).second) return;
     const unsigned long long budget =
         isUserConfig ? kMaxIncludedIniBytes
                      : (std::min)(kMaxIncludedIniBytes, kMaxTotalIncludedBytes - state->totalIncludedBytes);
-    std::string bytes;
-    if (!readRegularDiskFileBytes(fullPath, budget, &bytes)) return;
-    if (isUtf16D3dx(bytes)) return;
+    const char* limit = budget < kMaxIncludedIniBytes ? "total included config byte limit exceeded"
+                                                    : "included config file size limit exceeded";
+    std::optional<std::string> bytes;
+    const bool fileLimitReached = !isUserConfig && state->parsedFiles >= kMaxIncludeFiles;
+    if (const char* error = readRegularDiskFileBytes(fullPath, budget, limit, fileLimitReached, &bytes)) {
+        state->reportIncomplete(normRel, error);
+        return;
+    }
+    if (!bytes) return;
     if (!isUserConfig) {
         ++state->parsedFiles;
-        state->totalIncludedBytes += bytes.size();
+        state->totalIncludedBytes += bytes->size();
     }
-    parseMigotoIniText(bytes, true, normRel, state, nextIncludes);
+    parseMigotoIniText(*bytes, true, normRel, state, nextIncludes);
 }
 
 void loadIncludedIniRecursive(const std::wstring& gameDir, const std::wstring& rawRel, size_t depth,
                               EffectiveState* state, std::vector<PendingIncludeSection>* nextIncludes) {
-    if (depth > kMaxIncludeDepth || state->parsedFiles >= kMaxIncludeFiles ||
-        state->walkedDirs >= kMaxIncludeDirs || state->totalIncludedBytes >= kMaxTotalIncludedBytes) {
-        return;
-    }
     std::wstring dirPath;
     std::wstring normDirRel;
-    if (!resolveContainedRelativePath(gameDir, rawRel, true, &dirPath, &normDirRel)) return;
+    if (const char* error = resolveContainedRelativePath(gameDir, rawRel, true, &dirPath, &normDirRel)) {
+        state->reportIncomplete(rawRel, error);
+        return;
+    }
     if (!state->seenDirs.insert(wideLower(normDirRel)).second) return;
     const DWORD dirAttrs = GetFileAttributesW(dirPath.c_str());
-    if (dirAttrs == INVALID_FILE_ATTRIBUTES || (dirAttrs & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
-        (dirAttrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+    if (dirAttrs == INVALID_FILE_ATTRIBUTES) {
+        if (!missingPath(GetLastError())) state->reportIncomplete(rawRel, "cannot access recursive include directory");
         return;
+    }
+    if ((dirAttrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+        state->reportIncomplete(rawRel, "recursive include directory is a reparse point");
+        return;
+    }
+    if ((dirAttrs & FILE_ATTRIBUTE_DIRECTORY) == 0) return;  // The fork's "\\*" finds no files here.
+    if (depth > kMaxIncludeDepth) {
+        state->reportIncomplete(rawRel, "recursive include depth limit exceeded");
+        return;
+    }
+    if (state->walkedDirs >= kMaxIncludeDirs) {
+        state->reportIncomplete(rawRel, "recursive include directory count limit exceeded");
+        return;
+    }
     ++state->walkedDirs;
 
     std::set<std::wstring, WStringInsensitiveLess> iniFiles;
     std::set<std::wstring, WStringInsensitiveLess> subDirs;
     WIN32_FIND_DATAW fd{};
     HANDLE hFind = FindFirstFileW(joinPath(dirPath, L"*").c_str(), &fd);
-    if (hFind == INVALID_HANDLE_VALUE) return;
+    if (hFind == INVALID_HANDLE_VALUE) {
+        if (GetLastError() != ERROR_FILE_NOT_FOUND) {
+            state->reportIncomplete(rawRel, "cannot enumerate recursive include directory");
+        }
+        return;
+    }
     do {
         if (matchesExcludePatterns(fd.cFileName, state->excludePatterns)) continue;
-        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) continue;
         if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
             if (std::wcscmp(fd.cFileName, L".") != 0 && std::wcscmp(fd.cFileName, L"..") != 0) {
                 subDirs.insert(fd.cFileName);
@@ -1150,22 +842,24 @@ void loadIncludedIniRecursive(const std::wstring& gameDir, const std::wstring& r
             }
         }
     } while (FindNextFileW(hFind, &fd));
+    const DWORD enumerationError = GetLastError();
     FindClose(hFind);
+    if (enumerationError != ERROR_NO_MORE_FILES) {
+        state->reportIncomplete(rawRel, "error while enumerating recursive include directory");
+        return;
+    }
 
     for (const std::wstring& leaf : iniFiles) {
-        if (state->parsedFiles >= kMaxIncludeFiles || state->totalIncludedBytes >= kMaxTotalIncludedBytes) return;
         const std::wstring childRel = normDirRel.empty() ? leaf : (normDirRel + L"\\" + leaf);
         // Never re-parse root d3dx.ini as an included override when include_recursive = .
         if (normDirRel.empty() && _wcsicmp(leaf.c_str(), L"d3dx.ini") == 0) continue;
         loadSingleIncludedIni(gameDir, childRel, false, state, nextIncludes);
+        if (!state->incompleteReason.empty()) return;
     }
     for (const std::wstring& sub : subDirs) {
-        if (state->parsedFiles >= kMaxIncludeFiles || state->walkedDirs >= kMaxIncludeDirs ||
-            state->totalIncludedBytes >= kMaxTotalIncludedBytes) {
-            return;
-        }
         const std::wstring childDir = normDirRel.empty() ? sub : (normDirRel + L"\\" + sub);
         loadIncludedIniRecursive(gameDir, childDir, depth + 1, state, nextIncludes);
+        if (!state->incompleteReason.empty()) return;
     }
 }
 
@@ -1194,22 +888,13 @@ std::string removeD3dxKey(const std::string& iniText, const char* section, const
 }
 
 EdhmD3dxEffectiveCompat evaluateEdhmD3dxCompat(const std::wstring& gameDir, const std::string& d3dxIniText) {
-    EdhmD3dxEffectiveCompat out;
-    if (isUtf16D3dx(d3dxIniText)) {
-        out.satisfied = false;
-        out.allowPlatformUpdateOk = false;
-        out.upscalingOk = false;
-        return out;
-    }
-
     EffectiveState state;
     std::vector<PendingIncludeSection> pending;
     parseMigotoIniText(d3dxIniText, false, std::wstring(), &state, &pending);
 
     if (!gameDir.empty()) {
         // Breadth-first rounds matching ParseIncludedIniFiles (IniHandler.cpp:1726-1790).
-        while (!pending.empty() && state.parsedFiles < kMaxIncludeFiles &&
-               state.totalIncludedBytes < kMaxTotalIncludedBytes) {
+        while (!pending.empty() && state.incompleteReason.empty()) {
             std::sort(pending.begin(), pending.end(),
                       [](const PendingIncludeSection& a, const PendingIncludeSection& b) {
                           return AsciiInsensitiveLess{}(a.sectionSortKey, b.sectionSortKey);
@@ -1217,10 +902,7 @@ EdhmD3dxEffectiveCompat evaluateEdhmD3dxCompat(const std::wstring& gameDir, cons
             std::vector<PendingIncludeSection> nextRound;
             for (const PendingIncludeSection& sec : pending) {
                 for (const auto& kv : sec.entries) {
-                    if (state.parsedFiles >= kMaxIncludeFiles ||
-                        state.totalIncludedBytes >= kMaxTotalIncludedBytes) {
-                        break;
-                    }
+                    if (!state.incompleteReason.empty()) break;
                     // Matches IniHandler.cpp:1766-1774 (exact lowercase key names).
                     if (kv.first != "include" && kv.first != "include_recursive") continue;
                     const std::wstring rawRel = sec.dirPrefix + widenUtf8(kv.second);
@@ -1230,18 +912,40 @@ EdhmD3dxEffectiveCompat evaluateEdhmD3dxCompat(const std::wstring& gameDir, cons
                         loadIncludedIniRecursive(gameDir, rawRel, 0, &state, &nextRound);
                     }
                 }
+                if (!state.incompleteReason.empty()) break;
             }
             pending = std::move(nextRound);
         }
 
-        // Loaded last outside the include file cap so user_config (default d3dx_user.ini)
-        // always overrides root and ordinary includes (IniHandler.cpp:1682-1696, 5027-5034).
-        const std::string userCfg = state.userConfig.empty() ? "d3dx_user.ini" : state.userConfig;
-        loadSingleIncludedIni(gameDir, widenUtf8(userCfg), true, &state, nullptr);
+        if (state.incompleteReason.empty()) {
+            // The fork loads user_config last, independent of ordinary includes.
+            const std::wstring userConfig = widenUtf8(state.userConfig);
+            if (std::any_of(userConfig.begin(), userConfig.end(), [](wchar_t c) { return c > 127; })) {
+                // GetUserConfigPath widens UTF-8 bytes individually (IniHandler.cpp:1690).
+                state.reportIncomplete(userConfig, "unsupported non-ASCII user_config path");
+            } else {
+                loadSingleIncludedIni(gameDir, userConfig, true, &state, nullptr);
+            }
+        }
     }
 
-    out.allowPlatformUpdateOk = evalAllowPlatformUpdate(state.allowPlatformUpdate);
-    out.upscalingOk = evalUpscalingOk(state.upscaling);
+    EdhmD3dxEffectiveCompat out;
+    const auto allow = evalAllowPlatformUpdate(state.allowPlatformUpdate);
+    const auto upscaling = evalUpscalingOk(state.upscaling);
+    if (!allow) {
+        state.reportIncomplete(widenUtf8(state.allowPlatformUpdateSource),
+                               "[System] allow_platform_update needs expression evaluation");
+    }
+    if (!upscaling) {
+        state.reportIncomplete(widenUtf8(state.upscalingSource), "[Device] upscaling needs expression evaluation");
+    }
+    out.incompleteReason = std::move(state.incompleteReason);
+    if (!out.complete()) {
+        out.satisfied = false;
+        return out;
+    }
+    out.allowPlatformUpdateOk = *allow;
+    out.upscalingOk = *upscaling;
     if (!out.allowPlatformUpdateOk && !state.allowPlatformUpdateSource.empty()) {
         out.allowPlatformUpdateOverrideFile = state.allowPlatformUpdateSource;
     }
@@ -1270,7 +974,7 @@ std::string describeEdhmD3dxOverrideFailure(const EdhmD3dxEffectiveCompat& compa
 
 EdhmD3dxBackup snapshotEdhmD3dxCompat(const std::string& iniText, const EdhmD3dxEffectiveCompat& effective) {
     EdhmD3dxBackup b;
-    if (isUtf16D3dx(iniText)) return b;
+    if (!effective.complete() || isUtf16D3dx(iniText)) return b;
     EffectiveState rootState;
     parseMigotoIniText(iniText, false, std::wstring(), &rootState, nullptr);
     if (!effective.allowPlatformUpdateOk && effective.allowPlatformUpdateOverrideFile.empty() &&
@@ -1293,7 +997,7 @@ EdhmD3dxBackup snapshotEdhmD3dxCompat(const std::string& iniText) {
 }
 
 std::string applyEdhmD3dxCompat(const std::string& iniText, const EdhmD3dxEffectiveCompat& effective) {
-    if (isUtf16D3dx(iniText)) return iniText;
+    if (!effective.complete() || isUtf16D3dx(iniText)) return iniText;
     std::string out = iniText;
     if (!effective.allowPlatformUpdateOk && effective.allowPlatformUpdateOverrideFile.empty()) {
         out = setD3dxKeyInternal(out, "System", "allow_platform_update", "1", false);

@@ -25,11 +25,15 @@ struct EdhmD3dxEffectiveCompat {
     bool satisfied = true;
     bool allowPlatformUpdateOk = true;
     bool upscalingOk = true;
+    // First config path and reason when the effective settings cannot be determined.
+    std::string incompleteReason;
     // Relative path under the game folder (e.g. "d3dx_user.ini" or "EDHM-ini\\override.ini")
     // when the effective incompatible value came from an included or user config file rather
     // than the main d3dx.ini.
     std::string allowPlatformUpdateOverrideFile;
     std::string upscalingOverrideFile;
+
+    bool complete() const { return incompleteReason.empty(); }
 
     bool hasExternalOverrideFailure() const {
         return (!allowPlatformUpdateOk && !allowPlatformUpdateOverrideFile.empty()) ||
@@ -77,11 +81,10 @@ std::string removeD3dxKey(const std::string& iniText, const char* section, const
 //   - Empty values are ignored by ParseIniKeyValLine (IniHandler.cpp:637-645).
 //   - [System] allow_platform_update defaults to true in v0.1.9+ (IniHandler.cpp:5051;
 //     enforced by MIN_ALLOW_PLATFORM_UPDATE_DEFAULT_TRUE_VERSION in
-//     tools/fetch_edhm_2dmigoto.py) and parses via ParseBoolValue + static expression
-//     evaluation with fallback to default true (IniHandler.cpp:1299-1312, 1413-1449).
-//   - [Device] upscaling defaults to 0 (IniHandler.cpp:5141) and parses via
-//     ParseIntValue + static expression evaluation with fallback to default 0
-//     (IniHandler.cpp:1359-1411).
+//     tools/fetch_edhm_2dmigoto.py). [Device] upscaling defaults to 0
+//     (IniHandler.cpp:5141).
+//   - Boolean and numeric literals follow the fork's scalar conversions. Other
+//     values and conditions require expression evaluation and leave the check incomplete.
 //   - Included files and user_config override global [System]/[Device] keys last-write-wins
 //     (IniHandler.cpp:488-492, 647-652, 1682-1793, 5027-5034).
 // (v0.1.9 forces load_library_redirect = 0 automatically when loaded as
