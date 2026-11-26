@@ -72,9 +72,8 @@ inline TextureLodBiasResult resolveTextureLodBias(bool flatProfile, const std::s
         out.bias = static_cast<float>(std::atof(biasKey.c_str()));
         std::snprintf(out.why, sizeof(out.why), "advanced.texture_lod_bias = %s", biasKey.c_str());
     }
-    if (!std::isfinite(out.bias)) out.bias = 0.0f;
-    if (out.bias < -4.0f) out.bias = -4.0f;
-    if (out.bias > 4.0f) out.bias = 4.0f;
+    if (!(out.bias > -4.0f)) out.bias = -4.0f;
+    if (!(out.bias < 4.0f)) out.bias = 4.0f;
     return out;
 }
 

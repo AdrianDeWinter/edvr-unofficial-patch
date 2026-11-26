@@ -3431,6 +3431,13 @@ int main(int argc, char** argv) {
         const auto explicitBias = edvr::resolveTextureLodBias(true, "-0.5", 1.0f, 1.0f, nullptr);
         check(!explicitBias.isAuto && explicitBias.bias == -0.5f,
               "flat explicit texture bias is preserved");
+        const struct { const char* value; float expected; } legacyBounds[] = {
+            {"1e100", 4.0f}, {"-1e100", -4.0f}, {"nan", -4.0f},
+        };
+        for (const auto& bound : legacyBounds) {
+            const auto result = edvr::resolveTextureLodBias(false, bound.value, 1.0f, 1.0f, nullptr);
+            check(result.bias == bound.expected, "VR explicit texture bias retains legacy saturation");
+        }
     }
 
     if (g_fails) {
