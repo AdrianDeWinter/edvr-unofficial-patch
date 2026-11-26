@@ -276,6 +276,7 @@ bool fadeOurs();                                    // EDVR holds the global at 
 size_t stolenBytes(int hook);
 int hookState(int hook);                            // 0 not tried, 1 armed, 2 stood down
 bool gateOpen(int hook);
+void* relayAddress(int hook);                       // installed relay address before reset() clears it (#174)
 uint64_t controllerCalls();
 bool skeletonArmed();
 void setSkeleton(int site, uint64_t iface, uint32_t index);   // a latched pair member set by hand

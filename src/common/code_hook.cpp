@@ -367,7 +367,8 @@ bool CodeHook::install(void* target, void* replacement, void** origOut,
     // The trampoline is never written again once it is live, so it is not
     // left writable once it is live either: flip it to executable-only here,
     // before the target is touched. Nothing below writes into it; uninstall
-    // only restores the target's eight bytes and releases the block.
+    // restores the target's eight bytes and retains the executable block for
+    // process lifetime so in-flight callers finish safely (#174).
     DWORD trampOldProtect = 0;
     if (!VirtualProtect(tramp, trampolineBytes, PAGE_EXECUTE_READ, &trampOldProtect)) {
         refusedf(
@@ -501,8 +502,11 @@ void CodeHook::uninstall() {
             m_target);
     }
 
-    // Freed only when the patch was still ours; see above.
-    if (ours && m_trampoline) VirtualFree(m_trampoline, 0, MEM_RELEASE);
+    // The trampoline page is deliberately retained for process lifetime (never
+    // VirtualFree'd after publication), matching VTableHook: a game thread
+    // already past the entry jump or inside a relay when uninstall() runs
+    // still jumps through the relocated prologue into the host executable
+    // without touching any DLL code or data (#174).
     m_trampoline = nullptr;
     m_target = nullptr;
     m_replacement = nullptr;

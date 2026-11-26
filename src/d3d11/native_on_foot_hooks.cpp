@@ -3878,6 +3878,7 @@ bool fadeOurs() { return g_nativeFade.ours(); }
 size_t stolenBytes(int hook) { return hook >= 0 && hook < kHkCount ? g_hooks[hook].hook.stolenBytes() : 0; }
 int hookState(int hook) { return hook >= 0 && hook < kHkCount ? g_hooks[hook].state : -1; }
 bool gateOpen(int hook) { return hook >= 0 && hook < kHkCount && g_gate[hook].load() != 0; }
+void* relayAddress(int hook) { return hook >= 0 && hook < kHkCount ? g_hooks[hook].relay : nullptr; }
 uint64_t controllerCalls() { return g_ctlCalls.load(); }
 bool skeletonArmed() { return g_skelArmed.load(); }
 void setSkeleton(int site, uint64_t iface, uint32_t index) {   // a latched pair member set by hand
