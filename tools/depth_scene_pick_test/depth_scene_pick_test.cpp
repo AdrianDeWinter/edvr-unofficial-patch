@@ -825,6 +825,31 @@ int main(int argc, char** argv) {
               "depth sample log: the first six then every thirtieth candidate, without changing the sampling counter");
         check(!edvr::depthSampleLogDue(0) && edvr::depthSampleLogDue(++secondTarget.sampleLogCandidates) && secondTarget.sampleLogCandidates == 1,
               "depth sample log: a new target starts its own cadence; candidate zero is not a sample");
+        // Issue #199: depth probe log diet (census heartbeat/topology change, non-verbose sample cap, target announce dedup).
+        {
+            check(edvr::depthCensusLogDue(50000, 0, 111, 0, false),
+                  "#199: first depth census always logs");
+            check(!edvr::depthCensusLogDue(50000 + 20000, 50000, 111, 111, false) &&
+                      !edvr::depthCensusLogDue(50000 + 299999, 50000, 111, 111, false) &&
+                      edvr::depthCensusLogDue(50000 + 300000, 50000, 111, 111, false),
+                  "#199: steady depth topology waits for the 300 s heartbeat when detail/capture is off");
+            check(edvr::depthCensusLogDue(50000 + 20000, 50000, 222, 111, false),
+                  "#199: a topology or scene-pair change logs at the 20 s cadence even when detail/capture is off");
+            check(edvr::depthCensusLogDue(50000 + 20000, 50000, 111, 111, true),
+                  "#199: verbose mode (detail or eye_depth_capture) keeps the 20 s census cadence");
+            check(edvr::depthSamplePrintWanted(6, false, 0) && !edvr::depthSamplePrintWanted(30, false, 0) &&
+                      !edvr::depthSamplePrintWanted(1, false, edvr::kMaxSessionSampleLogs) &&
+                      edvr::depthSamplePrintWanted(30, true, edvr::kMaxSessionSampleLogs + 10),
+                  "#199: non-verbose sample logging caps at kMaxSampleLines per target and kMaxSessionSampleLogs per session while verbose stays uncapped");
+            edvr::Target dt{};
+            dt.w = 2000; dt.h = 2000; dt.texFmt = DXGI_FORMAT_R32_TYPELESS; dt.dsvFmt = DXGI_FORMAT_D32_FLOAT; dt.samples = 1;
+            const uint64_t s1 = edvr::targetAnnounceSig(dt);
+            check(!edvr::targetAnnounceShouldSuppress(s1, 1) && edvr::targetAnnounceShouldSuppress(s1, 1) &&
+                      !edvr::targetAnnounceShouldSuppress(s1, 2) && edvr::targetAnnounceShouldSuppress(s1, 2),
+                  "#199: identical target descriptors suppress eviction repeats while still announcing distinct simultaneously live targets");
+            edvr::g_announcedSigCount = 0;
+            for (auto& a : edvr::g_announcedSigs) a = edvr::AnnouncedSig{};
+        }
         const auto createDevice = edvr::systemD3D11CreateDevice();
         check(createDevice != nullptr, "load system D3D11");
         ComPtr<ID3D11Device> device;
@@ -1130,6 +1155,104 @@ int main(int argc, char** argv) {
                   "census: the atlas's record holds its two half viewports, and the one draw outside it is counted as such");
             for (unsigned i = 0; i < edvr::kReleaseAfterFrames + 2; ++i) edvr::depthProbeFrameBoundary(nullptr);
             check(refs(screen.view.Get()) == screenRefs, "census: an evicted target's view is released");
+        }
+
+        // Issue #199: announcement deduplication suppresses repeats across eviction and rediscovery
+        // without hiding distinct simultaneously live targets that share identical descriptors (such
+        // as left and right stereo eye depth targets).
+        {
+            edvr::depthProbeShutdown();
+            temporalMode = "dlss";
+            eyeDepthCaptureOn = false;
+            edvr::depthProbeConfigure(edvr::Config::get());
+            check(edvr::depthProbeWanted(), "#199 announce: probe re-armed");
+
+            DepthTarget eyeL = makeTarget(device.Get(), 128, 72);
+            DepthTarget eyeR = makeTarget(device.Get(), 128, 72);
+            const unsigned beforeFirst = logNotes;
+            draws(eyeL, 4);
+            draws(eyeR, 4);
+            edvr::depthProbeFrameBoundary(nullptr);
+            draws(eyeL, 4);
+            draws(eyeR, 4);
+            edvr::depthProbeFrameBoundary(nullptr);
+            const unsigned afterBothEyes = logNotes;
+            check(afterBothEyes - beforeFirst >= 2 &&
+                      std::strstr(lastNote, "depth target #1") != nullptr,
+                  "#199 announce: two simultaneously live targets with identical descriptors both announce (#0 and #1)");
+
+            // Evict both targets past kReleaseAfterFrames, then create two fresh targets with the
+            // exact same descriptor: neither should re-announce.
+            for (unsigned i = 0; i < edvr::kReleaseAfterFrames + 2; ++i) edvr::depthProbeFrameBoundary(nullptr);
+            DepthTarget eyeL2 = makeTarget(device.Get(), 128, 72);
+            DepthTarget eyeR2 = makeTarget(device.Get(), 128, 72);
+            const unsigned beforeRediscover = logNotes;
+            lastNote[0] = '\0';
+            draws(eyeL2, 4);
+            draws(eyeR2, 4);
+            edvr::depthProbeFrameBoundary(nullptr);
+            draws(eyeL2, 4);
+            draws(eyeR2, 4);
+            edvr::depthProbeFrameBoundary(nullptr);
+            check(std::strstr(lastNote, "depth target #") == nullptr,
+                  "#199 announce: rediscovered targets after eviction do not repeat identical descriptor announcements");
+            (void)beforeRediscover;
+
+            // Adding a third simultaneously live identical target exceeds the high-water mark (2 -> 3)
+            // and announces its slot cleanly.
+            DepthTarget eyeExtra = makeTarget(device.Get(), 128, 72);
+            lastNote[0] = '\0';
+            draws(eyeL2, 4);
+            draws(eyeR2, 4);
+            draws(eyeExtra, 4);
+            edvr::depthProbeFrameBoundary(nullptr);
+            draws(eyeL2, 4);
+            draws(eyeR2, 4);
+            draws(eyeExtra, 4);
+            edvr::depthProbeFrameBoundary(nullptr);
+            check(std::strstr(lastNote, "depth target #2") != nullptr,
+                  "#199 announce: a third simultaneously live target with the same descriptor still announces");
+
+            // Issue #199: an unsampled transient layout candidate (g_layoutFrames > 0, layoutSamples == 0)
+            // must not hold the census on the 20 s verbose cadence after the candidate stops drawing.
+            static uint64_t testClockMs = 1000000;
+            struct ClockGuard {
+                uint64_t (*prev)() = edvr::g_clockForTest;
+                ClockGuard() { edvr::g_clockForTest = []() -> uint64_t { return testClockMs; }; }
+                ~ClockGuard() { edvr::g_clockForTest = prev; }
+            } clockGuard;
+            edvr::layoutReset();
+            edvr::g_verboseLog = false;
+            edvr::g_summaryNoted = true;
+            edvr::g_eyeFrames = 130;
+            edvr::g_layoutFrames = 1;
+            edvr::g_layoutTarget = -1;
+            testClockMs = 1000000;
+            edvr::g_censusLastSig = edvr::computeCensusSig(edvr::g_scenePick[0], edvr::g_scenePick[1]);
+            edvr::g_censusLastMs = 975000;   // dt = 25 s: past 20 s verbose cadence, under 300 s heartbeat
+            const unsigned beforeUnsampled = logNotes;
+            edvr::depthProbeFrameBoundary(nullptr);
+            check(logNotes == beforeUnsampled,
+                  "#199 census: unsampled layout candidate does not trigger 20 s verbose census cadence");
+            // Once the 300 s heartbeat fires with no active layout target, stale g_layoutFrames resets.
+            testClockMs = 1280000;           // dt = 305 s: past 300 s heartbeat
+            edvr::depthProbeFrameBoundary(nullptr);
+            check(logNotes > beforeUnsampled && edvr::g_layoutFrames == 0,
+                  "#199 census: 300 s heartbeat fires and clears stale unsampled g_layoutFrames");
+
+            // Same-size target format or sample-count change in the same slot must alter computeCensusSig
+            // so topology changes report on the 20 s cadence instead of waiting 300 s (#199).
+            const uint64_t sigBeforeFmt = edvr::computeCensusSig(edvr::g_scenePick[0], edvr::g_scenePick[1]);
+            const uint32_t origSamples = edvr::g_targets[0].samples;
+            const DXGI_FORMAT origFmt = edvr::g_targets[0].dsvFmt;
+            edvr::g_targets[0].samples = origSamples + 1u;
+            const uint64_t sigAfterSamples = edvr::computeCensusSig(edvr::g_scenePick[0], edvr::g_scenePick[1]);
+            edvr::g_targets[0].samples = origSamples;
+            edvr::g_targets[0].dsvFmt = DXGI_FORMAT_D24_UNORM_S8_UINT;
+            const uint64_t sigAfterFmt = edvr::computeCensusSig(edvr::g_scenePick[0], edvr::g_scenePick[1]);
+            edvr::g_targets[0].dsvFmt = origFmt;
+            check(sigAfterSamples != sigBeforeFmt && sigAfterFmt != sigBeforeFmt,
+                  "#199 census: computeCensusSig includes full target descriptor (format and sample count) for same-size replacements");
         }
 
         const uint32_t shutdownScan = edvr::g_scenePickScans;

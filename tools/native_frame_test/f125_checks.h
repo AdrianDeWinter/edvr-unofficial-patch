@@ -461,6 +461,14 @@ inline void run125(Check&& check) {
         check(!context.take(), "F125 pin: the later clean B second starts a clean item window after the isolated mixed second");
         context.observe(30); context.observe(20);
         check(context.take() && !context.take(), "F125 pin: a context change and return inside one second is mixed once, never replayed without new samples");
+        const uint32_t stand = lp::weightSlotPolarity(90, 90.0) << 2;
+        const uint32_t walk = lp::weightSlotPolarity(90, 90.0) << 4;
+        check(!lp::weightPolarityConflict(stand, walk, 5),
+              "F125 (#199): a change from standing to walking at full weapon weight keeps the same pin window");
+        const uint32_t merged = lp::weightPolarityMerge(stand, walk, 5);
+        const uint32_t walkLowering = lp::weightSlotPolarity(100, 98.0) << 4;
+        check(lp::weightPolarityConflict(merged, walkLowering, 5),
+              "F125 (#199): lowering weapon weight in a walking bin seen after standing closes the pin window");
     }
     lw::setDetail(was);
 }

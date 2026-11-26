@@ -259,6 +259,7 @@ double g_alignTrimCm[3] = {};   // [0] right, [1] up, [2] forward (body axes)
 std::atomic<int> g_alignAnchorMode{0};   // F48: fix.native_on_foot_body_align_anchor: 0 neck (F53: the default, rest geometry), 1 clavicles (F43/F45), 2 pov
 std::atomic<bool> g_alignVertical{false};   // F50 (TEMPORARY): fix.native_on_foot_body_align_vertical: off (the default) locks the body's height
 std::atomic<bool> g_rotCalKey{false};   // F61 (TEMPORARY): fix.native_on_foot_rot_calibrate: off (the default) rotates nothing; on runs rotCalTick's schedule
+std::atomic<bool> g_f61RigActive{false};   // F175 (#199): true while rotCalTick has published F61 calibration rotation (tagged per-frame into PinIn/Sample)
 // F62b (TEMPORARY): the ADS head-aim (fix.native_on_foot_ads_head_aim; the block is above lookPublishTick). The hooks' half: the frame thread
 // queues the look input (game input units) and the update hook takes it; the processor hook publishes the game's applied deltas (cumulative,
 // the game's sign, one writer: the game thread) split into ours and the player's, and the gain it measured. Atomics only: no locks in the hooks.
@@ -1071,6 +1072,7 @@ void retiredKeysNote(const Config& cfg, bool first) {
                             "always left out of both eyes while the coat outfit is worn, and there is no dial)", saved);
     }
 }
+void f175FlushForF61Toggle(uint64_t now, bool prevF61, bool nextF61) noexcept;
 // The key, re-read when the configuration changes (Config::generation()). Read by its literal name (tools/gen_settings_schema.py).
 void readKey() {
     Config& cfg = Config::get();
@@ -1228,12 +1230,15 @@ void readKey() {
     // rotCalTick's schedule and each step is measured; off (the default): no seated rotation, and one already applied is turned back.
     {
         const bool rc = cfg.getString("fix.native_on_foot_rot_calibrate", "off") == "on";
-        if (first || rc != g_rotCalKey.load(std::memory_order_relaxed))
+        const bool prevRc = g_rotCalKey.load(std::memory_order_relaxed);
+        if (first || rc != prevRc) {
+            if (!first) f175FlushForF61Toggle(GetTickCount64(), prevRc, rc);
             Log::get().note("native on foot rot calibrate (F61, TEMPORARY): fix.native_on_foot_rot_calibrate is %s", rc ? "on -- while native stereo "
                             "is on foot the runtime turns the seated origin about the head: yaw +5 deg for 1 s, rest 1 s, pitch +5 deg (about the "
                             "head's right axis) for 1 s, rest 1 s, repeating; no loop, no guard; each step is measured"
                                                                                                     : "off -- no seated rotation (the default)");
-        g_rotCalKey.store(rc, std::memory_order_relaxed);
+        }
+        g_rotCalKey.store(rc, std::memory_order_release);
     }
     // F152 (live, the developer tier's "ADS eye forward / back"): the held weapon's ADS eye depth is the game's unscoped ADS camera (E's forward from the FP animation's joint 14) plus
     // the weapon's baked offset (native_on_foot_f149.h) plus this trim, cm, then 0..30 cm and the clearance cap (the eye never goes within 6 cm of an FP weapon point it can read
@@ -8822,6 +8827,7 @@ struct F135State {
     uint32_t sum[nofoot::f135::kCount] = {};
     uint64_t lineMs = 0, lastKeyEdgeMs = 0;
     bool footLast = false;
+    bool detailArmed = false;   // #199: F135 is measure-only; log output runs only under log.on_foot_detail
     uint32_t procLast = 0, asksLast = 0, zeroedLast = 0;
 };
 F135State g_f135;
@@ -8832,10 +8838,27 @@ void f135Tick(uint64_t now, bool onFoot) noexcept {
     g_f135Ctr.take(c);
     if (!onFoot) {   // the counts of the time off foot are dropped
         S.footLast = false;
+        S.detailArmed = false;
         return;
     }
-    if (!S.footLast) {
+    const bool detailOn = nofoot::logwin::detail();
+    if (!detailOn) {
+        // Drain object sets so nothing accumulates while the detail log is off.
+        f135::Obj upd[f135::ObjSet::kMax], place[f135::ObjSet::kMax];
+        uint32_t updMore = 0, placeMore = 0;
+        if (S.lineMs == 0 || now - S.lineMs >= 1000) {
+            S.lineMs = now;
+            g_f135UpdObjs.take(upd, &updMore);
+            g_f135PlaceObjs.take(place, &placeMore);
+            for (int i = 0; i < f135::kCount; ++i) S.sum[i] = 0;
+        }
         S.footLast = true;
+        S.detailArmed = false;
+        return;
+    }
+    if (!S.footLast || !S.detailArmed) {
+        S.footLast = true;
+        S.detailArmed = true;
         S.edges.reset();
         S.esc = S.start = S.back = f135::KeyEdge{};
         for (int i = 0; i < f135::kCount; ++i) S.sum[i] = 0;
@@ -11133,6 +11156,7 @@ struct PinIn {
     float localHeadY = 0.0f;   // F86g: the headset's height in natural LOCAL (m), with the pitch's validity
     float local[12] = {}, render[12] = {};   // F175: the headset in natural LOCAL (with localFull) and the render head in the seated space, the reported head (with renderFull), as the pose of this call had them
     bool localFull = false, renderFull = false;
+    bool f61On = false;   // F175 (#199): F61 calibration rig state active when this frame's eye rows were produced
     float f94SeatedY = 0.0f;   // F94a: the neck reference's seated y the camera carried (taken out of cam), and where it came from (nofoot::f94::Source)
     uint8_t f94Source = nofoot::f94::kSrcLegacy;
     float f137SeatedY = 0.0f, f137SeatedZ = 0.0f;   // F137: the virtual neck's seated y and z the camera carried (taken out of cam), and where they came from
@@ -11190,6 +11214,7 @@ void pinInPublish(const float cam[3], const float camRaw[3], const float weaponV
     if (localPitchValid) std::memcpy(g_pinIn.local, np.local, sizeof(g_pinIn.local));
     g_pinIn.renderFull = havePose && np.renderValid;
     if (g_pinIn.renderFull) std::memcpy(g_pinIn.render, np.render, sizeof(g_pinIn.render));
+    g_pinIn.f61On = g_f61RigActive.load(std::memory_order_acquire);
     g_pinIn.f94SeatedY = static_cast<float>(f94SeatedY);
     g_pinIn.f94Source = f94Source;
     g_pinIn.f137SeatedY = static_cast<float>(f137Seated[1]);
@@ -13897,6 +13922,7 @@ void rotCalTick(uint64_t now) noexcept {
             nativeFrameSetRotCalibrate(0.0f, 0.0f);   // the runtime turns the seated origin back to no calibration rotation
             g_rcPublished = false;
         }
+        g_f61RigActive.store(false, std::memory_order_release);
         if (g_rcT0 != 0) {
             Log::get().note("native on foot rot calibrate (F61): stopped (%s); zero rotation published", key ? "native stereo on foot ended" : "the key is off");
             rcReset();
@@ -13966,6 +13992,7 @@ void rotCalTick(uint64_t now) noexcept {
     const double kRad = 3.14159265358979323846 / 180.0;
     nativeFrameSetRotCalibrate(static_cast<float>(yawDeg * kRad), static_cast<float>(pitchDeg * kRad));
     g_rcPublished = true;
+    g_f61RigActive.store(true, std::memory_order_release);
 }
 
 // ---- F65a: the reach limit (frame thread) -------------------------------------------------------------------------------------------
@@ -14095,6 +14122,7 @@ void f65ReachLimit(uint64_t now, double dt, bool full3P, const AlignRun& a, cons
 // native stereo on foot), the game's armed flag for the hook, and the 1 s line (f67cPinLine, with the hook's statistics, defined after them).
 void f67cPinLine(uint64_t now, bool scope) noexcept;
 void f138Line(uint64_t now) noexcept;   // F138: the pitched view's 1 s and 10 s lines (defined after the pin's statistics, beside f67cPinLine)
+void f175FlushPending(uint64_t now) noexcept;   // #199: flush a partial F175 summary before a frame-thread reset
 // ---- F65c: the pre-bend neck (the hook publishes, the body align reads) ---------------------------------------------------------------
 // The Animate post-hook publishes the neck 34 and the head 44 (model space = body axes, as the census reads them) as they stand after stage 0
 // and before the bend, the square-up and the arm writes (the freeze's matrix where it wrote), with its sequence and ms; read with two tries.
@@ -15399,7 +15427,9 @@ void f115Exit(uint64_t now, bool fromPanels) noexcept {
     adsPublishPitch();
     g_adsLock[0] = g_adsLock[1] = g_adsLock[2] = 0.0;
     nativeFrameSetRotCalibrate(0.0f, 0.0f);
+    g_f61RigActive.store(false, std::memory_order_release);
     eyeshare::publish(0.0f, now);
+    f175FlushPending(now);   // #199: emit any accumulated partial F175 view-roll window before reset clears it
     f115TermsZero();
     // Published now: the zero alignment under its own serial (the hold's input finds it by the pose's reported serial), the zero ADS shift.
     g_eyeAlignPub[0] = g_eyeAlignPub[1] = g_eyeAlignPub[2] = 0.0;
@@ -18599,6 +18629,7 @@ bool pinStage0(const pfz::ArmPlan& pl, const PfzSpan& sp, bool froze, uint64_t n
                     f175::Sample fs;
                     fs.mode = g_ltaDrop.load(std::memory_order_relaxed) ? 1 : 0;
                     fs.item = armed ? 1 : 0;
+                    fs.f61On = in.f61On;
                     const double worldUp[3] = {0.0, 1.0, 0.0};
                     double viewRoll = 0.0, headRoll = 0.0, viewElev = 0.0, headElev = 0.0;
                     if (f175::viewRoll(fwdM, upM, worldUp, &viewRoll) && f175::localRoll(in.local, &headRoll)) {
@@ -25962,16 +25993,16 @@ void f67cPinLine(uint64_t now, bool scope) noexcept {
                         g_pinEyeCal.e[0], g_pinEyeCal.e[1], g_pinEyeCal.e[2], g_pinEyeCal.axes.fSign < 0.0 ? "-" : "+", g_pinEyeCal.axes.fAxis,
                         g_pinEyeCal.axes.uSign < 0.0 ? "-" : "+", g_pinEyeCal.axes.uAxis, nofoot::kPinEyeCalFrames, g_pinEyeCal.headY);
     F125PinWindow& pending = g_f125Pin;
+    // Issue #199: F94a/F95a/F97a/F179b already separate standing/moving/crouching/ADS into their own bins,
+    // so stance and ADS changes do not invalidate the 10 s pin summary window.
     uint64_t rawContext = nofoot::logwin::sigMix(g_cfgGeneration, g_heldItemSerial.load(std::memory_order_relaxed));
-    rawContext = nofoot::logwin::sigMix(rawContext, static_cast<uint32_t>(g_f119StancePub.load(std::memory_order_relaxed)));
     rawContext = nofoot::logwin::sigMix(rawContext, (scope ? 1u : 0u) | (nofoot::logwin::detail() ? 2u : 0u) |
-        (g_standKeyOn.load(std::memory_order_relaxed) ? 4u : 0u) | ((journalAds() || g_adsState == kAdsActive) ? 8u : 0u));
+        (g_standKeyOn.load(std::memory_order_relaxed) ? 4u : 0u));
     g_f125PinContext.observe(rawContext);
-    const bool adsNow = journalAds() || g_adsState == kAdsActive;
     if (pending.seconds && (pending.scope != scope || pending.detail != nofoot::logwin::detail() ||
-        pending.serial != g_heldItemSerial.load(std::memory_order_relaxed) || pending.stance != g_f119StancePub.load(std::memory_order_relaxed) ||
+        pending.serial != g_heldItemSerial.load(std::memory_order_relaxed) ||
         pending.standKey != g_standKeyOn.load(std::memory_order_relaxed) || pending.eyeKey != g_f94EyeHeightCm.load(std::memory_order_relaxed) ||
-        pending.guardKey != g_neckGuardCm.load(std::memory_order_relaxed) || (pending.ads && !adsNow))) {
+        pending.guardKey != g_neckGuardCm.load(std::memory_order_relaxed))) {
         f125PinClose(); f125CpuClose();
     }
     if (g_f125Cpu.seconds && (g_f125Cpu.scope != scope || g_f125Cpu.detail != nofoot::logwin::detail())) f125CpuClose();
@@ -26110,7 +26141,7 @@ void f67cPinLine(uint64_t now, bool scope) noexcept {
                         static_cast<unsigned long long>(st.sqWhy[nofoot::kSquareWeaponBothVertical]),
                         static_cast<unsigned long long>(st.sqWhy[nofoot::kSquareWeaponBadYaw]));
     }
-    if (st.legSolves) {
+    if (sayPin && st.legSolves) {
         char leg[2][300];
         for (int k = 0; k < 2; ++k)
             std::snprintf(leg[k], sizeof(leg[k]),
@@ -26122,7 +26153,7 @@ void f67cPinLine(uint64_t now, bool scope) noexcept {
         Log::get().note("native on foot body pin (F67c): legs, %u solves: %s; %s; foot error max %.2f mm (about 0 when the solve held)", st.legSolves, leg[0], leg[1],
                         st.footErrMaxMm);
     }
-    if (st.reachWant) {
+    if (sayPin && st.reachWant) {
         const double n = static_cast<double>(st.pinned ? st.pinned : 1);
         Log::get().note("native on foot body pin (F67c): reach limit (armed): evaluated %u of %llu calls, active %u, infeasible %u; the correction (horizontal) "
                         "mean %.1f max %.1f cm; the horizontal move before the correction mean right %+.1f forward %+.1f, after %+.1f %+.1f cm",
@@ -26146,10 +26177,13 @@ void f67cPinLine(uint64_t now, bool scope) noexcept {
         g_f95Hud.frames = g_f95Hud.notStill = 0;
     }
     F125PinWindow& w = g_f125Pin;
-    uint32_t weightSig = fs.n && fs.wSum / fs.n >= 0.99 ? 1u : 0u;
+    namespace lp = nofoot::logpin;
+    constexpr int kWeightSlots = 1 + nofoot::f97::kBinN;
+    static_assert(kWeightSlots <= 16, "2 bits per weight slot fit in uint32_t");
+    uint32_t weightSig = lp::weightSlotPolarity(fs.n, fs.wSum);
     for (int i = 0; i < nofoot::f97::kBinN; ++i)
-        if (st.f97[i].n && st.f97[i].wSum / st.f97[i].n >= 0.99) weightSig |= 2u << i;
-    if (w.seconds && (mixedRawSecond || w.weightSig != weightSig)) f125PinClose();
+        weightSig |= lp::weightSlotPolarity(st.f97[i].n, st.f97[i].wSum) << (2 * (i + 1));
+    if (w.seconds && (mixedRawSecond || lp::weightPolarityConflict(w.weightSig, weightSig, kWeightSlots))) f125PinClose();
     if (!w.seconds) {
         w.serial = g_heldItemSerial.load(std::memory_order_relaxed);
         if (!opticItemRead(&w.serial, w.item) || !w.item[0]) std::snprintf(w.item, sizeof(w.item), "none");
@@ -26158,8 +26192,9 @@ void f67cPinLine(uint64_t now, bool scope) noexcept {
         w.scope = scope; w.detail = nofoot::logwin::detail(); w.standKey = g_standKeyOn.load(std::memory_order_relaxed);
         w.eyeKey = g_f94EyeHeightCm.load(std::memory_order_relaxed); w.ads = journalAds() || g_adsState == kAdsActive; w.weightSig = weightSig;
         w.guardKey = g_neckGuardCm.load(std::memory_order_relaxed);
+    } else {
+        w.weightSig = lp::weightPolarityMerge(w.weightSig, weightSig, kWeightSlots);
     }
-    namespace lp = nofoot::logpin;
     lp::pin(w.pin, st); lp::frame(w.frame, fs); lp::hud(w.hud, hud);
     for (int b = 0; b < 2; ++b) {
         const PinStats::F94Bin& n = st.f94[b];
@@ -26184,6 +26219,95 @@ void f67cPinLine(uint64_t now, bool scope) noexcept {
 // INSIDE test on the drawn eye and the settle's refusals. Every 10 s with data one line per mode and item class gives the 10 deg bins of the aim's pitch (calls, the camera's
 // sink, what EDVR carried up and forward, the head's own height since the stance): it tells a sink that follows the aim's pitch alone from one that grows with EDVR's carried
 // offsets. An item drawn splits the lines: the bins are by class (item none, or the item), the 1 s line names the item and says how many of the calls had it.
+uint64_t g_f175LineMs = 0;   // #199: F175's window on F125's 10 s diet (1 s in detail); frame thread only
+uint64_t g_f175TakeMs = 0;   // #199: timestamp of the last g_f175Box drain/reset so partial flushes record exact active ms
+bool g_f175F61Was = false;
+nofoot::f175::Window g_f175Acc;   // folded F175 snapshots so each [mode][item] counts its own active slices and measured ms
+uint32_t g_f175FlushSeq = 0;   // frame thread's identity shared by rows emitted in one flush (#199)
+
+uint32_t f175SliceMs(uint64_t& takeMs, uint64_t now, uint64_t fallbackStart = 0) noexcept {
+    const uint64_t ref = takeMs ? takeMs : fallbackStart;
+    takeMs = now;
+    if (ref == 0 || now <= ref) return 0u;
+    return static_cast<uint32_t>(std::min<uint64_t>(now - ref, 1000ull));
+}
+
+void f175EmitAcc(uint32_t secs175, bool edgeFlush = false) noexcept {
+    if (!g_f175Acc.any()) return;
+    const nofoot::f175::Window vw = g_f175Acc;
+    g_f175Acc.clear();
+    if (vw.anyFor(false)) {
+        const uint32_t maxA = vw.maxActiveFor(false);
+        const uint32_t span175 = std::max(secs175, maxA ? maxA : 1u);
+        const uint32_t flushId = ++g_f175FlushSeq;
+        for (int m = 0; m < 2; ++m)
+            for (int i = 0; i < 2; ++i) {
+                if (!vw.g[m][i].frames) continue;
+                char viewRoll[1200];
+                nofoot::f175::formatGroup(viewRoll, sizeof(viewRoll), span175, m, i, vw.g[m][i], false,
+                                          vw.modeActiveSecs[m], flushId, vw.modeActiveMs[m]);
+                Log::get().note("%s%s", viewRoll, edgeFlush ? " [edge flush]" : "");
+            }
+    }
+    if (vw.anyFor(true)) {
+        const uint32_t maxA = vw.maxActiveFor(true);
+        const uint32_t span175 = std::max(secs175, maxA ? maxA : 1u);
+        const uint32_t flushId = ++g_f175FlushSeq;
+        for (int m = 0; m < 2; ++m)
+            for (int i = 0; i < 2; ++i) {
+                if (!vw.gF61On[m][i].frames) continue;
+                char viewRoll[1200];
+                nofoot::f175::formatGroup(viewRoll, sizeof(viewRoll), span175, m, i, vw.gF61On[m][i], true,
+                                          vw.modeActiveSecsF61On[m], flushId, vw.modeActiveMsF61On[m]);
+                Log::get().note("%s%s", viewRoll, edgeFlush ? " [edge flush]" : "");
+            }
+    }
+}
+
+void f175FlushForF61Toggle(uint64_t now, bool /*prevF61*/, bool nextF61) noexcept {
+    // Called on the frame thread in readKey() BEFORE g_rotCalKey flips. Samples are also
+    // tagged per-frame with the active F61 rig state (PinIn::f61On -> Window::g / gF61On),
+    // so any in-flight animation-hook sample arriving after this drain still emits under its
+    // true F61 rig state rather than contaminating the post-toggle summary (#199).
+    if (!g_f175Box.clearPending.load(std::memory_order_relaxed)) {
+        nofoot::f175::Window vw;
+        for (int tries = 0; tries < 8; ++tries) {
+            if (g_f175Box.take(&vw)) {
+                const uint32_t sliceMs = f175SliceMs(g_f175TakeMs, now, g_f175LineMs);
+                if (vw.any()) g_f175Acc.mergeSlice(vw, sliceMs);
+                break;
+            }
+        }
+    }
+    const bool hadWindow = g_f175LineMs != 0;
+    if (g_f175Acc.any()) {
+        const uint32_t elapsed = hadWindow ? nofoot::logwin::flush(g_f175LineMs, now) : 1u;
+        f175EmitAcc(elapsed, true);
+    }
+    if (hadWindow) {
+        g_f175LineMs = now;
+        g_f175TakeMs = now;
+    }
+    g_f175F61Was = nextF61;
+}
+
+void f175FlushPending(uint64_t now) noexcept {
+    if (!g_f175Box.clearPending.load(std::memory_order_relaxed)) {
+        nofoot::f175::Window vw;
+        if (g_f175Box.take(&vw) && vw.any()) {
+            g_f175Acc.mergeSlice(vw, f175SliceMs(g_f175TakeMs, now, g_f175LineMs));
+        }
+    }
+    if (g_f175Acc.any()) {
+        const bool hadWindow = g_f175LineMs != 0;
+        const uint32_t elapsed = hadWindow ? nofoot::logwin::flush(g_f175LineMs, now) : 1u;
+        f175EmitAcc(elapsed, true);
+    }
+    g_f175LineMs = 0;
+    g_f175TakeMs = 0;
+    g_f175Box.clearPending.store(true, std::memory_order_relaxed);
+}
+
 void f138Line(uint64_t now) noexcept {
     namespace f138 = nofoot::f138;
     static uint64_t lineMs = 0, binMs = 0;
@@ -26192,6 +26316,7 @@ void f138Line(uint64_t now) noexcept {
     static f138::Group bins[2][2];   // [look to aim][item drawn], merged each second, printed and cleared every 10 s
     if (g_f138LineReset.exchange(false, std::memory_order_relaxed)) {
         lineMs = binMs = 0;
+        f175FlushPending(now);
         f193LineMs = 0;
         g_f214LineMs = 0;
         g_f214Box.clearPending.store(true, std::memory_order_relaxed);   // F214: nor the follow's
@@ -26217,12 +26342,14 @@ void f138Line(uint64_t now) noexcept {
             for (f138::Group& g : row) g = f138::Group{};
     }
     if (lineMs == 0) {
-        lineMs = binMs = now;
+        lineMs = binMs = g_f175LineMs = g_f175TakeMs = now;
+        g_f175F61Was = g_rotCalKey.load(std::memory_order_relaxed);
         return;
     }
     if (now - lineMs < 1000) return;
     f138::Window w;
     if (!g_f138Box.take(&w)) return;   // torn twice: the next second takes both
+    const uint64_t prevLineMs = lineMs;
     lineMs = now;
     // F171: the raise's carriage (nofoot::f171c, native_on_foot_f171c.h): the second's pairs of consecutive pin calls, per look mode and band of the aim's pitch. Said in any second with a pair,
     // pitched or level (the level band is the control); a second without one prints nothing.
@@ -26238,18 +26365,25 @@ void f138Line(uint64_t now) noexcept {
             Log::get().note("%s", carriage);
         }
     }
-    // F175 (measure only): the view's roll and pitch against the headset's, a line for each look mode and item with frames in the second; a second with none prints nothing.
+    // F175 (measure only): the view's roll and pitch against the headset's, on F125's 10 s summary window by default (1 s with log.on_foot_detail, flushed at F61 toggles).
+    // Take the 1 s hook box each tick and fold into g_f175Acc so each [mode][item] tracks how many seconds in the reporting interval had eligible frames.
+    // readKey() already flushes pre-toggle samples before g_rotCalKey changes; if f61On still differs here, flush the prior accumulator BEFORE merging vw so samples never mix across F61 states.
     {
         nofoot::f175::Window vw;
-        if (g_f175Box.take(&vw) && vw.any()) {
-            const bool f61On = g_rotCalKey.load(std::memory_order_relaxed);
-            for (int m = 0; m < 2; ++m)
-                for (int i = 0; i < 2; ++i) {
-                    if (!vw.g[m][i].frames) continue;
-                    char viewRoll[1200];
-                    nofoot::f175::formatGroup(viewRoll, sizeof(viewRoll), 1, m, i, vw.g[m][i], f61On);
-                    Log::get().note("%s", viewRoll);
-                }
+        const bool taken = g_f175Box.take(&vw);
+        const uint32_t sliceMs = taken ? f175SliceMs(g_f175TakeMs, now, g_f175LineMs ? g_f175LineMs : prevLineMs) : 0u;
+        const bool haveTick = taken && vw.any();
+        const bool f61On = g_rotCalKey.load(std::memory_order_relaxed);
+        const bool f61Flipped = g_f175LineMs != 0 && f61On != g_f175F61Was;
+        if (f61Flipped) {
+            const uint32_t secsPrev = nofoot::logwin::flush(g_f175LineMs, now);
+            f175EmitAcc(secsPrev, true);
+            g_f175LineMs = now;
+            g_f175F61Was = f61On;
+        }
+        if (haveTick) g_f175Acc.mergeSlice(vw, sliceMs);
+        if (const uint32_t secs175 = nofoot::logwin::window(g_f175LineMs, now)) {
+            if (g_f175Acc.any()) f175EmitAcc(secs175, false);
         }
     }
     // F193: the sights' neck height, one line for a window with calls in the sights with a weapon drawn: the rule that set it, the neck target against the camera's eye, the frame steps, the stops.
@@ -26257,13 +26391,14 @@ void f138Line(uint64_t now) noexcept {
     // log.on_foot_detail, and closed early when the press of the sights ends (the detail log is as it was).
     {
         const bool adsNow = g_adsState != kAdsIdle;
+        const bool f193Edge = f193Was && !adsNow && !nofoot::logwin::detail();
         const uint32_t secs193 = (f193Was && !adsNow && !nofoot::logwin::detail()) ? nofoot::logwin::flush(f193LineMs, now) : nofoot::logwin::window(f193LineMs, now);
         f193Was = adsNow;
         nofoot::f193::Window bw;
         if (secs193 && g_f193Box.take(&bw) && bw.any()) {
             char bodyLine[760];
             nofoot::f193::formatLine(bodyLine, sizeof(bodyLine), secs193, bw, static_cast<double>(g_f94EyeHeightCm.load(std::memory_order_relaxed)), g_f193Stops.load(std::memory_order_relaxed));
-            Log::get().note("%s", bodyLine);
+            Log::get().note("%s%s", bodyLine, f193Edge ? " [edge flush]" : "");
         }
     }
     // F214: the view follows the body while moving, one line for a window with pin calls (the hook's window accumulates until it is taken): every 10 s by default, every second with log.on_foot_detail
@@ -29310,6 +29445,8 @@ uint64_t g_winMs = 0;
 // gate is unchanged), the on-foot state the window covers, and the tagged unmaps of each second for f85Report's path decision (g_win's count now runs over the
 // window, so the second's share is taken at each gate).
 uint64_t g_blockMs = 0;
+uint64_t g_f85BlockMs = 0;   // #199: weapon UI pin (F85b) uses its own summary window, decoupled from ADS-release edges
+bool g_f85HeldConfirmed[kF85bParts][2] = {};
 bool g_blockOnFoot = false;
 bool g_blockEnabled = false, g_blockDetail = false, g_blockMeasure = false, g_blockFix = false, g_blockAds = false;
 uint32_t g_blockItem = 0;
@@ -33953,13 +34090,33 @@ void f140PlacementText(const F140Seen& s, char* buf, size_t cap) {
     }
     std::snprintf(buf, cap, "%s, scope %s", s.table ? "table" : "class", loadout::scopeName(s.scope));
 }
+// Tags deliberate edge-triggered summary flushes with " [edge flush]" so tools/edup_log.py
+// distinguishes them from scheduled periodic reports under the F125 10 s diet without altering
+// any existing printf format strings (#199).
+void noteMaybeEdgeFlush(bool edgeFlush, const char* fmt, ...) {
+    char buf[1160];
+    va_list ap;
+    va_start(ap, fmt);
+    const int n = std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    const size_t len = static_cast<size_t>(n) < sizeof(buf) ? static_cast<size_t>(n) : sizeof(buf) - 1;
+    if (edgeFlush) {
+        static constexpr char kSuffix[] = " [edge flush]";
+        constexpr size_t kSufLen = sizeof(kSuffix) - 1;
+        if (len + kSufLen < sizeof(buf)) {
+            std::memcpy(buf + len, kSuffix, kSufLen + 1);
+        }
+    }
+    Log::get().note("%s", buf);
+}
 // F140: the window's `weapon UI placement` line for one class (when it placed at all), then the window starts over. The seed is the table's entry for the item (F151: one row
 // whatever the scope, which the line names for information only), else the class's built-in values; the totals are what the placement used. --health reads these for the figures to
 // bake into the table.
-void f140Report(int cls, uint32_t windowSecs) {
+void f140Report(int cls, uint32_t windowSecs, bool edgeFlush = false) {
     F140Seen& s = g_f140Seen[cls];
     if (s.have)
-        Log::get().note("weapon UI placement (F140) %u s: item %s scope %s, %s class, %s, seed forward %+.1f left %+.1f up %+.1f toward eye %+.1f cm, trim %+.1f %+.1f %+.1f %+.1f cm, "
+        noteMaybeEdgeFlush(edgeFlush, "weapon UI placement (F140) %u s: item %s scope %s, %s class, %s, seed forward %+.1f left %+.1f up %+.1f toward eye %+.1f cm, trim %+.1f %+.1f %+.1f %+.1f cm, "
                         "total forward %+.1f left %+.1f up %+.1f toward eye %+.1f cm, placed on %llu frames, scope unknown on %llu frames, untrusted item on %llu frames",
                         windowSecs, s.item[0] ? s.item : "none", loadout::scopeName(s.scope), nofoot::f140::className(cls), s.table ? "table entry" : "class values", s.seed[0],
                         s.seed[1], s.seed[2], s.seed[3], s.trim[0], s.trim[1], s.trim[2], s.trim[3], s.total[0], s.total[1], s.total[2], s.total[3],
@@ -33971,7 +34128,7 @@ void f140Report(int cls, uint32_t windowSecs) {
 // F144: the window's `weapon UI placement (F144)` line for each role that was placed: its seed, the trims, the total, and what reached the draw. The drawn move is the patched rows
 // inverted to the camera they draw the part's content centre with, against the same frame's unplaced draw (the getter's own frame), along the weapon's axes; it must equal the
 // total's move within 1 mm. A measurement counts only when the patch was bound at the draw's issue.
-void f144Report(uint32_t windowSecs) {
+void f144Report(uint32_t windowSecs, bool edgeFlush = false) {
     namespace f144 = nofoot::f144;
     using ull = unsigned long long;
     for (int ci = 0; ci < 2; ++ci)
@@ -33979,7 +34136,7 @@ void f144Report(uint32_t windowSecs) {
             f144::RoleAcc& a = g_f144Acc[ci][ri];
             if (a.have) {
                 const double n = a.bound ? static_cast<double>(a.bound) : 1.0;
-                Log::get().note("weapon UI placement (F144) %u s: item %s scope %s, %s class, %s role (%s), seed forward %+.1f left %+.1f up %+.1f toward eye %+.1f cm, trims %+.1f %+.1f %+.1f "
+                noteMaybeEdgeFlush(edgeFlush, "weapon UI placement (F144) %u s: item %s scope %s, %s class, %s role (%s), seed forward %+.1f left %+.1f up %+.1f toward eye %+.1f cm, trims %+.1f %+.1f %+.1f "
                                 "%+.1f cm, total forward %+.1f left %+.1f up %+.1f toward eye %+.1f cm; placed on %llu frames, measured on %llu, bound at the draw's issue on %llu; drawn move "
                                 "against the same frame at the seed alone (mean over the bound frames) forward %+.2f left %+.2f up %+.2f cm along the weapon's axes, %.2f cm against the trims' "
                                 "%.2f cm, worst difference %.2f mm: %s; against the game's own draw (information) forward %+.2f left %+.2f up %+.2f cm, %.2f cm against the total's %.2f cm",
@@ -33992,7 +34149,7 @@ void f144Report(uint32_t windowSecs) {
             a = f144::RoleAcc{};
         }
 }
-void f90Report(bool fold, uint32_t windowSecs, bool onFootWindow) {
+void f90Report(bool fold, uint32_t windowSecs, bool onFootWindow, bool edgeFlush = false) {
     namespace f90 = nofoot::f90;
     using ull = unsigned long long;
     // F93a: a swap whose class was never placed within 3 s says so
@@ -34039,7 +34196,7 @@ void f90Report(bool fold, uint32_t windowSecs, bool onFootWindow) {
         if (pt.role != f90::kRoleNone) anyRole = true;
         const f90::Part* tp = f90::partOfRole(pt.role);
         if (tp && pt.role != f90::kRoleHip) {
-            Log::get().note("weapon readout size (F90) %u s: %s (slot %u name %u) x%.4f about mesh (%+.2f, %+.2f): decided %llu, scaled %llu (eye 0 %llu, eye 1 %llu), table mismatch %llu "
+            noteMaybeEdgeFlush(edgeFlush, "weapon readout size (F90) %u s: %s (slot %u name %u) x%.4f about mesh (%+.2f, %+.2f): decided %llu, scaled %llu (eye 0 %llu, eye 1 %llu), table mismatch %llu "
                             "(mesh %.2f x %.2f scale %.5f); ADS weight at the scaled draws min %.2f max %.2f; content centre %.3f m from eye 0",
                             windowSecs, f90::roleName(pt.role), p, pt.name, f90::scaledRole(pt.role) ? f90::sizeFactor(pt.role) : 1.0, tp->centre[0], tp->centre[1], ull(pt.decided),
                             ull(pt.scaled), ull(pt.scaledEye[0]), ull(pt.scaledEye[1]), ull(pt.mismatch), pt.mesh[0], pt.mesh[1], pt.scale, pt.haveAds ? pt.adsMin : 0.0,
@@ -34047,7 +34204,7 @@ void f90Report(bool fold, uint32_t windowSecs, bool onFootWindow) {
         }
         pt = F90Part{};
     }
-    if (anyDecided && !anyRole) Log::get().note("weapon readout size (F91) %u s: no table part among the decided parts (%s)", windowSecs, parts);
+    if (anyDecided && !anyRole) noteMaybeEdgeFlush(edgeFlush, "weapon readout size (F91) %u s: no table part among the decided parts (%s)", windowSecs, parts);
     // B: the placements' lines (the pistol's, F90; the rifle's ADS readout's, F92)
     const uint32_t serial = meta.serial;
     const char* item = meta.item;
@@ -34086,7 +34243,7 @@ void f90Report(bool fold, uint32_t windowSecs, bool onFootWindow) {
         const double* pk = sn.have ? sn.total : nofoot::f140::kPistolClass;   // F140: the placement last used (the table's or the class's values, with the trim), else the class's
         char placementText[200];
         f140PlacementText(sn, placementText, sizeof(placementText));
-        Log::get().note("pistol readout (F90) %u s: item %s serial %u; keys forward %+.1f left %+.1f up %+.1f toward eye %+.1f cm (%s); frame: attach 51 %llu, F_root only "
+        noteMaybeEdgeFlush(edgeFlush, "pistol readout (F90) %u s: item %s serial %u; keys forward %+.1f left %+.1f up %+.1f toward eye %+.1f cm (%s); frame: attach 51 %llu, F_root only "
                         "%llu, none %llu (barrel vs aim mean %.1f max %.1f deg); target latched %llu frames; moved: hip readout %llu, pistol ADS readout %llu (x%.4f), previous-frame target %llu, "
                         "refused %llu [%s]; content shift mean %.1f cm; content %.3f m from eye 0, nearest surface on its rays %.3f m (%s); moved in %u of %u s",
                         windowSecs, item[0] ? item : "none", serial, pk[0],
@@ -34099,7 +34256,7 @@ void f90Report(bool fold, uint32_t windowSecs, bool onFootWindow) {
     }
     pistolMoveShare.reset(ps.movedHip + ps.movedAds);
     ps = F90Place{};
-    f140Report(nofoot::f140::kClassPistol, windowSecs);
+    f140Report(nofoot::f140::kClassPistol, windowSecs, edgeFlush);
     // F92: the rifle's ADS readout, while a primary weapon is held on foot (zeros then mean nothing ran) or while any of its counters moved
     F90Place& rs = g_f92Rifle;
     const bool primaryHeld = meta.primary;
@@ -34113,7 +34270,7 @@ void f90Report(bool fold, uint32_t windowSecs, bool onFootWindow) {
         const double* rk = sn.have ? sn.total : nofoot::f140::kRifleClass;
         char placementText[200];
         f140PlacementText(sn, placementText, sizeof(placementText));
-        Log::get().note("rifle ADS readout placement (F92) %u s: item %s serial %u; keys forward %+.1f left %+.1f up %+.1f toward eye %+.1f cm (%s); frame: attach 51 %llu, "
+        noteMaybeEdgeFlush(edgeFlush, "rifle ADS readout placement (F92) %u s: item %s serial %u; keys forward %+.1f left %+.1f up %+.1f toward eye %+.1f cm (%s); frame: attach 51 %llu, "
                         "F_root only %llu, none %llu (barrel vs aim mean %.1f max %.1f deg); target latched %llu frames; moved %llu (ADS weight at the moved draws min %.2f max "
                         "%.2f), refused %llu [%s]; content shift mean %.1f cm; content %.3f m from eye 0, nearest surface on its rays %.3f m (%s); moved in %u of %u s; ADS moved in %u of %u s",
                         windowSecs, item[0] ? item : "none", serial, rk[0],
@@ -34127,8 +34284,8 @@ void f90Report(bool fold, uint32_t windowSecs, bool onFootWindow) {
     moveShare.reset(rs.movedAds);
     adsMoveShare.reset(rs.fullAdsMoved);
     rs = F90Place{};
-    f140Report(nofoot::f140::kClassRifle, windowSecs);
-    f144Report(windowSecs);
+    f140Report(nofoot::f140::kClassRifle, windowSecs, edgeFlush);
+    f144Report(windowSecs, edgeFlush);
     rifleMoved.clear();
     rifleAds.clear();
     pistolMoved.clear();
@@ -34419,7 +34576,7 @@ bool f85cReticle(ID3D11DeviceContext* ctx, int e, uint32_t frame, const CbShadow
     return true;
 }
 // The 1 s lines (F85b per part and eye, the path and the tag census; F85c).
-void f85Report(uint64_t nowMs, bool fold, uint32_t windowSecs, bool detailLog, bool onFootWindow) {
+void f85Report(uint64_t nowMs, bool fold, uint32_t windowSecs, bool detailLog, bool onFootWindow, bool edgeFlush = false) {
     using ull = unsigned long long;
     static uint64_t lastIdleB = 0, lastIdleC = 0;
     static uint64_t prevSeen = 0, prevTagged = 0;
@@ -34517,7 +34674,7 @@ void f85Report(uint64_t nowMs, bool fold, uint32_t windowSecs, bool detailLog, b
                 if (!len) std::snprintf(why, sizeof(why), "none");
                 const double nn = pe.n ? static_cast<double>(pe.n) : 1.0;
                 const uint32_t nameId = g_f85bSlotName[p].load(std::memory_order_relaxed);
-                Log::get().note("weapon UI pin (F85b) part slot %u (name %u) eye %d: tagged %llu in all (all eyes), found %llu, matched %llu, decided %llu, bound %llu (%llu through the eye's newest rows; %llu draws of more than one instance), "
+                noteMaybeEdgeFlush(edgeFlush, "weapon UI pin (F85b) part slot %u (name %u) eye %d: tagged %llu in all (all eyes), found %llu, matched %llu, decided %llu, bound %llu (%llu through the eye's newest rows; %llu draws of more than one instance), "
                                 "refused %llu [%s]; unpatched anchor error mean %.1f max %.1f px / %.2f deg beside the K-to-U angle %.2f deg (the head's yaw %+.2f, pitch %+.2f from the aim); "
                                 "corrected residual max %.4f px; K origin to U origin mean %.1f max %.1f cm; K agreement (both eyes) origin max %.3f mm, rotation max %.4f deg; over %u s",
                                 p, nameId ? nameId - 1u : 0u, e, ull(g_f85bTagged[p].load(std::memory_order_relaxed)), ull(pe.found), ull(pe.matched), ull(pe.decided), ull(pe.corrected),
@@ -34525,34 +34682,50 @@ void f85Report(uint64_t nowMs, bool fold, uint32_t windowSecs, bool detailLog, b
                                 pe.originCmSum / nn, pe.originCmMax, w.agreeMmMax, w.agreeDegMax, windowSecs);
                 // F148: the both-eyes latch's hold, in plain words, on a line of its own (the line above has no room left under the 1100-byte budget the health self-test holds). The draws counted
                 // were decided on a latch whose pairing was 2 to 4 frames old (the eyes' K agreed then; the draw's own K was solved this frame); the refusals counted are those of a pair older than that.
-                // Zero is printed as zero, so the words alone tell this build from one before it.
+                // Zero is printed once per slot/eye so a clean session confirms the build ran, then repeated only on nonzero holds/refusals or under log.on_foot_detail (#199).
                 static_assert(nofoot::f85::kLatchHoldFrames == 4u, "the F85b held line names the gaps 2, 3 and 4");
-                Log::get().note("weapon UI pin (F85b) part slot %u (name %u) eye %d: held over a missed pair %llu (gap 2 %llu, 3 %llu, 4 %llu), refused past the hold %llu; over %u s", p,
-                                nameId ? nameId - 1u : 0u, e, ull(pe.heldGap[2] + pe.heldGap[3] + pe.heldGap[4]), ull(pe.heldGap[2]), ull(pe.heldGap[3]), ull(pe.heldGap[4]), ull(pe.pastHold),
-                                windowSecs);
+                const uint64_t heldTotal = pe.heldGap[2] + pe.heldGap[3] + pe.heldGap[4];
+                if (detailLog || heldTotal > 0 || pe.pastHold > 0 || !g_f85HeldConfirmed[p][e]) {
+                    g_f85HeldConfirmed[p][e] = true;
+                    noteMaybeEdgeFlush(edgeFlush, "weapon UI pin (F85b) part slot %u (name %u) eye %d: held over a missed pair %llu (gap 2 %llu, 3 %llu, 4 %llu), refused past the hold %llu; over %u s", p,
+                                    nameId ? nameId - 1u : 0u, e, ull(heldTotal), ull(pe.heldGap[2]), ull(pe.heldGap[3]), ull(pe.heldGap[4]), ull(pe.pastHold),
+                                    windowSecs);
+                }
                 // F151: the part's draws of this eye by how they were identified, on a line of its own (the part line has no room left). Seen by tag: the draw's stream entry named the
                 // record. Bound by place: no shadow window held the entry, and the draw sat where the part's readout sat in the last frame. Decided: all of them, then those from a bind
                 // by place; refused after a bind by place: the decision's own checks said no. Lost: frames in which the other eye drew the part and this eye drew none, named or bound.
-                // Zero is printed as zero.
-                char placeWhy[300];
-                size_t placeLen = 0;
-                placeWhy[0] = '\0';
-                for (int k = 0; k < kF85WhyCount; ++k)
-                    if (pe.placeWhy[k]) {
-                        const int n = std::snprintf(placeWhy + placeLen, sizeof(placeWhy) - placeLen, "%s%s %llu", placeLen ? ", " : "", kF85WhyName[k], ull(pe.placeWhy[k]));
-                        if (n > 0 && static_cast<size_t>(n) < sizeof(placeWhy) - placeLen) placeLen += static_cast<size_t>(n);
-                    }
-                if (!placeLen) std::snprintf(placeWhy, sizeof(placeWhy), "none");
-                Log::get().note("weapon UI pin (F85b) part slot %u (name %u) eye %d: place bind (F151): seen by tag %llu, bound by place %llu, decided %llu (%llu of them from a bind by place), "
-                                "refused after a bind by place %llu [%s], lost %llu; over %u s",
-                                p, nameId ? nameId - 1u : 0u, e, ull(pe.tagSeen), ull(pe.placeBound), ull(pe.decided), ull(pe.placeDecided), ull(pe.placeRefused), placeWhy, ull(pe.lost),
-                                windowSecs);
+                // Quiet all-zero place-bind lines are suppressed outside log.on_foot_detail (#199).
+                if (detailLog || pe.placeBound > 0 || pe.placeRefused > 0 || pe.lost > 0) {
+                    char placeWhy[300];
+                    size_t placeLen = 0;
+                    placeWhy[0] = '\0';
+                    for (int k = 0; k < kF85WhyCount; ++k)
+                        if (pe.placeWhy[k]) {
+                            const int n = std::snprintf(placeWhy + placeLen, sizeof(placeWhy) - placeLen, "%s%s %llu", placeLen ? ", " : "", kF85WhyName[k], ull(pe.placeWhy[k]));
+                            if (n > 0 && static_cast<size_t>(n) < sizeof(placeWhy) - placeLen) placeLen += static_cast<size_t>(n);
+                        }
+                    if (!placeLen) std::snprintf(placeWhy, sizeof(placeWhy), "none");
+                    noteMaybeEdgeFlush(edgeFlush, "weapon UI pin (F85b) part slot %u (name %u) eye %d: place bind (F151): seen by tag %llu, bound by place %llu, decided %llu (%llu of them from a bind by place), "
+                                    "refused after a bind by place %llu [%s], lost %llu; over %u s",
+                                    p, nameId ? nameId - 1u : 0u, e, ull(pe.tagSeen), ull(pe.placeBound), ull(pe.decided), ull(pe.placeDecided), ull(pe.placeRefused), placeWhy, ull(pe.lost),
+                                    windowSecs);
+                }
             }
         }
         // F151: per eye, the marker composite draws no stream window held (the F87c "outside"), and what the place rule said of each: bound, or the guard that refused (in the order
-        // they are checked). Most are not the weapon's: a lost frame loses all of the eye's draws at once.
+        // they are checked). Most are not the weapon's: a lost frame loses all of the eye's draws at once. Suppressed outside log.on_foot_detail only when nothing was bound by place
+        // and no part on this eye suffered a lost frame or place refusal (#199).
         for (int e = 0; e < 2; ++e) {
             if (!w.placeOutside[e]) continue;
+            const uint64_t bound = w.placeVerdict[e][nofoot::f151::kBound];
+            bool eyeIncident = false;
+            for (uint32_t p = 0; p < kF85bParts; ++p) {
+                if (w.pe[p][e].lost > 0 || w.pe[p][e].placeRefused > 0) {
+                    eyeIncident = true;
+                    break;
+                }
+            }
+            if (!detailLog && bound == 0 && !eyeIncident) continue;
             char reasons[420];
             size_t len = 0;
             reasons[0] = '\0';
@@ -34562,13 +34735,13 @@ void f85Report(uint64_t nowMs, bool fold, uint32_t windowSecs, bool detailLog, b
                     if (n > 0 && static_cast<size_t>(n) < sizeof(reasons) - len) len += static_cast<size_t>(n);
                 }
             if (!len) std::snprintf(reasons, sizeof(reasons), "none");
-            const uint64_t bound = w.placeVerdict[e][nofoot::f151::kBound];
-            Log::get().note("weapon UI pin (F85b) eye %d: place bind (F151): %llu draws outside every stream window, bound by place %llu, not bound %llu [%s]; over %u s", e,
+            noteMaybeEdgeFlush(edgeFlush, "weapon UI pin (F85b) eye %d: place bind (F151): %llu draws outside every stream window, bound by place %llu, not bound %llu [%s]; over %u s", e,
                             ull(w.placeOutside[e]), ull(bound), ull(w.placeOutside[e] - bound), reasons, windowSecs);
         }
-        // The tag census, every second a part was submitted (and an idle line every 5 s while on foot with the fix on, so a silent instrument is told from a working one)
+        // The tag census, every window a part was submitted (and an idle line every 10 s by default, 5 s in detail, while on foot with the fix on)
+        const uint64_t idleIntervalMs = detailLog ? 5000u : 10000u;
         if (dSeen || any || onFootWindow) {
-            if (dSeen || any || nowMs - lastIdleB >= 5000) {
+            if (dSeen || any || nowMs - lastIdleB >= idleIntervalMs) {
                 if (!dSeen && !any) lastIdleB = nowMs;
                 char perPart[300];
                 size_t len = 0;
@@ -34583,7 +34756,7 @@ void f85Report(uint64_t nowMs, bool fold, uint32_t windowSecs, bool detailLog, b
                 }
                 if (!len) std::snprintf(perPart, sizeof(perPart), "no part tagged yet");
                 const int path = g_f85bPath.load(std::memory_order_relaxed);
-                Log::get().note("weapon UI pin (F85b): %s%llu matched submits over %u s (%llu tagged; space 0 or other %llu in all); path %s; finds in the pool: by the tag %llu, by the translation %llu; "
+                noteMaybeEdgeFlush(edgeFlush, "weapon UI pin (F85b): %s%llu matched submits over %u s (%llu tagged; space 0 or other %llu in all); path %s; finds in the pool: by the tag %llu, by the translation %llu; "
                                 "K solves %llu, eye pairs %llu (%llu disagreed; last pair: origin %.3f mm, rotation %.4f deg); %s; matched submits in %u of %u s; origin rows (F152): engine shadow %llu, "
                                 "own shadow %llu, none %llu, own against engine max difference %.1e over %llu draws (%llu differing), refused with no b1 origin while the own shadow had rows %llu",
                                 (dSeen || any) ? "" : "no weapon UI part this second (no tool or weapon out, or the submit hook sees none); ", ull(dSeen), windowSecs, ull(dTagged),
@@ -34604,7 +34777,7 @@ void f85Report(uint64_t nowMs, bool fold, uint32_t windowSecs, bool detailLog, b
         g_reticleKeys.describe(reticleKeyText, sizeof(reticleKeyText));   // F191: "11 (type 1001)", or "10 (assumed: no type 1001 call seen yet)"
         if (st.draws || st.dispatched || st.reads) {
             const double nr = st.reads ? static_cast<double>(st.reads) : 1.0;
-            Log::get().note("reticle depth (F85c): key %s draws %llu, patched at the hit depth %llu; D_hit mean %.2f min %.2f max %.2f m over %llu readbacks (hit %llu, sky %llu, a surface under 0.5 m ignored %llu, "
+            noteMaybeEdgeFlush(edgeFlush, "reticle depth (F85c): key %s draws %llu, patched at the hit depth %llu; D_hit mean %.2f min %.2f max %.2f m over %llu readbacks (hit %llu, sky %llu, a surface under 0.5 m ignored %llu, "
                             "off screen %llu); the game's 5 m was behind a surface in %llu; |D_f - D_hit| mean %.3f max %.3f m, D_f %.2f m; readback age mean %.1f max %.0f frames; dispatched %llu; "
                             "refusals: no depth view %llu, no scene rows %llu, no K %llu, rows not a depth fit %llu, off the line %llu (largest %.3f deg), no readback yet %llu, late %llu, dropped %llu, "
                             "ring full %llu, map failed %llu, wrong sequence %llu, no GPU %llu; over %u s; draws in %u of %u s",
@@ -34615,16 +34788,16 @@ void f85Report(uint64_t nowMs, bool fold, uint32_t windowSecs, bool detailLog, b
             // F118 (measure only): which of the edge and the speed makes the reticle look double
             static_assert(nofoot::f118::kStepDeg == 0.25 && nofoot::f118::kRingDeg == 0.6 && nofoot::f118::kIpdM == 0.063, "the F118 line states these in its text");
             const nofoot::logwin::ReticleWindow& q = reticle;
-            Log::get().note("reticle depth (F118) %u s: readbacks %llu (hit or sky); steps over 0.25 deg %llu (sky-hit %llu, hit-hit %llu), flips %llu, largest step %.2f deg; "
+            noteMaybeEdgeFlush(edgeFlush, "reticle depth (F118) %u s: readbacks %llu (hit or sky); steps over 0.25 deg %llu (sky-hit %llu, hit-hit %llu), flips %llu, largest step %.2f deg; "
                             "drawn more than 0.25 deg from the target in %llu of %llu frames, longest run %.0f ms, worst %.2f deg; footprint (+-0.6 deg) read %llu, over a depth "
                             "edge %llu (the centre on the far side %llu), largest span %.2f deg, incomplete %llu, not dispatched %llu; at an IPD of 63 mm; edge in %u of %u s; speed in %u of %u s",
                             windowSecs, ull(q.steps.reads), ull(q.steps.steps), ull(q.steps.skyHit), ull(q.steps.hitHit), ull(q.steps.flips), q.steps.largestDeg, ull(q.trail.over),
                             ull(q.trail.frames), q.trail.longestMs, q.trail.worstDeg, ull(q.foot.read), ull(q.foot.edge), ull(q.foot.centreFar), q.foot.largestDeg,
                             ull(q.foot.incomplete), ull(q.foot.notDispatched), std::min(q.edgeSeconds.n, windowSecs), windowSecs,
                             std::min(q.speedSeconds.n, windowSecs), windowSecs);
-        } else if (onFootWindow && nowMs - lastIdleC >= 5000) {
+        } else if (onFootWindow && nowMs - lastIdleC >= idleIntervalMs) {
             lastIdleC = nowMs;
-            Log::get().note("reticle depth (F85c): no reticle composite draw over %u s (reticle key %s; no tool or weapon out, ADS, or the marker fix is off)", windowSecs, reticleKeyText);
+            noteMaybeEdgeFlush(edgeFlush, "reticle depth (F85c): no reticle composite draw over %u s (reticle key %s; no tool or weapon out, ADS, or the marker fix is off)", windowSecs, reticleKeyText);
         }
         drawsFold.reset(st.draws);
         const F85cState keep = st;
@@ -36115,8 +36288,9 @@ void report(uint64_t nowMs) {
     const uint32_t item = g_heldItemSerial.load(std::memory_order_relaxed);
     const uint32_t config = Config::get().generation();
     const bool wasOnFoot = g_blockOnFoot, detailLog = g_blockDetail, measure = g_blockMeasure, fixOn = g_blockFix;
-    const bool edge = g_winMs != 0 && (onFoot != wasOnFoot || enabled != g_blockEnabled || detailNow != g_blockDetail ||
-                                      measureNow != g_blockMeasure || fixNow != g_blockFix || item != g_blockItem || config != g_blockConfig || (g_blockAds && !ads));
+    const bool f85Edge = g_winMs != 0 && (onFoot != wasOnFoot || enabled != g_blockEnabled || detailNow != g_blockDetail ||
+                                          measureNow != g_blockMeasure || fixNow != g_blockFix || item != g_blockItem || config != g_blockConfig);
+    const bool edge = f85Edge || (g_winMs != 0 && g_blockAds && !ads);
     g_blockOnFoot = onFoot;
     g_blockEnabled = enabled;
     g_blockDetail = detailNow;
@@ -36127,7 +36301,9 @@ void report(uint64_t nowMs) {
     g_blockConfig = config;
     if (g_winMs == 0) {
         g_winMs = nowMs;
-        g_blockMs = nowMs;   // F125: the block's first window opens with the first second
+        g_blockMs = nowMs;      // F125: the block's first window opens with the first second
+        g_f85BlockMs = nowMs;   // #199: weapon UI pin's own window
+        std::memset(g_f85HeldConfirmed, 0, sizeof(g_f85HeldConfirmed));
         f85Report(nowMs, false, 0, detailNow, onFoot);
         f90Report(false, 0, onFoot);   // prime the initial window's metadata before a setting/item can change ahead of its first fold
         return;
@@ -36136,6 +36312,7 @@ void report(uint64_t nowMs) {
     if (!secondDue && !edge) return;
     const bool oneSecond = detailLog || measure;
     const uint32_t windowSecs = nofoot::logwin::gateWindow(g_blockMs, nowMs, edge, oneSecond);
+    const uint32_t f85WindowSecs = nofoot::logwin::gateWindow(g_f85BlockMs, nowMs, f85Edge, oneSecond);
     if (secondDue) {
         g_winMs = nowMs;
         if (measureNow) v2Report();   // F57 part 2: the cb1 version census's second (F100: the probe key alone)
@@ -36147,8 +36324,10 @@ void report(uint64_t nowMs) {
     // F125: the lines below print once a window, 10 s in the default log, and the window's figures (g_win, g_streamSec, g_rowsSec, the tee's counters) reset
     // with the print; everything above keeps the 1 s gate. The window is 1 s in the detail log, and while the probe key (measure) is on: its `marker probe:`
     // lines are 1 s lines. State edges close the previous window immediately; the functional gate above still runs only once a second.
-    f85Report(nowMs, secondDue, windowSecs, detailLog, wasOnFoot);
-    f90Report(secondDue, windowSecs, wasOnFoot);
+    const bool edgeFlush = edge && !oneSecond;
+    const bool f85EdgeFlush = f85Edge && !oneSecond;
+    f85Report(nowMs, secondDue, f85WindowSecs, detailLog, wasOnFoot, f85EdgeFlush);
+    f90Report(secondDue, windowSecs, wasOnFoot, edgeFlush);
     if (!windowSecs) return;
     char span[24];   // F125: "this second", or the window's "these N s"
     if (windowSecs == 1) std::snprintf(span, sizeof(span), "this second");
@@ -36280,7 +36459,7 @@ void report(uint64_t nowMs) {
                 uint64_t decisions = s.pOther;
                 for (int k = 0; k < drawtag::kPatchWhyCount; ++k) decisions += s.pWhy[k];
                 if (decisions)
-                    Log::get().note("native on foot marker fix (F62c/F64): eye %d: patch applied %.1f%% (%llu of %llu decisions bound at the issue, "
+                    noteMaybeEdgeFlush(edgeFlush, "native on foot marker fix (F62c/F64): eye %d: patch applied %.1f%% (%llu of %llu decisions bound at the issue, "
                                     "%llu through the newest rows); decided: applied %llu (newest rows %llu); refused: scene rows stale (none within "
                                     "%u frame) %llu, record not matched %llu (eye-frames), both-eyes rule not met %llu, w not positive %llu, |d| over "
                                     "%.2f NDC %llu, no P %llu, other (ranged b0, no CPU b0 rows, no CPU o_hud) %llu; bind refused %llu; over %u s",
@@ -36290,7 +36469,7 @@ void report(uint64_t nowMs) {
                                     drawtag::kPatchGateNdc, ull(s.pWhy[drawtag::kPatchGate]), ull(s.pWhy[drawtag::kPatchNoP]), ull(s.pOther),
                                     ull(s.fBind), windowSecs);
                 else
-                    Log::get().note("native on foot marker fix (F62c): eye %d: no decision %s (no marker composite draw of the eye reached "
+                    noteMaybeEdgeFlush(edgeFlush, "native on foot marker fix (F62c): eye %d: no decision %s (no marker composite draw of the eye reached "
                                     "the fix)", e, span);
                 if (!detailLog) continue;   // F125: the eye's F66f/F67d, F63 and F64 lines below are the detail log's; their sums reset with the window either way
                 // F66f, per eye: the affine rows and the icon offset of this second's patched draws. A run in which the new code never ran reads
@@ -36393,14 +36572,14 @@ void report(uint64_t nowMs) {
                 char ring[64];
                 if (f44::g_stream.ringHave[e]) std::snprintf(ring, sizeof(ring), "first %u last %u", f44::g_stream.ringFirst[e], f44::g_stream.ringLast[e]);
                 else std::snprintf(ring, sizeof(ring), "%s", "none yet");
-                Log::get().note("marker fix (F87c) eye %d: windows %u (F85 %u, history %u, escalated %u), named %llu, outside %llu (nearest %u); Unmap copy %llu copies, requested %llu bytes; eye-%d first/last ring %s; over %u s",
+                noteMaybeEdgeFlush(edgeFlush, "marker fix (F87c) eye %d: windows %u (F85 %u, history %u, escalated %u), named %llu, outside %llu (nearest %u); Unmap copy %llu copies, requested %llu bytes; eye-%d first/last ring %s; over %u s",
                                 e, pl.windows, pl.f85, pl.history, static_cast<unsigned>(ss.escCopies), ull(ss.named), ull(ss.outside), ss.nearest == ~0u ? 0u : ss.nearest,
                                 ull(ss.copies), ull(ss.copyBytes), e, ring, windowSecs);
                 ss = StreamSecond{};
             }
             // Build 3: the one copy both eyes share: requested (both eyes' planned bytes) against copied (the merged ranges), the windows that landed in a range with another,
             // the whole-stream copies' bytes, the copy faults (a merged one counts once per range) and the time of the whole function, planning and merge included.
-            Log::get().note("marker fix (F87c) Unmap copy: %llu Unmaps, requested %llu bytes, copied %llu bytes in %llu ranges (%llu windows joined), whole stream %llu bytes, faults %llu, %.3f ms; over %u s",
+            noteMaybeEdgeFlush(edgeFlush, "marker fix (F87c) Unmap copy: %llu Unmaps, requested %llu bytes, copied %llu bytes in %llu ranges (%llu windows joined), whole stream %llu bytes, faults %llu, %.3f ms; over %u s",
                             ull(w.streamUnmaps), ull(w.streamRequested), ull(w.streamCopied), ull(w.streamRanges), ull(w.streamJoined), ull(w.streamWholeBytes),
                             ull(w.streamFaults), double(f30QpcUs(w.streamCopyTicks)) / 1000.0, windowSecs);
         }
@@ -36415,7 +36594,7 @@ void report(uint64_t nowMs) {
                 using nofoot::f113::kFromMeshes;
                 using nofoot::f113::kFromPrepass;
                 using nofoot::f113::kFromTerrain;
-                Log::get().note("native on foot eye rows (F113) %u s: eye 0 %u frames: the scene meshes %u, the depth prepass %u, the terrain %u, none %u; eye 1 %u frames: "
+                noteMaybeEdgeFlush(edgeFlush, "native on foot eye rows (F113) %u s: eye 0 %u frames: the scene meshes %u, the depth prepass %u, the terrain %u, none %u; eye 1 %u frames: "
                                 "the scene meshes %u, the depth prepass %u, the terrain %u, none %u; checked against a scene mesh %llu (max diff %.2e); source draws "
                                 "with no scene depth eye %llu, no b1 shadow %llu; mesh rows replaced by a source %llu, marked meshes %u (refused draws %llu)",
                                 windowSecs, rs.eye[0].frames, rs.eye[0].from[kFromMeshes], rs.eye[0].from[kFromPrepass], rs.eye[0].from[kFromTerrain], rs.eye[0].none,
@@ -38678,6 +38857,7 @@ void nativeOnFootShutdown() {
     g_f216Pub[0] = g_f216Pub[1] = g_f216Pub[2] = 0.0;   // F216: ... and no view bob term
     for (auto& m : g_f220Move) m.store(0.0f, std::memory_order_relaxed);   // F220: ... and the HUD has no shift
     f137Reset();   // F137: ... and no virtual neck
+    g_f61RigActive.store(false, std::memory_order_release);
     f138Reset();   // F138: ... and no stance reference
     f89AlignPublish(zeroEyeAlign);
     eyeshare::publish(0.0f, GetTickCount64());   // F106: no shared left eye past shutdown

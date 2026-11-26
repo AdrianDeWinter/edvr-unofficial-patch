@@ -303,6 +303,75 @@ inline void run175(Check&& check) {
         char emptyLine[1300];
         f175::formatGroup(emptyLine, sizeof(emptyLine), 1, 0, 0, empty, false);
         check(std::strstr(emptyLine, "nan") == nullptr && std::strstr(emptyLine, "inf") == nullptr, "F175: an empty group formats without a number that is not one");
+
+        // Issue #199: folding per-second snapshots into a 10 s window counts item active seconds
+        // and the exact per-mode union of active seconds (both overlapping and disjoint armed/unarmed).
+        f175::Window acc, secOne, secEmpty;
+        f175::Sample oneSample;
+        oneSample.mode = 1;
+        oneSample.item = 1;
+        oneSample.rollOk = oneSample.pitchOk = true;
+        oneSample.rollErrRad = rad(3.0);
+        secOne.add(oneSample);
+        acc.mergeSecond(secOne);
+        for (int s = 0; s < 9; ++s) acc.mergeSecond(secEmpty);
+        char foldedLine[1300];
+        f175::formatGroup(foldedLine, sizeof(foldedLine), 10, 1, 1, acc.g[1][1], false, acc.modeActiveSecs[1], 7, acc.modeActiveMs[1]);
+        check(acc.g[1][1].frames == 1 && acc.g[1][1].activeSecs == 1 && acc.modeActiveSecs[1] == 1 && acc.modeActiveMs[1] == 1000 &&
+                  std::strstr(foldedLine, "native on foot view roll (F175) 10 s:") != nullptr &&
+                  std::strstr(foldedLine, "; frames in 1 of 10 s (mode 1 of 10 s, 1.00 s active, flush #7)") != nullptr,
+              "F175 (#199): mergeSecond tracks item and mode active seconds + measured ms separately from the 10 s reporting interval and tags the flush id");
+
+        f175::Window overlapAcc, secBoth;
+        f175::Sample unarmedSample = oneSample;
+        unarmedSample.item = 0;
+        secBoth.add(unarmedSample);
+        secBoth.add(oneSample);
+        overlapAcc.mergeSecond(secBoth);
+        check(overlapAcc.g[1][0].activeSecs == 1 && overlapAcc.g[1][1].activeSecs == 1 &&
+                  overlapAcc.modeActiveSecs[1] == 1 && overlapAcc.modeActiveMs[1] == 1000,
+              "F175 (#199): overlapping armed+unarmed frames in the same second count as 1 mode active second (1000 ms)");
+
+        f175::Window disjointAcc, secUnarmed;
+        secUnarmed.add(unarmedSample);
+        disjointAcc.mergeSecond(secUnarmed);
+        disjointAcc.mergeSecond(secOne);
+        char disjointLine[1300];
+        f175::formatGroup(disjointLine, sizeof(disjointLine), 10, 1, 1, disjointAcc.g[1][1], false, disjointAcc.modeActiveSecs[1], 8, disjointAcc.modeActiveMs[1]);
+        check(disjointAcc.g[1][0].activeSecs == 1 && disjointAcc.g[1][1].activeSecs == 1 &&
+                  disjointAcc.modeActiveSecs[1] == 2 && disjointAcc.modeActiveMs[1] == 2000 &&
+                  std::strstr(disjointLine, "; frames in 1 of 10 s (mode 2 of 10 s, 2.00 s active, flush #8)") != nullptr,
+              "F175 (#199): disjoint unarmed and armed seconds in one 10 s window count as 2 mode active seconds (2.00 s active)");
+
+        // Sub-second edge flush duration (#199): an 800 ms partial slice records 800 ms ("0.80 s active")
+        // rather than inflating to 1.00 s, so two 0.80 s edge flushes sum to 1.60 s (< 2 s).
+        f175::Window partialAcc;
+        partialAcc.mergeSlice(secOne, 800u);
+        char partialLine[1300];
+        f175::formatGroup(partialLine, sizeof(partialLine), 1, 1, 1, partialAcc.g[1][1], false, partialAcc.modeActiveSecs[1], 9, partialAcc.modeActiveMs[1]);
+        check(partialAcc.modeActiveSecs[1] == 1 && partialAcc.modeActiveMs[1] == 800 &&
+                  std::strstr(partialLine, "; frames in 1 of 1 s (mode 1 of 1 s, 0.80 s active, flush #9)") != nullptr,
+              "F175 (#199): mergeSlice preserves sub-second measured duration (0.80 s active) on partial flushes");
+
+        // Per-sample F61 separation (#199): a second containing both pre-toggle (f61On=false) and post-toggle
+        // (f61On=true) samples keeps them in strictly separate buckets (g vs gF61On) and splits sliceMs
+        // proportionally so total measured duration across both sides never exceeds sliceMs.
+        f175::Window mixedAcc, mixedSec;
+        f175::Sample offS = oneSample;
+        offS.f61On = false;
+        offS.rollErrRad = rad(0.2);
+        f175::Sample onS = oneSample;
+        onS.f61On = true;
+        onS.rollErrRad = rad(4.0);
+        mixedSec.add(offS);
+        for (int k = 0; k < 3; ++k) mixedSec.add(onS);
+        mixedAcc.mergeSecond(mixedSec);
+        check(mixedAcc.anyFor(false) && mixedAcc.anyFor(true) &&
+                  mixedAcc.g[1][1].frames == 1 && mixedAcc.gF61On[1][1].frames == 3 &&
+                  mixedAcc.modeActiveSecs[1] == 1 && mixedAcc.modeActiveSecsF61On[1] == 1 &&
+                  mixedAcc.modeActiveMs[1] == 250 && mixedAcc.modeActiveMsF61On[1] == 750 &&
+                  eq(mixedAcc.g[1][1].roll.mean(), 0.2, 1e-6) && eq(mixedAcc.gF61On[1][1].roll.mean(), 4.0, 1e-6),
+              "F175 (#199): per-sample f61On tagging separates pre-toggle and post-toggle samples and splits sliceMs proportionally");
     }
 
     // ---- 5. the source: where the figures are read ----------------------------------------------------------------------------------------------------------------------------------------------
