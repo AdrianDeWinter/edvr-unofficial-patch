@@ -45,6 +45,7 @@ constexpr double kOverDeg = 2.0;        // the share of frames with |roll error|
 constexpr double kFlagRmsDeg = 1.5;     // the health rule: a mode's roll error rms over this ...
 constexpr uint32_t kFlagFrames = 2 * 60;  // ... across at least this many frames (2 s at 60 frames a second) ...
 constexpr uint32_t kFlagSeconds = 2;    // ... and this many seconds with frames
+constexpr uint32_t kDurationFromSecs = 0xFFFFFFFFu;  // sentinel: formatGroup derives duration from integer modeActiveSecs when caller omits measured ms (#199)
 constexpr double kMinRateDtS = 0.001, kMaxRateDtS = 0.25;   // two LOCAL poses make a rate when they are this far apart in time at the most and at the least
 constexpr double kRateFreshS = 0.25;    // a rate is used for this long after it was last worked out (the pose may not change every game frame)
 constexpr double kPi = 3.14159265358979323846;
@@ -170,6 +171,7 @@ struct RateTracker {
 struct Sample {
     int mode = 0;   // 0 mouse look, 1 look to aim
     int item = 0;   // 0 unarmed, 1 armed
+    bool f61On = false;   // F61 calibration rig state that produced these eye rows (#199)
     bool rollOk = false, pitchOk = false, rateOk = false, leadOk = false;
     double rollErrRad = 0.0, pitchErrRad = 0.0;
     double speedDegS = 0.0, yawDegS = 0.0;
@@ -195,6 +197,8 @@ struct Stat {
 };
 struct Group {
     uint32_t frames = 0, over = 0;                // frames; frames with |roll error| over kOverDeg
+    uint32_t activeSecs = 0;                      // distinct slices in the window that had eligible frames (F125/F175)
+    uint32_t activeMs = 0;                        // measured active duration in ms across those slices (#199)
     Stat roll, still, turning, pitch;             // degrees: the roll error, split by the head still / turning horizontally, and the pitch error
     uint32_t slopeN = 0;                          // the pairs of the slope
     double sxx = 0.0, sxy = 0.0;                  // radians: x = aim pitch x yaw lead, y = the roll error
@@ -227,6 +231,8 @@ struct Group {
     void merge(const Group& o) noexcept {
         frames += o.frames;
         over += o.over;
+        activeSecs += o.activeSecs;
+        activeMs += o.activeMs;
         roll.merge(o.roll);
         still.merge(o.still);
         turning.merge(o.turning);
@@ -244,37 +250,112 @@ struct Group {
     double xRms() const noexcept { return slopeN ? std::sqrt(sxx / static_cast<double>(slopeN)) : 0.0; }
 };
 struct Window {
-    Group g[2][2];   // [mode][item]
+    Group g[2][2];                         // [mode][item] with F61 rig off
+    uint32_t modeActiveSecs[2] = {0, 0};   // distinct slices in the window where either item in [mode] had eligible frames with F61 off (F125/F175)
+    uint32_t modeActiveMs[2] = {0, 0};     // measured active duration (ms) for [mode] with F61 off (#199)
+    Group gF61On[2][2];                    // [mode][item] with F61 rig ON (kept strictly separate from F61 off across toggles, #199)
+    uint32_t modeActiveSecsF61On[2] = {0, 0};
+    uint32_t modeActiveMsF61On[2] = {0, 0};
     void add(const Sample& s) noexcept {
         if ((s.mode != 0 && s.mode != 1) || (s.item != 0 && s.item != 1)) return;
-        g[s.mode][s.item].add(s);
+        (s.f61On ? gF61On : g)[s.mode][s.item].add(s);
     }
-    bool any() const noexcept {
-        for (const auto& row : g)
-            for (const Group& x : row)
-                if (x.frames) return true;
+    uint32_t totalFramesFor(bool f61On) const noexcept {
+        const Group (*side)[2] = f61On ? gF61On : g;
+        uint32_t total = 0;
+        for (int m = 0; m < 2; ++m)
+            for (int i = 0; i < 2; ++i) total += side[m][i].frames;
+        return total;
+    }
+    // Fold one hook snapshot covering `sliceMs` milliseconds into a multi-second summary window,
+    // counting each [mode][item] and each [mode] union that had eligible frames separately from
+    // the reporting interval and strictly separated by per-sample F61 state (#199).
+    static void mergeSide(Group dst[2][2], uint32_t dstModeSecs[2], uint32_t dstModeMs[2],
+                          const Group src[2][2], const uint32_t srcModeSecs[2],
+                          const uint32_t srcModeMs[2], uint32_t sliceMs) noexcept {
+        for (int m = 0; m < 2; ++m) {
+            bool modeAny = false;
+            for (int i = 0; i < 2; ++i)
+                if (src[m][i].frames) {
+                    dst[m][i].merge(src[m][i]);
+                    dst[m][i].activeSecs += src[m][i].activeSecs ? 0u : 1u;
+                    dst[m][i].activeMs += src[m][i].activeSecs ? 0u : sliceMs;
+                    modeAny = true;
+                }
+            if (modeAny) {
+                dstModeSecs[m] += srcModeSecs[m] ? srcModeSecs[m] : 1u;
+                dstModeMs[m] += srcModeSecs[m] ? srcModeMs[m] : sliceMs;
+            }
+        }
+    }
+    void mergeSlice(const Window& sec, uint32_t sliceMs) noexcept {
+        // When a single raw snapshot holds samples from both F61 states (only possible across
+        // an F61 toggle edge), split sliceMs proportionally by frame count so an in-flight
+        // straggler never inflates the other side's measured duration past sliceMs (#199).
+        const uint32_t offFrames = sec.totalFramesFor(false);
+        const uint32_t onFrames = sec.totalFramesFor(true);
+        uint32_t offMs = sliceMs;
+        uint32_t onMs = sliceMs;
+        if (offFrames > 0 && onFrames > 0) {
+            offMs = static_cast<uint32_t>((static_cast<uint64_t>(sliceMs) * offFrames) / (offFrames + onFrames));
+            onMs = sliceMs - offMs;
+        }
+        mergeSide(g, modeActiveSecs, modeActiveMs, sec.g, sec.modeActiveSecs, sec.modeActiveMs, offMs);
+        mergeSide(gF61On, modeActiveSecsF61On, modeActiveMsF61On, sec.gF61On, sec.modeActiveSecsF61On,
+                  sec.modeActiveMsF61On, onMs);
+    }
+    void mergeSecond(const Window& sec) noexcept { mergeSlice(sec, 1000u); }
+    bool anyFor(bool f61On) const noexcept {
+        const Group (*side)[2] = f61On ? gF61On : g;
+        for (int m = 0; m < 2; ++m)
+            for (int i = 0; i < 2; ++i)
+                if (side[m][i].frames) return true;
         return false;
     }
+    uint32_t maxActiveFor(bool f61On) const noexcept {
+        const Group (*side)[2] = f61On ? gF61On : g;
+        const uint32_t* mSecs = f61On ? modeActiveSecsF61On : modeActiveSecs;
+        uint32_t maxA = 0;
+        for (int m = 0; m < 2; ++m) {
+            if (mSecs[m] > maxA) maxA = mSecs[m];
+            for (int i = 0; i < 2; ++i)
+                if (side[m][i].frames) {
+                    const uint32_t a = side[m][i].activeSecs ? side[m][i].activeSecs : 1u;
+                    if (a > maxA) maxA = a;
+                }
+        }
+        return maxA;
+    }
+    bool any() const noexcept { return anyFor(false) || anyFor(true); }
     void clear() noexcept { *this = Window{}; }
 };
 
 inline const char* modeName(int mode) noexcept { return mode ? "look to aim" : "mouse look"; }
 inline const char* itemName(int item) noexcept { return item ? "armed" : "unarmed"; }
 
-// One group's line for a 1 s window: the frames; the roll error's mean, rms and largest and the share over 2 deg; the same by the head still and turning; the pitch error against what is
+// One group's line for a summary window: the frames; the roll error's mean, rms and largest and the share over 2 deg; the same by the head still and turning; the pitch error against what is
 // expected (the headset's elevation under look to aim, plus the aim's pitch under mouse look); the slope with its pairs and the spread of its input; the head's speed, the aim's pitch and
-// the reported head's lead over the aim (yaw, pitch); F61's rig. The log's lines end at 1200 bytes (1166 of them the message); this one runs to about 700.
-inline int formatGroup(char* buf, size_t n, uint32_t seconds, int mode, int item, const Group& g, bool f61On) noexcept {
+// the reported head's lead over the aim (yaw, pitch); F61's rig; and the seconds with eligible frames in the window (for this item and across the look mode, plus the flush sequence id). The log's lines end at 1200 bytes (1166 of them the message); this one runs to about 750.
+inline int formatGroup(char* buf, size_t n, uint32_t seconds, int mode, int item, const Group& g, bool f61On,
+                       uint32_t modeActiveSecs = 0, uint32_t flushId = 0,
+                       uint32_t modeActiveMs = kDurationFromSecs) noexcept {
+    const uint32_t rawActive = g.activeSecs ? g.activeSecs : (g.frames ? seconds : 0u);
+    const uint32_t active = seconds ? std::min(rawActive, seconds) : rawActive;
+    const uint32_t rawMode = modeActiveSecs ? std::max(modeActiveSecs, rawActive) : rawActive;
+    const uint32_t modeActive = seconds ? std::min(rawMode, seconds) : rawMode;
+    const double activeDurS = (modeActiveMs != kDurationFromSecs)
+                                  ? (static_cast<double>(modeActiveMs) * 1e-3)
+                                  : static_cast<double>(modeActive);
     return std::snprintf(buf, n,
                          "native on foot view roll (F175) %u s: mode %s, item %s, F61 rig %s; %u frames (roll: about the view's forward against the character's up, + the right side up; error = the view's "
                          "less the headset's in LOCAL); roll error mean %+.2f rms %.2f max %.2f deg, over 2 deg in %u frames; head still (under 10 deg/s) %u frames mean %+.2f rms %.2f max %.2f; "
                          "head turning (yaw over 30 deg/s) %u frames mean %+.2f rms %.2f max %.2f; pitch error (the view's elevation less %s) %u frames mean %+.2f rms %.2f max %.2f deg; "
                          "slope of the roll error against aim pitch x the head's yaw lead %+.3f over %u frames (x rms %.4f rad); head speed mean %.1f deg/s; aim pitch mean %+.1f deg; "
-                         "reported head lead over the aim yaw %+.1f pitch %+.1f deg",
+                         "reported head lead over the aim yaw %+.1f pitch %+.1f deg; frames in %u of %u s (mode %u of %u s, %.2f s active, flush #%u)",
                          seconds, modeName(mode), itemName(item), f61On ? "ON" : "off", g.frames, g.roll.mean(), g.roll.rms(), g.roll.maxAbs, g.over, g.still.n, g.still.mean(), g.still.rms(),
                          g.still.maxAbs, g.turning.n, g.turning.mean(), g.turning.rms(), g.turning.maxAbs,
                          mode ? "the headset's in LOCAL" : "the headset's in LOCAL plus the aim's pitch", g.pitch.n, g.pitch.mean(), g.pitch.rms(), g.pitch.maxAbs, g.slope(), g.slopeN, g.xRms(),
-                         g.speed.mean(), g.aim.mean(), g.yawLead.mean(), g.pitchLead.mean());
+                         g.speed.mean(), g.aim.mean(), g.yawLead.mean(), g.pitchLead.mean(), active, seconds, modeActive, seconds, activeDurS, flushId);
 }
 
 }  // namespace f175

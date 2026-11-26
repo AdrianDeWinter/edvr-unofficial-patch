@@ -187,4 +187,31 @@ struct StoredNeck {
     }
     void clearWindow() noexcept { startAfterStored = 0; jump = 0.0; }
 };
+// Issue #199: per-slot weapon weight polarity for F125PinWindow (frame + each F97 bin):
+//   0 = no samples this second, 1 = active with mean weight < 0.99, 2 = active with mean weight >= 0.99.
+// Two seconds conflict only when BOTH observed the same slot and disagreed on its polarity;
+// a bin transitioning empty <-> active while another bin runs does not split the 10 s window.
+inline uint32_t weightSlotPolarity(uint32_t count, double wSum) noexcept {
+    if (!count) return 0u;
+    return (wSum / static_cast<double>(count) >= 0.99) ? 2u : 1u;
+}
+inline bool weightPolarityConflict(uint32_t pendingMask, uint32_t curMask, int slots) noexcept {
+    for (int i = 0; i < slots; ++i) {
+        const uint32_t shift = static_cast<uint32_t>(2 * i);
+        const uint32_t p = (pendingMask >> shift) & 3u;
+        const uint32_t c = (curMask >> shift) & 3u;
+        if (p != 0u && c != 0u && p != c) return true;
+    }
+    return false;
+}
+inline uint32_t weightPolarityMerge(uint32_t pendingMask, uint32_t curMask, int slots) noexcept {
+    uint32_t out = pendingMask;
+    for (int i = 0; i < slots; ++i) {
+        const uint32_t shift = static_cast<uint32_t>(2 * i);
+        const uint32_t p = (pendingMask >> shift) & 3u;
+        const uint32_t c = (curMask >> shift) & 3u;
+        if (p == 0u && c != 0u) out |= (c << shift);
+    }
+    return out;
+}
 }}} // namespace edvr::nofoot::logpin

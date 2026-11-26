@@ -41,7 +41,20 @@ constexpr int      kMaxTargets = 32;   // the cockpit binds shadow maps by the h
 constexpr uint64_t kSampleIntervalMs = 10000;
 constexpr uint64_t kSampleIntervalEyeMs = 2000;   // eye-sized targets: the census line wants them fresh
 constexpr int      kMaxSampleLines = 6;
+constexpr uint64_t kCensusIntervalMs = 20000;
+constexpr uint64_t kCensusHeartbeatMs = 300000;   // #199: 5-minute heartbeat when depth topology is steady and detail/capture is off
+constexpr uint32_t kMaxSessionSampleLogs = 24;    // #199: session cap on steady-state sample prints when detail/capture is off
 inline bool depthSampleLogDue(uint64_t candidate) noexcept { return candidate > 0 && (candidate <= 6 || candidate % 30 == 0); }
+inline bool depthSamplePrintWanted(uint64_t candidate, bool verbose, uint32_t sessionSampleLogs) noexcept {
+    if (!depthSampleLogDue(candidate)) return false;
+    return verbose || (candidate <= static_cast<uint64_t>(kMaxSampleLines) && sessionSampleLogs < kMaxSessionSampleLogs);
+}
+inline bool depthCensusLogDue(uint64_t nowMs, uint64_t lastMs, uint64_t sig, uint64_t lastSig, bool verbose) noexcept {
+    if (lastMs == 0 || nowMs < lastMs) return true;
+    const uint64_t dt = nowMs - lastMs;
+    if (verbose || sig != lastSig) return dt >= kCensusIntervalMs;
+    return dt >= kCensusHeartbeatMs;
+}
 
 // The near plane the game names when it asks for its projection (0.025,
 // every session's receiver line), for turning a reversed-Z value into
@@ -122,11 +135,67 @@ uint32_t g_indirectThisFrame = 0, g_indirectLastFrame = 0;
 uint32_t g_eyeRtvDrawsThisFrame = 0, g_eyeRtvDrawsLastFrame = 0;
 uint32_t g_boundaryNext = 0;        // round-robin over the targets
 uint64_t g_censusLastMs = 0;
-constexpr uint64_t kCensusIntervalMs = 20000;
+uint64_t g_censusLastSig = 0;
+bool     g_verboseLog = false;      // #199: true when advanced.eye_depth_capture or log.on_foot_detail is on
+uint32_t g_sessionSampleLogs = 0;   // #199: steady-state sample print cap across eviction churn
+struct AnnouncedSig {
+    uint64_t sig = 0;
+    uint32_t maxSimultaneous = 0;
+};
+AnnouncedSig g_announcedSigs[kMaxTargets] = {};
+int          g_announcedSigCount = 0;
 uint64_t g_boundaryLastMs = 0;
 bool     g_stagingAtBoundary = false;
 uint32_t g_frameNo = 0;
 constexpr uint32_t kReleaseAfterFrames = 120;
+
+constexpr uint64_t kFnv1a64Offset = 14695981039346656037ull;
+constexpr uint64_t kFnv1a64Prime = 1099511628211ull;
+
+inline void fnv1aMix(uint64_t& h, uint64_t v) noexcept {
+    h ^= v;
+    h *= kFnv1a64Prime;
+}
+
+uint64_t targetAnnounceSig(const Target& t) noexcept {
+    uint64_t h = kFnv1a64Offset;
+    fnv1aMix(h, t.w); fnv1aMix(h, t.h); fnv1aMix(h, static_cast<uint64_t>(t.texFmt));
+    fnv1aMix(h, static_cast<uint64_t>(t.dsvFmt)); fnv1aMix(h, t.dsvFlags);
+    fnv1aMix(h, t.bindFlags); fnv1aMix(h, t.samples); fnv1aMix(h, t.arraySize); fnv1aMix(h, t.mips);
+    return h ? h : 1ull;
+}
+
+// Suppresses repeating announcements after menu/transition eviction and rediscovery,
+// without hiding distinct simultaneously live targets that share the same descriptor
+// (for example, stereo left/right eye depth buffers) (#199).
+bool targetAnnounceShouldSuppress(uint64_t sig, uint32_t liveAnnouncedCount) noexcept {
+    for (int i = 0; i < g_announcedSigCount; ++i) {
+        if (g_announcedSigs[i].sig == sig) {
+            if (liveAnnouncedCount <= g_announcedSigs[i].maxSimultaneous) return true;
+            g_announcedSigs[i].maxSimultaneous = liveAnnouncedCount;
+            return false;
+        }
+    }
+    if (g_announcedSigCount < kMaxTargets) {
+        g_announcedSigs[g_announcedSigCount++] = AnnouncedSig{sig, liveAnnouncedCount};
+    }
+    return false;
+}
+
+uint64_t computeCensusSig(int scene0, int scene1) noexcept {
+    uint64_t h = kFnv1a64Offset;
+    uint32_t live = 0;
+    for (int i = 0; i < g_targetCount; ++i) {
+        if (!g_targets[i].dsv) continue;
+        ++live;
+        fnv1aMix(h, static_cast<uint64_t>(i));
+        fnv1aMix(h, targetAnnounceSig(g_targets[i]));
+    }
+    fnv1aMix(h, live);
+    fnv1aMix(h, static_cast<uint64_t>(scene0 + 1));
+    fnv1aMix(h, static_cast<uint64_t>(scene1 + 1));
+    return h ? h : 1ull;
+}
 
 // THE LAYOUT CENSUS (2026-09-23, the on-foot walk of flight 093817: the
 // scene's depth "went away" for the whole walk while target #23, 3840x2160,
@@ -539,6 +608,7 @@ void depthProbeConfigure(Config& cfg) {
     // pair, and the ADS sight lock and F113's row sources never had an eye.
     // The profile is asked first, so the flat profile never reads the key.
     const bool captureOn = cfg.getBool("advanced.eye_depth_capture", false);
+    g_verboseLog = captureOn || cfg.getBool("log.on_foot_detail", false);
     const bool vrProfile = runtimeVrProfile();
     const bool nativeOnFootVr = vrProfile && depthProbeNativeOnFootVr(vrProfile, cfg.getString("fix.native_on_foot", "on"));
     const DepthProbeWhy why = depthProbeWhyFor(mode, captureOn, nativeOnFootVr);
@@ -1157,9 +1227,20 @@ void depthProbeFrameBoundary(ID3D11DeviceContext* ctx) {
         t.nullRtvDrawsLastFrame = t.nullRtvDrawsThisFrame;
         t.drawsThisFrame = t.eyeRtvDrawsThisFrame = t.nullRtvDrawsThisFrame = 0;
         // Announced after a full frame of counting, so the line carries
-        // the census rather than a zero.
-        if (t.announced || t.framesSeen < 2) continue;
+        // the census rather than a zero. In default logging, suppress repeating
+        // identical target descriptors after menu/transition eviction without
+        // hiding distinct simultaneously live targets (such as stereo eyes) (#199).
+        if (!t.dsv || t.announced || t.framesSeen < 2) continue;
         t.announced = true;
+        const uint64_t aSig = targetAnnounceSig(t);
+        uint32_t liveWithSig = 0;
+        for (int j = 0; j < g_targetCount; ++j) {
+            if (g_targets[j].dsv && g_targets[j].announced && targetAnnounceSig(g_targets[j]) == aSig) {
+                ++liveWithSig;
+            }
+        }
+        const bool alreadyAnnounced = targetAnnounceShouldSuppress(aSig, liveWithSig);
+        if (!g_verboseLog && alreadyAnnounced) continue;
         Log::get().note(
             "depth probe: depth target #%d -- %ux%u, texture format %s (%d), "
             "view format %s (%d) flags 0x%X, bind flags 0x%X, %u sample(s), "
@@ -1210,123 +1291,128 @@ void depthProbeFrameBoundary(ID3D11DeviceContext* ctx) {
         if (layout) ++g_layoutFrames;
         layoutPickRecord();
     }
-    // The census, again every 20 s: the second depth flight showed the
-    // scene's draws moving between pairs of targets and dropping to a
-    // cockpit-only pass for a minute, which one line at 120 frames could
-    // never have shown.
-    if (g_summaryNoted && g_eyeFrames > 120 &&
-        (g_censusLastMs == 0 || elapsedMs(g_censusLastMs, kCensusIntervalMs))) {
-        g_censusLastMs = stampMs();
-        int order[kMaxTargets];
-        int live = 0;
-        for (int i = 0; i < g_targetCount; ++i) {
-            if (g_targets[i].dsv) order[live++] = i;
-        }
-        for (int i = 1; i < live; ++i) {
-            for (int j = i; j > 0 && g_targets[order[j]].drawsLastFrame >
-                                         g_targets[order[j - 1]].drawsLastFrame; --j) {
-                const int tmp = order[j]; order[j] = order[j - 1]; order[j - 1] = tmp;
-            }
-        }
-        char busy[320] = "";
-        size_t used = 0;
-        for (int k = 0; k < live && k < 5; ++k) {
-            const Target& b = g_targets[order[k]];
-            const int m = snprintf(busy + used, sizeof(busy) - used, "%s#%d %ux%u %u draws",
-                                   k ? ", " : "", order[k], b.w, b.h, b.drawsLastFrame);
-            if (m > 0) used += static_cast<size_t>(m);
-            if (used >= sizeof(busy)) break;
-        }
-        Log::get().note(
-            "depth probe census: %u draws last frame, %u with a depth target; "
-            "the busiest: %s; the pass's scene pair: #%d and #%d.",
-            g_drawsLastFrame, g_drawsWithDsvLastFrame, busy, g_scenePick[0],
-            g_scenePick[1]);
-        // Every eye-sized target, with its draws, its first bind and what
-        // its last sample read.
-        if (g_scenePick[0] >= 0 && g_scenePick[0] < g_targetCount) {
-            const uint32_t ew = g_targets[g_scenePick[0]].w;
-            const uint32_t eh = g_targets[g_scenePick[0]].h;
-            char eyes[700] = "";
-            size_t u2 = 0;
-            for (int i = 0; i < g_targetCount && u2 < sizeof(eyes); ++i) {
-                const Target& e2 = g_targets[i];
-                if (!e2.dsv || e2.w != ew || e2.h != eh) continue;
-                const int m = snprintf(eyes + u2, sizeof(eyes) - u2, "%s#%d %u draws (bind %u)%s",
-                                       u2 ? ", " : "", i, e2.drawsLastFrame, e2.firstBindLastFrame,
-                                       e2.samples > 1 ? " msaa" : (!e2.sampledOnce && !g_pickOnly ? " unsampled" : ""));
-                if (m > 0) u2 += static_cast<size_t>(m);
-                if (e2.sampledOnce && e2.samples <= 1 && u2 < sizeof(eyes)) {
-                    const int m2 = snprintf(eyes + u2, sizeof(eyes) - u2, " [far %d near %d]",
-                                            e2.sampleFar, e2.sampleNear);
-                    if (m2 > 0) u2 += static_cast<size_t>(m2);
-                }
-            }
-            Log::get().note("depth probe: the eye-sized targets: %s.", eyes);
-        }
+    // The census: every 20 s when detail/capture is on, when the layout census has samples,
+    // or when the live target topology/scene pair changes; otherwise a 5-minute heartbeat (#199).
+    if (g_summaryNoted && g_eyeFrames > 120) {
+        const uint64_t nowMs = stampMs();
+        const uint64_t cSig = computeCensusSig(g_scenePick[0], g_scenePick[1]);
         uint32_t layoutSamples = 0;
         for (const auto& r : g_layoutRecords) if (r.target >= 0) layoutSamples += r.samples;
-        if (g_layoutFrames > 0 && layoutSamples > 0) {
-            auto rects = [](const LayoutRect* r, uint32_t other, char* out, size_t cap) {
+        const bool wantVerboseCensus = g_verboseLog || layoutSamples > 0;
+        if (depthCensusLogDue(nowMs, g_censusLastMs, cSig, g_censusLastSig, wantVerboseCensus)) {
+            g_censusLastMs = nowMs;
+            g_censusLastSig = cSig;
+            int order[kMaxTargets];
+            int live = 0;
+            for (int i = 0; i < g_targetCount; ++i) {
+                if (g_targets[i].dsv) order[live++] = i;
+            }
+            for (int i = 1; i < live; ++i) {
+                for (int j = i; j > 0 && g_targets[order[j]].drawsLastFrame >
+                                             g_targets[order[j - 1]].drawsLastFrame; --j) {
+                    const int tmp = order[j]; order[j] = order[j - 1]; order[j - 1] = tmp;
+                }
+            }
+            char busy[320] = "";
+            size_t used = 0;
+            for (int k = 0; k < live && k < 5; ++k) {
+                const Target& b = g_targets[order[k]];
+                const int m = snprintf(busy + used, sizeof(busy) - used, "%s#%d %ux%u %u draws",
+                                       k ? ", " : "", order[k], b.w, b.h, b.drawsLastFrame);
+                if (m > 0) used += static_cast<size_t>(m);
+                if (used >= sizeof(busy)) break;
+            }
+            Log::get().note(
+                "depth probe census: %u draws last frame, %u with a depth target; "
+                "the busiest: %s; the pass's scene pair: #%d and #%d.",
+                g_drawsLastFrame, g_drawsWithDsvLastFrame, busy, g_scenePick[0],
+                g_scenePick[1]);
+            // Every eye-sized target, with its draws, its first bind and what
+            // its last sample read.
+            if (g_scenePick[0] >= 0 && g_scenePick[0] < g_targetCount) {
+                const uint32_t ew = g_targets[g_scenePick[0]].w;
+                const uint32_t eh = g_targets[g_scenePick[0]].h;
+                char eyes[700] = "";
+                size_t u2 = 0;
+                for (int i = 0; i < g_targetCount && u2 < sizeof(eyes); ++i) {
+                    const Target& e2 = g_targets[i];
+                    if (!e2.dsv || e2.w != ew || e2.h != eh) continue;
+                    const int m = snprintf(eyes + u2, sizeof(eyes) - u2, "%s#%d %u draws (bind %u)%s",
+                                           u2 ? ", " : "", i, e2.drawsLastFrame, e2.firstBindLastFrame,
+                                           e2.samples > 1 ? " msaa" : (!e2.sampledOnce && !g_pickOnly ? " unsampled" : ""));
+                    if (m > 0) u2 += static_cast<size_t>(m);
+                    if (e2.sampledOnce && e2.samples <= 1 && u2 < sizeof(eyes)) {
+                        const int m2 = snprintf(eyes + u2, sizeof(eyes) - u2, " [far %d near %d]",
+                                                e2.sampleFar, e2.sampleNear);
+                        if (m2 > 0) u2 += static_cast<size_t>(m2);
+                    }
+                }
+                Log::get().note("depth probe: the eye-sized targets: %s.", eyes);
+            }
+            if (g_layoutFrames > 0 && layoutSamples > 0) {
+                auto rects = [](const LayoutRect* r, uint32_t other, char* out, size_t cap) {
+                    size_t u = 0;
+                    out[0] = '\0';
+                    for (int i = 0; i < kLayoutKeep && r[i].count && u < cap; ++i) {
+                        const int k = snprintf(out + u, cap - u, "%s(%d,%d) %dx%d x%u", i ? ", " : "", r[i].x, r[i].y,
+                                               r[i].w, r[i].h, r[i].count);
+                        if (k > 0) u += static_cast<size_t>(k);
+                    }
+                    if (other && u < cap) snprintf(out + u, cap - u, "%s+%u more", u ? ", " : "", other);
+                    if (!out[0]) snprintf(out, cap, "none");
+                };
+                // Each sampled target's own record: its frames and samples, its
+                // viewports and scissors, the colour target beside it, and the
+                // samples whose viewport lies outside it.
+                char records[1600] = "", shaders[400];
+                size_t ur = 0;
+                for (const auto& r : g_layoutRecords) {
+                    if (r.target < 0 || !r.samples || ur >= sizeof(records)) continue;
+                    char vps[200], scs[200], colour[96];
+                    rects(r.viewports, r.viewportOther, vps, sizeof(vps));
+                    rects(r.scissors, r.scissorOther, scs, sizeof(scs));
+                    if (r.colourSeen)
+                        snprintf(colour, sizeof(colour), "%ux%u %s", r.colourW, r.colourH, fmtName(r.colourFmt));
+                    else
+                        snprintf(colour, sizeof(colour), "%s", r.colourNone ? "none (depth only)" : "not read");
+                    const int k = snprintf(records + ur, sizeof(records) - ur,
+                                           "%s#%d %ux%u on %u frames, %u samples: viewports [%s], scissors [%s], "
+                                           "the colour target beside it %s, %u samples with a viewport outside it%s",
+                                           ur ? "; " : "", r.target, r.w, r.h, r.frames, r.samples, vps, scs, colour,
+                                           r.outside, r.outside ? " (drawn with another depth than the one counted)" : "");
+                    if (k > 0) ur += static_cast<size_t>(k);
+                }
+                if (g_layoutRecordsFull && ur < sizeof(records))
+                    snprintf(records + ur, sizeof(records) - ur, "%s%u frames of further targets not recorded",
+                             ur ? "; " : "", g_layoutRecordsFull);
                 size_t u = 0;
-                out[0] = '\0';
-                for (int i = 0; i < kLayoutKeep && r[i].count && u < cap; ++i) {
-                    const int k = snprintf(out + u, cap - u, "%s(%d,%d) %dx%d x%u", i ? ", " : "", r[i].x, r[i].y,
-                                           r[i].w, r[i].h, r[i].count);
+                shaders[0] = '\0';
+                for (int i = 0; i < kLayoutKeep && g_layoutEyeShaders[i].count && u < sizeof(shaders); ++i) {
+                    const int k = snprintf(shaders + u, sizeof(shaders) - u, "%svs %016llX ps %016llX x%u", i ? ", " : "",
+                                           static_cast<unsigned long long>(g_layoutEyeShaders[i].vs),
+                                           static_cast<unsigned long long>(g_layoutEyeShaders[i].ps),
+                                           g_layoutEyeShaders[i].count);
                     if (k > 0) u += static_cast<size_t>(k);
                 }
-                if (other && u < cap) snprintf(out + u, cap - u, "%s+%u more", u ? ", " : "", other);
-                if (!out[0]) snprintf(out, cap, "none");
-            };
-            // Each sampled target's own record: its frames and samples, its
-            // viewports and scissors, the colour target beside it, and the
-            // samples whose viewport lies outside it.
-            char records[1600] = "", shaders[400];
-            size_t ur = 0;
-            for (const auto& r : g_layoutRecords) {
-                if (r.target < 0 || !r.samples || ur >= sizeof(records)) continue;
-                char vps[200], scs[200], colour[96];
-                rects(r.viewports, r.viewportOther, vps, sizeof(vps));
-                rects(r.scissors, r.scissorOther, scs, sizeof(scs));
-                if (r.colourSeen)
-                    snprintf(colour, sizeof(colour), "%ux%u %s", r.colourW, r.colourH, fmtName(r.colourFmt));
-                else
-                    snprintf(colour, sizeof(colour), "%s", r.colourNone ? "none (depth only)" : "not read");
-                const int k = snprintf(records + ur, sizeof(records) - ur,
-                                       "%s#%d %ux%u on %u frames, %u samples: viewports [%s], scissors [%s], "
-                                       "the colour target beside it %s, %u samples with a viewport outside it%s",
-                                       ur ? "; " : "", r.target, r.w, r.h, r.frames, r.samples, vps, scs, colour,
-                                       r.outside, r.outside ? " (drawn with another depth than the one counted)" : "");
-                if (k > 0) ur += static_cast<size_t>(k);
+                if (g_layoutEyeShaderOther && u < sizeof(shaders))
+                    snprintf(shaders + u, sizeof(shaders) - u, "%s+%u more", u ? ", " : "", g_layoutEyeShaderOther);
+                if (!shaders[0]) snprintf(shaders, sizeof(shaders), "no draw");
+                char now[96] = "";
+                if (g_layoutTarget >= 0)
+                    snprintf(now, sizeof(now), " (now #%d %ux%u, %u draws last frame)", g_layoutTarget,
+                             g_targets[g_layoutTarget].w, g_targets[g_layoutTarget].h,
+                             g_targets[g_layoutTarget].drawsLastFrame);
+                Log::get().note(
+                    "depth probe layout: on %u frames the busiest depth target%s had no eye-sized colour target beside "
+                    "any of its draws; by target, each its own samples: %s; meanwhile the eye-sized targets took %.1f "
+                    "draws a frame, drawn by [%s]. Two viewports would be a packed per-eye layout; one full viewport with "
+                    "a full-screen draw per eye is a flat picture the eyes show on a panel.",
+                    g_layoutFrames, now, records,
+                    static_cast<double>(g_layoutEyeDraws) / static_cast<double>(g_layoutFrames), shaders);
+                layoutReset();
+            } else if (g_layoutFrames > 0 && g_layoutTarget < 0) {
+                layoutReset();
             }
-            if (g_layoutRecordsFull && ur < sizeof(records))
-                snprintf(records + ur, sizeof(records) - ur, "%s%u frames of further targets not recorded",
-                         ur ? "; " : "", g_layoutRecordsFull);
-            size_t u = 0;
-            shaders[0] = '\0';
-            for (int i = 0; i < kLayoutKeep && g_layoutEyeShaders[i].count && u < sizeof(shaders); ++i) {
-                const int k = snprintf(shaders + u, sizeof(shaders) - u, "%svs %016llX ps %016llX x%u", i ? ", " : "",
-                                       static_cast<unsigned long long>(g_layoutEyeShaders[i].vs),
-                                       static_cast<unsigned long long>(g_layoutEyeShaders[i].ps),
-                                       g_layoutEyeShaders[i].count);
-                if (k > 0) u += static_cast<size_t>(k);
-            }
-            if (g_layoutEyeShaderOther && u < sizeof(shaders))
-                snprintf(shaders + u, sizeof(shaders) - u, "%s+%u more", u ? ", " : "", g_layoutEyeShaderOther);
-            if (!shaders[0]) snprintf(shaders, sizeof(shaders), "no draw");
-            char now[96] = "";
-            if (g_layoutTarget >= 0)
-                snprintf(now, sizeof(now), " (now #%d %ux%u, %u draws last frame)", g_layoutTarget,
-                         g_targets[g_layoutTarget].w, g_targets[g_layoutTarget].h,
-                         g_targets[g_layoutTarget].drawsLastFrame);
-            Log::get().note(
-                "depth probe layout: on %u frames the busiest depth target%s had no eye-sized colour target beside "
-                "any of its draws; by target, each its own samples: %s; meanwhile the eye-sized targets took %.1f "
-                "draws a frame, drawn by [%s]. Two viewports would be a packed per-eye layout; one full viewport with "
-                "a full-screen draw per eye is a flat picture the eyes show on a panel.",
-                g_layoutFrames, now, records,
-                static_cast<double>(g_layoutEyeDraws) / static_cast<double>(g_layoutFrames), shaders);
-            layoutReset();
         }
     }
     if (!g_summaryNoted && g_eyeFrames >= 120) {
@@ -1444,7 +1530,8 @@ void depthProbeFrameBoundary(ID3D11DeviceContext* ctx) {
             const int tIdx = g_stagingTarget >= 0 ? g_stagingTarget : 0;
             Target& t = g_targets[tIdx];
             ++t.sampleLines;
-            const bool logSample = depthSampleLogDue(++t.sampleLogCandidates);
+            const bool logSample = depthSamplePrintWanted(++t.sampleLogCandidates, g_verboseLog, g_sessionSampleLogs);
+            if (logSample) ++g_sessionSampleLogs;
             const float clear = t.clearValue;
             char part[2][520];
             for (int s = 0; s < 2; ++s) {
@@ -1557,6 +1644,11 @@ void depthProbeShutdown() {
     }
     releaseGpu();
     g_targetCount = 0;
+    g_censusLastMs = 0;
+    g_censusLastSig = 0;
+    g_sessionSampleLogs = 0;
+    g_announcedSigCount = 0;
+    for (auto& a : g_announcedSigs) a = AnnouncedSig{};
     g_layoutTarget = g_layoutRecord = -1;
     for (auto& r : g_layoutRecords) r = LayoutRecord{};
     g_lastDsv = nullptr;

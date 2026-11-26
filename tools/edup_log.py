@@ -15280,8 +15280,9 @@ H175_RE = (r"native on foot view roll \(F175\) (?P<wl>\d+) s: mode (?P<mode>mous
            r"head turning \(yaw over 30 deg/s\) (?P<tn>\d+) frames mean (?P<tmean>%s) rms (?P<trms>[\d.]+) max (?P<tmax>[\d.]+); pitch error \(the view's elevation less (?P<pexp>[^)]+)\) "
            r"(?P<pn>\d+) frames mean (?P<pmean>%s) rms (?P<prms>[\d.]+) max (?P<pmax>[\d.]+) deg; slope of the roll error against aim pitch x the head's yaw lead (?P<slope>%s) over "
            r"(?P<pairs>\d+) frames \(x rms (?P<xrms>[\d.]+) rad\); head speed mean (?P<speed>[\d.]+) deg/s; aim pitch mean (?P<aim>%s) deg; reported head lead over the aim yaw (?P<yawlead>%s) "
-           r"pitch (?P<pitchlead>%s) deg" % ((_HN,) * 8))
-H175_FLAG_RMS, H175_FLAG_SECONDS = 1.5, 2   # nofoot::f175::kFlagRmsDeg and kFlagSeconds
+           r"pitch (?P<pitchlead>%s) deg" % ((_HN,) * 8) + _hxs("frames in") +
+           r"(?: \(mode (?P<mxs>\d+) of (?P<mxm>\d+) s(?:, (?P<madur>[\d.]+) s active)?(?:, flush #(?P<fid>\d+))?\))?$")
+H175_FLAG_RMS, H175_FLAG_FRAMES, H175_FLAG_SECONDS = 1.5, 120, 2   # nofoot::f175::kFlagRmsDeg, kFlagFrames, kFlagSeconds
 
 
 def _hj_f175_view_roll(rows, ctx):
@@ -15290,7 +15291,7 @@ def _hj_f175_view_roll(rows, ctx):
     with), the sights down and the commander's camera: the view's roll about its forward against the character's up (positive: the right side up) less the headset's roll in LOCAL, the
     view's elevation less the expected one (look to aim: the headset's in LOCAL; mouse look: plus the aim's pitch), the headset's rate (still under 10 deg/s, turning over 30 deg/s of
     yaw), and the slope of the roll error against (aim pitch x the reported head's yaw lead over the aim). The report gives the figures by look mode, pooled over the seconds and the
-    items. It flags "the view rolls against the headset" (PARTIAL) when a mode's roll error rms is over 1.5 deg across 2 s or more of frames, naming whether it is with the head still,
+    items. It flags "the view rolls against the headset" (PARTIAL) when a mode's roll error rms is over 1.5 deg across 2 s and 120 frames or more, naming whether it is with the head still,
     turning, or both. What separates the readings: a slope near +-1 with the aim pitched and the head leading says EDVR's cancel adds the roll; a roll error with the head still, or in mouse
     look too, says the game's own camera rolls; a roll error near 0 with a pitch error says the tilt is a nod, not a roll; F61's rig ON is named. IDLE when the log has the raise
     carriage lines (the pin ran on this build) and no second with frames; no line and no carriage line: not present."""
@@ -15306,7 +15307,49 @@ def _hj_f175_view_roll(rows, ctx):
     parts, flags = [], []
     rig_on = any(r["rig"] == "ON" for r in sec)
     for mode, rs in modes.items():
-        secs = _hsecs(rs)
+        # Collapse armed/unarmed rows emitted at the same reporting flush: when rows carry an
+        # explicit positive flush id ("flush #N"), collapse strictly by flush id so two distinct
+        # flushes landing within 250 ms (e.g. periodic report followed by boarding flush) never
+        # merge; fall back to same-wl / sub-250 ms grouping only for older logs without fid (#199).
+        flush_durs = []
+        cur_t = cur_wl = cur_items = cur_fid = None
+        cur_dur = 0.0
+        for r in rs:
+            if r.get("mxs") is not None:
+                s = int(r["mxs"])
+            elif r.get("xs") is not None:
+                s = int(r["xs"])
+            else:
+                s = 1 if int(r["frames"]) > 0 else 0
+            if s <= 0:
+                continue
+            dur = float(r["madur"]) if r.get("madur") is not None else float(s)
+            t = r.get("_t")
+            wl = r.get("wl")
+            item = r["item"]
+            fid = int(r["fid"]) if r.get("fid") is not None and int(r["fid"]) > 0 else None
+            same_flush = False
+            if cur_items is not None and item not in cur_items:
+                if fid is not None and cur_fid is not None:
+                    same_flush = (fid == cur_fid)
+                elif fid is None and cur_fid is None and wl == cur_wl:
+                    if t is not None and cur_t is not None:
+                        dt = (t - cur_t) % 86400.0
+                        same_flush = dt < 0.25 or dt > 86399.75
+                    elif t is None and cur_t is None:
+                        same_flush = True
+            if same_flush:
+                cur_items.add(item)
+                if dur > cur_dur:
+                    cur_dur = dur
+            else:
+                if cur_items is not None:
+                    flush_durs.append(cur_dur)
+                cur_t, cur_wl, cur_items, cur_fid, cur_dur = t, wl, {item}, fid, dur
+        if cur_items is not None:
+            flush_durs.append(cur_dur)
+        dur_s = sum(flush_durs)
+        dur_txt = ("%d s" % int(round(dur_s))) if abs(dur_s - round(dur_s)) < 1e-6 else ("%.2f s" % dur_s)
         frames = sum(int(r["frames"]) for r in rs)
         if not frames:
             continue
@@ -15328,15 +15371,15 @@ def _hj_f175_view_roll(rows, ctx):
         aim = sum(int(r["frames"]) * float(r["aim"]) for r in rs) / frames
         yawlead = sum(int(r["frames"]) * float(r["yawlead"]) for r in rs) / frames
         items = ", ".join(sorted(set(r["item"] for r in rs)))
-        parts.append("%s (%s) %d s, %d frames: roll error mean %+.2f rms %.2f max %.2f deg, over 2 deg in %d (%.0f%%); head still %d frames rms %.2f, head turning %d frames rms %.2f; pitch error (%s) "
+        parts.append("%s (%s) %s, %d frames: roll error mean %+.2f rms %.2f max %.2f deg, over 2 deg in %d (%.0f%%); head still %d frames rms %.2f, head turning %d frames rms %.2f; pitch error (%s) "
                      "mean %+.2f rms %.2f over %d frames; slope against aim pitch x yaw lead %+.3f over %d pairs; aim pitch mean %+.1f deg, reported head yaw lead mean %+.1f deg" % (
-                         mode, items, secs, frames, mean, rms, rmax, over, 100.0 * over / frames, sn, srms, tn, trms, rs[0]["pexp"], pmean, prms, pn, slope, pairs, aim, yawlead))
-        if secs >= H175_FLAG_SECONDS and rms > H175_FLAG_RMS:
+                         mode, items, dur_txt, frames, mean, rms, rmax, over, 100.0 * over / frames, sn, srms, tn, trms, rs[0]["pexp"], pmean, prms, pn, slope, pairs, aim, yawlead))
+        if dur_s + 1e-6 >= H175_FLAG_SECONDS and frames >= H175_FLAG_FRAMES and rms > H175_FLAG_RMS:
             where = ("with the head still" if srms > H175_FLAG_RMS and trms <= H175_FLAG_RMS else "with the head turning" if trms > H175_FLAG_RMS and srms <= H175_FLAG_RMS else
                      "with the head still and turning" if srms > H175_FLAG_RMS and trms > H175_FLAG_RMS else "in the frames between still and turning")
             hint = ("the slope %+.2f against aim pitch x yaw lead is near +-1: ED-UP's cancel adds the roll" % slope if abs(slope) >= 0.5 and pairs >= 30 else
                     "the head was still: the game's own camera rolls" if srms > H175_FLAG_RMS and sn >= 30 else "the slope does not follow aim pitch x yaw lead")
-            flags.append("the view rolls against the headset in %s: roll error rms %.2f deg over %d s of frames, %s (%s)" % (mode, rms, secs, where, hint))
+            flags.append("the view rolls against the headset in %s: roll error rms %.2f deg over %s of frames, %s (%s)" % (mode, rms, dur_txt, where, hint))
     if not parts:
         return None
     text = "view roll error = the view's roll (about its forward against the character's up, + the right side up) less the headset's; " + "; ".join(parts) + \
@@ -16574,21 +16617,93 @@ def _hj_f116_hud_hide(rows, ctx):
     return ("OK", text)
 
 
+# Rules that intentionally emit 1 s lines even when log.on_foot_detail = off.
+H_F125_EXEMPT = frozenset(("raise carriage (F171)",))
+
+# F100 marker-probe state line (src\d3d11\native_on_foot.cpp): when fix.native_on_foot_marker_probe = on,
+# f44::report() deliberately sets oneSecond = detailLog || measure and runs its report block on 1 s windows.
+H_F100_PROBE_LABEL = "native on foot marker probe (F100):"
+H_F100_PROBE_RE = re.compile(
+    r"native on foot marker probe \(F100\): measurement families (?:ON|on|off) "
+    r"\(fix\.native_on_foot_marker_probe = (?P<state>on|off)\)"
+)
+H_F125_MARKER_PROBE_RULES = frozenset((
+    "weapon UI pin (F85b)",
+    "reticle depth (F85c)",
+    "reticle depth (F118)",
+    "weapon readout size (F90)",
+    "pistol readout (F90)",
+    "rifle ADS readout (F92)",
+    "weapon UI placement (F140)",
+    "weapon UI placement (F144)",
+    "marker fix (F62c/F64)",
+    "marker tee (F100)",
+    "eye rows (F113)",
+))
+
+
 def _hj_f125_diet(rows, ctx):
     """F125: the on-foot log's own state, from its announce line (written when native on foot arms and at each change of log.on_foot_detail). OK while the
-    summary log is in force (the diet applied: 10 s summaries, the detail-only lines not written); IDLE while the detail log is (every on-foot line as before
-    F125, nothing for the diet to do). A window opened after the last line takes the state from it (the "entry" row)."""
+    summary log is in force (the diet applied: 10 s summaries, the detail-only lines not written); PARTIAL when detail is off and one or more families
+    slip past the 10 s diet with repeated 1 s windows (#199); IDLE while the detail log is on. A window opened after the last line takes the state from it
+    (the "entry" row)."""
     seq = rows.get("entry", []) + rows.get("state", [])
     if not seq:
         return None
     where = " (set before the window)" if not rows.get("state") else ""
     state = _hdetail(ctx)
-    if state == "off":
-        return ("OK", "detail off%s: summary windows of %s s; per-frame traces and the settled features' detail lines are not written, and the rules that read only "
-                      "those are listed as not judged" % (where, seq[-1]["wl"]))
     if state == "on":
         return ("IDLE", "detail on%s: windows of %s s, every on-foot line as before F125 (about 4 MB a minute on foot)" % (where, seq[-1]["wl"]))
+    bursts = {}   # rule -> list of [t, one_s, ep]; collapses multi-line flushes emitted at one window boundary
+    for obs in rows.get("win_obs", []):
+        name, t, one_s, ep = obs["rule"], obs.get("t"), obs["one_s"], obs.get("ep", 0)
+        seq_b = bursts.setdefault(name, [])
+        if seq_b and seq_b[-1][2] == ep and t is not None and seq_b[-1][0] is not None:
+            dt = (t - seq_b[-1][0]) % 86400.0
+            if dt < 0.25 or dt > 86399.75:
+                if one_s:
+                    seq_b[-1][1] = True
+                continue
+        seq_b.append([t, one_s, ep])
+    # Flag a family only when 1 s windows repeat at a sustained ~1 s cadence (5+ consecutive
+    # bursts <= 2.5 s apart within one detail-off interval), so sparse legitimate edge flushes
+    # (e.g. boarding/F61/item swaps minutes apart) never masquerade as a 1 s cadence leak (#199).
+    slipped = []
+    for name, seq_b in bursts.items():
+        short = total = cur_streak = max_streak = 0
+        last_short_t = last_ep = None
+        for t, one_s, ep in seq_b:
+            total += 1
+            if one_s:
+                short += 1
+                if cur_streak == 0 or ep != last_ep:
+                    cur_streak = 1
+                elif t is None or last_short_t is None:
+                    cur_streak += 1
+                else:
+                    gap = (t - last_short_t) % 86400.0
+                    cur_streak = cur_streak + 1 if gap <= 2.5 else 1
+                last_short_t = t
+                last_ep = ep
+                if cur_streak > max_streak:
+                    max_streak = cur_streak
+            else:
+                cur_streak = 0
+                last_short_t = last_ep = None
+        if max_streak >= 5:
+            slipped.append((short, total, name))
+    slipped.sort(key=lambda x: (-x[0], x[2]))
+    desc = ", ".join("%s %d/%d" % (name, s, t) for s, t, name in slipped[:6])
+    if state == "off":
+        if slipped:
+            return ("PARTIAL", "detail off%s: summary windows of %s s; 1 s windows with detail off: %s (slipped past the 10 s diet)" %
+                    (where, seq[-1]["wl"], desc))
+        return ("OK", "detail off%s: summary windows of %s s; per-frame traces and the settled features' detail lines are not written, and the rules that read only "
+                      "those are listed as not judged" % (where, seq[-1]["wl"]))
     changes = sum(1 for a, b in zip(seq, seq[1:]) if a["detail"] != b["detail"])
+    if slipped:
+        return ("PARTIAL", "detail changed %d time(s) in the window, %s at its end; 1 s windows while detail was off: %s (slipped past the 10 s diet)" %
+                (changes, seq[-1]["detail"], desc))
     return ("OK", "detail changed %d time(s) in the window, %s at its end: the detail-only lines are in the log only where it was on" % (changes, seq[-1]["detail"]))
 
 
@@ -18293,7 +18408,7 @@ HEALTH_RULES = (
         ("edge", r"native on foot menu probe \(F135\): (?P<name>update|placement|ray|cursor window|owner transform|panel submit|inst submit|bridge update|bridge placement) "
                  r"(?P<what>rose|fell)"),
         ("_", r"native on foot menu probe \(F135\): armed "),
-    ), _hj_f135_menu),
+    ), _hj_f135_menu, needs_detail=True),
     _hrule("snap turn (F109)", ("F109",), ("native on foot snap turn (F109)",), (
         ("snap", r"native on foot snap turn \(F109\): snap (?P<n>\d+) by (?P<src>the stick|a mouse flick), (?P<dir>right|left) (?P<step>\d+) deg(?P<ads> in ADS)?: "
                  r"input (?P<input>%s) \(gain (?P<gain>%s), (?P<gsrc>.+?)\); the game applied (?P<applied>%s) deg in (?P<calls>\d+) call\(s\) \(the player's turn over "
@@ -18679,7 +18794,7 @@ def health_scan(text, since=None, until=None):
     first = last = None
     # F125: the detail log's state is said when native on foot arms and at each change, often long before a --since window opens. The last F125 line read
     # before the window's first line is the state in force as it opens: it goes to the log diet rule as an "entry" row.
-    carried, entered = None, False
+    carried, marker_probe, entered, off_epoch = None, None, False, 0
     # F212 and F209 read two states that are logged once, long before a --since window opens: whether native stereo on foot was on (the last F115 began/ended line)
     # and the conversation-look hook's armed or stood-down line (written when the hooks are installed). The last of each before the window goes in under H_CARRIED.
     f115_rule = next(r for r in HEALTH_RULES if r.name == H_F115)
@@ -18766,6 +18881,12 @@ def health_scan(text, since=None, until=None):
             g = H_F125_RE.search(raw)
             if g:
                 carried = dict(g.groupdict(), _t=tod)
+                if carried.get("detail") == "on":
+                    off_epoch += 1
+        if H_F100_PROBE_LABEL in raw:
+            g = H_F100_PROBE_RE.search(raw)
+            if g:
+                marker_probe = g.group("state")
         if not inside:
             continue
         stamp = "%s:%s:%s" % sm.group(1, 2, 3) if sm else ""
@@ -18791,6 +18912,9 @@ def health_scan(text, since=None, until=None):
                     continue
                 seen.add(rule.name)
                 body = raw[sm.end():] if sm else raw
+                edge_flush = body.endswith(" [edge flush]")
+                if edge_flush:
+                    body = body[:-len(" [edge flush]")]
                 for kind, rx in rule.kinds:
                     g = rx.search(body)
                     if g:
@@ -18801,6 +18925,20 @@ def health_scan(text, since=None, until=None):
                                 d.update({k: settings[rule.name][k] for k in ("epoch", "context")})
                             d["_t"] = tod
                             rows[rule.name].setdefault(kind, []).append(d)
+                            # Issue #199: record windowed lines written while detail is off so _hj_f125_diet catches families slipping past the 10 s diet.
+                            # Only evaluate scheduled reports with an explicit `wl` window group; exempt detail-only
+                            # rules, deliberate edge flushes (" [edge flush]"), and rules intentionally hardcoded to a 1 s cadence.
+                            if (carried is not None and carried.get("detail") == "off"
+                                    and rule.name != H_F125 and not rule.needs_detail
+                                    and rule.name not in H_F125_EXEMPT
+                                    and not (marker_probe == "on" and rule.name in H_F125_MARKER_PROBE_RULES)
+                                    and not edge_flush
+                                    and "wl" in rx.groupindex):
+                                wl = d.get("wl")
+                                if wl is not None:
+                                    rows[H_F125].setdefault("win_obs", []).append({"rule": rule.name, "t": tod, "one_s": wl == "1", "ep": off_epoch})
+                                elif "this second" in g.group(0):
+                                    rows[H_F125].setdefault("win_obs", []).append({"rule": rule.name, "t": tod, "one_s": True, "ep": off_epoch})
                         break
                 else:
                     if any(label_text in raw for label_text in rule.labels):
@@ -22314,13 +22452,23 @@ def self_test_health():
         # ---- F175 (measure only): the view's roll and pitch against the headset's ----
         V175 = "view roll (F175)"
 
+        vr175_seq = [0]
+
         def vr175(mode="look to aim", item="armed", rig="off", wl=1, frames=90, roll=(0.1, 0.6, 1.9, 0), still=(60, 0.1, 0.5, 1.2), turning=(20, 0.2, 0.8, 1.9), pitch=(90, 0.1, 0.4, 1.0),
-                  slope=(0.02, 90, 0.05), speed=12.0, aim=5.0, lead=(1.0, -0.5)):
+                  slope=(0.02, 90, 0.05), speed=12.0, aim=5.0, lead=(1.0, -0.5), active_secs=None, mode_active_secs=None, mode_active_s=None, flush_id=None):
             """F175's line, from the DLL's own format (formatGroup, native_on_foot_f175.h): the pitch error's expected-pitch words are the mode's; roll: (mean, rms, max, frames over 2 deg);
             still, turning, pitch: (frames, mean, rms, max); slope: (slope, pairs, x rms); lead: (yaw, pitch) in deg."""
+            act = wl if active_secs is None else active_secs
+            mact = act if mode_active_secs is None else mode_active_secs
+            mdur = float(mact) if mode_active_s is None else float(mode_active_s)
+            if flush_id is None:
+                vr175_seq[0] += 1
+                fid = vr175_seq[0]
+            else:
+                fid = flush_id
             return R175("native on foot view roll (F175) %u s", wl, mode, item, rig, frames, roll[0], roll[1], roll[2], roll[3], still[0], still[1], still[2], still[3], turning[0], turning[1], turning[2],
                         turning[3], "the headset's in LOCAL" if mode == "look to aim" else "the headset's in LOCAL plus the aim's pitch", pitch[0], pitch[1], pitch[2], pitch[3], slope[0], slope[1], slope[2],
-                        speed, aim, lead[0], lead[1])
+                        speed, aim, lead[0], lead[1], act, wl, mact, wl, mdur, fid)
 
         check("F175 view roll: look to aim over 3 s with an error well under 1.5 deg is OK, the figures by mode", [vr175(), vr175(), vr175()], 0, [("OK", V175)],
               has=["look to aim (armed) 3 s, 270 frames: roll error mean +0.10 rms 0.60 max 1.90 deg, over 2 deg in 0 (0%)", "F61's rig off", "slope against aim pitch x yaw lead +0.020 over 270 pairs"],
@@ -22333,6 +22481,45 @@ def self_test_health():
               [vr175(roll=(1.0, 2.0, 6.0, 50), still=(10, 0.1, 0.4, 0.8), turning=(70, 1.1, 2.2, 6.0), slope=(1.0, 90, 0.05)), vr175(roll=(1.0, 2.0, 6.0, 50), still=(10, 0.1, 0.4, 0.8), turning=(70, 1.1, 2.2, 6.0), slope=(1.0, 90, 0.05))], 0,
               [("PARTIAL", V175)], has=["in look to aim: roll error rms 2.00 deg over 2 s of frames, with the head turning", "the slope +1.00 against aim pitch x yaw lead is near +-1: ED-UP's cancel adds the roll"], lacks=["UNPARSED"])
         check("F175 view roll: one second of error is too little to flag", [vr175(roll=(1.0, 3.0, 8.0, 60))], 0, [("OK", V175)], lacks=["UNPARSED", "the view rolls against the headset"])
+        check("F175 view roll (#199): one eligible second inside a 10 s window does not false-trigger sustained roll, while 2 active seconds do",
+              [vr175(wl=10, frames=1, active_secs=1, roll=(3.0, 3.0, 3.0, 1), still=(1, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(1, 0.0, 0.0, 0.0), slope=(0.0, 1, 0.0))],
+              0, [("OK", V175)], has=["look to aim (armed) 1 s, 1 frames"], lacks=["UNPARSED", "the view rolls against the headset"])
+        check("F175 view roll (#199): two active seconds inside a 10 s window still flag sustained roll",
+              [vr175(wl=10, frames=120, active_secs=2, roll=(3.0, 3.0, 3.0, 120), still=(120, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(120, 0.0, 0.0, 0.0), slope=(0.0, 120, 0.0))],
+              0, [("PARTIAL", V175)], has=["roll error rms 3.00 deg over 2 s of frames"], lacks=["UNPARSED"])
+        check("F175 view roll (#199): armed and unarmed rows from the same 10 s flush with 1 overlapping active second do not double-count as 2 s",
+              [(10, vr175(wl=10, item="unarmed", frames=30, active_secs=1, mode_active_secs=1, flush_id=101, roll=(3.0, 3.0, 3.0, 30), still=(30, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(30, 0.0, 0.0, 0.0), slope=(0.0, 30, 0.0))),
+               (10, vr175(wl=10, item="armed", frames=30, active_secs=1, mode_active_secs=1, flush_id=101, roll=(3.0, 3.0, 3.0, 30), still=(30, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(30, 0.0, 0.0, 0.0), slope=(0.0, 30, 0.0)))],
+              0, [("OK", V175)], has=["look to aim (armed, unarmed) 1 s, 60 frames"], lacks=["UNPARSED", "the view rolls against the headset"])
+        check("F175 view roll (#199): armed and unarmed rows from the same 10 s flush on 2 disjoint active seconds report 2 s and flag sustained roll",
+              [(10, vr175(wl=10, item="unarmed", frames=60, active_secs=1, mode_active_secs=2, flush_id=102, roll=(3.0, 3.0, 3.0, 60), still=(60, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(60, 0.0, 0.0, 0.0), slope=(0.0, 60, 0.0))),
+               (10, vr175(wl=10, item="armed", frames=60, active_secs=1, mode_active_secs=2, flush_id=102, roll=(3.0, 3.0, 3.0, 60), still=(60, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(60, 0.0, 0.0, 0.0), slope=(0.0, 60, 0.0)))],
+              0, [("PARTIAL", V175)], has=["look to aim (armed, unarmed) 2 s, 120 frames", "roll error rms 3.00 deg over 2 s of frames"], lacks=["UNPARSED"])
+        check("F175 view roll (#199): two distinct flushes landing in the same second (e.g. periodic report then boarding flush) never merge and flag sustained roll",
+              [(10, vr175(wl=10, item="unarmed", frames=60, active_secs=1, mode_active_secs=1, flush_id=103, roll=(3.0, 3.0, 3.0, 60), still=(60, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(60, 0.0, 0.0, 0.0), slope=(0.0, 60, 0.0))),
+               (10, vr175(wl=1, item="armed", frames=60, active_secs=1, mode_active_secs=1, flush_id=104, roll=(3.0, 3.0, 3.0, 60), still=(60, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(60, 0.0, 0.0, 0.0), slope=(0.0, 60, 0.0)))],
+              0, [("PARTIAL", V175)], has=["look to aim (armed, unarmed) 2 s, 120 frames", "roll error rms 3.00 deg over 2 s of frames"], lacks=["UNPARSED"])
+        check("F175 view roll (#199): two brief sub-second flushes (4 frames each) do not false-trigger sustained roll below kFlagFrames (120)",
+              [(10, vr175(wl=1, item="armed", frames=4, active_secs=1, mode_active_secs=1, flush_id=105, roll=(3.0, 3.0, 3.0, 4), still=(4, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(4, 0.0, 0.0, 0.0), slope=(0.0, 4, 0.0)) + " [edge flush]"),
+               (10, vr175(wl=1, item="armed", frames=4, active_secs=1, mode_active_secs=1, flush_id=106, roll=(3.0, 3.0, 3.0, 4), still=(4, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(4, 0.0, 0.0, 0.0), slope=(0.0, 4, 0.0)) + " [edge flush]")],
+              0, [("OK", V175)], has=["look to aim (armed) 2 s, 8 frames"], lacks=["UNPARSED", "the view rolls against the headset"])
+        check("F175 view roll (#199): two 0.80 s edge flushes at 90 Hz (144 frames total, 1.60 s measured) do not false-trigger the 2 s sustained-roll gate",
+              [(10, vr175(wl=1, item="armed", frames=72, active_secs=1, mode_active_secs=1, mode_active_s=0.80, flush_id=107, roll=(3.0, 3.0, 3.0, 72), still=(72, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(72, 0.0, 0.0, 0.0), slope=(0.0, 72, 0.0)) + " [edge flush]"),
+               (11, vr175(wl=1, item="armed", frames=72, active_secs=1, mode_active_secs=1, mode_active_s=0.80, flush_id=108, roll=(3.0, 3.0, 3.0, 72), still=(72, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(72, 0.0, 0.0, 0.0), slope=(0.0, 72, 0.0)) + " [edge flush]")],
+              0, [("OK", V175)], has=["look to aim (armed) 1.60 s, 144 frames"], lacks=["UNPARSED", "the view rolls against the headset"])
+        check("F175 view roll (#199): two partial flushes summing to 2.00 s measured and 144 frames still flag sustained roll",
+              [(10, vr175(wl=2, item="armed", frames=72, active_secs=2, mode_active_secs=2, mode_active_s=1.20, flush_id=109, roll=(3.0, 3.0, 3.0, 72), still=(72, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(72, 0.0, 0.0, 0.0), slope=(0.0, 72, 0.0)) + " [edge flush]"),
+               (11, vr175(wl=1, item="armed", frames=72, active_secs=1, mode_active_secs=1, mode_active_s=0.80, flush_id=110, roll=(3.0, 3.0, 3.0, 72), still=(72, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(72, 0.0, 0.0, 0.0), slope=(0.0, 72, 0.0)) + " [edge flush]")],
+              0, [("PARTIAL", V175)], has=["look to aim (armed) 2 s, 144 frames", "roll error rms 3.00 deg over 2 s of frames"], lacks=["UNPARSED"])
+        check("F175 view roll (#199): older mode+flush line without measured 's active' still parses cleanly",
+              [vr175(wl=10, item="armed", frames=120, active_secs=2, mode_active_secs=2, flush_id=111, roll=(3.0, 3.0, 3.0, 120), still=(120, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(120, 0.0, 0.0, 0.0), slope=(0.0, 120, 0.0)).replace(", 2.00 s active", "")],
+              0, [("PARTIAL", V175)], has=["look to aim (armed) 2 s, 120 frames"], lacks=["UNPARSED"])
+        check("F175 view roll (#199): armed and unarmed rows across two distinct flushes still sum to 2 s and flag sustained roll",
+              [(10, vr175(wl=10, item="unarmed", frames=60, active_secs=1, roll=(3.0, 3.0, 3.0, 60), still=(60, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(60, 0.0, 0.0, 0.0), slope=(0.0, 60, 0.0))),
+               (20, vr175(wl=10, item="armed", frames=60, active_secs=1, roll=(3.0, 3.0, 3.0, 60), still=(60, 3.0, 3.0, 3.0), turning=(0, 0.0, 0.0, 0.0), pitch=(60, 0.0, 0.0, 0.0), slope=(0.0, 60, 0.0)))],
+              0, [("PARTIAL", V175)], has=["roll error rms 3.00 deg over 2 s of frames"], lacks=["UNPARSED"])
+        check("F175 view roll (#199): legacy 1 s line without '; frames in N of M s' still parses cleanly",
+              [vr175().split("; frames in ")[0]], 0, [("OK", V175)], has=["look to aim (armed) 1 s, 90 frames"], lacks=["UNPARSED"])
         check("F175 view roll: mouse look is its own mode, with its own expected pitch, beside look to aim",
               [vr175(), vr175(mode="mouse look", item="unarmed", roll=(0.0, 0.3, 0.9, 0), pitch=(90, 1.0, 2.0, 5.0))], 0, [("OK", V175)],
               has=["mouse look (unarmed) 1 s, 90 frames", "pitch error (the headset's in LOCAL plus the aim's pitch) mean +1.00 rms 2.00 over 90 frames", "pitch error (the headset's in LOCAL) mean"], lacks=["UNPARSED"])
@@ -24832,6 +25019,69 @@ def self_test_health():
                       has=[row("NEVER APPLIED", syn.name)], lacks=["not judged"])
         detail_report("F125: the off state carried into a --since window", [F125_OFF, (90, f90_part())], 0, has=["not judged (detail log off)"],
                       lacks=["NEVER APPLIED"], since="10:01:00")
+        # Issue #199: F135 is detail-only (needs_detail=True), and F125 catches families slipping past the 10 s diet with repeated 1 s windows while detail is off.
+        checks += 1
+        if "menu probe (F135)" not in ND:
+            print("health: #199: menu probe (F135) must set needs_detail=True; needs_detail: %r" % ND)
+            ok = False
+        check("#199 F125: repeated 1 s windows with detail off are flagged PARTIAL naming the slipped family",
+              [F125_OFF] + [vr175(wl=1) for _ in range(6)], 0, [("PARTIAL", H_F125), ("OK", V175)],
+              has=["1 s windows with detail off", "view roll (F175) 6/6", "slipped past the 10 s diet"])
+        check("#199 F125: 10 s windows with one 1 s edge flush stay OK",
+              [F125_OFF] + [vr175(wl=10) for _ in range(5)] + [vr175(wl=1)], 0, [("OK", H_F125), ("OK", V175)],
+              lacks=["slipped past the 10 s diet"])
+        check("#199 F125: 1 s windows while detail is on stay IDLE (not flagged as slipped)",
+              [F125_ON] + [vr175(wl=1) for _ in range(6)], 0, [("IDLE", H_F125), ("OK", V175)],
+              lacks=["slipped past the 10 s diet"])
+        check("#199 F125: single legitimate 1 s F85b flush emitting 5 lines at one timestamp stays OK (counts windows, not lines)",
+              [F125_OFF, (10, pin_part(wl=1)), (10, pin_part(wl=1)), (10, pin_held(wl=1, eye=0)), (10, pin_held(wl=1, eye=1)), (10, pin_sec(wl=1))],
+              0, [("OK", H_F125)], lacks=["slipped past the 10 s diet"])
+        check("#199 F125: 5 distinct 1 s F85b flushes across 5 seconds still flag PARTIAL as 5/5 windows",
+              [F125_OFF] + [(10 + s, line) for s in range(5) for line in (pin_part(wl=1), pin_held(wl=1, eye=0), pin_sec(wl=1))],
+              0, [("PARTIAL", H_F125)], has=["weapon UI pin (F85b) 5/5", "slipped past the 10 s diet"])
+        F100_MP_ON = "native on foot marker probe (F100): measurement families ON (fix.native_on_foot_marker_probe = on): F53's census notes"
+        F100_MP_OFF = "native on foot marker probe (F100): measurement families off (fix.native_on_foot_marker_probe = off): F53's census notes"
+        check("#199 F125: 1 s F85b windows while fix.native_on_foot_marker_probe = on are intentional and stay OK",
+              [F125_OFF, F100_MP_ON] + [(10 + s, line) for s in range(6) for line in (pin_part(wl=1), pin_sec(wl=1))],
+              0, [("OK", H_F125)], lacks=["slipped past the 10 s diet"])
+        check("#199 F125: 1 s F113 eye-row windows while fix.native_on_foot_marker_probe = on are intentional and stay OK",
+              [F125_OFF, F100_MP_ON] + [(10 + s, rows113(wl=1)) for s in range(6)],
+              0, [("OK", H_F125), ("OK", F113)], lacks=["slipped past the 10 s diet"])
+        check("#199 F125: 1 s F113 eye-row windows with marker_probe off still flag PARTIAL",
+              [F125_OFF, F100_MP_OFF] + [(10 + s, rows113(wl=1)) for s in range(6)],
+              0, [("PARTIAL", H_F125), ("OK", F113)], has=["eye rows (F113) 6/6", "slipped past the 10 s diet"])
+        check("#199 F125: pre-window marker_probe = on carries into --since window and exempts F85b",
+              [F125_OFF, F100_MP_ON] + [(70 + s, line) for s in range(6) for line in (pin_part(wl=1), pin_sec(wl=1))],
+              0, [("OK", H_F125)], lacks=["slipped past the 10 s diet"], extra=("--since", "10:01:00"))
+        check("#199 F125: marker_probe = on still flags non-marker-block 1 s leaks (e.g. view roll F175)",
+              [F125_OFF, F100_MP_ON] + [(10 + s, vr175(wl=1)) for s in range(6)],
+              0, [("PARTIAL", H_F125), ("OK", V175)], has=["view roll (F175) 6/6", "slipped past the 10 s diet"])
+        check("#199 F125: 1 s F85b windows after marker_probe flips back off flag PARTIAL",
+              [F125_OFF, F100_MP_ON, (5, F100_MP_OFF)] + [(10 + s, line) for s in range(5) for line in (pin_part(wl=1), pin_sec(wl=1))],
+              0, [("PARTIAL", H_F125)], has=["weapon UI pin (F85b) 5/5", "slipped past the 10 s diet"])
+        check("#199 F125: exempt 1 s rules (F171) and non-wl event rules (F109) do not false-positive PARTIAL",
+              [F125_OFF] + [vr175(wl=10) for _ in range(5)] +
+              ["native on foot smooth turn (F109) 1 s: the avatar turned 12.0 deg (the game's aim), the head aim's share 0.0, "
+               "so the player's own 12.0; the view turned 12.0 deg beyond the head's own (90 ticks, no rows 0, no aim 0): agrees"] * 6,
+              0, [("OK", H_F125), ("OK", V175), ("OK", "smooth turn (F109)")], lacks=["slipped past the 10 s diet"])
+        check("#199 F125: sparse legitimate 1 s edge flushes minutes apart stay OK (not a sustained 1 s cadence leak)",
+              [F125_OFF] + [(10 + 120 * i, vr175(wl=1)) for i in range(5)],
+              0, [("OK", H_F125), ("OK", V175)], lacks=["slipped past the 10 s diet"])
+        check("#199 F125: 5 consecutive 1 s leaks at 1 Hz after normal 10 s windows still flag PARTIAL",
+              [F125_OFF] + [(10 + 10 * i, vr175(wl=10)) for i in range(10)] + [(200 + i, vr175(wl=1)) for i in range(5)],
+              0, [("PARTIAL", H_F125), ("OK", V175)], has=["view roll (F175) 5/15", "slipped past the 10 s diet"])
+        check("#199 F125: toggling detail on later does not hide a 1 s cadence leak observed while detail was off",
+              [F125_OFF] + [(10 + i, vr175(wl=1)) for i in range(5)] + [(20, F125_ON)],
+              0, [("PARTIAL", H_F125), ("OK", V175)], has=["view roll (F175) 5/5", "slipped past the 10 s diet"])
+        check("#199 F125: short detail-off bursts separated by a detail-on interval do not merge into a 5-burst streak",
+              [F125_OFF] + [(10 + i, vr175(wl=1)) for i in range(3)] + [(13, F125_ON), (14, F125_OFF)] + [(15 + i, vr175(wl=1)) for i in range(2)],
+              0, [("OK", H_F125), ("OK", V175)], lacks=["slipped past the 10 s diet"])
+        check("#199 F125: repeated deliberate ADS/state edge flushes tagged [edge flush] parse cleanly and stay OK",
+              [F125_OFF] + [(10 + i, f90_idle(wl=1) + " [edge flush]") for i in range(6)],
+              3, [("OK", H_F125), ("NEVER APPLIED", F90S)], lacks=["slipped past the 10 s diet", "UNPARSED"])
+        check("#199 F125: repeated unflagged 1 s F91 windows still flag PARTIAL as a cadence leak",
+              [F125_OFF] + [(10 + i, f90_idle(wl=1)) for i in range(5)],
+              3, [("PARTIAL", H_F125), ("NEVER APPLIED", F90S)], has=["weapon readout size (F90) 5/5", "slipped past the 10 s diet"])
         # ---- the on-foot recording (F213): its lines are rendered from the C format strings in onfoot_recorder_core.h and onfoot_recorder.cpp ----
         rec_core = read_text(os.path.join(repo_root(), "src", "common", "onfoot_recorder_core.h"))
         rec_cpp = read_text(os.path.join(repo_root(), "src", "d3d11", "onfoot_recorder.cpp"))
