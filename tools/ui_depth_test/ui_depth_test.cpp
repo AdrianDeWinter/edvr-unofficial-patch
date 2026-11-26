@@ -940,20 +940,37 @@ UN[id.xy]=uiEvidence(id.xy);Result[id.xy]=adaptiveUiReactive(id.xy,float2(id.xy)
             bytes[4*55+3]=123;ctx->UpdateSubresource(t.Get(),0,nullptr,bytes.data(),13*4,0);
             check(valuesOf(tracker.prepare(ctx.Get(),v.Get(),135))[4]==1,"later change rearms edit history");
             GpuTimer outer;
+            const auto timerStartedAt=GetTickCount64();
             check(outer.begin(dev.Get(),ctx.Get()),"outer interval surrounds production UI sample");
             auto* resetFrame=tracker.prepare(ctx.Get(),v.Get(),137,true);
             check(outer.end(ctx.Get()),"outer interval ends after UI sample");
             check(tracker.lastDecision==UiContent::Decision::kReset&&tracker.lastAge==2,"census: a frame gap on an existing entry is a reset at its real age");
             for(float a:valuesOf(resetFrame))check(a==0,"skipped surface frame resets history");
             double outerMs=0;GpuTimerPoll outerStatus=GpuTimerPoll::Pending;
-            const auto deadline=GetTickCount64()+1500;
+            const auto pollStartedAt=GetTickCount64();
+            const auto deadline=pollStartedAt+1500;
+            unsigned polls=0;
             do {
+                ++polls;
                 tracker.gpu.poll(ctx.Get());
                 if(outerStatus==GpuTimerPoll::Pending)outerStatus=outer.poll(ctx.Get(),outerMs);
                 if(tracker.gpu.totals.samples && outerStatus!=GpuTimerPoll::Pending)break;
                 Sleep(1);
             } while(GetTickCount64()<deadline);
-            check(tracker.gpu.totals.samples==1 && !tracker.gpu.totals.invalid && outerStatus==GpuTimerPoll::Ready,
+            const bool timersReady=tracker.gpu.totals.samples==1 && !tracker.gpu.totals.invalid && outerStatus==GpuTimerPoll::Ready;
+            if(!timersReady) {
+                const auto pollEndedAt=GetTickCount64();
+                const char* outerState=outerStatus==GpuTimerPoll::Ready?"ready":
+                    outerStatus==GpuTimerPoll::Invalid?"invalid":"pending";
+                std::printf("UI timer state: format=%u samples=%u skipped=%u invalid=%u outer=%s "
+                            "pre_poll_ms=%llu poll_ms=%llu polls=%u outer_ms=%.6f ui_ms=%.6f device_removed=0x%08lX\n",
+                    static_cast<unsigned>(format),tracker.gpu.totals.samples,tracker.gpu.totals.skipped,
+                    tracker.gpu.totals.invalid,outerState,
+                    static_cast<unsigned long long>(pollStartedAt-timerStartedAt),
+                    static_cast<unsigned long long>(pollEndedAt-pollStartedAt),polls,outerMs,tracker.gpu.totals.ms,
+                    static_cast<unsigned long>(dev->GetDeviceRemovedReason()));
+            }
+            check(timersReady,
                   "production UI timer drains under an outer shared interval");
             check(outerMs>=tracker.gpu.totals.ms,"UI timestamp pair stays inside parent interval");
             outer.reset(ctx.Get());
