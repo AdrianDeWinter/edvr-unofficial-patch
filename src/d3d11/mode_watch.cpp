@@ -486,6 +486,7 @@ void commitPosted(const PostedMode& posted) {
         readPatched(now, readTextureLodBiasKey(Config::get(), runtimeFlatProfile()), posted.preset);
     std::string kept;
     for (size_t i = 0; i < kPatchedCount; ++i) {
+        if (i == 1 && target == RuntimeProfile::Passthrough) continue;  // Passthrough has no destination sampler bias.
         const bool same = (i == 1) ? sameEffectiveTextureLodBias(nowLodBias, g_inEffectLodBias)
                                    : (now[i] == g_inEffect[i]);
         if (same) continue;

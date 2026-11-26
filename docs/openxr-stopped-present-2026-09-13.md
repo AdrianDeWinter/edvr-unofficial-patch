@@ -10,7 +10,15 @@ exhaust the former 500 ms fixture deadline before callback entry. The finalizer
 is still held beyond the deadline to verify capture lifetime and pending lease
 release. Production shutdown behavior is unchanged. The corrected fixture
 passes all 64 checks under pinned MSVC/Wine; the delayed-caller case fails
-before this correction and passes after it. Full Windows CI remains pending.
+before this correction and passes after it. The full Windows build and package
+run
+[45878622430](https://github.com/characterecho-sean/ed-unofficial-patch/actions/runs/45878622430)
+passed on `d350cafd`.
+
+The CI correction is tracked with
+[#262](https://github.com/characterecho-sean/ed-unofficial-patch/issues/262).
+That issue's earlier watchdog reports still need qualification against this
+change; the shared last-stage text alone does not establish their cause.
 
 The [Frontier lifetime flight](openxr-shutdown-lifetime-2026-09-13.md)
 established a live render caller outside Present during forwarded shutdown: no
