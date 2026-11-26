@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace f107test {
 
@@ -257,6 +258,71 @@ inline void run107(Check&& check) {
         const double hScreen = 1.543 + 174.25, hStand = 1.58, eyeNow = 1.58;
         check(edvr::nofoot::pinCrouchWeight(true, hScreen, eyeNow) >= 1.0 && edvr::nofoot::pinCrouchWeight(true, hStand, eyeNow) == 0.0,
               "F107 (control): a standing calibration taken on the screen's camera makes every standing call crouched (w_c 1); the commander's own leaves it 0");
+    }
+    {   // The Animate hook steps several times before the next frame consumes its edges.
+        f107::Away away;
+        f107::EventQueue queue;
+        f107::LogState log;
+        std::vector<f107::Event> records;
+        const auto left = [&](const f107::EpisodeStart& start) {
+            records.push_back({f107::Event::kLeft, start, {}});
+        };
+        const auto ended = [&](const f107::EpisodeEnd& end) {
+            records.push_back({f107::Event::kEnded, {}, end});
+        };
+
+        away.step(3.7, 1.000, true, &queue);
+        away.step(0.46, 1.100, false, &queue);
+        away.step(4.2, 1.200, false, &queue);
+        away.step(0.46, 1.300, false, &queue);
+        away.step(0.46, 3.301, false, &queue);
+        away.step(3.8, 3.313, false, &queue);   // a 12 ms rejoin
+        log.drainEvents(queue, 3315, left, ended);
+        check(records.size() == 3 &&
+                  records[0].kind == f107::Event::kLeft && records[0].start.episode == 1 &&
+                  records[0].start.byShop && records[0].start.byDistance && records[0].start.distanceM == 3.7 &&
+                  records[1].kind == f107::Event::kEnded && records[1].end.episode == 1 &&
+                  records[1].end.calls == 4 && records[1].end.alternations == 1 && records[1].end.shopCalls == 1 &&
+                  records[1].end.distanceCalls == 2 && records[1].end.nearestM == 3.7 && records[1].end.farthestM == 4.2 &&
+                  std::fabs(records[1].end.durationS - 2.301) < 1e-6 &&
+                  records[2].kind == f107::Event::kLeft && records[2].start.episode == 2 &&
+                  records[2].start.rejoins == 1 && records[2].start.holdS == 4.0,
+              "F107 (#175): a return and 12 ms rejoin between frame reads logs both edges with each episode's own measurements");
+
+        records.clear();
+        away.step(5.1, 10.000, false, &queue);
+        log.drainEvents(queue, 10000, left, ended);
+        check(records.size() == 2 && records[0].kind == f107::Event::kEnded && records[0].end.episode == 2 &&
+                  records[0].end.calls == 1 && records[0].end.farthestM == 3.8 &&
+                  records[1].kind == f107::Event::kLeft && records[1].start.episode == 3 && records[1].start.holdS == 2.0,
+              "F107 (#175): one far call after silence ends the old episode before starting the next");
+
+        records.clear();
+        f107::EpisodeEnd lastReport;
+        lastReport.episode = 3;
+        lastReport.calls = 1;
+        lastReport.farthestM = 5.1;
+        log.closeStale(16000, lastReport, ended);
+        away.step(6.0, 17.000, false, &queue);
+        log.drainEvents(queue, 17000, left, ended);
+        check(records.size() == 2 && records[0].kind == f107::Event::kEnded && records[0].end.episode == 3 &&
+                  records[0].end.durationS == 6.0 && records[1].kind == f107::Event::kLeft && records[1].start.episode == 4,
+              "F107 (#175): a frame silence end is logged only once when the hook returns");
+    }
+    {
+        f107::EventQueue queue;
+        for (uint32_t episode = 1; episode <= 19; ++episode) {
+            f107::EpisodeStart start;
+            start.episode = episode;
+            queue.pushLeft(start);
+        }
+        bool fifo = true;
+        f107::Event event;
+        for (uint32_t episode = 1; episode <= 16; ++episode) {
+            fifo = fifo && queue.pop(&event) && event.kind == f107::Event::kLeft && event.start.episode == episode;
+        }
+        check(fifo && !queue.pop(&event) && queue.dropped() == 3,
+              "F107 (#175): overflow keeps the first 16 edges in order and reports the three dropped ones");
     }
 }
 

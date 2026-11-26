@@ -12547,11 +12547,11 @@ def _hj_f107_away(rows, ctx):
     """F107: the game's camera away from the commander (a terminal's or a screen's own camera, the carrier management screen 3367 m out): the episodes the pin
     refused, and the neck reference's seconds whose game camera stood 3 m or more from the neck. Such seconds are the camera measured as the commander's eye:
     with no episode line that is the gate never running (NEVER APPLIED), beside episode lines a camera the gate let through (PARTIAL)."""
-    left, ended = rows.get("left", []), rows.get("ended", [])
+    left, ended, overflow = rows.get("left", []), rows.get("ended", []), rows.get("overflow", [])
     necks = _hrows(ctx, "neck height (F94a)", "sec")
     remote = [r for r in necks if r.get("remote") is not None and int(r["remote"]) > 0 and r["bin"] == "every state"]
     remote += [r for r in necks if r.get("remote") is None and abs(float(r["game"])) >= 300.0]
-    if not left and not ended and not remote:
+    if not left and not ended and not remote and not overflow:
         return None
     text = "%d episodes" % len(left)
     tests = collections.Counter(r.get("test") or "distance" for r in left)   # F208b: the test that made each away (the distance test is the only one an earlier build had); F209: the shop screen
@@ -12573,12 +12573,14 @@ def _hj_f107_away(rows, ctx):
         return ("PARTIAL", text + "; %d of %d episodes lasted under 0.2 s: the camera alternated between two views and the episode ended on every return (a build before F208), so the view pumped" % (
             len(flaps), len(ended)))
     shopnote = _hj_f107_unflagged(left, ended, ctx)   # F209
+    dropnote = ("; event queue overflow dropped %d edge(s) (%s total)" %
+                (sum(int(r["n"]) for r in overflow), overflow[-1]["tot"])) if overflow else ""
     if remote:
         far = max(float(r["remote_max"]) if r.get("remote_max") is not None else abs(float(r["game"])) for r in remote) / 100.0
         note = "the game's camera %.1f m from the neck in %d neck reference seconds (taken as the commander's eye)" % (far, sum(int(r["remote"]) if r.get("remote") is not None else 1 for r in remote))
-        return ("PARTIAL" if left else "NEVER APPLIED", text + "; " + note + shopnote)
-    if shopnote:
-        return ("PARTIAL", text + shopnote)
+        return ("PARTIAL" if left else "NEVER APPLIED", text + "; " + note + shopnote + dropnote)
+    if shopnote or dropnote:
+        return ("PARTIAL", text + shopnote + dropnote)
     return ("OK", text + "; the neck reference and the standing calibration held")
 
 
@@ -17980,6 +17982,7 @@ HEALTH_RULES = (
                   r"camera (?P<near>[\d.]+) to (?P<far>[\d.]+) m from the neck, not a number in (?P<nan>\d+)"
                   r"(?:, back near and gone again within the (?P<hold>[\d.]+) s hold (?P<alt>\d+) times(?: \(rejoins in a row (?P<rej>\d+)\))?)?"   # F208/F208b: the flaps the hold absorbed, the rejoins
                   r"(?:.*\(calls held by the shop screen (?P<shopcalls>\d+), by the distance test (?P<distcalls>\d+)\))?"),   # F209: the calls each test held
+        ("overflow", r"native on foot camera away \(F107\): event queue overflow dropped (?P<n>\d+) edge\(s\) \((?P<tot>\d+) total\)$"),
     ), _hj_f107_away),
     _hrule(H_SHOP, ("F209",), ("(F209)",), (
         ("hook", r"avatar hooks: (?P<hook>shop-[a-z-]+) hook (?P<st>armed|stood down)"),
@@ -22704,6 +22707,10 @@ def self_test_health():
               [("OK", S209), ("OK", F107)], has=["1 Livery or loadout screen opening(s) held by the camera-away signal (HumanoidOutfittingInteraction)", "HumanoidOutfittingInteraction 1"], lacks=["UNPARSED"])
         check("F234: the loadout browser opened and the signal never went on is PARTIAL", [neck(), OSHOW234, OOPEN_HELD234, OCLOSE234, neck()], 0, [("PARTIAL", S209)],
               has=["a Livery screen or the loadout browser opened but the signal never went on"])
+        AWAY_OVERFLOW = R("event queue overflow dropped %u edge(s)", 2, 3)
+        check("F107 (#175): queue overflow diagnostic parses cleanly in a --since window without episode lines (PARTIAL, not UNPARSED)",
+              [(10, AWAY_LEFT), (70, AWAY_OVERFLOW)], 0, [("PARTIAL", F107)],
+              has=["0 episodes; event queue overflow dropped 2 edge(s) (3 total)"], lacks=["UNPARSED"], extra=("--since", "10:01:00"))
 
         # ---- the preview camera's roster (F232): the refused roster's line ----
         TAG232 = "native preview camera (F232):"
