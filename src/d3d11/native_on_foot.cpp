@@ -15126,7 +15126,7 @@ bool f107Tick(uint64_t now) noexcept {
         end.holdS = g_f107HoldS.load(std::memory_order_relaxed);
         end.nearestM = g_f107NearestM.load(std::memory_order_relaxed);
         end.farthestM = g_f107FarthestM.load(std::memory_order_relaxed);
-        g_f107LogState.closeStale(now, end, logEnded);
+        g_f107LogState.closeStale(now, last, end, logEnded);
     }
     static uint32_t lastDropped = 0;
     const uint32_t dropped = g_f107Events.dropped();

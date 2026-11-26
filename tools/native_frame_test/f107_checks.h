@@ -302,7 +302,12 @@ inline void run107(Check&& check) {
         lastReport.episode = 3;
         lastReport.calls = 1;
         lastReport.farthestM = 5.1;
-        log.closeStale(16000, lastReport, ended);
+        // The frame sampled its clock before the hook published a newer call.
+        log.closeStale(9999, 10000, lastReport, ended);
+        log.closeStale(15000, 10000, lastReport, ended);
+        check(records.empty() && log.isOpen(3),
+              "F107 (#175): a newer producer timestamp and the exact silence boundary keep the episode open");
+        log.closeStale(16000, 10000, lastReport, ended);
         away.step(6.0, 17.000, false, &queue);
         log.drainEvents(queue, 17000, left, ended);
         check(records.size() == 2 && records[0].kind == f107::Event::kEnded && records[0].end.episode == 3 &&

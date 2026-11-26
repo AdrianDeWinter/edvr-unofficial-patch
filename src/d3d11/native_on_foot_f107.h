@@ -242,7 +242,8 @@ class LogState {
     bool isOpen(uint32_t episode) const noexcept { return logged_ && episode_ == episode; }
 
     template <typename OnEnded>
-    void closeStale(uint64_t nowMs, EpisodeEnd end, OnEnded&& onEnded) noexcept {
+    void closeStale(uint64_t nowMs, uint64_t lastMs, EpisodeEnd end, OnEnded&& onEnded) noexcept {
+        if (!lastMs || nowMs < lastMs || nowMs - lastMs <= kAwayStaleMs) return;
         if (!isOpen(end.episode)) return;
         logged_ = false;
         end.durationS = static_cast<double>(nowMs - leftMs_) * 1e-3;
