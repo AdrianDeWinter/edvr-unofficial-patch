@@ -1105,6 +1105,7 @@ int main() {
                   "fewer bytes were stolen than the patch overwrites, so the "
                   "trampoline resumes inside an instruction");
 
+            void* const savedTrampoline = reinterpret_cast<void*>(g_codeOriginal);
             hook.uninstall();
             g_codeTargetCalls = 0;
             g_codeHookCalls = 0;
@@ -1112,6 +1113,24 @@ int main() {
                       g_codeTargetCalls == 1,
                   "uninstall puts the function back exactly as it was",
                   "the function did not survive being unhooked");
+
+            // Issue #174: the trampoline page must stay committed and executable after uninstall so an
+            // in-flight thread already inside a relay/trampoline finishes safely instead of jumping into freed memory.
+            MEMORY_BASIC_INFORMATION trampMbi{};
+            const bool trampLive =
+                VirtualQuery(savedTrampoline, &trampMbi, sizeof(trampMbi)) == sizeof(trampMbi) &&
+                trampMbi.State == MEM_COMMIT &&
+                (trampMbi.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)) != 0;
+            check(trampLive,
+                  "uninstall retains the trampoline page executable for in-flight callers (#174)",
+                  "uninstall freed the trampoline page, leaving in-flight callers dangling");
+            if (trampLive) {
+                g_codeTargetCalls = 0;
+                const int trampResult = reinterpret_cast<decltype(g_codeOriginal)>(savedTrampoline)(1);
+                check(trampResult == 8 && g_codeTargetCalls == 1,
+                      "an in-flight call through the retained trampoline completes after uninstall (#174)",
+                      "calling the retained trampoline after uninstall did not return the original result");
+            }
         }
     }
 

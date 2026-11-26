@@ -74,7 +74,7 @@ public:
     //
     // `origOut` receives the trampoline: the target's stolen first instructions
     // followed by a jump to what comes after them. Calling it is calling the
-    // function as it was. It stays valid until uninstall().
+    // function as it was. Published trampolines remain valid for process lifetime.
     //
     // `who` names the hook in the log lines. Returns false, having changed
     // nothing, if the target cannot be hooked safely -- and says why. Callers
@@ -86,7 +86,9 @@ public:
     // Put the original bytes back, but ONLY if the patch is still ours: another
     // tool that hooked the same function after us owns those bytes now, and
     // restoring them would cut it out exactly the way this class exists to
-    // avoid being cut out. The trampoline is then released.
+    // avoid being cut out. The trampoline page is intentionally retained for
+    // process lifetime so any thread already inside a relay or trampoline
+    // finishes safely after uninstall (#174).
     void uninstall();
 
     bool  installed() const { return m_installed; }

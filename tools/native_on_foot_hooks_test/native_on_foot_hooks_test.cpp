@@ -2699,10 +2699,11 @@ void testConversationLookGlue(const CtlPages& p) {
               "F212 A BUILD THAT IS NOT 334925: the hook is refused with the build as the reason and the address it did not touch; nothing is patched");
         t::reset();
     }
-    {   // an unload: the gate closes, and the leaf's own bytes come back
+    {   // an unload: the gate closes, the leaf's own bytes come back, and an in-flight call already inside the relay still completes (#174)
         Rig rig;
         start(rig);
-        check(leafAt[0] == 0xE9, "F212 UNLOAD: (before) the entry is a jump");
+        void* const savedRelay = t::relayAddress(t::kConversationLook);
+        check(leafAt[0] == 0xE9 && savedRelay != nullptr, "F212 UNLOAD: (before) the entry is a jump and the relay address is recorded");
         t::shutdown();
         check(!t::gateOpen(t::kConversationLook), "...the shutdown closes the gate: a call after it goes down the original path");
         edvr::g_nativeOnFootActive.store(true);
@@ -2712,6 +2713,12 @@ void testConversationLookGlue(const CtlPages& p) {
         edvr::g_nativeOnFootActive.store(false);
         t::reset();
         check(std::memcmp(g_cimg + f212::kLeafRva, f212::kLeaf, f212::kLeafBytes) == 0, "...and the uninstall puts all 17 of the leaf's bytes back");
+        // Simulate a game thread that entered the relay before uninstall restored the entry jump:
+        // the relay reads g_gate == 0 and tail-jumps to the trampoline, which must still be executable.
+        o.init();
+        reinterpret_cast<void (*)(void*, float, float)>(savedRelay)(o.b, 0.25f, -0.75f);
+        check(o.yaw() == f212::bitsOf(0.25f) && o.pitch() == f212::bitsOf(-0.75f),
+              "...and an in-flight call already inside the relay completes through the retained trampoline after uninstall (#174)");
     }
     {   // two threads: the game's thread calling the leaf while the frame thread runs its boundaries
         Rig rig;
