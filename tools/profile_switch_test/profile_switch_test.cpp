@@ -114,11 +114,11 @@ bool writeFile(const std::wstring& path, const std::string& text) {
 
 // A scratch root holding the DLL's own copy and the three settings files the rig is about: the install descriptor (two readers must
 // agree on scope), edup.ini and edup-flat.ini, each with one harmless key of its own. Its logs go under it.
-bool prepare(const std::wstring& root, const std::wstring& dll) {
+bool prepare(const std::wstring& root, const std::wstring& dll, const std::string& scope = "both") {
     CreateDirectoryW(root.c_str(), nullptr);
     CreateDirectoryW((root + L"\\logs").c_str(), nullptr);
     return CopyFileW(dll.c_str(), (root + L"\\d3d11.dll").c_str(), FALSE) &&
-           writeFile(root + L"\\edup_profile.ini", "[install]\r\nschema = 2\r\nscope = both\r\n") &&
+           writeFile(root + L"\\edup_profile.ini", "[install]\r\nschema = 2\r\nscope = " + scope + "\r\n") &&
            writeFile(root + L"\\edup.ini", "[hotkey]\r\nmenu = F9\r\n") &&
            writeFile(root + L"\\edup-flat.ini", "[hotkey]\r\nmenu = F10\r\n");
 }
@@ -251,7 +251,7 @@ int runControl(const std::wstring& root) {
     return g_bad > 0 ? 1 : 2;
 }
 
-int runBias(const std::wstring& root) {
+int runBias(const std::wstring& root, bool vrOnly) {
     SetEnvironmentVariableW(L"LOCALAPPDATA", root.c_str());
     SetEnvironmentVariableW(L"EDUP_LOG_DIR", (root + L"\\logs").c_str());
     SetEnvironmentVariableW(L"EDUP_LOG_DIR_FOR", nullptr);
@@ -260,6 +260,23 @@ int runBias(const std::wstring& root) {
     if (!p.load(root + L"\\d3d11.dll") || FAILED(d.initialize(p.module, D3D_DRIVER_TYPE_WARP, 64, 64))) {
         report(false, "texture bias fixture creates a device through the proxy");
         return 1;
+    }
+    const std::wstring logs = root + L"\\logs";
+    if (vrOnly) {
+        p.post(0);
+        std::string line;
+        const bool logged = SUCCEEDED(d.present(0)) && waitFor([&] {
+            const std::string text = readLogs(logs);
+            const size_t start = text.find("profile switch: vr -> passthrough");
+            if (start == std::string::npos) return false;
+            const size_t end = text.find('\n', start);
+            if (end == std::string::npos) return false;
+            line = text.substr(start, end - start);
+            return true;
+        }, 2000);
+        report(logged && line.find("advanced.texture_lod_bias=") == std::string::npos,
+               "switch to passthrough has no restart-only texture bias change -- " + line);
+        return g_bad ? 1 : 0;
     }
     report(p.read()[kProfile] == kFlat, "texture bias fixture starts flat");
     D3D11_SAMPLER_DESC desc{};
@@ -283,7 +300,6 @@ int runBias(const std::wstring& root) {
     report(blocked != INVALID_HANDLE_VALUE, "Custom is unavailable to readers during the VR commit");
     const bool vr = SUCCEEDED(d.present(0)) && p.read()[kProfile] == kVr;
     if (blocked != INVALID_HANDLE_VALUE) CloseHandle(blocked);
-    const std::wstring logs = root + L"\\logs";
     report(vr && waitFor([&] {
         return countOf(readLogs(logs), "advanced.texture_lod_bias=auto(-0.42) (new: auto(-1.00))") == 1;
     }, 2000), "switch to VR keeps the launch bias and reports HMD Quality 0.5 as the restart bias");
@@ -444,6 +460,20 @@ int runMain(const std::wstring& dllArg) {
                             std::to_string(static_cast<long long>(biasRc)) + ")");
     }
 
+    const std::wstring vrOnlyRoot = base + L"\\bias-vr-only";
+    const std::wstring vrOnlyGraphics = edvr::eliteGraphicsFolderUnder(vrOnlyRoot);
+    const bool vrOnlyReady = prepare(vrOnlyRoot, dll, "vr") &&
+        std::filesystem::create_directories(vrOnlyGraphics, ec) &&
+        writeFile(vrOnlyRoot + L"\\edup.ini", "[advanced]\r\ntexture_lod_bias = auto\r\n") &&
+        writeFile(vrOnlyGraphics + L"\\Settings.xml", "<StereoscopicMode>2</StereoscopicMode>") &&
+        writeFile(vrOnlyGraphics + L"\\Custom.4.4.fxcfg", "<HMDRenderTargetMultiplier>0.5</HMDRenderTargetMultiplier>");
+    report(vrOnlyReady, "passthrough texture bias fixture has VR-only scope and HMD Quality 0.5");
+    if (vrOnlyReady) {
+        const intptr_t vrOnlyRc = _wspawnl(_P_WAIT, self, self, L"--texture-bias-vr-only", vrOnlyRoot.c_str(), nullptr);
+        report(vrOnlyRc == 0, "texture bias fixture passes on switch to passthrough (exit " +
+                              std::to_string(static_cast<long long>(vrOnlyRc)) + ")");
+    }
+
     return finish();
 }
 
@@ -453,7 +483,8 @@ int wmain(int argc, wchar_t** argv) {
     // Unbuffered: a run that dies takes its buffered lines with it.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc == 3 && std::wcscmp(argv[1], L"--control") == 0) return runControl(argv[2]);
-    if (argc == 3 && std::wcscmp(argv[1], L"--texture-bias") == 0) return runBias(argv[2]);
+    if (argc == 3 && std::wcscmp(argv[1], L"--texture-bias") == 0) return runBias(argv[2], false);
+    if (argc == 3 && std::wcscmp(argv[1], L"--texture-bias-vr-only") == 0) return runBias(argv[2], true);
     if (argc < 2 || !argv[1] || !*argv[1]) {
         std::printf("usage: profile_switch_test.exe <path to d3d11.dll>\n");
         return 2;
