@@ -1292,6 +1292,8 @@ static void testShader() {
               "off/on retries the refused level buffer and enables the legacy canopy");
         edvr::cockpitGlassPsFor(ctx, ps1.Get(), cg::kIcePsQ3Hash);
 
+        // Supply the constant shader to the depth/stencil fixtures even on a cold overlay cache.
+        glass_test::overlayPixelShader = ps2.Get();
         auto runMixed = [&](D3D11_COMPARISON_FUNC gameFunc, float leftDepth, float rightDepth,
                             bool depthWrites, float* leftR, float* rightR) {
             D3D11_DEPTH_STENCIL_DESC gdd{};
@@ -1636,6 +1638,7 @@ static void testShader() {
               "#188 WARP skipped stock draw leaves both pixels untinted");
         setLegacy(ctx, false);
         edvr::bindingSetShader(edvr::BindSlot::Ps, nullptr, 0);
+        glass_test::overlayPixelShader = nullptr;
     }
 
     const unsigned problems = canopy.rig.problems();

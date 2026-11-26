@@ -48,7 +48,7 @@ Flown with 5 x (probe(N) + probe(-N)) ambient (268b292c): still almost no dirt. 
 15619672 flown: too faint, no visible difference from `odyssey`; film 0.4 and edge 0.3 flown 25cb4723, "looks better" (end of section 13). CB2[17].w behaves like per-ship wear driving Odyssey's dirt; Horizons' glass shader has no such term, and Sean decided on 2026-11-04 that EDVR's grime stays fixed (section 16). A dashed bright line under the top strut turned out not to be the glass, it shows with `odyssey` too (section 15). Whether the film and patches read naturally is still Sean's call.
 
 BUILT 2026-11-05, NOT FLOWN (section 17): `visual.cockpit_glass_dirt`, 0 to 300 percent, shipped 100, live, flat and VR, under Cockpit glass.
-A one-register block at b13 scales the dirt only; the row is dimmed unless the look is `legacy`. It makes Sean's strength call a slider.
+A one-register block at b13 scales the dirt only; the row is dimmed unless the look is `legacy`. It makes Sean's strength call a slider. If the device refuses the block, ED-UP draws stock canopy glass.
 
 Temporary: `experimental.cockpit_glass_probe` (`cockpit_glass_probe.*`, `tools\cockpit_glass_probe_test`, the
 `:rig_cockpit_glass_probe_test` rig, its flat allow-list line). Default off, kept on main while users try `legacy` (Sean, 2026-11-04), so a report can turn it on. Remove all of it once that feedback is in. Pre-merge review follow-ups, none seen in a flight: issue #188.
@@ -815,9 +815,9 @@ its one reissued draw). b13 is the last of D3D11's fourteen slots; the canopy sh
 uses b13 for its own draws. `vScreenPSSetConstantBuffersRaw` is a new raw call: `hookedPSSetConstantBuffers` exists only for the flat
 scope's discovery observer, and the glass's bind should not reach it.
 
-Failure modes, both visible and neither stock: a refused block is bound as null, so the shaders read 0 and draw no dirt (logged, "the dirt
-level block was refused"); an unbound b13 reads 0 the same way, which `tools\cockpit_glass_test` pins. A key outside 0 to 300 is
-clamped and logged by `getIntInRange`.
+The original build bound a refused level block as null, which yielded zero dirt. ED-UP now logs the refusal and draws
+stock canopy glass. Switching legacy off and back on retries the allocation. The shaders read an unbound b13 as zero,
+which `tools\cockpit_glass_test` checks. `getIntInRange` clamps and logs values outside 0 to 300.
 
 The menu. The row is dimmed, and refuses a step, a typed value and the reset, unless `visual.cockpit_glass` is `legacy`
 (`cockpit_glass_core.h` `dirtRowDim`, `menu.cpp` `cockpitGlassDirtRowDisabled`, read live as the glass reads it). It is dimmed and not
