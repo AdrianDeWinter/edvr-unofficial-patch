@@ -180,8 +180,8 @@ bool eliteBindsAction(const char* elementName, EliteResetBind* out);
 bool eliteBindsActionDir(const char* elementName, const wchar_t* dir, EliteResetBind* out, const wchar_t* game = nullptr);
 bool eliteBindsActionIn(const char* elementName, const char* text, size_t len, EliteResetBind* out);
 // The SRV action uses the third line of StartPreset.4.start, confirmed by the
-// flight of affd9edb (#179). A blank third line, fewer than four lines or the
-// legacy StartPreset.start use the same all-lines selection as other actions.
+// flight of affd9edb (#179). An absent or blank third line, or the legacy
+// StartPreset.start, uses the same all-lines selection as other actions.
 bool eliteBindsActionSrv(const char* elementName, EliteResetBind* out);
 bool eliteBindsActionSrvDir(const char* elementName, const wchar_t* dir, const wchar_t* gameDir, EliteResetBind* out);
 bool eliteBindsHmdReset(EliteResetBind* out);

@@ -186,13 +186,25 @@ void appendStockBindsFiles(const wchar_t* game, const std::vector<std::string>& 
     if (!game || !game[0]) return;
     const std::wstring schemes = std::wstring(game) + L"\\ControlSchemes\\";
     for (const std::string& name : names) {
-        if (name.find_first_of("\\/:") != std::string::npos ||
-            name.find('\0') != std::string::npos) continue;
-        wchar_t filename[MAX_PATH] = {};
+        // A binding preset names a filename stem. Dots and spaces are valid
+        // in a stem, and the graphics preset's 32-character limit is specific
+        // to OptionDefaults. Reject Windows path syntax and control bytes.
+        if (name.find_first_of("\\/:*?\"<>|") != std::string::npos ||
+            std::any_of(name.begin(), name.end(), [](unsigned char c) { return c < 0x20; })) continue;
+        wchar_t stem[MAX_PATH] = {};
         if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name.c_str(), -1,
-                                 filename, MAX_PATH)) continue;
+                                 stem, MAX_PATH)) continue;
+        const std::wstring filename = std::wstring(stem) + L".binds";
         Cand c{};
-        c.path = schemes + filename + L".binds";
+        c.path = schemes + filename;
+        // Check the full basename. A DOS device lookup can succeed and
+        // return a bare device name such as NUL instead of NUL.binds.
+        WIN32_FIND_DATAW fd{};
+        HANDLE find = FindFirstFileW(c.path.c_str(), &fd);
+        if (find == INVALID_HANDLE_VALUE) continue;
+        FindClose(find);
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            CompareStringOrdinal(fd.cFileName, -1, filename.c_str(), -1, TRUE) != CSTR_EQUAL) continue;
         snprintf(c.utf8, sizeof(c.utf8), "ControlSchemes\\%s.binds", name.c_str());
         out->push_back(c);
     }
@@ -219,22 +231,26 @@ bool collectActiveBindsFiles(const std::wstring& dir, const wchar_t* game,
     }
     // The flight of affd9edb confirmed only the third line (SRV). Legacy
     // and non-SRV lookups consider every preset line.
-    if (srv && hasV4 && lines.size() >= 4) {
-        std::string& preset = lines[2];
+    if (srv && hasV4 && lines.size() >= 3) {
+        const std::string& preset = lines[2];
         const size_t last = preset.find_last_not_of(" \t");
         if (last != std::string::npos) {
             lines = {preset.substr(0, last + 1)};
         }
     }
     std::vector<std::string> names;
+    bool hasNamedLine = false;
     for (const std::string& line : lines) {
         if (line.empty()) continue;
+        hasNamedLine = true;
+        if (line.find('\0') != std::string::npos) continue;
         if (std::none_of(names.begin(), names.end(), [&](const std::string& name) {
                 return _stricmp(name.c_str(), line.c_str()) == 0;
             })) {
             names.push_back(line);
         }
     }
+    if (hasNamedLine && names.empty()) return true;
     collectCustomBindsFiles(dir, names, out);
     appendStockBindsFiles(game, names, out);
     return true;
