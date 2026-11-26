@@ -866,6 +866,9 @@ extern "C" HRESULT WINAPI edvr_impl_D3D11CreateDevice(
     ID3D11DeviceContext** ppContext) {
     // Re-entry uses the published system target without any initialization or
     // module lookup. The caller may still be under the loader lock.
+    // Preserve the loader-phase refusal: a redirected dependency may call back
+    // before loaderPhase has published the real export. Do not initialize then.
+    if (!g_realCreateDevice) return E_FAIL;
     CreateDepth depth;
     const bool reentrant = depth.reentrant();
     if (!reentrant) ensureInitialised();
@@ -895,6 +898,7 @@ extern "C" HRESULT WINAPI edvr_impl_D3D11CreateDeviceAndSwapChain(
     const DXGI_SWAP_CHAIN_DESC* swapChainDesc, IDXGISwapChain** ppSwapChain,
     ID3D11Device** ppDevice, D3D_FEATURE_LEVEL* pFeatureLevel,
     ID3D11DeviceContext** ppContext) {
+    if (!g_realCreateDeviceAndSwapChain) return E_FAIL;
     CreateDepth depth;
     const bool reentrant = depth.reentrant();
     if (!reentrant) ensureInitialised();
