@@ -9,9 +9,9 @@
   - Visual page (2026-10-27, `menu visual`): VR's menu has one now, beside the flat panel's Visual tab; World scale (`visual.world_scale`), the intro settings and the screen curve are on it; BUILT, NOT FLOWN. The Desktop window page (2026-10-28, `menu desktop_window`, docs\desktop-window.md) follows it: `visual.desktop_window` and its aspect and style keys. Sections "What it shows" and "Visual tab" below.
   - Flat F8 panel: a Visual tab between Performance and Debug (2026-10-22, `menu visual`), a HUD Anti-Aliasing row (2026-10-24, flat-only as `menu flat_performance`; on VR's Performance page too since 2026-11-03, `menu performance`, flown OK the same day); sections below.
   - Explorer Cam page (2026-10-08): REMOVED with Explorer Cam (F98, 2026-10-24); its keys are retired.
-  - Hotkeys page (2026-10-08): key, pad or HOTAS rebinding of the menu, AA
-    comparison, exposure and history keys (Explorer Cam's key until F98). FLOWN
-    OK ("worked great"). Section "Hotkeys page" below.
+  - Hotkeys page (2026-10-08): key, pad or HOTAS rebinding, FLOWN OK. Menu key
+    adoption can also read the named stock ControlSchemes presets (#182).
+    General, Ship and OnFoot preset positions still await confirmation.
   - Performance page: one `UI quality` row (`fix.ui_quality`, off / 100% /
     125%; default 100) drives the cockpit panels' size and the UI layer;
     BUILT, NOT FLOWN as of its 2026-09-23 entry. Gone: the `HUD quality` row,
@@ -762,12 +762,11 @@ the same as before` (silence there is indistinguishable from a dead
 mechanism). `hotkey.read_game_bindings = 0` drops them (the same switch as
 the camera keys); the live flip is handled in `menuConfigure`, because an
 unchanged fingerprint would never re-read. A `hotkey.menu` change
-re-resolves the cached slots without a file read. BELIEVED: a player on a
-stock preset has NO `.binds` under `Options\Bindings` (Elite writes
-`Custom.*.binds` only after a rebind; Sean's directory holds only Custom
-files), so the confused majority gets `menu keys: no bindings files were
-found` and only the footer fix helps them -- the
-`ControlSchemes\<preset>.binds` fallback is the follow-up. BELIEVED:
+re-resolves the cached slots without a file read. The menu tries the active
+`Options\Bindings` files newest-first, then the named stock presets under
+the game's `ControlSchemes` directory when the element is absent from the
+user files (#182). The third preset line is confirmed for SRV by the flight of
+`affd9edb`. Menu lookups still consider every preset line. BELIEVED:
 Elite's `Key_` names are DirectInput scan-code names while
 `virtualKeyFromName` maps letters by VK, so on AZERTY/Dvorak the adopted
 `W` could be a different physical key from the one Elite acts on (the

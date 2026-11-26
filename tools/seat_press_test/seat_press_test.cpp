@@ -217,8 +217,9 @@ void srvContext() {
     writeFile(opt + L"\\StartPreset.start", "Custom\r\n");
     check(eliteBindsActionSrvDir("ToggleBuggyTurretButton", opt.c_str(), game.c_str(), &b) && std::strcmp(b.file, "Custom.4.2.binds") == 0 && b.slot[0].binding.padButtons == 0x8000,
           "with only the old StartPreset.start the answer is the active preset's file, as before");
-    writeFile(opt + L"\\StartPreset.4.start", "Custom\r\nCustom\r\n");
-    check(eliteBindsActionSrvDir("ToggleBuggyTurretButton", opt.c_str(), game.c_str(), &b) && std::strcmp(b.file, "Custom.4.2.binds") == 0, "a StartPreset.4.start of fewer than four lines: today's answer");
+    writeFile(opt + L"\\StartPreset.4.start", "Custom\r\nCustom\r\nConsoleX360\r\n");
+    check(eliteBindsActionSrvDir("ToggleBuggyTurretButton", opt.c_str(), game.c_str(), &b) && std::strcmp(b.file, "Custom.4.2.binds") == 0,
+          "a three-line preset with trailing CRLF uses the legacy all-lines selection");
     // Sean's file
     writeFile(opt + L"\\StartPreset.4.start", "Custom\r\nCustom\r\nConsoleX360\r\nCustom\r\n");
     check(!eliteBindsActionSrvDir("ToggleBuggyTurretButton", opt.c_str(), game.c_str(), &b), "the SRV line names ConsoleX360, which is nowhere yet: not found (the stale Custom file is not used)");
@@ -246,6 +247,80 @@ void srvContext() {
     RemoveDirectoryW(root.c_str());
     check(GetFileAttributesW(root.c_str()) == INVALID_FILE_ATTRIBUTES, "the SRV scratch folder is gone");
 }
+
+void stockFallbackAcrossPresetLines() {
+    const std::wstring root = scratchDir() + L"_stock";
+    const std::wstring opt = root + L"\\Bindings";
+    const std::wstring schemes = root + L"\\ControlSchemes";
+    const std::wstring start = opt + L"\\StartPreset.4.start";
+    const std::wstring user = opt + L"\\Pilot.4.2.binds";
+    const std::wstring stock = schemes + L"\\Pilot.binds";
+    CreateDirectoryW(root.c_str(), nullptr);
+    CreateDirectoryW(opt.c_str(), nullptr);
+    CreateDirectoryW(schemes.c_str(), nullptr);
+    writeFile(start, "Missing1\r\nMissing2\r\nMissing3\r\nPilot\r\n");
+    writeFile(user,
+              "<Root><HMDReset><Primary Device=\"Keyboard\" Key=\"Key_F8\" /></HMDReset>"
+              "<ExplorationFSSEnter><Primary Device=\"Keyboard\" Key=\"Key_F9\" /></ExplorationFSSEnter></Root>");
+    const std::string stockText =
+        "<Root><HMDReset><Primary Device=\"Keyboard\" Key=\"Key_F12\" /></HMDReset>"
+        "<ExplorationFSSEnter><Primary Device=\"Keyboard\" Key=\"Key_F5\" />"
+        "<Secondary Device=\"GamePad\" Key=\"GamePad_Back\" /></ExplorationFSSEnter>"
+        "<UI_Up><Primary Device=\"Keyboard\" Key=\"Key_UpArrow\" /></UI_Up></Root>";
+    writeFile(stock, stockText);
+    EliteResetBind hmd;
+    check(eliteBindsHmdResetDir(opt.c_str(), &hmd, root.c_str()) && hmd.count == 1 &&
+              hmd.slot[0].binding.vk == VK_F8 && std::strcmp(hmd.file, "Pilot.4.2.binds") == 0,
+          "the maintained preset on the fourth line wins over its stock file for HMDReset");
+    char key[40];
+    check(eliteBindsLookupDir(opt.c_str(), "ExplorationFSSEnter", key, sizeof(key), nullptr, root.c_str()) &&
+              std::strcmp(key, "F9") == 0,
+          "the FSS keyboard lookup considers the maintained preset on the fourth line");
+    check(!eliteBindsLookupPadDir(opt.c_str(), "ExplorationFSSEnter", key, sizeof(key), root.c_str()),
+          "an FSS element with no pad slot in the maintained file does not borrow the stock slot");
+    EliteKeySlots ui;
+    check(eliteBindsLookupSlotsDir(opt.c_str(), "UI_Up", kEliteKeyAllowModifierMain, &ui, root.c_str()) &&
+              ui.count == 1 && std::strcmp(ui.slot[0].binding, "UP") == 0 &&
+              std::strcmp(ui.file, "ControlSchemes\\Pilot.binds") == 0,
+          "a menu element absent from the maintained file falls through to the named stock preset");
+    EliteKeyboardUse keyboard[8];
+    EliteBindUse uses[8];
+    char file[64];
+    check(eliteBindsKeyboardUsesDir(opt.c_str(), keyboard, 8, file, sizeof(file), root.c_str()) == 2 &&
+              std::strcmp(file, "Pilot.4.2.binds") == 0 && std::strcmp(keyboard[0].binding, "F8") == 0 &&
+              std::strcmp(keyboard[1].binding, "F9") == 0,
+          "keyboard clashes use every keyboard slot from the first readable maintained preset");
+
+    DeleteFileW(user.c_str());
+    check(eliteBindsHmdResetDir(opt.c_str(), &hmd, root.c_str()) && hmd.count == 1 &&
+              hmd.slot[0].binding.vk == VK_F12 && std::strcmp(hmd.file, "ControlSchemes\\Pilot.binds") == 0,
+          "HMDReset can be adopted from the stock preset on the fourth line");
+    check(eliteBindsLookupDir(opt.c_str(), "ExplorationFSSEnter", key, sizeof(key), nullptr, root.c_str()) &&
+              std::strcmp(key, "F5") == 0,
+          "the FSS keyboard lookup can use the named stock preset");
+    check(eliteBindsLookupPadDir(opt.c_str(), "ExplorationFSSEnter", key, sizeof(key), root.c_str()) &&
+              std::strcmp(key, "GamePad_Back") == 0,
+          "the FSS pad lookup can use the named stock preset");
+    check(eliteBindsAllUsesDir(opt.c_str(), uses, 8, file, sizeof(file), root.c_str()) == 4 &&
+              std::strcmp(file, "ControlSchemes\\Pilot.binds") == 0 &&
+              std::strcmp(uses[0].element, "HMDReset") == 0 && uses[0].binding.vk == VK_F12 &&
+              std::strcmp(uses[1].element, "ExplorationFSSEnter") == 0 && uses[1].binding.vk == VK_F5 &&
+              uses[2].binding.kind == HotkeyKind::Pad && uses[2].binding.padButtons == 0x0020 &&
+              std::strcmp(uses[3].element, "UI_Up") == 0 && uses[3].binding.vk == VK_UP,
+          "stock-only clash checks include actions and buttons without assigning the file to a context");
+
+    const std::wstring escape = root + L"\\Escape.binds";
+    writeFile(start, "..\\Escape\r\n");
+    writeFile(escape, stockText);
+    check(!eliteBindsHmdResetDir(opt.c_str(), &hmd, root.c_str()) && hmd.filesSeen == 0,
+          "a preset line with a path separator cannot select a file outside ControlSchemes");
+    DeleteFileW(escape.c_str());
+    DeleteFileW(stock.c_str());
+    DeleteFileW(start.c_str());
+    RemoveDirectoryW(schemes.c_str());
+    RemoveDirectoryW(opt.c_str());
+    RemoveDirectoryW(root.c_str());
+}
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -265,6 +340,7 @@ int wmain(int argc, wchar_t** argv) {
     turretKey();
     folder();
     srvContext();
+    stockFallbackAcrossPresetLines();
     std::printf("seat_press_test: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
 }

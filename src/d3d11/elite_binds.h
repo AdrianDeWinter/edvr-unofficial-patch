@@ -37,7 +37,7 @@
 namespace edvr {
 
 // Look up an Elite binding element (e.g. "ExplorationFSSEnter",
-// "ExplorationFSSQuit") in the active preset's files and translate it
+// "ExplorationFSSQuit") across the active presets and translate it
 // to an EDVR binding string ("F11", "SHIFT+RIGHT", "["). Returns true and
 // fills `out` when a keyboard binding was found; false when the element is
 // unbound, bound to a non-keyboard device, or the files cannot be read.
@@ -58,15 +58,15 @@ bool eliteBindsLookup(const char* element, char* out, size_t outLen,
 bool eliteBindsLookupPad(const char* element, char* out, size_t outLen);
 
 bool eliteBindsLookupPadDir(const wchar_t* dir, const char* element,
-                            char* out, size_t outLen);
+                            char* out, size_t outLen, const wchar_t* game = nullptr);
 
 // The same lookup against an explicit bindings directory, exposed for the
-// smoke test -- the selection rules (newest maintained file wins; stale
-// previous-format presets lose) earned a harness the day a January relic
-// answered a live rebind.
+// smoke test. All active preset lines are candidates. Options\Bindings files
+// are tried newest-first, followed by the named stock files in ControlSchemes
+// under `game` when supplied.
 bool eliteBindsLookupDir(const wchar_t* dir, const char* element,
                          char* out, size_t outLen,
-                         const char* fallbackElement = nullptr);
+                         const char* fallbackElement = nullptr, const wchar_t* game = nullptr);
 
 // The Elite-name to EDVR-name translation, exposed for the smoke test:
 // "Key_F11" -> "F11", "Key_RightArrow" -> "RIGHT", "Key_BackSlash" -> "\\",
@@ -125,34 +125,35 @@ bool eliteBindsTranslateKeyEx(const char* eliteKey, unsigned flags, char* out,
 bool eliteBindsLookupSlots(const char* element, unsigned flags,
                            EliteKeySlots* out);
 bool eliteBindsLookupSlotsDir(const wchar_t* dir, const char* element,
-                              unsigned flags, EliteKeySlots* out);
+                              unsigned flags, EliteKeySlots* out, const wchar_t* game = nullptr);
 
 // EVERY keyboard binding in the active preset, for a clash check (the AA comparison key's, aa_compare.cpp): a key the game also acts on is named in the log. The
-// maintained file (the newest candidate that can be read) answers alone, as for every other lookup here. `binding` is the EDVR
+// first readable candidate (newest maintained user file, then stock) answers alone. `binding` is the EDVR
 // form the other lookups produce ("F5", "SHIFT+E"); a slot that is not on the keyboard, is empty, or is a key this build has no
 // name for is left out. Returns the number of uses written (at most `max`), or -1 when there is no preset or no readable file.
-// `file` (optional) receives the UTF-8 basename of the answering file.
+// `file` (optional) receives the UTF-8 basename or ControlSchemes label.
 struct EliteKeyboardUse {
     char element[64];    // the binding's name in the file: "ExplorationFSSEnter", "ToggleFreeCam"
     char binding[40];    // "F5", "CTRL+F5", "0xA2" is never produced here
 };
 int eliteBindsKeyboardUses(EliteKeyboardUse* out, int max, char* file, size_t fileLen);
-int eliteBindsKeyboardUsesDir(const wchar_t* dir, EliteKeyboardUse* out, int max, char* file, size_t fileLen);
+int eliteBindsKeyboardUsesDir(const wchar_t* dir, EliteKeyboardUse* out, int max, char* file, size_t fileLen,
+                             const wchar_t* game = nullptr);
 
 // The same walk for EVERY kind of binding a hotkey can share a press with (2026-10-08, the settings menu's Hotkeys page): the
 // keyboard (with its modifiers), the XInput pad ("GamePad_Back"), and the joysticks and HOTAS -- a Device written as eight hex
 // digits, vendor then product ("231D0200"), with a Key of Joy_N or Joy_POV1Up. Each use is returned as the parsed HotkeyBinding,
 // so a captured binding is compared with it field by field and never as text. Axes (Joy_XAxis), the mouse, a slot with no key and
 // a key this build has no name for are left out; a slot's own <Modifier> is read for the keyboard only (a pad or joystick
-// button that Elite acts on with a modifier held is still that button, and still shares the press). Same file rule as every
-// lookup here: the maintained file answers alone. Returns the number written (at most `max`), or -1 with no preset or no
-// readable file; `file` (optional) receives the answering basename.
+// button that Elite acts on with a modifier held is still that button, and still shares the press). The first readable
+// candidate answers alone. Returns the number written (at most `max`), or -1 with no preset or no readable file.
 struct EliteBindUse {
     char          element[64];   // the binding's name in the file: "HumanoidJumpButton", "ToggleFreeCam"
     HotkeyBinding binding;
 };
 int eliteBindsAllUses(EliteBindUse* out, int max, char* file, size_t fileLen);
-int eliteBindsAllUsesDir(const wchar_t* dir, EliteBindUse* out, int max, char* file, size_t fileLen);
+int eliteBindsAllUsesDir(const wchar_t* dir, EliteBindUse* out, int max, char* file, size_t fileLen,
+                        const wchar_t* game = nullptr);
 
 // The HMD recentre action (Elite's `HMDReset`, 2026-10-14: the seat memory tells the player's press from the game's own reset). Every slot the
 // element has with a device and a key, in file order (Primary, Secondary), each with what watching it takes: `observable` is true for a
@@ -176,15 +177,15 @@ struct EliteResetBind {
 };
 // Any one action by its element name (2026-11-03: the SRV turret view's ToggleBuggyTurretButton shares HMDReset's parser). The HMDReset functions below are this with the name fixed.
 bool eliteBindsAction(const char* elementName, EliteResetBind* out);
-bool eliteBindsActionDir(const char* elementName, const wchar_t* dir, EliteResetBind* out);
+bool eliteBindsActionDir(const char* elementName, const wchar_t* dir, EliteResetBind* out, const wchar_t* game = nullptr);
 bool eliteBindsActionIn(const char* elementName, const char* text, size_t len, EliteResetBind* out);
-// The same for the SRV's bind context (2026-11-03, issue 179): StartPreset.4.start holds one preset name per bind context, general, ship, SRV, on foot; the third line is the SRV's. That preset is
-// looked up in Options\Bindings (the newest maintained file of that name that has the element), then in <game dir>\ControlSchemes\<name>.binds, where a stock preset such as ConsoleX360 lives.
-// With only the old StartPreset.start, or a file of fewer than four lines, the answer is eliteBindsAction's. HMDReset and the other lookups do not use it.
+// The SRV action uses the third line of StartPreset.4.start, confirmed by the
+// flight of affd9edb (#179). A blank third line, fewer than four lines or the
+// legacy StartPreset.start use the same all-lines selection as other actions.
 bool eliteBindsActionSrv(const char* elementName, EliteResetBind* out);
 bool eliteBindsActionSrvDir(const char* elementName, const wchar_t* dir, const wchar_t* gameDir, EliteResetBind* out);
 bool eliteBindsHmdReset(EliteResetBind* out);
-bool eliteBindsHmdResetDir(const wchar_t* dir, EliteResetBind* out);
+bool eliteBindsHmdResetDir(const wchar_t* dir, EliteResetBind* out, const wchar_t* game = nullptr);
 // The pure half, over the text of one .binds file; exposed for the smoke test.
 bool eliteBindsHmdResetIn(const char* text, size_t len, EliteResetBind* out);
 
