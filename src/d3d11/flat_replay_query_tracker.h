@@ -21,8 +21,8 @@ struct FlatReplayQueryTracker {
     uint64_t begins = 0, ends = 0;
     uint64_t causeBegins = 0, causeEnds = 0;
     uint32_t causeOpen = 0;
-    // Ends of Timing queries with no Begin seen (2026-11-03): counted, never an escape. The observer runs only in the flat profile, so after a live VR-to-flat
-    // switch its first call can be the End of a timestamp-disjoint bracket the game opened in VR (flight edvr_gfx_20261103_061437: begins=0 ends=1, 0 ms in), and
+    // Ends of Timing queries with no Begin seen (2026-11-03): counted, never an escape. When the observer ran only in the flat profile, after a live VR-to-flat
+    // switch its first call could be the End of a timestamp-disjoint bracket the game opened in VR (flight edvr_gfx_20261103_061437: begins=0 ends=1, 0 ms in), and
     // that one End set the sticky flag and refused every on-foot DLSS frame. safe() already ignores an open Timing bracket (it counts no draws), so an unobserved
     // one cannot make a replay unsafe either.
     uint64_t unmatchedTimingEnds = 0;

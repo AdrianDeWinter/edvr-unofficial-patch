@@ -94,8 +94,8 @@ inline int flatQueryRejectFormatEvent(char* out, size_t size, uint32_t ordinal, 
 
 // ---- The tracker's first escape (2026-11-03; log only) --------------------------------------------------------------------------
 // The 11-03 flight (edvr_gfx_20261103_044624) rejected 193,092 of 193,092 foreground draws as UNCERTAIN_BRACKET#100 from 72 ms after a live
-// VR-to-flat switch, in 5 of 5 switched sessions with a checked draw and in none of 120+ flat-launched ones. The observer runs only in the flat
-// profile (vscreen.cpp hookedBegin/hookedEnd), so after a switch its first calls can be Ends of brackets opened before it looked. Two lines say
+// VR-to-flat switch, in 5 of 5 switched sessions with a checked draw and in none of 120+ flat-launched ones. The observer ran only in the flat
+// profile during that flight, so its first calls could be Ends of brackets opened before it looked. Two lines say
 // whether that is the cause: the first observed call, and the first escape with its cause. No start line = the observer never ran; a start line
 // and no escape line = the tracker stayed certain.
 // The numbers are FlatReplayQueryTracker::Cause and ::Kind (flat_replay_query_tracker.h); the tests pin the two against each other.
@@ -123,7 +123,7 @@ inline const char* flatQueryKindName(uint32_t k) {
 inline int flatQueryTrackerFormatStart(char* out, size_t size, const char* call, unsigned long long context, uint32_t thread) {
     return std::snprintf(out, size,
         "flat replay query tracker: observing from here (first call %s on context %016llX, thread %u); calls before this were not observed "
-        "(the observer runs only in the flat profile), so a bracket opened earlier ends here without a Begin",
+        "(the observer runs while flat is in scope), so a bracket opened earlier ends here without a Begin",
         call ? call : "?", context, thread);
 }
 // The first time the tracker went uncertain: why, on which call and query, and what it had seen by then.

@@ -5783,6 +5783,8 @@ void flatRuntimeReplayQueryBegin(ID3D11DeviceContext* ctx, ID3D11Asynchronous* a
 void flatRuntimeReplayQueryEnd(ID3D11DeviceContext* ctx, ID3D11Asynchronous* async) {
     if (ctx && ctx->GetType()==D3D11_DEVICE_CONTEXT_IMMEDIATE) {
         const auto kind=replayQueryKind(async);
+        // EndOnly queries (EVENT, TIMESTAMP) never open a bracket; skip the observer lock while VR is active.
+        if (kind == FlatReplayQueryTracker::Kind::EndOnly && !runtimeFlatProfile()) return;
         ReplayQueryNote note;
         {
             auto& observer=replayQueryObserver();std::lock_guard<std::mutex> lock(observer.mutex);

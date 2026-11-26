@@ -19,6 +19,7 @@
 #include <string>
 #include "../../src/d3d11/flat_replay_query_reject.h"
 #include "../../src/d3d11/flat_replay_query_tracker.h"
+#include "../../src/d3d11/flat_runtime.h"
 
 inline int flatReplayQueryRejectTests() {
     using namespace edvr;
@@ -221,10 +222,58 @@ inline int flatReplayQueryRejectTests() {
         clean.begin(&a, T::Kind::Count); clean.end(&a, T::Kind::Count); clean.begin(&b, T::Kind::Timing); clean.end(&b, T::Kind::Timing);
         expect(clean.safe() && clean.begins == 2 && clean.ends == 2 && clean.firstCause == T::Cause::None, "paired brackets leave the tracker certain and counted");
 
+        // Drive the hook's routing through the real launch scope and live profile.
+        {
+            const auto launch = g_launchDecision;
+            const auto profile = runtimeProfileValue();
+            g_launchDecision.active = RuntimeProfile::Vr;
+            g_launchDecision.scope.scope = InstallScope::Both;
+
+            const auto begin = [&](T& tracker, bool foreign = false) {
+                flatRuntimeObserveReplayQuery([&] { return foreign; },
+                                              [&] { tracker.begin(&a, T::Kind::Count); });
+            };
+            const auto end = [&](T& tracker) {
+                flatRuntimeObserveReplayQuery([] { return false; },
+                                              [&] { tracker.end(&a, T::Kind::Count); });
+            };
+            T toFlat;
+            runtimeProfileSet(RuntimeProfile::Vr);
+            begin(toFlat);
+            runtimeProfileSet(RuntimeProfile::Flat);
+            expect(!toFlat.safe() && !toFlat.uncertain && toFlat.openCount() == 1,
+                   "a Count bracket opened in VR blocks replay after switching to flat");
+            end(toFlat);
+            expect(toFlat.safe() && toFlat.openCount() == 0,
+                   "the End in flat closes the Count bracket opened in VR");
+
+            T fromFlat;
+            begin(fromFlat);
+            runtimeProfileSet(RuntimeProfile::Vr);
+            end(fromFlat);
+            runtimeProfileSet(RuntimeProfile::Flat);
+            expect(fromFlat.safe() && fromFlat.begins == 1 && fromFlat.ends == 1,
+                   "the End in VR closes the Count bracket before replay returns");
+
+            T foreign;
+            begin(foreign, true);
+            expect(foreign.safe() && foreign.openCount() == 0,
+                   "a query on a foreign context leaves replay safe on the owner");
+            T vrOnly;
+            g_launchDecision.scope.scope = InstallScope::Vr;
+            runtimeProfileSet(RuntimeProfile::Vr);
+            begin(vrOnly);
+            expect(vrOnly.safe() && vrOnly.openCount() == 0,
+                   "a VR-only install leaves the flat replay observer idle");
+
+            runtimeProfileSet(profile);
+            g_launchDecision = launch;
+        }
+
         char text[1000];
         flatQueryTrackerFormatStart(text, sizeof(text), "End", 0x00000208662D5580ull, 4321);
         expect(std::strcmp(text, "flat replay query tracker: observing from here (first call End on context 00000208662D5580, thread 4321); calls before this were not observed "
-                                 "(the observer runs only in the flat profile), so a bracket opened earlier ends here without a Begin") == 0,
+                                 "(the observer runs while flat is in scope), so a bracket opened earlier ends here without a Begin") == 0,
                "the start line, character for character");
         flatQueryTrackerFormatEscape(text, sizeof(text), 5, "End", 5, 2, 4321, 0x00000208662D5580ull, 0, 1, 0, 3);
         expect(std::strcmp(text, "flat replay query tracker: first escape: cause=unmatched-end call=End query=OCCLUSION_PREDICATE#5 kind=count thread=4321 "
