@@ -824,8 +824,8 @@ static void wiringCases() {
               has(pm, "srv turret press: Elite's ToggleBuggyTurretButton in %s"),
           "the press watcher reads ToggleBuggyTurretButton through the shared action parser, watches each slot as a game-mirrored hotkey, re-reads on a bindings change and says which slots are watched and which cannot be seen");
     const std::string eb = readText("src/d3d11/elite_binds.cpp");
-    check(has(eb, "return eliteBindsActionIn(\"HMDReset\", text, len, out);") && has(eb, "return eliteBindsActionDir(\"HMDReset\", dirC, out);") && !has(eb, "<HMDReset>\") != std::string::npos"),
-          "HMD reset's functions are the shared action parser with the name fixed (one parser, not a copy)");
+    check(has(eb, "return eliteBindsActionIn(\"HMDReset\", text, len, out);") && has(eb, "return eliteBindsActionDir(\"HMDReset\", dirC, out, game);") && !has(eb, "<HMDReset>\") != std::string::npos"),
+          "HMD reset's functions share the action parser and forward the stock-scheme folder (one parser, not a copy)");
     const std::string vsc = readText("src/d3d11/vscreen.cpp");
     const size_t gun = vsc.find("return srvTurretGunnerBegin(self, vs, kind, indexCount, srvTurretDrawEye(s));");
     const size_t watchOnly = vsc.find("if (srvTurretWatchOnly()) return false;");
