@@ -407,8 +407,8 @@ inline void run209(Check&& check) {
               "F209: the five hooks are in the hook table with their addresses and callbacks");
         check(hooks.find("tryShopHooks(sink);") != std::string::npos && hooks.find("shopFrameTick(sink);") != std::string::npos && hooks.find("shopFrameTick(sink);") < hooks.find("    updateGates();\n}\navh::Sink g_frameSink"),
               "F209: the frame boundary tries the shop hooks (while the native key is on) and re-reads the remembered objects every frame, before the gates are set");
-        check(cpp.find("g_f107Away.step(eyeNeckM, static_cast<double>(f30QpcUs(in.qpc)) * 1e-6, nativeOnFootShopOpen())") != std::string::npos,
-              "F209: the Animate post-hook gives F107 the shop signal with every call");
+        check(cpp.find("g_f107Away.step(eyeNeckM, static_cast<double>(f30QpcUs(in.qpc)) * 1e-6, nativeOnFootShopOpen(), &g_f107Events)") != std::string::npos,
+              "F209: the Animate post-hook gives F107 the shop signal and episode queue with every call");
         const std::string ini = slurp("edup.ini");
         const std::string gone[] = {std::string("livery") + "_game_view", std::string("loadout") + "_game_view"};   // the retired keys' names, built so that the source holds no trace of them
         check(ini.find(gone[0]) == std::string::npos && ini.find(gone[1]) == std::string::npos && cpp.find(gone[0]) == std::string::npos && cpp.find(gone[1]) == std::string::npos &&
