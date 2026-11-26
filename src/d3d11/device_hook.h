@@ -129,7 +129,7 @@ bool deviceHookHmdQuality(float* multiplier);
 bool deviceHookPanelSettings(float* hmd, float* ssaa, uint32_t* displayW, uint32_t* displayH);
 
 // The newest Options\Graphics\*.fxcfg's HMDRenderTargetMultiplier (*mult) and SSAAMultiplier (*ssaa), each 0 when absent,
-// and its file name (fileOut). The one reader eliteHmdMultiplier, for vr_ssaa_gate's startup line only. Not per frame.
+// and its file name (fileOut). Used by the VR SSAA gate and VR auto mip bias.
 bool deviceHookFxcfgMultipliers(float* mult, float* ssaa, char* fileOut, size_t fileLen);
 
 // The FSS mode latch: true while the player is (believed to be) in the Full
