@@ -2,6 +2,7 @@
 // CameraState memory. No game, resolver, installer or runtime is consulted.
 #include "../../src/d3d11/native_preview_camera.cpp"
 #include <array>
+#include <future>
 #include <memory>
 #include <thread>
 #include <limits>
@@ -574,18 +575,62 @@ static int testMain(int argc,char** argv) {
             auto qp=std::make_unique<Fixture>();Fixture& q=*qp;q.put<uint64_t>(0x3058,7);standard(0,q,true);
             check(q.engine.applied.load()==0&&q.engine.refused.load()==0,"a child that is not eligible is neither applied nor refused, and no snapshot is kept for it");
         }
-        // wait-free: a finalizer's and an eye stub's snapshots taken while the reader takes them
+        // The first snapshots cross threads before the writers start their
+        // bursts, which may legitimately skip every attempt on a busy slot.
         {
             auto fp=std::make_unique<Fixture>();Fixture& f=*fp;headlook(f,true);f.engine.diagWanted.store(true);
             Identity id;Refuse why=Refuse::kNone;run(f,id,why);
-            std::atomic<bool> go{false};std::atomic<unsigned> takenFinal{0},takenEye{0};
-            std::thread writers[2];
-            writers[0]=std::thread([&]{while(!go.load());for(unsigned i=0;i<2000;++i)f.engine.finalSeen(f.memory,id,FinalWhy::kApplied,nullptr,nullptr,nullptr);});
-            writers[1]=std::thread([&]{while(!go.load());Pose c=identityPose();for(unsigned i=0;i<2000;++i)f.engine.eyeSeen(&c,nullptr,false);});
-            std::thread reader([&]{while(!go.load());FinalSnap a;EyeSeen b;for(unsigned i=0;i<4000;++i){if(f.engine.takeFinal(a)&&a.headClass==1)takenFinal.fetch_add(1);if(f.engine.takeEyeSeen(b)&&b.head.read)takenEye.fetch_add(1);}});
-            go.store(true);for(auto& w:writers)w.join();reader.join();
-            {FinalSnap a;EyeSeen b;if(f.engine.takeFinal(a)&&a.headClass==1)takenFinal.fetch_add(1);if(f.engine.takeEyeSeen(b)&&b.head.read)takenEye.fetch_add(1);}   // what the reader missed is still there
-            check(takenFinal.load()>0&&takenEye.load()>0,"snapshots are taken without waiting while the reader takes them, and are consistent");
+            Pose poses[2]={identityPose(),identityPose()};
+            poses[0].v[12]=poses[0].v[13]=poses[0].v[14]=3;
+            poses[1].v[12]=poses[1].v[13]=poses[1].v[14]=7;
+            auto consistentTranslation=[](const Vec3& position,float value){
+                return position.read&&position.v[0]==value&&position.v[1]==value&&position.v[2]==value;
+            };
+            std::promise<void> finalPublished,eyePublished,firstTaken;
+            auto finalReady=finalPublished.get_future(),eyeReady=eyePublished.get_future();
+            const auto startBursts=firstTaken.get_future().share();
+            auto publishFinal=[&](const Pose& pose){
+                f.engine.finalSeen(f.memory,id,FinalWhy::kApplied,&pose,&pose,&pose);
+            };
+            std::thread finalWriter([&]{
+                publishFinal(poses[0]);
+                finalPublished.set_value();
+                startBursts.wait();
+                for(unsigned i=0;i<2000;++i)publishFinal(poses[i%2]);
+            });
+            std::thread eyeWriter([&]{
+                f.engine.eyeSeen(&poses[0],nullptr,false);
+                eyePublished.set_value();
+                startBursts.wait();
+                for(unsigned i=0;i<2000;++i)f.engine.eyeSeen(&poses[i%2],nullptr,false);
+            });
+            bool finalConsistent=true,eyeConsistent=true;
+            auto takeFinal=[&]{
+                FinalSnap snap;
+                if(!f.engine.takeFinal(snap))return false;
+                const float value=snap.out.v[0];
+                finalConsistent&=(value==3||value==7)&&snap.child==id.child&&snap.headClass==1&&snap.why==FinalWhy::kApplied&&
+                    consistentTranslation(snap.out,value)&&consistentTranslation(snap.head,value)&&consistentTranslation(snap.preview,value);
+                return true;
+            };
+            auto takeEye=[&]{
+                EyeSeen snap;
+                if(!f.engine.takeEyeSeen(snap))return false;
+                const float value=snap.head.v[0];
+                eyeConsistent&=(value==3||value==7)&&consistentTranslation(snap.head,value)&&!snap.replaced&&!snap.published;
+                return true;
+            };
+            finalReady.wait();
+            eyeReady.wait();
+            const bool firstFinalTaken=takeFinal(),firstEyeTaken=takeEye();
+            firstTaken.set_value();
+            for(unsigned i=0;i<4000;++i){takeFinal();takeEye();}
+            finalWriter.join();
+            eyeWriter.join();
+            takeFinal();
+            takeEye();
+            check(firstFinalTaken&&finalConsistent,"the reader takes a final snapshot from the producer and every final snapshot is consistent");
+            check(firstEyeTaken&&eyeConsistent,"the reader takes an eye snapshot from the producer and every eye snapshot is consistent");
         }
     }
     check(!edvr::previewInstall()&&edvr::layoutQueries==1&&edvr::unexpected==1,
