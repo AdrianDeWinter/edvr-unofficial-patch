@@ -257,6 +257,13 @@ std::atomic<bool> g_eager{false};
 std::atomic<bool> g_eagerOnFoot{false};
 // The SRV turret entry fade's request for the same cadence (journalWatchSetEagerStatusSrv), in the Scorpion.
 std::atomic<bool> g_eagerSrv{false};
+
+// Single owner for whether any consumer currently requests the 100 ms Status.json cadence (#181).
+bool eagerStatusWanted() noexcept {
+    return g_eager.load(std::memory_order_relaxed) ||
+           g_eagerOnFoot.load(std::memory_order_relaxed) ||
+           g_eagerSrv.load(std::memory_order_relaxed);
+}
 // F147: the native on-foot tick's request for the suit loadout's weapon slots (journalWatchSetLoadoutWanted). False until native on foot is first active, and always false in the
 // flat profile: nothing reads the loadout there, and the reader opens and walks the whole journal.
 std::atomic<bool> g_loadoutWanted{false};
@@ -772,7 +779,7 @@ bool pass(Session& s, char* buf) {
     // Status.json rides its own clock: ~1 KB reread, normally on the
     // journal's cadence, but at 100 ms when a consumer asked for low
     // latency.
-    const bool eager = g_eager.load(std::memory_order_relaxed) || g_eagerOnFoot.load(std::memory_order_relaxed) || g_eagerSrv.load(std::memory_order_relaxed);
+    const bool eager = eagerStatusWanted();
     if (dueMs(s.statusMs, cadence(eager ? kStatusEagerMs : kPollMs))) {
         s.statusMs = stampMs();
         PeriodicWorkScope timing(s.workStatus);
@@ -968,9 +975,8 @@ DWORD untilNextDue(const Session& s) {
         const uint64_t age = now - since;
         return age >= every ? 0 : every - age;
     };
-    // The SRV request is read here so the worker really wakes at 100 ms. (The on-foot request is not: it only sets pass()'s test, and the worker's sleep stays at the 500 ms the
-    // FSS latch's flag alone shortens. Left as it was; see the entry fade's doc entry.)
-    const bool eager = g_eager.load(std::memory_order_relaxed) || g_eagerSrv.load(std::memory_order_relaxed);
+    // Honour every eager Status.json consumer (general, on-foot, SRV) so the worker really wakes at 100 ms (#181).
+    const bool eager = eagerStatusWanted();
     const uint64_t status = left(s.statusMs, cadence(eager ? kStatusEagerMs : kPollMs));
     const uint64_t poll = left(s.pollMs, cadence(kPollMs));
     uint64_t ms = status < poll ? status : poll;

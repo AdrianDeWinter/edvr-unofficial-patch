@@ -1457,23 +1457,44 @@ int journalWorkerChecks() {
 
     // ------------------------------------------------------------ 4. eager Status reads
     {
-        const std::wstring d = makeDir(L"eager");
-        // A 5 s poll, and a 1 s eager Status read.
-        journalWatchTestSetCadencePercent(1000);
-        writeWhole(d + L"\\Journal.2026-09-29T100000.01.log", ev("LoadGame"));
-        writeWhole(d + L"\\Status.json", statusText(0x10, 1, 0));
-        journalWatchConfigure();
-        verify(tickUntil([] { return journalStatusSamples() >= 1; }, 10000),
-               "the first Status sample arrives");
-        const ULONGLONG t0 = GetTickCount64();
-        journalWatchSetEagerStatus(true);
-        verify(tickUntil([] { return journalStatusSamples() >= 2; }, 3500),
-               "asking for eager reads makes the next sample come at the eager period, not "
-               "the five-second poll: the request woke a worker asleep until its old due time");
-        printf("        (the second sample came %llu ms after the request; a 5 s poll would be 5000)\n",
-               static_cast<unsigned long long>(GetTickCount64() - t0));
-        journalWatchSetEagerStatus(false);
-        stopWorker();
+        struct EagerCase {
+            const char* name;
+            const wchar_t* dirName;
+            void (*setter)(bool);
+        };
+        const EagerCase cases[] = {
+            {"general", L"eager_gen", &journalWatchSetEagerStatus},
+            {"on-foot", L"eager_onfoot", &journalWatchSetEagerStatusOnFoot},
+            {"srv", L"eager_srv", &journalWatchSetEagerStatusSrv},
+        };
+        for (const EagerCase& c : cases) {
+            journalWatchSetEagerStatus(false);
+            journalWatchSetEagerStatusOnFoot(false);
+            journalWatchSetEagerStatusSrv(false);
+            const std::wstring d = makeDir(c.dirName);
+            // A 5 s poll, and a 1 s eager Status read.
+            journalWatchTestSetCadencePercent(1000);
+            writeWhole(d + L"\\Journal.2026-09-29T100000.01.log", ev("LoadGame"));
+            writeWhole(d + L"\\Status.json", statusText(0x10, 1, 0));
+            journalWatchConfigure();
+            verify(tickUntil([] { return journalStatusSamples() >= 1; }, 10000),
+                   "the first Status sample arrives");
+            const ULONGLONG t0 = GetTickCount64();
+            c.setter(true);
+            verify(tickUntil([] { return journalStatusSamples() >= 2; }, 3500),
+                   (std::string("eager ") + c.name +
+                    ": request wakes the worker for sample 2 ahead of the 5 s poll").c_str());
+            const ULONGLONG t1 = GetTickCount64();
+            // Sample 3 proves untilNextDue() sleeps at the 1 s eager cadence rather than falling back to 5 s (#181).
+            verify(tickUntil([] { return journalStatusSamples() >= 3; }, 3500),
+                   (std::string("eager ") + c.name +
+                    ": untilNextDue keeps sleeping at the 1 s eager cadence for sample 3, not 5 s (#181)").c_str());
+            printf("        (eager %s: sample 2 in %llu ms, sample 3 in +%llu ms; a 5 s poll would be 5000)\n",
+                   c.name, static_cast<unsigned long long>(t1 - t0),
+                   static_cast<unsigned long long>(GetTickCount64() - t1));
+            c.setter(false);
+            stopWorker();
+        }
     }
 
     // ------------------------------------------------------ 5. eight file errors retire it
