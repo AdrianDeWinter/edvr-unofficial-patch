@@ -2,6 +2,7 @@
 #include <atomic>
 #include <d3d11.h>
 #include <dxgi.h>
+#include "../common/runtime_profile.h"
 #include "flat_compute_readback.h"
 #include "flat_projection_scope.h"
 #include "flat_forward_light.h"
@@ -124,6 +125,12 @@ void flatRuntimeCreateBuffer(ID3D11Buffer*, const void* initialData);
 void flatRuntimeClearBindings();
 void flatRuntimeReplayQueryBegin(ID3D11DeviceContext*, ID3D11Asynchronous*);
 void flatRuntimeReplayQueryEnd(ID3D11DeviceContext*, ID3D11Asynchronous*);
+// Observe both ends while flat is in scope so a live switch preserves a
+// bracket on the owner context.
+template<class IsForeign, class Observe>
+inline void flatRuntimeObserveReplayQuery(IsForeign&& isForeign, Observe&& observe) {
+    if (runtimeScopeIncludesFlat() && !isForeign()) observe();
+}
 // F10-only retained DSV clear chronology; called before the real clear.
 void flatRuntimeWeaponFootprintClear(ID3D11DepthStencilView*, UINT clearFlags, UINT8 stencil);
 void flatRuntimeWeaponFootprintBeforePresent(IDXGISwapChain*, UINT flags);

@@ -5100,7 +5100,8 @@ void STDMETHODCALLTYPE hookedClearDsv(ID3D11DeviceContext* self,
 void STDMETHODCALLTYPE hookedBegin(ID3D11DeviceContext* self,
                                    ID3D11Asynchronous* async) {
     if (g_flatComputeInternal) { g_state->realBegin(self, async); return; }
-    if(runtimeFlatProfile())flatRuntimeReplayQueryBegin(self, async);
+    flatRuntimeObserveReplayQuery([&] { return foreignContext(self); },
+                                  [&] { flatRuntimeReplayQueryBegin(self, async); });
     gpuFrameCommandIfLive(self);
     if (gpuFrameInternal()) { g_state->realBegin(self, async); return; }
     if (drawCensusArmed()) {
@@ -5115,14 +5116,16 @@ void STDMETHODCALLTYPE hookedEnd(ID3D11DeviceContext* self,
     gpuFrameCommandIfLive(self);
     if (gpuFrameInternal()) {
         g_state->realEnd(self, async);
-        if(runtimeFlatProfile())flatRuntimeReplayQueryEnd(self, async);
+        flatRuntimeObserveReplayQuery([&] { return foreignContext(self); },
+                                      [&] { flatRuntimeReplayQueryEnd(self, async); });
         return;
     }
     if (drawCensusArmed()) {
         drawCensusQuery('E', async, foreignContext(self));
     }
     g_state->realEnd(self, async);
-    if(runtimeFlatProfile())flatRuntimeReplayQueryEnd(self, async);
+    flatRuntimeObserveReplayQuery([&] { return foreignContext(self); },
+                                  [&] { flatRuntimeReplayQueryEnd(self, async); });
 }
 
 // F100: native on foot's marker tee, called by every draw thunk below while the probe's machinery is live (owner context, the game's bindings).
