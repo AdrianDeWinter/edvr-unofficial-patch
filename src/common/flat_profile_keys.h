@@ -109,6 +109,9 @@ inline bool flatProfileReadsKey(const char* key) {
         // The flat jitter cycle's length (flat_runtime.cpp, FlatLivePhase::phaseCount; temporal_math.h). Developer tier, no flat panel
         // row. Unlisted, getInt answers 0 here whatever the file says, which the reader takes for out of range and reads as 8.
         std::strcmp(key, "advanced.temporal_aa_jitter_phases") == 0 ||
+        // Texture mip bias (device_hook.cpp): "auto" derives log2(SSAAMultiplier) in flat when temporal AA/upscaling is active,
+        // or a numeric bias override. Unlisted, getString answered "off" here and flat upscaling always got 0 mip bias (#253).
+        std::strcmp(key, "advanced.texture_lod_bias") == 0 ||
         // The shader dump (device_hook.cpp): every VS, PS and CS the game creates, to edvr_logs\shaders by hash. Flat's post
         // chain (bloom, tone, copy) is in no effects archive, so a running game is the only place its bytecode can be read.
         // Developer tier, no flat panel row. Unlisted, getBool answers false here whatever the file says.

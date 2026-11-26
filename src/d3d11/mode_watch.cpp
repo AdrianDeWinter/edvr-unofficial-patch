@@ -26,7 +26,7 @@
 #include "../common/native_render_settings.h"  // edvrQueryNativeRenderSizing: the runtime's live VR session
 #include "../common/runtime_profile.h"
 #include "cross_profile_cost.h"   // the live-session query's cost while flat runs, once a frame (log only)
-#include "../common/temporal_mode.h"          // temporalModeEnabled: the LOD bias default follows fix.temporal_aa
+#include "../common/texture_lod_bias.h"       // readTextureLodBiasKey: the LOD bias default follows fix.temporal_aa
 #include "../plugins/plugin_manager.h"      // PluginManager::onProfileSwitched: the add-ons suspend in a flat profile and resume in VR
 
 #include <windows.h>
@@ -389,14 +389,20 @@ const char* const kPatchedKeys[kPatchedCount] = {"advanced.texture_anisotropy", 
 // The values in effect, read once in modeWatchStart (after Config::init, before the device exists). Never updated: a switch changes the
 // file's values, not the game's.
 std::string g_inEffect[kPatchedCount];
+PatchedTextureLodBias g_inEffectLodBias;
 
 // The effective value of each patched setting under the active profile, with the defaults of the sites that read them
 // (device_hook.cpp's texture sampler, vscreen_res.cpp's width).
-void readPatched(std::string* out) {
+void readPatched(std::string* out, PatchedTextureLodBias* lodOut) {
     const Config& cfg = Config::get();
-    const bool temporal = temporalModeEnabled(cfg.getString("fix.temporal_aa", "off"));
+    const bool flat = runtimeFlatProfile();
     out[0] = cfg.getString(kPatchedKeys[0], "0");
-    out[1] = cfg.getString(kPatchedKeys[1], temporal ? "auto" : "0");
+    float hmdMult = 0.0f, ssaaMult = 0.0f;
+    (void)deviceHookFxcfgMultipliers(&hmdMult, &ssaaMult, nullptr, 0);
+    const PatchedTextureLodBias lod =
+        effectiveTextureLodBias(flat, readTextureLodBiasKey(cfg, flat), hmdMult, ssaaMult);
+    out[1] = lod.label;
+    if (lodOut) *lodOut = lod;
     out[2] = cfg.getString(kPatchedKeys[2], "auto");
 }
 
@@ -465,10 +471,13 @@ void commitPosted(uint64_t packed) {
     perfMonitorProfileSwitch();        // the monitor's frame interval restarts; the other profile's stretch is no long frame
 
     std::string now[kPatchedCount];
-    readPatched(now);
+    PatchedTextureLodBias nowLodBias;
+    readPatched(now, &nowLodBias);
     std::string kept;
     for (size_t i = 0; i < kPatchedCount; ++i) {
-        if (now[i] == g_inEffect[i]) continue;
+        const bool same = (i == 1) ? sameEffectiveTextureLodBias(nowLodBias, g_inEffectLodBias)
+                                   : (now[i] == g_inEffect[i]);
+        if (same) continue;
         if (!kept.empty()) kept += ", ";
         kept += kPatchedKeys[i];
         kept += "=" + g_inEffect[i] + " (new: " + now[i] + ")";
@@ -498,7 +507,7 @@ void commitPosted(uint64_t packed) {
 void modeWatchStart() {
     if (runtimeProfileValue() == RuntimeProfile::Invalid) return;
     if (g_startCalled.exchange(true)) return;
-    readPatched(g_inEffect);  // the launch's values: what device creation reads, before any switch can change the file's
+    readPatched(g_inEffect, &g_inEffectLodBias);  // the launch's values: what device creation reads, before any switch can change the file's
 
     const ModeRead launch = runtimeLaunchRead();
     if (launch.known) g_lastStereoValue.store(launch.value, std::memory_order_relaxed);   // F190
