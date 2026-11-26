@@ -17,13 +17,16 @@
 #include <windows.h>
 #include <psapi.h>
 #include <d3d11.h>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <process.h>
 #include <string>
 #include <vector>
 
+#include "../../src/common/elite_graphics_folder.h"
 #include "../openxr_native_test/present_device.h"
 
 namespace {
@@ -248,6 +251,53 @@ int runControl(const std::wstring& root) {
     return g_bad > 0 ? 1 : 2;
 }
 
+int runBias(const std::wstring& root) {
+    SetEnvironmentVariableW(L"LOCALAPPDATA", root.c_str());
+    SetEnvironmentVariableW(L"EDUP_LOG_DIR", (root + L"\\logs").c_str());
+    SetEnvironmentVariableW(L"EDUP_LOG_DIR_FOR", nullptr);
+    Proxy p;
+    edvr::openxr::PresentDevice d;
+    if (!p.load(root + L"\\d3d11.dll") || FAILED(d.initialize(p.module, D3D_DRIVER_TYPE_WARP, 64, 64))) {
+        report(false, "texture bias fixture creates a device through the proxy");
+        return 1;
+    }
+    report(p.read()[kProfile] == kFlat, "texture bias fixture starts flat");
+    D3D11_SAMPLER_DESC desc{};
+    desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    desc.AddressU = desc.AddressV = desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    desc.MaxAnisotropy = 1;
+    desc.MaxLOD = D3D11_FLOAT32_MAX;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler;
+    const HRESULT hr = d.device()->CreateSamplerState(&desc, sampler.GetAddressOf());
+    D3D11_SAMPLER_DESC actual{};
+    if (sampler) sampler->GetDesc(&actual);
+    report(SUCCEEDED(hr) && sampler && std::fabs(actual.MipLODBias - (-0.4150375f)) < 0.00001f,
+           "flat High at SSAA 0.75 creates a sampler with bias -0.4150375; got " + std::to_string(actual.MipLODBias));
+
+    // Deny file sharing between the post and Present, so a graphics read
+    // during the frame-boundary commit would fall back to zero.
+    p.post(1);
+    const std::wstring custom = edvr::eliteGraphicsFolderUnder(root) + L"\\Custom.4.4.fxcfg";
+    const HANDLE blocked = CreateFileW(custom.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    report(blocked != INVALID_HANDLE_VALUE, "Custom is unavailable to readers during the VR commit");
+    const bool vr = SUCCEEDED(d.present(0)) && p.read()[kProfile] == kVr;
+    if (blocked != INVALID_HANDLE_VALUE) CloseHandle(blocked);
+    const std::wstring logs = root + L"\\logs";
+    report(vr && waitFor([&] {
+        return countOf(readLogs(logs), "advanced.texture_lod_bias=auto(-0.42) (new: auto(-1.00))") == 1;
+    }, 2000), "switch to VR keeps the launch bias and reports HMD Quality 0.5 as the restart bias");
+
+    const std::wstring high = root + L"\\OptionDefaults\\High.fxcfg";
+    report(writeFile(high, "<SSAAMultiplier>0.625</SSAAMultiplier>"), "the active stock preset now uses SSAA 0.625");
+    bool framesOk = false;
+    const Snapshot flat = flipTo(p, d, false, framesOk);
+    report(framesOk && flat[kProfile] == kFlat && waitFor([&] {
+        return countOf(readLogs(logs), "advanced.texture_lod_bias=auto(-0.42) (new: auto(-0.68))") == 1;
+    }, 2000), "switch back to flat reports the active stock preset's changed SSAA");
+    return g_bad ? 1 : 0;
+}
+
 int runMain(const std::wstring& dllArg) {
     wchar_t full[MAX_PATH * 4]{};
     GetFullPathNameW(dllArg.c_str(), static_cast<DWORD>(sizeof(full) / sizeof(full[0])), full, nullptr);
@@ -371,6 +421,29 @@ int runMain(const std::wstring& dllArg) {
     report(rc == 1, "control: with the teardown skipped, flip to flat is detected (its teardown and menu checks fail; exit " +
                         std::to_string(static_cast<long long>(rc)) + ", want 1)");
 
+    // Run a copy of the exe so OptionDefaults sits beside it in scratch,
+    // exactly where the DLL would find it next to Elite.
+    const std::wstring biasRoot = base + L"\\bias";
+    const std::wstring biasExe = biasRoot + L"\\profile_switch_test.exe";
+    const std::wstring graphics = edvr::eliteGraphicsFolderUnder(biasRoot);
+    std::error_code ec;
+    const bool biasReady = prepare(biasRoot, dll) &&
+        std::filesystem::create_directories(graphics, ec) &&
+        CreateDirectoryW((biasRoot + L"\\OptionDefaults").c_str(), nullptr) &&
+        CopyFileW(self, biasExe.c_str(), TRUE) &&
+        writeFile(biasRoot + L"\\edup.ini", "[advanced]\r\ntexture_lod_bias = auto\r\n") &&
+        writeFile(biasRoot + L"\\edup-flat.ini", "[advanced]\r\ntexture_lod_bias = auto\r\n") &&
+        writeFile(graphics + L"\\Settings.xml", "<PresetName>High</PresetName><StereoscopicMode>0</StereoscopicMode>") &&
+        writeFile(graphics + L"\\Custom.4.4.fxcfg",
+                  "<HMDRenderTargetMultiplier>0.5</HMDRenderTargetMultiplier><SSAAMultiplier>0.25</SSAAMultiplier>") &&
+        writeFile(biasRoot + L"\\OptionDefaults\\High.fxcfg", "<SSAAMultiplier>0.75</SSAAMultiplier>");
+    report(biasReady, "texture bias fixture has stock High, a stale Custom file and both ED-UP profiles");
+    if (biasReady) {
+        const intptr_t biasRc = _wspawnl(_P_WAIT, biasExe.c_str(), biasExe.c_str(), L"--texture-bias", biasRoot.c_str(), nullptr);
+        report(biasRc == 0, "texture bias fixture passes at startup and through both live profile switches (exit " +
+                            std::to_string(static_cast<long long>(biasRc)) + ")");
+    }
+
     return finish();
 }
 
@@ -380,6 +453,7 @@ int wmain(int argc, wchar_t** argv) {
     // Unbuffered: a run that dies takes its buffered lines with it.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc == 3 && std::wcscmp(argv[1], L"--control") == 0) return runControl(argv[2]);
+    if (argc == 3 && std::wcscmp(argv[1], L"--texture-bias") == 0) return runBias(argv[2]);
     if (argc < 2 || !argv[1] || !*argv[1]) {
         std::printf("usage: profile_switch_test.exe <path to d3d11.dll>\n");
         return 2;

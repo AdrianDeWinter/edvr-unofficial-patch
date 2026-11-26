@@ -1,7 +1,8 @@
 // Pure texture mip-bias derivation for advanced.texture_lod_bias (VR and flat).
 //
 // In VR, Elite's render scale is <HMDRenderTargetMultiplier> in its newest
-// Options\Graphics\*.fxcfg. In flat, the render fraction is <SSAAMultiplier>.
+// Options\Graphics\*.fxcfg. In flat, the render fraction is
+// <SSAAMultiplier> in the active preset named by Settings.xml.
 // Keeping the parser and derivation header-only lets config_test prove both
 // profiles and missing-tag edge cases without spinning up a D3D11 device.
 #pragma once
@@ -37,6 +38,10 @@ struct TextureLodBiasResult {
     char why[256] = {};
 };
 
+inline bool isAutomaticTextureLodBias(const std::string& biasKey) {
+    return _stricmp(biasKey.c_str(), "auto") == 0;
+}
+
 // Derives the sampler mip bias and explanatory log fragment from the configured
 // biasKey ("auto" or a numeric string) and the multipliers read from .fxcfg.
 inline TextureLodBiasResult resolveTextureLodBias(bool flatProfile, const std::string& biasKey,
@@ -44,7 +49,7 @@ inline TextureLodBiasResult resolveTextureLodBias(bool flatProfile, const std::s
                                                   const char* presetFile) {
     TextureLodBiasResult out;
     const char* fileLabel = (presetFile && presetFile[0]) ? presetFile : "its graphics preset";
-    if (_stricmp(biasKey.c_str(), "auto") == 0) {
+    if (isAutomaticTextureLodBias(biasKey)) {
         const float active = flatProfile ? ssaaMult : hmdMult;
         if (active > 0.0f) {
             out.bias = std::log2(active);
@@ -54,9 +59,9 @@ inline TextureLodBiasResult resolveTextureLodBias(bool flatProfile, const std::s
                 std::snprintf(
                     out.why, sizeof(out.why),
                     "auto: Elite renders at %.3f of the output size "
-                    "(SSAAMultiplier in %s; its HMDRenderTargetMultiplier is %.3f), and "
+                    "(SSAAMultiplier in %s), and "
                     "log2 of that is the bias the mips want",
-                    static_cast<double>(ssaaMult), fileLabel, static_cast<double>(hmdMult));
+                    static_cast<double>(ssaaMult), fileLabel);
             } else {
                 std::snprintf(
                     out.why, sizeof(out.why),
@@ -84,7 +89,6 @@ inline TextureLodBiasResult resolveTextureLodBias(bool flatProfile, const std::s
 struct PatchedTextureLodBias {
     std::string label;
     float bias = 0.0f;
-    bool resolved = false;
 };
 
 inline PatchedTextureLodBias effectiveTextureLodBias(bool flatProfile, const std::string& biasKey,
@@ -92,16 +96,13 @@ inline PatchedTextureLodBias effectiveTextureLodBias(bool flatProfile, const std
     PatchedTextureLodBias out;
     const TextureLodBiasResult r = resolveTextureLodBias(flatProfile, biasKey, hmdMult, ssaaMult, nullptr);
     out.bias = r.bias;
-    const bool isAuto = _stricmp(biasKey.c_str(), "auto") == 0;
-    if (isAuto && r.autoMissing) {
+    if (r.autoMissing) {
         out.label = "auto";
-        out.resolved = false;
         return out;
     }
-    out.resolved = true;
     const double clean = std::fabs(static_cast<double>(r.bias)) < 0.0005 ? 0.0 : static_cast<double>(r.bias);
     char buf[32];
-    if (isAuto) {
+    if (r.isAuto) {
         std::snprintf(buf, sizeof(buf), "auto(%.2f)", clean);
         out.label = buf;
     } else {
@@ -122,8 +123,9 @@ inline PatchedTextureLodBias effectiveTextureLodBias(bool flatProfile, const std
 }
 
 inline bool sameEffectiveTextureLodBias(const PatchedTextureLodBias& a, const PatchedTextureLodBias& b) {
-    if (a.resolved && b.resolved) return std::fabs(a.bias - b.bias) < 0.005f;
-    return a.resolved == b.resolved && a.label == b.label;
+    // A failed auto lookup applies zero. The restart warning is about a change
+    // to the sampler bias, so that fallback compares equal to explicit zero.
+    return std::fabs(a.bias - b.bias) < 0.005f;
 }
 
 }  // namespace edvr

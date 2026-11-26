@@ -3188,7 +3188,7 @@ int main(int argc, char** argv) {
                     !edvr::sameEffectiveTextureLodBias(vrAuto, flatAuto) &&
                     edvr::sameEffectiveTextureLodBias(flatAuto, flatZero) &&
                     edvr::sameEffectiveTextureLodBias(vrExplicitA, vrExplicitB) &&
-                    !edvr::sameEffectiveTextureLodBias(vrMissing, flatZero) &&
+                    edvr::sameEffectiveTextureLodBias(vrMissing, flatZero) &&
                     edvr::sameEffectiveTextureLodBias(vrMissing, flatMissing)) {
                     ok("effectiveTextureLodBias compares resolved VR/flat auto biases and emits whitespace-free KEPT_ITEM labels");
                 } else {
