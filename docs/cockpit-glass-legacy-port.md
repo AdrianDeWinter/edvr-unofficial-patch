@@ -2,13 +2,13 @@
 
 ## Status
 
+Issue #188 depth follow-up, open: section 7 measured only intact glass (GREATER_EQUAL, depth writes off).
+ED-UP skips the dirt overlay after a depth-writing LESS, GREATER or NOT_EQUAL draw because replay cannot distinguish newly written pixels from those rejected at equal depth.
+Capture the quality-3 ice and condensation depth function, effective depth write mask and stencil state in flat and VR to determine whether this case occurs in Elite.
+
 Open 2026-11-05: in flat the dirt goes after a velocity change in normal space, until a reload. Cause measured: t12 is emptied after the swap's bind. Fix FLOWN OK in flat 2026-11-05 on `ddb725c0`, merged to main that day, ran in VR. The dirt's smear under the upscaler: FLOWN OK in flat, merged: under legacy the whole canopy draw goes into the post-upscale weapons layer ("The dirt layer", last section). VR was reported smearing 2026-11-06 (no log); the same route for VR FLOWN OK by eye on `d006d0e3`, on main `82ae83dd` ("The dirt layer in VR", end of the doc). Open 2026-11-06: station and hangar lights do not light the dirt, because neither this shader nor the game's reads local lights; the game's point and spot lists hold the pad's lights at the glass's depths, FLOWN on `ea6efed8`; an unshadowed spot light loop is the Visual option `visual.cockpit_glass_lights = off | station`, shipped off, `station` FLOWN OK by eye in flat and VR ("Station lights", end of the doc). The canopy draws at the render's size and is added into the layer when the layer is at least 1.5 times the render: half route FLOWN in VR on `ceeb4414`, about 0.22 ms a frame against about 1.1 to 1.5 ms for full, "half looks fine". Its final form has no key and has not itself flown. See "Clean glass after a supercruise exit", last section.
 
-State 2026-11-04: **FLOWN ON STEAM FLAT, NOT FLOWN IN VR, MERGING TO MAIN FOR USER FEEDBACK.** `visual.cockpit_glass = odyssey | legacy` (default `odyssey`, the game
-unchanged), flat and VR, Visual tab. Branch `claude/cockpit-glass-shader-port-1852e3`. With `legacy`, EDVR's
-own pixel shader (`cockpit_glass_shader.h`) is handed to the real `PSSetShader` in place of the game's intact
-quality-3 canopy shader `4E4FF61E8A08FC7E`, at bind time. What was built, the constants chosen and what the
-flight must check: section 8.
+`visual.cockpit_glass = odyssey | legacy` (default `odyssey`) is in the Visual tab for flat and VR. Section 8 records the first Steam flat flight and the intact quality-3 swap.
 
 Settled offline (sections 1 to 3):
 

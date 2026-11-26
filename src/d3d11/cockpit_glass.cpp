@@ -68,8 +68,9 @@ struct OverlayDsEntry {
 constexpr size_t kOverlayDsCacheMax = 8;
 std::vector<OverlayDsEntry> g_overlayDsCache;
 
-// The streak texture is generated off the render thread (about 50 ms on the build machine): started when the key turns on, picked up when ready. Until then the
-// replacement draws without dirt (an unbound t12 reads 0), never stock. Leaked, so a thread that outlives everything finds its job.
+// The streak texture is generated off the render thread (about 50 ms on the build machine): started when the key turns on, picked up when ready.
+// The intact swap uses a zero texture while the worker runs. If either required input cannot be created, the intact canopy uses its stock shader.
+// The job is leaked, so a thread that outlives everything finds it.
 struct StreakJob {
     std::atomic<int> state{0};   // 0 not started, 1 running, 2 ready, 3 failed
     std::vector<std::vector<uint8_t>> mips;
@@ -332,7 +333,7 @@ void uploadLevel(ID3D11DeviceContext* ctx) {
 }
 
 // The dirt level's block for this device, made the first time it is wanted and brought up to date with visual.cockpit_glass_dirt when the player has moved it (an upload
-// only on a change). Null when the device refused it; the shaders then read an unbound b13, which is no dirt, never the game's own glass. This is the block for a SCENE bind (the swap,
+// only on a change). Null when the device refused it; callers keep stock glass in that case. This is the block for a SCENE bind (the swap,
 // the overlay): the pixel map is the identity, whatever a layer bracket left, since a scene draw's SV_Position is the game's own.
 ID3D11Buffer* levelBuffer(ID3D11DeviceContext* ctx) {
     g_levelWanted.dirt = dirtLevelOf(g_dirtPercent);
@@ -689,7 +690,8 @@ bool readBoundDepthStencilDesc(ID3D11DeviceContext* ctx, ID3D11DepthStencilState
     });
 }
 
-bool cockpitGlassOverlayBegin(ID3D11DeviceContext* ctx) {
+bool cockpitGlassOverlayBegin(ID3D11DeviceContext* ctx, bool baseDrawIssued) {
+    if (!baseDrawIssued) return false;
     const Overlay which = overlayFor(bindingShaderHash(BindSlot::Ps));   // the game's own pixel shader: the shadow records it, never the replacement
     if (which == Overlay::None) return false;
     if (!ensureDevice(ctx)) return false;
@@ -744,6 +746,11 @@ bool cockpitGlassOverlayBegin(ID3D11DeviceContext* ctx) {
         }
         return false;
     }
+    ID3D11Buffer* level = levelBuffer(ctx);
+    if (!level) {
+        releaseGuarded(curDs, "cockpitGlass.overlay.ds.release");
+        return false;
+    }
     ID3D11DepthStencilState* overlayDs = nullptr;
     if (dsRule.needsClone) {
         dsDesc.DepthFunc = static_cast<D3D11_COMPARISON_FUNC>(dsRule.depthFunc);
@@ -758,7 +765,6 @@ bool cockpitGlassOverlayBegin(ID3D11DeviceContext* ctx) {
         releaseGuarded(curDs, "cockpitGlass.overlay.ds.release");
     }
     ID3D11ShaderResourceView* srv = streakSrv(ctx);
-    ID3D11Buffer* level = levelBuffer(ctx);
     bool saved = false;
     const bool ran = guarded("cockpitGlass.overlay.begin", [&] {
         ctx->PSGetShader(&g_savedPs, nullptr, nullptr);

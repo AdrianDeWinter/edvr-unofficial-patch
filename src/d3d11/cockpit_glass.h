@@ -48,17 +48,17 @@ void cockpitGlassClearLayerMap(ID3D11DeviceContext* ctx);
 // (flat, after a velocity change in normal space, every canopy draw until a reload: docs\cockpit-glass-legacy-port.md, "Clean glass after a supercruise exit"), which leaves the
 // legacy shader with no dirt. While the swap's inputs are bound this puts them back, and keeps what it found for the hand-back. One test and out at any other draw.
 void cockpitGlassBeforeDraw(ID3D11DeviceContext* ctx);
-// Called by vscreen.cpp's owner-context PSSetShaderResources / PSSetConstantBuffers hooks while
-// cockpitGlassLegacyLive() so an explicit game clear to null on t12/b13 is never mistaken for an
-// untouched EDVR binding (#188).
+// The owner-context PSSetShaderResources hook records t12 writes in both profiles. The
+// PSSetConstantBuffers observer records b13 writes in the flat profile. Both slots also
+// check the actual object's identity before restoring a saved binding (#188).
 void cockpitGlassNotePsSrvWrite(UINT start, UINT n);
 void cockpitGlassNotePsCbWrite(UINT start, UINT n);
 
 // The ice and condensation draws (docs\cockpit-glass-legacy-port.md section 11). The game draws the canopy with its own ice or condensation shader while they show, so the replacement
-// is not bound and the legacy dirt would vanish. While `legacy`, the draw thunks (owner context) call cockpitGlassOverlayBegin() after the game's draw: when the bound pixel shader is the
-// quality-3 ice or condensation one it binds EDVR's overlay pixel shader, a blend of colour ONE + ONE (alpha untouched) and the streak texture, and returns true; the thunk then issues
-// the same draw again and calls cockpitGlassOverlayEnd(), which puts the game's pixel shader, blend state, blend factor, sample mask and t12 back. False means nothing was changed.
-bool cockpitGlassOverlayBegin(ID3D11DeviceContext* ctx);
+// is not bound and the legacy dirt would vanish. While `legacy`, the owner-context thunks pass whether the game's draw issued. For an issued quality-3 ice or condensation draw,
+// Begin can bind the additive overlay and return true. The thunk then issues the same draw and calls End, which restores the game's pixel shader, blend state, blend factor, sample
+// mask, depth-stencil state and stencil reference, t12 and b13. A false result leaves the game's bindings in place.
+bool cockpitGlassOverlayBegin(ID3D11DeviceContext* ctx, bool baseDrawIssued);
 void cockpitGlassOverlayEnd(ID3D11DeviceContext* ctx);
 
 // Once a frame from vScreenFrameBoundary (the owner context): reads the key (live), gives back t12 and prints the 30 s window line while it is on.

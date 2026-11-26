@@ -9,9 +9,13 @@
 //   - the ice and condensation overlays: the same dirt light, premultiplied, alpha written 0, from their own vertex shaders' mask orders and texture slots.
 // Run with --dump <file> to write the generated streak texture as raw bytes (512 x 512). Output under obj\ and System32's d3d11.
 #include "../../src/d3d11/cockpit_glass_core.h"
+#include "../../src/d3d11/cockpit_glass.h"
+#include "../../src/d3d11/binding_shadow.h"
 #include "../../src/d3d11/cockpit_glass_shader.h"
 #include "../../src/d3d11/cockpit_glass_streaks.h"
 #include "../../src/d3d11/ui_layer_math.h"   // the canopy pair's hashes the UI layer names, held equal to this port's
+#include "../../src/common/config.h"
+#include "../../src/common/vtable_hook.h"
 #include "temporal_shader_bytecode.h"
 
 #include <windows.h>
@@ -33,6 +37,18 @@
 
 using Microsoft::WRL::ComPtr;
 namespace cg = edvr::cockpit_glass;
+namespace glass_test { extern ID3D11PixelShader* overlayPixelShader; }
+
+static HRESULT STDMETHODCALLTYPE refuseBuffer(ID3D11Device*, const D3D11_BUFFER_DESC*,
+                                               const D3D11_SUBRESOURCE_DATA*, ID3D11Buffer** buffer) {
+    *buffer = nullptr;
+    return E_OUTOFMEMORY;
+}
+
+static void setLegacy(ID3D11DeviceContext* ctx, bool enabled) {
+    edvr::Config::get().set("visual.cockpit_glass", enabled ? "legacy" : "odyssey");
+    edvr::cockpitGlassFrameBoundary(ctx);
+}
 
 static int g_failures = 0;
 static void check(bool ok, const char* what) {
@@ -1238,22 +1254,52 @@ static void testShader() {
         ComPtr<ID3D11Buffer> seedCb;
         hr(dev->CreateBuffer(&seedCbDesc, nullptr, &seedCb), "#188 seedCb");
 
+        setLegacy(ctx, true);
+        const auto bindIntact = [&] {
+            return edvr::cockpitGlassPsFor(ctx, ps1.Get(), cg::kReplacedPsHash);
+        };
+        ID3D11Buffer* gameB13 = seedCb.Get();
+        ctx->PSSetConstantBuffers(13, 1, &gameB13);
+        {
+            edvr::VTableHook deviceHook;
+            void* original = nullptr;
+            constexpr size_t kCreateBufferSlot = 3; // first ID3D11Device method after IUnknown
+            check(deviceHook.attach(dev) &&
+                      deviceHook.replace(kCreateBufferSlot, reinterpret_cast<void*>(&refuseBuffer), &original) &&
+                      deviceHook.commit(),
+                  "install device CreateBuffer refusal for the legacy level block");
+            check(bindIntact() == ps1.Get() && !edvr::cockpitGlassSwapActive(),
+                  "refused level buffer leaves stock canopy selected");
+        }
+        check(bindIntact() == ps1.Get(), "refused level buffer stays stock until re-enable");
+        ComPtr<ID3D11Buffer> restoredCb;
+        ctx->PSGetConstantBuffers(13, 1, &restoredCb);
+        check(restoredCb.Get() == gameB13, "refused level buffer leaves the game's b13 bound");
+
+        glass_test::overlayPixelShader = ps2.Get();
+        edvr::bindingSetShader(edvr::BindSlot::Ps, ps1.Get(), cg::kIcePsQ3Hash);
+        const bool refusedOverlay = edvr::cockpitGlassOverlayBegin(ctx, true);
+        check(!refusedOverlay, "refused level buffer leaves stock ice selected without an overlay");
+        if (refusedOverlay) edvr::cockpitGlassOverlayEnd(ctx);
+        glass_test::overlayPixelShader = nullptr;
+
+        setLegacy(ctx, false);
+        setLegacy(ctx, true);
+        ID3D11PixelShader* afterRetry = bindIntact();
+        ComPtr<ID3D11Buffer> replacementCb;
+        ctx->PSGetConstantBuffers(13, 1, &replacementCb);
+        check(afterRetry != ps1.Get() && edvr::cockpitGlassSwapActive() && replacementCb && replacementCb.Get() != gameB13,
+              "off/on retries the refused level buffer and enables the legacy canopy");
+        edvr::cockpitGlassPsFor(ctx, ps1.Get(), cg::kIcePsQ3Hash);
+
         auto runMixed = [&](D3D11_COMPARISON_FUNC gameFunc, float leftDepth, float rightDepth,
                             bool depthWrites, float* leftR, float* rightR) {
             D3D11_DEPTH_STENCIL_DESC gdd{};
             gdd.DepthEnable = TRUE;
             gdd.DepthWriteMask = depthWrites ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
             gdd.DepthFunc = gameFunc;
-            ComPtr<ID3D11DepthStencilState> gameDs, ovDs;
+            ComPtr<ID3D11DepthStencilState> gameDs;
             hr(dev->CreateDepthStencilState(&gdd, &gameDs), "#188 gameDs");
-            const cg::OverlayDepthRule r =
-                cg::deriveOverlayDepthRule(true, depthWrites, static_cast<uint32_t>(gameFunc), false, 0);
-            if (!r.skipOverlay && r.needsClone) {
-                D3D11_DEPTH_STENCIL_DESC odd = gdd;
-                odd.DepthFunc = static_cast<D3D11_COMPARISON_FUNC>(r.depthFunc);
-                if (r.zeroDepthWrite) odd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-                hr(dev->CreateDepthStencilState(&odd, &ovDs), "#188 ovDs");
-            }
             const float z[4] = {0, 0, 0, 0};
             const float one[4] = {1, 1, 1, 1};
             const float depths[4] = {leftDepth, rightDepth, 0.0f, 0.0f};
@@ -1280,12 +1326,16 @@ static void testShader() {
             ctx->OMSetBlendState(nullptr, one, 0xFFFFFFFFu);
             ctx->OMSetDepthStencilState(gameDs.Get(), 0);
             ctx->Draw(3, 0);
-            // Overlay replay at identical z=0.5 unless deriveOverlayDepthRule skips it.
-            if (!r.skipOverlay) {
-                ctx->PSSetShader(ps2.Get(), nullptr, 0);
-                ctx->OMSetBlendState(addBlend.Get(), one, 0xFFFFFFFFu);
-                ctx->OMSetDepthStencilState(r.needsClone ? ovDs.Get() : gameDs.Get(), 0);
+            const bool replayed = edvr::cockpitGlassOverlayBegin(ctx, true);
+            if (replayed) {
+                ComPtr<ID3D11DepthStencilState> replayDs;
+                ctx->OMGetDepthStencilState(&replayDs, nullptr);
+                D3D11_DEPTH_STENCIL_DESC replayDesc{};
+                if (replayDs) replayDs->GetDesc(&replayDesc);
+                check(replayDs && replayDesc.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ZERO && replayDesc.DepthFunc == gameFunc,
+                      "#188 WARP depth replay retains the game's depth test with writes disabled");
                 ctx->Draw(3, 0);
+                edvr::cockpitGlassOverlayEnd(ctx);
             }
             ctx->OMSetBlendState(nullptr, one, 0xFFFFFFFFu);
             ctx->OMSetDepthStencilState(nullptr, 0);
@@ -1297,19 +1347,20 @@ static void testShader() {
             *leftR = halfToFloat(row[4]);    // pixel x=1
             *rightR = halfToFloat(row[12]);  // pixel x=3
             ctx->Unmap(stg.Get(), 0);
+            return replayed;
         };
 
         float leftVal = 0, rightVal = 0;
         // Mixed-depth strict depth-writing draws: left passes, right is already at z=0.5 (rejected by stock draw).
         // Replay is skipped so right receives ZERO dirt instead of being tinted via widened EQUAL.
-        runMixed(D3D11_COMPARISON_LESS, 1.0f, 0.5f, true, &leftVal, &rightVal);
-        check(closeTo(leftVal, 0.25f, 0.01f) && closeTo(rightVal, 0.0f, 0.001f),
+        const bool lessReplayed = runMixed(D3D11_COMPARISON_LESS, 1.0f, 0.5f, true, &leftVal, &rightVal);
+        check(!lessReplayed && closeTo(leftVal, 0.25f, 0.01f) && closeTo(rightVal, 0.0f, 0.001f),
               "#188(d) WARP mixed-depth: depth-writing strict LESS skips replay so equal-depth rejected half stays 0.0");
-        runMixed(D3D11_COMPARISON_GREATER, 0.0f, 0.5f, true, &leftVal, &rightVal);
-        check(closeTo(leftVal, 0.25f, 0.01f) && closeTo(rightVal, 0.0f, 0.001f),
+        const bool greaterReplayed = runMixed(D3D11_COMPARISON_GREATER, 0.0f, 0.5f, true, &leftVal, &rightVal);
+        check(!greaterReplayed && closeTo(leftVal, 0.25f, 0.01f) && closeTo(rightVal, 0.0f, 0.001f),
               "#188(d) WARP mixed-depth: depth-writing strict GREATER skips replay so equal-depth rejected half stays 0.0");
-        runMixed(D3D11_COMPARISON_NOT_EQUAL, 1.0f, 0.5f, true, &leftVal, &rightVal);
-        check(closeTo(leftVal, 0.25f, 0.01f) && closeTo(rightVal, 0.0f, 0.001f),
+        const bool notEqualReplayed = runMixed(D3D11_COMPARISON_NOT_EQUAL, 1.0f, 0.5f, true, &leftVal, &rightVal);
+        check(!notEqualReplayed && closeTo(leftVal, 0.25f, 0.01f) && closeTo(rightVal, 0.0f, 0.001f),
               "#188(d) WARP mixed-depth: depth-writing NOT_EQUAL skips replay so equal-depth rejected half stays 0.0");
 
         // Mixed-depth inclusive depth-writing draws (standard-Z LESS_EQUAL and reverse-Z GREATER_EQUAL):
@@ -1350,8 +1401,6 @@ static void testShader() {
             gdd.DepthFunc = gameFunc;
             ComPtr<ID3D11DepthStencilState> gameDs;
             hr(dev->CreateDepthStencilState(&gdd, &gameDs), "#188 dsvGameDs");
-            const cg::OverlayDepthRule rule = cg::deriveOverlayDepthRuleForDsv(
-                bindDsv, readOnlyDsv, false, true, true, static_cast<uint32_t>(gameFunc), false, 0);
             const float z[4] = {0, 0, 0, 0};
             const float one[4] = {1, 1, 1, 1};
             const float depths[4] = {leftDepth, rightDepth, 0.0f, 0.0f};
@@ -1379,11 +1428,9 @@ static void testShader() {
             ctx->OMSetBlendState(nullptr, one, 0xFFFFFFFFu);
             ctx->OMSetDepthStencilState(gameDs.Get(), 0);
             ctx->Draw(3, 0);
-            if (!rule.skipOverlay) {
-                ctx->PSSetShader(ps2.Get(), nullptr, 0);
-                ctx->OMSetBlendState(addBlend.Get(), one, 0xFFFFFFFFu);
-                ctx->OMSetDepthStencilState(gameDs.Get(), 0);
+            if (edvr::cockpitGlassOverlayBegin(ctx, true)) {
                 ctx->Draw(3, 0);
+                edvr::cockpitGlassOverlayEnd(ctx);
             }
             ctx->OMSetBlendState(nullptr, one, 0xFFFFFFFFu);
             ctx->OMSetDepthStencilState(nullptr, 0);
@@ -1436,32 +1483,28 @@ static void testShader() {
         ComPtr<ID3D11DepthStencilState> seedStDs;
         hr(dev->CreateDepthStencilState(&seedStDesc, &seedStDs), "#188 seedStDs");
 
+        const uint8_t streak = 128;
+        D3D11_TEXTURE2D_DESC gameTexDesc{};
+        gameTexDesc.Width = gameTexDesc.Height = gameTexDesc.ArraySize = gameTexDesc.MipLevels = 1;
+        gameTexDesc.Format = DXGI_FORMAT_R8_UNORM;
+        gameTexDesc.SampleDesc.Count = 1;
+        gameTexDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        const D3D11_SUBRESOURCE_DATA texData{&streak, 1, 0};
+        ComPtr<ID3D11Texture2D> gameTexture;
+        ComPtr<ID3D11ShaderResourceView> gameView;
+        hr(dev->CreateTexture2D(&gameTexDesc, &texData, &gameTexture), "#188 game t12 texture");
+        hr(dev->CreateShaderResourceView(gameTexture.Get(), nullptr, &gameView), "#188 game t12 view");
+        ID3D11ShaderResourceView* gameT12 = gameView.Get();
+
+        struct StencilReplay {
+            bool issued;
+            UINT writeMask;
+        };
         auto runStencil = [&](uint8_t leftStencilVal, UINT drawRef, const D3D11_DEPTH_STENCIL_DESC& gdd,
-                              float* outL, float* outR) {
-            ComPtr<ID3D11DepthStencilState> gameDs, ovDs;
+                              float* outL, float* outR, bool baseDrawIssued = true,
+                              ID3D11DepthStencilState* stencilWitness = nullptr) {
+            ComPtr<ID3D11DepthStencilState> gameDs;
             hr(dev->CreateDepthStencilState(&gdd, &gameDs), "#188 stGameDs");
-            const cg::StencilFaceRule fr{
-                static_cast<uint32_t>(gdd.FrontFace.StencilFailOp),
-                static_cast<uint32_t>(gdd.FrontFace.StencilDepthFailOp),
-                static_cast<uint32_t>(gdd.FrontFace.StencilPassOp),
-                static_cast<uint32_t>(gdd.FrontFace.StencilFunc),
-            };
-            const cg::StencilFaceRule bk{
-                static_cast<uint32_t>(gdd.BackFace.StencilFailOp),
-                static_cast<uint32_t>(gdd.BackFace.StencilDepthFailOp),
-                static_cast<uint32_t>(gdd.BackFace.StencilPassOp),
-                static_cast<uint32_t>(gdd.BackFace.StencilFunc),
-            };
-            const cg::OverlayDepthRule r = cg::deriveOverlayDepthRuleForDsv(
-                true, false, false, gdd.DepthEnable != FALSE, gdd.DepthWriteMask != D3D11_DEPTH_WRITE_MASK_ZERO,
-                static_cast<uint32_t>(gdd.DepthFunc), gdd.StencilEnable != FALSE, gdd.StencilWriteMask,
-                true, gdd.StencilReadMask, fr, bk);
-            if (!r.skipOverlay && r.needsClone) {
-                D3D11_DEPTH_STENCIL_DESC odd = gdd;
-                if (r.zeroDepthWrite) odd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-                if (r.zeroStencilWrite) odd.StencilWriteMask = 0;
-                hr(dev->CreateDepthStencilState(&odd, &ovDs), "#188 stOvDs");
-            }
             const float z[4] = {0, 0, 0, 0};
             const float one[4] = {1, 1, 1, 1};
             ctx->ClearRenderTargetView(rtv.Get(), z);
@@ -1479,13 +1522,43 @@ static void testShader() {
             ID3D11RenderTargetView* rtvs[1] = {rtv.Get()};
             ctx->OMSetRenderTargets(1, rtvs, sdsv.Get());
             ctx->PSSetShader(ps1.Get(), nullptr, 0);
-            ctx->OMSetBlendState(nullptr, one, 0xFFFFFFFFu);
+            ctx->PSSetShaderResources(12, 1, &gameT12);
+            ctx->PSSetConstantBuffers(13, 1, &gameB13);
+            const float gameFactor[4] = {0.125f, 0.25f, 0.5f, 0.75f};
+            constexpr UINT kGameMask = 0x55555555u;
+            ctx->OMSetBlendState(nullptr, gameFactor, kGameMask);
             ctx->OMSetDepthStencilState(gameDs.Get(), drawRef);
-            ctx->Draw(3, 0);
-            if (!r.skipOverlay) {
-                ctx->PSSetShader(ps2.Get(), nullptr, 0);
+            if (baseDrawIssued) ctx->Draw(3, 0);
+            const bool overlayIssued = edvr::cockpitGlassOverlayBegin(ctx, baseDrawIssued);
+            ComPtr<ID3D11DepthStencilState> replayDs;
+            UINT replayRef = 0;
+            ctx->OMGetDepthStencilState(&replayDs, &replayRef);
+            if (overlayIssued) {
+                check(replayRef == drawRef, "overlay reuses the game's stencil reference");
+                ctx->Draw(3, 0);
+                edvr::cockpitGlassOverlayEnd(ctx);
+            }
+            ComPtr<ID3D11DepthStencilState> finalDs;
+            ComPtr<ID3D11PixelShader> finalPs;
+            ComPtr<ID3D11ShaderResourceView> finalT12;
+            ComPtr<ID3D11Buffer> finalB13;
+            ComPtr<ID3D11BlendState> finalBlend;
+            UINT finalRef = 0, finalMask = 0;
+            float finalFactor[4]{};
+            ctx->OMGetDepthStencilState(&finalDs, &finalRef);
+            ctx->OMGetBlendState(&finalBlend, finalFactor, &finalMask);
+            ctx->PSGetShader(&finalPs, nullptr, nullptr);
+            ctx->PSGetShaderResources(12, 1, &finalT12);
+            ctx->PSGetConstantBuffers(13, 1, &finalB13);
+            check(finalDs.Get() == gameDs.Get() && finalRef == drawRef, "overlay preserves game depth-stencil state and reference");
+            check(finalPs.Get() == ps1.Get() && finalT12.Get() == gameT12 && finalB13.Get() == gameB13,
+                  "overlay preserves game pixel shader, t12 and b13");
+            check(!finalBlend && std::equal(std::begin(gameFactor), std::end(gameFactor), finalFactor) && finalMask == kGameMask,
+                  "overlay preserves game blend state, factor and sample mask");
+            if (stencilWitness) {
+                // Add 0.25 only if the base pass incremented stencil from 0 to 1 exactly once.
                 ctx->OMSetBlendState(addBlend.Get(), one, 0xFFFFFFFFu);
-                ctx->OMSetDepthStencilState(r.needsClone ? ovDs.Get() : gameDs.Get(), drawRef);
+                ctx->OMSetDepthStencilState(stencilWitness, 1);
                 ctx->Draw(3, 0);
             }
             ctx->OMSetBlendState(nullptr, one, 0xFFFFFFFFu);
@@ -1498,7 +1571,10 @@ static void testShader() {
             *outL = halfToFloat(row[4]);
             *outR = halfToFloat(row[12]);
             ctx->Unmap(stg.Get(), 0);
-            return r;
+            D3D11_DEPTH_STENCIL_DESC replayDesc{};
+            if (replayDs) replayDs->GetDesc(&replayDesc);
+            check(replayDs != nullptr, "the overlay keeps a stencil state bound");
+            return StencilReplay{overlayIssued, replayDesc.StencilWriteMask};
         };
 
         D3D11_DEPTH_STENCIL_DESC stBase{};
@@ -1512,8 +1588,8 @@ static void testShader() {
         D3D11_DEPTH_STENCIL_DESC stMutate = stBase;
         stMutate.FrontFace = {D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_ZERO, D3D11_COMPARISON_EQUAL};
         stMutate.BackFace = stMutate.FrontFace;
-        const cg::OverlayDepthRule rMutate = runStencil(1, 1, stMutate, &leftVal, &rightVal);
-        check(rMutate.skipOverlay && closeTo(leftVal, 0.25f, 0.01f) && closeTo(rightVal, 0.0f, 0.001f),
+        const auto rMutate = runStencil(1, 1, stMutate, &leftVal, &rightVal);
+        check(!rMutate.issued && closeTo(leftVal, 0.25f, 0.01f) && closeTo(rightVal, 0.0f, 0.001f),
               "#188(d) WARP D24S8: EQUAL ref=1 with PassOp=ZERO skips overlay (0.25 left, 0.0 right)");
 
         D3D11_DEPTH_STENCIL_DESC stDisj = stBase;
@@ -1521,8 +1597,8 @@ static void testShader() {
         stDisj.StencilWriteMask = 0x1;
         stDisj.FrontFace = {D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_REPLACE, D3D11_COMPARISON_EQUAL};
         stDisj.BackFace = stDisj.FrontFace;
-        const cg::OverlayDepthRule rDisj = runStencil(0x2, 0x2, stDisj, &leftVal, &rightVal);
-        check(!rDisj.skipOverlay && rDisj.needsClone && rDisj.zeroStencilWrite &&
+        const auto rDisj = runStencil(0x2, 0x2, stDisj, &leftVal, &rightVal);
+        check(rDisj.issued && rDisj.writeMask == 0 &&
                   closeTo(leftVal, 0.75f, 0.01f) && closeTo(rightVal, 0.0f, 0.001f),
               "#188(d) WARP D24S8: disjoint stencil read/write masks (0x2 vs 0x1) add on passing left (0.75) and reject right (0.0)");
 
@@ -1531,18 +1607,35 @@ static void testShader() {
         stElite.StencilWriteMask = 0x5;
         stElite.FrontFace = {D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_REPLACE, D3D11_COMPARISON_ALWAYS};
         stElite.BackFace = stElite.FrontFace;
-        const cg::OverlayDepthRule rElite = runStencil(0, 0x5, stElite, &leftVal, &rightVal);
-        check(!rElite.skipOverlay && rElite.needsClone && rElite.zeroStencilWrite &&
+        const auto rElite = runStencil(0, 0x5, stElite, &leftVal, &rightVal);
+        check(rElite.issued && rElite.writeMask == 0 &&
                   closeTo(leftVal, 0.75f, 0.01f) && closeTo(rightVal, 0.75f, 0.01f),
               "#188(d) WARP D24S8: Elite ALWAYS+REPLACE stencil state clones with zero write mask and adds cleanly (0.75)");
 
         D3D11_DEPTH_STENCIL_DESC stKeepDesc = stBase;
         stKeepDesc.FrontFace = {D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP, D3D11_COMPARISON_EQUAL};
         stKeepDesc.BackFace = stKeepDesc.FrontFace;
-        const cg::OverlayDepthRule rKeep = runStencil(1, 1, stKeepDesc, &leftVal, &rightVal);
-        check(!rKeep.skipOverlay && !rKeep.needsClone &&
+        const auto rKeep = runStencil(1, 1, stKeepDesc, &leftVal, &rightVal);
+        check(rKeep.issued && rKeep.writeMask == 0xFF &&
                   closeTo(leftVal, 0.75f, 0.01f) && closeTo(rightVal, 0.0f, 0.001f),
               "#188(d) WARP D24S8: all-KEEP EQUAL stencil state needs no clone and preserves exact coverage (0.75 left, 0.0 right)");
+
+        auto increment = stElite;
+        increment.StencilWriteMask = 0xFF;
+        increment.FrontFace.StencilPassOp = increment.BackFace.StencilPassOp = D3D11_STENCIL_OP_INCR_SAT;
+        ComPtr<ID3D11DepthStencilState> witness;
+        hr(dev->CreateDepthStencilState(&stKeepDesc, &witness), "#188 stencil witness state");
+        // Exercise both the first replay with this state and the next one with the same descriptor.
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            const auto replay = runStencil(0, 0x5, increment, &leftVal, &rightVal, true, witness.Get());
+            check(replay.issued && closeTo(leftVal, 1.0f, 0.01f) && closeTo(rightVal, 1.0f, 0.01f),
+                  "#188 WARP INCR/EQUAL witness: the overlay adds 0.5 and leaves stencil at 1");
+        }
+        const auto noDraw = runStencil(0, 0x5, stElite, &leftVal, &rightVal, false);
+        check(!noDraw.issued && closeTo(leftVal, 0.0f, 0.001f) && closeTo(rightVal, 0.0f, 0.001f),
+              "#188 WARP skipped stock draw leaves both pixels untinted");
+        setLegacy(ctx, false);
+        edvr::bindingSetShader(edvr::BindSlot::Ps, nullptr, 0);
     }
 
     const unsigned problems = canopy.rig.problems();
