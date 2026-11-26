@@ -34,6 +34,7 @@ struct ID3D11Buffer;
 struct ID3D11Resource;
 struct ID3D11BlendState;
 struct ID3D11DepthStencilState;
+struct ID3D11Predicate;
 struct ID3D11ShaderResourceView;
 struct D3D11_BOX;
 struct D3D11_VIEWPORT;

@@ -48,6 +48,11 @@ void cockpitGlassClearLayerMap(ID3D11DeviceContext* ctx);
 // (flat, after a velocity change in normal space, every canopy draw until a reload: docs\cockpit-glass-legacy-port.md, "Clean glass after a supercruise exit"), which leaves the
 // legacy shader with no dirt. While the swap's inputs are bound this puts them back, and keeps what it found for the hand-back. One test and out at any other draw.
 void cockpitGlassBeforeDraw(ID3D11DeviceContext* ctx);
+// Called by vscreen.cpp's owner-context PSSetShaderResources / PSSetConstantBuffers hooks while
+// cockpitGlassLegacyLive() so an explicit game clear to null on t12/b13 is never mistaken for an
+// untouched EDVR binding (#188).
+void cockpitGlassNotePsSrvWrite(UINT start, UINT n);
+void cockpitGlassNotePsCbWrite(UINT start, UINT n);
 
 // The ice and condensation draws (docs\cockpit-glass-legacy-port.md section 11). The game draws the canopy with its own ice or condensation shader while they show, so the replacement
 // is not bound and the legacy dirt would vanish. While `legacy`, the draw thunks (owner context) call cockpitGlassOverlayBegin() after the game's draw: when the bound pixel shader is the

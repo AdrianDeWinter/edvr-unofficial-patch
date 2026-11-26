@@ -3257,6 +3257,7 @@ void STDMETHODCALLTYPE hookedPSSetShaderResources(ID3D11DeviceContext* self, UIN
         g_state->realPSSetShaderResources(self, start, n, srvs);
         return;
     }
+    if (cockpitGlassLegacyLive()) cockpitGlassNotePsSrvWrite(start, n);
     // Slots 0..3, not just 0: the census fingerprints a draw by everything it
     // samples, and a mask or gradient in a later slot is often what tells one
     // overlay from another. Recording a slot the call did not cover would
@@ -3306,8 +3307,10 @@ void STDMETHODCALLTYPE hookedPSSetConstantBuffers(ID3D11DeviceContext* self, UIN
     if (g_flatComputeInternal) { g_state->realPSSetConstantBuffers(self, start, n, bufs); return; }
     // Installed only for flat discovery. Forward exactly once, including
     // foreign contexts and every call outside the bounded capture window.
-    if (!foreignContext(self) && flatTemporalCapturing())
-        flatTemporalConstantBuffers(true, start, n, bufs);
+    if (!foreignContext(self)) {
+        if (cockpitGlassLegacyLive()) cockpitGlassNotePsCbWrite(start, n);
+        if (flatTemporalCapturing()) flatTemporalConstantBuffers(true, start, n, bufs);
+    }
     g_state->realPSSetConstantBuffers(self, start, n, bufs);
 }
 
@@ -5654,15 +5657,19 @@ void STDMETHODCALLTYPE hookedDraw(ID3D11DeviceContext* self, UINT count, UINT st
         FlatRuntimeDrawScope flatDraw(self, 1, 'D', count, 0, static_cast<int32_t>(start));
         if (flatDraw.needsActualDraw()) flatDraw.beginActualDraw();
         FlatStationSunGate sun(self, flatDraw, stationSkip, hideSkip);   // built 2026-10-21: only a skipped sun draw is changed (no real call, or a masked one)
+        bool drew = false;
         {
             FlatParticleScope particle(self, 'D', count, 1);
             ConcoursePaneScope pane(self, count, start, 0, 'D', kConcoursePaneCalls);   // TEMPORARY (concourse_pane.h): the outside's non-indexed draws (beams, flares, the scatter) are withheld here; no mirror, the glass is indexed
-            if (sun.issues() && !pane.withheld()) g_state->realDraw(self, count, start);
+            if (sun.issues() && !pane.withheld()) {
+                g_state->realDraw(self, count, start);
+                drew = true;
+            }
         }
         sun.restore();
         if (flatDraw.needsActualDraw()) flatDraw.endActualDraw();
         // visual.cockpit_glass = legacy (cockpit_glass.h): over the game's ice or condensation canopy draw, the legacy dirt, drawn again with EDVR's overlay; one relaxed load otherwise
-        if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDraw(self, count, start); cockpitGlassOverlayEnd(self); }
+        if (drew && !stationSkip && !hideSkip && cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDraw(self, count, start); cockpitGlassOverlayEnd(self); }
         if (!stationSkip && !hideSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDraw(self, count, start); });
         return;
     }
@@ -5687,6 +5694,7 @@ void STDMETHODCALLTYPE hookedDraw(ID3D11DeviceContext* self, UINT count, UINT st
     if (g_vrWorldWants && self == g_state->ownerCtx) vrWorldRouteDraw(self);   // the VR world route's detector; at the tone, its resolve
     const bool starGlow = vrStarGlowWanted() && self == g_state->ownerCtx;   // visual.star_glow (vr_star_glow.h): one relaxed load while off
     if (starGlow) vrStarGlowBeforeDraw(self);
+    bool drew = false;
     if (fast) {
         uiLayerMapRunEnd(self);   // the fast path skips forwardWithVerdict's brackets: the draw is the game's, into the game's targets
         // forwardWithVerdict's own return for the owner's blocked UI layer is kept; the game's draw otherwise as it is issued there.
@@ -5694,7 +5702,10 @@ void STDMETHODCALLTYPE hookedDraw(ID3D11DeviceContext* self, UINT count, UINT st
             const int64_t r0 = clock.on ? qpcNow() : 0;
             {
                 ConcoursePaneScope pane(self, count, start, 0, 'D', kConcoursePaneCalls);   // TEMPORARY (concourse_pane.h): the outside's non-indexed draws (beams, flares, the scatter) are withheld here; no mirror, the glass is indexed
-                if (!pane.withheld()) g_state->realDraw(self, count, start);
+                if (!pane.withheld()) {
+                    g_state->realDraw(self, count, start);
+                    drew = true;
+                }
             }
             if (clock.on) clock.realCall(r0);
         }
@@ -5703,13 +5714,16 @@ void STDMETHODCALLTYPE hookedDraw(ID3D11DeviceContext* self, UINT count, UINT st
         {
             GpuCensusAlteredScope timed(self, altered);   // the game's own draw, and only it (gpu_census.h)
             ConcoursePaneScope pane(self, count, start, 0, 'D', kConcoursePaneCalls);   // TEMPORARY (concourse_pane.h): the outside's non-indexed draws (beams, flares, the scatter) are withheld here; no mirror, the glass is indexed
-            if (!pane.withheld()) g_state->realDraw(self, count, start);
+            if (!pane.withheld()) {
+                g_state->realDraw(self, count, start);
+                drew = true;
+            }
         }
         srvTurretHudCountIssue(self);   // issue 140: the game's own issue; a family's first scope says its state (one relaxed load otherwise)
         if (clock.on) clock.realCall(r0);
         return true;
     });
-    if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDraw(self, count, start); cockpitGlassOverlayEnd(self); }
+    if (drew && cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDraw(self, count, start); cockpitGlassOverlayEnd(self); }
     if (v == DrawVerdict::kPanel) endPanelOverride(self);
     if (starGlow && vrStarGlowAfterMayAct()) starGlowAfterDraw(self, 'D', count, 1, args, v);
     if (self == g_state->ownerCtx && pixelProbeLive(g_state)) pixelProbeAfterEye(g_state, self, count, 1, false);
@@ -5762,17 +5776,19 @@ void STDMETHODCALLTYPE hookedDrawIndexed(ID3D11DeviceContext* self, UINT count,
         FlatRuntimeDrawScope flatDraw(self, 1, 'I', count, startIndex, baseVertex);
         if (flatDraw.needsActualDraw()) flatDraw.beginActualDraw();
         FlatStationSunGate sun(self, flatDraw, stationSkip, hideSkip);
+        bool drew = false;
         {
             FlatParticleScope particle(self, 'I', count, 1);
             ConcoursePaneScope pane(self, count, startIndex, baseVertex, 'I', kConcoursePaneCalls);
             if (sun.issues() && !pane.withheld()) {
                 g_state->realDrawIndexed(self, count, startIndex, baseVertex);
                 while (pane.nextMirrorPass()) g_state->realDrawIndexed(self, count, startIndex, baseVertex);   // the mirror: the same draw again (concourse_pane.h)
+                drew = true;
             }
         }
         sun.restore();
         if (flatDraw.needsActualDraw()) flatDraw.endActualDraw();
-        if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawIndexed(self, count, startIndex, baseVertex); cockpitGlassOverlayEnd(self); }
+        if (drew && !stationSkip && !hideSkip && cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawIndexed(self, count, startIndex, baseVertex); cockpitGlassOverlayEnd(self); }
         if (!stationSkip && !hideSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDrawIndexed(self, count, startIndex, baseVertex); });
         return;
     }
@@ -5798,6 +5814,7 @@ void STDMETHODCALLTYPE hookedDrawIndexed(ID3D11DeviceContext* self, UINT count,
     if (g_vrWorldWants && self == g_state->ownerCtx) vrWorldRouteDraw(self);
     const bool starGlow = vrStarGlowWanted() && self == g_state->ownerCtx;   // visual.star_glow (vr_star_glow.h): one relaxed load while off
     if (starGlow) vrStarGlowBeforeDraw(self);
+    bool drew = false;
     if (fast) {
         uiLayerMapRunEnd(self);   // as in hookedDraw
         if (!(self == g_state->ownerCtx && uiLayerIssueBlocked())) {
@@ -5807,6 +5824,7 @@ void STDMETHODCALLTYPE hookedDrawIndexed(ID3D11DeviceContext* self, UINT count,
                 if (!pane.withheld()) {
                     g_state->realDrawIndexed(self, count, startIndex, baseVertex);
                     while (pane.nextMirrorPass()) g_state->realDrawIndexed(self, count, startIndex, baseVertex);
+                    drew = true;
                 }
             }
             if (clock.on) clock.realCall(r0);
@@ -5819,13 +5837,14 @@ void STDMETHODCALLTYPE hookedDrawIndexed(ID3D11DeviceContext* self, UINT count,
             if (!pane.withheld()) {
                 g_state->realDrawIndexed(self, count, startIndex, baseVertex);
                 while (pane.nextMirrorPass()) g_state->realDrawIndexed(self, count, startIndex, baseVertex);
+                drew = true;
             }
         }
         srvTurretHudCountIssue(self);   // issue 140: the game's own issue; a family's first scope says its state (one relaxed load otherwise)
         if (clock.on) clock.realCall(r0);
         return true;
     });
-    if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawIndexed(self, count, startIndex, baseVertex); cockpitGlassOverlayEnd(self); }
+    if (drew && cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawIndexed(self, count, startIndex, baseVertex); cockpitGlassOverlayEnd(self); }
     if (v == DrawVerdict::kPanel) endPanelOverride(self);
     if (starGlow && vrStarGlowAfterMayAct()) starGlowAfterDraw(self, 'I', count, 1, args, v);
     if (self == g_state->ownerCtx && pixelProbeLive(g_state)) pixelProbeAfterEye(g_state, self, count, 1, false);
@@ -5869,14 +5888,18 @@ void STDMETHODCALLTYPE hookedDrawInstanced(ID3D11DeviceContext* self, UINT perIn
                                       static_cast<int32_t>(startVertex), startInstance);
         if (flatDraw.needsActualDraw()) flatDraw.beginActualDraw();
         FlatStationSunGate sun(self, flatDraw, stationSkip, hideSkip);
+        bool drew = false;
         {
             FlatParticleScope particle(self, 'N', perInstance, instances);
             ConcoursePaneScope pane(self, perInstance, startVertex, 0, 'N', kConcoursePaneCalls);   // TEMPORARY (concourse_pane.h): the outside's non-indexed draws (beams, flares, the scatter) are withheld here; no mirror, the glass is indexed
-            if (sun.issues() && !pane.withheld()) g_state->realDrawInstanced(self, perInstance, instances, startVertex, startInstance);
+            if (sun.issues() && !pane.withheld()) {
+                g_state->realDrawInstanced(self, perInstance, instances, startVertex, startInstance);
+                drew = true;
+            }
         }
         sun.restore();
         if (flatDraw.needsActualDraw()) flatDraw.endActualDraw();
-        if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawInstanced(self, perInstance, instances, startVertex, startInstance); cockpitGlassOverlayEnd(self); }
+        if (drew && !stationSkip && !hideSkip && cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawInstanced(self, perInstance, instances, startVertex, startInstance); cockpitGlassOverlayEnd(self); }
         if (!stationSkip && !hideSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDrawInstanced(self, perInstance, instances, startVertex, startInstance); });
         return;
     }
@@ -5911,13 +5934,17 @@ void STDMETHODCALLTYPE hookedDrawInstanced(ID3D11DeviceContext* self, UINT perIn
                            : instances;
     const bool starGlow = vrStarGlowWanted() && self == g_state->ownerCtx;   // visual.star_glow (vr_star_glow.h): one relaxed load while off
     if (starGlow) vrStarGlowBeforeDraw(self);
+    bool drew = false;
     if (fast) {
         uiLayerMapRunEnd(self);   // as in hookedDraw
         if (!(self == g_state->ownerCtx && uiLayerIssueBlocked())) {
             const int64_t r0 = clock.on ? qpcNow() : 0;
             {
                 ConcoursePaneScope pane(self, perInstance, startVertex, 0, 'N', kConcoursePaneCalls);   // TEMPORARY (concourse_pane.h): the outside's non-indexed draws (beams, flares, the scatter) are withheld here; no mirror, the glass is indexed
-                if (!pane.withheld()) g_state->realDrawInstanced(self, perInstance, drawn, startVertex, startInstance);
+                if (!pane.withheld()) {
+                    g_state->realDrawInstanced(self, perInstance, drawn, startVertex, startInstance);
+                    drew = true;
+                }
             }
             if (clock.on) clock.realCall(r0);
         }
@@ -5926,15 +5953,16 @@ void STDMETHODCALLTYPE hookedDrawInstanced(ID3D11DeviceContext* self, UINT perIn
         {
             GpuCensusAlteredScope timed(self, altered);   // the game's own draw, and only it (gpu_census.h)
             ConcoursePaneScope pane(self, perInstance, startVertex, 0, 'N', kConcoursePaneCalls);   // TEMPORARY (concourse_pane.h): the outside's non-indexed draws (beams, flares, the scatter) are withheld here; no mirror, the glass is indexed
-            if (!pane.withheld())
-                g_state->realDrawInstanced(self, perInstance, drawn, startVertex,
-                                           startInstance);
+            if (!pane.withheld()) {
+                g_state->realDrawInstanced(self, perInstance, drawn, startVertex, startInstance);
+                drew = true;
+            }
         }
         srvTurretHudCountIssue(self);   // issue 140: the game's own issue; a family's first scope says its state (one relaxed load otherwise)
         if (clock.on) clock.realCall(r0);
         return true;
     });
-    if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawInstanced(self, perInstance, drawn, startVertex, startInstance); cockpitGlassOverlayEnd(self); }
+    if (drew && cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawInstanced(self, perInstance, drawn, startVertex, startInstance); cockpitGlassOverlayEnd(self); }
     if (v == DrawVerdict::kPanel) endPanelOverride(self);
     if (starGlow && vrStarGlowAfterMayAct()) starGlowAfterDraw(self, 'N', perInstance, drawn, args, v);
     if (self == g_state->ownerCtx && pixelProbeLive(g_state)) pixelProbeAfterEye(g_state, self, perInstance, drawn, false);
@@ -5962,22 +5990,21 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(ID3D11DeviceContext* self,
         }
         FlatRuntimeDrawScope flatDraw(self, instances, 'X', perInstance, startIndex,
                                       baseVertex, startInstance);
+        bool drew = false;
         if (flatDraw.needsActualDraw()) flatDraw.beginActualDraw();
         FlatStationSunGate sun(self, flatDraw, stationSkip, hideSkip);
         {
             FlatParticleScope particle(self, 'X', perInstance, instances);
             ConcoursePaneScope pane(self, perInstance, startIndex, baseVertex, 'X', kConcoursePaneCalls);
             if (sun.issues() && !pane.withheld()) {
-                g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex,
-                                                  baseVertex, startInstance);
-                while (pane.nextMirrorPass())
-                    g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex,
-                                                      baseVertex, startInstance);
+                g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance);
+                while (pane.nextMirrorPass()) g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance);
+                drew = true;
             }
         }
         sun.restore();
         if (flatDraw.needsActualDraw()) flatDraw.endActualDraw();
-        if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance); cockpitGlassOverlayEnd(self); }
+        if (drew && !stationSkip && !hideSkip && cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance); cockpitGlassOverlayEnd(self); }
         if (!stationSkip && !hideSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance); });
         return;
     }
@@ -6025,6 +6052,7 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(ID3D11DeviceContext* self,
     if (g_vrWorldWants && self == g_state->ownerCtx) vrWorldRouteDraw(self);
     const bool starGlow = vrStarGlowWanted() && self == g_state->ownerCtx;   // visual.star_glow (vr_star_glow.h): one relaxed load while off
     if (starGlow) vrStarGlowBeforeDraw(self);
+    bool drew = false;
     forwardWithVerdict(self, v, flags, 'X', perInstance, instances, args, [&](AlteredDraw altered) {
         const int64_t r0 = clock.on ? qpcNow() : 0;
         {
@@ -6033,11 +6061,11 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(ID3D11DeviceContext* self,
             GpuCensusAlteredScope timed(self, altered);
             ConcoursePaneScope pane(self, perInstance, startIndex, baseVertex, 'X', kConcoursePaneCalls);   // TEMPORARY (concourse_pane.h)
             if (!pane.withheld()) {
-                g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex,
-                                                  baseVertex, startInstance);
+                g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance);
                 while (pane.nextMirrorPass())
                     g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex,
                                                       baseVertex, startInstance);
+                drew = true;
             }
         }
         // Stop the draw-hook clock here: the weapon-motion re-issue below is EDVR's own work, counted under "draw reissue CPU:" and not inside "draw hook CPU:".
@@ -6120,10 +6148,10 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(ID3D11DeviceContext* self,
                 else screenMotionDraw(self,reissueDrawIndexedInstanced<ReissueCaller::ScreenMotion>,perInstance,instances,startIndex,baseVertex,startInstance);
             }
         }
-        return true;  // the original draw was issued
+        return true;  // preserve the existing VR UI re-issue contract
     });
     if (bodyCull) nativeOnFootBodyCullEnd(self);   // F18 (TEMPORARY): the game's rasterizer state back
-    if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance); cockpitGlassOverlayEnd(self); }
+    if (drew && cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance); cockpitGlassOverlayEnd(self); }
     if (v == DrawVerdict::kPanel) endPanelOverride(self);
     if (v == DrawVerdict::kIntroPanel) introPanelEndDraw(self);
     // The splash's numbers are put away after the draw and the dim have used them (forwardWithVerdict), and the flag with them, on every way out of
