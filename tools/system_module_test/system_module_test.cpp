@@ -22,6 +22,12 @@
 //   S5  THE FIX: the handle held is the decoy: the chooser answers System32's module, verified, by-name or walked
 //   S6  no handle held: System32's module again
 //   S7  the walk tells the two same-named modules apart by path, and the module list shows both, in load order
+//   S8  resolveSystemD3D11Exports: before System32 maps, preserves fallback procs; after it maps, re-resolves
+//       D3D11CreateDevice and D3D11CreateDeviceAndSwapChain from System32 even when the held handle is the decoy
+//   S9  resolveSystemD3D11Exports: chained-export fallback refuses selfModule and resolves missing exports from
+//       System32 rather than the decoy
+//   S10 resolveSystemD3D11ExportsFrom: missing exports on a verified handle preserve the existing fallback procs
+//       rather than overwriting them with null
 //
 //   system_module_test.exe --dry-run             touches nothing
 //   system_module_test.exe --self-test           stages the decoy under %TEMP% and removes it again
@@ -111,6 +117,32 @@ int selfTest() {
     check(!none.verified && std::strcmp(none.route, "unresolved") == 0 && none.module == nullptr, "S2",
           "with no handle held and System32's unmapped: unresolved, no module");
 
+    auto sentinelCreate = reinterpret_cast<FARPROC>(&samePath);
+    auto sentinelSwap = reinterpret_cast<FARPROC>(&modulePath);
+    const edvr::SystemD3D11Exports earlyExports =
+        edvr::resolveSystemD3D11Exports(decoyModule, nullptr, sentinelCreate, sentinelSwap);
+    check(!earlyExports.choice.verified && earlyExports.createDevice == sentinelCreate &&
+              earlyExports.createDeviceAndSwapChain == sentinelSwap &&
+              !earlyExports.createDeviceFromVerified && !earlyExports.createDeviceAndSwapChainFromVerified,
+          "S8", "before System32 maps, resolveSystemD3D11Exports preserves fallback device-creation procs");
+    check(earlyExports.fallbackModule == nullptr, "S9",
+          "before System32 maps, a foreign loader handle is unavailable as chained fallback");
+
+    const edvr::SystemD3D11Exports earlySelf =
+        edvr::resolveSystemD3D11Exports(decoyModule, decoyModule, sentinelCreate, sentinelSwap);
+    check(earlySelf.fallbackModule == nullptr, "S9",
+          "when held equals selfModule and System32 is unmapped, chained fallback refuses selfModule");
+
+    edvr::SystemD3D11Choice staleChoice{};
+    staleChoice.module = decoyModule;
+    staleChoice.route = "walked";
+    staleChoice.verified = true;
+    staleChoice.wantedPath = system;
+    const bool pinned = edvr::pinVerifiedSystemD3D11(staleChoice, decoyModule);
+    check(!pinned && !staleChoice.verified && staleChoice.module == decoyModule &&
+              std::strcmp(staleChoice.route, "unresolved") == 0,
+          "S9", "pinning rejects a discovered module whose current path differs from System32");
+
     // S3: System32's by full path, beside the decoy.
     HMODULE real = LoadLibraryW(system.c_str());
     check(real != nullptr && real != decoyModule && samePath(modulePath(real), system), "S3",
@@ -147,6 +179,40 @@ int selfTest() {
     const std::vector<std::wstring> paths = edvr::mappedD3D11Paths();
     check(paths.size() == 2 && samePath(paths[0], decoyPath) && samePath(paths[1], system), "S7",
           "the module list shows the decoy then System32's, in load order");
+
+    // S8: with System32 mapped beside the decoy, re-resolving from the decoy handle finds System32's real exports.
+    const FARPROC realCreate = GetProcAddress(real, "D3D11CreateDevice");
+    const FARPROC realSwap = GetProcAddress(real, "D3D11CreateDeviceAndSwapChain");
+    check(realCreate != nullptr && realSwap != nullptr, "S8",
+          "System32's d3d11.dll exports D3D11CreateDevice and D3D11CreateDeviceAndSwapChain");
+    const edvr::SystemD3D11Exports fixedExports =
+        edvr::resolveSystemD3D11Exports(decoyModule, decoyModule, sentinelCreate, sentinelSwap);
+    check(fixedExports.choice.verified && fixedExports.choice.module == real &&
+              fixedExports.createDevice == realCreate && fixedExports.createDeviceAndSwapChain == realSwap &&
+              fixedExports.createDeviceFromVerified && fixedExports.createDeviceAndSwapChainFromVerified &&
+              !fixedExports.missingCreateDevice && !fixedExports.missingCreateDeviceAndSwapChain,
+          "S8", "with decoy held and System32 mapped, device-creation procs re-resolve to System32");
+
+    // S9: chained fallback uses verified System32 (never decoy or self), so missing chained exports resolve.
+    check(fixedExports.fallbackModule == real && fixedExports.fallbackModule != decoyModule, "S9",
+          "with decoy held as selfModule and System32 mapped, chained fallback switches to verified System32");
+    check(GetProcAddress(decoyModule, "D3D11CreateDevice") == nullptr &&
+              GetProcAddress(fixedExports.fallbackModule, "D3D11CreateDevice") == realCreate &&
+              GetProcAddress(fixedExports.fallbackModule, "D3D11CreateDeviceAndSwapChain") == realSwap,
+          "S9", "exports absent from a partial chained module resolve through the verified System32 fallback");
+
+    // S10: a verified module missing the D3D11CreateDevice* exports preserves fallback procs instead of nulling them.
+    edvr::SystemD3D11Choice syntheticMissing;
+    syntheticMissing.module = decoyModule;
+    syntheticMissing.route = "walked";
+    syntheticMissing.verified = true;
+    const edvr::SystemD3D11Exports missingExports =
+        edvr::resolveSystemD3D11ExportsFrom(syntheticMissing, nullptr, sentinelCreate, sentinelSwap);
+    check(missingExports.missingCreateDevice && missingExports.missingCreateDeviceAndSwapChain &&
+              missingExports.createDevice == sentinelCreate &&
+              missingExports.createDeviceAndSwapChain == sentinelSwap &&
+              !missingExports.createDeviceFromVerified && !missingExports.createDeviceAndSwapChainFromVerified,
+          "S10", "missing exports on a verified handle preserve the existing fallback procs");
 
     FreeLibrary(real);
     FreeLibrary(decoyModule);
