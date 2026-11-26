@@ -5,25 +5,58 @@
 #include <d3d12.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
 #include "../../src/common/log.h"
+#include "../../src/d3d11/d3d12_caps.h"
+#include "../../src/d3d11/dlaa.h"
 #include "../../src/d3d11/xess_engine.h"
 #include "../../src/d3d11/xess_feature_latch.h"
+#include "../../src/d3d11/xess_log_callback.h"
 #include "../../src/d3d11/xess_runtime_version.h"
 #include "unsupported_device.h"
 
 using Microsoft::WRL::ComPtr;
 
+namespace {
+std::mutex g_logMutex;
+std::vector<std::string> g_logLines;
+
+void clearCapturedLogs() {
+    std::lock_guard<std::mutex> lock(g_logMutex);
+    g_logLines.clear();
+}
+
+size_t countCapturedLogs(const char* needle) {
+    std::lock_guard<std::mutex> lock(g_logMutex);
+    size_t n = 0;
+    for (const auto& line : g_logLines) {
+        if (line.find(needle) != std::string::npos) ++n;
+    }
+    return n;
+}
+}  // namespace
+
 namespace edvr {
 Log& Log::get() { static auto* log = new Log; return *log; }
 void Log::note(const char* format, ...) {
+    char buf[1024]{};
     va_list args;
     va_start(args, format);
-    std::vfprintf(stderr, format, args);
+    std::vsnprintf(buf, sizeof(buf), format, args);
     va_end(args);
+    {
+        std::lock_guard<std::mutex> lock(g_logMutex);
+        g_logLines.emplace_back(buf);
+    }
+    std::fputs(buf, stderr);
     std::fputc('\n', stderr);
 }
 }  // namespace edvr
@@ -105,6 +138,152 @@ bool slotRangeSelfTest() {
                                                   1, 1, 1, 1, 0.0f, 0.0f, false, false, &why);
     return check(acceptedLast && why && std::strstr(why, "invalid XeSS") != nullptr,
                  "upscaler slot 2 passes the range check");
+}
+
+bool d3d12CapsAndLogSelfTest() {
+    // C1: downward shader-model probe handles E_INVALIDARG for newer models and resolves 6.6.
+    const edvr::D3D12Caps caps66 = edvr::queryD3D12CapsWith(
+        [](D3D12_FEATURE feature, void* data, UINT size) -> HRESULT {
+            if (feature == D3D12_FEATURE_SHADER_MODEL && size == sizeof(D3D12_FEATURE_DATA_SHADER_MODEL)) {
+                auto* sm = static_cast<D3D12_FEATURE_DATA_SHADER_MODEL*>(data);
+                if (sm->HighestShaderModel > D3D_SHADER_MODEL_6_6) return E_INVALIDARG;
+                sm->HighestShaderModel = D3D_SHADER_MODEL_6_6;
+                return S_OK;
+            }
+            if (feature == D3D12_FEATURE_D3D12_OPTIONS1 && size == sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS1)) {
+                auto* o1 = static_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS1*>(data);
+                o1->WaveOps = TRUE;
+                o1->WaveLaneCountMin = 32;
+                o1->WaveLaneCountMax = 64;
+                o1->TotalLaneCount = 2560;
+                o1->Int64ShaderOps = TRUE;
+                return S_OK;
+            }
+            if (feature == D3D12_FEATURE_D3D12_OPTIONS4 && size == sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS4)) {
+                auto* o4 = static_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS4*>(data);
+                o4->Native16BitShaderOpsSupported = TRUE;
+                return S_OK;
+            }
+            if (feature == D3D12_FEATURE_D3D12_OPTIONS9 && size == sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS9)) {
+                auto* o9 = static_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS9*>(data);
+                o9->WaveMMATier = D3D12_WAVE_MMA_TIER_1_0;
+                return S_OK;
+            }
+            return E_INVALIDARG;
+        });
+    const std::string text66 = edvr::formatD3D12Caps(caps66);
+    if (!check(SUCCEEDED(caps66.shaderModelHr) && caps66.highestShaderModel == D3D_SHADER_MODEL_6_6 &&
+                   text66.find("sm=6.6") != std::string::npos &&
+                   text66.find("waveOps=1 lanes=32..64 totalLanes=2560 int64=1") != std::string::npos &&
+                   text66.find("native16bit=1") != std::string::npos &&
+                   text66.find("waveMMA=1.0") != std::string::npos,
+               "C1: downward shader model probe and full D3D12 caps formatting")) return false;
+
+    // C2: partial failure resilience (OPTIONS9 E_INVALIDARG does not hide SM/OPTIONS1/OPTIONS4).
+    const edvr::D3D12Caps partial = edvr::queryD3D12CapsWith(
+        [](D3D12_FEATURE feature, void* data, UINT size) -> HRESULT {
+            if (feature == D3D12_FEATURE_SHADER_MODEL && size == sizeof(D3D12_FEATURE_DATA_SHADER_MODEL)) {
+                static_cast<D3D12_FEATURE_DATA_SHADER_MODEL*>(data)->HighestShaderModel =
+                    static_cast<D3D_SHADER_MODEL>(0x68);
+                return S_OK;
+            }
+            if (feature == D3D12_FEATURE_D3D12_OPTIONS1 && size == sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS1)) {
+                auto* o1 = static_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS1*>(data);
+                o1->WaveOps = TRUE; o1->WaveLaneCountMin = 32; o1->WaveLaneCountMax = 32;
+                return S_OK;
+            }
+            if (feature == D3D12_FEATURE_D3D12_OPTIONS4 && size == sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS4)) {
+                static_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS4*>(data)->Native16BitShaderOpsSupported = FALSE;
+                return S_OK;
+            }
+            return E_INVALIDARG;
+        });
+    const std::string textPartial = edvr::formatD3D12Caps(partial);
+    if (!check(textPartial.find("sm=6.8") != std::string::npos &&
+                   textPartial.find("native16bit=0") != std::string::npos &&
+                   textPartial.find("waveMMA=n/a(0x80070057)") != std::string::npos,
+               "C2: failing OPTIONS9 logs n/a HRESULT while preserving other caps")) return false;
+
+    // C3: null device and WaveMMA NOT_SUPPORTED.
+    const edvr::D3D12Caps nullCaps = edvr::queryD3D12Caps(nullptr);
+    const std::string textNull = edvr::formatD3D12Caps(nullCaps);
+    if (!check(textNull.find("sm=n/a(0x80004003)") != std::string::npos &&
+                   textNull.find("waveMMA=n/a(0x80004003)") != std::string::npos,
+               "C3: null device formats n/a(E_POINTER) safely")) return false;
+    edvr::D3D12Caps noMma = caps66;
+    noMma.waveMmaTier = D3D12_WAVE_MMA_TIER_NOT_SUPPORTED;
+    if (!check(edvr::formatD3D12Caps(noMma).find("waveMMA=none") != std::string::npos,
+               "C3: WaveMMA NOT_SUPPORTED formats as none")) return false;
+
+    // C4: XessLogLimiter separate INFO vs WARNING/ERROR budgets, newline sanitization, nullptr, truncation, reset.
+    edvr::XessLogLimiter limiter(2, 2);
+    const auto i1 = limiter.format("line1\r\nline2\t", 1);
+    const auto i2 = limiter.format("ok", 0);
+    const auto iOver1 = limiter.format("info over 1", 1);
+    const auto iOver2 = limiter.format("info over 2", 1);
+    // Exhausted INFO budget must NOT starve WARNING or ERROR messages.
+    const auto w1 = limiter.format(nullptr, 2);
+    const std::string huge(512, 'X');
+    const auto e1 = limiter.format(huge.c_str(), 3);
+    const auto wOver1 = limiter.format("warn over 1", 2);
+    const auto wOver2 = limiter.format("warn over 2", 3);
+    if (!check(i1.action == edvr::XessLogFormatResult::Action::Emit &&
+                   std::strcmp(i1.line, "xess: runtime info: line1  line2") == 0 &&
+                   std::strchr(i1.line, '\n') == nullptr && std::strchr(i1.line, '\r') == nullptr &&
+                   i2.action == edvr::XessLogFormatResult::Action::Emit &&
+                   iOver1.action == edvr::XessLogFormatResult::Action::EmitSuppressedNotice &&
+                   std::strstr(iOver1.line, "info/debug messages suppressed (cap=2)") != nullptr &&
+                   iOver2.action == edvr::XessLogFormatResult::Action::Drop &&
+                   w1.action == edvr::XessLogFormatResult::Action::Emit &&
+                   std::strcmp(w1.line, "xess: runtime warning: (null)") == 0 &&
+                   e1.action == edvr::XessLogFormatResult::Action::Emit &&
+                   std::strlen(e1.line) < sizeof(e1.line) &&
+                   std::strstr(e1.line, "...") != nullptr &&
+                   wOver1.action == edvr::XessLogFormatResult::Action::EmitSuppressedNotice &&
+                   std::strstr(wOver1.line, "warning/error messages suppressed (cap=2)") != nullptr &&
+                   wOver2.action == edvr::XessLogFormatResult::Action::Drop,
+               "C4: XessLogLimiter enforces separate INFO and WARNING/ERROR caps, sanitizes newlines, truncates long lines")) return false;
+    limiter.reset();
+    const auto rReset = limiter.format("after reset", 1);
+    if (!check(rReset.action == edvr::XessLogFormatResult::Action::Emit &&
+                   std::strcmp(rReset.line, "xess: runtime info: after reset") == 0,
+               "C4: XessLogLimiter reset restores budget")) return false;
+
+    // C5: multi-threaded atomic cap enforcement (4 threads x 50 calls, cap=20).
+    edvr::XessLogLimiter mt(20);
+    std::atomic<uint32_t> emitted{0}, suppressed{0}, dropped{0};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 4; ++t) {
+        threads.emplace_back([&] {
+            for (int i = 0; i < 50; ++i) {
+                const auto res = mt.format("concurrent msg", 2);
+                if (res.action == edvr::XessLogFormatResult::Action::Emit) emitted.fetch_add(1);
+                else if (res.action == edvr::XessLogFormatResult::Action::EmitSuppressedNotice) suppressed.fetch_add(1);
+                else dropped.fetch_add(1);
+            }
+        });
+    }
+    for (auto& th : threads) th.join();
+    return check(emitted.load() == 20 && suppressed.load() == 1 && dropped.load() == 179,
+                 "C5: XessLogLimiter atomic cap under 4-thread concurrency");
+}
+
+bool xessLogCallbackSelfTest() {
+    using Callbacks = edvr::XessLogCallbacks<edvr::kUpscalerSlots>;
+    clearCapturedLogs();
+    const auto slot0 = Callbacks::beginInit(0);
+    for (unsigned i = 0; i < 26; ++i) slot0("first context startup", XESS_LOGGING_LEVEL_INFO);
+    const auto slot1 = Callbacks::beginInit(1);
+    slot0("extra first context startup", XESS_LOGGING_LEVEL_INFO);
+    slot1("second context startup", XESS_LOGGING_LEVEL_INFO);
+    const auto rebuilt = Callbacks::beginInit(0);
+    rebuilt("rebuilt context startup", XESS_LOGGING_LEVEL_INFO);
+    const bool separateSlots = check(countCapturedLogs("runtime info: second context startup") == 1 &&
+                                         countCapturedLogs("runtime info: extra first context startup") == 0,
+                                     "a second slot gets its own INFO budget while the first slot stays capped");
+    const bool rebuiltSlot = check(countCapturedLogs("runtime info: rebuilt context startup") == 1,
+                                   "rebuilding a slot gives its new context a fresh INFO budget");
+    return separateSlots && rebuiltSlot;
 }
 
 enum class Probe { Ready, Skip, Fail };
@@ -480,7 +659,8 @@ int main(int argc, char** argv) {
     }
     if (std::strcmp(argv[1], "--self-test") == 0)
         return check(edvr::xessBuiltIn(), "backend compiled into rig") &&
-               latchSelfTest() && gateSelfTest() && slotRangeSelfTest() && failedProbeSelfTest() ? 0 : 1;
+               latchSelfTest() && gateSelfTest() && slotRangeSelfTest() &&
+               d3d12CapsAndLogSelfTest() && xessLogCallbackSelfTest() && failedProbeSelfTest() ? 0 : 1;
     const bool optional = std::strcmp(argv[1], "--gpu-test-if-available") == 0;
     if (!optional && std::strcmp(argv[1], "--gpu-test") != 0) return 2;
     if (optional) {
@@ -507,9 +687,14 @@ int main(int argc, char** argv) {
         const Probe capability = optionalHardwareProbe(device.Get());
         if (capability != Probe::Ready) return capability == Probe::Skip ? 0 : 1;
     }
+    clearCapturedLogs();
     const char* why = nullptr;
     if (!edvr::xessAvailable(device.Get(), &why)) {
         std::fprintf(stderr, "xess_engine_test: unavailable: %s\n", why ? why : "unspecified");
+        return 1;
+    }
+    if (!check(countCapturedLogs("xess: d3d12 caps:") == 1, "xessAvailable logs d3d12 caps once per device")) {
+        edvr::xessShutdown();
         return 1;
     }
     const char* firstFailure = nullptr;
@@ -518,6 +703,18 @@ int main(int argc, char** argv) {
         std::fprintf(stdout, "xess_engine_test: SKIP XeSS reported unsupported GPU/driver: %s\n", firstFailure);
         edvr::xessShutdown();
         return 0;
+    }
+    if (!first) {
+        std::fprintf(stderr, "xess_engine_test: first flight failed: %s\n", firstFailure ? firstFailure : "unspecified");
+        edvr::xessShutdown();
+        return 1;
+    }
+    if (!check(countCapturedLogs("xess: d3d12 caps:") == 1 &&
+                   countCapturedLogs("xess: slot=0 optimalDriver") >= 1 &&
+                   countCapturedLogs("xess: slot=0 properties") >= 1,
+               "XeSS feature init logs optimalDriver and properties without repeating d3d12 caps")) {
+        edvr::xessShutdown();
+        return 1;
     }
     const bool good = first &&
                       flight(device.Get(), context.Get(), 640, 360, 1280, 720, false) &&

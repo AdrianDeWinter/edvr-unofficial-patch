@@ -114,6 +114,24 @@ inline std::string fsr4FormatVersionList(const std::vector<std::string>& names) 
     return text;
 }
 
+// Logs the provider labels and version IDs reported by AMD's runtime (#256).
+// These describe the available providers; the resolved precision path is unknown.
+inline std::string fsr4FormatRawVersionList(const std::vector<std::string>& names,
+                                            const std::vector<uint64_t>& ids) {
+    std::string text;
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (i) text += ", ";
+        const std::string& raw = names[i];
+        text += raw.empty() ? "?" : raw.substr(0, 48);
+        if (i < ids.size()) {
+            char idBuf[32]{};
+            std::snprintf(idBuf, sizeof(idBuf), " (0x%llX)", static_cast<unsigned long long>(ids[i]));
+            text += idBuf;
+        }
+    }
+    return text;
+}
+
 // The refusal when AMD's runtime offers no 4.x provider (D7). underWine adds the Proton launch option: Valve's Wine routes the
 // version query to AMD's driver-side FSR 4 file only with FSR4_UPGRADE=1.
 inline std::string fsr4RefusalText(const std::vector<std::string>& offered, bool underWine) {
