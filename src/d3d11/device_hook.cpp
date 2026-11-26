@@ -38,6 +38,7 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 #include "../common/format_query_log.h"     // formatHooksInstalledLine: the one line that says the hooks went on
 #include "../common/temporal_mode.h"
 #include "../common/texture_lod_bias.h"
+#include "texture_lod_bias_reader.h"
 #include "../common/runtime_profile.h"
 #include "../common/frame_flag.h"
 #include "hmd_reset_press.h"   // hmdResetPressFrame: the players HMD recentre key, watched for the seat memory
@@ -2957,21 +2958,17 @@ void hookDevice(ID3D11Device* device) {
         const int aniso = sentinelCfg.getIntInRange("advanced.texture_anisotropy", 0, 0, 16);
         const bool flat = runtimeFlatProfile();
         const std::string biasKey = readTextureLodBiasKey(sentinelCfg, flat);
-        float mult = 0.0f, ssaa = 0.0f;
-        char file[80] = {};
-        if (_stricmp(biasKey.c_str(), "auto") == 0) {
-            (void)eliteHmdMultiplier(&mult, &ssaa, file, sizeof(file));
-        }
+        const TextureLodBiasPreset preset = isAutomaticTextureLodBias(biasKey)
+            ? readTextureLodBiasPreset(flat) : TextureLodBiasPreset{};
         const TextureLodBiasResult resolved =
-            resolveTextureLodBias(flat, biasKey, mult, ssaa, file);
+            resolveTextureLodBias(flat, biasKey, preset.hmd, preset.ssaa, preset.source);
         if (resolved.autoMissing) {
             // Say it here rather than leave it to the sampler line: a
             // failed auto leaves the bias at zero, which switches the
             // whole override off, which would print nothing at all.
             Log::get().note(
                 "texture filtering: advanced.texture_lod_bias = auto, but Elite's graphics "
-                "preset gave no %s (Options\\Graphics\\*.fxcfg under "
-                "%%LOCALAPPDATA%%\\Frontier Developments\\Elite Dangerous). No bias is applied. "
+                "preset gave no usable %s. No bias is applied. "
                 "Set a number instead, or check the game has written its settings once.",
                 flat ? "SSAAMultiplier" : "HMDRenderTargetMultiplier");
         }
