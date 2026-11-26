@@ -15,6 +15,7 @@
 // the commander (below).
 #pragma once
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 
@@ -58,6 +59,86 @@ constexpr uint64_t kAwayStaleMs = 5000;   // the frame thread's: an open episode
 // The frame thread's reading of the hook's published episode: away while the hook says so and its newest call is within kAwayStaleMs.
 inline bool awayNow(bool published, uint64_t lastMs, uint64_t nowMs) noexcept { return published && nowMs >= lastMs && nowMs - lastMs <= kAwayStaleMs; }
 
+// Immutable snapshots captured at each episode edge so a quick end + restart
+// within one frame preserves episode N's exact ended counters and duration (#175).
+struct EpisodeStart {
+    uint32_t episode = 0;
+    uint32_t rejoins = 0;
+    double distanceM = 0.0;
+    double holdS = kReturnHoldS;
+    bool byShop = false;
+    bool byDistance = false;
+};
+
+struct EpisodeEnd {
+    uint32_t episode = 0;
+    uint32_t calls = 0;
+    uint32_t notNumber = 0;
+    uint32_t alternations = 0;
+    uint32_t rejoins = 0;
+    uint32_t shopCalls = 0;
+    uint32_t distanceCalls = 0;
+    double durationS = 0.0;
+    double holdS = kReturnHoldS;
+    double nearestM = 0.0;
+    double farthestM = 0.0;
+};
+
+// Lock-free SPSC edge queue from the Animate post-hook (producer) to the frame
+// thread's f107Tick (consumer) so sub-frame end+restart transitions keep their
+// ended lines and frozen counters (#175).
+struct Event {
+    enum Kind : uint8_t { kLeft = 0, kEnded = 1 };
+    Kind kind = kLeft;
+    EpisodeStart start{};
+    EpisodeEnd end{};
+};
+
+class EventQueue {
+  public:
+    static constexpr uint32_t kCapacity = 16;
+
+    bool pushLeft(const EpisodeStart& s) noexcept {
+        Event ev;
+        ev.kind = Event::kLeft;
+        ev.start = s;
+        return push(ev);
+    }
+    bool pushEnded(const EpisodeEnd& e) noexcept {
+        Event ev;
+        ev.kind = Event::kEnded;
+        ev.end = e;
+        return push(ev);
+    }
+    bool pop(Event* out) noexcept {
+        const uint32_t tail = tail_.load(std::memory_order_relaxed);
+        const uint32_t head = head_.load(std::memory_order_acquire);
+        if (tail == head) return false;
+        if (out) *out = ring_[tail % kCapacity];
+        tail_.store(tail + 1, std::memory_order_release);
+        return true;
+    }
+    uint32_t dropped() const noexcept { return dropped_.load(std::memory_order_relaxed); }
+
+  private:
+    bool push(const Event& ev) noexcept {
+        const uint32_t head = head_.load(std::memory_order_relaxed);
+        const uint32_t tail = tail_.load(std::memory_order_acquire);
+        if (head - tail >= kCapacity) {
+            dropped_.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        ring_[head % kCapacity] = ev;
+        head_.store(head + 1, std::memory_order_release);
+        return true;
+    }
+
+    Event ring_[kCapacity]{};
+    std::atomic<uint32_t> head_{0};
+    std::atomic<uint32_t> tail_{0};
+    std::atomic<uint32_t> dropped_{0};
+};
+
 // One episode of the camera away, for the edge lines: the calls the pin refused (every call from the first far one until the return), the far calls and the nearest and farthest distance of them
 // (m; a camera that is not a number counts apart), the time and how often the camera came back near and left again before the hold ran out.
 struct Away {
@@ -70,9 +151,10 @@ struct Away {
     enum Edge : uint8_t { kNone = 0, kLeft = 1, kBack = 2 };
     // One pinned call: its eye - neck distance and its time (s, monotonic). Returns the edge this call made. While an episode is open every call is refused (the pin takes nothing from a camera
     // that was away a moment ago), near ones too; the episode ends on the first near call after the camera has been near for holdS without a far one between.
-    Edge step(double eyeNeckM, double tS, bool shopOpen = false) noexcept {
+    Edge step(double eyeNeckM, double tS, bool shopOpen = false, EventQueue* events = nullptr) noexcept {
         Edge e = kNone;
         if (away && lastCallS >= 0.0 && tS - lastCallS > kSilenceS) {   // no call for kSilenceS: nothing was pinned, the episode is over
+            if (events) events->pushEnded(endSnapshot(lastS));
             away = false;
             nearSinceS = -1.0;
             endS = -1.0;
@@ -102,6 +184,7 @@ struct Away {
         } else if (away) {
             if (nearSinceS < 0.0) nearSinceS = tS;
             if (tS - nearSinceS >= holdS) {
+                if (events) events->pushEnded(endSnapshot(tS));
                 away = false;
                 nearSinceS = -1.0;
                 endS = tS;
@@ -122,9 +205,55 @@ struct Away {
                     ++notNumber;
                 }
             }
+            if (events && e == kLeft) {
+                events->pushLeft({episodes, rejoins, farthestM, holdS, beganByShop, beganByDistance});
+            }
         }
         return e;
     }
+
+  private:
+    EpisodeEnd endSnapshot(double endTimeS) const noexcept {
+        return {episodes, calls, notNumber, alternations, rejoins, shopCalls, distanceCalls,
+                endTimeS - startS, holdS, nearestM, farthestM};
+    }
+};
+
+// The frame thread also closes an episode when the hook stops reporting. If the
+// hook resumes and queues that same end, its line has already been written.
+class LogState {
+  public:
+    template <typename OnLeft, typename OnEnded>
+    void drainEvents(EventQueue& queue, uint64_t nowMs, OnLeft&& onLeft, OnEnded&& onEnded) noexcept {
+        Event event;
+        while (queue.pop(&event)) {
+            if (event.kind == Event::kLeft) {
+                logged_ = true;
+                episode_ = event.start.episode;
+                leftMs_ = nowMs;
+                onLeft(event.start);
+            } else if (isOpen(event.end.episode)) {
+                logged_ = false;
+                onEnded(event.end);
+            }
+        }
+    }
+
+    bool isOpen(uint32_t episode) const noexcept { return logged_ && episode_ == episode; }
+
+    template <typename OnEnded>
+    void closeStale(uint64_t nowMs, uint64_t lastMs, EpisodeEnd end, OnEnded&& onEnded) noexcept {
+        if (!lastMs || nowMs < lastMs || nowMs - lastMs <= kAwayStaleMs) return;
+        if (!isOpen(end.episode)) return;
+        logged_ = false;
+        end.durationS = static_cast<double>(nowMs - leftMs_) * 1e-3;
+        onEnded(end);
+    }
+
+  private:
+    bool logged_ = false;
+    uint32_t episode_ = 0;
+    uint64_t leftMs_ = 0;
 };
 
 }  // namespace f107
