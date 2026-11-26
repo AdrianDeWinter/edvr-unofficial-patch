@@ -27,10 +27,12 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <vector>
 
 #include "../../src/common/log.h"
+#include "../../src/d3d11/d3d12_caps.h"
 #include "../../src/d3d11/fsr4_engine.h"
 #include "../../src/d3d11/fsr4_version.h"
 #include "../../src/d3d11/hdr_backend_flags.h"
@@ -38,13 +40,38 @@
 
 using Microsoft::WRL::ComPtr;
 
+namespace {
+std::mutex g_logMutex;
+std::vector<std::string> g_logLines;
+
+void clearCapturedLogs() {
+    std::lock_guard<std::mutex> lock(g_logMutex);
+    g_logLines.clear();
+}
+
+size_t countCapturedLogs(const char* needle) {
+    std::lock_guard<std::mutex> lock(g_logMutex);
+    size_t n = 0;
+    for (const auto& line : g_logLines) {
+        if (line.find(needle) != std::string::npos) ++n;
+    }
+    return n;
+}
+}  // namespace
+
 namespace edvr {
 Log& Log::get() { static auto* log = new Log; return *log; }
 void Log::note(const char* format, ...) {
+    char buf[1024]{};
     va_list args;
     va_start(args, format);
-    std::vfprintf(stderr, format, args);
+    std::vsnprintf(buf, sizeof(buf), format, args);
     va_end(args);
+    {
+        std::lock_guard<std::mutex> lock(g_logMutex);
+        g_logLines.emplace_back(buf);
+    }
+    std::fputs(buf, stderr);
     std::fputc('\n', stderr);
 }
 }  // namespace edvr
@@ -107,7 +134,12 @@ bool versionSelfTest() {
         !check(edvr::fsr4FormatVersionList({"3.1.5"}) == "3.1.5", "one-item list formatting") ||
         !check(edvr::fsr4FormatVersionList({"FSR 4.1.1", "4.0"}) == "4.1.1, 4.0.0", "a list shows versions as major.minor.patch") ||
         !check(edvr::fsr4FormatVersionList({"3.1.5", "junk", ""}) == "3.1.5, junk, ?", "a name that is not a version is shown as it came") ||
-        !check(edvr::fsr4FormatVersionList({}).empty(), "an empty list formats to nothing"))
+        !check(edvr::fsr4FormatVersionList({}).empty(), "an empty list formats to nothing") ||
+        !check(edvr::fsr4FormatRawVersionList({"FSR 4.1.2 (preview)", "3.1.5"}, {0x40102ull, 0x30105ull}) ==
+                   "FSR 4.1.2 (preview) (0x40102), 3.1.5 (0x30105)",
+               "raw offered list preserves provider labels and version IDs") ||
+        !check(edvr::formatD3D12Caps(edvr::queryD3D12Caps(nullptr)).find("sm=n/a(0x80004003)") != std::string::npos,
+               "shared d3d12_caps.h builds and formats null device cleanly in fsr4_engine_test"))
         return false;
 
     const std::string only315 =
@@ -589,10 +621,17 @@ int gpuTest(bool optional) {
     if (!check(level >= D3D_FEATURE_LEVEL_11_0, "D3D11 feature level 11_0")) return 1;
 
     edvr::fsr4Shutdown();
+    clearCapturedLogs();
     const char* why = nullptr;
     if (!edvr::fsr4Available(device.Get(), &why)) {
         // The expected answer on every GPU AMD's runtime does not offer a 4.x provider for. It must say why.
         if (!check(why && why[0], "a refusal carries a reason")) return 1;
+        // If probe reached D3D12 adapter match (i.e. not an earlier DXGI/D3D12 creation failure), D3D12 caps must be logged once.
+        if (countCapturedLogs("fsr4: D3D11/D3D12 adapter matched") > 0 &&
+            !check(countCapturedLogs("fsr4: d3d12 caps:") == 1, "fsr4 logs d3d12 caps once even on D7 refusal")) {
+            edvr::fsr4Shutdown();
+            return 1;
+        }
         if (!optional) {
             std::fprintf(stderr, "fsr4_engine_test: FAILED fsr4 unavailable on this GPU: %s\n", why);
             edvr::fsr4Shutdown();
@@ -609,6 +648,12 @@ int gpuTest(bool optional) {
         return check(cached, "the refusal is cached for the device") && check(refused, "fsr4Evaluate refuses with a reason too") ? 0 : 1;
     }
     std::fprintf(stderr, "fsr4_engine_test: fsr4 available on this GPU, label \"%s\"\n", edvr::fsr4VersionLabel());
+    if (!check(countCapturedLogs("fsr4: d3d12 caps:") == 1 &&
+                   countCapturedLogs("raw:") >= 1,
+               "fsr4Available logs d3d12 caps once and raw offered versions")) {
+        edvr::fsr4Shutdown();
+        return 1;
+    }
 
     FlightSpec ldr;
     FlightSpec hdr = ldr;

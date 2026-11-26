@@ -30,6 +30,7 @@
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 #include "gpu_timing.h"
+#include "d3d12_caps.h"
 // AMD's FidelityFX SDK v2.4.0 headers (the ffx-api: C descriptors over five exported functions), staged by the build under
 // <sdk>\include\FidelityFX\. ffx_api_loader.h is not used: it is a header of inline GetProcAddress calls that this file does by
 // hand, and it #pragma errors off Windows. The headers declare their functions dllexport; nothing here names those functions, it
@@ -1140,8 +1141,9 @@ bool probeRuntime(State& state, const char** why) {
     std::vector<uint64_t> ids;
     if (!queryOffered(state, names, ids, why)) return false;
     const std::string offered = names.empty() ? std::string("no FSR version") : "FSR " + fsr4FormatVersionList(names);
-    Log::get().note("fsr4: AMD's runtime offers %s for this device (%u version%s)", offered.c_str(), unsigned(names.size()),
-                    names.size() == 1 ? "" : "s");
+    const std::string offeredRaw = names.empty() ? std::string("none") : fsr4FormatRawVersionList(names, ids);
+    Log::get().note("fsr4: AMD's runtime offers %s for this device (%u version%s; raw: %s)", offered.c_str(),
+                    unsigned(names.size()), names.size() == 1 ? "" : "s", offeredRaw.c_str());
     Fsr4Version picked;
     const int pick = fsr4PickVersion(names, &picked);
     if (pick < 0) {
@@ -1150,7 +1152,8 @@ bool probeRuntime(State& state, const char** why) {
     }
     state.versionId = ids[static_cast<size_t>(pick)];
     state.versionName = names[static_cast<size_t>(pick)];
-    Log::get().note("fsr4: using AMD's provider %s (version id 0x%llX), the highest 4.x offered", fsr4FormatVersion(picked).c_str(),
+    Log::get().note("fsr4: using AMD's provider %s (raw: %s, version id 0x%llX), the highest 4.x offered",
+                    fsr4FormatVersion(picked).c_str(), state.versionName.c_str(),
                     static_cast<unsigned long long>(state.versionId));
 
     D3D12_COMMAND_QUEUE_DESC queueDesc{};
@@ -1236,6 +1239,7 @@ bool fsr4Available(ID3D11Device* dev, const char** why) {
     Log::get().note("fsr4: D3D11/D3D12 adapter matched LUID=%08X:%08X vendor=0x%04X device=0x%04X wine=%u",
                     unsigned(desc.AdapterLuid.HighPart), unsigned(desc.AdapterLuid.LowPart),
                     desc.VendorId, desc.DeviceId, underWine() ? 1u : 0u);
+    Log::get().note("fsr4: d3d12 caps: %s", formatD3D12Caps(queryD3D12Caps(state->d12.Get())).c_str());
     if (!probeRuntime(*state, why)) return false;
     g_state = state.release();
     g_available = true;
@@ -1662,6 +1666,7 @@ void fsr4Shutdown() {
         g_state = nullptr;
     }
     forgetFailedProbeDevice();
+    g_messageCount.store(0, std::memory_order_relaxed);
     g_tried = false;
     g_available = false;
     g_fovFallbackNoted = false;   // a re-initialised session says it again
