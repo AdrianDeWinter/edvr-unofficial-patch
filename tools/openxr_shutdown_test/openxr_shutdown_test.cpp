@@ -70,8 +70,8 @@ struct CaptureLifetime final {
 struct Watchdog final {
   Event finished;
   std::thread thread{[this] {
-    if (!finished.wait(20000)) {
-      std::fprintf(stderr, "openxr_shutdown_test: watchdog fired after 20 s in stage: %s\n",
+    if (!finished.wait(45000)) {
+      std::fprintf(stderr, "openxr_shutdown_test: watchdog fired after 45 s in stage: %s\n",
           g_stage.load(std::memory_order_acquire));
       std::fflush(stderr);
       std::_Exit(3);
@@ -105,6 +105,7 @@ struct FakeSteps final {
   CountedGraphics* immediate = nullptr;
   Event* finalizerEntered = nullptr;
   Event* finalizerRelease = nullptr;
+  DWORD finalizerReleaseTimeout = 5000;
   bool drainResult = true;
   bool finalizerResult = true;
   bool drainThrows = false;
@@ -128,7 +129,7 @@ struct FakeSteps final {
     if (finalizerThrows) throw 8;
     if (finalizerEntered) {
       finalizerEntered->signal();
-      if (!finalizerRelease || !finalizerRelease->wait(5000)) return false;
+      if (!finalizerRelease || !finalizerRelease->wait(finalizerReleaseTimeout)) return false;
     }
     if (finalizerResult && resources) resources->destroyed.store(true,
         std::memory_order_release);
@@ -394,24 +395,32 @@ void heldFinalizerRetiresBeforeRelease(HMODULE proxy, const std::wstring& path,
   Event release;
   steps.finalizerEntered = &entered;
   steps.finalizerRelease = &release;
+  steps.finalizerReleaseTimeout = 20000;
   ShutdownRun run;
-  startShutdown(fixture, steps, run, std::chrono::milliseconds(500));
+  // Use the production pending deadline; the real first Present can still be
+  // unwinding when the owner queues the final boundary request.
+  startShutdown(fixture, steps, run);
+  stage("held finalizer: wait for the drain request");
   check(reached([&] { return fixture.queue().pending() == 1; }),
       "held-finalizer drain request is pending");
-  check(SUCCEEDED(present.present()), "held-finalizer case services the drain");
-  check(reached([&] { return steps.drains.load(std::memory_order_acquire) == 1; }),
-      "held-finalizer drain executes before boundary request");
-  check(reached([&] { return fixture.queue().pending() == 1; }),
-      "held-finalizer boundary request is queued before the second Present");
 
   // The Present caller must stay inside the real callback while the observer
   // proves that lease release is pending. The observer then releases the fake
-  // finalizer, allowing the callback and System caller to retire normally.
+  // finalizer, allowing the callback and System caller to retire normally. Start
+  // observing before either Present so thread startup cannot consume the final
+  // request's pending deadline.
   std::atomic<bool> observerChecked{false};
   std::thread observer([&] {
-    const bool seen = entered.wait(3000);
-    Sleep(600);
-    check(seen && !run.done.load(std::memory_order_acquire) &&
+    const bool seen = reached([&] {
+      return entered.wait(0) || run.done.load(std::memory_order_acquire);
+    }, 10000) && entered.wait(0);
+    if (!seen) {
+      check(false, "System remains blocked while the finalizer holds the Present callback");
+      release.signal();
+      return;
+    }
+    Sleep(5100);
+    check(!run.done.load(std::memory_order_acquire) &&
           !run.captured.expired(),
         "System remains blocked while the finalizer holds the Present callback");
     const HRESULT closeResult = fixture.binding().close();
@@ -421,10 +430,22 @@ void heldFinalizerRetiresBeforeRelease(HMODULE proxy, const std::wstring& path,
     observerChecked.store(true, std::memory_order_release);
     release.signal();
   });
-  // The callback is held beyond the 500 ms fixture deadline. Once it has
-  // entered it must finish with its borrowed captures intact. Production keeps
-  // the existing five-second pending deadline.
-  check(SUCCEEDED(present.present()), "held finalizer Present completes after release");
+  stage("held finalizer: service the drain");
+  check(SUCCEEDED(present.present()), "held-finalizer case services the drain");
+  check(reached([&] { return steps.drains.load(std::memory_order_acquire) == 1; }),
+      "held-finalizer drain executes before boundary request");
+  stage("held finalizer: wait for the boundary request");
+  const bool queued = reached([&] {
+    return fixture.queue().pending() == 1 || run.done.load(std::memory_order_acquire);
+  }) && fixture.queue().pending() == 1;
+  check(queued, "held-finalizer boundary request is queued before the second Present");
+  // The callback is held beyond the five-second pending deadline. Once it has
+  // entered it must finish with its borrowed captures intact.
+  stage("held finalizer: service and release the boundary");
+  if (queued)
+    check(SUCCEEDED(present.present()), "held finalizer Present completes after release");
+  else
+    release.signal();
   observer.join();
   joinRun(run);
   check(observerChecked.load(std::memory_order_acquire) &&

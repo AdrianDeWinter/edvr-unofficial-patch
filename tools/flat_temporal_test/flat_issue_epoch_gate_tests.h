@@ -381,7 +381,8 @@ inline int run() {
                forgetCert.find("geometryCert()={};") < forgetCert.find("flatIssueEpochRevoke();") &&
                reset.find("geometryCertClear();") != std::string::npos && resize.find("forwardReset(s);") != std::string::npos,
            "flatRuntimeResize resets the forward-light state, which clears the certificate and revokes the epoch");
-    const std::string commit = bodyOf(modeWatch, "void commitPosted(uint64_t packed) {");
+    // Teardown ordering does not depend on the type of the posted payload.
+    const std::string commit = bodyOf(modeWatch, "void commitPosted(");
     const auto leaveFlat = commit.find("if (cur == RuntimeProfile::Flat) {");
     const auto resizeAt = commit.find("flatRuntimeResize();", leaveFlat);
     const auto flipAt = commit.find("runtimeProfileSet(target);");

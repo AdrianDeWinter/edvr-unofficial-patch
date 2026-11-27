@@ -37,6 +37,8 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 #include "../common/d3d11_device_slots.h"   // kDevSlotCheckFormatSupport / kDevSlotCheckFeatureSupport
 #include "../common/format_query_log.h"     // formatHooksInstalledLine: the one line that says the hooks went on
 #include "../common/temporal_mode.h"
+#include "../common/texture_lod_bias.h"
+#include "texture_lod_bias_reader.h"
 #include "../common/runtime_profile.h"
 #include "../common/frame_flag.h"
 #include "hmd_reset_press.h"   // hmdResetPressFrame: the players HMD recentre key, watched for the seat memory
@@ -2954,41 +2956,27 @@ void hookDevice(ID3D11Device* device) {
     vrSsaaGateStartup();  // log only: the 3D mode file, the .fxcfg's Supersampling and HMD Quality, once per process
     {
         const int aniso = sentinelCfg.getIntInRange("advanced.texture_anisotropy", 0, 0, 16);
-        const bool temporal = temporalModeEnabledFor(sentinelCfg.getString("fix.temporal_aa", "off"), runtimeFlatProfile());
-        const std::string biasKey = sentinelCfg.getString("advanced.texture_lod_bias", temporal ? "auto" : "0");
-        float bias = 0.0f;
-        if (_stricmp(biasKey.c_str(), "auto") == 0) {
-            float mult = 0.0f, ssaa = 0.0f;
-            char file[80] = {};
-            if (eliteHmdMultiplier(&mult, &ssaa, file, sizeof(file))) {
-                bias = log2f(mult);
-                s.samplerBiasAuto = true;
-                s.samplerBiasMult = mult;
-                snprintf(s.samplerBiasWhy, sizeof(s.samplerBiasWhy),
-                         "auto: Elite renders at %.3f of the size the runtime recommends "
-                         "(HMDRenderTargetMultiplier in %s; its SSAAMultiplier is %.3f), and "
-                         "log2 of that is the bias the mips want",
-                         static_cast<double>(mult), file[0] ? file : "its graphics preset",
-                         static_cast<double>(ssaa));
-            } else {
-                // Say it here rather than leave it to the sampler line: a
-                // failed auto leaves the bias at zero, which switches the
-                // whole override off, which would print nothing at all.
-                Log::get().note(
-                    "texture filtering: advanced.texture_lod_bias = auto, but Elite's graphics "
-                    "preset gave no HMDRenderTargetMultiplier (Options\\Graphics\\*.fxcfg under "
-                    "%%LOCALAPPDATA%%\\Frontier Developments\\Elite Dangerous). No bias is applied. "
-                    "Set a number instead, or check the game has written its settings once.");
-            }
-        } else {
-            bias = static_cast<float>(atof(biasKey.c_str()));
-            snprintf(s.samplerBiasWhy, sizeof(s.samplerBiasWhy),
-                     "advanced.texture_lod_bias = %s", biasKey.c_str());
+        const bool flat = runtimeFlatProfile();
+        const std::string biasKey = readTextureLodBiasKey(sentinelCfg, flat);
+        const TextureLodBiasPreset preset = isAutomaticTextureLodBias(biasKey)
+            ? readTextureLodBiasPreset(flat) : TextureLodBiasPreset{};
+        const TextureLodBiasResult resolved =
+            resolveTextureLodBias(flat, biasKey, preset.hmd, preset.ssaa, preset.source);
+        if (resolved.autoMissing) {
+            // Say it here rather than leave it to the sampler line: a
+            // failed auto leaves the bias at zero, which switches the
+            // whole override off, which would print nothing at all.
+            Log::get().note(
+                "texture filtering: advanced.texture_lod_bias = auto, but Elite's graphics "
+                "preset gave no usable %s. No bias is applied. "
+                "Set a number instead, or check the game has written its settings once.",
+                flat ? "SSAAMultiplier" : "HMDRenderTargetMultiplier");
         }
-        if (!(bias > -4.0f)) bias = -4.0f;
-        if (!(bias < 4.0f)) bias = 4.0f;
+        s.samplerBiasAuto = resolved.isAuto;
+        s.samplerBiasMult = resolved.activeMult;
+        snprintf(s.samplerBiasWhy, sizeof(s.samplerBiasWhy), "%s", resolved.why);
         s.samplerAniso = aniso;
-        s.samplerBias = bias;
+        s.samplerBias = resolved.bias;
     }
     s.deviceHook.replace(kDevCreateSamplerState, &hookedCreateSamplerState,
                          reinterpret_cast<void**>(&s.realCreateSamplerState));

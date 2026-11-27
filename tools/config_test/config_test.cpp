@@ -56,6 +56,7 @@
 #include "../../src/common/runtime_profile.h"
 #include "../../src/common/star_glow.h"
 #include "../../src/common/temporal_mode.h"
+#include "../../src/common/texture_lod_bias.h"
 #include "../../src/common/log.h"
 #include "../../src/d3d11/native_on_foot_f162.h"   // F162: the ADS sight eye key's text (a header with no dependencies)
 #include "config_contract_gen.h"   // build\gen: the tables the DLLs register, from the real edup.ini
@@ -3148,6 +3149,56 @@ int main(int argc, char** argv) {
             if (Config::get().getInt("advanced.temporal_aa_jitter_phases", 8) == 8)
                 ok("flat jitter cycle uses the 8 default when absent");
             else fail("flat jitter cycle default", "missing key was refused");
+            // Issue #253: flat profile reads advanced.texture_lod_bias and derives its default ("auto" vs "0")
+            // through readTextureLodBiasKey() from requestedTemporalMode() (never the refused VR fix.temporal_aa key).
+            if (Config::get().getString("advanced.texture_lod_bias", "auto") == "auto")
+                ok("flat texture_lod_bias uses the auto default when absent");
+            else fail("flat texture_lod_bias default",
+                      std::string("got ") + Config::get().getString("advanced.texture_lod_bias", "auto"));
+            const struct { const char* aa; const char* want; } lodDefaults[] = {
+                {"fsr4", "auto"}, {"xess", "auto"}, {"dlss", "auto"}, {"on", "auto"}, {"off", "0"},
+            };
+            bool lodDefaultsOk = true;
+            for (const auto& tc : lodDefaults) {
+                if (!rewriteIni(scratch, std::string("[fix]\r\ntemporal_aa = ") + tc.aa + "\r\n") ||
+                    !Config::get().reloadIfChanged() ||
+                    edvr::readTextureLodBiasKey(Config::get(), true) != tc.want) {
+                    lodDefaultsOk = false;
+                    fail("flat texture_lod_bias temporal default",
+                         std::string("aa=") + tc.aa + " got " + edvr::readTextureLodBiasKey(Config::get(), true));
+                }
+            }
+            if (lodDefaultsOk) ok("flat readTextureLodBiasKey derives auto/0 from requestedTemporalMode (fsr4/xess/dlss/on/off)");
+            // Issue #253 live switch: "auto" in VR (HMD=0.5 -> -1.00) vs "auto" in flat (SSAA=1.0 -> 0.00)
+            // must compare as different effective mip biases with whitespace-free KEPT_ITEM labels.
+            {
+                const auto vrAuto = edvr::effectiveTextureLodBias(false, "auto", 0.5f, 1.0f);
+                const auto flatAuto = edvr::effectiveTextureLodBias(true, "auto", 0.5f, 1.0f);
+                const auto flatZero = edvr::effectiveTextureLodBias(true, "0", 0.5f, 1.0f);
+                const auto vrExplicitA = edvr::effectiveTextureLodBias(false, "-1", 0.5f, 1.0f);
+                const auto vrExplicitB = edvr::effectiveTextureLodBias(false, " -1.0 ", 0.5f, 1.0f);
+                const auto vrMissing = edvr::effectiveTextureLodBias(false, "auto", 0.0f, 0.0f);
+                const auto flatMissing = edvr::effectiveTextureLodBias(true, "auto", 0.0f, 0.0f);
+                const bool labelsClean = vrAuto.label == "auto(-1.00)" && flatAuto.label == "auto(0.00)" &&
+                                         flatZero.label == "0" && vrExplicitB.label == "-1.0" &&
+                                         vrMissing.label == "auto" &&
+                                         vrAuto.label.find(' ') == std::string::npos &&
+                                         flatAuto.label.find(' ') == std::string::npos;
+                if (labelsClean &&
+                    !edvr::sameEffectiveTextureLodBias(vrAuto, flatAuto) &&
+                    edvr::sameEffectiveTextureLodBias(flatAuto, flatZero) &&
+                    edvr::sameEffectiveTextureLodBias(vrExplicitA, vrExplicitB) &&
+                    edvr::sameEffectiveTextureLodBias(vrMissing, flatZero) &&
+                    edvr::sameEffectiveTextureLodBias(vrMissing, flatMissing)) {
+                    ok("effectiveTextureLodBias compares resolved VR/flat auto biases and emits whitespace-free KEPT_ITEM labels");
+                } else {
+                    fail("effectiveTextureLodBias",
+                         "vr=" + vrAuto.label + " flat=" + flatAuto.label + " expB=" + vrExplicitB.label);
+                }
+            }
+            // Restore original scratch ini so later checks see the expected baseline.
+            (void)rewriteIni(scratch, "[fix]\r\nblack_void = on\r\n");
+            (void)Config::get().reloadIfChanged();
             if (Config::get().getBool("advanced.input_gate", true))
                 ok("flat input_gate uses true default when absent");
             else fail("flat input_gate default", "missing key was not true");
@@ -3189,6 +3240,9 @@ int main(int argc, char** argv) {
     expectInt("advanced.temporal_aa_jitter_phases", 32, "flat scope permits the jitter cycle's key");
     Config::get().set("advanced.temporal_aa_jitter_phases", "8");
     expectInt("advanced.temporal_aa_jitter_phases", 8, "flat scope reads the jitter cycle's key at its default");
+    // Issue #253: explicit texture-bias override in flat profile.
+    Config::get().set("advanced.texture_lod_bias", "-0.75");
+    expectStr("advanced.texture_lod_bias", "-0.75", "flat scope reads explicit advanced.texture_lod_bias");
     // The VR camera census's key is a VR-profile key too: a flat profile must never install its hook.
     Config::get().set("advanced.vr_camera_census", "on");
     expectStr("advanced.vr_camera_census", "off", "flat scope refuses the VR camera census's key");
@@ -3257,6 +3311,11 @@ int main(int argc, char** argv) {
     expectStr("advanced.real_dll", "d3d11_edhm.dll", "bad descriptor preserves mod chaining");
     Config::get().set("advanced.temporal_aa_jitter_phases", "32");
     expectInt("advanced.temporal_aa_jitter_phases", 0, "invalid profile refuses the flat jitter cycle's key");
+    Config::get().set("advanced.texture_lod_bias", "-0.5");
+    expectStr("advanced.texture_lod_bias", "off", "invalid profile refuses advanced.texture_lod_bias");
+    g_runtimeProfile = RuntimeProfile::Passthrough;
+    expectStr("advanced.texture_lod_bias", "off", "passthrough profile refuses advanced.texture_lod_bias");
+    g_runtimeProfile = RuntimeProfile::Invalid;
     Config::get().set("advanced.vr_camera_census", "on");
     expectStr("advanced.vr_camera_census", "off", "invalid profile cannot turn the VR camera census on");
     g_runtimeProfile = RuntimeProfile::LegacyVr;
@@ -3281,14 +3340,15 @@ int main(int argc, char** argv) {
         // The descriptor beside the inis is what makes init() pick the flat file:
         // without it the profile reads as the legacy VR one and edup.ini wins.
         if (!writeIni(flatDir, descriptor, L"edup_profile.ini") ||
-            !rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0.9\r\n") ||
-            !rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0.4\r\n[diag]\r\nflat_origin_capture = on\r\n", flatLeaf)) {
+            !rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0.9\r\n[advanced]\r\ntexture_lod_bias = -0.25\r\n") ||
+            !rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0.4\r\n[diag]\r\nflat_origin_capture = on\r\n[advanced]\r\ntexture_lod_bias = -0.75\r\n", flatLeaf)) {
             fail("flat sharpening reload", "could not write the scratch inis");
         } else {
             pinGraphicsMode(flatDir + L"_localappdata", 0);
             Config::get().init(flatDir);
             if (!runtimeFlatProfile()) fail("flat sharpening reload", "the descriptor did not select flat");
             expectBool("diag.flat_origin_capture", true, "flat profile permits explicit F1 diagnostic opt-in");
+            expectStr("advanced.texture_lod_bias", "-0.75", "edup-flat.ini overrides advanced.texture_lod_bias");
             expectFloat("fix.render_sharpness", 0.4f,
                         "the flat file is read first: its 0.4, not edup.ini's 0.9");
             if (!rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0\r\n", flatLeaf) ||
@@ -3352,6 +3412,33 @@ int main(int argc, char** argv) {
         }
     }
     g_runtimeProfile = savedProfile;
+
+    // Flat auto bias uses SSAA; VR keeps the HMD multiplier.
+    {
+        const auto flat = edvr::resolveTextureLodBias(true, "auto", 1.25f, 0.75f, "Custom.4.4.fxcfg");
+        check(flat.isAuto && !flat.autoMissing && std::abs(flat.bias - (-0.4150375f)) < 1e-5f &&
+                  flat.activeMult == 0.75f && std::strstr(flat.why, "SSAAMultiplier") != nullptr,
+              "flat automatic texture bias follows SSAA=0.75");
+        const auto vr = edvr::resolveTextureLodBias(false, "auto", 1.25f, 0.75f, "Custom.4.4.fxcfg");
+        check(vr.isAuto && std::abs(vr.bias - 0.3219281f) < 1e-5f,
+              "VR automatic texture bias retains HMD=1.25");
+        const auto missing = edvr::resolveTextureLodBias(true, "auto", 1.25f, 0.0f, nullptr);
+        check(missing.autoMissing && !missing.isAuto && missing.bias == 0.0f,
+              "missing flat SSAA leaves automatic bias at zero");
+        const auto ssaaOnly = edvr::resolveTextureLodBias(true, "auto", 0.0f, 0.5f, nullptr);
+        check(ssaaOnly.isAuto && ssaaOnly.bias == -1.0f,
+              "flat automatic bias needs no HMD setting");
+        const auto explicitBias = edvr::resolveTextureLodBias(true, "-0.5", 1.0f, 1.0f, nullptr);
+        check(!explicitBias.isAuto && explicitBias.bias == -0.5f,
+              "flat explicit texture bias is preserved");
+        const struct { const char* value; float expected; } legacyBounds[] = {
+            {"1e100", 4.0f}, {"-1e100", -4.0f}, {"nan", -4.0f},
+        };
+        for (const auto& bound : legacyBounds) {
+            const auto result = edvr::resolveTextureLodBias(false, bound.value, 1.0f, 1.0f, nullptr);
+            check(result.bias == bound.expected, "VR explicit texture bias retains legacy saturation");
+        }
+    }
 
     if (g_fails) {
         printf("CONFIG TEST FAILED (%d)\n", g_fails);

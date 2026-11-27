@@ -45,10 +45,10 @@
 - **Next flight:** "Flight plan". Temporary key it would add:
   `advanced.detail_at_output_size` (instrument only; remove when the arc
   closes).
-- **Not in scope, worth a look:** `advanced.texture_lod_bias = auto` derives
-  the mip bias from HMDRenderTargetMultiplier in both profiles
-  (device_hook.cpp), so in flat it ignores SS, the same render-size question
-  for textures.
+- **Not in scope (candidate #253, awaiting flat flight):** `advanced.texture_lod_bias` was
+  previously refused in flat (`flat_profile_keys.h`) and derived only from
+  `HMDRenderTargetMultiplier` (`device_hook.cpp`); flat now reads the key and
+  derives `auto` from `SSAAMultiplier`.
 
 ## Symptom and environment
 

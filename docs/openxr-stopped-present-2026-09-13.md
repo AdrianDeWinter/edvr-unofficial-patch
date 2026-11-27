@@ -1,5 +1,25 @@
 # Native shutdown after application Present stops
 
+## Status
+
+The eight-case desktop fixture qualifies the shared shutdown coordinator and
+real graphics callback. It does not qualify a runtime or headset shutdown. On
+2026-11-26, the held-finalizer case adopted the production five-second pending
+deadline and starts its observer before Present. A delayed render caller could
+exhaust the former 500 ms fixture deadline before callback entry. The finalizer
+is still held beyond the deadline to verify capture lifetime and pending lease
+release. Production shutdown behavior is unchanged. The corrected fixture
+passes all 64 checks under pinned MSVC/Wine; the delayed-caller case fails
+before this correction and passes after it. The full Windows build and package
+run
+[45878622430](https://github.com/characterecho-sean/ed-unofficial-patch/actions/runs/45878622430)
+passed on `d350cafd`.
+
+The CI correction is tracked with
+[#262](https://github.com/characterecho-sean/ed-unofficial-patch/issues/262).
+That issue's earlier watchdog reports still need qualification against this
+change; the shared last-stage text alone does not establish their cause.
+
 The [Frontier lifetime flight](openxr-shutdown-lifetime-2026-09-13.md)
 established a live render caller outside Present during forwarded shutdown: no
 active Present, unchanged balanced activity and zero callback-service samples
@@ -39,7 +59,7 @@ Eight cases run against a real graphics callback in
 | Render caller stays alive without another Present | The first queued drain expires after the existing five-second deadline; neither controlled drain nor finalizer runs. |
 | One Present services the drain, then Present stops | The second request expires without entering cleanup or destroying the controlled resources. |
 | Present service resumes | Drain and finalizer each run once on the owner stand-in; the drain's `CountedGraphics` callback runs on the actual Present caller, distinct from System and owner. |
-| A finalizer is held inside the real callback | A 600 ms hold exceeds the fixture's 500 ms pending deadline; the System caller remains blocked, captures stay alive, and close/release return `E_PENDING` until the callback retires. |
+| A finalizer is held inside the real callback | A 5.1 s hold exceeds the production five-second pending deadline; the System caller remains blocked, captures stay alive, and close/release return `E_PENDING` until the callback retires. |
 | Drain returns false | Finalization is skipped and controlled resources remain intact. |
 | Drain throws | The synchronous route reports failure, finalization is skipped and controlled resources remain intact. |
 | Finalizer returns false | Owner work joins, but cleanup is reported as unsuccessful. |
@@ -59,6 +79,16 @@ Parent review corrected the retained-reference check, ordered the second
 Present after the final request was queued, distinguished a failed finalizer
 outcome from completed owner-thread retirement, and increased the held-case
 deadline to allow scheduling margin. No production timeout was changed.
+
+The 2026-11-26 CI failure occurred after the drain succeeded but before the
+held-finalizer request was observed. Delaying the render caller by 750 ms after
+the first Present reproduces that failure: exactly one callback runs, the
+finalizer never enters, and the coordinator cancels the queued request. The
+fixture now starts the observer before servicing the drain, uses the production
+pending deadline, and holds an entered finalizer for 5.1 s. Its release wait
+and watchdog budget include that hold and the two earlier deliberate
+five-second cancellations. Missed callback entry reports a failure without
+attempting the active-lease checks.
 
 ## Qualification limits
 
