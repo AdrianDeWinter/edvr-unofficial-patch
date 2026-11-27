@@ -27,7 +27,7 @@ struct EdhmD3dxEffectiveCompat {
     bool upscalingOk = true;
     // First config path and reason when the effective settings cannot be determined.
     std::string incompleteReason;
-    // Relative path under the game folder (e.g. "d3dx_user.ini" or "EDHM-ini\\override.ini")
+    // Requested relative path under the game folder (e.g. "d3dx_user.ini" or "EDHM-ini\\override.ini")
     // when the effective incompatible value came from an included or user config file rather
     // than the main d3dx.ini.
     std::string allowPlatformUpdateOverrideFile;
@@ -75,8 +75,11 @@ std::string setD3dxKey(const std::string& iniText, const char* section, const ch
 std::string removeD3dxKey(const std::string& iniText, const char* section, const char* key);
 
 // Evaluates 2DMigoto's effective compatibility values across d3dx.ini, its [Include]
-// graph (contained within `gameDir`), and its user_config file (default d3dx_user.ini),
-// matching EDHM_2DMigoto v0.1.9 (commit 716157b8, DirectX11/IniHandler.cpp):
+// graph and its user_config file (default d3dx_user.ini). Names are relative to
+// `gameDir`; reads follow file and directory links, including outside targets,
+// and deduplicate ordinary includes by the final paths of opened handles.
+// Unresolvable reads fail closed; traversal limits and disk-file checks apply.
+// Scalar and override rules match EDHM_2DMigoto v0.1.9 (commit 716157b8, DirectX11/IniHandler.cpp):
 //   - Full-line ';' comments only; mid-line ';' is NOT stripped (IniHandler.cpp:718-729).
 //   - Empty values are ignored by ParseIniKeyValLine (IniHandler.cpp:637-645).
 //   - [System] allow_platform_update defaults to true in v0.1.9+ (IniHandler.cpp:5051;

@@ -573,7 +573,7 @@ std::wstring finalIncludePathKey(HANDLE h) {
     const DWORD length = GetFinalPathNameByHandleW(h, path.data(), capacity, flags);
     if (length == 0 || length >= capacity) return {};
     path.resize(length);
-    return wideLower(path);
+    return path;
 }
 
 // The caller checks the opened target and uses the same handle for identity and bytes.
@@ -776,16 +776,19 @@ void parseMigotoIniText(const std::string& text, bool isIncluded, const std::wst
 }
 
 void loadSingleIncludedIni(const std::wstring& gameDir, const std::wstring& rawRel, bool isUserConfig,
-                           EffectiveState* state, std::vector<PendingIncludeSection>* nextIncludes) {
+                           EffectiveState* state, std::vector<PendingIncludeSection>* nextIncludes,
+                           const std::wstring& resolvedParent = {}) {
     std::wstring normRel;
     if (const char* error = normalizeRelativeIncludePath(rawRel, false, &normRel)) {
         state->reportIncomplete(rawRel, error);
         return;
     }
-    const std::wstring fullPath = joinPath(gameDir, normRel);
+    const std::wstring& readBase = resolvedParent.empty() ? gameDir : resolvedParent;
+    const std::wstring readRel = resolvedParent.empty() ? normRel : normRel.substr(normRel.rfind(L'\\') + 1);
+    const std::wstring fullPath = joinPath(readBase, readRel);
     const IncludeReadHandle file(fullPath, GENERIC_READ, FILE_ATTRIBUTE_NORMAL);
     if (file.handle == INVALID_HANDLE_VALUE) {
-        if (!missingPath(GetLastError()) || !includePathIsMissing(gameDir, normRel)) {
+        if (!missingPath(GetLastError()) || !includePathIsMissing(readBase, readRel)) {
             state->reportIncomplete(rawRel, "cannot open included config for reading");
         }
         return;
@@ -834,16 +837,19 @@ void loadSingleIncludedIni(const std::wstring& gameDir, const std::wstring& rawR
 }
 
 void loadIncludedIniRecursive(const std::wstring& gameDir, const std::wstring& rawRel, size_t depth,
-                              EffectiveState* state, std::vector<PendingIncludeSection>* nextIncludes) {
+                              EffectiveState* state, std::vector<PendingIncludeSection>* nextIncludes,
+                              const std::wstring& resolvedParent = {}) {
     std::wstring normDirRel;
     if (const char* error = normalizeRelativeIncludePath(rawRel, true, &normDirRel)) {
         state->reportIncomplete(rawRel, error);
         return;
     }
-    const std::wstring dirPath = joinPath(gameDir, normDirRel);
+    const std::wstring& readBase = resolvedParent.empty() ? gameDir : resolvedParent;
+    const std::wstring readRel = resolvedParent.empty() ? normDirRel : normDirRel.substr(normDirRel.rfind(L'\\') + 1);
+    const std::wstring dirPath = joinPath(readBase, readRel);
     const IncludeReadHandle directory(dirPath, FILE_READ_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS);
     if (directory.handle == INVALID_HANDLE_VALUE) {
-        if (!missingPath(GetLastError()) || !includePathIsMissing(gameDir, normDirRel)) {
+        if (!missingPath(GetLastError()) || !includePathIsMissing(readBase, readRel)) {
             state->reportIncomplete(rawRel, "cannot open recursive include directory");
         }
         return;
@@ -874,7 +880,9 @@ void loadIncludedIniRecursive(const std::wstring& gameDir, const std::wstring& r
     std::set<std::wstring, WStringInsensitiveLess> iniFiles;
     std::set<std::wstring, WStringInsensitiveLess> subDirs;
     WIN32_FIND_DATAW fd{};
-    HANDLE hFind = FindFirstFileW(joinPath(dirPath, L"*").c_str(), &fd);
+    // Enumerate and open children from the resolved target even if its requested link is retargeted.
+    // Keep normDirRel for diagnostics and nested include bases.
+    HANDLE hFind = FindFirstFileW(joinPath(dirKey, L"*").c_str(), &fd);
     if (hFind == INVALID_HANDLE_VALUE) {
         if (GetLastError() != ERROR_FILE_NOT_FOUND) {
             state->reportIncomplete(rawRel, "cannot enumerate recursive include directory");
@@ -918,12 +926,12 @@ void loadIncludedIniRecursive(const std::wstring& gameDir, const std::wstring& r
             }
             if (dirKey == state->gameDirKey) continue;
         }
-        loadSingleIncludedIni(gameDir, childRel, false, state, nextIncludes);
+        loadSingleIncludedIni(gameDir, childRel, false, state, nextIncludes, dirKey);
         if (!state->incompleteReason.empty()) return;
     }
     for (const std::wstring& sub : subDirs) {
         const std::wstring childDir = normDirRel.empty() ? sub : (normDirRel + L"\\" + sub);
-        loadIncludedIniRecursive(gameDir, childDir, depth + 1, state, nextIncludes);
+        loadIncludedIniRecursive(gameDir, childDir, depth + 1, state, nextIncludes, dirKey);
         if (!state->incompleteReason.empty()) return;
     }
 }

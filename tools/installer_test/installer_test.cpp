@@ -7142,6 +7142,20 @@ static bool makeJunction(const std::wstring& link, const std::wstring& target) {
     return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 }
 
+static bool makeEdhmFileLink(const std::wstring& link, const std::wstring& target, const char* what) {
+    const bool linked = CreateSymbolicLinkW(link.c_str(), target.c_str(),
+                                           SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != FALSE;
+    const DWORD error = linked ? ERROR_SUCCESS : GetLastError();
+    const bool ci = GetEnvironmentVariableW(L"CI", nullptr, 0) != 0 ||
+                    GetEnvironmentVariableW(L"GITHUB_ACTIONS", nullptr, 0) != 0;
+    if (!linked && error == ERROR_PRIVILEGE_NOT_HELD && !ci) {
+        printf("  skip  %s: file symlink privilege is unavailable (required in CI)\n", what);
+        return false;
+    }
+    check(linked, what, "CreateSymbolicLinkW error " + std::to_string(error));
+    return linked;
+}
+
 static void testEdhmLinkedIncludes(const std::wstring& scratch) {
     const std::wstring game = joinPath(scratch, L"linked_include_game");
     const std::wstring configs = joinPath(scratch, L"linked_include_configs");
@@ -7157,17 +7171,16 @@ static void testEdhmLinkedIncludes(const std::wstring& scratch) {
     const std::string root = "[Include]\r\ninclude_recursive = EDHM-ini\r\n"
                              "[Device]\r\nupscaling = 0\r\nupscaling = 1\r\n";
     check(writeAll(joinPath(game, L"d3dx.ini"), root) &&
-              writeAll(source, "[System]\r\nallow_platform_update = 0\r\n"),
+              writeAll(source, "[System]\r\nallow_platform_update = 0\r\n") &&
+              writeAll(first, "[System]\r\nallow_platform_update = 0\r\n"),
           "linked includes: write the root and outside-game settings");
     const bool linkedDir = makeJunction(dirLink, configs);
-    constexpr DWORD fileLink = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
-    const bool linkedFile = CreateSymbolicLinkW(first.c_str(), source.c_str(), fileLink) != FALSE;
-    check(linkedDir && linkedFile, "linked includes: create a directory junction and file symlink");
-    if (linkedDir && linkedFile) {
+    check(linkedDir, "linked includes: create a directory junction");
+    if (linkedDir) {
         const auto linked = evaluateEdhmD3dxCompat(game, root);
         check(linked.complete() && !linked.satisfied && linked.upscalingOk &&
                   linked.allowPlatformUpdateOverrideFile == "EDHM-ini\\a.ini",
-              "linked includes: read settings through a junction outside the game and a file symlink",
+              "linked includes: read settings through a junction outside the game",
               linked.incompleteReason);
 
         const bool linkedCycle = makeJunction(cycle, game);
@@ -7181,28 +7194,33 @@ static void testEdhmLinkedIncludes(const std::wstring& scratch) {
             RemoveDirectoryW(cycle.c_str());
         }
 
-        const bool linkedAlias = CreateSymbolicLinkW(alias.c_str(), source.c_str(), fileLink) != FALSE;
-        check(writeAll(compatible, "[System]\r\nallow_platform_update = 1\r\n") && linkedAlias,
-              "linked includes: put a compatible override between two aliases of the same file");
-        if (linkedAlias) {
-            const auto aliased = evaluateEdhmD3dxCompat(game, root);
-            check(aliased.complete() && aliased.satisfied,
-                  "linked includes: a later alias cannot reapply the same include", aliased.incompleteReason);
-        }
+        check(DeleteFileW(first.c_str()) != FALSE, "linked includes: replace the ordinary include with a file symlink");
+        if (makeEdhmFileLink(first, source, "linked includes: create a file symlink")) {
+            const auto fileLinked = evaluateEdhmD3dxCompat(game, root);
+            check(fileLinked.complete() && !fileLinked.satisfied &&
+                      fileLinked.allowPlatformUpdateOverrideFile == "EDHM-ini\\a.ini",
+                  "linked includes: read settings through a file symlink", fileLinked.incompleteReason);
 
-        const bool linkedUser = CreateSymbolicLinkW(user.c_str(), compatible.c_str(), fileLink) != FALSE;
-        check(linkedUser, "linked includes: create the default user-config symlink");
-        if (linkedUser) {
-            const std::string ordered = "[Include]\r\ninclude = EDHM-ini\\b.ini\r\ninclude = EDHM-ini\\a.ini\r\n";
-            const auto userLast = evaluateEdhmD3dxCompat(game, ordered);
-            check(userLast.complete() && userLast.satisfied,
-                  "linked includes: a user-config symlink still applies last", userLast.incompleteReason);
+            check(writeAll(compatible, "[System]\r\nallow_platform_update = 1\r\n"),
+                  "linked includes: put a compatible override between two aliases of the same file");
+            if (makeEdhmFileLink(alias, source, "linked includes: create a second file alias")) {
+                const auto aliased = evaluateEdhmD3dxCompat(game, root);
+                check(aliased.complete() && aliased.satisfied,
+                      "linked includes: a later alias cannot reapply the same include", aliased.incompleteReason);
+            }
 
-            check(DeleteFileW(compatible.c_str()) != FALSE, "linked includes: remove the user-config target");
-            const auto dangling = evaluateEdhmD3dxCompat(game, "");
-            check(!dangling.complete() && dangling.incompleteReason.find("d3dx_user.ini: ") == 0,
-                  "linked includes: a dangling user-config symlink fails closed and names the link",
-                  dangling.incompleteReason);
+            if (makeEdhmFileLink(user, compatible, "linked includes: create the default user-config symlink")) {
+                const std::string ordered = "[Include]\r\ninclude = EDHM-ini\\b.ini\r\ninclude = EDHM-ini\\a.ini\r\n";
+                const auto userLast = evaluateEdhmD3dxCompat(game, ordered);
+                check(userLast.complete() && userLast.satisfied,
+                      "linked includes: a user-config symlink still applies last", userLast.incompleteReason);
+
+                check(DeleteFileW(compatible.c_str()) != FALSE, "linked includes: remove the user-config target");
+                const auto dangling = evaluateEdhmD3dxCompat(game, "");
+                check(!dangling.complete() && dangling.incompleteReason.find("d3dx_user.ini: ") == 0,
+                      "linked includes: a dangling user-config symlink fails closed and names the link",
+                      dangling.incompleteReason);
+            }
         }
     }
     DeleteFileW(user.c_str());
