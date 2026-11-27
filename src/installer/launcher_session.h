@@ -216,6 +216,12 @@ public:
     // Transient warning displayed under the EDHM 2DMigoto setting (e.g. antivirus interference).
     const std::string& edhmWarning() const { return edhmWarning_; }
     void setEdhmWarning(const std::string& warning);
+    // True when the currently adopted release failed to download the opt-in EDHM 2DMigoto asset
+    // (persisted via launcher.ini edhm_optin_failed_manifest).
+    bool edhmOptInDownloadFailed() const { return edhmOptInDownloadFailed_; }
+    // Explicit user retry after a failed opt-in EDHM 2DMigoto download: clears
+    // edhm_optin_failed_manifest, checks for the release, and starts downloading once available.
+    void retryEdhmOptInDownload();
     // True once the game has been seen running (or the direct start gave a process), for the run's exit code.
     bool gameStarted() const { return gameStarted_; }
 
@@ -229,7 +235,7 @@ private:
     void checkDone(const UpdateCheck& result);
     void updateFailed(const std::string& why);
     void finishSelfUpdate();
-    void payloadLoaded(const PayloadLoad& load);
+    void payloadLoaded(const PayloadLoad& load, unsigned long long gen, bool notify = true);
     UpdaterSettings updaterSettings() const;
     std::unique_ptr<HttpClient> makeHttp() const;
     void post(std::function<void()> job) { env_.post(std::move(job)); }
@@ -261,18 +267,21 @@ private:
 
     PayloadState payloadState_ = PayloadState::Loading;
     PayloadLoad payload_;
+    unsigned long long payloadGen_ = 0;  // monotonic counter so stale startup loads cannot overwrite newer updates
     CheckState checkState_ = CheckState::NotYet;
     UpdateCheck check_;
     std::string updateLine_;
     std::string channel_ = "stable";
     bool updating_ = false;
     bool recheckNeeded_ = false;  // queued re-check when opt-in state changes during an in-flight check/update
+    bool autoUpdateAfterCheck_ = false;  // explicit user retry: start beginUpdate() once check reports Available
     bool autoResumed_ = false;  // the update that followed a self-update's restart was started
     bool playing_ = false;
     bool directLaunch_ = false;
     bool closeAfterStart_ = false;
     bool steamFrontierLogin_ = false;
     bool edhm2dMigoto_ = false;
+    bool edhmOptInDownloadFailed_ = false;
     std::string edhmWarning_;
     bool gameStarted_ = false;
     edvr::VrHeadsetMode vrStereoMode_ = edvr::VrHeadsetMode::NotSet;

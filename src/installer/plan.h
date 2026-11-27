@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "detect.h"
+#include "edhm_d3dx.h"
 #include "../common/iniedit.h"
 #include "install_manifest.h"
 #include "probe.h"
@@ -101,6 +102,8 @@ struct Survey {
     bool                 d3dxIniUtf16 = false;       // <game>\d3dx.ini is UTF-16 (unsupported)
     std::string          d3dxIniText;                // contents of <game>\d3dx.ini when present, readable, and UTF-8/ASCII
     std::string          d3dxIniSha;                 // SHA-256 of d3dxIniText when present, readable, and UTF-8/ASCII
+    bool                 d3dxCompatChecked = false;  // true once surveyTarget computed d3dxCompat
+    EdhmD3dxEffectiveCompat d3dxCompat;              // effective compat across d3dx.ini, [Include] files, and d3dx_user.ini
     bool                 iniPresent = false;
     bool                 descriptorPresent = false;
     std::string          descriptorSha;
@@ -284,6 +287,13 @@ Plan planEdhmToggle(const Survey& survey, const Options& options, const PayloadI
 // while 2DMigoto is managed: checks Elite running / read-only / UTF-16, records the original value
 // in state.ini, and restores it on uncheck.
 Plan planEdhmLogging(const Survey& survey, const Options& options, const std::string& key, bool wantHide);
+
+// True when the recorded tailored 2DMigoto d3d11_edhm.dll matches on disk (and ED-UP is not chained to another mod).
+bool edhm2dMigotoDllActive(const Survey& survey);
+
+// True when tailored 2DMigoto is on disk AND effective d3dx.ini compatibility (including [Include] files
+// and d3dx_user.ini) is satisfied.
+bool edhm2dMigotoActive(const Survey& survey);
 
 // The one-paragraph summary shown before anything is done.
 std::string planSummary(const Plan& plan);

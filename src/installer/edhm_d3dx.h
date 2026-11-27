@@ -18,24 +18,48 @@ struct D3dxKeyRead {
     std::string value;
 };
 
+// Result of evaluating 2DMigoto's effective compatibility settings across d3dx.ini,
+// any [Include] files (include / include_recursive, honoring exclude_recursive and
+// preamble condition), and [Include] user_config (default d3dx_user.ini).
+struct EdhmD3dxEffectiveCompat {
+    bool satisfied = true;
+    bool allowPlatformUpdateOk = true;
+    bool upscalingOk = true;
+    // First config path and reason when the effective settings cannot be determined.
+    std::string incompleteReason;
+    // Requested relative path under the game folder (e.g. "d3dx_user.ini" or "EDHM-ini\\override.ini")
+    // when the effective incompatible value came from an included or user config file rather
+    // than the main d3dx.ini.
+    std::string allowPlatformUpdateOverrideFile;
+    std::string upscalingOverrideFile;
+
+    bool complete() const { return incompleteReason.empty(); }
+
+    bool hasExternalOverrideFailure() const {
+        return (!allowPlatformUpdateOk && !allowPlatformUpdateOverrideFile.empty()) ||
+               (!upscalingOk && !upscalingOverrideFile.empty());
+    }
+};
+
 // Returns true if `bytes` looks like UTF-16 (UTF-16 LE/BE BOM or embedded NUL
 // bytes). ED-UP only edits UTF-8 / ASCII d3dx.ini files and refuses UTF-16
 // rather than appending ASCII bytes onto a UTF-16 file.
 bool isUtf16D3dx(const std::string& bytes);
 
-// Reads the first active (uncommented) occurrence of `key` in the first
+// Reads the first active (uncommented, non-empty) occurrence of `key` in the first
 // `[section]` of that name, matching 2DMigoto's IniHandler.cpp (first section
-// wins, first key wins via emplace). Section and key matching are ASCII
+// wins, first non-empty key wins via emplace). Section and key matching are ASCII
 // case-insensitive. Lines whose first non-whitespace character is ';' are
-// comments; inline ';' comments are stripped from the returned value.
+// comments; inline ';' comments are stripped from the returned value for surgical
+// editing helpers.
 D3dxKeyRead readD3dxKey(const std::string& iniText, const char* section, const char* key);
 
 // Sets `key` in the first `[section]` of that name to `value`, preserving
 // comments, unrelated keys, inline comments, indentation, UTF-8 BOM, and
 // line-ending style (CRLF or LF).
-// - Only the first active occurrence in the first `[section]` (the effective
-//   first-wins entry read by 2DMigoto and readD3dxKey) is updated in place,
-//   so duplicate keys or repeated sections are not collapsed.
+// - Only the first active occurrence in the first `[section]` (preferring the
+//   first non-empty value, matching 2DMigoto) is updated in place, so duplicate
+//   keys or repeated sections are not collapsed.
 // - Otherwise, if a commented `; key = ...` line exists in that first
 //   `[section]`, `key = value` is inserted immediately after the first
 //   commented occurrence so the template comment stays intact.
@@ -50,39 +74,54 @@ std::string setD3dxKey(const std::string& iniText, const char* section, const ch
 // duplicate keys or sections intact.
 std::string removeD3dxKey(const std::string& iniText, const char* section, const char* key);
 
-// Returns true when d3dx.ini is UTF-8/ASCII and its effective compatibility
-// values already satisfy ED-UP + EDHM_2DMigoto v0.1.9 (commit 716157b8):
-//   [System] allow_platform_update  absent or truthy (1/true/yes/on); v0.1.9
-//                                   IniHandler.cpp:5051 defaults true, while an
-//                                   explicit false causes HackerDevice.cpp:1704
-//                                   and HackerContext.cpp:1374 to return
-//                                   E_NOINTERFACE for Device1/Context1, breaking
-//                                   flat_mono_resolve.cpp:604-619.
-//   [Device] upscaling              absent or 0 (IniHandler.cpp:5141 &
-//                                   HackerDXGI.cpp legacy swapchain upscaler).
+// Evaluates 2DMigoto's effective compatibility values across d3dx.ini, its [Include]
+// graph and its user_config file (default d3dx_user.ini). Names are relative to
+// `gameDir`; reads follow file and directory links, including outside targets,
+// and deduplicate ordinary includes by the final paths of opened handles.
+// Unresolvable reads fail closed; traversal limits and disk-file checks apply.
+// Scalar and override rules match EDHM_2DMigoto v0.1.9 (commit 716157b8, DirectX11/IniHandler.cpp):
+//   - Full-line ';' comments only; mid-line ';' is NOT stripped (IniHandler.cpp:718-729).
+//   - Empty values are ignored by ParseIniKeyValLine (IniHandler.cpp:637-645).
+//   - [System] allow_platform_update defaults to true in v0.1.9+ (IniHandler.cpp:5051;
+//     enforced by MIN_ALLOW_PLATFORM_UPDATE_DEFAULT_TRUE_VERSION in
+//     tools/fetch_edhm_2dmigoto.py). [Device] upscaling defaults to 0
+//     (IniHandler.cpp:5141).
+//   - Boolean and numeric literals follow the fork's scalar conversions. Other
+//     values and conditions require expression evaluation and leave the check incomplete.
+//   - Included files and user_config override global [System]/[Device] keys last-write-wins
+//     (IniHandler.cpp:488-492, 647-652, 1682-1793, 5027-5034).
 // (v0.1.9 forces load_library_redirect = 0 automatically when loaded as
 // d3d11_edhm.dll at IniHandler.cpp:5070-5075 & D3D11Wrapper.cpp:1228, so
 // ED-UP does not touch load_library_redirect.)
+EdhmD3dxEffectiveCompat evaluateEdhmD3dxCompat(const std::wstring& gameDir, const std::string& d3dxIniText);
+
+// Single-file compatibility check over in-memory d3dx.ini text (no filesystem includes).
 bool edhmD3dxCompatSatisfied(const std::string& iniText);
 
-// Captures the original values of ONLY the compatibility keys that currently
-// fail edhmD3dxCompatSatisfied (and will therefore be changed by
-// applyEdhmD3dxCompat).
+// Formats external include/user_config compatibility failures for user-facing problem text
+// (e.g. "[System] allow_platform_update in d3dx_user.ini").
+std::string describeEdhmD3dxOverrideFailure(const EdhmD3dxEffectiveCompat& compat);
+
+// Captures the original values of ONLY the compatibility keys in d3dx.ini that currently
+// fail effective compatibility (and will therefore be changed by applyEdhmD3dxCompat).
 EdhmD3dxBackup snapshotEdhmD3dxCompat(const std::string& iniText);
+EdhmD3dxBackup snapshotEdhmD3dxCompat(const std::string& iniText, const EdhmD3dxEffectiveCompat& effective);
 
 // Fixes only incompatible values in d3dx.ini:
-//   [System] allow_platform_update -> 1 (only when explicitly present and non-truthy)
-//   [Device] upscaling -> 0 (only when explicitly present and non-zero)
+//   [System] allow_platform_update -> 1 (only when effectively failing from d3dx.ini)
+//   [Device] upscaling -> 0 (only when effectively failing from d3dx.ini)
 // Leaves already-compatible d3dx.ini text byte-identical.
 std::string applyEdhmD3dxCompat(const std::string& iniText);
+std::string applyEdhmD3dxCompat(const std::string& iniText, const EdhmD3dxEffectiveCompat& effective);
 
 // Formats the backed-up keys and their original values for manual restoration
 // notices (e.g. when uninstall cannot edit a read-only or UTF-16 d3dx.ini).
 std::string describeEdhmD3dxBackup(const EdhmD3dxBackup& backup);
 
-// Restores any backed-up ED-UP compatibility keys (and backed-up [Logging]
-// keys, if recorded) ONLY while each key still holds ED-UP's applied value,
-// leaving later player or EDHM-UI edits intact.
+// Restores any backed-up ED-UP compatibility keys (including migrated legacy
+// load_library_redirect backups, and backed-up [Logging] keys if recorded) ONLY
+// while each key still holds ED-UP's applied value, leaving later player or
+// EDHM-UI edits intact.
 std::string restoreEdhmD3dxCompat(const std::string& iniText, const EdhmD3dxBackup& backup);
 
 // Restores a single backed-up [Logging] key when unchecking its checkbox.

@@ -69,12 +69,13 @@ void LauncherSession::start() {
 
     // The payload first: it is what makes Install available. The window is already up.
     payloadState_ = PayloadState::Loading;
+    const unsigned long long gen = ++payloadGen_;
     const LauncherRoots roots = env_.roots;
     const std::wstring payloadDir = env_.payloadDir;
     const char* const* keys = env_.keys;
-    spawn([this, roots, payloadDir, keys]() {
+    spawn([this, roots, payloadDir, keys, gen]() {
         const PayloadLoad load = loadLauncherPayload(roots, payloadDir, keys);
-        post([this, load]() { payloadLoaded(load); });
+        post([this, load, gen]() { payloadLoaded(load, gen); });
     });
     beginCheck();
 }
@@ -87,10 +88,32 @@ void LauncherSession::shutdown() {
     workers_.clear();
 }
 
-void LauncherSession::payloadLoaded(const PayloadLoad& load) {
+void LauncherSession::payloadLoaded(const PayloadLoad& load, unsigned long long gen, bool notify) {
+    if (gen < payloadGen_) return;
     payload_ = load;
     payloadState_ = load.ok ? PayloadState::Ready : PayloadState::None;
-    changed();
+    const bool hasEdhmAsset = load.ok && payloadInfo().find("edhm_2dmigoto") != nullptr;
+    if (load.ok && load.kind == PayloadKind::Manifest && edhm2dMigoto_ &&
+        load.hasOptInEdhmAsset && !hasEdhmAsset) {
+        LauncherState state;
+        if (state.load(launcherIniPath(env_.roots), nullptr) &&
+            !state.currentManifest().empty() &&
+            state.edhmOptInFailedManifest() == state.currentManifest()) {
+            edhmOptInDownloadFailed_ = true;
+            if (edhmWarning_.empty()) edhmWarning_ = kEdhmInterferenceWarning;
+        } else {
+            edhmOptInDownloadFailed_ = false;
+        }
+    } else {
+        edhmOptInDownloadFailed_ = false;
+        // Only clear an opt-in download warning when opt-in is ON and the manifest asset is now present;
+        // never clear an antivirus DLL-removal fallback warning set after opting out.
+        if (edhm2dMigoto_ && load.kind == PayloadKind::Manifest && hasEdhmAsset &&
+            edhmWarning_ == kEdhmInterferenceWarning) {
+            edhmWarning_.clear();
+        }
+    }
+    if (notify) changed();
 }
 
 void LauncherSession::beginCheck() {
@@ -138,6 +161,13 @@ void LauncherSession::checkDone(const UpdateCheck& result) {
             return;
         }
     }
+    if (autoUpdateAfterCheck_) {
+        autoUpdateAfterCheck_ = false;
+        if (checkState_ == CheckState::Available && edhm2dMigoto_) {
+            beginUpdate();
+            return;
+        }
+    }
     // Started by a self-update: the user already pressed Download, so carry on.
     if (env_.updatedFlag && !autoResumed_ && checkState_ == CheckState::Available) {
         autoResumed_ = true;
@@ -178,7 +208,8 @@ void LauncherSession::beginUpdate() {
     const UpdaterSettings settings = updaterSettings();
     const LauncherRoots roots = env_.roots;
     const std::wstring self = env_.selfExe;
-    spawn([this, check, settings, roots, selfUpdate, self]() mutable {
+    const unsigned long long gen = ++payloadGen_;
+    spawn([this, check, settings, roots, selfUpdate, self, gen]() mutable {
         std::unique_ptr<HttpClient> http = makeHttp();
         std::string error;
         // Progress is posted when the whole percent changes, not on every chunk.
@@ -212,18 +243,23 @@ void LauncherSession::beginUpdate() {
         }
         // The payload the window installs from is now the adopted manifest, not a --payload folder.
         const PayloadLoad load = loadLauncherPayload(roots, std::wstring(), settings.keys);
-        post([this, load, optInWarning]() {
+        post([this, load, optInWarning, gen]() {
             updating_ = false;
-            payloadLoaded(load);
+            const std::wstring prevManifestPath = payload_.manifestPath;
+            payloadLoaded(load, gen, false);
             if (!load.ok) {
                 updateLine_ = sentence("the update was downloaded but could not be switched to: " + load.note);
                 changed();
                 return;
             }
+            const bool optInMissing =
+                edhm2dMigoto_ && load.hasOptInEdhmAsset && payloadInfo().find("edhm_2dmigoto") == nullptr;
             if (!optInWarning.empty()) {
                 edhmWarning_ = optInWarning;
-            } else if (edhm2dMigoto_ && load.hasOptInEdhmAsset && payloadInfo().find("edhm_2dmigoto") == nullptr) {
+            } else if (optInMissing) {
                 edhmWarning_ = kEdhmInterferenceWarning;
+            } else if (payloadInfo().find("edhm_2dmigoto") != nullptr) {
+                edhmWarning_.clear();
             }
             updateLine_ = "ED-UP " + check_.manifest.version + " is ready to install.";
             checkState_ = CheckState::UpToDate;
@@ -235,7 +271,12 @@ void LauncherSession::beginUpdate() {
                     beginCheck();
                 }
             }
-            if (env_.payloadSwitched) env_.payloadSwitched();
+            // If we only re-adopted the same manifest on a failed opt-in download retry, stay on
+            // the current screen so the warning on Settings remains visible.
+            const bool sameManifestFailedOptIn =
+                !prevManifestPath.empty() && samePath(prevManifestPath, load.manifestPath) &&
+                (!optInWarning.empty() || optInMissing);
+            if (!sameManifestFailedOptIn && env_.payloadSwitched) env_.payloadSwitched();
         });
     });
 }
@@ -266,6 +307,9 @@ LauncherSession::LauncherSession(SessionEnv env) : env_(std::move(env)) {
         steamFrontierLogin_ = state.steamFrontierLogin();
         vrStereoMode_ = state.vrStereoMode();
         edhm2dMigoto_ = state.edhm2dMigoto();
+        edhmOptInDownloadFailed_ =
+            edhm2dMigoto_ && !state.currentManifest().empty() &&
+            state.edhmOptInFailedManifest() == state.currentManifest();
     }
 }
 
@@ -339,6 +383,7 @@ bool LauncherSession::setEdhm2dMigoto(bool on, const std::function<bool()>& conf
     if (on == edhm2dMigoto_) return edhm2dMigoto_;
     if (on && (!confirm || !confirm())) return edhm2dMigoto_;
     edhm2dMigoto_ = on;
+    edhmOptInDownloadFailed_ = false;
     if (on) edhmWarning_.clear();
     LauncherState state;
     std::string error;
@@ -360,9 +405,34 @@ bool LauncherSession::setEdhm2dMigoto(bool on, const std::function<bool()>& conf
         }
     } else if (!on) {
         recheckNeeded_ = false;
+        autoUpdateAfterCheck_ = false;
     }
     changed();
     return edhm2dMigoto_;
+}
+
+void LauncherSession::retryEdhmOptInDownload() {
+    if (!edhm2dMigoto_ || updating_ || applying_) return;
+    edhmOptInDownloadFailed_ = false;
+    edhmWarning_.clear();
+    LauncherState state;
+    std::string error;
+    if (state.load(launcherIniPath(env_.roots), &error) && !state.edhmOptInFailedManifest().empty()) {
+        state.setEdhmOptInFailedManifest(std::string());
+        createDirectories(env_.roots.launcherDir());
+        state.save(&error);
+    }
+    if (checkState_ == CheckState::Available) {
+        beginUpdate();
+        return;
+    }
+    autoUpdateAfterCheck_ = true;
+    if (checkState_ == CheckState::Checking) {
+        recheckNeeded_ = true;
+        changed();
+    } else {
+        beginCheck();
+    }
 }
 
 void LauncherSession::setEdhmWarning(const std::string& warning) {

@@ -8082,6 +8082,109 @@ void testEdhm2dMigoto() {
             check(up6.check().outcome == UpdateOutcome::Available,
                   "clearing edhm_optin_failed_manifest allows explicit retry to fetch the opt-in asset");
         }
+
+        // Issue #258-5: after a launcher restart following an opt-in download failure, the warning
+        // is restored (not lost in memory) while startup check stays UpToDate (no retry loop).
+        {
+            const std::wstring base258 = fresh("edhm-restart-retry");
+            const LauncherRoots roots258 = launcherRoots(base258);
+            const std::wstring self258 = P(base258, L"self.exe");
+            writeAll(self258, "the running launcher");
+            CreateDirectoryW(roots258.launcherDir().c_str(), nullptr);
+            {
+                LauncherState st;
+                std::string serr;
+                st.load(P(roots258.launcherDir(), L"launcher.ini"), nullptr);
+                st.setEdhm2dMigoto(true);
+                check(st.save(&serr), "issue258-5: saves edhm_2dmigoto=on before session failure test");
+            }
+            ScriptedHttp http258;
+            http258.replies[latestUrl()] = ok(releaseJson(rel), "\"etag-edhm-258\"");
+            serveRelease(&http258, rel);
+            std::string edhmAssetName;
+            for (const ManifestAsset& a : rel.manifest.assets) {
+                if (a.name.rfind("ed-up-edhm-", 0) == 0) { edhmAssetName = a.name; break; }
+            }
+            const Reply goodOptIn = http258.replies[kDownloads + rel.name + "/" + edhmAssetName];
+            Reply brokenOptIn;
+            brokenOptIn.status = 500;
+            http258.replies[kDownloads + rel.name + "/" + edhmAssetName] = brokenOptIn;
+
+            // Session 1: core update succeeds while opt-in EDHM asset fails.
+            {
+                Ui ui1;
+                LauncherSession s1(envFor(&ui1, &http258, base258, true, self258));
+                s1.start();
+                check(ui1.pump([&]() {
+                          return s1.payloadState() != PayloadState::Loading &&
+                                 s1.checkState() == CheckState::Available;
+                      }),
+                      "issue258-5: session 1 sees schema-3 release available");
+                s1.beginUpdate();
+                check(ui1.pump([&]() { return !s1.updating(); }),
+                      "issue258-5: session 1 finishes core update despite failed opt-in asset");
+                check(!s1.edhmWarning().empty() && s1.checkState() == CheckState::UpToDate,
+                      "issue258-5: session 1 surfaces opt-in warning and settles UpToDate");
+                s1.shutdown();
+            }
+            // Session 2 (restart): warning persists and startup check stays UpToDate (no loop).
+            {
+                Ui ui2;
+                LauncherSession s2(envFor(&ui2, &http258, base258, true, self258));
+                s2.start();
+                check(ui2.pump([&]() {
+                          return s2.payloadState() != PayloadState::Loading &&
+                                 s2.checkState() != CheckState::Checking &&
+                                 s2.checkState() != CheckState::NotYet;
+                      }),
+                      "issue258-5: restarted session finishes startup check and payload load");
+                check(s2.checkState() == CheckState::UpToDate,
+                      "issue258-5: restarted session stays UpToDate without looping on failed opt-in");
+                check(s2.edhmOptInDownloadFailed() && !s2.edhmWarning().empty(),
+                      "issue258-5: restarted session surfaces failed opt-in state and warning");
+                // A retry that still fails (HTTP 500) keeps warning & failed state and does NOT fire payloadSwitched.
+                const int switchedBeforeFailedRetry = ui2.switched;
+                s2.retryEdhmOptInDownload();
+                check(ui2.pump([&]() {
+                          return !s2.updating() && s2.checkState() == CheckState::UpToDate &&
+                                 s2.edhmOptInDownloadFailed();
+                      }),
+                      "issue258-5: failing retryEdhmOptInDownload settles back to UpToDate with failed opt-in state");
+                check(!s2.edhmWarning().empty() && ui2.switched == switchedBeforeFailedRetry,
+                      "issue258-5: failing retry keeps warning visible without switching away from Settings");
+                // Explicit retry once asset recovers downloads ONLY the missing opt-in asset without toggling edhm_2dmigoto.
+                http258.replies[kDownloads + rel.name + "/" + edhmAssetName] = goodOptIn;
+                s2.retryEdhmOptInDownload();
+                check(ui2.pump([&]() {
+                          return !s2.updating() && s2.checkState() != CheckState::Checking &&
+                                 payloadInfo().find("edhm_2dmigoto") != nullptr;
+                      }),
+                      "issue258-5: retryEdhmOptInDownload fetches missing opt-in asset after restart without toggling");
+                check(s2.edhm2dMigoto() && !s2.edhmOptInDownloadFailed() && s2.edhmWarning().empty(),
+                      "issue258-5: successful retry clears failed opt-in state and warning while keeping opt-in on");
+                check(readAll(P(roots258.launcherDir(), L"launcher.ini")).find("edhm_optin_failed_manifest") == std::string::npos,
+                      "issue258-5: successful retry removes edhm_optin_failed_manifest from launcher.ini");
+                s2.shutdown();
+            }
+            // Session 3: when opt-in is turned OFF with an AV-interference warning set before payloadLoaded
+            // completes, payloadLoaded must preserve that warning instead of clearing it.
+            {
+                Ui ui3;
+                LauncherSession s3(envFor(&ui3, &http258, base258, true, self258));
+                s3.start();
+                s3.setEdhm2dMigoto(false, nullptr);
+                s3.setEdhmWarning(kEdhmInterferenceWarning);
+                check(ui3.pump([&]() {
+                          return s3.payloadState() != PayloadState::Loading &&
+                                 s3.checkState() != CheckState::Checking &&
+                                 s3.checkState() != CheckState::NotYet;
+                      }),
+                      "issue258-5: session 3 finishes startup payload load after AV fallback opt-out");
+                check(s3.edhmWarning() == kEdhmInterferenceWarning,
+                      "issue258-5: payloadLoaded preserves AV-interference warning when edhm_2dmigoto is off");
+                s3.shutdown();
+            }
+        }
     }
 }
 
