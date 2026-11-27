@@ -43,10 +43,14 @@
   the contributor is arranging, splits edloader from EDHM's proxy as the substitute.
 - **Not folded in:** InPlace overflows the 64-slot registry on this build (vScreen alone patches about 45 slots,
   with the exposure fix, device hook and input gate beside it), so any session that lands in InPlace on Windows has
-  reclaim off. The loader phase still uses the unchecked handle for the export fallback in `chainThroughOtherProxy`
-  and for `g_systemCreateDevice` and `g_systemCreateDeviceAndSwapChain` (the re-entrancy route).
-  `advanced.context_hook_mode` is not on the flat allow-list (`flat_profile_keys.h`), so flat reads it as `off`; a
-  one-off test build adds the key to that list. No temporary key was added.
+  reclaim off.
+- **Verified loader exports** The loader in `d3d11_proxy.cpp` takes the `chainThroughOtherProxy` fallback and the
+  re-entrant targets `g_systemCreateDevice` and `g_systemCreateDeviceAndSwapChain` only from verified System32
+  `d3d11.dll`. If verification fails, the fallback handle and re-entrant targets stay null. [Merged on `main` in PR
+  #278](https://github.com/characterecho-sean/ed-unofficial-patch/pull/278)
+- **Context hook mode (#254):** Every profile reads `advanced.context_hook_mode` and defaults to `auto` when the
+  key is absent from the selected settings file. The flat profile reads `edup-flat.ini` when available and falls
+  back to `edup.ini` when the flat file is absent.
 - **Ruled out:** the loader alone answering a full path with a same-named module mapped first, because rig case S3
   got System32's module back with a decoy `d3d11.dll` already mapped (Windows 11 10.0.26200); a hook is needed.
   The `no longer holds EDVR's hook` grep as a test of the reclaim hypothesis on these logs, because reclaim is off

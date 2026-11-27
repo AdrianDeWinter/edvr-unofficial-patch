@@ -173,11 +173,14 @@ inline bool runtimeScopeIncludesVr() {
 //   advanced.game_vram         -- the video memory size Elite is told (game_vram.h): not in the installer's view, a
 //                                 hidden, permanent key. Left off this list it read as "off" under flat with no line
 //                                 saying so (flight 2026-11-20).
+//   advanced.context_hook_mode -- immediate-context hook override (d3d11_proxy.cpp): read by every profile so flat
+//                                 sessions do not log a false IGNORED warning for "off" and can force shared/live (#254).
 inline bool runtimeProfileAllowsKey(const char* key) {
     static const char* const kEveryProfileKeys[] = {
         "advanced.real_dll",
         "advanced.game_update_check",
         "advanced.game_vram",
+        "advanced.context_hook_mode",
     };
     if (runtimeVrProfile()) return true;
     if (!key) return false;

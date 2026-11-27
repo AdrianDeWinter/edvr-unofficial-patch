@@ -3199,6 +3199,11 @@ int main(int argc, char** argv) {
             // Restore original scratch ini so later checks see the expected baseline.
             (void)rewriteIni(scratch, "[fix]\r\nblack_void = on\r\n");
             (void)Config::get().reloadIfChanged();
+            // Issue #254: every profile reads advanced.context_hook_mode (default "auto" when absent, no false IGNORED).
+            if (Config::get().getString("advanced.context_hook_mode", "auto") == "auto")
+                ok("flat context_hook_mode uses the auto default when absent");
+            else fail("flat context_hook_mode default",
+                      std::string("got ") + Config::get().getString("advanced.context_hook_mode", "auto"));
             if (Config::get().getBool("advanced.input_gate", true))
                 ok("flat input_gate uses true default when absent");
             else fail("flat input_gate default", "missing key was not true");
@@ -3240,9 +3245,14 @@ int main(int argc, char** argv) {
     expectInt("advanced.temporal_aa_jitter_phases", 32, "flat scope permits the jitter cycle's key");
     Config::get().set("advanced.temporal_aa_jitter_phases", "8");
     expectInt("advanced.temporal_aa_jitter_phases", 8, "flat scope reads the jitter cycle's key at its default");
-    // Issue #253: explicit texture-bias override in flat profile.
+    // Issues #253 & #254: explicit overrides in flat profile.
     Config::get().set("advanced.texture_lod_bias", "-0.75");
     expectStr("advanced.texture_lod_bias", "-0.75", "flat scope reads explicit advanced.texture_lod_bias");
+    Config::get().set("advanced.context_hook_mode", "shared");
+    expectStr("advanced.context_hook_mode", "shared", "flat scope reads explicit advanced.context_hook_mode = shared");
+    Config::get().set("advanced.context_hook_mode", "live");
+    expectStr("advanced.context_hook_mode", "live", "flat scope reads explicit advanced.context_hook_mode = live");
+    Config::get().set("advanced.context_hook_mode", "auto");
     // The VR camera census's key is a VR-profile key too: a flat profile must never install its hook.
     Config::get().set("advanced.vr_camera_census", "on");
     expectStr("advanced.vr_camera_census", "off", "flat scope refuses the VR camera census's key");
@@ -3313,8 +3323,11 @@ int main(int argc, char** argv) {
     expectInt("advanced.temporal_aa_jitter_phases", 0, "invalid profile refuses the flat jitter cycle's key");
     Config::get().set("advanced.texture_lod_bias", "-0.5");
     expectStr("advanced.texture_lod_bias", "off", "invalid profile refuses advanced.texture_lod_bias");
+    Config::get().set("advanced.context_hook_mode", "shared");
+    expectStr("advanced.context_hook_mode", "shared", "invalid profile still permits advanced.context_hook_mode");
     g_runtimeProfile = RuntimeProfile::Passthrough;
     expectStr("advanced.texture_lod_bias", "off", "passthrough profile refuses advanced.texture_lod_bias");
+    expectStr("advanced.context_hook_mode", "shared", "passthrough profile permits advanced.context_hook_mode");
     g_runtimeProfile = RuntimeProfile::Invalid;
     Config::get().set("advanced.vr_camera_census", "on");
     expectStr("advanced.vr_camera_census", "off", "invalid profile cannot turn the VR camera census on");
@@ -3340,8 +3353,8 @@ int main(int argc, char** argv) {
         // The descriptor beside the inis is what makes init() pick the flat file:
         // without it the profile reads as the legacy VR one and edup.ini wins.
         if (!writeIni(flatDir, descriptor, L"edup_profile.ini") ||
-            !rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0.9\r\n[advanced]\r\ntexture_lod_bias = -0.25\r\n") ||
-            !rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0.4\r\n[diag]\r\nflat_origin_capture = on\r\n[advanced]\r\ntexture_lod_bias = -0.75\r\n", flatLeaf)) {
+            !rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0.9\r\n[advanced]\r\ntexture_lod_bias = -0.25\r\ncontext_hook_mode = private\r\n") ||
+            !rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0.4\r\n[diag]\r\nflat_origin_capture = on\r\n[advanced]\r\ntexture_lod_bias = -0.75\r\ncontext_hook_mode = shared\r\n", flatLeaf)) {
             fail("flat sharpening reload", "could not write the scratch inis");
         } else {
             pinGraphicsMode(flatDir + L"_localappdata", 0);
@@ -3349,6 +3362,7 @@ int main(int argc, char** argv) {
             if (!runtimeFlatProfile()) fail("flat sharpening reload", "the descriptor did not select flat");
             expectBool("diag.flat_origin_capture", true, "flat profile permits explicit F1 diagnostic opt-in");
             expectStr("advanced.texture_lod_bias", "-0.75", "edup-flat.ini overrides advanced.texture_lod_bias");
+            expectStr("advanced.context_hook_mode", "shared", "edup-flat.ini overrides advanced.context_hook_mode");
             expectFloat("fix.render_sharpness", 0.4f,
                         "the flat file is read first: its 0.4, not edup.ini's 0.9");
             if (!rewriteIni(flatDir, "[fix]\r\nrender_sharpness = 0\r\n", flatLeaf) ||
