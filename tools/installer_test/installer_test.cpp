@@ -7142,6 +7142,77 @@ static bool makeJunction(const std::wstring& link, const std::wstring& target) {
     return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 }
 
+static void testEdhmLinkedIncludes(const std::wstring& scratch) {
+    const std::wstring game = joinPath(scratch, L"linked_include_game");
+    const std::wstring configs = joinPath(scratch, L"linked_include_configs");
+    const std::wstring dirLink = joinPath(game, L"EDHM-ini");
+    const std::wstring cycle = joinPath(configs, L"back");
+    const std::wstring source = joinPath(configs, L"settings.txt");
+    const std::wstring first = joinPath(configs, L"a.ini");
+    const std::wstring compatible = joinPath(configs, L"b.ini");
+    const std::wstring alias = joinPath(configs, L"c.ini");
+    const std::wstring user = joinPath(game, L"d3dx_user.ini");
+    makeTree(game);
+    makeTree(configs);
+    const std::string root = "[Include]\r\ninclude_recursive = EDHM-ini\r\n"
+                             "[Device]\r\nupscaling = 0\r\nupscaling = 1\r\n";
+    check(writeAll(joinPath(game, L"d3dx.ini"), root) &&
+              writeAll(source, "[System]\r\nallow_platform_update = 0\r\n"),
+          "linked includes: write the root and outside-game settings");
+    const bool linkedDir = makeJunction(dirLink, configs);
+    constexpr DWORD fileLink = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+    const bool linkedFile = CreateSymbolicLinkW(first.c_str(), source.c_str(), fileLink) != FALSE;
+    check(linkedDir && linkedFile, "linked includes: create a directory junction and file symlink");
+    if (linkedDir && linkedFile) {
+        const auto linked = evaluateEdhmD3dxCompat(game, root);
+        check(linked.complete() && !linked.satisfied && linked.upscalingOk &&
+                  linked.allowPlatformUpdateOverrideFile == "EDHM-ini\\a.ini",
+              "linked includes: read settings through a junction outside the game and a file symlink",
+              linked.incompleteReason);
+
+        const bool linkedCycle = makeJunction(cycle, game);
+        check(linkedCycle, "linked includes: create a junction back to the game root");
+        if (linkedCycle) {
+            const auto cyclic = evaluateEdhmD3dxCompat(game, root);
+            check(cyclic.complete() && cyclic.upscalingOk &&
+                      cyclic.allowPlatformUpdateOverrideFile == "EDHM-ini\\a.ini",
+                  "linked includes: a directory cycle terminates without re-parsing root d3dx.ini",
+                  cyclic.incompleteReason);
+            RemoveDirectoryW(cycle.c_str());
+        }
+
+        const bool linkedAlias = CreateSymbolicLinkW(alias.c_str(), source.c_str(), fileLink) != FALSE;
+        check(writeAll(compatible, "[System]\r\nallow_platform_update = 1\r\n") && linkedAlias,
+              "linked includes: put a compatible override between two aliases of the same file");
+        if (linkedAlias) {
+            const auto aliased = evaluateEdhmD3dxCompat(game, root);
+            check(aliased.complete() && aliased.satisfied,
+                  "linked includes: a later alias cannot reapply the same include", aliased.incompleteReason);
+        }
+
+        const bool linkedUser = CreateSymbolicLinkW(user.c_str(), compatible.c_str(), fileLink) != FALSE;
+        check(linkedUser, "linked includes: create the default user-config symlink");
+        if (linkedUser) {
+            const std::string ordered = "[Include]\r\ninclude = EDHM-ini\\b.ini\r\ninclude = EDHM-ini\\a.ini\r\n";
+            const auto userLast = evaluateEdhmD3dxCompat(game, ordered);
+            check(userLast.complete() && userLast.satisfied,
+                  "linked includes: a user-config symlink still applies last", userLast.incompleteReason);
+
+            check(DeleteFileW(compatible.c_str()) != FALSE, "linked includes: remove the user-config target");
+            const auto dangling = evaluateEdhmD3dxCompat(game, "");
+            check(!dangling.complete() && dangling.incompleteReason.find("d3dx_user.ini: ") == 0,
+                  "linked includes: a dangling user-config symlink fails closed and names the link",
+                  dangling.incompleteReason);
+        }
+    }
+    DeleteFileW(user.c_str());
+    DeleteFileW(alias.c_str());
+    DeleteFileW(first.c_str());
+    RemoveDirectoryW(dirLink.c_str());
+    removeTree(game);
+    removeTree(configs);
+}
+
 // Fixes from the schema-2 review (docs\design-manifest-schema2-2026-11-12.md): vendor files a build lacks, nested targets, containment,
 // backup names, a file placed at a new target, and the proofs a flat conversion accepts.
 static void testSchemaReviewFixes(const std::wstring& scratch) {
@@ -7754,6 +7825,7 @@ int wmain(int argc, wchar_t** argv) {
 
     printf("installer_test: root %ls\n", root.c_str());
 
+    testEdhmLinkedIncludes(scratch);
     testMerge();
     testShippedIni(root);
     testChangedDefault(root);
@@ -9435,16 +9507,6 @@ int wmain(int argc, wchar_t** argv) {
                 DeleteFileW(partialPath.c_str());
                 check(!planEdhmToggle(surveyEdhm(), incOpt, p2).blocked,
                       "issue258-3: a missing direct include and default d3dx_user.ini contribute no settings");
-                const std::wstring linkedInclude = joinPath(incDir, L"edhm_link");
-                const bool linked = makeJunction(linkedInclude, edhmRoot);
-                check(linked, "issue258-3: the rig made a junction in the recursive include directory");
-                if (linked) {
-                    writeAll(d3dxPath, "[Include]\r\ninclude_recursive = EDHM-ini\r\n");
-                    const Plan junction = planEdhmToggle(surveyEdhm(), incOpt, p2);
-                    check(junction.blocked && problemMentions(junction, "edhm_link") && problemMentions(junction, "reparse"),
-                          "issue258-3: a recursive include containing a junction is reported without following the link");
-                    RemoveDirectoryW(linkedInclude.c_str());
-                }
                 // include_recursive = . scans gameDir itself (without re-parsing d3dx.ini as an override).
                 {
                     const std::wstring dotDir = joinPath(edhmRoot, L"dot_inc_test");

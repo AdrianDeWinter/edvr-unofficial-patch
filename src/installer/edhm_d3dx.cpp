@@ -490,13 +490,12 @@ bool missingPath(DWORD error) {
     return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
 }
 
-// Normalizes `rawRel` relative to `gameDir` and verifies strict containment inside `gameDir`:
+// Normalizes the requested name relative to the game directory:
 // rejects drive letters, UNC/absolute roots, escaping '..', embedded ':' or NUL, trailing space/dot
-// segments (Win32 strips them, which could normalize ".. " to ".."), DOS device names, and reparse
-// points along the relative chain. When `allowRoot` is true (for `include_recursive = .`), a path
-// resolving to `gameDir` itself is accepted with empty `*normRelOut`.
-const char* resolveContainedRelativePath(const std::wstring& gameDir, const std::wstring& rawRel, bool allowRoot,
-                                         std::wstring* fullOut, std::wstring* normRelOut) {
+// segments (Win32 strips them, which could normalize ".. " to ".."), and DOS device names.
+// Include reads follow links from that name, including links to targets outside the game directory.
+// `allowRoot` permits the empty normalized name for `include_recursive = .`.
+const char* normalizeRelativeIncludePath(const std::wstring& rawRel, bool allowRoot, std::wstring* normRelOut) {
     constexpr const char* unsafe = "unsafe include path";
     if (rawRel.empty() || rawRel[0] == L'\\' || rawRel[0] == L'/') return unsafe;
 
@@ -525,47 +524,61 @@ const char* resolveContainedRelativePath(const std::wstring& gameDir, const std:
     if (segs.empty() && !allowRoot) return unsafe;
 
     std::wstring normRel;
-    std::wstring walk = gameDir;
-    for (size_t i = 0; i < segs.size(); ++i) {
-        if (i > 0) normRel += L'\\';
-        normRel += segs[i];
-        walk = joinPath(walk, segs[i]);
-        const DWORD attrs = GetFileAttributesW(walk.c_str());
-        if (attrs == INVALID_FILE_ATTRIBUTES) {
-            if (!missingPath(GetLastError())) return "cannot read include path attributes";
-        } else if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-            return "include path contains a reparse point";
-        }
+    for (const std::wstring& seg : segs) {
+        if (!normRel.empty()) normRel += L'\\';
+        normRel += seg;
     }
-    *fullOut = walk;
-    *normRelOut = normRel;
+    *normRelOut = std::move(normRel);
     return nullptr;
 }
 
-// Opens a regular, non-reparse disk file without following a leaf symlink/junction and reads up to
-// `maxBytes` directly from that handle (avoiding leaf TOCTOU and DOS device opens).
-const char* readRegularDiskFileBytes(const std::wstring& path, unsigned long long maxBytes, const char* limit,
-                                     bool fileLimitReached, std::optional<std::string>* out) {
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-    if (h == INVALID_HANDLE_VALUE) {
-        // The fork skips a missing include or user_config. Unexpected open
-        // errors leave the effective settings unknown.
-        return missingPath(GetLastError()) ? nullptr : "cannot open included config for reading";
+struct IncludeReadHandle {
+    IncludeReadHandle(const std::wstring& path, DWORD access, DWORD flags)
+        : handle(CreateFileW(path.c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                             nullptr, OPEN_EXISTING, flags, nullptr)) {}
+    IncludeReadHandle(const IncludeReadHandle&) = delete;
+    IncludeReadHandle& operator=(const IncludeReadHandle&) = delete;
+    ~IncludeReadHandle() {
+        if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
     }
-    struct HandleGuard {
-        HANDLE handle;
-        ~HandleGuard() { CloseHandle(handle); }
-    } guard{h};
 
-    if (GetFileType(h) != FILE_TYPE_DISK) return "included config is not a regular disk file";
-    BY_HANDLE_FILE_INFORMATION info{};
-    if (!GetFileInformationByHandle(h, &info)) return "cannot read included config attributes";
-    if ((info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) return "included config is a reparse point";
-    if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return "included config is a directory";
-    if (fileLimitReached) return "included config file count limit exceeded";
-    const unsigned long long fileSize =
-        (static_cast<unsigned long long>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+    const HANDLE handle;
+};
+
+// A failed follow-open can report a missing target even when the requested link exists.
+// Check the closest existing prefix. A working directory link may still have a missing child.
+bool includePathIsMissing(const std::wstring& gameDir, const std::wstring& normRel) {
+    std::wstring prefix = normRel;
+    while (!prefix.empty()) {
+        const std::wstring path = joinPath(gameDir, prefix);
+        const DWORD attrs = GetFileAttributesW(path.c_str());
+        if (attrs != INVALID_FILE_ATTRIBUTES) {
+            if (prefix == normRel) return false;
+            if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) == 0) return true;
+            const IncludeReadHandle ancestor(path, FILE_READ_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS);
+            return ancestor.handle != INVALID_HANDLE_VALUE;
+        }
+        if (!missingPath(GetLastError())) return false;
+        const size_t slash = prefix.rfind(L'\\');
+        prefix.resize(slash == std::wstring::npos ? 0 : slash);
+    }
+    return true;
+}
+
+std::wstring finalIncludePathKey(HANDLE h) {
+    constexpr DWORD flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
+    const DWORD capacity = GetFinalPathNameByHandleW(h, nullptr, 0, flags);
+    if (capacity == 0) return {};
+    std::wstring path(capacity, L'\0');
+    const DWORD length = GetFinalPathNameByHandleW(h, path.data(), capacity, flags);
+    if (length == 0 || length >= capacity) return {};
+    path.resize(length);
+    return wideLower(path);
+}
+
+// The caller checks the opened target and uses the same handle for identity and bytes.
+const char* readIncludedIniBytes(HANDLE h, unsigned long long fileSize, unsigned long long maxBytes,
+                                 const char* limit, std::string* out) {
     if (fileSize > maxBytes) return limit;
 
     std::string buf;
@@ -604,8 +617,9 @@ struct EffectiveState {
     std::string userConfig = "d3dx_user.ini";
     std::vector<std::wstring> excludePatterns;
 
-    std::set<std::wstring> seenFiles;  // canonical lowercased normRel of included files already parsed
-    std::set<std::wstring> seenDirs;   // canonical lowercased normRel of recursive include dirs already walked
+    std::set<std::wstring> seenFiles;  // lowercased final paths from opened targets
+    std::set<std::wstring> seenDirs;
+    std::wstring gameDirKey;
     size_t parsedFiles = 0;
     size_t walkedDirs = 0;
     unsigned long long totalIncludedBytes = 0;
@@ -763,51 +777,90 @@ void parseMigotoIniText(const std::string& text, bool isIncluded, const std::wst
 
 void loadSingleIncludedIni(const std::wstring& gameDir, const std::wstring& rawRel, bool isUserConfig,
                            EffectiveState* state, std::vector<PendingIncludeSection>* nextIncludes) {
-    std::wstring fullPath;
     std::wstring normRel;
-    if (const char* error = resolveContainedRelativePath(gameDir, rawRel, false, &fullPath, &normRel)) {
+    if (const char* error = normalizeRelativeIncludePath(rawRel, false, &normRel)) {
         state->reportIncomplete(rawRel, error);
         return;
     }
-    if (!isUserConfig && !state->seenFiles.insert(wideLower(normRel)).second) return;
+    const std::wstring fullPath = joinPath(gameDir, normRel);
+    const IncludeReadHandle file(fullPath, GENERIC_READ, FILE_ATTRIBUTE_NORMAL);
+    if (file.handle == INVALID_HANDLE_VALUE) {
+        if (!missingPath(GetLastError()) || !includePathIsMissing(gameDir, normRel)) {
+            state->reportIncomplete(rawRel, "cannot open included config for reading");
+        }
+        return;
+    }
+    if (GetFileType(file.handle) != FILE_TYPE_DISK) {
+        state->reportIncomplete(rawRel, "included config is not a regular disk file");
+        return;
+    }
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!GetFileInformationByHandle(file.handle, &info)) {
+        state->reportIncomplete(rawRel, "cannot read included config attributes");
+        return;
+    }
+    if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        state->reportIncomplete(rawRel, "included config is a directory");
+        return;
+    }
+    std::wstring fileKey = finalIncludePathKey(file.handle);
+    if (fileKey.empty()) {
+        state->reportIncomplete(rawRel, "cannot resolve included config path");
+        return;
+    }
+    // user_config is a separate last pass, even if an ordinary include read its target.
+    if (!isUserConfig && !state->seenFiles.insert(std::move(fileKey)).second) return;
+    if (!isUserConfig && state->parsedFiles >= kMaxIncludeFiles) {
+        state->reportIncomplete(rawRel, "included config file count limit exceeded");
+        return;
+    }
     const unsigned long long budget =
         isUserConfig ? kMaxIncludedIniBytes
                      : (std::min)(kMaxIncludedIniBytes, kMaxTotalIncludedBytes - state->totalIncludedBytes);
     const char* limit = budget < kMaxIncludedIniBytes ? "total included config byte limit exceeded"
                                                     : "included config file size limit exceeded";
-    std::optional<std::string> bytes;
-    const bool fileLimitReached = !isUserConfig && state->parsedFiles >= kMaxIncludeFiles;
-    if (const char* error = readRegularDiskFileBytes(fullPath, budget, limit, fileLimitReached, &bytes)) {
-        state->reportIncomplete(normRel, error);
+    const unsigned long long fileSize =
+        (static_cast<unsigned long long>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+    std::string bytes;
+    if (const char* error = readIncludedIniBytes(file.handle, fileSize, budget, limit, &bytes)) {
+        state->reportIncomplete(rawRel, error);
         return;
     }
-    if (!bytes) return;
     if (!isUserConfig) {
         ++state->parsedFiles;
-        state->totalIncludedBytes += bytes->size();
+        state->totalIncludedBytes += bytes.size();
     }
-    parseMigotoIniText(*bytes, true, normRel, state, nextIncludes);
+    parseMigotoIniText(bytes, true, normRel, state, nextIncludes);
 }
 
 void loadIncludedIniRecursive(const std::wstring& gameDir, const std::wstring& rawRel, size_t depth,
                               EffectiveState* state, std::vector<PendingIncludeSection>* nextIncludes) {
-    std::wstring dirPath;
     std::wstring normDirRel;
-    if (const char* error = resolveContainedRelativePath(gameDir, rawRel, true, &dirPath, &normDirRel)) {
+    if (const char* error = normalizeRelativeIncludePath(rawRel, true, &normDirRel)) {
         state->reportIncomplete(rawRel, error);
         return;
     }
-    if (!state->seenDirs.insert(wideLower(normDirRel)).second) return;
-    const DWORD dirAttrs = GetFileAttributesW(dirPath.c_str());
-    if (dirAttrs == INVALID_FILE_ATTRIBUTES) {
-        if (!missingPath(GetLastError())) state->reportIncomplete(rawRel, "cannot access recursive include directory");
+    const std::wstring dirPath = joinPath(gameDir, normDirRel);
+    const IncludeReadHandle directory(dirPath, FILE_READ_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS);
+    if (directory.handle == INVALID_HANDLE_VALUE) {
+        if (!missingPath(GetLastError()) || !includePathIsMissing(gameDir, normDirRel)) {
+            state->reportIncomplete(rawRel, "cannot open recursive include directory");
+        }
         return;
     }
-    if ((dirAttrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-        state->reportIncomplete(rawRel, "recursive include directory is a reparse point");
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (GetFileType(directory.handle) != FILE_TYPE_DISK || !GetFileInformationByHandle(directory.handle, &info)) {
+        state->reportIncomplete(rawRel, "cannot read recursive include directory attributes");
         return;
     }
-    if ((dirAttrs & FILE_ATTRIBUTE_DIRECTORY) == 0) return;  // The fork's "\\*" finds no files here.
+    if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) return;  // The fork's "\\*" finds no files here.
+    const std::wstring dirKey = finalIncludePathKey(directory.handle);
+    if (dirKey.empty()) {
+        state->reportIncomplete(rawRel, "cannot resolve recursive include directory path");
+        return;
+    }
+    if (!state->seenDirs.insert(dirKey).second) return;
+    if (normDirRel.empty()) state->gameDirKey = dirKey;
     if (depth > kMaxIncludeDepth) {
         state->reportIncomplete(rawRel, "recursive include depth limit exceeded");
         return;
@@ -851,8 +904,20 @@ void loadIncludedIniRecursive(const std::wstring& gameDir, const std::wstring& r
 
     for (const std::wstring& leaf : iniFiles) {
         const std::wstring childRel = normDirRel.empty() ? leaf : (normDirRel + L"\\" + leaf);
-        // Never re-parse root d3dx.ini as an included override when include_recursive = .
-        if (normDirRel.empty() && _wcsicmp(leaf.c_str(), L"d3dx.ini") == 0) continue;
+        // A link back to the game directory must skip its root INI just as include_recursive = . does.
+        if (_wcsicmp(leaf.c_str(), L"d3dx.ini") == 0) {
+            if (state->gameDirKey.empty()) {
+                const IncludeReadHandle gameDirectory(gameDir, FILE_READ_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS);
+                if (gameDirectory.handle != INVALID_HANDLE_VALUE) {
+                    state->gameDirKey = finalIncludePathKey(gameDirectory.handle);
+                }
+                if (state->gameDirKey.empty()) {
+                    state->reportIncomplete(childRel, "cannot resolve game directory path");
+                    return;
+                }
+            }
+            if (dirKey == state->gameDirKey) continue;
+        }
         loadSingleIncludedIni(gameDir, childRel, false, state, nextIncludes);
         if (!state->incompleteReason.empty()) return;
     }
