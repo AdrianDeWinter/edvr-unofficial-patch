@@ -2,13 +2,13 @@
 
 ## Status
 
+Issue #188 depth follow-up, open: section 7 measured only intact glass (GREATER_EQUAL, depth writes off).
+ED-UP skips the dirt overlay after a depth-writing LESS, GREATER or NOT_EQUAL draw because replay cannot distinguish newly written pixels from those rejected at equal depth.
+Capture the quality-3 ice and condensation depth function, effective depth write mask and stencil state in flat and VR to determine whether this case occurs in Elite.
+
 Open 2026-11-05: in flat the dirt goes after a velocity change in normal space, until a reload. Cause measured: t12 is emptied after the swap's bind. Fix FLOWN OK in flat 2026-11-05 on `ddb725c0`, merged to main that day, ran in VR. The dirt's smear under the upscaler: FLOWN OK in flat, merged: under legacy the whole canopy draw goes into the post-upscale weapons layer ("The dirt layer", last section). VR was reported smearing 2026-11-06 (no log); the same route for VR FLOWN OK by eye on `d006d0e3`, on main `82ae83dd` ("The dirt layer in VR", end of the doc). Open 2026-11-06: station and hangar lights do not light the dirt, because neither this shader nor the game's reads local lights; the game's point and spot lists hold the pad's lights at the glass's depths, FLOWN on `ea6efed8`; an unshadowed spot light loop is the Visual option `visual.cockpit_glass_lights = off | station`, shipped off, `station` FLOWN OK by eye in flat and VR ("Station lights", end of the doc). The canopy draws at the render's size and is added into the layer when the layer is at least 1.5 times the render: half route FLOWN in VR on `ceeb4414`, about 0.22 ms a frame against about 1.1 to 1.5 ms for full, "half looks fine". Its final form has no key and has not itself flown. See "Clean glass after a supercruise exit", last section.
 
-State 2026-11-04: **FLOWN ON STEAM FLAT, NOT FLOWN IN VR, MERGING TO MAIN FOR USER FEEDBACK.** `visual.cockpit_glass = odyssey | legacy` (default `odyssey`, the game
-unchanged), flat and VR, Visual tab. Branch `claude/cockpit-glass-shader-port-1852e3`. With `legacy`, EDVR's
-own pixel shader (`cockpit_glass_shader.h`) is handed to the real `PSSetShader` in place of the game's intact
-quality-3 canopy shader `4E4FF61E8A08FC7E`, at bind time. What was built, the constants chosen and what the
-flight must check: section 8.
+`visual.cockpit_glass = odyssey | legacy` (default `odyssey`) is in the Visual tab for flat and VR. Section 8 records the first Steam flat flight and the intact quality-3 swap.
 
 Settled offline (sections 1 to 3):
 
@@ -48,7 +48,7 @@ Flown with 5 x (probe(N) + probe(-N)) ambient (268b292c): still almost no dirt. 
 15619672 flown: too faint, no visible difference from `odyssey`; film 0.4 and edge 0.3 flown 25cb4723, "looks better" (end of section 13). CB2[17].w behaves like per-ship wear driving Odyssey's dirt; Horizons' glass shader has no such term, and Sean decided on 2026-11-04 that EDVR's grime stays fixed (section 16). A dashed bright line under the top strut turned out not to be the glass, it shows with `odyssey` too (section 15). Whether the film and patches read naturally is still Sean's call.
 
 BUILT 2026-11-05, NOT FLOWN (section 17): `visual.cockpit_glass_dirt`, 0 to 300 percent, shipped 100, live, flat and VR, under Cockpit glass.
-A one-register block at b13 scales the dirt only; the row is dimmed unless the look is `legacy`. It makes Sean's strength call a slider.
+A one-register block at b13 scales the dirt only; the row is dimmed unless the look is `legacy`. It makes Sean's strength call a slider. If the device refuses the block, ED-UP draws stock canopy glass.
 
 Temporary: `experimental.cockpit_glass_probe` (`cockpit_glass_probe.*`, `tools\cockpit_glass_probe_test`, the
 `:rig_cockpit_glass_probe_test` rig, its flat allow-list line). Default off, kept on main while users try `legacy` (Sean, 2026-11-04), so a report can turn it on. Remove all of it once that feedback is in. Pre-merge review follow-ups, none seen in a flight: issue #188.
@@ -815,9 +815,9 @@ its one reissued draw). b13 is the last of D3D11's fourteen slots; the canopy sh
 uses b13 for its own draws. `vScreenPSSetConstantBuffersRaw` is a new raw call: `hookedPSSetConstantBuffers` exists only for the flat
 scope's discovery observer, and the glass's bind should not reach it.
 
-Failure modes, both visible and neither stock: a refused block is bound as null, so the shaders read 0 and draw no dirt (logged, "the dirt
-level block was refused"); an unbound b13 reads 0 the same way, which `tools\cockpit_glass_test` pins. A key outside 0 to 300 is
-clamped and logged by `getIntInRange`.
+The original build bound a refused level block as null, which yielded zero dirt. ED-UP now logs the refusal and draws
+stock canopy glass. Switching legacy off and back on retries the allocation. The shaders read an unbound b13 as zero,
+which `tools\cockpit_glass_test` checks. `getIntInRange` clamps and logs values outside 0 to 300.
 
 The menu. The row is dimmed, and refuses a step, a typed value and the reset, unless `visual.cockpit_glass` is `legacy`
 (`cockpit_glass_core.h` `dirtRowDim`, `menu.cpp` `cockpitGlassDirtRowDisabled`, read live as the glass reads it). It is dimmed and not

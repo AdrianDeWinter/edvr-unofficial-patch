@@ -148,5 +148,97 @@ constexpr InputElement kWideInputs[] = {
 constexpr uint32_t kFrameRegisters = 327;
 constexpr uint32_t kMaterialRegisters = 18;
 
+// Issue #188(b): only hand back a saved PS slot (t12 or b13) when the game has not written the
+// slot since EDVR bound it, EDVR bound a distinguishable non-null object (`ours != nullptr`),
+// and the slot still holds that object. Requiring `ours != nullptr` ensures an explicit game
+// clear to null never looks identical to an uncreated/refused EDVR binding.
+inline bool shouldRestoreSlot(const void* current, const void* ours, bool gameWrote = false) {
+    return !gameWrote && ours != nullptr && current == ours;
+}
+
+// Per-face stencil operations and comparison function, using raw D3D11 ABI enum values
+// (D3D11_STENCIL_OP_KEEP=1; D3D11_COMPARISON_NEVER=1, ALWAYS=8) so this header stays free
+// of D3D11 includes.
+struct StencilFaceRule {
+    uint32_t failOp = 1u;
+    uint32_t depthFailOp = 1u;
+    uint32_t passOp = 1u;
+    uint32_t func = 8u;
+};
+
+// Issue #188(d): derive the ice/condensation overlay's depth-stencil settings from the game's bound state so the second
+// additive draw at identical canopy depth preserves reverse-Z as well as standard-Z without writing depth/stencil or
+// tinting pixels the game rejected:
+// - When the original pass wrote depth under a strict inequality (LESS=2, GREATER=5, NOT_EQUAL=6), a post-draw replay
+//   cannot distinguish pixels the game wrote at canopy depth from pixels rejected on pre-existing equal depth (or
+//   discarded by the pixel shader over equal depth), so skip the overlay rather than tinting rejected fragments.
+// - When the original pass wrote depth under an inclusive/idempotent test (LESS_EQUAL, GREATER_EQUAL, EQUAL, ALWAYS,
+//   NEVER), keep the depth test and zero DepthWriteMask so coverage matches the original draw without double-writing depth.
+// - When stencil is enabled with a non-KEEP op and non-zero write mask: if either face performs a non-trivial stencil
+//   test (neither NEVER=1 nor ALWAYS=8) over bits overlapping StencilWriteMask & StencilReadMask, the original draw
+//   mutates bits its own stencil comparison reads (for example EQUAL with PassOp=ZERO), so skip the overlay rather than
+//   mismatched coverage; otherwise (such as Elite's StencilFunc=ALWAYS + PassOp=REPLACE) zero StencilWriteMask.
+// - When depth writes are already disabled and stencil writes do not occur, keep the game's state verbatim.
+// Uses raw D3D11_COMPARISON_FUNC / D3D11_STENCIL_OP values so this header stays free of D3D11 includes.
+struct OverlayDepthRule {
+    bool skipOverlay = false;
+    bool needsClone = false;
+    uint32_t depthFunc = 0;
+    bool zeroDepthWrite = false;
+    bool zeroStencilWrite = false;
+};
+inline OverlayDepthRule deriveOverlayDepthRule(bool depthEnable, bool depthWrites, uint32_t depthFunc,
+                                               bool stencilEnable, uint8_t stencilWriteMask,
+                                               uint8_t stencilReadMask = 0xFFu,
+                                               StencilFaceRule front = StencilFaceRule{1u, 1u, 3u, 8u},
+                                               StencilFaceRule back = StencilFaceRule{1u, 1u, 3u, 8u}) {
+    OverlayDepthRule r{};
+    r.depthFunc = depthFunc;
+    if (depthEnable && depthWrites) {
+        if (depthFunc == 2u || depthFunc == 5u || depthFunc == 6u) {   // strict LESS, GREATER, or NOT_EQUAL
+            r.skipOverlay = true;
+            return r;
+        }
+        r.zeroDepthWrite = true;
+        r.needsClone = true;
+    }
+    if (stencilEnable && stencilWriteMask != 0) {
+        const bool anyWriteOp =
+            front.failOp != 1u || front.depthFailOp != 1u || front.passOp != 1u ||
+            back.failOp != 1u || back.depthFailOp != 1u || back.passOp != 1u;
+        if (anyWriteOp) {
+            const bool anyFaceTests =
+                (front.func != 8u && front.func != 1u) || (back.func != 8u && back.func != 1u);
+            if (anyFaceTests && (stencilWriteMask & stencilReadMask) != 0) {
+                OverlayDepthRule skipped{};
+                skipped.depthFunc = depthFunc;
+                skipped.skipOverlay = true;
+                return skipped;
+            }
+            r.zeroStencilWrite = true;
+            r.needsClone = true;
+        }
+    }
+    return r;
+}
+
+// Effective overlay depth-stencil rule accounting for the bound DSV: without a bound DSV neither
+// depth nor stencil testing/writing happens, a depth-only DSV has no stencil plane, and read-only
+// DSV flags disable writes regardless of the depth-stencil state's write masks (#188).
+inline OverlayDepthRule deriveOverlayDepthRuleForDsv(bool hasDsv, bool dsvReadOnlyDepth, bool dsvReadOnlyStencil,
+                                                     bool depthEnable, bool depthWrites, uint32_t depthFunc,
+                                                     bool stencilEnable, uint8_t stencilWriteMask,
+                                                     bool dsvHasStencil = true,
+                                                     uint8_t stencilReadMask = 0xFFu,
+                                                     StencilFaceRule front = StencilFaceRule{1u, 1u, 3u, 8u},
+                                                     StencilFaceRule back = StencilFaceRule{1u, 1u, 3u, 8u}) {
+    if (!hasDsv) return OverlayDepthRule{};
+    const bool effDepthWrites = depthWrites && !dsvReadOnlyDepth;
+    const uint8_t effStencilMask =
+        (!dsvHasStencil || dsvReadOnlyStencil) ? static_cast<uint8_t>(0) : stencilWriteMask;
+    return deriveOverlayDepthRule(depthEnable, effDepthWrites, depthFunc, stencilEnable, effStencilMask,
+                                  stencilReadMask, front, back);
+}
+
 }  // namespace cockpit_glass
 }  // namespace edvr

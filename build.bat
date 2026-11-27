@@ -2631,11 +2631,15 @@ echo [edup] === cockpit glass test ===
 REM visual.cockpit_glass = legacy (docs\cockpit-glass-legacy-port.md section 8): src\d3d11\cockpit_glass_core.h (the key, which bound shader is replaced, the log lines) and the build's
 REM bytecode kCockpitGlassLegacyPsBytecode (src\d3d11\cockpit_glass_shader.h) on a WARP device with the D3D debug layer, drawn with a vertex shader that carries the game's canopy vertex shader's
 REM outputs: no coverage, dirt under the sun, a cascade's shadow, a hangar lit by the probe alone. Compiled /W4 /WX. Output under obj\ and System32's d3d11.
+REM The production swap and overlay also run against WARP to check refusal, replay coverage and binding restore.
 if not exist "%OBJ%\cockpitglass" mkdir "%OBJ%\cockpitglass"
-%CC% /nologo /O2 /MT /std:c++17 /EHsc /W4 /WX /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /I"%GEN%" /I"src\d3d11" ^
+%CC% /nologo /O2 /Gy /MT /std:c++17 /EHsc /W4 /WX /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /I"%GEN%" /I"src\d3d11" ^
     /Fo"%OBJ%\cockpitglass\\" /Fe"%OBJ%\cockpitglass\cockpit_glass_test.exe" ^
     "tools\cockpit_glass_test\cockpit_glass_test.cpp" ^
-    /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxguid.lib
+    "tools\cockpit_glass_test\cockpit_glass_boundaries.cpp" ^
+    "src\d3d11\cockpit_glass.cpp" "src\d3d11\binding_shadow.cpp" ^
+    "src\common\config.cpp" "src\common\vtable_hook.cpp" ^
+    /link /INCREMENTAL:NO /OPT:REF d3d11.lib d3dcompiler.lib dxguid.lib
 if errorlevel 1 ( echo [edup] ERROR: cockpit glass test build failed & exit /b 1 )
 "%OBJ%\cockpitglass\cockpit_glass_test.exe" || exit /b 1
 exit /b 0
