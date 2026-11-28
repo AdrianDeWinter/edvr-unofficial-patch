@@ -115,6 +115,12 @@ REM still works when EDUP_X is not set, with one warning; tools\edup_env.py does
 REM the Python tools, and the C++ names are read the same way in src\common\config.cpp.
 for %%V in (SIGN NO_COMPILE_CACHE PROFILE_SYMBOLS NGX_SDK XESS_SDK FSR4_SDK FFX_DX11 EDHM_2DMIGOTO JOBS RIG_TIMEOUT RIG_TIMEOUT_SCALE TRACE_EVENT_DIR ANALYSIS_DIR) do call :edup_legacy_env %%V
 for %%V in (SIGNTOOL SIGN_ENDPOINT SIGN_ACCOUNT SIGN_PROFILE SIGN_SUBJECT) do call :edup_legacy_env %%V
+REM The Python install manager puts a python.exe launcher first on PATH that
+REM runs the real interpreter as a child process. Put the real interpreter's
+REM folder first, so every "python" below and in the tools' child processes is
+REM the interpreter itself: build_lock.py records this cmd.exe as the build's
+REM owner only when it is the helper's direct parent.
+for /f "usebackq delims=" %%P in (`python -c "import sys; print(sys.executable)" 2^>nul`) do set "PATH=%%~dpP;%PATH%"
 if defined EDUP_RIG goto run_rig
 
 where python.exe >nul 2>&1
